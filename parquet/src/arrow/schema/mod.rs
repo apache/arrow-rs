@@ -45,6 +45,8 @@ mod primitive;
 use crate::arrow::ProjectionMask;
 pub(crate) use complex::{ParquetField, ParquetFieldType};
 
+use super::PARQUET_FIELD_ID_META_KEY;
+
 /// Convert Parquet schema to Arrow schema including optional metadata
 ///
 /// Attempts to decode any existing Arrow schema metadata, falling back
@@ -268,12 +270,20 @@ fn parse_key_value_metadata(
 /// Convert parquet column schema to arrow field.
 pub fn parquet_to_arrow_field(parquet_column: &ColumnDescriptor) -> Result<Field> {
     let field = complex::convert_type(&parquet_column.self_type_ptr())?;
-
-    Ok(Field::new(
+    let mut ret = Field::new(
         parquet_column.name(),
         field.arrow_type,
         field.nullable,
-    ))
+    );
+
+    let basic_info = parquet_column.self_type().get_basic_info();
+    if basic_info.has_id() {
+        let mut meta = HashMap::with_capacity(1);
+        meta.insert(PARQUET_FIELD_ID_META_KEY.to_string(), basic_info.id().to_string());
+        ret.set_metadata(meta);
+    }
+
+    Ok(ret)
 }
 
 pub fn decimal_length_from_precision(precision: u8) -> usize {
@@ -363,7 +373,12 @@ fn arrow_to_parquet_type(field: &Field) -> Result<Type> {
             .with_repetition(repetition)
             .with_id(id)
             .build(),
-        DataType::Float16 => Err(arrow_err!("Float16 arrays not supported")),
+        DataType::Float16 => Type::primitive_type_builder(name, PhysicalType::FIXED_LEN_BYTE_ARRAY)
+            .with_repetition(repetition)
+            .with_id(id)
+            .with_logical_type(Some(LogicalType::Float16))
+            .with_length(2)
+            .build(),
         DataType::Float32 => Type::primitive_type_builder(name, PhysicalType::FLOAT)
             .with_repetition(repetition)
             .with_id(id)
@@ -578,6 +593,7 @@ mod tests {
 
     use crate::arrow::PARQUET_FIELD_ID_META_KEY;
     use crate::file::metadata::KeyValue;
+    use crate::file::reader::FileReader;
     use crate::{
         arrow::{arrow_reader::ParquetRecordBatchReaderBuilder, ArrowWriter},
         schema::{parser::parse_message_type, types::SchemaDescriptor},
@@ -593,9 +609,10 @@ mod tests {
             REQUIRED INT32   uint8 (INTEGER(8,false));
             REQUIRED INT32   uint16 (INTEGER(16,false));
             REQUIRED INT32   int32;
-            REQUIRED INT64   int64 ;
+            REQUIRED INT64   int64;
             OPTIONAL DOUBLE  double;
             OPTIONAL FLOAT   float;
+            OPTIONAL FIXED_LEN_BYTE_ARRAY (2) float16 (FLOAT16);
             OPTIONAL BINARY  string (UTF8);
             OPTIONAL BINARY  string_2 (STRING);
             OPTIONAL BINARY  json (JSON);
@@ -617,6 +634,7 @@ mod tests {
             Field::new("int64", DataType::Int64, false),
             Field::new("double", DataType::Float64, true),
             Field::new("float", DataType::Float32, true),
+            Field::new("float16", DataType::Float16, true),
             Field::new("string", DataType::Utf8, true),
             Field::new("string_2", DataType::Utf8, true),
             Field::new("json", DataType::Utf8, true),
@@ -1292,6 +1310,7 @@ mod tests {
             REQUIRED INT64   int64;
             OPTIONAL DOUBLE  double;
             OPTIONAL FLOAT   float;
+            OPTIONAL FIXED_LEN_BYTE_ARRAY (2) float16 (FLOAT16);
             OPTIONAL BINARY  string (UTF8);
             REPEATED BOOLEAN bools;
             OPTIONAL INT32   date       (DATE);
@@ -1328,6 +1347,7 @@ mod tests {
             Field::new("int64", DataType::Int64, false),
             Field::new("double", DataType::Float64, true),
             Field::new("float", DataType::Float32, true),
+            Field::new("float16", DataType::Float16, true),
             Field::new("string", DataType::Utf8, true),
             Field::new_list(
                 "bools",
@@ -1387,6 +1407,7 @@ mod tests {
             REQUIRED INT64   int64;
             OPTIONAL DOUBLE  double;
             OPTIONAL FLOAT   float;
+            OPTIONAL FIXED_LEN_BYTE_ARRAY (2) float16 (FLOAT16);
             OPTIONAL BINARY  string (STRING);
             OPTIONAL GROUP   bools (LIST) {
                 REPEATED GROUP list {
@@ -1437,6 +1458,7 @@ mod tests {
             Field::new("int64", DataType::Int64, false),
             Field::new("double", DataType::Float64, true),
             Field::new("float", DataType::Float32, true),
+            Field::new("float16", DataType::Float16, true),
             Field::new("string", DataType::Utf8, true),
             Field::new_list(
                 "bools",
@@ -1650,6 +1672,8 @@ mod tests {
                                 vec![
                                     Field::new("a", DataType::Int16, true),
                                     Field::new("b", DataType::Float64, false),
+                                    Field::new("c", DataType::Float32, false),
+                                    Field::new("d", DataType::Float16, false),
                                 ]
                                 .into(),
                             ),
@@ -1807,6 +1831,52 @@ mod tests {
                 "arrow_schema.c41.my_entries.my_value.list.item -> 11",
             ]
         );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_read_parquet_field_ids_raw() -> Result<()> {
+        let meta = |a: &[(&str, &str)]| -> HashMap<String, String> {
+            a.iter()
+                .map(|(a, b)| (a.to_string(), b.to_string()))
+                .collect()
+        };
+        let schema = Schema::new_with_metadata(
+            vec![
+                Field::new("c1", DataType::Utf8, true).with_metadata(meta(&[
+                    (PARQUET_FIELD_ID_META_KEY, "1"),
+                ])),
+                Field::new("c2", DataType::Utf8, true).with_metadata(meta(&[
+                    (PARQUET_FIELD_ID_META_KEY, "2"),
+                ])),
+            ],
+            HashMap::new(),
+        );
+
+        let writer = ArrowWriter::try_new(
+            vec![],
+            Arc::new(schema.clone()),
+            None,
+        )?;
+        let parquet_bytes = writer.into_inner()?;
+
+        let reader = crate::file::reader::SerializedFileReader::new(
+            bytes::Bytes::from(parquet_bytes),
+        )?;
+        let schema_descriptor = reader.metadata().file_metadata().schema_descr_ptr();
+
+        // don't pass metadata so field ids are read from Parquet and not from serialized Arrow schema
+        let arrow_schema = crate::arrow::parquet_to_arrow_schema(
+            &schema_descriptor,
+            None,
+        )?;
+
+        let parq_schema_descr = crate::arrow::arrow_to_parquet_schema(&arrow_schema)?;
+        let parq_fields = parq_schema_descr.root_schema().get_fields();
+        assert_eq!(parq_fields.len(), 2);
+        assert_eq!(parq_fields[0].get_basic_info().id(), 1);
+        assert_eq!(parq_fields[1].get_basic_info().id(), 2);
 
         Ok(())
     }

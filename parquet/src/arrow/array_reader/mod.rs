@@ -152,7 +152,7 @@ where
     Ok(records_read)
 }
 
-/// Uses `record_reader` to skip up to `batch_size` records from`pages`
+/// Uses `record_reader` to skip up to `batch_size` records from `pages`
 ///
 /// Returns the number of records skipped, which can be less than `batch_size` if
 /// pages is exhausted

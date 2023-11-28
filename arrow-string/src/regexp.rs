@@ -41,8 +41,7 @@ pub fn regexp_is_match_utf8<OffsetSize: OffsetSizeTrait>(
 ) -> Result<BooleanArray, ArrowError> {
     if array.len() != regex_array.len() {
         return Err(ArrowError::ComputeError(
-            "Cannot perform comparison operation on arrays of different length"
-                .to_string(),
+            "Cannot perform comparison operation on arrays of different length".to_string(),
         ));
     }
     let nulls = NullBuffer::union(array.nulls(), regex_array.nulls());
@@ -51,14 +50,17 @@ pub fn regexp_is_match_utf8<OffsetSize: OffsetSizeTrait>(
     let mut result = BooleanBufferBuilder::new(array.len());
 
     let complete_pattern = match flags_array {
-        Some(flags) => Box::new(regex_array.iter().zip(flags.iter()).map(
-            |(pattern, flags)| {
-                pattern.map(|pattern| match flags {
-                    Some(flag) => format!("(?{flag}){pattern}"),
-                    None => pattern.to_string(),
-                })
-            },
-        )) as Box<dyn Iterator<Item = Option<String>>>,
+        Some(flags) => Box::new(
+            regex_array
+                .iter()
+                .zip(flags.iter())
+                .map(|(pattern, flags)| {
+                    pattern.map(|pattern| match flags {
+                        Some(flag) => format!("(?{flag}){pattern}"),
+                        None => pattern.to_string(),
+                    })
+                }),
+        ) as Box<dyn Iterator<Item = Option<String>>>,
         None => Box::new(
             regex_array
                 .iter()
@@ -178,19 +180,21 @@ pub fn regexp_match<OffsetSize: OffsetSizeTrait>(
     flags_array: Option<&GenericStringArray<OffsetSize>>,
 ) -> Result<ArrayRef, ArrowError> {
     let mut patterns: HashMap<String, Regex> = HashMap::new();
-    let builder: GenericStringBuilder<OffsetSize> =
-        GenericStringBuilder::with_capacity(0, 0);
+    let builder: GenericStringBuilder<OffsetSize> = GenericStringBuilder::with_capacity(0, 0);
     let mut list_builder = ListBuilder::new(builder);
 
     let complete_pattern = match flags_array {
-        Some(flags) => Box::new(regex_array.iter().zip(flags.iter()).map(
-            |(pattern, flags)| {
-                pattern.map(|pattern| match flags {
-                    Some(value) => format!("(?{value}){pattern}"),
-                    None => pattern.to_string(),
-                })
-            },
-        )) as Box<dyn Iterator<Item = Option<String>>>,
+        Some(flags) => Box::new(
+            regex_array
+                .iter()
+                .zip(flags.iter())
+                .map(|(pattern, flags)| {
+                    pattern.map(|pattern| match flags {
+                        Some(value) => format!("(?{value}){pattern}"),
+                        None => pattern.to_string(),
+                    })
+                }),
+        ) as Box<dyn Iterator<Item = Option<String>>>,
         None => Box::new(
             regex_array
                 .iter()
@@ -290,8 +294,7 @@ mod tests {
         let pattern = StringArray::from(vec![r"x.*-(\d*)-.*"; 4]);
         let flags = StringArray::from(vec!["i"; 4]);
         let actual = regexp_match(&array, &pattern, Some(&flags)).unwrap();
-        let elem_builder: GenericStringBuilder<i32> =
-            GenericStringBuilder::with_capacity(0, 0);
+        let elem_builder: GenericStringBuilder<i32> = GenericStringBuilder::with_capacity(0, 0);
         let mut expected_builder = ListBuilder::new(elem_builder);
         expected_builder.append(false);
         expected_builder.values().append_value("7");

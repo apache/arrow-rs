@@ -17,7 +17,7 @@
 
 //! An object store implementation for generic HTTP servers
 //!
-//! This follows [rfc2518] commonly known called [WebDAV]
+//! This follows [rfc2518] commonly known as [WebDAV]
 //!
 //! Basic get support will work out of the box with most HTTP servers,
 //! even those that don't explicitly support [rfc2518]
@@ -40,12 +40,13 @@ use snafu::{OptionExt, ResultExt, Snafu};
 use tokio::io::AsyncWrite;
 use url::Url;
 
-use crate::client::header::header_meta;
+use crate::client::get::GetClientExt;
+use crate::client::header::get_etag;
 use crate::http::client::Client;
 use crate::path::Path;
 use crate::{
-    ClientConfigKey, ClientOptions, GetOptions, GetResult, GetResultPayload, ListResult,
-    MultipartId, ObjectMeta, ObjectStore, Result, RetryConfig,
+    ClientConfigKey, ClientOptions, GetOptions, GetResult, ListResult, MultipartId, ObjectMeta,
+    ObjectStore, PutMode, PutOptions, PutResult, Result, RetryConfig,
 };
 
 mod client;
@@ -95,8 +96,23 @@ impl std::fmt::Display for HttpStore {
 
 #[async_trait]
 impl ObjectStore for HttpStore {
-    async fn put(&self, location: &Path, bytes: Bytes) -> Result<()> {
-        self.client.put(location, bytes).await
+    async fn put_opts(&self, location: &Path, bytes: Bytes, opts: PutOptions) -> Result<PutResult> {
+        if opts.mode != PutMode::Overwrite {
+            // TODO: Add support for If header - https://datatracker.ietf.org/doc/html/rfc2518#section-9.4
+            return Err(crate::Error::NotImplemented);
+        }
+
+        let response = self.client.put(location, bytes).await?;
+        let e_tag = match get_etag(response.headers()) {
+            Ok(e_tag) => Some(e_tag),
+            Err(crate::client::header::Error::MissingEtag) => None,
+            Err(source) => return Err(Error::Metadata { source }.into()),
+        };
+
+        Ok(PutResult {
+            e_tag,
+            version: None,
+        })
     }
 
     async fn put_multipart(
@@ -106,64 +122,25 @@ impl ObjectStore for HttpStore {
         Err(super::Error::NotImplemented)
     }
 
-    async fn abort_multipart(
-        &self,
-        _location: &Path,
-        _multipart_id: &MultipartId,
-    ) -> Result<()> {
+    async fn abort_multipart(&self, _location: &Path, _multipart_id: &MultipartId) -> Result<()> {
         Err(super::Error::NotImplemented)
     }
 
     async fn get_opts(&self, location: &Path, options: GetOptions) -> Result<GetResult> {
-        let range = options.range.clone();
-        let response = self.client.get(location, options).await?;
-        let meta = header_meta(location, response.headers()).context(MetadataSnafu)?;
-
-        let stream = response
-            .bytes_stream()
-            .map_err(|source| Error::Reqwest { source }.into())
-            .boxed();
-
-        Ok(GetResult {
-            payload: GetResultPayload::Stream(stream),
-            range: range.unwrap_or(0..meta.size),
-            meta,
-        })
-    }
-
-    async fn head(&self, location: &Path) -> Result<ObjectMeta> {
-        let status = self.client.list(Some(location), "0").await?;
-        match status.response.len() {
-            1 => {
-                let response = status.response.into_iter().next().unwrap();
-                response.check_ok()?;
-                match response.is_dir() {
-                    true => Err(crate::Error::NotFound {
-                        path: location.to_string(),
-                        source: "Is directory".to_string().into(),
-                    }),
-                    false => response.object_meta(self.client.base_url()),
-                }
-            }
-            x => Err(crate::Error::NotFound {
-                path: location.to_string(),
-                source: format!("Expected 1 result, got {x}").into(),
-            }),
-        }
+        self.client.get_opts(location, options).await
     }
 
     async fn delete(&self, location: &Path) -> Result<()> {
         self.client.delete(location).await
     }
 
-    async fn list(
-        &self,
-        prefix: Option<&Path>,
-    ) -> Result<BoxStream<'_, Result<ObjectMeta>>> {
+    fn list(&self, prefix: Option<&Path>) -> BoxStream<'_, Result<ObjectMeta>> {
         let prefix_len = prefix.map(|p| p.as_ref().len()).unwrap_or_default();
-        let status = self.client.list(prefix, "infinity").await?;
-        Ok(futures::stream::iter(
-            status
+        let prefix = prefix.cloned();
+        futures::stream::once(async move {
+            let status = self.client.list(prefix.as_ref(), "infinity").await?;
+
+            let iter = status
                 .response
                 .into_iter()
                 .filter(|r| !r.is_dir())
@@ -172,9 +149,12 @@ impl ObjectStore for HttpStore {
                     response.object_meta(self.client.base_url())
                 })
                 // Filter out exact prefix matches
-                .filter_ok(move |r| r.location.as_ref().len() > prefix_len),
-        )
-        .boxed())
+                .filter_ok(move |r| r.location.as_ref().len() > prefix_len);
+
+            Ok::<_, crate::Error>(futures::stream::iter(iter))
+        })
+        .try_flatten()
+        .boxed()
     }
 
     async fn list_with_delimiter(&self, prefix: Option<&Path>) -> Result<ListResult> {

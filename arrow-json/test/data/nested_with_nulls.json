@@ -1,0 +1,4 @@
+{"a": null, "b": null, "c":  null, "d": {"d1":         null, "d2": [null, 1, 2, null]}}
+{"a": null, "b": -3.5, "c":  true, "d": {"d1":         null, "d2": null}}
+{"a": null, "b": null, "c": false, "d": {"d1": "1970-01-01", "d2": null}}
+{"a":    1, "b":  2.0, "c": false, "d": {"d1":         null, "d2": null}}

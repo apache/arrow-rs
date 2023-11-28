@@ -18,32 +18,40 @@
 use crate::aws::checksum::Checksum;
 use crate::aws::credential::{AwsCredential, CredentialExt};
 use crate::aws::{
-    AwsCredentialProvider, S3CopyIfNotExists, STORE, STRICT_PATH_ENCODE_SET,
+    AwsCredentialProvider, S3ConditionalPut, S3CopyIfNotExists, STORE, STRICT_PATH_ENCODE_SET,
 };
 use crate::client::get::GetClient;
+use crate::client::header::HeaderConfig;
+use crate::client::header::{get_put_result, get_version};
 use crate::client::list::ListClient;
-use crate::client::list_response::ListResponse;
 use crate::client::retry::RetryExt;
+use crate::client::s3::{
+    CompleteMultipartUpload, CompleteMultipartUploadResult, InitiateMultipartUploadResult,
+    ListResponse,
+};
 use crate::client::GetOptionsExt;
 use crate::multipart::PartId;
 use crate::path::DELIMITER;
 use crate::{
-    ClientOptions, GetOptions, ListResult, MultipartId, Path, Result, RetryConfig,
+    ClientOptions, GetOptions, ListResult, MultipartId, Path, PutResult, Result, RetryConfig,
 };
 use async_trait::async_trait;
 use base64::prelude::BASE64_STANDARD;
 use base64::Engine;
 use bytes::{Buf, Bytes};
+use hyper::http::HeaderName;
 use itertools::Itertools;
 use percent_encoding::{utf8_percent_encode, PercentEncode};
 use quick_xml::events::{self as xml_events};
 use reqwest::{
     header::{CONTENT_LENGTH, CONTENT_TYPE},
-    Client as ReqwestClient, Method, Response, StatusCode,
+    Client as ReqwestClient, Method, RequestBuilder, Response, StatusCode,
 };
 use serde::{Deserialize, Serialize};
 use snafu::{ResultExt, Snafu};
 use std::sync::Arc;
+
+const VERSION_HEADER: &str = "x-amz-version-id";
 
 /// A specialized `Error` for object store-related errors
 #[derive(Debug, Snafu)]
@@ -117,11 +125,19 @@ pub(crate) enum Error {
     #[snafu(display("Error performing complete multipart request: {}", source))]
     CompleteMultipartRequest { source: crate::client::retry::Error },
 
+    #[snafu(display("Error getting complete multipart response body: {}", source))]
+    CompleteMultipartResponseBody { source: reqwest::Error },
+
     #[snafu(display("Got invalid list response: {}", source))]
     InvalidListResponse { source: quick_xml::de::DeError },
 
     #[snafu(display("Got invalid multipart response: {}", source))]
     InvalidMultipartResponse { source: quick_xml::de::DeError },
+
+    #[snafu(display("Unable to extract metadata from headers: {}", source))]
+    Metadata {
+        source: crate::client::header::Error,
+    },
 }
 
 impl From<Error> for crate::Error {
@@ -137,26 +153,6 @@ impl From<Error> for crate::Error {
             },
         }
     }
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "PascalCase")]
-struct InitiateMultipart {
-    upload_id: String,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "PascalCase", rename = "CompleteMultipartUpload")]
-struct CompleteMultipart {
-    part: Vec<MultipartPart>,
-}
-
-#[derive(Debug, Serialize)]
-struct MultipartPart {
-    #[serde(rename = "ETag")]
-    e_tag: String,
-    #[serde(rename = "PartNumber")]
-    part_number: usize,
 }
 
 #[derive(Deserialize)]
@@ -207,13 +203,64 @@ pub struct S3Config {
     pub retry_config: RetryConfig,
     pub client_options: ClientOptions,
     pub sign_payload: bool,
+    pub skip_signature: bool,
+    pub disable_tagging: bool,
     pub checksum: Option<Checksum>,
     pub copy_if_not_exists: Option<S3CopyIfNotExists>,
+    pub conditional_put: Option<S3ConditionalPut>,
 }
 
 impl S3Config {
-    fn path_url(&self, path: &Path) -> String {
+    pub(crate) fn path_url(&self, path: &Path) -> String {
         format!("{}/{}", self.bucket_endpoint, encode_path(path))
+    }
+
+    async fn get_credential(&self) -> Result<Option<Arc<AwsCredential>>> {
+        Ok(match self.skip_signature {
+            false => Some(self.credentials.get_credential().await?),
+            true => None,
+        })
+    }
+}
+
+/// A builder for a put request allowing customisation of the headers and query string
+pub(crate) struct PutRequest<'a> {
+    path: &'a Path,
+    config: &'a S3Config,
+    builder: RequestBuilder,
+    payload_sha256: Option<Vec<u8>>,
+}
+
+impl<'a> PutRequest<'a> {
+    pub fn query<T: Serialize + ?Sized + Sync>(self, query: &T) -> Self {
+        let builder = self.builder.query(query);
+        Self { builder, ..self }
+    }
+
+    pub fn header(self, k: &HeaderName, v: &str) -> Self {
+        let builder = self.builder.header(k, v);
+        Self { builder, ..self }
+    }
+
+    pub async fn send(self) -> Result<PutResult> {
+        let credential = self.config.get_credential().await?;
+
+        let response = self
+            .builder
+            .with_aws_sigv4(
+                credential.as_deref(),
+                &self.config.region,
+                "s3",
+                self.config.sign_payload,
+                self.payload_sha256.as_deref(),
+            )
+            .send_retry(&self.config.retry_config)
+            .await
+            .context(PutRequestSnafu {
+                path: self.path.as_ref(),
+            })?;
+
+        Ok(get_put_result(response.headers(), VERSION_HEADER).context(MetadataSnafu)?)
     }
 }
 
@@ -234,26 +281,17 @@ impl S3Client {
         &self.config
     }
 
-    async fn get_credential(&self) -> Result<Arc<AwsCredential>> {
-        self.config.credentials.get_credential().await
-    }
-
     /// Make an S3 PUT request <https://docs.aws.amazon.com/AmazonS3/latest/API/API_PutObject.html>
-    pub async fn put_request<T: Serialize + ?Sized + Sync>(
-        &self,
-        path: &Path,
-        bytes: Bytes,
-        query: &T,
-    ) -> Result<Response> {
-        let credential = self.get_credential().await?;
+    ///
+    /// Returns the ETag
+    pub fn put_request<'a>(&'a self, path: &'a Path, bytes: Bytes) -> PutRequest<'a> {
         let url = self.config.path_url(path);
         let mut builder = self.client.request(Method::PUT, url);
         let mut payload_sha256 = None;
 
         if let Some(checksum) = self.config().checksum {
             let digest = checksum.digest(&bytes);
-            builder =
-                builder.header(checksum.header_name(), BASE64_STANDARD.encode(&digest));
+            builder = builder.header(checksum.header_name(), BASE64_STANDARD.encode(&digest));
             if checksum == Checksum::SHA256 {
                 payload_sha256 = Some(digest);
             }
@@ -268,22 +306,12 @@ impl S3Client {
             builder = builder.header(CONTENT_TYPE, value);
         }
 
-        let response = builder
-            .query(query)
-            .with_aws_sigv4(
-                credential.as_ref(),
-                &self.config.region,
-                "s3",
-                self.config.sign_payload,
-                payload_sha256.as_deref(),
-            )
-            .send_retry(&self.config.retry_config)
-            .await
-            .context(PutRequestSnafu {
-                path: path.as_ref(),
-            })?;
-
-        Ok(response)
+        PutRequest {
+            path,
+            builder,
+            payload_sha256,
+            config: &self.config,
+        }
     }
 
     /// Make an S3 Delete request <https://docs.aws.amazon.com/AmazonS3/latest/API/API_DeleteObject.html>
@@ -292,14 +320,14 @@ impl S3Client {
         path: &Path,
         query: &T,
     ) -> Result<()> {
-        let credential = self.get_credential().await?;
+        let credential = self.config.get_credential().await?;
         let url = self.config.path_url(path);
 
         self.client
             .request(Method::DELETE, url)
             .query(query)
             .with_aws_sigv4(
-                credential.as_ref(),
+                credential.as_deref(),
                 &self.config.region,
                 "s3",
                 self.config.sign_payload,
@@ -321,25 +349,20 @@ impl S3Client {
     /// there was an error for a certain path, the error will be returned in the
     /// vector. If there was an issue with making the overall request, an error
     /// will be returned at the top level.
-    pub async fn bulk_delete_request(
-        &self,
-        paths: Vec<Path>,
-    ) -> Result<Vec<Result<Path>>> {
+    pub async fn bulk_delete_request(&self, paths: Vec<Path>) -> Result<Vec<Result<Path>>> {
         if paths.is_empty() {
             return Ok(Vec::new());
         }
 
-        let credential = self.get_credential().await?;
+        let credential = self.config.get_credential().await?;
         let url = format!("{}?delete", self.config.bucket_endpoint);
 
         let mut buffer = Vec::new();
         let mut writer = quick_xml::Writer::new(&mut buffer);
         writer
             .write_event(xml_events::Event::Start(
-                xml_events::BytesStart::new("Delete").with_attributes([(
-                    "xmlns",
-                    "http://s3.amazonaws.com/doc/2006-03-01/",
-                )]),
+                xml_events::BytesStart::new("Delete")
+                    .with_attributes([("xmlns", "http://s3.amazonaws.com/doc/2006-03-01/")]),
             ))
             .unwrap();
         for path in &paths {
@@ -390,7 +413,7 @@ impl S3Client {
             .header(CONTENT_TYPE, "application/xml")
             .body(body)
             .with_aws_sigv4(
-                credential.as_ref(),
+                credential.as_deref(),
                 &self.config.region,
                 "s3",
                 self.config.sign_payload,
@@ -403,9 +426,11 @@ impl S3Client {
             .await
             .context(DeleteObjectsResponseSnafu {})?;
 
-        let response: BatchDeleteResponse = quick_xml::de::from_reader(response.reader())
-            .map_err(|err| Error::InvalidDeleteObjectsResponse {
-                source: Box::new(err),
+        let response: BatchDeleteResponse =
+            quick_xml::de::from_reader(response.reader()).map_err(|err| {
+                Error::InvalidDeleteObjectsResponse {
+                    source: Box::new(err),
+                }
             })?;
 
         // Assume all were ok, then fill in errors. This guarantees output order
@@ -413,11 +438,10 @@ impl S3Client {
         let mut results: Vec<Result<Path>> = paths.iter().cloned().map(Ok).collect();
         for content in response.content.into_iter() {
             if let DeleteObjectResult::Error(error) = content {
-                let path = Path::parse(&error.key).map_err(|err| {
-                    Error::InvalidDeleteObjectsResponse {
+                let path =
+                    Path::parse(&error.key).map_err(|err| Error::InvalidDeleteObjectsResponse {
                         source: Box::new(err),
-                    }
-                })?;
+                    })?;
                 let i = paths.iter().find_position(|&p| p == &path).unwrap().0;
                 results[i] = Err(Error::from(error).into());
             }
@@ -427,13 +451,8 @@ impl S3Client {
     }
 
     /// Make an S3 Copy request <https://docs.aws.amazon.com/AmazonS3/latest/API/API_CopyObject.html>
-    pub async fn copy_request(
-        &self,
-        from: &Path,
-        to: &Path,
-        overwrite: bool,
-    ) -> Result<()> {
-        let credential = self.get_credential().await?;
+    pub async fn copy_request(&self, from: &Path, to: &Path, overwrite: bool) -> Result<()> {
+        let credential = self.config.get_credential().await?;
         let url = self.config.path_url(to);
         let source = format!("{}/{}", self.config.bucket, encode_path(from));
 
@@ -449,9 +468,7 @@ impl S3Client {
                 }
                 None => {
                     return Err(crate::Error::NotSupported {
-                        source: "S3 does not support copy-if-not-exists"
-                            .to_string()
-                            .into(),
+                        source: "S3 does not support copy-if-not-exists".to_string().into(),
                     })
                 }
             }
@@ -459,7 +476,7 @@ impl S3Client {
 
         builder
             .with_aws_sigv4(
-                credential.as_ref(),
+                credential.as_deref(),
                 &self.config.region,
                 "s3",
                 self.config.sign_payload,
@@ -483,14 +500,14 @@ impl S3Client {
     }
 
     pub async fn create_multipart(&self, location: &Path) -> Result<MultipartId> {
-        let credential = self.get_credential().await?;
+        let credential = self.config.get_credential().await?;
         let url = format!("{}?uploads=", self.config.path_url(location),);
 
         let response = self
             .client
             .request(Method::POST, url)
             .with_aws_sigv4(
-                credential.as_ref(),
+                credential.as_deref(),
                 &self.config.region,
                 "s3",
                 self.config.sign_payload,
@@ -503,10 +520,30 @@ impl S3Client {
             .await
             .context(CreateMultipartResponseBodySnafu)?;
 
-        let response: InitiateMultipart = quick_xml::de::from_reader(response.reader())
-            .context(InvalidMultipartResponseSnafu)?;
+        let response: InitiateMultipartUploadResult =
+            quick_xml::de::from_reader(response.reader()).context(InvalidMultipartResponseSnafu)?;
 
         Ok(response.upload_id)
+    }
+
+    pub async fn put_part(
+        &self,
+        path: &Path,
+        upload_id: &MultipartId,
+        part_idx: usize,
+        data: Bytes,
+    ) -> Result<PartId> {
+        let part = (part_idx + 1).to_string();
+
+        let result = self
+            .put_request(path, data)
+            .query(&[("partNumber", &part), ("uploadId", upload_id)])
+            .send()
+            .await?;
+
+        Ok(PartId {
+            content_id: result.e_tag.unwrap(),
+        })
     }
 
     pub async fn complete_multipart(
@@ -514,28 +551,20 @@ impl S3Client {
         location: &Path,
         upload_id: &str,
         parts: Vec<PartId>,
-    ) -> Result<()> {
-        let parts = parts
-            .into_iter()
-            .enumerate()
-            .map(|(part_idx, part)| MultipartPart {
-                e_tag: part.content_id,
-                part_number: part_idx + 1,
-            })
-            .collect();
-
-        let request = CompleteMultipart { part: parts };
+    ) -> Result<PutResult> {
+        let request = CompleteMultipartUpload::from(parts);
         let body = quick_xml::se::to_string(&request).unwrap();
 
-        let credential = self.get_credential().await?;
+        let credential = self.config.get_credential().await?;
         let url = self.config.path_url(location);
 
-        self.client
+        let response = self
+            .client
             .request(Method::POST, url)
             .query(&[("uploadId", upload_id)])
             .body(body)
             .with_aws_sigv4(
-                credential.as_ref(),
+                credential.as_deref(),
                 &self.config.region,
                 "s3",
                 self.config.sign_payload,
@@ -545,7 +574,42 @@ impl S3Client {
             .await
             .context(CompleteMultipartRequestSnafu)?;
 
-        Ok(())
+        let version = get_version(response.headers(), VERSION_HEADER).context(MetadataSnafu)?;
+
+        let data = response
+            .bytes()
+            .await
+            .context(CompleteMultipartResponseBodySnafu)?;
+
+        let response: CompleteMultipartUploadResult =
+            quick_xml::de::from_reader(data.reader()).context(InvalidMultipartResponseSnafu)?;
+
+        Ok(PutResult {
+            e_tag: Some(response.e_tag),
+            version,
+        })
+    }
+
+    #[cfg(test)]
+    pub async fn get_object_tagging(&self, path: &Path) -> Result<Response> {
+        let credential = self.config.get_credential().await?;
+        let url = format!("{}?tagging", self.config.path_url(path));
+        let response = self
+            .client
+            .request(Method::GET, url)
+            .with_aws_sigv4(
+                credential.as_deref(),
+                &self.config.region,
+                "s3",
+                self.config.sign_payload,
+                None,
+            )
+            .send_retry(&self.config.retry_config)
+            .await
+            .context(GetRequestSnafu {
+                path: path.as_ref(),
+            })?;
+        Ok(response)
     }
 }
 
@@ -553,26 +617,31 @@ impl S3Client {
 impl GetClient for S3Client {
     const STORE: &'static str = STORE;
 
+    const HEADER_CONFIG: HeaderConfig = HeaderConfig {
+        etag_required: false,
+        last_modified_required: false,
+        version_header: Some(VERSION_HEADER),
+    };
+
     /// Make an S3 GET request <https://docs.aws.amazon.com/AmazonS3/latest/API/API_GetObject.html>
-    async fn get_request(
-        &self,
-        path: &Path,
-        options: GetOptions,
-        head: bool,
-    ) -> Result<Response> {
-        let credential = self.get_credential().await?;
+    async fn get_request(&self, path: &Path, options: GetOptions) -> Result<Response> {
+        let credential = self.config.get_credential().await?;
         let url = self.config.path_url(path);
-        let method = match head {
+        let method = match options.head {
             true => Method::HEAD,
             false => Method::GET,
         };
 
-        let builder = self.client.request(method, url);
+        let mut builder = self.client.request(method, url);
+
+        if let Some(v) = &options.version {
+            builder = builder.query(&[("versionId", v)])
+        }
 
         let response = builder
             .with_get_options(options)
             .with_aws_sigv4(
-                credential.as_ref(),
+                credential.as_deref(),
                 &self.config.region,
                 "s3",
                 self.config.sign_payload,
@@ -598,7 +667,7 @@ impl ListClient for S3Client {
         token: Option<&str>,
         offset: Option<&str>,
     ) -> Result<(ListResult, Option<String>)> {
-        let credential = self.get_credential().await?;
+        let credential = self.config.get_credential().await?;
         let url = self.config.bucket_endpoint.clone();
 
         let mut query = Vec::with_capacity(4);
@@ -626,7 +695,7 @@ impl ListClient for S3Client {
             .request(Method::GET, &url)
             .query(&query)
             .with_aws_sigv4(
-                credential.as_ref(),
+                credential.as_deref(),
                 &self.config.region,
                 "s3",
                 self.config.sign_payload,
@@ -639,8 +708,8 @@ impl ListClient for S3Client {
             .await
             .context(ListResponseBodySnafu)?;
 
-        let mut response: ListResponse = quick_xml::de::from_reader(response.reader())
-            .context(InvalidListResponseSnafu)?;
+        let mut response: ListResponse =
+            quick_xml::de::from_reader(response.reader()).context(InvalidListResponseSnafu)?;
         let token = response.next_continuation_token.take();
 
         Ok((response.try_into()?, token))

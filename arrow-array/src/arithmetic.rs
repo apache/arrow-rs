@@ -229,10 +229,7 @@ macro_rules! native_type_op {
             #[inline]
             fn pow_checked(self, exp: u32) -> Result<Self, ArrowError> {
                 self.checked_pow(exp).ok_or_else(|| {
-                    ArrowError::ComputeError(format!(
-                        "Overflow happened on: {:?} ^ {exp:?}",
-                        self
-                    ))
+                    ArrowError::ComputeError(format!("Overflow happened on: {:?} ^ {exp:?}", self))
                 })
             }
 

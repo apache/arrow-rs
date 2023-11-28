@@ -17,8 +17,7 @@
 
 use crate::config::Parse;
 
-/// Configure how to provide [`ObjectStore::copy_if_not_exists`] for
-/// [`AmazonS3`].
+/// Configure how to provide [`ObjectStore::copy_if_not_exists`] for [`AmazonS3`].
 ///
 /// [`ObjectStore::copy_if_not_exists`]: crate::ObjectStore::copy_if_not_exists
 /// [`AmazonS3`]: super::AmazonS3
@@ -67,6 +66,48 @@ impl Parse for S3CopyIfNotExists {
         Self::from_str(v).ok_or_else(|| crate::Error::Generic {
             store: "Config",
             source: format!("Failed to parse \"{v}\" as S3CopyIfNotExists").into(),
+        })
+    }
+}
+
+/// Configure how to provide conditional put support for [`AmazonS3`].
+///
+/// [`AmazonS3`]: super::AmazonS3
+#[derive(Debug, Clone)]
+#[allow(missing_copy_implementations)]
+#[non_exhaustive]
+pub enum S3ConditionalPut {
+    /// Some S3-compatible stores, such as Cloudflare R2 and minio support conditional
+    /// put using the standard [HTTP precondition] headers If-Match and If-None-Match
+    ///
+    /// Encoded as `etag` ignoring whitespace
+    ///
+    /// [HTTP precondition]: https://datatracker.ietf.org/doc/html/rfc9110#name-preconditions
+    ETagMatch,
+}
+
+impl std::fmt::Display for S3ConditionalPut {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::ETagMatch => write!(f, "etag"),
+        }
+    }
+}
+
+impl S3ConditionalPut {
+    fn from_str(s: &str) -> Option<Self> {
+        match s.trim() {
+            "etag" => Some(Self::ETagMatch),
+            _ => None,
+        }
+    }
+}
+
+impl Parse for S3ConditionalPut {
+    fn parse(v: &str) -> crate::Result<Self> {
+        Self::from_str(v).ok_or_else(|| crate::Error::Generic {
+            store: "Config",
+            source: format!("Failed to parse \"{v}\" as S3PutConditional").into(),
         })
     }
 }

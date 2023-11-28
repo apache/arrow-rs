@@ -27,6 +27,7 @@ use arrow::compute::{lexsort, sort, sort_to_indices, SortColumn};
 use arrow::datatypes::{Int16Type, Int32Type};
 use arrow::util::bench_util::*;
 use arrow::{array::*, datatypes::Float32Type};
+use arrow_ord::rank::rank;
 
 fn create_f32_array(size: usize, with_nulls: bool) -> ArrayRef {
     let null_density = if with_nulls { 0.5 } else { 0.0 };
@@ -121,10 +122,8 @@ fn add_benchmark(c: &mut Criterion) {
         b.iter(|| bench_sort_to_indices(&arr, None))
     });
 
-    let run_encoded_array = create_primitive_run_array::<Int16Type, Int32Type>(
-        2usize.pow(12),
-        2usize.pow(10),
-    );
+    let run_encoded_array =
+        create_primitive_run_array::<Int16Type, Int32Type>(2usize.pow(12), 2usize.pow(10));
 
     c.bench_function("sort primitive run 2^12", |b| {
         b.iter(|| bench_sort(&run_encoded_array))
@@ -212,6 +211,26 @@ fn add_benchmark(c: &mut Criterion) {
     });
     c.bench_function("lexsort (f32, f32) nulls 2^12 limit 2^12", |b| {
         b.iter(|| bench_lexsort(&arr_a, &arr_b, Some(2usize.pow(12))))
+    });
+
+    let arr = create_f32_array(2usize.pow(12), false);
+    c.bench_function("rank f32 2^12", |b| {
+        b.iter(|| black_box(rank(&arr, None).unwrap()))
+    });
+
+    let arr = create_f32_array(2usize.pow(12), true);
+    c.bench_function("rank f32 nulls 2^12", |b| {
+        b.iter(|| black_box(rank(&arr, None).unwrap()))
+    });
+
+    let arr = create_string_array_with_len::<i32>(2usize.pow(12), 0.0, 10);
+    c.bench_function("rank string[10] 2^12", |b| {
+        b.iter(|| black_box(rank(&arr, None).unwrap()))
+    });
+
+    let arr = create_string_array_with_len::<i32>(2usize.pow(12), 0.5, 10);
+    c.bench_function("rank string[10] nulls 2^12", |b| {
+        b.iter(|| black_box(rank(&arr, None).unwrap()))
     });
 }
 

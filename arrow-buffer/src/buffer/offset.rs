@@ -148,6 +148,14 @@ impl<O: ArrowNativeType> OffsetBuffer<O> {
     pub fn slice(&self, offset: usize, len: usize) -> Self {
         Self(self.0.slice(offset, len.saturating_add(1)))
     }
+
+    /// Returns true if this [`OffsetBuffer`] is equal to `other`, using pointer comparisons
+    /// to determine buffer equality. This is cheaper than `PartialEq::eq` but may
+    /// return false when the arrays are logically equal
+    #[inline]
+    pub fn ptr_eq(&self, other: &Self) -> bool {
+        self.0.ptr_eq(&other.0)
+    }
 }
 
 impl<T: ArrowNativeType> Deref for OffsetBuffer<T> {
@@ -211,8 +219,7 @@ mod tests {
         assert_eq!(buffer.as_ref(), &[0, 2, 8, 11, 18, 20]);
 
         let half_max = i32::MAX / 2;
-        let buffer =
-            OffsetBuffer::<i32>::from_lengths([half_max as usize, half_max as usize]);
+        let buffer = OffsetBuffer::<i32>::from_lengths([half_max as usize, half_max as usize]);
         assert_eq!(buffer.as_ref(), &[0, half_max, half_max * 2]);
     }
 

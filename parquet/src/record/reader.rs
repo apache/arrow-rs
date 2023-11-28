@@ -82,14 +82,8 @@ impl TreeBuilder {
         let mut path = Vec::new();
 
         for field in descr.root_schema().get_fields() {
-            let reader = self.reader_tree(
-                field.clone(),
-                &mut path,
-                0,
-                0,
-                &paths,
-                row_group_reader,
-            )?;
+            let reader =
+                self.reader_tree(field.clone(), &mut path, 0, 0, &paths, row_group_reader)?;
             readers.push(reader);
         }
 
@@ -152,11 +146,7 @@ impl TreeBuilder {
             match field.get_basic_info().converted_type() {
                 // List types
                 ConvertedType::LIST => {
-                    assert_eq!(
-                        field.get_fields().len(),
-                        1,
-                        "Invalid list type {field:?}"
-                    );
+                    assert_eq!(field.get_fields().len(), 1, "Invalid list type {field:?}");
 
                     let repeated_field = field.get_fields()[0].clone();
                     assert_eq!(
@@ -208,11 +198,7 @@ impl TreeBuilder {
                 }
                 // Map types (key-value pairs)
                 ConvertedType::MAP | ConvertedType::MAP_KEY_VALUE => {
-                    assert_eq!(
-                        field.get_fields().len(),
-                        1,
-                        "Invalid map type: {field:?}"
-                    );
+                    assert_eq!(field.get_fields().len(), 1, "Invalid map type: {field:?}");
                     assert!(
                         !field.get_fields()[0].is_primitive(),
                         "Invalid map type: {field:?}"
@@ -404,8 +390,7 @@ impl Reader {
             Reader::GroupReader(_, _, ref mut readers) => {
                 let mut fields = Vec::new();
                 for reader in readers {
-                    fields
-                        .push((String::from(reader.field_name()), reader.read_field()?));
+                    fields.push((String::from(reader.field_name()), reader.read_field()?));
                 }
                 Ok(make_row(fields))
             }
@@ -436,10 +421,7 @@ impl Reader {
                     if reader.repetition() != Repetition::OPTIONAL
                         || reader.current_def_level() > def_level
                     {
-                        fields.push((
-                            String::from(reader.field_name()),
-                            reader.read_field()?,
-                        ));
+                        fields.push((String::from(reader.field_name()), reader.read_field()?));
                     } else {
                         reader.advance_columns();
                         fields.push((String::from(reader.field_name()), Field::Null));
@@ -471,13 +453,7 @@ impl Reader {
                 }
                 Field::ListInternal(make_list(elements))
             }
-            Reader::KeyValueReader(
-                _,
-                def_level,
-                rep_level,
-                ref mut keys,
-                ref mut values,
-            ) => {
+            Reader::KeyValueReader(_, def_level, rep_level, ref mut keys, ref mut values) => {
                 let mut pairs = Vec::new();
                 loop {
                     if keys.current_def_level() > def_level {
@@ -633,9 +609,20 @@ impl<'a> Either<'a> {
     }
 }
 
-/// Iterator of [`Row`]s.
-/// It is used either for a single row group to iterate over data in that row group, or
-/// an entire file with auto buffering of all row groups.
+/// Access parquet data as an iterator of [`Row`]
+///
+/// # Caveats
+///
+/// Parquet stores data in a columnar fashion using [Dremel] encoding, and is therefore highly
+/// optimised for reading data by column, not row. As a consequence applications concerned with
+/// performance should prefer the columnar arrow or [ColumnReader] APIs.
+///
+/// Additionally the current implementation does not correctly handle repeated fields ([#2394]),
+/// and workloads looking to handle such schema should use the other APIs.
+///
+/// [#2394]: https://github.com/apache/arrow-rs/issues/2394
+/// [ColumnReader]: crate::file::reader::RowGroupReader::get_column_reader
+/// [Dremel]: https://research.google/pubs/pub36632/
 pub struct RowIter<'a> {
     descr: SchemaDescPtr,
     tree_builder: TreeBuilder,
@@ -672,19 +659,14 @@ impl<'a> RowIter<'a> {
     /// file.
     pub fn from_file(proj: Option<Type>, reader: &'a dyn FileReader) -> Result<Self> {
         let either = Either::Left(reader);
-        let descr = Self::get_proj_descr(
-            proj,
-            reader.metadata().file_metadata().schema_descr_ptr(),
-        )?;
+        let descr =
+            Self::get_proj_descr(proj, reader.metadata().file_metadata().schema_descr_ptr())?;
 
         Ok(Self::new(Some(either), None, descr))
     }
 
     /// Creates iterator of [`Row`]s for a specific row group.
-    pub fn from_row_group(
-        proj: Option<Type>,
-        reader: &'a dyn RowGroupReader,
-    ) -> Result<Self> {
+    pub fn from_row_group(proj: Option<Type>, reader: &'a dyn RowGroupReader) -> Result<Self> {
         let descr = Self::get_proj_descr(proj, reader.metadata().schema_descr_ptr())?;
         let tree_builder = Self::tree_builder();
         let row_iter = tree_builder.as_iter(descr.clone(), reader)?;
@@ -730,10 +712,7 @@ impl<'a> RowIter<'a> {
     /// Helper method to get schema descriptor for projected schema.
     /// If projection is None, then full schema is returned.
     #[inline]
-    fn get_proj_descr(
-        proj: Option<Type>,
-        root_descr: SchemaDescPtr,
-    ) -> Result<SchemaDescPtr> {
+    fn get_proj_descr(proj: Option<Type>, root_descr: SchemaDescPtr) -> Result<SchemaDescPtr> {
         match proj {
             Some(projection) => {
                 // check if projection is part of file schema
@@ -745,6 +724,12 @@ impl<'a> RowIter<'a> {
             }
             None => Ok(root_descr),
         }
+    }
+
+    /// Sets batch size for this row iter.
+    pub fn with_batch_size(mut self, batch_size: usize) -> Self {
+        self.tree_builder = self.tree_builder.with_batch_size(batch_size);
+        self
     }
 
     /// Returns common tree builder, so the same settings are applied to both iterators
@@ -993,17 +978,11 @@ mod tests {
                                     list![
                                         group![
                                             ("E".to_string(), Field::Int(10)),
-                                            (
-                                                "F".to_string(),
-                                                Field::Str("aaa".to_string())
-                                            )
+                                            ("F".to_string(), Field::Str("aaa".to_string()))
                                         ],
                                         group![
                                             ("E".to_string(), Field::Int(-10)),
-                                            (
-                                                "F".to_string(),
-                                                Field::Str("bbb".to_string())
-                                            )
+                                            ("F".to_string(), Field::Str("bbb".to_string()))
                                         ]
                                     ],
                                     list![group![
@@ -1083,10 +1062,7 @@ mod tests {
                                         ],
                                         group![
                                             ("E".to_string(), Field::Int(10)),
-                                            (
-                                                "F".to_string(),
-                                                Field::Str("aaa".to_string())
-                                            )
+                                            ("F".to_string(), Field::Str("aaa".to_string()))
                                         ],
                                         group![
                                             ("E".to_string(), Field::Null),
@@ -1094,10 +1070,7 @@ mod tests {
                                         ],
                                         group![
                                             ("E".to_string(), Field::Int(-10)),
-                                            (
-                                                "F".to_string(),
-                                                Field::Str("bbb".to_string())
-                                            )
+                                            ("F".to_string(), Field::Str("bbb".to_string()))
                                         ],
                                         group![
                                             ("E".to_string(), Field::Null),
@@ -1107,10 +1080,7 @@ mod tests {
                                     list![
                                         group![
                                             ("E".to_string(), Field::Int(11)),
-                                            (
-                                                "F".to_string(),
-                                                Field::Str("c".to_string())
-                                            )
+                                            ("F".to_string(), Field::Str("c".to_string()))
                                         ],
                                         Field::Null
                                     ],
@@ -1134,10 +1104,7 @@ mod tests {
                                 ),
                                 (
                                     Field::Str("g2".to_string()),
-                                    group![(
-                                        "H".to_string(),
-                                        group![("i".to_string(), list![])]
-                                    )]
+                                    group![("H".to_string(), group![("i".to_string(), list![])])]
                                 ),
                                 (Field::Str("g3".to_string()), Field::Null),
                                 (
@@ -1271,8 +1238,7 @@ mod tests {
       }
     ";
         let schema = parse_message_type(schema).unwrap();
-        let rows =
-            test_file_reader_rows("nested_maps.snappy.parquet", Some(schema)).unwrap();
+        let rows = test_file_reader_rows("nested_maps.snappy.parquet", Some(schema)).unwrap();
         let expected_rows = vec![
             row![
                 ("c".to_string(), Field::Double(1.0)),
@@ -1339,8 +1305,7 @@ mod tests {
       }
     ";
         let schema = parse_message_type(schema).unwrap();
-        let rows =
-            test_file_reader_rows("nested_maps.snappy.parquet", Some(schema)).unwrap();
+        let rows = test_file_reader_rows("nested_maps.snappy.parquet", Some(schema)).unwrap();
         let expected_rows = vec![
             row![(
                 "a".to_string(),
@@ -1406,8 +1371,7 @@ mod tests {
       }
     ";
         let schema = parse_message_type(schema).unwrap();
-        let rows =
-            test_file_reader_rows("nested_lists.snappy.parquet", Some(schema)).unwrap();
+        let rows = test_file_reader_rows("nested_lists.snappy.parquet", Some(schema)).unwrap();
         let expected_rows = vec![
             row![(
                 "a".to_string(),

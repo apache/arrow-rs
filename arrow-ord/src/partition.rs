@@ -78,7 +78,7 @@ impl Partitions {
 /// # Example:
 ///
 /// For example, given columns `x`, `y` and `z`, calling
-/// `lexicographical_partition_ranges(values, (x, y))` will divide the
+/// [`partition`]`(values, (x, y))` will divide the
 /// rows into ranges where the values of `(x, y)` are equal:
 ///
 /// ```text
@@ -160,8 +160,9 @@ fn find_boundaries(v: &dyn Array) -> Result<BooleanBuffer, ArrowError> {
     Ok(distinct(&v1, &v2)?.values().clone())
 }
 
-/// Given a list of already sorted columns, find partition ranges that would partition
-/// lexicographically equal values across columns.
+/// Use [`partition`] instead. Given a list of already sorted columns, find
+/// partition ranges that would partition lexicographically equal values across
+/// columns.
 ///
 /// The returned vec would be of size k where k is cardinality of the sorted values; Consecutive
 /// values will be connected: (a, b) and (b, c), where start = 0 and end = n for the first and last
@@ -300,9 +301,7 @@ mod tests {
             Arc::new(Int64Array::new(vec![1; 9].into(), None)) as _,
             Arc::new(Int64Array::new(
                 vec![1, 1, 2, 2, 2, 3, 3, 3, 3].into(),
-                Some(
-                    vec![false, true, true, true, true, false, false, true, false].into(),
-                ),
+                Some(vec![false, true, true, true, true, false, false, true, false].into()),
             )) as _,
             Arc::new(Int64Array::new(
                 vec![1, 1, 2, 2, 2, 2, 2, 3, 7].into(),

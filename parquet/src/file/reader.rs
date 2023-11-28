@@ -134,7 +134,7 @@ pub trait FileReader: Send + Sync {
     /// Get the `i`th row group reader. Note this doesn't do bound check.
     fn get_row_group(&self, i: usize) -> Result<Box<dyn RowGroupReader + '_>>;
 
-    /// Get full iterator of `Row`s from a file (over all row groups).
+    /// Get an iterator over the row in this file, see [`RowIter`] for caveats.
     ///
     /// Iterator will automatically load the next row group to advance.
     ///
@@ -161,33 +161,28 @@ pub trait RowGroupReader: Send + Sync {
         let col_descr = schema_descr.column(i);
         let col_page_reader = self.get_column_page_reader(i)?;
         let col_reader = match col_descr.physical_type() {
-            Type::BOOLEAN => ColumnReader::BoolColumnReader(ColumnReaderImpl::new(
+            Type::BOOLEAN => {
+                ColumnReader::BoolColumnReader(ColumnReaderImpl::new(col_descr, col_page_reader))
+            }
+            Type::INT32 => {
+                ColumnReader::Int32ColumnReader(ColumnReaderImpl::new(col_descr, col_page_reader))
+            }
+            Type::INT64 => {
+                ColumnReader::Int64ColumnReader(ColumnReaderImpl::new(col_descr, col_page_reader))
+            }
+            Type::INT96 => {
+                ColumnReader::Int96ColumnReader(ColumnReaderImpl::new(col_descr, col_page_reader))
+            }
+            Type::FLOAT => {
+                ColumnReader::FloatColumnReader(ColumnReaderImpl::new(col_descr, col_page_reader))
+            }
+            Type::DOUBLE => {
+                ColumnReader::DoubleColumnReader(ColumnReaderImpl::new(col_descr, col_page_reader))
+            }
+            Type::BYTE_ARRAY => ColumnReader::ByteArrayColumnReader(ColumnReaderImpl::new(
                 col_descr,
                 col_page_reader,
             )),
-            Type::INT32 => ColumnReader::Int32ColumnReader(ColumnReaderImpl::new(
-                col_descr,
-                col_page_reader,
-            )),
-            Type::INT64 => ColumnReader::Int64ColumnReader(ColumnReaderImpl::new(
-                col_descr,
-                col_page_reader,
-            )),
-            Type::INT96 => ColumnReader::Int96ColumnReader(ColumnReaderImpl::new(
-                col_descr,
-                col_page_reader,
-            )),
-            Type::FLOAT => ColumnReader::FloatColumnReader(ColumnReaderImpl::new(
-                col_descr,
-                col_page_reader,
-            )),
-            Type::DOUBLE => ColumnReader::DoubleColumnReader(ColumnReaderImpl::new(
-                col_descr,
-                col_page_reader,
-            )),
-            Type::BYTE_ARRAY => ColumnReader::ByteArrayColumnReader(
-                ColumnReaderImpl::new(col_descr, col_page_reader),
-            ),
             Type::FIXED_LEN_BYTE_ARRAY => ColumnReader::FixedLenByteArrayColumnReader(
                 ColumnReaderImpl::new(col_descr, col_page_reader),
             ),
@@ -199,7 +194,7 @@ pub trait RowGroupReader: Send + Sync {
     /// to read bloom filters.
     fn get_column_bloom_filter(&self, i: usize) -> Option<&Sbbf>;
 
-    /// Get iterator of `Row`s from this row group.
+    /// Get an iterator over the row in this file, see [`RowIter`] for caveats.
     ///
     /// Projected schema can be a subset of or equal to the file schema, when it is None,
     /// full file schema is assumed.

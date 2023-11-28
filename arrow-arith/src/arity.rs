@@ -49,10 +49,7 @@ where
 }
 
 /// See [`PrimitiveArray::try_unary`]
-pub fn try_unary<I, F, O>(
-    array: &PrimitiveArray<I>,
-    op: F,
-) -> Result<PrimitiveArray<O>, ArrowError>
+pub fn try_unary<I, F, O>(array: &PrimitiveArray<I>, op: F) -> Result<PrimitiveArray<O>, ArrowError>
 where
     I: ArrowPrimitiveType,
     O: ArrowPrimitiveType,
@@ -86,10 +83,7 @@ where
 }
 
 /// A helper function that applies a fallible unary function to a dictionary array with primitive value type.
-fn try_unary_dict<K, F, T>(
-    array: &DictionaryArray<K>,
-    op: F,
-) -> Result<ArrayRef, ArrowError>
+fn try_unary_dict<K, F, T>(array: &DictionaryArray<K>, op: F) -> Result<ArrayRef, ArrowError>
 where
     K: ArrowDictionaryKeyType + ArrowNumericType,
     T: ArrowPrimitiveType,
@@ -299,8 +293,7 @@ where
         try_binary_no_nulls(len, a, b, op)
     } else {
         let nulls =
-            NullBuffer::union(a.logical_nulls().as_ref(), b.logical_nulls().as_ref())
-                .unwrap();
+            NullBuffer::union(a.logical_nulls().as_ref(), b.logical_nulls().as_ref()).unwrap();
 
         let mut buffer = BufferBuilder::<O::Native>::new(len);
         buffer.append_n_zeroed(len);
@@ -308,8 +301,7 @@ where
 
         nulls.try_for_each_valid_idx(|idx| {
             unsafe {
-                *slice.get_unchecked_mut(idx) =
-                    op(a.value_unchecked(idx), b.value_unchecked(idx))?
+                *slice.get_unchecked_mut(idx) = op(a.value_unchecked(idx), b.value_unchecked(idx))?
             };
             Ok::<_, ArrowError>(())
         })?;
@@ -360,8 +352,7 @@ where
         try_binary_no_nulls_mut(len, a, b, op)
     } else {
         let nulls =
-            NullBuffer::union(a.logical_nulls().as_ref(), b.logical_nulls().as_ref())
-                .unwrap();
+            NullBuffer::union(a.logical_nulls().as_ref(), b.logical_nulls().as_ref()).unwrap();
 
         let mut builder = a.into_builder()?;
 
@@ -440,8 +431,7 @@ mod tests {
     #[test]
     #[allow(deprecated)]
     fn test_unary_f64_slice() {
-        let input =
-            Float64Array::from(vec![Some(5.1f64), None, Some(6.8), None, Some(7.2)]);
+        let input = Float64Array::from(vec![Some(5.1f64), None, Some(6.8), None, Some(7.2)]);
         let input_slice = input.slice(1, 4);
         let result = unary(&input_slice, |n| n.round());
         assert_eq!(

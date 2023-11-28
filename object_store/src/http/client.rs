@@ -15,11 +15,14 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::client::get::GetClient;
+use crate::client::header::HeaderConfig;
 use crate::client::retry::{self, RetryConfig, RetryExt};
 use crate::client::GetOptionsExt;
 use crate::path::{Path, DELIMITER};
 use crate::util::deserialize_rfc1123;
 use crate::{ClientOptions, GetOptions, ObjectMeta, Result};
+use async_trait::async_trait;
 use bytes::{Buf, Bytes};
 use chrono::{DateTime, Utc};
 use percent_encoding::percent_decode_str;
@@ -36,6 +39,9 @@ enum Error {
 
     #[snafu(display("Request error: {}", source))]
     Reqwest { source: reqwest::Error },
+
+    #[snafu(display("Range request not supported by {}", href))]
+    RangeNotSupported { href: String },
 
     #[snafu(display("Error decoding PROPFIND response: {}", source))]
     InvalidPropFind { source: quick_xml::de::DeError },
@@ -84,11 +90,7 @@ pub struct Client {
 }
 
 impl Client {
-    pub fn new(
-        url: Url,
-        client_options: ClientOptions,
-        retry_config: RetryConfig,
-    ) -> Result<Self> {
+    pub fn new(url: Url, client_options: ClientOptions, retry_config: RetryConfig) -> Result<Self> {
         let client = client_options.client()?;
         Ok(Self {
             url,
@@ -154,7 +156,7 @@ impl Client {
         Ok(())
     }
 
-    pub async fn put(&self, location: &Path, bytes: Bytes) -> Result<()> {
+    pub async fn put(&self, location: &Path, bytes: Bytes) -> Result<Response> {
         let mut retry = false;
         loop {
             let url = self.path_url(location);
@@ -164,7 +166,7 @@ impl Client {
             }
 
             match builder.send_retry(&self.retry_config).await {
-                Ok(_) => return Ok(()),
+                Ok(response) => return Ok(response),
                 Err(source) => match source.status() {
                     // Some implementations return 404 instead of 409
                     Some(StatusCode::CONFLICT | StatusCode::NOT_FOUND) if !retry => {
@@ -177,11 +179,7 @@ impl Client {
         }
     }
 
-    pub async fn list(
-        &self,
-        location: Option<&Path>,
-        depth: &str,
-    ) -> Result<MultiStatus> {
+    pub async fn list(&self, location: Option<&Path>, depth: &str) -> Result<MultiStatus> {
         let url = location
             .map(|path| self.path_url(path))
             .unwrap_or_else(|| self.url.clone());
@@ -214,8 +212,7 @@ impl Client {
             Err(source) => return Err(Error::Request { source }.into()),
         };
 
-        let status = quick_xml::de::from_reader(response.reader())
-            .context(InvalidPropFindSnafu)?;
+        let status = quick_xml::de::from_reader(response.reader()).context(InvalidPropFindSnafu)?;
         Ok(status)
     }
 
@@ -235,11 +232,68 @@ impl Client {
         Ok(())
     }
 
-    pub async fn get(&self, location: &Path, options: GetOptions) -> Result<Response> {
-        let url = self.path_url(location);
-        let builder = self.client.get(url);
+    pub async fn copy(&self, from: &Path, to: &Path, overwrite: bool) -> Result<()> {
+        let mut retry = false;
+        loop {
+            let method = Method::from_bytes(b"COPY").unwrap();
 
-        builder
+            let mut builder = self
+                .client
+                .request(method, self.path_url(from))
+                .header("Destination", self.path_url(to).as_str());
+
+            if !overwrite {
+                // While the Overwrite header appears to duplicate
+                // the functionality of the If-Match: * header of HTTP/1.1, If-Match
+                // applies only to the Request-URI, and not to the Destination of a COPY
+                // or MOVE.
+                builder = builder.header("Overwrite", "F");
+            }
+
+            return match builder.send_retry(&self.retry_config).await {
+                Ok(_) => Ok(()),
+                Err(source) => Err(match source.status() {
+                    Some(StatusCode::PRECONDITION_FAILED) if !overwrite => {
+                        crate::Error::AlreadyExists {
+                            path: to.to_string(),
+                            source: Box::new(source),
+                        }
+                    }
+                    // Some implementations return 404 instead of 409
+                    Some(StatusCode::CONFLICT | StatusCode::NOT_FOUND) if !retry => {
+                        retry = true;
+                        self.create_parent_directories(to).await?;
+                        continue;
+                    }
+                    _ => Error::Request { source }.into(),
+                }),
+            };
+        }
+    }
+}
+
+#[async_trait]
+impl GetClient for Client {
+    const STORE: &'static str = "HTTP";
+
+    /// Override the [`HeaderConfig`] to be less strict to support a
+    /// broader range of HTTP servers (#4831)
+    const HEADER_CONFIG: HeaderConfig = HeaderConfig {
+        etag_required: false,
+        last_modified_required: false,
+        version_header: None,
+    };
+
+    async fn get_request(&self, path: &Path, options: GetOptions) -> Result<Response> {
+        let url = self.path_url(path);
+        let method = match options.head {
+            true => Method::HEAD,
+            false => Method::GET,
+        };
+        let has_range = options.range.is_some();
+        let builder = self.client.request(method, url);
+
+        let res = builder
             .with_get_options(options)
             .send_retry(&self.retry_config)
             .await
@@ -248,40 +302,23 @@ impl Client {
                 Some(StatusCode::NOT_FOUND | StatusCode::METHOD_NOT_ALLOWED) => {
                     crate::Error::NotFound {
                         source: Box::new(source),
-                        path: location.to_string(),
+                        path: path.to_string(),
                     }
                 }
                 _ => Error::Request { source }.into(),
-            })
-    }
+            })?;
 
-    pub async fn copy(&self, from: &Path, to: &Path, overwrite: bool) -> Result<()> {
-        let from = self.path_url(from);
-        let to = self.path_url(to);
-        let method = Method::from_bytes(b"COPY").unwrap();
-
-        let mut builder = self
-            .client
-            .request(method, from)
-            .header("Destination", to.as_str());
-
-        if !overwrite {
-            builder = builder.header("Overwrite", "F");
+        // We expect a 206 Partial Content response if a range was requested
+        // a 200 OK response would indicate the server did not fulfill the request
+        if has_range && res.status() != StatusCode::PARTIAL_CONTENT {
+            return Err(crate::Error::NotSupported {
+                source: Box::new(Error::RangeNotSupported {
+                    href: path.to_string(),
+                }),
+            });
         }
 
-        match builder.send_retry(&self.retry_config).await {
-            Ok(_) => Ok(()),
-            Err(e)
-                if !overwrite
-                    && matches!(e.status(), Some(StatusCode::PRECONDITION_FAILED)) =>
-            {
-                Err(crate::Error::AlreadyExists {
-                    path: to.to_string(),
-                    source: Box::new(e),
-                })
-            }
-            Err(source) => Err(Error::Request { source }.into()),
-        }
+        Ok(res)
     }
 }
 
@@ -343,6 +380,7 @@ impl MultiStatusResponse {
             last_modified,
             size: self.size()?,
             e_tag: self.prop_stat.prop.e_tag.clone(),
+            version: None,
         })
     }
 

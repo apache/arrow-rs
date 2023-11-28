@@ -47,12 +47,12 @@ impl From<Error> for super::Error {
     }
 }
 
-/// Recognises various URL formats, identifying the relevant [`ObjectStore`](crate::ObjectStore)
+/// Recognises various URL formats, identifying the relevant [`ObjectStore`]
 #[derive(Debug, Eq, PartialEq)]
 enum ObjectStoreScheme {
-    /// Url corresponding to [`LocalFileSystem`](crate::local::LocalFileSystem)
+    /// Url corresponding to [`LocalFileSystem`]
     Local,
-    /// Url corresponding to [`InMemory`](crate::memory::InMemory)
+    /// Url corresponding to [`InMemory`]
     Memory,
     /// Url corresponding to [`AmazonS3`](crate::aws::AmazonS3)
     AmazonS3,
@@ -83,6 +83,8 @@ impl ObjectStoreScheme {
             ("https", Some(host)) => {
                 if host.ends_with("dfs.core.windows.net")
                     || host.ends_with("blob.core.windows.net")
+                    || host.ends_with("dfs.fabric.microsoft.com")
+                    || host.ends_with("blob.fabric.microsoft.com")
                 {
                     (Self::MicrosoftAzure, url.path())
                 } else if host.ends_with("amazonaws.com") {
@@ -99,12 +101,11 @@ impl ObjectStoreScheme {
             _ => return Err(Error::Unrecognised { url: url.clone() }),
         };
 
-        let path = Path::parse(path)?;
-        Ok((scheme, path))
+        Ok((scheme, Path::from_url_path(path)?))
     }
 }
 
-#[cfg(any(feature = "aws", feature = "gcp", feature = "azure", feature = "http"))]
+#[cfg(any(feature = "aws", feature = "gcp", feature = "azure"))]
 macro_rules! builder_opts {
     ($builder:ty, $url:expr, $options:expr) => {{
         let builder = $options.into_iter().fold(
@@ -166,12 +167,7 @@ where
             let url = &url[..url::Position::BeforePath];
             Box::new(crate::http::HttpBuilder::new().with_url(url).build()?) as _
         }
-        #[cfg(not(all(
-            feature = "aws",
-            feature = "azure",
-            feature = "gcp",
-            feature = "http"
-        )))]
+        #[cfg(not(all(feature = "aws", feature = "azure", feature = "gcp", feature = "http")))]
         s => {
             return Err(super::Error::Generic {
                 store: "parse_url",
@@ -240,8 +236,48 @@ mod tests {
                 "gs://bucket/path",
                 (ObjectStoreScheme::GoogleCloudStorage, "path"),
             ),
+            (
+                "gs://test.example.com/path",
+                (ObjectStoreScheme::GoogleCloudStorage, "path"),
+            ),
             ("http://mydomain/path", (ObjectStoreScheme::Http, "path")),
             ("https://mydomain/path", (ObjectStoreScheme::Http, "path")),
+            (
+                "s3://bucket/foo%20bar",
+                (ObjectStoreScheme::AmazonS3, "foo bar"),
+            ),
+            (
+                "https://foo/bar%20baz",
+                (ObjectStoreScheme::Http, "bar baz"),
+            ),
+            (
+                "file:///bar%252Efoo",
+                (ObjectStoreScheme::Local, "bar%2Efoo"),
+            ),
+            (
+                "abfss://file_system@account.dfs.fabric.microsoft.com/",
+                (ObjectStoreScheme::MicrosoftAzure, ""),
+            ),
+            (
+                "abfss://file_system@account.dfs.fabric.microsoft.com/",
+                (ObjectStoreScheme::MicrosoftAzure, ""),
+            ),
+            (
+                "https://account.dfs.fabric.microsoft.com/",
+                (ObjectStoreScheme::MicrosoftAzure, ""),
+            ),
+            (
+                "https://account.dfs.fabric.microsoft.com/container",
+                (ObjectStoreScheme::MicrosoftAzure, "container"),
+            ),
+            (
+                "https://account.blob.fabric.microsoft.com/",
+                (ObjectStoreScheme::MicrosoftAzure, ""),
+            ),
+            (
+                "https://account.blob.fabric.microsoft.com/container",
+                (ObjectStoreScheme::MicrosoftAzure, "container"),
+            ),
         ];
 
         for (s, (expected_scheme, expected_path)) in cases {
@@ -261,5 +297,13 @@ mod tests {
             let url = Url::parse(s).unwrap();
             assert!(ObjectStoreScheme::parse(&url).is_err());
         }
+    }
+
+    #[test]
+    fn test_url_spaces() {
+        let url = Url::parse("file:///my file with spaces").unwrap();
+        assert_eq!(url.path(), "/my%20file%20with%20spaces");
+        let (_, path) = parse_url(&url).unwrap();
+        assert_eq!(path.as_ref(), "my file with spaces");
     }
 }

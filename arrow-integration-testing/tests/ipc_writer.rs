@@ -113,12 +113,7 @@ fn write_2_0_0_compression() {
         for options in &all_options {
             println!("Using options {options:?}");
             roundtrip_arrow_file_with_options(&testdata, version, path, options.clone());
-            roundtrip_arrow_stream_with_options(
-                &testdata,
-                version,
-                path,
-                options.clone(),
-            );
+            roundtrip_arrow_stream_with_options(&testdata, version, path, options.clone());
         }
     });
 }
@@ -143,8 +138,7 @@ fn roundtrip_arrow_file_with_options(
     path: &str,
     options: IpcWriteOptions,
 ) {
-    let filename =
-        format!("{testdata}/arrow-ipc-stream/integration/{version}/{path}.arrow_file");
+    let filename = format!("{testdata}/arrow-ipc-stream/integration/{version}/{path}.arrow_file");
     println!("Verifying {filename}");
 
     let mut tempfile = tempfile::tempfile().unwrap();
@@ -156,12 +150,8 @@ fn roundtrip_arrow_file_with_options(
 
         // read and rewrite the file to a temp location
         {
-            let mut writer = FileWriter::try_new_with_options(
-                &mut tempfile,
-                &reader.schema(),
-                options,
-            )
-            .unwrap();
+            let mut writer =
+                FileWriter::try_new_with_options(&mut tempfile, &reader.schema(), options).unwrap();
             while let Some(Ok(batch)) = reader.next() {
                 writer.write(&batch).unwrap();
             }
@@ -207,12 +197,7 @@ fn roundtrip_arrow_file_with_options(
 /// Verification json file
 /// `arrow-ipc-stream/integration/<version>/<path>.json.gz
 fn roundtrip_arrow_stream(testdata: &str, version: &str, path: &str) {
-    roundtrip_arrow_stream_with_options(
-        testdata,
-        version,
-        path,
-        IpcWriteOptions::default(),
-    )
+    roundtrip_arrow_stream_with_options(testdata, version, path, IpcWriteOptions::default())
 }
 
 fn roundtrip_arrow_stream_with_options(
@@ -221,8 +206,7 @@ fn roundtrip_arrow_stream_with_options(
     path: &str,
     options: IpcWriteOptions,
 ) {
-    let filename =
-        format!("{testdata}/arrow-ipc-stream/integration/{version}/{path}.stream");
+    let filename = format!("{testdata}/arrow-ipc-stream/integration/{version}/{path}.stream");
     println!("Verifying {filename}");
 
     let mut tempfile = tempfile::tempfile().unwrap();
@@ -234,12 +218,9 @@ fn roundtrip_arrow_stream_with_options(
 
         // read and rewrite the file to a temp location
         {
-            let mut writer = StreamWriter::try_new_with_options(
-                &mut tempfile,
-                &reader.schema(),
-                options,
-            )
-            .unwrap();
+            let mut writer =
+                StreamWriter::try_new_with_options(&mut tempfile, &reader.schema(), options)
+                    .unwrap();
             while let Some(Ok(batch)) = reader.next() {
                 writer.write(&batch).unwrap();
             }

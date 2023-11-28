@@ -46,16 +46,13 @@ pub trait ListClientExt {
         offset: Option<&Path>,
     ) -> BoxStream<'_, Result<ListResult>>;
 
-    async fn list(
-        &self,
-        prefix: Option<&Path>,
-    ) -> Result<BoxStream<'_, Result<ObjectMeta>>>;
+    fn list(&self, prefix: Option<&Path>) -> BoxStream<'_, Result<ObjectMeta>>;
 
-    async fn list_with_offset(
+    fn list_with_offset(
         &self,
         prefix: Option<&Path>,
         offset: &Path,
-    ) -> Result<BoxStream<'_, Result<ObjectMeta>>>;
+    ) -> BoxStream<'_, Result<ObjectMeta>>;
 
     async fn list_with_delimiter(&self, prefix: Option<&Path>) -> Result<ListResult>;
 }
@@ -90,31 +87,22 @@ impl<T: ListClient> ListClientExt for T {
         .boxed()
     }
 
-    async fn list(
-        &self,
-        prefix: Option<&Path>,
-    ) -> Result<BoxStream<'_, Result<ObjectMeta>>> {
-        let stream = self
-            .list_paginated(prefix, false, None)
+    fn list(&self, prefix: Option<&Path>) -> BoxStream<'_, Result<ObjectMeta>> {
+        self.list_paginated(prefix, false, None)
             .map_ok(|r| futures::stream::iter(r.objects.into_iter().map(Ok)))
             .try_flatten()
-            .boxed();
-
-        Ok(stream)
+            .boxed()
     }
 
-    async fn list_with_offset(
+    fn list_with_offset(
         &self,
         prefix: Option<&Path>,
         offset: &Path,
-    ) -> Result<BoxStream<'_, Result<ObjectMeta>>> {
-        let stream = self
-            .list_paginated(prefix, false, Some(offset))
+    ) -> BoxStream<'_, Result<ObjectMeta>> {
+        self.list_paginated(prefix, false, Some(offset))
             .map_ok(|r| futures::stream::iter(r.objects.into_iter().map(Ok)))
             .try_flatten()
-            .boxed();
-
-        Ok(stream)
+            .boxed()
     }
 
     async fn list_with_delimiter(&self, prefix: Option<&Path>) -> Result<ListResult> {

@@ -173,11 +173,7 @@ impl<'a> std::fmt::Debug for MutableArrayData<'a> {
 /// Builds an extend that adds `offset` to the source primitive
 /// Additionally validates that `max` fits into the
 /// the underlying primitive returning None if not
-fn build_extend_dictionary(
-    array: &ArrayData,
-    offset: usize,
-    max: usize,
-) -> Option<Extend> {
+fn build_extend_dictionary(array: &ArrayData, offset: usize, max: usize) -> Option<Extend> {
     macro_rules! validate_and_build {
         ($dt: ty) => {{
             let _: $dt = max.try_into().ok()?;
@@ -215,27 +211,19 @@ fn build_extend(array: &ArrayData) -> Extend {
         DataType::Int64 => primitive::build_extend::<i64>(array),
         DataType::Float32 => primitive::build_extend::<f32>(array),
         DataType::Float64 => primitive::build_extend::<f64>(array),
-        DataType::Date32
-        | DataType::Time32(_)
-        | DataType::Interval(IntervalUnit::YearMonth) => {
+        DataType::Date32 | DataType::Time32(_) | DataType::Interval(IntervalUnit::YearMonth) => {
             primitive::build_extend::<i32>(array)
         }
         DataType::Date64
         | DataType::Time64(_)
         | DataType::Timestamp(_, _)
         | DataType::Duration(_)
-        | DataType::Interval(IntervalUnit::DayTime) => {
-            primitive::build_extend::<i64>(array)
-        }
-        DataType::Interval(IntervalUnit::MonthDayNano) => {
-            primitive::build_extend::<i128>(array)
-        }
+        | DataType::Interval(IntervalUnit::DayTime) => primitive::build_extend::<i64>(array),
+        DataType::Interval(IntervalUnit::MonthDayNano) => primitive::build_extend::<i128>(array),
         DataType::Decimal128(_, _) => primitive::build_extend::<i128>(array),
         DataType::Decimal256(_, _) => primitive::build_extend::<i256>(array),
         DataType::Utf8 | DataType::Binary => variable_size::build_extend::<i32>(array),
-        DataType::LargeUtf8 | DataType::LargeBinary => {
-            variable_size::build_extend::<i64>(array)
-        }
+        DataType::LargeUtf8 | DataType::LargeBinary => variable_size::build_extend::<i64>(array),
         DataType::Map(_, _) | DataType::List(_) => list::build_extend::<i32>(array),
         DataType::LargeList(_) => list::build_extend::<i64>(array),
         DataType::Dictionary(_, _) => unreachable!("should use build_extend_dictionary"),
@@ -265,9 +253,9 @@ fn build_extend_nulls(data_type: &DataType) -> ExtendNulls {
         DataType::Int64 => primitive::extend_nulls::<i64>,
         DataType::Float32 => primitive::extend_nulls::<f32>,
         DataType::Float64 => primitive::extend_nulls::<f64>,
-        DataType::Date32
-        | DataType::Time32(_)
-        | DataType::Interval(IntervalUnit::YearMonth) => primitive::extend_nulls::<i32>,
+        DataType::Date32 | DataType::Time32(_) | DataType::Interval(IntervalUnit::YearMonth) => {
+            primitive::extend_nulls::<i32>
+        }
         DataType::Date64
         | DataType::Time64(_)
         | DataType::Timestamp(_, _)
@@ -366,6 +354,14 @@ impl<'a> MutableArrayData<'a> {
     ) -> Self {
         let data_type = arrays[0].data_type();
 
+        for a in arrays.iter().skip(1) {
+            assert_eq!(
+                data_type,
+                a.data_type(),
+                "Arrays with inconsistent types passed to MutableArrayData"
+            )
+        }
+
         // if any of the arrays has nulls, insertions from any array requires setting bits
         // as there is at least one array with nulls.
         let use_nulls = use_nulls | arrays.iter().any(|array| array.null_count() > 0);
@@ -380,10 +376,7 @@ impl<'a> MutableArrayData<'a> {
                 array_capacity = *capacity;
                 preallocate_offset_and_binary_buffer::<i64>(*capacity, *value_cap)
             }
-            (
-                DataType::Utf8 | DataType::Binary,
-                Capacities::Binary(capacity, Some(value_cap)),
-            ) => {
+            (DataType::Utf8 | DataType::Binary, Capacities::Binary(capacity, Some(value_cap))) => {
                 array_capacity = *capacity;
                 preallocate_offset_and_binary_buffer::<i32>(*capacity, *value_cap)
             }
@@ -391,10 +384,7 @@ impl<'a> MutableArrayData<'a> {
                 array_capacity = *capacity;
                 new_buffers(data_type, *capacity)
             }
-            (
-                DataType::List(_) | DataType::LargeList(_),
-                Capacities::List(capacity, _),
-            ) => {
+            (DataType::List(_) | DataType::LargeList(_), Capacities::List(capacity, _)) => {
                 array_capacity = *capacity;
                 new_buffers(data_type, *capacity)
             }
@@ -435,16 +425,15 @@ impl<'a> MutableArrayData<'a> {
                     .map(|array| &array.child_data()[0])
                     .collect::<Vec<_>>();
 
-                let capacities = if let Capacities::List(capacity, ref child_capacities) =
-                    capacities
-                {
-                    child_capacities
-                        .clone()
-                        .map(|c| *c)
-                        .unwrap_or(Capacities::Array(capacity))
-                } else {
-                    Capacities::Array(array_capacity)
-                };
+                let capacities =
+                    if let Capacities::List(capacity, ref child_capacities) = capacities {
+                        child_capacities
+                            .clone()
+                            .map(|c| *c)
+                            .unwrap_or(Capacities::Array(capacity))
+                    } else {
+                        Capacities::Array(array_capacity)
+                    };
 
                 vec![MutableArrayData::with_capacities(
                     children, use_nulls, capacities,
@@ -546,8 +535,7 @@ impl<'a> MutableArrayData<'a> {
                             .collect();
                         let capacity = lengths.iter().sum();
 
-                        let mut mutable =
-                            MutableArrayData::new(dictionaries, false, capacity);
+                        let mut mutable = MutableArrayData::new(dictionaries, false, capacity);
 
                         for (i, len) in lengths.iter().enumerate() {
                             mutable.extend(i, 0, *len)

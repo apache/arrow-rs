@@ -17,6 +17,7 @@
 
 use arrow_array::{Array, ArrayRef};
 use arrow_schema::DataType as ArrowType;
+use bytes::Bytes;
 use std::any::Any;
 use std::sync::Arc;
 
@@ -27,7 +28,6 @@ use crate::data_type::{ByteArray, ByteArrayType};
 use crate::encodings::encoding::{get_encoder, DictEncoder, Encoder};
 use crate::errors::Result;
 use crate::schema::types::{ColumnDescPtr, ColumnDescriptor, ColumnPath, Type};
-use crate::util::memory::ByteBufferPtr;
 
 /// Returns a descriptor for a UTF-8 column
 pub fn utf8_column() -> ColumnDescPtr {
@@ -45,7 +45,7 @@ pub fn utf8_column() -> ColumnDescPtr {
 }
 
 /// Encode `data` with the provided `encoding`
-pub fn encode_byte_array(encoding: Encoding, data: &[ByteArray]) -> ByteBufferPtr {
+pub fn encode_byte_array(encoding: Encoding, data: &[ByteArray]) -> Bytes {
     let mut encoder = get_encoder::<ByteArrayType>(encoding).unwrap();
 
     encoder.put(data).unwrap();
@@ -53,7 +53,7 @@ pub fn encode_byte_array(encoding: Encoding, data: &[ByteArray]) -> ByteBufferPt
 }
 
 /// Returns the encoded dictionary and value data
-pub fn encode_dictionary(data: &[ByteArray]) -> (ByteBufferPtr, ByteBufferPtr) {
+pub fn encode_dictionary(data: &[ByteArray]) -> (Bytes, Bytes) {
     let mut dict_encoder = DictEncoder::<ByteArrayType>::new(utf8_column());
 
     dict_encoder.put(data).unwrap();
@@ -68,7 +68,7 @@ pub fn encode_dictionary(data: &[ByteArray]) -> (ByteBufferPtr, ByteBufferPtr) {
 /// Returns an array of data with its associated encoding, along with an encoded dictionary
 pub fn byte_array_all_encodings(
     data: Vec<impl Into<ByteArray>>,
-) -> (Vec<(Encoding, ByteBufferPtr)>, ByteBufferPtr) {
+) -> (Vec<(Encoding, Bytes)>, Bytes) {
     let data: Vec<_> = data.into_iter().map(Into::into).collect();
     let (encoded_dictionary, encoded_rle) = encode_dictionary(&data);
 

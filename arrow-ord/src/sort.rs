@@ -30,6 +30,7 @@ use arrow_select::take::take;
 use std::cmp::Ordering;
 use std::sync::Arc;
 
+use crate::rank::rank;
 pub use arrow_schema::SortOptions;
 
 /// Sort the `ArrayRef` using `SortOptions`.
@@ -53,10 +54,7 @@ pub use arrow_schema::SortOptions;
 /// let sorted_array = sort(&array, None).unwrap();
 /// assert_eq!(sorted_array.as_ref(), &Int32Array::from(vec![1, 2, 3, 4, 5]));
 /// ```
-pub fn sort(
-    values: &dyn Array,
-    options: Option<SortOptions>,
-) -> Result<ArrayRef, ArrowError> {
+pub fn sort(values: &dyn Array, options: Option<SortOptions>) -> Result<ArrayRef, ArrowError> {
     downcast_primitive_array!(
         values => sort_native_type(values, options),
         DataType::RunEndEncoded(_, _) => sort_run(values, options, None),
@@ -193,8 +191,7 @@ fn partition_validity(array: &dyn Array) -> (Vec<u32>, Vec<u32>) {
 }
 
 /// Sort elements from `ArrayRef` into an unsigned integer (`UInt32Array`) of indices.
-/// For floating point arrays any NaN values are considered to be greater than any other non-null value.
-/// `limit` is an option for [partial_sort].
+/// Floats are sorted using IEEE 754 totalOrder.  `limit` is an option for [partial_sort].
 pub fn sort_to_indices(
     array: &dyn Array,
     options: Option<SortOptions>,
@@ -400,14 +397,7 @@ fn child_rank(values: &dyn Array, options: SortOptions) -> Result<Vec<u32>, Arro
         descending: false,
         nulls_first: options.nulls_first != options.descending,
     });
-
-    let sorted_value_indices = sort_to_indices(values, value_options, None)?;
-    let sorted_indices = sorted_value_indices.values();
-    let mut out: Vec<_> = vec![0_u32; sorted_indices.len()];
-    for (ix, val) in sorted_indices.iter().enumerate() {
-        out[*val as usize] = ix as u32;
-    }
-    Ok(out)
+    rank(values, value_options)
 }
 
 // Sort run array and return sorted run array.
@@ -459,8 +449,7 @@ fn sort_run_downcasted<R: RunEndIndexType>(
         new_run_ends_builder.append(R::Native::from_usize(new_run_end).unwrap());
     };
 
-    let (values_indices, run_values) =
-        sort_run_inner(run_array, options, output_len, consume_runs);
+    let (values_indices, run_values) = sort_run_inner(run_array, options, output_len, consume_runs);
 
     let new_run_ends = unsafe {
         // Safety:
@@ -562,8 +551,7 @@ where
             // and len, both of which are within bounds of run_array
             if physical_index == start_physical_index {
                 (
-                    run_ends.get_unchecked(physical_index).as_usize()
-                        - run_array.offset(),
+                    run_ends.get_unchecked(physical_index).as_usize() - run_array.offset(),
                     0,
                 )
             } else if physical_index == end_physical_index {
@@ -652,10 +640,7 @@ pub struct SortColumn {
 /// Note: for multi-column sorts without a limit, using the [row format](https://docs.rs/arrow-row/latest/arrow_row/)
 /// may be significantly faster
 ///
-pub fn lexsort(
-    columns: &[SortColumn],
-    limit: Option<usize>,
-) -> Result<Vec<ArrayRef>, ArrowError> {
+pub fn lexsort(columns: &[SortColumn], limit: Option<usize>) -> Result<Vec<ArrayRef>, ArrowError> {
     let indices = lexsort_to_indices(columns, limit)?;
     columns
         .iter()
@@ -778,9 +763,7 @@ impl LexicographicalComparator {
 
     /// Create a new lex comparator that will wrap the given sort columns and give comparison
     /// results with two indices.
-    pub fn try_new(
-        columns: &[SortColumn],
-    ) -> Result<LexicographicalComparator, ArrowError> {
+    pub fn try_new(columns: &[SortColumn]) -> Result<LexicographicalComparator, ArrowError> {
         let compare_items = columns
             .iter()
             .map(|column| {
@@ -800,7 +783,9 @@ impl LexicographicalComparator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow_array::builder::PrimitiveRunBuilder;
+    use arrow_array::builder::{
+        FixedSizeListBuilder, Int64Builder, ListBuilder, PrimitiveRunBuilder,
+    };
     use arrow_buffer::i256;
     use half::f16;
     use rand::rngs::StdRng;
@@ -830,8 +815,7 @@ mod tests {
     ) {
         let output = create_decimal128_array(data);
         let expected = UInt32Array::from(expected_data);
-        let output =
-            sort_to_indices(&(Arc::new(output) as ArrayRef), options, limit).unwrap();
+        let output = sort_to_indices(&(Arc::new(output) as ArrayRef), options, limit).unwrap();
         assert_eq!(output, expected)
     }
 
@@ -843,8 +827,7 @@ mod tests {
     ) {
         let output = create_decimal256_array(data);
         let expected = UInt32Array::from(expected_data);
-        let output =
-            sort_to_indices(&(Arc::new(output) as ArrayRef), options, limit).unwrap();
+        let output = sort_to_indices(&(Arc::new(output) as ArrayRef), options, limit).unwrap();
         assert_eq!(output, expected)
     }
 
@@ -857,9 +840,7 @@ mod tests {
         let output = create_decimal128_array(data);
         let expected = Arc::new(create_decimal128_array(expected_data)) as ArrayRef;
         let output = match limit {
-            Some(_) => {
-                sort_limit(&(Arc::new(output) as ArrayRef), options, limit).unwrap()
-            }
+            Some(_) => sort_limit(&(Arc::new(output) as ArrayRef), options, limit).unwrap(),
             _ => sort(&(Arc::new(output) as ArrayRef), options).unwrap(),
         };
         assert_eq!(&output, &expected)
@@ -874,9 +855,7 @@ mod tests {
         let output = create_decimal256_array(data);
         let expected = Arc::new(create_decimal256_array(expected_data)) as ArrayRef;
         let output = match limit {
-            Some(_) => {
-                sort_limit(&(Arc::new(output) as ArrayRef), options, limit).unwrap()
-            }
+            Some(_) => sort_limit(&(Arc::new(output) as ArrayRef), options, limit).unwrap(),
             _ => sort(&(Arc::new(output) as ArrayRef), options).unwrap(),
         };
         assert_eq!(&output, &expected)
@@ -890,8 +869,7 @@ mod tests {
     ) {
         let output = BooleanArray::from(data);
         let expected = UInt32Array::from(expected_data);
-        let output =
-            sort_to_indices(&(Arc::new(output) as ArrayRef), options, limit).unwrap();
+        let output = sort_to_indices(&(Arc::new(output) as ArrayRef), options, limit).unwrap();
         assert_eq!(output, expected)
     }
 
@@ -906,8 +884,7 @@ mod tests {
     {
         let output = PrimitiveArray::<T>::from(data);
         let expected = UInt32Array::from(expected_data);
-        let output =
-            sort_to_indices(&(Arc::new(output) as ArrayRef), options, limit).unwrap();
+        let output = sort_to_indices(&(Arc::new(output) as ArrayRef), options, limit).unwrap();
         assert_eq!(output, expected)
     }
 
@@ -923,9 +900,7 @@ mod tests {
         let output = PrimitiveArray::<T>::from(data);
         let expected = Arc::new(PrimitiveArray::<T>::from(expected_data)) as ArrayRef;
         let output = match limit {
-            Some(_) => {
-                sort_limit(&(Arc::new(output) as ArrayRef), options, limit).unwrap()
-            }
+            Some(_) => sort_limit(&(Arc::new(output) as ArrayRef), options, limit).unwrap(),
             _ => sort(&(Arc::new(output) as ArrayRef), options).unwrap(),
         };
         assert_eq!(&output, &expected)
@@ -939,8 +914,7 @@ mod tests {
     ) {
         let output = StringArray::from(data);
         let expected = UInt32Array::from(expected_data);
-        let output =
-            sort_to_indices(&(Arc::new(output) as ArrayRef), options, limit).unwrap();
+        let output = sort_to_indices(&(Arc::new(output) as ArrayRef), options, limit).unwrap();
         assert_eq!(output, expected)
     }
 
@@ -954,9 +928,7 @@ mod tests {
         let output = StringArray::from(data.clone());
         let expected = Arc::new(StringArray::from(expected_data.clone())) as ArrayRef;
         let output = match limit {
-            Some(_) => {
-                sort_limit(&(Arc::new(output) as ArrayRef), options, limit).unwrap()
-            }
+            Some(_) => sort_limit(&(Arc::new(output) as ArrayRef), options, limit).unwrap(),
             _ => sort(&(Arc::new(output) as ArrayRef), options).unwrap(),
         };
         assert_eq!(&output, &expected);
@@ -964,9 +936,7 @@ mod tests {
         let output = LargeStringArray::from(data);
         let expected = Arc::new(LargeStringArray::from(expected_data)) as ArrayRef;
         let output = match limit {
-            Some(_) => {
-                sort_limit(&(Arc::new(output) as ArrayRef), options, limit).unwrap()
-            }
+            Some(_) => sort_limit(&(Arc::new(output) as ArrayRef), options, limit).unwrap(),
             _ => sort(&(Arc::new(output) as ArrayRef), options).unwrap(),
         };
         assert_eq!(&output, &expected)
@@ -986,9 +956,7 @@ mod tests {
             .expect("Unable to get dictionary values");
 
         let sorted = match limit {
-            Some(_) => {
-                sort_limit(&(Arc::new(array) as ArrayRef), options, limit).unwrap()
-            }
+            Some(_) => sort_limit(&(Arc::new(array) as ArrayRef), options, limit).unwrap(),
             _ => sort(&(Arc::new(array) as ArrayRef), options).unwrap(),
         };
         let sorted = sorted
@@ -1016,8 +984,7 @@ mod tests {
                 .collect::<Vec<Option<&str>>>(),
         )
         .expect("Unable to create string array from dictionary");
-        let expected =
-            StringArray::try_from(expected_data).expect("Unable to create string array");
+        let expected = StringArray::try_from(expected_data).expect("Unable to create string array");
 
         assert_eq!(sorted_strings, expected)
     }
@@ -1036,9 +1003,7 @@ mod tests {
         let dict = array_values.as_primitive::<T>();
 
         let sorted = match limit {
-            Some(_) => {
-                sort_limit(&(Arc::new(array) as ArrayRef), options, limit).unwrap()
-            }
+            Some(_) => sort_limit(&(Arc::new(array) as ArrayRef), options, limit).unwrap(),
             _ => sort(&(Arc::new(array) as ArrayRef), options).unwrap(),
         };
         let sorted = sorted
@@ -1066,8 +1031,7 @@ mod tests {
                 })
                 .collect::<Vec<Option<T::Native>>>(),
         );
-        let expected: PrimitiveArray<T> =
-            From::<Vec<Option<T::Native>>>::from(expected_data);
+        let expected: PrimitiveArray<T> = From::<Vec<Option<T::Native>>>::from(expected_data);
 
         assert_eq!(sorted_values, expected)
     }
@@ -1138,11 +1102,7 @@ mod tests {
     }
 
     /// slice all arrays in expected_output to offset/length
-    fn slice_arrays(
-        expected_output: Vec<ArrayRef>,
-        offset: usize,
-        length: usize,
-    ) -> Vec<ArrayRef> {
+    fn slice_arrays(expected_output: Vec<ArrayRef>, offset: usize, length: usize) -> Vec<ArrayRef> {
         expected_output
             .into_iter()
             .map(|array| array.slice(offset, length))
@@ -1159,11 +1119,8 @@ mod tests {
         // Fixed size binary array
         if let Some(length) = fixed_length {
             let input = Arc::new(
-                FixedSizeBinaryArray::try_from_sparse_iter_with_size(
-                    data.iter().cloned(),
-                    length,
-                )
-                .unwrap(),
+                FixedSizeBinaryArray::try_from_sparse_iter_with_size(data.iter().cloned(), length)
+                    .unwrap(),
             );
             let sorted = match limit {
                 Some(_) => sort_limit(&(input as ArrayRef), options, limit).unwrap(),
@@ -1672,12 +1629,7 @@ mod tests {
         ];
 
         // decimal default
-        test_sort_to_indices_decimal256_array(
-            data.clone(),
-            None,
-            None,
-            vec![0, 6, 4, 2, 3, 5, 1],
-        );
+        test_sort_to_indices_decimal256_array(data.clone(), None, None, vec![0, 6, 4, 2, 3, 5, 1]);
         // decimal descending
         test_sort_to_indices_decimal256_array(
             data.clone(),
@@ -2669,9 +2621,7 @@ mod tests {
 
     #[test]
     fn test_sort_run_to_run() {
-        test_sort_run_inner(|array, sort_options, limit| {
-            sort_run(array, sort_options, limit)
-        });
+        test_sort_run_inner(|array, sort_options, limit| sort_run(array, sort_options, limit));
     }
 
     #[test]
@@ -2684,16 +2634,11 @@ mod tests {
 
     fn test_sort_run_inner<F>(sort_fn: F)
     where
-        F: Fn(
-            &dyn Array,
-            Option<SortOptions>,
-            Option<usize>,
-        ) -> Result<ArrayRef, ArrowError>,
+        F: Fn(&dyn Array, Option<SortOptions>, Option<usize>) -> Result<ArrayRef, ArrowError>,
     {
         // Create an input array for testing
         let total_len = 80;
-        let vals: Vec<Option<i32>> =
-            vec![Some(1), None, Some(2), Some(3), Some(4), None, Some(5)];
+        let vals: Vec<Option<i32>> = vec![Some(1), None, Some(2), Some(3), Some(4), None, Some(5)];
         let repeats: Vec<usize> = vec![1, 3, 2, 4];
         let mut input_array: Vec<Option<i32>> = Vec::with_capacity(total_len);
         for ix in 0_usize..32 {
@@ -2760,11 +2705,7 @@ mod tests {
         limit: Option<usize>,
         sort_fn: &F,
     ) where
-        F: Fn(
-            &dyn Array,
-            Option<SortOptions>,
-            Option<usize>,
-        ) -> Result<ArrayRef, ArrowError>,
+        F: Fn(&dyn Array, Option<SortOptions>, Option<usize>) -> Result<ArrayRef, ArrowError>,
     {
         // Run the sort and build actual result
         let sliced_array = run_array.slice(offset, length);
@@ -3653,11 +3594,7 @@ mod tests {
             ])) as ArrayRef,
         ];
         test_lex_sort_arrays(input.clone(), expected.clone(), None);
-        test_lex_sort_arrays(
-            input.clone(),
-            slice_arrays(expected.clone(), 0, 5),
-            Some(5),
-        );
+        test_lex_sort_arrays(input.clone(), slice_arrays(expected.clone(), 0, 5), Some(5));
 
         // Limiting by more rows than present is ok
         test_lex_sort_arrays(input, slice_arrays(expected, 0, 5), Some(10));
@@ -3692,8 +3629,7 @@ mod tests {
 
     #[test]
     fn test_sort_int8_dicts() {
-        let keys =
-            Int8Array::from(vec![Some(1_i8), None, Some(2), None, Some(2), Some(0)]);
+        let keys = Int8Array::from(vec![Some(1_i8), None, Some(2), None, Some(2), Some(0)]);
         let values = Int8Array::from(vec![1, 3, 5]);
         test_sort_primitive_dict_arrays::<Int8Type, Int8Type>(
             keys,
@@ -3703,8 +3639,7 @@ mod tests {
             vec![None, None, Some(1), Some(3), Some(5), Some(5)],
         );
 
-        let keys =
-            Int8Array::from(vec![Some(1_i8), None, Some(2), None, Some(2), Some(0)]);
+        let keys = Int8Array::from(vec![Some(1_i8), None, Some(2), None, Some(2), Some(0)]);
         let values = Int8Array::from(vec![1, 3, 5]);
         test_sort_primitive_dict_arrays::<Int8Type, Int8Type>(
             keys,
@@ -3717,8 +3652,7 @@ mod tests {
             vec![Some(5), Some(5), Some(3), Some(1), None, None],
         );
 
-        let keys =
-            Int8Array::from(vec![Some(1_i8), None, Some(2), None, Some(2), Some(0)]);
+        let keys = Int8Array::from(vec![Some(1_i8), None, Some(2), None, Some(2), Some(0)]);
         let values = Int8Array::from(vec![1, 3, 5]);
         test_sort_primitive_dict_arrays::<Int8Type, Int8Type>(
             keys,
@@ -3731,8 +3665,7 @@ mod tests {
             vec![Some(1), Some(3), Some(5), Some(5), None, None],
         );
 
-        let keys =
-            Int8Array::from(vec![Some(1_i8), None, Some(2), None, Some(2), Some(0)]);
+        let keys = Int8Array::from(vec![Some(1_i8), None, Some(2), None, Some(2), Some(0)]);
         let values = Int8Array::from(vec![1, 3, 5]);
         test_sort_primitive_dict_arrays::<Int8Type, Int8Type>(
             keys,
@@ -3830,8 +3763,7 @@ mod tests {
 
     #[test]
     fn test_sort_f32_dicts() {
-        let keys =
-            Int8Array::from(vec![Some(1_i8), None, Some(2), None, Some(2), Some(0)]);
+        let keys = Int8Array::from(vec![Some(1_i8), None, Some(2), None, Some(2), Some(0)]);
         let values = Float32Array::from(vec![1.2, 3.0, 5.1]);
         test_sort_primitive_dict_arrays::<Int8Type, Float32Type>(
             keys,
@@ -3841,8 +3773,7 @@ mod tests {
             vec![None, None, Some(1.2), Some(3.0), Some(5.1), Some(5.1)],
         );
 
-        let keys =
-            Int8Array::from(vec![Some(1_i8), None, Some(2), None, Some(2), Some(0)]);
+        let keys = Int8Array::from(vec![Some(1_i8), None, Some(2), None, Some(2), Some(0)]);
         let values = Float32Array::from(vec![1.2, 3.0, 5.1]);
         test_sort_primitive_dict_arrays::<Int8Type, Float32Type>(
             keys,
@@ -3855,8 +3786,7 @@ mod tests {
             vec![Some(5.1), Some(5.1), Some(3.0), Some(1.2), None, None],
         );
 
-        let keys =
-            Int8Array::from(vec![Some(1_i8), None, Some(2), None, Some(2), Some(0)]);
+        let keys = Int8Array::from(vec![Some(1_i8), None, Some(2), None, Some(2), Some(0)]);
         let values = Float32Array::from(vec![1.2, 3.0, 5.1]);
         test_sort_primitive_dict_arrays::<Int8Type, Float32Type>(
             keys,
@@ -3869,8 +3799,7 @@ mod tests {
             vec![Some(1.2), Some(3.0), Some(5.1), Some(5.1), None, None],
         );
 
-        let keys =
-            Int8Array::from(vec![Some(1_i8), None, Some(2), None, Some(2), Some(0)]);
+        let keys = Int8Array::from(vec![Some(1_i8), None, Some(2), None, Some(2), Some(0)]);
         let values = Float32Array::from(vec![1.2, 3.0, 5.1]);
         test_sort_primitive_dict_arrays::<Int8Type, Float32Type>(
             keys,
@@ -3990,5 +3919,32 @@ mod tests {
         assert_eq!(comparator.compare(2, 1), Ordering::Equal);
         // NULL.cmp(4)
         assert_eq!(comparator.compare(2, 3), Ordering::Less);
+    }
+
+    #[test]
+    fn sort_list_equal() {
+        let a = {
+            let mut builder = FixedSizeListBuilder::new(Int64Builder::new(), 2);
+            for value in [[1, 5], [0, 3], [1, 3]] {
+                builder.values().append_slice(&value);
+                builder.append(true);
+            }
+            builder.finish()
+        };
+
+        let sort_indices = sort_to_indices(&a, None, None).unwrap();
+        assert_eq!(sort_indices.values(), &[1, 2, 0]);
+
+        let a = {
+            let mut builder = ListBuilder::new(Int64Builder::new());
+            for value in [[1, 5], [0, 3], [1, 3]] {
+                builder.values().append_slice(&value);
+                builder.append(true);
+            }
+            builder.finish()
+        };
+
+        let sort_indices = sort_to_indices(&a, None, None).unwrap();
+        assert_eq!(sort_indices.values(), &[1, 2, 0]);
     }
 }

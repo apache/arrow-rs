@@ -173,11 +173,7 @@ impl Field {
     /// - `name`: the name of the [`DataType::Struct`] field
     /// - `fields`: the description of each struct element
     /// - `nullable`: if the [`DataType::Struct`] array is nullable
-    pub fn new_struct(
-        name: impl Into<String>,
-        fields: impl Into<Fields>,
-        nullable: bool,
-    ) -> Self {
+    pub fn new_struct(name: impl Into<String>, fields: impl Into<Fields>, nullable: bool) -> Self {
         Self::new(name, DataType::Struct(fields.into()), nullable)
     }
 
@@ -186,11 +182,7 @@ impl Field {
     /// - `name`: the name of the [`DataType::List`] field
     /// - `value`: the description of each list element
     /// - `nullable`: if the [`DataType::List`] array is nullable
-    pub fn new_list(
-        name: impl Into<String>,
-        value: impl Into<FieldRef>,
-        nullable: bool,
-    ) -> Self {
+    pub fn new_list(name: impl Into<String>, value: impl Into<FieldRef>, nullable: bool) -> Self {
         Self::new(name, DataType::List(value.into()), nullable)
     }
 
@@ -344,9 +336,7 @@ impl Field {
     fn _fields(dt: &DataType) -> Vec<&Field> {
         match dt {
             DataType::Struct(fields) => fields.iter().flat_map(|f| f.fields()).collect(),
-            DataType::Union(fields, _) => {
-                fields.iter().flat_map(|(_, f)| f.fields()).collect()
-            }
+            DataType::Union(fields, _) => fields.iter().flat_map(|(_, f)| f.fields()).collect(),
             DataType::List(field)
             | DataType::LargeList(field)
             | DataType::FixedSizeList(field, _)
@@ -363,8 +353,7 @@ impl Field {
         self.fields()
             .into_iter()
             .filter(|&field| {
-                matches!(field.data_type(), DataType::Dictionary(_, _))
-                    && field.dict_id == id
+                matches!(field.data_type(), DataType::Dictionary(_, _)) && field.dict_id == id
             })
             .collect()
     }
@@ -461,7 +450,10 @@ impl Field {
                     ));
                 }
             },
-            DataType::Null
+            DataType::Null => {
+                self.nullable = true;
+                self.data_type = from.data_type.clone();
+            }
             | DataType::Boolean
             | DataType::Int8
             | DataType::Int16
@@ -494,7 +486,9 @@ impl Field {
             | DataType::LargeUtf8
             | DataType::Decimal128(_, _)
             | DataType::Decimal256(_, _) => {
-                if self.data_type != from.data_type {
+                if from.data_type == DataType::Null {
+                    self.nullable = true;
+                } else if self.data_type != from.data_type {
                     return Err(ArrowError::SchemaError(
                         format!("Fail to merge schema field '{}' because the from data_type = {} does not equal {}",
                             self.name, from.data_type, self.data_type)
@@ -578,6 +572,21 @@ mod test {
             .expect_err("should fail")
             .to_string();
         assert_eq!("Schema error: Fail to merge schema field 'c1' because the from data_type = Float32 does not equal Int64", result);
+    }
+
+    #[test]
+    fn test_merge_with_null() {
+        let mut field1 = Field::new("c1", DataType::Null, true);
+        field1
+            .try_merge(&Field::new("c1", DataType::Float32, false))
+            .expect("should widen type to nullable float");
+        assert_eq!(Field::new("c1", DataType::Float32, true), field1);
+
+        let mut field2 = Field::new("c2", DataType::Utf8, false);
+        field2
+            .try_merge(&Field::new("c2", DataType::Null, true))
+            .expect("should widen type to nullable utf8");
+        assert_eq!(Field::new("c2", DataType::Utf8, true), field2);
     }
 
     #[test]
@@ -837,8 +846,7 @@ mod test {
     #[cfg(feature = "serde")]
     #[test]
     fn test_field_with_empty_metadata_serde() {
-        let field =
-            Field::new("name", DataType::Boolean, false).with_metadata(HashMap::new());
+        let field = Field::new("name", DataType::Boolean, false).with_metadata(HashMap::new());
 
         assert_binary_serde_round_trip(field)
     }

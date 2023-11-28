@@ -29,12 +29,12 @@ use crate::data_type::Int32Type;
 use crate::encodings::decoding::{Decoder, DeltaBitPackDecoder};
 use crate::errors::{ParquetError, Result};
 use crate::schema::types::ColumnDescPtr;
-use crate::util::memory::ByteBufferPtr;
 use arrow_array::{
     Array, ArrayRef, BinaryArray, Decimal128Array, Decimal256Array, OffsetSizeTrait,
 };
 use arrow_buffer::{i256, Buffer};
 use arrow_schema::DataType as ArrowType;
+use bytes::Bytes;
 use std::any::Any;
 use std::ops::Range;
 use std::sync::Arc;
@@ -189,7 +189,7 @@ impl<I: OffsetSizeTrait + ScalarValue> ColumnValueDecoder
 
     fn set_dict(
         &mut self,
-        buf: ByteBufferPtr,
+        buf: Bytes,
         num_values: u32,
         encoding: Encoding,
         _is_sorted: bool,
@@ -219,7 +219,7 @@ impl<I: OffsetSizeTrait + ScalarValue> ColumnValueDecoder
     fn set_data(
         &mut self,
         encoding: Encoding,
-        data: ByteBufferPtr,
+        data: Bytes,
         num_levels: usize,
         num_values: Option<usize>,
     ) -> Result<()> {
@@ -263,7 +263,7 @@ pub enum ByteArrayDecoder {
 impl ByteArrayDecoder {
     pub fn new(
         encoding: Encoding,
-        data: ByteBufferPtr,
+        data: Bytes,
         num_levels: usize,
         num_values: Option<usize>,
         validate_utf8: bool,
@@ -339,7 +339,7 @@ impl ByteArrayDecoder {
 
 /// Decoder from [`Encoding::PLAIN`] data to [`OffsetBuffer`]
 pub struct ByteArrayDecoderPlain {
-    buf: ByteBufferPtr,
+    buf: Bytes,
     offset: usize,
     validate_utf8: bool,
 
@@ -350,7 +350,7 @@ pub struct ByteArrayDecoderPlain {
 
 impl ByteArrayDecoderPlain {
     pub fn new(
-        buf: ByteBufferPtr,
+        buf: Bytes,
         num_levels: usize,
         num_values: Option<usize>,
         validate_utf8: bool,
@@ -438,16 +438,16 @@ impl ByteArrayDecoderPlain {
 /// Decoder from [`Encoding::DELTA_LENGTH_BYTE_ARRAY`] data to [`OffsetBuffer`]
 pub struct ByteArrayDecoderDeltaLength {
     lengths: Vec<i32>,
-    data: ByteBufferPtr,
+    data: Bytes,
     length_offset: usize,
     data_offset: usize,
     validate_utf8: bool,
 }
 
 impl ByteArrayDecoderDeltaLength {
-    fn new(data: ByteBufferPtr, validate_utf8: bool) -> Result<Self> {
+    fn new(data: Bytes, validate_utf8: bool) -> Result<Self> {
         let mut len_decoder = DeltaBitPackDecoder::<Int32Type>::new();
-        len_decoder.set_data(data.all(), 0)?;
+        len_decoder.set_data(data.clone(), 0)?;
         let values = len_decoder.values_left();
 
         let mut lengths = vec![0; values];
@@ -522,7 +522,7 @@ pub struct ByteArrayDecoderDelta {
 }
 
 impl ByteArrayDecoderDelta {
-    fn new(data: ByteBufferPtr, validate_utf8: bool) -> Result<Self> {
+    fn new(data: Bytes, validate_utf8: bool) -> Result<Self> {
         Ok(Self {
             decoder: DeltaByteArrayDecoder::new(data)?,
             validate_utf8,
@@ -558,7 +558,7 @@ pub struct ByteArrayDecoderDictionary {
 }
 
 impl ByteArrayDecoderDictionary {
-    fn new(data: ByteBufferPtr, num_levels: usize, num_values: Option<usize>) -> Self {
+    fn new(data: Bytes, num_levels: usize, num_values: Option<usize>) -> Self {
         Self {
             decoder: DictIndexDecoder::new(data, num_levels, num_values),
         }

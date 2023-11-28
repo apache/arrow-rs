@@ -30,15 +30,14 @@ use reqwest::{Client, Method, Request, RequestBuilder, StatusCode};
 use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use tracing::warn;
 use url::Url;
 
 type StdError = Box<dyn std::error::Error + Send + Sync>;
 
 /// SHA256 hash of empty string
-static EMPTY_SHA256_HASH: &str =
-    "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+static EMPTY_SHA256_HASH: &str = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
 static UNSIGNED_PAYLOAD: &str = "UNSIGNED-PAYLOAD";
 static STREAMING_PAYLOAD: &str = "STREAMING-AWS4-HMAC-SHA256-PAYLOAD";
 
@@ -57,13 +56,7 @@ impl AwsCredential {
     /// Signs a string
     ///
     /// <https://docs.aws.amazon.com/general/latest/gr/sigv4-calculate-signature.html>
-    fn sign(
-        &self,
-        to_sign: &str,
-        date: DateTime<Utc>,
-        region: &str,
-        service: &str,
-    ) -> String {
+    fn sign(&self, to_sign: &str, date: DateTime<Utc>, region: &str, service: &str) -> String {
         let date_string = date.format("%Y%m%d").to_string();
         let date_hmac = hmac_sha256(format!("AWS4{}", self.secret_key), date_string);
         let region_hmac = hmac_sha256(date_hmac, region);
@@ -89,6 +82,7 @@ const DATE_HEADER: &str = "x-amz-date";
 const HASH_HEADER: &str = "x-amz-content-sha256";
 const TOKEN_HEADER: &str = "x-amz-security-token";
 const AUTH_HEADER: &str = "authorization";
+const ALGORITHM: &str = "AWS4-HMAC-SHA256";
 
 impl<'a> AwsAuthorizer<'a> {
     /// Create a new [`AwsAuthorizer`]
@@ -154,21 +148,110 @@ impl<'a> AwsAuthorizer<'a> {
         let header_digest = HeaderValue::from_str(&digest).unwrap();
         request.headers_mut().insert(HASH_HEADER, header_digest);
 
-        // Each path segment must be URI-encoded twice (except for Amazon S3 which only gets URI-encoded once).
+        let (signed_headers, canonical_headers) = canonicalize_headers(request.headers());
+
+        let scope = self.scope(date);
+
+        let string_to_sign = self.string_to_sign(
+            date,
+            &scope,
+            request.method(),
+            request.url(),
+            &canonical_headers,
+            &signed_headers,
+            &digest,
+        );
+
+        // sign the string
+        let signature = self
+            .credential
+            .sign(&string_to_sign, date, self.region, self.service);
+
+        // build the actual auth header
+        let authorisation = format!(
+            "{} Credential={}/{}, SignedHeaders={}, Signature={}",
+            ALGORITHM, self.credential.key_id, scope, signed_headers, signature
+        );
+
+        let authorization_val = HeaderValue::from_str(&authorisation).unwrap();
+        request.headers_mut().insert(AUTH_HEADER, authorization_val);
+    }
+
+    pub(crate) fn sign(&self, method: Method, url: &mut Url, expires_in: Duration) {
+        let date = self.date.unwrap_or_else(Utc::now);
+        let scope = self.scope(date);
+
+        // https://docs.aws.amazon.com/AmazonS3/latest/API/sigv4-query-string-auth.html
+        url.query_pairs_mut()
+            .append_pair("X-Amz-Algorithm", ALGORITHM)
+            .append_pair(
+                "X-Amz-Credential",
+                &format!("{}/{}", self.credential.key_id, scope),
+            )
+            .append_pair("X-Amz-Date", &date.format("%Y%m%dT%H%M%SZ").to_string())
+            .append_pair("X-Amz-Expires", &expires_in.as_secs().to_string())
+            .append_pair("X-Amz-SignedHeaders", "host");
+
+        // For S3, you must include the X-Amz-Security-Token query parameter in the URL if
+        // using credentials sourced from the STS service.
+        if let Some(ref token) = self.credential.token {
+            url.query_pairs_mut()
+                .append_pair("X-Amz-Security-Token", token);
+        }
+
+        // We don't have a payload; the user is going to send the payload directly themselves.
+        let digest = UNSIGNED_PAYLOAD;
+
+        let host = &url[url::Position::BeforeHost..url::Position::AfterPort].to_string();
+        let mut headers = HeaderMap::new();
+        let host_val = HeaderValue::from_str(host).unwrap();
+        headers.insert("host", host_val);
+
+        let (signed_headers, canonical_headers) = canonicalize_headers(&headers);
+
+        let string_to_sign = self.string_to_sign(
+            date,
+            &scope,
+            &method,
+            url,
+            &canonical_headers,
+            &signed_headers,
+            digest,
+        );
+
+        let signature = self
+            .credential
+            .sign(&string_to_sign, date, self.region, self.service);
+
+        url.query_pairs_mut()
+            .append_pair("X-Amz-Signature", &signature);
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn string_to_sign(
+        &self,
+        date: DateTime<Utc>,
+        scope: &str,
+        request_method: &Method,
+        url: &Url,
+        canonical_headers: &str,
+        signed_headers: &str,
+        digest: &str,
+    ) -> String {
+        // Each path segment must be URI-encoded twice (except for Amazon S3 which only gets
+        // URI-encoded once).
         // see https://docs.aws.amazon.com/general/latest/gr/sigv4-create-canonical-request.html
         let canonical_uri = match self.service {
-            "s3" => request.url().path().to_string(),
-            _ => utf8_percent_encode(request.url().path(), &STRICT_PATH_ENCODE_SET)
-                .to_string(),
+            "s3" => url.path().to_string(),
+            _ => utf8_percent_encode(url.path(), &STRICT_PATH_ENCODE_SET).to_string(),
         };
 
-        let (signed_headers, canonical_headers) = canonicalize_headers(request.headers());
-        let canonical_query = canonicalize_query(request.url());
+        let canonical_query = canonicalize_query(url);
 
         // https://docs.aws.amazon.com/general/latest/gr/sigv4-create-canonical-request.html
         let canonical_request = format!(
             "{}\n{}\n{}\n{}\n{}\n{}",
-            request.method().as_str(),
+            request_method.as_str(),
             canonical_uri,
             canonical_query,
             canonical_headers,
@@ -177,33 +260,23 @@ impl<'a> AwsAuthorizer<'a> {
         );
 
         let hashed_canonical_request = hex_digest(canonical_request.as_bytes());
-        let scope = format!(
+
+        format!(
+            "{}\n{}\n{}\n{}",
+            ALGORITHM,
+            date.format("%Y%m%dT%H%M%SZ"),
+            scope,
+            hashed_canonical_request
+        )
+    }
+
+    fn scope(&self, date: DateTime<Utc>) -> String {
+        format!(
             "{}/{}/{}/aws4_request",
             date.format("%Y%m%d"),
             self.region,
             self.service
-        );
-
-        let string_to_sign = format!(
-            "AWS4-HMAC-SHA256\n{}\n{}\n{}",
-            date.format("%Y%m%dT%H%M%SZ"),
-            scope,
-            hashed_canonical_request
-        );
-
-        // sign the string
-        let signature =
-            self.credential
-                .sign(&string_to_sign, date, self.region, self.service);
-
-        // build the actual auth header
-        let authorisation = format!(
-            "AWS4-HMAC-SHA256 Credential={}/{}, SignedHeaders={}, Signature={}",
-            self.credential.key_id, scope, signed_headers, signature
-        );
-
-        let authorization_val = HeaderValue::from_str(&authorisation).unwrap();
-        request.headers_mut().insert(AUTH_HEADER, authorization_val);
+        )
     }
 }
 
@@ -211,7 +284,7 @@ pub trait CredentialExt {
     /// Sign a request <https://docs.aws.amazon.com/general/latest/gr/sigv4_signing.html>
     fn with_aws_sigv4(
         self,
-        credential: &AwsCredential,
+        credential: Option<&AwsCredential>,
         region: &str,
         service: &str,
         sign_payload: bool,
@@ -222,20 +295,25 @@ pub trait CredentialExt {
 impl CredentialExt for RequestBuilder {
     fn with_aws_sigv4(
         self,
-        credential: &AwsCredential,
+        credential: Option<&AwsCredential>,
         region: &str,
         service: &str,
         sign_payload: bool,
         payload_sha256: Option<&[u8]>,
     ) -> Self {
-        let (client, request) = self.build_split();
-        let mut request = request.expect("request valid");
+        match credential {
+            Some(credential) => {
+                let (client, request) = self.build_split();
+                let mut request = request.expect("request valid");
 
-        AwsAuthorizer::new(credential, service, region)
-            .with_sign_payload(sign_payload)
-            .authorize(&mut request, payload_sha256);
+                AwsAuthorizer::new(credential, service, region)
+                    .with_sign_payload(sign_payload)
+                    .authorize(&mut request, payload_sha256);
 
-        Self::from_parts(client, request)
+                Self::from_parts(client, request)
+            }
+            None => self,
+        }
     }
 }
 
@@ -436,9 +514,7 @@ async fn instance_creds(
 
     let token = match token_result {
         Ok(t) => Some(t.text().await?),
-        Err(e)
-            if imdsv1_fallback && matches!(e.status(), Some(StatusCode::FORBIDDEN)) =>
-        {
+        Err(e) if imdsv1_fallback && matches!(e.status(), Some(StatusCode::FORBIDDEN)) => {
             warn!("received 403 from metadata endpoint, falling back to IMDSv1");
             None
         }
@@ -460,8 +536,7 @@ async fn instance_creds(
         creds_request = creds_request.header(AWS_EC2_METADATA_TOKEN_HEADER, token);
     }
 
-    let creds: InstanceCredentials =
-        creds_request.send_retry(retry_config).await?.json().await?;
+    let creds: InstanceCredentials = creds_request.send_retry(retry_config).await?.json().await?;
 
     let now = Utc::now();
     let ttl = (creds.expiration - now).to_std().unwrap_or_default();
@@ -574,8 +649,7 @@ async fn task_credential(
     retry: &RetryConfig,
     url: &str,
 ) -> Result<TemporaryToken<Arc<AwsCredential>>, StdError> {
-    let creds: InstanceCredentials =
-        client.get(url).send_retry(retry).await?.json().await?;
+    let creds: InstanceCredentials = client.get(url).send_retry(retry).await?.json().await?;
 
     let now = Utc::now();
     let ttl = (creds.expiration - now).to_std().unwrap_or_default();
@@ -667,7 +741,46 @@ mod tests {
         };
 
         authorizer.authorize(&mut request, None);
-        assert_eq!(request.headers().get(AUTH_HEADER).unwrap(), "AWS4-HMAC-SHA256 Credential=AKIAIOSFODNN7EXAMPLE/20220806/us-east-1/ec2/aws4_request, SignedHeaders=host;x-amz-content-sha256;x-amz-date, Signature=653c3d8ea261fd826207df58bc2bb69fbb5003e9eb3c0ef06e4a51f2a81d8699")
+        assert_eq!(request.headers().get(AUTH_HEADER).unwrap(), "AWS4-HMAC-SHA256 Credential=AKIAIOSFODNN7EXAMPLE/20220806/us-east-1/ec2/aws4_request, SignedHeaders=host;x-amz-content-sha256;x-amz-date, Signature=653c3d8ea261fd826207df58bc2bb69fbb5003e9eb3c0ef06e4a51f2a81d8699");
+    }
+
+    #[test]
+    fn signed_get_url() {
+        // Values from https://docs.aws.amazon.com/AmazonS3/latest/API/sigv4-query-string-auth.html
+        let credential = AwsCredential {
+            key_id: "AKIAIOSFODNN7EXAMPLE".to_string(),
+            secret_key: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY".to_string(),
+            token: None,
+        };
+
+        let date = DateTime::parse_from_rfc3339("2013-05-24T00:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+
+        let authorizer = AwsAuthorizer {
+            date: Some(date),
+            credential: &credential,
+            service: "s3",
+            region: "us-east-1",
+            sign_payload: false,
+        };
+
+        let mut url = Url::parse("https://examplebucket.s3.amazonaws.com/test.txt").unwrap();
+        authorizer.sign(Method::GET, &mut url, Duration::from_secs(86400));
+
+        assert_eq!(
+            url,
+            Url::parse(
+                "https://examplebucket.s3.amazonaws.com/test.txt?\
+                X-Amz-Algorithm=AWS4-HMAC-SHA256&\
+                X-Amz-Credential=AKIAIOSFODNN7EXAMPLE%2F20130524%2Fus-east-1%2Fs3%2Faws4_request&\
+                X-Amz-Date=20130524T000000Z&\
+                X-Amz-Expires=86400&\
+                X-Amz-SignedHeaders=host&\
+                X-Amz-Signature=aeeed9bbccd4d02ee5c0109b86d86835f995330da4c265957d157751f604d404"
+            )
+            .unwrap()
+        );
     }
 
     #[test]

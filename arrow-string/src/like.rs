@@ -92,18 +92,12 @@ pub fn nilike(left: &dyn Datum, right: &dyn Datum) -> Result<BooleanArray, Arrow
 }
 
 /// Perform SQL `STARTSWITH(left, right)`
-pub fn starts_with(
-    left: &dyn Datum,
-    right: &dyn Datum,
-) -> Result<BooleanArray, ArrowError> {
+pub fn starts_with(left: &dyn Datum, right: &dyn Datum) -> Result<BooleanArray, ArrowError> {
     like_op(Op::StartsWith, left, right)
 }
 
 /// Perform SQL `ENDSWITH(left, right)`
-pub fn ends_with(
-    left: &dyn Datum,
-    right: &dyn Datum,
-) -> Result<BooleanArray, ArrowError> {
+pub fn ends_with(left: &dyn Datum, right: &dyn Datum) -> Result<BooleanArray, ArrowError> {
     like_op(Op::EndsWith, left, right)
 }
 
@@ -132,9 +126,7 @@ fn like_op(op: Op, lhs: &dyn Datum, rhs: &dyn Datum) -> Result<BooleanArray, Arr
     let r = r_v.map(|x| x.values().as_ref()).unwrap_or(r);
 
     match (l.data_type(), r.data_type()) {
-        (Utf8, Utf8) => {
-            apply::<i32>(op, l.as_string(), l_s, l_v, r.as_string(), r_s, r_v)
-        }
+        (Utf8, Utf8) => apply::<i32>(op, l.as_string(), l_s, l_v, r.as_string(), r_s, r_v),
         (LargeUtf8, LargeUtf8) => {
             apply::<i64>(op, l.as_string(), l_s, l_v, r.as_string(), r_s, r_v)
         }
@@ -155,20 +147,15 @@ fn apply<O: OffsetSizeTrait>(
 ) -> Result<BooleanArray, ArrowError> {
     let l_len = l_v.map(|l| l.len()).unwrap_or(l.len());
     if r_s {
-        let scalar = match r_v {
-            Some(dict) => match dict.nulls().filter(|n| n.null_count() != 0) {
-                Some(_) => return Ok(BooleanArray::new_null(l_len)),
-                None => {
-                    let idx = dict.normalized_keys()[0];
-                    if r.is_null(idx) {
-                        return Ok(BooleanArray::new_null(l_len));
-                    }
-                    r.value(idx)
-                }
-            },
-            None => r.value(0),
+        let idx = match r_v {
+            Some(dict) if dict.null_count() != 0 => return Ok(BooleanArray::new_null(l_len)),
+            Some(dict) => dict.normalized_keys()[0],
+            None => 0,
         };
-        op_scalar(op, l, l_v, scalar)
+        if r.is_null(idx) {
+            return Ok(BooleanArray::new_null(l_len));
+        }
+        op_scalar(op, l, l_v, r.value(idx))
     } else {
         match (l_s, l_v, r_v) {
             (true, None, None) => {
@@ -315,10 +302,7 @@ macro_rules! legacy_kernels {
 
         #[doc(hidden)]
         #[deprecated(note = $deprecation)]
-        pub fn $fn_scalar_dyn(
-            left: &dyn Array,
-            right: &str,
-        ) -> Result<BooleanArray, ArrowError> {
+        pub fn $fn_scalar_dyn(left: &dyn Array, right: &str) -> Result<BooleanArray, ArrowError> {
             let scalar = make_scalar(left.data_type(), right)?;
             $fn_datum(&left, &Scalar::new(&scalar))
         }
@@ -405,7 +389,6 @@ mod tests {
     macro_rules! test_dict_utf8 {
         ($test_name:ident, $left:expr, $right:expr, $op:expr, $expected:expr) => {
             #[test]
-            #[cfg(feature = "dyn_cmp_dict")]
             fn $test_name() {
                 let expected = BooleanArray::from($expected);
                 let left: DictionaryArray<Int8Type> = $left.into_iter().collect();
@@ -758,9 +741,7 @@ mod tests {
     test_utf8_scalar!(
         test_utf8_array_ilike_unicode,
         test_utf8_array_ilike_unicode_dyn,
-        vec![
-            "FFkoß", "FFkoSS", "FFkoss", "FFkoS", "FFkos", "ﬀkoSS", "ﬀkoß", "FFKoSS"
-        ],
+        vec!["FFkoß", "FFkoSS", "FFkoss", "FFkoS", "FFkos", "ﬀkoSS", "ﬀkoß", "FFKoSS"],
         "FFkoSS",
         ilike_utf8_scalar,
         ilike_utf8_scalar_dyn,
@@ -1539,5 +1520,36 @@ mod tests {
                 Some(false),
             ]),
         );
+    }
+
+    #[test]
+    fn like_scalar_null() {
+        let a = StringArray::new_scalar("a");
+        let b = Scalar::new(StringArray::new_null(1));
+        let r = like(&a, &b).unwrap();
+        assert_eq!(r.len(), 1);
+        assert_eq!(r.null_count(), 1);
+        assert!(r.is_null(0));
+
+        let a = StringArray::from_iter_values(["a"]);
+        let b = Scalar::new(StringArray::new_null(1));
+        let r = like(&a, &b).unwrap();
+        assert_eq!(r.len(), 1);
+        assert_eq!(r.null_count(), 1);
+        assert!(r.is_null(0));
+
+        let a = StringArray::from_iter_values(["a"]);
+        let b = StringArray::new_null(1);
+        let r = like(&a, &b).unwrap();
+        assert_eq!(r.len(), 1);
+        assert_eq!(r.null_count(), 1);
+        assert!(r.is_null(0));
+
+        let a = StringArray::new_scalar("a");
+        let b = StringArray::new_null(1);
+        let r = like(&a, &b).unwrap();
+        assert_eq!(r.len(), 1);
+        assert_eq!(r.null_count(), 1);
+        assert!(r.is_null(0));
     }
 }

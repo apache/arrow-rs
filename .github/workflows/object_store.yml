@@ -43,7 +43,7 @@ jobs:
       run:
         working-directory: object_store
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
       - name: Setup Clippy
@@ -60,6 +60,8 @@ jobs:
         run: cargo clippy --features gcp -- -D warnings
       - name: Run clippy with azure feature
         run: cargo clippy --features azure -- -D warnings
+      - name: Run clippy with http feature
+        run: cargo clippy --features http -- -D warnings
       - name: Run clippy with all features
         run: cargo clippy --all-features -- -D warnings
       - name: Run clippy with all features and all targets
@@ -79,7 +81,7 @@ jobs:
     env:
       RUSTDOCFLAGS: "-Dwarnings"
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       - name: Run cargo doc
         run: cargo doc --document-private-items --no-deps --workspace --all-features
 
@@ -115,7 +117,7 @@ jobs:
       GOOGLE_SERVICE_ACCOUNT: "/tmp/gcs.json"
 
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
       - name: Configure Fake GCS Server (GCP emulation)
         # Custom image - see fsouza/fake-gcs-server#1164
@@ -124,7 +126,7 @@ jobs:
           # Give the container a moment to start up prior to configuring it
           sleep 1
           curl -v -X POST --data-binary '{"name":"test-bucket"}' -H "Content-Type: application/json" "http://localhost:4443/storage/v1/b"
-          echo '{"gcs_base_url": "http://localhost:4443", "disable_oauth": true, "client_email": "", "private_key": ""}' > "$GOOGLE_SERVICE_ACCOUNT"
+          echo '{"gcs_base_url": "http://localhost:4443", "disable_oauth": true, "client_email": "", "private_key": "", "private_key_id": ""}' > "$GOOGLE_SERVICE_ACCOUNT"
 
       - name: Setup WebDav
         run: docker run -d -p 8080:80 rclone/rclone serve webdav /data --addr :80
@@ -160,7 +162,7 @@ jobs:
       run:
         working-directory: object_store
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
         with:
           submodules: true
       - name: Setup Rust toolchain

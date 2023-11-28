@@ -173,20 +173,22 @@ pub trait Array: std::fmt::Debug + Send + Sync {
     /// ```
     fn offset(&self) -> usize;
 
-    /// Returns the null buffer of this array if any
+    /// Returns the null buffer of this array if any.
     ///
-    /// Note: some arrays can encode their nullability in their children, for example,
+    /// The null buffer encodes the "physical" nulls of an array.
+    /// However, some arrays can also encode nullability in their children, for example,
     /// [`DictionaryArray::values`] values or [`RunArray::values`], or without a null buffer,
-    /// such as [`NullArray`]. Use [`Array::logical_nulls`] to obtain a computed mask encoding this
+    /// such as [`NullArray`]. To determine if each element of such an array is logically null,
+    /// you can use the slower [`Array::logical_nulls`] to obtain a computed mask .
     fn nulls(&self) -> Option<&NullBuffer>;
 
-    /// Returns the logical null buffer of this array if any
+    /// Returns a potentially computed [`NullBuffer`] that represent the logical null values of this array, if any.
     ///
     /// In most cases this will be the same as [`Array::nulls`], except for:
     ///
-    /// * DictionaryArray where [`DictionaryArray::values`] contains nulls
-    /// * RunArray where [`RunArray::values`] contains nulls
-    /// * NullArray where all indices are nulls
+    /// * [`DictionaryArray`] where [`DictionaryArray::values`] contains nulls
+    /// * [`RunArray`] where [`RunArray::values`] contains nulls
+    /// * [`NullArray`] where all indices are nulls
     ///
     /// In these cases a logical [`NullBuffer`] will be computed, encoding the logical nullability
     /// of these arrays, beyond what is encoded in [`Array::nulls`]
@@ -194,31 +196,33 @@ pub trait Array: std::fmt::Debug + Send + Sync {
         self.nulls().cloned()
     }
 
-    /// Returns whether the element at `index` is null.
-    /// When using this function on a slice, the index is relative to the slice.
+    /// Returns whether the element at `index` is null according to [`Array::nulls`]
     ///
-    /// Note: this method returns the physical nullability, i.e. that encoded in [`Array::nulls`]
-    /// see [`Array::logical_nulls`] for logical nullability
+    /// Note: For performance reasons, this method returns nullability solely as determined by the
+    /// null buffer. This difference can lead to surprising results, for example, [`NullArray::is_null`] always
+    /// returns `false` as the array lacks a null buffer. Similarly [`DictionaryArray`] and [`RunArray`] may
+    /// encode nullability in their children. See [`Self::logical_nulls`] for more information.
     ///
     /// # Example:
     ///
     /// ```
-    /// use arrow_array::{Array, Int32Array};
+    /// use arrow_array::{Array, Int32Array, NullArray};
     ///
     /// let array = Int32Array::from(vec![Some(1), None]);
-    ///
     /// assert_eq!(array.is_null(0), false);
     /// assert_eq!(array.is_null(1), true);
+    ///
+    /// // NullArrays do not have a null buffer, and therefore always
+    /// // return false for is_null.
+    /// let array = NullArray::new(1);
+    /// assert_eq!(array.is_null(0), false);
     /// ```
     fn is_null(&self, index: usize) -> bool {
         self.nulls().map(|n| n.is_null(index)).unwrap_or_default()
     }
 
-    /// Returns whether the element at `index` is not null.
-    /// When using this function on a slice, the index is relative to the slice.
-    ///
-    /// Note: this method returns the physical nullability, i.e. that encoded in [`Array::nulls`]
-    /// see [`Array::logical_nulls`] for logical nullability
+    /// Returns whether the element at `index` is *not* null, the
+    /// opposite of [`Self::is_null`].
     ///
     /// # Example:
     ///
@@ -532,9 +536,7 @@ pub fn make_array(data: ArrayData) -> ArrayRef {
         DataType::Float64 => Arc::new(Float64Array::from(data)) as ArrayRef,
         DataType::Date32 => Arc::new(Date32Array::from(data)) as ArrayRef,
         DataType::Date64 => Arc::new(Date64Array::from(data)) as ArrayRef,
-        DataType::Time32(TimeUnit::Second) => {
-            Arc::new(Time32SecondArray::from(data)) as ArrayRef
-        }
+        DataType::Time32(TimeUnit::Second) => Arc::new(Time32SecondArray::from(data)) as ArrayRef,
         DataType::Time32(TimeUnit::Millisecond) => {
             Arc::new(Time32MillisecondArray::from(data)) as ArrayRef
         }
@@ -579,9 +581,7 @@ pub fn make_array(data: ArrayData) -> ArrayRef {
         }
         DataType::Binary => Arc::new(BinaryArray::from(data)) as ArrayRef,
         DataType::LargeBinary => Arc::new(LargeBinaryArray::from(data)) as ArrayRef,
-        DataType::FixedSizeBinary(_) => {
-            Arc::new(FixedSizeBinaryArray::from(data)) as ArrayRef
-        }
+        DataType::FixedSizeBinary(_) => Arc::new(FixedSizeBinaryArray::from(data)) as ArrayRef,
         DataType::Utf8 => Arc::new(StringArray::from(data)) as ArrayRef,
         DataType::LargeUtf8 => Arc::new(LargeStringArray::from(data)) as ArrayRef,
         DataType::List(_) => Arc::new(ListArray::from(data)) as ArrayRef,
@@ -589,50 +589,24 @@ pub fn make_array(data: ArrayData) -> ArrayRef {
         DataType::Struct(_) => Arc::new(StructArray::from(data)) as ArrayRef,
         DataType::Map(_, _) => Arc::new(MapArray::from(data)) as ArrayRef,
         DataType::Union(_, _) => Arc::new(UnionArray::from(data)) as ArrayRef,
-        DataType::FixedSizeList(_, _) => {
-            Arc::new(FixedSizeListArray::from(data)) as ArrayRef
-        }
+        DataType::FixedSizeList(_, _) => Arc::new(FixedSizeListArray::from(data)) as ArrayRef,
         DataType::Dictionary(ref key_type, _) => match key_type.as_ref() {
-            DataType::Int8 => {
-                Arc::new(DictionaryArray::<Int8Type>::from(data)) as ArrayRef
-            }
-            DataType::Int16 => {
-                Arc::new(DictionaryArray::<Int16Type>::from(data)) as ArrayRef
-            }
-            DataType::Int32 => {
-                Arc::new(DictionaryArray::<Int32Type>::from(data)) as ArrayRef
-            }
-            DataType::Int64 => {
-                Arc::new(DictionaryArray::<Int64Type>::from(data)) as ArrayRef
-            }
-            DataType::UInt8 => {
-                Arc::new(DictionaryArray::<UInt8Type>::from(data)) as ArrayRef
-            }
-            DataType::UInt16 => {
-                Arc::new(DictionaryArray::<UInt16Type>::from(data)) as ArrayRef
-            }
-            DataType::UInt32 => {
-                Arc::new(DictionaryArray::<UInt32Type>::from(data)) as ArrayRef
-            }
-            DataType::UInt64 => {
-                Arc::new(DictionaryArray::<UInt64Type>::from(data)) as ArrayRef
-            }
+            DataType::Int8 => Arc::new(DictionaryArray::<Int8Type>::from(data)) as ArrayRef,
+            DataType::Int16 => Arc::new(DictionaryArray::<Int16Type>::from(data)) as ArrayRef,
+            DataType::Int32 => Arc::new(DictionaryArray::<Int32Type>::from(data)) as ArrayRef,
+            DataType::Int64 => Arc::new(DictionaryArray::<Int64Type>::from(data)) as ArrayRef,
+            DataType::UInt8 => Arc::new(DictionaryArray::<UInt8Type>::from(data)) as ArrayRef,
+            DataType::UInt16 => Arc::new(DictionaryArray::<UInt16Type>::from(data)) as ArrayRef,
+            DataType::UInt32 => Arc::new(DictionaryArray::<UInt32Type>::from(data)) as ArrayRef,
+            DataType::UInt64 => Arc::new(DictionaryArray::<UInt64Type>::from(data)) as ArrayRef,
             dt => panic!("Unexpected dictionary key type {dt:?}"),
         },
-        DataType::RunEndEncoded(ref run_ends_type, _) => {
-            match run_ends_type.data_type() {
-                DataType::Int16 => {
-                    Arc::new(RunArray::<Int16Type>::from(data)) as ArrayRef
-                }
-                DataType::Int32 => {
-                    Arc::new(RunArray::<Int32Type>::from(data)) as ArrayRef
-                }
-                DataType::Int64 => {
-                    Arc::new(RunArray::<Int64Type>::from(data)) as ArrayRef
-                }
-                dt => panic!("Unexpected data type for run_ends array {dt:?}"),
-            }
-        }
+        DataType::RunEndEncoded(ref run_ends_type, _) => match run_ends_type.data_type() {
+            DataType::Int16 => Arc::new(RunArray::<Int16Type>::from(data)) as ArrayRef,
+            DataType::Int32 => Arc::new(RunArray::<Int32Type>::from(data)) as ArrayRef,
+            DataType::Int64 => Arc::new(RunArray::<Int64Type>::from(data)) as ArrayRef,
+            dt => panic!("Unexpected data type for run_ends array {dt:?}"),
+        },
         DataType::Null => Arc::new(NullArray::from(data)) as ArrayRef,
         DataType::Decimal128(_, _) => Arc::new(Decimal128Array::from(data)) as ArrayRef,
         DataType::Decimal256(_, _) => Arc::new(Decimal256Array::from(data)) as ArrayRef,
@@ -683,11 +657,8 @@ unsafe fn get_offsets<O: ArrowNativeType>(data: &ArrayData) -> OffsetBuffer<O> {
     match data.is_empty() && data.buffers()[0].is_empty() {
         true => OffsetBuffer::new_empty(),
         false => {
-            let buffer = ScalarBuffer::new(
-                data.buffers()[0].clone(),
-                data.offset(),
-                data.len() + 1,
-            );
+            let buffer =
+                ScalarBuffer::new(data.buffers()[0].clone(), data.offset(), data.len() + 1);
             // Safety:
             // ArrayData is valid
             unsafe { OffsetBuffer::new_unchecked(buffer) }
@@ -696,11 +667,7 @@ unsafe fn get_offsets<O: ArrowNativeType>(data: &ArrayData) -> OffsetBuffer<O> {
 }
 
 /// Helper function for printing potentially long arrays.
-fn print_long_array<A, F>(
-    array: &A,
-    f: &mut std::fmt::Formatter,
-    print_item: F,
-) -> std::fmt::Result
+fn print_long_array<A, F>(array: &A, f: &mut std::fmt::Formatter, print_item: F) -> std::fmt::Result
 where
     A: Array,
     F: Fn(&A, usize, &mut std::fmt::Formatter) -> std::fmt::Result,
@@ -763,8 +730,7 @@ mod tests {
 
     #[test]
     fn test_empty_list_primitive() {
-        let data_type =
-            DataType::List(Arc::new(Field::new("item", DataType::Int32, false)));
+        let data_type = DataType::List(Arc::new(Field::new("item", DataType::Int32, false)));
         let array = new_empty_array(&data_type);
         let a = array.as_any().downcast_ref::<ListArray>().unwrap();
         assert_eq!(a.len(), 0);
@@ -795,8 +761,7 @@ mod tests {
     fn test_null_struct() {
         // It is possible to create a null struct containing a non-nullable child
         // see https://github.com/apache/arrow-rs/pull/3244 for details
-        let struct_type =
-            DataType::Struct(vec![Field::new("data", DataType::Int64, false)].into());
+        let struct_type = DataType::Struct(vec![Field::new("data", DataType::Int64, false)].into());
         let array = new_null_array(&struct_type, 9);
 
         let a = array.as_any().downcast_ref::<StructArray>().unwrap();
@@ -823,8 +788,7 @@ mod tests {
 
     #[test]
     fn test_null_list_primitive() {
-        let data_type =
-            DataType::List(Arc::new(Field::new("item", DataType::Int32, true)));
+        let data_type = DataType::List(Arc::new(Field::new("item", DataType::Int32, true)));
         let array = new_null_array(&data_type, 9);
         let a = array.as_any().downcast_ref::<ListArray>().unwrap();
         assert_eq!(a.len(), 9);
@@ -858,8 +822,8 @@ mod tests {
 
     #[test]
     fn test_null_dictionary() {
-        let values = vec![None, None, None, None, None, None, None, None, None]
-            as Vec<Option<&str>>;
+        let values =
+            vec![None, None, None, None, None, None, None, None, None] as Vec<Option<&str>>;
 
         let array: DictionaryArray<Int8Type> = values.into_iter().collect();
         let array = Arc::new(array) as ArrayRef;
@@ -961,8 +925,7 @@ mod tests {
     #[test]
     fn test_memory_size_primitive() {
         let arr = PrimitiveArray::<Int64Type>::from_iter_values(0..128);
-        let empty =
-            PrimitiveArray::<Int64Type>::from(ArrayData::new_empty(arr.data_type()));
+        let empty = PrimitiveArray::<Int64Type>::from(ArrayData::new_empty(arr.data_type()));
 
         // subtract empty array to avoid magic numbers for the size of additional fields
         assert_eq!(

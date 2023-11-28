@@ -183,7 +183,8 @@ impl ArrowJson {
                         return Ok(false);
                     }
                 }
-                _ => return Ok(false),
+                Some(Err(e)) => return Err(e),
+                None => return Ok(false),
             }
         }
 
@@ -260,9 +261,7 @@ impl ArrowJsonField {
                 true
             }
             Err(e) => {
-                eprintln!(
-                    "Encountered error while converting JSON field to Arrow field: {e:?}"
-                );
+                eprintln!("Encountered error while converting JSON field to Arrow field: {e:?}");
                 false
             }
         }
@@ -272,8 +271,8 @@ impl ArrowJsonField {
     /// TODO: convert to use an Into
     fn to_arrow_field(&self) -> Result<Field> {
         // a bit regressive, but we have to convert the field to JSON in order to convert it
-        let field = serde_json::to_value(self)
-            .map_err(|error| ArrowError::JsonError(error.to_string()))?;
+        let field =
+            serde_json::to_value(self).map_err(|error| ArrowError::JsonError(error.to_string()))?;
         field_from_json(&field)
     }
 }
@@ -388,12 +387,9 @@ pub fn array_from_json(
                 match is_valid {
                     1 => b.append_value(match value {
                         Value::Number(n) => n.as_i64().unwrap(),
-                        Value::String(s) => {
-                            s.parse().expect("Unable to parse string as i64")
-                        }
+                        Value::String(s) => s.parse().expect("Unable to parse string as i64"),
                         Value::Object(ref map)
-                            if map.contains_key("days")
-                                && map.contains_key("milliseconds") =>
+                            if map.contains_key("days") && map.contains_key("milliseconds") =>
                         {
                             match field.data_type() {
                                 DataType::Interval(IntervalUnit::DayTime) => {
@@ -403,23 +399,19 @@ pub fn array_from_json(
                                     match (days, milliseconds) {
                                         (Value::Number(d), Value::Number(m)) => {
                                             let mut bytes = [0_u8; 8];
-                                            let m = (m.as_i64().unwrap() as i32)
-                                                .to_le_bytes();
-                                            let d = (d.as_i64().unwrap() as i32)
-                                                .to_le_bytes();
+                                            let m = (m.as_i64().unwrap() as i32).to_le_bytes();
+                                            let d = (d.as_i64().unwrap() as i32).to_le_bytes();
 
                                             let c = [d, m].concat();
                                             bytes.copy_from_slice(c.as_slice());
                                             i64::from_le_bytes(bytes)
                                         }
-                                        _ => panic!(
-                                            "Unable to parse {value:?} as interval daytime"
-                                        ),
+                                        _ => {
+                                            panic!("Unable to parse {value:?} as interval daytime")
+                                        }
                                     }
                                 }
-                                _ => panic!(
-                                    "Unable to parse {value:?} as interval daytime"
-                                ),
+                                _ => panic!("Unable to parse {value:?} as interval daytime"),
                             }
                         }
                         _ => panic!("Unable to parse {value:?} as number"),
@@ -498,9 +490,7 @@ pub fn array_from_json(
                                     .expect("Unable to parse string as u64"),
                             )
                         } else if value.is_number() {
-                            b.append_value(
-                                value.as_u64().expect("Unable to read number as u64"),
-                            )
+                            b.append_value(value.as_u64().expect("Unable to read number as u64"))
                         } else {
                             panic!("Unable to parse value {value:?} as u64")
                         }
@@ -534,11 +524,10 @@ pub fn array_from_json(
                                     let months = months.as_i64().unwrap() as i32;
                                     let days = days.as_i64().unwrap() as i32;
                                     let nanoseconds = nanoseconds.as_i64().unwrap();
-                                    let months_days_ns: i128 = ((nanoseconds as i128)
-                                        & 0xFFFFFFFFFFFFFFFF)
-                                        << 64
-                                        | ((days as i128) & 0xFFFFFFFF) << 32
-                                        | ((months as i128) & 0xFFFFFFFF);
+                                    let months_days_ns: i128 =
+                                        ((nanoseconds as i128) & 0xFFFFFFFFFFFFFFFF) << 64
+                                            | ((days as i128) & 0xFFFFFFFF) << 32
+                                            | ((months as i128) & 0xFFFFFFFF);
                                     months_days_ns
                                 }
                                 (_, _, _) => {
@@ -677,11 +666,8 @@ pub fn array_from_json(
         DataType::List(child_field) => {
             let null_buf = create_null_buf(&json_col);
             let children = json_col.children.clone().unwrap();
-            let child_array = array_from_json(
-                child_field,
-                children.get(0).unwrap().clone(),
-                dictionaries,
-            )?;
+            let child_array =
+                array_from_json(child_field, children.get(0).unwrap().clone(), dictionaries)?;
             let offsets: Vec<i32> = json_col
                 .offset
                 .unwrap()
@@ -701,11 +687,8 @@ pub fn array_from_json(
         DataType::LargeList(child_field) => {
             let null_buf = create_null_buf(&json_col);
             let children = json_col.children.clone().unwrap();
-            let child_array = array_from_json(
-                child_field,
-                children.get(0).unwrap().clone(),
-                dictionaries,
-            )?;
+            let child_array =
+                array_from_json(child_field, children.get(0).unwrap().clone(), dictionaries)?;
             let offsets: Vec<i64> = json_col
                 .offset
                 .unwrap()
@@ -728,11 +711,8 @@ pub fn array_from_json(
         }
         DataType::FixedSizeList(child_field, _) => {
             let children = json_col.children.clone().unwrap();
-            let child_array = array_from_json(
-                child_field,
-                children.get(0).unwrap().clone(),
-                dictionaries,
-            )?;
+            let child_array =
+                array_from_json(child_field, children.get(0).unwrap().clone(), dictionaries)?;
             let null_buf = create_null_buf(&json_col);
             let list_data = ArrayData::builder(field.data_type().clone())
                 .len(json_col.count)
@@ -759,9 +739,7 @@ pub fn array_from_json(
         }
         DataType::Dictionary(key_type, value_type) => {
             let dict_id = field.dict_id().ok_or_else(|| {
-                ArrowError::JsonError(format!(
-                    "Unable to find dict_id for field {field:?}"
-                ))
+                ArrowError::JsonError(format!("Unable to find dict_id for field {field:?}"))
             })?;
             // find dictionary
             let dictionary = dictionaries
@@ -822,8 +800,7 @@ pub fn array_from_json(
                         } else {
                             [255_u8; 32]
                         };
-                        bytes[0..integer_bytes.len()]
-                            .copy_from_slice(integer_bytes.as_slice());
+                        bytes[0..integer_bytes.len()].copy_from_slice(integer_bytes.as_slice());
                         b.append_value(i256::from_le_bytes(bytes));
                     }
                     _ => b.append_null(),
@@ -836,11 +813,8 @@ pub fn array_from_json(
         DataType::Map(child_field, _) => {
             let null_buf = create_null_buf(&json_col);
             let children = json_col.children.clone().unwrap();
-            let child_array = array_from_json(
-                child_field,
-                children.get(0).unwrap().clone(),
-                dictionaries,
-            )?;
+            let child_array =
+                array_from_json(child_field, children.get(0).unwrap().clone(), dictionaries)?;
             let offsets: Vec<i32> = json_col
                 .offset
                 .unwrap()
@@ -945,9 +919,7 @@ pub fn dictionary_array_from_json(
                 .unwrap();
 
             let array = match dict_key {
-                DataType::Int8 => {
-                    Arc::new(Int8DictionaryArray::from(dict_data)) as ArrayRef
-                }
+                DataType::Int8 => Arc::new(Int8DictionaryArray::from(dict_data)) as ArrayRef,
                 DataType::Int16 => Arc::new(Int16DictionaryArray::from(dict_data)),
                 DataType::Int32 => Arc::new(Int32DictionaryArray::from(dict_data)),
                 DataType::Int64 => Arc::new(Int64DictionaryArray::from(dict_data)),
@@ -1098,11 +1070,7 @@ mod tests {
             Field::new("c3", DataType::Utf8, true),
             Field::new(
                 "c4",
-                DataType::List(Arc::new(Field::new(
-                    "custom_item",
-                    DataType::Int32,
-                    false,
-                ))),
+                DataType::List(Arc::new(Field::new("custom_item", DataType::Int32, false))),
                 true,
             ),
         ]);
@@ -1198,10 +1166,8 @@ mod tests {
             ),
         ]);
 
-        let bools_with_metadata_map =
-            BooleanArray::from(vec![Some(true), None, Some(false)]);
-        let bools_with_metadata_vec =
-            BooleanArray::from(vec![Some(true), None, Some(false)]);
+        let bools_with_metadata_map = BooleanArray::from(vec![Some(true), None, Some(false)]);
+        let bools_with_metadata_vec = BooleanArray::from(vec![Some(true), None, Some(false)]);
         let bools = BooleanArray::from(vec![Some(true), None, Some(false)]);
         let int8s = Int8Array::from(vec![Some(1), None, Some(3)]);
         let int16s = Int16Array::from(vec![Some(1), None, Some(3)]);
@@ -1219,39 +1185,24 @@ mod tests {
             Some(29923997007884),
             Some(30612271819236),
         ]);
-        let time_secs =
-            Time32SecondArray::from(vec![Some(27974), Some(78592), Some(43207)]);
-        let time_millis = Time32MillisecondArray::from(vec![
-            Some(6613125),
-            Some(74667230),
-            Some(52260079),
-        ]);
-        let time_micros =
-            Time64MicrosecondArray::from(vec![Some(62522958593), None, None]);
-        let time_nanos = Time64NanosecondArray::from(vec![
-            Some(73380123595985),
-            None,
-            Some(16584393546415),
-        ]);
+        let time_secs = Time32SecondArray::from(vec![Some(27974), Some(78592), Some(43207)]);
+        let time_millis =
+            Time32MillisecondArray::from(vec![Some(6613125), Some(74667230), Some(52260079)]);
+        let time_micros = Time64MicrosecondArray::from(vec![Some(62522958593), None, None]);
+        let time_nanos =
+            Time64NanosecondArray::from(vec![Some(73380123595985), None, Some(16584393546415)]);
         let ts_secs = TimestampSecondArray::from(vec![None, Some(193438817552), None]);
-        let ts_millis = TimestampMillisecondArray::from(vec![
-            None,
-            Some(38606916383008),
-            Some(58113709376587),
-        ]);
+        let ts_millis =
+            TimestampMillisecondArray::from(vec![None, Some(38606916383008), Some(58113709376587)]);
         let ts_micros = TimestampMicrosecondArray::from(vec![None, None, None]);
-        let ts_nanos =
-            TimestampNanosecondArray::from(vec![None, None, Some(-6473623571954960143)]);
+        let ts_nanos = TimestampNanosecondArray::from(vec![None, None, Some(-6473623571954960143)]);
         let ts_secs_tz = TimestampSecondArray::from(vec![None, Some(193438817552), None])
             .with_timezone_opt(secs_tz);
-        let ts_millis_tz = TimestampMillisecondArray::from(vec![
-            None,
-            Some(38606916383008),
-            Some(58113709376587),
-        ])
-        .with_timezone_opt(millis_tz);
-        let ts_micros_tz = TimestampMicrosecondArray::from(vec![None, None, None])
-            .with_timezone_opt(micros_tz);
+        let ts_millis_tz =
+            TimestampMillisecondArray::from(vec![None, Some(38606916383008), Some(58113709376587)])
+                .with_timezone_opt(millis_tz);
+        let ts_micros_tz =
+            TimestampMicrosecondArray::from(vec![None, None, None]).with_timezone_opt(micros_tz);
         let ts_nanos_tz =
             TimestampNanosecondArray::from(vec![None, None, Some(-6473623571954960143)])
                 .with_timezone_opt(nanos_tz);
@@ -1259,8 +1210,7 @@ mod tests {
 
         let value_data = Int32Array::from(vec![None, Some(2), None, None]);
         let value_offsets = Buffer::from_slice_ref([0, 3, 4, 4]);
-        let list_data_type =
-            DataType::List(Arc::new(Field::new("item", DataType::Int32, true)));
+        let list_data_type = DataType::List(Arc::new(Field::new("item", DataType::Int32, true)));
         let list_data = ArrayData::builder(list_data_type)
             .len(3)
             .add_buffer(value_offsets)

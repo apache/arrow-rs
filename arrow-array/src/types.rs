@@ -18,8 +18,7 @@
 //! Zero-sized types used to parameterize generic array implementations
 
 use crate::delta::{
-    add_days_datetime, add_months_datetime, shift_months, sub_days_datetime,
-    sub_months_datetime,
+    add_days_datetime, add_months_datetime, shift_months, sub_days_datetime, sub_months_datetime,
 };
 use crate::temporal_conversions::as_datetime_with_timezone;
 use crate::timezone::Tz;
@@ -27,9 +26,8 @@ use crate::{ArrowNativeTypeOp, OffsetSizeTrait};
 use arrow_buffer::{i256, Buffer, OffsetBuffer};
 use arrow_data::decimal::{validate_decimal256_precision, validate_decimal_precision};
 use arrow_schema::{
-    ArrowError, DataType, IntervalUnit, TimeUnit, DECIMAL128_MAX_PRECISION,
-    DECIMAL128_MAX_SCALE, DECIMAL256_MAX_PRECISION, DECIMAL256_MAX_SCALE,
-    DECIMAL_DEFAULT_SCALE,
+    ArrowError, DataType, IntervalUnit, TimeUnit, DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE,
+    DECIMAL256_MAX_PRECISION, DECIMAL256_MAX_SCALE, DECIMAL_DEFAULT_SCALE,
 };
 use chrono::{Duration, NaiveDate, NaiveDateTime};
 use half::f16;
@@ -875,9 +873,7 @@ impl IntervalDayTimeType {
     ///
     /// * `i` - The IntervalDayTimeType to convert
     #[inline]
-    pub fn to_parts(
-        i: <IntervalDayTimeType as ArrowPrimitiveType>::Native,
-    ) -> (i32, i32) {
+    pub fn to_parts(i: <IntervalDayTimeType as ArrowPrimitiveType>::Native) -> (i32, i32) {
         let days = (i >> 32) as i32;
         let ms = i as i32;
         (days, ms)
@@ -1221,10 +1217,7 @@ pub trait DecimalType:
     fn format_decimal(value: Self::Native, precision: u8, scale: i8) -> String;
 
     /// Validates that `value` contains no more than `precision` decimal digits
-    fn validate_decimal_precision(
-        value: Self::Native,
-        precision: u8,
-    ) -> Result<(), ArrowError>;
+    fn validate_decimal_precision(value: Self::Native, precision: u8) -> Result<(), ArrowError>;
 }
 
 /// Validate that `precision` and `scale` are valid for `T`
@@ -1368,12 +1361,14 @@ pub(crate) mod bytes {
     }
 
     impl ByteArrayNativeType for [u8] {
+        #[inline]
         unsafe fn from_bytes_unchecked(b: &[u8]) -> &Self {
             b
         }
     }
 
     impl ByteArrayNativeType for str {
+        #[inline]
         unsafe fn from_bytes_unchecked(b: &[u8]) -> &Self {
             std::str::from_utf8_unchecked(b)
         }
@@ -1398,10 +1393,7 @@ pub trait ByteArrayType: 'static + Send + Sync + bytes::ByteArrayTypeSealed {
     const DATA_TYPE: DataType;
 
     /// Verifies that every consecutive pair of `offsets` denotes a valid slice of `values`
-    fn validate(
-        offsets: &OffsetBuffer<Self::Offset>,
-        values: &Buffer,
-    ) -> Result<(), ArrowError>;
+    fn validate(offsets: &OffsetBuffer<Self::Offset>, values: &Buffer) -> Result<(), ArrowError>;
 }
 
 /// [`ByteArrayType`] for string arrays
@@ -1420,10 +1412,7 @@ impl<O: OffsetSizeTrait> ByteArrayType for GenericStringType<O> {
         DataType::Utf8
     };
 
-    fn validate(
-        offsets: &OffsetBuffer<Self::Offset>,
-        values: &Buffer,
-    ) -> Result<(), ArrowError> {
+    fn validate(offsets: &OffsetBuffer<Self::Offset>, values: &Buffer) -> Result<(), ArrowError> {
         // Verify that the slice as a whole is valid UTF-8
         let validated = std::str::from_utf8(values).map_err(|e| {
             ArrowError::InvalidArgumentError(format!("Encountered non UTF-8 data: {e}"))
@@ -1469,10 +1458,7 @@ impl<O: OffsetSizeTrait> ByteArrayType for GenericBinaryType<O> {
         DataType::Binary
     };
 
-    fn validate(
-        offsets: &OffsetBuffer<Self::Offset>,
-        values: &Buffer,
-    ) -> Result<(), ArrowError> {
+    fn validate(offsets: &OffsetBuffer<Self::Offset>, values: &Buffer) -> Result<(), ArrowError> {
         // offsets are guaranteed to be monotonically increasing and non-empty
         let max_offset = offsets.last().unwrap().as_usize();
         if values.len() < max_offset {

@@ -179,8 +179,7 @@ impl UnionArray {
         if let Some(b) = &value_offsets {
             if ((type_ids.len()) * 4) != b.len() {
                 return Err(ArrowError::InvalidArgumentError(
-                    "Type Ids and Offsets represent a different number of array slots."
-                        .to_string(),
+                    "Type Ids and Offsets represent a different number of array slots.".to_string(),
                 ));
             }
         }
@@ -216,9 +215,8 @@ impl UnionArray {
 
         // Unsafe Justification: arguments were validated above (and
         // re-revalidated as part of data().validate() below)
-        let new_self = unsafe {
-            Self::new_unchecked(field_type_ids, type_ids, value_offsets, child_arrays)
-        };
+        let new_self =
+            unsafe { Self::new_unchecked(field_type_ids, type_ids, value_offsets, child_arrays) };
         new_self.to_data().validate()?;
 
         Ok(new_self)
@@ -1059,7 +1057,13 @@ mod tests {
         let mut builder = UnionBuilder::new_sparse();
         builder.append::<Float32Type>("a", 1.0).unwrap();
         let err = builder.append::<Int32Type>("a", 1).unwrap_err().to_string();
-        assert!(err.contains("Attempt to write col \"a\" with type Int32 doesn't match existing type Float32"), "{}", err);
+        assert!(
+            err.contains(
+                "Attempt to write col \"a\" with type Int32 doesn't match existing type Float32"
+            ),
+            "{}",
+            err
+        );
     }
 
     #[test]

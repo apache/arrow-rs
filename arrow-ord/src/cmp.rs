@@ -24,12 +24,10 @@
 //!
 
 use arrow_array::cast::AsArray;
-use arrow_array::types::{
-    ByteArrayType, Int64Type, IntervalDayTimeType, IntervalMonthDayNanoType,
-};
+use arrow_array::types::{ByteArrayType, Int64Type, IntervalDayTimeType, IntervalMonthDayNanoType};
 use arrow_array::{
     downcast_primitive_array, AnyDictionaryArray, Array, ArrowNativeTypeOp, BooleanArray,
-    Datum, FixedSizeBinaryArray, GenericByteArray, PrimitiveArray,
+    BooleanArray, Datum, FixedSizeBinaryArray, GenericByteArray, PrimitiveArray,
 };
 use arrow_buffer::bit_util::ceil;
 use arrow_buffer::{BooleanBuffer, MutableBuffer, NullBuffer};
@@ -168,20 +166,13 @@ pub fn distinct(lhs: &dyn Datum, rhs: &dyn Datum) -> Result<BooleanArray, ArrowE
 /// to treat them as equal, please normalize zeros before calling this kernel.
 ///
 /// Please refer to [`f32::total_cmp`] and [`f64::total_cmp`]
-pub fn not_distinct(
-    lhs: &dyn Datum,
-    rhs: &dyn Datum,
-) -> Result<BooleanArray, ArrowError> {
+pub fn not_distinct(lhs: &dyn Datum, rhs: &dyn Datum) -> Result<BooleanArray, ArrowError> {
     compare_op(Op::NotDistinct, lhs, rhs)
 }
 
 /// Perform `op` on the provided `Datum`
 #[inline(never)]
-fn compare_op(
-    op: Op,
-    lhs: &dyn Datum,
-    rhs: &dyn Datum,
-) -> Result<BooleanArray, ArrowError> {
+fn compare_op(op: Op, lhs: &dyn Datum, rhs: &dyn Datum) -> Result<BooleanArray, ArrowError> {
     use arrow_schema::DataType::*;
     let (l, l_s) = lhs.get();
     let (r, r_s) = rhs.get();
@@ -332,12 +323,8 @@ fn apply<T: ArrayOrd>(
         assert_eq!(l_v.len(), r_v.len()); // Sanity check
 
         Some(match op {
-            Op::Equal | Op::NotDistinct => {
-                apply_op_vectored(l, &l_v, r, &r_v, false, T::is_eq)
-            }
-            Op::NotEqual | Op::Distinct => {
-                apply_op_vectored(l, &l_v, r, &r_v, true, T::is_eq)
-            }
+            Op::Equal | Op::NotDistinct => apply_op_vectored(l, &l_v, r, &r_v, false, T::is_eq),
+            Op::NotEqual | Op::Distinct => apply_op_vectored(l, &l_v, r, &r_v, true, T::is_eq),
             Op::Less => apply_op_vectored(l, &l_v, r, &r_v, false, T::is_lt),
             Op::LessEqual => apply_op_vectored(r, &r_v, l, &l_v, true, T::is_lt),
             Op::Greater => apply_op_vectored(r, &r_v, l, &l_v, false, T::is_lt),
@@ -665,16 +652,13 @@ fn mdn_in_nanos_min(mdn: i128) -> i64 {
 mod tests {
     use std::sync::Arc;
 
-    use arrow_array::{DictionaryArray, Int32Array, Scalar};
+    use arrow_array::{DictionaryArray, Int32Array, Scalar, StringArray};
 
     use super::*;
 
     #[test]
     fn test_null_dict() {
-        let a = DictionaryArray::new(
-            Int32Array::new_null(10),
-            Arc::new(Int32Array::new_null(0)),
-        );
+        let a = DictionaryArray::new(Int32Array::new_null(10), Arc::new(Int32Array::new_null(0)));
         let r = eq(&a, &a).unwrap();
         assert_eq!(r.null_count(), 10);
 
@@ -685,17 +669,13 @@ mod tests {
         let r = eq(&a, &a).unwrap();
         assert_eq!(r.null_count(), 6);
 
-        let scalar = DictionaryArray::new(
-            Int32Array::new_null(1),
-            Arc::new(Int32Array::new_null(0)),
-        );
+        let scalar =
+            DictionaryArray::new(Int32Array::new_null(1), Arc::new(Int32Array::new_null(0)));
         let r = eq(&a, &Scalar::new(&scalar)).unwrap();
         assert_eq!(r.null_count(), 6);
 
-        let scalar = DictionaryArray::new(
-            Int32Array::new_null(1),
-            Arc::new(Int32Array::new_null(0)),
-        );
+        let scalar =
+            DictionaryArray::new(Int32Array::new_null(1), Arc::new(Int32Array::new_null(0)));
         let r = eq(&Scalar::new(&scalar), &Scalar::new(&scalar)).unwrap();
         assert_eq!(r.null_count(), 1);
 
@@ -817,5 +797,17 @@ mod tests {
         assert_eq!(r.len(), 0);
         let r = eq(&b, &a).unwrap();
         assert_eq!(r.len(), 0);
+    }
+
+    #[test]
+    fn test_dictionary_nulls() {
+        let values = StringArray::from(vec![Some("us-west"), Some("us-east")]);
+        let nulls = NullBuffer::from(vec![false, true, true]);
+
+        let key_values = vec![100i32, 1i32, 0i32].into();
+        let keys = Int32Array::new(key_values, Some(nulls));
+        let col = DictionaryArray::try_new(keys, Arc::new(values)).unwrap();
+
+        neq(&col.slice(0, col.len() - 1), &col.slice(1, col.len() - 1)).unwrap();
     }
 }

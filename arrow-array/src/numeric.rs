@@ -179,8 +179,8 @@ macro_rules! make_numeric_type {
                     16 => {
                         // same general logic as for 8 lanes, extended to 16 bits
                         let vecidx = i32x16::new(
-                            1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096,
-                            8192, 16384, 32768,
+                            1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384,
+                            32768,
                         );
 
                         let vecmask = i32x16::splat((mask & 0xFFFF) as i32);
@@ -194,21 +194,19 @@ macro_rules! make_numeric_type {
                         let tmp = &mut [0_i16; 32];
 
                         let vecidx = i32x16::new(
-                            1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096,
-                            8192, 16384, 32768,
+                            1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384,
+                            32768,
                         );
 
                         let vecmask = i32x16::splat((mask & 0xFFFF) as i32);
                         let vecmask = (vecidx & vecmask).eq(vecidx);
 
-                        i16x16::from_cast(vecmask)
-                            .write_to_slice_unaligned(&mut tmp[0..16]);
+                        i16x16::from_cast(vecmask).write_to_slice_unaligned(&mut tmp[0..16]);
 
                         let vecmask = i32x16::splat(((mask >> 16) & 0xFFFF) as i32);
                         let vecmask = (vecidx & vecmask).eq(vecidx);
 
-                        i16x16::from_cast(vecmask)
-                            .write_to_slice_unaligned(&mut tmp[16..32]);
+                        i16x16::from_cast(vecmask).write_to_slice_unaligned(&mut tmp[16..32]);
 
                         unsafe { std::mem::transmute(i16x32::from_slice_unaligned(tmp)) }
                     }
@@ -218,33 +216,29 @@ macro_rules! make_numeric_type {
                         let tmp = &mut [0_i8; 64];
 
                         let vecidx = i32x16::new(
-                            1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096,
-                            8192, 16384, 32768,
+                            1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384,
+                            32768,
                         );
 
                         let vecmask = i32x16::splat((mask & 0xFFFF) as i32);
                         let vecmask = (vecidx & vecmask).eq(vecidx);
 
-                        i8x16::from_cast(vecmask)
-                            .write_to_slice_unaligned(&mut tmp[0..16]);
+                        i8x16::from_cast(vecmask).write_to_slice_unaligned(&mut tmp[0..16]);
 
                         let vecmask = i32x16::splat(((mask >> 16) & 0xFFFF) as i32);
                         let vecmask = (vecidx & vecmask).eq(vecidx);
 
-                        i8x16::from_cast(vecmask)
-                            .write_to_slice_unaligned(&mut tmp[16..32]);
+                        i8x16::from_cast(vecmask).write_to_slice_unaligned(&mut tmp[16..32]);
 
                         let vecmask = i32x16::splat(((mask >> 32) & 0xFFFF) as i32);
                         let vecmask = (vecidx & vecmask).eq(vecidx);
 
-                        i8x16::from_cast(vecmask)
-                            .write_to_slice_unaligned(&mut tmp[32..48]);
+                        i8x16::from_cast(vecmask).write_to_slice_unaligned(&mut tmp[32..48]);
 
                         let vecmask = i32x16::splat(((mask >> 48) & 0xFFFF) as i32);
                         let vecmask = (vecidx & vecmask).eq(vecidx);
 
-                        i8x16::from_cast(vecmask)
-                            .write_to_slice_unaligned(&mut tmp[48..64]);
+                        i8x16::from_cast(vecmask).write_to_slice_unaligned(&mut tmp[48..64]);
 
                         unsafe { std::mem::transmute(i8x64::from_slice_unaligned(tmp)) }
                     }
@@ -269,11 +263,7 @@ macro_rules! make_numeric_type {
 
             /// Selects elements of `a` and `b` using `mask`
             #[inline]
-            fn mask_select(
-                mask: Self::SimdMask,
-                a: Self::Simd,
-                b: Self::Simd,
-            ) -> Self::Simd {
+            fn mask_select(mask: Self::SimdMask, a: Self::Simd, b: Self::Simd) -> Self::Simd {
                 mask.select(a, b)
             }
 
@@ -327,10 +317,7 @@ macro_rules! make_numeric_type {
             }
 
             #[inline]
-            fn unary_op<F: Fn(Self::Simd) -> Self::Simd>(
-                a: Self::Simd,
-                op: F,
-            ) -> Self::Simd {
+            fn unary_op<F: Fn(Self::Simd) -> Self::Simd>(a: Self::Simd, op: F) -> Self::Simd {
                 op(a)
             }
         }
@@ -581,8 +568,7 @@ mod tests {
         let mask = 0b1101;
         let actual = IntervalMonthDayNanoType::mask_from_u64(mask);
         let expected = expected_mask!(i128, mask);
-        let expected =
-            m128x4::from_cast(i128x4::from_slice_unaligned(expected.as_slice()));
+        let expected = m128x4::from_cast(i128x4::from_slice_unaligned(expected.as_slice()));
 
         assert_eq!(expected, actual);
     }
@@ -612,8 +598,7 @@ mod tests {
         let mask = 0b10101010_10101010;
         let actual = Float32Type::mask_from_u64(mask);
         let expected = expected_mask!(i32, mask);
-        let expected =
-            m32x16::from_cast(i32x16::from_slice_unaligned(expected.as_slice()));
+        let expected = m32x16::from_cast(i32x16::from_slice_unaligned(expected.as_slice()));
 
         assert_eq!(expected, actual);
     }
@@ -623,8 +608,7 @@ mod tests {
         let mask = 0b01010101_01010101;
         let actual = Int32Type::mask_from_u64(mask);
         let expected = expected_mask!(i32, mask);
-        let expected =
-            m32x16::from_cast(i32x16::from_slice_unaligned(expected.as_slice()));
+        let expected = m32x16::from_cast(i32x16::from_slice_unaligned(expected.as_slice()));
 
         assert_eq!(expected, actual);
     }
@@ -634,17 +618,14 @@ mod tests {
         let mask = 0b01010101_01010101_10101010_10101010;
         let actual = UInt16Type::mask_from_u64(mask);
         let expected = expected_mask!(i16, mask);
-        dbg!(&expected);
-        let expected =
-            m16x32::from_cast(i16x32::from_slice_unaligned(expected.as_slice()));
+        let expected = m16x32::from_cast(i16x32::from_slice_unaligned(expected.as_slice()));
 
         assert_eq!(expected, actual);
     }
 
     #[test]
     fn test_mask_i8() {
-        let mask =
-            0b01010101_01010101_10101010_10101010_01010101_01010101_10101010_10101010;
+        let mask = 0b01010101_01010101_10101010_10101010_01010101_01010101_10101010_10101010;
         let actual = Int8Type::mask_from_u64(mask);
         let expected = expected_mask!(i8, mask);
         let expected = m8x64::from_cast(i8x64::from_slice_unaligned(expected.as_slice()));

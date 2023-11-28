@@ -38,8 +38,8 @@ fn parse_fixed_offset(tz: &str) -> Option<FixedOffset> {
     if values.iter().any(|x| *x > 9) {
         return None;
     }
-    let secs = (values[0] * 10 + values[1]) as i32 * 60 * 60
-        + (values[2] * 10 + values[3]) as i32 * 60;
+    let secs =
+        (values[0] * 10 + values[1]) as i32 * 60 * 60 + (values[2] * 10 + values[3]) as i32 * 60;
 
     match bytes[0] {
         b'+' => FixedOffset::east_opt(secs),
@@ -122,10 +122,7 @@ mod private {
             })
         }
 
-        fn offset_from_local_datetime(
-            &self,
-            local: &NaiveDateTime,
-        ) -> LocalResult<Self::Offset> {
+        fn offset_from_local_datetime(&self, local: &NaiveDateTime) -> LocalResult<Self::Offset> {
             tz!(self, tz, {
                 tz.offset_from_local_datetime(local).map(|x| TzOffset {
                     tz: *self,
@@ -285,10 +282,7 @@ mod private {
             self.0.offset_from_local_date(local).map(TzOffset)
         }
 
-        fn offset_from_local_datetime(
-            &self,
-            local: &NaiveDateTime,
-        ) -> LocalResult<Self::Offset> {
+        fn offset_from_local_datetime(&self, local: &NaiveDateTime) -> LocalResult<Self::Offset> {
             self.0.offset_from_local_datetime(local).map(TzOffset)
         }
 

@@ -19,28 +19,26 @@
 
 use std::pin::Pin;
 
-use futures::Stream;
+use futures::{stream::Peekable, Stream, StreamExt};
 use prost::Message;
 use tonic::{Request, Response, Status, Streaming};
 
 use super::{
-    ActionBeginSavepointRequest, ActionBeginSavepointResult,
-    ActionBeginTransactionRequest, ActionBeginTransactionResult,
-    ActionCancelQueryRequest, ActionCancelQueryResult,
+    ActionBeginSavepointRequest, ActionBeginSavepointResult, ActionBeginTransactionRequest,
+    ActionBeginTransactionResult, ActionCancelQueryRequest, ActionCancelQueryResult,
     ActionClosePreparedStatementRequest, ActionCreatePreparedStatementRequest,
     ActionCreatePreparedStatementResult, ActionCreatePreparedSubstraitPlanRequest,
-    ActionEndSavepointRequest, ActionEndTransactionRequest, Any, Command,
-    CommandGetCatalogs, CommandGetCrossReference, CommandGetDbSchemas,
-    CommandGetExportedKeys, CommandGetImportedKeys, CommandGetPrimaryKeys,
-    CommandGetSqlInfo, CommandGetTableTypes, CommandGetTables, CommandGetXdbcTypeInfo,
-    CommandPreparedStatementQuery, CommandPreparedStatementUpdate, CommandStatementQuery,
-    CommandStatementSubstraitPlan, CommandStatementUpdate, DoPutUpdateResult,
-    ProstMessageExt, SqlInfo, TicketStatementQuery,
+    ActionEndSavepointRequest, ActionEndTransactionRequest, Any, Command, CommandGetCatalogs,
+    CommandGetCrossReference, CommandGetDbSchemas, CommandGetExportedKeys, CommandGetImportedKeys,
+    CommandGetPrimaryKeys, CommandGetSqlInfo, CommandGetTableTypes, CommandGetTables,
+    CommandGetXdbcTypeInfo, CommandPreparedStatementQuery, CommandPreparedStatementUpdate,
+    CommandStatementQuery, CommandStatementSubstraitPlan, CommandStatementUpdate,
+    DoPutUpdateResult, ProstMessageExt, SqlInfo, TicketStatementQuery,
 };
 use crate::{
-    flight_service_server::FlightService, Action, ActionType, Criteria, Empty,
-    FlightData, FlightDescriptor, FlightInfo, HandshakeRequest, HandshakeResponse,
-    PutResult, SchemaResult, Ticket,
+    flight_service_server::FlightService, Action, ActionType, Criteria, Empty, FlightData,
+    FlightDescriptor, FlightInfo, HandshakeRequest, HandshakeResponse, PutResult, SchemaResult,
+    Ticket,
 };
 
 pub(crate) static CREATE_PREPARED_STATEMENT: &str = "CreatePreparedStatement";
@@ -227,6 +225,18 @@ pub trait FlightSqlService: Sync + Send + Sized + 'static {
         ))
     }
 
+    /// Implementors may override to handle additional calls to get_flight_info()
+    async fn get_flight_info_fallback(
+        &self,
+        cmd: Command,
+        _request: Request<FlightDescriptor>,
+    ) -> Result<Response<FlightInfo>, Status> {
+        Err(Status::unimplemented(format!(
+            "get_flight_info: The defined request is invalid: {}",
+            cmd.type_url()
+        )))
+    }
+
     // do_get
 
     /// Get a FlightDataStream containing the query results.
@@ -366,7 +376,7 @@ pub trait FlightSqlService: Sync + Send + Sized + 'static {
     /// Implementors may override to handle additional calls to do_put()
     async fn do_put_fallback(
         &self,
-        _request: Request<Streaming<FlightData>>,
+        _request: Request<PeekableFlightDataStream>,
         message: Any,
     ) -> Result<Response<<Self as FlightService>::DoPutStream>, Status> {
         Err(Status::unimplemented(format!(
@@ -379,7 +389,7 @@ pub trait FlightSqlService: Sync + Send + Sized + 'static {
     async fn do_put_statement_update(
         &self,
         _ticket: CommandStatementUpdate,
-        _request: Request<Streaming<FlightData>>,
+        _request: Request<PeekableFlightDataStream>,
     ) -> Result<i64, Status> {
         Err(Status::unimplemented(
             "do_put_statement_update has no default implementation",
@@ -390,7 +400,7 @@ pub trait FlightSqlService: Sync + Send + Sized + 'static {
     async fn do_put_prepared_statement_query(
         &self,
         _query: CommandPreparedStatementQuery,
-        _request: Request<Streaming<FlightData>>,
+        _request: Request<PeekableFlightDataStream>,
     ) -> Result<Response<<Self as FlightService>::DoPutStream>, Status> {
         Err(Status::unimplemented(
             "do_put_prepared_statement_query has no default implementation",
@@ -401,7 +411,7 @@ pub trait FlightSqlService: Sync + Send + Sized + 'static {
     async fn do_put_prepared_statement_update(
         &self,
         _query: CommandPreparedStatementUpdate,
-        _request: Request<Streaming<FlightData>>,
+        _request: Request<PeekableFlightDataStream>,
     ) -> Result<i64, Status> {
         Err(Status::unimplemented(
             "do_put_prepared_statement_update has no default implementation",
@@ -412,7 +422,7 @@ pub trait FlightSqlService: Sync + Send + Sized + 'static {
     async fn do_put_substrait_plan(
         &self,
         _query: CommandStatementSubstraitPlan,
-        _request: Request<Streaming<FlightData>>,
+        _request: Request<PeekableFlightDataStream>,
     ) -> Result<i64, Status> {
         Err(Status::unimplemented(
             "do_put_substrait_plan has no default implementation",
@@ -549,13 +559,10 @@ where
         Pin<Box<dyn Stream<Item = Result<HandshakeResponse, Status>> + Send + 'static>>;
     type ListFlightsStream =
         Pin<Box<dyn Stream<Item = Result<FlightInfo, Status>> + Send + 'static>>;
-    type DoGetStream =
-        Pin<Box<dyn Stream<Item = Result<FlightData, Status>> + Send + 'static>>;
-    type DoPutStream =
-        Pin<Box<dyn Stream<Item = Result<PutResult, Status>> + Send + 'static>>;
-    type DoActionStream = Pin<
-        Box<dyn Stream<Item = Result<super::super::Result, Status>> + Send + 'static>,
-    >;
+    type DoGetStream = Pin<Box<dyn Stream<Item = Result<FlightData, Status>> + Send + 'static>>;
+    type DoPutStream = Pin<Box<dyn Stream<Item = Result<PutResult, Status>> + Send + 'static>>;
+    type DoActionStream =
+        Pin<Box<dyn Stream<Item = Result<super::super::Result, Status>> + Send + 'static>>;
     type ListActionsStream =
         Pin<Box<dyn Stream<Item = Result<ActionType, Status>> + Send + 'static>>;
     type DoExchangeStream =
@@ -580,8 +587,7 @@ where
         &self,
         request: Request<FlightDescriptor>,
     ) -> Result<Response<FlightInfo>, Status> {
-        let message =
-            Any::decode(&*request.get_ref().cmd).map_err(decode_error_to_status)?;
+        let message = Any::decode(&*request.get_ref().cmd).map_err(decode_error_to_status)?;
 
         match Command::try_from(message).map_err(arrow_error_to_status)? {
             Command::CommandStatementQuery(token) => {
@@ -600,9 +606,7 @@ where
             Command::CommandGetDbSchemas(token) => {
                 return self.get_flight_info_schemas(token, request).await
             }
-            Command::CommandGetTables(token) => {
-                self.get_flight_info_tables(token, request).await
-            }
+            Command::CommandGetTables(token) => self.get_flight_info_tables(token, request).await,
             Command::CommandGetTableTypes(token) => {
                 self.get_flight_info_table_types(token, request).await
             }
@@ -624,10 +628,7 @@ where
             Command::CommandGetXdbcTypeInfo(token) => {
                 self.get_flight_info_xdbc_type_info(token, request).await
             }
-            cmd => Err(Status::unimplemented(format!(
-                "get_flight_info: The defined request is invalid: {}",
-                cmd.type_url()
-            ))),
+            cmd => self.get_flight_info_fallback(cmd, request).await,
         }
     }
 
@@ -642,31 +643,21 @@ where
         &self,
         request: Request<Ticket>,
     ) -> Result<Response<Self::DoGetStream>, Status> {
-        let msg: Any = Message::decode(&*request.get_ref().ticket)
-            .map_err(decode_error_to_status)?;
+        let msg: Any =
+            Message::decode(&*request.get_ref().ticket).map_err(decode_error_to_status)?;
 
         match Command::try_from(msg).map_err(arrow_error_to_status)? {
-            Command::TicketStatementQuery(command) => {
-                self.do_get_statement(command, request).await
-            }
+            Command::TicketStatementQuery(command) => self.do_get_statement(command, request).await,
             Command::CommandPreparedStatementQuery(command) => {
                 self.do_get_prepared_statement(command, request).await
             }
-            Command::CommandGetCatalogs(command) => {
-                self.do_get_catalogs(command, request).await
-            }
-            Command::CommandGetDbSchemas(command) => {
-                self.do_get_schemas(command, request).await
-            }
-            Command::CommandGetTables(command) => {
-                self.do_get_tables(command, request).await
-            }
+            Command::CommandGetCatalogs(command) => self.do_get_catalogs(command, request).await,
+            Command::CommandGetDbSchemas(command) => self.do_get_schemas(command, request).await,
+            Command::CommandGetTables(command) => self.do_get_tables(command, request).await,
             Command::CommandGetTableTypes(command) => {
                 self.do_get_table_types(command, request).await
             }
-            Command::CommandGetSqlInfo(command) => {
-                self.do_get_sql_info(command, request).await
-            }
+            Command::CommandGetSqlInfo(command) => self.do_get_sql_info(command, request).await,
             Command::CommandGetPrimaryKeys(command) => {
                 self.do_get_primary_keys(command, request).await
             }
@@ -688,11 +679,19 @@ where
 
     async fn do_put(
         &self,
-        mut request: Request<Streaming<FlightData>>,
+        request: Request<Streaming<FlightData>>,
     ) -> Result<Response<Self::DoPutStream>, Status> {
-        let cmd = request.get_mut().message().await?.unwrap();
-        let message = Any::decode(&*cmd.flight_descriptor.unwrap().cmd)
-            .map_err(decode_error_to_status)?;
+        // See issue #4658: https://github.com/apache/arrow-rs/issues/4658
+        // To dispatch to the correct `do_put` method, we cannot discard the first message,
+        // as it may contain the Arrow schema, which the `do_put` handler may need.
+        // To allow the first message to be reused by the `do_put` handler,
+        // we wrap this stream in a `Peekable` one, which allows us to peek at
+        // the first message without discarding it.
+        let mut request = request.map(PeekableFlightDataStream::new);
+        let cmd = Pin::new(request.get_mut()).peek().await.unwrap().clone()?;
+
+        let message =
+            Any::decode(&*cmd.flight_descriptor.unwrap().cmd).map_err(decode_error_to_status)?;
         match Command::try_from(message).map_err(arrow_error_to_status)? {
             Command::CommandStatementUpdate(command) => {
                 let record_count = self.do_put_statement_update(command, request).await?;
@@ -747,11 +746,10 @@ where
         };
         let create_prepared_substrait_plan_action_type = ActionType {
             r#type: CREATE_PREPARED_SUBSTRAIT_PLAN.to_string(),
-            description:
-                "Creates a reusable prepared substrait plan resource on the server.\n
+            description: "Creates a reusable prepared substrait plan resource on the server.\n
                 Request Message: ActionCreatePreparedSubstraitPlanRequest\n
                 Response Message: ActionCreatePreparedStatementResult"
-                    .into(),
+                .into(),
         };
         let begin_transaction_action_type = ActionType {
             r#type: BEGIN_TRANSACTION.to_string(),
@@ -812,8 +810,7 @@ where
         request: Request<Action>,
     ) -> Result<Response<Self::DoActionStream>, Status> {
         if request.get_ref().r#type == CREATE_PREPARED_STATEMENT {
-            let any =
-                Any::decode(&*request.get_ref().body).map_err(decode_error_to_status)?;
+            let any = Any::decode(&*request.get_ref().body).map_err(decode_error_to_status)?;
 
             let cmd: ActionCreatePreparedStatementRequest = any
                 .unpack()
@@ -831,8 +828,7 @@ where
             })]);
             return Ok(Response::new(Box::pin(output)));
         } else if request.get_ref().r#type == CLOSE_PREPARED_STATEMENT {
-            let any =
-                Any::decode(&*request.get_ref().body).map_err(decode_error_to_status)?;
+            let any = Any::decode(&*request.get_ref().body).map_err(decode_error_to_status)?;
 
             let cmd: ActionClosePreparedStatementRequest = any
                 .unpack()
@@ -846,8 +842,7 @@ where
                 .await?;
             return Ok(Response::new(Box::pin(futures::stream::empty())));
         } else if request.get_ref().r#type == CREATE_PREPARED_SUBSTRAIT_PLAN {
-            let any =
-                Any::decode(&*request.get_ref().body).map_err(decode_error_to_status)?;
+            let any = Any::decode(&*request.get_ref().body).map_err(decode_error_to_status)?;
 
             let cmd: ActionCreatePreparedSubstraitPlanRequest = any
                 .unpack()
@@ -861,47 +856,38 @@ where
                 .await?;
             return Ok(Response::new(Box::pin(futures::stream::empty())));
         } else if request.get_ref().r#type == BEGIN_TRANSACTION {
-            let any =
-                Any::decode(&*request.get_ref().body).map_err(decode_error_to_status)?;
+            let any = Any::decode(&*request.get_ref().body).map_err(decode_error_to_status)?;
 
             let cmd: ActionBeginTransactionRequest = any
                 .unpack()
                 .map_err(arrow_error_to_status)?
                 .ok_or_else(|| {
-                    Status::invalid_argument(
-                        "Unable to unpack ActionBeginTransactionRequest.",
-                    )
-                })?;
+                Status::invalid_argument("Unable to unpack ActionBeginTransactionRequest.")
+            })?;
             let stmt = self.do_action_begin_transaction(cmd, request).await?;
             let output = futures::stream::iter(vec![Ok(super::super::gen::Result {
                 body: stmt.as_any().encode_to_vec().into(),
             })]);
             return Ok(Response::new(Box::pin(output)));
         } else if request.get_ref().r#type == END_TRANSACTION {
-            let any =
-                Any::decode(&*request.get_ref().body).map_err(decode_error_to_status)?;
+            let any = Any::decode(&*request.get_ref().body).map_err(decode_error_to_status)?;
 
             let cmd: ActionEndTransactionRequest = any
                 .unpack()
                 .map_err(arrow_error_to_status)?
                 .ok_or_else(|| {
-                    Status::invalid_argument(
-                        "Unable to unpack ActionEndTransactionRequest.",
-                    )
+                    Status::invalid_argument("Unable to unpack ActionEndTransactionRequest.")
                 })?;
             self.do_action_end_transaction(cmd, request).await?;
             return Ok(Response::new(Box::pin(futures::stream::empty())));
         } else if request.get_ref().r#type == BEGIN_SAVEPOINT {
-            let any =
-                Any::decode(&*request.get_ref().body).map_err(decode_error_to_status)?;
+            let any = Any::decode(&*request.get_ref().body).map_err(decode_error_to_status)?;
 
             let cmd: ActionBeginSavepointRequest = any
                 .unpack()
                 .map_err(arrow_error_to_status)?
                 .ok_or_else(|| {
-                    Status::invalid_argument(
-                        "Unable to unpack ActionBeginSavepointRequest.",
-                    )
+                    Status::invalid_argument("Unable to unpack ActionBeginSavepointRequest.")
                 })?;
             let stmt = self.do_action_begin_savepoint(cmd, request).await?;
             let output = futures::stream::iter(vec![Ok(super::super::gen::Result {
@@ -909,22 +895,18 @@ where
             })]);
             return Ok(Response::new(Box::pin(output)));
         } else if request.get_ref().r#type == END_SAVEPOINT {
-            let any =
-                Any::decode(&*request.get_ref().body).map_err(decode_error_to_status)?;
+            let any = Any::decode(&*request.get_ref().body).map_err(decode_error_to_status)?;
 
             let cmd: ActionEndSavepointRequest = any
                 .unpack()
                 .map_err(arrow_error_to_status)?
                 .ok_or_else(|| {
-                    Status::invalid_argument(
-                        "Unable to unpack ActionEndSavepointRequest.",
-                    )
+                    Status::invalid_argument("Unable to unpack ActionEndSavepointRequest.")
                 })?;
             self.do_action_end_savepoint(cmd, request).await?;
             return Ok(Response::new(Box::pin(futures::stream::empty())));
         } else if request.get_ref().r#type == CANCEL_QUERY {
-            let any =
-                Any::decode(&*request.get_ref().body).map_err(decode_error_to_status)?;
+            let any = Any::decode(&*request.get_ref().body).map_err(decode_error_to_status)?;
 
             let cmd: ActionCancelQueryRequest = any
                 .unpack()
@@ -956,4 +938,90 @@ fn decode_error_to_status(err: prost::DecodeError) -> Status {
 
 fn arrow_error_to_status(err: arrow_schema::ArrowError) -> Status {
     Status::internal(format!("{err:?}"))
+}
+
+/// A wrapper around [`Streaming<FlightData>`] that allows "peeking" at the
+/// message at the front of the stream without consuming it.
+/// This is needed because sometimes the first message in the stream will contain
+/// a [`FlightDescriptor`] in addition to potentially any data, and the dispatch logic
+/// must inspect this information.
+///
+/// # Example
+///
+/// [`PeekableFlightDataStream::peek`] can be used to peek at the first message without
+/// discarding it; otherwise, `PeekableFlightDataStream` can be used as a regular stream.
+/// See the following example:
+///
+/// ```no_run
+/// use arrow_array::RecordBatch;
+/// use arrow_flight::decode::FlightRecordBatchStream;
+/// use arrow_flight::FlightDescriptor;
+/// use arrow_flight::error::FlightError;
+/// use arrow_flight::sql::server::PeekableFlightDataStream;
+/// use tonic::{Request, Status};
+/// use futures::TryStreamExt;
+///
+/// #[tokio::main]
+/// async fn main() -> Result<(), Status> {
+///     let request: Request<PeekableFlightDataStream> = todo!();
+///     let stream: PeekableFlightDataStream = request.into_inner();
+///
+///     // The first message contains the flight descriptor and the schema.
+///     // Read the flight descriptor without discarding the schema:
+///     let flight_descriptor: FlightDescriptor = stream
+///         .peek()
+///         .await
+///         .cloned()
+///         .transpose()?
+///         .and_then(|data| data.flight_descriptor)
+///         .expect("first message should contain flight descriptor");
+///
+///     // Pass the stream through a decoder
+///     let batches: Vec<RecordBatch> = FlightRecordBatchStream::new_from_flight_data(
+///         request.into_inner().map_err(|e| e.into()),
+///     )
+///     .try_collect()
+///     .await?;
+/// }
+/// ```
+pub struct PeekableFlightDataStream {
+    inner: Peekable<Streaming<FlightData>>,
+}
+
+impl PeekableFlightDataStream {
+    fn new(stream: Streaming<FlightData>) -> Self {
+        Self {
+            inner: stream.peekable(),
+        }
+    }
+
+    /// Convert this stream into a `Streaming<FlightData>`.
+    /// Any messages observed through [`Self::peek`] will be lost
+    /// after the conversion.
+    pub fn into_inner(self) -> Streaming<FlightData> {
+        self.inner.into_inner()
+    }
+
+    /// Convert this stream into a `Peekable<Streaming<FlightData>>`.
+    /// Preserves the state of the stream, so that calls to [`Self::peek`]
+    /// and [`Self::poll_next`] are the same.
+    pub fn into_peekable(self) -> Peekable<Streaming<FlightData>> {
+        self.inner
+    }
+
+    /// Peek at the head of this stream without advancing it.
+    pub async fn peek(&mut self) -> Option<&Result<FlightData, Status>> {
+        Pin::new(&mut self.inner).peek().await
+    }
+}
+
+impl Stream for PeekableFlightDataStream {
+    type Item = Result<FlightData, Status>;
+
+    fn poll_next(
+        mut self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
+        self.inner.poll_next_unpin(cx)
+    }
 }

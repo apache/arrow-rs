@@ -329,12 +329,12 @@ mod tests {
                     "b_catalog",
                 ])) as ArrayRef,
                 Arc::new(StringArray::from(vec![
-                    "a_schema", "a_schema", "b_schema", "b_schema", "a_schema",
-                    "a_schema", "b_schema", "b_schema",
+                    "a_schema", "a_schema", "b_schema", "b_schema", "a_schema", "a_schema",
+                    "b_schema", "b_schema",
                 ])) as ArrayRef,
                 Arc::new(StringArray::from(vec![
-                    "a_table", "b_table", "a_table", "b_table", "a_table", "a_table",
-                    "b_table", "b_table",
+                    "a_table", "b_table", "a_table", "b_table", "a_table", "a_table", "b_table",
+                    "b_table",
                 ])) as ArrayRef,
                 Arc::new(StringArray::from(vec![
                     "TABLE", "TABLE", "TABLE", "TABLE", "TABLE", "VIEW", "TABLE", "VIEW",

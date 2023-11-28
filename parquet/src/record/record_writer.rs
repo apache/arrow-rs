@@ -20,6 +20,10 @@ use crate::schema::types::TypePtr;
 use super::super::errors::ParquetError;
 use super::super::file::writer::SerializedRowGroupWriter;
 
+/// `write_to_row_group` writes from `self` into `row_group_writer`
+/// `schema` builds the schema used by `row_group_writer`
+/// The type parameter `T` is used to work around the rust orphan rule
+/// when implementing on types such as `&[T]`.
 pub trait RecordWriter<T> {
     fn write_to_row_group<W: std::io::Write + Send>(
         &self,

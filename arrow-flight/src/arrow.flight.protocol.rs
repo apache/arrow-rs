@@ -685,7 +685,7 @@ pub mod flight_service_server {
     #[async_trait]
     pub trait FlightService: Send + Sync + 'static {
         /// Server streaming response type for the Handshake method.
-        type HandshakeStream: futures_core::Stream<
+        type HandshakeStream: tonic::codegen::tokio_stream::Stream<
                 Item = std::result::Result<super::HandshakeResponse, tonic::Status>,
             >
             + Send
@@ -700,7 +700,7 @@ pub mod flight_service_server {
             request: tonic::Request<tonic::Streaming<super::HandshakeRequest>>,
         ) -> std::result::Result<tonic::Response<Self::HandshakeStream>, tonic::Status>;
         /// Server streaming response type for the ListFlights method.
-        type ListFlightsStream: futures_core::Stream<
+        type ListFlightsStream: tonic::codegen::tokio_stream::Stream<
                 Item = std::result::Result<super::FlightInfo, tonic::Status>,
             >
             + Send
@@ -744,7 +744,7 @@ pub mod flight_service_server {
             request: tonic::Request<super::FlightDescriptor>,
         ) -> std::result::Result<tonic::Response<super::SchemaResult>, tonic::Status>;
         /// Server streaming response type for the DoGet method.
-        type DoGetStream: futures_core::Stream<
+        type DoGetStream: tonic::codegen::tokio_stream::Stream<
                 Item = std::result::Result<super::FlightData, tonic::Status>,
             >
             + Send
@@ -759,7 +759,7 @@ pub mod flight_service_server {
             request: tonic::Request<super::Ticket>,
         ) -> std::result::Result<tonic::Response<Self::DoGetStream>, tonic::Status>;
         /// Server streaming response type for the DoPut method.
-        type DoPutStream: futures_core::Stream<
+        type DoPutStream: tonic::codegen::tokio_stream::Stream<
                 Item = std::result::Result<super::PutResult, tonic::Status>,
             >
             + Send
@@ -776,7 +776,7 @@ pub mod flight_service_server {
             request: tonic::Request<tonic::Streaming<super::FlightData>>,
         ) -> std::result::Result<tonic::Response<Self::DoPutStream>, tonic::Status>;
         /// Server streaming response type for the DoExchange method.
-        type DoExchangeStream: futures_core::Stream<
+        type DoExchangeStream: tonic::codegen::tokio_stream::Stream<
                 Item = std::result::Result<super::FlightData, tonic::Status>,
             >
             + Send
@@ -792,7 +792,7 @@ pub mod flight_service_server {
             request: tonic::Request<tonic::Streaming<super::FlightData>>,
         ) -> std::result::Result<tonic::Response<Self::DoExchangeStream>, tonic::Status>;
         /// Server streaming response type for the DoAction method.
-        type DoActionStream: futures_core::Stream<
+        type DoActionStream: tonic::codegen::tokio_stream::Stream<
                 Item = std::result::Result<super::Result, tonic::Status>,
             >
             + Send
@@ -809,7 +809,7 @@ pub mod flight_service_server {
             request: tonic::Request<super::Action>,
         ) -> std::result::Result<tonic::Response<Self::DoActionStream>, tonic::Status>;
         /// Server streaming response type for the ListActions method.
-        type ListActionsStream: futures_core::Stream<
+        type ListActionsStream: tonic::codegen::tokio_stream::Stream<
                 Item = std::result::Result<super::ActionType, tonic::Status>,
             >
             + Send
@@ -930,7 +930,9 @@ pub mod flight_service_server {
                             >,
                         ) -> Self::Future {
                             let inner = Arc::clone(&self.0);
-                            let fut = async move { (*inner).handshake(request).await };
+                            let fut = async move {
+                                <T as FlightService>::handshake(&inner, request).await
+                            };
                             Box::pin(fut)
                         }
                     }
@@ -976,7 +978,7 @@ pub mod flight_service_server {
                         ) -> Self::Future {
                             let inner = Arc::clone(&self.0);
                             let fut = async move {
-                                (*inner).list_flights(request).await
+                                <T as FlightService>::list_flights(&inner, request).await
                             };
                             Box::pin(fut)
                         }
@@ -1022,7 +1024,7 @@ pub mod flight_service_server {
                         ) -> Self::Future {
                             let inner = Arc::clone(&self.0);
                             let fut = async move {
-                                (*inner).get_flight_info(request).await
+                                <T as FlightService>::get_flight_info(&inner, request).await
                             };
                             Box::pin(fut)
                         }
@@ -1067,7 +1069,9 @@ pub mod flight_service_server {
                             request: tonic::Request<super::FlightDescriptor>,
                         ) -> Self::Future {
                             let inner = Arc::clone(&self.0);
-                            let fut = async move { (*inner).get_schema(request).await };
+                            let fut = async move {
+                                <T as FlightService>::get_schema(&inner, request).await
+                            };
                             Box::pin(fut)
                         }
                     }
@@ -1112,7 +1116,9 @@ pub mod flight_service_server {
                             request: tonic::Request<super::Ticket>,
                         ) -> Self::Future {
                             let inner = Arc::clone(&self.0);
-                            let fut = async move { (*inner).do_get(request).await };
+                            let fut = async move {
+                                <T as FlightService>::do_get(&inner, request).await
+                            };
                             Box::pin(fut)
                         }
                     }
@@ -1157,7 +1163,9 @@ pub mod flight_service_server {
                             request: tonic::Request<tonic::Streaming<super::FlightData>>,
                         ) -> Self::Future {
                             let inner = Arc::clone(&self.0);
-                            let fut = async move { (*inner).do_put(request).await };
+                            let fut = async move {
+                                <T as FlightService>::do_put(&inner, request).await
+                            };
                             Box::pin(fut)
                         }
                     }
@@ -1202,7 +1210,9 @@ pub mod flight_service_server {
                             request: tonic::Request<tonic::Streaming<super::FlightData>>,
                         ) -> Self::Future {
                             let inner = Arc::clone(&self.0);
-                            let fut = async move { (*inner).do_exchange(request).await };
+                            let fut = async move {
+                                <T as FlightService>::do_exchange(&inner, request).await
+                            };
                             Box::pin(fut)
                         }
                     }
@@ -1247,7 +1257,9 @@ pub mod flight_service_server {
                             request: tonic::Request<super::Action>,
                         ) -> Self::Future {
                             let inner = Arc::clone(&self.0);
-                            let fut = async move { (*inner).do_action(request).await };
+                            let fut = async move {
+                                <T as FlightService>::do_action(&inner, request).await
+                            };
                             Box::pin(fut)
                         }
                     }
@@ -1293,7 +1305,7 @@ pub mod flight_service_server {
                         ) -> Self::Future {
                             let inner = Arc::clone(&self.0);
                             let fut = async move {
-                                (*inner).list_actions(request).await
+                                <T as FlightService>::list_actions(&inner, request).await
                             };
                             Box::pin(fut)
                         }

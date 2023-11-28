@@ -42,14 +42,8 @@ macro_rules! try_to_type {
 }
 
 // Avoids creating a closure for each combination of `$RIGHT` and `$TY`
-fn try_to_type_result<T>(
-    value: Option<T>,
-    right: &str,
-    ty: &str,
-) -> Result<T, ArrowError> {
-    value.ok_or_else(|| {
-        ArrowError::ComputeError(format!("Could not convert {right} with {ty}",))
-    })
+fn try_to_type_result<T>(value: Option<T>, right: &str, ty: &str) -> Result<T, ArrowError> {
+    value.ok_or_else(|| ArrowError::ComputeError(format!("Could not convert {right} with {ty}",)))
 }
 
 fn make_primitive_scalar<T: num::ToPrimitive + std::fmt::Debug>(
@@ -105,15 +99,16 @@ fn make_primitive_scalar<T: num::ToPrimitive + std::fmt::Debug>(
         }
         DataType::Decimal128(_, _) => {
             let right = try_to_type!(scalar, to_i128)?;
-            Ok(Arc::new(PrimitiveArray::<Decimal128Type>::from(vec![
-                right,
-            ])))
+            Ok(Arc::new(
+                PrimitiveArray::<Decimal128Type>::from(vec![right]).with_data_type(d.clone()),
+            ))
         }
         DataType::Decimal256(_, _) => {
             let right = try_to_type!(scalar, to_i128)?;
-            Ok(Arc::new(PrimitiveArray::<Decimal256Type>::from(vec![
-                i256::from_i128(right),
-            ])))
+            Ok(Arc::new(
+                PrimitiveArray::<Decimal256Type>::from(vec![i256::from_i128(right)])
+                    .with_data_type(d.clone()),
+            ))
         }
         DataType::Date32 => {
             let right = try_to_type!(scalar, to_i32)?;
@@ -125,27 +120,30 @@ fn make_primitive_scalar<T: num::ToPrimitive + std::fmt::Debug>(
         }
         DataType::Timestamp(TimeUnit::Nanosecond, _) => {
             let right = try_to_type!(scalar, to_i64)?;
-            Ok(Arc::new(PrimitiveArray::<TimestampNanosecondType>::from(
-                vec![right],
-            )))
+            Ok(Arc::new(
+                PrimitiveArray::<TimestampNanosecondType>::from(vec![right])
+                    .with_data_type(d.clone()),
+            ))
         }
         DataType::Timestamp(TimeUnit::Microsecond, _) => {
             let right = try_to_type!(scalar, to_i64)?;
-            Ok(Arc::new(PrimitiveArray::<TimestampMicrosecondType>::from(
-                vec![right],
-            )))
+            Ok(Arc::new(
+                PrimitiveArray::<TimestampMicrosecondType>::from(vec![right])
+                    .with_data_type(d.clone()),
+            ))
         }
         DataType::Timestamp(TimeUnit::Millisecond, _) => {
             let right = try_to_type!(scalar, to_i64)?;
-            Ok(Arc::new(PrimitiveArray::<TimestampMillisecondType>::from(
-                vec![right],
-            )))
+            Ok(Arc::new(
+                PrimitiveArray::<TimestampMillisecondType>::from(vec![right])
+                    .with_data_type(d.clone()),
+            ))
         }
         DataType::Timestamp(TimeUnit::Second, _) => {
             let right = try_to_type!(scalar, to_i64)?;
-            Ok(Arc::new(PrimitiveArray::<TimestampSecondType>::from(vec![
-                right,
-            ])))
+            Ok(Arc::new(
+                PrimitiveArray::<TimestampSecondType>::from(vec![right]).with_data_type(d.clone()),
+            ))
         }
         DataType::Time32(TimeUnit::Second) => {
             let right = try_to_type!(scalar, to_i32)?;
@@ -223,12 +221,10 @@ fn make_primitive_scalar<T: num::ToPrimitive + std::fmt::Debug>(
 fn make_binary_scalar(d: &DataType, scalar: &[u8]) -> Result<ArrayRef, ArrowError> {
     match d {
         DataType::Binary => Ok(Arc::new(BinaryArray::from_iter_values([scalar]))),
-        DataType::FixedSizeBinary(_) => Ok(Arc::new(
-            FixedSizeBinaryArray::try_from_iter([scalar].into_iter())?,
-        )),
-        DataType::LargeBinary => {
-            Ok(Arc::new(LargeBinaryArray::from_iter_values([scalar])))
-        }
+        DataType::FixedSizeBinary(_) => Ok(Arc::new(FixedSizeBinaryArray::try_from_iter(
+            [scalar].into_iter(),
+        )?)),
+        DataType::LargeBinary => Ok(Arc::new(LargeBinaryArray::from_iter_values([scalar]))),
         DataType::Dictionary(_, v) => make_binary_scalar(v.as_ref(), scalar),
         _ => Err(ArrowError::InvalidArgumentError(format!(
             "Unsupported binary scalar data type {d:?}",
@@ -259,8 +255,7 @@ where
 {
     if left.len() != right.len() {
         return Err(ArrowError::ComputeError(
-            "Cannot perform comparison operation on arrays of different length"
-                .to_string(),
+            "Cannot perform comparison operation on arrays of different length".to_string(),
         ));
     }
 
@@ -269,10 +264,7 @@ where
 
 /// Helper function to perform boolean lambda function on values from array accessor, this
 /// version does not attempt to use SIMD.
-fn compare_op_scalar<T: ArrayAccessor, F>(
-    left: T,
-    op: F,
-) -> Result<BooleanArray, ArrowError>
+fn compare_op_scalar<T: ArrayAccessor, F>(left: T, op: F) -> Result<BooleanArray, ArrowError>
 where
     F: Fn(T::Item) -> bool,
 {
@@ -330,114 +322,78 @@ pub fn eq_utf8_scalar<OffsetSize: OffsetSizeTrait>(
 
 /// Perform `left == right` operation on [`BooleanArray`]
 #[deprecated(note = "Use arrow_ord::cmp::eq")]
-pub fn eq_bool(
-    left: &BooleanArray,
-    right: &BooleanArray,
-) -> Result<BooleanArray, ArrowError> {
+pub fn eq_bool(left: &BooleanArray, right: &BooleanArray) -> Result<BooleanArray, ArrowError> {
     crate::cmp::eq(&left, &right)
 }
 
 /// Perform `left != right` operation on [`BooleanArray`]
 #[deprecated(note = "Use arrow_ord::cmp::neq")]
-pub fn neq_bool(
-    left: &BooleanArray,
-    right: &BooleanArray,
-) -> Result<BooleanArray, ArrowError> {
+pub fn neq_bool(left: &BooleanArray, right: &BooleanArray) -> Result<BooleanArray, ArrowError> {
     crate::cmp::neq(&left, &right)
 }
 
 /// Perform `left < right` operation on [`BooleanArray`]
 #[deprecated(note = "Use arrow_ord::cmp::lt")]
-pub fn lt_bool(
-    left: &BooleanArray,
-    right: &BooleanArray,
-) -> Result<BooleanArray, ArrowError> {
+pub fn lt_bool(left: &BooleanArray, right: &BooleanArray) -> Result<BooleanArray, ArrowError> {
     crate::cmp::lt(&left, &right)
 }
 
 /// Perform `left <= right` operation on [`BooleanArray`]
 #[deprecated(note = "Use arrow_ord::cmp::lt_eq")]
-pub fn lt_eq_bool(
-    left: &BooleanArray,
-    right: &BooleanArray,
-) -> Result<BooleanArray, ArrowError> {
+pub fn lt_eq_bool(left: &BooleanArray, right: &BooleanArray) -> Result<BooleanArray, ArrowError> {
     crate::cmp::lt_eq(&left, &right)
 }
 
 /// Perform `left > right` operation on [`BooleanArray`]
 #[deprecated(note = "Use arrow_ord::cmp::gt")]
-pub fn gt_bool(
-    left: &BooleanArray,
-    right: &BooleanArray,
-) -> Result<BooleanArray, ArrowError> {
+pub fn gt_bool(left: &BooleanArray, right: &BooleanArray) -> Result<BooleanArray, ArrowError> {
     crate::cmp::gt(&left, &right)
 }
 
 /// Perform `left >= right` operation on [`BooleanArray`]
 #[deprecated(note = "Use arrow_ord::cmp::gt_eq")]
-pub fn gt_eq_bool(
-    left: &BooleanArray,
-    right: &BooleanArray,
-) -> Result<BooleanArray, ArrowError> {
+pub fn gt_eq_bool(left: &BooleanArray, right: &BooleanArray) -> Result<BooleanArray, ArrowError> {
     crate::cmp::gt_eq(&left, &right)
 }
 
 /// Perform `left == right` operation on [`BooleanArray`] and a scalar
 #[deprecated(note = "Use arrow_ord::cmp::eq")]
-pub fn eq_bool_scalar(
-    left: &BooleanArray,
-    right: bool,
-) -> Result<BooleanArray, ArrowError> {
+pub fn eq_bool_scalar(left: &BooleanArray, right: bool) -> Result<BooleanArray, ArrowError> {
     let right = BooleanArray::from(vec![right]);
     crate::cmp::eq(&left, &Scalar::new(&right))
 }
 
 /// Perform `left < right` operation on [`BooleanArray`] and a scalar
 #[deprecated(note = "Use arrow_ord::cmp::lt")]
-pub fn lt_bool_scalar(
-    left: &BooleanArray,
-    right: bool,
-) -> Result<BooleanArray, ArrowError> {
+pub fn lt_bool_scalar(left: &BooleanArray, right: bool) -> Result<BooleanArray, ArrowError> {
     let right = BooleanArray::from(vec![right]);
     crate::cmp::lt(&left, &Scalar::new(&right))
 }
 
 /// Perform `left <= right` operation on [`BooleanArray`] and a scalar
 #[deprecated(note = "Use arrow_ord::cmp::lt_eq")]
-pub fn lt_eq_bool_scalar(
-    left: &BooleanArray,
-    right: bool,
-) -> Result<BooleanArray, ArrowError> {
+pub fn lt_eq_bool_scalar(left: &BooleanArray, right: bool) -> Result<BooleanArray, ArrowError> {
     let right = BooleanArray::from(vec![right]);
     crate::cmp::lt_eq(&left, &Scalar::new(&right))
 }
 
 /// Perform `left > right` operation on [`BooleanArray`] and a scalar
 #[deprecated(note = "Use arrow_ord::cmp::gt")]
-pub fn gt_bool_scalar(
-    left: &BooleanArray,
-    right: bool,
-) -> Result<BooleanArray, ArrowError> {
+pub fn gt_bool_scalar(left: &BooleanArray, right: bool) -> Result<BooleanArray, ArrowError> {
     let right = BooleanArray::from(vec![right]);
     crate::cmp::gt(&left, &Scalar::new(&right))
 }
 
 /// Perform `left >= right` operation on [`BooleanArray`] and a scalar
 #[deprecated(note = "Use arrow_ord::cmp::gt_eq")]
-pub fn gt_eq_bool_scalar(
-    left: &BooleanArray,
-    right: bool,
-) -> Result<BooleanArray, ArrowError> {
+pub fn gt_eq_bool_scalar(left: &BooleanArray, right: bool) -> Result<BooleanArray, ArrowError> {
     let right = BooleanArray::from(vec![right]);
     crate::cmp::gt_eq(&left, &Scalar::new(&right))
 }
 
 /// Perform `left != right` operation on [`BooleanArray`] and a scalar
 #[deprecated(note = "Use arrow_ord::cmp::neq")]
-pub fn neq_bool_scalar(
-    left: &BooleanArray,
-    right: bool,
-) -> Result<BooleanArray, ArrowError> {
+pub fn neq_bool_scalar(left: &BooleanArray, right: bool) -> Result<BooleanArray, ArrowError> {
     let right = BooleanArray::from(vec![right]);
     crate::cmp::neq(&left, &Scalar::new(&right))
 }
@@ -762,10 +718,7 @@ where
 /// Perform `left == right` operation on an array and a numeric scalar
 /// value. Supports BinaryArray and LargeBinaryArray
 #[deprecated(note = "Use arrow_ord::cmp::eq")]
-pub fn eq_dyn_binary_scalar(
-    left: &dyn Array,
-    right: &[u8],
-) -> Result<BooleanArray, ArrowError> {
+pub fn eq_dyn_binary_scalar(left: &dyn Array, right: &[u8]) -> Result<BooleanArray, ArrowError> {
     let right = make_binary_scalar(left.data_type(), right)?;
     crate::cmp::eq(&left, &Scalar::new(&right))
 }
@@ -773,10 +726,7 @@ pub fn eq_dyn_binary_scalar(
 /// Perform `left != right` operation on an array and a numeric scalar
 /// value. Supports BinaryArray and LargeBinaryArray
 #[deprecated(note = "Use arrow_ord::cmp::neq")]
-pub fn neq_dyn_binary_scalar(
-    left: &dyn Array,
-    right: &[u8],
-) -> Result<BooleanArray, ArrowError> {
+pub fn neq_dyn_binary_scalar(left: &dyn Array, right: &[u8]) -> Result<BooleanArray, ArrowError> {
     let right = make_binary_scalar(left.data_type(), right)?;
     crate::cmp::neq(&left, &Scalar::new(&right))
 }
@@ -784,10 +734,7 @@ pub fn neq_dyn_binary_scalar(
 /// Perform `left < right` operation on an array and a numeric scalar
 /// value. Supports BinaryArray and LargeBinaryArray
 #[deprecated(note = "Use arrow_ord::cmp::lt")]
-pub fn lt_dyn_binary_scalar(
-    left: &dyn Array,
-    right: &[u8],
-) -> Result<BooleanArray, ArrowError> {
+pub fn lt_dyn_binary_scalar(left: &dyn Array, right: &[u8]) -> Result<BooleanArray, ArrowError> {
     let right = make_binary_scalar(left.data_type(), right)?;
     crate::cmp::lt(&left, &Scalar::new(&right))
 }
@@ -795,10 +742,7 @@ pub fn lt_dyn_binary_scalar(
 /// Perform `left <= right` operation on an array and a numeric scalar
 /// value. Supports BinaryArray and LargeBinaryArray
 #[deprecated(note = "Use arrow_ord::cmp::lt_eq")]
-pub fn lt_eq_dyn_binary_scalar(
-    left: &dyn Array,
-    right: &[u8],
-) -> Result<BooleanArray, ArrowError> {
+pub fn lt_eq_dyn_binary_scalar(left: &dyn Array, right: &[u8]) -> Result<BooleanArray, ArrowError> {
     let right = make_binary_scalar(left.data_type(), right)?;
     crate::cmp::lt_eq(&left, &Scalar::new(&right))
 }
@@ -806,10 +750,7 @@ pub fn lt_eq_dyn_binary_scalar(
 /// Perform `left > right` operation on an array and a numeric scalar
 /// value. Supports BinaryArray and LargeBinaryArray
 #[deprecated(note = "Use arrow_ord::cmp::gt")]
-pub fn gt_dyn_binary_scalar(
-    left: &dyn Array,
-    right: &[u8],
-) -> Result<BooleanArray, ArrowError> {
+pub fn gt_dyn_binary_scalar(left: &dyn Array, right: &[u8]) -> Result<BooleanArray, ArrowError> {
     let right = make_binary_scalar(left.data_type(), right)?;
     crate::cmp::gt(&left, &Scalar::new(&right))
 }
@@ -817,10 +758,7 @@ pub fn gt_dyn_binary_scalar(
 /// Perform `left >= right` operation on an array and a numeric scalar
 /// value. Supports BinaryArray and LargeBinaryArray
 #[deprecated(note = "Use arrow_ord::cmp::gt_eq")]
-pub fn gt_eq_dyn_binary_scalar(
-    left: &dyn Array,
-    right: &[u8],
-) -> Result<BooleanArray, ArrowError> {
+pub fn gt_eq_dyn_binary_scalar(left: &dyn Array, right: &[u8]) -> Result<BooleanArray, ArrowError> {
     let right = make_binary_scalar(left.data_type(), right)?;
     crate::cmp::gt_eq(&left, &Scalar::new(&right))
 }
@@ -828,10 +766,7 @@ pub fn gt_eq_dyn_binary_scalar(
 /// Perform `left == right` operation on an array and a numeric scalar
 /// value. Supports StringArrays, and DictionaryArrays that have string values
 #[deprecated(note = "Use arrow_ord::cmp::eq")]
-pub fn eq_dyn_utf8_scalar(
-    left: &dyn Array,
-    right: &str,
-) -> Result<BooleanArray, ArrowError> {
+pub fn eq_dyn_utf8_scalar(left: &dyn Array, right: &str) -> Result<BooleanArray, ArrowError> {
     let right = make_utf8_scalar(left.data_type(), right)?;
     crate::cmp::eq(&left, &Scalar::new(&right))
 }
@@ -839,10 +774,7 @@ pub fn eq_dyn_utf8_scalar(
 /// Perform `left < right` operation on an array and a numeric scalar
 /// value. Supports StringArrays, and DictionaryArrays that have string values
 #[deprecated(note = "Use arrow_ord::cmp::lt")]
-pub fn lt_dyn_utf8_scalar(
-    left: &dyn Array,
-    right: &str,
-) -> Result<BooleanArray, ArrowError> {
+pub fn lt_dyn_utf8_scalar(left: &dyn Array, right: &str) -> Result<BooleanArray, ArrowError> {
     let right = make_utf8_scalar(left.data_type(), right)?;
     crate::cmp::lt(&left, &Scalar::new(&right))
 }
@@ -850,10 +782,7 @@ pub fn lt_dyn_utf8_scalar(
 /// Perform `left >= right` operation on an array and a numeric scalar
 /// value. Supports StringArrays, and DictionaryArrays that have string values
 #[deprecated(note = "Use arrow_ord::cmp::gt_eq")]
-pub fn gt_eq_dyn_utf8_scalar(
-    left: &dyn Array,
-    right: &str,
-) -> Result<BooleanArray, ArrowError> {
+pub fn gt_eq_dyn_utf8_scalar(left: &dyn Array, right: &str) -> Result<BooleanArray, ArrowError> {
     let right = make_utf8_scalar(left.data_type(), right)?;
     crate::cmp::gt_eq(&left, &Scalar::new(&right))
 }
@@ -861,10 +790,7 @@ pub fn gt_eq_dyn_utf8_scalar(
 /// Perform `left <= right` operation on an array and a numeric scalar
 /// value. Supports StringArrays, and DictionaryArrays that have string values
 #[deprecated(note = "Use arrow_ord::cmp::lt_eq")]
-pub fn lt_eq_dyn_utf8_scalar(
-    left: &dyn Array,
-    right: &str,
-) -> Result<BooleanArray, ArrowError> {
+pub fn lt_eq_dyn_utf8_scalar(left: &dyn Array, right: &str) -> Result<BooleanArray, ArrowError> {
     let right = make_utf8_scalar(left.data_type(), right)?;
     crate::cmp::lt_eq(&left, &Scalar::new(&right))
 }
@@ -872,10 +798,7 @@ pub fn lt_eq_dyn_utf8_scalar(
 /// Perform `left > right` operation on an array and a numeric scalar
 /// value. Supports StringArrays, and DictionaryArrays that have string values
 #[deprecated(note = "Use arrow_ord::cmp::gt")]
-pub fn gt_dyn_utf8_scalar(
-    left: &dyn Array,
-    right: &str,
-) -> Result<BooleanArray, ArrowError> {
+pub fn gt_dyn_utf8_scalar(left: &dyn Array, right: &str) -> Result<BooleanArray, ArrowError> {
     let right = make_utf8_scalar(left.data_type(), right)?;
     crate::cmp::gt(&left, &Scalar::new(&right))
 }
@@ -883,10 +806,7 @@ pub fn gt_dyn_utf8_scalar(
 /// Perform `left != right` operation on an array and a numeric scalar
 /// value. Supports StringArrays, and DictionaryArrays that have string values
 #[deprecated(note = "Use arrow_ord::cmp::neq")]
-pub fn neq_dyn_utf8_scalar(
-    left: &dyn Array,
-    right: &str,
-) -> Result<BooleanArray, ArrowError> {
+pub fn neq_dyn_utf8_scalar(left: &dyn Array, right: &str) -> Result<BooleanArray, ArrowError> {
     let right = make_utf8_scalar(left.data_type(), right)?;
     crate::cmp::neq(&left, &Scalar::new(&right))
 }
@@ -894,10 +814,7 @@ pub fn neq_dyn_utf8_scalar(
 /// Perform `left == right` operation on an array and a numeric scalar
 /// value.
 #[deprecated(note = "Use arrow_ord::cmp::eq")]
-pub fn eq_dyn_bool_scalar(
-    left: &dyn Array,
-    right: bool,
-) -> Result<BooleanArray, ArrowError> {
+pub fn eq_dyn_bool_scalar(left: &dyn Array, right: bool) -> Result<BooleanArray, ArrowError> {
     let right = BooleanArray::from(vec![right]);
     crate::cmp::eq(&left, &Scalar::new(&right))
 }
@@ -905,10 +822,7 @@ pub fn eq_dyn_bool_scalar(
 /// Perform `left < right` operation on an array and a numeric scalar
 /// value. Supports BooleanArrays.
 #[deprecated(note = "Use arrow_ord::cmp::lt")]
-pub fn lt_dyn_bool_scalar(
-    left: &dyn Array,
-    right: bool,
-) -> Result<BooleanArray, ArrowError> {
+pub fn lt_dyn_bool_scalar(left: &dyn Array, right: bool) -> Result<BooleanArray, ArrowError> {
     let right = BooleanArray::from(vec![right]);
     crate::cmp::lt(&left, &Scalar::new(&right))
 }
@@ -916,10 +830,7 @@ pub fn lt_dyn_bool_scalar(
 /// Perform `left > right` operation on an array and a numeric scalar
 /// value. Supports BooleanArrays.
 #[deprecated(note = "Use arrow_ord::cmp::gt")]
-pub fn gt_dyn_bool_scalar(
-    left: &dyn Array,
-    right: bool,
-) -> Result<BooleanArray, ArrowError> {
+pub fn gt_dyn_bool_scalar(left: &dyn Array, right: bool) -> Result<BooleanArray, ArrowError> {
     let right = BooleanArray::from(vec![right]);
     crate::cmp::gt(&left, &Scalar::new(&right))
 }
@@ -927,10 +838,7 @@ pub fn gt_dyn_bool_scalar(
 /// Perform `left <= right` operation on an array and a numeric scalar
 /// value. Supports BooleanArrays.
 #[deprecated(note = "Use arrow_ord::cmp::lt_eq")]
-pub fn lt_eq_dyn_bool_scalar(
-    left: &dyn Array,
-    right: bool,
-) -> Result<BooleanArray, ArrowError> {
+pub fn lt_eq_dyn_bool_scalar(left: &dyn Array, right: bool) -> Result<BooleanArray, ArrowError> {
     let right = BooleanArray::from(vec![right]);
     crate::cmp::lt_eq(&left, &Scalar::new(&right))
 }
@@ -938,10 +846,7 @@ pub fn lt_eq_dyn_bool_scalar(
 /// Perform `left >= right` operation on an array and a numeric scalar
 /// value. Supports BooleanArrays.
 #[deprecated(note = "Use arrow_ord::cmp::gt_eq")]
-pub fn gt_eq_dyn_bool_scalar(
-    left: &dyn Array,
-    right: bool,
-) -> Result<BooleanArray, ArrowError> {
+pub fn gt_eq_dyn_bool_scalar(left: &dyn Array, right: bool) -> Result<BooleanArray, ArrowError> {
     let right = BooleanArray::from(vec![right]);
     crate::cmp::gt_eq(&left, &Scalar::new(&right))
 }
@@ -949,10 +854,7 @@ pub fn gt_eq_dyn_bool_scalar(
 /// Perform `left != right` operation on an array and a numeric scalar
 /// value. Supports BooleanArrays.
 #[deprecated(note = "Use arrow_ord::cmp::neq")]
-pub fn neq_dyn_bool_scalar(
-    left: &dyn Array,
-    right: bool,
-) -> Result<BooleanArray, ArrowError> {
+pub fn neq_dyn_bool_scalar(left: &dyn Array, right: bool) -> Result<BooleanArray, ArrowError> {
     let right = BooleanArray::from(vec![right]);
     crate::cmp::neq(&left, &Scalar::new(&right))
 }
@@ -1057,10 +959,7 @@ pub fn lt_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray, Arrow
 /// assert_eq!(BooleanArray::from(vec![Some(false), Some(true), Some(true), None]), result);
 /// ```
 #[deprecated(note = "Use arrow_ord::cmp::lt_eq")]
-pub fn lt_eq_dyn(
-    left: &dyn Array,
-    right: &dyn Array,
-) -> Result<BooleanArray, ArrowError> {
+pub fn lt_eq_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray, ArrowError> {
     crate::cmp::lt_eq(&left, &right)
 }
 
@@ -1110,10 +1009,7 @@ pub fn gt_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray, Arrow
 /// assert_eq!(BooleanArray::from(vec![Some(false), Some(true), None]), result);
 /// ```
 #[deprecated(note = "Use arrow_ord::cmp::gt_eq")]
-pub fn gt_eq_dyn(
-    left: &dyn Array,
-    right: &dyn Array,
-) -> Result<BooleanArray, ArrowError> {
+pub fn gt_eq_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray, ArrowError> {
     crate::cmp::gt_eq(&left, &right)
 }
 
@@ -1145,10 +1041,7 @@ where
 /// to treat them as equal, please normalize zeros before calling this kernel.
 /// Please refer to `f32::total_cmp` and `f64::total_cmp`.
 #[deprecated(note = "Use arrow_ord::cmp::eq")]
-pub fn eq_scalar<T>(
-    left: &PrimitiveArray<T>,
-    right: T::Native,
-) -> Result<BooleanArray, ArrowError>
+pub fn eq_scalar<T>(left: &PrimitiveArray<T>, right: T::Native) -> Result<BooleanArray, ArrowError>
 where
     T: ArrowNumericType,
     T::Native: ArrowNativeTypeOp,
@@ -1158,10 +1051,7 @@ where
 }
 
 /// Applies an unary and infallible comparison function to a primitive array.
-pub fn unary_cmp<T, F>(
-    left: &PrimitiveArray<T>,
-    op: F,
-) -> Result<BooleanArray, ArrowError>
+pub fn unary_cmp<T, F>(left: &PrimitiveArray<T>, op: F) -> Result<BooleanArray, ArrowError>
 where
     T: ArrowNumericType,
     F: Fn(T::Native) -> bool,
@@ -1198,10 +1088,7 @@ where
 /// to treat them as equal, please normalize zeros before calling this kernel.
 /// Please refer to `f32::total_cmp` and `f64::total_cmp`.
 #[deprecated(note = "Use arrow_ord::cmp::neq")]
-pub fn neq_scalar<T>(
-    left: &PrimitiveArray<T>,
-    right: T::Native,
-) -> Result<BooleanArray, ArrowError>
+pub fn neq_scalar<T>(left: &PrimitiveArray<T>, right: T::Native) -> Result<BooleanArray, ArrowError>
 where
     T: ArrowNumericType,
     T::Native: ArrowNativeTypeOp,
@@ -1241,10 +1128,7 @@ where
 /// to treat them as equal, please normalize zeros before calling this kernel.
 /// Please refer to `f32::total_cmp` and `f64::total_cmp`.
 #[deprecated(note = "Use arrow_ord::cmp::lt")]
-pub fn lt_scalar<T>(
-    left: &PrimitiveArray<T>,
-    right: T::Native,
-) -> Result<BooleanArray, ArrowError>
+pub fn lt_scalar<T>(left: &PrimitiveArray<T>, right: T::Native) -> Result<BooleanArray, ArrowError>
 where
     T: ArrowNumericType,
     T::Native: ArrowNativeTypeOp,
@@ -1327,10 +1211,7 @@ where
 /// to treat them as equal, please normalize zeros before calling this kernel.
 /// Please refer to `f32::total_cmp` and `f64::total_cmp`.
 #[deprecated(note = "Use arrow_ord::cmp::gt")]
-pub fn gt_scalar<T>(
-    left: &PrimitiveArray<T>,
-    right: T::Native,
-) -> Result<BooleanArray, ArrowError>
+pub fn gt_scalar<T>(left: &PrimitiveArray<T>, right: T::Native) -> Result<BooleanArray, ArrowError>
 where
     T: ArrowNumericType,
     T::Native: ArrowNativeTypeOp,
@@ -1394,8 +1275,7 @@ where
     let left_len = left.len();
     if left_len != right.len() {
         return Err(ArrowError::ComputeError(
-            "Cannot perform comparison operation on arrays of different length"
-                .to_string(),
+            "Cannot perform comparison operation on arrays of different length".to_string(),
         ));
     }
 
@@ -1435,8 +1315,7 @@ where
     let left_len = left.len();
     if left_len != right.len() {
         return Err(ArrowError::ComputeError(
-            "Cannot perform comparison operation on arrays of different length"
-                .to_string(),
+            "Cannot perform comparison operation on arrays of different length".to_string(),
         ));
     }
 
@@ -1672,11 +1551,9 @@ mod tests {
     #[test]
     fn test_boolean_array_eq() {
         let a: BooleanArray =
-            vec![Some(true), Some(false), Some(false), Some(true), Some(true), None]
-                .into();
+            vec![Some(true), Some(false), Some(false), Some(true), Some(true), None].into();
         let b: BooleanArray =
-            vec![Some(true), Some(true), Some(false), Some(false), None, Some(false)]
-                .into();
+            vec![Some(true), Some(true), Some(false), Some(false), None, Some(false)].into();
 
         let res: Vec<Option<bool>> = eq_bool(&a, &b).unwrap().iter().collect();
 
@@ -1689,11 +1566,9 @@ mod tests {
     #[test]
     fn test_boolean_array_neq() {
         let a: BooleanArray =
-            vec![Some(true), Some(false), Some(false), Some(true), Some(true), None]
-                .into();
+            vec![Some(true), Some(false), Some(false), Some(true), Some(true), None].into();
         let b: BooleanArray =
-            vec![Some(true), Some(true), Some(false), Some(false), None, Some(false)]
-                .into();
+            vec![Some(true), Some(true), Some(false), Some(false), None, Some(false)].into();
 
         let res: Vec<Option<bool>> = neq_bool(&a, &b).unwrap().iter().collect();
 
@@ -1706,11 +1581,9 @@ mod tests {
     #[test]
     fn test_boolean_array_lt() {
         let a: BooleanArray =
-            vec![Some(true), Some(false), Some(false), Some(true), Some(true), None]
-                .into();
+            vec![Some(true), Some(false), Some(false), Some(true), Some(true), None].into();
         let b: BooleanArray =
-            vec![Some(true), Some(true), Some(false), Some(false), None, Some(false)]
-                .into();
+            vec![Some(true), Some(true), Some(false), Some(false), None, Some(false)].into();
 
         let res: Vec<Option<bool>> = lt_bool(&a, &b).unwrap().iter().collect();
 
@@ -1723,11 +1596,9 @@ mod tests {
     #[test]
     fn test_boolean_array_lt_eq() {
         let a: BooleanArray =
-            vec![Some(true), Some(false), Some(false), Some(true), Some(true), None]
-                .into();
+            vec![Some(true), Some(false), Some(false), Some(true), Some(true), None].into();
         let b: BooleanArray =
-            vec![Some(true), Some(true), Some(false), Some(false), None, Some(false)]
-                .into();
+            vec![Some(true), Some(true), Some(false), Some(false), None, Some(false)].into();
 
         let res: Vec<Option<bool>> = lt_eq_bool(&a, &b).unwrap().iter().collect();
 
@@ -1740,11 +1611,9 @@ mod tests {
     #[test]
     fn test_boolean_array_gt() {
         let a: BooleanArray =
-            vec![Some(true), Some(false), Some(false), Some(true), Some(true), None]
-                .into();
+            vec![Some(true), Some(false), Some(false), Some(true), Some(true), None].into();
         let b: BooleanArray =
-            vec![Some(true), Some(true), Some(false), Some(false), None, Some(false)]
-                .into();
+            vec![Some(true), Some(true), Some(false), Some(false), None, Some(false)].into();
 
         let res: Vec<Option<bool>> = gt_bool(&a, &b).unwrap().iter().collect();
 
@@ -1757,11 +1626,9 @@ mod tests {
     #[test]
     fn test_boolean_array_gt_eq() {
         let a: BooleanArray =
-            vec![Some(true), Some(false), Some(false), Some(true), Some(true), None]
-                .into();
+            vec![Some(true), Some(false), Some(false), Some(true), Some(true), None].into();
         let b: BooleanArray =
-            vec![Some(true), Some(true), Some(false), Some(false), None, Some(false)]
-                .into();
+            vec![Some(true), Some(true), Some(false), Some(false), None, Some(false)].into();
 
         let res: Vec<Option<bool>> = gt_eq_bool(&a, &b).unwrap().iter().collect();
 
@@ -1788,8 +1655,7 @@ mod tests {
     fn test_boolean_array_neq_scalar() {
         let a: BooleanArray = vec![Some(true), Some(false), None].into();
 
-        let res1: Vec<Option<bool>> =
-            neq_bool_scalar(&a, false).unwrap().iter().collect();
+        let res1: Vec<Option<bool>> = neq_bool_scalar(&a, false).unwrap().iter().collect();
 
         assert_eq!(res1, vec![Some(true), Some(false), None]);
 
@@ -1815,13 +1681,11 @@ mod tests {
     fn test_boolean_array_lt_eq_scalar() {
         let a: BooleanArray = vec![Some(true), Some(false), None].into();
 
-        let res1: Vec<Option<bool>> =
-            lt_eq_bool_scalar(&a, false).unwrap().iter().collect();
+        let res1: Vec<Option<bool>> = lt_eq_bool_scalar(&a, false).unwrap().iter().collect();
 
         assert_eq!(res1, vec![Some(false), Some(true), None]);
 
-        let res2: Vec<Option<bool>> =
-            lt_eq_bool_scalar(&a, true).unwrap().iter().collect();
+        let res2: Vec<Option<bool>> = lt_eq_bool_scalar(&a, true).unwrap().iter().collect();
 
         assert_eq!(res2, vec![Some(true), Some(true), None]);
     }
@@ -1843,13 +1707,11 @@ mod tests {
     fn test_boolean_array_gt_eq_scalar() {
         let a: BooleanArray = vec![Some(true), Some(false), None].into();
 
-        let res1: Vec<Option<bool>> =
-            gt_eq_bool_scalar(&a, false).unwrap().iter().collect();
+        let res1: Vec<Option<bool>> = gt_eq_bool_scalar(&a, false).unwrap().iter().collect();
 
         assert_eq!(res1, vec![Some(true), Some(true), None]);
 
-        let res2: Vec<Option<bool>> =
-            gt_eq_bool_scalar(&a, true).unwrap().iter().collect();
+        let res2: Vec<Option<bool>> = gt_eq_bool_scalar(&a, true).unwrap().iter().collect();
 
         assert_eq!(res2, vec![Some(true), Some(false), None]);
     }
@@ -2134,25 +1996,19 @@ mod tests {
 
     #[test]
     fn test_interval_array() {
-        let a = IntervalDayTimeArray::from(
-            vec![Some(0), Some(6), Some(834), None, Some(3), None],
-        );
-        let b = IntervalDayTimeArray::from(
-            vec![Some(70), Some(6), Some(833), Some(6), Some(3), None],
-        );
+        let a = IntervalDayTimeArray::from(vec![Some(0), Some(6), Some(834), None, Some(3), None]);
+        let b =
+            IntervalDayTimeArray::from(vec![Some(70), Some(6), Some(833), Some(6), Some(3), None]);
         let res = eq(&a, &b).unwrap();
         let res_dyn = eq_dyn(&a, &b).unwrap();
         assert_eq!(res, res_dyn);
         assert_eq!(
             &res_dyn,
-            &BooleanArray::from(
-                vec![Some(false), Some(true), Some(false), None, Some(true), None]
-            )
+            &BooleanArray::from(vec![Some(false), Some(true), Some(false), None, Some(true), None])
         );
 
-        let a = IntervalMonthDayNanoArray::from(
-            vec![Some(0), Some(6), Some(834), None, Some(3), None],
-        );
+        let a =
+            IntervalMonthDayNanoArray::from(vec![Some(0), Some(6), Some(834), None, Some(3), None]);
         let b = IntervalMonthDayNanoArray::from(
             vec![Some(86), Some(5), Some(8), Some(6), Some(3), None],
         );
@@ -2166,9 +2022,8 @@ mod tests {
             )
         );
 
-        let a = IntervalYearMonthArray::from(
-            vec![Some(0), Some(623), Some(834), None, Some(3), None],
-        );
+        let a =
+            IntervalYearMonthArray::from(vec![Some(0), Some(623), Some(834), None, Some(3), None]);
         let b = IntervalYearMonthArray::from(
             vec![Some(86), Some(5), Some(834), Some(6), Some(86), None],
         );
@@ -2177,9 +2032,7 @@ mod tests {
         assert_eq!(res, res_dyn);
         assert_eq!(
             &res_dyn,
-            &BooleanArray::from(
-                vec![Some(false), Some(true), Some(true), None, Some(false), None]
-            )
+            &BooleanArray::from(vec![Some(false), Some(true), Some(true), None, Some(false), None])
         );
     }
 
@@ -2255,9 +2108,7 @@ mod tests {
 
     #[test]
     fn test_binary_eq_scalar_on_slice() {
-        let a = BinaryArray::from_opt_vec(
-            vec![Some(b"hi"), None, Some(b"hello"), Some(b"world")],
-        );
+        let a = BinaryArray::from_opt_vec(vec![Some(b"hi"), None, Some(b"hello"), Some(b"world")]);
         let a = a.slice(1, 3);
         let a = as_generic_binary_array::<i32>(&a);
         let a_eq = eq_binary_scalar(a, b"hello").unwrap();
@@ -2447,9 +2298,7 @@ mod tests {
 
     #[test]
     fn test_utf8_eq_scalar_on_slice() {
-        let a = StringArray::from(
-            vec![Some("hi"), None, Some("hello"), Some("world"), Some("")],
-        );
+        let a = StringArray::from(vec![Some("hi"), None, Some("hello"), Some("world"), Some("")]);
         let a = a.slice(1, 4);
         let a_eq = eq_utf8_scalar(&a, "hello").unwrap();
         assert_eq!(
@@ -2604,16 +2453,13 @@ mod tests {
         let a_eq = eq_dyn_scalar(&array, 8).unwrap();
         assert_eq!(
             a_eq,
-            BooleanArray::from(
-                vec![Some(false), Some(false), Some(true), Some(true), Some(false)]
-            )
+            BooleanArray::from(vec![Some(false), Some(false), Some(true), Some(true), Some(false)])
         );
     }
 
     #[test]
     fn test_eq_dyn_scalar_with_dict() {
-        let mut builder =
-            PrimitiveDictionaryBuilder::<Int8Type, Int32Type>::with_capacity(3, 2);
+        let mut builder = PrimitiveDictionaryBuilder::<Int8Type, Int32Type>::with_capacity(3, 2);
         builder.append(123).unwrap();
         builder.append_null();
         builder.append(23).unwrap();
@@ -2631,9 +2477,8 @@ mod tests {
             .into_iter()
             .map(Some)
             .collect();
-        let expected = BooleanArray::from(
-            vec![Some(false), Some(false), Some(true), Some(true), Some(false)],
-        );
+        let expected =
+            BooleanArray::from(vec![Some(false), Some(false), Some(true), Some(true), Some(false)]);
         assert_eq!(eq_dyn_scalar(&array, 8).unwrap(), expected);
 
         let array = array.unary::<_, Float64Type>(|x| x as f64);
@@ -2646,16 +2491,13 @@ mod tests {
         let a_eq = lt_dyn_scalar(&array, 8).unwrap();
         assert_eq!(
             a_eq,
-            BooleanArray::from(
-                vec![Some(true), Some(true), Some(false), Some(false), Some(false)]
-            )
+            BooleanArray::from(vec![Some(true), Some(true), Some(false), Some(false), Some(false)])
         );
     }
 
     #[test]
     fn test_lt_dyn_scalar_with_dict() {
-        let mut builder =
-            PrimitiveDictionaryBuilder::<Int8Type, Int32Type>::with_capacity(3, 2);
+        let mut builder = PrimitiveDictionaryBuilder::<Int8Type, Int32Type>::with_capacity(3, 2);
         builder.append(123).unwrap();
         builder.append_null();
         builder.append(23).unwrap();
@@ -2673,9 +2515,8 @@ mod tests {
             .into_iter()
             .map(Some)
             .collect();
-        let expected = BooleanArray::from(
-            vec![Some(true), Some(true), Some(false), Some(false), Some(false)],
-        );
+        let expected =
+            BooleanArray::from(vec![Some(true), Some(true), Some(false), Some(false), Some(false)]);
         assert_eq!(lt_dyn_scalar(&array, 8).unwrap(), expected);
 
         let array = array.unary::<_, Float64Type>(|x| x as f64);
@@ -2688,9 +2529,7 @@ mod tests {
         let a_eq = lt_eq_dyn_scalar(&array, 8).unwrap();
         assert_eq!(
             a_eq,
-            BooleanArray::from(
-                vec![Some(true), Some(true), Some(true), Some(true), Some(false)]
-            )
+            BooleanArray::from(vec![Some(true), Some(true), Some(true), Some(true), Some(false)])
         );
     }
 
@@ -2728,20 +2567,16 @@ mod tests {
 
     #[test]
     fn test_timestamp_dyn_scalar() {
-        let array =
-            TimestampSecondArray::from(vec![Some(1), None, Some(8), None, Some(10)]);
+        let array = TimestampSecondArray::from(vec![Some(1), None, Some(8), None, Some(10)]);
         test_primitive_dyn_scalar(array);
 
-        let array =
-            TimestampMicrosecondArray::from(vec![Some(1), None, Some(8), None, Some(10)]);
+        let array = TimestampMicrosecondArray::from(vec![Some(1), None, Some(8), None, Some(10)]);
         test_primitive_dyn_scalar(array);
 
-        let array =
-            TimestampMicrosecondArray::from(vec![Some(1), None, Some(8), None, Some(10)]);
+        let array = TimestampMicrosecondArray::from(vec![Some(1), None, Some(8), None, Some(10)]);
         test_primitive_dyn_scalar(array);
 
-        let array =
-            TimestampNanosecondArray::from(vec![Some(1), None, Some(8), None, Some(10)]);
+        let array = TimestampNanosecondArray::from(vec![Some(1), None, Some(8), None, Some(10)]);
         test_primitive_dyn_scalar(array);
     }
 
@@ -2762,60 +2597,49 @@ mod tests {
         let array = Time32SecondArray::from(vec![Some(1), None, Some(8), None, Some(10)]);
         test_primitive_dyn_scalar(array);
 
-        let array =
-            Time32MillisecondArray::from(vec![Some(1), None, Some(8), None, Some(10)]);
+        let array = Time32MillisecondArray::from(vec![Some(1), None, Some(8), None, Some(10)]);
         test_primitive_dyn_scalar(array);
     }
 
     #[test]
     fn test_time64_dyn_scalar() {
-        let array =
-            Time64MicrosecondArray::from(vec![Some(1), None, Some(8), None, Some(10)]);
+        let array = Time64MicrosecondArray::from(vec![Some(1), None, Some(8), None, Some(10)]);
         test_primitive_dyn_scalar(array);
 
-        let array =
-            Time64NanosecondArray::from(vec![Some(1), None, Some(8), None, Some(10)]);
+        let array = Time64NanosecondArray::from(vec![Some(1), None, Some(8), None, Some(10)]);
         test_primitive_dyn_scalar(array);
     }
 
     #[test]
     fn test_interval_dyn_scalar() {
-        let array =
-            IntervalDayTimeArray::from(vec![Some(1), None, Some(8), None, Some(10)]);
+        let array = IntervalDayTimeArray::from(vec![Some(1), None, Some(8), None, Some(10)]);
         test_primitive_dyn_scalar(array);
 
-        let array =
-            IntervalMonthDayNanoArray::from(vec![Some(1), None, Some(8), None, Some(10)]);
+        let array = IntervalMonthDayNanoArray::from(vec![Some(1), None, Some(8), None, Some(10)]);
         test_primitive_dyn_scalar(array);
 
-        let array =
-            IntervalYearMonthArray::from(vec![Some(1), None, Some(8), None, Some(10)]);
+        let array = IntervalYearMonthArray::from(vec![Some(1), None, Some(8), None, Some(10)]);
         test_primitive_dyn_scalar(array);
     }
 
     #[test]
     fn test_duration_dyn_scalar() {
-        let array =
-            DurationSecondArray::from(vec![Some(1), None, Some(8), None, Some(10)]);
+        let array = DurationSecondArray::from(vec![Some(1), None, Some(8), None, Some(10)]);
         test_primitive_dyn_scalar(array);
 
-        let array =
-            DurationMicrosecondArray::from(vec![Some(1), None, Some(8), None, Some(10)]);
+        let array = DurationMicrosecondArray::from(vec![Some(1), None, Some(8), None, Some(10)]);
         test_primitive_dyn_scalar(array);
 
-        let array =
-            DurationMillisecondArray::from(vec![Some(1), None, Some(8), None, Some(10)]);
+        let array = DurationMillisecondArray::from(vec![Some(1), None, Some(8), None, Some(10)]);
         test_primitive_dyn_scalar(array);
 
-        let array =
-            DurationNanosecondArray::from(vec![Some(1), None, Some(8), None, Some(10)]);
+        let array = DurationNanosecondArray::from(vec![Some(1), None, Some(8), None, Some(10)]);
         test_primitive_dyn_scalar(array);
     }
 
     #[test]
     fn test_lt_eq_dyn_scalar_with_dict() {
-        let mut builder =
-            PrimitiveDictionaryBuilder::<Int8Type, Int32Type>::with_capacity(3, 2);
+        let mut builder = PrimitiveDictionaryBuilder::<Int8Type, Int32Type>::with_capacity(3, 2);
         builder.append(123).unwrap();
         builder.append_null();
         builder.append(23).unwrap();
@@ -2833,9 +2657,8 @@ mod tests {
             .into_iter()
             .map(Some)
             .collect();
-        let expected = BooleanArray::from(
-            vec![Some(true), Some(true), Some(true), Some(true), Some(false)],
-        );
+        let expected =
+            BooleanArray::from(vec![Some(true), Some(true), Some(true), Some(true), Some(false)]);
         assert_eq!(lt_eq_dyn_scalar(&array, 8).unwrap(), expected);
 
         let array = array.unary::<_, Float64Type>(|x| x as f64);
@@ -2856,8 +2679,7 @@ mod tests {
 
     #[test]
     fn test_gt_dyn_scalar_with_dict() {
-        let mut builder =
-            PrimitiveDictionaryBuilder::<Int8Type, Int32Type>::with_capacity(3, 2);
+        let mut builder = PrimitiveDictionaryBuilder::<Int8Type, Int32Type>::with_capacity(3, 2);
         builder.append(123).unwrap();
         builder.append_null();
         builder.append(23).unwrap();
@@ -2890,16 +2712,13 @@ mod tests {
         let a_eq = gt_eq_dyn_scalar(&array, 8).unwrap();
         assert_eq!(
             a_eq,
-            BooleanArray::from(
-                vec![Some(false), Some(false), Some(true), Some(true), Some(true)]
-            )
+            BooleanArray::from(vec![Some(false), Some(false), Some(true), Some(true), Some(true)])
         );
     }
 
     #[test]
     fn test_gt_eq_dyn_scalar_with_dict() {
-        let mut builder =
-            PrimitiveDictionaryBuilder::<Int8Type, Int32Type>::with_capacity(3, 2);
+        let mut builder = PrimitiveDictionaryBuilder::<Int8Type, Int32Type>::with_capacity(3, 2);
         builder.append(22).unwrap();
         builder.append_null();
         builder.append(23).unwrap();
@@ -2917,9 +2736,8 @@ mod tests {
             .into_iter()
             .map(Some)
             .collect();
-        let expected = BooleanArray::from(
-            vec![Some(false), Some(false), Some(true), Some(true), Some(true)],
-        );
+        let expected =
+            BooleanArray::from(vec![Some(false), Some(false), Some(true), Some(true), Some(true)]);
         assert_eq!(gt_eq_dyn_scalar(&array, 8).unwrap(), expected);
 
         let array = array.unary::<_, Float64Type>(|x| x as f64);
@@ -2932,16 +2750,13 @@ mod tests {
         let a_eq = neq_dyn_scalar(&array, 8).unwrap();
         assert_eq!(
             a_eq,
-            BooleanArray::from(
-                vec![Some(true), Some(true), Some(false), Some(false), Some(true)]
-            )
+            BooleanArray::from(vec![Some(true), Some(true), Some(false), Some(false), Some(true)])
         );
     }
 
     #[test]
     fn test_neq_dyn_scalar_with_dict() {
-        let mut builder =
-            PrimitiveDictionaryBuilder::<Int8Type, Int32Type>::with_capacity(3, 2);
+        let mut builder = PrimitiveDictionaryBuilder::<Int8Type, Int32Type>::with_capacity(3, 2);
         builder.append(22).unwrap();
         builder.append_null();
         builder.append(23).unwrap();
@@ -2959,9 +2774,8 @@ mod tests {
             .into_iter()
             .map(Some)
             .collect();
-        let expected = BooleanArray::from(
-            vec![Some(true), Some(true), Some(false), Some(false), Some(true)],
-        );
+        let expected =
+            BooleanArray::from(vec![Some(true), Some(true), Some(false), Some(false), Some(true)]);
         assert_eq!(neq_dyn_scalar(&array, 8).unwrap(), expected);
 
         let array = array.unary::<_, Float64Type>(|x| x as f64);
@@ -2989,8 +2803,7 @@ mod tests {
         )
         .unwrap();
         let scalar = &[1u8];
-        let expected =
-            BooleanArray::from(vec![Some(false), Some(false), Some(false), Some(true)]);
+        let expected = BooleanArray::from(vec![Some(false), Some(false), Some(false), Some(true)]);
         assert_eq!(eq_dyn_binary_scalar(&fsb_array, scalar).unwrap(), expected);
     }
 
@@ -3015,8 +2828,7 @@ mod tests {
         )
         .unwrap();
         let scalar = &[1u8];
-        let expected =
-            BooleanArray::from(vec![Some(true), Some(true), Some(true), Some(false)]);
+        let expected = BooleanArray::from(vec![Some(true), Some(true), Some(true), Some(false)]);
         assert_eq!(neq_dyn_binary_scalar(&fsb_array, scalar).unwrap(), expected);
     }
 
@@ -3110,9 +2922,7 @@ mod tests {
         let a_eq = eq_dyn_utf8_scalar(&array, "def").unwrap();
         assert_eq!(
             a_eq,
-            BooleanArray::from(
-                vec![Some(false), None, Some(true), Some(true), Some(false)]
-            )
+            BooleanArray::from(vec![Some(false), None, Some(true), Some(true), Some(false)])
         );
     }
 
@@ -3138,9 +2948,7 @@ mod tests {
         let a_eq = lt_dyn_utf8_scalar(&array, "def").unwrap();
         assert_eq!(
             a_eq,
-            BooleanArray::from(
-                vec![Some(true), None, Some(false), Some(false), Some(true)]
-            )
+            BooleanArray::from(vec![Some(true), None, Some(false), Some(false), Some(true)])
         );
     }
 
@@ -3166,9 +2974,7 @@ mod tests {
         let a_eq = lt_eq_dyn_utf8_scalar(&array, "def").unwrap();
         assert_eq!(
             a_eq,
-            BooleanArray::from(
-                vec![Some(true), None, Some(true), Some(true), Some(false)]
-            )
+            BooleanArray::from(vec![Some(true), None, Some(true), Some(true), Some(false)])
         );
     }
 
@@ -3194,9 +3000,7 @@ mod tests {
         let a_eq = gt_eq_dyn_utf8_scalar(&array, "def").unwrap();
         assert_eq!(
             a_eq,
-            BooleanArray::from(
-                vec![Some(false), None, Some(true), Some(true), Some(true)]
-            )
+            BooleanArray::from(vec![Some(false), None, Some(true), Some(true), Some(true)])
         );
     }
 
@@ -3222,9 +3026,7 @@ mod tests {
         let a_eq = gt_dyn_utf8_scalar(&array, "def").unwrap();
         assert_eq!(
             a_eq,
-            BooleanArray::from(
-                vec![Some(false), None, Some(false), Some(false), Some(true)]
-            )
+            BooleanArray::from(vec![Some(false), None, Some(false), Some(false), Some(true)])
         );
     }
 
@@ -3250,9 +3052,7 @@ mod tests {
         let a_eq = neq_dyn_utf8_scalar(&array, "def").unwrap();
         assert_eq!(
             a_eq,
-            BooleanArray::from(
-                vec![Some(true), None, Some(false), Some(false), Some(true)]
-            )
+            BooleanArray::from(vec![Some(true), None, Some(false), Some(false), Some(true)])
         );
     }
 
@@ -3318,17 +3118,13 @@ mod tests {
 
     #[test]
     fn test_eq_dyn_neq_dyn_fixed_size_binary() {
-        let values1: Vec<Option<&[u8]>> =
-            vec![Some(&[0xfc, 0xa9]), None, Some(&[0x36, 0x01])];
-        let values2: Vec<Option<&[u8]>> =
-            vec![Some(&[0xfc, 0xa9]), None, Some(&[0x36, 0x00])];
+        let values1: Vec<Option<&[u8]>> = vec![Some(&[0xfc, 0xa9]), None, Some(&[0x36, 0x01])];
+        let values2: Vec<Option<&[u8]>> = vec![Some(&[0xfc, 0xa9]), None, Some(&[0x36, 0x00])];
 
         let array1 =
-            FixedSizeBinaryArray::try_from_sparse_iter_with_size(values1.into_iter(), 2)
-                .unwrap();
+            FixedSizeBinaryArray::try_from_sparse_iter_with_size(values1.into_iter(), 2).unwrap();
         let array2 =
-            FixedSizeBinaryArray::try_from_sparse_iter_with_size(values2.into_iter(), 2)
-                .unwrap();
+            FixedSizeBinaryArray::try_from_sparse_iter_with_size(values2.into_iter(), 2).unwrap();
 
         let result = eq_dyn(&array1, &array2).unwrap();
         assert_eq!(
@@ -3660,10 +3456,11 @@ mod tests {
     #[test]
     fn test_eq_dyn_neq_dyn_float_nan() {
         let array1 = Float16Array::from(vec![f16::NAN, f16::from_f32(7.0), f16::from_f32(8.0), f16::from_f32(8.0), f16::from_f32(10.0)]);
-        let array2 = Float16Array::from(vec![f16::NAN, f16::NAN, f16::from_f32(8.0), f16::from_f32(8.0), f16::from_f32(10.0)]);
-        let expected = BooleanArray::from(
-            vec![Some(true), Some(false), Some(true), Some(true), Some(true)],
+        let array2 = Float16Array::from(
+            vec![f16::NAN, f16::NAN, f16::from_f32(8.0), f16::from_f32(8.0), f16::from_f32(10.0)],
         );
+        let expected =
+            BooleanArray::from(vec![Some(true), Some(false), Some(true), Some(true), Some(true)]);
         assert_eq!(eq_dyn(&array1, &array2).unwrap(), expected);
 
         assert_eq!(eq(&array1, &array2).unwrap(), expected);
@@ -3677,9 +3474,8 @@ mod tests {
 
         let array1 = Float32Array::from(vec![f32::NAN, 7.0, 8.0, 8.0, 10.0]);
         let array2 = Float32Array::from(vec![f32::NAN, f32::NAN, 8.0, 8.0, 10.0]);
-        let expected = BooleanArray::from(
-            vec![Some(true), Some(false), Some(true), Some(true), Some(true)],
-        );
+        let expected =
+            BooleanArray::from(vec![Some(true), Some(false), Some(true), Some(true), Some(true)]);
         assert_eq!(eq_dyn(&array1, &array2).unwrap(), expected);
 
         assert_eq!(eq(&array1, &array2).unwrap(), expected);
@@ -3694,9 +3490,8 @@ mod tests {
         let array1 = Float64Array::from(vec![f64::NAN, 7.0, 8.0, 8.0, 10.0]);
         let array2 = Float64Array::from(vec![f64::NAN, f64::NAN, 8.0, 8.0, 10.0]);
 
-        let expected = BooleanArray::from(
-            vec![Some(true), Some(false), Some(true), Some(true), Some(true)],
-        );
+        let expected =
+            BooleanArray::from(vec![Some(true), Some(false), Some(true), Some(true), Some(true)]);
         assert_eq!(eq_dyn(&array1, &array2).unwrap(), expected);
 
         assert_eq!(eq(&array1, &array2).unwrap(), expected);
@@ -3832,9 +3627,8 @@ mod tests {
         );
         assert_eq!(eq_dyn_scalar(&array, f32::NAN).unwrap(), expected);
 
-        let expected = BooleanArray::from(
-            vec![Some(false), Some(true), Some(true), Some(true), Some(true)],
-        );
+        let expected =
+            BooleanArray::from(vec![Some(false), Some(true), Some(true), Some(true), Some(true)]);
         assert_eq!(neq_dyn_scalar(&array, f32::NAN).unwrap(), expected);
 
         let array = Float32Array::from(vec![f32::NAN, 7.0, 8.0, 8.0, 10.0]);
@@ -3843,9 +3637,8 @@ mod tests {
         );
         assert_eq!(eq_dyn_scalar(&array, f32::NAN).unwrap(), expected);
 
-        let expected = BooleanArray::from(
-            vec![Some(false), Some(true), Some(true), Some(true), Some(true)],
-        );
+        let expected =
+            BooleanArray::from(vec![Some(false), Some(true), Some(true), Some(true), Some(true)]);
         assert_eq!(neq_dyn_scalar(&array, f32::NAN).unwrap(), expected);
 
         let array = Float64Array::from(vec![f64::NAN, 7.0, 8.0, 8.0, 10.0]);
@@ -3854,9 +3647,8 @@ mod tests {
         );
         assert_eq!(eq_dyn_scalar(&array, f64::NAN).unwrap(), expected);
 
-        let expected = BooleanArray::from(
-            vec![Some(false), Some(true), Some(true), Some(true), Some(true)],
-        );
+        let expected =
+            BooleanArray::from(vec![Some(false), Some(true), Some(true), Some(true), Some(true)]);
         assert_eq!(neq_dyn_scalar(&array, f64::NAN).unwrap(), expected);
     }
 
@@ -3864,37 +3656,31 @@ mod tests {
     fn test_lt_dyn_scalar_lt_eq_dyn_scalar_float_nan() {
         let array = Float16Array::from(vec![f16::NAN, f16::from_f32(7.0), f16::from_f32(8.0), f16::from_f32(8.0), f16::from_f32(10.0)]);
 
-        let expected = BooleanArray::from(
-            vec![Some(false), Some(true), Some(true), Some(true), Some(true)],
-        );
+        let expected =
+            BooleanArray::from(vec![Some(false), Some(true), Some(true), Some(true), Some(true)]);
         assert_eq!(lt_dyn_scalar(&array, f16::NAN).unwrap(), expected);
 
-        let expected = BooleanArray::from(
-            vec![Some(true), Some(true), Some(true), Some(true), Some(true)],
-        );
+        let expected =
+            BooleanArray::from(vec![Some(true), Some(true), Some(true), Some(true), Some(true)]);
         assert_eq!(lt_eq_dyn_scalar(&array, f16::NAN).unwrap(), expected);
 
         let array = Float32Array::from(vec![f32::NAN, 7.0, 8.0, 8.0, 10.0]);
 
-        let expected = BooleanArray::from(
-            vec![Some(false), Some(true), Some(true), Some(true), Some(true)],
-        );
+        let expected =
+            BooleanArray::from(vec![Some(false), Some(true), Some(true), Some(true), Some(true)]);
         assert_eq!(lt_dyn_scalar(&array, f32::NAN).unwrap(), expected);
 
-        let expected = BooleanArray::from(
-            vec![Some(true), Some(true), Some(true), Some(true), Some(true)],
-        );
+        let expected =
+            BooleanArray::from(vec![Some(true), Some(true), Some(true), Some(true), Some(true)]);
         assert_eq!(lt_eq_dyn_scalar(&array, f32::NAN).unwrap(), expected);
 
         let array = Float64Array::from(vec![f64::NAN, 7.0, 8.0, 8.0, 10.0]);
-        let expected = BooleanArray::from(
-            vec![Some(false), Some(true), Some(true), Some(true), Some(true)],
-        );
+        let expected =
+            BooleanArray::from(vec![Some(false), Some(true), Some(true), Some(true), Some(true)]);
         assert_eq!(lt_dyn_scalar(&array, f64::NAN).unwrap(), expected);
 
-        let expected = BooleanArray::from(
-            vec![Some(true), Some(true), Some(true), Some(true), Some(true)],
-        );
+        let expected =
+            BooleanArray::from(vec![Some(true), Some(true), Some(true), Some(true), Some(true)]);
         assert_eq!(lt_eq_dyn_scalar(&array, f64::NAN).unwrap(), expected);
     }
 
@@ -4154,14 +3940,12 @@ mod tests {
             .into_iter()
             .map(Some)
             .collect();
-        let values =
-            Float16Array::from(vec![f16::NAN, f16::from_f32(8.0), f16::from_f32(10.0)]);
+        let values = Float16Array::from(vec![f16::NAN, f16::from_f32(8.0), f16::from_f32(10.0)]);
         let keys = Int8Array::from_iter_values([0_i8, 0, 1, 1, 2]);
         let array2 = DictionaryArray::new(keys, Arc::new(values));
 
-        let expected = BooleanArray::from(
-            vec![Some(true), Some(false), Some(true), Some(true), Some(true)],
-        );
+        let expected =
+            BooleanArray::from(vec![Some(true), Some(false), Some(true), Some(true), Some(true)]);
         assert_eq!(eq_dyn(&array1, &array2).unwrap(), expected);
 
         let expected = BooleanArray::from(
@@ -4177,9 +3961,8 @@ mod tests {
         let keys = Int8Array::from_iter_values([0_i8, 0, 1, 1, 2]);
         let array2 = DictionaryArray::new(keys, Arc::new(values));
 
-        let expected = BooleanArray::from(
-            vec![Some(true), Some(false), Some(true), Some(true), Some(true)],
-        );
+        let expected =
+            BooleanArray::from(vec![Some(true), Some(false), Some(true), Some(true), Some(true)]);
         assert_eq!(eq_dyn(&array1, &array2).unwrap(), expected);
 
         let expected = BooleanArray::from(
@@ -4195,9 +3978,8 @@ mod tests {
         let keys = Int8Array::from_iter_values([0_i8, 0, 1, 1, 2]);
         let array2 = DictionaryArray::new(keys, Arc::new(values));
 
-        let expected = BooleanArray::from(
-            vec![Some(true), Some(false), Some(true), Some(true), Some(true)],
-        );
+        let expected =
+            BooleanArray::from(vec![Some(true), Some(false), Some(true), Some(true), Some(true)]);
         assert_eq!(eq_dyn(&array1, &array2).unwrap(), expected);
 
         let expected = BooleanArray::from(
@@ -4454,8 +4236,7 @@ mod tests {
 
     #[test]
     fn test_cmp_dict_non_dict_decimal128() {
-        let array1: Decimal128Array =
-            Decimal128Array::from_iter_values([1, 2, 5, 4, 3, 0]);
+        let array1: Decimal128Array = Decimal128Array::from_iter_values([1, 2, 5, 4, 3, 0]);
 
         let values = Decimal128Array::from_iter_values([7, -3, 4, 3, 5]);
         let keys = Int8Array::from_iter_values([0_i8, 0, 1, 2, 3, 4]);
@@ -4489,15 +4270,13 @@ mod tests {
 
     #[test]
     fn test_cmp_dict_decimal256() {
-        let values = Decimal256Array::from_iter_values(
-            [0, 1, 2, 3, 4, 5].into_iter().map(i256::from_i128),
-        );
+        let values =
+            Decimal256Array::from_iter_values([0, 1, 2, 3, 4, 5].into_iter().map(i256::from_i128));
         let keys = Int8Array::from_iter_values([1_i8, 2, 5, 4, 3, 0]);
         let array1 = DictionaryArray::new(keys, Arc::new(values));
 
-        let values = Decimal256Array::from_iter_values(
-            [7, -3, 4, 3, 5].into_iter().map(i256::from_i128),
-        );
+        let values =
+            Decimal256Array::from_iter_values([7, -3, 4, 3, 5].into_iter().map(i256::from_i128));
         let keys = Int8Array::from_iter_values([0_i8, 0, 1, 2, 3, 4]);
         let array2 = DictionaryArray::new(keys, Arc::new(values));
 
@@ -4529,13 +4308,11 @@ mod tests {
 
     #[test]
     fn test_cmp_dict_non_dict_decimal256() {
-        let array1: Decimal256Array = Decimal256Array::from_iter_values(
-            [1, 2, 5, 4, 3, 0].into_iter().map(i256::from_i128),
-        );
+        let array1: Decimal256Array =
+            Decimal256Array::from_iter_values([1, 2, 5, 4, 3, 0].into_iter().map(i256::from_i128));
 
-        let values = Decimal256Array::from_iter_values(
-            [7, -3, 4, 3, 5].into_iter().map(i256::from_i128),
-        );
+        let values =
+            Decimal256Array::from_iter_values([7, -3, 4, 3, 5].into_iter().map(i256::from_i128));
         let keys = Int8Array::from_iter_values([0_i8, 0, 1, 2, 3, 4]);
         let array2 = DictionaryArray::new(keys, Arc::new(values));
 
@@ -4607,9 +4384,7 @@ mod tests {
 
     #[test]
     fn test_decimal128_scalar() {
-        let a = Decimal128Array::from(
-            vec![Some(1), Some(2), Some(3), None, Some(4), Some(5)],
-        );
+        let a = Decimal128Array::from(vec![Some(1), Some(2), Some(3), None, Some(4), Some(5)]);
         let b = 3_i128;
         // array eq scalar
         let e = BooleanArray::from(
@@ -4668,12 +4443,8 @@ mod tests {
 
     #[test]
     fn test_decimal256() {
-        let a = Decimal256Array::from_iter_values(
-            [1, 2, 4, 5].into_iter().map(i256::from_i128),
-        );
-        let b = Decimal256Array::from_iter_values(
-            [7, -3, 4, 3].into_iter().map(i256::from_i128),
-        );
+        let a = Decimal256Array::from_iter_values([1, 2, 4, 5].into_iter().map(i256::from_i128));
+        let b = Decimal256Array::from_iter_values([7, -3, 4, 3].into_iter().map(i256::from_i128));
         let e = BooleanArray::from(vec![false, false, true, false]);
         let r = eq(&a, &b).unwrap();
         assert_eq!(e, r);
@@ -4712,9 +4483,7 @@ mod tests {
 
     #[test]
     fn test_decimal256_scalar_i128() {
-        let a = Decimal256Array::from_iter_values(
-            [1, 2, 3, 4, 5].into_iter().map(i256::from_i128),
-        );
+        let a = Decimal256Array::from_iter_values([1, 2, 3, 4, 5].into_iter().map(i256::from_i128));
         let b = i256::from_i128(3);
         // array eq scalar
         let e = BooleanArray::from(
@@ -4726,45 +4495,40 @@ mod tests {
         assert_eq!(e, r);
 
         // array neq scalar
-        let e = BooleanArray::from(
-            vec![Some(true), Some(true), Some(false), Some(true), Some(true)],
-        );
+        let e =
+            BooleanArray::from(vec![Some(true), Some(true), Some(false), Some(true), Some(true)]);
         let r = neq_scalar(&a, b).unwrap();
         assert_eq!(e, r);
         let r = neq_dyn_scalar(&a, b).unwrap();
         assert_eq!(e, r);
 
         // array lt scalar
-        let e = BooleanArray::from(
-            vec![Some(true), Some(true), Some(false), Some(false), Some(false)],
-        );
+        let e =
+            BooleanArray::from(vec![Some(true), Some(true), Some(false), Some(false), Some(false)]);
         let r = lt_scalar(&a, b).unwrap();
         assert_eq!(e, r);
         let r = lt_dyn_scalar(&a, b).unwrap();
         assert_eq!(e, r);
 
         // array lt_eq scalar
-        let e = BooleanArray::from(
-            vec![Some(true), Some(true), Some(true), Some(false), Some(false)],
-        );
+        let e =
+            BooleanArray::from(vec![Some(true), Some(true), Some(true), Some(false), Some(false)]);
         let r = lt_eq_scalar(&a, b).unwrap();
         assert_eq!(e, r);
         let r = lt_eq_dyn_scalar(&a, b).unwrap();
         assert_eq!(e, r);
 
         // array gt scalar
-        let e = BooleanArray::from(
-            vec![Some(false), Some(false), Some(false), Some(true), Some(true)],
-        );
+        let e =
+            BooleanArray::from(vec![Some(false), Some(false), Some(false), Some(true), Some(true)]);
         let r = gt_scalar(&a, b).unwrap();
         assert_eq!(e, r);
         let r = gt_dyn_scalar(&a, b).unwrap();
         assert_eq!(e, r);
 
         // array gt_eq scalar
-        let e = BooleanArray::from(
-            vec![Some(false), Some(false), Some(true), Some(true), Some(true)],
-        );
+        let e =
+            BooleanArray::from(vec![Some(false), Some(false), Some(true), Some(true), Some(true)]);
         let r = gt_eq_scalar(&a, b).unwrap();
         assert_eq!(e, r);
         let r = gt_eq_dyn_scalar(&a, b).unwrap();
@@ -4773,9 +4537,7 @@ mod tests {
 
     #[test]
     fn test_decimal256_scalar_i256() {
-        let a = Decimal256Array::from_iter_values(
-            [1, 2, 3, 4, 5].into_iter().map(i256::from_i128),
-        );
+        let a = Decimal256Array::from_iter_values([1, 2, 3, 4, 5].into_iter().map(i256::from_i128));
         let b = i256::MAX;
         // array eq scalar
         let e = BooleanArray::from(
@@ -4787,27 +4549,24 @@ mod tests {
         assert!(r);
 
         // array neq scalar
-        let e = BooleanArray::from(
-            vec![Some(true), Some(true), Some(true), Some(true), Some(true)],
-        );
+        let e =
+            BooleanArray::from(vec![Some(true), Some(true), Some(true), Some(true), Some(true)]);
         let r = neq_scalar(&a, b).unwrap();
         assert_eq!(e, r);
         let r = neq_dyn_scalar(&a, b).is_err();
         assert!(r);
 
         // array lt scalar
-        let e = BooleanArray::from(
-            vec![Some(true), Some(true), Some(true), Some(true), Some(true)],
-        );
+        let e =
+            BooleanArray::from(vec![Some(true), Some(true), Some(true), Some(true), Some(true)]);
         let r = lt_scalar(&a, b).unwrap();
         assert_eq!(e, r);
         let r = lt_dyn_scalar(&a, b).is_err();
         assert!(r);
 
         // array lt_eq scalar
-        let e = BooleanArray::from(
-            vec![Some(true), Some(true), Some(true), Some(true), Some(true)],
-        );
+        let e =
+            BooleanArray::from(vec![Some(true), Some(true), Some(true), Some(true), Some(true)]);
         let r = lt_eq_scalar(&a, b).unwrap();
         assert_eq!(e, r);
         let r = lt_eq_dyn_scalar(&a, b).is_err();

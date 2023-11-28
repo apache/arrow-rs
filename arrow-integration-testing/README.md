@@ -48,7 +48,7 @@ ln -s <path_to_arrow_rs> arrow/rust
 
 ```shell
 cd arrow
-pip install -e dev/archery[docker]
+pip install -e dev/archery[integration]
 ```
 
 ### Build the C++ binaries:

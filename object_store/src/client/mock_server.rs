@@ -57,8 +57,7 @@ impl MockServer {
         });
 
         let (shutdown, rx) = oneshot::channel::<()>();
-        let server =
-            Server::bind(&SocketAddr::from(([127, 0, 0, 1], 0))).serve(make_service);
+        let server = Server::bind(&SocketAddr::from(([127, 0, 0, 1], 0))).serve(make_service);
 
         let url = format!("http://{}", server.local_addr());
 

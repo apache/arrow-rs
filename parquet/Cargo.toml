@@ -44,16 +44,16 @@ arrow-schema = { workspace = true, optional = true }
 arrow-select = { workspace = true, optional = true }
 arrow-ipc = { workspace = true, optional = true }
 # Intentionally not a path dependency as object_store is released separately
-object_store = { version = "0.7", default-features = false, optional = true }
+object_store = { version = "0.8", default-features = false, optional = true }
 
 bytes = { version = "1.1", default-features = false, features = ["std"] }
 thrift = { version = "0.17", default-features = false }
 snap = { version = "1.0", default-features = false, optional = true }
 brotli = { version = "3.3", default-features = false, features = ["std"], optional = true }
 flate2 = { version = "1.0", default-features = false, features = ["rust_backend"], optional = true }
-lz4 = { version = "1.23", default-features = false, optional = true }
-zstd = { version = "0.12.0", optional = true, default-features = false }
-chrono = { version = "0.4.23", default-features = false, features = ["alloc"] }
+lz4_flex = { version = "0.11", default-features = false, features = ["std", "frame"], optional = true }
+zstd = { version = "0.13.0", optional = true, default-features = false }
+chrono = { workspace = true }
 num = { version = "0.4", default-features = false }
 num-bigint = { version = "0.4", default-features = false }
 base64 = { version = "0.21", default-features = false, features = ["std", ], optional = true }
@@ -66,6 +66,7 @@ tokio = { version = "1.0", optional = true, default-features = false, features =
 hashbrown = { version = "0.14", default-features = false }
 twox-hash = { version = "1.6", default-features = false }
 paste = { version = "1.0" }
+half = { version = "2.1", default-features = false, features = ["num-traits"] }
 
 [dev-dependencies]
 base64 = { version = "0.21", default-features = false, features = ["std"] }
@@ -74,18 +75,21 @@ snap = { version = "1.0", default-features = false }
 tempfile = { version = "3.0", default-features = false }
 brotli = { version = "3.3", default-features = false, features = ["std"] }
 flate2 = { version = "1.0", default-features = false, features = ["rust_backend"] }
-lz4 = { version = "1.23", default-features = false }
-zstd = { version = "0.12", default-features = false }
+lz4_flex = { version = "0.11", default-features = false, features = ["std", "frame"] }
+zstd = { version = "0.13", default-features = false }
 serde_json = { version = "1.0", features = ["std"], default-features = false }
 arrow = { workspace = true, features = ["ipc", "test_utils", "prettyprint", "json"] }
 tokio = { version = "1.0", default-features = false, features = ["macros", "rt", "io-util", "fs"] }
 rand = { version = "0.8", default-features = false, features = ["std", "std_rng"] }
+object_store = { version = "0.8", default-features = false, features = ["azure"] }
 
 [package.metadata.docs.rs]
 all-features = true
 
 [features]
 default = ["arrow", "snap", "brotli", "flate2", "lz4", "zstd", "base64"]
+# Enable lz4
+lz4 = ["lz4_flex"]
 # Enable arrow reader/writer APIs
 arrow = ["base64", "arrow-array", "arrow-buffer", "arrow-cast", "arrow-data", "arrow-schema", "arrow-select", "arrow-ipc"]
 # Enable CLI tools
@@ -164,6 +168,16 @@ harness = false
 [[bench]]
 name = "arrow_reader"
 required-features = ["arrow", "test_common", "experimental"]
+harness = false
+
+[[bench]]
+name = "compression"
+required-features = ["experimental", "default"]
+harness = false
+
+
+[[bench]]
+name = "metadata"
 harness = false
 
 [lib]

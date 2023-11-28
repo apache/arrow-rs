@@ -71,10 +71,7 @@ impl NullBuffer {
     /// This is commonly used by binary operations where the result is NULL if either
     /// of the input values is NULL. Handling the null mask separately in this way
     /// can yield significant performance improvements over an iterator approach
-    pub fn union(
-        lhs: Option<&NullBuffer>,
-        rhs: Option<&NullBuffer>,
-    ) -> Option<NullBuffer> {
+    pub fn union(lhs: Option<&NullBuffer>, rhs: Option<&NullBuffer>) -> Option<NullBuffer> {
         match (lhs, rhs) {
             (Some(lhs), Some(rhs)) => Some(Self::new(lhs.inner() & rhs.inner())),
             (Some(n), None) | (None, Some(n)) => Some(n.clone()),

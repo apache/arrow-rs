@@ -21,7 +21,8 @@ use std::ops::Range;
 use std::{convert::TryInto, sync::Arc};
 
 use crate::{
-    path::Path, GetResult, GetResultPayload, ListResult, ObjectMeta, ObjectStore, Result,
+    path::Path, GetResult, GetResultPayload, ListResult, ObjectMeta, ObjectStore, PutOptions,
+    PutResult, Result,
 };
 use crate::{GetOptions, MultipartId};
 use async_trait::async_trait;
@@ -147,10 +148,14 @@ impl<T: ObjectStore> std::fmt::Display for ThrottledStore<T> {
 
 #[async_trait]
 impl<T: ObjectStore> ObjectStore for ThrottledStore<T> {
-    async fn put(&self, location: &Path, bytes: Bytes) -> Result<()> {
+    async fn put(&self, location: &Path, bytes: Bytes) -> Result<PutResult> {
         sleep(self.config().wait_put_per_call).await;
-
         self.inner.put(location, bytes).await
+    }
+
+    async fn put_opts(&self, location: &Path, bytes: Bytes, opts: PutOptions) -> Result<PutResult> {
+        sleep(self.config().wait_put_per_call).await;
+        self.inner.put_opts(location, bytes, opts).await
     }
 
     async fn put_multipart(
@@ -160,18 +165,7 @@ impl<T: ObjectStore> ObjectStore for ThrottledStore<T> {
         Err(super::Error::NotImplemented)
     }
 
-    async fn abort_multipart(
-        &self,
-        _location: &Path,
-        _multipart_id: &MultipartId,
-    ) -> Result<()> {
-        Err(super::Error::NotImplemented)
-    }
-
-    async fn append(
-        &self,
-        _location: &Path,
-    ) -> Result<Box<dyn AsyncWrite + Unpin + Send>> {
+    async fn abort_multipart(&self, _location: &Path, _multipart_id: &MultipartId) -> Result<()> {
         Err(super::Error::NotImplemented)
     }
 
@@ -198,19 +192,15 @@ impl<T: ObjectStore> ObjectStore for ThrottledStore<T> {
     async fn get_range(&self, location: &Path, range: Range<usize>) -> Result<Bytes> {
         let config = self.config();
 
-        let sleep_duration = config.wait_get_per_call
-            + config.wait_get_per_byte * (range.end - range.start) as u32;
+        let sleep_duration =
+            config.wait_get_per_call + config.wait_get_per_byte * (range.end - range.start) as u32;
 
         sleep(sleep_duration).await;
 
         self.inner.get_range(location, range).await
     }
 
-    async fn get_ranges(
-        &self,
-        location: &Path,
-        ranges: &[Range<usize>],
-    ) -> Result<Vec<Bytes>> {
+    async fn get_ranges(&self, location: &Path, ranges: &[Range<usize>]) -> Result<Vec<Bytes>> {
         let config = self.config();
 
         let total_bytes: usize = ranges.iter().map(|range| range.end - range.start).sum();
@@ -233,29 +223,30 @@ impl<T: ObjectStore> ObjectStore for ThrottledStore<T> {
         self.inner.delete(location).await
     }
 
-    async fn list(
-        &self,
-        prefix: Option<&Path>,
-    ) -> Result<BoxStream<'_, Result<ObjectMeta>>> {
-        sleep(self.config().wait_list_per_call).await;
-
-        // need to copy to avoid moving / referencing `self`
-        let wait_list_per_entry = self.config().wait_list_per_entry;
-        let stream = self.inner.list(prefix).await?;
-        Ok(throttle_stream(stream, move |_| wait_list_per_entry))
+    fn list(&self, prefix: Option<&Path>) -> BoxStream<'_, Result<ObjectMeta>> {
+        let stream = self.inner.list(prefix);
+        futures::stream::once(async move {
+            let wait_list_per_entry = self.config().wait_list_per_entry;
+            sleep(self.config().wait_list_per_call).await;
+            throttle_stream(stream, move |_| wait_list_per_entry)
+        })
+        .flatten()
+        .boxed()
     }
 
-    async fn list_with_offset(
+    fn list_with_offset(
         &self,
         prefix: Option<&Path>,
         offset: &Path,
-    ) -> Result<BoxStream<'_, Result<ObjectMeta>>> {
-        sleep(self.config().wait_list_per_call).await;
-
-        // need to copy to avoid moving / referencing `self`
-        let wait_list_per_entry = self.config().wait_list_per_entry;
-        let stream = self.inner.list_with_offset(prefix, offset).await?;
-        Ok(throttle_stream(stream, move |_| wait_list_per_entry))
+    ) -> BoxStream<'_, Result<ObjectMeta>> {
+        let stream = self.inner.list_with_offset(prefix, offset);
+        futures::stream::once(async move {
+            let wait_list_per_entry = self.config().wait_list_per_entry;
+            sleep(self.config().wait_list_per_call).await;
+            throttle_stream(stream, move |_| wait_list_per_entry)
+        })
+        .flatten()
+        .boxed()
     }
 
     async fn list_with_delimiter(&self, prefix: Option<&Path>) -> Result<ListResult> {
@@ -264,8 +255,7 @@ impl<T: ObjectStore> ObjectStore for ThrottledStore<T> {
         match self.inner.list_with_delimiter(prefix).await {
             Ok(list_result) => {
                 let entries_len = usize_to_u32_saturate(list_result.objects.len());
-                sleep(self.config().wait_list_with_delimiter_per_entry * entries_len)
-                    .await;
+                sleep(self.config().wait_list_with_delimiter_per_entry * entries_len).await;
                 Ok(list_result)
             }
             Err(err) => Err(err),
@@ -485,10 +475,7 @@ mod tests {
         assert_bounds!(measure_put(&store, 0).await, 0);
     }
 
-    async fn place_test_object(
-        store: &ThrottledStore<InMemory>,
-        n_bytes: Option<usize>,
-    ) -> Path {
+    async fn place_test_object(store: &ThrottledStore<InMemory>, n_bytes: Option<usize>) -> Path {
         let path = Path::from("foo");
 
         if let Some(n_bytes) = n_bytes {
@@ -504,20 +491,11 @@ mod tests {
     }
 
     #[allow(dead_code)]
-    async fn place_test_objects(
-        store: &ThrottledStore<InMemory>,
-        n_entries: usize,
-    ) -> Path {
+    async fn place_test_objects(store: &ThrottledStore<InMemory>, n_entries: usize) -> Path {
         let prefix = Path::from("foo");
 
         // clean up store
-        let entries: Vec<_> = store
-            .list(Some(&prefix))
-            .await
-            .unwrap()
-            .try_collect()
-            .await
-            .unwrap();
+        let entries: Vec<_> = store.list(Some(&prefix)).try_collect().await.unwrap();
 
         for entry in entries {
             store.delete(&entry.location).await.unwrap();
@@ -534,10 +512,7 @@ mod tests {
         prefix
     }
 
-    async fn measure_delete(
-        store: &ThrottledStore<InMemory>,
-        n_bytes: Option<usize>,
-    ) -> Duration {
+    async fn measure_delete(store: &ThrottledStore<InMemory>, n_bytes: Option<usize>) -> Duration {
         let path = place_test_object(store, n_bytes).await;
 
         let t0 = Instant::now();
@@ -547,10 +522,7 @@ mod tests {
     }
 
     #[allow(dead_code)]
-    async fn measure_get(
-        store: &ThrottledStore<InMemory>,
-        n_bytes: Option<usize>,
-    ) -> Duration {
+    async fn measure_get(store: &ThrottledStore<InMemory>, n_bytes: Option<usize>) -> Duration {
         let path = place_test_object(store, n_bytes).await;
 
         let t0 = Instant::now();
@@ -574,17 +546,12 @@ mod tests {
     }
 
     #[allow(dead_code)]
-    async fn measure_list(
-        store: &ThrottledStore<InMemory>,
-        n_entries: usize,
-    ) -> Duration {
+    async fn measure_list(store: &ThrottledStore<InMemory>, n_entries: usize) -> Duration {
         let prefix = place_test_objects(store, n_entries).await;
 
         let t0 = Instant::now();
         store
             .list(Some(&prefix))
-            .await
-            .unwrap()
             .try_collect::<Vec<_>>()
             .await
             .unwrap();

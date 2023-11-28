@@ -64,10 +64,7 @@ impl TimestampParser {
 
     /// Parses a date of the form `1997-01-31`
     fn date(&self) -> Option<NaiveDate> {
-        if self.mask & 0b1111111111 != 0b1101101111
-            || !self.test(4, b'-')
-            || !self.test(7, b'-')
-        {
+        if self.mask & 0b1111111111 != 0b1101101111 || !self.test(4, b'-') || !self.test(7, b'-') {
             return None;
         }
 
@@ -173,13 +170,9 @@ impl TimestampParser {
 /// * "2023-01-01 04:05:06.789 PST",
 ///
 /// [IANA timezones]: https://www.iana.org/time-zones
-pub fn string_to_datetime<T: TimeZone>(
-    timezone: &T,
-    s: &str,
-) -> Result<DateTime<T>, ArrowError> {
-    let err = |ctx: &str| {
-        ArrowError::ParseError(format!("Error parsing timestamp from '{s}': {ctx}"))
-    };
+pub fn string_to_datetime<T: TimeZone>(timezone: &T, s: &str) -> Result<DateTime<T>, ArrowError> {
+    let err =
+        |ctx: &str| ArrowError::ParseError(format!("Error parsing timestamp from '{s}': {ctx}"));
 
     let bytes = s.as_bytes();
     if bytes.len() < 10 {
@@ -277,16 +270,11 @@ pub fn string_to_timestamp_nanos(s: &str) -> Result<i64, ArrowError> {
     to_timestamp_nanos(string_to_datetime(&Utc, s)?.naive_utc())
 }
 
-/// Defensive check to prevent chrono-rs panics when nanosecond conversion happens on non-supported dates
+/// Fallible conversion of [`NaiveDateTime`] to `i64` nanoseconds
 #[inline]
 fn to_timestamp_nanos(dt: NaiveDateTime) -> Result<i64, ArrowError> {
-    if dt.timestamp().checked_mul(1_000_000_000).is_none() {
-        return Err(ArrowError::ParseError(
-            ERR_NANOSECONDS_NOT_SUPPORTED.to_string(),
-        ));
-    }
-
-    Ok(dt.timestamp_nanos())
+    dt.timestamp_nanos_opt()
+        .ok_or_else(|| ArrowError::ParseError(ERR_NANOSECONDS_NOT_SUPPORTED.to_string()))
 }
 
 /// Accepts a string in ISO8601 standard format and some
@@ -305,9 +293,8 @@ fn to_timestamp_nanos(dt: NaiveDateTime) -> Result<i64, ArrowError> {
 /// This function does not support parsing strings with a timezone
 /// or offset specified, as it considers only time since midnight.
 pub fn string_to_time_nanoseconds(s: &str) -> Result<i64, ArrowError> {
-    let nt = string_to_time(s).ok_or_else(|| {
-        ArrowError::ParseError(format!("Failed to parse \'{s}\' as time"))
-    })?;
+    let nt = string_to_time(s)
+        .ok_or_else(|| ArrowError::ParseError(format!("Failed to parse \'{s}\' as time")))?;
     Ok(nt.num_seconds_from_midnight() as i64 * 1_000_000_000 + nt.nanosecond() as i64)
 }
 
@@ -318,12 +305,8 @@ fn string_to_time(s: &str) -> Option<NaiveTime> {
     }
 
     let (am, bytes) = match bytes.get(bytes.len() - 3..) {
-        Some(b" AM" | b" am" | b" Am" | b" aM") => {
-            (Some(true), &bytes[..bytes.len() - 3])
-        }
-        Some(b" PM" | b" pm" | b" pM" | b" Pm") => {
-            (Some(false), &bytes[..bytes.len() - 3])
-        }
+        Some(b" AM" | b" am" | b" Am" | b" aM") => (Some(true), &bytes[..bytes.len() - 3]),
+        Some(b" PM" | b" pm" | b" pM" | b" Pm") => (Some(false), &bytes[..bytes.len() - 3]),
         _ => (None, bytes),
     };
 
@@ -506,10 +489,7 @@ impl Parser for Time64NanosecondType {
 
     fn parse_formatted(string: &str, format: &str) -> Option<Self::Native> {
         let nt = NaiveTime::parse_from_str(string, format).ok()?;
-        Some(
-            nt.num_seconds_from_midnight() as i64 * 1_000_000_000
-                + nt.nanosecond() as i64,
-        )
+        Some(nt.num_seconds_from_midnight() as i64 * 1_000_000_000 + nt.nanosecond() as i64)
     }
 }
 
@@ -524,10 +504,7 @@ impl Parser for Time64MicrosecondType {
 
     fn parse_formatted(string: &str, format: &str) -> Option<Self::Native> {
         let nt = NaiveTime::parse_from_str(string, format).ok()?;
-        Some(
-            nt.num_seconds_from_midnight() as i64 * 1_000_000
-                + nt.nanosecond() as i64 / 1_000,
-        )
+        Some(nt.num_seconds_from_midnight() as i64 * 1_000_000 + nt.nanosecond() as i64 / 1_000)
     }
 }
 
@@ -542,10 +519,7 @@ impl Parser for Time32MillisecondType {
 
     fn parse_formatted(string: &str, format: &str) -> Option<Self::Native> {
         let nt = NaiveTime::parse_from_str(string, format).ok()?;
-        Some(
-            nt.num_seconds_from_midnight() as i32 * 1_000
-                + nt.nanosecond() as i32 / 1_000_000,
-        )
+        Some(nt.num_seconds_from_midnight() as i32 * 1_000 + nt.nanosecond() as i32 / 1_000_000)
     }
 }
 
@@ -560,10 +534,7 @@ impl Parser for Time32SecondType {
 
     fn parse_formatted(string: &str, format: &str) -> Option<Self::Native> {
         let nt = NaiveTime::parse_from_str(string, format).ok()?;
-        Some(
-            nt.num_seconds_from_midnight() as i32
-                + nt.nanosecond() as i32 / 1_000_000_000,
-        )
+        Some(nt.num_seconds_from_midnight() as i32 + nt.nanosecond() as i32 / 1_000_000_000)
     }
 }
 
@@ -588,8 +559,20 @@ fn parse_date(string: &str) -> Option<NaiveDate> {
 
     const HYPHEN: u8 = b'-'.wrapping_sub(b'0');
 
+    //  refer to https://www.rfc-editor.org/rfc/rfc3339#section-3
     if digits[4] != HYPHEN {
-        return None;
+        let (year, month, day) = match (mask, string.len()) {
+            (0b11111111, 8) => (
+                digits[0] as u16 * 1000
+                    + digits[1] as u16 * 100
+                    + digits[2] as u16 * 10
+                    + digits[3] as u16,
+                digits[4] * 10 + digits[5],
+                digits[6] * 10 + digits[7],
+            ),
+            _ => return None,
+        };
+        return NaiveDate::from_ymd_opt(year as _, month as _, day as _);
     }
 
     let (month, day) = match mask {
@@ -620,10 +603,8 @@ fn parse_date(string: &str) -> Option<NaiveDate> {
         _ => return None,
     };
 
-    let year = digits[0] as u16 * 1000
-        + digits[1] as u16 * 100
-        + digits[2] as u16 * 10
-        + digits[3] as u16;
+    let year =
+        digits[0] as u16 * 1000 + digits[1] as u16 * 100 + digits[2] as u16 * 10 + digits[3] as u16;
 
     NaiveDate::from_ymd_opt(year as _, month as _, day as _)
 }
@@ -733,8 +714,7 @@ pub fn parse_decimal<T: DecimalType>(
                     fractionals += 1;
                     digits += 1;
                     result = result.mul_wrapping(base);
-                    result =
-                        result.add_wrapping(T::Native::usize_as((b - b'0') as usize));
+                    result = result.add_wrapping(T::Native::usize_as((b - b'0') as usize));
                 }
 
                 // Fail on "."
@@ -776,9 +756,11 @@ pub fn parse_interval_year_month(
     let config = IntervalParseConfig::new(IntervalUnit::Year);
     let interval = Interval::parse(value, &config)?;
 
-    let months = interval.to_year_months().map_err(|_| ArrowError::CastError(format!(
+    let months = interval.to_year_months().map_err(|_| {
+        ArrowError::CastError(format!(
             "Cannot cast {value} to IntervalYearMonth. Only year and month fields are allowed."
-        )))?;
+        ))
+    })?;
 
     Ok(IntervalYearMonthType::make_value(0, months))
 }
@@ -893,21 +875,16 @@ impl FromStr for IntervalAmount {
                     Ok(0)
                 } else {
                     integer.parse::<i64>().map_err(|_| {
-                        ArrowError::ParseError(format!(
-                            "Failed to parse {s} as interval amount"
-                        ))
+                        ArrowError::ParseError(format!("Failed to parse {s} as interval amount"))
                     })
                 }?;
 
                 let frac_unscaled = frac.parse::<i64>().map_err(|_| {
-                    ArrowError::ParseError(format!(
-                        "Failed to parse {s} as interval amount"
-                    ))
+                    ArrowError::ParseError(format!("Failed to parse {s} as interval amount"))
                 })?;
 
                 // scale fractional part by interval precision
-                let frac =
-                    frac_unscaled * 10_i64.pow(INTERVAL_PRECISION - frac.len() as u32);
+                let frac = frac_unscaled * 10_i64.pow(INTERVAL_PRECISION - frac.len() as u32);
 
                 // propagate the sign of the integer part to the fractional part
                 let frac = if integer < 0 || explicit_neg {
@@ -920,9 +897,9 @@ impl FromStr for IntervalAmount {
 
                 Ok(result)
             }
-            Some((_, frac)) if frac.starts_with('-') => Err(ArrowError::ParseError(
-                format!("Failed to parse {s} as interval amount"),
-            )),
+            Some((_, frac)) if frac.starts_with('-') => Err(ArrowError::ParseError(format!(
+                "Failed to parse {s} as interval amount"
+            ))),
             Some((_, frac)) if frac.len() > INTERVAL_PRECISION as usize => {
                 Err(ArrowError::ParseError(format!(
                     "{s} exceeds the precision available for interval amount"
@@ -930,9 +907,7 @@ impl FromStr for IntervalAmount {
             }
             Some(_) | None => {
                 let integer = s.parse::<i64>().map_err(|_| {
-                    ArrowError::ParseError(format!(
-                        "Failed to parse {s} as interval amount"
-                    ))
+                    ArrowError::ParseError(format!("Failed to parse {s} as interval amount"))
                 })?;
 
                 let result = Self { integer, frac: 0 };
@@ -1010,25 +985,20 @@ impl Interval {
     /// e.g. INTERVAL '0.5 MONTH' = 15 days, INTERVAL '1.5 MONTH' = 1 month 15 days
     /// e.g. INTERVAL '0.5 DAY' = 12 hours, INTERVAL '1.5 DAY' = 1 day 12 hours
     /// [Postgres reference](https://www.postgresql.org/docs/15/datatype-datetime.html#DATATYPE-INTERVAL-INPUT:~:text=Field%20values%20can,fractional%20on%20output.)
-    fn add(
-        &self,
-        amount: IntervalAmount,
-        unit: IntervalUnit,
-    ) -> Result<Self, ArrowError> {
+    fn add(&self, amount: IntervalAmount, unit: IntervalUnit) -> Result<Self, ArrowError> {
         let result = match unit {
             IntervalUnit::Century => {
                 let months_int = amount.integer.mul_checked(100)?.mul_checked(12)?;
                 let month_frac = amount.frac * 12 / 10_i64.pow(INTERVAL_PRECISION - 2);
-                let months =
-                    months_int
-                        .add_checked(month_frac)?
-                        .try_into()
-                        .map_err(|_| {
-                            ArrowError::ParseError(format!(
-                        "Unable to represent {} centuries as months in a signed 32-bit integer",
-                        &amount.integer
-                    ))
-                        })?;
+                let months = months_int
+                    .add_checked(month_frac)?
+                    .try_into()
+                    .map_err(|_| {
+                        ArrowError::ParseError(format!(
+                            "Unable to represent {} centuries as months in a signed 32-bit integer",
+                            &amount.integer
+                        ))
+                    })?;
 
                 Self::new(self.months.add_checked(months)?, self.days, self.nanos)
             }
@@ -1036,32 +1006,30 @@ impl Interval {
                 let months_int = amount.integer.mul_checked(10)?.mul_checked(12)?;
 
                 let month_frac = amount.frac * 12 / 10_i64.pow(INTERVAL_PRECISION - 1);
-                let months =
-                    months_int
-                        .add_checked(month_frac)?
-                        .try_into()
-                        .map_err(|_| {
-                            ArrowError::ParseError(format!(
-                        "Unable to represent {} decades as months in a signed 32-bit integer",
-                        &amount.integer
-                    ))
-                        })?;
+                let months = months_int
+                    .add_checked(month_frac)?
+                    .try_into()
+                    .map_err(|_| {
+                        ArrowError::ParseError(format!(
+                            "Unable to represent {} decades as months in a signed 32-bit integer",
+                            &amount.integer
+                        ))
+                    })?;
 
                 Self::new(self.months.add_checked(months)?, self.days, self.nanos)
             }
             IntervalUnit::Year => {
                 let months_int = amount.integer.mul_checked(12)?;
                 let month_frac = amount.frac * 12 / 10_i64.pow(INTERVAL_PRECISION);
-                let months =
-                    months_int
-                        .add_checked(month_frac)?
-                        .try_into()
-                        .map_err(|_| {
-                            ArrowError::ParseError(format!(
-                        "Unable to represent {} years as months in a signed 32-bit integer",
-                        &amount.integer
-                    ))
-                        })?;
+                let months = months_int
+                    .add_checked(month_frac)?
+                    .try_into()
+                    .map_err(|_| {
+                        ArrowError::ParseError(format!(
+                            "Unable to represent {} years as months in a signed 32-bit integer",
+                            &amount.integer
+                        ))
+                    })?;
 
                 Self::new(self.months.add_checked(months)?, self.days, self.nanos)
             }
@@ -1095,8 +1063,7 @@ impl Interval {
                     ))
                 })?;
 
-                let nanos =
-                    amount.frac * 7 * 24 * 6 * 6 / 10_i64.pow(INTERVAL_PRECISION - 11);
+                let nanos = amount.frac * 7 * 24 * 6 * 6 / 10_i64.pow(INTERVAL_PRECISION - 11);
 
                 Self::new(
                     self.months,
@@ -1112,8 +1079,7 @@ impl Interval {
                     ))
                 })?;
 
-                let nanos =
-                    amount.frac * 24 * 6 * 6 / 10_i64.pow(INTERVAL_PRECISION - 11);
+                let nanos = amount.frac * 24 * 6 * 6 / 10_i64.pow(INTERVAL_PRECISION - 11);
 
                 Self::new(
                     self.months,
@@ -1123,8 +1089,7 @@ impl Interval {
             }
             IntervalUnit::Hour => {
                 let nanos_int = amount.integer.mul_checked(NANOS_PER_HOUR)?;
-                let nanos_frac =
-                    amount.frac * 6 * 6 / 10_i64.pow(INTERVAL_PRECISION - 11);
+                let nanos_frac = amount.frac * 6 * 6 / 10_i64.pow(INTERVAL_PRECISION - 11);
                 let nanos = nanos_int.add_checked(nanos_frac)?;
 
                 Interval::new(self.months, self.days, self.nanos.add_checked(nanos)?)
@@ -1313,12 +1278,12 @@ mod tests {
 
         // Ensure both T and ' ' variants work
         assert_eq!(
-            naive_datetime.timestamp_nanos(),
+            naive_datetime.timestamp_nanos_opt().unwrap(),
             parse_timestamp("2020-09-08T13:42:29.190855").unwrap()
         );
 
         assert_eq!(
-            naive_datetime.timestamp_nanos(),
+            naive_datetime.timestamp_nanos_opt().unwrap(),
             parse_timestamp("2020-09-08 13:42:29.190855").unwrap()
         );
 
@@ -1331,12 +1296,12 @@ mod tests {
 
         // Ensure both T and ' ' variants work
         assert_eq!(
-            naive_datetime_whole_secs.timestamp_nanos(),
+            naive_datetime_whole_secs.timestamp_nanos_opt().unwrap(),
             parse_timestamp("2020-09-08T13:42:29").unwrap()
         );
 
         assert_eq!(
-            naive_datetime_whole_secs.timestamp_nanos(),
+            naive_datetime_whole_secs.timestamp_nanos_opt().unwrap(),
             parse_timestamp("2020-09-08 13:42:29").unwrap()
         );
 
@@ -1349,7 +1314,7 @@ mod tests {
         );
 
         assert_eq!(
-            naive_datetime_no_time.timestamp_nanos(),
+            naive_datetime_no_time.timestamp_nanos_opt().unwrap(),
             parse_timestamp("2020-09-08").unwrap()
         )
     }
@@ -1403,8 +1368,7 @@ mod tests {
             "2030-12-04T17:11:10.123456",
         ];
         for case in cases {
-            let chrono =
-                NaiveDateTime::parse_from_str(case, "%Y-%m-%dT%H:%M:%S%.f").unwrap();
+            let chrono = NaiveDateTime::parse_from_str(case, "%Y-%m-%dT%H:%M:%S%.f").unwrap();
             let custom = string_to_datetime(&Utc, case).unwrap();
             assert_eq!(chrono, custom.naive_utc())
         }
@@ -1436,8 +1400,7 @@ mod tests {
         ];
 
         for (s, ctx) in cases {
-            let expected =
-                format!("Parser error: Error parsing timestamp from '{s}': {ctx}");
+            let expected = format!("Parser error: Error parsing timestamp from '{s}': {ctx}");
             let actual = string_to_datetime(&Utc, s).unwrap_err().to_string();
             assert_eq!(actual, expected)
         }
@@ -1463,12 +1426,12 @@ mod tests {
 
         // Ensure both T and ' ' variants work
         assert_eq!(
-            naive_datetime.timestamp_nanos(),
+            naive_datetime.timestamp_nanos_opt().unwrap(),
             parse_timestamp("2020-09-08T13:42:29.190855").unwrap()
         );
 
         assert_eq!(
-            naive_datetime.timestamp_nanos(),
+            naive_datetime.timestamp_nanos_opt().unwrap(),
             parse_timestamp("2020-09-08 13:42:29.190855").unwrap()
         );
 
@@ -1479,12 +1442,12 @@ mod tests {
 
         // Ensure both T and ' ' variants work
         assert_eq!(
-            naive_datetime.timestamp_nanos(),
+            naive_datetime.timestamp_nanos_opt().unwrap(),
             parse_timestamp("2020-09-08T13:42:29").unwrap()
         );
 
         assert_eq!(
-            naive_datetime.timestamp_nanos(),
+            naive_datetime.timestamp_nanos_opt().unwrap(),
             parse_timestamp("2020-09-08 13:42:29").unwrap()
         );
 
@@ -1502,8 +1465,7 @@ mod tests {
         assert_eq!(local, "2020-09-08 15:42:29");
 
         let dt =
-            NaiveDateTime::parse_from_str("2020-09-08T13:42:29Z", "%Y-%m-%dT%H:%M:%SZ")
-                .unwrap();
+            NaiveDateTime::parse_from_str("2020-09-08T13:42:29Z", "%Y-%m-%dT%H:%M:%SZ").unwrap();
         let local: Tz = "+08:00".parse().unwrap();
 
         // Parsed as offset from UTC
@@ -1634,10 +1596,7 @@ mod tests {
 
         // custom format
         assert_eq!(
-            Time64NanosecondType::parse_formatted(
-                "02 - 10 - 01 - .1234567",
-                "%H - %M - %S - %.f"
-            ),
+            Time64NanosecondType::parse_formatted("02 - 10 - 01 - .1234567", "%H - %M - %S - %.f"),
             Some(7_801_123_456_700)
         );
     }
@@ -1714,10 +1673,7 @@ mod tests {
 
         // custom format
         assert_eq!(
-            Time64MicrosecondType::parse_formatted(
-                "02 - 10 - 01 - .1234",
-                "%H - %M - %S - %.f"
-            ),
+            Time64MicrosecondType::parse_formatted("02 - 10 - 01 - .1234", "%H - %M - %S - %.f"),
             Some(7_801_123_400)
         );
     }
@@ -1764,10 +1720,7 @@ mod tests {
 
         // custom format
         assert_eq!(
-            Time32MillisecondType::parse_formatted(
-                "02 - 10 - 01 - .1",
-                "%H - %M - %S - %.f"
-            ),
+            Time32MillisecondType::parse_formatted("02 - 10 - 01 - .1", "%H - %M - %S - %.f"),
             Some(7_801_100)
         );
     }
@@ -2010,8 +1963,19 @@ mod tests {
         );
 
         assert_eq!(
-            Interval::new(-13i32, -8i32, -NANOS_PER_HOUR - NANOS_PER_MINUTE - NANOS_PER_SECOND - (1.11_f64 * NANOS_PER_MILLIS as f64) as i64),
-            Interval::parse("-1 year -1 month -1 week -1 day -1 hour -1 minute -1 second -1.11 millisecond", &config).unwrap(),
+            Interval::new(
+                -13i32,
+                -8i32,
+                -NANOS_PER_HOUR
+                    - NANOS_PER_MINUTE
+                    - NANOS_PER_SECOND
+                    - (1.11_f64 * NANOS_PER_MILLIS as f64) as i64
+            ),
+            Interval::parse(
+                "-1 year -1 month -1 week -1 day -1 hour -1 minute -1 second -1.11 millisecond",
+                &config
+            )
+            .unwrap(),
         );
     }
 
@@ -2285,22 +2249,34 @@ mod tests {
         let edge_tests_256 = [
             (
                 "9999999999999999999999999999999999999999999999999999999999999999999999999999",
-i256::from_string("9999999999999999999999999999999999999999999999999999999999999999999999999999").unwrap(),
+                i256::from_string(
+                    "9999999999999999999999999999999999999999999999999999999999999999999999999999",
+                )
+                .unwrap(),
                 0,
             ),
             (
                 "999999999999999999999999999999999999999999999999999999999999999999999999.9999",
-                i256::from_string("9999999999999999999999999999999999999999999999999999999999999999999999999999").unwrap(),
+                i256::from_string(
+                    "9999999999999999999999999999999999999999999999999999999999999999999999999999",
+                )
+                .unwrap(),
                 4,
             ),
             (
                 "99999999999999999999999999999999999999999999999999.99999999999999999999999999",
-                i256::from_string("9999999999999999999999999999999999999999999999999999999999999999999999999999").unwrap(),
+                i256::from_string(
+                    "9999999999999999999999999999999999999999999999999999999999999999999999999999",
+                )
+                .unwrap(),
                 26,
             ),
             (
                 "99999999999999999999999999999999999999999999999999",
-                i256::from_string("9999999999999999999999999999999999999999999999999900000000000000000000000000").unwrap(),
+                i256::from_string(
+                    "9999999999999999999999999999999999999999999999999900000000000000000000000000",
+                )
+                .unwrap(),
                 26,
             ),
         ];

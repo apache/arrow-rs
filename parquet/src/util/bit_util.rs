@@ -17,10 +17,11 @@
 
 use std::{cmp, mem::size_of};
 
+use bytes::Bytes;
+
 use crate::data_type::{AsBytes, ByteArray, FixedLenByteArray, Int96};
 use crate::errors::{ParquetError, Result};
 use crate::util::bit_pack::{unpack16, unpack32, unpack64, unpack8};
-use crate::util::memory::ByteBufferPtr;
 
 #[inline]
 pub fn from_le_slice<T: FromBytes>(bs: &[u8]) -> T {
@@ -341,7 +342,7 @@ pub const MAX_VLQ_BYTE_LEN: usize = 10;
 
 pub struct BitReader {
     /// The byte buffer to read from, passed in by client
-    buffer: ByteBufferPtr,
+    buffer: Bytes,
 
     /// Bytes are memcpy'd from `buffer` and values are read from this variable.
     /// This is faster than reading values byte by byte directly from `buffer`
@@ -365,7 +366,7 @@ pub struct BitReader {
 /// Utility class to read bit/byte stream. This class can read bits or bytes that are
 /// either byte aligned or not.
 impl BitReader {
-    pub fn new(buffer: ByteBufferPtr) -> Self {
+    pub fn new(buffer: Bytes) -> Self {
         BitReader {
             buffer,
             buffered_values: 0,
@@ -374,7 +375,7 @@ impl BitReader {
         }
     }
 
-    pub fn reset(&mut self, buffer: ByteBufferPtr) {
+    pub fn reset(&mut self, buffer: Bytes) {
         self.buffer = buffer;
         self.buffered_values = 0;
         self.byte_offset = 0;
@@ -456,8 +457,6 @@ impl BitReader {
             }
         }
 
-        let in_buf = self.buffer.data();
-
         // Read directly into output buffer
         match size_of::<T>() {
             1 => {
@@ -465,7 +464,7 @@ impl BitReader {
                 let out = unsafe { std::slice::from_raw_parts_mut(ptr, batch.len()) };
                 while values_to_read - i >= 8 {
                     let out_slice = (&mut out[i..i + 8]).try_into().unwrap();
-                    unpack8(&in_buf[self.byte_offset..], out_slice, num_bits);
+                    unpack8(&self.buffer[self.byte_offset..], out_slice, num_bits);
                     self.byte_offset += num_bits;
                     i += 8;
                 }
@@ -475,7 +474,7 @@ impl BitReader {
                 let out = unsafe { std::slice::from_raw_parts_mut(ptr, batch.len()) };
                 while values_to_read - i >= 16 {
                     let out_slice = (&mut out[i..i + 16]).try_into().unwrap();
-                    unpack16(&in_buf[self.byte_offset..], out_slice, num_bits);
+                    unpack16(&self.buffer[self.byte_offset..], out_slice, num_bits);
                     self.byte_offset += 2 * num_bits;
                     i += 16;
                 }
@@ -485,7 +484,7 @@ impl BitReader {
                 let out = unsafe { std::slice::from_raw_parts_mut(ptr, batch.len()) };
                 while values_to_read - i >= 32 {
                     let out_slice = (&mut out[i..i + 32]).try_into().unwrap();
-                    unpack32(&in_buf[self.byte_offset..], out_slice, num_bits);
+                    unpack32(&self.buffer[self.byte_offset..], out_slice, num_bits);
                     self.byte_offset += 4 * num_bits;
                     i += 32;
                 }
@@ -495,7 +494,7 @@ impl BitReader {
                 let out = unsafe { std::slice::from_raw_parts_mut(ptr, batch.len()) };
                 while values_to_read - i >= 64 {
                     let out_slice = (&mut out[i..i + 64]).try_into().unwrap();
-                    unpack64(&in_buf[self.byte_offset..], out_slice, num_bits);
+                    unpack64(&self.buffer[self.byte_offset..], out_slice, num_bits);
                     self.byte_offset += 8 * num_bits;
                     i += 64;
                 }
@@ -506,7 +505,7 @@ impl BitReader {
         // Try to read smaller batches if possible
         if size_of::<T>() > 4 && values_to_read - i >= 32 && num_bits <= 32 {
             let mut out_buf = [0_u32; 32];
-            unpack32(&in_buf[self.byte_offset..], &mut out_buf, num_bits);
+            unpack32(&self.buffer[self.byte_offset..], &mut out_buf, num_bits);
             self.byte_offset += 4 * num_bits;
 
             for out in out_buf {
@@ -520,7 +519,7 @@ impl BitReader {
 
         if size_of::<T>() > 2 && values_to_read - i >= 16 && num_bits <= 16 {
             let mut out_buf = [0_u16; 16];
-            unpack16(&in_buf[self.byte_offset..], &mut out_buf, num_bits);
+            unpack16(&self.buffer[self.byte_offset..], &mut out_buf, num_bits);
             self.byte_offset += 2 * num_bits;
 
             for out in out_buf {
@@ -534,7 +533,7 @@ impl BitReader {
 
         if size_of::<T>() > 1 && values_to_read - i >= 8 && num_bits <= 8 {
             let mut out_buf = [0_u8; 8];
-            unpack8(&in_buf[self.byte_offset..], &mut out_buf, num_bits);
+            unpack8(&self.buffer[self.byte_offset..], &mut out_buf, num_bits);
             self.byte_offset += num_bits;
 
             for out in out_buf {
@@ -595,7 +594,7 @@ impl BitReader {
         self.byte_offset = self.get_byte_offset();
         self.bit_offset = 0;
 
-        let src = &self.buffer.data()[self.byte_offset..];
+        let src = &self.buffer[self.byte_offset..];
         let to_read = num_bytes.min(src.len());
         buf.extend_from_slice(&src[..to_read]);
 
@@ -620,7 +619,7 @@ impl BitReader {
         }
 
         // Advance byte_offset to next unread byte and read num_bytes
-        let v = read_num_bytes::<T>(num_bytes, &self.buffer.data()[self.byte_offset..]);
+        let v = read_num_bytes::<T>(num_bytes, &self.buffer[self.byte_offset..]);
         self.byte_offset += num_bytes;
 
         Some(v)
@@ -672,14 +671,14 @@ impl BitReader {
     fn load_buffered_values(&mut self) {
         let bytes_to_read = cmp::min(self.buffer.len() - self.byte_offset, 8);
         self.buffered_values =
-            read_num_bytes::<u64>(bytes_to_read, &self.buffer.data()[self.byte_offset..]);
+            read_num_bytes::<u64>(bytes_to_read, &self.buffer[self.byte_offset..]);
     }
 }
 
 impl From<Vec<u8>> for BitReader {
     #[inline]
     fn from(buffer: Vec<u8>) -> Self {
-        BitReader::new(ByteBufferPtr::new(buffer))
+        BitReader::new(buffer.into())
     }
 }
 
@@ -771,12 +770,12 @@ mod tests {
     #[test]
     fn test_bit_reader_get_aligned() {
         // 01110101 11001011
-        let buffer = ByteBufferPtr::new(vec![0x75, 0xCB]);
-        let mut bit_reader = BitReader::new(buffer.all());
+        let buffer = Bytes::from(vec![0x75, 0xCB]);
+        let mut bit_reader = BitReader::new(buffer.clone());
         assert_eq!(bit_reader.get_value::<i32>(3), Some(5));
         assert_eq!(bit_reader.get_aligned::<i32>(1), Some(203));
         assert_eq!(bit_reader.get_value::<i32>(1), None);
-        bit_reader.reset(buffer.all());
+        bit_reader.reset(buffer.clone());
         assert_eq!(bit_reader.get_aligned::<i32>(3), None);
     }
 
@@ -1128,7 +1127,7 @@ mod tests {
     #[test]
     fn test_get_batch_zero_extend() {
         let to_read = vec![0xFF; 4];
-        let mut reader = BitReader::new(ByteBufferPtr::new(to_read));
+        let mut reader = BitReader::from(to_read);
 
         // Create a non-zeroed output buffer
         let mut output = [u64::MAX; 32];

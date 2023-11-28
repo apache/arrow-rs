@@ -39,6 +39,7 @@ on:
       - arrow-integration-test/**
       - arrow-ipc/**
       - arrow-json/**
+      - arrow-avro/**
       - arrow-ord/**
       - arrow-row/**
       - arrow-schema/**
@@ -55,7 +56,7 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
         with:
           submodules: true
       - name: Setup Rust toolchain
@@ -78,6 +79,8 @@ jobs:
         run: cargo test -p arrow-csv --all-features
       - name: Test arrow-json with all features
         run: cargo test -p arrow-json --all-features
+      - name: Test arrow-avro with all features
+        run: cargo test -p arrow-avro --all-features
       - name: Test arrow-string with all features
         run: cargo test -p arrow-string --all-features
       - name: Test arrow-ord with all features
@@ -91,7 +94,7 @@ jobs:
       - name: Test arrow with default features
         run: cargo test -p arrow
       - name: Test arrow with all features apart from simd
-        run: cargo test -p arrow --features=force_validate,prettyprint,ipc_compression,ffi,dyn_cmp_dict,chrono-tz
+        run: cargo test -p arrow --features=force_validate,prettyprint,ipc_compression,ffi,chrono-tz
       - name: Run examples
         run: |
           # Test arrow examples
@@ -109,7 +112,7 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
         with:
           submodules: true
       - name: Setup Rust toolchain
@@ -136,7 +139,7 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
         with:
           submodules: true
       - name: Setup Rust toolchain
@@ -160,7 +163,7 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
         with:
           submodules: true
       - name: Setup Rust toolchain
@@ -179,7 +182,7 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
       - name: Setup Clippy
@@ -202,6 +205,8 @@ jobs:
         run: cargo clippy -p arrow-csv --all-targets --all-features -- -D warnings
       - name: Clippy arrow-json with all features
         run: cargo clippy -p arrow-json --all-targets --all-features -- -D warnings
+      - name: Clippy arrow-avro with all features
+        run: cargo clippy -p arrow-avro --all-targets --all-features -- -D warnings
       - name: Clippy arrow-string with all features
         run: cargo clippy -p arrow-string --all-targets --all-features -- -D warnings
       - name: Clippy arrow-ord with all features
@@ -211,7 +216,7 @@ jobs:
       - name: Clippy arrow-row with all features
         run: cargo clippy -p arrow-row --all-targets --all-features -- -D warnings
       - name: Clippy arrow with all features except SIMD
-        run: cargo clippy -p arrow --features=prettyprint,csv,ipc,test_utils,ffi,ipc_compression,dyn_cmp_dict,chrono-tz --all-targets -- -D warnings
+        run: cargo clippy -p arrow --features=prettyprint,csv,ipc,test_utils,ffi,ipc_compression,chrono-tz --all-targets -- -D warnings
       - name: Clippy arrow-integration-test with all features
         run: cargo clippy -p arrow-integration-test --all-targets --all-features -- -D warnings
       - name: Clippy arrow-integration-testing with all features
