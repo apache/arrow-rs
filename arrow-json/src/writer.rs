@@ -1542,7 +1542,7 @@ mod tests {
             Some(vec![]),
             Some(vec![Some(3), None]), // masked for a
             Some(vec![Some(4), Some(5)]),
-            None, // masked for b
+            None, // masked for a
             None,
         ]);
 
