@@ -770,6 +770,15 @@ impl AmazonS3Builder {
         self
     }
 
+    /// Configure how to provide `copy_if_not_exists`
+    pub fn with_copy_if_not_exists_return_code_override(
+        mut self,
+        config: S3CopyIfNotExistsReturnCodeOverride,
+    ) -> Self {
+        self.copy_if_not_exists_return_code_override = Some(config.into());
+        self
+    }
+
     /// Configure how to provide conditional put operations
     pub fn with_conditional_put(mut self, config: S3ConditionalPut) -> Self {
         self.conditional_put = Some(config.into());
