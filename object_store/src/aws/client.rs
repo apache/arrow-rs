@@ -485,10 +485,14 @@ impl S3Client {
             .send_retry(&self.config.retry_config)
             .await
             .map_err(|source| match source.status() {
-                Some(StatusCode::PRECONDITION_FAILED) => crate::Error::AlreadyExists {
-                    source: Box::new(source),
-                    path: to.to_string(),
-                },
+                Some(StatusCode::PRECONDITION_FAILED) | Some(StatusCode::FORBIDDEN)
+                    if !overwrite =>
+                {
+                    crate::Error::AlreadyExists {
+                        source: Box::new(source),
+                        path: to.to_string(),
+                    }
+                }
                 _ => Error::CopyRequest {
                     source,
                     path: from.to_string(),
