@@ -135,9 +135,7 @@ fn struct_array_to_jsonmap_array(
     let mut inner_objs = (0..array.len())
         // Ensure we write nulls for struct arrays as nulls in JSON
         // Instead of writing a struct with nulls
-        .map(|index| {
-            array.is_valid(index).then(JsonMap::new)
-        })
+        .map(|index| array.is_valid(index).then(JsonMap::new))
         .collect::<Vec<Option<JsonMap<String, Value>>>>();
 
     for (j, struct_col) in array.columns().iter().enumerate() {
@@ -233,13 +231,7 @@ fn array_to_json_array_internal(
             let jsonmaps = struct_array_to_jsonmap_array(array.as_struct(), explicit_nulls)?;
             let json_values = jsonmaps
                 .into_iter()
-                .map(|maybe_map| {
-                    if let Some(map) = maybe_map {
-                        Value::Object(map)
-                    } else {
-                        Value::Null
-                    }
-                })
+                .map(|maybe_map| maybe_map.map(Value::Object).unwrap_or(Value::Null))
                 .collect();
             Ok(json_values)
         }
