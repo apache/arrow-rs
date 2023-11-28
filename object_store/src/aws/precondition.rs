@@ -31,8 +31,7 @@ pub enum S3CopyIfNotExists {
     ///
     /// If set, [`ObjectStore::copy_if_not_exists`] will perform a normal copy operation
     /// with the provided header pair, and expect the store to fail with `412 Precondition Failed`
-    /// if the destination file already exists, or a different return code if overridden
-    /// using [`S3CopyIfNotExistsReturnCodeOverride`].
+    /// if the destination file already exists.
     ///
     /// Encoded as `header:<HEADER_NAME>:<HEADER_VALUE>` ignoring whitespace
     ///
@@ -41,7 +40,7 @@ pub enum S3CopyIfNotExists {
     ///
     /// [`ObjectStore::copy_if_not_exists`]: crate::ObjectStore::copy_if_not_exists
     Header(String, String),
-    /// The same as `Header` but allows custom status code checking, for object stores that return values
+    /// The same as [`S3CopyIfNotExists::Header`] but allows custom status code checking, for object stores that return values
     /// other than 412.
     ///
     /// Encoded as `header-with-status:<HEADER_NAME>:<HEADER_VALUE>:<STATUS>` ignoring whitespace
