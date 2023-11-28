@@ -66,7 +66,7 @@ impl S3CopyIfNotExists {
                 Some(Self::Header(k.trim().to_string(), v.trim().to_string()))
             }
             "header-with-status" => {
-                let parts = value.split(':').collect::<Vec<_>>();
+                let (k, v, status) = value.split(':').collect_tuple()?;
 
                 if parts.len() != 3 {
                     // format should be `header-with_status: 999: key: value`
