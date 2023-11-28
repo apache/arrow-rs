@@ -41,6 +41,8 @@ pub enum S3CopyIfNotExists {
     Header(String, String),
     /// The same as `Header` but allows custom status code checking, for object stores that return values
     /// other than 412.
+    ///
+    /// Encoded as `header-with-status:<HEADER_NAME>:<HEADER_VALUE>:<STATUS>` ignoring whitespace
     HeaderWithStatus(String, String, reqwest::StatusCode),
 }
 
