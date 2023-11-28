@@ -133,7 +133,7 @@ fn struct_array_to_jsonmap_array(
     let inner_col_names = array.column_names();
 
     let mut inner_objs = (0..array.len())
-        // Ensure we write nulls for structarrays as nulls in JSON
+        // Ensure we write nulls for struct arrays as nulls in JSON
         // Instead of writing a struct with nulls
         .map(|index| {
             if array.is_null(index) {
@@ -1535,7 +1535,7 @@ mod tests {
     }
 
     #[test]
-    fn json_struct_array_logical_nulls() {
+    fn json_struct_array_nulls() {
         let inner = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
             Some(vec![Some(1), Some(2)]),
             Some(vec![None]),
