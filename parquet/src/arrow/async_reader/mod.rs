@@ -90,7 +90,7 @@ use futures::stream::Stream;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncSeek, AsyncSeekExt};
 
 use arrow_array::RecordBatch;
-use arrow_schema::{Schema, SchemaRef};
+use arrow_schema::SchemaRef;
 
 use crate::arrow::array_reader::{build_array_reader, RowGroups};
 use crate::arrow::arrow_reader::{
@@ -385,20 +385,13 @@ impl<T: AsyncFileReader + Send + 'static> ParquetRecordBatchStreamBuilder<T> {
             offset: self.offset,
         };
 
-        // Clear metadata from schema for ParquetRecordBatchStream
-        let schema = if self.schema.metadata.is_empty() {
-            self.schema
-        } else {
-            Arc::new(Schema::new(self.schema.fields.clone()))
-        };
-
         Ok(ParquetRecordBatchStream {
             metadata: self.metadata,
             batch_size,
             row_groups,
             projection: self.projection,
             selection: self.selection,
-            schema,
+            schema: self.schema,
             reader: Some(reader),
             state: StreamState::Init,
         })
@@ -1589,41 +1582,6 @@ mod tests {
         let path = format!("{testdata}/data_index_bloom_encoding_stats.parquet");
         let data = Bytes::from(std::fs::read(path).unwrap());
         test_get_row_group_column_bloom_filter(data, false).await;
-    }
-
-    #[tokio::test]
-    async fn test_parquet_record_batch_stream_schema() {
-        let testdata = arrow::util::test_util::parquet_test_data();
-        let path = format!("{testdata}/data_index_bloom_encoding_stats.parquet");
-        let data = Bytes::from(std::fs::read(path).unwrap());
-        let metadata = Arc::new(parse_metadata(&data).unwrap());
-        let async_reader = TestReader {
-            data,
-            metadata,
-            requests: Default::default(),
-        };
-        let builder = ParquetRecordBatchStreamBuilder::new(async_reader)
-            .await
-            .unwrap();
-        let builder_schema = builder.schema().clone();
-        let stream = builder.build().unwrap();
-        let stream_schema = stream.schema().clone();
-        let batches = stream.try_collect::<Vec<_>>().await.unwrap();
-        let batch_schema = batches[0].schema();
-
-        // ParquetRecordBatchStreamBuilder::schema should preserve metadata
-        assert_eq!(builder_schema.metadata.len(), 2);
-        assert_eq!(
-            builder_schema.metadata["parquet.avro.schema"],
-            "{\"type\":\"record\",\"name\":\"data\",\"fields\":[{\"name\":\"String\",\"type\":[\"null\",\"string\"],\"doc\":\"Type inferred from 'Hello'\",\"default\":null}]}"
-        );
-        assert_eq!(builder_schema.metadata["writer.model.name"], "avro");
-
-        // ParquetRecordBatchStream::schema should not have metadata
-        assert!(stream_schema.metadata.is_empty());
-
-        // RecordBatches from ParquetRecordBatchStream should not have metadata in their schema
-        assert!(batch_schema.metadata.is_empty());
     }
 
     #[tokio::test]
