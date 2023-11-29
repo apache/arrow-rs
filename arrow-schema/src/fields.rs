@@ -102,6 +102,9 @@ impl Fields {
 
     /// Performs a depth-first scan of [`Fields`] filtering the [`FieldRef`] with no children
     ///
+    /// Invokes `filter` with each leaf [`FieldRef`], i.e. one containing no children, and a
+    /// count of the number of previous calls to `filter` - i.e. the leaf's index.
+    ///
     /// Returns a new [`Fields`] comprising the [`FieldRef`] for which `filter` returned `true`
     ///
     /// ```
