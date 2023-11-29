@@ -402,6 +402,9 @@ impl Schema {
     /// assert_eq!(schema.remove(1), Field::new("b", DataType::Int8, false).into());
     /// assert_eq!(schema.fields.len(), 2);
     /// ```
+    #[deprecated(note = "Use SchemaBuilder::remove")]
+    #[doc(hidden)]
+    #[allow(deprecated)]
     pub fn remove(&mut self, index: usize) -> FieldRef {
         self.fields.remove(index)
     }

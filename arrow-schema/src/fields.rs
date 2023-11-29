@@ -117,6 +117,8 @@ impl Fields {
     /// assert_eq!(fields.remove(1), Field::new("b", DataType::Int8, false).into());
     /// assert_eq!(fields.len(), 2);
     /// ```
+    #[deprecated(note = "Use SchemaBuilder::remove")]
+    #[doc(hidden)]
     pub fn remove(&mut self, index: usize) -> FieldRef {
         let mut builder = SchemaBuilder::from(Fields::from(&*self.0));
         let field = builder.remove(index);
