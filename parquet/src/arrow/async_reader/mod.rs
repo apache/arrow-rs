@@ -356,9 +356,9 @@ impl<T: AsyncFileReader + Send + 'static> ParquetRecordBatchStreamBuilder<T> {
         Ok(Some(Sbbf::new(&bitset)))
     }
 
-    pub fn build_with_async_row_group_builder<R: AsyncRowGroupReader + Send + 'static>(
+    pub fn build_with_row_group_reader<R: AsyncRowGroupReader + Send + 'static>(
         self,
-        builder: R,
+        row_group_reader: R,
     ) -> Result<ParquetRecordBatchStream<T, R>> {
         let num_row_groups = self.metadata.row_groups().len();
 
@@ -387,7 +387,7 @@ impl<T: AsyncFileReader + Send + 'static> ParquetRecordBatchStreamBuilder<T> {
             fields: self.fields,
             limit: self.limit,
             offset: self.offset,
-            row_group_builder: builder,
+            row_group_reader,
         };
 
         Ok(ParquetRecordBatchStream {
@@ -403,11 +403,11 @@ impl<T: AsyncFileReader + Send + 'static> ParquetRecordBatchStreamBuilder<T> {
     }
 
     /// Build a new [`ParquetRecordBatchStream`]
-    pub fn build(self) -> Result<ParquetRecordBatchStream<T, DefaultAsyncRowGroupReaderBuilder>> {
-        let builder = DefaultAsyncRowGroupReaderBuilder {
+    pub fn build(self) -> Result<ParquetRecordBatchStream<T, DefaultAsyncRowGroupReader>> {
+        let builder = DefaultAsyncRowGroupReader {
             metadata: self.metadata.clone(),
         };
-        self.build_with_async_row_group_builder(builder)
+        self.build_with_row_group_reader(builder)
     }
 }
 
@@ -428,7 +428,7 @@ struct ReaderFactory<T, R> {
 
     offset: Option<usize>,
 
-    row_group_builder: R,
+    row_group_reader: R,
 }
 
 impl<T, R> ReaderFactory<T, R>
@@ -457,7 +457,7 @@ where
         // schema: meta.schema_descr_ptr(),
         // row_count: meta.num_rows() as usize,
         // column_chunks: vec![None; meta.columns().len()],
-        let row_group_offsets_builder = RowGroupOffsetsBuilder {
+        let row_group_offsets_builder = RowGroupRangesBuilder {
             metadata: meta,
             page_locations,
         };
@@ -472,7 +472,7 @@ where
                 let row_group_offsets =
                     row_group_offsets_builder.build(predicate_projection, selection.as_ref());
                 let row_group = self
-                    .row_group_builder
+                    .row_group_reader
                     .get_row_group(&mut self.input, row_group_idx, row_group_offsets)
                     .await?;
                 let array_reader =
@@ -523,7 +523,7 @@ where
 
         let row_group_offsets = row_group_offsets_builder.build(&projection, selection.as_ref());
         let row_group = self
-            .row_group_builder
+            .row_group_reader
             .get_row_group(&mut self.input, row_group_idx, row_group_offsets)
             .await?;
 
@@ -672,12 +672,12 @@ pub enum RowGroupRanges {
 }
 
 /// An in-memory collection of column chunks
-struct RowGroupOffsetsBuilder<'a> {
+struct RowGroupRangesBuilder<'a> {
     metadata: &'a RowGroupMetaData,
     page_locations: Option<&'a [Vec<PageLocation>]>,
 }
 
-impl<'a> RowGroupOffsetsBuilder<'a> {
+impl<'a> RowGroupRangesBuilder<'a> {
     fn build(
         &self,
         projection: &ProjectionMask,
@@ -738,12 +738,12 @@ pub trait AsyncRowGroupReader {
     ) -> Result<Self::R>;
 }
 
-pub struct DefaultAsyncRowGroupReaderBuilder {
+pub struct DefaultAsyncRowGroupReader {
     metadata: Arc<ParquetMetaData>,
 }
 
 #[async_trait]
-impl AsyncRowGroupReader for DefaultAsyncRowGroupReaderBuilder {
+impl AsyncRowGroupReader for DefaultAsyncRowGroupReader {
     type R = InMemoryRowGroup;
 
     /// Fetches the necessary column data into memory
@@ -1575,7 +1575,7 @@ mod tests {
 
         let projection = ProjectionMask::leaves(metadata.file_metadata().schema_descr(), vec![0]);
 
-        let row_group_builder = DefaultAsyncRowGroupReaderBuilder {
+        let row_group_reader = DefaultAsyncRowGroupReader {
             metadata: metadata.clone(),
         };
         let reader_factory = ReaderFactory {
@@ -1585,7 +1585,7 @@ mod tests {
             filter: None,
             limit: None,
             offset: None,
-            row_group_builder,
+            row_group_reader,
         };
 
         let mut skip = true;
