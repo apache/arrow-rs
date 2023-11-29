@@ -90,7 +90,7 @@ use futures::stream::Stream;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncSeek, AsyncSeekExt};
 
 use arrow_array::RecordBatch;
-use arrow_schema::{Schema, SchemaRef};
+use arrow_schema::{DataType, Schema, SchemaRef};
 
 use crate::arrow::array_reader::{build_array_reader, RowGroups};
 use crate::arrow::arrow_reader::{
@@ -385,12 +385,20 @@ impl<T: AsyncFileReader + Send + 'static> ParquetRecordBatchStreamBuilder<T> {
             offset: self.offset,
         };
 
-        // Clear metadata from schema for ParquetRecordBatchStream
-        let schema = if self.schema.metadata.is_empty() {
-            self.schema
-        } else {
-            Arc::new(Schema::new(self.schema.fields.clone()))
+        // Ensure schema of ParquetRecordBatchStream respects projection, and does
+        // not store metadata (same as for ParquetRecordBatchReader and emitted RecordBatches)
+        let projected_fields = match reader.fields.as_deref().map(|pf| &pf.arrow_type) {
+            Some(DataType::Struct(fields)) => fields
+                .iter()
+                .enumerate()
+                .filter_map(|(idx, field)| {
+                    self.projection.leaf_included(idx).then_some(field.clone())
+                })
+                .collect::<Vec<_>>(),
+            None => vec![],
+            _ => unreachable!("Must be Struct for root type"),
         };
+        let schema = Arc::new(Schema::new(projected_fields));
 
         Ok(ParquetRecordBatchStream {
             metadata: self.metadata,
@@ -579,7 +587,10 @@ impl<T> std::fmt::Debug for ParquetRecordBatchStream<T> {
 }
 
 impl<T> ParquetRecordBatchStream<T> {
-    /// Returns the [`SchemaRef`] for this parquet file
+    /// Returns the projected [`SchemaRef`] for reading the parquet file.
+    ///
+    /// Note that the schema metadata will be stripped here. See
+    /// [`ParquetRecordBatchStreamBuilder::schema`] if the metadata is desired.
     pub fn schema(&self) -> &SchemaRef {
         &self.schema
     }
@@ -862,10 +873,14 @@ mod tests {
     use arrow_array::builder::{ListBuilder, StringBuilder};
     use arrow_array::cast::AsArray;
     use arrow_array::types::Int32Type;
-    use arrow_array::{Array, ArrayRef, Int32Array, Int8Array, Scalar, StringArray, UInt64Array};
-    use arrow_schema::{DataType, Field, Schema};
+    use arrow_array::{
+        Array, ArrayRef, Float32Array, Int32Array, Int8Array, RecordBatchReader, Scalar,
+        StringArray, StructArray, UInt64Array,
+    };
+    use arrow_schema::{DataType, Field, Fields, Schema};
     use futures::{StreamExt, TryStreamExt};
     use rand::{thread_rng, Rng};
+    use std::collections::HashMap;
     use std::sync::Mutex;
     use tempfile::tempfile;
 
@@ -1593,37 +1608,82 @@ mod tests {
 
     #[tokio::test]
     async fn test_parquet_record_batch_stream_schema() {
-        let testdata = arrow::util::test_util::parquet_test_data();
-        let path = format!("{testdata}/data_index_bloom_encoding_stats.parquet");
-        let data = Bytes::from(std::fs::read(path).unwrap());
-        let metadata = Arc::new(parse_metadata(&data).unwrap());
-        let async_reader = TestReader {
-            data,
-            metadata,
-            requests: Default::default(),
-        };
-        let builder = ParquetRecordBatchStreamBuilder::new(async_reader)
-            .await
-            .unwrap();
-        let builder_schema = builder.schema().clone();
-        let stream = builder.build().unwrap();
-        let stream_schema = stream.schema().clone();
-        let batches = stream.try_collect::<Vec<_>>().await.unwrap();
-        let batch_schema = batches[0].schema();
+        let mut metadata = HashMap::with_capacity(1);
+        metadata.insert("key".to_string(), "value".to_string());
 
-        // ParquetRecordBatchStreamBuilder::schema should preserve metadata
-        assert_eq!(builder_schema.metadata.len(), 2);
-        assert_eq!(
-            builder_schema.metadata["parquet.avro.schema"],
-            "{\"type\":\"record\",\"name\":\"data\",\"fields\":[{\"name\":\"String\",\"type\":[\"null\",\"string\"],\"doc\":\"Type inferred from 'Hello'\",\"default\":null}]}"
+        let schema = Arc::new(
+            Schema::new(Fields::from(vec![
+                Field::new("a", DataType::Int32, true),
+                Field::new("c", DataType::UInt64, true),
+                Field::new("d", DataType::Float32, true),
+            ]))
+            .with_metadata(metadata.clone()),
         );
-        assert_eq!(builder_schema.metadata["writer.model.name"], "avro");
+        let struct_array = StructArray::from(vec![
+            (
+                Arc::new(Field::new("a", DataType::Int32, true)),
+                Arc::new(Int32Array::from(vec![-1, 1])) as ArrayRef,
+            ),
+            (
+                Arc::new(Field::new("c", DataType::UInt64, true)),
+                Arc::new(UInt64Array::from(vec![1, 2])) as ArrayRef,
+            ),
+            (
+                Arc::new(Field::new("d", DataType::Float32, true)),
+                Arc::new(Float32Array::from(vec![1.0, 2.0])) as ArrayRef,
+            ),
+        ]);
+        let record_batch = RecordBatch::from(struct_array)
+            .with_schema(schema.clone())
+            .unwrap();
 
-        // ParquetRecordBatchStream::schema should not have metadata
-        assert!(stream_schema.metadata.is_empty());
+        // Write parquet with custom metadata in schema
+        let mut file = tempfile().unwrap();
+        let mut writer = ArrowWriter::try_new(&mut file, schema.clone(), None).unwrap();
+        writer.write(&record_batch).unwrap();
+        writer.close().unwrap();
 
-        // RecordBatches from ParquetRecordBatchStream should not have metadata in their schema
-        assert!(batch_schema.metadata.is_empty());
+        // Test projecting for [], [0], [0, 1], [0, 1, 2]
+        for num_projected in 0..schema.fields().len() {
+            let mask_indices = 0..num_projected;
+
+            let builder =
+                ParquetRecordBatchReaderBuilder::try_new(file.try_clone().unwrap()).unwrap();
+            let sync_builder_schema = builder.schema().clone();
+            let mask = ProjectionMask::leaves(builder.parquet_schema(), mask_indices.clone());
+            let mut reader = builder.with_projection(mask).build().unwrap();
+            let sync_reader_schema = reader.schema();
+            let batch = reader.next().unwrap().unwrap();
+            let sync_batch_schema = batch.schema();
+
+            // Builder schema should preserve all fields and metadata
+            assert_eq!(sync_builder_schema.fields.len(), schema.fields().len());
+            assert_eq!(sync_builder_schema.metadata, metadata);
+            // Reader & batch schema should show only projected fields, and no metadata
+            assert_eq!(sync_reader_schema.fields.len(), num_projected);
+            assert_eq!(sync_reader_schema.metadata, HashMap::default());
+            assert_eq!(sync_batch_schema.fields.len(), num_projected);
+            assert_eq!(sync_batch_schema.metadata, HashMap::default());
+
+            // Ensure parity with async implementation
+            let file = tokio::fs::File::from(file.try_clone().unwrap());
+            let builder = ParquetRecordBatchStreamBuilder::new(file).await.unwrap();
+            let async_builder_schema = builder.schema().clone();
+            let mask = ProjectionMask::leaves(builder.parquet_schema(), mask_indices);
+            let mut reader = builder.with_projection(mask).build().unwrap();
+            let async_reader_schema = reader.schema().clone();
+            let batch = reader.next().await.unwrap().unwrap();
+            let async_batch_schema = batch.schema();
+
+            // Builder schema should preserve all fields and metadata
+            assert_eq!(async_builder_schema.fields.len(), schema.fields().len());
+            assert_eq!(async_builder_schema.metadata, metadata);
+            // Reader & batch schema should show only projected fields, and no metadata
+            assert_eq!(async_reader_schema.fields.len(), num_projected);
+            assert_eq!(async_reader_schema.metadata, HashMap::default());
+            assert_eq!(async_batch_schema.fields.len(), num_projected);
+            assert_eq!(async_batch_schema.metadata, HashMap::default());
+        }
     }
 
     #[tokio::test]
