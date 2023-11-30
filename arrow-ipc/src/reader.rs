@@ -26,12 +26,16 @@ use std::fmt;
 use std::io::{BufReader, Read, Seek, SeekFrom};
 use std::sync::Arc;
 
+#[cfg(feature = "memmap")]
+use memmap2::Mmap;
+
 use arrow_array::*;
 use arrow_buffer::{Buffer, MutableBuffer};
 use arrow_data::ArrayData;
 use arrow_schema::*;
 
 use crate::compression::CompressionCodec;
+use crate::BodyCompression;
 use crate::{FieldNode, MetadataVersion, CONTINUATION_MARKER};
 use DataType::*;
 
@@ -1026,6 +1030,332 @@ impl<R: Read> RecordBatchReader for StreamReader<R> {
     }
 }
 
+/// Arrow Memmap reader. It does not copy the underlying buffers.
+#[cfg(feature = "memmap")]
+pub struct MemmapReader {
+    /// The memmap we're reading from
+    memmap: Arc<Mmap>,
+
+    /// The schema that is read from the file header
+    schema: SchemaRef,
+
+    /// The blocks in the file
+    ///
+    /// A block indicates the regions in the file to read to get data
+    blocks: Vec<crate::Block>,
+
+    /// A counter to keep track of the current block that should be read
+    current_block: usize,
+
+    /// The total number of blocks, which may contain record batches and other types
+    total_blocks: usize,
+
+    /// Optional dictionaries for each schema field.
+    ///
+    /// Dictionaries may be appended to in the streaming format.
+    dictionaries_by_id: HashMap<i64, ArrayRef>,
+
+    /// Metadata version
+    metadata_version: crate::MetadataVersion,
+
+    /// User defined metadata
+    custom_metadata: HashMap<String, String>,
+
+    /// Optional projection and projected_schema
+    projection: Option<(Vec<usize>, Schema)>,
+}
+
+#[cfg(feature = "memmap")]
+impl fmt::Debug for MemmapReader {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> std::result::Result<(), fmt::Error> {
+        f.debug_struct("FileReader<R>")
+            .field("reader", &"BufReader<..>")
+            .field("schema", &self.schema)
+            .field("blocks", &self.blocks)
+            .field("current_block", &self.current_block)
+            .field("total_blocks", &self.total_blocks)
+            .field("dictionaries_by_id", &self.dictionaries_by_id)
+            .field("metadata_version", &self.metadata_version)
+            .field("projection", &self.projection)
+            .finish()
+    }
+}
+
+#[cfg(feature = "memmap")]
+impl MemmapReader {
+    /// Try to create a new file reader
+    ///
+    /// Returns errors if the file does not meet the Arrow Format header and footer
+    /// requirements
+    pub fn try_new(memmap: Mmap, projection: Option<Vec<usize>>) -> Result<Self, ArrowError> {
+        let memmap = Arc::new(memmap);
+        let mut reader = std::io::Cursor::new(&memmap[..]);
+
+        let mut magic_buffer: [u8; 6] = [0; 6];
+        reader.read_exact(&mut magic_buffer)?;
+        if magic_buffer != super::ARROW_MAGIC {
+            return Err(ArrowError::ParseError(
+                "Arrow file does not contain correct header".to_string(),
+            ));
+        }
+        reader.seek(SeekFrom::End(-6))?;
+        reader.read_exact(&mut magic_buffer)?;
+        if magic_buffer != super::ARROW_MAGIC {
+            return Err(ArrowError::ParseError(
+                "Arrow file does not contain correct footer".to_string(),
+            ));
+        }
+        // read footer length
+        let mut footer_size: [u8; 4] = [0; 4];
+        reader.seek(SeekFrom::End(-10))?;
+        reader.read_exact(&mut footer_size)?;
+        let footer_len = i32::from_le_bytes(footer_size);
+
+        // read footer
+        let mut footer_data = vec![0; footer_len as usize];
+        reader.seek(SeekFrom::End(-10 - footer_len as i64))?;
+        reader.read_exact(&mut footer_data)?;
+
+        let footer = crate::root_as_footer(&footer_data[..]).map_err(|err| {
+            ArrowError::ParseError(format!("Unable to get root as footer: {err:?}"))
+        })?;
+
+        let blocks = footer.recordBatches().ok_or_else(|| {
+            ArrowError::ParseError("Unable to get record batches from IPC Footer".to_string())
+        })?;
+
+        let total_blocks = blocks.len();
+
+        let ipc_schema = footer.schema().unwrap();
+        let schema = crate::convert::fb_to_schema(ipc_schema);
+
+        let mut custom_metadata = HashMap::new();
+        if let Some(fb_custom_metadata) = footer.custom_metadata() {
+            for kv in fb_custom_metadata.into_iter() {
+                custom_metadata.insert(
+                    kv.key().unwrap().to_string(),
+                    kv.value().unwrap().to_string(),
+                );
+            }
+        }
+
+        // Create an array of optional dictionary value arrays, one per field.
+        let mut dictionaries_by_id = HashMap::new();
+        if let Some(dictionaries) = footer.dictionaries() {
+            for block in dictionaries {
+                // read length from end of offset
+                let mut message_size: [u8; 4] = [0; 4];
+                reader.seek(SeekFrom::Start(block.offset() as u64))?;
+                reader.read_exact(&mut message_size)?;
+                if message_size == CONTINUATION_MARKER {
+                    reader.read_exact(&mut message_size)?;
+                }
+                let footer_len = i32::from_le_bytes(message_size);
+                let mut block_data = vec![0; footer_len as usize];
+
+                reader.read_exact(&mut block_data)?;
+
+                let message = crate::root_as_message(&block_data[..]).map_err(|err| {
+                    ArrowError::ParseError(format!("Unable to get root as message: {err:?}"))
+                })?;
+
+                match message.header_type() {
+                    crate::MessageHeader::DictionaryBatch => {
+                        let batch = message.header_as_dictionary_batch().unwrap();
+
+                        // read the block that makes up the dictionary batch into a buffer
+
+                        let start = (block.offset() + block.metaDataLength() as i64) as usize;
+                        let len = message.bodyLength() as usize;
+                        assert_ne!(len, 0);
+
+                        let buf_slice = &memmap[start..(start + len)];
+                        // Safety: The memmap is allocated and held. We've just checked that it's of the correct lenght.
+                        let buf = unsafe {
+                            Buffer::from_custom_allocation(
+                                buf_slice.get(0).expect("Length is non-zero").into(),
+                                len,
+                                memmap.clone(),
+                            )
+                        };
+
+                        read_dictionary(
+                            &buf,
+                            batch,
+                            &schema,
+                            &mut dictionaries_by_id,
+                            &message.version(),
+                        )?;
+                    }
+                    t => {
+                        return Err(ArrowError::ParseError(format!(
+                            "Expecting DictionaryBatch in dictionary blocks, found {t:?}."
+                        )));
+                    }
+                }
+            }
+        }
+        let projection = match projection {
+            Some(projection_indices) => {
+                let schema = schema.project(&projection_indices)?;
+                Some((projection_indices, schema))
+            }
+            _ => None,
+        };
+
+        Ok(Self {
+            memmap,
+            schema: Arc::new(schema),
+            blocks: blocks.iter().copied().collect(),
+            current_block: 0,
+            total_blocks,
+            dictionaries_by_id,
+            metadata_version: footer.version(),
+            custom_metadata,
+            projection,
+        })
+    }
+
+    /// Return user defined customized metadata
+    pub fn custom_metadata(&self) -> &HashMap<String, String> {
+        &self.custom_metadata
+    }
+
+    /// Return the number of batches in the file
+    pub fn num_batches(&self) -> usize {
+        self.total_blocks
+    }
+
+    /// Return the schema of the file
+    pub fn schema(&self) -> SchemaRef {
+        self.schema.clone()
+    }
+
+    /// Read a specific record batch
+    ///
+    /// Sets the current block to the index, allowing random reads
+    pub fn set_index(&mut self, index: usize) -> Result<(), ArrowError> {
+        if index >= self.total_blocks {
+            Err(ArrowError::InvalidArgumentError(format!(
+                "Cannot set batch to index {} from {} total batches",
+                index, self.total_blocks
+            )))
+        } else {
+            self.current_block = index;
+            Ok(())
+        }
+    }
+
+    fn maybe_next(&mut self) -> Result<Option<RecordBatch>, ArrowError> {
+        let block = self.blocks[self.current_block];
+        self.current_block += 1;
+
+        let mut reader = std::io::Cursor::new(&self.memmap[..]);
+        // read length
+        reader.seek(SeekFrom::Start(block.offset() as u64))?;
+        let mut meta_buf = [0; 4];
+        reader.read_exact(&mut meta_buf)?;
+        if meta_buf == CONTINUATION_MARKER {
+            // continuation marker encountered, read message next
+            reader.read_exact(&mut meta_buf)?;
+        }
+        let meta_len = i32::from_le_bytes(meta_buf);
+
+        let mut block_data = vec![0; meta_len as usize];
+        reader.read_exact(&mut block_data)?;
+        let message = crate::root_as_message(&block_data[..]).map_err(|err| {
+            ArrowError::ParseError(format!("Unable to get root as footer: {err:?}"))
+        })?;
+
+        // some old test data's footer metadata is not set, so we account for that
+        if self.metadata_version != crate::MetadataVersion::V1
+            && message.version() != self.metadata_version
+        {
+            return Err(ArrowError::IpcError(
+                "Could not read IPC message as metadata versions mismatch".to_string(),
+            ));
+        }
+
+        match message.header_type() {
+            crate::MessageHeader::Schema => Err(ArrowError::IpcError(
+                "Not expecting a schema when messages are read".to_string(),
+            )),
+            crate::MessageHeader::RecordBatch => {
+                let batch = message.header_as_record_batch().ok_or_else(|| {
+                    ArrowError::IpcError("Unable to read IPC message as record batch".to_string())
+                })?;
+                // read the block that makes up the record batch into a buffer
+                let mut buf_slice =
+                    &self.memmap[block.offset() as usize + block.metaDataLength() as usize..];
+                let len = message.bodyLength() as usize;
+                buf_slice = &buf_slice[..len];
+                assert_ne!(0, len);
+
+                // Safety: The memmap is allocated and held. We've just checked that it's of the correct lenght.
+                let buf = unsafe {
+                    Buffer::from_custom_allocation(
+                        buf_slice.get(0).expect("Length is non-zero").into(),
+                        len,
+                        self.memmap.clone(),
+                    )
+                };
+
+                let batch_compression: Option<BodyCompression<'_>> = batch.compression();
+                let compression: Option<CompressionCodec> = batch_compression
+                    .map(|batch_compression| batch_compression.codec().try_into())
+                    .transpose()?;
+                if compression.is_some() {
+                    return Err(ArrowError::MemoryError(
+                        "Could not memmap IPC message as the data is compressed".to_string(),
+                    ));
+                }
+
+                read_record_batch(
+                    &buf,
+                    batch,
+                    self.schema(),
+                    &self.dictionaries_by_id,
+                    self.projection.as_ref().map(|x| x.0.as_ref()),
+                    &message.version(),
+                )
+                .map(Some)
+            }
+            crate::MessageHeader::NONE => Ok(None),
+            t => Err(ArrowError::InvalidArgumentError(format!(
+                "Reading types other than record batches not yet supported, unable to read {t:?}"
+            ))),
+        }
+    }
+
+    /// Gets a reference to the underlying reader.
+    ///
+    /// It is inadvisable to directly read from the underlying reader.
+    pub fn get_ref(&self) -> &Mmap {
+        &self.memmap
+    }
+}
+
+#[cfg(feature = "memmap")]
+impl Iterator for MemmapReader {
+    type Item = Result<RecordBatch, ArrowError>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        // get current block
+        if self.current_block < self.total_blocks {
+            self.maybe_next().transpose()
+        } else {
+            None
+        }
+    }
+}
+
+#[cfg(feature = "memmap")]
+impl RecordBatchReader for MemmapReader {
+    fn schema(&self) -> SchemaRef {
+        self.schema.clone()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::writer::{unslice_run_array, DictionaryTracker, IpcDataGenerator};
@@ -1203,6 +1533,47 @@ mod tests {
             // read record batch with reversed projection
             let reader =
                 FileReader::try_new(std::io::Cursor::new(buf.clone()), Some(vec![3, 2, 1]));
+            let read_batch = reader.unwrap().next().unwrap().unwrap();
+            let expected_batch = batch.project(&[3, 2, 1]).unwrap();
+            assert_eq!(read_batch, expected_batch);
+        }
+    }
+
+    #[test]
+    fn test_projection_array_values_memmap() {
+        // define schema
+        let schema = create_test_projection_schema();
+
+        // create record batch with test data
+        let batch = create_test_projection_batch_data(&schema);
+
+        // write record batch in IPC format
+        let mut file = tempfile::tempfile().unwrap();
+        {
+            let mut writer = crate::writer::FileWriter::try_new(&mut file, &schema).unwrap();
+            writer.write(&batch).unwrap();
+            writer.finish().unwrap();
+        }
+
+        file.rewind().unwrap();
+        // read record batch with projection
+        for index in 0..12 {
+            let projection = vec![index];
+            let reader =
+                MemmapReader::try_new(unsafe { Mmap::map(&file).unwrap() }, Some(projection));
+            let read_batch = reader.unwrap().next().unwrap().unwrap();
+            let projected_column = read_batch.column(0);
+            let expected_column = batch.column(index);
+
+            // check the projected column equals the expected column
+            assert_eq!(projected_column.as_ref(), expected_column.as_ref());
+        }
+
+        {
+            // read record batch with reversed projection
+            let reader =
+                MemmapReader::try_new(unsafe { Mmap::map(&file).unwrap() }, Some(vec![3, 2, 1]));
+
             let read_batch = reader.unwrap().next().unwrap().unwrap();
             let expected_batch = batch.project(&[3, 2, 1]).unwrap();
             assert_eq!(read_batch, expected_batch);
