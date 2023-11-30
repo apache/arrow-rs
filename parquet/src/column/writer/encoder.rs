@@ -18,7 +18,7 @@
 use bytes::Bytes;
 use half::f16;
 
-use crate::basic::{Encoding, LogicalType, Type};
+use crate::basic::{ConvertedType, Encoding, LogicalType, Type};
 use crate::bloom_filter::Sbbf;
 use crate::column::writer::{
     compare_greater, fallback_encoding, has_dictionary_support, is_nan, update_max, update_min,
@@ -137,7 +137,10 @@ pub struct ColumnValueEncoderImpl<T: DataType> {
 
 impl<T: DataType> ColumnValueEncoderImpl<T> {
     fn write_slice(&mut self, slice: &[T::T]) -> Result<()> {
-        if self.statistics_enabled == EnabledStatistics::Page {
+        if self.statistics_enabled == EnabledStatistics::Page
+            // INTERVAL has undefined sort order, so don't write min/max stats for it
+            && self.descr.converted_type() != ConvertedType::INTERVAL
+        {
             if let Some((min, max)) = self.min_max(slice, None) {
                 update_min(&self.descr, &min, &mut self.min_value);
                 update_max(&self.descr, &max, &mut self.max_value);
