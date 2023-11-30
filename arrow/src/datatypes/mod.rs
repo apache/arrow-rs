@@ -30,8 +30,3 @@ pub use arrow_schema::{
     DataType, Field, FieldRef, Fields, IntervalUnit, Schema, SchemaBuilder, SchemaRef, TimeUnit,
     UnionFields, UnionMode,
 };
-
-#[cfg(feature = "ffi")]
-mod ffi;
-#[cfg(feature = "ffi")]
-pub use ffi::*;

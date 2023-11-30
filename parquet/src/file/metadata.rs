@@ -885,9 +885,8 @@ pub struct ColumnIndexBuilder {
     null_pages: Vec<bool>,
     min_values: Vec<Vec<u8>>,
     max_values: Vec<Vec<u8>>,
-    // TODO: calc the order for all pages in this column
-    boundary_order: BoundaryOrder,
     null_counts: Vec<i64>,
+    boundary_order: BoundaryOrder,
     // If one page can't get build index, need to ignore all index in this column
     valid: bool,
 }
@@ -904,8 +903,8 @@ impl ColumnIndexBuilder {
             null_pages: Vec::new(),
             min_values: Vec::new(),
             max_values: Vec::new(),
-            boundary_order: BoundaryOrder::UNORDERED,
             null_counts: Vec::new(),
+            boundary_order: BoundaryOrder::UNORDERED,
             valid: true,
         }
     }
@@ -921,6 +920,10 @@ impl ColumnIndexBuilder {
         self.min_values.push(min_value);
         self.max_values.push(max_value);
         self.null_counts.push(null_count);
+    }
+
+    pub fn set_boundary_order(&mut self, boundary_order: BoundaryOrder) {
+        self.boundary_order = boundary_order;
     }
 
     pub fn to_invalid(&mut self) {
