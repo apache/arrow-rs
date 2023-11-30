@@ -1540,6 +1540,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "memmap")]
     fn test_projection_array_values_memmap() {
         // define schema
         let schema = create_test_projection_schema();
