@@ -332,7 +332,10 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         // If only computing chunk-level statistics compute them here, page-level statistics
         // are computed in [`Self::write_mini_batch`] and used to update chunk statistics in
         // [`Self::add_data_page`]
-        if self.statistics_enabled == EnabledStatistics::Chunk {
+        if self.statistics_enabled == EnabledStatistics::Chunk
+            // INTERVAL has undefined sort order, so don't write min/max stats for it
+            && self.descr.converted_type() != ConvertedType::INTERVAL
+        {
             match (min, max) {
                 (Some(min), Some(max)) => {
                     update_min(&self.descr, min, &mut self.column_metrics.min_column_value);
@@ -1111,7 +1114,6 @@ fn is_nan<T: ParquetValueType>(descr: &ColumnDescriptor, val: &T) -> bool {
 ///
 /// If `cur` is `None`, sets `cur` to `Some(val)`, otherwise calls `should_update` with
 /// the value of `cur`, and updates `cur` to `Some(val)` if it returns `true`
-
 fn update_stat<T: ParquetValueType, F>(
     descr: &ColumnDescriptor,
     val: &T,
@@ -3160,6 +3162,30 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn test_interval_stats_should_not_have_min_max() {
+        let input = [
+            vec![0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+            vec![0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
+            vec![0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2],
+        ]
+        .into_iter()
+        .map(|s| ByteArray::from(s).into())
+        .collect::<Vec<_>>();
+
+        let page_writer = get_test_page_writer();
+        let mut writer = get_test_interval_column_writer(page_writer);
+        writer.write_batch(&input, None, None).unwrap();
+
+        let metadata = writer.close().unwrap().metadata;
+        let stats = if let Some(Statistics::FixedLenByteArray(stats)) = metadata.statistics() {
+            stats.clone()
+        } else {
+            panic!("metadata missing statistics");
+        };
+        assert!(!stats.has_min_max_set());
+    }
+
     fn write_multiple_pages<T: DataType>(
         column_descr: &Arc<ColumnDescriptor>,
         pages: &[&[Option<T::T>]],
@@ -3489,8 +3515,7 @@ mod tests {
         values: &[FixedLenByteArray],
     ) -> ValueStatistics<FixedLenByteArray> {
         let page_writer = get_test_page_writer();
-        let props = Default::default();
-        let mut writer = get_test_float16_column_writer(page_writer, 0, 0, props);
+        let mut writer = get_test_float16_column_writer(page_writer);
         writer.write_batch(values, None, None).unwrap();
 
         let metadata = writer.close().unwrap().metadata;
@@ -3503,12 +3528,9 @@ mod tests {
 
     fn get_test_float16_column_writer(
         page_writer: Box<dyn PageWriter>,
-        max_def_level: i16,
-        max_rep_level: i16,
-        props: WriterPropertiesPtr,
     ) -> ColumnWriterImpl<'static, FixedLenByteArrayType> {
-        let descr = Arc::new(get_test_float16_column_descr(max_def_level, max_rep_level));
-        let column_writer = get_column_writer(descr, props, page_writer);
+        let descr = Arc::new(get_test_float16_column_descr(0, 0));
+        let column_writer = get_column_writer(descr, Default::default(), page_writer);
         get_typed_column_writer::<FixedLenByteArrayType>(column_writer)
     }
 
@@ -3521,6 +3543,25 @@ mod tests {
                 .build()
                 .unwrap();
         ColumnDescriptor::new(Arc::new(tpe), max_def_level, max_rep_level, path)
+    }
+
+    fn get_test_interval_column_writer(
+        page_writer: Box<dyn PageWriter>,
+    ) -> ColumnWriterImpl<'static, FixedLenByteArrayType> {
+        let descr = Arc::new(get_test_interval_column_descr());
+        let column_writer = get_column_writer(descr, Default::default(), page_writer);
+        get_typed_column_writer::<FixedLenByteArrayType>(column_writer)
+    }
+
+    fn get_test_interval_column_descr() -> ColumnDescriptor {
+        let path = ColumnPath::from("col");
+        let tpe =
+            SchemaType::primitive_type_builder("col", FixedLenByteArrayType::get_physical_type())
+                .with_length(12)
+                .with_converted_type(ConvertedType::INTERVAL)
+                .build()
+                .unwrap();
+        ColumnDescriptor::new(Arc::new(tpe), 0, 0, path)
     }
 
     /// Returns column writer for UINT32 Column provided as ConvertedType only
