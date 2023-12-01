@@ -2737,7 +2737,7 @@ mod tests {
         let builder = WriterProperties::builder().set_column_index_truncate_length(Some(1));
         let props = Arc::new(builder.build());
         let page_writer = get_test_page_writer();
-        let mut writer = get_test_float16_column_writer(page_writer, 0, 0, props);
+        let mut writer = get_test_float16_column_writer(page_writer, props);
 
         let expected_value = f16::PI.to_le_bytes().to_vec();
         let data = vec![ByteArray::from(expected_value.clone()).into()];
@@ -3515,7 +3515,7 @@ mod tests {
         values: &[FixedLenByteArray],
     ) -> ValueStatistics<FixedLenByteArray> {
         let page_writer = get_test_page_writer();
-        let mut writer = get_test_float16_column_writer(page_writer);
+        let mut writer = get_test_float16_column_writer(page_writer, Default::default());
         writer.write_batch(values, None, None).unwrap();
 
         let metadata = writer.close().unwrap().metadata;
@@ -3528,9 +3528,10 @@ mod tests {
 
     fn get_test_float16_column_writer(
         page_writer: Box<dyn PageWriter>,
+        props: WriterPropertiesPtr,
     ) -> ColumnWriterImpl<'static, FixedLenByteArrayType> {
         let descr = Arc::new(get_test_float16_column_descr(0, 0));
-        let column_writer = get_column_writer(descr, Default::default(), page_writer);
+        let column_writer = get_column_writer(descr, props, page_writer);
         get_typed_column_writer::<FixedLenByteArrayType>(column_writer)
     }
 
