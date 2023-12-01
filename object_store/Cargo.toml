@@ -52,7 +52,7 @@ serde_json = { version = "1.0", default-features = false, optional = true }
 rand = { version = "0.8", default-features = false, features = ["std", "std_rng"], optional = true }
 reqwest = { version = "0.11", default-features = false, features = ["rustls-tls-native-roots"], optional = true }
 ring = { version = "0.17", default-features = false, features = ["std"], optional = true }
-rustls-pemfile = { version = "1.0", default-features = false, optional = true }
+rustls-pemfile = { version = "2.0", default-features = false, optional = true }
 tokio = { version = "1.25.0", features = ["sync", "macros", "rt", "time", "io-util"] }
 
 [target.'cfg(target_family="unix")'.dev-dependencies]
