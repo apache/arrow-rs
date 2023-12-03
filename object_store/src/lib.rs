@@ -119,6 +119,7 @@
 //! application complexity.
 //!
 //! ```no_run
+//! # #[cfg(feature = "aws")] {
 //! # use url::Url;
 //! # use object_store::{parse_url, parse_url_opts};
 //! # use object_store::aws::{AmazonS3, AmazonS3Builder};
@@ -140,6 +141,7 @@
 //! let url = Url::parse("https://ACCOUNT_ID.r2.cloudflarestorage.com/bucket/path").unwrap();
 //! let (store, path) = parse_url(&url).unwrap();
 //! assert_eq!(path.as_ref(), "path");
+//! # }
 //! ```
 //!
 //! [PyArrow FileSystem]: https://arrow.apache.org/docs/python/generated/pyarrow.fs.FileSystem.html#pyarrow.fs.FileSystem.from_uri
