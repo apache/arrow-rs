@@ -1030,7 +1030,6 @@ impl<R: Read> RecordBatchReader for StreamReader<R> {
 }
 
 /// Arrow Memmap reader. It does not copy the underlying buffers.
-#[cfg(feature = "memmap")]
 pub struct BufferReader<A> {
     /// The memmap we're reading from
     buffer: Arc<A>,
@@ -1064,7 +1063,6 @@ pub struct BufferReader<A> {
     projection: Option<(Vec<usize>, Schema)>,
 }
 
-#[cfg(feature = "memmap")]
 impl<A> fmt::Debug for BufferReader<A> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> std::result::Result<(), fmt::Error> {
         f.debug_struct("FileReader<R>")
@@ -1080,7 +1078,6 @@ impl<A> fmt::Debug for BufferReader<A> {
     }
 }
 
-#[cfg(feature = "memmap")]
 impl<A: Deref<Target = [u8]> + Allocation + 'static> BufferReader<A> {
     /// Try to create a new file reader
     ///
@@ -1171,7 +1168,7 @@ impl<A: Deref<Target = [u8]> + Allocation + 'static> BufferReader<A> {
                         // Safety: The memmap is allocated and held. We've just checked that it's of the correct lenght.
                         let buf = unsafe {
                             Buffer::from_custom_allocation(
-                                buf_slice.get(0).expect("Length is non-zero").into(),
+                                buf_slice.first().expect("Length is non-zero").into(),
                                 len,
                                 buffer.clone(),
                             )
@@ -1292,7 +1289,7 @@ impl<A: Deref<Target = [u8]> + Allocation + 'static> BufferReader<A> {
                 // Safety: The memmap is allocated and held. We've just checked that it's of the correct lenght.
                 let buf = unsafe {
                     Buffer::from_custom_allocation(
-                        buf_slice.get(0).expect("Length is non-zero").into(),
+                        buf_slice.first().expect("Length is non-zero").into(),
                         len,
                         self.buffer.clone(),
                     )
@@ -1333,7 +1330,6 @@ impl<A: Deref<Target = [u8]> + Allocation + 'static> BufferReader<A> {
     }
 }
 
-#[cfg(feature = "memmap")]
 impl<A: Deref<Target = [u8]> + Allocation + 'static> Iterator for BufferReader<A> {
     type Item = Result<RecordBatch, ArrowError>;
 
