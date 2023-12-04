@@ -20,14 +20,13 @@
 //! The `FileReader` and `StreamReader` have similar interfaces,
 //! however the `FileReader` expects a reader that supports `Seek`ing
 
+use arrow_buffer::alloc::Allocation;
 use flatbuffers::VectorIter;
 use std::collections::HashMap;
 use std::fmt;
 use std::io::{BufReader, Read, Seek, SeekFrom};
+use std::ops::Deref;
 use std::sync::Arc;
-
-#[cfg(feature = "memmap")]
-use memmap2::Mmap;
 
 use arrow_array::*;
 use arrow_buffer::{Buffer, MutableBuffer};
@@ -1032,9 +1031,9 @@ impl<R: Read> RecordBatchReader for StreamReader<R> {
 
 /// Arrow Memmap reader. It does not copy the underlying buffers.
 #[cfg(feature = "memmap")]
-pub struct MemmapReader {
+pub struct BufferReader<A> {
     /// The memmap we're reading from
-    memmap: Arc<Mmap>,
+    buffer: Arc<A>,
 
     /// The schema that is read from the file header
     schema: SchemaRef,
@@ -1066,7 +1065,7 @@ pub struct MemmapReader {
 }
 
 #[cfg(feature = "memmap")]
-impl fmt::Debug for MemmapReader {
+impl<A> fmt::Debug for BufferReader<A> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> std::result::Result<(), fmt::Error> {
         f.debug_struct("FileReader<R>")
             .field("reader", &"BufReader<..>")
@@ -1082,14 +1081,13 @@ impl fmt::Debug for MemmapReader {
 }
 
 #[cfg(feature = "memmap")]
-impl MemmapReader {
+impl<A: Deref<Target = [u8]> + Allocation + 'static> BufferReader<A> {
     /// Try to create a new file reader
     ///
     /// Returns errors if the file does not meet the Arrow Format header and footer
     /// requirements
-    pub fn try_new(memmap: Mmap, projection: Option<Vec<usize>>) -> Result<Self, ArrowError> {
-        let memmap = Arc::new(memmap);
-        let mut reader = std::io::Cursor::new(&memmap[..]);
+    pub fn try_new(buffer: Arc<A>, projection: Option<Vec<usize>>) -> Result<Self, ArrowError> {
+        let mut reader = std::io::Cursor::new(&buffer[..]);
 
         let mut magic_buffer: [u8; 6] = [0; 6];
         reader.read_exact(&mut magic_buffer)?;
@@ -1169,13 +1167,13 @@ impl MemmapReader {
                         let len = message.bodyLength() as usize;
                         assert_ne!(len, 0);
 
-                        let buf_slice = &memmap[start..(start + len)];
+                        let buf_slice = &buffer[start..(start + len)];
                         // Safety: The memmap is allocated and held. We've just checked that it's of the correct lenght.
                         let buf = unsafe {
                             Buffer::from_custom_allocation(
                                 buf_slice.get(0).expect("Length is non-zero").into(),
                                 len,
-                                memmap.clone(),
+                                buffer.clone(),
                             )
                         };
 
@@ -1204,7 +1202,7 @@ impl MemmapReader {
         };
 
         Ok(Self {
-            memmap,
+            buffer,
             schema: Arc::new(schema),
             blocks: blocks.iter().copied().collect(),
             current_block: 0,
@@ -1250,7 +1248,7 @@ impl MemmapReader {
         let block = self.blocks[self.current_block];
         self.current_block += 1;
 
-        let mut reader = std::io::Cursor::new(&self.memmap[..]);
+        let mut reader = std::io::Cursor::new(&self.buffer[..]);
         // read length
         reader.seek(SeekFrom::Start(block.offset() as u64))?;
         let mut meta_buf = [0; 4];
@@ -1286,7 +1284,7 @@ impl MemmapReader {
                 })?;
                 // read the block that makes up the record batch into a buffer
                 let mut buf_slice =
-                    &self.memmap[block.offset() as usize + block.metaDataLength() as usize..];
+                    &self.buffer[block.offset() as usize + block.metaDataLength() as usize..];
                 let len = message.bodyLength() as usize;
                 buf_slice = &buf_slice[..len];
                 assert_ne!(0, len);
@@ -1296,7 +1294,7 @@ impl MemmapReader {
                     Buffer::from_custom_allocation(
                         buf_slice.get(0).expect("Length is non-zero").into(),
                         len,
-                        self.memmap.clone(),
+                        self.buffer.clone(),
                     )
                 };
 
@@ -1327,16 +1325,16 @@ impl MemmapReader {
         }
     }
 
-    /// Gets a reference to the underlying reader.
+    /// Gets a reference to the underlying buffer.
     ///
     /// It is inadvisable to directly read from the underlying reader.
-    pub fn get_ref(&self) -> &Mmap {
-        &self.memmap
+    pub fn get_ref(&self) -> &Arc<A> {
+        &self.buffer
     }
 }
 
 #[cfg(feature = "memmap")]
-impl Iterator for MemmapReader {
+impl<A: Deref<Target = [u8]> + Allocation + 'static> Iterator for BufferReader<A> {
     type Item = Result<RecordBatch, ArrowError>;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -1350,7 +1348,7 @@ impl Iterator for MemmapReader {
 }
 
 #[cfg(feature = "memmap")]
-impl RecordBatchReader for MemmapReader {
+impl<A: Deref<Target = [u8]> + Allocation + 'static> RecordBatchReader for BufferReader<A> {
     fn schema(&self) -> SchemaRef {
         self.schema.clone()
     }
@@ -1549,19 +1547,17 @@ mod tests {
         let batch = create_test_projection_batch_data(&schema);
 
         // write record batch in IPC format
-        let mut file = tempfile::tempfile().unwrap();
+        let mut buf = Vec::new();
         {
-            let mut writer = crate::writer::FileWriter::try_new(&mut file, &schema).unwrap();
+            let mut writer = crate::writer::FileWriter::try_new(&mut buf, &schema).unwrap();
             writer.write(&batch).unwrap();
             writer.finish().unwrap();
         }
-
-        file.rewind().unwrap();
+        let memmap = Arc::new(buf);
         // read record batch with projection
         for index in 0..12 {
             let projection = vec![index];
-            let reader =
-                MemmapReader::try_new(unsafe { Mmap::map(&file).unwrap() }, Some(projection));
+            let reader = BufferReader::try_new(memmap.clone(), Some(projection));
             let read_batch = reader.unwrap().next().unwrap().unwrap();
             let projected_column = read_batch.column(0);
             let expected_column = batch.column(index);
@@ -1572,8 +1568,7 @@ mod tests {
 
         {
             // read record batch with reversed projection
-            let reader =
-                MemmapReader::try_new(unsafe { Mmap::map(&file).unwrap() }, Some(vec![3, 2, 1]));
+            let reader = BufferReader::try_new(memmap, Some(vec![3, 2, 1]));
 
             let read_batch = reader.unwrap().next().unwrap().unwrap();
             let expected_batch = batch.project(&[3, 2, 1]).unwrap();
