@@ -699,7 +699,9 @@ where
                 .ok_or_else(|| ArrowError::ComputeError("Cast to usize failed".to_string()))?;
             let start = list.value_offset(index) as <UInt32Type as ArrowPrimitiveType>::Native;
 
-            values.extend(start..start + length);
+            values.extend((start..start + length).map(|idx| Some(idx)));
+        } else {
+            values.extend((0..length).map(|_| None));
         }
     }
 
@@ -1983,6 +1985,23 @@ mod tests {
             .into_iter()
             .collect::<Vec<_>>();
         assert_eq!(&values, &[Some(23), Some(4), None, None])
+    }
+
+    #[test]
+    fn test_take_fixed_size_list_null_indices() {
+        let indices = Int32Array::new(vec![0, 1].into(), Some(NullBuffer::from(vec![true, false])));
+        let values = Arc::new(Int32Array::from(vec![0, 1, 2, 3]));
+        let arr_field = Arc::new(Field::new("item", values.data_type().clone(), true));
+        let values = FixedSizeListArray::try_new(arr_field, 2, values, None).unwrap();
+
+        let r = take(&values, &indices, None).unwrap();
+        let values = r
+            .as_fixed_size_list()
+            .values()
+            .as_primitive::<Int32Type>()
+            .into_iter()
+            .collect::<Vec<_>>();
+        assert_eq!(&values, &[Some(0), Some(1), None, None])
     }
 
     #[test]
