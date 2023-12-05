@@ -19,7 +19,7 @@
 
 use std::sync::Arc;
 
-use arrow_array::builder::BufferBuilder;
+use arrow_array::builder::{BufferBuilder, UInt32Builder};
 use arrow_array::cast::AsArray;
 use arrow_array::types::*;
 use arrow_array::*;
@@ -689,7 +689,7 @@ fn take_value_indices_from_fixed_size_list<IndexType>(
 where
     IndexType: ArrowPrimitiveType,
 {
-    let mut values = Vec::with_capacity(length as usize * indices.len());
+    let mut values = UInt32Builder::with_capacity(length as usize * indices.len());
 
     for i in 0..indices.len() {
         if indices.is_valid(i) {
@@ -705,7 +705,7 @@ where
         }
     }
 
-    Ok(PrimitiveArray::<UInt32Type>::from(values))
+    Ok(values.finish())
 }
 
 /// To avoid generating take implementations for every index type, instead we
