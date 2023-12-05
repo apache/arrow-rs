@@ -699,9 +699,12 @@ where
                 .ok_or_else(|| ArrowError::ComputeError("Cast to usize failed".to_string()))?;
             let start = list.value_offset(index) as <UInt32Type as ArrowPrimitiveType>::Native;
 
-            values.extend((start..start + length).map(Some));
+            // Safety: Range always has known length.
+            unsafe {
+                values.append_trusted_len_iter(start..start + length);
+            }
         } else {
-            values.extend((0..length).map(|_| None));
+            values.append_nulls(length);
         }
     }
 
