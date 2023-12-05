@@ -699,7 +699,7 @@ where
                 .ok_or_else(|| ArrowError::ComputeError("Cast to usize failed".to_string()))?;
             let start = list.value_offset(index) as <UInt32Type as ArrowPrimitiveType>::Native;
 
-            values.extend((start..start + length).map(|idx| Some(idx)));
+            values.extend((start..start + length).map(Some));
         } else {
             values.extend((0..length).map(|_| None));
         }
