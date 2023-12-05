@@ -1989,7 +1989,7 @@ mod tests {
 
     #[test]
     fn test_take_fixed_size_list_null_indices() {
-        let indices = Int32Array::new(vec![0, 1].into(), Some(NullBuffer::from(vec![true, false])));
+        let indices = Int32Array::from_iter([Some(1), None]);
         let values = Arc::new(Int32Array::from(vec![0, 1, 2, 3]));
         let arr_field = Arc::new(Field::new("item", values.data_type().clone(), true));
         let values = FixedSizeListArray::try_new(arr_field, 2, values, None).unwrap();
@@ -1999,9 +1999,8 @@ mod tests {
             .as_fixed_size_list()
             .values()
             .as_primitive::<Int32Type>()
-            .into_iter()
-            .collect::<Vec<_>>();
-        assert_eq!(&values, &[Some(0), Some(1), None, None])
+            .values();
+        assert_eq!(values, &[Some(0), Some(1), None, None])
     }
 
     #[test]
