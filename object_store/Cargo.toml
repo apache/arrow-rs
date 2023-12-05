@@ -67,10 +67,10 @@ http = ["cloud"]
 tls-webpki-roots = ["reqwest?/rustls-tls-webpki-roots"]
 
 [dev-dependencies] # In alphabetical order
-tempfile = "3.1.0"
 futures-test = "0.3"
-rand = "0.8"
 hyper = { version = "0.14.24", features = ["server"] }
+rand = "0.8"
+tempfile = "3.1.0"
 
 [[test]]
 name = "get_range_file"
