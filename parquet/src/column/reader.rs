@@ -607,10 +607,7 @@ fn parse_v1_level(
         }
         Encoding::BIT_PACKED => {
             let bit_width = num_required_bits(max_level as u64);
-            let num_bytes = ceil(
-                (num_buffered_values as usize * bit_width as usize) as i64,
-                8,
-            ) as usize;
+            let num_bytes = ceil(num_buffered_values as usize * bit_width as usize, 8);
             Ok((num_bytes, buf.slice(..num_bytes)))
         }
         _ => Err(general_err!("invalid level encoding: {}", encoding)),
