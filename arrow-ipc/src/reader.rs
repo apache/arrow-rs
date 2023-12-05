@@ -20,12 +20,11 @@
 //! The `FileReader` and `StreamReader` have similar interfaces,
 //! however the `FileReader` expects a reader that supports `Seek`ing
 
-use arrow_buffer::alloc::Allocation;
 use flatbuffers::VectorIter;
 use std::collections::HashMap;
-use std::fmt;
 use std::io::{BufReader, Read, Seek, SeekFrom};
 use std::sync::Arc;
+use std::{fmt, io};
 
 use arrow_array::*;
 use arrow_buffer::{Buffer, MutableBuffer};
@@ -33,7 +32,6 @@ use arrow_data::ArrayData;
 use arrow_schema::*;
 
 use crate::compression::CompressionCodec;
-use crate::BodyCompression;
 use crate::{FieldNode, MetadataVersion, CONTINUATION_MARKER};
 use DataType::*;
 
@@ -500,13 +498,67 @@ pub fn read_dictionary(
     Ok(())
 }
 
-/// Arrow File reader
-pub struct FileReader<R: Read + Seek> {
-    /// Buffered file reader that supports reading and seeking
-    reader: BufReader<R>,
+pub trait BufferRead {
+    fn read_buffer(&mut self, len: usize) -> Result<Buffer, ArrowError>;
+}
 
-    /// The buffer we're reading from, if we're reading from a buffer. This could be a memmap or a Vec<u8>.
-    buffer: Option<Buffer>,
+impl<R: Read + Seek> BufferRead for BufReader<R> {
+    fn read_buffer(&mut self, len: usize) -> Result<Buffer, ArrowError> {
+        let mut buf = MutableBuffer::from_len_zeroed(len);
+        self.read_exact(&mut buf)?;
+        Ok(buf.into())
+    }
+}
+
+struct BufferReader {
+    buffer: Buffer,
+    position: u64,
+}
+
+impl Seek for BufferReader {
+    fn seek(&mut self, style: SeekFrom) -> io::Result<u64> {
+        let (base_pos, offset) = match style {
+            SeekFrom::Start(n) => {
+                self.position = n;
+                return Ok(n);
+            }
+            SeekFrom::End(n) => (self.buffer.as_ref().len() as u64, n),
+            SeekFrom::Current(n) => (self.position, n),
+        };
+        match base_pos.checked_add_signed(offset) {
+            Some(n) => {
+                self.position = n;
+                Ok(self.position)
+            }
+            None => Err(io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "invalid seek to a negative or overflowing position",
+            )),
+        }
+    }
+}
+
+impl Read for BufferReader {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        let mut remaining_slice = &self.buffer[self.position as usize..];
+        let n = Read::read(&mut remaining_slice, buf)?;
+        self.position += n as u64;
+        Ok(n)
+    }
+}
+
+impl BufferRead for BufferReader {
+    fn read_buffer(&mut self, len: usize) -> Result<Buffer, ArrowError> {
+        let buf = self.buffer.slice_with_length(self.position as usize, len);
+        self.position += len as u64;
+        Ok(buf)
+    }
+}
+
+/// Arrow File reader
+pub struct FileReader<R: BufferRead> {
+    /// Buffered file reader that supports reading and seeking
+    reader: R,
 
     /// The schema that is read from the file header
     schema: SchemaRef,
@@ -537,7 +589,7 @@ pub struct FileReader<R: Read + Seek> {
     projection: Option<(Vec<usize>, Schema)>,
 }
 
-impl<R: Read + Seek> fmt::Debug for FileReader<R> {
+impl<R: BufferRead> fmt::Debug for FileReader<R> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> std::result::Result<(), fmt::Error> {
         f.debug_struct("FileReader<R>")
             .field("reader", &"BufReader<..>")
@@ -553,27 +605,53 @@ impl<R: Read + Seek> fmt::Debug for FileReader<R> {
     }
 }
 
-impl<R: Read + Seek> FileReader<R> {
+impl<R: Read + Seek> FileReader<BufReader<R>> {
     /// Try to create a new file reader
     ///
     /// Returns errors if the file does not meet the Arrow Format header and footer
     /// requirements
     pub fn try_new(reader: R, projection: Option<Vec<usize>>) -> Result<Self, ArrowError> {
-        Self::try_new_inter(reader, projection, None)
+        Self::try_new_inter(BufReader::new(reader), projection)
     }
 
+    /// Gets a reference to the underlying reader.
+    ///
+    /// It is inadvisable to directly read from the underlying reader.
+    pub fn get_ref(&self) -> &R {
+        self.reader.get_ref()
+    }
+
+    /// Gets a mutable reference to the underlying reader.
+    ///
+    /// It is inadvisable to directly read from the underlying reader.
+    pub fn get_mut(&mut self) -> &mut R {
+        self.reader.get_mut()
+    }
+}
+
+impl FileReader<BufferReader> {
+    pub fn try_new_map(buffer: Buffer, projection: Option<Vec<usize>>) -> Result<Self, ArrowError> {
+        let reader = BufferReader {
+            buffer,
+            position: 0,
+        };
+        Self::try_new_inter(reader, projection)
+    }
+
+    pub fn get_buf(&self) -> &Buffer {
+        &self.reader.buffer
+    }
+}
+
+impl<R: Read + Seek + BufferRead> FileReader<R> {
     /// Try to create a new file reader
     ///
     /// Returns errors if the file does not meet the Arrow Format header and footer
     /// requirements
     ///
     /// If a buffer is provided, then the reader needs to be a io::Cursor wrapped around the buffer
-    fn try_new_inter(
-        reader: R,
-        projection: Option<Vec<usize>>,
-        buffer: Option<Buffer>,
-    ) -> Result<Self, ArrowError> {
-        let mut reader = BufReader::new(reader);
+    fn try_new_inter(mut reader: R, projection: Option<Vec<usize>>) -> Result<Self, ArrowError> {
+        // check if header and footer contain correct magic bytes
         // check if header and footer contain correct magic bytes
         let mut magic_buffer: [u8; 6] = [0; 6];
         reader.read_exact(&mut magic_buffer)?;
@@ -645,23 +723,12 @@ impl<R: Read + Seek> FileReader<R> {
 
                 match message.header_type() {
                     crate::MessageHeader::DictionaryBatch => {
+                        // read the block that makes up the dictionary batch into a buffer
                         let batch = message.header_as_dictionary_batch().unwrap();
-                        let buf = if let Some(buffer) = &buffer {
-                            // Don't need to check compression as dictionaries aren't compressed.
-                            buffer.slice_with_length(
-                                block.offset() as usize + block.metaDataLength() as usize,
-                                message.bodyLength() as usize,
-                            )
-                        } else {
-                            // read the block that makes up the dictionary batch into a buffer
-                            let mut buf =
-                                MutableBuffer::from_len_zeroed(message.bodyLength() as usize);
-                            reader.seek(SeekFrom::Start(
-                                block.offset() as u64 + block.metaDataLength() as u64,
-                            ))?;
-                            reader.read_exact(&mut buf)?;
-                            buf.into()
-                        };
+                        reader.seek(SeekFrom::Start(
+                            block.offset() as u64 + block.metaDataLength() as u64,
+                        ))?;
+                        let buf = reader.read_buffer(message.bodyLength() as usize)?;
 
                         read_dictionary(
                             &buf,
@@ -689,7 +756,6 @@ impl<R: Read + Seek> FileReader<R> {
 
         Ok(Self {
             reader,
-            buffer,
             schema: Arc::new(schema),
             blocks: blocks.iter().copied().collect(),
             current_block: 0,
@@ -769,30 +835,11 @@ impl<R: Read + Seek> FileReader<R> {
                     ArrowError::IpcError("Unable to read IPC message as record batch".to_string())
                 })?;
 
-                let buf = if let Some(buffer) = &self.buffer {
-                    // Check if the underlying data in the buffer is compressed and cannot be memmaped. It can still be read through the normal methods
-                    let batch_compression: Option<BodyCompression<'_>> = batch.compression();
-                    let compression: Option<CompressionCodec> = batch_compression
-                        .map(|batch_compression| batch_compression.codec().try_into())
-                        .transpose()?;
-                    if compression.is_some() {
-                        return Err(ArrowError::MemoryError(
-                            "Could not memmap IPC message as the data is compressed".to_string(),
-                        ));
-                    }
-                    buffer.slice_with_length(
-                        block.offset() as usize + block.metaDataLength() as usize,
-                        message.bodyLength() as usize,
-                    )
-                } else {
-                    // read the block that makes up the dictionary batch into a buffer
-                    let mut buf = MutableBuffer::from_len_zeroed(message.bodyLength() as usize);
-                    self.reader.seek(SeekFrom::Start(
-                        block.offset() as u64 + block.metaDataLength() as u64,
-                    ))?;
-                    self.reader.read_exact(&mut buf)?;
-                    buf.into()
-                };
+                // read the block that makes up the dictionary batch into a buffer
+                self.reader.seek(SeekFrom::Start(
+                    block.offset() as u64 + block.metaDataLength() as u64,
+                ))?;
+                let buf = self.reader.read_buffer(message.bodyLength() as usize)?;
 
                 read_record_batch(
                     &buf,
@@ -810,23 +857,9 @@ impl<R: Read + Seek> FileReader<R> {
             ))),
         }
     }
-
-    /// Gets a reference to the underlying reader.
-    ///
-    /// It is inadvisable to directly read from the underlying reader.
-    pub fn get_ref(&self) -> &R {
-        self.reader.get_ref()
-    }
-
-    /// Gets a mutable reference to the underlying reader.
-    ///
-    /// It is inadvisable to directly read from the underlying reader.
-    pub fn get_mut(&mut self) -> &mut R {
-        self.reader.get_mut()
-    }
 }
 
-impl<R: Read + Seek> Iterator for FileReader<R> {
+impl<R: Read + Seek + BufferRead> Iterator for FileReader<R> {
     type Item = Result<RecordBatch, ArrowError>;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -839,35 +872,9 @@ impl<R: Read + Seek> Iterator for FileReader<R> {
     }
 }
 
-impl<R: Read + Seek> RecordBatchReader for FileReader<R> {
+impl<R: Read + Seek + BufferRead> RecordBatchReader for FileReader<R> {
     fn schema(&self) -> SchemaRef {
         self.schema.clone()
-    }
-}
-
-pub type BufferReader<A> = FileReader<std::io::Cursor<Arc<A>>>;
-
-impl<A: Allocation + 'static> BufferReader<A>
-where
-    Arc<A>: AsRef<[u8]>,
-{
-    /// Reads in an IPC buffer without copying the arrow data contained within.
-    ///
-    /// Returns errors if the buffer does not meet the Arrow Format header and footer
-    /// requirements or if any part of the IPC buffer is compressed.
-    pub fn try_new_with_buffer(
-        buffer: Arc<A>,
-        projection: Option<Vec<usize>>,
-    ) -> Result<Self, ArrowError> {
-        let reader = std::io::Cursor::new(buffer.clone());
-        let buffer = unsafe {
-            Buffer::from_custom_allocation(
-                buffer.as_ref().first().expect("Length is non-zero").into(),
-                buffer.as_ref().len(),
-                buffer,
-            )
-        };
-        Self::try_new_inter(reader, projection, Some(buffer))
     }
 }
 
@@ -1285,7 +1292,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "memmap")]
     fn test_projection_array_values_memmap() {
         // define schema
         let schema = create_test_projection_schema();
@@ -1300,11 +1306,11 @@ mod tests {
             writer.write(&batch).unwrap();
             writer.finish().unwrap();
         }
-        let memmap = Arc::new(buf);
+        let memmap = Buffer::from_vec(buf);
         // read record batch with projection
         for index in 0..12 {
             let projection = vec![index];
-            let reader = BufferReader::try_new(memmap.clone(), Some(projection));
+            let reader = FileReader::try_new_map(memmap.clone(), Some(projection));
             let read_batch = reader.unwrap().next().unwrap().unwrap();
             let projected_column = read_batch.column(0);
             let expected_column = batch.column(index);
@@ -1315,7 +1321,7 @@ mod tests {
 
         {
             // read record batch with reversed projection
-            let reader = BufferReader::try_new(memmap, Some(vec![3, 2, 1]));
+            let reader = FileReader::try_new_map(memmap, Some(vec![3, 2, 1]));
 
             let read_batch = reader.unwrap().next().unwrap().unwrap();
             let expected_batch = batch.project(&[3, 2, 1]).unwrap();
@@ -1394,6 +1400,16 @@ mod tests {
         drop(writer);
 
         let mut reader = FileReader::try_new(std::io::Cursor::new(buf), None).unwrap();
+        reader.next().unwrap().unwrap()
+    }
+
+    fn roundtrip_ipc_map(rb: &RecordBatch) -> RecordBatch {
+        let mut buf = Vec::new();
+        let mut writer = crate::writer::FileWriter::try_new(&mut buf, &rb.schema()).unwrap();
+        writer.write(rb).unwrap();
+        writer.finish().unwrap();
+        drop(writer);
+        let mut reader = FileReader::try_new_map(buf.into(), None).unwrap();
         reader.next().unwrap().unwrap()
     }
 
@@ -1476,6 +1492,9 @@ mod tests {
         let union2 = rb2.column(0);
 
         assert_eq!(union1, union2);
+
+        let rb3 = roundtrip_ipc_map(&rb);
+        assert_eq!(rb2, rb3);
     }
 
     #[test]
