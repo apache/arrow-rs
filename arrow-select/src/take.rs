@@ -704,7 +704,7 @@ where
                 values.append_trusted_len_iter(start..start + length);
             }
         } else {
-            values.append_nulls(length);
+            values.append_nulls(length as usize);
         }
     }
 
