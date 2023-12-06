@@ -23,24 +23,21 @@
 //! [here](https://doc.rust-lang.org/stable/core/arch/) for more information.
 //!
 
+use std::ops::Not;
+
 use arrow_array::cast::AsArray;
 use arrow_array::types::{
-    ArrowPrimitiveType, ByteArrayType, Int128Type, Int64Type, IntervalDayTimeType,
-    IntervalMonthDayNanoType,
+    ByteArrayType, Int128Type, Int64Type, IntervalDayTimeType, IntervalMonthDayNanoType,
 };
 use arrow_array::{
-    downcast_primitive_array, downcast_primitive_array_cmp, AnyDictionaryArray, Array,
-    ArrowNativeTypeOp, BooleanArray, Datum, FixedSizeBinaryArray, GenericByteArray, PrimitiveArray,
+    downcast_primitive_array_cmp, AnyDictionaryArray, Array, ArrowNativeTypeOp, BooleanArray,
+    Datum, FixedSizeBinaryArray, GenericByteArray, PrimitiveArray,
 };
 use arrow_buffer::bit_util::ceil;
 use arrow_buffer::{BooleanBuffer, MutableBuffer, NullBuffer};
 use arrow_schema::ArrowError;
 use arrow_schema::IntervalUnit;
 use arrow_select::take::take;
-use std::ops::Not;
-
-const MILLIS_PER_DAY: i64 = 86_400_000;
-const NANOS_PER_DAY: i128 = 86_400_000_000_000;
 
 #[derive(Debug, Copy, Clone)]
 enum Op {
@@ -211,9 +208,6 @@ fn compare_op(op: Op, lhs: &dyn Datum, rhs: &dyn Datum) -> Result<BooleanArray, 
         )));
     }
 
-    println!("{:?}", l);
-
-    println!("{:?}", r);
     // Defer computation as may not be necessary
     let values = || -> BooleanBuffer {
         let d = downcast_primitive_array_cmp! {
@@ -552,6 +546,20 @@ impl<'a> ArrayOrd for &'a FixedSizeBinaryArray {
     }
 }
 
+/// Computes max or min milliseconds from a `PrimitiveArray<IntervalDayTimeType>` based on
+/// the comparison operator (`op`) and operand side (`lhs`). This function is essential for
+/// accurate interval comparison operations by considering the leap seconds.
+///
+/// # Arguments
+/// * `dt` - Reference to an array, expected to be `PrimitiveArray<IntervalDayTimeType>`.
+/// * `op` - Comparison operator.
+/// * `lhs` - Boolean indicating if the array is on the left-hand side of the operator.
+///
+/// # Returns
+/// A `PrimitiveArray<Int64Type>` with computed milliseconds values.
+///
+/// # Panics
+/// If `dt` is not a `PrimitiveArray<IntervalDayTimeType>` or if an invalid operator is used.
 #[inline]
 fn safer_interval_dt(dt: &dyn Array, op: Op, lhs: bool) -> PrimitiveArray<Int64Type> {
     match dt.as_primitive_opt::<IntervalDayTimeType>() {
@@ -562,7 +570,7 @@ fn safer_interval_dt(dt: &dyn Array, op: Op, lhs: bool) -> PrimitiveArray<Int64T
             (Op::Greater | Op::GreaterEqual, true) | (Op::Less | Op::LessEqual, false) => {
                 PrimitiveArray::<Int64Type>::from_iter(dt.iter().map(|dt| dt.map(dt_in_millis_min)))
             }
-            (Op::Equal, _) | (Op::NotEqual, _) => PrimitiveArray::<Int64Type>::from_iter(dt.iter()),
+            (Op::Equal | Op::NotEqual, _) => PrimitiveArray::<Int64Type>::from_iter(dt.iter()),
             _ => {
                 panic!(
                     "Invalid operator {:?} for Interval(IntervalDayTime) comparison",
@@ -576,6 +584,21 @@ fn safer_interval_dt(dt: &dyn Array, op: Op, lhs: bool) -> PrimitiveArray<Int64T
     }
 }
 
+/// Computes max or min nanoseconds from a `PrimitiveArray<IntervalMonthDayNanoType>` based on
+/// the comparison operator (`op`) and operand side (`lhs`). This function is crucial for
+/// precise interval comparison operations involving months and days, which can result in different
+/// number of nanoseconds depending on the timestamp.
+///
+/// # Arguments
+/// * `mdn` - Reference to an array, expected to be `PrimitiveArray<IntervalMonthDayNanoType>`.
+/// * `op` - Comparison operator.
+/// * `lhs` - Boolean indicating if the array is on the left-hand side of the operator.
+///
+/// # Returns
+/// A `PrimitiveArray<Int128Type>` with computed nanoseconds values.
+///
+/// # Panics
+/// If `mdn` is not a `PrimitiveArray<IntervalMonthDayNanoType>` or if an invalid operator is used.
 #[inline]
 fn safer_interval_mdn(mdn: &dyn Array, op: Op, lhs: bool) -> PrimitiveArray<Int128Type> {
     match mdn.as_primitive_opt::<IntervalMonthDayNanoType>() {
@@ -590,9 +613,7 @@ fn safer_interval_mdn(mdn: &dyn Array, op: Op, lhs: bool) -> PrimitiveArray<Int1
                     mdn.iter().map(|mdn| mdn.map(mdn_in_nanos_min)),
                 )
             }
-            (Op::Equal, _) | (Op::NotEqual, _) => {
-                PrimitiveArray::<Int128Type>::from_iter(mdn.iter())
-            }
+            (Op::Equal | Op::NotEqual, _) => PrimitiveArray::<Int128Type>::from_iter(mdn.iter()),
             _ => {
                 panic!("Invalid operator for Interval(IntervalMonthDayNano) comparison")
             }
@@ -603,34 +624,41 @@ fn safer_interval_mdn(mdn: &dyn Array, op: Op, lhs: bool) -> PrimitiveArray<Int1
     }
 }
 
+/// Calculates the maximum milliseconds for an `IntervalDayTimeType` interval, accounting
+/// for leap seconds by adding an extra 1000 milliseconds for each day.
 #[inline]
 fn dt_in_millis_max(dt: i64) -> i64 {
     let d = dt >> 32;
     let m = dt as i32 as i64;
-    d * (MILLIS_PER_DAY + 1_000) + m
+    d * (86_400_000 + 1_000) + m
 }
 
+/// Calculates the minimum milliseconds for an `IntervalDayTimeType` interval, excluding leap seconds.
 #[inline]
 fn dt_in_millis_min(dt: i64) -> i64 {
     let d = dt >> 32;
     let m = dt as i32 as i64;
-    d * (MILLIS_PER_DAY) + m
+    d * (86_400_000) + m
 }
 
+/// Calculates the maximum nanoseconds for an `IntervalMonthDayNanoType` interval, assuming
+/// 31 days per month and adding extra nanoseconds for longer days.
 #[inline]
 fn mdn_in_nanos_max(mdn: i128) -> i128 {
     let m = (mdn >> 96) as i32;
     let d = (mdn >> 64) as i32;
     let n = mdn as i64;
-    ((m as i128 * 31) + d as i128) * (NANOS_PER_DAY + 1_000_000_000) + n as i128
+    ((m as i128 * 31) + d as i128) * (86_400_000_000_000 + 1_000_000_000) + n as i128
 }
 
+/// Calculates the minimum nanoseconds for an `IntervalMonthDayNanoType` interval, assuming
+/// 28 days per month and excluding additional nanoseconds for longer days.
 #[inline]
 fn mdn_in_nanos_min(mdn: i128) -> i128 {
     let m = (mdn >> 96) as i32;
     let d = (mdn >> 64) as i32;
     let n = mdn as i64;
-    ((m as i128 * 28) + d as i128) * (NANOS_PER_DAY) + n as i128
+    ((m as i128 * 28) + d as i128) * (86_400_000_000_000) + n as i128
 }
 
 #[cfg(test)]

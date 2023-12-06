@@ -330,6 +330,9 @@ macro_rules! downcast_primitive {
     };
 }
 
+/// This macro functions similarly to [`downcast_primitive`], but it excludes
+/// [`arrow_schema::IntervalUnit::DayTime`] and [`arrow_schema::IntervalUnit::MonthDayNano`]
+/// because they cannot be simply cast to primitive types during a comparison operation.
 #[macro_export]
 macro_rules! downcast_primitive_cmp {
     ($($data_type:expr),+ => ($m:path $(, $args:tt)*), $($p:pat => $fallback:expr $(,)*)*) => {
@@ -428,6 +431,9 @@ macro_rules! downcast_primitive_array {
     };
 }
 
+/// This macro serves a similar function to [`downcast_primitive_array`], but it
+/// incorporates [`downcast_primitive_cmp`]. [`downcast_primitive_cmp`] is a specialized
+/// version of [`downcast_primitive`] designed specifically for comparison operations.
 #[macro_export]
 macro_rules! downcast_primitive_array_cmp {
     ($values:ident => $e:expr, $($p:pat => $fallback:expr $(,)*)*) => {
