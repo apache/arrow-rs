@@ -45,7 +45,6 @@ csv-core = { version = "0.1" }
 lazy_static = { version = "1.4", default-features = false }
 lexical-core = { version = "^0.8", default-features = false }
 regex = { version = "1.7.0", default-features = false, features = ["std", "unicode", "perf"] }
-cocoon = "0.3.3"
 
 [dev-dependencies]
 tempfile = "3.3"
