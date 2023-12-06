@@ -270,6 +270,7 @@ native_type_op!(u8);
 native_type_op!(u16);
 native_type_op!(u32);
 native_type_op!(u64);
+native_type_op!(u128);
 native_type_op!(i256, i256::ZERO, i256::ONE);
 
 macro_rules! native_type_float_op {
@@ -397,6 +398,7 @@ mod tests {
         assert!(0_u16.is_zero());
         assert!(0_u32.is_zero());
         assert!(0_u64.is_zero());
+        assert!(0_u128.is_zero());
         assert!(f16::ZERO.is_zero());
         assert!(0.0_f32.is_zero());
         assert!(0.0_f64.is_zero());
@@ -415,6 +417,7 @@ mod tests {
         assert!(8_u16.is_eq(8_u16));
         assert!(8_u32.is_eq(8_u32));
         assert!(8_u64.is_eq(8_u64));
+        assert!(8_u128.is_eq(8_u128));
         assert!(f16::from_f32(8.0).is_eq(f16::from_f32(8.0)));
         assert!(8.0_f32.is_eq(8.0_f32));
         assert!(8.0_f64.is_eq(8.0_f64));
@@ -430,6 +433,7 @@ mod tests {
         assert!(8_u16.is_ne(1_u16));
         assert!(8_u32.is_ne(1_u32));
         assert!(8_u64.is_ne(1_u64));
+        assert!(8_u128.is_ne(1_u128));
         assert!(f16::from_f32(8.0).is_ne(f16::from_f32(1.0)));
         assert!(8.0_f32.is_ne(1.0_f32));
         assert!(8.0_f64.is_ne(1.0_f64));
@@ -445,6 +449,7 @@ mod tests {
         assert!(8_u16.is_lt(10_u16));
         assert!(8_u32.is_lt(10_u32));
         assert!(8_u64.is_lt(10_u64));
+        assert!(8_u128.is_lt(10_u128));
         assert!(f16::from_f32(8.0).is_lt(f16::from_f32(10.0)));
         assert!(8.0_f32.is_lt(10.0_f32));
         assert!(8.0_f64.is_lt(10.0_f64));
@@ -460,6 +465,7 @@ mod tests {
         assert!(8_u16.is_gt(1_u16));
         assert!(8_u32.is_gt(1_u32));
         assert!(8_u64.is_gt(1_u64));
+        assert!(8_u128.is_gt(1_u128));
         assert!(f16::from_f32(8.0).is_gt(f16::from_f32(1.0)));
         assert!(8.0_f32.is_gt(1.0_f32));
         assert!(8.0_f64.is_gt(1.0_f64));
@@ -481,6 +487,7 @@ mod tests {
         assert_eq!(8_u16.add_wrapping(2_u16), 10_u16);
         assert_eq!(8_u32.add_wrapping(2_u32), 10_u32);
         assert_eq!(8_u64.add_wrapping(2_u64), 10_u64);
+        assert_eq!(8_u128.add_wrapping(2_u128), 10_u128);
         assert_eq!(
             f16::from_f32(8.0).add_wrapping(f16::from_f32(2.0)),
             f16::from_f32(10.0)
@@ -504,6 +511,7 @@ mod tests {
         assert_eq!(8_u16.add_checked(2_u16).unwrap(), 10_u16);
         assert_eq!(8_u32.add_checked(2_u32).unwrap(), 10_u32);
         assert_eq!(8_u64.add_checked(2_u64).unwrap(), 10_u64);
+        assert_eq!(8_u128.add_checked(2_u128).unwrap(), 10_u128);
         assert_eq!(
             f16::from_f32(8.0).add_checked(f16::from_f32(2.0)).unwrap(),
             f16::from_f32(10.0)
@@ -528,6 +536,7 @@ mod tests {
         assert_eq!(8_u16.sub_wrapping(2_u16), 6_u16);
         assert_eq!(8_u32.sub_wrapping(2_u32), 6_u32);
         assert_eq!(8_u64.sub_wrapping(2_u64), 6_u64);
+        assert_eq!(8_u128.sub_wrapping(2_u128), 6_u128);
         assert_eq!(
             f16::from_f32(8.0).sub_wrapping(f16::from_f32(2.0)),
             f16::from_f32(6.0)
@@ -551,6 +560,7 @@ mod tests {
         assert_eq!(8_u16.sub_checked(2_u16).unwrap(), 6_u16);
         assert_eq!(8_u32.sub_checked(2_u32).unwrap(), 6_u32);
         assert_eq!(8_u64.sub_checked(2_u64).unwrap(), 6_u64);
+        assert_eq!(8_u128.sub_checked(2_u128).unwrap(), 6_u128);
         assert_eq!(
             f16::from_f32(8.0).sub_checked(f16::from_f32(2.0)).unwrap(),
             f16::from_f32(6.0)
@@ -575,6 +585,7 @@ mod tests {
         assert_eq!(8_u16.mul_wrapping(2_u16), 16_u16);
         assert_eq!(8_u32.mul_wrapping(2_u32), 16_u32);
         assert_eq!(8_u64.mul_wrapping(2_u64), 16_u64);
+        assert_eq!(8_u128.mul_wrapping(2_u128), 16_u128);
         assert_eq!(
             f16::from_f32(8.0).mul_wrapping(f16::from_f32(2.0)),
             f16::from_f32(16.0)
@@ -598,6 +609,7 @@ mod tests {
         assert_eq!(8_u16.mul_checked(2_u16).unwrap(), 16_u16);
         assert_eq!(8_u32.mul_checked(2_u32).unwrap(), 16_u32);
         assert_eq!(8_u64.mul_checked(2_u64).unwrap(), 16_u64);
+        assert_eq!(8_u128.mul_checked(2_u128).unwrap(), 16_u128);
         assert_eq!(
             f16::from_f32(8.0).mul_checked(f16::from_f32(2.0)).unwrap(),
             f16::from_f32(16.0)
@@ -622,6 +634,7 @@ mod tests {
         assert_eq!(8_u16.div_wrapping(2_u16), 4_u16);
         assert_eq!(8_u32.div_wrapping(2_u32), 4_u32);
         assert_eq!(8_u64.div_wrapping(2_u64), 4_u64);
+        assert_eq!(8_u128.div_wrapping(2_u128), 4_u128);
         assert_eq!(
             f16::from_f32(8.0).div_wrapping(f16::from_f32(2.0)),
             f16::from_f32(4.0)
@@ -645,6 +658,7 @@ mod tests {
         assert_eq!(8_u16.div_checked(2_u16).unwrap(), 4_u16);
         assert_eq!(8_u32.div_checked(2_u32).unwrap(), 4_u32);
         assert_eq!(8_u64.div_checked(2_u64).unwrap(), 4_u64);
+        assert_eq!(8_u128.div_checked(2_u128).unwrap(), 4_u128);
         assert_eq!(
             f16::from_f32(8.0).div_checked(f16::from_f32(2.0)).unwrap(),
             f16::from_f32(4.0)
@@ -669,6 +683,7 @@ mod tests {
         assert_eq!(9_u16.mod_wrapping(2_u16), 1_u16);
         assert_eq!(9_u32.mod_wrapping(2_u32), 1_u32);
         assert_eq!(9_u64.mod_wrapping(2_u64), 1_u64);
+        assert_eq!(9_u128.mod_wrapping(2_u128), 1_u128);
         assert_eq!(
             f16::from_f32(9.0).mod_wrapping(f16::from_f32(2.0)),
             f16::from_f32(1.0)
@@ -692,6 +707,7 @@ mod tests {
         assert_eq!(9_u16.mod_checked(2_u16).unwrap(), 1_u16);
         assert_eq!(9_u32.mod_checked(2_u32).unwrap(), 1_u32);
         assert_eq!(9_u64.mod_checked(2_u64).unwrap(), 1_u64);
+        assert_eq!(9_u128.mod_checked(2_u128).unwrap(), 1_u128);
         assert_eq!(
             f16::from_f32(9.0).mod_checked(f16::from_f32(2.0)).unwrap(),
             f16::from_f32(1.0)
@@ -713,6 +729,7 @@ mod tests {
         assert_eq!(8_u16.neg_wrapping(), u16::MAX - 7_u16);
         assert_eq!(8_u32.neg_wrapping(), u32::MAX - 7_u32);
         assert_eq!(8_u64.neg_wrapping(), u64::MAX - 7_u64);
+        assert_eq!(8_u128.neg_wrapping(), u128::MAX - 7_u128);
         assert_eq!(f16::from_f32(8.0).neg_wrapping(), f16::from_f32(-8.0));
         assert_eq!(8.0_f32.neg_wrapping(), -8_f32);
         assert_eq!(8.0_f64.neg_wrapping(), -8_f64);
@@ -731,6 +748,7 @@ mod tests {
         assert!(8_u16.neg_checked().is_err());
         assert!(8_u32.neg_checked().is_err());
         assert!(8_u64.neg_checked().is_err());
+        assert!(8_u128.neg_checked().is_err());
         assert_eq!(
             f16::from_f32(8.0).neg_checked().unwrap(),
             f16::from_f32(-8.0)
@@ -755,6 +773,7 @@ mod tests {
         assert_eq!(8_u16.pow_wrapping(2_u32), 64_u16);
         assert_eq!(8_u32.pow_wrapping(2_u32), 64_u32);
         assert_eq!(8_u64.pow_wrapping(2_u32), 64_u64);
+        assert_eq!(8_u128.pow_wrapping(2_u32), 64_u128);
         assert_eq!(f16::from_f32(8.0).pow_wrapping(2_u32), f16::from_f32(64.0));
         assert_eq!(8.0_f32.pow_wrapping(2_u32), 64_f32);
         assert_eq!(8.0_f64.pow_wrapping(2_u32), 64_f64);
@@ -773,6 +792,7 @@ mod tests {
         assert_eq!(8_u16.pow_checked(2_u32).unwrap(), 64_u16);
         assert_eq!(8_u32.pow_checked(2_u32).unwrap(), 64_u32);
         assert_eq!(8_u64.pow_checked(2_u32).unwrap(), 64_u64);
+        assert_eq!(8_u128.pow_checked(2_u32).unwrap(), 64_u128);
         assert_eq!(
             f16::from_f32(8.0).pow_checked(2_u32).unwrap(),
             f16::from_f32(64.0)
