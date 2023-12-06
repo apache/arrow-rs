@@ -230,7 +230,7 @@ impl RleEncoder {
         self.bit_writer.put_vlq_int(indicator_value as u64);
         self.bit_writer.put_aligned(
             self.current_value,
-            bit_util::ceil(self.bit_width as i64, 8) as usize,
+            bit_util::ceil(self.bit_width as usize, 8),
         );
         self.num_buffered_values = 0;
         self.repeat_count = 0;
@@ -524,8 +524,8 @@ impl RleDecoder {
                 self.bit_packed_left = ((indicator_value >> 1) * 8) as u32;
             } else {
                 self.rle_left = (indicator_value >> 1) as u32;
-                let value_width = bit_util::ceil(self.bit_width as i64, 8);
-                self.current_value = bit_reader.get_aligned::<u64>(value_width as usize);
+                let value_width = bit_util::ceil(self.bit_width as usize, 8);
+                self.current_value = bit_reader.get_aligned::<u64>(value_width);
                 assert!(self.current_value.is_some());
             }
             true
