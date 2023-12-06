@@ -497,6 +497,7 @@ mod parse;
 mod util;
 
 pub use parse::{parse_url, parse_url_opts};
+use util::GetRange;
 
 use crate::path::Path;
 #[cfg(not(target_arch = "wasm32"))]
@@ -581,7 +582,7 @@ pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
     /// in the given byte range
     async fn get_range(&self, location: &Path, range: Range<usize>) -> Result<Bytes> {
         let options = GetOptions {
-            range: Some(range.clone()),
+            range: Some(range.into()),
             ..Default::default()
         };
         self.get_opts(location, options).await?.bytes().await
@@ -911,7 +912,7 @@ pub struct GetOptions {
     /// otherwise returning [`Error::NotModified`]
     ///
     /// <https://datatracker.ietf.org/doc/html/rfc9110#name-range>
-    pub range: Option<Range<usize>>,
+    pub range: Option<GetRange>,
     /// Request a particular object version
     pub version: Option<String>,
     /// Request transfer of no content

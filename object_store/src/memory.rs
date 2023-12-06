@@ -51,6 +51,9 @@ enum Error {
     #[snafu(display("Invalid range: {}..{}", range.start, range.end))]
     BadRange { range: Range<usize> },
 
+    #[snafu(display("Invalid suffix: {} bytes", nbytes))]
+    BadSuffix { nbytes: usize },
+
     #[snafu(display("Object already exists at that location: {path}"))]
     AlreadyExists { path: String },
 
@@ -206,6 +209,8 @@ impl ObjectStore for InMemory {
     }
 
     async fn get_opts(&self, location: &Path, options: GetOptions) -> Result<GetResult> {
+        use crate::util::GetRange::*;
+
         let entry = self.entry(location).await?;
         let e_tag = entry.e_tag.to_string();
 
@@ -221,9 +226,22 @@ impl ObjectStore for InMemory {
         let (range, data) = match options.range {
             Some(range) => {
                 let len = entry.data.len();
-                ensure!(range.end <= len, OutOfRangeSnafu { range, len });
-                ensure!(range.start <= range.end, BadRangeSnafu { range });
-                (range.clone(), entry.data.slice(range))
+                match range {
+                    Bounded(r) => {
+                        ensure!(r.end <= len, OutOfRangeSnafu { range: r, len });
+                        ensure!(r.start <= r.end, BadRangeSnafu { range: r });
+                        (r.clone(), entry.data.slice(r))
+                    }
+                    Offset(o) => {
+                        ensure!(o < len, OutOfRangeSnafu { range: o..len, len });
+                        (o..len, entry.data.slice(o..len))
+                    }
+                    Suffix(n) => {
+                        ensure!(n < len, BadSuffixSnafu { nbytes: n });
+                        let start = len - n;
+                        (start..len, entry.data.slice(start..len))
+                    }
+                }
             }
             None => (0..entry.data.len(), entry.data),
         };

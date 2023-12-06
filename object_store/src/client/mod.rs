@@ -580,8 +580,7 @@ impl GetOptionsExt for RequestBuilder {
         use hyper::header::*;
 
         if let Some(range) = options.range {
-            let range = format!("bytes={}-{}", range.start, range.end.saturating_sub(1));
-            self = self.header(RANGE, range);
+            self = self.header(RANGE, format!("bytes={range}"));
         }
 
         if let Some(tag) = options.if_match {

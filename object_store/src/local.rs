@@ -19,6 +19,7 @@
 use crate::{
     maybe_spawn_blocking,
     path::{absolute_path_to_url, Path},
+    util::as_generic_err,
     GetOptions, GetResult, GetResultPayload, ListResult, MultipartId, ObjectMeta, ObjectStore,
     PutMode, PutOptions, PutResult, Result,
 };
@@ -42,6 +43,8 @@ use std::{collections::VecDeque, path::PathBuf};
 use tokio::io::AsyncWrite;
 use url::Url;
 use walkdir::{DirEntry, WalkDir};
+
+const STORE: &'static str = "LocalFileSystem";
 
 /// A specialized `Error` for filesystem object store-related errors
 #[derive(Debug, Snafu)]
@@ -416,9 +419,16 @@ impl ObjectStore for LocalFileSystem {
             let meta = convert_metadata(metadata, location)?;
             options.check_preconditions(&meta)?;
 
+            let range = if let Some(r) = options.range {
+                r.as_range(meta.size)
+                    .map_err(|e| as_generic_err(STORE, e))?
+            } else {
+                0..meta.size
+            };
+
             Ok(GetResult {
                 payload: GetResultPayload::File(file, path),
-                range: options.range.unwrap_or(0..meta.size),
+                range,
                 meta,
             })
         })
