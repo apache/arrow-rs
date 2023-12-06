@@ -764,19 +764,22 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
 
         self.column_metrics.num_column_nulls += self.page_metrics.num_page_nulls;
 
-        let page_statistics = match (values_data.min_value, values_data.max_value) {
-            (Some(min), Some(max)) => {
-                update_min(&self.descr, &min, &mut self.column_metrics.min_column_value);
-                update_max(&self.descr, &max, &mut self.column_metrics.max_column_value);
-                Some(ValueStatistics::new(
-                    Some(min),
-                    Some(max),
-                    None,
-                    self.page_metrics.num_page_nulls,
-                    false,
-                ))
-            }
-            _ => None,
+        let page_statistics = if let (Some(min), Some(max)) =
+            (values_data.min_value, values_data.max_value)
+        {
+            // Update chunk level statistics
+            update_min(&self.descr, &min, &mut self.column_metrics.min_column_value);
+            update_max(&self.descr, &max, &mut self.column_metrics.max_column_value);
+
+            (self.statistics_enabled == EnabledStatistics::Page).then_some(ValueStatistics::new(
+                Some(min),
+                Some(max),
+                None,
+                self.page_metrics.num_page_nulls,
+                false,
+            ))
+        } else {
+            None
         };
 
         // update column and offset index
