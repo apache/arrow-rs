@@ -145,11 +145,13 @@ native_integer!(i16);
 native_integer!(i32, from_i32);
 native_integer!(i64, from_i64);
 native_integer!(i128, from_i128);
+native_integer!(isize);
 native_integer!(u8);
 native_integer!(u16);
 native_integer!(u32);
 native_integer!(u64);
 native_integer!(u128);
+native_integer!(usize);
 
 macro_rules! native_float {
     ($t:ty, $s:ident, $as_usize: expr, $i:ident, $usize_as: expr) => {
