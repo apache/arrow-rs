@@ -15,11 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::marker::PhantomData;
-
 use crate::arrow::buffer::bit_util::iter_set_bits_rev;
-use crate::data_type::Int96;
-use arrow_buffer::{ArrowNativeType, Buffer, MutableBuffer};
 
 /// A buffer that supports writing new data to the end, and removing data from the front
 ///
@@ -37,12 +33,12 @@ pub trait BufferQueue: Sized {
     /// to append data to the end of this [`BufferQueue`]
     ///
     /// NB: writes to the returned slice will not update the length of [`BufferQueue`]
-    /// instead a subsequent call should be made to [`BufferQueue::set_len`]
-    fn spare_capacity_mut(&mut self, batch_size: usize) -> &mut Self::Slice;
+    /// instead a subsequent call should be made to [`BufferQueue::truncate_buffer`]
+    fn get_output_slice(&mut self, batch_size: usize) -> &mut Self::Slice;
 
     /// Sets the length of the [`BufferQueue`].
     ///
-    /// Intended to be used in combination with [`BufferQueue::spare_capacity_mut`]
+    /// Intended to be used in combination with [`BufferQueue::get_output_slice`]
     ///
     /// # Panics
     ///
@@ -57,132 +53,27 @@ pub trait BufferQueue: Sized {
     /// track how much of this slice is actually written to by the caller. This is still
     /// safe as the slice is default-initialized.
     ///
-    fn set_len(&mut self, len: usize);
+    fn truncate_buffer(&mut self, len: usize);
 }
 
-/// A marker trait for [scalar] types
-///
-/// This means that a `[Self::default()]` of length `len` can be safely created from a
-/// zero-initialized `[u8]` with length `len * std::mem::size_of::<Self>()` and
-/// alignment of `std::mem::size_of::<Self>()`
-///
-/// [scalar]: https://doc.rust-lang.org/book/ch03-02-data-types.html#scalar-types
-///
-pub trait ScalarValue: Copy {}
-impl ScalarValue for bool {}
-impl ScalarValue for u8 {}
-impl ScalarValue for i8 {}
-impl ScalarValue for u16 {}
-impl ScalarValue for i16 {}
-impl ScalarValue for u32 {}
-impl ScalarValue for i32 {}
-impl ScalarValue for u64 {}
-impl ScalarValue for i64 {}
-impl ScalarValue for f32 {}
-impl ScalarValue for f64 {}
-impl ScalarValue for Int96 {}
-
-/// A typed buffer similar to [`Vec<T>`] but using [`MutableBuffer`] for storage
-#[derive(Debug)]
-pub struct ScalarBuffer<T: ScalarValue> {
-    buffer: MutableBuffer,
-
-    /// Length in elements of size T
-    len: usize,
-
-    /// Placeholder to allow `T` as an invariant generic parameter
-    /// without making it !Send
-    _phantom: PhantomData<fn(T) -> T>,
-}
-
-impl<T: ScalarValue> Default for ScalarBuffer<T> {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl<T: ScalarValue> ScalarBuffer<T> {
-    pub fn new() -> Self {
-        Self {
-            buffer: MutableBuffer::new(0),
-            len: 0,
-            _phantom: Default::default(),
-        }
-    }
-
-    pub fn len(&self) -> usize {
-        self.len
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.len == 0
-    }
-
-    pub fn reserve(&mut self, additional: usize) {
-        self.buffer.reserve(additional * std::mem::size_of::<T>());
-    }
-
-    pub fn resize(&mut self, len: usize) {
-        self.buffer.resize(len * std::mem::size_of::<T>(), 0);
-        self.len = len;
-    }
-
-    #[inline]
-    pub fn as_slice(&self) -> &[T] {
-        let (prefix, buf, suffix) = unsafe { self.buffer.as_slice().align_to::<T>() };
-        assert!(prefix.is_empty() && suffix.is_empty());
-        buf
-    }
-
-    #[inline]
-    pub fn as_slice_mut(&mut self) -> &mut [T] {
-        let (prefix, buf, suffix) = unsafe { self.buffer.as_slice_mut().align_to_mut::<T>() };
-        assert!(prefix.is_empty() && suffix.is_empty());
-        buf
-    }
-}
-
-impl<T: ScalarValue + ArrowNativeType> ScalarBuffer<T> {
-    pub fn push(&mut self, v: T) {
-        self.buffer.push(v);
-        self.len += 1;
-    }
-
-    pub fn extend_from_slice(&mut self, v: &[T]) {
-        self.buffer.extend_from_slice(v);
-        self.len += v.len();
-    }
-}
-
-impl<T: ScalarValue> From<ScalarBuffer<T>> for Buffer {
-    fn from(t: ScalarBuffer<T>) -> Self {
-        t.buffer.into()
-    }
-}
-
-impl<T: ScalarValue> BufferQueue for ScalarBuffer<T> {
-    type Output = Buffer;
+impl<T: Copy + Default> BufferQueue for Vec<T> {
+    type Output = Self;
 
     type Slice = [T];
 
     fn consume(&mut self) -> Self::Output {
-        std::mem::take(self).into()
+        std::mem::take(self)
     }
 
-    fn spare_capacity_mut(&mut self, batch_size: usize) -> &mut Self::Slice {
-        self.buffer
-            .resize((self.len + batch_size) * std::mem::size_of::<T>(), 0);
-
-        let range = self.len..self.len + batch_size;
-        &mut self.as_slice_mut()[range]
+    fn get_output_slice(&mut self, batch_size: usize) -> &mut Self::Slice {
+        let len = self.len();
+        self.resize(len + batch_size, T::default());
+        &mut self[len..]
     }
 
-    fn set_len(&mut self, len: usize) {
-        self.len = len;
-
-        let new_bytes = self.len * std::mem::size_of::<T>();
-        assert!(new_bytes <= self.buffer.len());
-        self.buffer.resize(new_bytes, 0);
+    fn truncate_buffer(&mut self, len: usize) {
+        assert!(len <= self.len());
+        self.truncate(len)
     }
 }
 
@@ -212,7 +103,7 @@ pub trait ValuesBuffer: BufferQueue {
     );
 }
 
-impl<T: ScalarValue> ValuesBuffer for ScalarBuffer<T> {
+impl<T: Copy + Default> ValuesBuffer for Vec<T> {
     fn pad_nulls(
         &mut self,
         read_offset: usize,
@@ -220,8 +111,7 @@ impl<T: ScalarValue> ValuesBuffer for ScalarBuffer<T> {
         levels_read: usize,
         valid_mask: &[u8],
     ) {
-        let slice = self.as_slice_mut();
-        assert!(slice.len() >= read_offset + levels_read);
+        assert!(self.len() >= read_offset + levels_read);
 
         let values_range = read_offset..read_offset + values_read;
         for (value_pos, level_pos) in values_range.rev().zip(iter_set_bits_rev(valid_mask)) {
@@ -229,7 +119,7 @@ impl<T: ScalarValue> ValuesBuffer for ScalarBuffer<T> {
             if level_pos <= value_pos {
                 break;
             }
-            slice[level_pos] = slice[value_pos];
+            self[level_pos] = self[value_pos];
         }
     }
 }

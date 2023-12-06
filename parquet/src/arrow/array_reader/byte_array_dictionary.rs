@@ -27,10 +27,8 @@ use bytes::Bytes;
 
 use crate::arrow::array_reader::byte_array::{ByteArrayDecoder, ByteArrayDecoderPlain};
 use crate::arrow::array_reader::{read_records, skip_records, ArrayReader};
-use crate::arrow::buffer::{
-    dictionary_buffer::DictionaryBuffer, offset_buffer::OffsetBuffer,
-};
-use crate::arrow::record_reader::buffer::{BufferQueue, ScalarValue};
+use crate::arrow::buffer::{dictionary_buffer::DictionaryBuffer, offset_buffer::OffsetBuffer};
+use crate::arrow::record_reader::buffer::BufferQueue;
 use crate::arrow::record_reader::GenericRecordReader;
 use crate::arrow::schema::parquet_to_arrow_field;
 use crate::basic::{ConvertedType, Encoding};
@@ -123,7 +121,7 @@ pub fn make_byte_array_dictionary_reader(
 /// An [`ArrayReader`] for dictionary encoded variable length byte arrays
 ///
 /// Will attempt to preserve any dictionary encoding present in the parquet data
-struct ByteArrayDictionaryReader<K: ScalarValue, V: ScalarValue> {
+struct ByteArrayDictionaryReader<K: ArrowNativeType, V: OffsetSizeTrait> {
     data_type: ArrowType,
     pages: Box<dyn PageIterator>,
     def_levels_buffer: Option<Buffer>,
@@ -133,16 +131,13 @@ struct ByteArrayDictionaryReader<K: ScalarValue, V: ScalarValue> {
 
 impl<K, V> ByteArrayDictionaryReader<K, V>
 where
-    K: FromBytes + ScalarValue + Ord + ArrowNativeType,
-    V: ScalarValue + OffsetSizeTrait,
+    K: FromBytes + Ord + ArrowNativeType,
+    V: OffsetSizeTrait,
 {
     fn new(
         pages: Box<dyn PageIterator>,
         data_type: ArrowType,
-        record_reader: GenericRecordReader<
-            DictionaryBuffer<K, V>,
-            DictionaryDecoder<K, V>,
-        >,
+        record_reader: GenericRecordReader<DictionaryBuffer<K, V>, DictionaryDecoder<K, V>>,
     ) -> Self {
         Self {
             data_type,
@@ -156,8 +151,8 @@ where
 
 impl<K, V> ArrayReader for ByteArrayDictionaryReader<K, V>
 where
-    K: FromBytes + ScalarValue + Ord + ArrowNativeType,
-    V: ScalarValue + OffsetSizeTrait,
+    K: FromBytes + Ord + ArrowNativeType,
+    V: OffsetSizeTrait,
 {
     fn as_any(&self) -> &dyn Any {
         self
@@ -226,16 +221,15 @@ struct DictionaryDecoder<K, V> {
 
 impl<K, V> ColumnValueDecoder for DictionaryDecoder<K, V>
 where
-    K: FromBytes + ScalarValue + Ord + ArrowNativeType,
-    V: ScalarValue + OffsetSizeTrait,
+    K: FromBytes + Ord + ArrowNativeType,
+    V: OffsetSizeTrait,
 {
     type Slice = DictionaryBuffer<K, V>;
 
     fn new(col: &ColumnDescPtr) -> Self {
         let validate_utf8 = col.converted_type() == ConvertedType::UTF8;
 
-        let value_type = match (V::IS_LARGE, col.converted_type() == ConvertedType::UTF8)
-        {
+        let value_type = match (V::IS_LARGE, col.converted_type() == ConvertedType::UTF8) {
             (true, true) => ArrowType::LargeUtf8,
             (true, false) => ArrowType::LargeBinary,
             (false, true) => ArrowType::Utf8,
@@ -274,8 +268,7 @@ where
 
         let len = num_values as usize;
         let mut buffer = OffsetBuffer::<V>::default();
-        let mut decoder =
-            ByteArrayDecoderPlain::new(buf, len, Some(len), self.validate_utf8);
+        let mut decoder = ByteArrayDecoderPlain::new(buf, len, Some(len), self.validate_utf8);
         decoder.read(&mut buffer, usize::MAX)?;
 
         let array = buffer.into_array(None, self.value_type.clone());
@@ -339,8 +332,8 @@ where
                     Some(keys) => {
                         // Happy path - can just copy keys
                         // Keys will be validated on conversion to arrow
-                        let keys_slice = keys.spare_capacity_mut(range.start + len);
-                        let len = decoder.get_batch(&mut keys_slice[range.start..])?;
+                        let keys_slice = keys.get_output_slice(len);
+                        let len = decoder.get_batch(keys_slice)?;
                         *max_remaining_values -= len;
                         Ok(len)
                     }
@@ -360,11 +353,7 @@ where
                         let dict_offsets = dict_buffers[0].typed_data::<V>();
                         let dict_values = dict_buffers[1].as_slice();
 
-                        values.extend_from_dictionary(
-                            &keys[..len],
-                            dict_offsets,
-                            dict_values,
-                        )?;
+                        values.extend_from_dictionary(&keys[..len], dict_offsets, dict_values)?;
                         *max_remaining_values -= len;
                         Ok(len)
                     }
@@ -375,9 +364,7 @@ where
 
     fn skip_values(&mut self, num_values: usize) -> Result<usize> {
         match self.decoder.as_mut().expect("decoder set") {
-            MaybeDictionaryDecoder::Fallback(decoder) => {
-                decoder.skip::<V>(num_values, None)
-            }
+            MaybeDictionaryDecoder::Fallback(decoder) => decoder.skip::<V>(num_values, None),
             MaybeDictionaryDecoder::Dict {
                 decoder,
                 max_remaining_values,

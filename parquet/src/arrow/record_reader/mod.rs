@@ -18,7 +18,7 @@
 use arrow_buffer::Buffer;
 
 use crate::arrow::record_reader::{
-    buffer::{BufferQueue, ScalarBuffer, ValuesBuffer},
+    buffer::{BufferQueue, ValuesBuffer},
     definition_levels::{DefinitionLevelBuffer, DefinitionLevelBufferDecoder},
 };
 use crate::column::reader::decoder::RepetitionLevelDecoderImpl;
@@ -37,8 +37,7 @@ pub(crate) mod buffer;
 mod definition_levels;
 
 /// A `RecordReader` is a stateful column reader that delimits semantic records.
-pub type RecordReader<T> =
-    GenericRecordReader<ScalarBuffer<<T as DataType>::T>, ColumnValueDecoderImpl<T>>;
+pub type RecordReader<T> = GenericRecordReader<Vec<<T as DataType>::T>, ColumnValueDecoderImpl<T>>;
 
 pub(crate) type ColumnReader<CV> =
     GenericColumnReader<RepetitionLevelDecoderImpl, DefinitionLevelBufferDecoder, CV>;
@@ -53,7 +52,7 @@ pub struct GenericRecordReader<V, CV> {
 
     values: V,
     def_levels: Option<DefinitionLevelBuffer>,
-    rep_levels: Option<ScalarBuffer<i16>>,
+    rep_levels: Option<Vec<i16>>,
     column_reader: Option<ColumnReader<CV>>,
     /// Number of buffered levels / null-padded values
     num_values: usize,
@@ -81,7 +80,7 @@ where
         let def_levels = (desc.max_def_level() > 0)
             .then(|| DefinitionLevelBuffer::new(&desc, packed_null_mask(&desc)));
 
-        let rep_levels = (desc.max_rep_level() > 0).then(ScalarBuffer::new);
+        let rep_levels = (desc.max_rep_level() > 0).then(Vec::new);
 
         Self {
             values: records,
@@ -174,7 +173,9 @@ where
     /// Return repetition level data.
     /// The side effect is similar to `consume_def_levels`.
     pub fn consume_rep_levels(&mut self) -> Option<Buffer> {
-        self.rep_levels.as_mut().map(|x| x.consume())
+        self.rep_levels
+            .as_mut()
+            .map(|x| Buffer::from_vec(x.consume()))
     }
 
     /// Returns currently stored buffer data.
@@ -209,9 +210,9 @@ where
         let rep_levels = self
             .rep_levels
             .as_mut()
-            .map(|levels| levels.spare_capacity_mut(batch_size));
+            .map(|levels| levels.get_output_slice(batch_size));
         let def_levels = self.def_levels.as_mut();
-        let values = self.values.spare_capacity_mut(batch_size);
+        let values = self.values.get_output_slice(batch_size);
 
         let (records_read, values_read, levels_read) = self
             .column_reader
@@ -234,9 +235,9 @@ where
 
         self.num_records += records_read;
         self.num_values += levels_read;
-        self.values.set_len(self.num_values);
+        self.values.truncate_buffer(self.num_values);
         if let Some(ref mut buf) = self.rep_levels {
-            buf.set_len(self.num_values)
+            buf.truncate_buffer(self.num_values)
         };
         if let Some(ref mut buf) = self.def_levels {
             buf.set_len(self.num_values)
@@ -257,7 +258,7 @@ mod tests {
     use std::sync::Arc;
 
     use arrow::buffer::Buffer;
-    use arrow_array::builder::{Int16BufferBuilder, Int32BufferBuilder};
+    use arrow_array::builder::Int16BufferBuilder;
 
     use crate::basic::Encoding;
     use crate::data_type::Int32Type;
@@ -334,10 +335,7 @@ mod tests {
             assert_eq!(7, record_reader.num_values());
         }
 
-        let mut bb = Int32BufferBuilder::new(7);
-        bb.append_slice(&[4, 7, 6, 3, 2, 8, 9]);
-        let expected_buffer = bb.finish();
-        assert_eq!(expected_buffer, record_reader.consume_record_data());
+        assert_eq!(record_reader.consume_record_data(), &[4, 7, 6, 3, 2, 8, 9]);
         assert_eq!(None, record_reader.consume_def_levels());
         assert_eq!(None, record_reader.consume_bitmap());
     }
@@ -434,13 +432,12 @@ mod tests {
 
         // Verify result record data
         let actual = record_reader.consume_record_data();
-        let actual_values = actual.typed_data::<i32>();
 
         let expected = &[0, 7, 0, 6, 3, 0, 8];
-        assert_eq!(actual_values.len(), expected.len());
+        assert_eq!(actual.len(), expected.len());
 
         // Only validate valid values are equal
-        let iter = expected_valid.iter().zip(actual_values).zip(expected);
+        let iter = expected_valid.iter().zip(&actual).zip(expected);
         for ((valid, actual), expected) in iter {
             if *valid {
                 assert_eq!(actual, expected)
@@ -544,12 +541,11 @@ mod tests {
 
         // Verify result record data
         let actual = record_reader.consume_record_data();
-        let actual_values = actual.typed_data::<i32>();
         let expected = &[4, 0, 0, 7, 6, 3, 2, 8, 9];
-        assert_eq!(actual_values.len(), expected.len());
+        assert_eq!(actual.len(), expected.len());
 
         // Only validate valid values are equal
-        let iter = expected_valid.iter().zip(actual_values).zip(expected);
+        let iter = expected_valid.iter().zip(&actual).zip(expected);
         for ((valid, actual), expected) in iter {
             if *valid {
                 assert_eq!(actual, expected)
@@ -713,10 +709,7 @@ mod tests {
             assert_eq!(0, record_reader.read_records(10).unwrap());
         }
 
-        let mut bb = Int32BufferBuilder::new(3);
-        bb.append_slice(&[6, 3, 2]);
-        let expected_buffer = bb.finish();
-        assert_eq!(expected_buffer, record_reader.consume_record_data());
+        assert_eq!(record_reader.consume_record_data(), &[6, 3, 2]);
         assert_eq!(None, record_reader.consume_def_levels());
         assert_eq!(None, record_reader.consume_bitmap());
     }
@@ -814,13 +807,12 @@ mod tests {
 
         // Verify result record data
         let actual = record_reader.consume_record_data();
-        let actual_values = actual.typed_data::<i32>();
 
         let expected = &[0, 6, 3];
-        assert_eq!(actual_values.len(), expected.len());
+        assert_eq!(actual.len(), expected.len());
 
         // Only validate valid values are equal
-        let iter = expected_valid.iter().zip(actual_values).zip(expected);
+        let iter = expected_valid.iter().zip(&actual).zip(expected);
         for ((valid, actual), expected) in iter {
             if *valid {
                 assert_eq!(actual, expected)
