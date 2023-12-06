@@ -1180,6 +1180,7 @@ def_from_for_primitive!(Int8Type, i8);
 def_from_for_primitive!(Int16Type, i16);
 def_from_for_primitive!(Int32Type, i32);
 def_from_for_primitive!(Int64Type, i64);
+def_from_for_primitive!(Int128Type, i128);
 def_from_for_primitive!(UInt8Type, u8);
 def_from_for_primitive!(UInt16Type, u16);
 def_from_for_primitive!(UInt32Type, u32);

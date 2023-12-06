@@ -74,6 +74,7 @@ fn equal_values(
         DataType::Int16 => primitive_equal::<i16>(lhs, rhs, lhs_start, rhs_start, len),
         DataType::Int32 => primitive_equal::<i32>(lhs, rhs, lhs_start, rhs_start, len),
         DataType::Int64 => primitive_equal::<i64>(lhs, rhs, lhs_start, rhs_start, len),
+        DataType::Int128 => primitive_equal::<i128>(lhs, rhs, lhs_start, rhs_start, len),
         DataType::Float32 => primitive_equal::<f32>(lhs, rhs, lhs_start, rhs_start, len),
         DataType::Float64 => primitive_equal::<f64>(lhs, rhs, lhs_start, rhs_start, len),
         DataType::Decimal128(_, _) => primitive_equal::<i128>(lhs, rhs, lhs_start, rhs_start, len),

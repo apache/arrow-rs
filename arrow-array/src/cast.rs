@@ -331,6 +331,51 @@ macro_rules! downcast_primitive {
 }
 
 #[macro_export]
+macro_rules! downcast_primitive_cmp {
+    ($($data_type:expr),+ => ($m:path $(, $args:tt)*), $($p:pat => $fallback:expr $(,)*)*) => {
+        $crate::downcast_integer! {
+            $($data_type),+ => ($m $(, $args)*),
+            $crate::repeat_pat!(arrow_schema::DataType::Float16, $($data_type),+) => {
+                $m!($crate::types::Float16Type $(, $args)*)
+            }
+            $crate::repeat_pat!(arrow_schema::DataType::Float32, $($data_type),+) => {
+                $m!($crate::types::Float32Type $(, $args)*)
+            }
+            $crate::repeat_pat!(arrow_schema::DataType::Float64, $($data_type),+) => {
+                $m!($crate::types::Float64Type $(, $args)*)
+            }
+            $crate::repeat_pat!(arrow_schema::DataType::Decimal128(_, _), $($data_type),+) => {
+                $m!($crate::types::Decimal128Type $(, $args)*)
+            }
+            $crate::repeat_pat!(arrow_schema::DataType::Decimal256(_, _), $($data_type),+) => {
+                $m!($crate::types::Decimal256Type $(, $args)*)
+            }
+            $crate::repeat_pat!(arrow_schema::DataType::Interval(arrow_schema::IntervalUnit::YearMonth), $($data_type),+) => {
+                $m!($crate::types::IntervalYearMonthType $(, $args)*)
+            }
+            $crate::repeat_pat!(arrow_schema::DataType::Duration(arrow_schema::TimeUnit::Second), $($data_type),+) => {
+                $m!($crate::types::DurationSecondType $(, $args)*)
+            }
+            $crate::repeat_pat!(arrow_schema::DataType::Duration(arrow_schema::TimeUnit::Millisecond), $($data_type),+) => {
+                $m!($crate::types::DurationMillisecondType $(, $args)*)
+            }
+            $crate::repeat_pat!(arrow_schema::DataType::Duration(arrow_schema::TimeUnit::Microsecond), $($data_type),+) => {
+                $m!($crate::types::DurationMicrosecondType $(, $args)*)
+            }
+            $crate::repeat_pat!(arrow_schema::DataType::Duration(arrow_schema::TimeUnit::Nanosecond), $($data_type),+) => {
+                $m!($crate::types::DurationNanosecondType $(, $args)*)
+            }
+            _ => {
+                $crate::downcast_temporal! {
+                    $($data_type),+ => ($m $(, $args)*),
+                    $($p => $fallback,)*
+                }
+            }
+        }
+    };
+}
+
+#[macro_export]
 #[doc(hidden)]
 macro_rules! downcast_primitive_array_helper {
     ($t:ty, $($values:ident),+, $e:block) => {{
@@ -377,6 +422,25 @@ macro_rules! downcast_primitive_array {
     };
     (($($values:ident),+) => $e:block $($p:pat => $fallback:expr $(,)*)*) => {
         $crate::downcast_primitive!{
+            $($values.data_type()),+ => ($crate::downcast_primitive_array_helper, $($values),+, $e),
+            $($p => $fallback,)*
+        }
+    };
+}
+
+#[macro_export]
+macro_rules! downcast_primitive_array_cmp {
+    ($values:ident => $e:expr, $($p:pat => $fallback:expr $(,)*)*) => {
+        $crate::downcast_primitive_array_cmp!($values => {$e} $($p => $fallback)*)
+    };
+    (($($values:ident),+) => $e:expr, $($p:pat => $fallback:expr $(,)*)*) => {
+        $crate::downcast_primitive_array_cmp!($($values),+ => {$e} $($p => $fallback)*)
+    };
+    ($($values:ident),+ => $e:block $($p:pat => $fallback:expr $(,)*)*) => {
+        $crate::downcast_primitive_array_cmp!(($($values),+) => $e $($p => $fallback)*)
+    };
+    (($($values:ident),+) => $e:block $($p:pat => $fallback:expr $(,)*)*) => {
+        $crate::downcast_primitive_cmp!{
             $($values.data_type()),+ => ($crate::downcast_primitive_array_helper, $($values),+, $e),
             $($p => $fallback,)*
         }

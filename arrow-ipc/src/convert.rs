@@ -499,7 +499,7 @@ pub(crate) fn get_fb_field_type<'a>(
                 children: Some(children),
             }
         }
-        Int8 | Int16 | Int32 | Int64 => {
+        Int8 | Int16 | Int32 | Int64 | Int128 => {
             let children = fbb.create_vector(&empty_fields[..]);
             let mut builder = crate::IntBuilder::new(fbb);
             builder.add_is_signed(true);
@@ -508,6 +508,7 @@ pub(crate) fn get_fb_field_type<'a>(
                 Int16 => builder.add_bitWidth(16),
                 Int32 => builder.add_bitWidth(32),
                 Int64 => builder.add_bitWidth(64),
+                Int128 => builder.add_bitWidth(128),
                 _ => {}
             };
             FBFieldType {

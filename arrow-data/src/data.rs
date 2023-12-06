@@ -84,6 +84,7 @@ pub(crate) fn new_buffers(data_type: &DataType, capacity: usize) -> [MutableBuff
         | DataType::Int16
         | DataType::Int32
         | DataType::Int64
+        | DataType::Int128
         | DataType::Float16
         | DataType::Float32
         | DataType::Float64
@@ -1509,6 +1510,7 @@ pub fn layout(data_type: &DataType) -> DataTypeLayout {
         DataType::Int16 => DataTypeLayout::new_fixed_width::<i16>(),
         DataType::Int32 => DataTypeLayout::new_fixed_width::<i32>(),
         DataType::Int64 => DataTypeLayout::new_fixed_width::<i64>(),
+        DataType::Int128 => DataTypeLayout::new_fixed_width::<i128>(),
         DataType::UInt8 => DataTypeLayout::new_fixed_width::<u8>(),
         DataType::UInt16 => DataTypeLayout::new_fixed_width::<u16>(),
         DataType::UInt32 => DataTypeLayout::new_fixed_width::<u32>(),

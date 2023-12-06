@@ -49,7 +49,9 @@ impl BooleanType {
 /// static-typed nature of rust types ([`ArrowNativeType`]) for all types that implement [`ArrowNativeType`].
 ///
 /// [`ArrowNativeType`]: arrow_buffer::ArrowNativeType
-pub trait ArrowPrimitiveType: primitive::PrimitiveTypeSealed + 'static {
+pub trait ArrowPrimitiveType<const CUSTOM_CMP: bool = false>:
+    primitive::PrimitiveTypeSealed + 'static
+{
     /// Corresponding Rust native type for the primitive type.
     type Native: ArrowNativeTypeOp;
 
@@ -74,12 +76,12 @@ mod primitive {
 }
 
 macro_rules! make_type {
-    ($name:ident, $native_ty:ty, $data_ty:expr, $doc_string: literal) => {
+    ($name:ident, $native_ty:ty, $data_ty:expr, $doc_string: literal, $custom_cmp:expr) => {
         #[derive(Debug)]
         #[doc = $doc_string]
         pub struct $name {}
 
-        impl ArrowPrimitiveType for $name {
+        impl ArrowPrimitiveType<$custom_cmp> for $name {
             type Native = $native_ty;
             const DATA_TYPE: DataType = $data_ty;
         }
@@ -88,168 +90,208 @@ macro_rules! make_type {
     };
 }
 
-make_type!(Int8Type, i8, DataType::Int8, "A signed 8-bit integer type.");
+make_type!(
+    Int8Type,
+    i8,
+    DataType::Int8,
+    "A signed 8-bit integer type.",
+    false
+);
 make_type!(
     Int16Type,
     i16,
     DataType::Int16,
-    "A signed 16-bit integer type."
+    "A signed 16-bit integer type.",
+    false
 );
 make_type!(
     Int32Type,
     i32,
     DataType::Int32,
-    "A signed 32-bit integer type."
+    "A signed 32-bit integer type.",
+    false
 );
 make_type!(
     Int64Type,
     i64,
     DataType::Int64,
-    "A signed 64-bit integer type."
+    "A signed 64-bit integer type.",
+    false
+);
+make_type!(
+    Int128Type,
+    i128,
+    DataType::Int128,
+    "A signed 128-bit integer type.",
+    false
 );
 make_type!(
     UInt8Type,
     u8,
     DataType::UInt8,
-    "An unsigned 8-bit integer type."
+    "An unsigned 8-bit integer type.",
+    false
 );
 make_type!(
     UInt16Type,
     u16,
     DataType::UInt16,
-    "An unsigned 16-bit integer type."
+    "An unsigned 16-bit integer type.",
+    false
 );
 make_type!(
     UInt32Type,
     u32,
     DataType::UInt32,
-    "An unsigned 32-bit integer type."
+    "An unsigned 32-bit integer type.",
+    false
 );
 make_type!(
     UInt64Type,
     u64,
     DataType::UInt64,
-    "An unsigned 64-bit integer type."
+    "An unsigned 64-bit integer type.",
+    false
 );
 make_type!(
     Float16Type,
     f16,
     DataType::Float16,
-    "A 16-bit floating point number type."
+    "A 16-bit floating point number type.",
+    false
 );
 make_type!(
     Float32Type,
     f32,
     DataType::Float32,
-    "A 32-bit floating point number type."
+    "A 32-bit floating point number type.",
+    false
 );
 make_type!(
     Float64Type,
     f64,
     DataType::Float64,
-    "A 64-bit floating point number type."
+    "A 64-bit floating point number type.",
+    false
 );
 make_type!(
     TimestampSecondType,
     i64,
     DataType::Timestamp(TimeUnit::Second, None),
-    "A timestamp second type with an optional timezone."
+    "A timestamp second type with an optional timezone.",
+    false
 );
 make_type!(
     TimestampMillisecondType,
     i64,
     DataType::Timestamp(TimeUnit::Millisecond, None),
-    "A timestamp millisecond type with an optional timezone."
+    "A timestamp millisecond type with an optional timezone.",
+    false
 );
 make_type!(
     TimestampMicrosecondType,
     i64,
     DataType::Timestamp(TimeUnit::Microsecond, None),
-    "A timestamp microsecond type with an optional timezone."
+    "A timestamp microsecond type with an optional timezone.",
+    false
 );
 make_type!(
     TimestampNanosecondType,
     i64,
     DataType::Timestamp(TimeUnit::Nanosecond, None),
-    "A timestamp nanosecond type with an optional timezone."
+    "A timestamp nanosecond type with an optional timezone.",
+    false
 );
 make_type!(
     Date32Type,
     i32,
     DataType::Date32,
-    "A 32-bit date type representing the elapsed time since UNIX epoch in days(32 bits)."
+    "A 32-bit date type representing the elapsed time since UNIX epoch in days(32 bits).",
+    false
 );
 make_type!(
     Date64Type,
     i64,
     DataType::Date64,
-    "A 64-bit date type representing the elapsed time since UNIX epoch in milliseconds(64 bits)."
+    "A 64-bit date type representing the elapsed time since UNIX epoch in milliseconds(64 bits).",
+    false
 );
 make_type!(
     Time32SecondType,
     i32,
     DataType::Time32(TimeUnit::Second),
-    "A 32-bit time type representing the elapsed time since midnight in seconds."
+    "A 32-bit time type representing the elapsed time since midnight in seconds.",
+    false
 );
 make_type!(
     Time32MillisecondType,
     i32,
     DataType::Time32(TimeUnit::Millisecond),
-    "A 32-bit time type representing the elapsed time since midnight in milliseconds."
+    "A 32-bit time type representing the elapsed time since midnight in milliseconds.",
+    false
 );
 make_type!(
     Time64MicrosecondType,
     i64,
     DataType::Time64(TimeUnit::Microsecond),
-    "A 64-bit time type representing the elapsed time since midnight in microseconds."
+    "A 64-bit time type representing the elapsed time since midnight in microseconds.",
+    false
 );
 make_type!(
     Time64NanosecondType,
     i64,
     DataType::Time64(TimeUnit::Nanosecond),
-    "A 64-bit time type representing the elapsed time since midnight in nanoseconds."
+    "A 64-bit time type representing the elapsed time since midnight in nanoseconds.",
+    false
 );
 make_type!(
     IntervalYearMonthType,
     i32,
     DataType::Interval(IntervalUnit::YearMonth),
-    "A “calendar” interval type in months."
+    "A “calendar” interval type in months.",
+    false
 );
 make_type!(
     IntervalDayTimeType,
     i64,
     DataType::Interval(IntervalUnit::DayTime),
-    "A “calendar” interval type in days and milliseconds."
+    "A “calendar” interval type in days and milliseconds.",
+    false
 );
 make_type!(
     IntervalMonthDayNanoType,
     i128,
     DataType::Interval(IntervalUnit::MonthDayNano),
-    "A “calendar” interval type in months, days, and nanoseconds."
+    "A “calendar” interval type in months, days, and nanoseconds.",
+    false
 );
 make_type!(
     DurationSecondType,
     i64,
     DataType::Duration(TimeUnit::Second),
-    "An elapsed time type in seconds."
+    "An elapsed time type in seconds.",
+    false
 );
 make_type!(
     DurationMillisecondType,
     i64,
     DataType::Duration(TimeUnit::Millisecond),
-    "An elapsed time type in milliseconds."
+    "An elapsed time type in milliseconds.",
+    false
 );
 make_type!(
     DurationMicrosecondType,
     i64,
     DataType::Duration(TimeUnit::Microsecond),
-    "An elapsed time type in microseconds."
+    "An elapsed time type in microseconds.",
+    false
 );
 make_type!(
     DurationNanosecondType,
     i64,
     DataType::Duration(TimeUnit::Nanosecond),
-    "An elapsed time type in nanoseconds."
+    "An elapsed time type in nanoseconds.",
+    false
 );
 
 /// A subtype of primitive type that represents legal dictionary keys.

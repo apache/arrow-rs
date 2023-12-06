@@ -50,6 +50,8 @@ pub enum DataType {
     Int32,
     /// A signed 64-bit integer.
     Int64,
+    /// A signed 128-bit integer.
+    Int128,
     /// An unsigned 8-bit integer.
     UInt8,
     /// An unsigned 16-bit integer.
@@ -467,6 +469,7 @@ impl DataType {
             DataType::Int16 | DataType::UInt16 | DataType::Float16 => Some(2),
             DataType::Int32 | DataType::UInt32 | DataType::Float32 => Some(4),
             DataType::Int64 | DataType::UInt64 | DataType::Float64 => Some(8),
+            DataType::Int128 => Some(16),
             DataType::Timestamp(_, _) => Some(8),
             DataType::Date32 | DataType::Time32(_) => Some(4),
             DataType::Date64 | DataType::Time64(_) => Some(8),
@@ -500,6 +503,7 @@ impl DataType {
                 | DataType::Int16
                 | DataType::Int32
                 | DataType::Int64
+                | DataType::Int128
                 | DataType::UInt8
                 | DataType::UInt16
                 | DataType::UInt32

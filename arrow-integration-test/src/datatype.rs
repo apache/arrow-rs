@@ -260,6 +260,7 @@ pub fn data_type_to_json(data_type: &DataType) -> serde_json::Value {
         DataType::Int16 => json!({"name": "int", "bitWidth": 16, "isSigned": true}),
         DataType::Int32 => json!({"name": "int", "bitWidth": 32, "isSigned": true}),
         DataType::Int64 => json!({"name": "int", "bitWidth": 64, "isSigned": true}),
+        DataType::Int128 => json!({"name": "int", "bitWidth": 128, "isSigned": true}),
         DataType::UInt8 => json!({"name": "int", "bitWidth": 8, "isSigned": false}),
         DataType::UInt16 => json!({"name": "int", "bitWidth": 16, "isSigned": false}),
         DataType::UInt32 => json!({"name": "int", "bitWidth": 32, "isSigned": false}),

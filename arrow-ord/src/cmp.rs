@@ -24,20 +24,23 @@
 //!
 
 use arrow_array::cast::AsArray;
-use arrow_array::types::{ByteArrayType, Int64Type, IntervalDayTimeType, IntervalMonthDayNanoType};
+use arrow_array::types::{
+    ArrowPrimitiveType, ByteArrayType, Int128Type, Int64Type, IntervalDayTimeType,
+    IntervalMonthDayNanoType,
+};
 use arrow_array::{
-    downcast_primitive_array, AnyDictionaryArray, Array, ArrowNativeTypeOp, BooleanArray, Datum,
-    FixedSizeBinaryArray, GenericByteArray, PrimitiveArray,
+    downcast_primitive_array, downcast_primitive_array_cmp, AnyDictionaryArray, Array,
+    ArrowNativeTypeOp, BooleanArray, Datum, FixedSizeBinaryArray, GenericByteArray, PrimitiveArray,
 };
 use arrow_buffer::bit_util::ceil;
 use arrow_buffer::{BooleanBuffer, MutableBuffer, NullBuffer};
 use arrow_schema::ArrowError;
+use arrow_schema::IntervalUnit;
 use arrow_select::take::take;
 use std::ops::Not;
 
 const MILLIS_PER_DAY: i64 = 86_400_000;
-
-const NANOS_PER_DAY: i64 = 86_400_000_000_000;
+const NANOS_PER_DAY: i128 = 86_400_000_000_000;
 
 #[derive(Debug, Copy, Clone)]
 enum Op {
@@ -208,16 +211,12 @@ fn compare_op(op: Op, lhs: &dyn Datum, rhs: &dyn Datum) -> Result<BooleanArray, 
         )));
     }
 
-    let interval_cmp = safe_cmp_for_intervals(l, r, op);
-    let (l, r) = if let Some((l, r)) = interval_cmp.as_ref() {
-        (l as &dyn Array, r as &dyn Array)
-    } else {
-        (l, r)
-    };
+    println!("{:?}", l);
 
+    println!("{:?}", r);
     // Defer computation as may not be necessary
     let values = || -> BooleanBuffer {
-        let d = downcast_primitive_array! {
+        let d = downcast_primitive_array_cmp! {
             (l, r) => apply(op, l.values().as_ref(), l_s, l_v, r.values().as_ref(), r_s, r_v),
             (Boolean, Boolean) => apply(op, l.as_boolean(), l_s, l_v, r.as_boolean(), r_s, r_v),
             (Utf8, Utf8) => apply(op, l.as_string::<i32>(), l_s, l_v, r.as_string::<i32>(), r_s, r_v),
@@ -225,6 +224,8 @@ fn compare_op(op: Op, lhs: &dyn Datum, rhs: &dyn Datum) -> Result<BooleanArray, 
             (Binary, Binary) => apply(op, l.as_binary::<i32>(), l_s, l_v, r.as_binary::<i32>(), r_s, r_v),
             (LargeBinary, LargeBinary) => apply(op, l.as_binary::<i64>(), l_s, l_v, r.as_binary::<i64>(), r_s, r_v),
             (FixedSizeBinary(_), FixedSizeBinary(_)) => apply(op, l.as_fixed_size_binary(), l_s, l_v, r.as_fixed_size_binary(), r_s, r_v),
+            (Interval(IntervalUnit::DayTime), Interval(IntervalUnit::DayTime)) => apply(op, safer_interval_dt(l, op, true).values().as_ref(), l_s, l_v, safer_interval_dt(r, op, false).values().as_ref(), r_s, r_v),
+            (Interval(IntervalUnit::MonthDayNano), Interval(IntervalUnit::MonthDayNano)) => apply(op, safer_interval_mdn(l, op, true).values().as_ref(), l_s, l_v, safer_interval_mdn(r, op, false).values().as_ref(), r_s, r_v),
             (Null, Null) => None,
             _ => unreachable!(),
         };
@@ -552,69 +553,53 @@ impl<'a> ArrayOrd for &'a FixedSizeBinaryArray {
 }
 
 #[inline]
-fn safe_cmp_for_intervals(
-    l: &dyn Array,
-    r: &dyn Array,
-    op: Op,
-) -> Option<(PrimitiveArray<Int64Type>, PrimitiveArray<Int64Type>)> {
-    match (
-        l.as_primitive_opt::<IntervalDayTimeType>(),
-        r.as_primitive_opt::<IntervalDayTimeType>(),
-        l.as_primitive_opt::<IntervalMonthDayNanoType>(),
-        r.as_primitive_opt::<IntervalMonthDayNanoType>(),
-    ) {
-        (Some(l_dt), Some(r_dt), _, _) => match op {
-            Op::Less | Op::LessEqual => {
-                let l_max = PrimitiveArray::<Int64Type>::from(
-                    l_dt.iter()
-                        .map(|dt| dt.map(dt_in_millis_max))
-                        .collect::<Vec<_>>(),
-                );
-                let r_min = PrimitiveArray::<Int64Type>::from(
-                    r_dt.iter()
-                        .map(|dt| dt.map(dt_in_millis_min))
-                        .collect::<Vec<_>>(),
-                );
-                Some((l_max, r_min))
+fn safer_interval_dt(dt: &dyn Array, op: Op, lhs: bool) -> PrimitiveArray<Int64Type> {
+    match dt.as_primitive_opt::<IntervalDayTimeType>() {
+        Some(dt) => match (op, lhs) {
+            (Op::Less | Op::LessEqual, true) | (Op::Greater | Op::GreaterEqual, false) => {
+                PrimitiveArray::<Int64Type>::from_iter(dt.iter().map(|dt| dt.map(dt_in_millis_max)))
             }
-            Op::Greater | Op::GreaterEqual => {
-                let l_min = PrimitiveArray::<Int64Type>::from(
-                    l_dt.iter()
-                        .map(|dt| dt.map(dt_in_millis_min))
-                        .collect::<Vec<_>>(),
-                );
-                let r_max = PrimitiveArray::<Int64Type>::from(
-                    r_dt.iter()
-                        .map(|dt| dt.map(dt_in_millis_max))
-                        .collect::<Vec<_>>(),
-                );
-                Some((l_min, r_max))
+            (Op::Greater | Op::GreaterEqual, true) | (Op::Less | Op::LessEqual, false) => {
+                PrimitiveArray::<Int64Type>::from_iter(dt.iter().map(|dt| dt.map(dt_in_millis_min)))
             }
-            _ => None,
+            (Op::Equal, _) | (Op::NotEqual, _) => PrimitiveArray::<Int64Type>::from_iter(dt.iter()),
+            _ => {
+                panic!(
+                    "Invalid operator {:?} for Interval(IntervalDayTime) comparison",
+                    op
+                )
+            }
         },
-        (_, _, Some(l_mdn), Some(r_mdn)) => match op {
-            Op::Less | Op::LessEqual => {
-                let l_max = PrimitiveArray::<Int64Type>::from_iter(
-                    l_mdn.iter().map(|mdn| mdn.map(mdn_in_nanos_max)),
-                );
-                let r_min = PrimitiveArray::<Int64Type>::from_iter(
-                    r_mdn.iter().map(|mdn| mdn.map(mdn_in_nanos_min)),
-                );
-                Some((l_max, r_min))
-            }
-            Op::Greater | Op::GreaterEqual => {
-                let l_min = PrimitiveArray::<Int64Type>::from_iter(
-                    l_mdn.iter().map(|mdn| mdn.map(mdn_in_nanos_min)),
-                );
-                let r_max = PrimitiveArray::<Int64Type>::from_iter(
-                    r_mdn.iter().map(|mdn| mdn.map(mdn_in_nanos_max)),
-                );
-                Some((l_min, r_max))
-            }
-            _ => None,
-        },
+        _ => {
+            panic!("Invalid datatype for Interval(IntervalDayTime) comparison")
+        }
+    }
+}
 
-        _ => None,
+#[inline]
+fn safer_interval_mdn(mdn: &dyn Array, op: Op, lhs: bool) -> PrimitiveArray<Int128Type> {
+    match mdn.as_primitive_opt::<IntervalMonthDayNanoType>() {
+        Some(mdn) => match (op, lhs) {
+            (Op::Less | Op::LessEqual, true) | (Op::Greater | Op::GreaterEqual, false) => {
+                PrimitiveArray::<Int128Type>::from_iter(
+                    mdn.iter().map(|mdn| mdn.map(mdn_in_nanos_max)),
+                )
+            }
+            (Op::Greater | Op::GreaterEqual, true) | (Op::Less | Op::LessEqual, false) => {
+                PrimitiveArray::<Int128Type>::from_iter(
+                    mdn.iter().map(|mdn| mdn.map(mdn_in_nanos_min)),
+                )
+            }
+            (Op::Equal, _) | (Op::NotEqual, _) => {
+                PrimitiveArray::<Int128Type>::from_iter(mdn.iter())
+            }
+            _ => {
+                panic!("Invalid operator for Interval(IntervalMonthDayNano) comparison")
+            }
+        },
+        _ => {
+            panic!("Invalid datatype for Interval(IntervalMonthDayNano) comparison")
+        }
     }
 }
 
@@ -633,19 +618,19 @@ fn dt_in_millis_min(dt: i64) -> i64 {
 }
 
 #[inline]
-fn mdn_in_nanos_max(mdn: i128) -> i64 {
+fn mdn_in_nanos_max(mdn: i128) -> i128 {
     let m = (mdn >> 96) as i32;
     let d = (mdn >> 64) as i32;
     let n = mdn as i64;
-    ((m * 31) + d) as i64 * (NANOS_PER_DAY + 1_000_000_000) + n
+    ((m as i128 * 31) + d as i128) * (NANOS_PER_DAY + 1_000_000_000) + n as i128
 }
 
 #[inline]
-fn mdn_in_nanos_min(mdn: i128) -> i64 {
+fn mdn_in_nanos_min(mdn: i128) -> i128 {
     let m = (mdn >> 96) as i32;
     let d = (mdn >> 64) as i32;
     let n = mdn as i64;
-    ((m * 28) + d) as i64 * (NANOS_PER_DAY) + n
+    ((m as i128 * 28) + d as i128) * (NANOS_PER_DAY) + n as i128
 }
 
 #[cfg(test)]
