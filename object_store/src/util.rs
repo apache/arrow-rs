@@ -124,7 +124,7 @@ where
 
             let start = range.start - fetch_range.start;
             let end = range.end - fetch_range.start;
-            fetch_bytes.slice(start..end)
+            fetch_bytes.slice(start..end.min(fetch_bytes.len()))
         })
         .collect())
 }
