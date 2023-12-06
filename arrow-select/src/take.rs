@@ -19,7 +19,7 @@
 
 use std::sync::Arc;
 
-use arrow_array::builder::BufferBuilder;
+use arrow_array::builder::{BufferBuilder, UInt32Builder};
 use arrow_array::cast::AsArray;
 use arrow_array::types::*;
 use arrow_array::*;
@@ -689,7 +689,7 @@ fn take_value_indices_from_fixed_size_list<IndexType>(
 where
     IndexType: ArrowPrimitiveType,
 {
-    let mut values = vec![];
+    let mut values = UInt32Builder::with_capacity(length as usize * indices.len());
 
     for i in 0..indices.len() {
         if indices.is_valid(i) {
@@ -699,11 +699,16 @@ where
                 .ok_or_else(|| ArrowError::ComputeError("Cast to usize failed".to_string()))?;
             let start = list.value_offset(index) as <UInt32Type as ArrowPrimitiveType>::Native;
 
-            values.extend(start..start + length);
+            // Safety: Range always has known length.
+            unsafe {
+                values.append_trusted_len_iter(start..start + length);
+            }
+        } else {
+            values.append_nulls(length as usize);
         }
     }
 
-    Ok(PrimitiveArray::<UInt32Type>::from(values))
+    Ok(values.finish())
 }
 
 /// To avoid generating take implementations for every index type, instead we
@@ -1983,6 +1988,23 @@ mod tests {
             .into_iter()
             .collect::<Vec<_>>();
         assert_eq!(&values, &[Some(23), Some(4), None, None])
+    }
+
+    #[test]
+    fn test_take_fixed_size_list_null_indices() {
+        let indices = Int32Array::from_iter([Some(0), None]);
+        let values = Arc::new(Int32Array::from(vec![0, 1, 2, 3]));
+        let arr_field = Arc::new(Field::new("item", values.data_type().clone(), true));
+        let values = FixedSizeListArray::try_new(arr_field, 2, values, None).unwrap();
+
+        let r = take(&values, &indices, None).unwrap();
+        let values = r
+            .as_fixed_size_list()
+            .values()
+            .as_primitive::<Int32Type>()
+            .into_iter()
+            .collect::<Vec<_>>();
+        assert_eq!(values, &[Some(0), Some(1), None, None])
     }
 
     #[test]
