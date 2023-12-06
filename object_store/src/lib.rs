@@ -589,6 +589,24 @@ pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
         self.get_opts(location, options).await?.bytes().await
     }
 
+    /// Return the last `nbytes` of the resource at the specified location.
+    ///
+    /// The default implementation uses 2 requests: one to find the full length,
+    /// and one to get the requested bytes.
+    /// Many stores implement suffix requests directly; these should override the default.
+    ///
+    /// If you already know the size of the resource, you should use a regular range request, like
+    /// `my_object_store.get_range(my_location, size.saturating_sub(nbytes)..size)`.
+    async fn get_suffix(&self, location: &Path, nbytes: usize) -> Result<Bytes> {
+        let options = GetOptions {
+            head: true,
+            ..Default::default()
+        };
+        let size = self.get_opts(location, options).await?.meta.size;
+        self.get_range(location, size.saturating_sub(nbytes)..size)
+            .await
+    }
+
     /// Return the bytes that are stored at the specified location
     /// in the given byte ranges
     async fn get_ranges(&self, location: &Path, ranges: &[Range<usize>]) -> Result<Vec<Bytes>> {
