@@ -573,8 +573,7 @@ impl<R: Read + Seek> fmt::Debug for FileReader<R> {
 impl<R: Read + Seek> FileReader<R> {
     /// Try to create a new file reader
     ///
-    /// Returns errors if the file does not meet the Arrow Format header and footer
-    /// requirements
+    /// Returns errors if the file does not meet the Arrow Format footer requirements
     pub fn try_new(mut reader: R, projection: Option<Vec<usize>>) -> Result<Self, ArrowError> {
         let mut buffer = [0; 10];
         reader.seek(SeekFrom::End(-10))?;
