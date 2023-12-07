@@ -468,7 +468,7 @@ mod tests {
     use arrow_array::builder::UnionBuilder;
     use arrow_array::cast::AsArray;
     use arrow_array::types::{Float64Type, Int32Type};
-    use arrow_array::{StructArray, UnionArray};
+    use arrow_array::*;
 
     use crate::array::{
         make_array, Array, ArrayData, BooleanArray, DictionaryArray, DurationSecondArray,
