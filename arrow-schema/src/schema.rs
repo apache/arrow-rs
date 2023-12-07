@@ -408,6 +408,29 @@ impl Schema {
     pub fn remove(&mut self, index: usize) -> FieldRef {
         self.fields.remove(index)
     }
+
+    /// Returns a field names from schema with references to fields
+    /// * `nested` - include nested fields.
+    #[inline]
+    pub fn field_names(&self, nested: bool) -> Vec<String> {
+        if nested {
+            self.fields
+                .iter()
+                .flat_map(|f| {
+                    if f.data_type().is_nested() {
+                        f.children_names()
+                    } else {
+                        vec![f.name().to_string()]
+                    }
+                })
+                .collect::<Vec<_>>()
+        } else {
+            self.fields
+                .iter()
+                .map(|f| f.name().clone())
+                .collect::<Vec<_>>()
+        }
+    }
 }
 
 impl fmt::Display for Schema {
@@ -956,5 +979,30 @@ mod tests {
         assert_eq!(out.metadata.len(), 2);
         assert_eq!(out.metadata["k"], "v");
         assert_eq!(out.metadata["key"], "value");
+    }
+
+    #[test]
+    fn test_schema_field_names() {
+        use crate::Field;
+        let mut builder = SchemaBuilder::new();
+        builder.push(Field::new("a", DataType::Int32, false));
+        builder.push(Field::new("b", DataType::Utf8, false));
+        builder.push(Field::new(
+            "nested",
+            DataType::Struct(Fields::from(vec![Field::new(
+                "inner",
+                DataType::Struct(Fields::from(vec![Field::new("a", DataType::Int32, true)])),
+                true,
+            )])),
+            true,
+        ));
+
+        let schema = builder.finish();
+        assert_eq!(schema.field_names(false), vec!["a", "b", "nested"]);
+
+        assert_eq!(
+            schema.field_names(true),
+            vec!["a", "b", "nested", "nested.inner", "nested.inner.a"]
+        );
     }
 }

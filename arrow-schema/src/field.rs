@@ -333,6 +333,67 @@ impl Field {
         collected_fields
     }
 
+    /// Returns a [`Vec`] direct children [`Field`]s
+    /// within `self`
+    pub(crate) fn nested_fields(&self) -> Vec<&Field> {
+        Field::_nested_fields(&self.data_type)
+    }
+
+    /// Return self and direct children field names of the [`Field`]
+    ///
+    /// ```
+    /// # use arrow_schema::*;
+    /// let field = Field::new("nested",
+    ///        DataType::Struct(
+    ///            Fields::from(
+    ///                vec![
+    ///                    Field::new("inner",
+    ///                    DataType::Struct(
+    ///                        Fields::from(
+    ///                            vec![
+    ///                                Field::new("a", DataType::Int32, true)
+    ///                                ])), true)])), true
+    ///                );
+    ///
+    /// assert_eq!(field.children_names(), vec!["nested", "nested.inner", "nested.inner.a"]);
+    /// ```
+    pub fn children_names(&self) -> Vec<String> {
+        fn nested_field_names_inner(f: &Field, parent_name: String, buffer: &mut Vec<String>) {
+            let current_name = format!("{}{}", parent_name, f.name());
+
+            // Push the concatenated name to the result vector
+            buffer.push(current_name.clone());
+
+            // Recursively concatenate child names
+            for child in f.nested_fields() {
+                nested_field_names_inner(child, format!("{}.", current_name), buffer);
+            }
+        }
+
+        if !&self.data_type().is_nested() {
+            vec![]
+        } else {
+            let mut result: Vec<String> = Vec::new();
+            nested_field_names_inner(self, "".to_string(), &mut result);
+            result
+        }
+    }
+
+    // Return inner fields not flattened
+    fn _nested_fields(dt: &DataType) -> Vec<&Field> {
+        match dt {
+            DataType::Struct(fields) => fields.iter().map(|f| f.as_ref()).collect(),
+            DataType::Union(fields, _) => fields.iter().map(|f| f.1.as_ref()).collect(),
+            DataType::List(field)
+            | DataType::LargeList(field)
+            | DataType::FixedSizeList(field, _)
+            | DataType::Map(field, _) => field.fields(),
+            DataType::Dictionary(_, value_field) => Field::_nested_fields(value_field.as_ref()),
+            _ => vec![],
+        }
+    }
+
+    // Return inner fields flattened
     fn _fields(dt: &DataType) -> Vec<&Field> {
         match dt {
             DataType::Struct(fields) => fields.iter().flat_map(|f| f.fields()).collect(),

@@ -149,9 +149,10 @@ impl RecordBatch {
         // check that number of fields in schema match column length
         if schema.fields().len() != columns.len() {
             return Err(ArrowError::InvalidArgumentError(format!(
-                "number of columns({}) must match number of fields({}) in schema",
+                "Mismatch between columns [{}] and schema fields [{}].\nKnown schema fields[{}]",
                 columns.len(),
                 schema.fields().len(),
+                schema.field_names(false).join(","),
             )));
         }
 

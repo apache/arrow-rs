@@ -287,7 +287,7 @@ async fn test_mismatched_record_batch_schema() {
     let err = result.unwrap_err();
     assert_eq!(
         err.to_string(),
-        "Arrow(InvalidArgumentError(\"number of columns(1) must match number of fields(2) in schema\"))"
+        "Arrow(InvalidArgumentError(\"Mismatch between columns [1] and schema fields [2].\\nKnown schema fields[i,f]\"))"
     );
 }
 
