@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::types::*;
 use crate::ArrowPrimitiveType;
 
 /// A subtype of primitive type that represents numeric values.

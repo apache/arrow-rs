@@ -153,7 +153,7 @@ mod tests {
     #[test]
     fn test_get_bit_raw() {
         const NUM_BYTE: usize = 10;
-        let mut buf = vec![0; NUM_BYTE];
+        let mut buf = [0; NUM_BYTE];
         let mut expected = vec![];
         let mut rng = seedable_rng();
         for i in 0..8 * NUM_BYTE {

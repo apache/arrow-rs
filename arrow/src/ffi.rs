@@ -471,10 +471,10 @@ mod tests {
     use arrow_array::{StructArray, UnionArray};
 
     use crate::array::{
-        make_array, Array, ArrayData, BooleanArray, Decimal128Array, DictionaryArray,
-        DurationSecondArray, FixedSizeBinaryArray, FixedSizeListArray, GenericBinaryArray,
-        GenericListArray, GenericStringArray, Int32Array, MapArray, OffsetSizeTrait,
-        Time32MillisecondArray, TimestampMillisecondArray, UInt32Array,
+        make_array, Array, ArrayData, BooleanArray, DictionaryArray, DurationSecondArray,
+        FixedSizeBinaryArray, FixedSizeListArray, GenericBinaryArray, GenericListArray,
+        GenericStringArray, Int32Array, MapArray, OffsetSizeTrait, Time32MillisecondArray,
+        TimestampMillisecondArray, UInt32Array,
     };
     use crate::compute::kernels;
     use crate::datatypes::{Field, Int8Type};

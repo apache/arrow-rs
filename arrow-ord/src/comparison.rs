@@ -243,34 +243,6 @@ fn make_utf8_scalar(d: &DataType, scalar: &str) -> Result<ArrayRef, ArrowError> 
     }
 }
 
-/// Helper function to perform boolean lambda function on values from two array accessors, this
-/// version does not attempt to use SIMD.
-fn compare_op<T: ArrayAccessor, S: ArrayAccessor, F>(
-    left: T,
-    right: S,
-    op: F,
-) -> Result<BooleanArray, ArrowError>
-where
-    F: Fn(T::Item, S::Item) -> bool,
-{
-    if left.len() != right.len() {
-        return Err(ArrowError::ComputeError(
-            "Cannot perform comparison operation on arrays of different length".to_string(),
-        ));
-    }
-
-    Ok(BooleanArray::from_binary(left, right, op))
-}
-
-/// Helper function to perform boolean lambda function on values from array accessor, this
-/// version does not attempt to use SIMD.
-fn compare_op_scalar<T: ArrayAccessor, F>(left: T, op: F) -> Result<BooleanArray, ArrowError>
-where
-    F: Fn(T::Item) -> bool,
-{
-    Ok(BooleanArray::from_unary(left, op))
-}
-
 /// Perform `left == right` operation on [`StringArray`] / [`LargeStringArray`].
 #[deprecated(note = "Use arrow_ord::cmp::eq")]
 pub fn eq_utf8<OffsetSize: OffsetSizeTrait>(
@@ -1014,12 +986,13 @@ where
 }
 
 /// Applies an unary and infallible comparison function to a primitive array.
+#[deprecated(note = "Use BooleanArray::from_unary")]
 pub fn unary_cmp<T, F>(left: &PrimitiveArray<T>, op: F) -> Result<BooleanArray, ArrowError>
 where
     T: ArrowNumericType,
     F: Fn(T::Native) -> bool,
 {
-    compare_op_scalar(left, op)
+    Ok(BooleanArray::from_unary(left, op))
 }
 
 /// Perform `left != right` operation on two [`PrimitiveArray`]s.
