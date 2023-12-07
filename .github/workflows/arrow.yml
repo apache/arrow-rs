@@ -148,9 +148,9 @@ jobs:
         with:
           target: wasm32-unknown-unknown,wasm32-wasi
       - name: Build wasm32-unknown-unknown
-        run: cargo build -p arrow --no-default-features --all-features --target wasm32-unknown-unknown
+        run: cargo build -p arrow --no-default-features --features=json,csv,ipc,ffi --target wasm32-unknown-unknown
       - name: Build wasm32-wasi
-        run: cargo build -p arrow --no-default-features --all-features --target wasm32-wasi
+        run: cargo build -p arrow --no-default-features --features=json,csv,ipc,ffi --target wasm32-wasi
 
   clippy:
     name: Clippy
