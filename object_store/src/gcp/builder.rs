@@ -393,7 +393,7 @@ impl GoogleCloudStorageBuilder {
         self
     }
 
-    /// Set the credential provider overriding any other options
+    /// Set the credential provider overriding any other options. Default: [`InstanceCredentialProvider`]
     pub fn with_credentials(mut self, credentials: GcpCredentialProvider) -> Self {
         self.credentials = Some(credentials);
         self
