@@ -35,8 +35,7 @@ use arrow_array::{
 };
 use arrow_buffer::bit_util::ceil;
 use arrow_buffer::{BooleanBuffer, MutableBuffer, NullBuffer};
-use arrow_schema::ArrowError;
-use arrow_schema::IntervalUnit;
+use arrow_schema::{ArrowError, IntervalUnit};
 use arrow_select::take::take;
 
 #[derive(Debug, Copy, Clone)]
