@@ -329,28 +329,11 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
             None => values.len(),
         };
 
-        // If only computing chunk-level statistics compute them here, page-level statistics
-        // are computed in [`Self::write_mini_batch`] and used to update chunk statistics in
-        // [`Self::add_data_page`]
-        if self.statistics_enabled == EnabledStatistics::Chunk
-            // INTERVAL has undefined sort order, so don't write min/max stats for it
-            && self.descr.converted_type() != ConvertedType::INTERVAL
-        {
-            match (min, max) {
-                (Some(min), Some(max)) => {
-                    update_min(&self.descr, min, &mut self.column_metrics.min_column_value);
-                    update_max(&self.descr, max, &mut self.column_metrics.max_column_value);
-                }
-                (None, Some(_)) | (Some(_), None) => {
-                    panic!("min/max should be both set or both None")
-                }
-                (None, None) => {
-                    if let Some((min, max)) = self.encoder.min_max(values, value_indices) {
-                        update_min(&self.descr, &min, &mut self.column_metrics.min_column_value);
-                        update_max(&self.descr, &max, &mut self.column_metrics.max_column_value);
-                    }
-                }
-            };
+        if let Some(min) = min {
+            update_min(&self.descr, min, &mut self.column_metrics.min_column_value);
+        }
+        if let Some(max) = max {
+            update_max(&self.descr, max, &mut self.column_metrics.max_column_value);
         }
 
         // We can only set the distinct count if there are no other writes
@@ -764,22 +747,23 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
 
         self.column_metrics.num_column_nulls += self.page_metrics.num_page_nulls;
 
-        let page_statistics = if let (Some(min), Some(max)) =
-            (values_data.min_value, values_data.max_value)
-        {
-            // Update chunk level statistics
-            update_min(&self.descr, &min, &mut self.column_metrics.min_column_value);
-            update_max(&self.descr, &max, &mut self.column_metrics.max_column_value);
+        let page_statistics = match (values_data.min_value, values_data.max_value) {
+            (Some(min), Some(max)) => {
+                // Update chunk level statistics
+                update_min(&self.descr, &min, &mut self.column_metrics.min_column_value);
+                update_max(&self.descr, &max, &mut self.column_metrics.max_column_value);
 
-            (self.statistics_enabled == EnabledStatistics::Page).then_some(ValueStatistics::new(
-                Some(min),
-                Some(max),
-                None,
-                self.page_metrics.num_page_nulls,
-                false,
-            ))
-        } else {
-            None
+                (self.statistics_enabled == EnabledStatistics::Page).then_some(
+                    ValueStatistics::new(
+                        Some(min),
+                        Some(max),
+                        None,
+                        self.page_metrics.num_page_nulls,
+                        false,
+                    ),
+                )
+            }
+            _ => None,
         };
 
         // update column and offset index
