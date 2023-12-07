@@ -2047,21 +2047,21 @@ mod tests {
         assert_eq!(res, res_eq);
         assert_eq!(
             &res,
-            &BooleanArray::from(vec![ Some(true), Some(true), Some(true), Some(true), Some(false)])
+            &BooleanArray::from(vec![ Some(true), Some(true), Some(true), Some(true), Some(true)])
         );
         let res = lt(&b, &a).unwrap();
         let res_eq = lt_eq(&b, &a).unwrap();
         assert_eq!(res, res_eq);
         assert_eq!(
             &res,
-            &BooleanArray::from(vec![ Some(true), Some(true), Some(true), Some(true), Some(false)])
+            &BooleanArray::from(vec![ Some(true), Some(true), Some(true), Some(true), Some(true)])
         );
 
         let a = IntervalMonthDayNanoArray::from(
-            vec![Some(IntervalMonthDayNanoType::make_value(0, 0, 1)),Some(IntervalMonthDayNanoType::make_value(0, 1, -1_000_000_000)),Some(IntervalMonthDayNanoType::make_value(3, 2, -100_000_000_000)),Some(IntervalMonthDayNanoType::make_value(0, 1, 1)),Some(IntervalMonthDayNanoType::make_value(1, 28, 0)), Some(IntervalMonthDayNanoType::make_value(10, 0, -1_000_000_000_000))],
+            vec![Some(IntervalMonthDayNanoType::make_value(0, 0, 1)),Some(IntervalMonthDayNanoType::make_value(0, 1, -1_000_000_000)),Some(IntervalMonthDayNanoType::make_value(3, 2, -100_000_000_000)),Some(IntervalMonthDayNanoType::make_value(0, 1, 86_400_000_000_999)),Some(IntervalMonthDayNanoType::make_value(1, 28, 0)), Some(IntervalMonthDayNanoType::make_value(10, 0, -1_000_000_000_000))],
         );
         let b = IntervalMonthDayNanoArray::from(
-            vec![Some(IntervalMonthDayNanoType::make_value(0, 0,0)),Some(IntervalMonthDayNanoType::make_value(0, 1, -8_000_000_000)),Some(IntervalMonthDayNanoType::make_value(1, 25, 100_000_000_000)),Some(IntervalMonthDayNanoType::make_value(0, 1, 0)),Some(IntervalMonthDayNanoType::make_value(2, 0, 0)), Some(IntervalMonthDayNanoType::make_value(5, 150, 1_000_000_000_000))],
+            vec![Some(IntervalMonthDayNanoType::make_value(0, 0,0)),Some(IntervalMonthDayNanoType::make_value(0, 1, -8_000_000_000)),Some(IntervalMonthDayNanoType::make_value(1, 25, 100_000_000_000)),Some(IntervalMonthDayNanoType::make_value(0, 2, 0)),Some(IntervalMonthDayNanoType::make_value(2, 0, 0)), Some(IntervalMonthDayNanoType::make_value(5, 150, 1_000_000_000_000))],
         );
         let res = gt(&a, &b).unwrap();
         let res_eq = gt_eq(&a, &b).unwrap();
