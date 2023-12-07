@@ -49,10 +49,6 @@ chrono-tz = { version = "0.8", optional = true }
 num = { version = "0.4.1", default-features = false, features = ["std"] }
 half = { version = "2.1", default-features = false, features = ["num-traits"] }
 hashbrown = { version = "0.14", default-features = false }
-packed_simd = { version = "0.3.9", default-features = false, optional = true }
-
-[features]
-simd = ["packed_simd"]
 
 [dev-dependencies]
 rand = { version = "0.8", default-features = false, features = ["std", "std_rng"] }
