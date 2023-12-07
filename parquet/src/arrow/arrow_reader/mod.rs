@@ -575,6 +575,10 @@ impl Iterator for ParquetRecordBatchReader {
 }
 
 impl RecordBatchReader for ParquetRecordBatchReader {
+    /// Returns the projected [`SchemaRef`] for reading the parquet file.
+    ///
+    /// Note that the schema metadata will be stripped here. See
+    /// [`ParquetRecordBatchReaderBuilder::schema`] if the metadata is desired.
     fn schema(&self) -> SchemaRef {
         self.schema.clone()
     }

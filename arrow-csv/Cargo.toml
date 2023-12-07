@@ -18,7 +18,7 @@
 [package]
 name = "arrow-csv"
 version = { workspace = true }
-description = "Support for parsing CSV format into the Arrow format"
+description = "Support for parsing CSV format to and from the Arrow format"
 homepage = { workspace = true }
 repository = { workspace = true }
 authors = { workspace = true }
