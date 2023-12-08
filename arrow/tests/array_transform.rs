@@ -28,6 +28,7 @@ use arrow_data::ArrayData;
 use arrow_schema::{DataType, Field, Fields};
 use std::sync::Arc;
 
+#[allow(unused)]
 fn create_decimal_array(array: Vec<Option<i128>>, precision: u8, scale: i8) -> Decimal128Array {
     array
         .into_iter()

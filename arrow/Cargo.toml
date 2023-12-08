@@ -65,7 +65,6 @@ ipc_compression = ["ipc", "arrow-ipc/lz4", "arrow-ipc/zstd"]
 csv = ["arrow-csv"]
 ipc = ["arrow-ipc"]
 json = ["arrow-json"]
-simd = ["arrow-array/simd", "arrow-arith/simd"]
 prettyprint = ["arrow-cast/prettyprint"]
 # The test utils feature enables code used in benchmarks and tests but
 # not the core arrow code itself. Be aware that `rand` must be kept as

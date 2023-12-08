@@ -43,6 +43,3 @@ half = { version = "2.1", default-features = false }
 num = { version = "0.4", default-features = false, features = ["std"] }
 
 [dev-dependencies]
-
-[features]
-simd = ["arrow-array/simd"]
