@@ -99,7 +99,7 @@ impl Buffer {
     ///
     /// This function is unsafe as there is no guarantee that the given pointer is valid for `len`
     /// bytes. If the `ptr` and `capacity` come from a `Buffer`, then this is guaranteed.
-    #[deprecated(note = "Use From<Vec<T>>")]
+    #[deprecated(note = "Use Buffer::from_vec")]
     pub unsafe fn from_raw_parts(ptr: NonNull<u8>, len: usize, capacity: usize) -> Self {
         assert!(len <= capacity);
         let layout = Layout::from_size_align(capacity, ALIGNMENT).unwrap();
