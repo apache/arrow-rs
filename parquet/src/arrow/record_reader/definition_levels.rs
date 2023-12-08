@@ -30,12 +30,10 @@ use crate::column::reader::decoder::{
 use crate::errors::{ParquetError, Result};
 use crate::schema::types::ColumnDescPtr;
 
-use super::buffer::ScalarBuffer;
-
 enum BufferInner {
     /// Compute levels and null mask
     Full {
-        levels: ScalarBuffer<i16>,
+        levels: Vec<i16>,
         nulls: BooleanBufferBuilder,
         max_level: i16,
     },
@@ -77,7 +75,7 @@ impl DefinitionLevelBuffer {
                 }
             }
             false => BufferInner::Full {
-                levels: ScalarBuffer::new(),
+                levels: Vec::new(),
                 nulls: BooleanBufferBuilder::new(0),
                 max_level: desc.max_def_level(),
             },
@@ -89,7 +87,7 @@ impl DefinitionLevelBuffer {
     /// Returns the built level data
     pub fn consume_levels(&mut self) -> Option<Buffer> {
         match &mut self.inner {
-            BufferInner::Full { levels, .. } => Some(std::mem::take(levels).into()),
+            BufferInner::Full { levels, .. } => Some(Buffer::from_vec(std::mem::take(levels))),
             BufferInner::Mask { .. } => None,
         }
     }
@@ -174,9 +172,9 @@ impl DefinitionLevelDecoder for DefinitionLevelBufferDecoder {
                 assert_eq!(self.max_level, *max_level);
                 assert_eq!(range.start + writer.len, nulls.len());
 
-                levels.resize(range.end + writer.len);
+                levels.resize(range.end + writer.len, 0);
 
-                let slice = &mut levels.as_slice_mut()[writer.len..];
+                let slice = &mut levels[writer.len..];
                 let levels_read = decoder.read_def_levels(slice, range.clone())?;
 
                 nulls.reserve(levels_read);

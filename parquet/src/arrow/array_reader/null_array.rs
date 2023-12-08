@@ -16,14 +16,13 @@
 // under the License.
 
 use crate::arrow::array_reader::{read_records, skip_records, ArrayReader};
-use crate::arrow::record_reader::buffer::ScalarValue;
 use crate::arrow::record_reader::RecordReader;
 use crate::column::page::PageIterator;
 use crate::data_type::DataType;
 use crate::errors::Result;
 use crate::schema::types::ColumnDescPtr;
 use arrow_array::ArrayRef;
-use arrow_buffer::Buffer;
+use arrow_buffer::{ArrowNativeType, Buffer};
 use arrow_schema::DataType as ArrowType;
 use std::any::Any;
 use std::sync::Arc;
@@ -33,7 +32,7 @@ use std::sync::Arc;
 pub struct NullArrayReader<T>
 where
     T: DataType,
-    T::T: ScalarValue,
+    T::T: ArrowNativeType,
 {
     data_type: ArrowType,
     pages: Box<dyn PageIterator>,
@@ -45,7 +44,7 @@ where
 impl<T> NullArrayReader<T>
 where
     T: DataType,
-    T::T: ScalarValue,
+    T::T: ArrowNativeType,
 {
     /// Construct null array reader.
     pub fn new(pages: Box<dyn PageIterator>, column_desc: ColumnDescPtr) -> Result<Self> {
@@ -65,7 +64,7 @@ where
 impl<T> ArrayReader for NullArrayReader<T>
 where
     T: DataType,
-    T::T: ScalarValue,
+    T::T: ArrowNativeType,
 {
     fn as_any(&self) -> &dyn Any {
         self
