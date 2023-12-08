@@ -16,8 +16,7 @@
 // under the License.
 
 use crate::arrow::buffer::bit_util::iter_set_bits_rev;
-use crate::arrow::record_reader::buffer::{BufferQueue, ValuesBuffer};
-use crate::column::reader::decoder::ValuesBufferSlice;
+use crate::arrow::record_reader::buffer::ValuesBuffer;
 use crate::errors::{ParquetError, Result};
 use arrow_array::{make_array, ArrayRef, OffsetSizeTrait};
 use arrow_buffer::{ArrowNativeType, Buffer};
@@ -141,23 +140,6 @@ impl<I: OffsetSizeTrait> OffsetBuffer<I> {
     }
 }
 
-impl<I: OffsetSizeTrait> BufferQueue for OffsetBuffer<I> {
-    type Output = Self;
-    type Slice = Self;
-
-    fn consume(&mut self) -> Self::Output {
-        std::mem::take(self)
-    }
-
-    fn get_output_slice(&mut self, _batch_size: usize) -> &mut Self::Slice {
-        self
-    }
-
-    fn truncate_buffer(&mut self, len: usize) {
-        assert_eq!(self.offsets.len(), len + 1);
-    }
-}
-
 impl<I: OffsetSizeTrait> ValuesBuffer for OffsetBuffer<I> {
     fn pad_nulls(
         &mut self,
@@ -208,12 +190,6 @@ impl<I: OffsetSizeTrait> ValuesBuffer for OffsetBuffer<I> {
     }
 }
 
-impl<I: OffsetSizeTrait> ValuesBufferSlice for OffsetBuffer<I> {
-    fn capacity(&self) -> usize {
-        usize::MAX
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -250,7 +226,7 @@ mod tests {
         for v in ["hello", "world", "cupcakes", "a", "b", "c"] {
             buffer.try_push(v.as_bytes(), false).unwrap()
         }
-        let split = buffer.consume();
+        let split = std::mem::take(&mut buffer);
 
         let array = split.into_array(None, ArrowType::Utf8);
         let strings = array.as_any().downcast_ref::<StringArray>().unwrap();

@@ -16,8 +16,7 @@
 // under the License.
 
 use crate::arrow::buffer::offset_buffer::OffsetBuffer;
-use crate::arrow::record_reader::buffer::{BufferQueue, ValuesBuffer};
-use crate::column::reader::decoder::ValuesBufferSlice;
+use crate::arrow::record_reader::buffer::ValuesBuffer;
 use crate::errors::{ParquetError, Result};
 use arrow_array::{make_array, Array, ArrayRef, OffsetSizeTrait};
 use arrow_buffer::{ArrowNativeType, Buffer};
@@ -185,12 +184,6 @@ impl<K: ArrowNativeType + Ord, V: OffsetSizeTrait> DictionaryBuffer<K, V> {
     }
 }
 
-impl<K: ArrowNativeType, V: OffsetSizeTrait> ValuesBufferSlice for DictionaryBuffer<K, V> {
-    fn capacity(&self) -> usize {
-        usize::MAX
-    }
-}
-
 impl<K: ArrowNativeType, V: OffsetSizeTrait> ValuesBuffer for DictionaryBuffer<K, V> {
     fn pad_nulls(
         &mut self,
@@ -207,34 +200,6 @@ impl<K: ArrowNativeType, V: OffsetSizeTrait> ValuesBuffer for DictionaryBuffer<K
             Self::Values { values, .. } => {
                 values.pad_nulls(read_offset, values_read, levels_read, valid_mask)
             }
-        }
-    }
-}
-
-impl<K: ArrowNativeType, V: OffsetSizeTrait> BufferQueue for DictionaryBuffer<K, V> {
-    type Output = Self;
-    type Slice = Self;
-
-    fn consume(&mut self) -> Self::Output {
-        match self {
-            Self::Dict { keys, values } => Self::Dict {
-                keys: std::mem::take(keys),
-                values: values.clone(),
-            },
-            Self::Values { values } => Self::Values {
-                values: values.consume(),
-            },
-        }
-    }
-
-    fn get_output_slice(&mut self, _batch_size: usize) -> &mut Self::Slice {
-        self
-    }
-
-    fn truncate_buffer(&mut self, len: usize) {
-        match self {
-            Self::Dict { keys, .. } => keys.truncate_buffer(len),
-            Self::Values { values } => values.truncate_buffer(len),
         }
     }
 }
@@ -274,7 +239,7 @@ mod tests {
         buffer.pad_nulls(read_offset, 2, 5, null_buffer.as_slice());
 
         assert_eq!(buffer.len(), 13);
-        let split = buffer.consume();
+        let split = std::mem::take(&mut buffer);
 
         let array = split.into_array(Some(null_buffer), &dict_type).unwrap();
         assert_eq!(array.data_type(), &dict_type);
@@ -309,7 +274,9 @@ mod tests {
             .unwrap()
             .extend_from_slice(&[0, 1, 0, 1]);
 
-        let array = buffer.consume().into_array(None, &dict_type).unwrap();
+        let array = std::mem::take(&mut buffer)
+            .into_array(None, &dict_type)
+            .unwrap();
         assert_eq!(array.data_type(), &dict_type);
 
         let strings = cast(&array, &ArrowType::Utf8).unwrap();
@@ -320,7 +287,7 @@ mod tests {
         );
 
         // Can recreate with new dictionary as keys empty
-        assert!(matches!(&buffer, DictionaryBuffer::Dict { .. }));
+        assert!(matches!(&buffer, DictionaryBuffer::Values { .. }));
         assert_eq!(buffer.len(), 0);
         let d3 = Arc::new(StringArray::from(vec!["bongo"])) as ArrayRef;
         buffer.as_keys(&d3).unwrap().extend_from_slice(&[0, 0]);

@@ -77,8 +77,8 @@ where
 {
     data_type: ArrowType,
     pages: Box<dyn PageIterator>,
-    def_levels_buffer: Option<Buffer>,
-    rep_levels_buffer: Option<Buffer>,
+    def_levels_buffer: Option<Vec<i16>>,
+    rep_levels_buffer: Option<Vec<i16>>,
     record_reader: RecordReader<T>,
 }
 
@@ -287,11 +287,11 @@ where
     }
 
     fn get_def_levels(&self) -> Option<&[i16]> {
-        self.def_levels_buffer.as_ref().map(|buf| buf.typed_data())
+        self.def_levels_buffer.as_deref()
     }
 
     fn get_rep_levels(&self) -> Option<&[i16]> {
-        self.rep_levels_buffer.as_ref().map(|buf| buf.typed_data())
+        self.rep_levels_buffer.as_deref()
     }
 }
 
