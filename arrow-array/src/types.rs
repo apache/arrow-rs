@@ -221,9 +221,8 @@ make_type!(
     DataType::Interval(IntervalUnit::DayTime),
     r#"A “calendar” interval type in days and milliseconds.
 
-## Represenation
-This type is stored as a single 64 bit integer,
-interpreted as two different i32 fields:
+## Representation
+This type is stored as a single 64 bit integer, interpreted as two i32 fields:
 1. the number of elapsed days
 2. The number of milliseconds (no leap seconds),
 
@@ -249,7 +248,7 @@ make_type!(
     DataType::Interval(IntervalUnit::MonthDayNano),
     r#"A “calendar” interval type in months, days, and nanoseconds.
 
-## Represenation
+## Representation
 This type is stored as a single 128 bit integer,
 interpreted as three different signed integral fields:
 
@@ -284,8 +283,7 @@ complicated in practice. For example is `1 month` more or less than `30 days`? T
 answer depends on what month you are talking about.
 
 This crate defines comparisons for calendar types using their binary
-representation which is the fastest and most efficient way to compare. However,
-comparing interval quanities using their binary representation can lead
+representation which is fast and efficient, but leads
 to potentially surprising results.
 
 For example a
