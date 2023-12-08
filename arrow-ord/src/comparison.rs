@@ -1407,6 +1407,48 @@ mod tests {
             vec![6, 7, 8, 9, 10, 6, 7, 8, 9, 10],
             vec![false, false, true, false, false, false, false, true, false, false]
         );
+
+        cmp_vec!(
+            eq,
+            eq_dyn,
+            IntervalYearMonthArray,
+            vec![
+                IntervalYearMonthType::make_value(1, 2),
+                IntervalYearMonthType::make_value(2, 1),
+                // 1 year
+                IntervalYearMonthType::make_value(1, 0),
+            ],
+            vec![
+                IntervalYearMonthType::make_value(1, 2),
+                IntervalYearMonthType::make_value(1, 2),
+                // NB 12 months is treated as equal to a year (as the underlying
+                // type stores number of months)
+                IntervalYearMonthType::make_value(0, 12),
+            ],
+            vec![true, false, true]
+        );
+
+        cmp_vec!(
+            eq,
+            eq_dyn,
+            IntervalMonthDayNanoArray,
+            vec![
+                IntervalMonthDayNanoType::make_value(1, 2, 3),
+                IntervalMonthDayNanoType::make_value(3, 2, 1),
+                // 1 month
+                IntervalMonthDayNanoType::make_value(1, 0, 0),
+                IntervalMonthDayNanoType::make_value(1, 0, 0),
+            ],
+            vec![
+                IntervalMonthDayNanoType::make_value(1, 2, 3),
+                IntervalMonthDayNanoType::make_value(1, 2, 3),
+                // 30 days is not treated as a month
+                IntervalMonthDayNanoType::make_value(0, 30, 0),
+                // 100 days
+                IntervalMonthDayNanoType::make_value(0, 100, 0),
+            ],
+            vec![true, false, false, false]
+        );
     }
 
     #[test]
@@ -1659,6 +1701,77 @@ mod tests {
             vec![8, 8, 8, 8, 8, 8, 8, 8, 8, 8],
             vec![6, 7, 8, 9, 10, 6, 7, 8, 9, 10],
             vec![false, false, false, true, true, false, false, false, true, true]
+        );
+
+        cmp_vec!(
+            lt,
+            lt_dyn,
+            IntervalDayTimeArray,
+            vec![
+                IntervalDayTimeType::make_value(1, 0),
+                IntervalDayTimeType::make_value(0, 1000),
+                IntervalDayTimeType::make_value(1, 1000),
+                IntervalDayTimeType::make_value(1, 3000),
+                // 90M milliseconds
+                IntervalDayTimeType::make_value(0, 90_000_000),
+            ],
+            vec![
+                IntervalDayTimeType::make_value(0, 1000),
+                IntervalDayTimeType::make_value(1, 0),
+                IntervalDayTimeType::make_value(10, 0),
+                IntervalDayTimeType::make_value(2, 1),
+                // NB even though 1 day is less than 90M milliseconds long,
+                // it compares as greater because the underlying type stores
+                // days and milliseconds as different fields
+                IntervalDayTimeType::make_value(0, 12),
+            ],
+            vec![false, true, true, true ,false]
+        );
+
+        cmp_vec!(
+            lt,
+            lt_dyn,
+            IntervalYearMonthArray,
+            vec![
+                IntervalYearMonthType::make_value(1, 2),
+                IntervalYearMonthType::make_value(2, 1),
+                IntervalYearMonthType::make_value(1, 2),
+                // 1 year
+                IntervalYearMonthType::make_value(1, 0),
+            ],
+            vec![
+                IntervalYearMonthType::make_value(1, 2),
+                IntervalYearMonthType::make_value(1, 2),
+                IntervalYearMonthType::make_value(2, 1),
+                // NB 12 months is treated as equal to a year (as the underlying
+                // type stores number of months)
+                IntervalYearMonthType::make_value(0, 12),
+            ],
+            vec![false, false, true, false]
+        );
+
+        cmp_vec!(
+            lt,
+            lt_dyn,
+            IntervalMonthDayNanoArray,
+            vec![
+                IntervalMonthDayNanoType::make_value(1, 2, 3),
+                IntervalMonthDayNanoType::make_value(3, 2, 1),
+                // 1 month
+                IntervalMonthDayNanoType::make_value(1, 0, 0),
+                IntervalMonthDayNanoType::make_value(1, 2, 0),
+                IntervalMonthDayNanoType::make_value(1, 0, 0),
+            ],
+            vec![
+                IntervalMonthDayNanoType::make_value(1, 2, 3),
+                IntervalMonthDayNanoType::make_value(1, 2, 3),
+                IntervalMonthDayNanoType::make_value(2, 0, 0),
+                // 30 days is not treated as a month
+                IntervalMonthDayNanoType::make_value(0, 30, 0),
+                // 100 days (note is treated as greater than 1 month as the underlying integer representation)
+                IntervalMonthDayNanoType::make_value(0, 100, 0),
+            ],
+            vec![false, false, true, false, false]
         );
     }
 
