@@ -9449,4 +9449,29 @@ mod tests {
         let r: Vec<_> = a.as_string::<i32>().iter().map(|x| x.unwrap()).collect();
         assert_eq!(r, &["[0, 1, 2]", "[0, null, 2]"]);
     }
+    #[test]
+    fn test_cast_string_to_timestamp_invalid_tz() {
+        // content after Z should be ignored
+        let bad_timestamp = "2023-12-05T21:58:10.45ZZTOP";
+        let array = StringArray::from(vec![Some(bad_timestamp)]);
+
+        let data_types = [
+            DataType::Timestamp(TimeUnit::Second, None),
+            DataType::Timestamp(TimeUnit::Millisecond, None),
+            DataType::Timestamp(TimeUnit::Microsecond, None),
+            DataType::Timestamp(TimeUnit::Nanosecond, None),
+        ];
+
+        let cast_options = CastOptions {
+            safe: false,
+            ..Default::default()
+        };
+
+        for dt in data_types {
+            assert_eq!(
+                cast_with_options(&array, &dt, &cast_options).unwrap_err().to_string(),
+                "Parser error: Invalid timezone \"ZZTOP\": only offset based timezones supported without chrono-tz feature"
+            );
+        }
+    }
 }
