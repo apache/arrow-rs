@@ -575,6 +575,7 @@ impl<R: Read + Seek> FileReader<R> {
     ///
     /// Returns errors if the file does not meet the Arrow Format footer requirements
     pub fn try_new(mut reader: R, projection: Option<Vec<usize>>) -> Result<Self, ArrowError> {
+        // Space for ARROW_MAGIC (6 bytes) and length (4 bytes)
         let mut buffer = [0; 10];
         reader.seek(SeekFrom::End(-10))?;
         reader.read_exact(&mut buffer)?;
