@@ -256,8 +256,8 @@ impl BooleanArray {
     }
 
     /// Deconstruct this array into its constituent parts
-    pub fn into_parts(self) -> (DataType, BooleanBuffer, Option<NullBuffer>) {
-        (DataType::Boolean, self.values, self.nulls)
+    pub fn into_parts(self) -> (BooleanBuffer, Option<NullBuffer>) {
+        (self.values, self.nulls)
     }
 }
 
@@ -629,16 +629,14 @@ mod tests {
         let boolean_array = [Some(true), None, Some(false)]
             .into_iter()
             .collect::<BooleanArray>();
-        let (data_type, values, nulls) = boolean_array.into_parts();
-        assert_eq!(data_type, DataType::Boolean);
+        let (values, nulls) = boolean_array.into_parts();
         assert_eq!(values.values(), &[0b0000_0001]);
         assert!(nulls.is_some());
         assert_eq!(nulls.unwrap().buffer().as_slice(), &[0b0000_0101]);
 
         let boolean_array =
             BooleanArray::from(vec![false, false, false, false, false, false, false, true]);
-        let (data_type, values, nulls) = boolean_array.into_parts();
-        assert_eq!(data_type, DataType::Boolean);
+        let (values, nulls) = boolean_array.into_parts();
         assert_eq!(values.values(), &[0b1000_0000]);
         assert!(nulls.is_none());
     }
