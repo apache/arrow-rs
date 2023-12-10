@@ -469,11 +469,34 @@ fn set_column_for_json_rows(
                 row.insert(col_name.to_string(), serde_json::Value::Object(obj));
             }
         }
+        DataType::Decimal128(_precision, _scale) => {
+            let options = FormatOptions::default();
+            let formatter = ArrayFormatter::try_new(array.as_ref(), &options)?;
+            let nulls = array.nulls();
+            rows.iter_mut()
+                .enumerate()
+                .filter_map(|(idx, maybe_row)| maybe_row.as_mut().map(|row| (idx, row)))
+                .for_each(|(idx, row)| {
+                    let maybe_value = nulls.map(|x| x.is_valid(idx)).unwrap_or(true).then(|| {
+                        Value::Number(
+                            serde_json::Number::from_f64(
+                                formatter.value(idx).to_string().parse::<f64>().unwrap(),
+                            )
+                            .unwrap(),
+                        )
+                    });
+                    if let Some(j) = maybe_value {
+                        row.insert(col_name.to_string(), j);
+                    } else if explicit_nulls {
+                        row.insert(col_name.to_string(), Value::Null);
+                    }
+                });
+        }
         _ => {
             return Err(ArrowError::JsonError(format!(
-                "data type {:?} not supported in nested map for json writer",
+                "data type {:?} not supported for json writer",
                 array.data_type()
-            )))
+            )));
         }
     }
     Ok(())
