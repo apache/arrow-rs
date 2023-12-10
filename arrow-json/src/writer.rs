@@ -524,7 +524,6 @@ fn to_json_float(
                         .map(Value::Number)
                 })
             })
-            // pivot the Option<Result> to Result<Option>
             .map_or_else(|| Ok(None), |result| result.map(Some));
 
         if let Some(j) = maybe_value? {
