@@ -470,7 +470,7 @@ fn set_column_for_json_rows(
             }
         }
         DataType::Decimal128(_precision, _scale) | DataType::Decimal256(_precision, _scale) => {
-            to_json_number_via_f64(rows, array, col_name, explicit_nulls)?;
+            to_json_float(rows, array, col_name, explicit_nulls)?;
         }
         _ => {
             return Err(ArrowError::JsonError(format!(
@@ -482,7 +482,7 @@ fn set_column_for_json_rows(
     Ok(())
 }
 
-fn to_json_number_via_f64(
+fn to_json_float(
     rows: &mut [Option<JsonMap<String, Value>>],
     array: &ArrayRef,
     col_name: &str,
