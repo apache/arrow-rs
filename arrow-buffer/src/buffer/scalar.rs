@@ -18,7 +18,7 @@
 use crate::alloc::Deallocation;
 use crate::buffer::Buffer;
 use crate::native::ArrowNativeType;
-use crate::MutableBuffer;
+use crate::{MutableBuffer, OffsetBuffer};
 use std::fmt::Formatter;
 use std::marker::PhantomData;
 use std::ops::Deref;
@@ -142,6 +142,12 @@ impl<T: ArrowNativeType> From<Buffer> for ScalarBuffer<T> {
             buffer,
             phantom: Default::default(),
         }
+    }
+}
+
+impl<T: ArrowNativeType> From<OffsetBuffer<T>> for ScalarBuffer<T> {
+    fn from(value: OffsetBuffer<T>) -> Self {
+        value.into_inner()
     }
 }
 
