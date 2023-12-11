@@ -23,6 +23,7 @@ use std::sync::Arc;
 
 use crate::alloc::{Allocation, Deallocation, ALIGNMENT};
 use crate::util::bit_chunk_iterator::{BitChunks, UnalignedBitChunk};
+use crate::BufferBuilder;
 use crate::{bytes::Bytes, native::ArrowNativeType};
 
 use super::ops::bitwise_unary_op_helper;
@@ -368,6 +369,12 @@ impl From<MutableBuffer> for Buffer {
     #[inline]
     fn from(buffer: MutableBuffer) -> Self {
         buffer.into_buffer()
+    }
+}
+
+impl<T: ArrowNativeType> From<BufferBuilder<T>> for Buffer {
+    fn from(mut value: BufferBuilder<T>) -> Self {
+        value.finish()
     }
 }
 
