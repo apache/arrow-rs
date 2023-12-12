@@ -17,9 +17,11 @@
 
 use crate::client::header::{header_meta, HeaderConfig};
 use crate::path::Path;
+use crate::util::{concrete_range, HttpRange};
 use crate::{Error, GetOptions, GetResult};
 use crate::{GetResultPayload, Result};
 use async_trait::async_trait;
+use bytes::Bytes;
 use futures::{StreamExt, TryStreamExt};
 use reqwest::Response;
 
@@ -40,30 +42,47 @@ pub trait GetClientExt {
     async fn get_opts(&self, location: &Path, options: GetOptions) -> Result<GetResult>;
 }
 
+pub(crate) fn response_to_get_result<T: GetClient>(
+    response: Response,
+    location: &Path,
+    range: Option<HttpRange>,
+) -> Result<GetResult> {
+    let meta = header_meta(location, response.headers(), T::HEADER_CONFIG).map_err(|e| {
+        Error::Generic {
+            store: T::STORE,
+            source: Box::new(e),
+        }
+    })?;
+
+    let stream = response
+        .bytes_stream()
+        .map_err(|source| Error::Generic {
+            store: T::STORE,
+            source: Box::new(source),
+        })
+        .boxed();
+
+    Ok(GetResult {
+        range: concrete_range(range, meta.size),
+        payload: GetResultPayload::Stream(stream),
+        meta,
+    })
+}
+
 #[async_trait]
 impl<T: GetClient> GetClientExt for T {
     async fn get_opts(&self, location: &Path, options: GetOptions) -> Result<GetResult> {
-        let range = options.range.clone();
+        let range = options.range.clone().map(|r| HttpRange::from(r));
         let response = self.get_request(location, options).await?;
-        let meta = header_meta(location, response.headers(), T::HEADER_CONFIG).map_err(|e| {
-            Error::Generic {
-                store: T::STORE,
-                source: Box::new(e),
-            }
-        })?;
-
-        let stream = response
-            .bytes_stream()
-            .map_err(|source| Error::Generic {
-                store: T::STORE,
-                source: Box::new(source),
-            })
-            .boxed();
-
-        Ok(GetResult {
-            range: range.unwrap_or(0..meta.size),
-            payload: GetResultPayload::Stream(stream),
-            meta,
-        })
+        response_to_get_result::<T>(response, location, range)
     }
+}
+
+/// This trait is a bodge to allow suffix requests without breaking the user-facing API.
+///
+/// See https://github.com/apache/arrow-rs/issues/4611 for discussion.
+#[async_trait]
+pub trait GetSuffixClient {
+    /// Get the last `nbytes` of a resource.
+    async fn get_suffix(&self, location: &Path, nbytes: usize) -> Result<Bytes>;
 }

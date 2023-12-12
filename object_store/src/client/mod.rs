@@ -571,6 +571,11 @@ impl ClientOptions {
     }
 }
 
+pub(crate) fn with_suffix_header(builder: RequestBuilder, nbytes: usize) -> RequestBuilder {
+    let range = format!("bytes=-{nbytes}");
+    builder.header(hyper::header::RANGE, range)
+}
+
 pub trait GetOptionsExt {
     fn with_get_options(self, options: GetOptions) -> Self;
 }

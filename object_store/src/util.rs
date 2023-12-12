@@ -16,6 +16,11 @@
 // under the License.
 
 //! Common logic for interacting with remote object stores
+use std::{
+    fmt::Display,
+    ops::{Range, RangeBounds},
+};
+
 use super::Result;
 use bytes::Bytes;
 use futures::{stream::StreamExt, Stream, TryStreamExt};
@@ -167,6 +172,116 @@ fn merge_ranges(ranges: &[std::ops::Range<usize>], coalesce: usize) -> Vec<std::
     ret
 }
 
+// Fully-featured HttpRange etc. implementation here https://github.com/clbarnes/arrow-rs/blob/httpsuff/object_store/src/util.rs
+
+/// A single range in a `Range` request.
+///
+/// These can be created from [usize] ranges, like
+///
+/// ```rust
+/// # use byteranges::request::HttpRange;
+/// let range1: HttpRange = (50..150).into();
+/// let range2: HttpRange = (50..=150).into();
+/// let range3: HttpRange = (50..).into();
+/// let range4: HttpRange = (..150).into();
+/// ```
+///
+/// At present, this is only used internally.
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub(crate) enum HttpRange {
+    /// A range with a given first and last bytes.
+    /// If `last > first`, the response should be empty.
+    Range {
+        /// Offset of the first requested byte (0-based).
+        first: usize,
+        /// Offset of the last requested byte; e.g. the range `0-0` will request 1 byte.
+        /// If [None], read to end of resource.
+        last: usize,
+    },
+    /// A range defined only by the first byte requested (requests all remaining bytes).
+    Offset {
+        /// Offset of the first byte requested.
+        first: usize,
+    },
+    /// A range defined as the number of bytes at the end of the resource.
+    Suffix {
+        /// Number of bytes requested.
+        nbytes: usize,
+    },
+}
+
+impl HttpRange {
+    /// Create a new range which only has an offset.
+    pub fn new_offset(first: usize) -> Self {
+        Self::Offset { first }
+    }
+
+    /// Create a new range with a start and end point.
+    pub fn new_range(first: usize, last: usize) -> Self {
+        Self::Range { first, last }
+    }
+
+    /// Create a new suffix, requesting the last `nbytes` bytes of the resource.
+    pub fn new_suffix(nbytes: usize) -> Self {
+        Self::Suffix { nbytes }
+    }
+
+    /// The index of the first byte requested ([None] for suffix).
+    pub fn first_byte(&self) -> Option<usize> {
+        match self {
+            HttpRange::Range { first, .. } => Some(*first),
+            HttpRange::Offset { first } => Some(*first),
+            HttpRange::Suffix { .. } => None,
+        }
+    }
+
+    /// The index of the last byte requested ([None] for offset or suffix).
+    pub fn last_byte(&self) -> Option<usize> {
+        match self {
+            HttpRange::Range { first: _, last } => Some(*last),
+            HttpRange::Offset { .. } => None,
+            HttpRange::Suffix { .. } => None,
+        }
+    }
+}
+
+impl<T: RangeBounds<usize>> From<T> for HttpRange {
+    fn from(value: T) -> Self {
+        use std::ops::Bound::*;
+        let first = match value.start_bound() {
+            Included(i) => *i,
+            Excluded(i) => i.saturating_add(1),
+            Unbounded => 0,
+        };
+        match value.end_bound() {
+            Included(i) => HttpRange::new_range(first, *i),
+            Excluded(i) => HttpRange::new_range(first, i.saturating_sub(1)),
+            Unbounded => HttpRange::new_offset(first),
+        }
+    }
+}
+
+impl Display for HttpRange {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            HttpRange::Range { first, last } => f.write_fmt(format_args!("{first}-{last}")),
+            HttpRange::Offset { first } => f.write_fmt(format_args!("{first}-")),
+            HttpRange::Suffix { nbytes } => f.write_fmt(format_args!("-{nbytes}")),
+        }
+    }
+}
+
+pub(crate) fn concrete_range(range: Option<HttpRange>, size: usize) -> Range<usize> {
+    let Some(r) = range else {
+        return 0..size;
+    };
+    let start = r.first_byte().unwrap_or(0);
+    let end = r
+        .last_byte()
+        .map_or(size, |b| b.saturating_add(1).min(size));
+    start..end
+}
+
 #[cfg(test)]
 mod tests {
     use crate::Error;
@@ -268,5 +383,26 @@ mod tests {
                 );
             }
         }
+    }
+    #[test]
+
+    fn http_range_str() {
+        assert_eq!(HttpRange::new_offset(0).to_string(), "0-");
+        assert_eq!(HttpRange::new_range(10, 20).to_string(), "10-20");
+        assert_eq!(HttpRange::new_suffix(10).to_string(), "-10");
+    }
+
+    #[test]
+    fn http_range_from() {
+        assert_eq!(
+            Into::<HttpRange>::into(10..15),
+            HttpRange::new_range(10, 14),
+        );
+        assert_eq!(
+            Into::<HttpRange>::into(10..=15),
+            HttpRange::new_range(10, 15),
+        );
+        assert_eq!(Into::<HttpRange>::into(10..), HttpRange::new_offset(10),);
+        assert_eq!(Into::<HttpRange>::into(..=15), HttpRange::new_range(0, 15));
     }
 }
