@@ -193,6 +193,12 @@ pub struct WriterBuilder {
     delimiter: u8,
     /// Whether to write column names as file headers. Defaults to `true`
     has_header: bool,
+    /// Optional quote character. Defaults to `b'"'`
+    quote: u8,
+    /// Optional escape character. Defaults to `b'\\'`
+    escape: u8,
+    /// Enable double quote escapes. Defaults to `true`
+    double_quote: bool,
     /// Optional date format for date arrays
     date_format: Option<String>,
     /// Optional datetime format for datetime arrays
@@ -209,14 +215,17 @@ pub struct WriterBuilder {
 
 impl Default for WriterBuilder {
     fn default() -> Self {
-        Self {
-            has_header: true,
+        WriterBuilder {
             delimiter: b',',
+            has_header: true,
+            quote: b'"',
+            escape: b'\\',
+            double_quote: true,
             date_format: None,
             datetime_format: None,
-            time_format: None,
             timestamp_format: None,
             timestamp_tz_format: None,
+            time_format: None,
             null_value: None,
         }
     }
@@ -275,6 +284,51 @@ impl WriterBuilder {
     /// Get the CSV file's column delimiter as a byte character
     pub fn delimiter(&self) -> u8 {
         self.delimiter
+    }
+
+    /// Set the CSV file's quote character as a byte character
+    pub fn with_quote(mut self, quote: u8) -> Self {
+        self.quote = quote;
+        self
+    }
+
+    /// Get the CSV file's quote character as a byte character
+    pub fn quote(&self) -> u8 {
+        self.quote
+    }
+
+    /// Set the CSV file's escape character as a byte character
+    ///
+    /// In some variants of CSV, quotes are escaped using a special escape
+    /// character like `\` (instead of escaping quotes by doubling them).
+    ///
+    /// By default, writing these idiosyncratic escapes is disabled, and is
+    /// only used when `double_quote` is disabled.
+    pub fn with_escape(mut self, escape: u8) -> Self {
+        self.escape = escape;
+        self
+    }
+
+    /// Get the CSV file's escape character as a byte character
+    pub fn escape(&self) -> u8 {
+        self.escape
+    }
+
+    /// Set whether to enable double quote escapes
+    ///
+    /// When enabled (which is the default), quotes are escaped by doubling
+    /// them. e.g., `"` escapes to `""`.
+    ///
+    /// When disabled, quotes are escaped with the escape character (which
+    /// is `\\` by default).
+    pub fn with_double_quote(mut self, double_quote: bool) -> Self {
+        self.double_quote = double_quote;
+        self
+    }
+
+    /// Get whether double quote escapes are enabled
+    pub fn double_quote(&self) -> bool {
+        self.double_quote
     }
 
     /// Set the CSV file's date format
@@ -346,7 +400,12 @@ impl WriterBuilder {
     /// Create a new `Writer`
     pub fn build<W: Write>(self, writer: W) -> Writer<W> {
         let mut builder = csv::WriterBuilder::new();
-        let writer = builder.delimiter(self.delimiter).from_writer(writer);
+        let writer = builder
+            .delimiter(self.delimiter)
+            .quote(self.quote)
+            .double_quote(self.double_quote)
+            .escape(self.escape)
+            .from_writer(writer);
         Writer {
             writer,
             beginning: true,
@@ -499,8 +558,8 @@ sed do eiusmod tempor,-556132.25,1,,2019-04-18T02:45:55.555,23:46:03,foo
         ]);
 
         let c1 = StringArray::from(vec![
-            "Lorem ipsum dolor sit amet",
-            "consectetur adipiscing elit",
+            "Lorem ipsum \ndolor sit amet",
+            "consectetur \"adipiscing\" elit",
             "sed do eiusmod tempor",
         ]);
         let c2 =
@@ -526,6 +585,7 @@ sed do eiusmod tempor,-556132.25,1,,2019-04-18T02:45:55.555,23:46:03,foo
         let builder = WriterBuilder::new()
             .with_header(false)
             .with_delimiter(b'|')
+            .with_quote(b'\'')
             .with_null("NULL".to_string())
             .with_time_format("%r".to_string());
         let mut writer = builder.build(&mut file);
@@ -541,10 +601,33 @@ sed do eiusmod tempor,-556132.25,1,,2019-04-18T02:45:55.555,23:46:03,foo
         file.read_to_end(&mut buffer).unwrap();
 
         assert_eq!(
-            "Lorem ipsum dolor sit amet|123.564532|3|true|12:20:34 AM\nconsectetur adipiscing elit|NULL|2|false|06:51:20 AM\nsed do eiusmod tempor|-556132.25|1|NULL|11:46:03 PM\n"
+            "'Lorem ipsum \ndolor sit amet'|123.564532|3|true|12:20:34 AM\nconsectetur \"adipiscing\" elit|NULL|2|false|06:51:20 AM\nsed do eiusmod tempor|-556132.25|1|NULL|11:46:03 PM\n"
             .to_string(),
             String::from_utf8(buffer).unwrap()
         );
+
+        let mut file = tempfile::tempfile().unwrap();
+
+        let builder = WriterBuilder::new()
+            .with_header(true)
+            .with_double_quote(false)
+            .with_escape(b'$');
+        let mut writer = builder.build(&mut file);
+        let batches = vec![&batch];
+        for batch in batches {
+            writer.write(batch).unwrap();
+        }
+        drop(writer);
+
+        file.rewind().unwrap();
+        let mut buffer: Vec<u8> = vec![];
+        file.read_to_end(&mut buffer).unwrap();
+
+        assert_eq!(
+			"c1,c2,c3,c4,c6\n\"Lorem ipsum \ndolor sit amet\",123.564532,3,true,00:20:34\n\"consectetur $\"adipiscing$\" elit\",,2,false,06:51:20\nsed do eiusmod tempor,-556132.25,1,,23:46:03\n"
+			.to_string(),
+			String::from_utf8(buffer).unwrap()
+		);
     }
 
     #[test]

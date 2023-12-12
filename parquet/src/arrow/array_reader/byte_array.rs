@@ -19,7 +19,6 @@ use crate::arrow::array_reader::{read_records, skip_records, ArrayReader};
 use crate::arrow::buffer::bit_util::sign_extend_be;
 use crate::arrow::buffer::offset_buffer::OffsetBuffer;
 use crate::arrow::decoder::{DeltaByteArrayDecoder, DictIndexDecoder};
-use crate::arrow::record_reader::buffer::ScalarValue;
 use crate::arrow::record_reader::GenericRecordReader;
 use crate::arrow::schema::parquet_to_arrow_field;
 use crate::basic::{ConvertedType, Encoding};
@@ -77,7 +76,7 @@ pub fn make_byte_array_reader(
 }
 
 /// An [`ArrayReader`] for variable length byte arrays
-struct ByteArrayReader<I: ScalarValue> {
+struct ByteArrayReader<I: OffsetSizeTrait> {
     data_type: ArrowType,
     pages: Box<dyn PageIterator>,
     def_levels_buffer: Option<Buffer>,
@@ -85,14 +84,11 @@ struct ByteArrayReader<I: ScalarValue> {
     record_reader: GenericRecordReader<OffsetBuffer<I>, ByteArrayColumnValueDecoder<I>>,
 }
 
-impl<I: ScalarValue> ByteArrayReader<I> {
+impl<I: OffsetSizeTrait> ByteArrayReader<I> {
     fn new(
         pages: Box<dyn PageIterator>,
         data_type: ArrowType,
-        record_reader: GenericRecordReader<
-            OffsetBuffer<I>,
-            ByteArrayColumnValueDecoder<I>,
-        >,
+        record_reader: GenericRecordReader<OffsetBuffer<I>, ByteArrayColumnValueDecoder<I>>,
     ) -> Self {
         Self {
             data_type,
@@ -104,7 +100,7 @@ impl<I: ScalarValue> ByteArrayReader<I> {
     }
 }
 
-impl<I: OffsetSizeTrait + ScalarValue> ArrayReader for ByteArrayReader<I> {
+impl<I: OffsetSizeTrait> ArrayReader for ByteArrayReader<I> {
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -167,15 +163,13 @@ impl<I: OffsetSizeTrait + ScalarValue> ArrayReader for ByteArrayReader<I> {
 }
 
 /// A [`ColumnValueDecoder`] for variable length byte arrays
-struct ByteArrayColumnValueDecoder<I: ScalarValue> {
+struct ByteArrayColumnValueDecoder<I: OffsetSizeTrait> {
     dict: Option<OffsetBuffer<I>>,
     decoder: Option<ByteArrayDecoder>,
     validate_utf8: bool,
 }
 
-impl<I: OffsetSizeTrait + ScalarValue> ColumnValueDecoder
-    for ByteArrayColumnValueDecoder<I>
-{
+impl<I: OffsetSizeTrait> ColumnValueDecoder for ByteArrayColumnValueDecoder<I> {
     type Slice = OffsetBuffer<I>;
 
     fn new(desc: &ColumnDescPtr) -> Self {
@@ -275,17 +269,15 @@ impl ByteArrayDecoder {
                 num_values,
                 validate_utf8,
             )),
-            Encoding::RLE_DICTIONARY | Encoding::PLAIN_DICTIONARY => {
-                ByteArrayDecoder::Dictionary(ByteArrayDecoderDictionary::new(
-                    data, num_levels, num_values,
-                ))
-            }
+            Encoding::RLE_DICTIONARY | Encoding::PLAIN_DICTIONARY => ByteArrayDecoder::Dictionary(
+                ByteArrayDecoderDictionary::new(data, num_levels, num_values),
+            ),
             Encoding::DELTA_LENGTH_BYTE_ARRAY => ByteArrayDecoder::DeltaLength(
                 ByteArrayDecoderDeltaLength::new(data, validate_utf8)?,
             ),
-            Encoding::DELTA_BYTE_ARRAY => ByteArrayDecoder::DeltaByteArray(
-                ByteArrayDecoderDelta::new(data, validate_utf8)?,
-            ),
+            Encoding::DELTA_BYTE_ARRAY => {
+                ByteArrayDecoder::DeltaByteArray(ByteArrayDecoderDelta::new(data, validate_utf8)?)
+            }
             _ => {
                 return Err(general_err!(
                     "unsupported encoding for byte array: {}",
@@ -298,7 +290,7 @@ impl ByteArrayDecoder {
     }
 
     /// Read up to `len` values to `out` with the optional dictionary
-    pub fn read<I: OffsetSizeTrait + ScalarValue>(
+    pub fn read<I: OffsetSizeTrait>(
         &mut self,
         out: &mut OffsetBuffer<I>,
         len: usize,
@@ -307,8 +299,8 @@ impl ByteArrayDecoder {
         match self {
             ByteArrayDecoder::Plain(d) => d.read(out, len),
             ByteArrayDecoder::Dictionary(d) => {
-                let dict = dict
-                    .ok_or_else(|| general_err!("missing dictionary page for column"))?;
+                let dict =
+                    dict.ok_or_else(|| general_err!("missing dictionary page for column"))?;
 
                 d.read(out, dict, len)
             }
@@ -318,7 +310,7 @@ impl ByteArrayDecoder {
     }
 
     /// Skip `len` values
-    pub fn skip<I: OffsetSizeTrait + ScalarValue>(
+    pub fn skip<I: OffsetSizeTrait>(
         &mut self,
         len: usize,
         dict: Option<&OffsetBuffer<I>>,
@@ -326,8 +318,8 @@ impl ByteArrayDecoder {
         match self {
             ByteArrayDecoder::Plain(d) => d.skip(len),
             ByteArrayDecoder::Dictionary(d) => {
-                let dict = dict
-                    .ok_or_else(|| general_err!("missing dictionary page for column"))?;
+                let dict =
+                    dict.ok_or_else(|| general_err!("missing dictionary page for column"))?;
 
                 d.skip(dict, len)
             }
@@ -363,7 +355,7 @@ impl ByteArrayDecoderPlain {
         }
     }
 
-    pub fn read<I: OffsetSizeTrait + ScalarValue>(
+    pub fn read<I: OffsetSizeTrait>(
         &mut self,
         output: &mut OffsetBuffer<I>,
         len: usize,
@@ -392,8 +384,7 @@ impl ByteArrayDecoderPlain {
             if self.offset + 4 > buf.len() {
                 return Err(ParquetError::EOF("eof decoding byte array".into()));
             }
-            let len_bytes: [u8; 4] =
-                buf[self.offset..self.offset + 4].try_into().unwrap();
+            let len_bytes: [u8; 4] = buf[self.offset..self.offset + 4].try_into().unwrap();
             let len = u32::from_le_bytes(len_bytes);
 
             let start_offset = self.offset + 4;
@@ -424,8 +415,7 @@ impl ByteArrayDecoderPlain {
             if self.offset + 4 > buf.len() {
                 return Err(ParquetError::EOF("eof decoding byte array".into()));
             }
-            let len_bytes: [u8; 4] =
-                buf[self.offset..self.offset + 4].try_into().unwrap();
+            let len_bytes: [u8; 4] = buf[self.offset..self.offset + 4].try_into().unwrap();
             let len = u32::from_le_bytes(len_bytes) as usize;
             skip += 1;
             self.offset = self.offset + 4 + len;
@@ -462,7 +452,7 @@ impl ByteArrayDecoderDeltaLength {
         })
     }
 
-    fn read<I: OffsetSizeTrait + ScalarValue>(
+    fn read<I: OffsetSizeTrait>(
         &mut self,
         output: &mut OffsetBuffer<I>,
         len: usize,
@@ -529,7 +519,7 @@ impl ByteArrayDecoderDelta {
         })
     }
 
-    fn read<I: OffsetSizeTrait + ScalarValue>(
+    fn read<I: OffsetSizeTrait>(
         &mut self,
         output: &mut OffsetBuffer<I>,
         len: usize,
@@ -564,7 +554,7 @@ impl ByteArrayDecoderDictionary {
         }
     }
 
-    fn read<I: OffsetSizeTrait + ScalarValue>(
+    fn read<I: OffsetSizeTrait>(
         &mut self,
         output: &mut OffsetBuffer<I>,
         dict: &OffsetBuffer<I>,
@@ -576,15 +566,11 @@ impl ByteArrayDecoderDictionary {
         }
 
         self.decoder.read(len, |keys| {
-            output.extend_from_dictionary(
-                keys,
-                dict.offsets.as_slice(),
-                dict.values.as_slice(),
-            )
+            output.extend_from_dictionary(keys, dict.offsets.as_slice(), dict.values.as_slice())
         })
     }
 
-    fn skip<I: OffsetSizeTrait + ScalarValue>(
+    fn skip<I: OffsetSizeTrait>(
         &mut self,
         dict: &OffsetBuffer<I>,
         to_skip: usize,

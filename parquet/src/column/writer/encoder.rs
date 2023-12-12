@@ -76,15 +76,6 @@ pub trait ColumnValueEncoder {
     /// The values encoded by this encoder
     type Values: ColumnValues + ?Sized;
 
-    /// Returns the min and max values in this collection, skipping any NaN values
-    ///
-    /// Returns `None` if no values found
-    fn min_max(
-        &self,
-        values: &Self::Values,
-        value_indices: Option<&[usize]>,
-    ) -> Option<(Self::T, Self::T)>;
-
     /// Create a new [`ColumnValueEncoder`]
     fn try_new(descr: &ColumnDescPtr, props: &WriterProperties) -> Result<Self>
     where
@@ -136,8 +127,15 @@ pub struct ColumnValueEncoderImpl<T: DataType> {
 }
 
 impl<T: DataType> ColumnValueEncoderImpl<T> {
+    fn min_max(&self, values: &[T::T], value_indices: Option<&[usize]>) -> Option<(T::T, T::T)> {
+        match value_indices {
+            Some(indices) => get_min_max(&self.descr, indices.iter().map(|x| &values[*x])),
+            None => get_min_max(&self.descr, values.iter()),
+        }
+    }
+
     fn write_slice(&mut self, slice: &[T::T]) -> Result<()> {
-        if self.statistics_enabled == EnabledStatistics::Page
+        if self.statistics_enabled != EnabledStatistics::None
             // INTERVAL has undefined sort order, so don't write min/max stats for it
             && self.descr.converted_type() != ConvertedType::INTERVAL
         {
@@ -165,17 +163,6 @@ impl<T: DataType> ColumnValueEncoder for ColumnValueEncoderImpl<T> {
     type T = T::T;
 
     type Values = [T::T];
-
-    fn min_max(
-        &self,
-        values: &Self::Values,
-        value_indices: Option<&[usize]>,
-    ) -> Option<(Self::T, Self::T)> {
-        match value_indices {
-            Some(indices) => get_min_max(&self.descr, indices.iter().map(|x| &values[*x])),
-            None => get_min_max(&self.descr, values.iter()),
-        }
-    }
 
     fn flush_bloom_filter(&mut self) -> Option<Sbbf> {
         self.bloom_filter.take()

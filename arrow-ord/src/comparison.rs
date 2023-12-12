@@ -243,64 +243,6 @@ fn make_utf8_scalar(d: &DataType, scalar: &str) -> Result<ArrayRef, ArrowError> 
     }
 }
 
-/// Helper function to perform boolean lambda function on values from two array accessors, this
-/// version does not attempt to use SIMD.
-fn compare_op<T: ArrayAccessor, S: ArrayAccessor, F>(
-    left: T,
-    right: S,
-    op: F,
-) -> Result<BooleanArray, ArrowError>
-where
-    F: Fn(T::Item, S::Item) -> bool,
-{
-    if left.len() != right.len() {
-        return Err(ArrowError::ComputeError(
-            "Cannot perform comparison operation on arrays of different length".to_string(),
-        ));
-    }
-
-    Ok(BooleanArray::from_binary(left, right, op))
-}
-
-/// Helper function to perform boolean lambda function on values from array accessor, this
-/// version does not attempt to use SIMD.
-fn compare_op_scalar<T: ArrayAccessor, F>(left: T, op: F) -> Result<BooleanArray, ArrowError>
-where
-    F: Fn(T::Item) -> bool,
-{
-    Ok(BooleanArray::from_unary(left, op))
-}
-
-/// Evaluate `op(left, right)` for [`PrimitiveArray`]s using a specified
-/// comparison function.
-#[deprecated(note = "Use BooleanArray::from_binary")]
-pub fn no_simd_compare_op<T, F>(
-    left: &PrimitiveArray<T>,
-    right: &PrimitiveArray<T>,
-    op: F,
-) -> Result<BooleanArray, ArrowError>
-where
-    T: ArrowPrimitiveType,
-    F: Fn(T::Native, T::Native) -> bool,
-{
-    compare_op(left, right, op)
-}
-
-/// Evaluate `op(left, right)` for [`PrimitiveArray`] and scalar using
-/// a specified comparison function.
-#[deprecated(note = "Use BooleanArray::from_unary")]
-pub fn no_simd_compare_op_scalar<T, F>(
-    left: &PrimitiveArray<T>,
-    right: T::Native,
-    op: F,
-) -> Result<BooleanArray, ArrowError>
-where
-    T: ArrowPrimitiveType,
-    F: Fn(T::Native, T::Native) -> bool,
-{
-    compare_op_scalar(left, |l| op(l, right))
-}
-
 /// Perform `left == right` operation on [`StringArray`] / [`LargeStringArray`].
 #[deprecated(note = "Use arrow_ord::cmp::eq")]
 pub fn eq_utf8<OffsetSize: OffsetSizeTrait>(
@@ -610,7 +552,6 @@ pub fn gt_eq_utf8_scalar<OffsetSize: OffsetSizeTrait>(
 /// Perform `left == right` operation on an array and a numeric scalar
 /// value. Supports PrimitiveArrays, and DictionaryArrays that have primitive values.
 ///
-/// If `simd` feature flag is not enabled:
 /// For floating values like f32 and f64, this comparison produces an ordering in accordance to
 /// the totalOrder predicate as defined in the IEEE 754 (2008 revision) floating point standard.
 /// Note that totalOrder treats positive and negative zeros are different. If it is necessary
@@ -628,7 +569,6 @@ where
 /// Perform `left < right` operation on an array and a numeric scalar
 /// value. Supports PrimitiveArrays, and DictionaryArrays that have primitive values.
 ///
-/// If `simd` feature flag is not enabled:
 /// For floating values like f32 and f64, this comparison produces an ordering in accordance to
 /// the totalOrder predicate as defined in the IEEE 754 (2008 revision) floating point standard.
 /// Note that totalOrder treats positive and negative zeros are different. If it is necessary
@@ -646,7 +586,6 @@ where
 /// Perform `left <= right` operation on an array and a numeric scalar
 /// value. Supports PrimitiveArrays, and DictionaryArrays that have primitive values.
 ///
-/// If `simd` feature flag is not enabled:
 /// For floating values like f32 and f64, this comparison produces an ordering in accordance to
 /// the totalOrder predicate as defined in the IEEE 754 (2008 revision) floating point standard.
 /// Note that totalOrder treats positive and negative zeros are different. If it is necessary
@@ -664,7 +603,6 @@ where
 /// Perform `left > right` operation on an array and a numeric scalar
 /// value. Supports PrimitiveArrays, and DictionaryArrays that have primitive values.
 ///
-/// If `simd` feature flag is not enabled:
 /// For floating values like f32 and f64, this comparison produces an ordering in accordance to
 /// the totalOrder predicate as defined in the IEEE 754 (2008 revision) floating point standard.
 /// Note that totalOrder treats positive and negative zeros are different. If it is necessary
@@ -682,7 +620,6 @@ where
 /// Perform `left >= right` operation on an array and a numeric scalar
 /// value. Supports PrimitiveArrays, and DictionaryArrays that have primitive values.
 ///
-/// If `simd` feature flag is not enabled:
 /// For floating values like f32 and f64, this comparison produces an ordering in accordance to
 /// the totalOrder predicate as defined in the IEEE 754 (2008 revision) floating point standard.
 /// Note that totalOrder treats positive and negative zeros are different. If it is necessary
@@ -700,7 +637,6 @@ where
 /// Perform `left != right` operation on an array and a numeric scalar
 /// value. Supports PrimitiveArrays, and DictionaryArrays that have primitive values.
 ///
-/// If `simd` feature flag is not enabled:
 /// For floating values like f32 and f64, this comparison produces an ordering in accordance to
 /// the totalOrder predicate as defined in the IEEE 754 (2008 revision) floating point standard.
 /// Note that totalOrder treats positive and negative zeros are different. If it is necessary
@@ -1015,7 +951,6 @@ pub fn gt_eq_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray, Ar
 
 /// Perform `left == right` operation on two [`PrimitiveArray`]s.
 ///
-/// If `simd` feature flag is not enabled:
 /// For floating values like f32 and f64, this comparison produces an ordering in accordance to
 /// the totalOrder predicate as defined in the IEEE 754 (2008 revision) floating point standard.
 /// Note that totalOrder treats positive and negative zeros are different. If it is necessary
@@ -1051,17 +986,17 @@ where
 }
 
 /// Applies an unary and infallible comparison function to a primitive array.
+#[deprecated(note = "Use BooleanArray::from_unary")]
 pub fn unary_cmp<T, F>(left: &PrimitiveArray<T>, op: F) -> Result<BooleanArray, ArrowError>
 where
     T: ArrowNumericType,
     F: Fn(T::Native) -> bool,
 {
-    compare_op_scalar(left, op)
+    Ok(BooleanArray::from_unary(left, op))
 }
 
 /// Perform `left != right` operation on two [`PrimitiveArray`]s.
 ///
-/// If `simd` feature flag is not enabled:
 /// For floating values like f32 and f64, this comparison produces an ordering in accordance to
 /// the totalOrder predicate as defined in the IEEE 754 (2008 revision) floating point standard.
 /// Note that totalOrder treats positive and negative zeros are different. If it is necessary
@@ -1081,7 +1016,6 @@ where
 
 /// Perform `left != right` operation on a [`PrimitiveArray`] and a scalar value.
 ///
-/// If `simd` feature flag is not enabled:
 /// For floating values like f32 and f64, this comparison produces an ordering in accordance to
 /// the totalOrder predicate as defined in the IEEE 754 (2008 revision) floating point standard.
 /// Note that totalOrder treats positive and negative zeros are different. If it is necessary
@@ -1100,7 +1034,6 @@ where
 /// Perform `left < right` operation on two [`PrimitiveArray`]s. Null values are less than non-null
 /// values.
 ///
-/// If `simd` feature flag is not enabled:
 /// For floating values like f32 and f64, this comparison produces an ordering in accordance to
 /// the totalOrder predicate as defined in the IEEE 754 (2008 revision) floating point standard.
 /// Note that totalOrder treats positive and negative zeros are different. If it is necessary
@@ -1121,7 +1054,6 @@ where
 /// Perform `left < right` operation on a [`PrimitiveArray`] and a scalar value.
 /// Null values are less than non-null values.
 ///
-/// If `simd` feature flag is not enabled:
 /// For floating values like f32 and f64, this comparison produces an ordering in accordance to
 /// the totalOrder predicate as defined in the IEEE 754 (2008 revision) floating point standard.
 /// Note that totalOrder treats positive and negative zeros are different. If it is necessary
@@ -1140,7 +1072,6 @@ where
 /// Perform `left <= right` operation on two [`PrimitiveArray`]s. Null values are less than non-null
 /// values.
 ///
-/// If `simd` feature flag is not enabled:
 /// For floating values like f32 and f64, this comparison produces an ordering in accordance to
 /// the totalOrder predicate as defined in the IEEE 754 (2008 revision) floating point standard.
 /// Note that totalOrder treats positive and negative zeros are different. If it is necessary
@@ -1161,7 +1092,6 @@ where
 /// Perform `left <= right` operation on a [`PrimitiveArray`] and a scalar value.
 /// Null values are less than non-null values.
 ///
-/// If `simd` feature flag is not enabled:
 /// For floating values like f32 and f64, this comparison produces an ordering in accordance to
 /// the totalOrder predicate as defined in the IEEE 754 (2008 revision) floating point standard.
 /// Note that totalOrder treats positive and negative zeros are different. If it is necessary
@@ -1183,7 +1113,6 @@ where
 /// Perform `left > right` operation on two [`PrimitiveArray`]s. Non-null values are greater than null
 /// values.
 ///
-/// If `simd` feature flag is not enabled:
 /// For floating values like f32 and f64, this comparison produces an ordering in accordance to
 /// the totalOrder predicate as defined in the IEEE 754 (2008 revision) floating point standard.
 /// Note that totalOrder treats positive and negative zeros are different. If it is necessary
@@ -1204,7 +1133,6 @@ where
 /// Perform `left > right` operation on a [`PrimitiveArray`] and a scalar value.
 /// Non-null values are greater than null values.
 ///
-/// If `simd` feature flag is not enabled:
 /// For floating values like f32 and f64, this comparison produces an ordering in accordance to
 /// the totalOrder predicate as defined in the IEEE 754 (2008 revision) floating point standard.
 /// Note that totalOrder treats positive and negative zeros are different. If it is necessary
@@ -1223,7 +1151,6 @@ where
 /// Perform `left >= right` operation on two [`PrimitiveArray`]s. Non-null values are greater than null
 /// values.
 ///
-/// If `simd` feature flag is not enabled:
 /// For floating values like f32 and f64, this comparison produces an ordering in accordance to
 /// the totalOrder predicate as defined in the IEEE 754 (2008 revision) floating point standard.
 /// Note that totalOrder treats positive and negative zeros are different. If it is necessary
@@ -1244,7 +1171,6 @@ where
 /// Perform `left >= right` operation on a [`PrimitiveArray`] and a scalar value.
 /// Non-null values are greater than null values.
 ///
-/// If `simd` feature flag is not enabled:
 /// For floating values like f32 and f64, this comparison produces an ordering in accordance to
 /// the totalOrder predicate as defined in the IEEE 754 (2008 revision) floating point standard.
 /// Note that totalOrder treats positive and negative zeros are different. If it is necessary
@@ -1480,6 +1406,48 @@ mod tests {
             vec![8, 8, 8, 8, 8, 8, 8, 8, 8, 8],
             vec![6, 7, 8, 9, 10, 6, 7, 8, 9, 10],
             vec![false, false, true, false, false, false, false, true, false, false]
+        );
+
+        cmp_vec!(
+            eq,
+            eq_dyn,
+            IntervalYearMonthArray,
+            vec![
+                IntervalYearMonthType::make_value(1, 2),
+                IntervalYearMonthType::make_value(2, 1),
+                // 1 year
+                IntervalYearMonthType::make_value(1, 0),
+            ],
+            vec![
+                IntervalYearMonthType::make_value(1, 2),
+                IntervalYearMonthType::make_value(1, 2),
+                // NB 12 months is treated as equal to a year (as the underlying
+                // type stores number of months)
+                IntervalYearMonthType::make_value(0, 12),
+            ],
+            vec![true, false, true]
+        );
+
+        cmp_vec!(
+            eq,
+            eq_dyn,
+            IntervalMonthDayNanoArray,
+            vec![
+                IntervalMonthDayNanoType::make_value(1, 2, 3),
+                IntervalMonthDayNanoType::make_value(3, 2, 1),
+                // 1 month
+                IntervalMonthDayNanoType::make_value(1, 0, 0),
+                IntervalMonthDayNanoType::make_value(1, 0, 0),
+            ],
+            vec![
+                IntervalMonthDayNanoType::make_value(1, 2, 3),
+                IntervalMonthDayNanoType::make_value(1, 2, 3),
+                // 30 days is not treated as a month
+                IntervalMonthDayNanoType::make_value(0, 30, 0),
+                // 100 days
+                IntervalMonthDayNanoType::make_value(0, 100, 0),
+            ],
+            vec![true, false, false, false]
         );
     }
 
@@ -1733,6 +1701,77 @@ mod tests {
             vec![8, 8, 8, 8, 8, 8, 8, 8, 8, 8],
             vec![6, 7, 8, 9, 10, 6, 7, 8, 9, 10],
             vec![false, false, false, true, true, false, false, false, true, true]
+        );
+
+        cmp_vec!(
+            lt,
+            lt_dyn,
+            IntervalDayTimeArray,
+            vec![
+                IntervalDayTimeType::make_value(1, 0),
+                IntervalDayTimeType::make_value(0, 1000),
+                IntervalDayTimeType::make_value(1, 1000),
+                IntervalDayTimeType::make_value(1, 3000),
+                // 90M milliseconds
+                IntervalDayTimeType::make_value(0, 90_000_000),
+            ],
+            vec![
+                IntervalDayTimeType::make_value(0, 1000),
+                IntervalDayTimeType::make_value(1, 0),
+                IntervalDayTimeType::make_value(10, 0),
+                IntervalDayTimeType::make_value(2, 1),
+                // NB even though 1 day is less than 90M milliseconds long,
+                // it compares as greater because the underlying type stores
+                // days and milliseconds as different fields
+                IntervalDayTimeType::make_value(0, 12),
+            ],
+            vec![false, true, true, true ,false]
+        );
+
+        cmp_vec!(
+            lt,
+            lt_dyn,
+            IntervalYearMonthArray,
+            vec![
+                IntervalYearMonthType::make_value(1, 2),
+                IntervalYearMonthType::make_value(2, 1),
+                IntervalYearMonthType::make_value(1, 2),
+                // 1 year
+                IntervalYearMonthType::make_value(1, 0),
+            ],
+            vec![
+                IntervalYearMonthType::make_value(1, 2),
+                IntervalYearMonthType::make_value(1, 2),
+                IntervalYearMonthType::make_value(2, 1),
+                // NB 12 months is treated as equal to a year (as the underlying
+                // type stores number of months)
+                IntervalYearMonthType::make_value(0, 12),
+            ],
+            vec![false, false, true, false]
+        );
+
+        cmp_vec!(
+            lt,
+            lt_dyn,
+            IntervalMonthDayNanoArray,
+            vec![
+                IntervalMonthDayNanoType::make_value(1, 2, 3),
+                IntervalMonthDayNanoType::make_value(3, 2, 1),
+                // 1 month
+                IntervalMonthDayNanoType::make_value(1, 0, 0),
+                IntervalMonthDayNanoType::make_value(1, 2, 0),
+                IntervalMonthDayNanoType::make_value(1, 0, 0),
+            ],
+            vec![
+                IntervalMonthDayNanoType::make_value(1, 2, 3),
+                IntervalMonthDayNanoType::make_value(1, 2, 3),
+                IntervalMonthDayNanoType::make_value(2, 0, 0),
+                // 30 days is not treated as a month
+                IntervalMonthDayNanoType::make_value(0, 30, 0),
+                // 100 days (note is treated as greater than 1 month as the underlying integer representation)
+                IntervalMonthDayNanoType::make_value(0, 100, 0),
+            ],
+            vec![false, false, true, false, false]
         );
     }
 

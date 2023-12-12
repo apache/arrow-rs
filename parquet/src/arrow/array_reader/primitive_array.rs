@@ -16,7 +16,6 @@
 // under the License.
 
 use crate::arrow::array_reader::{read_records, skip_records, ArrayReader};
-use crate::arrow::record_reader::buffer::ScalarValue;
 use crate::arrow::record_reader::RecordReader;
 use crate::arrow::schema::parquet_to_arrow_field;
 use crate::basic::Type as PhysicalType;
@@ -26,22 +25,55 @@ use crate::errors::{ParquetError, Result};
 use crate::schema::types::ColumnDescPtr;
 use arrow_array::Decimal256Array;
 use arrow_array::{
-    builder::{BooleanBufferBuilder, TimestampNanosecondBufferBuilder},
-    ArrayRef, BooleanArray, Decimal128Array, Float32Array, Float64Array, Int32Array,
-    Int64Array, TimestampNanosecondArray, UInt32Array, UInt64Array,
+    builder::TimestampNanosecondBufferBuilder, ArrayRef, BooleanArray, Decimal128Array,
+    Float32Array, Float64Array, Int32Array, Int64Array, TimestampNanosecondArray, UInt32Array,
+    UInt64Array,
 };
-use arrow_buffer::{i256, Buffer};
+use arrow_buffer::{i256, BooleanBuffer, Buffer};
 use arrow_data::ArrayDataBuilder;
 use arrow_schema::{DataType as ArrowType, TimeUnit};
 use std::any::Any;
 use std::sync::Arc;
+
+/// Provides conversion from `Vec<T>` to `Buffer`
+pub trait IntoBuffer {
+    fn into_buffer(self) -> Buffer;
+}
+
+macro_rules! native_buffer {
+    ($($t:ty),*) => {
+        $(impl IntoBuffer for Vec<$t> {
+            fn into_buffer(self) -> Buffer {
+                Buffer::from_vec(self)
+            }
+        })*
+    };
+}
+native_buffer!(i8, i16, i32, i64, u8, u16, u32, u64, f32, f64);
+
+impl IntoBuffer for Vec<bool> {
+    fn into_buffer(self) -> Buffer {
+        BooleanBuffer::from_iter(self).into_inner()
+    }
+}
+
+impl IntoBuffer for Vec<Int96> {
+    fn into_buffer(self) -> Buffer {
+        let mut builder = TimestampNanosecondBufferBuilder::new(self.len());
+        for v in self {
+            builder.append(v.to_nanos())
+        }
+        builder.finish()
+    }
+}
 
 /// Primitive array readers are leaves of array reader tree. They accept page iterator
 /// and read them into primitive arrays.
 pub struct PrimitiveArrayReader<T>
 where
     T: DataType,
-    T::T: ScalarValue,
+    T::T: Copy + Default,
+    Vec<T::T>: IntoBuffer,
 {
     data_type: ArrowType,
     pages: Box<dyn PageIterator>,
@@ -53,7 +85,8 @@ where
 impl<T> PrimitiveArrayReader<T>
 where
     T: DataType,
-    T::T: ScalarValue,
+    T::T: Copy + Default,
+    Vec<T::T>: IntoBuffer,
 {
     /// Construct primitive array reader.
     pub fn new(
@@ -85,7 +118,8 @@ where
 impl<T> ArrayReader for PrimitiveArrayReader<T>
 where
     T: DataType,
-    T::T: ScalarValue,
+    T::T: Copy + Default,
+    Vec<T::T>: IntoBuffer,
 {
     fn as_any(&self) -> &dyn Any {
         self
@@ -131,40 +165,14 @@ where
                 _ => unreachable!("INT96 must be timestamp nanosecond"),
             },
             PhysicalType::BYTE_ARRAY | PhysicalType::FIXED_LEN_BYTE_ARRAY => {
-                unreachable!(
-                    "PrimitiveArrayReaders don't support complex physical types"
-                );
+                unreachable!("PrimitiveArrayReaders don't support complex physical types");
             }
         };
 
         // Convert to arrays by using the Parquet physical type.
         // The physical types are then cast to Arrow types if necessary
 
-        let record_data = self.record_reader.consume_record_data();
-        let record_data = match T::get_physical_type() {
-            PhysicalType::BOOLEAN => {
-                let mut boolean_buffer = BooleanBufferBuilder::new(record_data.len());
-
-                for e in record_data.as_slice() {
-                    boolean_buffer.append(*e > 0);
-                }
-                boolean_buffer.into()
-            }
-            PhysicalType::INT96 => {
-                // SAFETY - record_data is an aligned buffer of Int96
-                let (prefix, slice, suffix) =
-                    unsafe { record_data.as_slice().align_to::<Int96>() };
-                assert!(prefix.is_empty() && suffix.is_empty());
-
-                let mut builder = TimestampNanosecondBufferBuilder::new(slice.len());
-                for v in slice {
-                    builder.append(v.to_nanos())
-                }
-
-                builder.finish()
-            }
-            _ => record_data,
-        };
+        let record_data = self.record_reader.consume_record_data().into_buffer();
 
         let array_data = ArrayDataBuilder::new(arrow_data_type)
             .len(self.record_reader.num_values())
@@ -188,9 +196,7 @@ where
             PhysicalType::DOUBLE => Arc::new(Float64Array::from(array_data)),
             PhysicalType::INT96 => Arc::new(TimestampNanosecondArray::from(array_data)),
             PhysicalType::BYTE_ARRAY | PhysicalType::FIXED_LEN_BYTE_ARRAY => {
-                unreachable!(
-                    "PrimitiveArrayReaders don't support complex physical types"
-                );
+                unreachable!("PrimitiveArrayReaders don't support complex physical types");
             }
         };
 
@@ -409,12 +415,9 @@ mod tests {
             );
             let page_iterator = InMemoryPageIterator::new(page_lists);
 
-            let mut array_reader = PrimitiveArrayReader::<Int32Type>::new(
-                Box::new(page_iterator),
-                column_desc,
-                None,
-            )
-            .unwrap();
+            let mut array_reader =
+                PrimitiveArrayReader::<Int32Type>::new(Box::new(page_iterator), column_desc, None)
+                    .unwrap();
 
             // Read first 50 values, which are all from the first column chunk
             let array = array_reader.next_batch(50).unwrap();
@@ -618,12 +621,9 @@ mod tests {
 
             let page_iterator = InMemoryPageIterator::new(page_lists);
 
-            let mut array_reader = PrimitiveArrayReader::<Int32Type>::new(
-                Box::new(page_iterator),
-                column_desc,
-                None,
-            )
-            .unwrap();
+            let mut array_reader =
+                PrimitiveArrayReader::<Int32Type>::new(Box::new(page_iterator), column_desc, None)
+                    .unwrap();
 
             let mut accu_len: usize = 0;
 
@@ -697,12 +697,9 @@ mod tests {
             );
             let page_iterator = InMemoryPageIterator::new(page_lists);
 
-            let mut array_reader = PrimitiveArrayReader::<Int32Type>::new(
-                Box::new(page_iterator),
-                column_desc,
-                None,
-            )
-            .unwrap();
+            let mut array_reader =
+                PrimitiveArrayReader::<Int32Type>::new(Box::new(page_iterator), column_desc, None)
+                    .unwrap();
 
             // read data from the reader
             // the data type is decimal(8,2)
@@ -759,12 +756,9 @@ mod tests {
             );
             let page_iterator = InMemoryPageIterator::new(page_lists);
 
-            let mut array_reader = PrimitiveArrayReader::<Int64Type>::new(
-                Box::new(page_iterator),
-                column_desc,
-                None,
-            )
-            .unwrap();
+            let mut array_reader =
+                PrimitiveArrayReader::<Int64Type>::new(Box::new(page_iterator), column_desc, None)
+                    .unwrap();
 
             // read data from the reader
             // the data type is decimal(18,4)

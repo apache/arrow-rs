@@ -71,7 +71,7 @@ use crate::datatypes::{DataType, Field, Schema};
 use crate::error::ArrowError;
 use crate::ffi;
 use crate::ffi::{FFI_ArrowArray, FFI_ArrowSchema};
-use crate::ffi_stream::{export_reader_into_raw, ArrowArrayStreamReader, FFI_ArrowArrayStream};
+use crate::ffi_stream::{ArrowArrayStreamReader, FFI_ArrowArrayStream};
 use crate::record_batch::RecordBatch;
 
 import_exception!(pyarrow, ArrowException);
@@ -377,7 +377,7 @@ impl FromPyArrow for RecordBatch {
 impl ToPyArrow for RecordBatch {
     fn to_pyarrow(&self, py: Python) -> PyResult<PyObject> {
         // Workaround apache/arrow#37669 by returning RecordBatchIterator
-        let reader = RecordBatchIterator::new(vec![Ok(self.clone())], self.schema().clone());
+        let reader = RecordBatchIterator::new(vec![Ok(self.clone())], self.schema());
         let reader: Box<dyn RecordBatchReader + Send> = Box::new(reader);
         let py_reader = reader.into_pyarrow(py)?;
         py_reader.call_method0(py, "read_next_batch")
