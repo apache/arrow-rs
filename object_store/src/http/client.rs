@@ -15,12 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::client::get::GetClient;
+use crate::client::get::{response_to_get_result, GetClient, GetSuffixClient};
 use crate::client::header::HeaderConfig;
 use crate::client::retry::{self, RetryConfig, RetryExt};
-use crate::client::GetOptionsExt;
+use crate::client::{with_suffix_header, GetOptionsExt};
 use crate::path::{Path, DELIMITER};
-use crate::util::deserialize_rfc1123;
+use crate::util::{deserialize_rfc1123, HttpRange};
 use crate::{ClientOptions, GetOptions, ObjectMeta, Result};
 use async_trait::async_trait;
 use bytes::{Buf, Bytes};
@@ -319,6 +319,43 @@ impl GetClient for Client {
         }
 
         Ok(res)
+    }
+}
+
+#[async_trait]
+impl GetSuffixClient for Client {
+    async fn get_suffix(&self, location: &Path, nbytes: usize) -> Result<Bytes> {
+        let url = self.path_url(location);
+        let method = Method::GET;
+        let builder = self.client.request(method, url);
+
+        let res = with_suffix_header(builder, nbytes)
+            .send_retry(&self.retry_config)
+            .await
+            .map_err(|source| match source.status() {
+                // Some stores return METHOD_NOT_ALLOWED for get on directories
+                Some(StatusCode::NOT_FOUND | StatusCode::METHOD_NOT_ALLOWED) => {
+                    crate::Error::NotFound {
+                        source: Box::new(source),
+                        path: location.to_string(),
+                    }
+                }
+                _ => Error::Request { source }.into(),
+            })?;
+
+        // We expect a 206 Partial Content response if a range was requested
+        // a 200 OK response would indicate the server did not fulfill the request
+        if res.status() != StatusCode::PARTIAL_CONTENT {
+            return Err(crate::Error::NotSupported {
+                source: Box::new(Error::RangeNotSupported {
+                    href: location.to_string(),
+                }),
+            });
+        }
+
+        response_to_get_result::<Client>(res, location, Some(HttpRange::new_suffix(nbytes)))?
+            .bytes()
+            .await
     }
 }
 

@@ -200,6 +200,16 @@ impl<T: ObjectStore> ObjectStore for ThrottledStore<T> {
         self.inner.get_range(location, range).await
     }
 
+    async fn get_suffix(&self, location: &Path, nbytes: usize) -> Result<Bytes> {
+        let config = self.config();
+
+        let sleep_duration = config.wait_get_per_call + config.wait_get_per_byte * nbytes as u32;
+
+        sleep(sleep_duration).await;
+
+        self.inner.get_suffix(location, nbytes).await
+    }
+
     async fn get_ranges(&self, location: &Path, ranges: &[Range<usize>]) -> Result<Vec<Bytes>> {
         let config = self.config();
 

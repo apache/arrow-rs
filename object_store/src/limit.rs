@@ -111,6 +111,11 @@ impl<T: ObjectStore> ObjectStore for LimitStore<T> {
         self.inner.get_range(location, range).await
     }
 
+    async fn get_suffix(&self, location: &Path, nbytes: usize) -> Result<Bytes> {
+        let _permit = self.semaphore.acquire().await.unwrap();
+        self.inner.get_suffix(location, nbytes).await
+    }
+
     async fn get_ranges(&self, location: &Path, ranges: &[Range<usize>]) -> Result<Vec<Bytes>> {
         let _permit = self.semaphore.acquire().await.unwrap();
         self.inner.get_ranges(location, ranges).await

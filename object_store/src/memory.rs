@@ -48,6 +48,9 @@ enum Error {
     ))]
     OutOfRange { range: Range<usize>, len: usize },
 
+    #[snafu(display("Suffix of length {} unavailable for object of length {}", nbytes, len))]
+    SuffixOutOfRange { nbytes: usize, len: usize },
+
     #[snafu(display("Invalid range: {}..{}", range.start, range.end))]
     BadRange { range: Range<usize> },
 
@@ -251,6 +254,13 @@ impl ObjectStore for InMemory {
                 Ok(entry.data.slice(range))
             })
             .collect()
+    }
+
+    async fn get_suffix(&self, location: &Path, nbytes: usize) -> Result<Bytes> {
+        let data = self.entry(location).await?.data;
+        let len = data.len();
+        ensure!(nbytes <= len, SuffixOutOfRangeSnafu { nbytes, len });
+        Ok(data.slice((data.len() - nbytes)..))
     }
 
     async fn head(&self, location: &Path) -> Result<ObjectMeta> {

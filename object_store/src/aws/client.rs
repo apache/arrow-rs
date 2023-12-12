@@ -20,7 +20,7 @@ use crate::aws::credential::{AwsCredential, CredentialExt};
 use crate::aws::{
     AwsCredentialProvider, S3ConditionalPut, S3CopyIfNotExists, STORE, STRICT_PATH_ENCODE_SET,
 };
-use crate::client::get::GetClient;
+use crate::client::get::{response_to_get_result, GetClient, GetSuffixClient};
 use crate::client::header::HeaderConfig;
 use crate::client::header::{get_put_result, get_version};
 use crate::client::list::ListClient;
@@ -29,9 +29,10 @@ use crate::client::s3::{
     CompleteMultipartUpload, CompleteMultipartUploadResult, InitiateMultipartUploadResult,
     ListResponse,
 };
-use crate::client::GetOptionsExt;
+use crate::client::{with_suffix_header, GetOptionsExt};
 use crate::multipart::PartId;
 use crate::path::DELIMITER;
+use crate::util::HttpRange;
 use crate::{
     ClientOptions, GetOptions, ListResult, MultipartId, Path, PutResult, Result, RetryConfig,
 };
@@ -662,6 +663,39 @@ impl GetClient for S3Client {
             })?;
 
         Ok(response)
+    }
+}
+
+#[async_trait]
+impl GetSuffixClient for S3Client {
+    async fn get_suffix(&self, location: &Path, nbytes: usize) -> Result<Bytes> {
+        let credential = self.config.get_credential().await?;
+        let url = self.config.path_url(location);
+        let method = Method::GET;
+
+        let builder = self.client.request(method, url);
+
+        // if let Some(v) = &options.version {
+        //     builder = builder.query(&[("versionId", v)])
+        // }
+
+        let response = with_suffix_header(builder, nbytes)
+            .with_aws_sigv4(
+                credential.as_deref(),
+                &self.config.region,
+                "s3",
+                self.config.sign_payload,
+                None,
+            )
+            .send_retry(&self.config.retry_config)
+            .await
+            .context(GetRequestSnafu {
+                path: location.as_ref(),
+            })?;
+
+        response_to_get_result::<S3Client>(response, location, Some(HttpRange::new_suffix(nbytes)))?
+            .bytes()
+            .await
     }
 }
 

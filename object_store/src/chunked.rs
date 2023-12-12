@@ -136,6 +136,10 @@ impl ObjectStore for ChunkedStore {
         self.inner.get_range(location, range).await
     }
 
+    async fn get_suffix(&self, location: &Path, nbytes: usize) -> Result<Bytes> {
+        self.inner.get_suffix(location, nbytes).await
+    }
+
     async fn head(&self, location: &Path) -> Result<ObjectMeta> {
         self.inner.head(location).await
     }

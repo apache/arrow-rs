@@ -42,7 +42,7 @@ use tokio::io::AsyncWrite;
 use url::Url;
 
 use crate::aws::client::S3Client;
-use crate::client::get::GetClientExt;
+use crate::client::get::{GetClientExt, GetSuffixClient};
 use crate::client::list::ListClientExt;
 use crate::client::CredentialProvider;
 use crate::multipart::{MultiPartStore, PartId, PutPart, WriteMultiPart};
@@ -214,6 +214,10 @@ impl ObjectStore for AmazonS3 {
         self.client
             .delete_request(location, &[("uploadId", multipart_id)])
             .await
+    }
+
+    async fn get_suffix(&self, location: &Path, nbytes: usize) -> Result<Bytes> {
+        self.client.get_suffix(location, nbytes).await
     }
 
     async fn get_opts(&self, location: &Path, options: GetOptions) -> Result<GetResult> {

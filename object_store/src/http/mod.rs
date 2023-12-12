@@ -40,7 +40,7 @@ use snafu::{OptionExt, ResultExt, Snafu};
 use tokio::io::AsyncWrite;
 use url::Url;
 
-use crate::client::get::GetClientExt;
+use crate::client::get::{GetClientExt, GetSuffixClient};
 use crate::client::header::get_etag;
 use crate::http::client::Client;
 use crate::path::Path;
@@ -128,6 +128,10 @@ impl ObjectStore for HttpStore {
 
     async fn get_opts(&self, location: &Path, options: GetOptions) -> Result<GetResult> {
         self.client.get_opts(location, options).await
+    }
+
+    async fn get_suffix(&self, location: &Path, nbytes: usize) -> Result<Bytes> {
+        self.client.get_suffix(location, nbytes).await
     }
 
     async fn delete(&self, location: &Path) -> Result<()> {

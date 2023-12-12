@@ -456,6 +456,15 @@ impl ObjectStore for LocalFileSystem {
         .await
     }
 
+    async fn get_suffix(&self, location: &Path, nbytes: usize) -> Result<Bytes> {
+        let path = self.config.path_to_filesystem(location)?;
+        maybe_spawn_blocking(move || {
+            let (mut file, _) = open_file(&path)?;
+            read_suffix(&mut file, &path, nbytes)
+        })
+        .await
+    }
+
     async fn delete(&self, location: &Path) -> Result<()> {
         let path = self.config.path_to_filesystem(location)?;
         maybe_spawn_blocking(move || match std::fs::remove_file(&path) {
@@ -947,6 +956,27 @@ pub(crate) fn read_range(file: &mut File, path: &PathBuf, range: Range<usize>) -
         OutOfRangeSnafu {
             path,
             expected: to_read,
+            actual: read
+        }
+    );
+    Ok(buf.into())
+}
+
+pub(crate) fn read_suffix(file: &mut File, path: &PathBuf, nbytes: usize) -> Result<Bytes> {
+    file.seek(SeekFrom::End(-(nbytes as i64)))
+        .context(SeekSnafu { path })?;
+
+    let mut buf = Vec::with_capacity(nbytes);
+    let read = file
+        .take(nbytes as u64)
+        .read_to_end(&mut buf)
+        .context(UnableToReadBytesSnafu { path })?;
+
+    ensure!(
+        read == nbytes,
+        OutOfRangeSnafu {
+            path,
+            expected: nbytes,
             actual: read
         }
     );

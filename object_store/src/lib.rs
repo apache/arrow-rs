@@ -797,6 +797,10 @@ macro_rules! as_ref_impl {
                 self.as_ref().get_range(location, range).await
             }
 
+            async fn get_suffix(&self, location: &Path, nbytes: usize) -> Result<Bytes> {
+                self.as_ref().get_suffix(location, nbytes).await
+            }
+
             async fn get_ranges(
                 &self,
                 location: &Path,
