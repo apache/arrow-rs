@@ -368,13 +368,6 @@ impl ClientOptions {
         self
     }
 
-    /// Use http2 if supported, otherwise use http1.
-    pub fn with_either_http1_http2(mut self) -> Self {
-        self.http1_only = false.into();
-        self.http2_only = false.into();
-        self
-    }
-
     /// Set a proxy URL to use for requests
     pub fn with_proxy_url(mut self, proxy_url: impl Into<String>) -> Self {
         self.proxy_url = Some(proxy_url.into());
