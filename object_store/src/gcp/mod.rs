@@ -29,6 +29,13 @@
 //! to abort the upload and drop those unneeded parts. In addition, you may wish to
 //! consider implementing automatic clean up of unused parts that are older than one
 //! week.
+//!
+//! ## Using HTTP/2
+//!
+//! Google Cloud Storage supports both HTTP/2 and HTTP/1. HTTP/1 is used by default
+//! because it allows much higher throughput in our benchmarks (see
+//! [#5194](https://github.com/apache/arrow-rs/issues/5194)). HTTP/2 can be
+//! enabled by setting [crate::ClientConfigKey::Http1Only] to false.
 use std::sync::Arc;
 
 use crate::client::CredentialProvider;
