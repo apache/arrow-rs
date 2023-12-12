@@ -18,7 +18,7 @@
 use crate::alloc::Deallocation;
 use crate::buffer::Buffer;
 use crate::native::ArrowNativeType;
-use crate::{MutableBuffer, OffsetBuffer};
+use crate::{BufferBuilder, MutableBuffer, OffsetBuffer};
 use std::fmt::Formatter;
 use std::marker::PhantomData;
 use std::ops::Deref;
@@ -160,6 +160,13 @@ impl<T: ArrowNativeType> From<Vec<T>> for ScalarBuffer<T> {
     }
 }
 
+impl<T: ArrowNativeType> From<BufferBuilder<T>> for ScalarBuffer<T> {
+    fn from(mut value: BufferBuilder<T>) -> Self {
+        let len = value.len();
+        Self::new(value.finish(), 0, len)
+    }
+}
+
 impl<T: ArrowNativeType> FromIterator<T> for ScalarBuffer<T> {
     fn from_iter<I: IntoIterator<Item = T>>(iter: I) -> Self {
         iter.into_iter().collect::<Vec<_>>().into()
@@ -268,5 +275,13 @@ mod tests {
     fn test_end_overflow() {
         let buffer = Buffer::from_iter([0_i32, 1, 2]);
         ScalarBuffer::<i32>::new(buffer, 0, usize::MAX / 4 + 1);
+    }
+
+    #[test]
+    fn convert_from_buffer_builder() {
+        let input = vec![1, 2, 3, 4];
+        let buffer_builder = BufferBuilder::from(input.clone());
+        let scalar_buffer = ScalarBuffer::from(buffer_builder);
+        assert_eq!(scalar_buffer.as_ref(), input);
     }
 }
