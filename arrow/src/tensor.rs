@@ -27,9 +27,7 @@ use crate::datatypes::*;
 use crate::error::{ArrowError, Result};
 
 /// Computes the strides required assuming a row major memory layout
-fn compute_row_major_strides<T: ArrowPrimitiveType>(
-    shape: &[usize],
-) -> Result<Vec<usize>> {
+fn compute_row_major_strides<T: ArrowPrimitiveType>(shape: &[usize]) -> Result<Vec<usize>> {
     let mut remaining_bytes = mem::size_of::<T::Native>();
 
     for i in shape {
@@ -52,9 +50,7 @@ fn compute_row_major_strides<T: ArrowPrimitiveType>(
 }
 
 /// Computes the strides required assuming a column major memory layout
-fn compute_column_major_strides<T: ArrowPrimitiveType>(
-    shape: &[usize],
-) -> Result<Vec<usize>> {
+fn compute_column_major_strides<T: ArrowPrimitiveType>(shape: &[usize]) -> Result<Vec<usize>> {
     let mut remaining_bytes = mem::size_of::<T::Native>();
     let mut strides = Vec::<usize>::new();
 
@@ -85,16 +81,36 @@ pub struct Tensor<'a, T: ArrowPrimitiveType> {
 }
 
 pub type BooleanTensor<'a> = Tensor<'a, BooleanType>;
+pub type Date32Tensor<'a> = Tensor<'a, Date32Type>;
+pub type Date64Tensor<'a> = Tensor<'a, Date64Type>;
+pub type Decimal128Tensor<'a> = Tensor<'a, Decimal128Type>;
+pub type Decimal256Tensor<'a> = Tensor<'a, Decimal256Type>;
+pub type DurationMicrosecondTensor<'a> = Tensor<'a, DurationMicrosecondType>;
+pub type DurationMillisecondTensor<'a> = Tensor<'a, DurationMillisecondType>;
+pub type DurationNanosecondTensor<'a> = Tensor<'a, DurationNanosecondType>;
+pub type DurationSecondTensor<'a> = Tensor<'a, DurationSecondType>;
+pub type Float16Tensor<'a> = Tensor<'a, Float16Type>;
+pub type Float32Tensor<'a> = Tensor<'a, Float32Type>;
+pub type Float64Tensor<'a> = Tensor<'a, Float64Type>;
 pub type Int8Tensor<'a> = Tensor<'a, Int8Type>;
 pub type Int16Tensor<'a> = Tensor<'a, Int16Type>;
 pub type Int32Tensor<'a> = Tensor<'a, Int32Type>;
 pub type Int64Tensor<'a> = Tensor<'a, Int64Type>;
+pub type IntervalDayTimeTensor<'a> = Tensor<'a, IntervalDayTimeType>;
+pub type IntervalMonthDayNanoTensor<'a> = Tensor<'a, IntervalMonthDayNanoType>;
+pub type IntervalYearMonthTensor<'a> = Tensor<'a, IntervalYearMonthType>;
+pub type Time32MillisecondTensor<'a> = Tensor<'a, Time32MillisecondType>;
+pub type Time32SecondTensor<'a> = Tensor<'a, Time32SecondType>;
+pub type Time64MicrosecondTensor<'a> = Tensor<'a, Time64MicrosecondType>;
+pub type Time64NanosecondTensor<'a> = Tensor<'a, Time64NanosecondType>;
+pub type TimestampMicrosecondTensor<'a> = Tensor<'a, TimestampMicrosecondType>;
+pub type TimestampMillisecondTensor<'a> = Tensor<'a, TimestampMillisecondType>;
+pub type TimestampNanosecondTensor<'a> = Tensor<'a, TimestampNanosecondType>;
+pub type TimestampSecondTensor<'a> = Tensor<'a, TimestampSecondType>;
 pub type UInt8Tensor<'a> = Tensor<'a, UInt8Type>;
 pub type UInt16Tensor<'a> = Tensor<'a, UInt16Type>;
 pub type UInt32Tensor<'a> = Tensor<'a, UInt32Type>;
 pub type UInt64Tensor<'a> = Tensor<'a, UInt64Type>;
-pub type Float32Tensor<'a> = Tensor<'a, Float32Type>;
-pub type Float64Tensor<'a> = Tensor<'a, Float64Type>;
 
 impl<'a, T: ArrowPrimitiveType> Tensor<'a, T> {
     /// Creates a new `Tensor`
@@ -108,18 +124,17 @@ impl<'a, T: ArrowPrimitiveType> Tensor<'a, T> {
             None => {
                 if buffer.len() != mem::size_of::<T::Native>() {
                     return Err(ArrowError::InvalidArgumentError(
-                        "underlying buffer should only contain a single tensor element"
-                            .to_string(),
+                        "underlying buffer should only contain a single tensor element".to_string(),
                     ));
                 }
 
-                if strides != None {
+                if strides.is_some() {
                     return Err(ArrowError::InvalidArgumentError(
                         "expected None strides for tensor with no shape".to_string(),
                     ));
                 }
 
-                if names != None {
+                if names.is_some() {
                     return Err(ArrowError::InvalidArgumentError(
                         "expected None names for tensor with no shape".to_string(),
                     ));
@@ -138,8 +153,7 @@ impl<'a, T: ArrowPrimitiveType> Tensor<'a, T> {
                 if let Some(ref n) = names {
                     if n.len() != s.len() {
                         return Err(ArrowError::InvalidArgumentError(
-                            "number of dimensions and number of dimension names differ"
-                                .to_string(),
+                            "number of dimensions and number of dimension names differ".to_string(),
                         ));
                     }
                 }
@@ -147,8 +161,7 @@ impl<'a, T: ArrowPrimitiveType> Tensor<'a, T> {
                 let total_elements: usize = s.iter().product();
                 if total_elements != (buffer.len() / mem::size_of::<T::Native>()) {
                     return Err(ArrowError::InvalidArgumentError(
-                        "number of elements in buffer does not match dimensions"
-                            .to_string(),
+                        "number of elements in buffer does not match dimensions".to_string(),
                     ));
                 }
             }
@@ -165,8 +178,7 @@ impl<'a, T: ArrowPrimitiveType> Tensor<'a, T> {
                         Some(st)
                     } else {
                         return Err(ArrowError::InvalidArgumentError(
-                            "the input stride does not match the selected shape"
-                                .to_string(),
+                            "the input stride does not match the selected shape".to_string(),
                         ));
                     }
                 } else {
@@ -286,9 +298,7 @@ impl<'a, T: ArrowPrimitiveType> Tensor<'a, T> {
     pub fn is_column_major(&self) -> Result<bool> {
         match self.shape {
             None => Ok(false),
-            Some(ref s) => {
-                Ok(Some(compute_column_major_strides::<T>(s)?) == self.strides)
-            }
+            Some(ref s) => Ok(Some(compute_column_major_strides::<T>(s)?) == self.strides),
         }
     }
 }
@@ -414,8 +424,7 @@ mod tests {
         }
         let buf = builder.finish();
         let names = vec!["Dim 1", "Dim 2"];
-        let tensor =
-            Int64Tensor::new_column_major(buf, Some(vec![2, 4]), Some(names)).unwrap();
+        let tensor = Int64Tensor::new_column_major(buf, Some(vec![2, 4]), Some(names)).unwrap();
         assert_eq!(8, tensor.size());
         assert_eq!(Some(vec![2_usize, 4]).as_ref(), tensor.shape());
         assert_eq!(Some(vec![8_usize, 16]).as_ref(), tensor.strides());
@@ -435,8 +444,7 @@ mod tests {
         }
         let buf = builder.finish();
 
-        let result =
-            Int32Tensor::try_new(buf, Some(vec![2, 8]), Some(vec![2, 8, 1]), None);
+        let result = Int32Tensor::try_new(buf, Some(vec![2, 8]), Some(vec![2, 8, 1]), None);
 
         if result.is_ok() {
             panic!("shape and stride dimensions are different")

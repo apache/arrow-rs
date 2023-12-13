@@ -19,42 +19,9 @@
 
 use std::convert::TryFrom;
 
-use crate::{
-    error::{ArrowError, Result},
-    ffi,
-    ffi::ArrowArrayRef,
-};
+use crate::{error::Result, ffi};
 
-use super::{make_array, ArrayData, ArrayRef};
-
-impl TryFrom<ffi::ArrowArray> for ArrayData {
-    type Error = ArrowError;
-
-    fn try_from(value: ffi::ArrowArray) -> Result<Self> {
-        value.to_data()
-    }
-}
-
-impl TryFrom<ArrayData> for ffi::ArrowArray {
-    type Error = ArrowError;
-
-    fn try_from(value: ArrayData) -> Result<Self> {
-        ffi::ArrowArray::try_new(value)
-    }
-}
-
-/// Creates a new array from two FFI pointers. Used to import arrays from the C Data Interface
-/// # Safety
-/// Assumes that these pointers represent valid C Data Interfaces, both in memory
-/// representation and lifetime via the `release` mechanism.
-pub unsafe fn make_array_from_raw(
-    array: *const ffi::FFI_ArrowArray,
-    schema: *const ffi::FFI_ArrowSchema,
-) -> Result<ArrayRef> {
-    let array = ffi::ArrowArray::try_from_raw(array, schema)?;
-    let data = ArrayData::try_from(array)?;
-    Ok(make_array(data))
-}
+use super::ArrayRef;
 
 /// Exports an array to raw pointers of the C Data Interface provided by the consumer.
 /// # Safety
@@ -64,13 +31,14 @@ pub unsafe fn make_array_from_raw(
 /// This function copies the content of two FFI structs [ffi::FFI_ArrowArray] and
 /// [ffi::FFI_ArrowSchema] in the array to the location pointed by the raw pointers.
 /// Usually the raw pointers are provided by the array data consumer.
+#[deprecated(note = "Use FFI_ArrowArray::new and FFI_ArrowSchema::try_from")]
 pub unsafe fn export_array_into_raw(
     src: ArrayRef,
     out_array: *mut ffi::FFI_ArrowArray,
     out_schema: *mut ffi::FFI_ArrowSchema,
 ) -> Result<()> {
-    let data = src.data();
-    let array = ffi::FFI_ArrowArray::new(data);
+    let data = src.to_data();
+    let array = ffi::FFI_ArrowArray::new(&data);
     let schema = ffi::FFI_ArrowSchema::try_from(data.data_type())?;
 
     std::ptr::write_unaligned(out_array, array);
@@ -87,89 +55,77 @@ mod tests {
     use crate::util::bit_util;
     use crate::{
         array::{
-            Array, ArrayData, BooleanArray, FixedSizeBinaryArray, Int64Array,
-            StructArray, UInt32Array, UInt64Array,
+            Array, ArrayData, BooleanArray, FixedSizeBinaryArray, Int64Array, StructArray,
+            UInt32Array, UInt64Array,
         },
         datatypes::{DataType, Field},
-        ffi::ArrowArray,
+        ffi::{from_ffi, FFI_ArrowArray, FFI_ArrowSchema},
     };
     use std::convert::TryFrom;
     use std::sync::Arc;
 
     fn test_round_trip(expected: &ArrayData) -> Result<()> {
-        // create a `ArrowArray` from the data.
-        let d1 = ArrowArray::try_from(expected.clone())?;
-
-        // here we export the array as 2 pointers. We would have no control over ownership if it was not for
-        // the release mechanism.
-        let (array, schema) = ArrowArray::into_raw(d1);
+        // here we export the array
+        let array = FFI_ArrowArray::new(expected);
+        let schema = FFI_ArrowSchema::try_from(expected.data_type())?;
 
         // simulate an external consumer by being the consumer
-        let d1 = unsafe { ArrowArray::try_from_raw(array, schema) }?;
-
-        let result = &ArrayData::try_from(d1)?;
+        let result = &unsafe { from_ffi(array, &schema) }?;
 
         assert_eq!(result, expected);
-
-        unsafe {
-            Arc::from_raw(array);
-            Arc::from_raw(schema);
-        }
         Ok(())
     }
 
     #[test]
     fn test_u32() -> Result<()> {
         let array = UInt32Array::from(vec![Some(2), None, Some(1), None]);
-        let data = array.data();
-        test_round_trip(data)
+        let data = array.into_data();
+        test_round_trip(&data)
     }
 
     #[test]
     fn test_u64() -> Result<()> {
         let array = UInt64Array::from(vec![Some(2), None, Some(1), None]);
-        let data = array.data();
-        test_round_trip(data)
+        let data = array.into_data();
+        test_round_trip(&data)
     }
 
     #[test]
     fn test_i64() -> Result<()> {
         let array = Int64Array::from(vec![Some(2), None, Some(1), None]);
-        let data = array.data();
-        test_round_trip(data)
+        let data = array.into_data();
+        test_round_trip(&data)
     }
 
     #[test]
     fn test_struct() -> Result<()> {
         let inner = StructArray::from(vec![
             (
-                Field::new("a1", DataType::Boolean, false),
-                Arc::new(BooleanArray::from(vec![true, true, false, false]))
-                    as Arc<dyn Array>,
+                Arc::new(Field::new("a1", DataType::Boolean, false)),
+                Arc::new(BooleanArray::from(vec![true, true, false, false])) as Arc<dyn Array>,
             ),
             (
-                Field::new("a2", DataType::UInt32, false),
+                Arc::new(Field::new("a2", DataType::UInt32, false)),
                 Arc::new(UInt32Array::from(vec![1, 2, 3, 4])),
             ),
         ]);
 
         let array = StructArray::from(vec![
             (
-                Field::new("a", inner.data_type().clone(), false),
+                Arc::new(Field::new("a", inner.data_type().clone(), false)),
                 Arc::new(inner) as Arc<dyn Array>,
             ),
             (
-                Field::new("b", DataType::Boolean, false),
-                Arc::new(BooleanArray::from(vec![false, false, true, true]))
-                    as Arc<dyn Array>,
+                Arc::new(Field::new("b", DataType::Boolean, false)),
+                Arc::new(BooleanArray::from(vec![false, false, true, true])) as Arc<dyn Array>,
             ),
             (
-                Field::new("c", DataType::UInt32, false),
+                Arc::new(Field::new("c", DataType::UInt32, false)),
                 Arc::new(UInt32Array::from(vec![42, 28, 19, 31])),
             ),
         ]);
-        let data = array.data();
-        test_round_trip(data)
+        let data = array.into_data();
+        test_round_trip(&data)
     }
 
     #[test]
@@ -187,10 +143,10 @@ mod tests {
             Some(1),
             None,
         ]);
-        let array = DictionaryArray::try_new(&keys, &values)?;
+        let array = DictionaryArray::new(keys, Arc::new(values));
 
-        let data = array.data();
-        test_round_trip(data)
+        let data = array.into_data();
+        test_round_trip(&data)
     }
 
     #[test]
@@ -198,8 +154,8 @@ mod tests {
         let values = vec![vec![10, 10, 10], vec![20, 20, 20], vec![30, 30, 30]];
         let array = FixedSizeBinaryArray::try_from_iter(values.into_iter())?;
 
-        let data = array.data();
-        test_round_trip(data)
+        let data = array.into_data();
+        test_round_trip(&data)
     }
 
     #[test]
@@ -212,29 +168,29 @@ mod tests {
             Some(vec![30, 30, 30]),
             None,
         ];
-        let array = FixedSizeBinaryArray::try_from_sparse_iter(values.into_iter())?;
+        let array = FixedSizeBinaryArray::try_from_sparse_iter_with_size(values.into_iter(), 3)?;
 
-        let data = array.data();
-        test_round_trip(data)
+        let data = array.into_data();
+        test_round_trip(&data)
     }
 
     #[test]
     fn test_fixed_size_list() -> Result<()> {
-        let v: Vec<i64> = (0..9).into_iter().collect();
+        let v: Vec<i64> = (0..9).collect();
         let value_data = ArrayData::builder(DataType::Int64)
             .len(9)
-            .add_buffer(Buffer::from_slice_ref(&v))
+            .add_buffer(Buffer::from_slice_ref(v))
             .build()?;
         let list_data_type =
-            DataType::FixedSizeList(Box::new(Field::new("f", DataType::Int64, false)), 3);
+            DataType::FixedSizeList(Arc::new(Field::new("f", DataType::Int64, false)), 3);
         let list_data = ArrayData::builder(list_data_type)
             .len(3)
             .add_child_data(value_data)
             .build()?;
         let array = FixedSizeListArray::from(list_data);
 
-        let data = array.data();
-        test_round_trip(data)
+        let data = array.into_data();
+        test_round_trip(&data)
     }
 
     #[test]
@@ -245,13 +201,13 @@ mod tests {
         bit_util::set_bit(&mut validity_bits, 2);
         bit_util::set_bit(&mut validity_bits, 6);
 
-        let v: Vec<i16> = (0..16).into_iter().collect();
+        let v: Vec<i16> = (0..16).collect();
         let value_data = ArrayData::builder(DataType::Int16)
             .len(16)
-            .add_buffer(Buffer::from_slice_ref(&v))
+            .add_buffer(Buffer::from_slice_ref(v))
             .build()?;
         let list_data_type =
-            DataType::FixedSizeList(Box::new(Field::new("f", DataType::Int16, false)), 2);
+            DataType::FixedSizeList(Arc::new(Field::new("f", DataType::Int16, false)), 2);
         let list_data = ArrayData::builder(list_data_type)
             .len(8)
             .null_bit_buffer(Some(Buffer::from(validity_bits)))
@@ -259,22 +215,22 @@ mod tests {
             .build()?;
         let array = FixedSizeListArray::from(list_data);
 
-        let data = array.data();
-        test_round_trip(data)
+        let data = array.into_data();
+        test_round_trip(&data)
     }
 
     #[test]
     fn test_fixed_size_list_nested() -> Result<()> {
-        let v: Vec<i32> = (0..16).into_iter().collect();
+        let v: Vec<i32> = (0..16).collect();
         let value_data = ArrayData::builder(DataType::Int32)
             .len(16)
-            .add_buffer(Buffer::from_slice_ref(&v))
+            .add_buffer(Buffer::from_slice_ref(v))
             .build()?;
 
         let offsets: Vec<i32> = vec![0, 2, 4, 6, 8, 10, 12, 14, 16];
-        let value_offsets = Buffer::from_slice_ref(&offsets);
+        let value_offsets = Buffer::from_slice_ref(offsets);
         let inner_list_data_type =
-            DataType::List(Box::new(Field::new("item", DataType::Int32, false)));
+            DataType::List(Arc::new(Field::new("item", DataType::Int32, false)));
         let inner_list_data = ArrayData::builder(inner_list_data_type.clone())
             .len(8)
             .add_buffer(value_offsets)
@@ -285,10 +241,8 @@ mod tests {
         let mut validity_bits: [u8; 1] = [0; 1];
         bit_util::set_bit(&mut validity_bits, 2);
 
-        let list_data_type = DataType::FixedSizeList(
-            Box::new(Field::new("f", inner_list_data_type, false)),
-            2,
-        );
+        let list_data_type =
+            DataType::FixedSizeList(Arc::new(Field::new("f", inner_list_data_type, false)), 2);
         let list_data = ArrayData::builder(list_data_type)
             .len(4)
             .null_bit_buffer(Some(Buffer::from(validity_bits)))
@@ -297,7 +251,7 @@ mod tests {
 
         let array = FixedSizeListArray::from(list_data);
 
-        let data = array.data();
-        test_round_trip(data)
+        let data = array.into_data();
+        test_round_trip(&data)
     }
 }

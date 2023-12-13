@@ -17,12 +17,7 @@
 
 #![allow(clippy::approx_constant)]
 
-extern crate parquet;
-
-#[macro_use]
-extern crate parquet_derive;
-
-use parquet::record::RecordWriter;
+use parquet_derive::{ParquetRecordReader, ParquetRecordWriter};
 
 #[derive(ParquetRecordWriter)]
 struct ACompleteRecord<'a> {
@@ -47,17 +42,39 @@ struct ACompleteRecord<'a> {
     pub borrowed_maybe_a_string: &'a Option<String>,
     pub borrowed_maybe_a_str: &'a Option<&'a str>,
     pub now: chrono::NaiveDateTime,
+    pub byte_vec: Vec<u8>,
+    pub maybe_byte_vec: Option<Vec<u8>>,
+    pub borrowed_byte_vec: &'a [u8],
+    pub borrowed_maybe_byte_vec: &'a Option<Vec<u8>>,
+    pub borrowed_maybe_borrowed_byte_vec: &'a Option<&'a [u8]>,
+}
+
+#[derive(PartialEq, ParquetRecordWriter, ParquetRecordReader, Debug)]
+struct APartiallyCompleteRecord {
+    pub bool: bool,
+    pub string: String,
+    pub i16: i16,
+    pub i32: i32,
+    pub u64: u64,
+    pub isize: isize,
+    pub float: f32,
+    pub double: f64,
+    pub now: chrono::NaiveDateTime,
+    pub date: chrono::NaiveDate,
+    pub byte_vec: Vec<u8>,
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    use std::{env, fs, io::Write, sync::Arc};
+
     use parquet::{
-        file::{properties::WriterProperties, writer::SerializedFileWriter},
+        file::writer::SerializedFileWriter,
+        record::{RecordReader, RecordWriter},
         schema::parser::parse_message_type,
     };
-    use std::{env, fs, io::Write, sync::Arc};
 
     #[test]
     fn test_parquet_derive_hello() {
@@ -87,6 +104,11 @@ mod tests {
             OPTIONAL BINARY          borrowed_maybe_a_string (STRING);
             OPTIONAL BINARY          borrowed_maybe_a_str (STRING);
             REQUIRED INT64           now (TIMESTAMP_MILLIS);
+            REQUIRED BINARY          byte_vec;
+            OPTIONAL BINARY          maybe_byte_vec;
+            REQUIRED BINARY          borrowed_byte_vec;
+            OPTIONAL BINARY          borrowed_maybe_byte_vec;
+            OPTIONAL BINARY          borrowed_maybe_borrowed_byte_vec;
         }";
 
         let schema = Arc::new(parse_message_type(schema_str).unwrap());
@@ -95,6 +117,9 @@ mod tests {
         let a_borrowed_string = "cool news".to_owned();
         let maybe_a_string = Some("it's true, I'm a string".to_owned());
         let maybe_a_str = Some(&a_str[..]);
+        let borrowed_byte_vec = vec![0x68, 0x69, 0x70];
+        let borrowed_maybe_byte_vec = Some(vec![0x71, 0x72]);
+        let borrowed_maybe_borrowed_byte_vec = Some(&borrowed_byte_vec[..]);
 
         let drs: Vec<ACompleteRecord> = vec![ACompleteRecord {
             a_bool: true,
@@ -118,20 +143,74 @@ mod tests {
             borrowed_maybe_a_string: &maybe_a_string,
             borrowed_maybe_a_str: &maybe_a_str,
             now: chrono::Utc::now().naive_local(),
+            byte_vec: vec![0x65, 0x66, 0x67],
+            maybe_byte_vec: Some(vec![0x88, 0x89, 0x90]),
+            borrowed_byte_vec: &borrowed_byte_vec,
+            borrowed_maybe_byte_vec: &borrowed_maybe_byte_vec,
+            borrowed_maybe_borrowed_byte_vec: &borrowed_maybe_borrowed_byte_vec,
         }];
 
         let generated_schema = drs.as_slice().schema().unwrap();
 
         assert_eq!(&schema, &generated_schema);
 
-        let props = Arc::new(WriterProperties::builder().build());
-        let mut writer =
-            SerializedFileWriter::new(file, generated_schema, props).unwrap();
+        let props = Default::default();
+        let mut writer = SerializedFileWriter::new(file, generated_schema, props).unwrap();
 
         let mut row_group = writer.next_row_group().unwrap();
         drs.as_slice().write_to_row_group(&mut row_group).unwrap();
         row_group.close().unwrap();
         writer.close().unwrap();
+    }
+
+    #[test]
+    fn test_parquet_derive_read_write_combined() {
+        let file = get_temp_file("test_parquet_derive_combined", &[]);
+
+        let mut drs: Vec<APartiallyCompleteRecord> = vec![APartiallyCompleteRecord {
+            bool: true,
+            string: "a string".into(),
+            i16: -45,
+            i32: 456,
+            u64: 4563424,
+            isize: -365,
+            float: 3.5,
+            double: std::f64::NAN,
+            now: chrono::Utc::now().naive_local(),
+            date: chrono::naive::NaiveDate::from_ymd_opt(2015, 3, 14).unwrap(),
+            byte_vec: vec![0x65, 0x66, 0x67],
+        }];
+
+        let mut out: Vec<APartiallyCompleteRecord> = Vec::new();
+
+        use parquet::file::{reader::FileReader, serialized_reader::SerializedFileReader};
+
+        let generated_schema = drs.as_slice().schema().unwrap();
+
+        let props = Default::default();
+        let mut writer =
+            SerializedFileWriter::new(file.try_clone().unwrap(), generated_schema, props).unwrap();
+
+        let mut row_group = writer.next_row_group().unwrap();
+        drs.as_slice().write_to_row_group(&mut row_group).unwrap();
+        row_group.close().unwrap();
+        writer.close().unwrap();
+
+        let reader = SerializedFileReader::new(file).unwrap();
+
+        let mut row_group = reader.get_row_group(0).unwrap();
+        out.read_from_row_group(&mut *row_group, 1).unwrap();
+
+        // correct for rounding error when writing milliseconds
+        drs[0].now =
+            chrono::naive::NaiveDateTime::from_timestamp_millis(drs[0].now.timestamp_millis())
+                .unwrap();
+
+        assert!(out[0].double.is_nan()); // these three lines are necessary because NAN != NAN
+        out[0].double = 0.;
+        drs[0].double = 0.;
+
+        assert_eq!(drs[0], out[0]);
     }
 
     /// Returns file handle for a temp file in 'target' directory with a provided content

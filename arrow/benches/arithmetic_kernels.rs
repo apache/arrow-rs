@@ -15,112 +15,63 @@
 // specific language governing permissions and limitations
 // under the License.
 
-#[macro_use]
-extern crate criterion;
-use criterion::Criterion;
-use rand::Rng;
-
-use std::sync::Arc;
+use criterion::*;
 
 extern crate arrow;
 
+use arrow::compute::kernels::numeric::*;
+use arrow::datatypes::Float32Type;
 use arrow::util::bench_util::*;
-use arrow::{array::*, datatypes::Float32Type};
-use arrow::{compute::kernels::arithmetic::*, util::test_util::seedable_rng};
-
-fn create_array(size: usize, with_nulls: bool) -> ArrayRef {
-    let null_density = if with_nulls { 0.5 } else { 0.0 };
-    let array = create_primitive_array::<Float32Type>(size, null_density);
-    Arc::new(array)
-}
-
-fn bench_add(arr_a: &ArrayRef, arr_b: &ArrayRef) {
-    let arr_a = arr_a.as_any().downcast_ref::<Float32Array>().unwrap();
-    let arr_b = arr_b.as_any().downcast_ref::<Float32Array>().unwrap();
-    criterion::black_box(add(arr_a, arr_b).unwrap());
-}
-
-fn bench_subtract(arr_a: &ArrayRef, arr_b: &ArrayRef) {
-    let arr_a = arr_a.as_any().downcast_ref::<Float32Array>().unwrap();
-    let arr_b = arr_b.as_any().downcast_ref::<Float32Array>().unwrap();
-    criterion::black_box(subtract(arr_a, arr_b).unwrap());
-}
-
-fn bench_multiply(arr_a: &ArrayRef, arr_b: &ArrayRef) {
-    let arr_a = arr_a.as_any().downcast_ref::<Float32Array>().unwrap();
-    let arr_b = arr_b.as_any().downcast_ref::<Float32Array>().unwrap();
-    criterion::black_box(multiply(arr_a, arr_b).unwrap());
-}
-
-fn bench_divide(arr_a: &ArrayRef, arr_b: &ArrayRef) {
-    let arr_a = arr_a.as_any().downcast_ref::<Float32Array>().unwrap();
-    let arr_b = arr_b.as_any().downcast_ref::<Float32Array>().unwrap();
-    criterion::black_box(divide(arr_a, arr_b).unwrap());
-}
-
-fn bench_divide_unchecked(arr_a: &ArrayRef, arr_b: &ArrayRef) {
-    let arr_a = arr_a.as_any().downcast_ref::<Float32Array>().unwrap();
-    let arr_b = arr_b.as_any().downcast_ref::<Float32Array>().unwrap();
-    criterion::black_box(divide_unchecked(arr_a, arr_b).unwrap());
-}
-
-fn bench_divide_scalar(array: &ArrayRef, divisor: f32) {
-    let array = array.as_any().downcast_ref::<Float32Array>().unwrap();
-    criterion::black_box(divide_scalar(array, divisor).unwrap());
-}
-
-fn bench_modulo(arr_a: &ArrayRef, arr_b: &ArrayRef) {
-    let arr_a = arr_a.as_any().downcast_ref::<Float32Array>().unwrap();
-    let arr_b = arr_b.as_any().downcast_ref::<Float32Array>().unwrap();
-    criterion::black_box(modulus(arr_a, arr_b).unwrap());
-}
-
-fn bench_modulo_scalar(array: &ArrayRef, divisor: f32) {
-    let array = array.as_any().downcast_ref::<Float32Array>().unwrap();
-    criterion::black_box(modulus_scalar(array, divisor).unwrap());
-}
+use arrow_array::Scalar;
 
 fn add_benchmark(c: &mut Criterion) {
     const BATCH_SIZE: usize = 64 * 1024;
-    let arr_a = create_array(BATCH_SIZE, false);
-    let arr_b = create_array(BATCH_SIZE, false);
-    let scalar = seedable_rng().gen();
+    for null_density in [0., 0.1, 0.5, 0.9, 1.0] {
+        let arr_a = create_primitive_array::<Float32Type>(BATCH_SIZE, null_density);
+        let arr_b = create_primitive_array::<Float32Type>(BATCH_SIZE, null_density);
+        let scalar_a = create_primitive_array::<Float32Type>(1, 0.);
+        let scalar = Scalar::new(&scalar_a);
 
-    c.bench_function("add", |b| b.iter(|| bench_add(&arr_a, &arr_b)));
-    c.bench_function("subtract", |b| b.iter(|| bench_subtract(&arr_a, &arr_b)));
-    c.bench_function("multiply", |b| b.iter(|| bench_multiply(&arr_a, &arr_b)));
-    c.bench_function("divide", |b| b.iter(|| bench_divide(&arr_a, &arr_b)));
-    c.bench_function("divide_unchecked", |b| {
-        b.iter(|| bench_divide_unchecked(&arr_a, &arr_b))
-    });
-    c.bench_function("divide_scalar", |b| {
-        b.iter(|| bench_divide_scalar(&arr_a, scalar))
-    });
-    c.bench_function("modulo", |b| b.iter(|| bench_modulo(&arr_a, &arr_b)));
-    c.bench_function("modulo_scalar", |b| {
-        b.iter(|| bench_modulo_scalar(&arr_a, scalar))
-    });
-
-    let arr_a_nulls = create_array(BATCH_SIZE, true);
-    let arr_b_nulls = create_array(BATCH_SIZE, true);
-    c.bench_function("add_nulls", |b| {
-        b.iter(|| bench_add(&arr_a_nulls, &arr_b_nulls))
-    });
-    c.bench_function("divide_nulls", |b| {
-        b.iter(|| bench_divide(&arr_a_nulls, &arr_b_nulls))
-    });
-    c.bench_function("divide_nulls_unchecked", |b| {
-        b.iter(|| bench_divide_unchecked(&arr_a_nulls, &arr_b_nulls))
-    });
-    c.bench_function("divide_scalar_nulls", |b| {
-        b.iter(|| bench_divide_scalar(&arr_a_nulls, scalar))
-    });
-    c.bench_function("modulo_nulls", |b| {
-        b.iter(|| bench_modulo(&arr_a_nulls, &arr_b_nulls))
-    });
-    c.bench_function("modulo_scalar_nulls", |b| {
-        b.iter(|| bench_modulo_scalar(&arr_a_nulls, scalar))
-    });
+        c.bench_function(&format!("add({null_density})"), |b| {
+            b.iter(|| criterion::black_box(add_wrapping(&arr_a, &arr_b).unwrap()))
+        });
+        c.bench_function(&format!("add_checked({null_density})"), |b| {
+            b.iter(|| criterion::black_box(add(&arr_a, &arr_b).unwrap()))
+        });
+        c.bench_function(&format!("add_scalar({null_density})"), |b| {
+            b.iter(|| criterion::black_box(add_wrapping(&arr_a, &scalar).unwrap()))
+        });
+        c.bench_function(&format!("subtract({null_density})"), |b| {
+            b.iter(|| criterion::black_box(sub_wrapping(&arr_a, &arr_b).unwrap()))
+        });
+        c.bench_function(&format!("subtract_checked({null_density})"), |b| {
+            b.iter(|| criterion::black_box(sub(&arr_a, &arr_b).unwrap()))
+        });
+        c.bench_function(&format!("subtract_scalar({null_density})"), |b| {
+            b.iter(|| criterion::black_box(sub_wrapping(&arr_a, &scalar).unwrap()))
+        });
+        c.bench_function(&format!("multiply({null_density})"), |b| {
+            b.iter(|| criterion::black_box(mul_wrapping(&arr_a, &arr_b).unwrap()))
+        });
+        c.bench_function(&format!("multiply_checked({null_density})"), |b| {
+            b.iter(|| criterion::black_box(mul(&arr_a, &arr_b).unwrap()))
+        });
+        c.bench_function(&format!("multiply_scalar({null_density})"), |b| {
+            b.iter(|| criterion::black_box(mul_wrapping(&arr_a, &scalar).unwrap()))
+        });
+        c.bench_function(&format!("divide({null_density})"), |b| {
+            b.iter(|| criterion::black_box(div(&arr_a, &arr_b).unwrap()))
+        });
+        c.bench_function(&format!("divide_scalar({null_density})"), |b| {
+            b.iter(|| criterion::black_box(div(&arr_a, &scalar).unwrap()))
+        });
+        c.bench_function(&format!("modulo({null_density})"), |b| {
+            b.iter(|| criterion::black_box(rem(&arr_a, &arr_b).unwrap()))
+        });
+        c.bench_function(&format!("modulo_scalar({null_density})"), |b| {
+            b.iter(|| criterion::black_box(rem(&arr_a, &scalar).unwrap()))
+        });
+    }
 }
 
 criterion_group!(benches, add_benchmark);

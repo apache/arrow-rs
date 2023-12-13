@@ -1,117 +1,139 @@
 // This file was automatically generated through the build.rs script, and should not be edited.
 
 ///
-///  The request that a client provides to a server on handshake.
+/// The request that a client provides to a server on handshake.
+#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct HandshakeRequest {
     ///
-    ///  A defined protocol version
-    #[prost(uint64, tag="1")]
+    /// A defined protocol version
+    #[prost(uint64, tag = "1")]
     pub protocol_version: u64,
     ///
-    ///  Arbitrary auth/handshake info.
-    #[prost(bytes="vec", tag="2")]
-    pub payload: ::prost::alloc::vec::Vec<u8>,
+    /// Arbitrary auth/handshake info.
+    #[prost(bytes = "bytes", tag = "2")]
+    pub payload: ::prost::bytes::Bytes,
 }
+#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct HandshakeResponse {
     ///
-    ///  A defined protocol version
-    #[prost(uint64, tag="1")]
+    /// A defined protocol version
+    #[prost(uint64, tag = "1")]
     pub protocol_version: u64,
     ///
-    ///  Arbitrary auth/handshake info.
-    #[prost(bytes="vec", tag="2")]
-    pub payload: ::prost::alloc::vec::Vec<u8>,
+    /// Arbitrary auth/handshake info.
+    #[prost(bytes = "bytes", tag = "2")]
+    pub payload: ::prost::bytes::Bytes,
 }
 ///
-///  A message for doing simple auth.
+/// A message for doing simple auth.
+#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct BasicAuth {
-    #[prost(string, tag="2")]
+    #[prost(string, tag = "2")]
     pub username: ::prost::alloc::string::String,
-    #[prost(string, tag="3")]
+    #[prost(string, tag = "3")]
     pub password: ::prost::alloc::string::String,
 }
+#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
-pub struct Empty {
-}
+pub struct Empty {}
 ///
-///  Describes an available action, including both the name used for execution
-///  along with a short description of the purpose of the action.
+/// Describes an available action, including both the name used for execution
+/// along with a short description of the purpose of the action.
+#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ActionType {
-    #[prost(string, tag="1")]
+    #[prost(string, tag = "1")]
     pub r#type: ::prost::alloc::string::String,
-    #[prost(string, tag="2")]
+    #[prost(string, tag = "2")]
     pub description: ::prost::alloc::string::String,
 }
 ///
-///  A service specific expression that can be used to return a limited set
-///  of available Arrow Flight streams.
+/// A service specific expression that can be used to return a limited set
+/// of available Arrow Flight streams.
+#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Criteria {
-    #[prost(bytes="vec", tag="1")]
-    pub expression: ::prost::alloc::vec::Vec<u8>,
+    #[prost(bytes = "bytes", tag = "1")]
+    pub expression: ::prost::bytes::Bytes,
 }
 ///
-///  An opaque action specific for the service.
+/// An opaque action specific for the service.
+#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Action {
-    #[prost(string, tag="1")]
+    #[prost(string, tag = "1")]
     pub r#type: ::prost::alloc::string::String,
-    #[prost(bytes="vec", tag="2")]
-    pub body: ::prost::alloc::vec::Vec<u8>,
+    #[prost(bytes = "bytes", tag = "2")]
+    pub body: ::prost::bytes::Bytes,
 }
 ///
-///  An opaque result returned after executing an action.
+/// An opaque result returned after executing an action.
+#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Result {
-    #[prost(bytes="vec", tag="1")]
-    pub body: ::prost::alloc::vec::Vec<u8>,
+    #[prost(bytes = "bytes", tag = "1")]
+    pub body: ::prost::bytes::Bytes,
 }
 ///
-///  Wrap the result of a getSchema call
+/// Wrap the result of a getSchema call
+#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct SchemaResult {
-    ///  schema of the dataset as described in Schema.fbs::Schema.
-    #[prost(bytes="vec", tag="1")]
-    pub schema: ::prost::alloc::vec::Vec<u8>,
+    /// The schema of the dataset in its IPC form:
+    ///    4 bytes - an optional IPC_CONTINUATION_TOKEN prefix
+    ///    4 bytes - the byte length of the payload
+    ///    a flatbuffer Message whose header is the Schema
+    #[prost(bytes = "bytes", tag = "1")]
+    pub schema: ::prost::bytes::Bytes,
 }
 ///
-///  The name or tag for a Flight. May be used as a way to retrieve or generate
-///  a flight or be used to expose a set of previously defined flights.
+/// The name or tag for a Flight. May be used as a way to retrieve or generate
+/// a flight or be used to expose a set of previously defined flights.
+#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct FlightDescriptor {
-    #[prost(enumeration="flight_descriptor::DescriptorType", tag="1")]
+    #[prost(enumeration = "flight_descriptor::DescriptorType", tag = "1")]
     pub r#type: i32,
     ///
-    ///  Opaque value used to express a command. Should only be defined when
-    ///  type = CMD.
-    #[prost(bytes="vec", tag="2")]
-    pub cmd: ::prost::alloc::vec::Vec<u8>,
+    /// Opaque value used to express a command. Should only be defined when
+    /// type = CMD.
+    #[prost(bytes = "bytes", tag = "2")]
+    pub cmd: ::prost::bytes::Bytes,
     ///
-    ///  List of strings identifying a particular dataset. Should only be defined
-    ///  when type = PATH.
-    #[prost(string, repeated, tag="3")]
+    /// List of strings identifying a particular dataset. Should only be defined
+    /// when type = PATH.
+    #[prost(string, repeated, tag = "3")]
     pub path: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
 }
 /// Nested message and enum types in `FlightDescriptor`.
 pub mod flight_descriptor {
     ///
-    ///  Describes what type of descriptor is defined.
-    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+    /// Describes what type of descriptor is defined.
+    #[derive(
+        Clone,
+        Copy,
+        Debug,
+        PartialEq,
+        Eq,
+        Hash,
+        PartialOrd,
+        Ord,
+        ::prost::Enumeration
+    )]
     #[repr(i32)]
     pub enum DescriptorType {
-        ///  Protobuf pattern, not used.
+        /// Protobuf pattern, not used.
         Unknown = 0,
         ///
-        ///  A named path that identifies a dataset. A path is composed of a string
-        ///  or list of strings describing a particular dataset. This is conceptually
+        /// A named path that identifies a dataset. A path is composed of a string
+        /// or list of strings describing a particular dataset. This is conceptually
         ///   similar to a path inside a filesystem.
         Path = 1,
         ///
-        ///  An opaque command to generate a dataset.
+        /// An opaque command to generate a dataset.
         Cmd = 2,
     }
     impl DescriptorType {
@@ -126,93 +148,149 @@ pub mod flight_descriptor {
                 DescriptorType::Cmd => "CMD",
             }
         }
+        /// Creates an enum from field names used in the ProtoBuf definition.
+        pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+            match value {
+                "UNKNOWN" => Some(Self::Unknown),
+                "PATH" => Some(Self::Path),
+                "CMD" => Some(Self::Cmd),
+                _ => None,
+            }
+        }
     }
 }
 ///
-///  The access coordinates for retrieval of a dataset. With a FlightInfo, a
-///  consumer is able to determine how to retrieve a dataset.
+/// The access coordinates for retrieval of a dataset. With a FlightInfo, a
+/// consumer is able to determine how to retrieve a dataset.
+#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct FlightInfo {
-    ///  schema of the dataset as described in Schema.fbs::Schema.
-    #[prost(bytes="vec", tag="1")]
-    pub schema: ::prost::alloc::vec::Vec<u8>,
+    /// The schema of the dataset in its IPC form:
+    ///    4 bytes - an optional IPC_CONTINUATION_TOKEN prefix
+    ///    4 bytes - the byte length of the payload
+    ///    a flatbuffer Message whose header is the Schema
+    #[prost(bytes = "bytes", tag = "1")]
+    pub schema: ::prost::bytes::Bytes,
     ///
-    ///  The descriptor associated with this info.
-    #[prost(message, optional, tag="2")]
+    /// The descriptor associated with this info.
+    #[prost(message, optional, tag = "2")]
     pub flight_descriptor: ::core::option::Option<FlightDescriptor>,
     ///
-    ///  A list of endpoints associated with the flight. To consume the whole
-    ///  flight, all endpoints must be consumed.
-    #[prost(message, repeated, tag="3")]
+    /// A list of endpoints associated with the flight. To consume the
+    /// whole flight, all endpoints (and hence all Tickets) must be
+    /// consumed. Endpoints can be consumed in any order.
+    ///
+    /// In other words, an application can use multiple endpoints to
+    /// represent partitioned data.
+    ///
+    /// If the returned data has an ordering, an application can use
+    /// "FlightInfo.ordered = true" or should return the all data in a
+    /// single endpoint. Otherwise, there is no ordering defined on
+    /// endpoints or the data within.
+    ///
+    /// A client can read ordered data by reading data from returned
+    /// endpoints, in order, from front to back.
+    ///
+    /// Note that a client may ignore "FlightInfo.ordered = true". If an
+    /// ordering is important for an application, an application must
+    /// choose one of them:
+    ///
+    /// * An application requires that all clients must read data in
+    ///    returned endpoints order.
+    /// * An application must return the all data in a single endpoint.
+    #[prost(message, repeated, tag = "3")]
     pub endpoint: ::prost::alloc::vec::Vec<FlightEndpoint>,
-    ///  Set these to -1 if unknown.
-    #[prost(int64, tag="4")]
+    /// Set these to -1 if unknown.
+    #[prost(int64, tag = "4")]
     pub total_records: i64,
-    #[prost(int64, tag="5")]
+    #[prost(int64, tag = "5")]
     pub total_bytes: i64,
+    ///
+    /// FlightEndpoints are in the same order as the data.
+    #[prost(bool, tag = "6")]
+    pub ordered: bool,
 }
 ///
-///  A particular stream or split associated with a flight.
+/// A particular stream or split associated with a flight.
+#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct FlightEndpoint {
     ///
-    ///  Token used to retrieve this stream.
-    #[prost(message, optional, tag="1")]
+    /// Token used to retrieve this stream.
+    #[prost(message, optional, tag = "1")]
     pub ticket: ::core::option::Option<Ticket>,
     ///
-    ///  A list of URIs where this ticket can be redeemed. If the list is
-    ///  empty, the expectation is that the ticket can only be redeemed on the
-    ///  current service where the ticket was generated.
-    #[prost(message, repeated, tag="2")]
+    /// A list of URIs where this ticket can be redeemed via DoGet().
+    ///
+    /// If the list is empty, the expectation is that the ticket can only
+    /// be redeemed on the current service where the ticket was
+    /// generated.
+    ///
+    /// If the list is not empty, the expectation is that the ticket can
+    /// be redeemed at any of the locations, and that the data returned
+    /// will be equivalent. In this case, the ticket may only be redeemed
+    /// at one of the given locations, and not (necessarily) on the
+    /// current service.
+    ///
+    /// In other words, an application can use multiple locations to
+    /// represent redundant and/or load balanced services.
+    #[prost(message, repeated, tag = "2")]
     pub location: ::prost::alloc::vec::Vec<Location>,
 }
 ///
-///  A location where a Flight service will accept retrieval of a particular
-///  stream given a ticket.
+/// A location where a Flight service will accept retrieval of a particular
+/// stream given a ticket.
+#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Location {
-    #[prost(string, tag="1")]
+    #[prost(string, tag = "1")]
     pub uri: ::prost::alloc::string::String,
 }
 ///
-///  An opaque identifier that the service can use to retrieve a particular
-///  portion of a stream.
+/// An opaque identifier that the service can use to retrieve a particular
+/// portion of a stream.
+///
+/// Tickets are meant to be single use. It is an error/application-defined
+/// behavior to reuse a ticket.
+#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Ticket {
-    #[prost(bytes="vec", tag="1")]
-    pub ticket: ::prost::alloc::vec::Vec<u8>,
+    #[prost(bytes = "bytes", tag = "1")]
+    pub ticket: ::prost::bytes::Bytes,
 }
 ///
-///  A batch of Arrow data as part of a stream of batches.
+/// A batch of Arrow data as part of a stream of batches.
+#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct FlightData {
     ///
-    ///  The descriptor of the data. This is only relevant when a client is
-    ///  starting a new DoPut stream.
-    #[prost(message, optional, tag="1")]
+    /// The descriptor of the data. This is only relevant when a client is
+    /// starting a new DoPut stream.
+    #[prost(message, optional, tag = "1")]
     pub flight_descriptor: ::core::option::Option<FlightDescriptor>,
     ///
-    ///  Header for message data as described in Message.fbs::Message.
-    #[prost(bytes="vec", tag="2")]
-    pub data_header: ::prost::alloc::vec::Vec<u8>,
+    /// Header for message data as described in Message.fbs::Message.
+    #[prost(bytes = "bytes", tag = "2")]
+    pub data_header: ::prost::bytes::Bytes,
     ///
-    ///  Application-defined metadata.
-    #[prost(bytes="vec", tag="3")]
-    pub app_metadata: ::prost::alloc::vec::Vec<u8>,
+    /// Application-defined metadata.
+    #[prost(bytes = "bytes", tag = "3")]
+    pub app_metadata: ::prost::bytes::Bytes,
     ///
-    ///  The actual batch of Arrow data. Preferably handled with minimal-copies
-    ///  coming last in the definition to help with sidecar patterns (it is
-    ///  expected that some implementations will fetch this field off the wire
-    ///  with specialized code to avoid extra memory copies).
-    #[prost(bytes="vec", tag="1000")]
-    pub data_body: ::prost::alloc::vec::Vec<u8>,
+    /// The actual batch of Arrow data. Preferably handled with minimal-copies
+    /// coming last in the definition to help with sidecar patterns (it is
+    /// expected that some implementations will fetch this field off the wire
+    /// with specialized code to avoid extra memory copies).
+    #[prost(bytes = "bytes", tag = "1000")]
+    pub data_body: ::prost::bytes::Bytes,
 }
 /// *
-///  The response message associated with the submission of a DoPut.
+/// The response message associated with the submission of a DoPut.
+#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PutResult {
-    #[prost(bytes="vec", tag="1")]
-    pub app_metadata: ::prost::alloc::vec::Vec<u8>,
+    #[prost(bytes = "bytes", tag = "1")]
+    pub app_metadata: ::prost::bytes::Bytes,
 }
 /// Generated client implementations.
 pub mod flight_service_client {
@@ -232,7 +310,7 @@ pub mod flight_service_client {
         /// Attempt to create a new client by connecting to a given endpoint.
         pub async fn connect<D>(dst: D) -> Result<Self, tonic::transport::Error>
         where
-            D: std::convert::TryInto<tonic::transport::Endpoint>,
+            D: TryInto<tonic::transport::Endpoint>,
             D::Error: Into<StdError>,
         {
             let conn = tonic::transport::Endpoint::new(dst)?.connect().await?;
@@ -288,6 +366,22 @@ pub mod flight_service_client {
             self.inner = self.inner.accept_compressed(encoding);
             self
         }
+        /// Limits the maximum size of a decoded message.
+        ///
+        /// Default: `4MB`
+        #[must_use]
+        pub fn max_decoding_message_size(mut self, limit: usize) -> Self {
+            self.inner = self.inner.max_decoding_message_size(limit);
+            self
+        }
+        /// Limits the maximum size of an encoded message.
+        ///
+        /// Default: `usize::MAX`
+        #[must_use]
+        pub fn max_encoding_message_size(mut self, limit: usize) -> Self {
+            self.inner = self.inner.max_encoding_message_size(limit);
+            self
+        }
         ///
         /// Handshake between client and server. Depending on the server, the
         /// handshake may be required to determine the token that should be used for
@@ -296,7 +390,7 @@ pub mod flight_service_client {
         pub async fn handshake(
             &mut self,
             request: impl tonic::IntoStreamingRequest<Message = super::HandshakeRequest>,
-        ) -> Result<
+        ) -> std::result::Result<
             tonic::Response<tonic::codec::Streaming<super::HandshakeResponse>>,
             tonic::Status,
         > {
@@ -313,7 +407,12 @@ pub mod flight_service_client {
             let path = http::uri::PathAndQuery::from_static(
                 "/arrow.flight.protocol.FlightService/Handshake",
             );
-            self.inner.streaming(request.into_streaming_request(), path, codec).await
+            let mut req = request.into_streaming_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new("arrow.flight.protocol.FlightService", "Handshake"),
+                );
+            self.inner.streaming(req, path, codec).await
         }
         ///
         /// Get a list of available streams given a particular criteria. Most flight
@@ -325,7 +424,7 @@ pub mod flight_service_client {
         pub async fn list_flights(
             &mut self,
             request: impl tonic::IntoRequest<super::Criteria>,
-        ) -> Result<
+        ) -> std::result::Result<
             tonic::Response<tonic::codec::Streaming<super::FlightInfo>>,
             tonic::Status,
         > {
@@ -342,7 +441,12 @@ pub mod flight_service_client {
             let path = http::uri::PathAndQuery::from_static(
                 "/arrow.flight.protocol.FlightService/ListFlights",
             );
-            self.inner.server_streaming(request.into_request(), path, codec).await
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new("arrow.flight.protocol.FlightService", "ListFlights"),
+                );
+            self.inner.server_streaming(req, path, codec).await
         }
         ///
         /// For a given FlightDescriptor, get information about how the flight can be
@@ -358,7 +462,7 @@ pub mod flight_service_client {
         pub async fn get_flight_info(
             &mut self,
             request: impl tonic::IntoRequest<super::FlightDescriptor>,
-        ) -> Result<tonic::Response<super::FlightInfo>, tonic::Status> {
+        ) -> std::result::Result<tonic::Response<super::FlightInfo>, tonic::Status> {
             self.inner
                 .ready()
                 .await
@@ -372,7 +476,15 @@ pub mod flight_service_client {
             let path = http::uri::PathAndQuery::from_static(
                 "/arrow.flight.protocol.FlightService/GetFlightInfo",
             );
-            self.inner.unary(request.into_request(), path, codec).await
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new(
+                        "arrow.flight.protocol.FlightService",
+                        "GetFlightInfo",
+                    ),
+                );
+            self.inner.unary(req, path, codec).await
         }
         ///
         /// For a given FlightDescriptor, get the Schema as described in Schema.fbs::Schema
@@ -382,7 +494,7 @@ pub mod flight_service_client {
         pub async fn get_schema(
             &mut self,
             request: impl tonic::IntoRequest<super::FlightDescriptor>,
-        ) -> Result<tonic::Response<super::SchemaResult>, tonic::Status> {
+        ) -> std::result::Result<tonic::Response<super::SchemaResult>, tonic::Status> {
             self.inner
                 .ready()
                 .await
@@ -396,7 +508,12 @@ pub mod flight_service_client {
             let path = http::uri::PathAndQuery::from_static(
                 "/arrow.flight.protocol.FlightService/GetSchema",
             );
-            self.inner.unary(request.into_request(), path, codec).await
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new("arrow.flight.protocol.FlightService", "GetSchema"),
+                );
+            self.inner.unary(req, path, codec).await
         }
         ///
         /// Retrieve a single stream associated with a particular descriptor
@@ -406,7 +523,7 @@ pub mod flight_service_client {
         pub async fn do_get(
             &mut self,
             request: impl tonic::IntoRequest<super::Ticket>,
-        ) -> Result<
+        ) -> std::result::Result<
             tonic::Response<tonic::codec::Streaming<super::FlightData>>,
             tonic::Status,
         > {
@@ -423,7 +540,10 @@ pub mod flight_service_client {
             let path = http::uri::PathAndQuery::from_static(
                 "/arrow.flight.protocol.FlightService/DoGet",
             );
-            self.inner.server_streaming(request.into_request(), path, codec).await
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(GrpcMethod::new("arrow.flight.protocol.FlightService", "DoGet"));
+            self.inner.server_streaming(req, path, codec).await
         }
         ///
         /// Push a stream to the flight service associated with a particular
@@ -435,7 +555,7 @@ pub mod flight_service_client {
         pub async fn do_put(
             &mut self,
             request: impl tonic::IntoStreamingRequest<Message = super::FlightData>,
-        ) -> Result<
+        ) -> std::result::Result<
             tonic::Response<tonic::codec::Streaming<super::PutResult>>,
             tonic::Status,
         > {
@@ -452,7 +572,10 @@ pub mod flight_service_client {
             let path = http::uri::PathAndQuery::from_static(
                 "/arrow.flight.protocol.FlightService/DoPut",
             );
-            self.inner.streaming(request.into_streaming_request(), path, codec).await
+            let mut req = request.into_streaming_request();
+            req.extensions_mut()
+                .insert(GrpcMethod::new("arrow.flight.protocol.FlightService", "DoPut"));
+            self.inner.streaming(req, path, codec).await
         }
         ///
         /// Open a bidirectional data channel for a given descriptor. This
@@ -463,7 +586,7 @@ pub mod flight_service_client {
         pub async fn do_exchange(
             &mut self,
             request: impl tonic::IntoStreamingRequest<Message = super::FlightData>,
-        ) -> Result<
+        ) -> std::result::Result<
             tonic::Response<tonic::codec::Streaming<super::FlightData>>,
             tonic::Status,
         > {
@@ -480,7 +603,12 @@ pub mod flight_service_client {
             let path = http::uri::PathAndQuery::from_static(
                 "/arrow.flight.protocol.FlightService/DoExchange",
             );
-            self.inner.streaming(request.into_streaming_request(), path, codec).await
+            let mut req = request.into_streaming_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new("arrow.flight.protocol.FlightService", "DoExchange"),
+                );
+            self.inner.streaming(req, path, codec).await
         }
         ///
         /// Flight services can support an arbitrary number of simple actions in
@@ -492,7 +620,7 @@ pub mod flight_service_client {
         pub async fn do_action(
             &mut self,
             request: impl tonic::IntoRequest<super::Action>,
-        ) -> Result<
+        ) -> std::result::Result<
             tonic::Response<tonic::codec::Streaming<super::Result>>,
             tonic::Status,
         > {
@@ -509,7 +637,12 @@ pub mod flight_service_client {
             let path = http::uri::PathAndQuery::from_static(
                 "/arrow.flight.protocol.FlightService/DoAction",
             );
-            self.inner.server_streaming(request.into_request(), path, codec).await
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new("arrow.flight.protocol.FlightService", "DoAction"),
+                );
+            self.inner.server_streaming(req, path, codec).await
         }
         ///
         /// A flight service exposes all of the available action types that it has
@@ -518,7 +651,7 @@ pub mod flight_service_client {
         pub async fn list_actions(
             &mut self,
             request: impl tonic::IntoRequest<super::Empty>,
-        ) -> Result<
+        ) -> std::result::Result<
             tonic::Response<tonic::codec::Streaming<super::ActionType>>,
             tonic::Status,
         > {
@@ -535,7 +668,12 @@ pub mod flight_service_client {
             let path = http::uri::PathAndQuery::from_static(
                 "/arrow.flight.protocol.FlightService/ListActions",
             );
-            self.inner.server_streaming(request.into_request(), path, codec).await
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new("arrow.flight.protocol.FlightService", "ListActions"),
+                );
+            self.inner.server_streaming(req, path, codec).await
         }
     }
 }
@@ -543,12 +681,12 @@ pub mod flight_service_client {
 pub mod flight_service_server {
     #![allow(unused_variables, dead_code, missing_docs, clippy::let_unit_value)]
     use tonic::codegen::*;
-    ///Generated trait containing gRPC methods that should be implemented for use with FlightServiceServer.
+    /// Generated trait containing gRPC methods that should be implemented for use with FlightServiceServer.
     #[async_trait]
     pub trait FlightService: Send + Sync + 'static {
-        ///Server streaming response type for the Handshake method.
-        type HandshakeStream: futures_core::Stream<
-                Item = Result<super::HandshakeResponse, tonic::Status>,
+        /// Server streaming response type for the Handshake method.
+        type HandshakeStream: tonic::codegen::tokio_stream::Stream<
+                Item = std::result::Result<super::HandshakeResponse, tonic::Status>,
             >
             + Send
             + 'static;
@@ -560,10 +698,10 @@ pub mod flight_service_server {
         async fn handshake(
             &self,
             request: tonic::Request<tonic::Streaming<super::HandshakeRequest>>,
-        ) -> Result<tonic::Response<Self::HandshakeStream>, tonic::Status>;
-        ///Server streaming response type for the ListFlights method.
-        type ListFlightsStream: futures_core::Stream<
-                Item = Result<super::FlightInfo, tonic::Status>,
+        ) -> std::result::Result<tonic::Response<Self::HandshakeStream>, tonic::Status>;
+        /// Server streaming response type for the ListFlights method.
+        type ListFlightsStream: tonic::codegen::tokio_stream::Stream<
+                Item = std::result::Result<super::FlightInfo, tonic::Status>,
             >
             + Send
             + 'static;
@@ -577,7 +715,10 @@ pub mod flight_service_server {
         async fn list_flights(
             &self,
             request: tonic::Request<super::Criteria>,
-        ) -> Result<tonic::Response<Self::ListFlightsStream>, tonic::Status>;
+        ) -> std::result::Result<
+            tonic::Response<Self::ListFlightsStream>,
+            tonic::Status,
+        >;
         ///
         /// For a given FlightDescriptor, get information about how the flight can be
         /// consumed. This is a useful interface if the consumer of the interface
@@ -592,7 +733,7 @@ pub mod flight_service_server {
         async fn get_flight_info(
             &self,
             request: tonic::Request<super::FlightDescriptor>,
-        ) -> Result<tonic::Response<super::FlightInfo>, tonic::Status>;
+        ) -> std::result::Result<tonic::Response<super::FlightInfo>, tonic::Status>;
         ///
         /// For a given FlightDescriptor, get the Schema as described in Schema.fbs::Schema
         /// This is used when a consumer needs the Schema of flight stream. Similar to
@@ -601,10 +742,10 @@ pub mod flight_service_server {
         async fn get_schema(
             &self,
             request: tonic::Request<super::FlightDescriptor>,
-        ) -> Result<tonic::Response<super::SchemaResult>, tonic::Status>;
-        ///Server streaming response type for the DoGet method.
-        type DoGetStream: futures_core::Stream<
-                Item = Result<super::FlightData, tonic::Status>,
+        ) -> std::result::Result<tonic::Response<super::SchemaResult>, tonic::Status>;
+        /// Server streaming response type for the DoGet method.
+        type DoGetStream: tonic::codegen::tokio_stream::Stream<
+                Item = std::result::Result<super::FlightData, tonic::Status>,
             >
             + Send
             + 'static;
@@ -616,10 +757,10 @@ pub mod flight_service_server {
         async fn do_get(
             &self,
             request: tonic::Request<super::Ticket>,
-        ) -> Result<tonic::Response<Self::DoGetStream>, tonic::Status>;
-        ///Server streaming response type for the DoPut method.
-        type DoPutStream: futures_core::Stream<
-                Item = Result<super::PutResult, tonic::Status>,
+        ) -> std::result::Result<tonic::Response<Self::DoGetStream>, tonic::Status>;
+        /// Server streaming response type for the DoPut method.
+        type DoPutStream: tonic::codegen::tokio_stream::Stream<
+                Item = std::result::Result<super::PutResult, tonic::Status>,
             >
             + Send
             + 'static;
@@ -633,10 +774,10 @@ pub mod flight_service_server {
         async fn do_put(
             &self,
             request: tonic::Request<tonic::Streaming<super::FlightData>>,
-        ) -> Result<tonic::Response<Self::DoPutStream>, tonic::Status>;
-        ///Server streaming response type for the DoExchange method.
-        type DoExchangeStream: futures_core::Stream<
-                Item = Result<super::FlightData, tonic::Status>,
+        ) -> std::result::Result<tonic::Response<Self::DoPutStream>, tonic::Status>;
+        /// Server streaming response type for the DoExchange method.
+        type DoExchangeStream: tonic::codegen::tokio_stream::Stream<
+                Item = std::result::Result<super::FlightData, tonic::Status>,
             >
             + Send
             + 'static;
@@ -649,10 +790,10 @@ pub mod flight_service_server {
         async fn do_exchange(
             &self,
             request: tonic::Request<tonic::Streaming<super::FlightData>>,
-        ) -> Result<tonic::Response<Self::DoExchangeStream>, tonic::Status>;
-        ///Server streaming response type for the DoAction method.
-        type DoActionStream: futures_core::Stream<
-                Item = Result<super::Result, tonic::Status>,
+        ) -> std::result::Result<tonic::Response<Self::DoExchangeStream>, tonic::Status>;
+        /// Server streaming response type for the DoAction method.
+        type DoActionStream: tonic::codegen::tokio_stream::Stream<
+                Item = std::result::Result<super::Result, tonic::Status>,
             >
             + Send
             + 'static;
@@ -666,10 +807,10 @@ pub mod flight_service_server {
         async fn do_action(
             &self,
             request: tonic::Request<super::Action>,
-        ) -> Result<tonic::Response<Self::DoActionStream>, tonic::Status>;
-        ///Server streaming response type for the ListActions method.
-        type ListActionsStream: futures_core::Stream<
-                Item = Result<super::ActionType, tonic::Status>,
+        ) -> std::result::Result<tonic::Response<Self::DoActionStream>, tonic::Status>;
+        /// Server streaming response type for the ListActions method.
+        type ListActionsStream: tonic::codegen::tokio_stream::Stream<
+                Item = std::result::Result<super::ActionType, tonic::Status>,
             >
             + Send
             + 'static;
@@ -680,7 +821,10 @@ pub mod flight_service_server {
         async fn list_actions(
             &self,
             request: tonic::Request<super::Empty>,
-        ) -> Result<tonic::Response<Self::ListActionsStream>, tonic::Status>;
+        ) -> std::result::Result<
+            tonic::Response<Self::ListActionsStream>,
+            tonic::Status,
+        >;
     }
     ///
     /// A flight service is an endpoint for retrieving or storing Arrow data. A
@@ -692,6 +836,8 @@ pub mod flight_service_server {
         inner: _Inner<T>,
         accept_compression_encodings: EnabledCompressionEncodings,
         send_compression_encodings: EnabledCompressionEncodings,
+        max_decoding_message_size: Option<usize>,
+        max_encoding_message_size: Option<usize>,
     }
     struct _Inner<T>(Arc<T>);
     impl<T: FlightService> FlightServiceServer<T> {
@@ -704,6 +850,8 @@ pub mod flight_service_server {
                 inner,
                 accept_compression_encodings: Default::default(),
                 send_compression_encodings: Default::default(),
+                max_decoding_message_size: None,
+                max_encoding_message_size: None,
             }
         }
         pub fn with_interceptor<F>(
@@ -727,6 +875,22 @@ pub mod flight_service_server {
             self.send_compression_encodings.enable(encoding);
             self
         }
+        /// Limits the maximum size of a decoded message.
+        ///
+        /// Default: `4MB`
+        #[must_use]
+        pub fn max_decoding_message_size(mut self, limit: usize) -> Self {
+            self.max_decoding_message_size = Some(limit);
+            self
+        }
+        /// Limits the maximum size of an encoded message.
+        ///
+        /// Default: `usize::MAX`
+        #[must_use]
+        pub fn max_encoding_message_size(mut self, limit: usize) -> Self {
+            self.max_encoding_message_size = Some(limit);
+            self
+        }
     }
     impl<T, B> tonic::codegen::Service<http::Request<B>> for FlightServiceServer<T>
     where
@@ -740,7 +904,7 @@ pub mod flight_service_server {
         fn poll_ready(
             &mut self,
             _cx: &mut Context<'_>,
-        ) -> Poll<Result<(), Self::Error>> {
+        ) -> Poll<std::result::Result<(), Self::Error>> {
             Poll::Ready(Ok(()))
         }
         fn call(&mut self, req: http::Request<B>) -> Self::Future {
@@ -765,13 +929,17 @@ pub mod flight_service_server {
                                 tonic::Streaming<super::HandshakeRequest>,
                             >,
                         ) -> Self::Future {
-                            let inner = self.0.clone();
-                            let fut = async move { (*inner).handshake(request).await };
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as FlightService>::handshake(&inner, request).await
+                            };
                             Box::pin(fut)
                         }
                     }
                     let accept_compression_encodings = self.accept_compression_encodings;
                     let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
                     let inner = self.inner.clone();
                     let fut = async move {
                         let inner = inner.0;
@@ -781,6 +949,10 @@ pub mod flight_service_server {
                             .apply_compression_config(
                                 accept_compression_encodings,
                                 send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
                             );
                         let res = grpc.streaming(method, req).await;
                         Ok(res)
@@ -804,15 +976,17 @@ pub mod flight_service_server {
                             &mut self,
                             request: tonic::Request<super::Criteria>,
                         ) -> Self::Future {
-                            let inner = self.0.clone();
+                            let inner = Arc::clone(&self.0);
                             let fut = async move {
-                                (*inner).list_flights(request).await
+                                <T as FlightService>::list_flights(&inner, request).await
                             };
                             Box::pin(fut)
                         }
                     }
                     let accept_compression_encodings = self.accept_compression_encodings;
                     let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
                     let inner = self.inner.clone();
                     let fut = async move {
                         let inner = inner.0;
@@ -822,6 +996,10 @@ pub mod flight_service_server {
                             .apply_compression_config(
                                 accept_compression_encodings,
                                 send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
                             );
                         let res = grpc.server_streaming(method, req).await;
                         Ok(res)
@@ -844,15 +1022,17 @@ pub mod flight_service_server {
                             &mut self,
                             request: tonic::Request<super::FlightDescriptor>,
                         ) -> Self::Future {
-                            let inner = self.0.clone();
+                            let inner = Arc::clone(&self.0);
                             let fut = async move {
-                                (*inner).get_flight_info(request).await
+                                <T as FlightService>::get_flight_info(&inner, request).await
                             };
                             Box::pin(fut)
                         }
                     }
                     let accept_compression_encodings = self.accept_compression_encodings;
                     let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
                     let inner = self.inner.clone();
                     let fut = async move {
                         let inner = inner.0;
@@ -862,6 +1042,10 @@ pub mod flight_service_server {
                             .apply_compression_config(
                                 accept_compression_encodings,
                                 send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
                             );
                         let res = grpc.unary(method, req).await;
                         Ok(res)
@@ -884,13 +1068,17 @@ pub mod flight_service_server {
                             &mut self,
                             request: tonic::Request<super::FlightDescriptor>,
                         ) -> Self::Future {
-                            let inner = self.0.clone();
-                            let fut = async move { (*inner).get_schema(request).await };
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as FlightService>::get_schema(&inner, request).await
+                            };
                             Box::pin(fut)
                         }
                     }
                     let accept_compression_encodings = self.accept_compression_encodings;
                     let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
                     let inner = self.inner.clone();
                     let fut = async move {
                         let inner = inner.0;
@@ -900,6 +1088,10 @@ pub mod flight_service_server {
                             .apply_compression_config(
                                 accept_compression_encodings,
                                 send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
                             );
                         let res = grpc.unary(method, req).await;
                         Ok(res)
@@ -923,13 +1115,17 @@ pub mod flight_service_server {
                             &mut self,
                             request: tonic::Request<super::Ticket>,
                         ) -> Self::Future {
-                            let inner = self.0.clone();
-                            let fut = async move { (*inner).do_get(request).await };
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as FlightService>::do_get(&inner, request).await
+                            };
                             Box::pin(fut)
                         }
                     }
                     let accept_compression_encodings = self.accept_compression_encodings;
                     let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
                     let inner = self.inner.clone();
                     let fut = async move {
                         let inner = inner.0;
@@ -939,6 +1135,10 @@ pub mod flight_service_server {
                             .apply_compression_config(
                                 accept_compression_encodings,
                                 send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
                             );
                         let res = grpc.server_streaming(method, req).await;
                         Ok(res)
@@ -962,13 +1162,17 @@ pub mod flight_service_server {
                             &mut self,
                             request: tonic::Request<tonic::Streaming<super::FlightData>>,
                         ) -> Self::Future {
-                            let inner = self.0.clone();
-                            let fut = async move { (*inner).do_put(request).await };
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as FlightService>::do_put(&inner, request).await
+                            };
                             Box::pin(fut)
                         }
                     }
                     let accept_compression_encodings = self.accept_compression_encodings;
                     let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
                     let inner = self.inner.clone();
                     let fut = async move {
                         let inner = inner.0;
@@ -978,6 +1182,10 @@ pub mod flight_service_server {
                             .apply_compression_config(
                                 accept_compression_encodings,
                                 send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
                             );
                         let res = grpc.streaming(method, req).await;
                         Ok(res)
@@ -1001,13 +1209,17 @@ pub mod flight_service_server {
                             &mut self,
                             request: tonic::Request<tonic::Streaming<super::FlightData>>,
                         ) -> Self::Future {
-                            let inner = self.0.clone();
-                            let fut = async move { (*inner).do_exchange(request).await };
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as FlightService>::do_exchange(&inner, request).await
+                            };
                             Box::pin(fut)
                         }
                     }
                     let accept_compression_encodings = self.accept_compression_encodings;
                     let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
                     let inner = self.inner.clone();
                     let fut = async move {
                         let inner = inner.0;
@@ -1017,6 +1229,10 @@ pub mod flight_service_server {
                             .apply_compression_config(
                                 accept_compression_encodings,
                                 send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
                             );
                         let res = grpc.streaming(method, req).await;
                         Ok(res)
@@ -1040,13 +1256,17 @@ pub mod flight_service_server {
                             &mut self,
                             request: tonic::Request<super::Action>,
                         ) -> Self::Future {
-                            let inner = self.0.clone();
-                            let fut = async move { (*inner).do_action(request).await };
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as FlightService>::do_action(&inner, request).await
+                            };
                             Box::pin(fut)
                         }
                     }
                     let accept_compression_encodings = self.accept_compression_encodings;
                     let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
                     let inner = self.inner.clone();
                     let fut = async move {
                         let inner = inner.0;
@@ -1056,6 +1276,10 @@ pub mod flight_service_server {
                             .apply_compression_config(
                                 accept_compression_encodings,
                                 send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
                             );
                         let res = grpc.server_streaming(method, req).await;
                         Ok(res)
@@ -1079,15 +1303,17 @@ pub mod flight_service_server {
                             &mut self,
                             request: tonic::Request<super::Empty>,
                         ) -> Self::Future {
-                            let inner = self.0.clone();
+                            let inner = Arc::clone(&self.0);
                             let fut = async move {
-                                (*inner).list_actions(request).await
+                                <T as FlightService>::list_actions(&inner, request).await
                             };
                             Box::pin(fut)
                         }
                     }
                     let accept_compression_encodings = self.accept_compression_encodings;
                     let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
                     let inner = self.inner.clone();
                     let fut = async move {
                         let inner = inner.0;
@@ -1097,6 +1323,10 @@ pub mod flight_service_server {
                             .apply_compression_config(
                                 accept_compression_encodings,
                                 send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
                             );
                         let res = grpc.server_streaming(method, req).await;
                         Ok(res)
@@ -1125,12 +1355,14 @@ pub mod flight_service_server {
                 inner,
                 accept_compression_encodings: self.accept_compression_encodings,
                 send_compression_encodings: self.send_compression_encodings,
+                max_decoding_message_size: self.max_decoding_message_size,
+                max_encoding_message_size: self.max_encoding_message_size,
             }
         }
     }
     impl<T: FlightService> Clone for _Inner<T> {
         fn clone(&self) -> Self {
-            Self(self.0.clone())
+            Self(Arc::clone(&self.0))
         }
     }
     impl<T: std::fmt::Debug> std::fmt::Debug for _Inner<T> {

@@ -17,67 +17,55 @@
 
 [package]
 name = "arrow"
-version = "22.0.0"
+version = { workspace = true }
 description = "Rust implementation of Apache Arrow"
-homepage = "https://github.com/apache/arrow-rs"
-repository = "https://github.com/apache/arrow-rs"
-authors = ["Apache Arrow <dev@arrow.apache.org>"]
-license = "Apache-2.0"
+homepage = { workspace = true }
+repository = { workspace = true }
+authors = { workspace = true }
+license = { workspace = true }
 keywords = ["arrow"]
 include = [
     "benches/*.rs",
     "src/**/*.rs",
+    "tests/*.rs",
     "Cargo.toml",
 ]
-edition = "2021"
-rust-version = "1.62"
+edition = { workspace = true }
+rust-version = "1.70.0"
 
 [lib]
 name = "arrow"
 path = "src/lib.rs"
 bench = false
 
-[target.'cfg(target_arch = "wasm32")'.dependencies]
-ahash = { version = "0.8", default-features = false, features = ["compile-time-rng"] }
-
-[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-ahash = { version = "0.8", default-features = false, features = ["runtime-rng"] }
-
 [dependencies]
-serde = { version = "1.0", default-features = false, features = ["derive"], optional = true }
-serde_json = { version = "1.0", default-features = false, features = ["std"], optional = true }
-indexmap = { version = "1.9", default-features = false, features = ["std"] }
+arrow-arith = { workspace = true }
+arrow-array = { workspace = true }
+arrow-buffer = { workspace = true }
+arrow-cast = { workspace = true }
+arrow-csv = { workspace = true, optional = true }
+arrow-data = { workspace = true }
+arrow-ipc = { workspace = true, optional = true }
+arrow-json = { workspace = true, optional = true }
+arrow-ord = { workspace = true }
+arrow-row = { workspace = true }
+arrow-schema = { workspace = true }
+arrow-select = { workspace = true }
+arrow-string = { workspace = true }
+
 rand = { version = "0.8", default-features = false, features = ["std", "std_rng"], optional = true }
-num = { version = "0.4", default-features = false, features = ["std"] }
-half = { version = "2.0", default-features = false }
-hashbrown = { version = "0.12", default-features = false }
-csv_crate = { version = "1.1", default-features = false, optional = true, package = "csv" }
-regex = { version = "1.5.6", default-features = false, features = ["std", "unicode"] }
-regex-syntax = { version = "0.6.27", default-features = false, features = ["unicode"] }
-lazy_static = { version = "1.4", default-features = false }
-lz4 = { version = "1.23", default-features = false, optional = true }
-packed_simd = { version = "0.3", default-features = false, optional = true, package = "packed_simd_2" }
-chrono = { version = "0.4", default-features = false, features = ["clock"] }
-chrono-tz = { version = "0.6", default-features = false, optional = true }
-flatbuffers = { version = "2.1.2", default-features = false, features = ["thiserror"], optional = true }
-comfy-table = { version = "6.0", optional = true, default-features = false }
-pyo3 = { version = "0.17", default-features = false, optional = true }
-lexical-core = { version = "^0.8", default-features = false, features = ["write-integers", "write-floats", "parse-integers", "parse-floats"] }
-multiversion = { version = "0.6.1", default-features = false }
-bitflags = { version = "1.2.1", default-features = false }
-zstd = { version = "0.11.1", default-features = false, optional = true }
+pyo3 = { version = "0.20", default-features = false, optional = true }
 
 [package.metadata.docs.rs]
-features = ["prettyprint", "ipc_compression", "dyn_cmp_dict", "ffi", "pyarrow"]
+features = ["prettyprint", "ipc_compression", "ffi", "pyarrow"]
 
 [features]
 default = ["csv", "ipc", "json"]
-ipc_compression = ["ipc", "zstd", "lz4"]
-csv = ["csv_crate"]
-ipc = ["flatbuffers"]
-json = ["serde", "serde_json"]
-simd = ["packed_simd"]
-prettyprint = ["comfy-table"]
+ipc_compression = ["ipc", "arrow-ipc/lz4", "arrow-ipc/zstd"]
+csv = ["arrow-csv"]
+ipc = ["arrow-ipc"]
+json = ["arrow-json"]
+prettyprint = ["arrow-cast/prettyprint"]
 # The test utils feature enables code used in benchmarks and tests but
 # not the core arrow code itself. Be aware that `rand` must be kept as
 # an optional dependency for supporting compile to wasm32-unknown-unknown
@@ -87,18 +75,18 @@ pyarrow = ["pyo3", "ffi"]
 # force_validate runs full data validation for all arrays that are created
 # this is not enabled by default as it is too computationally expensive
 # but is run as part of our CI checks
-force_validate = []
+force_validate = ["arrow-data/force_validate"]
 # Enable ffi support
-ffi = []
-# Enable dyn-comparison of dictionary arrays with other arrays
-# Note: this does not impact comparison against scalars
-dyn_cmp_dict = []
+ffi = ["arrow-schema/ffi", "arrow-data/ffi"]
+chrono-tz = ["arrow-array/chrono-tz"]
 
 [dev-dependencies]
+chrono = { workspace = true }
+criterion = { version = "0.5", default-features = false }
+half = { version = "2.1", default-features = false }
 rand = { version = "0.8", default-features = false, features = ["std", "std_rng"] }
-criterion = { version = "0.3", default-features = false }
-flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
 tempfile = { version = "3", default-features = false }
+serde = { version = "1.0", default-features = false, features = ["derive"] }
 
 [build-dependencies]
 
@@ -157,7 +145,7 @@ required-features = ["test_utils"]
 [[bench]]
 name = "comparison_kernels"
 harness = false
-required-features = ["test_utils", "dyn_cmp_dict"]
+required-features = ["test_utils"]
 
 [[bench]]
 name = "filter_kernels"
@@ -166,6 +154,11 @@ required-features = ["test_utils"]
 
 [[bench]]
 name = "take_kernels"
+harness = false
+required-features = ["test_utils"]
+
+[[bench]]
+name = "interleave_kernels"
 harness = false
 required-features = ["test_utils"]
 
@@ -193,9 +186,14 @@ harness = false
 required-features = ["csv"]
 
 [[bench]]
+name = "csv_reader"
+harness = false
+required-features = ["test_utils", "csv"]
+
+[[bench]]
 name = "json_reader"
 harness = false
-required-features = ["json"]
+required-features = ["test_utils", "json"]
 
 [[bench]]
 name = "equal"
@@ -222,6 +220,29 @@ harness = false
 required-features = ["test_utils"]
 
 [[bench]]
+name = "string_dictionary_builder"
+harness = false
+
+[[bench]]
+name = "string_run_builder"
+harness = false
+required-features = ["test_utils"]
+
+[[bench]]
+name = "string_run_iterator"
+harness = false
+
+[[bench]]
+name = "primitive_run_accessor"
+harness = false
+required-features = ["test_utils"]
+
+[[bench]]
+name = "primitive_run_take"
+harness = false
+required-features = ["test_utils"]
+
+[[bench]]
 name = "substring_kernels"
 harness = false
 required-features = ["test_utils"]
@@ -233,3 +254,38 @@ harness = false
 [[bench]]
 name = "decimal_validate"
 harness = false
+
+[[bench]]
+name = "row_format"
+harness = false
+required-features = ["test_utils"]
+
+[[bench]]
+name = "bitwise_kernel"
+harness = false
+required-features = ["test_utils"]
+
+[[bench]]
+name = "lexsort"
+harness = false
+required-features = ["test_utils"]
+
+[[test]]
+name = "csv"
+required-features = ["csv", "chrono-tz"]
+
+[[test]]
+name = "pyarrow"
+required-features = ["pyarrow"]
+
+[[test]]
+name = "array_cast"
+required-features = ["chrono-tz", "prettyprint"]
+
+[[test]]
+name = "timezone"
+required-features = ["chrono-tz"]
+
+[[test]]
+name = "arithmetic"
+required-features = ["chrono-tz"]

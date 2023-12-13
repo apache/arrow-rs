@@ -36,18 +36,18 @@
 //! repetition levels and read them to verify write/read correctness.
 //!
 //! ```rust,no_run
-//! use std::{fs, path::Path, sync::Arc};
-//!
-//! use parquet::{
-//!     column::{reader::ColumnReader, writer::ColumnWriter},
-//!     data_type::Int32Type,
-//!     file::{
-//!         properties::WriterProperties,
-//!         reader::{FileReader, SerializedFileReader},
-//!         writer::SerializedFileWriter,
-//!     },
-//!     schema::parser::parse_message_type,
-//! };
+//! # use std::{fs, path::Path, sync::Arc};
+//! #
+//! # use parquet::{
+//! #    column::{reader::ColumnReader, writer::ColumnWriter},
+//! #    data_type::Int32Type,
+//! #    file::{
+//! #        properties::WriterProperties,
+//! #        reader::{FileReader, SerializedFileReader},
+//! #        writer::SerializedFileWriter,
+//! #    },
+//! #    schema::parser::parse_message_type,
+//! # };
 //!
 //! let path = Path::new("/path/to/column_sample.parquet");
 //!
@@ -63,9 +63,8 @@
 //!   }
 //! ";
 //! let schema = Arc::new(parse_message_type(message_type).unwrap());
-//! let props = Arc::new(WriterProperties::builder().build());
 //! let file = fs::File::create(path).unwrap();
-//! let mut writer = SerializedFileWriter::new(file, schema, props).unwrap();
+//! let mut writer = SerializedFileWriter::new(file, schema, Default::default()).unwrap();
 //!
 //! let mut row_group_writer = writer.next_row_group().unwrap();
 //! while let Some(mut col_writer) = row_group_writer.next_column().unwrap() {
@@ -85,7 +84,6 @@
 //! let reader = SerializedFileReader::new(file).unwrap();
 //! let metadata = reader.metadata();
 //!
-//! let mut res = Ok((0, 0));
 //! let mut values = vec![0; 8];
 //! let mut def_levels = vec![0; 8];
 //! let mut rep_levels = vec![0; 8];
@@ -99,19 +97,21 @@
 //!         match column_reader {
 //!             // You can also use `get_typed_column_reader` method to extract typed reader.
 //!             ColumnReader::Int32ColumnReader(ref mut typed_reader) => {
-//!                 res = typed_reader.read_batch(
-//!                     8, // batch size
+//!                 let (records, values, levels) = typed_reader.read_records(
+//!                     8, // maximum records to read
 //!                     Some(&mut def_levels),
 //!                     Some(&mut rep_levels),
 //!                     &mut values,
-//!                 );
+//!                 ).unwrap();
+//!                 assert_eq!(records, 2);
+//!                 assert_eq!(levels, 5);
+//!                 assert_eq!(values, 3);
 //!             }
 //!             _ => {}
 //!         }
 //!     }
 //! }
 //!
-//! assert_eq!(res, Ok((3, 5)));
 //! assert_eq!(values, vec![1, 2, 3, 0, 0, 0, 0, 0]);
 //! assert_eq!(def_levels, vec![3, 3, 3, 2, 2, 0, 0, 0]);
 //! assert_eq!(rep_levels, vec![0, 1, 0, 1, 1, 0, 0, 0]);

@@ -1,66 +1,75 @@
-Apache Arrow <dev@arrow.apache.org>
-Binary to convert csv to Parquet
 
-USAGE:
-    parquet [OPTIONS] --schema <SCHEMA> --input-file <INPUT_FILE> --output-file <OUTPUT_FILE>
+Usage: parquet [OPTIONS] --schema <SCHEMA> --input-file <INPUT_FILE> --output-file <OUTPUT_FILE>
 
-OPTIONS:
-    -b, --batch-size <BATCH_SIZE>
-            batch size
-            
-            [env: PARQUET_FROM_CSV_BATCHSIZE=]
-            [default: 1000]
+Options:
+  -s, --schema <SCHEMA>
+          message schema for output Parquet
 
-    -c, --parquet-compression <PARQUET_COMPRESSION>
-            compression mode
-            
-            [default: SNAPPY]
+  -i, --input-file <INPUT_FILE>
+          input CSV file
 
-    -d, --delimiter <DELIMITER>
-            field delimiter
-            
-            default value: when input_format==CSV: ',' when input_format==TSV: 'TAB'
+  -o, --output-file <OUTPUT_FILE>
+          output Parquet file
 
-    -D, --double-quote <DOUBLE_QUOTE>
-            double quote
+  -f, --input-format <INPUT_FORMAT>
+          input file format
+          
+          [default: csv]
+          [possible values: csv, tsv]
 
-    -e, --escape-char <ESCAPE_CHAR>
-            escape charactor
+  -b, --batch-size <BATCH_SIZE>
+          batch size
+          
+          [env: PARQUET_FROM_CSV_BATCHSIZE=]
+          [default: 1000]
 
-    -f, --input-format <INPUT_FORMAT>
-            input file format
-            
-            [default: csv]
-            [possible values: csv, tsv]
+  -h, --has-header
+          has header
 
-    -h, --has-header
-            has header
+  -d, --delimiter <DELIMITER>
+          field delimiter
+          
+          default value: when input_format==CSV: ',' when input_format==TSV: 'TAB'
 
-        --help
-            Print help information
+  -r, --record-terminator <RECORD_TERMINATOR>
+          record terminator
+          
+          [possible values: lf, crlf, cr]
 
-    -i, --input-file <INPUT_FILE>
-            input CSV file
+  -e, --escape-char <ESCAPE_CHAR>
+          escape character
 
-    -m, --max-row-group-size <MAX_ROW_GROUP_SIZE>
-            max row group size
+  -q, --quote-char <QUOTE_CHAR>
+          quote character
 
-    -o, --output-file <OUTPUT_FILE>
-            output Parquet file
+  -D, --double-quote <DOUBLE_QUOTE>
+          double quote
+          
+          [possible values: true, false]
 
-    -q, --quote-char <QUOTE_CHAR>
-            quate charactor
+  -C, --csv-compression <CSV_COMPRESSION>
+          compression mode of csv
+          
+          [default: UNCOMPRESSED]
 
-    -r, --record-terminator <RECORD_TERMINATOR>
-            record terminator
-            
-            [possible values: lf, crlf, cr]
+  -c, --parquet-compression <PARQUET_COMPRESSION>
+          compression mode of parquet
+          
+          [default: SNAPPY]
 
-    -s, --schema <SCHEMA>
-            message schema for output Parquet
+  -w, --writer-version <WRITER_VERSION>
+          writer version
 
-    -V, --version
-            Print version information
+  -m, --max-row-group-size <MAX_ROW_GROUP_SIZE>
+          max row group size
 
-    -w, --writer-version <WRITER_VERSION>
-            writer version
+      --enable-bloom-filter <ENABLE_BLOOM_FILTER>
+          whether to enable bloom filter writing
+          
+          [possible values: true, false]
+
+      --help
+          display usage help
+
+  -V, --version
+          Print version

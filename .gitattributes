@@ -1,6 +1,3 @@
-r/R/RcppExports.R linguist-generated=true
-r/R/arrowExports.R linguist-generated=true
-r/src/RcppExports.cpp linguist-generated=true
-r/src/arrowExports.cpp linguist-generated=true
-r/man/*.Rd linguist-generated=true
-
+parquet/src/format.rs linguist-generated
+arrow-flight/src/arrow.flight.protocol.rs linguist-generated
+arrow-flight/src/sql/arrow.flight.protocol.sql.rs linguist-generated

@@ -20,32 +20,41 @@
 
 use std::sync::Arc;
 
+use arrow::array::new_empty_array;
+use arrow::record_batch::{RecordBatchIterator, RecordBatchReader};
+use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::wrap_pyfunction;
 
-use arrow::array::{ArrayData, ArrayRef, Int64Array};
+use arrow::array::{make_array, Array, ArrayData, ArrayRef, Int64Array};
 use arrow::compute::kernels;
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::error::ArrowError;
 use arrow::ffi_stream::ArrowArrayStreamReader;
-use arrow::pyarrow::PyArrowConvert;
+use arrow::pyarrow::{FromPyArrow, PyArrowException, PyArrowType, ToPyArrow};
 use arrow::record_batch::RecordBatch;
+
+fn to_py_err(err: ArrowError) -> PyErr {
+    PyArrowException::new_err(err.to_string())
+}
 
 /// Returns `array + array` of an int64 array.
 #[pyfunction]
 fn double(array: &PyAny, py: Python) -> PyResult<PyObject> {
     // import
-    let array = ArrayRef::from_pyarrow(array)?;
+    let array = make_array(ArrayData::from_pyarrow(array)?);
 
     // perform some operation
     let array = array
         .as_any()
         .downcast_ref::<Int64Array>()
-        .ok_or(ArrowError::ParseError("Expects an int64".to_string()))?;
-    let array = kernels::arithmetic::add(array, array)?;
+        .ok_or_else(|| ArrowError::ParseError("Expects an int64".to_string()))
+        .map_err(to_py_err)?;
+
+    let array = kernels::numeric::add(array, array).map_err(to_py_err)?;
 
     // export
-    array.to_pyarrow(py)
+    array.to_data().to_pyarrow(py)
 }
 
 /// calls a lambda function that receives and returns an array
@@ -57,72 +66,112 @@ fn double_py(lambda: &PyAny, py: Python) -> PyResult<bool> {
     let expected = Arc::new(Int64Array::from(vec![Some(2), None, Some(6)])) as ArrayRef;
 
     // to py
-    let pyarray = array.to_pyarrow(py)?;
+    let pyarray = array.to_data().to_pyarrow(py)?;
     let pyarray = lambda.call1((pyarray,))?;
-    let array = ArrayRef::from_pyarrow(pyarray)?;
+    let array = make_array(ArrayData::from_pyarrow(pyarray)?);
 
     Ok(array == expected)
 }
 
+#[pyfunction]
+fn make_empty_array(datatype: PyArrowType<DataType>, py: Python) -> PyResult<PyObject> {
+    let array = new_empty_array(&datatype.0);
+
+    array.to_data().to_pyarrow(py)
+}
+
 /// Returns the substring
 #[pyfunction]
-fn substring(array: ArrayData, start: i64) -> PyResult<ArrayData> {
+fn substring(
+    array: PyArrowType<ArrayData>,
+    start: i64,
+) -> PyResult<PyArrowType<ArrayData>> {
     // import
-    let array = ArrayRef::from(array);
+    let array = make_array(array.0);
 
     // substring
-    let array = kernels::substring::substring(array.as_ref(), start, None)?;
+    let array =
+        kernels::substring::substring(array.as_ref(), start, None).map_err(to_py_err)?;
 
-    Ok(array.data().to_owned())
+    Ok(array.to_data().into())
 }
 
 /// Returns the concatenate
 #[pyfunction]
-fn concatenate(array: ArrayData, py: Python) -> PyResult<PyObject> {
-    let array = ArrayRef::from(array);
+fn concatenate(array: PyArrowType<ArrayData>, py: Python) -> PyResult<PyObject> {
+    let array = make_array(array.0);
 
     // concat
-    let array = kernels::concat::concat(&[array.as_ref(), array.as_ref()])?;
+    let array =
+        kernels::concat::concat(&[array.as_ref(), array.as_ref()]).map_err(to_py_err)?;
 
-    array.to_pyarrow(py)
+    array.to_data().to_pyarrow(py)
 }
 
 #[pyfunction]
-fn round_trip_type(obj: DataType) -> PyResult<DataType> {
+fn round_trip_type(obj: PyArrowType<DataType>) -> PyResult<PyArrowType<DataType>> {
     Ok(obj)
 }
 
 #[pyfunction]
-fn round_trip_field(obj: Field) -> PyResult<Field> {
+fn round_trip_field(obj: PyArrowType<Field>) -> PyResult<PyArrowType<Field>> {
     Ok(obj)
 }
 
 #[pyfunction]
-fn round_trip_schema(obj: Schema) -> PyResult<Schema> {
+fn round_trip_schema(obj: PyArrowType<Schema>) -> PyResult<PyArrowType<Schema>> {
     Ok(obj)
 }
 
 #[pyfunction]
-fn round_trip_array(obj: ArrayData) -> PyResult<ArrayData> {
+fn round_trip_array(obj: PyArrowType<ArrayData>) -> PyResult<PyArrowType<ArrayData>> {
     Ok(obj)
 }
 
 #[pyfunction]
-fn round_trip_record_batch(obj: RecordBatch) -> PyResult<RecordBatch> {
+fn round_trip_record_batch(
+    obj: PyArrowType<RecordBatch>,
+) -> PyResult<PyArrowType<RecordBatch>> {
     Ok(obj)
 }
 
 #[pyfunction]
 fn round_trip_record_batch_reader(
-    obj: ArrowArrayStreamReader,
-) -> PyResult<ArrowArrayStreamReader> {
+    obj: PyArrowType<ArrowArrayStreamReader>,
+) -> PyResult<PyArrowType<ArrowArrayStreamReader>> {
     Ok(obj)
+}
+
+#[pyfunction]
+fn reader_return_errors(obj: PyArrowType<ArrowArrayStreamReader>) -> PyResult<()> {
+    // This makes sure we can correctly consume a RBR and return the error,
+    // ensuring the error can live beyond the lifetime of the RBR.
+    let batches = obj.0.collect::<Result<Vec<RecordBatch>, ArrowError>>();
+    match batches {
+        Ok(_) => Ok(()),
+        Err(err) => Err(PyValueError::new_err(err.to_string())),
+    }
+}
+
+#[pyfunction]
+fn boxed_reader_roundtrip(
+    obj: PyArrowType<ArrowArrayStreamReader>,
+) -> PyArrowType<Box<dyn RecordBatchReader + Send>> {
+    let schema = obj.0.schema();
+    let batches = obj
+        .0
+        .collect::<Result<Vec<RecordBatch>, ArrowError>>()
+        .unwrap();
+    let reader = RecordBatchIterator::new(batches.into_iter().map(Ok), schema);
+    let reader: Box<dyn RecordBatchReader + Send> = Box::new(reader);
+    PyArrowType(reader)
 }
 
 #[pymodule]
 fn arrow_pyarrow_integration_testing(_py: Python, m: &PyModule) -> PyResult<()> {
     m.add_wrapped(wrap_pyfunction!(double))?;
     m.add_wrapped(wrap_pyfunction!(double_py))?;
+    m.add_wrapped(wrap_pyfunction!(make_empty_array))?;
     m.add_wrapped(wrap_pyfunction!(substring))?;
     m.add_wrapped(wrap_pyfunction!(concatenate))?;
     m.add_wrapped(wrap_pyfunction!(round_trip_type))?;
@@ -131,5 +180,7 @@ fn arrow_pyarrow_integration_testing(_py: Python, m: &PyModule) -> PyResult<()> 
     m.add_wrapped(wrap_pyfunction!(round_trip_array))?;
     m.add_wrapped(wrap_pyfunction!(round_trip_record_batch))?;
     m.add_wrapped(wrap_pyfunction!(round_trip_record_batch_reader))?;
+    m.add_wrapped(wrap_pyfunction!(reader_return_errors))?;
+    m.add_wrapped(wrap_pyfunction!(boxed_reader_roundtrip))?;
     Ok(())
 }

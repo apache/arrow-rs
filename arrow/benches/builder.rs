@@ -22,12 +22,11 @@ extern crate rand;
 use std::mem::size_of;
 
 use criterion::*;
-use num::BigInt;
 use rand::distributions::Standard;
 
 use arrow::array::*;
-use arrow::util::decimal::Decimal256;
 use arrow::util::test_util::seedable_rng;
+use arrow_buffer::i256;
 use rand::Rng;
 
 // Build arrays with 512k elements.
@@ -112,13 +111,16 @@ fn bench_decimal128(c: &mut Criterion) {
     c.bench_function("bench_decimal128_builder", |b| {
         b.iter(|| {
             let mut rng = rand::thread_rng();
-            let mut decimal_builder = Decimal128Builder::with_capacity(BATCH_SIZE, 38, 0);
+            let mut decimal_builder = Decimal128Builder::with_capacity(BATCH_SIZE);
             for _ in 0..BATCH_SIZE {
-                decimal_builder
-                    .append_value(rng.gen_range::<i128, _>(0..9999999999))
-                    .unwrap();
+                decimal_builder.append_value(rng.gen_range::<i128, _>(0..9999999999));
             }
-            black_box(decimal_builder.finish());
+            black_box(
+                decimal_builder
+                    .finish()
+                    .with_precision_and_scale(38, 0)
+                    .unwrap(),
+            );
         })
     });
 }
@@ -127,16 +129,17 @@ fn bench_decimal256(c: &mut Criterion) {
     c.bench_function("bench_decimal128_builder", |b| {
         b.iter(|| {
             let mut rng = rand::thread_rng();
-            let mut decimal_builder =
-                Decimal256Builder::with_capacity(BATCH_SIZE, 76, 10);
+            let mut decimal_builder = Decimal256Builder::with_capacity(BATCH_SIZE);
             for _ in 0..BATCH_SIZE {
                 decimal_builder
-                    .append_value(&Decimal256::from(BigInt::from(
-                        rng.gen_range::<i128, _>(0..99999999999),
-                    )))
-                    .unwrap()
+                    .append_value(i256::from_i128(rng.gen_range::<i128, _>(0..99999999999)));
             }
-            black_box(decimal_builder.finish());
+            black_box(
+                decimal_builder
+                    .finish()
+                    .with_precision_and_scale(76, 10)
+                    .unwrap(),
+            );
         })
     });
 }

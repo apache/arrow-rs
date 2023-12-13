@@ -98,10 +98,7 @@ impl Backoff {
         };
 
         let next_backoff = self.max_backoff_secs.min(rand_backoff);
-        Duration::from_secs_f64(std::mem::replace(
-            &mut self.next_backoff_secs,
-            next_backoff,
-        ))
+        Duration::from_secs_f64(std::mem::replace(&mut self.next_backoff_secs, next_backoff))
     }
 }
 
@@ -122,8 +119,7 @@ mod tests {
             base,
         };
 
-        let assert_fuzzy_eq =
-            |a: f64, b: f64| assert!((b - a).abs() < 0.0001, "{} != {}", a, b);
+        let assert_fuzzy_eq = |a: f64, b: f64| assert!((b - a).abs() < 0.0001, "{a} != {b}");
 
         // Create a static rng that takes the minimum of the range
         let rng = Box::new(StepRng::new(0, 0));
@@ -149,8 +145,8 @@ mod tests {
         let mut value = init_backoff_secs;
         for _ in 0..20 {
             assert_fuzzy_eq(backoff.next().as_secs_f64(), value);
-            value = (init_backoff_secs + (value * base - init_backoff_secs) / 2.)
-                .min(max_backoff_secs);
+            value =
+                (init_backoff_secs + (value * base - init_backoff_secs) / 2.).min(max_backoff_secs);
         }
     }
 }

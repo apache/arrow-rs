@@ -19,6 +19,9 @@
 # tests for arrow_flight crate
 name: arrow_flight
 
+concurrency:
+  group: ${{ github.repository }}-${{ github.head_ref || github.sha }}-${{ github.workflow }}
+  cancel-in-progress: true
 
 # trigger for all PRs that touch certain files and changes to master
 on:
@@ -27,35 +30,51 @@ on:
       - master
   pull_request:
     paths:
-      - arrow/**
+      - arrow-array/**
+      - arrow-buffer/**
+      - arrow-cast/**
+      - arrow-data/**
       - arrow-flight/**
+      - arrow-ipc/**
+      - arrow-schema/**
+      - arrow-select/**
       - .github/**
 
 jobs:
-  # test the crate
   linux-test:
     name: Test
     runs-on: ubuntu-latest
     container:
       image: amd64/rust
-      env:
-        # Disable full debug symbol generation to speed up CI build and keep memory down
-        # "1" means line tables only, which is useful for panic tracebacks.
-        RUSTFLAGS: "-C debuginfo=1"
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
         with:
           submodules: true
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
-        with:
-          rust-version: stable
       - name: Test
         run: |
           cargo test -p arrow-flight
       - name: Test --all-features
         run: |
           cargo test -p arrow-flight --all-features
+      - name: Test --examples
+        run: |
+          cargo test -p arrow-flight  --features=flight-sql-experimental,tls --examples
+
+  vendor:
+    name: Verify Vendored Code
+    runs-on: ubuntu-latest
+    container:
+      image: amd64/rust
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Rust toolchain
+        uses: ./.github/actions/setup-builder
+      - name: Run gen
+        run: ./arrow-flight/regen.sh
+      - name: Verify workspace clean (if this fails, run ./arrow-flight/regen.sh and check in results)
+        run: git diff --exit-code
 
   clippy:
     name: Clippy
@@ -63,14 +82,10 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
-        with:
-          rust-version: stable
       - name: Setup Clippy
-        run: |
-          rustup component add clippy
+        run: rustup component add clippy
       - name: Run clippy
-        run: |
-          cargo clippy -p arrow-flight --all-features -- -D warnings
+        run: cargo clippy -p arrow-flight --all-targets --all-features -- -D warnings

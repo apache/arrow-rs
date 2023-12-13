@@ -18,6 +18,10 @@
 # tests for arrow crate
 name: arrow
 
+concurrency:
+  group: ${{ github.repository }}-${{ github.head_ref || github.sha }}-${{ github.workflow }}
+  cancel-in-progress: true
+
 on:
   # always trigger
   push:
@@ -25,8 +29,23 @@ on:
       - master
   pull_request:
     paths:
-      - arrow/**
       - .github/**
+      - arrow-arith/**
+      - arrow-array/**
+      - arrow-buffer/**
+      - arrow-cast/**
+      - arrow-csv/**
+      - arrow-data/**
+      - arrow-integration-test/**
+      - arrow-ipc/**
+      - arrow-json/**
+      - arrow-avro/**
+      - arrow-ord/**
+      - arrow-row/**
+      - arrow-schema/**
+      - arrow-select/**
+      - arrow-string/**
+      - arrow/**
 
 jobs:
 
@@ -36,24 +55,46 @@ jobs:
     runs-on: ubuntu-latest
     container:
       image: amd64/rust
-      env:
-        # Disable full debug symbol generation to speed up CI build and keep memory down
-        # "1" means line tables only, which is useful for panic tracebacks.
-        RUSTFLAGS: "-C debuginfo=1"
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
         with:
           submodules: true
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
-        with:
-          rust-version: stable
-      - name: Test
-        run: |
-          cargo test -p arrow
-      - name: Test --features=force_validate,prettyprint,ipc_compression,ffi,dyn_cmp_dict
-        run: |
-          cargo test -p arrow --features=force_validate,prettyprint,ipc_compression,ffi,dyn_cmp_dict
+      - name: Test arrow-buffer with all features
+        run: cargo test -p arrow-buffer --all-features
+      - name: Test arrow-data with all features
+        run: cargo test -p arrow-data --all-features
+      - name: Test arrow-schema with all features
+        run: cargo test -p arrow-schema --all-features
+      - name: Test arrow-array with all features
+        run: cargo test -p arrow-array --all-features
+      - name: Test arrow-select with all features
+        run: cargo test -p arrow-select --all-features
+      - name: Test arrow-cast with all features
+        run: cargo test -p arrow-cast --all-features
+      - name: Test arrow-ipc with all features
+        run: cargo test -p arrow-ipc --all-features
+      - name: Test arrow-csv with all features
+        run: cargo test -p arrow-csv --all-features
+      - name: Test arrow-json with all features
+        run: cargo test -p arrow-json --all-features
+      - name: Test arrow-avro with all features
+        run: cargo test -p arrow-avro --all-features
+      - name: Test arrow-string with all features
+        run: cargo test -p arrow-string --all-features
+      - name: Test arrow-ord with all features
+        run: cargo test -p arrow-ord --all-features
+      - name: Test arrow-arith with all features
+        run: cargo test -p arrow-arith --all-features
+      - name: Test arrow-row with all features
+        run: cargo test -p arrow-row --all-features
+      - name: Test arrow-integration-test with all features
+        run: cargo test -p arrow-integration-test --all-features
+      - name: Test arrow with default features
+        run: cargo test -p arrow
+      - name: Test arrow with all features except pyarrow
+        run: cargo test -p arrow --features=force_validate,prettyprint,ipc_compression,ffi,chrono-tz
       - name: Run examples
         run: |
           # Test arrow examples
@@ -64,99 +105,52 @@ jobs:
       - name: Run non-archery based integration-tests
         run: cargo test -p arrow-integration-testing
 
-  # test compilaton features
+  # test compilation features
   linux-features:
     name: Check Compilation
     runs-on: ubuntu-latest
     container:
       image: amd64/rust
-      env:
-        # Disable full debug symbol generation to speed up CI build and keep memory down
-        # "1" means line tables only, which is useful for panic tracebacks.
-        RUSTFLAGS: "-C debuginfo=1"
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
         with:
           submodules: true
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
-        with:
-          rust-version: stable
       - name: Check compilation
-        run: |
-          cargo check -p arrow
+        run: cargo check -p arrow
       - name: Check compilation --no-default-features
-        run: |
-          cargo check -p arrow --no-default-features
+        run: cargo check -p arrow --no-default-features
       - name: Check compilation --all-targets
-        run: |
-          cargo check -p arrow --all-targets
+        run: cargo check -p arrow --all-targets
       - name: Check compilation --no-default-features --all-targets
-        run: |
-          cargo check -p arrow --no-default-features --all-targets
+        run: cargo check -p arrow --no-default-features --all-targets
       - name: Check compilation --no-default-features --all-targets --features test_utils
-        run: |
-          cargo check -p arrow --no-default-features --all-targets --features test_utils
-
-  # test the --features "simd" of the arrow crate. This requires nightly Rust.
-  linux-test-simd:
-    name: Test SIMD on AMD64 Rust ${{ matrix.rust }}
-    runs-on: ubuntu-latest
-    container:
-      image: amd64/rust
-      env:
-        # Disable full debug symbol generation to speed up CI build and keep memory down
-        # "1" means line tables only, which is useful for panic tracebacks.
-        RUSTFLAGS: "-C debuginfo=1"
-    steps:
-      - uses: actions/checkout@v3
-        with:
-          submodules: true
-      - name: Setup Rust toolchain
-        uses: ./.github/actions/setup-builder
-        with:
-          rust-version: nightly
-      - name: Run tests --features "simd"
-        run: |
-          cargo test -p arrow --features "simd"
-      - name: Check compilation --features "simd"
-        run: |
-          cargo check -p arrow --features simd
-      - name: Check compilation --features simd --all-targets
-        run: |
-          cargo check -p arrow --features simd --all-targets
+        run: cargo check -p arrow --no-default-features --all-targets --features test_utils
+      - name: Check compilation --no-default-features --all-targets --features ffi
+        run: cargo check -p arrow --no-default-features --all-targets --features ffi
+      - name: Check compilation --no-default-features --all-targets --features chrono-tz
+        run: cargo check -p arrow --no-default-features --all-targets --features chrono-tz
 
 
-  # test the arrow crate builds against wasm32 in stable rust
+  # test the arrow crate builds against wasm32 in nightly rust
   wasm32-build:
     name: Build wasm32
     runs-on: ubuntu-latest
     container:
       image: amd64/rust
-      env:
-        # Disable full debug symbol generation to speed up CI build and keep memory down
-        # "1" means line tables only, which is useful for panic tracebacks.
-        RUSTFLAGS: "-C debuginfo=1"
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
         with:
           submodules: true
-      - name: Cache Cargo
-        uses: actions/cache@v3
+      - name: Setup Rust toolchain
+        uses: ./.github/actions/setup-builder
         with:
-          path: /github/home/.cargo
-          key: cargo-wasm32-cache3-
-      - name: Setup Rust toolchain for WASM
-        run: |
-          rustup toolchain install nightly
-          rustup override set nightly
-          rustup target add wasm32-unknown-unknown
-          rustup target add wasm32-wasi
-      - name: Build
-        run: |
-          cd arrow
-          cargo build --no-default-features --features=json,csv,ipc,simd,ffi --target wasm32-unknown-unknown
-          cargo build --no-default-features --features=json,csv,ipc,simd,ffi --target wasm32-wasi
+          target: wasm32-unknown-unknown,wasm32-wasi
+      - name: Build wasm32-unknown-unknown
+        run: cargo build -p arrow --no-default-features --features=json,csv,ipc,ffi --target wasm32-unknown-unknown
+      - name: Build wasm32-wasi
+        run: cargo build -p arrow --no-default-features --features=json,csv,ipc,ffi --target wasm32-wasi
 
   clippy:
     name: Clippy
@@ -164,14 +158,42 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
-        with:
-          rust-version: stable
       - name: Setup Clippy
-        run: |
-          rustup component add clippy
-      - name: Run clippy
-        run: |
-          cargo clippy -p arrow --features=prettyprint,csv,ipc,test_utils,ffi,ipc_compression,dyn_cmp_dict --all-targets -- -D warnings
+        run: rustup component add clippy
+      - name: Clippy arrow-buffer with all features
+        run: cargo clippy -p arrow-buffer --all-targets --all-features -- -D warnings
+      - name: Clippy arrow-data with all features
+        run: cargo clippy -p arrow-data --all-targets --all-features -- -D warnings
+      - name: Clippy arrow-schema with all features
+        run: cargo clippy -p arrow-schema --all-targets --all-features -- -D warnings
+      - name: Clippy arrow-array with all features
+        run: cargo clippy -p arrow-array --all-targets --all-features -- -D warnings
+      - name: Clippy arrow-select with all features
+        run: cargo clippy -p arrow-select --all-targets --all-features -- -D warnings
+      - name: Clippy arrow-cast with all features
+        run: cargo clippy -p arrow-cast --all-targets --all-features -- -D warnings
+      - name: Clippy arrow-ipc with all features
+        run: cargo clippy -p arrow-ipc --all-targets --all-features -- -D warnings
+      - name: Clippy arrow-csv with all features
+        run: cargo clippy -p arrow-csv --all-targets --all-features -- -D warnings
+      - name: Clippy arrow-json with all features
+        run: cargo clippy -p arrow-json --all-targets --all-features -- -D warnings
+      - name: Clippy arrow-avro with all features
+        run: cargo clippy -p arrow-avro --all-targets --all-features -- -D warnings
+      - name: Clippy arrow-string with all features
+        run: cargo clippy -p arrow-string --all-targets --all-features -- -D warnings
+      - name: Clippy arrow-ord with all features
+        run: cargo clippy -p arrow-ord --all-targets --all-features -- -D warnings
+      - name: Clippy arrow-arith with all features
+        run: cargo clippy -p arrow-arith --all-targets --all-features -- -D warnings
+      - name: Clippy arrow-row with all features
+        run: cargo clippy -p arrow-row --all-targets --all-features -- -D warnings
+      - name: Clippy arrow with all features
+        run: cargo clippy -p arrow --all-features --all-targets -- -D warnings
+      - name: Clippy arrow-integration-test with all features
+        run: cargo clippy -p arrow-integration-test --all-targets --all-features -- -D warnings
+      - name: Clippy arrow-integration-testing with all features
+        run: cargo clippy -p arrow-integration-testing --all-targets --all-features -- -D warnings

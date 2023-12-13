@@ -15,7 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::{Int32Builder, StringBuilder, StringDictionaryBuilder};
+use arrow::array::StringDictionaryBuilder;
+use arrow::datatypes::Int32Type;
 use criterion::{criterion_group, criterion_main, Criterion};
 use rand::{thread_rng, Rng};
 
@@ -36,19 +37,15 @@ fn criterion_benchmark(c: &mut Criterion) {
 
     let mut do_bench = |dict_size: usize, total_size: usize, key_len: usize| {
         group.bench_function(
-            format!(
-                "(dict_size:{}, len:{}, key_len: {})",
-                dict_size, total_size, key_len
-            ),
+            format!("(dict_size:{dict_size}, len:{total_size}, key_len: {key_len})"),
             |b| {
                 let strings = build_strings(dict_size, total_size, key_len);
                 b.iter(|| {
-                    let keys = Int32Builder::with_capacity(strings.len());
-                    let values = StringBuilder::with_capacity(
+                    let mut builder = StringDictionaryBuilder::<Int32Type>::with_capacity(
+                        strings.len(),
                         key_len + 1,
                         (key_len + 1) * dict_size,
                     );
-                    let mut builder = StringDictionaryBuilder::new(keys, values);
 
                     for val in &strings {
                         builder.append(val).unwrap();

@@ -24,7 +24,9 @@
 
 This crate contains the official Native Rust implementation of [Apache Parquet](https://parquet.apache.org/), which is part of the [Apache Arrow](https://arrow.apache.org/) project.
 
-See [crate documentation](https://docs.rs/parquet/latest/parquet/) for examples and the full API.
+See the [API documentation](https://docs.rs/parquet/latest) for examples and the full API.
+
+The API documentation for most recent, unreleased code is available [here](https://arrow.apache.org/rust/parquet/index.html).
 
 ## Rust Version Compatibility
 
@@ -47,12 +49,13 @@ The `parquet` crate provides the following features which may be enabled in your
 - `flate2` (default) - support for parquet using `gzip` compression
 - `lz4` (default) - support for parquet using `lz4` compression
 - `zstd` (default) - support for parquet using `zstd` compression
+- `snap` (default) - support for parquet using `snappy` compression
 - `cli` - parquet [CLI tools](https://github.com/apache/arrow-rs/tree/master/parquet/src/bin)
 - `experimental` - Experimental APIs which may change, even between minor releases
 
 ## Parquet Feature Status
 
-- [x] All encodings supported
+- [x] All encodings supported, except for BYTE_STREAM_SPLIT ([#4102](https://github.com/apache/arrow-rs/issues/4102))
 - [x] All compression codecs supported
 - [x] Read support
   - [x] Primitive column value readers
@@ -64,8 +67,8 @@ The `parquet` crate provides the following features which may be enabled in your
   - [x] Primitive column value writers
   - [ ] Row record writer
   - [x] Arrow record writer
-  - [ ] Async support
-- [ ] Predicate pushdown
+  - [x] Async support
+- [x] Predicate pushdown
 - [x] Parquet format 4.0.0 support
 
 ## License

@@ -26,6 +26,7 @@ use arrow::array::*;
 use arrow::compute::filter;
 use arrow::datatypes::{Field, Float32Type, Int32Type, Schema, UInt8Type};
 
+use arrow_array::types::Decimal128Type;
 use criterion::{criterion_group, criterion_main, Criterion};
 
 fn bench_filter(data_array: &dyn Array, filter_array: &BooleanArray) {
@@ -143,6 +144,29 @@ fn add_benchmark(c: &mut Criterion) {
         b.iter(|| bench_built_filter(&sparse_filter, &data_array))
     });
 
+    let data_array = create_primitive_array::<Decimal128Type>(size, 0.0);
+    c.bench_function("filter decimal128 (kept 1/2)", |b| {
+        b.iter(|| bench_filter(&data_array, &filter_array))
+    });
+    c.bench_function("filter decimal128 high selectivity (kept 1023/1024)", |b| {
+        b.iter(|| bench_filter(&data_array, &dense_filter_array))
+    });
+    c.bench_function("filter decimal128 low selectivity (kept 1/1024)", |b| {
+        b.iter(|| bench_filter(&data_array, &sparse_filter_array))
+    });
+
+    c.bench_function("filter context decimal128 (kept 1/2)", |b| {
+        b.iter(|| bench_built_filter(&filter, &data_array))
+    });
+    c.bench_function(
+        "filter context decimal128 high selectivity (kept 1023/1024)",
+        |b| b.iter(|| bench_built_filter(&dense_filter, &data_array)),
+    );
+    c.bench_function(
+        "filter context decimal128 low selectivity (kept 1/1024)",
+        |b| b.iter(|| bench_built_filter(&sparse_filter, &data_array)),
+    );
+
     let data_array = create_string_array::<i32>(size, 0.5);
     c.bench_function("filter context string (kept 1/2)", |b| {
         b.iter(|| bench_built_filter(&filter, &data_array))
@@ -155,7 +179,7 @@ fn add_benchmark(c: &mut Criterion) {
         b.iter(|| bench_built_filter(&sparse_filter, &data_array))
     });
 
-    let data_array = create_string_dict_array::<Int32Type>(size, 0.0);
+    let data_array = create_string_dict_array::<Int32Type>(size, 0.0, 4);
     c.bench_function("filter context string dictionary (kept 1/2)", |b| {
         b.iter(|| bench_built_filter(&filter, &data_array))
     });
@@ -168,7 +192,7 @@ fn add_benchmark(c: &mut Criterion) {
         |b| b.iter(|| bench_built_filter(&sparse_filter, &data_array)),
     );
 
-    let data_array = create_string_dict_array::<Int32Type>(size, 0.5);
+    let data_array = create_string_dict_array::<Int32Type>(size, 0.5, 4);
     c.bench_function("filter context string dictionary w NULLs (kept 1/2)", |b| {
         b.iter(|| bench_built_filter(&filter, &data_array))
     });
@@ -186,8 +210,7 @@ fn add_benchmark(c: &mut Criterion) {
     let field = Field::new("c1", data_array.data_type().clone(), true);
     let schema = Schema::new(vec![field]);
 
-    let batch =
-        RecordBatch::try_new(Arc::new(schema), vec![Arc::new(data_array)]).unwrap();
+    let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(data_array)]).unwrap();
 
     c.bench_function("filter single record batch", |b| {
         b.iter(|| filter_record_batch(&batch, &filter_array))

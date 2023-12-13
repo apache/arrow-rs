@@ -16,15 +16,32 @@
 # under the License.
 
 [workspace]
+
 members = [
-        "arrow",
-        "parquet",
-        "parquet_derive",
-        "parquet_derive_test",
-        "arrow-flight",
-        "integration-testing",
-        "object_store",
+    "arrow",
+    "arrow-arith",
+    "arrow-array",
+    "arrow-avro",
+    "arrow-buffer",
+    "arrow-cast",
+    "arrow-csv",
+    "arrow-data",
+    "arrow-flight",
+    "arrow-flight/gen",
+    "arrow-integration-test",
+    "arrow-integration-testing",
+    "arrow-ipc",
+    "arrow-json",
+    "arrow-ord",
+    "arrow-row",
+    "arrow-schema",
+    "arrow-select",
+    "arrow-string",
+    "parquet",
+    "parquet_derive",
+    "parquet_derive_test",
 ]
+
 # Enable the version 2 feature resolver, which avoids unifying features for targets that are not being built
 #
 # Critically this prevents dev-dependencies from enabling features even when not building a target that
@@ -35,7 +52,45 @@ members = [
 #
 resolver = "2"
 
-# this package is excluded because it requires different compilation flags, thereby significantly changing
-# how it is compiled within the workspace, causing the whole workspace to be compiled from scratch
-# this way, this is a stand-alone package that compiles independently of the others.
-exclude = ["arrow-pyarrow-integration-testing"]
+exclude = [
+    # arrow-pyarrow-integration-testing is excluded because it requires different compilation flags, thereby
+    # significantly changing how it is compiled within the workspace, causing the whole workspace to be compiled from
+    # scratch this way, this is a stand-alone package that compiles independently of the others.
+    "arrow-pyarrow-integration-testing",
+    # object_store is excluded because it follows a separate release cycle from the other arrow crates
+    "object_store"
+]
+
+[workspace.package]
+version = "49.0.0"
+homepage = "https://github.com/apache/arrow-rs"
+repository = "https://github.com/apache/arrow-rs"
+authors = ["Apache Arrow <dev@arrow.apache.org>"]
+license = "Apache-2.0"
+keywords = ["arrow"]
+include = [
+    "benches/*.rs",
+    "src/**/*.rs",
+    "Cargo.toml",
+]
+edition = "2021"
+rust-version = "1.62"
+
+[workspace.dependencies]
+arrow = { version = "49.0.0", path = "./arrow", default-features = false }
+arrow-arith = { version = "49.0.0", path = "./arrow-arith" }
+arrow-array = { version = "49.0.0", path = "./arrow-array" }
+arrow-buffer = { version = "49.0.0", path = "./arrow-buffer" }
+arrow-cast = { version = "49.0.0", path = "./arrow-cast" }
+arrow-csv = { version = "49.0.0", path = "./arrow-csv" }
+arrow-data = { version = "49.0.0", path = "./arrow-data" }
+arrow-ipc = { version = "49.0.0", path = "./arrow-ipc" }
+arrow-json = { version = "49.0.0", path = "./arrow-json" }
+arrow-ord = { version = "49.0.0", path = "./arrow-ord" }
+arrow-row = { version = "49.0.0", path = "./arrow-row" }
+arrow-schema = { version = "49.0.0", path = "./arrow-schema" }
+arrow-select = { version = "49.0.0", path = "./arrow-select" }
+arrow-string = { version = "49.0.0", path = "./arrow-string" }
+parquet = { version = "49.0.0", path = "./parquet", default-features = false }
+
+chrono = { version = "0.4.31", default-features = false, features = ["clock"] }

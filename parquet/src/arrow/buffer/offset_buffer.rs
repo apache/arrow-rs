@@ -16,35 +16,34 @@
 // under the License.
 
 use crate::arrow::buffer::bit_util::iter_set_bits_rev;
-use crate::arrow::record_reader::buffer::{
-    BufferQueue, ScalarBuffer, ScalarValue, ValuesBuffer,
-};
+use crate::arrow::record_reader::buffer::{BufferQueue, ValuesBuffer};
 use crate::column::reader::decoder::ValuesBufferSlice;
 use crate::errors::{ParquetError, Result};
-use arrow::array::{make_array, ArrayDataBuilder, ArrayRef, OffsetSizeTrait};
-use arrow::buffer::Buffer;
-use arrow::datatypes::{ArrowNativeType, DataType as ArrowType};
+use arrow_array::{make_array, ArrayRef, OffsetSizeTrait};
+use arrow_buffer::{ArrowNativeType, Buffer};
+use arrow_data::ArrayDataBuilder;
+use arrow_schema::DataType as ArrowType;
 
 /// A buffer of variable-sized byte arrays that can be converted into
 /// a corresponding [`ArrayRef`]
 #[derive(Debug)]
-pub struct OffsetBuffer<I: ScalarValue> {
-    pub offsets: ScalarBuffer<I>,
-    pub values: ScalarBuffer<u8>,
+pub struct OffsetBuffer<I: OffsetSizeTrait> {
+    pub offsets: Vec<I>,
+    pub values: Vec<u8>,
 }
 
-impl<I: ScalarValue> Default for OffsetBuffer<I> {
+impl<I: OffsetSizeTrait> Default for OffsetBuffer<I> {
     fn default() -> Self {
-        let mut offsets = ScalarBuffer::new();
-        offsets.resize(1);
+        let mut offsets = Vec::new();
+        offsets.resize(1, I::default());
         Self {
             offsets,
-            values: ScalarBuffer::new(),
+            values: Vec::new(),
         }
     }
 }
 
-impl<I: OffsetSizeTrait + ScalarValue> OffsetBuffer<I> {
+impl<I: OffsetSizeTrait> OffsetBuffer<I> {
     /// Returns the number of byte arrays in this buffer
     pub fn len(&self) -> usize {
         self.offsets.len() - 1
@@ -95,15 +94,15 @@ impl<I: OffsetSizeTrait + ScalarValue> OffsetBuffer<I> {
         dict_values: &[u8],
     ) -> Result<()> {
         for key in keys {
-            let index = key.to_usize().unwrap();
+            let index = key.as_usize();
             if index + 1 >= dict_offsets.len() {
                 return Err(general_err!(
                     "dictionary key beyond bounds of dictionary: 0..{}",
                     dict_offsets.len().saturating_sub(1)
                 ));
             }
-            let start_offset = dict_offsets[index].to_usize().unwrap();
-            let end_offset = dict_offsets[index + 1].to_usize().unwrap();
+            let start_offset = dict_offsets[index].as_usize();
+            let end_offset = dict_offsets[index + 1].as_usize();
 
             // Dictionary values are verified when decoding dictionary page
             self.try_push(&dict_values[start_offset..end_offset], false)?;
@@ -126,15 +125,11 @@ impl<I: OffsetSizeTrait + ScalarValue> OffsetBuffer<I> {
     }
 
     /// Converts this into an [`ArrayRef`] with the provided `data_type` and `null_buffer`
-    pub fn into_array(
-        self,
-        null_buffer: Option<Buffer>,
-        data_type: ArrowType,
-    ) -> ArrayRef {
+    pub fn into_array(self, null_buffer: Option<Buffer>, data_type: ArrowType) -> ArrayRef {
         let array_data_builder = ArrayDataBuilder::new(data_type)
             .len(self.len())
-            .add_buffer(self.offsets.into())
-            .add_buffer(self.values.into())
+            .add_buffer(Buffer::from_vec(self.offsets))
+            .add_buffer(Buffer::from_vec(self.values))
             .null_bit_buffer(null_buffer);
 
         let data = match cfg!(debug_assertions) {
@@ -146,41 +141,24 @@ impl<I: OffsetSizeTrait + ScalarValue> OffsetBuffer<I> {
     }
 }
 
-impl<I: OffsetSizeTrait + ScalarValue> BufferQueue for OffsetBuffer<I> {
+impl<I: OffsetSizeTrait> BufferQueue for OffsetBuffer<I> {
     type Output = Self;
     type Slice = Self;
 
-    fn split_off(&mut self, len: usize) -> Self::Output {
-        assert!(self.offsets.len() > len, "{} > {}", self.offsets.len(), len);
-        let remaining_offsets = self.offsets.len() - len - 1;
-        let offsets = self.offsets.as_slice();
-
-        let end_offset = offsets[len];
-
-        let mut new_offsets = ScalarBuffer::new();
-        new_offsets.reserve(remaining_offsets + 1);
-        for v in &offsets[len..] {
-            new_offsets.push(*v - end_offset)
-        }
-
-        self.offsets.resize(len + 1);
-
-        Self {
-            offsets: std::mem::replace(&mut self.offsets, new_offsets),
-            values: self.values.take(end_offset.to_usize().unwrap()),
-        }
+    fn consume(&mut self) -> Self::Output {
+        std::mem::take(self)
     }
 
-    fn spare_capacity_mut(&mut self, _batch_size: usize) -> &mut Self::Slice {
+    fn get_output_slice(&mut self, _batch_size: usize) -> &mut Self::Slice {
         self
     }
 
-    fn set_len(&mut self, len: usize) {
+    fn truncate_buffer(&mut self, len: usize) {
         assert_eq!(self.offsets.len(), len + 1);
     }
 }
 
-impl<I: OffsetSizeTrait + ScalarValue> ValuesBuffer for OffsetBuffer<I> {
+impl<I: OffsetSizeTrait> ValuesBuffer for OffsetBuffer<I> {
     fn pad_nulls(
         &mut self,
         read_offset: usize,
@@ -189,9 +167,10 @@ impl<I: OffsetSizeTrait + ScalarValue> ValuesBuffer for OffsetBuffer<I> {
         valid_mask: &[u8],
     ) {
         assert_eq!(self.offsets.len(), read_offset + values_read + 1);
-        self.offsets.resize(read_offset + levels_read + 1);
+        self.offsets
+            .resize(read_offset + levels_read + 1, I::default());
 
-        let offsets = self.offsets.as_slice_mut();
+        let offsets = &mut self.offsets;
 
         let mut last_pos = read_offset + levels_read + 1;
         let mut last_start_offset = I::from_usize(self.values.len()).unwrap();
@@ -229,7 +208,7 @@ impl<I: OffsetSizeTrait + ScalarValue> ValuesBuffer for OffsetBuffer<I> {
     }
 }
 
-impl<I: ScalarValue> ValuesBufferSlice for OffsetBuffer<I> {
+impl<I: OffsetSizeTrait> ValuesBufferSlice for OffsetBuffer<I> {
     fn capacity(&self) -> usize {
         usize::MAX
     }
@@ -238,7 +217,7 @@ impl<I: ScalarValue> ValuesBufferSlice for OffsetBuffer<I> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::array::{Array, LargeStringArray, StringArray};
+    use arrow_array::{Array, LargeStringArray, StringArray};
 
     #[test]
     fn test_offset_buffer_empty() {
@@ -266,18 +245,18 @@ mod tests {
     }
 
     #[test]
-    fn test_offset_buffer_split() {
+    fn test_offset_buffer() {
         let mut buffer = OffsetBuffer::<i32>::default();
         for v in ["hello", "world", "cupcakes", "a", "b", "c"] {
             buffer.try_push(v.as_bytes(), false).unwrap()
         }
-        let split = buffer.split_off(3);
+        let split = buffer.consume();
 
         let array = split.into_array(None, ArrowType::Utf8);
         let strings = array.as_any().downcast_ref::<StringArray>().unwrap();
         assert_eq!(
             strings.iter().map(|x| x.unwrap()).collect::<Vec<_>>(),
-            vec!["hello", "world", "cupcakes"]
+            vec!["hello", "world", "cupcakes", "a", "b", "c"]
         );
 
         buffer.try_push("test".as_bytes(), false).unwrap();
@@ -285,7 +264,7 @@ mod tests {
         let strings = array.as_any().downcast_ref::<StringArray>().unwrap();
         assert_eq!(
             strings.iter().map(|x| x.unwrap()).collect::<Vec<_>>(),
-            vec!["a", "b", "c", "test"]
+            vec!["test"]
         );
     }
 
@@ -297,10 +276,10 @@ mod tests {
             buffer.try_push(v.as_bytes(), false).unwrap()
         }
 
-        let valid = vec![
+        let valid = [
             true, false, false, true, false, true, false, true, true, false, false,
         ];
-        let valid_mask = Buffer::from_iter(valid.iter().cloned());
+        let valid_mask = Buffer::from_iter(valid.iter().copied());
 
         // Both trailing and leading nulls
         buffer.pad_nulls(1, values.len() - 1, valid.len() - 1, valid_mask.as_slice());

@@ -15,33 +15,28 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::arrow::arrow_writer::levels::LevelInfo;
 use crate::basic::Encoding;
-use crate::column::page::PageWriter;
-use crate::column::writer::encoder::{
-    ColumnValueEncoder, DataPageValues, DictionaryPage,
-};
-use crate::column::writer::GenericColumnWriter;
+use crate::bloom_filter::Sbbf;
+use crate::column::writer::encoder::{ColumnValueEncoder, DataPageValues, DictionaryPage};
 use crate::data_type::{AsBytes, ByteArray, Int32Type};
 use crate::encodings::encoding::{DeltaBitPackEncoder, Encoder};
 use crate::encodings::rle::RleEncoder;
 use crate::errors::{ParquetError, Result};
-use crate::file::properties::{WriterProperties, WriterPropertiesPtr, WriterVersion};
-use crate::file::writer::OnCloseColumnChunk;
+use crate::file::properties::{EnabledStatistics, WriterProperties, WriterVersion};
 use crate::schema::types::ColumnDescPtr;
 use crate::util::bit_util::num_required_bits;
 use crate::util::interner::{Interner, Storage};
-use arrow::array::{
-    Array, ArrayAccessor, ArrayRef, BinaryArray, DictionaryArray, LargeBinaryArray,
-    LargeStringArray, StringArray,
+use arrow_array::{
+    Array, ArrayAccessor, BinaryArray, DictionaryArray, LargeBinaryArray, LargeStringArray,
+    StringArray,
 };
-use arrow::datatypes::DataType;
+use arrow_schema::DataType;
 
 macro_rules! downcast_dict_impl {
     ($array:ident, $key:ident, $val:ident, $op:expr $(, $arg:expr)*) => {{
         $op($array
             .as_any()
-            .downcast_ref::<DictionaryArray<arrow::datatypes::$key>>()
+            .downcast_ref::<DictionaryArray<arrow_array::types::$key>>()
             .unwrap()
             .downcast_dict::<$val>()
             .unwrap()$(, $arg)*)
@@ -93,49 +88,6 @@ macro_rules! downcast_op {
     };
 }
 
-/// A writer for byte array types
-pub(super) struct ByteArrayWriter<'a> {
-    writer: GenericColumnWriter<'a, ByteArrayEncoder>,
-    on_close: Option<OnCloseColumnChunk<'a>>,
-}
-
-impl<'a> ByteArrayWriter<'a> {
-    /// Returns a new [`ByteArrayWriter`]
-    pub fn new(
-        descr: ColumnDescPtr,
-        props: &'a WriterPropertiesPtr,
-        page_writer: Box<dyn PageWriter + 'a>,
-        on_close: OnCloseColumnChunk<'a>,
-    ) -> Result<Self> {
-        Ok(Self {
-            writer: GenericColumnWriter::new(descr, props.clone(), page_writer),
-            on_close: Some(on_close),
-        })
-    }
-
-    pub fn write(&mut self, array: &ArrayRef, levels: LevelInfo) -> Result<()> {
-        self.writer.write_batch_internal(
-            array,
-            Some(levels.non_null_indices()),
-            levels.def_levels(),
-            levels.rep_levels(),
-            None,
-            None,
-            None,
-        )?;
-        Ok(())
-    }
-
-    pub fn close(self) -> Result<()> {
-        let r = self.writer.close()?;
-
-        if let Some(on_close) = self.on_close {
-            on_close(r)?;
-        }
-        Ok(())
-    }
-}
-
 /// A fallback encoder, i.e. non-dictionary, for [`ByteArray`]
 struct FallbackEncoder {
     encoder: FallbackEncoderImpl,
@@ -165,12 +117,13 @@ impl FallbackEncoder {
     /// Create the fallback encoder for the given [`ColumnDescPtr`] and [`WriterProperties`]
     fn new(descr: &ColumnDescPtr, props: &WriterProperties) -> Result<Self> {
         // Set either main encoder or fallback encoder.
-        let encoding = props.encoding(descr.path()).unwrap_or_else(|| {
-            match props.writer_version() {
-                WriterVersion::PARQUET_1_0 => Encoding::PLAIN,
-                WriterVersion::PARQUET_2_0 => Encoding::DELTA_BYTE_ARRAY,
-            }
-        });
+        let encoding =
+            props
+                .encoding(descr.path())
+                .unwrap_or_else(|| match props.writer_version() {
+                    WriterVersion::PARQUET_1_0 => Encoding::PLAIN,
+                    WriterVersion::PARQUET_2_0 => Encoding::DELTA_BYTE_ARRAY,
+                });
 
         let encoder = match encoding {
             Encoding::PLAIN => FallbackEncoderImpl::Plain { buffer: vec![] },
@@ -278,32 +231,32 @@ impl FallbackEncoder {
         max_value: Option<ByteArray>,
     ) -> Result<DataPageValues<ByteArray>> {
         let (buf, encoding) = match &mut self.encoder {
-            FallbackEncoderImpl::Plain { buffer } => {
-                (std::mem::take(buffer), Encoding::PLAIN)
-            }
+            FallbackEncoderImpl::Plain { buffer } => (std::mem::take(buffer), Encoding::PLAIN),
             FallbackEncoderImpl::DeltaLength { buffer, lengths } => {
                 let lengths = lengths.flush_buffer()?;
 
                 let mut out = Vec::with_capacity(lengths.len() + buffer.len());
-                out.extend_from_slice(lengths.data());
+                out.extend_from_slice(&lengths);
                 out.extend_from_slice(buffer);
+                buffer.clear();
                 (out, Encoding::DELTA_LENGTH_BYTE_ARRAY)
             }
             FallbackEncoderImpl::Delta {
                 buffer,
                 prefix_lengths,
                 suffix_lengths,
-                ..
+                last_value,
             } => {
                 let prefix_lengths = prefix_lengths.flush_buffer()?;
                 let suffix_lengths = suffix_lengths.flush_buffer()?;
 
-                let mut out = Vec::with_capacity(
-                    prefix_lengths.len() + suffix_lengths.len() + buffer.len(),
-                );
-                out.extend_from_slice(prefix_lengths.data());
-                out.extend_from_slice(suffix_lengths.data());
+                let mut out =
+                    Vec::with_capacity(prefix_lengths.len() + suffix_lengths.len() + buffer.len());
+                out.extend_from_slice(&prefix_lengths);
+                out.extend_from_slice(&suffix_lengths);
                 out.extend_from_slice(buffer);
+                buffer.clear();
+                last_value.clear();
                 (out, Encoding::DELTA_BYTE_ARRAY)
             }
         };
@@ -379,8 +332,7 @@ impl DictEncoder {
 
     fn estimated_data_page_size(&self) -> usize {
         let bit_width = self.bit_width();
-        1 + RleEncoder::min_buffer_size(bit_width)
-            + RleEncoder::max_buffer_size(bit_width, self.indices.len())
+        1 + RleEncoder::max_buffer_size(bit_width, self.indices.len())
     }
 
     fn estimated_dict_page_size(&self) -> usize {
@@ -405,11 +357,11 @@ impl DictEncoder {
         let num_values = self.indices.len();
         let buffer_len = self.estimated_data_page_size();
         let mut buffer = Vec::with_capacity(buffer_len);
-        buffer.push(self.bit_width() as u8);
+        buffer.push(self.bit_width());
 
         let mut encoder = RleEncoder::new_from_buf(self.bit_width(), buffer);
         for index in &self.indices {
-            encoder.put(*index as u64)
+            encoder.put(*index)
         }
 
         self.indices.clear();
@@ -424,33 +376,20 @@ impl DictEncoder {
     }
 }
 
-struct ByteArrayEncoder {
+pub struct ByteArrayEncoder {
     fallback: FallbackEncoder,
     dict_encoder: Option<DictEncoder>,
-    num_values: usize,
+    statistics_enabled: EnabledStatistics,
     min_value: Option<ByteArray>,
     max_value: Option<ByteArray>,
+    bloom_filter: Option<Sbbf>,
 }
 
 impl ColumnValueEncoder for ByteArrayEncoder {
     type T = ByteArray;
-    type Values = ArrayRef;
-
-    fn min_max(
-        &self,
-        values: &ArrayRef,
-        value_indices: Option<&[usize]>,
-    ) -> Option<(Self::T, Self::T)> {
-        match value_indices {
-            Some(indices) => {
-                let iter = indices.iter().cloned();
-                downcast_op!(values.data_type(), values, compute_min_max, iter)
-            }
-            None => {
-                let len = Array::len(values);
-                downcast_op!(values.data_type(), values, compute_min_max, 0..len)
-            }
-        }
+    type Values = dyn Array;
+    fn flush_bloom_filter(&mut self) -> Option<Sbbf> {
+        self.bloom_filter.take()
     }
 
     fn try_new(descr: &ColumnDescPtr, props: &WriterProperties) -> Result<Self>
@@ -463,21 +402,24 @@ impl ColumnValueEncoder for ByteArrayEncoder {
 
         let fallback = FallbackEncoder::new(descr, props)?;
 
+        let bloom_filter = props
+            .bloom_filter_properties(descr.path())
+            .map(|props| Sbbf::new_with_ndv_fpp(props.ndv, props.fpp))
+            .transpose()?;
+
+        let statistics_enabled = props.statistics_enabled(descr.path());
+
         Ok(Self {
             fallback,
+            statistics_enabled,
+            bloom_filter,
             dict_encoder: dictionary,
-            num_values: 0,
             min_value: None,
             max_value: None,
         })
     }
 
-    fn write(
-        &mut self,
-        _values: &Self::Values,
-        _offset: usize,
-        _len: usize,
-    ) -> Result<()> {
+    fn write(&mut self, _values: &Self::Values, _offset: usize, _len: usize) -> Result<()> {
         unreachable!("should call write_gather instead")
     }
 
@@ -487,7 +429,10 @@ impl ColumnValueEncoder for ByteArrayEncoder {
     }
 
     fn num_values(&self) -> usize {
-        self.num_values
+        match &self.dict_encoder {
+            Some(encoder) => encoder.indices.len(),
+            None => self.fallback.num_values,
+        }
     }
 
     fn has_dictionary(&self) -> bool {
@@ -508,7 +453,7 @@ impl ColumnValueEncoder for ByteArrayEncoder {
     fn flush_dict_page(&mut self) -> Result<Option<DictionaryPage>> {
         match self.dict_encoder.take() {
             Some(encoder) => {
-                if self.num_values != 0 {
+                if !encoder.indices.is_empty() {
                     return Err(general_err!(
                         "Must flush data pages before flushing dictionary"
                     ));
@@ -539,13 +484,23 @@ where
     T: ArrayAccessor + Copy,
     T::Item: Copy + Ord + AsRef<[u8]>,
 {
-    if let Some((min, max)) = compute_min_max(values, indices.iter().cloned()) {
-        if encoder.min_value.as_ref().map_or(true, |m| m > &min) {
-            encoder.min_value = Some(min);
-        }
+    if encoder.statistics_enabled != EnabledStatistics::None {
+        if let Some((min, max)) = compute_min_max(values, indices.iter().cloned()) {
+            if encoder.min_value.as_ref().map_or(true, |m| m > &min) {
+                encoder.min_value = Some(min);
+            }
 
-        if encoder.max_value.as_ref().map_or(true, |m| m < &max) {
-            encoder.max_value = Some(max);
+            if encoder.max_value.as_ref().map_or(true, |m| m < &max) {
+                encoder.max_value = Some(max);
+            }
+        }
+    }
+
+    // encode the values into bloom filter if enabled
+    if let Some(bloom_filter) = &mut encoder.bloom_filter {
+        let valid = indices.iter().cloned();
+        for idx in valid {
+            bloom_filter.insert(values.value(idx).as_ref());
         }
     }
 

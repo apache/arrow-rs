@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::util::bit_chunk_iterator::UnalignedBitChunk;
+use arrow_buffer::bit_chunk_iterator::UnalignedBitChunk;
 use std::ops::Range;
 
 /// Counts the number of set bits in the provided range
@@ -28,14 +28,13 @@ pub fn count_set_bits(bytes: &[u8], range: Range<usize>) -> usize {
 pub fn iter_set_bits_rev(bytes: &[u8]) -> impl Iterator<Item = usize> + '_ {
     let bit_length = bytes.len() * 8;
     let unaligned = UnalignedBitChunk::new(bytes, 0, bit_length);
-    let mut chunk_end_idx =
-        bit_length + unaligned.lead_padding() + unaligned.trailing_padding();
+    let mut chunk_end_idx = bit_length + unaligned.lead_padding() + unaligned.trailing_padding();
 
     let iter = unaligned
         .prefix()
         .into_iter()
         .chain(unaligned.chunks().iter().cloned())
-        .chain(unaligned.suffix().into_iter());
+        .chain(unaligned.suffix());
 
     iter.rev().flat_map(move |mut chunk| {
         let chunk_idx = chunk_end_idx - 64;
@@ -53,7 +52,7 @@ pub fn iter_set_bits_rev(bytes: &[u8]) -> impl Iterator<Item = usize> + '_ {
 
 /// Performs big endian sign extension
 pub fn sign_extend_be<const N: usize>(b: &[u8]) -> [u8; N] {
-    assert!(b.len() <= N, "Array too large, expected less than {}", N);
+    assert!(b.len() <= N, "Array too large, expected less than {N}");
     let is_negative = (b[0] & 128u8) == 128u8;
     let mut result = if is_negative { [255u8; N] } else { [0u8; N] };
     for (d, s) in result.iter_mut().skip(N - b.len()).zip(b) {
@@ -65,7 +64,7 @@ pub fn sign_extend_be<const N: usize>(b: &[u8]) -> [u8; N] {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::array::BooleanBufferBuilder;
+    use arrow_array::builder::BooleanBufferBuilder;
     use rand::prelude::*;
 
     #[test]
@@ -84,7 +83,7 @@ mod tests {
             .iter()
             .enumerate()
             .rev()
-            .filter_map(|(x, y)| y.then(|| x))
+            .filter_map(|(x, y)| y.then_some(x))
             .collect();
         assert_eq!(actual, expected);
 

@@ -15,13 +15,16 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::collections::HashMap;
+use std::sync::Arc;
+
 use crate::arrow::schema::primitive::convert_primitive;
-use crate::arrow::ProjectionMask;
+use crate::arrow::{ProjectionMask, PARQUET_FIELD_ID_META_KEY};
 use crate::basic::{ConvertedType, Repetition};
 use crate::errors::ParquetError;
 use crate::errors::Result;
 use crate::schema::types::{SchemaDescriptor, Type, TypePtr};
-use arrow::datatypes::{DataType, Field, Schema};
+use arrow_schema::{DataType, Field, Fields, SchemaBuilder};
 
 fn get_repetition(t: &Type) -> Repetition {
     let info = t.get_basic_info();
@@ -31,7 +34,8 @@ fn get_repetition(t: &Type) -> Repetition {
     }
 }
 
-/// Representation of a parquet file, in terms of arrow schema elements
+/// Representation of a parquet schema element, in terms of arrow schema elements
+#[derive(Debug, Clone)]
 pub struct ParquetField {
     /// The level which represents an insertion into the current list
     /// i.e. guaranteed to be > 0 for a list type
@@ -59,7 +63,7 @@ impl ParquetField {
             rep_level: self.rep_level,
             def_level: self.def_level,
             nullable: false,
-            arrow_type: DataType::List(Box::new(Field::new(
+            arrow_type: DataType::List(Arc::new(Field::new(
                 name,
                 self.arrow_type.clone(),
                 false,
@@ -79,6 +83,7 @@ impl ParquetField {
     }
 }
 
+#[derive(Debug, Clone)]
 pub enum ParquetFieldType {
     Primitive {
         /// The index of the column in parquet
@@ -191,7 +196,7 @@ impl Visitor {
             None => None,
         };
 
-        let mut child_fields = Vec::with_capacity(parquet_fields.len());
+        let mut child_fields = SchemaBuilder::with_capacity(parquet_fields.len());
         let mut children = Vec::with_capacity(parquet_fields.len());
 
         // Perform a DFS of children
@@ -211,7 +216,7 @@ impl Visitor {
                 None => None,
             };
 
-            let arrow_field = arrow_fields.map(|x| &x[idx]);
+            let arrow_field = arrow_fields.map(|x| &*x[idx]);
             let child_ctx = VisitorContext {
                 rep_level,
                 def_level,
@@ -234,7 +239,7 @@ impl Visitor {
             rep_level,
             def_level,
             nullable,
-            arrow_type: DataType::Struct(child_fields),
+            arrow_type: DataType::Struct(child_fields.finish().fields),
             field_type: ParquetFieldType::Group { children },
         };
 
@@ -300,7 +305,7 @@ impl Visitor {
                         ));
                     }
 
-                    (Some(field), Some(&fields[0]), Some(&fields[1]), *sorted)
+                    (Some(field), Some(&*fields[0]), Some(&*fields[1]), *sorted)
                 }
                 d => {
                     return Err(arrow_err!(
@@ -341,21 +346,25 @@ impl Visitor {
         // Need both columns to be projected
         match (maybe_key, maybe_value) {
             (Some(key), Some(value)) => {
-                let key_field = convert_field(map_key, &key, arrow_key);
-                let value_field = convert_field(map_value, &value, arrow_value);
+                let key_field = Arc::new(convert_field(map_key, &key, arrow_key));
+                let value_field = Arc::new(convert_field(map_value, &value, arrow_value));
+                let field_metadata = match arrow_map {
+                    Some(field) => field.metadata().clone(),
+                    _ => HashMap::default(),
+                };
 
-                let map_field = Field::new(
+                let map_field = Field::new_struct(
                     map_key_value.name(),
-                    DataType::Struct(vec![key_field, value_field]),
+                    [key_field, value_field],
                     false, // The inner map field is always non-nullable (#1697)
                 )
-                .with_metadata(arrow_map.and_then(|f| f.metadata().cloned()));
+                .with_metadata(field_metadata);
 
                 Ok(Some(ParquetField {
                     rep_level,
                     def_level,
                     nullable,
-                    arrow_type: DataType::Map(Box::new(map_field), sorted),
+                    arrow_type: DataType::Map(Arc::new(map_field), sorted),
                     field_type: ParquetFieldType::Group {
                         children: vec![key, value],
                     },
@@ -472,7 +481,7 @@ impl Visitor {
 
         match self.dispatch(item_type, new_context) {
             Ok(Some(item)) => {
-                let item_field = Box::new(convert_field(item_type, &item, arrow_field));
+                let item_field = Arc::new(convert_field(item_type, &item, arrow_field));
 
                 // Use arrow type as hint for index size
                 let arrow_type = match context.data_type {
@@ -539,21 +548,30 @@ fn convert_field(
                 _ => Field::new(name, data_type, nullable),
             };
 
-            field.with_metadata(hint.metadata().cloned())
+            field.with_metadata(hint.metadata().clone())
         }
-        None => Field::new(name, data_type, nullable),
+        None => {
+            let mut ret = Field::new(name, data_type, nullable);
+            let basic_info = parquet_type.get_basic_info();
+            if basic_info.has_id() {
+                let mut meta = HashMap::with_capacity(1);
+                meta.insert(PARQUET_FIELD_ID_META_KEY.to_string(), basic_info.id().to_string());
+                ret.set_metadata(meta);
+            }
+            ret
+        },
     }
 }
 
 /// Computes the [`ParquetField`] for the provided [`SchemaDescriptor`] with `leaf_columns` listing
 /// the indexes of leaf columns to project, and `embedded_arrow_schema` the optional
-/// [`Schema`] embedded in the parquet metadata
+/// [`Fields`] embedded in the parquet metadata
 ///
 /// Note: This does not support out of order column projection
 pub fn convert_schema(
     schema: &SchemaDescriptor,
     mask: ProjectionMask,
-    embedded_arrow_schema: Option<&Schema>,
+    embedded_arrow_schema: Option<&Fields>,
 ) -> Result<Option<ParquetField>> {
     let mut visitor = Visitor {
         next_col_idx: 0,
@@ -563,7 +581,7 @@ pub fn convert_schema(
     let context = VisitorContext {
         rep_level: 0,
         def_level: 0,
-        data_type: embedded_arrow_schema.map(|s| DataType::Struct(s.fields().clone())),
+        data_type: embedded_arrow_schema.map(|fields| DataType::Struct(fields.clone())),
     };
 
     visitor.dispatch(&schema.root_schema_ptr(), context)

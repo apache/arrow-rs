@@ -39,17 +39,20 @@ To test the S3 integration against [localstack](https://localstack.cloud/)
 First start up a container running localstack
 
 ```
-$ podman run --rm -it -p 4566:4566 -p 4510-4559:4510-4559 localstack/localstack
+$ podman run -d -p 4566:4566 localstack/localstack:2.0
+$ podman run -d -p 1338:1338 amazon/amazon-ec2-metadata-mock:v1.9.2 --imdsv2
 ```
 
 Setup environment
 
 ```
 export TEST_INTEGRATION=1
-export AWS_DEFAULT_REGION=us-east-1
+export OBJECT_STORE_AWS_DEFAULT_REGION=us-east-1
+export OBJECT_STORE_AWS_ACCESS_KEY_ID=test
+export OBJECT_STORE_AWS_SECRET_ACCESS_KEY=test
+export OBJECT_STORE_AWS_ENDPOINT=http://localhost:4566
 export AWS_ACCESS_KEY_ID=test
 export AWS_SECRET_ACCESS_KEY=test
-export AWS_ENDPOINT=http://127.0.0.1:4566
 export OBJECT_STORE_BUCKET=test-bucket
 ```
 
@@ -57,6 +60,12 @@ Create a bucket using the AWS CLI
 
 ```
 podman run --net=host --env-host amazon/aws-cli --endpoint-url=http://localhost:4566 s3 mb s3://test-bucket
+```
+
+Or directly with:
+
+```
+aws s3 mb s3://test-bucket --endpoint-url=http://localhost:4566
 ```
 
 Run tests
@@ -84,8 +93,13 @@ $ podman run --net=host mcr.microsoft.com/azure-cli az storage container create 
 
 Run tests
 
-```
-$ cargo test --features azure
+```shell
+AZURE_USE_EMULATOR=1 \
+TEST_INTEGRATION=1 \
+OBJECT_STORE_BUCKET=test-bucket \
+AZURE_STORAGE_ACCOUNT=devstoreaccount1 \
+AZURE_STORAGE_ACCESS_KEY=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw== \
+cargo test --features azure
 ```
 
 ### GCP
@@ -95,13 +109,13 @@ To test the GCS integration, we use [Fake GCS Server](https://github.com/fsouza/
 Startup the fake server:
 
 ```shell
-docker run -p 4443:4443 fsouza/fake-gcs-server
+docker run -p 4443:4443 tustvold/fake-gcs-server -scheme http
 ```
 
 Configure the account:
 ```shell
-curl --insecure -v -X POST --data-binary '{"name":"test-bucket"}' -H "Content-Type: application/json" "https://localhost:4443/storage/v1/b"
-echo '{"gcs_base_url": "https://localhost:4443", "disable_oauth": true, "client_email": "", "private_key": ""}' > /tmp/gcs.json
+curl -v -X POST --data-binary '{"name":"test-bucket"}' -H "Content-Type: application/json" "http://localhost:4443/storage/v1/b"
+echo '{"gcs_base_url": "http://localhost:4443", "disable_oauth": true, "client_email": "", "private_key": ""}' > /tmp/gcs.json
 ```
 
 Now run the tests:

@@ -17,10 +17,9 @@
 
 use crate::arrow::array_reader::ArrayReader;
 use crate::errors::{ParquetError, Result};
-use arrow::array::{
-    ArrayData, ArrayDataBuilder, ArrayRef, BooleanBufferBuilder, StructArray,
-};
-use arrow::datatypes::DataType as ArrowType;
+use arrow_array::{builder::BooleanBufferBuilder, Array, ArrayRef, StructArray};
+use arrow_data::{ArrayData, ArrayDataBuilder};
+use arrow_schema::DataType as ArrowType;
 use std::any::Any;
 use std::sync::Arc;
 
@@ -71,7 +70,7 @@ impl ArrayReader for StructArrayReader {
                 Some(expected) => {
                     if expected != child_read {
                         return Err(general_err!(
-                            "StructArrayReader out of sync in read_records, expected {} skipped, got {}",
+                            "StructArrayReader out of sync in read_records, expected {} read, got {}",
                             expected,
                             child_read
                         ));
@@ -131,7 +130,7 @@ impl ArrayReader for StructArrayReader {
             .child_data(
                 children_array
                     .iter()
-                    .map(|x| x.data().clone())
+                    .map(|x| x.to_data())
                     .collect::<Vec<ArrayData>>(),
             );
 
@@ -171,7 +170,7 @@ impl ArrayReader for StructArrayReader {
             }
 
             array_data_builder =
-                array_data_builder.null_bit_buffer(Some(bitmap_builder.finish()));
+                array_data_builder.null_bit_buffer(Some(bitmap_builder.into()));
         }
 
         let array_data = unsafe { array_data_builder.build_unchecked() };
@@ -216,9 +215,11 @@ mod tests {
     use super::*;
     use crate::arrow::array_reader::test_util::InMemoryArrayReader;
     use crate::arrow::array_reader::ListArrayReader;
-    use arrow::array::{Array, Int32Array, ListArray};
     use arrow::buffer::Buffer;
     use arrow::datatypes::Field;
+    use arrow_array::cast::AsArray;
+    use arrow_array::{Array, Int32Array, ListArray};
+    use arrow_schema::Fields;
 
     #[test]
     fn test_struct_array_reader() {
@@ -238,10 +239,10 @@ mod tests {
             Some(vec![0, 1, 1, 1, 1]),
         );
 
-        let struct_type = ArrowType::Struct(vec![
+        let struct_type = ArrowType::Struct(Fields::from(vec![
             Field::new("f1", array_1.data_type().clone(), true),
             Field::new("f2", array_2.data_type().clone(), true),
-        ]);
+        ]));
 
         let mut struct_array_reader = StructArrayReader::new(
             struct_type,
@@ -252,13 +253,13 @@ mod tests {
         );
 
         let struct_array = struct_array_reader.next_batch(5).unwrap();
-        let struct_array = struct_array.as_any().downcast_ref::<StructArray>().unwrap();
+        let struct_array = struct_array.as_struct();
 
         assert_eq!(5, struct_array.len());
         assert_eq!(
             vec![true, false, false, false, false],
             (0..5)
-                .map(|idx| struct_array.data_ref().is_null(idx))
+                .map(|idx| struct_array.is_null(idx))
                 .collect::<Vec<bool>>()
         );
         assert_eq!(
@@ -291,7 +292,7 @@ mod tests {
 
         let validity = Buffer::from([0b00000111]);
         let struct_fields = vec![(
-            Field::new("foo", expected_l.data_type().clone(), true),
+            Arc::new(Field::new("foo", expected_l.data_type().clone(), true)),
             expected_l.clone() as ArrayRef,
         )];
         let expected = StructArray::from((struct_fields, validity));
@@ -328,7 +329,7 @@ mod tests {
         );
 
         let actual = struct_reader.next_batch(1024).unwrap();
-        let actual = actual.as_any().downcast_ref::<StructArray>().unwrap();
+        let actual = actual.as_struct();
         assert_eq!(actual, &expected)
     }
 }

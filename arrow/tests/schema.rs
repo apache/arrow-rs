@@ -29,18 +29,19 @@ fn schema_destructure() {
     let field = Field::new("c1", DataType::Utf8, false);
     let schema = Schema::new(vec![field]).with_metadata(meta);
 
-    // Destructuring a Schema allows rewriting fields and metadata
+    // Destructuring a Schema allows rewriting metadata
     // without copying
     //
     // Model this usecase below:
 
     let Schema {
-        mut fields,
-        metadata,
+        fields,
+        mut metadata,
     } = schema;
-    fields.push(Field::new("c2", DataType::Utf8, false));
+
+    metadata.insert("foo".to_string(), "bar".to_string());
 
     let new_schema = Schema::new(fields).with_metadata(metadata);
 
-    assert_eq!(new_schema.fields().len(), 2);
+    assert_eq!(new_schema.metadata.get("foo").unwrap(), "bar");
 }

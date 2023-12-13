@@ -17,6 +17,10 @@
 
 name: coverage
 
+concurrency:
+  group: ${{ github.repository }}-${{ github.head_ref || github.sha }}-${{ github.workflow }}
+  cancel-in-progress: true
+
 # Trigger only on pushes to master, not pull requests
 on:
   push:
@@ -32,7 +36,7 @@ jobs:
     # otherwise we get this error:
     # Failed to run tests: ASLR disable failed: EPERM: Operation not permitted
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
         with:
           submodules: true
       - name: Setup Rust toolchain

@@ -38,6 +38,9 @@ fn add_benchmark(c: &mut Criterion) {
     let arr_a_nulls = create_primitive_array::<Float32Type>(512, 0.5);
     c.bench_function("equal_nulls_512", |b| b.iter(|| bench_equal(&arr_a_nulls)));
 
+    let arr_a = create_primitive_array::<Float32Type>(51200, 0.1);
+    c.bench_function("equal_51200", |b| b.iter(|| bench_equal(&arr_a)));
+
     let arr_a = create_string_array::<i32>(512, 0.0);
     c.bench_function("equal_string_512", |b| b.iter(|| bench_equal(&arr_a)));
 

@@ -88,6 +88,7 @@ impl<S: Storage> Interner<S> {
     }
 
     /// Unwraps the inner storage
+    #[cfg(feature = "arrow")]
     pub fn into_inner(self) -> S {
         self.storage
     }

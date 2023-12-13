@@ -46,13 +46,10 @@
 use std::{fmt, io};
 
 use crate::basic::{ConvertedType, LogicalType, TimeUnit, Type as PhysicalType};
-use crate::file::metadata::{
-    ColumnChunkMetaData, FileMetaData, ParquetMetaData, RowGroupMetaData,
-};
+use crate::file::metadata::{ColumnChunkMetaData, FileMetaData, ParquetMetaData, RowGroupMetaData};
 use crate::schema::types::Type;
 
-/// Prints Parquet metadata [`ParquetMetaData`](crate::file::metadata::ParquetMetaData)
-/// information.
+/// Prints Parquet metadata [`ParquetMetaData`] information.
 #[allow(unused_must_use)]
 pub fn print_parquet_metadata(out: &mut dyn io::Write, metadata: &ParquetMetaData) {
     print_file_metadata(out, metadata.file_metadata());
@@ -62,20 +59,19 @@ pub fn print_parquet_metadata(out: &mut dyn io::Write, metadata: &ParquetMetaDat
     writeln!(out, "row groups:");
     writeln!(out);
     for (i, rg) in metadata.row_groups().iter().enumerate() {
-        writeln!(out, "row group {}:", i);
+        writeln!(out, "row group {i}:");
         print_dashes(out, 80);
         print_row_group_metadata(out, rg);
     }
 }
 
-/// Prints file metadata [`FileMetaData`](crate::file::metadata::FileMetaData)
-/// information.
+/// Prints file metadata [`FileMetaData`] information.
 #[allow(unused_must_use)]
 pub fn print_file_metadata(out: &mut dyn io::Write, file_metadata: &FileMetaData) {
     writeln!(out, "version: {}", file_metadata.version());
     writeln!(out, "num of rows: {}", file_metadata.num_rows());
     if let Some(created_by) = file_metadata.created_by().as_ref() {
-        writeln!(out, "created by: {}", created_by);
+        writeln!(out, "created by: {created_by}");
     }
     if let Some(metadata) = file_metadata.key_value_metadata() {
         writeln!(out, "metadata:");
@@ -92,7 +88,7 @@ pub fn print_file_metadata(out: &mut dyn io::Write, file_metadata: &FileMetaData
     print_schema(out, schema);
 }
 
-/// Prints Parquet [`Type`](crate::schema::types::Type) information.
+/// Prints Parquet [`Type`] information.
 #[allow(unused_must_use)]
 pub fn print_schema(out: &mut dyn io::Write, tp: &Type) {
     // TODO: better if we can pass fmt::Write to Printer.
@@ -102,7 +98,7 @@ pub fn print_schema(out: &mut dyn io::Write, tp: &Type) {
         let mut printer = Printer::new(&mut s);
         printer.print(tp);
     }
-    writeln!(out, "{}", s);
+    writeln!(out, "{s}");
 }
 
 #[allow(unused_must_use)]
@@ -114,29 +110,27 @@ fn print_row_group_metadata(out: &mut dyn io::Write, rg_metadata: &RowGroupMetaD
     writeln!(out, "columns: ");
     for (i, cc) in rg_metadata.columns().iter().enumerate() {
         writeln!(out);
-        writeln!(out, "column {}:", i);
+        writeln!(out, "column {i}:");
         print_dashes(out, 80);
         print_column_chunk_metadata(out, cc);
     }
 }
 
 #[allow(unused_must_use)]
-fn print_column_chunk_metadata(
-    out: &mut dyn io::Write,
-    cc_metadata: &ColumnChunkMetaData,
-) {
+fn print_column_chunk_metadata(out: &mut dyn io::Write, cc_metadata: &ColumnChunkMetaData) {
     writeln!(out, "column type: {}", cc_metadata.column_type());
     writeln!(out, "column path: {}", cc_metadata.column_path());
     let encoding_strs: Vec<_> = cc_metadata
         .encodings()
         .iter()
-        .map(|e| format!("{}", e))
+        .map(|e| format!("{e}"))
         .collect();
     writeln!(out, "encodings: {}", encoding_strs.join(" "));
     let file_path_str = cc_metadata.file_path().unwrap_or("N/A");
-    writeln!(out, "file path: {}", file_path_str);
+    writeln!(out, "file path: {file_path_str}");
     writeln!(out, "file offset: {}", cc_metadata.file_offset());
     writeln!(out, "num of values: {}", cc_metadata.num_values());
+    writeln!(out, "compression: {}", cc_metadata.compression());
     writeln!(
         out,
         "total compressed size (in bytes): {}",
@@ -152,42 +146,47 @@ fn print_column_chunk_metadata(
         None => "N/A".to_owned(),
         Some(ipo) => ipo.to_string(),
     };
-    writeln!(out, "index page offset: {}", index_page_offset_str);
+    writeln!(out, "index page offset: {index_page_offset_str}");
     let dict_page_offset_str = match cc_metadata.dictionary_page_offset() {
         None => "N/A".to_owned(),
         Some(dpo) => dpo.to_string(),
     };
-    writeln!(out, "dictionary page offset: {}", dict_page_offset_str);
+    writeln!(out, "dictionary page offset: {dict_page_offset_str}");
     let statistics_str = match cc_metadata.statistics() {
         None => "N/A".to_owned(),
         Some(stats) => stats.to_string(),
     };
-    writeln!(out, "statistics: {}", statistics_str);
+    writeln!(out, "statistics: {statistics_str}");
     let bloom_filter_offset_str = match cc_metadata.bloom_filter_offset() {
         None => "N/A".to_owned(),
         Some(bfo) => bfo.to_string(),
     };
-    writeln!(out, "bloom filter offset: {}", bloom_filter_offset_str);
+    writeln!(out, "bloom filter offset: {bloom_filter_offset_str}");
+    let bloom_filter_length_str = match cc_metadata.bloom_filter_length() {
+        None => "N/A".to_owned(),
+        Some(bfo) => bfo.to_string(),
+    };
+    writeln!(out, "bloom filter length: {bloom_filter_length_str}");
     let offset_index_offset_str = match cc_metadata.offset_index_offset() {
         None => "N/A".to_owned(),
         Some(oio) => oio.to_string(),
     };
-    writeln!(out, "offset index offset: {}", offset_index_offset_str);
+    writeln!(out, "offset index offset: {offset_index_offset_str}");
     let offset_index_length_str = match cc_metadata.offset_index_length() {
         None => "N/A".to_owned(),
         Some(oil) => oil.to_string(),
     };
-    writeln!(out, "offset index length: {}", offset_index_length_str);
+    writeln!(out, "offset index length: {offset_index_length_str}");
     let column_index_offset_str = match cc_metadata.column_index_offset() {
         None => "N/A".to_owned(),
         Some(cio) => cio.to_string(),
     };
-    writeln!(out, "column index offset: {}", column_index_offset_str);
+    writeln!(out, "column index offset: {column_index_offset_str}");
     let column_index_length_str = match cc_metadata.column_index_length() {
         None => "N/A".to_owned(),
         Some(cil) => cil.to_string(),
     };
-    writeln!(out, "column index length: {}", column_index_length_str);
+    writeln!(out, "column index length: {column_index_length_str}");
     writeln!(out);
 }
 
@@ -242,10 +241,10 @@ fn print_logical_and_converted(
                 bit_width,
                 is_signed,
             } => {
-                format!("INTEGER({},{})", bit_width, is_signed)
+                format!("INTEGER({bit_width},{is_signed})")
             }
             LogicalType::Decimal { scale, precision } => {
-                format!("DECIMAL({},{})", precision, scale)
+                format!("DECIMAL({precision},{scale})")
             }
             LogicalType::Timestamp {
                 is_adjusted_to_u_t_c,
@@ -271,6 +270,7 @@ fn print_logical_and_converted(
             LogicalType::Enum => "ENUM".to_string(),
             LogicalType::List => "LIST".to_string(),
             LogicalType::Map => "MAP".to_string(),
+            LogicalType::Float16 => "FLOAT16".to_string(),
             LogicalType::Unknown => "UNKNOWN".to_string(),
         },
         None => {
@@ -283,15 +283,15 @@ fn print_logical_and_converted(
                     // DECIMAL(9) - DECIMAL
                     let precision_scale = match (precision, scale) {
                         (p, s) if p > 0 && s > 0 => {
-                            format!("({},{})", p, s)
+                            format!("({p},{s})")
                         }
-                        (p, 0) if p > 0 => format!("({})", p),
+                        (p, 0) if p > 0 => format!("({p})"),
                         _ => String::new(),
                     };
-                    format!("{}{}", decimal, precision_scale)
+                    format!("{decimal}{precision_scale}")
                 }
                 other_converted_type => {
-                    format!("{}", other_converted_type)
+                    format!("{other_converted_type}")
                 }
             }
         }
@@ -313,9 +313,9 @@ impl<'a> Printer<'a> {
                 let phys_type_str = match physical_type {
                     PhysicalType::FIXED_LEN_BYTE_ARRAY => {
                         // We need to include length for fixed byte array
-                        format!("{} ({})", physical_type, type_length)
+                        format!("{physical_type} ({type_length})")
                     }
-                    _ => format!("{}", physical_type),
+                    _ => format!("{physical_type}"),
                 };
                 // Also print logical type if it is available
                 // If there is a logical type, do not print converted type
@@ -358,7 +358,7 @@ impl<'a> Printer<'a> {
                         0,
                     );
                     if !logical_str.is_empty() {
-                        write!(self.output, "({}) ", logical_str);
+                        write!(self.output, "({logical_str}) ");
                     }
                     writeln!(self.output, "{{");
                 } else {
@@ -644,35 +644,38 @@ mod tests {
                 "REQUIRED FIXED_LEN_BYTE_ARRAY (16) field (UUID);",
             ),
             (
-                Type::primitive_type_builder(
-                    "decimal",
-                    PhysicalType::FIXED_LEN_BYTE_ARRAY,
-                )
-                .with_logical_type(Some(LogicalType::Decimal {
-                    precision: 32,
-                    scale: 20,
-                }))
-                .with_precision(32)
-                .with_scale(20)
-                .with_length(decimal_length_from_precision(32))
-                .with_repetition(Repetition::REPEATED)
-                .build()
-                .unwrap(),
+                Type::primitive_type_builder("decimal", PhysicalType::FIXED_LEN_BYTE_ARRAY)
+                    .with_logical_type(Some(LogicalType::Decimal {
+                        precision: 32,
+                        scale: 20,
+                    }))
+                    .with_precision(32)
+                    .with_scale(20)
+                    .with_length(decimal_length_from_precision(32))
+                    .with_repetition(Repetition::REPEATED)
+                    .build()
+                    .unwrap(),
                 "REPEATED FIXED_LEN_BYTE_ARRAY (14) decimal (DECIMAL(32,20));",
             ),
             (
-                Type::primitive_type_builder(
-                    "decimal",
-                    PhysicalType::FIXED_LEN_BYTE_ARRAY,
-                )
-                .with_converted_type(ConvertedType::DECIMAL)
-                .with_precision(19)
-                .with_scale(4)
-                .with_length(decimal_length_from_precision(19))
-                .with_repetition(Repetition::OPTIONAL)
-                .build()
-                .unwrap(),
+                Type::primitive_type_builder("decimal", PhysicalType::FIXED_LEN_BYTE_ARRAY)
+                    .with_converted_type(ConvertedType::DECIMAL)
+                    .with_precision(19)
+                    .with_scale(4)
+                    .with_length(decimal_length_from_precision(19))
+                    .with_repetition(Repetition::OPTIONAL)
+                    .build()
+                    .unwrap(),
                 "OPTIONAL FIXED_LEN_BYTE_ARRAY (9) decimal (DECIMAL(19,4));",
+            ),
+            (
+                Type::primitive_type_builder("float16", PhysicalType::FIXED_LEN_BYTE_ARRAY)
+                    .with_logical_type(Some(LogicalType::Float16))
+                    .with_length(2)
+                    .with_repetition(Repetition::REQUIRED)
+                    .build()
+                    .unwrap(),
+                "REQUIRED FIXED_LEN_BYTE_ARRAY (2) float16 (FLOAT16);",
             ),
         ];
 
@@ -694,40 +697,39 @@ mod tests {
             let f1 = Type::primitive_type_builder("f1", PhysicalType::INT32)
                 .with_repetition(Repetition::REQUIRED)
                 .with_converted_type(ConvertedType::INT_32)
-                .with_id(0)
+                .with_id(Some(0))
                 .build();
             let f2 = Type::primitive_type_builder("f2", PhysicalType::BYTE_ARRAY)
                 .with_converted_type(ConvertedType::UTF8)
-                .with_id(1)
+                .with_id(Some(1))
                 .build();
             let f3 = Type::primitive_type_builder("f3", PhysicalType::BYTE_ARRAY)
                 .with_logical_type(Some(LogicalType::String))
-                .with_id(1)
+                .with_id(Some(1))
                 .build();
-            let f4 =
-                Type::primitive_type_builder("f4", PhysicalType::FIXED_LEN_BYTE_ARRAY)
-                    .with_repetition(Repetition::REPEATED)
-                    .with_converted_type(ConvertedType::INTERVAL)
-                    .with_length(12)
-                    .with_id(2)
-                    .build();
+            let f4 = Type::primitive_type_builder("f4", PhysicalType::FIXED_LEN_BYTE_ARRAY)
+                .with_repetition(Repetition::REPEATED)
+                .with_converted_type(ConvertedType::INTERVAL)
+                .with_length(12)
+                .with_id(Some(2))
+                .build();
 
-            let mut struct_fields = vec![
+            let struct_fields = vec![
                 Arc::new(f1.unwrap()),
                 Arc::new(f2.unwrap()),
                 Arc::new(f3.unwrap()),
             ];
             let field = Type::group_type_builder("field")
                 .with_repetition(Repetition::OPTIONAL)
-                .with_fields(&mut struct_fields)
-                .with_id(1)
+                .with_fields(struct_fields)
+                .with_id(Some(1))
                 .build()
                 .unwrap();
 
-            let mut fields = vec![Arc::new(field), Arc::new(f4.unwrap())];
+            let fields = vec![Arc::new(field), Arc::new(f4.unwrap())];
             let message = Type::group_type_builder("schema")
-                .with_fields(&mut fields)
-                .with_id(2)
+                .with_fields(fields)
+                .with_id(Some(2))
                 .build()
                 .unwrap();
             p.print(&message);
@@ -755,7 +757,7 @@ mod tests {
             .with_repetition(Repetition::OPTIONAL)
             .with_logical_type(Some(LogicalType::List))
             .with_converted_type(ConvertedType::LIST)
-            .with_fields(&mut vec![Arc::new(a2)])
+            .with_fields(vec![Arc::new(a2)])
             .build()
             .unwrap();
 
@@ -772,7 +774,7 @@ mod tests {
         let b2 = Type::group_type_builder("b2")
             .with_repetition(Repetition::REPEATED)
             .with_converted_type(ConvertedType::NONE)
-            .with_fields(&mut vec![Arc::new(b3), Arc::new(b4)])
+            .with_fields(vec![Arc::new(b3), Arc::new(b4)])
             .build()
             .unwrap();
 
@@ -780,18 +782,18 @@ mod tests {
             .with_repetition(Repetition::OPTIONAL)
             .with_logical_type(Some(LogicalType::List))
             .with_converted_type(ConvertedType::LIST)
-            .with_fields(&mut vec![Arc::new(b2)])
+            .with_fields(vec![Arc::new(b2)])
             .build()
             .unwrap();
 
         let a0 = Type::group_type_builder("a0")
             .with_repetition(Repetition::REQUIRED)
-            .with_fields(&mut vec![Arc::new(a1), Arc::new(b1)])
+            .with_fields(vec![Arc::new(a1), Arc::new(b1)])
             .build()
             .unwrap();
 
         let message = Type::group_type_builder("root")
-            .with_fields(&mut vec![Arc::new(a0)])
+            .with_fields(vec![Arc::new(a0)])
             .build()
             .unwrap();
 
@@ -814,7 +816,7 @@ mod tests {
 
         let field = Type::group_type_builder("field")
             .with_repetition(Repetition::OPTIONAL)
-            .with_fields(&mut vec![Arc::new(f1), Arc::new(f2)])
+            .with_fields(vec![Arc::new(f1), Arc::new(f2)])
             .build()
             .unwrap();
 
@@ -826,7 +828,7 @@ mod tests {
             .unwrap();
 
         let message = Type::group_type_builder("schema")
-            .with_fields(&mut vec![Arc::new(field), Arc::new(f3)])
+            .with_fields(vec![Arc::new(field), Arc::new(f3)])
             .build()
             .unwrap();
 
@@ -860,7 +862,7 @@ mod tests {
             .unwrap();
 
         let message = Type::group_type_builder("schema")
-            .with_fields(&mut vec![Arc::new(f1), Arc::new(f2)])
+            .with_fields(vec![Arc::new(f1), Arc::new(f2)])
             .build()
             .unwrap();
 

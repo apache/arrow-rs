@@ -25,25 +25,54 @@
 # arrow-rs/.github_changelog_generator
 #
 # Usage:
-# CHANGELOG_GITHUB_TOKEN=<TOKEN> ./update_change_log.sh
+# ARROW_GITHUB_API_TOKEN=<TOKEN> ./update_change_log.sh
 
 set -e
 
-SINCE_TAG="21.0.0"
-FUTURE_RELEASE="22.0.0"
+SINCE_TAG="48.0.0"
+FUTURE_RELEASE="49.0.0"
 
 SOURCE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SOURCE_TOP_DIR="$(cd "${SOURCE_DIR}/../../" && pwd)"
 
 OUTPUT_PATH="${SOURCE_TOP_DIR}/CHANGELOG.md"
+OLD_OUTPUT_PATH="${SOURCE_TOP_DIR}/CHANGELOG-old.md"
 
 # remove license header so github-changelog-generator has a clean base to append
-sed -i.bak '1,18d' "${OUTPUT_PATH}"
+sed -i.bak '1,21d' "${OUTPUT_PATH}"
+sed -i.bak '1,21d' "${OLD_OUTPUT_PATH}"
+# remove the github-changelog-generator footer from the old CHANGELOG.md
+LINE_COUNT=$(wc -l <"${OUTPUT_PATH}")
+sed -i.bak2 "$(( $LINE_COUNT-4+1 )),$ d" "${OUTPUT_PATH}"
+
+# Copy the previous CHANGELOG.md to CHANGELOG-old.md
+echo '<!---
+  Licensed to the Apache Software Foundation (ASF) under one
+  or more contributor license agreements.  See the NOTICE file
+  distributed with this work for additional information
+  regarding copyright ownership.  The ASF licenses this file
+  to you under the Apache License, Version 2.0 (the
+  "License"); you may not use this file except in compliance
+  with the License.  You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+  Unless required by applicable law or agreed to in writing,
+  software distributed under the License is distributed on an
+  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+  KIND, either express or implied.  See the License for the
+  specific language governing permissions and limitations
+  under the License.
+-->
+
+# Historical Changelog
+' | cat - "${OUTPUT_PATH}" "${OLD_OUTPUT_PATH}" > "${OLD_OUTPUT_PATH}".tmp
+mv "${OLD_OUTPUT_PATH}".tmp "${OLD_OUTPUT_PATH}"
 
 # use exclude-tags-regex to filter out tags used for object_store
 # crates and only only look at tags that DO NOT begin with `object_store_`
 pushd "${SOURCE_TOP_DIR}"
-docker run -it --rm -e CHANGELOG_GITHUB_TOKEN="$CHANGELOG_GITHUB_TOKEN" -v "$(pwd)":/usr/local/src/your-app githubchangeloggenerator/github-changelog-generator \
+docker run -it --rm -e CHANGELOG_GITHUB_TOKEN="$ARROW_GITHUB_API_TOKEN" -v "$(pwd)":/usr/local/src/your-app githubchangeloggenerator/github-changelog-generator \
     --user apache \
     --project arrow-rs \
     --cache-file=.githubchangeloggenerator.cache \

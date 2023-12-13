@@ -23,8 +23,7 @@ use criterion::Criterion;
 extern crate arrow;
 
 use arrow::array::*;
-use arrow::util::decimal::Decimal256;
-use num::BigInt;
+use arrow_buffer::i256;
 use rand::Rng;
 use std::{convert::TryFrom, sync::Arc};
 
@@ -71,9 +70,7 @@ fn struct_array_from_vec(
     let strings: ArrayRef = Arc::new(StringArray::from(strings.to_owned()));
     let ints: ArrayRef = Arc::new(Int32Array::from(ints.to_owned()));
 
-    criterion::black_box(
-        StructArray::try_from(vec![(field1, strings), (field2, ints)]).unwrap(),
-    );
+    criterion::black_box(StructArray::try_from(vec![(field1, strings), (field2, ints)]).unwrap());
 }
 
 fn decimal128_array_from_vec(array: &[Option<i128>]) {
@@ -87,7 +84,7 @@ fn decimal128_array_from_vec(array: &[Option<i128>]) {
     );
 }
 
-fn decimal256_array_from_vec(array: &[Option<Decimal256>]) {
+fn decimal256_array_from_vec(array: &[Option<i256>]) {
     criterion::black_box(
         array
             .iter()
@@ -117,8 +114,7 @@ fn decimal_benchmark(c: &mut Criterion) {
     let mut array = vec![];
     let mut rng = rand::thread_rng();
     for _ in 0..size {
-        let decimal =
-            Decimal256::from(BigInt::from(rng.gen_range::<i128, _>(0..9999999999999)));
+        let decimal = i256::from_i128(rng.gen_range::<i128, _>(0..9999999999999));
         array.push(Some(decimal));
     }
 

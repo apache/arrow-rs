@@ -57,10 +57,13 @@ Run `cargo bench` for benchmarks.
 
 ## Docs
 
-To build documentation, run `cargo doc --no-deps`.
-To compile and view in the browser, run `cargo doc --no-deps --open`.
+To build documentation, run `cargo doc --no-deps --all-features`.
+To compile and view in the browser, run `cargo doc --no-deps --all-features --open`.
 
-## Update Supported Parquet Version
+Before submitting a pull request, run `cargo fmt --all` to format the change.
 
-To update Parquet format to a newer version, check if [parquet-format](https://github.com/sunchao/parquet-format-rs)
-version is available. Then simply update version of `parquet-format` crate in Cargo.toml.
+## Update Parquet Format
+
+To generate the parquet format (thrift definitions) code run [`./regen.sh`](./regen.sh).
+
+You may need to manually patch up doc comments that contain unescaped `[]`

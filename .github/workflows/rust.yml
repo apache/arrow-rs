@@ -18,6 +18,10 @@
 # workspace wide tests
 name: rust
 
+concurrency:
+  group: ${{ github.repository }}-${{ github.head_ref || github.sha }}-${{ github.workflow }}
+  cancel-in-progress: true
+
 # trigger for all PRs and changes to master
 on:
   push:
@@ -33,12 +37,11 @@ jobs:
     name: Test on Mac
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
         with:
           submodules: true
       - name: Install protoc with brew
-        run: |
-          brew install protobuf
+        run: brew install protobuf
       - name: Setup Rust toolchain
         run: |
           rustup toolchain install stable --no-self-update
@@ -57,7 +60,7 @@ jobs:
     name: Test on Windows
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
         with:
           submodules: true
       - name: Install protobuf compiler in /d/protoc
@@ -90,11 +93,41 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: actions/checkout@v3
-      - name: Setup toolchain
-        run: |
-          rustup toolchain install stable
-          rustup default stable
-          rustup component add rustfmt
-      - name: Run
+      - uses: actions/checkout@v4
+      - name: Setup Rust toolchain
+        uses: ./.github/actions/setup-builder
+      - name: Setup rustfmt
+        run: rustup component add rustfmt
+      - name: Format arrow
         run: cargo fmt --all -- --check
+      - name: Format object_store
+        working-directory: object_store
+        run: cargo fmt --all -- --check
+
+  msrv:
+    name: Verify MSRV
+    runs-on: ubuntu-latest
+    container:
+      image: amd64/rust
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Rust toolchain
+        uses: ./.github/actions/setup-builder
+      - name: Install cargo-msrv
+        run: cargo install cargo-msrv
+      - name: Check arrow
+        working-directory: arrow
+        run: cargo msrv verify
+      - name: Check parquet
+        working-directory: parquet
+        run: cargo msrv verify
+      - name: Check arrow-flight
+        working-directory: arrow-flight
+        run: cargo msrv verify
+      - name: Downgrade object_store dependencies
+        working-directory: object_store
+        # Necessary because 1.30.0 updates MSRV to 1.63
+        run: cargo update -p tokio --precise 1.29.1
+      - name: Check object_store
+        working-directory: object_store
+        run: cargo msrv verify

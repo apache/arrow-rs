@@ -47,10 +47,7 @@ pub fn create_random_batch(
     RecordBatch::try_new_with_options(
         schema,
         columns,
-        &RecordBatchOptions {
-            match_field_names: false,
-            row_count: None,
-        },
+        &RecordBatchOptions::new().with_match_field_names(false),
     )
 }
 
@@ -81,15 +78,14 @@ pub fn create_random_array(
         UInt64 => Arc::new(create_primitive_array::<UInt64Type>(size, null_density)),
         Float16 => {
             return Err(ArrowError::NotYetImplemented(
-                "Float16 is not implememted".to_string(),
+                "Float16 is not implemented".to_string(),
             ))
         }
         Float32 => Arc::new(create_primitive_array::<Float32Type>(size, null_density)),
         Float64 => Arc::new(create_primitive_array::<Float64Type>(size, null_density)),
         Timestamp(_, _) => {
             let int64_array =
-                Arc::new(create_primitive_array::<Int64Type>(size, null_density))
-                    as ArrayRef;
+                Arc::new(create_primitive_array::<Int64Type>(size, null_density)) as ArrayRef;
             return crate::compute::cast(&int64_array, field.data_type());
         }
         Date32 => Arc::new(create_primitive_array::<Date32Type>(size, null_density)),
@@ -99,27 +95,28 @@ pub fn create_random_array(
                 size,
                 null_density,
             )) as ArrayRef,
-            TimeUnit::Millisecond => Arc::new(create_primitive_array::<
-                Time32MillisecondType,
-            >(size, null_density)),
+            TimeUnit::Millisecond => Arc::new(create_primitive_array::<Time32MillisecondType>(
+                size,
+                null_density,
+            )),
             _ => {
                 return Err(ArrowError::InvalidArgumentError(format!(
-                    "Unsupported unit {:?} for Time32",
-                    unit
+                    "Unsupported unit {unit:?} for Time32"
                 )))
             }
         },
         Time64(unit) => match unit {
-            TimeUnit::Microsecond => Arc::new(create_primitive_array::<
-                Time64MicrosecondType,
-            >(size, null_density)) as ArrayRef,
-            TimeUnit::Nanosecond => Arc::new(create_primitive_array::<
-                Time64NanosecondType,
-            >(size, null_density)),
+            TimeUnit::Microsecond => Arc::new(create_primitive_array::<Time64MicrosecondType>(
+                size,
+                null_density,
+            )) as ArrayRef,
+            TimeUnit::Nanosecond => Arc::new(create_primitive_array::<Time64NanosecondType>(
+                size,
+                null_density,
+            )),
             _ => {
                 return Err(ArrowError::InvalidArgumentError(format!(
-                    "Unsupported unit {:?} for Time64",
-                    unit
+                    "Unsupported unit {unit:?} for Time64"
                 )))
             }
         },
@@ -127,13 +124,9 @@ pub fn create_random_array(
         LargeUtf8 => Arc::new(create_string_array::<i64>(size, null_density)),
         Binary => Arc::new(create_binary_array::<i32>(size, null_density)),
         LargeBinary => Arc::new(create_binary_array::<i64>(size, null_density)),
-        FixedSizeBinary(len) => {
-            Arc::new(create_fsb_array(size, null_density, *len as usize))
-        }
+        FixedSizeBinary(len) => Arc::new(create_fsb_array(size, null_density, *len as usize)),
         List(_) => create_random_list_array(field, size, null_density, true_density)?,
-        LargeList(_) => {
-            create_random_list_array(field, size, null_density, true_density)?
-        }
+        LargeList(_) => create_random_list_array(field, size, null_density, true_density)?,
         Struct(fields) => Arc::new(StructArray::try_from(
             fields
                 .iter()
@@ -143,9 +136,7 @@ pub fn create_random_array(
                 })
                 .collect::<Result<Vec<(&str, ArrayRef)>>>()?,
         )?),
-        d @ Dictionary(_, value_type)
-            if crate::compute::can_cast_types(value_type, d) =>
-        {
+        d @ Dictionary(_, value_type) if crate::compute::can_cast_types(value_type, d) => {
             let f = Field::new(
                 field.name(),
                 value_type.as_ref().clone(),
@@ -156,8 +147,7 @@ pub fn create_random_array(
         }
         other => {
             return Err(ArrowError::NotYetImplemented(format!(
-                "Generating random arrays not yet implemented for {:?}",
-                other
+                "Generating random arrays not yet implemented for {other:?}"
             )))
         }
     })
@@ -189,16 +179,14 @@ fn create_random_list_array(
         }
         _ => {
             return Err(ArrowError::InvalidArgumentError(format!(
-                "Cannot create list array for field {:?}",
-                field
+                "Cannot create list array for field {field:?}"
             )))
         }
     };
 
     // Create list's child data
-    let child_array =
-        create_random_array(list_field, child_len as usize, null_density, true_density)?;
-    let child_data = child_array.data();
+    let child_array = create_random_array(list_field, child_len, null_density, true_density)?;
+    let child_data = child_array.to_data();
     // Create list's null buffers, if it is nullable
     let null_buffer = match field.is_nullable() {
         true => Some(create_random_null_buffer(size, null_density)),
@@ -212,7 +200,7 @@ fn create_random_list_array(
             null_buffer,
             0,
             vec![offsets],
-            vec![child_data.clone()],
+            vec![child_data],
         )
     };
     Ok(make_array(list_data))
@@ -256,6 +244,7 @@ fn create_random_null_buffer(size: usize, null_density: f32) -> Buffer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use arrow_schema::Fields;
 
     #[test]
     fn test_create_batch() {
@@ -279,7 +268,7 @@ mod tests {
             Field::new("a", DataType::Int32, false),
             Field::new(
                 "b",
-                DataType::List(Box::new(Field::new("item", DataType::LargeUtf8, true))),
+                DataType::List(Arc::new(Field::new("item", DataType::LargeUtf8, true))),
                 false,
             ),
             Field::new("a", DataType::Int32, false),
@@ -295,8 +284,8 @@ mod tests {
         }
         // Test that the list's child values are non-null
         let b_array = batch.column(1);
-        let list_array = b_array.as_any().downcast_ref::<ListArray>().unwrap();
-        let child_array = make_array(list_array.data().child_data()[0].clone());
+        let list_array = b_array.as_list::<i32>();
+        let child_array = list_array.values();
         assert_eq!(child_array.null_count(), 0);
         // There should be more values than the list, to show that it's a list
         assert!(child_array.len() > list_array.len());
@@ -305,13 +294,13 @@ mod tests {
     #[test]
     fn test_create_struct_array() {
         let size = 32;
-        let struct_fields = vec![
+        let struct_fields = Fields::from(vec![
             Field::new("b", DataType::Boolean, true),
             Field::new(
                 "c",
-                DataType::LargeList(Box::new(Field::new(
+                DataType::LargeList(Arc::new(Field::new(
                     "item",
-                    DataType::List(Box::new(Field::new(
+                    DataType::List(Arc::new(Field::new(
                         "item",
                         DataType::FixedSizeBinary(6),
                         true,
@@ -322,14 +311,14 @@ mod tests {
             ),
             Field::new(
                 "d",
-                DataType::Struct(vec![
+                DataType::Struct(Fields::from(vec![
                     Field::new("d_x", DataType::Int32, true),
                     Field::new("d_y", DataType::Float32, false),
                     Field::new("d_z", DataType::Binary, true),
-                ]),
+                ])),
                 true,
             ),
-        ];
+        ]);
         let field = Field::new("struct", DataType::Struct(struct_fields), true);
         let array = create_random_array(&field, size, 0.2, 0.5).unwrap();
 
@@ -342,10 +331,8 @@ mod tests {
         let col_c = struct_array.column_by_name("c").unwrap();
         let col_c = col_c.as_any().downcast_ref::<LargeListArray>().unwrap();
         assert_eq!(col_c.len(), size);
-        let col_c_values = col_c.values();
-        assert!(col_c_values.len() > size);
-        // col_c_values should be a list
-        let col_c_list = col_c_values.as_any().downcast_ref::<ListArray>().unwrap();
+        let col_c_list = col_c.values().as_list::<i32>();
+        assert!(col_c_list.len() > size);
         // Its values should be FixedSizeBinary(6)
         let fsb = col_c_list.values();
         assert_eq!(fsb.data_type(), &DataType::FixedSizeBinary(6));

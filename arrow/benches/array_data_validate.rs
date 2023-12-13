@@ -37,8 +37,8 @@ fn create_binary_array_data(length: i32) -> ArrayData {
     .unwrap()
 }
 
-fn validate_utf8_array(arr: &StringArray) {
-    arr.data().validate_values().unwrap();
+fn validate_utf8_array(arr: &ArrayData) {
+    arr.validate_values().unwrap();
 }
 
 fn validate_benchmark(c: &mut Criterion) {
@@ -48,9 +48,14 @@ fn validate_benchmark(c: &mut Criterion) {
     });
 
     //Utf8 Array
-    let str_arr = StringArray::from(vec!["test"; 20000]);
+    let str_arr = StringArray::from(vec!["test"; 20000]).to_data();
     c.bench_function("validate_utf8_array_data 20000", |b| {
         b.iter(|| validate_utf8_array(&str_arr))
+    });
+
+    let byte_array = BinaryArray::from_iter_values(std::iter::repeat(b"test").take(20000));
+    c.bench_function("byte_array_to_string_array 20000", |b| {
+        b.iter(|| StringArray::from(BinaryArray::from(byte_array.to_data())))
     });
 }
 

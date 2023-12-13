@@ -17,8 +17,9 @@
 
 use crate::arrow::array_reader::ArrayReader;
 use crate::errors::Result;
-use arrow::array::{ArrayDataBuilder, ArrayRef, StructArray};
-use arrow::datatypes::DataType as ArrowType;
+use arrow_schema::{DataType as ArrowType, Fields};
+use arrow_array::{ArrayRef, StructArray};
+use arrow_data::ArrayDataBuilder;
 use std::any::Any;
 use std::sync::Arc;
 
@@ -39,7 +40,7 @@ struct EmptyArrayReader {
 impl EmptyArrayReader {
     pub fn new(row_count: usize) -> Self {
         Self {
-            data_type: ArrowType::Struct(vec![]),
+            data_type: ArrowType::Struct(Fields::empty()),
             remaining_rows: row_count,
             need_consume_records: 0,
         }

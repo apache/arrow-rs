@@ -49,7 +49,7 @@ pub trait TypeVisitor<R, C> {
     fn visit_list(&mut self, list_type: TypePtr, context: C) -> Result<R> {
         match list_type.as_ref() {
             Type::PrimitiveType { .. } => {
-                panic!("{:?} is a list type and must be a group type", list_type)
+                panic!("{list_type:?} is a list type and must be a group type")
             }
             Type::GroupType {
                 basic_info: _,
@@ -59,17 +59,11 @@ pub trait TypeVisitor<R, C> {
 
                 match list_item.as_ref() {
                     Type::PrimitiveType { .. } => {
-                        if list_item.get_basic_info().repetition() == Repetition::REPEATED
-                        {
-                            self.visit_list_with_item(
-                                list_type.clone(),
-                                list_item.clone(),
-                                context,
-                            )
+                        if list_item.get_basic_info().repetition() == Repetition::REPEATED {
+                            self.visit_list_with_item(list_type.clone(), list_item.clone(), context)
                         } else {
                             Err(General(
-                                "Primitive element type of list must be repeated."
-                                    .to_string(),
+                                "Primitive element type of list must be repeated.".to_string(),
                             ))
                         }
                     }
@@ -87,11 +81,7 @@ pub trait TypeVisitor<R, C> {
                                 context,
                             )
                         } else {
-                            self.visit_list_with_item(
-                                list_type.clone(),
-                                list_item.clone(),
-                                context,
-                            )
+                            self.visit_list_with_item(list_type.clone(), list_item.clone(), context)
                         }
                     }
                 }
@@ -176,11 +166,7 @@ mod tests {
             Ok(true)
         }
 
-        fn visit_map(
-            &mut self,
-            _map_type: TypePtr,
-            _context: TestVisitorContext,
-        ) -> Result<bool> {
+        fn visit_map(&mut self, _map_type: TypePtr, _context: TestVisitorContext) -> Result<bool> {
             unimplemented!()
         }
 

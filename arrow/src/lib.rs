@@ -23,8 +23,8 @@
 //!
 //! # Columnar Format
 //!
-//! The [`array`] module provides statically typed implementations of all the array
-//! types as defined by the [Arrow Columnar Format](https://arrow.apache.org/docs/format/Columnar.html).
+//! The [`array`] module provides statically typed implementations of all the array types as defined
+//! by the [Arrow Columnar Format](https://arrow.apache.org/docs/format/Columnar.html)
 //!
 //! For example, an [`Int32Array`](array::Int32Array) represents a nullable array of `i32`
 //!
@@ -37,11 +37,11 @@
 //!
 //! let collected: Vec<_> = array.iter().collect();
 //! assert_eq!(collected, vec![Some(1), None, Some(3)]);
-//! assert_eq!(array.values(), [1, 0, 3])
+//! assert_eq!(array.values(), &[1, 0, 3])
 //! ```
 //!
 //! It is also possible to write generic code. For example, the following is generic over
-//! all primitively typed arrays:
+//! all primitively typed arrays
 //!
 //! ```rust
 //! # use std::iter::Sum;
@@ -77,7 +77,7 @@
 //! assert_eq!(min(&StringArray::from(vec!["b", "a", "c"])), Some("a"));
 //! ```
 //!
-//! For more examples, consult the [`array`] docs.
+//! **For more examples, and details consult the [arrow_array] docs.**
 //!
 //! # Type Erasure / Trait Objects
 //!
@@ -103,6 +103,25 @@
 //! }
 //! ```
 //!
+//! To facilitate downcasting, the [`AsArray`](crate::array::AsArray) extension trait can be used
+//!
+//! ```rust
+//! # use arrow::array::{Array, Float32Array, AsArray};
+//! # use arrow::array::StringArray;
+//! # use arrow::datatypes::DataType;
+//! #
+//! fn impl_string(array: &StringArray) {}
+//! fn impl_f32(array: &Float32Array) {}
+//!
+//! fn impl_dyn(array: &dyn Array) {
+//!     match array.data_type() {
+//!         DataType::Utf8 => impl_string(array.as_string()),
+//!         DataType::Float32 => impl_f32(array.as_primitive()),
+//!         _ => unimplemented!()
+//!     }
+//! }
+//! ```
+//!
 //! It is also common to want to write a function that returns one of a number of possible
 //! array implementations. [`ArrayRef`] is a type-alias for [`Arc<dyn Array>`](array::Array)
 //! which is frequently used for this purpose
@@ -117,6 +136,7 @@
 //! fn parse_to_primitive<'a, T, I>(iter: I) -> PrimitiveArray<T>
 //! where
 //!     T: ArrowPrimitiveType,
+//!     T::Native: FromStr,
 //!     I: IntoIterator<Item=&'a str>,
 //! {
 //!     PrimitiveArray::from_iter(iter.into_iter().map(|val| T::Native::from_str(val).ok()))
@@ -135,12 +155,12 @@
 //!
 //! let array = parse_strings(["1", "2", "3"], DataType::Int32);
 //! let integers = array.as_any().downcast_ref::<Int32Array>().unwrap();
-//! assert_eq!(integers.values(), [1, 2, 3])
+//! assert_eq!(integers.values(), &[1, 2, 3])
 //! ```
 //!
 //! # Compute Kernels
 //!
-//! The [`compute`](compute) module provides optimised implementations of many common operations,
+//! The [`compute`] module provides optimised implementations of many common operations,
 //! for example the `parse_strings` operation above could also be implemented as follows:
 //!
 //! ```
@@ -153,24 +173,38 @@
 //! where
 //!     I: IntoIterator<Item=&'a str>,
 //! {
-//!     let array = Arc::new(StringArray::from_iter(iter.into_iter().map(Some))) as _;
+//!     let array = StringArray::from_iter(iter.into_iter().map(Some));
 //!     arrow::compute::cast(&array, to_data_type)
 //! }
 //!
 //! let array = parse_strings(["1", "2", "3"], &DataType::UInt32).unwrap();
 //! let integers = array.as_any().downcast_ref::<UInt32Array>().unwrap();
-//! assert_eq!(integers.values(), [1, 2, 3])
+//! assert_eq!(integers.values(), &[1, 2, 3])
 //! ```
 //!
 //! This module also implements many common vertical operations:
 //!
-//! * All mathematical binary operators, such as [`subtract`](compute::kernels::arithmetic::subtract)
+//! * All mathematical binary operators, such as [`sub`](compute::kernels::numeric::sub)
 //! * All boolean binary operators such as [`equality`](compute::kernels::comparison::eq)
 //! * [`cast`](compute::kernels::cast::cast)
 //! * [`filter`](compute::kernels::filter::filter)
-//! * [`take`](compute::kernels::take::take) and [`limit`](compute::kernels::limit::limit)
+//! * [`take`](compute::kernels::take::take)
 //! * [`sort`](compute::kernels::sort::sort)
 //! * some string operators such as [`substring`](compute::kernels::substring::substring) and [`length`](compute::kernels::length::length)
+//!
+//! ```
+//! # use arrow::compute::gt_scalar;
+//! # use arrow_array::cast::AsArray;
+//! # use arrow_array::Int32Array;
+//! # use arrow_array::types::Int32Type;
+//! # use arrow_select::filter::filter;
+//! let array = Int32Array::from_iter(0..100);
+//! let predicate = gt_scalar(&array, 60).unwrap();
+//! let filtered = filter(&array, &predicate).unwrap();
+//!
+//! let expected = Int32Array::from_iter(61..100);
+//! assert_eq!(&expected, filtered.as_primitive::<Int32Type>());
+//! ```
 //!
 //! As well as some horizontal operations, such as:
 //!
@@ -205,18 +239,81 @@
 //!
 //! Parquet is published as a [separate crate](https://crates.io/crates/parquet)
 //!
-//! # Memory and Buffers
+//! # Serde Compatibility
 //!
-//! Advanced users may wish to interact with the underlying buffers of an [`Array`], for example,
-//! for FFI or high-performance conversion from other formats. This interface is provided by
-//! [`ArrayData`] which stores the [`Buffer`] comprising an [`Array`], and can be accessed
-//! with [`Array::data`](array::Array::data)
+//! [`arrow_json::reader::Decoder`] provides a mechanism to convert arbitrary, serde-compatible
+//! structures into [`RecordBatch`].
 //!
-//! The APIs for constructing [`ArrayData`] come in safe, and unsafe variants, with the former
-//! performing extensive, but potentially expensive validation to ensure the buffers are well-formed.
+//! Whilst likely less performant than implementing a custom builder, as described in
+//! [arrow_array::builder], this provides a simple mechanism to get up and running quickly
 //!
-//! An [`ArrayRef`] can be cheaply created from an [`ArrayData`] using [`make_array`],
-//! or by using the appropriate [`From`] conversion on the concrete [`Array`] implementation.
+//! ```
+//! # use std::sync::Arc;
+//! # use arrow_json::ReaderBuilder;
+//! # use arrow_schema::{DataType, Field, Schema};
+//! # use serde::Serialize;
+//! # use arrow_array::cast::AsArray;
+//! # use arrow_array::types::{Float32Type, Int32Type};
+//! #
+//! #[derive(Serialize)]
+//! struct MyStruct {
+//!     int32: i32,
+//!     string: String,
+//! }
+//!
+//! let schema = Schema::new(vec![
+//!     Field::new("int32", DataType::Int32, false),
+//!     Field::new("string", DataType::Utf8, false),
+//! ]);
+//!
+//! let rows = vec![
+//!     MyStruct{ int32: 5, string: "bar".to_string() },
+//!     MyStruct{ int32: 8, string: "foo".to_string() },
+//! ];
+//!
+//! let mut decoder = ReaderBuilder::new(Arc::new(schema)).build_decoder().unwrap();
+//! decoder.serialize(&rows).unwrap();
+//!
+//! let batch = decoder.flush().unwrap().unwrap();
+//!
+//! // Expect batch containing two columns
+//! let int32 = batch.column(0).as_primitive::<Int32Type>();
+//! assert_eq!(int32.values(), &[5, 8]);
+//!
+//! let string = batch.column(1).as_string::<i32>();
+//! assert_eq!(string.value(0), "bar");
+//! assert_eq!(string.value(1), "foo");
+//! ```
+//!
+//! # Crate Topology
+//!
+//! The [`arrow`] project is implemented as multiple sub-crates, which are then re-exported by
+//! this top-level crate.
+//!
+//! Crate authors can choose to depend on this top-level crate, or just
+//! the sub-crates they need.
+//!
+//! The current list of sub-crates is:
+//!
+//! * [`arrow-arith`][arrow_arith] - arithmetic kernels
+//! * [`arrow-array`][arrow_array] - type-safe arrow array abstractions
+//! * [`arrow-buffer`][arrow_buffer] - buffer abstractions for arrow arrays
+//! * [`arrow-cast`][arrow_cast] - cast kernels for arrow arrays
+//! * [`arrow-csv`][arrow_csv] - read/write CSV to arrow format
+//! * [`arrow-data`][arrow_data] - the underlying data of arrow arrays
+//! * [`arrow-ipc`][arrow_ipc] - read/write IPC to arrow format
+//! * [`arrow-json`][arrow_json] - read/write JSON to arrow format
+//! * [`arrow-ord`][arrow_ord] - ordering kernels for arrow arrays
+//! * [`arrow-row`][arrow_row] - comparable row format
+//! * [`arrow-schema`][arrow_schema] - the logical types for arrow arrays
+//! * [`arrow-select`][arrow_select] - selection kernels for arrow arrays
+//! * [`arrow-string`][arrow_string] - string kernels for arrow arrays
+//!
+//! Some functionality is also distributed independently of this crate:
+//!
+//! * [`arrow-flight`] - support for [Arrow Flight RPC]
+//! * [`arrow-integration-test`] - support for [Arrow JSON Test Format]
+//! * [`parquet`](https://docs.rs/parquet/latest/parquet/) - support for [Apache Parquet]
 //!
 //! # Safety and Security
 //!
@@ -234,6 +331,7 @@
 //! orchestrates the primitives exported by this crate into an embeddable query engine, with
 //! SQL and DataFrame frontends, and heavily influences this crate's roadmap.
 //!
+//! [`arrow`]: https://github.com/apache/arrow-rs
 //! [`array`]: mod@array
 //! [`Array`]: array::Array
 //! [`ArrayRef`]: array::ArrayRef
@@ -241,21 +339,27 @@
 //! [`make_array`]: array::make_array
 //! [`Buffer`]: buffer::Buffer
 //! [`RecordBatch`]: record_batch::RecordBatch
+//! [`arrow-flight`]: https://docs.rs/arrow-flight/latest/arrow_flight/
+//! [`arrow-integration-test`]: https://docs.rs/arrow-integration-test/latest/arrow_integration_test/
+//! [`parquet`]: https://docs.rs/parquet/latest/parquet/
+//! [Arrow Flight RPC]: https://arrow.apache.org/docs/format/Flight.html
+//! [Arrow JSON Test Format]: https://github.com/apache/arrow/blob/master/docs/source/format/Integration.rst#json-test-data-format
+//! [Apache Parquet]: https://parquet.apache.org/
 //! [DataFusion]: https://github.com/apache/arrow-datafusion
 //! [issue tracker]: https://github.com/apache/arrow-rs/issues
 //!
 
 #![deny(clippy::redundant_clone)]
 #![warn(missing_debug_implementations)]
+#![allow(rustdoc::invalid_html_tags)]
+pub use arrow_array::{downcast_dictionary_array, downcast_primitive_array};
 
-pub mod alloc;
+pub use arrow_buffer::{alloc, buffer};
+
 pub mod array;
-pub mod bitmap;
-pub mod buffer;
-mod bytes;
 pub mod compute;
 #[cfg(feature = "csv")]
-pub mod csv;
+pub use arrow_csv as csv;
 pub mod datatypes;
 pub mod error;
 #[cfg(feature = "ffi")]
@@ -263,12 +367,18 @@ pub mod ffi;
 #[cfg(feature = "ffi")]
 pub mod ffi_stream;
 #[cfg(feature = "ipc")]
-pub mod ipc;
-#[cfg(feature = "serde_json")]
-pub mod json;
+pub use arrow_ipc as ipc;
+#[cfg(feature = "json")]
+pub use arrow_json as json;
 #[cfg(feature = "pyarrow")]
 pub mod pyarrow;
-pub mod record_batch;
-pub mod temporal_conversions;
+
+pub mod record_batch {
+    pub use arrow_array::{
+        RecordBatch, RecordBatchIterator, RecordBatchOptions, RecordBatchReader, RecordBatchWriter,
+    };
+}
+pub use arrow_array::temporal_conversions;
+pub use arrow_row as row;
 pub mod tensor;
 pub mod util;

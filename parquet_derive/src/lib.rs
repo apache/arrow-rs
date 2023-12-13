@@ -40,12 +40,11 @@ mod parquet_field;
 /// Example:
 ///
 /// ```ignore
-/// use parquet;
-/// use parquet::record::RecordWriter;
-/// use parquet::schema::parser::parse_message_type;
+/// use parquet::file::properties::WriterProperties;
+/// use parquet::file::writer::SerializedFileWriter;
 ///
 /// use std::sync::Arc;
-//
+///
 /// #[derive(ParquetRecordWriter)]
 /// struct ACompleteRecord<'a> {
 ///   pub a_bool: bool,
@@ -66,8 +65,7 @@ mod parquet_field;
 ///
 ///  let schema = samples.as_slice().schema();
 ///
-///  let props = Arc::new(WriterProperties::builder().build());
-///  let mut writer = SerializedFileWriter::new(file, schema, props).unwrap();
+///  let mut writer = SerializedFileWriter::new(file, schema, Default::default()).unwrap();
 ///
 ///  let mut row_group = writer.next_row_group().unwrap();
 ///  samples.as_slice().write_to_row_group(&mut row_group).unwrap();
@@ -97,11 +95,13 @@ pub fn parquet_record_writer(input: proc_macro::TokenStream) -> proc_macro::Toke
         field_infos.iter().map(|x| x.parquet_type()).collect();
 
     (quote! {
-    impl #generics RecordWriter<#derived_for #generics> for &[#derived_for #generics] {
-      fn write_to_row_group<W: std::io::Write>(
+    impl #generics ::parquet::record::RecordWriter<#derived_for #generics> for &[#derived_for #generics] {
+      fn write_to_row_group<W: ::std::io::Write + Send>(
         &self,
-        row_group_writer: &mut parquet::file::writer::SerializedRowGroupWriter<'_, W>
-      ) -> Result<(), parquet::errors::ParquetError> {
+        row_group_writer: &mut ::parquet::file::writer::SerializedRowGroupWriter<'_, W>
+      ) -> Result<(), ::parquet::errors::ParquetError> {
+        use ::parquet::column::writer::ColumnWriter;
+
         let mut row_group_writer = row_group_writer;
         let records = &self; // Used by all the writer snippets to be more clear
 
@@ -112,7 +112,7 @@ pub fn parquet_record_writer(input: proc_macro::TokenStream) -> proc_macro::Toke
                   #writer_snippets
                   column_writer.close()?;
               } else {
-                  return Err(parquet::errors::ParquetError::General("Failed to get next column".into()))
+                  return Err(::parquet::errors::ParquetError::General("Failed to get next column".into()))
               }
           }
         );*
@@ -120,20 +120,105 @@ pub fn parquet_record_writer(input: proc_macro::TokenStream) -> proc_macro::Toke
         Ok(())
       }
 
-      fn schema(&self) -> Result<parquet::schema::types::TypePtr, parquet::errors::ParquetError> {
-        use parquet::schema::types::Type as ParquetType;
-        use parquet::schema::types::TypePtr;
-        use parquet::basic::LogicalType;
-        use parquet::basic::*;
+      fn schema(&self) -> Result<::parquet::schema::types::TypePtr, ::parquet::errors::ParquetError> {
+        use ::parquet::schema::types::Type as ParquetType;
+        use ::parquet::schema::types::TypePtr;
+        use ::parquet::basic::LogicalType;
 
-        let mut fields: Vec<TypePtr> = Vec::new();
+        let mut fields: ::std::vec::Vec<TypePtr> = ::std::vec::Vec::new();
         #(
           #field_types
         );*;
-        let group = parquet::schema::types::Type::group_type_builder("rust_schema")
-          .with_fields(&mut fields)
+        let group = ParquetType::group_type_builder("rust_schema")
+          .with_fields(fields)
           .build()?;
         Ok(group.into())
+      }
+    }
+  }).into()
+}
+
+/// Derive flat, simple RecordReader implementations. Works by parsing
+/// a struct tagged with `#[derive(ParquetRecordReader)]` and emitting
+/// the correct writing code for each field of the struct. Column readers
+/// are generated in the order they are defined.
+///
+/// It is up to the programmer to keep the order of the struct
+/// fields lined up with the schema.
+///
+/// Example:
+///
+/// ```ignore
+/// use parquet::file::{serialized_reader::SerializedFileReader, reader::FileReader};
+/// use parquet_derive::{ParquetRecordReader};
+///
+/// #[derive(ParquetRecordReader)]
+/// struct ACompleteRecord {
+///     pub a_bool: bool,
+///     pub a_string: String,
+/// }
+///
+/// pub fn read_some_records() -> Vec<ACompleteRecord> {
+///   let mut samples: Vec<ACompleteRecord> = Vec::new();
+///
+///   let reader = SerializedFileReader::new(file).unwrap();
+///   let mut row_group = reader.get_row_group(0).unwrap();
+///   samples.read_from_row_group(&mut *row_group, 1).unwrap();
+///   samples
+/// }
+/// ```
+///
+#[proc_macro_derive(ParquetRecordReader)]
+pub fn parquet_record_reader(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    let input: DeriveInput = parse_macro_input!(input as DeriveInput);
+    let fields = match input.data {
+        Data::Struct(DataStruct { fields, .. }) => fields,
+        Data::Enum(_) => unimplemented!("Enum currently is not supported"),
+        Data::Union(_) => unimplemented!("Union currently is not supported"),
+    };
+
+    let field_infos: Vec<_> = fields.iter().map(parquet_field::Field::from).collect();
+    let field_names: Vec<_> = fields.iter().map(|f| f.ident.clone()).collect();
+    let reader_snippets: Vec<proc_macro2::TokenStream> =
+        field_infos.iter().map(|x| x.reader_snippet()).collect();
+    let i: Vec<_> = (0..reader_snippets.len()).collect();
+
+    let derived_for = input.ident;
+    let generics = input.generics;
+
+    (quote! {
+
+    impl #generics ::parquet::record::RecordReader<#derived_for #generics> for Vec<#derived_for #generics> {
+      fn read_from_row_group(
+        &mut self,
+        row_group_reader: &mut dyn ::parquet::file::reader::RowGroupReader,
+        num_records: usize,
+      ) -> Result<(), ::parquet::errors::ParquetError> {
+        use ::parquet::column::reader::ColumnReader;
+
+        let mut row_group_reader = row_group_reader;
+
+        for _ in 0..num_records {
+          self.push(#derived_for {
+            #(
+              #field_names: Default::default()
+            ),*
+          })
+        }
+
+        let records = self; // Used by all the reader snippets to be more clear
+
+        #(
+          {
+              if let Ok(mut column_reader) = row_group_reader.get_column_reader(#i) {
+                  #reader_snippets
+              } else {
+                  return Err(::parquet::errors::ParquetError::General("Failed to get next column".into()))
+              }
+          }
+        );*
+
+        Ok(())
       }
     }
   }).into()

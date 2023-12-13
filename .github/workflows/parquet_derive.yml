@@ -19,6 +19,9 @@
 # tests for parquet_derive crate
 name: parquet_derive
 
+concurrency:
+  group: ${{ github.repository }}-${{ github.head_ref || github.sha }}-${{ github.workflow }}
+  cancel-in-progress: true
 
 # trigger for all PRs that touch certain files and changes to master
 on:
@@ -39,21 +42,14 @@ jobs:
     runs-on: ubuntu-latest
     container:
       image: amd64/rust
-      env:
-        # Disable full debug symbol generation to speed up CI build and keep memory down
-        # "1" means line tables only, which is useful for panic tracebacks.
-        RUSTFLAGS: "-C debuginfo=1"
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
         with:
           submodules: true
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
-        with:
-          rust-version: stable
       - name: Test
-        run: |
-          cargo test -p parquet_derive
+        run: cargo test -p parquet_derive
 
   clippy:
     name: Clippy
@@ -61,14 +57,10 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
-        with:
-          rust-version: stable
       - name: Setup Clippy
-        run: |
-          rustup component add clippy
+        run: rustup component add clippy
       - name: Run clippy
-        run: |
-          cargo clippy -p parquet_derive --all-features -- -D warnings
+        run: cargo clippy -p parquet_derive --all-features -- -D warnings

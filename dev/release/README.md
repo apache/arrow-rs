@@ -67,19 +67,40 @@ For `object_store` the same process is done in the `object_store` directory. Exa
 ```bash
 git checkout master
 git pull
-git checkout -b make-release
+git checkout -b <RELEASE_BRANCH>
 
-# Copy the content of CHANGELOG.md to the beginning of CHANGELOG-old.md
+# Update versions. Make sure to run it before the next step since we do not want CHANGELOG-old.md affected.
+sed -i '' -e 's/14.0.0/39.0.0/g' `find . -name 'Cargo.toml' -or -name '*.md' | grep -v CHANGELOG.md`
+git commit -a -m 'Update version'
 
-# manully edit ./dev/release/update_change_log.sh to reflect the release version
+# ensure your github token is available
+export ARROW_GITHUB_API_TOKEN=<TOKEN>
+
+# manually edit ./dev/release/update_change_log.sh to reflect the release version
 # create the changelog
-CHANGELOG_GITHUB_TOKEN=<TOKEN> ./dev/release/update_change_log.sh
+./dev/release/update_change_log.sh
+
+# run automated script to copy labels to issues based on referenced PRs
+# (NOTE 1:  this must be done by a committer / other who has
+# write access to the repository)
+#
+# NOTE 2: this must be done after creating the initial CHANGELOG file
+python dev/release/label_issues.py
+
 # review change log / edit issues and labels if needed, rerun
 git commit -a -m 'Create changelog'
 
-# update versions
-sed -i '' -e 's/14.0.0/22.0.0/g' `find . -name 'Cargo.toml' -or -name '*.md' | grep -v CHANGELOG.md`
-git commit -a -m 'Update version'
+
+# Manually edit ./dev/release/update_change_log.sh to reflect the release version
+# Create the changelog
+CHANGELOG_GITHUB_TOKEN=<TOKEN> ./dev/release/update_change_log.sh
+# Review change log / edit issues and labels if needed, rerun
+git commit -a -m 'Create changelog'
+
+git push
+
+# File the release PR
+export BRANCH=<RELEASE_BRANCH> && export GITHUB_USERNAME=<USERNAME> && export GITHUB_TOKEN=<TOKEN> && ./file_release_pr.sh
 ```
 
 Note that when reviewing the change log, rather than editing the
@@ -203,7 +224,7 @@ Rust Arrow Crates:
 ./object_store/dev/release/release-tarball.sh 4.1.0 2
 ```
 
-Congratulations! The release is now offical!
+Congratulations! The release is now official!
 
 ### Publish on Crates.io
 
@@ -228,10 +249,25 @@ following commands
 Rust Arrow Crates:
 
 ```shell
+(cd arrow-buffer && cargo publish)
+(cd arrow-schema && cargo publish)
+(cd arrow-data && cargo publish)
+(cd arrow-array && cargo publish)
+(cd arrow-select && cargo publish)
+(cd arrow-cast && cargo publish)
+(cd arrow-ipc && cargo publish)
+(cd arrow-csv && cargo publish)
+(cd arrow-json && cargo publish)
+(cd arrow-avro && cargo publish)
+(cd arrow-ord && cargo publish)
+(cd arrow-arith && cargo publish)
+(cd arrow-string && cargo publish)
+(cd arrow-row && cargo publish)
 (cd arrow && cargo publish)
 (cd arrow-flight && cargo publish)
 (cd parquet && cargo publish)
 (cd parquet_derive && cargo publish)
+(cd arrow-integration-test && cargo publish)
 ```
 
 `object_store`

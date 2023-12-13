@@ -17,16 +17,16 @@
 
 [package]
 name = "parquet_derive"
-version = "22.0.0"
-license = "Apache-2.0"
+version = { workspace = true }
+license = { workspace = true }
 description = "Derive macros for the Rust implementation of Apache Parquet"
-homepage = "https://github.com/apache/arrow-rs"
-repository = "https://github.com/apache/arrow-rs"
-authors = ["Apache Arrow <dev@arrow.apache.org>"]
-keywords = [ "parquet" ]
+homepage = { workspace = true }
+repository = { workspace = true }
+authors = { workspace = true }
+keywords = ["parquet"]
 readme = "README.md"
-edition = "2021"
-rust-version = "1.62"
+edition = { workspace = true }
+rust-version = { workspace = true }
 
 [lib]
 proc-macro = true
@@ -34,5 +34,5 @@ proc-macro = true
 [dependencies]
 proc-macro2 = { version = "1.0", default-features = false }
 quote = { version = "1.0", default-features = false }
-syn = { version = "1.0", default-features = false }
-parquet = { path = "../parquet", version = "22.0.0" }
+syn = { version = "2.0", features = ["extra-traits"] }
+parquet = { workspace = true }

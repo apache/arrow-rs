@@ -78,7 +78,7 @@ pub fn get_temp_file(file_name: &str, content: &[u8]) -> fs::File {
 pub fn arrow_test_data() -> String {
     match get_data_dir("ARROW_TEST_DATA", "../testing/data") {
         Ok(pb) => pb.display().to_string(),
-        Err(err) => panic!("failed to get arrow data dir: {}", err),
+        Err(err) => panic!("failed to get arrow data dir: {err}"),
     }
 }
 
@@ -100,7 +100,7 @@ pub fn arrow_test_data() -> String {
 pub fn parquet_test_data() -> String {
     match get_data_dir("PARQUET_TEST_DATA", "../parquet-testing/data") {
         Ok(pb) => pb.display().to_string(),
-        Err(err) => panic!("failed to get parquet data dir: {}", err),
+        Err(err) => panic!("failed to get parquet data dir: {err}"),
     }
 }
 
@@ -167,8 +167,8 @@ pub struct BadIterator<T> {
 }
 
 impl<T> BadIterator<T> {
-    /// Create a new iterator for <limit> items, but that reports to
-    /// produce <claimed> items. Must provide at least 1 item.
+    /// Create a new iterator for `<limit>` items, but that reports to
+    /// produce `<claimed>` items. Must provide at least 1 item.
     pub fn new(limit: usize, claimed: usize, items: Vec<T>) -> Self {
         assert!(!items.is_empty());
         Self {
@@ -196,7 +196,7 @@ impl<T: Clone> Iterator for BadIterator<T> {
 
     /// report whatever the iterator says to
     fn size_hint(&self) -> (usize, Option<usize>) {
-        (0, Some(self.claimed as usize))
+        (0, Some(self.claimed))
     }
 }
 

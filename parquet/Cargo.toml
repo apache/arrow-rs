@@ -17,74 +17,120 @@
 
 [package]
 name = "parquet"
-version = "22.0.0"
-license = "Apache-2.0"
+version = { workspace = true }
+license = { workspace = true }
 description = "Apache Parquet implementation in Rust"
-homepage = "https://github.com/apache/arrow-rs"
-repository = "https://github.com/apache/arrow-rs"
-authors = ["Apache Arrow <dev@arrow.apache.org>"]
+homepage = { workspace = true }
+repository = { workspace = true }
+authors = { workspace = true }
 keywords = ["arrow", "parquet", "hadoop"]
 readme = "README.md"
-build = "build.rs"
-edition = "2021"
-rust-version = "1.62"
+edition = { workspace = true }
+rust-version = "1.70.0"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+ahash = { version = "0.8", default-features = false, features = ["compile-time-rng"] }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+ahash = { version = "0.8", default-features = false, features = ["runtime-rng"] }
 
 [dependencies]
-ahash = "0.8"
-parquet-format = { version = "4.0.0", default-features = false }
+arrow-array = { workspace = true, optional = true }
+arrow-buffer = { workspace = true, optional = true }
+arrow-cast = { workspace = true, optional = true }
+arrow-csv = { workspace = true, optional = true }
+arrow-data = { workspace = true, optional = true }
+arrow-schema = { workspace = true, optional = true }
+arrow-select = { workspace = true, optional = true }
+arrow-ipc = { workspace = true, optional = true }
+# Intentionally not a path dependency as object_store is released separately
+object_store = { version = "0.8", default-features = false, optional = true }
+
 bytes = { version = "1.1", default-features = false, features = ["std"] }
-thrift = { version = "0.13", default-features = false }
+thrift = { version = "0.17", default-features = false }
 snap = { version = "1.0", default-features = false, optional = true }
 brotli = { version = "3.3", default-features = false, features = ["std"], optional = true }
 flate2 = { version = "1.0", default-features = false, features = ["rust_backend"], optional = true }
-lz4 = { version = "1.23", default-features = false, optional = true }
-zstd = { version = "0.11.1", optional = true, default-features = false }
-chrono = { version = "0.4", default-features = false, features = ["alloc"] }
+lz4_flex = { version = "0.11", default-features = false, features = ["std", "frame"], optional = true }
+zstd = { version = "0.13.0", optional = true, default-features = false }
+chrono = { workspace = true }
 num = { version = "0.4", default-features = false }
 num-bigint = { version = "0.4", default-features = false }
-arrow = { path = "../arrow", version = "22.0.0", optional = true, default-features = false, features = ["ipc"] }
-base64 = { version = "0.13", default-features = false, features = ["std"], optional = true }
-clap = { version = "3", default-features = false, features = ["std", "derive", "env"], optional = true }
+base64 = { version = "0.21", default-features = false, features = ["std", ], optional = true }
+clap = { version = "4.1", default-features = false, features = ["std", "derive", "env", "help", "error-context", "usage"], optional = true }
+serde = { version = "1.0", default-features = false, features = ["derive"], optional = true }
 serde_json = { version = "1.0", default-features = false, features = ["std"], optional = true }
 seq-macro = { version = "0.3", default-features = false }
-rand = { version = "0.8", default-features = false, features = ["std", "std_rng"] }
 futures = { version = "0.3", default-features = false, features = ["std"], optional = true }
-tokio = { version = "1.0", optional = true, default-features = false, features = ["macros", "fs", "rt", "io-util"] }
-hashbrown = { version = "0.12", default-features = false }
+tokio = { version = "1.0", optional = true, default-features = false, features = ["macros", "rt", "io-util"] }
+hashbrown = { version = "0.14", default-features = false }
+twox-hash = { version = "1.6", default-features = false }
+paste = { version = "1.0" }
+half = { version = "2.1", default-features = false, features = ["num-traits"] }
 
 [dev-dependencies]
-base64 = { version = "0.13", default-features = false, features = ["std"] }
-criterion = { version = "0.3", default-features = false }
+base64 = { version = "0.21", default-features = false, features = ["std"] }
+criterion = { version = "0.5", default-features = false }
 snap = { version = "1.0", default-features = false }
 tempfile = { version = "3.0", default-features = false }
 brotli = { version = "3.3", default-features = false, features = ["std"] }
 flate2 = { version = "1.0", default-features = false, features = ["rust_backend"] }
-lz4 = { version = "1.23", default-features = false }
-zstd = { version = "0.11", default-features = false }
+lz4_flex = { version = "0.11", default-features = false, features = ["std", "frame"] }
+zstd = { version = "0.13", default-features = false }
 serde_json = { version = "1.0", features = ["std"], default-features = false }
-arrow = { path = "../arrow", version = "22.0.0", default-features = false, features = ["ipc", "test_utils", "prettyprint", "json"] }
+arrow = { workspace = true, features = ["ipc", "test_utils", "prettyprint", "json"] }
+tokio = { version = "1.0", default-features = false, features = ["macros", "rt", "io-util", "fs"] }
+rand = { version = "0.8", default-features = false, features = ["std", "std_rng"] }
+object_store = { version = "0.8", default-features = false, features = ["azure"] }
 
 [package.metadata.docs.rs]
 all-features = true
 
 [features]
 default = ["arrow", "snap", "brotli", "flate2", "lz4", "zstd", "base64"]
+# Enable lz4
+lz4 = ["lz4_flex"]
 # Enable arrow reader/writer APIs
-arrow = ["dep:arrow", "base64"]
+arrow = ["base64", "arrow-array", "arrow-buffer", "arrow-cast", "arrow-data", "arrow-schema", "arrow-select", "arrow-ipc"]
 # Enable CLI tools
-cli = ["json", "base64", "clap", "arrow/csv"]
+cli = ["json", "base64", "clap", "arrow-csv", "serde"]
 # Enable JSON APIs
-json = ["serde_json"]
+json = ["serde_json", "base64"]
 # Enable internal testing APIs
 test_common = ["arrow/test_utils"]
 # Experimental, unstable functionality primarily used for testing
 experimental = []
 # Enable async APIs
 async = ["futures", "tokio"]
+# Enable object_store integration
+object_store = ["dep:object_store", "async"]
+
+[[example]]
+name = "read_parquet"
+required-features = ["arrow"]
+path = "./examples/read_parquet.rs"
+
+[[example]]
+name = "async_read_parquet"
+required-features = ["arrow", "async"]
+path = "./examples/async_read_parquet.rs"
+
+[[example]]
+name = "read_with_rowgroup"
+required-features = ["arrow", "async"]
+path = "./examples/read_with_rowgroup.rs"
+
+[[test]]
+name = "arrow_writer_layout"
+required-features = ["arrow"]
 
 [[bin]]
 name = "parquet-read"
 required-features = ["cli"]
+
+[[bin]]
+name = "parquet-rewrite"
+required-features = ["arrow", "cli"]
 
 [[bin]]
 name = "parquet-schema"
@@ -95,7 +141,23 @@ name = "parquet-rowcount"
 required-features = ["cli"]
 
 [[bin]]
+name = "parquet-concat"
+required-features = ["cli"]
+
+[[bin]]
 name = "parquet-fromcsv"
+required-features = ["arrow", "cli", "snap", "brotli", "flate2", "lz4", "zstd"]
+
+[[bin]]
+name = "parquet-show-bloom-filter"
+required-features = ["cli"]
+
+[[bin]]
+name = "parquet-layout"
+required-features = ["cli"]
+
+[[bin]]
+name = "parquet-index"
 required-features = ["cli"]
 
 [[bench]]
@@ -106,6 +168,16 @@ harness = false
 [[bench]]
 name = "arrow_reader"
 required-features = ["arrow", "test_common", "experimental"]
+harness = false
+
+[[bench]]
+name = "compression"
+required-features = ["experimental", "default"]
+harness = false
+
+
+[[bench]]
+name = "metadata"
 harness = false
 
 [lib]

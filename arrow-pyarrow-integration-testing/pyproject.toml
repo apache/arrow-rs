@@ -16,5 +16,7 @@
 # under the License.
 
 [build-system]
-requires = ["maturin"]
+requires = ["maturin>=1.0,<2.0"]
 build-backend = "maturin"
+
+dependencies = ["pyarrow>=1"]

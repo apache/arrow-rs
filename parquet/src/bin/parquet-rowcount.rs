@@ -36,7 +36,6 @@
 //! Note that `parquet-rowcount` reads full file schema, no projection or filtering is
 //! applied.
 
-extern crate parquet;
 use clap::Parser;
 use parquet::file::reader::{FileReader, SerializedFileReader};
 use std::{fs::File, path::Path};
@@ -45,9 +44,7 @@ use std::{fs::File, path::Path};
 #[clap(author, version, about("Binary file to return the number of rows found from Parquet file(s)"), long_about = None)]
 struct Args {
     #[clap(
-        short,
-        long,
-        multiple_values(true),
+        number_of_values(1),
         help("List of Parquet files to read from separated by space")
     )]
     file_paths: Vec<String>,
@@ -59,8 +56,7 @@ fn main() {
     for filename in args.file_paths {
         let path = Path::new(&filename);
         let file = File::open(path).expect("Unable to open file");
-        let parquet_reader =
-            SerializedFileReader::new(file).expect("Unable to read file");
+        let parquet_reader = SerializedFileReader::new(file).expect("Unable to read file");
         let row_group_metadata = parquet_reader.metadata().row_groups();
         let mut total_num_rows = 0;
 
@@ -68,6 +64,6 @@ fn main() {
             total_num_rows += group_metadata.num_rows();
         }
 
-        eprintln!("File {}: rowcount={}", filename, total_num_rows);
+        eprintln!("File {filename}: rowcount={total_num_rows}");
     }
 }

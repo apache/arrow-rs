@@ -21,6 +21,7 @@ use itertools::Itertools;
 use percent_encoding::percent_decode;
 use snafu::{ensure, ResultExt, Snafu};
 use std::fmt::Formatter;
+#[cfg(not(target_arch = "wasm32"))]
 use url::Url;
 
 /// The delimiter to separate object namespaces, creating a directory structure.
@@ -64,10 +65,23 @@ pub enum Error {
 
 /// A parsed path representation that can be safely written to object storage
 ///
-/// # Path Safety
+/// A [`Path`] maintains the following invariants:
+///
+/// * Paths are delimited by `/`
+/// * Paths do not contain leading or trailing `/`
+/// * Paths do not contain relative path segments, i.e. `.` or `..`
+/// * Paths do not contain empty path segments
+/// * Paths do not contain any ASCII control characters
+///
+/// There are no enforced restrictions on path length, however, it should be noted that most
+/// object stores do not permit paths longer than 1024 bytes, and many filesystems do not
+/// support path segments longer than 255 bytes.
+///
+/// # Encode
 ///
 /// In theory object stores support any UTF-8 character sequence, however, certain character
-/// sequences cause compatibility problems with some applications and protocols. As such the
+/// sequences cause compatibility problems with some applications and protocols. Additionally
+/// some filesystems may impose character restrictions, see [`LocalFileSystem`]. As such the
 /// naming guidelines for [S3], [GCS] and [Azure Blob Storage] all recommend sticking to a
 /// limited character subset.
 ///
@@ -75,34 +89,16 @@ pub enum Error {
 /// [GCS]: https://cloud.google.com/storage/docs/naming-objects
 /// [Azure Blob Storage]: https://docs.microsoft.com/en-us/rest/api/storageservices/Naming-and-Referencing-Containers--Blobs--and-Metadata#blob-names
 ///
-/// This presents libraries with two options for consistent path handling:
-///
-/// 1. Allow constructing unsafe paths, allowing for both reading and writing of data to paths
-/// that may not be consistently understood or supported
-/// 2. Disallow constructing unsafe paths, ensuring data written can be consistently handled by
-/// all other systems, but preventing interaction with objects at unsafe paths
-///
-/// This library takes the second approach, in particular:
-///
-/// * Paths are delimited by `/`
-/// * Paths do not start with a `/`
-/// * Empty path segments are discarded (e.g. `//` is treated as though it were `/`)
-/// * Relative path segments, i.e. `.` and `..` are percent encoded
-/// * Unsafe characters are percent encoded, as described by [RFC 1738]
-/// * All paths are relative to the root of the object store
-///
-/// In order to provide these guarantees there are two ways to safely construct a [`Path`]
-///
-/// # Encode
-///
-/// A string containing potentially illegal path segments can be encoded to a [`Path`]
-/// using [`Path::from`] or [`Path::from_iter`].
+/// A string containing potentially problematic path segments can therefore be encoded to a [`Path`]
+/// using [`Path::from`] or [`Path::from_iter`]. This will percent encode any problematic
+/// segments according to [RFC 1738].
 ///
 /// ```
 /// # use object_store::path::Path;
 /// assert_eq!(Path::from("foo/bar").as_ref(), "foo/bar");
 /// assert_eq!(Path::from("foo//bar").as_ref(), "foo/bar");
 /// assert_eq!(Path::from("foo/../bar").as_ref(), "foo/%2E%2E/bar");
+/// assert_eq!(Path::from("/").as_ref(), "");
 /// assert_eq!(Path::from_iter(["foo", "foo/bar"]).as_ref(), "foo/foo%2Fbar");
 /// ```
 ///
@@ -115,20 +111,20 @@ pub enum Error {
 ///
 /// # Parse
 ///
-/// Alternatively a [`Path`] can be created from an existing string, returning an
-/// error if it is invalid. Unlike the encoding methods, this will permit
-/// valid percent encoded sequences.
+/// Alternatively a [`Path`] can be parsed from an existing string, returning an
+/// error if it is invalid. Unlike the encoding methods above, this will permit
+/// arbitrary unicode, including percent encoded sequences.
 ///
 /// ```
 /// # use object_store::path::Path;
-///
 /// assert_eq!(Path::parse("/foo/foo%2Fbar").unwrap().as_ref(), "foo/foo%2Fbar");
-/// Path::parse("..").unwrap_err();
-/// Path::parse("/foo//").unwrap_err();
-/// Path::parse("😀").unwrap_err();
+/// Path::parse("..").unwrap_err(); // Relative path segments are disallowed
+/// Path::parse("/foo//").unwrap_err(); // Empty path segments are disallowed
+/// Path::parse("\x00").unwrap_err(); // ASCII control characters are disallowed
 /// ```
 ///
 /// [RFC 1738]: https://www.ietf.org/rfc/rfc1738.txt
+/// [`LocalFileSystem`]: crate::local::LocalFileSystem
 #[derive(Debug, Clone, Default, PartialEq, Eq, Hash, Ord, PartialOrd)]
 pub struct Path {
     /// The raw path with no leading or trailing delimiters
@@ -160,15 +156,14 @@ impl Path {
         })
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     /// Convert a filesystem path to a [`Path`] relative to the filesystem root
     ///
     /// This will return an error if the path contains illegal character sequences
-    /// as defined by [`Path::parse`] or does not exist
+    /// as defined on the docstring for [`Path`] or does not exist
     ///
     /// Note: this will canonicalize the provided path, resolving any symlinks
-    pub fn from_filesystem_path(
-        path: impl AsRef<std::path::Path>,
-    ) -> Result<Self, Error> {
+    pub fn from_filesystem_path(path: impl AsRef<std::path::Path>) -> Result<Self, Error> {
         let absolute = std::fs::canonicalize(&path).context(CanonicalizeSnafu {
             path: path.as_ref(),
         })?;
@@ -176,35 +171,48 @@ impl Path {
         Self::from_absolute_path(absolute)
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     /// Convert an absolute filesystem path to a [`Path`] relative to the filesystem root
     ///
-    /// This will return an error if the path contains illegal character sequences
-    /// as defined by [`Path::parse`], or `base` is not an absolute path
+    /// This will return an error if the path contains illegal character sequences,
+    /// as defined on the docstring for [`Path`], or `base` is not an absolute path
     pub fn from_absolute_path(path: impl AsRef<std::path::Path>) -> Result<Self, Error> {
         Self::from_absolute_path_with_base(path, None)
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     /// Convert a filesystem path to a [`Path`] relative to the provided base
     ///
-    /// This will return an error if the path contains illegal character sequences
-    /// as defined by [`Path::parse`], or `base` does not refer to a parent path of `path`,
-    /// or `base` is not an absolute path
+    /// This will return an error if the path contains illegal character sequences,
+    /// as defined on the docstring for [`Path`], or `base` does not refer to a parent
+    /// path of `path`, or `base` is not an absolute path
     pub(crate) fn from_absolute_path_with_base(
         path: impl AsRef<std::path::Path>,
         base: Option<&Url>,
     ) -> Result<Self, Error> {
         let url = absolute_path_to_url(path)?;
         let path = match base {
-            Some(prefix) => url.path().strip_prefix(prefix.path()).ok_or_else(|| {
-                Error::PrefixMismatch {
-                    path: url.path().to_string(),
-                    prefix: prefix.to_string(),
-                }
-            })?,
+            Some(prefix) => {
+                url.path()
+                    .strip_prefix(prefix.path())
+                    .ok_or_else(|| Error::PrefixMismatch {
+                        path: url.path().to_string(),
+                        prefix: prefix.to_string(),
+                    })?
+            }
             None => url.path(),
         };
 
         // Reverse any percent encoding performed by conversion to URL
+        Self::from_url_path(path)
+    }
+
+    /// Parse a url encoded string as a [`Path`], returning a [`Error`] if invalid
+    ///
+    /// This will return an error if the path contains illegal character sequences
+    /// as defined on the docstring for [`Path`]
+    pub fn from_url_path(path: impl AsRef<str>) -> Result<Self, Error> {
+        let path = path.as_ref();
         let decoded = percent_decode(path.as_bytes())
             .decode_utf8()
             .context(NonUnicodeSnafu { path })?;
@@ -214,37 +222,44 @@ impl Path {
 
     /// Returns the [`PathPart`] of this [`Path`]
     pub fn parts(&self) -> impl Iterator<Item = PathPart<'_>> {
+        self.raw
+            .split_terminator(DELIMITER)
+            .map(|s| PathPart { raw: s.into() })
+    }
+
+    /// Returns the last path segment containing the filename stored in this [`Path`]
+    pub fn filename(&self) -> Option<&str> {
         match self.raw.is_empty() {
-            true => itertools::Either::Left(std::iter::empty()),
-            false => itertools::Either::Right(
-                self.raw
-                    .split(DELIMITER)
-                    .map(|s| PathPart { raw: s.into() }),
-            ),
+            true => None,
+            false => self.raw.rsplit(DELIMITER).next(),
         }
+    }
+
+    /// Returns the extension of the file stored in this [`Path`], if any
+    pub fn extension(&self) -> Option<&str> {
+        self.filename()
+            .and_then(|f| f.rsplit_once('.'))
+            .and_then(|(_, extension)| {
+                if extension.is_empty() {
+                    None
+                } else {
+                    Some(extension)
+                }
+            })
     }
 
     /// Returns an iterator of the [`PathPart`] of this [`Path`] after `prefix`
     ///
     /// Returns `None` if the prefix does not match
-    pub fn prefix_match(
-        &self,
-        prefix: &Self,
-    ) -> Option<impl Iterator<Item = PathPart<'_>> + '_> {
-        let diff = itertools::diff_with(self.parts(), prefix.parts(), |a, b| a == b);
-
-        match diff {
-            // Both were equal
-            None => Some(itertools::Either::Left(std::iter::empty())),
-            // Mismatch or prefix was longer => None
-            Some(
-                itertools::Diff::FirstMismatch(_, _, _) | itertools::Diff::Longer(_, _),
-            ) => None,
-            // Match with remaining
-            Some(itertools::Diff::Shorter(_, back)) => {
-                Some(itertools::Either::Right(back))
-            }
+    pub fn prefix_match(&self, prefix: &Self) -> Option<impl Iterator<Item = PathPart<'_>> + '_> {
+        let mut stripped = self.raw.strip_prefix(&prefix.raw)?;
+        if !stripped.is_empty() && !prefix.raw.is_empty() {
+            stripped = stripped.strip_prefix(DELIMITER)?;
         }
+        let iter = stripped
+            .split_terminator(DELIMITER)
+            .map(|x| PathPart { raw: x.into() });
+        Some(iter)
     }
 
     /// Returns true if this [`Path`] starts with `prefix`
@@ -308,10 +323,9 @@ where
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 /// Given an absolute filesystem path convert it to a URL representation without canonicalization
-pub(crate) fn absolute_path_to_url(
-    path: impl AsRef<std::path::Path>,
-) -> Result<Url, Error> {
+pub(crate) fn absolute_path_to_url(path: impl AsRef<std::path::Path>) -> Result<Url, Error> {
     Url::from_file_path(&path).map_err(|_| Error::InvalidPath {
         path: path.as_ref().into(),
     })
@@ -414,92 +428,74 @@ mod tests {
         assert!(existing_path.prefix_match(&prefix).is_none());
 
         // Prefix matches but there aren't any parts after it
-        let existing_path = Path::from("apple/bear/cow/dog");
+        let existing = Path::from("apple/bear/cow/dog");
 
-        let prefix = existing_path.clone();
-        assert_eq!(existing_path.prefix_match(&prefix).unwrap().count(), 0);
+        assert_eq!(existing.prefix_match(&existing).unwrap().count(), 0);
+        assert_eq!(Path::default().parts().count(), 0);
     }
 
     #[test]
     fn prefix_matches() {
         let haystack = Path::from_iter(["foo/bar", "baz%2Ftest", "something"]);
-        let needle = haystack.clone();
         // self starts with self
         assert!(
             haystack.prefix_matches(&haystack),
-            "{:?} should have started with {:?}",
-            haystack,
-            haystack
+            "{haystack:?} should have started with {haystack:?}"
         );
 
         // a longer prefix doesn't match
-        let needle = needle.child("longer now");
+        let needle = haystack.child("longer now");
         assert!(
             !haystack.prefix_matches(&needle),
-            "{:?} shouldn't have started with {:?}",
-            haystack,
-            needle
+            "{haystack:?} shouldn't have started with {needle:?}"
         );
 
         // one dir prefix matches
         let needle = Path::from_iter(["foo/bar"]);
         assert!(
             haystack.prefix_matches(&needle),
-            "{:?} should have started with {:?}",
-            haystack,
-            needle
+            "{haystack:?} should have started with {needle:?}"
         );
 
         // two dir prefix matches
         let needle = needle.child("baz%2Ftest");
         assert!(
             haystack.prefix_matches(&needle),
-            "{:?} should have started with {:?}",
-            haystack,
-            needle
+            "{haystack:?} should have started with {needle:?}"
         );
 
         // partial dir prefix doesn't match
         let needle = Path::from_iter(["f"]);
         assert!(
             !haystack.prefix_matches(&needle),
-            "{:?} should not have started with {:?}",
-            haystack,
-            needle
+            "{haystack:?} should not have started with {needle:?}"
         );
 
         // one dir and one partial dir doesn't match
         let needle = Path::from_iter(["foo/bar", "baz"]);
         assert!(
             !haystack.prefix_matches(&needle),
-            "{:?} should not have started with {:?}",
-            haystack,
-            needle
+            "{haystack:?} should not have started with {needle:?}"
         );
 
         // empty prefix matches
         let needle = Path::from("");
         assert!(
             haystack.prefix_matches(&needle),
-            "{:?} should have started with {:?}",
-            haystack,
-            needle
+            "{haystack:?} should have started with {needle:?}"
         );
     }
 
     #[test]
     fn prefix_matches_with_file_name() {
-        let haystack =
-            Path::from_iter(["foo/bar", "baz%2Ftest", "something", "foo.segment"]);
+        let haystack = Path::from_iter(["foo/bar", "baz%2Ftest", "something", "foo.segment"]);
 
         // All directories match and file name is a prefix
         let needle = Path::from_iter(["foo/bar", "baz%2Ftest", "something", "foo"]);
 
         assert!(
             !haystack.prefix_matches(&needle),
-            "{:?} should not have started with {:?}",
-            haystack,
-            needle
+            "{haystack:?} should not have started with {needle:?}"
         );
 
         // All directories match but file name is not a prefix
@@ -507,9 +503,7 @@ mod tests {
 
         assert!(
             !haystack.prefix_matches(&needle),
-            "{:?} should not have started with {:?}",
-            haystack,
-            needle
+            "{haystack:?} should not have started with {needle:?}"
         );
 
         // Not all directories match; file name is a prefix of the next directory; this
@@ -518,9 +512,7 @@ mod tests {
 
         assert!(
             !haystack.prefix_matches(&needle),
-            "{:?} should not have started with {:?}",
-            haystack,
-            needle
+            "{haystack:?} should not have started with {needle:?}"
         );
 
         // Not all directories match; file name is NOT a prefix of the next directory;
@@ -529,9 +521,59 @@ mod tests {
 
         assert!(
             !haystack.prefix_matches(&needle),
-            "{:?} should not have started with {:?}",
-            haystack,
-            needle
+            "{haystack:?} should not have started with {needle:?}"
         );
+    }
+
+    #[test]
+    fn path_containing_spaces() {
+        let a = Path::from_iter(["foo bar", "baz"]);
+        let b = Path::from("foo bar/baz");
+        let c = Path::parse("foo bar/baz").unwrap();
+
+        assert_eq!(a.raw, "foo bar/baz");
+        assert_eq!(a.raw, b.raw);
+        assert_eq!(b.raw, c.raw);
+    }
+
+    #[test]
+    fn from_url_path() {
+        let a = Path::from_url_path("foo%20bar").unwrap();
+        let b = Path::from_url_path("foo/%2E%2E/bar").unwrap_err();
+        let c = Path::from_url_path("foo%2F%252E%252E%2Fbar").unwrap();
+        let d = Path::from_url_path("foo/%252E%252E/bar").unwrap();
+        let e = Path::from_url_path("%48%45%4C%4C%4F").unwrap();
+        let f = Path::from_url_path("foo/%FF/as").unwrap_err();
+
+        assert_eq!(a.raw, "foo bar");
+        assert!(matches!(b, Error::BadSegment { .. }));
+        assert_eq!(c.raw, "foo/%2E%2E/bar");
+        assert_eq!(d.raw, "foo/%2E%2E/bar");
+        assert_eq!(e.raw, "HELLO");
+        assert!(matches!(f, Error::NonUnicode { .. }));
+    }
+
+    #[test]
+    fn filename_from_path() {
+        let a = Path::from("foo/bar");
+        let b = Path::from("foo/bar.baz");
+        let c = Path::from("foo.bar/baz");
+
+        assert_eq!(a.filename(), Some("bar"));
+        assert_eq!(b.filename(), Some("bar.baz"));
+        assert_eq!(c.filename(), Some("baz"));
+    }
+
+    #[test]
+    fn file_extension() {
+        let a = Path::from("foo/bar");
+        let b = Path::from("foo/bar.baz");
+        let c = Path::from("foo.bar/baz");
+        let d = Path::from("foo.bar/baz.qux");
+
+        assert_eq!(a.extension(), None);
+        assert_eq!(b.extension(), Some("baz"));
+        assert_eq!(c.extension(), None);
+        assert_eq!(d.extension(), Some("qux"));
     }
 }

@@ -36,8 +36,6 @@
 //! Note that `parquet-read` reads full file schema, no projection or filtering is
 //! applied.
 
-extern crate parquet;
-
 use clap::Parser;
 use parquet::file::reader::{FileReader, SerializedFileReader};
 use parquet::record::Row;
@@ -47,7 +45,7 @@ use std::{fs::File, path::Path};
 #[derive(Debug, Parser)]
 #[clap(author, version, about("Binary file to read data from a Parquet file"), long_about = None)]
 struct Args {
-    #[clap(short, long, help("Path to a parquet file, or - for stdin"))]
+    #[clap(help("Path to a parquet file, or - for stdin"))]
     file_name: String,
     #[clap(
         short,
@@ -73,12 +71,11 @@ fn main() {
             .read_to_end(&mut buf)
             .expect("Failed to read stdin into a buffer");
         Box::new(
-            SerializedFileReader::new(bytes::Bytes::from(buf))
-                .expect("Failed to create reader"),
+            SerializedFileReader::new(bytes::Bytes::from(buf)).expect("Failed to create reader"),
         )
     } else {
         let path = Path::new(&filename);
-        let file = File::open(&path).expect("Unable to open file");
+        let file = File::open(path).expect("Unable to open file");
         Box::new(SerializedFileReader::new(file).expect("Failed to create reader"))
     };
 
@@ -93,9 +90,9 @@ fn main() {
 
     while all_records || start < end {
         match iter.next() {
-            Some(row) => print_row(&row, json),
+            Some(row) => print_row(&row.unwrap(), json),
             None => break,
-        }
+        };
         start += 1;
     }
 }
@@ -104,6 +101,6 @@ fn print_row(row: &Row, json: bool) {
     if json {
         println!("{}", row.to_json_value())
     } else {
-        println!("{}", row);
+        println!("{row}");
     }
 }

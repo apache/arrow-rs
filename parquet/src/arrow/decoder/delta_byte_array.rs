@@ -15,16 +15,17 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use bytes::Bytes;
+
 use crate::data_type::Int32Type;
 use crate::encodings::decoding::{Decoder, DeltaBitPackDecoder};
 use crate::errors::{ParquetError, Result};
-use crate::util::memory::ByteBufferPtr;
 
 /// Decoder for `Encoding::DELTA_BYTE_ARRAY`
 pub struct DeltaByteArrayDecoder {
     prefix_lengths: Vec<i32>,
     suffix_lengths: Vec<i32>,
-    data: ByteBufferPtr,
+    data: Bytes,
     length_offset: usize,
     data_offset: usize,
     last_value: Vec<u8>,
@@ -32,16 +33,16 @@ pub struct DeltaByteArrayDecoder {
 
 impl DeltaByteArrayDecoder {
     /// Create a new [`DeltaByteArrayDecoder`] with the provided data page
-    pub fn new(data: ByteBufferPtr) -> Result<Self> {
+    pub fn new(data: Bytes) -> Result<Self> {
         let mut prefix = DeltaBitPackDecoder::<Int32Type>::new();
-        prefix.set_data(data.all(), 0)?;
+        prefix.set_data(data.clone(), 0)?;
 
         let num_prefix = prefix.values_left();
         let mut prefix_lengths = vec![0; num_prefix];
         assert_eq!(prefix.get(&mut prefix_lengths)?, num_prefix);
 
         let mut suffix = DeltaBitPackDecoder::<Int32Type>::new();
-        suffix.set_data(data.start_from(prefix.get_offset()), 0)?;
+        suffix.set_data(data.slice(prefix.get_offset()..), 0)?;
 
         let num_suffix = suffix.values_left();
         let mut suffix_lengths = vec![0; num_suffix];
@@ -49,8 +50,7 @@ impl DeltaByteArrayDecoder {
 
         if num_prefix != num_suffix {
             return Err(general_err!(format!(
-                "inconsistent DELTA_BYTE_ARRAY lengths, prefixes: {}, suffixes: {}",
-                num_prefix, num_suffix
+                "inconsistent DELTA_BYTE_ARRAY lengths, prefixes: {num_prefix}, suffixes: {num_suffix}"
             )));
         }
 
@@ -97,9 +97,8 @@ impl DeltaByteArrayDecoder {
             }
 
             self.last_value.truncate(prefix_length);
-            self.last_value.extend_from_slice(
-                &data[self.data_offset..self.data_offset + suffix_length],
-            );
+            self.last_value
+                .extend_from_slice(&data[self.data_offset..self.data_offset + suffix_length]);
             f(&self.last_value)?;
 
             self.data_offset += suffix_length;
@@ -129,9 +128,8 @@ impl DeltaByteArrayDecoder {
             }
 
             self.last_value.truncate(prefix_length);
-            self.last_value.extend_from_slice(
-                &data[self.data_offset..self.data_offset + suffix_length],
-            );
+            self.last_value
+                .extend_from_slice(&data[self.data_offset..self.data_offset + suffix_length]);
             self.data_offset += suffix_length;
         }
         self.length_offset += to_skip;

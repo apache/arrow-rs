@@ -17,6 +17,10 @@
 
 name: miri
 
+concurrency:
+  group: ${{ github.repository }}-${{ github.head_ref || github.sha }}-${{ github.workflow }}
+  cancel-in-progress: true
+
 # trigger for all PRs that touch certain files and changes to master
 on:
   push:
@@ -24,15 +28,26 @@ on:
       - master
   pull_request:
     paths:
-      - arrow/**
       - .github/**
+      - arrow-array/**
+      - arrow-buffer/**
+      - arrow-cast/**
+      - arrow-csv/**
+      - arrow-data/**
+      - arrow-ipc/**
+      - arrow-json/**
+      - arrow-avro/**
+      - arrow-schema/**
+      - arrow-select/**
+      - arrow-string/**
+      - arrow/**
 
 jobs:
   miri-checks:
     name: MIRI
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
         with:
           submodules: true
       - name: Setup Rust toolchain
@@ -44,5 +59,4 @@ jobs:
         env:
           RUST_BACKTRACE: full
           RUST_LOG: "trace"
-        run: |
-          bash .github/workflows/miri.sh
+        run: bash .github/workflows/miri.sh
