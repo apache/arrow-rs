@@ -179,7 +179,6 @@ fn merge_ranges(ranges: &[std::ops::Range<usize>], coalesce: usize) -> Vec<std::
 /// These can be created from [usize] ranges, like
 ///
 /// ```rust
-/// # use byteranges::request::HttpRange;
 /// let range1: HttpRange = (50..150).into();
 /// let range2: HttpRange = (50..=150).into();
 /// let range3: HttpRange = (50..).into();
