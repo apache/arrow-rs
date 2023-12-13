@@ -107,7 +107,7 @@ pub struct GoogleCloudStorageBuilder {
     retry_config: RetryConfig,
     /// Client options
     client_options: ClientOptions,
-    /// Credentials
+    /// Credentials. Uses instance metadata credentials if not provided
     credentials: Option<GcpCredentialProvider>,
 }
 
@@ -393,7 +393,6 @@ impl GoogleCloudStorageBuilder {
         self
     }
 
-    /// Set the credential provider overriding any other options. Default: [`InstanceCredentialProvider`]
     pub fn with_credentials(mut self, credentials: GcpCredentialProvider) -> Self {
         self.credentials = Some(credentials);
         self
