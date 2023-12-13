@@ -488,7 +488,7 @@ impl GetSuffixClient for GoogleCloudStorageClient {
                 path: path.as_ref(),
             })?;
 
-        response_to_get_result::<GoogleCloudStorageClient>(
+        response_to_get_result::<Self>(
             response,
             path,
             Some(HttpRange::new_suffix(nbytes)),

@@ -353,7 +353,7 @@ impl GetSuffixClient for Client {
             });
         }
 
-        response_to_get_result::<Client>(res, location, Some(HttpRange::new_suffix(nbytes)))?
+        response_to_get_result::<Self>(res, location, Some(HttpRange::new_suffix(nbytes)))?
             .bytes()
             .await
     }

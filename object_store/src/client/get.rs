@@ -72,7 +72,7 @@ pub(crate) fn response_to_get_result<T: GetClient>(
 #[async_trait]
 impl<T: GetClient> GetClientExt for T {
     async fn get_opts(&self, location: &Path, options: GetOptions) -> Result<GetResult> {
-        let range = options.range.clone().map(|r| HttpRange::from(r));
+        let range = options.range.clone().map(HttpRange::from);
         let response = self.get_request(location, options).await?;
         response_to_get_result::<T>(response, location, range)
     }

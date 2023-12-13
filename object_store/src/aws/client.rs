@@ -693,7 +693,7 @@ impl GetSuffixClient for S3Client {
                 path: location.as_ref(),
             })?;
 
-        response_to_get_result::<S3Client>(response, location, Some(HttpRange::new_suffix(nbytes)))?
+        response_to_get_result::<Self>(response, location, Some(HttpRange::new_suffix(nbytes)))?
             .bytes()
             .await
     }

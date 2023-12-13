@@ -228,18 +228,18 @@ impl HttpRange {
     /// The index of the first byte requested ([None] for suffix).
     pub fn first_byte(&self) -> Option<usize> {
         match self {
-            HttpRange::Range { first, .. } => Some(*first),
-            HttpRange::Offset { first } => Some(*first),
-            HttpRange::Suffix { .. } => None,
+            Self::Range { first, .. } => Some(*first),
+            Self::Offset { first } => Some(*first),
+            Self::Suffix { .. } => None,
         }
     }
 
     /// The index of the last byte requested ([None] for offset or suffix).
     pub fn last_byte(&self) -> Option<usize> {
         match self {
-            HttpRange::Range { first: _, last } => Some(*last),
-            HttpRange::Offset { .. } => None,
-            HttpRange::Suffix { .. } => None,
+            Self::Range { first: _, last } => Some(*last),
+            Self::Offset { .. } => None,
+            Self::Suffix { .. } => None,
         }
     }
 }
@@ -253,9 +253,9 @@ impl<T: RangeBounds<usize>> From<T> for HttpRange {
             Unbounded => 0,
         };
         match value.end_bound() {
-            Included(i) => HttpRange::new_range(first, *i),
-            Excluded(i) => HttpRange::new_range(first, i.saturating_sub(1)),
-            Unbounded => HttpRange::new_offset(first),
+            Included(i) => Self::new_range(first, *i),
+            Excluded(i) => Self::new_range(first, i.saturating_sub(1)),
+            Unbounded => Self::new_offset(first),
         }
     }
 }
@@ -263,22 +263,23 @@ impl<T: RangeBounds<usize>> From<T> for HttpRange {
 impl Display for HttpRange {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            HttpRange::Range { first, last } => f.write_fmt(format_args!("{first}-{last}")),
-            HttpRange::Offset { first } => f.write_fmt(format_args!("{first}-")),
-            HttpRange::Suffix { nbytes } => f.write_fmt(format_args!("-{nbytes}")),
+            Self::Range { first, last } => f.write_fmt(format_args!("{first}-{last}")),
+            Self::Offset { first } => f.write_fmt(format_args!("{first}-")),
+            Self::Suffix { nbytes } => f.write_fmt(format_args!("-{nbytes}")),
         }
     }
 }
 
 pub(crate) fn concrete_range(range: Option<HttpRange>, size: usize) -> Range<usize> {
-    let Some(r) = range else {
-        return 0..size;
-    };
-    let start = r.first_byte().unwrap_or(0);
-    let end = r
-        .last_byte()
-        .map_or(size, |b| b.saturating_add(1).min(size));
-    start..end
+    if let Some(r) = range {
+        let start = r.first_byte().unwrap_or(0);
+        let end = r
+            .last_byte()
+            .map_or(size, |b| b.saturating_add(1).min(size));
+        start..end
+    } else {
+        0..size
+    }
 }
 
 #[cfg(test)]
