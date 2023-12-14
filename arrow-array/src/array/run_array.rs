@@ -16,6 +16,7 @@
 // under the License.
 
 use std::any::Any;
+use std::borrow::Cow;
 use std::sync::Arc;
 
 use arrow_buffer::{ArrowNativeType, BooleanBufferBuilder, NullBuffer, RunEndBuffer};
@@ -339,7 +340,7 @@ impl<T: RunEndIndexType> Array for RunArray<T> {
         None
     }
 
-    fn logical_nulls(&self) -> Option<NullBuffer> {
+    fn logical_nulls(&self) -> Option<Cow<'_, NullBuffer>> {
         let len = self.len();
         let nulls = self.values.logical_nulls()?;
         let mut out = BooleanBufferBuilder::new(len);
@@ -369,7 +370,7 @@ impl<T: RunEndIndexType> Array for RunArray<T> {
         }
         // Sanity check
         assert_eq!(out.len(), len);
-        Some(out.finish().into())
+        Some(Cow::Owned(out.finish().into()))
     }
 
     fn is_nullable(&self) -> bool {
@@ -593,7 +594,7 @@ impl<'a, R: RunEndIndexType, V: Sync> Array for TypedRunArray<'a, R, V> {
         self.run_array.nulls()
     }
 
-    fn logical_nulls(&self) -> Option<NullBuffer> {
+    fn logical_nulls(&self) -> Option<Cow<'_, NullBuffer>> {
         self.run_array.logical_nulls()
     }
 
@@ -660,11 +661,12 @@ mod tests {
     use rand::thread_rng;
     use rand::Rng;
 
-    use super::*;
     use crate::builder::PrimitiveRunBuilder;
     use crate::cast::AsArray;
     use crate::types::{Int16Type, Int32Type, Int8Type, UInt32Type};
     use crate::{Array, Int32Array, StringArray};
+
+    use super::*;
 
     fn build_input_array(size: usize) -> Vec<Option<i32>> {
         // The input array is created by shuffling and repeating

@@ -17,12 +17,13 @@
 
 //! Idiomatic iterators for [`Array`](crate::Array)
 
+use arrow_buffer::NullBuffer;
+
 use crate::array::{
     ArrayAccessor, BooleanArray, FixedSizeBinaryArray, GenericBinaryArray, GenericListArray,
     GenericStringArray, PrimitiveArray,
 };
 use crate::{FixedSizeListArray, MapArray};
-use arrow_buffer::NullBuffer;
 
 /// An iterator that returns Some(T) or None, that can be used on any [`ArrayAccessor`]
 ///
@@ -56,7 +57,7 @@ impl<T: ArrayAccessor> ArrayIter<T> {
     /// create a new iterator
     pub fn new(array: T) -> Self {
         let len = array.len();
-        let logical_nulls = array.logical_nulls();
+        let logical_nulls = array.logical_nulls().map(|n| n.into_owned());
         ArrayIter {
             array,
             logical_nulls,

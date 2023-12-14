@@ -17,55 +17,45 @@
 
 //! The concrete array definitions
 
-mod binary_array;
+use std::any::Any;
+use std::borrow::Cow;
+use std::sync::Arc;
 
-use crate::types::*;
 use arrow_buffer::{ArrowNativeType, NullBuffer, OffsetBuffer, ScalarBuffer};
 use arrow_data::ArrayData;
 use arrow_schema::{DataType, IntervalUnit, TimeUnit};
-use std::any::Any;
-use std::sync::Arc;
-
 pub use binary_array::*;
-
-mod boolean_array;
 pub use boolean_array::*;
-
-mod byte_array;
 pub use byte_array::*;
-
-mod dictionary_array;
 pub use dictionary_array::*;
-
-mod fixed_size_binary_array;
 pub use fixed_size_binary_array::*;
-
-mod fixed_size_list_array;
 pub use fixed_size_list_array::*;
-
-mod list_array;
 pub use list_array::*;
-
-mod map_array;
 pub use map_array::*;
-
-mod null_array;
 pub use null_array::*;
-
-mod primitive_array;
 pub use primitive_array::*;
-
-mod string_array;
+pub use run_array::*;
 pub use string_array::*;
-
-mod struct_array;
 pub use struct_array::*;
-
-mod union_array;
 pub use union_array::*;
 
+use crate::types::*;
+
+mod binary_array;
+
+mod boolean_array;
+mod byte_array;
+mod dictionary_array;
+mod fixed_size_binary_array;
+mod fixed_size_list_array;
+mod list_array;
+mod map_array;
+mod null_array;
+mod primitive_array;
 mod run_array;
-pub use run_array::*;
+mod string_array;
+mod struct_array;
+mod union_array;
 
 /// An array in the [arrow columnar format](https://arrow.apache.org/docs/format/Columnar.html)
 pub trait Array: std::fmt::Debug + Send + Sync {
@@ -192,8 +182,23 @@ pub trait Array: std::fmt::Debug + Send + Sync {
     ///
     /// In these cases a logical [`NullBuffer`] will be computed, encoding the logical nullability
     /// of these arrays, beyond what is encoded in [`Array::nulls`]
-    fn logical_nulls(&self) -> Option<NullBuffer> {
-        self.nulls().cloned()
+    ///
+    /// # Example:
+    /// ```
+    /// # use arrow_array::{Array, Int32Array};
+    /// # use arrow_buffer::NullBuffer;
+    /// # let array: Int32Array = [Some(1), None, Some(3)].into_iter().collect();
+    ///
+    /// // to get a Option<&NullBuffer> requires using `as_ref`:
+    /// let logical_nulls = array.logical_nulls();
+    /// let logical_nulls_ref: Option<&NullBuffer> = logical_nulls.as_ref().map(|n| n.as_ref());
+    ///
+    /// // use into_owned to get an owned `NullBuffer`
+    /// let logical_nulls = array.logical_nulls();
+    /// let logical_nulls_owned: Option<NullBuffer> = logical_nulls.map(|n| n.into_owned());
+    /// ```
+    fn logical_nulls(&self) -> Option<Cow<'_, NullBuffer>> {
+        self.nulls().map(Cow::Borrowed)
     }
 
     /// Returns whether the element at `index` is null according to [`Array::nulls`]
@@ -321,7 +326,7 @@ impl Array for ArrayRef {
         self.as_ref().nulls()
     }
 
-    fn logical_nulls(&self) -> Option<NullBuffer> {
+    fn logical_nulls(&self) -> Option<Cow<'_, NullBuffer>> {
         self.as_ref().logical_nulls()
     }
 
@@ -387,7 +392,7 @@ impl<'a, T: Array> Array for &'a T {
         T::nulls(self)
     }
 
-    fn logical_nulls(&self) -> Option<NullBuffer> {
+    fn logical_nulls(&self) -> Option<Cow<'_, NullBuffer>> {
         T::logical_nulls(self)
     }
 
@@ -705,11 +710,13 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::cast::{as_union_array, downcast_array};
-    use crate::downcast_run_array;
     use arrow_buffer::MutableBuffer;
     use arrow_schema::{Field, Fields, UnionFields, UnionMode};
+
+    use crate::cast::{as_union_array, downcast_array};
+    use crate::downcast_run_array;
+
+    use super::*;
 
     #[test]
     fn test_empty_primitive() {

@@ -770,7 +770,7 @@ impl LexicographicalComparator {
                 // flatten and convert build comparators
                 let values = column.values.as_ref();
                 Ok((
-                    values.logical_nulls(),
+                    values.logical_nulls().map(|n| n.into_owned()),
                     build_compare(values, values)?,
                     column.options.unwrap_or_default(),
                 ))

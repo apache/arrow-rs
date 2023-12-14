@@ -194,7 +194,10 @@ where
         return Ok(PrimitiveArray::from(ArrayData::new_empty(&O::DATA_TYPE)));
     }
 
-    let nulls = NullBuffer::union(a.logical_nulls().as_ref(), b.logical_nulls().as_ref());
+    let nulls = NullBuffer::union(
+        a.logical_nulls().as_ref().map(|n| n.as_ref()),
+        b.logical_nulls().as_ref().map(|n| n.as_ref()),
+    );
 
     let values = a.values().iter().zip(b.values()).map(|(l, r)| op(*l, *r));
     // JUSTIFICATION
@@ -244,7 +247,10 @@ where
         ))));
     }
 
-    let nulls = NullBuffer::union(a.logical_nulls().as_ref(), b.logical_nulls().as_ref());
+    let nulls = NullBuffer::union(
+        a.logical_nulls().as_ref().map(|n| n.as_ref()),
+        b.logical_nulls().as_ref().map(|n| n.as_ref()),
+    );
 
     let mut builder = a.into_builder()?;
 
@@ -292,8 +298,11 @@ where
     if a.null_count() == 0 && b.null_count() == 0 {
         try_binary_no_nulls(len, a, b, op)
     } else {
-        let nulls =
-            NullBuffer::union(a.logical_nulls().as_ref(), b.logical_nulls().as_ref()).unwrap();
+        let nulls = NullBuffer::union(
+            a.logical_nulls().as_ref().map(|n| n.as_ref()),
+            b.logical_nulls().as_ref().map(|n| n.as_ref()),
+        )
+        .unwrap();
 
         let mut buffer = BufferBuilder::<O::Native>::new(len);
         buffer.append_n_zeroed(len);
@@ -351,8 +360,11 @@ where
     if a.null_count() == 0 && b.null_count() == 0 {
         try_binary_no_nulls_mut(len, a, b, op)
     } else {
-        let nulls =
-            NullBuffer::union(a.logical_nulls().as_ref(), b.logical_nulls().as_ref()).unwrap();
+        let nulls = NullBuffer::union(
+            a.logical_nulls().as_ref().map(|n| n.as_ref()),
+            b.logical_nulls().as_ref().map(|n| n.as_ref()),
+        )
+        .unwrap();
 
         let mut builder = a.into_builder()?;
 

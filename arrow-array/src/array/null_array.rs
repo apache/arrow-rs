@@ -23,6 +23,7 @@ use arrow_buffer::buffer::NullBuffer;
 use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::DataType;
 use std::any::Any;
+use std::borrow::Cow;
 use std::sync::Arc;
 
 /// An array of [null values](https://arrow.apache.org/docs/format/Columnar.html#null-layout)
@@ -109,8 +110,8 @@ impl Array for NullArray {
         None
     }
 
-    fn logical_nulls(&self) -> Option<NullBuffer> {
-        (self.len != 0).then(|| NullBuffer::new_null(self.len))
+    fn logical_nulls(&self) -> Option<Cow<'_, NullBuffer>> {
+        (self.len != 0).then(|| Cow::Owned(NullBuffer::new_null(self.len)))
     }
 
     fn is_nullable(&self) -> bool {
