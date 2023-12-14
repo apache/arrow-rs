@@ -172,7 +172,8 @@ pub trait Array: std::fmt::Debug + Send + Sync {
     /// you can use the slower [`Array::logical_nulls`] to obtain a computed mask .
     fn nulls(&self) -> Option<&NullBuffer>;
 
-    /// Returns a potentially computed [`NullBuffer`] that represent the logical null values of this array, if any.
+    /// Returns a potentially computed [`NullBuffer`] that represent the logical
+    /// null values of this array, if any.
     ///
     /// In most cases this will be the same as [`Array::nulls`], except for:
     ///
@@ -182,6 +183,9 @@ pub trait Array: std::fmt::Debug + Send + Sync {
     ///
     /// In these cases a logical [`NullBuffer`] will be computed, encoding the logical nullability
     /// of these arrays, beyond what is encoded in [`Array::nulls`]
+    ///
+    /// Returns a [`Cow<'_, NullBuffer>`] to avoid a copy of the null buffer
+    /// when it is already present.
     ///
     /// # Example:
     /// ```
