@@ -1433,6 +1433,14 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_multipart_lazy() {
+        let root = TempDir::new().unwrap();
+        let integration = LocalFileSystem::new_with_prefix(root.path()).unwrap();
+        let store = Arc::new(integration);
+        crate::tests::multipart_lazy(store).await;
+    }
+
+    #[tokio::test]
     async fn filesystem_filename_with_percent() {
         let temp_dir = TempDir::new().unwrap();
         let integration = LocalFileSystem::new_with_prefix(temp_dir.path()).unwrap();

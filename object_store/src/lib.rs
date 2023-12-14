@@ -2115,6 +2115,38 @@ mod tests {
         assert_eq!(meta.size, chunk_size * 2);
     }
 
+    pub(crate) async fn multipart_lazy(storage: Arc<DynObjectStore>) {
+        let path = Path::from("test_multipart_lazy");
+        let chunk_size = 5 * 1024 * 1024;
+
+        let chunks = get_chunks(chunk_size, 1);
+        let mut w = crate::multipart::put_multipart_lazy(
+            Arc::clone(&storage),
+            path.clone(),
+            10 * 1024 * 1024,
+        );
+        for chunk in chunks {
+            w.write_all(&chunk).await.unwrap();
+        }
+        w.shutdown().await.unwrap();
+
+        let meta = storage.head(&path).await.unwrap();
+        assert_eq!(meta.size, chunk_size);
+
+        let mut w = crate::multipart::put_multipart_lazy(
+            Arc::clone(&storage),
+            path.clone(),
+            10 * 1024 * 1024,
+        );
+        let chunks = get_chunks(chunk_size, 4);
+        for chunk in chunks {
+            w.write_all(&chunk).await.unwrap();
+        }
+        w.shutdown().await.unwrap();
+        let meta = storage.head(&path).await.unwrap();
+        assert_eq!(meta.size, chunk_size * 4);
+    }
+
     #[cfg(any(feature = "aws", feature = "azure"))]
     pub(crate) async fn tagging<F, Fut>(storage: &dyn ObjectStore, validate: bool, get_tags: F)
     where
