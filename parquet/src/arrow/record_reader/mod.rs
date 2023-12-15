@@ -18,7 +18,7 @@
 use arrow_buffer::Buffer;
 
 use crate::arrow::record_reader::{
-    buffer::{BufferQueue, ValuesBuffer},
+    buffer::ValuesBuffer,
     definition_levels::{DefinitionLevelBuffer, DefinitionLevelBufferDecoder},
 };
 use crate::column::reader::decoder::RepetitionLevelDecoderImpl;
@@ -62,28 +62,18 @@ pub struct GenericRecordReader<V, CV> {
 
 impl<V, CV> GenericRecordReader<V, CV>
 where
-    V: ValuesBuffer + Default,
-    CV: ColumnValueDecoder<Slice = V::Slice>,
+    V: ValuesBuffer,
+    CV: ColumnValueDecoder<Buffer = V>,
 {
     /// Create a new [`GenericRecordReader`]
     pub fn new(desc: ColumnDescPtr) -> Self {
-        Self::new_with_records(desc, V::default())
-    }
-}
-
-impl<V, CV> GenericRecordReader<V, CV>
-where
-    V: ValuesBuffer,
-    CV: ColumnValueDecoder<Slice = V::Slice>,
-{
-    pub fn new_with_records(desc: ColumnDescPtr, records: V) -> Self {
         let def_levels = (desc.max_def_level() > 0)
             .then(|| DefinitionLevelBuffer::new(&desc, packed_null_mask(&desc)));
 
         let rep_levels = (desc.max_rep_level() > 0).then(Vec::new);
 
         Self {
-            values: records,
+            values: V::default(),
             def_levels,
             rep_levels,
             column_reader: None,
@@ -166,22 +156,20 @@ where
     /// The implementation has side effects. It will create a new buffer to hold those
     /// definition level values that have already been read into memory but not counted
     /// as record values, e.g. those from `self.num_values` to `self.values_written`.
-    pub fn consume_def_levels(&mut self) -> Option<Buffer> {
+    pub fn consume_def_levels(&mut self) -> Option<Vec<i16>> {
         self.def_levels.as_mut().and_then(|x| x.consume_levels())
     }
 
     /// Return repetition level data.
     /// The side effect is similar to `consume_def_levels`.
-    pub fn consume_rep_levels(&mut self) -> Option<Buffer> {
-        self.rep_levels
-            .as_mut()
-            .map(|x| Buffer::from_vec(x.consume()))
+    pub fn consume_rep_levels(&mut self) -> Option<Vec<i16>> {
+        self.rep_levels.as_mut().map(std::mem::take)
     }
 
     /// Returns currently stored buffer data.
     /// The side effect is similar to `consume_def_levels`.
-    pub fn consume_record_data(&mut self) -> V::Output {
-        self.values.consume()
+    pub fn consume_record_data(&mut self) -> V {
+        std::mem::take(&mut self.values)
     }
 
     /// Returns currently stored null bitmap data.
@@ -207,18 +195,13 @@ where
 
     /// Try to read one batch of data returning the number of records read
     fn read_one_batch(&mut self, batch_size: usize) -> Result<usize> {
-        let rep_levels = self
-            .rep_levels
-            .as_mut()
-            .map(|levels| levels.get_output_slice(batch_size));
-        let def_levels = self.def_levels.as_mut();
-        let values = self.values.get_output_slice(batch_size);
-
-        let (records_read, values_read, levels_read) = self
-            .column_reader
-            .as_mut()
-            .unwrap()
-            .read_records(batch_size, def_levels, rep_levels, values)?;
+        let (records_read, values_read, levels_read) =
+            self.column_reader.as_mut().unwrap().read_records(
+                batch_size,
+                self.def_levels.as_mut(),
+                self.rep_levels.as_mut(),
+                &mut self.values,
+            )?;
 
         if values_read < levels_read {
             let def_levels = self.def_levels.as_ref().ok_or_else(|| {
@@ -235,13 +218,6 @@ where
 
         self.num_records += records_read;
         self.num_values += levels_read;
-        self.values.truncate_buffer(self.num_values);
-        if let Some(ref mut buf) = self.rep_levels {
-            buf.truncate_buffer(self.num_values)
-        };
-        if let Some(ref mut buf) = self.def_levels {
-            buf.set_len(self.num_values)
-        };
         Ok(records_read)
     }
 }
@@ -258,7 +234,6 @@ mod tests {
     use std::sync::Arc;
 
     use arrow::buffer::Buffer;
-    use arrow_array::builder::Int16BufferBuilder;
 
     use crate::basic::Encoding;
     use crate::data_type::Int32Type;
@@ -417,11 +392,8 @@ mod tests {
         }
 
         // Verify result def levels
-        let mut bb = Int16BufferBuilder::new(7);
-        bb.append_slice(&[1i16, 2i16, 0i16, 2i16, 2i16, 0i16, 2i16]);
-        let expected_def_levels = bb.finish();
         assert_eq!(
-            Some(expected_def_levels),
+            Some(vec![1i16, 2i16, 0i16, 2i16, 2i16, 0i16, 2i16]),
             record_reader.consume_def_levels()
         );
 
@@ -526,11 +498,8 @@ mod tests {
         }
 
         // Verify result def levels
-        let mut bb = Int16BufferBuilder::new(9);
-        bb.append_slice(&[2i16, 0i16, 1i16, 2i16, 2i16, 2i16, 2i16, 2i16, 2i16]);
-        let expected_def_levels = bb.finish();
         assert_eq!(
-            Some(expected_def_levels),
+            Some(vec![2i16, 0i16, 1i16, 2i16, 2i16, 2i16, 2i16, 2i16, 2i16]),
             record_reader.consume_def_levels()
         );
 
@@ -792,11 +761,8 @@ mod tests {
         }
 
         // Verify result def levels
-        let mut bb = Int16BufferBuilder::new(7);
-        bb.append_slice(&[0i16, 2i16, 2i16]);
-        let expected_def_levels = bb.finish();
         assert_eq!(
-            Some(expected_def_levels),
+            Some(vec![0i16, 2i16, 2i16]),
             record_reader.consume_def_levels()
         );
 

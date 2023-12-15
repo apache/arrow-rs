@@ -18,12 +18,12 @@
 use crate::arrow::array_reader::{read_records, skip_records, ArrayReader};
 use crate::arrow::buffer::bit_util::{iter_set_bits_rev, sign_extend_be};
 use crate::arrow::decoder::{DeltaByteArrayDecoder, DictIndexDecoder};
-use crate::arrow::record_reader::buffer::{BufferQueue, ValuesBuffer};
+use crate::arrow::record_reader::buffer::ValuesBuffer;
 use crate::arrow::record_reader::GenericRecordReader;
 use crate::arrow::schema::parquet_to_arrow_field;
 use crate::basic::{Encoding, Type};
 use crate::column::page::PageIterator;
-use crate::column::reader::decoder::{ColumnValueDecoder, ValuesBufferSlice};
+use crate::column::reader::decoder::ColumnValueDecoder;
 use crate::errors::{ParquetError, Result};
 use crate::schema::types::ColumnDescPtr;
 use arrow_array::{
@@ -36,7 +36,6 @@ use arrow_schema::{DataType as ArrowType, IntervalUnit};
 use bytes::Bytes;
 use half::f16;
 use std::any::Any;
-use std::ops::Range;
 use std::sync::Arc;
 
 /// Returns an [`ArrayReader`] that decodes the provided fixed length byte array column
@@ -117,8 +116,8 @@ struct FixedLenByteArrayReader {
     data_type: ArrowType,
     byte_length: usize,
     pages: Box<dyn PageIterator>,
-    def_levels_buffer: Option<Buffer>,
-    rep_levels_buffer: Option<Buffer>,
+    def_levels_buffer: Option<Vec<i16>>,
+    rep_levels_buffer: Option<Vec<i16>>,
     record_reader: GenericRecordReader<FixedLenByteArrayBuffer, ValueDecoder>,
 }
 
@@ -135,13 +134,7 @@ impl FixedLenByteArrayReader {
             pages,
             def_levels_buffer: None,
             rep_levels_buffer: None,
-            record_reader: GenericRecordReader::new_with_records(
-                column_desc,
-                FixedLenByteArrayBuffer {
-                    buffer: Default::default(),
-                    byte_length,
-                },
-            ),
+            record_reader: GenericRecordReader::new(column_desc),
         }
     }
 }
@@ -164,7 +157,7 @@ impl ArrayReader for FixedLenByteArrayReader {
 
         let array_data = ArrayDataBuilder::new(ArrowType::FixedSizeBinary(self.byte_length as i32))
             .len(self.record_reader.num_values())
-            .add_buffer(record_data)
+            .add_buffer(Buffer::from_vec(record_data.buffer))
             .null_bit_buffer(self.record_reader.consume_bitmap_buffer());
 
         let binary = FixedSizeBinaryArray::from(unsafe { array_data.build_unchecked() });
@@ -231,41 +224,19 @@ impl ArrayReader for FixedLenByteArrayReader {
     }
 
     fn get_def_levels(&self) -> Option<&[i16]> {
-        self.def_levels_buffer.as_ref().map(|buf| buf.typed_data())
+        self.def_levels_buffer.as_deref()
     }
 
     fn get_rep_levels(&self) -> Option<&[i16]> {
-        self.rep_levels_buffer.as_ref().map(|buf| buf.typed_data())
+        self.rep_levels_buffer.as_deref()
     }
 }
 
+#[derive(Default)]
 struct FixedLenByteArrayBuffer {
     buffer: Vec<u8>,
     /// The length of each element in bytes
-    byte_length: usize,
-}
-
-impl ValuesBufferSlice for FixedLenByteArrayBuffer {
-    fn capacity(&self) -> usize {
-        usize::MAX
-    }
-}
-
-impl BufferQueue for FixedLenByteArrayBuffer {
-    type Output = Buffer;
-    type Slice = Self;
-
-    fn consume(&mut self) -> Self::Output {
-        Buffer::from_vec(self.buffer.consume())
-    }
-
-    fn get_output_slice(&mut self, _batch_size: usize) -> &mut Self::Slice {
-        self
-    }
-
-    fn truncate_buffer(&mut self, len: usize) {
-        assert_eq!(self.buffer.len(), len * self.byte_length);
-    }
+    byte_length: Option<usize>,
 }
 
 impl ValuesBuffer for FixedLenByteArrayBuffer {
@@ -276,12 +247,11 @@ impl ValuesBuffer for FixedLenByteArrayBuffer {
         levels_read: usize,
         valid_mask: &[u8],
     ) {
-        assert_eq!(
-            self.buffer.len(),
-            (read_offset + values_read) * self.byte_length
-        );
+        let byte_length = self.byte_length.unwrap_or_default();
+
+        assert_eq!(self.buffer.len(), (read_offset + values_read) * byte_length);
         self.buffer
-            .resize((read_offset + levels_read) * self.byte_length, 0);
+            .resize((read_offset + levels_read) * byte_length, 0);
 
         let values_range = read_offset..read_offset + values_read;
         for (value_pos, level_pos) in values_range.rev().zip(iter_set_bits_rev(valid_mask)) {
@@ -290,10 +260,10 @@ impl ValuesBuffer for FixedLenByteArrayBuffer {
                 break;
             }
 
-            let level_pos_bytes = level_pos * self.byte_length;
-            let value_pos_bytes = value_pos * self.byte_length;
+            let level_pos_bytes = level_pos * byte_length;
+            let value_pos_bytes = value_pos * byte_length;
 
-            for i in 0..self.byte_length {
+            for i in 0..byte_length {
                 self.buffer[level_pos_bytes + i] = self.buffer[value_pos_bytes + i]
             }
         }
@@ -307,7 +277,7 @@ struct ValueDecoder {
 }
 
 impl ColumnValueDecoder for ValueDecoder {
-    type Slice = FixedLenByteArrayBuffer;
+    type Buffer = FixedLenByteArrayBuffer;
 
     fn new(col: &ColumnDescPtr) -> Self {
         Self {
@@ -374,13 +344,16 @@ impl ColumnValueDecoder for ValueDecoder {
         Ok(())
     }
 
-    fn read(&mut self, out: &mut Self::Slice, range: Range<usize>) -> Result<usize> {
-        assert_eq!(self.byte_length, out.byte_length);
+    fn read(&mut self, out: &mut Self::Buffer, num_values: usize) -> Result<usize> {
+        match out.byte_length {
+            Some(x) => assert_eq!(x, self.byte_length),
+            None => out.byte_length = Some(self.byte_length),
+        }
 
-        let len = range.end - range.start;
         match self.decoder.as_mut().unwrap() {
             Decoder::Plain { offset, buf } => {
-                let to_read = (len * self.byte_length).min(buf.len() - *offset) / self.byte_length;
+                let to_read =
+                    (num_values * self.byte_length).min(buf.len() - *offset) / self.byte_length;
                 let end_offset = *offset + to_read * self.byte_length;
                 out.buffer
                     .extend_from_slice(&buf.as_ref()[*offset..end_offset]);
@@ -394,7 +367,7 @@ impl ColumnValueDecoder for ValueDecoder {
                     return Ok(0);
                 }
 
-                decoder.read(len, |keys| {
+                decoder.read(num_values, |keys| {
                     out.buffer.reserve(keys.len() * self.byte_length);
                     for key in keys {
                         let offset = *key as usize * self.byte_length;
@@ -405,7 +378,7 @@ impl ColumnValueDecoder for ValueDecoder {
                 })
             }
             Decoder::Delta { decoder } => {
-                let to_read = len.min(decoder.remaining());
+                let to_read = num_values.min(decoder.remaining());
                 out.buffer.reserve(to_read * self.byte_length);
 
                 decoder.read(to_read, |slice| {

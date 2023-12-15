@@ -15,8 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::ops::Range;
-
 use arrow_array::builder::BooleanBufferBuilder;
 use arrow_buffer::bit_chunk_iterator::UnalignedBitChunk;
 use arrow_buffer::Buffer;
@@ -25,7 +23,7 @@ use bytes::Bytes;
 use crate::arrow::buffer::bit_util::count_set_bits;
 use crate::basic::Encoding;
 use crate::column::reader::decoder::{
-    ColumnLevelDecoder, DefinitionLevelDecoder, DefinitionLevelDecoderImpl, LevelsBufferSlice,
+    ColumnLevelDecoder, DefinitionLevelDecoder, DefinitionLevelDecoderImpl,
 };
 use crate::errors::{ParquetError, Result};
 use crate::schema::types::ColumnDescPtr;
@@ -85,16 +83,11 @@ impl DefinitionLevelBuffer {
     }
 
     /// Returns the built level data
-    pub fn consume_levels(&mut self) -> Option<Buffer> {
+    pub fn consume_levels(&mut self) -> Option<Vec<i16>> {
         match &mut self.inner {
-            BufferInner::Full { levels, .. } => Some(Buffer::from_vec(std::mem::take(levels))),
+            BufferInner::Full { levels, .. } => Some(std::mem::take(levels)),
             BufferInner::Mask { .. } => None,
         }
-    }
-
-    pub fn set_len(&mut self, len: usize) {
-        assert_eq!(self.nulls().len(), len);
-        self.len = len;
     }
 
     /// Returns the built null bitmask
@@ -111,18 +104,6 @@ impl DefinitionLevelBuffer {
             BufferInner::Full { nulls, .. } => nulls,
             BufferInner::Mask { nulls } => nulls,
         }
-    }
-}
-
-impl LevelsBufferSlice for DefinitionLevelBuffer {
-    fn capacity(&self) -> usize {
-        usize::MAX
-    }
-
-    fn count_nulls(&self, range: Range<usize>, _max_level: i16) -> usize {
-        let total_count = range.end - range.start;
-        let range = range.start + self.len..range.end + self.len;
-        total_count - count_set_bits(self.nulls().as_slice(), range)
     }
 }
 
@@ -148,7 +129,7 @@ impl DefinitionLevelBufferDecoder {
 }
 
 impl ColumnLevelDecoder for DefinitionLevelBufferDecoder {
-    type Slice = DefinitionLevelBuffer;
+    type Buffer = DefinitionLevelBuffer;
 
     fn set_data(&mut self, encoding: Encoding, data: Bytes) {
         match &mut self.decoder {
@@ -159,7 +140,11 @@ impl ColumnLevelDecoder for DefinitionLevelBufferDecoder {
 }
 
 impl DefinitionLevelDecoder for DefinitionLevelBufferDecoder {
-    fn read_def_levels(&mut self, writer: &mut Self::Slice, range: Range<usize>) -> Result<usize> {
+    fn read_def_levels(
+        &mut self,
+        writer: &mut Self::Buffer,
+        num_levels: usize,
+    ) -> Result<(usize, usize)> {
         match (&mut writer.inner, &mut self.decoder) {
             (
                 BufferInner::Full {
@@ -170,33 +155,33 @@ impl DefinitionLevelDecoder for DefinitionLevelBufferDecoder {
                 MaybePacked::Fallback(decoder),
             ) => {
                 assert_eq!(self.max_level, *max_level);
-                assert_eq!(range.start + writer.len, nulls.len());
 
-                levels.resize(range.end + writer.len, 0);
-
-                let slice = &mut levels[writer.len..];
-                let levels_read = decoder.read_def_levels(slice, range.clone())?;
+                let start = levels.len();
+                let (values_read, levels_read) = decoder.read_def_levels(levels, num_levels)?;
 
                 nulls.reserve(levels_read);
-                for i in &slice[range.start..range.start + levels_read] {
-                    nulls.append(i == max_level)
+                for i in &levels[start..] {
+                    nulls.append(i == max_level);
                 }
 
-                Ok(levels_read)
+                Ok((values_read, levels_read))
             }
             (BufferInner::Mask { nulls }, MaybePacked::Packed(decoder)) => {
                 assert_eq!(self.max_level, 1);
-                assert_eq!(range.start + writer.len, nulls.len());
 
-                decoder.read(nulls, range.end - range.start)
+                let start = nulls.len();
+                let levels_read = decoder.read(nulls, num_levels)?;
+
+                let values_read = count_set_bits(nulls.as_slice(), start..start + levels_read);
+                Ok((values_read, levels_read))
             }
             _ => unreachable!("inconsistent null mask"),
         }
     }
 
-    fn skip_def_levels(&mut self, num_levels: usize, max_def_level: i16) -> Result<(usize, usize)> {
+    fn skip_def_levels(&mut self, num_levels: usize) -> Result<(usize, usize)> {
         match &mut self.decoder {
-            MaybePacked::Fallback(decoder) => decoder.skip_def_levels(num_levels, max_def_level),
+            MaybePacked::Fallback(decoder) => decoder.skip_def_levels(num_levels),
             MaybePacked::Packed(decoder) => decoder.skip(num_levels),
         }
     }

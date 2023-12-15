@@ -3292,19 +3292,20 @@ mod tests {
             )
             .unwrap(),
         );
-        let reader = get_test_column_reader::<T>(page_reader, max_def_level, max_rep_level);
+        let mut reader = get_test_column_reader::<T>(page_reader, max_def_level, max_rep_level);
 
-        let mut actual_values = vec![T::T::default(); max_batch_size];
-        let mut actual_def_levels = def_levels.map(|_| vec![0i16; max_batch_size]);
-        let mut actual_rep_levels = rep_levels.map(|_| vec![0i16; max_batch_size]);
+        let mut actual_values = Vec::with_capacity(max_batch_size);
+        let mut actual_def_levels = def_levels.map(|_| Vec::with_capacity(max_batch_size));
+        let mut actual_rep_levels = rep_levels.map(|_| Vec::with_capacity(max_batch_size));
 
-        let (_, values_read, levels_read) = read_fully(
-            reader,
-            max_batch_size,
-            actual_def_levels.as_mut(),
-            actual_rep_levels.as_mut(),
-            actual_values.as_mut_slice(),
-        );
+        let (_, values_read, levels_read) = reader
+            .read_records(
+                max_batch_size,
+                actual_def_levels.as_mut(),
+                actual_rep_levels.as_mut(),
+                &mut actual_values,
+            )
+            .unwrap();
 
         // Assert values, definition and repetition levels.
 
@@ -3365,22 +3366,6 @@ mod tests {
         let meta = column_write_and_get_metadata::<T>(props, data);
         assert_eq!(meta.dictionary_page_offset(), dictionary_page_offset);
         assert_eq!(meta.encodings(), &encodings);
-    }
-
-    /// Reads one batch of data, considering that batch is large enough to capture all of
-    /// the values and levels.
-    fn read_fully<T: DataType>(
-        mut reader: ColumnReaderImpl<T>,
-        batch_size: usize,
-        mut def_levels: Option<&mut Vec<i16>>,
-        mut rep_levels: Option<&mut Vec<i16>>,
-        values: &mut [T::T],
-    ) -> (usize, usize, usize) {
-        let actual_def_levels = def_levels.as_mut().map(|vec| &mut vec[..]);
-        let actual_rep_levels = rep_levels.as_mut().map(|vec| &mut vec[..]);
-        reader
-            .read_records(batch_size, actual_def_levels, actual_rep_levels, values)
-            .unwrap()
     }
 
     /// Returns column writer.
