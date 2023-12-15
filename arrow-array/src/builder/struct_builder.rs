@@ -177,6 +177,24 @@ pub fn make_builder(datatype: &DataType, capacity: usize) -> Box<dyn ArrayBuilde
             let builder = make_builder(field.data_type(), capacity);
             Box::new(LargeListBuilder::with_capacity(builder, capacity))
         }
+        DataType::Map(field, _) => match field.data_type() {
+            DataType::Struct(fields) => {
+                let map_field_names = MapFieldNames {
+                    key: fields[0].name().clone(),
+                    value: fields[1].name().clone(),
+                    entry: field.name().clone(),
+                };
+                let key_builder = make_builder(fields[0].data_type(), capacity);
+                let value_builder = make_builder(fields[1].data_type(), capacity);
+                Box::new(MapBuilder::with_capacity(
+                    Some(map_field_names),
+                    key_builder,
+                    value_builder,
+                    capacity,
+                ))
+            }
+            t => panic!("The field of Map data type {t:?} should has a child Struct field"),
+        },
         DataType::Struct(fields) => Box::new(StructBuilder::from_fields(fields.clone(), capacity)),
         t => panic!("Data type {t:?} is not currently supported"),
     }
@@ -514,19 +532,15 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(
-        expected = "Data type Map(Field { name: \"entries\", data_type: Struct([Field { name: \"keys\", data_type: Int32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: \"values\", data_type: UInt32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }]), nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, false) is not currently supported"
-    )]
+    #[should_panic(expected = "Data type Dictionary(Int32, Utf8) is not currently supported")]
     fn test_struct_array_builder_from_schema_unsupported_type() {
-        let keys = Arc::new(Field::new("keys", DataType::Int32, false));
-        let values = Arc::new(Field::new("values", DataType::UInt32, false));
-        let struct_type = DataType::Struct(Fields::from(vec![keys, values]));
-        let map_data_type =
-            DataType::Map(Arc::new(Field::new("entries", struct_type, false)), false);
-
         let fields = vec![
             Field::new("f1", DataType::Int16, false),
-            Field::new("f2", map_data_type, false),
+            Field::new(
+                "f2",
+                DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+                false,
+            ),
         ];
 
         let _ = StructBuilder::from_fields(fields, 5);
