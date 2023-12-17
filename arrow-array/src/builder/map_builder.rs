@@ -120,7 +120,7 @@ impl<K: ArrayBuilder, V: ArrayBuilder> MapBuilder<K, V> {
     }
 
     /// Returns both the key and value array builders of the map
-    pub fn keys_and_values(&mut self) -> (&mut K, &mut V) {
+    pub fn entries(&mut self) -> (&mut K, &mut V) {
         (&mut self.key_builder, &mut self.value_builder)
     }
 

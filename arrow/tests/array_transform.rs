@@ -837,12 +837,12 @@ fn test_map_keys_values_append() {
         Int64Builder::with_capacity(32),
         Int64Builder::with_capacity(32),
     );
-    let (keys, values) = builder.keys_and_values();
+    let (keys, values) = builder.entries();
     keys.append_slice(&[1, 2, 3]);
     values.append_slice(&[1, 3, 4]);
     builder.append(true).unwrap();
 
-    let (keys, values) = builder.keys_and_values();
+    let (keys, values) = builder.entries();
     keys.append_slice(&[4, 5]);
     values.append_slice(&[4, 6]);
     builder.append(true).unwrap();
