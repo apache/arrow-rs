@@ -160,6 +160,12 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
         (Decimal128(_, _) | Decimal256(_, _), Utf8 | LargeUtf8) => true,
         // Utf8 to decimal
         (Utf8 | LargeUtf8, Decimal128(_, _) | Decimal256(_, _)) => true,
+		(Struct(from_fields), Struct(to_fields)) => {
+			from_fields.len() == to_fields.len() &&
+				from_fields.iter().zip(to_fields.iter()).all(|(f1, f2)| {
+					can_cast_types(f1.data_type(), f2.data_type())
+				})
+		}
         (Struct(_), _) => false,
         (_, Struct(_)) => false,
         (_, Boolean) => {
@@ -1138,11 +1144,22 @@ pub fn cast_with_options(
                 ))),
             }
         }
+        (Struct(_), Struct(fields_r)) => {
+            let array = array.as_any().downcast_ref::<StructArray>().unwrap();
+            let fields = array
+                .columns()
+                .iter()
+                .zip(fields_r.iter())
+                .map(|(l, field)| cast_with_options(l, field.data_type(), cast_options))
+                .collect::<Result<Vec<ArrayRef>, ArrowError>>()?;
+            let array = StructArray::new(fields_r.clone(), fields, array.nulls().cloned());
+            Ok(Arc::new(array) as ArrayRef)
+        }
         (Struct(_), _) => Err(ArrowError::CastError(
-            "Cannot cast from struct to other types".to_string(),
+            "Cannot cast from struct to other types except struct".to_string(),
         )),
         (_, Struct(_)) => Err(ArrowError::CastError(
-            "Cannot cast to struct from other types".to_string(),
+            "Cannot cast to struct from other types except struct".to_string(),
         )),
         (_, Boolean) => match from_type {
             UInt8 => cast_numeric_to_bool::<UInt8Type>(array),
