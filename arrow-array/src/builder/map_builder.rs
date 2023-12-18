@@ -119,6 +119,11 @@ impl<K: ArrayBuilder, V: ArrayBuilder> MapBuilder<K, V> {
         &mut self.value_builder
     }
 
+    /// Returns both the key and value array builders of the map
+    pub fn entries(&mut self) -> (&mut K, &mut V) {
+        (&mut self.key_builder, &mut self.value_builder)
+    }
+
     /// Finish the current map array slot
     ///
     /// Returns an error if the key and values builders are in an inconsistent state.

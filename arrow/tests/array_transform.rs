@@ -831,6 +831,57 @@ fn test_map_nulls_append() {
 }
 
 #[test]
+fn test_map_keys_values_append() {
+    let mut builder = MapBuilder::<Int64Builder, Int64Builder>::new(
+        None,
+        Int64Builder::with_capacity(32),
+        Int64Builder::with_capacity(32),
+    );
+    let (keys, values) = builder.entries();
+    keys.append_slice(&[1, 2, 3]);
+    values.append_slice(&[1, 3, 4]);
+    builder.append(true).unwrap();
+
+    let (keys, values) = builder.entries();
+    keys.append_slice(&[4, 5]);
+    values.append_slice(&[4, 6]);
+    builder.append(true).unwrap();
+
+    builder.append(false).unwrap();
+
+    let map = builder.finish();
+    assert!(map.is_null(2));
+
+    let first = map.value(0);
+    let keys = first
+        .column(0)
+        .as_any()
+        .downcast_ref::<Int64Array>()
+        .unwrap();
+    let values = first
+        .column(1)
+        .as_any()
+        .downcast_ref::<Int64Array>()
+        .unwrap();
+    assert_eq!(keys, &Int64Array::from(vec![Some(1), Some(2), Some(3)]));
+    assert_eq!(values, &Int64Array::from(vec![Some(1), Some(3), Some(4)]));
+
+    let second = map.value(1);
+    let keys = second
+        .column(0)
+        .as_any()
+        .downcast_ref::<Int64Array>()
+        .unwrap();
+    let values = second
+        .column(1)
+        .as_any()
+        .downcast_ref::<Int64Array>()
+        .unwrap();
+    assert_eq!(keys, &Int64Array::from(vec![Some(4), Some(5)]));
+    assert_eq!(values, &Int64Array::from(vec![Some(4), Some(6)]));
+}
+
+#[test]
 fn test_list_of_strings_append() {
     // [["alpha", "beta", None]]
     let mut builder = ListBuilder::new(StringBuilder::new());
