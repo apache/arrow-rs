@@ -9518,7 +9518,7 @@ mod tests {
             ]
             .into(),
         );
-		assert!(!can_cast_types(&struct_type, &to_type));
+        assert!(!can_cast_types(&struct_type, &to_type));
         let result = cast(&struct_array, &to_type);
         assert_eq!(
             "Cast error: Casting from Boolean to Date32 not supported",
