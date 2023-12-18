@@ -27,7 +27,7 @@ use arrow_array::cast::AsArray;
 use arrow_array::types::ByteArrayType;
 use arrow_array::{
     downcast_primitive_array, AnyDictionaryArray, Array, ArrowNativeTypeOp, BooleanArray, Datum,
-    FixedSizeBinaryArray, GenericByteArray, StructArray,
+    FixedSizeBinaryArray, GenericByteArray,
 };
 use arrow_buffer::bit_util::ceil;
 use arrow_buffer::{BooleanBuffer, MutableBuffer, NullBuffer};
@@ -335,20 +335,17 @@ fn compare_op_struct_values(
         _ => unreachable!(),
     };
 
-    let l = l.as_any().downcast_ref::<StructArray>().unwrap();
-    let r = r.as_any().downcast_ref::<StructArray>().unwrap();
+    let l = l.as_struct();
+    let r = r.as_struct();
 
-    let mut child_res: Vec<BooleanBuffer> = Vec::with_capacity(len);
     // compare each field of struct
-    for item in l
+    let child_res = l
         .columns()
         .to_vec()
         .iter()
         .zip(r.columns().to_vec().iter())
         .map(|(col_l, col_r)| compare_op_values(Op::Equal, col_l, l_s, col_r, r_s, len))
-    {
-        child_res.push(item?);
-    }
+        .collect::<Result<Vec<BooleanBuffer>, ArrowError>>()?;
     // combine the result of each field
     let equality = child_res
         .iter()
