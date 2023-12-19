@@ -341,9 +341,8 @@ fn compare_op_struct_values(
     // compare each field of struct
     let child_res = l
         .columns()
-        .to_vec()
         .iter()
-        .zip(r.columns().to_vec().iter())
+        .zip(r.columns().iter())
         .map(|(col_l, col_r)| compare_op_values(Op::Equal, col_l, l_s, col_r, r_s, len))
         .collect::<Result<Vec<BooleanBuffer>, ArrowError>>()?;
     // combine the result of each field
