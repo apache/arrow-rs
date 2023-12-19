@@ -1145,7 +1145,7 @@ pub fn cast_with_options(
             }
         }
         (Struct(_), Struct(to_fields)) => {
-            let array = array.as_any().downcast_ref::<StructArray>().unwrap();
+            let array = array.as_struct();
             let fields = array
                 .columns()
                 .iter()
