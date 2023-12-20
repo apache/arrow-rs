@@ -677,13 +677,16 @@ pub(crate) fn apply_range(
     selection
 }
 
-/// Evaluates an [`ArrowPredicate`], returning a [`RowSelection`] indiciating
+/// Evaluates an [`ArrowPredicate`], returning a [`RowSelection`] indicating
 /// which rows to return.
 ///
-/// If the  [`ParquetRecordBatchReader`] also specified an explicit
-/// [`RowSelection`] in addition to a predicate, `input_selection` will be
-/// `Some`. In this case, the final [`RowSelection`] will be the conjunction of
-/// this and the rows selected by `predicate`
+/// `input_selection`: Optional pre-existing selection. If `Some`, then the
+/// final [`RowSelection`] will be the conjunction of it and the rows selected
+/// by `predicate`.
+///
+/// Note: A pre-existing selection may come from evaluating a previous predicate
+/// or if the [`ParquetRecordBatchReader`] specified an explicit
+/// [`RowSelection`] in addition to one or more predicates.
 pub(crate) fn evaluate_predicate(
     batch_size: usize,
     array_reader: Box<dyn ArrayReader>,
