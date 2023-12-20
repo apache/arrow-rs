@@ -241,16 +241,22 @@ impl RowSelection {
             selectors: remaining,
         }
     }
-    /// Given a [`RowSelection`] computed under `self`, returns the [`RowSelection`]
-    /// representing their conjunction
+    /// returns a [`RowSelection`] representing rows that are selected in both
+    /// input [`RowSelection`]s.
     ///
-    /// For example:
+    /// This is equivalent to the logical `AND` / conjunction of the two
+    /// selections.
     ///
+    /// # Example
+    /// If `N` means the row is not selected, and `Y` means it is
+    /// selected:
+    ///
+    /// ```text
     /// self:     NNNNNNNNNNNNYYYYYYYYYYYYYYYYYYYYYYNNNYYYYY
     /// other:                YYYYYNNNNYYYYYYYYYYYYY   YYNNN
     ///
     /// returned: NNNNNNNNNNNNYYYYYNNNNYYYYYYYYYYYYYNNNYYNNN
-    ///
+    /// ```
     ///
     /// # Panics
     ///
