@@ -160,11 +160,13 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
         (Decimal128(_, _) | Decimal256(_, _), Utf8 | LargeUtf8) => true,
         // Utf8 to decimal
         (Utf8 | LargeUtf8, Decimal128(_, _) | Decimal256(_, _)) => true,
-		(Struct(from_fields), Struct(to_fields)) => {
-			from_fields.len() == to_fields.len() &&
-				from_fields.iter().zip(to_fields.iter()).all(|(f1, f2)| {
-					can_cast_types(f1.data_type(), f2.data_type())
-				})
+        (Struct(from_fields), Struct(to_fields)) => {
+            from_fields.len() == to_fields.len() &&
+                from_fields.iter().zip(to_fields.iter()).all(|(f1, f2)| {
+                    // Assume that nullability between two structs are compatible, if not,
+                    // cast kernel will return error.
+                    can_cast_types(f1.data_type(), f2.data_type())
+                })
 		}
         (Struct(_), _) => false,
         (_, Struct(_)) => false,
@@ -1152,7 +1154,7 @@ pub fn cast_with_options(
                 .zip(to_fields.iter())
                 .map(|(l, field)| cast_with_options(l, field.data_type(), cast_options))
                 .collect::<Result<Vec<ArrayRef>, ArrowError>>()?;
-            let array = StructArray::new(to_fields.clone(), fields, array.nulls().cloned());
+            let array = StructArray::try_new(to_fields.clone(), fields, array.nulls().cloned())?;
             Ok(Arc::new(array) as ArrayRef)
         }
         (Struct(_), _) => Err(ArrowError::CastError(
@@ -9523,6 +9525,79 @@ mod tests {
         assert_eq!(
             "Cast error: Casting from Boolean to Date32 not supported",
             result.unwrap_err().to_string()
+        );
+    }
+
+    #[test]
+    fn test_cast_struct_to_struct_nullability() {
+        let boolean = Arc::new(BooleanArray::from(vec![false, false, true, true]));
+        let int = Arc::new(Int32Array::from(vec![Some(42), None, Some(19), None]));
+        let struct_array = StructArray::from(vec![
+            (
+                Arc::new(Field::new("b", DataType::Boolean, false)),
+                boolean.clone() as ArrayRef,
+            ),
+            (
+                Arc::new(Field::new("c", DataType::Int32, true)),
+                int.clone() as ArrayRef,
+            ),
+        ]);
+
+        // okay: nullable to nullable
+        let to_type = DataType::Struct(
+            vec![
+                Field::new("a", DataType::Utf8, false),
+                Field::new("b", DataType::Utf8, true),
+            ]
+            .into(),
+        );
+        cast(&struct_array, &to_type).expect("Cast nullable to nullable struct field should work");
+
+        // error: nullable to non-nullable
+        let to_type = DataType::Struct(
+            vec![
+                Field::new("a", DataType::Utf8, false),
+                Field::new("b", DataType::Utf8, false),
+            ]
+            .into(),
+        );
+        cast(&struct_array, &to_type)
+            .expect_err("Cast nullable to non-nullable struct field should fail");
+
+        let boolean = Arc::new(BooleanArray::from(vec![false, false, true, true]));
+        let int = Arc::new(Int32Array::from(vec![i32::MAX, 25, 1, 100]));
+        let struct_array = StructArray::from(vec![
+            (
+                Arc::new(Field::new("b", DataType::Boolean, false)),
+                boolean.clone() as ArrayRef,
+            ),
+            (
+                Arc::new(Field::new("c", DataType::Int32, false)),
+                int.clone() as ArrayRef,
+            ),
+        ]);
+
+        // okay: non-nullable to non-nullable
+        let to_type = DataType::Struct(
+            vec![
+                Field::new("a", DataType::Utf8, false),
+                Field::new("b", DataType::Utf8, false),
+            ]
+            .into(),
+        );
+        cast(&struct_array, &to_type)
+            .expect("Cast non-nullable to non-nullable struct field should work");
+
+        // err: non-nullable to non-nullable but overflowing return null during casting
+        let to_type = DataType::Struct(
+            vec![
+                Field::new("a", DataType::Utf8, false),
+                Field::new("b", DataType::Int8, false),
+            ]
+            .into(),
+        );
+        cast(&struct_array, &to_type).expect_err(
+            "Cast non-nullable to non-nullable struct field returning null should fail",
         );
     }
 }
