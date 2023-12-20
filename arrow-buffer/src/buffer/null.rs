@@ -86,7 +86,7 @@ impl NullBuffer {
         }
         let lhs = self.inner().bit_chunks().iter_padded();
         let rhs = other.inner().bit_chunks().iter_padded();
-        lhs.zip(rhs).all(|(l, r)| (l & !r) == 0) // l:0 -> r:0 or 1, l:1 -> r:1
+        lhs.zip(rhs).all(|(l, r)| (l & !r) == 0)
     }
 
     /// Returns a new [`NullBuffer`] where each bit in the current null buffer
