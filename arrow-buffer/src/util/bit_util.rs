@@ -17,9 +17,6 @@
 
 //! Utils for working with bits
 
-#[cfg(feature = "simd")]
-use packed_simd::u8x64;
-
 const BIT_MASK: [u8; 8] = [1, 2, 4, 8, 16, 32, 64, 128];
 const UNSET_BIT_MASK: [u8; 8] = [
     255 - 1,
@@ -104,31 +101,13 @@ pub fn ceil(value: usize, divisor: usize) -> usize {
     value / divisor + (0 != value % divisor) as usize
 }
 
-/// Performs SIMD bitwise binary operations.
-///
-/// # Safety
-///
-/// Note that each slice should be 64 bytes and it is the callers responsibility to ensure
-/// that this is the case.  If passed slices larger than 64 bytes the operation will only
-/// be performed on the first 64 bytes.  Slices less than 64 bytes will panic.
-#[cfg(feature = "simd")]
-pub unsafe fn bitwise_bin_op_simd<F>(left: &[u8], right: &[u8], result: &mut [u8], op: F)
-where
-    F: Fn(u8x64, u8x64) -> u8x64,
-{
-    let left_simd = u8x64::from_slice_unaligned_unchecked(left);
-    let right_simd = u8x64::from_slice_unaligned_unchecked(right);
-    let simd_result = op(left_simd, right_simd);
-    simd_result.write_to_slice_unaligned_unchecked(result);
-}
-
-#[cfg(all(test, feature = "test_utils"))]
+#[cfg(test)]
 mod tests {
     use std::collections::HashSet;
 
     use super::*;
-    use crate::util::test_util::seedable_rng;
-    use rand::Rng;
+    use rand::rngs::StdRng;
+    use rand::{Rng, SeedableRng};
 
     #[test]
     fn test_round_upto_multiple_of_64() {
@@ -167,10 +146,14 @@ mod tests {
         assert!(!get_bit(&[0b01001001, 0b01010010], 15));
     }
 
+    pub fn seedable_rng() -> StdRng {
+        StdRng::seed_from_u64(42)
+    }
+
     #[test]
     fn test_get_bit_raw() {
         const NUM_BYTE: usize = 10;
-        let mut buf = vec![0; NUM_BYTE];
+        let mut buf = [0; NUM_BYTE];
         let mut expected = vec![];
         let mut rng = seedable_rng();
         for i in 0..8 * NUM_BYTE {
@@ -278,7 +261,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
     fn test_ceil() {
         assert_eq!(ceil(0, 1), 0);
         assert_eq!(ceil(1, 1), 1);
@@ -291,29 +273,5 @@ mod tests {
         assert_eq!(ceil(10000000000, 10), 1000000000);
         assert_eq!(ceil(10, 10000000000), 1);
         assert_eq!(ceil(10000000000, 1000000000), 10);
-    }
-
-    #[test]
-    #[cfg(feature = "simd")]
-    fn test_bitwise_and_simd() {
-        let buf1 = [0b00110011u8; 64];
-        let buf2 = [0b11110000u8; 64];
-        let mut buf3 = [0b00000000; 64];
-        unsafe { bitwise_bin_op_simd(&buf1, &buf2, &mut buf3, |a, b| a & b) };
-        for i in buf3.iter() {
-            assert_eq!(&0b00110000u8, i);
-        }
-    }
-
-    #[test]
-    #[cfg(feature = "simd")]
-    fn test_bitwise_or_simd() {
-        let buf1 = [0b00110011u8; 64];
-        let buf2 = [0b11110000u8; 64];
-        let mut buf3 = [0b00000000; 64];
-        unsafe { bitwise_bin_op_simd(&buf1, &buf2, &mut buf3, |a, b| a | b) };
-        for i in buf3.iter() {
-            assert_eq!(&0b11110011u8, i);
-        }
     }
 }

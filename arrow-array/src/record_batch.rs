@@ -219,7 +219,7 @@ impl RecordBatch {
     pub fn with_schema(self, schema: SchemaRef) -> Result<Self, ArrowError> {
         if !schema.contains(self.schema.as_ref()) {
             return Err(ArrowError::SchemaError(format!(
-                "{schema} is not a superset of {}",
+                "target schema is not superset of current schema target={schema} current={}",
                 self.schema
             )));
         }

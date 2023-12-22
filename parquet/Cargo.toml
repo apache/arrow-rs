@@ -44,7 +44,7 @@ arrow-schema = { workspace = true, optional = true }
 arrow-select = { workspace = true, optional = true }
 arrow-ipc = { workspace = true, optional = true }
 # Intentionally not a path dependency as object_store is released separately
-object_store = { version = "0.7", default-features = false, optional = true }
+object_store = { version = "0.8", default-features = false, optional = true }
 
 bytes = { version = "1.1", default-features = false, features = ["std"] }
 thrift = { version = "0.17", default-features = false }
@@ -66,6 +66,7 @@ tokio = { version = "1.0", optional = true, default-features = false, features =
 hashbrown = { version = "0.14", default-features = false }
 twox-hash = { version = "1.6", default-features = false }
 paste = { version = "1.0" }
+half = { version = "2.1", default-features = false, features = ["num-traits"] }
 
 [dev-dependencies]
 base64 = { version = "0.21", default-features = false, features = ["std"] }
@@ -80,6 +81,7 @@ serde_json = { version = "1.0", features = ["std"], default-features = false }
 arrow = { workspace = true, features = ["ipc", "test_utils", "prettyprint", "json"] }
 tokio = { version = "1.0", default-features = false, features = ["macros", "rt", "io-util", "fs"] }
 rand = { version = "0.8", default-features = false, features = ["std", "std_rng"] }
+object_store = { version = "0.8", default-features = false, features = ["azure"] }
 
 [package.metadata.docs.rs]
 all-features = true

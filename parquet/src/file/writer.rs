@@ -323,6 +323,19 @@ impl<W: Write + Send> SerializedFileWriter<W> {
             None => Some(self.kv_metadatas.clone()),
         };
 
+        // We only include ColumnOrder for leaf nodes.
+        // Currently only supported ColumnOrder is TypeDefinedOrder so we set this
+        // for all leaf nodes.
+        // Even if the column has an undefined sort order, such as INTERVAL, this
+        // is still technically the defined TYPEORDER so it should still be set.
+        let column_orders = (0..self.schema_descr().num_columns())
+            .map(|_| parquet::ColumnOrder::TYPEORDER(parquet::TypeDefinedOrder {}))
+            .collect();
+        // This field is optional, perhaps in cases where no min/max fields are set
+        // in any Statistics or ColumnIndex object in the whole file.
+        // But for simplicity we always set this field.
+        let column_orders = Some(column_orders);
+
         let file_metadata = parquet::FileMetaData {
             num_rows,
             row_groups,
@@ -330,7 +343,7 @@ impl<W: Write + Send> SerializedFileWriter<W> {
             version: self.props.writer_version().as_num(),
             schema: types::to_thrift(self.schema.as_ref())?,
             created_by: Some(self.props.created_by().to_owned()),
-            column_orders: None,
+            column_orders,
             encryption_algorithm: None,
             footer_signing_key_metadata: None,
         };
@@ -738,7 +751,9 @@ mod tests {
     use bytes::Bytes;
     use std::fs::File;
 
-    use crate::basic::{Compression, Encoding, LogicalType, Repetition, Type};
+    use crate::basic::{
+        ColumnOrder, Compression, ConvertedType, Encoding, LogicalType, Repetition, SortOrder, Type,
+    };
     use crate::column::page::{Page, PageReader};
     use crate::column::reader::get_typed_column_reader;
     use crate::compression::{create_codec, Codec, CodecOptionsBuilder};
@@ -756,7 +771,6 @@ mod tests {
     use crate::record::{Row, RowAccessor};
     use crate::schema::parser::parse_message_type;
     use crate::schema::types::{ColumnDescriptor, ColumnPath};
-    use crate::util::memory::ByteBufferPtr;
 
     #[test]
     fn test_row_group_writer_error_not_all_columns_written() {
@@ -850,6 +864,78 @@ mod tests {
 
         let reader = SerializedFileReader::new(file).unwrap();
         assert_eq!(reader.get_row_iter(None).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn test_file_writer_column_orders_populated() {
+        let file = tempfile::tempfile().unwrap();
+
+        let schema = Arc::new(
+            types::Type::group_type_builder("schema")
+                .with_fields(vec![
+                    Arc::new(
+                        types::Type::primitive_type_builder("col1", Type::INT32)
+                            .build()
+                            .unwrap(),
+                    ),
+                    Arc::new(
+                        types::Type::primitive_type_builder("col2", Type::FIXED_LEN_BYTE_ARRAY)
+                            .with_converted_type(ConvertedType::INTERVAL)
+                            .with_length(12)
+                            .build()
+                            .unwrap(),
+                    ),
+                    Arc::new(
+                        types::Type::group_type_builder("nested")
+                            .with_repetition(Repetition::REQUIRED)
+                            .with_fields(vec![
+                                Arc::new(
+                                    types::Type::primitive_type_builder(
+                                        "col3",
+                                        Type::FIXED_LEN_BYTE_ARRAY,
+                                    )
+                                    .with_logical_type(Some(LogicalType::Float16))
+                                    .with_length(2)
+                                    .build()
+                                    .unwrap(),
+                                ),
+                                Arc::new(
+                                    types::Type::primitive_type_builder("col4", Type::BYTE_ARRAY)
+                                        .with_logical_type(Some(LogicalType::String))
+                                        .build()
+                                        .unwrap(),
+                                ),
+                            ])
+                            .build()
+                            .unwrap(),
+                    ),
+                ])
+                .build()
+                .unwrap(),
+        );
+
+        let props = Default::default();
+        let writer = SerializedFileWriter::new(file.try_clone().unwrap(), schema, props).unwrap();
+        writer.close().unwrap();
+
+        let reader = SerializedFileReader::new(file).unwrap();
+
+        // only leaves
+        let expected = vec![
+            // INT32
+            ColumnOrder::TYPE_DEFINED_ORDER(SortOrder::SIGNED),
+            // INTERVAL
+            ColumnOrder::TYPE_DEFINED_ORDER(SortOrder::UNDEFINED),
+            // Float16
+            ColumnOrder::TYPE_DEFINED_ORDER(SortOrder::SIGNED),
+            // String
+            ColumnOrder::TYPE_DEFINED_ORDER(SortOrder::UNSIGNED),
+        ];
+        let actual = reader.metadata().file_metadata().column_orders();
+
+        assert!(actual.is_some());
+        let actual = actual.unwrap();
+        assert_eq!(*actual, expected);
     }
 
     #[test]
@@ -1040,7 +1126,7 @@ mod tests {
     fn test_page_writer_data_pages() {
         let pages = vec![
             Page::DataPage {
-                buf: ByteBufferPtr::new(vec![1, 2, 3, 4, 5, 6, 7, 8]),
+                buf: Bytes::from(vec![1, 2, 3, 4, 5, 6, 7, 8]),
                 num_values: 10,
                 encoding: Encoding::DELTA_BINARY_PACKED,
                 def_level_encoding: Encoding::RLE,
@@ -1048,7 +1134,7 @@ mod tests {
                 statistics: Some(Statistics::int32(Some(1), Some(3), None, 7, true)),
             },
             Page::DataPageV2 {
-                buf: ByteBufferPtr::new(vec![4; 128]),
+                buf: Bytes::from(vec![4; 128]),
                 num_values: 10,
                 encoding: Encoding::DELTA_BINARY_PACKED,
                 num_nulls: 2,
@@ -1068,13 +1154,13 @@ mod tests {
     fn test_page_writer_dict_pages() {
         let pages = vec![
             Page::DictionaryPage {
-                buf: ByteBufferPtr::new(vec![1, 2, 3, 4, 5]),
+                buf: Bytes::from(vec![1, 2, 3, 4, 5]),
                 num_values: 5,
                 encoding: Encoding::RLE_DICTIONARY,
                 is_sorted: false,
             },
             Page::DataPage {
-                buf: ByteBufferPtr::new(vec![1, 2, 3, 4, 5, 6, 7, 8]),
+                buf: Bytes::from(vec![1, 2, 3, 4, 5, 6, 7, 8]),
                 num_values: 10,
                 encoding: Encoding::DELTA_BINARY_PACKED,
                 def_level_encoding: Encoding::RLE,
@@ -1082,7 +1168,7 @@ mod tests {
                 statistics: Some(Statistics::int32(Some(1), Some(3), None, 7, true)),
             },
             Page::DataPageV2 {
-                buf: ByteBufferPtr::new(vec![4; 128]),
+                buf: Bytes::from(vec![4; 128]),
                 num_values: 10,
                 encoding: Encoding::DELTA_BINARY_PACKED,
                 num_nulls: 2,
@@ -1122,10 +1208,10 @@ mod tests {
                     ref statistics,
                 } => {
                     total_num_values += num_values as i64;
-                    let output_buf = compress_helper(compressor.as_mut(), buf.data());
+                    let output_buf = compress_helper(compressor.as_mut(), buf);
 
                     Page::DataPage {
-                        buf: ByteBufferPtr::new(output_buf),
+                        buf: Bytes::from(output_buf),
                         num_values,
                         encoding,
                         def_level_encoding,
@@ -1147,12 +1233,12 @@ mod tests {
                 } => {
                     total_num_values += num_values as i64;
                     let offset = (def_levels_byte_len + rep_levels_byte_len) as usize;
-                    let cmp_buf = compress_helper(compressor.as_mut(), &buf.data()[offset..]);
-                    let mut output_buf = Vec::from(&buf.data()[..offset]);
+                    let cmp_buf = compress_helper(compressor.as_mut(), &buf[offset..]);
+                    let mut output_buf = Vec::from(&buf[..offset]);
                     output_buf.extend_from_slice(&cmp_buf[..]);
 
                     Page::DataPageV2 {
-                        buf: ByteBufferPtr::new(output_buf),
+                        buf: Bytes::from(output_buf),
                         num_values,
                         encoding,
                         num_nulls,
@@ -1170,10 +1256,10 @@ mod tests {
                     encoding,
                     is_sorted,
                 } => {
-                    let output_buf = compress_helper(compressor.as_mut(), buf.data());
+                    let output_buf = compress_helper(compressor.as_mut(), buf);
 
                     Page::DictionaryPage {
-                        buf: ByteBufferPtr::new(output_buf),
+                        buf: Bytes::from(output_buf),
                         num_values,
                         encoding,
                         is_sorted,
@@ -1248,7 +1334,7 @@ mod tests {
     /// Check if pages match.
     fn assert_page(left: &Page, right: &Page) {
         assert_eq!(left.page_type(), right.page_type());
-        assert_eq!(left.buffer().data(), right.buffer().data());
+        assert_eq!(&left.buffer(), &right.buffer());
         assert_eq!(left.num_values(), right.num_values());
         assert_eq!(left.encoding(), right.encoding());
         assert_eq!(to_thrift(left.statistics()), to_thrift(right.statistics()));
@@ -1614,11 +1700,13 @@ mod tests {
         let test_read = |reader: SerializedFileReader<Bytes>| {
             let row_group = reader.get_row_group(0).unwrap();
 
-            let mut out = [0; 4];
+            let mut out = Vec::with_capacity(4);
             let c1 = row_group.get_column_reader(0).unwrap();
             let mut c1 = get_typed_column_reader::<Int32Type>(c1);
             c1.read_records(4, None, None, &mut out).unwrap();
             assert_eq!(out, column_data[0]);
+
+            out.clear();
 
             let c2 = row_group.get_column_reader(1).unwrap();
             let mut c2 = get_typed_column_reader::<Int32Type>(c2);

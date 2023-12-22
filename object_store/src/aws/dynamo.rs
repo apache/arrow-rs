@@ -97,7 +97,7 @@ const STORE: &str = "DynamoDB";
 /// [TTL]: https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/howitworks-ttl.html
 /// [DynamoDB Lock Client]: https://aws.amazon.com/blogs/database/building-distributed-locks-with-the-dynamodb-lock-client/
 /// [S3 Multi-Cluster]: https://docs.google.com/document/d/1Gs4ZsTH19lMxth4BSdwlWjUNR-XhKHicDvBjd2RqNd8/edit#heading=h.mjjuxw9mcz9h
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Eq, PartialEq)]
 pub struct DynamoCommit {
     table_name: String,
     /// The number of milliseconds a lease is valid for
@@ -177,7 +177,7 @@ impl DynamoCommit {
                     let expiry = lease.acquire + lease.timeout;
                     return match tokio::time::timeout_at(expiry.into(), fut).await {
                         Ok(Ok(_)) => Ok(()),
-                        Ok(Err(e)) => Err(e),
+                        Ok(Err(e)) => Err(e.into()),
                         Err(_) => Err(Error::Generic {
                             store: "DynamoDB",
                             source: format!(

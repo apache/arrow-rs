@@ -17,11 +17,12 @@
 
 //! Contains Parquet Page definitions and page reader interface.
 
+use bytes::Bytes;
+
 use crate::basic::{Encoding, PageType};
 use crate::errors::{ParquetError, Result};
 use crate::file::{metadata::ColumnChunkMetaData, statistics::Statistics};
 use crate::format::PageHeader;
-use crate::util::memory::ByteBufferPtr;
 
 /// Parquet Page definition.
 ///
@@ -31,7 +32,7 @@ use crate::util::memory::ByteBufferPtr;
 #[derive(Clone)]
 pub enum Page {
     DataPage {
-        buf: ByteBufferPtr,
+        buf: Bytes,
         num_values: u32,
         encoding: Encoding,
         def_level_encoding: Encoding,
@@ -39,7 +40,7 @@ pub enum Page {
         statistics: Option<Statistics>,
     },
     DataPageV2 {
-        buf: ByteBufferPtr,
+        buf: Bytes,
         num_values: u32,
         encoding: Encoding,
         num_nulls: u32,
@@ -50,7 +51,7 @@ pub enum Page {
         statistics: Option<Statistics>,
     },
     DictionaryPage {
-        buf: ByteBufferPtr,
+        buf: Bytes,
         num_values: u32,
         encoding: Encoding,
         is_sorted: bool,
@@ -68,7 +69,7 @@ impl Page {
     }
 
     /// Returns internal byte buffer reference for this page.
-    pub fn buffer(&self) -> &ByteBufferPtr {
+    pub fn buffer(&self) -> &Bytes {
         match self {
             Page::DataPage { ref buf, .. } => buf,
             Page::DataPageV2 { ref buf, .. } => buf,
@@ -159,7 +160,7 @@ impl CompressedPage {
 
     /// Returns slice of compressed buffer in the page.
     pub fn data(&self) -> &[u8] {
-        self.compressed_page.buffer().data()
+        self.compressed_page.buffer()
     }
 
     /// Returns the thrift page header
@@ -370,7 +371,7 @@ mod tests {
     #[test]
     fn test_page() {
         let data_page = Page::DataPage {
-            buf: ByteBufferPtr::new(vec![0, 1, 2]),
+            buf: Bytes::from(vec![0, 1, 2]),
             num_values: 10,
             encoding: Encoding::PLAIN,
             def_level_encoding: Encoding::RLE,
@@ -378,7 +379,7 @@ mod tests {
             statistics: Some(Statistics::int32(Some(1), Some(2), None, 1, true)),
         };
         assert_eq!(data_page.page_type(), PageType::DATA_PAGE);
-        assert_eq!(data_page.buffer().data(), vec![0, 1, 2].as_slice());
+        assert_eq!(data_page.buffer(), vec![0, 1, 2].as_slice());
         assert_eq!(data_page.num_values(), 10);
         assert_eq!(data_page.encoding(), Encoding::PLAIN);
         assert_eq!(
@@ -387,7 +388,7 @@ mod tests {
         );
 
         let data_page_v2 = Page::DataPageV2 {
-            buf: ByteBufferPtr::new(vec![0, 1, 2]),
+            buf: Bytes::from(vec![0, 1, 2]),
             num_values: 10,
             encoding: Encoding::PLAIN,
             num_nulls: 5,
@@ -398,7 +399,7 @@ mod tests {
             statistics: Some(Statistics::int32(Some(1), Some(2), None, 1, true)),
         };
         assert_eq!(data_page_v2.page_type(), PageType::DATA_PAGE_V2);
-        assert_eq!(data_page_v2.buffer().data(), vec![0, 1, 2].as_slice());
+        assert_eq!(data_page_v2.buffer(), vec![0, 1, 2].as_slice());
         assert_eq!(data_page_v2.num_values(), 10);
         assert_eq!(data_page_v2.encoding(), Encoding::PLAIN);
         assert_eq!(
@@ -407,13 +408,13 @@ mod tests {
         );
 
         let dict_page = Page::DictionaryPage {
-            buf: ByteBufferPtr::new(vec![0, 1, 2]),
+            buf: Bytes::from(vec![0, 1, 2]),
             num_values: 10,
             encoding: Encoding::PLAIN,
             is_sorted: false,
         };
         assert_eq!(dict_page.page_type(), PageType::DICTIONARY_PAGE);
-        assert_eq!(dict_page.buffer().data(), vec![0, 1, 2].as_slice());
+        assert_eq!(dict_page.buffer(), vec![0, 1, 2].as_slice());
         assert_eq!(dict_page.num_values(), 10);
         assert_eq!(dict_page.encoding(), Encoding::PLAIN);
         assert_eq!(dict_page.statistics(), None);
@@ -422,7 +423,7 @@ mod tests {
     #[test]
     fn test_compressed_page() {
         let data_page = Page::DataPage {
-            buf: ByteBufferPtr::new(vec![0, 1, 2]),
+            buf: Bytes::from(vec![0, 1, 2]),
             num_values: 10,
             encoding: Encoding::PLAIN,
             def_level_encoding: Encoding::RLE,

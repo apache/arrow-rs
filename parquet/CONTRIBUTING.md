@@ -57,8 +57,10 @@ Run `cargo bench` for benchmarks.
 
 ## Docs
 
-To build documentation, run `cargo doc --no-deps`.
-To compile and view in the browser, run `cargo doc --no-deps --open`.
+To build documentation, run `cargo doc --no-deps --all-features`.
+To compile and view in the browser, run `cargo doc --no-deps --all-features --open`.
+
+Before submitting a pull request, run `cargo fmt --all` to format the change.
 
 ## Update Parquet Format
 

@@ -134,7 +134,7 @@ pub trait FileReader: Send + Sync {
     /// Get the `i`th row group reader. Note this doesn't do bound check.
     fn get_row_group(&self, i: usize) -> Result<Box<dyn RowGroupReader + '_>>;
 
-    /// Get full iterator of `Row`s from a file (over all row groups).
+    /// Get an iterator over the row in this file, see [`RowIter`] for caveats.
     ///
     /// Iterator will automatically load the next row group to advance.
     ///
@@ -194,7 +194,7 @@ pub trait RowGroupReader: Send + Sync {
     /// to read bloom filters.
     fn get_column_bloom_filter(&self, i: usize) -> Option<&Sbbf>;
 
-    /// Get iterator of `Row`s from this row group.
+    /// Get an iterator over the row in this file, see [`RowIter`] for caveats.
     ///
     /// Projected schema can be a subset of or equal to the file schema, when it is None,
     /// full file schema is assumed.

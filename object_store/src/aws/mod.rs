@@ -36,12 +36,12 @@ use bytes::Bytes;
 use futures::stream::BoxStream;
 use futures::{StreamExt, TryStreamExt};
 use reqwest::header::{HeaderName, IF_MATCH, IF_NONE_MATCH};
-use reqwest::Method;
+use reqwest::{Method, StatusCode};
 use std::{sync::Arc, time::Duration};
 use tokio::io::AsyncWrite;
 use url::Url;
 
-use crate::aws::client::S3Client;
+use crate::aws::client::{RequestError, S3Client};
 use crate::client::get::GetClientExt;
 use crate::client::list::ListClientExt;
 use crate::client::CredentialProvider;
@@ -268,23 +268,29 @@ impl ObjectStore for AmazonS3 {
     }
 
     async fn copy_if_not_exists(&self, from: &Path, to: &Path) -> Result<()> {
-        match &self.client.config.copy_if_not_exists {
-            Some(S3CopyIfNotExists::Header(k, v)) => {
-                let req = self.client.copy_request(from, to);
-                match req.header(k, v).send().await {
-                    Err(Error::Precondition { path, source }) => {
-                        Err(Error::AlreadyExists { path, source })
-                    }
-                    Err(e) => Err(e),
-                    Ok(_) => Ok(()),
-                }
-            }
+        let (k, v, status) = match &self.client.config.copy_if_not_exists {
+            Some(S3CopyIfNotExists::Header(k, v)) => (k, v, StatusCode::PRECONDITION_FAILED),
+            Some(S3CopyIfNotExists::HeaderWithStatus(k, v, status)) => (k, v, *status),
             Some(S3CopyIfNotExists::Dynamo(lock)) => {
-                lock.copy_if_not_exists(&self.client, from, to).await
+                return lock.copy_if_not_exists(&self.client, from, to).await
             }
-            None => Err(Error::NotSupported {
-                source: "S3 does not support copy-if-not-exists".to_string().into(),
-            }),
+            None => {
+                return Err(Error::NotSupported {
+                    source: "S3 does not support copy-if-not-exists".to_string().into(),
+                })
+            }
+        };
+
+        let req = self.client.copy_request(from, to);
+        match req.header(k, v).send().await {
+            Err(RequestError::Retry { source, path }) if source.status() == Some(status) => {
+                Err(Error::AlreadyExists {
+                    source: Box::new(source),
+                    path,
+                })
+            }
+            Err(e) => Err(e.into()),
+            Ok(_) => Ok(()),
         }
     }
 }
@@ -356,12 +362,10 @@ mod tests {
 
         let integration = config.build().unwrap();
         let config = &integration.client.config;
-        let is_local = matches!(&config.endpoint, Some(e) if e.starts_with("http://"));
         let test_not_exists = config.copy_if_not_exists.is_some();
         let test_conditional_put = config.conditional_put.is_some();
 
-        // Localstack doesn't support listing with spaces https://github.com/localstack/localstack/issues/6328
-        put_get_delete_list_opts(&integration, is_local).await;
+        put_get_delete_list_opts(&integration).await;
         get_opts(&integration).await;
         list_uses_directories_correctly(&integration).await;
         list_with_delimiter(&integration).await;
@@ -384,12 +388,12 @@ mod tests {
         // run integration test with unsigned payload enabled
         let builder = AmazonS3Builder::from_env().with_unsigned_payload(true);
         let integration = builder.build().unwrap();
-        put_get_delete_list_opts(&integration, is_local).await;
+        put_get_delete_list_opts(&integration).await;
 
         // run integration test with checksum set to sha256
         let builder = AmazonS3Builder::from_env().with_checksum_algorithm(Checksum::SHA256);
         let integration = builder.build().unwrap();
-        put_get_delete_list_opts(&integration, is_local).await;
+        put_get_delete_list_opts(&integration).await;
 
         match &integration.client.config.copy_if_not_exists {
             Some(S3CopyIfNotExists::Dynamo(d)) => dynamo::integration_test(&integration, d).await,

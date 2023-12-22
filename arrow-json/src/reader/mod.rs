@@ -717,7 +717,9 @@ mod tests {
 
     use arrow_array::cast::AsArray;
     use arrow_array::types::Int32Type;
-    use arrow_array::{make_array, Array, BooleanArray, ListArray, StringArray, StructArray};
+    use arrow_array::{
+        make_array, Array, BooleanArray, Float64Array, ListArray, StringArray, StructArray,
+    };
     use arrow_buffer::{ArrowNativeType, Buffer};
     use arrow_cast::display::{ArrayFormatter, FormatOptions};
     use arrow_data::ArrayDataBuilder;
@@ -1562,7 +1564,7 @@ mod tests {
         let file = File::open(path).unwrap();
         let mut reader = BufReader::new(file);
         let schema = schema.unwrap_or_else(|| {
-            let schema = infer_json_schema(&mut reader, None).unwrap();
+            let (schema, _) = infer_json_schema(&mut reader, None).unwrap();
             reader.rewind().unwrap();
             schema
         });
@@ -1939,7 +1941,7 @@ mod tests {
     fn test_with_multiple_batches() {
         let file = File::open("test/data/basic_nulls.json").unwrap();
         let mut reader = BufReader::new(file);
-        let schema = infer_json_schema(&mut reader, None).unwrap();
+        let (schema, _) = infer_json_schema(&mut reader, None).unwrap();
         reader.rewind().unwrap();
 
         let builder = ReaderBuilder::new(Arc::new(schema)).with_batch_size(5);
@@ -2079,7 +2081,7 @@ mod tests {
     fn test_json_iterator() {
         let file = File::open("test/data/basic.json").unwrap();
         let mut reader = BufReader::new(file);
-        let schema = infer_json_schema(&mut reader, None).unwrap();
+        let (schema, _) = infer_json_schema(&mut reader, None).unwrap();
         reader.rewind().unwrap();
 
         let builder = ReaderBuilder::new(Arc::new(schema)).with_batch_size(5);
@@ -2228,5 +2230,74 @@ mod tests {
         let b = decoder.flush().unwrap().unwrap();
         let values = b.column(0).as_primitive::<Int32Type>().values();
         assert_eq!(values, &[1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn test_serde_large_numbers() {
+        let field = Field::new("int", DataType::Int64, true);
+        let mut decoder = ReaderBuilder::new_with_field(field)
+            .build_decoder()
+            .unwrap();
+
+        decoder.serialize(&[1699148028689_u64, 2, 3, 4]).unwrap();
+        let b = decoder.flush().unwrap().unwrap();
+        let values = b.column(0).as_primitive::<Int64Type>().values();
+        assert_eq!(values, &[1699148028689, 2, 3, 4]);
+
+        let field = Field::new(
+            "int",
+            DataType::Timestamp(TimeUnit::Microsecond, None),
+            true,
+        );
+        let mut decoder = ReaderBuilder::new_with_field(field)
+            .build_decoder()
+            .unwrap();
+
+        decoder.serialize(&[1699148028689_u64, 2, 3, 4]).unwrap();
+        let b = decoder.flush().unwrap().unwrap();
+        let values = b
+            .column(0)
+            .as_primitive::<TimestampMicrosecondType>()
+            .values();
+        assert_eq!(values, &[1699148028689, 2, 3, 4]);
+    }
+
+    #[test]
+    fn test_coercing_primitive_into_string_decoder() {
+        let buf = &format!(
+            r#"[{{"a": 1, "b": "A", "c": "T"}}, {{"a": 2, "b": "BB", "c": "F"}}, {{"a": {}, "b": 123, "c": false}}, {{"a": {}, "b": 789, "c": true}}]"#,
+            (std::i32::MAX as i64 + 10),
+            std::i64::MAX - 10
+        );
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::Float64, true),
+            Field::new("b", DataType::Utf8, true),
+            Field::new("c", DataType::Utf8, true),
+        ]);
+        let json_array: Vec<serde_json::Value> = serde_json::from_str(buf).unwrap();
+        let schema_ref = Arc::new(schema);
+
+        // read record batches
+        let reader = ReaderBuilder::new(schema_ref.clone()).with_coerce_primitive(true);
+        let mut decoder = reader.build_decoder().unwrap();
+        decoder.serialize(json_array.as_slice()).unwrap();
+        let batch = decoder.flush().unwrap().unwrap();
+        assert_eq!(
+            batch,
+            RecordBatch::try_new(
+                schema_ref,
+                vec![
+                    Arc::new(Float64Array::from(vec![
+                        1.0,
+                        2.0,
+                        (std::i32::MAX as i64 + 10) as f64,
+                        (std::i64::MAX - 10) as f64
+                    ])),
+                    Arc::new(StringArray::from(vec!["A", "BB", "123", "789"])),
+                    Arc::new(StringArray::from(vec!["T", "F", "false", "true"])),
+                ]
+            )
+            .unwrap()
+        );
     }
 }

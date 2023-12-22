@@ -213,7 +213,10 @@ impl Default for ClientOptions {
             http2_keep_alive_interval: None,
             http2_keep_alive_timeout: None,
             http2_keep_alive_while_idle: Default::default(),
-            http1_only: Default::default(),
+            // HTTP2 is known to be significantly slower than HTTP1, so we default
+            // to HTTP1 for now.
+            // https://github.com/apache/arrow-rs/issues/5194
+            http1_only: true.into(),
             http2_only: Default::default(),
         }
     }
@@ -350,14 +353,25 @@ impl ClientOptions {
     }
 
     /// Only use http1 connections
+    ///
+    /// This is on by default, since http2 is known to be significantly slower than http1.
     pub fn with_http1_only(mut self) -> Self {
+        self.http2_only = false.into();
         self.http1_only = true.into();
         self
     }
 
     /// Only use http2 connections
     pub fn with_http2_only(mut self) -> Self {
+        self.http1_only = false.into();
         self.http2_only = true.into();
+        self
+    }
+
+    /// Use http2 if supported, otherwise use http1.
+    pub fn with_allow_http2(mut self) -> Self {
+        self.http1_only = false.into();
+        self.http2_only = false.into();
         self
     }
 

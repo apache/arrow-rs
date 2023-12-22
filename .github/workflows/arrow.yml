@@ -67,8 +67,8 @@ jobs:
         run: cargo test -p arrow-data --all-features
       - name: Test arrow-schema with all features
         run: cargo test -p arrow-schema --all-features
-      - name: Test arrow-array with all features except SIMD
-        run: cargo test -p arrow-array
+      - name: Test arrow-array with all features
+        run: cargo test -p arrow-array --all-features
       - name: Test arrow-select with all features
         run: cargo test -p arrow-select --all-features
       - name: Test arrow-cast with all features
@@ -85,15 +85,15 @@ jobs:
         run: cargo test -p arrow-string --all-features
       - name: Test arrow-ord with all features
         run: cargo test -p arrow-ord --all-features
-      - name: Test arrow-arith with all features except SIMD
-        run: cargo test -p arrow-arith
+      - name: Test arrow-arith with all features
+        run: cargo test -p arrow-arith --all-features
       - name: Test arrow-row with all features
         run: cargo test -p arrow-row --all-features
       - name: Test arrow-integration-test with all features
         run: cargo test -p arrow-integration-test --all-features
       - name: Test arrow with default features
         run: cargo test -p arrow
-      - name: Test arrow with all features apart from simd
+      - name: Test arrow with all features except pyarrow
         run: cargo test -p arrow --features=force_validate,prettyprint,ipc_compression,ffi,chrono-tz
       - name: Run examples
         run: |
@@ -132,29 +132,6 @@ jobs:
       - name: Check compilation --no-default-features --all-targets --features chrono-tz
         run: cargo check -p arrow --no-default-features --all-targets --features chrono-tz
 
-  # test the --features "simd" of the arrow crate. This requires nightly Rust.
-  linux-test-simd:
-    name: Test SIMD on AMD64 Rust ${{ matrix.rust }}
-    runs-on: ubuntu-latest
-    container:
-      image: amd64/rust
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          submodules: true
-      - name: Setup Rust toolchain
-        uses: ./.github/actions/setup-builder
-        with:
-          rust-version: nightly
-      - name: Test arrow-array with SIMD
-        run: cargo test -p arrow-array --features simd
-      - name: Test arrow-arith with SIMD
-        run: cargo test -p arrow-arith --features simd
-      - name: Test arrow with SIMD
-        run: cargo test -p arrow --features simd
-      - name: Check compilation --features simd --all-targets
-        run: cargo check -p arrow --features simd --all-targets
-
 
   # test the arrow crate builds against wasm32 in nightly rust
   wasm32-build:
@@ -169,12 +146,11 @@ jobs:
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
         with:
-          rust-version: nightly
           target: wasm32-unknown-unknown,wasm32-wasi
       - name: Build wasm32-unknown-unknown
-        run: cargo build -p arrow --no-default-features --features=json,csv,ipc,simd,ffi --target wasm32-unknown-unknown
+        run: cargo build -p arrow --no-default-features --features=json,csv,ipc,ffi --target wasm32-unknown-unknown
       - name: Build wasm32-wasi
-        run: cargo build -p arrow --no-default-features --features=json,csv,ipc,simd,ffi --target wasm32-wasi
+        run: cargo build -p arrow --no-default-features --features=json,csv,ipc,ffi --target wasm32-wasi
 
   clippy:
     name: Clippy
@@ -193,8 +169,8 @@ jobs:
         run: cargo clippy -p arrow-data --all-targets --all-features -- -D warnings
       - name: Clippy arrow-schema with all features
         run: cargo clippy -p arrow-schema --all-targets --all-features -- -D warnings
-      - name: Clippy arrow-array with all features except SIMD
-        run: cargo clippy -p arrow-array --all-targets -- -D warnings
+      - name: Clippy arrow-array with all features
+        run: cargo clippy -p arrow-array --all-targets --all-features -- -D warnings
       - name: Clippy arrow-select with all features
         run: cargo clippy -p arrow-select --all-targets --all-features -- -D warnings
       - name: Clippy arrow-cast with all features
@@ -211,12 +187,12 @@ jobs:
         run: cargo clippy -p arrow-string --all-targets --all-features -- -D warnings
       - name: Clippy arrow-ord with all features
         run: cargo clippy -p arrow-ord --all-targets --all-features -- -D warnings
-      - name: Clippy arrow-arith with all features except SIMD
-        run: cargo clippy -p arrow-arith --all-targets -- -D warnings
+      - name: Clippy arrow-arith with all features
+        run: cargo clippy -p arrow-arith --all-targets --all-features -- -D warnings
       - name: Clippy arrow-row with all features
         run: cargo clippy -p arrow-row --all-targets --all-features -- -D warnings
-      - name: Clippy arrow with all features except SIMD
-        run: cargo clippy -p arrow --features=prettyprint,csv,ipc,test_utils,ffi,ipc_compression,chrono-tz --all-targets -- -D warnings
+      - name: Clippy arrow with all features
+        run: cargo clippy -p arrow --all-features --all-targets -- -D warnings
       - name: Clippy arrow-integration-test with all features
         run: cargo clippy -p arrow-integration-test --all-targets --all-features -- -D warnings
       - name: Clippy arrow-integration-testing with all features

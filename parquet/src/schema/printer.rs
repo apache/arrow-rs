@@ -270,6 +270,7 @@ fn print_logical_and_converted(
             LogicalType::Enum => "ENUM".to_string(),
             LogicalType::List => "LIST".to_string(),
             LogicalType::Map => "MAP".to_string(),
+            LogicalType::Float16 => "FLOAT16".to_string(),
             LogicalType::Unknown => "UNKNOWN".to_string(),
         },
         None => {
@@ -666,6 +667,15 @@ mod tests {
                     .build()
                     .unwrap(),
                 "OPTIONAL FIXED_LEN_BYTE_ARRAY (9) decimal (DECIMAL(19,4));",
+            ),
+            (
+                Type::primitive_type_builder("float16", PhysicalType::FIXED_LEN_BYTE_ARRAY)
+                    .with_logical_type(Some(LogicalType::Float16))
+                    .with_length(2)
+                    .with_repetition(Repetition::REQUIRED)
+                    .build()
+                    .unwrap(),
+                "REQUIRED FIXED_LEN_BYTE_ARRAY (2) float16 (FLOAT16);",
             ),
         ];
 

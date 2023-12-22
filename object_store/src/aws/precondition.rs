@@ -18,11 +18,13 @@
 use crate::aws::dynamo::DynamoCommit;
 use crate::config::Parse;
 
+use itertools::Itertools;
+
 /// Configure how to provide [`ObjectStore::copy_if_not_exists`] for [`AmazonS3`].
 ///
 /// [`ObjectStore::copy_if_not_exists`]: crate::ObjectStore::copy_if_not_exists
 /// [`AmazonS3`]: super::AmazonS3
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum S3CopyIfNotExists {
     /// Some S3-compatible stores, such as Cloudflare R2, support copy if not exists
@@ -30,7 +32,7 @@ pub enum S3CopyIfNotExists {
     ///
     /// If set, [`ObjectStore::copy_if_not_exists`] will perform a normal copy operation
     /// with the provided header pair, and expect the store to fail with `412 Precondition Failed`
-    /// if the destination file already exists
+    /// if the destination file already exists.
     ///
     /// Encoded as `header:<HEADER_NAME>:<HEADER_VALUE>` ignoring whitespace
     ///
@@ -39,6 +41,11 @@ pub enum S3CopyIfNotExists {
     ///
     /// [`ObjectStore::copy_if_not_exists`]: crate::ObjectStore::copy_if_not_exists
     Header(String, String),
+    /// The same as [`S3CopyIfNotExists::Header`] but allows custom status code checking, for object stores that return values
+    /// other than 412.
+    ///
+    /// Encoded as `header-with-status:<HEADER_NAME>:<HEADER_VALUE>:<STATUS>` ignoring whitespace
+    HeaderWithStatus(String, String, reqwest::StatusCode),
     /// The name of a DynamoDB table to use for coordination
     ///
     /// Encoded as either `dynamodb:<TABLE_NAME>` or `dynamodb:<TABLE_NAME>:<TIMEOUT_MILLIS>`
@@ -54,6 +61,9 @@ impl std::fmt::Display for S3CopyIfNotExists {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Header(k, v) => write!(f, "header: {}: {}", k, v),
+            Self::HeaderWithStatus(k, v, code) => {
+                write!(f, "header-with-status: {k}: {v}: {}", code.as_u16())
+            }
             Self::Dynamo(lock) => write!(f, "dynamo: {}", lock.table_name()),
         }
     }
@@ -66,6 +76,17 @@ impl S3CopyIfNotExists {
             "header" => {
                 let (k, v) = value.split_once(':')?;
                 Some(Self::Header(k.trim().to_string(), v.trim().to_string()))
+            }
+            "header-with-status" => {
+                let (k, v, status) = value.split(':').collect_tuple()?;
+
+                let code = status.trim().parse().ok()?;
+
+                Some(Self::HeaderWithStatus(
+                    k.trim().to_string(),
+                    v.trim().to_string(),
+                    code,
+                ))
             }
             "dynamo" => Some(Self::Dynamo(match value.split_once(':') {
                 Some((table_name, timeout)) => DynamoCommit::new(table_name.trim().to_string())
@@ -126,5 +147,78 @@ impl Parse for S3ConditionalPut {
             store: "Config",
             source: format!("Failed to parse \"{v}\" as S3PutConditional").into(),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::S3CopyIfNotExists;
+
+    #[test]
+    fn parse_s3_copy_if_not_exists_header() {
+        let input = "header: cf-copy-destination-if-none-match: *";
+        let expected = Some(S3CopyIfNotExists::Header(
+            "cf-copy-destination-if-none-match".to_owned(),
+            "*".to_owned(),
+        ));
+
+        assert_eq!(expected, S3CopyIfNotExists::from_str(input));
+    }
+
+    #[test]
+    fn parse_s3_copy_if_not_exists_header_with_status() {
+        let input = "header-with-status:key:value:403";
+        let expected = Some(S3CopyIfNotExists::HeaderWithStatus(
+            "key".to_owned(),
+            "value".to_owned(),
+            reqwest::StatusCode::FORBIDDEN,
+        ));
+
+        assert_eq!(expected, S3CopyIfNotExists::from_str(input));
+    }
+
+    #[test]
+    fn parse_s3_copy_if_not_exists_header_whitespace_invariant() {
+        let expected = Some(S3CopyIfNotExists::Header(
+            "cf-copy-destination-if-none-match".to_owned(),
+            "*".to_owned(),
+        ));
+
+        const INPUTS: &[&str] = &[
+            "header:cf-copy-destination-if-none-match:*",
+            "header: cf-copy-destination-if-none-match:*",
+            "header: cf-copy-destination-if-none-match: *",
+            "header : cf-copy-destination-if-none-match: *",
+            "header : cf-copy-destination-if-none-match : *",
+            "header : cf-copy-destination-if-none-match : * ",
+        ];
+
+        for input in INPUTS {
+            assert_eq!(expected, S3CopyIfNotExists::from_str(input));
+        }
+    }
+
+    #[test]
+    fn parse_s3_copy_if_not_exists_header_with_status_whitespace_invariant() {
+        let expected = Some(S3CopyIfNotExists::HeaderWithStatus(
+            "key".to_owned(),
+            "value".to_owned(),
+            reqwest::StatusCode::FORBIDDEN,
+        ));
+
+        const INPUTS: &[&str] = &[
+            "header-with-status:key:value:403",
+            "header-with-status: key:value:403",
+            "header-with-status: key: value:403",
+            "header-with-status: key: value: 403",
+            "header-with-status : key: value: 403",
+            "header-with-status : key : value: 403",
+            "header-with-status : key : value : 403",
+            "header-with-status : key : value : 403 ",
+        ];
+
+        for input in INPUTS {
+            assert_eq!(expected, S3CopyIfNotExists::from_str(input));
+        }
     }
 }

@@ -94,8 +94,7 @@
 //!
 //! This provides some compelling advantages:
 //!
-//! * Except where explicitly stated otherwise, operations are atomic, and readers
-//! cannot observe partial and/or failed writes
+//! * All operations are atomic, and readers cannot observe partial and/or failed writes
 //! * Methods map directly to object store APIs, providing both efficiency and predictability
 //! * Abstracts away filesystem and operating system specific quirks, ensuring portability
 //! * Allows for functionality not native to filesystems, such as operation preconditions
@@ -120,6 +119,7 @@
 //! application complexity.
 //!
 //! ```no_run
+//! # #[cfg(feature = "aws")] {
 //! # use url::Url;
 //! # use object_store::{parse_url, parse_url_opts};
 //! # use object_store::aws::{AmazonS3, AmazonS3Builder};
@@ -141,6 +141,7 @@
 //! let url = Url::parse("https://ACCOUNT_ID.r2.cloudflarestorage.com/bucket/path").unwrap();
 //! let (store, path) = parse_url(&url).unwrap();
 //! assert_eq!(path.as_ref(), "path");
+//! # }
 //! ```
 //!
 //! [PyArrow FileSystem]: https://arrow.apache.org/docs/python/generated/pyarrow.fs.FileSystem.html#pyarrow.fs.FileSystem.from_uri
@@ -437,6 +438,17 @@
 //! [Apache Iceberg]: https://iceberg.apache.org/
 //! [Delta Lake]: https://delta.io/
 //!
+//! # TLS Certificates
+//!
+//! Stores that use HTTPS/TLS (this is true for most cloud stores) can choose the source of their [CA]
+//! certificates. By default the system-bundled certificates are used (see
+//! [`rustls-native-certs`]). The `tls-webpki-roots` feature switch can be used to also bundle Mozilla's
+//! root certificates with the library/application (see [`webpki-roots`]).
+//!
+//! [CA]: https://en.wikipedia.org/wiki/Certificate_authority
+//! [`rustls-native-certs`]: https://crates.io/crates/rustls-native-certs/
+//! [`webpki-roots`]: https://crates.io/crates/webpki-roots
+//!
 
 #[cfg(all(
     target_arch = "wasm32",
@@ -558,30 +570,6 @@ pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
     /// See documentation for individual stores for exact behavior, as capabilities
     /// vary by object store.
     async fn abort_multipart(&self, location: &Path, multipart_id: &MultipartId) -> Result<()>;
-
-    /// Returns an [`AsyncWrite`] that can be used to append to the object at `location`
-    ///
-    /// A new object will be created if it doesn't already exist, otherwise it will be
-    /// opened, with subsequent writes appended to the end.
-    ///
-    /// This operation cannot be supported by all stores, most use-cases should prefer
-    /// [`ObjectStore::put`] and [`ObjectStore::put_multipart`] for better portability
-    /// and stronger guarantees
-    ///
-    /// This API is not guaranteed to be atomic, in particular
-    ///
-    /// * On error, `location` may contain partial data
-    /// * Concurrent calls to [`ObjectStore::list`] may return partially written objects
-    /// * Concurrent calls to [`ObjectStore::get`] may return partially written data
-    /// * Concurrent calls to [`ObjectStore::put`] may result in data loss / corruption
-    /// * Concurrent calls to [`ObjectStore::append`] may result in data loss / corruption
-    ///
-    /// Additionally some stores, such as Azure, may only support appending to objects created
-    /// with [`ObjectStore::append`], and not with [`ObjectStore::put`], [`ObjectStore::copy`], or
-    /// [`ObjectStore::put_multipart`]
-    async fn append(&self, _location: &Path) -> Result<Box<dyn AsyncWrite + Unpin + Send>> {
-        Err(Error::NotImplemented)
-    }
 
     /// Return the bytes that are stored at the specified location.
     async fn get(&self, location: &Path) -> Result<GetResult> {
@@ -777,10 +765,6 @@ macro_rules! as_ref_impl {
                 multipart_id: &MultipartId,
             ) -> Result<()> {
                 self.as_ref().abort_multipart(location, multipart_id).await
-            }
-
-            async fn append(&self, location: &Path) -> Result<Box<dyn AsyncWrite + Unpin + Send>> {
-                self.as_ref().append(location).await
             }
 
             async fn get(&self, location: &Path) -> Result<GetResult> {
@@ -1254,13 +1238,10 @@ mod tests {
     use tokio::io::AsyncWriteExt;
 
     pub(crate) async fn put_get_delete_list(storage: &DynObjectStore) {
-        put_get_delete_list_opts(storage, false).await
+        put_get_delete_list_opts(storage).await
     }
 
-    pub(crate) async fn put_get_delete_list_opts(
-        storage: &DynObjectStore,
-        skip_list_with_spaces: bool,
-    ) {
+    pub(crate) async fn put_get_delete_list_opts(storage: &DynObjectStore) {
         delete_fixtures(storage).await;
 
         let content_list = flatten_list_stream(storage, None).await.unwrap();
@@ -1471,6 +1452,23 @@ mod tests {
 
         storage.delete(&path).await.unwrap();
 
+        // Test handling of unicode paths
+        let path = Path::parse("🇦🇺/$shenanigans@@~.txt").unwrap();
+        storage.put(&path, "test".into()).await.unwrap();
+
+        let r = storage.get(&path).await.unwrap();
+        assert_eq!(r.bytes().await.unwrap(), "test");
+
+        let dir = Path::parse("🇦🇺").unwrap();
+        let r = storage.list_with_delimiter(None).await.unwrap();
+        assert!(r.common_prefixes.contains(&dir));
+
+        let r = storage.list_with_delimiter(Some(&dir)).await.unwrap();
+        assert_eq!(r.objects.len(), 1);
+        assert_eq!(r.objects[0].location, path);
+
+        storage.delete(&path).await.unwrap();
+
         // Can also write non-percent encoded sequences
         let path = Path::parse("%Q.parquet").unwrap();
         storage.put(&path, Bytes::from(vec![0, 1])).await.unwrap();
@@ -1484,12 +1482,11 @@ mod tests {
         storage.put(&path, Bytes::from(vec![0, 1])).await.unwrap();
         storage.head(&path).await.unwrap();
 
-        if !skip_list_with_spaces {
-            let files = flatten_list_stream(storage, Some(&Path::from("foo bar")))
-                .await
-                .unwrap();
-            assert_eq!(files, vec![path.clone()]);
-        }
+        let files = flatten_list_stream(storage, Some(&Path::from("foo bar")))
+            .await
+            .unwrap();
+        assert_eq!(files, vec![path.clone()]);
+
         storage.delete(&path).await.unwrap();
 
         let files = flatten_list_stream(storage, None).await.unwrap();
@@ -1536,11 +1533,11 @@ mod tests {
 
             let expected: Vec<_> = files
                 .iter()
-                .cloned()
                 .filter(|x| {
                     let prefix_match = prefix.as_ref().map(|p| x.prefix_matches(p)).unwrap_or(true);
-                    prefix_match && x > &offset
+                    prefix_match && *x > &offset
                 })
+                .cloned()
                 .collect();
 
             assert_eq!(actual, expected, "{prefix:?} - {offset:?}");

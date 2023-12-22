@@ -17,7 +17,7 @@
 
 [package]
 name = "object_store"
-version = "0.7.1"
+version = "0.8.0"
 edition = "2021"
 license = "MIT/Apache-2.0"
 readme = "README.md"
@@ -35,7 +35,7 @@ bytes = "1.0"
 chrono = { version = "0.4.31", default-features = false, features = ["clock"] }
 futures = "0.3"
 humantime = "2.1"
-itertools = "0.11.0"
+itertools = "0.12.0"
 parking_lot = { version = "0.12" }
 percent-encoding = "2.1"
 snafu = "0.7"
@@ -50,14 +50,9 @@ quick-xml = { version = "0.31.0", features = ["serialize", "overlapped-lists"], 
 serde = { version = "1.0", default-features = false, features = ["derive"], optional = true }
 serde_json = { version = "1.0", default-features = false, optional = true }
 rand = { version = "0.8", default-features = false, features = ["std", "std_rng"], optional = true }
-reqwest = { version = "0.11", default-features = false, features = ["rustls-tls"], optional = true }
+reqwest = { version = "0.11", default-features = false, features = ["rustls-tls-native-roots"], optional = true }
 ring = { version = "0.17", default-features = false, features = ["std"], optional = true }
-rustls-pemfile = { version = "1.0", default-features = false, optional = true }
-
-[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-tokio = { version = "1.25.0", features = ["sync", "macros", "rt", "time", "io-util", "fs"] }
-
-[target.'cfg(target_arch = "wasm32")'.dependencies]
+rustls-pemfile = { version = "2.0", default-features = false, features = ["std"], optional = true }
 tokio = { version = "1.25.0", features = ["sync", "macros", "rt", "time", "io-util"] }
 
 [target.'cfg(target_family="unix")'.dev-dependencies]
@@ -69,12 +64,13 @@ azure = ["cloud"]
 gcp = ["cloud", "rustls-pemfile"]
 aws = ["cloud"]
 http = ["cloud"]
+tls-webpki-roots = ["reqwest?/rustls-tls-webpki-roots"]
 
 [dev-dependencies] # In alphabetical order
-tempfile = "3.1.0"
 futures-test = "0.3"
-rand = "0.8"
 hyper = { version = "0.14.24", features = ["server"] }
+rand = "0.8"
+tempfile = "3.1.0"
 
 [[test]]
 name = "get_range_file"

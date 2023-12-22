@@ -194,6 +194,25 @@ impl S3Config {
     }
 }
 
+#[derive(Debug, Snafu)]
+pub enum RequestError {
+    #[snafu(context(false))]
+    Generic { source: crate::Error },
+    Retry {
+        source: crate::client::retry::Error,
+        path: String,
+    },
+}
+
+impl From<RequestError> for crate::Error {
+    fn from(value: RequestError) -> Self {
+        match value {
+            RequestError::Generic { source } => source,
+            RequestError::Retry { source, path } => source.error(STORE, path),
+        }
+    }
+}
+
 /// A builder for a request allowing customisation of the headers and query string
 pub(crate) struct Request<'a> {
     path: &'a Path,
@@ -217,11 +236,10 @@ impl<'a> Request<'a> {
         Self { builder, ..self }
     }
 
-    pub async fn send(self) -> Result<Response> {
+    pub async fn send(self) -> Result<Response, RequestError> {
         let credential = self.config.get_credential().await?;
-
-        let response = self
-            .builder
+        let path = self.path.as_ref();
+        self.builder
             .with_aws_sigv4(
                 credential.as_deref(),
                 &self.config.region,
@@ -231,9 +249,7 @@ impl<'a> Request<'a> {
             )
             .send_retry(&self.config.retry_config)
             .await
-            .map_err(|e| e.error(STORE, self.path.to_string()))?;
-
-        Ok(response)
+            .context(RetrySnafu { path })
     }
 
     pub async fn do_put(self) -> Result<PutResult> {

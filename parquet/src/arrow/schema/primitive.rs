@@ -304,6 +304,16 @@ fn from_fixed_len_byte_array(
             // would be incorrect if all 12 bytes of the interval are populated
             Ok(DataType::Interval(IntervalUnit::DayTime))
         }
+        (Some(LogicalType::Float16), _) => {
+            if type_length == 2 {
+                Ok(DataType::Float16)
+            } else {
+                Err(ParquetError::General(
+                    "FLOAT16 logical type must be Fixed Length Byte Array with length 2"
+                        .to_string(),
+                ))
+            }
+        }
         _ => Ok(DataType::FixedSizeBinary(type_length)),
     }
 }

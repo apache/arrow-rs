@@ -81,7 +81,10 @@ impl ObjectStoreScheme {
             }
             ("http", Some(_)) => (Self::Http, url.path()),
             ("https", Some(host)) => {
-                if host.ends_with("dfs.core.windows.net") || host.ends_with("blob.core.windows.net")
+                if host.ends_with("dfs.core.windows.net")
+                    || host.ends_with("blob.core.windows.net")
+                    || host.ends_with("dfs.fabric.microsoft.com")
+                    || host.ends_with("blob.fabric.microsoft.com")
                 {
                     (Self::MicrosoftAzure, url.path())
                 } else if host.ends_with("amazonaws.com") {
@@ -98,8 +101,7 @@ impl ObjectStoreScheme {
             _ => return Err(Error::Unrecognised { url: url.clone() }),
         };
 
-        let path = Path::parse(path)?;
-        Ok((scheme, path))
+        Ok((scheme, Path::from_url_path(path)?))
     }
 }
 
@@ -240,6 +242,42 @@ mod tests {
             ),
             ("http://mydomain/path", (ObjectStoreScheme::Http, "path")),
             ("https://mydomain/path", (ObjectStoreScheme::Http, "path")),
+            (
+                "s3://bucket/foo%20bar",
+                (ObjectStoreScheme::AmazonS3, "foo bar"),
+            ),
+            (
+                "https://foo/bar%20baz",
+                (ObjectStoreScheme::Http, "bar baz"),
+            ),
+            (
+                "file:///bar%252Efoo",
+                (ObjectStoreScheme::Local, "bar%2Efoo"),
+            ),
+            (
+                "abfss://file_system@account.dfs.fabric.microsoft.com/",
+                (ObjectStoreScheme::MicrosoftAzure, ""),
+            ),
+            (
+                "abfss://file_system@account.dfs.fabric.microsoft.com/",
+                (ObjectStoreScheme::MicrosoftAzure, ""),
+            ),
+            (
+                "https://account.dfs.fabric.microsoft.com/",
+                (ObjectStoreScheme::MicrosoftAzure, ""),
+            ),
+            (
+                "https://account.dfs.fabric.microsoft.com/container",
+                (ObjectStoreScheme::MicrosoftAzure, "container"),
+            ),
+            (
+                "https://account.blob.fabric.microsoft.com/",
+                (ObjectStoreScheme::MicrosoftAzure, ""),
+            ),
+            (
+                "https://account.blob.fabric.microsoft.com/container",
+                (ObjectStoreScheme::MicrosoftAzure, "container"),
+            ),
         ];
 
         for (s, (expected_scheme, expected_path)) in cases {
@@ -259,5 +297,13 @@ mod tests {
             let url = Url::parse(s).unwrap();
             assert!(ObjectStoreScheme::parse(&url).is_err());
         }
+    }
+
+    #[test]
+    fn test_url_spaces() {
+        let url = Url::parse("file:///my file with spaces").unwrap();
+        assert_eq!(url.path(), "/my%20file%20with%20spaces");
+        let (_, path) = parse_url(&url).unwrap();
+        assert_eq!(path.as_ref(), "my file with spaces");
     }
 }

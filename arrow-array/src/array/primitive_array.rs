@@ -352,12 +352,18 @@ pub type Time64MicrosecondArray = PrimitiveArray<Time64MicrosecondType>;
 pub type Time64NanosecondArray = PrimitiveArray<Time64NanosecondType>;
 
 /// A [`PrimitiveArray`] of “calendar” intervals in months
+///
+/// See [`IntervalYearMonthType`] for details on representation and caveats.
 pub type IntervalYearMonthArray = PrimitiveArray<IntervalYearMonthType>;
 
 /// A [`PrimitiveArray`] of “calendar” intervals in days and milliseconds
+///
+/// See [`IntervalDayTimeType`] for details on representation and caveats.
 pub type IntervalDayTimeArray = PrimitiveArray<IntervalDayTimeType>;
 
-/// A [`PrimitiveArray`] of “calendar” intervals in  months, days, and nanoseconds
+/// A [`PrimitiveArray`] of “calendar” intervals in  months, days, and nanoseconds.
+///
+/// See [`IntervalMonthDayNanoType`] for details on representation and caveats.
 pub type IntervalMonthDayNanoArray = PrimitiveArray<IntervalMonthDayNanoType>;
 
 /// A [`PrimitiveArray`] of elapsed durations in seconds

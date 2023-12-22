@@ -39,9 +39,12 @@ pub enum Error {
         body: Option<String>,
     },
 
-    #[snafu(display("Error after {retries} retries: {source}"))]
+    #[snafu(display("Error after {retries} retries in {elapsed:?}, max_retries:{max_retries}, retry_timeout:{retry_timeout:?}, source:{source}"))]
     Reqwest {
         retries: usize,
+        max_retries: usize,
+        elapsed: Duration,
+        retry_timeout: Duration,
         source: reqwest::Error,
     },
 }
@@ -198,7 +201,6 @@ impl RetryExt for reqwest::RequestBuilder {
                         }
                         Err(e) => {
                             let status = r.status();
-
                             if retries == max_retries
                                 || now.elapsed() > retry_timeout
                                 || !status.is_server_error() {
@@ -214,12 +216,18 @@ impl RetryExt for reqwest::RequestBuilder {
                                         Err(e) => {
                                             Error::Reqwest {
                                                 retries,
+                                                max_retries,
+                                                elapsed: now.elapsed(),
+                                                retry_timeout,
                                                 source: e,
                                             }
                                         }
                                     }
                                     false => Error::Reqwest {
                                         retries,
+                                        max_retries,
+                                        elapsed: now.elapsed(),
+                                        retry_timeout,
                                         source: e,
                                     }
                                 });
@@ -248,6 +256,9 @@ impl RetryExt for reqwest::RequestBuilder {
 
                             return Err(Error::Reqwest {
                                 retries,
+                                max_retries,
+                                elapsed: now.elapsed(),
+                                retry_timeout,
                                 source: e,
                             })
                         }
@@ -408,9 +419,8 @@ mod tests {
 
         let e = do_request().await.unwrap_err().to_string();
         assert!(
-            e.starts_with(
-                "Error after 2 retries: HTTP status server error (502 Bad Gateway) for url"
-            ),
+            e.contains("Error after 2 retries in") && 
+            e.contains("max_retries:2, retry_timeout:1000s, source:HTTP status server error (502 Bad Gateway) for url"),
             "{e}"
         );
 
@@ -425,7 +435,10 @@ mod tests {
         }
         let e = do_request().await.unwrap_err().to_string();
         assert!(
-            e.starts_with("Error after 2 retries: error sending request for url"),
+            e.contains("Error after 2 retries in")
+                && e.contains(
+                    "max_retries:2, retry_timeout:1000s, source:error sending request for url"
+                ),
             "{e}"
         );
 

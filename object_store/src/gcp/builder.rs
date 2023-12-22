@@ -605,7 +605,7 @@ mod tests {
             .with_bucket_name("foo")
             .with_proxy_url("https://example.com")
             .build();
-        assert!(dbg!(gcs).is_ok());
+        assert!(gcs.is_ok());
 
         let err = GoogleCloudStorageBuilder::new()
             .with_service_account_path(service_account_path.to_str().unwrap())

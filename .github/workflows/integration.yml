@@ -57,6 +57,7 @@ jobs:
     env:
       ARROW_USE_CCACHE: OFF
       ARROW_CPP_EXE_PATH: /build/cpp/debug
+      ARROW_RUST_EXE_PATH: /build/rust/debug
       BUILD_DOCS_CPP: OFF
       ARROW_INTEGRATION_CPP: ON
       ARROW_INTEGRATION_CSHARP: ON
@@ -106,6 +107,8 @@ jobs:
     strategy:
       matrix:
         rust: [ stable ]
+        # PyArrow 13 was the last version prior to introduction to Arrow PyCapsules
+        pyarrow: [ "13", "14" ]
     steps:
       - uses: actions/checkout@v4
         with:
@@ -126,16 +129,16 @@ jobs:
           path: /home/runner/target
           # this key is not equal because maturin uses different compilation flags.
           key: ${{ runner.os }}-${{ matrix.arch }}-target-maturin-cache-${{ matrix.rust }}-
-      - uses: actions/setup-python@v4
+      - uses: actions/setup-python@v5
         with:
-          python-version: '3.7'
+          python-version: '3.8'
       - name: Upgrade pip and setuptools
         run: pip install --upgrade pip setuptools wheel virtualenv
       - name: Create virtualenv and install dependencies
         run: |
           virtualenv venv
           source venv/bin/activate
-          pip install maturin toml pytest pytz pyarrow>=5.0
+          pip install maturin toml pytest pytz pyarrow==${{ matrix.pyarrow }}
       - name: Run Rust tests
         run: |
           source venv/bin/activate

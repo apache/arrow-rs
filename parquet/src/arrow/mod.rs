@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Provides API for reading/writing Arrow
+//! High-level API for reading/writing Arrow
 //! [RecordBatch](arrow_array::RecordBatch)es and
 //! [Array](arrow_array::Array)s to/from Parquet Files.
 //!

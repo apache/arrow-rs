@@ -27,6 +27,8 @@
 //! assert_eq!(stats.null_count(), 3);
 //! assert!(stats.has_min_max_set());
 //! assert!(stats.is_min_max_deprecated());
+//! assert!(stats.min_is_exact());
+//! assert!(stats.max_is_exact());
 //!
 //! match stats {
 //!     Statistics::Int32(ref typed) => {
@@ -206,19 +208,27 @@ pub fn from_thrift(
                     null_count,
                     old_format,
                 ),
-                Type::BYTE_ARRAY => Statistics::byte_array(
-                    min.map(ByteArray::from),
-                    max.map(ByteArray::from),
-                    distinct_count,
-                    null_count,
-                    old_format,
+                Type::BYTE_ARRAY => Statistics::ByteArray(
+                    ValueStatistics::new(
+                        min.map(ByteArray::from),
+                        max.map(ByteArray::from),
+                        distinct_count,
+                        null_count,
+                        old_format,
+                    )
+                    .with_max_is_exact(stats.is_max_value_exact.unwrap_or(false))
+                    .with_min_is_exact(stats.is_min_value_exact.unwrap_or(false)),
                 ),
-                Type::FIXED_LEN_BYTE_ARRAY => Statistics::fixed_len_byte_array(
-                    min.map(ByteArray::from).map(FixedLenByteArray::from),
-                    max.map(ByteArray::from).map(FixedLenByteArray::from),
-                    distinct_count,
-                    null_count,
-                    old_format,
+                Type::FIXED_LEN_BYTE_ARRAY => Statistics::FixedLenByteArray(
+                    ValueStatistics::new(
+                        min.map(ByteArray::from).map(FixedLenByteArray::from),
+                        max.map(ByteArray::from).map(FixedLenByteArray::from),
+                        distinct_count,
+                        null_count,
+                        old_format,
+                    )
+                    .with_max_is_exact(stats.is_max_value_exact.unwrap_or(false))
+                    .with_min_is_exact(stats.is_min_value_exact.unwrap_or(false)),
                 ),
             };
 
@@ -243,16 +253,20 @@ pub fn to_thrift(stats: Option<&Statistics>) -> Option<TStatistics> {
         distinct_count: stats.distinct_count().map(|value| value as i64),
         max_value: None,
         min_value: None,
+        is_max_value_exact: None,
+        is_min_value_exact: None,
     };
 
     // Get min/max if set.
-    let (min, max) = if stats.has_min_max_set() {
+    let (min, max, min_exact, max_exact) = if stats.has_min_max_set() {
         (
             Some(stats.min_bytes().to_vec()),
             Some(stats.max_bytes().to_vec()),
+            Some(stats.min_is_exact()),
+            Some(stats.max_is_exact()),
         )
     } else {
-        (None, None)
+        (None, None, None, None)
     };
 
     if stats.is_min_max_backwards_compatible() {
@@ -265,6 +279,9 @@ pub fn to_thrift(stats: Option<&Statistics>) -> Option<TStatistics> {
         thrift_stats.min_value = min;
         thrift_stats.max_value = max;
     }
+
+    thrift_stats.is_min_value_exact = min_exact;
+    thrift_stats.is_max_value_exact = max_exact;
 
     Some(thrift_stats)
 }
@@ -372,6 +389,16 @@ impl Statistics {
         statistics_enum_func![self, has_min_max_set]
     }
 
+    /// Returns `true` if the min value is set, and is an exact min value.
+    pub fn min_is_exact(&self) -> bool {
+        statistics_enum_func![self, min_is_exact]
+    }
+
+    /// Returns `true` if the max value is set, and is an exact max value.
+    pub fn max_is_exact(&self) -> bool {
+        statistics_enum_func![self, max_is_exact]
+    }
+
     /// Returns slice of bytes that represent min value.
     /// Panics if min value is not set.
     pub fn min_bytes(&self) -> &[u8] {
@@ -426,6 +453,10 @@ pub struct ValueStatistics<T> {
     distinct_count: Option<u64>,
     null_count: u64,
 
+    // Whether or not the min or max values are exact, or truncated.
+    is_max_value_exact: bool,
+    is_min_value_exact: bool,
+
     /// If `true` populate the deprecated `min` and `max` fields instead of
     /// `min_value` and `max_value`
     is_min_max_deprecated: bool,
@@ -445,12 +476,36 @@ impl<T: ParquetValueType> ValueStatistics<T> {
         is_min_max_deprecated: bool,
     ) -> Self {
         Self {
+            is_max_value_exact: max.is_some(),
+            is_min_value_exact: min.is_some(),
             min,
             max,
             distinct_count,
             null_count,
             is_min_max_deprecated,
             is_min_max_backwards_compatible: is_min_max_deprecated,
+        }
+    }
+
+    /// Set whether the stored `min` field represents the exact
+    /// minimum, or just a bound on the minimum value.
+    ///
+    /// see [`Self::min_is_exact`]
+    pub fn with_min_is_exact(self, is_min_value_exact: bool) -> Self {
+        Self {
+            is_min_value_exact,
+            ..self
+        }
+    }
+
+    /// Set whether the stored `max` field represents the exact
+    /// maximum, or just a bound on the maximum value.
+    ///
+    /// see [`Self::max_is_exact`]
+    pub fn with_max_is_exact(self, is_max_value_exact: bool) -> Self {
+        Self {
+            is_max_value_exact,
+            ..self
         }
     }
 
@@ -504,13 +559,23 @@ impl<T: ParquetValueType> ValueStatistics<T> {
         self.min.is_some() && self.max.is_some()
     }
 
+    /// Whether or not max value is set, and is an exact value.
+    pub fn max_is_exact(&self) -> bool {
+        self.max.is_some() && self.is_max_value_exact
+    }
+
+    /// Whether or not min value is set, and is an exact value.
+    pub fn min_is_exact(&self) -> bool {
+        self.min.is_some() && self.is_min_value_exact
+    }
+
     /// Returns optional value of number of distinct values occurring.
-    fn distinct_count(&self) -> Option<u64> {
+    pub fn distinct_count(&self) -> Option<u64> {
         self.distinct_count
     }
 
     /// Returns null count.
-    fn null_count(&self) -> u64 {
+    pub fn null_count(&self) -> u64 {
         self.null_count
     }
 
@@ -554,6 +619,8 @@ impl<T: ParquetValueType> fmt::Display for ValueStatistics<T> {
         }
         write!(f, ", null_count: {}", self.null_count)?;
         write!(f, ", min_max_deprecated: {}", self.is_min_max_deprecated)?;
+        write!(f, ", max_value_exact: {}", self.is_max_value_exact)?;
+        write!(f, ", min_value_exact: {}", self.is_min_value_exact)?;
         write!(f, "}}")
     }
 }
@@ -563,13 +630,15 @@ impl<T: ParquetValueType> fmt::Debug for ValueStatistics<T> {
         write!(
             f,
             "{{min: {:?}, max: {:?}, distinct_count: {:?}, null_count: {}, \
-             min_max_deprecated: {}, min_max_backwards_compatible: {}}}",
+             min_max_deprecated: {}, min_max_backwards_compatible: {}, max_value_exact: {}, min_value_exact: {}}}",
             self.min,
             self.max,
             self.distinct_count,
             self.null_count,
             self.is_min_max_deprecated,
-            self.is_min_max_backwards_compatible
+            self.is_min_max_backwards_compatible,
+            self.is_max_value_exact,
+            self.is_min_value_exact
         )
     }
 }
@@ -607,6 +676,8 @@ mod tests {
             distinct_count: None,
             max_value: None,
             min_value: None,
+            is_max_value_exact: None,
+            is_min_value_exact: None,
         };
 
         from_thrift(Type::INT32, Some(thrift_stats)).unwrap();
@@ -624,14 +695,14 @@ mod tests {
         assert_eq!(
             format!("{stats:?}"),
             "Int32({min: Some(1), max: Some(12), distinct_count: None, null_count: 12, \
-             min_max_deprecated: true, min_max_backwards_compatible: true})"
+             min_max_deprecated: true, min_max_backwards_compatible: true, max_value_exact: true, min_value_exact: true})"
         );
 
         let stats = Statistics::int32(None, None, None, 7, false);
         assert_eq!(
             format!("{stats:?}"),
             "Int32({min: None, max: None, distinct_count: None, null_count: 7, \
-             min_max_deprecated: false, min_max_backwards_compatible: false})"
+             min_max_deprecated: false, min_max_backwards_compatible: false, max_value_exact: false, min_value_exact: false})"
         )
     }
 
@@ -640,14 +711,14 @@ mod tests {
         let stats = Statistics::int32(Some(1), Some(12), None, 12, true);
         assert_eq!(
             format!("{stats}"),
-            "{min: 1, max: 12, distinct_count: N/A, null_count: 12, min_max_deprecated: true}"
+            "{min: 1, max: 12, distinct_count: N/A, null_count: 12, min_max_deprecated: true, max_value_exact: true, min_value_exact: true}"
         );
 
         let stats = Statistics::int64(None, None, None, 7, false);
         assert_eq!(
             format!("{stats}"),
             "{min: N/A, max: N/A, distinct_count: N/A, null_count: 7, min_max_deprecated: \
-             false}"
+             false, max_value_exact: false, min_value_exact: false}"
         );
 
         let stats = Statistics::int96(
@@ -660,19 +731,23 @@ mod tests {
         assert_eq!(
             format!("{stats}"),
             "{min: [1, 0, 0], max: [2, 3, 4], distinct_count: N/A, null_count: 3, \
-             min_max_deprecated: true}"
+             min_max_deprecated: true, max_value_exact: true, min_value_exact: true}"
         );
 
-        let stats = Statistics::byte_array(
-            Some(ByteArray::from(vec![1u8])),
-            Some(ByteArray::from(vec![2u8])),
-            Some(5),
-            7,
-            false,
+        let stats = Statistics::ByteArray(
+            ValueStatistics::new(
+                Some(ByteArray::from(vec![1u8])),
+                Some(ByteArray::from(vec![2u8])),
+                Some(5),
+                7,
+                false,
+            )
+            .with_max_is_exact(false)
+            .with_min_is_exact(false),
         );
         assert_eq!(
             format!("{stats}"),
-            "{min: [1], max: [2], distinct_count: 5, null_count: 7, min_max_deprecated: false}"
+            "{min: [1], max: [2], distinct_count: 5, null_count: 7, min_max_deprecated: false, max_value_exact: false, min_value_exact: false}"
         );
     }
 
@@ -708,7 +783,45 @@ mod tests {
                 Some(ByteArray::from(vec![1, 2, 3]).into()),
                 None,
                 0,
-                true
+                true,
+            )
+        );
+
+        assert!(
+            Statistics::byte_array(
+                Some(ByteArray::from(vec![1, 2, 3])),
+                Some(ByteArray::from(vec![1, 2, 3])),
+                None,
+                0,
+                true,
+            ) != Statistics::ByteArray(
+                ValueStatistics::new(
+                    Some(ByteArray::from(vec![1, 2, 3])),
+                    Some(ByteArray::from(vec![1, 2, 3])),
+                    None,
+                    0,
+                    true,
+                )
+                .with_max_is_exact(false)
+            )
+        );
+
+        assert!(
+            Statistics::fixed_len_byte_array(
+                Some(FixedLenByteArray::from(vec![1, 2, 3])),
+                Some(FixedLenByteArray::from(vec![1, 2, 3])),
+                None,
+                0,
+                true,
+            ) != Statistics::FixedLenByteArray(
+                ValueStatistics::new(
+                    Some(FixedLenByteArray::from(vec![1, 2, 3])),
+                    Some(FixedLenByteArray::from(vec![1, 2, 3])),
+                    None,
+                    0,
+                    true,
+                )
+                .with_min_is_exact(false)
             )
         );
     }
