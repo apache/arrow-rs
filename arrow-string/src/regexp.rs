@@ -88,8 +88,7 @@ pub fn regexp_is_match_utf8<OffsetSize: OffsetSizeTrait>(
                                     "Regular expression did not compile: {e:?}"
                                 ))
                             })?;
-                            patterns.insert(pattern.clone(), re);
-                            patterns.get(&pattern).unwrap()
+                            patterns.entry(pattern).or_insert(re)
                         }
                     };
                     result.append(re.is_match(value));
@@ -223,8 +222,7 @@ pub fn regexp_match<OffsetSize: OffsetSizeTrait>(
                                     "Regular expression did not compile: {e:?}"
                                 ))
                             })?;
-                            patterns.insert(pattern.clone(), re);
-                            patterns.get(&pattern).unwrap()
+                            patterns.entry(pattern).or_insert(re)
                         }
                     };
                     match re.captures(value) {
