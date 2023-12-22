@@ -248,6 +248,11 @@ harness = false
 required-features = ["test_utils"]
 
 [[bench]]
+name = "regexp_kernels"
+harness = false
+required-features = ["test_utils"]
+
+[[bench]]
 name = "array_data_validate"
 harness = false
 
