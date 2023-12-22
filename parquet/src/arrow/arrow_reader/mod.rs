@@ -677,11 +677,16 @@ pub(crate) fn apply_range(
     selection
 }
 
-/// Evaluates an [`ArrowPredicate`] returning the [`RowSelection`]
+/// Evaluates an [`ArrowPredicate`], returning a [`RowSelection`] indicating
+/// which rows to return.
 ///
-/// If this [`ParquetRecordBatchReader`] has a [`RowSelection`], the
-/// returned [`RowSelection`] will be the conjunction of this and
-/// the rows selected by `predicate`
+/// `input_selection`: Optional pre-existing selection. If `Some`, then the
+/// final [`RowSelection`] will be the conjunction of it and the rows selected
+/// by `predicate`.
+///
+/// Note: A pre-existing selection may come from evaluating a previous predicate
+/// or if the [`ParquetRecordBatchReader`] specified an explicit
+/// [`RowSelection`] in addition to one or more predicates.
 pub(crate) fn evaluate_predicate(
     batch_size: usize,
     array_reader: Box<dyn ArrayReader>,
@@ -691,7 +696,16 @@ pub(crate) fn evaluate_predicate(
     let reader = ParquetRecordBatchReader::new(batch_size, array_reader, input_selection.clone());
     let mut filters = vec![];
     for maybe_batch in reader {
-        let filter = predicate.evaluate(maybe_batch?)?;
+        let maybe_batch = maybe_batch?;
+        let input_rows = maybe_batch.num_rows();
+        let filter = predicate.evaluate(maybe_batch)?;
+        // Since user supplied predicate, check error here to catch bugs quickly
+        if filter.len() != input_rows {
+            return Err(arrow_err!(
+                "ArrowPredicate predicate returned {} rows, expected {input_rows}",
+                filter.len()
+            ));
+        }
         match filter.null_count() {
             0 => filters.push(filter),
             _ => filters.push(prep_null_mask_filter(&filter)),
