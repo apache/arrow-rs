@@ -78,18 +78,16 @@ impl From<Error> for crate::Error {
     }
 }
 
-/// Configure a connection to Google Cloud Storage using the specified
-/// credentials.
+/// Configure a connection to Google Cloud Storage.
+///
+/// If no credentials are explicitly provided, they will be sourced
+/// from the environment as documented [here](https://cloud.google.com/docs/authentication/application-default-credentials).
 ///
 /// # Example
 /// ```
 /// # let BUCKET_NAME = "foo";
-/// # let SERVICE_ACCOUNT_PATH = "/tmp/foo.json";
 /// # use object_store::gcp::GoogleCloudStorageBuilder;
-/// let gcs = GoogleCloudStorageBuilder::new()
-///  .with_service_account_path(SERVICE_ACCOUNT_PATH)
-///  .with_bucket_name(BUCKET_NAME)
-///  .build();
+/// let gcs = GoogleCloudStorageBuilder::from_env().with_bucket_name(BUCKET_NAME).build();
 /// ```
 #[derive(Debug, Clone)]
 pub struct GoogleCloudStorageBuilder {
