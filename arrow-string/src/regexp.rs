@@ -81,15 +81,14 @@ pub fn regexp_is_match_utf8<OffsetSize: OffsetSizeTrait>(
                 (Some(value), Some(pattern)) => {
                     let existing_pattern = patterns.get(&pattern);
                     let re = match existing_pattern {
-                        Some(re) => re.clone(),
+                        Some(re) => re,
                         None => {
                             let re = Regex::new(pattern.as_str()).map_err(|e| {
                                 ArrowError::ComputeError(format!(
                                     "Regular expression did not compile: {e:?}"
                                 ))
                             })?;
-                            patterns.insert(pattern, re.clone());
-                            re
+                            patterns.entry(pattern).or_insert(re)
                         }
                     };
                     result.append(re.is_match(value));
@@ -216,15 +215,14 @@ pub fn regexp_match<OffsetSize: OffsetSizeTrait>(
                 (Some(value), Some(pattern)) => {
                     let existing_pattern = patterns.get(&pattern);
                     let re = match existing_pattern {
-                        Some(re) => re.clone(),
+                        Some(re) => re,
                         None => {
                             let re = Regex::new(pattern.as_str()).map_err(|e| {
                                 ArrowError::ComputeError(format!(
                                     "Regular expression did not compile: {e:?}"
                                 ))
                             })?;
-                            patterns.insert(pattern, re.clone());
-                            re
+                            patterns.entry(pattern).or_insert(re)
                         }
                     };
                     match re.captures(value) {
