@@ -86,9 +86,8 @@ impl From<Error> for crate::Error {
 /// # Example
 /// ```
 /// # let BUCKET_NAME = "foo";
-/// # let SERVICE_ACCOUNT_PATH = "/tmp/foo.json";
 /// # use object_store::gcp::GoogleCloudStorageBuilder;
-/// let gcs = GoogleCloudStorageBuilder::from_env().build();
+/// let gcs = GoogleCloudStorageBuilder::from_env().with_bucket_name(BUCKET_NAME).build();
 /// ```
 #[derive(Debug, Clone)]
 pub struct GoogleCloudStorageBuilder {
