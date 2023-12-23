@@ -25,15 +25,12 @@ use async_trait::async_trait;
 use base64::prelude::BASE64_STANDARD;
 use base64::Engine;
 use chrono::{DateTime, Utc};
-use reqwest::header::ACCEPT;
-use reqwest::{
-    header::{
-        HeaderMap, HeaderName, HeaderValue, AUTHORIZATION, CONTENT_ENCODING, CONTENT_LANGUAGE,
-        CONTENT_LENGTH, CONTENT_TYPE, DATE, IF_MATCH, IF_MODIFIED_SINCE, IF_NONE_MATCH,
-        IF_UNMODIFIED_SINCE, RANGE,
-    },
-    Client, Method, RequestBuilder,
+use reqwest::header::{
+    HeaderMap, HeaderName, HeaderValue, ACCEPT, AUTHORIZATION, CONTENT_ENCODING, CONTENT_LANGUAGE,
+    CONTENT_LENGTH, CONTENT_TYPE, DATE, IF_MATCH, IF_MODIFIED_SINCE, IF_NONE_MATCH,
+    IF_UNMODIFIED_SINCE, RANGE,
 };
+use reqwest::{Client, Method, Request, RequestBuilder};
 use serde::Deserialize;
 use snafu::{ResultExt, Snafu};
 use std::borrow::Cow;
@@ -137,33 +134,37 @@ pub mod authority_hosts {
     pub const AZURE_PUBLIC_CLOUD: &str = "https://login.microsoftonline.com";
 }
 
-pub(crate) trait CredentialExt {
-    /// Apply authorization to requests against azure storage accounts
-    /// <https://docs.microsoft.com/en-us/rest/api/storageservices/authorize-requests-to-azure-storage>
-    fn with_azure_authorization(self, credential: &AzureCredential, account: &str) -> Self;
+pub struct AzureAuthorizer<'a> {
+    credential: &'a AzureCredential,
+    account: &'a str,
 }
 
-impl CredentialExt for RequestBuilder {
-    fn with_azure_authorization(mut self, credential: &AzureCredential, account: &str) -> Self {
+impl<'a> AzureAuthorizer<'a> {
+    pub fn new(credential: &'a AzureCredential, account: &'a str) -> Self {
+        AzureAuthorizer {
+            credential,
+            account,
+        }
+    }
+
+    pub fn authorize(&self, request: &mut Request) {
         // rfc2822 string should never contain illegal characters
         let date = Utc::now();
         let date_str = date.format(RFC1123_FMT).to_string();
         // we formatted the data string ourselves, so unwrapping should be fine
         let date_val = HeaderValue::from_str(&date_str).unwrap();
-        self = self
-            .header(DATE, &date_val)
-            .header(&VERSION, &AZURE_VERSION);
+        request.headers_mut().insert(DATE, date_val);
+        request
+            .headers_mut()
+            .insert(&VERSION, AZURE_VERSION.clone());
 
-        match credential {
+        match self.credential {
             AzureCredential::AccessKey(key) => {
-                let (client, request) = self.build_split();
-                let mut request = request.expect("request valid");
-
                 let signature = generate_authorization(
                     request.headers(),
                     request.url(),
                     request.method(),
-                    account,
+                    self.account,
                     key,
                 );
 
@@ -173,12 +174,37 @@ impl CredentialExt for RequestBuilder {
                     AUTHORIZATION,
                     HeaderValue::from_str(signature.as_str()).unwrap(),
                 );
-
-                Self::from_parts(client, request)
             }
-            AzureCredential::BearerToken(token) => self.bearer_auth(token),
-            AzureCredential::SASToken(query_pairs) => self.query(&query_pairs),
+            AzureCredential::BearerToken(token) => {
+                request.headers_mut().append(
+                    AUTHORIZATION,
+                    HeaderValue::from_str(format!("Bearer {}", token).as_str()).unwrap(),
+                );
+            }
+            AzureCredential::SASToken(query_pairs) => {
+                request
+                    .url_mut()
+                    .query_pairs_mut()
+                    .extend_pairs(query_pairs);
+            }
         }
+    }
+}
+
+pub(crate) trait CredentialExt {
+    /// Apply authorization to requests against azure storage accounts
+    /// <https://docs.microsoft.com/en-us/rest/api/storageservices/authorize-requests-to-azure-storage>
+    fn with_azure_authorization(self, credential: &AzureCredential, account: &str) -> Self;
+}
+
+impl CredentialExt for RequestBuilder {
+    fn with_azure_authorization(self, credential: &AzureCredential, account: &str) -> Self {
+        let (client, request) = self.build_split();
+        let mut request = request.expect("request valid");
+
+        AzureAuthorizer::new(credential, account).authorize(&mut request);
+
+        Self::from_parts(client, request)
     }
 }
 
