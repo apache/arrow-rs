@@ -99,10 +99,7 @@ impl TreeBuilder {
         row_group_reader: &dyn RowGroupReader,
     ) -> Result<ReaderIter> {
         let num_records = row_group_reader.metadata().num_rows() as usize;
-        ReaderIter::new(
-            self.build(descr, row_group_reader)?,
-            num_records,
-        )
+        ReaderIter::new(self.build(descr, row_group_reader)?, num_records)
     }
 
     /// Builds tree of readers for the current schema recursively.
@@ -555,21 +552,15 @@ impl Reader {
     /// Advances leaf columns for the current reader.
     fn advance_columns(&mut self) -> Result<()> {
         match *self {
-            Reader::PrimitiveReader(_, ref mut column) => {
-                column.read_next().map(|_| ())
-            }
-            Reader::OptionReader(_, ref mut reader) => {
-                reader.advance_columns()
-            }
+            Reader::PrimitiveReader(_, ref mut column) => column.read_next().map(|_| ()),
+            Reader::OptionReader(_, ref mut reader) => reader.advance_columns(),
             Reader::GroupReader(_, _, ref mut readers) => {
                 for reader in readers {
                     reader.advance_columns()?;
                 }
                 Ok(())
             }
-            Reader::RepeatedReader(_, _, _, ref mut reader) => {
-                reader.advance_columns()
-            }
+            Reader::RepeatedReader(_, _, _, ref mut reader) => reader.advance_columns(),
             Reader::KeyValueReader(_, _, _, ref mut keys, ref mut values) => {
                 keys.advance_columns()?;
                 values.advance_columns()
