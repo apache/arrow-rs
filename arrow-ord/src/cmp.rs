@@ -169,7 +169,6 @@ pub fn not_distinct(lhs: &dyn Datum, rhs: &dyn Datum) -> Result<BooleanArray, Ar
 /// Perform `op` on the provided `Datum`
 #[inline(never)]
 fn compare_op(op: Op, lhs: &dyn Datum, rhs: &dyn Datum) -> Result<BooleanArray, ArrowError> {
-    use arrow_schema::DataType::*;
     let (l, l_s) = lhs.get();
     let (r, r_s) = rhs.get();
 
@@ -179,28 +178,6 @@ fn compare_op(op: Op, lhs: &dyn Datum, rhs: &dyn Datum) -> Result<BooleanArray, 
     if l_len != r_len && !l_s && !r_s {
         return Err(ArrowError::InvalidArgumentError(format!(
             "Cannot compare arrays of different lengths, got {l_len} vs {r_len}"
-        )));
-    }
-
-    let l_t = l.data_type();
-    let r_t = r.data_type();
-    if l_t.is_nested() {
-        if !l_t.equals_datatype(r_t) {
-            return Err(ArrowError::InvalidArgumentError(format!(
-                "Invalid comparison operation: {l_t} {op} {r_t}"
-            )));
-        }
-        match (l_t, op) {
-            (Struct(_), Op::Equal | Op::NotEqual | Op::Distinct | Op::NotDistinct) => {}
-            _ => {
-                return Err(ArrowError::InvalidArgumentError(format!(
-                    "Invalid comparison operation: {l_t} {op} {r_t}"
-                )));
-            }
-        }
-    } else if r_t != l_t {
-        return Err(ArrowError::InvalidArgumentError(format!(
-            "Invalid comparison operation: {l_t} {op} {r_t}"
         )));
     }
 
@@ -284,9 +261,31 @@ fn compare_op_values(
     use arrow_schema::DataType::*;
     let l_v = l.as_any_dictionary_opt();
     let l = l_v.map(|x| x.values().as_ref()).unwrap_or(l);
+    let l_t = l.data_type();
 
     let r_v = r.as_any_dictionary_opt();
     let r = r_v.map(|x| x.values().as_ref()).unwrap_or(r);
+    let r_t = r.data_type();
+
+    if l_t.is_nested() {
+        if !l_t.equals_datatype(r_t) {
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "Invalid comparison operation: {l_t} {op} {r_t}"
+            )));
+        }
+        match (l_t, op) {
+            (Struct(_), Op::Equal | Op::NotEqual | Op::Distinct | Op::NotDistinct) => {}
+            _ => {
+                return Err(ArrowError::InvalidArgumentError(format!(
+                    "Invalid comparison operation: {l_t} {op} {r_t}"
+                )));
+            }
+        }
+    } else if r_t != l_t {
+        return Err(ArrowError::InvalidArgumentError(format!(
+            "Invalid comparison operation: {l_t} {op} {r_t}"
+        )));
+    }
 
     let l_nulls = l.logical_nulls().filter(|n| n.null_count() > 0);
     let r_nulls = r.logical_nulls().filter(|n| n.null_count() > 0);
