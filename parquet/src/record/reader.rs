@@ -99,10 +99,10 @@ impl TreeBuilder {
         row_group_reader: &dyn RowGroupReader,
     ) -> Result<ReaderIter> {
         let num_records = row_group_reader.metadata().num_rows() as usize;
-        Ok(ReaderIter::new(
+        ReaderIter::new(
             self.build(descr, row_group_reader)?,
             num_records,
-        ))
+        )
     }
 
     /// Builds tree of readers for the current schema recursively.
@@ -411,7 +411,7 @@ impl Reader {
                 if reader.current_def_level() > def_level {
                     reader.read_field()?
                 } else {
-                    reader.advance_columns();
+                    reader.advance_columns()?;
                     Field::Null
                 }
             }
@@ -423,7 +423,7 @@ impl Reader {
                     {
                         fields.push((String::from(reader.field_name()), reader.read_field()?));
                     } else {
-                        reader.advance_columns();
+                        reader.advance_columns()?;
                         fields.push((String::from(reader.field_name()), Field::Null));
                     }
                 }
@@ -436,7 +436,7 @@ impl Reader {
                     if reader.current_def_level() > def_level {
                         elements.push(reader.read_field()?);
                     } else {
-                        reader.advance_columns();
+                        reader.advance_columns()?;
                         // If the current definition level is equal to the definition
                         // level of this repeated type, then the
                         // result is an empty list and the repetition level
@@ -459,8 +459,8 @@ impl Reader {
                     if keys.current_def_level() > def_level {
                         pairs.push((keys.read_field()?, values.read_field()?));
                     } else {
-                        keys.advance_columns();
-                        values.advance_columns();
+                        keys.advance_columns()?;
+                        values.advance_columns()?;
                         // If the current definition level is equal to the definition
                         // level of this repeated type, then the
                         // result is an empty list and the repetition level
@@ -553,25 +553,26 @@ impl Reader {
     }
 
     /// Advances leaf columns for the current reader.
-    fn advance_columns(&mut self) {
+    fn advance_columns(&mut self) -> Result<()> {
         match *self {
             Reader::PrimitiveReader(_, ref mut column) => {
-                column.read_next().unwrap();
+                column.read_next().map(|_| ())
             }
             Reader::OptionReader(_, ref mut reader) => {
-                reader.advance_columns();
+                reader.advance_columns()
             }
             Reader::GroupReader(_, _, ref mut readers) => {
                 for reader in readers {
-                    reader.advance_columns();
+                    reader.advance_columns()?;
                 }
+                Ok(())
             }
             Reader::RepeatedReader(_, _, _, ref mut reader) => {
-                reader.advance_columns();
+                reader.advance_columns()
             }
             Reader::KeyValueReader(_, _, _, ref mut keys, ref mut values) => {
-                keys.advance_columns();
-                values.advance_columns();
+                keys.advance_columns()?;
+                values.advance_columns()
             }
         }
     }
@@ -784,13 +785,13 @@ pub struct ReaderIter {
 }
 
 impl ReaderIter {
-    fn new(mut root_reader: Reader, num_records: usize) -> Self {
+    fn new(mut root_reader: Reader, num_records: usize) -> Result<Self> {
         // Prepare root reader by advancing all column vectors
-        root_reader.advance_columns();
-        Self {
+        root_reader.advance_columns()?;
+        Ok(Self {
             root_reader,
             records_left: num_records,
-        }
+        })
     }
 }
 
