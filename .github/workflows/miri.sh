@@ -5,6 +5,8 @@
 # Must be run with nightly rust for example
 # rustup default nightly
 
+set -e
+
 export MIRIFLAGS="-Zmiri-disable-isolation"
 cargo miri setup
 cargo clean
