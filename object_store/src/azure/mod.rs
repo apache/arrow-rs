@@ -27,22 +27,26 @@
 //! a way to drop old blocks. Instead unused blocks are automatically cleaned up
 //! after 7 days.
 use crate::{
-    multipart::{PartId, PutPart, WriteMultiPart},
+    multipart::{MultiPartStore, PartId, PutPart, WriteMultiPart},
     path::Path,
+    signer::Signer,
     GetOptions, GetResult, ListResult, MultipartId, ObjectMeta, ObjectStore, PutOptions, PutResult,
     Result,
 };
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures::stream::BoxStream;
+use reqwest::Method;
 use std::fmt::Debug;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::io::AsyncWrite;
+use url::Url;
 
 use crate::client::get::GetClientExt;
 use crate::client::list::ListClientExt;
 use crate::client::CredentialProvider;
-pub use credential::authority_hosts;
+pub use credential::{authority_hosts, AzureAuthorizer};
 
 mod builder;
 mod client;
@@ -50,7 +54,6 @@ mod credential;
 
 /// [`CredentialProvider`] for [`MicrosoftAzure`]
 pub type AzureCredentialProvider = Arc<dyn CredentialProvider<Credential = AzureCredential>>;
-use crate::multipart::MultiPartStore;
 pub use builder::{AzureConfigKey, MicrosoftAzureBuilder};
 pub use credential::AzureCredential;
 
@@ -66,6 +69,11 @@ impl MicrosoftAzure {
     /// Returns the [`AzureCredentialProvider`] used by [`MicrosoftAzure`]
     pub fn credentials(&self) -> &AzureCredentialProvider {
         &self.client.config().credentials
+    }
+
+    /// Create a full URL to the resource specified by `path` with this instance's configuration.
+    fn path_url(&self, path: &Path) -> url::Url {
+        self.client.config().path_url(path)
     }
 }
 
@@ -125,6 +133,49 @@ impl ObjectStore for MicrosoftAzure {
 
     async fn copy_if_not_exists(&self, from: &Path, to: &Path) -> Result<()> {
         self.client.copy_request(from, to, false).await
+    }
+}
+
+#[async_trait]
+impl Signer for MicrosoftAzure {
+    /// Create a URL containing the relevant [Service SAS] query parameters that authorize a request
+    /// via `method` to the resource at `path` valid for the duration specified in `expires_in`.
+    ///
+    /// [Service SAS]: https://learn.microsoft.com/en-us/rest/api/storageservices/create-service-sas
+    ///
+    /// # Example
+    ///
+    /// This example returns a URL that will enable a user to upload a file to
+    /// "some-folder/some-file.txt" in the next hour.
+    ///
+    /// ```
+    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// # use object_store::{azure::MicrosoftAzureBuilder, path::Path, signer::Signer};
+    /// # use reqwest::Method;
+    /// # use std::time::Duration;
+    /// #
+    /// let azure = MicrosoftAzureBuilder::new()
+    ///     .with_account("my-account")
+    ///     .with_access_key("my-access-key")
+    ///     .with_container_name("my-container")
+    ///     .build()?;
+    ///
+    /// let url = azure.signed_url(
+    ///     Method::PUT,
+    ///     &Path::from("some-folder/some-file.txt"),
+    ///     Duration::from_secs(60 * 60)
+    /// ).await?;
+    /// #     Ok(())
+    /// # }
+    /// ```
+    async fn signed_url(&self, method: Method, path: &Path, expires_in: Duration) -> Result<Url> {
+        let credential = self.credentials().get_credential().await?;
+        let authorizer = AzureAuthorizer::new(&credential, &self.client.config().account);
+
+        let mut url = self.path_url(path);
+        authorizer.sign(method, &mut url, expires_in)?;
+
+        Ok(url)
     }
 }
 

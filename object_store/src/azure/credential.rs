@@ -24,7 +24,7 @@ use crate::RetryConfig;
 use async_trait::async_trait;
 use base64::prelude::BASE64_STANDARD;
 use base64::Engine;
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, SecondsFormat, Utc};
 use reqwest::header::{
     HeaderMap, HeaderName, HeaderValue, ACCEPT, AUTHORIZATION, CONTENT_ENCODING, CONTENT_LANGUAGE,
     CONTENT_LENGTH, CONTENT_TYPE, DATE, IF_MATCH, IF_MODIFIED_SINCE, IF_NONE_MATCH,
@@ -34,13 +34,15 @@ use reqwest::{Client, Method, Request, RequestBuilder};
 use serde::Deserialize;
 use snafu::{ResultExt, Snafu};
 use std::borrow::Cow;
+use std::collections::HashMap;
+use std::fmt::Debug;
 use std::process::Command;
 use std::str;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 use url::Url;
 
-static AZURE_VERSION: HeaderValue = HeaderValue::from_static("2021-08-06");
+static AZURE_VERSION: HeaderValue = HeaderValue::from_static("2023-11-03");
 static VERSION: HeaderName = HeaderName::from_static("x-ms-version");
 pub(crate) static BLOB_TYPE: HeaderName = HeaderName::from_static("x-ms-blob-type");
 pub(crate) static DELETE_SNAPSHOTS: HeaderName = HeaderName::from_static("x-ms-delete-snapshots");
@@ -80,6 +82,9 @@ pub enum Error {
 
     #[snafu(display("Failed to parse azure cli response: {source}"))]
     AzureCliResponse { source: serde_json::Error },
+
+    #[snafu(display("Generating SAS keys with SAS tokens auth is not supported"))]
+    SASforSASNotSupported,
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
@@ -134,12 +139,15 @@ pub mod authority_hosts {
     pub const AZURE_PUBLIC_CLOUD: &str = "https://login.microsoftonline.com";
 }
 
+/// Authorize a [`Request`] with an [`AzureAuthorizer`]
+#[derive(Debug)]
 pub struct AzureAuthorizer<'a> {
     credential: &'a AzureCredential,
     account: &'a str,
 }
 
 impl<'a> AzureAuthorizer<'a> {
+    /// Create a new [`AzureAuthorizer`]
     pub fn new(credential: &'a AzureCredential, account: &'a str) -> Self {
         AzureAuthorizer {
             credential,
@@ -147,6 +155,7 @@ impl<'a> AzureAuthorizer<'a> {
         }
     }
 
+    /// Authorize `request`
     pub fn authorize(&self, request: &mut Request) {
         // rfc2822 string should never contain illegal characters
         let date = Utc::now();
@@ -188,6 +197,24 @@ impl<'a> AzureAuthorizer<'a> {
                     .extend_pairs(query_pairs);
             }
         }
+    }
+
+    pub(crate) fn sign(&self, method: Method, url: &mut Url, expires_in: Duration) -> Result<()> {
+        match self.credential {
+            AzureCredential::AccessKey(key) => {
+                let (str_to_sign, query_pairs) =
+                    string_to_sign_service_sas(url, &method, self.account, expires_in);
+                let auth = hmac_sha256(&key.0, str_to_sign);
+                url.query_pairs_mut().extend_pairs(query_pairs);
+                url.query_pairs_mut()
+                    .append_pair("sig", BASE64_STANDARD.encode(auth).as_str());
+            }
+            AzureCredential::BearerToken(token) => {
+                todo!()
+            }
+            AzureCredential::SASToken(_) => return Err(Error::SASforSASNotSupported),
+        };
+        Ok(())
     }
 }
 
@@ -231,6 +258,80 @@ fn add_if_exists<'a>(h: &'a HeaderMap, key: &HeaderName) -> &'a str {
         .unwrap_or_default()
 }
 
+fn string_to_sign_service_sas(
+    u: &Url,
+    method: &Method,
+    account: &str,
+    expires_in: Duration,
+) -> (String, HashMap<&'static str, String>) {
+    let signed_resource = if u
+        .query()
+        .map(|q| q.contains("comp=list"))
+        .unwrap_or_default()
+    {
+        "c"
+    } else {
+        "b"
+    }
+    .to_string();
+
+    // https://learn.microsoft.com/en-us/rest/api/storageservices/create-service-sas#permissions-for-a-directory-container-or-blob
+    let signed_permissions = match *method {
+        // read and list permissions
+        Method::GET => match signed_resource.as_str() {
+            "c" => "rl",
+            "b" => "r",
+            _ => unreachable!(),
+        },
+        // write permissions (also allows crating a new blob in a sub-key)
+        Method::PUT => "w",
+        // delete permissions
+        Method::DELETE => "d",
+        // other methods are not used in any of the current operations
+        _ => "",
+    }
+    .to_string();
+    let signed_start = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
+    let signed_expiry = (Utc::now() + expires_in).to_rfc3339_opts(SecondsFormat::Secs, true);
+    let canonicalized_resource = if u.host_str().unwrap_or_default().contains(account) {
+        format!("/blob/{}{}", account, u.path())
+    } else {
+        // NOTE: in case of the emulator, the account name is not part of the host
+        //      but the path starts with the account name
+        format!("/blob{}", u.path())
+    };
+
+    // https://learn.microsoft.com/en-us/rest/api/storageservices/create-service-sas#version-2020-12-06-and-later
+    let string_to_sign = format!(
+        "{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}",
+        signed_permissions,
+        signed_start,
+        signed_expiry,
+        canonicalized_resource,
+        "",                               // signed identifier
+        "",                               // signed ip
+        "",                               // signed protocol
+        &AZURE_VERSION.to_str().unwrap(), // signed version
+        signed_resource,                  // signed resource
+        "",                               // signed snapshot time
+        "",                               // signed encryption scope
+        "",                               // rscc - response header: Cache-Control
+        "",                               // rscd - response header: Content-Disposition
+        "",                               // rsce - response header: Content-Encoding
+        "",                               // rscl - response header: Content-Language
+        "",                               // rsct - response header: Content-Type
+    );
+
+    let mut pairs = HashMap::new();
+    pairs.insert("sv", AZURE_VERSION.to_str().unwrap().to_string());
+    pairs.insert("sp", signed_permissions);
+    pairs.insert("st", signed_start);
+    pairs.insert("se", signed_expiry);
+    pairs.insert("sr", signed_resource);
+
+    (string_to_sign, pairs)
+}
+
 /// <https://docs.microsoft.com/en-us/rest/api/storageservices/authorize-with-shared-key#constructing-the-signature-string>
 fn string_to_sign(h: &HeaderMap, u: &Url, method: &Method, account: &str) -> String {
     // content length must only be specified if != 0
@@ -258,7 +359,7 @@ fn string_to_sign(h: &HeaderMap, u: &Url, method: &Method, account: &str) -> Str
         add_if_exists(h, &IF_UNMODIFIED_SINCE),
         add_if_exists(h, &RANGE),
         canonicalize_header(h),
-        canonicalized_resource(account, u)
+        canonicalize_resource(account, u)
     )
 }
 
@@ -283,7 +384,7 @@ fn canonicalize_header(headers: &HeaderMap) -> String {
 }
 
 /// <https://docs.microsoft.com/en-us/rest/api/storageservices/authorize-with-shared-key#constructing-the-canonicalized-resource-string>
-fn canonicalized_resource(account: &str, uri: &Url) -> String {
+fn canonicalize_resource(account: &str, uri: &Url) -> String {
     let mut can_res: String = String::new();
     can_res.push('/');
     can_res.push_str(account);
@@ -707,13 +808,19 @@ impl CredentialProvider for AzureCliCredential {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::client::mock_server::MockServer;
+    use bytes::Bytes;
     use futures::executor::block_on;
     use hyper::body::to_bytes;
     use hyper::{Body, Response};
     use reqwest::{Client, Method};
     use tempfile::NamedTempFile;
+
+    use super::*;
+    use crate::azure::MicrosoftAzureBuilder;
+    use crate::client::mock_server::MockServer;
+    use crate::path::Path;
+    use crate::signer::Signer;
+    use crate::ObjectStore;
 
     #[tokio::test]
     async fn test_managed_identity() {
@@ -821,5 +928,28 @@ mod tests {
             token.token.as_ref(),
             &AzureCredential::BearerToken("TOKEN".into())
         );
+    }
+
+    #[tokio::test]
+    async fn test_service_sas() {
+        crate::test_util::maybe_skip_integration!();
+        let integration = MicrosoftAzureBuilder::from_env()
+            .with_container_name("test-bucket")
+            .build()
+            .unwrap();
+
+        let data = Bytes::from("hello world");
+        let path = Path::from("file.txt");
+        integration.put(&path, data.clone()).await.unwrap();
+
+        let signed = integration
+            .signed_url(Method::GET, &path, Duration::from_secs(60))
+            .await
+            .unwrap();
+
+        let resp = reqwest::get(signed).await.unwrap();
+        let loaded = resp.bytes().await.unwrap();
+
+        assert_eq!(data, loaded);
     }
 }
