@@ -455,7 +455,7 @@ fn collect_field_types_from_object(
                 set_object_scalar_field_type(field_types, k, DataType::Utf8)?;
             }
             Value::Object(inner_map) => {
-                if !field_types.contains_key(k) {
+                if let InferredType::Any = field_types.get(k).unwrap_or(&InferredType::Any) {
                     field_types.insert(k.to_string(), InferredType::Object(HashMap::new()));
                 }
                 match field_types.get_mut(k).unwrap() {
@@ -717,6 +717,26 @@ mod tests {
             Field::new("ns", DataType::Utf8, true),
             Field::new("sn", DataType::Utf8, true),
         ]);
+        assert_eq!(inferred_schema, schema);
+    }
+
+    #[test]
+    fn test_infer_from_null_then_object() {
+        let data = r#"
+            {"obj":null}
+            {"obj":{"foo":1}}
+        "#;
+        let (inferred_schema, _) =
+            infer_json_schema_from_seekable(Cursor::new(data), None).expect("infer");
+        let schema = Schema::new(vec![Field::new(
+            "obj",
+            DataType::Struct(
+                [Field::new("foo", DataType::Int64, true)]
+                    .into_iter()
+                    .collect(),
+            ),
+            true,
+        )]);
         assert_eq!(inferred_schema, schema);
     }
 }

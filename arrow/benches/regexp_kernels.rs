@@ -15,9 +15,30 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::ArrowPrimitiveType;
+#[macro_use]
+extern crate criterion;
+use criterion::Criterion;
 
-/// A subtype of primitive type that represents numeric values.
-pub trait ArrowNumericType: ArrowPrimitiveType {}
+extern crate arrow;
 
-impl<T: ArrowPrimitiveType> ArrowNumericType for T {}
+use arrow::array::*;
+use arrow::compute::kernels::regexp::*;
+use arrow::util::bench_util::*;
+
+fn bench_regexp(arr: &GenericStringArray<i32>, regex_array: &GenericStringArray<i32>) {
+    regexp_match(criterion::black_box(arr), regex_array, None).unwrap();
+}
+
+fn add_benchmark(c: &mut Criterion) {
+    let size = 65536;
+    let val_len = 1000;
+
+    let arr_string = create_string_array_with_len::<i32>(size, 0.0, val_len);
+    let pattern_values = vec![r".*-(\d*)-.*"; size];
+    let pattern = GenericStringArray::<i32>::from(pattern_values);
+
+    c.bench_function("regexp", |b| b.iter(|| bench_regexp(&arr_string, &pattern)));
+}
+
+criterion_group!(benches, add_benchmark);
+criterion_main!(benches);

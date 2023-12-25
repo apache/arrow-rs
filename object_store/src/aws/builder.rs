@@ -477,29 +477,6 @@ impl AmazonS3Builder {
         self
     }
 
-    /// Set an option on the builder via a key - value pair.
-    ///
-    /// This method will return an `UnknownConfigKey` error if key cannot be parsed into [`AmazonS3ConfigKey`].
-    #[deprecated(note = "Use with_config")]
-    pub fn try_with_option(self, key: impl AsRef<str>, value: impl Into<String>) -> Result<Self> {
-        Ok(self.with_config(key.as_ref().parse()?, value))
-    }
-
-    /// Hydrate builder from key value pairs
-    ///
-    /// This method will return an `UnknownConfigKey` error if any key cannot be parsed into [`AmazonS3ConfigKey`].
-    #[deprecated(note = "Use with_config")]
-    #[allow(deprecated)]
-    pub fn try_with_options<I: IntoIterator<Item = (impl AsRef<str>, impl Into<String>)>>(
-        mut self,
-        options: I,
-    ) -> Result<Self> {
-        for (key, value) in options {
-            self = self.try_with_option(key, value)?;
-        }
-        Ok(self)
-    }
-
     /// Get config value via a [`AmazonS3ConfigKey`].
     ///
     /// # Example

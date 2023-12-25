@@ -1739,8 +1739,8 @@ mod tests {
         let row_group_reader = reader.get_row_group(0).unwrap();
         match row_group_reader.get_column_reader(0).unwrap() {
             ColumnReader::Int64ColumnReader(mut reader) => {
-                let mut buffer = [0; 1024];
-                let mut def_levels = [0; 1024];
+                let mut buffer = Vec::with_capacity(1024);
+                let mut def_levels = Vec::with_capacity(1024);
                 let (num_records, num_values, num_levels) = reader
                     .read_records(1024, Some(&mut def_levels), None, &mut buffer)
                     .unwrap();
@@ -1750,7 +1750,7 @@ mod tests {
                 assert_eq!(num_levels, 513);
 
                 let expected: Vec<i64> = (1..514).collect();
-                assert_eq!(&buffer[..513], &expected);
+                assert_eq!(&buffer, &expected);
             }
             _ => unreachable!(),
         }

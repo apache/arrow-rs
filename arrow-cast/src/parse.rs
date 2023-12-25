@@ -210,7 +210,7 @@ pub fn string_to_datetime<T: TimeZone>(timezone: &T, s: &str) -> Result<DateTime
             .ok_or_else(|| err("error computing timezone offset"));
     }
 
-    if bytes[tz_offset] == b'z' || bytes[tz_offset] == b'Z' {
+    if (bytes[tz_offset] == b'z' || bytes[tz_offset] == b'Z') && tz_offset == bytes.len() - 1 {
         return Ok(timezone.from_utc_datetime(&datetime));
     }
 

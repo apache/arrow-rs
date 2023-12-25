@@ -243,15 +243,12 @@ impl Field {
     pub fn reader_snippet(&self) -> proc_macro2::TokenStream {
         let ident = &self.ident;
         let column_reader = self.ty.column_reader();
-        let parquet_type = self.ty.physical_type_as_rust();
 
         // generate the code to read the column into a vector `vals`
         let write_batch_expr = quote! {
-            let mut vals_vec = Vec::new();
-            vals_vec.resize(num_records, Default::default());
-            let mut vals: &mut [#parquet_type] = vals_vec.as_mut_slice();
+            let mut vals = Vec::new();
             if let #column_reader(mut typed) = column_reader {
-                typed.read_records(num_records, None, None, vals)?;
+                typed.read_records(num_records, None, None, &mut vals)?;
             } else {
                 panic!("Schema and struct disagree on type for {}", stringify!{#ident});
             }
@@ -646,23 +643,6 @@ impl Type {
         }
     }
 
-    fn physical_type_as_rust(&self) -> proc_macro2::TokenStream {
-        use parquet::basic::Type as BasicType;
-
-        match self.physical_type() {
-            BasicType::BOOLEAN => quote! { bool },
-            BasicType::INT32 => quote! { i32 },
-            BasicType::INT64 => quote! { i64 },
-            BasicType::INT96 => unimplemented!("96-bit int currently is not supported"),
-            BasicType::FLOAT => quote! { f32 },
-            BasicType::DOUBLE => quote! { f64 },
-            BasicType::BYTE_ARRAY => quote! { ::parquet::data_type::ByteArray },
-            BasicType::FIXED_LEN_BYTE_ARRAY => {
-                quote! { ::parquet::data_type::FixedLenByteArray }
-            }
-        }
-    }
-
     fn logical_type(&self) -> proc_macro2::TokenStream {
         let last_part = self.last_part();
         let leaf_type = self.leaf_type_recursive();
@@ -877,11 +857,9 @@ mod test {
             snippet,
             (quote! {
                  {
-                     let mut vals_vec = Vec::new();
-                     vals_vec.resize(num_records, Default::default());
-                     let mut vals: &mut[i64] = vals_vec.as_mut_slice();
+                     let mut vals = Vec::new();
                      if let ColumnReader::Int64ColumnReader(mut typed) = column_reader {
-                         typed.read_records(num_records, None, None, vals)?;
+                         typed.read_records(num_records, None, None, &mut vals)?;
                      } else {
                          panic!("Schema and struct disagree on type for {}", stringify!{ counter });
                      }
@@ -1256,11 +1234,9 @@ mod test {
         let when = Field::from(&fields[0]);
         assert_eq!(when.reader_snippet().to_string(),(quote!{
             {
-                let mut vals_vec = Vec::new();
-                vals_vec.resize(num_records, Default::default());
-                let mut vals: &mut[i64] = vals_vec.as_mut_slice();
+                let mut vals = Vec::new();
                 if let ColumnReader::Int64ColumnReader(mut typed) = column_reader {
-                    typed.read_records(num_records, None, None, vals)?;
+                    typed.read_records(num_records, None, None, &mut vals)?;
                 } else {
                     panic!("Schema and struct disagree on type for {}", stringify!{ henceforth });
                 }
@@ -1326,11 +1302,9 @@ mod test {
         let when = Field::from(&fields[0]);
         assert_eq!(when.reader_snippet().to_string(),(quote!{
             {
-                let mut vals_vec = Vec::new();
-                vals_vec.resize(num_records, Default::default());
-                let mut vals: &mut [i32] = vals_vec.as_mut_slice();
+                let mut vals = Vec::new();
                 if let ColumnReader::Int32ColumnReader(mut typed) = column_reader {
-                    typed.read_records(num_records, None, None, vals)?;
+                    typed.read_records(num_records, None, None, &mut vals)?;
                 } else {
                     panic!("Schema and struct disagree on type for {}", stringify!{ henceforth });
                 }
@@ -1396,11 +1370,9 @@ mod test {
         let when = Field::from(&fields[0]);
         assert_eq!(when.reader_snippet().to_string(),(quote!{
             {
-                let mut vals_vec = Vec::new();
-                vals_vec.resize(num_records, Default::default());
-                let mut vals: &mut [::parquet::data_type::ByteArray] = vals_vec.as_mut_slice();
+                let mut vals = Vec::new();
                 if let ColumnReader::ByteArrayColumnReader(mut typed) = column_reader {
-                    typed.read_records(num_records, None, None, vals)?;
+                    typed.read_records(num_records, None, None, &mut vals)?;
                 } else {
                     panic!("Schema and struct disagree on type for {}", stringify!{ unique_id });
                 }

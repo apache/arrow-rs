@@ -45,7 +45,7 @@ use percent_encoding::{utf8_percent_encode, PercentEncode};
 use quick_xml::events::{self as xml_events};
 use reqwest::{
     header::{CONTENT_LENGTH, CONTENT_TYPE},
-    Client as ReqwestClient, Method, RequestBuilder, Response, StatusCode,
+    Client as ReqwestClient, Method, RequestBuilder, Response,
 };
 use serde::{Deserialize, Serialize};
 use snafu::{ResultExt, Snafu};
@@ -466,6 +466,9 @@ impl S3Client {
                 Some(S3CopyIfNotExists::Header(k, v)) => {
                     builder = builder.header(k, v);
                 }
+                Some(S3CopyIfNotExists::HeaderWithStatus(k, v, _)) => {
+                    builder = builder.header(k, v);
+                }
                 None => {
                     return Err(crate::Error::NotSupported {
                         source: "S3 does not support copy-if-not-exists".to_string().into(),
@@ -473,6 +476,11 @@ impl S3Client {
                 }
             }
         }
+
+        let precondition_failure = match &self.config.copy_if_not_exists {
+            Some(S3CopyIfNotExists::HeaderWithStatus(_, _, code)) => *code,
+            _ => reqwest::StatusCode::PRECONDITION_FAILED,
+        };
 
         builder
             .with_aws_sigv4(
@@ -485,7 +493,7 @@ impl S3Client {
             .send_retry(&self.config.retry_config)
             .await
             .map_err(|source| match source.status() {
-                Some(StatusCode::PRECONDITION_FAILED) => crate::Error::AlreadyExists {
+                Some(error) if error == precondition_failure => crate::Error::AlreadyExists {
                     source: Box::new(source),
                     path: to.to_string(),
                 },

@@ -160,6 +160,14 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
         (Decimal128(_, _) | Decimal256(_, _), Utf8 | LargeUtf8) => true,
         // Utf8 to decimal
         (Utf8 | LargeUtf8, Decimal128(_, _) | Decimal256(_, _)) => true,
+        (Struct(from_fields), Struct(to_fields)) => {
+            from_fields.len() == to_fields.len() &&
+                from_fields.iter().zip(to_fields.iter()).all(|(f1, f2)| {
+                    // Assume that nullability between two structs are compatible, if not,
+                    // cast kernel will return error.
+                    can_cast_types(f1.data_type(), f2.data_type())
+                })
+		}
         (Struct(_), _) => false,
         (_, Struct(_)) => false,
         (_, Boolean) => {
@@ -200,8 +208,8 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
 
         // start numeric casts
         (
-            UInt8 | UInt16 | UInt32 | UInt64 | Int8 | Int16 | Int32 | Int64 | Float32 | Float64,
-            UInt8 | UInt16 | UInt32 | UInt64 | Int8 | Int16 | Int32 | Int64 | Float32 | Float64,
+            UInt8 | UInt16 | UInt32 | UInt64 | Int8 | Int16 | Int32 | Int64 | Float16 | Float32 | Float64,
+            UInt8 | UInt16 | UInt32 | UInt64 | Int8 | Int16 | Int32 | Int64 | Float16 | Float32 | Float64,
         ) => true,
         // end numeric casts
 
@@ -220,8 +228,8 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
         (Time64(_), Time32(to_unit)) => {
             matches!(to_unit, Second | Millisecond)
         }
-        (Timestamp(_, _), _) if to_type.is_numeric() && to_type != &Float16 => true,
-        (_, Timestamp(_, _)) if from_type.is_numeric() && from_type != &Float16 => true,
+        (Timestamp(_, _), _) if to_type.is_numeric() => true,
+        (_, Timestamp(_, _)) if from_type.is_numeric() => true,
         (Date64, Timestamp(_, None)) => true,
         (Date32, Timestamp(_, None)) => true,
         (
@@ -1138,11 +1146,22 @@ pub fn cast_with_options(
                 ))),
             }
         }
+        (Struct(_), Struct(to_fields)) => {
+            let array = array.as_struct();
+            let fields = array
+                .columns()
+                .iter()
+                .zip(to_fields.iter())
+                .map(|(l, field)| cast_with_options(l, field.data_type(), cast_options))
+                .collect::<Result<Vec<ArrayRef>, ArrowError>>()?;
+            let array = StructArray::try_new(to_fields.clone(), fields, array.nulls().cloned())?;
+            Ok(Arc::new(array) as ArrayRef)
+        }
         (Struct(_), _) => Err(ArrowError::CastError(
-            "Cannot cast from struct to other types".to_string(),
+            "Cannot cast from struct to other types except struct".to_string(),
         )),
         (_, Struct(_)) => Err(ArrowError::CastError(
-            "Cannot cast to struct from other types".to_string(),
+            "Cannot cast to struct from other types except struct".to_string(),
         )),
         (_, Boolean) => match from_type {
             UInt8 => cast_numeric_to_bool::<UInt8Type>(array),
@@ -1367,6 +1386,7 @@ pub fn cast_with_options(
         (UInt8, Int16) => cast_numeric_arrays::<UInt8Type, Int16Type>(array, cast_options),
         (UInt8, Int32) => cast_numeric_arrays::<UInt8Type, Int32Type>(array, cast_options),
         (UInt8, Int64) => cast_numeric_arrays::<UInt8Type, Int64Type>(array, cast_options),
+        (UInt8, Float16) => cast_numeric_arrays::<UInt8Type, Float16Type>(array, cast_options),
         (UInt8, Float32) => cast_numeric_arrays::<UInt8Type, Float32Type>(array, cast_options),
         (UInt8, Float64) => cast_numeric_arrays::<UInt8Type, Float64Type>(array, cast_options),
 
@@ -1377,6 +1397,7 @@ pub fn cast_with_options(
         (UInt16, Int16) => cast_numeric_arrays::<UInt16Type, Int16Type>(array, cast_options),
         (UInt16, Int32) => cast_numeric_arrays::<UInt16Type, Int32Type>(array, cast_options),
         (UInt16, Int64) => cast_numeric_arrays::<UInt16Type, Int64Type>(array, cast_options),
+        (UInt16, Float16) => cast_numeric_arrays::<UInt16Type, Float16Type>(array, cast_options),
         (UInt16, Float32) => cast_numeric_arrays::<UInt16Type, Float32Type>(array, cast_options),
         (UInt16, Float64) => cast_numeric_arrays::<UInt16Type, Float64Type>(array, cast_options),
 
@@ -1387,6 +1408,7 @@ pub fn cast_with_options(
         (UInt32, Int16) => cast_numeric_arrays::<UInt32Type, Int16Type>(array, cast_options),
         (UInt32, Int32) => cast_numeric_arrays::<UInt32Type, Int32Type>(array, cast_options),
         (UInt32, Int64) => cast_numeric_arrays::<UInt32Type, Int64Type>(array, cast_options),
+        (UInt32, Float16) => cast_numeric_arrays::<UInt32Type, Float16Type>(array, cast_options),
         (UInt32, Float32) => cast_numeric_arrays::<UInt32Type, Float32Type>(array, cast_options),
         (UInt32, Float64) => cast_numeric_arrays::<UInt32Type, Float64Type>(array, cast_options),
 
@@ -1397,6 +1419,7 @@ pub fn cast_with_options(
         (UInt64, Int16) => cast_numeric_arrays::<UInt64Type, Int16Type>(array, cast_options),
         (UInt64, Int32) => cast_numeric_arrays::<UInt64Type, Int32Type>(array, cast_options),
         (UInt64, Int64) => cast_numeric_arrays::<UInt64Type, Int64Type>(array, cast_options),
+        (UInt64, Float16) => cast_numeric_arrays::<UInt64Type, Float16Type>(array, cast_options),
         (UInt64, Float32) => cast_numeric_arrays::<UInt64Type, Float32Type>(array, cast_options),
         (UInt64, Float64) => cast_numeric_arrays::<UInt64Type, Float64Type>(array, cast_options),
 
@@ -1407,6 +1430,7 @@ pub fn cast_with_options(
         (Int8, Int16) => cast_numeric_arrays::<Int8Type, Int16Type>(array, cast_options),
         (Int8, Int32) => cast_numeric_arrays::<Int8Type, Int32Type>(array, cast_options),
         (Int8, Int64) => cast_numeric_arrays::<Int8Type, Int64Type>(array, cast_options),
+        (Int8, Float16) => cast_numeric_arrays::<Int8Type, Float16Type>(array, cast_options),
         (Int8, Float32) => cast_numeric_arrays::<Int8Type, Float32Type>(array, cast_options),
         (Int8, Float64) => cast_numeric_arrays::<Int8Type, Float64Type>(array, cast_options),
 
@@ -1417,6 +1441,7 @@ pub fn cast_with_options(
         (Int16, Int8) => cast_numeric_arrays::<Int16Type, Int8Type>(array, cast_options),
         (Int16, Int32) => cast_numeric_arrays::<Int16Type, Int32Type>(array, cast_options),
         (Int16, Int64) => cast_numeric_arrays::<Int16Type, Int64Type>(array, cast_options),
+        (Int16, Float16) => cast_numeric_arrays::<Int16Type, Float16Type>(array, cast_options),
         (Int16, Float32) => cast_numeric_arrays::<Int16Type, Float32Type>(array, cast_options),
         (Int16, Float64) => cast_numeric_arrays::<Int16Type, Float64Type>(array, cast_options),
 
@@ -1427,6 +1452,7 @@ pub fn cast_with_options(
         (Int32, Int8) => cast_numeric_arrays::<Int32Type, Int8Type>(array, cast_options),
         (Int32, Int16) => cast_numeric_arrays::<Int32Type, Int16Type>(array, cast_options),
         (Int32, Int64) => cast_numeric_arrays::<Int32Type, Int64Type>(array, cast_options),
+        (Int32, Float16) => cast_numeric_arrays::<Int32Type, Float16Type>(array, cast_options),
         (Int32, Float32) => cast_numeric_arrays::<Int32Type, Float32Type>(array, cast_options),
         (Int32, Float64) => cast_numeric_arrays::<Int32Type, Float64Type>(array, cast_options),
 
@@ -1437,8 +1463,20 @@ pub fn cast_with_options(
         (Int64, Int8) => cast_numeric_arrays::<Int64Type, Int8Type>(array, cast_options),
         (Int64, Int16) => cast_numeric_arrays::<Int64Type, Int16Type>(array, cast_options),
         (Int64, Int32) => cast_numeric_arrays::<Int64Type, Int32Type>(array, cast_options),
+        (Int64, Float16) => cast_numeric_arrays::<Int64Type, Float16Type>(array, cast_options),
         (Int64, Float32) => cast_numeric_arrays::<Int64Type, Float32Type>(array, cast_options),
         (Int64, Float64) => cast_numeric_arrays::<Int64Type, Float64Type>(array, cast_options),
+
+        (Float16, UInt8) => cast_numeric_arrays::<Float16Type, UInt8Type>(array, cast_options),
+        (Float16, UInt16) => cast_numeric_arrays::<Float16Type, UInt16Type>(array, cast_options),
+        (Float16, UInt32) => cast_numeric_arrays::<Float16Type, UInt32Type>(array, cast_options),
+        (Float16, UInt64) => cast_numeric_arrays::<Float16Type, UInt64Type>(array, cast_options),
+        (Float16, Int8) => cast_numeric_arrays::<Float16Type, Int8Type>(array, cast_options),
+        (Float16, Int16) => cast_numeric_arrays::<Float16Type, Int16Type>(array, cast_options),
+        (Float16, Int32) => cast_numeric_arrays::<Float16Type, Int32Type>(array, cast_options),
+        (Float16, Int64) => cast_numeric_arrays::<Float16Type, Int64Type>(array, cast_options),
+        (Float16, Float32) => cast_numeric_arrays::<Float16Type, Float32Type>(array, cast_options),
+        (Float16, Float64) => cast_numeric_arrays::<Float16Type, Float64Type>(array, cast_options),
 
         (Float32, UInt8) => cast_numeric_arrays::<Float32Type, UInt8Type>(array, cast_options),
         (Float32, UInt16) => cast_numeric_arrays::<Float32Type, UInt16Type>(array, cast_options),
@@ -1448,6 +1486,7 @@ pub fn cast_with_options(
         (Float32, Int16) => cast_numeric_arrays::<Float32Type, Int16Type>(array, cast_options),
         (Float32, Int32) => cast_numeric_arrays::<Float32Type, Int32Type>(array, cast_options),
         (Float32, Int64) => cast_numeric_arrays::<Float32Type, Int64Type>(array, cast_options),
+        (Float32, Float16) => cast_numeric_arrays::<Float32Type, Float16Type>(array, cast_options),
         (Float32, Float64) => cast_numeric_arrays::<Float32Type, Float64Type>(array, cast_options),
 
         (Float64, UInt8) => cast_numeric_arrays::<Float64Type, UInt8Type>(array, cast_options),
@@ -1458,6 +1497,7 @@ pub fn cast_with_options(
         (Float64, Int16) => cast_numeric_arrays::<Float64Type, Int16Type>(array, cast_options),
         (Float64, Int32) => cast_numeric_arrays::<Float64Type, Int32Type>(array, cast_options),
         (Float64, Int64) => cast_numeric_arrays::<Float64Type, Int64Type>(array, cast_options),
+        (Float64, Float16) => cast_numeric_arrays::<Float64Type, Float16Type>(array, cast_options),
         (Float64, Float32) => cast_numeric_arrays::<Float64Type, Float32Type>(array, cast_options),
         // end numeric casts
 
@@ -2423,10 +2463,16 @@ fn cast_string_to_timestamp_impl<O: OffsetSizeTrait, T: ArrowTimestampType, Tz: 
     }
 }
 
-fn cast_string_to_year_month_interval<Offset: OffsetSizeTrait>(
+fn cast_string_to_interval<Offset, F, ArrowType>(
     array: &dyn Array,
     cast_options: &CastOptions,
-) -> Result<ArrayRef, ArrowError> {
+    parse_function: F,
+) -> Result<ArrayRef, ArrowError>
+where
+    Offset: OffsetSizeTrait,
+    ArrowType: ArrowPrimitiveType,
+    F: Fn(&str) -> Result<ArrowType::Native, ArrowError> + Copy,
+{
     let string_array = array
         .as_any()
         .downcast_ref::<GenericStringArray<Offset>>()
@@ -2434,92 +2480,59 @@ fn cast_string_to_year_month_interval<Offset: OffsetSizeTrait>(
     let interval_array = if cast_options.safe {
         let iter = string_array
             .iter()
-            .map(|v| v.and_then(|v| parse_interval_year_month(v).ok()));
+            .map(|v| v.and_then(|v| parse_function(v).ok()));
 
         // Benefit:
         //     20% performance improvement
         // Soundness:
         //     The iterator is trustedLen because it comes from an `StringArray`.
-        unsafe { IntervalYearMonthArray::from_trusted_len_iter(iter) }
+        unsafe { PrimitiveArray::<ArrowType>::from_trusted_len_iter(iter) }
     } else {
         let vec = string_array
             .iter()
-            .map(|v| v.map(parse_interval_year_month).transpose())
+            .map(|v| v.map(parse_function).transpose())
             .collect::<Result<Vec<_>, ArrowError>>()?;
 
         // Benefit:
         //     20% performance improvement
         // Soundness:
         //     The iterator is trustedLen because it comes from an `StringArray`.
-        unsafe { IntervalYearMonthArray::from_trusted_len_iter(vec) }
+        unsafe { PrimitiveArray::<ArrowType>::from_trusted_len_iter(vec) }
     };
     Ok(Arc::new(interval_array) as ArrayRef)
+}
+
+fn cast_string_to_year_month_interval<Offset: OffsetSizeTrait>(
+    array: &dyn Array,
+    cast_options: &CastOptions,
+) -> Result<ArrayRef, ArrowError> {
+    cast_string_to_interval::<Offset, _, IntervalYearMonthType>(
+        array,
+        cast_options,
+        parse_interval_year_month,
+    )
 }
 
 fn cast_string_to_day_time_interval<Offset: OffsetSizeTrait>(
     array: &dyn Array,
     cast_options: &CastOptions,
 ) -> Result<ArrayRef, ArrowError> {
-    let string_array = array
-        .as_any()
-        .downcast_ref::<GenericStringArray<Offset>>()
-        .unwrap();
-    let interval_array = if cast_options.safe {
-        let iter = string_array
-            .iter()
-            .map(|v| v.and_then(|v| parse_interval_day_time(v).ok()));
-
-        // Benefit:
-        //     20% performance improvement
-        // Soundness:
-        //     The iterator is trustedLen because it comes from an `StringArray`.
-        unsafe { IntervalDayTimeArray::from_trusted_len_iter(iter) }
-    } else {
-        let vec = string_array
-            .iter()
-            .map(|v| v.map(parse_interval_day_time).transpose())
-            .collect::<Result<Vec<_>, ArrowError>>()?;
-
-        // Benefit:
-        //     20% performance improvement
-        // Soundness:
-        //     The iterator is trustedLen because it comes from an `StringArray`.
-        unsafe { IntervalDayTimeArray::from_trusted_len_iter(vec) }
-    };
-    Ok(Arc::new(interval_array) as ArrayRef)
+    cast_string_to_interval::<Offset, _, IntervalDayTimeType>(
+        array,
+        cast_options,
+        parse_interval_day_time,
+    )
 }
 
 fn cast_string_to_month_day_nano_interval<Offset: OffsetSizeTrait>(
     array: &dyn Array,
     cast_options: &CastOptions,
 ) -> Result<ArrayRef, ArrowError> {
-    let string_array = array
-        .as_any()
-        .downcast_ref::<GenericStringArray<Offset>>()
-        .unwrap();
-    let interval_array = if cast_options.safe {
-        let iter = string_array
-            .iter()
-            .map(|v| v.and_then(|v| parse_interval_month_day_nano(v).ok()));
-
-        // Benefit:
-        //     20% performance improvement
-        // Soundness:
-        //     The iterator is trustedLen because it comes from an `StringArray`.
-        unsafe { IntervalMonthDayNanoArray::from_trusted_len_iter(iter) }
-    } else {
-        let vec = string_array
-            .iter()
-            .map(|v| v.map(parse_interval_month_day_nano).transpose())
-            .collect::<Result<Vec<_>, ArrowError>>()?;
-
-        // Benefit:
-        //     20% performance improvement
-        // Soundness:
-        //     The iterator is trustedLen because it comes from an `StringArray`.
-        unsafe { IntervalMonthDayNanoArray::from_trusted_len_iter(vec) }
-    };
-    Ok(Arc::new(interval_array) as ArrayRef)
+    cast_string_to_interval::<Offset, _, IntervalMonthDayNanoType>(
+        array,
+        cast_options,
+        parse_interval_month_day_nano,
+    )
 }
 
 fn adjust_timestamp_to_timezone<T: ArrowTimestampType>(
@@ -3299,6 +3312,7 @@ fn cast_list<I: OffsetSizeTrait, O: OffsetSizeTrait>(
 #[cfg(test)]
 mod tests {
     use arrow_buffer::{Buffer, NullBuffer};
+    use half::f16;
 
     use super::*;
 
@@ -4665,6 +4679,15 @@ mod tests {
         let array = Int64Array::from(vec![Some(2), Some(10), None]);
         let expected = cast(&array, &DataType::Timestamp(TimeUnit::Microsecond, None)).unwrap();
 
+        let array = Float16Array::from(vec![
+            Some(f16::from_f32(2.0)),
+            Some(f16::from_f32(10.6)),
+            None,
+        ]);
+        let actual = cast(&array, &DataType::Timestamp(TimeUnit::Microsecond, None)).unwrap();
+
+        assert_eq!(&actual, &expected);
+
         let array = Float32Array::from(vec![Some(2.0), Some(10.6), None]);
         let actual = cast(&array, &DataType::Timestamp(TimeUnit::Microsecond, None)).unwrap();
 
@@ -4681,6 +4704,9 @@ mod tests {
         let array = TimestampMillisecondArray::from(vec![Some(5), Some(1), None])
             .with_timezone("UTC".to_string());
         let expected = cast(&array, &DataType::Int64).unwrap();
+
+        let actual = cast(&cast(&array, &DataType::Float16).unwrap(), &DataType::Int64).unwrap();
+        assert_eq!(&actual, &expected);
 
         let actual = cast(&cast(&array, &DataType::Float32).unwrap(), &DataType::Int64).unwrap();
         assert_eq!(&actual, &expected);
@@ -6103,6 +6129,25 @@ mod tests {
                 .collect::<Vec<f32>>()
         );
 
+        let f16_expected = vec![
+            f16::from_f64(-9223372000000000000.0),
+            f16::from_f64(-2147483600.0),
+            f16::from_f64(-32768.0),
+            f16::from_f64(-128.0),
+            f16::from_f64(0.0),
+            f16::from_f64(255.0),
+            f16::from_f64(65535.0),
+            f16::from_f64(4294967300.0),
+            f16::from_f64(18446744000000000000.0),
+        ];
+        assert_eq!(
+            f16_expected,
+            get_cast_values::<Float16Type>(&f64_array, &DataType::Float16)
+                .iter()
+                .map(|i| i.parse::<f16>().unwrap())
+                .collect::<Vec<f16>>()
+        );
+
         let i64_expected = vec![
             "-9223372036854775808",
             "-2147483648",
@@ -6247,6 +6292,14 @@ mod tests {
             get_cast_values::<Float32Type>(&f32_array, &DataType::Float32)
         );
 
+        let f16_expected = vec![
+            "-inf", "-inf", "-32768.0", "-128.0", "0.0", "255.0", "inf", "inf", "inf",
+        ];
+        assert_eq!(
+            f16_expected,
+            get_cast_values::<Float16Type>(&f32_array, &DataType::Float16)
+        );
+
         let i64_expected = vec![
             "-2147483648",
             "-2147483648",
@@ -6365,6 +6418,21 @@ mod tests {
                 .collect::<Vec<f32>>()
         );
 
+        let f16_expected = vec![
+            f16::from_f64(0.0),
+            f16::from_f64(255.0),
+            f16::from_f64(65535.0),
+            f16::from_f64(4294967300.0),
+            f16::from_f64(18446744000000000000.0),
+        ];
+        assert_eq!(
+            f16_expected,
+            get_cast_values::<Float16Type>(&u64_array, &DataType::Float16)
+                .iter()
+                .map(|i| i.parse::<f16>().unwrap())
+                .collect::<Vec<f16>>()
+        );
+
         let i64_expected = vec!["0", "255", "65535", "4294967295", "null"];
         assert_eq!(
             i64_expected,
@@ -6429,6 +6497,12 @@ mod tests {
         assert_eq!(
             f32_expected,
             get_cast_values::<Float32Type>(&u32_array, &DataType::Float32)
+        );
+
+        let f16_expected = vec!["0.0", "255.0", "inf", "inf"];
+        assert_eq!(
+            f16_expected,
+            get_cast_values::<Float16Type>(&u32_array, &DataType::Float16)
         );
 
         let i64_expected = vec!["0", "255", "65535", "4294967295"];
@@ -6497,6 +6571,12 @@ mod tests {
             get_cast_values::<Float32Type>(&u16_array, &DataType::Float32)
         );
 
+        let f16_expected = vec!["0.0", "255.0", "inf"];
+        assert_eq!(
+            f16_expected,
+            get_cast_values::<Float16Type>(&u16_array, &DataType::Float16)
+        );
+
         let i64_expected = vec!["0", "255", "65535"];
         assert_eq!(
             i64_expected,
@@ -6561,6 +6641,12 @@ mod tests {
         assert_eq!(
             f32_expected,
             get_cast_values::<Float32Type>(&u8_array, &DataType::Float32)
+        );
+
+        let f16_expected = vec!["0.0", "255.0"];
+        assert_eq!(
+            f16_expected,
+            get_cast_values::<Float16Type>(&u8_array, &DataType::Float16)
         );
 
         let i64_expected = vec!["0", "255"];
@@ -6663,6 +6749,25 @@ mod tests {
                 .iter()
                 .map(|i| i.parse::<f32>().unwrap())
                 .collect::<Vec<f32>>()
+        );
+
+        let f16_expected = vec![
+            f16::from_f64(-9223372000000000000.0),
+            f16::from_f64(-2147483600.0),
+            f16::from_f64(-32768.0),
+            f16::from_f64(-128.0),
+            f16::from_f64(0.0),
+            f16::from_f64(127.0),
+            f16::from_f64(32767.0),
+            f16::from_f64(2147483600.0),
+            f16::from_f64(9223372000000000000.0),
+        ];
+        assert_eq!(
+            f16_expected,
+            get_cast_values::<Float16Type>(&i64_array, &DataType::Float16)
+                .iter()
+                .map(|i| i.parse::<f16>().unwrap())
+                .collect::<Vec<f16>>()
         );
 
         let i64_expected = vec![
@@ -6808,6 +6913,23 @@ mod tests {
             get_cast_values::<Float32Type>(&i32_array, &DataType::Float32)
         );
 
+        let f16_expected = vec![
+            f16::from_f64(-2147483600.0),
+            f16::from_f64(-32768.0),
+            f16::from_f64(-128.0),
+            f16::from_f64(0.0),
+            f16::from_f64(127.0),
+            f16::from_f64(32767.0),
+            f16::from_f64(2147483600.0),
+        ];
+        assert_eq!(
+            f16_expected,
+            get_cast_values::<Float16Type>(&i32_array, &DataType::Float16)
+                .iter()
+                .map(|i| i.parse::<f16>().unwrap())
+                .collect::<Vec<f16>>()
+        );
+
         let i16_expected = vec!["null", "-32768", "-128", "0", "127", "32767", "null"];
         assert_eq!(
             i16_expected,
@@ -6875,6 +6997,21 @@ mod tests {
         assert_eq!(
             f32_expected,
             get_cast_values::<Float32Type>(&i16_array, &DataType::Float32)
+        );
+
+        let f16_expected = vec![
+            f16::from_f64(-32768.0),
+            f16::from_f64(-128.0),
+            f16::from_f64(0.0),
+            f16::from_f64(127.0),
+            f16::from_f64(32767.0),
+        ];
+        assert_eq!(
+            f16_expected,
+            get_cast_values::<Float16Type>(&i16_array, &DataType::Float16)
+                .iter()
+                .map(|i| i.parse::<f16>().unwrap())
+                .collect::<Vec<f16>>()
         );
 
         let i64_expected = vec!["-32768", "-128", "0", "127", "32767"];
@@ -6969,6 +7106,12 @@ mod tests {
         assert_eq!(
             f32_expected,
             get_cast_values::<Float32Type>(&i8_array, &DataType::Float32)
+        );
+
+        let f16_expected = vec!["-128.0", "0.0", "127.0"];
+        assert_eq!(
+            f16_expected,
+            get_cast_values::<Float16Type>(&i8_array, &DataType::Float16)
         );
 
         let i64_expected = vec!["-128", "0", "127"];
@@ -9297,5 +9440,164 @@ mod tests {
         let a = cast_with_options(&array, &DataType::Utf8, &options).unwrap();
         let r: Vec<_> = a.as_string::<i32>().iter().map(|x| x.unwrap()).collect();
         assert_eq!(r, &["[0, 1, 2]", "[0, null, 2]"]);
+    }
+    #[test]
+    fn test_cast_string_to_timestamp_invalid_tz() {
+        // content after Z should be ignored
+        let bad_timestamp = "2023-12-05T21:58:10.45ZZTOP";
+        let array = StringArray::from(vec![Some(bad_timestamp)]);
+
+        let data_types = [
+            DataType::Timestamp(TimeUnit::Second, None),
+            DataType::Timestamp(TimeUnit::Millisecond, None),
+            DataType::Timestamp(TimeUnit::Microsecond, None),
+            DataType::Timestamp(TimeUnit::Nanosecond, None),
+        ];
+
+        let cast_options = CastOptions {
+            safe: false,
+            ..Default::default()
+        };
+
+        for dt in data_types {
+            assert_eq!(
+                cast_with_options(&array, &dt, &cast_options).unwrap_err().to_string(),
+                "Parser error: Invalid timezone \"ZZTOP\": only offset based timezones supported without chrono-tz feature"
+            );
+        }
+    }
+    #[test]
+    fn test_cast_struct_to_struct() {
+        let struct_type = DataType::Struct(
+            vec![
+                Field::new("a", DataType::Boolean, false),
+                Field::new("b", DataType::Int32, false),
+            ]
+            .into(),
+        );
+        let to_type = DataType::Struct(
+            vec![
+                Field::new("a", DataType::Utf8, false),
+                Field::new("b", DataType::Utf8, false),
+            ]
+            .into(),
+        );
+        let boolean = Arc::new(BooleanArray::from(vec![false, false, true, true]));
+        let int = Arc::new(Int32Array::from(vec![42, 28, 19, 31]));
+        let struct_array = StructArray::from(vec![
+            (
+                Arc::new(Field::new("b", DataType::Boolean, false)),
+                boolean.clone() as ArrayRef,
+            ),
+            (
+                Arc::new(Field::new("c", DataType::Int32, false)),
+                int.clone() as ArrayRef,
+            ),
+        ]);
+        let casted_array = cast(&struct_array, &to_type).unwrap();
+        let casted_array = casted_array.as_struct();
+        assert_eq!(casted_array.data_type(), &to_type);
+        let casted_boolean_array = casted_array
+            .column(0)
+            .as_string::<i32>()
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>();
+        let casted_int_array = casted_array
+            .column(1)
+            .as_string::<i32>()
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>();
+        assert_eq!(casted_boolean_array, vec!["false", "false", "true", "true"]);
+        assert_eq!(casted_int_array, vec!["42", "28", "19", "31"]);
+
+        // test for can't cast
+        let to_type = DataType::Struct(
+            vec![
+                Field::new("a", DataType::Date32, false),
+                Field::new("b", DataType::Utf8, false),
+            ]
+            .into(),
+        );
+        assert!(!can_cast_types(&struct_type, &to_type));
+        let result = cast(&struct_array, &to_type);
+        assert_eq!(
+            "Cast error: Casting from Boolean to Date32 not supported",
+            result.unwrap_err().to_string()
+        );
+    }
+
+    #[test]
+    fn test_cast_struct_to_struct_nullability() {
+        let boolean = Arc::new(BooleanArray::from(vec![false, false, true, true]));
+        let int = Arc::new(Int32Array::from(vec![Some(42), None, Some(19), None]));
+        let struct_array = StructArray::from(vec![
+            (
+                Arc::new(Field::new("b", DataType::Boolean, false)),
+                boolean.clone() as ArrayRef,
+            ),
+            (
+                Arc::new(Field::new("c", DataType::Int32, true)),
+                int.clone() as ArrayRef,
+            ),
+        ]);
+
+        // okay: nullable to nullable
+        let to_type = DataType::Struct(
+            vec![
+                Field::new("a", DataType::Utf8, false),
+                Field::new("b", DataType::Utf8, true),
+            ]
+            .into(),
+        );
+        cast(&struct_array, &to_type).expect("Cast nullable to nullable struct field should work");
+
+        // error: nullable to non-nullable
+        let to_type = DataType::Struct(
+            vec![
+                Field::new("a", DataType::Utf8, false),
+                Field::new("b", DataType::Utf8, false),
+            ]
+            .into(),
+        );
+        cast(&struct_array, &to_type)
+            .expect_err("Cast nullable to non-nullable struct field should fail");
+
+        let boolean = Arc::new(BooleanArray::from(vec![false, false, true, true]));
+        let int = Arc::new(Int32Array::from(vec![i32::MAX, 25, 1, 100]));
+        let struct_array = StructArray::from(vec![
+            (
+                Arc::new(Field::new("b", DataType::Boolean, false)),
+                boolean.clone() as ArrayRef,
+            ),
+            (
+                Arc::new(Field::new("c", DataType::Int32, false)),
+                int.clone() as ArrayRef,
+            ),
+        ]);
+
+        // okay: non-nullable to non-nullable
+        let to_type = DataType::Struct(
+            vec![
+                Field::new("a", DataType::Utf8, false),
+                Field::new("b", DataType::Utf8, false),
+            ]
+            .into(),
+        );
+        cast(&struct_array, &to_type)
+            .expect("Cast non-nullable to non-nullable struct field should work");
+
+        // err: non-nullable to non-nullable but overflowing return null during casting
+        let to_type = DataType::Struct(
+            vec![
+                Field::new("a", DataType::Utf8, false),
+                Field::new("b", DataType::Int8, false),
+            ]
+            .into(),
+        );
+        cast(&struct_array, &to_type).expect_err(
+            "Cast non-nullable to non-nullable struct field returning null should fail",
+        );
     }
 }

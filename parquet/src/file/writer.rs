@@ -323,6 +323,19 @@ impl<W: Write + Send> SerializedFileWriter<W> {
             None => Some(self.kv_metadatas.clone()),
         };
 
+        // We only include ColumnOrder for leaf nodes.
+        // Currently only supported ColumnOrder is TypeDefinedOrder so we set this
+        // for all leaf nodes.
+        // Even if the column has an undefined sort order, such as INTERVAL, this
+        // is still technically the defined TYPEORDER so it should still be set.
+        let column_orders = (0..self.schema_descr().num_columns())
+            .map(|_| parquet::ColumnOrder::TYPEORDER(parquet::TypeDefinedOrder {}))
+            .collect();
+        // This field is optional, perhaps in cases where no min/max fields are set
+        // in any Statistics or ColumnIndex object in the whole file.
+        // But for simplicity we always set this field.
+        let column_orders = Some(column_orders);
+
         let file_metadata = parquet::FileMetaData {
             num_rows,
             row_groups,
@@ -330,7 +343,7 @@ impl<W: Write + Send> SerializedFileWriter<W> {
             version: self.props.writer_version().as_num(),
             schema: types::to_thrift(self.schema.as_ref())?,
             created_by: Some(self.props.created_by().to_owned()),
-            column_orders: None,
+            column_orders,
             encryption_algorithm: None,
             footer_signing_key_metadata: None,
         };
@@ -738,7 +751,9 @@ mod tests {
     use bytes::Bytes;
     use std::fs::File;
 
-    use crate::basic::{Compression, Encoding, LogicalType, Repetition, Type};
+    use crate::basic::{
+        ColumnOrder, Compression, ConvertedType, Encoding, LogicalType, Repetition, SortOrder, Type,
+    };
     use crate::column::page::{Page, PageReader};
     use crate::column::reader::get_typed_column_reader;
     use crate::compression::{create_codec, Codec, CodecOptionsBuilder};
@@ -849,6 +864,78 @@ mod tests {
 
         let reader = SerializedFileReader::new(file).unwrap();
         assert_eq!(reader.get_row_iter(None).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn test_file_writer_column_orders_populated() {
+        let file = tempfile::tempfile().unwrap();
+
+        let schema = Arc::new(
+            types::Type::group_type_builder("schema")
+                .with_fields(vec![
+                    Arc::new(
+                        types::Type::primitive_type_builder("col1", Type::INT32)
+                            .build()
+                            .unwrap(),
+                    ),
+                    Arc::new(
+                        types::Type::primitive_type_builder("col2", Type::FIXED_LEN_BYTE_ARRAY)
+                            .with_converted_type(ConvertedType::INTERVAL)
+                            .with_length(12)
+                            .build()
+                            .unwrap(),
+                    ),
+                    Arc::new(
+                        types::Type::group_type_builder("nested")
+                            .with_repetition(Repetition::REQUIRED)
+                            .with_fields(vec![
+                                Arc::new(
+                                    types::Type::primitive_type_builder(
+                                        "col3",
+                                        Type::FIXED_LEN_BYTE_ARRAY,
+                                    )
+                                    .with_logical_type(Some(LogicalType::Float16))
+                                    .with_length(2)
+                                    .build()
+                                    .unwrap(),
+                                ),
+                                Arc::new(
+                                    types::Type::primitive_type_builder("col4", Type::BYTE_ARRAY)
+                                        .with_logical_type(Some(LogicalType::String))
+                                        .build()
+                                        .unwrap(),
+                                ),
+                            ])
+                            .build()
+                            .unwrap(),
+                    ),
+                ])
+                .build()
+                .unwrap(),
+        );
+
+        let props = Default::default();
+        let writer = SerializedFileWriter::new(file.try_clone().unwrap(), schema, props).unwrap();
+        writer.close().unwrap();
+
+        let reader = SerializedFileReader::new(file).unwrap();
+
+        // only leaves
+        let expected = vec![
+            // INT32
+            ColumnOrder::TYPE_DEFINED_ORDER(SortOrder::SIGNED),
+            // INTERVAL
+            ColumnOrder::TYPE_DEFINED_ORDER(SortOrder::UNDEFINED),
+            // Float16
+            ColumnOrder::TYPE_DEFINED_ORDER(SortOrder::SIGNED),
+            // String
+            ColumnOrder::TYPE_DEFINED_ORDER(SortOrder::UNSIGNED),
+        ];
+        let actual = reader.metadata().file_metadata().column_orders();
+
+        assert!(actual.is_some());
+        let actual = actual.unwrap();
+        assert_eq!(*actual, expected);
     }
 
     #[test]
@@ -1613,11 +1700,13 @@ mod tests {
         let test_read = |reader: SerializedFileReader<Bytes>| {
             let row_group = reader.get_row_group(0).unwrap();
 
-            let mut out = [0; 4];
+            let mut out = Vec::with_capacity(4);
             let c1 = row_group.get_column_reader(0).unwrap();
             let mut c1 = get_typed_column_reader::<Int32Type>(c1);
             c1.read_records(4, None, None, &mut out).unwrap();
             assert_eq!(out, column_data[0]);
+
+            out.clear();
 
             let c2 = row_group.get_column_reader(1).unwrap();
             let mut c2 = get_typed_column_reader::<Int32Type>(c2);

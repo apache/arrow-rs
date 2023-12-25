@@ -350,23 +350,27 @@ impl DataType {
     }
 
     /// Returns true if this type is floating: (Float*).
+    #[inline]
     pub fn is_floating(&self) -> bool {
         use DataType::*;
         matches!(self, Float16 | Float32 | Float64)
     }
 
     /// Returns true if this type is integer: (Int*, UInt*).
+    #[inline]
     pub fn is_integer(&self) -> bool {
         self.is_signed_integer() || self.is_unsigned_integer()
     }
 
     /// Returns true if this type is signed integer: (Int*).
+    #[inline]
     pub fn is_signed_integer(&self) -> bool {
         use DataType::*;
         matches!(self, Int8 | Int16 | Int32 | Int64)
     }
 
     /// Returns true if this type is unsigned integer: (UInt*).
+    #[inline]
     pub fn is_unsigned_integer(&self) -> bool {
         use DataType::*;
         matches!(self, UInt8 | UInt16 | UInt32 | UInt64)
@@ -387,6 +391,7 @@ impl DataType {
 
     /// Returns true if this type is nested (List, FixedSizeList, LargeList, Struct, Union,
     /// or Map), or a dictionary of a nested type
+    #[inline]
     pub fn is_nested(&self) -> bool {
         use DataType::*;
         match self {
@@ -396,6 +401,13 @@ impl DataType {
             }
             _ => false,
         }
+    }
+
+    /// Returns true if this type is DataType::Null.
+    #[inline]
+    pub fn is_null(&self) -> bool {
+        use DataType::*;
+        matches!(self, Null)
     }
 
     /// Compares the datatype with another, ignoring nested field names
@@ -853,6 +865,12 @@ mod tests {
     fn test_floating() {
         assert!(DataType::is_floating(&DataType::Float16));
         assert!(!DataType::is_floating(&DataType::Int32));
+    }
+
+    #[test]
+    fn test_datatype_is_null() {
+        assert!(DataType::is_null(&DataType::Null));
+        assert!(!DataType::is_null(&DataType::Int32));
     }
 
     #[test]

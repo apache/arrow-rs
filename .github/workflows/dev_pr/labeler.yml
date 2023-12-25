@@ -16,33 +16,40 @@
 # under the License.
 
 arrow:
-  - arrow-arith/**/*
-  - arrow-array/**/*
-  - arrow-buffer/**/*
-  - arrow-cast/**/*
-  - arrow-csv/**/*
-  - arrow-data/**/*
-  - arrow-flight/**/*
-  - arrow-integration-test/**/*
-  - arrow-integration-testing/**/*
-  - arrow-ipc/**/*
-  - arrow-json/**/*
-  - arrow-avro/**/*
-  - arrow-ord/**/*
-  - arrow-row/**/*
-  - arrow-schema/**/*
-  - arrow-select/**/*
-  - arrow-string/**/*
-  - arrow/**/*
+  - changed-files:
+    - any-glob-to-any-file:
+      - 'arrow-arith/**/*'
+      - 'arrow-array/**/*'
+      - 'arrow-buffer/**/*'
+      - 'arrow-cast/**/*'
+      - 'arrow-csv/**/*'
+      - 'arrow-data/**/*'
+      - 'arrow-flight/**/*'
+      - 'arrow-integration-test/**/*'
+      - 'arrow-integration-testing/**/*'
+      - 'arrow-ipc/**/*'
+      - 'arrow-json/**/*'
+      - 'arrow-avro/**/*'
+      - 'arrow-ord/**/*'
+      - 'arrow-row/**/*'
+      - 'arrow-schema/**/*'
+      - 'arrow-select/**/*'
+      - 'arrow-string/**/*'
+      - 'arrow/**/*'
 
 arrow-flight:
-  - arrow-flight/**/*
+  - changed-files:
+    - any-glob-to-any-file:
+      - 'arrow-flight/**/*'
 
 parquet:
-  - parquet/**/*
+  - changed-files:
+    - any-glob-to-any-file: [ 'parquet/**/*' ]
 
 parquet-derive:
-  - parquet_derive/**/*
+  - changed-files:
+    - any-glob-to-any-file: [ 'parquet_derive/**/*' ]
 
 object-store:
-  - object_store/**/*
+  - changed-files:
+    - any-glob-to-any-file: [ 'object_store/**/*' ]

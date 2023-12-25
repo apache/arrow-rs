@@ -304,8 +304,8 @@ fn decode_first_rsa_key(private_key_pem: String) -> Result<RsaKeyPair> {
 
     // Reading from string is infallible
     match rustls_pemfile::read_one(&mut reader).unwrap() {
-        Some(Item::PKCS8Key(key)) => Ok(RsaKeyPair::from_pkcs8(&key)?),
-        Some(Item::RSAKey(key)) => Ok(RsaKeyPair::from_der(&key)?),
+        Some(Item::Pkcs8Key(key)) => Ok(RsaKeyPair::from_pkcs8(key.secret_pkcs8_der())?),
+        Some(Item::Pkcs1Key(key)) => Ok(RsaKeyPair::from_der(key.secret_pkcs1_der())?),
         _ => Err(Error::MissingKey),
     }
 }
