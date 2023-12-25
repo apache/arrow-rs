@@ -15,6 +15,7 @@ echo "Starting Arrow MIRI run..."
 cargo miri test -p arrow-buffer
 cargo miri test -p arrow-data --features ffi
 cargo miri test -p arrow-schema --features ffi
-cargo miri test -p arrow-array
-cargo miri test -p arrow-arith
 cargo miri test -p arrow-ord
+# inline assembly not supported by Miri
+# cargo miri test -p arrow-array
+# cargo miri test -p arrow-arith
