@@ -260,16 +260,11 @@ fn get_scalar_pattern_flag<'a, OffsetSize: OffsetSizeTrait>(
 }
 
 fn regexp_scalar_match<OffsetSize: OffsetSizeTrait>(
-    array: &dyn Array,
+    array: &GenericStringArray<OffsetSize>,
     regex: &Regex,
 ) -> std::result::Result<ArrayRef, ArrowError> {
     let builder: GenericStringBuilder<OffsetSize> = GenericStringBuilder::with_capacity(0, 0);
     let mut list_builder = ListBuilder::new(builder);
-
-    let array = array
-        .as_any()
-        .downcast_ref::<GenericStringArray<OffsetSize>>()
-        .expect("Unable to downcast to StringArray/LargeStringArray");
 
     array
         .iter()
@@ -325,13 +320,18 @@ fn regexp_scalar_match<OffsetSize: OffsetSizeTrait>(
 /// that change the function's behavior.
 ///
 /// [regexp_match]: https://www.postgresql.org/docs/current/functions-matching.html#FUNCTIONS-POSIX-REGEXP
-pub fn regexp_match(
-    array: &dyn Datum,
+pub fn regexp_match<OffsetSize: OffsetSizeTrait>(
+    array: &GenericStringArray<OffsetSize>,
     regex_array: &dyn Datum,
     flags_array: Option<&dyn Datum>,
 ) -> std::result::Result<ArrayRef, ArrowError> {
-    let (lhs, is_lhs_scalar) = array.get();
     let (rhs, is_rhs_scalar) = regex_array.get();
+
+    if array.data_type() != rhs.data_type() {
+        return Err(ArrowError::ComputeError(format!(
+            "regexp_match() requires both array and pattern to be either Utf8 or LargeUtf8"
+        )));
+    }
 
     let (flags, is_flags_scalar) = match flags_array {
         Some(flags) => {
@@ -340,12 +340,6 @@ pub fn regexp_match(
         }
         None => (None, None),
     };
-
-    if is_lhs_scalar {
-        return Err(ArrowError::ComputeError(format!(
-            "regexp_match() requires array to be either Utf8 or LargeUtf8 array instead of scalar"
-        )));
-    }
 
     if is_flags_scalar.is_some() && is_rhs_scalar != is_flags_scalar.unwrap() {
         return Err(ArrowError::ComputeError(format!(
@@ -373,8 +367,12 @@ pub fn regexp_match(
 
         if regex.is_none() {
             return Ok(new_null_array(
-                &DataType::List(Arc::new(Field::new("item", lhs.data_type().clone(), true))),
-                lhs.len(),
+                &DataType::List(Arc::new(Field::new(
+                    "item",
+                    array.data_type().clone(),
+                    true,
+                ))),
+                array.len(),
             ));
         }
 
@@ -390,57 +388,19 @@ pub fn regexp_match(
             ArrowError::ComputeError(format!("Regular expression did not compile: {e:?}"))
         })?;
 
-        match lhs.data_type() {
-            DataType::Utf8 => regexp_scalar_match::<i32>(lhs, &re),
-            DataType::LargeUtf8 => regexp_scalar_match::<i64>(lhs, &re),
-            _ => {
-                return Err(ArrowError::ComputeError(format!(
-                    "regexp_match() requires array to be either Utf8 or LargeUtf8"
-                )));
-            }
-        }
+        regexp_scalar_match(array, &re)
     } else {
-        match rhs.data_type() {
-            DataType::Utf8 => {
-                let array = lhs
-                    .as_any()
-                    .downcast_ref::<GenericStringArray<i32>>()
-                    .expect("Unable to downcast to StringArray/LargeStringArray");
-                let regex_array = rhs
-                    .as_any()
-                    .downcast_ref::<GenericStringArray<i32>>()
-                    .expect("Unable to downcast to StringArray/LargeStringArray");
-                let flags_array = flags.map(|flags| {
-                    flags
-                        .as_any()
-                        .downcast_ref::<GenericStringArray<i32>>()
-                        .expect("Unable to downcast to StringArray/LargeStringArray")
-                });
-                regexp_array_match(array, regex_array, flags_array)
-            }
-            DataType::LargeUtf8 => {
-                let array = lhs
-                    .as_any()
-                    .downcast_ref::<GenericStringArray<i64>>()
-                    .expect("Unable to downcast to StringArray/LargeStringArray");
-                let regex_array = rhs
-                    .as_any()
-                    .downcast_ref::<GenericStringArray<i64>>()
-                    .expect("Unable to downcast to StringArray/LargeStringArray");
-                let flags_array = flags.map(|flags| {
-                    flags
-                        .as_any()
-                        .downcast_ref::<GenericStringArray<i64>>()
-                        .expect("Unable to downcast to StringArray/LargeStringArray")
-                });
-                regexp_array_match(array, regex_array, flags_array)
-            }
-            _ => {
-                return Err(ArrowError::ComputeError(format!(
-                    "regexp_match() requires pattern to be either Utf8 or LargeUtf8"
-                )));
-            }
-        }
+        let regex_array = rhs
+            .as_any()
+            .downcast_ref::<GenericStringArray<OffsetSize>>()
+            .expect("Unable to downcast to StringArray/LargeStringArray");
+        let flags_array = flags.map(|flags| {
+            flags
+                .as_any()
+                .downcast_ref::<GenericStringArray<OffsetSize>>()
+                .expect("Unable to downcast to StringArray/LargeStringArray")
+        });
+        regexp_array_match(array, regex_array, flags_array)
     }
 }
 
