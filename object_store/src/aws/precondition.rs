@@ -142,7 +142,7 @@ impl S3ConditionalPut {
     fn from_str(s: &str) -> Option<Self> {
         match s.trim() {
             "etag" => Some(Self::ETagMatch),
-            trimmed => match trimmed.split_once(":")? {
+            trimmed => match trimmed.split_once(':')? {
                 ("dynamo", s) => Some(Self::Dynamo(DynamoCommit::from_str(s)?)),
                 _ => None,
             },

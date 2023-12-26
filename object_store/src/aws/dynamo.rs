@@ -168,9 +168,9 @@ impl DynamoCommit {
     pub(crate) fn from_str(value: &str) -> Option<Self> {
         Some(match value.split_once(':') {
             Some((table_name, timeout)) => {
-                DynamoCommit::new(table_name.trim().to_string()).with_timeout(timeout.parse().ok()?)
+                Self::new(table_name.trim().to_string()).with_timeout(timeout.parse().ok()?)
             }
-            None => DynamoCommit::new(value.trim().to_string()),
+            None => Self::new(value.trim().to_string()),
         })
     }
 
@@ -192,6 +192,7 @@ impl DynamoCommit {
         .await
     }
 
+    #[allow(clippy::future_not_send)] // Generics confound this lint
     pub(crate) async fn conditional_op<F, Fut, T>(
         &self,
         client: &S3Client,
@@ -214,7 +215,7 @@ impl DynamoCommit {
                     let expiry = lease.acquire + lease.timeout;
                     return match tokio::time::timeout_at(expiry.into(), op()).await {
                         Ok(Ok(v)) => Ok(v),
-                        Ok(Err(e)) => Err(e.into()),
+                        Ok(Err(e)) => Err(e),
                         Err(_) => Err(Error::Generic {
                             store: "DynamoDB",
                             source: format!(
