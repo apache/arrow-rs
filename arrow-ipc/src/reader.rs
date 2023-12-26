@@ -20,7 +20,7 @@
 //! The `FileReader` and `StreamReader` have similar interfaces,
 //! however the `FileReader` expects a reader that supports `Seek`ing
 
-use flatbuffers::VectorIter;
+use flatbuffers::{VectorIter, VerifierOptions};
 use std::collections::HashMap;
 use std::fmt;
 use std::io::{BufReader, Read, Seek, SeekFrom};
@@ -522,6 +522,173 @@ fn parse_message(buf: &[u8]) -> Result<Message, ArrowError> {
         .map_err(|err| ArrowError::ParseError(format!("Unable to get root as message: {err:?}")))
 }
 
+/// Build an Arrow [`FileReader`] with custom options.
+#[derive(Debug)]
+pub struct FileReaderBuilder {
+    /// Optional projection for which columns to load (zero-based column indices)
+    projection: Option<Vec<usize>>,
+    /// Passed through to construct [`VerifierOptions`]
+    max_footer_fb_tables: usize,
+    /// Passed through to construct [`VerifierOptions`]
+    max_footer_fb_depth: usize,
+}
+
+impl Default for FileReaderBuilder {
+    fn default() -> Self {
+        let verifier_options = VerifierOptions::default();
+        Self {
+            max_footer_fb_tables: verifier_options.max_tables,
+            max_footer_fb_depth: verifier_options.max_depth,
+            projection: None,
+        }
+    }
+}
+
+impl FileReaderBuilder {
+    /// Options for creating a new [`FileReader`].
+    ///
+    /// To convert a builder into a reader, call [`FileReaderBuilder::build`].
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Optional projection for which columns to load (zero-based column indices).
+    pub fn with_projection(mut self, projection: Vec<usize>) -> Self {
+        self.projection = Some(projection);
+        self
+    }
+
+    /// Flatbuffers option for parsing the footer. Controls the max number of fields and
+    /// metadata key-value pairs that can be parsed from the schema of the footer.
+    ///
+    /// By default this is set to `1_000_000` which roughly translates to a schema with
+    /// no metadata key-value pairs but 499,999 fields.
+    ///
+    /// This default limit is enforced to protect against malicious files with a massive
+    /// amount of flatbuffer tables which could cause a denial of service attack.
+    ///
+    /// If you need to ingest a trusted file with a massive number of fields and/or
+    /// metadata key-value pairs and are facing the error `"Unable to get root as
+    /// footer: TooManyTables"` then increase this parameter as necessary.
+    pub fn with_max_footer_fb_tables(mut self, max_footer_fb_tables: usize) -> Self {
+        self.max_footer_fb_tables = max_footer_fb_tables;
+        self
+    }
+
+    /// Flatbuffers option for parsing the footer. Controls the max depth for schemas with
+    /// nested fields parsed from the footer.
+    ///
+    /// By default this is set to `64` which roughly translates to a schema with
+    /// a field nested 60 levels down through other struct fields.
+    ///
+    /// This default limit is enforced to protect against malicious files with a extremely
+    /// deep flatbuffer structure which could cause a denial of service attack.
+    ///
+    /// If you need to ingest a trusted file with a deeply nested field and are facing the
+    /// error `"Unable to get root as footer: DepthLimitReached"` then increase this
+    /// parameter as necessary.
+    pub fn with_max_footer_fb_depth(mut self, max_footer_fb_depth: usize) -> Self {
+        self.max_footer_fb_depth = max_footer_fb_depth;
+        self
+    }
+
+    /// Build [`FileReader`] with given reader.
+    pub fn build<R: Read + Seek>(self, mut reader: R) -> Result<FileReader<R>, ArrowError> {
+        // Space for ARROW_MAGIC (6 bytes) and length (4 bytes)
+        let mut buffer = [0; 10];
+        reader.seek(SeekFrom::End(-10))?;
+        reader.read_exact(&mut buffer)?;
+
+        if buffer[4..] != super::ARROW_MAGIC {
+            return Err(ArrowError::ParseError(
+                "Arrow file does not contain correct footer".to_string(),
+            ));
+        }
+
+        // read footer length
+        let footer_len = i32::from_le_bytes(buffer[..4].try_into().unwrap());
+
+        // read footer
+        let mut footer_data = vec![0; footer_len as usize];
+        reader.seek(SeekFrom::End(-10 - footer_len as i64))?;
+        reader.read_exact(&mut footer_data)?;
+
+        let verifier_options = VerifierOptions {
+            max_tables: self.max_footer_fb_tables,
+            max_depth: self.max_footer_fb_depth,
+            ..Default::default()
+        };
+        let footer = crate::root_as_footer_with_opts(&verifier_options, &footer_data[..]).map_err(
+            |err| ArrowError::ParseError(format!("Unable to get root as footer: {err:?}")),
+        )?;
+
+        let blocks = footer.recordBatches().ok_or_else(|| {
+            ArrowError::ParseError("Unable to get record batches from IPC Footer".to_string())
+        })?;
+
+        let total_blocks = blocks.len();
+
+        let ipc_schema = footer.schema().unwrap();
+        let schema = crate::convert::fb_to_schema(ipc_schema);
+
+        let mut custom_metadata = HashMap::new();
+        if let Some(fb_custom_metadata) = footer.custom_metadata() {
+            for kv in fb_custom_metadata.into_iter() {
+                custom_metadata.insert(
+                    kv.key().unwrap().to_string(),
+                    kv.value().unwrap().to_string(),
+                );
+            }
+        }
+
+        // Create an array of optional dictionary value arrays, one per field.
+        let mut dictionaries_by_id = HashMap::new();
+        if let Some(dictionaries) = footer.dictionaries() {
+            for block in dictionaries {
+                let buf = read_block(&mut reader, block)?;
+                let message = parse_message(&buf)?;
+
+                match message.header_type() {
+                    crate::MessageHeader::DictionaryBatch => {
+                        let batch = message.header_as_dictionary_batch().unwrap();
+                        read_dictionary(
+                            &buf.slice(block.metaDataLength() as _),
+                            batch,
+                            &schema,
+                            &mut dictionaries_by_id,
+                            &message.version(),
+                        )?;
+                    }
+                    t => {
+                        return Err(ArrowError::ParseError(format!(
+                            "Expecting DictionaryBatch in dictionary blocks, found {t:?}."
+                        )));
+                    }
+                }
+            }
+        }
+        let projection = match self.projection {
+            Some(projection_indices) => {
+                let schema = schema.project(&projection_indices)?;
+                Some((projection_indices, schema))
+            }
+            _ => None,
+        };
+
+        Ok(FileReader {
+            reader,
+            schema: Arc::new(schema),
+            blocks: blocks.iter().copied().collect(),
+            current_block: 0,
+            total_blocks,
+            dictionaries_by_id,
+            metadata_version: footer.version(),
+            custom_metadata,
+            projection,
+        })
+    }
+}
+
 /// Arrow File reader
 pub struct FileReader<R: Read + Seek> {
     /// Buffered file reader that supports reading and seeking
@@ -574,94 +741,12 @@ impl<R: Read + Seek> FileReader<R> {
     /// Try to create a new file reader
     ///
     /// Returns errors if the file does not meet the Arrow Format footer requirements
-    pub fn try_new(mut reader: R, projection: Option<Vec<usize>>) -> Result<Self, ArrowError> {
-        // Space for ARROW_MAGIC (6 bytes) and length (4 bytes)
-        let mut buffer = [0; 10];
-        reader.seek(SeekFrom::End(-10))?;
-        reader.read_exact(&mut buffer)?;
-
-        if buffer[4..] != super::ARROW_MAGIC {
-            return Err(ArrowError::ParseError(
-                "Arrow file does not contain correct footer".to_string(),
-            ));
-        }
-
-        // read footer length
-        let footer_len = i32::from_le_bytes(buffer[..4].try_into().unwrap());
-
-        // read footer
-        let mut footer_data = vec![0; footer_len as usize];
-        reader.seek(SeekFrom::End(-10 - footer_len as i64))?;
-        reader.read_exact(&mut footer_data)?;
-
-        let footer = crate::root_as_footer(&footer_data[..]).map_err(|err| {
-            ArrowError::ParseError(format!("Unable to get root as footer: {err:?}"))
-        })?;
-
-        let blocks = footer.recordBatches().ok_or_else(|| {
-            ArrowError::ParseError("Unable to get record batches from IPC Footer".to_string())
-        })?;
-
-        let total_blocks = blocks.len();
-
-        let ipc_schema = footer.schema().unwrap();
-        let schema = crate::convert::fb_to_schema(ipc_schema);
-
-        let mut custom_metadata = HashMap::new();
-        if let Some(fb_custom_metadata) = footer.custom_metadata() {
-            for kv in fb_custom_metadata.into_iter() {
-                custom_metadata.insert(
-                    kv.key().unwrap().to_string(),
-                    kv.value().unwrap().to_string(),
-                );
-            }
-        }
-
-        // Create an array of optional dictionary value arrays, one per field.
-        let mut dictionaries_by_id = HashMap::new();
-        if let Some(dictionaries) = footer.dictionaries() {
-            for block in dictionaries {
-                let buf = read_block(&mut reader, block)?;
-                let message = parse_message(&buf)?;
-
-                match message.header_type() {
-                    crate::MessageHeader::DictionaryBatch => {
-                        let batch = message.header_as_dictionary_batch().unwrap();
-                        read_dictionary(
-                            &buf.slice(block.metaDataLength() as _),
-                            batch,
-                            &schema,
-                            &mut dictionaries_by_id,
-                            &message.version(),
-                        )?;
-                    }
-                    t => {
-                        return Err(ArrowError::ParseError(format!(
-                            "Expecting DictionaryBatch in dictionary blocks, found {t:?}."
-                        )));
-                    }
-                }
-            }
-        }
-        let projection = match projection {
-            Some(projection_indices) => {
-                let schema = schema.project(&projection_indices)?;
-                Some((projection_indices, schema))
-            }
-            _ => None,
-        };
-
-        Ok(Self {
-            reader,
-            schema: Arc::new(schema),
-            blocks: blocks.iter().copied().collect(),
-            current_block: 0,
-            total_blocks,
-            dictionaries_by_id,
-            metadata_version: footer.version(),
-            custom_metadata,
+    pub fn try_new(reader: R, projection: Option<Vec<usize>>) -> Result<Self, ArrowError> {
+        let builder = FileReaderBuilder {
             projection,
-        })
+            ..Default::default()
+        };
+        builder.build(reader)
     }
 
     /// Return user defined customized metadata
@@ -1621,5 +1706,58 @@ mod tests {
         )
         .unwrap();
         assert_eq!(batch, roundtrip);
+    }
+
+    #[test]
+    fn test_file_with_massive_column_count() {
+        // 499_999 is upper limit for default settings (1_000_000)
+        let limit = 600_000;
+
+        let fields = (0..limit)
+            .map(|i| Field::new(format!("{i}"), DataType::Boolean, false))
+            .collect::<Vec<_>>();
+        let schema = Arc::new(Schema::new(fields));
+        let batch = RecordBatch::new_empty(schema);
+
+        let mut buf = Vec::new();
+        let mut writer = crate::writer::FileWriter::try_new(&mut buf, &batch.schema()).unwrap();
+        writer.write(&batch).unwrap();
+        writer.finish().unwrap();
+        drop(writer);
+
+        let mut reader = FileReaderBuilder::new()
+            .with_max_footer_fb_tables(1_500_000)
+            .build(std::io::Cursor::new(buf))
+            .unwrap();
+        let roundtrip_batch = reader.next().unwrap().unwrap();
+
+        assert_eq!(batch, roundtrip_batch);
+    }
+
+    #[test]
+    fn test_file_with_deeply_nested_columns() {
+        // 60 is upper limit for default settings (64)
+        let limit = 61;
+
+        let fields = (0..limit).fold(
+            vec![Field::new("leaf", DataType::Boolean, false)],
+            |field, index| vec![Field::new_struct(format!("{index}"), field, false)],
+        );
+        let schema = Arc::new(Schema::new(fields));
+        let batch = RecordBatch::new_empty(schema);
+
+        let mut buf = Vec::new();
+        let mut writer = crate::writer::FileWriter::try_new(&mut buf, &batch.schema()).unwrap();
+        writer.write(&batch).unwrap();
+        writer.finish().unwrap();
+        drop(writer);
+
+        let mut reader = FileReaderBuilder::new()
+            .with_max_footer_fb_depth(65)
+            .build(std::io::Cursor::new(buf))
+            .unwrap();
+        let roundtrip_batch = reader.next().unwrap().unwrap();
+
+        assert_eq!(batch, roundtrip_batch);
     }
 }
