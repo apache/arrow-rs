@@ -821,27 +821,23 @@ impl AmazonS3Builder {
             )) as _
         };
 
-        let endpoint: String;
-        let bucket_endpoint: String;
-
         // If `endpoint` is provided then its assumed to be consistent with
         // `virtual_hosted_style_request`. i.e. if `virtual_hosted_style_request` is true then
         // `endpoint` should have bucket name included.
-        if self.virtual_hosted_style_request.get()? {
-            endpoint = self
-                .endpoint
-                .unwrap_or_else(|| format!("https://{bucket}.s3.{region}.amazonaws.com"));
-            bucket_endpoint = endpoint.clone();
+        let bucket_endpoint = if self.virtual_hosted_style_request.get()? {
+            self.endpoint
+                .clone()
+                .unwrap_or_else(|| format!("https://{bucket}.s3.{region}.amazonaws.com"))
         } else {
-            endpoint = self
-                .endpoint
-                .unwrap_or_else(|| format!("https://s3.{region}.amazonaws.com"));
-            bucket_endpoint = format!("{endpoint}/{bucket}");
-        }
+            match &self.endpoint {
+                None => format!("https://s3.{region}.amazonaws.com/{bucket}"),
+                Some(endpoint) => format!("{endpoint}/{bucket}"),
+            }
+        };
 
         let config = S3Config {
             region,
-            endpoint,
+            endpoint: self.endpoint,
             bucket,
             bucket_endpoint,
             credentials,

@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::aws::dynamo::DynamoCommit;
 use crate::config::Parse;
 
 use itertools::Itertools;
@@ -45,6 +46,15 @@ pub enum S3CopyIfNotExists {
     ///
     /// Encoded as `header-with-status:<HEADER_NAME>:<HEADER_VALUE>:<STATUS>` ignoring whitespace
     HeaderWithStatus(String, String, reqwest::StatusCode),
+    /// The name of a DynamoDB table to use for coordination
+    ///
+    /// Encoded as either `dynamodb:<TABLE_NAME>` or `dynamodb:<TABLE_NAME>:<TIMEOUT_MILLIS>`
+    /// ignoring whitespace. The default timeout is used if not specified
+    ///
+    /// See [`DynamoCommit`] for more information
+    ///
+    /// This will use the same region, credentials and endpoint as configured for S3
+    Dynamo(DynamoCommit),
 }
 
 impl std::fmt::Display for S3CopyIfNotExists {
@@ -54,6 +64,7 @@ impl std::fmt::Display for S3CopyIfNotExists {
             Self::HeaderWithStatus(k, v, code) => {
                 write!(f, "header-with-status: {k}: {v}: {}", code.as_u16())
             }
+            Self::Dynamo(lock) => write!(f, "dynamo: {}", lock.table_name()),
         }
     }
 }
@@ -77,6 +88,12 @@ impl S3CopyIfNotExists {
                     code,
                 ))
             }
+            "dynamo" => Some(Self::Dynamo(match value.split_once(':') {
+                Some((table_name, timeout)) => DynamoCommit::new(table_name.trim().to_string())
+                    .with_timeout(timeout.parse().ok()?),
+                None => DynamoCommit::new(value.trim().to_string()),
+            })),
+
             _ => None,
         }
     }

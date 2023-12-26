@@ -36,12 +36,12 @@ use bytes::Bytes;
 use futures::stream::BoxStream;
 use futures::{StreamExt, TryStreamExt};
 use reqwest::header::{HeaderName, IF_MATCH, IF_NONE_MATCH};
-use reqwest::Method;
+use reqwest::{Method, StatusCode};
 use std::{sync::Arc, time::Duration};
 use tokio::io::AsyncWrite;
 use url::Url;
 
-use crate::aws::client::S3Client;
+use crate::aws::client::{RequestError, S3Client};
 use crate::client::get::GetClientExt;
 use crate::client::list::ListClientExt;
 use crate::client::CredentialProvider;
@@ -58,11 +58,13 @@ mod builder;
 mod checksum;
 mod client;
 mod credential;
+mod dynamo;
 mod precondition;
 mod resolve;
 
 pub use builder::{AmazonS3Builder, AmazonS3ConfigKey};
 pub use checksum::Checksum;
+pub use dynamo::DynamoCommit;
 pub use precondition::{S3ConditionalPut, S3CopyIfNotExists};
 pub use resolve::resolve_bucket_region;
 
@@ -93,19 +95,19 @@ pub struct AmazonS3 {
 
 impl std::fmt::Display for AmazonS3 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "AmazonS3({})", self.client.config().bucket)
+        write!(f, "AmazonS3({})", self.client.config.bucket)
     }
 }
 
 impl AmazonS3 {
     /// Returns the [`AwsCredentialProvider`] used by [`AmazonS3`]
     pub fn credentials(&self) -> &AwsCredentialProvider {
-        &self.client.config().credentials
+        &self.client.config.credentials
     }
 
     /// Create a full URL to the resource specified by `path` with this instance's configuration.
     fn path_url(&self, path: &Path) -> String {
-        self.client.config().path_url(path)
+        self.client.config.path_url(path)
     }
 }
 
@@ -145,7 +147,7 @@ impl Signer for AmazonS3 {
     /// ```
     async fn signed_url(&self, method: Method, path: &Path, expires_in: Duration) -> Result<Url> {
         let credential = self.credentials().get_credential().await?;
-        let authorizer = AwsAuthorizer::new(&credential, "s3", &self.client.config().region);
+        let authorizer = AwsAuthorizer::new(&credential, "s3", &self.client.config.region);
 
         let path_url = self.path_url(path);
         let mut url = Url::parse(&path_url).map_err(|e| crate::Error::Generic {
@@ -164,15 +166,15 @@ impl ObjectStore for AmazonS3 {
     async fn put_opts(&self, location: &Path, bytes: Bytes, opts: PutOptions) -> Result<PutResult> {
         let mut request = self.client.put_request(location, bytes);
         let tags = opts.tags.encoded();
-        if !tags.is_empty() && !self.client.config().disable_tagging {
+        if !tags.is_empty() && !self.client.config.disable_tagging {
             request = request.header(&TAGS_HEADER, tags);
         }
 
-        match (opts.mode, &self.client.config().conditional_put) {
-            (PutMode::Overwrite, _) => request.send().await,
+        match (opts.mode, &self.client.config.conditional_put) {
+            (PutMode::Overwrite, _) => request.do_put().await,
             (PutMode::Create | PutMode::Update(_), None) => Err(Error::NotImplemented),
             (PutMode::Create, Some(S3ConditionalPut::ETagMatch)) => {
-                match request.header(&IF_NONE_MATCH, "*").send().await {
+                match request.header(&IF_NONE_MATCH, "*").do_put().await {
                     // Technically If-None-Match should return NotModified but some stores,
                     // such as R2, instead return PreconditionFailed
                     // https://developers.cloudflare.com/r2/api/s3/extensions/#conditional-operations-in-putobject
@@ -190,7 +192,7 @@ impl ObjectStore for AmazonS3 {
                     store: STORE,
                     source: "ETag required for conditional put".to_string().into(),
                 })?;
-                request.header(&IF_MATCH, etag.as_str()).send().await
+                request.header(&IF_MATCH, etag.as_str()).do_put().await
             }
         }
     }
@@ -261,11 +263,35 @@ impl ObjectStore for AmazonS3 {
     }
 
     async fn copy(&self, from: &Path, to: &Path) -> Result<()> {
-        self.client.copy_request(from, to, true).await
+        self.client.copy_request(from, to).send().await?;
+        Ok(())
     }
 
     async fn copy_if_not_exists(&self, from: &Path, to: &Path) -> Result<()> {
-        self.client.copy_request(from, to, false).await
+        let (k, v, status) = match &self.client.config.copy_if_not_exists {
+            Some(S3CopyIfNotExists::Header(k, v)) => (k, v, StatusCode::PRECONDITION_FAILED),
+            Some(S3CopyIfNotExists::HeaderWithStatus(k, v, status)) => (k, v, *status),
+            Some(S3CopyIfNotExists::Dynamo(lock)) => {
+                return lock.copy_if_not_exists(&self.client, from, to).await
+            }
+            None => {
+                return Err(Error::NotSupported {
+                    source: "S3 does not support copy-if-not-exists".to_string().into(),
+                })
+            }
+        };
+
+        let req = self.client.copy_request(from, to);
+        match req.header(k, v).send().await {
+            Err(RequestError::Retry { source, path }) if source.status() == Some(status) => {
+                Err(Error::AlreadyExists {
+                    source: Box::new(source),
+                    path,
+                })
+            }
+            Err(e) => Err(e.into()),
+            Ok(_) => Ok(()),
+        }
     }
 }
 
@@ -335,7 +361,7 @@ mod tests {
         let config = AmazonS3Builder::from_env();
 
         let integration = config.build().unwrap();
-        let config = integration.client.config();
+        let config = &integration.client.config;
         let test_not_exists = config.copy_if_not_exists.is_some();
         let test_conditional_put = config.conditional_put.is_some();
 
@@ -368,6 +394,11 @@ mod tests {
         let builder = AmazonS3Builder::from_env().with_checksum_algorithm(Checksum::SHA256);
         let integration = builder.build().unwrap();
         put_get_delete_list_opts(&integration).await;
+
+        match &integration.client.config.copy_if_not_exists {
+            Some(S3CopyIfNotExists::Dynamo(d)) => dynamo::integration_test(&integration, d).await,
+            _ => eprintln!("Skipping dynamo integration test - dynamo not configured"),
+        };
     }
 
     #[tokio::test]
