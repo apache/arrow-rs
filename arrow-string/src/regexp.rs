@@ -328,9 +328,10 @@ pub fn regexp_match<OffsetSize: OffsetSizeTrait>(
     let (rhs, is_rhs_scalar) = regex_array.get();
 
     if array.data_type() != rhs.data_type() {
-        return Err(ArrowError::ComputeError(format!(
+        return Err(ArrowError::ComputeError(
             "regexp_match() requires both array and pattern to be either Utf8 or LargeUtf8"
-        )));
+                .to_string(),
+        ));
     }
 
     let (flags, is_flags_scalar) = match flags_array {
@@ -342,15 +343,17 @@ pub fn regexp_match<OffsetSize: OffsetSizeTrait>(
     };
 
     if is_flags_scalar.is_some() && is_rhs_scalar != is_flags_scalar.unwrap() {
-        return Err(ArrowError::ComputeError(format!(
+        return Err(ArrowError::ComputeError(
             "regexp_match() requires both pattern and flags to be either scalar or array"
-        )));
+                .to_string(),
+        ));
     }
 
     if flags_array.is_some() && rhs.data_type() != flags.unwrap().data_type() {
-        return Err(ArrowError::ComputeError(format!(
+        return Err(ArrowError::ComputeError(
             "regexp_match() requires both pattern and flags to be either string or largestring"
-        )));
+                .to_string(),
+        ));
     }
 
     if is_rhs_scalar {
@@ -359,9 +362,9 @@ pub fn regexp_match<OffsetSize: OffsetSizeTrait>(
             DataType::Utf8 => get_scalar_pattern_flag::<i32>(rhs, flags),
             DataType::LargeUtf8 => get_scalar_pattern_flag::<i64>(rhs, flags),
             _ => {
-                return Err(ArrowError::ComputeError(format!(
-                    "regexp_match() requires pattern to be either Utf8 or LargeUtf8"
-                )));
+                return Err(ArrowError::ComputeError(
+                    "regexp_match() requires pattern to be either Utf8 or LargeUtf8".to_string(),
+                ));
             }
         };
 
