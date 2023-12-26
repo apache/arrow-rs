@@ -61,16 +61,24 @@ const STORE: &str = "DynamoDB";
 ///
 /// The DynamoDB schema is as follows:
 ///
-/// * A string hash key named `"key"`
+/// * A string partition key named `"path"`
+/// * A string sort key named `"etag"`
 /// * A numeric [TTL] attribute named `"ttl"`
 /// * A numeric attribute named `"generation"`
 /// * A numeric attribute named `"timeout"`
 ///
-/// To perform a conditional operation on an object with a given `path` and `etag` (if exists),
+/// An appropriate DynamoDB table can be created with the CLI as follows:
+///
+/// ```bash
+/// $ aws dynamodb create-table --table-name <TABLE_NAME> --key-schema AttributeName=path,KeyType=HASH AttributeName=etag,KeyType=RANGE --attribute-definitions AttributeName=path,AttributeType=S AttributeName=etag,AttributeType=S
+/// $ aws dynamodb update-time-to-live --table-name <TABLE_NAME> --time-to-live-specification Enabled=true,AttributeName=ttl
+/// ```
+///
+/// To perform a conditional operation on an object with a given `path` and `etag` (`*` if creating),
 /// the commit protocol is as follows:
 ///
 /// 1. Perform HEAD request on `path` and error on precondition mismatch
-/// 2. Create record in DynamoDB with key `{path}#{etag}` with the configured timeout
+/// 2. Create record in DynamoDB with given `path` and `etag` with the configured timeout
 ///     1. On Success: Perform operation with the configured timeout
 ///     2. On Conflict:
 ///         1. Periodically re-perform HEAD request on `path` and error on precondition mismatch
@@ -181,7 +189,7 @@ impl DynamoCommit {
 
         loop {
             let existing = previous_lease.as_ref();
-            match self.try_lock(client, to.as_ref(), existing).await? {
+            match self.try_lock(client, to.as_ref(), "*", existing).await? {
                 TryLockResult::Ok(lease) => {
                     let fut = client.copy_request(from, to).send();
                     let expiry = lease.acquire + lease.timeout;
@@ -215,8 +223,11 @@ impl DynamoCommit {
     }
 
     /// Retrieve a lock, returning an error if it doesn't exist
-    async fn get_lock(&self, s3: &S3Client, key: &str) -> Result<Lease> {
-        let key_attributes = [("key", AttributeValue::String(key))];
+    async fn get_lock(&self, s3: &S3Client, path: &str, etag: &str) -> Result<Lease> {
+        let key_attributes = [
+            ("path", AttributeValue::String(path)),
+            ("etag", AttributeValue::String(etag)),
+        ];
         let req = GetItem {
             table_name: &self.table_name,
             key: Map(&key_attributes),
@@ -226,7 +237,7 @@ impl DynamoCommit {
         let resp = self
             .request(s3, credential.as_deref(), "DynamoDB_20120810.GetItem", req)
             .await
-            .map_err(|e| e.error(STORE, key.to_string()))?;
+            .map_err(|e| e.error(STORE, path.to_string()))?;
 
         let body = resp.bytes().await.map_err(|e| Error::Generic {
             store: STORE,
@@ -240,7 +251,7 @@ impl DynamoCommit {
             })?;
 
         extract_lease(&response.item).ok_or_else(|| Error::NotFound {
-            path: key.into(),
+            path: path.into(),
             source: "DynamoDB GetItem returned no items".to_string().into(),
         })
     }
@@ -249,7 +260,8 @@ impl DynamoCommit {
     async fn try_lock(
         &self,
         s3: &S3Client,
-        key: &str,
+        path: &str,
+        etag: &str,
         existing: Option<&Lease>,
     ) -> Result<TryLockResult> {
         let attributes;
@@ -267,12 +279,13 @@ impl DynamoCommit {
 
         let ttl = (Utc::now() + self.ttl).timestamp();
         let items = [
-            ("key", AttributeValue::String(key)),
+            ("path", AttributeValue::String(path)),
+            ("etag", AttributeValue::String(etag)),
             ("generation", AttributeValue::Number(next_gen)),
             ("timeout", AttributeValue::Number(self.timeout)),
             ("ttl", AttributeValue::Number(ttl as _)),
         ];
-        let names = [("#pk", "key")];
+        let names = [("#pk", "path")];
 
         let req = PutItem {
             table_name: &self.table_name,
@@ -312,7 +325,9 @@ impl DynamoCommit {
                     // <https://aws.amazon.com/about-aws/whats-new/2023/06/amazon-dynamodb-cost-failed-conditional-writes/>
                     // <https://repost.aws/questions/QUNfADrK4RT6WHe61RzTK8aw/dynamodblocal-support-for-returnvaluesonconditioncheckfailure-for-single-write-operations>
                     // <https://github.com/localstack/localstack/issues/9040>
-                    None => Ok(TryLockResult::Conflict(self.get_lock(s3, key).await?)),
+                    None => Ok(TryLockResult::Conflict(
+                        self.get_lock(s3, path, etag).await?,
+                    )),
                 },
                 _ => Err(Error::Generic {
                     store: STORE,
@@ -528,10 +543,11 @@ pub(crate) use tests::integration_test;
 
 #[cfg(test)]
 mod tests {
-
     use super::*;
     use crate::aws::AmazonS3;
     use crate::ObjectStore;
+    use rand::distributions::Alphanumeric;
+    use rand::{thread_rng, Rng};
 
     #[test]
     fn test_attribute_serde() {
@@ -554,24 +570,42 @@ mod tests {
         let _ = integration.delete(&dst).await; // Delete if present
 
         // Create a lock if not already exists
-        let existing = match d.try_lock(client, dst.as_ref(), None).await.unwrap() {
+        let existing = match d.try_lock(client, dst.as_ref(), "*", None).await.unwrap() {
             TryLockResult::Conflict(l) => l,
             TryLockResult::Ok(l) => l,
         };
 
         // Should not be able to acquire a lock again
-        let r = d.try_lock(client, dst.as_ref(), None).await;
+        let r = d.try_lock(client, dst.as_ref(), "*", None).await;
         assert!(matches!(r, Ok(TryLockResult::Conflict(_))));
 
         // But should still be able to reclaim lock and perform copy
         d.copy_if_not_exists(client, &src, &dst).await.unwrap();
 
-        match d.try_lock(client, dst.as_ref(), None).await.unwrap() {
+        match d.try_lock(client, dst.as_ref(), "*", None).await.unwrap() {
             TryLockResult::Conflict(new) => {
                 // Should have incremented generation to do so
                 assert_eq!(new.generation, existing.generation + 1);
             }
             _ => panic!("Should conflict"),
+        }
+
+        let rng = thread_rng();
+        let etag = String::from_utf8(rng.sample_iter(&Alphanumeric).take(32).collect()).unwrap();
+        let l = match d.try_lock(client, dst.as_ref(), &etag, None).await.unwrap() {
+            TryLockResult::Ok(l) => l,
+            _ => panic!("should not conflict"),
+        };
+
+        match d.try_lock(client, dst.as_ref(), &etag, None).await.unwrap() {
+            TryLockResult::Conflict(c) => assert_eq!(l.generation, c.generation),
+            _ => panic!("should conflict"),
+        }
+
+        let r = d.try_lock(client, dst.as_ref(), &etag, Some(&l)).await;
+        match r.unwrap() {
+            TryLockResult::Ok(new) => assert_eq!(new.generation, l.generation + 1),
+            _ => panic!("should not conflict"),
         }
     }
 }
