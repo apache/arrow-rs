@@ -634,7 +634,7 @@ mod tests {
         }
 
         let rng = thread_rng();
-        let etag = String::from_utf8(rng.sample_iter(&Alphanumeric).take(32).collect()).unwrap();
+        let etag = String::from_utf8(rng.sample_iter(Alphanumeric).take(32).collect()).unwrap();
         let t = Some(etag.as_str());
 
         let l = match d.try_lock(client, dst.as_ref(), t, None).await.unwrap() {
