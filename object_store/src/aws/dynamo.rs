@@ -17,7 +17,9 @@
 
 //! A DynamoDB based lock system
 
+use std::borrow::Cow;
 use std::collections::HashMap;
+use std::future::Future;
 use std::time::{Duration, Instant};
 
 use chrono::Utc;
@@ -183,23 +185,40 @@ impl DynamoCommit {
         from: &Path,
         to: &Path,
     ) -> Result<()> {
-        check_not_exists(client, to).await?;
+        self.conditional_op(client, to, None, || async {
+            client.copy_request(from, to).send().await?;
+            Ok(())
+        })
+        .await
+    }
+
+    pub(crate) async fn conditional_op<F, Fut, T>(
+        &self,
+        client: &S3Client,
+        to: &Path,
+        etag: Option<&str>,
+        op: F,
+    ) -> Result<T>
+    where
+        F: FnOnce() -> Fut,
+        Fut: Future<Output = Result<T, Error>>,
+    {
+        check_precondition(client, to, etag).await?;
 
         let mut previous_lease = None;
 
         loop {
             let existing = previous_lease.as_ref();
-            match self.try_lock(client, to.as_ref(), "*", existing).await? {
+            match self.try_lock(client, to.as_ref(), etag, existing).await? {
                 TryLockResult::Ok(lease) => {
-                    let fut = client.copy_request(from, to).send();
                     let expiry = lease.acquire + lease.timeout;
-                    return match tokio::time::timeout_at(expiry.into(), fut).await {
-                        Ok(Ok(_)) => Ok(()),
+                    return match tokio::time::timeout_at(expiry.into(), op()).await {
+                        Ok(Ok(v)) => Ok(v),
                         Ok(Err(e)) => Err(e.into()),
                         Err(_) => Err(Error::Generic {
                             store: "DynamoDB",
                             source: format!(
-                                "Failed to perform copy operation in {} milliseconds",
+                                "Failed to perform conditional operation in {} milliseconds",
                                 self.timeout
                             )
                             .into(),
@@ -211,7 +230,7 @@ impl DynamoCommit {
                     let expiry = conflict.timeout * self.max_clock_skew_rate;
                     loop {
                         interval.tick().await;
-                        check_not_exists(client, to).await?;
+                        check_precondition(client, to, etag).await?;
                         if conflict.acquire.elapsed() > expiry {
                             previous_lease = Some(conflict);
                             break;
@@ -223,10 +242,10 @@ impl DynamoCommit {
     }
 
     /// Retrieve a lock, returning an error if it doesn't exist
-    async fn get_lock(&self, s3: &S3Client, path: &str, etag: &str) -> Result<Lease> {
+    async fn get_lock(&self, s3: &S3Client, path: &str, etag: Option<&str>) -> Result<Lease> {
         let key_attributes = [
-            ("path", AttributeValue::String(path)),
-            ("etag", AttributeValue::String(etag)),
+            ("path", AttributeValue::from(path)),
+            ("etag", AttributeValue::from(etag.unwrap_or("*"))),
         ];
         let req = GetItem {
             table_name: &self.table_name,
@@ -261,7 +280,7 @@ impl DynamoCommit {
         &self,
         s3: &S3Client,
         path: &str,
-        etag: &str,
+        etag: Option<&str>,
         existing: Option<&Lease>,
     ) -> Result<TryLockResult> {
         let attributes;
@@ -279,8 +298,8 @@ impl DynamoCommit {
 
         let ttl = (Utc::now() + self.ttl).timestamp();
         let items = [
-            ("path", AttributeValue::String(path)),
-            ("etag", AttributeValue::String(etag)),
+            ("path", AttributeValue::from(path)),
+            ("etag", AttributeValue::from(etag.unwrap_or("*"))),
             ("generation", AttributeValue::Number(next_gen)),
             ("timeout", AttributeValue::Number(self.timeout)),
             ("ttl", AttributeValue::Number(ttl as _)),
@@ -372,19 +391,37 @@ enum TryLockResult {
     Conflict(Lease),
 }
 
-/// Returns an [`Error::AlreadyExists`] if `path` exists
-async fn check_not_exists(client: &S3Client, path: &Path) -> Result<()> {
+/// Validates that `path` has the given `etag` or doesn't exist if `None`
+async fn check_precondition(client: &S3Client, path: &Path, etag: Option<&str>) -> Result<()> {
     let options = GetOptions {
         head: true,
         ..Default::default()
     };
-    match client.get_opts(path, options).await {
-        Ok(_) => Err(Error::AlreadyExists {
-            path: path.to_string(),
-            source: "Already Exists".to_string().into(),
-        }),
-        Err(Error::NotFound { .. }) => Ok(()),
-        Err(e) => Err(e),
+
+    match etag {
+        Some(expected) => match client.get_opts(path, options).await {
+            Ok(r) => match r.meta.e_tag {
+                Some(actual) if expected == actual => Ok(()),
+                actual => Err(Error::Precondition {
+                    path: path.to_string(),
+                    source: format!("{} does not match {expected}", actual.unwrap_or_default())
+                        .into(),
+                }),
+            },
+            Err(Error::NotFound { .. }) => Err(Error::Precondition {
+                path: path.to_string(),
+                source: format!("Object at location {path} not found").into(),
+            }),
+            Err(e) => Err(e),
+        },
+        None => match client.get_opts(path, options).await {
+            Ok(_) => Err(Error::AlreadyExists {
+                path: path.to_string(),
+                source: "Already Exists".to_string().into(),
+            }),
+            Err(Error::NotFound { .. }) => Ok(()),
+            Err(e) => Err(e),
+        },
     }
 }
 
@@ -518,9 +555,15 @@ impl<'a, K: Serialize, V: Serialize> Serialize for Map<'a, K, V> {
 #[derive(Debug, Serialize, Deserialize)]
 enum AttributeValue<'a> {
     #[serde(rename = "S")]
-    String(&'a str),
+    String(Cow<'a, str>),
     #[serde(rename = "N", with = "number")]
     Number(u64),
+}
+
+impl<'a> From<&'a str> for AttributeValue<'a> {
+    fn from(value: &'a str) -> Self {
+        Self::String(Cow::Borrowed(value))
+    }
 }
 
 /// Numbers are serialized as strings
@@ -570,19 +613,19 @@ mod tests {
         let _ = integration.delete(&dst).await; // Delete if present
 
         // Create a lock if not already exists
-        let existing = match d.try_lock(client, dst.as_ref(), "*", None).await.unwrap() {
+        let existing = match d.try_lock(client, dst.as_ref(), None, None).await.unwrap() {
             TryLockResult::Conflict(l) => l,
             TryLockResult::Ok(l) => l,
         };
 
         // Should not be able to acquire a lock again
-        let r = d.try_lock(client, dst.as_ref(), "*", None).await;
+        let r = d.try_lock(client, dst.as_ref(), None, None).await;
         assert!(matches!(r, Ok(TryLockResult::Conflict(_))));
 
         // But should still be able to reclaim lock and perform copy
         d.copy_if_not_exists(client, &src, &dst).await.unwrap();
 
-        match d.try_lock(client, dst.as_ref(), "*", None).await.unwrap() {
+        match d.try_lock(client, dst.as_ref(), None, None).await.unwrap() {
             TryLockResult::Conflict(new) => {
                 // Should have incremented generation to do so
                 assert_eq!(new.generation, existing.generation + 1);
@@ -592,18 +635,19 @@ mod tests {
 
         let rng = thread_rng();
         let etag = String::from_utf8(rng.sample_iter(&Alphanumeric).take(32).collect()).unwrap();
-        let l = match d.try_lock(client, dst.as_ref(), &etag, None).await.unwrap() {
+        let t = Some(etag.as_str());
+
+        let l = match d.try_lock(client, dst.as_ref(), t, None).await.unwrap() {
             TryLockResult::Ok(l) => l,
             _ => panic!("should not conflict"),
         };
 
-        match d.try_lock(client, dst.as_ref(), &etag, None).await.unwrap() {
+        match d.try_lock(client, dst.as_ref(), t, None).await.unwrap() {
             TryLockResult::Conflict(c) => assert_eq!(l.generation, c.generation),
             _ => panic!("should conflict"),
         }
 
-        let r = d.try_lock(client, dst.as_ref(), &etag, Some(&l)).await;
-        match r.unwrap() {
+        match d.try_lock(client, dst.as_ref(), t, Some(&l)).await.unwrap() {
             TryLockResult::Ok(new) => assert_eq!(new.generation, l.generation + 1),
             _ => panic!("should not conflict"),
         }

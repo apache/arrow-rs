@@ -187,7 +187,10 @@ impl ObjectStore for AmazonS3 {
                     r => r,
                 }
             }
-            (PutMode::Create, Some(S3ConditionalPut::Dynamo(d))) => todo!(),
+            (PutMode::Create, Some(S3ConditionalPut::Dynamo(d))) => {
+                d.conditional_op(&self.client, location, None, move || request.do_put())
+                    .await
+            }
             (PutMode::Update(v), Some(put)) => {
                 let etag = v.e_tag.ok_or_else(|| Error::Generic {
                     store: STORE,
@@ -198,7 +201,10 @@ impl ObjectStore for AmazonS3 {
                         request.header(&IF_MATCH, etag.as_str()).do_put().await
                     }
                     S3ConditionalPut::Dynamo(d) => {
-                        todo!()
+                        d.conditional_op(&self.client, location, Some(&etag), move || {
+                            request.do_put()
+                        })
+                        .await
                     }
                 }
             }
