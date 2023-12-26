@@ -187,12 +187,20 @@ impl ObjectStore for AmazonS3 {
                     r => r,
                 }
             }
-            (PutMode::Update(v), Some(S3ConditionalPut::ETagMatch)) => {
+            (PutMode::Create, Some(S3ConditionalPut::Dynamo(d))) => todo!(),
+            (PutMode::Update(v), Some(put)) => {
                 let etag = v.e_tag.ok_or_else(|| Error::Generic {
                     store: STORE,
                     source: "ETag required for conditional put".to_string().into(),
                 })?;
-                request.header(&IF_MATCH, etag.as_str()).do_put().await
+                match put {
+                    S3ConditionalPut::ETagMatch => {
+                        request.header(&IF_MATCH, etag.as_str()).do_put().await
+                    }
+                    S3ConditionalPut::Dynamo(d) => {
+                        todo!()
+                    }
+                }
             }
         }
     }

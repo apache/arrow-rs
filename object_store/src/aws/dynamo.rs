@@ -154,6 +154,16 @@ impl DynamoCommit {
         self
     }
 
+    /// Parse [`DynamoCommit`] from a string
+    pub(crate) fn from_str(value: &str) -> Option<Self> {
+        Some(match value.split_once(':') {
+            Some((table_name, timeout)) => {
+                DynamoCommit::new(table_name.trim().to_string()).with_timeout(timeout.parse().ok()?)
+            }
+            None => DynamoCommit::new(value.trim().to_string()),
+        })
+    }
+
     /// Returns the name of the DynamoDB table.
     pub(crate) fn table_name(&self) -> &str {
         &self.table_name
