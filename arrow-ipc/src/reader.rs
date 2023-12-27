@@ -625,7 +625,7 @@ impl FileDecoder {
     }
 
     fn read_message<'a>(&self, buf: &'a [u8]) -> Result<Message<'a>, ArrowError> {
-        let message = parse_message(&buf)?;
+        let message = parse_message(buf)?;
 
         // some old test data's footer metadata is not set, so we account for that
         if self.version != MetadataVersion::V1 && message.version() != self.version {
@@ -638,7 +638,7 @@ impl FileDecoder {
 
     /// Read the dictionary with the given block and data buffer
     pub fn read_dictionary(&mut self, block: &Block, buf: &Buffer) -> Result<(), ArrowError> {
-        let message = self.read_message(&buf)?;
+        let message = self.read_message(buf)?;
         match message.header_type() {
             crate::MessageHeader::DictionaryBatch => {
                 let batch = message.header_as_dictionary_batch().unwrap();
@@ -662,7 +662,7 @@ impl FileDecoder {
         block: &Block,
         buf: &Buffer,
     ) -> Result<Option<RecordBatch>, ArrowError> {
-        let message = self.read_message(&buf)?;
+        let message = self.read_message(buf)?;
         match message.header_type() {
             crate::MessageHeader::Schema => Err(ArrowError::IpcError(
                 "Not expecting a schema when messages are read".to_string(),
@@ -1177,12 +1177,11 @@ impl<R: Read> RecordBatchReader for StreamReader<R> {
 
 #[cfg(test)]
 mod tests {
-    use crate::writer::{unslice_run_array, DictionaryTracker, FileWriter, IpcDataGenerator};
+    use crate::writer::{unslice_run_array, DictionaryTracker, IpcDataGenerator};
 
     use super::*;
 
-    use crate::convert::fb_to_schema;
-    use crate::{root_as_footer, root_as_message};
+    use crate::root_as_message;
     use arrow_array::builder::{PrimitiveRunBuilder, UnionBuilder};
     use arrow_array::types::*;
     use arrow_buffer::ArrowNativeType;
