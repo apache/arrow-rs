@@ -5,6 +5,7 @@ rusty-tags.vi
 .flatbuffers/
 .idea/
 .vscode
+.devcontainer
 venv/*
 # created by doctests
 parquet/data.parquet
