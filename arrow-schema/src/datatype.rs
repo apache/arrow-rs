@@ -573,12 +573,11 @@ impl DataType {
         }
     }
 
-    /// Create a [`DataType::List`] where each element has the
-    /// specified type and nullability and conventional name
-    /// (`"item"`);
+    /// Create a [`DataType::List`] with elements of the specified type
+    /// and nullability, and conventionally named inner [`Field`] (`"item"`).
     ///
-    /// To specify field level metadata, construct the inner `Field`
-    /// directly via [`Field::new`] or [`Field::new_list_item`].
+    /// To specify field level metadata, construct the inner [`Field`]
+    /// directly via [`Field::new`] or [`Field::new_list_field`].
     pub fn new_list(data_type: DataType, nullable: bool) -> Self {
         DataType::List(Arc::new(Field::new_list_field(data_type, nullable)))
     }
