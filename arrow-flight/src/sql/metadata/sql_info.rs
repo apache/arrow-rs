@@ -30,13 +30,12 @@ use std::sync::Arc;
 use arrow_arith::boolean::or;
 use arrow_array::array::{Array, UInt32Array, UnionArray};
 use arrow_array::builder::{
-    ArrayBuilder, BooleanBuilder, Int32Builder, Int64Builder, Int8Builder, ListBuilder,
-    MapBuilder, StringBuilder, UInt32Builder,
+    ArrayBuilder, BooleanBuilder, Int32Builder, Int64Builder, Int8Builder, ListBuilder, MapBuilder,
+    StringBuilder, UInt32Builder,
 };
-use arrow_array::cast::downcast_array;
-use arrow_array::RecordBatch;
+use arrow_array::{RecordBatch, Scalar};
 use arrow_data::ArrayData;
-use arrow_ord::comparison::eq_scalar;
+use arrow_ord::cmp::eq;
 use arrow_schema::{DataType, Field, Fields, Schema, SchemaRef, UnionFields, UnionMode};
 use arrow_select::filter::filter_record_batch;
 use once_cell::sync::Lazy;
@@ -185,11 +184,7 @@ static UNION_TYPE: Lazy<DataType> = Lazy::new(|| {
                         Field::new("keys", DataType::Int32, false),
                         Field::new(
                             "values",
-                            DataType::List(Arc::new(Field::new(
-                                "item",
-                                DataType::Int32,
-                                true,
-                            ))),
+                            DataType::List(Arc::new(Field::new("item", DataType::Int32, true))),
                             true,
                         ),
                     ])),
@@ -334,8 +329,8 @@ impl SqlInfoUnionBuilder {
 /// [`CommandGetSqlInfo`] are metadata requests used by a Flight SQL
 /// server to communicate supported capabilities to Flight SQL clients.
 ///
-/// Servers constuct - usually static - [`SqlInfoData`] via the [SqlInfoDataBuilder`],
-/// and build responses by passing the [`GetSqlInfoBuilder`].
+/// Servers constuct - usually static - [`SqlInfoData`] via the [`SqlInfoDataBuilder`],
+/// and build responses using [`CommandGetSqlInfo::into_builder`]
 #[derive(Debug, Clone, PartialEq)]
 pub struct SqlInfoDataBuilder {
     /// Use BTreeMap to ensure the values are sorted by value as
@@ -421,17 +416,17 @@ pub struct SqlInfoData {
 impl SqlInfoData {
     /// Return a  [`RecordBatch`] containing only the requested `u32`, if any
     /// from [`CommandGetSqlInfo`]
-    pub fn record_batch(
-        &self,
-        info: impl IntoIterator<Item = u32>,
-    ) -> Result<RecordBatch> {
-        let arr: UInt32Array = downcast_array(self.batch.column(0).as_ref());
+    pub fn record_batch(&self, info: impl IntoIterator<Item = u32>) -> Result<RecordBatch> {
+        let arr = self.batch.column(0);
         let type_filter = info
             .into_iter()
-            .map(|tt| eq_scalar(&arr, tt))
+            .map(|tt| {
+                let s = UInt32Array::from(vec![tt]);
+                eq(arr, &Scalar::new(&s))
+            })
             .collect::<std::result::Result<Vec<_>, _>>()?
             .into_iter()
-            // We know the arrays are of same length as they are produced fromn the same root array
+            // We know the arrays are of same length as they are produced from the same root array
             .reduce(|filter, arr| or(&filter, &arr).unwrap());
         if let Some(filter) = type_filter {
             Ok(filter_record_batch(&self.batch, &filter)?)
@@ -491,9 +486,7 @@ mod tests {
 
     use super::SqlInfoDataBuilder;
     use crate::sql::metadata::tests::assert_batches_eq;
-    use crate::sql::{
-        SqlInfo, SqlNullOrdering, SqlSupportedTransaction, SqlSupportsConvert,
-    };
+    use crate::sql::{SqlInfo, SqlNullOrdering, SqlSupportedTransaction, SqlSupportsConvert};
 
     #[test]
     fn test_sql_infos() {

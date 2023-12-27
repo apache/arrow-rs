@@ -160,7 +160,7 @@
 //!
 //! # Compute Kernels
 //!
-//! The [`compute`](compute) module provides optimised implementations of many common operations,
+//! The [`compute`] module provides optimised implementations of many common operations,
 //! for example the `parse_strings` operation above could also be implemented as follows:
 //!
 //! ```
@@ -375,7 +375,7 @@ pub mod pyarrow;
 
 pub mod record_batch {
     pub use arrow_array::{
-        RecordBatch, RecordBatchOptions, RecordBatchReader, RecordBatchWriter,
+        RecordBatch, RecordBatchIterator, RecordBatchOptions, RecordBatchReader, RecordBatchWriter,
     };
 }
 pub use arrow_array::temporal_conversions;

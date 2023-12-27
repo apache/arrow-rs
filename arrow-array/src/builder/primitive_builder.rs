@@ -161,9 +161,7 @@ impl<T: ArrowPrimitiveType> PrimitiveBuilder<T> {
         let values_builder = BufferBuilder::<T::Native>::new_from_buffer(values_buffer);
 
         let null_buffer_builder = null_buffer
-            .map(|buffer| {
-                NullBufferBuilder::new_from_buffer(buffer, values_builder.len())
-            })
+            .map(|buffer| NullBufferBuilder::new_from_buffer(buffer, values_builder.len()))
             .unwrap_or_else(|| NullBufferBuilder::new_with_len(values_builder.len()));
 
         Self {
@@ -256,10 +254,7 @@ impl<T: ArrowPrimitiveType> PrimitiveBuilder<T> {
     /// This requires the iterator be a trusted length. This could instead require
     /// the iterator implement `TrustedLen` once that is stabilized.
     #[inline]
-    pub unsafe fn append_trusted_len_iter(
-        &mut self,
-        iter: impl IntoIterator<Item = T::Native>,
-    ) {
+    pub unsafe fn append_trusted_len_iter(&mut self, iter: impl IntoIterator<Item = T::Native>) {
         let iter = iter.into_iter();
         let len = iter
             .size_hint()
@@ -328,11 +323,7 @@ impl<T: ArrowPrimitiveType> PrimitiveBuilder<T> {
 
 impl<P: DecimalType> PrimitiveBuilder<P> {
     /// Sets the precision and scale
-    pub fn with_precision_and_scale(
-        self,
-        precision: u8,
-        scale: i8,
-    ) -> Result<Self, ArrowError> {
+    pub fn with_precision_and_scale(self, precision: u8, scale: i8) -> Result<Self, ArrowError> {
         validate_decimal_precision_and_scale::<P>(precision, scale)?;
         Ok(Self {
             data_type: P::TYPE_CONSTRUCTOR(precision, scale),
@@ -592,25 +583,21 @@ mod tests {
 
     #[test]
     fn test_primitive_array_builder_with_data_type() {
-        let mut builder =
-            Decimal128Builder::new().with_data_type(DataType::Decimal128(1, 2));
+        let mut builder = Decimal128Builder::new().with_data_type(DataType::Decimal128(1, 2));
         builder.append_value(1);
         let array = builder.finish();
         assert_eq!(array.precision(), 1);
         assert_eq!(array.scale(), 2);
 
         let data_type = DataType::Timestamp(TimeUnit::Nanosecond, Some("+00:00".into()));
-        let mut builder =
-            TimestampNanosecondBuilder::new().with_data_type(data_type.clone());
+        let mut builder = TimestampNanosecondBuilder::new().with_data_type(data_type.clone());
         builder.append_value(1);
         let array = builder.finish();
         assert_eq!(array.data_type(), &data_type);
     }
 
     #[test]
-    #[should_panic(
-        expected = "incompatible data type for builder, expected Int32 got Int64"
-    )]
+    #[should_panic(expected = "incompatible data type for builder, expected Int32 got Int64")]
     fn test_invalid_with_data_type() {
         Int32Builder::new().with_data_type(DataType::Int64);
     }

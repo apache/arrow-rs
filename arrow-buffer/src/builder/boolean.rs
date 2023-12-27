@@ -154,14 +154,12 @@ impl BooleanBufferBuilder {
 
                 if cur_remainder != 0 {
                     // Pad last byte with 1s
-                    *self.buffer.as_slice_mut().last_mut().unwrap() |=
-                        !((1 << cur_remainder) - 1)
+                    *self.buffer.as_slice_mut().last_mut().unwrap() |= !((1 << cur_remainder) - 1)
                 }
                 self.buffer.resize(new_len_bytes, 0xFF);
                 if new_remainder != 0 {
                     // Clear remaining bits
-                    *self.buffer.as_slice_mut().last_mut().unwrap() &=
-                        (1 << new_remainder) - 1
+                    *self.buffer.as_slice_mut().last_mut().unwrap() &= (1 << new_remainder) - 1
                 }
                 self.len = new_len;
             }
@@ -201,6 +199,12 @@ impl BooleanBufferBuilder {
             range.start,
             len,
         );
+    }
+
+    /// Append [`BooleanBuffer`] to this [`BooleanBufferBuilder`]
+    pub fn append_buffer(&mut self, buffer: &BooleanBuffer) {
+        let range = buffer.offset()..buffer.offset() + buffer.len();
+        self.append_packed_range(range, buffer.values())
     }
 
     /// Returns the packed bits

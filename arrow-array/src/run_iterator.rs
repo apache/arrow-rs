@@ -86,8 +86,7 @@ where
         // If current logical index is greater than current run end index then increment
         // the physical index.
         let run_ends = self.array.run_ends().values();
-        if self.current_front_logical >= run_ends[self.current_front_physical].as_usize()
-        {
+        if self.current_front_logical >= run_ends[self.current_front_physical].as_usize() {
             // As the run_ends is expected to be strictly increasing, there
             // should be at least one logical entry in one physical entry. Because of this
             // reason the next value can be accessed by incrementing physical index once.
@@ -136,8 +135,7 @@ where
 
         let run_ends = self.array.run_ends().values();
         if self.current_back_physical > 0
-            && self.current_back_logical
-                < run_ends[self.current_back_physical - 1].as_usize()
+            && self.current_back_logical < run_ends[self.current_back_physical - 1].as_usize()
         {
             // As the run_ends is expected to be strictly increasing, there
             // should be at least one logical entry in one physical entry. Because of this
@@ -211,8 +209,7 @@ mod tests {
                 seed.shuffle(&mut rng);
             }
             // repeat the items between 1 and 8 times. Cap the length for smaller sized arrays
-            let num =
-                max_run_length.min(rand::thread_rng().gen_range(1..=max_run_length));
+            let num = max_run_length.min(rand::thread_rng().gen_range(1..=max_run_length));
             for _ in 0..num {
                 result.push(seed[ix]);
             }
@@ -237,7 +234,7 @@ mod tests {
             Some(72),
         ];
         let mut builder = PrimitiveRunBuilder::<Int32Type, Int32Type>::new();
-        builder.extend(input_vec.clone().into_iter());
+        builder.extend(input_vec.iter().copied());
         let ree_array = builder.finish();
         let ree_array = ree_array.downcast::<Int32Array>().unwrap();
 
@@ -261,7 +258,7 @@ mod tests {
             Some(72),
         ];
         let mut builder = PrimitiveRunBuilder::<Int32Type, Int32Type>::new();
-        builder.extend(input_vec.into_iter());
+        builder.extend(input_vec);
         let ree_array = builder.finish();
         let ree_array = ree_array.downcast::<Int32Array>().unwrap();
 
@@ -285,8 +282,7 @@ mod tests {
         for logical_len in logical_lengths {
             let input_array = build_input_array(logical_len);
 
-            let mut run_array_builder =
-                PrimitiveRunBuilder::<Int32Type, Int32Type>::new();
+            let mut run_array_builder = PrimitiveRunBuilder::<Int32Type, Int32Type>::new();
             run_array_builder.extend(input_array.iter().copied());
             let run_array = run_array_builder.finish();
             let typed_array = run_array.downcast::<Int32Array>().unwrap();
@@ -327,8 +323,7 @@ mod tests {
             })
             .collect();
 
-        let result_asref: Vec<Option<&str>> =
-            result.iter().map(|f| f.as_deref()).collect();
+        let result_asref: Vec<Option<&str>> = result.iter().map(|f| f.as_deref()).collect();
 
         let expected_vec = vec![
             Some("abb"),
@@ -364,8 +359,7 @@ mod tests {
 
             // Iterate on sliced typed run array
             let actual: Vec<Option<i32>> = sliced_typed_run_array.into_iter().collect();
-            let expected: Vec<Option<i32>> =
-                input_array.iter().take(slice_len).copied().collect();
+            let expected: Vec<Option<i32>> = input_array.iter().take(slice_len).copied().collect();
             assert_eq!(expected, actual);
 
             // test for offset = total_len - slice_len, length = slice_len

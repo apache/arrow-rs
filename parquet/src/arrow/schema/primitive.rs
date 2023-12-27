@@ -193,11 +193,11 @@ fn from_int64(info: &BasicTypeInfo, scale: i32, precision: i32) -> Result<DataTy
         (None, ConvertedType::NONE) => Ok(DataType::Int64),
         (
             Some(LogicalType::Integer {
-                bit_width,
+                bit_width: 64,
                 is_signed,
             }),
             _,
-        ) if bit_width == 64 => match is_signed {
+        ) => match is_signed {
             true => Ok(DataType::Int64),
             false => Ok(DataType::UInt64),
         },
@@ -303,6 +303,16 @@ fn from_fixed_len_byte_array(
             // to return. Thus without the original Arrow schema, the results
             // would be incorrect if all 12 bytes of the interval are populated
             Ok(DataType::Interval(IntervalUnit::DayTime))
+        }
+        (Some(LogicalType::Float16), _) => {
+            if type_length == 2 {
+                Ok(DataType::Float16)
+            } else {
+                Err(ParquetError::General(
+                    "FLOAT16 logical type must be Fixed Length Byte Array with length 2"
+                        .to_string(),
+                ))
+            }
         }
         _ => Ok(DataType::FixedSizeBinary(type_length)),
     }

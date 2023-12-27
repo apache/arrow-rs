@@ -112,17 +112,9 @@ impl MutableBuffer {
 
     /// Create a [`MutableBuffer`] from the provided [`Vec`] without copying
     #[inline]
+    #[deprecated(note = "Use From<Vec<T>>")]
     pub fn from_vec<T: ArrowNativeType>(vec: Vec<T>) -> Self {
-        // Safety
-        // Vec::as_ptr guaranteed to not be null and ArrowNativeType are trivially transmutable
-        let data = unsafe { NonNull::new_unchecked(vec.as_ptr() as _) };
-        let len = vec.len() * mem::size_of::<T>();
-        // Safety
-        // Vec guaranteed to have a valid layout matching that of `Layout::array`
-        // This is based on `RawVec::current_memory`
-        let layout = unsafe { Layout::array::<T>(vec.capacity()).unwrap_unchecked() };
-        mem::forget(vec);
-        Self { data, len, layout }
+        Self::from(vec)
     }
 
     /// Allocates a new [MutableBuffer] from given `Bytes`.
@@ -342,9 +334,7 @@ impl MutableBuffer {
 
     #[inline]
     pub(super) fn into_buffer(self) -> Buffer {
-        let bytes = unsafe {
-            Bytes::new(self.data, self.len, Deallocation::Standard(self.layout))
-        };
+        let bytes = unsafe { Bytes::new(self.data, self.len, Deallocation::Standard(self.layout)) };
         std::mem::forget(self);
         Buffer::from_bytes(bytes)
     }
@@ -359,8 +349,7 @@ impl MutableBuffer {
         // SAFETY
         // ArrowNativeType is trivially transmutable, is sealed to prevent potentially incorrect
         // implementation outside this crate, and this method checks alignment
-        let (prefix, offsets, suffix) =
-            unsafe { self.as_slice_mut().align_to_mut::<T>() };
+        let (prefix, offsets, suffix) = unsafe { self.as_slice_mut().align_to_mut::<T>() };
         assert!(prefix.is_empty() && suffix.is_empty());
         offsets
     }
@@ -502,6 +491,21 @@ impl<A: ArrowNativeType> Extend<A> for MutableBuffer {
     }
 }
 
+impl<T: ArrowNativeType> From<Vec<T>> for MutableBuffer {
+    fn from(value: Vec<T>) -> Self {
+        // Safety
+        // Vec::as_ptr guaranteed to not be null and ArrowNativeType are trivially transmutable
+        let data = unsafe { NonNull::new_unchecked(value.as_ptr() as _) };
+        let len = value.len() * mem::size_of::<T>();
+        // Safety
+        // Vec guaranteed to have a valid layout matching that of `Layout::array`
+        // This is based on `RawVec::current_memory`
+        let layout = unsafe { Layout::array::<T>(value.capacity()).unwrap_unchecked() };
+        mem::forget(value);
+        Self { data, len, layout }
+    }
+}
+
 impl MutableBuffer {
     #[inline]
     pub(super) fn extend_from_iter<T: ArrowNativeType, I: Iterator<Item = T>>(
@@ -597,9 +601,7 @@ impl MutableBuffer {
     //    we can't specialize `extend` for `TrustedLen` like `Vec` does.
     // 2. `from_trusted_len_iter_bool` is faster.
     #[inline]
-    pub unsafe fn from_trusted_len_iter_bool<I: Iterator<Item = bool>>(
-        mut iterator: I,
-    ) -> Self {
+    pub unsafe fn from_trusted_len_iter_bool<I: Iterator<Item = bool>>(mut iterator: I) -> Self {
         let (_, upper) = iterator.size_hint();
         let len = upper.expect("from_trusted_len_iter requires an upper limit");
 
@@ -768,6 +770,14 @@ impl std::iter::FromIterator<bool> for MutableBuffer {
             }
         }
         result
+    }
+}
+
+impl<T: ArrowNativeType> std::iter::FromIterator<T> for MutableBuffer {
+    fn from_iter<I: IntoIterator<Item = T>>(iter: I) -> Self {
+        let mut buffer = Self::default();
+        buffer.extend_from_iter(iter.into_iter());
+        buffer
     }
 }
 
@@ -984,5 +994,12 @@ mod tests {
     fn test_mutable_set_null_bits_oob_by_overflow() {
         let mut buffer = MutableBuffer::new(0);
         buffer.set_null_bits(1, usize::MAX);
+    }
+
+    #[test]
+    fn from_iter() {
+        let buffer = [1u16, 2, 3, 4].into_iter().collect::<MutableBuffer>();
+        assert_eq!(buffer.len(), 4 * mem::size_of::<u16>());
+        assert_eq!(buffer.as_slice(), &[1, 0, 2, 0, 3, 0, 4, 0]);
     }
 }

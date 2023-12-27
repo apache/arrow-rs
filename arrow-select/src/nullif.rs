@@ -18,7 +18,7 @@
 use arrow_array::{make_array, Array, ArrayRef, BooleanArray};
 use arrow_buffer::buffer::{bitwise_bin_op_helper, bitwise_unary_op_helper};
 use arrow_buffer::{BooleanBuffer, NullBuffer};
-use arrow_schema::ArrowError;
+use arrow_schema::{ArrowError, DataType};
 
 /// Copies original array, setting validity bit to false if a secondary comparison
 /// boolean array is set to true
@@ -29,13 +29,12 @@ pub fn nullif(left: &dyn Array, right: &BooleanArray) -> Result<ArrayRef, ArrowE
 
     if left_data.len() != right.len() {
         return Err(ArrowError::ComputeError(
-            "Cannot perform comparison operation on arrays of different length"
-                .to_string(),
+            "Cannot perform comparison operation on arrays of different length".to_string(),
         ));
     }
     let len = left_data.len();
 
-    if len == 0 {
+    if len == 0 || left_data.data_type() == &DataType::Null {
         return Ok(make_array(left_data));
     }
 
@@ -75,12 +74,11 @@ pub fn nullif(left: &dyn Array, right: &BooleanArray) -> Result<ArrayRef, ArrowE
         }
         None => {
             let mut null_count = 0;
-            let buffer =
-                bitwise_unary_op_helper(right.inner(), right.offset(), len, |b| {
-                    let t = !b;
-                    null_count += t.count_zeros() as usize;
-                    t
-                });
+            let buffer = bitwise_unary_op_helper(right.inner(), right.offset(), len, |b| {
+                let t = !b;
+                null_count += t.count_zeros() as usize;
+                t
+            });
             (buffer, null_count)
         }
     };
@@ -102,7 +100,7 @@ mod tests {
     use arrow_array::builder::{BooleanBuilder, Int32Builder, StructBuilder};
     use arrow_array::cast::AsArray;
     use arrow_array::types::Int32Type;
-    use arrow_array::{Int32Array, StringArray, StructArray};
+    use arrow_array::{Int32Array, NullArray, StringArray, StructArray};
     use arrow_data::ArrayData;
     use arrow_schema::{DataType, Field, Fields};
     use rand::{thread_rng, Rng};
@@ -110,8 +108,7 @@ mod tests {
     #[test]
     fn test_nullif_int_array() {
         let a = Int32Array::from(vec![Some(15), None, Some(8), Some(1), Some(9)]);
-        let comp =
-            BooleanArray::from(vec![Some(false), None, Some(true), Some(false), None]);
+        let comp = BooleanArray::from(vec![Some(false), None, Some(true), Some(false), None]);
         let res = nullif(&a, &comp).unwrap();
 
         let expected = Int32Array::from(vec![
@@ -126,6 +123,26 @@ mod tests {
 
         let res = res.as_primitive::<Int32Type>();
         assert_eq!(&expected, res);
+    }
+
+    #[test]
+    fn test_nullif_null_array() {
+        assert_eq!(
+            nullif(&NullArray::new(0), &BooleanArray::new_null(0))
+                .unwrap()
+                .as_ref(),
+            &NullArray::new(0)
+        );
+
+        assert_eq!(
+            nullif(
+                &NullArray::new(3),
+                &BooleanArray::from(vec![Some(false), Some(true), None]),
+            )
+            .unwrap()
+            .as_ref(),
+            &NullArray::new(3)
+        );
     }
 
     #[test]
@@ -428,8 +445,7 @@ mod tests {
     #[test]
     fn test_nullif_no_nulls() {
         let a = Int32Array::from(vec![Some(15), Some(7), Some(8), Some(1), Some(9)]);
-        let comp =
-            BooleanArray::from(vec![Some(false), None, Some(true), Some(false), None]);
+        let comp = BooleanArray::from(vec![Some(false), None, Some(true), Some(false), None]);
         let res = nullif(&a, &comp).unwrap();
         let res = res.as_primitive::<Int32Type>();
 

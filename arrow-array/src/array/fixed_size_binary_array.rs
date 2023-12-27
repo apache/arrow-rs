@@ -81,10 +81,7 @@ impl FixedSizeBinaryArray {
     ) -> Result<Self, ArrowError> {
         let data_type = DataType::FixedSizeBinary(size);
         let s = size.to_usize().ok_or_else(|| {
-            ArrowError::InvalidArgumentError(format!(
-                "Size cannot be negative, got {}",
-                size
-            ))
+            ArrowError::InvalidArgumentError(format!("Size cannot be negative, got {}", size))
         })?;
 
         let len = values.len() / s;
@@ -179,9 +176,18 @@ impl FixedSizeBinaryArray {
         self.value_length
     }
 
-    /// Returns a clone of the value data buffer
-    pub fn value_data(&self) -> Buffer {
-        self.value_data.clone()
+    /// Returns the values of this array.
+    ///
+    /// Unlike [`Self::value_data`] this returns the [`Buffer`]
+    /// allowing for zero-copy cloning.
+    #[inline]
+    pub fn values(&self) -> &Buffer {
+        &self.value_data
+    }
+
+    /// Returns the raw value data.
+    pub fn value_data(&self) -> &[u8] {
+        self.value_data.as_slice()
     }
 
     /// Returns a zero-copy slice of this array with the indicated offset and length.
@@ -324,10 +330,7 @@ impl FixedSizeBinaryArray {
     /// # Errors
     ///
     /// Returns error if argument has length zero, or sizes of nested slices don't match.
-    pub fn try_from_sparse_iter_with_size<T, U>(
-        mut iter: T,
-        size: i32,
-    ) -> Result<Self, ArrowError>
+    pub fn try_from_sparse_iter_with_size<T, U>(mut iter: T, size: i32) -> Result<Self, ArrowError>
     where
         T: Iterator<Item = Option<U>>,
         U: AsRef<[u8]>,
@@ -803,8 +806,7 @@ mod tests {
         let none_option: Option<[u8; 32]> = None;
         let input_arg = vec![none_option, none_option, none_option];
         #[allow(deprecated)]
-        let arr =
-            FixedSizeBinaryArray::try_from_sparse_iter(input_arg.into_iter()).unwrap();
+        let arr = FixedSizeBinaryArray::try_from_sparse_iter(input_arg.into_iter()).unwrap();
         assert_eq!(0, arr.value_length());
         assert_eq!(3, arr.len())
     }
@@ -819,16 +821,12 @@ mod tests {
             Some(vec![13, 14]),
         ];
         #[allow(deprecated)]
-        let arr = FixedSizeBinaryArray::try_from_sparse_iter(input_arg.iter().cloned())
-            .unwrap();
+        let arr = FixedSizeBinaryArray::try_from_sparse_iter(input_arg.iter().cloned()).unwrap();
         assert_eq!(2, arr.value_length());
         assert_eq!(5, arr.len());
 
-        let arr = FixedSizeBinaryArray::try_from_sparse_iter_with_size(
-            input_arg.into_iter(),
-            2,
-        )
-        .unwrap();
+        let arr =
+            FixedSizeBinaryArray::try_from_sparse_iter_with_size(input_arg.into_iter(), 2).unwrap();
         assert_eq!(2, arr.value_length());
         assert_eq!(5, arr.len());
     }
@@ -837,11 +835,8 @@ mod tests {
     fn test_fixed_size_binary_array_from_sparse_iter_with_size_all_none() {
         let input_arg = vec![None, None, None, None, None] as Vec<Option<Vec<u8>>>;
 
-        let arr = FixedSizeBinaryArray::try_from_sparse_iter_with_size(
-            input_arg.into_iter(),
-            16,
-        )
-        .unwrap();
+        let arr = FixedSizeBinaryArray::try_from_sparse_iter_with_size(input_arg.into_iter(), 16)
+            .unwrap();
         assert_eq!(16, arr.value_length());
         assert_eq!(5, arr.len())
     }
@@ -908,8 +903,7 @@ mod tests {
     fn fixed_size_binary_array_all_null() {
         let data = vec![None] as Vec<Option<String>>;
         let array =
-            FixedSizeBinaryArray::try_from_sparse_iter_with_size(data.into_iter(), 0)
-                .unwrap();
+            FixedSizeBinaryArray::try_from_sparse_iter_with_size(data.into_iter(), 0).unwrap();
         array
             .into_data()
             .validate_full()
@@ -919,8 +913,7 @@ mod tests {
     #[test]
     // Test for https://github.com/apache/arrow-rs/issues/1390
     fn fixed_size_binary_array_all_null_in_batch_with_schema() {
-        let schema =
-            Schema::new(vec![Field::new("a", DataType::FixedSizeBinary(2), true)]);
+        let schema = Schema::new(vec![Field::new("a", DataType::FixedSizeBinary(2), true)]);
 
         let none_option: Option<[u8; 2]> = None;
         let item = FixedSizeBinaryArray::try_from_sparse_iter_with_size(

@@ -36,8 +36,10 @@ use std::sync::Arc;
 ///
 /// let array = NullArray::new(10);
 ///
+/// assert!(array.is_nullable());
 /// assert_eq!(array.len(), 10);
-/// assert_eq!(array.null_count(), 10);
+/// assert_eq!(array.null_count(), 0);
+/// assert_eq!(array.logical_nulls().unwrap().null_count(), 10);
 /// ```
 #[derive(Clone)]
 pub struct NullArray {
@@ -107,22 +109,12 @@ impl Array for NullArray {
         None
     }
 
-    /// Returns whether the element at `index` is null.
-    /// All elements of a `NullArray` are always null.
-    fn is_null(&self, _index: usize) -> bool {
-        true
+    fn logical_nulls(&self) -> Option<NullBuffer> {
+        (self.len != 0).then(|| NullBuffer::new_null(self.len))
     }
 
-    /// Returns whether the element at `index` is valid.
-    /// All elements of a `NullArray` are always invalid.
-    fn is_valid(&self, _index: usize) -> bool {
-        false
-    }
-
-    /// Returns the total number of null values in this array.
-    /// The null count of a `NullArray` always equals its length.
-    fn null_count(&self) -> usize {
-        self.len()
+    fn is_nullable(&self) -> bool {
+        !self.is_empty()
     }
 
     fn get_buffer_memory_size(&self) -> usize {
@@ -176,8 +168,10 @@ mod tests {
         let null_arr = NullArray::new(32);
 
         assert_eq!(null_arr.len(), 32);
-        assert_eq!(null_arr.null_count(), 32);
-        assert!(!null_arr.is_valid(0));
+        assert_eq!(null_arr.null_count(), 0);
+        assert_eq!(null_arr.logical_nulls().unwrap().null_count(), 32);
+        assert!(null_arr.is_valid(0));
+        assert!(null_arr.is_nullable());
     }
 
     #[test]
@@ -186,7 +180,10 @@ mod tests {
 
         let array2 = array1.slice(8, 16);
         assert_eq!(array2.len(), 16);
-        assert_eq!(array2.null_count(), 16);
+        assert_eq!(array2.null_count(), 0);
+        assert_eq!(array2.logical_nulls().unwrap().null_count(), 16);
+        assert!(array2.is_valid(0));
+        assert!(array2.is_nullable());
     }
 
     #[test]

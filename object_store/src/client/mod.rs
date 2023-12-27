@@ -18,6 +18,7 @@
 //! Generic utilities reqwest based ObjectStore implementations
 
 pub mod backoff;
+
 #[cfg(test)]
 pub mod mock_server;
 
@@ -26,7 +27,6 @@ pub mod retry;
 #[cfg(any(feature = "aws", feature = "gcp", feature = "azure"))]
 pub mod pagination;
 
-#[cfg(any(feature = "aws", feature = "gcp", feature = "azure"))]
 pub mod get;
 
 #[cfg(any(feature = "aws", feature = "gcp", feature = "azure"))]
@@ -35,11 +35,10 @@ pub mod list;
 #[cfg(any(feature = "aws", feature = "gcp", feature = "azure"))]
 pub mod token;
 
-#[cfg(any(feature = "aws", feature = "gcp", feature = "azure"))]
 pub mod header;
 
 #[cfg(any(feature = "aws", feature = "gcp"))]
-pub mod list_response;
+pub mod s3;
 
 use async_trait::async_trait;
 use std::collections::HashMap;
@@ -48,7 +47,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use reqwest::header::{HeaderMap, HeaderValue};
-use reqwest::{Client, ClientBuilder, Proxy, RequestBuilder};
+use reqwest::{Client, ClientBuilder, NoProxy, Proxy, RequestBuilder};
 use serde::{Deserialize, Serialize};
 
 use crate::config::{fmt_duration, ConfigValue};
@@ -62,8 +61,7 @@ fn map_client_error(e: reqwest::Error) -> super::Error {
     }
 }
 
-static DEFAULT_USER_AGENT: &str =
-    concat!(env!("CARGO_PKG_NAME"), "/", env!("CARGO_PKG_VERSION"),);
+static DEFAULT_USER_AGENT: &str = concat!(env!("CARGO_PKG_NAME"), "/", env!("CARGO_PKG_VERSION"),);
 
 /// Configuration keys for [`ClientOptions`]
 #[derive(PartialEq, Eq, Hash, Clone, Debug, Copy, Deserialize, Serialize)]
@@ -103,6 +101,10 @@ pub enum ClientConfigKey {
     PoolMaxIdlePerHost,
     /// HTTP proxy to use for requests
     ProxyUrl,
+    /// PEM-formatted CA certificate for proxy connections
+    ProxyCaCertificate,
+    /// List of hosts that bypass proxy
+    ProxyExcludes,
     /// Request timeout
     ///
     /// The timeout is applied from when the request starts connecting until the
@@ -127,6 +129,8 @@ impl AsRef<str> for ClientConfigKey {
             Self::PoolIdleTimeout => "pool_idle_timeout",
             Self::PoolMaxIdlePerHost => "pool_max_idle_per_host",
             Self::ProxyUrl => "proxy_url",
+            Self::ProxyCaCertificate => "proxy_ca_certificate",
+            Self::ProxyExcludes => "proxy_excludes",
             Self::Timeout => "timeout",
             Self::UserAgent => "user_agent",
         }
@@ -161,13 +165,15 @@ impl FromStr for ClientConfigKey {
 }
 
 /// HTTP client configuration for remote object stores
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct ClientOptions {
     user_agent: Option<ConfigValue<HeaderValue>>,
     content_type_map: HashMap<String, String>,
     default_content_type: Option<String>,
     default_headers: Option<HeaderMap>,
     proxy_url: Option<String>,
+    proxy_ca_certificate: Option<String>,
+    proxy_excludes: Option<String>,
     allow_http: ConfigValue<bool>,
     allow_insecure: ConfigValue<bool>,
     timeout: Option<ConfigValue<Duration>>,
@@ -179,6 +185,41 @@ pub struct ClientOptions {
     http2_keep_alive_while_idle: ConfigValue<bool>,
     http1_only: ConfigValue<bool>,
     http2_only: ConfigValue<bool>,
+}
+
+impl Default for ClientOptions {
+    fn default() -> Self {
+        // Defaults based on
+        // <https://docs.aws.amazon.com/sdkref/latest/guide/feature-smart-config-defaults.html>
+        // <https://docs.aws.amazon.com/whitepapers/latest/s3-optimizing-performance-best-practices/timeouts-and-retries-for-latency-sensitive-applications.html>
+        // Which recommend a connection timeout of 3.1s and a request timeout of 2s
+        //
+        // As object store requests may involve the transfer of non-trivial volumes of data
+        // we opt for a slightly higher default timeout of 30 seconds
+        Self {
+            user_agent: None,
+            content_type_map: Default::default(),
+            default_content_type: None,
+            default_headers: None,
+            proxy_url: None,
+            proxy_ca_certificate: None,
+            proxy_excludes: None,
+            allow_http: Default::default(),
+            allow_insecure: Default::default(),
+            timeout: Some(Duration::from_secs(30).into()),
+            connect_timeout: Some(Duration::from_secs(5).into()),
+            pool_idle_timeout: None,
+            pool_max_idle_per_host: None,
+            http2_keep_alive_interval: None,
+            http2_keep_alive_timeout: None,
+            http2_keep_alive_while_idle: Default::default(),
+            // HTTP2 is known to be significantly slower than HTTP1, so we default
+            // to HTTP1 for now.
+            // https://github.com/apache/arrow-rs/issues/5194
+            http1_only: true.into(),
+            http2_only: Default::default(),
+        }
+    }
 }
 
 impl ClientOptions {
@@ -195,9 +236,7 @@ impl ClientOptions {
             ClientConfigKey::ConnectTimeout => {
                 self.connect_timeout = Some(ConfigValue::Deferred(value.into()))
             }
-            ClientConfigKey::DefaultContentType => {
-                self.default_content_type = Some(value.into())
-            }
+            ClientConfigKey::DefaultContentType => self.default_content_type = Some(value.into()),
             ClientConfigKey::Http1Only => self.http1_only.parse(value),
             ClientConfigKey::Http2Only => self.http2_only.parse(value),
             ClientConfigKey::Http2KeepAliveInterval => {
@@ -216,9 +255,9 @@ impl ClientOptions {
                 self.pool_max_idle_per_host = Some(ConfigValue::Deferred(value.into()))
             }
             ClientConfigKey::ProxyUrl => self.proxy_url = Some(value.into()),
-            ClientConfigKey::Timeout => {
-                self.timeout = Some(ConfigValue::Deferred(value.into()))
-            }
+            ClientConfigKey::ProxyCaCertificate => self.proxy_ca_certificate = Some(value.into()),
+            ClientConfigKey::ProxyExcludes => self.proxy_excludes = Some(value.into()),
+            ClientConfigKey::Timeout => self.timeout = Some(ConfigValue::Deferred(value.into())),
             ClientConfigKey::UserAgent => {
                 self.user_agent = Some(ConfigValue::Deferred(value.into()))
             }
@@ -230,12 +269,8 @@ impl ClientOptions {
     pub fn get_config_value(&self, key: &ClientConfigKey) -> Option<String> {
         match key {
             ClientConfigKey::AllowHttp => Some(self.allow_http.to_string()),
-            ClientConfigKey::AllowInvalidCertificates => {
-                Some(self.allow_insecure.to_string())
-            }
-            ClientConfigKey::ConnectTimeout => {
-                self.connect_timeout.as_ref().map(fmt_duration)
-            }
+            ClientConfigKey::AllowInvalidCertificates => Some(self.allow_insecure.to_string()),
+            ClientConfigKey::ConnectTimeout => self.connect_timeout.as_ref().map(fmt_duration),
             ClientConfigKey::DefaultContentType => self.default_content_type.clone(),
             ClientConfigKey::Http1Only => Some(self.http1_only.to_string()),
             ClientConfigKey::Http2KeepAliveInterval => {
@@ -248,13 +283,13 @@ impl ClientOptions {
                 Some(self.http2_keep_alive_while_idle.to_string())
             }
             ClientConfigKey::Http2Only => Some(self.http2_only.to_string()),
-            ClientConfigKey::PoolIdleTimeout => {
-                self.pool_idle_timeout.as_ref().map(fmt_duration)
-            }
+            ClientConfigKey::PoolIdleTimeout => self.pool_idle_timeout.as_ref().map(fmt_duration),
             ClientConfigKey::PoolMaxIdlePerHost => {
                 self.pool_max_idle_per_host.as_ref().map(|v| v.to_string())
             }
             ClientConfigKey::ProxyUrl => self.proxy_url.clone(),
+            ClientConfigKey::ProxyCaCertificate => self.proxy_ca_certificate.clone(),
+            ClientConfigKey::ProxyExcludes => self.proxy_excludes.clone(),
             ClientConfigKey::Timeout => self.timeout.as_ref().map(fmt_duration),
             ClientConfigKey::UserAgent => self
                 .user_agent
@@ -318,20 +353,43 @@ impl ClientOptions {
     }
 
     /// Only use http1 connections
+    ///
+    /// This is on by default, since http2 is known to be significantly slower than http1.
     pub fn with_http1_only(mut self) -> Self {
+        self.http2_only = false.into();
         self.http1_only = true.into();
         self
     }
 
     /// Only use http2 connections
     pub fn with_http2_only(mut self) -> Self {
+        self.http1_only = false.into();
         self.http2_only = true.into();
         self
     }
 
-    /// Set an HTTP proxy to use for requests
+    /// Use http2 if supported, otherwise use http1.
+    pub fn with_allow_http2(mut self) -> Self {
+        self.http1_only = false.into();
+        self.http2_only = false.into();
+        self
+    }
+
+    /// Set a proxy URL to use for requests
     pub fn with_proxy_url(mut self, proxy_url: impl Into<String>) -> Self {
         self.proxy_url = Some(proxy_url.into());
+        self
+    }
+
+    /// Set a trusted proxy CA certificate
+    pub fn with_proxy_ca_certificate(mut self, proxy_ca_certificate: impl Into<String>) -> Self {
+        self.proxy_ca_certificate = Some(proxy_ca_certificate.into());
+        self
+    }
+
+    /// Set a list of hosts to exclude from proxy connections
+    pub fn with_proxy_excludes(mut self, proxy_excludes: impl Into<String>) -> Self {
+        self.proxy_excludes = Some(proxy_excludes.into());
         self
     }
 
@@ -339,14 +397,34 @@ impl ClientOptions {
     ///
     /// The timeout is applied from when the request starts connecting until the
     /// response body has finished
+    ///
+    /// Default is 5 seconds
     pub fn with_timeout(mut self, timeout: Duration) -> Self {
         self.timeout = Some(ConfigValue::Parsed(timeout));
         self
     }
 
+    /// Disables the request timeout
+    ///
+    /// See [`Self::with_timeout`]
+    pub fn with_timeout_disabled(mut self) -> Self {
+        self.timeout = None;
+        self
+    }
+
     /// Set a timeout for only the connect phase of a Client
+    ///
+    /// Default is 5 seconds
     pub fn with_connect_timeout(mut self, timeout: Duration) -> Self {
         self.connect_timeout = Some(ConfigValue::Parsed(timeout));
+        self
+    }
+
+    /// Disables the connection timeout
+    ///
+    /// See [`Self::with_connect_timeout`]
+    pub fn with_connect_timeout_disabled(mut self) -> Self {
+        self.timeout = None;
         self
     }
 
@@ -416,7 +494,20 @@ impl ClientOptions {
         }
     }
 
-    pub(crate) fn client(&self) -> super::Result<Client> {
+    /// Create a [`Client`] with overrides optimised for metadata endpoint access
+    ///
+    /// In particular:
+    /// * Allows HTTP as metadata endpoints do not use TLS
+    /// * Configures a low connection timeout to provide quick feedback if not present
+    #[cfg(any(feature = "aws", feature = "gcp", feature = "azure"))]
+    pub(crate) fn metadata_client(&self) -> Result<Client> {
+        self.clone()
+            .with_allow_http(true)
+            .with_connect_timeout(Duration::from_secs(1))
+            .client()
+    }
+
+    pub(crate) fn client(&self) -> Result<Client> {
         let mut builder = ClientBuilder::new();
 
         match &self.user_agent {
@@ -429,7 +520,21 @@ impl ClientOptions {
         }
 
         if let Some(proxy) = &self.proxy_url {
-            let proxy = Proxy::all(proxy).map_err(map_client_error)?;
+            let mut proxy = Proxy::all(proxy).map_err(map_client_error)?;
+
+            if let Some(certificate) = &self.proxy_ca_certificate {
+                let certificate = reqwest::tls::Certificate::from_pem(certificate.as_bytes())
+                    .map_err(map_client_error)?;
+
+                builder = builder.add_root_certificate(certificate);
+            }
+
+            if let Some(proxy_excludes) = &self.proxy_excludes {
+                let no_proxy = NoProxy::from_string(proxy_excludes);
+
+                proxy = proxy.no_proxy(no_proxy);
+            }
+
             builder = builder.proxy(proxy);
         }
 
@@ -531,6 +636,7 @@ pub struct StaticCredentialProvider<T> {
 }
 
 impl<T> StaticCredentialProvider<T> {
+    /// A [`CredentialProvider`] for a static credential of type `T`
     pub fn new(credential: T) -> Self {
         Self {
             credential: Arc::new(credential),

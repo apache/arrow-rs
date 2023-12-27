@@ -19,9 +19,9 @@ use std::pin::Pin;
 
 use arrow_flight::{
     flight_descriptor::DescriptorType, flight_service_server::FlightService,
-    flight_service_server::FlightServiceServer, Action, ActionType, Criteria, Empty,
-    FlightData, FlightDescriptor, FlightInfo, HandshakeRequest, HandshakeResponse,
-    PutResult, SchemaResult, Ticket,
+    flight_service_server::FlightServiceServer, Action, ActionType, Criteria, Empty, FlightData,
+    FlightDescriptor, FlightInfo, HandshakeRequest, HandshakeResponse, PutResult, SchemaResult,
+    Ticket,
 };
 use futures::Stream;
 use tonic::{transport::Server, Request, Response, Status, Streaming};
@@ -93,8 +93,7 @@ impl FlightService for MiddlewareScenarioImpl {
 
         let descriptor = request.into_inner();
 
-        if descriptor.r#type == DescriptorType::Cmd as i32
-            && descriptor.cmd.as_ref() == b"success"
+        if descriptor.r#type == DescriptorType::Cmd as i32 && descriptor.cmd.as_ref() == b"success"
         {
             // Return a fake location - the test doesn't read it
             let endpoint = super::endpoint("foo", "grpc+tcp://localhost:10010");

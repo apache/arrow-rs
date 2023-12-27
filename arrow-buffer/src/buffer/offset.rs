@@ -19,7 +19,43 @@ use crate::buffer::ScalarBuffer;
 use crate::{ArrowNativeType, MutableBuffer};
 use std::ops::Deref;
 
-/// A non-empty buffer of monotonically increasing, positive integers
+/// A non-empty buffer of monotonically increasing, positive integers.
+///
+/// [`OffsetBuffer`] are used to represent ranges of offsets. An
+/// `OffsetBuffer` of `N+1` items contains `N` such ranges. The start
+/// offset for element `i` is `offsets[i]` and the end offset is
+/// `offsets[i+1]`. Equal offsets represent an empty range.
+///
+/// # Example
+///
+/// This example shows how 5 distinct ranges, are represented using a
+/// 6 entry `OffsetBuffer`. The first entry `(0, 3)` represents the
+/// three offsets `0, 1, 2`. The entry `(3,3)` represent no offsets
+/// (e.g. an empty list).
+///
+/// ```text
+///   ┌───────┐                ┌───┐
+///   │ (0,3) │                │ 0 │
+///   ├───────┤                ├───┤
+///   │ (3,3) │                │ 3 │
+///   ├───────┤                ├───┤
+///   │ (3,4) │                │ 3 │
+///   ├───────┤                ├───┤
+///   │ (4,5) │                │ 4 │
+///   ├───────┤                ├───┤
+///   │ (5,7) │                │ 5 │
+///   └───────┘                ├───┤
+///                            │ 7 │
+///                            └───┘
+///
+///                        Offsets Buffer
+///    Logical
+///    Offsets
+///
+///  (offsets[i],
+///   offsets[i+1])
+/// ```
+
 #[derive(Debug, Clone)]
 pub struct OffsetBuffer<O: ArrowNativeType>(ScalarBuffer<O>);
 
@@ -112,6 +148,14 @@ impl<O: ArrowNativeType> OffsetBuffer<O> {
     pub fn slice(&self, offset: usize, len: usize) -> Self {
         Self(self.0.slice(offset, len.saturating_add(1)))
     }
+
+    /// Returns true if this [`OffsetBuffer`] is equal to `other`, using pointer comparisons
+    /// to determine buffer equality. This is cheaper than `PartialEq::eq` but may
+    /// return false when the arrays are logically equal
+    #[inline]
+    pub fn ptr_eq(&self, other: &Self) -> bool {
+        self.0.ptr_eq(&other.0)
+    }
 }
 
 impl<T: ArrowNativeType> Deref for OffsetBuffer<T> {
@@ -175,8 +219,7 @@ mod tests {
         assert_eq!(buffer.as_ref(), &[0, 2, 8, 11, 18, 20]);
 
         let half_max = i32::MAX / 2;
-        let buffer =
-            OffsetBuffer::<i32>::from_lengths([half_max as usize, half_max as usize]);
+        let buffer = OffsetBuffer::<i32>::from_lengths([half_max as usize, half_max as usize]);
         assert_eq!(buffer.as_ref(), &[0, half_max, half_max * 2]);
     }
 

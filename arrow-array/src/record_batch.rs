@@ -107,10 +107,7 @@ impl RecordBatch {
     ///     vec![Arc::new(id_array)]
     /// ).unwrap();
     /// ```
-    pub fn try_new(
-        schema: SchemaRef,
-        columns: Vec<ArrayRef>,
-    ) -> Result<Self, ArrowError> {
+    pub fn try_new(schema: SchemaRef, columns: Vec<ArrayRef>) -> Result<Self, ArrowError> {
         let options = RecordBatchOptions::new();
         Self::try_new_impl(schema, columns, &options)
     }
@@ -158,7 +155,6 @@ impl RecordBatch {
             )));
         }
 
-        // check that all columns have the same row count
         let row_count = options
             .row_count
             .or_else(|| columns.first().map(|col| col.len()))
@@ -177,11 +173,10 @@ impl RecordBatch {
             }
         }
 
+        // check that all columns have the same row count
         if columns.iter().any(|c| c.len() != row_count) {
             let err = match options.row_count {
-                Some(_) => {
-                    "all columns in a record batch must have the specified row count"
-                }
+                Some(_) => "all columns in a record batch must have the specified row count",
                 None => "all columns in a record batch must have the same length",
             };
             return Err(ArrowError::InvalidArgumentError(err.to_string()));
@@ -190,9 +185,7 @@ impl RecordBatch {
         // function for comparing column type and field type
         // return true if 2 types are not matched
         let type_not_match = if options.match_field_names {
-            |(_, (col_type, field_type)): &(usize, (&DataType, &DataType))| {
-                col_type != field_type
-            }
+            |(_, (col_type, field_type)): &(usize, (&DataType, &DataType))| col_type != field_type
         } else {
             |(_, (col_type, field_type)): &(usize, (&DataType, &DataType))| {
                 !col_type.equals_datatype(field_type)
@@ -226,7 +219,7 @@ impl RecordBatch {
     pub fn with_schema(self, schema: SchemaRef) -> Result<Self, ArrowError> {
         if !schema.contains(self.schema.as_ref()) {
             return Err(ArrowError::SchemaError(format!(
-                "{schema} is not a superset of {}",
+                "target schema is not superset of current schema target={schema} current={}",
                 self.schema
             )));
         }
@@ -238,7 +231,7 @@ impl RecordBatch {
         })
     }
 
-    /// Returns the [`Schema`](arrow_schema::Schema) of the record batch.
+    /// Returns the [`Schema`] of the record batch.
     pub fn schema(&self) -> SchemaRef {
         self.schema.clone()
     }
@@ -332,6 +325,40 @@ impl RecordBatch {
     /// Get a reference to all columns in the record batch.
     pub fn columns(&self) -> &[ArrayRef] {
         &self.columns[..]
+    }
+
+    /// Remove column by index and return it.
+    ///
+    /// Return the `ArrayRef` if the column is removed.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `index`` out of bounds.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use arrow_array::{BooleanArray, Int32Array, RecordBatch};
+    /// use arrow_schema::{DataType, Field, Schema};
+    /// let id_array = Int32Array::from(vec![1, 2, 3, 4, 5]);
+    /// let bool_array = BooleanArray::from(vec![true, false, false, true, true]);
+    /// let schema = Schema::new(vec![
+    ///     Field::new("id", DataType::Int32, false),
+    ///     Field::new("bool", DataType::Boolean, false),
+    /// ]);
+    ///
+    /// let mut batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(id_array), Arc::new(bool_array)]).unwrap();
+    ///
+    /// let removed_column = batch.remove_column(0);
+    /// assert_eq!(removed_column.as_any().downcast_ref::<Int32Array>().unwrap(), &Int32Array::from(vec![1, 2, 3, 4, 5]));
+    /// assert_eq!(batch.num_columns(), 1);
+    /// ```
+    pub fn remove_column(&mut self, index: usize) -> ArrayRef {
+        let mut builder = SchemaBuilder::from(self.schema.fields());
+        builder.remove(index);
+        self.schema = Arc::new(builder.finish());
+        self.columns.remove(index)
     }
 
     /// Return a new RecordBatch where each column is sliced
@@ -484,7 +511,11 @@ impl From<StructArray> for RecordBatch {
     fn from(value: StructArray) -> Self {
         let row_count = value.len();
         let (fields, columns, nulls) = value.into_parts();
-        assert_eq!(nulls.map(|n| n.null_count()).unwrap_or_default(), 0, "Cannot convert nullable StructArray to RecordBatch, see StructArray documentation");
+        assert_eq!(
+            nulls.map(|n| n.null_count()).unwrap_or_default(),
+            0,
+            "Cannot convert nullable StructArray to RecordBatch, see StructArray documentation"
+        );
 
         RecordBatch {
             schema: Arc::new(Schema::new(fields)),
@@ -588,9 +619,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        BooleanArray, Int32Array, Int64Array, Int8Array, ListArray, StringArray,
-    };
+    use crate::{BooleanArray, Int32Array, Int64Array, Int8Array, ListArray, StringArray};
     use arrow_buffer::{Buffer, ToByteSlice};
     use arrow_data::{ArrayData, ArrayDataBuilder};
     use arrow_schema::Fields;
@@ -606,8 +635,7 @@ mod tests {
         let b = StringArray::from(vec!["a", "b", "c", "d", "e"]);
 
         let record_batch =
-            RecordBatch::try_new(Arc::new(schema), vec![Arc::new(a), Arc::new(b)])
-                .unwrap();
+            RecordBatch::try_new(Arc::new(schema), vec![Arc::new(a), Arc::new(b)]).unwrap();
         check_batch(record_batch, 5)
     }
 
@@ -622,8 +650,7 @@ mod tests {
         let b = StringArray::from(vec!["a", "b", "c", "d", "e"]);
 
         let record_batch =
-            RecordBatch::try_new(Arc::new(schema), vec![Arc::new(a), Arc::new(b)])
-                .unwrap();
+            RecordBatch::try_new(Arc::new(schema), vec![Arc::new(a), Arc::new(b)]).unwrap();
         assert_eq!(record_batch.get_array_memory_size(), 364);
     }
 
@@ -649,8 +676,7 @@ mod tests {
         let b = StringArray::from(vec!["a", "b", "c", "d", "e", "f", "h", "i"]);
 
         let record_batch =
-            RecordBatch::try_new(Arc::new(schema), vec![Arc::new(a), Arc::new(b)])
-                .unwrap();
+            RecordBatch::try_new(Arc::new(schema), vec![Arc::new(a), Arc::new(b)]).unwrap();
 
         let offset = 2;
         let length = 5;
@@ -699,8 +725,8 @@ mod tests {
         ]));
         let b: ArrayRef = Arc::new(StringArray::from(vec!["a", "b", "c", "d", "e"]));
 
-        let record_batch = RecordBatch::try_from_iter(vec![("a", a), ("b", b)])
-            .expect("valid conversion");
+        let record_batch =
+            RecordBatch::try_from_iter(vec![("a", a), ("b", b)]).expect("valid conversion");
 
         let expected_schema = Schema::new(vec![
             Field::new("a", DataType::Int32, true),
@@ -716,11 +742,9 @@ mod tests {
         let b: ArrayRef = Arc::new(StringArray::from(vec!["a", "b", "c", "d", "e"]));
 
         // Note there are no nulls in a or b, but we specify that b is nullable
-        let record_batch = RecordBatch::try_from_iter_with_nullable(vec![
-            ("a", a, false),
-            ("b", b, true),
-        ])
-        .expect("valid conversion");
+        let record_batch =
+            RecordBatch::try_from_iter_with_nullable(vec![("a", a, false), ("b", b, true)])
+                .expect("valid conversion");
 
         let expected_schema = Schema::new(vec![
             Field::new("a", DataType::Int32, false),
@@ -757,7 +781,7 @@ mod tests {
         ))))
         .add_child_data(a2_child.into_data())
         .len(2)
-        .add_buffer(Buffer::from(vec![0i32, 3, 4].to_byte_slice()))
+        .add_buffer(Buffer::from([0i32, 3, 4].to_byte_slice()))
         .build()
         .unwrap();
         let a2: ArrayRef = Arc::new(ListArray::from(a2));
@@ -792,8 +816,7 @@ mod tests {
         let a = Int32Array::from(vec![1, 2, 3, 4, 5]);
         let b = Int32Array::from(vec![1, 2, 3, 4, 5]);
 
-        let batch =
-            RecordBatch::try_new(Arc::new(schema), vec![Arc::new(a), Arc::new(b)]);
+        let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(a), Arc::new(b)]);
         assert!(batch.is_err());
     }
 
@@ -863,11 +886,8 @@ mod tests {
             Field::new("id", DataType::Int32, false),
             Field::new("val", DataType::Int32, false),
         ]);
-        let record_batch = RecordBatch::try_new(
-            Arc::new(schema1),
-            vec![id_arr.clone(), val_arr.clone()],
-        )
-        .unwrap();
+        let record_batch =
+            RecordBatch::try_new(Arc::new(schema1), vec![id_arr.clone(), val_arr.clone()]).unwrap();
 
         assert_eq!(record_batch["id"].as_ref(), id_arr.as_ref());
         assert_eq!(record_batch["val"].as_ref(), val_arr.as_ref());
@@ -1005,15 +1025,12 @@ mod tests {
         let b: ArrayRef = Arc::new(StringArray::from(vec!["a", "b", "c"]));
         let c: ArrayRef = Arc::new(StringArray::from(vec!["d", "e", "f"]));
 
-        let record_batch = RecordBatch::try_from_iter(vec![
-            ("a", a.clone()),
-            ("b", b.clone()),
-            ("c", c.clone()),
-        ])
-        .expect("valid conversion");
+        let record_batch =
+            RecordBatch::try_from_iter(vec![("a", a.clone()), ("b", b.clone()), ("c", c.clone())])
+                .expect("valid conversion");
 
-        let expected = RecordBatch::try_from_iter(vec![("a", a), ("c", c)])
-            .expect("valid conversion");
+        let expected =
+            RecordBatch::try_from_iter(vec![("a", a), ("c", c)]).expect("valid conversion");
 
         assert_eq!(expected, record_batch.project(&[0, 2]).unwrap());
     }
@@ -1049,8 +1066,7 @@ mod tests {
 
         let options = RecordBatchOptions::new().with_row_count(Some(10));
 
-        let ok =
-            RecordBatch::try_new_with_options(schema.clone(), vec![], &options).unwrap();
+        let ok = RecordBatch::try_new_with_options(schema.clone(), vec![], &options).unwrap();
         assert_eq!(ok.num_rows(), 10);
 
         let a = ok.slice(2, 5);

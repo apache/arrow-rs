@@ -14,3 +14,19 @@
 // KIND, either express or implied.  See the License for the
 // specific language governing permissions and limitations
 // under the License.
+
+use serde::{Deserialize, Serialize};
+
+/// The metadata key used for storing the JSON encoded [`CompressionCodec`]
+pub const CODEC_METADATA_KEY: &str = "avro.codec";
+
+#[derive(Debug, Copy, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum CompressionCodec {
+    Null,
+    Deflate,
+    BZip2,
+    Snappy,
+    XZ,
+    ZStandard,
+}

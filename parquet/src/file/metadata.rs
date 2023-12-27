@@ -37,8 +37,8 @@ use std::ops::Range;
 use std::sync::Arc;
 
 use crate::format::{
-    BoundaryOrder, ColumnChunk, ColumnIndex, ColumnMetaData, OffsetIndex, PageLocation,
-    RowGroup, SortingColumn,
+    BoundaryOrder, ColumnChunk, ColumnIndex, ColumnMetaData, OffsetIndex, PageLocation, RowGroup,
+    SortingColumn,
 };
 
 use crate::basic::{ColumnOrder, Compression, Encoding, Type};
@@ -155,13 +155,13 @@ impl ParquetMetaData {
     }
 
     /// Override the column index
-    #[allow(dead_code)]
+    #[cfg(feature = "arrow")]
     pub(crate) fn set_column_index(&mut self, index: Option<ParquetColumnIndex>) {
         self.column_index = index;
     }
 
     /// Override the offset index
-    #[allow(dead_code)]
+    #[cfg(feature = "arrow")]
     pub(crate) fn set_offset_index(&mut self, index: Option<ParquetOffsetIndex>) {
         self.offset_index = index;
     }
@@ -279,6 +279,9 @@ pub struct RowGroupMetaData {
     sorting_columns: Option<Vec<SortingColumn>>,
     total_byte_size: i64,
     schema_descr: SchemaDescPtr,
+    // We can't infer from file offset of first column since there may empty columns in row group.
+    file_offset: Option<i64>,
+    ordinal: Option<i16>,
 }
 
 impl RowGroupMetaData {
@@ -332,11 +335,20 @@ impl RowGroupMetaData {
         self.schema_descr.clone()
     }
 
+    /// Returns ordinal of this row group in file
+    #[inline(always)]
+    pub fn ordinal(&self) -> Option<i16> {
+        self.ordinal
+    }
+
+    /// Returns file offset of this row group in file.
+    #[inline(always)]
+    pub fn file_offset(&self) -> Option<i64> {
+        self.file_offset
+    }
+
     /// Method to convert from Thrift.
-    pub fn from_thrift(
-        schema_descr: SchemaDescPtr,
-        mut rg: RowGroup,
-    ) -> Result<RowGroupMetaData> {
+    pub fn from_thrift(schema_descr: SchemaDescPtr, mut rg: RowGroup) -> Result<RowGroupMetaData> {
         assert_eq!(schema_descr.num_columns(), rg.columns.len());
         let total_byte_size = rg.total_byte_size;
         let num_rows = rg.num_rows;
@@ -352,6 +364,8 @@ impl RowGroupMetaData {
             sorting_columns,
             total_byte_size,
             schema_descr,
+            file_offset: rg.file_offset,
+            ordinal: rg.ordinal,
         })
     }
 
@@ -362,9 +376,9 @@ impl RowGroupMetaData {
             total_byte_size: self.total_byte_size,
             num_rows: self.num_rows,
             sorting_columns: self.sorting_columns().cloned(),
-            file_offset: None,
-            total_compressed_size: None,
-            ordinal: None,
+            file_offset: self.file_offset(),
+            total_compressed_size: Some(self.compressed_size()),
+            ordinal: self.ordinal,
         }
     }
 
@@ -383,9 +397,11 @@ impl RowGroupMetaDataBuilder {
         Self(RowGroupMetaData {
             columns: Vec::with_capacity(schema_descr.num_columns()),
             schema_descr,
+            file_offset: None,
             num_rows: 0,
             sorting_columns: None,
             total_byte_size: 0,
+            ordinal: None,
         })
     }
 
@@ -410,6 +426,17 @@ impl RowGroupMetaDataBuilder {
     /// Sets column metadata for this row group.
     pub fn set_column_metadata(mut self, value: Vec<ColumnChunkMetaData>) -> Self {
         self.0.columns = value;
+        self
+    }
+
+    /// Sets ordinal for this row group.
+    pub fn set_ordinal(mut self, value: i16) -> Self {
+        self.0.ordinal = Some(value);
+        self
+    }
+
+    pub fn set_file_offset(mut self, value: i64) -> Self {
+        self.0.file_offset = Some(value);
         self
     }
 
@@ -444,6 +471,7 @@ pub struct ColumnChunkMetaData {
     statistics: Option<Statistics>,
     encoding_stats: Option<Vec<PageEncodingStats>>,
     bloom_filter_offset: Option<i64>,
+    bloom_filter_length: Option<i32>,
     offset_index_offset: Option<i64>,
     offset_index_length: Option<i32>,
     column_index_offset: Option<i64>,
@@ -561,6 +589,11 @@ impl ColumnChunkMetaData {
         self.bloom_filter_offset
     }
 
+    /// Returns the offset for the bloom filter.
+    pub fn bloom_filter_length(&self) -> Option<i32> {
+        self.bloom_filter_length
+    }
+
     /// Returns the offset for the column index.
     pub fn column_index_offset(&self) -> Option<i64> {
         self.column_index_offset
@@ -616,7 +649,7 @@ impl ColumnChunkMetaData {
         let data_page_offset = col_metadata.data_page_offset;
         let index_page_offset = col_metadata.index_page_offset;
         let dictionary_page_offset = col_metadata.dictionary_page_offset;
-        let statistics = statistics::from_thrift(column_type, col_metadata.statistics);
+        let statistics = statistics::from_thrift(column_type, col_metadata.statistics)?;
         let encoding_stats = col_metadata
             .encoding_stats
             .as_ref()
@@ -627,6 +660,7 @@ impl ColumnChunkMetaData {
             })
             .transpose()?;
         let bloom_filter_offset = col_metadata.bloom_filter_offset;
+        let bloom_filter_length = col_metadata.bloom_filter_length;
         let offset_index_offset = cc.offset_index_offset;
         let offset_index_length = cc.offset_index_length;
         let column_index_offset = cc.column_index_offset;
@@ -647,6 +681,7 @@ impl ColumnChunkMetaData {
             statistics,
             encoding_stats,
             bloom_filter_offset,
+            bloom_filter_length,
             offset_index_offset,
             offset_index_length,
             column_index_offset,
@@ -692,6 +727,7 @@ impl ColumnChunkMetaData {
                 .as_ref()
                 .map(|vec| vec.iter().map(page_encoding_stats::to_thrift).collect()),
             bloom_filter_offset: self.bloom_filter_offset,
+            bloom_filter_length: self.bloom_filter_length,
         }
     }
 
@@ -722,6 +758,7 @@ impl ColumnChunkMetaDataBuilder {
             statistics: None,
             encoding_stats: None,
             bloom_filter_offset: None,
+            bloom_filter_length: None,
             offset_index_offset: None,
             offset_index_length: None,
             column_index_offset: None,
@@ -807,6 +844,12 @@ impl ColumnChunkMetaDataBuilder {
         self
     }
 
+    /// Sets optional bloom filter length in bytes.
+    pub fn set_bloom_filter_length(mut self, value: Option<i32>) -> Self {
+        self.0.bloom_filter_length = value;
+        self
+    }
+
     /// Sets optional offset index offset in bytes.
     pub fn set_offset_index_offset(mut self, value: Option<i64>) -> Self {
         self.0.offset_index_offset = value;
@@ -842,9 +885,8 @@ pub struct ColumnIndexBuilder {
     null_pages: Vec<bool>,
     min_values: Vec<Vec<u8>>,
     max_values: Vec<Vec<u8>>,
-    // TODO: calc the order for all pages in this column
-    boundary_order: BoundaryOrder,
     null_counts: Vec<i64>,
+    boundary_order: BoundaryOrder,
     // If one page can't get build index, need to ignore all index in this column
     valid: bool,
 }
@@ -861,8 +903,8 @@ impl ColumnIndexBuilder {
             null_pages: Vec::new(),
             min_values: Vec::new(),
             max_values: Vec::new(),
-            boundary_order: BoundaryOrder::UNORDERED,
             null_counts: Vec::new(),
+            boundary_order: BoundaryOrder::UNORDERED,
             valid: true,
         }
     }
@@ -878,6 +920,10 @@ impl ColumnIndexBuilder {
         self.min_values.push(min_value);
         self.max_values.push(max_value);
         self.null_counts.push(null_count);
+    }
+
+    pub fn set_boundary_order(&mut self, boundary_order: BoundaryOrder) {
+        self.boundary_order = boundary_order;
     }
 
     pub fn to_invalid(&mut self) {
@@ -942,9 +988,7 @@ impl OffsetIndexBuilder {
             .iter()
             .zip(self.compressed_page_size_array.iter())
             .zip(self.first_row_index_array.iter())
-            .map(|((offset, size), row_index)| {
-                PageLocation::new(*offset, *size, *row_index)
-            })
+            .map(|((offset, size), row_index)| PageLocation::new(*offset, *size, *row_index))
             .collect::<Vec<_>>();
         OffsetIndex::new(locations)
     }
@@ -968,14 +1012,14 @@ mod tests {
             .set_num_rows(1000)
             .set_total_byte_size(2000)
             .set_column_metadata(columns)
+            .set_ordinal(1)
             .build()
             .unwrap();
 
         let row_group_exp = row_group_meta.to_thrift();
-        let row_group_res =
-            RowGroupMetaData::from_thrift(schema_descr, row_group_exp.clone())
-                .unwrap()
-                .to_thrift();
+        let row_group_res = RowGroupMetaData::from_thrift(schema_descr, row_group_exp.clone())
+            .unwrap()
+            .to_thrift();
 
         assert_eq!(row_group_res, row_group_exp);
     }
@@ -1022,6 +1066,7 @@ mod tests {
                 },
             ])
             .set_bloom_filter_offset(Some(6000))
+            .set_bloom_filter_length(Some(25))
             .set_offset_index_offset(Some(7000))
             .set_offset_index_length(Some(25))
             .set_column_index_offset(Some(8000))
@@ -1030,8 +1075,7 @@ mod tests {
             .unwrap();
 
         let col_chunk_res =
-            ColumnChunkMetaData::from_thrift(column_descr, col_metadata.to_thrift())
-                .unwrap();
+            ColumnChunkMetaData::from_thrift(column_descr, col_metadata.to_thrift()).unwrap();
 
         assert_eq!(col_chunk_res, col_metadata);
     }
@@ -1045,10 +1089,9 @@ mod tests {
             .unwrap();
 
         let col_chunk_exp = col_metadata.to_thrift();
-        let col_chunk_res =
-            ColumnChunkMetaData::from_thrift(column_descr, col_chunk_exp.clone())
-                .unwrap()
-                .to_thrift();
+        let col_chunk_res = ColumnChunkMetaData::from_thrift(column_descr, col_chunk_exp.clone())
+            .unwrap()
+            .to_thrift();
 
         assert_eq!(col_chunk_res, col_chunk_exp);
     }
@@ -1081,7 +1124,7 @@ mod tests {
     /// Returns sample schema descriptor so we can create column metadata.
     fn get_test_schema_descr() -> SchemaDescPtr {
         let schema = SchemaType::group_type_builder("schema")
-            .with_fields(&mut vec![
+            .with_fields(vec![
                 Arc::new(
                     SchemaType::primitive_type_builder("a", Type::INT32)
                         .build()

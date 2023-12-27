@@ -40,6 +40,7 @@ on:
       - arrow-ipc/**
       - arrow-csv/**
       - arrow-json/**
+      - arrow-avro/**
       - parquet/**
       - .github/**
 
@@ -51,7 +52,7 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
         with:
           submodules: true
       - name: Setup Rust toolchain
@@ -74,7 +75,7 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
         with:
           submodules: true
       - name: Setup Rust toolchain
@@ -116,17 +117,19 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
         with:
           submodules: true
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
         with:
           target: wasm32-unknown-unknown,wasm32-wasi
+      - name: Install clang # Needed for zlib compilation
+        run: apt-get update && apt-get install -y clang gcc-multilib
       - name: Build wasm32-unknown-unknown
-        run: cargo build -p parquet --no-default-features --features cli,snap,flate2,brotli --target wasm32-unknown-unknown
+        run: cargo build -p parquet --target wasm32-unknown-unknown
       - name: Build wasm32-wasi
-        run: cargo build -p parquet --no-default-features --features cli,snap,flate2,brotli --target wasm32-wasi
+        run: cargo build -p parquet --target wasm32-wasi
 
   pyspark-integration-test:
     name: PySpark Integration Test
@@ -135,9 +138,9 @@ jobs:
       matrix:
         rust: [ stable ]
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       - name: Setup Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
           python-version: "3.10"
           cache: "pip"
@@ -168,7 +171,7 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
       - name: Setup Clippy

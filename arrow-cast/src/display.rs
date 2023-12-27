@@ -129,10 +129,7 @@ impl<'a> FormatOptions<'a> {
     }
 
     /// Overrides the format used for [`DataType::Timestamp`] columns with a timezone
-    pub const fn with_timestamp_tz_format(
-        self,
-        timestamp_tz_format: Option<&'a str>,
-    ) -> Self {
+    pub const fn with_timestamp_tz_format(self, timestamp_tz_format: Option<&'a str>) -> Self {
         Self {
             timestamp_tz_format,
             ..self
@@ -173,9 +170,7 @@ impl<'a> ValueFormatter<'a> {
         match self.formatter.format.write(self.idx, s) {
             Ok(_) => Ok(()),
             Err(FormatError::Arrow(e)) => Err(e),
-            Err(FormatError::Format(_)) => {
-                Err(ArrowError::CastError("Format error".to_string()))
-            }
+            Err(FormatError::Format(_)) => Err(ArrowError::CastError("Format error".to_string())),
         }
     }
 
@@ -260,10 +255,7 @@ impl<'a> ArrayFormatter<'a> {
     /// Returns an [`ArrayFormatter`] that can be used to format `array`
     ///
     /// This returns an error if an array of the given data type cannot be formatted
-    pub fn try_new(
-        array: &'a dyn Array,
-        options: &FormatOptions<'a>,
-    ) -> Result<Self, ArrowError> {
+    pub fn try_new(array: &'a dyn Array, options: &FormatOptions<'a>) -> Result<Self, ArrowError> {
         Ok(Self {
             format: make_formatter(array, options)?,
             safe: options.safe,
@@ -309,6 +301,10 @@ fn make_formatter<'a>(
         DataType::Struct(_) => array_format(as_struct_array(array), options),
         DataType::Map(_, _) => array_format(as_map_array(array), options),
         DataType::Union(_, _) => array_format(as_union_array(array), options),
+        DataType::RunEndEncoded(_, _) => downcast_run_array! {
+            array => array_format(array, options),
+            _ => unreachable!()
+        },
         d => Err(ArrowError::NotYetImplemented(format!("formatting {d} is not yet supported"))),
     }
 }
@@ -399,8 +395,15 @@ impl<'a> DisplayIndex for &'a BooleanArray {
     }
 }
 
-impl<'a> DisplayIndex for &'a NullArray {
-    fn write(&self, _idx: usize, _f: &mut dyn Write) -> FormatResult {
+impl<'a> DisplayIndexState<'a> for &'a NullArray {
+    type State = &'a str;
+
+    fn prepare(&self, options: &FormatOptions<'a>) -> Result<Self::State, ArrowError> {
+        Ok(options.null)
+    }
+
+    fn write(&self, state: &Self::State, _idx: usize, f: &mut dyn Write) -> FormatResult {
+        f.write_str(state)?;
         Ok(())
     }
 }
@@ -465,9 +468,7 @@ fn write_timestamp(
             let date = Utc.from_utc_datetime(&naive).with_timezone(&tz);
             match format {
                 Some(s) => write!(f, "{}", date.format(s))?,
-                None => {
-                    write!(f, "{}", date.to_rfc3339_opts(SecondsFormat::AutoSi, true))?
-                }
+                None => write!(f, "{}", date.to_rfc3339_opts(SecondsFormat::AutoSi, true))?,
             }
         }
         None => match format {
@@ -519,19 +520,11 @@ macro_rules! temporal_display {
         impl<'a> DisplayIndexState<'a> for &'a PrimitiveArray<$t> {
             type State = TimeFormat<'a>;
 
-            fn prepare(
-                &self,
-                options: &FormatOptions<'a>,
-            ) -> Result<Self::State, ArrowError> {
+            fn prepare(&self, options: &FormatOptions<'a>) -> Result<Self::State, ArrowError> {
                 Ok(options.$format)
             }
 
-            fn write(
-                &self,
-                fmt: &Self::State,
-                idx: usize,
-                f: &mut dyn Write,
-            ) -> FormatResult {
+            fn write(&self, fmt: &Self::State, idx: usize, f: &mut dyn Write) -> FormatResult {
                 let value = self.value(idx);
                 let naive = $convert(value as _).ok_or_else(|| {
                     ArrowError::CastError(format!(
@@ -568,19 +561,11 @@ macro_rules! duration_display {
         impl<'a> DisplayIndexState<'a> for &'a PrimitiveArray<$t> {
             type State = DurationFormat;
 
-            fn prepare(
-                &self,
-                options: &FormatOptions<'a>,
-            ) -> Result<Self::State, ArrowError> {
+            fn prepare(&self, options: &FormatOptions<'a>) -> Result<Self::State, ArrowError> {
                 Ok(options.duration_format)
             }
 
-            fn write(
-                &self,
-                fmt: &Self::State,
-                idx: usize,
-                f: &mut dyn Write,
-            ) -> FormatResult {
+            fn write(&self, fmt: &Self::State, idx: usize, f: &mut dyn Write) -> FormatResult {
                 let v = self.value(idx);
                 match fmt {
                     DurationFormat::ISO8601 => write!(f, "{}", $convert(v))?,
@@ -697,8 +682,7 @@ impl<'a> DisplayIndex for &'a PrimitiveArray<IntervalMonthDayNanoType> {
     fn write(&self, idx: usize, f: &mut dyn Write) -> FormatResult {
         let value: u128 = self.value(idx) as u128;
 
-        let months_part: i32 =
-            ((value & 0xFFFFFFFF000000000000000000000000) >> 96) as i32;
+        let months_part: i32 = ((value & 0xFFFFFFFF000000000000000000000000) >> 96) as i32;
         let days_part: i32 = ((value & 0xFFFFFFFF0000000000000000) >> 64) as i32;
         let nanoseconds_part: i64 = (value & 0xFFFFFFFFFFFFFFFF) as i64;
 
@@ -764,6 +748,19 @@ impl<'a, K: ArrowDictionaryKeyType> DisplayIndexState<'a> for &'a DictionaryArra
 
     fn write(&self, s: &Self::State, idx: usize, f: &mut dyn Write) -> FormatResult {
         let value_idx = self.keys().values()[idx].as_usize();
+        s.as_ref().write(value_idx, f)
+    }
+}
+
+impl<'a, K: RunEndIndexType> DisplayIndexState<'a> for &'a RunArray<K> {
+    type State = Box<dyn DisplayIndex + 'a>;
+
+    fn prepare(&self, options: &FormatOptions<'a>) -> Result<Self::State, ArrowError> {
+        make_formatter(self.values().as_ref(), options)
+    }
+
+    fn write(&self, s: &Self::State, idx: usize, f: &mut dyn Write) -> FormatResult {
+        let value_idx = self.get_physical_index(idx);
         s.as_ref().write(value_idx, f)
     }
 }
@@ -930,10 +927,7 @@ impl<'a> DisplayIndexState<'a> for &'a UnionArray {
 /// suitable for converting large arrays or record batches.
 ///
 /// Please see [`ArrayFormatter`] for a more performant interface
-pub fn array_value_to_string(
-    column: &dyn Array,
-    row: usize,
-) -> Result<String, ArrowError> {
+pub fn array_value_to_string(column: &dyn Array, row: usize) -> Result<String, ArrowError> {
     let options = FormatOptions::default().with_display_error(true);
     let formatter = ArrayFormatter::try_new(column, &options)?;
     Ok(formatter.value(row).to_string())
@@ -958,6 +952,8 @@ pub fn lexical_to_string<N: lexical_core::ToLexical>(n: N) -> String {
 
 #[cfg(test)]
 mod tests {
+    use arrow_array::builder::StringRunBuilder;
+
     use super::*;
 
     /// Test to verify options can be constant. See #4580
@@ -979,12 +975,9 @@ mod tests {
         //  [[a, b, c], [d, e, f], [g, h]]
         let entry_offsets = [0, 3, 6, 8];
 
-        let map_array = MapArray::new_from_strings(
-            keys.clone().into_iter(),
-            &values_data,
-            &entry_offsets,
-        )
-        .unwrap();
+        let map_array =
+            MapArray::new_from_strings(keys.clone().into_iter(), &values_data, &entry_offsets)
+                .unwrap();
         assert_eq!(
             "{d: 30, e: 40, f: 50}",
             array_value_to_string(&map_array, 1).unwrap()
@@ -999,8 +992,7 @@ mod tests {
     #[test]
     fn test_array_value_to_string_duration() {
         let iso_fmt = FormatOptions::new();
-        let pretty_fmt =
-            FormatOptions::new().with_duration_format(DurationFormat::Pretty);
+        let pretty_fmt = FormatOptions::new().with_duration_format(DurationFormat::Pretty);
 
         let array = DurationNanosecondArray::from(vec![
             1,
@@ -1097,5 +1089,30 @@ mod tests {
         assert_eq!(pretty[4], "45 days 14 hours 2 mins 34 secs");
         assert_eq!(iso[5], "-P45DT50554S");
         assert_eq!(pretty[5], "-45 days -14 hours -2 mins -34 secs");
+    }
+
+    #[test]
+    fn test_null() {
+        let array = NullArray::new(2);
+        let options = FormatOptions::new().with_null("NULL");
+        let formatted = format_array(&array, &options);
+        assert_eq!(formatted, &["NULL".to_string(), "NULL".to_string()])
+    }
+
+    #[test]
+    fn test_string_run_arry_to_string() {
+        let mut builder = StringRunBuilder::<Int32Type>::new();
+
+        builder.append_value("input_value");
+        builder.append_value("input_value");
+        builder.append_value("input_value");
+        builder.append_value("input_value1");
+
+        let map_array = builder.finish();
+        assert_eq!("input_value", array_value_to_string(&map_array, 1).unwrap());
+        assert_eq!(
+            "input_value1",
+            array_value_to_string(&map_array, 3).unwrap()
+        );
     }
 }

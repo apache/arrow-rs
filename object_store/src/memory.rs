@@ -16,7 +16,10 @@
 // under the License.
 
 //! An in-memory object store implementation
-use crate::{path::Path, GetResult, ListResult, ObjectMeta, ObjectStore, Result};
+use crate::{
+    path::Path, GetResult, GetResultPayload, ListResult, ObjectMeta, ObjectStore, PutMode,
+    PutOptions, PutResult, Result, UpdateVersion,
+};
 use crate::{GetOptions, MultipartId};
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -33,9 +36,6 @@ use std::sync::Arc;
 use std::task::Poll;
 use tokio::io::AsyncWrite;
 
-type Entry = (Bytes, DateTime<Utc>);
-type StorageType = Arc<RwLock<BTreeMap<Path, Entry>>>;
-
 /// A specialized `Error` for in-memory object store-related errors
 #[derive(Debug, Snafu)]
 #[allow(missing_docs)]
@@ -43,14 +43,19 @@ enum Error {
     #[snafu(display("No data in memory found. Location: {path}"))]
     NoDataInMemory { path: String },
 
-    #[snafu(display("Out of range"))]
-    OutOfRange,
+    #[snafu(display(
+        "Requested range {}..{} is out of bounds for object with length {}", range.start, range.end, len
+    ))]
+    OutOfRange { range: Range<usize>, len: usize },
 
-    #[snafu(display("Bad range"))]
-    BadRange,
+    #[snafu(display("Invalid range: {}..{}", range.start, range.end))]
+    BadRange { range: Range<usize> },
 
     #[snafu(display("Object already exists at that location: {path}"))]
     AlreadyExists { path: String },
+
+    #[snafu(display("ETag required for conditional update"))]
+    MissingETag,
 }
 
 impl From<Error> for super::Error {
@@ -76,7 +81,83 @@ impl From<Error> for super::Error {
 /// storage provider.
 #[derive(Debug, Default)]
 pub struct InMemory {
-    storage: StorageType,
+    storage: SharedStorage,
+}
+
+#[derive(Debug, Clone)]
+struct Entry {
+    data: Bytes,
+    last_modified: DateTime<Utc>,
+    e_tag: usize,
+}
+
+impl Entry {
+    fn new(data: Bytes, last_modified: DateTime<Utc>, e_tag: usize) -> Self {
+        Self {
+            data,
+            last_modified,
+            e_tag,
+        }
+    }
+}
+
+#[derive(Debug, Default, Clone)]
+struct Storage {
+    next_etag: usize,
+    map: BTreeMap<Path, Entry>,
+}
+
+type SharedStorage = Arc<RwLock<Storage>>;
+
+impl Storage {
+    fn insert(&mut self, location: &Path, bytes: Bytes) -> usize {
+        let etag = self.next_etag;
+        self.next_etag += 1;
+        let entry = Entry::new(bytes, Utc::now(), etag);
+        self.overwrite(location, entry);
+        etag
+    }
+
+    fn overwrite(&mut self, location: &Path, entry: Entry) {
+        self.map.insert(location.clone(), entry);
+    }
+
+    fn create(&mut self, location: &Path, entry: Entry) -> Result<()> {
+        use std::collections::btree_map;
+        match self.map.entry(location.clone()) {
+            btree_map::Entry::Occupied(_) => Err(Error::AlreadyExists {
+                path: location.to_string(),
+            }
+            .into()),
+            btree_map::Entry::Vacant(v) => {
+                v.insert(entry);
+                Ok(())
+            }
+        }
+    }
+
+    fn update(&mut self, location: &Path, v: UpdateVersion, entry: Entry) -> Result<()> {
+        match self.map.get_mut(location) {
+            // Return Precondition instead of NotFound for consistency with stores
+            None => Err(crate::Error::Precondition {
+                path: location.to_string(),
+                source: format!("Object at location {location} not found").into(),
+            }),
+            Some(e) => {
+                let existing = e.e_tag.to_string();
+                let expected = v.e_tag.context(MissingETagSnafu)?;
+                if existing == expected {
+                    *e = entry;
+                    Ok(())
+                } else {
+                    Err(crate::Error::Precondition {
+                        path: location.to_string(),
+                        source: format!("{existing} does not match {expected}").into(),
+                    })
+                }
+            }
+        }
+    }
 }
 
 impl std::fmt::Display for InMemory {
@@ -87,11 +168,22 @@ impl std::fmt::Display for InMemory {
 
 #[async_trait]
 impl ObjectStore for InMemory {
-    async fn put(&self, location: &Path, bytes: Bytes) -> Result<()> {
-        self.storage
-            .write()
-            .insert(location.clone(), (bytes, Utc::now()));
-        Ok(())
+    async fn put_opts(&self, location: &Path, bytes: Bytes, opts: PutOptions) -> Result<PutResult> {
+        let mut storage = self.storage.write();
+        let etag = storage.next_etag;
+        let entry = Entry::new(bytes, Utc::now(), etag);
+
+        match opts.mode {
+            PutMode::Overwrite => storage.overwrite(location, entry),
+            PutMode::Create => storage.create(location, entry)?,
+            PutMode::Update(v) => storage.update(location, v, entry)?,
+        }
+        storage.next_etag += 1;
+
+        Ok(PutResult {
+            e_tag: Some(etag.to_string()),
+            version: None,
+        })
     }
 
     async fn put_multipart(
@@ -108,59 +200,55 @@ impl ObjectStore for InMemory {
         ))
     }
 
-    async fn abort_multipart(
-        &self,
-        _location: &Path,
-        _multipart_id: &MultipartId,
-    ) -> Result<()> {
+    async fn abort_multipart(&self, _location: &Path, _multipart_id: &MultipartId) -> Result<()> {
         // Nothing to clean up
         Ok(())
     }
 
-    async fn append(
-        &self,
-        location: &Path,
-    ) -> Result<Box<dyn AsyncWrite + Unpin + Send>> {
-        Ok(Box::new(InMemoryAppend {
-            location: location.clone(),
-            data: Vec::<u8>::new(),
-            storage: StorageType::clone(&self.storage),
-        }))
-    }
-
     async fn get_opts(&self, location: &Path, options: GetOptions) -> Result<GetResult> {
-        if options.if_match.is_some() || options.if_none_match.is_some() {
-            return Err(super::Error::NotSupported {
-                source: "ETags not supported by InMemory".to_string().into(),
-            });
-        }
-        let (data, last_modified) = self.entry(location).await?;
-        options.check_modified(location, last_modified)?;
+        let entry = self.entry(location).await?;
+        let e_tag = entry.e_tag.to_string();
 
+        let meta = ObjectMeta {
+            location: location.clone(),
+            last_modified: entry.last_modified,
+            size: entry.data.len(),
+            e_tag: Some(e_tag),
+            version: None,
+        };
+        options.check_preconditions(&meta)?;
+
+        let (range, data) = match options.range {
+            Some(range) => {
+                let len = entry.data.len();
+                ensure!(range.end <= len, OutOfRangeSnafu { range, len });
+                ensure!(range.start <= range.end, BadRangeSnafu { range });
+                (range.clone(), entry.data.slice(range))
+            }
+            None => (0..entry.data.len(), entry.data),
+        };
         let stream = futures::stream::once(futures::future::ready(Ok(data)));
-        Ok(GetResult::Stream(stream.boxed()))
+
+        Ok(GetResult {
+            payload: GetResultPayload::Stream(stream.boxed()),
+            meta,
+            range,
+        })
     }
 
-    async fn get_range(&self, location: &Path, range: Range<usize>) -> Result<Bytes> {
-        let data = self.entry(location).await?;
-        ensure!(range.end <= data.0.len(), OutOfRangeSnafu);
-        ensure!(range.start <= range.end, BadRangeSnafu);
-
-        Ok(data.0.slice(range))
-    }
-
-    async fn get_ranges(
-        &self,
-        location: &Path,
-        ranges: &[Range<usize>],
-    ) -> Result<Vec<Bytes>> {
-        let data = self.entry(location).await?;
+    async fn get_ranges(&self, location: &Path, ranges: &[Range<usize>]) -> Result<Vec<Bytes>> {
+        let entry = self.entry(location).await?;
         ranges
             .iter()
             .map(|range| {
-                ensure!(range.end <= data.0.len(), OutOfRangeSnafu);
-                ensure!(range.start <= range.end, BadRangeSnafu);
-                Ok(data.0.slice(range.clone()))
+                let range = range.clone();
+                let len = entry.data.len();
+                ensure!(
+                    range.end <= entry.data.len(),
+                    OutOfRangeSnafu { range, len }
+                );
+                ensure!(range.start <= range.end, BadRangeSnafu { range });
+                Ok(entry.data.slice(range))
             })
             .collect()
     }
@@ -170,26 +258,25 @@ impl ObjectStore for InMemory {
 
         Ok(ObjectMeta {
             location: location.clone(),
-            last_modified: entry.1,
-            size: entry.0.len(),
-            e_tag: None,
+            last_modified: entry.last_modified,
+            size: entry.data.len(),
+            e_tag: Some(entry.e_tag.to_string()),
+            version: None,
         })
     }
 
     async fn delete(&self, location: &Path) -> Result<()> {
-        self.storage.write().remove(location);
+        self.storage.write().map.remove(location);
         Ok(())
     }
 
-    async fn list(
-        &self,
-        prefix: Option<&Path>,
-    ) -> Result<BoxStream<'_, Result<ObjectMeta>>> {
+    fn list(&self, prefix: Option<&Path>) -> BoxStream<'_, Result<ObjectMeta>> {
         let root = Path::default();
         let prefix = prefix.unwrap_or(&root);
 
         let storage = self.storage.read();
         let values: Vec<_> = storage
+            .map
             .range((prefix)..)
             .take_while(|(key, _)| key.as_ref().starts_with(prefix.as_ref()))
             .filter(|(key, _)| {
@@ -201,14 +288,15 @@ impl ObjectStore for InMemory {
             .map(|(key, value)| {
                 Ok(ObjectMeta {
                     location: key.clone(),
-                    last_modified: value.1,
-                    size: value.0.len(),
-                    e_tag: None,
+                    last_modified: value.last_modified,
+                    size: value.data.len(),
+                    e_tag: Some(value.e_tag.to_string()),
+                    version: None,
                 })
             })
             .collect();
 
-        Ok(futures::stream::iter(values).boxed())
+        futures::stream::iter(values).boxed()
     }
 
     /// The memory implementation returns all results, as opposed to the cloud
@@ -223,7 +311,7 @@ impl ObjectStore for InMemory {
         // Only objects in this base level should be returned in the
         // response. Otherwise, we just collect the common prefixes.
         let mut objects = vec![];
-        for (k, v) in self.storage.read().range((prefix)..) {
+        for (k, v) in self.storage.read().map.range((prefix)..) {
             if !k.as_ref().starts_with(prefix.as_ref()) {
                 break;
             }
@@ -245,9 +333,10 @@ impl ObjectStore for InMemory {
             } else {
                 let object = ObjectMeta {
                     location: k.clone(),
-                    last_modified: v.1,
-                    size: v.0.len(),
-                    e_tag: None,
+                    last_modified: v.last_modified,
+                    size: v.data.len(),
+                    e_tag: Some(v.e_tag.to_string()),
+                    version: None,
                 };
                 objects.push(object);
             }
@@ -260,23 +349,21 @@ impl ObjectStore for InMemory {
     }
 
     async fn copy(&self, from: &Path, to: &Path) -> Result<()> {
-        let data = self.entry(from).await?;
-        self.storage
-            .write()
-            .insert(to.clone(), (data.0, Utc::now()));
+        let entry = self.entry(from).await?;
+        self.storage.write().insert(to, entry.data);
         Ok(())
     }
 
     async fn copy_if_not_exists(&self, from: &Path, to: &Path) -> Result<()> {
-        let data = self.entry(from).await?;
+        let entry = self.entry(from).await?;
         let mut storage = self.storage.write();
-        if storage.contains_key(to) {
+        if storage.map.contains_key(to) {
             return Err(Error::AlreadyExists {
                 path: to.to_string(),
             }
             .into());
         }
-        storage.insert(to.clone(), (data.0, Utc::now()));
+        storage.insert(to, entry.data);
         Ok(())
     }
 }
@@ -301,9 +388,10 @@ impl InMemory {
         self.fork()
     }
 
-    async fn entry(&self, location: &Path) -> Result<(Bytes, DateTime<Utc>)> {
+    async fn entry(&self, location: &Path) -> Result<Entry> {
         let storage = self.storage.read();
         let value = storage
+            .map
             .get(location)
             .cloned()
             .context(NoDataInMemorySnafu {
@@ -317,7 +405,7 @@ impl InMemory {
 struct InMemoryUpload {
     location: Path,
     data: Vec<u8>,
-    storage: StorageType,
+    storage: Arc<RwLock<Storage>>,
 }
 
 impl AsyncWrite for InMemoryUpload {
@@ -325,7 +413,7 @@ impl AsyncWrite for InMemoryUpload {
         mut self: Pin<&mut Self>,
         _cx: &mut std::task::Context<'_>,
         buf: &[u8],
-    ) -> std::task::Poll<Result<usize, io::Error>> {
+    ) -> Poll<Result<usize, io::Error>> {
         self.data.extend_from_slice(buf);
         Poll::Ready(Ok(buf.len()))
     }
@@ -333,71 +421,22 @@ impl AsyncWrite for InMemoryUpload {
     fn poll_flush(
         self: Pin<&mut Self>,
         _cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Result<(), io::Error>> {
+    ) -> Poll<Result<(), io::Error>> {
         Poll::Ready(Ok(()))
     }
 
     fn poll_shutdown(
         mut self: Pin<&mut Self>,
         _cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Result<(), io::Error>> {
+    ) -> Poll<Result<(), io::Error>> {
         let data = Bytes::from(std::mem::take(&mut self.data));
-        self.storage
-            .write()
-            .insert(self.location.clone(), (data, Utc::now()));
+        self.storage.write().insert(&self.location, data);
         Poll::Ready(Ok(()))
-    }
-}
-
-struct InMemoryAppend {
-    location: Path,
-    data: Vec<u8>,
-    storage: StorageType,
-}
-
-impl AsyncWrite for InMemoryAppend {
-    fn poll_write(
-        mut self: Pin<&mut Self>,
-        _cx: &mut std::task::Context<'_>,
-        buf: &[u8],
-    ) -> std::task::Poll<Result<usize, io::Error>> {
-        self.data.extend_from_slice(buf);
-        Poll::Ready(Ok(buf.len()))
-    }
-
-    fn poll_flush(
-        mut self: Pin<&mut Self>,
-        _cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Result<(), io::Error>> {
-        let storage = StorageType::clone(&self.storage);
-
-        let mut writer = storage.write();
-
-        if let Some((bytes, _)) = writer.remove(&self.location) {
-            let buf = std::mem::take(&mut self.data);
-            let concat = Bytes::from_iter(bytes.into_iter().chain(buf.into_iter()));
-            writer.insert(self.location.clone(), (concat, Utc::now()));
-        } else {
-            writer.insert(
-                self.location.clone(),
-                (Bytes::from(std::mem::take(&mut self.data)), Utc::now()),
-            );
-        };
-        Poll::Ready(Ok(()))
-    }
-
-    fn poll_shutdown(
-        self: Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Result<(), io::Error>> {
-        self.poll_flush(cx)
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use tokio::io::AsyncWriteExt;
-
     use super::*;
 
     use crate::tests::*;
@@ -413,6 +452,7 @@ mod tests {
         rename_and_copy(&integration).await;
         copy_if_not_exists(&integration).await;
         stream_get(&integration).await;
+        put_opts(&integration, true).await;
     }
 
     #[tokio::test]
@@ -483,51 +523,5 @@ mod tests {
         } else {
             panic!("unexpected error type: {err:?}");
         }
-    }
-
-    #[tokio::test]
-    async fn test_append_new() {
-        let in_memory = InMemory::new();
-        let location = Path::from("some_file");
-        let data = Bytes::from("arbitrary data");
-        let expected_data = data.clone();
-
-        let mut writer = in_memory.append(&location).await.unwrap();
-        writer.write_all(&data).await.unwrap();
-        writer.flush().await.unwrap();
-
-        let read_data = in_memory
-            .get(&location)
-            .await
-            .unwrap()
-            .bytes()
-            .await
-            .unwrap();
-        assert_eq!(&*read_data, expected_data);
-    }
-
-    #[tokio::test]
-    async fn test_append_existing() {
-        let in_memory = InMemory::new();
-        let location = Path::from("some_file");
-        let data = Bytes::from("arbitrary");
-        let data_appended = Bytes::from(" data");
-        let expected_data = Bytes::from("arbitrary data");
-
-        let mut writer = in_memory.append(&location).await.unwrap();
-        writer.write_all(&data).await.unwrap();
-        writer.flush().await.unwrap();
-
-        writer.write_all(&data_appended).await.unwrap();
-        writer.flush().await.unwrap();
-
-        let read_data = in_memory
-            .get(&location)
-            .await
-            .unwrap()
-            .bytes()
-            .await
-            .unwrap();
-        assert_eq!(&*read_data, expected_data);
     }
 }

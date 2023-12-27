@@ -35,7 +35,7 @@
 //! ```
 
 use crate::{
-    ArrowError, DataType, Field, FieldRef, Schema, TimeUnit, UnionFields, UnionMode,
+    ArrowError, DataType, Field, FieldRef, IntervalUnit, Schema, TimeUnit, UnionFields, UnionMode,
 };
 use std::sync::Arc;
 use std::{
@@ -213,13 +213,28 @@ impl FFI_ArrowSchema {
         };
 
         unsafe {
-            let mut private_data =
-                Box::from_raw(self.private_data as *mut SchemaPrivateData);
+            let mut private_data = Box::from_raw(self.private_data as *mut SchemaPrivateData);
             private_data.metadata = new_metadata;
             self.private_data = Box::into_raw(private_data) as *mut c_void;
         }
 
         Ok(self)
+    }
+
+    /// Takes ownership of the pointed to [`FFI_ArrowSchema`]
+    ///
+    /// This acts to [move] the data out of `schema`, setting the release callback to NULL
+    ///
+    /// # Safety
+    ///
+    /// * `schema` must be [valid] for reads and writes
+    /// * `schema` must be properly aligned
+    /// * `schema` must point to a properly initialized value of [`FFI_ArrowSchema`]
+    ///
+    /// [move]: https://arrow.apache.org/docs/format/CDataInterface.html#moving-an-array
+    /// [valid]: https://doc.rust-lang.org/std/ptr/index.html#safety
+    pub unsafe fn from_raw(schema: *mut FFI_ArrowSchema) -> Self {
+        std::ptr::replace(schema, Self::empty())
     }
 
     pub fn empty() -> Self {
@@ -318,9 +333,8 @@ impl FFI_ArrowSchema {
                 ));
             }
 
-            let mut metadata = HashMap::with_capacity(
-                num_entries.try_into().expect("Too many metadata entries"),
-            );
+            let mut metadata =
+                HashMap::with_capacity(num_entries.try_into().expect("Too many metadata entries"));
 
             for _ in 0..num_entries {
                 let key_length = i32::from_ne_bytes(next_four_bytes(buffer, &mut pos));
@@ -329,18 +343,15 @@ impl FFI_ArrowSchema {
                         "Negative key length in metadata".to_string(),
                     ));
                 }
-                let key = String::from_utf8(
-                    next_n_bytes(buffer, &mut pos, key_length).to_vec(),
-                )?;
+                let key = String::from_utf8(next_n_bytes(buffer, &mut pos, key_length).to_vec())?;
                 let value_length = i32::from_ne_bytes(next_four_bytes(buffer, &mut pos));
                 if value_length < 0 {
                     return Err(ArrowError::CDataInterface(
                         "Negative value length in metadata".to_string(),
                     ));
                 }
-                let value = String::from_utf8(
-                    next_n_bytes(buffer, &mut pos, value_length).to_vec(),
-                )?;
+                let value =
+                    String::from_utf8(next_n_bytes(buffer, &mut pos, value_length).to_vec())?;
                 metadata.insert(key, value);
             }
 
@@ -357,6 +368,8 @@ impl Drop for FFI_ArrowSchema {
         };
     }
 }
+
+unsafe impl Send for FFI_ArrowSchema {}
 
 impl TryFrom<&FFI_ArrowSchema> for DataType {
     type Error = ArrowError;
@@ -391,6 +404,9 @@ impl TryFrom<&FFI_ArrowSchema> for DataType {
             "tDm" => DataType::Duration(TimeUnit::Millisecond),
             "tDu" => DataType::Duration(TimeUnit::Microsecond),
             "tDn" => DataType::Duration(TimeUnit::Nanosecond),
+            "tiM" => DataType::Interval(IntervalUnit::YearMonth),
+            "tiD" => DataType::Interval(IntervalUnit::DayTime),
+            "tin" => DataType::Interval(IntervalUnit::MonthDayNano),
             "+l" => {
                 let c_child = c_schema.child(0);
                 DataType::List(Arc::new(Field::try_from(c_child)?))
@@ -639,9 +655,7 @@ fn get_format_string(dtype: &DataType) -> Result<String, ArrowError> {
         DataType::FixedSizeBinary(num_bytes) => Ok(format!("w:{num_bytes}")),
         DataType::FixedSizeList(_, num_elems) => Ok(format!("+w:{num_elems}")),
         DataType::Decimal128(precision, scale) => Ok(format!("d:{precision},{scale}")),
-        DataType::Decimal256(precision, scale) => {
-            Ok(format!("d:{precision},{scale},256"))
-        }
+        DataType::Decimal256(precision, scale) => Ok(format!("d:{precision},{scale},256")),
         DataType::Date32 => Ok("tdD".to_string()),
         DataType::Date64 => Ok("tdm".to_string()),
         DataType::Time32(TimeUnit::Second) => Ok("tts".to_string()),
@@ -660,6 +674,9 @@ fn get_format_string(dtype: &DataType) -> Result<String, ArrowError> {
         DataType::Duration(TimeUnit::Millisecond) => Ok("tDm".to_string()),
         DataType::Duration(TimeUnit::Microsecond) => Ok("tDu".to_string()),
         DataType::Duration(TimeUnit::Nanosecond) => Ok("tDn".to_string()),
+        DataType::Interval(IntervalUnit::YearMonth) => Ok("tiM".to_string()),
+        DataType::Interval(IntervalUnit::DayTime) => Ok("tiD".to_string()),
+        DataType::Interval(IntervalUnit::MonthDayNano) => Ok("tin".to_string()),
         DataType::List(_) => Ok("+l".to_string()),
         DataType::LargeList(_) => Ok("+L".to_string()),
         DataType::Struct(_) => Ok("+s".to_string()),
@@ -715,8 +732,7 @@ impl TryFrom<&Schema> for FFI_ArrowSchema {
 
     fn try_from(schema: &Schema) -> Result<Self, ArrowError> {
         let dtype = DataType::Struct(schema.fields().clone());
-        let c_schema =
-            FFI_ArrowSchema::try_from(&dtype)?.with_metadata(&schema.metadata)?;
+        let c_schema = FFI_ArrowSchema::try_from(&dtype)?.with_metadata(&schema.metadata)?;
         Ok(c_schema)
     }
 }
@@ -833,7 +849,7 @@ mod tests {
 
         // Construct a map array from the above two
         let map_data_type =
-            DataType::Map(Arc::new(Field::new("entries", entry_struct, true)), true);
+            DataType::Map(Arc::new(Field::new("entries", entry_struct, false)), true);
 
         let arrow_schema = FFI_ArrowSchema::try_from(map_data_type).unwrap();
         assert!(arrow_schema.map_keys_sorted());

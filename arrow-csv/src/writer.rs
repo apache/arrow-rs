@@ -70,11 +70,6 @@ use csv::ByteRecord;
 use std::io::Write;
 
 use crate::map_csv_error;
-
-const DEFAULT_DATE_FORMAT: &str = "%F";
-const DEFAULT_TIME_FORMAT: &str = "%T";
-const DEFAULT_TIMESTAMP_FORMAT: &str = "%FT%H:%M:%S.%9f";
-const DEFAULT_TIMESTAMP_TZ_FORMAT: &str = "%FT%H:%M:%S.%9f%:z";
 const DEFAULT_NULL_VALUE: &str = "";
 
 /// A CSV writer
@@ -82,41 +77,29 @@ const DEFAULT_NULL_VALUE: &str = "";
 pub struct Writer<W: Write> {
     /// The object to write to
     writer: csv::Writer<W>,
-    /// Whether file should be written with headers. Defaults to `true`
+    /// Whether file should be written with headers, defaults to `true`
     has_headers: bool,
-    /// The date format for date arrays
+    /// The date format for date arrays, defaults to RFC3339
     date_format: Option<String>,
-    /// The datetime format for datetime arrays
+    /// The datetime format for datetime arrays, defaults to RFC3339
     datetime_format: Option<String>,
-    /// The timestamp format for timestamp arrays
+    /// The timestamp format for timestamp arrays, defaults to RFC3339
     timestamp_format: Option<String>,
-    /// The timestamp format for timestamp (with timezone) arrays
+    /// The timestamp format for timestamp (with timezone) arrays, defaults to RFC3339
     timestamp_tz_format: Option<String>,
-    /// The time format for time arrays
+    /// The time format for time arrays, defaults to RFC3339
     time_format: Option<String>,
     /// Is the beginning-of-writer
     beginning: bool,
-    /// The value to represent null entries
-    null_value: String,
+    /// The value to represent null entries, defaults to [`DEFAULT_NULL_VALUE`]
+    null_value: Option<String>,
 }
 
 impl<W: Write> Writer<W> {
     /// Create a new CsvWriter from a writable object, with default options
     pub fn new(writer: W) -> Self {
         let delimiter = b',';
-        let mut builder = csv::WriterBuilder::new();
-        let writer = builder.delimiter(delimiter).from_writer(writer);
-        Writer {
-            writer,
-            has_headers: true,
-            date_format: Some(DEFAULT_DATE_FORMAT.to_string()),
-            datetime_format: Some(DEFAULT_TIMESTAMP_FORMAT.to_string()),
-            time_format: Some(DEFAULT_TIME_FORMAT.to_string()),
-            timestamp_format: Some(DEFAULT_TIMESTAMP_FORMAT.to_string()),
-            timestamp_tz_format: Some(DEFAULT_TIMESTAMP_TZ_FORMAT.to_string()),
-            beginning: true,
-            null_value: DEFAULT_NULL_VALUE.to_string(),
-        }
+        WriterBuilder::new().with_delimiter(delimiter).build(writer)
     }
 
     /// Write a vector of record batches to a writable object
@@ -138,7 +121,7 @@ impl<W: Write> Writer<W> {
         }
 
         let options = FormatOptions::default()
-            .with_null(&self.null_value)
+            .with_null(self.null_value.as_deref().unwrap_or(DEFAULT_NULL_VALUE))
             .with_date_format(self.date_format.as_deref())
             .with_datetime_format(self.datetime_format.as_deref())
             .with_timestamp_format(self.timestamp_format.as_deref())
@@ -207,9 +190,15 @@ impl<W: Write> RecordBatchWriter for Writer<W> {
 #[derive(Clone, Debug)]
 pub struct WriterBuilder {
     /// Optional column delimiter. Defaults to `b','`
-    delimiter: Option<u8>,
+    delimiter: u8,
     /// Whether to write column names as file headers. Defaults to `true`
-    has_headers: bool,
+    has_header: bool,
+    /// Optional quote character. Defaults to `b'"'`
+    quote: u8,
+    /// Optional escape character. Defaults to `b'\\'`
+    escape: u8,
+    /// Enable double quote escapes. Defaults to `true`
+    double_quote: bool,
     /// Optional date format for date arrays
     date_format: Option<String>,
     /// Optional datetime format for datetime arrays
@@ -226,15 +215,18 @@ pub struct WriterBuilder {
 
 impl Default for WriterBuilder {
     fn default() -> Self {
-        Self {
-            has_headers: true,
-            delimiter: None,
-            date_format: Some(DEFAULT_DATE_FORMAT.to_string()),
-            datetime_format: Some(DEFAULT_TIMESTAMP_FORMAT.to_string()),
-            time_format: Some(DEFAULT_TIME_FORMAT.to_string()),
-            timestamp_format: Some(DEFAULT_TIMESTAMP_FORMAT.to_string()),
-            timestamp_tz_format: Some(DEFAULT_TIMESTAMP_TZ_FORMAT.to_string()),
-            null_value: Some(DEFAULT_NULL_VALUE.to_string()),
+        WriterBuilder {
+            delimiter: b',',
+            has_header: true,
+            quote: b'"',
+            escape: b'\\',
+            double_quote: true,
+            date_format: None,
+            datetime_format: None,
+            timestamp_format: None,
+            timestamp_tz_format: None,
+            time_format: None,
+            null_value: None,
         }
     }
 }
@@ -254,7 +246,7 @@ impl WriterBuilder {
     ///     let file = File::create("target/out.csv").unwrap();
     ///
     ///     // create a builder that doesn't write headers
-    ///     let builder = WriterBuilder::new().has_headers(false);
+    ///     let builder = WriterBuilder::new().with_header(false);
     ///     let writer = builder.build(file);
     ///
     ///     writer
@@ -265,15 +257,78 @@ impl WriterBuilder {
     }
 
     /// Set whether to write headers
+    #[deprecated(note = "Use Self::with_header")]
+    #[doc(hidden)]
     pub fn has_headers(mut self, has_headers: bool) -> Self {
-        self.has_headers = has_headers;
+        self.has_header = has_headers;
         self
+    }
+
+    /// Set whether to write the CSV file with a header
+    pub fn with_header(mut self, header: bool) -> Self {
+        self.has_header = header;
+        self
+    }
+
+    /// Returns `true` if this writer is configured to write a header
+    pub fn header(&self) -> bool {
+        self.has_header
     }
 
     /// Set the CSV file's column delimiter as a byte character
     pub fn with_delimiter(mut self, delimiter: u8) -> Self {
-        self.delimiter = Some(delimiter);
+        self.delimiter = delimiter;
         self
+    }
+
+    /// Get the CSV file's column delimiter as a byte character
+    pub fn delimiter(&self) -> u8 {
+        self.delimiter
+    }
+
+    /// Set the CSV file's quote character as a byte character
+    pub fn with_quote(mut self, quote: u8) -> Self {
+        self.quote = quote;
+        self
+    }
+
+    /// Get the CSV file's quote character as a byte character
+    pub fn quote(&self) -> u8 {
+        self.quote
+    }
+
+    /// Set the CSV file's escape character as a byte character
+    ///
+    /// In some variants of CSV, quotes are escaped using a special escape
+    /// character like `\` (instead of escaping quotes by doubling them).
+    ///
+    /// By default, writing these idiosyncratic escapes is disabled, and is
+    /// only used when `double_quote` is disabled.
+    pub fn with_escape(mut self, escape: u8) -> Self {
+        self.escape = escape;
+        self
+    }
+
+    /// Get the CSV file's escape character as a byte character
+    pub fn escape(&self) -> u8 {
+        self.escape
+    }
+
+    /// Set whether to enable double quote escapes
+    ///
+    /// When enabled (which is the default), quotes are escaped by doubling
+    /// them. e.g., `"` escapes to `""`.
+    ///
+    /// When disabled, quotes are escaped with the escape character (which
+    /// is `\\` by default).
+    pub fn with_double_quote(mut self, double_quote: bool) -> Self {
+        self.double_quote = double_quote;
+        self
+    }
+
+    /// Get whether double quote escapes are enabled
+    pub fn double_quote(&self) -> bool {
+        self.double_quote
     }
 
     /// Set the CSV file's date format
@@ -282,10 +337,20 @@ impl WriterBuilder {
         self
     }
 
+    /// Get the CSV file's date format if set, defaults to RFC3339
+    pub fn date_format(&self) -> Option<&str> {
+        self.date_format.as_deref()
+    }
+
     /// Set the CSV file's datetime format
     pub fn with_datetime_format(mut self, format: String) -> Self {
         self.datetime_format = Some(format);
         self
+    }
+
+    /// Get the CSV file's datetime format if set, defaults to RFC3339
+    pub fn datetime_format(&self) -> Option<&str> {
+        self.datetime_format.as_deref()
     }
 
     /// Set the CSV file's time format
@@ -294,10 +359,20 @@ impl WriterBuilder {
         self
     }
 
+    /// Get the CSV file's datetime time if set, defaults to RFC3339
+    pub fn time_format(&self) -> Option<&str> {
+        self.time_format.as_deref()
+    }
+
     /// Set the CSV file's timestamp format
     pub fn with_timestamp_format(mut self, format: String) -> Self {
         self.timestamp_format = Some(format);
         self
+    }
+
+    /// Get the CSV file's timestamp format if set, defaults to RFC3339
+    pub fn timestamp_format(&self) -> Option<&str> {
+        self.timestamp_format.as_deref()
     }
 
     /// Set the value to represent null in output
@@ -306,7 +381,13 @@ impl WriterBuilder {
         self
     }
 
-    /// Use RFC3339 format for date/time/timestamps
+    /// Get the value to represent null in output
+    pub fn null(&self) -> &str {
+        self.null_value.as_deref().unwrap_or(DEFAULT_NULL_VALUE)
+    }
+
+    /// Use RFC3339 format for date/time/timestamps (default)
+    #[deprecated(note = "Use WriterBuilder::default()")]
     pub fn with_rfc3339(mut self) -> Self {
         self.date_format = None;
         self.datetime_format = None;
@@ -318,21 +399,23 @@ impl WriterBuilder {
 
     /// Create a new `Writer`
     pub fn build<W: Write>(self, writer: W) -> Writer<W> {
-        let delimiter = self.delimiter.unwrap_or(b',');
         let mut builder = csv::WriterBuilder::new();
-        let writer = builder.delimiter(delimiter).from_writer(writer);
+        let writer = builder
+            .delimiter(self.delimiter)
+            .quote(self.quote)
+            .double_quote(self.double_quote)
+            .escape(self.escape)
+            .from_writer(writer);
         Writer {
             writer,
-            has_headers: self.has_headers,
+            beginning: true,
+            has_headers: self.has_header,
             date_format: self.date_format,
             datetime_format: self.datetime_format,
             time_format: self.time_format,
             timestamp_format: self.timestamp_format,
             timestamp_tz_format: self.timestamp_tz_format,
-            beginning: true,
-            null_value: self
-                .null_value
-                .unwrap_or_else(|| DEFAULT_NULL_VALUE.to_string()),
+            null_value: self.null_value,
         }
     }
 }
@@ -365,18 +448,12 @@ mod tests {
             "consectetur adipiscing elit",
             "sed do eiusmod tempor",
         ]);
-        let c2 = PrimitiveArray::<Float64Type>::from(vec![
-            Some(123.564532),
-            None,
-            Some(-556132.25),
-        ]);
+        let c2 =
+            PrimitiveArray::<Float64Type>::from(vec![Some(123.564532), None, Some(-556132.25)]);
         let c3 = PrimitiveArray::<UInt32Type>::from(vec![3, 2, 1]);
         let c4 = BooleanArray::from(vec![Some(true), Some(false), None]);
-        let c5 = TimestampMillisecondArray::from(vec![
-            None,
-            Some(1555584887378),
-            Some(1555555555555),
-        ]);
+        let c5 =
+            TimestampMillisecondArray::from(vec![None, Some(1555584887378), Some(1555555555555)]);
         let c6 = Time32SecondArray::from(vec![1234, 24680, 85563]);
         let c7: DictionaryArray<Int32Type> =
             vec!["cupcakes", "cupcakes", "foo"].into_iter().collect();
@@ -411,11 +488,11 @@ mod tests {
 
         let expected = r#"c1,c2,c3,c4,c5,c6,c7
 Lorem ipsum dolor sit amet,123.564532,3,true,,00:20:34,cupcakes
-consectetur adipiscing elit,,2,false,2019-04-18T10:54:47.378000000,06:51:20,cupcakes
-sed do eiusmod tempor,-556132.25,1,,2019-04-18T02:45:55.555000000,23:46:03,foo
+consectetur adipiscing elit,,2,false,2019-04-18T10:54:47.378,06:51:20,cupcakes
+sed do eiusmod tempor,-556132.25,1,,2019-04-18T02:45:55.555,23:46:03,foo
 Lorem ipsum dolor sit amet,123.564532,3,true,,00:20:34,cupcakes
-consectetur adipiscing elit,,2,false,2019-04-18T10:54:47.378000000,06:51:20,cupcakes
-sed do eiusmod tempor,-556132.25,1,,2019-04-18T02:45:55.555000000,23:46:03,foo
+consectetur adipiscing elit,,2,false,2019-04-18T10:54:47.378,06:51:20,cupcakes
+sed do eiusmod tempor,-556132.25,1,,2019-04-18T02:45:55.555,23:46:03,foo
 "#;
         assert_eq!(expected.to_string(), String::from_utf8(buffer).unwrap());
     }
@@ -427,13 +504,11 @@ sed do eiusmod tempor,-556132.25,1,,2019-04-18T02:45:55.555000000,23:46:03,foo
             Field::new("c2", DataType::Decimal256(76, 6), true),
         ]);
 
-        let mut c1_builder =
-            Decimal128Builder::new().with_data_type(DataType::Decimal128(38, 6));
+        let mut c1_builder = Decimal128Builder::new().with_data_type(DataType::Decimal128(38, 6));
         c1_builder.extend(vec![Some(-3335724), Some(2179404), None, Some(290472)]);
         let c1 = c1_builder.finish();
 
-        let mut c2_builder =
-            Decimal256Builder::new().with_data_type(DataType::Decimal256(76, 6));
+        let mut c2_builder = Decimal256Builder::new().with_data_type(DataType::Decimal256(76, 6));
         c2_builder.extend(vec![
             Some(i256::from_i128(-3335724)),
             Some(i256::from_i128(2179404)),
@@ -443,8 +518,7 @@ sed do eiusmod tempor,-556132.25,1,,2019-04-18T02:45:55.555000000,23:46:03,foo
         let c2 = c2_builder.finish();
 
         let batch =
-            RecordBatch::try_new(Arc::new(schema), vec![Arc::new(c1), Arc::new(c2)])
-                .unwrap();
+            RecordBatch::try_new(Arc::new(schema), vec![Arc::new(c1), Arc::new(c2)]).unwrap();
 
         let mut file = tempfile::tempfile().unwrap();
 
@@ -484,15 +558,12 @@ sed do eiusmod tempor,-556132.25,1,,2019-04-18T02:45:55.555000000,23:46:03,foo
         ]);
 
         let c1 = StringArray::from(vec![
-            "Lorem ipsum dolor sit amet",
-            "consectetur adipiscing elit",
+            "Lorem ipsum \ndolor sit amet",
+            "consectetur \"adipiscing\" elit",
             "sed do eiusmod tempor",
         ]);
-        let c2 = PrimitiveArray::<Float64Type>::from(vec![
-            Some(123.564532),
-            None,
-            Some(-556132.25),
-        ]);
+        let c2 =
+            PrimitiveArray::<Float64Type>::from(vec![Some(123.564532), None, Some(-556132.25)]);
         let c3 = PrimitiveArray::<UInt32Type>::from(vec![3, 2, 1]);
         let c4 = BooleanArray::from(vec![Some(true), Some(false), None]);
         let c6 = Time32SecondArray::from(vec![1234, 24680, 85563]);
@@ -512,8 +583,9 @@ sed do eiusmod tempor,-556132.25,1,,2019-04-18T02:45:55.555000000,23:46:03,foo
         let mut file = tempfile::tempfile().unwrap();
 
         let builder = WriterBuilder::new()
-            .has_headers(false)
+            .with_header(false)
             .with_delimiter(b'|')
+            .with_quote(b'\'')
             .with_null("NULL".to_string())
             .with_time_format("%r".to_string());
         let mut writer = builder.build(&mut file);
@@ -529,10 +601,33 @@ sed do eiusmod tempor,-556132.25,1,,2019-04-18T02:45:55.555000000,23:46:03,foo
         file.read_to_end(&mut buffer).unwrap();
 
         assert_eq!(
-            "Lorem ipsum dolor sit amet|123.564532|3|true|12:20:34 AM\nconsectetur adipiscing elit|NULL|2|false|06:51:20 AM\nsed do eiusmod tempor|-556132.25|1|NULL|11:46:03 PM\n"
+            "'Lorem ipsum \ndolor sit amet'|123.564532|3|true|12:20:34 AM\nconsectetur \"adipiscing\" elit|NULL|2|false|06:51:20 AM\nsed do eiusmod tempor|-556132.25|1|NULL|11:46:03 PM\n"
             .to_string(),
             String::from_utf8(buffer).unwrap()
         );
+
+        let mut file = tempfile::tempfile().unwrap();
+
+        let builder = WriterBuilder::new()
+            .with_header(true)
+            .with_double_quote(false)
+            .with_escape(b'$');
+        let mut writer = builder.build(&mut file);
+        let batches = vec![&batch];
+        for batch in batches {
+            writer.write(batch).unwrap();
+        }
+        drop(writer);
+
+        file.rewind().unwrap();
+        let mut buffer: Vec<u8> = vec![];
+        file.read_to_end(&mut buffer).unwrap();
+
+        assert_eq!(
+			"c1,c2,c3,c4,c6\n\"Lorem ipsum \ndolor sit amet\",123.564532,3,true,00:20:34\n\"consectetur $\"adipiscing$\" elit\",,2,false,06:51:20\nsed do eiusmod tempor,-556132.25,1,,23:46:03\n"
+			.to_string(),
+			String::from_utf8(buffer).unwrap()
+		);
     }
 
     #[test]
@@ -560,7 +655,7 @@ sed do eiusmod tempor,-556132.25,1,,2019-04-18T02:45:55.555000000,23:46:03,foo
         )
         .unwrap();
 
-        let builder = WriterBuilder::new().has_headers(false);
+        let builder = WriterBuilder::new().with_header(false);
 
         let mut buf: Cursor<Vec<u8>> = Default::default();
         // drop the writer early to release the borrow.
@@ -605,8 +700,7 @@ sed do eiusmod tempor,-556132.25,1,,2019-04-18T02:45:55.555000000,23:46:03,foo
         let c0 = UInt32Array::from(vec![Some(123), Some(234)]);
         let c1 = Date64Array::from(vec![Some(1926632005177), Some(1926632005177685347)]);
         let batch =
-            RecordBatch::try_new(Arc::new(schema), vec![Arc::new(c0), Arc::new(c1)])
-                .unwrap();
+            RecordBatch::try_new(Arc::new(schema), vec![Arc::new(c0), Arc::new(c1)]).unwrap();
 
         let mut file = tempfile::tempfile().unwrap();
         let mut writer = Writer::new(&mut file);
@@ -632,15 +726,9 @@ sed do eiusmod tempor,-556132.25,1,,2019-04-18T02:45:55.555000000,23:46:03,foo
             Field::new("c4", DataType::Time32(TimeUnit::Second), false),
         ]);
 
-        let c1 = TimestampMillisecondArray::from(vec![
-            Some(1555584887378),
-            Some(1635577147000),
-        ])
-        .with_timezone("+00:00".to_string());
-        let c2 = TimestampMillisecondArray::from(vec![
-            Some(1555584887378),
-            Some(1635577147000),
-        ]);
+        let c1 = TimestampMillisecondArray::from(vec![Some(1555584887378), Some(1635577147000)])
+            .with_timezone("+00:00".to_string());
+        let c2 = TimestampMillisecondArray::from(vec![Some(1555584887378), Some(1635577147000)]);
         let c3 = Date32Array::from(vec![3, 2]);
         let c4 = Time32SecondArray::from(vec![1234, 24680]);
 
@@ -652,7 +740,7 @@ sed do eiusmod tempor,-556132.25,1,,2019-04-18T02:45:55.555000000,23:46:03,foo
 
         let mut file = tempfile::tempfile().unwrap();
 
-        let builder = WriterBuilder::new().with_rfc3339();
+        let builder = WriterBuilder::new();
         let mut writer = builder.build(&mut file);
         let batches = vec![&batch];
         for batch in batches {

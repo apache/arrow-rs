@@ -162,10 +162,7 @@ pub fn prep_null_mask_filter(filter: &BooleanArray) -> BooleanArray {
 /// let c = c.as_any().downcast_ref::<Int32Array>().unwrap();
 /// assert_eq!(c, &Int32Array::from(vec![5, 8]));
 /// ```
-pub fn filter(
-    values: &dyn Array,
-    predicate: &BooleanArray,
-) -> Result<ArrayRef, ArrowError> {
+pub fn filter(values: &dyn Array, predicate: &BooleanArray) -> Result<ArrayRef, ArrowError> {
     let predicate = FilterBuilder::new(predicate).build();
     filter_array(values, &predicate)
 }
@@ -187,8 +184,8 @@ pub fn filter_record_batch(
         .iter()
         .map(|a| filter_array(a, &filter))
         .collect::<Result<Vec<_>, _>>()?;
-
-    RecordBatch::try_new(record_batch.schema(), filtered_arrays)
+    let options = RecordBatchOptions::default().with_row_count(Some(filter.count()));
+    RecordBatch::try_new_with_options(record_batch.schema(), filtered_arrays, &options)
 }
 
 /// A builder to construct [`FilterPredicate`]
@@ -301,12 +298,14 @@ impl FilterPredicate {
     pub fn filter(&self, values: &dyn Array) -> Result<ArrayRef, ArrowError> {
         filter_array(values, self)
     }
+
+    /// Number of rows being selected based on this [`FilterPredicate`]
+    pub fn count(&self) -> usize {
+        self.count
+    }
 }
 
-fn filter_array(
-    values: &dyn Array,
-    predicate: &FilterPredicate,
-) -> Result<ArrayRef, ArrowError> {
+fn filter_array(values: &dyn Array, predicate: &FilterPredicate) -> Result<ArrayRef, ArrowError> {
     if predicate.filter.len() > values.len() {
         return Err(ArrowError::InvalidArgumentError(format!(
             "Filter predicate of length {} is larger than target array of length {}",
@@ -418,16 +417,14 @@ fn filter_bits(buffer: &BooleanBuffer, predicate: &FilterPredicate) -> Buffer {
             unsafe { MutableBuffer::from_trusted_len_iter_bool(bits).into() }
         }
         IterationStrategy::SlicesIterator => {
-            let mut builder =
-                BooleanBufferBuilder::new(bit_util::ceil(predicate.count, 8));
+            let mut builder = BooleanBufferBuilder::new(bit_util::ceil(predicate.count, 8));
             for (start, end) in SlicesIterator::new(&predicate.filter) {
                 builder.append_packed_range(start + offset..end + offset, src)
             }
             builder.into()
         }
         IterationStrategy::Slices(slices) => {
-            let mut builder =
-                BooleanBufferBuilder::new(bit_util::ceil(predicate.count, 8));
+            let mut builder = BooleanBufferBuilder::new(bit_util::ceil(predicate.count, 8));
             for (start, end) in slices {
                 builder.append_packed_range(*start + offset..*end + offset, src)
             }
@@ -454,10 +451,7 @@ fn filter_boolean(array: &BooleanArray, predicate: &FilterPredicate) -> BooleanA
 }
 
 /// `filter` implementation for primitive arrays
-fn filter_primitive<T>(
-    array: &PrimitiveArray<T>,
-    predicate: &FilterPredicate,
-) -> PrimitiveArray<T>
+fn filter_primitive<T>(array: &PrimitiveArray<T>, predicate: &FilterPredicate) -> PrimitiveArray<T>
 where
     T: ArrowPrimitiveType,
 {
@@ -466,24 +460,21 @@ where
 
     let buffer = match &predicate.strategy {
         IterationStrategy::SlicesIterator => {
-            let mut buffer =
-                MutableBuffer::with_capacity(predicate.count * T::get_byte_width());
+            let mut buffer = MutableBuffer::with_capacity(predicate.count * T::get_byte_width());
             for (start, end) in SlicesIterator::new(&predicate.filter) {
                 buffer.extend_from_slice(&values[start..end]);
             }
             buffer
         }
         IterationStrategy::Slices(slices) => {
-            let mut buffer =
-                MutableBuffer::with_capacity(predicate.count * T::get_byte_width());
+            let mut buffer = MutableBuffer::with_capacity(predicate.count * T::get_byte_width());
             for (start, end) in slices {
                 buffer.extend_from_slice(&values[*start..*end]);
             }
             buffer
         }
         IterationStrategy::IndexIterator => {
-            let iter =
-                IndexIterator::new(&predicate.filter, predicate.count).map(|x| values[x]);
+            let iter = IndexIterator::new(&predicate.filter, predicate.count).map(|x| values[x]);
 
             // SAFETY: IndexIterator is trusted length
             unsafe { MutableBuffer::from_trusted_len_iter(iter) }
@@ -593,10 +584,7 @@ where
 ///
 /// Note: NULLs with a non-zero slot length in `array` will have the corresponding
 /// data copied across. This allows handling the null mask separately from the data
-fn filter_bytes<T>(
-    array: &GenericByteArray<T>,
-    predicate: &FilterPredicate,
-) -> GenericByteArray<T>
+fn filter_bytes<T>(array: &GenericByteArray<T>, predicate: &FilterPredicate) -> GenericByteArray<T>
 where
     T: ByteArrayType,
 {
@@ -628,10 +616,7 @@ where
 }
 
 /// `filter` implementation for dictionaries
-fn filter_dict<T>(
-    array: &DictionaryArray<T>,
-    predicate: &FilterPredicate,
-) -> DictionaryArray<T>
+fn filter_dict<T>(array: &DictionaryArray<T>, predicate: &FilterPredicate) -> DictionaryArray<T>
 where
     T: ArrowDictionaryKeyType,
     T::Native: num::Num,
@@ -760,8 +745,7 @@ mod tests {
     fn test_filter_array_low_density() {
         // this test exercises the all 0's branch of the filter algorithm
         let mut data_values = (1..=65).collect::<Vec<i32>>();
-        let mut filter_values =
-            (1..=65).map(|i| matches!(i % 65, 0)).collect::<Vec<bool>>();
+        let mut filter_values = (1..=65).map(|i| matches!(i % 65, 0)).collect::<Vec<bool>>();
         // set up two more values after the batch
         data_values.extend_from_slice(&[66, 67]);
         filter_values.extend_from_slice(&[false, true]);
@@ -847,8 +831,7 @@ mod tests {
 
     #[test]
     fn test_filter_array_slice_with_null() {
-        let a =
-            Int32Array::from(vec![Some(5), None, Some(7), Some(8), Some(9)]).slice(1, 4);
+        let a = Int32Array::from(vec![Some(5), None, Some(7), Some(8), Some(9)]).slice(1, 4);
         let b = BooleanArray::from(vec![true, false, false, true]);
         // filtering with sliced filter array is not currently supported
         // let b_slice = BooleanArray::from(vec![true, false, false, true, false]).slice(1, 4);
@@ -863,7 +846,7 @@ mod tests {
 
     #[test]
     fn test_filter_dictionary_array() {
-        let values = vec![Some("hello"), None, Some("world"), Some("!")];
+        let values = [Some("hello"), None, Some("world"), Some("!")];
         let a: Int8DictionaryArray = values.iter().copied().collect();
         let b = BooleanArray::from(vec![false, true, true, false]);
         let c = filter(&a, &b).unwrap();
@@ -978,9 +961,19 @@ mod tests {
     }
 
     #[test]
+    fn test_filter_record_batch_no_columns() {
+        let pred = BooleanArray::from(vec![Some(true), Some(true), None]);
+        let options = RecordBatchOptions::default().with_row_count(Some(100));
+        let record_batch =
+            RecordBatch::try_new_with_options(Arc::new(Schema::empty()), vec![], &options).unwrap();
+        let out = filter_record_batch(&record_batch, &pred).unwrap();
+
+        assert_eq!(out.num_rows(), 2);
+    }
+
+    #[test]
     fn test_fast_path() {
-        let a: PrimitiveArray<Int64Type> =
-            PrimitiveArray::from(vec![Some(1), Some(2), None]);
+        let a: PrimitiveArray<Int64Type> = PrimitiveArray::from(vec![Some(1), Some(2), None]);
 
         // all true
         let mask = BooleanArray::from(vec![true, true, true]);
@@ -1129,9 +1122,7 @@ mod tests {
     }
 
     /// Returns an iterator that calls `Option::as_deref` on each item
-    fn as_deref<T: std::ops::Deref>(
-        src: &[Option<T>],
-    ) -> impl Iterator<Item = Option<&T::Target>> {
+    fn as_deref<T: std::ops::Deref>(src: &[Option<T>]) -> impl Iterator<Item = Option<&T::Target>> {
         src.iter().map(|x| x.as_deref())
     }
 
@@ -1270,10 +1261,8 @@ mod tests {
             .add_buffer(Buffer::from_slice_ref([0, 1, 2, 3, 4, 5, 6, 7, 8]))
             .build()
             .unwrap();
-        let list_data_type = DataType::FixedSizeList(
-            Arc::new(Field::new("item", DataType::Int32, false)),
-            3,
-        );
+        let list_data_type =
+            DataType::FixedSizeList(Arc::new(Field::new("item", DataType::Int32, false)), 3);
         let list_data = ArrayData::builder(list_data_type)
             .len(3)
             .add_child_data(value_data)
@@ -1329,10 +1318,8 @@ mod tests {
         bit_util::set_bit(&mut null_bits, 3);
         bit_util::set_bit(&mut null_bits, 4);
 
-        let list_data_type = DataType::FixedSizeList(
-            Arc::new(Field::new("item", DataType::Int32, false)),
-            2,
-        );
+        let list_data_type =
+            DataType::FixedSizeList(Arc::new(Field::new("item", DataType::Int32, false)), 2);
         let list_data = ArrayData::builder(list_data_type)
             .len(5)
             .add_child_data(value_data)
@@ -1514,13 +1501,11 @@ mod tests {
                         assert_eq!(value1, value2);
                     }
                     1 => {
-                        let slot1 =
-                            slot1.as_any().downcast_ref::<Float64Array>().unwrap();
+                        let slot1 = slot1.as_any().downcast_ref::<Float64Array>().unwrap();
                         assert_eq!(slot1.len(), 1);
                         let value1 = slot1.value(0);
 
-                        let slot2 =
-                            slot2.as_any().downcast_ref::<Float64Array>().unwrap();
+                        let slot2 = slot2.as_any().downcast_ref::<Float64Array>().unwrap();
                         assert_eq!(slot2.len(), 1);
                         let value2 = slot2.value(0);
                         assert_eq!(value1, value2);

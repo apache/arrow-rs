@@ -86,11 +86,7 @@ impl Default for MapFieldNames {
 
 impl<K: ArrayBuilder, V: ArrayBuilder> MapBuilder<K, V> {
     /// Creates a new `MapBuilder`
-    pub fn new(
-        field_names: Option<MapFieldNames>,
-        key_builder: K,
-        value_builder: V,
-    ) -> Self {
+    pub fn new(field_names: Option<MapFieldNames>, key_builder: K, value_builder: V) -> Self {
         let capacity = key_builder.len();
         Self::with_capacity(field_names, key_builder, value_builder, capacity)
     }
@@ -121,6 +117,11 @@ impl<K: ArrayBuilder, V: ArrayBuilder> MapBuilder<K, V> {
     /// Returns the value array builder of the map
     pub fn values(&mut self) -> &mut V {
         &mut self.value_builder
+    }
+
+    /// Returns both the key and value array builders of the map
+    pub fn entries(&mut self) -> (&mut K, &mut V) {
+        (&mut self.key_builder, &mut self.value_builder)
     }
 
     /// Finish the current map array slot
@@ -238,21 +239,61 @@ impl<K: ArrayBuilder, V: ArrayBuilder> ArrayBuilder for MapBuilder<K, V> {
 
 #[cfg(test)]
 mod tests {
-    use crate::builder::{Int32Builder, StringBuilder};
+    use crate::builder::{make_builder, Int32Builder, StringBuilder};
+    use crate::{Int32Array, StringArray};
 
     use super::*;
 
     #[test]
-    #[should_panic(
-        expected = "Keys array must have no null values, found 1 null value(s)"
-    )]
+    #[should_panic(expected = "Keys array must have no null values, found 1 null value(s)")]
     fn test_map_builder_with_null_keys_panics() {
-        let mut builder =
-            MapBuilder::new(None, StringBuilder::new(), Int32Builder::new());
+        let mut builder = MapBuilder::new(None, StringBuilder::new(), Int32Builder::new());
         builder.keys().append_null();
         builder.values().append_value(42);
         builder.append(true).unwrap();
 
         builder.finish();
+    }
+
+    #[test]
+    fn test_boxed_map_builder() {
+        let keys_builder = make_builder(&DataType::Utf8, 5);
+        let values_builder = make_builder(&DataType::Int32, 5);
+
+        let mut builder = MapBuilder::new(None, keys_builder, values_builder);
+        builder
+            .keys()
+            .as_any_mut()
+            .downcast_mut::<StringBuilder>()
+            .expect("should be an StringBuilder")
+            .append_value("1");
+        builder
+            .values()
+            .as_any_mut()
+            .downcast_mut::<Int32Builder>()
+            .expect("should be an Int32Builder")
+            .append_value(42);
+        builder.append(true).unwrap();
+
+        let map_array = builder.finish();
+
+        assert_eq!(
+            map_array
+                .keys()
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .expect("should be an StringArray")
+                .value(0),
+            "1"
+        );
+        assert_eq!(
+            map_array
+                .values()
+                .as_any()
+                .downcast_ref::<Int32Array>()
+                .expect("should be an Int32Array")
+                .value(0),
+            42
+        );
     }
 }

@@ -28,14 +28,13 @@ pub fn count_set_bits(bytes: &[u8], range: Range<usize>) -> usize {
 pub fn iter_set_bits_rev(bytes: &[u8]) -> impl Iterator<Item = usize> + '_ {
     let bit_length = bytes.len() * 8;
     let unaligned = UnalignedBitChunk::new(bytes, 0, bit_length);
-    let mut chunk_end_idx =
-        bit_length + unaligned.lead_padding() + unaligned.trailing_padding();
+    let mut chunk_end_idx = bit_length + unaligned.lead_padding() + unaligned.trailing_padding();
 
     let iter = unaligned
         .prefix()
         .into_iter()
         .chain(unaligned.chunks().iter().cloned())
-        .chain(unaligned.suffix().into_iter());
+        .chain(unaligned.suffix());
 
     iter.rev().flat_map(move |mut chunk| {
         let chunk_idx = chunk_end_idx - 64;
@@ -84,7 +83,7 @@ mod tests {
             .iter()
             .enumerate()
             .rev()
-            .filter_map(|(x, y)| y.then(|| x))
+            .filter_map(|(x, y)| y.then_some(x))
             .collect();
         assert_eq!(actual, expected);
 

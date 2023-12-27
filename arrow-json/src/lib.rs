@@ -15,9 +15,53 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Transfer data between the Arrow memory format and JSON
-//! line-delimited records. See the module level documentation for the
+//! Transfer data between the Arrow memory format and JSON line-delimited records.
+//!
+//! See the module level documentation for the
 //! [`reader`] and [`writer`] for usage examples.
+//!
+//! # Binary Data
+//!
+//! As per [RFC7159] JSON cannot encode arbitrary binary data. A common approach to workaround
+//! this is to use a [binary-to-text encoding] scheme, such as base64, to encode the
+//! input data and then decode it on output.
+//!
+//! ```
+//! # use std::io::Cursor;
+//! # use std::sync::Arc;
+//! # use arrow_array::{BinaryArray, RecordBatch, StringArray};
+//! # use arrow_array::cast::AsArray;
+//! # use arrow_cast::base64::{b64_decode, b64_encode, BASE64_STANDARD};
+//! # use arrow_json::{LineDelimitedWriter, ReaderBuilder};
+//! #
+//! // The data we want to write
+//! let input = BinaryArray::from(vec![b"\xDE\x00\xFF".as_ref()]);
+//!
+//! // Base64 encode it to a string
+//! let encoded: StringArray = b64_encode(&BASE64_STANDARD, &input);
+//!
+//! // Write the StringArray to JSON
+//! let batch = RecordBatch::try_from_iter([("col", Arc::new(encoded) as _)]).unwrap();
+//! let mut buf = Vec::with_capacity(1024);
+//! let mut writer = LineDelimitedWriter::new(&mut buf);
+//! writer.write(&batch).unwrap();
+//! writer.finish().unwrap();
+//!
+//! // Read the JSON data
+//! let cursor = Cursor::new(buf);
+//! let mut reader = ReaderBuilder::new(batch.schema()).build(cursor).unwrap();
+//! let batch = reader.next().unwrap().unwrap();
+//!
+//! // Reverse the base64 encoding
+//! let col: BinaryArray = batch.column(0).as_string::<i32>().clone().into();
+//! let output = b64_decode(&BASE64_STANDARD, &col).unwrap();
+//!
+//! assert_eq!(input, output);
+//! ```
+//!
+//! [RFC7159]: https://datatracker.ietf.org/doc/html/rfc7159#section-8.1
+//! [binary-to-text encoding]: https://en.wikipedia.org/wiki/Binary-to-text_encoding
+//!
 
 #![deny(rustdoc::broken_intra_doc_links)]
 #![warn(missing_docs)]
@@ -38,7 +82,7 @@ pub type RawReader<R> = Reader<R>;
 pub type RawReaderBuilder = ReaderBuilder;
 
 pub use self::reader::{Reader, ReaderBuilder};
-pub use self::writer::{ArrayWriter, LineDelimitedWriter, Writer};
+pub use self::writer::{ArrayWriter, LineDelimitedWriter, Writer, WriterBuilder};
 use half::f16;
 use serde_json::{Number, Value};
 

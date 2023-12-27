@@ -18,7 +18,7 @@
 use crate::alloc::Deallocation;
 use crate::buffer::Buffer;
 use crate::native::ArrowNativeType;
-use crate::MutableBuffer;
+use crate::{BufferBuilder, MutableBuffer, OffsetBuffer};
 use std::fmt::Formatter;
 use std::marker::PhantomData;
 use std::ops::Deref;
@@ -86,6 +86,14 @@ impl<T: ArrowNativeType> ScalarBuffer<T> {
     pub fn into_inner(self) -> Buffer {
         self.buffer
     }
+
+    /// Returns true if this [`ScalarBuffer`] is equal to `other`, using pointer comparisons
+    /// to determine buffer equality. This is cheaper than `PartialEq::eq` but may
+    /// return false when the arrays are logically equal
+    #[inline]
+    pub fn ptr_eq(&self, other: &Self) -> bool {
+        self.buffer.ptr_eq(&other.buffer)
+    }
 }
 
 impl<T: ArrowNativeType> Deref for ScalarBuffer<T> {
@@ -137,12 +145,25 @@ impl<T: ArrowNativeType> From<Buffer> for ScalarBuffer<T> {
     }
 }
 
+impl<T: ArrowNativeType> From<OffsetBuffer<T>> for ScalarBuffer<T> {
+    fn from(value: OffsetBuffer<T>) -> Self {
+        value.into_inner()
+    }
+}
+
 impl<T: ArrowNativeType> From<Vec<T>> for ScalarBuffer<T> {
     fn from(value: Vec<T>) -> Self {
         Self {
             buffer: Buffer::from_vec(value),
             phantom: Default::default(),
         }
+    }
+}
+
+impl<T: ArrowNativeType> From<BufferBuilder<T>> for ScalarBuffer<T> {
+    fn from(mut value: BufferBuilder<T>) -> Self {
+        let len = value.len();
+        Self::new(value.finish(), 0, len)
     }
 }
 
@@ -213,9 +234,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(
-        expected = "Memory pointer is not aligned with the specified scalar type"
-    )]
+    #[should_panic(expected = "Memory pointer is not aligned with the specified scalar type")]
     fn test_unaligned() {
         let expected = [0_i32, 1, 2];
         let buffer = Buffer::from_iter(expected.iter().cloned());
@@ -224,18 +243,14 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(
-        expected = "the offset of the new Buffer cannot exceed the existing length"
-    )]
+    #[should_panic(expected = "the offset of the new Buffer cannot exceed the existing length")]
     fn test_length_out_of_bounds() {
         let buffer = Buffer::from_iter([0_i32, 1, 2]);
         ScalarBuffer::<i32>::new(buffer, 1, 3);
     }
 
     #[test]
-    #[should_panic(
-        expected = "the offset of the new Buffer cannot exceed the existing length"
-    )]
+    #[should_panic(expected = "the offset of the new Buffer cannot exceed the existing length")]
     fn test_offset_out_of_bounds() {
         let buffer = Buffer::from_iter([0_i32, 1, 2]);
         ScalarBuffer::<i32>::new(buffer, 4, 0);
@@ -260,5 +275,13 @@ mod tests {
     fn test_end_overflow() {
         let buffer = Buffer::from_iter([0_i32, 1, 2]);
         ScalarBuffer::<i32>::new(buffer, 0, usize::MAX / 4 + 1);
+    }
+
+    #[test]
+    fn convert_from_buffer_builder() {
+        let input = vec![1, 2, 3, 4];
+        let buffer_builder = BufferBuilder::from(input.clone());
+        let scalar_buffer = ScalarBuffer::from(buffer_builder);
+        assert_eq!(scalar_buffer.as_ref(), input);
     }
 }

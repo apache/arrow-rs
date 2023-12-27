@@ -345,34 +345,32 @@ impl DataType {
         use DataType::*;
         matches!(
             self,
-            Date32
-                | Date64
-                | Timestamp(_, _)
-                | Time32(_)
-                | Time64(_)
-                | Duration(_)
-                | Interval(_)
+            Date32 | Date64 | Timestamp(_, _) | Time32(_) | Time64(_) | Duration(_) | Interval(_)
         )
     }
 
     /// Returns true if this type is floating: (Float*).
+    #[inline]
     pub fn is_floating(&self) -> bool {
         use DataType::*;
         matches!(self, Float16 | Float32 | Float64)
     }
 
     /// Returns true if this type is integer: (Int*, UInt*).
+    #[inline]
     pub fn is_integer(&self) -> bool {
         self.is_signed_integer() || self.is_unsigned_integer()
     }
 
     /// Returns true if this type is signed integer: (Int*).
+    #[inline]
     pub fn is_signed_integer(&self) -> bool {
         use DataType::*;
         matches!(self, Int8 | Int16 | Int32 | Int64)
     }
 
     /// Returns true if this type is unsigned integer: (UInt*).
+    #[inline]
     pub fn is_unsigned_integer(&self) -> bool {
         use DataType::*;
         matches!(self, UInt8 | UInt16 | UInt32 | UInt64)
@@ -393,18 +391,23 @@ impl DataType {
 
     /// Returns true if this type is nested (List, FixedSizeList, LargeList, Struct, Union,
     /// or Map), or a dictionary of a nested type
+    #[inline]
     pub fn is_nested(&self) -> bool {
         use DataType::*;
         match self {
             Dictionary(_, v) => DataType::is_nested(v.as_ref()),
-            List(_)
-            | FixedSizeList(_, _)
-            | LargeList(_)
-            | Struct(_)
-            | Union(_, _)
-            | Map(_, _) => true,
+            List(_) | FixedSizeList(_, _) | LargeList(_) | Struct(_) | Union(_, _) | Map(_, _) => {
+                true
+            }
             _ => false,
         }
+    }
+
+    /// Returns true if this type is DataType::Null.
+    #[inline]
+    pub fn is_null(&self) -> bool {
+        use DataType::*;
+        matches!(self, Null)
     }
 
     /// Compares the datatype with another, ignoring nested field names
@@ -413,8 +416,7 @@ impl DataType {
         match (&self, other) {
             (DataType::List(a), DataType::List(b))
             | (DataType::LargeList(a), DataType::LargeList(b)) => {
-                a.is_nullable() == b.is_nullable()
-                    && a.data_type().equals_datatype(b.data_type())
+                a.is_nullable() == b.is_nullable() && a.data_type().equals_datatype(b.data_type())
             }
             (DataType::FixedSizeList(a, a_size), DataType::FixedSizeList(b, b_size)) => {
                 a_size == b_size
@@ -428,18 +430,14 @@ impl DataType {
                             && a.data_type().equals_datatype(b.data_type())
                     })
             }
-            (
-                DataType::Map(a_field, a_is_sorted),
-                DataType::Map(b_field, b_is_sorted),
-            ) => {
+            (DataType::Map(a_field, a_is_sorted), DataType::Map(b_field, b_is_sorted)) => {
                 a_field.is_nullable() == b_field.is_nullable()
                     && a_field.data_type().equals_datatype(b_field.data_type())
                     && a_is_sorted == b_is_sorted
             }
-            (
-                DataType::Dictionary(a_key, a_value),
-                DataType::Dictionary(b_key, b_value),
-            ) => a_key.equals_datatype(b_key) && a_value.equals_datatype(b_value),
+            (DataType::Dictionary(a_key, a_value), DataType::Dictionary(b_key, b_value)) => {
+                a_key.equals_datatype(b_key) && a_value.equals_datatype(b_value)
+            }
             (
                 DataType::RunEndEncoded(a_run_ends, a_values),
                 DataType::RunEndEncoded(b_run_ends, b_values),
@@ -534,9 +532,7 @@ impl DataType {
                 | DataType::LargeUtf8
                 | DataType::Decimal128(_, _)
                 | DataType::Decimal256(_, _) => 0,
-                DataType::Timestamp(_, s) => {
-                    s.as_ref().map(|s| s.len()).unwrap_or_default()
-                }
+                DataType::Timestamp(_, s) => s.as_ref().map(|s| s.len()).unwrap_or_default(),
                 DataType::List(field)
                 | DataType::FixedSizeList(field, _)
                 | DataType::LargeList(field)
@@ -622,8 +618,8 @@ mod tests {
             Field::new("first_name", DataType::Utf8, false).with_metadata(field_metadata);
 
         // Empty map: should be omitted.
-        let last_name = Field::new("last_name", DataType::Utf8, false)
-            .with_metadata(HashMap::default());
+        let last_name =
+            Field::new("last_name", DataType::Utf8, false).with_metadata(HashMap::default());
 
         let person = DataType::Struct(Fields::from(vec![
             first_name,
@@ -671,14 +667,10 @@ mod tests {
         assert!(!list_b.equals_datatype(&list_c));
         assert!(!list_a.equals_datatype(&list_d));
 
-        let list_e = DataType::FixedSizeList(
-            Arc::new(Field::new("item", list_a.clone(), false)),
-            3,
-        );
-        let list_f = DataType::FixedSizeList(
-            Arc::new(Field::new("array", list_b.clone(), false)),
-            3,
-        );
+        let list_e =
+            DataType::FixedSizeList(Arc::new(Field::new("item", list_a.clone(), false)), 3);
+        let list_f =
+            DataType::FixedSizeList(Arc::new(Field::new("array", list_b.clone(), false)), 3);
         let list_g = DataType::FixedSizeList(
             Arc::new(Field::new("item", DataType::FixedSizeBinary(3), true)),
             3,
@@ -688,10 +680,8 @@ mod tests {
         assert!(!list_f.equals_datatype(&list_g));
 
         let list_h = DataType::Struct(Fields::from(vec![Field::new("f1", list_e, true)]));
-        let list_i =
-            DataType::Struct(Fields::from(vec![Field::new("f1", list_f.clone(), true)]));
-        let list_j =
-            DataType::Struct(Fields::from(vec![Field::new("f1", list_f.clone(), false)]));
+        let list_i = DataType::Struct(Fields::from(vec![Field::new("f1", list_f.clone(), true)]));
+        let list_j = DataType::Struct(Fields::from(vec![Field::new("f1", list_f.clone(), false)]));
         let list_k = DataType::Struct(Fields::from(vec![
             Field::new("f1", list_f.clone(), false),
             Field::new("f2", list_g.clone(), false),
@@ -712,16 +702,11 @@ mod tests {
         assert!(!list_k.equals_datatype(&list_l));
         assert!(list_k.equals_datatype(&list_m));
 
-        let list_n =
-            DataType::Map(Arc::new(Field::new("f1", list_a.clone(), true)), true);
-        let list_o =
-            DataType::Map(Arc::new(Field::new("f2", list_b.clone(), true)), true);
-        let list_p =
-            DataType::Map(Arc::new(Field::new("f2", list_b.clone(), true)), false);
-        let list_q =
-            DataType::Map(Arc::new(Field::new("f2", list_c.clone(), true)), true);
-        let list_r =
-            DataType::Map(Arc::new(Field::new("f1", list_a.clone(), false)), true);
+        let list_n = DataType::Map(Arc::new(Field::new("f1", list_a.clone(), true)), true);
+        let list_o = DataType::Map(Arc::new(Field::new("f2", list_b.clone(), true)), true);
+        let list_p = DataType::Map(Arc::new(Field::new("f2", list_b.clone(), true)), false);
+        let list_q = DataType::Map(Arc::new(Field::new("f2", list_c.clone(), true)), true);
+        let list_r = DataType::Map(Arc::new(Field::new("f1", list_a.clone(), false)), true);
 
         assert!(list_n.equals_datatype(&list_o));
         assert!(!list_n.equals_datatype(&list_p));
@@ -729,8 +714,7 @@ mod tests {
         assert!(!list_n.equals_datatype(&list_r));
 
         let list_s = DataType::Dictionary(Box::new(DataType::UInt8), Box::new(list_a));
-        let list_t =
-            DataType::Dictionary(Box::new(DataType::UInt8), Box::new(list_b.clone()));
+        let list_t = DataType::Dictionary(Box::new(DataType::UInt8), Box::new(list_b.clone()));
         let list_u = DataType::Dictionary(Box::new(DataType::Int8), Box::new(list_b));
         let list_v = DataType::Dictionary(Box::new(DataType::UInt8), Box::new(list_c));
 
@@ -886,6 +870,12 @@ mod tests {
     fn test_floating() {
         assert!(DataType::is_floating(&DataType::Float16));
         assert!(!DataType::is_floating(&DataType::Int32));
+    }
+
+    #[test]
+    fn test_datatype_is_null() {
+        assert!(DataType::is_null(&DataType::Null));
+        assert!(!DataType::is_null(&DataType::Int32));
     }
 
     #[test]

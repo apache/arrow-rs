@@ -20,7 +20,7 @@ use crate::builder::GenericByteBuilder;
 use crate::iterator::ArrayIter;
 use crate::types::bytes::ByteArrayNativeType;
 use crate::types::ByteArrayType;
-use crate::{Array, ArrayAccessor, ArrayRef, OffsetSizeTrait};
+use crate::{Array, ArrayAccessor, ArrayRef, OffsetSizeTrait, Scalar};
 use arrow_buffer::{ArrowNativeType, Buffer, MutableBuffer};
 use arrow_buffer::{NullBuffer, OffsetBuffer};
 use arrow_data::{ArrayData, ArrayDataBuilder};
@@ -182,6 +182,11 @@ impl<T: ByteArrayType> GenericByteArray<T> {
         }
     }
 
+    /// Create a new [`Scalar`] from `v`
+    pub fn new_scalar(value: impl AsRef<T::Native>) -> Scalar<Self> {
+        Scalar::new(Self::from_iter_values(std::iter::once(value)))
+    }
+
     /// Creates a [`GenericByteArray`] based on an iterator of values without nulls
     pub fn from_iter_values<Ptr, I>(iter: I) -> Self
     where
@@ -192,8 +197,7 @@ impl<T: ByteArrayType> GenericByteArray<T> {
         let (_, data_len) = iter.size_hint();
         let data_len = data_len.expect("Iterator must be sized"); // panic if no upper bound.
 
-        let mut offsets =
-            MutableBuffer::new((data_len + 1) * std::mem::size_of::<T::Offset>());
+        let mut offsets = MutableBuffer::new((data_len + 1) * std::mem::size_of::<T::Offset>());
         offsets.push(T::Offset::usize_as(0));
 
         let mut values = MutableBuffer::new(0);
@@ -330,8 +334,7 @@ impl<T: ByteArrayType> GenericByteArray<T> {
     /// offset and data buffers are not shared by others.
     pub fn into_builder(self) -> Result<GenericByteBuilder<T>, Self> {
         let len = self.len();
-        let value_len =
-            T::Offset::as_usize(self.value_offsets()[len] - self.value_offsets()[0]);
+        let value_len = T::Offset::as_usize(self.value_offsets()[len] - self.value_offsets()[0]);
 
         let data = self.into_data();
         let null_bit_buffer = data.nulls().map(|b| b.inner().sliced());
@@ -573,17 +576,14 @@ mod tests {
 
         let nulls = NullBuffer::new_null(3);
         let err =
-            StringArray::try_new(offsets.clone(), data.clone(), Some(nulls.clone()))
-                .unwrap_err();
+            StringArray::try_new(offsets.clone(), data.clone(), Some(nulls.clone())).unwrap_err();
         assert_eq!(err.to_string(), "Invalid argument error: Incorrect length of null buffer for StringArray, expected 2 got 3");
 
-        let err =
-            BinaryArray::try_new(offsets.clone(), data.clone(), Some(nulls)).unwrap_err();
+        let err = BinaryArray::try_new(offsets.clone(), data.clone(), Some(nulls)).unwrap_err();
         assert_eq!(err.to_string(), "Invalid argument error: Incorrect length of null buffer for BinaryArray, expected 2 got 3");
 
         let non_utf8_data = Buffer::from_slice_ref(b"he\xFFloworld");
-        let err = StringArray::try_new(offsets.clone(), non_utf8_data.clone(), None)
-            .unwrap_err();
+        let err = StringArray::try_new(offsets.clone(), non_utf8_data.clone(), None).unwrap_err();
         assert_eq!(err.to_string(), "Invalid argument error: Encountered non UTF-8 data: invalid utf-8 sequence of 1 bytes from index 2");
 
         BinaryArray::new(offsets, non_utf8_data, None);
@@ -606,8 +606,7 @@ mod tests {
         BinaryArray::new(offsets, non_ascii_data.clone(), None);
 
         let offsets = OffsetBuffer::new(vec![0, 3, 10].into());
-        let err = StringArray::try_new(offsets.clone(), non_ascii_data.clone(), None)
-            .unwrap_err();
+        let err = StringArray::try_new(offsets.clone(), non_ascii_data.clone(), None).unwrap_err();
         assert_eq!(
             err.to_string(),
             "Invalid argument error: Split UTF-8 codepoint at offset 3"

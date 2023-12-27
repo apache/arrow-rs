@@ -23,6 +23,7 @@ use std::sync::Arc;
 
 use crate::alloc::{Allocation, Deallocation, ALIGNMENT};
 use crate::util::bit_chunk_iterator::{BitChunks, UnalignedBitChunk};
+use crate::BufferBuilder;
 use crate::{bytes::Bytes, native::ArrowNativeType};
 
 use super::ops::bitwise_unary_op_helper;
@@ -74,7 +75,7 @@ impl Buffer {
     /// Create a [`Buffer`] from the provided [`Vec`] without copying
     #[inline]
     pub fn from_vec<T: ArrowNativeType>(vec: Vec<T>) -> Self {
-        MutableBuffer::from_vec(vec).into()
+        MutableBuffer::from(vec).into()
     }
 
     /// Initializes a [Buffer] from a slice of items.
@@ -99,7 +100,7 @@ impl Buffer {
     ///
     /// This function is unsafe as there is no guarantee that the given pointer is valid for `len`
     /// bytes. If the `ptr` and `capacity` come from a `Buffer`, then this is guaranteed.
-    #[deprecated(note = "Use From<Vec<T>>")]
+    #[deprecated(note = "Use Buffer::from_vec")]
     pub unsafe fn from_raw_parts(ptr: NonNull<u8>, len: usize, capacity: usize) -> Self {
         assert!(len <= capacity);
         let layout = Layout::from_size_align(capacity, ALIGNMENT).unwrap();
@@ -323,6 +324,14 @@ impl Buffer {
                 length,
             })
     }
+
+    /// Returns true if this [`Buffer`] is equal to `other`, using pointer comparisons
+    /// to determine buffer equality. This is cheaper than `PartialEq::eq` but may
+    /// return false when the arrays are logically equal
+    #[inline]
+    pub fn ptr_eq(&self, other: &Self) -> bool {
+        self.ptr == other.ptr && self.length == other.length
+    }
 }
 
 /// Creating a `Buffer` instance by copying the memory from a `AsRef<[u8]>` into a newly
@@ -360,6 +369,12 @@ impl From<MutableBuffer> for Buffer {
     #[inline]
     fn from(buffer: MutableBuffer) -> Self {
         buffer.into_buffer()
+    }
+}
+
+impl<T: ArrowNativeType> From<BufferBuilder<T>> for Buffer {
+    fn from(mut value: BufferBuilder<T>) -> Self {
+        value.finish()
     }
 }
 
@@ -515,9 +530,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(
-        expected = "the offset of the new Buffer cannot exceed the existing length"
-    )]
+    #[should_panic(expected = "the offset of the new Buffer cannot exceed the existing length")]
     fn test_slice_offset_out_of_bound() {
         let buf = Buffer::from(&[2, 4, 6, 8, 10]);
         buf.slice(6);
@@ -680,9 +693,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(
-        expected = "the offset of the new Buffer cannot exceed the existing length"
-    )]
+    #[should_panic(expected = "the offset of the new Buffer cannot exceed the existing length")]
     fn slice_overflow() {
         let buffer = Buffer::from(MutableBuffer::from_len_zeroed(12));
         buffer.slice_with_length(2, usize::MAX);

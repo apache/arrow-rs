@@ -18,8 +18,7 @@
 //! Zero-sized types used to parameterize generic array implementations
 
 use crate::delta::{
-    add_days_datetime, add_months_datetime, shift_months, sub_days_datetime,
-    sub_months_datetime,
+    add_days_datetime, add_months_datetime, shift_months, sub_days_datetime, sub_months_datetime,
 };
 use crate::temporal_conversions::as_datetime_with_timezone;
 use crate::timezone::Tz;
@@ -27,9 +26,8 @@ use crate::{ArrowNativeTypeOp, OffsetSizeTrait};
 use arrow_buffer::{i256, Buffer, OffsetBuffer};
 use arrow_data::decimal::{validate_decimal256_precision, validate_decimal_precision};
 use arrow_schema::{
-    ArrowError, DataType, IntervalUnit, TimeUnit, DECIMAL128_MAX_PRECISION,
-    DECIMAL128_MAX_SCALE, DECIMAL256_MAX_PRECISION, DECIMAL256_MAX_SCALE,
-    DECIMAL_DEFAULT_SCALE,
+    ArrowError, DataType, IntervalUnit, TimeUnit, DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE,
+    DECIMAL256_MAX_PRECISION, DECIMAL256_MAX_SCALE, DECIMAL_DEFAULT_SCALE,
 };
 use chrono::{Duration, NaiveDate, NaiveDateTime};
 use half::f16;
@@ -215,19 +213,84 @@ make_type!(
     IntervalYearMonthType,
     i32,
     DataType::Interval(IntervalUnit::YearMonth),
-    "A “calendar” interval type in months."
+    "A “calendar” interval stored as the number of whole months."
 );
 make_type!(
     IntervalDayTimeType,
     i64,
     DataType::Interval(IntervalUnit::DayTime),
-    "A “calendar” interval type in days and milliseconds."
+    r#"A “calendar” interval type in days and milliseconds.
+
+## Representation
+This type is stored as a single 64 bit integer, interpreted as two i32 fields:
+1. the number of elapsed days
+2. The number of milliseconds (no leap seconds),
+
+```text
+ ┌──────────────┬──────────────┐
+ │     Days     │ Milliseconds │
+ │  (32 bits)   │  (32 bits)   │
+ └──────────────┴──────────────┘
+ 0              31            63 bit offset
+```
+Please see the [Arrow Spec](https://github.com/apache/arrow/blob/081b4022fe6f659d8765efc82b3f4787c5039e3c/format/Schema.fbs#L406-L408) for more details
+
+## Note on Comparing and Ordering for Calendar Types
+
+Values of `IntervalDayTimeType` are compared using their binary representation,
+which can lead to surprising results. Please see the description of ordering on
+[`IntervalMonthDayNanoType`] for more details
+"#
 );
 make_type!(
     IntervalMonthDayNanoType,
     i128,
     DataType::Interval(IntervalUnit::MonthDayNano),
-    "A “calendar” interval type in months, days, and nanoseconds."
+    r#"A “calendar” interval type in months, days, and nanoseconds.
+
+## Representation
+This type is stored as a single 128 bit integer,
+interpreted as three different signed integral fields:
+
+1. The number of months (32 bits)
+2. The number days (32 bits)
+2. The number of nanoseconds (64 bits).
+
+Nanoseconds does not allow for leap seconds.
+Each field is independent (e.g. there is no constraint that the quantity of
+nanoseconds represents less than a day's worth of time).
+
+```text
+┌──────────────────────────────┬─────────────┬──────────────┐
+│            Nanos             │    Days     │    Months    │
+│          (64 bits)           │ (32 bits)   │  (32 bits)   │
+└──────────────────────────────┴─────────────┴──────────────┘
+  0                            63            95           127 bit offset
+```
+Please see the [Arrow Spec](https://github.com/apache/arrow/blob/081b4022fe6f659d8765efc82b3f4787c5039e3c/format/Schema.fbs#L409-L415) for more details
+
+## Note on Comparing and Ordering for Calendar Types
+Values of `IntervalMonthDayNanoType` are compared using their binary representation,
+which can lead to surprising results.
+
+Spans of time measured in calendar units are not fixed in absolute size (e.g.
+number of seconds) which makes defining comparisons and ordering non trivial.
+For example `1 month` is 28 days for February but `1 month` is 31 days
+in December.
+
+This makes the seemingly simple operation of comparing two intervals
+complicated in practice. For example is `1 month` more or less than `30 days`? The
+answer depends on what month you are talking about.
+
+This crate defines comparisons for calendar types using their binary
+representation which is fast and efficient, but leads
+to potentially surprising results.
+
+For example a
+`IntervalMonthDayNano` of `1 month` will compare as **greater** than a
+`IntervalMonthDayNano` of `100 days` because the binary representation of `1 month`
+is larger than the binary representation of 100 days.
+"#
 );
 make_type!(
     DurationSecondType,
@@ -875,9 +938,7 @@ impl IntervalDayTimeType {
     ///
     /// * `i` - The IntervalDayTimeType to convert
     #[inline]
-    pub fn to_parts(
-        i: <IntervalDayTimeType as ArrowPrimitiveType>::Native,
-    ) -> (i32, i32) {
+    pub fn to_parts(i: <IntervalDayTimeType as ArrowPrimitiveType>::Native) -> (i32, i32) {
         let days = (i >> 32) as i32;
         let ms = i as i32;
         (days, ms)
@@ -1221,10 +1282,7 @@ pub trait DecimalType:
     fn format_decimal(value: Self::Native, precision: u8, scale: i8) -> String;
 
     /// Validates that `value` contains no more than `precision` decimal digits
-    fn validate_decimal_precision(
-        value: Self::Native,
-        precision: u8,
-    ) -> Result<(), ArrowError>;
+    fn validate_decimal_precision(value: Self::Native, precision: u8) -> Result<(), ArrowError>;
 }
 
 /// Validate that `precision` and `scale` are valid for `T`
@@ -1368,12 +1426,14 @@ pub(crate) mod bytes {
     }
 
     impl ByteArrayNativeType for [u8] {
+        #[inline]
         unsafe fn from_bytes_unchecked(b: &[u8]) -> &Self {
             b
         }
     }
 
     impl ByteArrayNativeType for str {
+        #[inline]
         unsafe fn from_bytes_unchecked(b: &[u8]) -> &Self {
             std::str::from_utf8_unchecked(b)
         }
@@ -1398,10 +1458,7 @@ pub trait ByteArrayType: 'static + Send + Sync + bytes::ByteArrayTypeSealed {
     const DATA_TYPE: DataType;
 
     /// Verifies that every consecutive pair of `offsets` denotes a valid slice of `values`
-    fn validate(
-        offsets: &OffsetBuffer<Self::Offset>,
-        values: &Buffer,
-    ) -> Result<(), ArrowError>;
+    fn validate(offsets: &OffsetBuffer<Self::Offset>, values: &Buffer) -> Result<(), ArrowError>;
 }
 
 /// [`ByteArrayType`] for string arrays
@@ -1420,10 +1477,7 @@ impl<O: OffsetSizeTrait> ByteArrayType for GenericStringType<O> {
         DataType::Utf8
     };
 
-    fn validate(
-        offsets: &OffsetBuffer<Self::Offset>,
-        values: &Buffer,
-    ) -> Result<(), ArrowError> {
+    fn validate(offsets: &OffsetBuffer<Self::Offset>, values: &Buffer) -> Result<(), ArrowError> {
         // Verify that the slice as a whole is valid UTF-8
         let validated = std::str::from_utf8(values).map_err(|e| {
             ArrowError::InvalidArgumentError(format!("Encountered non UTF-8 data: {e}"))
@@ -1469,10 +1523,7 @@ impl<O: OffsetSizeTrait> ByteArrayType for GenericBinaryType<O> {
         DataType::Binary
     };
 
-    fn validate(
-        offsets: &OffsetBuffer<Self::Offset>,
-        values: &Buffer,
-    ) -> Result<(), ArrowError> {
+    fn validate(offsets: &OffsetBuffer<Self::Offset>, values: &Buffer) -> Result<(), ArrowError> {
         // offsets are guaranteed to be monotonically increasing and non-empty
         let max_offset = offsets.last().unwrap().as_usize();
         if values.len() < max_offset {
@@ -1494,7 +1545,6 @@ pub type LargeBinaryType = GenericBinaryType<i64>;
 mod tests {
     use super::*;
     use arrow_data::{layout, BufferSpec};
-    use std::mem::size_of;
 
     #[test]
     fn month_day_nano_should_roundtrip() {
@@ -1541,7 +1591,8 @@ mod tests {
         assert_eq!(
             spec,
             &BufferSpec::FixedWidth {
-                byte_width: size_of::<T::Native>()
+                byte_width: std::mem::size_of::<T::Native>(),
+                alignment: std::mem::align_of::<T::Native>(),
             }
         );
     }

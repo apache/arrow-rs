@@ -18,8 +18,8 @@
 use arrow::array::{
     make_array, Array, ArrayRef, BooleanArray, Decimal128Array, FixedSizeBinaryArray,
     FixedSizeBinaryBuilder, FixedSizeListBuilder, GenericBinaryArray, GenericStringArray,
-    Int32Array, Int32Builder, Int64Builder, ListArray, ListBuilder, NullArray,
-    OffsetSizeTrait, StringArray, StringDictionaryBuilder, StructArray, UnionBuilder,
+    Int32Array, Int32Builder, Int64Builder, ListArray, ListBuilder, NullArray, OffsetSizeTrait,
+    StringArray, StringDictionaryBuilder, StructArray, UnionBuilder,
 };
 use arrow::datatypes::{Int16Type, Int32Type};
 use arrow_array::builder::{StringBuilder, StructBuilder};
@@ -399,7 +399,7 @@ fn test_empty_offsets_list_equal() {
         true,
     ))))
     .len(0)
-    .add_buffer(Buffer::from(vec![0i32, 2, 3, 4, 6, 7, 8].to_byte_slice()))
+    .add_buffer(Buffer::from([0i32, 2, 3, 4, 6, 7, 8].to_byte_slice()))
     .add_child_data(Int32Array::from(vec![1, 2, -1, -2, 3, 4, -3, -4]).into_data())
     .null_bit_buffer(Some(Buffer::from(vec![0b00001001])))
     .build()
@@ -437,7 +437,7 @@ fn test_list_null() {
         true,
     ))))
     .len(6)
-    .add_buffer(Buffer::from(vec![0i32, 2, 3, 4, 6, 7, 8].to_byte_slice()))
+    .add_buffer(Buffer::from([0i32, 2, 3, 4, 6, 7, 8].to_byte_slice()))
     .add_child_data(c_values.into_data())
     .null_bit_buffer(Some(Buffer::from(vec![0b00001001])))
     .build()
@@ -460,7 +460,7 @@ fn test_list_null() {
         true,
     ))))
     .len(6)
-    .add_buffer(Buffer::from(vec![0i32, 2, 3, 4, 6, 7, 8].to_byte_slice()))
+    .add_buffer(Buffer::from([0i32, 2, 3, 4, 6, 7, 8].to_byte_slice()))
     .add_child_data(d_values.into_data())
     .null_bit_buffer(Some(Buffer::from(vec![0b00001001])))
     .build()
@@ -530,22 +530,10 @@ fn test_fixed_size_binary_null() {
 #[test]
 fn test_fixed_size_binary_offsets() {
     // Test the case where offset != 0
-    let a = create_fixed_size_binary_array([
-        Some(b"hello"),
-        None,
-        None,
-        Some(b"world"),
-        None,
-        None,
-    ]);
-    let b = create_fixed_size_binary_array([
-        Some(b"hello"),
-        None,
-        None,
-        Some(b"arrow"),
-        None,
-        None,
-    ]);
+    let a =
+        create_fixed_size_binary_array([Some(b"hello"), None, None, Some(b"world"), None, None]);
+    let b =
+        create_fixed_size_binary_array([Some(b"hello"), None, None, Some(b"arrow"), None, None]);
 
     let a_slice = a.slice(0, 3);
     let b_slice = b.slice(0, 3);
@@ -682,22 +670,10 @@ fn test_fixed_size_list_equal() {
 // Test the case where null_count > 0
 #[test]
 fn test_fixed_list_null() {
-    let a = create_fixed_size_list_array([
-        Some(&[1, 2, 3]),
-        None,
-        None,
-        Some(&[4, 5, 6]),
-        None,
-        None,
-    ]);
-    let b = create_fixed_size_list_array([
-        Some(&[1, 2, 3]),
-        None,
-        None,
-        Some(&[4, 5, 6]),
-        None,
-        None,
-    ]);
+    let a =
+        create_fixed_size_list_array([Some(&[1, 2, 3]), None, None, Some(&[4, 5, 6]), None, None]);
+    let b =
+        create_fixed_size_list_array([Some(&[1, 2, 3]), None, None, Some(&[4, 5, 6]), None, None]);
     test_equal(&a, &b, true);
 
     let b = create_fixed_size_list_array([
@@ -710,14 +686,8 @@ fn test_fixed_list_null() {
     ]);
     test_equal(&a, &b, false);
 
-    let b = create_fixed_size_list_array([
-        Some(&[1, 2, 3]),
-        None,
-        None,
-        Some(&[3, 6, 9]),
-        None,
-        None,
-    ]);
+    let b =
+        create_fixed_size_list_array([Some(&[1, 2, 3]), None, None, Some(&[3, 6, 9]), None, None]);
     test_equal(&a, &b, false);
 
     let b = create_fixed_size_list_array([None, Some(&[4, 5, 6]), None, None]);
@@ -729,22 +699,10 @@ fn test_fixed_list_null() {
 #[test]
 fn test_fixed_list_offsets() {
     // Test the case where offset != 0
-    let a = create_fixed_size_list_array([
-        Some(&[1, 2, 3]),
-        None,
-        None,
-        Some(&[4, 5, 6]),
-        None,
-        None,
-    ]);
-    let b = create_fixed_size_list_array([
-        Some(&[1, 2, 3]),
-        None,
-        None,
-        Some(&[3, 6, 9]),
-        None,
-        None,
-    ]);
+    let a =
+        create_fixed_size_list_array([Some(&[1, 2, 3]), None, None, Some(&[4, 5, 6]), None, None]);
+    let b =
+        create_fixed_size_list_array([Some(&[1, 2, 3]), None, None, Some(&[3, 6, 9]), None, None]);
 
     let a_slice = a.slice(0, 3);
     let b_slice = b.slice(0, 3);
@@ -776,8 +734,7 @@ fn test_struct_equal() {
         Some(5),
     ]));
 
-    let a = StructArray::try_from(vec![("f1", strings.clone()), ("f2", ints.clone())])
-        .unwrap();
+    let a = StructArray::try_from(vec![("f1", strings.clone()), ("f2", ints.clone())]).unwrap();
 
     let b = StructArray::try_from(vec![("f1", strings), ("f2", ints)]).unwrap();
 
@@ -948,14 +905,10 @@ fn test_struct_equal_null_variable_size() {
     test_equal(&a, &c, false);
 }
 
-fn create_dictionary_array(
-    values: &[&str],
-    keys: &[Option<&str>],
-) -> DictionaryArray<Int16Type> {
+fn create_dictionary_array(values: &[&str], keys: &[Option<&str>]) -> DictionaryArray<Int16Type> {
     let values = StringArray::from(values.to_vec());
     let mut builder =
-        StringDictionaryBuilder::<Int16Type>::new_with_dictionary(keys.len(), &values)
-            .unwrap();
+        StringDictionaryBuilder::<Int16Type>::new_with_dictionary(keys.len(), &values).unwrap();
     for key in keys {
         if let Some(v) = key {
             builder.append(v).unwrap();
@@ -1002,40 +955,25 @@ fn test_dictionary_equal() {
 #[test]
 fn test_dictionary_equal_null() {
     // (a, b, c), (1, 2, 1, 3) => (a, b, a, c)
-    let a = create_dictionary_array(
-        &["a", "b", "c"],
-        &[Some("a"), None, Some("a"), Some("c")],
-    );
+    let a = create_dictionary_array(&["a", "b", "c"], &[Some("a"), None, Some("a"), Some("c")]);
 
     // equal to self
     test_equal(&a, &a, true);
 
     // different representation (values and keys are swapped), same result
-    let b = create_dictionary_array(
-        &["a", "c", "b"],
-        &[Some("a"), None, Some("a"), Some("c")],
-    );
+    let b = create_dictionary_array(&["a", "c", "b"], &[Some("a"), None, Some("a"), Some("c")]);
     test_equal(&a, &b, true);
 
     // different null position
-    let b = create_dictionary_array(
-        &["a", "c", "b"],
-        &[Some("a"), Some("b"), Some("a"), None],
-    );
+    let b = create_dictionary_array(&["a", "c", "b"], &[Some("a"), Some("b"), Some("a"), None]);
     test_equal(&a, &b, false);
 
     // different key
-    let b = create_dictionary_array(
-        &["a", "c", "b"],
-        &[Some("a"), None, Some("a"), Some("a")],
-    );
+    let b = create_dictionary_array(&["a", "c", "b"], &[Some("a"), None, Some("a"), Some("a")]);
     test_equal(&a, &b, false);
 
     // different values, same keys
-    let b = create_dictionary_array(
-        &["a", "b", "d"],
-        &[Some("a"), None, Some("a"), Some("d")],
-    );
+    let b = create_dictionary_array(&["a", "b", "d"], &[Some("a"), None, Some("a"), Some("d")]);
     test_equal(&a, &b, false);
 }
 
@@ -1234,9 +1172,7 @@ fn test_list_different_offsets() {
     assert_eq!(&a_slice, &b_slice);
 }
 
-fn make_struct(
-    elements: Vec<Option<(Option<&'static str>, Option<i32>)>>,
-) -> StructArray {
+fn make_struct(elements: Vec<Option<(Option<&'static str>, Option<i32>)>>) -> StructArray {
     let mut builder = StructBuilder::new(
         vec![
             Field::new("f1", DataType::Utf8, true),
@@ -1294,4 +1230,26 @@ fn test_struct_equal_slice() {
     assert_eq!(a, &b);
 
     test_equal(&a, &b, true);
+}
+
+#[test]
+fn test_list_excess_children_equal() {
+    let mut a = ListBuilder::new(FixedSizeBinaryBuilder::new(5));
+    a.values().append_value(b"11111").unwrap(); // Masked value
+    a.append_null();
+    a.values().append_value(b"22222").unwrap();
+    a.values().append_null();
+    a.append(true);
+    let a = a.finish();
+
+    let mut b = ListBuilder::new(FixedSizeBinaryBuilder::new(5));
+    b.append_null();
+    b.values().append_value(b"22222").unwrap();
+    b.values().append_null();
+    b.append(true);
+    let b = b.finish();
+
+    assert_eq!(a.value_offsets(), &[0, 1, 3]);
+    assert_eq!(b.value_offsets(), &[0, 0, 2]);
+    assert_eq!(a, b);
 }

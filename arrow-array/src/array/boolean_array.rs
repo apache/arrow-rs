@@ -18,7 +18,7 @@
 use crate::array::print_long_array;
 use crate::builder::BooleanBuilder;
 use crate::iterator::BooleanIter;
-use crate::{Array, ArrayAccessor, ArrayRef};
+use crate::{Array, ArrayAccessor, ArrayRef, Scalar};
 use arrow_buffer::{bit_util, BooleanBuffer, MutableBuffer, NullBuffer};
 use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::DataType;
@@ -99,6 +99,15 @@ impl BooleanArray {
             values: BooleanBuffer::new_unset(len),
             nulls: Some(NullBuffer::new_null(len)),
         }
+    }
+
+    /// Create a new [`Scalar`] from `value`
+    pub fn new_scalar(value: bool) -> Scalar<Self> {
+        let values = match value {
+            true => BooleanBuffer::new_set(1),
+            false => BooleanBuffer::new_unset(1),
+        };
+        Scalar::new(Self::new(values, None))
     }
 
     /// Returns the length of this array.
@@ -205,7 +214,7 @@ impl BooleanArray {
     where
         F: FnMut(T::Item) -> bool,
     {
-        let nulls = left.nulls().cloned();
+        let nulls = left.logical_nulls();
         let values = BooleanBuffer::collect_bool(left.len(), |i| unsafe {
             // SAFETY: i in range 0..len
             op(left.value_unchecked(i))
@@ -229,22 +238,26 @@ impl BooleanArray {
     ///
     /// This function panics if left and right are not the same length
     ///
-    pub fn from_binary<T: ArrayAccessor, S: ArrayAccessor, F>(
-        left: T,
-        right: S,
-        mut op: F,
-    ) -> Self
+    pub fn from_binary<T: ArrayAccessor, S: ArrayAccessor, F>(left: T, right: S, mut op: F) -> Self
     where
         F: FnMut(T::Item, S::Item) -> bool,
     {
         assert_eq!(left.len(), right.len());
 
-        let nulls = NullBuffer::union(left.nulls(), right.nulls());
+        let nulls = NullBuffer::union(
+            left.logical_nulls().as_ref(),
+            right.logical_nulls().as_ref(),
+        );
         let values = BooleanBuffer::collect_bool(left.len(), |i| unsafe {
             // SAFETY: i in range 0..len
             op(left.value_unchecked(i), right.value_unchecked(i))
         });
         Self::new(values, nulls)
+    }
+
+    /// Deconstruct this array into its constituent parts
+    pub fn into_parts(self) -> (BooleanBuffer, Option<NullBuffer>) {
+        (self.values, self.nulls)
     }
 }
 
@@ -350,8 +363,7 @@ impl From<ArrayData> for BooleanArray {
             1,
             "BooleanArray data should contain a single buffer only (values buffer)"
         );
-        let values =
-            BooleanBuffer::new(data.buffers()[0].clone(), data.offset(), data.len());
+        let values = BooleanBuffer::new(data.buffers()[0].clone(), data.offset(), data.len());
 
         Self {
             values,
@@ -422,6 +434,15 @@ impl<Ptr: std::borrow::Borrow<Option<bool>>> FromIterator<Ptr> for BooleanArray 
             )
         };
         BooleanArray::from(data)
+    }
+}
+
+impl From<BooleanBuffer> for BooleanArray {
+    fn from(values: BooleanBuffer) -> Self {
+        Self {
+            values,
+            nulls: None,
+        }
     }
 }
 
@@ -570,9 +591,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(
-        expected = "BooleanArray expected ArrayData with type Boolean got Int32"
-    )]
+    #[should_panic(expected = "BooleanArray expected ArrayData with type Boolean got Int32")]
     fn test_from_array_data_validation() {
         let _ = BooleanArray::from(ArrayData::new_empty(&DataType::Int32));
     }
@@ -603,5 +622,22 @@ mod tests {
             let expected_false = d.iter().filter(|x| matches!(x, Some(false))).count();
             assert_eq!(b.false_count(), expected_false);
         }
+    }
+
+    #[test]
+    fn test_into_parts() {
+        let boolean_array = [Some(true), None, Some(false)]
+            .into_iter()
+            .collect::<BooleanArray>();
+        let (values, nulls) = boolean_array.into_parts();
+        assert_eq!(values.values(), &[0b0000_0001]);
+        assert!(nulls.is_some());
+        assert_eq!(nulls.unwrap().buffer().as_slice(), &[0b0000_0101]);
+
+        let boolean_array =
+            BooleanArray::from(vec![false, false, false, false, false, false, false, true]);
+        let (values, nulls) = boolean_array.into_parts();
+        assert_eq!(values.values(), &[0b1000_0000]);
+        assert!(nulls.is_none());
     }
 }

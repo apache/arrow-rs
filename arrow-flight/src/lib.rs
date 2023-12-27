@@ -111,6 +111,9 @@ pub use gen::Result;
 pub use gen::SchemaResult;
 pub use gen::Ticket;
 
+/// Helper to extract HTTP/gRPC trailers from a tonic stream.
+mod trailers;
+
 pub mod utils;
 
 #[cfg(feature = "flight-sql-experimental")]
@@ -130,10 +133,7 @@ pub struct IpcMessage(pub Bytes);
 
 // Useful conversion functions
 
-fn flight_schema_as_encoded_data(
-    arrow_schema: &Schema,
-    options: &IpcWriteOptions,
-) -> EncodedData {
+fn flight_schema_as_encoded_data(arrow_schema: &Schema, options: &IpcWriteOptions) -> EncodedData {
     let data_gen = writer::IpcDataGenerator::default();
     data_gen.schema_to_bytes(arrow_schema, options)
 }
@@ -310,16 +310,6 @@ impl TryFrom<SchemaAsIpc<'_>> for SchemaResult {
         //   a flatbuffer Message whose header is the Schema
         let IpcMessage(vals) = schema_to_ipc_format(schema_ipc)?;
         Ok(SchemaResult { schema: vals })
-    }
-}
-
-// TryFrom...
-
-impl TryFrom<i32> for DescriptorType {
-    type Error = ArrowError;
-
-    fn try_from(value: i32) -> ArrowResult<Self> {
-        value.try_into()
     }
 }
 

@@ -17,20 +17,18 @@
 
 use crate::basic::Encoding;
 use crate::bloom_filter::Sbbf;
-use crate::column::writer::encoder::{
-    ColumnValueEncoder, DataPageValues, DictionaryPage,
-};
+use crate::column::writer::encoder::{ColumnValueEncoder, DataPageValues, DictionaryPage};
 use crate::data_type::{AsBytes, ByteArray, Int32Type};
 use crate::encodings::encoding::{DeltaBitPackEncoder, Encoder};
 use crate::encodings::rle::RleEncoder;
 use crate::errors::{ParquetError, Result};
-use crate::file::properties::{WriterProperties, WriterVersion};
+use crate::file::properties::{EnabledStatistics, WriterProperties, WriterVersion};
 use crate::schema::types::ColumnDescPtr;
 use crate::util::bit_util::num_required_bits;
 use crate::util::interner::{Interner, Storage};
 use arrow_array::{
-    Array, ArrayAccessor, BinaryArray, DictionaryArray, LargeBinaryArray,
-    LargeStringArray, StringArray,
+    Array, ArrayAccessor, BinaryArray, DictionaryArray, LargeBinaryArray, LargeStringArray,
+    StringArray,
 };
 use arrow_schema::DataType;
 
@@ -119,12 +117,13 @@ impl FallbackEncoder {
     /// Create the fallback encoder for the given [`ColumnDescPtr`] and [`WriterProperties`]
     fn new(descr: &ColumnDescPtr, props: &WriterProperties) -> Result<Self> {
         // Set either main encoder or fallback encoder.
-        let encoding = props.encoding(descr.path()).unwrap_or_else(|| {
-            match props.writer_version() {
-                WriterVersion::PARQUET_1_0 => Encoding::PLAIN,
-                WriterVersion::PARQUET_2_0 => Encoding::DELTA_BYTE_ARRAY,
-            }
-        });
+        let encoding =
+            props
+                .encoding(descr.path())
+                .unwrap_or_else(|| match props.writer_version() {
+                    WriterVersion::PARQUET_1_0 => Encoding::PLAIN,
+                    WriterVersion::PARQUET_2_0 => Encoding::DELTA_BYTE_ARRAY,
+                });
 
         let encoder = match encoding {
             Encoding::PLAIN => FallbackEncoderImpl::Plain { buffer: vec![] },
@@ -232,14 +231,12 @@ impl FallbackEncoder {
         max_value: Option<ByteArray>,
     ) -> Result<DataPageValues<ByteArray>> {
         let (buf, encoding) = match &mut self.encoder {
-            FallbackEncoderImpl::Plain { buffer } => {
-                (std::mem::take(buffer), Encoding::PLAIN)
-            }
+            FallbackEncoderImpl::Plain { buffer } => (std::mem::take(buffer), Encoding::PLAIN),
             FallbackEncoderImpl::DeltaLength { buffer, lengths } => {
                 let lengths = lengths.flush_buffer()?;
 
                 let mut out = Vec::with_capacity(lengths.len() + buffer.len());
-                out.extend_from_slice(lengths.data());
+                out.extend_from_slice(&lengths);
                 out.extend_from_slice(buffer);
                 buffer.clear();
                 (out, Encoding::DELTA_LENGTH_BYTE_ARRAY)
@@ -253,11 +250,10 @@ impl FallbackEncoder {
                 let prefix_lengths = prefix_lengths.flush_buffer()?;
                 let suffix_lengths = suffix_lengths.flush_buffer()?;
 
-                let mut out = Vec::with_capacity(
-                    prefix_lengths.len() + suffix_lengths.len() + buffer.len(),
-                );
-                out.extend_from_slice(prefix_lengths.data());
-                out.extend_from_slice(suffix_lengths.data());
+                let mut out =
+                    Vec::with_capacity(prefix_lengths.len() + suffix_lengths.len() + buffer.len());
+                out.extend_from_slice(&prefix_lengths);
+                out.extend_from_slice(&suffix_lengths);
                 out.extend_from_slice(buffer);
                 buffer.clear();
                 last_value.clear();
@@ -383,6 +379,7 @@ impl DictEncoder {
 pub struct ByteArrayEncoder {
     fallback: FallbackEncoder,
     dict_encoder: Option<DictEncoder>,
+    statistics_enabled: EnabledStatistics,
     min_value: Option<ByteArray>,
     max_value: Option<ByteArray>,
     bloom_filter: Option<Sbbf>,
@@ -391,24 +388,6 @@ pub struct ByteArrayEncoder {
 impl ColumnValueEncoder for ByteArrayEncoder {
     type T = ByteArray;
     type Values = dyn Array;
-
-    fn min_max(
-        &self,
-        values: &dyn Array,
-        value_indices: Option<&[usize]>,
-    ) -> Option<(Self::T, Self::T)> {
-        match value_indices {
-            Some(indices) => {
-                let iter = indices.iter().cloned();
-                downcast_op!(values.data_type(), values, compute_min_max, iter)
-            }
-            None => {
-                let len = Array::len(values);
-                downcast_op!(values.data_type(), values, compute_min_max, 0..len)
-            }
-        }
-    }
-
     fn flush_bloom_filter(&mut self) -> Option<Sbbf> {
         self.bloom_filter.take()
     }
@@ -428,21 +407,19 @@ impl ColumnValueEncoder for ByteArrayEncoder {
             .map(|props| Sbbf::new_with_ndv_fpp(props.ndv, props.fpp))
             .transpose()?;
 
+        let statistics_enabled = props.statistics_enabled(descr.path());
+
         Ok(Self {
             fallback,
+            statistics_enabled,
+            bloom_filter,
             dict_encoder: dictionary,
             min_value: None,
             max_value: None,
-            bloom_filter,
         })
     }
 
-    fn write(
-        &mut self,
-        _values: &Self::Values,
-        _offset: usize,
-        _len: usize,
-    ) -> Result<()> {
+    fn write(&mut self, _values: &Self::Values, _offset: usize, _len: usize) -> Result<()> {
         unreachable!("should call write_gather instead")
     }
 
@@ -507,13 +484,15 @@ where
     T: ArrayAccessor + Copy,
     T::Item: Copy + Ord + AsRef<[u8]>,
 {
-    if let Some((min, max)) = compute_min_max(values, indices.iter().cloned()) {
-        if encoder.min_value.as_ref().map_or(true, |m| m > &min) {
-            encoder.min_value = Some(min);
-        }
+    if encoder.statistics_enabled != EnabledStatistics::None {
+        if let Some((min, max)) = compute_min_max(values, indices.iter().cloned()) {
+            if encoder.min_value.as_ref().map_or(true, |m| m > &min) {
+                encoder.min_value = Some(min);
+            }
 
-        if encoder.max_value.as_ref().map_or(true, |m| m < &max) {
-            encoder.max_value = Some(max);
+            if encoder.max_value.as_ref().map_or(true, |m| m < &max) {
+                encoder.max_value = Some(max);
+            }
         }
     }
 

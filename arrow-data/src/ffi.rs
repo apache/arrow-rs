@@ -168,6 +168,12 @@ impl FFI_ArrowArray {
             .collect::<Box<_>>();
         let n_children = children.len() as i64;
 
+        // As in the IPC format, emit null_count = length for Null type
+        let null_count = match data.data_type() {
+            DataType::Null => data.len(),
+            _ => data.null_count(),
+        };
+
         // create the private data owning everything.
         // any other data must be added here, e.g. via a struct, to track lifetime.
         let mut private_data = Box::new(ArrayPrivateData {
@@ -179,7 +185,7 @@ impl FFI_ArrowArray {
 
         Self {
             length: data.len() as i64,
-            null_count: data.null_count() as i64,
+            null_count: null_count as i64,
             offset: data.offset() as i64,
             n_buffers,
             n_children,
@@ -189,6 +195,22 @@ impl FFI_ArrowArray {
             release: Some(release_array),
             private_data: Box::into_raw(private_data) as *mut c_void,
         }
+    }
+
+    /// Takes ownership of the pointed to [`FFI_ArrowArray`]
+    ///
+    /// This acts to [move] the data out of `array`, setting the release callback to NULL
+    ///
+    /// # Safety
+    ///
+    /// * `array` must be [valid] for reads and writes
+    /// * `array` must be properly aligned
+    /// * `array` must point to a properly initialized value of [`FFI_ArrowArray`]
+    ///
+    /// [move]: https://arrow.apache.org/docs/format/CDataInterface.html#moving-an-array
+    /// [valid]: https://doc.rust-lang.org/std/ptr/index.html#safety
+    pub unsafe fn from_raw(array: *mut FFI_ArrowArray) -> Self {
+        std::ptr::replace(array, Self::empty())
     }
 
     /// create an empty `FFI_ArrowArray`, which can be used to import data into

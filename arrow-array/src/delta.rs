@@ -55,10 +55,7 @@ pub(crate) fn add_months_datetime<Tz: TimeZone>(
 /// Add the given number of days to the given datetime.
 ///
 /// Returns `None` when it will result in overflow.
-pub(crate) fn add_days_datetime<Tz: TimeZone>(
-    dt: DateTime<Tz>,
-    days: i32,
-) -> Option<DateTime<Tz>> {
+pub(crate) fn add_days_datetime<Tz: TimeZone>(dt: DateTime<Tz>, days: i32) -> Option<DateTime<Tz>> {
     match days.cmp(&0) {
         Ordering::Equal => Some(dt),
         Ordering::Greater => dt.checked_add_days(Days::new(days as u64)),
@@ -83,10 +80,7 @@ pub(crate) fn sub_months_datetime<Tz: TimeZone>(
 /// Substract the given number of days to the given datetime.
 ///
 /// Returns `None` when it will result in overflow.
-pub(crate) fn sub_days_datetime<Tz: TimeZone>(
-    dt: DateTime<Tz>,
-    days: i32,
-) -> Option<DateTime<Tz>> {
+pub(crate) fn sub_days_datetime<Tz: TimeZone>(dt: DateTime<Tz>, days: i32) -> Option<DateTime<Tz>> {
     match days.cmp(&0) {
         Ordering::Equal => Some(dt),
         Ordering::Greater => dt.checked_sub_days(Days::new(days as u64)),

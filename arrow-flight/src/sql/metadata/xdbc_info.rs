@@ -27,9 +27,8 @@
 use std::sync::Arc;
 
 use arrow_array::builder::{BooleanBuilder, Int32Builder, ListBuilder, StringBuilder};
-use arrow_array::cast::downcast_array;
-use arrow_array::{ArrayRef, Int32Array, ListArray, RecordBatch};
-use arrow_ord::comparison::eq_scalar;
+use arrow_array::{ArrayRef, Int32Array, ListArray, RecordBatch, Scalar};
+use arrow_ord::cmp::eq;
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
 use arrow_select::filter::filter_record_batch;
 use arrow_select::take::take;
@@ -37,9 +36,7 @@ use once_cell::sync::Lazy;
 
 use super::lexsort_to_indices;
 use crate::error::*;
-use crate::sql::{
-    CommandGetXdbcTypeInfo, Nullable, Searchable, XdbcDataType, XdbcDatetimeSubcode,
-};
+use crate::sql::{CommandGetXdbcTypeInfo, Nullable, Searchable, XdbcDataType, XdbcDatetimeSubcode};
 
 /// Data structure representing type information for xdbc types.
 #[derive(Debug, Clone, Default)]
@@ -70,8 +67,8 @@ pub struct XdbcTypeInfo {
 /// [`CommandGetXdbcTypeInfo`] are metadata requests used by a Flight SQL
 /// server to communicate supported capabilities to Flight SQL clients.
 ///
-/// Servers constuct - usually static - [`XdbcTypeInfoData`] via the [XdbcTypeInfoDataBuilder`],
-/// and build responses by passing the [`GetXdbcTypeInfoBuilder`].
+/// Servers constuct - usually static - [`XdbcTypeInfoData`] via the [`XdbcTypeInfoDataBuilder`],
+/// and build responses using [`CommandGetXdbcTypeInfo::into_builder`].
 pub struct XdbcTypeInfoData {
     batch: RecordBatch,
 }
@@ -81,8 +78,8 @@ impl XdbcTypeInfoData {
     /// from [`CommandGetXdbcTypeInfo`]
     pub fn record_batch(&self, data_type: impl Into<Option<i32>>) -> Result<RecordBatch> {
         if let Some(dt) = data_type.into() {
-            let arr: Int32Array = downcast_array(self.batch.column(1).as_ref());
-            let filter = eq_scalar(&arr, dt)?;
+            let scalar = Int32Array::from(vec![dt]);
+            let filter = eq(self.batch.column(1), &Scalar::new(&scalar))?;
             Ok(filter_record_batch(&self.batch, &filter)?)
         } else {
             Ok(self.batch.clone())
@@ -202,8 +199,7 @@ impl XdbcTypeInfoDataBuilder {
             minimum_scale_builder.append_option(info.minimum_scale);
             maximum_scale_builder.append_option(info.maximum_scale);
             sql_data_type_builder.append_value(info.sql_data_type as i32);
-            datetime_subcode_builder
-                .append_option(info.datetime_subcode.map(|code| code as i32));
+            datetime_subcode_builder.append_option(info.datetime_subcode.map(|code| code as i32));
             num_prec_radix_builder.append_option(info.num_prec_radix);
             interval_precision_builder.append_option(info.interval_precision);
         });
@@ -216,8 +212,7 @@ impl XdbcTypeInfoDataBuilder {
         let (field, offsets, values, nulls) = create_params_builder.finish().into_parts();
         // Re-defined the field to be non-nullable
         let new_field = Arc::new(field.as_ref().clone().with_nullable(false));
-        let create_params =
-            Arc::new(ListArray::new(new_field, offsets, values, nulls)) as ArrayRef;
+        let create_params = Arc::new(ListArray::new(new_field, offsets, values, nulls)) as ArrayRef;
         let nullable = Arc::new(nullable_builder.finish());
         let case_sensitive = Arc::new(case_sensitive_builder.finish());
         let searchable = Arc::new(searchable_builder.finish());

@@ -30,9 +30,9 @@ use arrow::{
 };
 use arrow_flight::{
     flight_descriptor::DescriptorType, flight_service_server::FlightService,
-    flight_service_server::FlightServiceServer, Action, ActionType, Criteria, Empty,
-    FlightData, FlightDescriptor, FlightEndpoint, FlightInfo, HandshakeRequest,
-    HandshakeResponse, IpcMessage, PutResult, SchemaAsIpc, SchemaResult, Ticket,
+    flight_service_server::FlightServiceServer, Action, ActionType, Criteria, Empty, FlightData,
+    FlightDescriptor, FlightEndpoint, FlightInfo, HandshakeRequest, HandshakeResponse, IpcMessage,
+    PutResult, SchemaAsIpc, SchemaResult, Ticket,
 };
 use futures::{channel::mpsc, sink::SinkExt, Stream, StreamExt};
 use std::convert::TryInto;
@@ -113,8 +113,7 @@ impl FlightService for FlightServiceImpl {
 
         let options = arrow::ipc::writer::IpcWriteOptions::default();
 
-        let schema =
-            std::iter::once(Ok(SchemaAsIpc::new(&flight.schema, &options).into()));
+        let schema = std::iter::once(Ok(SchemaAsIpc::new(&flight.schema, &options).into()));
 
         let batches = flight
             .chunks
@@ -126,12 +125,9 @@ impl FlightService for FlightServiceImpl {
 
                 let (encoded_dictionaries, encoded_batch) = data_gen
                     .encoded_batch(batch, &mut dictionary_tracker, &options)
-                    .expect(
-                        "DictionaryTracker configured above to not error on replacement",
-                    );
+                    .expect("DictionaryTracker configured above to not error on replacement");
 
-                let dictionary_flight_data =
-                    encoded_dictionaries.into_iter().map(Into::into);
+                let dictionary_flight_data = encoded_dictionaries.into_iter().map(Into::into);
                 let mut batch_flight_data: FlightData = encoded_batch.into();
 
                 // Only the record batch's FlightData gets app_metadata
@@ -182,8 +178,7 @@ impl FlightService for FlightServiceImpl {
 
                 let endpoint = self.endpoint_from_path(&path[0]);
 
-                let total_records: usize =
-                    flight.chunks.iter().map(|chunk| chunk.num_rows()).sum();
+                let total_records: usize = flight.chunks.iter().map(|chunk| chunk.num_rows()).sum();
 
                 let options = arrow::ipc::writer::IpcWriteOptions::default();
                 let message = SchemaAsIpc::new(&flight.schema, &options)
@@ -224,8 +219,7 @@ impl FlightService for FlightServiceImpl {
             .clone()
             .ok_or_else(|| Status::invalid_argument("Must have a descriptor"))?;
 
-        if descriptor.r#type != DescriptorType::Path as i32 || descriptor.path.is_empty()
-        {
+        if descriptor.r#type != DescriptorType::Path as i32 || descriptor.path.is_empty() {
             return Err(Status::invalid_argument("Must specify a path"));
         }
 
@@ -297,9 +291,9 @@ async fn record_batch_from_message(
     schema_ref: SchemaRef,
     dictionaries_by_id: &HashMap<i64, ArrayRef>,
 ) -> Result<RecordBatch, Status> {
-    let ipc_batch = message.header_as_record_batch().ok_or_else(|| {
-        Status::internal("Could not parse message header as record batch")
-    })?;
+    let ipc_batch = message
+        .header_as_record_batch()
+        .ok_or_else(|| Status::internal("Could not parse message header as record batch"))?;
 
     let arrow_batch_result = reader::read_record_batch(
         data_body,
@@ -320,9 +314,9 @@ async fn dictionary_from_message(
     schema_ref: SchemaRef,
     dictionaries_by_id: &mut HashMap<i64, ArrayRef>,
 ) -> Result<(), Status> {
-    let ipc_batch = message.header_as_dictionary_batch().ok_or_else(|| {
-        Status::internal("Could not parse message header as dictionary batch")
-    })?;
+    let ipc_batch = message
+        .header_as_dictionary_batch()
+        .ok_or_else(|| Status::internal("Could not parse message header as dictionary batch"))?;
 
     let dictionary_batch_result = reader::read_dictionary(
         data_body,

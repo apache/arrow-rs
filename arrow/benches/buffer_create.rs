@@ -49,8 +49,8 @@ fn mutable_buffer_iter_bitset(data: &[Vec<bool>]) -> Vec<Buffer> {
     criterion::black_box({
         data.iter()
             .map(|datum| {
-                let mut result = MutableBuffer::new((data.len() + 7) / 8)
-                    .with_bitset(datum.len(), false);
+                let mut result =
+                    MutableBuffer::new((data.len() + 7) / 8).with_bitset(datum.len(), false);
                 for (i, value) in datum.iter().enumerate() {
                     if *value {
                         unsafe {
@@ -148,10 +148,7 @@ fn benchmark(c: &mut Criterion) {
 
     c.bench_function("mutable iter extend_from_slice", |b| {
         b.iter(|| {
-            mutable_iter_extend_from_slice(
-                criterion::black_box(&data),
-                criterion::black_box(0),
-            )
+            mutable_iter_extend_from_slice(criterion::black_box(&data), criterion::black_box(0))
         })
     });
     c.bench_function("mutable", |b| {
@@ -163,9 +160,7 @@ fn benchmark(c: &mut Criterion) {
     });
 
     c.bench_function("mutable prepared", |b| {
-        b.iter(|| {
-            mutable_buffer(criterion::black_box(&data), criterion::black_box(byte_cap))
-        })
+        b.iter(|| mutable_buffer(criterion::black_box(&data), criterion::black_box(byte_cap)))
     });
 
     c.bench_function("from_slice", |b| {

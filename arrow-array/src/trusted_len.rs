@@ -63,7 +63,7 @@ mod tests {
 
     #[test]
     fn trusted_len_unzip_good() {
-        let vec = vec![Some(1u32), None];
+        let vec = [Some(1u32), None];
         let (null, buffer) = unsafe { trusted_len_unzip(vec.iter()) };
         assert_eq!(null.as_slice(), &[0b00000001]);
         assert_eq!(buffer.as_slice(), &[1u8, 0, 0, 0, 0, 0, 0, 0]);

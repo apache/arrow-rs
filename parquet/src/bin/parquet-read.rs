@@ -71,8 +71,7 @@ fn main() {
             .read_to_end(&mut buf)
             .expect("Failed to read stdin into a buffer");
         Box::new(
-            SerializedFileReader::new(bytes::Bytes::from(buf))
-                .expect("Failed to create reader"),
+            SerializedFileReader::new(bytes::Bytes::from(buf)).expect("Failed to create reader"),
         )
     } else {
         let path = Path::new(&filename);

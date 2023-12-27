@@ -21,18 +21,7 @@ use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 use std::str::FromStr;
 
-/// Returns fixed seedable RNG
-fn seedable_rng() -> StdRng {
-    StdRng::seed_from_u64(42)
-}
-
-fn create_i256_vec(size: usize) -> Vec<i256> {
-    let mut rng = seedable_rng();
-
-    (0..size)
-        .map(|_| i256::from_i128(rng.gen::<i128>()))
-        .collect()
-}
+const SIZE: usize = 1024;
 
 fn criterion_benchmark(c: &mut Criterion) {
     let numbers = vec![
@@ -54,24 +43,40 @@ fn criterion_benchmark(c: &mut Criterion) {
         });
     }
 
-    c.bench_function("i256_div", |b| {
+    let mut rng = StdRng::seed_from_u64(42);
+
+    let numerators: Vec<_> = (0..SIZE)
+        .map(|_| {
+            let high = rng.gen_range(1000..i128::MAX);
+            let low = rng.gen();
+            i256::from_parts(low, high)
+        })
+        .collect();
+
+    let divisors: Vec<_> = numerators
+        .iter()
+        .map(|n| {
+            let quotient = rng.gen_range(1..100_i32);
+            n.wrapping_div(i256::from(quotient))
+        })
+        .collect();
+
+    c.bench_function("i256_div_rem small quotient", |b| {
         b.iter(|| {
-            for number_a in create_i256_vec(10) {
-                for number_b in create_i256_vec(5) {
-                    number_a.checked_div(number_b);
-                    number_a.wrapping_div(number_b);
-                }
+            for (n, d) in numerators.iter().zip(&divisors) {
+                black_box(n.wrapping_div(*d));
             }
         });
     });
 
-    c.bench_function("i256_rem", |b| {
+    let divisors: Vec<_> = (0..SIZE)
+        .map(|_| i256::from(rng.gen_range(1..100_i32)))
+        .collect();
+
+    c.bench_function("i256_div_rem small divisor", |b| {
         b.iter(|| {
-            for number_a in create_i256_vec(10) {
-                for number_b in create_i256_vec(5) {
-                    number_a.checked_rem(number_b);
-                    number_a.wrapping_rem(number_b);
-                }
+            for (n, d) in numerators.iter().zip(&divisors) {
+                black_box(n.wrapping_div(*d));
             }
         });
     });

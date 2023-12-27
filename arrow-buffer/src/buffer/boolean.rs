@@ -90,6 +90,7 @@ impl BooleanBuffer {
 
     /// Returns a `BitChunks` instance which can be used to iterate over
     /// this buffer's bits in `u64` chunks
+    #[inline]
     pub fn bit_chunks(&self) -> BitChunks {
         BitChunks::new(self.values(), self.offset, self.len)
     }
@@ -223,13 +224,7 @@ impl BitAnd<&BooleanBuffer> for &BooleanBuffer {
     fn bitand(self, rhs: &BooleanBuffer) -> Self::Output {
         assert_eq!(self.len, rhs.len);
         BooleanBuffer {
-            buffer: buffer_bin_and(
-                &self.buffer,
-                self.offset,
-                &rhs.buffer,
-                rhs.offset,
-                self.len,
-            ),
+            buffer: buffer_bin_and(&self.buffer, self.offset, &rhs.buffer, rhs.offset, self.len),
             offset: 0,
             len: self.len,
         }
@@ -242,13 +237,7 @@ impl BitOr<&BooleanBuffer> for &BooleanBuffer {
     fn bitor(self, rhs: &BooleanBuffer) -> Self::Output {
         assert_eq!(self.len, rhs.len);
         BooleanBuffer {
-            buffer: buffer_bin_or(
-                &self.buffer,
-                self.offset,
-                &rhs.buffer,
-                rhs.offset,
-                self.len,
-            ),
+            buffer: buffer_bin_or(&self.buffer, self.offset, &rhs.buffer, rhs.offset, self.len),
             offset: 0,
             len: self.len,
         }
@@ -261,13 +250,7 @@ impl BitXor<&BooleanBuffer> for &BooleanBuffer {
     fn bitxor(self, rhs: &BooleanBuffer) -> Self::Output {
         assert_eq!(self.len, rhs.len);
         BooleanBuffer {
-            buffer: buffer_bin_xor(
-                &self.buffer,
-                self.offset,
-                &rhs.buffer,
-                rhs.offset,
-                self.len,
-            ),
+            buffer: buffer_bin_xor(&self.buffer, self.offset, &rhs.buffer, rhs.offset, self.len),
             offset: 0,
             len: self.len,
         }
@@ -428,8 +411,7 @@ mod tests {
         let buf = Buffer::from(&[0, 1, 1, 0, 0]);
         let boolean_buf = &BooleanBuffer::new(buf, offset, len);
 
-        let expected =
-            BooleanBuffer::new(Buffer::from(&[255, 254, 254, 255, 255]), offset, len);
+        let expected = BooleanBuffer::new(Buffer::from(&[255, 254, 254, 255, 255]), offset, len);
         assert_eq!(!boolean_buf, expected);
     }
 }

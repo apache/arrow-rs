@@ -34,10 +34,7 @@ use std::cmp::Ordering;
 /// let ranks = rank(&array, None).unwrap();
 /// assert_eq!(ranks, &[5, 2, 5, 2, 3]);
 /// ```
-pub fn rank(
-    array: &dyn Array,
-    options: Option<SortOptions>,
-) -> Result<Vec<u32>, ArrowError> {
+pub fn rank(array: &dyn Array, options: Option<SortOptions>) -> Result<Vec<u32>, ArrowError> {
     let options = options.unwrap_or_default();
     let ranks = downcast_primitive_array! {
         array => primitive_rank(array.values(), array.nulls(), options),
@@ -68,10 +65,7 @@ fn primitive_rank<T: ArrowNativeTypeOp>(
 }
 
 #[inline(never)]
-fn bytes_rank<T: ByteArrayType>(
-    array: &GenericByteArray<T>,
-    options: SortOptions,
-) -> Vec<u32> {
+fn bytes_rank<T: ByteArrayType>(array: &GenericByteArray<T>, options: SortOptions) -> Vec<u32> {
     let to_sort: Vec<(&[u8], u32)> = match array.nulls().filter(|n| n.null_count() > 0) {
         Some(n) => n
             .valid_indices()

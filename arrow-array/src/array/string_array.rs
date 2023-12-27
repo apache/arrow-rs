@@ -59,9 +59,7 @@ impl<OffsetSize: OffsetSizeTrait> GenericStringArray<OffsetSize> {
 
     /// Fallibly creates a [`GenericStringArray`] from a [`GenericBinaryArray`] returning
     /// an error if [`GenericBinaryArray`] contains invalid UTF-8 data
-    pub fn try_from_binary(
-        v: GenericBinaryArray<OffsetSize>,
-    ) -> Result<Self, ArrowError> {
+    pub fn try_from_binary(v: GenericBinaryArray<OffsetSize>) -> Result<Self, ArrowError> {
         let (offsets, values, nulls) = v.into_parts();
         Self::try_new(offsets, values, nulls)
     }
@@ -83,9 +81,7 @@ impl<OffsetSize: OffsetSizeTrait> From<GenericBinaryArray<OffsetSize>>
     }
 }
 
-impl<OffsetSize: OffsetSizeTrait> From<Vec<Option<&str>>>
-    for GenericStringArray<OffsetSize>
-{
+impl<OffsetSize: OffsetSizeTrait> From<Vec<Option<&str>>> for GenericStringArray<OffsetSize> {
     fn from(v: Vec<Option<&str>>) -> Self {
         v.into_iter().collect()
     }
@@ -97,9 +93,7 @@ impl<OffsetSize: OffsetSizeTrait> From<Vec<&str>> for GenericStringArray<OffsetS
     }
 }
 
-impl<OffsetSize: OffsetSizeTrait> From<Vec<Option<String>>>
-    for GenericStringArray<OffsetSize>
-{
+impl<OffsetSize: OffsetSizeTrait> From<Vec<Option<String>>> for GenericStringArray<OffsetSize> {
     fn from(v: Vec<Option<String>>) -> Self {
         v.into_iter().collect()
     }
@@ -324,14 +318,14 @@ mod tests {
 
     #[test]
     fn test_string_array_from_iter_values() {
-        let data = vec!["hello", "hello2"];
+        let data = ["hello", "hello2"];
         let array1 = StringArray::from_iter_values(data.iter());
 
         assert_eq!(array1.value(0), "hello");
         assert_eq!(array1.value(1), "hello2");
 
         // Also works with String types.
-        let data2: Vec<String> = vec!["goodbye".into(), "goodbye2".into()];
+        let data2 = ["goodbye".to_string(), "goodbye2".to_string()];
         let array2 = StringArray::from_iter_values(data2.iter());
 
         assert_eq!(array2.value(0), "goodbye");
@@ -438,13 +432,11 @@ mod tests {
         let expected: LargeStringArray = data.clone().into_iter().map(Some).collect();
 
         // Iterator reports too many items
-        let arr =
-            LargeStringArray::from_iter_values(BadIterator::new(3, 10, data.clone()));
+        let arr = LargeStringArray::from_iter_values(BadIterator::new(3, 10, data.clone()));
         assert_eq!(expected, arr);
 
         // Iterator reports too few items
-        let arr =
-            LargeStringArray::from_iter_values(BadIterator::new(3, 1, data.clone()));
+        let arr = LargeStringArray::from_iter_values(BadIterator::new(3, 1, data.clone()));
         assert_eq!(expected, arr);
     }
 
@@ -460,9 +452,11 @@ mod tests {
 
         let offsets = [0, 5, 8, 15].map(|n| O::from_usize(n).unwrap());
         let null_buffer = Buffer::from_slice_ref([0b101]);
-        let data_type = GenericListArray::<O>::DATA_TYPE_CONSTRUCTOR(Arc::new(
-            Field::new("item", DataType::UInt8, false),
-        ));
+        let data_type = GenericListArray::<O>::DATA_TYPE_CONSTRUCTOR(Arc::new(Field::new(
+            "item",
+            DataType::UInt8,
+            false,
+        )));
 
         // [None, Some("Parquet")]
         let array_data = ArrayData::builder(data_type)
@@ -493,9 +487,7 @@ mod tests {
         _test_generic_string_array_from_list_array::<i64>();
     }
 
-    fn _test_generic_string_array_from_list_array_with_child_nulls_failed<
-        O: OffsetSizeTrait,
-    >() {
+    fn _test_generic_string_array_from_list_array_with_child_nulls_failed<O: OffsetSizeTrait>() {
         let values = b"HelloArrow";
         let child_data = ArrayData::builder(DataType::UInt8)
             .len(10)
@@ -508,9 +500,11 @@ mod tests {
 
         // It is possible to create a null struct containing a non-nullable child
         // see https://github.com/apache/arrow-rs/pull/3244 for details
-        let data_type = GenericListArray::<O>::DATA_TYPE_CONSTRUCTOR(Arc::new(
-            Field::new("item", DataType::UInt8, true),
-        ));
+        let data_type = GenericListArray::<O>::DATA_TYPE_CONSTRUCTOR(Arc::new(Field::new(
+            "item",
+            DataType::UInt8,
+            true,
+        )));
 
         // [None, Some(b"Parquet")]
         let array_data = ArrayData::builder(data_type)
@@ -544,9 +538,11 @@ mod tests {
             .unwrap();
 
         let offsets = [0, 2, 3].map(|n| O::from_usize(n).unwrap());
-        let data_type = GenericListArray::<O>::DATA_TYPE_CONSTRUCTOR(Arc::new(
-            Field::new("item", DataType::UInt16, false),
-        ));
+        let data_type = GenericListArray::<O>::DATA_TYPE_CONSTRUCTOR(Arc::new(Field::new(
+            "item",
+            DataType::UInt16,
+            false,
+        )));
 
         let array_data = ArrayData::builder(data_type)
             .len(2)

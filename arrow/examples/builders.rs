@@ -59,8 +59,7 @@ fn main() {
         vec![Some(1550902545147), None, Some(1550902545147)].into();
     println!("{date_array:?}");
 
-    let time_array: PrimitiveArray<Time64NanosecondType> =
-        (0..100).collect::<Vec<i64>>().into();
+    let time_array: PrimitiveArray<Time64NanosecondType> = (0..100).collect::<Vec<i64>>().into();
     println!("{time_array:?}");
 
     // We can build arrays directly from the underlying buffers.
@@ -98,8 +97,7 @@ fn main() {
     let value_offsets = Buffer::from(&[0, 3, 6, 8].to_byte_slice());
 
     // Construct a list array from the above two
-    let list_data_type =
-        DataType::List(Arc::new(Field::new("item", DataType::Int32, false)));
+    let list_data_type = DataType::List(Arc::new(Field::new("item", DataType::Int32, false)));
     let list_data = ArrayData::builder(list_data_type)
         .len(3)
         .add_buffer(value_offsets)
@@ -119,8 +117,7 @@ fn main() {
     let struct_array = StructArray::from(vec![
         (
             Arc::new(Field::new("b", DataType::Boolean, false)),
-            Arc::new(BooleanArray::from(vec![false, false, true, true]))
-                as Arc<dyn Array>,
+            Arc::new(BooleanArray::from(vec![false, false, true, true])) as Arc<dyn Array>,
         ),
         (
             Arc::new(Field::new("c", DataType::Int32, false)),

@@ -16,7 +16,7 @@
 // under the License.
 
 //! Contains implementation of record assembly and converting Parquet types into
-//! [`Row`](crate::record::Row)s.
+//! [`Row`]s.
 
 use std::{collections::HashMap, fmt, sync::Arc};
 
@@ -82,14 +82,8 @@ impl TreeBuilder {
         let mut path = Vec::new();
 
         for field in descr.root_schema().get_fields() {
-            let reader = self.reader_tree(
-                field.clone(),
-                &mut path,
-                0,
-                0,
-                &paths,
-                row_group_reader,
-            )?;
+            let reader =
+                self.reader_tree(field.clone(), &mut path, 0, 0, &paths, row_group_reader)?;
             readers.push(reader);
         }
 
@@ -105,10 +99,7 @@ impl TreeBuilder {
         row_group_reader: &dyn RowGroupReader,
     ) -> Result<ReaderIter> {
         let num_records = row_group_reader.metadata().num_rows() as usize;
-        Ok(ReaderIter::new(
-            self.build(descr, row_group_reader)?,
-            num_records,
-        ))
+        ReaderIter::new(self.build(descr, row_group_reader)?, num_records)
     }
 
     /// Builds tree of readers for the current schema recursively.
@@ -152,11 +143,7 @@ impl TreeBuilder {
             match field.get_basic_info().converted_type() {
                 // List types
                 ConvertedType::LIST => {
-                    assert_eq!(
-                        field.get_fields().len(),
-                        1,
-                        "Invalid list type {field:?}"
-                    );
+                    assert_eq!(field.get_fields().len(), 1, "Invalid list type {field:?}");
 
                     let repeated_field = field.get_fields()[0].clone();
                     assert_eq!(
@@ -208,11 +195,7 @@ impl TreeBuilder {
                 }
                 // Map types (key-value pairs)
                 ConvertedType::MAP | ConvertedType::MAP_KEY_VALUE => {
-                    assert_eq!(
-                        field.get_fields().len(),
-                        1,
-                        "Invalid map type: {field:?}"
-                    );
+                    assert_eq!(field.get_fields().len(), 1, "Invalid map type: {field:?}");
                     assert!(
                         !field.get_fields()[0].is_primitive(),
                         "Invalid map type: {field:?}"
@@ -274,7 +257,7 @@ impl TreeBuilder {
                     let required_field = Type::group_type_builder(field.name())
                         .with_repetition(Repetition::REQUIRED)
                         .with_converted_type(field.get_basic_info().converted_type())
-                        .with_fields(&mut Vec::from(field.get_fields()))
+                        .with_fields(field.get_fields().to_vec())
                         .build()?;
 
                     path.pop();
@@ -288,12 +271,12 @@ impl TreeBuilder {
                         row_group_reader,
                     )?;
 
-                    Reader::RepeatedReader(
+                    return Ok(Reader::RepeatedReader(
                         field,
                         curr_def_level - 1,
                         curr_rep_level - 1,
                         Box::new(reader),
-                    )
+                    ));
                 }
                 // Group types (structs)
                 _ => {
@@ -404,8 +387,7 @@ impl Reader {
             Reader::GroupReader(_, _, ref mut readers) => {
                 let mut fields = Vec::new();
                 for reader in readers {
-                    fields
-                        .push((String::from(reader.field_name()), reader.read_field()?));
+                    fields.push((String::from(reader.field_name()), reader.read_field()?));
                 }
                 Ok(make_row(fields))
             }
@@ -426,7 +408,7 @@ impl Reader {
                 if reader.current_def_level() > def_level {
                     reader.read_field()?
                 } else {
-                    reader.advance_columns();
+                    reader.advance_columns()?;
                     Field::Null
                 }
             }
@@ -436,12 +418,9 @@ impl Reader {
                     if reader.repetition() != Repetition::OPTIONAL
                         || reader.current_def_level() > def_level
                     {
-                        fields.push((
-                            String::from(reader.field_name()),
-                            reader.read_field()?,
-                        ));
+                        fields.push((String::from(reader.field_name()), reader.read_field()?));
                     } else {
-                        reader.advance_columns();
+                        reader.advance_columns()?;
                         fields.push((String::from(reader.field_name()), Field::Null));
                     }
                 }
@@ -454,7 +433,7 @@ impl Reader {
                     if reader.current_def_level() > def_level {
                         elements.push(reader.read_field()?);
                     } else {
-                        reader.advance_columns();
+                        reader.advance_columns()?;
                         // If the current definition level is equal to the definition
                         // level of this repeated type, then the
                         // result is an empty list and the repetition level
@@ -471,20 +450,14 @@ impl Reader {
                 }
                 Field::ListInternal(make_list(elements))
             }
-            Reader::KeyValueReader(
-                _,
-                def_level,
-                rep_level,
-                ref mut keys,
-                ref mut values,
-            ) => {
+            Reader::KeyValueReader(_, def_level, rep_level, ref mut keys, ref mut values) => {
                 let mut pairs = Vec::new();
                 loop {
                     if keys.current_def_level() > def_level {
                         pairs.push((keys.read_field()?, values.read_field()?));
                     } else {
-                        keys.advance_columns();
-                        values.advance_columns();
+                        keys.advance_columns()?;
+                        values.advance_columns()?;
                         // If the current definition level is equal to the definition
                         // level of this repeated type, then the
                         // result is an empty list and the repetition level
@@ -577,25 +550,20 @@ impl Reader {
     }
 
     /// Advances leaf columns for the current reader.
-    fn advance_columns(&mut self) {
+    fn advance_columns(&mut self) -> Result<()> {
         match *self {
-            Reader::PrimitiveReader(_, ref mut column) => {
-                column.read_next().unwrap();
-            }
-            Reader::OptionReader(_, ref mut reader) => {
-                reader.advance_columns();
-            }
+            Reader::PrimitiveReader(_, ref mut column) => column.read_next().map(|_| ()),
+            Reader::OptionReader(_, ref mut reader) => reader.advance_columns(),
             Reader::GroupReader(_, _, ref mut readers) => {
                 for reader in readers {
-                    reader.advance_columns();
+                    reader.advance_columns()?;
                 }
+                Ok(())
             }
-            Reader::RepeatedReader(_, _, _, ref mut reader) => {
-                reader.advance_columns();
-            }
+            Reader::RepeatedReader(_, _, _, ref mut reader) => reader.advance_columns(),
             Reader::KeyValueReader(_, _, _, ref mut keys, ref mut values) => {
-                keys.advance_columns();
-                values.advance_columns();
+                keys.advance_columns()?;
+                values.advance_columns()
             }
         }
     }
@@ -618,7 +586,7 @@ impl fmt::Display for Reader {
 // Row iterators
 
 /// The enum Either with variants That represents a reference and a box of
-/// [`FileReader`](crate::file::reader::FileReader).
+/// [`FileReader`].
 enum Either<'a> {
     Left(&'a dyn FileReader),
     Right(Box<dyn FileReader>),
@@ -633,9 +601,20 @@ impl<'a> Either<'a> {
     }
 }
 
-/// Iterator of [`Row`](crate::record::Row)s.
-/// It is used either for a single row group to iterate over data in that row group, or
-/// an entire file with auto buffering of all row groups.
+/// Access parquet data as an iterator of [`Row`]
+///
+/// # Caveats
+///
+/// Parquet stores data in a columnar fashion using [Dremel] encoding, and is therefore highly
+/// optimised for reading data by column, not row. As a consequence applications concerned with
+/// performance should prefer the columnar arrow or [ColumnReader] APIs.
+///
+/// Additionally the current implementation does not correctly handle repeated fields ([#2394]),
+/// and workloads looking to handle such schema should use the other APIs.
+///
+/// [#2394]: https://github.com/apache/arrow-rs/issues/2394
+/// [ColumnReader]: crate::file::reader::RowGroupReader::get_column_reader
+/// [Dremel]: https://research.google/pubs/pub36632/
 pub struct RowIter<'a> {
     descr: SchemaDescPtr,
     tree_builder: TreeBuilder,
@@ -646,7 +625,7 @@ pub struct RowIter<'a> {
 }
 
 impl<'a> RowIter<'a> {
-    /// Creates a new iterator of [`Row`](crate::record::Row)s.
+    /// Creates a new iterator of [`Row`]s.
     fn new(
         file_reader: Option<Either<'a>>,
         row_iter: Option<ReaderIter>,
@@ -668,23 +647,18 @@ impl<'a> RowIter<'a> {
         }
     }
 
-    /// Creates iterator of [`Row`](crate::record::Row)s for all row groups in a
+    /// Creates iterator of [`Row`]s for all row groups in a
     /// file.
     pub fn from_file(proj: Option<Type>, reader: &'a dyn FileReader) -> Result<Self> {
         let either = Either::Left(reader);
-        let descr = Self::get_proj_descr(
-            proj,
-            reader.metadata().file_metadata().schema_descr_ptr(),
-        )?;
+        let descr =
+            Self::get_proj_descr(proj, reader.metadata().file_metadata().schema_descr_ptr())?;
 
         Ok(Self::new(Some(either), None, descr))
     }
 
-    /// Creates iterator of [`Row`](crate::record::Row)s for a specific row group.
-    pub fn from_row_group(
-        proj: Option<Type>,
-        reader: &'a dyn RowGroupReader,
-    ) -> Result<Self> {
+    /// Creates iterator of [`Row`]s for a specific row group.
+    pub fn from_row_group(proj: Option<Type>, reader: &'a dyn RowGroupReader) -> Result<Self> {
         let descr = Self::get_proj_descr(proj, reader.metadata().schema_descr_ptr())?;
         let tree_builder = Self::tree_builder();
         let row_iter = tree_builder.as_iter(descr.clone(), reader)?;
@@ -694,8 +668,7 @@ impl<'a> RowIter<'a> {
         Ok(Self::new(None, Some(row_iter), descr))
     }
 
-    /// Creates a iterator of [`Row`](crate::record::Row)s from a
-    /// [`FileReader`](crate::file::reader::FileReader) using the full file schema.
+    /// Creates a iterator of [`Row`]s from a [`FileReader`] using the full file schema.
     pub fn from_file_into(reader: Box<dyn FileReader>) -> Self {
         let either = Either::Right(reader);
         let descr = either
@@ -707,7 +680,7 @@ impl<'a> RowIter<'a> {
         Self::new(Some(either), None, descr)
     }
 
-    /// Tries to create a iterator of [`Row`](crate::record::Row)s using projections.
+    /// Tries to create a iterator of [`Row`]s using projections.
     /// Returns a error if a file reader is not the source of this iterator.
     ///
     /// The Projected schema can be a subset of or equal to the file schema,
@@ -731,10 +704,7 @@ impl<'a> RowIter<'a> {
     /// Helper method to get schema descriptor for projected schema.
     /// If projection is None, then full schema is returned.
     #[inline]
-    fn get_proj_descr(
-        proj: Option<Type>,
-        root_descr: SchemaDescPtr,
-    ) -> Result<SchemaDescPtr> {
+    fn get_proj_descr(proj: Option<Type>, root_descr: SchemaDescPtr) -> Result<SchemaDescPtr> {
         match proj {
             Some(projection) => {
                 // check if projection is part of file schema
@@ -746,6 +716,12 @@ impl<'a> RowIter<'a> {
             }
             None => Ok(root_descr),
         }
+    }
+
+    /// Sets batch size for this row iter.
+    pub fn with_batch_size(mut self, batch_size: usize) -> Self {
+        self.tree_builder = self.tree_builder.with_batch_size(batch_size);
+        self
     }
 
     /// Returns common tree builder, so the same settings are applied to both iterators
@@ -793,20 +769,20 @@ impl<'a> Iterator for RowIter<'a> {
     }
 }
 
-/// Internal iterator of [`Row`](crate::record::Row)s for a reader.
+/// Internal iterator of [`Row`]s for a reader.
 pub struct ReaderIter {
     root_reader: Reader,
     records_left: usize,
 }
 
 impl ReaderIter {
-    fn new(mut root_reader: Reader, num_records: usize) -> Self {
+    fn new(mut root_reader: Reader, num_records: usize) -> Result<Self> {
         // Prepare root reader by advancing all column vectors
-        root_reader.advance_columns();
-        Self {
+        root_reader.advance_columns()?;
+        Ok(Self {
             root_reader,
             records_left: num_records,
-        }
+        })
     }
 }
 
@@ -827,11 +803,14 @@ impl Iterator for ReaderIter {
 mod tests {
     use super::*;
 
+    use crate::data_type::Int64Type;
     use crate::errors::Result;
     use crate::file::reader::{FileReader, SerializedFileReader};
-    use crate::record::api::{Field, Row, RowAccessor, RowFormatter};
+    use crate::file::writer::SerializedFileWriter;
+    use crate::record::api::{Field, Row, RowAccessor};
     use crate::schema::parser::parse_message_type;
     use crate::util::test_common::file_util::{get_test_file, get_test_path};
+    use bytes::Bytes;
     use std::convert::TryFrom;
 
     // Convenient macros to assemble row, list, map, and group.
@@ -994,17 +973,11 @@ mod tests {
                                     list![
                                         group![
                                             ("E".to_string(), Field::Int(10)),
-                                            (
-                                                "F".to_string(),
-                                                Field::Str("aaa".to_string())
-                                            )
+                                            ("F".to_string(), Field::Str("aaa".to_string()))
                                         ],
                                         group![
                                             ("E".to_string(), Field::Int(-10)),
-                                            (
-                                                "F".to_string(),
-                                                Field::Str("bbb".to_string())
-                                            )
+                                            ("F".to_string(), Field::Str("bbb".to_string()))
                                         ]
                                     ],
                                     list![group![
@@ -1084,10 +1057,7 @@ mod tests {
                                         ],
                                         group![
                                             ("E".to_string(), Field::Int(10)),
-                                            (
-                                                "F".to_string(),
-                                                Field::Str("aaa".to_string())
-                                            )
+                                            ("F".to_string(), Field::Str("aaa".to_string()))
                                         ],
                                         group![
                                             ("E".to_string(), Field::Null),
@@ -1095,10 +1065,7 @@ mod tests {
                                         ],
                                         group![
                                             ("E".to_string(), Field::Int(-10)),
-                                            (
-                                                "F".to_string(),
-                                                Field::Str("bbb".to_string())
-                                            )
+                                            ("F".to_string(), Field::Str("bbb".to_string()))
                                         ],
                                         group![
                                             ("E".to_string(), Field::Null),
@@ -1108,10 +1075,7 @@ mod tests {
                                     list![
                                         group![
                                             ("E".to_string(), Field::Int(11)),
-                                            (
-                                                "F".to_string(),
-                                                Field::Str("c".to_string())
-                                            )
+                                            ("F".to_string(), Field::Str("c".to_string()))
                                         ],
                                         Field::Null
                                     ],
@@ -1135,10 +1099,7 @@ mod tests {
                                 ),
                                 (
                                     Field::Str("g2".to_string()),
-                                    group![(
-                                        "H".to_string(),
-                                        group![("i".to_string(), list![])]
-                                    )]
+                                    group![("H".to_string(), group![("i".to_string(), list![])])]
                                 ),
                                 (Field::Str("g3".to_string()), Field::Null),
                                 (
@@ -1272,8 +1233,7 @@ mod tests {
       }
     ";
         let schema = parse_message_type(schema).unwrap();
-        let rows =
-            test_file_reader_rows("nested_maps.snappy.parquet", Some(schema)).unwrap();
+        let rows = test_file_reader_rows("nested_maps.snappy.parquet", Some(schema)).unwrap();
         let expected_rows = vec![
             row![
                 ("c".to_string(), Field::Double(1.0)),
@@ -1340,8 +1300,7 @@ mod tests {
       }
     ";
         let schema = parse_message_type(schema).unwrap();
-        let rows =
-            test_file_reader_rows("nested_maps.snappy.parquet", Some(schema)).unwrap();
+        let rows = test_file_reader_rows("nested_maps.snappy.parquet", Some(schema)).unwrap();
         let expected_rows = vec![
             row![(
                 "a".to_string(),
@@ -1407,8 +1366,7 @@ mod tests {
       }
     ";
         let schema = parse_message_type(schema).unwrap();
-        let rows =
-            test_file_reader_rows("nested_lists.snappy.parquet", Some(schema)).unwrap();
+        let rows = test_file_reader_rows("nested_lists.snappy.parquet", Some(schema)).unwrap();
         let expected_rows = vec![
             row![(
                 "a".to_string(),
@@ -1501,33 +1459,26 @@ mod tests {
     #[test]
     fn test_file_reader_iter() {
         let path = get_test_path("alltypes_plain.parquet");
-        let vec = vec![path]
-            .iter()
-            .map(|p| SerializedFileReader::try_from(p.as_path()).unwrap())
-            .flat_map(|r| RowIter::from_file_into(Box::new(r)))
-            .flat_map(|r| r.unwrap().get_int(0))
-            .collect::<Vec<_>>();
+        let reader = SerializedFileReader::try_from(path.as_path()).unwrap();
+        let iter = RowIter::from_file_into(Box::new(reader));
 
-        assert_eq!(vec, vec![4, 5, 6, 7, 2, 3, 0, 1]);
+        let values: Vec<_> = iter.flat_map(|r| r.unwrap().get_int(0)).collect();
+        assert_eq!(values, &[4, 5, 6, 7, 2, 3, 0, 1]);
     }
 
     #[test]
     fn test_file_reader_iter_projection() {
         let path = get_test_path("alltypes_plain.parquet");
-        let values = vec![path]
-            .iter()
-            .map(|p| SerializedFileReader::try_from(p.as_path()).unwrap())
-            .flat_map(|r| {
-                let schema = "message schema { OPTIONAL INT32 id; }";
-                let proj = parse_message_type(schema).ok();
+        let reader = SerializedFileReader::try_from(path.as_path()).unwrap();
+        let schema = "message schema { OPTIONAL INT32 id; }";
+        let proj = parse_message_type(schema).ok();
 
-                RowIter::from_file_into(Box::new(r)).project(proj).unwrap()
-            })
-            .map(|r| format!("id:{}", r.unwrap().fmt(0)))
-            .collect::<Vec<_>>()
-            .join(", ");
+        let iter = RowIter::from_file_into(Box::new(reader))
+            .project(proj)
+            .unwrap();
+        let values: Vec<_> = iter.flat_map(|r| r.unwrap().get_int(0)).collect();
 
-        assert_eq!(values, "id:4, id:5, id:6, id:7, id:2, id:3, id:0, id:1");
+        assert_eq!(values, &[4, 5, 6, 7, 2, 3, 0, 1]);
     }
 
     #[test]
@@ -1619,6 +1570,106 @@ mod tests {
                     )]
                 )
             ],
+        ];
+
+        assert_eq!(rows, expected_rows);
+    }
+
+    #[test]
+    fn test_tree_reader_handle_nested_repeated_fields_with_no_annotation() {
+        // Create schema
+        let schema = Arc::new(
+            parse_message_type(
+                "
+            message schema {
+                REPEATED group level1 {
+                    REPEATED group level2 {
+                        REQUIRED group level3 {
+                            REQUIRED INT64 value3;
+                        }
+                    }
+                    REQUIRED INT64 value1;
+                }
+            }",
+            )
+            .unwrap(),
+        );
+
+        // Write Parquet file to buffer
+        let mut buffer: Vec<u8> = Vec::new();
+        let mut file_writer =
+            SerializedFileWriter::new(&mut buffer, schema, Default::default()).unwrap();
+        let mut row_group_writer = file_writer.next_row_group().unwrap();
+
+        // Write column level1.level2.level3.value3
+        let mut column_writer = row_group_writer.next_column().unwrap().unwrap();
+        column_writer
+            .typed::<Int64Type>()
+            .write_batch(&[30, 31, 32], Some(&[2, 2, 2]), Some(&[0, 0, 0]))
+            .unwrap();
+        column_writer.close().unwrap();
+
+        // Write column level1.value1
+        let mut column_writer = row_group_writer.next_column().unwrap().unwrap();
+        column_writer
+            .typed::<Int64Type>()
+            .write_batch(&[10, 11, 12], Some(&[1, 1, 1]), Some(&[0, 0, 0]))
+            .unwrap();
+        column_writer.close().unwrap();
+
+        // Finalize Parquet file
+        row_group_writer.close().unwrap();
+        file_writer.close().unwrap();
+        assert_eq!(&buffer[0..4], b"PAR1");
+
+        // Read Parquet file from buffer
+        let file_reader = SerializedFileReader::new(Bytes::from(buffer)).unwrap();
+        let rows: Vec<_> = file_reader
+            .get_row_iter(None)
+            .unwrap()
+            .map(|row| row.unwrap())
+            .collect();
+
+        let expected_rows = vec![
+            row![(
+                "level1".to_string(),
+                list![group![
+                    (
+                        "level2".to_string(),
+                        list![group![(
+                            "level3".to_string(),
+                            group![("value3".to_string(), Field::Long(30))]
+                        )]]
+                    ),
+                    ("value1".to_string(), Field::Long(10))
+                ]]
+            )],
+            row![(
+                "level1".to_string(),
+                list![group![
+                    (
+                        "level2".to_string(),
+                        list![group![(
+                            "level3".to_string(),
+                            group![("value3".to_string(), Field::Long(31))]
+                        )]]
+                    ),
+                    ("value1".to_string(), Field::Long(11))
+                ]]
+            )],
+            row![(
+                "level1".to_string(),
+                list![group![
+                    (
+                        "level2".to_string(),
+                        list![group![(
+                            "level3".to_string(),
+                            group![("value3".to_string(), Field::Long(32))]
+                        )]]
+                    ),
+                    ("value1".to_string(), Field::Long(12))
+                ]]
+            )],
         ];
 
         assert_eq!(rows, expected_rows);

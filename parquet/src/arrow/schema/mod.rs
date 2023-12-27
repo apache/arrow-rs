@@ -37,13 +37,15 @@ use crate::basic::{
 };
 use crate::errors::{ParquetError, Result};
 use crate::file::{metadata::KeyValue, properties::WriterProperties};
-use crate::schema::types::{ColumnDescriptor, SchemaDescriptor, Type, TypePtr};
+use crate::schema::types::{ColumnDescriptor, SchemaDescriptor, Type};
 
 mod complex;
 mod primitive;
 
 use crate::arrow::ProjectionMask;
 pub(crate) use complex::{ParquetField, ParquetFieldType};
+
+use super::PARQUET_FIELD_ID_META_KEY;
 
 /// Convert Parquet schema to Arrow schema including optional metadata
 ///
@@ -230,13 +232,13 @@ pub(crate) fn add_encoded_arrow_schema_to_metadata(
 
 /// Convert arrow schema to parquet schema
 pub fn arrow_to_parquet_schema(schema: &Schema) -> Result<SchemaDescriptor> {
-    let fields: Result<Vec<TypePtr>> = schema
+    let fields = schema
         .fields()
         .iter()
         .map(|field| arrow_to_parquet_type(field).map(Arc::new))
-        .collect();
+        .collect::<Result<_>>()?;
     let group = Type::group_type_builder("arrow_schema")
-        .with_fields(&mut fields?)
+        .with_fields(fields)
         .build()?;
     Ok(SchemaDescriptor::new(Arc::new(group)))
 }
@@ -268,12 +270,20 @@ fn parse_key_value_metadata(
 /// Convert parquet column schema to arrow field.
 pub fn parquet_to_arrow_field(parquet_column: &ColumnDescriptor) -> Result<Field> {
     let field = complex::convert_type(&parquet_column.self_type_ptr())?;
-
-    Ok(Field::new(
+    let mut ret = Field::new(
         parquet_column.name(),
         field.arrow_type,
         field.nullable,
-    ))
+    );
+
+    let basic_info = parquet_column.self_type().get_basic_info();
+    if basic_info.has_id() {
+        let mut meta = HashMap::with_capacity(1);
+        meta.insert(PARQUET_FIELD_ID_META_KEY.to_string(), basic_info.id().to_string());
+        ret.set_metadata(meta);
+    }
+
+    Ok(ret)
 }
 
 pub fn decimal_length_from_precision(precision: u8) -> usize {
@@ -295,14 +305,17 @@ fn arrow_to_parquet_type(field: &Field) -> Result<Type> {
     } else {
         Repetition::REQUIRED
     };
+    let id = field_id(field);
     // create type from field
     match field.data_type() {
         DataType::Null => Type::primitive_type_builder(name, PhysicalType::INT32)
             .with_logical_type(Some(LogicalType::Unknown))
             .with_repetition(repetition)
+            .with_id(id)
             .build(),
         DataType::Boolean => Type::primitive_type_builder(name, PhysicalType::BOOLEAN)
             .with_repetition(repetition)
+            .with_id(id)
             .build(),
         DataType::Int8 => Type::primitive_type_builder(name, PhysicalType::INT32)
             .with_logical_type(Some(LogicalType::Integer {
@@ -310,6 +323,7 @@ fn arrow_to_parquet_type(field: &Field) -> Result<Type> {
                 is_signed: true,
             }))
             .with_repetition(repetition)
+            .with_id(id)
             .build(),
         DataType::Int16 => Type::primitive_type_builder(name, PhysicalType::INT32)
             .with_logical_type(Some(LogicalType::Integer {
@@ -317,12 +331,15 @@ fn arrow_to_parquet_type(field: &Field) -> Result<Type> {
                 is_signed: true,
             }))
             .with_repetition(repetition)
+            .with_id(id)
             .build(),
         DataType::Int32 => Type::primitive_type_builder(name, PhysicalType::INT32)
             .with_repetition(repetition)
+            .with_id(id)
             .build(),
         DataType::Int64 => Type::primitive_type_builder(name, PhysicalType::INT64)
             .with_repetition(repetition)
+            .with_id(id)
             .build(),
         DataType::UInt8 => Type::primitive_type_builder(name, PhysicalType::INT32)
             .with_logical_type(Some(LogicalType::Integer {
@@ -330,6 +347,7 @@ fn arrow_to_parquet_type(field: &Field) -> Result<Type> {
                 is_signed: false,
             }))
             .with_repetition(repetition)
+            .with_id(id)
             .build(),
         DataType::UInt16 => Type::primitive_type_builder(name, PhysicalType::INT32)
             .with_logical_type(Some(LogicalType::Integer {
@@ -337,6 +355,7 @@ fn arrow_to_parquet_type(field: &Field) -> Result<Type> {
                 is_signed: false,
             }))
             .with_repetition(repetition)
+            .with_id(id)
             .build(),
         DataType::UInt32 => Type::primitive_type_builder(name, PhysicalType::INT32)
             .with_logical_type(Some(LogicalType::Integer {
@@ -344,6 +363,7 @@ fn arrow_to_parquet_type(field: &Field) -> Result<Type> {
                 is_signed: false,
             }))
             .with_repetition(repetition)
+            .with_id(id)
             .build(),
         DataType::UInt64 => Type::primitive_type_builder(name, PhysicalType::INT64)
             .with_logical_type(Some(LogicalType::Integer {
@@ -351,18 +371,27 @@ fn arrow_to_parquet_type(field: &Field) -> Result<Type> {
                 is_signed: false,
             }))
             .with_repetition(repetition)
+            .with_id(id)
             .build(),
-        DataType::Float16 => Err(arrow_err!("Float16 arrays not supported")),
+        DataType::Float16 => Type::primitive_type_builder(name, PhysicalType::FIXED_LEN_BYTE_ARRAY)
+            .with_repetition(repetition)
+            .with_id(id)
+            .with_logical_type(Some(LogicalType::Float16))
+            .with_length(2)
+            .build(),
         DataType::Float32 => Type::primitive_type_builder(name, PhysicalType::FLOAT)
             .with_repetition(repetition)
+            .with_id(id)
             .build(),
         DataType::Float64 => Type::primitive_type_builder(name, PhysicalType::DOUBLE)
             .with_repetition(repetition)
+            .with_id(id)
             .build(),
         DataType::Timestamp(TimeUnit::Second, _) => {
             // Cannot represent seconds in LogicalType
             Type::primitive_type_builder(name, PhysicalType::INT64)
                 .with_repetition(repetition)
+                .with_id(id)
                 .build()
         }
         DataType::Timestamp(time_unit, tz) => {
@@ -384,21 +413,25 @@ fn arrow_to_parquet_type(field: &Field) -> Result<Type> {
                     },
                 }))
                 .with_repetition(repetition)
+                .with_id(id)
                 .build()
         }
         DataType::Date32 => Type::primitive_type_builder(name, PhysicalType::INT32)
             .with_logical_type(Some(LogicalType::Date))
             .with_repetition(repetition)
+            .with_id(id)
             .build(),
         // date64 is cast to date32 (#1666)
         DataType::Date64 => Type::primitive_type_builder(name, PhysicalType::INT32)
             .with_logical_type(Some(LogicalType::Date))
             .with_repetition(repetition)
+            .with_id(id)
             .build(),
         DataType::Time32(TimeUnit::Second) => {
             // Cannot represent seconds in LogicalType
             Type::primitive_type_builder(name, PhysicalType::INT32)
                 .with_repetition(repetition)
+                .with_id(id)
                 .build()
         }
         DataType::Time32(unit) => Type::primitive_type_builder(name, PhysicalType::INT32)
@@ -410,6 +443,7 @@ fn arrow_to_parquet_type(field: &Field) -> Result<Type> {
                 },
             }))
             .with_repetition(repetition)
+            .with_id(id)
             .build(),
         DataType::Time64(unit) => Type::primitive_type_builder(name, PhysicalType::INT64)
             .with_logical_type(Some(LogicalType::Time {
@@ -421,6 +455,7 @@ fn arrow_to_parquet_type(field: &Field) -> Result<Type> {
                 },
             }))
             .with_repetition(repetition)
+            .with_id(id)
             .build(),
         DataType::Duration(_) => {
             Err(arrow_err!("Converting Duration to parquet not supported",))
@@ -429,17 +464,20 @@ fn arrow_to_parquet_type(field: &Field) -> Result<Type> {
             Type::primitive_type_builder(name, PhysicalType::FIXED_LEN_BYTE_ARRAY)
                 .with_converted_type(ConvertedType::INTERVAL)
                 .with_repetition(repetition)
+                .with_id(id)
                 .with_length(12)
                 .build()
         }
         DataType::Binary | DataType::LargeBinary => {
             Type::primitive_type_builder(name, PhysicalType::BYTE_ARRAY)
                 .with_repetition(repetition)
+                .with_id(id)
                 .build()
         }
         DataType::FixedSizeBinary(length) => {
             Type::primitive_type_builder(name, PhysicalType::FIXED_LEN_BYTE_ARRAY)
                 .with_repetition(repetition)
+                .with_id(id)
                 .with_length(*length)
                 .build()
         }
@@ -459,6 +497,7 @@ fn arrow_to_parquet_type(field: &Field) -> Result<Type> {
             };
             Type::primitive_type_builder(name, physical_type)
                 .with_repetition(repetition)
+                .with_id(id)
                 .with_length(length)
                 .with_logical_type(Some(LogicalType::Decimal {
                     scale: *scale as i32,
@@ -472,18 +511,20 @@ fn arrow_to_parquet_type(field: &Field) -> Result<Type> {
             Type::primitive_type_builder(name, PhysicalType::BYTE_ARRAY)
                 .with_logical_type(Some(LogicalType::String))
                 .with_repetition(repetition)
+                .with_id(id)
                 .build()
         }
         DataType::List(f) | DataType::FixedSizeList(f, _) | DataType::LargeList(f) => {
             Type::group_type_builder(name)
-                .with_fields(&mut vec![Arc::new(
+                .with_fields(vec![Arc::new(
                     Type::group_type_builder("list")
-                        .with_fields(&mut vec![Arc::new(arrow_to_parquet_type(f)?)])
+                        .with_fields(vec![Arc::new(arrow_to_parquet_type(f)?)])
                         .with_repetition(Repetition::REPEATED)
                         .build()?,
                 )])
                 .with_logical_type(Some(LogicalType::List))
                 .with_repetition(repetition)
+                .with_id(id)
                 .build()
         }
         DataType::Struct(fields) => {
@@ -493,37 +534,31 @@ fn arrow_to_parquet_type(field: &Field) -> Result<Type> {
                 );
             }
             // recursively convert children to types/nodes
-            let fields: Result<Vec<TypePtr>> = fields
+            let fields = fields
                 .iter()
                 .map(|f| arrow_to_parquet_type(f).map(Arc::new))
-                .collect();
+                .collect::<Result<_>>()?;
             Type::group_type_builder(name)
-                .with_fields(&mut fields?)
+                .with_fields(fields)
                 .with_repetition(repetition)
+                .with_id(id)
                 .build()
         }
         DataType::Map(field, _) => {
             if let DataType::Struct(struct_fields) = field.data_type() {
                 Type::group_type_builder(name)
-                    .with_fields(&mut vec![Arc::new(
+                    .with_fields(vec![Arc::new(
                         Type::group_type_builder(field.name())
-                            .with_fields(&mut vec![
-                                Arc::new(arrow_to_parquet_type(&Field::new(
-                                    struct_fields[0].name(),
-                                    struct_fields[0].data_type().clone(),
-                                    false,
-                                ))?),
-                                Arc::new(arrow_to_parquet_type(&Field::new(
-                                    struct_fields[1].name(),
-                                    struct_fields[1].data_type().clone(),
-                                    struct_fields[1].is_nullable(),
-                                ))?),
+                            .with_fields(vec![
+                                Arc::new(arrow_to_parquet_type(&struct_fields[0])?),
+                                Arc::new(arrow_to_parquet_type(&struct_fields[1])?),
                             ])
                             .with_repetition(Repetition::REPEATED)
                             .build()?,
                     )])
                     .with_logical_type(Some(LogicalType::Map))
                     .with_repetition(repetition)
+                    .with_id(id)
                     .build()
             } else {
                 Err(arrow_err!(
@@ -534,13 +569,18 @@ fn arrow_to_parquet_type(field: &Field) -> Result<Type> {
         DataType::Union(_, _) => unimplemented!("See ARROW-8817."),
         DataType::Dictionary(_, ref value) => {
             // Dictionary encoding not handled at the schema level
-            let dict_field = Field::new(name, *value.clone(), field.is_nullable());
+            let dict_field = field.clone().with_data_type(value.as_ref().clone());
             arrow_to_parquet_type(&dict_field)
         }
         DataType::RunEndEncoded(_, _) => Err(arrow_err!(
             "Converting RunEndEncodedType to parquet not supported",
         )),
     }
+}
+
+fn field_id(field: &Field) -> Option<i32> {
+    let value = field.metadata().get(super::PARQUET_FIELD_ID_META_KEY)?;
+    value.parse().ok() // Fail quietly if not a valid integer
 }
 
 #[cfg(test)]
@@ -551,7 +591,9 @@ mod tests {
 
     use arrow::datatypes::{DataType, Field, IntervalUnit, TimeUnit};
 
+    use crate::arrow::PARQUET_FIELD_ID_META_KEY;
     use crate::file::metadata::KeyValue;
+    use crate::file::reader::FileReader;
     use crate::{
         arrow::{arrow_reader::ParquetRecordBatchReaderBuilder, ArrowWriter},
         schema::{parser::parse_message_type, types::SchemaDescriptor},
@@ -567,9 +609,10 @@ mod tests {
             REQUIRED INT32   uint8 (INTEGER(8,false));
             REQUIRED INT32   uint16 (INTEGER(16,false));
             REQUIRED INT32   int32;
-            REQUIRED INT64   int64 ;
+            REQUIRED INT64   int64;
             OPTIONAL DOUBLE  double;
             OPTIONAL FLOAT   float;
+            OPTIONAL FIXED_LEN_BYTE_ARRAY (2) float16 (FLOAT16);
             OPTIONAL BINARY  string (UTF8);
             OPTIONAL BINARY  string_2 (STRING);
             OPTIONAL BINARY  json (JSON);
@@ -591,6 +634,7 @@ mod tests {
             Field::new("int64", DataType::Int64, false),
             Field::new("double", DataType::Float64, true),
             Field::new("float", DataType::Float32, true),
+            Field::new("float16", DataType::Float16, true),
             Field::new("string", DataType::Utf8, true),
             Field::new("string_2", DataType::Utf8, true),
             Field::new("json", DataType::Utf8, true),
@@ -1266,6 +1310,7 @@ mod tests {
             REQUIRED INT64   int64;
             OPTIONAL DOUBLE  double;
             OPTIONAL FLOAT   float;
+            OPTIONAL FIXED_LEN_BYTE_ARRAY (2) float16 (FLOAT16);
             OPTIONAL BINARY  string (UTF8);
             REPEATED BOOLEAN bools;
             OPTIONAL INT32   date       (DATE);
@@ -1302,6 +1347,7 @@ mod tests {
             Field::new("int64", DataType::Int64, false),
             Field::new("double", DataType::Float64, true),
             Field::new("float", DataType::Float32, true),
+            Field::new("float16", DataType::Float16, true),
             Field::new("string", DataType::Utf8, true),
             Field::new_list(
                 "bools",
@@ -1361,6 +1407,7 @@ mod tests {
             REQUIRED INT64   int64;
             OPTIONAL DOUBLE  double;
             OPTIONAL FLOAT   float;
+            OPTIONAL FIXED_LEN_BYTE_ARRAY (2) float16 (FLOAT16);
             OPTIONAL BINARY  string (STRING);
             OPTIONAL GROUP   bools (LIST) {
                 REPEATED GROUP list {
@@ -1411,6 +1458,7 @@ mod tests {
             Field::new("int64", DataType::Int64, false),
             Field::new("double", DataType::Float64, true),
             Field::new("float", DataType::Float32, true),
+            Field::new("float16", DataType::Float16, true),
             Field::new("string", DataType::Utf8, true),
             Field::new_list(
                 "bools",
@@ -1555,17 +1603,18 @@ mod tests {
 
     #[test]
     fn test_arrow_schema_roundtrip() -> Result<()> {
-        // This tests the roundtrip of an Arrow schema
-        // Fields that are commented out fail roundtrip tests or are unsupported by the writer
-        let metadata: HashMap<String, String> =
-            [("Key".to_string(), "Value".to_string())]
-                .iter()
-                .cloned()
-                .collect();
+        let meta = |a: &[(&str, &str)]| -> HashMap<String, String> {
+            a.iter()
+                .map(|(a, b)| (a.to_string(), b.to_string()))
+                .collect()
+        };
 
         let schema = Schema::new_with_metadata(
             vec![
-                Field::new("c1", DataType::Utf8, false),
+                Field::new("c1", DataType::Utf8, false).with_metadata(meta(&[
+                    ("Key", "Foo"),
+                    (PARQUET_FIELD_ID_META_KEY, "2"),
+                ])),
                 Field::new("c2", DataType::Binary, false),
                 Field::new("c3", DataType::FixedSizeBinary(3), false),
                 Field::new("c4", DataType::Boolean, false),
@@ -1598,24 +1647,42 @@ mod tests {
                 Field::new("c20", DataType::Interval(IntervalUnit::YearMonth), false),
                 Field::new_list(
                     "c21",
-                    Field::new("list", DataType::Boolean, true),
+                    Field::new("item", DataType::Boolean, true).with_metadata(meta(&[
+                        ("Key", "Bar"),
+                        (PARQUET_FIELD_ID_META_KEY, "5"),
+                    ])),
+                    false,
+                )
+                .with_metadata(meta(&[(PARQUET_FIELD_ID_META_KEY, "4")])),
+                Field::new(
+                    "c22",
+                    DataType::FixedSizeList(
+                        Arc::new(Field::new("item", DataType::Boolean, true)),
+                        5,
+                    ),
                     false,
                 ),
-                // Field::new(
-                //     "c22",
-                //     DataType::FixedSizeList(Box::new(DataType::Boolean), 5),
-                //     false,
-                // ),
-                // Field::new(
-                //     "c23",
-                //     DataType::List(Box::new(DataType::LargeList(Box::new(
-                //         DataType::Struct(vec![
-                //             Field::new("a", DataType::Int16, true),
-                //             Field::new("b", DataType::Float64, false),
-                //         ]),
-                //     )))),
-                //     true,
-                // ),
+                Field::new_list(
+                    "c23",
+                    Field::new_large_list(
+                        "inner",
+                        Field::new(
+                            "item",
+                            DataType::Struct(
+                                vec![
+                                    Field::new("a", DataType::Int16, true),
+                                    Field::new("b", DataType::Float64, false),
+                                    Field::new("c", DataType::Float32, false),
+                                    Field::new("d", DataType::Float16, false),
+                                ]
+                                .into(),
+                            ),
+                            false,
+                        ),
+                        true,
+                    ),
+                    false,
+                ),
                 Field::new(
                     "c24",
                     DataType::Struct(Fields::from(vec![
@@ -1626,6 +1693,7 @@ mod tests {
                 ),
                 Field::new("c25", DataType::Interval(IntervalUnit::YearMonth), true),
                 Field::new("c26", DataType::Interval(IntervalUnit::DayTime), true),
+                // Duration types not supported
                 // Field::new("c27", DataType::Duration(TimeUnit::Second), false),
                 // Field::new("c28", DataType::Duration(TimeUnit::Millisecond), false),
                 // Field::new("c29", DataType::Duration(TimeUnit::Microsecond), false),
@@ -1639,19 +1707,29 @@ mod tests {
                     true,
                     123,
                     true,
-                ),
+                )
+                .with_metadata(meta(&[(PARQUET_FIELD_ID_META_KEY, "6")])),
                 Field::new("c32", DataType::LargeBinary, true),
                 Field::new("c33", DataType::LargeUtf8, true),
-                // Field::new(
-                //     "c34",
-                //     DataType::LargeList(Box::new(DataType::List(Box::new(
-                //         DataType::Struct(vec![
-                //             Field::new("a", DataType::Int16, true),
-                //             Field::new("b", DataType::Float64, true),
-                //         ]),
-                //     )))),
-                //     true,
-                // ),
+                Field::new_large_list(
+                    "c34",
+                    Field::new_list(
+                        "inner",
+                        Field::new(
+                            "item",
+                            DataType::Struct(
+                                vec![
+                                    Field::new("a", DataType::Int16, true),
+                                    Field::new("b", DataType::Float64, true),
+                                ]
+                                .into(),
+                            ),
+                            true,
+                        ),
+                        true,
+                    ),
+                    true,
+                ),
                 Field::new("c35", DataType::Null, true),
                 Field::new("c36", DataType::Decimal128(2, 1), false),
                 Field::new("c37", DataType::Decimal256(50, 20), false),
@@ -1671,29 +1749,34 @@ mod tests {
                 Field::new_map(
                     "c40",
                     "my_entries",
-                    Field::new("my_key", DataType::Utf8, false),
+                    Field::new("my_key", DataType::Utf8, false)
+                        .with_metadata(meta(&[(PARQUET_FIELD_ID_META_KEY, "8")])),
                     Field::new_list(
                         "my_value",
-                        Field::new("item", DataType::Utf8, true),
+                        Field::new("item", DataType::Utf8, true)
+                            .with_metadata(meta(&[(PARQUET_FIELD_ID_META_KEY, "10")])),
                         true,
-                    ),
+                    )
+                    .with_metadata(meta(&[(PARQUET_FIELD_ID_META_KEY, "9")])),
                     false, // fails to roundtrip keys_sorted
                     true,
-                ),
+                )
+                .with_metadata(meta(&[(PARQUET_FIELD_ID_META_KEY, "7")])),
                 Field::new_map(
                     "c41",
                     "my_entries",
                     Field::new("my_key", DataType::Utf8, false),
                     Field::new_list(
                         "my_value",
-                        Field::new("item", DataType::Utf8, true),
+                        Field::new("item", DataType::Utf8, true)
+                            .with_metadata(meta(&[(PARQUET_FIELD_ID_META_KEY, "11")])),
                         true,
                     ),
                     false, // fails to roundtrip keys_sorted
                     false,
                 ),
             ],
-            metadata,
+            meta(&[("Key", "Value")]),
         );
 
         // write to an empty parquet file so that schema is serialized
@@ -1707,8 +1790,93 @@ mod tests {
 
         // read file back
         let arrow_reader = ParquetRecordBatchReaderBuilder::try_new(file).unwrap();
+
+        // Check arrow schema
         let read_schema = arrow_reader.schema();
         assert_eq!(&schema, read_schema.as_ref());
+
+        // Walk schema finding field IDs
+        let mut stack = Vec::with_capacity(10);
+        let mut out = Vec::with_capacity(10);
+
+        let root = arrow_reader.parquet_schema().root_schema_ptr();
+        stack.push((root.name().to_string(), root));
+
+        while let Some((p, t)) = stack.pop() {
+            if t.is_group() {
+                for f in t.get_fields() {
+                    stack.push((format!("{p}.{}", f.name()), f.clone()))
+                }
+            }
+
+            let info = t.get_basic_info();
+            if info.has_id() {
+                out.push(format!("{p} -> {}", info.id()))
+            }
+        }
+        out.sort_unstable();
+        let out: Vec<_> = out.iter().map(|x| x.as_str()).collect();
+
+        assert_eq!(
+            &out,
+            &[
+                "arrow_schema.c1 -> 2",
+                "arrow_schema.c21 -> 4",
+                "arrow_schema.c21.list.item -> 5",
+                "arrow_schema.c31 -> 6",
+                "arrow_schema.c40 -> 7",
+                "arrow_schema.c40.my_entries.my_key -> 8",
+                "arrow_schema.c40.my_entries.my_value -> 9",
+                "arrow_schema.c40.my_entries.my_value.list.item -> 10",
+                "arrow_schema.c41.my_entries.my_value.list.item -> 11",
+            ]
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_read_parquet_field_ids_raw() -> Result<()> {
+        let meta = |a: &[(&str, &str)]| -> HashMap<String, String> {
+            a.iter()
+                .map(|(a, b)| (a.to_string(), b.to_string()))
+                .collect()
+        };
+        let schema = Schema::new_with_metadata(
+            vec![
+                Field::new("c1", DataType::Utf8, true).with_metadata(meta(&[
+                    (PARQUET_FIELD_ID_META_KEY, "1"),
+                ])),
+                Field::new("c2", DataType::Utf8, true).with_metadata(meta(&[
+                    (PARQUET_FIELD_ID_META_KEY, "2"),
+                ])),
+            ],
+            HashMap::new(),
+        );
+
+        let writer = ArrowWriter::try_new(
+            vec![],
+            Arc::new(schema.clone()),
+            None,
+        )?;
+        let parquet_bytes = writer.into_inner()?;
+
+        let reader = crate::file::reader::SerializedFileReader::new(
+            bytes::Bytes::from(parquet_bytes),
+        )?;
+        let schema_descriptor = reader.metadata().file_metadata().schema_descr_ptr();
+
+        // don't pass metadata so field ids are read from Parquet and not from serialized Arrow schema
+        let arrow_schema = crate::arrow::parquet_to_arrow_schema(
+            &schema_descriptor,
+            None,
+        )?;
+
+        let parq_schema_descr = crate::arrow::arrow_to_parquet_schema(&arrow_schema)?;
+        let parq_fields = parq_schema_descr.root_schema().get_fields();
+        assert_eq!(parq_fields.len(), 2);
+        assert_eq!(parq_fields[0].get_basic_info().id(), 1);
+        assert_eq!(parq_fields[1].get_basic_info().id(), 2);
 
         Ok(())
     }

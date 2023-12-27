@@ -49,10 +49,7 @@ where
 }
 
 /// See [`PrimitiveArray::try_unary`]
-pub fn try_unary<I, F, O>(
-    array: &PrimitiveArray<I>,
-    op: F,
-) -> Result<PrimitiveArray<O>, ArrowError>
+pub fn try_unary<I, F, O>(array: &PrimitiveArray<I>, op: F) -> Result<PrimitiveArray<O>, ArrowError>
 where
     I: ArrowPrimitiveType,
     O: ArrowPrimitiveType,
@@ -82,14 +79,11 @@ where
 {
     let dict_values = array.values().as_any().downcast_ref().unwrap();
     let values = unary::<T, F, T>(dict_values, op);
-    Ok(Arc::new(array.with_values(&values)))
+    Ok(Arc::new(array.with_values(Arc::new(values))))
 }
 
 /// A helper function that applies a fallible unary function to a dictionary array with primitive value type.
-fn try_unary_dict<K, F, T>(
-    array: &DictionaryArray<K>,
-    op: F,
-) -> Result<ArrayRef, ArrowError>
+fn try_unary_dict<K, F, T>(array: &DictionaryArray<K>, op: F) -> Result<ArrayRef, ArrowError>
 where
     K: ArrowDictionaryKeyType + ArrowNumericType,
     T: ArrowPrimitiveType,
@@ -105,10 +99,11 @@ where
 
     let dict_values = array.values().as_any().downcast_ref().unwrap();
     let values = try_unary::<T, F, T>(dict_values, op)?;
-    Ok(Arc::new(array.with_values(&values)))
+    Ok(Arc::new(array.with_values(Arc::new(values))))
 }
 
 /// Applies an infallible unary function to an array with primitive values.
+#[deprecated(note = "Use arrow_array::AnyDictionaryArray")]
 pub fn unary_dyn<F, T>(array: &dyn Array, op: F) -> Result<ArrayRef, ArrowError>
 where
     T: ArrowPrimitiveType,
@@ -134,6 +129,7 @@ where
 }
 
 /// Applies a fallible unary function to an array with primitive values.
+#[deprecated(note = "Use arrow_array::AnyDictionaryArray")]
 pub fn try_unary_dyn<F, T>(array: &dyn Array, op: F) -> Result<ArrayRef, ArrowError>
 where
     T: ArrowPrimitiveType,
@@ -198,7 +194,7 @@ where
         return Ok(PrimitiveArray::from(ArrayData::new_empty(&O::DATA_TYPE)));
     }
 
-    let nulls = NullBuffer::union(a.nulls(), b.nulls());
+    let nulls = NullBuffer::union(a.logical_nulls().as_ref(), b.logical_nulls().as_ref());
 
     let values = a.values().iter().zip(b.values()).map(|(l, r)| op(*l, *r));
     // JUSTIFICATION
@@ -248,7 +244,7 @@ where
         ))));
     }
 
-    let nulls = NullBuffer::union(a.nulls(), b.nulls());
+    let nulls = NullBuffer::union(a.logical_nulls().as_ref(), b.logical_nulls().as_ref());
 
     let mut builder = a.into_builder()?;
 
@@ -296,7 +292,8 @@ where
     if a.null_count() == 0 && b.null_count() == 0 {
         try_binary_no_nulls(len, a, b, op)
     } else {
-        let nulls = NullBuffer::union(a.nulls(), b.nulls()).unwrap();
+        let nulls =
+            NullBuffer::union(a.logical_nulls().as_ref(), b.logical_nulls().as_ref()).unwrap();
 
         let mut buffer = BufferBuilder::<O::Native>::new(len);
         buffer.append_n_zeroed(len);
@@ -304,8 +301,7 @@ where
 
         nulls.try_for_each_valid_idx(|idx| {
             unsafe {
-                *slice.get_unchecked_mut(idx) =
-                    op(a.value_unchecked(idx), b.value_unchecked(idx))?
+                *slice.get_unchecked_mut(idx) = op(a.value_unchecked(idx), b.value_unchecked(idx))?
             };
             Ok::<_, ArrowError>(())
         })?;
@@ -355,7 +351,9 @@ where
     if a.null_count() == 0 && b.null_count() == 0 {
         try_binary_no_nulls_mut(len, a, b, op)
     } else {
-        let nulls = NullBuffer::union(a.nulls(), b.nulls()).unwrap();
+        let nulls =
+            NullBuffer::union(a.logical_nulls().as_ref(), b.logical_nulls().as_ref()).unwrap();
+
         let mut builder = a.into_builder()?;
 
         let slice = builder.values_slice_mut();
@@ -431,9 +429,9 @@ mod tests {
     use arrow_array::types::*;
 
     #[test]
+    #[allow(deprecated)]
     fn test_unary_f64_slice() {
-        let input =
-            Float64Array::from(vec![Some(5.1f64), None, Some(6.8), None, Some(7.2)]);
+        let input = Float64Array::from(vec![Some(5.1f64), None, Some(6.8), None, Some(7.2)]);
         let input_slice = input.slice(1, 4);
         let result = unary(&input_slice, |n| n.round());
         assert_eq!(
@@ -450,6 +448,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn test_unary_dict_and_unary_dyn() {
         let mut builder = PrimitiveDictionaryBuilder::<Int8Type, Int32Type>::new();
         builder.append(5).unwrap();

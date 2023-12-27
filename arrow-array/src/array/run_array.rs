@@ -18,7 +18,7 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use arrow_buffer::{ArrowNativeType, NullBuffer, RunEndBuffer};
+use arrow_buffer::{ArrowNativeType, BooleanBufferBuilder, NullBuffer, RunEndBuffer};
 use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::{ArrowError, DataType, Field};
 
@@ -91,10 +91,7 @@ impl<R: RunEndIndexType> RunArray<R> {
     /// Attempts to create RunArray using given run_ends (index where a run ends)
     /// and the values (value of the run). Returns an error if the given data is not compatible
     /// with RunEndEncoded specification.
-    pub fn try_new(
-        run_ends: &PrimitiveArray<R>,
-        values: &dyn Array,
-    ) -> Result<Self, ArrowError> {
+    pub fn try_new(run_ends: &PrimitiveArray<R>, values: &dyn Array) -> Result<Self, ArrowError> {
         let run_ends_type = run_ends.data_type().clone();
         let values_type = values.data_type().clone();
         let ree_array_type = DataType::RunEndEncoded(
@@ -182,10 +179,7 @@ impl<R: RunEndIndexType> RunArray<R> {
     /// scaled well for larger inputs.
     /// See <https://github.com/apache/arrow-rs/pull/3622#issuecomment-1407753727> for more details.
     #[inline]
-    pub fn get_physical_indices<I>(
-        &self,
-        logical_indices: &[I],
-    ) -> Result<Vec<usize>, ArrowError>
+    pub fn get_physical_indices<I>(&self, logical_indices: &[I]) -> Result<Vec<usize>, ArrowError>
     where
         I: ArrowNativeType,
     {
@@ -211,8 +205,7 @@ impl<R: RunEndIndexType> RunArray<R> {
         });
 
         // Return early if all the logical indices cannot be converted to physical indices.
-        let largest_logical_index =
-            logical_indices[*ordered_indices.last().unwrap()].as_usize();
+        let largest_logical_index = logical_indices[*ordered_indices.last().unwrap()].as_usize();
         if largest_logical_index >= len {
             return Err(ArrowError::InvalidArgumentError(format!(
                 "Cannot convert all logical indices to physical indices. The logical index cannot be converted is {largest_logical_index}.",
@@ -225,8 +218,7 @@ impl<R: RunEndIndexType> RunArray<R> {
         let mut physical_indices = vec![0; indices_len];
 
         let mut ordered_index = 0_usize;
-        for (physical_index, run_end) in
-            self.run_ends.values().iter().enumerate().skip(skip_value)
+        for (physical_index, run_end) in self.run_ends.values().iter().enumerate().skip(skip_value)
         {
             // Get the run end index (relative to offset) of current physical index
             let run_end_value = run_end.as_usize() - offset;
@@ -234,8 +226,7 @@ impl<R: RunEndIndexType> RunArray<R> {
             // All the `logical_indices` that are less than current run end index
             // belongs to current physical index.
             while ordered_index < indices_len
-                && logical_indices[ordered_indices[ordered_index]].as_usize()
-                    < run_end_value
+                && logical_indices[ordered_indices[ordered_index]].as_usize() < run_end_value
             {
                 physical_indices[ordered_indices[ordered_index]] = physical_index;
                 ordered_index += 1;
@@ -245,8 +236,7 @@ impl<R: RunEndIndexType> RunArray<R> {
         // If there are input values >= run_ends.last_value then we'll not be able to convert
         // all logical indices to physical indices.
         if ordered_index < logical_indices.len() {
-            let logical_index =
-                logical_indices[ordered_indices[ordered_index]].as_usize();
+            let logical_index = logical_indices[ordered_indices[ordered_index]].as_usize();
             return Err(ArrowError::InvalidArgumentError(format!(
                 "Cannot convert all logical indices to physical indices. The logical index cannot be converted is {logical_index}.",
             )));
@@ -347,6 +337,43 @@ impl<T: RunEndIndexType> Array for RunArray<T> {
 
     fn nulls(&self) -> Option<&NullBuffer> {
         None
+    }
+
+    fn logical_nulls(&self) -> Option<NullBuffer> {
+        let len = self.len();
+        let nulls = self.values.logical_nulls()?;
+        let mut out = BooleanBufferBuilder::new(len);
+        let offset = self.run_ends.offset();
+        let mut valid_start = 0;
+        let mut last_end = 0;
+        for (idx, end) in self.run_ends.values().iter().enumerate() {
+            let end = end.as_usize();
+            if end < offset {
+                continue;
+            }
+            let end = (end - offset).min(len);
+            if nulls.is_null(idx) {
+                if valid_start < last_end {
+                    out.append_n(last_end - valid_start, true);
+                }
+                out.append_n(end - last_end, false);
+                valid_start = end;
+            }
+            last_end = end;
+            if end == len {
+                break;
+            }
+        }
+        if valid_start < len {
+            out.append_n(len - valid_start, true)
+        }
+        // Sanity check
+        assert_eq!(out.len(), len);
+        Some(out.finish().into())
+    }
+
+    fn is_nullable(&self) -> bool {
+        !self.is_empty() && self.values.is_nullable()
     }
 
     fn get_buffer_memory_size(&self) -> usize {
@@ -500,10 +527,7 @@ pub struct TypedRunArray<'a, R: RunEndIndexType, V> {
 // Manually implement `Clone` to avoid `V: Clone` type constraint
 impl<'a, R: RunEndIndexType, V> Clone for TypedRunArray<'a, R, V> {
     fn clone(&self) -> Self {
-        Self {
-            run_array: self.run_array,
-            values: self.values,
-        }
+        *self
     }
 }
 
@@ -567,6 +591,14 @@ impl<'a, R: RunEndIndexType, V: Sync> Array for TypedRunArray<'a, R, V> {
 
     fn nulls(&self) -> Option<&NullBuffer> {
         self.run_array.nulls()
+    }
+
+    fn logical_nulls(&self) -> Option<NullBuffer> {
+        self.run_array.logical_nulls()
+    }
+
+    fn is_nullable(&self) -> bool {
+        self.run_array.is_nullable()
     }
 
     fn get_buffer_memory_size(&self) -> usize {
@@ -662,8 +694,7 @@ mod tests {
                 seed.shuffle(&mut rng);
             }
             // repeat the items between 1 and 8 times. Cap the length for smaller sized arrays
-            let num =
-                max_run_length.min(rand::thread_rng().gen_range(1..=max_run_length));
+            let num = max_run_length.min(rand::thread_rng().gen_range(1..=max_run_length));
             for _ in 0..num {
                 result.push(seed[ix]);
             }
@@ -707,19 +738,16 @@ mod tests {
     #[test]
     fn test_run_array() {
         // Construct a value array
-        let value_data = PrimitiveArray::<Int8Type>::from_iter_values([
-            10_i8, 11, 12, 13, 14, 15, 16, 17,
-        ]);
+        let value_data =
+            PrimitiveArray::<Int8Type>::from_iter_values([10_i8, 11, 12, 13, 14, 15, 16, 17]);
 
         // Construct a run_ends array:
         let run_ends_values = [4_i16, 6, 7, 9, 13, 18, 20, 22];
-        let run_ends_data = PrimitiveArray::<Int16Type>::from_iter_values(
-            run_ends_values.iter().copied(),
-        );
+        let run_ends_data =
+            PrimitiveArray::<Int16Type>::from_iter_values(run_ends_values.iter().copied());
 
         // Construct a run ends encoded array from the above two
-        let ree_array =
-            RunArray::<Int16Type>::try_new(&run_ends_data, &value_data).unwrap();
+        let ree_array = RunArray::<Int16Type>::try_new(&run_ends_data, &value_data).unwrap();
 
         assert_eq!(ree_array.len(), 22);
         assert_eq!(ree_array.null_count(), 0);
@@ -830,8 +858,7 @@ mod tests {
         let values: StringArray = [Some("foo"), Some("bar"), None, Some("baz")]
             .into_iter()
             .collect();
-        let run_ends: Int32Array =
-            [Some(1), Some(2), Some(3), Some(4)].into_iter().collect();
+        let run_ends: Int32Array = [Some(1), Some(2), Some(3), Some(4)].into_iter().collect();
 
         let array = RunArray::<Int32Type>::try_new(&run_ends, &values).unwrap();
         assert_eq!(array.values().data_type(), &DataType::Utf8);
@@ -882,7 +909,10 @@ mod tests {
         let run_ends: Int32Array = [Some(1), None, Some(3)].into_iter().collect();
 
         let actual = RunArray::<Int32Type>::try_new(&run_ends, &values);
-        let expected = ArrowError::InvalidArgumentError("Found null values in run_ends array. The run_ends array should not have null values.".to_string());
+        let expected = ArrowError::InvalidArgumentError(
+            "Found null values in run_ends array. The run_ends array should not have null values."
+                .to_string(),
+        );
         assert_eq!(expected.to_string(), actual.err().unwrap().to_string());
     }
 
@@ -961,8 +991,7 @@ mod tests {
             let mut rng = thread_rng();
             logical_indices.shuffle(&mut rng);
 
-            let physical_indices =
-                run_array.get_physical_indices(&logical_indices).unwrap();
+            let physical_indices = run_array.get_physical_indices(&logical_indices).unwrap();
 
             assert_eq!(logical_indices.len(), physical_indices.len());
 
@@ -1039,6 +1068,28 @@ mod tests {
                 &physical_indices,
                 physical_values_array,
             );
+        }
+    }
+
+    #[test]
+    fn test_logical_nulls() {
+        let run = Int32Array::from(vec![3, 6, 9, 12]);
+        let values = Int32Array::from(vec![Some(0), None, Some(1), None]);
+        let array = RunArray::try_new(&run, &values).unwrap();
+
+        let expected = [
+            true, true, true, false, false, false, true, true, true, false, false, false,
+        ];
+
+        let n = array.logical_nulls().unwrap();
+        assert_eq!(n.null_count(), 6);
+
+        let slices = [(0, 12), (0, 2), (2, 5), (3, 0), (3, 3), (3, 4), (4, 8)];
+        for (offset, length) in slices {
+            let a = array.slice(offset, length);
+            let n = a.logical_nulls().unwrap();
+            let n = n.into_iter().collect::<Vec<_>>();
+            assert_eq!(&n, &expected[offset..offset + length], "{offset} {length}");
         }
     }
 }

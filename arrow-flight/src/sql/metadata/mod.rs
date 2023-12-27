@@ -21,10 +21,14 @@
 //! - [`GetCatalogsBuilder`] for building responses to [`CommandGetCatalogs`] queries.
 //! - [`GetDbSchemasBuilder`] for building responses to [`CommandGetDbSchemas`] queries.
 //! - [`GetTablesBuilder`]for building responses to [`CommandGetTables`] queries.
+//! - [`SqlInfoDataBuilder`]for building responses to [`CommandGetSqlInfo`] queries.
+//! - [`XdbcTypeInfoDataBuilder`]for building responses to [`CommandGetXdbcTypeInfo`] queries.
 //!
 //! [`CommandGetCatalogs`]: crate::sql::CommandGetCatalogs
 //! [`CommandGetDbSchemas`]: crate::sql::CommandGetDbSchemas
 //! [`CommandGetTables`]: crate::sql::CommandGetTables
+//! [`CommandGetSqlInfo`]: crate::sql::CommandGetSqlInfo
+//! [`CommandGetXdbcTypeInfo`]: crate::sql::CommandGetXdbcTypeInfo
 
 mod catalogs;
 mod db_schemas;
@@ -49,7 +53,7 @@ fn lexsort_to_indices(arrays: &[ArrayRef]) -> UInt32Array {
         .iter()
         .map(|a| SortField::new(a.data_type().clone()))
         .collect();
-    let mut converter = RowConverter::new(fields).unwrap();
+    let converter = RowConverter::new(fields).unwrap();
     let rows = converter.convert_columns(arrays).unwrap();
     let mut sort: Vec<_> = rows.iter().enumerate().collect();
     sort.sort_unstable_by(|(_, a), (_, b)| a.cmp(b));

@@ -41,8 +41,7 @@ pub fn regexp_is_match_utf8<OffsetSize: OffsetSizeTrait>(
 ) -> Result<BooleanArray, ArrowError> {
     if array.len() != regex_array.len() {
         return Err(ArrowError::ComputeError(
-            "Cannot perform comparison operation on arrays of different length"
-                .to_string(),
+            "Cannot perform comparison operation on arrays of different length".to_string(),
         ));
     }
     let nulls = NullBuffer::union(array.nulls(), regex_array.nulls());
@@ -51,14 +50,17 @@ pub fn regexp_is_match_utf8<OffsetSize: OffsetSizeTrait>(
     let mut result = BooleanBufferBuilder::new(array.len());
 
     let complete_pattern = match flags_array {
-        Some(flags) => Box::new(regex_array.iter().zip(flags.iter()).map(
-            |(pattern, flags)| {
-                pattern.map(|pattern| match flags {
-                    Some(flag) => format!("(?{flag}){pattern}"),
-                    None => pattern.to_string(),
-                })
-            },
-        )) as Box<dyn Iterator<Item = Option<String>>>,
+        Some(flags) => Box::new(
+            regex_array
+                .iter()
+                .zip(flags.iter())
+                .map(|(pattern, flags)| {
+                    pattern.map(|pattern| match flags {
+                        Some(flag) => format!("(?{flag}){pattern}"),
+                        None => pattern.to_string(),
+                    })
+                }),
+        ) as Box<dyn Iterator<Item = Option<String>>>,
         None => Box::new(
             regex_array
                 .iter()
@@ -79,15 +81,14 @@ pub fn regexp_is_match_utf8<OffsetSize: OffsetSizeTrait>(
                 (Some(value), Some(pattern)) => {
                     let existing_pattern = patterns.get(&pattern);
                     let re = match existing_pattern {
-                        Some(re) => re.clone(),
+                        Some(re) => re,
                         None => {
                             let re = Regex::new(pattern.as_str()).map_err(|e| {
                                 ArrowError::ComputeError(format!(
                                     "Regular expression did not compile: {e:?}"
                                 ))
                             })?;
-                            patterns.insert(pattern, re.clone());
-                            re
+                            patterns.entry(pattern).or_insert(re)
                         }
                     };
                     result.append(re.is_match(value));
@@ -178,19 +179,21 @@ pub fn regexp_match<OffsetSize: OffsetSizeTrait>(
     flags_array: Option<&GenericStringArray<OffsetSize>>,
 ) -> Result<ArrayRef, ArrowError> {
     let mut patterns: HashMap<String, Regex> = HashMap::new();
-    let builder: GenericStringBuilder<OffsetSize> =
-        GenericStringBuilder::with_capacity(0, 0);
+    let builder: GenericStringBuilder<OffsetSize> = GenericStringBuilder::with_capacity(0, 0);
     let mut list_builder = ListBuilder::new(builder);
 
     let complete_pattern = match flags_array {
-        Some(flags) => Box::new(regex_array.iter().zip(flags.iter()).map(
-            |(pattern, flags)| {
-                pattern.map(|pattern| match flags {
-                    Some(value) => format!("(?{value}){pattern}"),
-                    None => pattern.to_string(),
-                })
-            },
-        )) as Box<dyn Iterator<Item = Option<String>>>,
+        Some(flags) => Box::new(
+            regex_array
+                .iter()
+                .zip(flags.iter())
+                .map(|(pattern, flags)| {
+                    pattern.map(|pattern| match flags {
+                        Some(value) => format!("(?{value}){pattern}"),
+                        None => pattern.to_string(),
+                    })
+                }),
+        ) as Box<dyn Iterator<Item = Option<String>>>,
         None => Box::new(
             regex_array
                 .iter()
@@ -212,15 +215,14 @@ pub fn regexp_match<OffsetSize: OffsetSizeTrait>(
                 (Some(value), Some(pattern)) => {
                     let existing_pattern = patterns.get(&pattern);
                     let re = match existing_pattern {
-                        Some(re) => re.clone(),
+                        Some(re) => re,
                         None => {
                             let re = Regex::new(pattern.as_str()).map_err(|e| {
                                 ArrowError::ComputeError(format!(
                                     "Regular expression did not compile: {e:?}"
                                 ))
                             })?;
-                            patterns.insert(pattern, re.clone());
-                            re
+                            patterns.entry(pattern).or_insert(re)
                         }
                     };
                     match re.captures(value) {
@@ -290,8 +292,7 @@ mod tests {
         let pattern = StringArray::from(vec![r"x.*-(\d*)-.*"; 4]);
         let flags = StringArray::from(vec!["i"; 4]);
         let actual = regexp_match(&array, &pattern, Some(&flags)).unwrap();
-        let elem_builder: GenericStringBuilder<i32> =
-            GenericStringBuilder::with_capacity(0, 0);
+        let elem_builder: GenericStringBuilder<i32> = GenericStringBuilder::with_capacity(0, 0);
         let mut expected_builder = ListBuilder::new(elem_builder);
         expected_builder.append(false);
         expected_builder.values().append_value("7");
@@ -398,7 +399,7 @@ mod tests {
         vec!["arrow", "arrow", "arrow", "arrow", "arrow", "arrow"],
         vec!["^ar", "^AR", "ow$", "OW$", "foo", ""],
         regexp_is_match_utf8,
-        vec![true, false, true, false, false, true]
+        [true, false, true, false, false, true]
     );
     test_flag_utf8!(
         test_utf8_array_regexp_is_match_insensitive,
@@ -406,7 +407,7 @@ mod tests {
         vec!["^ar", "^AR", "ow$", "OW$", "foo", ""],
         vec!["i"; 6],
         regexp_is_match_utf8,
-        vec![true, true, true, true, false, true]
+        [true, true, true, true, false, true]
     );
 
     test_flag_utf8_scalar!(
@@ -414,14 +415,14 @@ mod tests {
         vec!["arrow", "ARROW", "parquet", "PARQUET"],
         "^ar",
         regexp_is_match_utf8_scalar,
-        vec![true, false, false, false]
+        [true, false, false, false]
     );
     test_flag_utf8_scalar!(
         test_utf8_array_regexp_is_match_empty_scalar,
         vec!["arrow", "ARROW", "parquet", "PARQUET"],
         "",
         regexp_is_match_utf8_scalar,
-        vec![true, true, true, true]
+        [true, true, true, true]
     );
     test_flag_utf8_scalar!(
         test_utf8_array_regexp_is_match_insensitive_scalar,
@@ -429,6 +430,6 @@ mod tests {
         "^ar",
         "i",
         regexp_is_match_utf8_scalar,
-        vec![true, true, false, false]
+        [true, true, false, false]
     );
 }

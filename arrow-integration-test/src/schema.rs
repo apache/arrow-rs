@@ -65,11 +65,9 @@ fn from_metadata(json: &serde_json::Value) -> Result<HashMap<String, String>> {
     match json {
         Value::Array(_) => {
             let mut hashmap = HashMap::new();
-            let values: Vec<MetadataKeyValue> = serde_json::from_value(json.clone())
-                .map_err(|_| {
-                    ArrowError::JsonError(
-                        "Unable to parse object into key-value pair".to_string(),
-                    )
+            let values: Vec<MetadataKeyValue> =
+                serde_json::from_value(json.clone()).map_err(|_| {
+                    ArrowError::JsonError("Unable to parse object into key-value pair".to_string())
                 })?;
             for meta in values {
                 hashmap.insert(meta.key.clone(), meta.value);
@@ -110,11 +108,10 @@ mod tests {
     #[test]
     fn schema_json() {
         // Add some custom metadata
-        let metadata: HashMap<String, String> =
-            [("Key".to_string(), "Value".to_string())]
-                .iter()
-                .cloned()
-                .collect();
+        let metadata: HashMap<String, String> = [("Key".to_string(), "Value".to_string())]
+            .iter()
+            .cloned()
+            .collect();
 
         let schema = Schema::new_with_metadata(
             vec![
@@ -140,10 +137,7 @@ mod tests {
                 ),
                 Field::new(
                     "c17",
-                    DataType::Timestamp(
-                        TimeUnit::Microsecond,
-                        Some("Africa/Johannesburg".into()),
-                    ),
+                    DataType::Timestamp(TimeUnit::Microsecond, Some("Africa/Johannesburg".into())),
                     false,
                 ),
                 Field::new(
@@ -197,10 +191,7 @@ mod tests {
                 Field::new("c32", DataType::Duration(TimeUnit::Nanosecond), false),
                 Field::new_dict(
                     "c33",
-                    DataType::Dictionary(
-                        Box::new(DataType::Int32),
-                        Box::new(DataType::Utf8),
-                    ),
+                    DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
                     true,
                     123,
                     true,

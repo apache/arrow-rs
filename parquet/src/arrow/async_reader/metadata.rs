@@ -17,21 +17,18 @@
 
 use crate::arrow::async_reader::AsyncFileReader;
 use crate::errors::{ParquetError, Result};
-use crate::file::footer::{decode_footer, read_metadata};
+use crate::file::footer::{decode_footer, decode_metadata};
 use crate::file::metadata::ParquetMetaData;
 use crate::file::page_index::index::Index;
-use crate::file::page_index::index_reader::{
-    acc_range, decode_column_index, decode_offset_index,
-};
+use crate::file::page_index::index_reader::{acc_range, decode_column_index, decode_offset_index};
 use bytes::Bytes;
 use futures::future::BoxFuture;
 use futures::FutureExt;
 use std::future::Future;
-use std::io::Read;
 use std::ops::Range;
 
 /// A data source that can be used with [`MetadataLoader`] to load [`ParquetMetaData`]
-pub(crate) trait MetadataFetch {
+pub trait MetadataFetch {
     fn fetch(&mut self, range: Range<usize>) -> BoxFuture<'_, Result<Bytes>>;
 }
 
@@ -42,9 +39,7 @@ impl<'a, T: AsyncFileReader> MetadataFetch for &'a mut T {
 }
 
 /// An asynchronous interface to load [`ParquetMetaData`] from an async source
-///
-/// Crate-private until stabilised
-pub(crate) struct MetadataLoader<F> {
+pub struct MetadataLoader<F> {
     /// Function that fetches byte ranges asynchronously
     fetch: F,
     /// The in-progress metadata
@@ -57,11 +52,7 @@ impl<F: MetadataFetch> MetadataLoader<F> {
     /// Create a new [`MetadataLoader`] by reading the footer information
     ///
     /// See [`fetch_parquet_metadata`] for the meaning of the individual parameters
-    pub async fn load(
-        mut fetch: F,
-        file_size: usize,
-        prefetch: Option<usize>,
-    ) -> Result<Self> {
+    pub async fn load(mut fetch: F, file_size: usize, prefetch: Option<usize>) -> Result<Self> {
         if file_size < 8 {
             return Err(ParquetError::EOF(format!(
                 "file size of {file_size} is less than footer"
@@ -95,16 +86,14 @@ impl<F: MetadataFetch> MetadataLoader<F> {
         // Did not fetch the entire file metadata in the initial read, need to make a second request
         let (metadata, remainder) = if length > suffix_len - 8 {
             let metadata_start = file_size - length - 8;
-            let remaining_metadata = fetch.fetch(metadata_start..footer_start).await?;
-
-            let reader = remaining_metadata.as_ref().chain(&suffix[..suffix_len - 8]);
-            (read_metadata(reader)?, None)
+            let meta = fetch.fetch(metadata_start..file_size - 8).await?;
+            (decode_metadata(&meta)?, None)
         } else {
             let metadata_start = file_size - length - 8 - footer_start;
 
             let slice = &suffix[metadata_start..suffix_len - 8];
             (
-                read_metadata(slice)?,
+                decode_metadata(slice)?,
                 Some((footer_start, suffix.slice(..metadata_start))),
             )
         };
@@ -129,11 +118,7 @@ impl<F: MetadataFetch> MetadataLoader<F> {
     ///
     /// * `column_index`: if true will load column index
     /// * `offset_index`: if true will load offset index
-    pub async fn load_page_index(
-        &mut self,
-        column_index: bool,
-        offset_index: bool,
-    ) -> Result<()> {
+    pub async fn load_page_index(&mut self, column_index: bool, offset_index: bool) -> Result<()> {
         if !column_index && !offset_index {
             return Ok(());
         }
@@ -192,9 +177,7 @@ impl<F: MetadataFetch> MetadataLoader<F> {
                     x.columns()
                         .iter()
                         .map(|c| match c.offset_index_range() {
-                            Some(r) => decode_offset_index(
-                                &data[r.start - offset..r.end - offset],
-                            ),
+                            Some(r) => decode_offset_index(&data[r.start - offset..r.end - offset]),
                             None => Err(general_err!("missing offset index")),
                         })
                         .collect::<Result<Vec<_>>>()

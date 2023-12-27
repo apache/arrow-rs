@@ -15,10 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::client::header::header_meta;
+use crate::client::header::{header_meta, HeaderConfig};
 use crate::path::Path;
-use crate::Result;
-use crate::{Error, GetOptions, GetResult, ObjectMeta};
+use crate::{Error, GetOptions, GetResult};
+use crate::{GetResultPayload, Result};
 use async_trait::async_trait;
 use futures::{StreamExt, TryStreamExt};
 use reqwest::Response;
@@ -28,26 +28,30 @@ use reqwest::Response;
 pub trait GetClient: Send + Sync + 'static {
     const STORE: &'static str;
 
-    async fn get_request(
-        &self,
-        path: &Path,
-        options: GetOptions,
-        head: bool,
-    ) -> Result<Response>;
+    /// Configure the [`HeaderConfig`] for this client
+    const HEADER_CONFIG: HeaderConfig;
+
+    async fn get_request(&self, path: &Path, options: GetOptions) -> Result<Response>;
 }
 
 /// Extension trait for [`GetClient`] that adds common retrieval functionality
 #[async_trait]
 pub trait GetClientExt {
     async fn get_opts(&self, location: &Path, options: GetOptions) -> Result<GetResult>;
-
-    async fn head(&self, location: &Path) -> Result<ObjectMeta>;
 }
 
 #[async_trait]
 impl<T: GetClient> GetClientExt for T {
     async fn get_opts(&self, location: &Path, options: GetOptions) -> Result<GetResult> {
-        let response = self.get_request(location, options, false).await?;
+        let range = options.range.clone();
+        let response = self.get_request(location, options).await?;
+        let meta = header_meta(location, response.headers(), T::HEADER_CONFIG).map_err(|e| {
+            Error::Generic {
+                store: T::STORE,
+                source: Box::new(e),
+            }
+        })?;
+
         let stream = response
             .bytes_stream()
             .map_err(|source| Error::Generic {
@@ -56,15 +60,10 @@ impl<T: GetClient> GetClientExt for T {
             })
             .boxed();
 
-        Ok(GetResult::Stream(stream))
-    }
-
-    async fn head(&self, location: &Path) -> Result<ObjectMeta> {
-        let options = GetOptions::default();
-        let response = self.get_request(location, options, true).await?;
-        header_meta(location, response.headers()).map_err(|e| Error::Generic {
-            store: T::STORE,
-            source: Box::new(e),
+        Ok(GetResult {
+            range: range.unwrap_or(0..meta.size),
+            payload: GetResultPayload::Stream(stream),
+            meta,
         })
     }
 }

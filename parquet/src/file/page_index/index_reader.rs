@@ -24,17 +24,13 @@ use crate::file::metadata::ColumnChunkMetaData;
 use crate::file::page_index::index::{Index, NativeIndex};
 use crate::file::reader::ChunkReader;
 use crate::format::{ColumnIndex, OffsetIndex, PageLocation};
-use std::io::Cursor;
+use crate::thrift::{TCompactSliceInputProtocol, TSerializable};
 use std::ops::Range;
-use thrift::protocol::{TCompactInputProtocol, TSerializable};
 
 /// Computes the covering range of two optional ranges
 ///
 /// For example `acc_range(Some(7..9), Some(1..3)) = Some(1..9)`
-pub(crate) fn acc_range(
-    a: Option<Range<usize>>,
-    b: Option<Range<usize>>,
-) -> Option<Range<usize>> {
+pub(crate) fn acc_range(a: Option<Range<usize>>, b: Option<Range<usize>>) -> Option<Range<usize>> {
     match (a, b) {
         (Some(a), Some(b)) => Some(a.start.min(b.start)..a.end.max(b.end)),
         (None, x) | (x, None) => x,
@@ -113,20 +109,14 @@ pub fn read_pages_locations<R: ChunkReader>(
         .collect()
 }
 
-pub(crate) fn decode_offset_index(
-    data: &[u8],
-) -> Result<Vec<PageLocation>, ParquetError> {
-    let mut prot = TCompactInputProtocol::new(data);
+pub(crate) fn decode_offset_index(data: &[u8]) -> Result<Vec<PageLocation>, ParquetError> {
+    let mut prot = TCompactSliceInputProtocol::new(data);
     let offset = OffsetIndex::read_from_in_protocol(&mut prot)?;
     Ok(offset.page_locations)
 }
 
-pub(crate) fn decode_column_index(
-    data: &[u8],
-    column_type: Type,
-) -> Result<Index, ParquetError> {
-    let mut d = Cursor::new(data);
-    let mut prot = TCompactInputProtocol::new(&mut d);
+pub(crate) fn decode_column_index(data: &[u8], column_type: Type) -> Result<Index, ParquetError> {
+    let mut prot = TCompactSliceInputProtocol::new(data);
 
     let index = ColumnIndex::read_from_in_protocol(&mut prot)?;
 
@@ -138,9 +128,7 @@ pub(crate) fn decode_column_index(
         Type::FLOAT => Index::FLOAT(NativeIndex::<f32>::try_new(index)?),
         Type::DOUBLE => Index::DOUBLE(NativeIndex::<f64>::try_new(index)?),
         Type::BYTE_ARRAY => Index::BYTE_ARRAY(NativeIndex::try_new(index)?),
-        Type::FIXED_LEN_BYTE_ARRAY => {
-            Index::FIXED_LEN_BYTE_ARRAY(NativeIndex::try_new(index)?)
-        }
+        Type::FIXED_LEN_BYTE_ARRAY => Index::FIXED_LEN_BYTE_ARRAY(NativeIndex::try_new(index)?),
     };
 
     Ok(index)

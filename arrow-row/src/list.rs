@@ -144,8 +144,7 @@ pub unsafe fn decode<O: OffsetSizeTrait>(
         let row = &canonical.value_data()[start..end];
         let element_count_start = row.len() - 4;
         let element_count =
-            u32::from_be_bytes((&row[element_count_start..]).try_into().unwrap())
-                as usize;
+            u32::from_be_bytes((&row[element_count_start..]).try_into().unwrap()) as usize;
 
         let lengths_start = element_count_start - (element_count * 4);
         let mut row_offset = 0;

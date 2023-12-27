@@ -43,13 +43,13 @@ jobs:
       env:
         RUSTDOCFLAGS: "-Dwarnings --enable-index-page -Zunstable-options"
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
         with:
           submodules: true
       - name: Install python dev
         run: |
           apt update
-          apt install -y libpython3.9-dev
+          apt install -y libpython3.11-dev
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
         with:
@@ -64,7 +64,7 @@ jobs:
               echo "::warning title=Invalid file permissions automatically fixed::$line"
           done
       - name: Upload artifacts
-        uses: actions/upload-pages-artifact@v2
+        uses: actions/upload-pages-artifact@v3
         with:
           name: crate-docs
           path: target/doc
@@ -77,9 +77,9 @@ jobs:
       contents: write
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       - name: Download crate docs
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4
         with:
           name: crate-docs
           path: website/build

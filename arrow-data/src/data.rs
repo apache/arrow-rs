@@ -20,7 +20,7 @@
 
 use crate::bit_iterator::BitSliceIterator;
 use arrow_buffer::buffer::{BooleanBuffer, NullBuffer};
-use arrow_buffer::{bit_util, ArrowNativeType, Buffer, MutableBuffer};
+use arrow_buffer::{bit_util, i256, ArrowNativeType, Buffer, MutableBuffer};
 use arrow_schema::{ArrowError, DataType, UnionMode};
 use std::convert::TryInto;
 use std::mem;
@@ -42,9 +42,7 @@ pub(crate) fn contains_nulls(
 ) -> bool {
     match null_bit_buffer {
         Some(buffer) => {
-            match BitSliceIterator::new(buffer.validity(), buffer.offset() + offset, len)
-                .next()
-            {
+            match BitSliceIterator::new(buffer.validity(), buffer.offset() + offset, len).next() {
                 Some((start, end)) => start != 0 || end != len,
                 None => len != 0, // No non-null values
             }
@@ -130,9 +128,9 @@ pub(crate) fn new_buffers(data_type: &DataType, capacity: usize) -> [MutableBuff
             MutableBuffer::new(capacity * k.primitive_width().unwrap()),
             empty_buffer,
         ],
-        DataType::FixedSizeList(_, _)
-        | DataType::Struct(_)
-        | DataType::RunEndEncoded(_, _) => [empty_buffer, MutableBuffer::new(0)],
+        DataType::FixedSizeList(_, _) | DataType::Struct(_) | DataType::RunEndEncoded(_, _) => {
+            [empty_buffer, MutableBuffer::new(0)]
+        }
         DataType::Decimal128(_, _) | DataType::Decimal256(_, _) => [
             MutableBuffer::new(capacity * mem::size_of::<u8>()),
             empty_buffer,
@@ -159,10 +157,9 @@ pub(crate) fn into_buffers(
 ) -> Vec<Buffer> {
     match data_type {
         DataType::Null | DataType::Struct(_) | DataType::FixedSizeList(_, _) => vec![],
-        DataType::Utf8
-        | DataType::Binary
-        | DataType::LargeUtf8
-        | DataType::LargeBinary => vec![buffer1.into(), buffer2.into()],
+        DataType::Utf8 | DataType::Binary | DataType::LargeUtf8 | DataType::LargeBinary => {
+            vec![buffer1.into(), buffer2.into()]
+        }
         DataType::Union(_, mode) => {
             match mode {
                 // Based on Union's DataTypeLayout
@@ -174,7 +171,7 @@ pub(crate) fn into_buffers(
     }
 }
 
-/// An generic representation of Arrow array data which encapsulates common attributes and
+/// A generic representation of Arrow array data which encapsulates common attributes and
 /// operations for Arrow array. Specific operations for different arrays types (e.g.,
 /// primitive, list, struct) are implemented in `Array`.
 ///
@@ -451,13 +448,12 @@ impl ArrayData {
 
         for spec in layout.buffers.iter() {
             match spec {
-                BufferSpec::FixedWidth { byte_width } => {
-                    let buffer_size =
-                        self.len.checked_mul(*byte_width).ok_or_else(|| {
-                            ArrowError::ComputeError(
-                                "Integer overflow computing buffer size".to_string(),
-                            )
-                        })?;
+                BufferSpec::FixedWidth { byte_width, .. } => {
+                    let buffer_size = self.len.checked_mul(*byte_width).ok_or_else(|| {
+                        ArrowError::ComputeError(
+                            "Integer overflow computing buffer size".to_string(),
+                        )
+                    })?;
                     result += buffer_size;
                 }
                 BufferSpec::VariableWidth => {
@@ -590,9 +586,7 @@ impl ArrayData {
                 DataType::LargeBinary | DataType::LargeUtf8 => {
                     (vec![zeroed((len + 1) * 8), zeroed(0)], vec![], true)
                 }
-                DataType::FixedSizeBinary(i) => {
-                    (vec![zeroed(*i as usize * len)], vec![], true)
-                }
+                DataType::FixedSizeBinary(i) => (vec![zeroed(*i as usize * len)], vec![], true),
                 DataType::List(f) | DataType::Map(f, _) => (
                     vec![zeroed((len + 1) * 4)],
                     vec![ArrayData::new_empty(f.data_type())],
@@ -699,6 +693,23 @@ impl ArrayData {
         Self::new_null(data_type, 0)
     }
 
+    /// Verifies that the buffers meet the minimum alignment requirements for the data type
+    ///
+    /// Buffers that are not adequately aligned will be copied to a new aligned allocation
+    ///
+    /// This can be useful for when interacting with data sent over IPC or FFI, that may
+    /// not meet the minimum alignment requirements
+    pub fn align_buffers(&mut self) {
+        let layout = layout(&self.data_type);
+        for (buffer, spec) in self.buffers.iter_mut().zip(&layout.buffers) {
+            if let BufferSpec::FixedWidth { alignment, .. } = spec {
+                if buffer.as_ptr().align_offset(*alignment) != 0 {
+                    *buffer = Buffer::from_slice_ref(buffer.as_ref())
+                }
+            }
+        }
+    }
+
     /// "cheap" validation of an `ArrayData`. Ensures buffers are
     /// sufficiently sized to store `len` + `offset` total elements of
     /// `data_type` and performs other inexpensive consistency checks.
@@ -732,19 +743,26 @@ impl ArrayData {
             )));
         }
 
-        for (i, (buffer, spec)) in
-            self.buffers.iter().zip(layout.buffers.iter()).enumerate()
-        {
+        for (i, (buffer, spec)) in self.buffers.iter().zip(layout.buffers.iter()).enumerate() {
             match spec {
-                BufferSpec::FixedWidth { byte_width } => {
-                    let min_buffer_size = len_plus_offset
-                        .checked_mul(*byte_width)
-                        .expect("integer overflow computing min buffer size");
+                BufferSpec::FixedWidth {
+                    byte_width,
+                    alignment,
+                } => {
+                    let min_buffer_size = len_plus_offset.saturating_mul(*byte_width);
 
                     if buffer.len() < min_buffer_size {
                         return Err(ArrowError::InvalidArgumentError(format!(
                             "Need at least {} bytes in buffers[{}] in array of type {:?}, but got {}",
                             min_buffer_size, i, self.data_type, buffer.len()
+                        )));
+                    }
+
+                    let align_offset = buffer.as_ptr().align_offset(*alignment);
+                    if align_offset != 0 {
+                        return Err(ArrowError::InvalidArgumentError(format!(
+                            "Misaligned buffers[{i}] in array of type {:?}, offset from expected alignment of {alignment} by {}",
+                            self.data_type, align_offset.min(alignment - align_offset)
                         )));
                     }
                 }
@@ -973,10 +991,8 @@ impl ArrayData {
             }
             DataType::RunEndEncoded(run_ends_field, values_field) => {
                 self.validate_num_child_data(2)?;
-                let run_ends_data =
-                    self.get_valid_child_data(0, run_ends_field.data_type())?;
-                let values_data =
-                    self.get_valid_child_data(1, values_field.data_type())?;
+                let run_ends_data = self.get_valid_child_data(0, run_ends_field.data_type())?;
+                let values_data = self.get_valid_child_data(1, values_field.data_type())?;
                 if run_ends_data.len != values_data.len {
                     return Err(ArrowError::InvalidArgumentError(format!(
                         "The run_ends array length should be the same as values array length. Run_ends array length is {}, values array length is {}",
@@ -996,9 +1012,7 @@ impl ArrayData {
                 for (i, (_, field)) in fields.iter().enumerate() {
                     let field_data = self.get_valid_child_data(i, field.data_type())?;
 
-                    if mode == &UnionMode::Sparse
-                        && field_data.len < (self.len + self.offset)
-                    {
+                    if mode == &UnionMode::Sparse && field_data.len < (self.len + self.offset) {
                         return Err(ArrowError::InvalidArgumentError(format!(
                             "Sparse union child array #{} has length smaller than expected for union array ({} < {})",
                             i, field_data.len, self.len + self.offset
@@ -1057,14 +1071,14 @@ impl ArrayData {
         i: usize,
         expected_type: &DataType,
     ) -> Result<&ArrayData, ArrowError> {
-        let values_data = self.child_data
-            .get(i)
-            .ok_or_else(|| {
-                ArrowError::InvalidArgumentError(format!(
-                    "{} did not have enough child arrays. Expected at least {} but had only {}",
-                    self.data_type, i+1, self.child_data.len()
-                ))
-            })?;
+        let values_data = self.child_data.get(i).ok_or_else(|| {
+            ArrowError::InvalidArgumentError(format!(
+                "{} did not have enough child arrays. Expected at least {} but had only {}",
+                self.data_type,
+                i + 1,
+                self.child_data.len()
+            ))
+        })?;
 
         if expected_type != &values_data.data_type {
             return Err(ArrowError::InvalidArgumentError(format!(
@@ -1134,7 +1148,8 @@ impl ArrayData {
             if actual != nulls.null_count() {
                 return Err(ArrowError::InvalidArgumentError(format!(
                     "null_count value ({}) doesn't match actual number of nulls in array ({})",
-                    nulls.null_count(), actual
+                    nulls.null_count(),
+                    actual
                 )));
             }
         }
@@ -1183,23 +1198,22 @@ impl ArrayData {
     ) -> Result<(), ArrowError> {
         let mask = match mask {
             Some(mask) => mask,
-            None => return match child.null_count() {
-                0 => Ok(()),
-                _ => Err(ArrowError::InvalidArgumentError(format!(
-                    "non-nullable child of type {} contains nulls not present in parent {}",
-                    child.data_type,
-                    self.data_type
-                ))),
-            },
+            None => {
+                return match child.null_count() {
+                    0 => Ok(()),
+                    _ => Err(ArrowError::InvalidArgumentError(format!(
+                        "non-nullable child of type {} contains nulls not present in parent {}",
+                        child.data_type, self.data_type
+                    ))),
+                }
+            }
         };
 
         match child.nulls() {
-            Some(nulls) if !mask.contains(nulls) => {
-                Err(ArrowError::InvalidArgumentError(format!(
-                    "non-nullable child of type {} contains nulls not present in parent",
-                    child.data_type
-                )))
-            }
+            Some(nulls) if !mask.contains(nulls) => Err(ArrowError::InvalidArgumentError(format!(
+                "non-nullable child of type {} contains nulls not present in parent",
+                child.data_type
+            ))),
             _ => Ok(()),
         }
     }
@@ -1214,9 +1228,7 @@ impl ArrayData {
             DataType::Utf8 => self.validate_utf8::<i32>(),
             DataType::LargeUtf8 => self.validate_utf8::<i64>(),
             DataType::Binary => self.validate_offsets_full::<i32>(self.buffers[1].len()),
-            DataType::LargeBinary => {
-                self.validate_offsets_full::<i64>(self.buffers[1].len())
-            }
+            DataType::LargeBinary => self.validate_offsets_full::<i64>(self.buffers[1].len()),
             DataType::List(_) | DataType::Map(_, _) => {
                 let child = &self.child_data[0];
                 self.validate_offsets_full::<i32>(child.len)
@@ -1274,11 +1286,7 @@ impl ArrayData {
     ///
     /// For example, the offsets buffer contained `[1, 2, 4]`, this
     /// function would call `validate([1,2])`, and `validate([2,4])`
-    fn validate_each_offset<T, V>(
-        &self,
-        offset_limit: usize,
-        validate: V,
-    ) -> Result<(), ArrowError>
+    fn validate_each_offset<T, V>(&self, offset_limit: usize, validate: V) -> Result<(), ArrowError>
     where
         T: ArrowNativeType + TryInto<usize> + num::Num + std::fmt::Display,
         V: Fn(usize, Range<usize>) -> Result<(), ArrowError>,
@@ -1332,32 +1340,26 @@ impl ArrayData {
         let values_buffer = &self.buffers[1].as_slice();
         if let Ok(values_str) = std::str::from_utf8(values_buffer) {
             // Validate Offsets are correct
-            self.validate_each_offset::<T, _>(
-                values_buffer.len(),
-                |string_index, range| {
-                    if !values_str.is_char_boundary(range.start)
-                        || !values_str.is_char_boundary(range.end)
-                    {
-                        return Err(ArrowError::InvalidArgumentError(format!(
-                            "incomplete utf-8 byte sequence from index {string_index}"
-                        )));
-                    }
-                    Ok(())
-                },
-            )
+            self.validate_each_offset::<T, _>(values_buffer.len(), |string_index, range| {
+                if !values_str.is_char_boundary(range.start)
+                    || !values_str.is_char_boundary(range.end)
+                {
+                    return Err(ArrowError::InvalidArgumentError(format!(
+                        "incomplete utf-8 byte sequence from index {string_index}"
+                    )));
+                }
+                Ok(())
+            })
         } else {
             // find specific offset that failed utf8 validation
-            self.validate_each_offset::<T, _>(
-                values_buffer.len(),
-                |string_index, range| {
-                    std::str::from_utf8(&values_buffer[range.clone()]).map_err(|e| {
-                        ArrowError::InvalidArgumentError(format!(
-                            "Invalid UTF8 sequence at string index {string_index} ({range:?}): {e}"
-                        ))
-                    })?;
-                    Ok(())
-                },
-            )
+            self.validate_each_offset::<T, _>(values_buffer.len(), |string_index, range| {
+                std::str::from_utf8(&values_buffer[range.clone()]).map_err(|e| {
+                    ArrowError::InvalidArgumentError(format!(
+                        "Invalid UTF8 sequence at string index {string_index} ({range:?}): {e}"
+                    ))
+                })?;
+                Ok(())
+            })
         }
     }
 
@@ -1388,8 +1390,7 @@ impl ArrayData {
         assert!(buffer.len() / mem::size_of::<T>() >= required_len);
 
         // Justification: buffer size was validated above
-        let indexes: &[T] =
-            &buffer.typed_data::<T>()[self.offset..self.offset + self.len];
+        let indexes: &[T] = &buffer.typed_data::<T>()[self.offset..self.offset + self.len];
 
         indexes.iter().enumerate().try_for_each(|(i, &dict_index)| {
             // Do not check the value is null (value can be arbitrary)
@@ -1493,7 +1494,8 @@ impl ArrayData {
 pub fn layout(data_type: &DataType) -> DataTypeLayout {
     // based on C/C++ implementation in
     // https://github.com/apache/arrow/blob/661c7d749150905a63dd3b52e0a04dac39030d95/cpp/src/arrow/type.h (and .cc)
-    use std::mem::size_of;
+    use arrow_schema::IntervalUnit::*;
+
     match data_type {
         DataType::Null => DataTypeLayout {
             buffers: vec![],
@@ -1503,44 +1505,52 @@ pub fn layout(data_type: &DataType) -> DataTypeLayout {
             buffers: vec![BufferSpec::BitMap],
             can_contain_null_mask: true,
         },
-        DataType::Int8
-        | DataType::Int16
-        | DataType::Int32
-        | DataType::Int64
-        | DataType::UInt8
-        | DataType::UInt16
-        | DataType::UInt32
-        | DataType::UInt64
-        | DataType::Float16
-        | DataType::Float32
-        | DataType::Float64
-        | DataType::Timestamp(_, _)
-        | DataType::Date32
-        | DataType::Date64
-        | DataType::Time32(_)
-        | DataType::Time64(_)
-        | DataType::Interval(_) => {
-            DataTypeLayout::new_fixed_width(data_type.primitive_width().unwrap())
+        DataType::Int8 => DataTypeLayout::new_fixed_width::<i8>(),
+        DataType::Int16 => DataTypeLayout::new_fixed_width::<i16>(),
+        DataType::Int32 => DataTypeLayout::new_fixed_width::<i32>(),
+        DataType::Int64 => DataTypeLayout::new_fixed_width::<i64>(),
+        DataType::UInt8 => DataTypeLayout::new_fixed_width::<u8>(),
+        DataType::UInt16 => DataTypeLayout::new_fixed_width::<u16>(),
+        DataType::UInt32 => DataTypeLayout::new_fixed_width::<u32>(),
+        DataType::UInt64 => DataTypeLayout::new_fixed_width::<u64>(),
+        DataType::Float16 => DataTypeLayout::new_fixed_width::<half::f16>(),
+        DataType::Float32 => DataTypeLayout::new_fixed_width::<f32>(),
+        DataType::Float64 => DataTypeLayout::new_fixed_width::<f64>(),
+        DataType::Timestamp(_, _) => DataTypeLayout::new_fixed_width::<i64>(),
+        DataType::Date32 => DataTypeLayout::new_fixed_width::<i32>(),
+        DataType::Date64 => DataTypeLayout::new_fixed_width::<i64>(),
+        DataType::Time32(_) => DataTypeLayout::new_fixed_width::<i32>(),
+        DataType::Time64(_) => DataTypeLayout::new_fixed_width::<i64>(),
+        DataType::Interval(YearMonth) => DataTypeLayout::new_fixed_width::<i32>(),
+        DataType::Interval(DayTime) => DataTypeLayout::new_fixed_width::<i64>(),
+        DataType::Interval(MonthDayNano) => DataTypeLayout::new_fixed_width::<i128>(),
+        DataType::Duration(_) => DataTypeLayout::new_fixed_width::<i64>(),
+        DataType::Decimal128(_, _) => DataTypeLayout::new_fixed_width::<i128>(),
+        DataType::Decimal256(_, _) => DataTypeLayout::new_fixed_width::<i256>(),
+        DataType::FixedSizeBinary(size) => {
+            let spec = BufferSpec::FixedWidth {
+                byte_width: (*size).try_into().unwrap(),
+                alignment: mem::align_of::<u8>(),
+            };
+            DataTypeLayout {
+                buffers: vec![spec],
+                can_contain_null_mask: true,
+            }
         }
-        DataType::Duration(_) => DataTypeLayout::new_fixed_width(size_of::<i64>()),
-        DataType::Binary => DataTypeLayout::new_binary(size_of::<i32>()),
-        DataType::FixedSizeBinary(bytes_per_value) => {
-            let bytes_per_value: usize = (*bytes_per_value)
-                .try_into()
-                .expect("negative size for fixed size binary");
-            DataTypeLayout::new_fixed_width(bytes_per_value)
-        }
-        DataType::LargeBinary => DataTypeLayout::new_binary(size_of::<i64>()),
-        DataType::Utf8 => DataTypeLayout::new_binary(size_of::<i32>()),
-        DataType::LargeUtf8 => DataTypeLayout::new_binary(size_of::<i64>()),
-        DataType::List(_) => DataTypeLayout::new_fixed_width(size_of::<i32>()),
+        DataType::Binary => DataTypeLayout::new_binary::<i32>(),
+        DataType::LargeBinary => DataTypeLayout::new_binary::<i64>(),
+        DataType::Utf8 => DataTypeLayout::new_binary::<i32>(),
+        DataType::LargeUtf8 => DataTypeLayout::new_binary::<i64>(),
         DataType::FixedSizeList(_, _) => DataTypeLayout::new_empty(), // all in child data
-        DataType::LargeList(_) => DataTypeLayout::new_fixed_width(size_of::<i64>()),
+        DataType::List(_) => DataTypeLayout::new_fixed_width::<i32>(),
+        DataType::LargeList(_) => DataTypeLayout::new_fixed_width::<i64>(),
+        DataType::Map(_, _) => DataTypeLayout::new_fixed_width::<i32>(),
         DataType::Struct(_) => DataTypeLayout::new_empty(), // all in child data,
         DataType::RunEndEncoded(_, _) => DataTypeLayout::new_empty(), // all in child data,
         DataType::Union(_, mode) => {
             let type_ids = BufferSpec::FixedWidth {
-                byte_width: size_of::<i8>(),
+                byte_width: mem::size_of::<i8>(),
+                alignment: mem::align_of::<i8>(),
             };
 
             DataTypeLayout {
@@ -1552,7 +1562,8 @@ pub fn layout(data_type: &DataType) -> DataTypeLayout {
                         vec![
                             type_ids,
                             BufferSpec::FixedWidth {
-                                byte_width: size_of::<i32>(),
+                                byte_width: mem::size_of::<i32>(),
+                                alignment: mem::align_of::<i32>(),
                             },
                         ]
                     }
@@ -1561,19 +1572,6 @@ pub fn layout(data_type: &DataType) -> DataTypeLayout {
             }
         }
         DataType::Dictionary(key_type, _value_type) => layout(key_type),
-        DataType::Decimal128(_, _) => {
-            // Decimals are always some fixed width; The rust implementation
-            // always uses 16 bytes / size of i128
-            DataTypeLayout::new_fixed_width(size_of::<i128>())
-        }
-        DataType::Decimal256(_, _) => {
-            // Decimals are always some fixed width.
-            DataTypeLayout::new_fixed_width(32)
-        }
-        DataType::Map(_, _) => {
-            // same as ListType
-            DataTypeLayout::new_fixed_width(size_of::<i32>())
-        }
     }
 }
 
@@ -1589,10 +1587,13 @@ pub struct DataTypeLayout {
 }
 
 impl DataTypeLayout {
-    /// Describes a basic numeric array where each element has a fixed width
-    pub fn new_fixed_width(byte_width: usize) -> Self {
+    /// Describes a basic numeric array where each element has type `T`
+    pub fn new_fixed_width<T>() -> Self {
         Self {
-            buffers: vec![BufferSpec::FixedWidth { byte_width }],
+            buffers: vec![BufferSpec::FixedWidth {
+                byte_width: mem::size_of::<T>(),
+                alignment: mem::align_of::<T>(),
+            }],
             can_contain_null_mask: true,
         }
     }
@@ -1608,14 +1609,15 @@ impl DataTypeLayout {
     }
 
     /// Describes a basic numeric array where each element has a fixed
-    /// with offset buffer of `offset_byte_width` bytes, followed by a
+    /// with offset buffer of type `T`, followed by a
     /// variable width data buffer
-    pub fn new_binary(offset_byte_width: usize) -> Self {
+    pub fn new_binary<T>() -> Self {
         Self {
             buffers: vec![
                 // offsets
                 BufferSpec::FixedWidth {
-                    byte_width: offset_byte_width,
+                    byte_width: mem::size_of::<T>(),
+                    alignment: mem::align_of::<T>(),
                 },
                 // values
                 BufferSpec::VariableWidth,
@@ -1628,8 +1630,17 @@ impl DataTypeLayout {
 /// Layout specification for a single data type buffer
 #[derive(Debug, PartialEq, Eq)]
 pub enum BufferSpec {
-    /// each element has a fixed width
-    FixedWidth { byte_width: usize },
+    /// Each element is a fixed width primitive, with the given `byte_width` and `alignment`
+    ///
+    /// `alignment` is the alignment required by Rust for an array of the corresponding primitive,
+    /// see [`Layout::array`](std::alloc::Layout::array) and [`std::mem::align_of`].
+    ///
+    /// Arrow-rs requires that all buffers have at least this alignment, to allow for
+    /// [slice](std::slice) based APIs. Alignment in excess of this is not required to allow
+    /// for array slicing and interoperability with `Vec`, which cannot be over-aligned.
+    ///
+    /// Note that these alignment requirements will vary between architectures
+    FixedWidth { byte_width: usize, alignment: usize },
     /// Variable width, such as string data for utf8 data
     VariableWidth,
     /// Buffer holds a bitmap.
@@ -1741,6 +1752,15 @@ impl ArrayDataBuilder {
     /// apply.
     #[allow(clippy::let_and_return)]
     pub unsafe fn build_unchecked(self) -> ArrayData {
+        let data = self.build_impl();
+        // Provide a force_validate mode
+        #[cfg(feature = "force_validate")]
+        data.validate_data().unwrap();
+        data
+    }
+
+    /// Same as [`Self::build_unchecked`] but ignoring `force_validate` feature flag
+    unsafe fn build_impl(self) -> ArrayData {
         let nulls = self.nulls.or_else(|| {
             let buffer = self.null_bit_buffer?;
             let buffer = BooleanBuffer::new(buffer, self.offset, self.len);
@@ -1750,26 +1770,41 @@ impl ArrayDataBuilder {
             })
         });
 
-        let data = ArrayData {
+        ArrayData {
             data_type: self.data_type,
             len: self.len,
             offset: self.offset,
             buffers: self.buffers,
             child_data: self.child_data,
             nulls: nulls.filter(|b| b.null_count() != 0),
-        };
-
-        // Provide a force_validate mode
-        #[cfg(feature = "force_validate")]
-        data.validate_data().unwrap();
-        data
+        }
     }
 
     /// Creates an array data, validating all inputs
-    #[allow(clippy::let_and_return)]
     pub fn build(self) -> Result<ArrayData, ArrowError> {
-        let data = unsafe { self.build_unchecked() };
-        #[cfg(not(feature = "force_validate"))]
+        let data = unsafe { self.build_impl() };
+        data.validate_data()?;
+        Ok(data)
+    }
+
+    /// Creates an array data, validating all inputs, and aligning any buffers
+    ///
+    /// Rust requires that arrays are aligned to their corresponding primitive,
+    /// see [`Layout::array`](std::alloc::Layout::array) and [`std::mem::align_of`].
+    ///
+    /// [`ArrayData`] therefore requires that all buffers have at least this alignment,
+    /// to allow for [slice](std::slice) based APIs. See [`BufferSpec::FixedWidth`].
+    ///
+    /// As this alignment is architecture specific, and not guaranteed by all arrow implementations,
+    /// this method is provided to automatically copy buffers to a new correctly aligned allocation
+    /// when necessary, making it useful when interacting with buffers produced by other systems,
+    /// e.g. IPC or FFI.
+    ///
+    /// This is unlike `[Self::build`] which will instead return an error on encountering
+    /// insufficiently aligned buffers.
+    pub fn build_aligned(self) -> Result<ArrayData, ArrowError> {
+        let mut data = unsafe { self.build_impl() };
+        data.align_buffers();
         data.validate_data()?;
         Ok(data)
     }
@@ -2056,5 +2091,32 @@ mod tests {
             let layout = layout(&data_type);
             assert_eq!(buffers.len(), layout.buffers.len());
         }
+    }
+
+    #[test]
+    fn test_alignment() {
+        let buffer = Buffer::from_vec(vec![1_i32, 2_i32, 3_i32]);
+        let sliced = buffer.slice(1);
+
+        let mut data = ArrayData {
+            data_type: DataType::Int32,
+            len: 0,
+            offset: 0,
+            buffers: vec![buffer],
+            child_data: vec![],
+            nulls: None,
+        };
+        data.validate_full().unwrap();
+
+        data.buffers[0] = sliced;
+        let err = data.validate().unwrap_err();
+
+        assert_eq!(
+            err.to_string(),
+            "Invalid argument error: Misaligned buffers[0] in array of type Int32, offset from expected alignment of 4 by 1"
+        );
+
+        data.align_buffers();
+        data.validate_full().unwrap();
     }
 }
