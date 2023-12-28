@@ -56,7 +56,7 @@ use std::{io::Write, sync::Arc};
 use crate::{
     arrow::ArrowWriter,
     errors::{ParquetError, Result},
-    file::properties::WriterProperties,
+    file::{metadata::RowGroupMetaDataPtr, properties::WriterProperties},
     format::{FileMetaData, KeyValue},
 };
 use arrow_array::RecordBatch;
@@ -109,6 +109,21 @@ impl<W: AsyncWrite + Unpin + Send> AsyncArrowWriter<W> {
         })
     }
 
+    /// Returns metadata for any flushed row groups
+    pub fn flushed_row_groups(&self) -> &[RowGroupMetaDataPtr] {
+        self.sync_writer.flushed_row_groups()
+    }
+
+    /// Returns the estimated length in bytes of the current in progress row group
+    pub fn in_progress_size(&self) -> usize {
+        self.sync_writer.in_progress_size()
+    }
+
+    /// Returns the number of rows buffered in the in progress row group
+    pub fn in_progress_rows(&self) -> usize {
+        self.sync_writer.in_progress_rows()
+    }
+
     /// Enqueues the provided `RecordBatch` to be written
     ///
     /// After every sync write by the inner [ArrowWriter], the inner buffer will be
@@ -121,6 +136,14 @@ impl<W: AsyncWrite + Unpin + Send> AsyncArrowWriter<W> {
             self.buffer_size,
         )
         .await
+    }
+
+    /// Flushes all buffered rows into a new row group
+    pub async fn flush(&mut self) -> Result<()> {
+        self.sync_writer.flush()?;
+        Self::try_flush(&mut self.shared_buffer, &mut self.async_writer, 0).await?;
+
+        Ok(())
     }
 
     /// Append [`KeyValue`] metadata in addition to those in [`WriterProperties`]
@@ -206,7 +229,8 @@ impl Write for SharedBuffer {
 
 #[cfg(test)]
 mod tests {
-    use arrow_array::{ArrayRef, BinaryArray, Int64Array, RecordBatchReader};
+    use arrow::datatypes::{DataType, Field, Schema};
+    use arrow_array::{ArrayRef, BinaryArray, Int32Array, Int64Array, RecordBatchReader};
     use bytes::Bytes;
     use tokio::pin;
 
@@ -394,5 +418,46 @@ mod tests {
         let read = reader.next().unwrap().unwrap();
 
         assert_eq!(to_write, read);
+    }
+
+    #[tokio::test]
+    async fn in_progress_accounting() {
+        // define schema
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+
+        // create some data
+        let a = Int32Array::from_value(0_i32, 512);
+
+        // build a record batch
+        let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(a)]).unwrap();
+
+        for buffer_size in [0, 8, 1024] {
+            let temp = tempfile::tempfile().unwrap();
+            let file = tokio::fs::File::from_std(temp.try_clone().unwrap());
+            let mut writer =
+                AsyncArrowWriter::try_new(file, batch.schema(), buffer_size, None).unwrap();
+
+            // starts empty
+            assert_eq!(writer.in_progress_size(), 0);
+            assert_eq!(writer.in_progress_rows(), 0);
+            writer.write(&batch).await.unwrap();
+
+            // updated on write
+            let initial_size = writer.in_progress_size();
+            assert!(initial_size > 0);
+            assert_eq!(writer.in_progress_rows(), batch.num_rows());
+
+            // updated on second write
+            writer.write(&batch).await.unwrap();
+            assert!(writer.in_progress_size() > initial_size);
+            assert_eq!(writer.in_progress_rows(), batch.num_rows() * 2);
+
+            // cleared on flush
+            writer.flush().await.unwrap();
+            assert_eq!(writer.in_progress_size(), 0);
+            assert_eq!(writer.in_progress_rows(), 0);
+
+            writer.close().await.unwrap();
+        }
     }
 }
