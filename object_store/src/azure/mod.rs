@@ -46,7 +46,7 @@ use url::Url;
 use crate::client::get::GetClientExt;
 use crate::client::list::ListClientExt;
 use crate::client::CredentialProvider;
-pub use credential::{authority_hosts, AzureAuthorizer};
+pub use credential::{authority_hosts, AzureAccessKey, AzureAuthorizer};
 
 mod builder;
 mod client;
@@ -170,10 +170,24 @@ impl Signer for MicrosoftAzure {
     /// ```
     async fn signed_url(&self, method: Method, path: &Path, expires_in: Duration) -> Result<Url> {
         let credential = self.credentials().get_credential().await?;
-        let authorizer = AzureAuthorizer::new(&credential, &self.client.config().account);
+        let signed_start = chrono::Utc::now();
+        let signed_expiry = signed_start + expires_in;
+        let delegation_key = match credential.as_ref() {
+            AzureCredential::BearerToken(_) => Some(
+                self.client
+                    .get_user_delegation_key(&signed_start, &signed_expiry)
+                    .await?,
+            ),
+            _ => None,
+        };
 
+        let authorizer = AzureAuthorizer::new(
+            &credential,
+            delegation_key.as_ref(),
+            &self.client.config().account,
+        );
         let mut url = self.path_url(path);
-        authorizer.sign(method, &mut url, expires_in)?;
+        authorizer.sign(method, &mut url, &signed_start, &signed_expiry)?;
 
         Ok(url)
     }
@@ -260,6 +274,50 @@ mod tests {
             async move { client.get_blob_tagging(&p).await }
         })
         .await
+    }
+
+    #[ignore = "Used for manual testing against a real storage account."]
+    #[tokio::test]
+    async fn test_user_delegation_key() {
+        let account = std::env::var("AZURE_ACCOUNT_NAME").unwrap();
+        let container = std::env::var("AZURE_CONTAINER_NAME").unwrap();
+        let client_id = std::env::var("AZURE_CLIENT_ID").unwrap();
+        let client_secret = std::env::var("AZURE_CLIENT_SECRET").unwrap();
+        let tenant_id = std::env::var("AZURE_TENANT_ID").unwrap();
+        let integration = MicrosoftAzureBuilder::new()
+            .with_account(account)
+            .with_container_name(container)
+            .with_client_id(client_id)
+            .with_client_secret(client_secret)
+            .with_tenant_id(&tenant_id)
+            .build()
+            .unwrap();
+
+        let start = chrono::Utc::now();
+        let end = start + chrono::Duration::days(1);
+
+        let key = integration
+            .client
+            .get_user_delegation_key(&start, &end)
+            .await
+            .unwrap();
+
+        assert!(key.value.len() > 0);
+        assert_eq!(key.signed_tid, tenant_id);
+
+        let data = Bytes::from("hello world");
+        let path = Path::from("file.txt");
+        integration.put(&path, data.clone()).await.unwrap();
+
+        let signed = integration
+            .signed_url(Method::GET, &path, Duration::from_secs(60))
+            .await
+            .unwrap();
+
+        let resp = reqwest::get(signed).await.unwrap();
+        let loaded = resp.bytes().await.unwrap();
+
+        assert_eq!(data, loaded);
     }
 
     #[test]

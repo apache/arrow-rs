@@ -14,6 +14,7 @@ parquet/data.parquet
 justfile
 .prettierignore
 .env
+.editorconfig
 # local azurite file
 __azurite*
 __blobstorage__
