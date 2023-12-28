@@ -124,6 +124,11 @@ impl<W: AsyncWrite + Unpin + Send> AsyncArrowWriter<W> {
         self.sync_writer.in_progress_rows()
     }
 
+    /// Returns the number of bytes written by this instance
+    pub fn data_written(&self) -> usize {
+        self.sync_writer.bytes_written()
+    }
+
     /// Enqueues the provided `RecordBatch` to be written
     ///
     /// After every sync write by the inner [ArrowWriter], the inner buffer will be

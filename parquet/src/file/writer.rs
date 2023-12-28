@@ -394,6 +394,11 @@ impl<W: Write + Send> SerializedFileWriter<W> {
 
         self.buf.into_inner()
     }
+
+    /// Returns the number of bytes written to this instance
+    pub fn bytes_written(&self) -> usize {
+        self.buf.bytes_written()
+    }
 }
 
 /// Parquet row group writer API.

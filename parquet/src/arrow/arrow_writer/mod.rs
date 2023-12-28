@@ -163,6 +163,11 @@ impl<W: Write + Send> ArrowWriter<W> {
             .unwrap_or_default()
     }
 
+    /// Returns the number of bytes written by this instance
+    pub fn bytes_written(&self) -> usize {
+        self.writer.bytes_written()
+    }
+
     /// Encodes the provided [`RecordBatch`]
     ///
     /// If this would cause the current row group to exceed [`WriterProperties::max_row_group_size`]
