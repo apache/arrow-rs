@@ -2699,6 +2699,7 @@ mod tests {
         // starts empty
         assert_eq!(writer.in_progress_size(), 0);
         assert_eq!(writer.in_progress_rows(), 0);
+        assert_eq!(writer.bytes_written(), 4); // Initial header
         writer.write(&batch).unwrap();
 
         // updated on write
@@ -2711,10 +2712,12 @@ mod tests {
         assert!(writer.in_progress_size() > initial_size);
         assert_eq!(writer.in_progress_rows(), 10);
 
-        // cleared on flush
+        // in progress tracking is cleared, but the overall data written is updated
+        let pre_flush_bytes_written = writer.bytes_written();
         writer.flush().unwrap();
         assert_eq!(writer.in_progress_size(), 0);
         assert_eq!(writer.in_progress_rows(), 0);
+        assert!(writer.bytes_written() > pre_flush_bytes_written);
 
         writer.close().unwrap();
     }
