@@ -125,7 +125,7 @@ impl<W: AsyncWrite + Unpin + Send> AsyncArrowWriter<W> {
     }
 
     /// Returns the number of bytes written by this instance
-    pub fn data_written(&self) -> usize {
+    pub fn bytes_written(&self) -> usize {
         self.sync_writer.bytes_written()
     }
 
