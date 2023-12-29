@@ -1116,16 +1116,13 @@ mod tests {
 
         assert_eq!(metadata.len(), 3);
 
-        assert_eq!(metadata.get(0).unwrap().key, "parquet.proto.descriptor");
+        assert_eq!(metadata[0].key, "parquet.proto.descriptor");
 
-        assert_eq!(metadata.get(1).unwrap().key, "writer.model.name");
-        assert_eq!(metadata.get(1).unwrap().value, Some("protobuf".to_owned()));
+        assert_eq!(metadata[1].key, "writer.model.name");
+        assert_eq!(metadata[1].value, Some("protobuf".to_owned()));
 
-        assert_eq!(metadata.get(2).unwrap().key, "parquet.proto.class");
-        assert_eq!(
-            metadata.get(2).unwrap().value,
-            Some("foo.baz.Foobaz$Event".to_owned())
-        );
+        assert_eq!(metadata[2].key, "parquet.proto.class");
+        assert_eq!(metadata[2].value, Some("foo.baz.Foobaz$Event".to_owned()));
     }
 
     #[test]
@@ -1141,7 +1138,7 @@ mod tests {
         assert_eq!(col0_metadata.bloom_filter_offset().unwrap(), 192);
 
         // test page encoding stats
-        let page_encoding_stats = col0_metadata.page_encoding_stats().unwrap().get(0).unwrap();
+        let page_encoding_stats = &col0_metadata.page_encoding_stats().unwrap()[0];
 
         assert_eq!(page_encoding_stats.page_type, basic::PageType::DATA_PAGE);
         assert_eq!(page_encoding_stats.encoding, Encoding::PLAIN);

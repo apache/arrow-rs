@@ -53,7 +53,7 @@ pub fn flight_data_from_arrow_batch(
 
 /// Convert a slice of wire protocol `FlightData`s into a vector of `RecordBatch`es
 pub fn flight_data_to_batches(flight_data: &[FlightData]) -> Result<Vec<RecordBatch>, ArrowError> {
-    let schema = flight_data.get(0).ok_or_else(|| {
+    let schema = flight_data.first().ok_or_else(|| {
         ArrowError::CastError("Need at least one FlightData for schema".to_string())
     })?;
     let message = root_as_message(&schema.data_header[..])

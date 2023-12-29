@@ -790,7 +790,6 @@ mod tests {
     use half::f16;
     use rand::rngs::StdRng;
     use rand::{Rng, RngCore, SeedableRng};
-    use std::convert::TryFrom;
     use std::sync::Arc;
 
     fn create_decimal128_array(data: Vec<Option<i128>>) -> Decimal128Array {
@@ -972,19 +971,14 @@ mod tests {
 
         assert_eq!(sorted_dict, dict);
 
-        let sorted_strings = StringArray::try_from(
-            (0..sorted.len())
-                .map(|i| {
-                    if sorted.is_valid(i) {
-                        Some(sorted_dict.value(sorted_keys.value(i).as_usize()))
-                    } else {
-                        None
-                    }
-                })
-                .collect::<Vec<Option<&str>>>(),
-        )
-        .expect("Unable to create string array from dictionary");
-        let expected = StringArray::try_from(expected_data).expect("Unable to create string array");
+        let sorted_strings = StringArray::from_iter((0..sorted.len()).map(|i| {
+            if sorted.is_valid(i) {
+                Some(sorted_dict.value(sorted_keys.value(i).as_usize()))
+            } else {
+                None
+            }
+        }));
+        let expected = StringArray::from(expected_data);
 
         assert_eq!(sorted_strings, expected)
     }
