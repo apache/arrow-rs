@@ -357,13 +357,10 @@ impl Iterator for ArrowArrayStreamReader {
                 return None;
             }
 
-            let data = unsafe {
-                from_ffi_and_data_type(array, DataType::Struct(self.schema().fields().clone()))?
+            let result = unsafe {
+                from_ffi_and_data_type(array, DataType::Struct(self.schema().fields().clone()))
             };
-
-            let record_batch = RecordBatch::from(StructArray::from(data));
-
-            Some(Ok(record_batch))
+            Some(result.map(|data| RecordBatch::from(StructArray::from(data))))
         } else {
             let last_error = self.get_stream_last_error();
             let err = ArrowError::CDataInterface(last_error.unwrap());
