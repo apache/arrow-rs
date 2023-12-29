@@ -63,7 +63,8 @@ jobs:
       ARROW_INTEGRATION_CSHARP: ON
       ARROW_INTEGRATION_GO: ON
       ARROW_INTEGRATION_JAVA: ON
-      ARROW_INTEGRATION_JS: ON
+      # https://github.com/apache/arrow/issues/39395
+      ARROW_INTEGRATION_JS: OFF
       # https://github.com/apache/arrow/pull/38403/files#r1371281630
       ARCHERY_INTEGRATION_WITH_RUST: ON
       # These are necessary because the github runner overrides $HOME
