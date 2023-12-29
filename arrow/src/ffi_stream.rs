@@ -54,6 +54,7 @@
 //! }
 //! ```
 
+use arrow_schema::DataType;
 use std::ffi::CStr;
 use std::ptr::addr_of;
 use std::{
@@ -356,12 +357,10 @@ impl Iterator for ArrowArrayStreamReader {
                 return None;
             }
 
-            let schema_ref = self.schema();
-            // NOTE: this parses the FFI_ArrowSchema again on each iterator call;
-            // should probably use from_ffi_and_data_type() instead.
-            let schema = FFI_ArrowSchema::try_from(schema_ref.as_ref()).ok()?;
-
-            let data = unsafe { from_ffi(array, &schema) }.ok()?;
+            let data = unsafe {
+                from_ffi_and_data_type(array, DataType::Struct(self.schema().fields().clone()))
+            }
+            .ok()?;
 
             let record_batch = RecordBatch::from(StructArray::from(data));
 
