@@ -2584,14 +2584,8 @@ mod tests {
         }
 
         // page location
-        assert_eq!(
-            0,
-            offset_index.page_locations.get(0).unwrap().first_row_index
-        );
-        assert_eq!(
-            4,
-            offset_index.page_locations.get(1).unwrap().first_row_index
-        );
+        assert_eq!(0, offset_index.page_locations[0].first_row_index);
+        assert_eq!(4, offset_index.page_locations[1].first_row_index);
     }
 
     /// Verify min/max value truncation in the column index works as expected
@@ -2632,8 +2626,8 @@ mod tests {
             assert_eq!(stats.null_count(), 0);
             assert_eq!(stats.distinct_count(), None);
             if let Statistics::FixedLenByteArray(stats) = stats {
-                let column_index_min_value = column_index.min_values.get(0).unwrap();
-                let column_index_max_value = column_index.max_values.get(0).unwrap();
+                let column_index_min_value = &column_index.min_values[0];
+                let column_index_max_value = &column_index.max_values[0];
 
                 // Column index stats are truncated, while the column chunk's aren't.
                 assert_ne!(stats.min_bytes(), column_index_min_value.as_slice());
@@ -2699,8 +2693,8 @@ mod tests {
             assert_eq!(stats.null_count(), 0);
             assert_eq!(stats.distinct_count(), None);
             if let Statistics::FixedLenByteArray(_stats) = stats {
-                let column_index_min_value = column_index.min_values.get(0).unwrap();
-                let column_index_max_value = column_index.max_values.get(0).unwrap();
+                let column_index_min_value = &column_index.min_values[0];
+                let column_index_max_value = &column_index.max_values[0];
 
                 assert_eq!(column_index_min_value.len(), 1);
                 assert_eq!(column_index_max_value.len(), 1);

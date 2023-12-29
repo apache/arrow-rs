@@ -43,11 +43,13 @@ pub(super) fn run_equal(
         return false;
     }
 
-    let lhs_run_ends_array = lhs.child_data().get(0).unwrap();
-    let lhs_values_array = lhs.child_data().get(1).unwrap();
+    let lhs_child_data = lhs.child_data();
+    let lhs_run_ends_array = &lhs_child_data[0];
+    let lhs_values_array = &lhs_child_data[1];
 
-    let rhs_run_ends_array = rhs.child_data().get(0).unwrap();
-    let rhs_values_array = rhs.child_data().get(1).unwrap();
+    let rhs_child_data = rhs.child_data();
+    let rhs_run_ends_array = &rhs_child_data[0];
+    let rhs_values_array = &rhs_child_data[1];
 
     if lhs_run_ends_array.len() != rhs_run_ends_array.len() {
         return false;

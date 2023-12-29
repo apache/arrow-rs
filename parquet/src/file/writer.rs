@@ -1024,8 +1024,7 @@ mod tests {
         // ARROW-11803: Test that the converted and logical types have been populated
         let fields = reader.metadata().file_metadata().schema().get_fields();
         assert_eq!(fields.len(), 1);
-        let read_field = fields.get(0).unwrap();
-        assert_eq!(read_field, &field);
+        assert_eq!(fields[0], field);
     }
 
     #[test]
