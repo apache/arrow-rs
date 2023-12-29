@@ -302,7 +302,7 @@ mod tests {
             .await
             .unwrap();
 
-        assert!(key.value.len() > 0);
+        assert!(!key.value.is_empty());
         assert_eq!(key.signed_tid, tenant_id);
 
         let data = Bytes::from("hello world");
