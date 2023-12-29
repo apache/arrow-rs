@@ -358,9 +358,8 @@ impl Iterator for ArrowArrayStreamReader {
             }
 
             let data = unsafe {
-                from_ffi_and_data_type(array, DataType::Struct(self.schema().fields().clone()))
-            }
-            .ok()?;
+                from_ffi_and_data_type(array, DataType::Struct(self.schema().fields().clone()))?
+            };
 
             let record_batch = RecordBatch::from(StructArray::from(data));
 
