@@ -78,10 +78,10 @@ pub fn canonicalize_schema(schema: &Schema) -> Schema {
         .map(|field| match field.data_type() {
             DataType::Map(child_field, sorted) => match child_field.data_type() {
                 DataType::Struct(fields) if fields.len() == 2 => {
-                    let first_field = fields.get(0).unwrap();
+                    let first_field = &fields[0];
                     let key_field =
                         Arc::new(Field::new("key", first_field.data_type().clone(), false));
-                    let second_field = fields.get(1).unwrap();
+                    let second_field = &fields[1];
                     let value_field = Arc::new(Field::new(
                         "value",
                         second_field.data_type().clone(),
