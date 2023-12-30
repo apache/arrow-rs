@@ -41,9 +41,6 @@ static DEFAULT_METADATA_ENDPOINT: &str = "http://169.254.169.254";
 #[derive(Debug, Snafu)]
 #[allow(missing_docs)]
 enum Error {
-    #[snafu(display("Missing region"))]
-    MissingRegion,
-
     #[snafu(display("Missing bucket name"))]
     MissingBucketName,
 
@@ -559,19 +556,25 @@ impl AmazonS3Builder {
         Ok(())
     }
 
-    /// Set the AWS Access Key (required)
+    /// Set the AWS Access Key
     pub fn with_access_key_id(mut self, access_key_id: impl Into<String>) -> Self {
         self.access_key_id = Some(access_key_id.into());
         self
     }
 
-    /// Set the AWS Secret Access Key (required)
+    /// Set the AWS Secret Access Key
     pub fn with_secret_access_key(mut self, secret_access_key: impl Into<String>) -> Self {
         self.secret_access_key = Some(secret_access_key.into());
         self
     }
 
-    /// Set the region (e.g. `us-east-1`) (required)
+    /// Set the AWS Session Token to use for requests
+    pub fn with_token(mut self, token: impl Into<String>) -> Self {
+        self.token = Some(token.into());
+        self
+    }
+
+    /// Set the region, defaults to `us-east-1`
     pub fn with_region(mut self, region: impl Into<String>) -> Self {
         self.region = Some(region.into());
         self
@@ -583,22 +586,18 @@ impl AmazonS3Builder {
         self
     }
 
-    /// Sets the endpoint for communicating with AWS S3. Default value
-    /// is based on region. The `endpoint` field should be consistent with
-    /// the field `virtual_hosted_style_request'.
+    /// Sets the endpoint for communicating with AWS S3, defaults to the [region endpoint]
     ///
     /// For example, this might be set to `"http://localhost:4566:`
     /// for testing against a localstack instance.
-    /// If `virtual_hosted_style_request` is set to true then `endpoint`
-    /// should have bucket name included.
+    ///
+    /// The `endpoint` field should be consistent with [`Self::with_virtual_hosted_style_request`],
+    /// i.e. if `virtual_hosted_style_request` is set to true then `endpoint`
+    /// should have the bucket name included.
+    ///
+    /// [region endpoint]: https://docs.aws.amazon.com/general/latest/gr/s3.html
     pub fn with_endpoint(mut self, endpoint: impl Into<String>) -> Self {
         self.endpoint = Some(endpoint.into());
-        self
-    }
-
-    /// Set the token to use for requests (passed to underlying provider)
-    pub fn with_token(mut self, token: impl Into<String>) -> Self {
-        self.token = Some(token.into());
         self
     }
 
@@ -741,7 +740,7 @@ impl AmazonS3Builder {
         }
 
         let bucket = self.bucket_name.context(MissingBucketNameSnafu)?;
-        let region = self.region.context(MissingRegionSnafu)?;
+        let region = self.region.unwrap_or_else(|| "us-east-1".to_string());
         let checksum = self.checksum_algorithm.map(|x| x.get()).transpose()?;
         let copy_if_not_exists = self.copy_if_not_exists.map(|x| x.get()).transpose()?;
         let put_precondition = self.conditional_put.map(|x| x.get()).transpose()?;
@@ -948,6 +947,15 @@ mod tests {
                 .unwrap(),
             "true"
         );
+    }
+
+    #[test]
+    fn s3_default_region() {
+        let builder = AmazonS3Builder::new()
+            .with_bucket_name("foo")
+            .build()
+            .unwrap();
+        assert_eq!(builder.client.config.region, "us-east-1");
     }
 
     #[test]
