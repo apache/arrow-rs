@@ -23,14 +23,18 @@ use crate::{Field, FieldRef, Fields, UnionFields};
 /// The set of datatypes that are supported by this implementation of Apache Arrow.
 ///
 /// The Arrow specification on data types includes some more types.
-/// See also [`Schema.fbs`](https://github.com/apache/arrow/blob/master/format/Schema.fbs)
+/// See also [`Schema.fbs`](https://github.com/apache/arrow/blob/main/format/Schema.fbs)
 /// for Arrow's specification.
 ///
 /// The variants of this enum include primitive fixed size types as well as parametric or
 /// nested types.
-/// Currently the Rust implementation supports the following  nested types:
+/// Currently the Rust implementation supports the following nested types:
 ///  - `List<T>`
+///  - `LargeList<T>`
+///  - `FixedSizeList<T>`
 ///  - `Struct<T, U, V, ...>`
+///  - `Union<T, U, V, ...>`
+///  - `Map<K, V>`
 ///
 /// Nested types can themselves be nested within other arrays.
 /// For more information on these types please see
@@ -147,8 +151,10 @@ pub enum DataType {
     /// in milliseconds (64 bits). Values are evenly divisible by 86400000.
     Date64,
     /// A 32-bit time representing the elapsed time since midnight in the unit of `TimeUnit`.
+    /// Must be either seconds or millieseconds.
     Time32(TimeUnit),
     /// A 64-bit time representing the elapsed time since midnight in the unit of `TimeUnit`.
+    /// Must be either microseconds or nanoseconds.
     Time64(TimeUnit),
     /// Measure of elapsed time in either seconds, milliseconds, microseconds or nanoseconds.
     Duration(TimeUnit),
@@ -159,7 +165,7 @@ pub enum DataType {
     /// Opaque binary data of variable length.
     ///
     /// A single Binary array can store up to [`i32::MAX`] bytes
-    /// of binary data in total
+    /// of binary data in total.
     Binary,
     /// Opaque binary data of fixed size.
     /// Enum parameter specifies the number of bytes per value.
@@ -167,27 +173,27 @@ pub enum DataType {
     /// Opaque binary data of variable length and 64-bit offsets.
     ///
     /// A single LargeBinary array can store up to [`i64::MAX`] bytes
-    /// of binary data in total
+    /// of binary data in total.
     LargeBinary,
-    /// A variable-length string in Unicode with UTF-8 encoding
+    /// A variable-length string in Unicode with UTF-8 encoding.
     ///
     /// A single Utf8 array can store up to [`i32::MAX`] bytes
-    /// of string data in total
+    /// of string data in total.
     Utf8,
     /// A variable-length string in Unicode with UFT-8 encoding and 64-bit offsets.
     ///
     /// A single LargeUtf8 array can store up to [`i64::MAX`] bytes
-    /// of string data in total
+    /// of string data in total.
     LargeUtf8,
     /// A list of some logical data type with variable length.
     ///
-    /// A single List array can store up to [`i32::MAX`] elements in total
+    /// A single List array can store up to [`i32::MAX`] elements in total.
     List(FieldRef),
     /// A list of some logical data type with fixed length.
     FixedSizeList(FieldRef, i32),
     /// A list of some logical data type with variable length and 64-bit offsets.
     ///
-    /// A single LargeList array can store up to [`i64::MAX`] elements in total
+    /// A single LargeList array can store up to [`i64::MAX`] elements in total.
     LargeList(FieldRef),
     /// A nested datatype that contains a number of sub-fields.
     Struct(Fields),
