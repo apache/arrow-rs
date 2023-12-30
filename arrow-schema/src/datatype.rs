@@ -72,7 +72,7 @@ pub enum DataType {
     ///
     /// Time is measured as a Unix epoch, counting the seconds from
     /// 00:00:00.000 on 1 January 1970, excluding leap seconds,
-    /// as a 64-bit integer.
+    /// as a signed 64-bit integer.
     ///
     /// The time zone is a string indicating the name of a time zone, one of:
     ///
@@ -144,16 +144,16 @@ pub enum DataType {
     /// DataType::Timestamp(TimeUnit::Second, Some("string".to_string().into()));
     /// ```
     Timestamp(TimeUnit, Option<Arc<str>>),
-    /// A 32-bit date representing the elapsed time since UNIX epoch (1970-01-01)
+    /// A signed 32-bit date representing the elapsed time since UNIX epoch (1970-01-01)
     /// in days (32 bits).
     Date32,
-    /// A 64-bit date representing the elapsed time since UNIX epoch (1970-01-01)
+    /// A signed 64-bit date representing the elapsed time since UNIX epoch (1970-01-01)
     /// in milliseconds (64 bits). Values are evenly divisible by 86400000.
     Date64,
-    /// A 32-bit time representing the elapsed time since midnight in the unit of `TimeUnit`.
+    /// A signed 32-bit time representing the elapsed time since midnight in the unit of `TimeUnit`.
     /// Must be either seconds or millieseconds.
     Time32(TimeUnit),
-    /// A 64-bit time representing the elapsed time since midnight in the unit of `TimeUnit`.
+    /// A signed 64-bit time representing the elapsed time since midnight in the unit of `TimeUnit`.
     /// Must be either microseconds or nanoseconds.
     Time64(TimeUnit),
     /// Measure of elapsed time in either seconds, milliseconds, microseconds or nanoseconds.
