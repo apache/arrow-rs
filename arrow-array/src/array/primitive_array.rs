@@ -713,9 +713,8 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
     /// the semantic values of the array, e.g. 100 milliseconds in a [`TimestampNanosecondArray`]
     /// will become 100 seconds in a [`TimestampSecondArray`].
     ///
-    /// For casts that preserve the semantic value, check out the [compute kernels]
-    ///
-    /// [compute kernels](https://docs.rs/arrow/latest/arrow/compute/kernels/cast/index.html)
+    /// For casts that preserve the semantic value, check out the
+    /// [compute kernels](https://docs.rs/arrow/latest/arrow/compute/kernels/cast/index.html).
     ///
     /// ```
     /// # use arrow_array::{Int64Array, TimestampNanosecondArray};
