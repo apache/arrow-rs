@@ -522,7 +522,7 @@ fn parse_message(buf: &[u8]) -> Result<Message, ArrowError> {
         .map_err(|err| ArrowError::ParseError(format!("Unable to get root as message: {err:?}")))
 }
 
-/// Read the footer length from the last 10 bytes of a file
+/// Read the footer length from the last 10 bytes of an Arrow IPC file
 ///
 /// Expects a 4 byte footer length followed by `b"ARROW1"`
 pub fn read_footer_length(buf: [u8; 10]) -> Result<usize, ArrowError> {
