@@ -151,7 +151,7 @@ pub enum DataType {
     /// in milliseconds (64 bits). Values are evenly divisible by 86400000.
     Date64,
     /// A signed 32-bit time representing the elapsed time since midnight in the unit of `TimeUnit`.
-    /// Must be either seconds or millieseconds.
+    /// Must be either seconds or milliseconds.
     Time32(TimeUnit),
     /// A signed 64-bit time representing the elapsed time since midnight in the unit of `TimeUnit`.
     /// Must be either microseconds or nanoseconds.
