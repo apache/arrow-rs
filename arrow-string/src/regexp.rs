@@ -378,11 +378,9 @@ pub fn regexp_match(
         match array.data_type() {
             DataType::Utf8 => regexp_scalar_match(array.as_string::<i32>(), &re),
             DataType::LargeUtf8 => regexp_scalar_match(array.as_string::<i64>(), &re),
-            _ => {
-                return Err(ArrowError::ComputeError(
-                    "regexp_match() requires array to be either Utf8 or LargeUtf8".to_string(),
-                ));
-            }
+            _ => Err(ArrowError::ComputeError(
+                "regexp_match() requires array to be either Utf8 or LargeUtf8".to_string(),
+            )),
         }
     } else {
         match array.data_type() {
@@ -396,11 +394,9 @@ pub fn regexp_match(
                 let flags_array = flags.map(|flags| flags.as_string());
                 regexp_array_match(array.as_string::<i64>(), regex_array, flags_array)
             }
-            _ => {
-                return Err(ArrowError::ComputeError(
-                    "regexp_match() requires array to be either Utf8 or LargeUtf8".to_string(),
-                ));
-            }
+            _ => Err(ArrowError::ComputeError(
+                "regexp_match() requires array to be either Utf8 or LargeUtf8".to_string(),
+            )),
         }
     }
 }
