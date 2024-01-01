@@ -868,7 +868,8 @@ impl AmazonS3Builder {
         // For example, if `virtual_hosted_style_request` is true then `endpoint` should have bucket name included.
         let virtual_hosted = self.virtual_hosted_style_request.get()?;
         let bucket_endpoint = match (&self.endpoint, zonal_endpoint, virtual_hosted) {
-            (Some(endpoint), _, _) => endpoint.clone(),
+            (Some(endpoint), _, true) => endpoint.clone(),
+            (Some(endpoint), _, false) => format!("{endpoint}/{bucket}"),
             (None, Some(endpoint), _) => endpoint,
             (None, None, true) => format!("https://{bucket}.s3.{region}.amazonaws.com"),
             (None, None, false) => format!("https://s3.{region}.amazonaws.com/{bucket}"),
