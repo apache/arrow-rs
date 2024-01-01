@@ -38,7 +38,7 @@ humantime = "2.1"
 itertools = "0.12.0"
 parking_lot = { version = "0.12" }
 percent-encoding = "2.1"
-snafu = "0.7"
+snafu = "0.8"
 tracing = { version = "0.1" }
 url = "2.2"
 walkdir = "2"
