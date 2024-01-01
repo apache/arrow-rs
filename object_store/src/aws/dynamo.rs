@@ -27,7 +27,7 @@ use serde::{Deserialize, Serialize, Serializer};
 
 use crate::aws::client::S3Client;
 use crate::aws::credential::CredentialExt;
-use crate::aws::AwsCredential;
+use crate::aws::{AwsAuthorizer, AwsCredential};
 use crate::client::get::GetClientExt;
 use crate::client::retry::Error as RetryError;
 use crate::client::retry::RetryExt;
@@ -320,6 +320,7 @@ impl DynamoCommit {
         req: R,
     ) -> Result<Response, RetryError> {
         let region = &s3.config.region;
+        let authorizer = cred.map(|x| AwsAuthorizer::new(x, "dynamodb", region));
 
         let builder = match &s3.config.endpoint {
             Some(e) => s3.client.post(e),
@@ -333,7 +334,7 @@ impl DynamoCommit {
             .timeout(Duration::from_millis(self.timeout))
             .json(&req)
             .header("X-Amz-Target", target)
-            .with_aws_sigv4(cred, region, "dynamodb", true, None)
+            .with_aws_sigv4(authorizer, None)
             .send_retry(&s3.config.retry_config)
             .await
     }
