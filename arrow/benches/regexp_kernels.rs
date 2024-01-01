@@ -25,7 +25,7 @@ use arrow::array::*;
 use arrow::compute::kernels::regexp::*;
 use arrow::util::bench_util::*;
 
-fn bench_regexp(arr: &GenericStringArray<i32>, regex_array: &GenericStringArray<i32>) {
+fn bench_regexp(arr: &GenericStringArray<i32>, regex_array: &dyn Datum) {
     regexp_match(criterion::black_box(arr), regex_array, None).unwrap();
 }
 
@@ -38,6 +38,13 @@ fn add_benchmark(c: &mut Criterion) {
     let pattern = GenericStringArray::<i32>::from(pattern_values);
 
     c.bench_function("regexp", |b| b.iter(|| bench_regexp(&arr_string, &pattern)));
+
+    let pattern_values = vec![r".*-(\d*)-.*"];
+    let pattern = Scalar::new(GenericStringArray::<i32>::from(pattern_values));
+
+    c.bench_function("regexp scalar", |b| {
+        b.iter(|| bench_regexp(&arr_string, &pattern))
+    });
 }
 
 criterion_group!(benches, add_benchmark);
