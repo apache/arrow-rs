@@ -19,7 +19,7 @@
 use crate::{
     maybe_spawn_blocking,
     path::{absolute_path_to_url, Path},
-    util::as_generic_err,
+    util::InvalidGetRange,
     GetOptions, GetResult, GetResultPayload, ListResult, MultipartId, ObjectMeta, ObjectStore,
     PutMode, PutOptions, PutResult, Result,
 };
@@ -43,8 +43,6 @@ use std::{collections::VecDeque, path::PathBuf};
 use tokio::io::AsyncWrite;
 use url::Url;
 use walkdir::{DirEntry, WalkDir};
-
-const STORE: &'static str = "LocalFileSystem";
 
 /// A specialized `Error` for filesystem object store-related errors
 #[derive(Debug, Snafu)]
@@ -112,6 +110,11 @@ pub(crate) enum Error {
         path: PathBuf,
         expected: usize,
         actual: usize,
+    },
+
+    #[snafu(display("Requested range was invalid"))]
+    InvalidRange {
+        source: InvalidGetRange,
     },
 
     #[snafu(display("Unable to copy file from {} to {}: {}", from.display(), to.display(), source))]
@@ -420,8 +423,7 @@ impl ObjectStore for LocalFileSystem {
             options.check_preconditions(&meta)?;
 
             let range = if let Some(r) = options.range {
-                r.as_range(meta.size)
-                    .map_err(|e| as_generic_err(STORE, e))?
+                r.as_range(meta.size).context(InvalidRangeSnafu)?
             } else {
                 0..meta.size
             };

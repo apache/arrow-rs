@@ -54,7 +54,6 @@ reqwest = { version = "0.11", default-features = false, features = ["rustls-tls-
 ring = { version = "0.17", default-features = false, features = ["std"], optional = true }
 rustls-pemfile = { version = "1.0", default-features = false, optional = true }
 tokio = { version = "1.25.0", features = ["sync", "macros", "rt", "time", "io-util"] }
-http-content-range = "0.1.2"
 
 [target.'cfg(target_family="unix")'.dev-dependencies]
 nix = { version = "0.27.1", features = ["fs"] }

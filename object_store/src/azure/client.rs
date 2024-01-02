@@ -99,6 +99,9 @@ pub(crate) enum Error {
         source: crate::client::header::Error,
     },
 
+    #[snafu(display("Operation not supported by this store: {reason}"))]
+    NotSupported { reason: &'static str },
+
     #[snafu(display("ETag required for conditional update"))]
     MissingETag,
 }
@@ -109,6 +112,9 @@ impl From<Error> for crate::Error {
             Error::GetRequest { source, path }
             | Error::DeleteRequest { source, path }
             | Error::PutRequest { source, path } => source.error(STORE, path),
+            Error::NotSupported { .. } => Self::NotSupported {
+                source: Box::new(err),
+            },
             _ => Self::Generic {
                 store: STORE,
                 source: Box::new(err),
@@ -356,6 +362,19 @@ impl GetClient for AzureClient {
     /// <https://docs.microsoft.com/en-us/rest/api/storageservices/get-blob>
     /// <https://docs.microsoft.com/en-us/rest/api/storageservices/get-blob-properties>
     async fn get_request(&self, path: &Path, options: GetOptions) -> Result<Response> {
+        // As of 2024-01-02, Azure does not support suffix requests,
+        // so we should fail fast here rather than sending one
+        if let Some(r) = options.range.as_ref() {
+            match r {
+                crate::util::GetRange::Suffix(_) => {
+                    Err(Error::NotSupported {
+                        reason: "suffix request",
+                    })?;
+                }
+                _ => (),
+            }
+        }
+
         let credential = self.get_credential().await?;
         let url = self.config.path_url(path);
         let method = match options.head {

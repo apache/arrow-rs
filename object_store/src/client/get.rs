@@ -25,7 +25,52 @@ use crate::{GetResultPayload, Result};
 use async_trait::async_trait;
 use futures::{StreamExt, TryStreamExt};
 use reqwest::Response;
-use snafu::Snafu;
+use snafu::{ResultExt, Snafu};
+
+/// A specialized `Error` for get-related errors
+#[derive(Debug, Snafu)]
+#[allow(missing_docs)]
+pub(crate) enum Error {
+    #[snafu(display("Could not extract metadata from response headers"))]
+    Header {
+        store: &'static str,
+        source: crate::client::header::Error,
+    },
+
+    #[snafu(display("Requested an invalid range"))]
+    InvalidRangeRequest {
+        store: &'static str,
+        source: crate::util::InvalidGetRange,
+    },
+
+    #[snafu(display("Got an invalid range response"))]
+    InvalidRangeResponse {
+        store: &'static str,
+        source: crate::util::InvalidRangeResponse,
+    },
+
+    #[snafu(display("Requested {expected:?}, got {actual:?}"))]
+    UnexpectedRange {
+        store: &'static str,
+        expected: Range<usize>,
+        actual: Range<usize>,
+    },
+}
+
+impl From<Error> for crate::Error {
+    fn from(err: Error) -> Self {
+        let store = match err {
+            Error::Header { store, .. } => store,
+            Error::InvalidRangeRequest { store, .. } => store,
+            Error::InvalidRangeResponse { store, .. } => store,
+            Error::UnexpectedRange { store, .. } => store,
+        };
+        Self::Generic {
+            store: store,
+            source: Box::new(err),
+        }
+    }
+}
 
 /// A client that can perform a get request
 #[async_trait]
@@ -36,13 +81,6 @@ pub trait GetClient: Send + Sync + 'static {
     const HEADER_CONFIG: HeaderConfig;
 
     async fn get_request(&self, path: &Path, options: GetOptions) -> Result<Response>;
-}
-
-#[derive(Debug, Snafu)]
-#[snafu(display("Requested range {expected:?}, got {actual:?}"))]
-pub struct UnexpectedRange {
-    expected: Range<usize>,
-    actual: Range<usize>,
 }
 
 /// Extension trait for [`GetClient`] that adds common retrieval functionality
@@ -57,20 +95,23 @@ impl<T: GetClient> GetClientExt for T {
         let range = options.range.clone();
         let response = self.get_request(location, options).await?;
         let meta = header_meta(location, response.headers(), T::HEADER_CONFIG)
-            .map_err(|e| as_generic_err(T::STORE, e))?;
+            .context(HeaderSnafu { store: T::STORE })?;
 
         // ensure that we receive the range we asked for
         let out_range = if let Some(r) = range {
             let actual = r
                 .as_range(meta.size)
-                .map_err(|source| as_generic_err(T::STORE, source))?;
+                .context(InvalidRangeRequestSnafu { store: T::STORE })?;
+
             let expected =
-                response_range(&response).map_err(|source| as_generic_err(T::STORE, source))?;
+                response_range(&response).context(InvalidRangeResponseSnafu { store: T::STORE })?;
+
             if actual != expected {
-                return Err(as_generic_err(
-                    T::STORE,
-                    UnexpectedRange { expected, actual },
-                ));
+                Err(Error::UnexpectedRange {
+                    store: T::STORE,
+                    expected,
+                    actual: actual.clone(),
+                })?;
             }
             actual
         } else {
