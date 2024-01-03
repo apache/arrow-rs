@@ -387,7 +387,7 @@ mod tests {
     #[test]
     fn getrange_str() {
         assert_eq!(GetRange::Offset(0).to_string(), "0-");
-        assert_eq!(GetRange::Bounded(10..19).to_string(), "10-20");
+        assert_eq!(GetRange::Bounded(10..19).to_string(), "10-18");
         assert_eq!(GetRange::Suffix(10).to_string(), "-10");
     }
 

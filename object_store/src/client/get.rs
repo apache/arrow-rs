@@ -19,7 +19,7 @@ use std::ops::Range;
 
 use crate::client::header::{header_meta, HeaderConfig};
 use crate::path::Path;
-use crate::{GetOptions, GetRange, GetResult, GetResultPayload};
+use crate::{GetOptions, GetRange, GetResult, GetResultPayload, Result};
 use async_trait::async_trait;
 use futures::{StreamExt, TryStreamExt};
 use hyper::header::CONTENT_RANGE;
@@ -28,10 +28,49 @@ use reqwest::header::ToStrError;
 use reqwest::Response;
 use snafu::{ensure, OptionExt, ResultExt, Snafu};
 
+/// A client that can perform a get request
+#[async_trait]
+pub trait GetClient: Send + Sync + 'static {
+    const STORE: &'static str;
+
+    /// Configure the [`HeaderConfig`] for this client
+    const HEADER_CONFIG: HeaderConfig;
+
+    async fn get_request(&self, path: &Path, options: GetOptions) -> Result<Response>;
+}
+
+/// Extension trait for [`GetClient`] that adds common retrieval functionality
+#[async_trait]
+pub trait GetClientExt {
+    async fn get_opts(&self, location: &Path, options: GetOptions) -> Result<GetResult>;
+}
+
+#[async_trait]
+impl<T: GetClient> GetClientExt for T {
+    async fn get_opts(&self, location: &Path, options: GetOptions) -> Result<GetResult> {
+        let range = options.range.clone();
+        let response = self.get_request(location, options).await?;
+        get_result::<T>(location, range, response).map_err(|e| crate::Error::Generic {
+            store: T::STORE,
+            source: Box::new(e),
+        })
+    }
+}
+fn parse_content_range(s: &str) -> Option<Range<usize>> {
+    let rem = s.trim().strip_prefix("bytes ")?;
+    let (range, _) = rem.split_once('/')?;
+    let (start_s, end_s) = range.split_once('-')?;
+
+    let start = start_s.parse().ok()?;
+    let end: usize = end_s.parse().ok()?;
+
+    Some(start..(end + 1))
+}
+
 /// A specialized `Error` for get-related errors
 #[derive(Debug, Snafu)]
 #[allow(missing_docs)]
-pub(crate) enum Error {
+enum GetResultError {
     #[snafu(context(false))]
     Header {
         source: crate::client::header::Error,
@@ -61,52 +100,11 @@ pub(crate) enum Error {
     },
 }
 
-pub(crate) type Result<T, E = Error> = std::result::Result<T, E>;
-
-/// A client that can perform a get request
-#[async_trait]
-pub trait GetClient: Send + Sync + 'static {
-    const STORE: &'static str;
-
-    /// Configure the [`HeaderConfig`] for this client
-    const HEADER_CONFIG: HeaderConfig;
-
-    async fn get_request(&self, path: &Path, options: GetOptions) -> crate::Result<Response>;
-}
-
-/// Extension trait for [`GetClient`] that adds common retrieval functionality
-#[async_trait]
-pub trait GetClientExt {
-    async fn get_opts(&self, location: &Path, options: GetOptions) -> crate::Result<GetResult>;
-}
-
-#[async_trait]
-impl<T: GetClient> GetClientExt for T {
-    async fn get_opts(&self, location: &Path, options: GetOptions) -> crate::Result<GetResult> {
-        let range = options.range.clone();
-        let response = self.get_request(location, options).await?;
-        get_result::<T>(location, range, response).map_err(|e| crate::Error::Generic {
-            store: T::STORE,
-            source: Box::new(e),
-        })
-    }
-}
-fn parse_content_range(s: &str) -> Option<Range<usize>> {
-    let rem = s.trim().strip_prefix("bytes ")?;
-    let (range, _) = rem.split_once('/')?;
-    let (start_s, end_s) = range.split_once('-')?;
-
-    let start = start_s.parse().ok()?;
-    let end: usize = end_s.parse().ok()?;
-
-    Some(start..(end + 1))
-}
-
 fn get_result<T: GetClient>(
     location: &Path,
     range: Option<GetRange>,
     response: Response,
-) -> Result<GetResult> {
+) -> Result<GetResult, GetResultError> {
     let meta = header_meta(location, response.headers(), T::HEADER_CONFIG)?;
 
     // ensure that we receive the range we asked for
