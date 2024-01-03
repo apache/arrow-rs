@@ -220,17 +220,12 @@ impl GetRange {
     pub(crate) fn as_range(&self, len: usize) -> Result<Range<usize>, InvalidGetRange> {
         match self {
             Self::Bounded(r) => {
-                if r.start >= len {
-                    Err(InvalidGetRange::StartTooLarge {
-                        expected: r.start,
-                        actual: len,
-                    })
-                } else if r.end <= r.start {
+                if r.end < r.start {
                     Err(InvalidGetRange::Inconsistent {
                         start: r.start,
                         end: r.end,
                     })
-                } else if r.end >= len {
+                } else if r.end > len {
                     Err(InvalidGetRange::EndTooLarge {
                         expected: r.end,
                         actual: len,
@@ -240,7 +235,7 @@ impl GetRange {
                 }
             }
             Self::Offset(o) => {
-                if o >= &len {
+                if *o > len {
                     Err(InvalidGetRange::StartTooLarge {
                         expected: *o,
                         actual: len,
@@ -403,5 +398,51 @@ mod tests {
         assert_eq!(Into::<GetRange>::into(10..=15), GetRange::Bounded(10..16),);
         assert_eq!(Into::<GetRange>::into(10..), GetRange::Offset(10),);
         assert_eq!(Into::<GetRange>::into(..=15), GetRange::Bounded(0..16));
+    }
+
+    #[test]
+    fn test_as_range() {
+        let range = GetRange::Bounded(2..5);
+        assert_eq!(range.as_range(5).unwrap(), 2..5);
+
+        let err = range.as_range(4).unwrap_err().to_string();
+        assert_eq!(
+            err,
+            "Wanted range ending at 5, but resource was only 4 bytes long"
+        );
+
+        let range = GetRange::Bounded(3..3);
+        let err = range.as_range(2).unwrap_err().to_string();
+        assert_eq!(
+            err,
+            "Wanted range ending at 3, but resource was only 2 bytes long"
+        );
+
+        let range = GetRange::Bounded(2..2);
+        assert_eq!(range.as_range(3).unwrap(), 2..2);
+
+        let range = GetRange::Suffix(3);
+        assert_eq!(range.as_range(3).unwrap(), 0..3);
+
+        let err = range.as_range(2).unwrap_err().to_string();
+        assert_eq!(
+            err,
+            "Wanted suffix of 3 bytes, but resource was only 2 bytes long"
+        );
+
+        let range = GetRange::Suffix(0);
+        assert_eq!(range.as_range(0).unwrap(), 0..0);
+
+        let range = GetRange::Offset(2);
+        assert_eq!(range.as_range(2).unwrap(), 2..2);
+
+        let err = range.as_range(1).unwrap_err().to_string();
+        assert_eq!(
+            err,
+            "Wanted range starting at 2, but resource was only 1 bytes long"
+        );
+
+        let range = GetRange::Offset(1);
+        assert_eq!(range.as_range(2).unwrap(), 1..2);
     }
 }
