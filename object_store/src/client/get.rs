@@ -277,7 +277,12 @@ mod tests {
             "Content-Range header not present in partial response"
         );
 
-        let resp = make_response(2, Some(2..3), StatusCode::PARTIAL_CONTENT, None);
+        let resp = make_response(
+            2,
+            Some(2..3),
+            StatusCode::PARTIAL_CONTENT,
+            Some("bytes 2-3/2"),
+        );
         let err = get_result::<TestClient>(&path, Some(get_range.clone()), resp).unwrap_err();
         assert_eq!(
             err.to_string(),
