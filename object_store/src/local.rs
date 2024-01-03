@@ -422,10 +422,9 @@ impl ObjectStore for LocalFileSystem {
             let meta = convert_metadata(metadata, location)?;
             options.check_preconditions(&meta)?;
 
-            let range = if let Some(r) = options.range {
-                r.as_range(meta.size).context(InvalidRangeSnafu)?
-            } else {
-                0..meta.size
+            let range = match options.range {
+                Some(r) => r.as_range(meta.size).context(InvalidRangeSnafu)?,
+                None => 0..meta.size,
             };
 
             Ok(GetResult {

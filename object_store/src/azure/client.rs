@@ -25,7 +25,7 @@ use crate::client::retry::RetryExt;
 use crate::client::GetOptionsExt;
 use crate::multipart::PartId;
 use crate::path::DELIMITER;
-use crate::util::deserialize_rfc1123;
+use crate::util::{deserialize_rfc1123, GetRange};
 use crate::{
     ClientOptions, GetOptions, ListResult, ObjectMeta, Path, PutMode, PutOptions, PutResult,
     Result, RetryConfig,
@@ -99,9 +99,6 @@ pub(crate) enum Error {
         source: crate::client::header::Error,
     },
 
-    #[snafu(display("Operation not supported by this store: {reason}"))]
-    NotSupported { reason: &'static str },
-
     #[snafu(display("ETag required for conditional update"))]
     MissingETag,
 }
@@ -112,9 +109,6 @@ impl From<Error> for crate::Error {
             Error::GetRequest { source, path }
             | Error::DeleteRequest { source, path }
             | Error::PutRequest { source, path } => source.error(STORE, path),
-            Error::NotSupported { .. } => Self::NotSupported {
-                source: Box::new(err),
-            },
             _ => Self::Generic {
                 store: STORE,
                 source: Box::new(err),
@@ -364,15 +358,10 @@ impl GetClient for AzureClient {
     async fn get_request(&self, path: &Path, options: GetOptions) -> Result<Response> {
         // As of 2024-01-02, Azure does not support suffix requests,
         // so we should fail fast here rather than sending one
-        if let Some(r) = options.range.as_ref() {
-            match r {
-                crate::util::GetRange::Suffix(_) => {
-                    Err(Error::NotSupported {
-                        reason: "suffix request",
-                    })?;
-                }
-                _ => (),
-            }
+        if let Some(GetRange::Suffix(_)) = options.range.as_ref() {
+            return Err(crate::Error::NotSupported {
+                source: "Azure does not support suffix range requests".into(),
+            });
         }
 
         let credential = self.get_credential().await?;

@@ -497,7 +497,7 @@ mod parse;
 mod util;
 
 pub use parse::{parse_url, parse_url_opts};
-use util::GetRange;
+pub use util::GetRange;
 
 use crate::path::Path;
 #[cfg(not(target_arch = "wasm32"))]
@@ -1889,7 +1889,7 @@ mod tests {
 
         // We can abort an in-progress write
         let (upload_id, mut writer) = storage.put_multipart(&location).await.unwrap();
-        if let Some(chunk) = data.get(0) {
+        if let Some(chunk) = data.first() {
             writer.write_all(chunk).await.unwrap();
             let _ = writer.write(chunk).await.unwrap();
         }

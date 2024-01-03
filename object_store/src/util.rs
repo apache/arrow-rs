@@ -19,16 +19,11 @@
 use std::{
     fmt::Display,
     ops::{Range, RangeBounds},
-    str::from_utf8,
 };
-
-use crate::Error;
 
 use super::Result;
 use bytes::Bytes;
 use futures::{stream::StreamExt, Stream, TryStreamExt};
-use hyper::{header::CONTENT_RANGE, http::HeaderValue, StatusCode};
-use reqwest::Response;
 use snafu::Snafu;
 
 #[cfg(any(feature = "azure", feature = "http"))]
@@ -109,12 +104,12 @@ pub const OBJECT_STORE_COALESCE_PARALLEL: usize = 10;
 /// * Make multiple `fetch` requests in parallel (up to maximum of 10)
 ///
 pub async fn coalesce_ranges<F, E, Fut>(
-    ranges: &[std::ops::Range<usize>],
+    ranges: &[Range<usize>],
     fetch: F,
     coalesce: usize,
 ) -> Result<Vec<Bytes>, E>
 where
-    F: Send + FnMut(std::ops::Range<usize>) -> Fut,
+    F: Send + FnMut(Range<usize>) -> Fut,
     E: Send,
     Fut: std::future::Future<Output = Result<Bytes, E>> + Send,
 {
@@ -141,7 +136,7 @@ where
 }
 
 /// Returns a sorted list of ranges that cover `ranges`
-fn merge_ranges(ranges: &[std::ops::Range<usize>], coalesce: usize) -> Vec<std::ops::Range<usize>> {
+fn merge_ranges(ranges: &[Range<usize>], coalesce: usize) -> Vec<Range<usize>> {
     if ranges.is_empty() {
         return vec![];
     }
@@ -183,11 +178,11 @@ fn merge_ranges(ranges: &[std::ops::Range<usize>], coalesce: usize) -> Vec<std::
 /// These can be created from [usize] ranges, like
 ///
 /// ```rust
-/// # use byteranges::request::HttpRange;
-/// let range1: HttpRange = (50..150).into();
-/// let range2: HttpRange = (50..=150).into();
-/// let range3: HttpRange = (50..).into();
-/// let range4: HttpRange = (..150).into();
+/// # use object_store::GetRange;
+/// let range1: GetRange = (50..150).into();
+/// let range2: GetRange = (50..=150).into();
+/// let range3: GetRange = (50..).into();
+/// let range4: GetRange = (..150).into();
 /// ```
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum GetRange {
@@ -200,7 +195,7 @@ pub enum GetRange {
 }
 
 #[derive(Debug, Snafu)]
-pub enum InvalidGetRange {
+pub(crate) enum InvalidGetRange {
     #[snafu(display("Wanted suffix with {expected}B, resource was {actual}B long"))]
     SuffixTooLarge { expected: usize, actual: usize },
 
@@ -215,7 +210,7 @@ pub enum InvalidGetRange {
 }
 
 impl GetRange {
-    /// Convert to a [std::ops::Range<usize>] if valid.
+    /// Convert to a [`Range`] if valid.
     pub(crate) fn as_range(&self, len: usize) -> Result<Range<usize>, InvalidGetRange> {
         match self {
             Self::Bounded(r) => {
@@ -263,9 +258,9 @@ impl GetRange {
 impl Display for GetRange {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            GetRange::Bounded(r) => f.write_fmt(format_args!("{}-{}", r.start, r.end - 1)),
-            GetRange::Offset(o) => f.write_fmt(format_args!("{o}-")),
-            GetRange::Suffix(n) => f.write_fmt(format_args!("-{n}")),
+            Self::Bounded(r) => f.write_fmt(format_args!("{}-{}", r.start, r.end - 1)),
+            Self::Offset(o) => f.write_fmt(format_args!("{o}-")),
+            Self::Suffix(n) => f.write_fmt(format_args!("-{n}")),
         }
     }
 }
@@ -279,63 +274,10 @@ impl<T: RangeBounds<usize>> From<T> for GetRange {
             Unbounded => 0,
         };
         match value.end_bound() {
-            Included(i) => GetRange::Bounded(first..(i + 1)),
-            Excluded(i) => GetRange::Bounded(first..*i),
-            Unbounded => GetRange::Offset(first),
+            Included(i) => Self::Bounded(first..(i + 1)),
+            Excluded(i) => Self::Bounded(first..*i),
+            Unbounded => Self::Offset(first),
         }
-    }
-}
-
-#[derive(Debug, Snafu)]
-pub enum InvalidRangeResponse {
-    #[snafu(display("Response was not PARTIAL_CONTENT; length {length:?}"))]
-    NotPartial { length: Option<usize> },
-    #[snafu(display("Content-Range header not present"))]
-    NoContentRange,
-    #[snafu(display("Content-Range header could not be parsed: {value:?}"))]
-    InvalidContentRange { value: Vec<u8> },
-}
-
-fn parse_content_range(val: &HeaderValue) -> Result<Range<usize>, InvalidRangeResponse> {
-    let bts = val.as_bytes();
-
-    let err = || InvalidRangeResponse::InvalidContentRange {
-        value: bts.to_vec(),
-    };
-    let s = from_utf8(bts).map_err(|_| err())?;
-    let rem = s.trim().strip_prefix("bytes ").ok_or_else(err)?;
-    let (range, _) = rem.split_once("/").ok_or_else(err)?;
-    let (start_s, end_s) = range.split_once("-").ok_or_else(err)?;
-
-    let start = start_s.parse().map_err(|_| err())?;
-    let end: usize = end_s.parse().map_err(|_| err())?;
-
-    Ok(start..(end + 1))
-}
-
-/// Ensure that the given [Response] contains Partial Content with a single byte range,
-/// and get that range range.
-pub(crate) fn response_range(r: &Response) -> Result<Range<usize>, InvalidRangeResponse> {
-    use InvalidRangeResponse::*;
-
-    if r.status() != StatusCode::PARTIAL_CONTENT {
-        return Err(NotPartial {
-            length: r.content_length().map(|s| s as usize),
-        });
-    }
-
-    let val = r.headers().get(CONTENT_RANGE).ok_or(NoContentRange)?;
-
-    parse_content_range(val)
-}
-
-pub(crate) fn as_generic_err<E: std::error::Error + Send + Sync + 'static>(
-    store: &'static str,
-    source: E,
-) -> Error {
-    Error::Generic {
-        store,
-        source: Box::new(source),
     }
 }
 
