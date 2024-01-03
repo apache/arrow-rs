@@ -58,11 +58,16 @@ impl<T: GetClient> GetClientExt for T {
 }
 
 struct ContentRange {
+    /// The range of the object returned
     range: Range<usize>,
+    /// The total size of the object being requested
     size: usize,
 }
 
 impl ContentRange {
+    /// Parse a content range of the form `bytes <range-start>-<range-end>/<size>`
+    ///
+    /// <https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Content-Range>
     fn from_str(s: &str) -> Option<Self> {
         let rem = s.trim().strip_prefix("bytes ")?;
         let (range, size) = rem.split_once('/')?;
