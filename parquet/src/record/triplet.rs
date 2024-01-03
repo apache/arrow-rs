@@ -296,17 +296,19 @@ impl<T: DataType> TypedTripletIter<T> {
         // and therefore not advance `self.triplets_left`
         while self.curr_triplet_index >= self.triplets_left {
             let (records_read, values_read, levels_read) = {
-                // Get slice of definition levels, if available
-                let def_levels = self.def_levels.as_mut().map(|vec| &mut vec[..]);
-
-                // Get slice of repetition levels, if available
-                let rep_levels = self.rep_levels.as_mut().map(|vec| &mut vec[..]);
+                self.values.clear();
+                if let Some(x) = &mut self.def_levels {
+                    x.clear()
+                }
+                if let Some(x) = &mut self.rep_levels {
+                    x.clear()
+                }
 
                 // Buffer triplets
                 self.reader.read_records(
                     self.batch_size,
-                    def_levels,
-                    rep_levels,
+                    self.def_levels.as_mut(),
+                    self.rep_levels.as_mut(),
                     &mut self.values,
                 )?
             };
@@ -333,6 +335,7 @@ impl<T: DataType> TypedTripletIter<T> {
                 // Note: if values_read == 0, then spacing will not be triggered
                 let mut idx = values_read;
                 let def_levels = self.def_levels.as_ref().unwrap();
+                self.values.resize(levels_read, T::T::default());
                 for i in 0..levels_read {
                     if def_levels[levels_read - i - 1] == self.max_def_level {
                         idx -= 1; // This is done to avoid usize becoming a negative value

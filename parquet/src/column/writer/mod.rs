@@ -21,7 +21,7 @@ use bytes::Bytes;
 use half::f16;
 
 use crate::bloom_filter::Sbbf;
-use crate::format::{ColumnIndex, OffsetIndex};
+use crate::format::{BoundaryOrder, ColumnIndex, OffsetIndex};
 use std::collections::{BTreeSet, VecDeque};
 use std::str;
 
@@ -228,6 +228,13 @@ pub struct GenericColumnWriter<'a, E: ColumnValueEncoder> {
     // column index and offset index
     column_index_builder: ColumnIndexBuilder,
     offset_index_builder: OffsetIndexBuilder,
+
+    // Below fields used to incrementally check boundary order across data pages.
+    // We assume they are ascending/descending until proven wrong.
+    data_page_boundary_ascending: bool,
+    data_page_boundary_descending: bool,
+    /// (min, max)
+    last_non_null_data_page_min_max: Option<(E::T, E::T)>,
 }
 
 impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
@@ -279,6 +286,9 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
             column_index_builder: ColumnIndexBuilder::new(),
             offset_index_builder: OffsetIndexBuilder::new(),
             encodings,
+            data_page_boundary_ascending: true,
+            data_page_boundary_descending: true,
+            last_non_null_data_page_min_max: None,
         }
     }
 
@@ -319,25 +329,11 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
             None => values.len(),
         };
 
-        // If only computing chunk-level statistics compute them here, page-level statistics
-        // are computed in [`Self::write_mini_batch`] and used to update chunk statistics in
-        // [`Self::add_data_page`]
-        if self.statistics_enabled == EnabledStatistics::Chunk {
-            match (min, max) {
-                (Some(min), Some(max)) => {
-                    update_min(&self.descr, min, &mut self.column_metrics.min_column_value);
-                    update_max(&self.descr, max, &mut self.column_metrics.max_column_value);
-                }
-                (None, Some(_)) | (Some(_), None) => {
-                    panic!("min/max should be both set or both None")
-                }
-                (None, None) => {
-                    if let Some((min, max)) = self.encoder.min_max(values, value_indices) {
-                        update_min(&self.descr, &min, &mut self.column_metrics.min_column_value);
-                        update_max(&self.descr, &max, &mut self.column_metrics.max_column_value);
-                    }
-                }
-            };
+        if let Some(min) = min {
+            update_min(&self.descr, min, &mut self.column_metrics.min_column_value);
+        }
+        if let Some(max) = max {
+            update_max(&self.descr, max, &mut self.column_metrics.max_column_value);
         }
 
         // We can only set the distinct count if there are no other writes
@@ -466,6 +462,18 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         self.flush_data_pages()?;
         let metadata = self.write_column_metadata()?;
         self.page_writer.close()?;
+
+        let boundary_order = match (
+            self.data_page_boundary_ascending,
+            self.data_page_boundary_descending,
+        ) {
+            // If the lists are composed of equal elements then will be marked as ascending
+            // (Also the case if all pages are null pages)
+            (true, _) => BoundaryOrder::ASCENDING,
+            (false, true) => BoundaryOrder::DESCENDING,
+            (false, false) => BoundaryOrder::UNORDERED,
+        };
+        self.column_index_builder.set_boundary_order(boundary_order);
 
         let column_index = self
             .column_index_builder
@@ -610,7 +618,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
     }
 
     /// Update the column index and offset index when adding the data page
-    fn update_column_offset_index(&mut self, page_statistics: Option<&Statistics>) {
+    fn update_column_offset_index(&mut self, page_statistics: Option<&ValueStatistics<E::T>>) {
         // update the column index
         let null_page =
             (self.page_metrics.num_buffered_rows as u64) == self.page_metrics.num_page_nulls;
@@ -631,32 +639,52 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
                     self.column_index_builder.to_invalid();
                 }
                 Some(stat) => {
-                    // We only truncate if the data is represented as binary
-                    match self.descr.physical_type() {
-                        Type::BYTE_ARRAY | Type::FIXED_LEN_BYTE_ARRAY => {
-                            self.column_index_builder.append(
-                                null_page,
-                                self.truncate_min_value(
-                                    self.props.column_index_truncate_length(),
-                                    stat.min_bytes(),
-                                )
-                                .0,
-                                self.truncate_max_value(
-                                    self.props.column_index_truncate_length(),
-                                    stat.max_bytes(),
-                                )
-                                .0,
-                                self.page_metrics.num_page_nulls as i64,
-                            );
+                    // Check if min/max are still ascending/descending across pages
+                    let new_min = stat.min();
+                    let new_max = stat.max();
+                    if let Some((last_min, last_max)) = &self.last_non_null_data_page_min_max {
+                        if self.data_page_boundary_ascending {
+                            // If last min/max are greater than new min/max then not ascending anymore
+                            let not_ascending = compare_greater(&self.descr, last_min, new_min)
+                                || compare_greater(&self.descr, last_max, new_max);
+                            if not_ascending {
+                                self.data_page_boundary_ascending = false;
+                            }
                         }
-                        _ => {
-                            self.column_index_builder.append(
-                                null_page,
-                                stat.min_bytes().to_vec(),
-                                stat.max_bytes().to_vec(),
-                                self.page_metrics.num_page_nulls as i64,
-                            );
+
+                        if self.data_page_boundary_descending {
+                            // If new min/max are greater than last min/max then not descending anymore
+                            let not_descending = compare_greater(&self.descr, new_min, last_min)
+                                || compare_greater(&self.descr, new_max, last_max);
+                            if not_descending {
+                                self.data_page_boundary_descending = false;
+                            }
                         }
+                    }
+                    self.last_non_null_data_page_min_max = Some((new_min.clone(), new_max.clone()));
+
+                    if self.can_truncate_value() {
+                        self.column_index_builder.append(
+                            null_page,
+                            self.truncate_min_value(
+                                self.props.column_index_truncate_length(),
+                                stat.min_bytes(),
+                            )
+                            .0,
+                            self.truncate_max_value(
+                                self.props.column_index_truncate_length(),
+                                stat.max_bytes(),
+                            )
+                            .0,
+                            self.page_metrics.num_page_nulls as i64,
+                        );
+                    } else {
+                        self.column_index_builder.append(
+                            null_page,
+                            stat.min_bytes().to_vec(),
+                            stat.max_bytes().to_vec(),
+                            self.page_metrics.num_page_nulls as i64,
+                        );
                     }
                 }
             }
@@ -664,6 +692,26 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         // update the offset index
         self.offset_index_builder
             .append_row_count(self.page_metrics.num_buffered_rows as i64);
+    }
+
+    /// Determine if we should allow truncating min/max values for this column's statistics
+    fn can_truncate_value(&self) -> bool {
+        match self.descr.physical_type() {
+            // Don't truncate for Float16 and Decimal because their sort order is different
+            // from that of FIXED_LEN_BYTE_ARRAY sort order.
+            // So truncation of those types could lead to inaccurate min/max statistics
+            Type::FIXED_LEN_BYTE_ARRAY
+                if !matches!(
+                    self.descr.logical_type(),
+                    Some(LogicalType::Decimal { .. }) | Some(LogicalType::Float16)
+                ) =>
+            {
+                true
+            }
+            Type::BYTE_ARRAY => true,
+            // Truncation only applies for fba/binary physical types
+            _ => false,
+        }
     }
 
     fn truncate_min_value(&self, truncation_length: Option<usize>, data: &[u8]) -> (Vec<u8>, bool) {
@@ -701,21 +749,26 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
 
         let page_statistics = match (values_data.min_value, values_data.max_value) {
             (Some(min), Some(max)) => {
+                // Update chunk level statistics
                 update_min(&self.descr, &min, &mut self.column_metrics.min_column_value);
                 update_max(&self.descr, &max, &mut self.column_metrics.max_column_value);
-                Some(Statistics::new(
-                    Some(min),
-                    Some(max),
-                    None,
-                    self.page_metrics.num_page_nulls,
-                    false,
-                ))
+
+                (self.statistics_enabled == EnabledStatistics::Page).then_some(
+                    ValueStatistics::new(
+                        Some(min),
+                        Some(max),
+                        None,
+                        self.page_metrics.num_page_nulls,
+                        false,
+                    ),
+                )
             }
             _ => None,
         };
 
         // update column and offset index
         self.update_column_offset_index(page_statistics.as_ref());
+        let page_statistics = page_statistics.map(Statistics::from);
 
         let compressed_page = match self.props.writer_version() {
             WriterVersion::PARQUET_1_0 => {
@@ -898,7 +951,9 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
                         .with_min_is_exact(!did_truncate_min),
                     )
                 }
-                Statistics::FixedLenByteArray(stats) if stats.has_min_max_set() => {
+                Statistics::FixedLenByteArray(stats)
+                    if (stats.has_min_max_set() && self.can_truncate_value()) =>
+                {
                     let (min, did_truncate_min) = self.truncate_min_value(
                         self.props.statistics_truncate_length(),
                         stats.min_bytes(),
@@ -1046,7 +1101,6 @@ fn is_nan<T: ParquetValueType>(descr: &ColumnDescriptor, val: &T) -> bool {
 ///
 /// If `cur` is `None`, sets `cur` to `Some(val)`, otherwise calls `should_update` with
 /// the value of `cur`, and updates `cur` to `Some(val)` if it returns `true`
-
 fn update_stat<T: ParquetValueType, F>(
     descr: &ColumnDescriptor,
     val: &T,
@@ -2530,14 +2584,8 @@ mod tests {
         }
 
         // page location
-        assert_eq!(
-            0,
-            offset_index.page_locations.get(0).unwrap().first_row_index
-        );
-        assert_eq!(
-            4,
-            offset_index.page_locations.get(1).unwrap().first_row_index
-        );
+        assert_eq!(0, offset_index.page_locations[0].first_row_index);
+        assert_eq!(4, offset_index.page_locations[1].first_row_index);
     }
 
     /// Verify min/max value truncation in the column index works as expected
@@ -2569,7 +2617,7 @@ mod tests {
         // column index
         assert_eq!(1, column_index.null_pages.len());
         assert_eq!(1, offset_index.page_locations.len());
-        assert_eq!(BoundaryOrder::UNORDERED, column_index.boundary_order);
+        assert_eq!(BoundaryOrder::ASCENDING, column_index.boundary_order);
         assert!(!column_index.null_pages[0]);
         assert_eq!(0, column_index.null_counts.as_ref().unwrap()[0]);
 
@@ -2578,8 +2626,8 @@ mod tests {
             assert_eq!(stats.null_count(), 0);
             assert_eq!(stats.distinct_count(), None);
             if let Statistics::FixedLenByteArray(stats) = stats {
-                let column_index_min_value = column_index.min_values.get(0).unwrap();
-                let column_index_max_value = column_index.max_values.get(0).unwrap();
+                let column_index_min_value = &column_index.min_values[0];
+                let column_index_max_value = &column_index.max_values[0];
 
                 // Column index stats are truncated, while the column chunk's aren't.
                 assert_ne!(stats.min_bytes(), column_index_min_value.as_slice());
@@ -2636,7 +2684,7 @@ mod tests {
         // column index
         assert_eq!(1, column_index.null_pages.len());
         assert_eq!(1, offset_index.page_locations.len());
-        assert_eq!(BoundaryOrder::UNORDERED, column_index.boundary_order);
+        assert_eq!(BoundaryOrder::ASCENDING, column_index.boundary_order);
         assert!(!column_index.null_pages[0]);
         assert_eq!(0, column_index.null_counts.as_ref().unwrap()[0]);
 
@@ -2645,8 +2693,8 @@ mod tests {
             assert_eq!(stats.null_count(), 0);
             assert_eq!(stats.distinct_count(), None);
             if let Statistics::FixedLenByteArray(_stats) = stats {
-                let column_index_min_value = column_index.min_values.get(0).unwrap();
-                let column_index_max_value = column_index.max_values.get(0).unwrap();
+                let column_index_min_value = &column_index.min_values[0];
+                let column_index_max_value = &column_index.max_values[0];
 
                 assert_eq!(column_index_min_value.len(), 1);
                 assert_eq!(column_index_max_value.len(), 1);
@@ -2661,6 +2709,82 @@ mod tests {
             }
         } else {
             panic!("metadata missing statistics");
+        }
+    }
+
+    #[test]
+    fn test_float16_min_max_no_truncation() {
+        // Even if we set truncation to occur at 1 byte, we should not truncate for Float16
+        let builder = WriterProperties::builder().set_column_index_truncate_length(Some(1));
+        let props = Arc::new(builder.build());
+        let page_writer = get_test_page_writer();
+        let mut writer = get_test_float16_column_writer(page_writer, props);
+
+        let expected_value = f16::PI.to_le_bytes().to_vec();
+        let data = vec![ByteArray::from(expected_value.clone()).into()];
+        writer.write_batch(&data, None, None).unwrap();
+        writer.flush_data_pages().unwrap();
+
+        let r = writer.close().unwrap();
+
+        // stats should still be written
+        // ensure bytes weren't truncated for column index
+        let column_index = r.column_index.unwrap();
+        let column_index_min_bytes = column_index.min_values[0].as_slice();
+        let column_index_max_bytes = column_index.max_values[0].as_slice();
+        assert_eq!(expected_value, column_index_min_bytes);
+        assert_eq!(expected_value, column_index_max_bytes);
+
+        // ensure bytes weren't truncated for statistics
+        let stats = r.metadata.statistics().unwrap();
+        assert!(stats.has_min_max_set());
+        if let Statistics::FixedLenByteArray(stats) = stats {
+            let stats_min_bytes = stats.min_bytes();
+            let stats_max_bytes = stats.max_bytes();
+            assert_eq!(expected_value, stats_min_bytes);
+            assert_eq!(expected_value, stats_max_bytes);
+        } else {
+            panic!("expecting Statistics::FixedLenByteArray");
+        }
+    }
+
+    #[test]
+    fn test_decimal_min_max_no_truncation() {
+        // Even if we set truncation to occur at 1 byte, we should not truncate for Decimal
+        let builder = WriterProperties::builder().set_column_index_truncate_length(Some(1));
+        let props = Arc::new(builder.build());
+        let page_writer = get_test_page_writer();
+        let mut writer =
+            get_test_decimals_column_writer::<FixedLenByteArrayType>(page_writer, 0, 0, props);
+
+        let expected_value = vec![
+            255u8, 255u8, 255u8, 255u8, 255u8, 255u8, 255u8, 255u8, 179u8, 172u8, 19u8, 35u8,
+            231u8, 90u8, 0u8, 0u8,
+        ];
+        let data = vec![ByteArray::from(expected_value.clone()).into()];
+        writer.write_batch(&data, None, None).unwrap();
+        writer.flush_data_pages().unwrap();
+
+        let r = writer.close().unwrap();
+
+        // stats should still be written
+        // ensure bytes weren't truncated for column index
+        let column_index = r.column_index.unwrap();
+        let column_index_min_bytes = column_index.min_values[0].as_slice();
+        let column_index_max_bytes = column_index.max_values[0].as_slice();
+        assert_eq!(expected_value, column_index_min_bytes);
+        assert_eq!(expected_value, column_index_max_bytes);
+
+        // ensure bytes weren't truncated for statistics
+        let stats = r.metadata.statistics().unwrap();
+        assert!(stats.has_min_max_set());
+        if let Statistics::FixedLenByteArray(stats) = stats {
+            let stats_min_bytes = stats.min_bytes();
+            let stats_max_bytes = stats.max_bytes();
+            assert_eq!(expected_value, stats_min_bytes);
+            assert_eq!(expected_value, stats_max_bytes);
+        } else {
+            panic!("expecting Statistics::FixedLenByteArray");
         }
     }
 
@@ -2891,6 +3015,182 @@ mod tests {
         assert!(incremented.is_none())
     }
 
+    #[test]
+    fn test_boundary_order() -> Result<()> {
+        let descr = Arc::new(get_test_column_descr::<Int32Type>(1, 0));
+        // min max both ascending
+        let column_close_result = write_multiple_pages::<Int32Type>(
+            &descr,
+            &[
+                &[Some(-10), Some(10)],
+                &[Some(-5), Some(11)],
+                &[None],
+                &[Some(-5), Some(11)],
+            ],
+        )?;
+        let boundary_order = column_close_result.column_index.unwrap().boundary_order;
+        assert_eq!(boundary_order, BoundaryOrder::ASCENDING);
+
+        // min max both descending
+        let column_close_result = write_multiple_pages::<Int32Type>(
+            &descr,
+            &[
+                &[Some(10), Some(11)],
+                &[Some(5), Some(11)],
+                &[None],
+                &[Some(-5), Some(0)],
+            ],
+        )?;
+        let boundary_order = column_close_result.column_index.unwrap().boundary_order;
+        assert_eq!(boundary_order, BoundaryOrder::DESCENDING);
+
+        // min max both equal
+        let column_close_result = write_multiple_pages::<Int32Type>(
+            &descr,
+            &[&[Some(10), Some(11)], &[None], &[Some(10), Some(11)]],
+        )?;
+        let boundary_order = column_close_result.column_index.unwrap().boundary_order;
+        assert_eq!(boundary_order, BoundaryOrder::ASCENDING);
+
+        // only nulls
+        let column_close_result =
+            write_multiple_pages::<Int32Type>(&descr, &[&[None], &[None], &[None]])?;
+        let boundary_order = column_close_result.column_index.unwrap().boundary_order;
+        assert_eq!(boundary_order, BoundaryOrder::ASCENDING);
+
+        // one page
+        let column_close_result =
+            write_multiple_pages::<Int32Type>(&descr, &[&[Some(-10), Some(10)]])?;
+        let boundary_order = column_close_result.column_index.unwrap().boundary_order;
+        assert_eq!(boundary_order, BoundaryOrder::ASCENDING);
+
+        // one non-null page
+        let column_close_result =
+            write_multiple_pages::<Int32Type>(&descr, &[&[Some(-10), Some(10)], &[None]])?;
+        let boundary_order = column_close_result.column_index.unwrap().boundary_order;
+        assert_eq!(boundary_order, BoundaryOrder::ASCENDING);
+
+        // min max both unordered
+        let column_close_result = write_multiple_pages::<Int32Type>(
+            &descr,
+            &[
+                &[Some(10), Some(11)],
+                &[Some(11), Some(16)],
+                &[None],
+                &[Some(-5), Some(0)],
+            ],
+        )?;
+        let boundary_order = column_close_result.column_index.unwrap().boundary_order;
+        assert_eq!(boundary_order, BoundaryOrder::UNORDERED);
+
+        // min max both ordered in different orders
+        let column_close_result = write_multiple_pages::<Int32Type>(
+            &descr,
+            &[
+                &[Some(1), Some(9)],
+                &[Some(2), Some(8)],
+                &[None],
+                &[Some(3), Some(7)],
+            ],
+        )?;
+        let boundary_order = column_close_result.column_index.unwrap().boundary_order;
+        assert_eq!(boundary_order, BoundaryOrder::UNORDERED);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_boundary_order_logical_type() -> Result<()> {
+        // ensure that logical types account for different sort order than underlying
+        // physical type representation
+        let f16_descr = Arc::new(get_test_float16_column_descr(1, 0));
+        let fba_descr = {
+            let tpe = SchemaType::primitive_type_builder(
+                "col",
+                FixedLenByteArrayType::get_physical_type(),
+            )
+            .with_length(2)
+            .build()?;
+            Arc::new(ColumnDescriptor::new(
+                Arc::new(tpe),
+                1,
+                0,
+                ColumnPath::from("col"),
+            ))
+        };
+
+        let values: &[&[Option<FixedLenByteArray>]] = &[
+            &[Some(FixedLenByteArray::from(ByteArray::from(f16::ONE)))],
+            &[Some(FixedLenByteArray::from(ByteArray::from(f16::ZERO)))],
+            &[Some(FixedLenByteArray::from(ByteArray::from(
+                f16::NEG_ZERO,
+            )))],
+            &[Some(FixedLenByteArray::from(ByteArray::from(f16::NEG_ONE)))],
+        ];
+
+        // f16 descending
+        let column_close_result =
+            write_multiple_pages::<FixedLenByteArrayType>(&f16_descr, values)?;
+        let boundary_order = column_close_result.column_index.unwrap().boundary_order;
+        assert_eq!(boundary_order, BoundaryOrder::DESCENDING);
+
+        // same bytes, but fba unordered
+        let column_close_result =
+            write_multiple_pages::<FixedLenByteArrayType>(&fba_descr, values)?;
+        let boundary_order = column_close_result.column_index.unwrap().boundary_order;
+        assert_eq!(boundary_order, BoundaryOrder::UNORDERED);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_interval_stats_should_not_have_min_max() {
+        let input = [
+            vec![0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+            vec![0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
+            vec![0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2],
+        ]
+        .into_iter()
+        .map(|s| ByteArray::from(s).into())
+        .collect::<Vec<_>>();
+
+        let page_writer = get_test_page_writer();
+        let mut writer = get_test_interval_column_writer(page_writer);
+        writer.write_batch(&input, None, None).unwrap();
+
+        let metadata = writer.close().unwrap().metadata;
+        let stats = if let Some(Statistics::FixedLenByteArray(stats)) = metadata.statistics() {
+            stats.clone()
+        } else {
+            panic!("metadata missing statistics");
+        };
+        assert!(!stats.has_min_max_set());
+    }
+
+    fn write_multiple_pages<T: DataType>(
+        column_descr: &Arc<ColumnDescriptor>,
+        pages: &[&[Option<T::T>]],
+    ) -> Result<ColumnCloseResult> {
+        let column_writer = get_column_writer(
+            column_descr.clone(),
+            Default::default(),
+            get_test_page_writer(),
+        );
+        let mut writer = get_typed_column_writer::<T>(column_writer);
+
+        for &page in pages {
+            let values = page.iter().filter_map(Clone::clone).collect::<Vec<_>>();
+            let def_levels = page
+                .iter()
+                .map(|maybe_value| if maybe_value.is_some() { 1 } else { 0 })
+                .collect::<Vec<_>>();
+            writer.write_batch(&values, Some(&def_levels), None)?;
+            writer.flush_data_pages()?;
+        }
+
+        writer.close()
+    }
+
     /// Performs write-read roundtrip with randomly generated values and levels.
     /// `max_size` is maximum number of values or levels (if `max_def_level` > 0) to write
     /// for a column.
@@ -2986,19 +3286,20 @@ mod tests {
             )
             .unwrap(),
         );
-        let reader = get_test_column_reader::<T>(page_reader, max_def_level, max_rep_level);
+        let mut reader = get_test_column_reader::<T>(page_reader, max_def_level, max_rep_level);
 
-        let mut actual_values = vec![T::T::default(); max_batch_size];
-        let mut actual_def_levels = def_levels.map(|_| vec![0i16; max_batch_size]);
-        let mut actual_rep_levels = rep_levels.map(|_| vec![0i16; max_batch_size]);
+        let mut actual_values = Vec::with_capacity(max_batch_size);
+        let mut actual_def_levels = def_levels.map(|_| Vec::with_capacity(max_batch_size));
+        let mut actual_rep_levels = rep_levels.map(|_| Vec::with_capacity(max_batch_size));
 
-        let (_, values_read, levels_read) = read_fully(
-            reader,
-            max_batch_size,
-            actual_def_levels.as_mut(),
-            actual_rep_levels.as_mut(),
-            actual_values.as_mut_slice(),
-        );
+        let (_, values_read, levels_read) = reader
+            .read_records(
+                max_batch_size,
+                actual_def_levels.as_mut(),
+                actual_rep_levels.as_mut(),
+                &mut actual_values,
+            )
+            .unwrap();
 
         // Assert values, definition and repetition levels.
 
@@ -3059,22 +3360,6 @@ mod tests {
         let meta = column_write_and_get_metadata::<T>(props, data);
         assert_eq!(meta.dictionary_page_offset(), dictionary_page_offset);
         assert_eq!(meta.encodings(), &encodings);
-    }
-
-    /// Reads one batch of data, considering that batch is large enough to capture all of
-    /// the values and levels.
-    fn read_fully<T: DataType>(
-        mut reader: ColumnReaderImpl<T>,
-        batch_size: usize,
-        mut def_levels: Option<&mut Vec<i16>>,
-        mut rep_levels: Option<&mut Vec<i16>>,
-        values: &mut [T::T],
-    ) -> (usize, usize, usize) {
-        let actual_def_levels = def_levels.as_mut().map(|vec| &mut vec[..]);
-        let actual_rep_levels = rep_levels.as_mut().map(|vec| &mut vec[..]);
-        reader
-            .read_records(batch_size, actual_def_levels, actual_rep_levels, values)
-            .unwrap()
     }
 
     /// Returns column writer.
@@ -3196,9 +3481,7 @@ mod tests {
         values: &[FixedLenByteArray],
     ) -> ValueStatistics<FixedLenByteArray> {
         let page_writer = get_test_page_writer();
-        let props = Default::default();
-        let mut writer =
-            get_test_float16_column_writer::<FixedLenByteArrayType>(page_writer, 0, 0, props);
+        let mut writer = get_test_float16_column_writer(page_writer, Default::default());
         writer.write_batch(values, None, None).unwrap();
 
         let metadata = writer.close().unwrap().metadata;
@@ -3209,31 +3492,43 @@ mod tests {
         }
     }
 
-    fn get_test_float16_column_writer<T: DataType>(
+    fn get_test_float16_column_writer(
         page_writer: Box<dyn PageWriter>,
-        max_def_level: i16,
-        max_rep_level: i16,
         props: WriterPropertiesPtr,
-    ) -> ColumnWriterImpl<'static, T> {
-        let descr = Arc::new(get_test_float16_column_descr::<T>(
-            max_def_level,
-            max_rep_level,
-        ));
+    ) -> ColumnWriterImpl<'static, FixedLenByteArrayType> {
+        let descr = Arc::new(get_test_float16_column_descr(0, 0));
         let column_writer = get_column_writer(descr, props, page_writer);
-        get_typed_column_writer::<T>(column_writer)
+        get_typed_column_writer::<FixedLenByteArrayType>(column_writer)
     }
 
-    fn get_test_float16_column_descr<T: DataType>(
-        max_def_level: i16,
-        max_rep_level: i16,
-    ) -> ColumnDescriptor {
+    fn get_test_float16_column_descr(max_def_level: i16, max_rep_level: i16) -> ColumnDescriptor {
         let path = ColumnPath::from("col");
-        let tpe = SchemaType::primitive_type_builder("col", T::get_physical_type())
-            .with_length(2)
-            .with_logical_type(Some(LogicalType::Float16))
-            .build()
-            .unwrap();
+        let tpe =
+            SchemaType::primitive_type_builder("col", FixedLenByteArrayType::get_physical_type())
+                .with_length(2)
+                .with_logical_type(Some(LogicalType::Float16))
+                .build()
+                .unwrap();
         ColumnDescriptor::new(Arc::new(tpe), max_def_level, max_rep_level, path)
+    }
+
+    fn get_test_interval_column_writer(
+        page_writer: Box<dyn PageWriter>,
+    ) -> ColumnWriterImpl<'static, FixedLenByteArrayType> {
+        let descr = Arc::new(get_test_interval_column_descr());
+        let column_writer = get_column_writer(descr, Default::default(), page_writer);
+        get_typed_column_writer::<FixedLenByteArrayType>(column_writer)
+    }
+
+    fn get_test_interval_column_descr() -> ColumnDescriptor {
+        let path = ColumnPath::from("col");
+        let tpe =
+            SchemaType::primitive_type_builder("col", FixedLenByteArrayType::get_physical_type())
+                .with_length(12)
+                .with_converted_type(ConvertedType::INTERVAL)
+                .build()
+                .unwrap();
+        ColumnDescriptor::new(Arc::new(tpe), 0, 0, path)
     }
 
     /// Returns column writer for UINT32 Column provided as ConvertedType only

@@ -119,7 +119,7 @@
 //!
 //! [non-comparison sorts]: https://en.wikipedia.org/wiki/Sorting_algorithm#Non-comparison_sorts
 //! [radix sort]: https://en.wikipedia.org/wiki/Radix_sort
-//! [normalized for sorting]: https://citeseerx.ist.psu.edu/viewdoc/download?doi=10.1.1.83.1080&rep=rep1&type=pdf
+//! [normalized for sorting]: http://wwwlgis.informatik.uni-kl.de/archiv/wwwdvs.informatik.uni-kl.de/courses/DBSREAL/SS2005/Vorlesungsunterlagen/Implementing_Sorting.pdf
 //! [`memcmp`]: https://www.man7.org/linux/man-pages/man3/memcmp.3.html
 //! [`lexsort`]: https://docs.rs/arrow-ord/latest/arrow_ord/sort/fn.lexsort.html
 //! [compared]: PartialOrd

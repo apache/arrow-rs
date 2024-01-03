@@ -1058,7 +1058,7 @@ mod tests {
 
         assert_eq!(levels.len(), 1);
 
-        let list_level = levels.get(0).unwrap();
+        let list_level = &levels[0];
 
         let expected_level = ArrayLevels {
             def_levels: Some(vec![0, 3, 3, 3]),
@@ -1150,7 +1150,7 @@ mod tests {
         assert_eq!(levels.len(), 5);
 
         // test "a" levels
-        let list_level = levels.get(0).unwrap();
+        let list_level = &levels[0];
 
         let expected_level = ArrayLevels {
             def_levels: None,
@@ -1295,7 +1295,7 @@ mod tests {
         let map = batch.column(0).as_map();
 
         // test key levels
-        let list_level = levels.get(0).unwrap();
+        let list_level = &levels[0];
 
         let expected_level = ArrayLevels {
             def_levels: Some(vec![1; 7]),
@@ -1477,9 +1477,10 @@ mod tests {
         let field_a2 = Arc::new(Field::new("integers", a2.data_type().clone(), true));
 
         let nulls = Buffer::from([0b00110111]);
-        let struct_a =
-            Arc::new(StructArray::try_from((vec![(field_a1, a1), (field_a2, a2)], nulls)).unwrap())
-                as ArrayRef;
+        let struct_a = Arc::new(StructArray::from((
+            vec![(field_a1, a1), (field_a2, a2)],
+            nulls,
+        ))) as ArrayRef;
 
         let offsets = Buffer::from_iter([0_i32, 0, 2, 2, 3, 5, 5]);
         let nulls = Buffer::from([0b00111100]);
@@ -1566,7 +1567,7 @@ mod tests {
 
         assert_eq!(levels.len(), 1);
 
-        let list_level = levels.get(0).unwrap();
+        let list_level = &levels[0];
 
         let expected_level = ArrayLevels {
             def_levels: Some(vec![0, 0, 3, 3]),
@@ -1756,7 +1757,7 @@ mod tests {
 
         assert_eq!(levels.len(), 1);
 
-        let list_level = levels.get(0).unwrap();
+        let list_level = &levels[0];
 
         let expected_level = ArrayLevels {
             def_levels: Some(vec![1, 0, 1]),

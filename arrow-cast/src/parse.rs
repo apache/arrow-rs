@@ -210,7 +210,7 @@ pub fn string_to_datetime<T: TimeZone>(timezone: &T, s: &str) -> Result<DateTime
             .ok_or_else(|| err("error computing timezone offset"));
     }
 
-    if bytes[tz_offset] == b'z' || bytes[tz_offset] == b'Z' {
+    if (bytes[tz_offset] == b'z' || bytes[tz_offset] == b'Z') && tz_offset == bytes.len() - 1 {
         return Ok(timezone.from_utc_datetime(&datetime));
     }
 
@@ -559,8 +559,20 @@ fn parse_date(string: &str) -> Option<NaiveDate> {
 
     const HYPHEN: u8 = b'-'.wrapping_sub(b'0');
 
+    //  refer to https://www.rfc-editor.org/rfc/rfc3339#section-3
     if digits[4] != HYPHEN {
-        return None;
+        let (year, month, day) = match (mask, string.len()) {
+            (0b11111111, 8) => (
+                digits[0] as u16 * 1000
+                    + digits[1] as u16 * 100
+                    + digits[2] as u16 * 10
+                    + digits[3] as u16,
+                digits[4] * 10 + digits[5],
+                digits[6] * 10 + digits[7],
+            ),
+            _ => return None,
+        };
+        return NaiveDate::from_ymd_opt(year as _, month as _, day as _);
     }
 
     let (month, day) = match mask {

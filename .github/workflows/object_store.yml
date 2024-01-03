@@ -112,6 +112,7 @@ jobs:
       AWS_SECRET_ACCESS_KEY: test
       AWS_ENDPOINT: http://localhost:4566
       AWS_ALLOW_HTTP: true
+      AWS_COPY_IF_NOT_EXISTS: dynamo:test-table:2000
       HTTP_URL: "http://localhost:8080"
       GOOGLE_BUCKET: test-bucket
       GOOGLE_SERVICE_ACCOUNT: "/tmp/gcs.json"
@@ -133,9 +134,10 @@ jobs:
 
       - name: Setup LocalStack (AWS emulation)
         run: |
-          docker run -d -p 4566:4566 localstack/localstack:2.0
+          docker run -d -p 4566:4566 localstack/localstack:3.0.1
           docker run -d -p 1338:1338 amazon/amazon-ec2-metadata-mock:v1.9.2 --imdsv2
           aws --endpoint-url=http://localhost:4566 s3 mb s3://test-bucket
+          aws --endpoint-url=http://localhost:4566 dynamodb create-table --table-name test-table --key-schema AttributeName=key,KeyType=HASH --attribute-definitions AttributeName=key,AttributeType=S --provisioned-throughput ReadCapacityUnits=5,WriteCapacityUnits=5
 
       - name: Configure Azurite (Azure emulation)
         # the magical connection string is from

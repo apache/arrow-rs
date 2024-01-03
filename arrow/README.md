@@ -48,9 +48,7 @@ The `arrow` crate provides the following features which may be enabled in your `
 - `ipc` (default) - support for reading [Arrow IPC Format](https://arrow.apache.org/docs/format/Columnar.html#serialization-and-interprocess-communication-ipc), also used as the wire protocol in [arrow-flight](https://crates.io/crates/arrow-flight)
 - `ipc_compression` - Enables reading and writing compressed IPC streams (also enables `ipc`)
 - `prettyprint` - support for formatting record batches as textual columns
-- `simd` - (_Requires Nightly Rust_) Use alternate hand optimized
   implementations of some [compute](https://github.com/apache/arrow-rs/tree/master/arrow/src/compute/kernels)
-  kernels using explicit SIMD instructions via [packed_simd_2](https://docs.rs/packed_simd_2/latest/packed_simd_2/).
 - `chrono-tz` - support of parsing timezone using [chrono-tz](https://docs.rs/chrono-tz/0.6.0/chrono_tz/)
 - `ffi` - bindings for the Arrow C [C Data Interface](https://arrow.apache.org/docs/format/CDataInterface.html)
 - `pyarrow` - bindings for pyo3 to call arrow-rs from python
@@ -75,7 +73,6 @@ In particular there are a number of scenarios where `unsafe` is largely unavoida
 
 - Invariants that cannot be statically verified by the compiler and unlock non-trivial performance wins, e.g. values in a StringArray are UTF-8, [TrustedLen](https://doc.rust-lang.org/std/iter/trait.TrustedLen.html) iterators, etc...
 - FFI
-- SIMD
 
 Additionally, this crate exposes a number of `unsafe` APIs, allowing downstream crates to explicitly opt-out of potentially expensive invariant checking where appropriate.
 
@@ -95,7 +92,7 @@ In order to compile Arrow for `wasm32-unknown-unknown` you will need to disable 
 
 ```toml
 [dependencies]
-arrow = { version = "5.0", default-features = false, features = ["csv", "ipc", "simd"] }
+arrow = { version = "5.0", default-features = false, features = ["csv", "ipc"] }
 ```
 
 ## Examples

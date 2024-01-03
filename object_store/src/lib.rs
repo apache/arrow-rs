@@ -119,6 +119,7 @@
 //! application complexity.
 //!
 //! ```no_run
+//! # #[cfg(feature = "aws")] {
 //! # use url::Url;
 //! # use object_store::{parse_url, parse_url_opts};
 //! # use object_store::aws::{AmazonS3, AmazonS3Builder};
@@ -140,6 +141,7 @@
 //! let url = Url::parse("https://ACCOUNT_ID.r2.cloudflarestorage.com/bucket/path").unwrap();
 //! let (store, path) = parse_url(&url).unwrap();
 //! assert_eq!(path.as_ref(), "path");
+//! # }
 //! ```
 //!
 //! [PyArrow FileSystem]: https://arrow.apache.org/docs/python/generated/pyarrow.fs.FileSystem.html#pyarrow.fs.FileSystem.from_uri
@@ -1237,13 +1239,10 @@ mod tests {
     use tokio::io::AsyncWriteExt;
 
     pub(crate) async fn put_get_delete_list(storage: &DynObjectStore) {
-        put_get_delete_list_opts(storage, false).await
+        put_get_delete_list_opts(storage).await
     }
 
-    pub(crate) async fn put_get_delete_list_opts(
-        storage: &DynObjectStore,
-        skip_list_with_spaces: bool,
-    ) {
+    pub(crate) async fn put_get_delete_list_opts(storage: &DynObjectStore) {
         delete_fixtures(storage).await;
 
         let content_list = flatten_list_stream(storage, None).await.unwrap();
@@ -1305,11 +1304,22 @@ mod tests {
         let range = 3..7;
         let range_result = storage.get_range(&location, range.clone()).await;
 
+        let bytes = range_result.unwrap();
+        assert_eq!(bytes, expected_data.slice(range.clone()));
+
+        let opts = GetOptions {
+            range: Some(GetRange::Bounded(2..5)),
+            ..Default::default()
+        };
+        let result = storage.get_opts(&location, opts).await.unwrap();
+        // Data is `"arbitrary data"`, length 14 bytes
+        assert_eq!(result.meta.size, 14); // Should return full object size (#5272)
+        assert_eq!(result.range, 2..5);
+        let bytes = result.bytes().await.unwrap();
+        assert_eq!(bytes, b"bit".as_ref());
+
         let out_of_range = 200..300;
         let out_of_range_result = storage.get_range(&location, out_of_range).await;
-
-        let bytes = range_result.unwrap();
-        assert_eq!(bytes, expected_data.slice(range));
 
         // Should be a non-fatal error
         out_of_range_result.unwrap_err();
@@ -1484,12 +1494,11 @@ mod tests {
         storage.put(&path, Bytes::from(vec![0, 1])).await.unwrap();
         storage.head(&path).await.unwrap();
 
-        if !skip_list_with_spaces {
-            let files = flatten_list_stream(storage, Some(&Path::from("foo bar")))
-                .await
-                .unwrap();
-            assert_eq!(files, vec![path.clone()]);
-        }
+        let files = flatten_list_stream(storage, Some(&Path::from("foo bar")))
+            .await
+            .unwrap();
+        assert_eq!(files, vec![path.clone()]);
+
         storage.delete(&path).await.unwrap();
 
         let files = flatten_list_stream(storage, None).await.unwrap();

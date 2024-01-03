@@ -217,6 +217,73 @@ pub mod tests {
     }
 
     #[test]
+    fn test_interval_day_time() {
+        let array = IntervalDayTimeArray::from(vec![
+            // 0 days, 1 second
+            IntervalDayTimeType::make_value(0, 1000),
+            // 1 day, 2 milliseconds
+            IntervalDayTimeType::make_value(1, 2),
+            // 90M milliseconds (which is more than is in 1 day)
+            IntervalDayTimeType::make_value(0, 90_000_000),
+        ]);
+
+        let cmp = build_compare(&array, &array).unwrap();
+
+        assert_eq!(Ordering::Less, cmp(0, 1));
+        assert_eq!(Ordering::Greater, cmp(1, 0));
+
+        // somewhat confusingly, while 90M milliseconds is more than 1 day,
+        // it will compare less as the comparison is done on the underlying
+        // values not field by field
+        assert_eq!(Ordering::Greater, cmp(1, 2));
+        assert_eq!(Ordering::Less, cmp(2, 1));
+    }
+
+    #[test]
+    fn test_interval_year_month() {
+        let array = IntervalYearMonthArray::from(vec![
+            // 1 year, 0 months
+            IntervalYearMonthType::make_value(1, 0),
+            // 0 years, 13 months
+            IntervalYearMonthType::make_value(0, 13),
+            // 1 year, 1 month
+            IntervalYearMonthType::make_value(1, 1),
+        ]);
+
+        let cmp = build_compare(&array, &array).unwrap();
+
+        assert_eq!(Ordering::Less, cmp(0, 1));
+        assert_eq!(Ordering::Greater, cmp(1, 0));
+
+        // the underlying representation is months, so both quantities are the same
+        assert_eq!(Ordering::Equal, cmp(1, 2));
+        assert_eq!(Ordering::Equal, cmp(2, 1));
+    }
+
+    #[test]
+    fn test_interval_month_day_nano() {
+        let array = IntervalMonthDayNanoArray::from(vec![
+            // 100 days
+            IntervalMonthDayNanoType::make_value(0, 100, 0),
+            // 1 month
+            IntervalMonthDayNanoType::make_value(1, 0, 0),
+            // 100 day, 1 nanoseconds
+            IntervalMonthDayNanoType::make_value(0, 100, 2),
+        ]);
+
+        let cmp = build_compare(&array, &array).unwrap();
+
+        assert_eq!(Ordering::Less, cmp(0, 1));
+        assert_eq!(Ordering::Greater, cmp(1, 0));
+
+        // somewhat confusingly, while 100 days is more than 1 month in all cases
+        // it will compare less as the comparison is done on the underlying
+        // values not field by field
+        assert_eq!(Ordering::Greater, cmp(1, 2));
+        assert_eq!(Ordering::Less, cmp(2, 1));
+    }
+
+    #[test]
     fn test_decimal() {
         let array = vec![Some(5_i128), Some(2_i128), Some(3_i128)]
             .into_iter()

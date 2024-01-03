@@ -196,13 +196,19 @@ pub enum GetRange {
 
 #[derive(Debug, Snafu)]
 pub(crate) enum InvalidGetRange {
-    #[snafu(display("Wanted suffix with {expected}B, resource was {actual}B long"))]
+    #[snafu(display(
+        "Wanted suffix of {expected} bytes, but resource was only {actual} bytes long"
+    ))]
     SuffixTooLarge { expected: usize, actual: usize },
 
-    #[snafu(display("Wanted range starting at {expected}, resource was {actual}B long"))]
+    #[snafu(display(
+        "Wanted range starting at {expected}, but resource was only {actual} bytes long"
+    ))]
     StartTooLarge { expected: usize, actual: usize },
 
-    #[snafu(display("Wanted range ending at {expected}, resource was {actual}B long"))]
+    #[snafu(display(
+        "Wanted range ending at {expected}, but resource was only {actual} bytes long"
+    ))]
     EndTooLarge { expected: usize, actual: usize },
 
     #[snafu(display("Range started at {start} and ended at {end}"))]

@@ -45,6 +45,16 @@ pub trait ArrowNativeTypeOp: ArrowNativeType {
     /// The multiplicative identity
     const ONE: Self;
 
+    /// The minimum value and identity for the `max` aggregation.
+    /// Note that the aggregation uses the total order predicate for floating point values,
+    /// which means that this value is a negative NaN.
+    const MIN_TOTAL_ORDER: Self;
+
+    /// The maximum value and identity for the `min` aggregation.
+    /// Note that the aggregation uses the total order predicate for floating point values,
+    /// which means that this value is a positive NaN.
+    const MAX_TOTAL_ORDER: Self;
+
     /// Checked addition operation
     fn add_checked(self, rhs: Self) -> Result<Self, ArrowError>;
 
@@ -129,12 +139,14 @@ pub trait ArrowNativeTypeOp: ArrowNativeType {
 
 macro_rules! native_type_op {
     ($t:tt) => {
-        native_type_op!($t, 0, 1);
+        native_type_op!($t, 0, 1, $t::MIN, $t::MAX);
     };
-    ($t:tt, $zero:expr, $one: expr) => {
+    ($t:tt, $zero:expr, $one: expr, $min: expr, $max: expr) => {
         impl ArrowNativeTypeOp for $t {
             const ZERO: Self = $zero;
             const ONE: Self = $one;
+            const MIN_TOTAL_ORDER: Self = $min;
+            const MAX_TOTAL_ORDER: Self = $max;
 
             #[inline]
             fn add_checked(self, rhs: Self) -> Result<Self, ArrowError> {
@@ -270,13 +282,15 @@ native_type_op!(u8);
 native_type_op!(u16);
 native_type_op!(u32);
 native_type_op!(u64);
-native_type_op!(i256, i256::ZERO, i256::ONE);
+native_type_op!(i256, i256::ZERO, i256::ONE, i256::MIN, i256::MAX);
 
 macro_rules! native_type_float_op {
-    ($t:tt, $zero:expr, $one:expr) => {
+    ($t:tt, $zero:expr, $one:expr, $min:expr, $max:expr) => {
         impl ArrowNativeTypeOp for $t {
             const ZERO: Self = $zero;
             const ONE: Self = $one;
+            const MIN_TOTAL_ORDER: Self = $min;
+            const MAX_TOTAL_ORDER: Self = $max;
 
             #[inline]
             fn add_checked(self, rhs: Self) -> Result<Self, ArrowError> {
@@ -377,9 +391,30 @@ macro_rules! native_type_float_op {
     };
 }
 
-native_type_float_op!(f16, f16::ZERO, f16::ONE);
-native_type_float_op!(f32, 0., 1.);
-native_type_float_op!(f64, 0., 1.);
+// the smallest/largest bit patterns for floating point numbers are NaN, but differ from the canonical NAN constants.
+// See test_float_total_order_min_max for details.
+native_type_float_op!(
+    f16,
+    f16::ZERO,
+    f16::ONE,
+    f16::from_bits(-1 as _),
+    f16::from_bits(i16::MAX as _)
+);
+// from_bits is not yet stable as const fn, see https://github.com/rust-lang/rust/issues/72447
+native_type_float_op!(
+    f32,
+    0.,
+    1.,
+    unsafe { std::mem::transmute(-1_i32) },
+    unsafe { std::mem::transmute(i32::MAX) }
+);
+native_type_float_op!(
+    f64,
+    0.,
+    1.,
+    unsafe { std::mem::transmute(-1_i64) },
+    unsafe { std::mem::transmute(i64::MAX) }
+);
 
 #[cfg(test)]
 mod tests {
@@ -779,5 +814,41 @@ mod tests {
         );
         assert_eq!(8.0_f32.pow_checked(2_u32).unwrap(), 64_f32);
         assert_eq!(8.0_f64.pow_checked(2_u32).unwrap(), 64_f64);
+    }
+
+    #[test]
+    fn test_float_total_order_min_max() {
+        assert!(<f64 as ArrowNativeTypeOp>::MIN_TOTAL_ORDER.is_lt(f64::NEG_INFINITY));
+        assert!(<f64 as ArrowNativeTypeOp>::MAX_TOTAL_ORDER.is_gt(f64::INFINITY));
+
+        assert!(<f64 as ArrowNativeTypeOp>::MIN_TOTAL_ORDER.is_nan());
+        assert!(<f64 as ArrowNativeTypeOp>::MIN_TOTAL_ORDER.is_sign_negative());
+        assert!(<f64 as ArrowNativeTypeOp>::MIN_TOTAL_ORDER.is_lt(-f64::NAN));
+
+        assert!(<f64 as ArrowNativeTypeOp>::MAX_TOTAL_ORDER.is_nan());
+        assert!(<f64 as ArrowNativeTypeOp>::MAX_TOTAL_ORDER.is_sign_positive());
+        assert!(<f64 as ArrowNativeTypeOp>::MAX_TOTAL_ORDER.is_gt(f64::NAN));
+
+        assert!(<f32 as ArrowNativeTypeOp>::MIN_TOTAL_ORDER.is_lt(f32::NEG_INFINITY));
+        assert!(<f32 as ArrowNativeTypeOp>::MAX_TOTAL_ORDER.is_gt(f32::INFINITY));
+
+        assert!(<f32 as ArrowNativeTypeOp>::MIN_TOTAL_ORDER.is_nan());
+        assert!(<f32 as ArrowNativeTypeOp>::MIN_TOTAL_ORDER.is_sign_negative());
+        assert!(<f32 as ArrowNativeTypeOp>::MIN_TOTAL_ORDER.is_lt(-f32::NAN));
+
+        assert!(<f32 as ArrowNativeTypeOp>::MAX_TOTAL_ORDER.is_nan());
+        assert!(<f32 as ArrowNativeTypeOp>::MAX_TOTAL_ORDER.is_sign_positive());
+        assert!(<f32 as ArrowNativeTypeOp>::MAX_TOTAL_ORDER.is_gt(f32::NAN));
+
+        assert!(<f16 as ArrowNativeTypeOp>::MIN_TOTAL_ORDER.is_lt(f16::NEG_INFINITY));
+        assert!(<f16 as ArrowNativeTypeOp>::MAX_TOTAL_ORDER.is_gt(f16::INFINITY));
+
+        assert!(<f16 as ArrowNativeTypeOp>::MIN_TOTAL_ORDER.is_nan());
+        assert!(<f16 as ArrowNativeTypeOp>::MIN_TOTAL_ORDER.is_sign_negative());
+        assert!(<f16 as ArrowNativeTypeOp>::MIN_TOTAL_ORDER.is_lt(-f16::NAN));
+
+        assert!(<f16 as ArrowNativeTypeOp>::MAX_TOTAL_ORDER.is_nan());
+        assert!(<f16 as ArrowNativeTypeOp>::MAX_TOTAL_ORDER.is_sign_positive());
+        assert!(<f16 as ArrowNativeTypeOp>::MAX_TOTAL_ORDER.is_gt(f16::NAN));
     }
 }

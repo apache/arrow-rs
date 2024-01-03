@@ -67,10 +67,10 @@ pub(super) fn base_equal(lhs: &ArrayData, rhs: &ArrayData) -> bool {
                 (DataType::Struct(l_fields), DataType::Struct(r_fields))
                     if l_fields.len() == 2 && r_fields.len() == 2 =>
                 {
-                    let l_key_field = l_fields.get(0).unwrap();
-                    let r_key_field = r_fields.get(0).unwrap();
-                    let l_value_field = l_fields.get(1).unwrap();
-                    let r_value_field = r_fields.get(1).unwrap();
+                    let l_key_field = &l_fields[0];
+                    let r_key_field = &r_fields[0];
+                    let l_value_field = &l_fields[1];
+                    let r_value_field = &r_fields[1];
 
                     // We don't enforce the equality of field names
                     let data_type_equal = l_key_field.data_type() == r_key_field.data_type()
