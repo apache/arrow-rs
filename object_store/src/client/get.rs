@@ -127,7 +127,6 @@ fn get_result<T: GetClient>(
 
     // ensure that we receive the range we asked for
     let range = if let Some(expected) = range {
-        let expected = expected.as_range(meta.size)?;
         ensure!(
             response.status() == StatusCode::PARTIAL_CONTENT,
             NotPartialSnafu
@@ -141,13 +140,16 @@ fn get_result<T: GetClient>(
         let value = ContentRange::from_str(value).context(ParseContentRangeSnafu { value })?;
         let actual = value.range;
 
+        // Update size to reflect full size of object (#5272)
+        meta.size = value.size;
+
+        let expected = expected.as_range(meta.size)?;
+
         ensure!(
             actual == expected,
             UnexpectedRangeSnafu { expected, actual }
         );
 
-        // Update size to reflect full size of object (#5272)
-        meta.size = value.size;
         actual
     } else {
         0..meta.size
