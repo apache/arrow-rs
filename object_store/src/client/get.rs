@@ -97,10 +97,10 @@ enum GetResultError {
     #[snafu(display("Received non-partial response when range requested"))]
     NotPartial,
 
-    #[snafu(display("Content-Range header not present"))]
+    #[snafu(display("Content-Range header not present in partial response"))]
     NoContentRange,
 
-    #[snafu(display("Failed to parse value for CONTENT_RANGE header: {value}"))]
+    #[snafu(display("Failed to parse value for CONTENT_RANGE header: \"{value}\""))]
     ParseContentRange { value: String },
 
     #[snafu(display("Content-Range header contained non UTF-8 characters"))]
@@ -160,4 +160,111 @@ fn get_result<T: GetClient>(
         meta,
         payload: GetResultPayload::Stream(stream),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use hyper::http;
+    use hyper::http::header::*;
+
+    struct TestClient {}
+
+    #[async_trait]
+    impl GetClient for TestClient {
+        const STORE: &'static str = "TEST";
+
+        const HEADER_CONFIG: HeaderConfig = HeaderConfig {
+            etag_required: false,
+            last_modified_required: false,
+            version_header: None,
+        };
+
+        async fn get_request(&self, _: &Path, _: GetOptions) -> Result<Response> {
+            unimplemented!()
+        }
+    }
+
+    fn make_response(
+        object_size: usize,
+        range: Option<Range<usize>>,
+        status: StatusCode,
+        content_range: Option<&str>,
+    ) -> Response {
+        let mut builder = http::Response::builder();
+        if let Some(range) = content_range {
+            builder = builder.header(CONTENT_RANGE, range);
+        }
+
+        let body = match range {
+            Some(range) => vec![0_u8; range.end - range.start],
+            None => vec![0_u8; object_size],
+        };
+
+        builder
+            .status(status)
+            .header(CONTENT_LENGTH, object_size)
+            .body(body)
+            .unwrap()
+            .into()
+    }
+
+    #[tokio::test]
+    async fn test_get_result() {
+        let path = Path::from("test");
+
+        let resp = make_response(12, None, StatusCode::OK, None);
+        let res = get_result::<TestClient>(&path, None, resp).unwrap();
+        assert_eq!(res.meta.size, 12);
+        assert_eq!(res.range, 0..12);
+        let bytes = res.bytes().await.unwrap();
+        assert_eq!(bytes.len(), 12);
+
+        let resp = make_response(
+            12,
+            Some(2..3),
+            StatusCode::PARTIAL_CONTENT,
+            Some("bytes 2-2/12"),
+        );
+        let res = get_result::<TestClient>(&path, Some(2..3), resp).unwrap();
+        assert_eq!(res.meta.size, 12);
+        assert_eq!(res.range, 2..3);
+        let bytes = res.bytes().await.unwrap();
+        assert_eq!(bytes.len(), 1);
+
+        let resp = make_response(12, Some(2..3), StatusCode::OK, None);
+        let err = get_result::<TestClient>(&path, Some(2..3), resp).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Received non-partial response when range requested"
+        );
+
+        let resp = make_response(
+            12,
+            Some(2..3),
+            StatusCode::PARTIAL_CONTENT,
+            Some("bytes 2-3/12"),
+        );
+        let err = get_result::<TestClient>(&path, Some(2..3), resp).unwrap_err();
+        assert_eq!(err.to_string(), "Requested 2..3, got 2..4");
+
+        let resp = make_response(
+            12,
+            Some(2..3),
+            StatusCode::PARTIAL_CONTENT,
+            Some("bytes 2-2/*"),
+        );
+        let err = get_result::<TestClient>(&path, Some(2..3), resp).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Failed to parse value for CONTENT_RANGE header: \"bytes 2-2/*\""
+        );
+
+        let resp = make_response(12, Some(2..3), StatusCode::PARTIAL_CONTENT, None);
+        let err = get_result::<TestClient>(&path, Some(2..3), resp).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Content-Range header not present in partial response"
+        );
+    }
 }
