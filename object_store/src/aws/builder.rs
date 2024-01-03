@@ -315,8 +315,8 @@ pub enum AmazonS3ConfigKey {
     /// Enable Support for S3 Express One Zone
     ///
     /// Supported keys:
-    /// - `aws_disable_tagging`
-    /// - `disable_tagging`
+    /// - `aws_s3_express`
+    /// - `s3_express`
     S3Express,
 
     /// Client options
