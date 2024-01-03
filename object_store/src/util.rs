@@ -258,9 +258,9 @@ impl GetRange {
 impl Display for GetRange {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Bounded(r) => f.write_fmt(format_args!("{}-{}", r.start, r.end - 1)),
-            Self::Offset(o) => f.write_fmt(format_args!("{o}-")),
-            Self::Suffix(n) => f.write_fmt(format_args!("-{n}")),
+            Self::Bounded(r) => f.write_fmt(format_args!("bytes={}-{}", r.start, r.end - 1)),
+            Self::Offset(o) => f.write_fmt(format_args!("bytes={o}-")),
+            Self::Suffix(n) => f.write_fmt(format_args!("bytes=-{n}")),
         }
     }
 }
@@ -386,9 +386,9 @@ mod tests {
 
     #[test]
     fn getrange_str() {
-        assert_eq!(GetRange::Offset(0).to_string(), "0-");
-        assert_eq!(GetRange::Bounded(10..19).to_string(), "10-18");
-        assert_eq!(GetRange::Suffix(10).to_string(), "-10");
+        assert_eq!(GetRange::Offset(0).to_string(), "bytes=0-");
+        assert_eq!(GetRange::Bounded(10..19).to_string(), "bytes=10-18");
+        assert_eq!(GetRange::Suffix(10).to_string(), "bytes=-10");
     }
 
     #[test]
