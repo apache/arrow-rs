@@ -687,6 +687,9 @@ impl MicrosoftAzureBuilder {
     /// Override the endpoint used to communicate with blob storage
     ///
     /// Defaults to `https://{account}.blob.core.windows.net`
+    ///
+    /// By default, only HTTPS schemes are enabled. To connect to an HTTP endpoint, enable
+    /// [`Self::with_allow_http`].
     pub fn with_endpoint(mut self, endpoint: String) -> Self {
         self.endpoint = Some(endpoint);
         self

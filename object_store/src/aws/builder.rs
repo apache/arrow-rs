@@ -595,6 +595,9 @@ impl AmazonS3Builder {
     /// i.e. if `virtual_hosted_style_request` is set to true then `endpoint`
     /// should have the bucket name included.
     ///
+    /// By default, only HTTPS schemes are enabled. To connect to an HTTP endpoint, enable
+    /// [`Self::with_allow_http`].
+    ///
     /// [region endpoint]: https://docs.aws.amazon.com/general/latest/gr/s3.html
     pub fn with_endpoint(mut self, endpoint: impl Into<String>) -> Self {
         self.endpoint = Some(endpoint.into());
