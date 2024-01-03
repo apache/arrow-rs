@@ -1311,6 +1311,7 @@ mod tests {
             ..Default::default()
         };
         let result = storage.get_opts(&location, opts).await.unwrap();
+        // Data is `"arbitrary data"`, length 14 bytes
         assert_eq!(result.meta.size, 14); // Should return full object size (#5272)
         assert_eq!(result.range, 2..5);
         let bytes = result.bytes().await.unwrap();
