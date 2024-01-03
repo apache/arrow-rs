@@ -1303,11 +1303,22 @@ mod tests {
         let range = 3..7;
         let range_result = storage.get_range(&location, range.clone()).await;
 
+        let bytes = range_result.unwrap();
+        assert_eq!(bytes, expected_data.slice(range.clone()));
+
+        let opts = GetOptions {
+            range: Some(2..5),
+            ..Default::default()
+        };
+        let result = storage.get_opts(&location, opts).await.unwrap();
+        // Data is `"arbitrary data"`, length 14 bytes
+        assert_eq!(result.meta.size, 14); // Should return full object size (#5272)
+        assert_eq!(result.range, 2..5);
+        let bytes = result.bytes().await.unwrap();
+        assert_eq!(bytes, b"bit".as_ref());
+
         let out_of_range = 200..300;
         let out_of_range_result = storage.get_range(&location, out_of_range).await;
-
-        let bytes = range_result.unwrap();
-        assert_eq!(bytes, expected_data.slice(range));
 
         // Should be a non-fatal error
         out_of_range_result.unwrap_err();
