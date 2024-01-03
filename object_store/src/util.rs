@@ -258,9 +258,9 @@ impl GetRange {
 impl Display for GetRange {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Bounded(r) => f.write_fmt(format_args!("bytes={}-{}", r.start, r.end - 1)),
-            Self::Offset(o) => f.write_fmt(format_args!("bytes={o}-")),
-            Self::Suffix(n) => f.write_fmt(format_args!("bytes=-{n}")),
+            Self::Bounded(r) => write!(f, "bytes={}-{}", r.start, r.end - 1),
+            Self::Offset(o) => write!(f, "bytes={o}-"),
+            Self::Suffix(n) => write!(f, "bytes=-{n}"),
         }
     }
 }
