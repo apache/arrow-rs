@@ -185,7 +185,7 @@ impl Signer for MicrosoftAzure {
         let signer = self.client.signer(expires_in).await?;
         for path in paths {
             let mut url = self.path_url(path);
-            signer.sign(&method, &mut url)?;
+            signer.sign(method, &mut url)?;
             urls.push(url);
         }
         Ok(urls)

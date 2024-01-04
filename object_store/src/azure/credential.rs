@@ -170,7 +170,7 @@ impl AzureSigner {
         let (str_to_sign, query_pairs) = match &self.delegation_key {
             Some(delegation_key) => string_to_sign_user_delegation_sas(
                 url,
-                &method,
+                method,
                 &self.account,
                 &self.start,
                 &self.end,
