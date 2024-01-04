@@ -581,7 +581,16 @@ pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
     async fn get_opts(&self, location: &Path, options: GetOptions) -> Result<GetResult>;
 
     /// Return the bytes that are stored at the specified location
-    /// in the given byte range
+    /// in the given byte range.
+    ///
+    /// If the given range is zero-length or starts after the end of the resource,
+    /// an error will be returned.
+    /// If the given range starts in a valid location but ends after the end of the resource,
+    /// the valid sub-range will be returned:
+    /// this will start at the requested index but will be shorter than expected.
+    ///
+    /// If you need to know the exact returned range, you can use [ObjectStore::get_opts] instead;
+    /// the [GetResult] object contains the actual range.
     async fn get_range(&self, location: &Path, range: Range<usize>) -> Result<Bytes> {
         let options = GetOptions {
             range: Some(range.into()),

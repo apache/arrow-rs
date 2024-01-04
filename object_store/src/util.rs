@@ -206,11 +206,6 @@ pub(crate) enum InvalidGetRange {
     ))]
     StartTooLarge { requested: usize, length: usize },
 
-    #[snafu(display(
-        "Wanted range ending at {requested}, but resource was only {length} bytes long"
-    ))]
-    EndTooLarge { requested: usize, length: usize },
-
     #[snafu(display("Range started at {start} and ended at {end}"))]
     Inconsistent { start: usize, end: usize },
 }
@@ -240,10 +235,7 @@ impl GetRange {
                         length: len,
                     })
                 } else if r.end > len {
-                    Err(InvalidGetRange::EndTooLarge {
-                        requested: r.end,
-                        length: len,
-                    })
+                    Ok(r.start..len)
                 } else {
                     Ok(r.clone())
                 }
@@ -419,11 +411,8 @@ mod tests {
         let range = GetRange::Bounded(2..5);
         assert_eq!(range.as_range(5).unwrap(), 2..5);
 
-        let err = range.as_range(4).unwrap_err().to_string();
-        assert_eq!(
-            err,
-            "Wanted range ending at 5, but resource was only 4 bytes long"
-        );
+        let range = range.as_range(4).unwrap();
+        assert_eq!(range, 2..4);
 
         let range = GetRange::Bounded(3..3);
         let err = range.as_range(2).unwrap_err().to_string();
