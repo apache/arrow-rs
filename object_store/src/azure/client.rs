@@ -376,6 +376,10 @@ impl AzureClient {
         Ok(response)
     }
 
+    /// Creat an AzureSigner for generating SAS tokens (pre-signed urls).
+    ///
+    /// Depending on the type of credential, this will either use the account key or a user delegation key.
+    /// Since delegation keys are acquired ad-hoc, the signer aloows for signing multiple urls with the same key.
     pub async fn signer(&self, expires_in: Duration) -> Result<AzureSigner> {
         let credential = self.get_credential().await?;
         let signed_start = chrono::Utc::now();

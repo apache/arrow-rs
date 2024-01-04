@@ -294,16 +294,8 @@ fn string_to_sign_sas(
     start: &DateTime<Utc>,
     end: &DateTime<Utc>,
 ) -> (String, String, String, String, String) {
-    let signed_resource = if u
-        .query()
-        .map(|q| q.contains("comp=list"))
-        .unwrap_or_default()
-    {
-        "c"
-    } else {
-        "b"
-    }
-    .to_string();
+    // NOTE: for now only blob signing is supported.
+    let signed_resource = "b".to_string();
 
     // https://learn.microsoft.com/en-us/rest/api/storageservices/create-service-sas#permissions-for-a-directory-container-or-blob
     let signed_permissions = match *method {
@@ -1052,7 +1044,7 @@ mod tests {
         integration.put(&path, data.clone()).await.unwrap();
 
         let signed = integration
-            .signed_url(&Method::GET, &path, Duration::from_secs(60))
+            .signed_url(Method::GET, &path, Duration::from_secs(60))
             .await
             .unwrap();
 

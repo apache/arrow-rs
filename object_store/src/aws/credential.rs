@@ -177,7 +177,7 @@ impl<'a> AwsAuthorizer<'a> {
         request.headers_mut().insert(AUTH_HEADER, authorization_val);
     }
 
-    pub(crate) fn sign(&self, method: &Method, url: &mut Url, expires_in: Duration) {
+    pub(crate) fn sign(&self, method: Method, url: &mut Url, expires_in: Duration) {
         let date = self.date.unwrap_or_else(Utc::now);
         let scope = self.scope(date);
 
@@ -212,7 +212,7 @@ impl<'a> AwsAuthorizer<'a> {
         let string_to_sign = self.string_to_sign(
             date,
             &scope,
-            method,
+            &method,
             url,
             &canonical_headers,
             &signed_headers,
@@ -766,7 +766,7 @@ mod tests {
         };
 
         let mut url = Url::parse("https://examplebucket.s3.amazonaws.com/test.txt").unwrap();
-        authorizer.sign(&Method::GET, &mut url, Duration::from_secs(86400));
+        authorizer.sign(Method::GET, &mut url, Duration::from_secs(86400));
 
         assert_eq!(
             url,

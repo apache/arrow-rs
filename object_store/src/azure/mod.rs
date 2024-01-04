@@ -161,23 +161,23 @@ impl Signer for MicrosoftAzure {
     ///     .build()?;
     ///
     /// let url = azure.signed_url(
-    ///     &Method::PUT,
+    ///     Method::PUT,
     ///     &Path::from("some-folder/some-file.txt"),
     ///     Duration::from_secs(60 * 60)
     /// ).await?;
     /// #     Ok(())
     /// # }
     /// ```
-    async fn signed_url(&self, method: &Method, path: &Path, expires_in: Duration) -> Result<Url> {
+    async fn signed_url(&self, method: Method, path: &Path, expires_in: Duration) -> Result<Url> {
         let mut url = self.path_url(path);
         let signer = self.client.signer(expires_in).await?;
-        signer.sign(method, &mut url)?;
+        signer.sign(&method, &mut url)?;
         Ok(url)
     }
 
     async fn signed_urls(
         &self,
-        method: &Method,
+        method: Method,
         paths: &[Path],
         expires_in: Duration,
     ) -> Result<Vec<Url>> {
@@ -185,7 +185,7 @@ impl Signer for MicrosoftAzure {
         let signer = self.client.signer(expires_in).await?;
         for path in paths {
             let mut url = self.path_url(path);
-            signer.sign(method, &mut url)?;
+            signer.sign(&method, &mut url)?;
             urls.push(url);
         }
         Ok(urls)
@@ -297,7 +297,7 @@ mod tests {
         integration.put(&path, data.clone()).await.unwrap();
 
         let signed = integration
-            .signed_url(&Method::GET, &path, Duration::from_secs(60))
+            .signed_url(Method::GET, &path, Duration::from_secs(60))
             .await
             .unwrap();
 
