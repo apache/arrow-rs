@@ -27,22 +27,26 @@
 //! a way to drop old blocks. Instead unused blocks are automatically cleaned up
 //! after 7 days.
 use crate::{
-    multipart::{PartId, PutPart, WriteMultiPart},
+    multipart::{MultiPartStore, PartId, PutPart, WriteMultiPart},
     path::Path,
+    signer::Signer,
     GetOptions, GetResult, ListResult, MultipartId, ObjectMeta, ObjectStore, PutOptions, PutResult,
     Result,
 };
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures::stream::BoxStream;
+use reqwest::Method;
 use std::fmt::Debug;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::io::AsyncWrite;
+use url::Url;
 
 use crate::client::get::GetClientExt;
 use crate::client::list::ListClientExt;
 use crate::client::CredentialProvider;
-pub use credential::authority_hosts;
+pub use credential::{authority_hosts, AzureAccessKey, AzureAuthorizer};
 
 mod builder;
 mod client;
@@ -50,7 +54,6 @@ mod credential;
 
 /// [`CredentialProvider`] for [`MicrosoftAzure`]
 pub type AzureCredentialProvider = Arc<dyn CredentialProvider<Credential = AzureCredential>>;
-use crate::multipart::MultiPartStore;
 pub use builder::{AzureConfigKey, MicrosoftAzureBuilder};
 pub use credential::AzureCredential;
 
@@ -66,6 +69,11 @@ impl MicrosoftAzure {
     /// Returns the [`AzureCredentialProvider`] used by [`MicrosoftAzure`]
     pub fn credentials(&self) -> &AzureCredentialProvider {
         &self.client.config().credentials
+    }
+
+    /// Create a full URL to the resource specified by `path` with this instance's configuration.
+    fn path_url(&self, path: &Path) -> url::Url {
+        self.client.config().path_url(path)
     }
 }
 
@@ -125,6 +133,62 @@ impl ObjectStore for MicrosoftAzure {
 
     async fn copy_if_not_exists(&self, from: &Path, to: &Path) -> Result<()> {
         self.client.copy_request(from, to, false).await
+    }
+}
+
+#[async_trait]
+impl Signer for MicrosoftAzure {
+    /// Create a URL containing the relevant [Service SAS] query parameters that authorize a request
+    /// via `method` to the resource at `path` valid for the duration specified in `expires_in`.
+    ///
+    /// [Service SAS]: https://learn.microsoft.com/en-us/rest/api/storageservices/create-service-sas
+    ///
+    /// # Example
+    ///
+    /// This example returns a URL that will enable a user to upload a file to
+    /// "some-folder/some-file.txt" in the next hour.
+    ///
+    /// ```
+    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// # use object_store::{azure::MicrosoftAzureBuilder, path::Path, signer::Signer};
+    /// # use reqwest::Method;
+    /// # use std::time::Duration;
+    /// #
+    /// let azure = MicrosoftAzureBuilder::new()
+    ///     .with_account("my-account")
+    ///     .with_access_key("my-access-key")
+    ///     .with_container_name("my-container")
+    ///     .build()?;
+    ///
+    /// let url = azure.signed_url(
+    ///     Method::PUT,
+    ///     &Path::from("some-folder/some-file.txt"),
+    ///     Duration::from_secs(60 * 60)
+    /// ).await?;
+    /// #     Ok(())
+    /// # }
+    /// ```
+    async fn signed_url(&self, method: Method, path: &Path, expires_in: Duration) -> Result<Url> {
+        let mut url = self.path_url(path);
+        let signer = self.client.signer(expires_in).await?;
+        signer.sign(&method, &mut url)?;
+        Ok(url)
+    }
+
+    async fn signed_urls(
+        &self,
+        method: Method,
+        paths: &[Path],
+        expires_in: Duration,
+    ) -> Result<Vec<Url>> {
+        let mut urls = Vec::with_capacity(paths.len());
+        let signer = self.client.signer(expires_in).await?;
+        for path in paths {
+            let mut url = self.path_url(path);
+            signer.sign(&method, &mut url)?;
+            urls.push(url);
+        }
+        Ok(urls)
     }
 }
 
@@ -202,6 +266,7 @@ mod tests {
         stream_get(&integration).await;
         put_opts(&integration, true).await;
         multipart(&integration, &integration).await;
+        signing(&integration).await;
 
         let validate = !integration.client.config().disable_tagging;
         tagging(&integration, validate, |p| {
@@ -209,6 +274,38 @@ mod tests {
             async move { client.get_blob_tagging(&p).await }
         })
         .await
+    }
+
+    #[ignore = "Used for manual testing against a real storage account."]
+    #[tokio::test]
+    async fn test_user_delegation_key() {
+        let account = std::env::var("AZURE_ACCOUNT_NAME").unwrap();
+        let container = std::env::var("AZURE_CONTAINER_NAME").unwrap();
+        let client_id = std::env::var("AZURE_CLIENT_ID").unwrap();
+        let client_secret = std::env::var("AZURE_CLIENT_SECRET").unwrap();
+        let tenant_id = std::env::var("AZURE_TENANT_ID").unwrap();
+        let integration = MicrosoftAzureBuilder::new()
+            .with_account(account)
+            .with_container_name(container)
+            .with_client_id(client_id)
+            .with_client_secret(client_secret)
+            .with_tenant_id(&tenant_id)
+            .build()
+            .unwrap();
+
+        let data = Bytes::from("hello world");
+        let path = Path::from("file.txt");
+        integration.put(&path, data.clone()).await.unwrap();
+
+        let signed = integration
+            .signed_url(Method::GET, &path, Duration::from_secs(60))
+            .await
+            .unwrap();
+
+        let resp = reqwest::get(signed).await.unwrap();
+        let loaded = resp.bytes().await.unwrap();
+
+        assert_eq!(data, loaded);
     }
 
     #[test]

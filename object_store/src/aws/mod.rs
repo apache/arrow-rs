@@ -372,6 +372,7 @@ mod tests {
         rename_and_copy(&integration).await;
         stream_get(&integration).await;
         multipart(&integration, &integration).await;
+        signing(&integration).await;
 
         tagging(&integration, !config.disable_tagging, |p| {
             let client = Arc::clone(&integration.client);

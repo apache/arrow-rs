@@ -46,6 +46,7 @@ use serde::{Deserialize, Serialize};
 use snafu::{OptionExt, ResultExt, Snafu};
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Duration;
 use url::Url;
 
 const VERSION_HEADER: &str = "x-ms-version-id";
@@ -101,6 +102,18 @@ pub(crate) enum Error {
 
     #[snafu(display("ETag required for conditional update"))]
     MissingETag,
+
+    #[snafu(display("Error requesting user delegation key: {}", source))]
+    DelegationKeyRequest { source: crate::client::retry::Error },
+
+    #[snafu(display("Error getting user delegation key response body: {}", source))]
+    DelegationKeyResponseBody { source: reqwest::Error },
+
+    #[snafu(display("Got invalid user delegation key response: {}", source))]
+    DelegationKeyResponse { source: quick_xml::de::DeError },
+
+    #[snafu(display("Generating SAS keys with SAS tokens auth is not supported"))]
+    SASforSASNotSupported,
 }
 
 impl From<Error> for crate::Error {
@@ -322,6 +335,78 @@ impl AzureClient {
             .map_err(|err| err.error(STORE, from.to_string()))?;
 
         Ok(())
+    }
+
+    /// Make a Get User Delegation Key request
+    /// <https://docs.microsoft.com/en-us/rest/api/storageservices/get-user-delegation-key>
+    async fn get_user_delegation_key(
+        &self,
+        start: &DateTime<Utc>,
+        end: &DateTime<Utc>,
+    ) -> Result<UserDelegationKey> {
+        let credential = self.get_credential().await?;
+        let url = self.config.service.clone();
+
+        let start = start.to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        let expiry = end.to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+
+        let mut body = String::new();
+        body.push_str("<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<KeyInfo>\n");
+        body.push_str(&format!(
+            "\t<Start>{start}</Start>\n\t<Expiry>{expiry}</Expiry>\n"
+        ));
+        body.push_str("</KeyInfo>");
+
+        let response = self
+            .client
+            .request(Method::POST, url)
+            .body(body)
+            .query(&[("restype", "service"), ("comp", "userdelegationkey")])
+            .with_azure_authorization(&credential, &self.config.account)
+            .send_retry(&self.config.retry_config)
+            .await
+            .context(DelegationKeyRequestSnafu)?
+            .bytes()
+            .await
+            .context(DelegationKeyResponseBodySnafu)?;
+
+        let response: UserDelegationKey =
+            quick_xml::de::from_reader(response.reader()).context(DelegationKeyResponseSnafu)?;
+
+        Ok(response)
+    }
+
+    /// Creat an AzureSigner for generating SAS tokens (pre-signed urls).
+    ///
+    /// Depending on the type of credential, this will either use the account key or a user delegation key.
+    /// Since delegation keys are acquired ad-hoc, the signer aloows for signing multiple urls with the same key.
+    pub async fn signer(&self, expires_in: Duration) -> Result<AzureSigner> {
+        let credential = self.get_credential().await?;
+        let signed_start = chrono::Utc::now();
+        let signed_expiry = signed_start + expires_in;
+        match credential.as_ref() {
+            AzureCredential::BearerToken(_) => {
+                let key = self
+                    .get_user_delegation_key(&signed_start, &signed_expiry)
+                    .await?;
+                let signing_key = AzureAccessKey::try_new(&key.value)?;
+                Ok(AzureSigner::new(
+                    signing_key,
+                    self.config.account.clone(),
+                    signed_start,
+                    signed_expiry,
+                    Some(key),
+                ))
+            }
+            AzureCredential::AccessKey(key) => Ok(AzureSigner::new(
+                key.to_owned(),
+                self.config.account.clone(),
+                signed_start,
+                signed_expiry,
+                None,
+            )),
+            _ => Err(Error::SASforSASNotSupported.into()),
+        }
     }
 
     #[cfg(test)]
@@ -600,6 +685,18 @@ impl BlockList {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub(crate) struct UserDelegationKey {
+    pub signed_oid: String,
+    pub signed_tid: String,
+    pub signed_start: String,
+    pub signed_expiry: String,
+    pub signed_service: String,
+    pub signed_version: String,
+    pub value: String,
+}
+
 #[cfg(test)]
 mod tests {
     use bytes::Bytes;
@@ -757,8 +854,7 @@ mod tests {
     <NextMarker/>
 </EnumerationResults>";
 
-        let mut _list_blobs_response_internal: ListResultInternal =
-            quick_xml::de::from_str(S).unwrap();
+        let _list_blobs_response_internal: ListResultInternal = quick_xml::de::from_str(S).unwrap();
     }
 
     #[test]
@@ -777,5 +873,22 @@ mod tests {
         let res: &str = &blocks.to_xml();
 
         assert_eq!(res, S)
+    }
+
+    #[test]
+    fn test_delegated_key_response() {
+        const S: &str = r#"<?xml version="1.0" encoding="utf-8"?>
+<UserDelegationKey>
+    <SignedOid>String containing a GUID value</SignedOid>
+    <SignedTid>String containing a GUID value</SignedTid>
+    <SignedStart>String formatted as ISO date</SignedStart>
+    <SignedExpiry>String formatted as ISO date</SignedExpiry>
+    <SignedService>b</SignedService>
+    <SignedVersion>String specifying REST api version to use to create the user delegation key</SignedVersion>
+    <Value>String containing the user delegation key</Value>
+</UserDelegationKey>"#;
+
+        let _delegated_key_response_internal: UserDelegationKey =
+            quick_xml::de::from_str(S).unwrap();
     }
 }

@@ -2126,6 +2126,29 @@ mod tests {
         assert_eq!(meta.size, chunk_size * 2);
     }
 
+    #[cfg(any(feature = "azure", feature = "aws"))]
+    pub(crate) async fn signing<T>(integration: &T)
+    where
+        T: ObjectStore + crate::signer::Signer,
+    {
+        use reqwest::Method;
+        use std::time::Duration;
+
+        let data = Bytes::from("hello world");
+        let path = Path::from("file.txt");
+        integration.put(&path, data.clone()).await.unwrap();
+
+        let signed = integration
+            .signed_url(Method::GET, &path, Duration::from_secs(60))
+            .await
+            .unwrap();
+
+        let resp = reqwest::get(signed).await.unwrap();
+        let loaded = resp.bytes().await.unwrap();
+
+        assert_eq!(data, loaded);
+    }
+
     #[cfg(any(feature = "aws", feature = "azure"))]
     pub(crate) async fn tagging<F, Fut>(storage: &dyn ObjectStore, validate: bool, get_tags: F)
     where
