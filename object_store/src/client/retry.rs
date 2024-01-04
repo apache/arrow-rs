@@ -119,11 +119,19 @@ impl From<Error> for std::io::Error {
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
 
-/// Contains the configuration for how to respond to server errors
+/// The configuration for how to respond to request errors
 ///
-/// By default they will be retried up to some limit, using exponential
+/// The following categories of error will be retried:
+///
+/// * 5xx server errors
+/// * Connection errors
+/// * Dropped connections
+/// * Timeouts for [safe] / read-only requests
+///
+/// Requests will be retried up to some limit, using exponential
 /// backoff with jitter. See [`BackoffConfig`] for more information
 ///
+/// [safe]: https://datatracker.ietf.org/doc/html/rfc7231#section-4.2.1
 #[derive(Debug, Clone)]
 pub struct RetryConfig {
     /// The backoff configuration
