@@ -266,6 +266,7 @@ mod tests {
         stream_get(&integration).await;
         put_opts(&integration, true).await;
         multipart(&integration, &integration).await;
+        signing(&integration).await;
 
         let validate = !integration.client.config().disable_tagging;
         tagging(&integration, validate, |p| {

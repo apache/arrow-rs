@@ -909,7 +909,6 @@ impl CredentialProvider for AzureCliCredential {
 
 #[cfg(test)]
 mod tests {
-    use bytes::Bytes;
     use futures::executor::block_on;
     use hyper::body::to_bytes;
     use hyper::{Body, Response};
@@ -917,11 +916,7 @@ mod tests {
     use tempfile::NamedTempFile;
 
     use super::*;
-    use crate::azure::MicrosoftAzureBuilder;
     use crate::client::mock_server::MockServer;
-    use crate::path::Path;
-    use crate::signer::Signer;
-    use crate::ObjectStore;
 
     #[tokio::test]
     async fn test_managed_identity() {
@@ -1029,28 +1024,5 @@ mod tests {
             token.token.as_ref(),
             &AzureCredential::BearerToken("TOKEN".into())
         );
-    }
-
-    #[tokio::test]
-    async fn test_service_sas() {
-        crate::test_util::maybe_skip_integration!();
-        let integration = MicrosoftAzureBuilder::from_env()
-            .with_container_name("test-bucket")
-            .build()
-            .unwrap();
-
-        let data = Bytes::from("hello world");
-        let path = Path::from("file.txt");
-        integration.put(&path, data.clone()).await.unwrap();
-
-        let signed = integration
-            .signed_url(Method::GET, &path, Duration::from_secs(60))
-            .await
-            .unwrap();
-
-        let resp = reqwest::get(signed).await.unwrap();
-        let loaded = resp.bytes().await.unwrap();
-
-        assert_eq!(data, loaded);
     }
 }
