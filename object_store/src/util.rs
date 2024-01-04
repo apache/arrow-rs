@@ -173,7 +173,7 @@ fn merge_ranges(ranges: &[Range<usize>], coalesce: usize) -> Vec<Range<usize>> {
     ret
 }
 
-/// A single range in a `Range` request.
+/// Request only a portion of an object's bytes
 ///
 /// These can be created from [usize] ranges, like
 ///
@@ -184,23 +184,28 @@ fn merge_ranges(ranges: &[Range<usize>], coalesce: usize) -> Vec<Range<usize>> {
 /// let range3: GetRange = (50..).into();
 /// let range4: GetRange = (..150).into();
 /// ```
+///
+/// Implementations may wish to inspect [`GetResult`] for the exact byte
+/// range returned.
+///
+/// [`GetResult`]: crate::GetResult
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum GetRange {
-    /// A bounded byte range.
+    /// Request a specific range of bytes
+    ///
+    /// If the given range is zero-length or starts after the end of the object,
+    /// an error will be returned. Additionally, if the range ends after the end
+    /// of the object, the entire remainder of the object will be returned.
+    /// Otherwise, the exact requested range will be returned.
     Bounded(Range<usize>),
-    /// A range defined only by the first byte requested (requests all remaining bytes).
+    /// Request all bytes starting from a given byte offset
     Offset(usize),
-    /// A range defined as the number of bytes at the end of the resource.
+    /// Request up to the last n bytes
     Suffix(usize),
 }
 
 #[derive(Debug, Snafu)]
 pub(crate) enum InvalidGetRange {
-    #[snafu(display(
-        "Wanted suffix of {requested} bytes, but resource was only {length} bytes long"
-    ))]
-    SuffixTooLarge { requested: usize, length: usize },
-
     #[snafu(display(
         "Wanted range starting at {requested}, but resource was only {length} bytes long"
     ))]
@@ -250,14 +255,7 @@ impl GetRange {
                     Ok(*o..len)
                 }
             }
-            Self::Suffix(n) => {
-                len.checked_sub(*n)
-                    .map(|start| start..len)
-                    .ok_or(InvalidGetRange::SuffixTooLarge {
-                        requested: *n,
-                        length: len,
-                    })
-            }
+            Self::Suffix(n) => Ok(len.saturating_sub(*n)..len),
         }
     }
 }
