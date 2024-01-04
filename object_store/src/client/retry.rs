@@ -119,11 +119,19 @@ impl From<Error> for std::io::Error {
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
 
-/// Contains the configuration for how to respond to server errors
+/// The configuration for how to respond to request errors
 ///
-/// By default they will be retried up to some limit, using exponential
+/// The following categories of error will be retried:
+///
+/// * 5xx server errors
+/// * Connection errors
+/// * Dropped connections
+/// * Timeouts for [safe] / read-only requests
+///
+/// Requests will be retried up to some limit, using exponential
 /// backoff with jitter. See [`BackoffConfig`] for more information
 ///
+/// [safe]: https://datatracker.ietf.org/doc/html/rfc7231#section-4.2.1
 #[derive(Debug, Clone)]
 pub struct RetryConfig {
     /// The backoff configuration
@@ -173,13 +181,16 @@ impl RetryExt for reqwest::RequestBuilder {
         let max_retries = config.max_retries;
         let retry_timeout = config.retry_timeout;
 
+        let (client, req) = self.build_split();
+        let req = req.expect("request must be valid");
+
         async move {
             let mut retries = 0;
             let now = Instant::now();
 
             loop {
-                let s = self.try_clone().expect("request body must be cloneable");
-                match s.send().await {
+                let s = req.try_clone().expect("request body must be cloneable");
+                match client.execute(s).await {
                     Ok(r) => match r.error_for_status_ref() {
                         Ok(_) if r.status().is_success() => return Ok(r),
                         Ok(r) if r.status() == StatusCode::NOT_MODIFIED => {
@@ -242,7 +253,9 @@ impl RetryExt for reqwest::RequestBuilder {
                     Err(e) =>
                     {
                         let mut do_retry = false;
-                        if let Some(source) = e.source() {
+                        if req.method().is_safe() && e.is_timeout() {
+                            do_retry = true
+                        } else if let Some(source) = e.source() {
                             if let Some(e) = source.downcast_ref::<hyper::Error>() {
                                 if e.is_connect() || e.is_closed() || e.is_incomplete_message() {
                                     do_retry = true;
@@ -294,7 +307,11 @@ mod tests {
             retry_timeout: Duration::from_secs(1000),
         };
 
-        let client = Client::new();
+        let client = Client::builder()
+            .timeout(Duration::from_millis(100))
+            .build()
+            .unwrap();
+
         let do_request = || client.request(Method::GET, mock.url()).send_retry(&retry);
 
         // Simple request should work
@@ -419,7 +436,7 @@ mod tests {
 
         let e = do_request().await.unwrap_err().to_string();
         assert!(
-            e.contains("Error after 2 retries in") && 
+            e.contains("Error after 2 retries in") &&
             e.contains("max_retries:2, retry_timeout:1000s, source:HTTP status server error (502 Bad Gateway) for url"),
             "{e}"
         );
@@ -439,6 +456,25 @@ mod tests {
                 && e.contains(
                     "max_retries:2, retry_timeout:1000s, source:error sending request for url"
                 ),
+            "{e}"
+        );
+
+        // Retries on client timeout
+        mock.push_async_fn(|_| async move {
+            tokio::time::sleep(Duration::from_secs(10)).await;
+            panic!()
+        });
+        do_request().await.unwrap();
+
+        // Does not retry PUT request
+        mock.push_async_fn(|_| async move {
+            tokio::time::sleep(Duration::from_secs(10)).await;
+            panic!()
+        });
+        let res = client.request(Method::PUT, mock.url()).send_retry(&retry);
+        let e = res.await.unwrap_err().to_string();
+        assert!(
+            e.contains("Error after 0 retries in") && e.contains("operation timed out"),
             "{e}"
         );
 
