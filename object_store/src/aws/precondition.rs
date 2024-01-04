@@ -48,7 +48,7 @@ pub enum S3CopyIfNotExists {
     HeaderWithStatus(String, String, reqwest::StatusCode),
     /// The name of a DynamoDB table to use for coordination
     ///
-    /// Encoded as either `dynamodb:<TABLE_NAME>` or `dynamodb:<TABLE_NAME>:<TIMEOUT_MILLIS>`
+    /// Encoded as either `dynamo:<TABLE_NAME>` or `dynamo:<TABLE_NAME>:<TIMEOUT_MILLIS>`
     /// ignoring whitespace. The default timeout is used if not specified
     ///
     /// See [`DynamoCommit`] for more information
@@ -88,12 +88,7 @@ impl S3CopyIfNotExists {
                     code,
                 ))
             }
-            "dynamo" => Some(Self::Dynamo(match value.split_once(':') {
-                Some((table_name, timeout)) => DynamoCommit::new(table_name.trim().to_string())
-                    .with_timeout(timeout.parse().ok()?),
-                None => DynamoCommit::new(value.trim().to_string()),
-            })),
-
+            "dynamo" => Some(Self::Dynamo(DynamoCommit::from_str(value)?)),
             _ => None,
         }
     }
@@ -111,7 +106,7 @@ impl Parse for S3CopyIfNotExists {
 /// Configure how to provide conditional put support for [`AmazonS3`].
 ///
 /// [`AmazonS3`]: super::AmazonS3
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Eq, PartialEq)]
 #[allow(missing_copy_implementations)]
 #[non_exhaustive]
 pub enum S3ConditionalPut {
@@ -122,12 +117,23 @@ pub enum S3ConditionalPut {
     ///
     /// [HTTP precondition]: https://datatracker.ietf.org/doc/html/rfc9110#name-preconditions
     ETagMatch,
+
+    /// The name of a DynamoDB table to use for coordination
+    ///
+    /// Encoded as either `dynamo:<TABLE_NAME>` or `dynamo:<TABLE_NAME>:<TIMEOUT_MILLIS>`
+    /// ignoring whitespace. The default timeout is used if not specified
+    ///
+    /// See [`DynamoCommit`] for more information
+    ///
+    /// This will use the same region, credentials and endpoint as configured for S3
+    Dynamo(DynamoCommit),
 }
 
 impl std::fmt::Display for S3ConditionalPut {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::ETagMatch => write!(f, "etag"),
+            Self::Dynamo(lock) => write!(f, "dynamo: {}", lock.table_name()),
         }
     }
 }
@@ -136,7 +142,10 @@ impl S3ConditionalPut {
     fn from_str(s: &str) -> Option<Self> {
         match s.trim() {
             "etag" => Some(Self::ETagMatch),
-            _ => None,
+            trimmed => match trimmed.split_once(':')? {
+                ("dynamo", s) => Some(Self::Dynamo(DynamoCommit::from_str(s)?)),
+                _ => None,
+            },
         }
     }
 }
@@ -153,6 +162,7 @@ impl Parse for S3ConditionalPut {
 #[cfg(test)]
 mod tests {
     use super::S3CopyIfNotExists;
+    use crate::aws::{DynamoCommit, S3ConditionalPut};
 
     #[test]
     fn parse_s3_copy_if_not_exists_header() {
@@ -175,6 +185,24 @@ mod tests {
         ));
 
         assert_eq!(expected, S3CopyIfNotExists::from_str(input));
+    }
+
+    #[test]
+    fn parse_s3_copy_if_not_exists_dynamo() {
+        let input = "dynamo: table:100";
+        let expected = Some(S3CopyIfNotExists::Dynamo(
+            DynamoCommit::new("table".into()).with_timeout(100),
+        ));
+        assert_eq!(expected, S3CopyIfNotExists::from_str(input));
+    }
+
+    #[test]
+    fn parse_s3_condition_put_dynamo() {
+        let input = "dynamo: table:1300";
+        let expected = Some(S3ConditionalPut::Dynamo(
+            DynamoCommit::new("table".into()).with_timeout(1300),
+        ));
+        assert_eq!(expected, S3ConditionalPut::from_str(input));
     }
 
     #[test]
