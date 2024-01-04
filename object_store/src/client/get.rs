@@ -292,7 +292,7 @@ mod tests {
         let err = get_result::<TestClient>(&path, Some(get_range.clone()), resp).unwrap_err();
         assert_eq!(
             err.to_string(),
-            "InvalidRangeRequest: Wanted range starting at 2, but resource was only 2 bytes long"
+            "InvalidRangeRequest: Wanted range starting at 2, but object was only 2 bytes long"
         );
 
         let resp = make_response(

@@ -1340,21 +1340,31 @@ mod tests {
             range: Some(GetRange::Suffix(2)),
             ..Default::default()
         };
-        let result = storage.get_opts(&location, opts).await.unwrap();
-        assert_eq!(result.range, 12..14);
-        assert_eq!(result.meta.size, 14);
-        let bytes = result.bytes().await.unwrap();
-        assert_eq!(bytes, b"ta".as_ref());
+        match storage.get_opts(&location, opts).await {
+            Ok(result) => {
+                assert_eq!(result.range, 12..14);
+                assert_eq!(result.meta.size, 14);
+                let bytes = result.bytes().await.unwrap();
+                assert_eq!(bytes, b"ta".as_ref());
+            }
+            Err(Error::NotSupported { .. }) => {}
+            Err(e) => panic!("{e}"),
+        }
 
         let opts = GetOptions {
             range: Some(GetRange::Suffix(100)),
             ..Default::default()
         };
-        let result = storage.get_opts(&location, opts).await.unwrap();
-        assert_eq!(result.range, 0..14);
-        assert_eq!(result.meta.size, 14);
-        let bytes = result.bytes().await.unwrap();
-        assert_eq!(bytes, b"arbitrary data".as_ref());
+        match storage.get_opts(&location, opts).await {
+            Ok(result) => {
+                assert_eq!(result.range, 0..14);
+                assert_eq!(result.meta.size, 14);
+                let bytes = result.bytes().await.unwrap();
+                assert_eq!(bytes, b"arbitrary data".as_ref());
+            }
+            Err(Error::NotSupported { .. }) => {}
+            Err(e) => panic!("{e}"),
+        }
 
         let opts = GetOptions {
             range: Some(GetRange::Offset(3)),

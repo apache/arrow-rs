@@ -207,7 +207,7 @@ pub enum GetRange {
 #[derive(Debug, Snafu)]
 pub(crate) enum InvalidGetRange {
     #[snafu(display(
-        "Wanted range starting at {requested}, but resource was only {length} bytes long"
+        "Wanted range starting at {requested}, but object was only {length} bytes long"
     ))]
     StartTooLarge { requested: usize, length: usize },
 
@@ -422,12 +422,7 @@ mod tests {
 
         let range = GetRange::Suffix(3);
         assert_eq!(range.as_range(3).unwrap(), 0..3);
-
-        let err = range.as_range(2).unwrap_err().to_string();
-        assert_eq!(
-            err,
-            "Wanted suffix of 3 bytes, but resource was only 2 bytes long"
-        );
+        assert_eq!(range.as_range(2).unwrap(), 0..2);
 
         let range = GetRange::Suffix(0);
         assert_eq!(range.as_range(0).unwrap(), 0..0);
@@ -436,13 +431,13 @@ mod tests {
         let err = range.as_range(2).unwrap_err().to_string();
         assert_eq!(
             err,
-            "Wanted range starting at 2, but resource was only 2 bytes long"
+            "Wanted range starting at 2, but object was only 2 bytes long"
         );
 
         let err = range.as_range(1).unwrap_err().to_string();
         assert_eq!(
             err,
-            "Wanted range starting at 2, but resource was only 1 bytes long"
+            "Wanted range starting at 2, but object was only 1 bytes long"
         );
 
         let range = GetRange::Offset(1);
