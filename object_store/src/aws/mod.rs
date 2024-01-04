@@ -136,14 +136,14 @@ impl Signer for AmazonS3 {
     ///     .build()?;
     ///
     /// let url = s3.signed_url(
-    ///     Method::PUT,
+    ///     &Method::PUT,
     ///     &Path::from("some-folder/some-file.txt"),
     ///     Duration::from_secs(60 * 60)
     /// ).await?;
     /// #     Ok(())
     /// # }
     /// ```
-    async fn signed_url(&self, method: Method, path: &Path, expires_in: Duration) -> Result<Url> {
+    async fn signed_url(&self, method: &Method, path: &Path, expires_in: Duration) -> Result<Url> {
         let credential = self.credentials().get_credential().await?;
         let authorizer = AwsAuthorizer::new(&credential, "s3", &self.client.config().region);
 

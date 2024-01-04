@@ -161,35 +161,34 @@ impl Signer for MicrosoftAzure {
     ///     .build()?;
     ///
     /// let url = azure.signed_url(
-    ///     Method::PUT,
+    ///     &Method::PUT,
     ///     &Path::from("some-folder/some-file.txt"),
     ///     Duration::from_secs(60 * 60)
     /// ).await?;
     /// #     Ok(())
     /// # }
     /// ```
-    async fn signed_url(&self, method: Method, path: &Path, expires_in: Duration) -> Result<Url> {
-        let credential = self.credentials().get_credential().await?;
-        let signed_start = chrono::Utc::now();
-        let signed_expiry = signed_start + expires_in;
-        let delegation_key = match credential.as_ref() {
-            AzureCredential::BearerToken(_) => Some(
-                self.client
-                    .get_user_delegation_key(&signed_start, &signed_expiry)
-                    .await?,
-            ),
-            _ => None,
-        };
-
-        let authorizer = AzureAuthorizer::new(
-            &credential,
-            delegation_key.as_ref(),
-            &self.client.config().account,
-        );
+    async fn signed_url(&self, method: &Method, path: &Path, expires_in: Duration) -> Result<Url> {
         let mut url = self.path_url(path);
-        authorizer.sign(method, &mut url, &signed_start, &signed_expiry)?;
-
+        let signer = self.client.signer(expires_in).await?;
+        signer.sign(method, &mut url)?;
         Ok(url)
+    }
+
+    async fn signed_urls(
+        &self,
+        method: &Method,
+        paths: &[Path],
+        expires_in: Duration,
+    ) -> Result<Vec<Url>> {
+        let mut urls = Vec::with_capacity(paths.len());
+        let signer = self.client.signer(expires_in).await?;
+        for path in paths {
+            let mut url = self.path_url(path);
+            signer.sign(&method, &mut url)?;
+            urls.push(url);
+        }
+        Ok(urls)
     }
 }
 
@@ -293,24 +292,12 @@ mod tests {
             .build()
             .unwrap();
 
-        let start = chrono::Utc::now();
-        let end = start + chrono::Duration::days(1);
-
-        let key = integration
-            .client
-            .get_user_delegation_key(&start, &end)
-            .await
-            .unwrap();
-
-        assert!(!key.value.is_empty());
-        assert_eq!(key.signed_tid, tenant_id);
-
         let data = Bytes::from("hello world");
         let path = Path::from("file.txt");
         integration.put(&path, data.clone()).await.unwrap();
 
         let signed = integration
-            .signed_url(Method::GET, &path, Duration::from_secs(60))
+            .signed_url(&Method::GET, &path, Duration::from_secs(60))
             .await
             .unwrap();
 

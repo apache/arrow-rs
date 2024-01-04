@@ -46,6 +46,7 @@ use serde::{Deserialize, Serialize};
 use snafu::{OptionExt, ResultExt, Snafu};
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Duration;
 use url::Url;
 
 const VERSION_HEADER: &str = "x-ms-version-id";
@@ -110,6 +111,9 @@ pub(crate) enum Error {
 
     #[snafu(display("Got invalid user delegation key response: {}", source))]
     DelegationKeyResponse { source: quick_xml::de::DeError },
+
+    #[snafu(display("Generating SAS keys with SAS tokens auth is not supported"))]
+    SASforSASNotSupported,
 }
 
 impl From<Error> for crate::Error {
@@ -335,7 +339,7 @@ impl AzureClient {
 
     /// Make a Get User Delegation Key request
     /// <https://docs.microsoft.com/en-us/rest/api/storageservices/get-user-delegation-key>
-    pub async fn get_user_delegation_key(
+    async fn get_user_delegation_key(
         &self,
         start: &DateTime<Utc>,
         end: &DateTime<Utc>,
@@ -370,6 +374,35 @@ impl AzureClient {
             quick_xml::de::from_reader(response.reader()).context(DelegationKeyResponseSnafu)?;
 
         Ok(response)
+    }
+
+    pub async fn signer(&self, expires_in: Duration) -> Result<AzureSigner> {
+        let credential = self.get_credential().await?;
+        let signed_start = chrono::Utc::now();
+        let signed_expiry = signed_start + expires_in;
+        match credential.as_ref() {
+            AzureCredential::BearerToken(_) => {
+                let key = self
+                    .get_user_delegation_key(&signed_start, &signed_expiry)
+                    .await?;
+                let signing_key = AzureAccessKey::try_new(&key.value)?;
+                Ok(AzureSigner::new(
+                    signing_key,
+                    self.config.account.clone(),
+                    signed_start,
+                    signed_expiry,
+                    Some(key),
+                ))
+            }
+            AzureCredential::AccessKey(key) => Ok(AzureSigner::new(
+                key.to_owned(),
+                self.config.account.clone(),
+                signed_start,
+                signed_expiry,
+                None,
+            )),
+            _ => Err(Error::SASforSASNotSupported.into()),
+        }
     }
 
     #[cfg(test)]
@@ -650,7 +683,7 @@ impl BlockList {
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(rename_all = "PascalCase")]
-pub struct UserDelegationKey {
+pub(crate) struct UserDelegationKey {
     pub signed_oid: String,
     pub signed_tid: String,
     pub signed_start: String,

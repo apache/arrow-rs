@@ -101,7 +101,7 @@ impl From<Error> for crate::Error {
 }
 
 /// A shared Azure Storage Account Key
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Debug, Clone, Eq, PartialEq)]
 pub struct AzureAccessKey(Vec<u8>);
 
 impl AzureAccessKey {
@@ -141,24 +141,63 @@ pub mod authority_hosts {
     pub const AZURE_PUBLIC_CLOUD: &str = "https://login.microsoftonline.com";
 }
 
+pub(crate) struct AzureSigner {
+    signing_key: AzureAccessKey,
+    start: DateTime<Utc>,
+    end: DateTime<Utc>,
+    account: String,
+    delegation_key: Option<UserDelegationKey>,
+}
+
+impl AzureSigner {
+    pub fn new(
+        signing_key: AzureAccessKey,
+        account: String,
+        start: DateTime<Utc>,
+        end: DateTime<Utc>,
+        delegation_key: Option<UserDelegationKey>,
+    ) -> Self {
+        Self {
+            signing_key,
+            account,
+            start,
+            end,
+            delegation_key,
+        }
+    }
+
+    pub fn sign(&self, method: &Method, url: &mut Url) -> Result<()> {
+        let (str_to_sign, query_pairs) = match &self.delegation_key {
+            Some(delegation_key) => string_to_sign_user_delegation_sas(
+                url,
+                &method,
+                &self.account,
+                &self.start,
+                &self.end,
+                delegation_key,
+            ),
+            None => string_to_sign_service_sas(url, method, &self.account, &self.start, &self.end),
+        };
+        let auth = hmac_sha256(&self.signing_key.0, str_to_sign);
+        url.query_pairs_mut().extend_pairs(query_pairs);
+        url.query_pairs_mut()
+            .append_pair("sig", BASE64_STANDARD.encode(auth).as_str());
+        Ok(())
+    }
+}
+
 /// Authorize a [`Request`] with an [`AzureAuthorizer`]
 #[derive(Debug)]
 pub struct AzureAuthorizer<'a> {
     credential: &'a AzureCredential,
-    delegation_key: Option<&'a UserDelegationKey>,
     account: &'a str,
 }
 
 impl<'a> AzureAuthorizer<'a> {
     /// Create a new [`AzureAuthorizer`]
-    pub fn new(
-        credential: &'a AzureCredential,
-        delegation_key: Option<&'a UserDelegationKey>,
-        account: &'a str,
-    ) -> Self {
+    pub fn new(credential: &'a AzureCredential, account: &'a str) -> Self {
         AzureAuthorizer {
             credential,
-            delegation_key,
             account,
         }
     }
@@ -206,44 +245,6 @@ impl<'a> AzureAuthorizer<'a> {
             }
         }
     }
-
-    /// Sign a url with a shared access signature (SAS).
-    pub(crate) fn sign(
-        &self,
-        method: Method,
-        url: &mut Url,
-        start: &DateTime<Utc>,
-        end: &DateTime<Utc>,
-    ) -> Result<()> {
-        if let Some(delegation_key) = self.delegation_key {
-            let (str_to_sign, query_pairs) = string_to_sign_user_delegation_sas(
-                url,
-                &method,
-                self.account,
-                start,
-                end,
-                delegation_key,
-            );
-            let signing_key = AzureAccessKey::try_new(&delegation_key.value)?;
-            let auth = hmac_sha256(signing_key.0, str_to_sign);
-            url.query_pairs_mut().extend_pairs(query_pairs);
-            url.query_pairs_mut()
-                .append_pair("sig", BASE64_STANDARD.encode(auth).as_str());
-            return Ok(());
-        }
-        match self.credential {
-            AzureCredential::AccessKey(key) => {
-                let (str_to_sign, query_pairs) =
-                    string_to_sign_service_sas(url, &method, self.account, start, end);
-                let auth = hmac_sha256(&key.0, str_to_sign);
-                url.query_pairs_mut().extend_pairs(query_pairs);
-                url.query_pairs_mut()
-                    .append_pair("sig", BASE64_STANDARD.encode(auth).as_str());
-            }
-            _ => return Err(Error::SASforSASNotSupported),
-        };
-        Ok(())
-    }
 }
 
 pub(crate) trait CredentialExt {
@@ -257,7 +258,7 @@ impl CredentialExt for RequestBuilder {
         let (client, request) = self.build_split();
         let mut request = request.expect("request valid");
 
-        AzureAuthorizer::new(credential, None, account).authorize(&mut request);
+        AzureAuthorizer::new(credential, account).authorize(&mut request);
 
         Self::from_parts(client, request)
     }
@@ -339,6 +340,9 @@ fn string_to_sign_sas(
     )
 }
 
+/// Create a string to be signed for authorization via [service sas].
+///
+/// [service sas]: https://learn.microsoft.com/en-us/rest/api/storageservices/create-service-sas#version-2020-12-06-and-later
 fn string_to_sign_service_sas(
     u: &Url,
     method: &Method,
@@ -349,7 +353,6 @@ fn string_to_sign_service_sas(
     let (signed_resource, signed_permissions, signed_start, signed_expiry, canonicalized_resource) =
         string_to_sign_sas(u, method, account, start, end);
 
-    // https://learn.microsoft.com/en-us/rest/api/storageservices/create-service-sas#version-2020-12-06-and-later
     let string_to_sign = format!(
         "{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}",
         signed_permissions,
@@ -380,6 +383,9 @@ fn string_to_sign_service_sas(
     (string_to_sign, pairs)
 }
 
+/// Create a string to be signed for authorization via [user delegation sas].
+///
+/// [user delegation sas]: https://learn.microsoft.com/en-us/rest/api/storageservices/create-user-delegation-sas#version-2020-12-06-and-later
 fn string_to_sign_user_delegation_sas(
     u: &Url,
     method: &Method,
@@ -391,7 +397,6 @@ fn string_to_sign_user_delegation_sas(
     let (signed_resource, signed_permissions, signed_start, signed_expiry, canonicalized_resource) =
         string_to_sign_sas(u, method, account, start, end);
 
-    // https://learn.microsoft.com/en-us/rest/api/storageservices/create-user-delegation-sas#version-2020-12-06-and-later
     let string_to_sign = format!(
         "{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}",
         signed_permissions,
@@ -1047,7 +1052,7 @@ mod tests {
         integration.put(&path, data.clone()).await.unwrap();
 
         let signed = integration
-            .signed_url(Method::GET, &path, Duration::from_secs(60))
+            .signed_url(&Method::GET, &path, Duration::from_secs(60))
             .await
             .unwrap();
 
