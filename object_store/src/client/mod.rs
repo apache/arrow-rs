@@ -680,6 +680,12 @@ mod cloud {
                 cache: Default::default(),
             }
         }
+
+        /// Override the minimum remaining TTL for a cached token to be used
+        pub fn with_min_ttl(mut self, min_ttl: Duration) -> Self {
+            self.cache = self.cache.with_min_ttl(min_ttl);
+            self
+        }
     }
 
     #[async_trait]

@@ -723,7 +723,7 @@ impl TokenProvider for SessionProvider {
         let creds = resp.credentials;
         Ok(TemporaryToken {
             token: Arc::new(creds.into()),
-            // Credentials last 5 minutes
+            // Credentials last 5 minutes - https://docs.aws.amazon.com/AmazonS3/latest/API/API_CreateSession.html
             expiry: Some(Instant::now() + Duration::from_secs(5 * 60)),
         })
     }

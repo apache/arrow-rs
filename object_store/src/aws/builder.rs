@@ -31,6 +31,7 @@ use serde::{Deserialize, Serialize};
 use snafu::{OptionExt, ResultExt, Snafu};
 use std::str::FromStr;
 use std::sync::Arc;
+use std::time::Duration;
 use tracing::info;
 use url::Url;
 
@@ -850,15 +851,18 @@ impl AmazonS3Builder {
                 // https://docs.aws.amazon.com/AmazonS3/latest/userguide/s3-express-Regions-and-Zones.html
                 let endpoint = format!("https://{bucket}.s3express-{zone}.{region}.amazonaws.com");
 
-                let session = Arc::new(TokenCredentialProvider::new(
-                    SessionProvider {
-                        endpoint: endpoint.clone(),
-                        region: region.clone(),
-                        credentials: Arc::clone(&credentials),
-                    },
-                    self.client_options.client()?,
-                    self.retry_config.clone(),
-                ));
+                let session = Arc::new(
+                    TokenCredentialProvider::new(
+                        SessionProvider {
+                            endpoint: endpoint.clone(),
+                            region: region.clone(),
+                            credentials: Arc::clone(&credentials),
+                        },
+                        self.client_options.client()?,
+                        self.retry_config.clone(),
+                    )
+                    .with_min_ttl(Duration::from_secs(60)), // Credentials only valid for 5 minutes
+                );
                 (Some(session as _), Some(endpoint))
             }
             false => (None, None),
