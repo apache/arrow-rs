@@ -499,6 +499,7 @@ mod parse;
 mod util;
 
 pub use parse::{parse_url, parse_url_opts};
+pub use util::GetRange;
 
 use crate::path::Path;
 #[cfg(not(target_arch = "wasm32"))]
@@ -580,10 +581,12 @@ pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
     async fn get_opts(&self, location: &Path, options: GetOptions) -> Result<GetResult>;
 
     /// Return the bytes that are stored at the specified location
-    /// in the given byte range
+    /// in the given byte range.
+    ///
+    /// See [`GetRange::Bounded`] for more details on how `range` gets interpreted
     async fn get_range(&self, location: &Path, range: Range<usize>) -> Result<Bytes> {
         let options = GetOptions {
-            range: Some(range.clone()),
+            range: Some(range.into()),
             ..Default::default()
         };
         self.get_opts(location, options).await?.bytes().await
@@ -913,7 +916,7 @@ pub struct GetOptions {
     /// otherwise returning [`Error::NotModified`]
     ///
     /// <https://datatracker.ietf.org/doc/html/rfc9110#name-range>
-    pub range: Option<Range<usize>>,
+    pub range: Option<GetRange>,
     /// Request a particular object version
     pub version: Option<String>,
     /// Request transfer of no content
@@ -1308,7 +1311,7 @@ mod tests {
         assert_eq!(bytes, expected_data.slice(range.clone()));
 
         let opts = GetOptions {
-            range: Some(2..5),
+            range: Some(GetRange::Bounded(2..5)),
             ..Default::default()
         };
         let result = storage.get_opts(&location, opts).await.unwrap();
@@ -1323,6 +1326,62 @@ mod tests {
 
         // Should be a non-fatal error
         out_of_range_result.unwrap_err();
+
+        let opts = GetOptions {
+            range: Some(GetRange::Bounded(2..100)),
+            ..Default::default()
+        };
+        let result = storage.get_opts(&location, opts).await.unwrap();
+        assert_eq!(result.range, 2..14);
+        assert_eq!(result.meta.size, 14);
+        let bytes = result.bytes().await.unwrap();
+        assert_eq!(bytes, b"bitrary data".as_ref());
+
+        let opts = GetOptions {
+            range: Some(GetRange::Suffix(2)),
+            ..Default::default()
+        };
+        match storage.get_opts(&location, opts).await {
+            Ok(result) => {
+                assert_eq!(result.range, 12..14);
+                assert_eq!(result.meta.size, 14);
+                let bytes = result.bytes().await.unwrap();
+                assert_eq!(bytes, b"ta".as_ref());
+            }
+            Err(Error::NotSupported { .. }) => {}
+            Err(e) => panic!("{e}"),
+        }
+
+        let opts = GetOptions {
+            range: Some(GetRange::Suffix(100)),
+            ..Default::default()
+        };
+        match storage.get_opts(&location, opts).await {
+            Ok(result) => {
+                assert_eq!(result.range, 0..14);
+                assert_eq!(result.meta.size, 14);
+                let bytes = result.bytes().await.unwrap();
+                assert_eq!(bytes, b"arbitrary data".as_ref());
+            }
+            Err(Error::NotSupported { .. }) => {}
+            Err(e) => panic!("{e}"),
+        }
+
+        let opts = GetOptions {
+            range: Some(GetRange::Offset(3)),
+            ..Default::default()
+        };
+        let result = storage.get_opts(&location, opts).await.unwrap();
+        assert_eq!(result.range, 3..14);
+        assert_eq!(result.meta.size, 14);
+        let bytes = result.bytes().await.unwrap();
+        assert_eq!(bytes, b"itrary data".as_ref());
+
+        let opts = GetOptions {
+            range: Some(GetRange::Offset(100)),
+            ..Default::default()
+        };
+        storage.get_opts(&location, opts).await.unwrap_err();
 
         let ranges = vec![0..1, 2..3, 0..5];
         let bytes = storage.get_ranges(&location, &ranges).await.unwrap();

@@ -19,6 +19,7 @@
 use crate::{
     maybe_spawn_blocking,
     path::{absolute_path_to_url, Path},
+    util::InvalidGetRange,
     GetOptions, GetResult, GetResultPayload, ListResult, MultipartId, ObjectMeta, ObjectStore,
     PutMode, PutOptions, PutResult, Result,
 };
@@ -109,6 +110,11 @@ pub(crate) enum Error {
         path: PathBuf,
         expected: usize,
         actual: usize,
+    },
+
+    #[snafu(display("Requested range was invalid"))]
+    InvalidRange {
+        source: InvalidGetRange,
     },
 
     #[snafu(display("Unable to copy file from {} to {}: {}", from.display(), to.display(), source))]
@@ -424,9 +430,14 @@ impl ObjectStore for LocalFileSystem {
             let meta = convert_metadata(metadata, location)?;
             options.check_preconditions(&meta)?;
 
+            let range = match options.range {
+                Some(r) => r.as_range(meta.size).context(InvalidRangeSnafu)?,
+                None => 0..meta.size,
+            };
+
             Ok(GetResult {
                 payload: GetResultPayload::File(file, path),
-                range: options.range.unwrap_or(0..meta.size),
+                range,
                 meta,
             })
         })

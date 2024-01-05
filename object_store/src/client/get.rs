@@ -19,7 +19,7 @@ use std::ops::Range;
 
 use crate::client::header::{header_meta, HeaderConfig};
 use crate::path::Path;
-use crate::{Error, GetOptions, GetResult, GetResultPayload, Result};
+use crate::{GetOptions, GetRange, GetResult, GetResultPayload, Result};
 use async_trait::async_trait;
 use futures::{StreamExt, TryStreamExt};
 use hyper::header::CONTENT_RANGE;
@@ -49,6 +49,12 @@ pub trait GetClientExt {
 impl<T: GetClient> GetClientExt for T {
     async fn get_opts(&self, location: &Path, options: GetOptions) -> Result<GetResult> {
         let range = options.range.clone();
+        if let Some(r) = range.as_ref() {
+            r.is_valid().map_err(|e| crate::Error::Generic {
+                store: T::STORE,
+                source: Box::new(e),
+            })?;
+        }
         let response = self.get_request(location, options).await?;
         get_result::<T>(location, range, response).map_err(|e| crate::Error::Generic {
             store: T::STORE,
@@ -94,6 +100,11 @@ enum GetResultError {
         source: crate::client::header::Error,
     },
 
+    #[snafu(context(false))]
+    InvalidRangeRequest {
+        source: crate::util::InvalidGetRange,
+    },
+
     #[snafu(display("Received non-partial response when range requested"))]
     NotPartial,
 
@@ -115,7 +126,7 @@ enum GetResultError {
 
 fn get_result<T: GetClient>(
     location: &Path,
-    range: Option<Range<usize>>,
+    range: Option<GetRange>,
     response: Response,
 ) -> Result<GetResult, GetResultError> {
     let mut meta = header_meta(location, response.headers(), T::HEADER_CONFIG)?;
@@ -135,13 +146,16 @@ fn get_result<T: GetClient>(
         let value = ContentRange::from_str(value).context(ParseContentRangeSnafu { value })?;
         let actual = value.range;
 
+        // Update size to reflect full size of object (#5272)
+        meta.size = value.size;
+
+        let expected = expected.as_range(meta.size)?;
+
         ensure!(
             actual == expected,
             UnexpectedRangeSnafu { expected, actual }
         );
 
-        // Update size to reflect full size of object (#5272)
-        meta.size = value.size;
         actual
     } else {
         0..meta.size
@@ -149,7 +163,7 @@ fn get_result<T: GetClient>(
 
     let stream = response
         .bytes_stream()
-        .map_err(|source| Error::Generic {
+        .map_err(|source| crate::Error::Generic {
             store: T::STORE,
             source: Box::new(source),
         })
@@ -220,20 +234,22 @@ mod tests {
         let bytes = res.bytes().await.unwrap();
         assert_eq!(bytes.len(), 12);
 
+        let get_range = GetRange::from(2..3);
+
         let resp = make_response(
             12,
             Some(2..3),
             StatusCode::PARTIAL_CONTENT,
             Some("bytes 2-2/12"),
         );
-        let res = get_result::<TestClient>(&path, Some(2..3), resp).unwrap();
+        let res = get_result::<TestClient>(&path, Some(get_range.clone()), resp).unwrap();
         assert_eq!(res.meta.size, 12);
         assert_eq!(res.range, 2..3);
         let bytes = res.bytes().await.unwrap();
         assert_eq!(bytes.len(), 1);
 
         let resp = make_response(12, Some(2..3), StatusCode::OK, None);
-        let err = get_result::<TestClient>(&path, Some(2..3), resp).unwrap_err();
+        let err = get_result::<TestClient>(&path, Some(get_range.clone()), resp).unwrap_err();
         assert_eq!(
             err.to_string(),
             "Received non-partial response when range requested"
@@ -245,7 +261,7 @@ mod tests {
             StatusCode::PARTIAL_CONTENT,
             Some("bytes 2-3/12"),
         );
-        let err = get_result::<TestClient>(&path, Some(2..3), resp).unwrap_err();
+        let err = get_result::<TestClient>(&path, Some(get_range.clone()), resp).unwrap_err();
         assert_eq!(err.to_string(), "Requested 2..3, got 2..4");
 
         let resp = make_response(
@@ -254,17 +270,50 @@ mod tests {
             StatusCode::PARTIAL_CONTENT,
             Some("bytes 2-2/*"),
         );
-        let err = get_result::<TestClient>(&path, Some(2..3), resp).unwrap_err();
+        let err = get_result::<TestClient>(&path, Some(get_range.clone()), resp).unwrap_err();
         assert_eq!(
             err.to_string(),
             "Failed to parse value for CONTENT_RANGE header: \"bytes 2-2/*\""
         );
 
         let resp = make_response(12, Some(2..3), StatusCode::PARTIAL_CONTENT, None);
-        let err = get_result::<TestClient>(&path, Some(2..3), resp).unwrap_err();
+        let err = get_result::<TestClient>(&path, Some(get_range.clone()), resp).unwrap_err();
         assert_eq!(
             err.to_string(),
             "Content-Range header not present in partial response"
         );
+
+        let resp = make_response(
+            2,
+            Some(2..3),
+            StatusCode::PARTIAL_CONTENT,
+            Some("bytes 2-3/2"),
+        );
+        let err = get_result::<TestClient>(&path, Some(get_range.clone()), resp).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "InvalidRangeRequest: Wanted range starting at 2, but object was only 2 bytes long"
+        );
+
+        let resp = make_response(
+            6,
+            Some(2..6),
+            StatusCode::PARTIAL_CONTENT,
+            Some("bytes 2-5/6"),
+        );
+        let res = get_result::<TestClient>(&path, Some(GetRange::Suffix(4)), resp).unwrap();
+        assert_eq!(res.meta.size, 6);
+        assert_eq!(res.range, 2..6);
+        let bytes = res.bytes().await.unwrap();
+        assert_eq!(bytes.len(), 4);
+
+        let resp = make_response(
+            6,
+            Some(2..6),
+            StatusCode::PARTIAL_CONTENT,
+            Some("bytes 2-3/6"),
+        );
+        let err = get_result::<TestClient>(&path, Some(GetRange::Suffix(4)), resp).unwrap_err();
+        assert_eq!(err.to_string(), "Requested 2..6, got 2..4");
     }
 }

@@ -16,9 +16,10 @@
 // under the License.
 
 //! An in-memory object store implementation
+use crate::util::InvalidGetRange;
 use crate::{
-    path::Path, GetResult, GetResultPayload, ListResult, ObjectMeta, ObjectStore, PutMode,
-    PutOptions, PutResult, Result, UpdateVersion,
+    path::Path, GetRange, GetResult, GetResultPayload, ListResult, ObjectMeta, ObjectStore,
+    PutMode, PutOptions, PutResult, Result, UpdateVersion,
 };
 use crate::{GetOptions, MultipartId};
 use async_trait::async_trait;
@@ -26,7 +27,7 @@ use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use futures::{stream::BoxStream, StreamExt};
 use parking_lot::RwLock;
-use snafu::{ensure, OptionExt, Snafu};
+use snafu::{OptionExt, ResultExt, Snafu};
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::io;
@@ -43,13 +44,8 @@ enum Error {
     #[snafu(display("No data in memory found. Location: {path}"))]
     NoDataInMemory { path: String },
 
-    #[snafu(display(
-        "Requested range {}..{} is out of bounds for object with length {}", range.start, range.end, len
-    ))]
-    OutOfRange { range: Range<usize>, len: usize },
-
-    #[snafu(display("Invalid range: {}..{}", range.start, range.end))]
-    BadRange { range: Range<usize> },
+    #[snafu(display("Invalid range: {source}"))]
+    Range { source: InvalidGetRange },
 
     #[snafu(display("Object already exists at that location: {path}"))]
     AlreadyExists { path: String },
@@ -220,10 +216,8 @@ impl ObjectStore for InMemory {
 
         let (range, data) = match options.range {
             Some(range) => {
-                let len = entry.data.len();
-                ensure!(range.end <= len, OutOfRangeSnafu { range, len });
-                ensure!(range.start <= range.end, BadRangeSnafu { range });
-                (range.clone(), entry.data.slice(range))
+                let r = range.as_range(entry.data.len()).context(RangeSnafu)?;
+                (r.clone(), entry.data.slice(r))
             }
             None => (0..entry.data.len(), entry.data),
         };
@@ -241,14 +235,11 @@ impl ObjectStore for InMemory {
         ranges
             .iter()
             .map(|range| {
-                let range = range.clone();
-                let len = entry.data.len();
-                ensure!(
-                    range.end <= entry.data.len(),
-                    OutOfRangeSnafu { range, len }
-                );
-                ensure!(range.start <= range.end, BadRangeSnafu { range });
-                Ok(entry.data.slice(range))
+                let r = GetRange::Bounded(range.clone())
+                    .as_range(entry.data.len())
+                    .context(RangeSnafu)?;
+
+                Ok(entry.data.slice(r))
             })
             .collect()
     }

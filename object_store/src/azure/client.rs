@@ -25,7 +25,7 @@ use crate::client::retry::RetryExt;
 use crate::client::GetOptionsExt;
 use crate::multipart::PartId;
 use crate::path::DELIMITER;
-use crate::util::deserialize_rfc1123;
+use crate::util::{deserialize_rfc1123, GetRange};
 use crate::{
     ClientOptions, GetOptions, ListResult, ObjectMeta, Path, PutMode, PutOptions, PutResult,
     Result, RetryConfig,
@@ -441,6 +441,14 @@ impl GetClient for AzureClient {
     /// <https://docs.microsoft.com/en-us/rest/api/storageservices/get-blob>
     /// <https://docs.microsoft.com/en-us/rest/api/storageservices/get-blob-properties>
     async fn get_request(&self, path: &Path, options: GetOptions) -> Result<Response> {
+        // As of 2024-01-02, Azure does not support suffix requests,
+        // so we should fail fast here rather than sending one
+        if let Some(GetRange::Suffix(_)) = options.range.as_ref() {
+            return Err(crate::Error::NotSupported {
+                source: "Azure does not support suffix range requests".into(),
+            });
+        }
+
         let credential = self.get_credential().await?;
         let url = self.config.path_url(path);
         let method = match options.head {
