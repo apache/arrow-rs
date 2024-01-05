@@ -269,6 +269,16 @@ impl ObjectStore for AmazonS3 {
         prefix: Option<&Path>,
         offset: &Path,
     ) -> BoxStream<'_, Result<ObjectMeta>> {
+        if self.client.config.is_s3_express() {
+            let offset = offset.clone();
+            // S3 Express does not support start-after
+            return self
+                .client
+                .list(prefix)
+                .try_filter(move |f| futures::future::ready(f.location > offset))
+                .boxed();
+        }
+
         self.client.list_with_offset(prefix, offset)
     }
 
@@ -388,11 +398,15 @@ mod tests {
         multipart(&integration, &integration).await;
         signing(&integration).await;
 
-        tagging(&integration, !config.disable_tagging, |p| {
-            let client = Arc::clone(&integration.client);
-            async move { client.get_object_tagging(&p).await }
-        })
-        .await;
+        // Object tagging is not supported by S3 Express One Zone
+        if config.session_provider.is_none() {
+            tagging(&integration, !config.disable_tagging, |p| {
+                let client = Arc::clone(&integration.client);
+                async move { client.get_object_tagging(&p).await }
+            })
+            .await;
+        }
+
         if test_not_exists {
             copy_if_not_exists(&integration).await;
         }
