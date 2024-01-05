@@ -26,7 +26,7 @@ use bytes::Buf;
 use chrono::{DateTime, Utc};
 use hyper::header::HeaderName;
 use percent_encoding::utf8_percent_encode;
-use reqwest::header::{HeaderMap, HeaderValue};
+use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION};
 use reqwest::{Client, Method, Request, RequestBuilder, StatusCode};
 use serde::Deserialize;
 use snafu::{ResultExt, Snafu};
@@ -106,7 +106,6 @@ pub struct AwsAuthorizer<'a> {
 static DATE_HEADER: HeaderName = HeaderName::from_static("x-amz-date");
 static HASH_HEADER: HeaderName = HeaderName::from_static("x-amz-content-sha256");
 static TOKEN_HEADER: HeaderName = HeaderName::from_static("x-amz-security-token");
-static AUTH_HEADER: HeaderName = HeaderName::from_static("authorization");
 const ALGORITHM: &str = "AWS4-HMAC-SHA256";
 
 impl<'a> AwsAuthorizer<'a> {
@@ -209,7 +208,7 @@ impl<'a> AwsAuthorizer<'a> {
         let authorization_val = HeaderValue::from_str(&authorisation).unwrap();
         request
             .headers_mut()
-            .insert(&AUTH_HEADER, authorization_val);
+            .insert(&AUTHORIZATION, authorization_val);
     }
 
     pub(crate) fn sign(&self, method: Method, url: &mut Url, expires_in: Duration) {
@@ -780,7 +779,7 @@ mod tests {
         };
 
         signer.authorize(&mut request, None);
-        assert_eq!(request.headers().get(&AUTH_HEADER).unwrap(), "AWS4-HMAC-SHA256 Credential=AKIAIOSFODNN7EXAMPLE/20220806/us-east-1/ec2/aws4_request, SignedHeaders=host;x-amz-content-sha256;x-amz-date, Signature=a3c787a7ed37f7fdfbfd2d7056a3d7c9d85e6d52a2bfbec73793c0be6e7862d4")
+        assert_eq!(request.headers().get(&AUTHORIZATION).unwrap(), "AWS4-HMAC-SHA256 Credential=AKIAIOSFODNN7EXAMPLE/20220806/us-east-1/ec2/aws4_request, SignedHeaders=host;x-amz-content-sha256;x-amz-date, Signature=a3c787a7ed37f7fdfbfd2d7056a3d7c9d85e6d52a2bfbec73793c0be6e7862d4")
     }
 
     #[test]
@@ -819,7 +818,7 @@ mod tests {
         };
 
         authorizer.authorize(&mut request, None);
-        assert_eq!(request.headers().get(&AUTH_HEADER).unwrap(), "AWS4-HMAC-SHA256 Credential=AKIAIOSFODNN7EXAMPLE/20220806/us-east-1/ec2/aws4_request, SignedHeaders=host;x-amz-content-sha256;x-amz-date, Signature=653c3d8ea261fd826207df58bc2bb69fbb5003e9eb3c0ef06e4a51f2a81d8699");
+        assert_eq!(request.headers().get(&AUTHORIZATION).unwrap(), "AWS4-HMAC-SHA256 Credential=AKIAIOSFODNN7EXAMPLE/20220806/us-east-1/ec2/aws4_request, SignedHeaders=host;x-amz-content-sha256;x-amz-date, Signature=653c3d8ea261fd826207df58bc2bb69fbb5003e9eb3c0ef06e4a51f2a81d8699");
     }
 
     #[test]
@@ -897,7 +896,7 @@ mod tests {
         };
 
         authorizer.authorize(&mut request, None);
-        assert_eq!(request.headers().get(&AUTH_HEADER).unwrap(), "AWS4-HMAC-SHA256 Credential=H20ABqCkLZID4rLe/20220809/us-east-1/s3/aws4_request, SignedHeaders=host;x-amz-content-sha256;x-amz-date, Signature=9ebf2f92872066c99ac94e573b4e1b80f4dbb8a32b1e8e23178318746e7d1b4d")
+        assert_eq!(request.headers().get(&AUTHORIZATION).unwrap(), "AWS4-HMAC-SHA256 Credential=H20ABqCkLZID4rLe/20220809/us-east-1/s3/aws4_request, SignedHeaders=host;x-amz-content-sha256;x-amz-date, Signature=9ebf2f92872066c99ac94e573b4e1b80f4dbb8a32b1e8e23178318746e7d1b4d")
     }
 
     #[tokio::test]

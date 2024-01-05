@@ -210,6 +210,11 @@ impl S3Config {
             true => None,
         })
     }
+
+    #[inline]
+    pub(crate) fn is_s3_express(&self) -> bool {
+        self.session_provider.is_some()
+    }
 }
 
 struct SessionCredential<'a> {

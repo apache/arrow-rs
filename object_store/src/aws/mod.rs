@@ -255,7 +255,7 @@ impl ObjectStore for AmazonS3 {
         prefix: Option<&Path>,
         offset: &Path,
     ) -> BoxStream<'_, Result<ObjectMeta>> {
-        if self.client.config.session_provider.is_some() {
+        if self.client.config.is_s3_express() {
             let offset = offset.clone();
             // S3 Express does not support start-after
             return self
