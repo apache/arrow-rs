@@ -121,10 +121,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # We are forced to use docker commands instead of service containers as we need to override the entrypoints
+      # which is currently not supported - https://github.com/actions/runner/discussions/1872
       - name: Configure Fake GCS Server (GCP emulation)
         # Custom image - see fsouza/fake-gcs-server#1164
         run: |
-          docker run -d -p 4443:4443 tustvold/fake-gcs-server -scheme http -backend memory -public-host localhost:4443
+          echo "GCS_CONTAINER=$(docker run -d -p 4443:4443 tustvold/fake-gcs-server -scheme http -backend memory -public-host localhost:4443)" >> $GITHUB_ENV
           # Give the container a moment to start up prior to configuring it
           sleep 1
           curl -v -X POST --data-binary '{"name":"test-bucket"}' -H "Content-Type: application/json" "http://localhost:4443/storage/v1/b"
@@ -135,8 +137,8 @@ jobs:
 
       - name: Setup LocalStack (AWS emulation)
         run: |
-          docker run -d -p 4566:4566 localstack/localstack:3.0.1
-          docker run -d -p 1338:1338 amazon/amazon-ec2-metadata-mock:v1.9.2 --imdsv2
+          echo "LOCALSTACK_CONTAINER=$(docker run -d -p 4566:4566 localstack/localstack:3.0.1)" >> $GITHUB_ENV
+          echo "EC2_METADATA_CONTAINER=$(docker run -d -p 1338:1338 amazon/amazon-ec2-metadata-mock:v1.9.2 --imdsv2)" >> $GITHUB_ENV
           aws --endpoint-url=http://localhost:4566 s3 mb s3://test-bucket
           aws --endpoint-url=http://localhost:4566 dynamodb create-table --table-name test-table --key-schema AttributeName=path,KeyType=HASH AttributeName=etag,KeyType=RANGE --attribute-definitions AttributeName=path,AttributeType=S AttributeName=etag,AttributeType=S --provisioned-throughput ReadCapacityUnits=5,WriteCapacityUnits=5
 
@@ -144,7 +146,7 @@ jobs:
         # the magical connection string is from
         # https://docs.microsoft.com/en-us/azure/storage/common/storage-use-azurite?tabs=visual-studio#http-connection-strings
         run: |
-          docker run -d -p 10000:10000 -p 10001:10001 -p 10002:10002 mcr.microsoft.com/azure-storage/azurite
+          echo "AZURITE_CONTAINER=$(docker run -d -p 10000:10000 -p 10001:10001 -p 10002:10002 mcr.microsoft.com/azure-storage/azurite)" >> $GITHUB_ENV
           az storage container create -n test-bucket --connection-string 'DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://localhost:10000/devstoreaccount1;QueueEndpoint=http://localhost:10001/devstoreaccount1;'
 
       - name: Setup Rust toolchain
@@ -154,6 +156,22 @@ jobs:
 
       - name: Run object_store tests
         run: cargo test --features=aws,azure,gcp,http
+
+      - name: GCS Output
+        if: ${{ !cancelled() }}
+        run: docker logs $GCS_CONTAINER
+
+      - name: LocalStack Output
+        if: ${{ !cancelled() }}
+        run: docker logs $LOCALSTACK_CONTAINER
+
+      - name: EC2 Metadata Output
+        if: ${{ !cancelled() }}
+        run: docker logs $EC2_METADATA_CONTAINER
+
+      - name: Azurite Output
+        if: ${{ !cancelled() }}
+        run: docker logs $AZURITE_CONTAINER
 
   # test the object_store crate builds against wasm32 in stable rust
   wasm32-build:
