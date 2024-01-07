@@ -1841,7 +1841,6 @@ mod tests {
             encoder.put(&v[..]).expect("ok to encode");
         }
         let bytes = encoder.flush_buffer().expect("ok to flush buffer");
-        println!("{:x?}", bytes.data());
 
         // Flatten expected data as contiguous array of values
         let expected: Vec<T::T> = data.iter().flat_map(|s| s.clone()).collect();
