@@ -1,12 +1,12 @@
 use crate::basic::{Encoding, Type};
 use crate::data_type::DataType;
 use crate::data_type::SliceAsBytes;
-use crate::util::memory::ByteBufferPtr;
 
 use crate::errors::Result;
 
 use super::Encoder;
 
+use bytes::Bytes;
 use std::marker::PhantomData;
 
 pub struct ByteStreamSplitEncoder<T> {
@@ -43,7 +43,7 @@ impl<T: DataType> Encoder<T> for ByteStreamSplitEncoder<T> {
         self.buffer.len()
     }
 
-    fn flush_buffer(&mut self) -> Result<ByteBufferPtr> {
+    fn flush_buffer(&mut self) -> Result<Bytes> {
         let mut encoded = vec![0; self.buffer.len()];
         // Have to do all work in flush buffer, as we need the whole byte stream
         let num_streams = T::get_type_size();

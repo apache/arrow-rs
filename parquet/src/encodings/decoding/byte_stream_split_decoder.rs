@@ -3,13 +3,12 @@ use crate::{basic::Encoding, errors::Result};
 
 use super::Decoder;
 
-use crate::util::memory::ByteBufferPtr;
-
+use bytes::Bytes;
 use std::marker::PhantomData;
 
 pub struct ByteStreamSplitDecoder<T: DataType> {
     _phantom: PhantomData<T>,
-    encoded_bytes: ByteBufferPtr,
+    encoded_bytes: Bytes,
     total_num_values: usize,
     values_decoded: usize,
 }
@@ -18,7 +17,7 @@ impl<T: DataType> ByteStreamSplitDecoder<T> {
     pub(crate) fn new() -> Self {
         Self {
             _phantom: PhantomData,
-            encoded_bytes: ByteBufferPtr::new(vec![]),
+            encoded_bytes: Bytes::new(),
             total_num_values: 0,
             values_decoded: 0,
         }
@@ -26,7 +25,7 @@ impl<T: DataType> ByteStreamSplitDecoder<T> {
 }
 
 impl<T: DataType> Decoder<T> for ByteStreamSplitDecoder<T> {
-    fn set_data(&mut self, data: ByteBufferPtr, num_values: usize) -> Result<()> {
+    fn set_data(&mut self, data: Bytes, num_values: usize) -> Result<()> {
         self.encoded_bytes = data;
         self.total_num_values = num_values;
         self.values_decoded = 0;
@@ -50,8 +49,8 @@ impl<T: DataType> Decoder<T> for ByteStreamSplitDecoder<T> {
         for out_value_idx in 0..num_values {
             // go through each byte stream of that value
             for byte_stream_idx in 0..num_streams {
-                let idx_in_encoded_data = (byte_stream_idx * byte_stream_length)
-                    + (values_decoded + out_value_idx);
+                let idx_in_encoded_data =
+                    (byte_stream_idx * byte_stream_length) + (values_decoded + out_value_idx);
 
                 raw_out_bytes[(out_value_idx * num_streams) + byte_stream_idx] =
                     self.encoded_bytes[idx_in_encoded_data];
