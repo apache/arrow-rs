@@ -2,7 +2,7 @@ use crate::basic::{Encoding, Type};
 use crate::data_type::DataType;
 use crate::data_type::SliceAsBytes;
 
-use crate::errors::Result;
+use crate::errors::{ParquetError, Result};
 
 use super::Encoder;
 
@@ -19,6 +19,19 @@ impl<T: DataType> ByteStreamSplitEncoder<T> {
         Self {
             buffer: Vec::new(),
             _p: PhantomData,
+        }
+    }
+}
+
+// Here we assume src contains the full data (which it must, since we're
+// can only know where to split the streams once all data is collected).
+// We iterate over the input bytes and write them to their strided output
+// byte locations.
+fn split_streams_const<const TYPE_SIZE: usize>(src: &[u8], dst: &mut [u8]) {
+    let stride = src.len() / TYPE_SIZE;
+    for i in 0..stride {
+        for j in 0..TYPE_SIZE {
+            dst[i + j * stride] = src[i * TYPE_SIZE + j];
         }
     }
 }
@@ -45,15 +58,18 @@ impl<T: DataType> Encoder<T> for ByteStreamSplitEncoder<T> {
 
     fn flush_buffer(&mut self) -> Result<Bytes> {
         let mut encoded = vec![0; self.buffer.len()];
-        // Have to do all work in flush buffer, as we need the whole byte stream
-        let num_streams = T::get_type_size();
-        let num_values = self.buffer.len() / T::get_type_size();
-        for i in 0..num_values {
-            for j in 0..num_streams {
-                let byte_in_value = self.buffer[i * num_streams + j];
-                encoded[j * num_values + i] = byte_in_value;
+        let type_size = T::get_type_size();
+        match type_size {
+            4 => split_streams_const::<4>(&self.buffer, &mut encoded),
+            8 => split_streams_const::<8>(&self.buffer, &mut encoded),
+            _ => {
+                return Err(general_err!(
+                    "byte stream split unsupported for data types of size {} bytes",
+                    type_size
+                ));
             }
         }
+
         self.buffer.clear();
         Ok(encoded.into())
     }

@@ -1,10 +1,12 @@
-use crate::data_type::{DataType, SliceAsBytes};
-use crate::{basic::Encoding, errors::Result};
-
-use super::Decoder;
+use std::marker::PhantomData;
 
 use bytes::Bytes;
-use std::marker::PhantomData;
+
+use crate::basic::Encoding;
+use crate::data_type::{DataType, SliceAsBytes};
+use crate::errors::{ParquetError, Result};
+
+use super::Decoder;
 
 pub struct ByteStreamSplitDecoder<T: DataType> {
     _phantom: PhantomData<T>,
@@ -24,6 +26,25 @@ impl<T: DataType> ByteStreamSplitDecoder<T> {
     }
 }
 
+// Here we assume src contains the full data (which it must, since we're
+// can only know where to split the streams once all data is collected),
+// but dst can be just a slice starting from the given index.
+// We iterate over the output bytes and fill them in from their strided
+// input byte locations.
+fn join_streams_const<const TYPE_SIZE: usize>(
+    src: &[u8],
+    dst: &mut [u8],
+    stride: usize,
+    values_decoded: usize,
+) {
+    let sub_src = &src[values_decoded..];
+    for i in 0..dst.len() / TYPE_SIZE {
+        for j in 0..TYPE_SIZE {
+            dst[i * TYPE_SIZE + j] = sub_src[i + j * stride];
+        }
+    }
+}
+
 impl<T: DataType> Decoder<T> for ByteStreamSplitDecoder<T> {
     fn set_data(&mut self, data: Bytes, num_values: usize) -> Result<()> {
         self.encoded_bytes = data;
@@ -36,27 +57,32 @@ impl<T: DataType> Decoder<T> for ByteStreamSplitDecoder<T> {
     fn get(&mut self, buffer: &mut [<T as DataType>::T]) -> Result<usize> {
         let total_remaining_values = self.values_left();
         let num_values = buffer.len().min(total_remaining_values);
+        let buffer = &mut buffer[..num_values];
 
         // SAFETY: f32 and f64 has no constraints on their internal representation, so we can modify it as we want
         let raw_out_bytes = unsafe { <T as DataType>::T::slice_as_bytes_mut(buffer) };
-
-        let num_values = num_values;
-        let num_streams = T::get_type_size();
-        let byte_stream_length = self.encoded_bytes.len() / num_streams;
-        let values_decoded = self.values_decoded;
-
-        // go through each value to decode
-        for out_value_idx in 0..num_values {
-            // go through each byte stream of that value
-            for byte_stream_idx in 0..num_streams {
-                let idx_in_encoded_data =
-                    (byte_stream_idx * byte_stream_length) + (values_decoded + out_value_idx);
-
-                raw_out_bytes[(out_value_idx * num_streams) + byte_stream_idx] =
-                    self.encoded_bytes[idx_in_encoded_data];
+        let type_size = T::get_type_size();
+        let stride = self.encoded_bytes.len() / type_size;
+        match type_size {
+            4 => join_streams_const::<4>(
+                &self.encoded_bytes,
+                raw_out_bytes,
+                stride,
+                self.values_decoded,
+            ),
+            8 => join_streams_const::<8>(
+                &self.encoded_bytes,
+                raw_out_bytes,
+                stride,
+                self.values_decoded,
+            ),
+            _ => {
+                return Err(general_err!(
+                    "byte stream split unsupported for data types of size {} bytes",
+                    type_size
+                ));
             }
         }
-
         self.values_decoded += num_values;
 
         Ok(num_values)

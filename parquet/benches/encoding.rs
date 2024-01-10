@@ -18,13 +18,16 @@
 use criterion::*;
 use parquet::basic::Encoding;
 use parquet::data_type::{DataType, DoubleType, FloatType};
+use parquet::decoding::{get_decoder, Decoder};
 use parquet::encoding::get_encoder;
+use parquet::schema::types::{ColumnDescPtr, ColumnDescriptor, ColumnPath, Type};
 use rand::prelude::*;
+use std::sync::Arc;
 
 fn bench_typed<T: DataType>(c: &mut Criterion, values: &[T::T], encoding: Encoding) {
     let name = format!(
         "dtype={}, encoding={:?}",
-        std::any::type_name::<T>(),
+        std::any::type_name::<T::T>(),
         encoding
     );
     c.bench_function(&format!("encoding: {}", name), |b| {
@@ -39,6 +42,26 @@ fn bench_typed<T: DataType>(c: &mut Criterion, values: &[T::T], encoding: Encodi
     encoder.put(values).unwrap();
     let encoded = encoder.flush_buffer().unwrap();
     println!("{} encoded as {} bytes", name, encoded.len(),);
+
+    let mut buffer = vec![T::T::default(); values.len()];
+    let column_desc_ptr = ColumnDescPtr::new(ColumnDescriptor::new(
+        Arc::new(
+            Type::primitive_type_builder("", T::get_physical_type())
+                .build()
+                .unwrap(),
+        ),
+        0,
+        0,
+        ColumnPath::new(vec![]),
+    ));
+    c.bench_function(&format!("decoding: {}", name), |b| {
+        b.iter(|| {
+            let mut decoder: Box<dyn Decoder<T>> =
+                get_decoder(column_desc_ptr.clone(), encoding).unwrap();
+            decoder.set_data(encoded.clone(), values.len()).unwrap();
+            decoder.get(&mut buffer).unwrap();
+        });
+    });
 }
 
 fn criterion_benchmark(c: &mut Criterion) {
@@ -52,9 +75,7 @@ fn criterion_benchmark(c: &mut Criterion) {
         f64s.push(rng.gen::<f64>());
     }
 
-    bench_typed::<FloatType>(c, &f32s, Encoding::PLAIN);
     bench_typed::<FloatType>(c, &f32s, Encoding::BYTE_STREAM_SPLIT);
-    bench_typed::<DoubleType>(c, &f64s, Encoding::PLAIN);
     bench_typed::<DoubleType>(c, &f64s, Encoding::BYTE_STREAM_SPLIT);
 }
 
