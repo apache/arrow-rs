@@ -1421,13 +1421,14 @@ mod tests {
                 .downcast_ref::<Float64Array>()
                 .unwrap();
 
+            // This file contains floats from a standard normal distribution
             for x in f32_col {
-                assert!(x.unwrap() > 990.0);
-                assert!(x.unwrap() < 1010.0);
+                assert!(x.unwrap() > -10.0);
+                assert!(x.unwrap() < 10.0);
             }
             for x in f64_col {
-                assert!(x.unwrap() > 990.0);
-                assert!(x.unwrap() < 1010.0);
+                assert!(x.unwrap() > -10.0);
+                assert!(x.unwrap() < 10.0);
             }
         }
         assert_eq!(row_count, 300);
