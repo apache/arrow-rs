@@ -175,6 +175,11 @@ name = "compression"
 required-features = ["experimental", "default"]
 harness = false
 
+[[bench]]
+name = "encoding"
+required-features = ["experimental", "default"]
+harness = false
+
 
 [[bench]]
 name = "metadata"
