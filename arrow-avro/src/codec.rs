@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::schema::{ComplexType, PrimitiveType, Record, Schema, TypeName};
+use crate::schema::{Attributes, ComplexType, PrimitiveType, Record, Schema, TypeName};
 use arrow_schema::{
     ArrowError, DataType, Field, FieldRef, IntervalUnit, SchemaBuilder, SchemaRef, TimeUnit,
 };
@@ -73,6 +73,9 @@ impl<'a> TryFrom<&Schema<'a>> for AvroField {
     }
 }
 
+/// An Avro encoding
+///
+/// <https://avro.apache.org/docs/1.11.1/specification/#encodings>
 #[derive(Debug, Clone)]
 pub enum Codec {
     Null,
@@ -86,8 +89,9 @@ pub enum Codec {
     Date32,
     TimeMillis,
     TimeMicros,
-    /// Timestamp (is_utc)
+    /// TimestampMillis(is_utc)
     TimestampMillis(bool),
+    /// TimestampMicros(is_utc)
     TimestampMicros(bool),
     Fixed(i32),
     List(Arc<AvroField>),
@@ -138,6 +142,9 @@ impl From<PrimitiveType> for Codec {
     }
 }
 
+/// Resolves Avro type names to [`AvroField`]
+///
+/// See <https://avro.apache.org/docs/1.11.1/specification/#names>
 #[derive(Debug, Default)]
 struct Resolver<'a> {
     map: HashMap<(&'a str, &'a str), AvroField>,
@@ -160,6 +167,12 @@ impl<'a> Resolver<'a> {
     }
 }
 
+/// Parses a [`AvroField`] from the provided [`Schema`] and the given `name` and `namespace`
+///
+/// `name`: is name used to refer to `schema` in its parent
+/// `namespace`: an optional qualifier used as part of a type hierarchy
+///
+/// See [`Resolver`] for more information
 fn make_field<'a>(
     schema: &Schema<'a>,
     name: &'a str,
@@ -177,6 +190,7 @@ fn make_field<'a>(
         }),
         Schema::TypeName(TypeName::Ref(name)) => resolver.resolve(name, namespace),
         Schema::Union(f) => {
+            // Special case the common case of nullable primitives
             let null = f
                 .iter()
                 .position(|x| x == &Schema::TypeName(TypeName::Primitive(PrimitiveType::Null)));
@@ -210,7 +224,7 @@ fn make_field<'a>(
                     meta: Arc::new(AvroFieldMeta {
                         name: r.name.to_string(),
                         codec: Codec::Struct(fields),
-                        metadata: extract_metadata(&r.attributes.additional),
+                        metadata: r.attributes.field_metadata(),
                     }),
                 };
                 resolver.register(name, namespace, field.clone());
@@ -222,7 +236,7 @@ fn make_field<'a>(
                     nulls: None,
                     meta: Arc::new(AvroFieldMeta {
                         name: name.to_string(),
-                        metadata: extract_metadata(&a.attributes.additional),
+                        metadata: a.attributes.field_metadata(),
                         codec: Codec::List(Arc::new(field)),
                     }),
                 })
@@ -236,7 +250,7 @@ fn make_field<'a>(
                     nulls: None,
                     meta: Arc::new(AvroFieldMeta {
                         name: f.name.to_string(),
-                        metadata: extract_metadata(&f.attributes.additional),
+                        metadata: f.attributes.field_metadata(),
                         codec: Codec::Fixed(size),
                     }),
                 };
@@ -293,11 +307,4 @@ fn make_field<'a>(
             Ok(field)
         }
     }
-}
-
-fn extract_metadata(metadata: &HashMap<&str, serde_json::Value>) -> HashMap<String, String> {
-    metadata
-        .iter()
-        .map(|(k, v)| (k.to_string(), v.to_string()))
-        .collect()
 }

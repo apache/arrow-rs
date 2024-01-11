@@ -64,6 +64,16 @@ pub struct Attributes<'a> {
     pub additional: HashMap<&'a str, serde_json::Value>,
 }
 
+impl<'a> Attributes<'a> {
+    /// Returns the field metadata for this [`Attributes`]
+    pub(crate) fn field_metadata(&self) -> HashMap<String, String> {
+        self.additional
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
+    }
+}
+
 /// A type definition that is not a variant of [`ComplexType`]
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
