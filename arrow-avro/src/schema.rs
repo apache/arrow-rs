@@ -34,7 +34,7 @@ pub enum TypeName<'a> {
 /// A primitive type
 ///
 /// <https://avro.apache.org/docs/1.11.1/specification/#primitive-types>
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum PrimitiveType {
     Null,
@@ -62,6 +62,16 @@ pub struct Attributes<'a> {
     /// Additional JSON attributes
     #[serde(flatten)]
     pub additional: HashMap<&'a str, serde_json::Value>,
+}
+
+impl<'a> Attributes<'a> {
+    /// Returns the field metadata for this [`Attributes`]
+    pub(crate) fn field_metadata(&self) -> HashMap<String, String> {
+        self.additional
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
+    }
 }
 
 /// A type definition that is not a variant of [`ComplexType`]
@@ -94,8 +104,6 @@ pub enum Schema<'a> {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum ComplexType<'a> {
-    #[serde(borrow)]
-    Union(Vec<Schema<'a>>),
     #[serde(borrow)]
     Record(Record<'a>),
     #[serde(borrow)]
@@ -202,7 +210,10 @@ pub struct Fixed<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::codec::{AvroDataType, AvroField};
+    use arrow_schema::{DataType, Fields, TimeUnit};
     use serde_json::json;
+
     #[test]
     fn test_deserialize() {
         let t: Schema = serde_json::from_str("\"string\"").unwrap();
@@ -352,6 +363,10 @@ mod tests {
             }))
         );
 
+        // Recursive schema are not supported
+        let err = AvroField::try_from(&schema).unwrap_err().to_string();
+        assert_eq!(err, "Parser error: Failed to resolve .LongList");
+
         let schema: Schema = serde_json::from_str(
             r#"{
                "type":"record",
@@ -409,14 +424,29 @@ mod tests {
                 attributes: Default::default(),
             }))
         );
+        let codec = AvroField::try_from(&schema).unwrap();
+        assert_eq!(
+            codec.field(),
+            arrow_schema::Field::new(
+                "topLevelRecord",
+                DataType::Struct(Fields::from(vec![
+                    arrow_schema::Field::new("id", DataType::Int32, true),
+                    arrow_schema::Field::new(
+                        "timestamp_col",
+                        DataType::Timestamp(TimeUnit::Microsecond, Some("+00:00".into())),
+                        true
+                    ),
+                ])),
+                false
+            )
+        );
 
         let schema: Schema = serde_json::from_str(
             r#"{
                   "type": "record",
                   "name": "HandshakeRequest", "namespace":"org.apache.avro.ipc",
                   "fields": [
-                    {"name": "clientHash",
-                     "type": {"type": "fixed", "name": "MD5", "size": 16}},
+                    {"name": "clientHash", "type": {"type": "fixed", "name": "MD5", "size": 16}},
                     {"name": "clientProtocol", "type": ["null", "string"]},
                     {"name": "serverHash", "type": "MD5"},
                     {"name": "meta", "type": ["null", {"type": "map", "values": "bytes"}]}
