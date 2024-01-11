@@ -236,7 +236,7 @@ impl HeaderDecoder {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::codec::AvroField;
+    use crate::codec::{AvroDataType, AvroField};
     use crate::reader::read_header;
     use crate::schema::SCHEMA_METADATA_KEY;
     use crate::test_util::arrow_test_data;

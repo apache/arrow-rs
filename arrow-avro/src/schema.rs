@@ -210,7 +210,7 @@ pub struct Fixed<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::codec::AvroField;
+    use crate::codec::{AvroDataType, AvroField};
     use arrow_schema::{DataType, Fields, TimeUnit};
     use serde_json::json;
 
