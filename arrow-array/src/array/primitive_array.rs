@@ -352,12 +352,18 @@ pub type Time64MicrosecondArray = PrimitiveArray<Time64MicrosecondType>;
 pub type Time64NanosecondArray = PrimitiveArray<Time64NanosecondType>;
 
 /// A [`PrimitiveArray`] of “calendar” intervals in months
+///
+/// See [`IntervalYearMonthType`] for details on representation and caveats.
 pub type IntervalYearMonthArray = PrimitiveArray<IntervalYearMonthType>;
 
 /// A [`PrimitiveArray`] of “calendar” intervals in days and milliseconds
+///
+/// See [`IntervalDayTimeType`] for details on representation and caveats.
 pub type IntervalDayTimeArray = PrimitiveArray<IntervalDayTimeType>;
 
-/// A [`PrimitiveArray`] of “calendar” intervals in  months, days, and nanoseconds
+/// A [`PrimitiveArray`] of “calendar” intervals in  months, days, and nanoseconds.
+///
+/// See [`IntervalMonthDayNanoType`] for details on representation and caveats.
 pub type IntervalMonthDayNanoArray = PrimitiveArray<IntervalMonthDayNanoType>;
 
 /// A [`PrimitiveArray`] of elapsed durations in seconds
@@ -707,9 +713,8 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
     /// the semantic values of the array, e.g. 100 milliseconds in a [`TimestampNanosecondArray`]
     /// will become 100 seconds in a [`TimestampSecondArray`].
     ///
-    /// For casts that preserve the semantic value, check out the [compute kernels]
-    ///
-    /// [compute kernels](https://docs.rs/arrow/latest/arrow/compute/kernels/cast/index.html)
+    /// For casts that preserve the semantic value, check out the
+    /// [compute kernels](https://docs.rs/arrow/latest/arrow/compute/kernels/cast/index.html).
     ///
     /// ```
     /// # use arrow_array::{Int64Array, TimestampNanosecondArray};

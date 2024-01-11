@@ -31,4 +31,20 @@ pub trait Signer: Send + Sync + fmt::Debug + 'static {
     /// implementation's credentials such that the URL can be handed to something that doesn't have
     /// access to the object store's credentials, to allow limited access to the object store.
     async fn signed_url(&self, method: Method, path: &Path, expires_in: Duration) -> Result<Url>;
+
+    /// Generate signed urls for multiple paths.
+    ///
+    /// See [`Signer::signed_url`] for more details.
+    async fn signed_urls(
+        &self,
+        method: Method,
+        paths: &[Path],
+        expires_in: Duration,
+    ) -> Result<Vec<Url>> {
+        let mut urls = Vec::with_capacity(paths.len());
+        for path in paths {
+            urls.push(self.signed_url(method.clone(), path, expires_in).await?);
+        }
+        Ok(urls)
+    }
 }

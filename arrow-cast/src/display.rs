@@ -301,6 +301,10 @@ fn make_formatter<'a>(
         DataType::Struct(_) => array_format(as_struct_array(array), options),
         DataType::Map(_, _) => array_format(as_map_array(array), options),
         DataType::Union(_, _) => array_format(as_union_array(array), options),
+        DataType::RunEndEncoded(_, _) => downcast_run_array! {
+            array => array_format(array, options),
+            _ => unreachable!()
+        },
         d => Err(ArrowError::NotYetImplemented(format!("formatting {d} is not yet supported"))),
     }
 }
@@ -748,6 +752,19 @@ impl<'a, K: ArrowDictionaryKeyType> DisplayIndexState<'a> for &'a DictionaryArra
     }
 }
 
+impl<'a, K: RunEndIndexType> DisplayIndexState<'a> for &'a RunArray<K> {
+    type State = Box<dyn DisplayIndex + 'a>;
+
+    fn prepare(&self, options: &FormatOptions<'a>) -> Result<Self::State, ArrowError> {
+        make_formatter(self.values().as_ref(), options)
+    }
+
+    fn write(&self, s: &Self::State, idx: usize, f: &mut dyn Write) -> FormatResult {
+        let value_idx = self.get_physical_index(idx);
+        s.as_ref().write(value_idx, f)
+    }
+}
+
 fn write_list(
     f: &mut dyn Write,
     mut range: Range<usize>,
@@ -935,6 +952,8 @@ pub fn lexical_to_string<N: lexical_core::ToLexical>(n: N) -> String {
 
 #[cfg(test)]
 mod tests {
+    use arrow_array::builder::StringRunBuilder;
+
     use super::*;
 
     /// Test to verify options can be constant. See #4580
@@ -1078,5 +1097,22 @@ mod tests {
         let options = FormatOptions::new().with_null("NULL");
         let formatted = format_array(&array, &options);
         assert_eq!(formatted, &["NULL".to_string(), "NULL".to_string()])
+    }
+
+    #[test]
+    fn test_string_run_arry_to_string() {
+        let mut builder = StringRunBuilder::<Int32Type>::new();
+
+        builder.append_value("input_value");
+        builder.append_value("input_value");
+        builder.append_value("input_value");
+        builder.append_value("input_value1");
+
+        let map_array = builder.finish();
+        assert_eq!("input_value", array_value_to_string(&map_array, 1).unwrap());
+        assert_eq!(
+            "input_value1",
+            array_value_to_string(&map_array, 3).unwrap()
+        );
     }
 }

@@ -16,9 +16,10 @@
 // under the License.
 
 //! An in-memory object store implementation
+use crate::util::InvalidGetRange;
 use crate::{
-    path::Path, GetResult, GetResultPayload, ListResult, ObjectMeta, ObjectStore, PutMode,
-    PutOptions, PutResult, Result, UpdateVersion,
+    path::Path, GetRange, GetResult, GetResultPayload, ListResult, ObjectMeta, ObjectStore,
+    PutMode, PutOptions, PutResult, Result, UpdateVersion,
 };
 use crate::{GetOptions, MultipartId};
 use async_trait::async_trait;
@@ -26,7 +27,7 @@ use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use futures::{stream::BoxStream, StreamExt};
 use parking_lot::RwLock;
-use snafu::{ensure, OptionExt, Snafu};
+use snafu::{OptionExt, ResultExt, Snafu};
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::io;
@@ -43,13 +44,8 @@ enum Error {
     #[snafu(display("No data in memory found. Location: {path}"))]
     NoDataInMemory { path: String },
 
-    #[snafu(display(
-        "Requested range {}..{} is out of bounds for object with length {}", range.start, range.end, len
-    ))]
-    OutOfRange { range: Range<usize>, len: usize },
-
-    #[snafu(display("Invalid range: {}..{}", range.start, range.end))]
-    BadRange { range: Range<usize> },
+    #[snafu(display("Invalid range: {source}"))]
+    Range { source: InvalidGetRange },
 
     #[snafu(display("Object already exists at that location: {path}"))]
     AlreadyExists { path: String },
@@ -205,14 +201,6 @@ impl ObjectStore for InMemory {
         Ok(())
     }
 
-    async fn append(&self, location: &Path) -> Result<Box<dyn AsyncWrite + Unpin + Send>> {
-        Ok(Box::new(InMemoryAppend {
-            location: location.clone(),
-            data: Vec::<u8>::new(),
-            storage: SharedStorage::clone(&self.storage),
-        }))
-    }
-
     async fn get_opts(&self, location: &Path, options: GetOptions) -> Result<GetResult> {
         let entry = self.entry(location).await?;
         let e_tag = entry.e_tag.to_string();
@@ -228,10 +216,8 @@ impl ObjectStore for InMemory {
 
         let (range, data) = match options.range {
             Some(range) => {
-                let len = entry.data.len();
-                ensure!(range.end <= len, OutOfRangeSnafu { range, len });
-                ensure!(range.start <= range.end, BadRangeSnafu { range });
-                (range.clone(), entry.data.slice(range))
+                let r = range.as_range(entry.data.len()).context(RangeSnafu)?;
+                (r.clone(), entry.data.slice(r))
             }
             None => (0..entry.data.len(), entry.data),
         };
@@ -249,14 +235,11 @@ impl ObjectStore for InMemory {
         ranges
             .iter()
             .map(|range| {
-                let range = range.clone();
-                let len = entry.data.len();
-                ensure!(
-                    range.end <= entry.data.len(),
-                    OutOfRangeSnafu { range, len }
-                );
-                ensure!(range.start <= range.end, BadRangeSnafu { range });
-                Ok(entry.data.slice(range))
+                let r = GetRange::Bounded(range.clone())
+                    .as_range(entry.data.len())
+                    .context(RangeSnafu)?;
+
+                Ok(entry.data.slice(r))
             })
             .collect()
     }
@@ -443,53 +426,8 @@ impl AsyncWrite for InMemoryUpload {
     }
 }
 
-struct InMemoryAppend {
-    location: Path,
-    data: Vec<u8>,
-    storage: Arc<RwLock<Storage>>,
-}
-
-impl AsyncWrite for InMemoryAppend {
-    fn poll_write(
-        mut self: Pin<&mut Self>,
-        _cx: &mut std::task::Context<'_>,
-        buf: &[u8],
-    ) -> Poll<Result<usize, io::Error>> {
-        self.data.extend_from_slice(buf);
-        Poll::Ready(Ok(buf.len()))
-    }
-
-    fn poll_flush(
-        mut self: Pin<&mut Self>,
-        _cx: &mut std::task::Context<'_>,
-    ) -> Poll<Result<(), io::Error>> {
-        let storage = Arc::clone(&self.storage);
-
-        let mut writer = storage.write();
-
-        if let Some(entry) = writer.map.remove(&self.location) {
-            let buf = std::mem::take(&mut self.data);
-            let concat = Bytes::from_iter(entry.data.into_iter().chain(buf));
-            writer.insert(&self.location, concat);
-        } else {
-            let data = Bytes::from(std::mem::take(&mut self.data));
-            writer.insert(&self.location, data);
-        };
-        Poll::Ready(Ok(()))
-    }
-
-    fn poll_shutdown(
-        self: Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> Poll<Result<(), io::Error>> {
-        self.poll_flush(cx)
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use tokio::io::AsyncWriteExt;
-
     use super::*;
 
     use crate::tests::*;
@@ -576,51 +514,5 @@ mod tests {
         } else {
             panic!("unexpected error type: {err:?}");
         }
-    }
-
-    #[tokio::test]
-    async fn test_append_new() {
-        let in_memory = InMemory::new();
-        let location = Path::from("some_file");
-        let data = Bytes::from("arbitrary data");
-        let expected_data = data.clone();
-
-        let mut writer = in_memory.append(&location).await.unwrap();
-        writer.write_all(&data).await.unwrap();
-        writer.flush().await.unwrap();
-
-        let read_data = in_memory
-            .get(&location)
-            .await
-            .unwrap()
-            .bytes()
-            .await
-            .unwrap();
-        assert_eq!(&*read_data, expected_data);
-    }
-
-    #[tokio::test]
-    async fn test_append_existing() {
-        let in_memory = InMemory::new();
-        let location = Path::from("some_file");
-        let data = Bytes::from("arbitrary");
-        let data_appended = Bytes::from(" data");
-        let expected_data = Bytes::from("arbitrary data");
-
-        let mut writer = in_memory.append(&location).await.unwrap();
-        writer.write_all(&data).await.unwrap();
-        writer.flush().await.unwrap();
-
-        writer.write_all(&data_appended).await.unwrap();
-        writer.flush().await.unwrap();
-
-        let read_data = in_memory
-            .get(&location)
-            .await
-            .unwrap()
-            .bytes()
-            .await
-            .unwrap();
-        assert_eq!(&*read_data, expected_data);
     }
 }

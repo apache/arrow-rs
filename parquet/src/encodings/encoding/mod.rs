@@ -24,11 +24,9 @@ use crate::data_type::private::ParquetValueType;
 use crate::data_type::*;
 use crate::encodings::rle::RleEncoder;
 use crate::errors::{ParquetError, Result};
-use crate::util::{
-    bit_util::{self, num_required_bits, BitWriter},
-    memory::ByteBufferPtr,
-};
+use crate::util::bit_util::{self, num_required_bits, BitWriter};
 
+use bytes::Bytes;
 pub use dict_encoder::DictEncoder;
 
 mod dict_encoder;
@@ -70,7 +68,7 @@ pub trait Encoder<T: DataType>: Send {
 
     /// Flushes the underlying byte buffer that's being processed by this encoder, and
     /// return the immutable copy of it. This will also reset the internal state.
-    fn flush_buffer(&mut self) -> Result<ByteBufferPtr>;
+    fn flush_buffer(&mut self) -> Result<Bytes>;
 }
 
 /// Gets a encoder for the particular data type `T` and encoding `encoding`. Memory usage
@@ -143,7 +141,7 @@ impl<T: DataType> Encoder<T> for PlainEncoder<T> {
     }
 
     #[inline]
-    fn flush_buffer(&mut self) -> Result<ByteBufferPtr> {
+    fn flush_buffer(&mut self) -> Result<Bytes> {
         self.buffer
             .extend_from_slice(self.bit_writer.flush_buffer());
         self.bit_writer.clear();
@@ -223,7 +221,7 @@ impl<T: DataType> Encoder<T> for RleValueEncoder<T> {
     }
 
     #[inline]
-    fn flush_buffer(&mut self) -> Result<ByteBufferPtr> {
+    fn flush_buffer(&mut self) -> Result<Bytes> {
         ensure_phys_ty!(Type::BOOLEAN, "RleValueEncoder only supports BoolType");
         let rle_encoder = self
             .encoder
@@ -238,7 +236,7 @@ impl<T: DataType> Encoder<T> for RleValueEncoder<T> {
         let len = (buf.len() - 4) as i32;
         buf[..4].copy_from_slice(&len.to_le_bytes());
 
-        Ok(ByteBufferPtr::new(buf))
+        Ok(buf.into())
     }
 }
 
@@ -456,7 +454,7 @@ impl<T: DataType> Encoder<T> for DeltaBitPackEncoder<T> {
         self.bit_writer.bytes_written()
     }
 
-    fn flush_buffer(&mut self) -> Result<ByteBufferPtr> {
+    fn flush_buffer(&mut self) -> Result<Bytes> {
         // Write remaining values
         self.flush_block_values()?;
         // Write page header with total values
@@ -597,7 +595,7 @@ impl<T: DataType> Encoder<T> for DeltaLengthByteArrayEncoder<T> {
         self.len_encoder.estimated_data_encoded_size() + self.encoded_size
     }
 
-    fn flush_buffer(&mut self) -> Result<ByteBufferPtr> {
+    fn flush_buffer(&mut self) -> Result<Bytes> {
         ensure_phys_ty!(
             Type::BYTE_ARRAY | Type::FIXED_LEN_BYTE_ARRAY,
             "DeltaLengthByteArrayEncoder only supports ByteArrayType"
@@ -605,14 +603,14 @@ impl<T: DataType> Encoder<T> for DeltaLengthByteArrayEncoder<T> {
 
         let mut total_bytes = vec![];
         let lengths = self.len_encoder.flush_buffer()?;
-        total_bytes.extend_from_slice(lengths.data());
+        total_bytes.extend_from_slice(&lengths);
         self.data.iter().for_each(|byte_array| {
             total_bytes.extend_from_slice(byte_array.data());
         });
         self.data.clear();
         self.encoded_size = 0;
 
-        Ok(ByteBufferPtr::new(total_bytes))
+        Ok(total_bytes.into())
     }
 }
 
@@ -696,7 +694,7 @@ impl<T: DataType> Encoder<T> for DeltaByteArrayEncoder<T> {
             + self.suffix_writer.estimated_data_encoded_size()
     }
 
-    fn flush_buffer(&mut self) -> Result<ByteBufferPtr> {
+    fn flush_buffer(&mut self) -> Result<Bytes> {
         match T::get_physical_type() {
             Type::BYTE_ARRAY | Type::FIXED_LEN_BYTE_ARRAY => {
                 // TODO: investigate if we can merge lengths and suffixes
@@ -704,17 +702,17 @@ impl<T: DataType> Encoder<T> for DeltaByteArrayEncoder<T> {
                 let mut total_bytes = vec![];
                 // Insert lengths ...
                 let lengths = self.prefix_len_encoder.flush_buffer()?;
-                total_bytes.extend_from_slice(lengths.data());
+                total_bytes.extend_from_slice(&lengths);
                 // ... followed by suffixes
                 let suffixes = self.suffix_writer.flush_buffer()?;
-                total_bytes.extend_from_slice(suffixes.data());
+                total_bytes.extend_from_slice(&suffixes);
 
                 self.previous.clear();
-                Ok(ByteBufferPtr::new(total_bytes))
+                Ok(total_bytes.into())
             }
             _ => panic!(
                 "DeltaByteArrayEncoder only supports ByteArrayType and FixedLenByteArrayType"
-            )
+            ),
         }
     }
 }

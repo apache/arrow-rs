@@ -373,7 +373,12 @@ fn arrow_to_parquet_type(field: &Field) -> Result<Type> {
             .with_repetition(repetition)
             .with_id(id)
             .build(),
-        DataType::Float16 => Err(arrow_err!("Float16 arrays not supported")),
+        DataType::Float16 => Type::primitive_type_builder(name, PhysicalType::FIXED_LEN_BYTE_ARRAY)
+            .with_repetition(repetition)
+            .with_id(id)
+            .with_logical_type(Some(LogicalType::Float16))
+            .with_length(2)
+            .build(),
         DataType::Float32 => Type::primitive_type_builder(name, PhysicalType::FLOAT)
             .with_repetition(repetition)
             .with_id(id)
@@ -604,9 +609,10 @@ mod tests {
             REQUIRED INT32   uint8 (INTEGER(8,false));
             REQUIRED INT32   uint16 (INTEGER(16,false));
             REQUIRED INT32   int32;
-            REQUIRED INT64   int64 ;
+            REQUIRED INT64   int64;
             OPTIONAL DOUBLE  double;
             OPTIONAL FLOAT   float;
+            OPTIONAL FIXED_LEN_BYTE_ARRAY (2) float16 (FLOAT16);
             OPTIONAL BINARY  string (UTF8);
             OPTIONAL BINARY  string_2 (STRING);
             OPTIONAL BINARY  json (JSON);
@@ -628,6 +634,7 @@ mod tests {
             Field::new("int64", DataType::Int64, false),
             Field::new("double", DataType::Float64, true),
             Field::new("float", DataType::Float32, true),
+            Field::new("float16", DataType::Float16, true),
             Field::new("string", DataType::Utf8, true),
             Field::new("string_2", DataType::Utf8, true),
             Field::new("json", DataType::Utf8, true),
@@ -1303,6 +1310,7 @@ mod tests {
             REQUIRED INT64   int64;
             OPTIONAL DOUBLE  double;
             OPTIONAL FLOAT   float;
+            OPTIONAL FIXED_LEN_BYTE_ARRAY (2) float16 (FLOAT16);
             OPTIONAL BINARY  string (UTF8);
             REPEATED BOOLEAN bools;
             OPTIONAL INT32   date       (DATE);
@@ -1339,6 +1347,7 @@ mod tests {
             Field::new("int64", DataType::Int64, false),
             Field::new("double", DataType::Float64, true),
             Field::new("float", DataType::Float32, true),
+            Field::new("float16", DataType::Float16, true),
             Field::new("string", DataType::Utf8, true),
             Field::new_list(
                 "bools",
@@ -1398,6 +1407,7 @@ mod tests {
             REQUIRED INT64   int64;
             OPTIONAL DOUBLE  double;
             OPTIONAL FLOAT   float;
+            OPTIONAL FIXED_LEN_BYTE_ARRAY (2) float16 (FLOAT16);
             OPTIONAL BINARY  string (STRING);
             OPTIONAL GROUP   bools (LIST) {
                 REPEATED GROUP list {
@@ -1448,6 +1458,7 @@ mod tests {
             Field::new("int64", DataType::Int64, false),
             Field::new("double", DataType::Float64, true),
             Field::new("float", DataType::Float32, true),
+            Field::new("float16", DataType::Float16, true),
             Field::new("string", DataType::Utf8, true),
             Field::new_list(
                 "bools",
@@ -1661,6 +1672,8 @@ mod tests {
                                 vec![
                                     Field::new("a", DataType::Int16, true),
                                     Field::new("b", DataType::Float64, false),
+                                    Field::new("c", DataType::Float32, false),
+                                    Field::new("d", DataType::Float16, false),
                                 ]
                                 .into(),
                             ),

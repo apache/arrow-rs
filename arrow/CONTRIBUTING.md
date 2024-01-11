@@ -67,18 +67,6 @@ the impossibility of the compiler to derive the invariants (such as lifetime, nu
 
 The arrow format declares a IPC protocol, which this crate supports. IPC is equivalent to a FFI in that the rust compiler can't reason about the contract's invariants.
 
-#### SIMD
-
-The API provided by the [packed_simd_2](https://docs.rs/packed_simd_2/latest/packed_simd_2/) crate is currently `unsafe`. However,
-SIMD offers a significant performance improvement over non-SIMD operations. A related crate in development is
-[portable-simd](https://rust-lang.github.io/portable-simd/core_simd/) which has a nice
-[beginners guide](https://github.com/rust-lang/portable-simd/blob/master/beginners-guide.md). These crates provide the ability
-for code on x86 and ARM architectures to use some of the available parallel register operations. As an example if two arrays
-of numbers are added, [1,2,3,4] + [5,6,7,8], rather than using four instructions to add each of the elements of the arrays,
-one instruction can be used to all all four elements at the same time, which leads to improved time to solution. SIMD instructions
-are typically most effective when data is aligned to allow a single load instruction to bring multiple consecutive data elements
-to the registers, before use of a SIMD instruction.
-
 #### Performance
 
 Some operations are significantly faster when `unsafe` is used.

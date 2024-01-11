@@ -17,7 +17,7 @@
 
 use crate::aws::client::{S3Client, S3Config};
 use crate::aws::credential::{
-    InstanceCredentialProvider, TaskCredentialProvider, WebIdentityProvider,
+    InstanceCredentialProvider, SessionProvider, TaskCredentialProvider, WebIdentityProvider,
 };
 use crate::aws::{
     AmazonS3, AwsCredential, AwsCredentialProvider, Checksum, S3ConditionalPut, S3CopyIfNotExists,
@@ -31,6 +31,7 @@ use serde::{Deserialize, Serialize};
 use snafu::{OptionExt, ResultExt, Snafu};
 use std::str::FromStr;
 use std::sync::Arc;
+use std::time::Duration;
 use tracing::info;
 use url::Url;
 
@@ -41,9 +42,6 @@ static DEFAULT_METADATA_ENDPOINT: &str = "http://169.254.169.254";
 #[derive(Debug, Snafu)]
 #[allow(missing_docs)]
 enum Error {
-    #[snafu(display("Missing region"))]
-    MissingRegion,
-
     #[snafu(display("Missing bucket name"))]
     MissingBucketName,
 
@@ -79,6 +77,9 @@ enum Error {
         bucket: String,
         source: reqwest::Error,
     },
+
+    #[snafu(display("Invalid Zone suffix for bucket '{bucket}'"))]
+    ZoneSuffix { bucket: String },
 
     #[snafu(display("Failed to parse the region for bucket '{}'", bucket))]
     RegionParse { bucket: String },
@@ -137,6 +138,8 @@ pub struct AmazonS3Builder {
     imdsv1_fallback: ConfigValue<bool>,
     /// When set to true, virtual hosted style request has to be used
     virtual_hosted_style_request: ConfigValue<bool>,
+    /// When set to true, S3 express is used
+    s3_express: ConfigValue<bool>,
     /// When set to true, unsigned payload option has to be used
     unsigned_payload: ConfigValue<bool>,
     /// Checksum algorithm which has to be used for object integrity check during upload
@@ -310,6 +313,13 @@ pub enum AmazonS3ConfigKey {
     /// - `disable_tagging`
     DisableTagging,
 
+    /// Enable Support for S3 Express One Zone
+    ///
+    /// Supported keys:
+    /// - `aws_s3_express`
+    /// - `s3_express`
+    S3Express,
+
     /// Client options
     Client(ClientConfigKey),
 }
@@ -325,6 +335,7 @@ impl AsRef<str> for AmazonS3ConfigKey {
             Self::Token => "aws_session_token",
             Self::ImdsV1Fallback => "aws_imdsv1_fallback",
             Self::VirtualHostedStyleRequest => "aws_virtual_hosted_style_request",
+            Self::S3Express => "aws_s3_express",
             Self::DefaultRegion => "aws_default_region",
             Self::MetadataEndpoint => "aws_metadata_endpoint",
             Self::UnsignedPayload => "aws_unsigned_payload",
@@ -354,6 +365,7 @@ impl FromStr for AmazonS3ConfigKey {
             "aws_virtual_hosted_style_request" | "virtual_hosted_style_request" => {
                 Ok(Self::VirtualHostedStyleRequest)
             }
+            "aws_s3_express" | "s3_express" => Ok(Self::S3Express),
             "aws_imdsv1_fallback" | "imdsv1_fallback" => Ok(Self::ImdsV1Fallback),
             "aws_metadata_endpoint" | "metadata_endpoint" => Ok(Self::MetadataEndpoint),
             "aws_unsigned_payload" | "unsigned_payload" => Ok(Self::UnsignedPayload),
@@ -451,6 +463,7 @@ impl AmazonS3Builder {
             AmazonS3ConfigKey::VirtualHostedStyleRequest => {
                 self.virtual_hosted_style_request.parse(value)
             }
+            AmazonS3ConfigKey::S3Express => self.s3_express.parse(value),
             AmazonS3ConfigKey::DefaultRegion => {
                 self.region = self.region.or_else(|| Some(value.into()))
             }
@@ -477,29 +490,6 @@ impl AmazonS3Builder {
         self
     }
 
-    /// Set an option on the builder via a key - value pair.
-    ///
-    /// This method will return an `UnknownConfigKey` error if key cannot be parsed into [`AmazonS3ConfigKey`].
-    #[deprecated(note = "Use with_config")]
-    pub fn try_with_option(self, key: impl AsRef<str>, value: impl Into<String>) -> Result<Self> {
-        Ok(self.with_config(key.as_ref().parse()?, value))
-    }
-
-    /// Hydrate builder from key value pairs
-    ///
-    /// This method will return an `UnknownConfigKey` error if any key cannot be parsed into [`AmazonS3ConfigKey`].
-    #[deprecated(note = "Use with_config")]
-    #[allow(deprecated)]
-    pub fn try_with_options<I: IntoIterator<Item = (impl AsRef<str>, impl Into<String>)>>(
-        mut self,
-        options: I,
-    ) -> Result<Self> {
-        for (key, value) in options {
-            self = self.try_with_option(key, value)?;
-        }
-        Ok(self)
-    }
-
     /// Get config value via a [`AmazonS3ConfigKey`].
     ///
     /// # Example
@@ -523,6 +513,7 @@ impl AmazonS3Builder {
             AmazonS3ConfigKey::VirtualHostedStyleRequest => {
                 Some(self.virtual_hosted_style_request.to_string())
             }
+            AmazonS3ConfigKey::S3Express => Some(self.s3_express.to_string()),
             AmazonS3ConfigKey::MetadataEndpoint => self.metadata_endpoint.clone(),
             AmazonS3ConfigKey::UnsignedPayload => Some(self.unsigned_payload.to_string()),
             AmazonS3ConfigKey::Checksum => {
@@ -582,19 +573,25 @@ impl AmazonS3Builder {
         Ok(())
     }
 
-    /// Set the AWS Access Key (required)
+    /// Set the AWS Access Key
     pub fn with_access_key_id(mut self, access_key_id: impl Into<String>) -> Self {
         self.access_key_id = Some(access_key_id.into());
         self
     }
 
-    /// Set the AWS Secret Access Key (required)
+    /// Set the AWS Secret Access Key
     pub fn with_secret_access_key(mut self, secret_access_key: impl Into<String>) -> Self {
         self.secret_access_key = Some(secret_access_key.into());
         self
     }
 
-    /// Set the region (e.g. `us-east-1`) (required)
+    /// Set the AWS Session Token to use for requests
+    pub fn with_token(mut self, token: impl Into<String>) -> Self {
+        self.token = Some(token.into());
+        self
+    }
+
+    /// Set the region, defaults to `us-east-1`
     pub fn with_region(mut self, region: impl Into<String>) -> Self {
         self.region = Some(region.into());
         self
@@ -606,22 +603,21 @@ impl AmazonS3Builder {
         self
     }
 
-    /// Sets the endpoint for communicating with AWS S3. Default value
-    /// is based on region. The `endpoint` field should be consistent with
-    /// the field `virtual_hosted_style_request'.
+    /// Sets the endpoint for communicating with AWS S3, defaults to the [region endpoint]
     ///
     /// For example, this might be set to `"http://localhost:4566:`
     /// for testing against a localstack instance.
-    /// If `virtual_hosted_style_request` is set to true then `endpoint`
-    /// should have bucket name included.
+    ///
+    /// The `endpoint` field should be consistent with [`Self::with_virtual_hosted_style_request`],
+    /// i.e. if `virtual_hosted_style_request` is set to true then `endpoint`
+    /// should have the bucket name included.
+    ///
+    /// By default, only HTTPS schemes are enabled. To connect to an HTTP endpoint, enable
+    /// [`Self::with_allow_http`].
+    ///
+    /// [region endpoint]: https://docs.aws.amazon.com/general/latest/gr/s3.html
     pub fn with_endpoint(mut self, endpoint: impl Into<String>) -> Self {
         self.endpoint = Some(endpoint.into());
-        self
-    }
-
-    /// Set the token to use for requests (passed to underlying provider)
-    pub fn with_token(mut self, token: impl Into<String>) -> Self {
-        self.token = Some(token.into());
         self
     }
 
@@ -640,7 +636,8 @@ impl AmazonS3Builder {
     }
 
     /// Sets if virtual hosted style request has to be used.
-    /// If `virtual_hosted_style_request` is :
+    ///
+    /// If `virtual_hosted_style_request` is:
     /// * false (default):  Path style request is used
     /// * true:  Virtual hosted style request is used
     ///
@@ -650,6 +647,12 @@ impl AmazonS3Builder {
     /// then `endpoint` should have bucket name included.
     pub fn with_virtual_hosted_style_request(mut self, virtual_hosted_style_request: bool) -> Self {
         self.virtual_hosted_style_request = virtual_hosted_style_request.into();
+        self
+    }
+
+    /// Configure this as an S3 Express One Zone Bucket
+    pub fn with_s3_express(mut self, s3_express: bool) -> Self {
+        self.s3_express = s3_express.into();
         self
     }
 
@@ -764,7 +767,7 @@ impl AmazonS3Builder {
         }
 
         let bucket = self.bucket_name.context(MissingBucketNameSnafu)?;
-        let region = self.region.context(MissingRegionSnafu)?;
+        let region = self.region.unwrap_or_else(|| "us-east-1".to_string());
         let checksum = self.checksum_algorithm.map(|x| x.get()).transpose()?;
         let copy_if_not_exists = self.copy_if_not_exists.map(|x| x.get()).transpose()?;
         let put_precondition = self.conditional_put.map(|x| x.get()).transpose()?;
@@ -844,30 +847,48 @@ impl AmazonS3Builder {
             )) as _
         };
 
-        let endpoint: String;
-        let bucket_endpoint: String;
+        let (session_provider, zonal_endpoint) = match self.s3_express.get()? {
+            true => {
+                let zone = parse_bucket_az(&bucket).context(ZoneSuffixSnafu { bucket: &bucket })?;
 
-        // If `endpoint` is provided then its assumed to be consistent with
-        // `virtual_hosted_style_request`. i.e. if `virtual_hosted_style_request` is true then
-        // `endpoint` should have bucket name included.
-        if self.virtual_hosted_style_request.get()? {
-            endpoint = self
-                .endpoint
-                .unwrap_or_else(|| format!("https://{bucket}.s3.{region}.amazonaws.com"));
-            bucket_endpoint = endpoint.clone();
-        } else {
-            endpoint = self
-                .endpoint
-                .unwrap_or_else(|| format!("https://s3.{region}.amazonaws.com"));
-            bucket_endpoint = format!("{endpoint}/{bucket}");
-        }
+                // https://docs.aws.amazon.com/AmazonS3/latest/userguide/s3-express-Regions-and-Zones.html
+                let endpoint = format!("https://{bucket}.s3express-{zone}.{region}.amazonaws.com");
+
+                let session = Arc::new(
+                    TokenCredentialProvider::new(
+                        SessionProvider {
+                            endpoint: endpoint.clone(),
+                            region: region.clone(),
+                            credentials: Arc::clone(&credentials),
+                        },
+                        self.client_options.client()?,
+                        self.retry_config.clone(),
+                    )
+                    .with_min_ttl(Duration::from_secs(60)), // Credentials only valid for 5 minutes
+                );
+                (Some(session as _), Some(endpoint))
+            }
+            false => (None, None),
+        };
+
+        // If `endpoint` is provided it's assumed to be consistent with `virtual_hosted_style_request` or `s3_express`.
+        // For example, if `virtual_hosted_style_request` is true then `endpoint` should have bucket name included.
+        let virtual_hosted = self.virtual_hosted_style_request.get()?;
+        let bucket_endpoint = match (&self.endpoint, zonal_endpoint, virtual_hosted) {
+            (Some(endpoint), _, true) => endpoint.clone(),
+            (Some(endpoint), _, false) => format!("{endpoint}/{bucket}"),
+            (None, Some(endpoint), _) => endpoint,
+            (None, None, true) => format!("https://{bucket}.s3.{region}.amazonaws.com"),
+            (None, None, false) => format!("https://s3.{region}.amazonaws.com/{bucket}"),
+        };
 
         let config = S3Config {
             region,
-            endpoint,
+            endpoint: self.endpoint,
             bucket,
             bucket_endpoint,
             credentials,
+            session_provider,
             retry_config: self.retry_config,
             client_options: self.client_options,
             sign_payload: !self.unsigned_payload.get()?,
@@ -882,6 +903,13 @@ impl AmazonS3Builder {
 
         Ok(AmazonS3 { client })
     }
+}
+
+/// Extracts the AZ from a S3 Express One Zone bucket name
+///
+/// <https://docs.aws.amazon.com/AmazonS3/latest/userguide/directory-bucket-naming-rules.html>
+fn parse_bucket_az(bucket: &str) -> Option<&str> {
+    Some(bucket.strip_suffix("--x-s3")?.rsplit_once("--")?.1)
 }
 
 #[cfg(test)]
@@ -975,6 +1003,15 @@ mod tests {
                 .unwrap(),
             "true"
         );
+    }
+
+    #[test]
+    fn s3_default_region() {
+        let builder = AmazonS3Builder::new()
+            .with_bucket_name("foo")
+            .build()
+            .unwrap();
+        assert_eq!(builder.client.config.region, "us-east-1");
     }
 
     #[test]
@@ -1103,5 +1140,19 @@ mod tests {
             err,
             "Generic Config error: \"md5\" is not a valid checksum algorithm"
         );
+    }
+
+    #[test]
+    fn test_parse_bucket_az() {
+        let cases = [
+            ("bucket-base-name--usw2-az1--x-s3", Some("usw2-az1")),
+            ("bucket-base--name--azid--x-s3", Some("azid")),
+            ("bucket-base-name", None),
+            ("bucket-base-name--x-s3", None),
+        ];
+
+        for (bucket, expected) in cases {
+            assert_eq!(parse_bucket_az(bucket), expected)
+        }
     }
 }

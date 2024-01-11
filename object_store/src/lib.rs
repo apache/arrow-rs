@@ -94,8 +94,7 @@
 //!
 //! This provides some compelling advantages:
 //!
-//! * Except where explicitly stated otherwise, operations are atomic, and readers
-//! cannot observe partial and/or failed writes
+//! * All operations are atomic, and readers cannot observe partial and/or failed writes
 //! * Methods map directly to object store APIs, providing both efficiency and predictability
 //! * Abstracts away filesystem and operating system specific quirks, ensuring portability
 //! * Allows for functionality not native to filesystems, such as operation preconditions
@@ -120,6 +119,7 @@
 //! application complexity.
 //!
 //! ```no_run
+//! # #[cfg(feature = "aws")] {
 //! # use url::Url;
 //! # use object_store::{parse_url, parse_url_opts};
 //! # use object_store::aws::{AmazonS3, AmazonS3Builder};
@@ -141,6 +141,7 @@
 //! let url = Url::parse("https://ACCOUNT_ID.r2.cloudflarestorage.com/bucket/path").unwrap();
 //! let (store, path) = parse_url(&url).unwrap();
 //! assert_eq!(path.as_ref(), "path");
+//! # }
 //! ```
 //!
 //! [PyArrow FileSystem]: https://arrow.apache.org/docs/python/generated/pyarrow.fs.FileSystem.html#pyarrow.fs.FileSystem.from_uri
@@ -437,6 +438,17 @@
 //! [Apache Iceberg]: https://iceberg.apache.org/
 //! [Delta Lake]: https://delta.io/
 //!
+//! # TLS Certificates
+//!
+//! Stores that use HTTPS/TLS (this is true for most cloud stores) can choose the source of their [CA]
+//! certificates. By default the system-bundled certificates are used (see
+//! [`rustls-native-certs`]). The `tls-webpki-roots` feature switch can be used to also bundle Mozilla's
+//! root certificates with the library/application (see [`webpki-roots`]).
+//!
+//! [CA]: https://en.wikipedia.org/wiki/Certificate_authority
+//! [`rustls-native-certs`]: https://crates.io/crates/rustls-native-certs/
+//! [`webpki-roots`]: https://crates.io/crates/webpki-roots
+//!
 
 #[cfg(all(
     target_arch = "wasm32",
@@ -487,6 +499,7 @@ mod parse;
 mod util;
 
 pub use parse::{parse_url, parse_url_opts};
+pub use util::GetRange;
 
 use crate::path::Path;
 #[cfg(not(target_arch = "wasm32"))]
@@ -559,30 +572,6 @@ pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
     /// vary by object store.
     async fn abort_multipart(&self, location: &Path, multipart_id: &MultipartId) -> Result<()>;
 
-    /// Returns an [`AsyncWrite`] that can be used to append to the object at `location`
-    ///
-    /// A new object will be created if it doesn't already exist, otherwise it will be
-    /// opened, with subsequent writes appended to the end.
-    ///
-    /// This operation cannot be supported by all stores, most use-cases should prefer
-    /// [`ObjectStore::put`] and [`ObjectStore::put_multipart`] for better portability
-    /// and stronger guarantees
-    ///
-    /// This API is not guaranteed to be atomic, in particular
-    ///
-    /// * On error, `location` may contain partial data
-    /// * Concurrent calls to [`ObjectStore::list`] may return partially written objects
-    /// * Concurrent calls to [`ObjectStore::get`] may return partially written data
-    /// * Concurrent calls to [`ObjectStore::put`] may result in data loss / corruption
-    /// * Concurrent calls to [`ObjectStore::append`] may result in data loss / corruption
-    ///
-    /// Additionally some stores, such as Azure, may only support appending to objects created
-    /// with [`ObjectStore::append`], and not with [`ObjectStore::put`], [`ObjectStore::copy`], or
-    /// [`ObjectStore::put_multipart`]
-    async fn append(&self, _location: &Path) -> Result<Box<dyn AsyncWrite + Unpin + Send>> {
-        Err(Error::NotImplemented)
-    }
-
     /// Return the bytes that are stored at the specified location.
     async fn get(&self, location: &Path) -> Result<GetResult> {
         self.get_opts(location, GetOptions::default()).await
@@ -592,10 +581,12 @@ pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
     async fn get_opts(&self, location: &Path, options: GetOptions) -> Result<GetResult>;
 
     /// Return the bytes that are stored at the specified location
-    /// in the given byte range
+    /// in the given byte range.
+    ///
+    /// See [`GetRange::Bounded`] for more details on how `range` gets interpreted
     async fn get_range(&self, location: &Path, range: Range<usize>) -> Result<Bytes> {
         let options = GetOptions {
-            range: Some(range.clone()),
+            range: Some(range.into()),
             ..Default::default()
         };
         self.get_opts(location, options).await?.bytes().await
@@ -779,10 +770,6 @@ macro_rules! as_ref_impl {
                 self.as_ref().abort_multipart(location, multipart_id).await
             }
 
-            async fn append(&self, location: &Path) -> Result<Box<dyn AsyncWrite + Unpin + Send>> {
-                self.as_ref().append(location).await
-            }
-
             async fn get(&self, location: &Path) -> Result<GetResult> {
                 self.as_ref().get(location).await
             }
@@ -929,7 +916,7 @@ pub struct GetOptions {
     /// otherwise returning [`Error::NotModified`]
     ///
     /// <https://datatracker.ietf.org/doc/html/rfc9110#name-range>
-    pub range: Option<Range<usize>>,
+    pub range: Option<GetRange>,
     /// Request a particular object version
     pub version: Option<String>,
     /// Request transfer of no content
@@ -1249,18 +1236,16 @@ mod tests {
     use crate::test_util::flatten_list_stream;
     use chrono::TimeZone;
     use futures::stream::FuturesUnordered;
+    use rand::distributions::Alphanumeric;
     use rand::{thread_rng, Rng};
     use std::future::Future;
     use tokio::io::AsyncWriteExt;
 
     pub(crate) async fn put_get_delete_list(storage: &DynObjectStore) {
-        put_get_delete_list_opts(storage, false).await
+        put_get_delete_list_opts(storage).await
     }
 
-    pub(crate) async fn put_get_delete_list_opts(
-        storage: &DynObjectStore,
-        skip_list_with_spaces: bool,
-    ) {
+    pub(crate) async fn put_get_delete_list_opts(storage: &DynObjectStore) {
         delete_fixtures(storage).await;
 
         let content_list = flatten_list_stream(storage, None).await.unwrap();
@@ -1322,14 +1307,81 @@ mod tests {
         let range = 3..7;
         let range_result = storage.get_range(&location, range.clone()).await;
 
+        let bytes = range_result.unwrap();
+        assert_eq!(bytes, expected_data.slice(range.clone()));
+
+        let opts = GetOptions {
+            range: Some(GetRange::Bounded(2..5)),
+            ..Default::default()
+        };
+        let result = storage.get_opts(&location, opts).await.unwrap();
+        // Data is `"arbitrary data"`, length 14 bytes
+        assert_eq!(result.meta.size, 14); // Should return full object size (#5272)
+        assert_eq!(result.range, 2..5);
+        let bytes = result.bytes().await.unwrap();
+        assert_eq!(bytes, b"bit".as_ref());
+
         let out_of_range = 200..300;
         let out_of_range_result = storage.get_range(&location, out_of_range).await;
 
-        let bytes = range_result.unwrap();
-        assert_eq!(bytes, expected_data.slice(range));
-
         // Should be a non-fatal error
         out_of_range_result.unwrap_err();
+
+        let opts = GetOptions {
+            range: Some(GetRange::Bounded(2..100)),
+            ..Default::default()
+        };
+        let result = storage.get_opts(&location, opts).await.unwrap();
+        assert_eq!(result.range, 2..14);
+        assert_eq!(result.meta.size, 14);
+        let bytes = result.bytes().await.unwrap();
+        assert_eq!(bytes, b"bitrary data".as_ref());
+
+        let opts = GetOptions {
+            range: Some(GetRange::Suffix(2)),
+            ..Default::default()
+        };
+        match storage.get_opts(&location, opts).await {
+            Ok(result) => {
+                assert_eq!(result.range, 12..14);
+                assert_eq!(result.meta.size, 14);
+                let bytes = result.bytes().await.unwrap();
+                assert_eq!(bytes, b"ta".as_ref());
+            }
+            Err(Error::NotSupported { .. }) => {}
+            Err(e) => panic!("{e}"),
+        }
+
+        let opts = GetOptions {
+            range: Some(GetRange::Suffix(100)),
+            ..Default::default()
+        };
+        match storage.get_opts(&location, opts).await {
+            Ok(result) => {
+                assert_eq!(result.range, 0..14);
+                assert_eq!(result.meta.size, 14);
+                let bytes = result.bytes().await.unwrap();
+                assert_eq!(bytes, b"arbitrary data".as_ref());
+            }
+            Err(Error::NotSupported { .. }) => {}
+            Err(e) => panic!("{e}"),
+        }
+
+        let opts = GetOptions {
+            range: Some(GetRange::Offset(3)),
+            ..Default::default()
+        };
+        let result = storage.get_opts(&location, opts).await.unwrap();
+        assert_eq!(result.range, 3..14);
+        assert_eq!(result.meta.size, 14);
+        let bytes = result.bytes().await.unwrap();
+        assert_eq!(bytes, b"itrary data".as_ref());
+
+        let opts = GetOptions {
+            range: Some(GetRange::Offset(100)),
+            ..Default::default()
+        };
+        storage.get_opts(&location, opts).await.unwrap_err();
 
         let ranges = vec![0..1, 2..3, 0..5];
         let bytes = storage.get_ranges(&location, &ranges).await.unwrap();
@@ -1471,6 +1523,23 @@ mod tests {
 
         storage.delete(&path).await.unwrap();
 
+        // Test handling of unicode paths
+        let path = Path::parse("🇦🇺/$shenanigans@@~.txt").unwrap();
+        storage.put(&path, "test".into()).await.unwrap();
+
+        let r = storage.get(&path).await.unwrap();
+        assert_eq!(r.bytes().await.unwrap(), "test");
+
+        let dir = Path::parse("🇦🇺").unwrap();
+        let r = storage.list_with_delimiter(None).await.unwrap();
+        assert!(r.common_prefixes.contains(&dir));
+
+        let r = storage.list_with_delimiter(Some(&dir)).await.unwrap();
+        assert_eq!(r.objects.len(), 1);
+        assert_eq!(r.objects[0].location, path);
+
+        storage.delete(&path).await.unwrap();
+
         // Can also write non-percent encoded sequences
         let path = Path::parse("%Q.parquet").unwrap();
         storage.put(&path, Bytes::from(vec![0, 1])).await.unwrap();
@@ -1484,12 +1553,11 @@ mod tests {
         storage.put(&path, Bytes::from(vec![0, 1])).await.unwrap();
         storage.head(&path).await.unwrap();
 
-        if !skip_list_with_spaces {
-            let files = flatten_list_stream(storage, Some(&Path::from("foo bar")))
-                .await
-                .unwrap();
-            assert_eq!(files, vec![path.clone()]);
-        }
+        let files = flatten_list_stream(storage, Some(&Path::from("foo bar")))
+            .await
+            .unwrap();
+        assert_eq!(files, vec![path.clone()]);
+
         storage.delete(&path).await.unwrap();
 
         let files = flatten_list_stream(storage, None).await.unwrap();
@@ -1536,11 +1604,11 @@ mod tests {
 
             let expected: Vec<_> = files
                 .iter()
-                .cloned()
                 .filter(|x| {
                     let prefix_match = prefix.as_ref().map(|p| x.prefix_matches(p)).unwrap_or(true);
-                    prefix_match && x > &offset
+                    prefix_match && *x > &offset
                 })
+                .cloned()
                 .collect();
 
             assert_eq!(actual, expected, "{prefix:?} - {offset:?}");
@@ -1718,8 +1786,15 @@ mod tests {
     }
 
     pub(crate) async fn put_opts(storage: &dyn ObjectStore, supports_update: bool) {
+        // When using DynamoCommit repeated runs of this test will produce the same sequence of records in DynamoDB
+        // As a result each conditional operation will need to wait for the lease to timeout before proceeding
+        // One solution would be to clear DynamoDB before each test, but this would require non-trivial additional code
+        // so we instead just generate a random suffix for the filenames
+        let rng = thread_rng();
+        let suffix = String::from_utf8(rng.sample_iter(Alphanumeric).take(32).collect()).unwrap();
+
         delete_fixtures(storage).await;
-        let path = Path::from("put_opts");
+        let path = Path::from(format!("put_opts_{suffix}"));
         let v1 = storage
             .put_opts(&path, "a".into(), PutMode::Create.into())
             .await
@@ -1771,7 +1846,7 @@ mod tests {
         const NUM_WORKERS: usize = 5;
         const NUM_INCREMENTS: usize = 10;
 
-        let path = Path::from("RACE");
+        let path = Path::from(format!("RACE-{suffix}"));
         let mut futures: FuturesUnordered<_> = (0..NUM_WORKERS)
             .map(|_| async {
                 for _ in 0..NUM_INCREMENTS {
@@ -1889,7 +1964,7 @@ mod tests {
 
         // We can abort an in-progress write
         let (upload_id, mut writer) = storage.put_multipart(&location).await.unwrap();
-        if let Some(chunk) = data.get(0) {
+        if let Some(chunk) = data.first() {
             writer.write_all(chunk).await.unwrap();
             let _ = writer.write(chunk).await.unwrap();
         }
@@ -2116,6 +2191,29 @@ mod tests {
 
         let meta = storage.head(&path).await.unwrap();
         assert_eq!(meta.size, chunk_size * 2);
+    }
+
+    #[cfg(any(feature = "azure", feature = "aws"))]
+    pub(crate) async fn signing<T>(integration: &T)
+    where
+        T: ObjectStore + crate::signer::Signer,
+    {
+        use reqwest::Method;
+        use std::time::Duration;
+
+        let data = Bytes::from("hello world");
+        let path = Path::from("file.txt");
+        integration.put(&path, data.clone()).await.unwrap();
+
+        let signed = integration
+            .signed_url(Method::GET, &path, Duration::from_secs(60))
+            .await
+            .unwrap();
+
+        let resp = reqwest::get(signed).await.unwrap();
+        let loaded = resp.bytes().await.unwrap();
+
+        assert_eq!(data, loaded);
     }
 
     #[cfg(any(feature = "aws", feature = "azure"))]

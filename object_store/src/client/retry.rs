@@ -39,9 +39,12 @@ pub enum Error {
         body: Option<String>,
     },
 
-    #[snafu(display("Error after {retries} retries: {source}"))]
+    #[snafu(display("Error after {retries} retries in {elapsed:?}, max_retries:{max_retries}, retry_timeout:{retry_timeout:?}, source:{source}"))]
     Reqwest {
         retries: usize,
+        max_retries: usize,
+        elapsed: Duration,
+        retry_timeout: Duration,
         source: reqwest::Error,
     },
 }
@@ -116,11 +119,19 @@ impl From<Error> for std::io::Error {
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
 
-/// Contains the configuration for how to respond to server errors
+/// The configuration for how to respond to request errors
 ///
-/// By default they will be retried up to some limit, using exponential
+/// The following categories of error will be retried:
+///
+/// * 5xx server errors
+/// * Connection errors
+/// * Dropped connections
+/// * Timeouts for [safe] / read-only requests
+///
+/// Requests will be retried up to some limit, using exponential
 /// backoff with jitter. See [`BackoffConfig`] for more information
 ///
+/// [safe]: https://datatracker.ietf.org/doc/html/rfc7231#section-4.2.1
 #[derive(Debug, Clone)]
 pub struct RetryConfig {
     /// The backoff configuration
@@ -170,13 +181,16 @@ impl RetryExt for reqwest::RequestBuilder {
         let max_retries = config.max_retries;
         let retry_timeout = config.retry_timeout;
 
+        let (client, req) = self.build_split();
+        let req = req.expect("request must be valid");
+
         async move {
             let mut retries = 0;
             let now = Instant::now();
 
             loop {
-                let s = self.try_clone().expect("request body must be cloneable");
-                match s.send().await {
+                let s = req.try_clone().expect("request body must be cloneable");
+                match client.execute(s).await {
                     Ok(r) => match r.error_for_status_ref() {
                         Ok(_) if r.status().is_success() => return Ok(r),
                         Ok(r) if r.status() == StatusCode::NOT_MODIFIED => {
@@ -198,7 +212,6 @@ impl RetryExt for reqwest::RequestBuilder {
                         }
                         Err(e) => {
                             let status = r.status();
-
                             if retries == max_retries
                                 || now.elapsed() > retry_timeout
                                 || !status.is_server_error() {
@@ -214,12 +227,18 @@ impl RetryExt for reqwest::RequestBuilder {
                                         Err(e) => {
                                             Error::Reqwest {
                                                 retries,
+                                                max_retries,
+                                                elapsed: now.elapsed(),
+                                                retry_timeout,
                                                 source: e,
                                             }
                                         }
                                     }
                                     false => Error::Reqwest {
                                         retries,
+                                        max_retries,
+                                        elapsed: now.elapsed(),
+                                        retry_timeout,
                                         source: e,
                                     }
                                 });
@@ -227,14 +246,22 @@ impl RetryExt for reqwest::RequestBuilder {
 
                             let sleep = backoff.next();
                             retries += 1;
-                            info!("Encountered server error, backing off for {} seconds, retry {} of {}", sleep.as_secs_f32(), retries, max_retries);
+                            info!(
+                                "Encountered server error, backing off for {} seconds, retry {} of {}: {}",
+                                sleep.as_secs_f32(),
+                                retries,
+                                max_retries,
+                                e,
+                            );
                             tokio::time::sleep(sleep).await;
                         }
                     },
                     Err(e) =>
                     {
                         let mut do_retry = false;
-                        if let Some(source) = e.source() {
+                        if req.method().is_safe() && e.is_timeout() {
+                            do_retry = true
+                        } else if let Some(source) = e.source() {
                             if let Some(e) = source.downcast_ref::<hyper::Error>() {
                                 if e.is_connect() || e.is_closed() || e.is_incomplete_message() {
                                     do_retry = true;
@@ -248,12 +275,21 @@ impl RetryExt for reqwest::RequestBuilder {
 
                             return Err(Error::Reqwest {
                                 retries,
+                                max_retries,
+                                elapsed: now.elapsed(),
+                                retry_timeout,
                                 source: e,
                             })
                         }
                         let sleep = backoff.next();
                         retries += 1;
-                        info!("Encountered transport error ({}) backing off for {} seconds, retry {} of {}", e, sleep.as_secs_f32(), retries, max_retries);
+                        info!(
+                            "Encountered transport error backing off for {} seconds, retry {} of {}: {}", 
+                            sleep.as_secs_f32(),
+                            retries,
+                            max_retries,
+                            e,
+                        );
                         tokio::time::sleep(sleep).await;
                     }
                 }
@@ -283,7 +319,11 @@ mod tests {
             retry_timeout: Duration::from_secs(1000),
         };
 
-        let client = Client::new();
+        let client = Client::builder()
+            .timeout(Duration::from_millis(100))
+            .build()
+            .unwrap();
+
         let do_request = || client.request(Method::GET, mock.url()).send_retry(&retry);
 
         // Simple request should work
@@ -408,9 +448,8 @@ mod tests {
 
         let e = do_request().await.unwrap_err().to_string();
         assert!(
-            e.starts_with(
-                "Error after 2 retries: HTTP status server error (502 Bad Gateway) for url"
-            ),
+            e.contains("Error after 2 retries in") &&
+            e.contains("max_retries:2, retry_timeout:1000s, source:HTTP status server error (502 Bad Gateway) for url"),
             "{e}"
         );
 
@@ -425,7 +464,29 @@ mod tests {
         }
         let e = do_request().await.unwrap_err().to_string();
         assert!(
-            e.starts_with("Error after 2 retries: error sending request for url"),
+            e.contains("Error after 2 retries in")
+                && e.contains(
+                    "max_retries:2, retry_timeout:1000s, source:error sending request for url"
+                ),
+            "{e}"
+        );
+
+        // Retries on client timeout
+        mock.push_async_fn(|_| async move {
+            tokio::time::sleep(Duration::from_secs(10)).await;
+            panic!()
+        });
+        do_request().await.unwrap();
+
+        // Does not retry PUT request
+        mock.push_async_fn(|_| async move {
+            tokio::time::sleep(Duration::from_secs(10)).await;
+            panic!()
+        });
+        let res = client.request(Method::PUT, mock.url()).send_retry(&retry);
+        let e = res.await.unwrap_err().to_string();
+        assert!(
+            e.contains("Error after 0 retries in") && e.contains("operation timed out"),
             "{e}"
         );
 

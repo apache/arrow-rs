@@ -47,7 +47,6 @@ fn test_cast_timestamp_to_string() {
     let a = TimestampMillisecondArray::from(vec![Some(864000000005), Some(1545696000001), None])
         .with_timezone("UTC".to_string());
     let array = Arc::new(a) as ArrayRef;
-    dbg!(&array);
     let b = cast(&array, &DataType::Utf8).unwrap();
     let c = b.as_any().downcast_ref::<StringArray>().unwrap();
     assert_eq!(&DataType::Utf8, c.data_type());

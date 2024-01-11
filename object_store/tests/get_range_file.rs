@@ -93,4 +93,29 @@ async fn test_get_range() {
         let data = store.get_range(&path, range.clone()).await.unwrap();
         assert_eq!(&data[..], &expected[range])
     }
+
+    let over_range = 0..(expected.len() * 2);
+    let data = store.get_range(&path, over_range.clone()).await.unwrap();
+    assert_eq!(&data[..], expected)
+}
+
+/// Test that, when a requesting a range which overhangs the end of the resource,
+/// the resulting [GetResult::range] reports the returned range,
+/// not the requested.
+#[tokio::test]
+async fn test_get_opts_over_range() {
+    let tmp = tempdir().unwrap();
+    let store = MyStore(LocalFileSystem::new_with_prefix(tmp.path()).unwrap());
+    let path = Path::from("foo");
+
+    let expected = Bytes::from_static(b"hello world");
+    store.put(&path, expected.clone()).await.unwrap();
+
+    let opts = GetOptions {
+        range: Some(GetRange::Bounded(0..(expected.len() * 2))),
+        ..Default::default()
+    };
+    let res = store.get_opts(&path, opts).await.unwrap();
+    assert_eq!(res.range, 0..expected.len());
+    assert_eq!(res.bytes().await.unwrap(), expected);
 }

@@ -40,7 +40,7 @@ use crate::record::reader::RowIter;
 use crate::record::Row;
 use crate::schema::types::Type as SchemaType;
 use crate::thrift::{TCompactSliceInputProtocol, TSerializable};
-use crate::util::memory::ByteBufferPtr;
+use bytes::Bytes;
 use thrift::protocol::TCompactInputProtocol;
 
 impl TryFrom<File> for SerializedFileReader<File> {
@@ -386,7 +386,7 @@ fn read_page_header_len<T: Read>(input: &mut T) -> Result<(usize, PageHeader)> {
 /// Decodes a [`Page`] from the provided `buffer`
 pub(crate) fn decode_page(
     page_header: PageHeader,
-    buffer: ByteBufferPtr,
+    buffer: Bytes,
     physical_type: Type,
     decompressor: Option<&mut Box<dyn Codec>>,
 ) -> Result<Page> {
@@ -428,7 +428,7 @@ pub(crate) fn decode_page(
                 ));
             }
 
-            ByteBufferPtr::new(decompressed)
+            Bytes::from(decompressed)
         }
         _ => buffer,
     };
@@ -627,7 +627,7 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
 
                     decode_page(
                         header,
-                        ByteBufferPtr::new(buffer),
+                        Bytes::from(buffer),
                         self.physical_type,
                         self.decompressor.as_mut(),
                     )?
@@ -656,7 +656,7 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
                     let bytes = buffer.slice(offset..);
                     decode_page(
                         header,
-                        bytes.into(),
+                        bytes,
                         self.physical_type,
                         self.decompressor.as_mut(),
                     )?
@@ -775,6 +775,7 @@ mod tests {
     use crate::format::BoundaryOrder;
 
     use crate::basic::{self, ColumnOrder};
+    use crate::column::reader::ColumnReader;
     use crate::data_type::private::ParquetValueType;
     use crate::data_type::{AsBytes, FixedLenByteArrayType};
     use crate::file::page_index::index::{Index, NativeIndex};
@@ -1115,16 +1116,13 @@ mod tests {
 
         assert_eq!(metadata.len(), 3);
 
-        assert_eq!(metadata.get(0).unwrap().key, "parquet.proto.descriptor");
+        assert_eq!(metadata[0].key, "parquet.proto.descriptor");
 
-        assert_eq!(metadata.get(1).unwrap().key, "writer.model.name");
-        assert_eq!(metadata.get(1).unwrap().value, Some("protobuf".to_owned()));
+        assert_eq!(metadata[1].key, "writer.model.name");
+        assert_eq!(metadata[1].value, Some("protobuf".to_owned()));
 
-        assert_eq!(metadata.get(2).unwrap().key, "parquet.proto.class");
-        assert_eq!(
-            metadata.get(2).unwrap().value,
-            Some("foo.baz.Foobaz$Event".to_owned())
-        );
+        assert_eq!(metadata[2].key, "parquet.proto.class");
+        assert_eq!(metadata[2].value, Some("foo.baz.Foobaz$Event".to_owned()));
     }
 
     #[test]
@@ -1140,7 +1138,7 @@ mod tests {
         assert_eq!(col0_metadata.bloom_filter_offset().unwrap(), 192);
 
         // test page encoding stats
-        let page_encoding_stats = col0_metadata.page_encoding_stats().unwrap().get(0).unwrap();
+        let page_encoding_stats = &col0_metadata.page_encoding_stats().unwrap()[0];
 
         assert_eq!(page_encoding_stats.page_type, basic::PageType::DATA_PAGE);
         assert_eq!(page_encoding_stats.encoding, Encoding::PLAIN);
@@ -1726,6 +1724,30 @@ mod tests {
                 assert_eq!(page_idx.null_count.unwrap(), 1);
                 assert_eq!(page_idx.min.as_ref().unwrap().as_ref(), &[0; 11]);
                 assert_eq!(page_idx.max.as_ref().unwrap().as_ref(), &[5; 11]);
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    #[test]
+    fn test_multi_gz() {
+        let file = get_test_file("concatenated_gzip_members.parquet");
+        let reader = SerializedFileReader::new(file).unwrap();
+        let row_group_reader = reader.get_row_group(0).unwrap();
+        match row_group_reader.get_column_reader(0).unwrap() {
+            ColumnReader::Int64ColumnReader(mut reader) => {
+                let mut buffer = Vec::with_capacity(1024);
+                let mut def_levels = Vec::with_capacity(1024);
+                let (num_records, num_values, num_levels) = reader
+                    .read_records(1024, Some(&mut def_levels), None, &mut buffer)
+                    .unwrap();
+
+                assert_eq!(num_records, 513);
+                assert_eq!(num_values, 513);
+                assert_eq!(num_levels, 513);
+
+                let expected: Vec<i64> = (1..514).collect();
+                assert_eq!(&buffer, &expected);
             }
             _ => unreachable!(),
         }

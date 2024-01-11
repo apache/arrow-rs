@@ -78,18 +78,16 @@ impl From<Error> for crate::Error {
     }
 }
 
-/// Configure a connection to Google Cloud Storage using the specified
-/// credentials.
+/// Configure a connection to Google Cloud Storage.
+///
+/// If no credentials are explicitly provided, they will be sourced
+/// from the environment as documented [here](https://cloud.google.com/docs/authentication/application-default-credentials).
 ///
 /// # Example
 /// ```
 /// # let BUCKET_NAME = "foo";
-/// # let SERVICE_ACCOUNT_PATH = "/tmp/foo.json";
 /// # use object_store::gcp::GoogleCloudStorageBuilder;
-/// let gcs = GoogleCloudStorageBuilder::new()
-///  .with_service_account_path(SERVICE_ACCOUNT_PATH)
-///  .with_bucket_name(BUCKET_NAME)
-///  .build();
+/// let gcs = GoogleCloudStorageBuilder::from_env().with_bucket_name(BUCKET_NAME).build();
 /// ```
 #[derive(Debug, Clone)]
 pub struct GoogleCloudStorageBuilder {
@@ -287,25 +285,6 @@ impl GoogleCloudStorageBuilder {
             }
         };
         self
-    }
-
-    /// Set an option on the builder via a key - value pair.
-    #[deprecated(note = "Use with_config")]
-    pub fn try_with_option(self, key: impl AsRef<str>, value: impl Into<String>) -> Result<Self> {
-        Ok(self.with_config(key.as_ref().parse()?, value))
-    }
-
-    /// Hydrate builder from key value pairs
-    #[deprecated(note = "Use with_config")]
-    #[allow(deprecated)]
-    pub fn try_with_options<I: IntoIterator<Item = (impl AsRef<str>, impl Into<String>)>>(
-        mut self,
-        options: I,
-    ) -> Result<Self> {
-        for (key, value) in options {
-            self = self.try_with_option(key, value)?;
-        }
-        Ok(self)
     }
 
     /// Get config value via a [`GoogleConfigKey`].
@@ -605,7 +584,7 @@ mod tests {
             .with_bucket_name("foo")
             .with_proxy_url("https://example.com")
             .build();
-        assert!(dbg!(gcs).is_ok());
+        assert!(gcs.is_ok());
 
         let err = GoogleCloudStorageBuilder::new()
             .with_service_account_path(service_account_path.to_str().unwrap())

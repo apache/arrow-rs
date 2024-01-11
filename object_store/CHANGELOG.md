@@ -19,49 +19,61 @@
 
 # Changelog
 
-## [object_store_0.7.1](https://github.com/apache/arrow-rs/tree/object_store_0.7.1) (2023-09-26)
+## [object_store_0.9.0](https://github.com/apache/arrow-rs/tree/object_store_0.9.0) (2024-01-05)
 
-[Full Changelog](https://github.com/apache/arrow-rs/compare/object_store_0.7.0...object_store_0.7.1)
+[Full Changelog](https://github.com/apache/arrow-rs/compare/object_store_0.8.0...object_store_0.9.0)
+
+**Breaking changes:**
+
+- Remove deprecated try\_with\_option methods [\#5237](https://github.com/apache/arrow-rs/pull/5237) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)] ([tustvold](https://github.com/tustvold))
+- object\_store: full HTTP range support [\#5222](https://github.com/apache/arrow-rs/pull/5222) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)] ([clbarnes](https://github.com/clbarnes))
+- feat\(object\_store\): use http1 by default [\#5204](https://github.com/apache/arrow-rs/pull/5204) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)] ([wjones127](https://github.com/wjones127))
+- refactor: change `object_store` CA handling [\#5056](https://github.com/apache/arrow-rs/pull/5056) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)] ([crepererum](https://github.com/crepererum))
 
 **Implemented enhancements:**
 
-- Automatically Cleanup LocalFileSystem Temporary Files [\#4778](https://github.com/apache/arrow-rs/issues/4778) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)]
-- object-store: Expose an async reader API for object store [\#4762](https://github.com/apache/arrow-rs/issues/4762)
-- Improve proxy support by using reqwest::Proxy as configuration [\#4713](https://github.com/apache/arrow-rs/issues/4713) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)]
+- Azure Signed URL Support [\#5232](https://github.com/apache/arrow-rs/issues/5232) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)]
+- \[object-store\] Make aws region optional. [\#5211](https://github.com/apache/arrow-rs/issues/5211) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)]
+- \[object\_store,gcp\] Document GoogleCloudStorage Default Credentials [\#5187](https://github.com/apache/arrow-rs/issues/5187) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)]
+- Support S3 Express One Zone [\#5140](https://github.com/apache/arrow-rs/issues/5140) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)]
+- `object_store`: Allow 403 Forbidden for `copy_if_not_exists` S3 status code [\#5132](https://github.com/apache/arrow-rs/issues/5132) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)]
+- Add `copy_if_not_exists` support for AmazonS3 via DynamoDB Lock Support [\#4880](https://github.com/apache/arrow-rs/issues/4880) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)]
+- object\_store: native certs, w/o webpki-roots [\#4870](https://github.com/apache/arrow-rs/issues/4870)
+- object\_store: range request with suffix [\#4611](https://github.com/apache/arrow-rs/issues/4611)
 
 **Fixed bugs:**
 
-- object-store: http shouldn't perform range requests unless `accept-ranges: bytes` header is present [\#4839](https://github.com/apache/arrow-rs/issues/4839)
-- object-store: http-store fails when url doesn't have last-modified header on 0.7.0 [\#4831](https://github.com/apache/arrow-rs/issues/4831)
-- object-store fails to compile for `wasm32-unknown-unknown` with `http` feature [\#4776](https://github.com/apache/arrow-rs/issues/4776) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)]
-- object-store: could not find `header` in `client` for `http` feature [\#4775](https://github.com/apache/arrow-rs/issues/4775) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)]
-- LocalFileSystem Copy and Rename Don't Create Intermediate Directories [\#4760](https://github.com/apache/arrow-rs/issues/4760) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)]
-- LocalFileSystem Copy is not Atomic [\#4758](https://github.com/apache/arrow-rs/issues/4758) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)]
+- ObjectStore::get\_opts Incorrectly Returns Response Size not Object Size [\#5272](https://github.com/apache/arrow-rs/issues/5272) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)]
+- Single object store has limited throughput on GCS [\#5194](https://github.com/apache/arrow-rs/issues/5194) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)]
+- local::tests::invalid\_path fails during object store release verification [\#5035](https://github.com/apache/arrow-rs/issues/5035) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)]
+- Object Store Doctest Failure with Default Features [\#5025](https://github.com/apache/arrow-rs/issues/5025) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)]
 
-**Closed issues:**
+**Documentation updates:**
 
-- object\_store Azure Government Cloud functionality? [\#4853](https://github.com/apache/arrow-rs/issues/4853)
+- Document default value of InstanceCredentialProvider [\#5188](https://github.com/apache/arrow-rs/pull/5188) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)] ([justinabrahms](https://github.com/justinabrahms))
 
 **Merged pull requests:**
 
-- Add ObjectStore BufReader \(\#4762\) [\#4857](https://github.com/apache/arrow-rs/pull/4857) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)] ([tustvold](https://github.com/tustvold))
-- Allow overriding azure endpoint [\#4854](https://github.com/apache/arrow-rs/pull/4854) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)] ([tustvold](https://github.com/tustvold))
-- Minor: Improve object\_store docs.rs landing page [\#4849](https://github.com/apache/arrow-rs/pull/4849) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)] ([alamb](https://github.com/alamb))
-- Error if Remote Ignores HTTP Range Header [\#4841](https://github.com/apache/arrow-rs/pull/4841) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)] ([universalmind303](https://github.com/universalmind303))
-- Perform HEAD request for HttpStore::head [\#4837](https://github.com/apache/arrow-rs/pull/4837) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)] ([tustvold](https://github.com/tustvold))
-- fix: object store http header last modified [\#4834](https://github.com/apache/arrow-rs/pull/4834) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)] ([universalmind303](https://github.com/universalmind303))
-- Prepare arrow 47.0.0 [\#4827](https://github.com/apache/arrow-rs/pull/4827) ([tustvold](https://github.com/tustvold))
-- ObjectStore Wasm32 Fixes \(\#4775\) \(\#4776\) [\#4796](https://github.com/apache/arrow-rs/pull/4796) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)] ([tustvold](https://github.com/tustvold))
-- Best effort cleanup of staged upload files \(\#4778\) [\#4792](https://github.com/apache/arrow-rs/pull/4792) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)] ([tustvold](https://github.com/tustvold))
-- Relaxing type bounds on coalesce\_ranges and collect\_bytes [\#4787](https://github.com/apache/arrow-rs/pull/4787) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)] ([sumerman](https://github.com/sumerman))
-- Update object\_store chrono deprecations [\#4786](https://github.com/apache/arrow-rs/pull/4786) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)] ([tustvold](https://github.com/tustvold))
-- Make coalesce\_ranges and collect\_bytes available for crate users [\#4784](https://github.com/apache/arrow-rs/pull/4784) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)] ([sumerman](https://github.com/sumerman))
-- Bump actions/checkout from 3 to 4 [\#4767](https://github.com/apache/arrow-rs/pull/4767) ([dependabot[bot]](https://github.com/apps/dependabot))
-- Make ObjectStore::copy Atomic and Automatically Create Parent Directories \(\#4758\) \(\#4760\) [\#4759](https://github.com/apache/arrow-rs/pull/4759) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)] ([tustvold](https://github.com/tustvold))
-- Update nix requirement from 0.26.1 to 0.27.1 in /object\_store [\#4744](https://github.com/apache/arrow-rs/pull/4744) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)] ([viirya](https://github.com/viirya))
-- Add `with_proxy_ca_certificate` and `with_proxy_excludes` [\#4714](https://github.com/apache/arrow-rs/pull/4714) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)] ([gordonwang0](https://github.com/gordonwang0))
-- Update object\_store Dependencies and Configure Dependabot [\#4700](https://github.com/apache/arrow-rs/pull/4700) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)] ([tustvold](https://github.com/tustvold))
-
-
+- Retry Safe/Read-Only Requests on Timeout [\#5278](https://github.com/apache/arrow-rs/pull/5278) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)] ([tustvold](https://github.com/tustvold))
+- Fix ObjectMeta::size for range requests \(\#5272\) [\#5276](https://github.com/apache/arrow-rs/pull/5276) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)] ([tustvold](https://github.com/tustvold))
+- docs\(object\_store\): Mention `with_allow_http` in docs of `with_endpoint` [\#5275](https://github.com/apache/arrow-rs/pull/5275) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)] ([Xuanwo](https://github.com/Xuanwo))
+- Support S3 Express One Zone [\#5268](https://github.com/apache/arrow-rs/pull/5268) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)] ([tustvold](https://github.com/tustvold))
+- feat\(object\_store\): Azure url signing [\#5259](https://github.com/apache/arrow-rs/pull/5259) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)] ([roeap](https://github.com/roeap))
+- DynamoDB ConditionalPut [\#5247](https://github.com/apache/arrow-rs/pull/5247) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)] ([tustvold](https://github.com/tustvold))
+- Default AWS region to us-east-1 \(\#5211\) [\#5244](https://github.com/apache/arrow-rs/pull/5244) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)] ([tustvold](https://github.com/tustvold))
+- ci: Fail Miri CI on first failure [\#5243](https://github.com/apache/arrow-rs/pull/5243) ([Jefffrey](https://github.com/Jefffrey))
+- Bump actions/upload-pages-artifact from 2 to 3 [\#5229](https://github.com/apache/arrow-rs/pull/5229) ([dependabot[bot]](https://github.com/apps/dependabot))
+- Bump actions/setup-python from 4 to 5 [\#5175](https://github.com/apache/arrow-rs/pull/5175) ([dependabot[bot]](https://github.com/apps/dependabot))
+- fix: ensure take\_fixed\_size\_list can handle null indices [\#5170](https://github.com/apache/arrow-rs/pull/5170) ([westonpace](https://github.com/westonpace))
+- Bump actions/labeler from 4.3.0 to 5.0.0 [\#5167](https://github.com/apache/arrow-rs/pull/5167) ([dependabot[bot]](https://github.com/apps/dependabot))
+- object\_store: fix failing doctest with default features [\#5161](https://github.com/apache/arrow-rs/pull/5161) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)] ([Jefffrey](https://github.com/Jefffrey))
+- Update rustls-pemfile requirement from 1.0 to 2.0 in /object\_store [\#5155](https://github.com/apache/arrow-rs/pull/5155) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)] ([dependabot[bot]](https://github.com/apps/dependabot))
+- Allow 403 for overwrite prevention [\#5134](https://github.com/apache/arrow-rs/pull/5134) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)] ([emcake](https://github.com/emcake))
+- Fix ObjectStore.LocalFileSystem.put\_opts for blobfuse [\#5094](https://github.com/apache/arrow-rs/pull/5094) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)] ([RobinLin666](https://github.com/RobinLin666))
+- Update itertools requirement from 0.11.0 to 0.12.0 in /object\_store [\#5077](https://github.com/apache/arrow-rs/pull/5077) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)] ([dependabot[bot]](https://github.com/apps/dependabot))
+- Add a PR under "Breaking changes" in the object\_store 0.8.0 changelog [\#5063](https://github.com/apache/arrow-rs/pull/5063) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)] ([carols10cents](https://github.com/carols10cents))
+- Prepare arrow 49.0.0 [\#5054](https://github.com/apache/arrow-rs/pull/5054) ([tustvold](https://github.com/tustvold))
+- Fix invalid\_path test [\#5026](https://github.com/apache/arrow-rs/pull/5026) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)] ([tustvold](https://github.com/tustvold))
+- Implement `copy_if_not_exist` for `AmazonS3` using DynamoDB \(\#4880\) [\#4918](https://github.com/apache/arrow-rs/pull/4918) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)] ([tustvold](https://github.com/tustvold))
 
 \* *This Changelog was automatically generated by [github_changelog_generator](https://github.com/github-changelog-generator/github-changelog-generator)*

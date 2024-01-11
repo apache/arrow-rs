@@ -180,7 +180,7 @@ impl<'a> Tape<'a> {
             TapeElement::Null => out.push_str("null"),
             TapeElement::I64(high) => match self.get(idx + 1) {
                 TapeElement::I32(low) => {
-                    let val = (high as i64) << 32 | low as i64;
+                    let val = (high as i64) << 32 | (low as u32) as i64;
                     let _ = write!(out, "{val}");
                     return idx + 2;
                 }

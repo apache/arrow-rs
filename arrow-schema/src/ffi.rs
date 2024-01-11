@@ -34,7 +34,9 @@
 //! assert_eq!(schema, back);
 //! ```
 
-use crate::{ArrowError, DataType, Field, FieldRef, Schema, TimeUnit, UnionFields, UnionMode};
+use crate::{
+    ArrowError, DataType, Field, FieldRef, IntervalUnit, Schema, TimeUnit, UnionFields, UnionMode,
+};
 use std::sync::Arc;
 use std::{
     collections::HashMap,
@@ -219,6 +221,22 @@ impl FFI_ArrowSchema {
         Ok(self)
     }
 
+    /// Takes ownership of the pointed to [`FFI_ArrowSchema`]
+    ///
+    /// This acts to [move] the data out of `schema`, setting the release callback to NULL
+    ///
+    /// # Safety
+    ///
+    /// * `schema` must be [valid] for reads and writes
+    /// * `schema` must be properly aligned
+    /// * `schema` must point to a properly initialized value of [`FFI_ArrowSchema`]
+    ///
+    /// [move]: https://arrow.apache.org/docs/format/CDataInterface.html#moving-an-array
+    /// [valid]: https://doc.rust-lang.org/std/ptr/index.html#safety
+    pub unsafe fn from_raw(schema: *mut FFI_ArrowSchema) -> Self {
+        std::ptr::replace(schema, Self::empty())
+    }
+
     pub fn empty() -> Self {
         Self {
             format: std::ptr::null_mut(),
@@ -351,6 +369,8 @@ impl Drop for FFI_ArrowSchema {
     }
 }
 
+unsafe impl Send for FFI_ArrowSchema {}
+
 impl TryFrom<&FFI_ArrowSchema> for DataType {
     type Error = ArrowError;
 
@@ -384,6 +404,9 @@ impl TryFrom<&FFI_ArrowSchema> for DataType {
             "tDm" => DataType::Duration(TimeUnit::Millisecond),
             "tDu" => DataType::Duration(TimeUnit::Microsecond),
             "tDn" => DataType::Duration(TimeUnit::Nanosecond),
+            "tiM" => DataType::Interval(IntervalUnit::YearMonth),
+            "tiD" => DataType::Interval(IntervalUnit::DayTime),
+            "tin" => DataType::Interval(IntervalUnit::MonthDayNano),
             "+l" => {
                 let c_child = c_schema.child(0);
                 DataType::List(Arc::new(Field::try_from(c_child)?))
@@ -651,6 +674,9 @@ fn get_format_string(dtype: &DataType) -> Result<String, ArrowError> {
         DataType::Duration(TimeUnit::Millisecond) => Ok("tDm".to_string()),
         DataType::Duration(TimeUnit::Microsecond) => Ok("tDu".to_string()),
         DataType::Duration(TimeUnit::Nanosecond) => Ok("tDn".to_string()),
+        DataType::Interval(IntervalUnit::YearMonth) => Ok("tiM".to_string()),
+        DataType::Interval(IntervalUnit::DayTime) => Ok("tiD".to_string()),
+        DataType::Interval(IntervalUnit::MonthDayNano) => Ok("tin".to_string()),
         DataType::List(_) => Ok("+l".to_string()),
         DataType::LargeList(_) => Ok("+L".to_string()),
         DataType::Struct(_) => Ok("+s".to_string()),

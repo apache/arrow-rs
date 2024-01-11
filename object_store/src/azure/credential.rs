@@ -24,26 +24,27 @@ use crate::RetryConfig;
 use async_trait::async_trait;
 use base64::prelude::BASE64_STANDARD;
 use base64::Engine;
-use chrono::{DateTime, Utc};
-use reqwest::header::ACCEPT;
-use reqwest::{
-    header::{
-        HeaderMap, HeaderName, HeaderValue, AUTHORIZATION, CONTENT_ENCODING, CONTENT_LANGUAGE,
-        CONTENT_LENGTH, CONTENT_TYPE, DATE, IF_MATCH, IF_MODIFIED_SINCE, IF_NONE_MATCH,
-        IF_UNMODIFIED_SINCE, RANGE,
-    },
-    Client, Method, RequestBuilder,
+use chrono::{DateTime, SecondsFormat, Utc};
+use reqwest::header::{
+    HeaderMap, HeaderName, HeaderValue, ACCEPT, AUTHORIZATION, CONTENT_ENCODING, CONTENT_LANGUAGE,
+    CONTENT_LENGTH, CONTENT_TYPE, DATE, IF_MATCH, IF_MODIFIED_SINCE, IF_NONE_MATCH,
+    IF_UNMODIFIED_SINCE, RANGE,
 };
+use reqwest::{Client, Method, Request, RequestBuilder};
 use serde::Deserialize;
 use snafu::{ResultExt, Snafu};
 use std::borrow::Cow;
+use std::collections::HashMap;
+use std::fmt::Debug;
 use std::process::Command;
 use std::str;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 use url::Url;
 
-static AZURE_VERSION: HeaderValue = HeaderValue::from_static("2021-08-06");
+use super::client::UserDelegationKey;
+
+static AZURE_VERSION: HeaderValue = HeaderValue::from_static("2023-11-03");
 static VERSION: HeaderName = HeaderName::from_static("x-ms-version");
 pub(crate) static BLOB_TYPE: HeaderName = HeaderName::from_static("x-ms-blob-type");
 pub(crate) static DELETE_SNAPSHOTS: HeaderName = HeaderName::from_static("x-ms-delete-snapshots");
@@ -83,6 +84,9 @@ pub enum Error {
 
     #[snafu(display("Failed to parse azure cli response: {source}"))]
     AzureCliResponse { source: serde_json::Error },
+
+    #[snafu(display("Generating SAS keys with SAS tokens auth is not supported"))]
+    SASforSASNotSupported,
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
@@ -97,7 +101,7 @@ impl From<Error> for crate::Error {
 }
 
 /// A shared Azure Storage Account Key
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Debug, Clone, Eq, PartialEq)]
 pub struct AzureAccessKey(Vec<u8>);
 
 impl AzureAccessKey {
@@ -137,33 +141,86 @@ pub mod authority_hosts {
     pub const AZURE_PUBLIC_CLOUD: &str = "https://login.microsoftonline.com";
 }
 
-pub(crate) trait CredentialExt {
-    /// Apply authorization to requests against azure storage accounts
-    /// <https://docs.microsoft.com/en-us/rest/api/storageservices/authorize-requests-to-azure-storage>
-    fn with_azure_authorization(self, credential: &AzureCredential, account: &str) -> Self;
+pub(crate) struct AzureSigner {
+    signing_key: AzureAccessKey,
+    start: DateTime<Utc>,
+    end: DateTime<Utc>,
+    account: String,
+    delegation_key: Option<UserDelegationKey>,
 }
 
-impl CredentialExt for RequestBuilder {
-    fn with_azure_authorization(mut self, credential: &AzureCredential, account: &str) -> Self {
+impl AzureSigner {
+    pub fn new(
+        signing_key: AzureAccessKey,
+        account: String,
+        start: DateTime<Utc>,
+        end: DateTime<Utc>,
+        delegation_key: Option<UserDelegationKey>,
+    ) -> Self {
+        Self {
+            signing_key,
+            account,
+            start,
+            end,
+            delegation_key,
+        }
+    }
+
+    pub fn sign(&self, method: &Method, url: &mut Url) -> Result<()> {
+        let (str_to_sign, query_pairs) = match &self.delegation_key {
+            Some(delegation_key) => string_to_sign_user_delegation_sas(
+                url,
+                method,
+                &self.account,
+                &self.start,
+                &self.end,
+                delegation_key,
+            ),
+            None => string_to_sign_service_sas(url, method, &self.account, &self.start, &self.end),
+        };
+        let auth = hmac_sha256(&self.signing_key.0, str_to_sign);
+        url.query_pairs_mut().extend_pairs(query_pairs);
+        url.query_pairs_mut()
+            .append_pair("sig", BASE64_STANDARD.encode(auth).as_str());
+        Ok(())
+    }
+}
+
+/// Authorize a [`Request`] with an [`AzureAuthorizer`]
+#[derive(Debug)]
+pub struct AzureAuthorizer<'a> {
+    credential: &'a AzureCredential,
+    account: &'a str,
+}
+
+impl<'a> AzureAuthorizer<'a> {
+    /// Create a new [`AzureAuthorizer`]
+    pub fn new(credential: &'a AzureCredential, account: &'a str) -> Self {
+        AzureAuthorizer {
+            credential,
+            account,
+        }
+    }
+
+    /// Authorize `request`
+    pub fn authorize(&self, request: &mut Request) {
         // rfc2822 string should never contain illegal characters
         let date = Utc::now();
         let date_str = date.format(RFC1123_FMT).to_string();
         // we formatted the data string ourselves, so unwrapping should be fine
         let date_val = HeaderValue::from_str(&date_str).unwrap();
-        self = self
-            .header(DATE, &date_val)
-            .header(&VERSION, &AZURE_VERSION);
+        request.headers_mut().insert(DATE, date_val);
+        request
+            .headers_mut()
+            .insert(&VERSION, AZURE_VERSION.clone());
 
-        match credential {
+        match self.credential {
             AzureCredential::AccessKey(key) => {
-                let (client, request) = self.build_split();
-                let mut request = request.expect("request valid");
-
                 let signature = generate_authorization(
                     request.headers(),
                     request.url(),
                     request.method(),
-                    account,
+                    self.account,
                     key,
                 );
 
@@ -173,12 +230,37 @@ impl CredentialExt for RequestBuilder {
                     AUTHORIZATION,
                     HeaderValue::from_str(signature.as_str()).unwrap(),
                 );
-
-                Self::from_parts(client, request)
             }
-            AzureCredential::BearerToken(token) => self.bearer_auth(token),
-            AzureCredential::SASToken(query_pairs) => self.query(&query_pairs),
+            AzureCredential::BearerToken(token) => {
+                request.headers_mut().append(
+                    AUTHORIZATION,
+                    HeaderValue::from_str(format!("Bearer {}", token).as_str()).unwrap(),
+                );
+            }
+            AzureCredential::SASToken(query_pairs) => {
+                request
+                    .url_mut()
+                    .query_pairs_mut()
+                    .extend_pairs(query_pairs);
+            }
         }
+    }
+}
+
+pub(crate) trait CredentialExt {
+    /// Apply authorization to requests against azure storage accounts
+    /// <https://docs.microsoft.com/en-us/rest/api/storageservices/authorize-requests-to-azure-storage>
+    fn with_azure_authorization(self, credential: &AzureCredential, account: &str) -> Self;
+}
+
+impl CredentialExt for RequestBuilder {
+    fn with_azure_authorization(self, credential: &AzureCredential, account: &str) -> Self {
+        let (client, request) = self.build_split();
+        let mut request = request.expect("request valid");
+
+        AzureAuthorizer::new(credential, account).authorize(&mut request);
+
+        Self::from_parts(client, request)
     }
 }
 
@@ -203,6 +285,152 @@ fn add_if_exists<'a>(h: &'a HeaderMap, key: &HeaderName) -> &'a str {
         .ok()
         .flatten()
         .unwrap_or_default()
+}
+
+fn string_to_sign_sas(
+    u: &Url,
+    method: &Method,
+    account: &str,
+    start: &DateTime<Utc>,
+    end: &DateTime<Utc>,
+) -> (String, String, String, String, String) {
+    // NOTE: for now only blob signing is supported.
+    let signed_resource = "b".to_string();
+
+    // https://learn.microsoft.com/en-us/rest/api/storageservices/create-service-sas#permissions-for-a-directory-container-or-blob
+    let signed_permissions = match *method {
+        // read and list permissions
+        Method::GET => match signed_resource.as_str() {
+            "c" => "rl",
+            "b" => "r",
+            _ => unreachable!(),
+        },
+        // write permissions (also allows crating a new blob in a sub-key)
+        Method::PUT => "w",
+        // delete permissions
+        Method::DELETE => "d",
+        // other methods are not used in any of the current operations
+        _ => "",
+    }
+    .to_string();
+    let signed_start = start.to_rfc3339_opts(SecondsFormat::Secs, true);
+    let signed_expiry = end.to_rfc3339_opts(SecondsFormat::Secs, true);
+    let canonicalized_resource = if u.host_str().unwrap_or_default().contains(account) {
+        format!("/blob/{}{}", account, u.path())
+    } else {
+        // NOTE: in case of the emulator, the account name is not part of the host
+        //      but the path starts with the account name
+        format!("/blob{}", u.path())
+    };
+
+    (
+        signed_resource,
+        signed_permissions,
+        signed_start,
+        signed_expiry,
+        canonicalized_resource,
+    )
+}
+
+/// Create a string to be signed for authorization via [service sas].
+///
+/// [service sas]: https://learn.microsoft.com/en-us/rest/api/storageservices/create-service-sas#version-2020-12-06-and-later
+fn string_to_sign_service_sas(
+    u: &Url,
+    method: &Method,
+    account: &str,
+    start: &DateTime<Utc>,
+    end: &DateTime<Utc>,
+) -> (String, HashMap<&'static str, String>) {
+    let (signed_resource, signed_permissions, signed_start, signed_expiry, canonicalized_resource) =
+        string_to_sign_sas(u, method, account, start, end);
+
+    let string_to_sign = format!(
+        "{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}",
+        signed_permissions,
+        signed_start,
+        signed_expiry,
+        canonicalized_resource,
+        "",                               // signed identifier
+        "",                               // signed ip
+        "",                               // signed protocol
+        &AZURE_VERSION.to_str().unwrap(), // signed version
+        signed_resource,                  // signed resource
+        "",                               // signed snapshot time
+        "",                               // signed encryption scope
+        "",                               // rscc - response header: Cache-Control
+        "",                               // rscd - response header: Content-Disposition
+        "",                               // rsce - response header: Content-Encoding
+        "",                               // rscl - response header: Content-Language
+        "",                               // rsct - response header: Content-Type
+    );
+
+    let mut pairs = HashMap::new();
+    pairs.insert("sv", AZURE_VERSION.to_str().unwrap().to_string());
+    pairs.insert("sp", signed_permissions);
+    pairs.insert("st", signed_start);
+    pairs.insert("se", signed_expiry);
+    pairs.insert("sr", signed_resource);
+
+    (string_to_sign, pairs)
+}
+
+/// Create a string to be signed for authorization via [user delegation sas].
+///
+/// [user delegation sas]: https://learn.microsoft.com/en-us/rest/api/storageservices/create-user-delegation-sas#version-2020-12-06-and-later
+fn string_to_sign_user_delegation_sas(
+    u: &Url,
+    method: &Method,
+    account: &str,
+    start: &DateTime<Utc>,
+    end: &DateTime<Utc>,
+    delegation_key: &UserDelegationKey,
+) -> (String, HashMap<&'static str, String>) {
+    let (signed_resource, signed_permissions, signed_start, signed_expiry, canonicalized_resource) =
+        string_to_sign_sas(u, method, account, start, end);
+
+    let string_to_sign = format!(
+        "{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}",
+        signed_permissions,
+        signed_start,
+        signed_expiry,
+        canonicalized_resource,
+        delegation_key.signed_oid,        // signed key object id
+        delegation_key.signed_tid,        // signed key tenant id
+        delegation_key.signed_start,      // signed key start
+        delegation_key.signed_expiry,     // signed key expiry
+        delegation_key.signed_service,    // signed key service
+        delegation_key.signed_version,    // signed key version
+        "",                               // signed authorized user object id
+        "",                               // signed unauthorized user object id
+        "",                               // signed correlation id
+        "",                               // signed ip
+        "",                               // signed protocol
+        &AZURE_VERSION.to_str().unwrap(), // signed version
+        signed_resource,                  // signed resource
+        "",                               // signed snapshot time
+        "",                               // signed encryption scope
+        "",                               // rscc - response header: Cache-Control
+        "",                               // rscd - response header: Content-Disposition
+        "",                               // rsce - response header: Content-Encoding
+        "",                               // rscl - response header: Content-Language
+        "",                               // rsct - response header: Content-Type
+    );
+
+    let mut pairs = HashMap::new();
+    pairs.insert("sv", AZURE_VERSION.to_str().unwrap().to_string());
+    pairs.insert("sp", signed_permissions);
+    pairs.insert("st", signed_start);
+    pairs.insert("se", signed_expiry);
+    pairs.insert("sr", signed_resource);
+    pairs.insert("skoid", delegation_key.signed_oid.clone());
+    pairs.insert("sktid", delegation_key.signed_tid.clone());
+    pairs.insert("skt", delegation_key.signed_start.clone());
+    pairs.insert("ske", delegation_key.signed_expiry.clone());
+    pairs.insert("sks", delegation_key.signed_service.clone());
+    pairs.insert("skv", delegation_key.signed_version.clone());
+
+    (string_to_sign, pairs)
 }
 
 /// <https://docs.microsoft.com/en-us/rest/api/storageservices/authorize-with-shared-key#constructing-the-signature-string>
@@ -232,7 +460,7 @@ fn string_to_sign(h: &HeaderMap, u: &Url, method: &Method, account: &str) -> Str
         add_if_exists(h, &IF_UNMODIFIED_SINCE),
         add_if_exists(h, &RANGE),
         canonicalize_header(h),
-        canonicalized_resource(account, u)
+        canonicalize_resource(account, u)
     )
 }
 
@@ -257,7 +485,7 @@ fn canonicalize_header(headers: &HeaderMap) -> String {
 }
 
 /// <https://docs.microsoft.com/en-us/rest/api/storageservices/authorize-with-shared-key#constructing-the-canonicalized-resource-string>
-fn canonicalized_resource(account: &str, uri: &Url) -> String {
+fn canonicalize_resource(account: &str, uri: &Url) -> String {
     let mut can_res: String = String::new();
     can_res.push('/');
     can_res.push_str(account);
@@ -681,13 +909,14 @@ impl CredentialProvider for AzureCliCredential {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::client::mock_server::MockServer;
     use futures::executor::block_on;
     use hyper::body::to_bytes;
     use hyper::{Body, Response};
     use reqwest::{Client, Method};
     use tempfile::NamedTempFile;
+
+    use super::*;
+    use crate::client::mock_server::MockServer;
 
     #[tokio::test]
     async fn test_managed_identity() {

@@ -16,9 +16,15 @@
 // under the License.
 
 //! Common logic for interacting with remote object stores
+use std::{
+    fmt::Display,
+    ops::{Range, RangeBounds},
+};
+
 use super::Result;
 use bytes::Bytes;
 use futures::{stream::StreamExt, Stream, TryStreamExt};
+use snafu::Snafu;
 
 #[cfg(any(feature = "azure", feature = "http"))]
 pub static RFC1123_FMT: &str = "%a, %d %h %Y %T GMT";
@@ -98,12 +104,12 @@ pub const OBJECT_STORE_COALESCE_PARALLEL: usize = 10;
 /// * Make multiple `fetch` requests in parallel (up to maximum of 10)
 ///
 pub async fn coalesce_ranges<F, E, Fut>(
-    ranges: &[std::ops::Range<usize>],
+    ranges: &[Range<usize>],
     fetch: F,
     coalesce: usize,
 ) -> Result<Vec<Bytes>, E>
 where
-    F: Send + FnMut(std::ops::Range<usize>) -> Fut,
+    F: Send + FnMut(Range<usize>) -> Fut,
     E: Send,
     Fut: std::future::Future<Output = Result<Bytes, E>> + Send,
 {
@@ -124,13 +130,13 @@ where
 
             let start = range.start - fetch_range.start;
             let end = range.end - fetch_range.start;
-            fetch_bytes.slice(start..end)
+            fetch_bytes.slice(start..end.min(fetch_bytes.len()))
         })
         .collect())
 }
 
 /// Returns a sorted list of ranges that cover `ranges`
-fn merge_ranges(ranges: &[std::ops::Range<usize>], coalesce: usize) -> Vec<std::ops::Range<usize>> {
+fn merge_ranges(ranges: &[Range<usize>], coalesce: usize) -> Vec<Range<usize>> {
     if ranges.is_empty() {
         return vec![];
     }
@@ -165,6 +171,119 @@ fn merge_ranges(ranges: &[std::ops::Range<usize>], coalesce: usize) -> Vec<std::
     }
 
     ret
+}
+
+/// Request only a portion of an object's bytes
+///
+/// These can be created from [usize] ranges, like
+///
+/// ```rust
+/// # use object_store::GetRange;
+/// let range1: GetRange = (50..150).into();
+/// let range2: GetRange = (50..=150).into();
+/// let range3: GetRange = (50..).into();
+/// let range4: GetRange = (..150).into();
+/// ```
+///
+/// Implementations may wish to inspect [`GetResult`] for the exact byte
+/// range returned.
+///
+/// [`GetResult`]: crate::GetResult
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub enum GetRange {
+    /// Request a specific range of bytes
+    ///
+    /// If the given range is zero-length or starts after the end of the object,
+    /// an error will be returned. Additionally, if the range ends after the end
+    /// of the object, the entire remainder of the object will be returned.
+    /// Otherwise, the exact requested range will be returned.
+    Bounded(Range<usize>),
+    /// Request all bytes starting from a given byte offset
+    Offset(usize),
+    /// Request up to the last n bytes
+    Suffix(usize),
+}
+
+#[derive(Debug, Snafu)]
+pub(crate) enum InvalidGetRange {
+    #[snafu(display(
+        "Wanted range starting at {requested}, but object was only {length} bytes long"
+    ))]
+    StartTooLarge { requested: usize, length: usize },
+
+    #[snafu(display("Range started at {start} and ended at {end}"))]
+    Inconsistent { start: usize, end: usize },
+}
+
+impl GetRange {
+    pub(crate) fn is_valid(&self) -> Result<(), InvalidGetRange> {
+        match self {
+            Self::Bounded(r) if r.end <= r.start => {
+                return Err(InvalidGetRange::Inconsistent {
+                    start: r.start,
+                    end: r.end,
+                });
+            }
+            _ => (),
+        };
+        Ok(())
+    }
+
+    /// Convert to a [`Range`] if valid.
+    pub(crate) fn as_range(&self, len: usize) -> Result<Range<usize>, InvalidGetRange> {
+        self.is_valid()?;
+        match self {
+            Self::Bounded(r) => {
+                if r.start >= len {
+                    Err(InvalidGetRange::StartTooLarge {
+                        requested: r.start,
+                        length: len,
+                    })
+                } else if r.end > len {
+                    Ok(r.start..len)
+                } else {
+                    Ok(r.clone())
+                }
+            }
+            Self::Offset(o) => {
+                if *o >= len {
+                    Err(InvalidGetRange::StartTooLarge {
+                        requested: *o,
+                        length: len,
+                    })
+                } else {
+                    Ok(*o..len)
+                }
+            }
+            Self::Suffix(n) => Ok(len.saturating_sub(*n)..len),
+        }
+    }
+}
+
+impl Display for GetRange {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Bounded(r) => write!(f, "bytes={}-{}", r.start, r.end - 1),
+            Self::Offset(o) => write!(f, "bytes={o}-"),
+            Self::Suffix(n) => write!(f, "bytes=-{n}"),
+        }
+    }
+}
+
+impl<T: RangeBounds<usize>> From<T> for GetRange {
+    fn from(value: T) -> Self {
+        use std::ops::Bound::*;
+        let first = match value.start_bound() {
+            Included(i) => *i,
+            Excluded(i) => i + 1,
+            Unbounded => 0,
+        };
+        match value.end_bound() {
+            Included(i) => Self::Bounded(first..(i + 1)),
+            Excluded(i) => Self::Bounded(first..*i),
+            Unbounded => Self::Offset(first),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -268,5 +387,60 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn getrange_str() {
+        assert_eq!(GetRange::Offset(0).to_string(), "bytes=0-");
+        assert_eq!(GetRange::Bounded(10..19).to_string(), "bytes=10-18");
+        assert_eq!(GetRange::Suffix(10).to_string(), "bytes=-10");
+    }
+
+    #[test]
+    fn getrange_from() {
+        assert_eq!(Into::<GetRange>::into(10..15), GetRange::Bounded(10..15),);
+        assert_eq!(Into::<GetRange>::into(10..=15), GetRange::Bounded(10..16),);
+        assert_eq!(Into::<GetRange>::into(10..), GetRange::Offset(10),);
+        assert_eq!(Into::<GetRange>::into(..=15), GetRange::Bounded(0..16));
+    }
+
+    #[test]
+    fn test_as_range() {
+        let range = GetRange::Bounded(2..5);
+        assert_eq!(range.as_range(5).unwrap(), 2..5);
+
+        let range = range.as_range(4).unwrap();
+        assert_eq!(range, 2..4);
+
+        let range = GetRange::Bounded(3..3);
+        let err = range.as_range(2).unwrap_err().to_string();
+        assert_eq!(err, "Range started at 3 and ended at 3");
+
+        let range = GetRange::Bounded(2..2);
+        let err = range.as_range(3).unwrap_err().to_string();
+        assert_eq!(err, "Range started at 2 and ended at 2");
+
+        let range = GetRange::Suffix(3);
+        assert_eq!(range.as_range(3).unwrap(), 0..3);
+        assert_eq!(range.as_range(2).unwrap(), 0..2);
+
+        let range = GetRange::Suffix(0);
+        assert_eq!(range.as_range(0).unwrap(), 0..0);
+
+        let range = GetRange::Offset(2);
+        let err = range.as_range(2).unwrap_err().to_string();
+        assert_eq!(
+            err,
+            "Wanted range starting at 2, but object was only 2 bytes long"
+        );
+
+        let err = range.as_range(1).unwrap_err().to_string();
+        assert_eq!(
+            err,
+            "Wanted range starting at 2, but object was only 1 bytes long"
+        );
+
+        let range = GetRange::Offset(1);
+        assert_eq!(range.as_range(2).unwrap(), 1..2);
     }
 }

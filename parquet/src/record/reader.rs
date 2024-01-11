@@ -99,10 +99,7 @@ impl TreeBuilder {
         row_group_reader: &dyn RowGroupReader,
     ) -> Result<ReaderIter> {
         let num_records = row_group_reader.metadata().num_rows() as usize;
-        Ok(ReaderIter::new(
-            self.build(descr, row_group_reader)?,
-            num_records,
-        ))
+        ReaderIter::new(self.build(descr, row_group_reader)?, num_records)
     }
 
     /// Builds tree of readers for the current schema recursively.
@@ -274,12 +271,12 @@ impl TreeBuilder {
                         row_group_reader,
                     )?;
 
-                    Reader::RepeatedReader(
+                    return Ok(Reader::RepeatedReader(
                         field,
                         curr_def_level - 1,
                         curr_rep_level - 1,
                         Box::new(reader),
-                    )
+                    ));
                 }
                 // Group types (structs)
                 _ => {
@@ -411,7 +408,7 @@ impl Reader {
                 if reader.current_def_level() > def_level {
                     reader.read_field()?
                 } else {
-                    reader.advance_columns();
+                    reader.advance_columns()?;
                     Field::Null
                 }
             }
@@ -423,7 +420,7 @@ impl Reader {
                     {
                         fields.push((String::from(reader.field_name()), reader.read_field()?));
                     } else {
-                        reader.advance_columns();
+                        reader.advance_columns()?;
                         fields.push((String::from(reader.field_name()), Field::Null));
                     }
                 }
@@ -436,7 +433,7 @@ impl Reader {
                     if reader.current_def_level() > def_level {
                         elements.push(reader.read_field()?);
                     } else {
-                        reader.advance_columns();
+                        reader.advance_columns()?;
                         // If the current definition level is equal to the definition
                         // level of this repeated type, then the
                         // result is an empty list and the repetition level
@@ -459,8 +456,8 @@ impl Reader {
                     if keys.current_def_level() > def_level {
                         pairs.push((keys.read_field()?, values.read_field()?));
                     } else {
-                        keys.advance_columns();
-                        values.advance_columns();
+                        keys.advance_columns()?;
+                        values.advance_columns()?;
                         // If the current definition level is equal to the definition
                         // level of this repeated type, then the
                         // result is an empty list and the repetition level
@@ -553,25 +550,20 @@ impl Reader {
     }
 
     /// Advances leaf columns for the current reader.
-    fn advance_columns(&mut self) {
+    fn advance_columns(&mut self) -> Result<()> {
         match *self {
-            Reader::PrimitiveReader(_, ref mut column) => {
-                column.read_next().unwrap();
-            }
-            Reader::OptionReader(_, ref mut reader) => {
-                reader.advance_columns();
-            }
+            Reader::PrimitiveReader(_, ref mut column) => column.read_next().map(|_| ()),
+            Reader::OptionReader(_, ref mut reader) => reader.advance_columns(),
             Reader::GroupReader(_, _, ref mut readers) => {
                 for reader in readers {
-                    reader.advance_columns();
+                    reader.advance_columns()?;
                 }
+                Ok(())
             }
-            Reader::RepeatedReader(_, _, _, ref mut reader) => {
-                reader.advance_columns();
-            }
+            Reader::RepeatedReader(_, _, _, ref mut reader) => reader.advance_columns(),
             Reader::KeyValueReader(_, _, _, ref mut keys, ref mut values) => {
-                keys.advance_columns();
-                values.advance_columns();
+                keys.advance_columns()?;
+                values.advance_columns()
             }
         }
     }
@@ -609,9 +601,20 @@ impl<'a> Either<'a> {
     }
 }
 
-/// Iterator of [`Row`]s.
-/// It is used either for a single row group to iterate over data in that row group, or
-/// an entire file with auto buffering of all row groups.
+/// Access parquet data as an iterator of [`Row`]
+///
+/// # Caveats
+///
+/// Parquet stores data in a columnar fashion using [Dremel] encoding, and is therefore highly
+/// optimised for reading data by column, not row. As a consequence applications concerned with
+/// performance should prefer the columnar arrow or [ColumnReader] APIs.
+///
+/// Additionally the current implementation does not correctly handle repeated fields ([#2394]),
+/// and workloads looking to handle such schema should use the other APIs.
+///
+/// [#2394]: https://github.com/apache/arrow-rs/issues/2394
+/// [ColumnReader]: crate::file::reader::RowGroupReader::get_column_reader
+/// [Dremel]: https://research.google/pubs/pub36632/
 pub struct RowIter<'a> {
     descr: SchemaDescPtr,
     tree_builder: TreeBuilder,
@@ -773,13 +776,13 @@ pub struct ReaderIter {
 }
 
 impl ReaderIter {
-    fn new(mut root_reader: Reader, num_records: usize) -> Self {
+    fn new(mut root_reader: Reader, num_records: usize) -> Result<Self> {
         // Prepare root reader by advancing all column vectors
-        root_reader.advance_columns();
-        Self {
+        root_reader.advance_columns()?;
+        Ok(Self {
             root_reader,
             records_left: num_records,
-        }
+        })
     }
 }
 
@@ -800,11 +803,14 @@ impl Iterator for ReaderIter {
 mod tests {
     use super::*;
 
+    use crate::data_type::Int64Type;
     use crate::errors::Result;
     use crate::file::reader::{FileReader, SerializedFileReader};
+    use crate::file::writer::SerializedFileWriter;
     use crate::record::api::{Field, Row, RowAccessor};
     use crate::schema::parser::parse_message_type;
     use crate::util::test_common::file_util::{get_test_file, get_test_path};
+    use bytes::Bytes;
     use std::convert::TryFrom;
 
     // Convenient macros to assemble row, list, map, and group.
@@ -1564,6 +1570,106 @@ mod tests {
                     )]
                 )
             ],
+        ];
+
+        assert_eq!(rows, expected_rows);
+    }
+
+    #[test]
+    fn test_tree_reader_handle_nested_repeated_fields_with_no_annotation() {
+        // Create schema
+        let schema = Arc::new(
+            parse_message_type(
+                "
+            message schema {
+                REPEATED group level1 {
+                    REPEATED group level2 {
+                        REQUIRED group level3 {
+                            REQUIRED INT64 value3;
+                        }
+                    }
+                    REQUIRED INT64 value1;
+                }
+            }",
+            )
+            .unwrap(),
+        );
+
+        // Write Parquet file to buffer
+        let mut buffer: Vec<u8> = Vec::new();
+        let mut file_writer =
+            SerializedFileWriter::new(&mut buffer, schema, Default::default()).unwrap();
+        let mut row_group_writer = file_writer.next_row_group().unwrap();
+
+        // Write column level1.level2.level3.value3
+        let mut column_writer = row_group_writer.next_column().unwrap().unwrap();
+        column_writer
+            .typed::<Int64Type>()
+            .write_batch(&[30, 31, 32], Some(&[2, 2, 2]), Some(&[0, 0, 0]))
+            .unwrap();
+        column_writer.close().unwrap();
+
+        // Write column level1.value1
+        let mut column_writer = row_group_writer.next_column().unwrap().unwrap();
+        column_writer
+            .typed::<Int64Type>()
+            .write_batch(&[10, 11, 12], Some(&[1, 1, 1]), Some(&[0, 0, 0]))
+            .unwrap();
+        column_writer.close().unwrap();
+
+        // Finalize Parquet file
+        row_group_writer.close().unwrap();
+        file_writer.close().unwrap();
+        assert_eq!(&buffer[0..4], b"PAR1");
+
+        // Read Parquet file from buffer
+        let file_reader = SerializedFileReader::new(Bytes::from(buffer)).unwrap();
+        let rows: Vec<_> = file_reader
+            .get_row_iter(None)
+            .unwrap()
+            .map(|row| row.unwrap())
+            .collect();
+
+        let expected_rows = vec![
+            row![(
+                "level1".to_string(),
+                list![group![
+                    (
+                        "level2".to_string(),
+                        list![group![(
+                            "level3".to_string(),
+                            group![("value3".to_string(), Field::Long(30))]
+                        )]]
+                    ),
+                    ("value1".to_string(), Field::Long(10))
+                ]]
+            )],
+            row![(
+                "level1".to_string(),
+                list![group![
+                    (
+                        "level2".to_string(),
+                        list![group![(
+                            "level3".to_string(),
+                            group![("value3".to_string(), Field::Long(31))]
+                        )]]
+                    ),
+                    ("value1".to_string(), Field::Long(11))
+                ]]
+            )],
+            row![(
+                "level1".to_string(),
+                list![group![
+                    (
+                        "level2".to_string(),
+                        list![group![(
+                            "level3".to_string(),
+                            group![("value3".to_string(), Field::Long(32))]
+                        )]]
+                    ),
+                    ("value1".to_string(), Field::Long(12))
+                ]]
+            )],
         ];
 
         assert_eq!(rows, expected_rows);

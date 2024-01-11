@@ -575,6 +575,10 @@ impl Iterator for ParquetRecordBatchReader {
 }
 
 impl RecordBatchReader for ParquetRecordBatchReader {
+    /// Returns the projected [`SchemaRef`] for reading the parquet file.
+    ///
+    /// Note that the schema metadata will be stripped here. See
+    /// [`ParquetRecordBatchReaderBuilder::schema`] if the metadata is desired.
     fn schema(&self) -> SchemaRef {
         self.schema.clone()
     }
@@ -673,11 +677,16 @@ pub(crate) fn apply_range(
     selection
 }
 
-/// Evaluates an [`ArrowPredicate`] returning the [`RowSelection`]
+/// Evaluates an [`ArrowPredicate`], returning a [`RowSelection`] indicating
+/// which rows to return.
 ///
-/// If this [`ParquetRecordBatchReader`] has a [`RowSelection`], the
-/// returned [`RowSelection`] will be the conjunction of this and
-/// the rows selected by `predicate`
+/// `input_selection`: Optional pre-existing selection. If `Some`, then the
+/// final [`RowSelection`] will be the conjunction of it and the rows selected
+/// by `predicate`.
+///
+/// Note: A pre-existing selection may come from evaluating a previous predicate
+/// or if the [`ParquetRecordBatchReader`] specified an explicit
+/// [`RowSelection`] in addition to one or more predicates.
 pub(crate) fn evaluate_predicate(
     batch_size: usize,
     array_reader: Box<dyn ArrayReader>,
@@ -687,7 +696,16 @@ pub(crate) fn evaluate_predicate(
     let reader = ParquetRecordBatchReader::new(batch_size, array_reader, input_selection.clone());
     let mut filters = vec![];
     for maybe_batch in reader {
-        let filter = predicate.evaluate(maybe_batch?)?;
+        let maybe_batch = maybe_batch?;
+        let input_rows = maybe_batch.num_rows();
+        let filter = predicate.evaluate(maybe_batch)?;
+        // Since user supplied predicate, check error here to catch bugs quickly
+        if filter.len() != input_rows {
+            return Err(arrow_err!(
+                "ArrowPredicate predicate returned {} rows, expected {input_rows}",
+                filter.len()
+            ));
+        }
         match filter.null_count() {
             0 => filters.push(filter),
             _ => filters.push(prep_null_mask_filter(&filter)),
@@ -712,13 +730,14 @@ mod tests {
     use std::sync::Arc;
 
     use bytes::Bytes;
+    use half::f16;
     use num::PrimInt;
     use rand::{thread_rng, Rng, RngCore};
     use tempfile::tempfile;
 
     use arrow_array::builder::*;
     use arrow_array::cast::AsArray;
-    use arrow_array::types::{Decimal128Type, Decimal256Type, DecimalType};
+    use arrow_array::types::{Decimal128Type, Decimal256Type, DecimalType, Float16Type};
     use arrow_array::*;
     use arrow_array::{RecordBatch, RecordBatchReader};
     use arrow_buffer::{i256, ArrowNativeType, Buffer};
@@ -922,6 +941,66 @@ mod tests {
             .as_any()
             .downcast_ref::<UInt64Array>()
             .unwrap();
+    }
+
+    #[test]
+    fn test_float16_roundtrip() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("float16", ArrowDataType::Float16, false),
+            Field::new("float16-nullable", ArrowDataType::Float16, true),
+        ]));
+
+        let mut buf = Vec::with_capacity(1024);
+        let mut writer = ArrowWriter::try_new(&mut buf, schema.clone(), None)?;
+
+        let original = RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(Float16Array::from_iter_values([
+                    f16::EPSILON,
+                    f16::MIN,
+                    f16::MAX,
+                    f16::NAN,
+                    f16::INFINITY,
+                    f16::NEG_INFINITY,
+                    f16::ONE,
+                    f16::NEG_ONE,
+                    f16::ZERO,
+                    f16::NEG_ZERO,
+                    f16::E,
+                    f16::PI,
+                    f16::FRAC_1_PI,
+                ])),
+                Arc::new(Float16Array::from(vec![
+                    None,
+                    None,
+                    None,
+                    Some(f16::NAN),
+                    Some(f16::INFINITY),
+                    Some(f16::NEG_INFINITY),
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    Some(f16::FRAC_1_PI),
+                ])),
+            ],
+        )?;
+
+        writer.write(&original)?;
+        writer.close()?;
+
+        let mut reader = ParquetRecordBatchReader::try_new(Bytes::from(buf), 1024)?;
+        let ret = reader.next().unwrap()?;
+        assert_eq!(ret, original);
+
+        // Ensure can be downcast to the correct type
+        ret.column(0).as_primitive::<Float16Type>();
+        ret.column(1).as_primitive::<Float16Type>();
+
+        Ok(())
     }
 
     struct RandFixedLenGen {}
@@ -1253,6 +1332,62 @@ mod tests {
                 assert_eq!(col.value(i), v * 100_i128);
             }
         }
+    }
+
+    #[test]
+    fn test_read_float16_nonzeros_file() {
+        use arrow_array::Float16Array;
+        let testdata = arrow::util::test_util::parquet_test_data();
+        // see https://github.com/apache/parquet-testing/pull/40
+        let path = format!("{testdata}/float16_nonzeros_and_nans.parquet");
+        let file = File::open(path).unwrap();
+        let mut record_reader = ParquetRecordBatchReader::try_new(file, 32).unwrap();
+
+        let batch = record_reader.next().unwrap().unwrap();
+        assert_eq!(batch.num_rows(), 8);
+        let col = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<Float16Array>()
+            .unwrap();
+
+        let f16_two = f16::ONE + f16::ONE;
+
+        assert_eq!(col.null_count(), 1);
+        assert!(col.is_null(0));
+        assert_eq!(col.value(1), f16::ONE);
+        assert_eq!(col.value(2), -f16_two);
+        assert!(col.value(3).is_nan());
+        assert_eq!(col.value(4), f16::ZERO);
+        assert!(col.value(4).is_sign_positive());
+        assert_eq!(col.value(5), f16::NEG_ONE);
+        assert_eq!(col.value(6), f16::NEG_ZERO);
+        assert!(col.value(6).is_sign_negative());
+        assert_eq!(col.value(7), f16_two);
+    }
+
+    #[test]
+    fn test_read_float16_zeros_file() {
+        use arrow_array::Float16Array;
+        let testdata = arrow::util::test_util::parquet_test_data();
+        // see https://github.com/apache/parquet-testing/pull/40
+        let path = format!("{testdata}/float16_zeros_and_nans.parquet");
+        let file = File::open(path).unwrap();
+        let mut record_reader = ParquetRecordBatchReader::try_new(file, 32).unwrap();
+
+        let batch = record_reader.next().unwrap().unwrap();
+        assert_eq!(batch.num_rows(), 3);
+        let col = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<Float16Array>()
+            .unwrap();
+
+        assert_eq!(col.null_count(), 1);
+        assert!(col.is_null(0));
+        assert_eq!(col.value(1), f16::ZERO);
+        assert!(col.value(1).is_sign_positive());
+        assert!(col.value(2).is_nan());
     }
 
     /// Parameters for single_column_reader_test

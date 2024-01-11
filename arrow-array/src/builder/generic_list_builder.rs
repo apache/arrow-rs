@@ -353,7 +353,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::builder::{Int32Builder, ListBuilder};
+    use crate::builder::{make_builder, Int32Builder, ListBuilder};
     use crate::cast::AsArray;
     use crate::types::Int32Type;
     use crate::{Array, Int32Array};
@@ -547,5 +547,222 @@ mod tests {
         assert_eq!(elements.values(), &[1, 2, 7, 0, 4, 5]);
         assert_eq!(elements.null_count(), 1);
         assert!(elements.is_null(3));
+    }
+
+    #[test]
+    fn test_boxed_primitive_aray_builder() {
+        let values_builder = make_builder(&DataType::Int32, 5);
+        let mut builder = ListBuilder::new(values_builder);
+
+        builder
+            .values()
+            .as_any_mut()
+            .downcast_mut::<Int32Builder>()
+            .expect("should be an Int32Builder")
+            .append_slice(&[1, 2, 3]);
+        builder.append(true);
+
+        builder
+            .values()
+            .as_any_mut()
+            .downcast_mut::<Int32Builder>()
+            .expect("should be an Int32Builder")
+            .append_slice(&[4, 5, 6]);
+        builder.append(true);
+
+        let arr = builder.finish();
+        assert_eq!(2, arr.len());
+
+        let elements = arr.values().as_primitive::<Int32Type>();
+        assert_eq!(elements.values(), &[1, 2, 3, 4, 5, 6]);
+    }
+
+    #[test]
+    fn test_boxed_list_list_array_builder() {
+        // This test is same as `test_list_list_array_builder` but uses boxed builders.
+        let values_builder = make_builder(
+            &DataType::List(Arc::new(Field::new("item", DataType::Int32, true))),
+            10,
+        );
+        test_boxed_generic_list_generic_list_array_builder::<i32>(values_builder);
+    }
+
+    #[test]
+    fn test_boxed_large_list_large_list_array_builder() {
+        // This test is same as `test_list_list_array_builder` but uses boxed builders.
+        let values_builder = make_builder(
+            &DataType::LargeList(Arc::new(Field::new("item", DataType::Int32, true))),
+            10,
+        );
+        test_boxed_generic_list_generic_list_array_builder::<i64>(values_builder);
+    }
+
+    fn test_boxed_generic_list_generic_list_array_builder<O: OffsetSizeTrait + PartialEq>(
+        values_builder: Box<dyn ArrayBuilder>,
+    ) {
+        let mut builder: GenericListBuilder<O, Box<dyn ArrayBuilder>> =
+            GenericListBuilder::<O, Box<dyn ArrayBuilder>>::new(values_builder);
+
+        //  [[[1, 2], [3, 4]], [[5, 6, 7], null, [8]], null, [[9, 10]]]
+        builder
+            .values()
+            .as_any_mut()
+            .downcast_mut::<GenericListBuilder<O, Box<dyn ArrayBuilder>>>()
+            .expect("should be an (Large)ListBuilder")
+            .values()
+            .as_any_mut()
+            .downcast_mut::<Int32Builder>()
+            .expect("should be an Int32Builder")
+            .append_value(1);
+        builder
+            .values()
+            .as_any_mut()
+            .downcast_mut::<GenericListBuilder<O, Box<dyn ArrayBuilder>>>()
+            .expect("should be an (Large)ListBuilder")
+            .values()
+            .as_any_mut()
+            .downcast_mut::<Int32Builder>()
+            .expect("should be an Int32Builder")
+            .append_value(2);
+        builder
+            .values()
+            .as_any_mut()
+            .downcast_mut::<GenericListBuilder<O, Box<dyn ArrayBuilder>>>()
+            .expect("should be an (Large)ListBuilder")
+            .append(true);
+        builder
+            .values()
+            .as_any_mut()
+            .downcast_mut::<GenericListBuilder<O, Box<dyn ArrayBuilder>>>()
+            .expect("should be an (Large)ListBuilder")
+            .values()
+            .as_any_mut()
+            .downcast_mut::<Int32Builder>()
+            .expect("should be an Int32Builder")
+            .append_value(3);
+        builder
+            .values()
+            .as_any_mut()
+            .downcast_mut::<GenericListBuilder<O, Box<dyn ArrayBuilder>>>()
+            .expect("should be an (Large)ListBuilder")
+            .values()
+            .as_any_mut()
+            .downcast_mut::<Int32Builder>()
+            .expect("should be an Int32Builder")
+            .append_value(4);
+        builder
+            .values()
+            .as_any_mut()
+            .downcast_mut::<GenericListBuilder<O, Box<dyn ArrayBuilder>>>()
+            .expect("should be an (Large)ListBuilder")
+            .append(true);
+        builder.append(true);
+
+        builder
+            .values()
+            .as_any_mut()
+            .downcast_mut::<GenericListBuilder<O, Box<dyn ArrayBuilder>>>()
+            .expect("should be an (Large)ListBuilder")
+            .values()
+            .as_any_mut()
+            .downcast_mut::<Int32Builder>()
+            .expect("should be an Int32Builder")
+            .append_value(5);
+        builder
+            .values()
+            .as_any_mut()
+            .downcast_mut::<GenericListBuilder<O, Box<dyn ArrayBuilder>>>()
+            .expect("should be an (Large)ListBuilder")
+            .values()
+            .as_any_mut()
+            .downcast_mut::<Int32Builder>()
+            .expect("should be an Int32Builder")
+            .append_value(6);
+        builder
+            .values()
+            .as_any_mut()
+            .downcast_mut::<GenericListBuilder<O, Box<dyn ArrayBuilder>>>()
+            .expect("should be an (Large)ListBuilder")
+            .values()
+            .as_any_mut()
+            .downcast_mut::<Int32Builder>()
+            .expect("should be an (Large)ListBuilder")
+            .append_value(7);
+        builder
+            .values()
+            .as_any_mut()
+            .downcast_mut::<GenericListBuilder<O, Box<dyn ArrayBuilder>>>()
+            .expect("should be an (Large)ListBuilder")
+            .append(true);
+        builder
+            .values()
+            .as_any_mut()
+            .downcast_mut::<GenericListBuilder<O, Box<dyn ArrayBuilder>>>()
+            .expect("should be an (Large)ListBuilder")
+            .append(false);
+        builder
+            .values()
+            .as_any_mut()
+            .downcast_mut::<GenericListBuilder<O, Box<dyn ArrayBuilder>>>()
+            .expect("should be an (Large)ListBuilder")
+            .values()
+            .as_any_mut()
+            .downcast_mut::<Int32Builder>()
+            .expect("should be an Int32Builder")
+            .append_value(8);
+        builder
+            .values()
+            .as_any_mut()
+            .downcast_mut::<GenericListBuilder<O, Box<dyn ArrayBuilder>>>()
+            .expect("should be an (Large)ListBuilder")
+            .append(true);
+        builder.append(true);
+
+        builder.append(false);
+
+        builder
+            .values()
+            .as_any_mut()
+            .downcast_mut::<GenericListBuilder<O, Box<dyn ArrayBuilder>>>()
+            .expect("should be an (Large)ListBuilder")
+            .values()
+            .as_any_mut()
+            .downcast_mut::<Int32Builder>()
+            .expect("should be an Int32Builder")
+            .append_value(9);
+        builder
+            .values()
+            .as_any_mut()
+            .downcast_mut::<GenericListBuilder<O, Box<dyn ArrayBuilder>>>()
+            .expect("should be an (Large)ListBuilder")
+            .values()
+            .as_any_mut()
+            .downcast_mut::<Int32Builder>()
+            .expect("should be an Int32Builder")
+            .append_value(10);
+        builder
+            .values()
+            .as_any_mut()
+            .downcast_mut::<GenericListBuilder<O, Box<dyn ArrayBuilder>>>()
+            .expect("should be an (Large)ListBuilder")
+            .append(true);
+        builder.append(true);
+
+        let l1 = builder.finish();
+
+        assert_eq!(4, l1.len());
+        assert_eq!(1, l1.null_count());
+
+        assert_eq!(l1.value_offsets(), &[0, 2, 5, 5, 6].map(O::usize_as));
+        let l2 = l1.values().as_list::<O>();
+
+        assert_eq!(6, l2.len());
+        assert_eq!(1, l2.null_count());
+        assert_eq!(l2.value_offsets(), &[0, 2, 4, 7, 7, 8, 10].map(O::usize_as));
+
+        let i1 = l2.values().as_primitive::<Int32Type>();
+        assert_eq!(10, i1.len());
+        assert_eq!(0, i1.null_count());
+        assert_eq!(i1.values(), &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
     }
 }

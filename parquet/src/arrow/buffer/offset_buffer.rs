@@ -16,8 +16,7 @@
 // under the License.
 
 use crate::arrow::buffer::bit_util::iter_set_bits_rev;
-use crate::arrow::record_reader::buffer::{BufferQueue, ScalarBuffer, ScalarValue, ValuesBuffer};
-use crate::column::reader::decoder::ValuesBufferSlice;
+use crate::arrow::record_reader::buffer::ValuesBuffer;
 use crate::errors::{ParquetError, Result};
 use arrow_array::{make_array, ArrayRef, OffsetSizeTrait};
 use arrow_buffer::{ArrowNativeType, Buffer};
@@ -27,23 +26,23 @@ use arrow_schema::DataType as ArrowType;
 /// A buffer of variable-sized byte arrays that can be converted into
 /// a corresponding [`ArrayRef`]
 #[derive(Debug)]
-pub struct OffsetBuffer<I: ScalarValue> {
-    pub offsets: ScalarBuffer<I>,
-    pub values: ScalarBuffer<u8>,
+pub struct OffsetBuffer<I: OffsetSizeTrait> {
+    pub offsets: Vec<I>,
+    pub values: Vec<u8>,
 }
 
-impl<I: ScalarValue> Default for OffsetBuffer<I> {
+impl<I: OffsetSizeTrait> Default for OffsetBuffer<I> {
     fn default() -> Self {
-        let mut offsets = ScalarBuffer::new();
-        offsets.resize(1);
+        let mut offsets = Vec::new();
+        offsets.resize(1, I::default());
         Self {
             offsets,
-            values: ScalarBuffer::new(),
+            values: Vec::new(),
         }
     }
 }
 
-impl<I: OffsetSizeTrait + ScalarValue> OffsetBuffer<I> {
+impl<I: OffsetSizeTrait> OffsetBuffer<I> {
     /// Returns the number of byte arrays in this buffer
     pub fn len(&self) -> usize {
         self.offsets.len() - 1
@@ -128,8 +127,8 @@ impl<I: OffsetSizeTrait + ScalarValue> OffsetBuffer<I> {
     pub fn into_array(self, null_buffer: Option<Buffer>, data_type: ArrowType) -> ArrayRef {
         let array_data_builder = ArrayDataBuilder::new(data_type)
             .len(self.len())
-            .add_buffer(self.offsets.into())
-            .add_buffer(self.values.into())
+            .add_buffer(Buffer::from_vec(self.offsets))
+            .add_buffer(Buffer::from_vec(self.values))
             .null_bit_buffer(null_buffer);
 
         let data = match cfg!(debug_assertions) {
@@ -141,24 +140,7 @@ impl<I: OffsetSizeTrait + ScalarValue> OffsetBuffer<I> {
     }
 }
 
-impl<I: OffsetSizeTrait + ScalarValue> BufferQueue for OffsetBuffer<I> {
-    type Output = Self;
-    type Slice = Self;
-
-    fn consume(&mut self) -> Self::Output {
-        std::mem::take(self)
-    }
-
-    fn spare_capacity_mut(&mut self, _batch_size: usize) -> &mut Self::Slice {
-        self
-    }
-
-    fn set_len(&mut self, len: usize) {
-        assert_eq!(self.offsets.len(), len + 1);
-    }
-}
-
-impl<I: OffsetSizeTrait + ScalarValue> ValuesBuffer for OffsetBuffer<I> {
+impl<I: OffsetSizeTrait> ValuesBuffer for OffsetBuffer<I> {
     fn pad_nulls(
         &mut self,
         read_offset: usize,
@@ -167,9 +149,10 @@ impl<I: OffsetSizeTrait + ScalarValue> ValuesBuffer for OffsetBuffer<I> {
         valid_mask: &[u8],
     ) {
         assert_eq!(self.offsets.len(), read_offset + values_read + 1);
-        self.offsets.resize(read_offset + levels_read + 1);
+        self.offsets
+            .resize(read_offset + levels_read + 1, I::default());
 
-        let offsets = self.offsets.as_slice_mut();
+        let offsets = &mut self.offsets;
 
         let mut last_pos = read_offset + levels_read + 1;
         let mut last_start_offset = I::from_usize(self.values.len()).unwrap();
@@ -204,12 +187,6 @@ impl<I: OffsetSizeTrait + ScalarValue> ValuesBuffer for OffsetBuffer<I> {
         for x in &mut offsets[values_range.start + 1..last_pos] {
             *x = last_start_offset
         }
-    }
-}
-
-impl<I: ScalarValue> ValuesBufferSlice for OffsetBuffer<I> {
-    fn capacity(&self) -> usize {
-        usize::MAX
     }
 }
 
@@ -249,7 +226,7 @@ mod tests {
         for v in ["hello", "world", "cupcakes", "a", "b", "c"] {
             buffer.try_push(v.as_bytes(), false).unwrap()
         }
-        let split = buffer.consume();
+        let split = std::mem::take(&mut buffer);
 
         let array = split.into_array(None, ArrowType::Utf8);
         let strings = array.as_any().downcast_ref::<StringArray>().unwrap();

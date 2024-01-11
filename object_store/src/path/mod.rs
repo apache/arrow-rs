@@ -65,10 +65,23 @@ pub enum Error {
 
 /// A parsed path representation that can be safely written to object storage
 ///
-/// # Path Safety
+/// A [`Path`] maintains the following invariants:
+///
+/// * Paths are delimited by `/`
+/// * Paths do not contain leading or trailing `/`
+/// * Paths do not contain relative path segments, i.e. `.` or `..`
+/// * Paths do not contain empty path segments
+/// * Paths do not contain any ASCII control characters
+///
+/// There are no enforced restrictions on path length, however, it should be noted that most
+/// object stores do not permit paths longer than 1024 bytes, and many filesystems do not
+/// support path segments longer than 255 bytes.
+///
+/// # Encode
 ///
 /// In theory object stores support any UTF-8 character sequence, however, certain character
-/// sequences cause compatibility problems with some applications and protocols. As such the
+/// sequences cause compatibility problems with some applications and protocols. Additionally
+/// some filesystems may impose character restrictions, see [`LocalFileSystem`]. As such the
 /// naming guidelines for [S3], [GCS] and [Azure Blob Storage] all recommend sticking to a
 /// limited character subset.
 ///
@@ -76,34 +89,16 @@ pub enum Error {
 /// [GCS]: https://cloud.google.com/storage/docs/naming-objects
 /// [Azure Blob Storage]: https://docs.microsoft.com/en-us/rest/api/storageservices/Naming-and-Referencing-Containers--Blobs--and-Metadata#blob-names
 ///
-/// This presents libraries with two options for consistent path handling:
-///
-/// 1. Allow constructing unsafe paths, allowing for both reading and writing of data to paths
-/// that may not be consistently understood or supported
-/// 2. Disallow constructing unsafe paths, ensuring data written can be consistently handled by
-/// all other systems, but preventing interaction with objects at unsafe paths
-///
-/// This library takes the second approach, in particular:
-///
-/// * Paths are delimited by `/`
-/// * Paths do not start with a `/`
-/// * Empty path segments are discarded (e.g. `//` is treated as though it were `/`)
-/// * Relative path segments, i.e. `.` and `..` are percent encoded
-/// * Unsafe characters are percent encoded, as described by [RFC 1738]
-/// * All paths are relative to the root of the object store
-///
-/// In order to provide these guarantees there are two ways to safely construct a [`Path`]
-///
-/// # Encode
-///
-/// A string containing potentially illegal path segments can be encoded to a [`Path`]
-/// using [`Path::from`] or [`Path::from_iter`].
+/// A string containing potentially problematic path segments can therefore be encoded to a [`Path`]
+/// using [`Path::from`] or [`Path::from_iter`]. This will percent encode any problematic
+/// segments according to [RFC 1738].
 ///
 /// ```
 /// # use object_store::path::Path;
 /// assert_eq!(Path::from("foo/bar").as_ref(), "foo/bar");
 /// assert_eq!(Path::from("foo//bar").as_ref(), "foo/bar");
 /// assert_eq!(Path::from("foo/../bar").as_ref(), "foo/%2E%2E/bar");
+/// assert_eq!(Path::from("/").as_ref(), "");
 /// assert_eq!(Path::from_iter(["foo", "foo/bar"]).as_ref(), "foo/foo%2Fbar");
 /// ```
 ///
@@ -116,20 +111,20 @@ pub enum Error {
 ///
 /// # Parse
 ///
-/// Alternatively a [`Path`] can be created from an existing string, returning an
-/// error if it is invalid. Unlike the encoding methods, this will permit
-/// valid percent encoded sequences.
+/// Alternatively a [`Path`] can be parsed from an existing string, returning an
+/// error if it is invalid. Unlike the encoding methods above, this will permit
+/// arbitrary unicode, including percent encoded sequences.
 ///
 /// ```
 /// # use object_store::path::Path;
-///
 /// assert_eq!(Path::parse("/foo/foo%2Fbar").unwrap().as_ref(), "foo/foo%2Fbar");
-/// Path::parse("..").unwrap_err();
-/// Path::parse("/foo//").unwrap_err();
-/// Path::parse("😀").unwrap_err();
+/// Path::parse("..").unwrap_err(); // Relative path segments are disallowed
+/// Path::parse("/foo//").unwrap_err(); // Empty path segments are disallowed
+/// Path::parse("\x00").unwrap_err(); // ASCII control characters are disallowed
 /// ```
 ///
 /// [RFC 1738]: https://www.ietf.org/rfc/rfc1738.txt
+/// [`LocalFileSystem`]: crate::local::LocalFileSystem
 #[derive(Debug, Clone, Default, PartialEq, Eq, Hash, Ord, PartialOrd)]
 pub struct Path {
     /// The raw path with no leading or trailing delimiters
@@ -236,7 +231,7 @@ impl Path {
     pub fn filename(&self) -> Option<&str> {
         match self.raw.is_empty() {
             true => None,
-            false => self.raw.split(DELIMITER).last(),
+            false => self.raw.rsplit(DELIMITER).next(),
         }
     }
 

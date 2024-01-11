@@ -18,6 +18,7 @@
 //! Data types that connect Parquet physical types with their Rust-specific
 //! representations.
 use bytes::Bytes;
+use half::f16;
 use std::cmp::Ordering;
 use std::fmt;
 use std::mem;
@@ -28,7 +29,7 @@ use crate::basic::Type;
 use crate::column::reader::{ColumnReader, ColumnReaderImpl};
 use crate::column::writer::{ColumnWriter, ColumnWriterImpl};
 use crate::errors::{ParquetError, Result};
-use crate::util::{bit_util::FromBytes, memory::ByteBufferPtr};
+use crate::util::bit_util::FromBytes;
 
 /// Rust representation for logical type INT96, value is backed by an array of `u32`.
 /// The type only takes 12 bytes, without extra padding.
@@ -103,7 +104,7 @@ impl fmt::Display for Int96 {
 /// Value is backed by a byte buffer.
 #[derive(Clone, Default)]
 pub struct ByteArray {
-    data: Option<ByteBufferPtr>,
+    data: Option<Bytes>,
 }
 
 // Special case Debug that prints out byte arrays that are valid utf8 as &str's
@@ -130,7 +131,7 @@ impl PartialOrd for ByteArray {
             (Some(_), None) => Some(Ordering::Greater),
             (Some(self_data), Some(other_data)) => {
                 // compare slices directly
-                self_data.data().partial_cmp(other_data.data())
+                self_data.partial_cmp(&other_data)
             }
         }
     }
@@ -167,7 +168,7 @@ impl ByteArray {
 
     /// Set data from another byte buffer.
     #[inline]
-    pub fn set_data(&mut self, data: ByteBufferPtr) {
+    pub fn set_data(&mut self, data: Bytes) {
         self.data = Some(data);
     }
 
@@ -178,7 +179,7 @@ impl ByteArray {
             self.data
                 .as_ref()
                 .expect("set_data should have been called")
-                .range(start, len),
+                .slice(start..start + len),
         )
     }
 
@@ -194,7 +195,7 @@ impl ByteArray {
 impl From<Vec<u8>> for ByteArray {
     fn from(buf: Vec<u8>) -> ByteArray {
         Self {
-            data: Some(ByteBufferPtr::new(buf)),
+            data: Some(buf.into()),
         }
     }
 }
@@ -204,7 +205,7 @@ impl<'a> From<&'a [u8]> for ByteArray {
         let mut v = Vec::new();
         v.extend_from_slice(b);
         Self {
-            data: Some(ByteBufferPtr::new(v)),
+            data: Some(v.into()),
         }
     }
 }
@@ -214,20 +215,20 @@ impl<'a> From<&'a str> for ByteArray {
         let mut v = Vec::new();
         v.extend_from_slice(s.as_bytes());
         Self {
-            data: Some(ByteBufferPtr::new(v)),
+            data: Some(v.into()),
         }
-    }
-}
-
-impl From<ByteBufferPtr> for ByteArray {
-    fn from(ptr: ByteBufferPtr) -> ByteArray {
-        Self { data: Some(ptr) }
     }
 }
 
 impl From<Bytes> for ByteArray {
     fn from(value: Bytes) -> Self {
-        ByteBufferPtr::from(value).into()
+        Self { data: Some(value) }
+    }
+}
+
+impl From<f16> for ByteArray {
+    fn from(value: f16) -> Self {
+        Self::from(value.to_le_bytes().as_slice())
     }
 }
 
@@ -580,9 +581,10 @@ impl AsBytes for str {
 }
 
 pub(crate) mod private {
+    use bytes::Bytes;
+
     use crate::encodings::decoding::PlainDecoderDetails;
     use crate::util::bit_util::{read_num_bytes, BitReader, BitWriter};
-    use crate::util::memory::ByteBufferPtr;
 
     use crate::basic::Type;
     use std::convert::TryInto;
@@ -618,7 +620,7 @@ pub(crate) mod private {
         ) -> Result<()>;
 
         /// Establish the data that will be decoded in a buffer
-        fn set_data(decoder: &mut PlainDecoderDetails, data: ByteBufferPtr, num_values: usize);
+        fn set_data(decoder: &mut PlainDecoderDetails, data: Bytes, num_values: usize);
 
         /// Decode the value from a given buffer for a higher level decoder
         fn decode(buffer: &mut [Self], decoder: &mut PlainDecoderDetails) -> Result<usize>;
@@ -632,7 +634,7 @@ pub(crate) mod private {
 
         /// Return the value as i64 if possible
         ///
-        /// This is essentially the same as `std::convert::TryInto<i64>` but can
+        /// This is essentially the same as `std::convert::TryInto<i64>` but can't be
         /// implemented for `f32` and `f64`, types that would fail orphan rules
         fn as_i64(&self) -> Result<i64> {
             Err(general_err!("Type cannot be converted to i64"))
@@ -640,7 +642,7 @@ pub(crate) mod private {
 
         /// Return the value as u64 if possible
         ///
-        /// This is essentially the same as `std::convert::TryInto<u64>` but can
+        /// This is essentially the same as `std::convert::TryInto<u64>` but can't be
         /// implemented for `f32` and `f64`, types that would fail orphan rules
         fn as_u64(&self) -> Result<u64> {
             self.as_i64()
@@ -671,7 +673,7 @@ pub(crate) mod private {
         }
 
         #[inline]
-        fn set_data(decoder: &mut PlainDecoderDetails, data: ByteBufferPtr, num_values: usize) {
+        fn set_data(decoder: &mut PlainDecoderDetails, data: Bytes, num_values: usize) {
             decoder.bit_reader.replace(BitReader::new(data));
             decoder.num_values = num_values;
         }
@@ -728,7 +730,7 @@ pub(crate) mod private {
                 }
 
                 #[inline]
-                fn set_data(decoder: &mut PlainDecoderDetails, data: ByteBufferPtr, num_values: usize) {
+                fn set_data(decoder: &mut PlainDecoderDetails, data: Bytes, num_values: usize) {
                     decoder.data.replace(data);
                     decoder.start = 0;
                     decoder.num_values = num_values;
@@ -748,7 +750,9 @@ pub(crate) mod private {
                     // SAFETY: Raw types should be as per the standard rust bit-vectors
                     unsafe {
                         let raw_buffer = &mut Self::slice_as_bytes_mut(buffer)[..bytes_to_decode];
-                        raw_buffer.copy_from_slice(data.range(decoder.start, bytes_to_decode).as_ref());
+                        raw_buffer.copy_from_slice(data.slice(
+                            decoder.start..decoder.start + bytes_to_decode
+                        ).as_ref());
                     };
                     decoder.start += bytes_to_decode;
                     decoder.num_values -= num_values;
@@ -815,7 +819,7 @@ pub(crate) mod private {
         }
 
         #[inline]
-        fn set_data(decoder: &mut PlainDecoderDetails, data: ByteBufferPtr, num_values: usize) {
+        fn set_data(decoder: &mut PlainDecoderDetails, data: Bytes, num_values: usize) {
             decoder.data.replace(data);
             decoder.start = 0;
             decoder.num_values = num_values;
@@ -836,8 +840,8 @@ pub(crate) mod private {
                 return Err(eof_err!("Not enough bytes to decode"));
             }
 
-            let data_range = data.range(decoder.start, bytes_to_decode);
-            let bytes: &[u8] = data_range.data();
+            let data_range = data.slice(decoder.start..decoder.start + bytes_to_decode);
+            let bytes: &[u8] = &data_range;
             decoder.start += bytes_to_decode;
 
             let mut pos = 0; // position in byte array
@@ -902,7 +906,7 @@ pub(crate) mod private {
         }
 
         #[inline]
-        fn set_data(decoder: &mut PlainDecoderDetails, data: ByteBufferPtr, num_values: usize) {
+        fn set_data(decoder: &mut PlainDecoderDetails, data: Bytes, num_values: usize) {
             decoder.data.replace(data);
             decoder.start = 0;
             decoder.num_values = num_values;
@@ -917,7 +921,7 @@ pub(crate) mod private {
             let num_values = std::cmp::min(buffer.len(), decoder.num_values);
             for val_array in buffer.iter_mut().take(num_values) {
                 let len: usize =
-                    read_num_bytes::<u32>(4, data.start_from(decoder.start).as_ref()) as usize;
+                    read_num_bytes::<u32>(4, data.slice(decoder.start..).as_ref()) as usize;
                 decoder.start += std::mem::size_of::<u32>();
 
                 if data.len() < decoder.start + len {
@@ -926,7 +930,7 @@ pub(crate) mod private {
 
                 let val: &mut Self = val_array.as_mut_any().downcast_mut().unwrap();
 
-                val.set_data(data.range(decoder.start, len));
+                val.set_data(data.slice(decoder.start..decoder.start + len));
                 decoder.start += len;
             }
             decoder.num_values -= num_values;
@@ -943,7 +947,7 @@ pub(crate) mod private {
 
             for _ in 0..num_values {
                 let len: usize =
-                    read_num_bytes::<u32>(4, data.start_from(decoder.start).as_ref()) as usize;
+                    read_num_bytes::<u32>(4, data.slice(decoder.start..).as_ref()) as usize;
                 decoder.start += std::mem::size_of::<u32>() + len;
             }
             decoder.num_values -= num_values;
@@ -984,7 +988,7 @@ pub(crate) mod private {
         }
 
         #[inline]
-        fn set_data(decoder: &mut PlainDecoderDetails, data: ByteBufferPtr, num_values: usize) {
+        fn set_data(decoder: &mut PlainDecoderDetails, data: Bytes, num_values: usize) {
             decoder.data.replace(data);
             decoder.start = 0;
             decoder.num_values = num_values;
@@ -1007,7 +1011,7 @@ pub(crate) mod private {
                     return Err(eof_err!("Not enough bytes to decode"));
                 }
 
-                item.set_data(data.range(decoder.start, len));
+                item.set_data(data.slice(decoder.start..decoder.start + len));
                 decoder.start += len;
             }
             decoder.num_values -= num_values;
@@ -1241,7 +1245,7 @@ mod tests {
         );
         assert_eq!(ByteArray::from("ABC").data(), &[b'A', b'B', b'C']);
         assert_eq!(
-            ByteArray::from(ByteBufferPtr::new(vec![1u8, 2u8, 3u8, 4u8, 5u8])).data(),
+            ByteArray::from(Bytes::from(vec![1u8, 2u8, 3u8, 4u8, 5u8])).data(),
             &[1u8, 2u8, 3u8, 4u8, 5u8]
         );
         let buf = vec![6u8, 7u8, 8u8, 9u8, 10u8];

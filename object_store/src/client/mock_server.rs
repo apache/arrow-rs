@@ -15,17 +15,20 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use futures::future::BoxFuture;
+use futures::FutureExt;
 use hyper::service::{make_service_fn, service_fn};
 use hyper::{Body, Request, Response, Server};
 use parking_lot::Mutex;
 use std::collections::VecDeque;
 use std::convert::Infallible;
+use std::future::Future;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 
-pub type ResponseFn = Box<dyn FnOnce(Request<Body>) -> Response<Body> + Send>;
+pub type ResponseFn = Box<dyn FnOnce(Request<Body>) -> BoxFuture<'static, Response<Body>> + Send>;
 
 /// A mock server
 pub struct MockServer {
@@ -46,9 +49,10 @@ impl MockServer {
             async move {
                 Ok::<_, Infallible>(service_fn(move |req| {
                     let r = Arc::clone(&r);
+                    let next = r.lock().pop_front();
                     async move {
-                        Ok::<_, Infallible>(match r.lock().pop_front() {
-                            Some(r) => r(req),
+                        Ok::<_, Infallible>(match next {
+                            Some(r) => r(req).await,
                             None => Response::new(Body::from("Hello World")),
                         })
                     }
@@ -93,7 +97,16 @@ impl MockServer {
     where
         F: FnOnce(Request<Body>) -> Response<Body> + Send + 'static,
     {
-        self.responses.lock().push_back(Box::new(f))
+        let f = Box::new(|req| async move { f(req) }.boxed());
+        self.responses.lock().push_back(f)
+    }
+
+    pub fn push_async_fn<F, Fut>(&self, f: F)
+    where
+        F: FnOnce(Request<Body>) -> Fut + Send + 'static,
+        Fut: Future<Output = Response<Body>> + Send + 'static,
+    {
+        self.responses.lock().push_back(Box::new(|r| f(r).boxed()))
     }
 
     /// Shutdown the mock server

@@ -58,6 +58,12 @@ impl From<std::io::Error> for ArrowError {
     }
 }
 
+impl From<std::str::Utf8Error> for ArrowError {
+    fn from(error: std::str::Utf8Error) -> Self {
+        ArrowError::ParseError(error.to_string())
+    }
+}
+
 impl From<std::string::FromUtf8Error> for ArrowError {
     fn from(error: std::string::FromUtf8Error) -> Self {
         ArrowError::ParseError(error.to_string())

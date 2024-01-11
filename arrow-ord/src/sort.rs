@@ -191,8 +191,7 @@ fn partition_validity(array: &dyn Array) -> (Vec<u32>, Vec<u32>) {
 }
 
 /// Sort elements from `ArrayRef` into an unsigned integer (`UInt32Array`) of indices.
-/// For floating point arrays any NaN values are considered to be greater than any other non-null value.
-/// `limit` is an option for [partial_sort].
+/// Floats are sorted using IEEE 754 totalOrder.  `limit` is an option for [partial_sort].
 pub fn sort_to_indices(
     array: &dyn Array,
     options: Option<SortOptions>,
@@ -791,7 +790,6 @@ mod tests {
     use half::f16;
     use rand::rngs::StdRng;
     use rand::{Rng, RngCore, SeedableRng};
-    use std::convert::TryFrom;
     use std::sync::Arc;
 
     fn create_decimal128_array(data: Vec<Option<i128>>) -> Decimal128Array {
@@ -973,19 +971,14 @@ mod tests {
 
         assert_eq!(sorted_dict, dict);
 
-        let sorted_strings = StringArray::try_from(
-            (0..sorted.len())
-                .map(|i| {
-                    if sorted.is_valid(i) {
-                        Some(sorted_dict.value(sorted_keys.value(i).as_usize()))
-                    } else {
-                        None
-                    }
-                })
-                .collect::<Vec<Option<&str>>>(),
-        )
-        .expect("Unable to create string array from dictionary");
-        let expected = StringArray::try_from(expected_data).expect("Unable to create string array");
+        let sorted_strings = StringArray::from_iter((0..sorted.len()).map(|i| {
+            if sorted.is_valid(i) {
+                Some(sorted_dict.value(sorted_keys.value(i).as_usize()))
+            } else {
+                None
+            }
+        }));
+        let expected = StringArray::from(expected_data);
 
         assert_eq!(sorted_strings, expected)
     }

@@ -210,7 +210,7 @@ pub fn string_to_datetime<T: TimeZone>(timezone: &T, s: &str) -> Result<DateTime
             .ok_or_else(|| err("error computing timezone offset"));
     }
 
-    if bytes[tz_offset] == b'z' || bytes[tz_offset] == b'Z' {
+    if (bytes[tz_offset] == b'z' || bytes[tz_offset] == b'Z') && tz_offset == bytes.len() - 1 {
         return Ok(timezone.from_utc_datetime(&datetime));
     }
 
@@ -546,8 +546,11 @@ const ERR_NANOSECONDS_NOT_SUPPORTED: &str = "The dates that can be represented a
 
 fn parse_date(string: &str) -> Option<NaiveDate> {
     if string.len() > 10 {
-        return None;
-    }
+        // Try to parse as datetime and return just the date part
+        return string_to_datetime(&Utc, string)
+            .map(|dt| dt.date_naive())
+            .ok();
+    };
     let mut digits = [0; 10];
     let mut mask = 0;
 
@@ -559,8 +562,20 @@ fn parse_date(string: &str) -> Option<NaiveDate> {
 
     const HYPHEN: u8 = b'-'.wrapping_sub(b'0');
 
+    //  refer to https://www.rfc-editor.org/rfc/rfc3339#section-3
     if digits[4] != HYPHEN {
-        return None;
+        let (year, month, day) = match (mask, string.len()) {
+            (0b11111111, 8) => (
+                digits[0] as u16 * 1000
+                    + digits[1] as u16 * 100
+                    + digits[2] as u16 * 10
+                    + digits[3] as u16,
+                digits[4] * 10 + digits[5],
+                digits[6] * 10 + digits[7],
+            ),
+            _ => return None,
+        };
+        return NaiveDate::from_ymd_opt(year as _, month as _, day as _);
     }
 
     let (month, day) = match mask {
@@ -1476,10 +1491,13 @@ mod tests {
             "2020-9-08",
             "2020-12-1",
             "1690-2-5",
+            "2020-09-08 01:02:03",
         ];
         for case in cases {
             let v = date32_to_datetime(Date32Type::parse(case).unwrap()).unwrap();
-            let expected: NaiveDate = case.parse().unwrap();
+            let expected = NaiveDate::parse_from_str(case, "%Y-%m-%d")
+                .or(NaiveDate::parse_from_str(case, "%Y-%m-%d %H:%M:%S"))
+                .unwrap();
             assert_eq!(v.date(), expected);
         }
 
@@ -1491,6 +1509,11 @@ mod tests {
             "2020-09-08-03",
             "2020--04-03",
             "2020--",
+            "2020-09-08 01",
+            "2020-09-08 01:02",
+            "2020-09-08 01-02-03",
+            "2020-9-8 01:02:03",
+            "2020-09-08 1:2:3",
         ];
         for case in err_cases {
             assert_eq!(Date32Type::parse(case), None);

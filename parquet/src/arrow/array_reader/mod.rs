@@ -129,7 +129,7 @@ fn read_records<V, CV>(
 ) -> Result<usize>
 where
     V: ValuesBuffer,
-    CV: ColumnValueDecoder<Slice = V::Slice>,
+    CV: ColumnValueDecoder<Buffer = V>,
 {
     let mut records_read = 0usize;
     while records_read < batch_size {
@@ -163,7 +163,7 @@ fn skip_records<V, CV>(
 ) -> Result<usize>
 where
     V: ValuesBuffer,
-    CV: ColumnValueDecoder<Slice = V::Slice>,
+    CV: ColumnValueDecoder<Buffer = V>,
 {
     let mut records_skipped = 0usize;
     while records_skipped < batch_size {

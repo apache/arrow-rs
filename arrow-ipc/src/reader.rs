@@ -20,19 +20,19 @@
 //! The `FileReader` and `StreamReader` have similar interfaces,
 //! however the `FileReader` expects a reader that supports `Seek`ing
 
-use flatbuffers::VectorIter;
+use flatbuffers::{VectorIter, VerifierOptions};
 use std::collections::HashMap;
 use std::fmt;
 use std::io::{BufReader, Read, Seek, SeekFrom};
 use std::sync::Arc;
 
 use arrow_array::*;
-use arrow_buffer::{Buffer, MutableBuffer};
+use arrow_buffer::{ArrowNativeType, Buffer, MutableBuffer};
 use arrow_data::ArrayData;
 use arrow_schema::*;
 
 use crate::compression::CompressionCodec;
-use crate::{FieldNode, MetadataVersion, CONTINUATION_MARKER};
+use crate::{Block, FieldNode, Message, MetadataVersion, CONTINUATION_MARKER};
 use DataType::*;
 
 /// Read a buffer based on offset and length
@@ -451,7 +451,7 @@ pub fn read_dictionary(
     batch: crate::DictionaryBatch,
     schema: &Schema,
     dictionaries_by_id: &mut HashMap<i64, ArrayRef>,
-    metadata: &crate::MetadataVersion,
+    metadata: &MetadataVersion,
 ) -> Result<(), ArrowError> {
     if batch.isDelta() {
         return Err(ArrowError::InvalidArgumentError(
@@ -498,91 +498,290 @@ pub fn read_dictionary(
     Ok(())
 }
 
-/// Arrow File reader
-pub struct FileReader<R: Read + Seek> {
-    /// Buffered file reader that supports reading and seeking
-    reader: BufReader<R>,
+/// Read the data for a given block
+fn read_block<R: Read + Seek>(mut reader: R, block: &Block) -> Result<Buffer, ArrowError> {
+    reader.seek(SeekFrom::Start(block.offset() as u64))?;
+    let body_len = block.bodyLength().to_usize().unwrap();
+    let metadata_len = block.metaDataLength().to_usize().unwrap();
+    let total_len = body_len.checked_add(metadata_len).unwrap();
 
-    /// The schema that is read from the file header
-    schema: SchemaRef,
-
-    /// The blocks in the file
-    ///
-    /// A block indicates the regions in the file to read to get data
-    blocks: Vec<crate::Block>,
-
-    /// A counter to keep track of the current block that should be read
-    current_block: usize,
-
-    /// The total number of blocks, which may contain record batches and other types
-    total_blocks: usize,
-
-    /// Optional dictionaries for each schema field.
-    ///
-    /// Dictionaries may be appended to in the streaming format.
-    dictionaries_by_id: HashMap<i64, ArrayRef>,
-
-    /// Metadata version
-    metadata_version: crate::MetadataVersion,
-
-    /// User defined metadata
-    custom_metadata: HashMap<String, String>,
-
-    /// Optional projection and projected_schema
-    projection: Option<(Vec<usize>, Schema)>,
+    let mut buf = MutableBuffer::from_len_zeroed(total_len);
+    reader.read_exact(&mut buf)?;
+    Ok(buf.into())
 }
 
-impl<R: Read + Seek> fmt::Debug for FileReader<R> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> std::result::Result<(), fmt::Error> {
-        f.debug_struct("FileReader<R>")
-            .field("reader", &"BufReader<..>")
-            .field("schema", &self.schema)
-            .field("blocks", &self.blocks)
-            .field("current_block", &self.current_block)
-            .field("total_blocks", &self.total_blocks)
-            .field("dictionaries_by_id", &self.dictionaries_by_id)
-            .field("metadata_version", &self.metadata_version)
-            .field("projection", &self.projection)
-            .finish()
+/// Parse an encapsulated message
+///
+/// <https://arrow.apache.org/docs/format/Columnar.html#encapsulated-message-format>
+fn parse_message(buf: &[u8]) -> Result<Message, ArrowError> {
+    let buf = match buf[..4] == CONTINUATION_MARKER {
+        true => &buf[8..],
+        false => &buf[4..],
+    };
+    crate::root_as_message(buf)
+        .map_err(|err| ArrowError::ParseError(format!("Unable to get root as message: {err:?}")))
+}
+
+/// Read the footer length from the last 10 bytes of an Arrow IPC file
+///
+/// Expects a 4 byte footer length followed by `b"ARROW1"`
+pub fn read_footer_length(buf: [u8; 10]) -> Result<usize, ArrowError> {
+    if buf[4..] != super::ARROW_MAGIC {
+        return Err(ArrowError::ParseError(
+            "Arrow file does not contain correct footer".to_string(),
+        ));
+    }
+
+    // read footer length
+    let footer_len = i32::from_le_bytes(buf[..4].try_into().unwrap());
+    footer_len
+        .try_into()
+        .map_err(|_| ArrowError::ParseError(format!("Invalid footer length: {footer_len}")))
+}
+
+/// A low-level, push-based interface for reading an IPC file
+///
+/// For a higher-level interface see [`FileReader`]
+///
+/// ```
+/// # use std::sync::Arc;
+/// # use arrow_array::*;
+/// # use arrow_array::types::Int32Type;
+/// # use arrow_buffer::Buffer;
+/// # use arrow_ipc::convert::fb_to_schema;
+/// # use arrow_ipc::reader::{FileDecoder, read_footer_length};
+/// # use arrow_ipc::root_as_footer;
+/// # use arrow_ipc::writer::FileWriter;
+/// // Write an IPC file
+///
+/// let batch = RecordBatch::try_from_iter([
+///     ("a", Arc::new(Int32Array::from(vec![1, 2, 3])) as _),
+///     ("b", Arc::new(Int32Array::from(vec![1, 2, 3])) as _),
+///     ("c", Arc::new(DictionaryArray::<Int32Type>::from_iter(["hello", "hello", "world"])) as _),
+/// ]).unwrap();
+///
+/// let schema = batch.schema();
+///
+/// let mut out = Vec::with_capacity(1024);
+/// let mut writer = FileWriter::try_new(&mut out, schema.as_ref()).unwrap();
+/// writer.write(&batch).unwrap();
+/// writer.finish().unwrap();
+///
+/// drop(writer);
+///
+/// // Read IPC file
+///
+/// let buffer = Buffer::from_vec(out);
+/// let trailer_start = buffer.len() - 10;
+/// let footer_len = read_footer_length(buffer[trailer_start..].try_into().unwrap()).unwrap();
+/// let footer = root_as_footer(&buffer[trailer_start - footer_len..trailer_start]).unwrap();
+///
+/// let back = fb_to_schema(footer.schema().unwrap());
+/// assert_eq!(&back, schema.as_ref());
+///
+/// let mut decoder = FileDecoder::new(schema, footer.version());
+///
+/// // Read dictionaries
+/// for block in footer.dictionaries().iter().flatten() {
+///     let block_len = block.bodyLength() as usize + block.metaDataLength() as usize;
+///     let data = buffer.slice_with_length(block.offset() as _, block_len);
+///     decoder.read_dictionary(&block, &data).unwrap();
+/// }
+///
+/// // Read record batch
+/// let batches = footer.recordBatches().unwrap();
+/// assert_eq!(batches.len(), 1); // Only wrote a single batch
+///
+/// let block = batches.get(0);
+/// let block_len = block.bodyLength() as usize + block.metaDataLength() as usize;
+/// let data = buffer.slice_with_length(block.offset() as _, block_len);
+/// let back = decoder.read_record_batch(block, &data).unwrap().unwrap();
+///
+/// assert_eq!(batch, back);
+/// ```
+#[derive(Debug)]
+pub struct FileDecoder {
+    schema: SchemaRef,
+    dictionaries: HashMap<i64, ArrayRef>,
+    version: MetadataVersion,
+    projection: Option<Vec<usize>>,
+}
+
+impl FileDecoder {
+    /// Create a new [`FileDecoder`] with the given schema and version
+    pub fn new(schema: SchemaRef, version: MetadataVersion) -> Self {
+        Self {
+            schema,
+            version,
+            dictionaries: Default::default(),
+            projection: None,
+        }
+    }
+
+    /// Specify a projection
+    pub fn with_projection(mut self, projection: Vec<usize>) -> Self {
+        self.projection = Some(projection);
+        self
+    }
+
+    fn read_message<'a>(&self, buf: &'a [u8]) -> Result<Message<'a>, ArrowError> {
+        let message = parse_message(buf)?;
+
+        // some old test data's footer metadata is not set, so we account for that
+        if self.version != MetadataVersion::V1 && message.version() != self.version {
+            return Err(ArrowError::IpcError(
+                "Could not read IPC message as metadata versions mismatch".to_string(),
+            ));
+        }
+        Ok(message)
+    }
+
+    /// Read the dictionary with the given block and data buffer
+    pub fn read_dictionary(&mut self, block: &Block, buf: &Buffer) -> Result<(), ArrowError> {
+        let message = self.read_message(buf)?;
+        match message.header_type() {
+            crate::MessageHeader::DictionaryBatch => {
+                let batch = message.header_as_dictionary_batch().unwrap();
+                read_dictionary(
+                    &buf.slice(block.metaDataLength() as _),
+                    batch,
+                    &self.schema,
+                    &mut self.dictionaries,
+                    &message.version(),
+                )
+            }
+            t => Err(ArrowError::ParseError(format!(
+                "Expecting DictionaryBatch in dictionary blocks, found {t:?}."
+            ))),
+        }
+    }
+
+    /// Read the RecordBatch with the given block and data buffer
+    pub fn read_record_batch(
+        &self,
+        block: &Block,
+        buf: &Buffer,
+    ) -> Result<Option<RecordBatch>, ArrowError> {
+        let message = self.read_message(buf)?;
+        match message.header_type() {
+            crate::MessageHeader::Schema => Err(ArrowError::IpcError(
+                "Not expecting a schema when messages are read".to_string(),
+            )),
+            crate::MessageHeader::RecordBatch => {
+                let batch = message.header_as_record_batch().ok_or_else(|| {
+                    ArrowError::IpcError("Unable to read IPC message as record batch".to_string())
+                })?;
+                // read the block that makes up the record batch into a buffer
+                read_record_batch(
+                    &buf.slice(block.metaDataLength() as _),
+                    batch,
+                    self.schema.clone(),
+                    &self.dictionaries,
+                    self.projection.as_deref(),
+                    &message.version(),
+                )
+                .map(Some)
+            }
+            crate::MessageHeader::NONE => Ok(None),
+            t => Err(ArrowError::InvalidArgumentError(format!(
+                "Reading types other than record batches not yet supported, unable to read {t:?}"
+            ))),
+        }
     }
 }
 
-impl<R: Read + Seek> FileReader<R> {
-    /// Try to create a new file reader
+/// Build an Arrow [`FileReader`] with custom options.
+#[derive(Debug)]
+pub struct FileReaderBuilder {
+    /// Optional projection for which columns to load (zero-based column indices)
+    projection: Option<Vec<usize>>,
+    /// Passed through to construct [`VerifierOptions`]
+    max_footer_fb_tables: usize,
+    /// Passed through to construct [`VerifierOptions`]
+    max_footer_fb_depth: usize,
+}
+
+impl Default for FileReaderBuilder {
+    fn default() -> Self {
+        let verifier_options = VerifierOptions::default();
+        Self {
+            max_footer_fb_tables: verifier_options.max_tables,
+            max_footer_fb_depth: verifier_options.max_depth,
+            projection: None,
+        }
+    }
+}
+
+impl FileReaderBuilder {
+    /// Options for creating a new [`FileReader`].
     ///
-    /// Returns errors if the file does not meet the Arrow Format header and footer
-    /// requirements
-    pub fn try_new(reader: R, projection: Option<Vec<usize>>) -> Result<Self, ArrowError> {
-        let mut reader = BufReader::new(reader);
-        // check if header and footer contain correct magic bytes
-        let mut magic_buffer: [u8; 6] = [0; 6];
-        reader.read_exact(&mut magic_buffer)?;
-        if magic_buffer != super::ARROW_MAGIC {
-            return Err(ArrowError::ParseError(
-                "Arrow file does not contain correct header".to_string(),
-            ));
-        }
-        reader.seek(SeekFrom::End(-6))?;
-        reader.read_exact(&mut magic_buffer)?;
-        if magic_buffer != super::ARROW_MAGIC {
-            return Err(ArrowError::ParseError(
-                "Arrow file does not contain correct footer".to_string(),
-            ));
-        }
-        // read footer length
-        let mut footer_size: [u8; 4] = [0; 4];
+    /// To convert a builder into a reader, call [`FileReaderBuilder::build`].
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Optional projection for which columns to load (zero-based column indices).
+    pub fn with_projection(mut self, projection: Vec<usize>) -> Self {
+        self.projection = Some(projection);
+        self
+    }
+
+    /// Flatbuffers option for parsing the footer. Controls the max number of fields and
+    /// metadata key-value pairs that can be parsed from the schema of the footer.
+    ///
+    /// By default this is set to `1_000_000` which roughly translates to a schema with
+    /// no metadata key-value pairs but 499,999 fields.
+    ///
+    /// This default limit is enforced to protect against malicious files with a massive
+    /// amount of flatbuffer tables which could cause a denial of service attack.
+    ///
+    /// If you need to ingest a trusted file with a massive number of fields and/or
+    /// metadata key-value pairs and are facing the error `"Unable to get root as
+    /// footer: TooManyTables"` then increase this parameter as necessary.
+    pub fn with_max_footer_fb_tables(mut self, max_footer_fb_tables: usize) -> Self {
+        self.max_footer_fb_tables = max_footer_fb_tables;
+        self
+    }
+
+    /// Flatbuffers option for parsing the footer. Controls the max depth for schemas with
+    /// nested fields parsed from the footer.
+    ///
+    /// By default this is set to `64` which roughly translates to a schema with
+    /// a field nested 60 levels down through other struct fields.
+    ///
+    /// This default limit is enforced to protect against malicious files with a extremely
+    /// deep flatbuffer structure which could cause a denial of service attack.
+    ///
+    /// If you need to ingest a trusted file with a deeply nested field and are facing the
+    /// error `"Unable to get root as footer: DepthLimitReached"` then increase this
+    /// parameter as necessary.
+    pub fn with_max_footer_fb_depth(mut self, max_footer_fb_depth: usize) -> Self {
+        self.max_footer_fb_depth = max_footer_fb_depth;
+        self
+    }
+
+    /// Build [`FileReader`] with given reader.
+    pub fn build<R: Read + Seek>(self, mut reader: R) -> Result<FileReader<R>, ArrowError> {
+        // Space for ARROW_MAGIC (6 bytes) and length (4 bytes)
+        let mut buffer = [0; 10];
         reader.seek(SeekFrom::End(-10))?;
-        reader.read_exact(&mut footer_size)?;
-        let footer_len = i32::from_le_bytes(footer_size);
+        reader.read_exact(&mut buffer)?;
+
+        let footer_len = read_footer_length(buffer)?;
 
         // read footer
-        let mut footer_data = vec![0; footer_len as usize];
+        let mut footer_data = vec![0; footer_len];
         reader.seek(SeekFrom::End(-10 - footer_len as i64))?;
         reader.read_exact(&mut footer_data)?;
 
-        let footer = crate::root_as_footer(&footer_data[..]).map_err(|err| {
-            ArrowError::ParseError(format!("Unable to get root as footer: {err:?}"))
-        })?;
+        let verifier_options = VerifierOptions {
+            max_tables: self.max_footer_fb_tables,
+            max_depth: self.max_footer_fb_depth,
+            ..Default::default()
+        };
+        let footer = crate::root_as_footer_with_opts(&verifier_options, &footer_data[..]).map_err(
+            |err| ArrowError::ParseError(format!("Unable to get root as footer: {err:?}")),
+        )?;
 
         let blocks = footer.recordBatches().ok_or_else(|| {
             ArrowError::ParseError("Unable to get record batches from IPC Footer".to_string())
@@ -603,72 +802,74 @@ impl<R: Read + Seek> FileReader<R> {
             }
         }
 
+        let mut decoder = FileDecoder::new(Arc::new(schema), footer.version());
+        if let Some(projection) = self.projection {
+            decoder = decoder.with_projection(projection)
+        }
+
         // Create an array of optional dictionary value arrays, one per field.
-        let mut dictionaries_by_id = HashMap::new();
         if let Some(dictionaries) = footer.dictionaries() {
             for block in dictionaries {
-                // read length from end of offset
-                let mut message_size: [u8; 4] = [0; 4];
-                reader.seek(SeekFrom::Start(block.offset() as u64))?;
-                reader.read_exact(&mut message_size)?;
-                if message_size == CONTINUATION_MARKER {
-                    reader.read_exact(&mut message_size)?;
-                }
-                let footer_len = i32::from_le_bytes(message_size);
-                let mut block_data = vec![0; footer_len as usize];
-
-                reader.read_exact(&mut block_data)?;
-
-                let message = crate::root_as_message(&block_data[..]).map_err(|err| {
-                    ArrowError::ParseError(format!("Unable to get root as message: {err:?}"))
-                })?;
-
-                match message.header_type() {
-                    crate::MessageHeader::DictionaryBatch => {
-                        let batch = message.header_as_dictionary_batch().unwrap();
-
-                        // read the block that makes up the dictionary batch into a buffer
-                        let mut buf = MutableBuffer::from_len_zeroed(message.bodyLength() as usize);
-                        reader.seek(SeekFrom::Start(
-                            block.offset() as u64 + block.metaDataLength() as u64,
-                        ))?;
-                        reader.read_exact(&mut buf)?;
-
-                        read_dictionary(
-                            &buf.into(),
-                            batch,
-                            &schema,
-                            &mut dictionaries_by_id,
-                            &message.version(),
-                        )?;
-                    }
-                    t => {
-                        return Err(ArrowError::ParseError(format!(
-                            "Expecting DictionaryBatch in dictionary blocks, found {t:?}."
-                        )));
-                    }
-                }
+                let buf = read_block(&mut reader, block)?;
+                decoder.read_dictionary(block, &buf)?;
             }
         }
-        let projection = match projection {
-            Some(projection_indices) => {
-                let schema = schema.project(&projection_indices)?;
-                Some((projection_indices, schema))
-            }
-            _ => None,
-        };
 
-        Ok(Self {
+        Ok(FileReader {
             reader,
-            schema: Arc::new(schema),
             blocks: blocks.iter().copied().collect(),
             current_block: 0,
             total_blocks,
-            dictionaries_by_id,
-            metadata_version: footer.version(),
+            decoder,
             custom_metadata,
-            projection,
         })
+    }
+}
+
+/// Arrow File reader
+pub struct FileReader<R: Read + Seek> {
+    /// Buffered file reader that supports reading and seeking
+    reader: R,
+
+    /// The decoder
+    decoder: FileDecoder,
+
+    /// The blocks in the file
+    ///
+    /// A block indicates the regions in the file to read to get data
+    blocks: Vec<Block>,
+
+    /// A counter to keep track of the current block that should be read
+    current_block: usize,
+
+    /// The total number of blocks, which may contain record batches and other types
+    total_blocks: usize,
+
+    /// User defined metadata
+    custom_metadata: HashMap<String, String>,
+}
+
+impl<R: Read + Seek> fmt::Debug for FileReader<R> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> Result<(), fmt::Error> {
+        f.debug_struct("FileReader<R>")
+            .field("decoder", &self.decoder)
+            .field("blocks", &self.blocks)
+            .field("current_block", &self.current_block)
+            .field("total_blocks", &self.total_blocks)
+            .finish_non_exhaustive()
+    }
+}
+
+impl<R: Read + Seek> FileReader<R> {
+    /// Try to create a new file reader
+    ///
+    /// Returns errors if the file does not meet the Arrow Format footer requirements
+    pub fn try_new(reader: R, projection: Option<Vec<usize>>) -> Result<Self, ArrowError> {
+        let builder = FileReaderBuilder {
+            projection,
+            ..Default::default()
+        };
+        builder.build(reader)
     }
 
     /// Return user defined customized metadata
@@ -683,7 +884,7 @@ impl<R: Read + Seek> FileReader<R> {
 
     /// Return the schema of the file
     pub fn schema(&self) -> SchemaRef {
-        self.schema.clone()
+        self.decoder.schema.clone()
     }
 
     /// Read a specific record batch
@@ -702,78 +903,26 @@ impl<R: Read + Seek> FileReader<R> {
     }
 
     fn maybe_next(&mut self) -> Result<Option<RecordBatch>, ArrowError> {
-        let block = self.blocks[self.current_block];
+        let block = &self.blocks[self.current_block];
         self.current_block += 1;
 
         // read length
-        self.reader.seek(SeekFrom::Start(block.offset() as u64))?;
-        let mut meta_buf = [0; 4];
-        self.reader.read_exact(&mut meta_buf)?;
-        if meta_buf == CONTINUATION_MARKER {
-            // continuation marker encountered, read message next
-            self.reader.read_exact(&mut meta_buf)?;
-        }
-        let meta_len = i32::from_le_bytes(meta_buf);
-
-        let mut block_data = vec![0; meta_len as usize];
-        self.reader.read_exact(&mut block_data)?;
-        let message = crate::root_as_message(&block_data[..]).map_err(|err| {
-            ArrowError::ParseError(format!("Unable to get root as footer: {err:?}"))
-        })?;
-
-        // some old test data's footer metadata is not set, so we account for that
-        if self.metadata_version != crate::MetadataVersion::V1
-            && message.version() != self.metadata_version
-        {
-            return Err(ArrowError::IpcError(
-                "Could not read IPC message as metadata versions mismatch".to_string(),
-            ));
-        }
-
-        match message.header_type() {
-            crate::MessageHeader::Schema => Err(ArrowError::IpcError(
-                "Not expecting a schema when messages are read".to_string(),
-            )),
-            crate::MessageHeader::RecordBatch => {
-                let batch = message.header_as_record_batch().ok_or_else(|| {
-                    ArrowError::IpcError("Unable to read IPC message as record batch".to_string())
-                })?;
-                // read the block that makes up the record batch into a buffer
-                let mut buf = MutableBuffer::from_len_zeroed(message.bodyLength() as usize);
-                self.reader.seek(SeekFrom::Start(
-                    block.offset() as u64 + block.metaDataLength() as u64,
-                ))?;
-                self.reader.read_exact(&mut buf)?;
-
-                read_record_batch(
-                    &buf.into(),
-                    batch,
-                    self.schema(),
-                    &self.dictionaries_by_id,
-                    self.projection.as_ref().map(|x| x.0.as_ref()),
-                    &message.version(),
-                )
-                .map(Some)
-            }
-            crate::MessageHeader::NONE => Ok(None),
-            t => Err(ArrowError::InvalidArgumentError(format!(
-                "Reading types other than record batches not yet supported, unable to read {t:?}"
-            ))),
-        }
+        let buffer = read_block(&mut self.reader, block)?;
+        self.decoder.read_record_batch(block, &buffer)
     }
 
     /// Gets a reference to the underlying reader.
     ///
     /// It is inadvisable to directly read from the underlying reader.
     pub fn get_ref(&self) -> &R {
-        self.reader.get_ref()
+        &self.reader
     }
 
     /// Gets a mutable reference to the underlying reader.
     ///
     /// It is inadvisable to directly read from the underlying reader.
     pub fn get_mut(&mut self) -> &mut R {
-        self.reader.get_mut()
+        &mut self.reader
     }
 }
 
@@ -792,7 +941,7 @@ impl<R: Read + Seek> Iterator for FileReader<R> {
 
 impl<R: Read + Seek> RecordBatchReader for FileReader<R> {
     fn schema(&self) -> SchemaRef {
-        self.schema.clone()
+        self.schema()
     }
 }
 
@@ -1646,5 +1795,58 @@ mod tests {
         )
         .unwrap();
         assert_eq!(batch, roundtrip);
+    }
+
+    #[test]
+    fn test_file_with_massive_column_count() {
+        // 499_999 is upper limit for default settings (1_000_000)
+        let limit = 600_000;
+
+        let fields = (0..limit)
+            .map(|i| Field::new(format!("{i}"), DataType::Boolean, false))
+            .collect::<Vec<_>>();
+        let schema = Arc::new(Schema::new(fields));
+        let batch = RecordBatch::new_empty(schema);
+
+        let mut buf = Vec::new();
+        let mut writer = crate::writer::FileWriter::try_new(&mut buf, &batch.schema()).unwrap();
+        writer.write(&batch).unwrap();
+        writer.finish().unwrap();
+        drop(writer);
+
+        let mut reader = FileReaderBuilder::new()
+            .with_max_footer_fb_tables(1_500_000)
+            .build(std::io::Cursor::new(buf))
+            .unwrap();
+        let roundtrip_batch = reader.next().unwrap().unwrap();
+
+        assert_eq!(batch, roundtrip_batch);
+    }
+
+    #[test]
+    fn test_file_with_deeply_nested_columns() {
+        // 60 is upper limit for default settings (64)
+        let limit = 61;
+
+        let fields = (0..limit).fold(
+            vec![Field::new("leaf", DataType::Boolean, false)],
+            |field, index| vec![Field::new_struct(format!("{index}"), field, false)],
+        );
+        let schema = Arc::new(Schema::new(fields));
+        let batch = RecordBatch::new_empty(schema);
+
+        let mut buf = Vec::new();
+        let mut writer = crate::writer::FileWriter::try_new(&mut buf, &batch.schema()).unwrap();
+        writer.write(&batch).unwrap();
+        writer.finish().unwrap();
+        drop(writer);
+
+        let mut reader = FileReaderBuilder::new()
+            .with_max_footer_fb_depth(65)
+            .build(std::io::Cursor::new(buf))
+            .unwrap();
+        let roundtrip_batch = reader.next().unwrap().unwrap();
+
+        assert_eq!(batch, roundtrip_batch);
     }
 }

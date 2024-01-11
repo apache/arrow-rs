@@ -331,7 +331,7 @@ impl PageWriter for ArrowPageWriter {
 
         buf.length += compressed_size;
         buf.data.push(header);
-        buf.data.push(data.into());
+        buf.data.push(data);
 
         Ok(spec)
     }
@@ -771,6 +771,10 @@ fn write_leaf(writer: &mut ColumnWriter<'_>, levels: &ArrayLevels) -> Result<usi
                         .unwrap();
                     get_decimal_256_array_slice(array, indices)
                 }
+                ArrowDataType::Float16 => {
+                    let array = column.as_primitive::<Float16Type>();
+                    get_float_16_array_slice(array, indices)
+                }
                 _ => {
                     return Err(ParquetError::NYI(
                         "Attempting to write an Arrow type that is not yet implemented".to_string(),
@@ -867,6 +871,18 @@ fn get_decimal_256_array_slice(
     values
 }
 
+fn get_float_16_array_slice(
+    array: &arrow_array::Float16Array,
+    indices: &[usize],
+) -> Vec<FixedLenByteArray> {
+    let mut values = Vec::with_capacity(indices.len());
+    for i in indices {
+        let value = array.value(*i).to_le_bytes().to_vec();
+        values.push(FixedLenByteArray::from(ByteArray::from(value)));
+    }
+    values
+}
+
 fn get_fsb_array_slice(
     array: &arrow_array::FixedSizeBinaryArray,
     indices: &[usize],
@@ -900,8 +916,9 @@ mod tests {
     use crate::basic::Encoding;
     use crate::data_type::AsBytes;
     use crate::file::metadata::ParquetMetaData;
+    use crate::file::page_index::index::Index;
     use crate::file::page_index::index_reader::read_pages_locations;
-    use crate::file::properties::{ReaderProperties, WriterVersion};
+    use crate::file::properties::{EnabledStatistics, ReaderProperties, WriterVersion};
     use crate::file::serialized_reader::ReadOptionsBuilder;
     use crate::file::{
         reader::{FileReader, SerializedFileReader},
@@ -2721,5 +2738,145 @@ mod tests {
         assert_eq!(index[0].len(), 2); // 2 columns
         assert_eq!(index[0][0].len(), 1); // 1 page
         assert_eq!(index[0][1].len(), 1); // 1 page
+    }
+
+    #[test]
+    fn test_disabled_statistics_with_page() {
+        let file_schema = Schema::new(vec![
+            Field::new("a", DataType::Utf8, true),
+            Field::new("b", DataType::Utf8, true),
+        ]);
+        let file_schema = Arc::new(file_schema);
+
+        let batch = RecordBatch::try_new(
+            file_schema.clone(),
+            vec![
+                Arc::new(StringArray::from(vec!["a", "b", "c", "d"])) as _,
+                Arc::new(StringArray::from(vec!["w", "x", "y", "z"])) as _,
+            ],
+        )
+        .unwrap();
+
+        let props = WriterProperties::builder()
+            .set_statistics_enabled(EnabledStatistics::None)
+            .set_column_statistics_enabled("a".into(), EnabledStatistics::Page)
+            .build();
+
+        let mut buf = Vec::with_capacity(1024);
+        let mut writer = ArrowWriter::try_new(&mut buf, file_schema.clone(), Some(props)).unwrap();
+        writer.write(&batch).unwrap();
+
+        let metadata = writer.close().unwrap();
+        assert_eq!(metadata.row_groups.len(), 1);
+        let row_group = &metadata.row_groups[0];
+        assert_eq!(row_group.columns.len(), 2);
+        // Column "a" has both offset and column index, as requested
+        assert!(row_group.columns[0].offset_index_offset.is_some());
+        assert!(row_group.columns[0].column_index_offset.is_some());
+        // Column "b" should only have offset index
+        assert!(row_group.columns[1].offset_index_offset.is_some());
+        assert!(row_group.columns[1].column_index_offset.is_none());
+
+        let options = ReadOptionsBuilder::new().with_page_index().build();
+        let reader = SerializedFileReader::new_with_options(Bytes::from(buf), options).unwrap();
+
+        let row_group = reader.get_row_group(0).unwrap();
+        let a_col = row_group.metadata().column(0);
+        let b_col = row_group.metadata().column(1);
+
+        // Column chunk of column "a" should have chunk level statistics
+        if let Statistics::ByteArray(byte_array_stats) = a_col.statistics().unwrap() {
+            let min = byte_array_stats.min();
+            let max = byte_array_stats.max();
+
+            assert_eq!(min.as_bytes(), &[b'a']);
+            assert_eq!(max.as_bytes(), &[b'd']);
+        } else {
+            panic!("expecting Statistics::ByteArray");
+        }
+
+        // The column chunk for column "b" shouldn't have statistics
+        assert!(b_col.statistics().is_none());
+
+        let offset_index = reader.metadata().offset_index().unwrap();
+        assert_eq!(offset_index.len(), 1); // 1 row group
+        assert_eq!(offset_index[0].len(), 2); // 2 columns
+
+        let column_index = reader.metadata().column_index().unwrap();
+        assert_eq!(column_index.len(), 1); // 1 row group
+        assert_eq!(column_index[0].len(), 2); // 2 columns
+
+        let a_idx = &column_index[0][0];
+        assert!(matches!(a_idx, Index::BYTE_ARRAY(_)), "{a_idx:?}");
+        let b_idx = &column_index[0][1];
+        assert!(matches!(b_idx, Index::NONE), "{b_idx:?}");
+    }
+
+    #[test]
+    fn test_disabled_statistics_with_chunk() {
+        let file_schema = Schema::new(vec![
+            Field::new("a", DataType::Utf8, true),
+            Field::new("b", DataType::Utf8, true),
+        ]);
+        let file_schema = Arc::new(file_schema);
+
+        let batch = RecordBatch::try_new(
+            file_schema.clone(),
+            vec![
+                Arc::new(StringArray::from(vec!["a", "b", "c", "d"])) as _,
+                Arc::new(StringArray::from(vec!["w", "x", "y", "z"])) as _,
+            ],
+        )
+        .unwrap();
+
+        let props = WriterProperties::builder()
+            .set_statistics_enabled(EnabledStatistics::None)
+            .set_column_statistics_enabled("a".into(), EnabledStatistics::Chunk)
+            .build();
+
+        let mut buf = Vec::with_capacity(1024);
+        let mut writer = ArrowWriter::try_new(&mut buf, file_schema.clone(), Some(props)).unwrap();
+        writer.write(&batch).unwrap();
+
+        let metadata = writer.close().unwrap();
+        assert_eq!(metadata.row_groups.len(), 1);
+        let row_group = &metadata.row_groups[0];
+        assert_eq!(row_group.columns.len(), 2);
+        // Column "a" should only have offset index
+        assert!(row_group.columns[0].offset_index_offset.is_some());
+        assert!(row_group.columns[0].column_index_offset.is_none());
+        // Column "b" should only have offset index
+        assert!(row_group.columns[1].offset_index_offset.is_some());
+        assert!(row_group.columns[1].column_index_offset.is_none());
+
+        let options = ReadOptionsBuilder::new().with_page_index().build();
+        let reader = SerializedFileReader::new_with_options(Bytes::from(buf), options).unwrap();
+
+        let row_group = reader.get_row_group(0).unwrap();
+        let a_col = row_group.metadata().column(0);
+        let b_col = row_group.metadata().column(1);
+
+        // Column chunk of column "a" should have chunk level statistics
+        if let Statistics::ByteArray(byte_array_stats) = a_col.statistics().unwrap() {
+            let min = byte_array_stats.min();
+            let max = byte_array_stats.max();
+
+            assert_eq!(min.as_bytes(), &[b'a']);
+            assert_eq!(max.as_bytes(), &[b'd']);
+        } else {
+            panic!("expecting Statistics::ByteArray");
+        }
+
+        // The column chunk for column "b"  shouldn't have statistics
+        assert!(b_col.statistics().is_none());
+
+        let column_index = reader.metadata().column_index().unwrap();
+        assert_eq!(column_index.len(), 1); // 1 row group
+        assert_eq!(column_index[0].len(), 2); // 2 columns
+
+        let a_idx = &column_index[0][0];
+        assert!(matches!(a_idx, Index::NONE), "{a_idx:?}");
+        let b_idx = &column_index[0][1];
+        assert!(matches!(b_idx, Index::NONE), "{b_idx:?}");
     }
 }
