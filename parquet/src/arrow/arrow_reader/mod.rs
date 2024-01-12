@@ -737,7 +737,9 @@ mod tests {
 
     use arrow_array::builder::*;
     use arrow_array::cast::AsArray;
-    use arrow_array::types::{Decimal128Type, Decimal256Type, DecimalType, Float16Type};
+    use arrow_array::types::{
+        Decimal128Type, Decimal256Type, DecimalType, Float16Type, Float32Type, Float64Type,
+    };
     use arrow_array::*;
     use arrow_array::{RecordBatch, RecordBatchReader};
     use arrow_buffer::{i256, ArrowNativeType, Buffer};
@@ -755,7 +757,7 @@ mod tests {
     use crate::column::reader::decoder::REPETITION_LEVELS_BATCH_SIZE;
     use crate::data_type::{
         BoolType, ByteArray, ByteArrayType, DataType, FixedLenByteArray, FixedLenByteArrayType,
-        Int32Type, Int64Type, Int96Type,
+        FloatType, Int32Type, Int64Type, Int96Type,
     };
     use crate::errors::Result;
     use crate::file::properties::{EnabledStatistics, WriterProperties, WriterVersion};
@@ -860,6 +862,13 @@ mod tests {
                 Encoding::RLE_DICTIONARY,
                 Encoding::DELTA_BINARY_PACKED,
             ],
+        );
+        run_single_column_reader_tests::<FloatType, _, FloatType>(
+            2,
+            ConvertedType::NONE,
+            None,
+            |vals| Arc::new(Float32Array::from_iter(vals.iter().cloned())),
+            &[Encoding::PLAIN, Encoding::BYTE_STREAM_SPLIT],
         );
     }
 
@@ -1388,6 +1397,35 @@ mod tests {
         assert_eq!(col.value(1), f16::ZERO);
         assert!(col.value(1).is_sign_positive());
         assert!(col.value(2).is_nan());
+    }
+
+    #[test]
+    fn test_read_float32_float64_byte_stream_split() {
+        let path = format!(
+            "{}/byte_stream_split.zstd.parquet",
+            arrow::util::test_util::parquet_test_data(),
+        );
+        let file = File::open(path).unwrap();
+        let record_reader = ParquetRecordBatchReader::try_new(file, 128).unwrap();
+
+        let mut row_count = 0;
+        for batch in record_reader {
+            let batch = batch.unwrap();
+            row_count += batch.num_rows();
+            let f32_col = batch.column(0).as_primitive::<Float32Type>();
+            let f64_col = batch.column(1).as_primitive::<Float64Type>();
+
+            // This file contains floats from a standard normal distribution
+            for &x in f32_col.values() {
+                assert!(x > -10.0);
+                assert!(x < 10.0);
+            }
+            for &x in f64_col.values() {
+                assert!(x > -10.0);
+                assert!(x < 10.0);
+            }
+        }
+        assert_eq!(row_count, 300);
     }
 
     /// Parameters for single_column_reader_test
