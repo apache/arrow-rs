@@ -737,7 +737,9 @@ mod tests {
 
     use arrow_array::builder::*;
     use arrow_array::cast::AsArray;
-    use arrow_array::types::{Decimal128Type, Decimal256Type, DecimalType, Float16Type};
+    use arrow_array::types::{
+        Decimal128Type, Decimal256Type, DecimalType, Float16Type, Float32Type, Float64Type,
+    };
     use arrow_array::*;
     use arrow_array::{RecordBatch, RecordBatchReader};
     use arrow_buffer::{i256, ArrowNativeType, Buffer};
@@ -1410,25 +1412,17 @@ mod tests {
         for batch in record_reader {
             let batch = batch.unwrap();
             row_count += batch.num_rows();
-            let f32_col = batch
-                .column(0)
-                .as_any()
-                .downcast_ref::<Float32Array>()
-                .unwrap();
-            let f64_col = batch
-                .column(1)
-                .as_any()
-                .downcast_ref::<Float64Array>()
-                .unwrap();
+            let f32_col = batch.column(0).as_primitive::<Float32Type>();
+            let f64_col = batch.column(1).as_primitive::<Float64Type>();
 
             // This file contains floats from a standard normal distribution
-            for x in f32_col {
-                assert!(x.unwrap() > -10.0);
-                assert!(x.unwrap() < 10.0);
+            for &x in f32_col.values() {
+                assert!(x > -10.0);
+                assert!(x < 10.0);
             }
-            for x in f64_col {
-                assert!(x.unwrap() > -10.0);
-                assert!(x.unwrap() < 10.0);
+            for &x in f64_col.values() {
+                assert!(x > -10.0);
+                assert!(x < 10.0);
             }
         }
         assert_eq!(row_count, 300);
