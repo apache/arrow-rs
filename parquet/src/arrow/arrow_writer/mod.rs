@@ -944,6 +944,7 @@ mod tests {
     use std::sync::Arc;
 
     use crate::arrow::arrow_reader::{ParquetRecordBatchReader, ParquetRecordBatchReaderBuilder};
+    use crate::arrow::ARROW_SCHEMA_META_KEY;
     use arrow::datatypes::ToByteSlice;
     use arrow::datatypes::{DataType, Field, Schema, UInt32Type, UInt8Type};
     use arrow::error::Result as ArrowResult;
@@ -2921,5 +2922,38 @@ mod tests {
         assert!(matches!(a_idx, Index::NONE), "{a_idx:?}");
         let b_idx = &column_index[0][1];
         assert!(matches!(b_idx, Index::NONE), "{b_idx:?}");
+    }
+
+    #[test]
+    fn test_arrow_writer_skip_metadata() {
+        let batch_schema = Schema::new(vec![Field::new("int32", DataType::Int32, false)]);
+        let file_schema = Arc::new(batch_schema.clone());
+
+        let batch = RecordBatch::try_new(
+            Arc::new(batch_schema),
+            vec![Arc::new(Int32Array::from(vec![1, 2, 3, 4])) as _],
+        )
+        .unwrap();
+        let skip_options = ArrowWriterOptions::new().with_skip_arrow_metadata(true);
+
+        let mut buf = Vec::with_capacity(1024);
+        let mut writer =
+            ArrowWriter::try_new_with_options(&mut buf, file_schema.clone(), None, skip_options)
+                .unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+
+        let bytes = Bytes::from(buf);
+        let reader_builder = ParquetRecordBatchReaderBuilder::try_new(bytes).unwrap();
+        assert_eq!(file_schema, *reader_builder.schema());
+        if let Some(key_value_metadata) = reader_builder
+            .metadata()
+            .file_metadata()
+            .key_value_metadata()
+        {
+            assert!(!key_value_metadata
+                .iter()
+                .any(|kv| kv.key.as_str() == ARROW_SCHEMA_META_KEY));
+        }
     }
 }
