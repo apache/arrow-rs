@@ -24,10 +24,13 @@ use async_trait::async_trait;
 use base64::prelude::BASE64_URL_SAFE_NO_PAD;
 use base64::Engine;
 use futures::TryFutureExt;
+use hyper::HeaderMap;
+use itertools::Itertools;
 use reqwest::{Client, Method};
 use ring::signature::RsaKeyPair;
 use serde::Deserialize;
 use snafu::{ResultExt, Snafu};
+use std::collections::BTreeMap;
 use std::env;
 use std::fs::File;
 use std::io::BufReader;
@@ -35,6 +38,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tracing::info;
+use url::Url;
 
 pub const DEFAULT_SCOPE: &str = "https://www.googleapis.com/auth/devstorage.full_control";
 
@@ -454,5 +458,79 @@ impl TokenProvider for AuthorizedUserCredentials {
             }),
             expiry: Some(Instant::now() + Duration::from_secs(response.expires_in)),
         })
+    }
+}
+
+/// Canonicalizes query parameters into the GCP canonical form
+///
+/// <https://cloud.google.com/storage/docs/authentication/canonical-requests>
+fn canonicalize_request(url: &Url) -> String {
+    todo!()
+}
+
+/// Trim whitespace from header values
+fn trim_header_value(value: &str) -> String {
+    let mut ret = value.to_string();
+    ret.retain(|c| !c.is_whitespace());
+    ret
+}
+
+fn add_missing_required_headers(header_map: &mut HeaderMap) {
+    if !header_map.contains_key("host") {
+        header_map.insert("host", "storage.googleapis.com".parse().unwrap());
+    }
+}
+
+/// Canonicalizes query parameters into the GCP canonical form
+///
+/// <https://cloud.google.com/storage/docs/authentication/canonical-requests#about-headers>
+fn canonicalize_headers(header_map: &HeaderMap) -> String {
+    //FIXME add error handling for invalid header values
+    let mut headers = BTreeMap::<&str, Vec<&str>>::new();
+    for (k, v) in header_map {
+        headers
+            .entry(k.as_str())
+            .or_default()
+            .push(std::str::from_utf8(v.as_bytes()).unwrap());
+    }
+
+    headers
+        .iter()
+        .map(|(k, v)| {
+            format!(
+                "{}:{}",
+                k.trim(),
+                v.iter().map(|v| trim_header_value(v)).join(",")
+            )
+        })
+        .join("\n")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /*
+    *
+    * host: storage.googleapis.com
+    content-type: text/plain
+    x-goog-meta-reviewer: jane
+    x-goog-meta-reviewer: john
+    */
+
+    #[test]
+    fn test_canonicalize_headers() {
+        let mut input_header = HeaderMap::new();
+        input_header.insert("content-type", "text/plain".parse().unwrap());
+        input_header.insert("host", "storage.googleapis.com".parse().unwrap());
+        input_header.insert("x-goog-meta-reviewer", "jane".parse().unwrap());
+        input_header.append("x-goog-meta-reviewer", "john".parse().unwrap());
+        assert_eq!(
+            canonicalize_headers(&input_header),
+            "content-type:text/plain
+host:storage.googleapis.com
+x-goog-meta-reviewer:jane,john"
+                .to_string()
+        );
     }
 }
