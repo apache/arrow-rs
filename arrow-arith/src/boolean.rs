@@ -24,10 +24,7 @@
 
 use arrow_array::*;
 use arrow_buffer::buffer::{bitwise_bin_op_helper, bitwise_quaternary_op_helper};
-use arrow_buffer::{buffer_bin_and_not, BooleanBuffer, MutableBuffer, NullBuffer};
-use arrow_data::ArrayData;
-use arrow_schema::{ArrowError, DataType};
-use arrow_buffer::{BooleanBuffer, NullBuffer};
+use arrow_buffer::{buffer_bin_and_not, BooleanBuffer, NullBuffer};
 use arrow_schema::ArrowError;
 
 /// Logical 'and' boolean values with Kleene logic
@@ -289,13 +286,9 @@ pub fn or(left: &BooleanArray, right: &BooleanArray) -> Result<BooleanArray, Arr
 /// assert_eq!(andn_ab, BooleanArray::from(vec![Some(false), Some(false), None]));
 /// // It's equal to and(left, not(right))
 /// assert_eq!(andn_ab, and(&a, &not(&b).unwrap()).unwrap());
-pub fn and_not(
-    left: &BooleanArray,
-    right: &BooleanArray,
-) -> Result<BooleanArray, ArrowError> {
+pub fn and_not(left: &BooleanArray, right: &BooleanArray) -> Result<BooleanArray, ArrowError> {
     binary_boolean_kernel(left, right, |a, b| {
-        let buffer =
-            buffer_bin_and_not(&a.inner(), b.offset(), &b.inner(), a.offset(), a.len());
+        let buffer = buffer_bin_and_not(&a.inner(), b.offset(), &b.inner(), a.offset(), a.len());
         BooleanBuffer::new(buffer, left.offset(), left.len())
     })
 }
