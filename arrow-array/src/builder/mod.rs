@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Defines builders that can be used to safely build arrays
+//! Defines push-based APIs for constructing arrays
 //!
 //! # Basic Usage
 //!
@@ -81,7 +81,9 @@
 //! # Custom Builders
 //!
 //! It is common to have a collection of statically defined Rust types that
-//! you want to convert to Arrow arrays. An example of doing so is below
+//! you want to convert to Arrow arrays.
+//!
+//! An example of doing so is below
 //!
 //! ```
 //! # use std::any::Any;
@@ -115,14 +117,14 @@
 //!     /// Note: returns StructArray to allow nesting within another array if desired
 //!     fn finish(&mut self) -> StructArray {
 //!         let i32 = Arc::new(self.i32.finish()) as ArrayRef;
-//!         let i32_field = Field::new("i32", DataType::Int32, false);
+//!         let i32_field = Arc::new(Field::new("i32", DataType::Int32, false));
 //!
 //!         let string = Arc::new(self.string.finish()) as ArrayRef;
-//!         let string_field = Field::new("i32", DataType::Utf8, false);
+//!         let string_field = Arc::new(Field::new("i32", DataType::Utf8, false));
 //!
 //!         let i32_list = Arc::new(self.i32_list.finish()) as ArrayRef;
 //!         let value_field = Arc::new(Field::new("item", DataType::Int32, true));
-//!         let i32_list_field = Field::new("i32_list", DataType::List(value_field), true);
+//!         let i32_list_field = Arc::new(Field::new("i32_list", DataType::List(value_field), true));
 //!
 //!         StructArray::from(vec![
 //!             (i32_field, i32),
@@ -146,8 +148,7 @@
 //! }
 //! ```
 
-mod boolean_buffer_builder;
-pub use boolean_buffer_builder::*;
+pub use arrow_buffer::BooleanBufferBuilder;
 
 mod boolean_builder;
 pub use boolean_builder::*;
@@ -163,7 +164,8 @@ mod generic_list_builder;
 pub use generic_list_builder::*;
 mod map_builder;
 pub use map_builder::*;
-mod null_buffer_builder;
+mod null_builder;
+pub use null_builder::*;
 mod primitive_builder;
 pub use primitive_builder::*;
 mod primitive_dictionary_builder;
@@ -235,7 +237,9 @@ pub trait ArrayBuilder: Any + Send {
     fn len(&self) -> usize;
 
     /// Returns whether number of array slots is zero
-    fn is_empty(&self) -> bool;
+    fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
 
     /// Builds the array
     fn finish(&mut self) -> ArrayRef;
@@ -261,26 +265,50 @@ pub trait ArrayBuilder: Any + Send {
     fn into_box_any(self: Box<Self>) -> Box<dyn Any>;
 }
 
-/// Builder for [`ListArray`]s (i32 offsets)
-///
-/// See [`GenericListBuilder`] for usage examples
-///
-/// [`ListArray`]: crate::array::ListArray
+impl ArrayBuilder for Box<dyn ArrayBuilder> {
+    fn len(&self) -> usize {
+        (**self).len()
+    }
+
+    fn is_empty(&self) -> bool {
+        (**self).is_empty()
+    }
+
+    fn finish(&mut self) -> ArrayRef {
+        (**self).finish()
+    }
+
+    fn finish_cloned(&self) -> ArrayRef {
+        (**self).finish_cloned()
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        (**self).as_any()
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        (**self).as_any_mut()
+    }
+
+    fn into_box_any(self: Box<Self>) -> Box<dyn Any> {
+        self
+    }
+}
+
+/// Builder for [`ListArray`](crate::array::ListArray)
 pub type ListBuilder<T> = GenericListBuilder<i32, T>;
 
-/// Builder for [`LargeListArray`]s (i64 offsets)
-///
-/// See [`GenericListBuilder`] for usage examples
-///
-/// [`LargeListArray`]: crate::array::LargeListArray
+/// Builder for [`LargeListArray`](crate::array::LargeListArray)
 pub type LargeListBuilder<T> = GenericListBuilder<i64, T>;
 
-/// A binary array builder with i32 offsets
+/// Builder for [`BinaryArray`](crate::array::BinaryArray)
 pub type BinaryBuilder = GenericBinaryBuilder<i32>;
-/// A binary array builder with i64 offsets
+
+/// Builder for [`LargeBinaryArray`](crate::array::LargeBinaryArray)
 pub type LargeBinaryBuilder = GenericBinaryBuilder<i64>;
 
-/// A string array builder with i32 offsets
+/// Builder for [`StringArray`](crate::array::StringArray)
 pub type StringBuilder = GenericStringBuilder<i32>;
-/// A string array builder with i64 offsets
+
+/// Builder for [`LargeStringArray`](crate::array::LargeStringArray)
 pub type LargeStringBuilder = GenericStringBuilder<i64>;

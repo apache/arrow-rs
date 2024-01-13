@@ -19,7 +19,7 @@ use crate::reader::tape::{Tape, TapeElement};
 use crate::reader::{make_decoder, ArrayDecoder};
 use arrow_array::builder::{BooleanBufferBuilder, BufferBuilder};
 use arrow_array::OffsetSizeTrait;
-use arrow_buffer::buffer::{BooleanBuffer, NullBuffer};
+use arrow_buffer::buffer::NullBuffer;
 use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::{ArrowError, DataType};
 use std::marker::PhantomData;
@@ -35,6 +35,7 @@ impl<O: OffsetSizeTrait> ListArrayDecoder<O> {
     pub fn new(
         data_type: DataType,
         coerce_primitive: bool,
+        strict_mode: bool,
         is_nullable: bool,
     ) -> Result<Self, ArrowError> {
         let field = match &data_type {
@@ -45,6 +46,7 @@ impl<O: OffsetSizeTrait> ListArrayDecoder<O> {
         let decoder = make_decoder(
             field.data_type().clone(),
             coerce_primitive,
+            strict_mode,
             field.is_nullable(),
         )?;
 
@@ -90,18 +92,13 @@ impl<O: OffsetSizeTrait> ArrayDecoder for ListArrayDecoder<O> {
             }
 
             let offset = O::from_usize(child_pos.len()).ok_or_else(|| {
-                ArrowError::JsonError(format!(
-                    "offset overflow decoding {}",
-                    self.data_type
-                ))
+                ArrowError::JsonError(format!("offset overflow decoding {}", self.data_type))
             })?;
             offsets.append(offset)
         }
 
         let child_data = self.decoder.decode(tape, &child_pos)?;
-        let nulls = nulls
-            .as_mut()
-            .map(|x| NullBuffer::new(BooleanBuffer::new(x.finish(), 0, pos.len())));
+        let nulls = nulls.as_mut().map(|x| NullBuffer::new(x.finish()));
 
         let data = ArrayDataBuilder::new(self.data_type.clone())
             .len(pos.len())

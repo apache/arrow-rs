@@ -21,27 +21,22 @@
 use crate::bloom_filter::Sbbf;
 use crate::format as parquet;
 use crate::format::{ColumnIndex, OffsetIndex, RowGroup};
-use std::io::{BufWriter, IoSlice};
+use crate::thrift::TSerializable;
+use std::fmt::Debug;
+use std::io::{BufWriter, IoSlice, Read};
 use std::{io::Write, sync::Arc};
-use thrift::protocol::{TCompactOutputProtocol, TSerializable};
+use thrift::protocol::TCompactOutputProtocol;
 
-use crate::basic::PageType;
-use crate::column::writer::{
-    get_typed_column_writer_mut, ColumnCloseResult, ColumnWriterImpl,
-};
+use crate::column::writer::{get_typed_column_writer_mut, ColumnCloseResult, ColumnWriterImpl};
 use crate::column::{
-    page::{CompressedPage, Page, PageWriteSpec, PageWriter},
+    page::{CompressedPage, PageWriteSpec, PageWriter},
     writer::{get_column_writer, ColumnWriter},
 };
 use crate::data_type::DataType;
 use crate::errors::{ParquetError, Result};
-use crate::file::{
-    metadata::*, properties::WriterPropertiesPtr,
-    statistics::to_thrift as statistics_to_thrift, PARQUET_MAGIC,
-};
-use crate::schema::types::{
-    self, ColumnDescPtr, SchemaDescPtr, SchemaDescriptor, TypePtr,
-};
+use crate::file::reader::ChunkReader;
+use crate::file::{metadata::*, properties::WriterPropertiesPtr, PARQUET_MAGIC};
+use crate::schema::types::{self, ColumnDescPtr, SchemaDescPtr, SchemaDescriptor, TypePtr};
 
 /// A wrapper around a [`Write`] that keeps track of the number
 /// of bytes that have been written. The given [`Write`] is wrapped
@@ -69,10 +64,7 @@ impl<W: Write> TrackedWrite<W> {
     /// Returns the underlying writer.
     pub fn into_inner(self) -> Result<W> {
         self.inner.into_inner().map_err(|err| {
-            ParquetError::General(format!(
-                "fail to get inner writer: {:?}",
-                err.to_string()
-            ))
+            ParquetError::General(format!("fail to get inner writer: {:?}", err.to_string()))
         })
     }
 }
@@ -117,7 +109,8 @@ pub type OnCloseRowGroup<'a> = Box<
             Vec<Option<ColumnIndex>>,
             Vec<Option<OffsetIndex>>,
         ) -> Result<()>
-        + 'a,
+        + 'a
+        + Send,
 >;
 
 // ----------------------------------------------------------------------
@@ -146,7 +139,19 @@ pub struct SerializedFileWriter<W: Write> {
     kv_metadatas: Vec<KeyValue>,
 }
 
-impl<W: Write> SerializedFileWriter<W> {
+impl<W: Write> Debug for SerializedFileWriter<W> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // implement Debug so this can be used with #[derive(Debug)]
+        // in client code rather than actually listing all the fields
+        f.debug_struct("SerializedFileWriter")
+            .field("descr", &self.descr)
+            .field("row_group_index", &self.row_group_index)
+            .field("kv_metadatas", &self.kv_metadatas)
+            .finish_non_exhaustive()
+    }
+}
+
+impl<W: Write + Send> SerializedFileWriter<W> {
     /// Creates new file writer.
     pub fn new(buf: W, schema: TypePtr, properties: WriterPropertiesPtr) -> Result<Self> {
         let mut buf = TrackedWrite::new(buf);
@@ -173,27 +178,28 @@ impl<W: Write> SerializedFileWriter<W> {
     /// previous row group must be finalised and closed using `RowGroupWriter::close` method.
     pub fn next_row_group(&mut self) -> Result<SerializedRowGroupWriter<'_, W>> {
         self.assert_previous_writer_closed()?;
+        let ordinal = self.row_group_index;
+
         self.row_group_index += 1;
 
         let row_groups = &mut self.row_groups;
         let row_bloom_filters = &mut self.bloom_filters;
         let row_column_indexes = &mut self.column_indexes;
         let row_offset_indexes = &mut self.offset_indexes;
-        let on_close = |metadata,
-                        row_group_bloom_filter,
-                        row_group_column_index,
-                        row_group_offset_index| {
-            row_groups.push(metadata);
-            row_bloom_filters.push(row_group_bloom_filter);
-            row_column_indexes.push(row_group_column_index);
-            row_offset_indexes.push(row_group_offset_index);
-            Ok(())
-        };
+        let on_close =
+            |metadata, row_group_bloom_filter, row_group_column_index, row_group_offset_index| {
+                row_groups.push(metadata);
+                row_bloom_filters.push(row_group_bloom_filter);
+                row_column_indexes.push(row_group_column_index);
+                row_offset_indexes.push(row_group_offset_index);
+                Ok(())
+            };
 
         let row_group_writer = SerializedRowGroupWriter::new(
             self.descr.clone(),
             self.props.clone(),
             &mut self.buf,
+            ordinal as i16,
             Some(Box::new(on_close)),
         );
         Ok(row_group_writer)
@@ -223,8 +229,7 @@ impl<W: Write> SerializedFileWriter<W> {
         // iter each column
         // write offset index to the file
         for (row_group_idx, row_group) in row_groups.iter_mut().enumerate() {
-            for (column_idx, column_metadata) in row_group.columns.iter_mut().enumerate()
-            {
+            for (column_idx, column_metadata) in row_group.columns.iter_mut().enumerate() {
                 match &self.offset_indexes[row_group_idx][column_idx] {
                     Some(offset_index) => {
                         let start_offset = self.buf.bytes_written();
@@ -254,12 +259,15 @@ impl<W: Write> SerializedFileWriter<W> {
                     Some(bloom_filter) => {
                         let start_offset = self.buf.bytes_written();
                         bloom_filter.write(&mut self.buf)?;
+                        let end_offset = self.buf.bytes_written();
                         // set offset and index for bloom filter
-                        column_chunk
+                        let column_chunk_meta = column_chunk
                             .meta_data
                             .as_mut()
-                            .expect("can't have bloom filter without column metadata")
-                            .bloom_filter_offset = Some(start_offset as i64);
+                            .expect("can't have bloom filter without column metadata");
+                        column_chunk_meta.bloom_filter_offset = Some(start_offset as i64);
+                        column_chunk_meta.bloom_filter_length =
+                            Some((end_offset - start_offset) as i32);
                     }
                     None => {}
                 }
@@ -274,8 +282,7 @@ impl<W: Write> SerializedFileWriter<W> {
         // iter each column
         // write column index to the file
         for (row_group_idx, row_group) in row_groups.iter_mut().enumerate() {
-            for (column_idx, column_metadata) in row_group.columns.iter_mut().enumerate()
-            {
+            for (column_idx, column_metadata) in row_group.columns.iter_mut().enumerate() {
                 match &self.column_indexes[row_group_idx][column_idx] {
                     Some(column_index) => {
                         let start_offset = self.buf.bytes_written();
@@ -316,6 +323,19 @@ impl<W: Write> SerializedFileWriter<W> {
             None => Some(self.kv_metadatas.clone()),
         };
 
+        // We only include ColumnOrder for leaf nodes.
+        // Currently only supported ColumnOrder is TypeDefinedOrder so we set this
+        // for all leaf nodes.
+        // Even if the column has an undefined sort order, such as INTERVAL, this
+        // is still technically the defined TYPEORDER so it should still be set.
+        let column_orders = (0..self.schema_descr().num_columns())
+            .map(|_| parquet::ColumnOrder::TYPEORDER(parquet::TypeDefinedOrder {}))
+            .collect();
+        // This field is optional, perhaps in cases where no min/max fields are set
+        // in any Statistics or ColumnIndex object in the whole file.
+        // But for simplicity we always set this field.
+        let column_orders = Some(column_orders);
+
         let file_metadata = parquet::FileMetaData {
             num_rows,
             row_groups,
@@ -323,7 +343,7 @@ impl<W: Write> SerializedFileWriter<W> {
             version: self.props.writer_version().as_num(),
             schema: types::to_thrift(self.schema.as_ref())?,
             created_by: Some(self.props.created_by().to_owned()),
-            column_orders: None,
+            column_orders,
             encryption_algorithm: None,
             footer_signing_key_metadata: None,
         };
@@ -337,7 +357,7 @@ impl<W: Write> SerializedFileWriter<W> {
         let end_pos = self.buf.bytes_written();
 
         // Write footer
-        let metadata_len = (end_pos - start_pos) as i32;
+        let metadata_len = (end_pos - start_pos) as u32;
 
         self.buf.write_all(&metadata_len.to_le_bytes())?;
         self.buf.write_all(&PARQUET_MAGIC)?;
@@ -355,6 +375,16 @@ impl<W: Write> SerializedFileWriter<W> {
 
     pub fn append_key_value_metadata(&mut self, kv_metadata: KeyValue) {
         self.kv_metadatas.push(kv_metadata);
+    }
+
+    /// Returns a reference to schema descriptor.
+    pub fn schema_descr(&self) -> &SchemaDescriptor {
+        &self.descr
+    }
+
+    /// Returns a reference to the writer properties
+    pub fn properties(&self) -> &WriterPropertiesPtr {
+        &self.props
     }
 
     /// Writes the file footer and returns the underlying writer.
@@ -389,25 +419,33 @@ pub struct SerializedRowGroupWriter<'a, W: Write> {
     bloom_filters: Vec<Option<Sbbf>>,
     column_indexes: Vec<Option<ColumnIndex>>,
     offset_indexes: Vec<Option<OffsetIndex>>,
+    row_group_index: i16,
+    file_offset: i64,
     on_close: Option<OnCloseRowGroup<'a>>,
 }
 
-impl<'a, W: Write> SerializedRowGroupWriter<'a, W> {
+impl<'a, W: Write + Send> SerializedRowGroupWriter<'a, W> {
     /// Creates a new `SerializedRowGroupWriter` with:
     ///
     /// - `schema_descr` - the schema to write
     /// - `properties` - writer properties
     /// - `buf` - the buffer to write data to
+    /// - `row_group_index` - row group index in this parquet file.
+    /// - `file_offset` - file offset of this row group in this parquet file.
     /// - `on_close` - an optional callback that will invoked on [`Self::close`]
     pub fn new(
         schema_descr: SchemaDescPtr,
         properties: WriterPropertiesPtr,
         buf: &'a mut TrackedWrite<W>,
+        row_group_index: i16,
         on_close: Option<OnCloseRowGroup<'a>>,
     ) -> Self {
         let num_columns = schema_descr.num_columns();
+        let file_offset = buf.bytes_written() as i64;
         Self {
             buf,
+            row_group_index,
+            file_offset,
             on_close,
             total_rows_written: None,
             descr: schema_descr,
@@ -423,27 +461,15 @@ impl<'a, W: Write> SerializedRowGroupWriter<'a, W> {
         }
     }
 
-    /// Returns the next column writer, if available, using the factory function;
-    /// otherwise returns `None`.
-    pub(crate) fn next_column_with_factory<'b, F, C>(
-        &'b mut self,
-        factory: F,
-    ) -> Result<Option<C>>
-    where
-        F: FnOnce(
-            ColumnDescPtr,
-            &'b WriterPropertiesPtr,
-            Box<dyn PageWriter + 'b>,
-            OnCloseColumnChunk<'b>,
-        ) -> Result<C>,
-    {
-        self.assert_previous_writer_closed()?;
+    /// Advance `self.column_index` returning the next [`ColumnDescPtr`] if any
+    fn next_column_desc(&mut self) -> Option<ColumnDescPtr> {
+        let ret = self.descr.columns().get(self.column_index)?.clone();
+        self.column_index += 1;
+        Some(ret)
+    }
 
-        if self.column_index >= self.descr.num_columns() {
-            return Ok(None);
-        }
-        let page_writer = Box::new(SerializedPageWriter::new(self.buf));
-
+    /// Returns [`OnCloseColumnChunk`] for the next writer
+    fn get_on_close(&mut self) -> (&mut TrackedWrite<W>, OnCloseColumnChunk<'_>) {
         let total_bytes_written = &mut self.total_bytes_written;
         let total_uncompressed_bytes = &mut self.total_uncompressed_bytes;
         let total_rows_written = &mut self.total_rows_written;
@@ -475,16 +501,30 @@ impl<'a, W: Write> SerializedRowGroupWriter<'a, W> {
 
             Ok(())
         };
+        (self.buf, Box::new(on_close))
+    }
 
-        let column = self.descr.column(self.column_index);
-        self.column_index += 1;
-
-        Ok(Some(factory(
-            column,
-            &self.props,
-            page_writer,
-            Box::new(on_close),
-        )?))
+    /// Returns the next column writer, if available, using the factory function;
+    /// otherwise returns `None`.
+    pub(crate) fn next_column_with_factory<'b, F, C>(&'b mut self, factory: F) -> Result<Option<C>>
+    where
+        F: FnOnce(
+            ColumnDescPtr,
+            WriterPropertiesPtr,
+            Box<dyn PageWriter + 'b>,
+            OnCloseColumnChunk<'b>,
+        ) -> Result<C>,
+    {
+        self.assert_previous_writer_closed()?;
+        Ok(match self.next_column_desc() {
+            Some(column) => {
+                let props = self.props.clone();
+                let (buf, on_close) = self.get_on_close();
+                let page_writer = Box::new(SerializedPageWriter::new(buf));
+                Some(factory(column, props, page_writer, Box::new(on_close))?)
+            }
+            None => None,
+        })
     }
 
     /// Returns the next column writer, if available; otherwise returns `None`.
@@ -492,9 +532,79 @@ impl<'a, W: Write> SerializedRowGroupWriter<'a, W> {
     /// closed returns `Err`.
     pub fn next_column(&mut self) -> Result<Option<SerializedColumnWriter<'_>>> {
         self.next_column_with_factory(|descr, props, page_writer, on_close| {
-            let column_writer = get_column_writer(descr, props.clone(), page_writer);
+            let column_writer = get_column_writer(descr, props, page_writer);
             Ok(SerializedColumnWriter::new(column_writer, Some(on_close)))
         })
+    }
+
+    /// Append an encoded column chunk from another source without decoding it
+    ///
+    /// This can be used for efficiently concatenating or projecting parquet data,
+    /// or encoding parquet data to temporary in-memory buffers
+    ///
+    /// See [`Self::next_column`] for writing data that isn't already encoded
+    pub fn append_column<R: ChunkReader>(
+        &mut self,
+        reader: &R,
+        mut close: ColumnCloseResult,
+    ) -> Result<()> {
+        self.assert_previous_writer_closed()?;
+        let desc = self
+            .next_column_desc()
+            .ok_or_else(|| general_err!("exhausted columns in SerializedRowGroupWriter"))?;
+
+        let metadata = close.metadata;
+
+        if metadata.column_descr() != desc.as_ref() {
+            return Err(general_err!(
+                "column descriptor mismatch, expected {:?} got {:?}",
+                desc,
+                metadata.column_descr()
+            ));
+        }
+
+        let src_dictionary_offset = metadata.dictionary_page_offset();
+        let src_data_offset = metadata.data_page_offset();
+        let src_offset = src_dictionary_offset.unwrap_or(src_data_offset);
+        let src_length = metadata.compressed_size();
+
+        let write_offset = self.buf.bytes_written();
+        let mut read = reader.get_read(src_offset as _)?.take(src_length as _);
+        let write_length = std::io::copy(&mut read, &mut self.buf)?;
+
+        if src_length as u64 != write_length {
+            return Err(general_err!(
+                "Failed to splice column data, expected {read_length} got {write_length}"
+            ));
+        }
+
+        let file_offset = self.buf.bytes_written() as i64;
+
+        let map_offset = |x| x - src_offset + write_offset as i64;
+        let mut builder = ColumnChunkMetaData::builder(metadata.column_descr_ptr())
+            .set_compression(metadata.compression())
+            .set_encodings(metadata.encodings().clone())
+            .set_file_offset(file_offset)
+            .set_total_compressed_size(metadata.compressed_size())
+            .set_total_uncompressed_size(metadata.uncompressed_size())
+            .set_num_values(metadata.num_values())
+            .set_data_page_offset(map_offset(src_data_offset))
+            .set_dictionary_page_offset(src_dictionary_offset.map(map_offset));
+
+        if let Some(statistics) = metadata.statistics() {
+            builder = builder.set_statistics(statistics.clone())
+        }
+        close.metadata = builder.build()?;
+
+        if let Some(offsets) = close.offset_index.as_mut() {
+            for location in &mut offsets.page_locations {
+                location.offset = map_offset(location.offset)
+            }
+        }
+
+        SerializedPageWriter::new(self.buf).write_metadata(&metadata)?;
+        let (_, on_close) = self.get_on_close();
+        on_close(close)
     }
 
     /// Closes this row group writer and returns row group metadata.
@@ -508,6 +618,8 @@ impl<'a, W: Write> SerializedRowGroupWriter<'a, W> {
                 .set_total_byte_size(self.total_uncompressed_bytes)
                 .set_num_rows(self.total_rows_written.unwrap_or(0) as i64)
                 .set_sorting_columns(self.props.sorting_columns().cloned())
+                .set_ordinal(self.row_group_index)
+                .set_file_offset(self.file_offset)
                 .build()?;
 
             let metadata = Arc::new(row_group_metadata);
@@ -516,9 +628,9 @@ impl<'a, W: Write> SerializedRowGroupWriter<'a, W> {
             if let Some(on_close) = self.on_close.take() {
                 on_close(
                     metadata,
-                    self.bloom_filters.clone(),
-                    self.column_indexes.clone(),
-                    self.offset_indexes.clone(),
+                    self.bloom_filters,
+                    self.column_indexes,
+                    self.offset_indexes,
                 )?
             }
         }
@@ -546,10 +658,7 @@ pub struct SerializedColumnWriter<'a> {
 impl<'a> SerializedColumnWriter<'a> {
     /// Create a new [`SerializedColumnWriter`] from a [`ColumnWriter`] and an
     /// optional callback to be invoked on [`Self::close`]
-    pub fn new(
-        inner: ColumnWriter<'a>,
-        on_close: Option<OnCloseColumnChunk<'a>>,
-    ) -> Self {
+    pub fn new(inner: ColumnWriter<'a>, on_close: Option<OnCloseColumnChunk<'a>>) -> Self {
         Self { inner, on_close }
     }
 
@@ -565,17 +674,7 @@ impl<'a> SerializedColumnWriter<'a> {
 
     /// Close this [`SerializedColumnWriter`]
     pub fn close(mut self) -> Result<()> {
-        let r = match self.inner {
-            ColumnWriter::BoolColumnWriter(typed) => typed.close()?,
-            ColumnWriter::Int32ColumnWriter(typed) => typed.close()?,
-            ColumnWriter::Int64ColumnWriter(typed) => typed.close()?,
-            ColumnWriter::Int96ColumnWriter(typed) => typed.close()?,
-            ColumnWriter::FloatColumnWriter(typed) => typed.close()?,
-            ColumnWriter::DoubleColumnWriter(typed) => typed.close()?,
-            ColumnWriter::ByteArrayColumnWriter(typed) => typed.close()?,
-            ColumnWriter::FixedLenByteArrayColumnWriter(typed) => typed.close()?,
-        };
-
+        let r = self.inner.close()?;
         if let Some(on_close) = self.on_close.take() {
             on_close(r)?
         }
@@ -611,88 +710,22 @@ impl<'a, W: Write> SerializedPageWriter<'a, W> {
     }
 }
 
-impl<'a, W: Write> PageWriter for SerializedPageWriter<'a, W> {
+impl<'a, W: Write + Send> PageWriter for SerializedPageWriter<'a, W> {
     fn write_page(&mut self, page: CompressedPage) -> Result<PageWriteSpec> {
-        let uncompressed_size = page.uncompressed_size();
-        let compressed_size = page.compressed_size();
-        let num_values = page.num_values();
-        let encoding = page.encoding();
         let page_type = page.page_type();
-
-        let mut page_header = parquet::PageHeader {
-            type_: page_type.into(),
-            uncompressed_page_size: uncompressed_size as i32,
-            compressed_page_size: compressed_size as i32,
-            // TODO: Add support for crc checksum
-            crc: None,
-            data_page_header: None,
-            index_page_header: None,
-            dictionary_page_header: None,
-            data_page_header_v2: None,
-        };
-
-        match *page.compressed_page() {
-            Page::DataPage {
-                def_level_encoding,
-                rep_level_encoding,
-                ref statistics,
-                ..
-            } => {
-                let data_page_header = parquet::DataPageHeader {
-                    num_values: num_values as i32,
-                    encoding: encoding.into(),
-                    definition_level_encoding: def_level_encoding.into(),
-                    repetition_level_encoding: rep_level_encoding.into(),
-                    statistics: statistics_to_thrift(statistics.as_ref()),
-                };
-                page_header.data_page_header = Some(data_page_header);
-            }
-            Page::DataPageV2 {
-                num_nulls,
-                num_rows,
-                def_levels_byte_len,
-                rep_levels_byte_len,
-                is_compressed,
-                ref statistics,
-                ..
-            } => {
-                let data_page_header_v2 = parquet::DataPageHeaderV2 {
-                    num_values: num_values as i32,
-                    num_nulls: num_nulls as i32,
-                    num_rows: num_rows as i32,
-                    encoding: encoding.into(),
-                    definition_levels_byte_length: def_levels_byte_len as i32,
-                    repetition_levels_byte_length: rep_levels_byte_len as i32,
-                    is_compressed: Some(is_compressed),
-                    statistics: statistics_to_thrift(statistics.as_ref()),
-                };
-                page_header.data_page_header_v2 = Some(data_page_header_v2);
-            }
-            Page::DictionaryPage { is_sorted, .. } => {
-                let dictionary_page_header = parquet::DictionaryPageHeader {
-                    num_values: num_values as i32,
-                    encoding: encoding.into(),
-                    is_sorted: Some(is_sorted),
-                };
-                page_header.dictionary_page_header = Some(dictionary_page_header);
-            }
-        }
-
         let start_pos = self.sink.bytes_written() as u64;
 
+        let page_header = page.to_thrift_header();
         let header_size = self.serialize_page_header(page_header)?;
         self.sink.write_all(page.data())?;
 
         let mut spec = PageWriteSpec::new();
         spec.page_type = page_type;
-        spec.uncompressed_size = uncompressed_size + header_size;
-        spec.compressed_size = compressed_size + header_size;
+        spec.uncompressed_size = page.uncompressed_size() + header_size;
+        spec.compressed_size = page.compressed_size() + header_size;
         spec.offset = start_pos;
         spec.bytes_written = self.sink.bytes_written() as u64 - start_pos;
-        // Number of values is incremented for data pages only
-        if page_type == PageType::DATA_PAGE || page_type == PageType::DATA_PAGE_V2 {
-            spec.num_values = num_values;
-        }
+        spec.num_values = page.num_values();
 
         Ok(spec)
     }
@@ -718,11 +751,17 @@ mod tests {
     use bytes::Bytes;
     use std::fs::File;
 
-    use crate::basic::{Compression, Encoding, LogicalType, Repetition, Type};
-    use crate::column::page::PageReader;
+    use crate::basic::{
+        ColumnOrder, Compression, ConvertedType, Encoding, LogicalType, Repetition, SortOrder, Type,
+    };
+    use crate::column::page::{Page, PageReader};
+    use crate::column::reader::get_typed_column_reader;
     use crate::compression::{create_codec, Codec, CodecOptionsBuilder};
     use crate::data_type::{BoolType, Int32Type};
+    use crate::file::page_index::index::Index;
+    use crate::file::properties::EnabledStatistics;
     use crate::file::reader::ChunkReader;
+    use crate::file::serialized_reader::ReadOptionsBuilder;
     use crate::file::{
         properties::{ReaderProperties, WriterProperties, WriterVersion},
         reader::{FileReader, SerializedFileReader, SerializedPageReader},
@@ -732,14 +771,13 @@ mod tests {
     use crate::record::{Row, RowAccessor};
     use crate::schema::parser::parse_message_type;
     use crate::schema::types::{ColumnDescriptor, ColumnPath};
-    use crate::util::memory::ByteBufferPtr;
 
     #[test]
     fn test_row_group_writer_error_not_all_columns_written() {
         let file = tempfile::tempfile().unwrap();
         let schema = Arc::new(
             types::Type::group_type_builder("schema")
-                .with_fields(&mut vec![Arc::new(
+                .with_fields(vec![Arc::new(
                     types::Type::primitive_type_builder("col1", Type::INT32)
                         .build()
                         .unwrap(),
@@ -747,7 +785,7 @@ mod tests {
                 .build()
                 .unwrap(),
         );
-        let props = Arc::new(WriterProperties::builder().build());
+        let props = Default::default();
         let mut writer = SerializedFileWriter::new(file, schema, props).unwrap();
         let row_group_writer = writer.next_row_group().unwrap();
         let res = row_group_writer.close();
@@ -765,7 +803,7 @@ mod tests {
         let file = tempfile::tempfile().unwrap();
         let schema = Arc::new(
             types::Type::group_type_builder("schema")
-                .with_fields(&mut vec![
+                .with_fields(vec![
                     Arc::new(
                         types::Type::primitive_type_builder("col1", Type::INT32)
                             .with_repetition(Repetition::REQUIRED)
@@ -782,7 +820,7 @@ mod tests {
                 .build()
                 .unwrap(),
         );
-        let props = Arc::new(WriterProperties::builder().build());
+        let props = Default::default();
         let mut writer = SerializedFileWriter::new(file, schema, props).unwrap();
         let mut row_group_writer = writer.next_row_group().unwrap();
 
@@ -812,7 +850,7 @@ mod tests {
 
         let schema = Arc::new(
             types::Type::group_type_builder("schema")
-                .with_fields(&mut vec![Arc::new(
+                .with_fields(vec![Arc::new(
                     types::Type::primitive_type_builder("col1", Type::INT32)
                         .build()
                         .unwrap(),
@@ -820,13 +858,84 @@ mod tests {
                 .build()
                 .unwrap(),
         );
-        let props = Arc::new(WriterProperties::builder().build());
-        let writer =
-            SerializedFileWriter::new(file.try_clone().unwrap(), schema, props).unwrap();
+        let props = Default::default();
+        let writer = SerializedFileWriter::new(file.try_clone().unwrap(), schema, props).unwrap();
         writer.close().unwrap();
 
         let reader = SerializedFileReader::new(file).unwrap();
         assert_eq!(reader.get_row_iter(None).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn test_file_writer_column_orders_populated() {
+        let file = tempfile::tempfile().unwrap();
+
+        let schema = Arc::new(
+            types::Type::group_type_builder("schema")
+                .with_fields(vec![
+                    Arc::new(
+                        types::Type::primitive_type_builder("col1", Type::INT32)
+                            .build()
+                            .unwrap(),
+                    ),
+                    Arc::new(
+                        types::Type::primitive_type_builder("col2", Type::FIXED_LEN_BYTE_ARRAY)
+                            .with_converted_type(ConvertedType::INTERVAL)
+                            .with_length(12)
+                            .build()
+                            .unwrap(),
+                    ),
+                    Arc::new(
+                        types::Type::group_type_builder("nested")
+                            .with_repetition(Repetition::REQUIRED)
+                            .with_fields(vec![
+                                Arc::new(
+                                    types::Type::primitive_type_builder(
+                                        "col3",
+                                        Type::FIXED_LEN_BYTE_ARRAY,
+                                    )
+                                    .with_logical_type(Some(LogicalType::Float16))
+                                    .with_length(2)
+                                    .build()
+                                    .unwrap(),
+                                ),
+                                Arc::new(
+                                    types::Type::primitive_type_builder("col4", Type::BYTE_ARRAY)
+                                        .with_logical_type(Some(LogicalType::String))
+                                        .build()
+                                        .unwrap(),
+                                ),
+                            ])
+                            .build()
+                            .unwrap(),
+                    ),
+                ])
+                .build()
+                .unwrap(),
+        );
+
+        let props = Default::default();
+        let writer = SerializedFileWriter::new(file.try_clone().unwrap(), schema, props).unwrap();
+        writer.close().unwrap();
+
+        let reader = SerializedFileReader::new(file).unwrap();
+
+        // only leaves
+        let expected = vec![
+            // INT32
+            ColumnOrder::TYPE_DEFINED_ORDER(SortOrder::SIGNED),
+            // INTERVAL
+            ColumnOrder::TYPE_DEFINED_ORDER(SortOrder::UNDEFINED),
+            // Float16
+            ColumnOrder::TYPE_DEFINED_ORDER(SortOrder::SIGNED),
+            // String
+            ColumnOrder::TYPE_DEFINED_ORDER(SortOrder::UNSIGNED),
+        ];
+        let actual = reader.metadata().file_metadata().column_orders();
+
+        assert!(actual.is_some());
+        let actual = actual.unwrap();
+        assert_eq!(*actual, expected);
     }
 
     #[test]
@@ -835,7 +944,7 @@ mod tests {
 
         let schema = Arc::new(
             types::Type::group_type_builder("schema")
-                .with_fields(&mut vec![Arc::new(
+                .with_fields(vec![Arc::new(
                     types::Type::primitive_type_builder("col1", Type::INT32)
                         .build()
                         .unwrap(),
@@ -851,8 +960,7 @@ mod tests {
                 )]))
                 .build(),
         );
-        let writer =
-            SerializedFileWriter::new(file.try_clone().unwrap(), schema, props).unwrap();
+        let writer = SerializedFileWriter::new(file.try_clone().unwrap(), schema, props).unwrap();
         writer.close().unwrap();
 
         let reader = SerializedFileReader::new(file).unwrap();
@@ -884,7 +992,7 @@ mod tests {
         );
         let schema = Arc::new(
             types::Type::group_type_builder("schema")
-                .with_fields(&mut vec![field.clone()])
+                .with_fields(vec![field.clone()])
                 .build()
                 .unwrap(),
         );
@@ -897,8 +1005,7 @@ mod tests {
                 .set_writer_version(WriterVersion::PARQUET_2_0)
                 .build(),
         );
-        let writer =
-            SerializedFileWriter::new(file.try_clone().unwrap(), schema, props).unwrap();
+        let writer = SerializedFileWriter::new(file.try_clone().unwrap(), schema, props).unwrap();
         writer.close().unwrap();
 
         let reader = SerializedFileReader::new(file).unwrap();
@@ -917,8 +1024,7 @@ mod tests {
         // ARROW-11803: Test that the converted and logical types have been populated
         let fields = reader.metadata().file_metadata().schema().get_fields();
         assert_eq!(fields.len(), 1);
-        let read_field = fields.get(0).unwrap();
-        assert_eq!(read_field, &field);
+        assert_eq!(fields[0], field);
     }
 
     #[test]
@@ -927,7 +1033,7 @@ mod tests {
 
         let schema = Arc::new(
             types::Type::group_type_builder("schema")
-                .with_fields(&mut vec![
+                .with_fields(vec![
                     Arc::new(
                         types::Type::primitive_type_builder("col1", Type::INT32)
                             .build()
@@ -1019,7 +1125,7 @@ mod tests {
     fn test_page_writer_data_pages() {
         let pages = vec![
             Page::DataPage {
-                buf: ByteBufferPtr::new(vec![1, 2, 3, 4, 5, 6, 7, 8]),
+                buf: Bytes::from(vec![1, 2, 3, 4, 5, 6, 7, 8]),
                 num_values: 10,
                 encoding: Encoding::DELTA_BINARY_PACKED,
                 def_level_encoding: Encoding::RLE,
@@ -1027,7 +1133,7 @@ mod tests {
                 statistics: Some(Statistics::int32(Some(1), Some(3), None, 7, true)),
             },
             Page::DataPageV2 {
-                buf: ByteBufferPtr::new(vec![4; 128]),
+                buf: Bytes::from(vec![4; 128]),
                 num_values: 10,
                 encoding: Encoding::DELTA_BINARY_PACKED,
                 num_nulls: 2,
@@ -1047,13 +1153,13 @@ mod tests {
     fn test_page_writer_dict_pages() {
         let pages = vec![
             Page::DictionaryPage {
-                buf: ByteBufferPtr::new(vec![1, 2, 3, 4, 5]),
+                buf: Bytes::from(vec![1, 2, 3, 4, 5]),
                 num_values: 5,
                 encoding: Encoding::RLE_DICTIONARY,
                 is_sorted: false,
             },
             Page::DataPage {
-                buf: ByteBufferPtr::new(vec![1, 2, 3, 4, 5, 6, 7, 8]),
+                buf: Bytes::from(vec![1, 2, 3, 4, 5, 6, 7, 8]),
                 num_values: 10,
                 encoding: Encoding::DELTA_BINARY_PACKED,
                 def_level_encoding: Encoding::RLE,
@@ -1061,7 +1167,7 @@ mod tests {
                 statistics: Some(Statistics::int32(Some(1), Some(3), None, 7, true)),
             },
             Page::DataPageV2 {
-                buf: ByteBufferPtr::new(vec![4; 128]),
+                buf: Bytes::from(vec![4; 128]),
                 num_values: 10,
                 encoding: Encoding::DELTA_BINARY_PACKED,
                 num_nulls: 2,
@@ -1101,18 +1207,16 @@ mod tests {
                     ref statistics,
                 } => {
                     total_num_values += num_values as i64;
-                    let output_buf = compress_helper(compressor.as_mut(), buf.data());
+                    let output_buf = compress_helper(compressor.as_mut(), buf);
 
                     Page::DataPage {
-                        buf: ByteBufferPtr::new(output_buf),
+                        buf: Bytes::from(output_buf),
                         num_values,
                         encoding,
                         def_level_encoding,
                         rep_level_encoding,
-                        statistics: from_thrift(
-                            physical_type,
-                            to_thrift(statistics.as_ref()),
-                        ),
+                        statistics: from_thrift(physical_type, to_thrift(statistics.as_ref()))
+                            .unwrap(),
                     }
                 }
                 Page::DataPageV2 {
@@ -1128,13 +1232,12 @@ mod tests {
                 } => {
                     total_num_values += num_values as i64;
                     let offset = (def_levels_byte_len + rep_levels_byte_len) as usize;
-                    let cmp_buf =
-                        compress_helper(compressor.as_mut(), &buf.data()[offset..]);
-                    let mut output_buf = Vec::from(&buf.data()[..offset]);
+                    let cmp_buf = compress_helper(compressor.as_mut(), &buf[offset..]);
+                    let mut output_buf = Vec::from(&buf[..offset]);
                     output_buf.extend_from_slice(&cmp_buf[..]);
 
                     Page::DataPageV2 {
-                        buf: ByteBufferPtr::new(output_buf),
+                        buf: Bytes::from(output_buf),
                         num_values,
                         encoding,
                         num_nulls,
@@ -1142,10 +1245,8 @@ mod tests {
                         def_levels_byte_len,
                         rep_levels_byte_len,
                         is_compressed: compressor.is_some(),
-                        statistics: from_thrift(
-                            physical_type,
-                            to_thrift(statistics.as_ref()),
-                        ),
+                        statistics: from_thrift(physical_type, to_thrift(statistics.as_ref()))
+                            .unwrap(),
                     }
                 }
                 Page::DictionaryPage {
@@ -1154,10 +1255,10 @@ mod tests {
                     encoding,
                     is_sorted,
                 } => {
-                    let output_buf = compress_helper(compressor.as_mut(), buf.data());
+                    let output_buf = compress_helper(compressor.as_mut(), buf);
 
                     Page::DictionaryPage {
-                        buf: ByteBufferPtr::new(output_buf),
+                        buf: Bytes::from(output_buf),
                         num_values,
                         encoding,
                         is_sorted,
@@ -1232,7 +1333,7 @@ mod tests {
     /// Check if pages match.
     fn assert_page(left: &Page, right: &Page) {
         assert_eq!(left.page_type(), right.page_type());
-        assert_eq!(left.buffer().data(), right.buffer().data());
+        assert_eq!(&left.buffer(), &right.buffer());
         assert_eq!(left.num_values(), right.num_values());
         assert_eq!(left.encoding(), right.encoding());
         assert_eq!(to_thrift(left.statistics()), to_thrift(right.statistics()));
@@ -1245,15 +1346,10 @@ mod tests {
         compression: Compression,
     ) -> crate::format::FileMetaData
     where
-        W: Write,
+        W: Write + Send,
         R: ChunkReader + From<W> + 'static,
     {
-        test_roundtrip::<W, R, Int32Type, _>(
-            file,
-            data,
-            |r| r.get_int(0).unwrap(),
-            compression,
-        )
+        test_roundtrip::<W, R, Int32Type, _>(file, data, |r| r.get_int(0).unwrap(), compression)
     }
 
     /// Tests roundtrip of data of type `D` written using `W` and read using `R`
@@ -1265,14 +1361,14 @@ mod tests {
         compression: Compression,
     ) -> crate::format::FileMetaData
     where
-        W: Write,
+        W: Write + Send,
         R: ChunkReader + From<W> + 'static,
         D: DataType,
         F: Fn(Row) -> D::T,
     {
         let schema = Arc::new(
             types::Type::group_type_builder("schema")
-                .with_fields(&mut vec![Arc::new(
+                .with_fields(vec![Arc::new(
                     types::Type::primitive_type_builder("col1", D::get_physical_type())
                         .with_repetition(Repetition::REQUIRED)
                         .build()
@@ -1286,11 +1382,11 @@ mod tests {
                 .set_compression(compression)
                 .build(),
         );
-        let mut file_writer =
-            SerializedFileWriter::new(&mut file, schema, props).unwrap();
+        let mut file_writer = SerializedFileWriter::new(&mut file, schema, props).unwrap();
         let mut rows: i64 = 0;
 
         for (idx, subset) in data.iter().enumerate() {
+            let row_group_file_offset = file_writer.buf.bytes_written();
             let mut row_group_writer = file_writer.next_row_group().unwrap();
             if let Some(mut writer) = row_group_writer.next_column().unwrap() {
                 rows += writer
@@ -1302,6 +1398,8 @@ mod tests {
             let last_group = row_group_writer.close().unwrap();
             let flushed = file_writer.flushed_row_groups();
             assert_eq!(flushed.len(), idx + 1);
+            assert_eq!(Some(idx as i16), last_group.ordinal());
+            assert_eq!(Some(row_group_file_offset as i64), last_group.file_offset());
             assert_eq!(flushed[idx].as_ref(), last_group.as_ref());
         }
         let file_metadata = file_writer.close().unwrap();
@@ -1316,7 +1414,7 @@ mod tests {
         for (i, item) in data.iter().enumerate().take(reader.num_row_groups()) {
             let row_group_reader = reader.get_row_group(i).unwrap();
             let iter = row_group_reader.get_row_iter(None).unwrap();
-            let res: Vec<_> = iter.map(&value).collect();
+            let res: Vec<_> = iter.map(|row| row.unwrap()).map(&value).collect();
             let row_group_size = row_group_reader.metadata().total_byte_size();
             let uncompressed_size: i64 = row_group_reader
                 .metadata()
@@ -1332,10 +1430,7 @@ mod tests {
 
     /// File write-read roundtrip.
     /// `data` consists of arrays of values for each row group.
-    fn test_file_roundtrip(
-        file: File,
-        data: Vec<Vec<i32>>,
-    ) -> crate::format::FileMetaData {
+    fn test_file_roundtrip(file: File, data: Vec<Vec<i32>>) -> crate::format::FileMetaData {
         test_roundtrip_i32::<File, File>(file, data, Compression::UNCOMPRESSED)
     }
 
@@ -1421,13 +1516,10 @@ mod tests {
         });
     }
 
-    fn test_kv_metadata(
-        initial_kv: Option<Vec<KeyValue>>,
-        final_kv: Option<Vec<KeyValue>>,
-    ) {
+    fn test_kv_metadata(initial_kv: Option<Vec<KeyValue>>, final_kv: Option<Vec<KeyValue>>) {
         let schema = Arc::new(
             types::Type::group_type_builder("schema")
-                .with_fields(&mut vec![Arc::new(
+                .with_fields(vec![Arc::new(
                     types::Type::primitive_type_builder("col1", Type::INT32)
                         .with_repetition(Repetition::REQUIRED)
                         .build()
@@ -1497,7 +1589,7 @@ mod tests {
         ";
 
         let schema = Arc::new(parse_message_type(message_type).unwrap());
-        let props = Arc::new(WriterProperties::builder().build());
+        let props = Default::default();
         let mut writer = SerializedFileWriter::new(vec![], schema, props).unwrap();
         let mut row_group_writer = writer.next_row_group().unwrap();
 
@@ -1539,5 +1631,150 @@ mod tests {
         assert_eq!(s.max.as_deref(), None);
         assert_eq!(s.min_value.as_deref(), Some(1_i32.to_le_bytes().as_ref()));
         assert_eq!(s.max_value.as_deref(), Some(3_i32.to_le_bytes().as_ref()));
+    }
+
+    #[test]
+    fn test_spliced_write() {
+        let message_type = "
+            message test_schema {
+                REQUIRED INT32 i32 (INTEGER(32,true));
+                REQUIRED INT32 u32 (INTEGER(32,false));
+            }
+        ";
+        let schema = Arc::new(parse_message_type(message_type).unwrap());
+        let props = Arc::new(WriterProperties::builder().build());
+
+        let mut file = Vec::with_capacity(1024);
+        let mut file_writer = SerializedFileWriter::new(&mut file, schema, props.clone()).unwrap();
+
+        let columns = file_writer.descr.columns();
+        let mut column_state: Vec<(_, Option<ColumnCloseResult>)> = columns
+            .iter()
+            .map(|_| (TrackedWrite::new(Vec::with_capacity(1024)), None))
+            .collect();
+
+        let mut column_state_slice = column_state.as_mut_slice();
+        let mut column_writers = Vec::with_capacity(columns.len());
+        for c in columns {
+            let ((buf, out), tail) = column_state_slice.split_first_mut().unwrap();
+            column_state_slice = tail;
+
+            let page_writer = Box::new(SerializedPageWriter::new(buf));
+            let col_writer = get_column_writer(c.clone(), props.clone(), page_writer);
+            column_writers.push(SerializedColumnWriter::new(
+                col_writer,
+                Some(Box::new(|on_close| {
+                    *out = Some(on_close);
+                    Ok(())
+                })),
+            ));
+        }
+
+        let column_data = [[1, 2, 3, 4], [7, 3, 7, 3]];
+
+        // Interleaved writing to the column writers
+        for (writer, batch) in column_writers.iter_mut().zip(column_data) {
+            let writer = writer.typed::<Int32Type>();
+            writer.write_batch(&batch, None, None).unwrap();
+        }
+
+        // Close the column writers
+        for writer in column_writers {
+            writer.close().unwrap()
+        }
+
+        // Splice column data into a row group
+        let mut row_group_writer = file_writer.next_row_group().unwrap();
+        for (write, close) in column_state {
+            let buf = Bytes::from(write.into_inner().unwrap());
+            row_group_writer
+                .append_column(&buf, close.unwrap())
+                .unwrap();
+        }
+        row_group_writer.close().unwrap();
+        file_writer.close().unwrap();
+
+        // Check data was written correctly
+        let file = Bytes::from(file);
+        let test_read = |reader: SerializedFileReader<Bytes>| {
+            let row_group = reader.get_row_group(0).unwrap();
+
+            let mut out = Vec::with_capacity(4);
+            let c1 = row_group.get_column_reader(0).unwrap();
+            let mut c1 = get_typed_column_reader::<Int32Type>(c1);
+            c1.read_records(4, None, None, &mut out).unwrap();
+            assert_eq!(out, column_data[0]);
+
+            out.clear();
+
+            let c2 = row_group.get_column_reader(1).unwrap();
+            let mut c2 = get_typed_column_reader::<Int32Type>(c2);
+            c2.read_records(4, None, None, &mut out).unwrap();
+            assert_eq!(out, column_data[1]);
+        };
+
+        let reader = SerializedFileReader::new(file.clone()).unwrap();
+        test_read(reader);
+
+        let options = ReadOptionsBuilder::new().with_page_index().build();
+        let reader = SerializedFileReader::new_with_options(file, options).unwrap();
+        test_read(reader);
+    }
+
+    #[test]
+    fn test_disabled_statistics() {
+        let message_type = "
+            message test_schema {
+                REQUIRED INT32 a;
+                REQUIRED INT32 b;
+            }
+        ";
+        let schema = Arc::new(parse_message_type(message_type).unwrap());
+        let props = WriterProperties::builder()
+            .set_statistics_enabled(EnabledStatistics::None)
+            .set_column_statistics_enabled("a".into(), EnabledStatistics::Page)
+            .build();
+        let mut file = Vec::with_capacity(1024);
+        let mut file_writer =
+            SerializedFileWriter::new(&mut file, schema, Arc::new(props)).unwrap();
+
+        let mut row_group_writer = file_writer.next_row_group().unwrap();
+        let mut a_writer = row_group_writer.next_column().unwrap().unwrap();
+        let col_writer = a_writer.typed::<Int32Type>();
+        col_writer.write_batch(&[1, 2, 3], None, None).unwrap();
+        a_writer.close().unwrap();
+
+        let mut b_writer = row_group_writer.next_column().unwrap().unwrap();
+        let col_writer = b_writer.typed::<Int32Type>();
+        col_writer.write_batch(&[4, 5, 6], None, None).unwrap();
+        b_writer.close().unwrap();
+        row_group_writer.close().unwrap();
+
+        let metadata = file_writer.close().unwrap();
+        assert_eq!(metadata.row_groups.len(), 1);
+        let row_group = &metadata.row_groups[0];
+        assert_eq!(row_group.columns.len(), 2);
+        // Column "a" has both offset and column index, as requested
+        assert!(row_group.columns[0].offset_index_offset.is_some());
+        assert!(row_group.columns[0].column_index_offset.is_some());
+        // Column "b" should only have offset index
+        assert!(row_group.columns[1].offset_index_offset.is_some());
+        assert!(row_group.columns[1].column_index_offset.is_none());
+
+        let options = ReadOptionsBuilder::new().with_page_index().build();
+        let reader = SerializedFileReader::new_with_options(Bytes::from(file), options).unwrap();
+
+        let offset_index = reader.metadata().offset_index().unwrap();
+        assert_eq!(offset_index.len(), 1); // 1 row group
+        assert_eq!(offset_index[0].len(), 2); // 2 columns
+
+        let column_index = reader.metadata().column_index().unwrap();
+        assert_eq!(column_index.len(), 1); // 1 row group
+        assert_eq!(column_index[0].len(), 2); // 2 column
+
+        let a_idx = &column_index[0][0];
+        assert!(matches!(a_idx, Index::INT32(_)), "{a_idx:?}");
+        let b_idx = &column_index[0][1];
+        assert!(matches!(b_idx, Index::NONE), "{b_idx:?}");
     }
 }

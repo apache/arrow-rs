@@ -25,9 +25,7 @@ use comfy_table::{Cell, Table};
 use std::fmt::Display;
 
 /// Create a visual representation of record batches
-pub fn pretty_format_batches(
-    results: &[RecordBatch],
-) -> Result<impl Display, ArrowError> {
+pub fn pretty_format_batches(results: &[RecordBatch]) -> Result<impl Display, ArrowError> {
     let options = FormatOptions::default().with_display_error(true);
     pretty_format_batches_with_options(results, &options)
 }
@@ -70,10 +68,7 @@ pub fn print_columns(col_name: &str, results: &[ArrayRef]) -> Result<(), ArrowEr
 }
 
 /// Convert a series of record batches into a table
-fn create_table(
-    results: &[RecordBatch],
-    options: &FormatOptions,
-) -> Result<Table, ArrowError> {
+fn create_table(results: &[RecordBatch], options: &FormatOptions) -> Result<Table, ArrowError> {
     let mut table = Table::new();
     table.load_preset("||--+-++|    ++++++");
 
@@ -209,8 +204,8 @@ mod tests {
         let table = pretty_format_columns("a", &columns).unwrap().to_string();
 
         let expected = vec![
-            "+---+", "| a |", "+---+", "| a |", "| b |", "|   |", "| d |", "| e |",
-            "|   |", "| g |", "+---+",
+            "+---+", "| a |", "+---+", "| a |", "| b |", "|   |", "| d |", "| e |", "|   |",
+            "| g |", "+---+",
         ];
 
         let actual: Vec<&str> = table.lines().collect();
@@ -289,10 +284,8 @@ mod tests {
     #[test]
     fn test_pretty_format_fixed_size_list() {
         // define a schema.
-        let field_type = DataType::FixedSizeList(
-            Arc::new(Field::new("item", DataType::Int32, true)),
-            3,
-        );
+        let field_type =
+            DataType::FixedSizeList(Arc::new(Field::new("item", DataType::Int32, true)), 3);
         let schema = Arc::new(Schema::new(vec![Field::new("d1", field_type, true)]));
 
         let keys_builder = Int32Array::builder(3);
@@ -383,10 +376,7 @@ mod tests {
         };
     }
 
-    fn timestamp_batch<T: ArrowTimestampType>(
-        timezone: &str,
-        value: T::Native,
-    ) -> RecordBatch {
+    fn timestamp_batch<T: ArrowTimestampType>(timezone: &str, value: T::Native) -> RecordBatch {
         let mut builder = PrimitiveBuilder::<T>::with_capacity(10);
         builder.append_value(value);
         builder.append_null();
@@ -621,8 +611,8 @@ mod tests {
 
         let table = pretty_format_batches(&[batch]).unwrap().to_string();
         let expected = vec![
-            "+------+", "| f    |", "+------+", "| 101  |", "|      |", "| 200  |",
-            "| 3040 |", "+------+",
+            "+------+", "| f    |", "+------+", "| 101  |", "|      |", "| 200  |", "| 3040 |",
+            "+------+",
         ];
 
         let actual: Vec<&str> = table.lines().collect();
@@ -649,27 +639,25 @@ mod tests {
 
         let c1 = StructArray::from(vec![
             (
-                Field::new("c11", DataType::Int32, true),
+                Arc::new(Field::new("c11", DataType::Int32, true)),
                 Arc::new(Int32Array::from(vec![Some(1), None, Some(5)])) as ArrayRef,
             ),
             (
-                Field::new_struct(
+                Arc::new(Field::new_struct(
                     "c12",
                     vec![Field::new("c121", DataType::Utf8, false)],
                     false,
-                ),
+                )),
                 Arc::new(StructArray::from(vec![(
-                    Field::new("c121", DataType::Utf8, false),
-                    Arc::new(StringArray::from(vec![Some("e"), Some("f"), Some("g")]))
-                        as ArrayRef,
+                    Arc::new(Field::new("c121", DataType::Utf8, false)),
+                    Arc::new(StringArray::from(vec![Some("e"), Some("f"), Some("g")])) as ArrayRef,
                 )])) as ArrayRef,
             ),
         ]);
         let c2 = StringArray::from(vec![Some("a"), Some("b"), Some("c")]);
 
         let batch =
-            RecordBatch::try_new(Arc::new(schema), vec![Arc::new(c1), Arc::new(c2)])
-                .unwrap();
+            RecordBatch::try_new(Arc::new(schema), vec![Arc::new(c1), Arc::new(c2)]).unwrap();
 
         let table = pretty_format_batches(&[batch]).unwrap().to_string();
         let expected = vec![
@@ -705,8 +693,7 @@ mod tests {
             UnionMode::Dense,
         )]);
 
-        let batch =
-            RecordBatch::try_new(Arc::new(schema), vec![Arc::new(union)]).unwrap();
+        let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(union)]).unwrap();
         let table = pretty_format_batches(&[batch]).unwrap().to_string();
         let actual: Vec<&str> = table.lines().collect();
         let expected = vec![
@@ -742,8 +729,7 @@ mod tests {
             UnionMode::Sparse,
         )]);
 
-        let batch =
-            RecordBatch::try_new(Arc::new(schema), vec![Arc::new(union)]).unwrap();
+        let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(union)]).unwrap();
         let table = pretty_format_batches(&[batch]).unwrap().to_string();
         let actual: Vec<&str> = table.lines().collect();
         let expected = vec![
@@ -799,8 +785,7 @@ mod tests {
             UnionMode::Sparse,
         )]);
 
-        let batch =
-            RecordBatch::try_new(Arc::new(schema), vec![Arc::new(outer)]).unwrap();
+        let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(outer)]).unwrap();
         let table = pretty_format_batches(&[batch]).unwrap().to_string();
         let actual: Vec<&str> = table.lines().collect();
         let expected = vec![
@@ -848,7 +833,7 @@ mod tests {
         let mut buf = String::new();
         write!(&mut buf, "{}", pretty_format_batches(&[batch]).unwrap()).unwrap();
 
-        let s = vec![
+        let s = [
             "+---+-----+",
             "| a | b   |",
             "+---+-----+",
@@ -882,8 +867,7 @@ mod tests {
         let table = pretty_format_batches(&[batch]).unwrap().to_string();
 
         let expected = vec![
-            "+------+", "| f16  |", "+------+", "| NaN  |", "| 4    |", "| -inf |",
-            "+------+",
+            "+------+", "| f16  |", "+------+", "| NaN  |", "| 4    |", "| -inf |", "+------+",
         ];
 
         let actual: Vec<&str> = table.lines().collect();
@@ -986,9 +970,7 @@ mod tests {
     fn test_format_options() {
         let options = FormatOptions::default().with_null("null");
         let array = Int32Array::from(vec![Some(1), Some(2), None, Some(3), Some(4)]);
-        let batch =
-            RecordBatch::try_from_iter([("my_column_name", Arc::new(array) as _)])
-                .unwrap();
+        let batch = RecordBatch::try_from_iter([("my_column_name", Arc::new(array) as _)]).unwrap();
 
         let column = pretty_format_columns_with_options(
             "my_column_name",

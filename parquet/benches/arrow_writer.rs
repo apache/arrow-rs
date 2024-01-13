@@ -311,10 +311,7 @@ fn write_batch_enable_bloom_filter(batch: &RecordBatch) -> Result<()> {
 }
 
 #[inline]
-fn write_batch_with_option(
-    batch: &RecordBatch,
-    props: Option<WriterProperties>,
-) -> Result<()> {
+fn write_batch_with_option(batch: &RecordBatch, props: Option<WriterProperties>) -> Result<()> {
     let path = env::temp_dir().join("arrow_writer.temp");
     let file = File::create(path).unwrap();
     let mut writer = ArrowWriter::try_new(file, batch.schema(), props)?;

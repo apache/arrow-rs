@@ -18,8 +18,8 @@
 use crate::bit_chunk_iterator::BitChunks;
 use crate::bit_iterator::{BitIndexIterator, BitIterator, BitSliceIterator};
 use crate::{
-    bit_util, buffer_bin_and, buffer_bin_or, buffer_bin_xor, buffer_unary_not, Buffer,
-    MutableBuffer,
+    bit_util, buffer_bin_and, buffer_bin_or, buffer_bin_xor, buffer_unary_not,
+    BooleanBufferBuilder, Buffer, MutableBuffer,
 };
 use std::ops::{BitAnd, BitOr, BitXor, Not};
 
@@ -60,6 +60,23 @@ impl BooleanBuffer {
         }
     }
 
+    /// Create a new [`BooleanBuffer`] of `length` where all values are `true`
+    pub fn new_set(length: usize) -> Self {
+        let mut builder = BooleanBufferBuilder::new(length);
+        builder.append_n(length, true);
+        builder.finish()
+    }
+
+    /// Create a new [`BooleanBuffer`] of `length` where all values are `false`
+    pub fn new_unset(length: usize) -> Self {
+        let buffer = MutableBuffer::new_null(length).into_buffer();
+        Self {
+            buffer,
+            offset: 0,
+            len: length,
+        }
+    }
+
     /// Invokes `f` with indexes `0..len` collecting the boolean results into a new `BooleanBuffer`
     pub fn collect_bool<F: FnMut(usize) -> bool>(len: usize, f: F) -> Self {
         let buffer = MutableBuffer::collect_bool(len, f);
@@ -73,6 +90,7 @@ impl BooleanBuffer {
 
     /// Returns a `BitChunks` instance which can be used to iterate over
     /// this buffer's bits in `u64` chunks
+    #[inline]
     pub fn bit_chunks(&self) -> BitChunks {
         BitChunks::new(self.values(), self.offset, self.len)
     }
@@ -111,6 +129,7 @@ impl BooleanBuffer {
     /// # Panics
     ///
     /// Panics if `i >= self.len()`
+    #[inline]
     pub fn value(&self, idx: usize) -> bool {
         assert!(idx < self.len);
         unsafe { self.value_unchecked(idx) }
@@ -205,13 +224,7 @@ impl BitAnd<&BooleanBuffer> for &BooleanBuffer {
     fn bitand(self, rhs: &BooleanBuffer) -> Self::Output {
         assert_eq!(self.len, rhs.len);
         BooleanBuffer {
-            buffer: buffer_bin_and(
-                &self.buffer,
-                self.offset,
-                &rhs.buffer,
-                rhs.offset,
-                self.len,
-            ),
+            buffer: buffer_bin_and(&self.buffer, self.offset, &rhs.buffer, rhs.offset, self.len),
             offset: 0,
             len: self.len,
         }
@@ -224,13 +237,7 @@ impl BitOr<&BooleanBuffer> for &BooleanBuffer {
     fn bitor(self, rhs: &BooleanBuffer) -> Self::Output {
         assert_eq!(self.len, rhs.len);
         BooleanBuffer {
-            buffer: buffer_bin_or(
-                &self.buffer,
-                self.offset,
-                &rhs.buffer,
-                rhs.offset,
-                self.len,
-            ),
+            buffer: buffer_bin_or(&self.buffer, self.offset, &rhs.buffer, rhs.offset, self.len),
             offset: 0,
             len: self.len,
         }
@@ -243,13 +250,7 @@ impl BitXor<&BooleanBuffer> for &BooleanBuffer {
     fn bitxor(self, rhs: &BooleanBuffer) -> Self::Output {
         assert_eq!(self.len, rhs.len);
         BooleanBuffer {
-            buffer: buffer_bin_xor(
-                &self.buffer,
-                self.offset,
-                &rhs.buffer,
-                rhs.offset,
-                self.len,
-            ),
+            buffer: buffer_bin_xor(&self.buffer, self.offset, &rhs.buffer, rhs.offset, self.len),
             offset: 0,
             len: self.len,
         }
@@ -262,6 +263,30 @@ impl<'a> IntoIterator for &'a BooleanBuffer {
 
     fn into_iter(self) -> Self::IntoIter {
         BitIterator::new(self.values(), self.offset, self.len)
+    }
+}
+
+impl From<&[bool]> for BooleanBuffer {
+    fn from(value: &[bool]) -> Self {
+        let mut builder = BooleanBufferBuilder::new(value.len());
+        builder.append_slice(value);
+        builder.finish()
+    }
+}
+
+impl From<Vec<bool>> for BooleanBuffer {
+    fn from(value: Vec<bool>) -> Self {
+        value.as_slice().into()
+    }
+}
+
+impl FromIterator<bool> for BooleanBuffer {
+    fn from_iter<T: IntoIterator<Item = bool>>(iter: T) -> Self {
+        let iter = iter.into_iter();
+        let (hint, _) = iter.size_hint();
+        let mut builder = BooleanBufferBuilder::new(hint);
+        iter.for_each(|b| builder.append(b));
+        builder.finish()
     }
 }
 
@@ -386,8 +411,7 @@ mod tests {
         let buf = Buffer::from(&[0, 1, 1, 0, 0]);
         let boolean_buf = &BooleanBuffer::new(buf, offset, len);
 
-        let expected =
-            BooleanBuffer::new(Buffer::from(&[255, 254, 254, 255, 255]), offset, len);
+        let expected = BooleanBuffer::new(Buffer::from(&[255, 254, 254, 255, 255]), offset, len);
         assert_eq!(!boolean_buf, expected);
     }
 }

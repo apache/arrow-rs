@@ -18,7 +18,7 @@
 use crate::reader::tape::{Tape, TapeElement};
 use crate::reader::{make_decoder, ArrayDecoder};
 use arrow_array::builder::{BooleanBufferBuilder, BufferBuilder};
-use arrow_buffer::buffer::{BooleanBuffer, NullBuffer};
+use arrow_buffer::buffer::NullBuffer;
 use arrow_buffer::ArrowNativeType;
 use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::{ArrowError, DataType};
@@ -34,6 +34,7 @@ impl MapArrayDecoder {
     pub fn new(
         data_type: DataType,
         coerce_primitive: bool,
+        strict_mode: bool,
         is_nullable: bool,
     ) -> Result<Self, ArrowError> {
         let fields = match &data_type {
@@ -56,11 +57,13 @@ impl MapArrayDecoder {
         let keys = make_decoder(
             fields[0].data_type().clone(),
             coerce_primitive,
+            strict_mode,
             fields[0].is_nullable(),
         )?;
         let values = make_decoder(
             fields[1].data_type().clone(),
             coerce_primitive,
+            strict_mode,
             fields[1].is_nullable(),
         )?;
 
@@ -118,10 +121,7 @@ impl ArrayDecoder for MapArrayDecoder {
             }
 
             let offset = i32::from_usize(key_pos.len()).ok_or_else(|| {
-                ArrowError::JsonError(format!(
-                    "offset overflow decoding {}",
-                    self.data_type
-                ))
+                ArrowError::JsonError(format!("offset overflow decoding {}", self.data_type))
             })?;
             offsets.append(offset)
         }
@@ -139,9 +139,7 @@ impl ArrayDecoder for MapArrayDecoder {
         // Valid by construction
         let struct_data = unsafe { struct_data.build_unchecked() };
 
-        let nulls = nulls
-            .as_mut()
-            .map(|x| NullBuffer::new(BooleanBuffer::new(x.finish(), 0, pos.len())));
+        let nulls = nulls.as_mut().map(|x| NullBuffer::new(x.finish()));
 
         let builder = ArrayDataBuilder::new(self.data_type.clone())
             .len(pos.len())

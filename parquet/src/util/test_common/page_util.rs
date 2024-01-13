@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use bytes::Bytes;
+
 use crate::basic::Encoding;
 use crate::column::page::{Page, PageIterator};
 use crate::column::page::{PageMetadata, PageReader};
@@ -22,8 +24,7 @@ use crate::data_type::DataType;
 use crate::encodings::encoding::{get_encoder, Encoder};
 use crate::encodings::levels::LevelEncoder;
 use crate::errors::Result;
-use crate::schema::types::{ColumnDescPtr, SchemaDescPtr};
-use crate::util::memory::ByteBufferPtr;
+use crate::schema::types::ColumnDescPtr;
 use std::iter::Peekable;
 use std::mem;
 
@@ -31,7 +32,7 @@ pub trait DataPageBuilder {
     fn add_rep_levels(&mut self, max_level: i16, rep_levels: &[i16]);
     fn add_def_levels(&mut self, max_level: i16, def_levels: &[i16]);
     fn add_values<T: DataType>(&mut self, encoding: Encoding, values: &[T::T]);
-    fn add_indices(&mut self, indices: ByteBufferPtr);
+    fn add_indices(&mut self, indices: Bytes);
     fn consume(self) -> Page;
 }
 
@@ -112,18 +113,18 @@ impl DataPageBuilder for DataPageBuilderImpl {
         let encoded_values = encoder
             .flush_buffer()
             .expect("consume_buffer() should be OK");
-        self.buffer.extend_from_slice(encoded_values.data());
+        self.buffer.extend_from_slice(&encoded_values);
     }
 
-    fn add_indices(&mut self, indices: ByteBufferPtr) {
+    fn add_indices(&mut self, indices: Bytes) {
         self.encoding = Some(Encoding::RLE_DICTIONARY);
-        self.buffer.extend_from_slice(indices.data());
+        self.buffer.extend_from_slice(&indices);
     }
 
     fn consume(self) -> Page {
         if self.datapage_v2 {
             Page::DataPageV2 {
-                buf: ByteBufferPtr::new(self.buffer),
+                buf: Bytes::from(self.buffer),
                 num_values: self.num_values,
                 encoding: self.encoding.unwrap(),
                 num_nulls: 0, /* set to dummy value - don't need this when reading
@@ -137,7 +138,7 @@ impl DataPageBuilder for DataPageBuilderImpl {
             }
         } else {
             Page::DataPage {
-                buf: ByteBufferPtr::new(self.buffer),
+                buf: Bytes::from(self.buffer),
                 num_values: self.num_values,
                 encoding: self.encoding.unwrap(),
                 def_level_encoding: Encoding::RLE,
@@ -170,15 +171,22 @@ impl<P: Iterator<Item = Page> + Send> PageReader for InMemoryPageReader<P> {
         if let Some(x) = self.page_iter.peek() {
             match x {
                 Page::DataPage { num_values, .. } => Ok(Some(PageMetadata {
-                    num_rows: *num_values as usize,
+                    num_rows: None,
+                    num_levels: Some(*num_values as _),
                     is_dict: false,
                 })),
-                Page::DataPageV2 { num_rows, .. } => Ok(Some(PageMetadata {
-                    num_rows: *num_rows as usize,
+                Page::DataPageV2 {
+                    num_rows,
+                    num_values,
+                    ..
+                } => Ok(Some(PageMetadata {
+                    num_rows: Some(*num_rows as _),
+                    num_levels: Some(*num_values as _),
                     is_dict: false,
                 })),
                 Page::DictionaryPage { .. } => Ok(Some(PageMetadata {
-                    num_rows: 0,
+                    num_rows: None,
+                    num_levels: None,
                     is_dict: true,
                 })),
             }
@@ -204,20 +212,12 @@ impl<P: Iterator<Item = Page> + Send> Iterator for InMemoryPageReader<P> {
 /// A utility page iterator which stores page readers in memory, used for tests.
 #[derive(Clone)]
 pub struct InMemoryPageIterator<I: Iterator<Item = Vec<Page>>> {
-    schema: SchemaDescPtr,
-    column_desc: ColumnDescPtr,
     page_reader_iter: I,
 }
 
 impl<I: Iterator<Item = Vec<Page>>> InMemoryPageIterator<I> {
-    pub fn new(
-        schema: SchemaDescPtr,
-        column_desc: ColumnDescPtr,
-        pages: impl IntoIterator<Item = Vec<Page>, IntoIter = I>,
-    ) -> Self {
+    pub fn new(pages: impl IntoIterator<Item = Vec<Page>, IntoIter = I>) -> Self {
         Self {
-            schema,
-            column_desc,
             page_reader_iter: pages.into_iter(),
         }
     }
@@ -233,12 +233,4 @@ impl<I: Iterator<Item = Vec<Page>>> Iterator for InMemoryPageIterator<I> {
     }
 }
 
-impl<I: Iterator<Item = Vec<Page>> + Send> PageIterator for InMemoryPageIterator<I> {
-    fn schema(&mut self) -> Result<SchemaDescPtr> {
-        Ok(self.schema.clone())
-    }
-
-    fn column_schema(&mut self) -> Result<ColumnDescPtr> {
-        Ok(self.column_desc.clone())
-    }
-}
+impl<I: Iterator<Item = Vec<Page>> + Send> PageIterator for InMemoryPageIterator<I> {}

@@ -26,144 +26,55 @@
 //! [ObjectStore::abort_multipart] is a no-op, since Azure Blob Store doesn't provide
 //! a way to drop old blocks. Instead unused blocks are automatically cleaned up
 //! after 7 days.
-use self::client::{BlockId, BlockList};
-use crate::client::token::TokenCache;
 use crate::{
-    multipart::{CloudMultiPartUpload, CloudMultiPartUploadImpl, UploadPart},
+    multipart::{MultiPartStore, PartId, PutPart, WriteMultiPart},
     path::Path,
-    ClientOptions, GetResult, ListResult, MultipartId, ObjectMeta, ObjectStore, Result,
-    RetryConfig,
+    signer::Signer,
+    GetOptions, GetResult, ListResult, MultipartId, ObjectMeta, ObjectStore, PutOptions, PutResult,
+    Result,
 };
 use async_trait::async_trait;
-use base64::prelude::BASE64_STANDARD;
-use base64::Engine;
 use bytes::Bytes;
-use chrono::{TimeZone, Utc};
-use futures::{stream::BoxStream, StreamExt, TryStreamExt};
-use percent_encoding::percent_decode_str;
-use serde::{Deserialize, Serialize};
-use snafu::{OptionExt, ResultExt, Snafu};
-use std::fmt::{Debug, Formatter};
-use std::io;
-use std::ops::Range;
+use futures::stream::BoxStream;
+use reqwest::Method;
+use std::fmt::Debug;
 use std::sync::Arc;
-use std::{collections::BTreeSet, str::FromStr};
+use std::time::Duration;
 use tokio::io::AsyncWrite;
 use url::Url;
 
-use crate::util::{str_is_truthy, RFC1123_FMT};
-pub use credential::authority_hosts;
+use crate::client::get::GetClientExt;
+use crate::client::list::ListClientExt;
+use crate::client::CredentialProvider;
+pub use credential::{authority_hosts, AzureAccessKey, AzureAuthorizer};
 
+mod builder;
 mod client;
 mod credential;
 
-/// The well-known account used by Azurite and the legacy Azure Storage Emulator.
-/// <https://docs.microsoft.com/azure/storage/common/storage-use-azurite#well-known-storage-account-and-key>
-const EMULATOR_ACCOUNT: &str = "devstoreaccount1";
+/// [`CredentialProvider`] for [`MicrosoftAzure`]
+pub type AzureCredentialProvider = Arc<dyn CredentialProvider<Credential = AzureCredential>>;
+pub use builder::{AzureConfigKey, MicrosoftAzureBuilder};
+pub use credential::AzureCredential;
 
-/// The well-known account key used by Azurite and the legacy Azure Storage Emulator.
-/// <https://docs.microsoft.com/azure/storage/common/storage-use-azurite#well-known-storage-account-and-key>
-const EMULATOR_ACCOUNT_KEY: &str =
-    "Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==";
-
-const MSI_ENDPOINT_ENV_KEY: &str = "IDENTITY_ENDPOINT";
-
-/// A specialized `Error` for Azure object store-related errors
-#[derive(Debug, Snafu)]
-#[allow(missing_docs)]
-enum Error {
-    #[snafu(display("Last-Modified Header missing from response"))]
-    MissingLastModified,
-
-    #[snafu(display("Content-Length Header missing from response"))]
-    MissingContentLength,
-
-    #[snafu(display("Invalid last modified '{}': {}", last_modified, source))]
-    InvalidLastModified {
-        last_modified: String,
-        source: chrono::ParseError,
-    },
-
-    #[snafu(display("Invalid content length '{}': {}", content_length, source))]
-    InvalidContentLength {
-        content_length: String,
-        source: std::num::ParseIntError,
-    },
-
-    #[snafu(display("Received header containing non-ASCII data"))]
-    BadHeader { source: reqwest::header::ToStrError },
-
-    #[snafu(display("Unable parse source url. Url: {}, Error: {}", url, source))]
-    UnableToParseUrl {
-        source: url::ParseError,
-        url: String,
-    },
-
-    #[snafu(display(
-        "Unable parse emulator url {}={}, Error: {}",
-        env_name,
-        env_value,
-        source
-    ))]
-    UnableToParseEmulatorUrl {
-        env_name: String,
-        env_value: String,
-        source: url::ParseError,
-    },
-
-    #[snafu(display("Account must be specified"))]
-    MissingAccount {},
-
-    #[snafu(display("Container name must be specified"))]
-    MissingContainerName {},
-
-    #[snafu(display("At least one authorization option must be specified"))]
-    MissingCredentials {},
-
-    #[snafu(display("Azure credential error: {}", source), context(false))]
-    Credential { source: credential::Error },
-
-    #[snafu(display(
-        "Unknown url scheme cannot be parsed into storage location: {}",
-        scheme
-    ))]
-    UnknownUrlScheme { scheme: String },
-
-    #[snafu(display("URL did not match any known pattern for scheme: {}", url))]
-    UrlNotRecognised { url: String },
-
-    #[snafu(display("Failed parsing an SAS key"))]
-    DecodeSasKey { source: std::str::Utf8Error },
-
-    #[snafu(display("Missing component in SAS query pair"))]
-    MissingSasComponent {},
-
-    #[snafu(display("Configuration key: '{}' is not known.", key))]
-    UnknownConfigurationKey { key: String },
-
-    #[snafu(display("ETag Header missing from response"))]
-    MissingEtag,
-}
-
-impl From<Error> for super::Error {
-    fn from(source: Error) -> Self {
-        match source {
-            Error::UnknownConfigurationKey { key } => Self::UnknownConfigurationKey {
-                store: "MicrosoftAzure",
-                key,
-            },
-            _ => Self::Generic {
-                store: "MicrosoftAzure",
-                source: Box::new(source),
-            },
-        }
-    }
-}
+const STORE: &str = "MicrosoftAzure";
 
 /// Interface for [Microsoft Azure Blob Storage](https://azure.microsoft.com/en-us/services/storage/blobs/).
 #[derive(Debug)]
 pub struct MicrosoftAzure {
     client: Arc<client::AzureClient>,
+}
+
+impl MicrosoftAzure {
+    /// Returns the [`AzureCredentialProvider`] used by [`MicrosoftAzure`]
+    pub fn credentials(&self) -> &AzureCredentialProvider {
+        &self.client.config().credentials
+    }
+
+    /// Create a full URL to the resource specified by `path` with this instance's configuration.
+    fn path_url(&self, path: &Path) -> url::Url {
+        self.client.config().path_url(path)
+    }
 }
 
 impl std::fmt::Display for MicrosoftAzure {
@@ -179,11 +90,8 @@ impl std::fmt::Display for MicrosoftAzure {
 
 #[async_trait]
 impl ObjectStore for MicrosoftAzure {
-    async fn put(&self, location: &Path, bytes: Bytes) -> Result<()> {
-        self.client
-            .put_request(location, Some(bytes), false, &())
-            .await?;
-        Ok(())
+    async fn put_opts(&self, location: &Path, bytes: Bytes, opts: PutOptions) -> Result<PutResult> {
+        self.client.put_blob(location, bytes, opts).await
     }
 
     async fn put_multipart(
@@ -194,120 +102,29 @@ impl ObjectStore for MicrosoftAzure {
             client: Arc::clone(&self.client),
             location: location.to_owned(),
         };
-        Ok((String::new(), Box::new(CloudMultiPartUpload::new(inner, 8))))
+        Ok((String::new(), Box::new(WriteMultiPart::new(inner, 8))))
     }
 
-    async fn abort_multipart(
-        &self,
-        _location: &Path,
-        _multipart_id: &MultipartId,
-    ) -> Result<()> {
+    async fn abort_multipart(&self, _location: &Path, _multipart_id: &MultipartId) -> Result<()> {
         // There is no way to drop blocks that have been uploaded. Instead, they simply
         // expire in 7 days.
         Ok(())
     }
 
-    async fn get(&self, location: &Path) -> Result<GetResult> {
-        let response = self.client.get_request(location, None, false).await?;
-        let stream = response
-            .bytes_stream()
-            .map_err(|source| crate::Error::Generic {
-                store: "MicrosoftAzure",
-                source: Box::new(source),
-            })
-            .boxed();
-
-        Ok(GetResult::Stream(stream))
-    }
-
-    async fn get_range(&self, location: &Path, range: Range<usize>) -> Result<Bytes> {
-        let bytes = self
-            .client
-            .get_request(location, Some(range), false)
-            .await?
-            .bytes()
-            .await
-            .map_err(|source| client::Error::GetResponseBody {
-                source,
-                path: location.to_string(),
-            })?;
-        Ok(bytes)
-    }
-
-    async fn head(&self, location: &Path) -> Result<ObjectMeta> {
-        use reqwest::header::{CONTENT_LENGTH, ETAG, LAST_MODIFIED};
-
-        // Extract meta from headers
-        // https://docs.microsoft.com/en-us/rest/api/storageservices/get-blob-properties
-        let response = self.client.get_request(location, None, true).await?;
-        let headers = response.headers();
-
-        let last_modified = headers
-            .get(LAST_MODIFIED)
-            .ok_or(Error::MissingLastModified)?
-            .to_str()
-            .context(BadHeaderSnafu)?;
-        let last_modified = Utc
-            .datetime_from_str(last_modified, RFC1123_FMT)
-            .context(InvalidLastModifiedSnafu { last_modified })?;
-
-        let content_length = headers
-            .get(CONTENT_LENGTH)
-            .ok_or(Error::MissingContentLength)?
-            .to_str()
-            .context(BadHeaderSnafu)?;
-        let content_length = content_length
-            .parse()
-            .context(InvalidContentLengthSnafu { content_length })?;
-
-        let e_tag = headers
-            .get(ETAG)
-            .ok_or(Error::MissingEtag)?
-            .to_str()
-            .context(BadHeaderSnafu)?;
-
-        Ok(ObjectMeta {
-            location: location.clone(),
-            last_modified,
-            size: content_length,
-            e_tag: Some(e_tag.to_string()),
-        })
+    async fn get_opts(&self, location: &Path, options: GetOptions) -> Result<GetResult> {
+        self.client.get_opts(location, options).await
     }
 
     async fn delete(&self, location: &Path) -> Result<()> {
         self.client.delete_request(location, &()).await
     }
 
-    async fn list(
-        &self,
-        prefix: Option<&Path>,
-    ) -> Result<BoxStream<'_, Result<ObjectMeta>>> {
-        let stream = self
-            .client
-            .list_paginated(prefix, false)
-            .map_ok(|r| futures::stream::iter(r.objects.into_iter().map(Ok)))
-            .try_flatten()
-            .boxed();
-
-        Ok(stream)
+    fn list(&self, prefix: Option<&Path>) -> BoxStream<'_, Result<ObjectMeta>> {
+        self.client.list(prefix)
     }
 
     async fn list_with_delimiter(&self, prefix: Option<&Path>) -> Result<ListResult> {
-        let mut stream = self.client.list_paginated(prefix, true);
-
-        let mut common_prefixes = BTreeSet::new();
-        let mut objects = Vec::new();
-
-        while let Some(result) = stream.next().await {
-            let response = result?;
-            common_prefixes.extend(response.common_prefixes.into_iter());
-            objects.extend(response.objects.into_iter());
-        }
-
-        Ok(ListResult {
-            common_prefixes: common_prefixes.into_iter().collect(),
-            objects,
-        })
+        self.client.list_with_delimiter(prefix).await
     }
 
     async fn copy(&self, from: &Path, to: &Path) -> Result<()> {
@@ -316,6 +133,62 @@ impl ObjectStore for MicrosoftAzure {
 
     async fn copy_if_not_exists(&self, from: &Path, to: &Path) -> Result<()> {
         self.client.copy_request(from, to, false).await
+    }
+}
+
+#[async_trait]
+impl Signer for MicrosoftAzure {
+    /// Create a URL containing the relevant [Service SAS] query parameters that authorize a request
+    /// via `method` to the resource at `path` valid for the duration specified in `expires_in`.
+    ///
+    /// [Service SAS]: https://learn.microsoft.com/en-us/rest/api/storageservices/create-service-sas
+    ///
+    /// # Example
+    ///
+    /// This example returns a URL that will enable a user to upload a file to
+    /// "some-folder/some-file.txt" in the next hour.
+    ///
+    /// ```
+    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// # use object_store::{azure::MicrosoftAzureBuilder, path::Path, signer::Signer};
+    /// # use reqwest::Method;
+    /// # use std::time::Duration;
+    /// #
+    /// let azure = MicrosoftAzureBuilder::new()
+    ///     .with_account("my-account")
+    ///     .with_access_key("my-access-key")
+    ///     .with_container_name("my-container")
+    ///     .build()?;
+    ///
+    /// let url = azure.signed_url(
+    ///     Method::PUT,
+    ///     &Path::from("some-folder/some-file.txt"),
+    ///     Duration::from_secs(60 * 60)
+    /// ).await?;
+    /// #     Ok(())
+    /// # }
+    /// ```
+    async fn signed_url(&self, method: Method, path: &Path, expires_in: Duration) -> Result<Url> {
+        let mut url = self.path_url(path);
+        let signer = self.client.signer(expires_in).await?;
+        signer.sign(&method, &mut url)?;
+        Ok(url)
+    }
+
+    async fn signed_urls(
+        &self,
+        method: Method,
+        paths: &[Path],
+        expires_in: Duration,
+    ) -> Result<Vec<Url>> {
+        let mut urls = Vec::with_capacity(paths.len());
+        let signer = self.client.signer(expires_in).await?;
+        for path in paths {
+            let mut url = self.path_url(path);
+            signer.sign(&method, &mut url)?;
+            urls.push(url);
+        }
+        Ok(urls)
     }
 }
 
@@ -331,973 +204,108 @@ struct AzureMultiPartUpload {
 }
 
 #[async_trait]
-impl CloudMultiPartUploadImpl for AzureMultiPartUpload {
-    async fn put_multipart_part(
+impl PutPart for AzureMultiPartUpload {
+    async fn put_part(&self, buf: Vec<u8>, idx: usize) -> Result<PartId> {
+        self.client.put_block(&self.location, idx, buf.into()).await
+    }
+
+    async fn complete(&self, parts: Vec<PartId>) -> Result<()> {
+        self.client.put_block_list(&self.location, parts).await?;
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl MultiPartStore for MicrosoftAzure {
+    async fn create_multipart(&self, _: &Path) -> Result<MultipartId> {
+        Ok(String::new())
+    }
+
+    async fn put_part(
         &self,
-        buf: Vec<u8>,
+        path: &Path,
+        _: &MultipartId,
         part_idx: usize,
-    ) -> Result<UploadPart, io::Error> {
-        let content_id = format!("{part_idx:20}");
-        let block_id: BlockId = content_id.clone().into();
-
-        self.client
-            .put_request(
-                &self.location,
-                Some(buf.into()),
-                true,
-                &[
-                    ("comp", "block"),
-                    ("blockid", &BASE64_STANDARD.encode(block_id)),
-                ],
-            )
-            .await?;
-
-        Ok(UploadPart { content_id })
+        data: Bytes,
+    ) -> Result<PartId> {
+        self.client.put_block(path, part_idx, data).await
     }
 
-    async fn complete(&self, completed_parts: Vec<UploadPart>) -> Result<(), io::Error> {
-        let blocks = completed_parts
-            .into_iter()
-            .map(|part| BlockId::from(part.content_id))
-            .collect();
+    async fn complete_multipart(
+        &self,
+        path: &Path,
+        _: &MultipartId,
+        parts: Vec<PartId>,
+    ) -> Result<PutResult> {
+        self.client.put_block_list(path, parts).await
+    }
 
-        let block_list = BlockList { blocks };
-        let block_xml = block_list.to_xml();
-
-        self.client
-            .put_request(
-                &self.location,
-                Some(block_xml.into()),
-                true,
-                &[("comp", "blocklist")],
-            )
-            .await?;
-
+    async fn abort_multipart(&self, _: &Path, _: &MultipartId) -> Result<()> {
+        // There is no way to drop blocks that have been uploaded. Instead, they simply
+        // expire in 7 days.
         Ok(())
     }
-}
-
-/// Configure a connection to Microsoft Azure Blob Storage container using
-/// the specified credentials.
-///
-/// # Example
-/// ```
-/// # let ACCOUNT = "foo";
-/// # let BUCKET_NAME = "foo";
-/// # let ACCESS_KEY = "foo";
-/// # use object_store::azure::MicrosoftAzureBuilder;
-/// let azure = MicrosoftAzureBuilder::new()
-///  .with_account(ACCOUNT)
-///  .with_access_key(ACCESS_KEY)
-///  .with_container_name(BUCKET_NAME)
-///  .build();
-/// ```
-#[derive(Default, Clone)]
-pub struct MicrosoftAzureBuilder {
-    /// Account name
-    account_name: Option<String>,
-    /// Access key
-    access_key: Option<String>,
-    /// Container name
-    container_name: Option<String>,
-    /// Bearer token
-    bearer_token: Option<String>,
-    /// Client id
-    client_id: Option<String>,
-    /// Client secret
-    client_secret: Option<String>,
-    /// Tenant id
-    tenant_id: Option<String>,
-    /// Query pairs for shared access signature authorization
-    sas_query_pairs: Option<Vec<(String, String)>>,
-    /// Shared access signature
-    sas_key: Option<String>,
-    /// Authority host
-    authority_host: Option<String>,
-    /// Url
-    url: Option<String>,
-    /// When set to true, azurite storage emulator has to be used
-    use_emulator: bool,
-    /// Msi endpoint for acquiring managed identity token
-    msi_endpoint: Option<String>,
-    /// Object id for use with managed identity authentication
-    object_id: Option<String>,
-    /// Msi resource id for use with managed identity authentication
-    msi_resource_id: Option<String>,
-    /// File containing token for Azure AD workload identity federation
-    federated_token_file: Option<String>,
-    /// When set to true, azure cli has to be used for acquiring access token
-    use_azure_cli: bool,
-    /// Retry config
-    retry_config: RetryConfig,
-    /// Client options
-    client_options: ClientOptions,
-}
-
-/// Configuration keys for [`MicrosoftAzureBuilder`]
-///
-/// Configuration via keys can be dome via the [`try_with_option`](MicrosoftAzureBuilder::try_with_option)
-/// or [`with_options`](MicrosoftAzureBuilder::try_with_options) methods on the builder.
-///
-/// # Example
-/// ```
-/// use std::collections::HashMap;
-/// use object_store::azure::{MicrosoftAzureBuilder, AzureConfigKey};
-///
-/// let options = HashMap::from([
-///     ("azure_client_id", "my-client-id"),
-///     ("azure_client_secret", "my-account-name"),
-/// ]);
-/// let typed_options = vec![
-///     (AzureConfigKey::AccountName, "my-account-name"),
-/// ];
-/// let azure = MicrosoftAzureBuilder::new()
-///     .try_with_options(options)
-///     .unwrap()
-///     .try_with_options(typed_options)
-///     .unwrap()
-///     .try_with_option(AzureConfigKey::AuthorityId, "my-tenant-id")
-///     .unwrap();
-/// ```
-#[derive(PartialEq, Eq, Hash, Clone, Debug, Copy, Deserialize, Serialize)]
-pub enum AzureConfigKey {
-    /// The name of the azure storage account
-    ///
-    /// Supported keys:
-    /// - `azure_storage_account_name`
-    /// - `account_name`
-    AccountName,
-
-    /// Master key for accessing storage account
-    ///
-    /// Supported keys:
-    /// - `azure_storage_account_key`
-    /// - `azure_storage_access_key`
-    /// - `azure_storage_master_key`
-    /// - `access_key`
-    /// - `account_key`
-    /// - `master_key`
-    AccessKey,
-
-    /// Service principal client id for authorizing requests
-    ///
-    /// Supported keys:
-    /// - `azure_storage_client_id`
-    /// - `azure_client_id`
-    /// - `client_id`
-    ClientId,
-
-    /// Service principal client secret for authorizing requests
-    ///
-    /// Supported keys:
-    /// - `azure_storage_client_secret`
-    /// - `azure_client_secret`
-    /// - `client_secret`
-    ClientSecret,
-
-    /// Tenant id used in oauth flows
-    ///
-    /// Supported keys:
-    /// - `azure_storage_tenant_id`
-    /// - `azure_storage_authority_id`
-    /// - `azure_tenant_id`
-    /// - `azure_authority_id`
-    /// - `tenant_id`
-    /// - `authority_id`
-    AuthorityId,
-
-    /// Shared access signature.
-    ///
-    /// The signature is expected to be percent-encoded, much like they are provided
-    /// in the azure storage explorer or azure portal.
-    ///
-    /// Supported keys:
-    /// - `azure_storage_sas_key`
-    /// - `azure_storage_sas_token`
-    /// - `sas_key`
-    /// - `sas_token`
-    SasKey,
-
-    /// Bearer token
-    ///
-    /// Supported keys:
-    /// - `azure_storage_token`
-    /// - `bearer_token`
-    /// - `token`
-    Token,
-
-    /// Use object store with azurite storage emulator
-    ///
-    /// Supported keys:
-    /// - `azure_storage_use_emulator`
-    /// - `object_store_use_emulator`
-    /// - `use_emulator`
-    UseEmulator,
-
-    /// Endpoint to request a imds managed identity token
-    ///
-    /// Supported keys:
-    /// - `azure_msi_endpoint`
-    /// - `azure_identity_endpoint`
-    /// - `identity_endpoint`
-    /// - `msi_endpoint`
-    MsiEndpoint,
-
-    /// Object id for use with managed identity authentication
-    ///
-    /// Supported keys:
-    /// - `azure_object_id`
-    /// - `object_id`
-    ObjectId,
-
-    /// Msi resource id for use with managed identity authentication
-    ///
-    /// Supported keys:
-    /// - `azure_msi_resource_id`
-    /// - `msi_resource_id`
-    MsiResourceId,
-
-    /// File containing token for Azure AD workload identity federation
-    ///
-    /// Supported keys:
-    /// - `azure_federated_token_file`
-    /// - `federated_token_file`
-    FederatedTokenFile,
-
-    /// Use azure cli for acquiring access token
-    ///
-    /// Supported keys:
-    /// - `azure_use_azure_cli`
-    /// - `use_azure_cli`
-    UseAzureCli,
-}
-
-impl AsRef<str> for AzureConfigKey {
-    fn as_ref(&self) -> &str {
-        match self {
-            Self::AccountName => "azure_storage_account_name",
-            Self::AccessKey => "azure_storage_account_key",
-            Self::ClientId => "azure_storage_client_id",
-            Self::ClientSecret => "azure_storage_client_secret",
-            Self::AuthorityId => "azure_storage_tenant_id",
-            Self::SasKey => "azure_storage_sas_key",
-            Self::Token => "azure_storage_token",
-            Self::UseEmulator => "azure_storage_use_emulator",
-            Self::MsiEndpoint => "azure_msi_endpoint",
-            Self::ObjectId => "azure_object_id",
-            Self::MsiResourceId => "azure_msi_resource_id",
-            Self::FederatedTokenFile => "azure_federated_token_file",
-            Self::UseAzureCli => "azure_use_azure_cli",
-        }
-    }
-}
-
-impl FromStr for AzureConfigKey {
-    type Err = super::Error;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "azure_storage_account_key"
-            | "azure_storage_access_key"
-            | "azure_storage_master_key"
-            | "master_key"
-            | "account_key"
-            | "access_key" => Ok(Self::AccessKey),
-            "azure_storage_account_name" | "account_name" => Ok(Self::AccountName),
-            "azure_storage_client_id" | "azure_client_id" | "client_id" => {
-                Ok(Self::ClientId)
-            }
-            "azure_storage_client_secret" | "azure_client_secret" | "client_secret" => {
-                Ok(Self::ClientSecret)
-            }
-            "azure_storage_tenant_id"
-            | "azure_storage_authority_id"
-            | "azure_tenant_id"
-            | "azure_authority_id"
-            | "tenant_id"
-            | "authority_id" => Ok(Self::AuthorityId),
-            "azure_storage_sas_key"
-            | "azure_storage_sas_token"
-            | "sas_key"
-            | "sas_token" => Ok(Self::SasKey),
-            "azure_storage_token" | "bearer_token" | "token" => Ok(Self::Token),
-            "azure_storage_use_emulator" | "use_emulator" => Ok(Self::UseEmulator),
-            "azure_msi_endpoint"
-            | "azure_identity_endpoint"
-            | "identity_endpoint"
-            | "msi_endpoint" => Ok(Self::MsiEndpoint),
-            "azure_object_id" | "object_id" => Ok(Self::ObjectId),
-            "azure_msi_resource_id" | "msi_resource_id" => Ok(Self::MsiResourceId),
-            "azure_federated_token_file" | "federated_token_file" => {
-                Ok(Self::FederatedTokenFile)
-            }
-            "azure_use_azure_cli" | "use_azure_cli" => Ok(Self::UseAzureCli),
-            _ => Err(Error::UnknownConfigurationKey { key: s.into() }.into()),
-        }
-    }
-}
-
-impl Debug for MicrosoftAzureBuilder {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "MicrosoftAzureBuilder {{ account: {:?}, container_name: {:?} }}",
-            self.account_name, self.container_name
-        )
-    }
-}
-
-impl MicrosoftAzureBuilder {
-    /// Create a new [`MicrosoftAzureBuilder`] with default values.
-    pub fn new() -> Self {
-        Default::default()
-    }
-
-    /// Create an instance of [`MicrosoftAzureBuilder`] with values pre-populated from environment variables.
-    ///
-    /// Variables extracted from environment:
-    /// * AZURE_STORAGE_ACCOUNT_NAME: storage account name
-    /// * AZURE_STORAGE_ACCOUNT_KEY: storage account master key
-    /// * AZURE_STORAGE_ACCESS_KEY: alias for AZURE_STORAGE_ACCOUNT_KEY
-    /// * AZURE_STORAGE_CLIENT_ID -> client id for service principal authorization
-    /// * AZURE_STORAGE_CLIENT_SECRET -> client secret for service principal authorization
-    /// * AZURE_STORAGE_TENANT_ID -> tenant id used in oauth flows
-    /// # Example
-    /// ```
-    /// use object_store::azure::MicrosoftAzureBuilder;
-    ///
-    /// let azure = MicrosoftAzureBuilder::from_env()
-    ///     .with_container_name("foo")
-    ///     .build();
-    /// ```
-    pub fn from_env() -> Self {
-        let mut builder = Self::default();
-        for (os_key, os_value) in std::env::vars_os() {
-            if let (Some(key), Some(value)) = (os_key.to_str(), os_value.to_str()) {
-                if key.starts_with("AZURE_") {
-                    if let Ok(config_key) =
-                        AzureConfigKey::from_str(&key.to_ascii_lowercase())
-                    {
-                        builder = builder.try_with_option(config_key, value).unwrap();
-                    }
-                }
-            }
-        }
-
-        if let Ok(text) = std::env::var("AZURE_ALLOW_HTTP") {
-            builder.client_options =
-                builder.client_options.with_allow_http(str_is_truthy(&text));
-        }
-
-        if let Ok(text) = std::env::var(MSI_ENDPOINT_ENV_KEY) {
-            builder = builder.with_msi_endpoint(text);
-        }
-
-        builder
-    }
-
-    /// Parse available connection info form a well-known storage URL.
-    ///
-    /// The supported url schemes are:
-    ///
-    /// - `abfs[s]://<container>/<path>` (according to [fsspec](https://github.com/fsspec/adlfs))
-    /// - `abfs[s]://<file_system>@<account_name>.dfs.core.windows.net/<path>`
-    /// - `az://<container>/<path>` (according to [fsspec](https://github.com/fsspec/adlfs))
-    /// - `adl://<container>/<path>` (according to [fsspec](https://github.com/fsspec/adlfs))
-    /// - `azure://<container>/<path>` (custom)
-    /// - `https://<account>.dfs.core.windows.net`
-    /// - `https://<account>.blob.core.windows.net`
-    ///
-    /// Note: Settings derived from the URL will override any others set on this builder
-    ///
-    /// # Example
-    /// ```
-    /// use object_store::azure::MicrosoftAzureBuilder;
-    ///
-    /// let azure = MicrosoftAzureBuilder::from_env()
-    ///     .with_url("abfss://file_system@account.dfs.core.windows.net/")
-    ///     .build();
-    /// ```
-    pub fn with_url(mut self, url: impl Into<String>) -> Self {
-        self.url = Some(url.into());
-        self
-    }
-
-    /// Set an option on the builder via a key - value pair.
-    pub fn try_with_option(
-        mut self,
-        key: impl AsRef<str>,
-        value: impl Into<String>,
-    ) -> Result<Self> {
-        match AzureConfigKey::from_str(key.as_ref())? {
-            AzureConfigKey::AccessKey => self.access_key = Some(value.into()),
-            AzureConfigKey::AccountName => self.account_name = Some(value.into()),
-            AzureConfigKey::ClientId => self.client_id = Some(value.into()),
-            AzureConfigKey::ClientSecret => self.client_secret = Some(value.into()),
-            AzureConfigKey::AuthorityId => self.tenant_id = Some(value.into()),
-            AzureConfigKey::SasKey => self.sas_key = Some(value.into()),
-            AzureConfigKey::Token => self.bearer_token = Some(value.into()),
-            AzureConfigKey::MsiEndpoint => self.msi_endpoint = Some(value.into()),
-            AzureConfigKey::ObjectId => self.object_id = Some(value.into()),
-            AzureConfigKey::MsiResourceId => self.msi_resource_id = Some(value.into()),
-            AzureConfigKey::FederatedTokenFile => {
-                self.federated_token_file = Some(value.into())
-            }
-            AzureConfigKey::UseAzureCli => {
-                self.use_azure_cli = str_is_truthy(&value.into())
-            }
-            AzureConfigKey::UseEmulator => {
-                self.use_emulator = str_is_truthy(&value.into())
-            }
-        };
-        Ok(self)
-    }
-
-    /// Hydrate builder from key value pairs
-    pub fn try_with_options<
-        I: IntoIterator<Item = (impl AsRef<str>, impl Into<String>)>,
-    >(
-        mut self,
-        options: I,
-    ) -> Result<Self> {
-        for (key, value) in options {
-            self = self.try_with_option(key, value)?;
-        }
-        Ok(self)
-    }
-
-    /// Get config value via a [`AzureConfigKey`].
-    ///
-    /// # Example
-    /// ```
-    /// use object_store::azure::{MicrosoftAzureBuilder, AzureConfigKey};
-    ///
-    /// let builder = MicrosoftAzureBuilder::from_env()
-    ///     .with_account("foo");
-    /// let account_name = builder.get_config_value(&AzureConfigKey::AccountName).unwrap_or_default();
-    /// assert_eq!("foo", &account_name);
-    /// ```
-    pub fn get_config_value(&self, key: &AzureConfigKey) -> Option<String> {
-        match key {
-            AzureConfigKey::AccountName => self.account_name.clone(),
-            AzureConfigKey::AccessKey => self.access_key.clone(),
-            AzureConfigKey::ClientId => self.client_id.clone(),
-            AzureConfigKey::ClientSecret => self.client_secret.clone(),
-            AzureConfigKey::AuthorityId => self.tenant_id.clone(),
-            AzureConfigKey::SasKey => self.sas_key.clone(),
-            AzureConfigKey::Token => self.bearer_token.clone(),
-            AzureConfigKey::UseEmulator => Some(self.use_emulator.to_string()),
-            AzureConfigKey::MsiEndpoint => self.msi_endpoint.clone(),
-            AzureConfigKey::ObjectId => self.object_id.clone(),
-            AzureConfigKey::MsiResourceId => self.msi_resource_id.clone(),
-            AzureConfigKey::FederatedTokenFile => self.federated_token_file.clone(),
-            AzureConfigKey::UseAzureCli => Some(self.use_azure_cli.to_string()),
-        }
-    }
-
-    /// Sets properties on this builder based on a URL
-    ///
-    /// This is a separate member function to allow fallible computation to
-    /// be deferred until [`Self::build`] which in turn allows deriving [`Clone`]
-    fn parse_url(&mut self, url: &str) -> Result<()> {
-        let parsed = Url::parse(url).context(UnableToParseUrlSnafu { url })?;
-        let host = parsed.host_str().context(UrlNotRecognisedSnafu { url })?;
-
-        let validate = |s: &str| match s.contains('.') {
-            true => Err(UrlNotRecognisedSnafu { url }.build()),
-            false => Ok(s.to_string()),
-        };
-
-        match parsed.scheme() {
-            "az" | "adl" | "azure" => self.container_name = Some(validate(host)?),
-            "abfs" | "abfss" => {
-                // abfs(s) might refer to the fsspec convention abfs://<container>/<path>
-                // or the convention for the hadoop driver abfs[s]://<file_system>@<account_name>.dfs.core.windows.net/<path>
-                if parsed.username().is_empty() {
-                    self.container_name = Some(validate(host)?);
-                } else if let Some(a) = host.strip_suffix(".dfs.core.windows.net") {
-                    self.container_name = Some(validate(parsed.username())?);
-                    self.account_name = Some(validate(a)?);
-                } else {
-                    return Err(UrlNotRecognisedSnafu { url }.build().into());
-                }
-            }
-            "https" => match host.split_once('.') {
-                Some((a, "dfs.core.windows.net"))
-                | Some((a, "blob.core.windows.net")) => {
-                    self.account_name = Some(validate(a)?);
-                }
-                _ => return Err(UrlNotRecognisedSnafu { url }.build().into()),
-            },
-            scheme => return Err(UnknownUrlSchemeSnafu { scheme }.build().into()),
-        }
-        Ok(())
-    }
-
-    /// Set the Azure Account (required)
-    pub fn with_account(mut self, account: impl Into<String>) -> Self {
-        self.account_name = Some(account.into());
-        self
-    }
-
-    /// Set the Azure Container Name (required)
-    pub fn with_container_name(mut self, container_name: impl Into<String>) -> Self {
-        self.container_name = Some(container_name.into());
-        self
-    }
-
-    /// Set the Azure Access Key (required - one of access key, bearer token, or client credentials)
-    pub fn with_access_key(mut self, access_key: impl Into<String>) -> Self {
-        self.access_key = Some(access_key.into());
-        self
-    }
-
-    /// Set a static bearer token to be used for authorizing requests
-    pub fn with_bearer_token_authorization(
-        mut self,
-        bearer_token: impl Into<String>,
-    ) -> Self {
-        self.bearer_token = Some(bearer_token.into());
-        self
-    }
-
-    /// Set a client secret used for client secret authorization
-    pub fn with_client_secret_authorization(
-        mut self,
-        client_id: impl Into<String>,
-        client_secret: impl Into<String>,
-        tenant_id: impl Into<String>,
-    ) -> Self {
-        self.client_id = Some(client_id.into());
-        self.client_secret = Some(client_secret.into());
-        self.tenant_id = Some(tenant_id.into());
-        self
-    }
-
-    /// Sets the client id for use in client secret or k8s federated credential flow
-    pub fn with_client_id(mut self, client_id: impl Into<String>) -> Self {
-        self.client_id = Some(client_id.into());
-        self
-    }
-
-    /// Sets the client secret for use in client secret flow
-    pub fn with_client_secret(mut self, client_secret: impl Into<String>) -> Self {
-        self.client_secret = Some(client_secret.into());
-        self
-    }
-
-    /// Sets the tenant id for use in client secret or k8s federated credential flow
-    pub fn with_tenant_id(mut self, tenant_id: impl Into<String>) -> Self {
-        self.tenant_id = Some(tenant_id.into());
-        self
-    }
-
-    /// Set query pairs appended to the url for shared access signature authorization
-    pub fn with_sas_authorization(
-        mut self,
-        query_pairs: impl Into<Vec<(String, String)>>,
-    ) -> Self {
-        self.sas_query_pairs = Some(query_pairs.into());
-        self
-    }
-
-    /// Set if the Azure emulator should be used (defaults to false)
-    pub fn with_use_emulator(mut self, use_emulator: bool) -> Self {
-        self.use_emulator = use_emulator;
-        self
-    }
-
-    /// Sets what protocol is allowed. If `allow_http` is :
-    /// * false (default):  Only HTTPS are allowed
-    /// * true:  HTTP and HTTPS are allowed
-    pub fn with_allow_http(mut self, allow_http: bool) -> Self {
-        self.client_options = self.client_options.with_allow_http(allow_http);
-        self
-    }
-
-    /// Sets an alternative authority host for OAuth based authorization
-    /// common hosts for azure clouds are defined in [authority_hosts].
-    /// Defaults to <https://login.microsoftonline.com>
-    pub fn with_authority_host(mut self, authority_host: impl Into<String>) -> Self {
-        self.authority_host = Some(authority_host.into());
-        self
-    }
-
-    /// Set the retry configuration
-    pub fn with_retry(mut self, retry_config: RetryConfig) -> Self {
-        self.retry_config = retry_config;
-        self
-    }
-
-    /// Set the proxy_url to be used by the underlying client
-    pub fn with_proxy_url(mut self, proxy_url: impl Into<String>) -> Self {
-        self.client_options = self.client_options.with_proxy_url(proxy_url);
-        self
-    }
-
-    /// Sets the client options, overriding any already set
-    pub fn with_client_options(mut self, options: ClientOptions) -> Self {
-        self.client_options = options;
-        self
-    }
-
-    /// Sets the endpoint for acquiring managed identity token
-    pub fn with_msi_endpoint(mut self, msi_endpoint: impl Into<String>) -> Self {
-        self.msi_endpoint = Some(msi_endpoint.into());
-        self
-    }
-
-    /// Sets a file path for acquiring azure federated identity token in k8s
-    ///
-    /// requires `client_id` and `tenant_id` to be set
-    pub fn with_federated_token_file(
-        mut self,
-        federated_token_file: impl Into<String>,
-    ) -> Self {
-        self.federated_token_file = Some(federated_token_file.into());
-        self
-    }
-
-    /// Set if the Azure Cli should be used for acquiring access token
-    /// <https://learn.microsoft.com/en-us/cli/azure/account?view=azure-cli-latest#az-account-get-access-token>
-    pub fn with_use_azure_cli(mut self, use_azure_cli: bool) -> Self {
-        self.use_azure_cli = use_azure_cli;
-        self
-    }
-
-    /// Configure a connection to container with given name on Microsoft Azure
-    /// Blob store.
-    pub fn build(mut self) -> Result<MicrosoftAzure> {
-        if let Some(url) = self.url.take() {
-            self.parse_url(&url)?;
-        }
-
-        let container = self.container_name.ok_or(Error::MissingContainerName {})?;
-
-        let (is_emulator, storage_url, auth, account) = if self.use_emulator {
-            let account_name = self
-                .account_name
-                .unwrap_or_else(|| EMULATOR_ACCOUNT.to_string());
-            // Allow overriding defaults. Values taken from
-            // from https://docs.rs/azure_storage/0.2.0/src/azure_storage/core/clients/storage_account_client.rs.html#129-141
-            let url = url_from_env("AZURITE_BLOB_STORAGE_URL", "http://127.0.0.1:10000")?;
-            let account_key = self
-                .access_key
-                .unwrap_or_else(|| EMULATOR_ACCOUNT_KEY.to_string());
-            let credential = credential::CredentialProvider::AccessKey(account_key);
-
-            self.client_options = self.client_options.with_allow_http(true);
-            (true, url, credential, account_name)
-        } else {
-            let account_name = self.account_name.ok_or(Error::MissingAccount {})?;
-            let account_url = format!("https://{}.blob.core.windows.net", &account_name);
-            let url = Url::parse(&account_url)
-                .context(UnableToParseUrlSnafu { url: account_url })?;
-            let credential = if let Some(bearer_token) = self.bearer_token {
-                credential::CredentialProvider::BearerToken(bearer_token)
-            } else if let Some(access_key) = self.access_key {
-                credential::CredentialProvider::AccessKey(access_key)
-            } else if let (Some(client_id), Some(tenant_id), Some(federated_token_file)) =
-                (&self.client_id, &self.tenant_id, self.federated_token_file)
-            {
-                let client_credential = credential::WorkloadIdentityOAuthProvider::new(
-                    client_id,
-                    federated_token_file,
-                    tenant_id,
-                    self.authority_host,
-                );
-                credential::CredentialProvider::TokenCredential(
-                    TokenCache::default(),
-                    Box::new(client_credential),
-                )
-            } else if let (Some(client_id), Some(client_secret), Some(tenant_id)) =
-                (&self.client_id, self.client_secret, &self.tenant_id)
-            {
-                let client_credential = credential::ClientSecretOAuthProvider::new(
-                    client_id.clone(),
-                    client_secret,
-                    tenant_id,
-                    self.authority_host,
-                );
-                credential::CredentialProvider::TokenCredential(
-                    TokenCache::default(),
-                    Box::new(client_credential),
-                )
-            } else if let Some(query_pairs) = self.sas_query_pairs {
-                credential::CredentialProvider::SASToken(query_pairs)
-            } else if let Some(sas) = self.sas_key {
-                credential::CredentialProvider::SASToken(split_sas(&sas)?)
-            } else if self.use_azure_cli {
-                credential::CredentialProvider::TokenCredential(
-                    TokenCache::default(),
-                    Box::new(credential::AzureCliCredential::new()),
-                )
-            } else {
-                let client =
-                    self.client_options.clone().with_allow_http(true).client()?;
-                let msi_credential = credential::ImdsManagedIdentityOAuthProvider::new(
-                    self.client_id,
-                    self.object_id,
-                    self.msi_resource_id,
-                    self.msi_endpoint,
-                    client,
-                );
-                credential::CredentialProvider::TokenCredential(
-                    TokenCache::default(),
-                    Box::new(msi_credential),
-                )
-            };
-            (false, url, credential, account_name)
-        };
-
-        let config = client::AzureConfig {
-            account,
-            is_emulator,
-            container,
-            retry_config: self.retry_config,
-            client_options: self.client_options,
-            service: storage_url,
-            credentials: auth,
-        };
-
-        let client = Arc::new(client::AzureClient::new(config)?);
-
-        Ok(MicrosoftAzure { client })
-    }
-}
-
-/// Parses the contents of the environment variable `env_name` as a URL
-/// if present, otherwise falls back to default_url
-fn url_from_env(env_name: &str, default_url: &str) -> Result<Url> {
-    let url = match std::env::var(env_name) {
-        Ok(env_value) => {
-            Url::parse(&env_value).context(UnableToParseEmulatorUrlSnafu {
-                env_name,
-                env_value,
-            })?
-        }
-        Err(_) => Url::parse(default_url).expect("Failed to parse default URL"),
-    };
-    Ok(url)
-}
-
-fn split_sas(sas: &str) -> Result<Vec<(String, String)>, Error> {
-    let sas = percent_decode_str(sas)
-        .decode_utf8()
-        .context(DecodeSasKeySnafu {})?;
-    let kv_str_pairs = sas
-        .trim_start_matches('?')
-        .split('&')
-        .filter(|s| !s.chars().all(char::is_whitespace));
-    let mut pairs = Vec::new();
-    for kv_pair_str in kv_str_pairs {
-        let (k, v) = kv_pair_str
-            .trim()
-            .split_once('=')
-            .ok_or(Error::MissingSasComponent {})?;
-        pairs.push((k.into(), v.into()))
-    }
-    Ok(pairs)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tests::{
-        copy_if_not_exists, list_uses_directories_correctly, list_with_delimiter,
-        put_get_delete_list, put_get_delete_list_opts, rename_and_copy, stream_get,
-    };
-    use std::collections::HashMap;
-    use std::env;
-
-    // Helper macro to skip tests if TEST_INTEGRATION and the Azure environment
-    // variables are not set.
-    macro_rules! maybe_skip_integration {
-        () => {{
-            dotenv::dotenv().ok();
-
-            let use_emulator = std::env::var("AZURE_USE_EMULATOR").is_ok();
-
-            let mut required_vars = vec!["OBJECT_STORE_BUCKET"];
-            if !use_emulator {
-                required_vars.push("AZURE_STORAGE_ACCOUNT");
-                required_vars.push("AZURE_STORAGE_ACCESS_KEY");
-            }
-            let unset_vars: Vec<_> = required_vars
-                .iter()
-                .filter_map(|&name| match env::var(name) {
-                    Ok(_) => None,
-                    Err(_) => Some(name),
-                })
-                .collect();
-            let unset_var_names = unset_vars.join(", ");
-
-            let force = std::env::var("TEST_INTEGRATION");
-
-            if force.is_ok() && !unset_var_names.is_empty() {
-                panic!(
-                    "TEST_INTEGRATION is set, \
-                        but variable(s) {} need to be set",
-                    unset_var_names
-                )
-            } else if force.is_err() {
-                eprintln!(
-                    "skipping Azure integration test - set {}TEST_INTEGRATION to run",
-                    if unset_var_names.is_empty() {
-                        String::new()
-                    } else {
-                        format!("{} and ", unset_var_names)
-                    }
-                );
-                return;
-            } else {
-                let builder = MicrosoftAzureBuilder::new()
-                    .with_container_name(
-                        env::var("OBJECT_STORE_BUCKET")
-                            .expect("already checked OBJECT_STORE_BUCKET"),
-                    )
-                    .with_use_emulator(use_emulator);
-                if !use_emulator {
-                    builder
-                        .with_account(
-                            env::var("AZURE_STORAGE_ACCOUNT").unwrap_or_default(),
-                        )
-                        .with_access_key(
-                            env::var("AZURE_STORAGE_ACCESS_KEY").unwrap_or_default(),
-                        )
-                } else {
-                    builder
-                }
-            }
-        }};
-    }
+    use crate::tests::*;
 
     #[tokio::test]
     async fn azure_blob_test() {
-        let integration = maybe_skip_integration!().build().unwrap();
-        put_get_delete_list_opts(&integration, false).await;
+        crate::test_util::maybe_skip_integration!();
+        let integration = MicrosoftAzureBuilder::from_env().build().unwrap();
+
+        put_get_delete_list_opts(&integration).await;
+        get_opts(&integration).await;
         list_uses_directories_correctly(&integration).await;
         list_with_delimiter(&integration).await;
         rename_and_copy(&integration).await;
         copy_if_not_exists(&integration).await;
         stream_get(&integration).await;
+        put_opts(&integration, true).await;
+        multipart(&integration, &integration).await;
+        signing(&integration).await;
+
+        let validate = !integration.client.config().disable_tagging;
+        tagging(&integration, validate, |p| {
+            let client = Arc::clone(&integration.client);
+            async move { client.get_blob_tagging(&p).await }
+        })
+        .await
     }
 
-    // test for running integration test against actual blob service with service principal
-    // credentials. To run make sure all environment variables are set and remove the ignore
+    #[ignore = "Used for manual testing against a real storage account."]
     #[tokio::test]
-    #[ignore]
-    async fn azure_blob_test_sp() {
-        dotenv::dotenv().ok();
-        let builder = MicrosoftAzureBuilder::new()
-            .with_account(
-                env::var("AZURE_STORAGE_ACCOUNT")
-                    .expect("must be set AZURE_STORAGE_ACCOUNT"),
-            )
-            .with_container_name(
-                env::var("OBJECT_STORE_BUCKET").expect("must be set OBJECT_STORE_BUCKET"),
-            )
-            .with_access_key(
-                env::var("AZURE_STORAGE_ACCESS_KEY")
-                    .expect("must be set AZURE_STORAGE_CLIENT_ID"),
-            );
-        let integration = builder.build().unwrap();
-
-        put_get_delete_list(&integration).await;
-        list_uses_directories_correctly(&integration).await;
-        list_with_delimiter(&integration).await;
-        rename_and_copy(&integration).await;
-        copy_if_not_exists(&integration).await;
-        stream_get(&integration).await;
-    }
-
-    #[test]
-    fn azure_blob_test_urls() {
-        let mut builder = MicrosoftAzureBuilder::new();
-        builder
-            .parse_url("abfss://file_system@account.dfs.core.windows.net/")
+    async fn test_user_delegation_key() {
+        let account = std::env::var("AZURE_ACCOUNT_NAME").unwrap();
+        let container = std::env::var("AZURE_CONTAINER_NAME").unwrap();
+        let client_id = std::env::var("AZURE_CLIENT_ID").unwrap();
+        let client_secret = std::env::var("AZURE_CLIENT_SECRET").unwrap();
+        let tenant_id = std::env::var("AZURE_TENANT_ID").unwrap();
+        let integration = MicrosoftAzureBuilder::new()
+            .with_account(account)
+            .with_container_name(container)
+            .with_client_id(client_id)
+            .with_client_secret(client_secret)
+            .with_tenant_id(&tenant_id)
+            .build()
             .unwrap();
-        assert_eq!(builder.account_name, Some("account".to_string()));
-        assert_eq!(builder.container_name, Some("file_system".to_string()));
 
-        let mut builder = MicrosoftAzureBuilder::new();
-        builder.parse_url("abfs://container/path").unwrap();
-        assert_eq!(builder.container_name, Some("container".to_string()));
+        let data = Bytes::from("hello world");
+        let path = Path::from("file.txt");
+        integration.put(&path, data.clone()).await.unwrap();
 
-        let mut builder = MicrosoftAzureBuilder::new();
-        builder.parse_url("az://container").unwrap();
-        assert_eq!(builder.container_name, Some("container".to_string()));
-
-        let mut builder = MicrosoftAzureBuilder::new();
-        builder.parse_url("az://container/path").unwrap();
-        assert_eq!(builder.container_name, Some("container".to_string()));
-
-        let mut builder = MicrosoftAzureBuilder::new();
-        builder
-            .parse_url("https://account.dfs.core.windows.net/")
+        let signed = integration
+            .signed_url(Method::GET, &path, Duration::from_secs(60))
+            .await
             .unwrap();
-        assert_eq!(builder.account_name, Some("account".to_string()));
 
-        let mut builder = MicrosoftAzureBuilder::new();
-        builder
-            .parse_url("https://account.blob.core.windows.net/")
-            .unwrap();
-        assert_eq!(builder.account_name, Some("account".to_string()));
+        let resp = reqwest::get(signed).await.unwrap();
+        let loaded = resp.bytes().await.unwrap();
 
-        let err_cases = [
-            "mailto://account.blob.core.windows.net/",
-            "az://blob.mydomain/",
-            "abfs://container.foo/path",
-            "abfss://file_system@account.foo.dfs.core.windows.net/",
-            "abfss://file_system.bar@account.dfs.core.windows.net/",
-            "https://blob.mydomain/",
-            "https://blob.foo.dfs.core.windows.net/",
-        ];
-        let mut builder = MicrosoftAzureBuilder::new();
-        for case in err_cases {
-            builder.parse_url(case).unwrap_err();
-        }
-    }
-
-    #[test]
-    fn azure_test_config_from_map() {
-        let azure_client_id = "object_store:fake_access_key_id";
-        let azure_storage_account_name = "object_store:fake_secret_key";
-        let azure_storage_token = "object_store:fake_default_region";
-        let options = HashMap::from([
-            ("azure_client_id", azure_client_id),
-            ("azure_storage_account_name", azure_storage_account_name),
-            ("azure_storage_token", azure_storage_token),
-        ]);
-
-        let builder = MicrosoftAzureBuilder::new()
-            .try_with_options(options)
-            .unwrap();
-        assert_eq!(builder.client_id.unwrap(), azure_client_id);
-        assert_eq!(builder.account_name.unwrap(), azure_storage_account_name);
-        assert_eq!(builder.bearer_token.unwrap(), azure_storage_token);
-    }
-
-    #[test]
-    fn azure_test_config_from_typed_map() {
-        let azure_client_id = "object_store:fake_access_key_id".to_string();
-        let azure_storage_account_name = "object_store:fake_secret_key".to_string();
-        let azure_storage_token = "object_store:fake_default_region".to_string();
-        let options = HashMap::from([
-            (AzureConfigKey::ClientId, azure_client_id.clone()),
-            (
-                AzureConfigKey::AccountName,
-                azure_storage_account_name.clone(),
-            ),
-            (AzureConfigKey::Token, azure_storage_token.clone()),
-        ]);
-
-        let builder = MicrosoftAzureBuilder::new()
-            .try_with_options(&options)
-            .unwrap();
-        assert_eq!(builder.client_id.unwrap(), azure_client_id);
-        assert_eq!(builder.account_name.unwrap(), azure_storage_account_name);
-        assert_eq!(builder.bearer_token.unwrap(), azure_storage_token);
+        assert_eq!(data, loaded);
     }
 
     #[test]
@@ -1305,18 +313,11 @@ mod tests {
         let azure_client_id = "object_store:fake_access_key_id".to_string();
         let azure_storage_account_name = "object_store:fake_secret_key".to_string();
         let azure_storage_token = "object_store:fake_default_region".to_string();
-        let options = HashMap::from([
-            (AzureConfigKey::ClientId, azure_client_id.clone()),
-            (
-                AzureConfigKey::AccountName,
-                azure_storage_account_name.clone(),
-            ),
-            (AzureConfigKey::Token, azure_storage_token.clone()),
-        ]);
-
         let builder = MicrosoftAzureBuilder::new()
-            .try_with_options(&options)
-            .unwrap();
+            .with_config(AzureConfigKey::ClientId, &azure_client_id)
+            .with_config(AzureConfigKey::AccountName, &azure_storage_account_name)
+            .with_config(AzureConfigKey::Token, &azure_storage_token);
+
         assert_eq!(
             builder.get_config_value(&AzureConfigKey::ClientId).unwrap(),
             azure_client_id
@@ -1331,36 +332,5 @@ mod tests {
             builder.get_config_value(&AzureConfigKey::Token).unwrap(),
             azure_storage_token
         );
-    }
-
-    #[test]
-    fn azure_test_config_fallible_options() {
-        let azure_client_id = "object_store:fake_access_key_id".to_string();
-        let azure_storage_token = "object_store:fake_default_region".to_string();
-        let options = HashMap::from([
-            ("azure_client_id", azure_client_id),
-            ("invalid-key", azure_storage_token),
-        ]);
-
-        let builder = MicrosoftAzureBuilder::new().try_with_options(&options);
-        assert!(builder.is_err());
-    }
-
-    #[test]
-    fn azure_test_split_sas() {
-        let raw_sas = "?sv=2021-10-04&st=2023-01-04T17%3A48%3A57Z&se=2023-01-04T18%3A15%3A00Z&sr=c&sp=rcwl&sig=C7%2BZeEOWbrxPA3R0Cw%2Fw1EZz0%2B4KBvQexeKZKe%2BB6h0%3D";
-        let expected = vec![
-            ("sv".to_string(), "2021-10-04".to_string()),
-            ("st".to_string(), "2023-01-04T17:48:57Z".to_string()),
-            ("se".to_string(), "2023-01-04T18:15:00Z".to_string()),
-            ("sr".to_string(), "c".to_string()),
-            ("sp".to_string(), "rcwl".to_string()),
-            (
-                "sig".to_string(),
-                "C7+ZeEOWbrxPA3R0Cw/w1EZz0+4KBvQexeKZKe+B6h0=".to_string(),
-            ),
-        ];
-        let pairs = split_sas(raw_sas).unwrap();
-        assert_eq!(expected, pairs);
     }
 }

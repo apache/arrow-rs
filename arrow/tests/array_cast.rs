@@ -15,26 +15,22 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow_array::builder::{
-    PrimitiveDictionaryBuilder, StringDictionaryBuilder, UnionBuilder,
-};
+use arrow_array::builder::{PrimitiveDictionaryBuilder, StringDictionaryBuilder, UnionBuilder};
+use arrow_array::cast::AsArray;
 use arrow_array::types::{
-    ArrowDictionaryKeyType, Decimal128Type, Decimal256Type, Int16Type, Int32Type,
-    Int64Type, Int8Type, TimestampMicrosecondType, UInt16Type, UInt32Type, UInt64Type,
-    UInt8Type,
+    ArrowDictionaryKeyType, Decimal128Type, Decimal256Type, Int16Type, Int32Type, Int64Type,
+    Int8Type, TimestampMicrosecondType, UInt16Type, UInt32Type, UInt64Type, UInt8Type,
 };
 use arrow_array::{
-    Array, ArrayRef, ArrowPrimitiveType, BinaryArray, BooleanArray, Date32Array,
-    Date64Array, Decimal128Array, DurationMicrosecondArray, DurationMillisecondArray,
-    DurationNanosecondArray, DurationSecondArray, FixedSizeBinaryArray,
-    FixedSizeListArray, Float16Array, Float32Array, Float64Array, Int16Array, Int32Array,
-    Int64Array, Int8Array, IntervalDayTimeArray, IntervalMonthDayNanoArray,
-    IntervalYearMonthArray, LargeBinaryArray, LargeListArray, LargeStringArray,
-    ListArray, NullArray, PrimitiveArray, StringArray, StructArray,
-    Time32MillisecondArray, Time32SecondArray, Time64MicrosecondArray,
-    Time64NanosecondArray, TimestampMicrosecondArray, TimestampMillisecondArray,
-    TimestampNanosecondArray, TimestampSecondArray, UInt16Array, UInt32Array,
-    UInt64Array, UInt8Array, UnionArray,
+    Array, ArrayRef, ArrowPrimitiveType, BinaryArray, BooleanArray, Date32Array, Date64Array,
+    Decimal128Array, DurationMicrosecondArray, DurationMillisecondArray, DurationNanosecondArray,
+    DurationSecondArray, FixedSizeBinaryArray, FixedSizeListArray, Float16Array, Float32Array,
+    Float64Array, Int16Array, Int32Array, Int64Array, Int8Array, IntervalDayTimeArray,
+    IntervalMonthDayNanoArray, IntervalYearMonthArray, LargeBinaryArray, LargeListArray,
+    LargeStringArray, ListArray, NullArray, PrimitiveArray, StringArray, StructArray,
+    Time32MillisecondArray, Time32SecondArray, Time64MicrosecondArray, Time64NanosecondArray,
+    TimestampMicrosecondArray, TimestampMillisecondArray, TimestampNanosecondArray,
+    TimestampSecondArray, UInt16Array, UInt32Array, UInt64Array, UInt8Array, UnionArray,
 };
 use arrow_buffer::{i256, Buffer};
 use arrow_cast::pretty::pretty_format_columns;
@@ -48,20 +44,103 @@ use std::sync::Arc;
 
 #[test]
 fn test_cast_timestamp_to_string() {
-    let a = TimestampMillisecondArray::from(vec![
-        Some(864000000005),
-        Some(1545696000001),
-        None,
-    ])
-    .with_timezone("UTC".to_string());
+    let a = TimestampMillisecondArray::from(vec![Some(864000000005), Some(1545696000001), None])
+        .with_timezone("UTC".to_string());
     let array = Arc::new(a) as ArrayRef;
-    dbg!(&array);
     let b = cast(&array, &DataType::Utf8).unwrap();
     let c = b.as_any().downcast_ref::<StringArray>().unwrap();
     assert_eq!(&DataType::Utf8, c.data_type());
     assert_eq!("1997-05-19T00:00:00.005Z", c.value(0));
     assert_eq!("2018-12-25T00:00:00.001Z", c.value(1));
     assert!(c.is_null(2));
+}
+
+// See: https://en.wikipedia.org/wiki/List_of_tz_database_time_zones for list of valid
+// timezones
+
+// Cast Timestamp(_, None) -> Timestamp(_, Some(timezone))
+#[test]
+fn test_cast_timestamp_with_timezone_daylight_1() {
+    let string_array: Arc<dyn Array> = Arc::new(StringArray::from(vec![
+        // This is winter in New York so daylight saving is not in effect
+        // UTC offset is -05:00
+        Some("2000-01-01T00:00:00.123456789"),
+        // This is summer in New York so daylight saving is in effect
+        // UTC offset is -04:00
+        Some("2010-07-01T00:00:00.123456789"),
+        None,
+    ]));
+    let to_type = DataType::Timestamp(TimeUnit::Nanosecond, None);
+    let timestamp_array = cast(&string_array, &to_type).unwrap();
+
+    let to_type = DataType::Timestamp(TimeUnit::Microsecond, Some("America/New_York".into()));
+    let timestamp_array = cast(&timestamp_array, &to_type).unwrap();
+
+    let string_array = cast(&timestamp_array, &DataType::Utf8).unwrap();
+    let result = string_array.as_string::<i32>();
+    assert_eq!("2000-01-01T00:00:00.123456-05:00", result.value(0));
+    assert_eq!("2010-07-01T00:00:00.123456-04:00", result.value(1));
+    assert!(result.is_null(2));
+}
+
+// Cast Timestamp(_, Some(timezone)) -> Timestamp(_, None)
+#[test]
+fn test_cast_timestamp_with_timezone_daylight_2() {
+    let string_array: Arc<dyn Array> = Arc::new(StringArray::from(vec![
+        Some("2000-01-01T07:00:00.123456789"),
+        Some("2010-07-01T07:00:00.123456789"),
+        None,
+    ]));
+    let to_type = DataType::Timestamp(TimeUnit::Millisecond, Some("America/New_York".into()));
+    let timestamp_array = cast(&string_array, &to_type).unwrap();
+
+    // Check intermediate representation is correct
+    let string_array = cast(&timestamp_array, &DataType::Utf8).unwrap();
+    let result = string_array.as_string::<i32>();
+    assert_eq!("2000-01-01T07:00:00.123-05:00", result.value(0));
+    assert_eq!("2010-07-01T07:00:00.123-04:00", result.value(1));
+    assert!(result.is_null(2));
+
+    let to_type = DataType::Timestamp(TimeUnit::Nanosecond, None);
+    let timestamp_array = cast(&timestamp_array, &to_type).unwrap();
+
+    let string_array = cast(&timestamp_array, &DataType::Utf8).unwrap();
+    let result = string_array.as_string::<i32>();
+    assert_eq!("2000-01-01T12:00:00.123", result.value(0));
+    assert_eq!("2010-07-01T11:00:00.123", result.value(1));
+    assert!(result.is_null(2));
+}
+
+// Cast Timestamp(_, Some(timezone)) -> Timestamp(_, Some(timezone))
+#[test]
+fn test_cast_timestamp_with_timezone_daylight_3() {
+    let string_array: Arc<dyn Array> = Arc::new(StringArray::from(vec![
+        // Winter in New York, summer in Sydney
+        // UTC offset is -05:00 (New York) and +11:00 (Sydney)
+        Some("2000-01-01T00:00:00.123456789"),
+        // Summer in New York, winter in Sydney
+        // UTC offset is -04:00 (New York) and +10:00 (Sydney)
+        Some("2010-07-01T00:00:00.123456789"),
+        None,
+    ]));
+    let to_type = DataType::Timestamp(TimeUnit::Microsecond, Some("America/New_York".into()));
+    let timestamp_array = cast(&string_array, &to_type).unwrap();
+
+    // Check intermediate representation is correct
+    let string_array = cast(&timestamp_array, &DataType::Utf8).unwrap();
+    let result = string_array.as_string::<i32>();
+    assert_eq!("2000-01-01T00:00:00.123456-05:00", result.value(0));
+    assert_eq!("2010-07-01T00:00:00.123456-04:00", result.value(1));
+    assert!(result.is_null(2));
+
+    let to_type = DataType::Timestamp(TimeUnit::Second, Some("Australia/Sydney".into()));
+    let timestamp_array = cast(&timestamp_array, &to_type).unwrap();
+
+    let string_array = cast(&timestamp_array, &DataType::Utf8).unwrap();
+    let result = string_array.as_string::<i32>();
+    assert_eq!("2000-01-01T16:00:00+11:00", result.value(0));
+    assert_eq!("2010-07-01T14:00:00+10:00", result.value(1));
+    assert!(result.is_null(2));
 }
 
 #[test]
@@ -127,12 +206,11 @@ fn get_arrays_of_all_types() -> Vec<ArrayRef> {
         Arc::new(make_fixed_size_binary_array()),
         Arc::new(StructArray::from(vec![
             (
-                Field::new("a", DataType::Boolean, false),
-                Arc::new(BooleanArray::from(vec![false, false, true, true]))
-                    as Arc<dyn Array>,
+                Arc::new(Field::new("a", DataType::Boolean, false)),
+                Arc::new(BooleanArray::from(vec![false, false, true, true])) as Arc<dyn Array>,
             ),
             (
-                Field::new("b", DataType::Int32, false),
+                Arc::new(Field::new("b", DataType::Int32, false)),
                 Arc::new(Int32Array::from(vec![42, 28, 19, 31])),
             ),
         ])),
@@ -160,17 +238,9 @@ fn get_arrays_of_all_types() -> Vec<ArrayRef> {
         Arc::new(TimestampMillisecondArray::from(vec![1000, 2000])),
         Arc::new(TimestampMicrosecondArray::from(vec![1000, 2000])),
         Arc::new(TimestampNanosecondArray::from(vec![1000, 2000])),
-        Arc::new(
-            TimestampSecondArray::from(vec![1000, 2000]).with_timezone(tz_name.clone()),
-        ),
-        Arc::new(
-            TimestampMillisecondArray::from(vec![1000, 2000])
-                .with_timezone(tz_name.clone()),
-        ),
-        Arc::new(
-            TimestampMicrosecondArray::from(vec![1000, 2000])
-                .with_timezone(tz_name.clone()),
-        ),
+        Arc::new(TimestampSecondArray::from(vec![1000, 2000]).with_timezone(tz_name.clone())),
+        Arc::new(TimestampMillisecondArray::from(vec![1000, 2000]).with_timezone(tz_name.clone())),
+        Arc::new(TimestampMicrosecondArray::from(vec![1000, 2000]).with_timezone(tz_name.clone())),
         Arc::new(TimestampNanosecondArray::from(vec![1000, 2000]).with_timezone(tz_name)),
         Arc::new(Date32Array::from(vec![1000, 2000])),
         Arc::new(Date64Array::from(vec![1000, 2000])),
@@ -272,8 +342,7 @@ fn make_list_array() -> ListArray {
     let value_offsets = Buffer::from_slice_ref([0, 3, 6, 8]);
 
     // Construct a list array from the above two
-    let list_data_type =
-        DataType::List(Arc::new(Field::new("item", DataType::Int32, true)));
+    let list_data_type = DataType::List(Arc::new(Field::new("item", DataType::Int32, true)));
     let list_data = ArrayData::builder(list_data_type)
         .len(3)
         .add_buffer(value_offsets)
@@ -296,8 +365,7 @@ fn make_large_list_array() -> LargeListArray {
     let value_offsets = Buffer::from_slice_ref([0i64, 3, 6, 8]);
 
     // Construct a list array from the above two
-    let list_data_type =
-        DataType::LargeList(Arc::new(Field::new("item", DataType::Int32, true)));
+    let list_data_type = DataType::LargeList(Arc::new(Field::new("item", DataType::Int32, true)));
     let list_data = ArrayData::builder(list_data_type)
         .len(3)
         .add_buffer(value_offsets)
@@ -415,8 +483,7 @@ fn get_all_types() -> Vec<DataType> {
         Decimal128(38, 0),
     ];
 
-    let dictionary_key_types =
-        vec![Int8, Int16, Int32, Int64, UInt8, UInt16, UInt32, UInt64];
+    let dictionary_key_types = vec![Int8, Int16, Int32, Int64, UInt8, UInt16, UInt32, UInt64];
 
     let mut dictionary_types = dictionary_key_types
         .into_iter()
@@ -472,9 +539,7 @@ fn test_timestamp_cast_utf8() {
 }
 
 fn format_timezone(tz: &str) -> Result<String, ArrowError> {
-    let array = Arc::new(
-        TimestampSecondArray::from(vec![Some(11111111), None]).with_timezone(tz),
-    );
+    let array = Arc::new(TimestampSecondArray::from(vec![Some(11111111), None]).with_timezone(tz));
     Ok(pretty_format_columns("f", &[array])?.to_string())
 }
 

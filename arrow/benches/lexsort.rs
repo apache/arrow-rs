@@ -52,12 +52,8 @@ impl std::fmt::Debug for Column {
 impl Column {
     fn generate(self, size: usize) -> ArrayRef {
         match self {
-            Column::RequiredI32 => {
-                Arc::new(create_primitive_array::<Int32Type>(size, 0.))
-            }
-            Column::OptionalI32 => {
-                Arc::new(create_primitive_array::<Int32Type>(size, 0.2))
-            }
+            Column::RequiredI32 => Arc::new(create_primitive_array::<Int32Type>(size, 0.)),
+            Column::OptionalI32 => Arc::new(create_primitive_array::<Int32Type>(size, 0.2)),
             Column::Required16CharString => {
                 Arc::new(create_string_array_with_len::<i32>(size, 0., 16))
             }
@@ -100,7 +96,7 @@ fn do_bench(c: &mut Criterion, columns: &[Column], len: usize) {
                     .iter()
                     .map(|a| SortField::new(a.data_type().clone()))
                     .collect();
-                let mut converter = RowConverter::new(fields).unwrap();
+                let converter = RowConverter::new(fields).unwrap();
                 let rows = converter.convert_columns(&arrays).unwrap();
                 let mut sort: Vec<_> = rows.iter().enumerate().collect();
                 sort.sort_unstable_by(|(_, a), (_, b)| a.cmp(b));

@@ -39,67 +39,27 @@ fn extend_offset_values<T: ArrowNativeType + AsPrimitive<usize>>(
     buffer.extend_from_slice(new_values);
 }
 
-pub(super) fn build_extend<
-    T: ArrowNativeType + Integer + CheckedAdd + AsPrimitive<usize>,
->(
+pub(super) fn build_extend<T: ArrowNativeType + Integer + CheckedAdd + AsPrimitive<usize>>(
     array: &ArrayData,
 ) -> Extend {
     let offsets = array.buffer::<T>(0);
     let values = array.buffers()[1].as_slice();
-    if array.null_count() == 0 {
-        // fast case where we can copy regions without null issues
-        Box::new(
-            move |mutable: &mut _MutableArrayData, _, start: usize, len: usize| {
-                let offset_buffer = &mut mutable.buffer1;
-                let values_buffer = &mut mutable.buffer2;
+    Box::new(
+        move |mutable: &mut _MutableArrayData, _, start: usize, len: usize| {
+            let offset_buffer = &mut mutable.buffer1;
+            let values_buffer = &mut mutable.buffer2;
 
-                // this is safe due to how offset is built. See details on `get_last_offset`
-                let last_offset = unsafe { get_last_offset(offset_buffer) };
+            // this is safe due to how offset is built. See details on `get_last_offset`
+            let last_offset = unsafe { get_last_offset(offset_buffer) };
 
-                extend_offsets::<T>(
-                    offset_buffer,
-                    last_offset,
-                    &offsets[start..start + len + 1],
-                );
-                // values
-                extend_offset_values::<T>(values_buffer, offsets, values, start, len);
-            },
-        )
-    } else {
-        Box::new(
-            move |mutable: &mut _MutableArrayData, _, start: usize, len: usize| {
-                let offset_buffer = &mut mutable.buffer1;
-                let values_buffer = &mut mutable.buffer2;
-
-                // this is safe due to how offset is built. See details on `get_last_offset`
-                let mut last_offset: T = unsafe { get_last_offset(offset_buffer) };
-
-                // nulls present: append item by item, ignoring null entries
-                offset_buffer.reserve(len * std::mem::size_of::<T>());
-
-                (start..start + len).for_each(|i| {
-                    if array.is_valid(i) {
-                        // compute the new offset
-                        let length = offsets[i + 1] - offsets[i];
-                        last_offset = last_offset + length;
-
-                        // append value
-                        let bytes = &values[offsets[i].to_usize().unwrap()
-                            ..offsets[i + 1].to_usize().unwrap()];
-                        values_buffer.extend_from_slice(bytes);
-                    }
-                    // offsets are always present
-                    offset_buffer.push(last_offset);
-                })
-            },
-        )
-    }
+            extend_offsets::<T>(offset_buffer, last_offset, &offsets[start..start + len + 1]);
+            // values
+            extend_offset_values::<T>(values_buffer, offsets, values, start, len);
+        },
+    )
 }
 
-pub(super) fn extend_nulls<T: ArrowNativeType>(
-    mutable: &mut _MutableArrayData,
-    len: usize,
-) {
+pub(super) fn extend_nulls<T: ArrowNativeType>(mutable: &mut _MutableArrayData, len: usize) {
     let offset_buffer = &mut mutable.buffer1;
 
     // this is safe due to how offset is built. See details on `get_last_offset`

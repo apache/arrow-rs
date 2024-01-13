@@ -17,7 +17,11 @@
 
 use arrow_buffer::i256;
 use criterion::*;
+use rand::rngs::StdRng;
+use rand::{Rng, SeedableRng};
 use std::str::FromStr;
+
+const SIZE: usize = 1024;
 
 fn criterion_benchmark(c: &mut Criterion) {
     let numbers = vec![
@@ -38,6 +42,44 @@ fn criterion_benchmark(c: &mut Criterion) {
             b.iter(|| i256::from_str(&t).unwrap());
         });
     }
+
+    let mut rng = StdRng::seed_from_u64(42);
+
+    let numerators: Vec<_> = (0..SIZE)
+        .map(|_| {
+            let high = rng.gen_range(1000..i128::MAX);
+            let low = rng.gen();
+            i256::from_parts(low, high)
+        })
+        .collect();
+
+    let divisors: Vec<_> = numerators
+        .iter()
+        .map(|n| {
+            let quotient = rng.gen_range(1..100_i32);
+            n.wrapping_div(i256::from(quotient))
+        })
+        .collect();
+
+    c.bench_function("i256_div_rem small quotient", |b| {
+        b.iter(|| {
+            for (n, d) in numerators.iter().zip(&divisors) {
+                black_box(n.wrapping_div(*d));
+            }
+        });
+    });
+
+    let divisors: Vec<_> = (0..SIZE)
+        .map(|_| i256::from(rng.gen_range(1..100_i32)))
+        .collect();
+
+    c.bench_function("i256_div_rem small divisor", |b| {
+        b.iter(|| {
+            for (n, d) in numerators.iter().zip(&divisors) {
+                black_box(n.wrapping_div(*d));
+            }
+        });
+    });
 }
 
 criterion_group!(benches, criterion_benchmark);

@@ -18,9 +18,9 @@
 use std::task::Poll;
 
 use crate::{
-    decode::FlightRecordBatchStream, flight_service_client::FlightServiceClient, Action,
-    ActionType, Criteria, Empty, FlightData, FlightDescriptor, FlightInfo,
-    HandshakeRequest, PutResult, Ticket,
+    decode::FlightRecordBatchStream, flight_service_client::FlightServiceClient,
+    trailers::extract_lazy_trailers, Action, ActionType, Criteria, Empty, FlightData,
+    FlightDescriptor, FlightInfo, HandshakeRequest, PutResult, Ticket,
 };
 use arrow_schema::Schema;
 use bytes::Bytes;
@@ -74,7 +74,7 @@ pub struct FlightClient {
 }
 
 impl FlightClient {
-    /// Creates a client client with the provided [`Channel`](tonic::transport::Channel)
+    /// Creates a client client with the provided [`Channel`]
     pub fn new(channel: Channel) -> Self {
         Self::new_from_inner(FlightServiceClient::new(channel))
     }
@@ -204,16 +204,14 @@ impl FlightClient {
     pub async fn do_get(&mut self, ticket: Ticket) -> Result<FlightRecordBatchStream> {
         let request = self.make_request(ticket);
 
-        let response_stream = self
-            .inner
-            .do_get(request)
-            .await?
-            .into_inner()
-            .map_err(FlightError::Tonic);
+        let (md, response_stream, _ext) = self.inner.do_get(request).await?.into_parts();
+        let (response_stream, trailers) = extract_lazy_trailers(response_stream);
 
         Ok(FlightRecordBatchStream::new_from_flight_data(
-            response_stream,
-        ))
+            response_stream.map_err(FlightError::Tonic),
+        )
+        .with_headers(md)
+        .with_trailers(trailers))
     }
 
     /// Make a `GetFlightInfo` call to the server with the provided
@@ -251,10 +249,7 @@ impl FlightClient {
     ///   .expect("error fetching data");
     /// # }
     /// ```
-    pub async fn get_flight_info(
-        &mut self,
-        descriptor: FlightDescriptor,
-    ) -> Result<FlightInfo> {
+    pub async fn get_flight_info(&mut self, descriptor: FlightDescriptor) -> Result<FlightInfo> {
         let request = self.make_request(descriptor);
 
         let response = self.inner.get_flight_info(request).await?.into_inner();
@@ -262,7 +257,7 @@ impl FlightClient {
     }
 
     /// Make a `DoPut` call to the server with the provided
-    /// [`Stream`](futures::Stream) of [`FlightData`] and returning a
+    /// [`Stream`] of [`FlightData`] and returning a
     /// stream of [`PutResult`].
     ///
     /// # Note
@@ -340,7 +335,7 @@ impl FlightClient {
     }
 
     /// Make a `DoExchange` call to the server with the provided
-    /// [`Stream`](futures::Stream) of [`FlightData`] and returning a
+    /// [`Stream`] of [`FlightData`] and returning a
     /// stream of [`FlightData`].
     ///
     /// # Example:
@@ -391,7 +386,7 @@ impl FlightClient {
     }
 
     /// Make a `ListFlights` call to the server with the provided
-    /// criteria and returning a [`Stream`](futures::Stream) of [`FlightInfo`].
+    /// criteria and returning a [`Stream`] of [`FlightInfo`].
     ///
     /// # Example:
     /// ```no_run
@@ -454,10 +449,7 @@ impl FlightClient {
     ///   .expect("error making request");
     /// # }
     /// ```
-    pub async fn get_schema(
-        &mut self,
-        flight_descriptor: FlightDescriptor,
-    ) -> Result<Schema> {
+    pub async fn get_schema(&mut self, flight_descriptor: FlightDescriptor) -> Result<Schema> {
         let request = self.make_request(flight_descriptor);
 
         let schema_result = self.inner.get_schema(request).await?.into_inner();
@@ -469,7 +461,7 @@ impl FlightClient {
     }
 
     /// Make a `ListActions` call to the server and returning a
-    /// [`Stream`](futures::Stream) of [`ActionType`].
+    /// [`Stream`] of [`ActionType`].
     ///
     /// # Example:
     /// ```no_run
@@ -490,9 +482,7 @@ impl FlightClient {
     ///   .expect("error gathering actions");
     /// # }
     /// ```
-    pub async fn list_actions(
-        &mut self,
-    ) -> Result<BoxStream<'static, Result<ActionType>>> {
+    pub async fn list_actions(&mut self) -> Result<BoxStream<'static, Result<ActionType>>> {
         let request = self.make_request(Empty {});
 
         let action_stream = self
@@ -506,7 +496,7 @@ impl FlightClient {
     }
 
     /// Make a `DoAction` call to the server and returning a
-    /// [`Stream`](futures::Stream) of opaque [`Bytes`].
+    /// [`Stream`] of opaque [`Bytes`].
     ///
     /// # Example:
     /// ```no_run
@@ -530,10 +520,7 @@ impl FlightClient {
     ///   .expect("error gathering action results");
     /// # }
     /// ```
-    pub async fn do_action(
-        &mut self,
-        action: Action,
-    ) -> Result<BoxStream<'static, Result<Bytes>>> {
+    pub async fn do_action(&mut self, action: Action) -> Result<BoxStream<'static, Result<Bytes>>> {
         let request = self.make_request(action);
 
         let result_stream = self

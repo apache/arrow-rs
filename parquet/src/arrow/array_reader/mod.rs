@@ -28,13 +28,13 @@ use crate::arrow::record_reader::GenericRecordReader;
 use crate::column::page::PageIterator;
 use crate::column::reader::decoder::ColumnValueDecoder;
 use crate::file::reader::{FilePageIterator, FileReader};
-use crate::schema::types::SchemaDescPtr;
 
 mod builder;
 mod byte_array;
 mod byte_array_dictionary;
 mod empty_array;
 mod fixed_len_byte_array;
+mod fixed_size_list_array;
 mod list_array;
 mod map_array;
 mod null_array;
@@ -48,6 +48,7 @@ pub use builder::build_array_reader;
 pub use byte_array::make_byte_array_reader;
 pub use byte_array_dictionary::make_byte_array_dictionary_reader;
 pub use fixed_len_byte_array::make_fixed_len_byte_array_reader;
+pub use fixed_size_list_array::FixedSizeListArrayReader;
 pub use list_array::ListArrayReader;
 pub use map_array::MapArrayReader;
 pub use null_array::NullArrayReader;
@@ -98,75 +99,21 @@ pub trait ArrayReader: Send {
 }
 
 /// A collection of row groups
-pub trait RowGroupCollection {
-    /// Get schema of parquet file.
-    fn schema(&self) -> SchemaDescPtr;
-
+pub trait RowGroups {
     /// Get the number of rows in this collection
     fn num_rows(&self) -> usize;
 
-    /// Returns an iterator over the column chunks for particular column
+    /// Returns a [`PageIterator`] for the column chunks with the given leaf column index
     fn column_chunks(&self, i: usize) -> Result<Box<dyn PageIterator>>;
 }
 
-impl RowGroupCollection for Arc<dyn FileReader> {
-    fn schema(&self) -> SchemaDescPtr {
-        self.metadata().file_metadata().schema_descr_ptr()
-    }
-
+impl RowGroups for Arc<dyn FileReader> {
     fn num_rows(&self) -> usize {
         self.metadata().file_metadata().num_rows() as usize
     }
 
     fn column_chunks(&self, column_index: usize) -> Result<Box<dyn PageIterator>> {
         let iterator = FilePageIterator::new(column_index, Arc::clone(self))?;
-        Ok(Box::new(iterator))
-    }
-}
-
-pub(crate) struct FileReaderRowGroupCollection {
-    /// The underling file reader
-    reader: Arc<dyn FileReader>,
-    /// Optional list of row group indices to scan
-    row_groups: Option<Vec<usize>>,
-}
-
-impl FileReaderRowGroupCollection {
-    /// Creates a new [`RowGroupCollection`] from a `FileReader` and an optional
-    /// list of row group indexes to scan
-    pub fn new(reader: Arc<dyn FileReader>, row_groups: Option<Vec<usize>>) -> Self {
-        Self { reader, row_groups }
-    }
-}
-
-impl RowGroupCollection for FileReaderRowGroupCollection {
-    fn schema(&self) -> SchemaDescPtr {
-        self.reader.metadata().file_metadata().schema_descr_ptr()
-    }
-
-    fn num_rows(&self) -> usize {
-        match &self.row_groups {
-            None => self.reader.metadata().file_metadata().num_rows() as usize,
-            Some(row_groups) => {
-                let meta = self.reader.metadata().row_groups();
-                row_groups
-                    .iter()
-                    .map(|x| meta[*x].num_rows() as usize)
-                    .sum()
-            }
-        }
-    }
-
-    fn column_chunks(&self, i: usize) -> Result<Box<dyn PageIterator>> {
-        let iterator = match &self.row_groups {
-            Some(row_groups) => FilePageIterator::with_row_groups(
-                i,
-                Box::new(row_groups.clone().into_iter()),
-                Arc::clone(&self.reader),
-            )?,
-            None => FilePageIterator::new(i, Arc::clone(&self.reader))?,
-        };
-
         Ok(Box::new(iterator))
     }
 }
@@ -182,7 +129,7 @@ fn read_records<V, CV>(
 ) -> Result<usize>
 where
     V: ValuesBuffer,
-    CV: ColumnValueDecoder<Slice = V::Slice>,
+    CV: ColumnValueDecoder<Buffer = V>,
 {
     let mut records_read = 0usize;
     while records_read < batch_size {
@@ -205,7 +152,7 @@ where
     Ok(records_read)
 }
 
-/// Uses `record_reader` to skip up to `batch_size` records from`pages`
+/// Uses `record_reader` to skip up to `batch_size` records from `pages`
 ///
 /// Returns the number of records skipped, which can be less than `batch_size` if
 /// pages is exhausted
@@ -216,7 +163,7 @@ fn skip_records<V, CV>(
 ) -> Result<usize>
 where
     V: ValuesBuffer,
-    CV: ColumnValueDecoder<Slice = V::Slice>,
+    CV: ColumnValueDecoder<Buffer = V>,
 {
     let mut records_skipped = 0usize;
     while records_skipped < batch_size {

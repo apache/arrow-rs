@@ -60,8 +60,7 @@ impl<'a> UnalignedBitChunk<'a> {
 
         // If less than 8 bytes, read into prefix
         if buffer.len() <= 8 {
-            let (suffix_mask, trailing_padding) =
-                compute_suffix_mask(len, offset_padding);
+            let (suffix_mask, trailing_padding) = compute_suffix_mask(len, offset_padding);
             let prefix = read_u64(buffer) & suffix_mask & prefix_mask;
 
             return Self {
@@ -75,8 +74,7 @@ impl<'a> UnalignedBitChunk<'a> {
 
         // If less than 16 bytes, read into prefix and suffix
         if buffer.len() <= 16 {
-            let (suffix_mask, trailing_padding) =
-                compute_suffix_mask(len, offset_padding);
+            let (suffix_mask, trailing_padding) = compute_suffix_mask(len, offset_padding);
             let prefix = read_u64(&buffer[..8]) & prefix_mask;
             let suffix = read_u64(&buffer[8..]) & suffix_mask;
 
@@ -157,7 +155,7 @@ impl<'a> UnalignedBitChunk<'a> {
         self.prefix
             .into_iter()
             .chain(self.chunks.iter().cloned())
-            .chain(self.suffix.into_iter())
+            .chain(self.suffix)
     }
 
     /// Counts the number of ones
@@ -167,10 +165,7 @@ impl<'a> UnalignedBitChunk<'a> {
 }
 
 pub type UnalignedBitChunkIterator<'a> = std::iter::Chain<
-    std::iter::Chain<
-        std::option::IntoIter<u64>,
-        std::iter::Cloned<std::slice::Iter<'a, u64>>,
-    >,
+    std::iter::Chain<std::option::IntoIter<u64>, std::iter::Cloned<std::slice::Iter<'a, u64>>>,
     std::option::IntoIter<u64>,
 >;
 
@@ -338,9 +333,8 @@ impl Iterator for BitChunkIterator<'_> {
         } else {
             // the constructor ensures that bit_offset is in 0..8
             // that means we need to read at most one additional byte to fill in the high bits
-            let next = unsafe {
-                std::ptr::read_unaligned(raw_data.add(index + 1) as *const u8) as u64
-            };
+            let next =
+                unsafe { std::ptr::read_unaligned(raw_data.add(index + 1) as *const u8) as u64 };
 
             (current >> bit_offset) | (next << (64 - bit_offset))
         };
@@ -387,8 +381,8 @@ mod tests {
     #[test]
     fn test_iter_unaligned() {
         let input: &[u8] = &[
-            0b00000000, 0b00000001, 0b00000010, 0b00000100, 0b00001000, 0b00010000,
-            0b00100000, 0b01000000, 0b11111111,
+            0b00000000, 0b00000001, 0b00000010, 0b00000100, 0b00001000, 0b00010000, 0b00100000,
+            0b01000000, 0b11111111,
         ];
         let buffer: Buffer = Buffer::from(input);
 
@@ -408,8 +402,8 @@ mod tests {
     #[test]
     fn test_iter_unaligned_remainder_1_byte() {
         let input: &[u8] = &[
-            0b00000000, 0b00000001, 0b00000010, 0b00000100, 0b00001000, 0b00010000,
-            0b00100000, 0b01000000, 0b11111111,
+            0b00000000, 0b00000001, 0b00000010, 0b00000100, 0b00001000, 0b00010000, 0b00100000,
+            0b01000000, 0b11111111,
         ];
         let buffer: Buffer = Buffer::from(input);
 
@@ -442,8 +436,8 @@ mod tests {
     #[test]
     fn test_iter_unaligned_remainder_bits_large() {
         let input: &[u8] = &[
-            0b11111111, 0b00000000, 0b11111111, 0b00000000, 0b11111111, 0b00000000,
-            0b11111111, 0b00000000, 0b11111111,
+            0b11111111, 0b00000000, 0b11111111, 0b00000000, 0b11111111, 0b00000000, 0b11111111,
+            0b00000000, 0b11111111,
         ];
         let buffer: Buffer = Buffer::from(input);
 
@@ -637,11 +631,8 @@ mod tests {
             let max_truncate = 128.min(mask_len - offset);
             let truncate = rng.gen::<usize>().checked_rem(max_truncate).unwrap_or(0);
 
-            let unaligned = UnalignedBitChunk::new(
-                buffer.as_slice(),
-                offset,
-                mask_len - offset - truncate,
-            );
+            let unaligned =
+                UnalignedBitChunk::new(buffer.as_slice(), offset, mask_len - offset - truncate);
 
             let bool_slice = &bools[offset..mask_len - truncate];
 

@@ -17,7 +17,7 @@
 
 //! An object store implementation for generic HTTP servers
 //!
-//! This follows [rfc2518] commonly known called [WebDAV]
+//! This follows [rfc2518] commonly known as [WebDAV]
 //!
 //! Basic get support will work out of the box with most HTTP servers,
 //! even those that don't explicitly support [rfc2518]
@@ -31,8 +31,6 @@
 //! [rfc2518]: https://datatracker.ietf.org/doc/html/rfc2518
 //! [WebDAV]: https://en.wikipedia.org/wiki/WebDAV
 
-use std::ops::Range;
-
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures::stream::BoxStream;
@@ -42,11 +40,13 @@ use snafu::{OptionExt, ResultExt, Snafu};
 use tokio::io::AsyncWrite;
 use url::Url;
 
+use crate::client::get::GetClientExt;
+use crate::client::header::get_etag;
 use crate::http::client::Client;
 use crate::path::Path;
 use crate::{
-    ClientOptions, GetResult, ListResult, MultipartId, ObjectMeta, ObjectStore, Result,
-    RetryConfig,
+    ClientConfigKey, ClientOptions, GetOptions, GetResult, ListResult, MultipartId, ObjectMeta,
+    ObjectStore, PutMode, PutOptions, PutResult, Result, RetryConfig,
 };
 
 mod client;
@@ -62,14 +62,10 @@ enum Error {
         url: String,
     },
 
-    #[snafu(display("Object is a directory"))]
-    IsDirectory,
-
-    #[snafu(display("PROPFIND response contained no valid objects"))]
-    NoObjects,
-
-    #[snafu(display("PROPFIND response contained more than one object"))]
-    MultipleObjects,
+    #[snafu(display("Unable to extract metadata from headers: {}", source))]
+    Metadata {
+        source: crate::client::header::Error,
+    },
 
     #[snafu(display("Request error: {}", source))]
     Reqwest { source: reqwest::Error },
@@ -100,8 +96,23 @@ impl std::fmt::Display for HttpStore {
 
 #[async_trait]
 impl ObjectStore for HttpStore {
-    async fn put(&self, location: &Path, bytes: Bytes) -> Result<()> {
-        self.client.put(location, bytes).await
+    async fn put_opts(&self, location: &Path, bytes: Bytes, opts: PutOptions) -> Result<PutResult> {
+        if opts.mode != PutMode::Overwrite {
+            // TODO: Add support for If header - https://datatracker.ietf.org/doc/html/rfc2518#section-9.4
+            return Err(crate::Error::NotImplemented);
+        }
+
+        let response = self.client.put(location, bytes).await?;
+        let e_tag = match get_etag(response.headers()) {
+            Ok(e_tag) => Some(e_tag),
+            Err(crate::client::header::Error::MissingEtag) => None,
+            Err(source) => return Err(Error::Metadata { source }.into()),
+        };
+
+        Ok(PutResult {
+            e_tag,
+            version: None,
+        })
     }
 
     async fn put_multipart(
@@ -111,63 +122,25 @@ impl ObjectStore for HttpStore {
         Err(super::Error::NotImplemented)
     }
 
-    async fn abort_multipart(
-        &self,
-        _location: &Path,
-        _multipart_id: &MultipartId,
-    ) -> Result<()> {
+    async fn abort_multipart(&self, _location: &Path, _multipart_id: &MultipartId) -> Result<()> {
         Err(super::Error::NotImplemented)
     }
 
-    async fn get(&self, location: &Path) -> Result<GetResult> {
-        let response = self.client.get(location, None).await?;
-        let stream = response
-            .bytes_stream()
-            .map_err(|source| Error::Reqwest { source }.into())
-            .boxed();
-
-        Ok(GetResult::Stream(stream))
-    }
-
-    async fn get_range(&self, location: &Path, range: Range<usize>) -> Result<Bytes> {
-        let bytes = self
-            .client
-            .get(location, Some(range))
-            .await?
-            .bytes()
-            .await
-            .context(ReqwestSnafu)?;
-        Ok(bytes)
-    }
-
-    async fn head(&self, location: &Path) -> Result<ObjectMeta> {
-        let status = self.client.list(Some(location), "0").await?;
-        match status.response.len() {
-            1 => {
-                let response = status.response.into_iter().next().unwrap();
-                response.check_ok()?;
-                match response.is_dir() {
-                    true => Err(Error::IsDirectory.into()),
-                    false => response.object_meta(self.client.base_url()),
-                }
-            }
-            0 => Err(Error::NoObjects.into()),
-            _ => Err(Error::MultipleObjects.into()),
-        }
+    async fn get_opts(&self, location: &Path, options: GetOptions) -> Result<GetResult> {
+        self.client.get_opts(location, options).await
     }
 
     async fn delete(&self, location: &Path) -> Result<()> {
         self.client.delete(location).await
     }
 
-    async fn list(
-        &self,
-        prefix: Option<&Path>,
-    ) -> Result<BoxStream<'_, Result<ObjectMeta>>> {
+    fn list(&self, prefix: Option<&Path>) -> BoxStream<'_, Result<ObjectMeta>> {
         let prefix_len = prefix.map(|p| p.as_ref().len()).unwrap_or_default();
-        let status = self.client.list(prefix, "infinity").await?;
-        Ok(futures::stream::iter(
-            status
+        let prefix = prefix.cloned();
+        futures::stream::once(async move {
+            let status = self.client.list(prefix.as_ref(), "infinity").await?;
+
+            let iter = status
                 .response
                 .into_iter()
                 .filter(|r| !r.is_dir())
@@ -176,9 +149,12 @@ impl ObjectStore for HttpStore {
                     response.object_meta(self.client.base_url())
                 })
                 // Filter out exact prefix matches
-                .filter_ok(move |r| r.location.as_ref().len() > prefix_len),
-        )
-        .boxed())
+                .filter_ok(move |r| r.location.as_ref().len() > prefix_len);
+
+            Ok::<_, crate::Error>(futures::stream::iter(iter))
+        })
+        .try_flatten()
+        .boxed()
     }
 
     async fn list_with_delimiter(&self, prefix: Option<&Path>) -> Result<ListResult> {
@@ -248,6 +224,12 @@ impl HttpBuilder {
         self
     }
 
+    /// Set individual client configuration without overriding the entire config
+    pub fn with_config(mut self, key: ClientConfigKey, value: impl Into<String>) -> Self {
+        self.client_options = self.client_options.with_config(key, value);
+        self
+    }
+
     /// Sets the client options, overriding any already set
     pub fn with_client_options(mut self, options: ClientOptions) -> Self {
         self.client_options = options;
@@ -273,12 +255,7 @@ mod tests {
 
     #[tokio::test]
     async fn http_test() {
-        dotenv::dotenv().ok();
-        let force = std::env::var("TEST_INTEGRATION");
-        if force.is_err() {
-            eprintln!("skipping HTTP integration test - set TEST_INTEGRATION to run");
-            return;
-        }
+        crate::test_util::maybe_skip_integration!();
         let url = std::env::var("HTTP_URL").expect("HTTP_URL must be set");
         let options = ClientOptions::new().with_allow_http(true);
         let integration = HttpBuilder::new()
@@ -287,7 +264,7 @@ mod tests {
             .build()
             .unwrap();
 
-        put_get_delete_list_opts(&integration, false).await;
+        put_get_delete_list_opts(&integration).await;
         list_uses_directories_correctly(&integration).await;
         list_with_delimiter(&integration).await;
         rename_and_copy(&integration).await;

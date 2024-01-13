@@ -15,16 +15,16 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::builder::null_buffer_builder::NullBufferBuilder;
 use crate::builder::{ArrayBuilder, BooleanBufferBuilder};
 use crate::{ArrayRef, BooleanArray};
 use arrow_buffer::Buffer;
+use arrow_buffer::NullBufferBuilder;
 use arrow_data::ArrayData;
 use arrow_schema::{ArrowError, DataType};
 use std::any::Any;
 use std::sync::Arc;
 
-///  Array builder for fixed-width primitive types
+/// Builder for [`BooleanArray`]
 ///
 /// # Example
 ///
@@ -127,11 +127,7 @@ impl BooleanBuilder {
     ///
     /// Returns an error if the slices are of different lengths
     #[inline]
-    pub fn append_values(
-        &mut self,
-        values: &[bool],
-        is_valid: &[bool],
-    ) -> Result<(), ArrowError> {
+    pub fn append_values(&mut self, values: &[bool], is_valid: &[bool]) -> Result<(), ArrowError> {
         if values.len() != is_valid.len() {
             Err(ArrowError::InvalidArgumentError(
                 "Value and validity lengths must be equal".to_string(),
@@ -149,8 +145,8 @@ impl BooleanBuilder {
         let null_bit_buffer = self.null_buffer_builder.finish();
         let builder = ArrayData::builder(DataType::Boolean)
             .len(len)
-            .add_buffer(self.values_builder.finish())
-            .null_bit_buffer(null_bit_buffer);
+            .add_buffer(self.values_builder.finish().into_inner())
+            .nulls(null_bit_buffer);
 
         let array_data = unsafe { builder.build_unchecked() };
         BooleanArray::from(array_data)
@@ -159,18 +155,20 @@ impl BooleanBuilder {
     /// Builds the [BooleanArray] without resetting the builder.
     pub fn finish_cloned(&self) -> BooleanArray {
         let len = self.len();
-        let null_bit_buffer = self
-            .null_buffer_builder
-            .as_slice()
-            .map(Buffer::from_slice_ref);
+        let nulls = self.null_buffer_builder.finish_cloned();
         let value_buffer = Buffer::from_slice_ref(self.values_builder.as_slice());
         let builder = ArrayData::builder(DataType::Boolean)
             .len(len)
             .add_buffer(value_buffer)
-            .null_bit_buffer(null_bit_buffer);
+            .nulls(nulls);
 
         let array_data = unsafe { builder.build_unchecked() };
         BooleanArray::from(array_data)
+    }
+
+    /// Returns the current null buffer as a slice
+    pub fn validity_slice(&self) -> Option<&[u8]> {
+        self.null_buffer_builder.as_slice()
     }
 }
 
@@ -193,11 +191,6 @@ impl ArrayBuilder for BooleanBuilder {
     /// Returns the number of array slots in the builder
     fn len(&self) -> usize {
         self.values_builder.len()
-    }
-
-    /// Returns whether the number of array slots is zero
-    fn is_empty(&self) -> bool {
-        self.values_builder.is_empty()
     }
 
     /// Builds the array and reset this builder.
@@ -253,8 +246,7 @@ mod tests {
 
     #[test]
     fn test_boolean_array_builder_append_slice() {
-        let arr1 =
-            BooleanArray::from(vec![Some(true), Some(false), None, None, Some(false)]);
+        let arr1 = BooleanArray::from(vec![Some(true), Some(false), None, None, Some(false)]);
 
         let mut builder = BooleanArray::builder(0);
         builder.append_slice(&[true, false]);

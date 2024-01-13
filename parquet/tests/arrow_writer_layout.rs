@@ -19,6 +19,7 @@
 
 use arrow::array::{Int32Array, StringArray};
 use arrow::record_batch::RecordBatch;
+use arrow_array::builder::{Int32Builder, ListBuilder};
 use bytes::Bytes;
 use parquet::arrow::arrow_reader::{ArrowReaderOptions, ParquetRecordBatchReaderBuilder};
 use parquet::arrow::ArrowWriter;
@@ -59,8 +60,7 @@ fn do_test(test: LayoutTest) {
     let mut buf = Vec::with_capacity(1024);
 
     let mut writer =
-        ArrowWriter::try_new(&mut buf, test.batches[0].schema(), Some(test.props))
-            .unwrap();
+        ArrowWriter::try_new(&mut buf, test.batches[0].schema(), Some(test.props)).unwrap();
     for batch in test.batches {
         writer.write(&batch).unwrap();
     }
@@ -70,23 +70,24 @@ fn do_test(test: LayoutTest) {
     // Re-read file to decode column index
     let read_options = ArrowReaderOptions::new().with_page_index(true);
     let reader =
-        ParquetRecordBatchReaderBuilder::try_new_with_options(b.clone(), read_options)
-            .unwrap();
+        ParquetRecordBatchReaderBuilder::try_new_with_options(b.clone(), read_options).unwrap();
 
     assert_layout(&b, reader.metadata().as_ref(), &test.layout);
 }
 
 fn assert_layout(file_reader: &Bytes, meta: &ParquetMetaData, layout: &Layout) {
     assert_eq!(meta.row_groups().len(), layout.row_groups.len());
-    for (row_group, row_group_layout) in meta.row_groups().iter().zip(&layout.row_groups)
-    {
+    let iter = meta
+        .row_groups()
+        .iter()
+        .zip(&layout.row_groups)
+        .zip(meta.offset_index().unwrap());
+
+    for ((row_group, row_group_layout), offset_index) in iter {
         // Check against offset index
-        let offset_index = row_group.page_offset_index().unwrap();
         assert_eq!(offset_index.len(), row_group_layout.columns.len());
 
-        for (column_index, column_layout) in
-            offset_index.iter().zip(&row_group_layout.columns)
-        {
+        for (column_index, column_layout) in offset_index.iter().zip(&row_group_layout.columns) {
             assert_eq!(
                 column_index.len(),
                 column_layout.pages.len(),
@@ -142,8 +143,7 @@ fn assert_layout(file_reader: &Bytes, meta: &ParquetMetaData, layout: &Layout) {
             let pages = page_reader.collect::<Result<Vec<_>, _>>().unwrap();
             assert_eq!(
                 pages.len(),
-                column_layout.pages.len()
-                    + column_layout.dictionary_page.is_some() as usize,
+                column_layout.pages.len() + column_layout.dictionary_page.is_some() as usize,
                 "page {idx} count mismatch"
             );
 
@@ -171,7 +171,7 @@ fn test_primitive() {
     let batch = RecordBatch::try_from_iter([("col", array)]).unwrap();
     let props = WriterProperties::builder()
         .set_dictionary_enabled(false)
-        .set_data_pagesize_limit(1000)
+        .set_data_page_size_limit(1000)
         .set_write_batch_size(10)
         .build();
 
@@ -185,7 +185,7 @@ fn test_primitive() {
                     pages: (0..8)
                         .map(|_| Page {
                             rows: 250,
-                            page_header_size: 34,
+                            page_header_size: 36,
                             compressed_size: 1000,
                             encoding: Encoding::PLAIN,
                             page_type: PageType::DATA_PAGE,
@@ -200,8 +200,8 @@ fn test_primitive() {
     // Test spill dictionary
     let props = WriterProperties::builder()
         .set_dictionary_enabled(true)
-        .set_dictionary_pagesize_limit(1000)
-        .set_data_pagesize_limit(10000)
+        .set_dictionary_page_size_limit(1000)
+        .set_data_page_size_limit(10000)
         .set_write_batch_size(10)
         .build();
 
@@ -214,14 +214,14 @@ fn test_primitive() {
                     pages: vec![
                         Page {
                             rows: 250,
-                            page_header_size: 34,
+                            page_header_size: 36,
                             compressed_size: 258,
                             encoding: Encoding::RLE_DICTIONARY,
                             page_type: PageType::DATA_PAGE,
                         },
                         Page {
                             rows: 1750,
-                            page_header_size: 34,
+                            page_header_size: 36,
                             compressed_size: 7000,
                             encoding: Encoding::PLAIN,
                             page_type: PageType::DATA_PAGE,
@@ -229,7 +229,7 @@ fn test_primitive() {
                     ],
                     dictionary_page: Some(Page {
                         rows: 250,
-                        page_header_size: 34,
+                        page_header_size: 36,
                         compressed_size: 1000,
                         encoding: Encoding::PLAIN,
                         page_type: PageType::DICTIONARY_PAGE,
@@ -242,8 +242,8 @@ fn test_primitive() {
     // Test spill dictionary encoded pages
     let props = WriterProperties::builder()
         .set_dictionary_enabled(true)
-        .set_dictionary_pagesize_limit(10000)
-        .set_data_pagesize_limit(500)
+        .set_dictionary_page_size_limit(10000)
+        .set_data_page_size_limit(500)
         .set_write_batch_size(10)
         .build();
 
@@ -256,42 +256,42 @@ fn test_primitive() {
                     pages: vec![
                         Page {
                             rows: 400,
-                            page_header_size: 34,
+                            page_header_size: 36,
                             compressed_size: 452,
                             encoding: Encoding::RLE_DICTIONARY,
                             page_type: PageType::DATA_PAGE,
                         },
                         Page {
                             rows: 370,
-                            page_header_size: 34,
+                            page_header_size: 36,
                             compressed_size: 472,
                             encoding: Encoding::RLE_DICTIONARY,
                             page_type: PageType::DATA_PAGE,
                         },
                         Page {
                             rows: 330,
-                            page_header_size: 34,
+                            page_header_size: 36,
                             compressed_size: 464,
                             encoding: Encoding::RLE_DICTIONARY,
                             page_type: PageType::DATA_PAGE,
                         },
                         Page {
                             rows: 330,
-                            page_header_size: 34,
+                            page_header_size: 36,
                             compressed_size: 464,
                             encoding: Encoding::RLE_DICTIONARY,
                             page_type: PageType::DATA_PAGE,
                         },
                         Page {
                             rows: 330,
-                            page_header_size: 34,
+                            page_header_size: 36,
                             compressed_size: 464,
                             encoding: Encoding::RLE_DICTIONARY,
                             page_type: PageType::DATA_PAGE,
                         },
                         Page {
                             rows: 240,
-                            page_header_size: 34,
+                            page_header_size: 36,
                             compressed_size: 332,
                             encoding: Encoding::RLE_DICTIONARY,
                             page_type: PageType::DATA_PAGE,
@@ -299,7 +299,7 @@ fn test_primitive() {
                     ],
                     dictionary_page: Some(Page {
                         rows: 2000,
-                        page_header_size: 34,
+                        page_header_size: 36,
                         compressed_size: 8000,
                         encoding: Encoding::PLAIN,
                         page_type: PageType::DICTIONARY_PAGE,
@@ -325,7 +325,7 @@ fn test_primitive() {
                     pages: (0..20)
                         .map(|_| Page {
                             rows: 100,
-                            page_header_size: 34,
+                            page_header_size: 36,
                             compressed_size: 400,
                             encoding: Encoding::PLAIN,
                             page_type: PageType::DATA_PAGE,
@@ -346,7 +346,7 @@ fn test_string() {
     let batch = RecordBatch::try_from_iter([("col", array)]).unwrap();
     let props = WriterProperties::builder()
         .set_dictionary_enabled(false)
-        .set_data_pagesize_limit(1000)
+        .set_data_page_size_limit(1000)
         .set_write_batch_size(10)
         .build();
 
@@ -360,14 +360,14 @@ fn test_string() {
                     pages: (0..15)
                         .map(|_| Page {
                             rows: 130,
-                            page_header_size: 34,
+                            page_header_size: 36,
                             compressed_size: 1040,
                             encoding: Encoding::PLAIN,
                             page_type: PageType::DATA_PAGE,
                         })
                         .chain(std::iter::once(Page {
                             rows: 50,
-                            page_header_size: 33,
+                            page_header_size: 35,
                             compressed_size: 400,
                             encoding: Encoding::PLAIN,
                             page_type: PageType::DATA_PAGE,
@@ -382,8 +382,8 @@ fn test_string() {
     // Test spill dictionary
     let props = WriterProperties::builder()
         .set_dictionary_enabled(true)
-        .set_dictionary_pagesize_limit(1000)
-        .set_data_pagesize_limit(10000)
+        .set_dictionary_page_size_limit(1000)
+        .set_data_page_size_limit(10000)
         .set_write_batch_size(10)
         .build();
 
@@ -396,21 +396,21 @@ fn test_string() {
                     pages: vec![
                         Page {
                             rows: 130,
-                            page_header_size: 34,
+                            page_header_size: 36,
                             compressed_size: 138,
                             encoding: Encoding::RLE_DICTIONARY,
                             page_type: PageType::DATA_PAGE,
                         },
                         Page {
                             rows: 1250,
-                            page_header_size: 36,
+                            page_header_size: 38,
                             compressed_size: 10000,
                             encoding: Encoding::PLAIN,
                             page_type: PageType::DATA_PAGE,
                         },
                         Page {
                             rows: 620,
-                            page_header_size: 34,
+                            page_header_size: 36,
                             compressed_size: 4960,
                             encoding: Encoding::PLAIN,
                             page_type: PageType::DATA_PAGE,
@@ -418,7 +418,7 @@ fn test_string() {
                     ],
                     dictionary_page: Some(Page {
                         rows: 130,
-                        page_header_size: 34,
+                        page_header_size: 36,
                         compressed_size: 1040,
                         encoding: Encoding::PLAIN,
                         page_type: PageType::DICTIONARY_PAGE,
@@ -431,8 +431,8 @@ fn test_string() {
     // Test spill dictionary encoded pages
     let props = WriterProperties::builder()
         .set_dictionary_enabled(true)
-        .set_dictionary_pagesize_limit(20000)
-        .set_data_pagesize_limit(500)
+        .set_dictionary_page_size_limit(20000)
+        .set_data_page_size_limit(500)
         .set_write_batch_size(10)
         .build();
 
@@ -445,42 +445,42 @@ fn test_string() {
                     pages: vec![
                         Page {
                             rows: 400,
-                            page_header_size: 34,
+                            page_header_size: 36,
                             compressed_size: 452,
                             encoding: Encoding::RLE_DICTIONARY,
                             page_type: PageType::DATA_PAGE,
                         },
                         Page {
                             rows: 370,
-                            page_header_size: 34,
+                            page_header_size: 36,
                             compressed_size: 472,
                             encoding: Encoding::RLE_DICTIONARY,
                             page_type: PageType::DATA_PAGE,
                         },
                         Page {
                             rows: 330,
-                            page_header_size: 34,
+                            page_header_size: 36,
                             compressed_size: 464,
                             encoding: Encoding::RLE_DICTIONARY,
                             page_type: PageType::DATA_PAGE,
                         },
                         Page {
                             rows: 330,
-                            page_header_size: 34,
+                            page_header_size: 36,
                             compressed_size: 464,
                             encoding: Encoding::RLE_DICTIONARY,
                             page_type: PageType::DATA_PAGE,
                         },
                         Page {
                             rows: 330,
-                            page_header_size: 34,
+                            page_header_size: 36,
                             compressed_size: 464,
                             encoding: Encoding::RLE_DICTIONARY,
                             page_type: PageType::DATA_PAGE,
                         },
                         Page {
                             rows: 240,
-                            page_header_size: 34,
+                            page_header_size: 36,
                             compressed_size: 332,
                             encoding: Encoding::RLE_DICTIONARY,
                             page_type: PageType::DATA_PAGE,
@@ -488,11 +488,53 @@ fn test_string() {
                     ],
                     dictionary_page: Some(Page {
                         rows: 2000,
-                        page_header_size: 34,
+                        page_header_size: 36,
                         compressed_size: 16000,
                         encoding: Encoding::PLAIN,
                         page_type: PageType::DICTIONARY_PAGE,
                     }),
+                }],
+            }],
+        },
+    });
+}
+
+#[test]
+fn test_list() {
+    let mut list = ListBuilder::new(Int32Builder::new());
+    for _ in 0..200 {
+        let values = list.values();
+        for i in 0..8 {
+            values.append_value(i);
+        }
+        list.append(true);
+    }
+    let array = Arc::new(list.finish()) as _;
+
+    let batch = RecordBatch::try_from_iter([("col", array)]).unwrap();
+    let props = WriterProperties::builder()
+        .set_dictionary_enabled(false)
+        .set_data_page_row_count_limit(20)
+        .set_write_batch_size(3)
+        .build();
+
+    // Test rows not split across pages
+    do_test(LayoutTest {
+        props,
+        batches: vec![batch],
+        layout: Layout {
+            row_groups: vec![RowGroup {
+                columns: vec![ColumnChunk {
+                    pages: (0..10)
+                        .map(|_| Page {
+                            rows: 20,
+                            page_header_size: 36,
+                            compressed_size: 672,
+                            encoding: Encoding::PLAIN,
+                            page_type: PageType::DATA_PAGE,
+                        })
+                        .collect(),
+                    dictionary_page: None,
                 }],
             }],
         },

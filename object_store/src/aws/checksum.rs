@@ -15,7 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::config::Parse;
 use ring::digest::{self, digest as ring_digest};
+use std::str::FromStr;
 
 #[allow(non_camel_case_types)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -47,13 +49,30 @@ impl std::fmt::Display for Checksum {
     }
 }
 
+impl FromStr for Checksum {
+    type Err = ();
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "sha256" => Ok(Self::SHA256),
+            _ => Err(()),
+        }
+    }
+}
+
 impl TryFrom<&String> for Checksum {
     type Error = ();
 
     fn try_from(value: &String) -> Result<Self, Self::Error> {
-        match value.to_lowercase().as_str() {
-            "sha256" => Ok(Self::SHA256),
-            _ => Err(()),
-        }
+        value.parse()
+    }
+}
+
+impl Parse for Checksum {
+    fn parse(v: &str) -> crate::Result<Self> {
+        v.parse().map_err(|_| crate::Error::Generic {
+            store: "Config",
+            source: format!("\"{v}\" is not a valid checksum algorithm").into(),
+        })
     }
 }

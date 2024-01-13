@@ -21,38 +21,6 @@
 //! Please see the [arrow crates.io](https://crates.io/crates/arrow)
 //! page for feature flags and tips to improve performance.
 //!
-//! # Crate Topology
-//!
-//! The [`arrow`] project is implemented as multiple sub-crates, which are then re-exported by
-//! this top-level crate.
-//!
-//! Crate authors can choose to depend on this top-level crate, or just
-//! the sub-crates they need.
-//!
-//! The current list of sub-crates is:
-//!
-//! * [`arrow-arith`][arrow_arith] - arithmetic kernels
-//! * [`arrow-array`][arrow_array] - type-safe arrow array abstractions
-//! * [`arrow-buffer`][arrow_buffer] - buffer abstractions for arrow arrays
-//! * [`arrow-cast`][arrow_cast] - cast kernels for arrow arrays
-//! * [`arrow-csv`][arrow_csv] - read/write CSV to arrow format
-//! * [`arrow-data`][arrow_data] - the underlying data of arrow arrays
-//! * [`arrow-ipc`][arrow_ipc] - read/write IPC to arrow format
-//! * [`arrow-json`][arrow_json] - read/write JSON to arrow format
-//! * [`arrow-ord`][arrow_ord] - ordering kernels for arrow arrays
-//! * [`arrow-row`][arrow_row] - comparable row format
-//! * [`arrow-schema`][arrow_schema] - the logical types for arrow arrays
-//! * [`arrow-select`][arrow_select] - selection kernels for arrow arrays
-//! * [`arrow-string`][arrow_string] - string kernels for arrow arrays
-//!
-//! _This list is likely to grow as further functionality is split out from the top-level crate_
-//!
-//! Some functionality is also distributed independently of this crate:
-//!
-//! * [`arrow-flight`] - support for [Arrow Flight RPC]
-//! * [`arrow-integration-test`] - support for [Arrow JSON Test Format]
-//! * [`parquet`](https://docs.rs/parquet/latest/parquet/) - support for [Apache Parquet]
-//!
 //! # Columnar Format
 //!
 //! The [`array`] module provides statically typed implementations of all the array types as defined
@@ -73,7 +41,7 @@
 //! ```
 //!
 //! It is also possible to write generic code. For example, the following is generic over
-//! all primitively typed arrays:
+//! all primitively typed arrays
 //!
 //! ```rust
 //! # use std::iter::Sum;
@@ -109,7 +77,7 @@
 //! assert_eq!(min(&StringArray::from(vec!["b", "a", "c"])), Some("a"));
 //! ```
 //!
-//! For more examples, consult the [arrow_array] docs.
+//! **For more examples, and details consult the [arrow_array] docs.**
 //!
 //! # Type Erasure / Trait Objects
 //!
@@ -192,7 +160,7 @@
 //!
 //! # Compute Kernels
 //!
-//! The [`compute`](compute) module provides optimised implementations of many common operations,
+//! The [`compute`] module provides optimised implementations of many common operations,
 //! for example the `parse_strings` operation above could also be implemented as follows:
 //!
 //! ```
@@ -216,11 +184,11 @@
 //!
 //! This module also implements many common vertical operations:
 //!
-//! * All mathematical binary operators, such as [`subtract`](compute::kernels::arithmetic::subtract)
+//! * All mathematical binary operators, such as [`sub`](compute::kernels::numeric::sub)
 //! * All boolean binary operators such as [`equality`](compute::kernels::comparison::eq)
 //! * [`cast`](compute::kernels::cast::cast)
 //! * [`filter`](compute::kernels::filter::filter)
-//! * [`take`](compute::kernels::take::take) and [`limit`](compute::kernels::limit::limit)
+//! * [`take`](compute::kernels::take::take)
 //! * [`sort`](compute::kernels::sort::sort)
 //! * some string operators such as [`substring`](compute::kernels::substring::substring) and [`length`](compute::kernels::length::length)
 //!
@@ -317,18 +285,35 @@
 //! assert_eq!(string.value(1), "foo");
 //! ```
 //!
-//! # Memory and Buffers
+//! # Crate Topology
 //!
-//! Advanced users may wish to interact with the underlying buffers of an [`Array`], for example,
-//! for FFI or high-performance conversion from other formats. This interface is provided by
-//! [`ArrayData`] which stores the [`Buffer`] comprising an [`Array`], and can be accessed
-//! with [`Array::to_data`](array::Array::to_data)
+//! The [`arrow`] project is implemented as multiple sub-crates, which are then re-exported by
+//! this top-level crate.
 //!
-//! The APIs for constructing [`ArrayData`] come in safe, and unsafe variants, with the former
-//! performing extensive, but potentially expensive validation to ensure the buffers are well-formed.
+//! Crate authors can choose to depend on this top-level crate, or just
+//! the sub-crates they need.
 //!
-//! An [`ArrayRef`] can be cheaply created from an [`ArrayData`] using [`make_array`],
-//! or by using the appropriate [`From`] conversion on the concrete [`Array`] implementation.
+//! The current list of sub-crates is:
+//!
+//! * [`arrow-arith`][arrow_arith] - arithmetic kernels
+//! * [`arrow-array`][arrow_array] - type-safe arrow array abstractions
+//! * [`arrow-buffer`][arrow_buffer] - buffer abstractions for arrow arrays
+//! * [`arrow-cast`][arrow_cast] - cast kernels for arrow arrays
+//! * [`arrow-csv`][arrow_csv] - read/write CSV to arrow format
+//! * [`arrow-data`][arrow_data] - the underlying data of arrow arrays
+//! * [`arrow-ipc`][arrow_ipc] - read/write IPC to arrow format
+//! * [`arrow-json`][arrow_json] - read/write JSON to arrow format
+//! * [`arrow-ord`][arrow_ord] - ordering kernels for arrow arrays
+//! * [`arrow-row`][arrow_row] - comparable row format
+//! * [`arrow-schema`][arrow_schema] - the logical types for arrow arrays
+//! * [`arrow-select`][arrow_select] - selection kernels for arrow arrays
+//! * [`arrow-string`][arrow_string] - string kernels for arrow arrays
+//!
+//! Some functionality is also distributed independently of this crate:
+//!
+//! * [`arrow-flight`] - support for [Arrow Flight RPC]
+//! * [`arrow-integration-test`] - support for [Arrow JSON Test Format]
+//! * [`parquet`](https://docs.rs/parquet/latest/parquet/) - support for [Apache Parquet]
 //!
 //! # Safety and Security
 //!
@@ -389,7 +374,9 @@ pub use arrow_json as json;
 pub mod pyarrow;
 
 pub mod record_batch {
-    pub use arrow_array::{RecordBatch, RecordBatchOptions, RecordBatchReader};
+    pub use arrow_array::{
+        RecordBatch, RecordBatchIterator, RecordBatchOptions, RecordBatchReader, RecordBatchWriter,
+    };
 }
 pub use arrow_array::temporal_conversions;
 pub use arrow_row as row;

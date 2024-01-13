@@ -70,13 +70,13 @@ impl Args {
         // Column index data for all row groups and columns
         let column_index = reader
             .metadata()
-            .page_indexes()
+            .column_index()
             .ok_or_else(|| ParquetError::General("Column index not found".to_string()))?;
 
         // Offset index data for all row groups and columns
         let offset_index = reader
             .metadata()
-            .offset_indexes()
+            .offset_index()
             .ok_or_else(|| ParquetError::General("Offset index not found".to_string()))?;
 
         // Iterate through each row group
@@ -102,9 +102,7 @@ impl Args {
                 Index::INT96(v) => print_index(&v.indexes, offset_index, &row_counts)?,
                 Index::FLOAT(v) => print_index(&v.indexes, offset_index, &row_counts)?,
                 Index::DOUBLE(v) => print_index(&v.indexes, offset_index, &row_counts)?,
-                Index::BYTE_ARRAY(v) => {
-                    print_index(&v.indexes, offset_index, &row_counts)?
-                }
+                Index::BYTE_ARRAY(v) => print_index(&v.indexes, offset_index, &row_counts)?,
                 Index::FIXED_LEN_BYTE_ARRAY(v) => {
                     print_index(&v.indexes, offset_index, &row_counts)?
                 }

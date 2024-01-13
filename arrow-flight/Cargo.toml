@@ -20,46 +20,57 @@ name = "arrow-flight"
 description = "Apache Arrow Flight"
 version = { workspace = true }
 edition = { workspace = true }
-rust-version = { workspace = true }
+rust-version = "1.70.0"
 authors = { workspace = true }
 homepage = { workspace = true }
 repository = { workspace = true }
 license = { workspace = true }
 
 [dependencies]
+arrow-arith = { workspace = true, optional = true }
 arrow-array = { workspace = true }
 arrow-buffer = { workspace = true }
 # Cast is needed to work around https://github.com/apache/arrow-rs/issues/3389
 arrow-cast = { workspace = true }
+arrow-data = { workspace = true, optional = true }
 arrow-ipc = { workspace = true }
+arrow-ord = { workspace = true, optional = true }
+arrow-row = { workspace = true, optional = true }
+arrow-select = { workspace = true, optional = true }
 arrow-schema = { workspace = true }
+arrow-string = { workspace = true, optional = true }
 base64 = { version = "0.21", default-features = false, features = ["std"] }
-tonic = { version = "0.9", default-features = false, features = ["transport", "codegen", "prost"] }
 bytes = { version = "1", default-features = false }
-paste = { version = "1.0" }
-prost = { version = "0.11", default-features = false, features = ["prost-derive"] }
-tokio = { version = "1.0", default-features = false, features = ["macros", "rt", "rt-multi-thread"] }
 futures = { version = "0.3", default-features = false, features = ["alloc"] }
+once_cell = { version = "1", optional = true }
+paste = { version = "1.0" }
+prost = { version = "0.12.1", default-features = false, features = ["prost-derive"] }
+tokio = { version = "1.0", default-features = false, features = ["macros", "rt", "rt-multi-thread"] }
+tonic = { version = "0.10.0", default-features = false, features = ["transport", "codegen", "prost"] }
 
 # CLI-related dependencies
-clap = { version = "4.1", default-features = false, features = ["std", "derive", "env", "help", "error-context", "usage"], optional = true }
-tracing-log = { version = "0.1", optional = true }
-tracing-subscriber = { version = "0.3.1", default-features = false, features = ["ansi", "fmt"], optional = true }
+anyhow = { version = "1.0", optional = true }
+clap = { version = "4.4.6", default-features = false, features = ["std", "derive", "env", "help", "error-context", "usage", "wrap_help", "color", "suggestions"], optional = true }
+tracing-log = { version = "0.2", optional = true }
+tracing-subscriber = { version = "0.3.1", default-features = false, features = ["ansi", "env-filter", "fmt"], optional = true }
 
 [package.metadata.docs.rs]
 all-features = true
 
 [features]
 default = []
-flight-sql-experimental = []
+flight-sql-experimental = ["arrow-arith", "arrow-data", "arrow-ord", "arrow-row", "arrow-select", "arrow-string", "once_cell"]
 tls = ["tonic/tls"]
 
 # Enable CLI tools
-cli = ["arrow-cast/prettyprint", "clap", "tracing-log", "tracing-subscriber", "tonic/tls-webpki-roots"]
+cli = ["anyhow", "arrow-cast/prettyprint", "clap", "tracing-log", "tracing-subscriber", "tonic/tls-webpki-roots"]
 
 [dev-dependencies]
 arrow-cast = { workspace = true, features = ["prettyprint"] }
 assert_cmd = "2.0.8"
+http = "0.2.9"
+http-body = "0.4.5"
+pin-project-lite = "0.2"
 tempfile = "3.3"
 tokio-stream = { version = "0.1", features = ["net"] }
 tower = "0.4.13"

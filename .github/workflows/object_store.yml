@@ -43,7 +43,7 @@ jobs:
       run:
         working-directory: object_store
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
       - name: Setup Clippy
@@ -56,16 +56,34 @@ jobs:
         run: cargo clippy -- -D warnings
       - name: Run clippy with aws feature
         run: cargo clippy --features aws -- -D warnings
-      - name: Run clippy with aws_profile feature
-        run: cargo clippy --features aws_profile -- -D warnings
       - name: Run clippy with gcp feature
         run: cargo clippy --features gcp -- -D warnings
       - name: Run clippy with azure feature
         run: cargo clippy --features azure -- -D warnings
+      - name: Run clippy with http feature
+        run: cargo clippy --features http -- -D warnings
       - name: Run clippy with all features
         run: cargo clippy --all-features -- -D warnings
       - name: Run clippy with all features and all targets
         run: cargo clippy --all-features --all-targets -- -D warnings
+
+  # test doc links still work
+  #
+  # Note that since object_store is not part of the main workspace,
+  # this needs a separate docs job as it is not covered by
+  # `cargo doc --workspace`
+  docs:
+    name: Rustdocs
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: object_store
+    env:
+      RUSTDOCFLAGS: "-Dwarnings"
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run cargo doc
+        run: cargo doc --document-private-items --no-deps --workspace --all-features
 
   # test the crate
   # This runs outside a container to workaround lack of support for passing arguments
@@ -84,43 +102,51 @@ jobs:
       # Run integration tests
       TEST_INTEGRATION: 1
       EC2_METADATA_ENDPOINT: http://localhost:1338
-      AZURE_USE_EMULATOR: "1"
+      AZURE_CONTAINER_NAME: test-bucket
+      AZURE_STORAGE_USE_EMULATOR: "1"
       AZURITE_BLOB_STORAGE_URL: "http://localhost:10000"
       AZURITE_QUEUE_STORAGE_URL: "http://localhost:10001"
+      AWS_BUCKET: test-bucket
+      AWS_DEFAULT_REGION: "us-east-1"
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      AWS_ENDPOINT: http://localhost:4566
+      AWS_ALLOW_HTTP: true
+      AWS_COPY_IF_NOT_EXISTS: dynamo:test-table:2000
+      AWS_CONDITIONAL_PUT: dynamo:test-table:2000
       HTTP_URL: "http://localhost:8080"
+      GOOGLE_BUCKET: test-bucket
       GOOGLE_SERVICE_ACCOUNT: "/tmp/gcs.json"
-      OBJECT_STORE_BUCKET: test-bucket
 
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
+      # We are forced to use docker commands instead of service containers as we need to override the entrypoints
+      # which is currently not supported - https://github.com/actions/runner/discussions/1872
       - name: Configure Fake GCS Server (GCP emulation)
+        # Custom image - see fsouza/fake-gcs-server#1164
         run: |
-          docker run -d -p 4443:4443 fsouza/fake-gcs-server -scheme http
+          echo "GCS_CONTAINER=$(docker run -d -p 4443:4443 tustvold/fake-gcs-server -scheme http -backend memory -public-host localhost:4443)" >> $GITHUB_ENV
           # Give the container a moment to start up prior to configuring it
           sleep 1
           curl -v -X POST --data-binary '{"name":"test-bucket"}' -H "Content-Type: application/json" "http://localhost:4443/storage/v1/b"
-          echo '{"gcs_base_url": "http://localhost:4443", "disable_oauth": true, "client_email": "", "private_key": ""}' > "$GOOGLE_SERVICE_ACCOUNT"
+          echo '{"gcs_base_url": "http://localhost:4443", "disable_oauth": true, "client_email": "", "private_key": "", "private_key_id": ""}' > "$GOOGLE_SERVICE_ACCOUNT"
 
       - name: Setup WebDav
         run: docker run -d -p 8080:80 rclone/rclone serve webdav /data --addr :80
 
       - name: Setup LocalStack (AWS emulation)
-        env:
-          AWS_DEFAULT_REGION: "us-east-1"
-          AWS_ACCESS_KEY_ID: test
-          AWS_SECRET_ACCESS_KEY: test
-          AWS_ENDPOINT: http://localhost:4566
         run: |
-          docker run -d -p 4566:4566 localstack/localstack:2.0
-          docker run -d -p 1338:1338 amazon/amazon-ec2-metadata-mock:v1.9.2 --imdsv2
+          echo "LOCALSTACK_CONTAINER=$(docker run -d -p 4566:4566 localstack/localstack:3.0.1)" >> $GITHUB_ENV
+          echo "EC2_METADATA_CONTAINER=$(docker run -d -p 1338:1338 amazon/amazon-ec2-metadata-mock:v1.9.2 --imdsv2)" >> $GITHUB_ENV
           aws --endpoint-url=http://localhost:4566 s3 mb s3://test-bucket
+          aws --endpoint-url=http://localhost:4566 dynamodb create-table --table-name test-table --key-schema AttributeName=path,KeyType=HASH AttributeName=etag,KeyType=RANGE --attribute-definitions AttributeName=path,AttributeType=S AttributeName=etag,AttributeType=S --provisioned-throughput ReadCapacityUnits=5,WriteCapacityUnits=5
 
       - name: Configure Azurite (Azure emulation)
         # the magical connection string is from
         # https://docs.microsoft.com/en-us/azure/storage/common/storage-use-azurite?tabs=visual-studio#http-connection-strings
         run: |
-          docker run -d -p 10000:10000 -p 10001:10001 -p 10002:10002 mcr.microsoft.com/azure-storage/azurite
+          echo "AZURITE_CONTAINER=$(docker run -d -p 10000:10000 -p 10001:10001 -p 10002:10002 mcr.microsoft.com/azure-storage/azurite)" >> $GITHUB_ENV
           az storage container create -n test-bucket --connection-string 'DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://localhost:10000/devstoreaccount1;QueueEndpoint=http://localhost:10001/devstoreaccount1;'
 
       - name: Setup Rust toolchain
@@ -129,12 +155,23 @@ jobs:
           rustup default stable
 
       - name: Run object_store tests
-        env:
-          OBJECT_STORE_AWS_DEFAULT_REGION: "us-east-1"
-          OBJECT_STORE_AWS_ACCESS_KEY_ID: test
-          OBJECT_STORE_AWS_SECRET_ACCESS_KEY: test
-          OBJECT_STORE_AWS_ENDPOINT: http://localhost:4566
         run: cargo test --features=aws,azure,gcp,http
+
+      - name: GCS Output
+        if: ${{ !cancelled() }}
+        run: docker logs $GCS_CONTAINER
+
+      - name: LocalStack Output
+        if: ${{ !cancelled() }}
+        run: docker logs $LOCALSTACK_CONTAINER
+
+      - name: EC2 Metadata Output
+        if: ${{ !cancelled() }}
+        run: docker logs $EC2_METADATA_CONTAINER
+
+      - name: Azurite Output
+        if: ${{ !cancelled() }}
+        run: docker logs $AZURITE_CONTAINER
 
   # test the object_store crate builds against wasm32 in stable rust
   wasm32-build:
@@ -146,7 +183,7 @@ jobs:
       run:
         working-directory: object_store
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
         with:
           submodules: true
       - name: Setup Rust toolchain

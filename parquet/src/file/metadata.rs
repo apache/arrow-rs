@@ -33,11 +33,12 @@
 //! [`ColumnChunkMetaData`](struct.ColumnChunkMetaData.html) has information about column
 //! chunk (primitive leaf column), including encoding/compression, number of values, etc.
 
+use std::ops::Range;
 use std::sync::Arc;
 
 use crate::format::{
-    BoundaryOrder, ColumnChunk, ColumnIndex, ColumnMetaData, OffsetIndex, PageLocation,
-    RowGroup, SortingColumn,
+    BoundaryOrder, ColumnChunk, ColumnIndex, ColumnMetaData, OffsetIndex, PageLocation, RowGroup,
+    SortingColumn,
 };
 
 use crate::basic::{ColumnOrder, Compression, Encoding, Type};
@@ -77,9 +78,9 @@ pub struct ParquetMetaData {
     file_metadata: FileMetaData,
     row_groups: Vec<RowGroupMetaData>,
     /// Page index for all pages in each column chunk
-    page_indexes: Option<ParquetColumnIndex>,
+    column_index: Option<ParquetColumnIndex>,
     /// Offset index for all pages in each column chunk
-    offset_indexes: Option<ParquetOffsetIndex>,
+    offset_index: Option<ParquetOffsetIndex>,
 }
 
 impl ParquetMetaData {
@@ -89,8 +90,8 @@ impl ParquetMetaData {
         ParquetMetaData {
             file_metadata,
             row_groups,
-            page_indexes: None,
-            offset_indexes: None,
+            column_index: None,
+            offset_index: None,
         }
     }
 
@@ -99,14 +100,14 @@ impl ParquetMetaData {
     pub fn new_with_page_index(
         file_metadata: FileMetaData,
         row_groups: Vec<RowGroupMetaData>,
-        page_indexes: Option<ParquetColumnIndex>,
-        offset_indexes: Option<ParquetOffsetIndex>,
+        column_index: Option<ParquetColumnIndex>,
+        offset_index: Option<ParquetOffsetIndex>,
     ) -> Self {
         ParquetMetaData {
             file_metadata,
             row_groups,
-            page_indexes,
-            offset_indexes,
+            column_index,
+            offset_index,
         }
     }
 
@@ -132,13 +133,37 @@ impl ParquetMetaData {
     }
 
     /// Returns page indexes in this file.
+    #[deprecated(note = "Use Self::column_index")]
     pub fn page_indexes(&self) -> Option<&ParquetColumnIndex> {
-        self.page_indexes.as_ref()
+        self.column_index.as_ref()
+    }
+
+    /// Returns the column index for this file if loaded
+    pub fn column_index(&self) -> Option<&ParquetColumnIndex> {
+        self.column_index.as_ref()
+    }
+
+    /// Returns the offset index for this file if loaded
+    #[deprecated(note = "Use Self::offset_index")]
+    pub fn offset_indexes(&self) -> Option<&ParquetOffsetIndex> {
+        self.offset_index.as_ref()
     }
 
     /// Returns offset indexes in this file.
-    pub fn offset_indexes(&self) -> Option<&ParquetOffsetIndex> {
-        self.offset_indexes.as_ref()
+    pub fn offset_index(&self) -> Option<&ParquetOffsetIndex> {
+        self.offset_index.as_ref()
+    }
+
+    /// Override the column index
+    #[cfg(feature = "arrow")]
+    pub(crate) fn set_column_index(&mut self, index: Option<ParquetColumnIndex>) {
+        self.column_index = index;
+    }
+
+    /// Override the offset index
+    #[cfg(feature = "arrow")]
+    pub(crate) fn set_offset_index(&mut self, index: Option<ParquetOffsetIndex>) {
+        self.offset_index = index;
     }
 }
 
@@ -205,7 +230,9 @@ impl FileMetaData {
         self.key_value_metadata.as_ref()
     }
 
-    /// Returns Parquet ['Type`] that describes schema in this file.
+    /// Returns Parquet [`Type`] that describes schema in this file.
+    ///
+    /// [`Type`]: crate::schema::types::Type
     pub fn schema(&self) -> &SchemaType {
         self.schema_descr.root_schema()
     }
@@ -252,8 +279,9 @@ pub struct RowGroupMetaData {
     sorting_columns: Option<Vec<SortingColumn>>,
     total_byte_size: i64,
     schema_descr: SchemaDescPtr,
-    /// `page_offset_index[column_number][page_number]`
-    page_offset_index: Option<Vec<Vec<PageLocation>>>,
+    // We can't infer from file offset of first column since there may empty columns in row group.
+    file_offset: Option<i64>,
+    ordinal: Option<i16>,
 }
 
 impl RowGroupMetaData {
@@ -297,13 +325,6 @@ impl RowGroupMetaData {
         self.columns.iter().map(|c| c.total_compressed_size).sum()
     }
 
-    /// Returns reference of page offset index of all column in this row group.
-    ///
-    /// The returned vector contains `page_offset[column_number][page_number]`
-    pub fn page_offset_index(&self) -> Option<&Vec<Vec<PageLocation>>> {
-        self.page_offset_index.as_ref()
-    }
-
     /// Returns reference to a schema descriptor.
     pub fn schema_descr(&self) -> &SchemaDescriptor {
         self.schema_descr.as_ref()
@@ -314,18 +335,20 @@ impl RowGroupMetaData {
         self.schema_descr.clone()
     }
 
-    /// Sets page offset index for this row group.
-    ///
-    /// The vector represents `page_offset[column_number][page_number]`
-    pub fn set_page_offset(&mut self, page_offset: Vec<Vec<PageLocation>>) {
-        self.page_offset_index = Some(page_offset);
+    /// Returns ordinal of this row group in file
+    #[inline(always)]
+    pub fn ordinal(&self) -> Option<i16> {
+        self.ordinal
+    }
+
+    /// Returns file offset of this row group in file.
+    #[inline(always)]
+    pub fn file_offset(&self) -> Option<i64> {
+        self.file_offset
     }
 
     /// Method to convert from Thrift.
-    pub fn from_thrift(
-        schema_descr: SchemaDescPtr,
-        mut rg: RowGroup,
-    ) -> Result<RowGroupMetaData> {
+    pub fn from_thrift(schema_descr: SchemaDescPtr, mut rg: RowGroup) -> Result<RowGroupMetaData> {
         assert_eq!(schema_descr.num_columns(), rg.columns.len());
         let total_byte_size = rg.total_byte_size;
         let num_rows = rg.num_rows;
@@ -341,7 +364,8 @@ impl RowGroupMetaData {
             sorting_columns,
             total_byte_size,
             schema_descr,
-            page_offset_index: None,
+            file_offset: rg.file_offset,
+            ordinal: rg.ordinal,
         })
     }
 
@@ -352,92 +376,87 @@ impl RowGroupMetaData {
             total_byte_size: self.total_byte_size,
             num_rows: self.num_rows,
             sorting_columns: self.sorting_columns().cloned(),
-            file_offset: None,
-            total_compressed_size: None,
-            ordinal: None,
+            file_offset: self.file_offset(),
+            total_compressed_size: Some(self.compressed_size()),
+            ordinal: self.ordinal,
         }
+    }
+
+    /// Converts this [`RowGroupMetaData`] into a [`RowGroupMetaDataBuilder`]
+    pub fn into_builder(self) -> RowGroupMetaDataBuilder {
+        RowGroupMetaDataBuilder(self)
     }
 }
 
 /// Builder for row group metadata.
-pub struct RowGroupMetaDataBuilder {
-    columns: Vec<ColumnChunkMetaData>,
-    schema_descr: SchemaDescPtr,
-    num_rows: i64,
-    sorting_columns: Option<Vec<SortingColumn>>,
-    total_byte_size: i64,
-    page_offset_index: Option<Vec<Vec<PageLocation>>>,
-}
+pub struct RowGroupMetaDataBuilder(RowGroupMetaData);
 
 impl RowGroupMetaDataBuilder {
     /// Creates new builder from schema descriptor.
     fn new(schema_descr: SchemaDescPtr) -> Self {
-        Self {
+        Self(RowGroupMetaData {
             columns: Vec::with_capacity(schema_descr.num_columns()),
             schema_descr,
+            file_offset: None,
             num_rows: 0,
             sorting_columns: None,
             total_byte_size: 0,
-            page_offset_index: None,
-        }
+            ordinal: None,
+        })
     }
 
     /// Sets number of rows in this row group.
     pub fn set_num_rows(mut self, value: i64) -> Self {
-        self.num_rows = value;
+        self.0.num_rows = value;
         self
     }
 
     /// Sets the sorting order for columns
     pub fn set_sorting_columns(mut self, value: Option<Vec<SortingColumn>>) -> Self {
-        self.sorting_columns = value;
+        self.0.sorting_columns = value;
         self
     }
 
     /// Sets total size in bytes for this row group.
     pub fn set_total_byte_size(mut self, value: i64) -> Self {
-        self.total_byte_size = value;
+        self.0.total_byte_size = value;
         self
     }
 
     /// Sets column metadata for this row group.
     pub fn set_column_metadata(mut self, value: Vec<ColumnChunkMetaData>) -> Self {
-        self.columns = value;
+        self.0.columns = value;
         self
     }
 
-    /// Sets page offset index for this row group.
-    pub fn set_page_offset(mut self, page_offset: Vec<Vec<PageLocation>>) -> Self {
-        self.page_offset_index = Some(page_offset);
+    /// Sets ordinal for this row group.
+    pub fn set_ordinal(mut self, value: i16) -> Self {
+        self.0.ordinal = Some(value);
+        self
+    }
+
+    pub fn set_file_offset(mut self, value: i64) -> Self {
+        self.0.file_offset = Some(value);
         self
     }
 
     /// Builds row group metadata.
     pub fn build(self) -> Result<RowGroupMetaData> {
-        if self.schema_descr.num_columns() != self.columns.len() {
+        if self.0.schema_descr.num_columns() != self.0.columns.len() {
             return Err(general_err!(
                 "Column length mismatch: {} != {}",
-                self.schema_descr.num_columns(),
-                self.columns.len()
+                self.0.schema_descr.num_columns(),
+                self.0.columns.len()
             ));
         }
 
-        Ok(RowGroupMetaData {
-            columns: self.columns,
-            num_rows: self.num_rows,
-            sorting_columns: self.sorting_columns,
-            total_byte_size: self.total_byte_size,
-            schema_descr: self.schema_descr,
-            page_offset_index: self.page_offset_index,
-        })
+        Ok(self.0)
     }
 }
 
 /// Metadata for a column chunk.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ColumnChunkMetaData {
-    column_type: Type,
-    column_path: ColumnPath,
     column_descr: ColumnDescPtr,
     encodings: Vec<Encoding>,
     file_path: Option<String>,
@@ -452,6 +471,7 @@ pub struct ColumnChunkMetaData {
     statistics: Option<Statistics>,
     encoding_stats: Option<Vec<PageEncodingStats>>,
     bloom_filter_offset: Option<i64>,
+    bloom_filter_length: Option<i32>,
     offset_index_offset: Option<i64>,
     offset_index_length: Option<i32>,
     column_index_offset: Option<i64>,
@@ -480,12 +500,12 @@ impl ColumnChunkMetaData {
 
     /// Type of this column. Must be primitive.
     pub fn column_type(&self) -> Type {
-        self.column_type
+        self.column_descr.physical_type()
     }
 
     /// Path (or identifier) of this column.
     pub fn column_path(&self) -> &ColumnPath {
-        &self.column_path
+        self.column_descr.path()
     }
 
     /// Descriptor for this column.
@@ -569,6 +589,11 @@ impl ColumnChunkMetaData {
         self.bloom_filter_offset
     }
 
+    /// Returns the offset for the bloom filter.
+    pub fn bloom_filter_length(&self) -> Option<i32> {
+        self.bloom_filter_length
+    }
+
     /// Returns the offset for the column index.
     pub fn column_index_offset(&self) -> Option<i64> {
         self.column_index_offset
@@ -577,6 +602,13 @@ impl ColumnChunkMetaData {
     /// Returns the offset for the column index length.
     pub fn column_index_length(&self) -> Option<i32> {
         self.column_index_length
+    }
+
+    /// Returns the range for the offset index if any
+    pub(crate) fn column_index_range(&self) -> Option<Range<usize>> {
+        let offset = usize::try_from(self.column_index_offset?).ok()?;
+        let length = usize::try_from(self.column_index_length?).ok()?;
+        Some(offset..(offset + length))
     }
 
     /// Returns the offset for the offset index.
@@ -589,6 +621,13 @@ impl ColumnChunkMetaData {
         self.offset_index_length
     }
 
+    /// Returns the range for the offset index if any
+    pub(crate) fn offset_index_range(&self) -> Option<Range<usize>> {
+        let offset = usize::try_from(self.offset_index_offset?).ok()?;
+        let length = usize::try_from(self.offset_index_length?).ok()?;
+        Some(offset..(offset + length))
+    }
+
     /// Method to convert from Thrift.
     pub fn from_thrift(column_descr: ColumnDescPtr, cc: ColumnChunk) -> Result<Self> {
         if cc.meta_data.is_none() {
@@ -596,7 +635,6 @@ impl ColumnChunkMetaData {
         }
         let mut col_metadata: ColumnMetaData = cc.meta_data.unwrap();
         let column_type = Type::try_from(col_metadata.type_)?;
-        let column_path = ColumnPath::new(col_metadata.path_in_schema);
         let encodings = col_metadata
             .encodings
             .drain(0..)
@@ -611,7 +649,7 @@ impl ColumnChunkMetaData {
         let data_page_offset = col_metadata.data_page_offset;
         let index_page_offset = col_metadata.index_page_offset;
         let dictionary_page_offset = col_metadata.dictionary_page_offset;
-        let statistics = statistics::from_thrift(column_type, col_metadata.statistics);
+        let statistics = statistics::from_thrift(column_type, col_metadata.statistics)?;
         let encoding_stats = col_metadata
             .encoding_stats
             .as_ref()
@@ -622,14 +660,13 @@ impl ColumnChunkMetaData {
             })
             .transpose()?;
         let bloom_filter_offset = col_metadata.bloom_filter_offset;
+        let bloom_filter_length = col_metadata.bloom_filter_length;
         let offset_index_offset = cc.offset_index_offset;
         let offset_index_length = cc.offset_index_length;
         let column_index_offset = cc.column_index_offset;
         let column_index_length = cc.column_index_length;
 
         let result = ColumnChunkMetaData {
-            column_type,
-            column_path,
             column_descr,
             encodings,
             file_path,
@@ -644,6 +681,7 @@ impl ColumnChunkMetaData {
             statistics,
             encoding_stats,
             bloom_filter_offset,
+            bloom_filter_length,
             offset_index_offset,
             offset_index_length,
             column_index_offset,
@@ -672,9 +710,9 @@ impl ColumnChunkMetaData {
     /// Method to convert to Thrift `ColumnMetaData`
     pub fn to_column_metadata_thrift(&self) -> ColumnMetaData {
         ColumnMetaData {
-            type_: self.column_type.into(),
+            type_: self.column_type().into(),
             encodings: self.encodings().iter().map(|&v| v.into()).collect(),
-            path_in_schema: Vec::from(self.column_path.as_ref()),
+            path_in_schema: self.column_path().as_ref().to_vec(),
             codec: self.compression.into(),
             num_values: self.num_values,
             total_uncompressed_size: self.total_uncompressed_size,
@@ -689,36 +727,23 @@ impl ColumnChunkMetaData {
                 .as_ref()
                 .map(|vec| vec.iter().map(page_encoding_stats::to_thrift).collect()),
             bloom_filter_offset: self.bloom_filter_offset,
+            bloom_filter_length: self.bloom_filter_length,
         }
+    }
+
+    /// Converts this [`ColumnChunkMetaData`] into a [`ColumnChunkMetaDataBuilder`]
+    pub fn into_builder(self) -> ColumnChunkMetaDataBuilder {
+        ColumnChunkMetaDataBuilder(self)
     }
 }
 
 /// Builder for column chunk metadata.
-pub struct ColumnChunkMetaDataBuilder {
-    column_descr: ColumnDescPtr,
-    encodings: Vec<Encoding>,
-    file_path: Option<String>,
-    file_offset: i64,
-    num_values: i64,
-    compression: Compression,
-    total_compressed_size: i64,
-    total_uncompressed_size: i64,
-    data_page_offset: i64,
-    index_page_offset: Option<i64>,
-    dictionary_page_offset: Option<i64>,
-    statistics: Option<Statistics>,
-    encoding_stats: Option<Vec<PageEncodingStats>>,
-    bloom_filter_offset: Option<i64>,
-    offset_index_offset: Option<i64>,
-    offset_index_length: Option<i32>,
-    column_index_offset: Option<i64>,
-    column_index_length: Option<i32>,
-}
+pub struct ColumnChunkMetaDataBuilder(ColumnChunkMetaData);
 
 impl ColumnChunkMetaDataBuilder {
     /// Creates new column chunk metadata builder.
     fn new(column_descr: ColumnDescPtr) -> Self {
-        Self {
+        Self(ColumnChunkMetaData {
             column_descr,
             encodings: Vec::new(),
             file_path: None,
@@ -733,139 +758,125 @@ impl ColumnChunkMetaDataBuilder {
             statistics: None,
             encoding_stats: None,
             bloom_filter_offset: None,
+            bloom_filter_length: None,
             offset_index_offset: None,
             offset_index_length: None,
             column_index_offset: None,
             column_index_length: None,
-        }
+        })
     }
 
     /// Sets list of encodings for this column chunk.
     pub fn set_encodings(mut self, encodings: Vec<Encoding>) -> Self {
-        self.encodings = encodings;
+        self.0.encodings = encodings;
         self
     }
 
     /// Sets optional file path for this column chunk.
     pub fn set_file_path(mut self, value: String) -> Self {
-        self.file_path = Some(value);
+        self.0.file_path = Some(value);
         self
     }
 
     /// Sets file offset in bytes.
     pub fn set_file_offset(mut self, value: i64) -> Self {
-        self.file_offset = value;
+        self.0.file_offset = value;
         self
     }
 
     /// Sets number of values.
     pub fn set_num_values(mut self, value: i64) -> Self {
-        self.num_values = value;
+        self.0.num_values = value;
         self
     }
 
     /// Sets compression.
     pub fn set_compression(mut self, value: Compression) -> Self {
-        self.compression = value;
+        self.0.compression = value;
         self
     }
 
     /// Sets total compressed size in bytes.
     pub fn set_total_compressed_size(mut self, value: i64) -> Self {
-        self.total_compressed_size = value;
+        self.0.total_compressed_size = value;
         self
     }
 
     /// Sets total uncompressed size in bytes.
     pub fn set_total_uncompressed_size(mut self, value: i64) -> Self {
-        self.total_uncompressed_size = value;
+        self.0.total_uncompressed_size = value;
         self
     }
 
     /// Sets data page offset in bytes.
     pub fn set_data_page_offset(mut self, value: i64) -> Self {
-        self.data_page_offset = value;
+        self.0.data_page_offset = value;
         self
     }
 
     /// Sets optional dictionary page ofset in bytes.
     pub fn set_dictionary_page_offset(mut self, value: Option<i64>) -> Self {
-        self.dictionary_page_offset = value;
+        self.0.dictionary_page_offset = value;
         self
     }
 
     /// Sets optional index page offset in bytes.
     pub fn set_index_page_offset(mut self, value: Option<i64>) -> Self {
-        self.index_page_offset = value;
+        self.0.index_page_offset = value;
         self
     }
 
     /// Sets statistics for this column chunk.
     pub fn set_statistics(mut self, value: Statistics) -> Self {
-        self.statistics = Some(value);
+        self.0.statistics = Some(value);
         self
     }
 
     /// Sets page encoding stats for this column chunk.
     pub fn set_page_encoding_stats(mut self, value: Vec<PageEncodingStats>) -> Self {
-        self.encoding_stats = Some(value);
+        self.0.encoding_stats = Some(value);
         self
     }
 
     /// Sets optional bloom filter offset in bytes.
     pub fn set_bloom_filter_offset(mut self, value: Option<i64>) -> Self {
-        self.bloom_filter_offset = value;
+        self.0.bloom_filter_offset = value;
+        self
+    }
+
+    /// Sets optional bloom filter length in bytes.
+    pub fn set_bloom_filter_length(mut self, value: Option<i32>) -> Self {
+        self.0.bloom_filter_length = value;
         self
     }
 
     /// Sets optional offset index offset in bytes.
     pub fn set_offset_index_offset(mut self, value: Option<i64>) -> Self {
-        self.offset_index_offset = value;
+        self.0.offset_index_offset = value;
         self
     }
 
     /// Sets optional offset index length in bytes.
     pub fn set_offset_index_length(mut self, value: Option<i32>) -> Self {
-        self.offset_index_length = value;
+        self.0.offset_index_length = value;
         self
     }
 
     /// Sets optional column index offset in bytes.
     pub fn set_column_index_offset(mut self, value: Option<i64>) -> Self {
-        self.column_index_offset = value;
+        self.0.column_index_offset = value;
         self
     }
 
     /// Sets optional column index length in bytes.
     pub fn set_column_index_length(mut self, value: Option<i32>) -> Self {
-        self.column_index_length = value;
+        self.0.column_index_length = value;
         self
     }
 
     /// Builds column chunk metadata.
     pub fn build(self) -> Result<ColumnChunkMetaData> {
-        Ok(ColumnChunkMetaData {
-            column_type: self.column_descr.physical_type(),
-            column_path: self.column_descr.path().clone(),
-            column_descr: self.column_descr,
-            encodings: self.encodings,
-            file_path: self.file_path,
-            file_offset: self.file_offset,
-            num_values: self.num_values,
-            compression: self.compression,
-            total_compressed_size: self.total_compressed_size,
-            total_uncompressed_size: self.total_uncompressed_size,
-            data_page_offset: self.data_page_offset,
-            index_page_offset: self.index_page_offset,
-            dictionary_page_offset: self.dictionary_page_offset,
-            statistics: self.statistics,
-            encoding_stats: self.encoding_stats,
-            bloom_filter_offset: self.bloom_filter_offset,
-            offset_index_offset: self.offset_index_offset,
-            offset_index_length: self.offset_index_length,
-            column_index_offset: self.column_index_offset,
-            column_index_length: self.column_index_length,
-        })
+        Ok(self.0)
     }
 }
 
@@ -874,9 +885,8 @@ pub struct ColumnIndexBuilder {
     null_pages: Vec<bool>,
     min_values: Vec<Vec<u8>>,
     max_values: Vec<Vec<u8>>,
-    // TODO: calc the order for all pages in this column
-    boundary_order: BoundaryOrder,
     null_counts: Vec<i64>,
+    boundary_order: BoundaryOrder,
     // If one page can't get build index, need to ignore all index in this column
     valid: bool,
 }
@@ -893,8 +903,8 @@ impl ColumnIndexBuilder {
             null_pages: Vec::new(),
             min_values: Vec::new(),
             max_values: Vec::new(),
-            boundary_order: BoundaryOrder::UNORDERED,
             null_counts: Vec::new(),
+            boundary_order: BoundaryOrder::UNORDERED,
             valid: true,
         }
     }
@@ -902,14 +912,18 @@ impl ColumnIndexBuilder {
     pub fn append(
         &mut self,
         null_page: bool,
-        min_value: &[u8],
-        max_value: &[u8],
+        min_value: Vec<u8>,
+        max_value: Vec<u8>,
         null_count: i64,
     ) {
         self.null_pages.push(null_page);
-        self.min_values.push(min_value.to_vec());
-        self.max_values.push(max_value.to_vec());
+        self.min_values.push(min_value);
+        self.max_values.push(max_value);
         self.null_counts.push(null_count);
+    }
+
+    pub fn set_boundary_order(&mut self, boundary_order: BoundaryOrder) {
+        self.boundary_order = boundary_order;
     }
 
     pub fn to_invalid(&mut self) {
@@ -974,9 +988,7 @@ impl OffsetIndexBuilder {
             .iter()
             .zip(self.compressed_page_size_array.iter())
             .zip(self.first_row_index_array.iter())
-            .map(|((offset, size), row_index)| {
-                PageLocation::new(*offset, *size, *row_index)
-            })
+            .map(|((offset, size), row_index)| PageLocation::new(*offset, *size, *row_index))
             .collect::<Vec<_>>();
         OffsetIndex::new(locations)
     }
@@ -1000,14 +1012,14 @@ mod tests {
             .set_num_rows(1000)
             .set_total_byte_size(2000)
             .set_column_metadata(columns)
+            .set_ordinal(1)
             .build()
             .unwrap();
 
         let row_group_exp = row_group_meta.to_thrift();
-        let row_group_res =
-            RowGroupMetaData::from_thrift(schema_descr, row_group_exp.clone())
-                .unwrap()
-                .to_thrift();
+        let row_group_res = RowGroupMetaData::from_thrift(schema_descr, row_group_exp.clone())
+            .unwrap()
+            .to_thrift();
 
         assert_eq!(row_group_res, row_group_exp);
     }
@@ -1054,6 +1066,7 @@ mod tests {
                 },
             ])
             .set_bloom_filter_offset(Some(6000))
+            .set_bloom_filter_length(Some(25))
             .set_offset_index_offset(Some(7000))
             .set_offset_index_length(Some(25))
             .set_column_index_offset(Some(8000))
@@ -1062,8 +1075,7 @@ mod tests {
             .unwrap();
 
         let col_chunk_res =
-            ColumnChunkMetaData::from_thrift(column_descr, col_metadata.to_thrift())
-                .unwrap();
+            ColumnChunkMetaData::from_thrift(column_descr, col_metadata.to_thrift()).unwrap();
 
         assert_eq!(col_chunk_res, col_metadata);
     }
@@ -1077,10 +1089,9 @@ mod tests {
             .unwrap();
 
         let col_chunk_exp = col_metadata.to_thrift();
-        let col_chunk_res =
-            ColumnChunkMetaData::from_thrift(column_descr, col_chunk_exp.clone())
-                .unwrap()
-                .to_thrift();
+        let col_chunk_res = ColumnChunkMetaData::from_thrift(column_descr, col_chunk_exp.clone())
+            .unwrap()
+            .to_thrift();
 
         assert_eq!(col_chunk_res, col_chunk_exp);
     }
@@ -1113,7 +1124,7 @@ mod tests {
     /// Returns sample schema descriptor so we can create column metadata.
     fn get_test_schema_descr() -> SchemaDescPtr {
         let schema = SchemaType::group_type_builder("schema")
-            .with_fields(&mut vec![
+            .with_fields(vec![
                 Arc::new(
                     SchemaType::primitive_type_builder("a", Type::INT32)
                         .build()

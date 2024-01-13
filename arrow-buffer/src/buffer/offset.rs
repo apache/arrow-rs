@@ -19,7 +19,43 @@ use crate::buffer::ScalarBuffer;
 use crate::{ArrowNativeType, MutableBuffer};
 use std::ops::Deref;
 
-/// A non-empty buffer of monotonically increasing, positive integers
+/// A non-empty buffer of monotonically increasing, positive integers.
+///
+/// [`OffsetBuffer`] are used to represent ranges of offsets. An
+/// `OffsetBuffer` of `N+1` items contains `N` such ranges. The start
+/// offset for element `i` is `offsets[i]` and the end offset is
+/// `offsets[i+1]`. Equal offsets represent an empty range.
+///
+/// # Example
+///
+/// This example shows how 5 distinct ranges, are represented using a
+/// 6 entry `OffsetBuffer`. The first entry `(0, 3)` represents the
+/// three offsets `0, 1, 2`. The entry `(3,3)` represent no offsets
+/// (e.g. an empty list).
+///
+/// ```text
+///   ┌───────┐                ┌───┐
+///   │ (0,3) │                │ 0 │
+///   ├───────┤                ├───┤
+///   │ (3,3) │                │ 3 │
+///   ├───────┤                ├───┤
+///   │ (3,4) │                │ 3 │
+///   ├───────┤                ├───┤
+///   │ (4,5) │                │ 4 │
+///   ├───────┤                ├───┤
+///   │ (5,7) │                │ 5 │
+///   └───────┘                ├───┤
+///                            │ 7 │
+///                            └───┘
+///
+///                        Offsets Buffer
+///    Logical
+///    Offsets
+///
+///  (offsets[i],
+///   offsets[i+1])
+/// ```
+
 #[derive(Debug, Clone)]
 pub struct OffsetBuffer<O: ArrowNativeType>(ScalarBuffer<O>);
 
@@ -69,6 +105,35 @@ impl<O: ArrowNativeType> OffsetBuffer<O> {
         Self(buffer.into_buffer().into())
     }
 
+    /// Create a new [`OffsetBuffer`] from the iterator of slice lengths
+    ///
+    /// ```
+    /// # use arrow_buffer::OffsetBuffer;
+    /// let offsets = OffsetBuffer::<i32>::from_lengths([1, 3, 5]);
+    /// assert_eq!(offsets.as_ref(), &[0, 1, 4, 9]);
+    /// ```
+    ///
+    /// # Panics
+    ///
+    /// Panics on overflow
+    pub fn from_lengths<I>(lengths: I) -> Self
+    where
+        I: IntoIterator<Item = usize>,
+    {
+        let iter = lengths.into_iter();
+        let mut out = Vec::with_capacity(iter.size_hint().0 + 1);
+        out.push(O::usize_as(0));
+
+        let mut acc = 0_usize;
+        for length in iter {
+            acc = acc.checked_add(length).expect("usize overflow");
+            out.push(O::usize_as(acc))
+        }
+        // Check for overflow
+        O::from_usize(acc).expect("offset overflow");
+        Self(out.into())
+    }
+
     /// Returns the inner [`ScalarBuffer`]
     pub fn inner(&self) -> &ScalarBuffer<O> {
         &self.0
@@ -82,6 +147,14 @@ impl<O: ArrowNativeType> OffsetBuffer<O> {
     /// Returns a zero-copy slice of this buffer with length `len` and starting at `offset`
     pub fn slice(&self, offset: usize, len: usize) -> Self {
         Self(self.0.slice(offset, len.saturating_add(1)))
+    }
+
+    /// Returns true if this [`OffsetBuffer`] is equal to `other`, using pointer comparisons
+    /// to determine buffer equality. This is cheaper than `PartialEq::eq` but may
+    /// return false when the arrays are logically equal
+    #[inline]
+    pub fn ptr_eq(&self, other: &Self) -> bool {
+        self.0.ptr_eq(&other.0)
     }
 }
 
@@ -138,5 +211,27 @@ mod tests {
     #[should_panic(expected = "offsets must be monotonically increasing")]
     fn non_monotonic_offsets() {
         OffsetBuffer::new(vec![1, 2, 0].into());
+    }
+
+    #[test]
+    fn from_lengths() {
+        let buffer = OffsetBuffer::<i32>::from_lengths([2, 6, 3, 7, 2]);
+        assert_eq!(buffer.as_ref(), &[0, 2, 8, 11, 18, 20]);
+
+        let half_max = i32::MAX / 2;
+        let buffer = OffsetBuffer::<i32>::from_lengths([half_max as usize, half_max as usize]);
+        assert_eq!(buffer.as_ref(), &[0, half_max, half_max * 2]);
+    }
+
+    #[test]
+    #[should_panic(expected = "offset overflow")]
+    fn from_lengths_offset_overflow() {
+        OffsetBuffer::<i32>::from_lengths([i32::MAX as usize, 1]);
+    }
+
+    #[test]
+    #[should_panic(expected = "usize overflow")]
+    fn from_lengths_usize_overflow() {
+        OffsetBuffer::<i32>::from_lengths([usize::MAX, 1]);
     }
 }

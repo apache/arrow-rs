@@ -57,23 +57,23 @@ fn encoded_len(rows: &Rows, range: Option<Range<usize>>) -> usize {
 ///
 /// `rows` should contain the encoded child elements
 pub fn encode<O: OffsetSizeTrait>(
-    out: &mut Rows,
+    data: &mut [u8],
+    offsets: &mut [usize],
     rows: &Rows,
     opts: SortOptions,
     array: &GenericListArray<O>,
 ) {
     let mut temporary = vec![];
-    let offsets = array.value_offsets().windows(2);
-    out.offsets
+    offsets
         .iter_mut()
         .skip(1)
-        .zip(offsets)
+        .zip(array.value_offsets().windows(2))
         .enumerate()
         .for_each(|(idx, (offset, offsets))| {
             let start = offsets[0].as_usize();
             let end = offsets[1].as_usize();
             let range = array.is_valid(idx).then_some(start..end);
-            let out = &mut out.buffer[*offset..];
+            let out = &mut data[*offset..];
             *offset += encode_one(out, &mut temporary, rows, range, opts)
         });
 }
@@ -144,8 +144,7 @@ pub unsafe fn decode<O: OffsetSizeTrait>(
         let row = &canonical.value_data()[start..end];
         let element_count_start = row.len() - 4;
         let element_count =
-            u32::from_be_bytes((&row[element_count_start..]).try_into().unwrap())
-                as usize;
+            u32::from_be_bytes((&row[element_count_start..]).try_into().unwrap()) as usize;
 
         let lengths_start = element_count_start - (element_count * 4);
         let mut row_offset = 0;

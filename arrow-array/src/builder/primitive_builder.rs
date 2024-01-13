@@ -15,13 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::builder::null_buffer_builder::NullBufferBuilder;
 use crate::builder::{ArrayBuilder, BufferBuilder};
 use crate::types::*;
 use crate::{ArrayRef, ArrowPrimitiveType, PrimitiveArray};
+use arrow_buffer::NullBufferBuilder;
 use arrow_buffer::{Buffer, MutableBuffer};
 use arrow_data::ArrayData;
-use arrow_schema::DataType;
+use arrow_schema::{ArrowError, DataType};
 use std::any::Any;
 use std::sync::Arc;
 
@@ -41,6 +41,8 @@ pub type UInt16Builder = PrimitiveBuilder<UInt16Type>;
 pub type UInt32Builder = PrimitiveBuilder<UInt32Type>;
 /// An usigned 64-bit integer array builder.
 pub type UInt64Builder = PrimitiveBuilder<UInt64Type>;
+/// A 16-bit floating point array builder.
+pub type Float16Builder = PrimitiveBuilder<Float16Type>;
 /// A 32-bit floating point array builder.
 pub type Float32Builder = PrimitiveBuilder<Float32Type>;
 /// A 64-bit floating point array builder.
@@ -90,7 +92,7 @@ pub type Decimal128Builder = PrimitiveBuilder<Decimal128Type>;
 /// A decimal 256 array builder
 pub type Decimal256Builder = PrimitiveBuilder<Decimal256Type>;
 
-///  Array builder for fixed-width primitive types
+/// Builder for [`PrimitiveArray`]
 #[derive(Debug)]
 pub struct PrimitiveBuilder<T: ArrowPrimitiveType> {
     values_builder: BufferBuilder<T::Native>,
@@ -117,11 +119,6 @@ impl<T: ArrowPrimitiveType> ArrayBuilder for PrimitiveBuilder<T> {
     /// Returns the number of array slots in the builder
     fn len(&self) -> usize {
         self.values_builder.len()
-    }
-
-    /// Returns whether the number of array slots is zero
-    fn is_empty(&self) -> bool {
-        self.values_builder.is_empty()
     }
 
     /// Builds the array and reset this builder.
@@ -164,9 +161,7 @@ impl<T: ArrowPrimitiveType> PrimitiveBuilder<T> {
         let values_builder = BufferBuilder::<T::Native>::new_from_buffer(values_buffer);
 
         let null_buffer_builder = null_buffer
-            .map(|buffer| {
-                NullBufferBuilder::new_from_buffer(buffer, values_builder.len())
-            })
+            .map(|buffer| NullBufferBuilder::new_from_buffer(buffer, values_builder.len()))
             .unwrap_or_else(|| NullBufferBuilder::new_with_len(values_builder.len()));
 
         Self {
@@ -180,7 +175,7 @@ impl<T: ArrowPrimitiveType> PrimitiveBuilder<T> {
     /// data type of the generated array.
     ///
     /// This method allows overriding the data type, to allow specifying timezones
-    /// for [`DataType::Timestamp`] or precision and scale for [`DataType::Decimal128`]
+    /// for [`DataType::Timestamp`] or precision and scale for [`DataType::Decimal128`] and [`DataType::Decimal256`]
     ///
     /// # Panics
     ///
@@ -259,10 +254,7 @@ impl<T: ArrowPrimitiveType> PrimitiveBuilder<T> {
     /// This requires the iterator be a trusted length. This could instead require
     /// the iterator implement `TrustedLen` once that is stabilized.
     #[inline]
-    pub unsafe fn append_trusted_len_iter(
-        &mut self,
-        iter: impl IntoIterator<Item = T::Native>,
-    ) {
+    pub unsafe fn append_trusted_len_iter(&mut self, iter: impl IntoIterator<Item = T::Native>) {
         let iter = iter.into_iter();
         let len = iter
             .size_hint()
@@ -276,11 +268,11 @@ impl<T: ArrowPrimitiveType> PrimitiveBuilder<T> {
     /// Builds the [`PrimitiveArray`] and reset this builder.
     pub fn finish(&mut self) -> PrimitiveArray<T> {
         let len = self.len();
-        let null_bit_buffer = self.null_buffer_builder.finish();
+        let nulls = self.null_buffer_builder.finish();
         let builder = ArrayData::builder(self.data_type.clone())
             .len(len)
             .add_buffer(self.values_builder.finish())
-            .null_bit_buffer(null_bit_buffer);
+            .nulls(nulls);
 
         let array_data = unsafe { builder.build_unchecked() };
         PrimitiveArray::<T>::from(array_data)
@@ -289,15 +281,12 @@ impl<T: ArrowPrimitiveType> PrimitiveBuilder<T> {
     /// Builds the [`PrimitiveArray`] without resetting the builder.
     pub fn finish_cloned(&self) -> PrimitiveArray<T> {
         let len = self.len();
-        let null_bit_buffer = self
-            .null_buffer_builder
-            .as_slice()
-            .map(Buffer::from_slice_ref);
+        let nulls = self.null_buffer_builder.finish_cloned();
         let values_buffer = Buffer::from_slice_ref(self.values_builder.as_slice());
         let builder = ArrayData::builder(self.data_type.clone())
             .len(len)
             .add_buffer(values_buffer)
-            .null_bit_buffer(null_bit_buffer);
+            .nulls(nulls);
 
         let array_data = unsafe { builder.build_unchecked() };
         PrimitiveArray::<T>::from(array_data)
@@ -329,6 +318,32 @@ impl<T: ArrowPrimitiveType> PrimitiveBuilder<T> {
             self.values_builder.as_slice_mut(),
             self.null_buffer_builder.as_slice_mut(),
         )
+    }
+}
+
+impl<P: DecimalType> PrimitiveBuilder<P> {
+    /// Sets the precision and scale
+    pub fn with_precision_and_scale(self, precision: u8, scale: i8) -> Result<Self, ArrowError> {
+        validate_decimal_precision_and_scale::<P>(precision, scale)?;
+        Ok(Self {
+            data_type: P::TYPE_CONSTRUCTOR(precision, scale),
+            ..self
+        })
+    }
+}
+
+impl<P: ArrowTimestampType> PrimitiveBuilder<P> {
+    /// Sets the timezone
+    pub fn with_timezone(self, timezone: impl Into<Arc<str>>) -> Self {
+        self.with_timezone_opt(Some(timezone.into()))
+    }
+
+    /// Sets an optional timezone
+    pub fn with_timezone_opt<S: Into<Arc<str>>>(self, timezone: Option<S>) -> Self {
+        Self {
+            data_type: DataType::Timestamp(P::UNIT, timezone.map(Into::into)),
+            ..self
+        }
     }
 }
 
@@ -568,25 +583,21 @@ mod tests {
 
     #[test]
     fn test_primitive_array_builder_with_data_type() {
-        let mut builder =
-            Decimal128Builder::new().with_data_type(DataType::Decimal128(1, 2));
+        let mut builder = Decimal128Builder::new().with_data_type(DataType::Decimal128(1, 2));
         builder.append_value(1);
         let array = builder.finish();
         assert_eq!(array.precision(), 1);
         assert_eq!(array.scale(), 2);
 
         let data_type = DataType::Timestamp(TimeUnit::Nanosecond, Some("+00:00".into()));
-        let mut builder =
-            TimestampNanosecondBuilder::new().with_data_type(data_type.clone());
+        let mut builder = TimestampNanosecondBuilder::new().with_data_type(data_type.clone());
         builder.append_value(1);
         let array = builder.finish();
         assert_eq!(array.data_type(), &data_type);
     }
 
     #[test]
-    #[should_panic(
-        expected = "incompatible data type for builder, expected Int32 got Int64"
-    )]
+    #[should_panic(expected = "incompatible data type for builder, expected Int32 got Int64")]
     fn test_invalid_with_data_type() {
         Int32Builder::new().with_data_type(DataType::Int64);
     }

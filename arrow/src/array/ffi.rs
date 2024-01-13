@@ -19,29 +19,9 @@
 
 use std::convert::TryFrom;
 
-use crate::{
-    error::{ArrowError, Result},
-    ffi,
-    ffi::ArrowArrayRef,
-};
+use crate::{error::Result, ffi};
 
-use super::{ArrayData, ArrayRef};
-
-impl TryFrom<ffi::ArrowArray> for ArrayData {
-    type Error = ArrowError;
-
-    fn try_from(value: ffi::ArrowArray) -> Result<Self> {
-        value.to_data()
-    }
-}
-
-impl TryFrom<ArrayData> for ffi::ArrowArray {
-    type Error = ArrowError;
-
-    fn try_from(value: ArrayData) -> Result<Self> {
-        ffi::ArrowArray::try_new(value)
-    }
-}
+use super::ArrayRef;
 
 /// Exports an array to raw pointers of the C Data Interface provided by the consumer.
 /// # Safety
@@ -75,11 +55,11 @@ mod tests {
     use crate::util::bit_util;
     use crate::{
         array::{
-            Array, ArrayData, BooleanArray, FixedSizeBinaryArray, Int64Array,
-            StructArray, UInt32Array, UInt64Array,
+            Array, ArrayData, BooleanArray, FixedSizeBinaryArray, Int64Array, StructArray,
+            UInt32Array, UInt64Array,
         },
         datatypes::{DataType, Field},
-        ffi::{ArrowArray, FFI_ArrowArray, FFI_ArrowSchema},
+        ffi::{from_ffi, FFI_ArrowArray, FFI_ArrowSchema},
     };
     use std::convert::TryFrom;
     use std::sync::Arc;
@@ -90,9 +70,7 @@ mod tests {
         let schema = FFI_ArrowSchema::try_from(expected.data_type())?;
 
         // simulate an external consumer by being the consumer
-        let d1 = ArrowArray::new(array, schema);
-
-        let result = &ArrayData::try_from(d1)?;
+        let result = &unsafe { from_ffi(array, &schema) }?;
 
         assert_eq!(result, expected);
         Ok(())
@@ -123,28 +101,26 @@ mod tests {
     fn test_struct() -> Result<()> {
         let inner = StructArray::from(vec![
             (
-                Field::new("a1", DataType::Boolean, false),
-                Arc::new(BooleanArray::from(vec![true, true, false, false]))
-                    as Arc<dyn Array>,
+                Arc::new(Field::new("a1", DataType::Boolean, false)),
+                Arc::new(BooleanArray::from(vec![true, true, false, false])) as Arc<dyn Array>,
             ),
             (
-                Field::new("a2", DataType::UInt32, false),
+                Arc::new(Field::new("a2", DataType::UInt32, false)),
                 Arc::new(UInt32Array::from(vec![1, 2, 3, 4])),
             ),
         ]);
 
         let array = StructArray::from(vec![
             (
-                Field::new("a", inner.data_type().clone(), false),
+                Arc::new(Field::new("a", inner.data_type().clone(), false)),
                 Arc::new(inner) as Arc<dyn Array>,
             ),
             (
-                Field::new("b", DataType::Boolean, false),
-                Arc::new(BooleanArray::from(vec![false, false, true, true]))
-                    as Arc<dyn Array>,
+                Arc::new(Field::new("b", DataType::Boolean, false)),
+                Arc::new(BooleanArray::from(vec![false, false, true, true])) as Arc<dyn Array>,
             ),
             (
-                Field::new("c", DataType::UInt32, false),
+                Arc::new(Field::new("c", DataType::UInt32, false)),
                 Arc::new(UInt32Array::from(vec![42, 28, 19, 31])),
             ),
         ]);
@@ -192,8 +168,7 @@ mod tests {
             Some(vec![30, 30, 30]),
             None,
         ];
-        let array =
-            FixedSizeBinaryArray::try_from_sparse_iter_with_size(values.into_iter(), 3)?;
+        let array = FixedSizeBinaryArray::try_from_sparse_iter_with_size(values.into_iter(), 3)?;
 
         let data = array.into_data();
         test_round_trip(&data)
@@ -266,10 +241,8 @@ mod tests {
         let mut validity_bits: [u8; 1] = [0; 1];
         bit_util::set_bit(&mut validity_bits, 2);
 
-        let list_data_type = DataType::FixedSizeList(
-            Arc::new(Field::new("f", inner_list_data_type, false)),
-            2,
-        );
+        let list_data_type =
+            DataType::FixedSizeList(Arc::new(Field::new("f", inner_list_data_type, false)), 2);
         let list_data = ArrayData::builder(list_data_type)
             .len(4)
             .null_bit_buffer(Some(Buffer::from(validity_bits)))

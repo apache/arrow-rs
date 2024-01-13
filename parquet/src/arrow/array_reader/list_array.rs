@@ -220,9 +220,9 @@ impl<OffsetSize: OffsetSizeTrait> ArrayReader for ListArrayReader<OffsetSize> {
             .add_buffer(value_offsets)
             .add_child_data(child_data);
 
-        if let Some(mut builder) = validity {
+        if let Some(builder) = validity {
             assert_eq!(builder.len(), list_offsets.len() - 1);
-            data_builder = data_builder.null_bit_buffer(Some(builder.finish()))
+            data_builder = data_builder.null_bit_buffer(Some(builder.into()))
         }
 
         let list_data = unsafe { data_builder.build_unchecked() };
@@ -250,7 +250,7 @@ mod tests {
     use crate::arrow::array_reader::build_array_reader;
     use crate::arrow::array_reader::list_array::ListArrayReader;
     use crate::arrow::array_reader::test_util::InMemoryArrayReader;
-    use crate::arrow::schema::parquet_to_array_schema_and_fields;
+    use crate::arrow::schema::parquet_to_arrow_schema_and_fields;
     use crate::arrow::{parquet_to_arrow_schema, ArrowWriter, ProjectionMask};
     use crate::file::properties::WriterProperties;
     use crate::file::reader::{FileReader, SerializedFileReader};
@@ -566,7 +566,7 @@ mod tests {
         let file_metadata = file_reader.metadata().file_metadata();
         let schema = file_metadata.schema_descr();
         let mask = ProjectionMask::leaves(schema, vec![0]);
-        let (_, fields) = parquet_to_array_schema_and_fields(
+        let (_, fields) = parquet_to_arrow_schema_and_fields(
             schema,
             ProjectionMask::all(),
             file_metadata.key_value_metadata(),

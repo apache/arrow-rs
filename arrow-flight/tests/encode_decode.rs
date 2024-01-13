@@ -22,6 +22,8 @@ use std::{collections::HashMap, sync::Arc};
 use arrow_array::types::Int32Type;
 use arrow_array::{ArrayRef, DictionaryArray, Float64Array, RecordBatch, UInt8Array};
 use arrow_cast::pretty::pretty_format_batches;
+use arrow_flight::flight_descriptor::DescriptorType;
+use arrow_flight::FlightDescriptor;
 use arrow_flight::{
     decode::{DecodedPayload, FlightDataDecoder, FlightRecordBatchStream},
     encode::FlightDataEncoderBuilder,
@@ -137,6 +139,29 @@ async fn test_zero_batches_schema_specified() {
 }
 
 #[tokio::test]
+async fn test_with_flight_descriptor() {
+    let stream = futures::stream::iter(vec![Ok(make_dictionary_batch(5))]);
+    let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Utf8, true)]));
+
+    let descriptor = Some(FlightDescriptor {
+        r#type: DescriptorType::Path.into(),
+        path: vec!["table_name".to_string()],
+        cmd: Bytes::default(),
+    });
+
+    let encoder = FlightDataEncoderBuilder::default()
+        .with_schema(schema.clone())
+        .with_flight_descriptor(descriptor.clone());
+
+    let mut encoder = encoder.build(stream);
+
+    // First batch should be the schema
+    let first_batch = encoder.next().await.unwrap().unwrap();
+
+    assert_eq!(first_batch.flight_descriptor, descriptor);
+}
+
+#[tokio::test]
 async fn test_zero_batches_dictionary_schema_specified() {
     let schema = Arc::new(Schema::new(vec![
         Field::new("a", DataType::Int64, false),
@@ -170,8 +195,7 @@ async fn test_app_metadata() {
     let encode_stream = encoder.build(input_batch_stream);
 
     // use lower level stream to get access to app metadata
-    let decode_stream =
-        FlightRecordBatchStream::new_from_flight_data(encode_stream).into_inner();
+    let decode_stream = FlightRecordBatchStream::new_from_flight_data(encode_stream).into_inner();
 
     let mut messages: Vec<_> = decode_stream.try_collect().await.expect("encode fails");
 
@@ -200,8 +224,7 @@ async fn test_max_message_size() {
     let encode_stream = encoder.build(input_batch_stream);
 
     // use lower level stream to get access to app metadata
-    let decode_stream =
-        FlightRecordBatchStream::new_from_flight_data(encode_stream).into_inner();
+    let decode_stream = FlightRecordBatchStream::new_from_flight_data(encode_stream).into_inner();
 
     let messages: Vec<_> = decode_stream.try_collect().await.expect("encode fails");
 
@@ -229,8 +252,8 @@ async fn test_max_message_size_fuzz() {
     ];
 
     for max_message_size_bytes in [10, 1024, 2048, 6400, 3211212] {
-        let encoder = FlightDataEncoderBuilder::default()
-            .with_max_flight_data_size(max_message_size_bytes);
+        let encoder =
+            FlightDataEncoderBuilder::default().with_max_flight_data_size(max_message_size_bytes);
 
         let input_batch_stream = futures::stream::iter(input.clone()).map(Ok);
 
@@ -274,10 +297,10 @@ async fn test_chained_streams_batch_decoder() {
     let batch2 = make_dictionary_batch(3);
 
     // Model sending two flight streams back to back, with different schemas
-    let encode_stream1 = FlightDataEncoderBuilder::default()
-        .build(futures::stream::iter(vec![Ok(batch1.clone())]));
-    let encode_stream2 = FlightDataEncoderBuilder::default()
-        .build(futures::stream::iter(vec![Ok(batch2.clone())]));
+    let encode_stream1 =
+        FlightDataEncoderBuilder::default().build(futures::stream::iter(vec![Ok(batch1.clone())]));
+    let encode_stream2 =
+        FlightDataEncoderBuilder::default().build(futures::stream::iter(vec![Ok(batch2.clone())]));
 
     // append the two streams (so they will have two different schema messages)
     let encode_stream = encode_stream1.chain(encode_stream2);
@@ -299,10 +322,10 @@ async fn test_chained_streams_data_decoder() {
     let batch2 = make_dictionary_batch(3);
 
     // Model sending two flight streams back to back, with different schemas
-    let encode_stream1 = FlightDataEncoderBuilder::default()
-        .build(futures::stream::iter(vec![Ok(batch1.clone())]));
-    let encode_stream2 = FlightDataEncoderBuilder::default()
-        .build(futures::stream::iter(vec![Ok(batch2.clone())]));
+    let encode_stream1 =
+        FlightDataEncoderBuilder::default().build(futures::stream::iter(vec![Ok(batch1.clone())]));
+    let encode_stream2 =
+        FlightDataEncoderBuilder::default().build(futures::stream::iter(vec![Ok(batch2.clone())]));
 
     // append the two streams (so they will have two different schema messages)
     let encode_stream = encode_stream1.chain(encode_stream2);
@@ -310,8 +333,7 @@ async fn test_chained_streams_data_decoder() {
     // lower level decode stream can handle multiple schema messages
     let decode_stream = FlightDataDecoder::new(encode_stream);
 
-    let decoded_data: Vec<_> =
-        decode_stream.try_collect().await.expect("encode / decode");
+    let decoded_data: Vec<_> = decode_stream.try_collect().await.expect("encode / decode");
 
     println!("decoded data: {decoded_data:#?}");
 
@@ -361,7 +383,7 @@ async fn test_mismatched_schema_message() {
     do_test(
         make_primitive_batch(5),
         make_dictionary_batch(3),
-        "Error decoding ipc RecordBatch: Io error: Invalid data for schema",
+        "Error decoding ipc RecordBatch: Schema error: Invalid data for schema",
     )
     .await;
 
@@ -400,8 +422,7 @@ fn make_primitive_batch(num_rows: usize) -> RecordBatch {
         })
         .collect();
 
-    RecordBatch::try_from_iter(vec![("i", Arc::new(i) as ArrayRef), ("f", Arc::new(f))])
-        .unwrap()
+    RecordBatch::try_from_iter(vec![("i", Arc::new(i) as ArrayRef), ("f", Arc::new(f))]).unwrap()
 }
 
 /// Make a dictionary batch for testing
@@ -434,8 +455,7 @@ fn make_dictionary_batch(num_rows: usize) -> RecordBatch {
 /// match the input.
 async fn roundtrip(input: Vec<RecordBatch>) {
     let expected_output = input.clone();
-    roundtrip_with_encoder(FlightDataEncoderBuilder::default(), input, expected_output)
-        .await
+    roundtrip_with_encoder(FlightDataEncoderBuilder::default(), input, expected_output).await
 }
 
 /// Encodes input as a FlightData stream, and then decodes it using
@@ -450,8 +470,7 @@ async fn roundtrip_dictionary(input: Vec<RecordBatch>) {
         .iter()
         .map(|batch| prepare_batch_for_flight(batch, schema.clone()).unwrap())
         .collect();
-    roundtrip_with_encoder(FlightDataEncoderBuilder::default(), input, expected_output)
-        .await
+    roundtrip_with_encoder(FlightDataEncoderBuilder::default(), input, expected_output).await
 }
 
 async fn roundtrip_with_encoder(
@@ -466,8 +485,7 @@ async fn roundtrip_with_encoder(
     let encode_stream = encoder.build(input_batch_stream);
 
     let decode_stream = FlightRecordBatchStream::new_from_flight_data(encode_stream);
-    let output_batches: Vec<_> =
-        decode_stream.try_collect().await.expect("encode / decode");
+    let output_batches: Vec<_> = decode_stream.try_collect().await.expect("encode / decode");
 
     // remove any empty batches from input as they are not transmitted
     let expected_batches: Vec<_> = expected_batches

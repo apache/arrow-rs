@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Main entrypoint for working with Parquet API.
+//! Low level APIs for reading raw parquet data.
 //!
 //! Provides access to file and row group readers and writers, record API, metadata, etc.
 //!
@@ -45,9 +45,8 @@
 //!   }
 //! ";
 //! let schema = Arc::new(parse_message_type(message_type).unwrap());
-//! let props = Arc::new(WriterProperties::builder().build());
 //! let file = fs::File::create(&path).unwrap();
-//! let mut writer = SerializedFileWriter::new(file, schema, props).unwrap();
+//! let mut writer = SerializedFileWriter::new(file, schema, Default::default()).unwrap();
 //! let mut row_group_writer = writer.next_row_group().unwrap();
 //! while let Some(mut col_writer) = row_group_writer.next_column().unwrap() {
 //!     // ... write values to a column writer
@@ -92,7 +91,7 @@
 //!     .flat_map(|r| r.into_iter());
 //!
 //! for row in rows {
-//!     println!("{}", row);
+//!     println!("{}", row.unwrap());
 //! }
 //! ```
 pub mod footer;

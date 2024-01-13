@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Provides API for reading/writing Arrow
+//! High-level API for reading/writing Arrow
 //! [RecordBatch](arrow_array::RecordBatch)es and
 //! [Array](arrow_array::Array)s to/from Parquet Files.
 //!
@@ -25,12 +25,13 @@
 //!# Example of writing Arrow record batch to Parquet file
 //!
 //!```rust
-//! use arrow_array::{Int32Array, ArrayRef};
-//! use arrow_array::RecordBatch;
-//! use parquet::arrow::arrow_writer::ArrowWriter;
-//! use parquet::file::properties::WriterProperties;
-//! use std::fs::File;
-//! use std::sync::Arc;
+//! # use arrow_array::{Int32Array, ArrayRef};
+//! # use arrow_array::RecordBatch;
+//! # use parquet::arrow::arrow_writer::ArrowWriter;
+//! # use parquet::file::properties::WriterProperties;
+//! # use tempfile::tempfile;
+//! # use std::sync::Arc;
+//! # use parquet::basic::Compression;
 //! let ids = Int32Array::from(vec![1, 2, 3, 4]);
 //! let vals = Int32Array::from(vec![5, 6, 7, 8]);
 //! let batch = RecordBatch::try_from_iter(vec![
@@ -38,10 +39,12 @@
 //!   ("val", Arc::new(vals) as ArrayRef),
 //! ]).unwrap();
 //!
-//! let file = File::create("data.parquet").unwrap();
+//! let file = tempfile().unwrap();
 //!
-//! // Default writer properties
-//! let props = WriterProperties::builder().build();
+//! // WriterProperties can be used to set Parquet file options
+//! let props = WriterProperties::builder()
+//!     .set_compression(Compression::SNAPPY)
+//!     .build();
 //!
 //! let mut writer = ArrowWriter::try_new(file, batch.schema(), Some(props)).unwrap();
 //!
@@ -51,24 +54,11 @@
 //! writer.close().unwrap();
 //! ```
 //!
-//! `WriterProperties` can be used to set Parquet file options
-//! ```rust
-//! use parquet::file::properties::WriterProperties;
-//! use parquet::basic::{ Compression, Encoding };
-//! use parquet::file::properties::WriterVersion;
-//!
-//! // File compression
-//! let props = WriterProperties::builder()
-//!     .set_compression(Compression::SNAPPY)
-//!     .build();
-//! ```
-//!
 //! # Example of reading parquet file into arrow record batch
 //!
 //! ```rust
-//! use std::fs::File;
-//! use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
-//!
+//! # use std::fs::File;
+//! # use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 //! # use std::sync::Arc;
 //! # use arrow_array::Int32Array;
 //! # use arrow::datatypes::{DataType, Field, Schema};
@@ -91,7 +81,7 @@
 //! #     writer.write(&batch).expect("Writing batch");
 //! # }
 //! # writer.close().unwrap();
-//!
+//! #
 //! let file = File::open("data.parquet").unwrap();
 //!
 //! let builder = ParquetRecordBatchReaderBuilder::try_new(file).unwrap();
@@ -118,8 +108,6 @@ pub mod async_writer;
 mod record_reader;
 experimental!(mod schema);
 
-#[allow(deprecated)]
-pub use self::arrow_reader::{ArrowReader, ParquetFileArrowReader};
 pub use self::arrow_writer::ArrowWriter;
 #[cfg(feature = "async")]
 pub use self::async_reader::ParquetRecordBatchStreamBuilder;
@@ -128,11 +116,19 @@ pub use self::async_writer::AsyncArrowWriter;
 use crate::schema::types::SchemaDescriptor;
 
 pub use self::schema::{
-    arrow_to_parquet_schema, parquet_to_arrow_schema, parquet_to_arrow_schema_by_columns,
+    arrow_to_parquet_schema, parquet_to_arrow_field_levels, parquet_to_arrow_schema,
+    parquet_to_arrow_schema_by_columns, FieldLevels,
 };
 
 /// Schema metadata key used to store serialized Arrow IPC schema
 pub const ARROW_SCHEMA_META_KEY: &str = "ARROW:schema";
+
+/// The value of this metadata key, if present on [`Field::metadata`], will be used
+/// to populate [`BasicTypeInfo::id`]
+///
+/// [`Field::metadata`]: arrow_schema::Field::metadata
+/// [`BasicTypeInfo::id`]: crate::schema::types::BasicTypeInfo::id
+pub const PARQUET_FIELD_ID_META_KEY: &str = "PARQUET:field_id";
 
 /// A [`ProjectionMask`] identifies a set of columns within a potentially nested schema to project
 ///
@@ -179,10 +175,7 @@ impl ProjectionMask {
     /// Note: repeated or out of order indices will not impact the final mask
     ///
     /// i.e. `[0, 1, 2]` will construct the same mask as `[1, 0, 0, 2]`
-    pub fn leaves(
-        schema: &SchemaDescriptor,
-        indices: impl IntoIterator<Item = usize>,
-    ) -> Self {
+    pub fn leaves(schema: &SchemaDescriptor, indices: impl IntoIterator<Item = usize>) -> Self {
         let mut mask = vec![false; schema.num_columns()];
         for leaf_idx in indices {
             mask[leaf_idx] = true;
@@ -195,10 +188,7 @@ impl ProjectionMask {
     /// Note: repeated or out of order indices will not impact the final mask
     ///
     /// i.e. `[0, 1, 2]` will construct the same mask as `[1, 0, 0, 2]`
-    pub fn roots(
-        schema: &SchemaDescriptor,
-        indices: impl IntoIterator<Item = usize>,
-    ) -> Self {
+    pub fn roots(schema: &SchemaDescriptor, indices: impl IntoIterator<Item = usize>) -> Self {
         let num_root_columns = schema.root_schema().get_fields().len();
         let mut root_mask = vec![false; num_root_columns];
         for root_idx in indices {

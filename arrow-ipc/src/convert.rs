@@ -18,9 +18,7 @@
 //! Utilities for converting between IPC types and native Arrow types
 
 use arrow_schema::*;
-use flatbuffers::{
-    FlatBufferBuilder, ForwardsUOffset, UnionWIPOffset, Vector, WIPOffset,
-};
+use flatbuffers::{FlatBufferBuilder, ForwardsUOffset, UnionWIPOffset, Vector, WIPOffset};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -150,12 +148,12 @@ pub fn try_schema_from_flatbuffer_bytes(bytes: &[u8]) -> Result<Schema, ArrowErr
         if let Some(schema) = ipc.header_as_schema().map(fb_to_schema) {
             Ok(schema)
         } else {
-            Err(ArrowError::IoError(
+            Err(ArrowError::ParseError(
                 "Unable to get head as schema".to_string(),
             ))
         }
     } else {
-        Err(ArrowError::IoError(
+        Err(ArrowError::ParseError(
             "Unable to get root as message".to_string(),
         ))
     }
@@ -186,16 +184,11 @@ pub fn try_schema_from_ipc_buffer(buffer: &[u8]) -> Result<Schema, ArrowError> {
             // buffer
             0
         };
-        let msg =
-            size_prefixed_root_as_message(&buffer[begin_offset..]).map_err(|err| {
-                ArrowError::ParseError(format!(
-                    "Unable to convert flight info to a message: {err}"
-                ))
-            })?;
+        let msg = size_prefixed_root_as_message(&buffer[begin_offset..]).map_err(|err| {
+            ArrowError::ParseError(format!("Unable to convert flight info to a message: {err}"))
+        })?;
         let ipc_schema = msg.header_as_schema().ok_or_else(|| {
-            ArrowError::ParseError(
-                "Unable to convert flight info to a schema".to_string(),
-            )
+            ArrowError::ParseError("Unable to convert flight info to a schema".to_string())
         })?;
         Ok(fb_to_schema(ipc_schema))
     } else {
@@ -277,15 +270,9 @@ pub(crate) fn get_data_type(field: crate::Field, may_be_dictionary: bool) -> Dat
             let time = field.type_as_time().unwrap();
             match (time.bitWidth(), time.unit()) {
                 (32, crate::TimeUnit::SECOND) => DataType::Time32(TimeUnit::Second),
-                (32, crate::TimeUnit::MILLISECOND) => {
-                    DataType::Time32(TimeUnit::Millisecond)
-                }
-                (64, crate::TimeUnit::MICROSECOND) => {
-                    DataType::Time64(TimeUnit::Microsecond)
-                }
-                (64, crate::TimeUnit::NANOSECOND) => {
-                    DataType::Time64(TimeUnit::Nanosecond)
-                }
+                (32, crate::TimeUnit::MILLISECOND) => DataType::Time32(TimeUnit::Millisecond),
+                (64, crate::TimeUnit::MICROSECOND) => DataType::Time64(TimeUnit::Microsecond),
+                (64, crate::TimeUnit::NANOSECOND) => DataType::Time64(TimeUnit::Nanosecond),
                 z => panic!(
                     "Time type with bit width of {} and unit of {:?} not supported",
                     z.0, z.1
@@ -296,30 +283,22 @@ pub(crate) fn get_data_type(field: crate::Field, may_be_dictionary: bool) -> Dat
             let timestamp = field.type_as_timestamp().unwrap();
             let timezone: Option<_> = timestamp.timezone().map(|tz| tz.into());
             match timestamp.unit() {
-                crate::TimeUnit::SECOND => {
-                    DataType::Timestamp(TimeUnit::Second, timezone)
-                }
+                crate::TimeUnit::SECOND => DataType::Timestamp(TimeUnit::Second, timezone),
                 crate::TimeUnit::MILLISECOND => {
                     DataType::Timestamp(TimeUnit::Millisecond, timezone)
                 }
                 crate::TimeUnit::MICROSECOND => {
                     DataType::Timestamp(TimeUnit::Microsecond, timezone)
                 }
-                crate::TimeUnit::NANOSECOND => {
-                    DataType::Timestamp(TimeUnit::Nanosecond, timezone)
-                }
+                crate::TimeUnit::NANOSECOND => DataType::Timestamp(TimeUnit::Nanosecond, timezone),
                 z => panic!("Timestamp type with unit of {z:?} not supported"),
             }
         }
         crate::Type::Interval => {
             let interval = field.type_as_interval().unwrap();
             match interval.unit() {
-                crate::IntervalUnit::YEAR_MONTH => {
-                    DataType::Interval(IntervalUnit::YearMonth)
-                }
-                crate::IntervalUnit::DAY_TIME => {
-                    DataType::Interval(IntervalUnit::DayTime)
-                }
+                crate::IntervalUnit::YEAR_MONTH => DataType::Interval(IntervalUnit::YearMonth),
+                crate::IntervalUnit::DAY_TIME => DataType::Interval(IntervalUnit::DayTime),
                 crate::IntervalUnit::MONTH_DAY_NANO => {
                     DataType::Interval(IntervalUnit::MonthDayNano)
                 }
@@ -717,7 +696,7 @@ pub(crate) fn get_fb_field_type<'a>(
         RunEndEncoded(run_ends, values) => {
             let run_ends_field = build_field(fbb, run_ends);
             let values_field = build_field(fbb, values);
-            let children = vec![run_ends_field, values_field];
+            let children = [run_ends_field, values_field];
             FBFieldType {
                 type_type: crate::Type::RunEndEncoded,
                 type_: crate::RunEndEncodedBuilder::new(fbb)
@@ -775,8 +754,8 @@ pub(crate) fn get_fb_field_type<'a>(
                 UnionMode::Dense => crate::UnionMode::Dense,
             };
 
-            let fbb_type_ids = fbb
-                .create_vector(&fields.iter().map(|(t, _)| t as i32).collect::<Vec<_>>());
+            let fbb_type_ids =
+                fbb.create_vector(&fields.iter().map(|(t, _)| t as i32).collect::<Vec<_>>());
             let mut builder = crate::UnionBuilder::new(fbb);
             builder.add_mode(union_mode);
             builder.add_typeIds(fbb_type_ids);
@@ -872,10 +851,7 @@ mod tests {
                 ),
                 Field::new(
                     "timestamp[us]",
-                    DataType::Timestamp(
-                        TimeUnit::Microsecond,
-                        Some("Africa/Johannesburg".into()),
-                    ),
+                    DataType::Timestamp(TimeUnit::Microsecond, Some("Africa/Johannesburg".into())),
                     false,
                 ),
                 Field::new(
@@ -900,11 +876,7 @@ mod tests {
                 ),
                 Field::new("utf8", DataType::Utf8, false),
                 Field::new("binary", DataType::Binary, false),
-                Field::new_list(
-                    "list[u8]",
-                    Field::new("item", DataType::UInt8, false),
-                    true,
-                ),
+                Field::new_list("list[u8]", Field::new("item", DataType::UInt8, false), true),
                 Field::new_list(
                     "list[struct<float32, int32, bool>]",
                     Field::new_struct(
@@ -1013,20 +985,14 @@ mod tests {
                 ),
                 Field::new_dict(
                     "dictionary<int32, utf8>",
-                    DataType::Dictionary(
-                        Box::new(DataType::Int32),
-                        Box::new(DataType::Utf8),
-                    ),
+                    DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
                     true,
                     123,
                     true,
                 ),
                 Field::new_dict(
                     "dictionary<uint8, uint32>",
-                    DataType::Dictionary(
-                        Box::new(DataType::UInt8),
-                        Box::new(DataType::UInt32),
-                    ),
+                    DataType::Dictionary(Box::new(DataType::UInt8), Box::new(DataType::UInt32)),
                     true,
                     123,
                     true,
@@ -1056,20 +1022,18 @@ mod tests {
         // # stripping continuation & length prefix & suffix bytes to get only schema bytes
         // [x for x in sink.getvalue().to_pybytes()][8:-8]
         let bytes: Vec<u8> = vec![
-            16, 0, 0, 0, 0, 0, 10, 0, 12, 0, 6, 0, 5, 0, 8, 0, 10, 0, 0, 0, 0, 1, 4, 0,
-            12, 0, 0, 0, 8, 0, 8, 0, 0, 0, 4, 0, 8, 0, 0, 0, 4, 0, 0, 0, 1, 0, 0, 0, 20,
-            0, 0, 0, 16, 0, 20, 0, 8, 0, 0, 0, 7, 0, 12, 0, 0, 0, 16, 0, 16, 0, 0, 0, 0,
-            0, 0, 2, 16, 0, 0, 0, 32, 0, 0, 0, 4, 0, 0, 0, 0, 0, 0, 0, 6, 0, 0, 0, 102,
-            105, 101, 108, 100, 49, 0, 0, 0, 0, 6, 0, 8, 0, 4, 0, 6, 0, 0, 0, 32, 0, 0,
-            0,
+            16, 0, 0, 0, 0, 0, 10, 0, 12, 0, 6, 0, 5, 0, 8, 0, 10, 0, 0, 0, 0, 1, 4, 0, 12, 0, 0,
+            0, 8, 0, 8, 0, 0, 0, 4, 0, 8, 0, 0, 0, 4, 0, 0, 0, 1, 0, 0, 0, 20, 0, 0, 0, 16, 0, 20,
+            0, 8, 0, 0, 0, 7, 0, 12, 0, 0, 0, 16, 0, 16, 0, 0, 0, 0, 0, 0, 2, 16, 0, 0, 0, 32, 0,
+            0, 0, 4, 0, 0, 0, 0, 0, 0, 0, 6, 0, 0, 0, 102, 105, 101, 108, 100, 49, 0, 0, 0, 0, 6,
+            0, 8, 0, 4, 0, 6, 0, 0, 0, 32, 0, 0, 0,
         ];
         let ipc = crate::root_as_message(&bytes).unwrap();
         let schema = ipc.header_as_schema().unwrap();
 
         // generate same message with Rust
         let data_gen = crate::writer::IpcDataGenerator::default();
-        let arrow_schema =
-            Schema::new(vec![Field::new("field1", DataType::UInt32, false)]);
+        let arrow_schema = Schema::new(vec![Field::new("field1", DataType::UInt32, false)]);
         let bytes = data_gen
             .schema_to_bytes(&arrow_schema, &crate::writer::IpcWriteOptions::default())
             .ipc_message;

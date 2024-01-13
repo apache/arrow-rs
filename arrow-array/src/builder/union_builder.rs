@@ -16,9 +16,9 @@
 // under the License.
 
 use crate::builder::buffer_builder::{Int32BufferBuilder, Int8BufferBuilder};
-use crate::builder::null_buffer_builder::NullBufferBuilder;
 use crate::builder::BufferBuilder;
 use crate::{make_array, ArrowPrimitiveType, UnionArray};
+use arrow_buffer::NullBufferBuilder;
 use arrow_buffer::{ArrowNativeType, Buffer};
 use arrow_data::ArrayDataBuilder;
 use arrow_schema::{ArrowError, DataType, Field};
@@ -65,11 +65,7 @@ impl<T: ArrowNativeType> FieldDataValues for BufferBuilder<T> {
 
 impl FieldData {
     /// Creates a new `FieldData`.
-    fn new<T: ArrowPrimitiveType>(
-        type_id: i8,
-        data_type: DataType,
-        capacity: usize,
-    ) -> Self {
+    fn new<T: ArrowPrimitiveType>(type_id: i8, data_type: DataType, capacity: usize) -> Self {
         Self {
             type_id,
             data_type,
@@ -99,7 +95,7 @@ impl FieldData {
     }
 }
 
-/// Builder type for creating a new `UnionArray`.
+/// Builder for [`UnionArray`]
 ///
 /// Example: **Dense Memory Layout**
 ///
@@ -222,7 +218,12 @@ impl UnionBuilder {
         let mut field_data = match self.fields.remove(&type_name) {
             Some(data) => {
                 if data.data_type != T::DATA_TYPE {
-                    return Err(ArrowError::InvalidArgumentError(format!("Attempt to write col \"{}\" with type {} doesn't match existing type {}", type_name, T::DATA_TYPE, data.data_type)));
+                    return Err(ArrowError::InvalidArgumentError(format!(
+                        "Attempt to write col \"{}\" with type {} doesn't match existing type {}",
+                        type_name,
+                        T::DATA_TYPE,
+                        data.data_type
+                    )));
                 }
                 data
             }
@@ -292,7 +293,7 @@ impl UnionBuilder {
             let arr_data_builder = ArrayDataBuilder::new(data_type.clone())
                 .add_buffer(buffer)
                 .len(slots)
-                .null_bit_buffer(bitmap_builder.finish());
+                .nulls(bitmap_builder.finish());
 
             let arr_data_ref = unsafe { arr_data_builder.build_unchecked() };
             let array_ref = make_array(arr_data_ref);

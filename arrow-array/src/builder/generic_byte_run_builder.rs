@@ -19,10 +19,7 @@ use crate::types::bytes::ByteArrayNativeType;
 use std::{any::Any, sync::Arc};
 
 use crate::{
-    types::{
-        BinaryType, ByteArrayType, LargeBinaryType, LargeUtf8Type, RunEndIndexType,
-        Utf8Type,
-    },
+    types::{BinaryType, ByteArrayType, LargeBinaryType, LargeUtf8Type, RunEndIndexType, Utf8Type},
     ArrayRef, ArrowPrimitiveType, RunArray,
 };
 
@@ -30,7 +27,7 @@ use super::{ArrayBuilder, GenericByteBuilder, PrimitiveBuilder};
 
 use arrow_buffer::ArrowNativeType;
 
-/// Array builder for [`RunArray`] for String and Binary types.
+/// Builder for [`RunArray`] of [`GenericByteArray`](crate::array::GenericByteArray)
 ///
 /// # Example:
 ///
@@ -112,10 +109,7 @@ where
     pub fn with_capacity(capacity: usize, data_capacity: usize) -> Self {
         Self {
             run_ends_builder: PrimitiveBuilder::with_capacity(capacity),
-            values_builder: GenericByteBuilder::<V>::with_capacity(
-                capacity,
-                data_capacity,
-            ),
+            values_builder: GenericByteBuilder::<V>::with_capacity(capacity, data_capacity),
             current_value: Vec::new(),
             has_current_value: false,
             current_run_end_index: 0,
@@ -148,11 +142,6 @@ where
     /// the eventual runs array.
     fn len(&self) -> usize {
         self.current_run_end_index
-    }
-
-    /// Returns whether the number of array slots is zero
-    fn is_empty(&self) -> bool {
-        self.current_run_end_index == 0
     }
 
     /// Builds the array and reset this builder.
@@ -287,12 +276,13 @@ where
     }
 
     fn run_end_index_as_native(&self) -> R::Native {
-        R::Native::from_usize(self.current_run_end_index)
-        .unwrap_or_else(|| panic!(
+        R::Native::from_usize(self.current_run_end_index).unwrap_or_else(|| {
+            panic!(
                 "Cannot convert the value {} from `usize` to native form of arrow datatype {}",
                 self.current_run_end_index,
                 R::DATA_TYPE
-        ))
+            )
+        })
     }
 }
 
@@ -309,7 +299,7 @@ where
     }
 }
 
-/// Array builder for [`RunArray`] that encodes strings ([`Utf8Type`]).
+/// Builder for [`RunArray`] of [`StringArray`](crate::array::StringArray)
 ///
 /// ```
 /// // Create a run-end encoded array with run-end indexes data type as `i16`.
@@ -319,7 +309,7 @@ where
 /// # use arrow_array::{Int16Array, StringArray};
 /// # use arrow_array::types::Int16Type;
 /// # use arrow_array::cast::AsArray;
-///
+/// #
 /// let mut builder = StringRunBuilder::<Int16Type>::new();
 ///
 /// // The builder builds the dictionary value by value
@@ -342,10 +332,10 @@ where
 /// ```
 pub type StringRunBuilder<K> = GenericByteRunBuilder<K, Utf8Type>;
 
-/// Array builder for [`RunArray`] that encodes large strings ([`LargeUtf8Type`]). See [`StringRunBuilder`] for an example.
+/// Builder for [`RunArray`] of [`LargeStringArray`](crate::array::LargeStringArray)
 pub type LargeStringRunBuilder<K> = GenericByteRunBuilder<K, LargeUtf8Type>;
 
-/// Array builder for [`RunArray`] that encodes binary values([`BinaryType`]).
+/// Builder for [`RunArray`] of [`BinaryArray`](crate::array::BinaryArray)
 ///
 /// ```
 /// // Create a run-end encoded array with run-end indexes data type as `i16`.
@@ -378,8 +368,7 @@ pub type LargeStringRunBuilder<K> = GenericByteRunBuilder<K, LargeUtf8Type>;
 /// ```
 pub type BinaryRunBuilder<K> = GenericByteRunBuilder<K, BinaryType>;
 
-/// Array builder for [`RunArray`] that encodes large binary values([`LargeBinaryType`]).
-/// See documentation of [`BinaryRunBuilder`] for an example.
+/// Builder for [`RunArray`] of [`LargeBinaryArray`](crate::array::LargeBinaryArray)
 pub type LargeBinaryRunBuilder<K> = GenericByteRunBuilder<K, LargeBinaryType>;
 
 #[cfg(test)]
@@ -392,7 +381,7 @@ mod tests {
     use crate::GenericByteArray;
     use crate::Int16RunArray;
 
-    fn test_bytes_run_buider<T>(values: Vec<&T::Native>)
+    fn test_bytes_run_builder<T>(values: Vec<&T::Native>)
     where
         T: ByteArrayType,
         <T as ByteArrayType>::Native: PartialEq,
@@ -419,8 +408,7 @@ mod tests {
 
         // Values are polymorphic and so require a downcast.
         let av = array.values();
-        let ava: &GenericByteArray<T> =
-            av.as_any().downcast_ref::<GenericByteArray<T>>().unwrap();
+        let ava: &GenericByteArray<T> = av.as_any().downcast_ref::<GenericByteArray<T>>().unwrap();
 
         assert_eq!(*ava.value(0), *values[0]);
         assert!(ava.is_null(1));
@@ -429,21 +417,21 @@ mod tests {
     }
 
     #[test]
-    fn test_string_run_buider() {
-        test_bytes_run_buider::<Utf8Type>(vec!["abc", "def", "ghi"]);
+    fn test_string_run_builder() {
+        test_bytes_run_builder::<Utf8Type>(vec!["abc", "def", "ghi"]);
     }
 
     #[test]
-    fn test_string_run_buider_with_empty_strings() {
-        test_bytes_run_buider::<Utf8Type>(vec!["abc", "", "ghi"]);
+    fn test_string_run_builder_with_empty_strings() {
+        test_bytes_run_builder::<Utf8Type>(vec!["abc", "", "ghi"]);
     }
 
     #[test]
-    fn test_binary_run_buider() {
-        test_bytes_run_buider::<BinaryType>(vec![b"abc", b"def", b"ghi"]);
+    fn test_binary_run_builder() {
+        test_bytes_run_builder::<BinaryType>(vec![b"abc", b"def", b"ghi"]);
     }
 
-    fn test_bytes_run_buider_finish_cloned<T>(values: Vec<&T::Native>)
+    fn test_bytes_run_builder_finish_cloned<T>(values: Vec<&T::Native>)
     where
         T: ByteArrayType,
         <T as ByteArrayType>::Native: PartialEq,
@@ -465,8 +453,7 @@ mod tests {
 
         // Values are polymorphic and so require a downcast.
         let av = array.values();
-        let ava: &GenericByteArray<T> =
-            av.as_any().downcast_ref::<GenericByteArray<T>>().unwrap();
+        let ava: &GenericByteArray<T> = av.as_any().downcast_ref::<GenericByteArray<T>>().unwrap();
 
         assert_eq!(ava.value(0), values[0]);
         assert!(ava.is_null(1));
@@ -499,13 +486,13 @@ mod tests {
     }
 
     #[test]
-    fn test_string_run_buider_finish_cloned() {
-        test_bytes_run_buider_finish_cloned::<Utf8Type>(vec!["abc", "def", "ghi"]);
+    fn test_string_run_builder_finish_cloned() {
+        test_bytes_run_builder_finish_cloned::<Utf8Type>(vec!["abc", "def", "ghi"]);
     }
 
     #[test]
-    fn test_binary_run_buider_finish_cloned() {
-        test_bytes_run_buider_finish_cloned::<BinaryType>(vec![b"abc", b"def", b"ghi"]);
+    fn test_binary_run_builder_finish_cloned() {
+        test_bytes_run_builder_finish_cloned::<BinaryType>(vec![b"abc", b"def", b"ghi"]);
     }
 
     #[test]

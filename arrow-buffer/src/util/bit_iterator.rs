@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! Types for iterating over packed bitmasks
+
 use crate::bit_chunk_iterator::{UnalignedBitChunk, UnalignedBitChunkIterator};
 use crate::bit_util::{ceil, get_bit_raw};
 
@@ -274,8 +276,8 @@ mod tests {
         assert_eq!(
             actual,
             &[
-                false, true, false, false, true, false, true, false, false, false, false,
-                false, true, false
+                false, true, false, false, true, false, true, false, false, false, false, false,
+                true, false
             ]
         );
 

@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-///! This example demonstrates dealing with mixed types dynamically at runtime
+//! This example demonstrates dealing with mixed types dynamically at runtime
 use std::sync::Arc;
 
 extern crate arrow;
@@ -23,7 +23,6 @@ extern crate arrow;
 use arrow::array::*;
 use arrow::datatypes::*;
 use arrow::error::Result;
-use arrow::record_batch::*;
 
 #[cfg(feature = "prettyprint")]
 use arrow::util::pretty::print_batches;
@@ -49,22 +48,21 @@ fn main() -> Result<()> {
 
     let nested = StructArray::from(vec![
         (
-            Field::new("a", DataType::Utf8, false),
+            Arc::new(Field::new("a", DataType::Utf8, false)),
             Arc::new(StringArray::from(vec!["a", "b", "c", "d", "e"])) as Arc<dyn Array>,
         ),
         (
-            Field::new("b", DataType::Float64, false),
+            Arc::new(Field::new("b", DataType::Float64, false)),
             Arc::new(Float64Array::from(vec![1.1, 2.2, 3.3, 4.4, 5.5])),
         ),
         (
-            Field::new("c", DataType::Float64, false),
+            Arc::new(Field::new("c", DataType::Float64, false)),
             Arc::new(Float64Array::from(vec![2.2, 3.3, 4.4, 5.5, 6.6])),
         ),
     ]);
 
     // build a record batch
-    let batch =
-        RecordBatch::try_new(Arc::new(schema), vec![Arc::new(id), Arc::new(nested)])?;
+    let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(id), Arc::new(nested)])?;
 
     print_batches(&[batch.clone()]).unwrap();
 

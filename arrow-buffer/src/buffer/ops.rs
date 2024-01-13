@@ -203,10 +203,6 @@ pub fn buffer_bin_and_not(
 
 /// Apply a bitwise not to one input and return the result as a Buffer.
 /// The input is treated as a bitmap, meaning that offset and length are specified in number of bits.
-pub fn buffer_unary_not(
-    left: &Buffer,
-    offset_in_bits: usize,
-    len_in_bits: usize,
-) -> Buffer {
+pub fn buffer_unary_not(left: &Buffer, offset_in_bits: usize, len_in_bits: usize) -> Buffer {
     bitwise_unary_op_helper(left, offset_in_bits, len_in_bits, |a| !a)
 }

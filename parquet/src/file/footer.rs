@@ -18,7 +18,7 @@
 use std::{io::Read, sync::Arc};
 
 use crate::format::{ColumnOrder as TColumnOrder, FileMetaData as TFileMetaData};
-use thrift::protocol::{TCompactInputProtocol, TSerializable};
+use crate::thrift::{TCompactSliceInputProtocol, TSerializable};
 
 use crate::basic::ColumnOrder;
 
@@ -46,7 +46,7 @@ pub fn parse_metadata<R: ChunkReader>(chunk_reader: &R) -> Result<ParquetMetaDat
 
     let mut footer = [0_u8; 8];
     chunk_reader
-        .get_read(file_size - 8, 8)?
+        .get_read(file_size - 8)?
         .read_exact(&mut footer)?;
 
     let metadata_len = decode_footer(&footer)?;
@@ -61,16 +61,14 @@ pub fn parse_metadata<R: ChunkReader>(chunk_reader: &R) -> Result<ParquetMetaDat
         ));
     }
 
-    let metadata =
-        chunk_reader.get_bytes(file_size - footer_metadata_len as u64, metadata_len)?;
-
-    decode_metadata(&metadata)
+    let start = file_size - footer_metadata_len as u64;
+    decode_metadata(chunk_reader.get_bytes(start, metadata_len)?.as_ref())
 }
 
 /// Decodes [`ParquetMetaData`] from the provided bytes
-pub fn decode_metadata(metadata_read: &[u8]) -> Result<ParquetMetaData> {
+pub fn decode_metadata(buf: &[u8]) -> Result<ParquetMetaData> {
     // TODO: row group filtering
-    let mut prot = TCompactInputProtocol::new(metadata_read);
+    let mut prot = TCompactSliceInputProtocol::new(buf);
     let t_file_metadata: TFileMetaData = TFileMetaData::read_from_in_protocol(&mut prot)
         .map_err(|e| ParquetError::General(format!("Could not parse metadata: {e}")))?;
     let schema = types::from_thrift(&t_file_metadata.schema)?;
@@ -100,13 +98,9 @@ pub fn decode_footer(slice: &[u8; FOOTER_SIZE]) -> Result<usize> {
     }
 
     // get the metadata length from the footer
-    let metadata_len = i32::from_le_bytes(slice[..4].try_into().unwrap());
-    metadata_len.try_into().map_err(|_| {
-        general_err!(
-            "Invalid Parquet file. Metadata length is less than zero ({})",
-            metadata_len
-        )
-    })
+    let metadata_len = u32::from_le_bytes(slice[..4].try_into().unwrap());
+    // u32 won't be larger than usize in most cases
+    Ok(metadata_len as usize)
 }
 
 /// Parses column orders from Thrift definition.
@@ -173,16 +167,6 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_metadata_invalid_length() {
-        let test_file = Bytes::from(vec![0, 0, 0, 255, b'P', b'A', b'R', b'1']);
-        let reader_result = parse_metadata(&test_file);
-        assert_eq!(
-            reader_result.unwrap_err().to_string(),
-            "Parquet error: Invalid Parquet file. Metadata length is less than zero (-16777216)"
-        );
-    }
-
-    #[test]
     fn test_parse_metadata_invalid_start() {
         let test_file = Bytes::from(vec![255, 0, 0, 0, b'P', b'A', b'R', b'1']);
         let reader_result = parse_metadata(&test_file);
@@ -195,7 +179,7 @@ mod tests {
     #[test]
     fn test_metadata_column_orders_parse() {
         // Define simple schema, we do not need to provide logical types.
-        let mut fields = vec![
+        let fields = vec![
             Arc::new(
                 SchemaType::primitive_type_builder("col1", Type::INT32)
                     .build()
@@ -208,7 +192,7 @@ mod tests {
             ),
         ];
         let schema = SchemaType::group_type_builder("schema")
-            .with_fields(&mut fields)
+            .with_fields(fields)
             .build()
             .unwrap();
         let schema_descr = SchemaDescriptor::new(Arc::new(schema));
@@ -236,8 +220,7 @@ mod tests {
         let schema = SchemaType::group_type_builder("schema").build().unwrap();
         let schema_descr = SchemaDescriptor::new(Arc::new(schema));
 
-        let t_column_orders =
-            Some(vec![TColumnOrder::TYPEORDER(TypeDefinedOrder::new())]);
+        let t_column_orders = Some(vec![TColumnOrder::TYPEORDER(TypeDefinedOrder::new())]);
 
         parse_column_orders(t_column_orders, &schema_descr);
     }

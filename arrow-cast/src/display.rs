@@ -34,12 +34,22 @@ use lexical_core::FormattedSize;
 
 type TimeFormat<'a> = Option<&'a str>;
 
+/// Format for displaying durations
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum DurationFormat {
+    /// ISO 8601 - `P198DT72932.972880S`
+    ISO8601,
+    /// A human readable representation - `198 days 16 hours 34 mins 15.407810000 secs`
+    Pretty,
+}
+
 /// Options for formatting arrays
 ///
 /// By default nulls are formatted as `""` and temporal types formatted
 /// according to RFC3339
 ///
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct FormatOptions<'a> {
     /// If set to `true` any formatting errors will be written to the output
     /// instead of being converted into a [`std::fmt::Error`]
@@ -56,10 +66,18 @@ pub struct FormatOptions<'a> {
     timestamp_tz_format: TimeFormat<'a>,
     /// Time format for time arrays
     time_format: TimeFormat<'a>,
+    /// Duration format
+    duration_format: DurationFormat,
 }
 
 impl<'a> Default for FormatOptions<'a> {
     fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<'a> FormatOptions<'a> {
+    pub const fn new() -> Self {
         Self {
             safe: true,
             null: "",
@@ -68,14 +86,13 @@ impl<'a> Default for FormatOptions<'a> {
             timestamp_format: None,
             timestamp_tz_format: None,
             time_format: None,
+            duration_format: DurationFormat::ISO8601,
         }
     }
-}
 
-impl<'a> FormatOptions<'a> {
     /// If set to `true` any formatting errors will be written to the output
     /// instead of being converted into a [`std::fmt::Error`]
-    pub fn with_display_error(mut self, safe: bool) -> Self {
+    pub const fn with_display_error(mut self, safe: bool) -> Self {
         self.safe = safe;
         self
     }
@@ -83,12 +100,12 @@ impl<'a> FormatOptions<'a> {
     /// Overrides the string used to represent a null
     ///
     /// Defaults to `""`
-    pub fn with_null(self, null: &'a str) -> Self {
+    pub const fn with_null(self, null: &'a str) -> Self {
         Self { null, ..self }
     }
 
     /// Overrides the format used for [`DataType::Date32`] columns
-    pub fn with_date_format(self, date_format: Option<&'a str>) -> Self {
+    pub const fn with_date_format(self, date_format: Option<&'a str>) -> Self {
         Self {
             date_format,
             ..self
@@ -96,7 +113,7 @@ impl<'a> FormatOptions<'a> {
     }
 
     /// Overrides the format used for [`DataType::Date64`] columns
-    pub fn with_datetime_format(self, datetime_format: Option<&'a str>) -> Self {
+    pub const fn with_datetime_format(self, datetime_format: Option<&'a str>) -> Self {
         Self {
             datetime_format,
             ..self
@@ -104,7 +121,7 @@ impl<'a> FormatOptions<'a> {
     }
 
     /// Overrides the format used for [`DataType::Timestamp`] columns without a timezone
-    pub fn with_timestamp_format(self, timestamp_format: Option<&'a str>) -> Self {
+    pub const fn with_timestamp_format(self, timestamp_format: Option<&'a str>) -> Self {
         Self {
             timestamp_format,
             ..self
@@ -112,7 +129,7 @@ impl<'a> FormatOptions<'a> {
     }
 
     /// Overrides the format used for [`DataType::Timestamp`] columns with a timezone
-    pub fn with_timestamp_tz_format(self, timestamp_tz_format: Option<&'a str>) -> Self {
+    pub const fn with_timestamp_tz_format(self, timestamp_tz_format: Option<&'a str>) -> Self {
         Self {
             timestamp_tz_format,
             ..self
@@ -120,9 +137,19 @@ impl<'a> FormatOptions<'a> {
     }
 
     /// Overrides the format used for [`DataType::Time32`] and [`DataType::Time64`] columns
-    pub fn with_time_format(self, time_format: Option<&'a str>) -> Self {
+    pub const fn with_time_format(self, time_format: Option<&'a str>) -> Self {
         Self {
             time_format,
+            ..self
+        }
+    }
+
+    /// Overrides the format used for duration columns
+    ///
+    /// Defaults to [`DurationFormat::ISO8601`]
+    pub const fn with_duration_format(self, duration_format: DurationFormat) -> Self {
+        Self {
+            duration_format,
             ..self
         }
     }
@@ -143,9 +170,7 @@ impl<'a> ValueFormatter<'a> {
         match self.formatter.format.write(self.idx, s) {
             Ok(_) => Ok(()),
             Err(FormatError::Arrow(e)) => Err(e),
-            Err(FormatError::Format(_)) => {
-                Err(ArrowError::CastError("Format error".to_string()))
-            }
+            Err(FormatError::Format(_)) => Err(ArrowError::CastError("Format error".to_string())),
         }
     }
 
@@ -230,10 +255,7 @@ impl<'a> ArrayFormatter<'a> {
     /// Returns an [`ArrayFormatter`] that can be used to format `array`
     ///
     /// This returns an error if an array of the given data type cannot be formatted
-    pub fn try_new(
-        array: &'a dyn Array,
-        options: &FormatOptions<'a>,
-    ) -> Result<Self, ArrowError> {
+    pub fn try_new(array: &'a dyn Array, options: &FormatOptions<'a>) -> Result<Self, ArrowError> {
         Ok(Self {
             format: make_formatter(array, options)?,
             safe: options.safe,
@@ -279,6 +301,10 @@ fn make_formatter<'a>(
         DataType::Struct(_) => array_format(as_struct_array(array), options),
         DataType::Map(_, _) => array_format(as_map_array(array), options),
         DataType::Union(_, _) => array_format(as_union_array(array), options),
+        DataType::RunEndEncoded(_, _) => downcast_run_array! {
+            array => array_format(array, options),
+            _ => unreachable!()
+        },
         d => Err(ArrowError::NotYetImplemented(format!("formatting {d} is not yet supported"))),
     }
 }
@@ -369,8 +395,15 @@ impl<'a> DisplayIndex for &'a BooleanArray {
     }
 }
 
-impl<'a> DisplayIndex for &'a NullArray {
-    fn write(&self, _idx: usize, _f: &mut dyn Write) -> FormatResult {
+impl<'a> DisplayIndexState<'a> for &'a NullArray {
+    type State = &'a str;
+
+    fn prepare(&self, options: &FormatOptions<'a>) -> Result<Self::State, ArrowError> {
+        Ok(options.null)
+    }
+
+    fn write(&self, state: &Self::State, _idx: usize, f: &mut dyn Write) -> FormatResult {
+        f.write_str(state)?;
         Ok(())
     }
 }
@@ -435,9 +468,7 @@ fn write_timestamp(
             let date = Utc.from_utc_datetime(&naive).with_timezone(&tz);
             match format {
                 Some(s) => write!(f, "{}", date.format(s))?,
-                None => {
-                    write!(f, "{}", date.to_rfc3339_opts(SecondsFormat::AutoSi, true))?
-                }
+                None => write!(f, "{}", date.to_rfc3339_opts(SecondsFormat::AutoSi, true))?,
             }
         }
         None => match format {
@@ -489,19 +520,11 @@ macro_rules! temporal_display {
         impl<'a> DisplayIndexState<'a> for &'a PrimitiveArray<$t> {
             type State = TimeFormat<'a>;
 
-            fn prepare(
-                &self,
-                options: &FormatOptions<'a>,
-            ) -> Result<Self::State, ArrowError> {
+            fn prepare(&self, options: &FormatOptions<'a>) -> Result<Self::State, ArrowError> {
                 Ok(options.$format)
             }
 
-            fn write(
-                &self,
-                fmt: &Self::State,
-                idx: usize,
-                f: &mut dyn Write,
-            ) -> FormatResult {
+            fn write(&self, fmt: &Self::State, idx: usize, f: &mut dyn Write) -> FormatResult {
                 let value = self.value(idx);
                 let naive = $convert(value as _).ok_or_else(|| {
                     ArrowError::CastError(format!(
@@ -534,20 +557,76 @@ temporal_display!(time64us_to_time, time_format, Time64MicrosecondType);
 temporal_display!(time64ns_to_time, time_format, Time64NanosecondType);
 
 macro_rules! duration_display {
-    ($convert:ident, $t:ty) => {
-        impl<'a> DisplayIndex for &'a PrimitiveArray<$t> {
-            fn write(&self, idx: usize, f: &mut dyn Write) -> FormatResult {
-                write!(f, "{}", $convert(self.value(idx)))?;
+    ($convert:ident, $t:ty, $scale:tt) => {
+        impl<'a> DisplayIndexState<'a> for &'a PrimitiveArray<$t> {
+            type State = DurationFormat;
+
+            fn prepare(&self, options: &FormatOptions<'a>) -> Result<Self::State, ArrowError> {
+                Ok(options.duration_format)
+            }
+
+            fn write(&self, fmt: &Self::State, idx: usize, f: &mut dyn Write) -> FormatResult {
+                let v = self.value(idx);
+                match fmt {
+                    DurationFormat::ISO8601 => write!(f, "{}", $convert(v))?,
+                    DurationFormat::Pretty => duration_fmt!(f, v, $scale)?,
+                }
                 Ok(())
             }
         }
     };
 }
 
-duration_display!(duration_s_to_duration, DurationSecondType);
-duration_display!(duration_ms_to_duration, DurationMillisecondType);
-duration_display!(duration_us_to_duration, DurationMicrosecondType);
-duration_display!(duration_ns_to_duration, DurationNanosecondType);
+macro_rules! duration_fmt {
+    ($f:ident, $v:expr, 0) => {{
+        let secs = $v;
+        let mins = secs / 60;
+        let hours = mins / 60;
+        let days = hours / 24;
+
+        let secs = secs - (mins * 60);
+        let mins = mins - (hours * 60);
+        let hours = hours - (days * 24);
+        write!($f, "{days} days {hours} hours {mins} mins {secs} secs")
+    }};
+    ($f:ident, $v:expr, $scale:tt) => {{
+        let subsec = $v;
+        let secs = subsec / 10_i64.pow($scale);
+        let mins = secs / 60;
+        let hours = mins / 60;
+        let days = hours / 24;
+
+        let subsec = subsec - (secs * 10_i64.pow($scale));
+        let secs = secs - (mins * 60);
+        let mins = mins - (hours * 60);
+        let hours = hours - (days * 24);
+        match subsec.is_negative() {
+            true => {
+                write!(
+                    $f,
+                    concat!("{} days {} hours {} mins -{}.{:0", $scale, "} secs"),
+                    days,
+                    hours,
+                    mins,
+                    secs.abs(),
+                    subsec.abs()
+                )
+            }
+            false => {
+                write!(
+                    $f,
+                    concat!("{} days {} hours {} mins {}.{:0", $scale, "} secs"),
+                    days, hours, mins, secs, subsec
+                )
+            }
+        }
+    }};
+}
+
+duration_display!(duration_s_to_duration, DurationSecondType, 0);
+duration_display!(duration_ms_to_duration, DurationMillisecondType, 3);
+duration_display!(duration_us_to_duration, DurationMicrosecondType, 6);
+duration_display!(duration_ns_to_duration, DurationNanosecondType, 9);
 
 impl<'a> DisplayIndex for &'a PrimitiveArray<IntervalYearMonthType> {
     fn write(&self, idx: usize, f: &mut dyn Write) -> FormatResult {
@@ -603,8 +682,7 @@ impl<'a> DisplayIndex for &'a PrimitiveArray<IntervalMonthDayNanoType> {
     fn write(&self, idx: usize, f: &mut dyn Write) -> FormatResult {
         let value: u128 = self.value(idx) as u128;
 
-        let months_part: i32 =
-            ((value & 0xFFFFFFFF000000000000000000000000) >> 96) as i32;
+        let months_part: i32 = ((value & 0xFFFFFFFF000000000000000000000000) >> 96) as i32;
         let days_part: i32 = ((value & 0xFFFFFFFF0000000000000000) >> 64) as i32;
         let nanoseconds_part: i64 = (value & 0xFFFFFFFFFFFFFFFF) as i64;
 
@@ -670,6 +748,19 @@ impl<'a, K: ArrowDictionaryKeyType> DisplayIndexState<'a> for &'a DictionaryArra
 
     fn write(&self, s: &Self::State, idx: usize, f: &mut dyn Write) -> FormatResult {
         let value_idx = self.keys().values()[idx].as_usize();
+        s.as_ref().write(value_idx, f)
+    }
+}
+
+impl<'a, K: RunEndIndexType> DisplayIndexState<'a> for &'a RunArray<K> {
+    type State = Box<dyn DisplayIndex + 'a>;
+
+    fn prepare(&self, options: &FormatOptions<'a>) -> Result<Self::State, ArrowError> {
+        make_formatter(self.values().as_ref(), options)
+    }
+
+    fn write(&self, s: &Self::State, idx: usize, f: &mut dyn Write) -> FormatResult {
+        let value_idx = self.get_physical_index(idx);
         s.as_ref().write(value_idx, f)
     }
 }
@@ -836,10 +927,7 @@ impl<'a> DisplayIndexState<'a> for &'a UnionArray {
 /// suitable for converting large arrays or record batches.
 ///
 /// Please see [`ArrayFormatter`] for a more performant interface
-pub fn array_value_to_string(
-    column: &dyn Array,
-    row: usize,
-) -> Result<String, ArrowError> {
+pub fn array_value_to_string(column: &dyn Array, row: usize) -> Result<String, ArrowError> {
     let options = FormatOptions::default().with_display_error(true);
     let formatter = ArrayFormatter::try_new(column, &options)?;
     Ok(formatter.value(row).to_string())
@@ -864,10 +952,22 @@ pub fn lexical_to_string<N: lexical_core::ToLexical>(n: N) -> String {
 
 #[cfg(test)]
 mod tests {
+    use arrow_array::builder::StringRunBuilder;
+
     use super::*;
 
+    /// Test to verify options can be constant. See #4580
+    const TEST_CONST_OPTIONS: FormatOptions<'static> = FormatOptions::new()
+        .with_date_format(Some("foo"))
+        .with_timestamp_format(Some("404"));
+
     #[test]
-    fn test_map_arry_to_string() {
+    fn test_const_options() {
+        assert_eq!(TEST_CONST_OPTIONS.date_format, Some("foo"));
+    }
+
+    #[test]
+    fn test_map_array_to_string() {
         let keys = vec!["a", "b", "c", "d", "e", "f", "g", "h"];
         let values_data = UInt32Array::from(vec![0u32, 10, 20, 30, 40, 50, 60, 70]);
 
@@ -875,37 +975,144 @@ mod tests {
         //  [[a, b, c], [d, e, f], [g, h]]
         let entry_offsets = [0, 3, 6, 8];
 
-        let map_array = MapArray::new_from_strings(
-            keys.clone().into_iter(),
-            &values_data,
-            &entry_offsets,
-        )
-        .unwrap();
+        let map_array =
+            MapArray::new_from_strings(keys.clone().into_iter(), &values_data, &entry_offsets)
+                .unwrap();
         assert_eq!(
             "{d: 30, e: 40, f: 50}",
             array_value_to_string(&map_array, 1).unwrap()
         );
     }
 
+    fn format_array(array: &dyn Array, fmt: &FormatOptions) -> Vec<String> {
+        let fmt = ArrayFormatter::try_new(array, fmt).unwrap();
+        (0..array.len()).map(|x| fmt.value(x).to_string()).collect()
+    }
+
     #[test]
     fn test_array_value_to_string_duration() {
-        let ns_array = DurationNanosecondArray::from(vec![Some(1), None]);
+        let iso_fmt = FormatOptions::new();
+        let pretty_fmt = FormatOptions::new().with_duration_format(DurationFormat::Pretty);
+
+        let array = DurationNanosecondArray::from(vec![
+            1,
+            -1,
+            1000,
+            -1000,
+            (45 * 60 * 60 * 24 + 14 * 60 * 60 + 2 * 60 + 34) * 1_000_000_000 + 123456789,
+            -(45 * 60 * 60 * 24 + 14 * 60 * 60 + 2 * 60 + 34) * 1_000_000_000 - 123456789,
+        ]);
+        let iso = format_array(&array, &iso_fmt);
+        let pretty = format_array(&array, &pretty_fmt);
+
+        assert_eq!(iso[0], "PT0.000000001S");
+        assert_eq!(pretty[0], "0 days 0 hours 0 mins 0.000000001 secs");
+        assert_eq!(iso[1], "-PT0.000000001S");
+        assert_eq!(pretty[1], "0 days 0 hours 0 mins -0.000000001 secs");
+        assert_eq!(iso[2], "PT0.000001S");
+        assert_eq!(pretty[2], "0 days 0 hours 0 mins 0.000001000 secs");
+        assert_eq!(iso[3], "-PT0.000001S");
+        assert_eq!(pretty[3], "0 days 0 hours 0 mins -0.000001000 secs");
+        assert_eq!(iso[4], "P45DT50554.123456789S");
+        assert_eq!(pretty[4], "45 days 14 hours 2 mins 34.123456789 secs");
+        assert_eq!(iso[5], "-P45DT50554.123456789S");
+        assert_eq!(pretty[5], "-45 days -14 hours -2 mins -34.123456789 secs");
+
+        let array = DurationMicrosecondArray::from(vec![
+            1,
+            -1,
+            1000,
+            -1000,
+            (45 * 60 * 60 * 24 + 14 * 60 * 60 + 2 * 60 + 34) * 1_000_000 + 123456,
+            -(45 * 60 * 60 * 24 + 14 * 60 * 60 + 2 * 60 + 34) * 1_000_000 - 123456,
+        ]);
+        let iso = format_array(&array, &iso_fmt);
+        let pretty = format_array(&array, &pretty_fmt);
+
+        assert_eq!(iso[0], "PT0.000001S");
+        assert_eq!(pretty[0], "0 days 0 hours 0 mins 0.000001 secs");
+        assert_eq!(iso[1], "-PT0.000001S");
+        assert_eq!(pretty[1], "0 days 0 hours 0 mins -0.000001 secs");
+        assert_eq!(iso[2], "PT0.001S");
+        assert_eq!(pretty[2], "0 days 0 hours 0 mins 0.001000 secs");
+        assert_eq!(iso[3], "-PT0.001S");
+        assert_eq!(pretty[3], "0 days 0 hours 0 mins -0.001000 secs");
+        assert_eq!(iso[4], "P45DT50554.123456S");
+        assert_eq!(pretty[4], "45 days 14 hours 2 mins 34.123456 secs");
+        assert_eq!(iso[5], "-P45DT50554.123456S");
+        assert_eq!(pretty[5], "-45 days -14 hours -2 mins -34.123456 secs");
+
+        let array = DurationMillisecondArray::from(vec![
+            1,
+            -1,
+            1000,
+            -1000,
+            (45 * 60 * 60 * 24 + 14 * 60 * 60 + 2 * 60 + 34) * 1_000 + 123,
+            -(45 * 60 * 60 * 24 + 14 * 60 * 60 + 2 * 60 + 34) * 1_000 - 123,
+        ]);
+        let iso = format_array(&array, &iso_fmt);
+        let pretty = format_array(&array, &pretty_fmt);
+
+        assert_eq!(iso[0], "PT0.001S");
+        assert_eq!(pretty[0], "0 days 0 hours 0 mins 0.001 secs");
+        assert_eq!(iso[1], "-PT0.001S");
+        assert_eq!(pretty[1], "0 days 0 hours 0 mins -0.001 secs");
+        assert_eq!(iso[2], "PT1S");
+        assert_eq!(pretty[2], "0 days 0 hours 0 mins 1.000 secs");
+        assert_eq!(iso[3], "-PT1S");
+        assert_eq!(pretty[3], "0 days 0 hours 0 mins -1.000 secs");
+        assert_eq!(iso[4], "P45DT50554.123S");
+        assert_eq!(pretty[4], "45 days 14 hours 2 mins 34.123 secs");
+        assert_eq!(iso[5], "-P45DT50554.123S");
+        assert_eq!(pretty[5], "-45 days -14 hours -2 mins -34.123 secs");
+
+        let array = DurationSecondArray::from(vec![
+            1,
+            -1,
+            1000,
+            -1000,
+            45 * 60 * 60 * 24 + 14 * 60 * 60 + 2 * 60 + 34,
+            -45 * 60 * 60 * 24 - 14 * 60 * 60 - 2 * 60 - 34,
+        ]);
+        let iso = format_array(&array, &iso_fmt);
+        let pretty = format_array(&array, &pretty_fmt);
+
+        assert_eq!(iso[0], "PT1S");
+        assert_eq!(pretty[0], "0 days 0 hours 0 mins 1 secs");
+        assert_eq!(iso[1], "-PT1S");
+        assert_eq!(pretty[1], "0 days 0 hours 0 mins -1 secs");
+        assert_eq!(iso[2], "PT1000S");
+        assert_eq!(pretty[2], "0 days 0 hours 16 mins 40 secs");
+        assert_eq!(iso[3], "-PT1000S");
+        assert_eq!(pretty[3], "0 days 0 hours -16 mins -40 secs");
+        assert_eq!(iso[4], "P45DT50554S");
+        assert_eq!(pretty[4], "45 days 14 hours 2 mins 34 secs");
+        assert_eq!(iso[5], "-P45DT50554S");
+        assert_eq!(pretty[5], "-45 days -14 hours -2 mins -34 secs");
+    }
+
+    #[test]
+    fn test_null() {
+        let array = NullArray::new(2);
+        let options = FormatOptions::new().with_null("NULL");
+        let formatted = format_array(&array, &options);
+        assert_eq!(formatted, &["NULL".to_string(), "NULL".to_string()])
+    }
+
+    #[test]
+    fn test_string_run_arry_to_string() {
+        let mut builder = StringRunBuilder::<Int32Type>::new();
+
+        builder.append_value("input_value");
+        builder.append_value("input_value");
+        builder.append_value("input_value");
+        builder.append_value("input_value1");
+
+        let map_array = builder.finish();
+        assert_eq!("input_value", array_value_to_string(&map_array, 1).unwrap());
         assert_eq!(
-            array_value_to_string(&ns_array, 0).unwrap(),
-            "PT0.000000001S"
+            "input_value1",
+            array_value_to_string(&map_array, 3).unwrap()
         );
-        assert_eq!(array_value_to_string(&ns_array, 1).unwrap(), "");
-
-        let us_array = DurationMicrosecondArray::from(vec![Some(1), None]);
-        assert_eq!(array_value_to_string(&us_array, 0).unwrap(), "PT0.000001S");
-        assert_eq!(array_value_to_string(&us_array, 1).unwrap(), "");
-
-        let ms_array = DurationMillisecondArray::from(vec![Some(1), None]);
-        assert_eq!(array_value_to_string(&ms_array, 0).unwrap(), "PT0.001S");
-        assert_eq!(array_value_to_string(&ms_array, 1).unwrap(), "");
-
-        let s_array = DurationSecondArray::from(vec![Some(1), None]);
-        assert_eq!(array_value_to_string(&s_array, 0).unwrap(), "PT1S");
-        assert_eq!(array_value_to_string(&s_array, 1).unwrap(), "");
     }
 }

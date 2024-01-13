@@ -15,16 +15,14 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::builder::null_buffer_builder::NullBufferBuilder;
 use crate::builder::*;
-use crate::{Array, ArrayRef, StructArray};
-use arrow_buffer::Buffer;
-use arrow_data::ArrayData;
+use crate::{ArrayRef, StructArray};
+use arrow_buffer::NullBufferBuilder;
 use arrow_schema::{DataType, Fields, IntervalUnit, TimeUnit};
 use std::any::Any;
 use std::sync::Arc;
 
-/// Array builder for Struct types.
+/// Builder for [`StructArray`]
 ///
 /// Note that callers should make sure that methods of all the child field builders are
 /// properly called to maintain the consistency of the data structure.
@@ -52,11 +50,6 @@ impl ArrayBuilder for StructBuilder {
     /// builder should have the equal number of elements.
     fn len(&self) -> usize {
         self.null_buffer_builder.len()
-    }
-
-    /// Returns whether the number of array slots is zero
-    fn is_empty(&self) -> bool {
-        self.len() == 0
     }
 
     /// Builds the array.
@@ -99,7 +92,7 @@ impl ArrayBuilder for StructBuilder {
 pub fn make_builder(datatype: &DataType, capacity: usize) -> Box<dyn ArrayBuilder> {
     use crate::builder::*;
     match datatype {
-        DataType::Null => unimplemented!(),
+        DataType::Null => Box::new(NullBuilder::with_capacity(capacity)),
         DataType::Boolean => Box::new(BooleanBuilder::with_capacity(capacity)),
         DataType::Int8 => Box::new(Int8Builder::with_capacity(capacity)),
         DataType::Int16 => Box::new(Int16Builder::with_capacity(capacity)),
@@ -109,17 +102,22 @@ pub fn make_builder(datatype: &DataType, capacity: usize) -> Box<dyn ArrayBuilde
         DataType::UInt16 => Box::new(UInt16Builder::with_capacity(capacity)),
         DataType::UInt32 => Box::new(UInt32Builder::with_capacity(capacity)),
         DataType::UInt64 => Box::new(UInt64Builder::with_capacity(capacity)),
+        DataType::Float16 => Box::new(Float16Builder::with_capacity(capacity)),
         DataType::Float32 => Box::new(Float32Builder::with_capacity(capacity)),
         DataType::Float64 => Box::new(Float64Builder::with_capacity(capacity)),
         DataType::Binary => Box::new(BinaryBuilder::with_capacity(capacity, 1024)),
+        DataType::LargeBinary => Box::new(LargeBinaryBuilder::with_capacity(capacity, 1024)),
         DataType::FixedSizeBinary(len) => {
             Box::new(FixedSizeBinaryBuilder::with_capacity(capacity, *len))
         }
         DataType::Decimal128(p, s) => Box::new(
-            Decimal128Builder::with_capacity(capacity)
-                .with_data_type(DataType::Decimal128(*p, *s)),
+            Decimal128Builder::with_capacity(capacity).with_data_type(DataType::Decimal128(*p, *s)),
+        ),
+        DataType::Decimal256(p, s) => Box::new(
+            Decimal256Builder::with_capacity(capacity).with_data_type(DataType::Decimal256(*p, *s)),
         ),
         DataType::Utf8 => Box::new(StringBuilder::with_capacity(capacity, 1024)),
+        DataType::LargeUtf8 => Box::new(LargeStringBuilder::with_capacity(capacity, 1024)),
         DataType::Date32 => Box::new(Date32Builder::with_capacity(capacity)),
         DataType::Date64 => Box::new(Date64Builder::with_capacity(capacity)),
         DataType::Time32(TimeUnit::Second) => {
@@ -171,19 +169,40 @@ pub fn make_builder(datatype: &DataType, capacity: usize) -> Box<dyn ArrayBuilde
         DataType::Duration(TimeUnit::Nanosecond) => {
             Box::new(DurationNanosecondBuilder::with_capacity(capacity))
         }
-        DataType::Struct(fields) => {
-            Box::new(StructBuilder::from_fields(fields.clone(), capacity))
+        DataType::List(field) => {
+            let builder = make_builder(field.data_type(), capacity);
+            Box::new(ListBuilder::with_capacity(builder, capacity))
         }
+        DataType::LargeList(field) => {
+            let builder = make_builder(field.data_type(), capacity);
+            Box::new(LargeListBuilder::with_capacity(builder, capacity))
+        }
+        DataType::Map(field, _) => match field.data_type() {
+            DataType::Struct(fields) => {
+                let map_field_names = MapFieldNames {
+                    key: fields[0].name().clone(),
+                    value: fields[1].name().clone(),
+                    entry: field.name().clone(),
+                };
+                let key_builder = make_builder(fields[0].data_type(), capacity);
+                let value_builder = make_builder(fields[1].data_type(), capacity);
+                Box::new(MapBuilder::with_capacity(
+                    Some(map_field_names),
+                    key_builder,
+                    value_builder,
+                    capacity,
+                ))
+            }
+            t => panic!("The field of Map data type {t:?} should has a child Struct field"),
+        },
+        DataType::Struct(fields) => Box::new(StructBuilder::from_fields(fields.clone(), capacity)),
         t => panic!("Data type {t:?} is not currently supported"),
     }
 }
 
 impl StructBuilder {
     /// Creates a new `StructBuilder`
-    pub fn new(
-        fields: impl Into<Fields>,
-        field_builders: Vec<Box<dyn ArrayBuilder>>,
-    ) -> Self {
+    pub fn new(fields: impl Into<Fields>, field_builders: Vec<Box<dyn ArrayBuilder>>) -> Self {
         Self {
             field_builders,
             fields: fields.into(),
@@ -229,46 +248,35 @@ impl StructBuilder {
     /// Builds the `StructArray` and reset this builder.
     pub fn finish(&mut self) -> StructArray {
         self.validate_content();
-
-        let mut child_data = Vec::with_capacity(self.field_builders.len());
-        for f in &mut self.field_builders {
-            let arr = f.finish();
-            child_data.push(arr.to_data());
+        if self.fields.is_empty() {
+            return StructArray::new_empty_fields(self.len(), self.null_buffer_builder.finish());
         }
-        let length = self.len();
-        let null_bit_buffer = self.null_buffer_builder.finish();
 
-        let builder = ArrayData::builder(DataType::Struct(self.fields.clone()))
-            .len(length)
-            .child_data(child_data)
-            .null_bit_buffer(null_bit_buffer);
-
-        let array_data = unsafe { builder.build_unchecked() };
-        StructArray::from(array_data)
+        let arrays = self.field_builders.iter_mut().map(|f| f.finish()).collect();
+        let nulls = self.null_buffer_builder.finish();
+        StructArray::new(self.fields.clone(), arrays, nulls)
     }
 
     /// Builds the `StructArray` without resetting the builder.
     pub fn finish_cloned(&self) -> StructArray {
         self.validate_content();
 
-        let mut child_data = Vec::with_capacity(self.field_builders.len());
-        for f in &self.field_builders {
-            let arr = f.finish_cloned();
-            child_data.push(arr.to_data());
+        if self.fields.is_empty() {
+            return StructArray::new_empty_fields(
+                self.len(),
+                self.null_buffer_builder.finish_cloned(),
+            );
         }
-        let length = self.len();
-        let null_bit_buffer = self
-            .null_buffer_builder
-            .as_slice()
-            .map(Buffer::from_slice_ref);
 
-        let builder = ArrayData::builder(DataType::Struct(self.fields.clone()))
-            .len(length)
-            .child_data(child_data)
-            .null_bit_buffer(null_bit_buffer);
+        let arrays = self
+            .field_builders
+            .iter()
+            .map(|f| f.finish_cloned())
+            .collect();
 
-        let array_data = unsafe { builder.build_unchecked() };
-        StructArray::from(array_data)
+        let nulls = self.null_buffer_builder.finish_cloned();
+
+        StructArray::new(self.fields.clone(), arrays, nulls)
     }
 
     /// Constructs and validates contents in the builder to ensure that
@@ -288,6 +296,7 @@ impl StructBuilder {
 mod tests {
     use super::*;
     use arrow_buffer::Buffer;
+    use arrow_data::ArrayData;
     use arrow_schema::Field;
 
     use crate::array::Array;
@@ -298,8 +307,8 @@ mod tests {
         let int_builder = Int32Builder::new();
 
         let fields = vec![
-            Field::new("f1", DataType::Utf8, false),
-            Field::new("f2", DataType::Int32, false),
+            Field::new("f1", DataType::Utf8, true),
+            Field::new("f2", DataType::Int32, true),
         ];
         let field_builders = vec![
             Box::new(string_builder) as Box<dyn ArrayBuilder>,
@@ -523,15 +532,15 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(
-        expected = "Data type List(Field { name: \"item\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }) is not currently supported"
-    )]
+    #[should_panic(expected = "Data type Dictionary(Int32, Utf8) is not currently supported")]
     fn test_struct_array_builder_from_schema_unsupported_type() {
-        let list_type =
-            DataType::List(Arc::new(Field::new("item", DataType::Int64, true)));
         let fields = vec![
             Field::new("f1", DataType::Int16, false),
-            Field::new("f2", list_type, false),
+            Field::new(
+                "f2",
+                DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+                false,
+            ),
         ];
 
         let _ = StructBuilder::from_fields(fields, 5);
@@ -574,9 +583,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(
-        expected = "Number of fields is not equal to the number of field_builders."
-    )]
+    #[should_panic(expected = "Number of fields is not equal to the number of field_builders.")]
     fn test_struct_array_builder_unequal_field_field_builders() {
         let int_builder = Int32Builder::with_capacity(10);
 
@@ -588,5 +595,38 @@ mod tests {
 
         let mut builder = StructBuilder::new(fields, field_builders);
         builder.finish();
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "Incorrect datatype for StructArray field \\\"timestamp\\\", expected Timestamp(Nanosecond, Some(\\\"UTC\\\")) got Timestamp(Nanosecond, None)"
+    )]
+    fn test_struct_array_mismatch_builder() {
+        let fields = vec![Field::new(
+            "timestamp",
+            DataType::Timestamp(TimeUnit::Nanosecond, Some("UTC".to_owned().into())),
+            false,
+        )];
+
+        let field_builders: Vec<Box<dyn ArrayBuilder>> =
+            vec![Box::new(TimestampNanosecondBuilder::new())];
+
+        let mut sa = StructBuilder::new(fields, field_builders);
+        sa.finish();
+    }
+
+    #[test]
+    fn test_empty() {
+        let mut builder = StructBuilder::new(Fields::empty(), vec![]);
+        builder.append(true);
+        builder.append(false);
+
+        let a1 = builder.finish_cloned();
+        let a2 = builder.finish();
+        assert_eq!(a1, a2);
+        assert_eq!(a1.len(), 2);
+        assert_eq!(a1.null_count(), 1);
+        assert!(a1.is_valid(0));
+        assert!(a1.is_null(1));
     }
 }

@@ -23,7 +23,7 @@ use super::{ArrayBuilder, PrimitiveBuilder};
 
 use arrow_buffer::ArrowNativeType;
 
-/// Array builder for [`RunArray`] that encodes primitive values.
+/// Builder for [`RunArray`] of [`PrimitiveArray`](crate::array::PrimitiveArray)
 ///
 /// # Example:
 ///
@@ -134,11 +134,6 @@ where
     /// the eventual runs array.
     fn len(&self) -> usize {
         self.current_run_end_index
-    }
-
-    /// Returns whether the number of array slots is zero
-    fn is_empty(&self) -> bool {
-        self.current_run_end_index == 0
     }
 
     /// Builds the array and reset this builder.

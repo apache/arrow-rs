@@ -22,7 +22,7 @@
 //! This is handled by [FFI_ArrowSchema] and [FFI_ArrowArray].
 //!
 //! The second interface maps native Rust types to the Rust-specific implementation of Arrow such as `format` to `Datatype`,
-//! `Buffer`, etc. This is handled by `ArrowArray`.
+//! `Buffer`, etc. This is handled by `from_ffi` and `to_ffi`.
 //!
 //!
 //! Export to FFI
@@ -31,26 +31,26 @@
 //! # use std::sync::Arc;
 //! # use arrow::array::{Int32Array, Array, ArrayData, make_array};
 //! # use arrow::error::Result;
-//! # use arrow::compute::kernels::arithmetic;
-//! # use arrow::ffi::{ArrowArray, FFI_ArrowArray, FFI_ArrowSchema};
+//! # use arrow_arith::numeric::add;
+//! # use arrow::ffi::{to_ffi, from_ffi};
 //! # fn main() -> Result<()> {
 //! // create an array natively
+//!
 //! let array = Int32Array::from(vec![Some(1), None, Some(3)]);
 //! let data = array.into_data();
 //!
 //! // Export it
-//! let out_array = FFI_ArrowArray::new(&data);
-//! let out_schema = FFI_ArrowSchema::try_from(data.data_type())?;
+//! let (out_array, out_schema) = to_ffi(&data)?;
 //!
 //! // import it
-//! let array = ArrowArray::new(out_array, out_schema);
-//! let array = Int32Array::from(ArrayData::try_from(array)?);
+//! let data = unsafe { from_ffi(out_array, &out_schema) }?;
+//! let array = Int32Array::from(data);
 //!
 //! // perform some operation
-//! let array = arithmetic::add(&array, &array)?;
+//! let array = add(&array, &array)?;
 //!
 //! // verify
-//! assert_eq!(array, Int32Array::from(vec![Some(2), None, Some(6)]));
+//! assert_eq!(array.as_ref(), &Int32Array::from(vec![Some(2), None, Some(6)]));
 //! #
 //! # Ok(())
 //! # }
@@ -60,7 +60,7 @@
 //!
 //! ```
 //! # use std::ptr::addr_of_mut;
-//! # use arrow::ffi::{ArrowArray, FFI_ArrowArray, FFI_ArrowSchema};
+//! # use arrow::ffi::{from_ffi, FFI_ArrowArray, FFI_ArrowSchema};
 //! # use arrow_array::{ArrayRef, make_array};
 //! # use arrow_schema::ArrowError;
 //! #
@@ -80,7 +80,7 @@
 //!     let mut schema = FFI_ArrowSchema::empty();
 //!     let mut array = FFI_ArrowArray::empty();
 //!     foreign.export_to_c(addr_of_mut!(array), addr_of_mut!(schema));
-//!     Ok(make_array(ArrowArray::new(array, schema).try_into()?))
+//!     Ok(make_array(unsafe { from_ffi(array, &schema) }?))
 //! }
 //! ```
 
@@ -106,6 +106,9 @@ To export an array, create an `ArrowArray` using [ArrowArray::try_new].
 
 use std::{mem::size_of, ptr::NonNull, sync::Arc};
 
+pub use arrow_data::ffi::FFI_ArrowArray;
+pub use arrow_schema::ffi::{FFI_ArrowSchema, Flags};
+
 use arrow_schema::UnionMode;
 
 use crate::array::{layout, ArrayData};
@@ -113,9 +116,6 @@ use crate::buffer::{Buffer, MutableBuffer};
 use crate::datatypes::DataType;
 use crate::error::{ArrowError, Result};
 use crate::util::bit_util;
-
-pub use arrow_data::ffi::FFI_ArrowArray;
-pub use arrow_schema::ffi::{FFI_ArrowSchema, Flags};
 
 // returns the number of bits that buffer `i` (in the C data interface) is expected to have.
 // This is set by the Arrow specification
@@ -222,14 +222,64 @@ unsafe fn create_buffer(
         .map(|ptr| Buffer::from_custom_allocation(ptr, len, owner))
 }
 
-pub trait ArrowArrayRef {
-    fn to_data(&self) -> Result<ArrayData> {
-        let data_type = self.data_type()?;
-        let len = self.array().len();
-        let offset = self.array().offset();
-        let null_count = self.array().null_count();
+/// Export to the C Data Interface
+pub fn to_ffi(data: &ArrayData) -> Result<(FFI_ArrowArray, FFI_ArrowSchema)> {
+    let array = FFI_ArrowArray::new(data);
+    let schema = FFI_ArrowSchema::try_from(data.data_type())?;
+    Ok((array, schema))
+}
 
-        let data_layout = layout(&data_type);
+/// Import [ArrayData] from the C Data Interface
+///
+/// # Safety
+///
+/// This struct assumes that the incoming data agrees with the C data interface.
+pub unsafe fn from_ffi(array: FFI_ArrowArray, schema: &FFI_ArrowSchema) -> Result<ArrayData> {
+    let dt = DataType::try_from(schema)?;
+    let array = Arc::new(array);
+    let tmp = ImportedArrowArray {
+        array: &array,
+        data_type: dt,
+        owner: &array,
+    };
+    tmp.consume()
+}
+
+/// Import [ArrayData] from the C Data Interface
+///
+/// # Safety
+///
+/// This struct assumes that the incoming data agrees with the C data interface.
+pub unsafe fn from_ffi_and_data_type(
+    array: FFI_ArrowArray,
+    data_type: DataType,
+) -> Result<ArrayData> {
+    let array = Arc::new(array);
+    let tmp = ImportedArrowArray {
+        array: &array,
+        data_type,
+        owner: &array,
+    };
+    tmp.consume()
+}
+
+#[derive(Debug)]
+struct ImportedArrowArray<'a> {
+    array: &'a FFI_ArrowArray,
+    data_type: DataType,
+    owner: &'a Arc<FFI_ArrowArray>,
+}
+
+impl<'a> ImportedArrowArray<'a> {
+    fn consume(self) -> Result<ArrayData> {
+        let len = self.array.len();
+        let offset = self.array.offset();
+        let null_count = match &self.data_type {
+            DataType::Null => 0,
+            _ => self.array.null_count(),
+        };
+
+        let data_layout = layout(&self.data_type);
         let buffers = self.buffers(data_layout.can_contain_null_mask)?;
 
         let null_bit_buffer = if data_layout.can_contain_null_mask {
@@ -238,25 +288,19 @@ pub trait ArrowArrayRef {
             None
         };
 
-        let mut child_data: Vec<ArrayData> = (0..self.array().num_children())
-            .map(|i| {
-                let child = self.child(i);
-                child.to_data()
-            })
-            .map(|d| d.unwrap())
-            .collect();
+        let mut child_data = self.consume_children()?;
 
-        if let Some(d) = self.dictionary() {
+        if let Some(d) = self.dictionary()? {
             // For dictionary type there should only be a single child, so we don't need to worry if
             // there are other children added above.
             assert!(child_data.is_empty());
-            child_data.push(d.to_data()?);
+            child_data.push(d.consume()?);
         }
 
         // Should FFI be checking validity?
         Ok(unsafe {
             ArrayData::new_unchecked(
-                data_type,
+                self.data_type,
                 len,
                 Some(null_count),
                 null_bit_buffer,
@@ -267,18 +311,51 @@ pub trait ArrowArrayRef {
         })
     }
 
+    fn consume_children(&self) -> Result<Vec<ArrayData>> {
+        match &self.data_type {
+            DataType::List(field)
+            | DataType::FixedSizeList(field, _)
+            | DataType::LargeList(field)
+            | DataType::Map(field, _) => Ok([self.consume_child(0, field.data_type())?].to_vec()),
+            DataType::Struct(fields) => {
+                assert!(fields.len() == self.array.num_children());
+                fields
+                    .iter()
+                    .enumerate()
+                    .map(|(i, field)| self.consume_child(i, field.data_type()))
+                    .collect::<Result<Vec<_>>>()
+            }
+            DataType::Union(union_fields, _) => {
+                assert!(union_fields.len() == self.array.num_children());
+                union_fields
+                    .iter()
+                    .enumerate()
+                    .map(|(i, (_, field))| self.consume_child(i, field.data_type()))
+                    .collect::<Result<Vec<_>>>()
+            }
+            _ => Ok(Vec::new()),
+        }
+    }
+
+    fn consume_child(&self, index: usize, child_type: &DataType) -> Result<ArrayData> {
+        ImportedArrowArray {
+            array: self.array.child(index),
+            data_type: child_type.clone(),
+            owner: self.owner,
+        }
+        .consume()
+    }
+
     /// returns all buffers, as organized by Rust (i.e. null buffer is skipped if it's present
     /// in the spec of the type)
     fn buffers(&self, can_contain_null_mask: bool) -> Result<Vec<Buffer>> {
         // + 1: skip null buffer
         let buffer_begin = can_contain_null_mask as usize;
-        (buffer_begin..self.array().num_buffers())
+        (buffer_begin..self.array.num_buffers())
             .map(|index| {
-                let len = self.buffer_len(index)?;
+                let len = self.buffer_len(index, &self.data_type)?;
 
-                match unsafe {
-                    create_buffer(self.owner().clone(), self.array(), index, len)
-                } {
+                match unsafe { create_buffer(self.owner.clone(), self.array, index, len) } {
                     Some(buf) => Ok(buf),
                     None if len == 0 => {
                         // Null data buffer, which Rust doesn't allow. So create
@@ -297,17 +374,16 @@ pub trait ArrowArrayRef {
     /// Rust implementation uses fixed-sized buffers, which require knowledge of their `len`.
     /// for variable-sized buffers, such as the second buffer of a stringArray, we need
     /// to fetch offset buffer's len to build the second buffer.
-    fn buffer_len(&self, i: usize) -> Result<usize> {
+    fn buffer_len(&self, i: usize, dt: &DataType) -> Result<usize> {
         // Special handling for dictionary type as we only care about the key type in the case.
-        let t = self.data_type()?;
-        let data_type = match &t {
+        let data_type = match dt {
             DataType::Dictionary(key_data_type, _) => key_data_type.as_ref(),
             dt => dt,
         };
 
         // `ffi::ArrowArray` records array offset, we need to add it back to the
         // buffer length to get the actual buffer length.
-        let length = self.array().len() + self.array().offset();
+        let length = self.array.len() + self.array.offset();
 
         // Inner type is not important for buffer length.
         Ok(match (&data_type, i) {
@@ -325,21 +401,21 @@ pub trait ArrowArrayRef {
             }
             (DataType::Utf8, 2) | (DataType::Binary, 2) => {
                 // the len of the data buffer (buffer 2) equals the last value of the offset buffer (buffer 1)
-                let len = self.buffer_len(1)?;
+                let len = self.buffer_len(1, dt)?;
                 // first buffer is the null buffer => add(1)
                 // we assume that pointer is aligned for `i32`, as Utf8 uses `i32` offsets.
                 #[allow(clippy::cast_ptr_alignment)]
-                let offset_buffer = self.array().buffer(1) as *const i32;
+                let offset_buffer = self.array.buffer(1) as *const i32;
                 // get last offset
                 (unsafe { *offset_buffer.add(len / size_of::<i32>() - 1) }) as usize
             }
             (DataType::LargeUtf8, 2) | (DataType::LargeBinary, 2) => {
                 // the len of the data buffer (buffer 2) equals the last value of the offset buffer (buffer 1)
-                let len = self.buffer_len(1)?;
+                let len = self.buffer_len(1, dt)?;
                 // first buffer is the null buffer => add(1)
                 // we assume that pointer is aligned for `i64`, as Large uses `i64` offsets.
                 #[allow(clippy::cast_ptr_alignment)]
-                let offset_buffer = self.array().buffer(1) as *const i64;
+                let offset_buffer = self.array.buffer(1) as *const i64;
                 // get last offset
                 (unsafe { *offset_buffer.add(len / size_of::<i64>() - 1) }) as usize
             }
@@ -358,151 +434,52 @@ pub trait ArrowArrayRef {
         // similar to `self.buffer_len(0)`, but without `Result`.
         // `ffi::ArrowArray` records array offset, we need to add it back to the
         // buffer length to get the actual buffer length.
-        let length = self.array().len() + self.array().offset();
+        let length = self.array.len() + self.array.offset();
         let buffer_len = bit_util::ceil(length, 8);
 
-        unsafe { create_buffer(self.owner().clone(), self.array(), 0, buffer_len) }
+        unsafe { create_buffer(self.owner.clone(), self.array, 0, buffer_len) }
     }
 
-    fn child(&self, index: usize) -> ArrowArrayChild {
-        ArrowArrayChild {
-            array: self.array().child(index),
-            schema: self.schema().child(index),
-            owner: self.owner(),
-        }
-    }
-
-    fn owner(&self) -> &Arc<FFI_ArrowArray>;
-    fn array(&self) -> &FFI_ArrowArray;
-    fn schema(&self) -> &FFI_ArrowSchema;
-    fn data_type(&self) -> Result<DataType>;
-    fn dictionary(&self) -> Option<ArrowArrayChild> {
-        match (self.array().dictionary(), self.schema().dictionary()) {
-            (Some(array), Some(schema)) => Some(ArrowArrayChild {
+    fn dictionary(&self) -> Result<Option<ImportedArrowArray>> {
+        match (self.array.dictionary(), &self.data_type) {
+            (Some(array), DataType::Dictionary(_, value_type)) => Ok(Some(ImportedArrowArray {
                 array,
-                schema,
-                owner: self.owner(),
-            }),
-            (None, None) => None,
-            _ => panic!("Dictionary should both be set or not set in FFI_ArrowArray and FFI_ArrowSchema")
+                data_type: value_type.as_ref().clone(),
+                owner: self.owner,
+            })),
+            (Some(_), _) => Err(ArrowError::CDataInterface(
+                "Got dictionary in FFI_ArrowArray for non-dictionary data type".to_string(),
+            )),
+            (None, DataType::Dictionary(_, _)) => Err(ArrowError::CDataInterface(
+                "Missing dictionary in FFI_ArrowArray for dictionary data type".to_string(),
+            )),
+            (_, _) => Ok(None),
         }
-    }
-}
-
-#[allow(rustdoc::private_intra_doc_links)]
-/// Struct used to move an Array from and to the C Data Interface.
-/// Its main responsibility is to expose functionality that requires
-/// both [FFI_ArrowArray] and [FFI_ArrowSchema].
-///
-/// ## Import from the C Data Interface
-/// * [ArrowArray::new] to create an array from [`FFI_ArrowArray`] and [`FFI_ArrowSchema`]
-///
-/// ## Export to the C Data Interface
-/// * Use [`FFI_ArrowArray`] and [`FFI_ArrowSchema`] directly
-///
-/// # Safety
-///
-/// This struct assumes that the incoming data agrees with the C data interface.
-#[derive(Debug)]
-pub struct ArrowArray {
-    pub(crate) array: Arc<FFI_ArrowArray>,
-    pub(crate) schema: Arc<FFI_ArrowSchema>,
-}
-
-#[derive(Debug)]
-pub struct ArrowArrayChild<'a> {
-    array: &'a FFI_ArrowArray,
-    schema: &'a FFI_ArrowSchema,
-    owner: &'a Arc<FFI_ArrowArray>,
-}
-
-impl ArrowArrayRef for ArrowArray {
-    /// the data_type as declared in the schema
-    fn data_type(&self) -> Result<DataType> {
-        DataType::try_from(self.schema.as_ref())
-    }
-
-    fn array(&self) -> &FFI_ArrowArray {
-        self.array.as_ref()
-    }
-
-    fn schema(&self) -> &FFI_ArrowSchema {
-        self.schema.as_ref()
-    }
-
-    fn owner(&self) -> &Arc<FFI_ArrowArray> {
-        &self.array
-    }
-}
-
-impl<'a> ArrowArrayRef for ArrowArrayChild<'a> {
-    /// the data_type as declared in the schema
-    fn data_type(&self) -> Result<DataType> {
-        DataType::try_from(self.schema)
-    }
-
-    fn array(&self) -> &FFI_ArrowArray {
-        self.array
-    }
-
-    fn schema(&self) -> &FFI_ArrowSchema {
-        self.schema
-    }
-
-    fn owner(&self) -> &Arc<FFI_ArrowArray> {
-        self.owner
-    }
-}
-
-impl ArrowArray {
-    /// Creates a new [`ArrowArray`] from the provided array and schema
-    pub fn new(array: FFI_ArrowArray, schema: FFI_ArrowSchema) -> Self {
-        Self {
-            array: Arc::new(array),
-            schema: Arc::new(schema),
-        }
-    }
-
-    /// creates a new `ArrowArray`. This is used to export to the C Data Interface.
-    ///
-    /// # Memory Leaks
-    /// This method releases `buffers`. Consumers of this struct *must* call `release` before
-    /// releasing this struct, or contents in `buffers` leak.
-    pub fn try_new(data: ArrayData) -> Result<Self> {
-        let array = Arc::new(FFI_ArrowArray::new(&data));
-        let schema = Arc::new(FFI_ArrowSchema::try_from(data.data_type())?);
-        Ok(ArrowArray { array, schema })
-    }
-
-    /// creates a new empty [ArrowArray]. Used to import from the C Data Interface.
-    /// # Safety
-    /// See safety of [ArrowArray]
-    pub unsafe fn empty() -> Self {
-        let schema = Arc::new(FFI_ArrowSchema::empty());
-        let array = Arc::new(FFI_ArrowArray::empty());
-        ArrowArray { array, schema }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::array::{
-        make_array, Array, ArrayData, BooleanArray, Decimal128Array, DictionaryArray,
-        DurationSecondArray, FixedSizeBinaryArray, FixedSizeListArray,
-        GenericBinaryArray, GenericListArray, GenericStringArray, Int32Array, MapArray,
-        OffsetSizeTrait, Time32MillisecondArray, TimestampMillisecondArray, UInt32Array,
-    };
-    use crate::compute::kernels;
-    use crate::datatypes::{Field, Int8Type};
-    use arrow_array::builder::UnionBuilder;
-    use arrow_array::cast::AsArray;
-    use arrow_array::types::{Float64Type, Int32Type};
-    use arrow_array::{StructArray, UnionArray};
     use std::collections::HashMap;
     use std::convert::TryFrom;
     use std::mem::ManuallyDrop;
     use std::ptr::addr_of_mut;
+
+    use arrow_array::builder::UnionBuilder;
+    use arrow_array::cast::AsArray;
+    use arrow_array::types::{Float64Type, Int32Type};
+    use arrow_array::*;
+
+    use crate::array::{
+        make_array, Array, ArrayData, BooleanArray, DictionaryArray, DurationSecondArray,
+        FixedSizeBinaryArray, FixedSizeListArray, GenericBinaryArray, GenericListArray,
+        GenericStringArray, Int32Array, MapArray, OffsetSizeTrait, Time32MillisecondArray,
+        TimestampMillisecondArray, UInt32Array,
+    };
+    use crate::compute::kernels;
+    use crate::datatypes::{Field, Int8Type};
+
+    use super::*;
 
     #[test]
     fn test_round_trip() {
@@ -510,14 +487,14 @@ mod tests {
         let array = Int32Array::from(vec![1, 2, 3]);
 
         // export it
-        let array = ArrowArray::try_from(array.into_data()).unwrap();
+        let (array, schema) = to_ffi(&array.into_data()).unwrap();
 
         // (simulate consumer) import it
-        let array = Int32Array::from(ArrayData::try_from(array).unwrap());
-        let array = kernels::arithmetic::add(&array, &array).unwrap();
+        let array = Int32Array::from(unsafe { from_ffi(array, &schema) }.unwrap());
+        let array = kernels::numeric::add(&array, &array).unwrap();
 
         // verify
-        assert_eq!(array, Int32Array::from(vec![2, 4, 6]));
+        assert_eq!(array.as_ref(), &Int32Array::from(vec![2, 4, 6]));
     }
 
     #[test]
@@ -539,11 +516,10 @@ mod tests {
         // We can read them back to memory
         // SAFETY:
         // Pointers are aligned and valid
-        let array = unsafe {
-            ArrowArray::new(std::ptr::read(array_ptr), std::ptr::read(schema_ptr))
-        };
+        let data =
+            unsafe { from_ffi(std::ptr::read(array_ptr), &std::ptr::read(schema_ptr)).unwrap() };
 
-        let array = Int32Array::from(ArrayData::try_from(array).unwrap());
+        let array = Int32Array::from(data);
         assert_eq!(array, Int32Array::from(vec![1, 2, 3]));
     }
 
@@ -555,20 +531,20 @@ mod tests {
         let array = array.slice(1, 2);
 
         // export it
-        let array = ArrowArray::try_from(array.into_data())?;
+        let (array, schema) = to_ffi(&array.to_data())?;
 
         // (simulate consumer) import it
-        let data = ArrayData::try_from(array)?;
+        let data = unsafe { from_ffi(array, &schema) }?;
         let array = make_array(data);
 
         // perform some operation
         let array = array.as_any().downcast_ref::<Int32Array>().unwrap();
         assert_eq!(array, &Int32Array::from(vec![Some(2), None]));
 
-        let array = kernels::arithmetic::add(array, array).unwrap();
+        let array = kernels::numeric::add(array, array).unwrap();
 
         // verify
-        assert_eq!(array, Int32Array::from(vec![Some(4), None]));
+        assert_eq!(array.as_ref(), &Int32Array::from(vec![Some(4), None]));
 
         // (drop/release)
         Ok(())
@@ -585,10 +561,10 @@ mod tests {
             .unwrap();
 
         // export it
-        let array = ArrowArray::try_from(Array::to_data(&original_array))?;
+        let (array, schema) = to_ffi(&original_array.to_data())?;
 
         // (simulate consumer) import it
-        let data = ArrayData::try_from(array)?;
+        let data = unsafe { from_ffi(array, &schema) }?;
         let array = make_array(data);
 
         // perform some operation
@@ -604,14 +580,13 @@ mod tests {
 
     fn test_generic_string<Offset: OffsetSizeTrait>() -> Result<()> {
         // create an array natively
-        let array =
-            GenericStringArray::<Offset>::from(vec![Some("a"), None, Some("aaa")]);
+        let array = GenericStringArray::<Offset>::from(vec![Some("a"), None, Some("aaa")]);
 
         // export it
-        let array = ArrowArray::try_from(array.into_data())?;
+        let (array, schema) = to_ffi(&array.to_data())?;
 
         // (simulate consumer) import it
-        let data = ArrayData::try_from(array)?;
+        let data = unsafe { from_ffi(array, &schema) }?;
         let array = make_array(data);
 
         // perform some operation
@@ -677,10 +652,10 @@ mod tests {
         let array = GenericListArray::<Offset>::from(list_data.clone());
 
         // export it
-        let array = ArrowArray::try_from(array.into_data())?;
+        let (array, schema) = to_ffi(&array.to_data())?;
 
         // (simulate consumer) import it
-        let data = ArrayData::try_from(array)?;
+        let data = unsafe { from_ffi(array, &schema) }?;
         let array = make_array(data);
 
         // downcast
@@ -688,8 +663,6 @@ mod tests {
             .as_any()
             .downcast_ref::<GenericListArray<Offset>>()
             .unwrap();
-
-        dbg!(&array);
 
         // verify
         let expected = GenericListArray::<Offset>::from(list_data);
@@ -717,10 +690,10 @@ mod tests {
         let array = GenericBinaryArray::<Offset>::from(array);
 
         // export it
-        let array = ArrowArray::try_from(array.into_data())?;
+        let (array, schema) = to_ffi(&array.to_data())?;
 
         // (simulate consumer) import it
-        let data = ArrayData::try_from(array)?;
+        let data = unsafe { from_ffi(array, &schema) }?;
         let array = make_array(data);
 
         // perform some operation
@@ -762,10 +735,10 @@ mod tests {
         let array = BooleanArray::from(vec![None, Some(true), Some(false)]);
 
         // export it
-        let array = ArrowArray::try_from(array.into_data())?;
+        let (array, schema) = to_ffi(&array.to_data())?;
 
         // (simulate consumer) import it
-        let data = ArrayData::try_from(array)?;
+        let data = unsafe { from_ffi(array, &schema) }?;
         let array = make_array(data);
 
         // perform some operation
@@ -788,10 +761,10 @@ mod tests {
         let array = Time32MillisecondArray::from(vec![None, Some(1), Some(2)]);
 
         // export it
-        let array = ArrowArray::try_from(array.into_data())?;
+        let (array, schema) = to_ffi(&array.to_data())?;
 
         // (simulate consumer) import it
-        let data = ArrayData::try_from(array)?;
+        let data = unsafe { from_ffi(array, &schema) }?;
         let array = make_array(data);
 
         // perform some operation
@@ -804,14 +777,7 @@ mod tests {
         // verify
         assert_eq!(
             array,
-            &Time32MillisecondArray::from(vec![
-                None,
-                Some(1),
-                Some(2),
-                None,
-                Some(1),
-                Some(2)
-            ])
+            &Time32MillisecondArray::from(vec![None, Some(1), Some(2), None, Some(1), Some(2)])
         );
 
         // (drop/release)
@@ -824,10 +790,10 @@ mod tests {
         let array = TimestampMillisecondArray::from(vec![None, Some(1), Some(2)]);
 
         // export it
-        let array = ArrowArray::try_from(array.into_data())?;
+        let (array, schema) = to_ffi(&array.to_data())?;
 
         // (simulate consumer) import it
-        let data = ArrayData::try_from(array)?;
+        let data = unsafe { from_ffi(array, &schema) }?;
         let array = make_array(data);
 
         // perform some operation
@@ -840,14 +806,7 @@ mod tests {
         // verify
         assert_eq!(
             array,
-            &TimestampMillisecondArray::from(vec![
-                None,
-                Some(1),
-                Some(2),
-                None,
-                Some(1),
-                Some(2)
-            ])
+            &TimestampMillisecondArray::from(vec![None, Some(1), Some(2), None, Some(1), Some(2)])
         );
 
         // (drop/release)
@@ -864,14 +823,13 @@ mod tests {
             Some(vec![30, 30, 30]),
             None,
         ];
-        let array =
-            FixedSizeBinaryArray::try_from_sparse_iter_with_size(values.into_iter(), 3)?;
+        let array = FixedSizeBinaryArray::try_from_sparse_iter_with_size(values.into_iter(), 3)?;
 
         // export it
-        let array = ArrowArray::try_from(array.into_data())?;
+        let (array, schema) = to_ffi(&array.to_data())?;
 
         // (simulate consumer) import it
-        let data = ArrayData::try_from(array)?;
+        let data = unsafe { from_ffi(array, &schema) }?;
         let array = make_array(data);
 
         // perform some operation
@@ -929,10 +887,10 @@ mod tests {
             .build()?;
 
         // export it
-        let array = ArrowArray::try_from(list_data)?;
+        let (array, schema) = to_ffi(&list_data)?;
 
         // (simulate consumer) import it
-        let data = ArrayData::try_from(array)?;
+        let data = unsafe { from_ffi(array, &schema) }?;
         let array = make_array(data);
 
         // perform some operation
@@ -974,10 +932,10 @@ mod tests {
         let dict_array: DictionaryArray<Int8Type> = values.into_iter().collect();
 
         // export it
-        let array = ArrowArray::try_from(dict_array.into_data())?;
+        let (array, schema) = to_ffi(&dict_array.to_data())?;
 
         // (simulate consumer) import it
-        let data = ArrayData::try_from(array)?;
+        let data = unsafe { from_ffi(array, &schema) }?;
         let array = make_array(data);
 
         // perform some operation
@@ -1015,16 +973,15 @@ mod tests {
         }
 
         // (simulate consumer) import it
-        let array = ArrowArray::new(out_array, out_schema);
-        let data = ArrayData::try_from(array)?;
+        let data = unsafe { from_ffi(out_array, &out_schema) }?;
         let array = make_array(data);
 
         // perform some operation
         let array = array.as_any().downcast_ref::<Int32Array>().unwrap();
-        let array = kernels::arithmetic::add(array, array).unwrap();
+        let array = kernels::numeric::add(array, array).unwrap();
 
         // verify
-        assert_eq!(array, Int32Array::from(vec![2, 4, 6]));
+        assert_eq!(array.as_ref(), &Int32Array::from(vec![2, 4, 6]));
         Ok(())
     }
 
@@ -1034,10 +991,10 @@ mod tests {
         let array = DurationSecondArray::from(vec![None, Some(1), Some(2)]);
 
         // export it
-        let array = ArrowArray::try_from(array.into_data())?;
+        let (array, schema) = to_ffi(&array.to_data())?;
 
         // (simulate consumer) import it
-        let data = ArrayData::try_from(array)?;
+        let data = unsafe { from_ffi(array, &schema) }?;
         let array = make_array(data);
 
         // perform some operation
@@ -1050,14 +1007,7 @@ mod tests {
         // verify
         assert_eq!(
             array,
-            &DurationSecondArray::from(vec![
-                None,
-                Some(1),
-                Some(2),
-                None,
-                Some(1),
-                Some(2)
-            ])
+            &DurationSecondArray::from(vec![None, Some(1), Some(2), None, Some(1), Some(2)])
         );
 
         // (drop/release)
@@ -1073,18 +1023,15 @@ mod tests {
         //  [[a, b, c], [d, e, f], [g, h]]
         let entry_offsets = [0, 3, 6, 8];
 
-        let map_array = MapArray::new_from_strings(
-            keys.clone().into_iter(),
-            &values_data,
-            &entry_offsets,
-        )
-        .unwrap();
+        let map_array =
+            MapArray::new_from_strings(keys.clone().into_iter(), &values_data, &entry_offsets)
+                .unwrap();
 
         // export it
-        let array = ArrowArray::try_from(map_array.to_data())?;
+        let (array, schema) = to_ffi(&map_array.to_data())?;
 
         // (simulate consumer) import it
-        let data = ArrayData::try_from(array)?;
+        let data = unsafe { from_ffi(array, &schema) }?;
         let array = make_array(data);
 
         // perform some operation
@@ -1099,15 +1046,15 @@ mod tests {
         let metadata: HashMap<String, String> =
             [("Hello".to_string(), "World! 😊".to_string())].into();
         let struct_array = StructArray::from(vec![(
-            Field::new("a", DataType::Int32, false).with_metadata(metadata),
+            Arc::new(Field::new("a", DataType::Int32, false).with_metadata(metadata)),
             Arc::new(Int32Array::from(vec![2, 4, 6])) as Arc<dyn Array>,
         )]);
 
         // export it
-        let array = ArrowArray::try_from(struct_array.to_data())?;
+        let (array, schema) = to_ffi(&struct_array.to_data())?;
 
         // (simulate consumer) import it
-        let data = ArrayData::try_from(array)?;
+        let data = unsafe { from_ffi(array, &schema) }?;
         let array = make_array(data);
 
         // perform some operation
@@ -1128,10 +1075,10 @@ mod tests {
         let union = builder.build().unwrap();
 
         // export it
-        let array = ArrowArray::try_from(union.to_data())?;
+        let (array, schema) = to_ffi(&union.to_data())?;
 
         // (simulate consumer) import it
-        let data = ArrayData::try_from(array)?;
+        let data = unsafe { from_ffi(array, &schema) }?;
         let array = make_array(data);
 
         let array = array.as_any().downcast_ref::<UnionArray>().unwrap();
@@ -1189,10 +1136,10 @@ mod tests {
         let union = builder.build().unwrap();
 
         // export it
-        let array = ArrowArray::try_from(union.to_data())?;
+        let (array, schema) = to_ffi(&union.to_data())?;
 
         // (simulate consumer) import it
-        let data = ArrayData::try_from(array)?;
+        let data = unsafe { from_ffi(array, &schema) }?;
         let array = UnionArray::from(data);
 
         let expected_type_ids = vec![0_i8, 0, 1, 0];

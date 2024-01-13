@@ -17,9 +17,13 @@
 
 //! JSON reader
 //!
-//! This JSON reader allows JSON line-delimited files to be read into the Arrow memory
-//! model. Records are loaded in batches and are then converted from row-based data to
-//! columnar data.
+//! This JSON reader allows JSON records to be read into the Arrow memory
+//! model. Records are loaded in batches and are then converted from the record-oriented
+//! representation to the columnar arrow data model.
+//!
+//! The reader ignores whitespace between JSON values, including `\n` and `\r`, allowing
+//! parsing of sequences of one or more arbitrarily formatted JSON values, including
+//! but not limited to newline-delimited JSON.
 //!
 //! # Basic Usage
 //!
@@ -130,6 +134,7 @@
 //!
 
 use std::io::BufRead;
+use std::sync::Arc;
 
 use chrono::Utc;
 use serde::Serialize;
@@ -137,25 +142,27 @@ use serde::Serialize;
 use arrow_array::timezone::Tz;
 use arrow_array::types::Float32Type;
 use arrow_array::types::*;
-use arrow_array::{downcast_integer, RecordBatch, RecordBatchReader, StructArray};
+use arrow_array::{downcast_integer, make_array, RecordBatch, RecordBatchReader, StructArray};
 use arrow_data::ArrayData;
-use arrow_schema::{ArrowError, DataType, SchemaRef, TimeUnit};
+use arrow_schema::{ArrowError, DataType, FieldRef, Schema, SchemaRef, TimeUnit};
 pub use schema::*;
 
 use crate::reader::boolean_array::BooleanArrayDecoder;
 use crate::reader::decimal_array::DecimalArrayDecoder;
 use crate::reader::list_array::ListArrayDecoder;
 use crate::reader::map_array::MapArrayDecoder;
+use crate::reader::null_array::NullArrayDecoder;
 use crate::reader::primitive_array::PrimitiveArrayDecoder;
 use crate::reader::string_array::StringArrayDecoder;
 use crate::reader::struct_array::StructArrayDecoder;
-use crate::reader::tape::{Tape, TapeDecoder, TapeElement};
+use crate::reader::tape::{Tape, TapeDecoder};
 use crate::reader::timestamp_array::TimestampArrayDecoder;
 
 mod boolean_array;
 mod decimal_array;
 mod list_array;
 mod map_array;
+mod null_array;
 mod primitive_array;
 mod schema;
 mod serializer;
@@ -168,6 +175,8 @@ mod timestamp_array;
 pub struct ReaderBuilder {
     batch_size: usize,
     coerce_primitive: bool,
+    strict_mode: bool,
+    is_field: bool,
 
     schema: SchemaRef,
 }
@@ -177,14 +186,57 @@ impl ReaderBuilder {
     ///
     /// This could be obtained using [`infer_json_schema`] if not known
     ///
-    /// Any columns not present in `schema` will be ignored
+    /// Any columns not present in `schema` will be ignored, unless `strict_mode` is set to true.
+    /// In this case, an error is returned when a column is missing from `schema`.
     ///
     /// [`infer_json_schema`]: crate::reader::infer_json_schema
     pub fn new(schema: SchemaRef) -> Self {
         Self {
             batch_size: 1024,
             coerce_primitive: false,
+            strict_mode: false,
+            is_field: false,
             schema,
+        }
+    }
+
+    /// Create a new [`ReaderBuilder`] that will parse JSON values of `field.data_type()`
+    ///
+    /// Unlike [`ReaderBuilder::new`] this does not require the root of the JSON data
+    /// to be an object, i.e. `{..}`, allowing for parsing of any valid JSON value(s)
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use arrow_array::cast::AsArray;
+    /// # use arrow_array::types::Int32Type;
+    /// # use arrow_json::ReaderBuilder;
+    /// # use arrow_schema::{DataType, Field};
+    /// // Root of JSON schema is a numeric type
+    /// let data = "1\n2\n3\n";
+    /// let field = Arc::new(Field::new("int", DataType::Int32, true));
+    /// let mut reader = ReaderBuilder::new_with_field(field.clone()).build(data.as_bytes()).unwrap();
+    /// let b = reader.next().unwrap().unwrap();
+    /// let values = b.column(0).as_primitive::<Int32Type>().values();
+    /// assert_eq!(values, &[1, 2, 3]);
+    ///
+    /// // Root of JSON schema is a list type
+    /// let data = "[1, 2, 3, 4, 5, 6, 7]\n[1, 2, 3]";
+    /// let field = Field::new_list("int", field.clone(), true);
+    /// let mut reader = ReaderBuilder::new_with_field(field).build(data.as_bytes()).unwrap();
+    /// let b = reader.next().unwrap().unwrap();
+    /// let list = b.column(0).as_list::<i32>();
+    ///
+    /// assert_eq!(list.offsets().as_ref(), &[0, 7, 10]);
+    /// let list_values = list.values().as_primitive::<Int32Type>();
+    /// assert_eq!(list_values.values(), &[1, 2, 3, 4, 5, 6, 7, 1, 2, 3]);
+    /// ```
+    pub fn new_with_field(field: impl Into<FieldRef>) -> Self {
+        Self {
+            batch_size: 1024,
+            coerce_primitive: false,
+            strict_mode: false,
+            is_field: true,
+            schema: Arc::new(Schema::new([field.into()])),
         }
     }
 
@@ -193,10 +245,27 @@ impl ReaderBuilder {
         Self { batch_size, ..self }
     }
 
-    /// Sets if the decoder should coerce primitive values (bool and number) into string when the Schema's column is Utf8 or LargeUtf8.
+    /// Sets if the decoder should coerce primitive values (bool and number) into string
+    /// when the Schema's column is Utf8 or LargeUtf8.
+    #[deprecated(note = "Use with_coerce_primitive")]
     pub fn coerce_primitive(self, coerce_primitive: bool) -> Self {
+        self.with_coerce_primitive(coerce_primitive)
+    }
+
+    /// Sets if the decoder should coerce primitive values (bool and number) into string
+    /// when the Schema's column is Utf8 or LargeUtf8.
+    pub fn with_coerce_primitive(self, coerce_primitive: bool) -> Self {
         Self {
             coerce_primitive,
+            ..self
+        }
+    }
+
+    /// Sets if the decoder should return an error if it encounters a column not present
+    /// in `schema`
+    pub fn with_strict_mode(self, strict_mode: bool) -> Self {
+        Self {
+            strict_mode,
             ..self
         }
     }
@@ -211,15 +280,21 @@ impl ReaderBuilder {
 
     /// Create a [`Decoder`]
     pub fn build_decoder(self) -> Result<Decoder, ArrowError> {
-        let decoder = make_decoder(
-            DataType::Struct(self.schema.fields.clone()),
-            self.coerce_primitive,
-            false,
-        )?;
+        let (data_type, nullable) = match self.is_field {
+            false => (DataType::Struct(self.schema.fields.clone()), false),
+            true => {
+                let field = &self.schema.fields[0];
+                (field.data_type().clone(), field.is_nullable())
+            }
+        };
+
+        let decoder = make_decoder(data_type, self.coerce_primitive, self.strict_mode, nullable)?;
+
         let num_fields = self.schema.all_fields().len();
 
         Ok(Decoder {
             decoder,
+            is_field: self.is_field,
             tape_decoder: TapeDecoder::new(self.batch_size, num_fields),
             batch_size: self.batch_size,
             schema: self.schema,
@@ -321,6 +396,7 @@ pub struct Decoder {
     tape_decoder: TapeDecoder,
     decoder: Box<dyn ArrayDecoder>,
     batch_size: usize,
+    is_field: bool,
     schema: SchemaRef,
 }
 
@@ -540,24 +616,21 @@ impl Decoder {
         let mut next_object = 1;
         let pos: Vec<_> = (0..tape.num_rows())
             .map(|_| {
-                let end = match tape.get(next_object) {
-                    TapeElement::StartObject(end) => end,
-                    _ => unreachable!("corrupt tape"),
-                };
-                std::mem::replace(&mut next_object, end + 1)
+                let next = tape.next(next_object, "row").unwrap();
+                std::mem::replace(&mut next_object, next)
             })
             .collect();
 
         let decoded = self.decoder.decode(&tape, &pos)?;
         self.tape_decoder.clear();
 
-        // Sanity check
-        assert!(matches!(decoded.data_type(), DataType::Struct(_)));
-        assert_eq!(decoded.null_count(), 0);
-        assert_eq!(decoded.len(), pos.len());
+        let batch = match self.is_field {
+            true => RecordBatch::try_new(self.schema.clone(), vec![make_array(decoded)])?,
+            false => {
+                RecordBatch::from(StructArray::from(decoded)).with_schema(self.schema.clone())?
+            }
+        };
 
-        let batch = RecordBatch::from(StructArray::from(decoded))
-            .with_schema(self.schema.clone())?;
         Ok(Some(batch))
     }
 }
@@ -576,10 +649,13 @@ macro_rules! primitive_decoder {
 fn make_decoder(
     data_type: DataType,
     coerce_primitive: bool,
+    strict_mode: bool,
     is_nullable: bool,
 ) -> Result<Box<dyn ArrayDecoder>, ArrowError> {
     downcast_integer! {
         data_type => (primitive_decoder, data_type),
+        DataType::Null => Ok(Box::<NullArrayDecoder>::default()),
+        DataType::Float16 => primitive_decoder!(Float16Type, data_type),
         DataType::Float32 => primitive_decoder!(Float32Type, data_type),
         DataType::Float64 => primitive_decoder!(Float64Type, data_type),
         DataType::Timestamp(TimeUnit::Second, None) => {
@@ -621,13 +697,13 @@ fn make_decoder(
         DataType::Boolean => Ok(Box::<BooleanArrayDecoder>::default()),
         DataType::Utf8 => Ok(Box::new(StringArrayDecoder::<i32>::new(coerce_primitive))),
         DataType::LargeUtf8 => Ok(Box::new(StringArrayDecoder::<i64>::new(coerce_primitive))),
-        DataType::List(_) => Ok(Box::new(ListArrayDecoder::<i32>::new(data_type, coerce_primitive, is_nullable)?)),
-        DataType::LargeList(_) => Ok(Box::new(ListArrayDecoder::<i64>::new(data_type, coerce_primitive, is_nullable)?)),
-        DataType::Struct(_) => Ok(Box::new(StructArrayDecoder::new(data_type, coerce_primitive, is_nullable)?)),
+        DataType::List(_) => Ok(Box::new(ListArrayDecoder::<i32>::new(data_type, coerce_primitive, strict_mode, is_nullable)?)),
+        DataType::LargeList(_) => Ok(Box::new(ListArrayDecoder::<i64>::new(data_type, coerce_primitive, strict_mode, is_nullable)?)),
+        DataType::Struct(_) => Ok(Box::new(StructArrayDecoder::new(data_type, coerce_primitive, strict_mode, is_nullable)?)),
         DataType::Binary | DataType::LargeBinary | DataType::FixedSizeBinary(_) => {
             Err(ArrowError::JsonError(format!("{data_type} is not supported by JSON")))
         }
-        DataType::Map(_, _) => Ok(Box::new(MapArrayDecoder::new(data_type, coerce_primitive, is_nullable)?)),
+        DataType::Map(_, _) => Ok(Box::new(MapArrayDecoder::new(data_type, coerce_primitive, strict_mode, is_nullable)?)),
         d => Err(ArrowError::NotYetImplemented(format!("Support for {d} in JSON reader")))
     }
 }
@@ -642,12 +718,12 @@ mod tests {
     use arrow_array::cast::AsArray;
     use arrow_array::types::Int32Type;
     use arrow_array::{
-        make_array, Array, BooleanArray, ListArray, StringArray, StructArray,
+        make_array, Array, BooleanArray, Float64Array, ListArray, StringArray, StructArray,
     };
     use arrow_buffer::{ArrowNativeType, Buffer};
     use arrow_cast::display::{ArrayFormatter, FormatOptions};
     use arrow_data::ArrayDataBuilder;
-    use arrow_schema::{DataType, Field, Schema};
+    use arrow_schema::{DataType, Field, FieldRef, Schema};
 
     use crate::reader::infer_json_schema;
     use crate::ReaderBuilder;
@@ -658,6 +734,7 @@ mod tests {
         buf: &str,
         batch_size: usize,
         coerce_primitive: bool,
+        strict_mode: bool,
         schema: SchemaRef,
     ) -> Vec<RecordBatch> {
         let mut unbuffered = vec![];
@@ -666,7 +743,7 @@ mod tests {
         for batch_size in [1, 3, 100, batch_size] {
             unbuffered = ReaderBuilder::new(schema.clone())
                 .with_batch_size(batch_size)
-                .coerce_primitive(coerce_primitive)
+                .with_coerce_primitive(coerce_primitive)
                 .build(Cursor::new(buf.as_bytes()))
                 .unwrap()
                 .collect::<Result<Vec<_>, _>>()
@@ -680,7 +757,8 @@ mod tests {
             for b in [1, 3, 5] {
                 let buffered = ReaderBuilder::new(schema.clone())
                     .with_batch_size(batch_size)
-                    .coerce_primitive(coerce_primitive)
+                    .with_coerce_primitive(coerce_primitive)
+                    .with_strict_mode(strict_mode)
                     .build(BufReader::with_capacity(b, Cursor::new(buf.as_bytes())))
                     .unwrap()
                     .collect::<Result<Vec<_>, _>>()
@@ -712,7 +790,7 @@ mod tests {
             Field::new("e", DataType::Date64, true),
         ]));
 
-        let batches = do_read(buf, 1024, false, schema);
+        let batches = do_read(buf, 1024, false, false, schema);
         assert_eq!(batches.len(), 1);
 
         let col1 = batches[0].column(0).as_primitive::<Int64Type>();
@@ -751,7 +829,7 @@ mod tests {
         {"a": "1", "b": "2"}
         {"a": "hello", "b": "shoo"}
         {"b": "\t😁foo", "a": "\nfoobar\ud83d\ude00\u0061\u0073\u0066\u0067\u00FF"}
-        
+
         {"b": null}
         {"b": "", "a": null}
 
@@ -761,7 +839,7 @@ mod tests {
             Field::new("b", DataType::LargeUtf8, true),
         ]));
 
-        let batches = do_read(buf, 1024, false, schema);
+        let batches = do_read(buf, 1024, false, false, schema);
         assert_eq!(batches.len(), 1);
 
         let col1 = batches[0].column(0).as_string::<i32>();
@@ -814,7 +892,7 @@ mod tests {
             ),
         ]));
 
-        let batches = do_read(buf, 1024, false, schema);
+        let batches = do_read(buf, 1024, false, false, schema);
         assert_eq!(batches.len(), 1);
 
         let list = batches[0].column(0).as_list::<i32>();
@@ -883,7 +961,7 @@ mod tests {
             ),
         ]));
 
-        let batches = do_read(buf, 1024, false, schema);
+        let batches = do_read(buf, 1024, false, false, schema);
         assert_eq!(batches.len(), 1);
 
         let nested = batches[0].column(0).as_struct();
@@ -929,7 +1007,7 @@ mod tests {
 
         let schema = Arc::new(Schema::new(vec![map]));
 
-        let batches = do_read(buf, 1024, false, schema);
+        let batches = do_read(buf, 1024, false, false, schema);
         assert_eq!(batches.len(), 1);
 
         let map = batches[0].column(0).as_map();
@@ -1003,7 +1081,7 @@ mod tests {
             Field::new("c", DataType::Utf8, true),
         ]));
 
-        let batches = do_read(buf, 1024, true, schema);
+        let batches = do_read(buf, 1024, true, false, schema);
         assert_eq!(batches.len(), 1);
 
         let col1 = batches[0].column(0).as_string::<i32>();
@@ -1051,7 +1129,7 @@ mod tests {
             Field::new("c", data_type, true),
         ]));
 
-        let batches = do_read(buf, 1024, true, schema);
+        let batches = do_read(buf, 1024, true, false, schema);
         assert_eq!(batches.len(), 1);
 
         let col1 = batches[0].column(0).as_primitive::<T>();
@@ -1109,7 +1187,7 @@ mod tests {
             Field::new("d", with_timezone, true),
         ]));
 
-        let batches = do_read(buf, 1024, true, schema);
+        let batches = do_read(buf, 1024, true, false, schema);
         assert_eq!(batches.len(), 1);
 
         let unit_in_nanos: i64 = match T::UNIT {
@@ -1209,7 +1287,7 @@ mod tests {
             Field::new("c", T::DATA_TYPE, true),
         ]));
 
-        let batches = do_read(buf, 1024, true, schema);
+        let batches = do_read(buf, 1024, true, false, schema);
         assert_eq!(batches.len(), 1);
 
         let col1 = batches[0].column(0).as_primitive::<T>();
@@ -1286,7 +1364,7 @@ mod tests {
             ),
         ]));
 
-        let batches = do_read(json, 1024, true, schema);
+        let batches = do_read(json, 1024, true, false, schema);
         assert_eq!(batches.len(), 1);
 
         let s: StructArray = batches.into_iter().next().unwrap().into();
@@ -1361,7 +1439,7 @@ mod tests {
             Field::new("u64", DataType::UInt64, true),
         ]));
 
-        let batches = do_read(buf, 1024, true, schema);
+        let batches = do_read(buf, 1024, true, false, schema);
         assert_eq!(batches.len(), 1);
 
         let i64 = batches[0].column(0).as_primitive::<Int64Type>();
@@ -1385,7 +1463,7 @@ mod tests {
             true,
         )]));
 
-        let batches = do_read(buf, 1024, true, schema);
+        let batches = do_read(buf, 1024, true, false, schema);
         assert_eq!(batches.len(), 1);
 
         let i64 = batches[0]
@@ -1394,11 +1472,99 @@ mod tests {
         assert_eq!(i64.values(), &[i64::MAX, i64::MIN, 900000]);
     }
 
+    #[test]
+    fn test_strict_mode_no_missing_columns_in_schema() {
+        let buf = r#"
+        {"a": 1, "b": "2", "c": true}
+        {"a": 2E0, "b": "4", "c": false}
+        "#;
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int16, false),
+            Field::new("b", DataType::Utf8, false),
+            Field::new("c", DataType::Boolean, false),
+        ]));
+
+        let batches = do_read(buf, 1024, true, true, schema);
+        assert_eq!(batches.len(), 1);
+
+        let buf = r#"
+        {"a": 1, "b": "2", "c": {"a": true, "b": 1}}
+        {"a": 2E0, "b": "4", "c": {"a": false, "b": 2}}
+        "#;
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int16, false),
+            Field::new("b", DataType::Utf8, false),
+            Field::new_struct(
+                "c",
+                vec![
+                    Field::new("a", DataType::Boolean, false),
+                    Field::new("b", DataType::Int16, false),
+                ],
+                false,
+            ),
+        ]));
+
+        let batches = do_read(buf, 1024, true, true, schema);
+        assert_eq!(batches.len(), 1);
+    }
+
+    #[test]
+    fn test_strict_mode_missing_columns_in_schema() {
+        let buf = r#"
+        {"a": 1, "b": "2", "c": true}
+        {"a": 2E0, "b": "4", "c": false}
+        "#;
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int16, true),
+            Field::new("c", DataType::Boolean, true),
+        ]));
+
+        let err = ReaderBuilder::new(schema)
+            .with_batch_size(1024)
+            .with_strict_mode(true)
+            .build(Cursor::new(buf.as_bytes()))
+            .unwrap()
+            .read()
+            .unwrap_err();
+
+        assert_eq!(
+            err.to_string(),
+            "Json error: column 'b' missing from schema"
+        );
+
+        let buf = r#"
+        {"a": 1, "b": "2", "c": {"a": true, "b": 1}}
+        {"a": 2E0, "b": "4", "c": {"a": false, "b": 2}}
+        "#;
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int16, false),
+            Field::new("b", DataType::Utf8, false),
+            Field::new_struct("c", vec![Field::new("a", DataType::Boolean, false)], false),
+        ]));
+
+        let err = ReaderBuilder::new(schema)
+            .with_batch_size(1024)
+            .with_strict_mode(true)
+            .build(Cursor::new(buf.as_bytes()))
+            .unwrap()
+            .read()
+            .unwrap_err();
+
+        assert_eq!(
+            err.to_string(),
+            "Json error: whilst decoding field 'c': column 'b' missing from schema"
+        );
+    }
+
     fn read_file(path: &str, schema: Option<Schema>) -> Reader<BufReader<File>> {
         let file = File::open(path).unwrap();
         let mut reader = BufReader::new(file);
         let schema = schema.unwrap_or_else(|| {
-            let schema = infer_json_schema(&mut reader, None).unwrap();
+            let (schema, _) = infer_json_schema(&mut reader, None).unwrap();
             reader.rewind().unwrap();
             schema
         });
@@ -1411,7 +1577,7 @@ mod tests {
         let mut reader = read_file("test/data/basic.json", None);
         let batch = reader.next().unwrap().unwrap();
 
-        assert_eq!(7, batch.num_columns());
+        assert_eq!(8, batch.num_columns());
         assert_eq!(12, batch.num_rows());
 
         let schema = reader.schema();
@@ -1603,16 +1769,70 @@ mod tests {
     }
 
     #[test]
+    fn test_empty_json_arrays() {
+        let json_content = r#"
+            {"items": []}
+            {"items": null}
+            {}
+            "#;
+
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "items",
+            DataType::List(FieldRef::new(Field::new("item", DataType::Null, true))),
+            true,
+        )]));
+
+        let batches = do_read(json_content, 1024, false, false, schema);
+        assert_eq!(batches.len(), 1);
+
+        let col1 = batches[0].column(0).as_list::<i32>();
+        assert_eq!(col1.null_count(), 2);
+        assert!(col1.value(0).is_empty());
+        assert_eq!(col1.value(0).data_type(), &DataType::Null);
+        assert!(col1.is_null(1));
+        assert!(col1.is_null(2));
+    }
+
+    #[test]
+    fn test_nested_empty_json_arrays() {
+        let json_content = r#"
+            {"items": [[],[]]}
+            {"items": [[null, null],[null]]}
+            "#;
+
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "items",
+            DataType::List(FieldRef::new(Field::new(
+                "item",
+                DataType::List(FieldRef::new(Field::new("item", DataType::Null, true))),
+                true,
+            ))),
+            true,
+        )]));
+
+        let batches = do_read(json_content, 1024, false, false, schema);
+        assert_eq!(batches.len(), 1);
+
+        let col1 = batches[0].column(0).as_list::<i32>();
+        assert_eq!(col1.null_count(), 0);
+        assert_eq!(col1.value(0).len(), 2);
+        assert!(col1.value(0).as_list::<i32>().value(0).is_empty());
+        assert!(col1.value(0).as_list::<i32>().value(1).is_empty());
+
+        assert_eq!(col1.value(1).len(), 2);
+        assert_eq!(col1.value(1).as_list::<i32>().value(0).len(), 2);
+        assert_eq!(col1.value(1).as_list::<i32>().value(1).len(), 1);
+    }
+
+    #[test]
     fn test_nested_list_json_arrays() {
-        let c_field =
-            Field::new_struct("c", vec![Field::new("d", DataType::Utf8, true)], true);
+        let c_field = Field::new_struct("c", vec![Field::new("d", DataType::Utf8, true)], true);
         let a_struct_field = Field::new_struct(
             "a",
             vec![Field::new("b", DataType::Boolean, true), c_field.clone()],
             true,
         );
-        let a_field =
-            Field::new("a", DataType::List(Arc::new(a_struct_field.clone())), true);
+        let a_field = Field::new("a", DataType::List(Arc::new(a_struct_field.clone())), true);
         let schema = Arc::new(Schema::new(vec![a_field.clone()]));
         let builder = ReaderBuilder::new(schema).with_batch_size(64);
         let json_content = r#"
@@ -1721,7 +1941,7 @@ mod tests {
     fn test_with_multiple_batches() {
         let file = File::open("test/data/basic_nulls.json").unwrap();
         let mut reader = BufReader::new(file);
-        let schema = infer_json_schema(&mut reader, None).unwrap();
+        let (schema, _) = infer_json_schema(&mut reader, None).unwrap();
         reader.rewind().unwrap();
 
         let builder = ReaderBuilder::new(Arc::new(schema)).with_batch_size(5);
@@ -1861,7 +2081,7 @@ mod tests {
     fn test_json_iterator() {
         let file = File::open("test/data/basic.json").unwrap();
         let mut reader = BufReader::new(file);
-        let schema = infer_json_schema(&mut reader, None).unwrap();
+        let (schema, _) = infer_json_schema(&mut reader, None).unwrap();
         reader.rewind().unwrap();
 
         let builder = ReaderBuilder::new(Arc::new(schema)).with_batch_size(5);
@@ -1874,7 +2094,7 @@ mod tests {
         let mut sum_a = 0;
         for batch in reader {
             let batch = batch.unwrap();
-            assert_eq!(7, batch.num_columns());
+            assert_eq!(8, batch.num_columns());
             sum_num_rows += batch.num_rows();
             num_batches += 1;
             let batch_schema = batch.schema();
@@ -1998,5 +2218,86 @@ mod tests {
         assert_eq!(batch.num_columns(), 1);
         let values = batch.column(0).as_primitive::<TimestampSecondType>();
         assert_eq!(values.values(), &[1681319393, -7200]);
+    }
+
+    #[test]
+    fn test_serde_field() {
+        let field = Field::new("int", DataType::Int32, true);
+        let mut decoder = ReaderBuilder::new_with_field(field)
+            .build_decoder()
+            .unwrap();
+        decoder.serialize(&[1_i32, 2, 3, 4]).unwrap();
+        let b = decoder.flush().unwrap().unwrap();
+        let values = b.column(0).as_primitive::<Int32Type>().values();
+        assert_eq!(values, &[1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn test_serde_large_numbers() {
+        let field = Field::new("int", DataType::Int64, true);
+        let mut decoder = ReaderBuilder::new_with_field(field)
+            .build_decoder()
+            .unwrap();
+
+        decoder.serialize(&[1699148028689_u64, 2, 3, 4]).unwrap();
+        let b = decoder.flush().unwrap().unwrap();
+        let values = b.column(0).as_primitive::<Int64Type>().values();
+        assert_eq!(values, &[1699148028689, 2, 3, 4]);
+
+        let field = Field::new(
+            "int",
+            DataType::Timestamp(TimeUnit::Microsecond, None),
+            true,
+        );
+        let mut decoder = ReaderBuilder::new_with_field(field)
+            .build_decoder()
+            .unwrap();
+
+        decoder.serialize(&[1699148028689_u64, 2, 3, 4]).unwrap();
+        let b = decoder.flush().unwrap().unwrap();
+        let values = b
+            .column(0)
+            .as_primitive::<TimestampMicrosecondType>()
+            .values();
+        assert_eq!(values, &[1699148028689, 2, 3, 4]);
+    }
+
+    #[test]
+    fn test_coercing_primitive_into_string_decoder() {
+        let buf = &format!(
+            r#"[{{"a": 1, "b": "A", "c": "T"}}, {{"a": 2, "b": "BB", "c": "F"}}, {{"a": {}, "b": 123, "c": false}}, {{"a": {}, "b": 789, "c": true}}]"#,
+            (std::i32::MAX as i64 + 10),
+            std::i64::MAX - 10
+        );
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::Float64, true),
+            Field::new("b", DataType::Utf8, true),
+            Field::new("c", DataType::Utf8, true),
+        ]);
+        let json_array: Vec<serde_json::Value> = serde_json::from_str(buf).unwrap();
+        let schema_ref = Arc::new(schema);
+
+        // read record batches
+        let reader = ReaderBuilder::new(schema_ref.clone()).with_coerce_primitive(true);
+        let mut decoder = reader.build_decoder().unwrap();
+        decoder.serialize(json_array.as_slice()).unwrap();
+        let batch = decoder.flush().unwrap().unwrap();
+        assert_eq!(
+            batch,
+            RecordBatch::try_new(
+                schema_ref,
+                vec![
+                    Arc::new(Float64Array::from(vec![
+                        1.0,
+                        2.0,
+                        (std::i32::MAX as i64 + 10) as f64,
+                        (std::i64::MAX - 10) as f64
+                    ])),
+                    Arc::new(StringArray::from(vec!["A", "BB", "123", "789"])),
+                    Arc::new(StringArray::from(vec!["T", "F", "false", "true"])),
+                ]
+            )
+            .unwrap()
+        );
     }
 }

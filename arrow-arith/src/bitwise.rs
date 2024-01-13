@@ -17,10 +17,12 @@
 
 use crate::arity::{binary, unary};
 use arrow_array::*;
+use arrow_buffer::ArrowNativeType;
 use arrow_schema::ArrowError;
+use num::traits::{WrappingShl, WrappingShr};
 use std::ops::{BitAnd, BitOr, BitXor, Not};
 
-// The helper function for bitwise operation with two array
+/// The helper function for bitwise operation with two array
 fn bitwise_op<T, F>(
     left: &PrimitiveArray<T>,
     right: &PrimitiveArray<T>,
@@ -70,6 +72,38 @@ where
     T::Native: BitXor<Output = T::Native>,
 {
     bitwise_op(left, right, |a, b| a ^ b)
+}
+
+/// Perform bitwise `left << right` operation on two arrays. If either left or right value is null
+/// then the result is also null.
+pub fn bitwise_shift_left<T>(
+    left: &PrimitiveArray<T>,
+    right: &PrimitiveArray<T>,
+) -> Result<PrimitiveArray<T>, ArrowError>
+where
+    T: ArrowNumericType,
+    T::Native: WrappingShl<Output = T::Native>,
+{
+    bitwise_op(left, right, |a, b| {
+        let b = b.as_usize();
+        a.wrapping_shl(b as u32)
+    })
+}
+
+/// Perform bitwise `left >> right` operation on two arrays. If either left or right value is null
+/// then the result is also null.
+pub fn bitwise_shift_right<T>(
+    left: &PrimitiveArray<T>,
+    right: &PrimitiveArray<T>,
+) -> Result<PrimitiveArray<T>, ArrowError>
+where
+    T: ArrowNumericType,
+    T::Native: WrappingShr<Output = T::Native>,
+{
+    bitwise_op(left, right, |a, b| {
+        let b = b.as_usize();
+        a.wrapping_shr(b as u32)
+    })
 }
 
 /// Perform `!array` operation on array. If array value is null
@@ -135,6 +169,38 @@ where
     Ok(unary(array, |value| value ^ scalar))
 }
 
+/// Perform bitwise `left << right` every value in an array with the scalar. If any value in the array is null then the
+/// result is also null.
+pub fn bitwise_shift_left_scalar<T>(
+    array: &PrimitiveArray<T>,
+    scalar: T::Native,
+) -> Result<PrimitiveArray<T>, ArrowError>
+where
+    T: ArrowNumericType,
+    T::Native: WrappingShl<Output = T::Native>,
+{
+    Ok(unary(array, |value| {
+        let scalar = scalar.as_usize();
+        value.wrapping_shl(scalar as u32)
+    }))
+}
+
+/// Perform bitwise `left >> right` every value in an array with the scalar. If any value in the array is null then the
+/// result is also null.
+pub fn bitwise_shift_right_scalar<T>(
+    array: &PrimitiveArray<T>,
+    scalar: T::Native,
+) -> Result<PrimitiveArray<T>, ArrowError>
+where
+    T: ArrowNumericType,
+    T::Native: WrappingShr<Output = T::Native>,
+{
+    Ok(unary(array, |value| {
+        let scalar = scalar.as_usize();
+        value.wrapping_shr(scalar as u32)
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -155,6 +221,42 @@ mod tests {
         let result = bitwise_and(&left, &right)?;
         assert_eq!(expected, result);
         Ok(())
+    }
+
+    #[test]
+    fn test_bitwise_shift_left() {
+        let left = UInt64Array::from(vec![Some(1), Some(2), None, Some(4), Some(8)]);
+        let right = UInt64Array::from(vec![Some(5), Some(10), Some(8), Some(12), Some(u64::MAX)]);
+        let expected = UInt64Array::from(vec![Some(32), Some(2048), None, Some(16384), Some(0)]);
+        let result = bitwise_shift_left(&left, &right).unwrap();
+        assert_eq!(expected, result);
+    }
+
+    #[test]
+    fn test_bitwise_shift_left_scalar() {
+        let left = UInt64Array::from(vec![Some(1), Some(2), None, Some(4), Some(8)]);
+        let scalar = 2;
+        let expected = UInt64Array::from(vec![Some(4), Some(8), None, Some(16), Some(32)]);
+        let result = bitwise_shift_left_scalar(&left, scalar).unwrap();
+        assert_eq!(expected, result);
+    }
+
+    #[test]
+    fn test_bitwise_shift_right() {
+        let left = UInt64Array::from(vec![Some(32), Some(2048), None, Some(16384), Some(3)]);
+        let right = UInt64Array::from(vec![Some(5), Some(10), Some(8), Some(12), Some(65)]);
+        let expected = UInt64Array::from(vec![Some(1), Some(2), None, Some(4), Some(1)]);
+        let result = bitwise_shift_right(&left, &right).unwrap();
+        assert_eq!(expected, result);
+    }
+
+    #[test]
+    fn test_bitwise_shift_right_scalar() {
+        let left = UInt64Array::from(vec![Some(32), Some(2048), None, Some(16384), Some(3)]);
+        let scalar = 2;
+        let expected = UInt64Array::from(vec![Some(8), Some(512), None, Some(4096), Some(0)]);
+        let result = bitwise_shift_right_scalar(&left, scalar).unwrap();
+        assert_eq!(expected, result);
     }
 
     #[test]

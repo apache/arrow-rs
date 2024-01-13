@@ -28,6 +28,7 @@ use crate::{FieldRef, Fields};
 #[derive(Debug, Default)]
 pub struct SchemaBuilder {
     fields: Vec<FieldRef>,
+    metadata: HashMap<String, String>,
 }
 
 impl SchemaBuilder {
@@ -40,12 +41,55 @@ impl SchemaBuilder {
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
             fields: Vec::with_capacity(capacity),
+            metadata: Default::default(),
         }
     }
 
     /// Appends a [`FieldRef`] to this [`SchemaBuilder`] without checking for collision
     pub fn push(&mut self, field: impl Into<FieldRef>) {
         self.fields.push(field.into())
+    }
+
+    /// Removes and returns the [`FieldRef`] as index `idx`
+    ///
+    /// # Panics
+    ///
+    /// Panics if index out of bounds
+    pub fn remove(&mut self, idx: usize) -> FieldRef {
+        self.fields.remove(idx)
+    }
+
+    /// Returns an immutable reference to the [`FieldRef`] at index `idx`
+    ///
+    /// # Panics
+    ///
+    /// Panics if index out of bounds
+    pub fn field(&mut self, idx: usize) -> &FieldRef {
+        &mut self.fields[idx]
+    }
+
+    /// Returns a mutable reference to the [`FieldRef`] at index `idx`
+    ///
+    /// # Panics
+    ///
+    /// Panics if index out of bounds
+    pub fn field_mut(&mut self, idx: usize) -> &mut FieldRef {
+        &mut self.fields[idx]
+    }
+
+    /// Returns an immutable reference to the Map of custom metadata key-value pairs.
+    pub fn metadata(&mut self) -> &HashMap<String, String> {
+        &self.metadata
+    }
+
+    /// Returns a mutable reference to the Map of custom metadata key-value pairs.
+    pub fn metadata_mut(&mut self) -> &mut HashMap<String, String> {
+        &mut self.metadata
+    }
+
+    /// Reverse the fileds
+    pub fn reverse(&mut self) {
+        self.fields.reverse();
     }
 
     /// Appends a [`FieldRef`] to this [`SchemaBuilder`] checking for collision
@@ -71,7 +115,10 @@ impl SchemaBuilder {
 
     /// Consume this [`SchemaBuilder`] yielding the final [`Schema`]
     pub fn finish(self) -> Schema {
-        Schema::new(self.fields)
+        Schema {
+            fields: self.fields.into(),
+            metadata: self.metadata,
+        }
     }
 }
 
@@ -79,6 +126,7 @@ impl From<&Fields> for SchemaBuilder {
     fn from(value: &Fields) -> Self {
         Self {
             fields: value.to_vec(),
+            metadata: Default::default(),
         }
     }
 }
@@ -87,6 +135,16 @@ impl From<Fields> for SchemaBuilder {
     fn from(value: Fields) -> Self {
         Self {
             fields: value.to_vec(),
+            metadata: Default::default(),
+        }
+    }
+}
+
+impl From<Schema> for SchemaBuilder {
+    fn from(value: Schema) -> Self {
+        Self {
+            fields: value.fields.to_vec(),
+            metadata: value.metadata,
         }
     }
 }
@@ -168,10 +226,7 @@ impl Schema {
     /// let schema = Schema::new_with_metadata(vec![field_a, field_b], metadata);
     /// ```
     #[inline]
-    pub fn new_with_metadata(
-        fields: impl Into<Fields>,
-        metadata: HashMap<String, String>,
-    ) -> Self {
+    pub fn new_with_metadata(fields: impl Into<Fields>, metadata: HashMap<String, String>) -> Self {
         Self {
             fields: fields.into(),
             metadata,
@@ -230,9 +285,7 @@ impl Schema {
     ///     ]),
     /// );
     /// ```
-    pub fn try_merge(
-        schemas: impl IntoIterator<Item = Self>,
-    ) -> Result<Self, ArrowError> {
+    pub fn try_merge(schemas: impl IntoIterator<Item = Self>) -> Result<Self, ArrowError> {
         let mut out_meta = HashMap::new();
         let mut out_fields = SchemaBuilder::new();
         for schema in schemas {
@@ -323,9 +376,37 @@ impl Schema {
     pub fn contains(&self, other: &Schema) -> bool {
         // make sure self.metadata is a superset of other.metadata
         self.fields.contains(&other.fields)
-            && other.metadata.iter().all(|(k, v1)| {
-                self.metadata.get(k).map(|v2| v1 == v2).unwrap_or_default()
-            })
+            && other
+                .metadata
+                .iter()
+                .all(|(k, v1)| self.metadata.get(k).map(|v2| v1 == v2).unwrap_or_default())
+    }
+
+    /// Remove field by index and return it. Recommend to use [`SchemaBuilder`]
+    /// if you are looking to remove multiple columns, as this will save allocations.
+    ///
+    /// # Panic
+    ///
+    /// Panics if `index` is out of bounds.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use arrow_schema::{DataType, Field, Schema};
+    /// let mut schema = Schema::new(vec![
+    ///   Field::new("a", DataType::Boolean, false),
+    ///   Field::new("b", DataType::Int8, false),
+    ///   Field::new("c", DataType::Utf8, false),
+    /// ]);
+    /// assert_eq!(schema.fields.len(), 3);
+    /// assert_eq!(schema.remove(1), Field::new("b", DataType::Int8, false).into());
+    /// assert_eq!(schema.fields.len(), 2);
+    /// ```
+    #[deprecated(note = "Use SchemaBuilder::remove")]
+    #[doc(hidden)]
+    #[allow(deprecated)]
+    pub fn remove(&mut self, index: usize) -> FieldRef {
+        self.fields.remove(index)
     }
 }
 
@@ -381,8 +462,8 @@ mod tests {
         assert_eq!(schema, de_schema);
 
         // ser/de with non-empty metadata
-        let schema = schema
-            .with_metadata([("key".to_owned(), "val".to_owned())].into_iter().collect());
+        let schema =
+            schema.with_metadata([("key".to_owned(), "val".to_owned())].into_iter().collect());
         let json = serde_json::to_string(&schema).unwrap();
         let de_schema = serde_json::from_str(&json).unwrap();
 
@@ -636,18 +717,14 @@ mod tests {
             .collect();
         let f2 = Field::new("first_name", DataType::Utf8, false).with_metadata(metadata2);
 
-        assert!(
-            Schema::try_merge(vec![Schema::new(vec![f1]), Schema::new(vec![f2])])
-                .is_err()
-        );
+        assert!(Schema::try_merge(vec![Schema::new(vec![f1]), Schema::new(vec![f2])]).is_err());
 
         // 2. None + Some
         let mut f1 = Field::new("first_name", DataType::Utf8, false);
-        let metadata2: HashMap<String, String> =
-            [("missing".to_string(), "value".to_string())]
-                .iter()
-                .cloned()
-                .collect();
+        let metadata2: HashMap<String, String> = [("missing".to_string(), "value".to_string())]
+            .iter()
+            .cloned()
+            .collect();
         let f2 = Field::new("first_name", DataType::Utf8, false).with_metadata(metadata2);
 
         assert!(f1.try_merge(&f2).is_ok());
@@ -714,9 +791,7 @@ mod tests {
                 Field::new("last_name", DataType::Utf8, false),
                 Field::new(
                     "address",
-                    DataType::Struct(
-                        vec![Field::new("zip", DataType::UInt16, false)].into(),
-                    ),
+                    DataType::Struct(vec![Field::new("zip", DataType::UInt16, false)].into()),
                     false,
                 ),
             ]),
@@ -837,5 +912,49 @@ mod tests {
             res.to_string().contains(expected),
             "Could not find expected string '{expected}' in '{res}'"
         );
+    }
+
+    #[test]
+    fn test_schema_builder_change_field() {
+        let mut builder = SchemaBuilder::new();
+        builder.push(Field::new("a", DataType::Int32, false));
+        builder.push(Field::new("b", DataType::Utf8, false));
+        *builder.field_mut(1) = Arc::new(Field::new("c", DataType::Int32, false));
+        assert_eq!(
+            builder.fields,
+            vec![
+                Arc::new(Field::new("a", DataType::Int32, false)),
+                Arc::new(Field::new("c", DataType::Int32, false))
+            ]
+        );
+    }
+
+    #[test]
+    fn test_schema_builder_reverse() {
+        let mut builder = SchemaBuilder::new();
+        builder.push(Field::new("a", DataType::Int32, false));
+        builder.push(Field::new("b", DataType::Utf8, true));
+        builder.reverse();
+        assert_eq!(
+            builder.fields,
+            vec![
+                Arc::new(Field::new("b", DataType::Utf8, true)),
+                Arc::new(Field::new("a", DataType::Int32, false))
+            ]
+        );
+    }
+
+    #[test]
+    fn test_schema_builder_metadata() {
+        let mut metadata = HashMap::with_capacity(1);
+        metadata.insert("key".to_string(), "value".to_string());
+
+        let fields = vec![Field::new("test", DataType::Int8, true)];
+        let mut builder: SchemaBuilder = Schema::new(fields).with_metadata(metadata).into();
+        builder.metadata_mut().insert("k".into(), "v".into());
+        let out = builder.finish();
+        assert_eq!(out.metadata.len(), 2);
+        assert_eq!(out.metadata["k"], "v");
+        assert_eq!(out.metadata["key"], "value");
     }
 }

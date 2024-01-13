@@ -16,18 +16,22 @@
 // under the License.
 
 use crate::array::{get_offsets, print_long_array};
-use crate::{make_array, Array, ArrayRef, ListArray, StringArray, StructArray};
+use crate::iterator::MapArrayIter;
+use crate::{make_array, Array, ArrayAccessor, ArrayRef, ListArray, StringArray, StructArray};
 use arrow_buffer::{ArrowNativeType, Buffer, NullBuffer, OffsetBuffer, ToByteSlice};
 use arrow_data::{ArrayData, ArrayDataBuilder};
-use arrow_schema::{ArrowError, DataType, Field};
+use arrow_schema::{ArrowError, DataType, Field, FieldRef};
 use std::any::Any;
 use std::sync::Arc;
 
-/// A nested array type where each record is a key-value map.
+/// An array of key-value maps
+///
 /// Keys should always be non-null, but values can be null.
 ///
-/// [MapArray] is physically a [crate::array::ListArray] that has a
-/// [StructArray] with 2 child fields.
+/// [`MapArray`] is physically a [`ListArray`] of key values pairs stored as an `entries`
+/// [`StructArray`] with 2 child fields.
+///
+/// See [`MapBuilder`](crate::builder::MapBuilder) for how to construct a [`MapArray`]
 #[derive(Clone)]
 pub struct MapArray {
     data_type: DataType,
@@ -39,6 +43,112 @@ pub struct MapArray {
 }
 
 impl MapArray {
+    /// Create a new [`MapArray`] from the provided parts
+    ///
+    /// See [`MapBuilder`](crate::builder::MapBuilder) for a higher-level interface
+    /// to construct a [`MapArray`]
+    ///
+    /// # Errors
+    ///
+    /// Errors if
+    ///
+    /// * `offsets.len() - 1 != nulls.len()`
+    /// * `offsets.last() > entries.len()`
+    /// * `field.is_nullable()`
+    /// * `entries.null_count() != 0`
+    /// * `entries.columns().len() != 2`
+    /// * `field.data_type() != entries.data_type()`
+    pub fn try_new(
+        field: FieldRef,
+        offsets: OffsetBuffer<i32>,
+        entries: StructArray,
+        nulls: Option<NullBuffer>,
+        ordered: bool,
+    ) -> Result<Self, ArrowError> {
+        let len = offsets.len() - 1; // Offsets guaranteed to not be empty
+        let end_offset = offsets.last().unwrap().as_usize();
+        // don't need to check other values of `offsets` because they are checked
+        // during construction of `OffsetBuffer`
+        if end_offset > entries.len() {
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "Max offset of {end_offset} exceeds length of entries {}",
+                entries.len()
+            )));
+        }
+
+        if let Some(n) = nulls.as_ref() {
+            if n.len() != len {
+                return Err(ArrowError::InvalidArgumentError(format!(
+                    "Incorrect length of null buffer for MapArray, expected {len} got {}",
+                    n.len(),
+                )));
+            }
+        }
+        if field.is_nullable() || entries.null_count() != 0 {
+            return Err(ArrowError::InvalidArgumentError(
+                "MapArray entries cannot contain nulls".to_string(),
+            ));
+        }
+
+        if field.data_type() != entries.data_type() {
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "MapArray expected data type {} got {} for {:?}",
+                field.data_type(),
+                entries.data_type(),
+                field.name()
+            )));
+        }
+
+        if entries.columns().len() != 2 {
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "MapArray entries must contain two children, got {}",
+                entries.columns().len()
+            )));
+        }
+
+        Ok(Self {
+            data_type: DataType::Map(field, ordered),
+            nulls,
+            entries,
+            value_offsets: offsets,
+        })
+    }
+
+    /// Create a new [`MapArray`] from the provided parts
+    ///
+    /// See [`MapBuilder`](crate::builder::MapBuilder) for a higher-level interface
+    /// to construct a [`MapArray`]
+    ///
+    /// # Panics
+    ///
+    /// Panics if [`Self::try_new`] returns an error
+    pub fn new(
+        field: FieldRef,
+        offsets: OffsetBuffer<i32>,
+        entries: StructArray,
+        nulls: Option<NullBuffer>,
+        ordered: bool,
+    ) -> Self {
+        Self::try_new(field, offsets, entries, nulls, ordered).unwrap()
+    }
+
+    /// Deconstruct this array into its constituent parts
+    pub fn into_parts(
+        self,
+    ) -> (
+        FieldRef,
+        OffsetBuffer<i32>,
+        StructArray,
+        Option<NullBuffer>,
+        bool,
+    ) {
+        let (f, ordered) = match self.data_type {
+            DataType::Map(f, ordered) => (f, ordered),
+            _ => unreachable!(),
+        };
+        (f, self.value_offsets, self.entries, self.nulls, ordered)
+    }
+
     /// Returns a reference to the offsets of this map
     ///
     /// Unlike [`Self::value_offsets`] this returns the [`OffsetBuffer`]
@@ -115,6 +225,11 @@ impl MapArray {
             value_offsets: self.value_offsets.slice(offset, length),
         }
     }
+
+    /// constructs a new iterator
+    pub fn iter(&self) -> MapArrayIter<'_> {
+        MapArrayIter::new(self)
+    }
 }
 
 impl From<ArrayData> for MapArray {
@@ -147,9 +262,10 @@ impl MapArray {
         }
 
         if data.buffers().len() != 1 {
-            return Err(ArrowError::InvalidArgumentError(
-                format!("MapArray data should contain a single buffer only (value offsets), had {}",
-                        data.len())));
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "MapArray data should contain a single buffer only (value offsets), had {}",
+                data.len()
+            )));
         }
 
         if data.child_data().len() != 1 {
@@ -164,9 +280,9 @@ impl MapArray {
         if let DataType::Struct(fields) = entries.data_type() {
             if fields.len() != 2 {
                 return Err(ArrowError::InvalidArgumentError(format!(
-                "MapArray should contain a struct array with 2 fields, have {} fields",
-                fields.len()
-            )));
+                    "MapArray should contain a struct array with 2 fields, have {} fields",
+                    fields.len()
+                )));
             }
         } else {
             return Err(ArrowError::InvalidArgumentError(format!(
@@ -197,12 +313,12 @@ impl MapArray {
         let entry_offsets_buffer = Buffer::from(entry_offsets.to_byte_slice());
         let keys_data = StringArray::from_iter_values(keys);
 
-        let keys_field = Field::new("keys", DataType::Utf8, false);
-        let values_field = Field::new(
+        let keys_field = Arc::new(Field::new("keys", DataType::Utf8, false));
+        let values_field = Arc::new(Field::new(
             "values",
             values.data_type().clone(),
             values.null_count() > 0,
-        );
+        ));
 
         let entry_struct = StructArray::from(vec![
             (keys_field, Arc::new(keys_data) as ArrayRef),
@@ -213,7 +329,7 @@ impl MapArray {
             Arc::new(Field::new(
                 "entries",
                 entry_struct.data_type().clone(),
-                true,
+                false,
             )),
             false,
         );
@@ -283,6 +399,18 @@ impl Array for MapArray {
     }
 }
 
+impl<'a> ArrayAccessor for &'a MapArray {
+    type Item = StructArray;
+
+    fn value(&self, index: usize) -> Self::Item {
+        MapArray::value(self, index)
+    }
+
+    unsafe fn value_unchecked(&self, index: usize) -> Self::Item {
+        MapArray::value(self, index)
+    }
+}
+
 impl std::fmt::Debug for MapArray {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         write!(f, "MapArray\n[\n")?;
@@ -336,8 +464,8 @@ mod tests {
         //  [[0, 1, 2], [3, 4, 5], [6, 7]]
         let entry_offsets = Buffer::from(&[0, 3, 6, 8].to_byte_slice());
 
-        let keys = Field::new("keys", DataType::Int32, false);
-        let values = Field::new("values", DataType::UInt32, false);
+        let keys = Arc::new(Field::new("keys", DataType::Int32, false));
+        let values = Arc::new(Field::new("values", DataType::UInt32, false));
         let entry_struct = StructArray::from(vec![
             (keys, make_array(keys_data)),
             (values, make_array(values_data)),
@@ -348,7 +476,7 @@ mod tests {
             Arc::new(Field::new(
                 "entries",
                 entry_struct.data_type().clone(),
-                true,
+                false,
             )),
             false,
         );
@@ -382,8 +510,8 @@ mod tests {
         //  [[0, 1, 2], [3, 4, 5], [6, 7]]
         let entry_offsets = Buffer::from(&[0, 3, 6, 8].to_byte_slice());
 
-        let keys_field = Field::new("keys", DataType::Int32, false);
-        let values_field = Field::new("values", DataType::UInt32, true);
+        let keys_field = Arc::new(Field::new("keys", DataType::Int32, false));
+        let values_field = Arc::new(Field::new("values", DataType::UInt32, true));
         let entry_struct = StructArray::from(vec![
             (keys_field.clone(), make_array(key_data)),
             (values_field.clone(), make_array(value_data.clone())),
@@ -394,7 +522,7 @@ mod tests {
             Arc::new(Field::new(
                 "entries",
                 entry_struct.data_type().clone(),
-                true,
+                false,
             )),
             false,
         );
@@ -447,8 +575,7 @@ mod tests {
         assert_eq!(2, map_array.value_length(1));
 
         let key_array = Arc::new(Int32Array::from(vec![3, 4, 5])) as ArrayRef;
-        let value_array =
-            Arc::new(UInt32Array::from(vec![None, Some(40), None])) as ArrayRef;
+        let value_array = Arc::new(UInt32Array::from(vec![None, Some(40), None])) as ArrayRef;
         let struct_array =
             StructArray::from(vec![(keys_field, key_array), (values_field, value_array)]);
         assert_eq!(
@@ -504,8 +631,8 @@ mod tests {
         //  [[3, 4, 5], [6, 7]]
         let entry_offsets = Buffer::from(&[0, 3, 5].to_byte_slice());
 
-        let keys = Field::new("keys", DataType::Int32, false);
-        let values = Field::new("values", DataType::UInt32, false);
+        let keys = Arc::new(Field::new("keys", DataType::Int32, false));
+        let values = Arc::new(Field::new("values", DataType::UInt32, false));
         let entry_struct = StructArray::from(vec![
             (keys, make_array(keys_data)),
             (values, make_array(values_data)),
@@ -516,7 +643,7 @@ mod tests {
             Arc::new(Field::new(
                 "entries",
                 entry_struct.data_type().clone(),
-                true,
+                false,
             )),
             false,
         );
@@ -540,9 +667,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(
-        expected = "MapArray expected ArrayData with DataType::Map got Dictionary"
-    )]
+    #[should_panic(expected = "MapArray expected ArrayData with DataType::Map got Dictionary")]
     fn test_from_array_data_validation() {
         // A DictionaryArray has similar buffer layout to a MapArray
         // but the meaning of the values differs
@@ -563,12 +688,9 @@ mod tests {
         //  [[a, b, c], [d, e, f], [g, h]]
         let entry_offsets = [0, 3, 6, 8];
 
-        let map_array = MapArray::new_from_strings(
-            keys.clone().into_iter(),
-            &values_data,
-            &entry_offsets,
-        )
-        .unwrap();
+        let map_array =
+            MapArray::new_from_strings(keys.clone().into_iter(), &values_data, &entry_offsets)
+                .unwrap();
 
         assert_eq!(
             &values_data,
@@ -582,8 +704,8 @@ mod tests {
 
         let key_array = Arc::new(StringArray::from(vec!["a", "b", "c"])) as ArrayRef;
         let value_array = Arc::new(UInt32Array::from(vec![0u32, 10, 20])) as ArrayRef;
-        let keys_field = Field::new("keys", DataType::Utf8, false);
-        let values_field = Field::new("values", DataType::UInt32, false);
+        let keys_field = Arc::new(Field::new("keys", DataType::Utf8, false));
+        let values_field = Arc::new(Field::new("values", DataType::UInt32, false));
         let struct_array =
             StructArray::from(vec![(keys_field, key_array), (values_field, value_array)]);
         assert_eq!(
@@ -601,5 +723,80 @@ mod tests {
             assert!(map_array.is_valid(i));
             assert!(!map_array.is_null(i));
         }
+    }
+
+    #[test]
+    fn test_try_new() {
+        let offsets = OffsetBuffer::new(vec![0, 1, 4, 5].into());
+        let fields = Fields::from(vec![
+            Field::new("key", DataType::Int32, false),
+            Field::new("values", DataType::Int32, false),
+        ]);
+        let columns = vec![
+            Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5])) as _,
+            Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5])) as _,
+        ];
+
+        let entries = StructArray::new(fields.clone(), columns, None);
+        let field = Arc::new(Field::new("entries", DataType::Struct(fields), false));
+
+        MapArray::new(field.clone(), offsets.clone(), entries.clone(), None, false);
+
+        let nulls = NullBuffer::new_null(3);
+        MapArray::new(field.clone(), offsets, entries.clone(), Some(nulls), false);
+
+        let nulls = NullBuffer::new_null(3);
+        let offsets = OffsetBuffer::new(vec![0, 1, 2, 4, 5].into());
+        let err = MapArray::try_new(
+            field.clone(),
+            offsets.clone(),
+            entries.clone(),
+            Some(nulls),
+            false,
+        )
+        .unwrap_err();
+
+        assert_eq!(
+            err.to_string(),
+            "Invalid argument error: Incorrect length of null buffer for MapArray, expected 4 got 3"
+        );
+
+        let err = MapArray::try_new(field, offsets.clone(), entries.slice(0, 2), None, false)
+            .unwrap_err();
+
+        assert_eq!(
+            err.to_string(),
+            "Invalid argument error: Max offset of 5 exceeds length of entries 2"
+        );
+
+        let field = Arc::new(Field::new("element", DataType::Int64, false));
+        let err = MapArray::try_new(field, offsets.clone(), entries, None, false)
+            .unwrap_err()
+            .to_string();
+
+        assert!(
+            err.starts_with("Invalid argument error: MapArray expected data type Int64 got Struct"),
+            "{err}"
+        );
+
+        let fields = Fields::from(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, false),
+            Field::new("c", DataType::Int32, false),
+        ]);
+        let columns = vec![
+            Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5])) as _,
+            Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5])) as _,
+            Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5])) as _,
+        ];
+
+        let s = StructArray::new(fields.clone(), columns, None);
+        let field = Arc::new(Field::new("entries", DataType::Struct(fields), false));
+        let err = MapArray::try_new(field, offsets, s, None, false).unwrap_err();
+
+        assert_eq!(
+            err.to_string(),
+            "Invalid argument error: MapArray entries must contain two children, got 3"
+        );
     }
 }

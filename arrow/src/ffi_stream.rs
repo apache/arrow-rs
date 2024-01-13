@@ -37,29 +37,25 @@
 //! let reader = Box::new(FileReader::try_new(file).unwrap());
 //!
 //! // export it
-//! let stream = Box::new(FFI_ArrowArrayStream::empty());
-//! let stream_ptr = Box::into_raw(stream) as *mut FFI_ArrowArrayStream;
-//! unsafe { export_reader_into_raw(reader, stream_ptr) };
+//! let mut stream = FFI_ArrowArrayStream::empty();
+//! unsafe { export_reader_into_raw(reader, &mut stream) };
 //!
 //! // consumed and used by something else...
 //!
 //! // import it
-//! let stream_reader = unsafe { ArrowArrayStreamReader::from_raw(stream_ptr).unwrap() };
+//! let stream_reader = unsafe { ArrowArrayStreamReader::from_raw(&mut stream).unwrap() };
 //! let imported_schema = stream_reader.schema();
 //!
 //! let mut produced_batches = vec![];
 //! for batch in stream_reader {
 //!      produced_batches.push(batch.unwrap());
 //! }
-//!
-//! // (drop/release)
-//! unsafe {
-//!   Box::from_raw(stream_ptr);
-//! }
 //! Ok(())
 //! }
 //! ```
 
+use arrow_schema::DataType;
+use std::ffi::CStr;
 use std::ptr::addr_of;
 use std::{
     convert::TryFrom,
@@ -88,22 +84,18 @@ const ENOSYS: i32 = 78;
 #[derive(Debug)]
 pub struct FFI_ArrowArrayStream {
     pub get_schema: Option<
-        unsafe extern "C" fn(
-            arg1: *mut FFI_ArrowArrayStream,
-            out: *mut FFI_ArrowSchema,
-        ) -> c_int,
+        unsafe extern "C" fn(arg1: *mut FFI_ArrowArrayStream, out: *mut FFI_ArrowSchema) -> c_int,
     >,
     pub get_next: Option<
-        unsafe extern "C" fn(
-            arg1: *mut FFI_ArrowArrayStream,
-            out: *mut FFI_ArrowArray,
-        ) -> c_int,
+        unsafe extern "C" fn(arg1: *mut FFI_ArrowArrayStream, out: *mut FFI_ArrowArray) -> c_int,
     >,
     pub get_last_error:
         Option<unsafe extern "C" fn(arg1: *mut FFI_ArrowArrayStream) -> *const c_char>,
     pub release: Option<unsafe extern "C" fn(arg1: *mut FFI_ArrowArrayStream)>,
     pub private_data: *mut c_void,
 }
+
+unsafe impl Send for FFI_ArrowArrayStream {}
 
 // callback used to drop [FFI_ArrowArrayStream] when it is exported.
 unsafe extern "C" fn release_stream(stream: *mut FFI_ArrowArrayStream) {
@@ -123,8 +115,8 @@ unsafe extern "C" fn release_stream(stream: *mut FFI_ArrowArrayStream) {
 }
 
 struct StreamPrivateData {
-    batch_reader: Box<dyn RecordBatchReader>,
-    last_error: String,
+    batch_reader: Box<dyn RecordBatchReader + Send>,
+    last_error: Option<CString>,
 }
 
 // The callback used to get array schema
@@ -146,8 +138,12 @@ unsafe extern "C" fn get_next(
 // The callback used to get the error from last operation on the `FFI_ArrowArrayStream`
 unsafe extern "C" fn get_last_error(stream: *mut FFI_ArrowArrayStream) -> *const c_char {
     let mut ffi_stream = ExportedArrayStream { stream };
-    let last_error = ffi_stream.get_last_error();
-    CString::new(last_error.as_str()).unwrap().into_raw()
+    // The consumer should not take ownership of this string, we should return
+    // a const pointer to it.
+    match ffi_stream.get_last_error() {
+        Some(err_string) => err_string.as_ptr(),
+        None => std::ptr::null(),
+    }
 }
 
 impl Drop for FFI_ArrowArrayStream {
@@ -161,10 +157,10 @@ impl Drop for FFI_ArrowArrayStream {
 
 impl FFI_ArrowArrayStream {
     /// Creates a new [`FFI_ArrowArrayStream`].
-    pub fn new(batch_reader: Box<dyn RecordBatchReader>) -> Self {
+    pub fn new(batch_reader: Box<dyn RecordBatchReader + Send>) -> Self {
         let private_data = Box::new(StreamPrivateData {
             batch_reader,
-            last_error: String::new(),
+            last_error: None,
         });
 
         Self {
@@ -174,6 +170,22 @@ impl FFI_ArrowArrayStream {
             release: Some(release_stream),
             private_data: Box::into_raw(private_data) as *mut c_void,
         }
+    }
+
+    /// Takes ownership of the pointed to [`FFI_ArrowArrayStream`]
+    ///
+    /// This acts to [move] the data out of `raw_stream`, setting the release callback to NULL
+    ///
+    /// # Safety
+    ///
+    /// * `raw_stream` must be [valid] for reads and writes
+    /// * `raw_stream` must be properly aligned
+    /// * `raw_stream` must point to a properly initialized value of [`FFI_ArrowArrayStream`]
+    ///
+    /// [move]: https://arrow.apache.org/docs/format/CDataInterface.html#moving-an-array
+    /// [valid]: https://doc.rust-lang.org/std/ptr/index.html#safety
+    pub unsafe fn from_raw(raw_stream: *mut FFI_ArrowArrayStream) -> Self {
+        std::ptr::replace(raw_stream, Self::empty())
     }
 
     /// Creates a new empty [FFI_ArrowArrayStream]. Used to import from the C Stream Interface.
@@ -198,7 +210,7 @@ impl ExportedArrayStream {
     }
 
     pub fn get_schema(&mut self, out: *mut FFI_ArrowSchema) -> i32 {
-        let mut private_data = self.get_private_data();
+        let private_data = self.get_private_data();
         let reader = &private_data.batch_reader;
 
         let schema = FFI_ArrowSchema::try_from(reader.schema().as_ref());
@@ -210,14 +222,16 @@ impl ExportedArrayStream {
                 0
             }
             Err(ref err) => {
-                private_data.last_error = err.to_string();
+                private_data.last_error = Some(
+                    CString::new(err.to_string()).expect("Error string has a null byte in it."),
+                );
                 get_error_code(err)
             }
         }
     }
 
     pub fn get_next(&mut self, out: *mut FFI_ArrowArray) -> i32 {
-        let mut private_data = self.get_private_data();
+        let private_data = self.get_private_data();
         let reader = &mut private_data.batch_reader;
 
         match reader.next() {
@@ -231,20 +245,21 @@ impl ExportedArrayStream {
                     let struct_array = StructArray::from(batch);
                     let array = FFI_ArrowArray::new(&struct_array.to_data());
 
-                    unsafe { std::ptr::copy(addr_of!(array), out, 1) };
-                    std::mem::forget(array);
+                    unsafe { std::ptr::write_unaligned(out, array) };
                     0
                 } else {
                     let err = &next_batch.unwrap_err();
-                    private_data.last_error = err.to_string();
+                    private_data.last_error = Some(
+                        CString::new(err.to_string()).expect("Error string has a null byte in it."),
+                    );
                     get_error_code(err)
                 }
             }
         }
     }
 
-    pub fn get_last_error(&mut self) -> &String {
-        &self.get_private_data().last_error
+    pub fn get_last_error(&mut self) -> Option<&CString> {
+        self.get_private_data().last_error.as_ref()
     }
 }
 
@@ -252,7 +267,7 @@ fn get_error_code(err: &ArrowError) -> i32 {
     match err {
         ArrowError::NotYetImplemented(_) => ENOSYS,
         ArrowError::MemoryError(_) => ENOMEM,
-        ArrowError::IoError(_) => EIO,
+        ArrowError::IoError(_, _) => EIO,
         _ => EINVAL,
     }
 }
@@ -261,24 +276,21 @@ fn get_error_code(err: &ArrowError) -> i32 {
 /// Struct used to fetch `RecordBatch` from the C Stream Interface.
 /// Its main responsibility is to expose `RecordBatchReader` functionality
 /// that requires [FFI_ArrowArrayStream].
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct ArrowArrayStreamReader {
-    stream: Arc<FFI_ArrowArrayStream>,
+    stream: FFI_ArrowArrayStream,
     schema: SchemaRef,
 }
 
 /// Gets schema from a raw pointer of `FFI_ArrowArrayStream`. This is used when constructing
 /// `ArrowArrayStreamReader` to cache schema.
 fn get_stream_schema(stream_ptr: *mut FFI_ArrowArrayStream) -> Result<SchemaRef> {
-    let empty_schema = Arc::new(FFI_ArrowSchema::empty());
-    let schema_ptr = Arc::into_raw(empty_schema) as *mut FFI_ArrowSchema;
+    let mut schema = FFI_ArrowSchema::empty();
 
-    let ret_code = unsafe { (*stream_ptr).get_schema.unwrap()(stream_ptr, schema_ptr) };
-
-    let ffi_schema = unsafe { Arc::from_raw(schema_ptr) };
+    let ret_code = unsafe { (*stream_ptr).get_schema.unwrap()(stream_ptr, &mut schema) };
 
     if ret_code == 0 {
-        let schema = Schema::try_from(ffi_schema.as_ref()).unwrap();
+        let schema = Schema::try_from(&schema)?;
         Ok(Arc::new(schema))
     } else {
         Err(ArrowError::CDataInterface(format!(
@@ -291,21 +303,16 @@ impl ArrowArrayStreamReader {
     /// Creates a new `ArrowArrayStreamReader` from a `FFI_ArrowArrayStream`.
     /// This is used to import from the C Stream Interface.
     #[allow(dead_code)]
-    pub fn try_new(stream: FFI_ArrowArrayStream) -> Result<Self> {
+    pub fn try_new(mut stream: FFI_ArrowArrayStream) -> Result<Self> {
         if stream.release.is_none() {
             return Err(ArrowError::CDataInterface(
                 "input stream is already released".to_string(),
             ));
         }
 
-        let stream_ptr = Arc::into_raw(Arc::new(stream)) as *mut FFI_ArrowArrayStream;
+        let schema = get_stream_schema(&mut stream)?;
 
-        let schema = get_stream_schema(stream_ptr)?;
-
-        Ok(Self {
-            stream: unsafe { Arc::from_raw(stream_ptr) },
-            schema,
-        })
+        Ok(Self { stream, schema })
     }
 
     /// Creates a new `ArrowArrayStreamReader` from a raw pointer of `FFI_ArrowArrayStream`.
@@ -316,29 +323,23 @@ impl ArrowArrayStreamReader {
     /// the pointer.
     ///
     /// # Safety
-    /// This function dereferences a raw pointer of `FFI_ArrowArrayStream`.
+    ///
+    /// See [`FFI_ArrowArrayStream::from_raw`]
     pub unsafe fn from_raw(raw_stream: *mut FFI_ArrowArrayStream) -> Result<Self> {
-        let stream_data = std::ptr::replace(raw_stream, FFI_ArrowArrayStream::empty());
-
-        Self::try_new(stream_data)
+        Self::try_new(FFI_ArrowArrayStream::from_raw(raw_stream))
     }
 
     /// Get the last error from `ArrowArrayStreamReader`
-    fn get_stream_last_error(&self) -> Option<String> {
-        self.stream.get_last_error?;
+    fn get_stream_last_error(&mut self) -> Option<String> {
+        let get_last_error = self.stream.get_last_error?;
 
-        let stream_ptr = Arc::as_ptr(&self.stream) as *mut FFI_ArrowArrayStream;
-
-        let error_str = unsafe {
-            let c_str = self.stream.get_last_error.unwrap()(stream_ptr) as *mut c_char;
-            CString::from_raw(c_str).into_string()
-        };
-
-        if let Err(err) = error_str {
-            Some(err.to_string())
-        } else {
-            Some(error_str.unwrap())
+        let error_str = unsafe { get_last_error(&mut self.stream) };
+        if error_str.is_null() {
+            return None;
         }
+
+        let error_str = unsafe { CStr::from_ptr(error_str) };
+        Some(error_str.to_string_lossy().to_string())
     }
 }
 
@@ -346,37 +347,21 @@ impl Iterator for ArrowArrayStreamReader {
     type Item = Result<RecordBatch>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let stream_ptr = Arc::as_ptr(&self.stream) as *mut FFI_ArrowArrayStream;
+        let mut array = FFI_ArrowArray::empty();
 
-        let empty_array = Arc::new(FFI_ArrowArray::empty());
-        let array_ptr = Arc::into_raw(empty_array) as *mut FFI_ArrowArray;
-
-        let ret_code = unsafe { self.stream.get_next.unwrap()(stream_ptr, array_ptr) };
+        let ret_code = unsafe { self.stream.get_next.unwrap()(&mut self.stream, &mut array) };
 
         if ret_code == 0 {
-            let ffi_array = unsafe { Arc::from_raw(array_ptr) };
-
             // The end of stream has been reached
-            if ffi_array.is_released() {
+            if array.is_released() {
                 return None;
             }
 
-            let schema_ref = self.schema();
-            let schema = FFI_ArrowSchema::try_from(schema_ref.as_ref()).ok()?;
-
-            let data = ArrowArray {
-                array: ffi_array,
-                schema: Arc::new(schema),
-            }
-            .to_data()
-            .ok()?;
-
-            let record_batch = RecordBatch::from(StructArray::from(data));
-
-            Some(Ok(record_batch))
+            let result = unsafe {
+                from_ffi_and_data_type(array, DataType::Struct(self.schema().fields().clone()))
+            };
+            Some(result.map(|data| RecordBatch::from(StructArray::from(data))))
         } else {
-            unsafe { Arc::from_raw(array_ptr) };
-
             let last_error = self.get_stream_last_error();
             let err = ArrowError::CDataInterface(last_error.unwrap());
             Some(Err(err))
@@ -395,8 +380,9 @@ impl RecordBatchReader for ArrowArrayStreamReader {
 /// # Safety
 /// Assumes that the pointer represents valid C Stream Interfaces, both in memory
 /// representation and lifetime via the `release` mechanism.
+#[deprecated(note = "Use FFI_ArrowArrayStream::new")]
 pub unsafe fn export_reader_into_raw(
-    reader: Box<dyn RecordBatchReader>,
+    reader: Box<dyn RecordBatchReader + Send>,
     out_stream: *mut FFI_ArrowArrayStream,
 ) {
     let stream = FFI_ArrowArrayStream::new(reader);
@@ -406,6 +392,8 @@ pub unsafe fn export_reader_into_raw(
 
 #[cfg(test)]
 mod tests {
+    use arrow_schema::DataType;
+
     use super::*;
 
     use crate::array::Int32Array;
@@ -413,13 +401,13 @@ mod tests {
 
     struct TestRecordBatchReader {
         schema: SchemaRef,
-        iter: Box<dyn Iterator<Item = Result<RecordBatch>>>,
+        iter: Box<dyn Iterator<Item = Result<RecordBatch>> + Send>,
     }
 
     impl TestRecordBatchReader {
         pub fn new(
             schema: SchemaRef,
-            iter: Box<dyn Iterator<Item = Result<RecordBatch>>>,
+            iter: Box<dyn Iterator<Item = Result<RecordBatch>> + Send>,
         ) -> Box<TestRecordBatchReader> {
             Box::new(TestRecordBatchReader { schema, iter })
         }
@@ -451,44 +439,29 @@ mod tests {
         let reader = TestRecordBatchReader::new(schema.clone(), iter);
 
         // Export a `RecordBatchReader` through `FFI_ArrowArrayStream`
-        let stream = Arc::new(FFI_ArrowArrayStream::empty());
-        let stream_ptr = Arc::into_raw(stream) as *mut FFI_ArrowArrayStream;
-
-        unsafe { export_reader_into_raw(reader, stream_ptr) };
-
-        let empty_schema = Arc::new(FFI_ArrowSchema::empty());
-        let schema_ptr = Arc::into_raw(empty_schema) as *mut FFI_ArrowSchema;
+        let mut ffi_stream = FFI_ArrowArrayStream::new(reader);
 
         // Get schema from `FFI_ArrowArrayStream`
-        let ret_code = unsafe { get_schema(stream_ptr, schema_ptr) };
+        let mut ffi_schema = FFI_ArrowSchema::empty();
+        let ret_code = unsafe { get_schema(&mut ffi_stream, &mut ffi_schema) };
         assert_eq!(ret_code, 0);
 
-        let ffi_schema = unsafe { Arc::from_raw(schema_ptr) };
-
-        let exported_schema = Schema::try_from(ffi_schema.as_ref()).unwrap();
+        let exported_schema = Schema::try_from(&ffi_schema).unwrap();
         assert_eq!(&exported_schema, schema.as_ref());
 
         // Get array from `FFI_ArrowArrayStream`
         let mut produced_batches = vec![];
         loop {
-            let empty_array = Arc::new(FFI_ArrowArray::empty());
-            let array_ptr = Arc::into_raw(empty_array.clone()) as *mut FFI_ArrowArray;
-
-            let ret_code = unsafe { get_next(stream_ptr, array_ptr) };
+            let mut ffi_array = FFI_ArrowArray::empty();
+            let ret_code = unsafe { get_next(&mut ffi_stream, &mut ffi_array) };
             assert_eq!(ret_code, 0);
 
             // The end of stream has been reached
-            let ffi_array = unsafe { Arc::from_raw(array_ptr) };
             if ffi_array.is_released() {
                 break;
             }
 
-            let array = ArrowArray {
-                array: ffi_array,
-                schema: ffi_schema.clone(),
-            }
-            .to_data()
-            .unwrap();
+            let array = unsafe { from_ffi(ffi_array, &ffi_schema) }.unwrap();
 
             let record_batch = RecordBatch::from(StructArray::from(array));
             produced_batches.push(record_batch);
@@ -496,7 +469,6 @@ mod tests {
 
         assert_eq!(produced_batches, vec![batch.clone(), batch]);
 
-        unsafe { Arc::from_raw(stream_ptr) };
         Ok(())
     }
 
@@ -512,10 +484,8 @@ mod tests {
         let reader = TestRecordBatchReader::new(schema.clone(), iter);
 
         // Import through `FFI_ArrowArrayStream` as `ArrowArrayStreamReader`
-        let stream = Arc::new(FFI_ArrowArrayStream::new(reader));
-        let stream_ptr = Arc::into_raw(stream) as *mut FFI_ArrowArrayStream;
-        let stream_reader =
-            unsafe { ArrowArrayStreamReader::from_raw(stream_ptr).unwrap() };
+        let stream = FFI_ArrowArrayStream::new(reader);
+        let stream_reader = ArrowArrayStreamReader::try_new(stream).unwrap();
 
         let imported_schema = stream_reader.schema();
         assert_eq!(imported_schema, schema);
@@ -527,7 +497,6 @@ mod tests {
 
         assert_eq!(produced_batches, vec![batch.clone(), batch]);
 
-        unsafe { Arc::from_raw(stream_ptr) };
         Ok(())
     }
 
@@ -545,5 +514,32 @@ mod tests {
         let array: Arc<dyn Array> = Arc::new(array);
 
         _test_round_trip_import(vec![array.clone(), array.clone(), array])
+    }
+
+    #[test]
+    fn test_error_import() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, true)]));
+
+        let iter = Box::new(vec![Err(ArrowError::MemoryError("".to_string()))].into_iter());
+
+        let reader = TestRecordBatchReader::new(schema.clone(), iter);
+
+        // Import through `FFI_ArrowArrayStream` as `ArrowArrayStreamReader`
+        let stream = FFI_ArrowArrayStream::new(reader);
+        let stream_reader = ArrowArrayStreamReader::try_new(stream).unwrap();
+
+        let imported_schema = stream_reader.schema();
+        assert_eq!(imported_schema, schema);
+
+        let mut produced_batches = vec![];
+        for batch in stream_reader {
+            produced_batches.push(batch);
+        }
+
+        // The results should outlive the lifetime of the stream itself.
+        assert_eq!(produced_batches.len(), 1);
+        assert!(produced_batches[0].is_err());
+
+        Ok(())
     }
 }

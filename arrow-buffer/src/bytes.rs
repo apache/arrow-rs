@@ -60,11 +60,7 @@ impl Bytes {
     /// This function is unsafe as there is no guarantee that the given pointer is valid for `len`
     /// bytes. If the `ptr` and `capacity` come from a `Buffer`, then this is guaranteed.
     #[inline]
-    pub(crate) unsafe fn new(
-        ptr: NonNull<u8>,
-        len: usize,
-        deallocation: Deallocation,
-    ) -> Bytes {
+    pub(crate) unsafe fn new(ptr: NonNull<u8>, len: usize, deallocation: Deallocation) -> Bytes {
         Bytes {
             ptr,
             len,
@@ -146,5 +142,33 @@ impl Debug for Bytes {
         f.debug_list().entries(self.iter()).finish()?;
 
         write!(f, " }}")
+    }
+}
+
+impl From<bytes::Bytes> for Bytes {
+    fn from(value: bytes::Bytes) -> Self {
+        Self {
+            len: value.len(),
+            ptr: NonNull::new(value.as_ptr() as _).unwrap(),
+            deallocation: Deallocation::Custom(std::sync::Arc::new(value)),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_from_bytes() {
+        let bytes = bytes::Bytes::from(vec![1, 2, 3, 4]);
+        let arrow_bytes: Bytes = bytes.clone().into();
+
+        assert_eq!(bytes.as_ptr(), arrow_bytes.as_ptr());
+
+        drop(bytes);
+        drop(arrow_bytes);
+
+        let _ = Bytes::from(bytes::Bytes::new());
     }
 }

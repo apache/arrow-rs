@@ -18,24 +18,24 @@
 use crate::arrow::array_reader::{read_records, skip_records, ArrayReader};
 use crate::arrow::buffer::bit_util::{iter_set_bits_rev, sign_extend_be};
 use crate::arrow::decoder::{DeltaByteArrayDecoder, DictIndexDecoder};
-use crate::arrow::record_reader::buffer::{BufferQueue, ScalarBuffer, ValuesBuffer};
+use crate::arrow::record_reader::buffer::ValuesBuffer;
 use crate::arrow::record_reader::GenericRecordReader;
 use crate::arrow::schema::parquet_to_arrow_field;
 use crate::basic::{Encoding, Type};
 use crate::column::page::PageIterator;
-use crate::column::reader::decoder::{ColumnValueDecoder, ValuesBufferSlice};
+use crate::column::reader::decoder::ColumnValueDecoder;
 use crate::errors::{ParquetError, Result};
 use crate::schema::types::ColumnDescPtr;
-use crate::util::memory::ByteBufferPtr;
 use arrow_array::{
-    ArrayRef, Decimal128Array, FixedSizeBinaryArray, IntervalDayTimeArray,
-    IntervalYearMonthArray,
+    ArrayRef, Decimal128Array, Decimal256Array, FixedSizeBinaryArray, Float16Array,
+    IntervalDayTimeArray, IntervalYearMonthArray,
 };
-use arrow_buffer::Buffer;
+use arrow_buffer::{i256, Buffer};
 use arrow_data::ArrayDataBuilder;
 use arrow_schema::{DataType as ArrowType, IntervalUnit};
+use bytes::Bytes;
+use half::f16;
 use std::any::Any;
-use std::ops::Range;
 use std::sync::Arc;
 
 /// Returns an [`ArrayReader`] that decodes the provided fixed length byte array column
@@ -61,7 +61,6 @@ pub fn make_fixed_len_byte_array_reader(
             ))
         }
     };
-
     match &data_type {
         ArrowType::FixedSizeBinary(_) => {}
         ArrowType::Decimal128(_, _) => {
@@ -72,11 +71,27 @@ pub fn make_fixed_len_byte_array_reader(
                 ));
             }
         }
+        ArrowType::Decimal256(_, _) => {
+            if byte_length > 32 {
+                return Err(general_err!(
+                    "decimal 256 type too large, must be less than 32 bytes, got {}",
+                    byte_length
+                ));
+            }
+        }
         ArrowType::Interval(_) => {
             if byte_length != 12 {
                 // https://github.com/apache/parquet-format/blob/master/LogicalTypes.md#interval
                 return Err(general_err!(
                     "interval type must consist of 12 bytes got {}",
+                    byte_length
+                ));
+            }
+        }
+        ArrowType::Float16 => {
+            if byte_length != 2 {
+                return Err(general_err!(
+                    "float 16 type must be 2 bytes, got {}",
                     byte_length
                 ));
             }
@@ -101,8 +116,8 @@ struct FixedLenByteArrayReader {
     data_type: ArrowType,
     byte_length: usize,
     pages: Box<dyn PageIterator>,
-    def_levels_buffer: Option<Buffer>,
-    rep_levels_buffer: Option<Buffer>,
+    def_levels_buffer: Option<Vec<i16>>,
+    rep_levels_buffer: Option<Vec<i16>>,
     record_reader: GenericRecordReader<FixedLenByteArrayBuffer, ValueDecoder>,
 }
 
@@ -119,13 +134,7 @@ impl FixedLenByteArrayReader {
             pages,
             def_levels_buffer: None,
             rep_levels_buffer: None,
-            record_reader: GenericRecordReader::new_with_records(
-                column_desc,
-                FixedLenByteArrayBuffer {
-                    buffer: Default::default(),
-                    byte_length,
-                },
-            ),
+            record_reader: GenericRecordReader::new(column_desc),
         }
     }
 }
@@ -146,21 +155,29 @@ impl ArrayReader for FixedLenByteArrayReader {
     fn consume_batch(&mut self) -> Result<ArrayRef> {
         let record_data = self.record_reader.consume_record_data();
 
-        let array_data =
-            ArrayDataBuilder::new(ArrowType::FixedSizeBinary(self.byte_length as i32))
-                .len(self.record_reader.num_values())
-                .add_buffer(record_data)
-                .null_bit_buffer(self.record_reader.consume_bitmap_buffer());
+        let array_data = ArrayDataBuilder::new(ArrowType::FixedSizeBinary(self.byte_length as i32))
+            .len(self.record_reader.num_values())
+            .add_buffer(Buffer::from_vec(record_data.buffer))
+            .null_bit_buffer(self.record_reader.consume_bitmap_buffer());
 
         let binary = FixedSizeBinaryArray::from(unsafe { array_data.build_unchecked() });
 
         // TODO: An improvement might be to do this conversion on read
-        let array = match &self.data_type {
+        let array: ArrayRef = match &self.data_type {
             ArrowType::Decimal128(p, s) => {
                 let decimal = binary
                     .iter()
                     .map(|opt| Some(i128::from_be_bytes(sign_extend_be(opt?))))
                     .collect::<Decimal128Array>()
+                    .with_precision_and_scale(*p, *s)?;
+
+                Arc::new(decimal)
+            }
+            ArrowType::Decimal256(p, s) => {
+                let decimal = binary
+                    .iter()
+                    .map(|opt| Some(i256::from_be_bytes(sign_extend_be(opt?))))
+                    .collect::<Decimal256Array>()
                     .with_precision_and_scale(*p, *s)?;
 
                 Arc::new(decimal)
@@ -172,19 +189,13 @@ impl ArrayReader for FixedLenByteArrayReader {
                     IntervalUnit::YearMonth => Arc::new(
                         binary
                             .iter()
-                            .map(|o| {
-                                o.map(|b| i32::from_le_bytes(b[0..4].try_into().unwrap()))
-                            })
+                            .map(|o| o.map(|b| i32::from_le_bytes(b[0..4].try_into().unwrap())))
                             .collect::<IntervalYearMonthArray>(),
                     ) as ArrayRef,
                     IntervalUnit::DayTime => Arc::new(
                         binary
                             .iter()
-                            .map(|o| {
-                                o.map(|b| {
-                                    i64::from_le_bytes(b[4..12].try_into().unwrap())
-                                })
-                            })
+                            .map(|o| o.map(|b| i64::from_le_bytes(b[4..12].try_into().unwrap())))
                             .collect::<IntervalDayTimeArray>(),
                     ) as ArrayRef,
                     IntervalUnit::MonthDayNano => {
@@ -192,6 +203,12 @@ impl ArrayReader for FixedLenByteArrayReader {
                     }
                 }
             }
+            ArrowType::Float16 => Arc::new(
+                binary
+                    .iter()
+                    .map(|o| o.map(|b| f16::from_le_bytes(b[..2].try_into().unwrap())))
+                    .collect::<Float16Array>(),
+            ) as ArrayRef,
             _ => Arc::new(binary) as ArrayRef,
         };
 
@@ -207,41 +224,19 @@ impl ArrayReader for FixedLenByteArrayReader {
     }
 
     fn get_def_levels(&self) -> Option<&[i16]> {
-        self.def_levels_buffer.as_ref().map(|buf| buf.typed_data())
+        self.def_levels_buffer.as_deref()
     }
 
     fn get_rep_levels(&self) -> Option<&[i16]> {
-        self.rep_levels_buffer.as_ref().map(|buf| buf.typed_data())
+        self.rep_levels_buffer.as_deref()
     }
 }
 
+#[derive(Default)]
 struct FixedLenByteArrayBuffer {
-    buffer: ScalarBuffer<u8>,
+    buffer: Vec<u8>,
     /// The length of each element in bytes
-    byte_length: usize,
-}
-
-impl ValuesBufferSlice for FixedLenByteArrayBuffer {
-    fn capacity(&self) -> usize {
-        usize::MAX
-    }
-}
-
-impl BufferQueue for FixedLenByteArrayBuffer {
-    type Output = Buffer;
-    type Slice = Self;
-
-    fn split_off(&mut self, len: usize) -> Self::Output {
-        self.buffer.split_off(len * self.byte_length)
-    }
-
-    fn spare_capacity_mut(&mut self, _batch_size: usize) -> &mut Self::Slice {
-        self
-    }
-
-    fn set_len(&mut self, len: usize) {
-        assert_eq!(self.buffer.len(), len * self.byte_length);
-    }
+    byte_length: Option<usize>,
 }
 
 impl ValuesBuffer for FixedLenByteArrayBuffer {
@@ -252,29 +247,24 @@ impl ValuesBuffer for FixedLenByteArrayBuffer {
         levels_read: usize,
         valid_mask: &[u8],
     ) {
-        assert_eq!(
-            self.buffer.len(),
-            (read_offset + values_read) * self.byte_length
-        );
-        self.buffer
-            .resize((read_offset + levels_read) * self.byte_length);
+        let byte_length = self.byte_length.unwrap_or_default();
 
-        let slice = self.buffer.as_slice_mut();
+        assert_eq!(self.buffer.len(), (read_offset + values_read) * byte_length);
+        self.buffer
+            .resize((read_offset + levels_read) * byte_length, 0);
 
         let values_range = read_offset..read_offset + values_read;
-        for (value_pos, level_pos) in
-            values_range.rev().zip(iter_set_bits_rev(valid_mask))
-        {
+        for (value_pos, level_pos) in values_range.rev().zip(iter_set_bits_rev(valid_mask)) {
             debug_assert!(level_pos >= value_pos);
             if level_pos <= value_pos {
                 break;
             }
 
-            let level_pos_bytes = level_pos * self.byte_length;
-            let value_pos_bytes = value_pos * self.byte_length;
+            let level_pos_bytes = level_pos * byte_length;
+            let value_pos_bytes = value_pos * byte_length;
 
-            for i in 0..self.byte_length {
-                slice[level_pos_bytes + i] = slice[value_pos_bytes + i]
+            for i in 0..byte_length {
+                self.buffer[level_pos_bytes + i] = self.buffer[value_pos_bytes + i]
             }
         }
     }
@@ -282,12 +272,12 @@ impl ValuesBuffer for FixedLenByteArrayBuffer {
 
 struct ValueDecoder {
     byte_length: usize,
-    dict_page: Option<ByteBufferPtr>,
+    dict_page: Option<Bytes>,
     decoder: Option<Decoder>,
 }
 
 impl ColumnValueDecoder for ValueDecoder {
-    type Slice = FixedLenByteArrayBuffer;
+    type Buffer = FixedLenByteArrayBuffer;
 
     fn new(col: &ColumnDescPtr) -> Self {
         Self {
@@ -299,7 +289,7 @@ impl ColumnValueDecoder for ValueDecoder {
 
     fn set_dict(
         &mut self,
-        buf: ByteBufferPtr,
+        buf: Bytes,
         num_values: u32,
         encoding: Encoding,
         _is_sorted: bool,
@@ -329,7 +319,7 @@ impl ColumnValueDecoder for ValueDecoder {
     fn set_data(
         &mut self,
         encoding: Encoding,
-        data: ByteBufferPtr,
+        data: Bytes,
         num_levels: usize,
         num_values: Option<usize>,
     ) -> Result<()> {
@@ -354,14 +344,16 @@ impl ColumnValueDecoder for ValueDecoder {
         Ok(())
     }
 
-    fn read(&mut self, out: &mut Self::Slice, range: Range<usize>) -> Result<usize> {
-        assert_eq!(self.byte_length, out.byte_length);
+    fn read(&mut self, out: &mut Self::Buffer, num_values: usize) -> Result<usize> {
+        match out.byte_length {
+            Some(x) => assert_eq!(x, self.byte_length),
+            None => out.byte_length = Some(self.byte_length),
+        }
 
-        let len = range.end - range.start;
         match self.decoder.as_mut().unwrap() {
             Decoder::Plain { offset, buf } => {
                 let to_read =
-                    (len * self.byte_length).min(buf.len() - *offset) / self.byte_length;
+                    (num_values * self.byte_length).min(buf.len() - *offset) / self.byte_length;
                 let end_offset = *offset + to_read * self.byte_length;
                 out.buffer
                     .extend_from_slice(&buf.as_ref()[*offset..end_offset]);
@@ -375,7 +367,7 @@ impl ColumnValueDecoder for ValueDecoder {
                     return Ok(0);
                 }
 
-                decoder.read(len, |keys| {
+                decoder.read(num_values, |keys| {
                     out.buffer.reserve(keys.len() * self.byte_length);
                     for key in keys {
                         let offset = *key as usize * self.byte_length;
@@ -386,7 +378,7 @@ impl ColumnValueDecoder for ValueDecoder {
                 })
             }
             Decoder::Delta { decoder } => {
-                let to_read = len.min(decoder.remaining());
+                let to_read = num_values.min(decoder.remaining());
                 out.buffer.reserve(to_read * self.byte_length);
 
                 decoder.read(to_read, |slice| {
@@ -418,7 +410,7 @@ impl ColumnValueDecoder for ValueDecoder {
 }
 
 enum Decoder {
-    Plain { buf: ByteBufferPtr, offset: usize },
+    Plain { buf: Bytes, offset: usize },
     Dict { decoder: DictIndexDecoder },
     Delta { decoder: DeltaByteArrayDecoder },
 }
@@ -428,16 +420,18 @@ mod tests {
     use super::*;
     use crate::arrow::arrow_reader::ParquetRecordBatchReader;
     use crate::arrow::ArrowWriter;
-    use arrow_array::{Array, Decimal128Array, ListArray};
     use arrow::datatypes::Field;
     use arrow::error::Result as ArrowResult;
     use arrow_array::RecordBatch;
+    use arrow_array::{Array, ListArray};
     use bytes::Bytes;
     use std::sync::Arc;
 
     #[test]
     fn test_decimal_list() {
-        let decimals = Decimal128Array::from_iter_values([1, 2, 3, 4, 5, 6, 7, 8]);
+        let decimals = Decimal256Array::from_iter_values(
+            [1, 2, 3, 4, 5, 6, 7, 8].into_iter().map(i256::from_i128),
+        );
 
         // [[], [1], [2, 3], null, [4], null, [6, 7, 8]]
         let data = ArrayDataBuilder::new(ArrowType::List(Arc::new(Field::new(
@@ -452,15 +446,12 @@ mod tests {
         .build()
         .unwrap();
 
-        let written = RecordBatch::try_from_iter([(
-            "list",
-            Arc::new(ListArray::from(data)) as ArrayRef,
-        )])
-        .unwrap();
+        let written =
+            RecordBatch::try_from_iter([("list", Arc::new(ListArray::from(data)) as ArrayRef)])
+                .unwrap();
 
         let mut buffer = Vec::with_capacity(1024);
-        let mut writer =
-            ArrowWriter::try_new(&mut buffer, written.schema(), None).unwrap();
+        let mut writer = ArrowWriter::try_new(&mut buffer, written.schema(), None).unwrap();
         writer.write(&written).unwrap();
         writer.close().unwrap();
 

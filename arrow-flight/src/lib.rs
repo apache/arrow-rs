@@ -26,7 +26,8 @@
 //! This crate contains:
 //!
 //! 1. Low level [prost] generated structs
-//!  for Flight gRPC protobuf messages, such as [`FlightData`].
+//!  for Flight gRPC protobuf messages, such as [`FlightData`], [`FlightInfo`],
+//!  [`Location`] and [`Ticket`].
 //!
 //! 2. Low level [tonic] generated [`flight_service_client`] and
 //! [`flight_service_server`].
@@ -110,6 +111,9 @@ pub use gen::Result;
 pub use gen::SchemaResult;
 pub use gen::Ticket;
 
+/// Helper to extract HTTP/gRPC trailers from a tonic stream.
+mod trailers;
+
 pub mod utils;
 
 #[cfg(feature = "flight-sql-experimental")]
@@ -129,10 +133,7 @@ pub struct IpcMessage(pub Bytes);
 
 // Useful conversion functions
 
-fn flight_schema_as_encoded_data(
-    arrow_schema: &Schema,
-    options: &IpcWriteOptions,
-) -> EncodedData {
+fn flight_schema_as_encoded_data(arrow_schema: &Schema, options: &IpcWriteOptions) -> EncodedData {
     let data_gen = writer::IpcDataGenerator::default();
     data_gen.schema_to_bytes(arrow_schema, options)
 }
@@ -312,16 +313,6 @@ impl TryFrom<SchemaAsIpc<'_>> for SchemaResult {
     }
 }
 
-// TryFrom...
-
-impl TryFrom<i32> for DescriptorType {
-    type Error = ArrowError;
-
-    fn try_from(value: i32) -> ArrowResult<Self> {
-        value.try_into()
-    }
-}
-
 impl TryFrom<SchemaAsIpc<'_>> for IpcMessage {
     type Error = ArrowError;
 
@@ -383,23 +374,65 @@ impl TryFrom<SchemaResult> for Schema {
 // FlightData, FlightDescriptor, etc..
 
 impl FlightData {
-    pub fn new(
-        flight_descriptor: Option<FlightDescriptor>,
-        message: IpcMessage,
-        app_metadata: impl Into<Bytes>,
-        data_body: impl Into<Bytes>,
-    ) -> Self {
-        let IpcMessage(vals) = message;
-        FlightData {
-            flight_descriptor,
-            data_header: vals,
-            app_metadata: app_metadata.into(),
-            data_body: data_body.into(),
-        }
+    /// Create a new [`FlightData`].
+    ///
+    /// # See Also
+    ///
+    /// See [`FlightDataEncoderBuilder`] for a higher level API to
+    /// convert a stream of [`RecordBatch`]es to [`FlightData`]s
+    ///
+    /// # Example:
+    ///
+    /// ```
+    /// # use bytes::Bytes;
+    /// # use arrow_flight::{FlightData, FlightDescriptor};
+    /// # fn encode_data() -> Bytes { Bytes::new() } // dummy data
+    /// // Get encoded Arrow IPC data:
+    /// let data_body: Bytes = encode_data();
+    /// // Create the FlightData message
+    /// let flight_data = FlightData::new()
+    ///   .with_descriptor(FlightDescriptor::new_cmd("the command"))
+    ///   .with_app_metadata("My apps metadata")
+    ///   .with_data_body(data_body);
+    /// ```
+    ///
+    /// [`FlightDataEncoderBuilder`]: crate::encode::FlightDataEncoderBuilder
+    /// [`RecordBatch`]: arrow_array::RecordBatch
+    pub fn new() -> Self {
+        Default::default()
+    }
+
+    /// Add a [`FlightDescriptor`] describing the data
+    pub fn with_descriptor(mut self, flight_descriptor: FlightDescriptor) -> Self {
+        self.flight_descriptor = Some(flight_descriptor);
+        self
+    }
+
+    /// Add a data header
+    pub fn with_data_header(mut self, data_header: impl Into<Bytes>) -> Self {
+        self.data_header = data_header.into();
+        self
+    }
+
+    /// Add a data body. See [`IpcDataGenerator`] to create this data.
+    ///
+    /// [`IpcDataGenerator`]: arrow_ipc::writer::IpcDataGenerator
+    pub fn with_data_body(mut self, data_body: impl Into<Bytes>) -> Self {
+        self.data_body = data_body.into();
+        self
+    }
+
+    /// Add optional application specific metadata to the message
+    pub fn with_app_metadata(mut self, app_metadata: impl Into<Bytes>) -> Self {
+        self.app_metadata = app_metadata.into();
+        self
     }
 }
 
 impl FlightDescriptor {
+    /// Create a new opaque command [`CMD`] `FlightDescriptor` to generate a dataset.
+    ///
+    /// [`CMD`]: https://github.com/apache/arrow/blob/6bd31f37ae66bd35594b077cb2f830be57e08acd/format/Flight.proto#L224-L227
     pub fn new_cmd(cmd: impl Into<Bytes>) -> Self {
         FlightDescriptor {
             r#type: DescriptorType::Cmd.into(),
@@ -408,6 +441,9 @@ impl FlightDescriptor {
         }
     }
 
+    /// Create a new named path [`PATH`] `FlightDescriptor` that identifies a dataset
+    ///
+    /// [`PATH`]: https://github.com/apache/arrow/blob/6bd31f37ae66bd35594b077cb2f830be57e08acd/format/Flight.proto#L217-L222
     pub fn new_path(path: Vec<String>) -> Self {
         FlightDescriptor {
             r#type: DescriptorType::Path.into(),
@@ -418,20 +454,45 @@ impl FlightDescriptor {
 }
 
 impl FlightInfo {
-    pub fn new(
-        message: IpcMessage,
-        flight_descriptor: Option<FlightDescriptor>,
-        endpoint: Vec<FlightEndpoint>,
-        total_records: i64,
-        total_bytes: i64,
-    ) -> Self {
-        let IpcMessage(vals) = message;
+    /// Create a new, empty `FlightInfo`, describing where to fetch flight data
+    ///
+    ///
+    /// # Example:
+    /// ```
+    /// # use arrow_flight::{FlightInfo, Ticket, FlightDescriptor, FlightEndpoint};
+    /// # use arrow_schema::{Schema, Field, DataType};
+    /// # fn get_schema() -> Schema {
+    /// #   Schema::new(vec![
+    /// #     Field::new("a", DataType::Utf8, false),
+    /// #   ])
+    /// # }
+    /// #
+    /// // Create a new FlightInfo
+    /// let flight_info = FlightInfo::new()
+    ///   // Encode the Arrow schema
+    ///   .try_with_schema(&get_schema())
+    ///   .expect("encoding failed")
+    ///   .with_descriptor(
+    ///      FlightDescriptor::new_cmd("a command")
+    ///   )
+    ///   .with_endpoint(
+    ///      FlightEndpoint::new()
+    ///        .with_ticket(Ticket::new("ticket contents")
+    ///      )
+    ///    )
+    ///   .with_descriptor(FlightDescriptor::new_cmd("RUN QUERY"));
+    /// ```
+    pub fn new() -> FlightInfo {
         FlightInfo {
-            schema: vals,
-            flight_descriptor,
-            endpoint,
-            total_records,
-            total_bytes,
+            schema: Bytes::new(),
+            flight_descriptor: None,
+            endpoint: vec![],
+            ordered: false,
+            // Flight says "Set these to -1 if unknown."
+            //
+            // https://github.com/apache/arrow-rs/blob/17ca4d51d0490f9c65f5adde144f677dbc8300e7/format/Flight.proto#L287-L289
+            total_records: -1,
+            total_bytes: -1,
         }
     }
 
@@ -439,6 +500,51 @@ impl FlightInfo {
     pub fn try_decode_schema(self) -> ArrowResult<Schema> {
         let msg = IpcMessage(self.schema);
         msg.try_into()
+    }
+
+    /// Specify the schema for the response.
+    ///
+    /// Note this takes the arrow [`Schema`] (not the IPC schema) and
+    /// encodes it using the default IPC options.
+    ///
+    /// Returns an error if `schema` can not be encoded into IPC form.
+    pub fn try_with_schema(mut self, schema: &Schema) -> ArrowResult<Self> {
+        let options = IpcWriteOptions::default();
+        let IpcMessage(schema) = SchemaAsIpc::new(schema, &options).try_into()?;
+        self.schema = schema;
+        Ok(self)
+    }
+
+    /// Add specific a endpoint for fetching the data
+    pub fn with_endpoint(mut self, endpoint: FlightEndpoint) -> Self {
+        self.endpoint.push(endpoint);
+        self
+    }
+
+    /// Add a [`FlightDescriptor`] describing what this data is
+    pub fn with_descriptor(mut self, flight_descriptor: FlightDescriptor) -> Self {
+        self.flight_descriptor = Some(flight_descriptor);
+        self
+    }
+
+    /// Set the number of records in the result, if known
+    pub fn with_total_records(mut self, total_records: i64) -> Self {
+        self.total_records = total_records;
+        self
+    }
+
+    /// Set the number of bytes in the result, if known
+    pub fn with_total_bytes(mut self, total_bytes: i64) -> Self {
+        self.total_bytes = total_bytes;
+        self
+    }
+
+    /// Specify if the response is [ordered] across endpoints
+    ///
+    /// [ordered]: https://github.com/apache/arrow-rs/blob/17ca4d51d0490f9c65f5adde144f677dbc8300e7/format/Flight.proto#L269-L275
+    pub fn with_ordered(mut self, ordered: bool) -> Self {
+        self.ordered = ordered;
+        self
     }
 }
 
@@ -464,6 +570,68 @@ impl Result {
     /// Create a new Result with the specified body
     pub fn new(body: impl Into<Bytes>) -> Self {
         Self { body: body.into() }
+    }
+}
+
+impl Ticket {
+    /// Create a new `Ticket`
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # use arrow_flight::Ticket;
+    /// let ticket = Ticket::new("SELECT * from FOO");
+    /// ```
+    pub fn new(ticket: impl Into<Bytes>) -> Self {
+        Self {
+            ticket: ticket.into(),
+        }
+    }
+}
+
+impl FlightEndpoint {
+    /// Create a new, empty `FlightEndpoint` that represents a location
+    /// to retrieve Flight results.
+    ///
+    /// # Example
+    /// ```
+    /// # use arrow_flight::{FlightEndpoint, Ticket};
+    /// #
+    /// // Specify the client should fetch results from this server
+    /// let endpoint = FlightEndpoint::new()
+    ///   .with_ticket(Ticket::new("the ticket"));
+    ///
+    /// // Specify the client should fetch results from either
+    /// // `http://example.com` or `https://example.com`
+    /// let endpoint = FlightEndpoint::new()
+    ///   .with_ticket(Ticket::new("the ticket"))
+    ///   .with_location("http://example.com")
+    ///   .with_location("https://example.com");
+    /// ```
+    pub fn new() -> FlightEndpoint {
+        Default::default()
+    }
+
+    /// Set the [`Ticket`] used to retrieve data from the endpoint
+    pub fn with_ticket(mut self, ticket: Ticket) -> Self {
+        self.ticket = Some(ticket);
+        self
+    }
+
+    /// Add a location `uri` to this endpoint. Note each endpoint can
+    /// have multiple locations.
+    ///
+    /// If no `uri` is specified, the [Flight Spec] says:
+    ///
+    /// ```text
+    /// * If the list is empty, the expectation is that the ticket can only
+    /// * be redeemed on the current service where the ticket was
+    /// * generated.
+    /// ```
+    /// [Flight Spec]: https://github.com/apache/arrow-rs/blob/17ca4d51d0490f9c65f5adde144f677dbc8300e7/format/Flight.proto#L307C2-L312
+    pub fn with_location(mut self, uri: impl Into<String>) -> Self {
+        self.location.push(Location { uri: uri.into() });
+        self
     }
 }
 

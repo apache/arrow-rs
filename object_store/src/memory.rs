@@ -16,14 +16,18 @@
 // under the License.
 
 //! An in-memory object store implementation
-use crate::MultipartId;
-use crate::{path::Path, GetResult, ListResult, ObjectMeta, ObjectStore, Result};
+use crate::util::InvalidGetRange;
+use crate::{
+    path::Path, GetRange, GetResult, GetResultPayload, ListResult, ObjectMeta, ObjectStore,
+    PutMode, PutOptions, PutResult, Result, UpdateVersion,
+};
+use crate::{GetOptions, MultipartId};
 use async_trait::async_trait;
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use futures::{stream::BoxStream, StreamExt};
 use parking_lot::RwLock;
-use snafu::{ensure, OptionExt, Snafu};
+use snafu::{OptionExt, ResultExt, Snafu};
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::io;
@@ -33,9 +37,6 @@ use std::sync::Arc;
 use std::task::Poll;
 use tokio::io::AsyncWrite;
 
-type Entry = (Bytes, DateTime<Utc>);
-type StorageType = Arc<RwLock<BTreeMap<Path, Entry>>>;
-
 /// A specialized `Error` for in-memory object store-related errors
 #[derive(Debug, Snafu)]
 #[allow(missing_docs)]
@@ -43,14 +44,14 @@ enum Error {
     #[snafu(display("No data in memory found. Location: {path}"))]
     NoDataInMemory { path: String },
 
-    #[snafu(display("Out of range"))]
-    OutOfRange,
-
-    #[snafu(display("Bad range"))]
-    BadRange,
+    #[snafu(display("Invalid range: {source}"))]
+    Range { source: InvalidGetRange },
 
     #[snafu(display("Object already exists at that location: {path}"))]
     AlreadyExists { path: String },
+
+    #[snafu(display("ETag required for conditional update"))]
+    MissingETag,
 }
 
 impl From<Error> for super::Error {
@@ -76,7 +77,83 @@ impl From<Error> for super::Error {
 /// storage provider.
 #[derive(Debug, Default)]
 pub struct InMemory {
-    storage: StorageType,
+    storage: SharedStorage,
+}
+
+#[derive(Debug, Clone)]
+struct Entry {
+    data: Bytes,
+    last_modified: DateTime<Utc>,
+    e_tag: usize,
+}
+
+impl Entry {
+    fn new(data: Bytes, last_modified: DateTime<Utc>, e_tag: usize) -> Self {
+        Self {
+            data,
+            last_modified,
+            e_tag,
+        }
+    }
+}
+
+#[derive(Debug, Default, Clone)]
+struct Storage {
+    next_etag: usize,
+    map: BTreeMap<Path, Entry>,
+}
+
+type SharedStorage = Arc<RwLock<Storage>>;
+
+impl Storage {
+    fn insert(&mut self, location: &Path, bytes: Bytes) -> usize {
+        let etag = self.next_etag;
+        self.next_etag += 1;
+        let entry = Entry::new(bytes, Utc::now(), etag);
+        self.overwrite(location, entry);
+        etag
+    }
+
+    fn overwrite(&mut self, location: &Path, entry: Entry) {
+        self.map.insert(location.clone(), entry);
+    }
+
+    fn create(&mut self, location: &Path, entry: Entry) -> Result<()> {
+        use std::collections::btree_map;
+        match self.map.entry(location.clone()) {
+            btree_map::Entry::Occupied(_) => Err(Error::AlreadyExists {
+                path: location.to_string(),
+            }
+            .into()),
+            btree_map::Entry::Vacant(v) => {
+                v.insert(entry);
+                Ok(())
+            }
+        }
+    }
+
+    fn update(&mut self, location: &Path, v: UpdateVersion, entry: Entry) -> Result<()> {
+        match self.map.get_mut(location) {
+            // Return Precondition instead of NotFound for consistency with stores
+            None => Err(crate::Error::Precondition {
+                path: location.to_string(),
+                source: format!("Object at location {location} not found").into(),
+            }),
+            Some(e) => {
+                let existing = e.e_tag.to_string();
+                let expected = v.e_tag.context(MissingETagSnafu)?;
+                if existing == expected {
+                    *e = entry;
+                    Ok(())
+                } else {
+                    Err(crate::Error::Precondition {
+                        path: location.to_string(),
+                        source: format!("{existing} does not match {expected}").into(),
+                    })
+                }
+            }
+        }
+    }
 }
 
 impl std::fmt::Display for InMemory {
@@ -87,11 +164,22 @@ impl std::fmt::Display for InMemory {
 
 #[async_trait]
 impl ObjectStore for InMemory {
-    async fn put(&self, location: &Path, bytes: Bytes) -> Result<()> {
-        self.storage
-            .write()
-            .insert(location.clone(), (bytes, Utc::now()));
-        Ok(())
+    async fn put_opts(&self, location: &Path, bytes: Bytes, opts: PutOptions) -> Result<PutResult> {
+        let mut storage = self.storage.write();
+        let etag = storage.next_etag;
+        let entry = Entry::new(bytes, Utc::now(), etag);
+
+        match opts.mode {
+            PutMode::Overwrite => storage.overwrite(location, entry),
+            PutMode::Create => storage.create(location, entry)?,
+            PutMode::Update(v) => storage.update(location, v, entry)?,
+        }
+        storage.next_etag += 1;
+
+        Ok(PutResult {
+            e_tag: Some(etag.to_string()),
+            version: None,
+        })
     }
 
     async fn put_multipart(
@@ -108,43 +196,50 @@ impl ObjectStore for InMemory {
         ))
     }
 
-    async fn abort_multipart(
-        &self,
-        _location: &Path,
-        _multipart_id: &MultipartId,
-    ) -> Result<()> {
+    async fn abort_multipart(&self, _location: &Path, _multipart_id: &MultipartId) -> Result<()> {
         // Nothing to clean up
         Ok(())
     }
 
-    async fn get(&self, location: &Path) -> Result<GetResult> {
-        let data = self.entry(location).await?;
+    async fn get_opts(&self, location: &Path, options: GetOptions) -> Result<GetResult> {
+        let entry = self.entry(location).await?;
+        let e_tag = entry.e_tag.to_string();
 
-        Ok(GetResult::Stream(
-            futures::stream::once(async move { Ok(data.0) }).boxed(),
-        ))
+        let meta = ObjectMeta {
+            location: location.clone(),
+            last_modified: entry.last_modified,
+            size: entry.data.len(),
+            e_tag: Some(e_tag),
+            version: None,
+        };
+        options.check_preconditions(&meta)?;
+
+        let (range, data) = match options.range {
+            Some(range) => {
+                let r = range.as_range(entry.data.len()).context(RangeSnafu)?;
+                (r.clone(), entry.data.slice(r))
+            }
+            None => (0..entry.data.len(), entry.data),
+        };
+        let stream = futures::stream::once(futures::future::ready(Ok(data)));
+
+        Ok(GetResult {
+            payload: GetResultPayload::Stream(stream.boxed()),
+            meta,
+            range,
+        })
     }
 
-    async fn get_range(&self, location: &Path, range: Range<usize>) -> Result<Bytes> {
-        let data = self.entry(location).await?;
-        ensure!(range.end <= data.0.len(), OutOfRangeSnafu);
-        ensure!(range.start <= range.end, BadRangeSnafu);
-
-        Ok(data.0.slice(range))
-    }
-
-    async fn get_ranges(
-        &self,
-        location: &Path,
-        ranges: &[Range<usize>],
-    ) -> Result<Vec<Bytes>> {
-        let data = self.entry(location).await?;
+    async fn get_ranges(&self, location: &Path, ranges: &[Range<usize>]) -> Result<Vec<Bytes>> {
+        let entry = self.entry(location).await?;
         ranges
             .iter()
             .map(|range| {
-                ensure!(range.end <= data.0.len(), OutOfRangeSnafu);
-                ensure!(range.start <= range.end, BadRangeSnafu);
-                Ok(data.0.slice(range.clone()))
+                let r = GetRange::Bounded(range.clone())
+                    .as_range(entry.data.len())
+                    .context(RangeSnafu)?;
+
+                Ok(entry.data.slice(r))
             })
             .collect()
     }
@@ -154,26 +249,25 @@ impl ObjectStore for InMemory {
 
         Ok(ObjectMeta {
             location: location.clone(),
-            last_modified: entry.1,
-            size: entry.0.len(),
-            e_tag: None,
+            last_modified: entry.last_modified,
+            size: entry.data.len(),
+            e_tag: Some(entry.e_tag.to_string()),
+            version: None,
         })
     }
 
     async fn delete(&self, location: &Path) -> Result<()> {
-        self.storage.write().remove(location);
+        self.storage.write().map.remove(location);
         Ok(())
     }
 
-    async fn list(
-        &self,
-        prefix: Option<&Path>,
-    ) -> Result<BoxStream<'_, Result<ObjectMeta>>> {
+    fn list(&self, prefix: Option<&Path>) -> BoxStream<'_, Result<ObjectMeta>> {
         let root = Path::default();
         let prefix = prefix.unwrap_or(&root);
 
         let storage = self.storage.read();
         let values: Vec<_> = storage
+            .map
             .range((prefix)..)
             .take_while(|(key, _)| key.as_ref().starts_with(prefix.as_ref()))
             .filter(|(key, _)| {
@@ -185,14 +279,15 @@ impl ObjectStore for InMemory {
             .map(|(key, value)| {
                 Ok(ObjectMeta {
                     location: key.clone(),
-                    last_modified: value.1,
-                    size: value.0.len(),
-                    e_tag: None,
+                    last_modified: value.last_modified,
+                    size: value.data.len(),
+                    e_tag: Some(value.e_tag.to_string()),
+                    version: None,
                 })
             })
             .collect();
 
-        Ok(futures::stream::iter(values).boxed())
+        futures::stream::iter(values).boxed()
     }
 
     /// The memory implementation returns all results, as opposed to the cloud
@@ -207,7 +302,7 @@ impl ObjectStore for InMemory {
         // Only objects in this base level should be returned in the
         // response. Otherwise, we just collect the common prefixes.
         let mut objects = vec![];
-        for (k, v) in self.storage.read().range((prefix)..) {
+        for (k, v) in self.storage.read().map.range((prefix)..) {
             if !k.as_ref().starts_with(prefix.as_ref()) {
                 break;
             }
@@ -229,9 +324,10 @@ impl ObjectStore for InMemory {
             } else {
                 let object = ObjectMeta {
                     location: k.clone(),
-                    last_modified: v.1,
-                    size: v.0.len(),
-                    e_tag: None,
+                    last_modified: v.last_modified,
+                    size: v.data.len(),
+                    e_tag: Some(v.e_tag.to_string()),
+                    version: None,
                 };
                 objects.push(object);
             }
@@ -244,23 +340,21 @@ impl ObjectStore for InMemory {
     }
 
     async fn copy(&self, from: &Path, to: &Path) -> Result<()> {
-        let data = self.entry(from).await?;
-        self.storage
-            .write()
-            .insert(to.clone(), (data.0, Utc::now()));
+        let entry = self.entry(from).await?;
+        self.storage.write().insert(to, entry.data);
         Ok(())
     }
 
     async fn copy_if_not_exists(&self, from: &Path, to: &Path) -> Result<()> {
-        let data = self.entry(from).await?;
+        let entry = self.entry(from).await?;
         let mut storage = self.storage.write();
-        if storage.contains_key(to) {
+        if storage.map.contains_key(to) {
             return Err(Error::AlreadyExists {
                 path: to.to_string(),
             }
             .into());
         }
-        storage.insert(to.clone(), (data.0, Utc::now()));
+        storage.insert(to, entry.data);
         Ok(())
     }
 }
@@ -271,19 +365,24 @@ impl InMemory {
         Self::default()
     }
 
-    /// Creates a clone of the store
-    pub async fn clone(&self) -> Self {
+    /// Creates a fork of the store, with the current content copied into the
+    /// new store.
+    pub fn fork(&self) -> Self {
         let storage = self.storage.read();
-        let storage = storage.clone();
-
-        Self {
-            storage: Arc::new(RwLock::new(storage)),
-        }
+        let storage = Arc::new(RwLock::new(storage.clone()));
+        Self { storage }
     }
 
-    async fn entry(&self, location: &Path) -> Result<(Bytes, DateTime<Utc>)> {
+    /// Creates a clone of the store
+    #[deprecated(note = "Use fork() instead")]
+    pub async fn clone(&self) -> Self {
+        self.fork()
+    }
+
+    async fn entry(&self, location: &Path) -> Result<Entry> {
         let storage = self.storage.read();
         let value = storage
+            .map
             .get(location)
             .cloned()
             .context(NoDataInMemorySnafu {
@@ -297,7 +396,7 @@ impl InMemory {
 struct InMemoryUpload {
     location: Path,
     data: Vec<u8>,
-    storage: StorageType,
+    storage: Arc<RwLock<Storage>>,
 }
 
 impl AsyncWrite for InMemoryUpload {
@@ -305,7 +404,7 @@ impl AsyncWrite for InMemoryUpload {
         mut self: Pin<&mut Self>,
         _cx: &mut std::task::Context<'_>,
         buf: &[u8],
-    ) -> std::task::Poll<Result<usize, io::Error>> {
+    ) -> Poll<Result<usize, io::Error>> {
         self.data.extend_from_slice(buf);
         Poll::Ready(Ok(buf.len()))
     }
@@ -313,18 +412,16 @@ impl AsyncWrite for InMemoryUpload {
     fn poll_flush(
         self: Pin<&mut Self>,
         _cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Result<(), io::Error>> {
+    ) -> Poll<Result<(), io::Error>> {
         Poll::Ready(Ok(()))
     }
 
     fn poll_shutdown(
         mut self: Pin<&mut Self>,
         _cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Result<(), io::Error>> {
+    ) -> Poll<Result<(), io::Error>> {
         let data = Bytes::from(std::mem::take(&mut self.data));
-        self.storage
-            .write()
-            .insert(self.location.clone(), (data, Utc::now()));
+        self.storage.write().insert(&self.location, data);
         Poll::Ready(Ok(()))
     }
 }
@@ -333,19 +430,41 @@ impl AsyncWrite for InMemoryUpload {
 mod tests {
     use super::*;
 
-    use crate::{
-        tests::{
-            copy_if_not_exists, get_nonexistent_object, list_uses_directories_correctly,
-            list_with_delimiter, put_get_delete_list, rename_and_copy, stream_get,
-        },
-        Error as ObjectStoreError, ObjectStore,
-    };
+    use crate::tests::*;
 
     #[tokio::test]
     async fn in_memory_test() {
         let integration = InMemory::new();
 
         put_get_delete_list(&integration).await;
+        get_opts(&integration).await;
+        list_uses_directories_correctly(&integration).await;
+        list_with_delimiter(&integration).await;
+        rename_and_copy(&integration).await;
+        copy_if_not_exists(&integration).await;
+        stream_get(&integration).await;
+        put_opts(&integration, true).await;
+    }
+
+    #[tokio::test]
+    async fn box_test() {
+        let integration: Box<dyn ObjectStore> = Box::new(InMemory::new());
+
+        put_get_delete_list(&integration).await;
+        get_opts(&integration).await;
+        list_uses_directories_correctly(&integration).await;
+        list_with_delimiter(&integration).await;
+        rename_and_copy(&integration).await;
+        copy_if_not_exists(&integration).await;
+        stream_get(&integration).await;
+    }
+
+    #[tokio::test]
+    async fn arc_test() {
+        let integration: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+
+        put_get_delete_list(&integration).await;
+        get_opts(&integration).await;
         list_uses_directories_correctly(&integration).await;
         list_with_delimiter(&integration).await;
         rename_and_copy(&integration).await;
@@ -385,7 +504,7 @@ mod tests {
         let err = get_nonexistent_object(&integration, Some(location))
             .await
             .unwrap_err();
-        if let ObjectStoreError::NotFound { path, source } = err {
+        if let crate::Error::NotFound { path, source } = err {
             let source_variant = source.downcast_ref::<Error>();
             assert!(
                 matches!(source_variant, Some(Error::NoDataInMemory { .. }),),

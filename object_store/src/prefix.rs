@@ -23,8 +23,8 @@ use tokio::io::AsyncWrite;
 
 use crate::path::Path;
 use crate::{
-    GetResult, ListResult, MultipartId, ObjectMeta, ObjectStore,
-    Result as ObjectStoreResult,
+    GetOptions, GetResult, ListResult, MultipartId, ObjectMeta, ObjectStore, PutOptions, PutResult,
+    Result,
 };
 
 #[doc(hidden)]
@@ -59,154 +59,139 @@ impl<T: ObjectStore> PrefixStore<T> {
     }
 
     /// Strip the constant prefix from a given path
-    fn strip_prefix(&self, path: &Path) -> Option<Path> {
-        Some(path.prefix_match(&self.prefix)?.collect())
+    fn strip_prefix(&self, path: Path) -> Path {
+        // Note cannot use match because of borrow checker
+        if let Some(suffix) = path.prefix_match(&self.prefix) {
+            return suffix.collect();
+        }
+        path
+    }
+
+    /// Strip the constant prefix from a given ObjectMeta
+    fn strip_meta(&self, meta: ObjectMeta) -> ObjectMeta {
+        ObjectMeta {
+            last_modified: meta.last_modified,
+            size: meta.size,
+            location: self.strip_prefix(meta.location),
+            e_tag: meta.e_tag,
+            version: None,
+        }
     }
 }
 
 #[async_trait::async_trait]
 impl<T: ObjectStore> ObjectStore for PrefixStore<T> {
-    async fn put(&self, location: &Path, bytes: Bytes) -> ObjectStoreResult<()> {
+    async fn put(&self, location: &Path, bytes: Bytes) -> Result<PutResult> {
         let full_path = self.full_path(location);
         self.inner.put(&full_path, bytes).await
     }
 
-    async fn append(
-        &self,
-        location: &Path,
-    ) -> ObjectStoreResult<Box<dyn AsyncWrite + Unpin + Send>> {
+    async fn put_opts(&self, location: &Path, bytes: Bytes, opts: PutOptions) -> Result<PutResult> {
         let full_path = self.full_path(location);
-        self.inner.append(&full_path).await
-    }
-
-    async fn get(&self, location: &Path) -> ObjectStoreResult<GetResult> {
-        let full_path = self.full_path(location);
-        self.inner.get(&full_path).await
-    }
-
-    async fn get_range(
-        &self,
-        location: &Path,
-        range: Range<usize>,
-    ) -> ObjectStoreResult<Bytes> {
-        let full_path = self.full_path(location);
-        self.inner.get_range(&full_path, range).await
-    }
-
-    async fn get_ranges(
-        &self,
-        location: &Path,
-        ranges: &[Range<usize>],
-    ) -> ObjectStoreResult<Vec<Bytes>> {
-        let full_path = self.full_path(location);
-        self.inner.get_ranges(&full_path, ranges).await
-    }
-
-    async fn head(&self, location: &Path) -> ObjectStoreResult<ObjectMeta> {
-        let full_path = self.full_path(location);
-        self.inner.head(&full_path).await.map(|meta| ObjectMeta {
-            last_modified: meta.last_modified,
-            size: meta.size,
-            location: self.strip_prefix(&meta.location).unwrap_or(meta.location),
-            e_tag: meta.e_tag,
-        })
-    }
-
-    async fn delete(&self, location: &Path) -> ObjectStoreResult<()> {
-        let full_path = self.full_path(location);
-        self.inner.delete(&full_path).await
-    }
-
-    async fn list(
-        &self,
-        prefix: Option<&Path>,
-    ) -> ObjectStoreResult<BoxStream<'_, ObjectStoreResult<ObjectMeta>>> {
-        Ok(self
-            .inner
-            .list(Some(&self.full_path(prefix.unwrap_or(&Path::from("/")))))
-            .await?
-            .map_ok(|meta| ObjectMeta {
-                last_modified: meta.last_modified,
-                size: meta.size,
-                location: self.strip_prefix(&meta.location).unwrap_or(meta.location),
-                e_tag: meta.e_tag,
-            })
-            .boxed())
-    }
-
-    async fn list_with_delimiter(
-        &self,
-        prefix: Option<&Path>,
-    ) -> ObjectStoreResult<ListResult> {
-        self.inner
-            .list_with_delimiter(Some(
-                &self.full_path(prefix.unwrap_or(&Path::from("/"))),
-            ))
-            .await
-            .map(|lst| ListResult {
-                common_prefixes: lst
-                    .common_prefixes
-                    .iter()
-                    .filter_map(|p| self.strip_prefix(p))
-                    .collect(),
-                objects: lst
-                    .objects
-                    .iter()
-                    .filter_map(|meta| {
-                        Some(ObjectMeta {
-                            last_modified: meta.last_modified,
-                            size: meta.size,
-                            location: self.strip_prefix(&meta.location)?,
-                            e_tag: meta.e_tag.clone(),
-                        })
-                    })
-                    .collect(),
-            })
-    }
-
-    async fn copy(&self, from: &Path, to: &Path) -> ObjectStoreResult<()> {
-        let full_from = self.full_path(from);
-        let full_to = self.full_path(to);
-        self.inner.copy(&full_from, &full_to).await
-    }
-
-    async fn copy_if_not_exists(&self, from: &Path, to: &Path) -> ObjectStoreResult<()> {
-        let full_from = self.full_path(from);
-        let full_to = self.full_path(to);
-        self.inner.copy_if_not_exists(&full_from, &full_to).await
-    }
-
-    async fn rename(&self, from: &Path, to: &Path) -> ObjectStoreResult<()> {
-        let full_from = self.full_path(from);
-        let full_to = self.full_path(to);
-        self.inner.rename(&full_from, &full_to).await
-    }
-
-    async fn rename_if_not_exists(
-        &self,
-        from: &Path,
-        to: &Path,
-    ) -> ObjectStoreResult<()> {
-        let full_from = self.full_path(from);
-        let full_to = self.full_path(to);
-        self.inner.rename_if_not_exists(&full_from, &full_to).await
+        self.inner.put_opts(&full_path, bytes, opts).await
     }
 
     async fn put_multipart(
         &self,
         location: &Path,
-    ) -> ObjectStoreResult<(MultipartId, Box<dyn AsyncWrite + Unpin + Send>)> {
+    ) -> Result<(MultipartId, Box<dyn AsyncWrite + Unpin + Send>)> {
         let full_path = self.full_path(location);
         self.inner.put_multipart(&full_path).await
     }
 
-    async fn abort_multipart(
-        &self,
-        location: &Path,
-        multipart_id: &MultipartId,
-    ) -> ObjectStoreResult<()> {
+    async fn abort_multipart(&self, location: &Path, multipart_id: &MultipartId) -> Result<()> {
         let full_path = self.full_path(location);
         self.inner.abort_multipart(&full_path, multipart_id).await
+    }
+    async fn get(&self, location: &Path) -> Result<GetResult> {
+        let full_path = self.full_path(location);
+        self.inner.get(&full_path).await
+    }
+
+    async fn get_range(&self, location: &Path, range: Range<usize>) -> Result<Bytes> {
+        let full_path = self.full_path(location);
+        self.inner.get_range(&full_path, range).await
+    }
+
+    async fn get_opts(&self, location: &Path, options: GetOptions) -> Result<GetResult> {
+        let full_path = self.full_path(location);
+        self.inner.get_opts(&full_path, options).await
+    }
+
+    async fn get_ranges(&self, location: &Path, ranges: &[Range<usize>]) -> Result<Vec<Bytes>> {
+        let full_path = self.full_path(location);
+        self.inner.get_ranges(&full_path, ranges).await
+    }
+
+    async fn head(&self, location: &Path) -> Result<ObjectMeta> {
+        let full_path = self.full_path(location);
+        let meta = self.inner.head(&full_path).await?;
+        Ok(self.strip_meta(meta))
+    }
+
+    async fn delete(&self, location: &Path) -> Result<()> {
+        let full_path = self.full_path(location);
+        self.inner.delete(&full_path).await
+    }
+
+    fn list(&self, prefix: Option<&Path>) -> BoxStream<'_, Result<ObjectMeta>> {
+        let prefix = self.full_path(prefix.unwrap_or(&Path::default()));
+        let s = self.inner.list(Some(&prefix));
+        s.map_ok(|meta| self.strip_meta(meta)).boxed()
+    }
+
+    fn list_with_offset(
+        &self,
+        prefix: Option<&Path>,
+        offset: &Path,
+    ) -> BoxStream<'_, Result<ObjectMeta>> {
+        let offset = self.full_path(offset);
+        let prefix = self.full_path(prefix.unwrap_or(&Path::default()));
+        let s = self.inner.list_with_offset(Some(&prefix), &offset);
+        s.map_ok(|meta| self.strip_meta(meta)).boxed()
+    }
+
+    async fn list_with_delimiter(&self, prefix: Option<&Path>) -> Result<ListResult> {
+        let prefix = self.full_path(prefix.unwrap_or(&Path::default()));
+        self.inner
+            .list_with_delimiter(Some(&prefix))
+            .await
+            .map(|lst| ListResult {
+                common_prefixes: lst
+                    .common_prefixes
+                    .into_iter()
+                    .map(|p| self.strip_prefix(p))
+                    .collect(),
+                objects: lst
+                    .objects
+                    .into_iter()
+                    .map(|meta| self.strip_meta(meta))
+                    .collect(),
+            })
+    }
+
+    async fn copy(&self, from: &Path, to: &Path) -> Result<()> {
+        let full_from = self.full_path(from);
+        let full_to = self.full_path(to);
+        self.inner.copy(&full_from, &full_to).await
+    }
+
+    async fn rename(&self, from: &Path, to: &Path) -> Result<()> {
+        let full_from = self.full_path(from);
+        let full_to = self.full_path(to);
+        self.inner.rename(&full_from, &full_to).await
+    }
+
+    async fn copy_if_not_exists(&self, from: &Path, to: &Path) -> Result<()> {
+        let full_from = self.full_path(from);
+        let full_to = self.full_path(to);
+        self.inner.copy_if_not_exists(&full_from, &full_to).await
+    }
+
+    async fn rename_if_not_exists(&self, from: &Path, to: &Path) -> Result<()> {
+        let full_from = self.full_path(from);
+        let full_to = self.full_path(to);
+        self.inner.rename_if_not_exists(&full_from, &full_to).await
     }
 }
 
@@ -215,10 +200,7 @@ mod tests {
     use super::*;
     use crate::local::LocalFileSystem;
     use crate::test_util::flatten_list_stream;
-    use crate::tests::{
-        copy_if_not_exists, list_uses_directories_correctly, list_with_delimiter,
-        put_get_delete_list, rename_and_copy, stream_get,
-    };
+    use crate::tests::*;
 
     use tempfile::TempDir;
 
@@ -229,6 +211,7 @@ mod tests {
         let integration = PrefixStore::new(inner, "prefix");
 
         put_get_delete_list(&integration).await;
+        get_opts(&integration).await;
         list_uses_directories_correctly(&integration).await;
         list_with_delimiter(&integration).await;
         rename_and_copy(&integration).await;

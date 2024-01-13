@@ -53,7 +53,7 @@ struct _MutableArrayData<'a> {
     pub null_count: usize,
 
     pub len: usize,
-    pub null_buffer: MutableBuffer,
+    pub null_buffer: Option<MutableBuffer>,
 
     // arrow specification only allows up to 3 buffers (2 ignoring the nulls above).
     // Thus, we place them in the stack to avoid bound checks and greater data locality.
@@ -63,6 +63,12 @@ struct _MutableArrayData<'a> {
 }
 
 impl<'a> _MutableArrayData<'a> {
+    fn null_buffer(&mut self) -> &mut MutableBuffer {
+        self.null_buffer
+            .as_mut()
+            .expect("MutableArrayData not nullable")
+    }
+
     fn freeze(self, dictionary: Option<ArrayData>) -> ArrayDataBuilder {
         let buffers = into_buffers(&self.data_type, self.buffer1, self.buffer2);
 
@@ -77,10 +83,13 @@ impl<'a> _MutableArrayData<'a> {
             }
         };
 
-        let nulls = (self.null_count > 0).then(|| {
-            let bools = BooleanBuffer::new(self.null_buffer.into(), 0, self.len);
-            unsafe { NullBuffer::new_unchecked(bools, self.null_count) }
-        });
+        let nulls = self
+            .null_buffer
+            .map(|nulls| {
+                let bools = BooleanBuffer::new(nulls.into(), 0, self.len);
+                unsafe { NullBuffer::new_unchecked(bools, self.null_count) }
+            })
+            .filter(|n| n.null_count() > 0);
 
         ArrayDataBuilder::new(self.data_type)
             .offset(0)
@@ -95,22 +104,25 @@ fn build_extend_null_bits(array: &ArrayData, use_nulls: bool) -> ExtendNullBits 
     if let Some(nulls) = array.nulls() {
         let bytes = nulls.validity();
         Box::new(move |mutable, start, len| {
-            utils::resize_for_bits(&mut mutable.null_buffer, mutable.len + len);
+            let mutable_len = mutable.len;
+            let out = mutable.null_buffer();
+            utils::resize_for_bits(out, mutable_len + len);
             mutable.null_count += set_bits(
-                mutable.null_buffer.as_slice_mut(),
+                out.as_slice_mut(),
                 bytes,
-                mutable.len,
+                mutable_len,
                 nulls.offset() + start,
                 len,
             );
         })
     } else if use_nulls {
         Box::new(|mutable, _, len| {
-            utils::resize_for_bits(&mut mutable.null_buffer, mutable.len + len);
-            let write_data = mutable.null_buffer.as_slice_mut();
-            let offset = mutable.len;
+            let mutable_len = mutable.len;
+            let out = mutable.null_buffer();
+            utils::resize_for_bits(out, mutable_len + len);
+            let write_data = out.as_slice_mut();
             (0..len).for_each(|i| {
-                bit_util::set_bit(write_data, offset + i);
+                bit_util::set_bit(write_data, mutable_len + i);
             });
         })
     } else {
@@ -161,11 +173,7 @@ impl<'a> std::fmt::Debug for MutableArrayData<'a> {
 /// Builds an extend that adds `offset` to the source primitive
 /// Additionally validates that `max` fits into the
 /// the underlying primitive returning None if not
-fn build_extend_dictionary(
-    array: &ArrayData,
-    offset: usize,
-    max: usize,
-) -> Option<Extend> {
+fn build_extend_dictionary(array: &ArrayData, offset: usize, max: usize) -> Option<Extend> {
     macro_rules! validate_and_build {
         ($dt: ty) => {{
             let _: $dt = max.try_into().ok()?;
@@ -203,27 +211,19 @@ fn build_extend(array: &ArrayData) -> Extend {
         DataType::Int64 => primitive::build_extend::<i64>(array),
         DataType::Float32 => primitive::build_extend::<f32>(array),
         DataType::Float64 => primitive::build_extend::<f64>(array),
-        DataType::Date32
-        | DataType::Time32(_)
-        | DataType::Interval(IntervalUnit::YearMonth) => {
+        DataType::Date32 | DataType::Time32(_) | DataType::Interval(IntervalUnit::YearMonth) => {
             primitive::build_extend::<i32>(array)
         }
         DataType::Date64
         | DataType::Time64(_)
         | DataType::Timestamp(_, _)
         | DataType::Duration(_)
-        | DataType::Interval(IntervalUnit::DayTime) => {
-            primitive::build_extend::<i64>(array)
-        }
-        DataType::Interval(IntervalUnit::MonthDayNano) => {
-            primitive::build_extend::<i128>(array)
-        }
+        | DataType::Interval(IntervalUnit::DayTime) => primitive::build_extend::<i64>(array),
+        DataType::Interval(IntervalUnit::MonthDayNano) => primitive::build_extend::<i128>(array),
         DataType::Decimal128(_, _) => primitive::build_extend::<i128>(array),
         DataType::Decimal256(_, _) => primitive::build_extend::<i256>(array),
         DataType::Utf8 | DataType::Binary => variable_size::build_extend::<i32>(array),
-        DataType::LargeUtf8 | DataType::LargeBinary => {
-            variable_size::build_extend::<i64>(array)
-        }
+        DataType::LargeUtf8 | DataType::LargeBinary => variable_size::build_extend::<i64>(array),
         DataType::Map(_, _) | DataType::List(_) => list::build_extend::<i32>(array),
         DataType::LargeList(_) => list::build_extend::<i64>(array),
         DataType::Dictionary(_, _) => unreachable!("should use build_extend_dictionary"),
@@ -253,9 +253,9 @@ fn build_extend_nulls(data_type: &DataType) -> ExtendNulls {
         DataType::Int64 => primitive::extend_nulls::<i64>,
         DataType::Float32 => primitive::extend_nulls::<f32>,
         DataType::Float64 => primitive::extend_nulls::<f64>,
-        DataType::Date32
-        | DataType::Time32(_)
-        | DataType::Interval(IntervalUnit::YearMonth) => primitive::extend_nulls::<i32>,
+        DataType::Date32 | DataType::Time32(_) | DataType::Interval(IntervalUnit::YearMonth) => {
+            primitive::extend_nulls::<i32>
+        }
         DataType::Date64
         | DataType::Time64(_)
         | DataType::Timestamp(_, _)
@@ -354,6 +354,14 @@ impl<'a> MutableArrayData<'a> {
     ) -> Self {
         let data_type = arrays[0].data_type();
 
+        for a in arrays.iter().skip(1) {
+            assert_eq!(
+                data_type,
+                a.data_type(),
+                "Arrays with inconsistent types passed to MutableArrayData"
+            )
+        }
+
         // if any of the arrays has nulls, insertions from any array requires setting bits
         // as there is at least one array with nulls.
         let use_nulls = use_nulls | arrays.iter().any(|array| array.null_count() > 0);
@@ -368,10 +376,7 @@ impl<'a> MutableArrayData<'a> {
                 array_capacity = *capacity;
                 preallocate_offset_and_binary_buffer::<i64>(*capacity, *value_cap)
             }
-            (
-                DataType::Utf8 | DataType::Binary,
-                Capacities::Binary(capacity, Some(value_cap)),
-            ) => {
+            (DataType::Utf8 | DataType::Binary, Capacities::Binary(capacity, Some(value_cap))) => {
                 array_capacity = *capacity;
                 preallocate_offset_and_binary_buffer::<i32>(*capacity, *value_cap)
             }
@@ -379,10 +384,7 @@ impl<'a> MutableArrayData<'a> {
                 array_capacity = *capacity;
                 new_buffers(data_type, *capacity)
             }
-            (
-                DataType::List(_) | DataType::LargeList(_),
-                Capacities::List(capacity, _),
-            ) => {
+            (DataType::List(_) | DataType::LargeList(_), Capacities::List(capacity, _)) => {
                 array_capacity = *capacity;
                 new_buffers(data_type, *capacity)
             }
@@ -423,16 +425,15 @@ impl<'a> MutableArrayData<'a> {
                     .map(|array| &array.child_data()[0])
                     .collect::<Vec<_>>();
 
-                let capacities = if let Capacities::List(capacity, ref child_capacities) =
-                    capacities
-                {
-                    child_capacities
-                        .clone()
-                        .map(|c| *c)
-                        .unwrap_or(Capacities::Array(capacity))
-                } else {
-                    Capacities::Array(array_capacity)
-                };
+                let capacities =
+                    if let Capacities::List(capacity, ref child_capacities) = capacities {
+                        child_capacities
+                            .clone()
+                            .map(|c| *c)
+                            .unwrap_or(Capacities::Array(capacity))
+                    } else {
+                        Capacities::Array(array_capacity)
+                    };
 
                 vec![MutableArrayData::with_capacities(
                     children, use_nulls, capacities,
@@ -534,8 +535,7 @@ impl<'a> MutableArrayData<'a> {
                             .collect();
                         let capacity = lengths.iter().sum();
 
-                        let mut mutable =
-                            MutableArrayData::new(dictionaries, false, capacity);
+                        let mut mutable = MutableArrayData::new(dictionaries, false, capacity);
 
                         for (i, len) in lengths.iter().enumerate() {
                             mutable.extend(i, 0, *len)
@@ -555,13 +555,10 @@ impl<'a> MutableArrayData<'a> {
             .map(|array| build_extend_null_bits(array, use_nulls))
             .collect();
 
-        let null_buffer = if use_nulls {
+        let null_buffer = use_nulls.then(|| {
             let null_bytes = bit_util::ceil(array_capacity, 8);
             MutableBuffer::from_len_zeroed(null_bytes)
-        } else {
-            // create 0 capacity mutable buffer with the intention that it won't be used
-            MutableBuffer::with_capacity(0)
-        };
+        });
 
         let extend_values = match &data_type {
             DataType::Dictionary(_, _) => {
@@ -624,13 +621,18 @@ impl<'a> MutableArrayData<'a> {
     }
 
     /// Extends this [MutableArrayData] with null elements, disregarding the bound arrays
+    ///
+    /// # Panics
+    ///
+    /// Panics if [`MutableArrayData`] not created with `use_nulls` or nullable source arrays
+    ///
     pub fn extend_nulls(&mut self, len: usize) {
-        // TODO: null_buffer should probably be extended here as well
-        // otherwise is_valid() could later panic
-        // add test to confirm
+        self.data.len += len;
+        let bit_len = bit_util::ceil(self.data.len, 8);
+        let nulls = self.data.null_buffer();
+        nulls.resize(bit_len, 0);
         self.data.null_count += len;
         (self.extend_nulls)(&mut self.data, len);
-        self.data.len += len;
     }
 
     /// Returns the current length

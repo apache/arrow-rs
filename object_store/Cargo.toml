@@ -17,13 +17,14 @@
 
 [package]
 name = "object_store"
-version = "0.5.6"
+version = "0.9.0"
 edition = "2021"
 license = "MIT/Apache-2.0"
 readme = "README.md"
 description = "A generic object store interface for uniformly interacting with AWS S3, Google Cloud Storage, Azure Blob Storage and local files."
 keywords = ["object", "storage", "cloud"]
 repository = "https://github.com/apache/arrow-rs/tree/master/object_store"
+rust-version = "1.62.1"
 
 [package.metadata.docs.rs]
 all-features = true
@@ -31,9 +32,10 @@ all-features = true
 [dependencies] # In alphabetical order
 async-trait = "0.1.53"
 bytes = "1.0"
-chrono = { version = "0.4.23", default-features = false, features = ["clock"] }
+chrono = { version = "0.4.31", default-features = false, features = ["clock"] }
 futures = "0.3"
-itertools = "0.10.1"
+humantime = "2.1"
+itertools = "0.12.0"
 parking_lot = { version = "0.12" }
 percent-encoding = "2.1"
 snafu = "0.7"
@@ -43,41 +45,33 @@ walkdir = "2"
 
 # Cloud storage support
 base64 = { version = "0.21", default-features = false, features = ["std"], optional = true }
-quick-xml = { version = "0.28.0", features = ["serialize"], optional = true }
+hyper = { version = "0.14", default-features = false, optional = true }
+quick-xml = { version = "0.31.0", features = ["serialize", "overlapped-lists"], optional = true }
 serde = { version = "1.0", default-features = false, features = ["derive"], optional = true }
 serde_json = { version = "1.0", default-features = false, optional = true }
 rand = { version = "0.8", default-features = false, features = ["std", "std_rng"], optional = true }
-reqwest = { version = "0.11", default-features = false, features = ["rustls-tls"], optional = true }
-ring = { version = "0.16", default-features = false, features = ["std"], optional = true }
-rustls-pemfile = { version = "1.0", default-features = false, optional = true }
-
-# AWS Profile support
-aws-types = { version = "0.55", optional = true }
-aws-credential-types = { version = "0.55", optional = true }
-aws-config = { version = "0.55", optional = true }
-
-[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-tokio = { version = "1.25.0", features = ["sync", "macros", "rt", "time", "io-util", "fs"] }
-
-[target.'cfg(target_arch = "wasm32")'.dependencies]
+reqwest = { version = "0.11", default-features = false, features = ["rustls-tls-native-roots"], optional = true }
+ring = { version = "0.17", default-features = false, features = ["std"], optional = true }
+rustls-pemfile = { version = "2.0", default-features = false, features = ["std"], optional = true }
 tokio = { version = "1.25.0", features = ["sync", "macros", "rt", "time", "io-util"] }
 
 [target.'cfg(target_family="unix")'.dev-dependencies]
-nix = "0.26.1"
+nix = { version = "0.27.1", features = ["fs"] }
 
 [features]
-cloud = ["serde", "serde_json", "quick-xml", "reqwest", "reqwest/json", "reqwest/stream", "chrono/serde", "base64", "rand", "ring"]
+cloud = ["serde", "serde_json", "quick-xml", "hyper", "reqwest", "reqwest/json", "reqwest/stream", "chrono/serde", "base64", "rand", "ring"]
 azure = ["cloud"]
 gcp = ["cloud", "rustls-pemfile"]
 aws = ["cloud"]
 http = ["cloud"]
-
-# Experimental support for AWS_PROFILE
-aws_profile = ["aws", "aws-config", "aws-types", "aws-credential-types"]
+tls-webpki-roots = ["reqwest?/rustls-tls-webpki-roots"]
 
 [dev-dependencies] # In alphabetical order
-dotenv = "0.15.0"
-tempfile = "3.1.0"
 futures-test = "0.3"
-rand = "0.8"
 hyper = { version = "0.14.24", features = ["server"] }
+rand = "0.8"
+tempfile = "3.1.0"
+
+[[test]]
+name = "get_range_file"
+path = "tests/get_range_file.rs"

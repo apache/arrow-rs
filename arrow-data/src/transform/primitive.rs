@@ -47,9 +47,6 @@ where
     )
 }
 
-pub(super) fn extend_nulls<T: ArrowNativeType>(
-    mutable: &mut _MutableArrayData,
-    len: usize,
-) {
+pub(super) fn extend_nulls<T: ArrowNativeType>(mutable: &mut _MutableArrayData, len: usize) {
     mutable.buffer1.extend_zeros(len * size_of::<T>());
 }

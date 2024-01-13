@@ -47,9 +47,7 @@ fn build_strings_runs(
 fn criterion_benchmark(c: &mut Criterion) {
     let mut group = c.benchmark_group("string_run_iterator");
 
-    let mut do_bench = |physical_array_len: usize,
-                        logical_array_len: usize,
-                        string_len: usize| {
+    let mut do_bench = |physical_array_len: usize, logical_array_len: usize, string_len: usize| {
         group.bench_function(
             format!(
                 "(run_array_len:{logical_array_len}, physical_array_len:{physical_array_len}, string_len: {string_len})"),

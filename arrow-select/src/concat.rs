@@ -30,20 +30,20 @@
 //! assert_eq!(arr.len(), 3);
 //! ```
 
+use crate::dictionary::{merge_dictionary_values, should_merge_dictionary_values};
+use arrow_array::cast::AsArray;
 use arrow_array::types::*;
 use arrow_array::*;
-use arrow_buffer::ArrowNativeType;
+use arrow_buffer::{ArrowNativeType, BooleanBufferBuilder, NullBuffer};
 use arrow_data::transform::{Capacities, MutableArrayData};
 use arrow_schema::{ArrowError, DataType, SchemaRef};
+use std::sync::Arc;
 
 fn binary_capacity<T: ByteArrayType>(arrays: &[&dyn Array]) -> Capacities {
     let mut item_capacity = 0;
     let mut bytes_capacity = 0;
     for array in arrays {
-        let a = array
-            .as_any()
-            .downcast_ref::<GenericByteArray<T>>()
-            .unwrap();
+        let a = array.as_bytes::<T>();
 
         // Guaranteed to always have at least one element
         let offsets = a.value_offsets();
@@ -52,6 +52,59 @@ fn binary_capacity<T: ByteArrayType>(arrays: &[&dyn Array]) -> Capacities {
     }
 
     Capacities::Binary(item_capacity, Some(bytes_capacity))
+}
+
+fn concat_dictionaries<K: ArrowDictionaryKeyType>(
+    arrays: &[&dyn Array],
+) -> Result<ArrayRef, ArrowError> {
+    let mut output_len = 0;
+    let dictionaries: Vec<_> = arrays
+        .iter()
+        .map(|x| x.as_dictionary::<K>())
+        .inspect(|d| output_len += d.len())
+        .collect();
+
+    if !should_merge_dictionary_values::<K>(&dictionaries, output_len) {
+        return concat_fallback(arrays, Capacities::Array(output_len));
+    }
+
+    let merged = merge_dictionary_values(&dictionaries, None)?;
+
+    // Recompute keys
+    let mut key_values = Vec::with_capacity(output_len);
+
+    let mut has_nulls = false;
+    for (d, mapping) in dictionaries.iter().zip(merged.key_mappings) {
+        has_nulls |= d.null_count() != 0;
+        for key in d.keys().values() {
+            // Use get to safely handle nulls
+            key_values.push(mapping.get(key.as_usize()).copied().unwrap_or_default())
+        }
+    }
+
+    let nulls = has_nulls.then(|| {
+        let mut nulls = BooleanBufferBuilder::new(output_len);
+        for d in &dictionaries {
+            match d.nulls() {
+                Some(n) => nulls.append_buffer(n.inner()),
+                None => nulls.append_n(d.len(), true),
+            }
+        }
+        NullBuffer::new(nulls.finish())
+    });
+
+    let keys = PrimitiveArray::<K>::new(key_values.into(), nulls);
+    // Sanity check
+    assert_eq!(keys.len(), output_len);
+
+    let array = unsafe { DictionaryArray::new_unchecked(keys, merged.values) };
+    Ok(Arc::new(array))
+}
+
+macro_rules! dict_helper {
+    ($t:ty, $arrays:expr) => {
+        return Ok(Arc::new(concat_dictionaries::<$t>($arrays)?) as _)
+    };
 }
 
 /// Concatenate multiple [Array] of the same type into a single [ArrayRef].
@@ -68,8 +121,7 @@ pub fn concat(arrays: &[&dyn Array]) -> Result<ArrayRef, ArrowError> {
     let d = arrays[0].data_type();
     if arrays.iter().skip(1).any(|array| array.data_type() != d) {
         return Err(ArrowError::InvalidArgumentError(
-            "It is not possible to concatenate arrays of different data types."
-                .to_string(),
+            "It is not possible to concatenate arrays of different data types.".to_string(),
         ));
     }
 
@@ -78,9 +130,20 @@ pub fn concat(arrays: &[&dyn Array]) -> Result<ArrayRef, ArrowError> {
         DataType::LargeUtf8 => binary_capacity::<LargeUtf8Type>(arrays),
         DataType::Binary => binary_capacity::<BinaryType>(arrays),
         DataType::LargeBinary => binary_capacity::<LargeBinaryType>(arrays),
+        DataType::Dictionary(k, _) => downcast_integer! {
+            k.as_ref() => (dict_helper, arrays),
+            _ => unreachable!("illegal dictionary key type {k}")
+        },
         _ => Capacities::Array(arrays.iter().map(|a| a.len()).sum()),
     };
 
+    concat_fallback(arrays, capacity)
+}
+
+/// Concatenates arrays using MutableArrayData
+///
+/// This will naively concatenate dictionaries
+fn concat_fallback(arrays: &[&dyn Array], capacity: Capacities) -> Result<ArrayRef, ArrowError> {
     let array_data: Vec<_> = arrays.iter().map(|a| a.to_data()).collect::<Vec<_>>();
     let array_data = array_data.iter().collect();
     let mut mutable = MutableArrayData::with_capacities(array_data, false, capacity);
@@ -92,28 +155,27 @@ pub fn concat(arrays: &[&dyn Array]) -> Result<ArrayRef, ArrowError> {
     Ok(make_array(mutable.freeze()))
 }
 
-/// Concatenates `batches` together into a single record batch.
+/// Concatenates `batches` together into a single [`RecordBatch`].
+///
+/// The output batch has the specified `schemas`; The schema of the
+/// input are ignored.
+///
+/// Returns an error if the types of underlying arrays are different.
 pub fn concat_batches<'a>(
     schema: &SchemaRef,
     input_batches: impl IntoIterator<Item = &'a RecordBatch>,
 ) -> Result<RecordBatch, ArrowError> {
+    // When schema is empty, sum the number of the rows of all batches
+    if schema.fields().is_empty() {
+        let num_rows: usize = input_batches.into_iter().map(RecordBatch::num_rows).sum();
+        let mut options = RecordBatchOptions::default();
+        options.row_count = Some(num_rows);
+        return RecordBatch::try_new_with_options(schema.clone(), vec![], &options);
+    }
+
     let batches: Vec<&RecordBatch> = input_batches.into_iter().collect();
     if batches.is_empty() {
         return Ok(RecordBatch::new_empty(schema.clone()));
-    }
-    if let Some((i, _)) = batches
-        .iter()
-        .enumerate()
-        .find(|&(_, batch)| batch.schema() != *schema)
-    {
-        return Err(ArrowError::InvalidArgumentError(format!(
-            "batches[{i}] schema is different with argument schema.
-            batches[{i}] schema: {:?},
-            argument schema: {:?}
-            ",
-            batches[i].schema(),
-            *schema
-        )));
     }
     let field_num = schema.fields().len();
     let mut arrays = Vec::with_capacity(field_num);
@@ -132,6 +194,7 @@ pub fn concat_batches<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use arrow_array::builder::StringDictionaryBuilder;
     use arrow_array::cast::AsArray;
     use arrow_schema::{Field, Schema};
     use std::sync::Arc;
@@ -140,6 +203,20 @@ mod tests {
     fn test_concat_empty_vec() {
         let re = concat(&[]);
         assert!(re.is_err());
+    }
+
+    #[test]
+    fn test_concat_batches_no_columns() {
+        // Test concat using empty schema / batches without columns
+        let schema = Arc::new(Schema::empty());
+
+        let mut options = RecordBatchOptions::default();
+        options.row_count = Some(100);
+        let batch = RecordBatch::try_new_with_options(schema.clone(), vec![], &options).unwrap();
+        // put in 2 batches of 100 rows each
+        let re = concat_batches(&schema, &[batch.clone(), batch]).unwrap();
+
+        assert_eq!(re.num_rows(), 200);
     }
 
     #[test]
@@ -192,19 +269,8 @@ mod tests {
     #[test]
     fn test_concat_primitive_arrays() {
         let arr = concat(&[
-            &PrimitiveArray::<Int64Type>::from(vec![
-                Some(-1),
-                Some(-1),
-                Some(2),
-                None,
-                None,
-            ]),
-            &PrimitiveArray::<Int64Type>::from(vec![
-                Some(101),
-                Some(102),
-                Some(103),
-                None,
-            ]),
+            &PrimitiveArray::<Int64Type>::from(vec![Some(-1), Some(-1), Some(2), None, None]),
+            &PrimitiveArray::<Int64Type>::from(vec![Some(101), Some(102), Some(103), None]),
             &PrimitiveArray::<Int64Type>::from(vec![Some(256), Some(512), Some(1024)]),
         ])
         .unwrap();
@@ -229,22 +295,13 @@ mod tests {
 
     #[test]
     fn test_concat_primitive_array_slices() {
-        let input_1 = PrimitiveArray::<Int64Type>::from(vec![
-            Some(-1),
-            Some(-1),
-            Some(2),
-            None,
-            None,
-        ])
-        .slice(1, 3);
+        let input_1 =
+            PrimitiveArray::<Int64Type>::from(vec![Some(-1), Some(-1), Some(2), None, None])
+                .slice(1, 3);
 
-        let input_2 = PrimitiveArray::<Int64Type>::from(vec![
-            Some(101),
-            Some(102),
-            Some(103),
-            None,
-        ])
-        .slice(1, 3);
+        let input_2 =
+            PrimitiveArray::<Int64Type>::from(vec![Some(101), Some(102), Some(103), None])
+                .slice(1, 3);
         let arr = concat(&[&input_1, &input_2]).unwrap();
 
         let expected_output = Arc::new(PrimitiveArray::<Int64Type>::from(vec![
@@ -298,27 +355,21 @@ mod tests {
             None,
             Some(vec![Some(10)]),
         ];
-        let list1_array =
-            ListArray::from_iter_primitive::<Int64Type, _, _>(list1.clone());
+        let list1_array = ListArray::from_iter_primitive::<Int64Type, _, _>(list1.clone());
 
         let list2 = vec![
             None,
             Some(vec![Some(100), None, Some(101)]),
             Some(vec![Some(102)]),
         ];
-        let list2_array =
-            ListArray::from_iter_primitive::<Int64Type, _, _>(list2.clone());
+        let list2_array = ListArray::from_iter_primitive::<Int64Type, _, _>(list2.clone());
 
         let list3 = vec![Some(vec![Some(1000), Some(1001)])];
-        let list3_array =
-            ListArray::from_iter_primitive::<Int64Type, _, _>(list3.clone());
+        let list3_array = ListArray::from_iter_primitive::<Int64Type, _, _>(list3.clone());
 
         let array_result = concat(&[&list1_array, &list2_array, &list3_array]).unwrap();
 
-        let expected = list1
-            .into_iter()
-            .chain(list2.into_iter())
-            .chain(list3.into_iter());
+        let expected = list1.into_iter().chain(list2).chain(list3);
         let array_expected = ListArray::from_iter_primitive::<Int64Type, _, _>(expected);
 
         assert_eq!(array_result.as_ref(), &array_expected as &dyn Array);
@@ -326,32 +377,29 @@ mod tests {
 
     #[test]
     fn test_concat_struct_arrays() {
-        let field = Field::new("field", DataType::Int64, true);
-        let input_primitive_1: ArrayRef =
-            Arc::new(PrimitiveArray::<Int64Type>::from(vec![
-                Some(-1),
-                Some(-1),
-                Some(2),
-                None,
-                None,
-            ]));
+        let field = Arc::new(Field::new("field", DataType::Int64, true));
+        let input_primitive_1: ArrayRef = Arc::new(PrimitiveArray::<Int64Type>::from(vec![
+            Some(-1),
+            Some(-1),
+            Some(2),
+            None,
+            None,
+        ]));
         let input_struct_1 = StructArray::from(vec![(field.clone(), input_primitive_1)]);
 
-        let input_primitive_2: ArrayRef =
-            Arc::new(PrimitiveArray::<Int64Type>::from(vec![
-                Some(101),
-                Some(102),
-                Some(103),
-                None,
-            ]));
+        let input_primitive_2: ArrayRef = Arc::new(PrimitiveArray::<Int64Type>::from(vec![
+            Some(101),
+            Some(102),
+            Some(103),
+            None,
+        ]));
         let input_struct_2 = StructArray::from(vec![(field.clone(), input_primitive_2)]);
 
-        let input_primitive_3: ArrayRef =
-            Arc::new(PrimitiveArray::<Int64Type>::from(vec![
-                Some(256),
-                Some(512),
-                Some(1024),
-            ]));
+        let input_primitive_3: ArrayRef = Arc::new(PrimitiveArray::<Int64Type>::from(vec![
+            Some(256),
+            Some(512),
+            Some(1024),
+        ]));
         let input_struct_3 = StructArray::from(vec![(field, input_primitive_3)]);
 
         let arr = concat(&[&input_struct_1, &input_struct_2, &input_struct_3]).unwrap();
@@ -381,28 +429,25 @@ mod tests {
 
     #[test]
     fn test_concat_struct_array_slices() {
-        let field = Field::new("field", DataType::Int64, true);
-        let input_primitive_1: ArrayRef =
-            Arc::new(PrimitiveArray::<Int64Type>::from(vec![
-                Some(-1),
-                Some(-1),
-                Some(2),
-                None,
-                None,
-            ]));
+        let field = Arc::new(Field::new("field", DataType::Int64, true));
+        let input_primitive_1: ArrayRef = Arc::new(PrimitiveArray::<Int64Type>::from(vec![
+            Some(-1),
+            Some(-1),
+            Some(2),
+            None,
+            None,
+        ]));
         let input_struct_1 = StructArray::from(vec![(field.clone(), input_primitive_1)]);
 
-        let input_primitive_2: ArrayRef =
-            Arc::new(PrimitiveArray::<Int64Type>::from(vec![
-                Some(101),
-                Some(102),
-                Some(103),
-                None,
-            ]));
+        let input_primitive_2: ArrayRef = Arc::new(PrimitiveArray::<Int64Type>::from(vec![
+            Some(101),
+            Some(102),
+            Some(103),
+            None,
+        ]));
         let input_struct_2 = StructArray::from(vec![(field, input_primitive_2)]);
 
-        let arr =
-            concat(&[&input_struct_1.slice(1, 3), &input_struct_2.slice(1, 2)]).unwrap();
+        let arr = concat(&[&input_struct_1.slice(1, 3), &input_struct_2.slice(1, 2)]).unwrap();
 
         let expected_primitive_output = Arc::new(PrimitiveArray::<Int64Type>::from(vec![
             Some(-1),
@@ -447,72 +492,84 @@ mod tests {
         assert_eq!(actual_output, &expected_output);
     }
 
-    fn collect_string_dictionary(
-        dictionary: &DictionaryArray<Int32Type>,
-    ) -> Vec<Option<String>> {
-        let values = dictionary.values();
-        let values = values.as_any().downcast_ref::<StringArray>().unwrap();
-
-        dictionary
-            .keys()
-            .iter()
-            .map(|key| key.map(|key| values.value(key as _).to_string()))
-            .collect()
-    }
-
-    fn concat_dictionary(
-        input_1: DictionaryArray<Int32Type>,
-        input_2: DictionaryArray<Int32Type>,
-    ) -> Vec<Option<String>> {
-        let concat = concat(&[&input_1 as _, &input_2 as _]).unwrap();
-        let concat = concat
-            .as_any()
-            .downcast_ref::<DictionaryArray<Int32Type>>()
-            .unwrap();
-
-        collect_string_dictionary(concat)
+    fn collect_string_dictionary(array: &DictionaryArray<Int32Type>) -> Vec<Option<&str>> {
+        let concrete = array.downcast_dict::<StringArray>().unwrap();
+        concrete.into_iter().collect()
     }
 
     #[test]
     fn test_string_dictionary_array() {
-        let input_1: DictionaryArray<Int32Type> =
-            vec!["hello", "A", "B", "hello", "hello", "C"]
-                .into_iter()
-                .collect();
-        let input_2: DictionaryArray<Int32Type> =
-            vec!["hello", "E", "E", "hello", "F", "E"]
-                .into_iter()
-                .collect();
+        let input_1: DictionaryArray<Int32Type> = vec!["hello", "A", "B", "hello", "hello", "C"]
+            .into_iter()
+            .collect();
+        let input_2: DictionaryArray<Int32Type> = vec!["hello", "E", "E", "hello", "F", "E"]
+            .into_iter()
+            .collect();
 
         let expected: Vec<_> = vec![
-            "hello", "A", "B", "hello", "hello", "C", "hello", "E", "E", "hello", "F",
-            "E",
+            "hello", "A", "B", "hello", "hello", "C", "hello", "E", "E", "hello", "F", "E",
         ]
         .into_iter()
-        .map(|x| Some(x.to_string()))
+        .map(Some)
         .collect();
 
-        let concat = concat_dictionary(input_1, input_2);
-        assert_eq!(concat, expected);
+        let concat = concat(&[&input_1 as _, &input_2 as _]).unwrap();
+        let dictionary = concat.as_dictionary::<Int32Type>();
+        let actual = collect_string_dictionary(dictionary);
+        assert_eq!(actual, expected);
+
+        // Should have concatenated inputs together
+        assert_eq!(
+            dictionary.values().len(),
+            input_1.values().len() + input_2.values().len(),
+        )
     }
 
     #[test]
     fn test_string_dictionary_array_nulls() {
-        let input_1: DictionaryArray<Int32Type> =
-            vec![Some("foo"), Some("bar"), None, Some("fiz")]
-                .into_iter()
-                .collect();
+        let input_1: DictionaryArray<Int32Type> = vec![Some("foo"), Some("bar"), None, Some("fiz")]
+            .into_iter()
+            .collect();
         let input_2: DictionaryArray<Int32Type> = vec![None].into_iter().collect();
-        let expected = vec![
-            Some("foo".to_string()),
-            Some("bar".to_string()),
-            None,
-            Some("fiz".to_string()),
-            None,
-        ];
+        let expected = vec![Some("foo"), Some("bar"), None, Some("fiz"), None];
 
-        let concat = concat_dictionary(input_1, input_2);
-        assert_eq!(concat, expected);
+        let concat = concat(&[&input_1 as _, &input_2 as _]).unwrap();
+        let dictionary = concat.as_dictionary::<Int32Type>();
+        let actual = collect_string_dictionary(dictionary);
+        assert_eq!(actual, expected);
+
+        // Should have concatenated inputs together
+        assert_eq!(
+            dictionary.values().len(),
+            input_1.values().len() + input_2.values().len(),
+        )
+    }
+
+    #[test]
+    fn test_string_dictionary_merge() {
+        let mut builder = StringDictionaryBuilder::<Int32Type>::new();
+        for i in 0..20 {
+            builder.append(&i.to_string()).unwrap();
+        }
+        let input_1 = builder.finish();
+
+        let mut builder = StringDictionaryBuilder::<Int32Type>::new();
+        for i in 0..30 {
+            builder.append(&i.to_string()).unwrap();
+        }
+        let input_2 = builder.finish();
+
+        let expected: Vec<_> = (0..20).chain(0..30).map(|x| x.to_string()).collect();
+        let expected: Vec<_> = expected.iter().map(|x| Some(x.as_str())).collect();
+
+        let concat = concat(&[&input_1 as _, &input_2 as _]).unwrap();
+        let dictionary = concat.as_dictionary::<Int32Type>();
+        let actual = collect_string_dictionary(dictionary);
+        assert_eq!(actual, expected);
+
+        // Should have merged inputs together
+        // Not 30 as this is done on a best-effort basis
+        assert_eq!(dictionary.values().len(), 33)
     }
 
     #[test]
@@ -534,9 +591,8 @@ mod tests {
 
     #[test]
     fn test_dictionary_concat_reuse() {
-        let array: DictionaryArray<Int8Type> =
-            vec!["a", "a", "b", "c"].into_iter().collect();
-        let copy: DictionaryArray<Int8Type> = array.to_data().into();
+        let array: DictionaryArray<Int8Type> = vec!["a", "a", "b", "c"].into_iter().collect();
+        let copy: DictionaryArray<Int8Type> = array.clone();
 
         // dictionary is "a", "b", "c"
         assert_eq!(
@@ -547,11 +603,7 @@ mod tests {
 
         // concatenate it with itself
         let combined = concat(&[&copy as _, &array as _]).unwrap();
-
-        let combined = combined
-            .as_any()
-            .downcast_ref::<DictionaryArray<Int8Type>>()
-            .unwrap();
+        let combined = combined.as_dictionary::<Int8Type>();
 
         assert_eq!(
             combined.values(),
@@ -625,36 +677,41 @@ mod tests {
     }
 
     #[test]
-    fn concat_record_batches_of_different_schemas() {
-        let schema1 = Arc::new(Schema::new(vec![
-            Field::new("a", DataType::Int32, false),
-            Field::new("b", DataType::Utf8, false),
-        ]));
-        let schema2 = Arc::new(Schema::new(vec![
-            Field::new("c", DataType::Int32, false),
-            Field::new("d", DataType::Utf8, false),
-        ]));
+    fn concat_record_batches_of_different_schemas_but_compatible_data() {
+        let schema1 = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+        // column names differ
+        let schema2 = Arc::new(Schema::new(vec![Field::new("c", DataType::Int32, false)]));
         let batch1 = RecordBatch::try_new(
             schema1.clone(),
-            vec![
-                Arc::new(Int32Array::from(vec![1, 2])),
-                Arc::new(StringArray::from(vec!["a", "b"])),
-            ],
+            vec![Arc::new(Int32Array::from(vec![1, 2]))],
+        )
+        .unwrap();
+        let batch2 =
+            RecordBatch::try_new(schema2, vec![Arc::new(Int32Array::from(vec![3, 4]))]).unwrap();
+        // concat_batches simply uses the schema provided
+        let batch = concat_batches(&schema1, [&batch1, &batch2]).unwrap();
+        assert_eq!(batch.schema().as_ref(), schema1.as_ref());
+        assert_eq!(4, batch.num_rows());
+    }
+
+    #[test]
+    fn concat_record_batches_of_different_schemas_incompatible_data() {
+        let schema1 = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+        // column names differ
+        let schema2 = Arc::new(Schema::new(vec![Field::new("a", DataType::Utf8, false)]));
+        let batch1 = RecordBatch::try_new(
+            schema1.clone(),
+            vec![Arc::new(Int32Array::from(vec![1, 2]))],
         )
         .unwrap();
         let batch2 = RecordBatch::try_new(
             schema2,
-            vec![
-                Arc::new(Int32Array::from(vec![3, 4])),
-                Arc::new(StringArray::from(vec!["c", "d"])),
-            ],
+            vec![Arc::new(StringArray::from(vec!["foo", "bar"]))],
         )
         .unwrap();
+
         let error = concat_batches(&schema1, [&batch1, &batch2]).unwrap_err();
-        assert_eq!(
-            error.to_string(),
-            "Invalid argument error: batches[1] schema is different with argument schema.\n            batches[1] schema: Schema { fields: [Field { name: \"c\", data_type: Int32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: \"d\", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} },\n            argument schema: Schema { fields: [Field { name: \"a\", data_type: Int32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: \"b\", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }\n            "
-        );
+        assert_eq!(error.to_string(), "Invalid argument error: It is not possible to concatenate arrays of different data types.");
     }
 
     #[test]
@@ -695,8 +752,7 @@ mod tests {
         assert_eq!(data.buffers()[1].capacity(), 192); // Nearest multiple of 64
 
         let a = LargeBinaryArray::from_iter_values(std::iter::repeat(b"foo").take(100));
-        let b =
-            LargeBinaryArray::from_iter_values(std::iter::repeat(b"cupcakes").take(10));
+        let b = LargeBinaryArray::from_iter_values(std::iter::repeat(b"cupcakes").take(10));
 
         let a = concat(&[&a, &b]).unwrap();
         let data = a.to_data();
@@ -717,5 +773,17 @@ mod tests {
         // len("foo") * 40 + len("cupcakes") * 10
         assert_eq!(data.buffers()[1].len(), 200);
         assert_eq!(data.buffers()[1].capacity(), 256); // Nearest multiple of 64
+    }
+
+    #[test]
+    fn concat_sparse_nulls() {
+        let values = StringArray::from_iter_values((0..100).map(|x| x.to_string()));
+        let keys = Int32Array::from(vec![1; 10]);
+        let dict_a = DictionaryArray::new(keys, Arc::new(values));
+        let values = StringArray::new_null(0);
+        let keys = Int32Array::new_null(10);
+        let dict_b = DictionaryArray::new(keys, Arc::new(values));
+        let array = concat(&[&dict_a, &dict_b]).unwrap();
+        assert_eq!(array.null_count(), 10);
     }
 }

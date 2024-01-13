@@ -20,7 +20,7 @@ use crate::builder::GenericByteBuilder;
 use crate::iterator::ArrayIter;
 use crate::types::bytes::ByteArrayNativeType;
 use crate::types::ByteArrayType;
-use crate::{Array, ArrayAccessor, ArrayRef, OffsetSizeTrait};
+use crate::{Array, ArrayAccessor, ArrayRef, OffsetSizeTrait, Scalar};
 use arrow_buffer::{ArrowNativeType, Buffer, MutableBuffer};
 use arrow_buffer::{NullBuffer, OffsetBuffer};
 use arrow_data::{ArrayData, ArrayDataBuilder};
@@ -28,11 +28,57 @@ use arrow_schema::{ArrowError, DataType};
 use std::any::Any;
 use std::sync::Arc;
 
-/// Generic struct for variable-size byte arrays
+/// An array of [variable length byte arrays](https://arrow.apache.org/docs/format/Columnar.html#variable-size-binary-layout)
 ///
 /// See [`StringArray`] and [`LargeStringArray`] for storing utf8 encoded string data
 ///
 /// See [`BinaryArray`] and [`LargeBinaryArray`] for storing arbitrary bytes
+///
+/// # Example: From a Vec
+///
+/// ```
+/// # use arrow_array::{Array, GenericByteArray, types::Utf8Type};
+/// let arr: GenericByteArray<Utf8Type> = vec!["hello", "world", ""].into();
+/// assert_eq!(arr.value_data(), b"helloworld");
+/// assert_eq!(arr.value_offsets(), &[0, 5, 10, 10]);
+/// let values: Vec<_> = arr.iter().collect();
+/// assert_eq!(values, &[Some("hello"), Some("world"), Some("")]);
+/// ```
+///
+/// # Example: From an optional Vec
+///
+/// ```
+/// # use arrow_array::{Array, GenericByteArray, types::Utf8Type};
+/// let arr: GenericByteArray<Utf8Type> = vec![Some("hello"), Some("world"), Some(""), None].into();
+/// assert_eq!(arr.value_data(), b"helloworld");
+/// assert_eq!(arr.value_offsets(), &[0, 5, 10, 10, 10]);
+/// let values: Vec<_> = arr.iter().collect();
+/// assert_eq!(values, &[Some("hello"), Some("world"), Some(""), None]);
+/// ```
+///
+/// # Example: From an iterator of option
+///
+/// ```
+/// # use arrow_array::{Array, GenericByteArray, types::Utf8Type};
+/// let arr: GenericByteArray<Utf8Type> = (0..5).map(|x| (x % 2 == 0).then(|| x.to_string())).collect();
+/// let values: Vec<_> = arr.iter().collect();
+/// assert_eq!(values, &[Some("0"), None, Some("2"), None, Some("4")]);
+/// ```
+///
+/// # Example: Using Builder
+///
+/// ```
+/// # use arrow_array::Array;
+/// # use arrow_array::builder::GenericByteBuilder;
+/// # use arrow_array::types::Utf8Type;
+/// let mut builder = GenericByteBuilder::<Utf8Type>::new();
+/// builder.append_value("hello");
+/// builder.append_null();
+/// builder.append_value("world");
+/// let array = builder.finish();
+/// let values: Vec<_> = array.iter().collect();
+/// assert_eq!(values, &[Some("hello"), None, Some("world")]);
+/// ```
 ///
 /// [`StringArray`]: crate::StringArray
 /// [`LargeStringArray`]: crate::LargeStringArray
@@ -113,7 +159,7 @@ impl<T: ByteArrayType> GenericByteArray<T> {
     /// # Safety
     ///
     /// Safe if [`Self::try_new`] would not error
-    pub fn new_unchecked(
+    pub unsafe fn new_unchecked(
         offsets: OffsetBuffer<T::Offset>,
         values: Buffer,
         nulls: Option<NullBuffer>,
@@ -133,6 +179,45 @@ impl<T: ByteArrayType> GenericByteArray<T> {
             value_offsets: OffsetBuffer::new_zeroed(len),
             value_data: MutableBuffer::new(0).into(),
             nulls: Some(NullBuffer::new_null(len)),
+        }
+    }
+
+    /// Create a new [`Scalar`] from `v`
+    pub fn new_scalar(value: impl AsRef<T::Native>) -> Scalar<Self> {
+        Scalar::new(Self::from_iter_values(std::iter::once(value)))
+    }
+
+    /// Creates a [`GenericByteArray`] based on an iterator of values without nulls
+    pub fn from_iter_values<Ptr, I>(iter: I) -> Self
+    where
+        Ptr: AsRef<T::Native>,
+        I: IntoIterator<Item = Ptr>,
+    {
+        let iter = iter.into_iter();
+        let (_, data_len) = iter.size_hint();
+        let data_len = data_len.expect("Iterator must be sized"); // panic if no upper bound.
+
+        let mut offsets = MutableBuffer::new((data_len + 1) * std::mem::size_of::<T::Offset>());
+        offsets.push(T::Offset::usize_as(0));
+
+        let mut values = MutableBuffer::new(0);
+        for s in iter {
+            let s: &[u8] = s.as_ref().as_ref();
+            values.extend_from_slice(s);
+            offsets.push(T::Offset::usize_as(values.len()));
+        }
+
+        T::Offset::from_usize(values.len()).expect("offset overflow");
+        let offsets = Buffer::from(offsets);
+
+        // Safety: valid by construction
+        let value_offsets = unsafe { OffsetBuffer::new_unchecked(offsets.into()) };
+
+        Self {
+            data_type: T::DATA_TYPE,
+            value_data: values.into(),
+            value_offsets,
+            nulls: None,
         }
     }
 
@@ -249,8 +334,7 @@ impl<T: ByteArrayType> GenericByteArray<T> {
     /// offset and data buffers are not shared by others.
     pub fn into_builder(self) -> Result<GenericByteBuilder<T>, Self> {
         let len = self.len();
-        let value_len =
-            T::Offset::as_usize(self.value_offsets()[len] - self.value_offsets()[0]);
+        let value_len = T::Offset::as_usize(self.value_offsets()[len] - self.value_offsets()[0]);
 
         let data = self.into_data();
         let null_bit_buffer = data.nulls().map(|b| b.inner().sliced());
@@ -456,6 +540,29 @@ impl<'a, T: ByteArrayType> IntoIterator for &'a GenericByteArray<T> {
     }
 }
 
+impl<'a, Ptr, T: ByteArrayType> FromIterator<&'a Option<Ptr>> for GenericByteArray<T>
+where
+    Ptr: AsRef<T::Native> + 'a,
+{
+    fn from_iter<I: IntoIterator<Item = &'a Option<Ptr>>>(iter: I) -> Self {
+        iter.into_iter()
+            .map(|o| o.as_ref().map(|p| p.as_ref()))
+            .collect()
+    }
+}
+
+impl<Ptr, T: ByteArrayType> FromIterator<Option<Ptr>> for GenericByteArray<T>
+where
+    Ptr: AsRef<T::Native>,
+{
+    fn from_iter<I: IntoIterator<Item = Option<Ptr>>>(iter: I) -> Self {
+        let iter = iter.into_iter();
+        let mut builder = GenericByteBuilder::with_capacity(iter.size_hint().0, 1024);
+        builder.extend(iter);
+        builder.finish()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::{BinaryArray, StringArray};
@@ -469,17 +576,14 @@ mod tests {
 
         let nulls = NullBuffer::new_null(3);
         let err =
-            StringArray::try_new(offsets.clone(), data.clone(), Some(nulls.clone()))
-                .unwrap_err();
+            StringArray::try_new(offsets.clone(), data.clone(), Some(nulls.clone())).unwrap_err();
         assert_eq!(err.to_string(), "Invalid argument error: Incorrect length of null buffer for StringArray, expected 2 got 3");
 
-        let err =
-            BinaryArray::try_new(offsets.clone(), data.clone(), Some(nulls)).unwrap_err();
+        let err = BinaryArray::try_new(offsets.clone(), data.clone(), Some(nulls)).unwrap_err();
         assert_eq!(err.to_string(), "Invalid argument error: Incorrect length of null buffer for BinaryArray, expected 2 got 3");
 
         let non_utf8_data = Buffer::from_slice_ref(b"he\xFFloworld");
-        let err = StringArray::try_new(offsets.clone(), non_utf8_data.clone(), None)
-            .unwrap_err();
+        let err = StringArray::try_new(offsets.clone(), non_utf8_data.clone(), None).unwrap_err();
         assert_eq!(err.to_string(), "Invalid argument error: Encountered non UTF-8 data: invalid utf-8 sequence of 1 bytes from index 2");
 
         BinaryArray::new(offsets, non_utf8_data, None);
@@ -502,8 +606,7 @@ mod tests {
         BinaryArray::new(offsets, non_ascii_data.clone(), None);
 
         let offsets = OffsetBuffer::new(vec![0, 3, 10].into());
-        let err = StringArray::try_new(offsets.clone(), non_ascii_data.clone(), None)
-            .unwrap_err();
+        let err = StringArray::try_new(offsets.clone(), non_ascii_data.clone(), None).unwrap_err();
         assert_eq!(
             err.to_string(),
             "Invalid argument error: Split UTF-8 codepoint at offset 3"

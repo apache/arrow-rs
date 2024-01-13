@@ -15,42 +15,55 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::azure::STORE;
 use crate::client::retry::RetryExt;
 use crate::client::token::{TemporaryToken, TokenCache};
+use crate::client::{CredentialProvider, TokenProvider};
 use crate::util::hmac_sha256;
 use crate::RetryConfig;
+use async_trait::async_trait;
 use base64::prelude::BASE64_STANDARD;
 use base64::Engine;
-use chrono::{DateTime, Utc};
-use reqwest::header::ACCEPT;
-use reqwest::{
-    header::{
-        HeaderMap, HeaderName, HeaderValue, AUTHORIZATION, CONTENT_ENCODING,
-        CONTENT_LANGUAGE, CONTENT_LENGTH, CONTENT_TYPE, DATE, IF_MATCH,
-        IF_MODIFIED_SINCE, IF_NONE_MATCH, IF_UNMODIFIED_SINCE, RANGE,
-    },
-    Client, Method, RequestBuilder,
+use chrono::{DateTime, SecondsFormat, Utc};
+use reqwest::header::{
+    HeaderMap, HeaderName, HeaderValue, ACCEPT, AUTHORIZATION, CONTENT_ENCODING, CONTENT_LANGUAGE,
+    CONTENT_LENGTH, CONTENT_TYPE, DATE, IF_MATCH, IF_MODIFIED_SINCE, IF_NONE_MATCH,
+    IF_UNMODIFIED_SINCE, RANGE,
 };
+use reqwest::{Client, Method, Request, RequestBuilder};
 use serde::Deserialize;
 use snafu::{ResultExt, Snafu};
 use std::borrow::Cow;
+use std::collections::HashMap;
+use std::fmt::Debug;
 use std::process::Command;
 use std::str;
-use std::time::{Duration, Instant};
+use std::sync::Arc;
+use std::time::{Duration, Instant, SystemTime};
 use url::Url;
 
-static AZURE_VERSION: HeaderValue = HeaderValue::from_static("2021-08-06");
+use super::client::UserDelegationKey;
+
+static AZURE_VERSION: HeaderValue = HeaderValue::from_static("2023-11-03");
 static VERSION: HeaderName = HeaderName::from_static("x-ms-version");
 pub(crate) static BLOB_TYPE: HeaderName = HeaderName::from_static("x-ms-blob-type");
-pub(crate) static DELETE_SNAPSHOTS: HeaderName =
-    HeaderName::from_static("x-ms-delete-snapshots");
+pub(crate) static DELETE_SNAPSHOTS: HeaderName = HeaderName::from_static("x-ms-delete-snapshots");
 pub(crate) static COPY_SOURCE: HeaderName = HeaderName::from_static("x-ms-copy-source");
 static CONTENT_MD5: HeaderName = HeaderName::from_static("content-md5");
 pub(crate) const RFC1123_FMT: &str = "%a, %d %h %Y %T GMT";
 const CONTENT_TYPE_JSON: &str = "application/json";
 const MSI_SECRET_ENV_KEY: &str = "IDENTITY_HEADER";
 const MSI_API_VERSION: &str = "2019-08-01";
+
+/// OIDC scope used when interacting with OAuth2 APIs
+///
+/// <https://learn.microsoft.com/en-us/azure/active-directory/develop/scopes-oidc#the-default-scope>
 const AZURE_STORAGE_SCOPE: &str = "https://storage.azure.com/.default";
+
+/// Resource ID used when obtaining an access token from the metadata endpoint
+///
+/// <https://learn.microsoft.com/en-us/azure/storage/blobs/authorize-access-azure-active-directory#microsoft-authentication-library-msal>
+const AZURE_STORAGE_RESOURCE: &str = "https://storage.azure.com";
 
 #[derive(Debug, Snafu)]
 pub enum Error {
@@ -63,28 +76,57 @@ pub enum Error {
     #[snafu(display("Error reading federated token file "))]
     FederatedTokenFile,
 
+    #[snafu(display("Invalid Access Key: {}", source))]
+    InvalidAccessKey { source: base64::DecodeError },
+
     #[snafu(display("'az account get-access-token' command failed: {message}"))]
     AzureCli { message: String },
 
     #[snafu(display("Failed to parse azure cli response: {source}"))]
     AzureCliResponse { source: serde_json::Error },
+
+    #[snafu(display("Generating SAS keys with SAS tokens auth is not supported"))]
+    SASforSASNotSupported,
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
 
-/// Provides credentials for use when signing requests
-#[derive(Debug)]
-pub enum CredentialProvider {
-    AccessKey(String),
-    BearerToken(String),
-    SASToken(Vec<(String, String)>),
-    TokenCredential(TokenCache<String>, Box<dyn TokenCredential>),
+impl From<Error> for crate::Error {
+    fn from(value: Error) -> Self {
+        Self::Generic {
+            store: STORE,
+            source: Box::new(value),
+        }
+    }
 }
 
-pub(crate) enum AzureCredential {
-    AccessKey(String),
+/// A shared Azure Storage Account Key
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct AzureAccessKey(Vec<u8>);
+
+impl AzureAccessKey {
+    /// Create a new [`AzureAccessKey`], checking it for validity
+    pub fn try_new(key: &str) -> Result<Self> {
+        let key = BASE64_STANDARD.decode(key).context(InvalidAccessKeySnafu)?;
+        Ok(Self(key))
+    }
+}
+
+/// An Azure storage credential
+#[derive(Debug, Eq, PartialEq)]
+pub enum AzureCredential {
+    /// A shared access key
+    ///
+    /// <https://learn.microsoft.com/en-us/rest/api/storageservices/authorize-with-shared-key>
+    AccessKey(AzureAccessKey),
+    /// A shared access signature
+    ///
+    /// <https://learn.microsoft.com/en-us/rest/api/storageservices/delegate-access-with-shared-access-signature>
     SASToken(Vec<(String, String)>),
-    AuthorizationToken(HeaderValue),
+    /// An authorization token
+    ///
+    /// <https://learn.microsoft.com/en-us/rest/api/storageservices/authorize-with-azure-active-directory>
+    BearerToken(String),
 }
 
 /// A list of known Azure authority hosts
@@ -99,42 +141,87 @@ pub mod authority_hosts {
     pub const AZURE_PUBLIC_CLOUD: &str = "https://login.microsoftonline.com";
 }
 
-pub(crate) trait CredentialExt {
-    /// Apply authorization to requests against azure storage accounts
-    /// <https://docs.microsoft.com/en-us/rest/api/storageservices/authorize-requests-to-azure-storage>
-    fn with_azure_authorization(
-        self,
-        credential: &AzureCredential,
-        account: &str,
-    ) -> Self;
+pub(crate) struct AzureSigner {
+    signing_key: AzureAccessKey,
+    start: DateTime<Utc>,
+    end: DateTime<Utc>,
+    account: String,
+    delegation_key: Option<UserDelegationKey>,
 }
 
-impl CredentialExt for RequestBuilder {
-    fn with_azure_authorization(
-        mut self,
-        credential: &AzureCredential,
-        account: &str,
+impl AzureSigner {
+    pub fn new(
+        signing_key: AzureAccessKey,
+        account: String,
+        start: DateTime<Utc>,
+        end: DateTime<Utc>,
+        delegation_key: Option<UserDelegationKey>,
     ) -> Self {
+        Self {
+            signing_key,
+            account,
+            start,
+            end,
+            delegation_key,
+        }
+    }
+
+    pub fn sign(&self, method: &Method, url: &mut Url) -> Result<()> {
+        let (str_to_sign, query_pairs) = match &self.delegation_key {
+            Some(delegation_key) => string_to_sign_user_delegation_sas(
+                url,
+                method,
+                &self.account,
+                &self.start,
+                &self.end,
+                delegation_key,
+            ),
+            None => string_to_sign_service_sas(url, method, &self.account, &self.start, &self.end),
+        };
+        let auth = hmac_sha256(&self.signing_key.0, str_to_sign);
+        url.query_pairs_mut().extend_pairs(query_pairs);
+        url.query_pairs_mut()
+            .append_pair("sig", BASE64_STANDARD.encode(auth).as_str());
+        Ok(())
+    }
+}
+
+/// Authorize a [`Request`] with an [`AzureAuthorizer`]
+#[derive(Debug)]
+pub struct AzureAuthorizer<'a> {
+    credential: &'a AzureCredential,
+    account: &'a str,
+}
+
+impl<'a> AzureAuthorizer<'a> {
+    /// Create a new [`AzureAuthorizer`]
+    pub fn new(credential: &'a AzureCredential, account: &'a str) -> Self {
+        AzureAuthorizer {
+            credential,
+            account,
+        }
+    }
+
+    /// Authorize `request`
+    pub fn authorize(&self, request: &mut Request) {
         // rfc2822 string should never contain illegal characters
         let date = Utc::now();
         let date_str = date.format(RFC1123_FMT).to_string();
         // we formatted the data string ourselves, so unwrapping should be fine
         let date_val = HeaderValue::from_str(&date_str).unwrap();
-        self = self
-            .header(DATE, &date_val)
-            .header(&VERSION, &AZURE_VERSION);
+        request.headers_mut().insert(DATE, date_val);
+        request
+            .headers_mut()
+            .insert(&VERSION, AZURE_VERSION.clone());
 
-        match credential {
+        match self.credential {
             AzureCredential::AccessKey(key) => {
-                let (client, request) = self.build_split();
-                let mut request = request.expect("request valid");
-
                 let signature = generate_authorization(
                     request.headers(),
                     request.url(),
                     request.method(),
-                    account,
-                    key.as_str(),
+                    self.account,
+                    key,
                 );
 
                 // "signature" is a base 64 encoded string so it should never
@@ -143,14 +230,37 @@ impl CredentialExt for RequestBuilder {
                     AUTHORIZATION,
                     HeaderValue::from_str(signature.as_str()).unwrap(),
                 );
-
-                Self::from_parts(client, request)
             }
-            AzureCredential::AuthorizationToken(token) => {
-                self.header(AUTHORIZATION, token)
+            AzureCredential::BearerToken(token) => {
+                request.headers_mut().append(
+                    AUTHORIZATION,
+                    HeaderValue::from_str(format!("Bearer {}", token).as_str()).unwrap(),
+                );
             }
-            AzureCredential::SASToken(query_pairs) => self.query(&query_pairs),
+            AzureCredential::SASToken(query_pairs) => {
+                request
+                    .url_mut()
+                    .query_pairs_mut()
+                    .extend_pairs(query_pairs);
+            }
         }
+    }
+}
+
+pub(crate) trait CredentialExt {
+    /// Apply authorization to requests against azure storage accounts
+    /// <https://docs.microsoft.com/en-us/rest/api/storageservices/authorize-requests-to-azure-storage>
+    fn with_azure_authorization(self, credential: &AzureCredential, account: &str) -> Self;
+}
+
+impl CredentialExt for RequestBuilder {
+    fn with_azure_authorization(self, credential: &AzureCredential, account: &str) -> Self {
+        let (client, request) = self.build_split();
+        let mut request = request.expect("request valid");
+
+        AzureAuthorizer::new(credential, account).authorize(&mut request);
+
+        Self::from_parts(client, request)
     }
 }
 
@@ -161,10 +271,10 @@ fn generate_authorization(
     u: &Url,
     method: &Method,
     account: &str,
-    key: &str,
+    key: &AzureAccessKey,
 ) -> String {
     let str_to_sign = string_to_sign(h, u, method, account);
-    let auth = hmac_sha256(BASE64_STANDARD.decode(key).unwrap(), str_to_sign);
+    let auth = hmac_sha256(&key.0, str_to_sign);
     format!("SharedKey {}:{}", account, BASE64_STANDARD.encode(auth))
 }
 
@@ -175,6 +285,152 @@ fn add_if_exists<'a>(h: &'a HeaderMap, key: &HeaderName) -> &'a str {
         .ok()
         .flatten()
         .unwrap_or_default()
+}
+
+fn string_to_sign_sas(
+    u: &Url,
+    method: &Method,
+    account: &str,
+    start: &DateTime<Utc>,
+    end: &DateTime<Utc>,
+) -> (String, String, String, String, String) {
+    // NOTE: for now only blob signing is supported.
+    let signed_resource = "b".to_string();
+
+    // https://learn.microsoft.com/en-us/rest/api/storageservices/create-service-sas#permissions-for-a-directory-container-or-blob
+    let signed_permissions = match *method {
+        // read and list permissions
+        Method::GET => match signed_resource.as_str() {
+            "c" => "rl",
+            "b" => "r",
+            _ => unreachable!(),
+        },
+        // write permissions (also allows crating a new blob in a sub-key)
+        Method::PUT => "w",
+        // delete permissions
+        Method::DELETE => "d",
+        // other methods are not used in any of the current operations
+        _ => "",
+    }
+    .to_string();
+    let signed_start = start.to_rfc3339_opts(SecondsFormat::Secs, true);
+    let signed_expiry = end.to_rfc3339_opts(SecondsFormat::Secs, true);
+    let canonicalized_resource = if u.host_str().unwrap_or_default().contains(account) {
+        format!("/blob/{}{}", account, u.path())
+    } else {
+        // NOTE: in case of the emulator, the account name is not part of the host
+        //      but the path starts with the account name
+        format!("/blob{}", u.path())
+    };
+
+    (
+        signed_resource,
+        signed_permissions,
+        signed_start,
+        signed_expiry,
+        canonicalized_resource,
+    )
+}
+
+/// Create a string to be signed for authorization via [service sas].
+///
+/// [service sas]: https://learn.microsoft.com/en-us/rest/api/storageservices/create-service-sas#version-2020-12-06-and-later
+fn string_to_sign_service_sas(
+    u: &Url,
+    method: &Method,
+    account: &str,
+    start: &DateTime<Utc>,
+    end: &DateTime<Utc>,
+) -> (String, HashMap<&'static str, String>) {
+    let (signed_resource, signed_permissions, signed_start, signed_expiry, canonicalized_resource) =
+        string_to_sign_sas(u, method, account, start, end);
+
+    let string_to_sign = format!(
+        "{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}",
+        signed_permissions,
+        signed_start,
+        signed_expiry,
+        canonicalized_resource,
+        "",                               // signed identifier
+        "",                               // signed ip
+        "",                               // signed protocol
+        &AZURE_VERSION.to_str().unwrap(), // signed version
+        signed_resource,                  // signed resource
+        "",                               // signed snapshot time
+        "",                               // signed encryption scope
+        "",                               // rscc - response header: Cache-Control
+        "",                               // rscd - response header: Content-Disposition
+        "",                               // rsce - response header: Content-Encoding
+        "",                               // rscl - response header: Content-Language
+        "",                               // rsct - response header: Content-Type
+    );
+
+    let mut pairs = HashMap::new();
+    pairs.insert("sv", AZURE_VERSION.to_str().unwrap().to_string());
+    pairs.insert("sp", signed_permissions);
+    pairs.insert("st", signed_start);
+    pairs.insert("se", signed_expiry);
+    pairs.insert("sr", signed_resource);
+
+    (string_to_sign, pairs)
+}
+
+/// Create a string to be signed for authorization via [user delegation sas].
+///
+/// [user delegation sas]: https://learn.microsoft.com/en-us/rest/api/storageservices/create-user-delegation-sas#version-2020-12-06-and-later
+fn string_to_sign_user_delegation_sas(
+    u: &Url,
+    method: &Method,
+    account: &str,
+    start: &DateTime<Utc>,
+    end: &DateTime<Utc>,
+    delegation_key: &UserDelegationKey,
+) -> (String, HashMap<&'static str, String>) {
+    let (signed_resource, signed_permissions, signed_start, signed_expiry, canonicalized_resource) =
+        string_to_sign_sas(u, method, account, start, end);
+
+    let string_to_sign = format!(
+        "{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}",
+        signed_permissions,
+        signed_start,
+        signed_expiry,
+        canonicalized_resource,
+        delegation_key.signed_oid,        // signed key object id
+        delegation_key.signed_tid,        // signed key tenant id
+        delegation_key.signed_start,      // signed key start
+        delegation_key.signed_expiry,     // signed key expiry
+        delegation_key.signed_service,    // signed key service
+        delegation_key.signed_version,    // signed key version
+        "",                               // signed authorized user object id
+        "",                               // signed unauthorized user object id
+        "",                               // signed correlation id
+        "",                               // signed ip
+        "",                               // signed protocol
+        &AZURE_VERSION.to_str().unwrap(), // signed version
+        signed_resource,                  // signed resource
+        "",                               // signed snapshot time
+        "",                               // signed encryption scope
+        "",                               // rscc - response header: Cache-Control
+        "",                               // rscd - response header: Content-Disposition
+        "",                               // rsce - response header: Content-Encoding
+        "",                               // rscl - response header: Content-Language
+        "",                               // rsct - response header: Content-Type
+    );
+
+    let mut pairs = HashMap::new();
+    pairs.insert("sv", AZURE_VERSION.to_str().unwrap().to_string());
+    pairs.insert("sp", signed_permissions);
+    pairs.insert("st", signed_start);
+    pairs.insert("se", signed_expiry);
+    pairs.insert("sr", signed_resource);
+    pairs.insert("skoid", delegation_key.signed_oid.clone());
+    pairs.insert("sktid", delegation_key.signed_tid.clone());
+    pairs.insert("skt", delegation_key.signed_start.clone());
+    pairs.insert("ske", delegation_key.signed_expiry.clone());
+    pairs.insert("sks", delegation_key.signed_service.clone());
+    pairs.insert("skv", delegation_key.signed_version.clone());
+
+    (string_to_sign, pairs)
 }
 
 /// <https://docs.microsoft.com/en-us/rest/api/storageservices/authorize-with-shared-key#constructing-the-signature-string>
@@ -204,7 +460,7 @@ fn string_to_sign(h: &HeaderMap, u: &Url, method: &Method, account: &str) -> Str
         add_if_exists(h, &IF_UNMODIFIED_SINCE),
         add_if_exists(h, &RANGE),
         canonicalize_header(h),
-        canonicalized_resource(account, u)
+        canonicalize_resource(account, u)
     )
 }
 
@@ -212,11 +468,9 @@ fn string_to_sign(h: &HeaderMap, u: &Url, method: &Method, account: &str) -> Str
 fn canonicalize_header(headers: &HeaderMap) -> String {
     let mut names = headers
         .iter()
-        .filter_map(|(k, _)| {
-            (k.as_str().starts_with("x-ms"))
-                // TODO remove unwraps
-                .then(|| (k.as_str(), headers.get(k).unwrap().to_str().unwrap()))
-        })
+        .filter(|&(k, _)| (k.as_str().starts_with("x-ms")))
+        // TODO remove unwraps
+        .map(|(k, _)| (k.as_str(), headers.get(k).unwrap().to_str().unwrap()))
         .collect::<Vec<_>>();
     names.sort_unstable();
 
@@ -231,7 +485,7 @@ fn canonicalize_header(headers: &HeaderMap) -> String {
 }
 
 /// <https://docs.microsoft.com/en-us/rest/api/storageservices/authorize-with-shared-key#constructing-the-canonicalized-resource-string>
-fn canonicalized_resource(account: &str, uri: &Url) -> String {
+fn canonicalize_resource(account: &str, uri: &Url) -> String {
     let mut can_res: String = String::new();
     can_res.push('/');
     can_res.push_str(account);
@@ -282,22 +536,16 @@ fn lexy_sort<'a>(
     values
 }
 
-#[async_trait::async_trait]
-pub trait TokenCredential: std::fmt::Debug + Send + Sync + 'static {
-    async fn fetch_token(
-        &self,
-        client: &Client,
-        retry: &RetryConfig,
-    ) -> Result<TemporaryToken<String>>;
-}
-
+/// <https://learn.microsoft.com/en-us/azure/active-directory/develop/v2-oauth2-client-creds-grant-flow#successful-response-1>
 #[derive(Deserialize, Debug)]
-struct TokenResponse {
+struct OAuthTokenResponse {
     access_token: String,
     expires_in: u64,
 }
 
 /// Encapsulates the logic to perform an OAuth token challenge
+///
+/// <https://learn.microsoft.com/en-us/azure/active-directory/develop/v2-oauth2-client-creds-grant-flow#first-case-access-token-request-with-a-shared-secret>
 #[derive(Debug)]
 pub struct ClientSecretOAuthProvider {
     token_url: String,
@@ -313,8 +561,8 @@ impl ClientSecretOAuthProvider {
         tenant_id: impl AsRef<str>,
         authority_host: Option<String>,
     ) -> Self {
-        let authority_host = authority_host
-            .unwrap_or_else(|| authority_hosts::AZURE_PUBLIC_CLOUD.to_owned());
+        let authority_host =
+            authority_host.unwrap_or_else(|| authority_hosts::AZURE_PUBLIC_CLOUD.to_owned());
 
         Self {
             token_url: format!(
@@ -329,14 +577,16 @@ impl ClientSecretOAuthProvider {
 }
 
 #[async_trait::async_trait]
-impl TokenCredential for ClientSecretOAuthProvider {
+impl TokenProvider for ClientSecretOAuthProvider {
+    type Credential = AzureCredential;
+
     /// Fetch a token
     async fn fetch_token(
         &self,
         client: &Client,
         retry: &RetryConfig,
-    ) -> Result<TemporaryToken<String>> {
-        let response: TokenResponse = client
+    ) -> crate::Result<TemporaryToken<Arc<AzureCredential>>> {
+        let response: OAuthTokenResponse = client
             .request(Method::POST, &self.token_url)
             .header(ACCEPT, HeaderValue::from_static(CONTENT_TYPE_JSON))
             .form(&[
@@ -352,30 +602,34 @@ impl TokenCredential for ClientSecretOAuthProvider {
             .await
             .context(TokenResponseBodySnafu)?;
 
-        let token = TemporaryToken {
-            token: response.access_token,
+        Ok(TemporaryToken {
+            token: Arc::new(AzureCredential::BearerToken(response.access_token)),
             expiry: Some(Instant::now() + Duration::from_secs(response.expires_in)),
-        };
-
-        Ok(token)
+        })
     }
 }
 
-fn expires_in_string<'de, D>(deserializer: D) -> std::result::Result<u64, D::Error>
+fn expires_on_string<'de, D>(deserializer: D) -> std::result::Result<Instant, D::Error>
 where
     D: serde::de::Deserializer<'de>,
 {
     let v = String::deserialize(deserializer)?;
-    v.parse::<u64>().map_err(serde::de::Error::custom)
+    let v = v.parse::<u64>().map_err(serde::de::Error::custom)?;
+    let now = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map_err(serde::de::Error::custom)?;
+
+    Ok(Instant::now() + Duration::from_secs(v.saturating_sub(now.as_secs())))
 }
 
-// NOTE: expires_on is a String version of unix epoch time, not an integer.
-// <https://learn.microsoft.com/en-gb/azure/active-directory/managed-identities-azure-resources/how-to-use-vm-token#get-a-token-using-http>
+/// NOTE: expires_on is a String version of unix epoch time, not an integer.
+/// <https://learn.microsoft.com/en-gb/azure/active-directory/managed-identities-azure-resources/how-to-use-vm-token#get-a-token-using-http>
+/// <https://learn.microsoft.com/en-us/azure/app-service/overview-managed-identity?tabs=portal%2Chttp#connect-to-azure-services-in-app-code>
 #[derive(Debug, Clone, Deserialize)]
-struct MsiTokenResponse {
+struct ImdsTokenResponse {
     pub access_token: String,
-    #[serde(deserialize_with = "expires_in_string")]
-    pub expires_in: u64,
+    #[serde(deserialize_with = "expires_on_string")]
+    pub expires_on: Instant,
 }
 
 /// Attempts authentication using a managed identity that has been assigned to the deployment environment.
@@ -383,48 +637,46 @@ struct MsiTokenResponse {
 /// This authentication type works in Azure VMs, App Service and Azure Functions applications, as well as the Azure Cloud Shell
 /// <https://learn.microsoft.com/en-gb/azure/active-directory/managed-identities-azure-resources/how-to-use-vm-token#get-a-token-using-http>
 #[derive(Debug)]
-pub struct ImdsManagedIdentityOAuthProvider {
+pub struct ImdsManagedIdentityProvider {
     msi_endpoint: String,
     client_id: Option<String>,
     object_id: Option<String>,
     msi_res_id: Option<String>,
-    client: Client,
 }
 
-impl ImdsManagedIdentityOAuthProvider {
-    /// Create a new [`ImdsManagedIdentityOAuthProvider`] for an azure backed store
+impl ImdsManagedIdentityProvider {
+    /// Create a new [`ImdsManagedIdentityProvider`] for an azure backed store
     pub fn new(
         client_id: Option<String>,
         object_id: Option<String>,
         msi_res_id: Option<String>,
         msi_endpoint: Option<String>,
-        client: Client,
     ) -> Self {
-        let msi_endpoint = msi_endpoint.unwrap_or_else(|| {
-            "http://169.254.169.254/metadata/identity/oauth2/token".to_owned()
-        });
+        let msi_endpoint = msi_endpoint
+            .unwrap_or_else(|| "http://169.254.169.254/metadata/identity/oauth2/token".to_owned());
 
         Self {
             msi_endpoint,
             client_id,
             object_id,
             msi_res_id,
-            client,
         }
     }
 }
 
 #[async_trait::async_trait]
-impl TokenCredential for ImdsManagedIdentityOAuthProvider {
+impl TokenProvider for ImdsManagedIdentityProvider {
+    type Credential = AzureCredential;
+
     /// Fetch a token
     async fn fetch_token(
         &self,
-        _client: &Client,
+        client: &Client,
         retry: &RetryConfig,
-    ) -> Result<TemporaryToken<String>> {
+    ) -> crate::Result<TemporaryToken<Arc<AzureCredential>>> {
         let mut query_items = vec![
             ("api-version", MSI_API_VERSION),
-            ("resource", AZURE_STORAGE_SCOPE),
+            ("resource", AZURE_STORAGE_RESOURCE),
         ];
 
         let mut identity = None;
@@ -441,8 +693,7 @@ impl TokenCredential for ImdsManagedIdentityOAuthProvider {
             query_items.push((key, value));
         }
 
-        let mut builder = self
-            .client
+        let mut builder = client
             .request(Method::GET, &self.msi_endpoint)
             .header("metadata", "true")
             .query(&query_items);
@@ -451,7 +702,7 @@ impl TokenCredential for ImdsManagedIdentityOAuthProvider {
             builder = builder.header("x-identity-header", val);
         };
 
-        let response: MsiTokenResponse = builder
+        let response: ImdsTokenResponse = builder
             .send_retry(retry)
             .await
             .context(TokenRequestSnafu)?
@@ -459,16 +710,14 @@ impl TokenCredential for ImdsManagedIdentityOAuthProvider {
             .await
             .context(TokenResponseBodySnafu)?;
 
-        let token = TemporaryToken {
-            token: response.access_token,
-            expiry: Some(Instant::now() + Duration::from_secs(response.expires_in)),
-        };
-
-        Ok(token)
+        Ok(TemporaryToken {
+            token: Arc::new(AzureCredential::BearerToken(response.access_token)),
+            expiry: Some(response.expires_on),
+        })
     }
 }
 
-/// Credential for using workload identity dfederation
+/// Credential for using workload identity federation
 ///
 /// <https://learn.microsoft.com/en-us/azure/active-directory/develop/workload-identity-federation>
 #[derive(Debug)]
@@ -486,8 +735,8 @@ impl WorkloadIdentityOAuthProvider {
         tenant_id: impl AsRef<str>,
         authority_host: Option<String>,
     ) -> Self {
-        let authority_host = authority_host
-            .unwrap_or_else(|| authority_hosts::AZURE_PUBLIC_CLOUD.to_owned());
+        let authority_host =
+            authority_host.unwrap_or_else(|| authority_hosts::AZURE_PUBLIC_CLOUD.to_owned());
 
         Self {
             token_url: format!(
@@ -502,18 +751,20 @@ impl WorkloadIdentityOAuthProvider {
 }
 
 #[async_trait::async_trait]
-impl TokenCredential for WorkloadIdentityOAuthProvider {
+impl TokenProvider for WorkloadIdentityOAuthProvider {
+    type Credential = AzureCredential;
+
     /// Fetch a token
     async fn fetch_token(
         &self,
         client: &Client,
         retry: &RetryConfig,
-    ) -> Result<TemporaryToken<String>> {
+    ) -> crate::Result<TemporaryToken<Arc<AzureCredential>>> {
         let token_str = std::fs::read_to_string(&self.federated_token_file)
             .map_err(|_| Error::FederatedTokenFile)?;
 
         // https://learn.microsoft.com/en-us/azure/active-directory/develop/v2-oauth2-client-creds-grant-flow#third-case-access-token-request-with-a-federated-credential
-        let response: TokenResponse = client
+        let response: OAuthTokenResponse = client
             .request(Method::POST, &self.token_url)
             .header(ACCEPT, HeaderValue::from_static(CONTENT_TYPE_JSON))
             .form(&[
@@ -533,12 +784,10 @@ impl TokenCredential for WorkloadIdentityOAuthProvider {
             .await
             .context(TokenResponseBodySnafu)?;
 
-        let token = TemporaryToken {
-            token: response.access_token,
+        Ok(TemporaryToken {
+            token: Arc::new(AzureCredential::BearerToken(response.access_token)),
             expiry: Some(Instant::now() + Duration::from_secs(response.expires_in)),
-        };
-
-        Ok(token)
+        })
     }
 }
 
@@ -546,9 +795,7 @@ mod az_cli_date_format {
     use chrono::{DateTime, TimeZone};
     use serde::{self, Deserialize, Deserializer};
 
-    pub fn deserialize<'de, D>(
-        deserializer: D,
-    ) -> Result<DateTime<chrono::Local>, D::Error>
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<DateTime<chrono::Local>, D::Error>
     where
         D: Deserializer<'de>,
     {
@@ -576,23 +823,16 @@ struct AzureCliTokenResponse {
 
 #[derive(Default, Debug)]
 pub struct AzureCliCredential {
-    _private: (),
+    cache: TokenCache<Arc<AzureCredential>>,
 }
 
 impl AzureCliCredential {
     pub fn new() -> Self {
         Self::default()
     }
-}
 
-#[async_trait::async_trait]
-impl TokenCredential for AzureCliCredential {
     /// Fetch a token
-    async fn fetch_token(
-        &self,
-        _client: &Client,
-        _retry: &RetryConfig,
-    ) -> Result<TemporaryToken<String>> {
+    async fn fetch_token(&self) -> Result<TemporaryToken<Arc<AzureCredential>>> {
         // on window az is a cmd and it should be called like this
         // see https://doc.rust-lang.org/nightly/std/process/struct.Command.html
         let program = if cfg!(target_os = "windows") {
@@ -614,14 +854,12 @@ impl TokenCredential for AzureCliCredential {
 
         match Command::new(program).args(args).output() {
             Ok(az_output) if az_output.status.success() => {
-                let output =
-                    str::from_utf8(&az_output.stdout).map_err(|_| Error::AzureCli {
-                        message: "az response is not a valid utf-8 string".to_string(),
-                    })?;
+                let output = str::from_utf8(&az_output.stdout).map_err(|_| Error::AzureCli {
+                    message: "az response is not a valid utf-8 string".to_string(),
+                })?;
 
-                let token_response =
-                    serde_json::from_str::<AzureCliTokenResponse>(output)
-                        .context(AzureCliResponseSnafu)?;
+                let token_response = serde_json::from_str::<AzureCliTokenResponse>(output)
+                    .context(AzureCliResponseSnafu)?;
                 if !token_response.token_type.eq_ignore_ascii_case("bearer") {
                     return Err(Error::AzureCli {
                         message: format!(
@@ -630,10 +868,10 @@ impl TokenCredential for AzureCliCredential {
                         ),
                     });
                 }
-                let duration = token_response.expires_on.naive_local()
-                    - chrono::Local::now().naive_local();
+                let duration =
+                    token_response.expires_on.naive_local() - chrono::Local::now().naive_local();
                 Ok(TemporaryToken {
-                    token: token_response.access_token,
+                    token: Arc::new(AzureCredential::BearerToken(token_response.access_token)),
                     expiry: Some(
                         Instant::now()
                             + duration.to_std().map_err(|_| Error::AzureCli {
@@ -660,15 +898,25 @@ impl TokenCredential for AzureCliCredential {
     }
 }
 
+#[async_trait]
+impl CredentialProvider for AzureCliCredential {
+    type Credential = AzureCredential;
+
+    async fn get_credential(&self) -> crate::Result<Arc<Self::Credential>> {
+        Ok(self.cache.get_or_insert_with(|| self.fetch_token()).await?)
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::client::mock_server::MockServer;
     use futures::executor::block_on;
     use hyper::body::to_bytes;
     use hyper::{Body, Response};
     use reqwest::{Client, Method};
     use tempfile::NamedTempFile;
+
+    use super::*;
+    use crate::client::mock_server::MockServer;
 
     #[tokio::test]
     async fn test_managed_identity() {
@@ -709,12 +957,11 @@ mod tests {
             ))
         });
 
-        let credential = ImdsManagedIdentityOAuthProvider::new(
+        let credential = ImdsManagedIdentityProvider::new(
             Some("client_id".into()),
             None,
             None,
             Some(format!("{endpoint}/metadata/identity/oauth2/token")),
-            client.clone(),
         );
 
         let token = credential
@@ -722,7 +969,10 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(&token.token, "TOKEN");
+        assert_eq!(
+            token.token.as_ref(),
+            &AzureCredential::BearerToken("TOKEN".into())
+        );
     }
 
     #[tokio::test]
@@ -770,6 +1020,9 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(&token.token, "TOKEN");
+        assert_eq!(
+            token.token.as_ref(),
+            &AzureCredential::BearerToken("TOKEN".into())
+        );
     }
 }

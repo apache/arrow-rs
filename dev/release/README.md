@@ -70,14 +70,11 @@ git pull
 git checkout -b <RELEASE_BRANCH>
 
 # Update versions. Make sure to run it before the next step since we do not want CHANGELOG-old.md affected.
-sed -i '' -e 's/14.0.0/37.0.0/g' `find . -name 'Cargo.toml' -or -name '*.md' | grep -v CHANGELOG.md`
+sed -i '' -e 's/14.0.0/39.0.0/g' `find . -name 'Cargo.toml' -or -name '*.md' | grep -v CHANGELOG.md`
 git commit -a -m 'Update version'
-
-# Copy the content of CHANGELOG.md to the beginning of CHANGELOG-old.md
 
 # ensure your github token is available
 export ARROW_GITHUB_API_TOKEN=<TOKEN>
-
 
 # manually edit ./dev/release/update_change_log.sh to reflect the release version
 # create the changelog
@@ -261,6 +258,7 @@ Rust Arrow Crates:
 (cd arrow-ipc && cargo publish)
 (cd arrow-csv && cargo publish)
 (cd arrow-json && cargo publish)
+(cd arrow-avro && cargo publish)
 (cd arrow-ord && cargo publish)
 (cd arrow-arith && cargo publish)
 (cd arrow-string && cargo publish)

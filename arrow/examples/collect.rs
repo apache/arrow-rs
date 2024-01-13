@@ -15,8 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-///! `FromIterator` API is implemented for different array types to easily create them
-/// from values.
+//! `FromIterator` API is implemented for different array types to easily create them
+//! from values.
+
 use arrow::array::Array;
 use arrow_array::types::Int32Type;
 use arrow_array::{Float32Array, Int32Array, Int8Array, ListArray};

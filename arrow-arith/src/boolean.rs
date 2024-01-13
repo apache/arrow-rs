@@ -23,11 +23,15 @@
 //! [here](https://doc.rust-lang.org/stable/core/arch/) for more information.
 
 use arrow_array::*;
-use arrow_buffer::bit_util::ceil;
 use arrow_buffer::buffer::{bitwise_bin_op_helper, bitwise_quaternary_op_helper};
+<<<<<<< HEAD
 use arrow_buffer::{buffer_bin_and_not, BooleanBuffer, MutableBuffer, NullBuffer};
 use arrow_data::ArrayData;
 use arrow_schema::{ArrowError, DataType};
+=======
+use arrow_buffer::{BooleanBuffer, NullBuffer};
+use arrow_schema::ArrowError;
+>>>>>>> 4c3e9be465f1448b20faca69c0652748bb0f5436
 
 /// Logical 'and' boolean values with Kleene logic
 ///
@@ -59,10 +63,7 @@ use arrow_schema::{ArrowError, DataType};
 /// # Fails
 ///
 /// If the operands have different lengths
-pub fn and_kleene(
-    left: &BooleanArray,
-    right: &BooleanArray,
-) -> Result<BooleanArray, ArrowError> {
+pub fn and_kleene(left: &BooleanArray, right: &BooleanArray) -> Result<BooleanArray, ArrowError> {
     if left.len() != right.len() {
         return Err(ArrowError::ComputeError(
             "Cannot perform bitwise operation on arrays of different length".to_string(),
@@ -157,10 +158,7 @@ pub fn and_kleene(
 /// # Fails
 ///
 /// If the operands have different lengths
-pub fn or_kleene(
-    left: &BooleanArray,
-    right: &BooleanArray,
-) -> Result<BooleanArray, ArrowError> {
+pub fn or_kleene(left: &BooleanArray, right: &BooleanArray) -> Result<BooleanArray, ArrowError> {
     if left.len() != right.len() {
         return Err(ArrowError::ComputeError(
             "Cannot perform bitwise operation on arrays of different length".to_string(),
@@ -259,10 +257,7 @@ where
 /// let and_ab = and(&a, &b).unwrap();
 /// assert_eq!(and_ab, BooleanArray::from(vec![Some(false), Some(true), None]));
 /// ```
-pub fn and(
-    left: &BooleanArray,
-    right: &BooleanArray,
-) -> Result<BooleanArray, ArrowError> {
+pub fn and(left: &BooleanArray, right: &BooleanArray) -> Result<BooleanArray, ArrowError> {
     binary_boolean_kernel(left, right, |a, b| a & b)
 }
 
@@ -338,8 +333,8 @@ pub fn not(left: &BooleanArray) -> Result<BooleanArray, ArrowError> {
 /// assert_eq!(a_is_null, BooleanArray::from(vec![false, false, true]));
 /// ```
 pub fn is_null(input: &dyn Array) -> Result<BooleanArray, ArrowError> {
-    let values = match input.nulls() {
-        None => NullBuffer::new_null(input.len()).into_inner(),
+    let values = match input.logical_nulls() {
+        None => BooleanBuffer::new_unset(input.len()),
         Some(nulls) => !nulls.inner(),
     };
 
@@ -358,31 +353,11 @@ pub fn is_null(input: &dyn Array) -> Result<BooleanArray, ArrowError> {
 /// assert_eq!(a_is_not_null, BooleanArray::from(vec![true, true, false]));
 /// ```
 pub fn is_not_null(input: &dyn Array) -> Result<BooleanArray, ArrowError> {
-    let len = input.len();
-
-    let output = match input.nulls() {
-        None => {
-            let len_bytes = ceil(len, 8);
-            MutableBuffer::new(len_bytes)
-                .with_bitset(len_bytes, true)
-                .into()
-        }
-        Some(nulls) => nulls.inner().sliced(),
+    let values = match input.logical_nulls() {
+        None => BooleanBuffer::new_set(input.len()),
+        Some(n) => n.inner().clone(),
     };
-
-    let data = unsafe {
-        ArrayData::new_unchecked(
-            DataType::Boolean,
-            len,
-            None,
-            None,
-            0,
-            vec![output],
-            vec![],
-        )
-    };
-
-    Ok(BooleanArray::from(data))
+    Ok(BooleanArray::new(values, None))
 }
 
 #[cfg(test)]
@@ -640,8 +615,7 @@ mod tests {
         let a = a.as_any().downcast_ref::<BooleanArray>().unwrap();
         let c = not(a).unwrap();
 
-        let expected =
-            BooleanArray::from(vec![Some(false), Some(true), None, Some(false)]);
+        let expected = BooleanArray::from(vec![Some(false), Some(true), None, Some(false)]);
 
         assert_eq!(c, expected);
     }
@@ -690,12 +664,10 @@ mod tests {
     #[test]
     fn test_bool_array_and_sliced_same_offset() {
         let a = BooleanArray::from(vec![
-            false, false, false, false, false, false, false, false, false, false, true,
-            true,
+            false, false, false, false, false, false, false, false, false, false, true, true,
         ]);
         let b = BooleanArray::from(vec![
-            false, false, false, false, false, false, false, false, false, true, false,
-            true,
+            false, false, false, false, false, false, false, false, false, true, false, true,
         ]);
 
         let a = a.slice(8, 4);
@@ -713,12 +685,10 @@ mod tests {
     #[test]
     fn test_bool_array_and_sliced_same_offset_mod8() {
         let a = BooleanArray::from(vec![
-            false, false, true, true, false, false, false, false, false, false, false,
-            false,
+            false, false, true, true, false, false, false, false, false, false, false, false,
         ]);
         let b = BooleanArray::from(vec![
-            false, false, false, false, false, false, false, false, false, true, false,
-            true,
+            false, false, false, false, false, false, false, false, false, true, false, true,
         ]);
 
         let a = a.slice(0, 4);
@@ -736,8 +706,7 @@ mod tests {
     #[test]
     fn test_bool_array_and_sliced_offset1() {
         let a = BooleanArray::from(vec![
-            false, false, false, false, false, false, false, false, false, false, true,
-            true,
+            false, false, false, false, false, false, false, false, false, false, true, true,
         ]);
         let b = BooleanArray::from(vec![false, true, false, true]);
 
@@ -755,8 +724,7 @@ mod tests {
     fn test_bool_array_and_sliced_offset2() {
         let a = BooleanArray::from(vec![false, false, true, true]);
         let b = BooleanArray::from(vec![
-            false, false, false, false, false, false, false, false, false, true, false,
-            true,
+            false, false, false, false, false, false, false, false, false, true, false, true,
         ]);
 
         let b = b.slice(8, 4);
@@ -789,8 +757,7 @@ mod tests {
 
         let c = and(a, b).unwrap();
 
-        let expected =
-            BooleanArray::from(vec![Some(false), Some(false), None, Some(true)]);
+        let expected = BooleanArray::from(vec![Some(false), Some(false), None, Some(true)]);
 
         assert_eq!(expected, c);
     }
@@ -926,6 +893,30 @@ mod tests {
         let res = is_not_null(&a).unwrap();
 
         let expected = BooleanArray::from(vec![true, false, true, false]);
+
+        assert_eq!(expected, res);
+        assert!(res.nulls().is_none());
+    }
+
+    #[test]
+    fn test_null_array_is_null() {
+        let a = NullArray::new(3);
+
+        let res = is_null(&a).unwrap();
+
+        let expected = BooleanArray::from(vec![true, true, true]);
+
+        assert_eq!(expected, res);
+        assert!(res.nulls().is_none());
+    }
+
+    #[test]
+    fn test_null_array_is_not_null() {
+        let a = NullArray::new(3);
+
+        let res = is_not_null(&a).unwrap();
+
+        let expected = BooleanArray::from(vec![false, false, false]);
 
         assert_eq!(expected, res);
         assert!(res.nulls().is_none());

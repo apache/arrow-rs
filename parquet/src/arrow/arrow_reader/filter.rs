@@ -29,8 +29,10 @@ pub trait ArrowPredicate: Send + 'static {
     /// Evaluate this predicate for the given [`RecordBatch`] containing the columns
     /// identified by [`Self::projection`]
     ///
-    /// Rows that are `true` in the returned [`BooleanArray`] will be returned by the
-    /// parquet reader, whereas rows that are `false` or `Null` will not be
+    /// Must return a  [`BooleanArray`] that has the same length as the input
+    /// `batch` where each row indicates whether the row should be returned:
+    /// * `true`:the row should be returned
+    /// * `false` or `null`: the row should not be returned
     fn evaluate(&mut self, batch: RecordBatch) -> Result<BooleanArray, ArrowError>;
 }
 

@@ -24,8 +24,10 @@
 
 This crate contains the official Native Rust implementation of [Apache Arrow][arrow] in memory format, governed by the Apache Software Foundation.
 
-The [crate documentation](https://docs.rs/arrow/latest/arrow/) contains examples and full API.
+The [API documentation](https://docs.rs/arrow/latest) contains examples and full API.
 There are several [examples](https://github.com/apache/arrow-rs/tree/master/arrow/examples) to start from as well.
+
+The API documentation for most recent, unreleased code is available [here](https://arrow.apache.org/rust/arrow/index.html).
 
 ## Rust Version Compatibility
 
@@ -35,7 +37,7 @@ This crate is tested with the latest stable version of Rust. We do not currently
 
 The arrow crate follows the [SemVer standard](https://doc.rust-lang.org/cargo/reference/semver.html) defined by Cargo and works well within the Rust crate ecosystem.
 
-However, for historical reasons, this crate uses versions with major numbers greater than `0.x` (e.g. `37.0.0`), unlike many other crates in the Rust ecosystem which spend extended time releasing versions `0.x` to signal planned ongoing API changes. Minor arrow releases contain only compatible changes, while major releases may contain breaking API changes.
+However, for historical reasons, this crate uses versions with major numbers greater than `0.x` (e.g. `39.0.0`), unlike many other crates in the Rust ecosystem which spend extended time releasing versions `0.x` to signal planned ongoing API changes. Minor arrow releases contain only compatible changes, while major releases may contain breaking API changes.
 
 ## Feature Flags
 
@@ -46,14 +48,10 @@ The `arrow` crate provides the following features which may be enabled in your `
 - `ipc` (default) - support for reading [Arrow IPC Format](https://arrow.apache.org/docs/format/Columnar.html#serialization-and-interprocess-communication-ipc), also used as the wire protocol in [arrow-flight](https://crates.io/crates/arrow-flight)
 - `ipc_compression` - Enables reading and writing compressed IPC streams (also enables `ipc`)
 - `prettyprint` - support for formatting record batches as textual columns
-- `simd` - (_Requires Nightly Rust_) Use alternate hand optimized
   implementations of some [compute](https://github.com/apache/arrow-rs/tree/master/arrow/src/compute/kernels)
-  kernels using explicit SIMD instructions via [packed_simd_2](https://docs.rs/packed_simd_2/latest/packed_simd_2/).
 - `chrono-tz` - support of parsing timezone using [chrono-tz](https://docs.rs/chrono-tz/0.6.0/chrono_tz/)
 - `ffi` - bindings for the Arrow C [C Data Interface](https://arrow.apache.org/docs/format/CDataInterface.html)
 - `pyarrow` - bindings for pyo3 to call arrow-rs from python
-- `dyn_cmp_dict` - enables comparison of dictionary arrays within dyn comparison kernels
-- `dyn_arith_dict` - enables arithmetic on dictionary arrays within dyn arithmetic kernels
 
 ## Arrow Feature Status
 
@@ -75,7 +73,6 @@ In particular there are a number of scenarios where `unsafe` is largely unavoida
 
 - Invariants that cannot be statically verified by the compiler and unlock non-trivial performance wins, e.g. values in a StringArray are UTF-8, [TrustedLen](https://doc.rust-lang.org/std/iter/trait.TrustedLen.html) iterators, etc...
 - FFI
-- SIMD
 
 Additionally, this crate exposes a number of `unsafe` APIs, allowing downstream crates to explicitly opt-out of potentially expensive invariant checking where appropriate.
 
@@ -95,7 +92,7 @@ In order to compile Arrow for `wasm32-unknown-unknown` you will need to disable 
 
 ```toml
 [dependencies]
-arrow = { version = "5.0", default-features = false, features = ["csv", "ipc", "simd"] }
+arrow = { version = "5.0", default-features = false, features = ["csv", "ipc"] }
 ```
 
 ## Examples

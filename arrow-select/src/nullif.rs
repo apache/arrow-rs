@@ -15,12 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow_array::builder::BooleanBufferBuilder;
 use arrow_array::{make_array, Array, ArrayRef, BooleanArray};
-use arrow_buffer::buffer::{
-    bitwise_bin_op_helper, bitwise_unary_op_helper, buffer_bin_and,
-};
-use arrow_schema::ArrowError;
+use arrow_buffer::buffer::{bitwise_bin_op_helper, bitwise_unary_op_helper};
+use arrow_buffer::{BooleanBuffer, NullBuffer};
+use arrow_schema::{ArrowError, DataType};
 
 /// Copies original array, setting validity bit to false if a secondary comparison
 /// boolean array is set to true
@@ -28,18 +26,15 @@ use arrow_schema::ArrowError;
 /// Typically used to implement NULLIF.
 pub fn nullif(left: &dyn Array, right: &BooleanArray) -> Result<ArrayRef, ArrowError> {
     let left_data = left.to_data();
-    let right_data = right.to_data();
 
-    if left_data.len() != right_data.len() {
+    if left_data.len() != right.len() {
         return Err(ArrowError::ComputeError(
-            "Cannot perform comparison operation on arrays of different length"
-                .to_string(),
+            "Cannot perform comparison operation on arrays of different length".to_string(),
         ));
     }
     let len = left_data.len();
-    let l_offset = left_data.offset();
 
-    if len == 0 {
+    if len == 0 || left_data.data_type() == &DataType::Null {
         return Ok(make_array(left_data));
     }
 
@@ -53,18 +48,9 @@ pub fn nullif(left: &dyn Array, right: &BooleanArray) -> Result<ArrayRef, ArrowE
     //              OR left null bitmap & !(right_values & right_bitmap)
 
     // Compute right_values & right_bitmap
-    let (right, r_offset) = match right_data.nulls() {
-        Some(nulls) => (
-            buffer_bin_and(
-                right_data.buffers()[0],
-                right_data.offset(),
-                nulls.buffer(),
-                nulls.offset(),
-                len,
-            ),
-            0,
-        ),
-        None => (right_data.buffers()[0].clone(), right_data.offset()),
+    let right = match right.nulls() {
+        Some(nulls) => right.values() & nulls.inner(),
+        None => right.values().clone(),
     };
 
     // Compute left null bitmap & !right
@@ -75,8 +61,8 @@ pub fn nullif(left: &dyn Array, right: &BooleanArray) -> Result<ArrayRef, ArrowE
             let b = bitwise_bin_op_helper(
                 left.buffer(),
                 left.offset(),
-                &right,
-                r_offset,
+                right.inner(),
+                right.offset(),
                 len,
                 |l, r| {
                     let t = l & !r;
@@ -88,7 +74,7 @@ pub fn nullif(left: &dyn Array, right: &BooleanArray) -> Result<ArrayRef, ArrowE
         }
         None => {
             let mut null_count = 0;
-            let buffer = bitwise_unary_op_helper(&right, r_offset, len, |b| {
+            let buffer = bitwise_unary_op_helper(right.inner(), right.offset(), len, |b| {
                 let t = !b;
                 null_count += t.count_zeros() as usize;
                 t
@@ -97,22 +83,11 @@ pub fn nullif(left: &dyn Array, right: &BooleanArray) -> Result<ArrayRef, ArrowE
         }
     };
 
-    // Need to construct null buffer with offset of left
-    let null_buffer = match left_data.offset() {
-        0 => combined,
-        _ => {
-            let mut builder = BooleanBufferBuilder::new(len + l_offset);
-            // Pad with 0s up to offset
-            builder.resize(l_offset);
-            builder.append_packed_range(0..len, &combined);
-            builder.finish()
-        }
-    };
-
-    let data = left_data
-        .into_builder()
-        .null_bit_buffer(Some(null_buffer))
-        .null_count(null_count);
+    let combined = BooleanBuffer::new(combined, 0, len);
+    // Safety:
+    // Counted nulls whilst computing
+    let nulls = unsafe { NullBuffer::new_unchecked(combined, null_count) };
+    let data = left_data.into_builder().nulls(Some(nulls));
 
     // SAFETY:
     // Only altered null mask
@@ -125,7 +100,7 @@ mod tests {
     use arrow_array::builder::{BooleanBuilder, Int32Builder, StructBuilder};
     use arrow_array::cast::AsArray;
     use arrow_array::types::Int32Type;
-    use arrow_array::{Int32Array, StringArray, StructArray};
+    use arrow_array::{Int32Array, NullArray, StringArray, StructArray};
     use arrow_data::ArrayData;
     use arrow_schema::{DataType, Field, Fields};
     use rand::{thread_rng, Rng};
@@ -133,8 +108,7 @@ mod tests {
     #[test]
     fn test_nullif_int_array() {
         let a = Int32Array::from(vec![Some(15), None, Some(8), Some(1), Some(9)]);
-        let comp =
-            BooleanArray::from(vec![Some(false), None, Some(true), Some(false), None]);
+        let comp = BooleanArray::from(vec![Some(false), None, Some(true), Some(false), None]);
         let res = nullif(&a, &comp).unwrap();
 
         let expected = Int32Array::from(vec![
@@ -149,6 +123,26 @@ mod tests {
 
         let res = res.as_primitive::<Int32Type>();
         assert_eq!(&expected, res);
+    }
+
+    #[test]
+    fn test_nullif_null_array() {
+        assert_eq!(
+            nullif(&NullArray::new(0), &BooleanArray::new_null(0))
+                .unwrap()
+                .as_ref(),
+            &NullArray::new(0)
+        );
+
+        assert_eq!(
+            nullif(
+                &NullArray::new(3),
+                &BooleanArray::from(vec![Some(false), Some(true), None]),
+            )
+            .unwrap()
+            .as_ref(),
+            &NullArray::new(3)
+        );
     }
 
     #[test]
@@ -451,8 +445,7 @@ mod tests {
     #[test]
     fn test_nullif_no_nulls() {
         let a = Int32Array::from(vec![Some(15), Some(7), Some(8), Some(1), Some(9)]);
-        let comp =
-            BooleanArray::from(vec![Some(false), None, Some(true), Some(false), None]);
+        let comp = BooleanArray::from(vec![Some(false), None, Some(true), Some(false), None]);
         let res = nullif(&a, &comp).unwrap();
         let res = res.as_primitive::<Int32Type>();
 

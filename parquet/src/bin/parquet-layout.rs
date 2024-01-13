@@ -38,12 +38,13 @@ use std::io::Read;
 
 use clap::Parser;
 use serde::Serialize;
-use thrift::protocol::{TCompactInputProtocol, TSerializable};
+use thrift::protocol::TCompactInputProtocol;
 
 use parquet::basic::{Compression, Encoding};
 use parquet::errors::Result;
 use parquet::file::reader::ChunkReader;
 use parquet::format::PageHeader;
+use parquet::thrift::TSerializable;
 
 #[derive(Serialize, Debug)]
 struct ParquetFile {
@@ -161,10 +162,7 @@ fn do_layout<C: ChunkReader>(reader: &C) -> Result<ParquetFile> {
 
 /// Reads the page header at `offset` from `reader`, returning
 /// both the `PageHeader` and its length in bytes
-fn read_page_header<C: ChunkReader>(
-    reader: &C,
-    offset: u64,
-) -> Result<(usize, PageHeader)> {
+fn read_page_header<C: ChunkReader>(reader: &C, offset: u64) -> Result<(usize, PageHeader)> {
     struct TrackedRead<R>(R, usize);
 
     impl<R: Read> Read for TrackedRead<R> {
@@ -175,8 +173,7 @@ fn read_page_header<C: ChunkReader>(
         }
     }
 
-    let len = reader.len().checked_sub(offset).unwrap() as usize;
-    let input = reader.get_read(offset, len)?;
+    let input = reader.get_read(offset)?;
     let mut tracked = TrackedRead(input, 0);
     let mut prot = TCompactInputProtocol::new(&mut tracked);
     let header = PageHeader::read_from_in_protocol(&mut prot)?;

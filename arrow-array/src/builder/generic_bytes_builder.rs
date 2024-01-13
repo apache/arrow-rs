@@ -15,17 +15,17 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::builder::null_buffer_builder::NullBufferBuilder;
 use crate::builder::{ArrayBuilder, BufferBuilder, UInt8BufferBuilder};
 use crate::types::{ByteArrayType, GenericBinaryType, GenericStringType};
 use crate::{ArrayRef, GenericByteArray, OffsetSizeTrait};
+use arrow_buffer::NullBufferBuilder;
 use arrow_buffer::{ArrowNativeType, Buffer, MutableBuffer};
 use arrow_data::ArrayDataBuilder;
 use std::any::Any;
 use std::fmt::Write;
 use std::sync::Arc;
 
-///  Array builder for [`GenericByteArray`]
+/// Builder for [`GenericByteArray`]
 pub struct GenericByteBuilder<T: ByteArrayType> {
     value_builder: UInt8BufferBuilder,
     offsets_builder: BufferBuilder<T::Offset>,
@@ -68,12 +68,8 @@ impl<T: ByteArrayType> GenericByteBuilder<T> {
         let value_builder = BufferBuilder::<u8>::new_from_buffer(value_buffer);
 
         let null_buffer_builder = null_buffer
-            .map(|buffer| {
-                NullBufferBuilder::new_from_buffer(buffer, offsets_builder.len() - 1)
-            })
-            .unwrap_or_else(|| {
-                NullBufferBuilder::new_with_len(offsets_builder.len() - 1)
-            });
+            .map(|buffer| NullBufferBuilder::new_from_buffer(buffer, offsets_builder.len() - 1))
+            .unwrap_or_else(|| NullBufferBuilder::new_with_len(offsets_builder.len() - 1));
 
         Self {
             offsets_builder,
@@ -84,8 +80,7 @@ impl<T: ByteArrayType> GenericByteBuilder<T> {
 
     #[inline]
     fn next_offset(&self) -> T::Offset {
-        T::Offset::from_usize(self.value_builder.len())
-            .expect("byte array offset overflow")
+        T::Offset::from_usize(self.value_builder.len()).expect("byte array offset overflow")
     }
 
     /// Appends a value into the builder.
@@ -123,7 +118,7 @@ impl<T: ByteArrayType> GenericByteBuilder<T> {
             .len(self.len())
             .add_buffer(self.offsets_builder.finish())
             .add_buffer(self.value_builder.finish())
-            .null_bit_buffer(self.null_buffer_builder.finish());
+            .nulls(self.null_buffer_builder.finish());
 
         self.offsets_builder.append(self.next_offset());
         let array_data = unsafe { array_builder.build_unchecked() };
@@ -139,11 +134,7 @@ impl<T: ByteArrayType> GenericByteBuilder<T> {
             .len(self.len())
             .add_buffer(offset_buffer)
             .add_buffer(value_buffer)
-            .null_bit_buffer(
-                self.null_buffer_builder
-                    .as_slice()
-                    .map(Buffer::from_slice_ref),
-            );
+            .nulls(self.null_buffer_builder.finish_cloned());
 
         let array_data = unsafe { array_builder.build_unchecked() };
         GenericByteArray::from(array_data)
@@ -191,11 +182,6 @@ impl<T: ByteArrayType> ArrayBuilder for GenericByteBuilder<T> {
     /// Returns the number of binary slots in the builder
     fn len(&self) -> usize {
         self.null_buffer_builder.len()
-    }
-
-    /// Returns whether the number of binary slots is zero
-    fn is_empty(&self) -> bool {
-        self.null_buffer_builder.is_empty()
     }
 
     /// Builds the array and reset this builder.

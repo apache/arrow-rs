@@ -18,19 +18,23 @@
 use std::fmt;
 use std::sync::Arc;
 
-use crate::{FieldRef, Fields, UnionFields};
+use crate::{Field, FieldRef, Fields, UnionFields};
 
 /// The set of datatypes that are supported by this implementation of Apache Arrow.
 ///
 /// The Arrow specification on data types includes some more types.
-/// See also [`Schema.fbs`](https://github.com/apache/arrow/blob/master/format/Schema.fbs)
+/// See also [`Schema.fbs`](https://github.com/apache/arrow/blob/main/format/Schema.fbs)
 /// for Arrow's specification.
 ///
 /// The variants of this enum include primitive fixed size types as well as parametric or
 /// nested types.
-/// Currently the Rust implementation supports the following  nested types:
+/// Currently the Rust implementation supports the following nested types:
 ///  - `List<T>`
+///  - `LargeList<T>`
+///  - `FixedSizeList<T>`
 ///  - `Struct<T, U, V, ...>`
+///  - `Union<T, U, V, ...>`
+///  - `Map<K, V>`
 ///
 /// Nested types can themselves be nested within other arrays.
 /// For more information on these types please see
@@ -68,7 +72,7 @@ pub enum DataType {
     ///
     /// Time is measured as a Unix epoch, counting the seconds from
     /// 00:00:00.000 on 1 January 1970, excluding leap seconds,
-    /// as a 64-bit integer.
+    /// as a signed 64-bit integer.
     ///
     /// The time zone is a string indicating the name of a time zone, one of:
     ///
@@ -140,15 +144,17 @@ pub enum DataType {
     /// DataType::Timestamp(TimeUnit::Second, Some("string".to_string().into()));
     /// ```
     Timestamp(TimeUnit, Option<Arc<str>>),
-    /// A 32-bit date representing the elapsed time since UNIX epoch (1970-01-01)
+    /// A signed 32-bit date representing the elapsed time since UNIX epoch (1970-01-01)
     /// in days (32 bits).
     Date32,
-    /// A 64-bit date representing the elapsed time since UNIX epoch (1970-01-01)
+    /// A signed 64-bit date representing the elapsed time since UNIX epoch (1970-01-01)
     /// in milliseconds (64 bits). Values are evenly divisible by 86400000.
     Date64,
-    /// A 32-bit time representing the elapsed time since midnight in the unit of `TimeUnit`.
+    /// A signed 32-bit time representing the elapsed time since midnight in the unit of `TimeUnit`.
+    /// Must be either seconds or milliseconds.
     Time32(TimeUnit),
-    /// A 64-bit time representing the elapsed time since midnight in the unit of `TimeUnit`.
+    /// A signed 64-bit time representing the elapsed time since midnight in the unit of `TimeUnit`.
+    /// Must be either microseconds or nanoseconds.
     Time64(TimeUnit),
     /// Measure of elapsed time in either seconds, milliseconds, microseconds or nanoseconds.
     Duration(TimeUnit),
@@ -159,7 +165,7 @@ pub enum DataType {
     /// Opaque binary data of variable length.
     ///
     /// A single Binary array can store up to [`i32::MAX`] bytes
-    /// of binary data in total
+    /// of binary data in total.
     Binary,
     /// Opaque binary data of fixed size.
     /// Enum parameter specifies the number of bytes per value.
@@ -167,27 +173,27 @@ pub enum DataType {
     /// Opaque binary data of variable length and 64-bit offsets.
     ///
     /// A single LargeBinary array can store up to [`i64::MAX`] bytes
-    /// of binary data in total
+    /// of binary data in total.
     LargeBinary,
-    /// A variable-length string in Unicode with UTF-8 encoding
+    /// A variable-length string in Unicode with UTF-8 encoding.
     ///
     /// A single Utf8 array can store up to [`i32::MAX`] bytes
-    /// of string data in total
+    /// of string data in total.
     Utf8,
     /// A variable-length string in Unicode with UFT-8 encoding and 64-bit offsets.
     ///
     /// A single LargeUtf8 array can store up to [`i64::MAX`] bytes
-    /// of string data in total
+    /// of string data in total.
     LargeUtf8,
     /// A list of some logical data type with variable length.
     ///
-    /// A single List array can store up to [`i32::MAX`] elements in total
+    /// A single List array can store up to [`i32::MAX`] elements in total.
     List(FieldRef),
     /// A list of some logical data type with fixed length.
     FixedSizeList(FieldRef, i32),
     /// A list of some logical data type with variable length and 64-bit offsets.
     ///
-    /// A single LargeList array can store up to [`i64::MAX`] elements in total
+    /// A single LargeList array can store up to [`i64::MAX`] elements in total.
     LargeList(FieldRef),
     /// A nested datatype that contains a number of sub-fields.
     Struct(Fields),
@@ -345,34 +351,32 @@ impl DataType {
         use DataType::*;
         matches!(
             self,
-            Date32
-                | Date64
-                | Timestamp(_, _)
-                | Time32(_)
-                | Time64(_)
-                | Duration(_)
-                | Interval(_)
+            Date32 | Date64 | Timestamp(_, _) | Time32(_) | Time64(_) | Duration(_) | Interval(_)
         )
     }
 
     /// Returns true if this type is floating: (Float*).
+    #[inline]
     pub fn is_floating(&self) -> bool {
         use DataType::*;
         matches!(self, Float16 | Float32 | Float64)
     }
 
     /// Returns true if this type is integer: (Int*, UInt*).
+    #[inline]
     pub fn is_integer(&self) -> bool {
         self.is_signed_integer() || self.is_unsigned_integer()
     }
 
     /// Returns true if this type is signed integer: (Int*).
+    #[inline]
     pub fn is_signed_integer(&self) -> bool {
         use DataType::*;
         matches!(self, Int8 | Int16 | Int32 | Int64)
     }
 
     /// Returns true if this type is unsigned integer: (UInt*).
+    #[inline]
     pub fn is_unsigned_integer(&self) -> bool {
         use DataType::*;
         matches!(self, UInt8 | UInt16 | UInt32 | UInt64)
@@ -393,18 +397,23 @@ impl DataType {
 
     /// Returns true if this type is nested (List, FixedSizeList, LargeList, Struct, Union,
     /// or Map), or a dictionary of a nested type
+    #[inline]
     pub fn is_nested(&self) -> bool {
         use DataType::*;
         match self {
             Dictionary(_, v) => DataType::is_nested(v.as_ref()),
-            List(_)
-            | FixedSizeList(_, _)
-            | LargeList(_)
-            | Struct(_)
-            | Union(_, _)
-            | Map(_, _) => true,
+            List(_) | FixedSizeList(_, _) | LargeList(_) | Struct(_) | Union(_, _) | Map(_, _) => {
+                true
+            }
             _ => false,
         }
+    }
+
+    /// Returns true if this type is DataType::Null.
+    #[inline]
+    pub fn is_null(&self) -> bool {
+        use DataType::*;
+        matches!(self, Null)
     }
 
     /// Compares the datatype with another, ignoring nested field names
@@ -413,8 +422,7 @@ impl DataType {
         match (&self, other) {
             (DataType::List(a), DataType::List(b))
             | (DataType::LargeList(a), DataType::LargeList(b)) => {
-                a.is_nullable() == b.is_nullable()
-                    && a.data_type().equals_datatype(b.data_type())
+                a.is_nullable() == b.is_nullable() && a.data_type().equals_datatype(b.data_type())
             }
             (DataType::FixedSizeList(a, a_size), DataType::FixedSizeList(b, b_size)) => {
                 a_size == b_size
@@ -428,10 +436,39 @@ impl DataType {
                             && a.data_type().equals_datatype(b.data_type())
                     })
             }
+            (DataType::Map(a_field, a_is_sorted), DataType::Map(b_field, b_is_sorted)) => {
+                a_field.is_nullable() == b_field.is_nullable()
+                    && a_field.data_type().equals_datatype(b_field.data_type())
+                    && a_is_sorted == b_is_sorted
+            }
+            (DataType::Dictionary(a_key, a_value), DataType::Dictionary(b_key, b_value)) => {
+                a_key.equals_datatype(b_key) && a_value.equals_datatype(b_value)
+            }
             (
-                DataType::Map(a_field, a_is_sorted),
-                DataType::Map(b_field, b_is_sorted),
-            ) => a_field == b_field && a_is_sorted == b_is_sorted,
+                DataType::RunEndEncoded(a_run_ends, a_values),
+                DataType::RunEndEncoded(b_run_ends, b_values),
+            ) => {
+                a_run_ends.is_nullable() == b_run_ends.is_nullable()
+                    && a_run_ends
+                        .data_type()
+                        .equals_datatype(b_run_ends.data_type())
+                    && a_values.is_nullable() == b_values.is_nullable()
+                    && a_values.data_type().equals_datatype(b_values.data_type())
+            }
+            (
+                DataType::Union(a_union_fields, a_union_mode),
+                DataType::Union(b_union_fields, b_union_mode),
+            ) => {
+                a_union_mode == b_union_mode
+                    && a_union_fields.len() == b_union_fields.len()
+                    && a_union_fields.iter().all(|a| {
+                        b_union_fields.iter().any(|b| {
+                            a.0 == b.0
+                                && a.1.is_nullable() == b.1.is_nullable()
+                                && a.1.data_type().equals_datatype(b.1.data_type())
+                        })
+                    })
+            }
             _ => self == other,
         }
     }
@@ -501,9 +538,7 @@ impl DataType {
                 | DataType::LargeUtf8
                 | DataType::Decimal128(_, _)
                 | DataType::Decimal256(_, _) => 0,
-                DataType::Timestamp(_, s) => {
-                    s.as_ref().map(|s| s.len()).unwrap_or_default()
-                }
+                DataType::Timestamp(_, s) => s.as_ref().map(|s| s.len()).unwrap_or_default(),
                 DataType::List(field)
                 | DataType::FixedSizeList(field, _)
                 | DataType::LargeList(field)
@@ -543,6 +578,15 @@ impl DataType {
             _ => self == other,
         }
     }
+
+    /// Create a [`DataType::List`] with elements of the specified type
+    /// and nullability, and conventionally named inner [`Field`] (`"item"`).
+    ///
+    /// To specify field level metadata, construct the inner [`Field`]
+    /// directly via [`Field::new`] or [`Field::new_list_field`].
+    pub fn new_list(data_type: DataType, nullable: bool) -> Self {
+        DataType::List(Arc::new(Field::new_list_field(data_type, nullable)))
+    }
 }
 
 /// The maximum precision for [DataType::Decimal128] values
@@ -564,7 +608,7 @@ pub const DECIMAL_DEFAULT_SCALE: i8 = 10;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Field;
+    use crate::{Field, UnionMode};
 
     #[test]
     #[cfg(feature = "serde")]
@@ -579,8 +623,8 @@ mod tests {
             Field::new("first_name", DataType::Utf8, false).with_metadata(field_metadata);
 
         // Empty map: should be omitted.
-        let last_name = Field::new("last_name", DataType::Utf8, false)
-            .with_metadata(HashMap::default());
+        let last_name =
+            Field::new("last_name", DataType::Utf8, false).with_metadata(HashMap::default());
 
         let person = DataType::Struct(Fields::from(vec![
             first_name,
@@ -629,9 +673,9 @@ mod tests {
         assert!(!list_a.equals_datatype(&list_d));
 
         let list_e =
-            DataType::FixedSizeList(Arc::new(Field::new("item", list_a, false)), 3);
+            DataType::FixedSizeList(Arc::new(Field::new("item", list_a.clone(), false)), 3);
         let list_f =
-            DataType::FixedSizeList(Arc::new(Field::new("array", list_b, false)), 3);
+            DataType::FixedSizeList(Arc::new(Field::new("array", list_b.clone(), false)), 3);
         let list_g = DataType::FixedSizeList(
             Arc::new(Field::new("item", DataType::FixedSizeBinary(3), true)),
             3,
@@ -641,10 +685,8 @@ mod tests {
         assert!(!list_f.equals_datatype(&list_g));
 
         let list_h = DataType::Struct(Fields::from(vec![Field::new("f1", list_e, true)]));
-        let list_i =
-            DataType::Struct(Fields::from(vec![Field::new("f1", list_f.clone(), true)]));
-        let list_j =
-            DataType::Struct(Fields::from(vec![Field::new("f1", list_f.clone(), false)]));
+        let list_i = DataType::Struct(Fields::from(vec![Field::new("f1", list_f.clone(), true)]));
+        let list_j = DataType::Struct(Fields::from(vec![Field::new("f1", list_f.clone(), false)]));
         let list_k = DataType::Struct(Fields::from(vec![
             Field::new("f1", list_f.clone(), false),
             Field::new("f2", list_g.clone(), false),
@@ -664,6 +706,103 @@ mod tests {
         assert!(!list_h.equals_datatype(&list_j));
         assert!(!list_k.equals_datatype(&list_l));
         assert!(list_k.equals_datatype(&list_m));
+
+        let list_n = DataType::Map(Arc::new(Field::new("f1", list_a.clone(), true)), true);
+        let list_o = DataType::Map(Arc::new(Field::new("f2", list_b.clone(), true)), true);
+        let list_p = DataType::Map(Arc::new(Field::new("f2", list_b.clone(), true)), false);
+        let list_q = DataType::Map(Arc::new(Field::new("f2", list_c.clone(), true)), true);
+        let list_r = DataType::Map(Arc::new(Field::new("f1", list_a.clone(), false)), true);
+
+        assert!(list_n.equals_datatype(&list_o));
+        assert!(!list_n.equals_datatype(&list_p));
+        assert!(!list_n.equals_datatype(&list_q));
+        assert!(!list_n.equals_datatype(&list_r));
+
+        let list_s = DataType::Dictionary(Box::new(DataType::UInt8), Box::new(list_a));
+        let list_t = DataType::Dictionary(Box::new(DataType::UInt8), Box::new(list_b.clone()));
+        let list_u = DataType::Dictionary(Box::new(DataType::Int8), Box::new(list_b));
+        let list_v = DataType::Dictionary(Box::new(DataType::UInt8), Box::new(list_c));
+
+        assert!(list_s.equals_datatype(&list_t));
+        assert!(!list_s.equals_datatype(&list_u));
+        assert!(!list_s.equals_datatype(&list_v));
+
+        let union_a = DataType::Union(
+            UnionFields::new(
+                vec![1, 2],
+                vec![
+                    Field::new("f1", DataType::Utf8, false),
+                    Field::new("f2", DataType::UInt8, false),
+                ],
+            ),
+            UnionMode::Sparse,
+        );
+        let union_b = DataType::Union(
+            UnionFields::new(
+                vec![1, 2],
+                vec![
+                    Field::new("ff1", DataType::Utf8, false),
+                    Field::new("ff2", DataType::UInt8, false),
+                ],
+            ),
+            UnionMode::Sparse,
+        );
+        let union_c = DataType::Union(
+            UnionFields::new(
+                vec![2, 1],
+                vec![
+                    Field::new("fff2", DataType::UInt8, false),
+                    Field::new("fff1", DataType::Utf8, false),
+                ],
+            ),
+            UnionMode::Sparse,
+        );
+        let union_d = DataType::Union(
+            UnionFields::new(
+                vec![2, 1],
+                vec![
+                    Field::new("fff1", DataType::Int8, false),
+                    Field::new("fff2", DataType::UInt8, false),
+                ],
+            ),
+            UnionMode::Sparse,
+        );
+        let union_e = DataType::Union(
+            UnionFields::new(
+                vec![1, 2],
+                vec![
+                    Field::new("f1", DataType::Utf8, true),
+                    Field::new("f2", DataType::UInt8, false),
+                ],
+            ),
+            UnionMode::Sparse,
+        );
+
+        assert!(union_a.equals_datatype(&union_b));
+        assert!(union_a.equals_datatype(&union_c));
+        assert!(!union_a.equals_datatype(&union_d));
+        assert!(!union_a.equals_datatype(&union_e));
+
+        let list_w = DataType::RunEndEncoded(
+            Arc::new(Field::new("f1", DataType::Int64, true)),
+            Arc::new(Field::new("f2", DataType::Utf8, true)),
+        );
+        let list_x = DataType::RunEndEncoded(
+            Arc::new(Field::new("ff1", DataType::Int64, true)),
+            Arc::new(Field::new("ff2", DataType::Utf8, true)),
+        );
+        let list_y = DataType::RunEndEncoded(
+            Arc::new(Field::new("ff1", DataType::UInt16, true)),
+            Arc::new(Field::new("ff2", DataType::Utf8, true)),
+        );
+        let list_z = DataType::RunEndEncoded(
+            Arc::new(Field::new("f1", DataType::Int64, false)),
+            Arc::new(Field::new("f2", DataType::Utf8, true)),
+        );
+
+        assert!(list_w.equals_datatype(&list_x));
+        assert!(!list_w.equals_datatype(&list_y));
+        assert!(!list_w.equals_datatype(&list_z));
     }
 
     #[test]
@@ -736,6 +875,12 @@ mod tests {
     fn test_floating() {
         assert!(DataType::is_floating(&DataType::Float16));
         assert!(!DataType::is_floating(&DataType::Int32));
+    }
+
+    #[test]
+    fn test_datatype_is_null() {
+        assert!(DataType::is_null(&DataType::Null));
+        assert!(!DataType::is_null(&DataType::Int32));
     }
 
     #[test]

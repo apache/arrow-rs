@@ -21,24 +21,56 @@
 
 [![Crates.io](https://img.shields.io/crates/v/arrow-flight.svg)](https://crates.io/crates/arrow-flight)
 
+See the [API documentation](https://docs.rs/arrow_flight/latest) for examples and the full API.
+
+The API documentation for most recent, unreleased code is available [here](https://arrow.apache.org/rust/arrow_flight/index.html).
+
 ## Usage
 
 Add this to your Cargo.toml:
 
 ```toml
 [dependencies]
-arrow-flight = "37.0.0"
+arrow-flight = "39.0.0"
 ```
 
 Apache Arrow Flight is a gRPC based protocol for exchanging Arrow data between processes. See the blog post [Introducing Apache Arrow Flight: A Framework for Fast Data Transport](https://arrow.apache.org/blog/2019/10/13/introducing-arrow-flight/) for more information.
 
 This crate provides a Rust implementation of the
-[Flight.proto](../../format/Flight.proto) gRPC protocol and
+[Flight.proto](../format/Flight.proto) gRPC protocol and
 [examples](https://github.com/apache/arrow-rs/tree/master/arrow-flight/examples)
 that demonstrate how to build a Flight server implemented with [tonic](https://docs.rs/crate/tonic/latest).
 
 ## Feature Flags
 
 - `flight-sql-experimental`: Enables experimental support for
-  [Apache Arrow FlightSQL](https://arrow.apache.org/docs/format/FlightSql.html),
-  a protocol for interacting with SQL databases.
+  [Apache Arrow FlightSQL], a protocol for interacting with SQL databases.
+
+## CLI
+
+This crates offers a basic [Apache Arrow FlightSQL] command line interface.
+
+The client can be installed from the repository:
+
+```console
+$ cargo install --features=cli,flight-sql-experimental,tls --bin=flight_sql_client --path=. --locked
+```
+
+The client comes with extensive help text:
+
+```console
+$ flight_sql_client help
+```
+
+A query can be executed using:
+
+```console
+$ flight_sql_client --host example.com statement-query "SELECT 1;"
++----------+
+| Int64(1) |
++----------+
+| 1        |
++----------+
+```
+
+[apache arrow flightsql]: https://arrow.apache.org/docs/format/FlightSql.html

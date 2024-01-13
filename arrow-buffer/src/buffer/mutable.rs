@@ -36,7 +36,7 @@ use super::Buffer;
 /// Use [MutableBuffer::push] to insert an item, [MutableBuffer::extend_from_slice]
 /// to insert many items, and `into` to convert it to [`Buffer`].
 ///
-/// For a safe, strongly typed API consider using `Vec`
+/// For a safe, strongly typed API consider using [`Vec`] and [`ScalarBuffer`](crate::ScalarBuffer)
 ///
 /// Note: this may be deprecated in a future release ([#1176](https://github.com/apache/arrow-rs/issues/1176))
 ///
@@ -112,17 +112,9 @@ impl MutableBuffer {
 
     /// Create a [`MutableBuffer`] from the provided [`Vec`] without copying
     #[inline]
+    #[deprecated(note = "Use From<Vec<T>>")]
     pub fn from_vec<T: ArrowNativeType>(vec: Vec<T>) -> Self {
-        // Safety
-        // Vec::as_ptr guaranteed to not be null and ArrowNativeType are trivially transmutable
-        let data = unsafe { NonNull::new_unchecked(vec.as_ptr() as _) };
-        let len = vec.len() * mem::size_of::<T>();
-        // Safety
-        // Vec guaranteed to have a valid layout matching that of `Layout::array`
-        // This is based on `RawVec::current_memory`
-        let layout = unsafe { Layout::array::<T>(vec.capacity()).unwrap_unchecked() };
-        mem::forget(vec);
-        Self { data, len, layout }
+        Self::from(vec)
     }
 
     /// Allocates a new [MutableBuffer] from given `Bytes`.
@@ -168,7 +160,14 @@ impl MutableBuffer {
     /// `len` of the buffer and so can be used to initialize the memory region from
     /// `len` to `capacity`.
     pub fn set_null_bits(&mut self, start: usize, count: usize) {
-        assert!(start + count <= self.layout.size());
+        assert!(
+            start.saturating_add(count) <= self.layout.size(),
+            "range start index {start} and count {count} out of bounds for \
+            buffer of length {}",
+            self.layout.size(),
+        );
+
+        // Safety: `self.data[start..][..count]` is in-bounds and well-aligned for `u8`
         unsafe {
             std::ptr::write_bytes(self.data.as_ptr().add(start), 0, count);
         }
@@ -335,9 +334,7 @@ impl MutableBuffer {
 
     #[inline]
     pub(super) fn into_buffer(self) -> Buffer {
-        let bytes = unsafe {
-            Bytes::new(self.data, self.len, Deallocation::Standard(self.layout))
-        };
+        let bytes = unsafe { Bytes::new(self.data, self.len, Deallocation::Standard(self.layout)) };
         std::mem::forget(self);
         Buffer::from_bytes(bytes)
     }
@@ -352,8 +349,7 @@ impl MutableBuffer {
         // SAFETY
         // ArrowNativeType is trivially transmutable, is sealed to prevent potentially incorrect
         // implementation outside this crate, and this method checks alignment
-        let (prefix, offsets, suffix) =
-            unsafe { self.as_slice_mut().align_to_mut::<T>() };
+        let (prefix, offsets, suffix) = unsafe { self.as_slice_mut().align_to_mut::<T>() };
         assert!(prefix.is_empty() && suffix.is_empty());
         offsets
     }
@@ -383,8 +379,7 @@ impl MutableBuffer {
     /// ```
     #[inline]
     pub fn extend_from_slice<T: ArrowNativeType>(&mut self, items: &[T]) {
-        let len = items.len();
-        let additional = len * std::mem::size_of::<T>();
+        let additional = mem::size_of_val(items);
         self.reserve(additional);
         unsafe {
             // this assumes that `[ToByteSlice]` can be copied directly
@@ -496,6 +491,21 @@ impl<A: ArrowNativeType> Extend<A> for MutableBuffer {
     }
 }
 
+impl<T: ArrowNativeType> From<Vec<T>> for MutableBuffer {
+    fn from(value: Vec<T>) -> Self {
+        // Safety
+        // Vec::as_ptr guaranteed to not be null and ArrowNativeType are trivially transmutable
+        let data = unsafe { NonNull::new_unchecked(value.as_ptr() as _) };
+        let len = value.len() * mem::size_of::<T>();
+        // Safety
+        // Vec guaranteed to have a valid layout matching that of `Layout::array`
+        // This is based on `RawVec::current_memory`
+        let layout = unsafe { Layout::array::<T>(value.capacity()).unwrap_unchecked() };
+        mem::forget(value);
+        Self { data, len, layout }
+    }
+}
+
 impl MutableBuffer {
     #[inline]
     pub(super) fn extend_from_iter<T: ArrowNativeType, I: Iterator<Item = T>>(
@@ -591,9 +601,7 @@ impl MutableBuffer {
     //    we can't specialize `extend` for `TrustedLen` like `Vec` does.
     // 2. `from_trusted_len_iter_bool` is faster.
     #[inline]
-    pub unsafe fn from_trusted_len_iter_bool<I: Iterator<Item = bool>>(
-        mut iterator: I,
-    ) -> Self {
+    pub unsafe fn from_trusted_len_iter_bool<I: Iterator<Item = bool>>(mut iterator: I) -> Self {
         let (_, upper) = iterator.size_hint();
         let len = upper.expect("from_trusted_len_iter requires an upper limit");
 
@@ -641,6 +649,12 @@ impl MutableBuffer {
         }
         finalize_buffer(dst, &mut buffer, len);
         Ok(buffer)
+    }
+}
+
+impl Default for MutableBuffer {
+    fn default() -> Self {
+        Self::with_capacity(0)
     }
 }
 
@@ -759,6 +773,14 @@ impl std::iter::FromIterator<bool> for MutableBuffer {
     }
 }
 
+impl<T: ArrowNativeType> std::iter::FromIterator<T> for MutableBuffer {
+    fn from_iter<I: IntoIterator<Item = T>>(iter: I) -> Self {
+        let mut buffer = Self::default();
+        buffer.extend_from_iter(iter.into_iter());
+        buffer
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -769,6 +791,19 @@ mod tests {
         assert_eq!(64, buf.capacity());
         assert_eq!(0, buf.len());
         assert!(buf.is_empty());
+    }
+
+    #[test]
+    fn test_mutable_default() {
+        let buf = MutableBuffer::default();
+        assert_eq!(0, buf.capacity());
+        assert_eq!(0, buf.len());
+        assert!(buf.is_empty());
+
+        let mut buf = MutableBuffer::default();
+        buf.extend_from_slice(b"hello");
+        assert_eq!(5, buf.len());
+        assert_eq!(b"hello", buf.as_slice());
     }
 
     #[test]
@@ -932,5 +967,39 @@ mod tests {
 
         buffer.shrink_to_fit();
         assert!(buffer.capacity() >= 64 && buffer.capacity() < 128);
+    }
+
+    #[test]
+    fn test_mutable_set_null_bits() {
+        let mut buffer = MutableBuffer::new(8).with_bitset(8, true);
+
+        for i in 0..=buffer.capacity() {
+            buffer.set_null_bits(i, 0);
+            assert_eq!(buffer[..8], [255; 8][..]);
+        }
+
+        buffer.set_null_bits(1, 4);
+        assert_eq!(buffer[..8], [255, 0, 0, 0, 0, 255, 255, 255][..]);
+    }
+
+    #[test]
+    #[should_panic = "out of bounds for buffer of length"]
+    fn test_mutable_set_null_bits_oob() {
+        let mut buffer = MutableBuffer::new(64);
+        buffer.set_null_bits(1, buffer.capacity());
+    }
+
+    #[test]
+    #[should_panic = "out of bounds for buffer of length"]
+    fn test_mutable_set_null_bits_oob_by_overflow() {
+        let mut buffer = MutableBuffer::new(0);
+        buffer.set_null_bits(1, usize::MAX);
+    }
+
+    #[test]
+    fn from_iter() {
+        let buffer = [1u16, 2, 3, 4].into_iter().collect::<MutableBuffer>();
+        assert_eq!(buffer.len(), 4 * mem::size_of::<u16>());
+        assert_eq!(buffer.as_slice(), &[1, 0, 2, 0, 3, 0, 4, 0]);
     }
 }

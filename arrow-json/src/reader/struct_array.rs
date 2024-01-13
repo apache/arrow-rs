@@ -18,13 +18,14 @@
 use crate::reader::tape::{Tape, TapeElement};
 use crate::reader::{make_decoder, ArrayDecoder};
 use arrow_array::builder::BooleanBufferBuilder;
-use arrow_buffer::buffer::{BooleanBuffer, NullBuffer};
+use arrow_buffer::buffer::NullBuffer;
 use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::{ArrowError, DataType, Fields};
 
 pub struct StructArrayDecoder {
     data_type: DataType,
     decoders: Vec<Box<dyn ArrayDecoder>>,
+    strict_mode: bool,
     is_nullable: bool,
 }
 
@@ -32,6 +33,7 @@ impl StructArrayDecoder {
     pub fn new(
         data_type: DataType,
         coerce_primitive: bool,
+        strict_mode: bool,
         is_nullable: bool,
     ) -> Result<Self, ArrowError> {
         let decoders = struct_fields(&data_type)
@@ -41,13 +43,19 @@ impl StructArrayDecoder {
                 // StructArrayDecoder::decode verifies that if the child is not nullable
                 // it doesn't contain any nulls not masked by its parent
                 let nullable = f.is_nullable() || is_nullable;
-                make_decoder(f.data_type().clone(), coerce_primitive, nullable)
+                make_decoder(
+                    f.data_type().clone(),
+                    coerce_primitive,
+                    strict_mode,
+                    nullable,
+                )
             })
             .collect::<Result<Vec<_>, ArrowError>>()?;
 
         Ok(Self {
             data_type,
             decoders,
+            strict_mode,
             is_nullable,
         })
     }
@@ -56,8 +64,7 @@ impl StructArrayDecoder {
 impl ArrayDecoder for StructArrayDecoder {
     fn decode(&mut self, tape: &Tape<'_>, pos: &[u32]) -> Result<ArrayData, ArrowError> {
         let fields = struct_fields(&self.data_type);
-        let mut child_pos: Vec<_> =
-            (0..fields.len()).map(|_| vec![0; pos.len()]).collect();
+        let mut child_pos: Vec<_> = (0..fields.len()).map(|_| vec![0; pos.len()]).collect();
 
         let mut nulls = self
             .is_nullable
@@ -86,10 +93,16 @@ impl ArrayDecoder for StructArrayDecoder {
                 };
 
                 // Update child pos if match found
-                if let Some(field_idx) =
-                    fields.iter().position(|x| x.name() == field_name)
-                {
-                    child_pos[field_idx][row] = cur_idx + 1;
+                match fields.iter().position(|x| x.name() == field_name) {
+                    Some(field_idx) => child_pos[field_idx][row] = cur_idx + 1,
+                    None => {
+                        if self.strict_mode {
+                            return Err(ArrowError::JsonError(format!(
+                                "column '{}' missing from schema",
+                                field_name
+                            )));
+                        }
+                    }
                 }
 
                 // Advance to next field
@@ -104,36 +117,27 @@ impl ArrayDecoder for StructArrayDecoder {
             .zip(fields)
             .map(|((d, pos), f)| {
                 d.decode(tape, &pos).map_err(|e| match e {
-                    ArrowError::JsonError(s) => ArrowError::JsonError(format!(
-                        "whilst decoding field '{}': {s}",
-                        f.name()
-                    )),
+                    ArrowError::JsonError(s) => {
+                        ArrowError::JsonError(format!("whilst decoding field '{}': {s}", f.name()))
+                    }
                     e => e,
                 })
             })
             .collect::<Result<Vec<_>, ArrowError>>()?;
 
-        let nulls = nulls
-            .as_mut()
-            .map(|x| NullBuffer::new(BooleanBuffer::new(x.finish(), 0, pos.len())));
+        let nulls = nulls.as_mut().map(|x| NullBuffer::new(x.finish()));
 
         for (c, f) in child_data.iter().zip(fields) {
             // Sanity check
             assert_eq!(c.len(), pos.len());
+            if let Some(a) = c.nulls() {
+                let nulls_valid =
+                    f.is_nullable() || nulls.as_ref().map(|n| n.contains(a)).unwrap_or_default();
 
-            if !f.is_nullable() && c.null_count() != 0 {
-                // Need to verify nulls
-                let valid = match nulls.as_ref() {
-                    Some(nulls) => {
-                        let lhs = nulls.inner().bit_chunks().iter_padded();
-                        let rhs = c.nulls().unwrap().inner().bit_chunks().iter_padded();
-                        lhs.zip(rhs).all(|(l, r)| (l & !r) == 0)
-                    }
-                    None => false,
-                };
-
-                if !valid {
-                    return Err(ArrowError::JsonError(format!("Encountered unmasked nulls in non-nullable StructArray child: {f}")));
+                if !nulls_valid {
+                    return Err(ArrowError::JsonError(format!(
+                        "Encountered unmasked nulls in non-nullable StructArray child: {f}"
+                    )));
                 }
             }
         }

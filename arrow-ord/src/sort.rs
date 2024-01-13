@@ -22,14 +22,15 @@ use arrow_array::builder::BufferBuilder;
 use arrow_array::cast::*;
 use arrow_array::types::*;
 use arrow_array::*;
-use arrow_buffer::{ArrowNativeType, MutableBuffer, NullBuffer};
-use arrow_data::ArrayData;
+use arrow_buffer::BooleanBufferBuilder;
+use arrow_buffer::{ArrowNativeType, NullBuffer};
 use arrow_data::ArrayDataBuilder;
-use arrow_schema::{ArrowError, DataType, IntervalUnit, TimeUnit};
+use arrow_schema::{ArrowError, DataType};
 use arrow_select::take::take;
 use std::cmp::Ordering;
 use std::sync::Arc;
 
+use crate::rank::rank;
 pub use arrow_schema::SortOptions;
 
 /// Sort the `ArrayRef` using `SortOptions`.
@@ -53,15 +54,75 @@ pub use arrow_schema::SortOptions;
 /// let sorted_array = sort(&array, None).unwrap();
 /// assert_eq!(sorted_array.as_ref(), &Int32Array::from(vec![1, 2, 3, 4, 5]));
 /// ```
-pub fn sort(
-    values: &dyn Array,
+pub fn sort(values: &dyn Array, options: Option<SortOptions>) -> Result<ArrayRef, ArrowError> {
+    downcast_primitive_array!(
+        values => sort_native_type(values, options),
+        DataType::RunEndEncoded(_, _) => sort_run(values, options, None),
+        _ => {
+            let indices = sort_to_indices(values, options, None)?;
+            take(values, &indices, None)
+        }
+    )
+}
+
+fn sort_native_type<T>(
+    primitive_values: &PrimitiveArray<T>,
     options: Option<SortOptions>,
-) -> Result<ArrayRef, ArrowError> {
-    if let DataType::RunEndEncoded(_, _) = values.data_type() {
-        return sort_run(values, options, None);
+) -> Result<ArrayRef, ArrowError>
+where
+    T: ArrowPrimitiveType,
+{
+    let sort_options = options.unwrap_or_default();
+
+    let mut mutable_buffer = vec![T::default_value(); primitive_values.len()];
+    let mutable_slice = &mut mutable_buffer;
+
+    let input_values = primitive_values.values().as_ref();
+
+    let nulls_count = primitive_values.null_count();
+    let valid_count = primitive_values.len() - nulls_count;
+
+    let null_bit_buffer = match nulls_count > 0 {
+        true => {
+            let mut validity_buffer = BooleanBufferBuilder::new(primitive_values.len());
+            if sort_options.nulls_first {
+                validity_buffer.append_n(nulls_count, false);
+                validity_buffer.append_n(valid_count, true);
+            } else {
+                validity_buffer.append_n(valid_count, true);
+                validity_buffer.append_n(nulls_count, false);
+            }
+            Some(validity_buffer.finish().into())
+        }
+        false => None,
+    };
+
+    if let Some(nulls) = primitive_values.nulls().filter(|n| n.null_count() > 0) {
+        let values_slice = match sort_options.nulls_first {
+            true => &mut mutable_slice[nulls_count..],
+            false => &mut mutable_slice[..valid_count],
+        };
+
+        for (write_index, index) in nulls.valid_indices().enumerate() {
+            values_slice[write_index] = primitive_values.value(index);
+        }
+
+        values_slice.sort_unstable_by(|a, b| a.compare(*b));
+        if sort_options.descending {
+            values_slice.reverse();
+        }
+    } else {
+        mutable_slice.copy_from_slice(input_values);
+        mutable_slice.sort_unstable_by(|a, b| a.compare(*b));
+        if sort_options.descending {
+            mutable_slice.reverse();
+        }
     }
-    let indices = sort_to_indices(values, options, None)?;
-    take(values, &indices, None)
+
+    Ok(Arc::new(
+        PrimitiveArray::<T>::new(mutable_buffer.into(), null_bit_buffer)
+            .with_data_type(primitive_values.data_type().clone()),
+    ))
 }
 
 /// Sort the `ArrayRef` partially.
@@ -117,13 +178,6 @@ where
     }
 }
 
-fn cmp<T>(l: T, r: T) -> Ordering
-where
-    T: Ord,
-{
-    l.cmp(&r)
-}
-
 // partition indices into valid and null indices
 fn partition_validity(array: &dyn Array) -> (Vec<u32>, Vec<u32>) {
     match array.null_count() {
@@ -137,226 +191,35 @@ fn partition_validity(array: &dyn Array) -> (Vec<u32>, Vec<u32>) {
 }
 
 /// Sort elements from `ArrayRef` into an unsigned integer (`UInt32Array`) of indices.
-/// For floating point arrays any NaN values are considered to be greater than any other non-null value
-/// limit is an option for partial_sort
+/// Floats are sorted using IEEE 754 totalOrder.  `limit` is an option for [partial_sort].
 pub fn sort_to_indices(
-    values: &dyn Array,
+    array: &dyn Array,
     options: Option<SortOptions>,
     limit: Option<usize>,
 ) -> Result<UInt32Array, ArrowError> {
     let options = options.unwrap_or_default();
 
-    let (v, n) = partition_validity(values);
+    let (v, n) = partition_validity(array);
 
-    Ok(match values.data_type() {
-        DataType::Decimal128(_, _) => {
-            sort_primitive::<Decimal128Type, _>(values, v, n, cmp, &options, limit)
+    Ok(downcast_primitive_array! {
+        array => sort_primitive(array, v, n, options, limit),
+        DataType::Boolean => sort_boolean(array.as_boolean(), v, n, options, limit),
+        DataType::Utf8 => sort_bytes(array.as_string::<i32>(), v, n, options, limit),
+        DataType::LargeUtf8 => sort_bytes(array.as_string::<i64>(), v, n, options, limit),
+        DataType::Binary => sort_bytes(array.as_binary::<i32>(), v, n, options, limit),
+        DataType::LargeBinary => sort_bytes(array.as_binary::<i64>(), v, n, options, limit),
+        DataType::FixedSizeBinary(_) => sort_fixed_size_binary(array.as_fixed_size_binary(), v, n, options, limit),
+        DataType::List(_) => sort_list(array.as_list::<i32>(), v, n, options, limit)?,
+        DataType::LargeList(_) => sort_list(array.as_list::<i64>(), v, n, options, limit)?,
+        DataType::FixedSizeList(_, _) => sort_fixed_size_list(array.as_fixed_size_list(), v, n, options, limit)?,
+        DataType::Dictionary(_, _) => downcast_dictionary_array!{
+            array => sort_dictionary(array, v, n, options, limit)?,
+            _ => unreachable!()
         }
-        DataType::Decimal256(_, _) => {
-            sort_primitive::<Decimal256Type, _>(values, v, n, cmp, &options, limit)
-        }
-        DataType::Boolean => sort_boolean(values, v, n, &options, limit),
-        DataType::Int8 => {
-            sort_primitive::<Int8Type, _>(values, v, n, cmp, &options, limit)
-        }
-        DataType::Int16 => {
-            sort_primitive::<Int16Type, _>(values, v, n, cmp, &options, limit)
-        }
-        DataType::Int32 => {
-            sort_primitive::<Int32Type, _>(values, v, n, cmp, &options, limit)
-        }
-        DataType::Int64 => {
-            sort_primitive::<Int64Type, _>(values, v, n, cmp, &options, limit)
-        }
-        DataType::UInt8 => {
-            sort_primitive::<UInt8Type, _>(values, v, n, cmp, &options, limit)
-        }
-        DataType::UInt16 => {
-            sort_primitive::<UInt16Type, _>(values, v, n, cmp, &options, limit)
-        }
-        DataType::UInt32 => {
-            sort_primitive::<UInt32Type, _>(values, v, n, cmp, &options, limit)
-        }
-        DataType::UInt64 => {
-            sort_primitive::<UInt64Type, _>(values, v, n, cmp, &options, limit)
-        }
-        DataType::Float16 => sort_primitive::<Float16Type, _>(
-            values,
-            v,
-            n,
-            |x, y| x.total_cmp(&y),
-            &options,
-            limit,
-        ),
-        DataType::Float32 => sort_primitive::<Float32Type, _>(
-            values,
-            v,
-            n,
-            |x, y| x.total_cmp(&y),
-            &options,
-            limit,
-        ),
-        DataType::Float64 => sort_primitive::<Float64Type, _>(
-            values,
-            v,
-            n,
-            |x, y| x.total_cmp(&y),
-            &options,
-            limit,
-        ),
-        DataType::Date32 => {
-            sort_primitive::<Date32Type, _>(values, v, n, cmp, &options, limit)
-        }
-        DataType::Date64 => {
-            sort_primitive::<Date64Type, _>(values, v, n, cmp, &options, limit)
-        }
-        DataType::Time32(TimeUnit::Second) => {
-            sort_primitive::<Time32SecondType, _>(values, v, n, cmp, &options, limit)
-        }
-        DataType::Time32(TimeUnit::Millisecond) => {
-            sort_primitive::<Time32MillisecondType, _>(values, v, n, cmp, &options, limit)
-        }
-        DataType::Time64(TimeUnit::Microsecond) => {
-            sort_primitive::<Time64MicrosecondType, _>(values, v, n, cmp, &options, limit)
-        }
-        DataType::Time64(TimeUnit::Nanosecond) => {
-            sort_primitive::<Time64NanosecondType, _>(values, v, n, cmp, &options, limit)
-        }
-        DataType::Timestamp(TimeUnit::Second, _) => {
-            sort_primitive::<TimestampSecondType, _>(values, v, n, cmp, &options, limit)
-        }
-        DataType::Timestamp(TimeUnit::Millisecond, _) => {
-            sort_primitive::<TimestampMillisecondType, _>(
-                values, v, n, cmp, &options, limit,
-            )
-        }
-        DataType::Timestamp(TimeUnit::Microsecond, _) => {
-            sort_primitive::<TimestampMicrosecondType, _>(
-                values, v, n, cmp, &options, limit,
-            )
-        }
-        DataType::Timestamp(TimeUnit::Nanosecond, _) => {
-            sort_primitive::<TimestampNanosecondType, _>(
-                values, v, n, cmp, &options, limit,
-            )
-        }
-        DataType::Interval(IntervalUnit::YearMonth) => {
-            sort_primitive::<IntervalYearMonthType, _>(values, v, n, cmp, &options, limit)
-        }
-        DataType::Interval(IntervalUnit::DayTime) => {
-            sort_primitive::<IntervalDayTimeType, _>(values, v, n, cmp, &options, limit)
-        }
-        DataType::Interval(IntervalUnit::MonthDayNano) => {
-            sort_primitive::<IntervalMonthDayNanoType, _>(
-                values, v, n, cmp, &options, limit,
-            )
-        }
-        DataType::Duration(TimeUnit::Second) => {
-            sort_primitive::<DurationSecondType, _>(values, v, n, cmp, &options, limit)
-        }
-        DataType::Duration(TimeUnit::Millisecond) => {
-            sort_primitive::<DurationMillisecondType, _>(
-                values, v, n, cmp, &options, limit,
-            )
-        }
-        DataType::Duration(TimeUnit::Microsecond) => {
-            sort_primitive::<DurationMicrosecondType, _>(
-                values, v, n, cmp, &options, limit,
-            )
-        }
-        DataType::Duration(TimeUnit::Nanosecond) => {
-            sort_primitive::<DurationNanosecondType, _>(
-                values, v, n, cmp, &options, limit,
-            )
-        }
-        DataType::Utf8 => sort_string::<i32>(values, v, n, &options, limit),
-        DataType::LargeUtf8 => sort_string::<i64>(values, v, n, &options, limit),
-        DataType::List(field) | DataType::FixedSizeList(field, _) => {
-            match field.data_type() {
-                DataType::Int8 => sort_list::<i32>(values, v, n, &options, limit),
-                DataType::Int16 => sort_list::<i32>(values, v, n, &options, limit),
-                DataType::Int32 => sort_list::<i32>(values, v, n, &options, limit),
-                DataType::Int64 => sort_list::<i32>(values, v, n, &options, limit),
-                DataType::UInt8 => sort_list::<i32>(values, v, n, &options, limit),
-                DataType::UInt16 => sort_list::<i32>(values, v, n, &options, limit),
-                DataType::UInt32 => sort_list::<i32>(values, v, n, &options, limit),
-                DataType::UInt64 => sort_list::<i32>(values, v, n, &options, limit),
-                DataType::Float16 => sort_list::<i32>(values, v, n, &options, limit),
-                DataType::Float32 => sort_list::<i32>(values, v, n, &options, limit),
-                DataType::Float64 => sort_list::<i32>(values, v, n, &options, limit),
-                t => {
-                    return Err(ArrowError::ComputeError(format!(
-                        "Sort not supported for list type {t:?}"
-                    )));
-                }
-            }
-        }
-        DataType::LargeList(field) => match field.data_type() {
-            DataType::Int8 => sort_list::<i64>(values, v, n, &options, limit),
-            DataType::Int16 => sort_list::<i64>(values, v, n, &options, limit),
-            DataType::Int32 => sort_list::<i64>(values, v, n, &options, limit),
-            DataType::Int64 => sort_list::<i64>(values, v, n, &options, limit),
-            DataType::UInt8 => sort_list::<i64>(values, v, n, &options, limit),
-            DataType::UInt16 => sort_list::<i64>(values, v, n, &options, limit),
-            DataType::UInt32 => sort_list::<i64>(values, v, n, &options, limit),
-            DataType::UInt64 => sort_list::<i64>(values, v, n, &options, limit),
-            DataType::Float16 => sort_list::<i64>(values, v, n, &options, limit),
-            DataType::Float32 => sort_list::<i64>(values, v, n, &options, limit),
-            DataType::Float64 => sort_list::<i64>(values, v, n, &options, limit),
-            t => {
-                return Err(ArrowError::ComputeError(format!(
-                    "Sort not supported for list type {t:?}"
-                )));
-            }
-        },
-        DataType::Dictionary(_, _) => {
-            let value_null_first = if options.descending {
-                // When sorting dictionary in descending order, we take inverse of of null ordering
-                // when sorting the values. Because if `nulls_first` is true, null must be in front
-                // of non-null value. As we take the sorted order of value array to sort dictionary
-                // keys, these null values will be treated as smallest ones and be sorted to the end
-                // of sorted result. So we set `nulls_first` to false when sorting dictionary value
-                // array to make them as largest ones, then null values will be put at the beginning
-                // of sorted dictionary result.
-                !options.nulls_first
-            } else {
-                options.nulls_first
-            };
-            let value_options = Some(SortOptions {
-                descending: false,
-                nulls_first: value_null_first,
-            });
-            downcast_dictionary_array!(
-                values => match values.values().data_type() {
-                    dt if DataType::is_primitive(dt) => {
-                        let dict_values = values.values();
-                        let sorted_value_indices = sort_to_indices(dict_values, value_options, None)?;
-                        let value_indices_map = sorted_rank(&sorted_value_indices);
-                        sort_primitive_dictionary::<_, _>(values, &value_indices_map, v, n, options, limit, cmp)
-                    },
-                    DataType::Utf8 => {
-                        let dict_values = values.values();
-                        let sorted_value_indices = sort_to_indices(dict_values, value_options, None)?;
-                        let value_indices_map = sorted_rank(&sorted_value_indices);
-                        sort_string_dictionary::<_>(values, &value_indices_map, v, n, &options, limit)
-                    },
-                    t => return Err(ArrowError::ComputeError(format!(
-                        "Unsupported dictionary value type {t}"
-                    ))),
-                },
-                t => return Err(ArrowError::ComputeError(format!(
-                    "Unsupported datatype {t}"
-                ))),
-            )
-        }
-        DataType::Binary | DataType::FixedSizeBinary(_) => {
-            sort_binary::<i32>(values, v, n, &options, limit)
-        }
-        DataType::LargeBinary => sort_binary::<i64>(values, v, n, &options, limit),
         DataType::RunEndEncoded(run_ends_field, _) => match run_ends_field.data_type() {
-            DataType::Int16 => sort_run_to_indices::<Int16Type>(values, &options, limit),
-            DataType::Int32 => sort_run_to_indices::<Int32Type>(values, &options, limit),
-            DataType::Int64 => sort_run_to_indices::<Int64Type>(values, &options, limit),
+            DataType::Int16 => sort_run_to_indices::<Int16Type>(array, options, limit),
+            DataType::Int32 => sort_run_to_indices::<Int32Type>(array, options, limit),
+            DataType::Int64 => sort_run_to_indices::<Int64Type>(array, options, limit),
             dt => {
                 return Err(ArrowError::ComputeError(format!(
                     "Invalid run end data type: {dt}"
@@ -371,238 +234,170 @@ pub fn sort_to_indices(
     })
 }
 
-/// Sort boolean values
-///
-/// when a limit is present, the sort is pair-comparison based as k-select might be more efficient,
-/// when the limit is absent, binary partition is used to speed up (which is linear).
-///
-/// TODO maybe partition_validity call can be eliminated in this case
-/// and [tri-color sort](https://en.wikipedia.org/wiki/Dutch_national_flag_problem)
-/// can be used instead.
 fn sort_boolean(
-    values: &dyn Array,
-    value_indices: Vec<u32>,
-    mut null_indices: Vec<u32>,
-    options: &SortOptions,
-    limit: Option<usize>,
-) -> UInt32Array {
-    let values = values
-        .as_any()
-        .downcast_ref::<BooleanArray>()
-        .expect("Unable to downcast to boolean array");
-    let descending = options.descending;
-
-    let valids_len = value_indices.len();
-    let nulls_len = null_indices.len();
-
-    let mut len = values.len();
-    let valids = if let Some(limit) = limit {
-        len = limit.min(len);
-        // create tuples that are used for sorting
-        let mut valids = value_indices
-            .into_iter()
-            .map(|index| (index, values.value(index as usize)))
-            .collect::<Vec<(u32, bool)>>();
-
-        sort_valids(descending, &mut valids, &mut null_indices, len, cmp);
-        valids
-    } else {
-        // when limit is not present, we have a better way than sorting: we can just partition
-        // the vec into [false..., true...] or [true..., false...] when descending
-        // TODO when https://github.com/rust-lang/rust/issues/62543 is merged we can use partition_in_place
-        let (mut a, b): (Vec<_>, Vec<_>) = value_indices
-            .into_iter()
-            .map(|index| (index, values.value(index as usize)))
-            .partition(|(_, value)| *value == descending);
-        a.extend(b);
-        if descending {
-            null_indices.reverse();
-        }
-        a
-    };
-
-    let nulls = null_indices;
-
-    // collect results directly into a buffer instead of a vec to avoid another aligned allocation
-    let result_capacity = len * std::mem::size_of::<u32>();
-    let mut result = MutableBuffer::new(result_capacity);
-    // sets len to capacity so we can access the whole buffer as a typed slice
-    result.resize(result_capacity, 0);
-    let result_slice: &mut [u32] = result.typed_data_mut();
-
-    if options.nulls_first {
-        let size = nulls_len.min(len);
-        result_slice[0..size].copy_from_slice(&nulls[0..size]);
-        if nulls_len < len {
-            insert_valid_values(result_slice, nulls_len, &valids[0..len - size]);
-        }
-    } else {
-        // nulls last
-        let size = valids.len().min(len);
-        insert_valid_values(result_slice, 0, &valids[0..size]);
-        if len > size {
-            result_slice[valids_len..].copy_from_slice(&nulls[0..(len - valids_len)]);
-        }
-    }
-
-    let result_data = unsafe {
-        ArrayData::new_unchecked(
-            DataType::UInt32,
-            len,
-            Some(0),
-            None,
-            0,
-            vec![result.into()],
-            vec![],
-        )
-    };
-
-    UInt32Array::from(result_data)
-}
-
-/// Sort primitive values
-fn sort_primitive<T, F>(
-    values: &dyn Array,
-    value_indices: Vec<u32>,
-    null_indices: Vec<u32>,
-    cmp: F,
-    options: &SortOptions,
-    limit: Option<usize>,
-) -> UInt32Array
-where
-    T: ArrowPrimitiveType,
-    T::Native: PartialOrd,
-    F: Fn(T::Native, T::Native) -> Ordering,
-{
-    // create tuples that are used for sorting
-    let valids = {
-        let values = values.as_primitive::<T>();
-        value_indices
-            .into_iter()
-            .map(|index| (index, values.value(index as usize)))
-            .collect::<Vec<(u32, T::Native)>>()
-    };
-    sort_primitive_inner(values.len(), null_indices, cmp, options, limit, valids)
-}
-
-/// Given a list of indices that yield a sorted order, returns the ordered
-/// rank of each index
-///
-/// e.g. [2, 4, 3, 1, 0] -> [4, 3, 0, 2, 1]
-fn sorted_rank(sorted_value_indices: &UInt32Array) -> Vec<u32> {
-    assert_eq!(sorted_value_indices.null_count(), 0);
-    let sorted_indices = sorted_value_indices.values();
-    let mut out: Vec<_> = vec![0_u32; sorted_indices.len()];
-    for (ix, val) in sorted_indices.iter().enumerate() {
-        out[*val as usize] = ix as u32;
-    }
-    out
-}
-
-/// Sort dictionary encoded primitive values
-fn sort_primitive_dictionary<K, F>(
-    values: &DictionaryArray<K>,
-    value_indices_map: &[u32],
+    values: &BooleanArray,
     value_indices: Vec<u32>,
     null_indices: Vec<u32>,
     options: SortOptions,
     limit: Option<usize>,
-    cmp: F,
-) -> UInt32Array
-where
-    K: ArrowDictionaryKeyType,
-    F: Fn(u32, u32) -> Ordering,
-{
-    let keys: &PrimitiveArray<K> = values.keys();
+) -> UInt32Array {
+    let mut valids = value_indices
+        .into_iter()
+        .map(|index| (index, values.value(index as usize)))
+        .collect::<Vec<(u32, bool)>>();
+    sort_impl(options, &mut valids, &null_indices, limit, |a, b| a.cmp(&b)).into()
+}
+
+fn sort_primitive<T: ArrowPrimitiveType>(
+    values: &PrimitiveArray<T>,
+    value_indices: Vec<u32>,
+    nulls: Vec<u32>,
+    options: SortOptions,
+    limit: Option<usize>,
+) -> UInt32Array {
+    let mut valids = value_indices
+        .into_iter()
+        .map(|index| (index, values.value(index as usize)))
+        .collect::<Vec<(u32, T::Native)>>();
+    sort_impl(options, &mut valids, &nulls, limit, T::Native::compare).into()
+}
+
+fn sort_bytes<T: ByteArrayType>(
+    values: &GenericByteArray<T>,
+    value_indices: Vec<u32>,
+    nulls: Vec<u32>,
+    options: SortOptions,
+    limit: Option<usize>,
+) -> UInt32Array {
+    let mut valids = value_indices
+        .into_iter()
+        .map(|index| (index, values.value(index as usize).as_ref()))
+        .collect::<Vec<(u32, &[u8])>>();
+
+    sort_impl(options, &mut valids, &nulls, limit, Ord::cmp).into()
+}
+
+fn sort_fixed_size_binary(
+    values: &FixedSizeBinaryArray,
+    value_indices: Vec<u32>,
+    nulls: Vec<u32>,
+    options: SortOptions,
+    limit: Option<usize>,
+) -> UInt32Array {
+    let mut valids = value_indices
+        .iter()
+        .copied()
+        .map(|index| (index, values.value(index as usize)))
+        .collect::<Vec<(u32, &[u8])>>();
+    sort_impl(options, &mut valids, &nulls, limit, Ord::cmp).into()
+}
+
+fn sort_dictionary<K: ArrowDictionaryKeyType>(
+    dict: &DictionaryArray<K>,
+    value_indices: Vec<u32>,
+    null_indices: Vec<u32>,
+    options: SortOptions,
+    limit: Option<usize>,
+) -> Result<UInt32Array, ArrowError> {
+    let keys: &PrimitiveArray<K> = dict.keys();
+    let rank = child_rank(dict.values().as_ref(), options)?;
 
     // create tuples that are used for sorting
-    let valids = value_indices
+    let mut valids = value_indices
         .into_iter()
         .map(|index| {
             let key: K::Native = keys.value(index as usize);
-            (index, value_indices_map[key.as_usize()])
+            (index, rank[key.as_usize()])
         })
         .collect::<Vec<(u32, u32)>>();
 
-    sort_primitive_inner::<_, _>(keys.len(), null_indices, cmp, &options, limit, valids)
+    Ok(sort_impl(options, &mut valids, &null_indices, limit, |a, b| a.cmp(&b)).into())
 }
 
-// sort is instantiated a lot so we only compile this inner version for each native type
-fn sort_primitive_inner<T, F>(
-    value_len: usize,
+fn sort_list<O: OffsetSizeTrait>(
+    array: &GenericListArray<O>,
+    value_indices: Vec<u32>,
     null_indices: Vec<u32>,
-    cmp: F,
-    options: &SortOptions,
+    options: SortOptions,
     limit: Option<usize>,
-    mut valids: Vec<(u32, T)>,
-) -> UInt32Array
-where
-    T: ArrowNativeType,
-    T: PartialOrd,
-    F: Fn(T, T) -> Ordering,
-{
-    let mut nulls = null_indices;
-
-    let valids_len = valids.len();
-    let nulls_len = nulls.len();
-    let mut len = value_len;
-
-    if let Some(limit) = limit {
-        len = limit.min(len);
-    }
-
-    sort_valids(options.descending, &mut valids, &mut nulls, len, cmp);
-
-    // collect results directly into a buffer instead of a vec to avoid another aligned allocation
-    let result_capacity = len * std::mem::size_of::<u32>();
-    let mut result = MutableBuffer::new(result_capacity);
-    // sets len to capacity so we can access the whole buffer as a typed slice
-    result.resize(result_capacity, 0);
-    let result_slice: &mut [u32] = result.typed_data_mut();
-
-    if options.nulls_first {
-        let size = nulls_len.min(len);
-        result_slice[0..size].copy_from_slice(&nulls[0..size]);
-        if nulls_len < len {
-            insert_valid_values(result_slice, nulls_len, &valids[0..len - size]);
-        }
-    } else {
-        // nulls last
-        let size = valids.len().min(len);
-        insert_valid_values(result_slice, 0, &valids[0..size]);
-        if len > size {
-            result_slice[valids_len..].copy_from_slice(&nulls[0..(len - valids_len)]);
-        }
-    }
-
-    let result_data = unsafe {
-        ArrayData::new_unchecked(
-            DataType::UInt32,
-            len,
-            Some(0),
-            None,
-            0,
-            vec![result.into()],
-            vec![],
-        )
-    };
-
-    UInt32Array::from(result_data)
+) -> Result<UInt32Array, ArrowError> {
+    let rank = child_rank(array.values().as_ref(), options)?;
+    let offsets = array.value_offsets();
+    let mut valids = value_indices
+        .into_iter()
+        .map(|index| {
+            let end = offsets[index as usize + 1].as_usize();
+            let start = offsets[index as usize].as_usize();
+            (index, &rank[start..end])
+        })
+        .collect::<Vec<(u32, &[u32])>>();
+    Ok(sort_impl(options, &mut valids, &null_indices, limit, Ord::cmp).into())
 }
 
-// insert valid and nan values in the correct order depending on the descending flag
-fn insert_valid_values<T>(result_slice: &mut [u32], offset: usize, valids: &[(u32, T)]) {
-    let valids_len = valids.len();
-    // helper to append the index part of the valid tuples
-    let append_valids = move |dst_slice: &mut [u32]| {
-        debug_assert_eq!(dst_slice.len(), valids_len);
-        dst_slice
-            .iter_mut()
-            .zip(valids.iter())
-            .for_each(|(dst, src)| *dst = src.0)
+fn sort_fixed_size_list(
+    array: &FixedSizeListArray,
+    value_indices: Vec<u32>,
+    null_indices: Vec<u32>,
+    options: SortOptions,
+    limit: Option<usize>,
+) -> Result<UInt32Array, ArrowError> {
+    let rank = child_rank(array.values().as_ref(), options)?;
+    let size = array.value_length() as usize;
+    let mut valids = value_indices
+        .into_iter()
+        .map(|index| {
+            let start = index as usize * size;
+            (index, &rank[start..start + size])
+        })
+        .collect::<Vec<(u32, &[u32])>>();
+    Ok(sort_impl(options, &mut valids, &null_indices, limit, Ord::cmp).into())
+}
+
+#[inline(never)]
+fn sort_impl<T: ?Sized + Copy>(
+    options: SortOptions,
+    valids: &mut [(u32, T)],
+    nulls: &[u32],
+    limit: Option<usize>,
+    mut cmp: impl FnMut(T, T) -> Ordering,
+) -> Vec<u32> {
+    let v_limit = match (limit, options.nulls_first) {
+        (Some(l), true) => l.saturating_sub(nulls.len()).min(valids.len()),
+        _ => valids.len(),
     };
 
-    append_valids(&mut result_slice[offset..offset + valids.len()]);
+    match options.descending {
+        false => sort_unstable_by(valids, v_limit, |a, b| cmp(a.1, b.1)),
+        true => sort_unstable_by(valids, v_limit, |a, b| cmp(a.1, b.1).reverse()),
+    }
+
+    let len = valids.len() + nulls.len();
+    let limit = limit.unwrap_or(len).min(len);
+    let mut out = Vec::with_capacity(len);
+    match options.nulls_first {
+        true => {
+            out.extend_from_slice(&nulls[..nulls.len().min(limit)]);
+            let remaining = limit - out.len();
+            out.extend(valids.iter().map(|x| x.0).take(remaining));
+        }
+        false => {
+            out.extend(valids.iter().map(|x| x.0).take(limit));
+            let remaining = limit - out.len();
+            out.extend_from_slice(&nulls[..remaining])
+        }
+    }
+    out
+}
+
+/// Computes the rank for a set of child values
+fn child_rank(values: &dyn Array, options: SortOptions) -> Result<Vec<u32>, ArrowError> {
+    // If parent sort order is descending we need to invert the value of nulls_first so that
+    // when the parent is sorted based on the produced ranks, nulls are still ordered correctly
+    let value_options = Some(SortOptions {
+        descending: false,
+        nulls_first: options.nulls_first != options.descending,
+    });
+    rank(values, value_options)
 }
 
 // Sort run array and return sorted run array.
@@ -654,8 +449,7 @@ fn sort_run_downcasted<R: RunEndIndexType>(
         new_run_ends_builder.append(R::Native::from_usize(new_run_end).unwrap());
     };
 
-    let (values_indices, run_values) =
-        sort_run_inner(run_array, options, output_len, consume_runs);
+    let (values_indices, run_values) = sort_run_inner(run_array, options, output_len, consume_runs);
 
     let new_run_ends = unsafe {
         // Safety:
@@ -693,7 +487,7 @@ fn sort_run_downcasted<R: RunEndIndexType>(
 // encoded back to run array.
 fn sort_run_to_indices<R: RunEndIndexType>(
     values: &dyn Array,
-    options: &SortOptions,
+    options: SortOptions,
     limit: Option<usize>,
 ) -> UInt32Array {
     let run_array = values.as_any().downcast_ref::<RunArray<R>>().unwrap();
@@ -708,7 +502,7 @@ fn sort_run_to_indices<R: RunEndIndexType>(
     let consume_runs = |run_length, logical_start| {
         result.extend(logical_start as u32..(logical_start + run_length) as u32);
     };
-    sort_run_inner(run_array, Some(*options), output_len, consume_runs);
+    sort_run_inner(run_array, Some(options), output_len, consume_runs);
 
     UInt32Array::from(result)
 }
@@ -757,8 +551,7 @@ where
             // and len, both of which are within bounds of run_array
             if physical_index == start_physical_index {
                 (
-                    run_ends.get_unchecked(physical_index).as_usize()
-                        - run_array.offset(),
+                    run_ends.get_unchecked(physical_index).as_usize() - run_array.offset(),
                     0,
                 )
             } else if physical_index == end_physical_index {
@@ -788,223 +581,6 @@ where
         panic!("Remaining length should be zero its values is {remaining_len}")
     }
     (values_indices, run_values)
-}
-
-/// Sort strings
-fn sort_string<Offset: OffsetSizeTrait>(
-    values: &dyn Array,
-    value_indices: Vec<u32>,
-    null_indices: Vec<u32>,
-    options: &SortOptions,
-    limit: Option<usize>,
-) -> UInt32Array {
-    let values = values
-        .as_any()
-        .downcast_ref::<GenericStringArray<Offset>>()
-        .unwrap();
-
-    sort_string_helper(
-        values,
-        value_indices,
-        null_indices,
-        options,
-        limit,
-        |array, idx| array.value(idx as usize),
-    )
-}
-
-/// Sort dictionary encoded strings
-fn sort_string_dictionary<T: ArrowDictionaryKeyType>(
-    values: &DictionaryArray<T>,
-    value_indices_map: &[u32],
-    value_indices: Vec<u32>,
-    null_indices: Vec<u32>,
-    options: &SortOptions,
-    limit: Option<usize>,
-) -> UInt32Array {
-    let keys: &PrimitiveArray<T> = values.keys();
-
-    // create tuples that are used for sorting
-    let valids = value_indices
-        .into_iter()
-        .map(|index| {
-            let key: T::Native = keys.value(index as usize);
-            (index, value_indices_map[key.as_usize()])
-        })
-        .collect::<Vec<(u32, u32)>>();
-
-    sort_primitive_inner::<_, _>(keys.len(), null_indices, cmp, options, limit, valids)
-}
-
-/// shared implementation between dictionary encoded and plain string arrays
-#[inline]
-fn sort_string_helper<'a, A: Array, F>(
-    values: &'a A,
-    value_indices: Vec<u32>,
-    null_indices: Vec<u32>,
-    options: &SortOptions,
-    limit: Option<usize>,
-    value_fn: F,
-) -> UInt32Array
-where
-    F: Fn(&'a A, u32) -> &str,
-{
-    let mut valids = value_indices
-        .into_iter()
-        .map(|index| (index, value_fn(values, index)))
-        .collect::<Vec<(u32, &str)>>();
-    let mut nulls = null_indices;
-    let descending = options.descending;
-    let mut len = values.len();
-
-    if let Some(limit) = limit {
-        len = limit.min(len);
-    }
-
-    sort_valids(descending, &mut valids, &mut nulls, len, cmp);
-    // collect the order of valid tuplies
-    let mut valid_indices: Vec<u32> = valids.iter().map(|tuple| tuple.0).collect();
-
-    if options.nulls_first {
-        nulls.append(&mut valid_indices);
-        nulls.truncate(len);
-        UInt32Array::from(nulls)
-    } else {
-        // no need to sort nulls as they are in the correct order already
-        valid_indices.append(&mut nulls);
-        valid_indices.truncate(len);
-        UInt32Array::from(valid_indices)
-    }
-}
-
-fn sort_list<S>(
-    values: &dyn Array,
-    value_indices: Vec<u32>,
-    null_indices: Vec<u32>,
-    options: &SortOptions,
-    limit: Option<usize>,
-) -> UInt32Array
-where
-    S: OffsetSizeTrait,
-{
-    sort_list_inner::<S>(values, value_indices, null_indices, options, limit)
-}
-
-fn sort_list_inner<S>(
-    values: &dyn Array,
-    value_indices: Vec<u32>,
-    mut null_indices: Vec<u32>,
-    options: &SortOptions,
-    limit: Option<usize>,
-) -> UInt32Array
-where
-    S: OffsetSizeTrait,
-{
-    let mut valids: Vec<(u32, ArrayRef)> = values
-        .as_any()
-        .downcast_ref::<FixedSizeListArray>()
-        .map_or_else(
-            || {
-                let values = as_generic_list_array::<S>(values);
-                value_indices
-                    .iter()
-                    .copied()
-                    .map(|index| (index, values.value(index as usize)))
-                    .collect()
-            },
-            |values| {
-                value_indices
-                    .iter()
-                    .copied()
-                    .map(|index| (index, values.value(index as usize)))
-                    .collect()
-            },
-        );
-
-    let mut len = values.len();
-    let descending = options.descending;
-
-    if let Some(limit) = limit {
-        len = limit.min(len);
-    }
-    sort_valids_array(descending, &mut valids, &mut null_indices, len);
-
-    let mut valid_indices: Vec<u32> = valids.iter().map(|tuple| tuple.0).collect();
-    if options.nulls_first {
-        null_indices.append(&mut valid_indices);
-        null_indices.truncate(len);
-        UInt32Array::from(null_indices)
-    } else {
-        valid_indices.append(&mut null_indices);
-        valid_indices.truncate(len);
-        UInt32Array::from(valid_indices)
-    }
-}
-
-fn sort_binary<S>(
-    values: &dyn Array,
-    value_indices: Vec<u32>,
-    mut null_indices: Vec<u32>,
-    options: &SortOptions,
-    limit: Option<usize>,
-) -> UInt32Array
-where
-    S: OffsetSizeTrait,
-{
-    let mut valids: Vec<(u32, &[u8])> = values
-        .as_any()
-        .downcast_ref::<FixedSizeBinaryArray>()
-        .map_or_else(
-            || {
-                let values = as_generic_binary_array::<S>(values);
-                value_indices
-                    .iter()
-                    .copied()
-                    .map(|index| (index, values.value(index as usize)))
-                    .collect()
-            },
-            |values| {
-                value_indices
-                    .iter()
-                    .copied()
-                    .map(|index| (index, values.value(index as usize)))
-                    .collect()
-            },
-        );
-
-    let mut len = values.len();
-    let descending = options.descending;
-
-    if let Some(limit) = limit {
-        len = limit.min(len);
-    }
-
-    sort_valids(descending, &mut valids, &mut null_indices, len, cmp);
-
-    let mut valid_indices: Vec<u32> = valids.iter().map(|tuple| tuple.0).collect();
-    if options.nulls_first {
-        null_indices.append(&mut valid_indices);
-        null_indices.truncate(len);
-        UInt32Array::from(null_indices)
-    } else {
-        valid_indices.append(&mut null_indices);
-        valid_indices.truncate(len);
-        UInt32Array::from(valid_indices)
-    }
-}
-
-/// Compare two `Array`s based on the ordering defined in [build_compare]
-fn cmp_array(a: &dyn Array, b: &dyn Array) -> Ordering {
-    let cmp_op = build_compare(a, b).unwrap();
-    let length = a.len().max(b.len());
-
-    for i in 0..length {
-        let result = cmp_op(i, i);
-        if result != Ordering::Equal {
-            return result;
-        }
-    }
-    Ordering::Equal
 }
 
 /// One column to be used in lexicographical sort
@@ -1061,13 +637,10 @@ pub struct SortColumn {
 /// assert!(sorted_columns[0].is_null(0));
 /// ```
 ///
-/// Note: for multi-column sorts without a limit, using the [row format](https://docs.rs/arrow/latest/arrow/row/)
+/// Note: for multi-column sorts without a limit, using the [row format](https://docs.rs/arrow-row/latest/arrow_row/)
 /// may be significantly faster
 ///
-pub fn lexsort(
-    columns: &[SortColumn],
-    limit: Option<usize>,
-) -> Result<Vec<ArrayRef>, ArrowError> {
+pub fn lexsort(columns: &[SortColumn], limit: Option<usize>) -> Result<Vec<ArrayRef>, ArrowError> {
     let indices = lexsort_to_indices(columns, limit)?;
     columns
         .iter()
@@ -1078,7 +651,7 @@ pub fn lexsort(
 /// Sort elements lexicographically from a list of `ArrayRef` into an unsigned integer
 /// (`UInt32Array`) of indices.
 ///
-/// Note: for multi-column sorts without a limit, using the [row format](https://docs.rs/arrow/latest/arrow/row/)
+/// Note: for multi-column sorts without a limit, using the [row format](https://docs.rs/arrow-row/latest/arrow_row/)
 /// may be significantly faster
 pub fn lexsort_to_indices(
     columns: &[SortColumn],
@@ -1125,23 +698,25 @@ pub fn partial_sort<T, F>(v: &mut [T], limit: usize, mut is_less: F)
 where
     F: FnMut(&T, &T) -> Ordering,
 {
-    let (before, _mid, _after) = v.select_nth_unstable_by(limit, &mut is_less);
-    before.sort_unstable_by(is_less);
+    if let Some(n) = limit.checked_sub(1) {
+        let (before, _mid, _after) = v.select_nth_unstable_by(n, &mut is_less);
+        before.sort_unstable_by(is_less);
+    }
 }
 
-type LexicographicalCompareItem<'a> = (
-    Option<&'a NullBuffer>, // nulls
-    DynComparator,          // comparator
-    SortOptions,            // sort_option
+type LexicographicalCompareItem = (
+    Option<NullBuffer>, // nulls
+    DynComparator,      // comparator
+    SortOptions,        // sort_option
 );
 
 /// A lexicographical comparator that wraps given array data (columns) and can lexicographically compare data
 /// at given two indices. The lifetime is the same at the data wrapped.
-pub struct LexicographicalComparator<'a> {
-    compare_items: Vec<LexicographicalCompareItem<'a>>,
+pub struct LexicographicalComparator {
+    compare_items: Vec<LexicographicalCompareItem>,
 }
 
-impl LexicographicalComparator<'_> {
+impl LexicographicalComparator {
     /// lexicographically compare values at the wrapped columns with given indices.
     pub fn compare(&self, a_idx: usize, b_idx: usize) -> Ordering {
         for (nulls, comparator, sort_option) in &self.compare_items {
@@ -1188,16 +763,14 @@ impl LexicographicalComparator<'_> {
 
     /// Create a new lex comparator that will wrap the given sort columns and give comparison
     /// results with two indices.
-    pub fn try_new(
-        columns: &[SortColumn],
-    ) -> Result<LexicographicalComparator<'_>, ArrowError> {
+    pub fn try_new(columns: &[SortColumn]) -> Result<LexicographicalComparator, ArrowError> {
         let compare_items = columns
             .iter()
             .map(|column| {
                 // flatten and convert build comparators
                 let values = column.values.as_ref();
                 Ok((
-                    values.nulls(),
+                    values.logical_nulls(),
                     build_compare(values, values)?,
                     column.options.unwrap_or_default(),
                 ))
@@ -1207,54 +780,16 @@ impl LexicographicalComparator<'_> {
     }
 }
 
-fn sort_valids<T, U>(
-    descending: bool,
-    valids: &mut [(u32, T)],
-    nulls: &mut [U],
-    len: usize,
-    mut cmp: impl FnMut(T, T) -> Ordering,
-) where
-    T: ?Sized + Copy,
-{
-    let valids_len = valids.len();
-    if !descending {
-        sort_unstable_by(valids, len.min(valids_len), |a, b| cmp(a.1, b.1));
-    } else {
-        sort_unstable_by(valids, len.min(valids_len), |a, b| cmp(a.1, b.1).reverse());
-        // reverse to keep a stable ordering
-        nulls.reverse();
-    }
-}
-
-fn sort_valids_array<T>(
-    descending: bool,
-    valids: &mut [(u32, ArrayRef)],
-    nulls: &mut [T],
-    len: usize,
-) {
-    let valids_len = valids.len();
-    if !descending {
-        sort_unstable_by(valids, len.min(valids_len), |a, b| {
-            cmp_array(a.1.as_ref(), b.1.as_ref())
-        });
-    } else {
-        sort_unstable_by(valids, len.min(valids_len), |a, b| {
-            cmp_array(a.1.as_ref(), b.1.as_ref()).reverse()
-        });
-        // reverse to keep a stable ordering
-        nulls.reverse();
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow_array::builder::PrimitiveRunBuilder;
+    use arrow_array::builder::{
+        FixedSizeListBuilder, Int64Builder, ListBuilder, PrimitiveRunBuilder,
+    };
     use arrow_buffer::i256;
     use half::f16;
     use rand::rngs::StdRng;
     use rand::{Rng, RngCore, SeedableRng};
-    use std::convert::TryFrom;
     use std::sync::Arc;
 
     fn create_decimal128_array(data: Vec<Option<i128>>) -> Decimal128Array {
@@ -1279,8 +814,7 @@ mod tests {
     ) {
         let output = create_decimal128_array(data);
         let expected = UInt32Array::from(expected_data);
-        let output =
-            sort_to_indices(&(Arc::new(output) as ArrayRef), options, limit).unwrap();
+        let output = sort_to_indices(&(Arc::new(output) as ArrayRef), options, limit).unwrap();
         assert_eq!(output, expected)
     }
 
@@ -1292,8 +826,7 @@ mod tests {
     ) {
         let output = create_decimal256_array(data);
         let expected = UInt32Array::from(expected_data);
-        let output =
-            sort_to_indices(&(Arc::new(output) as ArrayRef), options, limit).unwrap();
+        let output = sort_to_indices(&(Arc::new(output) as ArrayRef), options, limit).unwrap();
         assert_eq!(output, expected)
     }
 
@@ -1306,9 +839,7 @@ mod tests {
         let output = create_decimal128_array(data);
         let expected = Arc::new(create_decimal128_array(expected_data)) as ArrayRef;
         let output = match limit {
-            Some(_) => {
-                sort_limit(&(Arc::new(output) as ArrayRef), options, limit).unwrap()
-            }
+            Some(_) => sort_limit(&(Arc::new(output) as ArrayRef), options, limit).unwrap(),
             _ => sort(&(Arc::new(output) as ArrayRef), options).unwrap(),
         };
         assert_eq!(&output, &expected)
@@ -1323,9 +854,7 @@ mod tests {
         let output = create_decimal256_array(data);
         let expected = Arc::new(create_decimal256_array(expected_data)) as ArrayRef;
         let output = match limit {
-            Some(_) => {
-                sort_limit(&(Arc::new(output) as ArrayRef), options, limit).unwrap()
-            }
+            Some(_) => sort_limit(&(Arc::new(output) as ArrayRef), options, limit).unwrap(),
             _ => sort(&(Arc::new(output) as ArrayRef), options).unwrap(),
         };
         assert_eq!(&output, &expected)
@@ -1339,8 +868,7 @@ mod tests {
     ) {
         let output = BooleanArray::from(data);
         let expected = UInt32Array::from(expected_data);
-        let output =
-            sort_to_indices(&(Arc::new(output) as ArrayRef), options, limit).unwrap();
+        let output = sort_to_indices(&(Arc::new(output) as ArrayRef), options, limit).unwrap();
         assert_eq!(output, expected)
     }
 
@@ -1355,8 +883,7 @@ mod tests {
     {
         let output = PrimitiveArray::<T>::from(data);
         let expected = UInt32Array::from(expected_data);
-        let output =
-            sort_to_indices(&(Arc::new(output) as ArrayRef), options, limit).unwrap();
+        let output = sort_to_indices(&(Arc::new(output) as ArrayRef), options, limit).unwrap();
         assert_eq!(output, expected)
     }
 
@@ -1372,9 +899,7 @@ mod tests {
         let output = PrimitiveArray::<T>::from(data);
         let expected = Arc::new(PrimitiveArray::<T>::from(expected_data)) as ArrayRef;
         let output = match limit {
-            Some(_) => {
-                sort_limit(&(Arc::new(output) as ArrayRef), options, limit).unwrap()
-            }
+            Some(_) => sort_limit(&(Arc::new(output) as ArrayRef), options, limit).unwrap(),
             _ => sort(&(Arc::new(output) as ArrayRef), options).unwrap(),
         };
         assert_eq!(&output, &expected)
@@ -1388,8 +913,7 @@ mod tests {
     ) {
         let output = StringArray::from(data);
         let expected = UInt32Array::from(expected_data);
-        let output =
-            sort_to_indices(&(Arc::new(output) as ArrayRef), options, limit).unwrap();
+        let output = sort_to_indices(&(Arc::new(output) as ArrayRef), options, limit).unwrap();
         assert_eq!(output, expected)
     }
 
@@ -1403,9 +927,7 @@ mod tests {
         let output = StringArray::from(data.clone());
         let expected = Arc::new(StringArray::from(expected_data.clone())) as ArrayRef;
         let output = match limit {
-            Some(_) => {
-                sort_limit(&(Arc::new(output) as ArrayRef), options, limit).unwrap()
-            }
+            Some(_) => sort_limit(&(Arc::new(output) as ArrayRef), options, limit).unwrap(),
             _ => sort(&(Arc::new(output) as ArrayRef), options).unwrap(),
         };
         assert_eq!(&output, &expected);
@@ -1413,9 +935,7 @@ mod tests {
         let output = LargeStringArray::from(data);
         let expected = Arc::new(LargeStringArray::from(expected_data)) as ArrayRef;
         let output = match limit {
-            Some(_) => {
-                sort_limit(&(Arc::new(output) as ArrayRef), options, limit).unwrap()
-            }
+            Some(_) => sort_limit(&(Arc::new(output) as ArrayRef), options, limit).unwrap(),
             _ => sort(&(Arc::new(output) as ArrayRef), options).unwrap(),
         };
         assert_eq!(&output, &expected)
@@ -1435,9 +955,7 @@ mod tests {
             .expect("Unable to get dictionary values");
 
         let sorted = match limit {
-            Some(_) => {
-                sort_limit(&(Arc::new(array) as ArrayRef), options, limit).unwrap()
-            }
+            Some(_) => sort_limit(&(Arc::new(array) as ArrayRef), options, limit).unwrap(),
             _ => sort(&(Arc::new(array) as ArrayRef), options).unwrap(),
         };
         let sorted = sorted
@@ -1453,20 +971,14 @@ mod tests {
 
         assert_eq!(sorted_dict, dict);
 
-        let sorted_strings = StringArray::try_from(
-            (0..sorted.len())
-                .map(|i| {
-                    if sorted.is_valid(i) {
-                        Some(sorted_dict.value(sorted_keys.value(i).as_usize()))
-                    } else {
-                        None
-                    }
-                })
-                .collect::<Vec<Option<&str>>>(),
-        )
-        .expect("Unable to create string array from dictionary");
-        let expected =
-            StringArray::try_from(expected_data).expect("Unable to create string array");
+        let sorted_strings = StringArray::from_iter((0..sorted.len()).map(|i| {
+            if sorted.is_valid(i) {
+                Some(sorted_dict.value(sorted_keys.value(i).as_usize()))
+            } else {
+                None
+            }
+        }));
+        let expected = StringArray::from(expected_data);
 
         assert_eq!(sorted_strings, expected)
     }
@@ -1485,9 +997,7 @@ mod tests {
         let dict = array_values.as_primitive::<T>();
 
         let sorted = match limit {
-            Some(_) => {
-                sort_limit(&(Arc::new(array) as ArrayRef), options, limit).unwrap()
-            }
+            Some(_) => sort_limit(&(Arc::new(array) as ArrayRef), options, limit).unwrap(),
             _ => sort(&(Arc::new(array) as ArrayRef), options).unwrap(),
         };
         let sorted = sorted
@@ -1515,8 +1025,7 @@ mod tests {
                 })
                 .collect::<Vec<Option<T::Native>>>(),
         );
-        let expected: PrimitiveArray<T> =
-            From::<Vec<Option<T::Native>>>::from(expected_data);
+        let expected: PrimitiveArray<T> = From::<Vec<Option<T::Native>>>::from(expected_data);
 
         assert_eq!(sorted_values, expected)
     }
@@ -1587,11 +1096,7 @@ mod tests {
     }
 
     /// slice all arrays in expected_output to offset/length
-    fn slice_arrays(
-        expected_output: Vec<ArrayRef>,
-        offset: usize,
-        length: usize,
-    ) -> Vec<ArrayRef> {
+    fn slice_arrays(expected_output: Vec<ArrayRef>, offset: usize, length: usize) -> Vec<ArrayRef> {
         expected_output
             .into_iter()
             .map(|array| array.slice(offset, length))
@@ -1608,11 +1113,8 @@ mod tests {
         // Fixed size binary array
         if let Some(length) = fixed_length {
             let input = Arc::new(
-                FixedSizeBinaryArray::try_from_sparse_iter_with_size(
-                    data.iter().cloned(),
-                    length,
-                )
-                .unwrap(),
+                FixedSizeBinaryArray::try_from_sparse_iter_with_size(data.iter().cloned(), length)
+                    .unwrap(),
             );
             let sorted = match limit {
                 Some(_) => sort_limit(&(input as ArrayRef), options, limit).unwrap(),
@@ -1733,7 +1235,7 @@ mod tests {
                 nulls_first: false,
             }),
             None,
-            vec![2, 1, 4, 3, 5, 0], // [2, 4, 1, 3, 5, 0]
+            vec![2, 1, 4, 3, 0, 5],
         );
 
         test_sort_to_indices_primitive_arrays::<Int16Type>(
@@ -1743,7 +1245,7 @@ mod tests {
                 nulls_first: false,
             }),
             None,
-            vec![2, 1, 4, 3, 5, 0],
+            vec![2, 1, 4, 3, 0, 5],
         );
 
         test_sort_to_indices_primitive_arrays::<Int32Type>(
@@ -1753,7 +1255,7 @@ mod tests {
                 nulls_first: false,
             }),
             None,
-            vec![2, 1, 4, 3, 5, 0],
+            vec![2, 1, 4, 3, 0, 5],
         );
 
         test_sort_to_indices_primitive_arrays::<Int64Type>(
@@ -1763,7 +1265,7 @@ mod tests {
                 nulls_first: false,
             }),
             None,
-            vec![2, 1, 4, 3, 5, 0],
+            vec![2, 1, 4, 3, 0, 5],
         );
 
         test_sort_to_indices_primitive_arrays::<Float16Type>(
@@ -1780,7 +1282,7 @@ mod tests {
                 nulls_first: false,
             }),
             None,
-            vec![2, 1, 4, 3, 5, 0],
+            vec![2, 1, 4, 3, 0, 5],
         );
 
         test_sort_to_indices_primitive_arrays::<Float32Type>(
@@ -1797,7 +1299,7 @@ mod tests {
                 nulls_first: false,
             }),
             None,
-            vec![2, 1, 4, 3, 5, 0],
+            vec![2, 1, 4, 3, 0, 5],
         );
 
         test_sort_to_indices_primitive_arrays::<Float64Type>(
@@ -1807,7 +1309,7 @@ mod tests {
                 nulls_first: false,
             }),
             None,
-            vec![2, 1, 4, 3, 5, 0],
+            vec![2, 1, 4, 3, 0, 5],
         );
 
         // descending, nulls first
@@ -1818,7 +1320,7 @@ mod tests {
                 nulls_first: true,
             }),
             None,
-            vec![5, 0, 2, 1, 4, 3], // [5, 0, 2, 4, 1, 3]
+            vec![0, 5, 2, 1, 4, 3], // [5, 0, 2, 4, 1, 3]
         );
 
         test_sort_to_indices_primitive_arrays::<Int16Type>(
@@ -1828,7 +1330,7 @@ mod tests {
                 nulls_first: true,
             }),
             None,
-            vec![5, 0, 2, 1, 4, 3], // [5, 0, 2, 4, 1, 3]
+            vec![0, 5, 2, 1, 4, 3], // [5, 0, 2, 4, 1, 3]
         );
 
         test_sort_to_indices_primitive_arrays::<Int32Type>(
@@ -1838,7 +1340,7 @@ mod tests {
                 nulls_first: true,
             }),
             None,
-            vec![5, 0, 2, 1, 4, 3],
+            vec![0, 5, 2, 1, 4, 3],
         );
 
         test_sort_to_indices_primitive_arrays::<Int64Type>(
@@ -1848,7 +1350,7 @@ mod tests {
                 nulls_first: true,
             }),
             None,
-            vec![5, 0, 2, 1, 4, 3],
+            vec![0, 5, 2, 1, 4, 3],
         );
 
         test_sort_to_indices_primitive_arrays::<Float16Type>(
@@ -1865,7 +1367,7 @@ mod tests {
                 nulls_first: true,
             }),
             None,
-            vec![5, 0, 2, 1, 4, 3],
+            vec![0, 5, 2, 1, 4, 3],
         );
 
         test_sort_to_indices_primitive_arrays::<Float32Type>(
@@ -1875,7 +1377,7 @@ mod tests {
                 nulls_first: true,
             }),
             None,
-            vec![5, 0, 2, 1, 4, 3],
+            vec![0, 5, 2, 1, 4, 3],
         );
 
         test_sort_to_indices_primitive_arrays::<Float64Type>(
@@ -1885,7 +1387,7 @@ mod tests {
                 nulls_first: true,
             }),
             None,
-            vec![5, 0, 2, 1, 4, 3],
+            vec![0, 5, 2, 1, 4, 3],
         );
 
         // valid values less than limit with extra nulls
@@ -1962,7 +1464,7 @@ mod tests {
                 nulls_first: false,
             }),
             None,
-            vec![2, 3, 1, 4, 5, 0],
+            vec![2, 3, 1, 4, 0, 5],
         );
 
         // boolean, descending, nulls first
@@ -1973,7 +1475,7 @@ mod tests {
                 nulls_first: true,
             }),
             None,
-            vec![5, 0, 2, 3, 1, 4],
+            vec![0, 5, 2, 3, 1, 4],
         );
 
         // boolean, descending, nulls first, limit
@@ -1984,7 +1486,7 @@ mod tests {
                 nulls_first: true,
             }),
             Some(3),
-            vec![5, 0, 2],
+            vec![0, 5, 2],
         );
 
         // valid values less than limit with extra nulls
@@ -2047,7 +1549,7 @@ mod tests {
                 nulls_first: false,
             }),
             None,
-            vec![1, 5, 3, 2, 4, 6, 0],
+            vec![1, 5, 3, 2, 4, 0, 6],
         );
         // decimal null_first and descending
         test_sort_to_indices_decimal128_array(
@@ -2057,7 +1559,7 @@ mod tests {
                 nulls_first: true,
             }),
             None,
-            vec![6, 0, 1, 5, 3, 2, 4],
+            vec![0, 6, 1, 5, 3, 2, 4],
         );
         // decimal null_first
         test_sort_to_indices_decimal128_array(
@@ -2094,7 +1596,7 @@ mod tests {
                 nulls_first: true,
             }),
             Some(3),
-            vec![6, 0, 1],
+            vec![0, 6, 1],
         );
         // limit null_first
         test_sort_to_indices_decimal128_array(
@@ -2110,48 +1612,41 @@ mod tests {
 
     #[test]
     fn test_sort_indices_decimal256() {
+        let data = vec![
+            None,
+            Some(i256::from_i128(5)),
+            Some(i256::from_i128(2)),
+            Some(i256::from_i128(3)),
+            Some(i256::from_i128(1)),
+            Some(i256::from_i128(4)),
+            None,
+        ];
+
         // decimal default
-        test_sort_to_indices_decimal256_array(
-            vec![None, Some(5), Some(2), Some(3), Some(1), Some(4), None]
-                .iter()
-                .map(|v| v.map(i256::from_i128))
-                .collect(),
-            None,
-            None,
-            vec![0, 6, 4, 2, 3, 5, 1],
-        );
+        test_sort_to_indices_decimal256_array(data.clone(), None, None, vec![0, 6, 4, 2, 3, 5, 1]);
         // decimal descending
         test_sort_to_indices_decimal256_array(
-            vec![None, Some(5), Some(2), Some(3), Some(1), Some(4), None]
-                .iter()
-                .map(|v| v.map(i256::from_i128))
-                .collect(),
+            data.clone(),
             Some(SortOptions {
                 descending: true,
                 nulls_first: false,
             }),
             None,
-            vec![1, 5, 3, 2, 4, 6, 0],
+            vec![1, 5, 3, 2, 4, 0, 6],
         );
         // decimal null_first and descending
         test_sort_to_indices_decimal256_array(
-            vec![None, Some(5), Some(2), Some(3), Some(1), Some(4), None]
-                .iter()
-                .map(|v| v.map(i256::from_i128))
-                .collect(),
+            data.clone(),
             Some(SortOptions {
                 descending: true,
                 nulls_first: true,
             }),
             None,
-            vec![6, 0, 1, 5, 3, 2, 4],
+            vec![0, 6, 1, 5, 3, 2, 4],
         );
         // decimal null_first
         test_sort_to_indices_decimal256_array(
-            vec![None, Some(5), Some(2), Some(3), Some(1), Some(4), None]
-                .iter()
-                .map(|v| v.map(i256::from_i128))
-                .collect(),
+            data.clone(),
             Some(SortOptions {
                 descending: false,
                 nulls_first: true,
@@ -2160,21 +1655,10 @@ mod tests {
             vec![0, 6, 4, 2, 3, 5, 1],
         );
         // limit
-        test_sort_to_indices_decimal256_array(
-            vec![None, Some(5), Some(2), Some(3), Some(1), Some(4), None]
-                .iter()
-                .map(|v| v.map(i256::from_i128))
-                .collect(),
-            None,
-            Some(3),
-            vec![0, 6, 4],
-        );
+        test_sort_to_indices_decimal256_array(data.clone(), None, Some(3), vec![0, 6, 4]);
         // limit descending
         test_sort_to_indices_decimal256_array(
-            vec![None, Some(5), Some(2), Some(3), Some(1), Some(4), None]
-                .iter()
-                .map(|v| v.map(i256::from_i128))
-                .collect(),
+            data.clone(),
             Some(SortOptions {
                 descending: true,
                 nulls_first: false,
@@ -2184,23 +1668,17 @@ mod tests {
         );
         // limit descending null_first
         test_sort_to_indices_decimal256_array(
-            vec![None, Some(5), Some(2), Some(3), Some(1), Some(4), None]
-                .iter()
-                .map(|v| v.map(i256::from_i128))
-                .collect(),
+            data.clone(),
             Some(SortOptions {
                 descending: true,
                 nulls_first: true,
             }),
             Some(3),
-            vec![6, 0, 1],
+            vec![0, 6, 1],
         );
         // limit null_first
         test_sort_to_indices_decimal256_array(
-            vec![None, Some(5), Some(2), Some(3), Some(1), Some(4), None]
-                .iter()
-                .map(|v| v.map(i256::from_i128))
-                .collect(),
+            data,
             Some(SortOptions {
                 descending: false,
                 nulls_first: true,
@@ -2212,14 +1690,15 @@ mod tests {
 
     #[test]
     fn test_sort_indices_decimal256_max_min() {
+        let data = vec![
+            None,
+            Some(i256::MIN),
+            Some(i256::from_i128(1)),
+            Some(i256::MAX),
+            Some(i256::from_i128(-1)),
+        ];
         test_sort_to_indices_decimal256_array(
-            vec![
-                None,
-                Some(i256::MIN),
-                Some(i256::from_i128(1)),
-                Some(i256::MAX),
-                Some(i256::from_i128(-1)),
-            ],
+            data.clone(),
             Some(SortOptions {
                 descending: false,
                 nulls_first: true,
@@ -2229,13 +1708,7 @@ mod tests {
         );
 
         test_sort_to_indices_decimal256_array(
-            vec![
-                None,
-                Some(i256::MIN),
-                Some(i256::from_i128(1)),
-                Some(i256::MAX),
-                Some(i256::from_i128(-1)),
-            ],
+            data.clone(),
             Some(SortOptions {
                 descending: true,
                 nulls_first: true,
@@ -2245,13 +1718,7 @@ mod tests {
         );
 
         test_sort_to_indices_decimal256_array(
-            vec![
-                None,
-                Some(i256::MIN),
-                Some(i256::from_i128(1)),
-                Some(i256::MAX),
-                Some(i256::from_i128(-1)),
-            ],
+            data.clone(),
             Some(SortOptions {
                 descending: false,
                 nulls_first: true,
@@ -2261,13 +1728,7 @@ mod tests {
         );
 
         test_sort_to_indices_decimal256_array(
-            vec![
-                None,
-                Some(i256::MIN),
-                Some(i256::from_i128(1)),
-                Some(i256::MAX),
-                Some(i256::from_i128(-1)),
-            ],
+            data.clone(),
             Some(SortOptions {
                 descending: true,
                 nulls_first: true,
@@ -2357,124 +1818,109 @@ mod tests {
 
     #[test]
     fn test_sort_decimal256() {
+        let data = vec![
+            None,
+            Some(i256::from_i128(5)),
+            Some(i256::from_i128(2)),
+            Some(i256::from_i128(3)),
+            Some(i256::from_i128(1)),
+            Some(i256::from_i128(4)),
+            None,
+        ];
         // decimal default
         test_sort_decimal256_array(
-            vec![None, Some(5), Some(2), Some(3), Some(1), Some(4), None]
-                .iter()
-                .map(|v| v.map(i256::from_i128))
-                .collect(),
+            data.clone(),
             None,
             None,
-            vec![None, None, Some(1), Some(2), Some(3), Some(4), Some(5)]
+            [None, None, Some(1), Some(2), Some(3), Some(4), Some(5)]
                 .iter()
                 .map(|v| v.map(i256::from_i128))
                 .collect(),
         );
         // decimal descending
         test_sort_decimal256_array(
-            vec![None, Some(5), Some(2), Some(3), Some(1), Some(4), None]
-                .iter()
-                .map(|v| v.map(i256::from_i128))
-                .collect(),
+            data.clone(),
             Some(SortOptions {
                 descending: true,
                 nulls_first: false,
             }),
             None,
-            vec![Some(5), Some(4), Some(3), Some(2), Some(1), None, None]
+            [Some(5), Some(4), Some(3), Some(2), Some(1), None, None]
                 .iter()
                 .map(|v| v.map(i256::from_i128))
                 .collect(),
         );
         // decimal null_first and descending
         test_sort_decimal256_array(
-            vec![None, Some(5), Some(2), Some(3), Some(1), Some(4), None]
-                .iter()
-                .map(|v| v.map(i256::from_i128))
-                .collect(),
+            data.clone(),
             Some(SortOptions {
                 descending: true,
                 nulls_first: true,
             }),
             None,
-            vec![None, None, Some(5), Some(4), Some(3), Some(2), Some(1)]
+            [None, None, Some(5), Some(4), Some(3), Some(2), Some(1)]
                 .iter()
                 .map(|v| v.map(i256::from_i128))
                 .collect(),
         );
         // decimal null_first
         test_sort_decimal256_array(
-            vec![None, Some(5), Some(2), Some(3), Some(1), Some(4), None]
-                .iter()
-                .map(|v| v.map(i256::from_i128))
-                .collect(),
+            data.clone(),
             Some(SortOptions {
                 descending: false,
                 nulls_first: true,
             }),
             None,
-            vec![None, None, Some(1), Some(2), Some(3), Some(4), Some(5)]
+            [None, None, Some(1), Some(2), Some(3), Some(4), Some(5)]
                 .iter()
                 .map(|v| v.map(i256::from_i128))
                 .collect(),
         );
         // limit
         test_sort_decimal256_array(
-            vec![None, Some(5), Some(2), Some(3), Some(1), Some(4), None]
-                .iter()
-                .map(|v| v.map(i256::from_i128))
-                .collect(),
+            data.clone(),
             None,
             Some(3),
-            vec![None, None, Some(1)]
+            [None, None, Some(1)]
                 .iter()
                 .map(|v| v.map(i256::from_i128))
                 .collect(),
         );
         // limit descending
         test_sort_decimal256_array(
-            vec![None, Some(5), Some(2), Some(3), Some(1), Some(4), None]
-                .iter()
-                .map(|v| v.map(i256::from_i128))
-                .collect(),
+            data.clone(),
             Some(SortOptions {
                 descending: true,
                 nulls_first: false,
             }),
             Some(3),
-            vec![Some(5), Some(4), Some(3)]
+            [Some(5), Some(4), Some(3)]
                 .iter()
                 .map(|v| v.map(i256::from_i128))
                 .collect(),
         );
         // limit descending null_first
         test_sort_decimal256_array(
-            vec![None, Some(5), Some(2), Some(3), Some(1), Some(4), None]
-                .iter()
-                .map(|v| v.map(i256::from_i128))
-                .collect(),
+            data.clone(),
             Some(SortOptions {
                 descending: true,
                 nulls_first: true,
             }),
             Some(3),
-            vec![None, None, Some(5)]
+            [None, None, Some(5)]
                 .iter()
                 .map(|v| v.map(i256::from_i128))
                 .collect(),
         );
         // limit null_first
         test_sort_decimal256_array(
-            vec![None, Some(5), Some(2), Some(3), Some(1), Some(4), None]
-                .iter()
-                .map(|v| v.map(i256::from_i128))
-                .collect(),
+            data,
             Some(SortOptions {
                 descending: false,
                 nulls_first: true,
             }),
             Some(3),
-            vec![None, None, Some(1)]
+            [None, None, Some(1)]
                 .iter()
                 .map(|v| v.map(i256::from_i128))
                 .collect(),
@@ -2915,7 +2361,7 @@ mod tests {
                 nulls_first: false,
             }),
             None,
-            vec![2, 4, 1, 5, 3, 0],
+            vec![2, 4, 1, 5, 0, 3],
         );
 
         test_sort_to_indices_string_arrays(
@@ -2949,7 +2395,7 @@ mod tests {
                 nulls_first: true,
             }),
             None,
-            vec![3, 0, 2, 4, 1, 5],
+            vec![0, 3, 2, 4, 1, 5],
         );
 
         test_sort_to_indices_string_arrays(
@@ -2966,7 +2412,7 @@ mod tests {
                 nulls_first: true,
             }),
             Some(3),
-            vec![3, 0, 2],
+            vec![0, 3, 2],
         );
 
         // valid values less than limit with extra nulls
@@ -3169,9 +2615,7 @@ mod tests {
 
     #[test]
     fn test_sort_run_to_run() {
-        test_sort_run_inner(|array, sort_options, limit| {
-            sort_run(array, sort_options, limit)
-        });
+        test_sort_run_inner(|array, sort_options, limit| sort_run(array, sort_options, limit));
     }
 
     #[test]
@@ -3184,16 +2628,11 @@ mod tests {
 
     fn test_sort_run_inner<F>(sort_fn: F)
     where
-        F: Fn(
-            &dyn Array,
-            Option<SortOptions>,
-            Option<usize>,
-        ) -> Result<ArrayRef, ArrowError>,
+        F: Fn(&dyn Array, Option<SortOptions>, Option<usize>) -> Result<ArrayRef, ArrowError>,
     {
         // Create an input array for testing
         let total_len = 80;
-        let vals: Vec<Option<i32>> =
-            vec![Some(1), None, Some(2), Some(3), Some(4), None, Some(5)];
+        let vals: Vec<Option<i32>> = vec![Some(1), None, Some(2), Some(3), Some(4), None, Some(5)];
         let repeats: Vec<usize> = vec![1, 3, 2, 4];
         let mut input_array: Vec<Option<i32>> = Vec::with_capacity(total_len);
         for ix in 0_usize..32 {
@@ -3260,11 +2699,7 @@ mod tests {
         limit: Option<usize>,
         sort_fn: &F,
     ) where
-        F: Fn(
-            &dyn Array,
-            Option<SortOptions>,
-            Option<usize>,
-        ) -> Result<ArrayRef, ArrowError>,
+        F: Fn(&dyn Array, Option<SortOptions>, Option<usize>) -> Result<ArrayRef, ArrowError>,
     {
         // Run the sort and build actual result
         let sliced_array = run_array.slice(offset, length);
@@ -4153,11 +3588,7 @@ mod tests {
             ])) as ArrayRef,
         ];
         test_lex_sort_arrays(input.clone(), expected.clone(), None);
-        test_lex_sort_arrays(
-            input.clone(),
-            slice_arrays(expected.clone(), 0, 5),
-            Some(5),
-        );
+        test_lex_sort_arrays(input.clone(), slice_arrays(expected.clone(), 0, 5), Some(5));
 
         // Limiting by more rows than present is ok
         test_lex_sort_arrays(input, slice_arrays(expected, 0, 5), Some(10));
@@ -4192,8 +3623,7 @@ mod tests {
 
     #[test]
     fn test_sort_int8_dicts() {
-        let keys =
-            Int8Array::from(vec![Some(1_i8), None, Some(2), None, Some(2), Some(0)]);
+        let keys = Int8Array::from(vec![Some(1_i8), None, Some(2), None, Some(2), Some(0)]);
         let values = Int8Array::from(vec![1, 3, 5]);
         test_sort_primitive_dict_arrays::<Int8Type, Int8Type>(
             keys,
@@ -4203,8 +3633,7 @@ mod tests {
             vec![None, None, Some(1), Some(3), Some(5), Some(5)],
         );
 
-        let keys =
-            Int8Array::from(vec![Some(1_i8), None, Some(2), None, Some(2), Some(0)]);
+        let keys = Int8Array::from(vec![Some(1_i8), None, Some(2), None, Some(2), Some(0)]);
         let values = Int8Array::from(vec![1, 3, 5]);
         test_sort_primitive_dict_arrays::<Int8Type, Int8Type>(
             keys,
@@ -4217,8 +3646,7 @@ mod tests {
             vec![Some(5), Some(5), Some(3), Some(1), None, None],
         );
 
-        let keys =
-            Int8Array::from(vec![Some(1_i8), None, Some(2), None, Some(2), Some(0)]);
+        let keys = Int8Array::from(vec![Some(1_i8), None, Some(2), None, Some(2), Some(0)]);
         let values = Int8Array::from(vec![1, 3, 5]);
         test_sort_primitive_dict_arrays::<Int8Type, Int8Type>(
             keys,
@@ -4231,8 +3659,7 @@ mod tests {
             vec![Some(1), Some(3), Some(5), Some(5), None, None],
         );
 
-        let keys =
-            Int8Array::from(vec![Some(1_i8), None, Some(2), None, Some(2), Some(0)]);
+        let keys = Int8Array::from(vec![Some(1_i8), None, Some(2), None, Some(2), Some(0)]);
         let values = Int8Array::from(vec![1, 3, 5]);
         test_sort_primitive_dict_arrays::<Int8Type, Int8Type>(
             keys,
@@ -4330,8 +3757,7 @@ mod tests {
 
     #[test]
     fn test_sort_f32_dicts() {
-        let keys =
-            Int8Array::from(vec![Some(1_i8), None, Some(2), None, Some(2), Some(0)]);
+        let keys = Int8Array::from(vec![Some(1_i8), None, Some(2), None, Some(2), Some(0)]);
         let values = Float32Array::from(vec![1.2, 3.0, 5.1]);
         test_sort_primitive_dict_arrays::<Int8Type, Float32Type>(
             keys,
@@ -4341,8 +3767,7 @@ mod tests {
             vec![None, None, Some(1.2), Some(3.0), Some(5.1), Some(5.1)],
         );
 
-        let keys =
-            Int8Array::from(vec![Some(1_i8), None, Some(2), None, Some(2), Some(0)]);
+        let keys = Int8Array::from(vec![Some(1_i8), None, Some(2), None, Some(2), Some(0)]);
         let values = Float32Array::from(vec![1.2, 3.0, 5.1]);
         test_sort_primitive_dict_arrays::<Int8Type, Float32Type>(
             keys,
@@ -4355,8 +3780,7 @@ mod tests {
             vec![Some(5.1), Some(5.1), Some(3.0), Some(1.2), None, None],
         );
 
-        let keys =
-            Int8Array::from(vec![Some(1_i8), None, Some(2), None, Some(2), Some(0)]);
+        let keys = Int8Array::from(vec![Some(1_i8), None, Some(2), None, Some(2), Some(0)]);
         let values = Float32Array::from(vec![1.2, 3.0, 5.1]);
         test_sort_primitive_dict_arrays::<Int8Type, Float32Type>(
             keys,
@@ -4369,8 +3793,7 @@ mod tests {
             vec![Some(1.2), Some(3.0), Some(5.1), Some(5.1), None, None],
         );
 
-        let keys =
-            Int8Array::from(vec![Some(1_i8), None, Some(2), None, Some(2), Some(0)]);
+        let keys = Int8Array::from(vec![Some(1_i8), None, Some(2), None, Some(2), Some(0)]);
         let values = Float32Array::from(vec![1.2, 3.0, 5.1]);
         test_sort_primitive_dict_arrays::<Int8Type, Float32Type>(
             keys,
@@ -4464,5 +3887,58 @@ mod tests {
             None,
             vec![None, None, None, Some(5.1), Some(5.1), Some(3.0), Some(1.2)],
         );
+    }
+
+    #[test]
+    fn test_lexicographic_comparator_null_dict_values() {
+        let values = Int32Array::new(
+            vec![1, 2, 3, 4].into(),
+            Some(NullBuffer::from(vec![true, false, false, true])),
+        );
+        let keys = Int32Array::new(
+            vec![0, 1, 53, 3].into(),
+            Some(NullBuffer::from(vec![true, true, false, true])),
+        );
+        // [1, NULL, NULL, 4]
+        let dict = DictionaryArray::new(keys, Arc::new(values));
+
+        let comparator = LexicographicalComparator::try_new(&[SortColumn {
+            values: Arc::new(dict),
+            options: None,
+        }])
+        .unwrap();
+        // 1.cmp(NULL)
+        assert_eq!(comparator.compare(0, 1), Ordering::Greater);
+        // NULL.cmp(NULL)
+        assert_eq!(comparator.compare(2, 1), Ordering::Equal);
+        // NULL.cmp(4)
+        assert_eq!(comparator.compare(2, 3), Ordering::Less);
+    }
+
+    #[test]
+    fn sort_list_equal() {
+        let a = {
+            let mut builder = FixedSizeListBuilder::new(Int64Builder::new(), 2);
+            for value in [[1, 5], [0, 3], [1, 3]] {
+                builder.values().append_slice(&value);
+                builder.append(true);
+            }
+            builder.finish()
+        };
+
+        let sort_indices = sort_to_indices(&a, None, None).unwrap();
+        assert_eq!(sort_indices.values(), &[1, 2, 0]);
+
+        let a = {
+            let mut builder = ListBuilder::new(Int64Builder::new());
+            for value in [[1, 5], [0, 3], [1, 3]] {
+                builder.values().append_slice(&value);
+                builder.append(true);
+            }
+            builder.finish()
+        };
+
+        let sort_indices = sort_to_indices(&a, None, None).unwrap();
+        assert_eq!(sort_indices.values(), &[1, 2, 0]);
     }
 }
