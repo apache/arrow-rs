@@ -24,14 +24,11 @@
 
 use arrow_array::*;
 use arrow_buffer::buffer::{bitwise_bin_op_helper, bitwise_quaternary_op_helper};
-<<<<<<< HEAD
 use arrow_buffer::{buffer_bin_and_not, BooleanBuffer, MutableBuffer, NullBuffer};
 use arrow_data::ArrayData;
 use arrow_schema::{ArrowError, DataType};
-=======
 use arrow_buffer::{BooleanBuffer, NullBuffer};
 use arrow_schema::ArrowError;
->>>>>>> 4c3e9be465f1448b20faca69c0652748bb0f5436
 
 /// Logical 'and' boolean values with Kleene logic
 ///
