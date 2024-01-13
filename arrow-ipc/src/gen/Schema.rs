@@ -1039,6 +1039,15 @@ impl Endianness {
             _ => None,
         }
     }
+
+    /// Returns true if the endianness of the source system matches the endianness of the target system.
+    pub fn equals_to_target_endianness(self) -> bool {
+        match self {
+            Self::Little => cfg!(target_endian = "little"),
+            Self::Big => cfg!(target_endian = "big"),
+            _ => false,
+        }
+    }
 }
 impl core::fmt::Debug for Endianness {
     fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {

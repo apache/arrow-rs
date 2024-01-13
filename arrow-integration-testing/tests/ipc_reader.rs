@@ -18,6 +18,7 @@
 //! Tests for reading the content of  [`FileReader`] and [`StreamReader`]
 //! in `testing/arrow-ipc-stream/integration/...`
 
+use arrow::error::ArrowError;
 use arrow::ipc::reader::{FileReader, StreamReader};
 use arrow::util::test_util::arrow_test_data;
 use arrow_integration_testing::read_gzip_json;
@@ -56,25 +57,11 @@ fn read_0_1_7() {
 }
 
 #[test]
-#[should_panic(expected = "Big Endian is not supported for Decimal!")]
-fn read_1_0_0_bigendian_decimal_should_panic() {
-    let testdata = arrow_test_data();
-    verify_arrow_file(&testdata, "1.0.0-bigendian", "generated_decimal");
-}
-
-#[test]
-#[should_panic(expected = "Last offset 687865856 of Utf8 is larger than values length 41")]
-fn read_1_0_0_bigendian_dictionary_should_panic() {
-    // The offsets are not translated for big-endian files
-    // https://github.com/apache/arrow-rs/issues/859
-    let testdata = arrow_test_data();
-    verify_arrow_file(&testdata, "1.0.0-bigendian", "generated_dictionary");
-}
-
-#[test]
 fn read_1_0_0_bigendian() {
     let testdata = arrow_test_data();
     let paths = [
+        "generated_decimal",
+        "generated_dictionary",
         "generated_interval",
         "generated_datetime",
         "generated_map",
@@ -91,14 +78,12 @@ fn read_1_0_0_bigendian() {
         ))
         .unwrap();
 
-        FileReader::try_new(file, None).unwrap();
+        let reader = FileReader::try_new(file, None);
 
-        // While the the reader doesn't error but the values are not
-        // read correctly on little endian platforms so verifying the
-        // contents fails
-        //
-        // https://github.com/apache/arrow-rs/issues/3459
-        //verify_arrow_file(&testdata, "1.0.0-bigendian", path);
+        assert!(reader.is_err());
+        let err = reader.err().unwrap();
+        assert!(matches!(err, ArrowError::IpcError(_)));
+        assert_eq!(err.to_string(), "Ipc error: the endianness of the source system does not match the endianness of the target system.");
     });
 }
 
