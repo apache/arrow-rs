@@ -790,6 +790,12 @@ impl FileReaderBuilder {
         let total_blocks = blocks.len();
 
         let ipc_schema = footer.schema().unwrap();
+        if !ipc_schema.endianness().equals_to_target_endianness() {
+            return Err(ArrowError::IpcError(
+                "the endianness of the source system does not match the endianness of the target system.".to_owned()
+            ));
+        }
+
         let schema = crate::convert::fb_to_schema(ipc_schema);
 
         let mut custom_metadata = HashMap::new();
