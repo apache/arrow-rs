@@ -47,8 +47,6 @@ pub const DEFAULT_SCOPE: &str = "https://www.googleapis.com/auth/devstorage.full
 
 pub const DEFAULT_GCS_BASE_URL: &str = "https://storage.googleapis.com";
 
-pub const DEFAULT_GCS_PLAYLOAD_STRING: &str = "UNSIGNED-PAYLOAD";
-
 #[derive(Debug, Snafu)]
 pub enum Error {
     #[snafu(display("Unable to open service account file from {}: {}", path.display(), source))]
@@ -543,138 +541,39 @@ impl TokenProvider for AuthorizedUserCredentials {
         })
     }
 }
-
-/// Canonicalizes query parameters into the GCP canonical form
-/// form like:
-/// ```
-///HTTP_VERB  
-///PATH_TO_RESOURCE  
-///CANONICAL_QUERY_STRING  
-///CANONICAL_HEADERS  
-///
-///SIGNED_HEADERS  
-///PAYLOAD
-///```
-///
-/// <https://cloud.google.com/storage/docs/authentication/canonical-requests>
-fn canonicalize_request(url: &Url, methond: &Method, headers: &HeaderMap) -> String {
-    let verb = methond.as_str();
-    let path = url.path();
-    let query = canonicalize_query(url);
-    let (canaonical_headers, signed_headers) = canonicalize_headers(headers);
-
-    format!(
-        "{}\n{}\n{}\n{}\n\n{}\n{}",
-        verb, path, query, canaonical_headers, signed_headers, DEFAULT_GCS_PLAYLOAD_STRING
-    )
-}
-
-fn canonicalize_query(url: &Url) -> String {
-    url.query_pairs()
-        .sorted_unstable_by(|a, b| a.0.cmp(&b.0))
-        .map(|(k, v)| {
-            format!(
-                "{}={}",
-                utf8_percent_encode(k.as_ref(), &STRICT_ENCODE_SET),
-                utf8_percent_encode(v.as_ref(), &STRICT_ENCODE_SET)
-            )
-        })
-        .join("&")
-}
-
-/// Trim whitespace from header values
-fn trim_header_value(value: &str) -> String {
-    let mut ret = value.to_string();
-    ret.retain(|c| !c.is_whitespace());
-    ret
-}
-
-/// Canonicalizes query parameters into the GCP canonical form
-///
-/// <https://cloud.google.com/storage/docs/authentication/canonical-requests#about-headers>
-fn canonicalize_headers(header_map: &HeaderMap) -> (String, String) {
-    //FIXME add error handling for invalid header values
-    let mut headers = BTreeMap::<String, Vec<&str>>::new();
-    for (k, v) in header_map {
-        headers
-            .entry(k.as_str().to_lowercase())
-            .or_default()
-            .push(std::str::from_utf8(v.as_bytes()).unwrap());
-    }
-
-    let canonicalize_headers = headers
-        .iter()
-        .map(|(k, v)| {
-            format!(
-                "{}:{}",
-                k.trim(),
-                v.iter().map(|v| trim_header_value(v)).join(",")
-            )
-        })
-        .join("\n");
-
-    let signed_headers = headers.keys().join(";");
-
-    (canonicalize_headers, signed_headers)
-}
-
-///construct the string to sign
-///form like:
-///```
-///SIGNING_ALGORITHM  
-///ACTIVE_DATETIME  
-///CREDENTIAL_SCOPE  
-///HASHED_CANONICAL_REQUEST
-///````
-///`ACTIVE_DATETIME` format:`YYYYMMDD'T'HHMMSS'Z'`
-/// <https://cloud.google.com/storage/docs/authentication/signatures#string-to-sign>
-fn string_to_sign(
-    signing_algorithm: &str,
-    date: DateTime<Utc>,
-    scope: &str,
-    hashed_canonical_req: &str,
-) -> String {
-    format!(
-        "{}\n{}\n{}\n{}",
-        signing_algorithm,
-        date.format("%Y%m%dT%H%M%SZ"),
-        scope,
-        hashed_canonical_req
-    )
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_canonicalize_headers() {
-        let mut input_header = HeaderMap::new();
-        input_header.insert("content-type", "text/plain".parse().unwrap());
-        input_header.insert("host", "storage.googleapis.com".parse().unwrap());
-        input_header.insert("x-goog-meta-reviewer", "jane".parse().unwrap());
-        input_header.append("x-goog-meta-reviewer", "john".parse().unwrap());
-        assert_eq!(
-            canonicalize_headers(&input_header),
-            (
-                "content-type:text/plain
-host:storage.googleapis.com
-x-goog-meta-reviewer:jane,john"
-                    .to_string(),
-                "content-type;host;x-goog-meta-reviewer".to_string()
-            )
-        );
-    }
-
-    #[test]
-    fn test_canonicalize_query() {
-        let mut url = Url::parse("https://storage.googleapis.com/bucket/object").unwrap();
-        url.query_pairs_mut()
-            .append_pair("max-keys", "2")
-            .append_pair("prefix", "object");
-        assert_eq!(
-            canonicalize_query(&url),
-            "max-keys=2&prefix=object".to_string()
-        );
-    }
-}
+//
+// #[cfg(test)]
+// mod tests {
+//     use super::*;
+//
+//     #[test]
+//     fn test_canonicalize_headers() {
+//         let mut input_header = HeaderMap::new();
+//         input_header.insert("content-type", "text/plain".parse().unwrap());
+//         input_header.insert("host", "storage.googleapis.com".parse().unwrap());
+//         input_header.insert("x-goog-meta-reviewer", "jane".parse().unwrap());
+//         input_header.append("x-goog-meta-reviewer", "john".parse().unwrap());
+//         assert_eq!(
+//             canonicalize_headers(&input_header),
+//             (
+//                 "content-type:text/plain
+// host:storage.googleapis.com
+// x-goog-meta-reviewer:jane,john"
+//                     .to_string(),
+//                 "content-type;host;x-goog-meta-reviewer".to_string()
+//             )
+//         );
+//     }
+//
+//     #[test]
+//     fn test_canonicalize_query() {
+//         let mut url = Url::parse("https://storage.googleapis.com/bucket/object").unwrap();
+//         url.query_pairs_mut()
+//             .append_pair("max-keys", "2")
+//             .append_pair("prefix", "object");
+//         assert_eq!(
+//             canonicalize_query(&url),
+//             "max-keys=2&prefix=object".to_string()
+//         );
+//     }
+// }

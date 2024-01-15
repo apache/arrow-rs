@@ -37,8 +37,10 @@
 //! [#5194](https://github.com/apache/arrow-rs/issues/5194)). HTTP/2 can be
 //! enabled by setting [crate::ClientConfigKey::Http1Only] to false.
 use std::sync::Arc;
+use std::time::Duration;
 
 use crate::client::CredentialProvider;
+use crate::signer::Signer;
 use crate::{
     multipart::{PartId, PutPart, WriteMultiPart},
     path::Path,
@@ -49,7 +51,9 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use client::GoogleCloudStorageClient;
 use futures::stream::BoxStream;
+use hyper::Method;
 use tokio::io::AsyncWrite;
+use url::Url;
 
 use crate::client::get::GetClientExt;
 use crate::client::list::ListClientExt;
@@ -75,6 +79,8 @@ pub(crate) const STRICT_ENCODE_SET: percent_encoding::AsciiSet = percent_encodin
     .remove(b'.')
     .remove(b'_')
     .remove(b'~');
+
+pub const DEFAULT_GCS_PLAYLOAD_STRING: &str = "UNSIGNED-PAYLOAD";
 
 /// Interface for [Google Cloud Storage](https://cloud.google.com/storage/).
 #[derive(Debug)]
@@ -212,6 +218,15 @@ impl MultiPartStore for GoogleCloudStorage {
 
     async fn abort_multipart(&self, path: &Path, id: &MultipartId) -> Result<()> {
         self.client.multipart_cleanup(path, id).await
+    }
+}
+
+#[async_trait]
+impl Signer for GoogleCloudStorage {
+    async fn signed_url(&self, method: Method, path: &Path, expires_in: Duration) -> Result<Url> {
+        let config = self.client.config();
+        let mut url = config.path_url(path);
+        todo!()
     }
 }
 

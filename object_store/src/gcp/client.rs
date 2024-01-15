@@ -24,7 +24,9 @@ use crate::client::s3::{
     ListResponse,
 };
 use crate::client::GetOptionsExt;
-use crate::gcp::{GcpCredential, GcpCredentialProvider, STORE};
+use crate::gcp::{
+    GcpCredential, GcpCredentialProvider, DEFAULT_GCS_PLAYLOAD_STRING, STORE, STRICT_ENCODE_SET,
+};
 use crate::multipart::PartId;
 use crate::path::{Path, DELIMITER};
 use crate::{
@@ -33,12 +35,18 @@ use crate::{
 };
 use async_trait::async_trait;
 use bytes::{Buf, Bytes};
+use chrono::{DateTime, Utc};
+use hyper::HeaderMap;
+use itertools::Itertools;
 use percent_encoding::{percent_encode, utf8_percent_encode, NON_ALPHANUMERIC};
 use reqwest::header::HeaderName;
 use reqwest::{header, Client, Method, RequestBuilder, Response, StatusCode};
 use serde::Serialize;
 use snafu::{OptionExt, ResultExt, Snafu};
+use std::collections::BTreeMap;
 use std::sync::Arc;
+use std::time::Duration;
+use url::Url;
 
 const VERSION_HEADER: &str = "x-goog-generation";
 
@@ -128,6 +136,134 @@ pub struct GoogleCloudStorageConfig {
     pub retry_config: RetryConfig,
 
     pub client_options: ClientOptions,
+}
+
+impl GoogleCloudStorageConfig {
+    pub fn new(
+        base_url: String,
+        credentials: GcpCredentialProvider,
+        bucket_name: String,
+        retry_config: RetryConfig,
+        client_options: ClientOptions,
+    ) -> Self {
+        Self {
+            base_url,
+            credentials,
+            bucket_name,
+            retry_config,
+            client_options,
+        }
+    }
+
+    pub fn path_url(&self, path: &Path) -> String {
+        format!("{}/{}", self.base_url, path)
+    }
+}
+
+pub(crate) struct GCSSigner {
+    expire_in: Duration,
+}
+
+/// Trim whitespace from header values
+fn trim_header_value(value: &str) -> String {
+    let mut ret = value.to_string();
+    ret.retain(|c| !c.is_whitespace());
+    ret
+}
+
+impl GCSSigner {
+    /// Canonicalizes query parameters into the GCP canonical form
+    /// form like:
+    /// ```
+    ///HTTP_VERB  
+    ///PATH_TO_RESOURCE  
+    ///CANONICAL_QUERY_STRING  
+    ///CANONICAL_HEADERS  
+    ///
+    ///SIGNED_HEADERS  
+    ///PAYLOAD
+    ///```
+    ///
+    /// <https://cloud.google.com/storage/docs/authentication/canonical-requests>
+    fn canonicalize_request(&self, url: &Url, methond: &Method, headers: &HeaderMap) -> String {
+        let verb = methond.as_str();
+        let path = url.path();
+        let query = self.canonicalize_query(url);
+        let (canaonical_headers, signed_headers) = self.canonicalize_headers(headers);
+
+        format!(
+            "{}\n{}\n{}\n{}\n\n{}\n{}",
+            verb, path, query, canaonical_headers, signed_headers, DEFAULT_GCS_PLAYLOAD_STRING
+        )
+    }
+
+    fn canonicalize_query(&self, url: &Url) -> String {
+        url.query_pairs()
+            .sorted_unstable_by(|a, b| a.0.cmp(&b.0))
+            .map(|(k, v)| {
+                format!(
+                    "{}={}",
+                    utf8_percent_encode(k.as_ref(), &STRICT_ENCODE_SET),
+                    utf8_percent_encode(v.as_ref(), &STRICT_ENCODE_SET)
+                )
+            })
+            .join("&")
+    }
+
+    /// Canonicalizes query parameters into the GCP canonical form
+    ///
+    /// <https://cloud.google.com/storage/docs/authentication/canonical-requests#about-headers>
+    fn canonicalize_headers(&self, header_map: &HeaderMap) -> (String, String) {
+        //FIXME add error handling for invalid header values
+        let mut headers = BTreeMap::<String, Vec<&str>>::new();
+        for (k, v) in header_map {
+            headers
+                .entry(k.as_str().to_lowercase())
+                .or_default()
+                .push(std::str::from_utf8(v.as_bytes()).unwrap());
+        }
+
+        let canonicalize_headers = headers
+            .iter()
+            .map(|(k, v)| {
+                format!(
+                    "{}:{}",
+                    k.trim(),
+                    v.iter().map(|v| trim_header_value(v)).join(",")
+                )
+            })
+            .join("\n");
+
+        let signed_headers = headers.keys().join(";");
+
+        (canonicalize_headers, signed_headers)
+    }
+
+    ///construct the string to sign
+    ///form like:
+    ///```
+    ///SIGNING_ALGORITHM  
+    ///ACTIVE_DATETIME  
+    ///CREDENTIAL_SCOPE  
+    ///HASHED_CANONICAL_REQUEST
+    ///````
+    ///`ACTIVE_DATETIME` format:`YYYYMMDD'T'HHMMSS'Z'`
+    /// <https://cloud.google.com/storage/docs/authentication/signatures#string-to-sign>
+    fn string_to_sign(
+        &self,
+        signing_algorithm: &str,
+        date: DateTime<Utc>,
+        scope: &str,
+        hashed_canonical_req: &str,
+    ) -> String {
+        format!(
+            "{}\n{}\n{}\n{}",
+            signing_algorithm,
+            date.format("%Y%m%dT%H%M%SZ"),
+            scope,
+            hashed_canonical_req
+        )
+    }
 }
 
 /// A builder for a put request allowing customisation of the headers and query string
