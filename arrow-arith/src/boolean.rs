@@ -288,7 +288,7 @@ pub fn or(left: &BooleanArray, right: &BooleanArray) -> Result<BooleanArray, Arr
 /// assert_eq!(andn_ab, and(&a, &not(&b).unwrap()).unwrap());
 pub fn and_not(left: &BooleanArray, right: &BooleanArray) -> Result<BooleanArray, ArrowError> {
     binary_boolean_kernel(left, right, |a, b| {
-        let buffer = buffer_bin_and_not(&a.inner(), b.offset(), &b.inner(), a.offset(), a.len());
+        let buffer = buffer_bin_and_not(a.inner(), b.offset(), b.inner(), a.offset(), a.len());
         BooleanBuffer::new(buffer, left.offset(), left.len())
     })
 }
