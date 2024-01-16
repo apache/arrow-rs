@@ -89,7 +89,7 @@ mod test {
         ];
 
         for file in files {
-            let file = File::open(arrow_test_data(&file)).unwrap();
+            let file = File::open(arrow_test_data(file)).unwrap();
             let mut reader = BufReader::new(file);
             let header = read_header(&mut reader).unwrap();
             let compression = header.compression().unwrap();
