@@ -18,20 +18,20 @@
 use crate::client::retry::RetryExt;
 use crate::client::token::TemporaryToken;
 use crate::client::TokenProvider;
-use crate::gcp::{STORE, STRICT_ENCODE_SET};
+use crate::gcp::{DEFAULT_GCS_PLAYLOAD_STRING, STORE, STRICT_ENCODE_SET};
 use crate::RetryConfig;
 use async_trait::async_trait;
-use base64::prelude::BASE64_STANDARD;
 use base64::prelude::BASE64_URL_SAFE_NO_PAD;
 use base64::Engine;
 use chrono::{DateTime, Utc};
 use futures::TryFutureExt;
+use hyper::header::HeaderName;
 use hyper::HeaderMap;
 use itertools::Itertools;
 use percent_encoding::utf8_percent_encode;
 use reqwest::{Client, Method};
 use ring::signature::RsaKeyPair;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use snafu::{ResultExt, Snafu};
 use std::collections::BTreeMap;
 use std::env;
@@ -78,9 +78,6 @@ pub enum Error {
 
     #[snafu(display("Error getting token response body: {}", source))]
     TokenResponseBody { source: reqwest::Error },
-
-    #[snafu(display("Error signing blob: {}", source))]
-    SignBlobResponse { source: reqwest::Error },
 }
 
 impl From<Error> for crate::Error {
@@ -100,81 +97,7 @@ pub struct GcpCredential {
     /// An HTTP bearer token
     pub bearer: String,
 }
-
-/// Sign Blob Request Body
-#[derive(Debug, Serialize)]
-struct SignBlobBody {
-    /// The payload to sign
-    payload: String,
-}
-
-/// Sign Blob Response
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct SignBLogResponse {
-    /// Key id
-    key_id: String,
-    /// The signature for the payload
-    signed_blob: String,
-}
-
-impl GcpCredential {
-    /// Create a signature from a string-to-sign using Google Cloud signBlob method.
-    /// form like:
-    /// ```
-    /// curl -X POST --data-binary @JSON_FILE_NAME \
-    ///-H "Authorization: Bearer OAUTH2_TOKEN" \
-    ///-H "Content-Type: application/json" \
-    ///"https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/SERVICE_ACCOUNT_EMAIL:signBlob"
-    /// ```
-    ///
-    /// <JSON_FILE_NAME>
-    /// ```
-    /// {
-    ///  "payload": "REQUEST_INFORMATION"
-    /// }
-    /// ```
-    async fn sign_blob(
-        &self,
-        client: &Client,
-        string_to_sing: &str,
-        account_email: &str,
-    ) -> Result<String> {
-        let body = SignBlobBody {
-            payload: BASE64_STANDARD.encode(string_to_sing),
-        };
-
-        let url = format!(
-            "https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/{}:signBlob",
-            account_email
-        );
-
-        let response = client
-            .post(&url)
-            .bearer_auth(&self.bearer)
-            .json(&body)
-            .send()
-            .await;
-
-        let response = match response {
-            Ok(response) => response,
-            Err(e) => {
-                tracing::error!("sign blob error: {}", e);
-                return Err(Error::SignBlobResponse { source: e });
-            }
-        };
-
-        //If successful, the signature is returned in the signedBlob field in the response.
-        let response = match response.json::<SignBLogResponse>().await {
-            Ok(response) => response,
-            Err(e) => {
-                tracing::error!("sign blob error: {}", e);
-                return Err(Error::SignBlobResponse { source: e });
-            }
-        };
-        Ok(response.signed_blob)
-    }
-}
+impl GcpCredential {}
 
 #[derive(Debug, Default, serde::Serialize)]
 pub struct JwtHeader<'a> {
@@ -541,6 +464,184 @@ impl TokenProvider for AuthorizedUserCredentials {
         })
     }
 }
+
+/// Computes the SHA256 digest of `body` returned as a hex encoded string
+fn hex_digest(bytes: &[u8]) -> String {
+    let digest = ring::digest::digest(&ring::digest::SHA256, bytes);
+    hex_encode(digest.as_ref())
+}
+
+/// Returns `bytes` as a lower-case hex encoded string
+fn hex_encode(bytes: &[u8]) -> String {
+    use std::fmt::Write;
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        // String writing is infallible
+        let _ = write!(out, "{byte:02x}");
+    }
+    out
+}
+
+/// Trim whitespace from header values
+fn trim_header_value(value: &str) -> String {
+    let mut ret = value.to_string();
+    ret.retain(|c| !c.is_whitespace());
+    ret
+}
+
+/// Authorize a [`Request`] with an [`AwsCredential`] using [AWS SigV4]
+///
+/// [AWS SigV4]: https://docs.aws.amazon.com/general/latest/gr/sigv4-calculate-signature.html
+#[derive(Debug)]
+pub struct GCSAuthorizer<'a> {
+    date: Option<DateTime<Utc>>,
+    credential: &'a GcpCredential,
+}
+
+impl<'a> GCSAuthorizer<'a> {
+    /// Create a new [`GCSAuthorizer`]
+    pub fn new(credential: &'a GcpCredential) -> GCSAuthorizer<'a> {
+        GCSAuthorizer {
+            date: None,
+            credential,
+        }
+    }
+
+    pub(crate) fn sign(
+        &self,
+        method: Method,
+        url: &mut Url,
+        expires_in: Duration,
+        bucket_name: &str,
+    ) -> String {
+        let date = chrono::Utc::now();
+        let scope = self.scope(date);
+        let credential_with_scope = format!("{}/{}", self.credential.client_email, scope);
+
+        let host = format!("{}.storage.googleapis.com", bucket_name);
+        let mut headers = HeaderMap::new();
+        headers.insert("host", host.parse().unwrap());
+
+        let (canaonical_header, signed_headers) = self.canonicalize_headers(&headers);
+
+        url.query_pairs_mut()
+            .append_pair("X-Goog-Algorithm", "GOOG4-RSA-SHA256")
+            .append_pair("X-Goog-Credential", &credential_with_scope)
+            .append_pair("X-Goog-Date", &date.format("%Y%m%dT%H%M%SZ").to_string())
+            .append_pair("X-Goog-Expires", &expires_in.as_secs().to_string())
+            .append_pair("X-Goog-SignedHeaders", &signed_headers);
+
+        let canonical_request = self.canonicalize_request(url, &method, &headers);
+
+        self.string_to_sign(date, &method, url, &headers)
+    }
+
+    /// Get scope for the request
+    fn scope(&self, date: DateTime<Utc>) -> String {
+        format!(
+            "{}/us-central1/storage/goog4_request",
+            date.format("%Y%m%d"),
+        )
+    }
+
+    /// Canonicalizes query parameters into the GCP canonical form
+    /// form like:
+    /// ```
+    ///HTTP_VERB  
+    ///PATH_TO_RESOURCE  
+    ///CANONICAL_QUERY_STRING  
+    ///CANONICAL_HEADERS  
+    ///
+    ///SIGNED_HEADERS  
+    ///PAYLOAD
+    ///```
+    ///
+    /// <https://cloud.google.com/storage/docs/authentication/canonical-requests>
+    fn canonicalize_request(&self, url: &Url, methond: &Method, headers: &HeaderMap) -> String {
+        let verb = methond.as_str();
+        let path = url.path();
+        let query = self.canonicalize_query(url);
+        let (canaonical_headers, signed_headers) = self.canonicalize_headers(headers);
+
+        format!(
+            "{}\n{}\n{}\n{}\n\n{}\n{}",
+            verb, path, query, canaonical_headers, signed_headers, DEFAULT_GCS_PLAYLOAD_STRING
+        )
+    }
+
+    fn canonicalize_query(&self, url: &Url) -> String {
+        url.query_pairs()
+            .sorted_unstable_by(|a, b| a.0.cmp(&b.0))
+            .map(|(k, v)| {
+                format!(
+                    "{}={}",
+                    utf8_percent_encode(k.as_ref(), &STRICT_ENCODE_SET),
+                    utf8_percent_encode(v.as_ref(), &STRICT_ENCODE_SET)
+                )
+            })
+            .join("&")
+    }
+
+    /// Canonicalizes query parameters into the GCP canonical form
+    ///
+    /// <https://cloud.google.com/storage/docs/authentication/canonical-requests#about-headers>
+    fn canonicalize_headers(&self, header_map: &HeaderMap) -> (String, String) {
+        //FIXME add error handling for invalid header values
+        let mut headers = BTreeMap::<String, Vec<&str>>::new();
+        for (k, v) in header_map {
+            headers
+                .entry(k.as_str().to_lowercase())
+                .or_default()
+                .push(std::str::from_utf8(v.as_bytes()).unwrap());
+        }
+
+        let canonicalize_headers = headers
+            .iter()
+            .map(|(k, v)| {
+                format!(
+                    "{}:{}",
+                    k.trim(),
+                    v.iter().map(|v| trim_header_value(v)).join(",")
+                )
+            })
+            .join("\n");
+
+        let signed_headers = headers.keys().join(";");
+
+        (canonicalize_headers, signed_headers)
+    }
+
+    ///construct the string to sign
+    ///form like:
+    ///```
+    ///SIGNING_ALGORITHM  
+    ///ACTIVE_DATETIME  
+    ///CREDENTIAL_SCOPE  
+    ///HASHED_CANONICAL_REQUEST
+    ///````
+    ///`ACTIVE_DATETIME` format:`YYYYMMDD'T'HHMMSS'Z'`
+    /// <https://cloud.google.com/storage/docs/authentication/signatures#string-to-sign>
+    pub fn string_to_sign(
+        &self,
+        date: DateTime<Utc>,
+        request_method: &Method,
+        url: &Url,
+        headers: &HeaderMap,
+    ) -> String {
+        let caninical_request = self.canonicalize_request(url, request_method, headers);
+        let hashed_canonical_req = hex_digest(caninical_request.as_bytes());
+        let scope = self.scope(date);
+
+        format!(
+            "{}\n{}\n{}\n{}",
+            "GOOG4-RSA-SHA256",
+            date.format("%Y%m%dT%H%M%SZ"),
+            scope,
+            hashed_canonical_req
+        )
+    }
+}
+
 //
 // #[cfg(test)]
 // mod tests {

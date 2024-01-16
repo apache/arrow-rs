@@ -36,10 +36,12 @@
 //! because it allows much higher throughput in our benchmarks (see
 //! [#5194](https://github.com/apache/arrow-rs/issues/5194)). HTTP/2 can be
 //! enabled by setting [crate::ClientConfigKey::Http1Only] to false.
+use std::ops::Deref;
 use std::sync::Arc;
 use std::time::Duration;
 
 use crate::client::CredentialProvider;
+use crate::gcp::credential::GCSAuthorizer;
 use crate::signer::Signer;
 use crate::{
     multipart::{PartId, PutPart, WriteMultiPart},
@@ -51,7 +53,7 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use client::GoogleCloudStorageClient;
 use futures::stream::BoxStream;
-use hyper::Method;
+use hyper::{HeaderMap, Method};
 use tokio::io::AsyncWrite;
 use url::Url;
 
@@ -80,6 +82,7 @@ pub(crate) const STRICT_ENCODE_SET: percent_encoding::AsciiSet = percent_encodin
     .remove(b'_')
     .remove(b'~');
 
+/// default payload string for GCS
 pub const DEFAULT_GCS_PLAYLOAD_STRING: &str = "UNSIGNED-PAYLOAD";
 
 /// Interface for [Google Cloud Storage](https://cloud.google.com/storage/).
@@ -224,8 +227,30 @@ impl MultiPartStore for GoogleCloudStorage {
 #[async_trait]
 impl Signer for GoogleCloudStorage {
     async fn signed_url(&self, method: Method, path: &Path, expires_in: Duration) -> Result<Url> {
+        if expires_in.as_secs() > 604800 {
+            return Err(crate::Error::Generic {
+                store: STORE,
+                source: format!("Expiration Time can't be longer than 604800 seconds (7 days).")
+                    .into(),
+            });
+        }
+
         let config = self.client.config();
-        let mut url = config.path_url(path);
+        let credentials = self.credentials().get_credential().await?;
+        let path_url = config.path_url(path);
+        let mut url = Url::parse(&path_url).map_err(|e| crate::Error::Generic {
+            store: STORE,
+            source: format!("Unable to parse url {path_url}: {e}").into(),
+        })?;
+
+        let authoriztor = GCSAuthorizer::new(&credentials);
+
+        let string_to_sign = authoriztor.sign(method, &mut url, expires_in, &config.bucket_name);
+        let signature = self
+            .client
+            .sign_blob(&string_to_sign, &credentials.client_email)
+            .await?;
+
         todo!()
     }
 }
