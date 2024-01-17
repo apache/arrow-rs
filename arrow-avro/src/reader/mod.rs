@@ -89,11 +89,12 @@ mod test {
         ];
 
         for file in files {
+            println!("file: {file}");
             let file = File::open(arrow_test_data(file)).unwrap();
             let mut reader = BufReader::new(file);
             let header = read_header(&mut reader).unwrap();
             let compression = header.compression().unwrap();
-            println!("{compression:?}");
+            println!("compression: {compression:?}");
             for result in read_blocks(reader) {
                 let block = result.unwrap();
                 assert_eq!(block.sync, header.sync());
