@@ -73,6 +73,7 @@ fn read_blocks<R: BufRead>(mut reader: R) -> impl Iterator<Item = Result<Block, 
 
 #[cfg(test)]
 mod test {
+    use crate::compression::CompressionCodec;
     use crate::reader::{read_blocks, read_header};
     use crate::test_util::arrow_test_data;
     use std::fs::File;
@@ -80,12 +81,27 @@ mod test {
 
     #[test]
     fn test_mux() {
-        let file = File::open(arrow_test_data("avro/alltypes_plain.avro")).unwrap();
-        let mut reader = BufReader::new(file);
-        let header = read_header(&mut reader).unwrap();
-        for result in read_blocks(reader) {
-            let block = result.unwrap();
-            assert_eq!(block.sync, header.sync());
+        let files = [
+            "avro/alltypes_plain.avro",
+            "avro/alltypes_plain.snappy.avro",
+            "avro/alltypes_plain.zstandard.avro",
+            "avro/alltypes_nulls_plain.avro",
+        ];
+
+        for file in files {
+            println!("file: {file}");
+            let file = File::open(arrow_test_data(file)).unwrap();
+            let mut reader = BufReader::new(file);
+            let header = read_header(&mut reader).unwrap();
+            let compression = header.compression().unwrap();
+            println!("compression: {compression:?}");
+            for result in read_blocks(reader) {
+                let block = result.unwrap();
+                assert_eq!(block.sync, header.sync());
+                if let Some(c) = compression {
+                    c.decompress(&block.data).unwrap();
+                }
+            }
         }
     }
 }

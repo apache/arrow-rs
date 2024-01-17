@@ -17,6 +17,7 @@
 
 //! Decoder for [`Header`]
 
+use crate::compression::{CompressionCodec, CODEC_METADATA_KEY};
 use crate::reader::vlq::VLQDecoder;
 use crate::schema::Schema;
 use arrow_schema::ArrowError;
@@ -55,7 +56,7 @@ impl Header {
     /// Returns an iterator over the meta keys in this header
     pub fn metadata(&self) -> impl Iterator<Item = (&[u8], &[u8])> {
         let mut last = 0;
-        self.meta_offsets.windows(2).map(move |w| {
+        self.meta_offsets.chunks_exact(2).map(move |w| {
             let start = last;
             last = w[1];
             (&self.meta_buf[start..w[0]], &self.meta_buf[w[0]..w[1]])
@@ -71,6 +72,22 @@ impl Header {
     /// Returns the sync token for this file
     pub fn sync(&self) -> [u8; 16] {
         self.sync
+    }
+
+    /// Returns the [`CompressionCodec`] if any
+    pub fn compression(&self) -> Result<Option<CompressionCodec>, ArrowError> {
+        let v = self.get(CODEC_METADATA_KEY);
+
+        match v {
+            None | Some(b"null") => Ok(None),
+            Some(b"deflate") => Ok(Some(CompressionCodec::Deflate)),
+            Some(b"snappy") => Ok(Some(CompressionCodec::Snappy)),
+            Some(b"zstandard") => Ok(Some(CompressionCodec::ZStandard)),
+            Some(v) => Err(ArrowError::ParseError(format!(
+                "Unrecognized compression codec \'{}\'",
+                String::from_utf8_lossy(v)
+            ))),
+        }
     }
 }
 
@@ -305,6 +322,17 @@ mod test {
         );
 
         let header = decode_file(&arrow_test_data("avro/fixed_length_decimal.avro"));
+
+        let meta: Vec<_> = header
+            .metadata()
+            .map(|(k, _)| std::str::from_utf8(k).unwrap())
+            .collect();
+
+        assert_eq!(
+            meta,
+            &["avro.schema", "org.apache.spark.version", "avro.codec"]
+        );
+
         let schema_json = header.get(SCHEMA_METADATA_KEY).unwrap();
         let expected = br#"{"type":"record","name":"topLevelRecord","fields":[{"name":"value","type":[{"type":"fixed","name":"fixed","namespace":"topLevelRecord.value","size":11,"logicalType":"decimal","precision":25,"scale":2},"null"]}]}"#;
         assert_eq!(schema_json, expected);
