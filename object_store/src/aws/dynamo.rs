@@ -242,40 +242,6 @@ impl DynamoCommit {
         }
     }
 
-    /// Retrieve a lock, returning an error if it doesn't exist
-    async fn get_lock(&self, s3: &S3Client, path: &str, etag: Option<&str>) -> Result<Lease> {
-        let key_attributes = [
-            ("path", AttributeValue::from(path)),
-            ("etag", AttributeValue::from(etag.unwrap_or("*"))),
-        ];
-        let req = GetItem {
-            table_name: &self.table_name,
-            key: Map(&key_attributes),
-        };
-        let credential = s3.config.get_credential().await?;
-
-        let resp = self
-            .request(s3, credential.as_deref(), "DynamoDB_20120810.GetItem", req)
-            .await
-            .map_err(|e| e.error(STORE, path.to_string()))?;
-
-        let body = resp.bytes().await.map_err(|e| Error::Generic {
-            store: STORE,
-            source: Box::new(e),
-        })?;
-
-        let response: GetItemResponse<'_> =
-            serde_json::from_slice(body.as_ref()).map_err(|e| Error::Generic {
-                store: STORE,
-                source: Box::new(e),
-            })?;
-
-        extract_lease(&response.item).ok_or_else(|| Error::NotFound {
-            path: path.into(),
-            source: "DynamoDB GetItem returned no items".to_string().into(),
-        })
-    }
-
     /// Attempt to acquire a lock, reclaiming an existing lease if provided
     async fn try_lock(
         &self,
@@ -332,22 +298,10 @@ impl DynamoCommit {
             Err(e) => match parse_error_response(&e) {
                 Some(e) if e.error.ends_with(CONFLICT) => match extract_lease(&e.item) {
                     Some(lease) => Ok(TryLockResult::Conflict(lease)),
-                    // ReturnValuesOnConditionCheckFailure is a relatively recent addition
-                    // to DynamoDB and is not supported by dynamodb-local, which is used
-                    // by localstack. In such cases the conflict error will not contain
-                    // the conflicting item, and we must instead perform a get request
-                    //
-                    // There is a potential race here if the conflicting record is removed
-                    // before we retrieve it. We could retry the transaction in such a scenario,
-                    // but as this only occurs for emulators, we simply abort with a
-                    // not found error
-                    //
-                    // <https://aws.amazon.com/about-aws/whats-new/2023/06/amazon-dynamodb-cost-failed-conditional-writes/>
-                    // <https://repost.aws/questions/QUNfADrK4RT6WHe61RzTK8aw/dynamodblocal-support-for-returnvaluesonconditioncheckfailure-for-single-write-operations>
-                    // <https://github.com/localstack/localstack/issues/9040>
-                    None => Ok(TryLockResult::Conflict(
-                        self.get_lock(s3, path, etag).await?,
-                    )),
+                    None => Err(Error::Generic {
+                        store: STORE,
+                        source: "Failed to extract lease from conflict ReturnValuesOnConditionCheckFailure response".into()
+                    }),
                 },
                 _ => Err(Error::Generic {
                     store: STORE,
@@ -507,12 +461,6 @@ struct GetItem<'a> {
     table_name: &'a str,
     /// The primary key
     key: Map<'a, &'a str, AttributeValue<'a>>,
-}
-
-#[derive(Deserialize)]
-struct GetItemResponse<'a> {
-    #[serde(borrow, default, rename = "Item")]
-    item: HashMap<&'a str, AttributeValue<'a>>,
 }
 
 #[derive(Deserialize)]
