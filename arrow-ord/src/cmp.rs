@@ -252,8 +252,8 @@ fn compare_op(op: Op, lhs: &dyn Datum, rhs: &dyn Datum) -> Result<BooleanArray, 
         (Some(_), true, Some(a), false) | (Some(a), false, Some(_), true) => {
             // Scalar is null, other side is non-scalar and nullable
             match op {
-                Op::Distinct => a.into_inner().into(),
-                Op::NotDistinct => a.into_inner().not().into(),
+                Op::Distinct => a.into_owned().into_inner().into(),
+                Op::NotDistinct => a.into_owned().into_inner().not().into(),
                 _ => BooleanArray::new_null(len),
             }
         }
@@ -276,7 +276,7 @@ fn compare_op(op: Op, lhs: &dyn Datum, rhs: &dyn Datum) -> Result<BooleanArray, 
                         BooleanBuffer::new(buffer, 0, len).into()
                     }
                     Op::NotDistinct => (nulls.inner() & &values()).into(),
-                    _ => BooleanArray::new(values(), Some(nulls)),
+                    _ => BooleanArray::new(values(), Some(nulls.into_owned())),
                 },
             }
         }

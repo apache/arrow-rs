@@ -214,7 +214,7 @@ impl BooleanArray {
     where
         F: FnMut(T::Item) -> bool,
     {
-        let nulls = left.logical_nulls();
+        let nulls = left.logical_nulls().map(|n| n.into_owned());
         let values = BooleanBuffer::collect_bool(left.len(), |i| unsafe {
             // SAFETY: i in range 0..len
             op(left.value_unchecked(i))
@@ -245,8 +245,8 @@ impl BooleanArray {
         assert_eq!(left.len(), right.len());
 
         let nulls = NullBuffer::union(
-            left.logical_nulls().as_ref(),
-            right.logical_nulls().as_ref(),
+            left.logical_nulls().as_ref().map(|n| n.as_ref()),
+            right.logical_nulls().as_ref().map(|n| n.as_ref()),
         );
         let values = BooleanBuffer::collect_bool(left.len(), |i| unsafe {
             // SAFETY: i in range 0..len

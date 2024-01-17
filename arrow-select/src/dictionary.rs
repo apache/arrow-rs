@@ -152,7 +152,7 @@ pub fn merge_dictionary_values<K: ArrowDictionaryKeyType>(
     for (idx, dictionary) in dictionaries.iter().enumerate() {
         let mask = masks.and_then(|m| m.get(idx));
         let key_mask = match (dictionary.logical_nulls(), mask) {
-            (Some(n), None) => Some(n.into_inner()),
+            (Some(n), None) => Some(n.into_owned().into_inner()),
             (None, Some(n)) => Some(n.clone()),
             (Some(n), Some(m)) => Some(n.inner() & m),
             (None, None) => None,
