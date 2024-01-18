@@ -51,7 +51,7 @@ jobs:
           curl -LO https://github.com/protocolbuffers/protobuf/releases/download/v21.4/protoc-21.4-linux-x86_64.zip
           unzip protoc-21.4-linux-x86_64.zip
       - name: Cache Cargo
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         with:
           path: /home/runner/.cargo
           key: cargo-coverage-cache3-
