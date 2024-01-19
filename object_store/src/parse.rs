@@ -105,7 +105,7 @@ impl ObjectStoreScheme {
     }
 }
 
-#[cfg(any(feature = "aws", feature = "gcp", feature = "azure"))]
+#[cfg(feature = "cloud")]
 macro_rules! builder_opts {
     ($builder:ty, $url:expr, $options:expr) => {{
         let builder = $options.into_iter().fold(
@@ -164,8 +164,7 @@ where
         }
         #[cfg(feature = "http")]
         ObjectStoreScheme::Http => {
-            let url = &url[..url::Position::BeforePath];
-            Box::new(crate::http::HttpBuilder::new().with_url(url).build()?) as _
+            builder_opts!(crate::http::HttpBuilder, url, _options)
         }
         #[cfg(not(all(feature = "aws", feature = "azure", feature = "gcp", feature = "http")))]
         s => {
