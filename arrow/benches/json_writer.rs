@@ -35,7 +35,7 @@ fn do_bench(c: &mut Criterion, name: &str, batch: &RecordBatch) {
     c.bench_function(name, |b| {
         b.iter(|| {
             let mut out = Vec::with_capacity(1024);
-            LineDelimitedWriter::new(&mut out).write(&batch).unwrap();
+            LineDelimitedWriter::new(&mut out).write(batch).unwrap();
             out
         })
     });
