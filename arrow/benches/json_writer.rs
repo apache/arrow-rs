@@ -118,8 +118,8 @@ fn bench_dict_array(c: &mut Criterion) {
 
 fn bench_string_array(c: &mut Criterion) {
     let c1 = Arc::new(create_string_array::<i32>(NUM_ROWS, 0.));
-    let c2 = Arc::new(create_string_dict_array::<Int32Type>(NUM_ROWS, 0., 20));
-    let c3 = Arc::new(create_string_dict_array::<Int32Type>(NUM_ROWS, 0.1, 20));
+    let c2 = Arc::new(create_string_array_with_len::<i32>(NUM_ROWS, 0., 10));
+    let c3 = Arc::new(create_string_array_with_len::<i32>(NUM_ROWS, 0.1, 20));
 
     let batch =
         RecordBatch::try_from_iter([("c1", c1 as _), ("c2", c2 as _), ("c3", c3 as _)]).unwrap();
