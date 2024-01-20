@@ -90,7 +90,7 @@ fn create_nullable_struct(len: usize) -> StructArray {
 }
 
 fn bench_primitive(c: &mut Criterion) {
-    let c1 = Arc::new(create_string_array::<i32>(NUM_ROWS, 0.));
+    let c1 = Arc::new(create_primitive_array::<Float32Type>(NUM_ROWS, 0.));
     let c2 = Arc::new(create_primitive_array::<Int32Type>(NUM_ROWS, 0.));
     let c3 = Arc::new(create_primitive_array::<UInt32Type>(NUM_ROWS, 0.));
 
