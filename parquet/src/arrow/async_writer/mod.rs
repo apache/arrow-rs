@@ -99,7 +99,8 @@ impl<W: AsyncWrite + Unpin + Send> AsyncArrowWriter<W> {
         buffer_size: usize,
         props: Option<WriterProperties>,
     ) -> Result<Self> {
-        Self::try_new_with_options(writer, arrow_schema, buffer_size, props, Default::default())
+        let options = ArrowWriterOptions::new().with_properties(props.unwrap_or_default());
+        Self::try_new_with_options(writer, arrow_schema, buffer_size, options)
     }
 
     /// Try to create a new Async Arrow Writer with [`ArrowWriterOptions`].
@@ -115,12 +116,11 @@ impl<W: AsyncWrite + Unpin + Send> AsyncArrowWriter<W> {
         writer: W,
         arrow_schema: SchemaRef,
         buffer_size: usize,
-        props: Option<WriterProperties>,
         options: ArrowWriterOptions,
     ) -> Result<Self> {
         let shared_buffer = SharedBuffer::new(buffer_size);
         let sync_writer =
-            ArrowWriter::try_new_with_options(shared_buffer.clone(), arrow_schema, props, options)?;
+            ArrowWriter::try_new_with_options(shared_buffer.clone(), arrow_schema, options)?;
 
         Ok(Self {
             sync_writer,
