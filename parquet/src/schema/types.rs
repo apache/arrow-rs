@@ -1085,20 +1085,38 @@ fn from_thrift_helper(elements: &[SchemaElement], index: usize) -> Result<(usize
                 ));
             }
             let repetition = Repetition::try_from(elements[index].repetition_type.unwrap())?;
-            let physical_type = PhysicalType::try_from(elements[index].type_.unwrap())?;
-            let length = elements[index].type_length.unwrap_or(-1);
-            let scale = elements[index].scale.unwrap_or(-1);
-            let precision = elements[index].precision.unwrap_or(-1);
-            let name = &elements[index].name;
-            let builder = Type::primitive_type_builder(name, physical_type)
-                .with_repetition(repetition)
-                .with_converted_type(converted_type)
-                .with_logical_type(logical_type)
-                .with_length(length)
-                .with_precision(precision)
-                .with_scale(scale)
-                .with_id(field_id);
-            Ok((index + 1, Arc::new(builder.build()?)))
+            if let Some(type_) = elements[index].type_ {
+                let physical_type = PhysicalType::try_from(type_)?;
+                let length = elements[index].type_length.unwrap_or(-1);
+                let scale = elements[index].scale.unwrap_or(-1);
+                let precision = elements[index].precision.unwrap_or(-1);
+                let name = &elements[index].name;
+                let builder = Type::primitive_type_builder(name, physical_type)
+                    .with_repetition(repetition)
+                    .with_converted_type(converted_type)
+                    .with_logical_type(logical_type)
+                    .with_length(length)
+                    .with_precision(precision)
+                    .with_scale(scale)
+                    .with_id(field_id);
+                Ok((index + 1, Arc::new(builder.build()?)))
+            } else {
+                let mut builder = Type::group_type_builder(&elements[index].name)
+                    .with_converted_type(converted_type)
+                    .with_logical_type(logical_type)
+                    .with_id(field_id);
+                if !is_root_node {
+                    // Sometimes parquet-cpp and parquet-mr set repetition level REQUIRED or
+                    // REPEATED for root node.
+                    //
+                    // We only set repetition for group types that are not top-level message
+                    // type. According to parquet-format:
+                    //   Root of the schema does not have a repetition_type.
+                    //   All other types must have one.
+                    builder = builder.with_repetition(repetition);
+                }
+                Ok((index + 1, Arc::new(builder.build().unwrap())))
+            }
         }
         Some(n) => {
             let repetition = elements[index]
@@ -2130,6 +2148,18 @@ mod tests {
       OPTIONAL INT32 b (UINT_8);
     }
     ";
+
+        let expected_schema = parse_message_type(message_type).unwrap();
+        let mut thrift_schema = to_thrift(&expected_schema).unwrap();
+        thrift_schema[0].repetition_type = Some(Repetition::REQUIRED.into());
+
+        let result_schema = from_thrift(&thrift_schema).unwrap();
+        assert_eq!(result_schema, Arc::new(expected_schema));
+    }
+
+    #[test]
+    fn test_schema_from_thrift_group_has_no_child() {
+        let message_type = "message schema {}";
 
         let expected_schema = parse_message_type(message_type).unwrap();
         let mut thrift_schema = to_thrift(&expected_schema).unwrap();
