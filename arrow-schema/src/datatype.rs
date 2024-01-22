@@ -158,7 +158,7 @@ pub enum DataType {
     /// such as Java when it used to store dates as timestamps.
     ///
     /// Practically, validation that values of this type are evenly divisible by `86_400_000` is not enforced
-    /// by this library for performance and usability reasons. Date64 values will be treated similar to the
+    /// by this library for performance and usability reasons. Date64 values will be treated similarly to the
     /// `Timestamp(TimeUnit::Millisecond, None)` type, in that its values will be printed showing the time of
     /// day if the value does not represent an exact day, and arithmetic can be done at the millisecond
     /// granularity to change the time represented.
