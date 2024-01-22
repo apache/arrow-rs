@@ -132,6 +132,7 @@ impl FlightSqlServiceClient<Channel> {
     }
 
     /// Perform a `handshake` with the server, passing credentials and establishing a session.
+    ///
     /// If the server returns an "authorization" header, it is automatically parsed and set as
     /// a token for future requests. Any other data returned by the server in the handshake
     /// response is returned as a binary blob.
