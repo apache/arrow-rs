@@ -155,7 +155,8 @@ pub enum DataType {
     /// `86_400_000` (the number of milliseconds in a standard day).
     ///
     /// The reason for this is for compatibility with other language's native libraries,
-    /// such as Java when it used to store dates as timestamps.
+    /// such as Java, which historically lacked a dedicated date type
+    /// and only supported timestamps.
     ///
     /// Practically, validation that values of this type are evenly divisible by `86_400_000` is not enforced
     /// by this library for performance and usability reasons. Date64 values will be treated similarly to the
