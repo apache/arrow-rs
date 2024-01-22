@@ -2159,7 +2159,6 @@ mod tests {
 
     #[test]
     fn test_schema_from_thrift_group_has_no_child() {
-        // schema definition written by parquet-cpp version 1.3.2-SNAPSHOT
         let message_type = "message schema {}";
 
         let expected_schema = parse_message_type(message_type).unwrap();
