@@ -131,8 +131,11 @@ impl FlightSqlServiceClient<Channel> {
         self.get_flight_info_for_command(cmd).await
     }
 
-    /// Perform a `handshake` with the server, passing credentials and establishing a session
-    /// Returns arbitrary auth/handshake info binary blob
+    /// Perform a `handshake` with the server, passing credentials and establishing a session.
+    ///
+    /// If the server returns an "authorization" header, it is automatically parsed and set as
+    /// a token for future requests. Any other data returned by the server in the handshake
+    /// response is returned as a binary blob.
     pub async fn handshake(&mut self, username: &str, password: &str) -> Result<Bytes, ArrowError> {
         let cmd = HandshakeRequest {
             protocol_version: 0,
