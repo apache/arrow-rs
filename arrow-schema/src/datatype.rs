@@ -145,10 +145,31 @@ pub enum DataType {
     /// ```
     Timestamp(TimeUnit, Option<Arc<str>>),
     /// A signed 32-bit date representing the elapsed time since UNIX epoch (1970-01-01)
-    /// in days (32 bits).
+    /// in days.
     Date32,
     /// A signed 64-bit date representing the elapsed time since UNIX epoch (1970-01-01)
-    /// in milliseconds (64 bits). Values are evenly divisible by 86400000.
+    /// in milliseconds.
+    ///
+    /// According to the specification (see [Schema.fbs]), this should be treated as the number of
+    /// days, in milliseconds, since the UNIX epoch. Therefore, values must be evenly divisible by
+    /// `86_400_000` (the number of milliseconds in a standard day).
+    ///
+    /// The reason for this is for compatibility with other language's native libraries,
+    /// such as Java, which historically lacked a dedicated date type
+    /// and only supported timestamps.
+    ///
+    /// Practically, validation that values of this type are evenly divisible by `86_400_000` is not enforced
+    /// by this library for performance and usability reasons. Date64 values will be treated similarly to the
+    /// `Timestamp(TimeUnit::Millisecond, None)` type, in that its values will be printed showing the time of
+    /// day if the value does not represent an exact day, and arithmetic can be done at the millisecond
+    /// granularity to change the time represented.
+    ///
+    /// Users should prefer using Date32 to cleanly represent the number of days, or one of the Timestamp
+    /// variants to include time as part of the representation, depending on their use case.
+    ///
+    /// For more details, see [#5288](https://github.com/apache/arrow-rs/issues/5288).
+    ///
+    /// [Schema.fbs]: https://github.com/apache/arrow/blob/main/format/Schema.fbs
     Date64,
     /// A signed 32-bit time representing the elapsed time since midnight in the unit of `TimeUnit`.
     /// Must be either seconds or milliseconds.
