@@ -154,7 +154,7 @@ pub enum DataType {
     /// days, in milliseconds, since the UNIX epoch. Therefore, values must be evenly divisible by
     /// `86_400_000` (the number of milliseconds in a standard day).
     ///
-    /// The reason for this is historically for compatibility with other languages native libraries,
+    /// The reason for this is for compatibility with other language's native libraries,
     /// such as Java when it used to store dates as timestamps.
     ///
     /// Practically, validation that values of this type are evenly divisible by `86_400_000` is not enforced
