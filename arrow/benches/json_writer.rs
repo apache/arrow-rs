@@ -89,15 +89,24 @@ fn create_nullable_struct(len: usize) -> StructArray {
     )
 }
 
-fn bench_primitive(c: &mut Criterion) {
+fn bench_float(c: &mut Criterion) {
     let c1 = Arc::new(create_primitive_array::<Float32Type>(NUM_ROWS, 0.));
+    let c2 = Arc::new(create_primitive_array::<Float64Type>(NUM_ROWS, 0.));
+
+    let batch = RecordBatch::try_from_iter([("c1", c1 as _), ("c2", c2 as _)]).unwrap();
+
+    do_bench(c, "bench_float", &batch)
+}
+
+fn bench_integer(c: &mut Criterion) {
+    let c1 = Arc::new(create_primitive_array::<UInt64Type>(NUM_ROWS, 0.));
     let c2 = Arc::new(create_primitive_array::<Int32Type>(NUM_ROWS, 0.));
     let c3 = Arc::new(create_primitive_array::<UInt32Type>(NUM_ROWS, 0.));
 
     let batch =
         RecordBatch::try_from_iter([("c1", c1 as _), ("c2", c2 as _), ("c3", c3 as _)]).unwrap();
 
-    do_bench(c, "bench_primitive", &batch)
+    do_bench(c, "bench_integer", &batch)
 }
 
 fn bench_mixed(c: &mut Criterion) {
@@ -106,7 +115,7 @@ fn bench_mixed(c: &mut Criterion) {
 }
 
 fn bench_dict_array(c: &mut Criterion) {
-    let c1 = Arc::new(create_string_array::<i32>(NUM_ROWS, 0.));
+    let c1 = Arc::new(create_string_dict_array::<Int32Type>(NUM_ROWS, 0., 30));
     let c2 = Arc::new(create_string_dict_array::<Int32Type>(NUM_ROWS, 0., 20));
     let c3 = Arc::new(create_string_dict_array::<Int32Type>(NUM_ROWS, 0.1, 20));
 
@@ -116,7 +125,7 @@ fn bench_dict_array(c: &mut Criterion) {
     do_bench(c, "bench_dict_array", &batch)
 }
 
-fn bench_string_array(c: &mut Criterion) {
+fn bench_string(c: &mut Criterion) {
     let c1 = Arc::new(create_string_array::<i32>(NUM_ROWS, 0.));
     let c2 = Arc::new(create_string_array_with_len::<i32>(NUM_ROWS, 0., 10));
     let c3 = Arc::new(create_string_array_with_len::<i32>(NUM_ROWS, 0.1, 20));
@@ -173,8 +182,9 @@ fn bench_struct_list(c: &mut Criterion) {
 }
 
 fn criterion_benchmark(c: &mut Criterion) {
-    bench_primitive(c);
-    bench_string_array(c);
+    bench_integer(c);
+    bench_float(c);
+    bench_string(c);
     bench_mixed(c);
     bench_dict_array(c);
     bench_struct(c);
