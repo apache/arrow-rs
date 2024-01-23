@@ -19,8 +19,8 @@
 
 use std::sync::Arc;
 
-use arrow_array::cast::{downcast_array, AsArray};
-use chrono::{DateTime, Datelike, NaiveDateTime, Offset, TimeZone, Timelike, Utc};
+use arrow_array::cast::AsArray;
+use chrono::{Datelike, NaiveDateTime, Offset, TimeZone, Timelike, Utc};
 
 use arrow_array::temporal_conversions::{
     date32_to_datetime, date64_to_datetime, time32ms_to_time, time32s_to_time, time64ns_to_time,
@@ -31,7 +31,7 @@ use arrow_array::timezone::Tz;
 use arrow_array::types::*;
 use arrow_array::*;
 use arrow_buffer::ArrowNativeType;
-use arrow_schema::{ArrowError, DataType, TimeUnit};
+use arrow_schema::{ArrowError, DataType};
 
 /// Valid parts to extract from date/timestamp arrays.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -72,8 +72,14 @@ impl std::fmt::Display for DatePart {
     }
 }
 
-/// Returns function to extract relevant [`DatePart`] from a [`NaiveDateTime`].
-fn get_naive_date_time_part_extract_fn(part: DatePart) -> fn(NaiveDateTime) -> i32 {
+/// Returns function to extract relevant [`DatePart`] from types like a
+/// [`NaiveDateTime`] or [`DateTime`].
+///
+/// [`DateTime`]: chrono::DateTime
+fn get_date_time_part_extract_fn<T>(part: DatePart) -> fn(T) -> i32
+where
+    T: ChronoDateExt + Datelike + Timelike,
+{
     match part {
         DatePart::Quarter => |d| d.quarter() as i32,
         DatePart::Year => |d| d.year(),
@@ -90,185 +96,6 @@ fn get_naive_date_time_part_extract_fn(part: DatePart) -> fn(NaiveDateTime) -> i
         DatePart::Microsecond => |d| (d.nanosecond() / 1_000) as i32,
         DatePart::Nanosecond => |d| (d.nanosecond()) as i32,
     }
-}
-
-/// Returns function to extract relevant [`DatePart`] from a [`DateTime`].
-fn get_date_time_tz_part_extract_fn(part: DatePart) -> fn(DateTime<Tz>) -> i32 {
-    match part {
-        DatePart::Quarter => |d| d.quarter() as i32,
-        DatePart::Year => |d| d.year(),
-        DatePart::Month => |d| d.month() as i32,
-        DatePart::Week => |d| d.iso_week().week() as i32,
-        DatePart::Day => |d| d.day() as i32,
-        DatePart::DayOfWeekSunday0 => |d| d.num_days_from_sunday(),
-        DatePart::DayOfWeekMonday0 => |d| d.num_days_from_monday(),
-        DatePart::DayOfYear => |d| d.ordinal() as i32,
-        DatePart::Hour => |d| d.hour() as i32,
-        DatePart::Minute => |d| d.minute() as i32,
-        DatePart::Second => |d| d.second() as i32,
-        DatePart::Millisecond => |d| (d.nanosecond() / 1_000_000) as i32,
-        DatePart::Microsecond => |d| (d.nanosecond() / 1_000) as i32,
-        DatePart::Nanosecond => |d| (d.nanosecond()) as i32,
-    }
-}
-
-fn date_part_time32_s(
-    array: &PrimitiveArray<Time32SecondType>,
-    part: DatePart,
-) -> Result<Int32Array, ArrowError> {
-    match part {
-        DatePart::Hour => Ok(array.unary_opt(|d| time32s_to_time(d).map(|c| c.hour() as i32))),
-        // TODO expand support for Time types, see: https://github.com/apache/arrow-rs/issues/5261
-        _ => return_compute_error_with!(format!("{part} does not support"), array.data_type()),
-    }
-}
-
-fn date_part_time32_ms(
-    array: &PrimitiveArray<Time32MillisecondType>,
-    part: DatePart,
-) -> Result<Int32Array, ArrowError> {
-    match part {
-        DatePart::Hour => Ok(array.unary_opt(|d| time32ms_to_time(d).map(|c| c.hour() as i32))),
-        // TODO expand support for Time types, see: https://github.com/apache/arrow-rs/issues/5261
-        _ => return_compute_error_with!(format!("{part} does not support"), array.data_type()),
-    }
-}
-
-fn date_part_time64_us(
-    array: &PrimitiveArray<Time64MicrosecondType>,
-    part: DatePart,
-) -> Result<Int32Array, ArrowError> {
-    match part {
-        DatePart::Hour => Ok(array.unary_opt(|d| time64us_to_time(d).map(|c| c.hour() as i32))),
-        // TODO expand support for Time types, see: https://github.com/apache/arrow-rs/issues/5261
-        _ => return_compute_error_with!(format!("{part} does not support"), array.data_type()),
-    }
-}
-
-fn date_part_time64_ns(
-    array: &PrimitiveArray<Time64NanosecondType>,
-    part: DatePart,
-) -> Result<Int32Array, ArrowError> {
-    match part {
-        DatePart::Hour => Ok(array.unary_opt(|d| time64ns_to_time(d).map(|c| c.hour() as i32))),
-        // TODO expand support for Time types, see: https://github.com/apache/arrow-rs/issues/5261
-        _ => return_compute_error_with!(format!("{part} does not support"), array.data_type()),
-    }
-}
-
-fn date_part_date32(array: &PrimitiveArray<Date32Type>, part: DatePart) -> Int32Array {
-    // Date32 only encodes number of days, so these will always be 0
-    if let DatePart::Hour
-    | DatePart::Minute
-    | DatePart::Second
-    | DatePart::Millisecond
-    | DatePart::Microsecond
-    | DatePart::Nanosecond = part
-    {
-        array.unary(|_| 0)
-    } else {
-        let map_func = get_naive_date_time_part_extract_fn(part);
-        array.unary_opt(|d| date32_to_datetime(d).map(map_func))
-    }
-}
-
-fn date_part_date64(array: &PrimitiveArray<Date64Type>, part: DatePart) -> Int32Array {
-    let map_func = get_naive_date_time_part_extract_fn(part);
-    array.unary_opt(|d| date64_to_datetime(d).map(map_func))
-}
-
-fn date_part_timestamp_s(
-    array: &PrimitiveArray<TimestampSecondType>,
-    part: DatePart,
-) -> Int32Array {
-    // TimestampSecond only encodes number of seconds, so these will always be 0
-    if let DatePart::Millisecond | DatePart::Microsecond | DatePart::Nanosecond = part {
-        array.unary(|_| 0)
-    } else {
-        let map_func = get_naive_date_time_part_extract_fn(part);
-        array.unary_opt(|d| timestamp_s_to_datetime(d).map(map_func))
-    }
-}
-
-fn date_part_timestamp_s_tz(
-    array: &PrimitiveArray<TimestampSecondType>,
-    part: DatePart,
-    tz: Tz,
-) -> Int32Array {
-    // TimestampSecond only encodes number of seconds, so these will always be 0
-    if let DatePart::Millisecond | DatePart::Microsecond | DatePart::Nanosecond = part {
-        array.unary(|_| 0)
-    } else {
-        let map_func = get_date_time_tz_part_extract_fn(part);
-        array.unary_opt(|d| {
-            timestamp_s_to_datetime(d)
-                .map(|c| Utc.from_utc_datetime(&c).with_timezone(&tz))
-                .map(map_func)
-        })
-    }
-}
-
-fn date_part_timestamp_ms(
-    array: &PrimitiveArray<TimestampMillisecondType>,
-    part: DatePart,
-) -> Int32Array {
-    let map_func = get_naive_date_time_part_extract_fn(part);
-    array.unary_opt(|d| timestamp_ms_to_datetime(d).map(map_func))
-}
-
-fn date_part_timestamp_ms_tz(
-    array: &PrimitiveArray<TimestampMillisecondType>,
-    part: DatePart,
-    tz: Tz,
-) -> Int32Array {
-    let map_func = get_date_time_tz_part_extract_fn(part);
-    array.unary_opt(|d| {
-        timestamp_ms_to_datetime(d)
-            .map(|c| Utc.from_utc_datetime(&c).with_timezone(&tz))
-            .map(map_func)
-    })
-}
-
-fn date_part_timestamp_us(
-    array: &PrimitiveArray<TimestampMicrosecondType>,
-    part: DatePart,
-) -> Int32Array {
-    let map_func = get_naive_date_time_part_extract_fn(part);
-    array.unary_opt(|d| timestamp_us_to_datetime(d).map(map_func))
-}
-
-fn date_part_timestamp_us_tz(
-    array: &PrimitiveArray<TimestampMicrosecondType>,
-    part: DatePart,
-    tz: Tz,
-) -> Int32Array {
-    let map_func = get_date_time_tz_part_extract_fn(part);
-    array.unary_opt(|d| {
-        timestamp_us_to_datetime(d)
-            .map(|c| Utc.from_utc_datetime(&c).with_timezone(&tz))
-            .map(map_func)
-    })
-}
-
-fn date_part_timestamp_ns(
-    array: &PrimitiveArray<TimestampNanosecondType>,
-    part: DatePart,
-) -> Int32Array {
-    let map_func = get_naive_date_time_part_extract_fn(part);
-    array.unary_opt(|d| timestamp_ns_to_datetime(d).map(map_func))
-}
-
-fn date_part_timestamp_ns_tz(
-    array: &PrimitiveArray<TimestampNanosecondType>,
-    part: DatePart,
-    tz: Tz,
-) -> Int32Array {
-    let map_func = get_date_time_tz_part_extract_fn(part);
-    array.unary_opt(|d| {
-        timestamp_ns_to_datetime(d)
-            .map(|c| Utc.from_utc_datetime(&c).with_timezone(&tz))
-            .map(map_func)
-    })
 }
 
 /// Given array, return new array with the extracted [`DatePart`].
@@ -278,92 +105,186 @@ fn date_part_timestamp_ns_tz(
 ///
 /// Returns error if attempting to extract date part from unsupported type (i.e. non-date/timestamp types).
 pub fn date_part(array: &dyn Array, part: DatePart) -> Result<ArrayRef, ArrowError> {
-    downcast_primitive_array!(
+    downcast_temporal_array!(
         array => {
-            let array = primitive_array_date_part(array, part)?;
+            let array = array.date_part(part)?;
             let array = Arc::new(array) as ArrayRef;
             Ok(array)
         }
+        // TODO: support interval
+        // DataType::Interval(_) => {
+        //     todo!();
+        // }
         DataType::Dictionary(_, _) => {
             let array = array.as_any_dictionary();
             let values = date_part(array.values(), part)?;
-            let new_array = array.with_values(Arc::new(values) as ArrayRef);
+            let values = Arc::new(values) as ArrayRef;
+            let new_array = array.with_values(values);
             Ok(new_array)
         }
         t => return_compute_error_with!(format!("{part} does not support"), t),
     )
 }
 
-/// Dispatch to specialized function depending on the array type. Since we don't need to consider
-/// dictionary arrays here, can strictly control return type to be [`Int32Array`].
-fn primitive_array_date_part<T: ArrowPrimitiveType>(
+/// Used to integrate new [`date_part()`] method with existing shims such as
+/// [`hour()`] and [`week()`].
+fn date_part_primitive<T: ArrowTemporalType>(
     array: &PrimitiveArray<T>,
     part: DatePart,
 ) -> Result<Int32Array, ArrowError> {
-    match array.data_type() {
-        DataType::Date32 => {
-            let array = downcast_array::<Date32Array>(array);
-            Ok(date_part_date32(&array, part))
+    let array = date_part(array, part)?;
+    Ok(array.as_primitive::<Int32Type>().to_owned())
+}
+
+/// Extract optional [`Tz`] from timestamp data types, returning error
+/// if called with a non-timestamp type.
+fn get_tz(dt: &DataType) -> Result<Option<Tz>, ArrowError> {
+    match dt {
+        DataType::Timestamp(_, Some(tz)) => Ok(Some(tz.parse::<Tz>()?)),
+        DataType::Timestamp(_, None) => Ok(None),
+        _ => Err(ArrowError::CastError(format!("Not a timestamp type: {dt}"))),
+    }
+}
+
+/// Implement the specialized functions for extracting date part from temporal arrays.
+trait ExtractDatePartExt {
+    fn date_part(&self, part: DatePart) -> Result<Int32Array, ArrowError>;
+}
+
+impl ExtractDatePartExt for PrimitiveArray<Time32SecondType> {
+    fn date_part(&self, part: DatePart) -> Result<Int32Array, ArrowError> {
+        match part {
+            DatePart::Hour => Ok(self.unary_opt(|d| time32s_to_time(d).map(|c| c.hour() as i32))),
+            // TODO expand support for Time types, see: https://github.com/apache/arrow-rs/issues/5261
+            _ => return_compute_error_with!(format!("{part} does not support"), self.data_type()),
         }
-        DataType::Date64 => {
-            let array = downcast_array::<Date64Array>(array);
-            Ok(date_part_date64(&array, part))
+    }
+}
+
+impl ExtractDatePartExt for PrimitiveArray<Time32MillisecondType> {
+    fn date_part(&self, part: DatePart) -> Result<Int32Array, ArrowError> {
+        match part {
+            DatePart::Hour => Ok(self.unary_opt(|d| time32ms_to_time(d).map(|c| c.hour() as i32))),
+            // TODO expand support for Time types, see: https://github.com/apache/arrow-rs/issues/5261
+            _ => return_compute_error_with!(format!("{part} does not support"), self.data_type()),
         }
-        DataType::Timestamp(TimeUnit::Second, None) => {
-            let array = downcast_array::<TimestampSecondArray>(array);
-            Ok(date_part_timestamp_s(&array, part))
+    }
+}
+
+impl ExtractDatePartExt for PrimitiveArray<Time64MicrosecondType> {
+    fn date_part(&self, part: DatePart) -> Result<Int32Array, ArrowError> {
+        match part {
+            DatePart::Hour => Ok(self.unary_opt(|d| time64us_to_time(d).map(|c| c.hour() as i32))),
+            // TODO expand support for Time types, see: https://github.com/apache/arrow-rs/issues/5261
+            _ => return_compute_error_with!(format!("{part} does not support"), self.data_type()),
         }
-        DataType::Timestamp(TimeUnit::Second, Some(tz)) => {
-            let array = downcast_array::<TimestampSecondArray>(array);
-            let tz = tz.parse()?;
-            Ok(date_part_timestamp_s_tz(&array, part, tz))
+    }
+}
+
+impl ExtractDatePartExt for PrimitiveArray<Time64NanosecondType> {
+    fn date_part(&self, part: DatePart) -> Result<Int32Array, ArrowError> {
+        match part {
+            DatePart::Hour => Ok(self.unary_opt(|d| time64ns_to_time(d).map(|c| c.hour() as i32))),
+            // TODO expand support for Time types, see: https://github.com/apache/arrow-rs/issues/5261
+            _ => return_compute_error_with!(format!("{part} does not support"), self.data_type()),
         }
-        DataType::Timestamp(TimeUnit::Millisecond, None) => {
-            let array = downcast_array::<TimestampMillisecondArray>(array);
-            Ok(date_part_timestamp_ms(&array, part))
+    }
+}
+
+impl ExtractDatePartExt for PrimitiveArray<Date32Type> {
+    fn date_part(&self, part: DatePart) -> Result<Int32Array, ArrowError> {
+        // Date32 only encodes number of days, so these will always be 0
+        if let DatePart::Hour
+        | DatePart::Minute
+        | DatePart::Second
+        | DatePart::Millisecond
+        | DatePart::Microsecond
+        | DatePart::Nanosecond = part
+        {
+            Ok(self.unary(|_| 0))
+        } else {
+            let map_func = get_date_time_part_extract_fn(part);
+            Ok(self.unary_opt(|d| date32_to_datetime(d).map(map_func)))
         }
-        DataType::Timestamp(TimeUnit::Millisecond, Some(tz)) => {
-            let array = downcast_array::<TimestampMillisecondArray>(array);
-            let tz = tz.parse()?;
-            Ok(date_part_timestamp_ms_tz(&array, part, tz))
-        }
-        DataType::Timestamp(TimeUnit::Microsecond, None) => {
-            let array = downcast_array::<TimestampMicrosecondArray>(array);
-            Ok(date_part_timestamp_us(&array, part))
-        }
-        DataType::Timestamp(TimeUnit::Microsecond, Some(tz)) => {
-            let array = downcast_array::<TimestampMicrosecondArray>(array);
-            let tz = tz.parse()?;
-            Ok(date_part_timestamp_us_tz(&array, part, tz))
-        }
-        DataType::Timestamp(TimeUnit::Nanosecond, None) => {
-            let array = downcast_array::<TimestampNanosecondArray>(array);
-            Ok(date_part_timestamp_ns(&array, part))
-        }
-        DataType::Timestamp(TimeUnit::Nanosecond, Some(tz)) => {
-            let array = downcast_array::<TimestampNanosecondArray>(array);
-            let tz = tz.parse()?;
-            Ok(date_part_timestamp_ns_tz(&array, part, tz))
-        }
-        DataType::Time32(TimeUnit::Second) => {
-            let array = downcast_array::<Time32SecondArray>(array);
-            Ok(date_part_time32_s(&array, part)?)
-        }
-        DataType::Time32(TimeUnit::Millisecond) => {
-            let array = downcast_array::<Time32MillisecondArray>(array);
-            Ok(date_part_time32_ms(&array, part)?)
-        }
-        DataType::Time64(TimeUnit::Microsecond) => {
-            let array = downcast_array::<Time64MicrosecondArray>(array);
-            Ok(date_part_time64_us(&array, part)?)
-        }
-        DataType::Time64(TimeUnit::Nanosecond) => {
-            let array = downcast_array::<Time64NanosecondArray>(array);
-            Ok(date_part_time64_ns(&array, part)?)
-        }
-        // TODO: support Interval
-        // DataType::Interval(_) => todo!(),
-        _ => return_compute_error_with!(format!("{part} does not support"), array.data_type()),
+    }
+}
+
+impl ExtractDatePartExt for PrimitiveArray<Date64Type> {
+    fn date_part(&self, part: DatePart) -> Result<Int32Array, ArrowError> {
+        let map_func = get_date_time_part_extract_fn(part);
+        Ok(self.unary_opt(|d| date64_to_datetime(d).map(map_func)))
+    }
+}
+
+impl ExtractDatePartExt for PrimitiveArray<TimestampSecondType> {
+    fn date_part(&self, part: DatePart) -> Result<Int32Array, ArrowError> {
+        // TimestampSecond only encodes number of seconds, so these will always be 0
+        let array =
+            if let DatePart::Millisecond | DatePart::Microsecond | DatePart::Nanosecond = part {
+                self.unary(|_| 0)
+            } else if let Some(tz) = get_tz(self.data_type())? {
+                let map_func = get_date_time_part_extract_fn(part);
+                self.unary_opt(|d| {
+                    timestamp_s_to_datetime(d)
+                        .map(|c| Utc.from_utc_datetime(&c).with_timezone(&tz))
+                        .map(map_func)
+                })
+            } else {
+                let map_func = get_date_time_part_extract_fn(part);
+                self.unary_opt(|d| timestamp_s_to_datetime(d).map(map_func))
+            };
+        Ok(array)
+    }
+}
+
+impl ExtractDatePartExt for PrimitiveArray<TimestampMillisecondType> {
+    fn date_part(&self, part: DatePart) -> Result<Int32Array, ArrowError> {
+        let array = if let Some(tz) = get_tz(self.data_type())? {
+            let map_func = get_date_time_part_extract_fn(part);
+            self.unary_opt(|d| {
+                timestamp_ms_to_datetime(d)
+                    .map(|c| Utc.from_utc_datetime(&c).with_timezone(&tz))
+                    .map(map_func)
+            })
+        } else {
+            let map_func = get_date_time_part_extract_fn(part);
+            self.unary_opt(|d| timestamp_ms_to_datetime(d).map(map_func))
+        };
+        Ok(array)
+    }
+}
+
+impl ExtractDatePartExt for PrimitiveArray<TimestampMicrosecondType> {
+    fn date_part(&self, part: DatePart) -> Result<Int32Array, ArrowError> {
+        let array = if let Some(tz) = get_tz(self.data_type())? {
+            let map_func = get_date_time_part_extract_fn(part);
+            self.unary_opt(|d| {
+                timestamp_us_to_datetime(d)
+                    .map(|c| Utc.from_utc_datetime(&c).with_timezone(&tz))
+                    .map(map_func)
+            })
+        } else {
+            let map_func = get_date_time_part_extract_fn(part);
+            self.unary_opt(|d| timestamp_us_to_datetime(d).map(map_func))
+        };
+        Ok(array)
+    }
+}
+
+impl ExtractDatePartExt for PrimitiveArray<TimestampNanosecondType> {
+    fn date_part(&self, part: DatePart) -> Result<Int32Array, ArrowError> {
+        let array = if let Some(tz) = get_tz(self.data_type())? {
+            let map_func = get_date_time_part_extract_fn(part);
+            self.unary_opt(|d| {
+                timestamp_ns_to_datetime(d)
+                    .map(|c| Utc.from_utc_datetime(&c).with_timezone(&tz))
+                    .map(map_func)
+            })
+        } else {
+            let map_func = get_date_time_part_extract_fn(part);
+            self.unary_opt(|d| timestamp_ns_to_datetime(d).map(map_func))
+        };
+        Ok(array)
     }
 }
 
@@ -435,7 +356,7 @@ where
     T: ArrowTemporalType + ArrowNumericType,
     i64: From<T::Native>,
 {
-    primitive_array_date_part(array, DatePart::Hour)
+    date_part_primitive(array, DatePart::Hour)
 }
 
 /// Extracts the years of a given temporal array as an array of integers.
@@ -451,7 +372,7 @@ where
     T: ArrowTemporalType + ArrowNumericType,
     i64: From<T::Native>,
 {
-    primitive_array_date_part(array, DatePart::Year)
+    date_part_primitive(array, DatePart::Year)
 }
 
 /// Extracts the quarter of a given temporal array as an array of integersa within
@@ -468,7 +389,7 @@ where
     T: ArrowTemporalType + ArrowNumericType,
     i64: From<T::Native>,
 {
-    primitive_array_date_part(array, DatePart::Quarter)
+    date_part_primitive(array, DatePart::Quarter)
 }
 
 /// Extracts the month of a given temporal array as an array of integers.
@@ -485,7 +406,7 @@ where
     T: ArrowTemporalType + ArrowNumericType,
     i64: From<T::Native>,
 {
-    primitive_array_date_part(array, DatePart::Month)
+    date_part_primitive(array, DatePart::Month)
 }
 
 /// Extracts the day of week of a given temporal array as an array of
@@ -512,7 +433,7 @@ where
     T: ArrowTemporalType + ArrowNumericType,
     i64: From<T::Native>,
 {
-    primitive_array_date_part(array, DatePart::DayOfWeekMonday0)
+    date_part_primitive(array, DatePart::DayOfWeekMonday0)
 }
 
 /// Extracts the day of week of a given temporal array as an array of
@@ -539,7 +460,7 @@ where
     T: ArrowTemporalType + ArrowNumericType,
     i64: From<T::Native>,
 {
-    primitive_array_date_part(array, DatePart::DayOfWeekSunday0)
+    date_part_primitive(array, DatePart::DayOfWeekSunday0)
 }
 
 /// Extracts the day of a given temporal array as an array of integers.
@@ -555,7 +476,7 @@ where
     T: ArrowTemporalType + ArrowNumericType,
     i64: From<T::Native>,
 {
-    primitive_array_date_part(array, DatePart::Day)
+    date_part_primitive(array, DatePart::Day)
 }
 
 /// Extracts the day of year of a given temporal array as an array of integers
@@ -574,7 +495,7 @@ where
     T::Native: ArrowNativeType,
     i64: From<T::Native>,
 {
-    primitive_array_date_part(array, DatePart::DayOfYear)
+    date_part_primitive(array, DatePart::DayOfYear)
 }
 
 /// Extracts the minutes of a given temporal primitive array as an array of integers
@@ -583,7 +504,7 @@ where
     T: ArrowTemporalType + ArrowNumericType,
     i64: From<T::Native>,
 {
-    primitive_array_date_part(array, DatePart::Minute)
+    date_part_primitive(array, DatePart::Minute)
 }
 
 /// Extracts the week of a given temporal array as an array of integers.
@@ -599,7 +520,7 @@ where
     T: ArrowTemporalType + ArrowNumericType,
     i64: From<T::Native>,
 {
-    primitive_array_date_part(array, DatePart::Week)
+    date_part_primitive(array, DatePart::Week)
 }
 
 /// Extracts the seconds of a given temporal primitive array as an array of integers
@@ -608,7 +529,7 @@ where
     T: ArrowTemporalType + ArrowNumericType,
     i64: From<T::Native>,
 {
-    primitive_array_date_part(array, DatePart::Second)
+    date_part_primitive(array, DatePart::Second)
 }
 
 /// Extracts the nanoseconds of a given temporal primitive array as an array of integers
@@ -617,7 +538,7 @@ where
     T: ArrowTemporalType + ArrowNumericType,
     i64: From<T::Native>,
 {
-    primitive_array_date_part(array, DatePart::Nanosecond)
+    date_part_primitive(array, DatePart::Nanosecond)
 }
 
 /// Extracts the nanoseconds of a given temporal primitive array as an array of integers.
@@ -633,7 +554,7 @@ where
     T: ArrowTemporalType + ArrowNumericType,
     i64: From<T::Native>,
 {
-    primitive_array_date_part(array, DatePart::Microsecond)
+    date_part_primitive(array, DatePart::Microsecond)
 }
 
 /// Extracts the microseconds of a given temporal primitive array as an array of integers.
@@ -649,7 +570,7 @@ where
     T: ArrowTemporalType + ArrowNumericType,
     i64: From<T::Native>,
 {
-    primitive_array_date_part(array, DatePart::Millisecond)
+    date_part_primitive(array, DatePart::Millisecond)
 }
 /// Extracts the milliseconds of a given temporal primitive array as an array of integers.
 /// If the given array isn't temporal primitive or dictionary array,
