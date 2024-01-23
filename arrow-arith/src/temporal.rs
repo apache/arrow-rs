@@ -201,7 +201,10 @@ impl ExtractDatePartExt for PrimitiveArray<Date32Type> {
         | DatePart::Microsecond
         | DatePart::Nanosecond = part
         {
-            Ok(self.unary(|_| 0))
+            Ok(Int32Array::new(
+                vec![0; self.len()].into(),
+                self.nulls().cloned(),
+            ))
         } else {
             let map_func = get_date_time_part_extract_fn(part);
             Ok(self.unary_opt(|d| date32_to_datetime(d).map(map_func)))
@@ -221,7 +224,7 @@ impl ExtractDatePartExt for PrimitiveArray<TimestampSecondType> {
         // TimestampSecond only encodes number of seconds, so these will always be 0
         let array =
             if let DatePart::Millisecond | DatePart::Microsecond | DatePart::Nanosecond = part {
-                self.unary(|_| 0)
+                Int32Array::new(vec![0; self.len()].into(), self.nulls().cloned())
             } else if let Some(tz) = get_tz(self.data_type())? {
                 let map_func = get_date_time_part_extract_fn(part);
                 self.unary_opt(|d| {
