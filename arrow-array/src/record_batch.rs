@@ -355,7 +355,7 @@ impl RecordBatch {
     /// assert_eq!(batch.num_columns(), 1);
     /// ```
     pub fn remove_column(&mut self, index: usize) -> ArrayRef {
-        let mut builder = SchemaBuilder::from(self.schema.fields());
+        let mut builder = SchemaBuilder::from(self.schema.as_ref());
         builder.remove(index);
         self.schema = Arc::new(builder.finish());
         self.columns.remove(index)

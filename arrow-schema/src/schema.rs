@@ -140,6 +140,15 @@ impl From<Fields> for SchemaBuilder {
     }
 }
 
+impl From<&Schema> for SchemaBuilder {
+    fn from(value: &Schema) -> Self {
+        Self {
+            fields: value.fields.to_vec(),
+            metadata: value.metadata.clone(),
+        }
+    }
+}
+
 impl From<Schema> for SchemaBuilder {
     fn from(value: Schema) -> Self {
         Self {
