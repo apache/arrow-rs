@@ -133,7 +133,7 @@ fn bench_string(c: &mut Criterion) {
     let batch =
         RecordBatch::try_from_iter([("c1", c1 as _), ("c2", c2 as _), ("c3", c3 as _)]).unwrap();
 
-    do_bench(c, "bench_dict_array", &batch)
+    do_bench(c, "bench_string", &batch)
 }
 
 fn bench_struct(c: &mut Criterion) {
