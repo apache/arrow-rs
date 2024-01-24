@@ -681,7 +681,7 @@ where
     /// Determines how the byte stream is formatted
     format: F,
 
-    /// Whether keys with null values should be written or skipped
+    /// Controls how JSON should be encoded, e.g. whether to write explicit nulls or skip them
     options: EncoderOptions,
 }
 

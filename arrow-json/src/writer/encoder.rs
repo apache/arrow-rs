@@ -111,9 +111,10 @@ fn make_encoder_impl<'a>(
         }
         d => match d.is_temporal() {
             true => {
-                // Note: the implementation assumes that escaping is not necessary
-                // If this is extended to support user-provided format specifications
-                // this assumption may need to be revisited
+                // Note: the implementation of Encoder for ArrayFormatter assumes it does not produce
+                // characters that would need to be escaped within a JSON string, e.g. `'"'`.
+                // If support for user-provided format specifications is added, this assumption
+                // may need to be revisited
                 let options = FormatOptions::new().with_display_error(true);
                 let formatter = ArrayFormatter::try_new(array, &options)?;
                 (Box::new(formatter) as _, array.nulls().cloned())
