@@ -16,7 +16,7 @@
 // under the License.
 
 use arrow_arith::numeric::{add, sub};
-use arrow_arith::temporal::hour;
+use arrow_arith::temporal::{date_part, DatePart};
 use arrow_array::cast::AsArray;
 use arrow_array::temporal_conversions::as_datetime_with_timezone;
 use arrow_array::timezone::Tz;
@@ -28,7 +28,8 @@ use chrono::{DateTime, TimeZone};
 fn test_temporal_array_timestamp_hour_with_timezone_using_chrono_tz() {
     let a =
         TimestampSecondArray::from(vec![60 * 60 * 10]).with_timezone("Asia/Kolkata".to_string());
-    let b = hour(&a).unwrap();
+    let b = date_part(&a, DatePart::Hour).unwrap();
+    let b = b.as_primitive::<Int32Type>();
     assert_eq!(15, b.value(0));
 }
 
@@ -41,7 +42,8 @@ fn test_temporal_array_timestamp_hour_with_dst_timezone_using_chrono_tz() {
 
     let a = TimestampMillisecondArray::from(vec![Some(1635577147000)])
         .with_timezone("Australia/Sydney".to_string());
-    let b = hour(&a).unwrap();
+    let b = date_part(&a, DatePart::Hour).unwrap();
+    let b = b.as_primitive::<Int32Type>();
     assert_eq!(17, b.value(0));
 }
 
