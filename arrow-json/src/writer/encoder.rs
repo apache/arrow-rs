@@ -31,7 +31,13 @@ pub struct EncoderOptions {
     pub explicit_nulls: bool,
 }
 
+/// A trait to format array values as JSON values
+///
+/// Nullability is handled by the caller to allow encoding nulls implicitly, i.e. `{}` instead of `{"a": null}`
 pub trait Encoder {
+    /// Encode the non-null value at index `idx` to `out`
+    ///
+    /// The behaviour is unspecified if `idx` corresponds to a null index
     fn encode(&mut self, idx: usize, out: &mut Vec<u8>);
 }
 
@@ -173,6 +179,9 @@ trait PrimitiveEncode: ArrowNativeType {
     // Workaround https://github.com/rust-lang/rust/issues/61415
     fn init_buffer() -> Self::Buffer;
 
+    /// Encode the primitive value as bytes, returning a reference to that slice.
+    ///
+    /// `buf` is temporary space that may be used
     fn encode(self, buf: &mut Self::Buffer) -> &[u8];
 }
 
@@ -219,14 +228,14 @@ macro_rules! float_encode {
 float_encode!(f32, f64);
 
 impl PrimitiveEncode for f16 {
-    type Buffer = <f64 as PrimitiveEncode>::Buffer;
+    type Buffer = <f32 as PrimitiveEncode>::Buffer;
 
     fn init_buffer() -> Self::Buffer {
-        f64::init_buffer()
+        f32::init_buffer()
     }
 
     fn encode(self, buf: &mut Self::Buffer) -> &[u8] {
-        self.to_f64().encode(buf)
+        self.to_f32().encode(buf)
     }
 }
 
