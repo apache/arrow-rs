@@ -124,7 +124,8 @@ impl<OffsetSize: OffsetSizeTrait, T: ArrayBuilder> GenericListBuilder<OffsetSize
     ///
     /// By default a nullable field is created with the name `item`
     ///
-    /// Note: [`Self::finish`] and [`Self::finish_cloned`] will panic if the provided data type does not match `T`
+    /// Note: [`Self::finish`] and [`Self::finish_cloned`] will panic if the
+    /// field's data type does not match that of `T`
     pub fn with_field(self, field: impl Into<FieldRef>) -> Self {
         Self {
             field: Some(field.into()),
