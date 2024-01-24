@@ -33,8 +33,14 @@ use arrow_array::*;
 use arrow_buffer::ArrowNativeType;
 use arrow_schema::{ArrowError, DataType};
 
-/// Valid parts to extract from date/timestamp arrays.
+/// Valid parts to extract from date/time/timestamp arrays.
+///
+/// See [`date_part`].
+///
+/// Marked as non-exhaustive as may expand to support more types of
+/// date parts in the future.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum DatePart {
     /// Quarter of the year, in range `1..=4`
     Quarter,
@@ -46,9 +52,9 @@ pub enum DatePart {
     Week,
     /// Day of the month, in range `1..=31`
     Day,
-    /// Day of the week, in range `0..=6`, where Sunday is 0
+    /// Day of the week, in range `0..=6`, where Sunday is `0`
     DayOfWeekSunday0,
-    /// Day of the week, in range `0..=6`, where Monday is 0
+    /// Day of the week, in range `0..=6`, where Monday is `0`
     DayOfWeekMonday0,
     /// Day of year, in range `1..=366`
     DayOfYear,
@@ -98,12 +104,32 @@ where
     }
 }
 
-/// Given array, return new array with the extracted [`DatePart`].
+/// Given an array, return a new array with the extracted [`DatePart`] as signed 32-bit
+/// integer values.
+///
+/// Currently only supports temporal types:
+///   - Date32/Date64
+///   - Time32/Time64 (Limited support)
+///   - Timestamp
 ///
 /// Returns an [`Int32Array`] unless input was a dictionary type, in which case returns
 /// the dictionary but with this function applied onto its values.
 ///
-/// Returns error if attempting to extract date part from unsupported type (i.e. non-date/timestamp types).
+/// If array passed in is not of the above listed types (or is a dictionary array where the
+/// values array isn't of the above listed types), then this function will return an error.
+///
+/// # Examples
+///
+/// ```
+/// # use arrow_array::{Int32Array, TimestampMicrosecondArray};
+/// # use arrow_arith::temporal::{DatePart, date_part};
+/// let input: TimestampMicrosecondArray =
+///     vec![Some(1612025847000000), None, Some(1722015847000000)].into();
+///
+/// let actual = date_part(&input, DatePart::Week).unwrap();
+/// let expected: Int32Array = vec![Some(4), None, Some(30)].into();
+/// assert_eq!(actual.as_ref(), &expected);
+/// ```
 pub fn date_part(array: &dyn Array, part: DatePart) -> Result<ArrayRef, ArrowError> {
     downcast_temporal_array!(
         array => {
@@ -126,7 +152,7 @@ pub fn date_part(array: &dyn Array, part: DatePart) -> Result<ArrayRef, ArrowErr
     )
 }
 
-/// Used to integrate new [`date_part()`] method with existing shims such as
+/// Used to integrate new [`date_part()`] method with deprecated shims such as
 /// [`hour()`] and [`week()`].
 fn date_part_primitive<T: ArrowTemporalType>(
     array: &PrimitiveArray<T>,
@@ -348,12 +374,14 @@ pub fn using_chrono_tz_and_utc_naive_date_time(
 /// Extracts the hours of a given array as an array of integers within
 /// the range of [0, 23]. If the given array isn't temporal primitive or dictionary array,
 /// an `Err` will be returned.
+#[deprecated(since = "51.0.0", note = "Use `date_part` instead")]
 pub fn hour_dyn(array: &dyn Array) -> Result<ArrayRef, ArrowError> {
     date_part(array, DatePart::Hour)
 }
 
 /// Extracts the hours of a given temporal primitive array as an array of integers within
 /// the range of [0, 23].
+#[deprecated(since = "51.0.0", note = "Use `date_part` instead")]
 pub fn hour<T>(array: &PrimitiveArray<T>) -> Result<Int32Array, ArrowError>
 where
     T: ArrowTemporalType + ArrowNumericType,
@@ -365,11 +393,13 @@ where
 /// Extracts the years of a given temporal array as an array of integers.
 /// If the given array isn't temporal primitive or dictionary array,
 /// an `Err` will be returned.
+#[deprecated(since = "51.0.0", note = "Use `date_part` instead")]
 pub fn year_dyn(array: &dyn Array) -> Result<ArrayRef, ArrowError> {
     date_part(array, DatePart::Year)
 }
 
 /// Extracts the years of a given temporal primitive array as an array of integers
+#[deprecated(since = "51.0.0", note = "Use `date_part` instead")]
 pub fn year<T>(array: &PrimitiveArray<T>) -> Result<Int32Array, ArrowError>
 where
     T: ArrowTemporalType + ArrowNumericType,
@@ -381,12 +411,14 @@ where
 /// Extracts the quarter of a given temporal array as an array of integersa within
 /// the range of [1, 4]. If the given array isn't temporal primitive or dictionary array,
 /// an `Err` will be returned.
+#[deprecated(since = "51.0.0", note = "Use `date_part` instead")]
 pub fn quarter_dyn(array: &dyn Array) -> Result<ArrayRef, ArrowError> {
     date_part(array, DatePart::Quarter)
 }
 
 /// Extracts the quarter of a given temporal primitive array as an array of integers within
 /// the range of [1, 4].
+#[deprecated(since = "51.0.0", note = "Use `date_part` instead")]
 pub fn quarter<T>(array: &PrimitiveArray<T>) -> Result<Int32Array, ArrowError>
 where
     T: ArrowTemporalType + ArrowNumericType,
@@ -398,12 +430,14 @@ where
 /// Extracts the month of a given temporal array as an array of integers.
 /// If the given array isn't temporal primitive or dictionary array,
 /// an `Err` will be returned.
+#[deprecated(since = "51.0.0", note = "Use `date_part` instead")]
 pub fn month_dyn(array: &dyn Array) -> Result<ArrayRef, ArrowError> {
     date_part(array, DatePart::Month)
 }
 
 /// Extracts the month of a given temporal primitive array as an array of integers within
 /// the range of [1, 12].
+#[deprecated(since = "51.0.0", note = "Use `date_part` instead")]
 pub fn month<T>(array: &PrimitiveArray<T>) -> Result<Int32Array, ArrowError>
 where
     T: ArrowTemporalType + ArrowNumericType,
@@ -421,6 +455,7 @@ where
 ///
 /// If the given array isn't temporal primitive or dictionary array,
 /// an `Err` will be returned.
+#[deprecated(since = "51.0.0", note = "Use `date_part` instead")]
 pub fn num_days_from_monday_dyn(array: &dyn Array) -> Result<ArrayRef, ArrowError> {
     date_part(array, DatePart::DayOfWeekMonday0)
 }
@@ -431,6 +466,7 @@ pub fn num_days_from_monday_dyn(array: &dyn Array) -> Result<ArrayRef, ArrowErro
 /// Monday is encoded as `0`, Tuesday as `1`, etc.
 ///
 /// See also [`num_days_from_sunday`] which starts at Sunday.
+#[deprecated(since = "51.0.0", note = "Use `date_part` instead")]
 pub fn num_days_from_monday<T>(array: &PrimitiveArray<T>) -> Result<Int32Array, ArrowError>
 where
     T: ArrowTemporalType + ArrowNumericType,
@@ -448,6 +484,7 @@ where
 ///
 /// If the given array isn't temporal primitive or dictionary array,
 /// an `Err` will be returned.
+#[deprecated(since = "51.0.0", note = "Use `date_part` instead")]
 pub fn num_days_from_sunday_dyn(array: &dyn Array) -> Result<ArrayRef, ArrowError> {
     date_part(array, DatePart::DayOfWeekSunday0)
 }
@@ -458,6 +495,7 @@ pub fn num_days_from_sunday_dyn(array: &dyn Array) -> Result<ArrayRef, ArrowErro
 /// Sunday is encoded as `0`, Monday as `1`, etc.
 ///
 /// See also [`num_days_from_monday`] which starts at Monday.
+#[deprecated(since = "51.0.0", note = "Use `date_part` instead")]
 pub fn num_days_from_sunday<T>(array: &PrimitiveArray<T>) -> Result<Int32Array, ArrowError>
 where
     T: ArrowTemporalType + ArrowNumericType,
@@ -469,11 +507,13 @@ where
 /// Extracts the day of a given temporal array as an array of integers.
 /// If the given array isn't temporal primitive or dictionary array,
 /// an `Err` will be returned.
+#[deprecated(since = "51.0.0", note = "Use `date_part` instead")]
 pub fn day_dyn(array: &dyn Array) -> Result<ArrayRef, ArrowError> {
     date_part(array, DatePart::Day)
 }
 
 /// Extracts the day of a given temporal primitive array as an array of integers
+#[deprecated(since = "51.0.0", note = "Use `date_part` instead")]
 pub fn day<T>(array: &PrimitiveArray<T>) -> Result<Int32Array, ArrowError>
 where
     T: ArrowTemporalType + ArrowNumericType,
@@ -486,12 +526,14 @@ where
 /// The day of year that ranges from 1 to 366.
 /// If the given array isn't temporal primitive or dictionary array,
 /// an `Err` will be returned.
+#[deprecated(since = "51.0.0", note = "Use `date_part` instead")]
 pub fn doy_dyn(array: &dyn Array) -> Result<ArrayRef, ArrowError> {
     date_part(array, DatePart::DayOfYear)
 }
 
 /// Extracts the day of year of a given temporal primitive array as an array of integers
 /// The day of year that ranges from 1 to 366
+#[deprecated(since = "51.0.0", note = "Use `date_part` instead")]
 pub fn doy<T>(array: &PrimitiveArray<T>) -> Result<Int32Array, ArrowError>
 where
     T: ArrowTemporalType + ArrowNumericType,
@@ -502,6 +544,7 @@ where
 }
 
 /// Extracts the minutes of a given temporal primitive array as an array of integers
+#[deprecated(since = "51.0.0", note = "Use `date_part` instead")]
 pub fn minute<T>(array: &PrimitiveArray<T>) -> Result<Int32Array, ArrowError>
 where
     T: ArrowTemporalType + ArrowNumericType,
@@ -513,11 +556,13 @@ where
 /// Extracts the week of a given temporal array as an array of integers.
 /// If the given array isn't temporal primitive or dictionary array,
 /// an `Err` will be returned.
+#[deprecated(since = "51.0.0", note = "Use `date_part` instead")]
 pub fn week_dyn(array: &dyn Array) -> Result<ArrayRef, ArrowError> {
     date_part(array, DatePart::Week)
 }
 
 /// Extracts the week of a given temporal primitive array as an array of integers
+#[deprecated(since = "51.0.0", note = "Use `date_part` instead")]
 pub fn week<T>(array: &PrimitiveArray<T>) -> Result<Int32Array, ArrowError>
 where
     T: ArrowTemporalType + ArrowNumericType,
@@ -527,6 +572,7 @@ where
 }
 
 /// Extracts the seconds of a given temporal primitive array as an array of integers
+#[deprecated(since = "51.0.0", note = "Use `date_part` instead")]
 pub fn second<T>(array: &PrimitiveArray<T>) -> Result<Int32Array, ArrowError>
 where
     T: ArrowTemporalType + ArrowNumericType,
@@ -536,6 +582,7 @@ where
 }
 
 /// Extracts the nanoseconds of a given temporal primitive array as an array of integers
+#[deprecated(since = "51.0.0", note = "Use `date_part` instead")]
 pub fn nanosecond<T>(array: &PrimitiveArray<T>) -> Result<Int32Array, ArrowError>
 where
     T: ArrowTemporalType + ArrowNumericType,
@@ -547,11 +594,13 @@ where
 /// Extracts the nanoseconds of a given temporal primitive array as an array of integers.
 /// If the given array isn't temporal primitive or dictionary array,
 /// an `Err` will be returned.
+#[deprecated(since = "51.0.0", note = "Use `date_part` instead")]
 pub fn nanosecond_dyn(array: &dyn Array) -> Result<ArrayRef, ArrowError> {
     date_part(array, DatePart::Nanosecond)
 }
 
 /// Extracts the microseconds of a given temporal primitive array as an array of integers
+#[deprecated(since = "51.0.0", note = "Use `date_part` instead")]
 pub fn microsecond<T>(array: &PrimitiveArray<T>) -> Result<Int32Array, ArrowError>
 where
     T: ArrowTemporalType + ArrowNumericType,
@@ -563,11 +612,13 @@ where
 /// Extracts the microseconds of a given temporal primitive array as an array of integers.
 /// If the given array isn't temporal primitive or dictionary array,
 /// an `Err` will be returned.
+#[deprecated(since = "51.0.0", note = "Use `date_part` instead")]
 pub fn microsecond_dyn(array: &dyn Array) -> Result<ArrayRef, ArrowError> {
     date_part(array, DatePart::Microsecond)
 }
 
 /// Extracts the milliseconds of a given temporal primitive array as an array of integers
+#[deprecated(since = "51.0.0", note = "Use `date_part` instead")]
 pub fn millisecond<T>(array: &PrimitiveArray<T>) -> Result<Int32Array, ArrowError>
 where
     T: ArrowTemporalType + ArrowNumericType,
@@ -575,9 +626,11 @@ where
 {
     date_part_primitive(array, DatePart::Millisecond)
 }
+
 /// Extracts the milliseconds of a given temporal primitive array as an array of integers.
 /// If the given array isn't temporal primitive or dictionary array,
 /// an `Err` will be returned.
+#[deprecated(since = "51.0.0", note = "Use `date_part` instead")]
 pub fn millisecond_dyn(array: &dyn Array) -> Result<ArrayRef, ArrowError> {
     date_part(array, DatePart::Millisecond)
 }
@@ -585,6 +638,7 @@ pub fn millisecond_dyn(array: &dyn Array) -> Result<ArrayRef, ArrowError> {
 /// Extracts the minutes of a given temporal array as an array of integers.
 /// If the given array isn't temporal primitive or dictionary array,
 /// an `Err` will be returned.
+#[deprecated(since = "51.0.0", note = "Use `date_part` instead")]
 pub fn minute_dyn(array: &dyn Array) -> Result<ArrayRef, ArrowError> {
     date_part(array, DatePart::Minute)
 }
@@ -592,11 +646,13 @@ pub fn minute_dyn(array: &dyn Array) -> Result<ArrayRef, ArrowError> {
 /// Extracts the seconds of a given temporal array as an array of integers.
 /// If the given array isn't temporal primitive or dictionary array,
 /// an `Err` will be returned.
+#[deprecated(since = "51.0.0", note = "Use `date_part` instead")]
 pub fn second_dyn(array: &dyn Array) -> Result<ArrayRef, ArrowError> {
     date_part(array, DatePart::Second)
 }
 
 #[cfg(test)]
+#[allow(deprecated)]
 mod tests {
     use super::*;
 
