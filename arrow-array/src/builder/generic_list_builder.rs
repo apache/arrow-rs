@@ -765,8 +765,8 @@ mod tests {
     }
 
     #[test]
-    fn test_non_nullable_list() {
-        let field = Arc::new(Field::new("item", DataType::Int32, false));
+    fn test_with_field() {
+        let field = Arc::new(Field::new("bar", DataType::Int32, false));
         let mut builder = ListBuilder::new(Int32Builder::new()).with_field(field.clone());
         builder.append_value([Some(1), Some(2), Some(3)]);
         builder.append_null(); // This is fine as nullability refers to nullability of values
