@@ -769,11 +769,25 @@ to_indices_reinterpret!(Int32Type, UInt32Type);
 to_indices_identity!(UInt64Type);
 to_indices_reinterpret!(Int64Type, UInt64Type);
 
+/// Take rows by index from [`RecordBatch`] and returns a new [`RecordBatch`] from those indexes.
+pub fn take_record_batch(
+    record_batch: &RecordBatch,
+    indices: &[u64],
+) -> Result<RecordBatch, ArrowError> {
+    let indices = UInt64Array::from(indices.to_vec());
+    let columns = record_batch
+        .columns()
+        .iter()
+        .map(|c| take(c, &indices, None))
+        .collect::<Result<Vec<_>, _>>()?;
+    RecordBatch::try_new(record_batch.schema(), columns)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use arrow_array::builder::*;
-    use arrow_schema::{Field, Fields, TimeUnit};
+    use arrow_schema::{Field, Fields, Schema, TimeUnit};
 
     fn test_take_decimal_arrays(
         data: Vec<Option<i128>>,
@@ -2053,5 +2067,34 @@ mod tests {
         let actual = strings.iter().collect::<Vec<_>>();
         let expected = vec![Some("a"), None, None, Some("a"), Some("c"), Some("d")];
         assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn test_take_record_batch() {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Utf8, true),
+        ]));
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(Int32Array::from_iter_values(0..20)),
+                Arc::new(StringArray::from_iter_values(
+                    (0..20).map(|i| format!("str-{}", i)),
+                )),
+            ],
+        )
+        .unwrap();
+        let expected = RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(Int32Array::from(vec![1, 5, 10])),
+                Arc::new(StringArray::from(vec!["str-1", "str-5", "str-10"])),
+            ],
+        )
+        .unwrap();
+
+        let taken = take_record_batch(&batch, &[1, 5, 10]).unwrap();
+        assert_eq!(expected, taken)
     }
 }
