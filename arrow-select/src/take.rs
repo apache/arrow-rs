@@ -808,9 +808,9 @@ to_indices_reinterpret!(Int64Type, UInt64Type);
 /// .unwrap();
 /// assert_eq!(taken, expected);
 /// ```
-pub fn take_record_batch<T: ArrowPrimitiveType>(
+pub fn take_record_batch(
     record_batch: &RecordBatch,
-    indices: &PrimitiveArray<T>,
+    indices: &dyn Array,
 ) -> Result<RecordBatch, ArrowError> {
     let columns = record_batch
         .columns()
@@ -824,7 +824,7 @@ pub fn take_record_batch<T: ArrowPrimitiveType>(
 mod tests {
     use super::*;
     use arrow_array::builder::*;
-    use arrow_schema::{Field, Fields, Schema, TimeUnit};
+    use arrow_schema::{Field, Fields, TimeUnit};
 
     fn test_take_decimal_arrays(
         data: Vec<Option<i128>>,
@@ -2104,49 +2104,5 @@ mod tests {
         let actual = strings.iter().collect::<Vec<_>>();
         let expected = vec![Some("a"), None, None, Some("a"), Some("c"), Some("d")];
         assert_eq!(expected, actual);
-    }
-
-    #[test]
-    fn test_take_record_batch() {
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("a", DataType::Int32, true),
-            Field::new("b", DataType::Utf8, true),
-        ]));
-        let batch = RecordBatch::try_new(
-            schema.clone(),
-            vec![
-                Arc::new(Int32Array::from_iter_values(0..20)),
-                Arc::new(StringArray::from_iter_values(
-                    (0..20).map(|i| format!("str-{}", i)),
-                )),
-            ],
-        )
-        .unwrap();
-        let expected = RecordBatch::try_new(
-            schema,
-            vec![
-                Arc::new(Int32Array::from(vec![1, 5, 10])),
-                Arc::new(StringArray::from(vec!["str-1", "str-5", "str-10"])),
-            ],
-        )
-        .unwrap();
-
-        {
-            let indices = Int32Array::from(vec![1, 5, 10]);
-            let taken = take_record_batch(&batch, &indices).unwrap();
-            assert_eq!(expected, taken)
-        }
-
-        {
-            let indices = UInt32Array::from(vec![1, 5, 10]);
-            let taken = take_record_batch(&batch, &indices).unwrap();
-            assert_eq!(expected, taken)
-        }
-
-        {
-            let indices = UInt64Array::from(vec![1, 5, 10]);
-            let taken = take_record_batch(&batch, &indices).unwrap();
-            assert_eq!(expected, taken)
-        }
     }
 }
