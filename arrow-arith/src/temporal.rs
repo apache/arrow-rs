@@ -23,9 +23,9 @@ use arrow_array::cast::AsArray;
 use chrono::{Datelike, NaiveDateTime, Offset, TimeZone, Timelike, Utc};
 
 use arrow_array::temporal_conversions::{
-    date32_to_datetime, date64_to_datetime, time32ms_to_time, time32s_to_time, time64ns_to_time,
-    time64us_to_time, timestamp_ms_to_datetime, timestamp_ns_to_datetime, timestamp_s_to_datetime,
-    timestamp_us_to_datetime,
+    date32_to_datetime, date64_to_datetime, timestamp_ms_to_datetime, timestamp_ns_to_datetime,
+    timestamp_s_to_datetime, timestamp_us_to_datetime, MICROSECONDS, MICROSECONDS_IN_DAY,
+    MILLISECONDS, MILLISECONDS_IN_DAY, NANOSECONDS, NANOSECONDS_IN_DAY, SECONDS_IN_DAY,
 };
 use arrow_array::timezone::Tz;
 use arrow_array::types::*;
@@ -109,7 +109,7 @@ where
 ///
 /// Currently only supports temporal types:
 ///   - Date32/Date64
-///   - Time32/Time64 (Limited support)
+///   - Time32/Time64
 ///   - Timestamp
 ///
 /// Returns an [`Int32Array`] unless input was a dictionary type, in which case returns
@@ -180,8 +180,36 @@ trait ExtractDatePartExt {
 impl ExtractDatePartExt for PrimitiveArray<Time32SecondType> {
     fn date_part(&self, part: DatePart) -> Result<Int32Array, ArrowError> {
         match part {
-            DatePart::Hour => Ok(self.unary_opt(|d| time32s_to_time(d).map(|c| c.hour() as i32))),
-            // TODO expand support for Time types, see: https://github.com/apache/arrow-rs/issues/5261
+            DatePart::Hour => Ok(self.unary_opt(|s| {
+                if (0..SECONDS_IN_DAY as i32).contains(&s) {
+                    Some(s / 3_600)
+                } else {
+                    None
+                }
+            })),
+            DatePart::Minute => Ok(self.unary_opt(|s| {
+                if (0..SECONDS_IN_DAY as i32).contains(&s) {
+                    Some((s / 60) % 60)
+                } else {
+                    None
+                }
+            })),
+            DatePart::Second => Ok(self.unary_opt(|s| {
+                if (0..SECONDS_IN_DAY as i32).contains(&s) {
+                    Some(s % 60)
+                } else {
+                    None
+                }
+            })),
+            // Time32Second only encodes number of seconds, so these will always be 0 (if in valid range)
+            DatePart::Millisecond | DatePart::Microsecond | DatePart::Nanosecond => Ok(self
+                .unary_opt(|s| {
+                    if (0..SECONDS_IN_DAY as i32).contains(&s) {
+                        Some(0)
+                    } else {
+                        None
+                    }
+                })),
             _ => return_compute_error_with!(format!("{part} does not support"), self.data_type()),
         }
     }
@@ -189,9 +217,51 @@ impl ExtractDatePartExt for PrimitiveArray<Time32SecondType> {
 
 impl ExtractDatePartExt for PrimitiveArray<Time32MillisecondType> {
     fn date_part(&self, part: DatePart) -> Result<Int32Array, ArrowError> {
+        let milliseconds_in_day = MILLISECONDS_IN_DAY as i32;
+        let milliseconds = MILLISECONDS as i32;
         match part {
-            DatePart::Hour => Ok(self.unary_opt(|d| time32ms_to_time(d).map(|c| c.hour() as i32))),
-            // TODO expand support for Time types, see: https://github.com/apache/arrow-rs/issues/5261
+            DatePart::Hour => Ok(self.unary_opt(|ms| {
+                if (0..milliseconds_in_day).contains(&ms) {
+                    Some(ms / 3_600 / milliseconds)
+                } else {
+                    None
+                }
+            })),
+            DatePart::Minute => Ok(self.unary_opt(|ms| {
+                if (0..milliseconds_in_day).contains(&ms) {
+                    Some((ms / 60 / milliseconds) % 60)
+                } else {
+                    None
+                }
+            })),
+            DatePart::Second => Ok(self.unary_opt(|ms| {
+                if (0..milliseconds_in_day).contains(&ms) {
+                    Some((ms / milliseconds) % 60)
+                } else {
+                    None
+                }
+            })),
+            DatePart::Millisecond => Ok(self.unary_opt(|ms| {
+                if (0..milliseconds_in_day).contains(&ms) {
+                    Some(ms % milliseconds)
+                } else {
+                    None
+                }
+            })),
+            DatePart::Microsecond => Ok(self.unary_opt(|ms| {
+                if (0..milliseconds_in_day).contains(&ms) {
+                    Some((ms % milliseconds) * 1_000)
+                } else {
+                    None
+                }
+            })),
+            DatePart::Nanosecond => Ok(self.unary_opt(|ms| {
+                if (0..milliseconds_in_day).contains(&ms) {
+                    Some((ms % milliseconds) * 1_000_000)
+                } else {
+                    None
+                }
+            })),
             _ => return_compute_error_with!(format!("{part} does not support"), self.data_type()),
         }
     }
@@ -200,8 +270,48 @@ impl ExtractDatePartExt for PrimitiveArray<Time32MillisecondType> {
 impl ExtractDatePartExt for PrimitiveArray<Time64MicrosecondType> {
     fn date_part(&self, part: DatePart) -> Result<Int32Array, ArrowError> {
         match part {
-            DatePart::Hour => Ok(self.unary_opt(|d| time64us_to_time(d).map(|c| c.hour() as i32))),
-            // TODO expand support for Time types, see: https://github.com/apache/arrow-rs/issues/5261
+            DatePart::Hour => Ok(self.unary_opt(|us| {
+                if (0..MICROSECONDS_IN_DAY).contains(&us) {
+                    Some((us / 3_600 / MICROSECONDS) as i32)
+                } else {
+                    None
+                }
+            })),
+            DatePart::Minute => Ok(self.unary_opt(|us| {
+                if (0..MICROSECONDS_IN_DAY).contains(&us) {
+                    Some(((us / 60 / MICROSECONDS) % 60) as i32)
+                } else {
+                    None
+                }
+            })),
+            DatePart::Second => Ok(self.unary_opt(|us| {
+                if (0..MICROSECONDS_IN_DAY).contains(&us) {
+                    Some(((us / MICROSECONDS) % 60) as i32)
+                } else {
+                    None
+                }
+            })),
+            DatePart::Millisecond => Ok(self.unary_opt(|us| {
+                if (0..MICROSECONDS_IN_DAY).contains(&us) {
+                    Some(((us % MICROSECONDS) / 1_000) as i32)
+                } else {
+                    None
+                }
+            })),
+            DatePart::Microsecond => Ok(self.unary_opt(|us| {
+                if (0..MICROSECONDS_IN_DAY).contains(&us) {
+                    Some((us % MICROSECONDS) as i32)
+                } else {
+                    None
+                }
+            })),
+            DatePart::Nanosecond => Ok(self.unary_opt(|us| {
+                if (0..MICROSECONDS_IN_DAY).contains(&us) {
+                    Some(((us % MICROSECONDS) * 1_000) as i32)
+                } else {
+                    None
+                }
+            })),
             _ => return_compute_error_with!(format!("{part} does not support"), self.data_type()),
         }
     }
@@ -210,8 +320,48 @@ impl ExtractDatePartExt for PrimitiveArray<Time64MicrosecondType> {
 impl ExtractDatePartExt for PrimitiveArray<Time64NanosecondType> {
     fn date_part(&self, part: DatePart) -> Result<Int32Array, ArrowError> {
         match part {
-            DatePart::Hour => Ok(self.unary_opt(|d| time64ns_to_time(d).map(|c| c.hour() as i32))),
-            // TODO expand support for Time types, see: https://github.com/apache/arrow-rs/issues/5261
+            DatePart::Hour => Ok(self.unary_opt(|ns| {
+                if (0..NANOSECONDS_IN_DAY).contains(&ns) {
+                    Some((ns / 3_600 / NANOSECONDS) as i32)
+                } else {
+                    None
+                }
+            })),
+            DatePart::Minute => Ok(self.unary_opt(|ns| {
+                if (0..NANOSECONDS_IN_DAY).contains(&ns) {
+                    Some(((ns / 60 / NANOSECONDS) % 60) as i32)
+                } else {
+                    None
+                }
+            })),
+            DatePart::Second => Ok(self.unary_opt(|ns| {
+                if (0..NANOSECONDS_IN_DAY).contains(&ns) {
+                    Some(((ns / NANOSECONDS) % 60) as i32)
+                } else {
+                    None
+                }
+            })),
+            DatePart::Millisecond => Ok(self.unary_opt(|ns| {
+                if (0..NANOSECONDS_IN_DAY).contains(&ns) {
+                    Some(((ns % NANOSECONDS) / 1_000_000) as i32)
+                } else {
+                    None
+                }
+            })),
+            DatePart::Microsecond => Ok(self.unary_opt(|ns| {
+                if (0..NANOSECONDS_IN_DAY).contains(&ns) {
+                    Some(((ns % NANOSECONDS) / 1_000) as i32)
+                } else {
+                    None
+                }
+            })),
+            DatePart::Nanosecond => Ok(self.unary_opt(|ns| {
+                if (0..NANOSECONDS_IN_DAY).contains(&ns) {
+                    Some((ns % NANOSECONDS) as i32)
+                } else {
+                    None
+                }
+            })),
             _ => return_compute_error_with!(format!("{part} does not support"), self.data_type()),
         }
     }
@@ -1243,5 +1393,191 @@ mod tests {
         let expected_dict = DictionaryArray::new(keys, Arc::new(a));
         let expected = Arc::new(expected_dict) as ArrayRef;
         assert_eq!(&expected, &b);
+    }
+
+    #[test]
+    fn test_temporal_array_time64_nanoseconds() {
+        // 23:32:50.123456789
+        let input: Time64NanosecondArray = vec![Some(84_770_123_456_789)].into();
+
+        let actual = date_part(&input, DatePart::Hour).unwrap();
+        let actual = actual.as_primitive::<Int32Type>();
+        assert_eq!(23, actual.value(0));
+
+        let actual = date_part(&input, DatePart::Minute).unwrap();
+        let actual = actual.as_primitive::<Int32Type>();
+        assert_eq!(32, actual.value(0));
+
+        let actual = date_part(&input, DatePart::Second).unwrap();
+        let actual = actual.as_primitive::<Int32Type>();
+        assert_eq!(50, actual.value(0));
+
+        let actual = date_part(&input, DatePart::Millisecond).unwrap();
+        let actual = actual.as_primitive::<Int32Type>();
+        assert_eq!(123, actual.value(0));
+
+        let actual = date_part(&input, DatePart::Microsecond).unwrap();
+        let actual = actual.as_primitive::<Int32Type>();
+        assert_eq!(123_456, actual.value(0));
+
+        let actual = date_part(&input, DatePart::Nanosecond).unwrap();
+        let actual = actual.as_primitive::<Int32Type>();
+        assert_eq!(123_456_789, actual.value(0));
+
+        // invalid values should turn into null
+        let input: Time64NanosecondArray = vec![
+            Some(-1),
+            Some(86_400_000_000_000),
+            Some(86_401_000_000_000),
+            None,
+        ]
+        .into();
+        let actual = date_part(&input, DatePart::Hour).unwrap();
+        let actual = actual.as_primitive::<Int32Type>();
+        let expected: Int32Array = vec![None, None, None, None].into();
+        assert_eq!(&expected, actual);
+    }
+
+    #[test]
+    fn test_temporal_array_time64_microseconds() {
+        // 23:32:50.123456
+        let input: Time64MicrosecondArray = vec![Some(84_770_123_456)].into();
+
+        let actual = date_part(&input, DatePart::Hour).unwrap();
+        let actual = actual.as_primitive::<Int32Type>();
+        assert_eq!(23, actual.value(0));
+
+        let actual = date_part(&input, DatePart::Minute).unwrap();
+        let actual = actual.as_primitive::<Int32Type>();
+        assert_eq!(32, actual.value(0));
+
+        let actual = date_part(&input, DatePart::Second).unwrap();
+        let actual = actual.as_primitive::<Int32Type>();
+        assert_eq!(50, actual.value(0));
+
+        let actual = date_part(&input, DatePart::Millisecond).unwrap();
+        let actual = actual.as_primitive::<Int32Type>();
+        assert_eq!(123, actual.value(0));
+
+        let actual = date_part(&input, DatePart::Microsecond).unwrap();
+        let actual = actual.as_primitive::<Int32Type>();
+        assert_eq!(123_456, actual.value(0));
+
+        let actual = date_part(&input, DatePart::Nanosecond).unwrap();
+        let actual = actual.as_primitive::<Int32Type>();
+        assert_eq!(123_456_000, actual.value(0));
+
+        // invalid values should turn into null
+        let input: Time64MicrosecondArray =
+            vec![Some(-1), Some(86_400_000_000), Some(86_401_000_000), None].into();
+        let actual = date_part(&input, DatePart::Hour).unwrap();
+        let actual = actual.as_primitive::<Int32Type>();
+        let expected: Int32Array = vec![None, None, None, None].into();
+        assert_eq!(&expected, actual);
+    }
+
+    #[test]
+    fn test_temporal_array_time32_milliseconds() {
+        // 23:32:50.123
+        let input: Time32MillisecondArray = vec![Some(84_770_123)].into();
+
+        let actual = date_part(&input, DatePart::Hour).unwrap();
+        let actual = actual.as_primitive::<Int32Type>();
+        assert_eq!(23, actual.value(0));
+
+        let actual = date_part(&input, DatePart::Minute).unwrap();
+        let actual = actual.as_primitive::<Int32Type>();
+        assert_eq!(32, actual.value(0));
+
+        let actual = date_part(&input, DatePart::Second).unwrap();
+        let actual = actual.as_primitive::<Int32Type>();
+        assert_eq!(50, actual.value(0));
+
+        let actual = date_part(&input, DatePart::Millisecond).unwrap();
+        let actual = actual.as_primitive::<Int32Type>();
+        assert_eq!(123, actual.value(0));
+
+        let actual = date_part(&input, DatePart::Microsecond).unwrap();
+        let actual = actual.as_primitive::<Int32Type>();
+        assert_eq!(123_000, actual.value(0));
+
+        let actual = date_part(&input, DatePart::Nanosecond).unwrap();
+        let actual = actual.as_primitive::<Int32Type>();
+        assert_eq!(123_000_000, actual.value(0));
+
+        // invalid values should turn into null
+        let input: Time32MillisecondArray =
+            vec![Some(-1), Some(86_400_000), Some(86_401_000), None].into();
+        let actual = date_part(&input, DatePart::Hour).unwrap();
+        let actual = actual.as_primitive::<Int32Type>();
+        let expected: Int32Array = vec![None, None, None, None].into();
+        assert_eq!(&expected, actual);
+    }
+
+    #[test]
+    fn test_temporal_array_time32_seconds() {
+        // 23:32:50
+        let input: Time32SecondArray = vec![84_770].into();
+
+        let actual = date_part(&input, DatePart::Hour).unwrap();
+        let actual = actual.as_primitive::<Int32Type>();
+        assert_eq!(23, actual.value(0));
+
+        let actual = date_part(&input, DatePart::Minute).unwrap();
+        let actual = actual.as_primitive::<Int32Type>();
+        assert_eq!(32, actual.value(0));
+
+        let actual = date_part(&input, DatePart::Second).unwrap();
+        let actual = actual.as_primitive::<Int32Type>();
+        assert_eq!(50, actual.value(0));
+
+        let actual = date_part(&input, DatePart::Millisecond).unwrap();
+        let actual = actual.as_primitive::<Int32Type>();
+        assert_eq!(0, actual.value(0));
+
+        let actual = date_part(&input, DatePart::Microsecond).unwrap();
+        let actual = actual.as_primitive::<Int32Type>();
+        assert_eq!(0, actual.value(0));
+
+        let actual = date_part(&input, DatePart::Nanosecond).unwrap();
+        let actual = actual.as_primitive::<Int32Type>();
+        assert_eq!(0, actual.value(0));
+
+        // invalid values should turn into null
+        let input: Time32SecondArray = vec![Some(-1), Some(86_400), Some(86_401), None].into();
+        let actual = date_part(&input, DatePart::Hour).unwrap();
+        let actual = actual.as_primitive::<Int32Type>();
+        let expected: Int32Array = vec![None, None, None, None].into();
+        assert_eq!(&expected, actual);
+    }
+
+    #[test]
+    fn test_temporal_array_time_invalid_parts() {
+        fn ensure_returns_error(array: &dyn Array) {
+            let invalid_parts = [
+                DatePart::Quarter,
+                DatePart::Year,
+                DatePart::Month,
+                DatePart::Week,
+                DatePart::Day,
+                DatePart::DayOfWeekSunday0,
+                DatePart::DayOfWeekMonday0,
+                DatePart::DayOfYear,
+            ];
+
+            for part in invalid_parts {
+                let err = date_part(array, part).unwrap_err();
+                let expected = format!(
+                    "Compute error: {part} does not support: {}",
+                    array.data_type()
+                );
+                assert_eq!(expected, err.to_string());
+            }
+        }
+
+        ensure_returns_error(&Time32SecondArray::from(vec![0]));
+        ensure_returns_error(&Time32MillisecondArray::from(vec![0]));
+        ensure_returns_error(&Time64MicrosecondArray::from(vec![0]));
+        ensure_returns_error(&Time64NanosecondArray::from(vec![0]));
     }
 }
