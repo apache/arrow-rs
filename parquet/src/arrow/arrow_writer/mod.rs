@@ -183,7 +183,9 @@ impl<W: Write + Send> ArrowWriter<W> {
     ///
     /// If this would cause the current row group to exceed [`WriterProperties::max_row_group_size`]
     /// rows, the contents of `batch` will be written to one or more row groups such that all but
-    /// the final row group in the file contain [`WriterProperties::max_row_group_size`] rows
+    /// the final row group in the file contain [`WriterProperties::max_row_group_size`] rows.
+    ///
+    /// This will fail if the `batch`'s schema does not match the writer's schema.
     pub fn write(&mut self, batch: &RecordBatch) -> Result<()> {
         if batch.num_rows() == 0 {
             return Ok(());
