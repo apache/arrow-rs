@@ -230,8 +230,7 @@ impl Signer for GoogleCloudStorage {
         if expires_in.as_secs() > 604800 {
             return Err(crate::Error::Generic {
                 store: STORE,
-                source: format!("Expiration Time can't be longer than 604800 seconds (7 days).")
-                    .into(),
+                source: "Expiration Time can't be longer than 604800 seconds (7 days).".into(),
             });
         }
 
@@ -245,11 +244,23 @@ impl Signer for GoogleCloudStorage {
 
         let authoriztor = GCSAuthorizer::new(&credentials);
 
-        let string_to_sign = authoriztor.sign(method, &mut url, expires_in, &config.bucket_name);
-        let signature = self
-            .client
-            .sign_blob(&string_to_sign, &credentials.client_email)
-            .await?;
+        let client_email = if credentials.client_email.is_none() {
+            return Err(crate::Error::Generic {
+                store: STORE,
+                source: "Unable to get client email from credentials.".into(),
+            });
+        } else {
+            credentials.client_email.as_ref().unwrap()
+        };
+        let host = format!("{}.storage.googleapis.com", config.bucket_name);
+        authoriztor.sign(
+            method,
+            &mut url,
+            expires_in,
+            &host,
+            client_email,
+            &self.client,
+        );
 
         todo!()
     }

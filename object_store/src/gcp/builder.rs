@@ -451,6 +451,7 @@ impl GoogleCloudStorageBuilder {
         } else if disable_oauth {
             Arc::new(StaticCredentialProvider::new(GcpCredential {
                 bearer: "".to_string(),
+                client_email: None,
             })) as _
         } else if let Some(credentials) = service_account_credentials {
             Arc::new(TokenCredentialProvider::new(

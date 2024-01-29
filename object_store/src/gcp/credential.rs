@@ -43,6 +43,8 @@ use std::time::{Duration, Instant};
 use tracing::info;
 use url::Url;
 
+use super::client::GoogleCloudStorageClient;
+
 pub const DEFAULT_SCOPE: &str = "https://www.googleapis.com/auth/devstorage.full_control";
 
 pub const DEFAULT_GCS_BASE_URL: &str = "https://storage.googleapis.com";
@@ -96,6 +98,9 @@ pub type Result<T, E = Error> = std::result::Result<T, E>;
 pub struct GcpCredential {
     /// An HTTP bearer token
     pub bearer: String,
+
+    /// client email address
+    pub client_email: Option<String>,
 }
 impl GcpCredential {}
 
@@ -228,7 +233,10 @@ impl TokenProvider for SelfSignedJwt {
         let bearer = [message, signature].join(".");
 
         Ok(TemporaryToken {
-            token: Arc::new(GcpCredential { bearer }),
+            token: Arc::new(GcpCredential {
+                bearer,
+                client_email: Some(self.issuer.clone()),
+            }),
             expiry: Some(Instant::now() + Duration::from_secs(3600)),
         })
     }
@@ -350,6 +358,26 @@ async fn make_metadata_request(
     Ok(response)
 }
 
+/// Make a request to the metadata server to fetch the client email, using a a given hostname.
+async fn make_metadata_request_for_email(
+    client: &Client,
+    hostname: &str,
+    retry: &RetryConfig,
+) -> crate::Result<String> {
+    let url =
+        format!("http://{hostname}/computeMetadata/v1/instance/service-accounts/default/email",);
+    let response = client
+        .request(Method::GET, url)
+        .header("Metadata-Flavor", "Google")
+        .send_retry(retry)
+        .await
+        .context(TokenRequestSnafu)?
+        .text()
+        .await
+        .context(TokenResponseBodySnafu)?;
+    Ok(response)
+}
+
 #[async_trait]
 impl TokenProvider for InstanceCredentialProvider {
     type Credential = GcpCredential;
@@ -368,9 +396,14 @@ impl TokenProvider for InstanceCredentialProvider {
         let response = make_metadata_request(client, METADATA_HOST, retry)
             .or_else(|_| make_metadata_request(client, METADATA_IP, retry))
             .await?;
+
+        let client_email = make_metadata_request_for_email(client, METADATA_HOST, retry)
+            .or_else(|_| make_metadata_request_for_email(client, METADATA_IP, retry))
+            .await?;
         let token = TemporaryToken {
             token: Arc::new(GcpCredential {
                 bearer: response.access_token,
+                client_email: Some(client_email),
             }),
             expiry: Some(Instant::now() + Duration::from_secs(response.expires_in)),
         };
@@ -432,6 +465,12 @@ pub struct AuthorizedUserCredentials {
     refresh_token: String,
 }
 
+impl AuthorizedUserCredentials {
+    async fn client_email(&self) -> Result<String> {
+        todo!()
+    }
+}
+
 #[async_trait]
 impl TokenProvider for AuthorizedUserCredentials {
     type Credential = GcpCredential;
@@ -456,9 +495,12 @@ impl TokenProvider for AuthorizedUserCredentials {
             .await
             .context(TokenResponseBodySnafu)?;
 
+        let client_email = self.client_email().await?;
+
         Ok(TemporaryToken {
             token: Arc::new(GcpCredential {
                 bearer: response.access_token,
+                client_email: Some(client_email),
             }),
             expiry: Some(Instant::now() + Duration::from_secs(response.expires_in)),
         })
@@ -507,22 +549,23 @@ impl<'a> GCSAuthorizer<'a> {
         }
     }
 
-    pub(crate) fn sign(
+    pub(crate) async fn sign(
         &self,
         method: Method,
         url: &mut Url,
         expires_in: Duration,
-        bucket_name: &str,
-    ) -> String {
+        host: &str,
+        client_email: &str,
+        client: &GoogleCloudStorageClient,
+    ) -> crate::Result<()> {
         let date = chrono::Utc::now();
         let scope = self.scope(date);
-        let credential_with_scope = format!("{}/{}", self.credential.client_email, scope);
+        let credential_with_scope = format!("{}/{}", client_email, scope);
 
-        let host = format!("{}.storage.googleapis.com", bucket_name);
         let mut headers = HeaderMap::new();
         headers.insert("host", host.parse().unwrap());
 
-        let (canaonical_header, signed_headers) = self.canonicalize_headers(&headers);
+        let (_, signed_headers) = self.canonicalize_headers(&headers);
 
         url.query_pairs_mut()
             .append_pair("X-Goog-Algorithm", "GOOG4-RSA-SHA256")
@@ -531,9 +574,12 @@ impl<'a> GCSAuthorizer<'a> {
             .append_pair("X-Goog-Expires", &expires_in.as_secs().to_string())
             .append_pair("X-Goog-SignedHeaders", &signed_headers);
 
-        let canonical_request = self.canonicalize_request(url, &method, &headers);
+        let string_to_sign = self.string_to_sign(date, &method, url, &headers);
+        let signature = client.sign_blob(&string_to_sign, client_email).await?;
 
-        self.string_to_sign(date, &method, url, &headers)
+        url.query_pairs_mut()
+            .append_pair("X-Goog-Signature", &signature);
+        Ok(())
     }
 
     /// Get scope for the request
