@@ -25,7 +25,6 @@ use base64::prelude::BASE64_URL_SAFE_NO_PAD;
 use base64::Engine;
 use chrono::{DateTime, Utc};
 use futures::TryFutureExt;
-use hyper::header::HeaderName;
 use hyper::HeaderMap;
 use itertools::Itertools;
 use percent_encoding::utf8_percent_encode;
@@ -535,18 +534,14 @@ fn trim_header_value(value: &str) -> String {
 ///
 /// [AWS SigV4]: https://docs.aws.amazon.com/general/latest/gr/sigv4-calculate-signature.html
 #[derive(Debug)]
-pub struct GCSAuthorizer<'a> {
+pub struct GCSAuthorizer {
     date: Option<DateTime<Utc>>,
-    credential: &'a GcpCredential,
 }
 
-impl<'a> GCSAuthorizer<'a> {
+impl GCSAuthorizer {
     /// Create a new [`GCSAuthorizer`]
-    pub fn new(credential: &'a GcpCredential) -> GCSAuthorizer<'a> {
-        GCSAuthorizer {
-            date: None,
-            credential,
-        }
+    pub fn new() -> Self {
+        Self { date: None }
     }
 
     pub(crate) async fn sign(
@@ -558,7 +553,7 @@ impl<'a> GCSAuthorizer<'a> {
         client_email: &str,
         client: &GoogleCloudStorageClient,
     ) -> crate::Result<()> {
-        let date = chrono::Utc::now();
+        let date = self.date.unwrap_or_else(Utc::now);
         let scope = self.scope(date);
         let credential_with_scope = format!("{}/{}", client_email, scope);
 

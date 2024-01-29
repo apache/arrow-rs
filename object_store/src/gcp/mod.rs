@@ -36,7 +36,6 @@
 //! because it allows much higher throughput in our benchmarks (see
 //! [#5194](https://github.com/apache/arrow-rs/issues/5194)). HTTP/2 can be
 //! enabled by setting [crate::ClientConfigKey::Http1Only] to false.
-use std::ops::Deref;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -53,7 +52,7 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use client::GoogleCloudStorageClient;
 use futures::stream::BoxStream;
-use hyper::{HeaderMap, Method};
+use hyper::Method;
 use tokio::io::AsyncWrite;
 use url::Url;
 
@@ -242,7 +241,7 @@ impl Signer for GoogleCloudStorage {
             source: format!("Unable to parse url {path_url}: {e}").into(),
         })?;
 
-        let authoriztor = GCSAuthorizer::new(&credentials);
+        let authoriztor = GCSAuthorizer::new();
 
         let client_email = if credentials.client_email.is_none() {
             return Err(crate::Error::Generic {
@@ -253,16 +252,18 @@ impl Signer for GoogleCloudStorage {
             credentials.client_email.as_ref().unwrap()
         };
         let host = format!("{}.storage.googleapis.com", config.bucket_name);
-        authoriztor.sign(
-            method,
-            &mut url,
-            expires_in,
-            &host,
-            client_email,
-            &self.client,
-        );
+        authoriztor
+            .sign(
+                method,
+                &mut url,
+                expires_in,
+                &host,
+                client_email,
+                &self.client,
+            )
+            .await?;
 
-        todo!()
+        Ok(url)
     }
 }
 

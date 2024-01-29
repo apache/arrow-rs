@@ -204,8 +204,6 @@ struct SignBlobBody {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct SignBlobResponse {
-    /// Key id
-    key_id: String,
     /// The signature for the payload
     signed_blob: String,
 }
