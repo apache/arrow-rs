@@ -2963,4 +2963,29 @@ mod tests {
                 .any(|kv| kv.key.as_str() == ARROW_SCHEMA_META_KEY));
         }
     }
+
+    #[test]
+    fn mismatched_schemas() {
+        let batch_schema = Schema::new(vec![Field::new("count", DataType::Int32, false)]);
+        let file_schema = Arc::new(Schema::new(vec![Field::new(
+            "temperature",
+            DataType::Float64,
+            false,
+        )]));
+
+        let batch = RecordBatch::try_new(
+            Arc::new(batch_schema),
+            vec![Arc::new(Int32Array::from(vec![1, 2, 3, 4])) as _],
+        )
+        .unwrap();
+
+        let mut buf = Vec::with_capacity(1024);
+        let mut writer = ArrowWriter::try_new(&mut buf, file_schema.clone(), None).unwrap();
+
+        let err = writer.write(&batch).unwrap_err().to_string();
+        assert_eq!(
+            err,
+            "Arrow: Incompatible type. Field 'temperature' has type Float64, array has type Int32"
+        );
+    }
 }
