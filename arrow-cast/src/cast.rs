@@ -802,6 +802,9 @@ pub fn cast_with_options(
         }
         (_, List(ref to)) => cast_values_to_list::<i32>(array, to, cast_options),
         (_, LargeList(ref to)) => cast_values_to_list::<i64>(array, to, cast_options),
+        (_, FixedSizeList(ref to, size)) => {
+            cast_values_to_fixed_size_list(array, to, size, cast_options)
+        }
         (Decimal128(_, s1), Decimal128(p2, s2)) => {
             cast_decimal_to_decimal_same_type::<Decimal128Type>(
                 array.as_primitive(),
@@ -3037,6 +3040,18 @@ fn cast_values_to_list<O: OffsetSizeTrait>(
     let values = cast_with_options(array, to.data_type(), cast_options)?;
     let offsets = OffsetBuffer::from_lengths(std::iter::repeat(1).take(values.len()));
     let list = GenericListArray::<O>::new(to.clone(), offsets, values, None);
+    Ok(Arc::new(list))
+}
+
+/// Helper function that takes a primitive array and casts to a fixed size list array.
+fn cast_values_to_fixed_size_list(
+    array: &dyn Array,
+    to: &FieldRef,
+    size: &i32,
+    cast_options: &CastOptions,
+) -> Result<ArrayRef, ArrowError> {
+    let values = cast_with_options(array, to.data_type(), cast_options)?;
+    let list = FixedSizeListArray::new(to.clone(), *size, values, None);
     Ok(Arc::new(list))
 }
 
@@ -7607,6 +7622,36 @@ mod tests {
         let actual = list_array3.as_any().downcast_ref::<ListArray>().unwrap();
         let expected = array3.as_any().downcast_ref::<LargeListArray>().unwrap();
         assert_eq!(expected.values(), actual.values());
+    }
+
+    #[test]
+    fn test_cast_utf8_to_list() {
+        // DataType::List
+        let array = Arc::new(StringArray::from(vec!["5"])) as ArrayRef;
+        let field = Arc::new(Field::new("", DataType::Int32, false));
+        let list_array = cast(&array, &DataType::List(field.clone())).unwrap();
+        let actual = list_array.as_any().downcast_ref::<ListArray>().unwrap();
+        let expect = ListArray::from_iter_primitive::<Int32Type, _, _>([Some([Some(5)])]);
+        assert_eq!(&expect.value(0), &actual.value(0));
+
+        // DataType::LargeList
+        let list_array = cast(&array, &DataType::LargeList(field.clone())).unwrap();
+        let actual = list_array
+            .as_any()
+            .downcast_ref::<LargeListArray>()
+            .unwrap();
+        let expect = LargeListArray::from_iter_primitive::<Int32Type, _, _>([Some([Some(5)])]);
+        assert_eq!(&expect.value(0), &actual.value(0));
+
+        // DataType::FixedSizeList
+        let list_array = cast(&array, &DataType::FixedSizeList(field.clone(), 1)).unwrap();
+        let actual = list_array
+            .as_any()
+            .downcast_ref::<FixedSizeListArray>()
+            .unwrap();
+        let expect =
+            FixedSizeListArray::from_iter_primitive::<Int32Type, _, _>([Some([Some(5)])], 1);
+        assert_eq!(&expect.value(0), &actual.value(0));
     }
 
     #[test]
