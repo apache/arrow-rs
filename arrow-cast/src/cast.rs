@@ -141,6 +141,8 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
         }
         (_, List(list_to)) => can_cast_types(from_type, list_to.data_type()),
         (_, LargeList(list_to)) => can_cast_types(from_type, list_to.data_type()),
+        (_, FixedSizeList(list_to,size)) if size.eq(&1_i32) => {
+            can_cast_types(from_type, list_to.data_type())},
         // cast one decimal type to another decimal type
         (Decimal128(_, _), Decimal128(_, _)) => true,
         (Decimal256(_, _), Decimal256(_, _)) => true,
@@ -802,7 +804,7 @@ pub fn cast_with_options(
         }
         (_, List(ref to)) => cast_values_to_list::<i32>(array, to, cast_options),
         (_, LargeList(ref to)) => cast_values_to_list::<i64>(array, to, cast_options),
-        (_, FixedSizeList(ref to, size)) => {
+        (_, FixedSizeList(ref to, size)) if size.eq(&1_i32) => {
             cast_values_to_fixed_size_list(array, to, size, cast_options)
         }
         (Decimal128(_, s1), Decimal128(p2, s2)) => {
