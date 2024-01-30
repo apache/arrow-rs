@@ -23,5 +23,5 @@ add-sections={"documentation":{"prefix":"**Documentation updates:**","labels":["
 # so that the component is shown associated with the issue
 issue-line-labels=object-store
 # skip non object_store issues
-exclude-labels=development-process,invalid,arrow,parquet,arrow-flight,parquet-derive
+exclude-labels=development-process,invalid,arrow,parquet,arrow-flight,parquet-derive,question
 breaking_labels=api-change
