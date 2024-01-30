@@ -179,37 +179,18 @@ trait ExtractDatePartExt {
 
 impl ExtractDatePartExt for PrimitiveArray<Time32SecondType> {
     fn date_part(&self, part: DatePart) -> Result<Int32Array, ArrowError> {
+        #[inline]
+        fn range_check(s: i32) -> bool {
+            (0..SECONDS_IN_DAY as i32).contains(&s)
+        }
         match part {
-            DatePart::Hour => Ok(self.unary_opt(|s| {
-                if (0..SECONDS_IN_DAY as i32).contains(&s) {
-                    Some(s / 3_600)
-                } else {
-                    None
-                }
-            })),
-            DatePart::Minute => Ok(self.unary_opt(|s| {
-                if (0..SECONDS_IN_DAY as i32).contains(&s) {
-                    Some((s / 60) % 60)
-                } else {
-                    None
-                }
-            })),
-            DatePart::Second => Ok(self.unary_opt(|s| {
-                if (0..SECONDS_IN_DAY as i32).contains(&s) {
-                    Some(s % 60)
-                } else {
-                    None
-                }
-            })),
+            DatePart::Hour => Ok(self.unary_opt(|s| range_check(s).then_some(s / 3_600))),
+            DatePart::Minute => Ok(self.unary_opt(|s| range_check(s).then_some((s / 60) % 60))),
+            DatePart::Second => Ok(self.unary_opt(|s| range_check(s).then_some(s % 60))),
             // Time32Second only encodes number of seconds, so these will always be 0 (if in valid range)
-            DatePart::Millisecond | DatePart::Microsecond | DatePart::Nanosecond => Ok(self
-                .unary_opt(|s| {
-                    if (0..SECONDS_IN_DAY as i32).contains(&s) {
-                        Some(0)
-                    } else {
-                        None
-                    }
-                })),
+            DatePart::Millisecond | DatePart::Microsecond | DatePart::Nanosecond => {
+                Ok(self.unary_opt(|s| range_check(s).then_some(0)))
+            }
             _ => return_compute_error_with!(format!("{part} does not support"), self.data_type()),
         }
     }
@@ -217,51 +198,30 @@ impl ExtractDatePartExt for PrimitiveArray<Time32SecondType> {
 
 impl ExtractDatePartExt for PrimitiveArray<Time32MillisecondType> {
     fn date_part(&self, part: DatePart) -> Result<Int32Array, ArrowError> {
-        let milliseconds_in_day = MILLISECONDS_IN_DAY as i32;
+        #[inline]
+        fn range_check(ms: i32) -> bool {
+            (0..MILLISECONDS_IN_DAY as i32).contains(&ms)
+        }
         let milliseconds = MILLISECONDS as i32;
         match part {
-            DatePart::Hour => Ok(self.unary_opt(|ms| {
-                if (0..milliseconds_in_day).contains(&ms) {
-                    Some(ms / 3_600 / milliseconds)
-                } else {
-                    None
-                }
-            })),
-            DatePart::Minute => Ok(self.unary_opt(|ms| {
-                if (0..milliseconds_in_day).contains(&ms) {
-                    Some((ms / 60 / milliseconds) % 60)
-                } else {
-                    None
-                }
-            })),
-            DatePart::Second => Ok(self.unary_opt(|ms| {
-                if (0..milliseconds_in_day).contains(&ms) {
-                    Some((ms / milliseconds) % 60)
-                } else {
-                    None
-                }
-            })),
-            DatePart::Millisecond => Ok(self.unary_opt(|ms| {
-                if (0..milliseconds_in_day).contains(&ms) {
-                    Some(ms % milliseconds)
-                } else {
-                    None
-                }
-            })),
-            DatePart::Microsecond => Ok(self.unary_opt(|ms| {
-                if (0..milliseconds_in_day).contains(&ms) {
-                    Some((ms % milliseconds) * 1_000)
-                } else {
-                    None
-                }
-            })),
-            DatePart::Nanosecond => Ok(self.unary_opt(|ms| {
-                if (0..milliseconds_in_day).contains(&ms) {
-                    Some((ms % milliseconds) * 1_000_000)
-                } else {
-                    None
-                }
-            })),
+            DatePart::Hour => {
+                Ok(self.unary_opt(|ms| range_check(ms).then_some(ms / 3_600 / milliseconds)))
+            }
+            DatePart::Minute => {
+                Ok(self.unary_opt(|ms| range_check(ms).then_some((ms / 60 / milliseconds) % 60)))
+            }
+            DatePart::Second => {
+                Ok(self.unary_opt(|ms| range_check(ms).then_some((ms / milliseconds) % 60)))
+            }
+            DatePart::Millisecond => {
+                Ok(self.unary_opt(|ms| range_check(ms).then_some(ms % milliseconds)))
+            }
+            DatePart::Microsecond => {
+                Ok(self.unary_opt(|ms| range_check(ms).then_some((ms % milliseconds) * 1_000)))
+            }
+            DatePart::Nanosecond => {
+                Ok(self.unary_opt(|ms| range_check(ms).then_some((ms % milliseconds) * 1_000_000)))
+            }
             _ => return_compute_error_with!(format!("{part} does not support"), self.data_type()),
         }
     }
@@ -269,49 +229,28 @@ impl ExtractDatePartExt for PrimitiveArray<Time32MillisecondType> {
 
 impl ExtractDatePartExt for PrimitiveArray<Time64MicrosecondType> {
     fn date_part(&self, part: DatePart) -> Result<Int32Array, ArrowError> {
+        #[inline]
+        fn range_check(us: i64) -> bool {
+            (0..MICROSECONDS_IN_DAY).contains(&us)
+        }
         match part {
-            DatePart::Hour => Ok(self.unary_opt(|us| {
-                if (0..MICROSECONDS_IN_DAY).contains(&us) {
-                    Some((us / 3_600 / MICROSECONDS) as i32)
-                } else {
-                    None
-                }
-            })),
-            DatePart::Minute => Ok(self.unary_opt(|us| {
-                if (0..MICROSECONDS_IN_DAY).contains(&us) {
-                    Some(((us / 60 / MICROSECONDS) % 60) as i32)
-                } else {
-                    None
-                }
-            })),
-            DatePart::Second => Ok(self.unary_opt(|us| {
-                if (0..MICROSECONDS_IN_DAY).contains(&us) {
-                    Some(((us / MICROSECONDS) % 60) as i32)
-                } else {
-                    None
-                }
-            })),
-            DatePart::Millisecond => Ok(self.unary_opt(|us| {
-                if (0..MICROSECONDS_IN_DAY).contains(&us) {
-                    Some(((us % MICROSECONDS) / 1_000) as i32)
-                } else {
-                    None
-                }
-            })),
-            DatePart::Microsecond => Ok(self.unary_opt(|us| {
-                if (0..MICROSECONDS_IN_DAY).contains(&us) {
-                    Some((us % MICROSECONDS) as i32)
-                } else {
-                    None
-                }
-            })),
-            DatePart::Nanosecond => Ok(self.unary_opt(|us| {
-                if (0..MICROSECONDS_IN_DAY).contains(&us) {
-                    Some(((us % MICROSECONDS) * 1_000) as i32)
-                } else {
-                    None
-                }
-            })),
+            DatePart::Hour => {
+                Ok(self
+                    .unary_opt(|us| range_check(us).then_some((us / 3_600 / MICROSECONDS) as i32)))
+            }
+            DatePart::Minute => Ok(self
+                .unary_opt(|us| range_check(us).then_some(((us / 60 / MICROSECONDS) % 60) as i32))),
+            DatePart::Second => {
+                Ok(self
+                    .unary_opt(|us| range_check(us).then_some(((us / MICROSECONDS) % 60) as i32)))
+            }
+            DatePart::Millisecond => Ok(self
+                .unary_opt(|us| range_check(us).then_some(((us % MICROSECONDS) / 1_000) as i32))),
+            DatePart::Microsecond => {
+                Ok(self.unary_opt(|us| range_check(us).then_some((us % MICROSECONDS) as i32)))
+            }
+            DatePart::Nanosecond => Ok(self
+                .unary_opt(|us| range_check(us).then_some(((us % MICROSECONDS) * 1_000) as i32))),
             _ => return_compute_error_with!(format!("{part} does not support"), self.data_type()),
         }
     }
@@ -319,49 +258,30 @@ impl ExtractDatePartExt for PrimitiveArray<Time64MicrosecondType> {
 
 impl ExtractDatePartExt for PrimitiveArray<Time64NanosecondType> {
     fn date_part(&self, part: DatePart) -> Result<Int32Array, ArrowError> {
+        #[inline]
+        fn range_check(ns: i64) -> bool {
+            (0..NANOSECONDS_IN_DAY).contains(&ns)
+        }
         match part {
-            DatePart::Hour => Ok(self.unary_opt(|ns| {
-                if (0..NANOSECONDS_IN_DAY).contains(&ns) {
-                    Some((ns / 3_600 / NANOSECONDS) as i32)
-                } else {
-                    None
-                }
-            })),
-            DatePart::Minute => Ok(self.unary_opt(|ns| {
-                if (0..NANOSECONDS_IN_DAY).contains(&ns) {
-                    Some(((ns / 60 / NANOSECONDS) % 60) as i32)
-                } else {
-                    None
-                }
-            })),
-            DatePart::Second => Ok(self.unary_opt(|ns| {
-                if (0..NANOSECONDS_IN_DAY).contains(&ns) {
-                    Some(((ns / NANOSECONDS) % 60) as i32)
-                } else {
-                    None
-                }
-            })),
+            DatePart::Hour => {
+                Ok(self
+                    .unary_opt(|ns| range_check(ns).then_some((ns / 3_600 / NANOSECONDS) as i32)))
+            }
+            DatePart::Minute => Ok(self
+                .unary_opt(|ns| range_check(ns).then_some(((ns / 60 / NANOSECONDS) % 60) as i32))),
+            DatePart::Second => Ok(
+                self.unary_opt(|ns| range_check(ns).then_some(((ns / NANOSECONDS) % 60) as i32))
+            ),
             DatePart::Millisecond => Ok(self.unary_opt(|ns| {
-                if (0..NANOSECONDS_IN_DAY).contains(&ns) {
-                    Some(((ns % NANOSECONDS) / 1_000_000) as i32)
-                } else {
-                    None
-                }
+                range_check(ns).then_some(((ns % NANOSECONDS) / 1_000_000) as i32)
             })),
-            DatePart::Microsecond => Ok(self.unary_opt(|ns| {
-                if (0..NANOSECONDS_IN_DAY).contains(&ns) {
-                    Some(((ns % NANOSECONDS) / 1_000) as i32)
-                } else {
-                    None
-                }
-            })),
-            DatePart::Nanosecond => Ok(self.unary_opt(|ns| {
-                if (0..NANOSECONDS_IN_DAY).contains(&ns) {
-                    Some((ns % NANOSECONDS) as i32)
-                } else {
-                    None
-                }
-            })),
+            DatePart::Microsecond => {
+                Ok(self
+                    .unary_opt(|ns| range_check(ns).then_some(((ns % NANOSECONDS) / 1_000) as i32)))
+            }
+            DatePart::Nanosecond => {
+                Ok(self.unary_opt(|ns| range_check(ns).then_some((ns % NANOSECONDS) as i32)))
+            }
             _ => return_compute_error_with!(format!("{part} does not support"), self.data_type()),
         }
     }
