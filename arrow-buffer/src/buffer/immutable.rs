@@ -124,7 +124,7 @@ impl Buffer {
         len: usize,
         owner: Arc<dyn Allocation>,
     ) -> Self {
-        Buffer::build_with_arguments(ptr, len, Deallocation::Custom(owner))
+        Buffer::build_with_arguments(ptr, len, Deallocation::Custom(owner, len))
     }
 
     /// Auxiliary method to create a new Buffer
