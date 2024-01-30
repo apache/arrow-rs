@@ -141,7 +141,7 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
         }
         (_, List(list_to)) => can_cast_types(from_type, list_to.data_type()),
         (_, LargeList(list_to)) => can_cast_types(from_type, list_to.data_type()),
-        (_, FixedSizeList(list_to,size)) if size.eq(&1_i32) => {
+        (_, FixedSizeList(list_to,size)) if *size == 1 => {
             can_cast_types(from_type, list_to.data_type())},
         // cast one decimal type to another decimal type
         (Decimal128(_, _), Decimal128(_, _)) => true,
@@ -805,7 +805,7 @@ pub fn cast_with_options(
         (_, List(ref to)) => cast_values_to_list::<i32>(array, to, cast_options),
         (_, LargeList(ref to)) => cast_values_to_list::<i64>(array, to, cast_options),
         (_, FixedSizeList(ref to, size)) if size.eq(&1_i32) => {
-            cast_values_to_fixed_size_list(array, to, size, cast_options)
+            cast_values_to_fixed_size_list(array, to, *size, cast_options)
         }
         (Decimal128(_, s1), Decimal128(p2, s2)) => {
             cast_decimal_to_decimal_same_type::<Decimal128Type>(
@@ -3049,11 +3049,11 @@ fn cast_values_to_list<O: OffsetSizeTrait>(
 fn cast_values_to_fixed_size_list(
     array: &dyn Array,
     to: &FieldRef,
-    size: &i32,
+    size: i32,
     cast_options: &CastOptions,
 ) -> Result<ArrayRef, ArrowError> {
     let values = cast_with_options(array, to.data_type(), cast_options)?;
-    let list = FixedSizeListArray::new(to.clone(), *size, values, None);
+    let list = FixedSizeListArray::new(to.clone(), size, values, None);
     Ok(Arc::new(list))
 }
 
@@ -7632,25 +7632,19 @@ mod tests {
         let array = Arc::new(StringArray::from(vec!["5"])) as ArrayRef;
         let field = Arc::new(Field::new("", DataType::Int32, false));
         let list_array = cast(&array, &DataType::List(field.clone())).unwrap();
-        let actual = list_array.as_any().downcast_ref::<ListArray>().unwrap();
+        let actual = list_array.as_list_opt::<i32>().unwrap();
         let expect = ListArray::from_iter_primitive::<Int32Type, _, _>([Some([Some(5)])]);
         assert_eq!(&expect.value(0), &actual.value(0));
 
         // DataType::LargeList
         let list_array = cast(&array, &DataType::LargeList(field.clone())).unwrap();
-        let actual = list_array
-            .as_any()
-            .downcast_ref::<LargeListArray>()
-            .unwrap();
+        let actual = list_array.as_list_opt::<i64>().unwrap();
         let expect = LargeListArray::from_iter_primitive::<Int32Type, _, _>([Some([Some(5)])]);
         assert_eq!(&expect.value(0), &actual.value(0));
 
         // DataType::FixedSizeList
         let list_array = cast(&array, &DataType::FixedSizeList(field.clone(), 1)).unwrap();
-        let actual = list_array
-            .as_any()
-            .downcast_ref::<FixedSizeListArray>()
-            .unwrap();
+        let actual = list_array.as_fixed_size_list_opt().unwrap();
         let expect =
             FixedSizeListArray::from_iter_primitive::<Int32Type, _, _>([Some([Some(5)])], 1);
         assert_eq!(&expect.value(0), &actual.value(0));
