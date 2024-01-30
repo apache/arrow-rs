@@ -35,6 +35,7 @@ pub fn max_buffer_size(
     let bit_width = num_required_bits(max_level as u64);
     match encoding {
         Encoding::RLE => RleEncoder::max_buffer_size(bit_width, num_buffered_values),
+        #[allow(deprecated)]
         Encoding::BIT_PACKED => ceil(num_buffered_values * bit_width as usize, 8),
         _ => panic!("Unsupported encoding type {encoding}"),
     }
@@ -66,6 +67,7 @@ impl LevelEncoder {
                 buffer.extend_from_slice(&[0; 4]);
                 LevelEncoder::Rle(RleEncoder::new_from_buf(bit_width, buffer))
             }
+            #[allow(deprecated)]
             Encoding::BIT_PACKED => {
                 // Here we set full byte buffer without adjusting for num_buffered_values,
                 // because byte buffer will already be allocated with size from
