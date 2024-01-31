@@ -256,10 +256,21 @@ pub enum Encoding {
     /// Usable for definition/repetition levels encoding and boolean values.
     RLE,
 
-    /// Bit packed encoding.
+    /// **Deprecated** Bit-packed encoding.
     ///
     /// This can only be used if the data has a known max width.
     /// Usable for definition/repetition levels encoding.
+    ///
+    /// There are compatibility issues with files using this encoding.
+    /// The parquet standard specifies the bits to be packed starting from the
+    /// most-significant bit, several implementations do not follow this bit order.
+    /// Several other implementations also have issues reading this encoding
+    /// because of incorrect assumptions about the length of the encoded data.
+    ///
+    /// The RLE/bit-packing hybrid is more cpu and memory efficient and should be used instead.
+    #[deprecated(
+        note = "Please see documentation for compatibility issues and use the RLE/bit-packing hybrid encoding instead"
+    )]
     BIT_PACKED,
 
     /// Delta encoding for integers, either INT32 or INT64.
@@ -301,6 +312,7 @@ impl FromStr for Encoding {
             "PLAIN" | "plain" => Ok(Encoding::PLAIN),
             "PLAIN_DICTIONARY" | "plain_dictionary" => Ok(Encoding::PLAIN_DICTIONARY),
             "RLE" | "rle" => Ok(Encoding::RLE),
+            #[allow(deprecated)]
             "BIT_PACKED" | "bit_packed" => Ok(Encoding::BIT_PACKED),
             "DELTA_BINARY_PACKED" | "delta_binary_packed" => Ok(Encoding::DELTA_BINARY_PACKED),
             "DELTA_LENGTH_BYTE_ARRAY" | "delta_length_byte_array" => {
@@ -910,6 +922,7 @@ impl TryFrom<parquet::Encoding> for Encoding {
             parquet::Encoding::PLAIN => Encoding::PLAIN,
             parquet::Encoding::PLAIN_DICTIONARY => Encoding::PLAIN_DICTIONARY,
             parquet::Encoding::RLE => Encoding::RLE,
+            #[allow(deprecated)]
             parquet::Encoding::BIT_PACKED => Encoding::BIT_PACKED,
             parquet::Encoding::DELTA_BINARY_PACKED => Encoding::DELTA_BINARY_PACKED,
             parquet::Encoding::DELTA_LENGTH_BYTE_ARRAY => Encoding::DELTA_LENGTH_BYTE_ARRAY,
@@ -927,6 +940,7 @@ impl From<Encoding> for parquet::Encoding {
             Encoding::PLAIN => parquet::Encoding::PLAIN,
             Encoding::PLAIN_DICTIONARY => parquet::Encoding::PLAIN_DICTIONARY,
             Encoding::RLE => parquet::Encoding::RLE,
+            #[allow(deprecated)]
             Encoding::BIT_PACKED => parquet::Encoding::BIT_PACKED,
             Encoding::DELTA_BINARY_PACKED => parquet::Encoding::DELTA_BINARY_PACKED,
             Encoding::DELTA_LENGTH_BYTE_ARRAY => parquet::Encoding::DELTA_LENGTH_BYTE_ARRAY,
@@ -1114,6 +1128,7 @@ impl str::FromStr for LogicalType {
 }
 
 #[cfg(test)]
+#[allow(deprecated)] // allow BIT_PACKED encoding for the whole test module
 mod tests {
     use super::*;
 

@@ -268,6 +268,7 @@ impl LevelDecoder {
                 decoder.set_data(data);
                 Self::Rle(decoder)
             }
+            #[allow(deprecated)]
             Encoding::BIT_PACKED => Self::Packed(BitReader::new(data), bit_width),
             _ => unreachable!("invalid level encoding: {}", encoding),
         }
