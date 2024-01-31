@@ -134,7 +134,7 @@ impl<T: ArrowNativeType> From<Buffer> for ScalarBuffer<T> {
                 is_aligned,
                 "Memory pointer is not aligned with the specified scalar type"
             ),
-            Deallocation::Custom(_) =>
+            Deallocation::Custom(_, _) =>
                 assert!(is_aligned, "Memory pointer from external source (e.g, FFI) is not aligned with the specified scalar type. Before importing buffer through FFI, please make sure the allocation is aligned."),
         }
 
