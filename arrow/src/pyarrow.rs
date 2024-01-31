@@ -355,7 +355,12 @@ impl FromPyArrow for RecordBatch {
                 ));
             }
             let array = StructArray::from(array_data);
-            return Ok(array.into());
+            // StructArray does not embed metadata from schema. We need to override
+            // the output schema with the schema from the capsule.
+            let schema = Arc::new(Schema::try_from(schema_ptr).map_err(to_py_err)?);
+            return RecordBatch::from(array)
+                .with_schema(schema)
+                .map_err(to_py_err);
         }
 
         validate_class("RecordBatch", value)?;
