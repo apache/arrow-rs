@@ -808,6 +808,15 @@ pub struct DoPutUpdateResult {
     #[prost(int64, tag = "1")]
     pub record_count: i64,
 }
+/// Response returned when `DoPut` is called with `CommandPreparedStatementQuery`
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct DoPutPreparedStatementResult {
+    /// (potentially updated) opaque handle for the prepared statement on the server.
+    /// All subsequent requests for his prepared statement must use this new handle, if specified
+    #[prost(bytes = "bytes", tag = "1")]
+    pub prepared_statement_handle: ::prost::bytes::Bytes,
+}
 ///
 /// Request message for the "CancelQuery" action.
 ///
