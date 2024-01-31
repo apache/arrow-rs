@@ -232,7 +232,7 @@ use std::any::Any;
 ///     "🍎"
 /// );
 /// ```
-pub trait ArrayBuilder: Any + Send {
+pub trait ArrayBuilder: Any + Send + Sync {
     /// Returns the number of array slots in the builder
     fn len(&self) -> usize;
 
