@@ -560,16 +560,10 @@ impl DataType {
                     })
             }
             _ => {
-                if (self.is_numeric() == true && other.is_numeric() == true)
-                    || (self.is_temporal() == true && other.is_temporal() == true)
-                    || (self.is_utf8() == true && other.is_utf8() == true)
-                    || (self.is_null() == true && other.is_null() == true)
+                (self.is_numeric() && other.is_numeric())
+                    || (self.is_temporal() && other.is_temporal())
+                    || (self.is_utf8() && other.is_utf8())
                     || self.equals_datatype(other)
-                {
-                    true
-                } else {
-                    false
-                }
             }
         }
     }
@@ -1077,13 +1071,16 @@ mod tests {
         let dt2 = DataType::LargeList(Arc::new(Field::new("item", Float32, true)));
         assert!(!dt1.equals_similar_datatype(&dt2));
 
-        // Nested type
         let dt1 = DataType::List(Arc::new(Field::new("item", Int32, true)));
         let dt2 = DataType::LargeList(Arc::new(Field::new(
             "item",
             DataType::List(Arc::new(Field::new("item", Int32, true))),
             true,
         )));
+        assert!(!dt1.equals_similar_datatype(&dt2));
+
+        let dt1 = Null;
+        let dt2 = Int32;
         assert!(!dt1.equals_similar_datatype(&dt2));
     }
 }
