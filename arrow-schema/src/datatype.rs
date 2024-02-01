@@ -437,6 +437,13 @@ impl DataType {
         matches!(self, Null)
     }
 
+    /// Rture ture if this type is UTF-8 encoded string.
+    #[inline]
+    pub fn is_utf8(&self) -> bool {
+        use DataType::*;
+        matches!(self, Utf8 | LargeUtf8)
+    }
+
     /// Compares the datatype with another, ignoring nested field names
     /// and metadata.
     pub fn equals_datatype(&self, other: &DataType) -> bool {
@@ -491,6 +498,79 @@ impl DataType {
                     })
             }
             _ => self == other,
+        }
+    }
+
+    /// Compares the datatype with another with similar type but different magnitudes, ignoring nested field names
+    /// and metadata.
+    pub fn equals_similar_datatype(&self, other: &DataType) -> bool {
+        match (&self, other) {
+            (DataType::List(a), DataType::List(b))
+            | (DataType::LargeList(a), DataType::LargeList(b)) => {
+                a.is_nullable() == b.is_nullable()
+                    && a.data_type().equals_similar_datatype(b.data_type())
+            }
+            (DataType::FixedSizeList(a, a_size), DataType::FixedSizeList(b, b_size)) => {
+                a_size == b_size
+                    && a.is_nullable() == b.is_nullable()
+                    && a.data_type().equals_similar_datatype(b.data_type())
+            }
+            (DataType::Struct(a), DataType::Struct(b)) => {
+                a.len() == b.len()
+                    && a.iter().zip(b).all(|(a, b)| {
+                        a.is_nullable() == b.is_nullable()
+                            && a.data_type().equals_similar_datatype(b.data_type())
+                    })
+            }
+            (DataType::Map(a_field, a_is_sorted), DataType::Map(b_field, b_is_sorted)) => {
+                a_field.is_nullable() == b_field.is_nullable()
+                    && a_field
+                        .data_type()
+                        .equals_similar_datatype(b_field.data_type())
+                    && a_is_sorted == b_is_sorted
+            }
+            (DataType::Dictionary(a_key, a_value), DataType::Dictionary(b_key, b_value)) => {
+                a_key.equals_similar_datatype(b_key) && a_value.equals_similar_datatype(b_value)
+            }
+            (
+                DataType::RunEndEncoded(a_run_ends, a_values),
+                DataType::RunEndEncoded(b_run_ends, b_values),
+            ) => {
+                a_run_ends.is_nullable() == b_run_ends.is_nullable()
+                    && a_run_ends
+                        .data_type()
+                        .equals_similar_datatype(b_run_ends.data_type())
+                    && a_values.is_nullable() == b_values.is_nullable()
+                    && a_values
+                        .data_type()
+                        .equals_similar_datatype(b_values.data_type())
+            }
+            (
+                DataType::Union(a_union_fields, a_union_mode),
+                DataType::Union(b_union_fields, b_union_mode),
+            ) => {
+                a_union_mode == b_union_mode
+                    && a_union_fields.len() == b_union_fields.len()
+                    && a_union_fields.iter().all(|a| {
+                        b_union_fields.iter().any(|b| {
+                            a.0 == b.0
+                                && a.1.is_nullable() == b.1.is_nullable()
+                                && a.1.data_type().equals_similar_datatype(b.1.data_type())
+                        })
+                    })
+            }
+            _ => {
+                if (self.is_numeric() == true && other.is_numeric() == true)
+                    || (self.is_temporal() == true && other.is_temporal() == true)
+                    || (self.is_utf8() == true && other.is_utf8() == true)
+                    || (self.is_null() == true && other.is_null() == true)
+                    || self.equals_datatype(other)
+                {
+                    true
+                } else {
+                    false
+                }
+            }
         }
     }
 
@@ -923,5 +1003,87 @@ mod tests {
             ),
             UnionMode::Dense,
         );
+    }
+
+    #[test]
+    fn test_equal_similar_datatype() {
+        use DataType::*;
+        // Utf8*
+        let dt1 = Utf8;
+        let dt2 = LargeUtf8;
+        assert!(dt1.equals_similar_datatype(&dt2));
+
+        // Numeric types
+        let types = [
+            UInt8,
+            UInt16,
+            UInt32,
+            UInt64,
+            Int8,
+            Int16,
+            Int32,
+            Int64,
+            Float16,
+            Float32,
+            Float64,
+            Decimal128(10, 2),
+            Decimal256(10, 2),
+        ];
+        for (dt1, dt2) in types.iter().zip(types.iter()) {
+            assert!(dt1.equals_similar_datatype(dt2));
+        }
+
+        // Temporal types
+        let types = [
+            Timestamp(TimeUnit::Second, None),
+            Timestamp(TimeUnit::Millisecond, None),
+            Timestamp(TimeUnit::Microsecond, None),
+            Timestamp(TimeUnit::Nanosecond, None),
+            Time32(TimeUnit::Second),
+            Time32(TimeUnit::Millisecond),
+            Time32(TimeUnit::Microsecond),
+            Time32(TimeUnit::Nanosecond),
+            Time64(TimeUnit::Second),
+            Time64(TimeUnit::Millisecond),
+            Time64(TimeUnit::Microsecond),
+            Time64(TimeUnit::Nanosecond),
+            Duration(TimeUnit::Second),
+            Duration(TimeUnit::Millisecond),
+            Duration(TimeUnit::Microsecond),
+            Duration(TimeUnit::Nanosecond),
+            Interval(IntervalUnit::YearMonth),
+            Interval(IntervalUnit::DayTime),
+            Interval(IntervalUnit::MonthDayNano),
+            Date32,
+            Date64,
+        ];
+        for (dt1, dt2) in types.iter().zip(types.iter()) {
+            assert!(dt1.equals_similar_datatype(dt2));
+        }
+
+        // List types
+        let types = [
+            DataType::List(Arc::new(Field::new("item", Int32, true))),
+            DataType::List(Arc::new(Field::new("item", Int64, true))),
+            DataType::List(Arc::new(Field::new("item", Float32, true))),
+            DataType::List(Arc::new(Field::new("item", Float64, true))),
+        ];
+        for (dt1, dt2) in types.iter().zip(types.iter()) {
+            assert!(dt1.equals_similar_datatype(dt2));
+        }
+
+        // Differnt type
+        let dt1 = DataType::List(Arc::new(Field::new("item", Int32, true)));
+        let dt2 = DataType::LargeList(Arc::new(Field::new("item", Float32, true)));
+        assert!(!dt1.equals_similar_datatype(&dt2));
+
+        // Nested type
+        let dt1 = DataType::List(Arc::new(Field::new("item", Int32, true)));
+        let dt2 = DataType::LargeList(Arc::new(Field::new(
+            "item",
+            DataType::List(Arc::new(Field::new("item", Int32, true))),
+            true,
+        )));
+        assert!(!dt1.equals_similar_datatype(&dt2));
     }
 }
