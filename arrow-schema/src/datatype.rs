@@ -437,7 +437,7 @@ impl DataType {
         matches!(self, Null)
     }
 
-    /// Rture ture if this type is UTF-8 encoded string.
+    /// Reture ture if this type is UTF-8 encoded string.
     #[inline]
     pub fn is_utf8(&self) -> bool {
         use DataType::*;
@@ -501,7 +501,7 @@ impl DataType {
         }
     }
 
-    /// Compares the datatype with another with similar type but different magnitudes, ignoring nested field names
+    /// Compare the datatype of similar types but different magnitudes, ignoring nested field names
     /// and metadata.
     pub fn equals_similar_datatype(&self, other: &DataType) -> bool {
         match (&self, other) {
