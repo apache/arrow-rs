@@ -464,9 +464,24 @@ pub struct AuthorizedUserCredentials {
     refresh_token: String,
 }
 
+///<https://oauth2.googleapis.com/tokeninfo?access_token=ACCESS_TOKEN>
+#[derive(Debug, Deserialize)]
+struct EmailResponse {
+    email: String,
+}
 impl AuthorizedUserCredentials {
-    async fn client_email(&self) -> Result<String> {
-        todo!()
+    async fn client_email(&self, client: &Client, retry: &RetryConfig) -> Result<String> {
+        let response = client
+            .request(Method::GET, "https://oauth2.googleapis.com/tokeninfo")
+            .query(&[("access_token", &self.refresh_token)])
+            .send_retry(retry)
+            .await
+            .context(TokenRequestSnafu)?
+            .json::<EmailResponse>()
+            .await
+            .context(TokenResponseBodySnafu)?;
+
+        Ok(response.email)
     }
 }
 
@@ -494,7 +509,7 @@ impl TokenProvider for AuthorizedUserCredentials {
             .await
             .context(TokenResponseBodySnafu)?;
 
-        let client_email = self.client_email().await?;
+        let client_email = self.client_email(client, retry).await?;
 
         Ok(TemporaryToken {
             token: Arc::new(GcpCredential {
@@ -587,7 +602,7 @@ impl GCSAuthorizer {
 
     /// Canonicalizes query parameters into the GCP canonical form
     /// form like:
-    /// ```
+    ///```
     ///HTTP_VERB  
     ///PATH_TO_RESOURCE  
     ///CANONICAL_QUERY_STRING  
