@@ -90,8 +90,6 @@ impl From<Error> for crate::Error {
     }
 }
 
-pub type Result<T, E = Error> = std::result::Result<T, E>;
-
 /// A Google Cloud Storage Credential
 #[derive(Debug, Eq, PartialEq)]
 pub struct GcpCredential {
@@ -101,7 +99,8 @@ pub struct GcpCredential {
     /// client email address
     pub client_email: Option<String>,
 }
-impl GcpCredential {}
+
+pub type Result<T, E = Error> = std::result::Result<T, E>;
 
 #[derive(Debug, Default, serde::Serialize)]
 pub struct JwtHeader<'a> {
@@ -396,9 +395,7 @@ impl TokenProvider for InstanceCredentialProvider {
             .or_else(|_| make_metadata_request(client, METADATA_IP, retry))
             .await?;
 
-        let client_email = make_metadata_request_for_email(client, METADATA_HOST, retry)
-            .or_else(|_| make_metadata_request_for_email(client, METADATA_IP, retry))
-            .await?;
+        let client_email = make_metadata_request_for_email(client, METADATA_HOST, retry).await?;
         let token = TemporaryToken {
             token: Arc::new(GcpCredential {
                 bearer: response.access_token,
