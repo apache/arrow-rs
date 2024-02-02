@@ -244,7 +244,7 @@ impl GoogleCloudStorageClient {
 
     /// Create a signature from a string-to-sign using Google Cloud signBlob method.
     /// form like:
-    /// ```
+    /// ```plaintext
     /// curl -X POST --data-binary @JSON_FILE_NAME \
     ///-H "Authorization: Bearer OAUTH2_TOKEN" \
     ///-H "Content-Type: application/json" \
@@ -252,7 +252,7 @@ impl GoogleCloudStorageClient {
     /// ```
     ///
     /// 'JSON_FILE_NAME' is a file containing the following JSON object:
-    /// ```
+    /// ```plaintext
     /// {
     ///  "payload": "REQUEST_INFORMATION"
     /// }

@@ -542,9 +542,9 @@ fn trim_header_value(value: &str) -> String {
     ret
 }
 
-/// Authorize a [`Request`] with an [`AwsCredential`] using [AWS SigV4]
+/// A Google Cloud Storage Authorizer for generating signed URL using [Google SigV4]
 ///
-/// [AWS SigV4]: https://docs.aws.amazon.com/general/latest/gr/sigv4-calculate-signature.html
+/// [Google SigV4]: https://cloud.google.com/storage/docs/access-control/signed-urls
 #[derive(Debug)]
 pub struct GCSAuthorizer {
     date: Option<DateTime<Utc>>,
@@ -590,16 +590,18 @@ impl GCSAuthorizer {
     }
 
     /// Get scope for the request
+    /// 
+    /// <https://cloud.google.com/storage/docs/authentication/signatures#credential-scope>
     fn scope(&self, date: DateTime<Utc>) -> String {
         format!(
-            "{}/us-central1/storage/goog4_request",
+            "{}/auto/storage/goog4_request",
             date.format("%Y%m%d"),
         )
     }
 
     /// Canonicalizes query parameters into the GCP canonical form
     /// form like:
-    ///```
+    ///```plaintext
     ///HTTP_VERB  
     ///PATH_TO_RESOURCE  
     ///CANONICAL_QUERY_STRING  
@@ -622,6 +624,10 @@ impl GCSAuthorizer {
         )
     }
 
+    /// Canonicalizes query parameters into the GCP canonical form
+    /// form like `max-keys=2&prefix=object`
+    /// 
+    /// <https://cloud.google.com/storage/docs/authentication/canonical-requests#about-query-strings>
     fn canonicalize_query(&self, url: &Url) -> String {
         url.query_pairs()
             .sorted_unstable_by(|a, b| a.0.cmp(&b.0))
@@ -635,7 +641,7 @@ impl GCSAuthorizer {
             .join("&")
     }
 
-    /// Canonicalizes query parameters into the GCP canonical form
+    /// Canonicalizes header into the GCP canonical form
     ///
     /// <https://cloud.google.com/storage/docs/authentication/canonical-requests#about-headers>
     fn canonicalize_headers(&self, header_map: &HeaderMap) -> (String, String) {
@@ -666,12 +672,12 @@ impl GCSAuthorizer {
 
     ///construct the string to sign
     ///form like:
-    ///```
+    ///```plaintext
     ///SIGNING_ALGORITHM  
     ///ACTIVE_DATETIME  
     ///CREDENTIAL_SCOPE  
     ///HASHED_CANONICAL_REQUEST
-    ///````
+    ///```
     ///`ACTIVE_DATETIME` format:`YYYYMMDD'T'HHMMSS'Z'`
     /// <https://cloud.google.com/storage/docs/authentication/signatures#string-to-sign>
     pub fn string_to_sign(
