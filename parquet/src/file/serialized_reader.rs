@@ -963,7 +963,9 @@ mod tests {
                     assert_eq!(num_values, 8);
                     assert_eq!(encoding, Encoding::PLAIN_DICTIONARY);
                     assert_eq!(def_level_encoding, Encoding::RLE);
-                    assert_eq!(rep_level_encoding, Encoding::BIT_PACKED);
+                    #[allow(deprecated)]
+                    let expected_rep_level_encoding = Encoding::BIT_PACKED;
+                    assert_eq!(rep_level_encoding, expected_rep_level_encoding);
                     assert!(statistics.is_none());
                     true
                 }

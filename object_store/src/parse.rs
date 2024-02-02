@@ -105,11 +105,11 @@ impl ObjectStoreScheme {
     }
 }
 
-#[cfg(any(feature = "aws", feature = "gcp", feature = "azure"))]
+#[cfg(feature = "cloud")]
 macro_rules! builder_opts {
     ($builder:ty, $url:expr, $options:expr) => {{
         let builder = $options.into_iter().fold(
-            <$builder>::new().with_url($url.as_str()),
+            <$builder>::new().with_url($url.to_string()),
             |builder, (key, value)| match key.as_ref().parse() {
                 Ok(k) => builder.with_config(k, value),
                 Err(_) => builder,
@@ -165,7 +165,7 @@ where
         #[cfg(feature = "http")]
         ObjectStoreScheme::Http => {
             let url = &url[..url::Position::BeforePath];
-            Box::new(crate::http::HttpBuilder::new().with_url(url).build()?) as _
+            builder_opts!(crate::http::HttpBuilder, url, _options)
         }
         #[cfg(not(all(feature = "aws", feature = "azure", feature = "gcp", feature = "http")))]
         s => {
@@ -305,5 +305,29 @@ mod tests {
         assert_eq!(url.path(), "/my%20file%20with%20spaces");
         let (_, path) = parse_url(&url).unwrap();
         assert_eq!(path.as_ref(), "my file with spaces");
+    }
+
+    #[tokio::test]
+    #[cfg(feature = "http")]
+    async fn test_url_http() {
+        use crate::client::mock_server::MockServer;
+        use hyper::{header::USER_AGENT, Body, Response};
+
+        let server = MockServer::new();
+
+        server.push_fn(|r| {
+            assert_eq!(r.uri().path(), "/foo/bar");
+            assert_eq!(r.headers().get(USER_AGENT).unwrap(), "test_url");
+            Response::new(Body::empty())
+        });
+
+        let test = format!("{}/foo/bar", server.url());
+        let opts = [("user_agent", "test_url"), ("allow_http", "true")];
+        let url = test.parse().unwrap();
+        let (store, path) = parse_url_opts(&url, opts).unwrap();
+        assert_eq!(path.as_ref(), "foo/bar");
+        store.get(&path).await.unwrap();
+
+        server.shutdown().await;
     }
 }

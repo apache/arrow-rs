@@ -24,7 +24,7 @@
 
 use arrow_array::*;
 use arrow_buffer::buffer::{bitwise_bin_op_helper, bitwise_quaternary_op_helper};
-use arrow_buffer::{BooleanBuffer, NullBuffer};
+use arrow_buffer::{buffer_bin_and_not, BooleanBuffer, NullBuffer};
 use arrow_schema::ArrowError;
 
 /// Logical 'and' boolean values with Kleene logic
@@ -272,6 +272,27 @@ pub fn or(left: &BooleanArray, right: &BooleanArray) -> Result<BooleanArray, Arr
     binary_boolean_kernel(left, right, |a, b| a | b)
 }
 
+/// Performs `AND_NOT` operation on two arrays. If either left or right value is null then the
+/// result is also null.
+/// # Error
+/// This function errors when the arrays have different lengths.
+/// # Example
+/// ```rust
+/// # use arrow_array::BooleanArray;
+/// # use arrow_arith::boolean::{and, not, and_not};
+/// let a = BooleanArray::from(vec![Some(false), Some(true), None]);
+/// let b = BooleanArray::from(vec![Some(true), Some(true), Some(false)]);
+/// let andn_ab = and_not(&a, &b).unwrap();
+/// assert_eq!(andn_ab, BooleanArray::from(vec![Some(false), Some(false), None]));
+/// // It's equal to and(left, not(right))
+/// assert_eq!(andn_ab, and(&a, &not(&b).unwrap()).unwrap());
+pub fn and_not(left: &BooleanArray, right: &BooleanArray) -> Result<BooleanArray, ArrowError> {
+    binary_boolean_kernel(left, right, |a, b| {
+        let buffer = buffer_bin_and_not(a.inner(), b.offset(), b.inner(), a.offset(), a.len());
+        BooleanBuffer::new(buffer, left.offset(), left.len())
+    })
+}
+
 /// Performs unary `NOT` operation on an arrays. If value is null then the result is also
 /// null.
 /// # Error
@@ -354,6 +375,18 @@ mod tests {
         let expected = BooleanArray::from(vec![false, true, true, true]);
 
         assert_eq!(c, expected);
+    }
+
+    #[test]
+    fn test_bool_array_and_not() {
+        let a = BooleanArray::from(vec![false, false, true, true]);
+        let b = BooleanArray::from(vec![false, true, false, true]);
+        let c = and_not(&a, &b).unwrap();
+
+        let expected = BooleanArray::from(vec![false, false, true, false]);
+
+        assert_eq!(c, expected);
+        assert_eq!(c, and(&a, &not(&b).unwrap()).unwrap());
     }
 
     #[test]

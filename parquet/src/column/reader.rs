@@ -580,6 +580,7 @@ fn parse_v1_level(
                 buf.slice(i32_size..i32_size + data_size),
             ))
         }
+        #[allow(deprecated)]
         Encoding::BIT_PACKED => {
             let bit_width = num_required_bits(max_level as u64);
             let num_bytes = ceil(num_buffered_values as usize * bit_width as usize, 8);

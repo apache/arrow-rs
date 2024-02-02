@@ -18,7 +18,7 @@
 use crate::builder::*;
 use crate::{ArrayRef, StructArray};
 use arrow_buffer::NullBufferBuilder;
-use arrow_schema::{DataType, Fields, IntervalUnit, TimeUnit};
+use arrow_schema::{DataType, Fields, IntervalUnit, SchemaBuilder, TimeUnit};
 use std::any::Any;
 use std::sync::Arc;
 
@@ -286,9 +286,21 @@ impl StructBuilder {
         if self.fields.len() != self.field_builders.len() {
             panic!("Number of fields is not equal to the number of field_builders.");
         }
-        if !self.field_builders.iter().all(|x| x.len() == self.len()) {
-            panic!("StructBuilder and field_builders are of unequal lengths.");
-        }
+        self.field_builders.iter().enumerate().for_each(|(idx, x)| {
+            if x.len() != self.len() {
+                let builder = SchemaBuilder::from(&self.fields);
+                let schema = builder.finish();
+
+                panic!("{}", format!(
+                    "StructBuilder ({:?}) and field_builder with index {} ({:?}) are of unequal lengths: ({} != {}).",
+                    schema,
+                    idx,
+                    self.fields[idx].data_type(),
+                    self.len(),
+                    x.len()
+                ));
+            }
+        });
     }
 }
 
@@ -558,7 +570,9 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "StructBuilder and field_builders are of unequal lengths.")]
+    #[should_panic(
+        expected = "StructBuilder (Schema { fields: [Field { name: \"f1\", data_type: Int32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: \"f2\", data_type: Boolean, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }) and field_builder with index 1 (Boolean) are of unequal lengths: (2 != 1)."
+    )]
     fn test_struct_array_builder_unequal_field_builders_lengths() {
         let mut int_builder = Int32Builder::with_capacity(10);
         let mut bool_builder = BooleanBuilder::new();

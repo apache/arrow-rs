@@ -54,6 +54,7 @@
 use std::{io::Write, sync::Arc};
 
 use crate::{
+    arrow::arrow_writer::ArrowWriterOptions,
     arrow::ArrowWriter,
     errors::{ParquetError, Result},
     file::properties::WriterProperties,
@@ -98,8 +99,28 @@ impl<W: AsyncWrite + Unpin + Send> AsyncArrowWriter<W> {
         buffer_size: usize,
         props: Option<WriterProperties>,
     ) -> Result<Self> {
+        let options = ArrowWriterOptions::new().with_properties(props.unwrap_or_default());
+        Self::try_new_with_options(writer, arrow_schema, buffer_size, options)
+    }
+
+    /// Try to create a new Async Arrow Writer with [`ArrowWriterOptions`].
+    ///
+    /// `buffer_size` determines the number of bytes to buffer before flushing
+    /// to the underlying [`AsyncWrite`]
+    ///
+    /// The intermediate buffer will automatically be resized if necessary
+    ///
+    /// [`Self::write`] will flush this intermediate buffer if it is at least
+    /// half full
+    pub fn try_new_with_options(
+        writer: W,
+        arrow_schema: SchemaRef,
+        buffer_size: usize,
+        options: ArrowWriterOptions,
+    ) -> Result<Self> {
         let shared_buffer = SharedBuffer::new(buffer_size);
-        let sync_writer = ArrowWriter::try_new(shared_buffer.clone(), arrow_schema, props)?;
+        let sync_writer =
+            ArrowWriter::try_new_with_options(shared_buffer.clone(), arrow_schema, options)?;
 
         Ok(Self {
             sync_writer,

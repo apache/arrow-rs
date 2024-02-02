@@ -182,6 +182,25 @@ pub fn buffer_bin_xor(
     )
 }
 
+/// Apply a bitwise and_not to two inputs and return the result as a Buffer.
+/// The inputs are treated as bitmaps, meaning that offsets and length are specified in number of bits.
+pub fn buffer_bin_and_not(
+    left: &Buffer,
+    left_offset_in_bits: usize,
+    right: &Buffer,
+    right_offset_in_bits: usize,
+    len_in_bits: usize,
+) -> Buffer {
+    bitwise_bin_op_helper(
+        left,
+        left_offset_in_bits,
+        right,
+        right_offset_in_bits,
+        len_in_bits,
+        |a, b| a & !b,
+    )
+}
+
 /// Apply a bitwise not to one input and return the result as a Buffer.
 /// The input is treated as a bitmap, meaning that offset and length are specified in number of bits.
 pub fn buffer_unary_not(left: &Buffer, offset_in_bits: usize, len_in_bits: usize) -> Buffer {

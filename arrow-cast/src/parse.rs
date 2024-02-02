@@ -546,8 +546,11 @@ const ERR_NANOSECONDS_NOT_SUPPORTED: &str = "The dates that can be represented a
 
 fn parse_date(string: &str) -> Option<NaiveDate> {
     if string.len() > 10 {
-        return None;
-    }
+        // Try to parse as datetime and return just the date part
+        return string_to_datetime(&Utc, string)
+            .map(|dt| dt.date_naive())
+            .ok();
+    };
     let mut digits = [0; 10];
     let mut mask = 0;
 
@@ -1488,10 +1491,13 @@ mod tests {
             "2020-9-08",
             "2020-12-1",
             "1690-2-5",
+            "2020-09-08 01:02:03",
         ];
         for case in cases {
             let v = date32_to_datetime(Date32Type::parse(case).unwrap()).unwrap();
-            let expected: NaiveDate = case.parse().unwrap();
+            let expected = NaiveDate::parse_from_str(case, "%Y-%m-%d")
+                .or(NaiveDate::parse_from_str(case, "%Y-%m-%d %H:%M:%S"))
+                .unwrap();
             assert_eq!(v.date(), expected);
         }
 
@@ -1503,6 +1509,11 @@ mod tests {
             "2020-09-08-03",
             "2020--04-03",
             "2020--",
+            "2020-09-08 01",
+            "2020-09-08 01:02",
+            "2020-09-08 01-02-03",
+            "2020-9-8 01:02:03",
+            "2020-09-08 1:2:3",
         ];
         for case in err_cases {
             assert_eq!(Date32Type::parse(case), None);

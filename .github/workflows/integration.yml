@@ -119,12 +119,12 @@ jobs:
           rustup default ${{ matrix.rust }}
           rustup component add rustfmt clippy
       - name: Cache Cargo
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         with:
           path: /home/runner/.cargo
           key: cargo-maturin-cache-
       - name: Cache Rust dependencies
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         with:
           path: /home/runner/target
           # this key is not equal because maturin uses different compilation flags.

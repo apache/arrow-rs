@@ -17,6 +17,7 @@
 
 //! Decoder for [`Header`]
 
+use crate::compression::{CompressionCodec, CODEC_METADATA_KEY};
 use crate::reader::vlq::VLQDecoder;
 use crate::schema::Schema;
 use arrow_schema::ArrowError;
@@ -55,7 +56,7 @@ impl Header {
     /// Returns an iterator over the meta keys in this header
     pub fn metadata(&self) -> impl Iterator<Item = (&[u8], &[u8])> {
         let mut last = 0;
-        self.meta_offsets.windows(2).map(move |w| {
+        self.meta_offsets.chunks_exact(2).map(move |w| {
             let start = last;
             last = w[1];
             (&self.meta_buf[start..w[0]], &self.meta_buf[w[0]..w[1]])
@@ -71,6 +72,22 @@ impl Header {
     /// Returns the sync token for this file
     pub fn sync(&self) -> [u8; 16] {
         self.sync
+    }
+
+    /// Returns the [`CompressionCodec`] if any
+    pub fn compression(&self) -> Result<Option<CompressionCodec>, ArrowError> {
+        let v = self.get(CODEC_METADATA_KEY);
+
+        match v {
+            None | Some(b"null") => Ok(None),
+            Some(b"deflate") => Ok(Some(CompressionCodec::Deflate)),
+            Some(b"snappy") => Ok(Some(CompressionCodec::Snappy)),
+            Some(b"zstandard") => Ok(Some(CompressionCodec::ZStandard)),
+            Some(v) => Err(ArrowError::ParseError(format!(
+                "Unrecognized compression codec \'{}\'",
+                String::from_utf8_lossy(v)
+            ))),
+        }
     }
 }
 
@@ -236,9 +253,11 @@ impl HeaderDecoder {
 #[cfg(test)]
 mod test {
     use super::*;
+    use crate::codec::{AvroDataType, AvroField};
     use crate::reader::read_header;
     use crate::schema::SCHEMA_METADATA_KEY;
     use crate::test_util::arrow_test_data;
+    use arrow_schema::{DataType, Field, Fields, TimeUnit};
     use std::fs::File;
     use std::io::{BufRead, BufReader};
 
@@ -269,13 +288,51 @@ mod test {
         let schema_json = header.get(SCHEMA_METADATA_KEY).unwrap();
         let expected = br#"{"type":"record","name":"topLevelRecord","fields":[{"name":"id","type":["int","null"]},{"name":"bool_col","type":["boolean","null"]},{"name":"tinyint_col","type":["int","null"]},{"name":"smallint_col","type":["int","null"]},{"name":"int_col","type":["int","null"]},{"name":"bigint_col","type":["long","null"]},{"name":"float_col","type":["float","null"]},{"name":"double_col","type":["double","null"]},{"name":"date_string_col","type":["bytes","null"]},{"name":"string_col","type":["bytes","null"]},{"name":"timestamp_col","type":[{"type":"long","logicalType":"timestamp-micros"},"null"]}]}"#;
         assert_eq!(schema_json, expected);
-        let _schema: Schema<'_> = serde_json::from_slice(schema_json).unwrap();
+        let schema: Schema<'_> = serde_json::from_slice(schema_json).unwrap();
+        let field = AvroField::try_from(&schema).unwrap();
+
+        assert_eq!(
+            field.field(),
+            Field::new(
+                "topLevelRecord",
+                DataType::Struct(Fields::from(vec![
+                    Field::new("id", DataType::Int32, true),
+                    Field::new("bool_col", DataType::Boolean, true),
+                    Field::new("tinyint_col", DataType::Int32, true),
+                    Field::new("smallint_col", DataType::Int32, true),
+                    Field::new("int_col", DataType::Int32, true),
+                    Field::new("bigint_col", DataType::Int64, true),
+                    Field::new("float_col", DataType::Float32, true),
+                    Field::new("double_col", DataType::Float64, true),
+                    Field::new("date_string_col", DataType::Binary, true),
+                    Field::new("string_col", DataType::Binary, true),
+                    Field::new(
+                        "timestamp_col",
+                        DataType::Timestamp(TimeUnit::Microsecond, Some("+00:00".into())),
+                        true
+                    ),
+                ])),
+                false
+            )
+        );
+
         assert_eq!(
             u128::from_le_bytes(header.sync()),
             226966037233754408753420635932530907102
         );
 
         let header = decode_file(&arrow_test_data("avro/fixed_length_decimal.avro"));
+
+        let meta: Vec<_> = header
+            .metadata()
+            .map(|(k, _)| std::str::from_utf8(k).unwrap())
+            .collect();
+
+        assert_eq!(
+            meta,
+            &["avro.schema", "org.apache.spark.version", "avro.codec"]
+        );
+
         let schema_json = header.get(SCHEMA_METADATA_KEY).unwrap();
         let expected = br#"{"type":"record","name":"topLevelRecord","fields":[{"name":"value","type":[{"type":"fixed","name":"fixed","namespace":"topLevelRecord.value","size":11,"logicalType":"decimal","precision":25,"scale":2},"null"]}]}"#;
         assert_eq!(schema_json, expected);

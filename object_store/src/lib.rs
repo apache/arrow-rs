@@ -51,11 +51,11 @@
 //!
 //! 5. Small dependency footprint, depending on only a small number of common crates
 //!
-//! Originally developed for [InfluxDB IOx] and subsequently donated
+//! Originally developed by [InfluxData] and subsequently donated
 //! to [Apache Arrow].
 //!
 //! [Apache Arrow]: https://arrow.apache.org/
-//! [InfluxDB IOx]: https://github.com/influxdata/influxdb_iox/
+//! [InfluxData]: https://www.influxdata.com/
 //! [crates.io]: https://github.com/rust-lang/crates.io
 //! [ACID]: https://en.wikipedia.org/wiki/ACID
 //! [S3]: https://aws.amazon.com/s3/
