@@ -72,7 +72,7 @@ There is more information in the [contributing] guide.
 [contributing]: CONTRIBUTING.md
 [parquet-readme]: parquet/README.md
 [flight-readme]: arrow-flight/README.md
-[datafusion-readme]: https://github.com/apache/arrow-datafusion/blob/master/README.md
+[datafusion-readme]: https://github.com/apache/arrow-datafusion/blob/main/README.md
 [ballista-readme]: https://github.com/apache/arrow-ballista/blob/master/README.md
 [objectstore-readme]: object_store/README.md
 [issues]: https://github.com/apache/arrow-rs/issues
