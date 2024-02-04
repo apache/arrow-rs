@@ -272,6 +272,8 @@ pub trait Array: std::fmt::Debug + Send + Sync {
 
     /// Returns the total number of bytes of memory pointed to by this array.
     /// The buffers store bytes in the Arrow memory format, and include the data as well as the validity map.
+    /// Note that this does not always correspond to the exact memory usage of an array,
+    /// since multiple arrays can share the same buffers or slices thereof.
     fn get_buffer_memory_size(&self) -> usize;
 
     /// Returns the total number of bytes of memory occupied physically by this array.
@@ -932,6 +934,17 @@ mod tests {
             arr.get_array_memory_size() - empty.get_array_memory_size(),
             128 * std::mem::size_of::<i64>()
         );
+    }
+
+    #[test]
+    fn test_memory_size_primitive_sliced() {
+        let arr = PrimitiveArray::<Int64Type>::from_iter_values(0..128);
+        let slice1 = arr.slice(0, 64);
+        let slice2 = arr.slice(64, 64);
+
+        // both slices report the full buffer memory usage, even though the buffers are shared
+        assert_eq!(slice1.get_array_memory_size(), arr.get_array_memory_size());
+        assert_eq!(slice2.get_array_memory_size(), arr.get_array_memory_size());
     }
 
     #[test]

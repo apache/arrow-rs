@@ -90,9 +90,9 @@ impl Bytes {
     pub fn capacity(&self) -> usize {
         match self.deallocation {
             Deallocation::Standard(layout) => layout.size(),
-            // we cannot determine this in general,
-            // and thus we state that this is externally-owned memory
-            Deallocation::Custom(_) => 0,
+            // we only know the size of the custom allocation
+            // its underlying capacity might be larger
+            Deallocation::Custom(_, size) => size,
         }
     }
 
@@ -116,7 +116,7 @@ impl Drop for Bytes {
                 _ => unsafe { std::alloc::dealloc(self.ptr.as_ptr(), *layout) },
             },
             // The automatic drop implementation will free the memory once the reference count reaches zero
-            Deallocation::Custom(_allocation) => (),
+            Deallocation::Custom(_allocation, _size) => (),
         }
     }
 }
@@ -147,10 +147,11 @@ impl Debug for Bytes {
 
 impl From<bytes::Bytes> for Bytes {
     fn from(value: bytes::Bytes) -> Self {
+        let len = value.len();
         Self {
-            len: value.len(),
+            len,
             ptr: NonNull::new(value.as_ptr() as _).unwrap(),
-            deallocation: Deallocation::Custom(std::sync::Arc::new(value)),
+            deallocation: Deallocation::Custom(std::sync::Arc::new(value), len),
         }
     }
 }

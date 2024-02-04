@@ -101,6 +101,7 @@ struct LevelContext {
 }
 
 /// A helper to construct [`ArrayLevels`] from a potentially nested [`Field`]
+#[derive(Debug)]
 enum LevelInfoBuilder {
     /// A primitive, leaf array
     Primitive(ArrayLevels),
@@ -132,7 +133,15 @@ enum LevelInfoBuilder {
 impl LevelInfoBuilder {
     /// Create a new [`LevelInfoBuilder`] for the given [`Field`] and parent [`LevelContext`]
     fn try_new(field: &Field, parent_ctx: LevelContext, array: &ArrayRef) -> Result<Self> {
-        assert_eq!(field.data_type(), array.data_type());
+        if field.data_type() != array.data_type() {
+            return Err(arrow_err!(format!(
+                "Incompatible type. Field '{}' has type {}, array has type {}",
+                field.name(),
+                field.data_type(),
+                array.data_type(),
+            )));
+        }
+
         let is_nullable = field.is_nullable();
 
         match array.data_type() {
@@ -1833,6 +1842,21 @@ mod tests {
             array: Arc::new(dict),
         };
         assert_eq!(levels[0], expected_level);
+    }
+
+    #[test]
+    fn mismatched_types() {
+        let array = Arc::new(Int32Array::from_iter(0..10)) as ArrayRef;
+        let field = Field::new("item", DataType::Float64, false);
+
+        let err = LevelInfoBuilder::try_new(&field, Default::default(), &array)
+            .unwrap_err()
+            .to_string();
+
+        assert_eq!(
+            err,
+            "Arrow: Incompatible type. Field 'item' has type Float64, array has type Int32",
+        );
     }
 
     fn levels<T: Array + 'static>(field: &Field, array: T) -> LevelInfoBuilder {

@@ -276,6 +276,7 @@ impl PackedDecoder {
         self.packed_offset = 0;
         self.packed_count = match encoding {
             Encoding::RLE => 0,
+            #[allow(deprecated)]
             Encoding::BIT_PACKED => data.len() * 8,
             _ => unreachable!("invalid level encoding: {}", encoding),
         };

@@ -183,7 +183,9 @@ impl<W: Write + Send> ArrowWriter<W> {
     ///
     /// If this would cause the current row group to exceed [`WriterProperties::max_row_group_size`]
     /// rows, the contents of `batch` will be written to one or more row groups such that all but
-    /// the final row group in the file contain [`WriterProperties::max_row_group_size`] rows
+    /// the final row group in the file contain [`WriterProperties::max_row_group_size`] rows.
+    ///
+    /// This will fail if the `batch`'s schema does not match the writer's schema.
     pub fn write(&mut self, batch: &RecordBatch) -> Result<()> {
         if batch.num_rows() == 0 {
             return Ok(());
@@ -2962,5 +2964,30 @@ mod tests {
                 .iter()
                 .any(|kv| kv.key.as_str() == ARROW_SCHEMA_META_KEY));
         }
+    }
+
+    #[test]
+    fn mismatched_schemas() {
+        let batch_schema = Schema::new(vec![Field::new("count", DataType::Int32, false)]);
+        let file_schema = Arc::new(Schema::new(vec![Field::new(
+            "temperature",
+            DataType::Float64,
+            false,
+        )]));
+
+        let batch = RecordBatch::try_new(
+            Arc::new(batch_schema),
+            vec![Arc::new(Int32Array::from(vec![1, 2, 3, 4])) as _],
+        )
+        .unwrap();
+
+        let mut buf = Vec::with_capacity(1024);
+        let mut writer = ArrowWriter::try_new(&mut buf, file_schema.clone(), None).unwrap();
+
+        let err = writer.write(&batch).unwrap_err().to_string();
+        assert_eq!(
+            err,
+            "Arrow: Incompatible type. Field 'temperature' has type Float64, array has type Int32"
+        );
     }
 }
