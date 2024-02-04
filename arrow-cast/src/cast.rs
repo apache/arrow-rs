@@ -804,7 +804,7 @@ pub fn cast_with_options(
         }
         (_, List(ref to)) => cast_values_to_list::<i32>(array, to, cast_options),
         (_, LargeList(ref to)) => cast_values_to_list::<i64>(array, to, cast_options),
-        (_, FixedSizeList(ref to, size)) if size.eq(&1_i32) => {
+        (_, FixedSizeList(ref to, size)) if *size == 1 => {
             cast_values_to_fixed_size_list(array, to, *size, cast_options)
         }
         (Decimal128(_, s1), Decimal128(p2, s2)) => {
@@ -7640,14 +7640,14 @@ mod tests {
         let list_array = cast(&array, &DataType::LargeList(field.clone())).unwrap();
         let actual = list_array.as_list_opt::<i64>().unwrap();
         let expect = LargeListArray::from_iter_primitive::<Int32Type, _, _>([Some([Some(5)])]);
-        assert_eq!(&expect.value(0), &actual.value(0));
+        assert_eq!(expect.value(0), actual.value(0));
 
         // DataType::FixedSizeList
         let list_array = cast(&array, &DataType::FixedSizeList(field.clone(), 1)).unwrap();
         let actual = list_array.as_fixed_size_list_opt().unwrap();
         let expect =
             FixedSizeListArray::from_iter_primitive::<Int32Type, _, _>([Some([Some(5)])], 1);
-        assert_eq!(&expect.value(0), &actual.value(0));
+        assert_eq!(expect.value(0), actual.value(0));
     }
 
     #[test]
