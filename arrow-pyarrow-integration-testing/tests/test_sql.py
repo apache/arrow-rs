@@ -199,9 +199,10 @@ def test_field_metadata_roundtrip():
 
 def test_schema_roundtrip():
     pyarrow_fields = zip(string.ascii_lowercase, _supported_pyarrow_types)
-    pyarrow_schema = pa.schema(pyarrow_fields)
+    pyarrow_schema = pa.schema(pyarrow_fields, metadata = {b'key1': b'value1'})
     schema = rust.round_trip_schema(pyarrow_schema)
     assert schema == pyarrow_schema
+    assert schema.metadata == pyarrow_schema.metadata
 
 
 def test_primitive_python():
@@ -467,9 +468,11 @@ def test_tensor_array():
     b = rust.round_trip_array(f32_array)
     assert b == f32_array.storage
 
-    batch = pa.record_batch([f32_array], ["tensor"])
+    batch = pa.record_batch([f32_array], ["tensor"], metadata={b'key1': b'value1'})
     b = rust.round_trip_record_batch(batch)
     assert b == batch
+    assert b.schema == batch.schema
+    assert b.schema.metadata == batch.schema.metadata
 
     del b
 
@@ -486,6 +489,7 @@ def test_record_batch_reader():
     b = rust.round_trip_record_batch_reader(a)
 
     assert b.schema == schema
+    assert b.schema.metadata == schema.metadata
     got_batches = list(b)
     assert got_batches == batches
 
@@ -493,6 +497,7 @@ def test_record_batch_reader():
     a = pa.RecordBatchReader.from_batches(schema, batches)
     b = rust.boxed_reader_roundtrip(a)
     assert b.schema == schema
+    assert b.schema.metadata == schema.metadata
     got_batches = list(b)
     assert got_batches == batches
 
@@ -511,6 +516,7 @@ def test_record_batch_reader_pycapsule():
     b = rust.round_trip_record_batch_reader(wrapped)
 
     assert b.schema == schema
+    assert b.schema.metadata == schema.metadata
     got_batches = list(b)
     assert got_batches == batches
 
@@ -519,6 +525,7 @@ def test_record_batch_reader_pycapsule():
     wrapped = StreamWrapper(a)
     b = rust.boxed_reader_roundtrip(wrapped)
     assert b.schema == schema
+    assert b.schema.metadata == schema.metadata
     got_batches = list(b)
     assert got_batches == batches
 
