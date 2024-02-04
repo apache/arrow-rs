@@ -7640,14 +7640,14 @@ mod tests {
         let list_array = cast(&array, &DataType::LargeList(field.clone())).unwrap();
         let actual = list_array.as_list_opt::<i64>().unwrap();
         let expect = LargeListArray::from_iter_primitive::<Int32Type, _, _>([Some([Some(5)])]);
-        assert_eq!(expect.value(0), actual.value(0));
+        assert_eq!(&expect.value(0), &actual.value(0));
 
         // DataType::FixedSizeList
         let list_array = cast(&array, &DataType::FixedSizeList(field.clone(), 1)).unwrap();
         let actual = list_array.as_fixed_size_list_opt().unwrap();
         let expect =
             FixedSizeListArray::from_iter_primitive::<Int32Type, _, _>([Some([Some(5)])], 1);
-        assert_eq!(expect.value(0), actual.value(0));
+        assert_eq!(&expect.value(0), &actual.value(0));
     }
 
     #[test]
