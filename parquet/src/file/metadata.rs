@@ -351,7 +351,7 @@ impl RowGroupMetaData {
     pub fn from_thrift(schema_descr: SchemaDescPtr, mut rg: RowGroup) -> Result<RowGroupMetaData> {
         if schema_descr.num_columns() != rg.columns.len() {
             return Err(general_err!(
-                "Column length mismatch. Schema has {} columns while Row Group has {}",
+                "Column count mismatch. Schema has {} columns while Row Group has {}",
                 schema_descr.num_columns(),
                 rg.columns.len()
             ));
