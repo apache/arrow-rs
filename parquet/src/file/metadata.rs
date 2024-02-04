@@ -1110,7 +1110,7 @@ mod tests {
                 .to_string();
         assert_eq!(
             err,
-            "Parquet error: Column length mismatch. Schema has 3 columns while Row Group has 2"
+            "Parquet error: Column count mismatch. Schema has 3 columns while Row Group has 2"
         );
     }
 
