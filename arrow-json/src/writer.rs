@@ -74,7 +74,34 @@
 //! [`LineDelimitedWriter`] and [`ArrayWriter`] will omit writing keys with null values.
 //! In order to explicitly write null values for keys, configure a custom [`Writer`] by
 //! using a [`WriterBuilder`] to construct a [`Writer`].
-
+//!
+//! ## Writing to [serde_json] JSON Objects
+//!
+//! To serialize [`RecordBatch`]es into an array of
+//! [JSON](https://docs.serde.rs/serde_json/) objects, use the [RawValue] api
+//!
+//! [RawValue]: https://docs.rs/serde_json/latest/serde_json/value/struct.RawValue.html
+//!
+//! ```
+//! # use std::sync::Arc;
+//! # use arrow_array::{Int32Array, RecordBatch};
+//! # use arrow_schema::{DataType, Field, Schema};
+//!
+//! let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+//! let a = Int32Array::from(vec![1, 2, 3]);
+//! let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(a)]).unwrap();
+//!
+//! todo!("How do we do this?");
+//! // let json_rows = arrow_json::writer::record_batches_to_json_rows(&[&batch]).unwrap();
+//! assert_eq!(
+//!     serde_json::Value::Object(json_rows[1].clone()),
+//!     serde_json::json!({"a": 2}),
+//! );
+//! ```
+//!
+//!
+//!
+//!
 mod encoder;
 
 use std::iter;
