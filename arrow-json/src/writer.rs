@@ -85,23 +85,20 @@
 //! # use std::sync::Arc;
 //! # use arrow_array::{Int32Array, RecordBatch};
 //! # use arrow_schema::{DataType, Field, Schema};
-//! # use serde_json::{Map, Value};
-//!
 //! let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
 //! let a = Int32Array::from(vec![1, 2, 3]);
 //! let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(a)]).unwrap();
 //!
-//! // Write the record batch out as a JSON array
-//! let json_string = {
-//!   let buf = Vec::new();
-//!   let mut writer = arrow_json::ArrayWriter::new(buf);
-//!   writer.write_batches(&vec![&batch]).unwrap();
-//!   writer.finish().unwrap();
-//!   String::from_utf8(writer.into_inner()).unwrap()
-//! };
+//! // Write the record batch out as json bytes (string)
+//! let buf = Vec::new();
+//! let mut writer = arrow_json::ArrayWriter::new(buf);
+//! writer.write_batches(&vec![&batch]).unwrap();
+//! writer.finish().unwrap();
+//! let json_data = writer.into_inner();
 //!
 //! // Parse the string using serde_json
-//! let json_rows: Vec<Map<String, Value>> = serde_json::from_str(&json_string).unwrap();
+//! use serde_json::{Map, Value};
+//! let json_rows: Vec<Map<String, Value>> = serde_json::from_reader(json_data.as_slice()).unwrap();
 //! assert_eq!(
 //!     serde_json::Value::Object(json_rows[1].clone()),
 //!     serde_json::json!({"a": 2}),
