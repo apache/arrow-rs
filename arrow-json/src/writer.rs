@@ -78,9 +78,8 @@
 //! ## Writing to [serde_json] JSON Objects
 //!
 //! To serialize [`RecordBatch`]es into an array of
-//! [JSON](https://docs.serde.rs/serde_json/) objects, use the [RawValue] api
-//!
-//! [RawValue]: https://docs.rs/serde_json/latest/serde_json/value/struct.RawValue.html
+//! [JSON](https://docs.serde.rs/serde_json/) objects you can reparse the resulting JSON string.
+//! Note that this is less efficient than using the `Writer` API.
 //!
 //! ```
 //! # use std::sync::Arc;
@@ -92,17 +91,22 @@
 //! let a = Int32Array::from(vec![1, 2, 3]);
 //! let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(a)]).unwrap();
 //!
-//! let json_rows: Vec<Map<String, Value>> = todo!("How do we do this?");
-//! // let json_rows = arrow_json::writer::record_batches_to_json_rows(&[&batch]).unwrap();
+//! // Write the record batch out as a JSON array
+//! let json_string = {
+//!   let buf = Vec::new();
+//!   let mut writer = arrow_json::ArrayWriter::new(buf);
+//!   writer.write_batches(&vec![&batch]).unwrap();
+//!   writer.finish().unwrap();
+//!   String::from_utf8(writer.into_inner()).unwrap()
+//! };
+//!
+//! // Parse the string using serde_json
+//! let json_rows: Vec<Map<String, Value>> = serde_json::from_str(&json_string).unwrap();
 //! assert_eq!(
 //!     serde_json::Value::Object(json_rows[1].clone()),
 //!     serde_json::json!({"a": 2}),
 //! );
 //! ```
-//!
-//!
-//!
-//!
 mod encoder;
 
 use std::iter;
