@@ -552,8 +552,8 @@ pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
     /// to clean up partially written data.
     ///
     /// <div class="warning">
-    /// If there is point where a significant gap in time (> ~30s) can occur between
-    /// successive write calls, it is recommended to await `flush()` first.
+    /// It is recommended applications wait for any in-flight requests to complete by calling `flush`, if 
+    /// there may be a significant gap in time (> ~30s) before the next write.
     /// These gaps can include times where the function returns control to the
     /// caller while keeping the writer open. If `flush` is not called, futures
     /// for in-flight requests may be left unpolled long enough for the requests
