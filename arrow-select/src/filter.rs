@@ -1261,8 +1261,7 @@ mod tests {
             .add_buffer(Buffer::from_slice_ref([0, 1, 2, 3, 4, 5, 6, 7, 8]))
             .build()
             .unwrap();
-        let list_data_type =
-            DataType::FixedSizeList(Arc::new(Field::new("item", DataType::Int32, false)), 3);
+        let list_data_type = DataType::new_fixed_size_list(DataType::Int32, 3, false);
         let list_data = ArrayData::builder(list_data_type)
             .len(3)
             .add_child_data(value_data)
@@ -1318,8 +1317,7 @@ mod tests {
         bit_util::set_bit(&mut null_bits, 3);
         bit_util::set_bit(&mut null_bits, 4);
 
-        let list_data_type =
-            DataType::FixedSizeList(Arc::new(Field::new("item", DataType::Int32, false)), 2);
+        let list_data_type = DataType::new_fixed_size_list(DataType::Int32, 2, false);
         let list_data = ArrayData::builder(list_data_type)
             .len(5)
             .add_child_data(value_data)

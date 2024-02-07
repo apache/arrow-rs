@@ -217,6 +217,21 @@ impl Field {
         Self::new(name, DataType::LargeList(value.into()), nullable)
     }
 
+    /// Create a new [`Field`] with [`DataType::FixedSizeList`]
+    ///
+    /// - `name`: the name of the [`DataType::FixedSizeList`] field
+    /// - `value`: the description of each list element
+    /// - `size`: the size of the fixed size list
+    /// - `nullable`: if the [`DataType::FixedSizeList`] array is nullable
+    pub fn new_fixed_size_list(
+        name: impl Into<String>,
+        value: impl Into<FieldRef>,
+        size: i32,
+        nullable: bool,
+    ) -> Self {
+        Self::new(name, DataType::FixedSizeList(value.into(), size), nullable)
+    }
+
     /// Create a new [`Field`] with [`DataType::Map`]
     ///
     /// - `name`: the name of the [`DataType::Map`] field
