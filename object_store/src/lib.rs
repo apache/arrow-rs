@@ -552,7 +552,7 @@ pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
     /// to clean up partially written data.
     ///
     /// <div class="warning">
-    /// It is recommended applications wait for any in-flight requests to complete by calling `flush`, if 
+    /// It is recommended applications wait for any in-flight requests to complete by calling `flush`, if
     /// there may be a significant gap in time (> ~30s) before the next write.
     /// These gaps can include times where the function returns control to the
     /// caller while keeping the writer open. If `flush` is not called, futures
