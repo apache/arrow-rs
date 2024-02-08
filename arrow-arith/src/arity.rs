@@ -358,17 +358,16 @@ where
 
         let slice = builder.values_slice_mut();
 
-        match nulls.try_for_each_valid_idx(|idx| {
+        let r = nulls.try_for_each_valid_idx(|idx| {
             unsafe {
                 *slice.get_unchecked_mut(idx) =
                     op(*slice.get_unchecked(idx), b.value_unchecked(idx))?
             };
             Ok::<_, ArrowError>(())
-        }) {
-            Ok(_) => {}
-            Err(err) => return Ok(Err(err)),
-        };
-
+        });
+        if let Err(err) = r {
+            return Ok(Err(err));
+        }
         let array_builder = builder.finish().into_data().into_builder();
         let array_data = unsafe { array_builder.nulls(Some(nulls)).build_unchecked() };
         Ok(Ok(PrimitiveArray::<T>::from(array_data)))
