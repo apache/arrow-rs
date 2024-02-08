@@ -856,13 +856,14 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
 
         let (slice, null_buffer) = builder.slices_mut();
 
-        match try_for_each_valid_idx(len, 0, null_count, null_buffer.as_deref(), |idx| {
+        let r = try_for_each_valid_idx(len, 0, null_count, null_buffer.as_deref(), |idx| {
             unsafe { *slice.get_unchecked_mut(idx) = op(*slice.get_unchecked(idx))? };
             Ok::<_, E>(())
-        }) {
-            Ok(_) => {}
-            Err(err) => return Ok(Err(err)),
-        };
+        });
+
+        if let Err(err) = r {
+            return Ok(Err(err));
+        }
 
         Ok(Ok(builder.finish()))
     }

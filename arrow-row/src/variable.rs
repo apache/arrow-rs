@@ -85,7 +85,7 @@ pub fn encode<'a, I: Iterator<Item = Option<&'a [u8]>>>(
 
 pub fn encode_one(out: &mut [u8], val: Option<&[u8]>, opts: SortOptions) -> usize {
     match val {
-        Some(val) if val.is_empty() => {
+        Some([]) => {
             out[0] = match opts.descending {
                 true => !EMPTY_SENTINEL,
                 false => EMPTY_SENTINEL,
