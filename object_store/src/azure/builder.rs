@@ -474,6 +474,7 @@ impl MicrosoftAzureBuilder {
     /// - `azure://<container>/<path>` (custom)
     /// - `https://<account>.dfs.core.windows.net`
     /// - `https://<account>.blob.core.windows.net`
+    /// - `https://<account>.blob.core.windows.net/<container>`
     /// - `https://<account>.dfs.fabric.microsoft.com`
     /// - `https://<account>.dfs.fabric.microsoft.com/<container>`
     /// - `https://<account>.blob.fabric.microsoft.com`
@@ -589,6 +590,9 @@ impl MicrosoftAzureBuilder {
             "https" => match host.split_once('.') {
                 Some((a, "dfs.core.windows.net")) | Some((a, "blob.core.windows.net")) => {
                     self.account_name = Some(validate(a)?);
+                    if let Some(container) = parsed.path_segments().unwrap().next() {
+                        self.container_name = Some(validate(container)?);
+                    }
                 }
                 Some((a, "dfs.fabric.microsoft.com")) | Some((a, "blob.fabric.microsoft.com")) => {
                     self.account_name = Some(validate(a)?);
@@ -982,6 +986,14 @@ mod tests {
             .parse_url("https://account.blob.core.windows.net/")
             .unwrap();
         assert_eq!(builder.account_name, Some("account".to_string()));
+        assert!(!builder.use_fabric_endpoint.get().unwrap());
+
+        let mut builder = MicrosoftAzureBuilder::new();
+        builder
+            .parse_url("https://account.blob.core.windows.net/container")
+            .unwrap();
+        assert_eq!(builder.account_name, Some("account".to_string()));
+        assert_eq!(builder.container_name, Some("container".to_string()));
         assert!(!builder.use_fabric_endpoint.get().unwrap());
 
         let mut builder = MicrosoftAzureBuilder::new();
