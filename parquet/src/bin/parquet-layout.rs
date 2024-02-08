@@ -200,6 +200,7 @@ fn encoding(encoding: parquet::format::Encoding) -> &'static str {
         Ok(Encoding::PLAIN) => "plain",
         Ok(Encoding::PLAIN_DICTIONARY) => "plain_dictionary",
         Ok(Encoding::RLE) => "rle",
+        #[allow(deprecated)]
         Ok(Encoding::BIT_PACKED) => "bit_packed",
         Ok(Encoding::DELTA_BINARY_PACKED) => "delta_binary_packed",
         Ok(Encoding::DELTA_LENGTH_BYTE_ARRAY) => "delta_length_byte_array",

@@ -355,7 +355,16 @@ impl FromPyArrow for RecordBatch {
                 ));
             }
             let array = StructArray::from(array_data);
-            return Ok(array.into());
+            // StructArray does not embed metadata from schema. We need to override
+            // the output schema with the schema from the capsule.
+            let schema = Arc::new(Schema::try_from(schema_ptr).map_err(to_py_err)?);
+            let (_fields, columns, nulls) = array.into_parts();
+            assert_eq!(
+                nulls.map(|n| n.null_count()).unwrap_or_default(),
+                0,
+                "Cannot convert nullable StructArray to RecordBatch, see StructArray documentation"
+            );
+            return RecordBatch::try_new(schema, columns).map_err(to_py_err);
         }
 
         validate_class("RecordBatch", value)?;

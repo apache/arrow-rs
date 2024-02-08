@@ -133,14 +133,17 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
             can_cast_types(list_from.data_type(), list_to.data_type())
         }
         (List(_), _) => false,
-        (FixedSizeList(list_from,_), List(list_to)) => {
-            list_from.data_type() == list_to.data_type()
-        }
+        (FixedSizeList(list_from,_), List(list_to)) |
         (FixedSizeList(list_from,_), LargeList(list_to)) => {
-            list_from.data_type() == list_to.data_type()
+            can_cast_types(list_from.data_type(), list_to.data_type())
+        }
+        (FixedSizeList(inner, size), FixedSizeList(inner_to, size_to)) if size == size_to => {
+            can_cast_types(inner.data_type(), inner_to.data_type())
         }
         (_, List(list_to)) => can_cast_types(from_type, list_to.data_type()),
         (_, LargeList(list_to)) => can_cast_types(from_type, list_to.data_type()),
+        (_, FixedSizeList(list_to,size)) if *size == 1 => {
+            can_cast_types(from_type, list_to.data_type())},
         // cast one decimal type to another decimal type
         (Decimal128(_, _), Decimal128(_, _)) => true,
         (Decimal256(_, _), Decimal256(_, _)) => true,
@@ -782,26 +785,46 @@ pub fn cast_with_options(
                 "Cannot cast list to non-list data types".to_string(),
             )),
         },
-        (FixedSizeList(list_from, _), List(list_to)) => {
+        (FixedSizeList(list_from, size), List(list_to)) => {
             if list_to.data_type() != list_from.data_type() {
-                Err(ArrowError::CastError(
-                    "cannot cast fixed-size-list to list with different child data".into(),
-                ))
+                // To transform inner type, can first cast to FSL with new inner type.
+                let fsl_to = DataType::FixedSizeList(list_to.clone(), *size);
+                let array = cast_with_options(array, &fsl_to, cast_options)?;
+                cast_fixed_size_list_to_list::<i32>(array.as_ref())
             } else {
                 cast_fixed_size_list_to_list::<i32>(array)
             }
         }
-        (FixedSizeList(list_from, _), LargeList(list_to)) => {
+        (FixedSizeList(list_from, size), LargeList(list_to)) => {
             if list_to.data_type() != list_from.data_type() {
-                Err(ArrowError::CastError(
-                    "cannot cast fixed-size-list to largelist with different child data".into(),
-                ))
+                // To transform inner type, can first cast to FSL with new inner type.
+                let fsl_to = DataType::FixedSizeList(list_to.clone(), *size);
+                let array = cast_with_options(array, &fsl_to, cast_options)?;
+                cast_fixed_size_list_to_list::<i64>(array.as_ref())
             } else {
                 cast_fixed_size_list_to_list::<i64>(array)
             }
         }
+        (FixedSizeList(_, size_from), FixedSizeList(list_to, size_to)) => {
+            if size_from != size_to {
+                return Err(ArrowError::CastError(
+                    "cannot cast fixed-size-list to fixed-size-list with different size".into(),
+                ));
+            }
+            let array = array.as_any().downcast_ref::<FixedSizeListArray>().unwrap();
+            let values = cast_with_options(array.values(), list_to.data_type(), cast_options)?;
+            Ok(Arc::new(FixedSizeListArray::try_new(
+                list_to.clone(),
+                *size_from,
+                values,
+                array.nulls().cloned(),
+            )?))
+        }
         (_, List(ref to)) => cast_values_to_list::<i32>(array, to, cast_options),
         (_, LargeList(ref to)) => cast_values_to_list::<i64>(array, to, cast_options),
+        (_, FixedSizeList(ref to, size)) if *size == 1 => {
+            cast_values_to_fixed_size_list(array, to, *size, cast_options)
+        }
         (Decimal128(_, s1), Decimal128(p2, s2)) => {
             cast_decimal_to_decimal_same_type::<Decimal128Type>(
                 array.as_primitive(),
@@ -3037,6 +3060,18 @@ fn cast_values_to_list<O: OffsetSizeTrait>(
     let values = cast_with_options(array, to.data_type(), cast_options)?;
     let offsets = OffsetBuffer::from_lengths(std::iter::repeat(1).take(values.len()));
     let list = GenericListArray::<O>::new(to.clone(), offsets, values, None);
+    Ok(Arc::new(list))
+}
+
+/// Helper function that takes a primitive array and casts to a fixed size list array.
+fn cast_values_to_fixed_size_list(
+    array: &dyn Array,
+    to: &FieldRef,
+    size: i32,
+    cast_options: &CastOptions,
+) -> Result<ArrayRef, ArrowError> {
+    let values = cast_with_options(array, to.data_type(), cast_options)?;
+    let list = FixedSizeListArray::new(to.clone(), size, values, None);
     Ok(Arc::new(list))
 }
 
@@ -7545,6 +7580,37 @@ mod tests {
     }
 
     #[test]
+    fn test_can_cast_fsl_to_fsl() {
+        let from_array = Arc::new(
+            FixedSizeListArray::from_iter_primitive::<Float32Type, _, _>(
+                [Some([Some(1.0), Some(2.0)]), None],
+                2,
+            ),
+        ) as ArrayRef;
+        let to_array = Arc::new(
+            FixedSizeListArray::from_iter_primitive::<Float16Type, _, _>(
+                [
+                    Some([Some(f16::from_f32(1.0)), Some(f16::from_f32(2.0))]),
+                    None,
+                ],
+                2,
+            ),
+        ) as ArrayRef;
+
+        assert!(can_cast_types(from_array.data_type(), to_array.data_type()));
+        let actual = cast(&from_array, to_array.data_type()).unwrap();
+        assert_eq!(actual.data_type(), to_array.data_type());
+
+        let invalid_target =
+            DataType::FixedSizeList(Arc::new(Field::new("item", DataType::Binary, true)), 2);
+        assert!(!can_cast_types(from_array.data_type(), &invalid_target));
+
+        let invalid_size =
+            DataType::FixedSizeList(Arc::new(Field::new("item", DataType::Float16, true)), 5);
+        assert!(!can_cast_types(from_array.data_type(), &invalid_size));
+    }
+
+    #[test]
     fn test_can_cast_types_fixed_size_list_to_list() {
         // DataType::List
         let array1 = Arc::new(make_fixed_size_list_array()) as ArrayRef;
@@ -7563,50 +7629,102 @@ mod tests {
 
     #[test]
     fn test_cast_fixed_size_list_to_list() {
-        // DataType::List
-        let array1 = Arc::new(make_fixed_size_list_array()) as ArrayRef;
-        let list_array1 = cast(
-            &array1,
-            &DataType::List(Arc::new(Field::new("", DataType::Int32, false))),
-        )
-        .unwrap();
-        let actual = list_array1.as_any().downcast_ref::<ListArray>().unwrap();
-        let expected = array1
-            .as_any()
-            .downcast_ref::<FixedSizeListArray>()
-            .unwrap();
+        // Important cases:
+        // 1. With/without nulls
+        // 2. LargeList and List
+        // 3. With and without inner casts
 
-        assert_eq!(expected.values(), actual.values());
-        assert_eq!(expected.len(), actual.len());
+        let cases = [
+            // fixed_size_list<i32, 2> => list<i32>
+            (
+                Arc::new(FixedSizeListArray::from_iter_primitive::<Int32Type, _, _>(
+                    [[1, 1].map(Some), [2, 2].map(Some)].map(Some),
+                    2,
+                )) as ArrayRef,
+                Arc::new(ListArray::from_iter_primitive::<Int32Type, _, _>([
+                    Some([Some(1), Some(1)]),
+                    Some([Some(2), Some(2)]),
+                ])) as ArrayRef,
+            ),
+            // fixed_size_list<i32, 2> => list<i32> (nullable)
+            (
+                Arc::new(FixedSizeListArray::from_iter_primitive::<Int32Type, _, _>(
+                    [None, Some([Some(2), Some(2)])],
+                    2,
+                )) as ArrayRef,
+                Arc::new(ListArray::from_iter_primitive::<Int32Type, _, _>([
+                    None,
+                    Some([Some(2), Some(2)]),
+                ])) as ArrayRef,
+            ),
+            // fixed_size_list<i32, 2> => large_list<i64>
+            (
+                Arc::new(FixedSizeListArray::from_iter_primitive::<Int32Type, _, _>(
+                    [[1, 1].map(Some), [2, 2].map(Some)].map(Some),
+                    2,
+                )) as ArrayRef,
+                Arc::new(LargeListArray::from_iter_primitive::<Int64Type, _, _>([
+                    Some([Some(1), Some(1)]),
+                    Some([Some(2), Some(2)]),
+                ])) as ArrayRef,
+            ),
+            // fixed_size_list<i32, 2> => large_list<i64> (nullable)
+            (
+                Arc::new(FixedSizeListArray::from_iter_primitive::<Int32Type, _, _>(
+                    [None, Some([Some(2), Some(2)])],
+                    2,
+                )) as ArrayRef,
+                Arc::new(LargeListArray::from_iter_primitive::<Int64Type, _, _>([
+                    None,
+                    Some([Some(2), Some(2)]),
+                ])) as ArrayRef,
+            ),
+        ];
+
+        for (array, expected) in cases {
+            let array = Arc::new(array) as ArrayRef;
+
+            assert!(
+                can_cast_types(array.data_type(), expected.data_type()),
+                "can_cast_types claims we cannot cast {:?} to {:?}",
+                array.data_type(),
+                expected.data_type()
+            );
+
+            let list_array = cast(&array, expected.data_type())
+                .unwrap_or_else(|_| panic!("Failed to cast {:?} to {:?}", array, expected));
+            assert_eq!(
+                list_array.as_ref(),
+                &expected,
+                "Incorrect result from casting {:?} to {:?}",
+                array,
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn test_cast_utf8_to_list() {
+        // DataType::List
+        let array = Arc::new(StringArray::from(vec!["5"])) as ArrayRef;
+        let field = Arc::new(Field::new("", DataType::Int32, false));
+        let list_array = cast(&array, &DataType::List(field.clone())).unwrap();
+        let actual = list_array.as_list_opt::<i32>().unwrap();
+        let expect = ListArray::from_iter_primitive::<Int32Type, _, _>([Some([Some(5)])]);
+        assert_eq!(&expect.value(0), &actual.value(0));
 
         // DataType::LargeList
-        let array2 = Arc::new(make_fixed_size_list_array_for_large_list()) as ArrayRef;
-        let list_array2 = cast(
-            &array2,
-            &DataType::LargeList(Arc::new(Field::new("", DataType::Int64, false))),
-        )
-        .unwrap();
-        let actual = list_array2
-            .as_any()
-            .downcast_ref::<LargeListArray>()
-            .unwrap();
-        let expected = array2
-            .as_any()
-            .downcast_ref::<FixedSizeListArray>()
-            .unwrap();
-        assert_eq!(expected.values(), actual.values());
-        assert_eq!(expected.len(), actual.len());
+        let list_array = cast(&array, &DataType::LargeList(field.clone())).unwrap();
+        let actual = list_array.as_list_opt::<i64>().unwrap();
+        let expect = LargeListArray::from_iter_primitive::<Int32Type, _, _>([Some([Some(5)])]);
+        assert_eq!(&expect.value(0), &actual.value(0));
 
-        // Cast previous LargeList to List
-        let array3 = Arc::new(actual.clone()) as ArrayRef;
-        let list_array3 = cast(
-            &array3,
-            &DataType::List(Arc::new(Field::new("", DataType::Int64, false))),
-        )
-        .unwrap();
-        let actual = list_array3.as_any().downcast_ref::<ListArray>().unwrap();
-        let expected = array3.as_any().downcast_ref::<LargeListArray>().unwrap();
-        assert_eq!(expected.values(), actual.values());
+        // DataType::FixedSizeList
+        let list_array = cast(&array, &DataType::FixedSizeList(field.clone(), 1)).unwrap();
+        let actual = list_array.as_fixed_size_list_opt().unwrap();
+        let expect =
+            FixedSizeListArray::from_iter_primitive::<Int32Type, _, _>([Some([Some(5)])], 1);
+        assert_eq!(&expect.value(0), &actual.value(0));
     }
 
     #[test]

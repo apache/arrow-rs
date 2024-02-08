@@ -754,6 +754,7 @@ mod tests {
         );
 
         // unsupported
+        #[allow(deprecated)]
         create_and_check_encoder::<Int32Type>(
             Encoding::BIT_PACKED,
             Some(nyi_err!("Encoding BIT_PACKED is not supported")),
