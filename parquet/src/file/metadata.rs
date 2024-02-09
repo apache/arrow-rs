@@ -38,7 +38,7 @@ use std::sync::Arc;
 
 use crate::format::{
     BoundaryOrder, ColumnChunk, ColumnIndex, ColumnMetaData, OffsetIndex, PageLocation, RowGroup,
-    SortingColumn,
+    SizeStatistics, SortingColumn,
 };
 
 use crate::basic::{ColumnOrder, Compression, Encoding, Type};
@@ -482,6 +482,9 @@ pub struct ColumnChunkMetaData {
     offset_index_length: Option<i32>,
     column_index_offset: Option<i64>,
     column_index_length: Option<i32>,
+    unencoded_byte_array_data_bytes: Option<i64>,
+    repetition_level_histogram: Option<Vec<i64>>,
+    definition_level_histogram: Option<Vec<i64>>,
 }
 
 /// Represents common operations for a column chunk.
@@ -634,6 +637,21 @@ impl ColumnChunkMetaData {
         Some(offset..(offset + length))
     }
 
+    /// Returns the number of bytes of variable length data.
+    pub fn unencoded_byte_array_data_bytes(&self) -> Option<i64> {
+        self.unencoded_byte_array_data_bytes
+    }
+
+    /// Returns the repetition level histogram.
+    pub fn repetition_level_histogram(&self) -> Option<&Vec<i64>> {
+        self.repetition_level_histogram.as_ref()
+    }
+
+    /// Returns the repetition level histogram.
+    pub fn definition_level_histogram(&self) -> Option<&Vec<i64>> {
+        self.definition_level_histogram.as_ref()
+    }
+
     /// Method to convert from Thrift.
     pub fn from_thrift(column_descr: ColumnDescPtr, cc: ColumnChunk) -> Result<Self> {
         if cc.meta_data.is_none() {
@@ -671,6 +689,19 @@ impl ColumnChunkMetaData {
         let offset_index_length = cc.offset_index_length;
         let column_index_offset = cc.column_index_offset;
         let column_index_length = cc.column_index_length;
+        let (
+            unencoded_byte_array_data_bytes,
+            repetition_level_histogram,
+            definition_level_histogram,
+        ) = if let Some(size_stats) = col_metadata.size_statistics {
+            (
+                size_stats.unencoded_byte_array_data_bytes,
+                size_stats.repetition_level_histogram,
+                size_stats.definition_level_histogram,
+            )
+        } else {
+            (None, None, None)
+        };
 
         let result = ColumnChunkMetaData {
             column_descr,
@@ -692,6 +723,9 @@ impl ColumnChunkMetaData {
             offset_index_length,
             column_index_offset,
             column_index_length,
+            unencoded_byte_array_data_bytes,
+            repetition_level_histogram,
+            definition_level_histogram,
         };
         Ok(result)
     }
@@ -734,7 +768,11 @@ impl ColumnChunkMetaData {
                 .map(|vec| vec.iter().map(page_encoding_stats::to_thrift).collect()),
             bloom_filter_offset: self.bloom_filter_offset,
             bloom_filter_length: self.bloom_filter_length,
-            size_statistics: None,
+            size_statistics: Some(SizeStatistics {
+                unencoded_byte_array_data_bytes: self.unencoded_byte_array_data_bytes,
+                repetition_level_histogram: self.repetition_level_histogram.clone(),
+                definition_level_histogram: self.definition_level_histogram.clone(),
+            }),
         }
     }
 
@@ -770,6 +808,9 @@ impl ColumnChunkMetaDataBuilder {
             offset_index_length: None,
             column_index_offset: None,
             column_index_length: None,
+            unencoded_byte_array_data_bytes: None,
+            repetition_level_histogram: None,
+            definition_level_histogram: None,
         })
     }
 
@@ -881,6 +922,24 @@ impl ColumnChunkMetaDataBuilder {
         self
     }
 
+    /// Sets optional length of variable length data in bytes.
+    pub fn set_unencoded_byte_array_data_bytes(mut self, value: Option<i64>) -> Self {
+        self.0.unencoded_byte_array_data_bytes = value;
+        self
+    }
+
+    /// Sets optional repetition level histogram
+    pub fn set_repetition_level_histogram(mut self, value: Option<Vec<i64>>) -> Self {
+        self.0.repetition_level_histogram = value;
+        self
+    }
+
+    /// Sets optional repetition level histogram
+    pub fn set_definition_level_histogram(mut self, value: Option<Vec<i64>>) -> Self {
+        self.0.definition_level_histogram = value;
+        self
+    }
+
     /// Builds column chunk metadata.
     pub fn build(self) -> Result<ColumnChunkMetaData> {
         Ok(self.0)
@@ -894,6 +953,8 @@ pub struct ColumnIndexBuilder {
     max_values: Vec<Vec<u8>>,
     null_counts: Vec<i64>,
     boundary_order: BoundaryOrder,
+    repetition_level_histograms: Vec<i64>,
+    definition_level_histograms: Vec<i64>,
     // If one page can't get build index, need to ignore all index in this column
     valid: bool,
 }
@@ -912,6 +973,8 @@ impl ColumnIndexBuilder {
             max_values: Vec::new(),
             null_counts: Vec::new(),
             boundary_order: BoundaryOrder::UNORDERED,
+            repetition_level_histograms: Vec::new(),
+            definition_level_histograms: Vec::new(),
             valid: true,
         }
     }
@@ -927,6 +990,21 @@ impl ColumnIndexBuilder {
         self.min_values.push(min_value);
         self.max_values.push(max_value);
         self.null_counts.push(null_count);
+    }
+
+    pub fn append_histograms(
+        &mut self,
+        repetition_level_histogram: &Option<Vec<i64>>,
+        definition_level_histogram: &Option<Vec<i64>>,
+    ) {
+        if let Some(ref rep_lvl_hist) = repetition_level_histogram {
+            self.repetition_level_histograms.reserve(rep_lvl_hist.len());
+            self.repetition_level_histograms.extend(rep_lvl_hist);
+        }
+        if let Some(ref def_lvl_hist) = definition_level_histogram {
+            self.definition_level_histograms.reserve(def_lvl_hist.len());
+            self.definition_level_histograms.extend(def_lvl_hist);
+        }
     }
 
     pub fn set_boundary_order(&mut self, boundary_order: BoundaryOrder) {
@@ -949,8 +1027,8 @@ impl ColumnIndexBuilder {
             self.max_values,
             self.boundary_order,
             self.null_counts,
-            None,
-            None,
+            self.repetition_level_histograms,
+            self.definition_level_histograms,
         )
     }
 }
@@ -960,6 +1038,7 @@ pub struct OffsetIndexBuilder {
     offset_array: Vec<i64>,
     compressed_page_size_array: Vec<i32>,
     first_row_index_array: Vec<i64>,
+    unencoded_byte_array_data_bytes_array: Option<Vec<i64>>,
     current_first_row_index: i64,
 }
 
@@ -975,6 +1054,7 @@ impl OffsetIndexBuilder {
             offset_array: Vec::new(),
             compressed_page_size_array: Vec::new(),
             first_row_index_array: Vec::new(),
+            unencoded_byte_array_data_bytes_array: None,
             current_first_row_index: 0,
         }
     }
@@ -990,6 +1070,17 @@ impl OffsetIndexBuilder {
         self.compressed_page_size_array.push(compressed_page_size);
     }
 
+    pub fn append_unencoded_byte_array_data_bytes(
+        &mut self,
+        unencoded_byte_array_data_bytes: Option<i64>,
+    ) {
+        if let Some(val) = unencoded_byte_array_data_bytes {
+            self.unencoded_byte_array_data_bytes_array
+                .get_or_insert(Vec::new())
+                .push(val);
+        }
+    }
+
     /// Build and get the thrift metadata of offset index
     pub fn build_to_thrift(self) -> OffsetIndex {
         let locations = self
@@ -999,7 +1090,7 @@ impl OffsetIndexBuilder {
             .zip(self.first_row_index_array.iter())
             .map(|((offset, size), row_index)| PageLocation::new(*offset, *size, *row_index))
             .collect::<Vec<_>>();
-        OffsetIndex::new(locations, None)
+        OffsetIndex::new(locations, self.unencoded_byte_array_data_bytes_array)
     }
 }
 

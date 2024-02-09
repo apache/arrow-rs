@@ -63,6 +63,7 @@ pub struct DataPageValues<T> {
     pub encoding: Encoding,
     pub min_value: Option<T>,
     pub max_value: Option<T>,
+    pub variable_length_bytes: Option<i64>,
 }
 
 /// A generic encoder of [`ColumnValues`] to data and dictionary pages used by
@@ -124,6 +125,7 @@ pub struct ColumnValueEncoderImpl<T: DataType> {
     min_value: Option<T::T>,
     max_value: Option<T::T>,
     bloom_filter: Option<Sbbf>,
+    variable_length_bytes: Option<i64>,
 }
 
 impl<T: DataType> ColumnValueEncoderImpl<T> {
@@ -142,6 +144,11 @@ impl<T: DataType> ColumnValueEncoderImpl<T> {
             if let Some((min, max)) = self.min_max(slice, None) {
                 update_min(&self.descr, &min, &mut self.min_value);
                 update_max(&self.descr, &max, &mut self.max_value);
+            }
+
+            if let Some(var_bytes) = T::T::variable_length_bytes(slice) {
+                self.variable_length_bytes =
+                    Some(var_bytes + self.variable_length_bytes.unwrap_or(0));
             }
         }
 
@@ -196,6 +203,7 @@ impl<T: DataType> ColumnValueEncoder for ColumnValueEncoderImpl<T> {
             bloom_filter,
             min_value: None,
             max_value: None,
+            variable_length_bytes: None,
         })
     }
 
@@ -271,6 +279,7 @@ impl<T: DataType> ColumnValueEncoder for ColumnValueEncoderImpl<T> {
             num_values: std::mem::take(&mut self.num_values),
             min_value: self.min_value.take(),
             max_value: self.max_value.take(),
+            variable_length_bytes: self.variable_length_bytes.take(),
         })
     }
 }

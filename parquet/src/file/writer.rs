@@ -594,8 +594,15 @@ impl<'a, W: Write + Send> SerializedRowGroupWriter<'a, W> {
             .set_total_uncompressed_size(metadata.uncompressed_size())
             .set_num_values(metadata.num_values())
             .set_data_page_offset(map_offset(src_data_offset))
-            .set_dictionary_page_offset(src_dictionary_offset.map(map_offset));
+            .set_dictionary_page_offset(src_dictionary_offset.map(map_offset))
+            .set_unencoded_byte_array_data_bytes(metadata.unencoded_byte_array_data_bytes());
 
+        if let Some(rep_hist) = metadata.repetition_level_histogram() {
+            builder = builder.set_repetition_level_histogram(Some(rep_hist.clone()))
+        }
+        if let Some(def_hist) = metadata.definition_level_histogram() {
+            builder = builder.set_definition_level_histogram(Some(def_hist.clone()))
+        }
         if let Some(statistics) = metadata.statistics() {
             builder = builder.set_statistics(statistics.clone())
         }
