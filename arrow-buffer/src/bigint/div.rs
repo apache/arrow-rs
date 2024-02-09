@@ -189,7 +189,7 @@ fn div_rem_word(hi: u64, lo: u64, divisor: u64) -> (u64, u64) {
 
     // LLVM fails to use the div instruction as it is not able to prove
     // that hi < divisor, and therefore the result will fit into 64-bits
-    #[cfg(target_arch = "x86_64")]
+    #[cfg(all(target_arch = "x86_64", not(miri)))]
     unsafe {
         let mut quot = lo;
         let mut rem = hi;
@@ -202,7 +202,7 @@ fn div_rem_word(hi: u64, lo: u64, divisor: u64) -> (u64, u64) {
         );
         (quot, rem)
     }
-    #[cfg(not(target_arch = "x86_64"))]
+    #[cfg(any(not(target_arch = "x86_64"), miri))]
     {
         let x = (u128::from(hi) << 64) + u128::from(lo);
         let y = u128::from(divisor);
