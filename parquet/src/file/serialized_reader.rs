@@ -1251,9 +1251,15 @@ mod tests {
 
     #[test]
     fn test_file_reader_invalid_metadata() {
-        let data = [255, 172, 1, 0, 50, 82, 65, 73, 1, 0, 0, 0, 169, 168, 168, 162, 87, 255, 16, 0, 0, 0, 80, 65, 82, 49];
+        let data = [
+            255, 172, 1, 0, 50, 82, 65, 73, 1, 0, 0, 0, 169, 168, 168, 162, 87, 255, 16, 0, 0, 0,
+            80, 65, 82, 49,
+        ];
         let ret = SerializedFileReader::new(Bytes::copy_from_slice(&data));
-        assert_eq!(ret.err().unwrap().to_string(), "Parquet error: Could not parse metadata: bad data");
+        assert_eq!(
+            ret.err().unwrap().to_string(),
+            "Parquet error: Could not parse metadata: bad data"
+        );
     }
 
     #[test]
