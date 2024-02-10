@@ -121,12 +121,11 @@ pub type Result<T, E = Error> = std::result::Result<T, E>;
 
 /// The configuration for how to respond to request errors
 ///
-/// The following categories of error will be retried:
+/// The following categories of error will not be retried:
 ///
-/// * 5xx server errors
-/// * Connection errors
-/// * Dropped connections
-/// * Timeouts for [safe] / read-only requests
+/// * Parse errors
+/// * User errors
+/// * Canceled connections
 ///
 /// Requests will be retried up to some limit, using exponential
 /// backoff with jitter. See [`BackoffConfig`] for more information
@@ -263,7 +262,7 @@ impl RetryExt for reqwest::RequestBuilder {
                             do_retry = true
                         } else if let Some(source) = e.source() {
                             if let Some(e) = source.downcast_ref::<hyper::Error>() {
-                                if e.is_connect() || e.is_closed() || e.is_incomplete_message() {
+                                if !(e.is_parse() || e.is_parse_status() || e.is_parse_too_large() || e.is_user() || e.is_canceled()) {
                                     do_retry = true;
                                 }
                             }
