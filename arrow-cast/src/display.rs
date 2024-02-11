@@ -1013,9 +1013,9 @@ mod tests {
         assert_eq!(pretty[2], "0 days 0 hours 0 mins 0.000001000 secs");
         assert_eq!(iso[3], "-PT0.000001S");
         assert_eq!(pretty[3], "0 days 0 hours 0 mins -0.000001000 secs");
-        assert_eq!(iso[4], "P45DT50554.123456789S");
+        assert_eq!(iso[4], "PT3938554.123456789S");
         assert_eq!(pretty[4], "45 days 14 hours 2 mins 34.123456789 secs");
-        assert_eq!(iso[5], "-P45DT50554.123456789S");
+        assert_eq!(iso[5], "-PT3938554.123456789S");
         assert_eq!(pretty[5], "-45 days -14 hours -2 mins -34.123456789 secs");
 
         let array = DurationMicrosecondArray::from(vec![
@@ -1037,9 +1037,9 @@ mod tests {
         assert_eq!(pretty[2], "0 days 0 hours 0 mins 0.001000 secs");
         assert_eq!(iso[3], "-PT0.001S");
         assert_eq!(pretty[3], "0 days 0 hours 0 mins -0.001000 secs");
-        assert_eq!(iso[4], "P45DT50554.123456S");
+        assert_eq!(iso[4], "PT3938554.123456S");
         assert_eq!(pretty[4], "45 days 14 hours 2 mins 34.123456 secs");
-        assert_eq!(iso[5], "-P45DT50554.123456S");
+        assert_eq!(iso[5], "-PT3938554.123456S");
         assert_eq!(pretty[5], "-45 days -14 hours -2 mins -34.123456 secs");
 
         let array = DurationMillisecondArray::from(vec![
@@ -1061,9 +1061,9 @@ mod tests {
         assert_eq!(pretty[2], "0 days 0 hours 0 mins 1.000 secs");
         assert_eq!(iso[3], "-PT1S");
         assert_eq!(pretty[3], "0 days 0 hours 0 mins -1.000 secs");
-        assert_eq!(iso[4], "P45DT50554.123S");
+        assert_eq!(iso[4], "PT3938554.123S");
         assert_eq!(pretty[4], "45 days 14 hours 2 mins 34.123 secs");
-        assert_eq!(iso[5], "-P45DT50554.123S");
+        assert_eq!(iso[5], "-PT3938554.123S");
         assert_eq!(pretty[5], "-45 days -14 hours -2 mins -34.123 secs");
 
         let array = DurationSecondArray::from(vec![
@@ -1085,9 +1085,9 @@ mod tests {
         assert_eq!(pretty[2], "0 days 0 hours 16 mins 40 secs");
         assert_eq!(iso[3], "-PT1000S");
         assert_eq!(pretty[3], "0 days 0 hours -16 mins -40 secs");
-        assert_eq!(iso[4], "P45DT50554S");
+        assert_eq!(iso[4], "PT3938554S");
         assert_eq!(pretty[4], "45 days 14 hours 2 mins 34 secs");
-        assert_eq!(iso[5], "-P45DT50554S");
+        assert_eq!(iso[5], "-PT3938554S");
         assert_eq!(pretty[5], "-45 days -14 hours -2 mins -34 secs");
     }
 
