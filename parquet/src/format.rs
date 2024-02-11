@@ -1369,7 +1369,7 @@ impl crate::thrift::TSerializable for TimeUnit {
         )
       )
     } else {
-      Ok(ret.expect("return value should have been constructed"))
+      ret.ok_or_else(|| thrift::Error::Protocol(ProtocolError::new(ProtocolErrorKind::InvalidData, "return value should have been constructed")))
     }
   }
   fn write_to_out_protocol<T: TOutputProtocol>(&self, o_prot: &mut T) -> thrift::Result<()> {
@@ -1851,7 +1851,7 @@ impl crate::thrift::TSerializable for LogicalType {
         )
       )
     } else {
-      Ok(ret.expect("return value should have been constructed"))
+      ret.ok_or_else(|| thrift::Error::Protocol(ProtocolError::new(ProtocolErrorKind::InvalidData, "return value should have been constructed")))
     }
   }
   fn write_to_out_protocol<T: TOutputProtocol>(&self, o_prot: &mut T) -> thrift::Result<()> {
@@ -2625,7 +2625,7 @@ impl crate::thrift::TSerializable for BloomFilterAlgorithm {
         )
       )
     } else {
-      Ok(ret.expect("return value should have been constructed"))
+      ret.ok_or_else(|| thrift::Error::Protocol(ProtocolError::new(ProtocolErrorKind::InvalidData, "return value should have been constructed")))
     }
   }
   fn write_to_out_protocol<T: TOutputProtocol>(&self, o_prot: &mut T) -> thrift::Result<()> {
@@ -2738,7 +2738,7 @@ impl crate::thrift::TSerializable for BloomFilterHash {
         )
       )
     } else {
-      Ok(ret.expect("return value should have been constructed"))
+      ret.ok_or_else(|| thrift::Error::Protocol(ProtocolError::new(ProtocolErrorKind::InvalidData, "return value should have been constructed")))
     }
   }
   fn write_to_out_protocol<T: TOutputProtocol>(&self, o_prot: &mut T) -> thrift::Result<()> {
@@ -2850,7 +2850,7 @@ impl crate::thrift::TSerializable for BloomFilterCompression {
         )
       )
     } else {
-      Ok(ret.expect("return value should have been constructed"))
+      ret.ok_or_else(|| thrift::Error::Protocol(ProtocolError::new(ProtocolErrorKind::InvalidData, "return value should have been constructed")))
     }
   }
   fn write_to_out_protocol<T: TOutputProtocol>(&self, o_prot: &mut T) -> thrift::Result<()> {
@@ -3846,7 +3846,7 @@ impl crate::thrift::TSerializable for ColumnCryptoMetaData {
         )
       )
     } else {
-      Ok(ret.expect("return value should have been constructed"))
+      ret.ok_or_else(|| thrift::Error::Protocol(ProtocolError::new(ProtocolErrorKind::InvalidData, "return value should have been constructed")))
     }
   }
   fn write_to_out_protocol<T: TOutputProtocol>(&self, o_prot: &mut T) -> thrift::Result<()> {
@@ -4300,7 +4300,7 @@ impl crate::thrift::TSerializable for ColumnOrder {
         )
       )
     } else {
-      Ok(ret.expect("return value should have been constructed"))
+      ret.ok_or_else(|| thrift::Error::Protocol(ProtocolError::new(ProtocolErrorKind::InvalidData, "return value should have been constructed")))
     }
   }
   fn write_to_out_protocol<T: TOutputProtocol>(&self, o_prot: &mut T) -> thrift::Result<()> {
@@ -4873,7 +4873,7 @@ impl crate::thrift::TSerializable for EncryptionAlgorithm {
         )
       )
     } else {
-      Ok(ret.expect("return value should have been constructed"))
+      ret.ok_or_else(|| thrift::Error::Protocol(ProtocolError::new(ProtocolErrorKind::InvalidData, "return value should have been constructed")))
     }
   }
   fn write_to_out_protocol<T: TOutputProtocol>(&self, o_prot: &mut T) -> thrift::Result<()> {
