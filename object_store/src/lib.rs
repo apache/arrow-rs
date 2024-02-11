@@ -497,7 +497,6 @@ pub use tags::TagSet;
 pub mod multipart;
 mod parse;
 mod util;
-pub mod export;
 
 pub use parse::{parse_url, parse_url_opts};
 
@@ -516,6 +515,9 @@ use std::io::{Read, Seek, SeekFrom};
 use std::ops::Range;
 use std::sync::Arc;
 use tokio::io::AsyncWrite;
+
+// Re-exports
+pub use hyper;
 
 /// An alias for a dynamically dispatched object store implementation.
 pub type DynObjectStore = dyn ObjectStore;
