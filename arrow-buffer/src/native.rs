@@ -53,6 +53,13 @@ pub trait ArrowNativeType:
     /// in truncation/overflow
     fn from_usize(_: usize) -> Option<Self>;
 
+    /// Convert native integer type from usize without checking (unsafe)
+    ///
+    /// # Safety
+    ///
+    /// The caller is responsible for ensuring that the value is representable in the type
+    unsafe fn from_usize_unchecked(_: usize) -> Self;
+
     /// Convert to usize according to the [`as`] operator
     ///
     /// [`as`]: https://doc.rust-lang.org/reference/expressions/operator-expr.html#numeric-cast
@@ -109,6 +116,8 @@ macro_rules! native_integer {
                 v.try_into().ok()
             }
 
+
+
             #[inline]
             fn to_usize(self) -> Option<usize> {
                 self.try_into().ok()
@@ -129,6 +138,10 @@ macro_rules! native_integer {
                 i as _
             }
 
+            #[inline]
+            unsafe fn from_usize_unchecked(v: usize) -> Self {
+                v as _
+            }
 
             $(
                 #[inline]
@@ -136,6 +149,7 @@ macro_rules! native_integer {
                     Some(v)
                 }
             )*
+
         }
     };
 }
@@ -157,6 +171,11 @@ macro_rules! native_float {
             #[inline]
             fn from_usize(_: usize) -> Option<Self> {
                 None
+            }
+
+            #[inline]
+            unsafe fn from_usize_unchecked(_v: usize) -> Self {
+                panic!("Cannot convert usize to floating point type")
             }
 
             #[inline]
@@ -190,6 +209,11 @@ impl private::Sealed for i256 {}
 impl ArrowNativeType for i256 {
     fn from_usize(u: usize) -> Option<Self> {
         Some(Self::from_parts(u as u128, 0))
+    }
+
+    #[inline]
+    unsafe fn from_usize_unchecked(_v: usize) -> Self {
+        panic!("Cannot convert usize to i256")
     }
 
     fn as_usize(self) -> usize {
