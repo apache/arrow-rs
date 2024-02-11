@@ -517,6 +517,7 @@ use std::sync::Arc;
 use tokio::io::AsyncWrite;
 
 // Re-exports
+#[cfg(feature = "hyper")]
 pub use hyper;
 
 /// An alias for a dynamically dispatched object store implementation.
