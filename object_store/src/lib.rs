@@ -497,6 +497,7 @@ pub use tags::TagSet;
 pub mod multipart;
 mod parse;
 mod util;
+pub mod export;
 
 pub use parse::{parse_url, parse_url_opts};
 
