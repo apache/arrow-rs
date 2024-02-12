@@ -190,9 +190,7 @@ fn is_like_pattern(c: char) -> bool {
 }
 
 fn contains_like_pattern(pattern: &str) -> bool {
-    memchr2(b'%', b'_', pattern.as_bytes())
-        .map(|_| true)
-        .unwrap_or(false)
+    memchr2(b'%', b'_', pattern.as_bytes()).is_some()
 }
 
 #[cfg(test)]
