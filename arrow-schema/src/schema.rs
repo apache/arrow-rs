@@ -140,6 +140,12 @@ impl From<Fields> for SchemaBuilder {
     }
 }
 
+impl From<&Schema> for SchemaBuilder {
+    fn from(value: &Schema) -> Self {
+        Self::from(value.clone())
+    }
+}
+
 impl From<Schema> for SchemaBuilder {
     fn from(value: Schema) -> Self {
         Self {
