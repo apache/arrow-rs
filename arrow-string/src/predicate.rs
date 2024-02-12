@@ -190,7 +190,7 @@ fn is_like_pattern(c: char) -> bool {
 }
 
 fn contains_like_pattern_memchr(pattern: &str) -> bool {
-    memchr2('%' as u8, '_' as u8, pattern.as_bytes())
+    memchr2(b'%', b'_', pattern.as_bytes())
         .map(|_| true)
         .unwrap_or(false)
 }
