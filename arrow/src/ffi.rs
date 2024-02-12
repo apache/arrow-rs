@@ -394,6 +394,11 @@ impl<'a> ImportedArrowArray<'a> {
             | (DataType::List(_), 1)
             | (DataType::LargeList(_), 1)
             | (DataType::Map(_, _), 1) => {
+                // An empty array can have 0 offsets
+                if length == 0 {
+                    return Ok(0);
+                }
+
                 // the len of the offset buffer (buffer 1) equals length + 1
                 let bits = bit_width(data_type, i)?;
                 debug_assert_eq!(bits % 8, 0);
@@ -402,6 +407,12 @@ impl<'a> ImportedArrowArray<'a> {
             (DataType::Utf8, 2) | (DataType::Binary, 2) => {
                 // the len of the data buffer (buffer 2) equals the last value of the offset buffer (buffer 1)
                 let len = self.buffer_len(1, dt)?;
+
+                // An empty array can have 0 offsets
+                if len == 0 {
+                    return Ok(0);
+                }
+
                 // first buffer is the null buffer => add(1)
                 // we assume that pointer is aligned for `i32`, as Utf8 uses `i32` offsets.
                 #[allow(clippy::cast_ptr_alignment)]
@@ -412,6 +423,12 @@ impl<'a> ImportedArrowArray<'a> {
             (DataType::LargeUtf8, 2) | (DataType::LargeBinary, 2) => {
                 // the len of the data buffer (buffer 2) equals the last value of the offset buffer (buffer 1)
                 let len = self.buffer_len(1, dt)?;
+
+                // An empty array can have 0 offsets
+                if len == 0 {
+                    return Ok(0);
+                }
+
                 // first buffer is the null buffer => add(1)
                 // we assume that pointer is aligned for `i64`, as Large uses `i64` offsets.
                 #[allow(clippy::cast_ptr_alignment)]
