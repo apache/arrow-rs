@@ -40,19 +40,19 @@ pub enum Predicate<'a> {
 impl<'a> Predicate<'a> {
     /// Create a predicate for the given like pattern
     pub fn like(pattern: &'a str) -> Result<Self, ArrowError> {
-        if !contains_like_pattern_memchr(pattern) {
+        if !contains_like_pattern(pattern) {
             Ok(Self::Eq(pattern))
         } else if pattern.ends_with('%')
             && !pattern.ends_with("\\%")
-            && !contains_like_pattern_memchr(&pattern[..pattern.len() - 1])
+            && !contains_like_pattern(&pattern[..pattern.len() - 1])
         {
             Ok(Self::StartsWith(&pattern[..pattern.len() - 1]))
-        } else if pattern.starts_with('%') && !contains_like_pattern_memchr(&pattern[1..]) {
+        } else if pattern.starts_with('%') && !contains_like_pattern(&pattern[1..]) {
             Ok(Self::EndsWith(&pattern[1..]))
         } else if pattern.starts_with('%')
             && pattern.ends_with('%')
             && !pattern.ends_with("\\%")
-            && !contains_like_pattern_memchr(&pattern[1..pattern.len() - 1])
+            && !contains_like_pattern(&pattern[1..pattern.len() - 1])
         {
             Ok(Self::Contains(&pattern[1..pattern.len() - 1]))
         } else {
@@ -63,14 +63,14 @@ impl<'a> Predicate<'a> {
     /// Create a predicate for the given ilike pattern
     pub fn ilike(pattern: &'a str, is_ascii: bool) -> Result<Self, ArrowError> {
         if is_ascii && pattern.is_ascii() {
-            if !contains_like_pattern_memchr(pattern) {
+            if !contains_like_pattern(pattern) {
                 return Ok(Self::IEqAscii(pattern));
             } else if pattern.ends_with('%')
                 && !pattern.ends_with("\\%")
-                && !contains_like_pattern_memchr(&pattern[..pattern.len() - 1])
+                && !contains_like_pattern(&pattern[..pattern.len() - 1])
             {
                 return Ok(Self::IStartsWithAscii(&pattern[..pattern.len() - 1]));
-            } else if pattern.starts_with('%') && !contains_like_pattern_memchr(&pattern[1..]) {
+            } else if pattern.starts_with('%') && !contains_like_pattern(&pattern[1..]) {
                 return Ok(Self::IEndsWithAscii(&pattern[1..]));
             }
         }
@@ -189,7 +189,7 @@ fn is_like_pattern(c: char) -> bool {
     c == '%' || c == '_'
 }
 
-fn contains_like_pattern_memchr(pattern: &str) -> bool {
+fn contains_like_pattern(pattern: &str) -> bool {
     memchr2(b'%', b'_', pattern.as_bytes())
         .map(|_| true)
         .unwrap_or(false)
