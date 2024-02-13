@@ -17,6 +17,7 @@
 
 use arrow_array::{BooleanArray, GenericStringArray, OffsetSizeTrait};
 use arrow_schema::ArrowError;
+use memchr::memchr2;
 use regex::{Regex, RegexBuilder};
 
 /// A string based predicate
@@ -39,19 +40,19 @@ pub enum Predicate<'a> {
 impl<'a> Predicate<'a> {
     /// Create a predicate for the given like pattern
     pub fn like(pattern: &'a str) -> Result<Self, ArrowError> {
-        if !pattern.contains(is_like_pattern) {
+        if !contains_like_pattern(pattern) {
             Ok(Self::Eq(pattern))
         } else if pattern.ends_with('%')
             && !pattern.ends_with("\\%")
-            && !pattern[..pattern.len() - 1].contains(is_like_pattern)
+            && !contains_like_pattern(&pattern[..pattern.len() - 1])
         {
             Ok(Self::StartsWith(&pattern[..pattern.len() - 1]))
-        } else if pattern.starts_with('%') && !pattern[1..].contains(is_like_pattern) {
+        } else if pattern.starts_with('%') && !contains_like_pattern(&pattern[1..]) {
             Ok(Self::EndsWith(&pattern[1..]))
         } else if pattern.starts_with('%')
             && pattern.ends_with('%')
             && !pattern.ends_with("\\%")
-            && !pattern[1..pattern.len() - 1].contains(is_like_pattern)
+            && !contains_like_pattern(&pattern[1..pattern.len() - 1])
         {
             Ok(Self::Contains(&pattern[1..pattern.len() - 1]))
         } else {
@@ -62,14 +63,14 @@ impl<'a> Predicate<'a> {
     /// Create a predicate for the given ilike pattern
     pub fn ilike(pattern: &'a str, is_ascii: bool) -> Result<Self, ArrowError> {
         if is_ascii && pattern.is_ascii() {
-            if !pattern.contains(is_like_pattern) {
+            if !contains_like_pattern(pattern) {
                 return Ok(Self::IEqAscii(pattern));
             } else if pattern.ends_with('%')
                 && !pattern.ends_with("\\%")
-                && !pattern[..pattern.len() - 1].contains(is_like_pattern)
+                && !contains_like_pattern(&pattern[..pattern.len() - 1])
             {
                 return Ok(Self::IStartsWithAscii(&pattern[..pattern.len() - 1]));
-            } else if pattern.starts_with('%') && !pattern[1..].contains(is_like_pattern) {
+            } else if pattern.starts_with('%') && !contains_like_pattern(&pattern[1..]) {
                 return Ok(Self::IEndsWithAscii(&pattern[1..]));
             }
         }
@@ -186,6 +187,10 @@ fn regex_like(pattern: &str, case_insensitive: bool) -> Result<Regex, ArrowError
 
 fn is_like_pattern(c: char) -> bool {
     c == '%' || c == '_'
+}
+
+fn contains_like_pattern(pattern: &str) -> bool {
+    memchr2(b'%', b'_', pattern.as_bytes()).is_some()
 }
 
 #[cfg(test)]
