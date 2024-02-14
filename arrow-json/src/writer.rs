@@ -833,7 +833,7 @@ mod tests {
     use serde_json::json;
 
     use arrow_array::builder::{Int32Builder, Int64Builder, MapBuilder, StringBuilder};
-    use arrow_buffer::{Buffer, ToByteSlice};
+    use arrow_buffer::{Buffer, NullBuffer, OffsetBuffer, ToByteSlice};
     use arrow_data::ArrayData;
 
     use crate::reader::*;
@@ -949,6 +949,93 @@ mod tests {
 {"c1":"foo"}
 {"c2":"sd"}
 {"c1":"cupcakes","c2":"sdsd"}
+"#,
+        );
+    }
+
+    #[test]
+    fn write_list_of_dictionary() {
+        let dict_field = Arc::new(Field::new_dictionary(
+            "item",
+            DataType::Int32,
+            DataType::Utf8,
+            true,
+        ));
+        let schema = Schema::new(vec![Field::new_large_list("l", dict_field.clone(), true)]);
+
+        let dict_array: DictionaryArray<Int32Type> =
+            vec![Some("a"), Some("b"), Some("c"), Some("a"), None, Some("c")]
+                .into_iter()
+                .collect();
+        let list_array = LargeListArray::try_new(
+            dict_field,
+            OffsetBuffer::from_lengths([3_usize, 2, 0, 1]),
+            Arc::new(dict_array),
+            Some(NullBuffer::from_iter([true, true, false, true])),
+        )
+        .unwrap();
+
+        let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(list_array)]).unwrap();
+
+        let mut buf = Vec::new();
+        {
+            let mut writer = LineDelimitedWriter::new(&mut buf);
+            writer.write_batches(&[&batch]).unwrap();
+        }
+
+        assert_json_eq(
+            &buf,
+            r#"{"l":["a","b","c"]}
+{"l":["a",null]}
+{}
+{"l":["c"]}
+"#,
+        );
+    }
+
+    #[test]
+    fn write_list_of_dictionary_large_values() {
+        let dict_field = Arc::new(Field::new_dictionary(
+            "item",
+            DataType::Int32,
+            DataType::LargeUtf8,
+            true,
+        ));
+        let schema = Schema::new(vec![Field::new_large_list("l", dict_field.clone(), true)]);
+
+        let keys = PrimitiveArray::<Int32Type>::from(vec![
+            Some(0),
+            Some(1),
+            Some(2),
+            Some(0),
+            None,
+            Some(2),
+        ]);
+        let values = LargeStringArray::from(vec!["a", "b", "c"]);
+        let dict_array = DictionaryArray::try_new(keys, Arc::new(values)).unwrap();
+
+        let list_array = LargeListArray::try_new(
+            dict_field,
+            OffsetBuffer::from_lengths([3_usize, 2, 0, 1]),
+            Arc::new(dict_array),
+            Some(NullBuffer::from_iter([true, true, false, true])),
+        )
+        .unwrap();
+
+        let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(list_array)]).unwrap();
+
+        let mut buf = Vec::new();
+        {
+            let mut writer = LineDelimitedWriter::new(&mut buf);
+            writer.write_batches(&[&batch]).unwrap();
+        }
+
+        assert_json_eq(
+            &buf,
+            r#"{"l":["a","b","c"]}
+{"l":["a",null]}
+{}
+{"l":["c"]}
 "#,
         );
     }
