@@ -93,4 +93,4 @@ arrow-select = { version = "50.0.0", path = "./arrow-select" }
 arrow-string = { version = "50.0.0", path = "./arrow-string" }
 parquet = { version = "50.0.0", path = "./parquet", default-features = false }
 
-chrono = { version = "0.4.31", default-features = false, features = ["clock"] }
+chrono = { version = "0.4.34", default-features = false, features = ["clock"] }

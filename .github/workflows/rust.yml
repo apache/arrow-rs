@@ -115,6 +115,8 @@ jobs:
         uses: ./.github/actions/setup-builder
       - name: Install cargo-msrv
         run: cargo install cargo-msrv
+      - name: Downgrade arrow dependencies
+        run: cargo update -p ahash --precise 0.8.7
       - name: Check arrow
         working-directory: arrow
         run: cargo msrv verify
