@@ -438,7 +438,7 @@ macro_rules! parser_primitive {
     ($t:ty) => {
         impl Parser for $t {
             fn parse(string: &str) -> Option<Self::Native> {
-                atoi::atoi::<Self::Native>(string.as_bytes())
+                string.parse::<Self::Native>().ok()
             }
         }
     };
