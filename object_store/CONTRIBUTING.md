@@ -39,7 +39,8 @@ To test the S3 integration against [localstack](https://localstack.cloud/)
 First start up a container running localstack
 
 ```
-$ podman run -d -p 4566:4566 localstack/localstack:2.0
+$ LOCALSTACK_VERSION=sha256:a0b79cb2430f1818de2c66ce89d41bba40f5a1823410f5a7eaf3494b692eed97
+$ podman run -d -p 4566:4566 localstack/localstack@$LOCALSTACK_VERSION
 $ podman run -d -p 1338:1338 amazon/amazon-ec2-metadata-mock:v1.9.2 --imdsv2
 ```
 
@@ -51,6 +52,7 @@ export AWS_DEFAULT_REGION=us-east-1
 export AWS_ACCESS_KEY_ID=test
 export AWS_SECRET_ACCESS_KEY=test
 export AWS_ENDPOINT=http://localhost:4566
+export AWS_ALLOW_HTTP=true
 export AWS_BUCKET_NAME=test-bucket
 ```
 
@@ -64,6 +66,7 @@ Or directly with:
 
 ```
 aws s3 mb s3://test-bucket --endpoint-url=http://localhost:4566
+aws --endpoint-url=http://localhost:4566 dynamodb create-table --table-name test-table --key-schema AttributeName=path,KeyType=HASH AttributeName=etag,KeyType=RANGE --attribute-definitions AttributeName=path,AttributeType=S AttributeName=etag,AttributeType=S --provisioned-throughput ReadCapacityUnits=5,WriteCapacityUnits=5
 ```
 
 Run tests
@@ -74,12 +77,20 @@ $ cargo test --features aws
 
 #### Encryption tests
 
+To create an encryption key for the tests, you can run the following command:
+
+```
+export AWS_SSE_KMS_KEY_ID=$(aws --endpoint-url=http://localhost:4566 \
+  kms create-key --description "test key" |
+  jq -r '.KeyMetadata.KeyId')
+```
+
 To run integration tests with encryption, you can set the following environment variables:
 
 ```
 export AWS_SERVER_SIDE_ENCRYPTION=aws:kms
-export AWS_SSE_KMS_KEY_ID=<some-key-id>
 export AWS_SSE_BUCKET_KEY=false
+cargo test --features aws
 ```
 
 As well as:
@@ -87,7 +98,7 @@ As well as:
 ```
 unset AWS_SSE_BUCKET_KEY
 export AWS_SERVER_SIDE_ENCRYPTION=aws:kms:dsse
-export AWS_SSE_KMS_KEY_ID=<some-key-id>
+cargo test --features aws
 ```
 
 ### Azure
