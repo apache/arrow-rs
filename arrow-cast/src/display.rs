@@ -427,9 +427,23 @@ macro_rules! primitive_display {
     };
 }
 
+macro_rules! primitive_display_float {
+    ($($t:ty),+) => {
+        $(impl<'a> DisplayIndex for &'a PrimitiveArray<$t>
+        {
+            fn write(&self, idx: usize, f: &mut dyn Write) -> FormatResult {
+                let value = self.value(idx);
+                let mut buffer = ryu::Buffer::new();
+                f.write_str(buffer.format(value))?;
+                Ok(())
+            }
+        })+
+    };
+}
+
 primitive_display!(Int8Type, Int16Type, Int32Type, Int64Type);
 primitive_display!(UInt8Type, UInt16Type, UInt32Type, UInt64Type);
-primitive_display!(Float32Type, Float64Type);
+primitive_display_float!(Float32Type, Float64Type);
 
 impl<'a> DisplayIndex for &'a PrimitiveArray<Float16Type> {
     fn write(&self, idx: usize, f: &mut dyn Write) -> FormatResult {
