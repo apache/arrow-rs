@@ -877,6 +877,12 @@ mod tests {
                 Field::new("utf8", DataType::Utf8, false),
                 Field::new("binary", DataType::Binary, false),
                 Field::new_list("list[u8]", Field::new("item", DataType::UInt8, false), true),
+                Field::new_fixed_size_list(
+                    "fixed_size_list[u8]",
+                    Field::new("item", DataType::UInt8, false),
+                    2,
+                    true,
+                ),
                 Field::new_list(
                     "list[struct<float32, int32, bool>]",
                     Field::new_struct(

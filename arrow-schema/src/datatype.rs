@@ -608,6 +608,24 @@ impl DataType {
     pub fn new_list(data_type: DataType, nullable: bool) -> Self {
         DataType::List(Arc::new(Field::new_list_field(data_type, nullable)))
     }
+
+    /// Create a [`DataType::LargeList`] with elements of the specified type
+    /// and nullability, and conventionally named inner [`Field`] (`"item"`).
+    ///
+    /// To specify field level metadata, construct the inner [`Field`]
+    /// directly via [`Field::new`] or [`Field::new_list_field`].
+    pub fn new_large_list(data_type: DataType, nullable: bool) -> Self {
+        DataType::LargeList(Arc::new(Field::new_list_field(data_type, nullable)))
+    }
+
+    /// Create a [`DataType::FixedSizeList`] with elements of the specified type, size
+    /// and nullability, and conventionally named inner [`Field`] (`"item"`).
+    ///
+    /// To specify field level metadata, construct the inner [`Field`]
+    /// directly via [`Field::new`] or [`Field::new_list_field`].
+    pub fn new_fixed_size_list(data_type: DataType, size: i32, nullable: bool) -> Self {
+        DataType::FixedSizeList(Arc::new(Field::new_list_field(data_type, nullable)), size)
+    }
 }
 
 /// The maximum precision for [DataType::Decimal128] values
