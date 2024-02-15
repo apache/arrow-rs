@@ -51,7 +51,10 @@ use reqwest::{
 };
 use serde::{Deserialize, Serialize};
 use snafu::{ResultExt, Snafu};
+
 use std::sync::Arc;
+
+use super::builder::S3EncryptionHeaders;
 
 const VERSION_HEADER: &str = "x-amz-version-id";
 
@@ -181,6 +184,7 @@ pub struct S3Config {
     pub checksum: Option<Checksum>,
     pub copy_if_not_exists: Option<S3CopyIfNotExists>,
     pub conditional_put: Option<S3ConditionalPut>,
+    pub encryption_headers: S3EncryptionHeaders,
 }
 
 impl S3Config {
@@ -320,9 +324,17 @@ impl S3Client {
     /// Make an S3 PUT request <https://docs.aws.amazon.com/AmazonS3/latest/API/API_PutObject.html>
     ///
     /// Returns the ETag
-    pub fn put_request<'a>(&'a self, path: &'a Path, bytes: Bytes) -> Request<'a> {
+    pub fn put_request<'a>(
+        &'a self,
+        path: &'a Path,
+        bytes: Bytes,
+        with_encryption_headers: bool,
+    ) -> Request<'a> {
         let url = self.config.path_url(path);
         let mut builder = self.client.request(Method::PUT, url);
+        if with_encryption_headers {
+            builder = builder.headers(self.config.encryption_headers.0.clone());
+        }
         let mut payload_sha256 = None;
 
         if let Some(checksum) = self.config.checksum {
@@ -481,7 +493,8 @@ impl S3Client {
         let builder = self
             .client
             .request(Method::PUT, url)
-            .header("x-amz-copy-source", source);
+            .header("x-amz-copy-source", source)
+            .headers(self.config.encryption_headers.0.clone());
 
         Request {
             builder,
@@ -499,6 +512,7 @@ impl S3Client {
         let response = self
             .client
             .request(Method::POST, url)
+            .headers(self.config.encryption_headers.0.clone())
             .with_aws_sigv4(credential.authorizer(), None)
             .send_retry(&self.config.retry_config)
             .await
@@ -523,7 +537,7 @@ impl S3Client {
         let part = (part_idx + 1).to_string();
 
         let response = self
-            .put_request(path, data)
+            .put_request(path, data, false)
             .query(&[("partNumber", &part), ("uploadId", upload_id)])
             .send()
             .await?;

@@ -47,13 +47,11 @@ Setup environment
 
 ```
 export TEST_INTEGRATION=1
-export OBJECT_STORE_AWS_DEFAULT_REGION=us-east-1
-export OBJECT_STORE_AWS_ACCESS_KEY_ID=test
-export OBJECT_STORE_AWS_SECRET_ACCESS_KEY=test
-export OBJECT_STORE_AWS_ENDPOINT=http://localhost:4566
+export AWS_DEFAULT_REGION=us-east-1
 export AWS_ACCESS_KEY_ID=test
 export AWS_SECRET_ACCESS_KEY=test
-export OBJECT_STORE_BUCKET=test-bucket
+export AWS_ENDPOINT=http://localhost:4566
+export AWS_BUCKET_NAME=test-bucket
 ```
 
 Create a bucket using the AWS CLI
@@ -72,6 +70,24 @@ Run tests
 
 ```
 $ cargo test --features aws
+```
+
+#### Encryption tests
+
+To run integration tests with encryption, you can set the following environment variables:
+
+```
+export AWS_SERVER_SIDE_ENCRYPTION=aws:kms
+export AWS_SSE_KMS_KEY_ID=<some-key-id>
+export AWS_SSE_BUCKET_KEY=false
+```
+
+As well as:
+
+```
+unset AWS_SSE_BUCKET_KEY
+export AWS_SERVER_SIDE_ENCRYPTION=aws:kms:dsse
+export AWS_SSE_KMS_KEY_ID=<some-key-id>
 ```
 
 ### Azure
