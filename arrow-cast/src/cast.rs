@@ -4912,6 +4912,25 @@ mod tests {
     }
 
     #[test]
+    fn test_cast_string_to_integral_overflow() {
+        let str = Arc::new(StringArray::from(vec![
+            Some("123"),
+            Some("-123"),
+            Some("86374"),
+            None,
+        ])) as ArrayRef;
+
+        let options = CastOptions {
+            safe: true,
+            format_options: FormatOptions::default(),
+        };
+        let res = cast_with_options(&str, &DataType::Int16, &options).expect("should cast to i16");
+        let expected =
+            Arc::new(Int16Array::from(vec![Some(123), Some(-123), None, None])) as ArrayRef;
+        assert_eq!(&res, &expected);
+    }
+
+    #[test]
     fn test_cast_string_to_timestamp() {
         let a1 = Arc::new(StringArray::from(vec![
             Some("2020-09-08T12:00:00.123456789+00:00"),

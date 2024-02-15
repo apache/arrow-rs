@@ -438,7 +438,12 @@ macro_rules! parser_primitive {
     ($t:ty) => {
         impl Parser for $t {
             fn parse(string: &str) -> Option<Self::Native> {
-                lexical_core::parse::<Self::Native>(string.as_bytes()).ok()
+                match atoi::FromRadix10SignedChecked::from_radix_10_signed_checked(
+                    string.as_bytes(),
+                ) {
+                    (Some(n), x) if x == string.len() => Some(n),
+                    _ => None,
+                }
             }
         }
     };
