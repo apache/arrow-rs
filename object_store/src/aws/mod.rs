@@ -395,7 +395,7 @@ mod tests {
         list_uses_directories_correctly(&integration).await;
         list_with_delimiter(&integration).await;
         rename_and_copy(&integration).await;
-        // stream_get(&integration).await;
+        stream_get(&integration).await;
         multipart(&integration, &integration).await;
         signing(&integration).await;
         s3_encryption(&integration).await;

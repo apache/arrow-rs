@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::aws::builder::S3EncryptionHeaders;
 use crate::aws::checksum::Checksum;
 use crate::aws::credential::{AwsCredential, CredentialExt};
 use crate::aws::{
@@ -51,10 +52,7 @@ use reqwest::{
 };
 use serde::{Deserialize, Serialize};
 use snafu::{ResultExt, Snafu};
-
 use std::sync::Arc;
-
-use super::builder::S3EncryptionHeaders;
 
 const VERSION_HEADER: &str = "x-amz-version-id";
 
