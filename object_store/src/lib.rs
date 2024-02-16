@@ -2200,6 +2200,21 @@ mod tests {
 
         let meta = storage.head(&path).await.unwrap();
         assert_eq!(meta.size, chunk_size * 2);
+
+        // Empty case
+        let path = Path::from("test_empty_multipart");
+
+        let id = multipart.create_multipart(&path).await.unwrap();
+
+        let parts = vec![];
+
+        multipart
+            .complete_multipart(&path, &id, parts)
+            .await
+            .unwrap();
+
+        let meta = storage.head(&path).await.unwrap();
+        assert_eq!(meta.size, 0);
     }
 
     #[cfg(any(feature = "azure", feature = "aws"))]
