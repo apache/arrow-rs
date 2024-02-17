@@ -157,6 +157,61 @@ lazy_static! {
     ]).unwrap();
 }
 
+/// Determines the smallest integer `DataType` that can represent the given string `s`.
+fn smallest_integer_type(s: &str) -> DataType {
+    if s.starts_with('-') {
+        match s.len() {
+            2..=4 => {
+                if lexical_core::parse::<i8>(s.as_bytes()).is_ok() {
+                    DataType::Int8
+                } else {
+                    DataType::Int16
+                }
+            }
+            5..=6 => {
+                if lexical_core::parse::<i16>(s.as_bytes()).is_ok() {
+                    DataType::Int16
+                } else {
+                    DataType::Int32
+                }
+            }
+            7..=11 => {
+                if lexical_core::parse::<i32>(s.as_bytes()).is_ok() {
+                    DataType::Int32
+                } else {
+                    DataType::Int64
+                }
+            }
+            _ => DataType::Int64,
+        }
+    } else {
+        match s.len() {
+            1..=3 => {
+                if lexical_core::parse::<u8>(s.as_bytes()).is_ok() {
+                    DataType::UInt8
+                } else {
+                    DataType::UInt16
+                }
+            }
+            4..=5 => {
+                if lexical_core::parse::<u16>(s.as_bytes()).is_ok() {
+                    DataType::UInt16
+                } else {
+                    DataType::UInt32
+                }
+            }
+            6..=10 => {
+                if lexical_core::parse::<u32>(s.as_bytes()).is_ok() {
+                    DataType::UInt32
+                } else {
+                    DataType::UInt64
+                }
+            }
+            _ => DataType::UInt64,
+        }
+    }
+}
+
 /// A wrapper over `Option<Regex>` to check if the value is `NULL`.
 #[derive(Debug, Clone, Default)]
 struct NullRegex(Option<Regex>);
@@ -186,6 +241,16 @@ struct InferredDataType {
     /// 6 - Timestamp(Microsecond)
     /// 7 - Timestamp(Nanosecond)
     /// 8 - Utf8
+    ///
+    /// Higher bits are used to indicate signedness and precision
+    /// x - UInt8
+    /// 9 - UInt16
+    /// 10 - UInt32
+    /// 11 - UInt64
+    /// 12 - Int8
+    /// 13 - Int16
+    /// 14 - Int32
+    /// 15 - Int64
     packed: u16,
 }
 
@@ -193,10 +258,20 @@ impl InferredDataType {
     /// Returns the inferred data type
     fn get(&self) -> DataType {
         match self.packed {
-            0 => DataType::Null,
-            1 => DataType::Boolean,
-            2 => DataType::Int64,
-            4 | 6 => DataType::Float64, // Promote Int64 to Float64
+            0b0 => DataType::Null,
+            0b1 => DataType::Boolean,
+            0b10 => DataType::UInt8,
+            b if b != 0 && (b & 0b000111111111 == 2) => match b.leading_zeros() {
+                6 => DataType::UInt16,
+                5 => DataType::UInt32,
+                4 => DataType::UInt64,
+                3 => DataType::Int8,
+                2 => DataType::Int16,
+                1 => DataType::Int32,
+                0 => DataType::Int64,
+                _ => panic!("Unexpected encoding: {b:b}"),
+            },
+            0b100 | 0b110 => DataType::Float64, // Promote Int64 to Float64
             b if b != 0 && (b & !0b11111000) == 0 => match b.leading_zeros() {
                 // Promote to highest precision temporal type
                 8 => DataType::Timestamp(TimeUnit::Nanosecond, None),
@@ -215,6 +290,21 @@ impl InferredDataType {
         self.packed |= if string.starts_with('"') {
             1 << 8 // Utf8
         } else if let Some(m) = REGEX_SET.matches(string).into_iter().next() {
+            if m == 1 {
+                // Integer
+                self.packed |= match smallest_integer_type(string) {
+                    DataType::UInt8 => 0,
+                    DataType::UInt16 => 1 << 9,
+                    DataType::UInt32 => 1 << 10,
+                    DataType::UInt64 => 1 << 11,
+                    DataType::Int8 => 1 << 12,
+                    DataType::Int16 => 1 << 13,
+                    DataType::Int32 => 1 << 14,
+                    DataType::Int64 => 1 << 15,
+                    _ => unreachable!(),
+                };
+            }
+
             1 << m
         } else {
             1 << 8 // Utf8
@@ -1513,7 +1603,7 @@ mod tests {
         file.rewind().unwrap();
 
         let expected_schema = Schema::new(vec![
-            Field::new("c_int", DataType::Int64, true),
+            Field::new("c_int", DataType::UInt8, true),
             Field::new("c_float", DataType::Float64, true),
             Field::new("c_string", DataType::Utf8, true),
             Field::new("c_bool", DataType::Boolean, true),
@@ -1585,7 +1675,7 @@ mod tests {
 
         let schema = batch.schema();
 
-        assert_eq!(&DataType::Int64, schema.field(0).data_type());
+        assert_eq!(&DataType::UInt8, schema.field(0).data_type());
         assert_eq!(&DataType::Float64, schema.field(1).data_type());
         assert_eq!(&DataType::Float64, schema.field(2).data_type());
         assert_eq!(&DataType::Boolean, schema.field(3).data_type());
@@ -1636,7 +1726,7 @@ mod tests {
         file.rewind().unwrap();
 
         let expected_schema = Schema::new(vec![
-            Field::new("c_int", DataType::Int64, true),
+            Field::new("c_int", DataType::UInt8, true),
             Field::new("c_float", DataType::Float64, true),
             Field::new("c_string", DataType::Utf8, true),
             Field::new("c_bool", DataType::Boolean, true),
@@ -1699,7 +1789,7 @@ mod tests {
     fn test_infer_field_schema() {
         assert_eq!(infer_field_schema("A"), DataType::Utf8);
         assert_eq!(infer_field_schema("\"123\""), DataType::Utf8);
-        assert_eq!(infer_field_schema("10"), DataType::Int64);
+        assert_eq!(infer_field_schema("10"), DataType::UInt8);
         assert_eq!(infer_field_schema("10.2"), DataType::Float64);
         assert_eq!(infer_field_schema(".2"), DataType::Float64);
         assert_eq!(infer_field_schema("2."), DataType::Float64);
@@ -1868,7 +1958,7 @@ mod tests {
         assert!(schema.field(2).is_nullable());
         assert!(schema.field(3).is_nullable());
 
-        assert_eq!(&DataType::Int64, schema.field(0).data_type());
+        assert_eq!(&DataType::UInt8, schema.field(0).data_type());
         assert_eq!(&DataType::Utf8, schema.field(1).data_type());
         assert_eq!(&DataType::Float64, schema.field(2).data_type());
         assert_eq!(&DataType::Boolean, schema.field(3).data_type());
@@ -2290,13 +2380,52 @@ mod tests {
     }
 
     #[test]
+    fn test_smallest_integer_type() {
+        assert_eq!(smallest_integer_type("0"), DataType::UInt8);
+        assert_eq!(smallest_integer_type("255"), DataType::UInt8);
+        assert_eq!(smallest_integer_type("256"), DataType::UInt16);
+        assert_eq!(smallest_integer_type("65535"), DataType::UInt16);
+        assert_eq!(smallest_integer_type("65536"), DataType::UInt32);
+        assert_eq!(smallest_integer_type("4294967295"), DataType::UInt32);
+        assert_eq!(smallest_integer_type("4294967296"), DataType::UInt64);
+        assert_eq!(
+            smallest_integer_type("18446744073709551615"),
+            DataType::UInt64
+        );
+        assert_eq!(smallest_integer_type("-1"), DataType::Int8);
+        assert_eq!(smallest_integer_type("-128"), DataType::Int8);
+        assert_eq!(smallest_integer_type("-129"), DataType::Int16);
+        assert_eq!(smallest_integer_type("-32768"), DataType::Int16);
+        assert_eq!(smallest_integer_type("-32769"), DataType::Int32);
+        assert_eq!(smallest_integer_type("-2147483648"), DataType::Int32);
+        assert_eq!(smallest_integer_type("-2147483649"), DataType::Int64);
+        assert_eq!(
+            smallest_integer_type("-9223372036854775808"),
+            DataType::Int64
+        );
+    }
+
+    #[test]
     fn test_inference() {
         let cases: &[(&[&str], DataType)] = &[
             (&[], DataType::Null),
             (&["false", "12"], DataType::Utf8),
             (&["12", "cupcakes"], DataType::Utf8),
             (&["12", "12.4"], DataType::Float64),
-            (&["14050", "24332"], DataType::Int64),
+            (&["0", "255"], DataType::UInt8),
+            (&["14050", "24332"], DataType::UInt16),
+            (&["256", "-1"], DataType::Int8),
+            (&["-128", "128", "-129"], DataType::Int16),
+            (&["-32769", "32767", "32768"], DataType::Int32),
+            (
+                &["-2147483649", "2147483647", "2147483648"],
+                DataType::Int64,
+            ),
+            (&["42949", "4294967295"], DataType::UInt32),
+            (
+                &["18446744073709551615", "18446744073709551616"],
+                DataType::UInt64,
+            ),
             (&["14050.0", "true"], DataType::Utf8),
             (&["14050", "2020-03-19 00:00:00"], DataType::Utf8),
             (&["14050", "2340.0", "2020-03-19 00:00:00"], DataType::Utf8),
