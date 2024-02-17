@@ -538,6 +538,16 @@ impl S3Client {
         upload_id: &str,
         parts: Vec<PartId>,
     ) -> Result<PutResult> {
+        let parts = if parts.is_empty() {
+            // If no parts were uploaded, upload an empty part
+            // otherwise the completion request will fail
+            let part = self
+                .put_part(location, &upload_id.to_string(), 0, Bytes::new())
+                .await?;
+            vec![part]
+        } else {
+            parts
+        };
         let request = CompleteMultipartUpload::from(parts);
         let body = quick_xml::se::to_string(&request).unwrap();
 
