@@ -541,7 +541,9 @@ impl S3Client {
         let parts = if parts.is_empty() {
             // If no parts were uploaded, upload an empty part
             // otherwise the completion request will fail
-            let part = self.put_part(location, &upload_id.to_string(), 0, Bytes::new()).await?;
+            let part = self
+                .put_part(location, &upload_id.to_string(), 0, Bytes::new())
+                .await?;
             vec![part]
         } else {
             parts
