@@ -147,7 +147,8 @@ lazy_static! {
     /// Order should match [`InferredDataType`]
     static ref REGEX_SET: RegexSet = RegexSet::new([
         r"(?i)^(true)$|^(false)$(?-i)", //BOOLEAN
-        r"^-?(\d+)$", //INTEGER
+        r"^(\d+)$", //Unsigned Int
+        r"^-(\d+)$", //Signed Int
         r"^-?((\d*\.\d+|\d+\.\d*)([eE]-?\d+)?|\d+([eE]-?\d+))$", //DECIMAL
         r"^\d{4}-\d\d-\d\d$", //DATE32
         r"^\d{4}-\d\d-\d\d[T ]\d\d:\d\d:\d\d(?:[^\d\.].*)?$", //Timestamp(Second)
@@ -233,52 +234,49 @@ struct InferredDataType {
     /// Packed booleans indicating type
     ///
     /// 0 - Boolean
-    /// 1 - Integer
-    /// 2 - Float64
-    /// 3 - Date32
-    /// 4 - Timestamp(Second)
-    /// 5 - Timestamp(Millisecond)
-    /// 6 - Timestamp(Microsecond)
-    /// 7 - Timestamp(Nanosecond)
-    /// 8 - Utf8
+    /// 1 - Unsigned Integer
+    /// 2 - Signed Integer
+    /// 3 - Float64
+    /// 4 - Date32
+    /// 5 - Timestamp(Second)
+    /// 6 - Timestamp(Millisecond)
+    /// 7 - Timestamp(Microsecond)
+    /// 8 - Timestamp(Nanosecond)
+    /// 9 - Utf8
     ///
-    /// Higher bits are used to indicate signedness and precision
-    /// x - UInt8
-    /// 9 - UInt16
-    /// 10 - UInt32
-    /// 11 - UInt64
-    /// 12 - Int8
-    /// 13 - Int16
-    /// 14 - Int32
-    /// 15 - Int64
+    /// Higher bits are used to indicate precision
+    /// 10 - 16bit
+    /// 11 - 32bit
+    /// 12 - 64bit
     packed: u16,
 }
 
 impl InferredDataType {
     /// Returns the inferred data type
     fn get(&self) -> DataType {
-        match self.packed {
-            0b0 => DataType::Null,
-            0b1 => DataType::Boolean,
-            0b10 => DataType::UInt8,
-            b if b != 0 && (b & 0b000111111111 == 2) => match b.leading_zeros() {
-                6 => DataType::UInt16,
-                5 => DataType::UInt32,
-                4 => DataType::UInt64,
-                3 => DataType::Int8,
-                2 => DataType::Int16,
-                1 => DataType::Int32,
-                0 => DataType::Int64,
-                _ => panic!("Unexpected encoding: {b:b}"),
+        match self.packed & 0x3ff {
+            0x0 => DataType::Null,
+            0x1 => DataType::Boolean,
+            0x2 => match self.packed.leading_zeros() {
+                3 => DataType::UInt64,
+                4 => DataType::UInt32,
+                5 => DataType::UInt16,
+                _ => DataType::UInt8,
             },
-            0b100 | 0b110 => DataType::Float64, // Promote Int64 to Float64
-            b if b != 0 && (b & !0b11111000) == 0 => match b.leading_zeros() {
+            0x4 | 0x6 => match self.packed.leading_zeros() {
+                3 => DataType::Int64,
+                4 => DataType::Int32,
+                5 => DataType::Int16,
+                _ => DataType::Int8,
+            },
+            0x8 | 0xA | 0xC | 0xE => DataType::Float64, // Promote Int64 to Float64
+            b if b != 0 && (b & !0x1f0) == 0 => match self.packed.leading_zeros() {
                 // Promote to highest precision temporal type
-                8 => DataType::Timestamp(TimeUnit::Nanosecond, None),
-                9 => DataType::Timestamp(TimeUnit::Microsecond, None),
-                10 => DataType::Timestamp(TimeUnit::Millisecond, None),
-                11 => DataType::Timestamp(TimeUnit::Second, None),
-                12 => DataType::Date32,
+                7 => DataType::Timestamp(TimeUnit::Nanosecond, None),
+                8 => DataType::Timestamp(TimeUnit::Microsecond, None),
+                9 => DataType::Timestamp(TimeUnit::Millisecond, None),
+                10 => DataType::Timestamp(TimeUnit::Second, None),
+                11 => DataType::Date32,
                 _ => unreachable!(),
             },
             _ => DataType::Utf8,
@@ -288,26 +286,24 @@ impl InferredDataType {
     /// Updates the [`InferredDataType`] with the given string
     fn update(&mut self, string: &str) {
         self.packed |= if string.starts_with('"') {
-            1 << 8 // Utf8
+            1 << 9 // Utf8
         } else if let Some(m) = REGEX_SET.matches(string).into_iter().next() {
-            if m == 1 {
+            if m == 0x1 || m == 0x2 {
                 // Integer
                 self.packed |= match smallest_integer_type(string) {
-                    DataType::UInt8 => 0,
-                    DataType::UInt16 => 1 << 9,
-                    DataType::UInt32 => 1 << 10,
-                    DataType::UInt64 => 1 << 11,
-                    DataType::Int8 => 1 << 12,
-                    DataType::Int16 => 1 << 13,
-                    DataType::Int32 => 1 << 14,
-                    DataType::Int64 => 1 << 15,
-                    _ => unreachable!(),
+                    DataType::UInt16 => 1 << 10,
+                    DataType::UInt32 => 1 << 11,
+                    DataType::UInt64 => 1 << 12,
+                    DataType::Int16 => 1 << 10,
+                    DataType::Int32 => 1 << 11,
+                    DataType::Int64 => 1 << 12,
+                    _ => 0,
                 };
             }
 
             1 << m
         } else {
-            1 << 8 // Utf8
+            1 << 9 // Utf8
         }
     }
 }
@@ -2414,7 +2410,7 @@ mod tests {
             (&["12", "12.4"], DataType::Float64),
             (&["0", "255"], DataType::UInt8),
             (&["14050", "24332"], DataType::UInt16),
-            (&["256", "-1"], DataType::Int8),
+            (&["256", "-1"], DataType::Int16),
             (&["-128", "128", "-129"], DataType::Int16),
             (&["-32769", "32767", "32768"], DataType::Int32),
             (
