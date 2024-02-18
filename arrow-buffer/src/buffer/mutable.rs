@@ -480,7 +480,15 @@ fn dangling_ptr() -> NonNull<u8> {
     // SAFETY: ALIGNMENT is a non-zero usize which is then casted
     // to a *mut T. Therefore, `ptr` is not null and the conditions for
     // calling new_unchecked() are respected.
-    unsafe { NonNull::new_unchecked(ALIGNMENT as *mut u8) }
+    #[cfg(miri)]
+    {
+        // Since miri implies a nightly rust version we can use the unstable strict_provenance feature
+        unsafe { NonNull::new_unchecked(std::ptr::invalid_mut(ALIGNMENT)) }
+    }
+    #[cfg(not(miri))]
+    {
+        unsafe { NonNull::new_unchecked(ALIGNMENT as *mut u8) }
+    }
 }
 
 impl<A: ArrowNativeType> Extend<A> for MutableBuffer {
