@@ -1074,15 +1074,8 @@ impl std::fmt::Display for S3EncryptionType {
 ///
 /// Whether these headers are sent depends on both the kind of encryption set
 /// and the kind of request being made.
-#[derive(Default, Clone)]
-pub struct S3EncryptionHeaders(pub HeaderMap);
-
-impl std::fmt::Debug for S3EncryptionHeaders {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        // TODO: if we take a user-provided key, hide the key from debug output.
-        f.debug_map().entries(self.0.iter()).finish()
-    }
-}
+#[derive(Default, Clone, Debug)]
+pub struct S3EncryptionHeaders(HeaderMap);
 
 impl S3EncryptionHeaders {
     fn try_new(
@@ -1091,6 +1084,8 @@ impl S3EncryptionHeaders {
         bucket_key_enabled: Option<bool>,
     ) -> Result<Self> {
         let mut headers = HeaderMap::new();
+        // Note: if we later add support for SSE-C, we should be sure to use
+        // HeaderValue::set_sensitive to prevent the key from being logged.
         headers.insert(
             "x-amz-server-side-encryption",
             HeaderValue::from_static(encryption_type.into()),
