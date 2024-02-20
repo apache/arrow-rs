@@ -31,6 +31,7 @@ change. Supported object stores include:
 * [Google Cloud Storage](https://cloud.google.com/storage)
 * Local files
 * Memory
+* [HTTP/WebDAV Storage](https://datatracker.ietf.org/doc/html/rfc2518)
 * Custom implementations
 
 Originally developed by [InfluxData](https://www.influxdata.com/) and later donated to [Apache Arrow](https://arrow.apache.org/).
