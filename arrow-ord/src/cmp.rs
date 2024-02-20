@@ -192,13 +192,7 @@ pub fn compare_list(l: ArrayRef, r: ArrayRef) -> Ordering {
         }
     }
 
-    if l_len < r_len {
-        Ordering::Less
-    } else if l_len > r_len {
-        Ordering::Greater
-    } else {
-        Ordering::Equal
-    }
+    l_len.cmp(&r_len)
 }
 
 fn process_nested(
