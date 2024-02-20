@@ -18,9 +18,12 @@
 use std::task::Poll;
 
 use crate::{
-    decode::FlightRecordBatchStream, flight_service_client::FlightServiceClient,
-    trailers::extract_lazy_trailers, Action, ActionType, Criteria, Empty, FlightData,
-    FlightDescriptor, FlightInfo, HandshakeRequest, PutResult, Ticket,
+    decode::FlightRecordBatchStream,
+    flight_service_client::FlightServiceClient,
+    gen::{CancelFlightInfoRequest, CancelFlightInfoResult, RenewFlightEndpointRequest},
+    trailers::extract_lazy_trailers,
+    Action, ActionType, Criteria, Empty, FlightData, FlightDescriptor, FlightEndpoint, FlightInfo,
+    HandshakeRequest, PollInfo, PutResult, Ticket,
 };
 use arrow_schema::Schema;
 use bytes::Bytes;
@@ -30,6 +33,7 @@ use futures::{
     stream::{self, BoxStream},
     FutureExt, Stream, StreamExt, TryStreamExt,
 };
+use prost::Message;
 use tonic::{metadata::MetadataMap, transport::Channel};
 
 use crate::error::{FlightError, Result};
@@ -253,6 +257,64 @@ impl FlightClient {
         let request = self.make_request(descriptor);
 
         let response = self.inner.get_flight_info(request).await?.into_inner();
+        Ok(response)
+    }
+
+    /// Make a `PollFlightInfo` call to the server with the provided
+    /// [`FlightDescriptor`] and return the [`PollInfo`] from the
+    /// server.
+    ///
+    /// The `info` field of the [`PollInfo`] can be used with
+    /// [`Self::do_get`] to retrieve the requested batches.
+    ///
+    /// If the `flight_descriptor` field of the [`PollInfo`] is
+    /// `None` then the `info` field represents the complete results.
+    ///
+    /// If the `flight_descriptor` field is some [`FlightDescriptor`]
+    /// then the `info` field has incomplete results, and the client
+    /// should call this method again with the new `flight_descriptor`
+    /// to get the updated status.
+    ///
+    /// The `expiration_time`, if set, represents the expiration time
+    /// of the `flight_descriptor`, after which the server may not accept
+    /// this retry descriptor and may cancel the query.
+    ///
+    /// # Example:
+    /// ```no_run
+    /// # async fn run() {
+    /// # use arrow_flight::FlightClient;
+    /// # use arrow_flight::FlightDescriptor;
+    /// # let channel: tonic::transport::Channel = unimplemented!();
+    /// let mut client = FlightClient::new(channel);
+    ///
+    /// // Send a 'CMD' request to the server
+    /// let request = FlightDescriptor::new_cmd(b"MOAR DATA".to_vec());
+    /// let poll_info = client
+    ///   .poll_flight_info(request)
+    ///   .await
+    ///   .expect("error handshaking");
+    ///
+    /// // retrieve the first endpoint from the returned poll info
+    /// let ticket = poll_info
+    ///   .info
+    ///   .expect("expected flight info")
+    ///   .endpoint[0]
+    ///   // Extract the ticket
+    ///   .ticket
+    ///   .clone()
+    ///   .expect("expected ticket");
+    ///
+    /// // Retrieve the corresponding RecordBatch stream with do_get
+    /// let data = client
+    ///   .do_get(ticket)
+    ///   .await
+    ///   .expect("error fetching data");
+    /// # }
+    /// ```
+    pub async fn poll_flight_info(&mut self, descriptor: FlightDescriptor) -> Result<PollInfo> {
+        let request = self.make_request(descriptor);
+
+        let response = self.inner.poll_flight_info(request).await?.into_inner();
         Ok(response)
     }
 
@@ -538,6 +600,82 @@ impl FlightClient {
             });
 
         Ok(result_stream.boxed())
+    }
+
+    /// Make a `CancelFlightInfo` call to the server and return
+    /// a [`CancelFlightInfoResult`].
+    ///
+    /// # Example:
+    /// ```no_run
+    /// # async fn run() {
+    /// # use arrow_flight::{CancelFlightInfoRequest, FlightClient, FlightDescriptor};
+    /// # let channel: tonic::transport::Channel = unimplemented!();
+    /// let mut client = FlightClient::new(channel);
+    ///
+    /// // Send a 'CMD' request to the server
+    /// let request = FlightDescriptor::new_cmd(b"MOAR DATA".to_vec());
+    /// let flight_info = client
+    ///   .get_flight_info(request)
+    ///   .await
+    ///   .expect("error handshaking");
+    ///
+    /// // Cancel the query
+    /// let request = CancelFlightInfoRequest::new(flight_info);
+    /// let result = client
+    ///   .cancel_flight_info(request)
+    ///   .await
+    ///   .expect("error cancelling");
+    /// # }
+    /// ```
+    pub async fn cancel_flight_info(
+        &mut self,
+        request: CancelFlightInfoRequest,
+    ) -> Result<CancelFlightInfoResult> {
+        let action = Action::new("CancelFlightInfo", request.encode_to_vec());
+        let response = self.do_action(action).await?.try_next().await?;
+        let response = response.ok_or(FlightError::protocol(
+            "Received no response for cancel_flight_info call",
+        ))?;
+        CancelFlightInfoResult::decode(response)
+            .map_err(|e| FlightError::DecodeError(e.to_string()))
+    }
+
+    /// Make a `RenewFlightEndpoint` call to the server and return
+    /// the renewed [`FlightEndpoint`].
+    ///
+    /// # Example:
+    /// ```no_run
+    /// # async fn run() {
+    /// # use arrow_flight::{FlightClient, FlightDescriptor, RenewFlightEndpointRequest};
+    /// # let channel: tonic::transport::Channel = unimplemented!();
+    /// let mut client = FlightClient::new(channel);
+    ///
+    /// // Send a 'CMD' request to the server
+    /// let request = FlightDescriptor::new_cmd(b"MOAR DATA".to_vec());
+    /// let flight_endpoint = client
+    ///   .get_flight_info(request)
+    ///   .await
+    ///   .expect("error handshaking")
+    ///   .endpoint[0];
+    ///
+    /// // Renew the endpoint
+    /// let request = RenewFlightEndpointRequest::new(flight_endpoint);
+    /// let flight_endpoint = client
+    ///   .renew_flight_endpoint(request)
+    ///   .await
+    ///   .expect("error renewing");
+    /// # }
+    /// ```
+    pub async fn renew_flight_endpoint(
+        &mut self,
+        request: RenewFlightEndpointRequest,
+    ) -> Result<FlightEndpoint> {
+        let action = Action::new("RenewFlightEndpoint", request.encode_to_vec());
+        let response = self.do_action(action).await?.try_next().await?;
+        let response = response.ok_or(FlightError::protocol(
+            "Received no response for renew_flight_endpoint call",
+        ))?;
+        FlightEndpoint::decode(response).map_err(|e| FlightError::DecodeError(e.to_string()))
     }
 
     /// return a Request, adding any configured metadata

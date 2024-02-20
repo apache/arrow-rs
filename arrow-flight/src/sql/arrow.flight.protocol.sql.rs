@@ -176,7 +176,7 @@ pub struct CommandGetDbSchemas {
 ///   - ARROW:FLIGHT:SQL:PRECISION         - Column precision/size
 ///   - ARROW:FLIGHT:SQL:SCALE             - Column scale/decimal digits if applicable
 ///   - ARROW:FLIGHT:SQL:IS_AUTO_INCREMENT - "1" indicates if the column is auto incremented, "0" otherwise.
-///   - ARROW:FLIGHT:SQL:IS_CASE_SENSITIVE - "1" indicates if the column is case sensitive, "0" otherwise.
+///   - ARROW:FLIGHT:SQL:IS_CASE_SENSITIVE - "1" indicates if the column is case-sensitive, "0" otherwise.
 ///   - ARROW:FLIGHT:SQL:IS_READ_ONLY      - "1" indicates if the column is read only, "0" otherwise.
 ///   - ARROW:FLIGHT:SQL:IS_SEARCHABLE     - "1" indicates if the column is searchable via WHERE clause, "0" otherwise.
 /// The returned data should be ordered by catalog_name, db_schema_name, table_name, then table_type, followed by table_schema if requested.
@@ -485,11 +485,14 @@ pub struct ActionCreatePreparedStatementResult {
     #[prost(bytes = "bytes", tag = "1")]
     pub prepared_statement_handle: ::prost::bytes::Bytes,
     /// If a result set generating query was provided, dataset_schema contains the
-    /// schema of the dataset as described in Schema.fbs::Schema, it is serialized as an IPC message.
+    /// schema of the result set.  It should be an IPC-encapsulated Schema, as described in Schema.fbs.
+    /// For some queries, the schema of the results may depend on the schema of the parameters.  The server
+    /// should provide its best guess as to the schema at this point.  Clients must not assume that this
+    /// schema, if provided, will be accurate.
     #[prost(bytes = "bytes", tag = "2")]
     pub dataset_schema: ::prost::bytes::Bytes,
     /// If the query provided contained parameters, parameter_schema contains the
-    /// schema of the expected parameters as described in Schema.fbs::Schema, it is serialized as an IPC message.
+    /// schema of the expected parameters.  It should be an IPC-encapsulated Schema, as described in Schema.fbs.
     #[prost(bytes = "bytes", tag = "3")]
     pub parameter_schema: ::prost::bytes::Bytes,
 }
@@ -691,7 +694,7 @@ pub mod action_end_savepoint_request {
 ///     - ARROW:FLIGHT:SQL:PRECISION         - Column precision/size
 ///     - ARROW:FLIGHT:SQL:SCALE             - Column scale/decimal digits if applicable
 ///     - ARROW:FLIGHT:SQL:IS_AUTO_INCREMENT - "1" indicates if the column is auto incremented, "0" otherwise.
-///     - ARROW:FLIGHT:SQL:IS_CASE_SENSITIVE - "1" indicates if the column is case sensitive, "0" otherwise.
+///     - ARROW:FLIGHT:SQL:IS_CASE_SENSITIVE - "1" indicates if the column is case-sensitive, "0" otherwise.
 ///     - ARROW:FLIGHT:SQL:IS_READ_ONLY      - "1" indicates if the column is read only, "0" otherwise.
 ///     - ARROW:FLIGHT:SQL:IS_SEARCHABLE     - "1" indicates if the column is searchable via WHERE clause, "0" otherwise.
 ///   - GetFlightInfo: execute the query.
@@ -717,7 +720,7 @@ pub struct CommandStatementQuery {
 ///     - ARROW:FLIGHT:SQL:PRECISION         - Column precision/size
 ///     - ARROW:FLIGHT:SQL:SCALE             - Column scale/decimal digits if applicable
 ///     - ARROW:FLIGHT:SQL:IS_AUTO_INCREMENT - "1" indicates if the column is auto incremented, "0" otherwise.
-///     - ARROW:FLIGHT:SQL:IS_CASE_SENSITIVE - "1" indicates if the column is case sensitive, "0" otherwise.
+///     - ARROW:FLIGHT:SQL:IS_CASE_SENSITIVE - "1" indicates if the column is case-sensitive, "0" otherwise.
 ///     - ARROW:FLIGHT:SQL:IS_READ_ONLY      - "1" indicates if the column is read only, "0" otherwise.
 ///     - ARROW:FLIGHT:SQL:IS_SEARCHABLE     - "1" indicates if the column is searchable via WHERE clause, "0" otherwise.
 ///   - GetFlightInfo: execute the query.
@@ -754,9 +757,12 @@ pub struct TicketStatementQuery {
 ///     - ARROW:FLIGHT:SQL:PRECISION         - Column precision/size
 ///     - ARROW:FLIGHT:SQL:SCALE             - Column scale/decimal digits if applicable
 ///     - ARROW:FLIGHT:SQL:IS_AUTO_INCREMENT - "1" indicates if the column is auto incremented, "0" otherwise.
-///     - ARROW:FLIGHT:SQL:IS_CASE_SENSITIVE - "1" indicates if the column is case sensitive, "0" otherwise.
+///     - ARROW:FLIGHT:SQL:IS_CASE_SENSITIVE - "1" indicates if the column is case-sensitive, "0" otherwise.
 ///     - ARROW:FLIGHT:SQL:IS_READ_ONLY      - "1" indicates if the column is read only, "0" otherwise.
 ///     - ARROW:FLIGHT:SQL:IS_SEARCHABLE     - "1" indicates if the column is searchable via WHERE clause, "0" otherwise.
+///
+///     If the schema is retrieved after parameter values have been bound with DoPut, then the server should account
+///     for the parameters when determining the schema.
 ///   - DoPut: bind parameter values. All of the bound parameter sets will be executed as a single atomic execution.
 ///   - GetFlightInfo: execute the prepared statement instance.
 #[allow(clippy::derive_partial_eq_without_eq)]
@@ -768,7 +774,7 @@ pub struct CommandPreparedStatementQuery {
 }
 ///
 /// Represents a SQL update query. Used in the command member of FlightDescriptor
-/// for the the RPC call DoPut to cause the server to execute the included SQL update.
+/// for the RPC call DoPut to cause the server to execute the included SQL update.
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CommandStatementUpdate {
@@ -781,7 +787,7 @@ pub struct CommandStatementUpdate {
 }
 ///
 /// Represents a SQL update query. Used in the command member of FlightDescriptor
-/// for the the RPC call DoPut to cause the server to execute the included
+/// for the RPC call DoPut to cause the server to execute the included
 /// prepared statement handle as an update.
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -815,6 +821,9 @@ pub struct DoPutUpdateResult {
 /// data.
 ///
 /// This command is idempotent.
+///
+/// This command is deprecated since 13.0.0. Use the "CancelFlightInfo"
+/// action with DoAction instead.
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ActionCancelQueryRequest {
@@ -829,6 +838,9 @@ pub struct ActionCancelQueryRequest {
 /// The result of cancelling a query.
 ///
 /// The result should be wrapped in a google.protobuf.Any message.
+///
+/// This command is deprecated since 13.0.0. Use the "CancelFlightInfo"
+/// action with DoAction instead.
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ActionCancelQueryResult {
@@ -1272,7 +1284,7 @@ pub enum SqlInfo {
     SqlMaxCharLiteralLength = 542,
     /// Retrieves a int64 value representing the maximum number of characters allowed for a column name.
     SqlMaxColumnNameLength = 543,
-    /// Retrieves a int64 value representing the the maximum number of columns allowed in a GROUP BY clause.
+    /// Retrieves a int64 value representing the maximum number of columns allowed in a GROUP BY clause.
     SqlMaxColumnsInGroupBy = 544,
     /// Retrieves a int64 value representing the maximum number of columns allowed in an index.
     SqlMaxColumnsInIndex = 545,
@@ -2373,7 +2385,7 @@ impl SqlSupportsConvert {
 }
 /// *
 /// The JDBC/ODBC-defined type of any object.
-/// All the values here are the sames as in the JDBC and ODBC specs.
+/// All the values here are the same as in the JDBC and ODBC specs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]
 pub enum XdbcDataType {
@@ -2621,7 +2633,7 @@ pub enum Nullable {
     /// Indicates that the fields allow the use of null values.
     NullabilityNullable = 1,
     /// *
-    /// Indicates that nullability of the fields can not be determined.
+    /// Indicates that nullability of the fields cannot be determined.
     NullabilityUnknown = 2,
 }
 impl Nullable {
@@ -2650,7 +2662,7 @@ impl Nullable {
 #[repr(i32)]
 pub enum Searchable {
     /// *
-    /// Indicates that column can not be used in a WHERE clause.
+    /// Indicates that column cannot be used in a WHERE clause.
     None = 0,
     /// *
     /// Indicates that the column can be used in a WHERE clause if it is using a

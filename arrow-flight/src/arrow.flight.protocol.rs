@@ -70,12 +70,42 @@ pub struct Action {
     pub body: ::prost::bytes::Bytes,
 }
 ///
+/// The request of the CancelFlightInfo action.
+///
+/// The request should be stored in Action.body.
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct CancelFlightInfoRequest {
+    #[prost(message, optional, tag = "1")]
+    pub info: ::core::option::Option<FlightInfo>,
+}
+///
+/// The request of the RenewFlightEndpoint action.
+///
+/// The request should be stored in Action.body.
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct RenewFlightEndpointRequest {
+    #[prost(message, optional, tag = "1")]
+    pub endpoint: ::core::option::Option<FlightEndpoint>,
+}
+///
 /// An opaque result returned after executing an action.
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Result {
     #[prost(bytes = "bytes", tag = "1")]
     pub body: ::prost::bytes::Bytes,
+}
+///
+/// The result of the CancelFlightInfo action.
+///
+/// The result should be stored in Result.body.
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct CancelFlightInfoResult {
+    #[prost(enumeration = "CancelStatus", tag = "1")]
+    pub status: i32,
 }
 ///
 /// Wrap the result of a getSchema call
@@ -209,6 +239,57 @@ pub struct FlightInfo {
     /// FlightEndpoints are in the same order as the data.
     #[prost(bool, tag = "6")]
     pub ordered: bool,
+    ///
+    /// Application-defined metadata.
+    ///
+    /// There is no inherent or required relationship between this
+    /// and the app_metadata fields in the FlightEndpoints or resulting
+    /// FlightData messages. Since this metadata is application-defined,
+    /// a given application could define there to be a relationship,
+    /// but there is none required by the spec.
+    #[prost(bytes = "bytes", tag = "7")]
+    pub app_metadata: ::prost::bytes::Bytes,
+}
+///
+/// The information to process a long-running query.
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PollInfo {
+    ///
+    /// The currently available results.
+    ///
+    /// If "flight_descriptor" is not specified, the query is complete
+    /// and "info" specifies all results. Otherwise, "info" contains
+    /// partial query results.
+    ///
+    /// Note that each PollInfo response contains a complete
+    /// FlightInfo (not just the delta between the previous and current
+    /// FlightInfo).
+    ///
+    /// Subsequent PollInfo responses may only append new endpoints to
+    /// info.
+    ///
+    /// Clients can begin fetching results via DoGet(Ticket) with the
+    /// ticket in the info before the query is
+    /// completed. FlightInfo.ordered is also valid.
+    #[prost(message, optional, tag = "1")]
+    pub info: ::core::option::Option<FlightInfo>,
+    ///
+    /// The descriptor the client should use on the next try.
+    /// If unset, the query is complete.
+    #[prost(message, optional, tag = "2")]
+    pub flight_descriptor: ::core::option::Option<FlightDescriptor>,
+    ///
+    /// Query progress. If known, must be in \[0.0, 1.0\] but need not be
+    /// monotonic or nondecreasing. If unknown, do not set.
+    #[prost(double, optional, tag = "3")]
+    pub progress: ::core::option::Option<f64>,
+    ///
+    /// Expiration time for this request. After this passes, the server
+    /// might not accept the retry descriptor anymore (and the query may
+    /// be cancelled). This may be updated on a call to PollFlightInfo.
+    #[prost(message, optional, tag = "4")]
+    pub expiration_time: ::core::option::Option<::prost_types::Timestamp>,
 }
 ///
 /// A particular stream or split associated with a flight.
@@ -236,6 +317,22 @@ pub struct FlightEndpoint {
     /// represent redundant and/or load balanced services.
     #[prost(message, repeated, tag = "2")]
     pub location: ::prost::alloc::vec::Vec<Location>,
+    ///
+    /// Expiration time of this stream. If present, clients may assume
+    /// they can retry DoGet requests. Otherwise, it is
+    /// application-defined whether DoGet requests may be retried.
+    #[prost(message, optional, tag = "3")]
+    pub expiration_time: ::core::option::Option<::prost_types::Timestamp>,
+    ///
+    /// Application-defined metadata.
+    ///
+    /// There is no inherent or required relationship between this
+    /// and the app_metadata fields in the FlightInfo or resulting
+    /// FlightData messages. Since this metadata is application-defined,
+    /// a given application could define there to be a relationship,
+    /// but there is none required by the spec.
+    #[prost(bytes = "bytes", tag = "4")]
+    pub app_metadata: ::prost::bytes::Bytes,
 }
 ///
 /// A location where a Flight service will accept retrieval of a particular
@@ -291,6 +388,51 @@ pub struct FlightData {
 pub struct PutResult {
     #[prost(bytes = "bytes", tag = "1")]
     pub app_metadata: ::prost::bytes::Bytes,
+}
+///
+/// The result of a cancel operation.
+///
+/// This is used by CancelFlightInfoResult.status.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum CancelStatus {
+    /// The cancellation status is unknown. Servers should avoid using
+    /// this value (send a NOT_FOUND error if the requested query is
+    /// not known). Clients can retry the request.
+    Unspecified = 0,
+    /// The cancellation request is complete. Subsequent requests with
+    /// the same payload may return CANCELLED or a NOT_FOUND error.
+    Cancelled = 1,
+    /// The cancellation request is in progress. The client may retry
+    /// the cancellation request.
+    Cancelling = 2,
+    /// The query is not cancellable. The client should not retry the
+    /// cancellation request.
+    NotCancellable = 3,
+}
+impl CancelStatus {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            CancelStatus::Unspecified => "CANCEL_STATUS_UNSPECIFIED",
+            CancelStatus::Cancelled => "CANCEL_STATUS_CANCELLED",
+            CancelStatus::Cancelling => "CANCEL_STATUS_CANCELLING",
+            CancelStatus::NotCancellable => "CANCEL_STATUS_NOT_CANCELLABLE",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "CANCEL_STATUS_UNSPECIFIED" => Some(Self::Unspecified),
+            "CANCEL_STATUS_CANCELLED" => Some(Self::Cancelled),
+            "CANCEL_STATUS_CANCELLING" => Some(Self::Cancelling),
+            "CANCEL_STATUS_NOT_CANCELLABLE" => Some(Self::NotCancellable),
+            _ => None,
+        }
+    }
 }
 /// Generated client implementations.
 pub mod flight_service_client {
@@ -482,6 +624,56 @@ pub mod flight_service_client {
                     GrpcMethod::new(
                         "arrow.flight.protocol.FlightService",
                         "GetFlightInfo",
+                    ),
+                );
+            self.inner.unary(req, path, codec).await
+        }
+        ///
+        /// For a given FlightDescriptor, start a query and get information
+        /// to poll its execution status. This is a useful interface if the
+        /// query may be a long-running query. The first PollFlightInfo call
+        /// should return as quickly as possible. (GetFlightInfo doesn't
+        /// return until the query is complete.)
+        ///
+        /// A client can consume any available results before
+        /// the query is completed. See PollInfo.info for details.
+        ///
+        /// A client can poll the updated query status by calling
+        /// PollFlightInfo() with PollInfo.flight_descriptor. A server
+        /// should not respond until the result would be different from last
+        /// time. That way, the client can "long poll" for updates
+        /// without constantly making requests. Clients can set a short timeout
+        /// to avoid blocking calls if desired.
+        ///
+        /// A client can't use PollInfo.flight_descriptor after
+        /// PollInfo.expiration_time passes. A server might not accept the
+        /// retry descriptor anymore and the query may be cancelled.
+        ///
+        /// A client may use the CancelFlightInfo action with
+        /// PollInfo.info to cancel the running query.
+        pub async fn poll_flight_info(
+            &mut self,
+            request: impl tonic::IntoRequest<super::FlightDescriptor>,
+        ) -> std::result::Result<tonic::Response<super::PollInfo>, tonic::Status> {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::new(
+                        tonic::Code::Unknown,
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/arrow.flight.protocol.FlightService/PollFlightInfo",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new(
+                        "arrow.flight.protocol.FlightService",
+                        "PollFlightInfo",
                     ),
                 );
             self.inner.unary(req, path, codec).await
@@ -734,6 +926,33 @@ pub mod flight_service_server {
             &self,
             request: tonic::Request<super::FlightDescriptor>,
         ) -> std::result::Result<tonic::Response<super::FlightInfo>, tonic::Status>;
+        ///
+        /// For a given FlightDescriptor, start a query and get information
+        /// to poll its execution status. This is a useful interface if the
+        /// query may be a long-running query. The first PollFlightInfo call
+        /// should return as quickly as possible. (GetFlightInfo doesn't
+        /// return until the query is complete.)
+        ///
+        /// A client can consume any available results before
+        /// the query is completed. See PollInfo.info for details.
+        ///
+        /// A client can poll the updated query status by calling
+        /// PollFlightInfo() with PollInfo.flight_descriptor. A server
+        /// should not respond until the result would be different from last
+        /// time. That way, the client can "long poll" for updates
+        /// without constantly making requests. Clients can set a short timeout
+        /// to avoid blocking calls if desired.
+        ///
+        /// A client can't use PollInfo.flight_descriptor after
+        /// PollInfo.expiration_time passes. A server might not accept the
+        /// retry descriptor anymore and the query may be cancelled.
+        ///
+        /// A client may use the CancelFlightInfo action with
+        /// PollInfo.info to cancel the running query.
+        async fn poll_flight_info(
+            &self,
+            request: tonic::Request<super::FlightDescriptor>,
+        ) -> std::result::Result<tonic::Response<super::PollInfo>, tonic::Status>;
         ///
         /// For a given FlightDescriptor, get the Schema as described in Schema.fbs::Schema
         /// This is used when a consumer needs the Schema of flight stream. Similar to
@@ -1037,6 +1256,53 @@ pub mod flight_service_server {
                     let fut = async move {
                         let inner = inner.0;
                         let method = GetFlightInfoSvc(inner);
+                        let codec = tonic::codec::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/arrow.flight.protocol.FlightService/PollFlightInfo" => {
+                    #[allow(non_camel_case_types)]
+                    struct PollFlightInfoSvc<T: FlightService>(pub Arc<T>);
+                    impl<
+                        T: FlightService,
+                    > tonic::server::UnaryService<super::FlightDescriptor>
+                    for PollFlightInfoSvc<T> {
+                        type Response = super::PollInfo;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::FlightDescriptor>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as FlightService>::poll_flight_info(&inner, request)
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let inner = inner.0;
+                        let method = PollFlightInfoSvc(inner);
                         let codec = tonic::codec::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(
