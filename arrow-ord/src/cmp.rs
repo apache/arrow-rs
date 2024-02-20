@@ -232,12 +232,10 @@ fn process_nested(
         // Process nested data types
         match op {
             Op::Less => {
-                let v = process_ordering(l, r, Ordering::Less, len)?;
-                Ok(Some(v))
+                Ok(Some(process_ordering(l, r, Ordering::Less, len)?))
             }
             Op::Equal => {
-                let v = process_ordering(l, r, Ordering::Equal, len)?;
-                Ok(Some(v))
+                Ok(Some(process_ordering(l, r, Ordering::Equal, len)?))
             }
             _ => Err(ArrowError::NotYetImplemented(format!(
                 "Comparison for {op} is NYI"
