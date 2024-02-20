@@ -168,6 +168,54 @@ pub fn not_distinct(lhs: &dyn Datum, rhs: &dyn Datum) -> Result<BooleanArray, Ar
     compare_op(Op::NotDistinct, lhs, rhs)
 }
 
+fn compare_list(l: &dyn Array, r: &dyn Array) -> Result<bool, ArrowError> {
+    let l_t = l.data_type();
+    let r_t = r.data_type();
+    let l_len = l.len();
+    let r_len = r.len();
+    let min_len = std::cmp::min(l_len, r_len);
+
+    if let (DataType::List(_), DataType::List(_)) = (l_t, r_t) {
+        // Since `compare_op` does not support inconsistent lengths, we compare the
+        // prefix with `compare_op` only, and compare the left if the prefix is equal
+        let l = l.slice(0, min_len);
+        let r = r.slice(0, min_len);
+
+        let lt_res = lt(&l, &r)?;
+        let eq_res = eq(&l, &r)?;
+
+        fn post_process(lt: &BooleanArray, eq: &BooleanArray, r_is_longer: bool) -> bool {
+            for j in 0..lt.len() {
+                if lt.value(j) {
+                    return true;
+                }
+                if !eq.value(j) {
+                    return false;
+                }
+            }
+            r_is_longer
+        }
+
+        Ok(post_process(&lt_res, &eq_res, r_len > l_len))
+    } else {
+        let cmp = build_compare(l, r)?;
+
+        fn post_process(len: usize, cmp: DynComparator, r_is_longer: bool) -> bool {
+            for j in 0..len {
+                let ord = cmp(j, j);
+                if ord == std::cmp::Ordering::Less {
+                    return true;
+                }
+                if ord == std::cmp::Ordering::Greater {
+                    return false;
+                }
+            }
+            r_is_longer
+        }
+        Ok(post_process(min_len, cmp, r_len > l_len))
+    }
+}
+
 fn process_nested(
     l: &dyn Array,
     r: &dyn Array,
@@ -187,55 +235,8 @@ fn process_nested(
                 for i in 0..l.len() {
                     let l = l.value(i);
                     let r = r.value(i);
-                    let l_t = l.data_type();
-                    let r_t = r.data_type();
-                    let l_len = l.len();
-                    let r_len = r.len();
-                    let min_len = std::cmp::min(l_len, r_len);
-
-                    if !l_t.is_nested() && !r_t.is_nested() {
-                        let cmp = build_compare(&l, &r)?;
-
-                        fn post_process(len: usize, cmp: DynComparator, r_is_longer: bool) -> bool {
-                            for j in 0..len {
-                                let ord = cmp(j, j);
-                                if ord == std::cmp::Ordering::Less {
-                                    return true;
-                                }
-                                if ord == std::cmp::Ordering::Greater {
-                                    return false;
-                                }
-                            }
-                            r_is_longer
-                        }
-                        values.append_value(post_process(min_len, cmp, r_len > l_len));
-                    } else {
-                        // Since `compare_op` does not support inconsistent lengths, we compare the
-                        // prefix with `compare_op` only, and compare the left if the prefix is equal
-                        let l = l.slice(0, min_len);
-                        let r = r.slice(0, min_len);
-
-                        let lt_res = lt(&l, &r)?;
-                        let eq_res = eq(&l, &r)?;
-
-                        fn post_process(
-                            lt: &BooleanArray,
-                            eq: &BooleanArray,
-                            r_is_longer: bool,
-                        ) -> bool {
-                            for j in 0..lt.len() {
-                                if lt.value(j) {
-                                    return true;
-                                }
-                                if !eq.value(j) {
-                                    return false;
-                                }
-                            }
-                            r_is_longer
-                        }
-
-                        values.append_value(post_process(&lt_res, &eq_res, r_len > l_len));
-                    }
+                    let v = compare_list(&l, &r)?;
+                    values.append_value(v);
                 }
 
                 let values = values.finish();
