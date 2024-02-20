@@ -33,6 +33,7 @@ use arrow_buffer::bit_util::ceil;
 use arrow_buffer::{BooleanBuffer, MutableBuffer, NullBuffer};
 use arrow_schema::{ArrowError, DataType};
 use arrow_select::take::take;
+use std::cmp::Ordering;
 use std::ops::Not;
 
 use crate::ord::{build_compare, DynComparator};
@@ -168,7 +169,7 @@ pub fn not_distinct(lhs: &dyn Datum, rhs: &dyn Datum) -> Result<BooleanArray, Ar
     compare_op(Op::NotDistinct, lhs, rhs)
 }
 
-fn compare_list(l: &dyn Array, r: &dyn Array) -> Result<bool, ArrowError> {
+fn compare_list(l: &dyn Array, r: &dyn Array) -> Result<Ordering, ArrowError> {
     let l_t = l.data_type();
     let r_t = r.data_type();
     let l_len = l.len();
@@ -178,41 +179,31 @@ fn compare_list(l: &dyn Array, r: &dyn Array) -> Result<bool, ArrowError> {
     if let (DataType::List(_), DataType::List(_)) = (l_t, r_t) {
         // Since `compare_op` does not support inconsistent lengths, we compare the
         // prefix with `compare_op` only, and compare the left if the prefix is equal
-        let l = l.slice(0, min_len);
-        let r = r.slice(0, min_len);
-
-        let lt_res = lt(&l, &r)?;
-        let eq_res = eq(&l, &r)?;
-
-        fn post_process(lt: &BooleanArray, eq: &BooleanArray, r_is_longer: bool) -> bool {
-            for j in 0..lt.len() {
-                if lt.value(j) {
-                    return true;
-                }
-                if !eq.value(j) {
-                    return false;
-                }
+        for i in 0..min_len {
+            let l = l.as_list::<i32>().value(i);
+            let r = r.as_list::<i32>().value(i);
+            let ord = compare_list(&l, &r)?;
+            if ord != Ordering::Equal {
+                return Ok(ord);
             }
-            r_is_longer
         }
-
-        Ok(post_process(&lt_res, &eq_res, r_len > l_len))
     } else {
         let cmp = build_compare(l, r)?;
 
-        fn post_process(len: usize, cmp: DynComparator, r_is_longer: bool) -> bool {
-            for j in 0..len {
-                let ord = cmp(j, j);
-                if ord == std::cmp::Ordering::Less {
-                    return true;
-                }
-                if ord == std::cmp::Ordering::Greater {
-                    return false;
-                }
+        for j in 0..min_len {
+            let ord = cmp(j, j);
+            if ord != Ordering::Equal {
+                return Ok(ord);
             }
-            r_is_longer
         }
-        Ok(post_process(min_len, cmp, r_len > l_len))
+    }
+
+    if l_len < r_len {
+        Ok(Ordering::Less)
+    } else if l_len > r_len {
+        Ok(Ordering::Greater)
+    } else {
+        Ok(Ordering::Equal)
     }
 }
 
@@ -236,7 +227,7 @@ fn process_nested(
                     let l = l.value(i);
                     let r = r.value(i);
                     let v = compare_list(&l, &r)?;
-                    values.append_value(v);
+                    values.append_value(v == Ordering::Less);
                 }
 
                 let values = values.finish();
