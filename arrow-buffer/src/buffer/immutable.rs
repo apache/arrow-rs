@@ -431,7 +431,7 @@ impl<T: ArrowNativeType> FromIterator<T> for Buffer {
             None => MutableBuffer::new(0),
             Some(element) => {
                 let (lower, _) = iterator.size_hint();
-                let mut buffer = MutableBuffer::new(lower.saturating_add(1) * size);
+                let mut buffer = MutableBuffer::new(lower.saturating_add(1).saturating_mul(size));
                 unsafe {
                     std::ptr::write(buffer.as_mut_ptr() as *mut T, element);
                     buffer.set_len(size);
@@ -819,5 +819,12 @@ mod tests {
         let b = Buffer::from(b);
         let b = b.into_vec::<u32>().unwrap();
         assert_eq!(b, &[1, 3, 5]);
+    }
+
+    #[test]
+    #[should_panic(expected = "failed to create layout for MutableBuffer: LayoutError")]
+    fn test_from_iter_overflow() {
+        let iter_len = usize::MAX / std::mem::size_of::<u64>() + 1;
+        let _ = Buffer::from_iter(std::iter::repeat(0_u64).take(iter_len));
     }
 }
