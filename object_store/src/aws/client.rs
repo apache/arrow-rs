@@ -438,6 +438,13 @@ impl S3Client {
             None
         };
 
+        // S3 *requires* DeleteObjects to include a Content-MD5 header:
+        // https://docs.aws.amazon.com/AmazonS3/latest/API/API_DeleteObjects.html
+        // >   "The Content-MD5 request header is required for all Multi-Object Delete requests"
+        // Some platforms, like MinIO, enforce this requirement and fail requests without the header.
+        let md5_digest = md5::compute(&body);
+        builder = builder.header("Content-MD5", BASE64_STANDARD.encode(md5_digest.0));
+
         let response = builder
             .header(CONTENT_TYPE, "application/xml")
             .body(body)
