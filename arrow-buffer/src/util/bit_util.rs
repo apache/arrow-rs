@@ -39,7 +39,12 @@ pub fn round_upto_multiple_of_64(num: usize) -> usize {
 /// be a power of 2.
 pub fn round_upto_power_of_2(num: usize, factor: usize) -> usize {
     debug_assert!(factor > 0 && (factor & (factor - 1)) == 0);
-    (num.saturating_add(factor - 1)) & !(factor - 1)
+    let rounded = (num.saturating_add(factor - 1)) & !(factor - 1);
+    assert!(
+        rounded >= num,
+        "failed to round {num} up to nearest multiple of {factor}",
+    );
+    rounded
 }
 
 /// Returns whether bit at position `i` in `data` is set or not
@@ -117,8 +122,12 @@ mod tests {
         assert_eq!(64, round_upto_multiple_of_64(64));
         assert_eq!(128, round_upto_multiple_of_64(65));
         assert_eq!(192, round_upto_multiple_of_64(129));
-        // TODO: investigate why this is failing
-        // assert_eq!(usize::MAX, round_upto_multiple_of_64(usize::MAX));
+    }
+
+    #[test]
+    #[should_panic(expected = "failed to round 18446744073709551615 up to nearest multiple of 2")]
+    fn test_round_upto_panic() {
+        let _ = round_upto_power_of_2(usize::MAX, 2);
     }
 
     #[test]

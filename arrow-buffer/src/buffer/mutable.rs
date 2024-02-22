@@ -67,11 +67,6 @@ impl MutableBuffer {
     }
 
     /// Allocate a new [MutableBuffer] with initial capacity to be at least `capacity`.
-    ///
-    /// # Panics
-    ///
-    /// If `capacity`, when rounded up to a multiple of 64, is larger than `isize::MAX`
-    /// then this function will panic. Avoid allocating capacities above this limit.
     #[inline]
     pub fn with_capacity(capacity: usize) -> Self {
         let capacity = bit_util::round_upto_multiple_of_64(capacity);
@@ -1019,7 +1014,8 @@ mod tests {
 
     #[test]
     #[should_panic(expected = "failed to create layout for MutableBuffer: LayoutError")]
-    fn test_with_capacity_overflow() {
-        let _ = MutableBuffer::with_capacity(usize::MAX);
+    fn test_with_capacity_panics_above_max_capacity() {
+        let max_capacity = isize::MAX as usize - (isize::MAX as usize % ALIGNMENT);
+        let _ = MutableBuffer::with_capacity(max_capacity + 1);
     }
 }

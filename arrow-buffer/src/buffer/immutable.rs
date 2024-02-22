@@ -822,7 +822,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "failed to create layout for MutableBuffer: LayoutError")]
+    #[should_panic(expected = "failed to round 18446744073709551615 up to nearest multiple of 64")]
     fn test_from_iter_overflow() {
         let iter_len = usize::MAX / std::mem::size_of::<u64>() + 1;
         let _ = Buffer::from_iter(std::iter::repeat(0_u64).take(iter_len));
