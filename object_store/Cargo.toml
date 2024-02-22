@@ -54,6 +54,7 @@ reqwest = { version = "0.11", default-features = false, features = ["rustls-tls-
 ring = { version = "0.17", default-features = false, features = ["std"], optional = true }
 rustls-pemfile = { version = "2.0", default-features = false, features = ["std"], optional = true }
 tokio = { version = "1.25.0", features = ["sync", "macros", "rt", "time", "io-util"] }
+md-5 = { version = "0.10.6", default-features = false, optional = true }
 
 [target.'cfg(target_family="unix")'.dev-dependencies]
 nix = { version = "0.27.1", features = ["fs"] }
@@ -62,7 +63,7 @@ nix = { version = "0.27.1", features = ["fs"] }
 cloud = ["serde", "serde_json", "quick-xml", "hyper", "reqwest", "reqwest/json", "reqwest/stream", "chrono/serde", "base64", "rand", "ring"]
 azure = ["cloud"]
 gcp = ["cloud", "rustls-pemfile"]
-aws = ["cloud"]
+aws = ["cloud", "md-5"]
 http = ["cloud"]
 tls-webpki-roots = ["reqwest?/rustls-tls-webpki-roots"]
 

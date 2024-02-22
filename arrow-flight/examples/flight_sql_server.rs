@@ -249,6 +249,8 @@ impl FlightSqlService for FlightSqlServiceImpl {
         let endpoint = FlightEndpoint {
             ticket: Some(ticket),
             location: vec![loc],
+            expiration_time: None,
+            app_metadata: vec![].into(),
         };
         let info = FlightInfo::new()
             .try_with_schema(&schema)

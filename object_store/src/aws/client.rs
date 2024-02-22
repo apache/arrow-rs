@@ -43,6 +43,7 @@ use bytes::{Buf, Bytes};
 use hyper::http;
 use hyper::http::HeaderName;
 use itertools::Itertools;
+use md5::{Digest, Md5};
 use percent_encoding::{utf8_percent_encode, PercentEncode};
 use quick_xml::events::{self as xml_events};
 use reqwest::{
@@ -437,6 +438,14 @@ impl S3Client {
         } else {
             None
         };
+
+        // S3 *requires* DeleteObjects to include a Content-MD5 header:
+        // https://docs.aws.amazon.com/AmazonS3/latest/API/API_DeleteObjects.html
+        // >   "The Content-MD5 request header is required for all Multi-Object Delete requests"
+        // Some platforms, like MinIO, enforce this requirement and fail requests without the header.
+        let mut hasher = Md5::new();
+        hasher.update(&body);
+        builder = builder.header("Content-MD5", BASE64_STANDARD.encode(hasher.finalize()));
 
         let response = builder
             .header(CONTENT_TYPE, "application/xml")

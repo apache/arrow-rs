@@ -21,7 +21,7 @@ use std::sync::Arc;
 use arrow_flight::{
     flight_service_server::FlightService, flight_service_server::FlightServiceServer, Action,
     ActionType, BasicAuth, Criteria, Empty, FlightData, FlightDescriptor, FlightInfo,
-    HandshakeRequest, HandshakeResponse, PutResult, SchemaResult, Ticket,
+    HandshakeRequest, HandshakeResponse, PollInfo, PutResult, SchemaResult, Ticket,
 };
 use futures::{channel::mpsc, sink::SinkExt, Stream, StreamExt};
 use tokio::sync::Mutex;
@@ -174,6 +174,14 @@ impl FlightService for AuthBasicProtoScenarioImpl {
         &self,
         request: Request<FlightDescriptor>,
     ) -> Result<Response<FlightInfo>, Status> {
+        self.check_auth(request.metadata()).await?;
+        Err(Status::unimplemented("Not yet implemented"))
+    }
+
+    async fn poll_flight_info(
+        &self,
+        request: Request<FlightDescriptor>,
+    ) -> Result<Response<PollInfo>, Status> {
         self.check_auth(request.metadata()).await?;
         Err(Status::unimplemented("Not yet implemented"))
     }

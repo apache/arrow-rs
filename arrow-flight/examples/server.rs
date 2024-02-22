@@ -22,7 +22,7 @@ use tonic::{Request, Response, Status, Streaming};
 use arrow_flight::{
     flight_service_server::FlightService, flight_service_server::FlightServiceServer, Action,
     ActionType, Criteria, Empty, FlightData, FlightDescriptor, FlightInfo, HandshakeRequest,
-    HandshakeResponse, PutResult, SchemaResult, Ticket,
+    HandshakeResponse, PollInfo, PutResult, SchemaResult, Ticket,
 };
 
 #[derive(Clone)]
@@ -57,6 +57,13 @@ impl FlightService for FlightServiceImpl {
         _request: Request<FlightDescriptor>,
     ) -> Result<Response<FlightInfo>, Status> {
         Err(Status::unimplemented("Implement get_flight_info"))
+    }
+
+    async fn poll_flight_info(
+        &self,
+        _request: Request<FlightDescriptor>,
+    ) -> Result<Response<PollInfo>, Status> {
+        Err(Status::unimplemented("Implement poll_flight_info"))
     }
 
     async fn get_schema(
