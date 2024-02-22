@@ -1111,6 +1111,12 @@ impl S3EncryptionHeaders {
     }
 }
 
+impl From<S3EncryptionHeaders> for HeaderMap {
+    fn from(headers: S3EncryptionHeaders) -> Self {
+        headers.0
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

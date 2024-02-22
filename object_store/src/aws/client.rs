@@ -331,7 +331,7 @@ impl S3Client {
         let url = self.config.path_url(path);
         let mut builder = self.client.request(Method::PUT, url);
         if with_encryption_headers {
-            builder = builder.headers(self.config.encryption_headers.0.clone());
+            builder = builder.headers(self.config.encryption_headers.clone().into());
         }
         let mut payload_sha256 = None;
 
@@ -492,7 +492,7 @@ impl S3Client {
             .client
             .request(Method::PUT, url)
             .header("x-amz-copy-source", source)
-            .headers(self.config.encryption_headers.0.clone());
+            .headers(self.config.encryption_headers.clone().into());
 
         Request {
             builder,
@@ -510,7 +510,7 @@ impl S3Client {
         let response = self
             .client
             .request(Method::POST, url)
-            .headers(self.config.encryption_headers.0.clone())
+            .headers(self.config.encryption_headers.clone().into())
             .with_aws_sigv4(credential.authorizer(), None)
             .send_retry(&self.config.retry_config)
             .await

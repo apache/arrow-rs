@@ -376,6 +376,7 @@ mod tests {
     use super::*;
     use crate::{client::get::GetClient, tests::*};
     use bytes::Bytes;
+    use hyper::HeaderMap;
     use tokio::io::AsyncWriteExt;
 
     const NON_EXISTENT_NAME: &str = "nonexistentname";
@@ -523,15 +524,14 @@ mod tests {
 
         let data = Bytes::from(vec![3u8; 1024]);
 
-        let encryption_headers = &store.client.config.encryption_headers;
-        let expected_encryption = if let Some(encryption_type) =
-            encryption_headers.0.get("x-amz-server-side-encryption")
-        {
-            encryption_type
-        } else {
-            eprintln!("Skipping S3 encryption test - encryption not configured");
-            return;
-        };
+        let encryption_headers: HeaderMap = store.client.config.encryption_headers.clone().into();
+        let expected_encryption =
+            if let Some(encryption_type) = encryption_headers.get("x-amz-server-side-encryption") {
+                encryption_type
+            } else {
+                eprintln!("Skipping S3 encryption test - encryption not configured");
+                return;
+            };
 
         let locations = [
             Path::from("test-encryption-1"),
