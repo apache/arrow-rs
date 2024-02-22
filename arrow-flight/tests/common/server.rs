@@ -26,7 +26,7 @@ use arrow_flight::{
     encode::FlightDataEncoderBuilder,
     flight_service_server::{FlightService, FlightServiceServer},
     Action, ActionType, Criteria, Empty, FlightData, FlightDescriptor, FlightInfo,
-    HandshakeRequest, HandshakeResponse, PutResult, SchemaAsIpc, SchemaResult, Ticket,
+    HandshakeRequest, HandshakeResponse, PollInfo, PutResult, SchemaAsIpc, SchemaResult, Ticket,
 };
 
 #[derive(Debug, Clone)]
@@ -54,11 +54,10 @@ impl TestFlightServer {
     /// Specify the response returned from the next call to handshake
     pub fn set_handshake_response(&self, response: Result<HandshakeResponse, Status>) {
         let mut state = self.state.lock().expect("mutex not poisoned");
-
         state.handshake_response.replace(response);
     }
 
-    /// Take and return last handshake request send to the server,
+    /// Take and return last handshake request sent to the server,
     pub fn take_handshake_request(&self) -> Option<HandshakeRequest> {
         self.state
             .lock()
@@ -67,19 +66,33 @@ impl TestFlightServer {
             .take()
     }
 
-    /// Specify the response returned from the next call to handshake
+    /// Specify the response returned from the next call to get_flight_info
     pub fn set_get_flight_info_response(&self, response: Result<FlightInfo, Status>) {
         let mut state = self.state.lock().expect("mutex not poisoned");
-
         state.get_flight_info_response.replace(response);
     }
 
-    /// Take and return last get_flight_info request send to the server,
+    /// Take and return last get_flight_info request sent to the server,
     pub fn take_get_flight_info_request(&self) -> Option<FlightDescriptor> {
         self.state
             .lock()
             .expect("mutex not poisoned")
             .get_flight_info_request
+            .take()
+    }
+
+    /// Specify the response returned from the next call to poll_flight_info
+    pub fn set_poll_flight_info_response(&self, response: Result<PollInfo, Status>) {
+        let mut state = self.state.lock().expect("mutex not poisoned");
+        state.poll_flight_info_response.replace(response);
+    }
+
+    /// Take and return last poll_flight_info request sent to the server,
+    pub fn take_poll_flight_info_request(&self) -> Option<FlightDescriptor> {
+        self.state
+            .lock()
+            .expect("mutex not poisoned")
+            .poll_flight_info_request
             .take()
     }
 
@@ -104,7 +117,7 @@ impl TestFlightServer {
         state.do_put_response.replace(response);
     }
 
-    /// Take and return last do_put request send to the server,
+    /// Take and return last do_put request sent to the server,
     pub fn take_do_put_request(&self) -> Option<Vec<FlightData>> {
         self.state
             .lock()
@@ -214,8 +227,12 @@ struct State {
     pub handshake_response: Option<Result<HandshakeResponse, Status>>,
     /// The last `get_flight_info` request received
     pub get_flight_info_request: Option<FlightDescriptor>,
-    /// the next response  to return from `get_flight_info`
+    /// The next response to return from `get_flight_info`
     pub get_flight_info_response: Option<Result<FlightInfo, Status>>,
+    /// The last `poll_flight_info` request received
+    pub poll_flight_info_request: Option<FlightDescriptor>,
+    /// The next response to return from `poll_flight_info`
+    pub poll_flight_info_response: Option<Result<PollInfo, Status>>,
     /// The last do_get request received
     pub do_get_request: Option<Ticket>,
     /// The next response returned from `do_get`
@@ -315,6 +332,20 @@ impl FlightService for TestFlightServer {
             .get_flight_info_response
             .take()
             .unwrap_or_else(|| Err(Status::internal("No get_flight_info response configured")))?;
+        Ok(Response::new(response))
+    }
+
+    async fn poll_flight_info(
+        &self,
+        request: Request<FlightDescriptor>,
+    ) -> Result<Response<PollInfo>, Status> {
+        self.save_metadata(&request);
+        let mut state = self.state.lock().expect("mutex not poisoned");
+        state.poll_flight_info_request = Some(request.into_inner());
+        let response = state
+            .poll_flight_info_response
+            .take()
+            .unwrap_or_else(|| Err(Status::internal("No poll_flight_info response configured")))?;
         Ok(Response::new(response))
     }
 

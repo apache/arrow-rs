@@ -391,6 +391,7 @@ impl FlightSqlServiceClient<Channel> {
 
     /// Explicitly shut down and clean up the client.
     pub async fn close(&mut self) -> Result<(), ArrowError> {
+        // TODO: consume self instead of &mut self to explicitly prevent reuse?
         Ok(())
     }
 

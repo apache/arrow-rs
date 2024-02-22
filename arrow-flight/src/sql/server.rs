@@ -36,9 +36,9 @@ use super::{
     DoPutUpdateResult, ProstMessageExt, SqlInfo, TicketStatementQuery,
 };
 use crate::{
-    flight_service_server::FlightService, Action, ActionType, Criteria, Empty, FlightData,
-    FlightDescriptor, FlightInfo, HandshakeRequest, HandshakeResponse, PutResult, SchemaResult,
-    Ticket,
+    flight_service_server::FlightService, gen::PollInfo, Action, ActionType, Criteria, Empty,
+    FlightData, FlightDescriptor, FlightInfo, HandshakeRequest, HandshakeResponse, PutResult,
+    SchemaResult, Ticket,
 };
 
 pub(crate) static CREATE_PREPARED_STATEMENT: &str = "CreatePreparedStatement";
@@ -630,6 +630,13 @@ where
             }
             cmd => self.get_flight_info_fallback(cmd, request).await,
         }
+    }
+
+    async fn poll_flight_info(
+        &self,
+        _request: Request<FlightDescriptor>,
+    ) -> Result<Response<PollInfo>, Status> {
+        Err(Status::unimplemented("Not yet implemented"))
     }
 
     async fn get_schema(
