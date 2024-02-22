@@ -483,7 +483,7 @@ fn dangling_ptr() -> NonNull<u8> {
     #[cfg(miri)]
     {
         // Since miri implies a nightly rust version we can use the unstable strict_provenance feature
-        unsafe { NonNull::new_unchecked(std::ptr::invalid_mut(ALIGNMENT)) }
+        unsafe { NonNull::new_unchecked(std::ptr::without_provenance_mut(ALIGNMENT)) }
     }
     #[cfg(not(miri))]
     {
