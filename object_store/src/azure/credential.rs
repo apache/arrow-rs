@@ -127,6 +127,10 @@ pub enum AzureCredential {
     ///
     /// <https://learn.microsoft.com/en-us/rest/api/storageservices/authorize-with-azure-active-directory>
     BearerToken(String),
+    /// No authorization (anonymous read access)
+    ///
+    /// <https://learn.microsoft.com/en-us/azure/storage/blobs/anonymous-read-access-configure>
+    None
 }
 
 /// A list of known Azure authority hosts
@@ -243,6 +247,7 @@ impl<'a> AzureAuthorizer<'a> {
                     .query_pairs_mut()
                     .extend_pairs(query_pairs);
             }
+            AzureCredential::None => {}
         }
     }
 }
