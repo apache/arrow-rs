@@ -198,7 +198,38 @@ fn compare_op(op: Op, lhs: &dyn Datum, rhs: &dyn Datum) -> Result<BooleanArray, 
     let r = r_v.map(|x| x.values().as_ref()).unwrap_or(r);
     let r_t = r.data_type();
 
-    if l_t != r_t || l_t.is_nested() {
+    if l_t != r_t {
+        return Err(ArrowError::InvalidArgumentError(format!(
+            "Invalid comparison operation: {l_t} {op} {r_t}"
+        )));
+    }
+
+    if let Struct(_) = l_t {
+        let l = l.as_struct();
+        let r = r.as_struct();
+        assert_eq!(l.num_columns(), r.num_columns());
+        match op {
+            Op::Equal => {
+                let mut res = vec![true; len];
+                for i in 0..l.num_columns() {
+                    let col_l = l.column(i);
+                    let col_r = r.column(i);
+                    let eq_rows = compare_op(op, col_l, col_r)?;
+                    for (j, item) in res.iter_mut().enumerate().take(len) {
+                        *item &= eq_rows.value(j);
+                    }
+                }
+                return Ok(BooleanArray::from(res));
+            }
+            _ => {
+                return Err(ArrowError::NotYetImplemented(format!(
+                    "Op for struct is not yet implemented: {op}"
+                )));
+            }
+        }
+    }
+
+    if l_t.is_nested() {
         return Err(ArrowError::InvalidArgumentError(format!(
             "Invalid comparison operation: {l_t} {op} {r_t}"
         )));
@@ -544,9 +575,69 @@ impl<'a> ArrayOrd for &'a FixedSizeBinaryArray {
 mod tests {
     use std::sync::Arc;
 
-    use arrow_array::{DictionaryArray, Int32Array, Scalar, StringArray};
+    use arrow_array::{
+        DictionaryArray, Float32Array, Int32Array, Scalar, StringArray, StructArray,
+    };
 
     use super::*;
+
+    #[test]
+    fn test_struct_eq() {
+        let s1 = StructArray::try_from(vec![
+            (
+                "a",
+                Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5])) as Arc<dyn Array>,
+            ),
+            (
+                "b",
+                Arc::new(Float32Array::from(vec![1.0, 2.0, 3.0, 4.0, 5.0])) as Arc<dyn Array>,
+            ),
+        ])
+        .unwrap();
+        let s2 = StructArray::try_from(vec![
+            (
+                "a",
+                Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5])) as Arc<dyn Array>,
+            ),
+            (
+                "b",
+                Arc::new(Float32Array::from(vec![1.0, 2.0, 3.0, 4.0, 5.0])) as Arc<dyn Array>,
+            ),
+        ])
+        .unwrap();
+
+        let res = eq(&s1, &s2).unwrap();
+        assert_eq!(res, BooleanArray::from(vec![true; 5]));
+
+        let s1 = StructArray::try_from(vec![
+            (
+                "a",
+                Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5])) as Arc<dyn Array>,
+            ),
+            (
+                "b",
+                Arc::new(Float32Array::from(vec![1.0, 2.0, 3.0, 4.0, 5.0])) as Arc<dyn Array>,
+            ),
+        ])
+        .unwrap();
+        let s2 = StructArray::try_from(vec![
+            (
+                "a",
+                Arc::new(Int32Array::from(vec![10, 20, 30, 4, 5])) as Arc<dyn Array>,
+            ),
+            (
+                "b",
+                Arc::new(Float32Array::from(vec![1.0, 2.0, 3.0, 4.0, 5.0])) as Arc<dyn Array>,
+            ),
+        ])
+        .unwrap();
+
+        let res = eq(&s1, &s2).unwrap();
+        assert_eq!(
+            res,
+            BooleanArray::from(vec![false, false, false, true, true])
+        );
+    }
 
     #[test]
     fn test_null_dict() {
