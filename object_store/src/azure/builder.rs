@@ -409,7 +409,9 @@ impl FromStr for AzureConfigKey {
             }
             "azure_storage_token" | "bearer_token" | "token" => Ok(Self::Token),
             "azure_storage_use_emulator" | "use_emulator" => Ok(Self::UseEmulator),
-            "azure_disable_emulator_key" | "object_store_disable_emulator_key" | "disable_emulator_key" => Ok(Self::DisableEmulatorKey),
+            "azure_disable_emulator_key"
+            | "object_store_disable_emulator_key"
+            | "disable_emulator_key" => Ok(Self::DisableEmulatorKey),
             "azure_storage_endpoint" | "azure_endpoint" | "endpoint" => Ok(Self::Endpoint),
             "azure_msi_endpoint"
             | "azure_identity_endpoint"

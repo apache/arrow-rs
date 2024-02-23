@@ -130,7 +130,7 @@ pub enum AzureCredential {
     /// No authorization (anonymous read access)
     ///
     /// <https://learn.microsoft.com/en-us/azure/storage/blobs/anonymous-read-access-configure>
-    None
+    None,
 }
 
 /// A list of known Azure authority hosts
@@ -916,12 +916,14 @@ impl CredentialProvider for AzureCliCredential {
 mod tests {
     use futures::executor::block_on;
     use hyper::body::to_bytes;
-    use hyper::{Body, Response};
+    use hyper::{Body, Response, StatusCode};
     use reqwest::{Client, Method};
     use tempfile::NamedTempFile;
 
     use super::*;
+    use crate::azure::MicrosoftAzureBuilder;
     use crate::client::mock_server::MockServer;
+    use crate::{ObjectStore, Path};
 
     #[tokio::test]
     async fn test_managed_identity() {
@@ -1029,5 +1031,35 @@ mod tests {
             token.token.as_ref(),
             &AzureCredential::BearerToken("TOKEN".into())
         );
+    }
+
+    #[tokio::test]
+    async fn test_no_credentials() {
+        let server = MockServer::new();
+
+        let endpoint = server.url();
+        let store = MicrosoftAzureBuilder::new()
+            .with_account("test")
+            .with_container_name("test")
+            .with_endpoint(endpoint.to_string())
+            .with_skip_signature(true)
+            .build()
+            .unwrap();
+
+        let client = Client::new();
+        let retry_config = RetryConfig::default();
+
+        server.push_fn(|req| {
+            assert_eq!(req.method(), &Method::GET);
+            assert!(req.headers().get("authorization").is_none());
+            Response::builder()
+                .status(StatusCode::NOT_FOUND)
+                .body(Body::from("not found"))
+                .unwrap()
+        });
+
+        let path = Path::from("file.txt");
+        let res = store.get(&path).await;
+        assert!(res.is_err());
     }
 }
