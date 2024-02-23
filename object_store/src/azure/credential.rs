@@ -1046,9 +1046,6 @@ mod tests {
             .build()
             .unwrap();
 
-        let client = Client::new();
-        let retry_config = RetryConfig::default();
-
         server.push_fn(|req| {
             assert_eq!(req.method(), &Method::GET);
             assert!(req.headers().get("authorization").is_none());
