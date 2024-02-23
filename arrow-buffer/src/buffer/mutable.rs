@@ -61,12 +61,19 @@ pub struct MutableBuffer {
 
 impl MutableBuffer {
     /// Allocate a new [MutableBuffer] with initial capacity to be at least `capacity`.
+    ///
+    /// See [`MutableBuffer::with_capacity`].
     #[inline]
     pub fn new(capacity: usize) -> Self {
         Self::with_capacity(capacity)
     }
 
     /// Allocate a new [MutableBuffer] with initial capacity to be at least `capacity`.
+    ///
+    /// # Panics
+    ///
+    /// If `capacity`, when rounded up to the nearest multiple of [`ALIGNMENT`], is greater
+    /// then `isize::MAX`, then this function will panic.
     #[inline]
     pub fn with_capacity(capacity: usize) -> Self {
         let capacity = bit_util::round_upto_multiple_of_64(capacity);
