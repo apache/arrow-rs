@@ -36,6 +36,7 @@ use snafu::{ResultExt, Snafu};
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::fmt::Debug;
+use std::ops::Deref;
 use std::process::Command;
 use std::str;
 use std::sync::Arc;
@@ -127,10 +128,6 @@ pub enum AzureCredential {
     ///
     /// <https://learn.microsoft.com/en-us/rest/api/storageservices/authorize-with-azure-active-directory>
     BearerToken(String),
-    /// No authorization (anonymous read access)
-    ///
-    /// <https://learn.microsoft.com/en-us/azure/storage/blobs/anonymous-read-access-configure>
-    None,
 }
 
 /// A list of known Azure authority hosts
@@ -193,13 +190,13 @@ impl AzureSigner {
 /// Authorize a [`Request`] with an [`AzureAuthorizer`]
 #[derive(Debug)]
 pub struct AzureAuthorizer<'a> {
-    credential: &'a AzureCredential,
+    credential: Option<&'a AzureCredential>,
     account: &'a str,
 }
 
 impl<'a> AzureAuthorizer<'a> {
     /// Create a new [`AzureAuthorizer`]
-    pub fn new(credential: &'a AzureCredential, account: &'a str) -> Self {
+    pub fn new(credential: Option<&'a AzureCredential>, account: &'a str) -> Self {
         AzureAuthorizer {
             credential,
             account,
@@ -219,7 +216,7 @@ impl<'a> AzureAuthorizer<'a> {
             .insert(&VERSION, AZURE_VERSION.clone());
 
         match self.credential {
-            AzureCredential::AccessKey(key) => {
+            Some(AzureCredential::AccessKey(key)) => {
                 let signature = generate_authorization(
                     request.headers(),
                     request.url(),
@@ -235,19 +232,19 @@ impl<'a> AzureAuthorizer<'a> {
                     HeaderValue::from_str(signature.as_str()).unwrap(),
                 );
             }
-            AzureCredential::BearerToken(token) => {
+            Some(AzureCredential::BearerToken(token)) => {
                 request.headers_mut().append(
                     AUTHORIZATION,
                     HeaderValue::from_str(format!("Bearer {}", token).as_str()).unwrap(),
                 );
             }
-            AzureCredential::SASToken(query_pairs) => {
+            Some(AzureCredential::SASToken(query_pairs)) => {
                 request
                     .url_mut()
                     .query_pairs_mut()
                     .extend_pairs(query_pairs);
             }
-            AzureCredential::None => {}
+            None => (),
         }
     }
 }
@@ -255,15 +252,23 @@ impl<'a> AzureAuthorizer<'a> {
 pub(crate) trait CredentialExt {
     /// Apply authorization to requests against azure storage accounts
     /// <https://docs.microsoft.com/en-us/rest/api/storageservices/authorize-requests-to-azure-storage>
-    fn with_azure_authorization(self, credential: &AzureCredential, account: &str) -> Self;
+    fn with_azure_authorization(
+        self,
+        credential: &Option<impl Deref<Target = AzureCredential>>,
+        account: &str,
+    ) -> Self;
 }
 
 impl CredentialExt for RequestBuilder {
-    fn with_azure_authorization(self, credential: &AzureCredential, account: &str) -> Self {
+    fn with_azure_authorization(
+        self,
+        credential: &Option<impl Deref<Target = AzureCredential>>,
+        account: &str,
+    ) -> Self {
         let (client, request) = self.build_split();
         let mut request = request.expect("request valid");
 
-        AzureAuthorizer::new(credential, account).authorize(&mut request);
+        AzureAuthorizer::new(credential.as_deref(), account).authorize(&mut request);
 
         Self::from_parts(client, request)
     }
@@ -1041,6 +1046,8 @@ mod tests {
         let store = MicrosoftAzureBuilder::new()
             .with_account("test")
             .with_container_name("test")
+            .with_allow_http(true)
+            .with_bearer_token_authorization("token")
             .with_endpoint(endpoint.to_string())
             .with_skip_signature(true)
             .build()
@@ -1048,7 +1055,7 @@ mod tests {
 
         server.push_fn(|req| {
             assert_eq!(req.method(), &Method::GET);
-            assert!(req.headers().get("authorization").is_none());
+            assert!(req.headers().get("Authorization").is_none());
             Response::builder()
                 .status(StatusCode::NOT_FOUND)
                 .body(Body::from("not found"))
@@ -1056,7 +1063,11 @@ mod tests {
         });
 
         let path = Path::from("file.txt");
-        let res = store.get(&path).await;
-        assert!(res.is_err());
+        match store.get(&path).await {
+            Err(crate::Error::NotFound { .. }) => {}
+            _ => {
+                panic!("unexpected response");
+            }
+        }
     }
 }

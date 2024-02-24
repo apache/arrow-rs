@@ -151,8 +151,6 @@ pub struct MicrosoftAzureBuilder {
     url: Option<String>,
     /// When set to true, azurite storage emulator has to be used
     use_emulator: ConfigValue<bool>,
-    /// When set to true, the emulator storage account key will not be used by default
-    disable_emulator_key: ConfigValue<bool>,
     /// Storage endpoint
     endpoint: Option<String>,
     /// Msi endpoint for acquiring managed identity token
@@ -268,14 +266,6 @@ pub enum AzureConfigKey {
     /// - `use_emulator`
     UseEmulator,
 
-    /// Don't use the default key if credentials are missing when using the azurite storage emulator
-    ///
-    /// Supported keys:
-    /// - `azure_disable_emulator_key`
-    /// - `object_store_disable_emulator_key`
-    /// - `disable_emulator_key`
-    DisableEmulatorKey,
-
     /// Override the endpoint used to communicate with blob storage
     ///
     /// Supported keys:
@@ -366,7 +356,6 @@ impl AsRef<str> for AzureConfigKey {
             Self::SasKey => "azure_storage_sas_key",
             Self::Token => "azure_storage_token",
             Self::UseEmulator => "azure_storage_use_emulator",
-            Self::DisableEmulatorKey => "azure_disable_emulator_key",
             Self::UseFabricEndpoint => "azure_use_fabric_endpoint",
             Self::Endpoint => "azure_storage_endpoint",
             Self::MsiEndpoint => "azure_msi_endpoint",
@@ -409,9 +398,6 @@ impl FromStr for AzureConfigKey {
             }
             "azure_storage_token" | "bearer_token" | "token" => Ok(Self::Token),
             "azure_storage_use_emulator" | "use_emulator" => Ok(Self::UseEmulator),
-            "azure_disable_emulator_key"
-            | "object_store_disable_emulator_key"
-            | "disable_emulator_key" => Ok(Self::DisableEmulatorKey),
             "azure_storage_endpoint" | "azure_endpoint" | "endpoint" => Ok(Self::Endpoint),
             "azure_msi_endpoint"
             | "azure_identity_endpoint"
@@ -537,7 +523,6 @@ impl MicrosoftAzureBuilder {
             AzureConfigKey::UseAzureCli => self.use_azure_cli.parse(value),
             AzureConfigKey::SkipSignature => self.skip_signature.parse(value),
             AzureConfigKey::UseEmulator => self.use_emulator.parse(value),
-            AzureConfigKey::DisableEmulatorKey => self.disable_emulator_key.parse(value),
             AzureConfigKey::Endpoint => self.endpoint = Some(value.into()),
             AzureConfigKey::UseFabricEndpoint => self.use_fabric_endpoint.parse(value),
             AzureConfigKey::Client(key) => {
@@ -570,7 +555,6 @@ impl MicrosoftAzureBuilder {
             AzureConfigKey::SasKey => self.sas_key.clone(),
             AzureConfigKey::Token => self.bearer_token.clone(),
             AzureConfigKey::UseEmulator => Some(self.use_emulator.to_string()),
-            AzureConfigKey::DisableEmulatorKey => Some(self.disable_emulator_key.to_string()),
             AzureConfigKey::UseFabricEndpoint => Some(self.use_fabric_endpoint.to_string()),
             AzureConfigKey::Endpoint => self.endpoint.clone(),
             AzureConfigKey::MsiEndpoint => self.msi_endpoint.clone(),
@@ -717,12 +701,6 @@ impl MicrosoftAzureBuilder {
         self
     }
 
-    /// Don't use the default key if credentials are missing when using the azurite storage emulator
-    pub fn with_disable_emulator_key(mut self, disable_emulator_key: bool) -> Self {
-        self.disable_emulator_key = disable_emulator_key.into();
-        self
-    }
-
     /// Override the endpoint used to communicate with blob storage
     ///
     /// Defaults to `https://{account}.blob.core.windows.net`
@@ -860,8 +838,6 @@ impl MicrosoftAzureBuilder {
                 AzureCredential::SASToken(query_pairs)
             } else if let Some(sas) = self.sas_key {
                 AzureCredential::SASToken(split_sas(&sas)?)
-            } else if self.disable_emulator_key.get()? {
-                AzureCredential::None
             } else {
                 AzureCredential::AccessKey(AzureAccessKey::try_new(EMULATOR_ACCOUNT_KEY)?)
             };
@@ -883,9 +859,7 @@ impl MicrosoftAzureBuilder {
             let url =
                 Url::parse(&account_url).context(UnableToParseUrlSnafu { url: account_url })?;
 
-            let credential = if self.skip_signature.get()? {
-                static_creds(AzureCredential::None)
-            } else if let Some(credential) = self.credentials {
+            let credential = if let Some(credential) = self.credentials {
                 credential
             } else if let Some(bearer_token) = self.bearer_token {
                 static_creds(AzureCredential::BearerToken(bearer_token))
@@ -945,6 +919,7 @@ impl MicrosoftAzureBuilder {
         let config = AzureConfig {
             account,
             is_emulator,
+            skip_signature: self.skip_signature.get()?,
             container,
             disable_tagging: self.disable_tagging.get()?,
             retry_config: self.retry_config,
