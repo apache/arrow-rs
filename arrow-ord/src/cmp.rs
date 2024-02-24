@@ -209,17 +209,14 @@ fn compare_op(op: Op, lhs: &dyn Datum, rhs: &dyn Datum) -> Result<BooleanArray, 
         let r = r.as_struct();
         assert_eq!(l.num_columns(), r.num_columns());
 
-        #[allow(clippy::manual_try_fold)]
         match op {
             Op::Equal => {
-                return (0..l.num_columns()).fold(
-                    Ok(BooleanArray::new(BooleanBuffer::new_set(len), None)),
+                return (0..l.num_columns()).try_fold(
+                    BooleanArray::new(BooleanBuffer::new_set(len), None),
                     |res, i| {
-                        let res = res?;
                         let col_l = l.column(i);
                         let col_r = r.column(i);
                         let eq_rows = compare_op(op, col_l, col_r)?;
-
                         let nulls = NullBuffer::union(res.nulls(), eq_rows.nulls());
                         let vals = res.values() & eq_rows.values();
                         Ok(BooleanArray::new(vals, nulls))
