@@ -115,8 +115,8 @@ pub(crate) enum Error {
     #[snafu(display("Generating SAS keys with SAS tokens auth is not supported"))]
     SASforSASNotSupported,
 
-    #[snafu(display("Generating SAS keys without providing credentials is not supported"))]
-    SASwithMissingCredentials,
+    #[snafu(display("Generating SAS keys while skipping signatures is not supported"))]
+    SASwithSkipSignature,
 }
 
 impl From<Error> for crate::Error {
@@ -416,7 +416,7 @@ impl AzureClient {
                 signed_expiry,
                 None,
             )),
-            None => Err(Error::SASwithMissingCredentials.into()),
+            None => Err(Error::SASwithSkipSignature.into()),
             _ => Err(Error::SASforSASNotSupported.into()),
         }
     }
