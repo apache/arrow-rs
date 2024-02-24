@@ -39,7 +39,9 @@ pub fn round_upto_multiple_of_64(num: usize) -> usize {
 /// be a power of 2.
 pub fn round_upto_power_of_2(num: usize, factor: usize) -> usize {
     debug_assert!(factor > 0 && (factor & (factor - 1)) == 0);
-    (num + (factor - 1)) & !(factor - 1)
+    num.checked_add(factor - 1)
+        .expect("failed to round to next highest power of 2")
+        & !(factor - 1)
 }
 
 /// Returns whether bit at position `i` in `data` is set or not
@@ -117,6 +119,12 @@ mod tests {
         assert_eq!(64, round_upto_multiple_of_64(64));
         assert_eq!(128, round_upto_multiple_of_64(65));
         assert_eq!(192, round_upto_multiple_of_64(129));
+    }
+
+    #[test]
+    #[should_panic(expected = "failed to round to next highest power of 2")]
+    fn test_round_upto_panic() {
+        let _ = round_upto_power_of_2(usize::MAX, 2);
     }
 
     #[test]
