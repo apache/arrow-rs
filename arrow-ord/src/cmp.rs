@@ -208,10 +208,12 @@ fn compare_op(op: Op, lhs: &dyn Datum, rhs: &dyn Datum) -> Result<BooleanArray, 
         let l = l.as_struct();
         let r = r.as_struct();
         assert_eq!(l.num_columns(), r.num_columns());
+
+        #[allow(clippy::manual_try_fold)]
         match op {
             Op::Equal => {
                 return (0..l.num_columns()).fold(
-                    Ok(BooleanArray::from(vec![true; len])),
+                    Ok(BooleanArray::new(BooleanBuffer::new_set(len), None)),
                     |res, i| {
                         let res = res?;
                         let col_l = l.column(i);
