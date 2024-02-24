@@ -211,7 +211,7 @@ fn compare_op(op: Op, lhs: &dyn Datum, rhs: &dyn Datum) -> Result<BooleanArray, 
 
         match op {
             Op::Equal => {
-                return (0..l.num_columns()).try_fold(
+                let cmp_res = (0..l.num_columns()).try_fold(
                     BooleanArray::new(BooleanBuffer::new_set(len), None),
                     |res, i| {
                         let col_l = l.column(i);
@@ -219,9 +219,29 @@ fn compare_op(op: Op, lhs: &dyn Datum, rhs: &dyn Datum) -> Result<BooleanArray, 
                         let eq_rows = compare_op(op, col_l, col_r)?;
                         let nulls = NullBuffer::union(res.nulls(), eq_rows.nulls());
                         let vals = res.values() & eq_rows.values();
-                        Ok(BooleanArray::new(vals, nulls))
+                        Ok::<BooleanArray, ArrowError>(BooleanArray::new(vals, nulls))
                     },
-                )
+                )?;
+
+                // null handling
+                // if both null, then true
+                // if one is null, then false
+                // else compare the values
+                let bools: Vec<bool> = (0..l.len())
+                    .map(|i| {
+                        let is_l_null = l.is_null(i);
+                        let is_r_null = r.is_null(i);
+                        if is_l_null && is_r_null {
+                            true
+                        } else if !is_l_null && !is_r_null {
+                            cmp_res.value(i)
+                        } else {
+                            false
+                        }
+                    })
+                    .collect();
+
+                return Ok(BooleanArray::from(bools));
             }
             _ => {
                 return Err(ArrowError::NotYetImplemented(format!(
@@ -580,6 +600,8 @@ mod tests {
     use arrow_array::{
         DictionaryArray, Float32Array, Int32Array, Scalar, StringArray, StructArray,
     };
+    use arrow_buffer::Buffer;
+    use arrow_schema::{DataType, Field};
 
     use super::*;
 
@@ -639,6 +661,48 @@ mod tests {
             res,
             BooleanArray::from(vec![false, false, false, true, true])
         );
+    }
+
+    #[test]
+    fn test_struct_eq_with_nulls() {
+        let field_a = Arc::new(Field::new("a", DataType::Int32, true));
+        let field_b = Arc::new(Field::new("b", DataType::Float32, true));
+
+        let s1 = StructArray::from((
+            vec![
+                (
+                    field_a.clone(),
+                    Arc::new(Int32Array::from(vec![1, 2, 3])) as Arc<dyn Array>,
+                ),
+                (
+                    field_b.clone(),
+                    Arc::new(Float32Array::from(vec![1.0, 2.0, 3.0])) as Arc<dyn Array>,
+                ),
+            ],
+            // 4(=b100), (null, null, valid)
+            Buffer::from(&[4]),
+        ));
+
+        let s2 = StructArray::from((
+            vec![
+                (
+                    field_a,
+                    Arc::new(Int32Array::from(vec![1, 2, 3])) as Arc<dyn Array>,
+                ),
+                (
+                    field_b,
+                    Arc::new(Float32Array::from(vec![1.1, 2.0, 3.1])) as Arc<dyn Array>,
+                ),
+            ],
+            // 6(=b110), (null, valid, valid)
+            Buffer::from(&[6]),
+        ));
+
+        let res = eq(&s1, &s2).unwrap();
+        // both 1st row are null, so true
+        // 2nd row, 1st column is null, but 2nd column is valid, so false
+        // both 3rd row are valid, so compare the value
+        assert_eq!(res, BooleanArray::from(vec![true, false, false]));
     }
 
     #[test]
