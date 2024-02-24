@@ -210,17 +210,19 @@ fn compare_op(op: Op, lhs: &dyn Datum, rhs: &dyn Datum) -> Result<BooleanArray, 
         assert_eq!(l.num_columns(), r.num_columns());
         match op {
             Op::Equal => {
-                let mut res = BooleanArray::from(vec![true; len]);
-                for i in 0..l.num_columns() {
-                    let col_l = l.column(i);
-                    let col_r = r.column(i);
-                    let eq_rows = compare_op(op, col_l, col_r)?;
+                return (0..l.num_columns()).fold(
+                    Ok(BooleanArray::from(vec![true; len])),
+                    |res, i| {
+                        let res = res?;
+                        let col_l = l.column(i);
+                        let col_r = r.column(i);
+                        let eq_rows = compare_op(op, col_l, col_r)?;
 
-                    let nulls = NullBuffer::union(res.nulls(), eq_rows.nulls());
-                    let vals = res.values() & eq_rows.values();
-                    res = BooleanArray::new(vals, nulls);
-                }
-                return Ok(res);
+                        let nulls = NullBuffer::union(res.nulls(), eq_rows.nulls());
+                        let vals = res.values() & eq_rows.values();
+                        Ok(BooleanArray::new(vals, nulls))
+                    },
+                )
             }
             _ => {
                 return Err(ArrowError::NotYetImplemented(format!(
