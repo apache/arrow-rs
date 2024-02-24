@@ -220,7 +220,7 @@ fn compare_op(op: Op, lhs: &dyn Datum, rhs: &dyn Datum) -> Result<BooleanArray, 
                     let vals = res.values() & eq_rows.values();
                     res = BooleanArray::new(vals, nulls);
                 }
-                return Ok(BooleanArray::from(res));
+                return Ok(res);
             }
             _ => {
                 return Err(ArrowError::NotYetImplemented(format!(
