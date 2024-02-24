@@ -607,54 +607,53 @@ mod tests {
 
     #[test]
     fn test_struct_eq() {
-        let s1 = StructArray::try_from(vec![
+        let field_a = Arc::new(Field::new("a", DataType::Int32, true));
+        let field_b = Arc::new(Field::new("b", DataType::Float32, true));
+        let s1 = StructArray::from(vec![
             (
-                "a",
+                field_a.clone(),
                 Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5])) as Arc<dyn Array>,
             ),
             (
-                "b",
+                field_b.clone(),
                 Arc::new(Float32Array::from(vec![1.0, 2.0, 3.0, 4.0, 5.0])) as Arc<dyn Array>,
             ),
-        ])
-        .unwrap();
-        let s2 = StructArray::try_from(vec![
+        ]);
+
+        let s2 = StructArray::from(vec![
             (
-                "a",
+                field_a.clone(),
                 Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5])) as Arc<dyn Array>,
             ),
             (
-                "b",
+                field_b.clone(),
                 Arc::new(Float32Array::from(vec![1.0, 2.0, 3.0, 4.0, 5.0])) as Arc<dyn Array>,
             ),
-        ])
-        .unwrap();
+        ]);
 
         let res = eq(&s1, &s2).unwrap();
         assert_eq!(res, BooleanArray::from(vec![true; 5]));
 
-        let s1 = StructArray::try_from(vec![
+        let s1 = StructArray::from(vec![
             (
-                "a",
+                field_a.clone(),
                 Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5])) as Arc<dyn Array>,
             ),
             (
-                "b",
+                field_b.clone(),
                 Arc::new(Float32Array::from(vec![1.0, 2.0, 3.0, 4.0, 5.0])) as Arc<dyn Array>,
             ),
-        ])
-        .unwrap();
-        let s2 = StructArray::try_from(vec![
+        ]);
+        let s2 = StructArray::from(vec![
             (
-                "a",
+                field_a,
                 Arc::new(Int32Array::from(vec![10, 20, 30, 4, 5])) as Arc<dyn Array>,
             ),
             (
-                "b",
+                field_b,
                 Arc::new(Float32Array::from(vec![1.0, 2.0, 3.0, 4.0, 5.0])) as Arc<dyn Array>,
             ),
-        ])
-        .unwrap();
+        ]);
 
         let res = eq(&s1, &s2).unwrap();
         assert_eq!(
