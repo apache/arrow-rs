@@ -187,16 +187,28 @@ impl AzureSigner {
     }
 }
 
+fn add_date_and_version_headers(request: &mut Request) {
+    // rfc2822 string should never contain illegal characters
+    let date = Utc::now();
+    let date_str = date.format(RFC1123_FMT).to_string();
+    // we formatted the data string ourselves, so unwrapping should be fine
+    let date_val = HeaderValue::from_str(&date_str).unwrap();
+    request.headers_mut().insert(DATE, date_val);
+    request
+        .headers_mut()
+        .insert(&VERSION, AZURE_VERSION.clone());
+}
+
 /// Authorize a [`Request`] with an [`AzureAuthorizer`]
 #[derive(Debug)]
 pub struct AzureAuthorizer<'a> {
-    credential: Option<&'a AzureCredential>,
+    credential: &'a AzureCredential,
     account: &'a str,
 }
 
 impl<'a> AzureAuthorizer<'a> {
     /// Create a new [`AzureAuthorizer`]
-    pub fn new(credential: Option<&'a AzureCredential>, account: &'a str) -> Self {
+    pub fn new(credential: &'a AzureCredential, account: &'a str) -> Self {
         AzureAuthorizer {
             credential,
             account,
@@ -205,18 +217,10 @@ impl<'a> AzureAuthorizer<'a> {
 
     /// Authorize `request`
     pub fn authorize(&self, request: &mut Request) {
-        // rfc2822 string should never contain illegal characters
-        let date = Utc::now();
-        let date_str = date.format(RFC1123_FMT).to_string();
-        // we formatted the data string ourselves, so unwrapping should be fine
-        let date_val = HeaderValue::from_str(&date_str).unwrap();
-        request.headers_mut().insert(DATE, date_val);
-        request
-            .headers_mut()
-            .insert(&VERSION, AZURE_VERSION.clone());
+        add_date_and_version_headers(request);
 
         match self.credential {
-            Some(AzureCredential::AccessKey(key)) => {
+            AzureCredential::AccessKey(key) => {
                 let signature = generate_authorization(
                     request.headers(),
                     request.url(),
@@ -232,19 +236,18 @@ impl<'a> AzureAuthorizer<'a> {
                     HeaderValue::from_str(signature.as_str()).unwrap(),
                 );
             }
-            Some(AzureCredential::BearerToken(token)) => {
+            AzureCredential::BearerToken(token) => {
                 request.headers_mut().append(
                     AUTHORIZATION,
                     HeaderValue::from_str(format!("Bearer {}", token).as_str()).unwrap(),
                 );
             }
-            Some(AzureCredential::SASToken(query_pairs)) => {
+            AzureCredential::SASToken(query_pairs) => {
                 request
                     .url_mut()
                     .query_pairs_mut()
                     .extend_pairs(query_pairs);
             }
-            None => (),
         }
     }
 }
@@ -268,7 +271,14 @@ impl CredentialExt for RequestBuilder {
         let (client, request) = self.build_split();
         let mut request = request.expect("request valid");
 
-        AzureAuthorizer::new(credential.as_deref(), account).authorize(&mut request);
+        match credential.as_deref() {
+            Some(credential) => {
+                AzureAuthorizer::new(credential, account).authorize(&mut request);
+            }
+            None => {
+                add_date_and_version_headers(&mut request);
+            }
+        }
 
         Self::from_parts(client, request)
     }
