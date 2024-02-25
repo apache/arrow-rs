@@ -169,6 +169,8 @@ pub struct MicrosoftAzureBuilder {
     client_options: ClientOptions,
     /// Credentials
     credentials: Option<AzureCredentialProvider>,
+    /// Skip signing requests
+    skip_signature: ConfigValue<bool>,
     /// When set to true, fabric url scheme will be used
     ///
     /// i.e. https://{account_name}.dfs.fabric.microsoft.com
@@ -316,6 +318,13 @@ pub enum AzureConfigKey {
     /// - `use_azure_cli`
     UseAzureCli,
 
+    /// Skip signing requests
+    ///
+    /// Supported keys:
+    /// - `azure_skip_signature`
+    /// - `skip_signature`
+    SkipSignature,
+
     /// Container name
     ///
     /// Supported keys:
@@ -354,6 +363,7 @@ impl AsRef<str> for AzureConfigKey {
             Self::MsiResourceId => "azure_msi_resource_id",
             Self::FederatedTokenFile => "azure_federated_token_file",
             Self::UseAzureCli => "azure_use_azure_cli",
+            Self::SkipSignature => "azure_skip_signature",
             Self::ContainerName => "azure_container_name",
             Self::DisableTagging => "azure_disable_tagging",
             Self::Client(key) => key.as_ref(),
@@ -398,6 +408,7 @@ impl FromStr for AzureConfigKey {
             "azure_federated_token_file" | "federated_token_file" => Ok(Self::FederatedTokenFile),
             "azure_use_fabric_endpoint" | "use_fabric_endpoint" => Ok(Self::UseFabricEndpoint),
             "azure_use_azure_cli" | "use_azure_cli" => Ok(Self::UseAzureCli),
+            "azure_skip_signature" | "skip_signature" => Ok(Self::SkipSignature),
             "azure_container_name" | "container_name" => Ok(Self::ContainerName),
             "azure_disable_tagging" | "disable_tagging" => Ok(Self::DisableTagging),
             // Backwards compatibility
@@ -510,6 +521,7 @@ impl MicrosoftAzureBuilder {
             AzureConfigKey::MsiResourceId => self.msi_resource_id = Some(value.into()),
             AzureConfigKey::FederatedTokenFile => self.federated_token_file = Some(value.into()),
             AzureConfigKey::UseAzureCli => self.use_azure_cli.parse(value),
+            AzureConfigKey::SkipSignature => self.skip_signature.parse(value),
             AzureConfigKey::UseEmulator => self.use_emulator.parse(value),
             AzureConfigKey::Endpoint => self.endpoint = Some(value.into()),
             AzureConfigKey::UseFabricEndpoint => self.use_fabric_endpoint.parse(value),
@@ -550,6 +562,7 @@ impl MicrosoftAzureBuilder {
             AzureConfigKey::MsiResourceId => self.msi_resource_id.clone(),
             AzureConfigKey::FederatedTokenFile => self.federated_token_file.clone(),
             AzureConfigKey::UseAzureCli => Some(self.use_azure_cli.to_string()),
+            AzureConfigKey::SkipSignature => Some(self.skip_signature.to_string()),
             AzureConfigKey::Client(key) => self.client_options.get_config_value(key),
             AzureConfigKey::ContainerName => self.container_name.clone(),
             AzureConfigKey::DisableTagging => Some(self.disable_tagging.to_string()),
@@ -784,6 +797,14 @@ impl MicrosoftAzureBuilder {
         self
     }
 
+    /// If enabled, [`MicrosoftAzure`] will not fetch credentials and will not sign requests
+    ///
+    /// This can be useful when interacting with public containers
+    pub fn with_skip_signature(mut self, skip_signature: bool) -> Self {
+        self.skip_signature = skip_signature.into();
+        self
+    }
+
     /// If set to `true` will ignore any tags provided to put_opts
     pub fn with_disable_tagging(mut self, ignore: bool) -> Self {
         self.disable_tagging = ignore.into();
@@ -809,15 +830,20 @@ impl MicrosoftAzureBuilder {
             // Allow overriding defaults. Values taken from
             // from https://docs.rs/azure_storage/0.2.0/src/azure_storage/core/clients/storage_account_client.rs.html#129-141
             let url = url_from_env("AZURITE_BLOB_STORAGE_URL", "http://127.0.0.1:10000")?;
-            let key = match self.access_key {
-                Some(k) => AzureAccessKey::try_new(&k)?,
-                None => AzureAccessKey::try_new(EMULATOR_ACCOUNT_KEY)?,
+            let credential = if let Some(k) = self.access_key {
+                AzureCredential::AccessKey(AzureAccessKey::try_new(&k)?)
+            } else if let Some(bearer_token) = self.bearer_token {
+                AzureCredential::BearerToken(bearer_token)
+            } else if let Some(query_pairs) = self.sas_query_pairs {
+                AzureCredential::SASToken(query_pairs)
+            } else if let Some(sas) = self.sas_key {
+                AzureCredential::SASToken(split_sas(&sas)?)
+            } else {
+                AzureCredential::AccessKey(AzureAccessKey::try_new(EMULATOR_ACCOUNT_KEY)?)
             };
 
-            let credential = static_creds(AzureCredential::AccessKey(key));
-
             self.client_options = self.client_options.with_allow_http(true);
-            (true, url, credential, account_name)
+            (true, url, static_creds(credential), account_name)
         } else {
             let account_name = self.account_name.ok_or(Error::MissingAccount {})?;
             let account_url = match self.endpoint {
@@ -893,6 +919,7 @@ impl MicrosoftAzureBuilder {
         let config = AzureConfig {
             account,
             is_emulator,
+            skip_signature: self.skip_signature.get()?,
             container,
             disable_tagging: self.disable_tagging.get()?,
             retry_config: self.retry_config,

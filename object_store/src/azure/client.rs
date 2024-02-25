@@ -114,6 +114,9 @@ pub(crate) enum Error {
 
     #[snafu(display("Generating SAS keys with SAS tokens auth is not supported"))]
     SASforSASNotSupported,
+
+    #[snafu(display("Generating SAS keys while skipping signatures is not supported"))]
+    SASwithSkipSignature,
 }
 
 impl From<Error> for crate::Error {
@@ -139,6 +142,7 @@ pub(crate) struct AzureConfig {
     pub retry_config: RetryConfig,
     pub service: Url,
     pub is_emulator: bool,
+    pub skip_signature: bool,
     pub disable_tagging: bool,
     pub client_options: ClientOptions,
 }
@@ -154,6 +158,13 @@ impl AzureConfig {
             path_mut.push(&self.container).extend(path.parts());
         }
         url
+    }
+    async fn get_credential(&self) -> Result<Option<Arc<AzureCredential>>> {
+        if self.skip_signature {
+            Ok(None)
+        } else {
+            Some(self.credentials.get_credential().await).transpose()
+        }
     }
 }
 
@@ -176,7 +187,7 @@ impl<'a> PutRequest<'a> {
     }
 
     async fn send(self) -> Result<Response> {
-        let credential = self.config.credentials.get_credential().await?;
+        let credential = self.config.get_credential().await?;
         let response = self
             .builder
             .with_azure_authorization(&credential, &self.config.account)
@@ -208,8 +219,8 @@ impl AzureClient {
         &self.config
     }
 
-    async fn get_credential(&self) -> Result<Arc<AzureCredential>> {
-        self.config.credentials.get_credential().await
+    async fn get_credential(&self) -> Result<Option<Arc<AzureCredential>>> {
+        self.config.get_credential().await
     }
 
     fn put_request<'a>(&'a self, path: &'a Path, bytes: Bytes) -> PutRequest<'a> {
@@ -314,7 +325,7 @@ impl AzureClient {
 
         // If using SAS authorization must include the headers in the URL
         // <https://docs.microsoft.com/en-us/rest/api/storageservices/copy-blob#request-headers>
-        if let AzureCredential::SASToken(pairs) = credential.as_ref() {
+        if let Some(AzureCredential::SASToken(pairs)) = credential.as_deref() {
             source.query_pairs_mut().extend_pairs(pairs);
         }
 
@@ -384,8 +395,8 @@ impl AzureClient {
         let credential = self.get_credential().await?;
         let signed_start = chrono::Utc::now();
         let signed_expiry = signed_start + expires_in;
-        match credential.as_ref() {
-            AzureCredential::BearerToken(_) => {
+        match credential.as_deref() {
+            Some(AzureCredential::BearerToken(_)) => {
                 let key = self
                     .get_user_delegation_key(&signed_start, &signed_expiry)
                     .await?;
@@ -398,13 +409,14 @@ impl AzureClient {
                     Some(key),
                 ))
             }
-            AzureCredential::AccessKey(key) => Ok(AzureSigner::new(
+            Some(AzureCredential::AccessKey(key)) => Ok(AzureSigner::new(
                 key.to_owned(),
                 self.config.account.clone(),
                 signed_start,
                 signed_expiry,
                 None,
             )),
+            None => Err(Error::SASwithSkipSignature.into()),
             _ => Err(Error::SASforSASNotSupported.into()),
         }
     }
