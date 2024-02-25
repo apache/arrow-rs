@@ -24,8 +24,31 @@ use arrow_buffer::ArrowNativeType;
 use arrow_schema::ArrowError;
 use std::cmp::Ordering;
 
+pub fn list_ordering(l: ArrayRef, r: ArrayRef) -> Ordering {
+    let l_len = l.len();
+    let r_len = r.len();
+    let min_len = std::cmp::min(l_len, r_len);
+
+    let cmp = build_compare(&l, &r).unwrap();
+
+    for i in 0..min_len {
+        let ord = cmp(i, i);
+        if ord != Ordering::Equal {
+            return ord;
+        }
+    }
+
+    l_len.cmp(&r_len)
+}
+
 /// Compare the values at two arbitrary indices in two arrays.
 pub type DynComparator = Box<dyn Fn(usize, usize) -> Ordering + Send + Sync>;
+
+fn compare_list(l: &dyn Array, r: &dyn Array) -> DynComparator {
+    let l = l.as_list::<i32>().to_owned();
+    let r = r.as_list::<i32>().to_owned();
+    Box::new(move |i, j| list_ordering(l.value(i), r.value(j)))
+}
 
 fn compare_primitive<T: ArrowPrimitiveType>(left: &dyn Array, right: &dyn Array) -> DynComparator
 where
@@ -120,6 +143,12 @@ pub fn build_compare(left: &dyn Array, right: &dyn Array) -> Result<DynComparato
                  l_key.as_ref(), r_key.as_ref() => (dict_helper, left, right),
                  _ => unreachable!()
              }
+        },
+        (List(_), List(_)) => {
+            Ok(compare_list(left, right))
+            // let l = left.as_list::<i32>().to_owned();
+            // let r = right.as_list::<i32>().to_owned();
+            // Ok(Box::new(move |i, j| compare_list(l.value(i), r.value(j))))
         },
         (lhs, rhs) => Err(ArrowError::InvalidArgumentError(match lhs == rhs {
             true => format!("The data type type {lhs:?} has no natural order"),

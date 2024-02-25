@@ -26,8 +26,8 @@
 use arrow_array::cast::AsArray;
 use arrow_array::types::ByteArrayType;
 use arrow_array::{
-    downcast_primitive_array, AnyDictionaryArray, Array, ArrayRef, ArrowNativeTypeOp, BooleanArray,
-    Datum, FixedSizeBinaryArray, GenericByteArray,
+    downcast_primitive_array, AnyDictionaryArray, Array, ArrowNativeTypeOp, BooleanArray, Datum,
+    FixedSizeBinaryArray, GenericByteArray,
 };
 use arrow_buffer::bit_util::ceil;
 use arrow_buffer::{BooleanBuffer, MutableBuffer, NullBuffer};
@@ -169,32 +169,6 @@ pub fn not_distinct(lhs: &dyn Datum, rhs: &dyn Datum) -> Result<BooleanArray, Ar
     compare_op(Op::NotDistinct, lhs, rhs)
 }
 
-pub fn compare_list(l: ArrayRef, r: ArrayRef) -> Ordering {
-    let l_t = l.data_type();
-    let r_t = r.data_type();
-    let l_len = l.len();
-    let r_len = r.len();
-    let min_len = std::cmp::min(l_len, r_len);
-
-    let cmp = if let (DataType::List(_), DataType::List(_)) = (l_t, r_t) {
-        let l = l.as_list::<i32>();
-        let r = r.as_list::<i32>();
-
-        Box::new(move |i, j| compare_list(l.value(i), r.value(j)))
-    } else {
-        build_compare(&l, &r).unwrap()
-    };
-
-    for i in 0..min_len {
-        let ord = cmp(i, i);
-        if ord != Ordering::Equal {
-            return ord;
-        }
-    }
-
-    l_len.cmp(&r_len)
-}
-
 fn process_nested(
     l: &dyn Array,
     r: &dyn Array,
@@ -211,13 +185,10 @@ fn process_nested(
             target_ord: Ordering,
             len: usize,
         ) -> Result<BooleanArray, ArrowError> {
-            let l = l.as_list::<i32>();
-            let r = r.as_list::<i32>();
+            let cmp = build_compare(l, r)?;
             let mut values = BooleanArray::builder(len);
             for i in 0..len {
-                let l = l.value(i);
-                let r = r.value(i);
-                let ord = compare_list(l, r);
+                let ord = cmp(i, i);
                 values.append_value(ord == target_ord);
             }
             Ok(values.finish())
