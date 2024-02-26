@@ -1101,11 +1101,10 @@ impl<T: ArrowPrimitiveType> std::fmt::Debug for PrimitiveArray<T> {
                 match as_date::<T>(v) {
                     Some(date) => write!(f, "{date:?}"),
                     None => {
-                        let err = ArrowError::CastError(format!(
-                            "Failed to convert {} to temporal for {:?}",
+                        write!(
+                            "Cast error: Failed to convert {} to temporal for {:?}",
                             v, data_type
-                        ));
-                        write!(f, "{}", err)
+                        );
                     }
                 }
             }
