@@ -175,23 +175,35 @@ pub trait Array: std::fmt::Debug + Send + Sync {
 
     /// Returns the null buffer of this array if any.
     ///
-    /// The null buffer encodes the "physical" nulls of an array.
-    /// However, some arrays can also encode nullability in their children, for example,
-    /// [`DictionaryArray::values`] values or [`RunArray::values`], or without a null buffer,
-    /// such as [`NullArray`]. To determine if each element of such an array is logically null,
-    /// you can use the slower [`Array::logical_nulls`] to obtain a computed mask .
+    /// The null buffer contains the "physical" nulls of an array, that is how
+    /// the nulls are represented in the underlying arrow format.
+    ///
+    /// The physical representation is efficient, but is sometimes non intuitive
+    /// for certain array types such as those with nullable child arrays like
+    /// [`DictionaryArray::values`] or [`RunArray::values`], or without a
+    /// null buffer, such as [`NullArray`].
+    ///
+    /// To determine if each element of such an array is "logically" null,
+    /// use the slower [`Array::logical_nulls`] to obtain a computed mask.
     fn nulls(&self) -> Option<&NullBuffer>;
 
-    /// Returns a potentially computed [`NullBuffer`] that represent the logical null values of this array, if any.
+    /// Returns a potentially computed [`NullBuffer`] that represents the logical
+    /// null values of this array, if any.
     ///
-    /// In most cases this will be the same as [`Array::nulls`], except for:
+    /// Logical nulls represent the values that are null in the array,
+    /// regardless of the underlying physical arrow representation.
+    ///
+    /// For most array types, this is equivalent to the "physical" nulls
+    /// returned by [`Array::nulls`]. It is different for the following cases, because which
+    /// elements are null is not encoded in a single null buffer:
     ///
     /// * [`DictionaryArray`] where [`DictionaryArray::values`] contains nulls
     /// * [`RunArray`] where [`RunArray::values`] contains nulls
     /// * [`NullArray`] where all indices are nulls
     ///
-    /// In these cases a logical [`NullBuffer`] will be computed, encoding the logical nullability
-    /// of these arrays, beyond what is encoded in [`Array::nulls`]
+    /// In these cases a logical [`NullBuffer`] will be computed, encoding the
+    /// logical nullability of these arrays, beyond what is encoded in
+    /// [`Array::nulls`]
     fn logical_nulls(&self) -> Option<NullBuffer> {
         self.nulls().cloned()
     }
