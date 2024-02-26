@@ -62,7 +62,7 @@ mod dynamo;
 mod precondition;
 mod resolve;
 
-pub use builder::{AmazonS3Builder, AmazonS3ConfigKey};
+pub use builder::{AmazonS3Builder, AmazonS3ConfigKey, S3EncryptionHeaders};
 pub use checksum::Checksum;
 pub use dynamo::DynamoCommit;
 pub use precondition::{S3ConditionalPut, S3CopyIfNotExists};
@@ -164,7 +164,7 @@ impl Signer for AmazonS3 {
 #[async_trait]
 impl ObjectStore for AmazonS3 {
     async fn put_opts(&self, location: &Path, bytes: Bytes, opts: PutOptions) -> Result<PutResult> {
-        let mut request = self.client.put_request(location, bytes);
+        let mut request = self.client.put_request(location, bytes, true);
         let tags = opts.tags.encoded();
         if !tags.is_empty() && !self.client.config.disable_tagging {
             request = request.header(&TAGS_HEADER, tags);
@@ -374,8 +374,10 @@ impl MultiPartStore for AmazonS3 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tests::*;
+    use crate::{client::get::GetClient, tests::*};
     use bytes::Bytes;
+    use hyper::HeaderMap;
+    use tokio::io::AsyncWriteExt;
 
     const NON_EXISTENT_NAME: &str = "nonexistentname";
 
@@ -397,6 +399,7 @@ mod tests {
         stream_get(&integration).await;
         multipart(&integration, &integration).await;
         signing(&integration).await;
+        s3_encryption(&integration).await;
 
         // Object tagging is not supported by S3 Express One Zone
         if config.session_provider.is_none() {
@@ -514,5 +517,50 @@ mod tests {
             .unwrap();
 
         v2.list_with_delimiter(Some(&prefix)).await.unwrap();
+    }
+
+    async fn s3_encryption(store: &AmazonS3) {
+        crate::test_util::maybe_skip_integration!();
+
+        let data = Bytes::from(vec![3u8; 1024]);
+
+        let encryption_headers: HeaderMap = store.client.config.encryption_headers.clone().into();
+        let expected_encryption =
+            if let Some(encryption_type) = encryption_headers.get("x-amz-server-side-encryption") {
+                encryption_type
+            } else {
+                eprintln!("Skipping S3 encryption test - encryption not configured");
+                return;
+            };
+
+        let locations = [
+            Path::from("test-encryption-1"),
+            Path::from("test-encryption-2"),
+            Path::from("test-encryption-3"),
+        ];
+
+        store.put(&locations[0], data.clone()).await.unwrap();
+        store.copy(&locations[0], &locations[1]).await.unwrap();
+
+        let (_, mut writer) = store.put_multipart(&locations[2]).await.unwrap();
+        writer.write_all(&data).await.unwrap();
+        writer.shutdown().await.unwrap();
+
+        for location in &locations {
+            let res = store
+                .client
+                .get_request(location, GetOptions::default())
+                .await
+                .unwrap();
+            let headers = res.headers();
+            assert_eq!(
+                headers
+                    .get("x-amz-server-side-encryption")
+                    .expect("object is not encrypted"),
+                expected_encryption
+            );
+
+            store.delete(location).await.unwrap();
+        }
     }
 }
