@@ -184,17 +184,17 @@ pub trait Array: std::fmt::Debug + Send + Sync {
     /// null buffer, such as [`NullArray`].
     ///
     /// To determine if each element of such an array is "logically" null,
-    /// use the slower [`Array::logical_nulls`] to obtain a computed mask .
+    /// use the slower [`Array::logical_nulls`] to obtain a computed mask.
     fn nulls(&self) -> Option<&NullBuffer>;
 
-    /// Returns a potentially computed [`NullBuffer`] that represent the logical
+    /// Returns a potentially computed [`NullBuffer`] that represents the logical
     /// null values of this array, if any.
     ///
     /// Logical nulls represent the values that are null in the array,
     /// regardless of the underlying physical arrow representation.
     ///
     /// For most array types, this is equivalent to the "physical" nulls
-    /// returned by [`Array::nulls`]. However, for the following cases, which
+    /// returned by [`Array::nulls`]. It is different for the following cases, because which
     /// elements are null is not encoded in a single null buffer:
     ///
     /// * [`DictionaryArray`] where [`DictionaryArray::values`] contains nulls
