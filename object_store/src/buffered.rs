@@ -250,7 +250,7 @@ impl BufWriter {
         Self {
             capacity,
             store,
-            state: BufWriterState::Buffer(path, Vec::with_capacity(1024)),
+            state: BufWriterState::Buffer(path, Vec::new()),
             multipart_id: None,
         }
     }
