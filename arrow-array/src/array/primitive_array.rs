@@ -1102,9 +1102,9 @@ impl<T: ArrowPrimitiveType> std::fmt::Debug for PrimitiveArray<T> {
                     Some(date) => write!(f, "{date:?}"),
                     None => {
                         write!(
-                            "Cast error: Failed to convert {} to temporal for {:?}",
-                            v, data_type
-                        );
+                            f,
+                            "Cast error: Failed to convert {v} to temporal for {data_type:?}"
+                        )
                     }
                 }
             }
@@ -1114,9 +1114,9 @@ impl<T: ArrowPrimitiveType> std::fmt::Debug for PrimitiveArray<T> {
                     Some(time) => write!(f, "{time:?}"),
                     None => {
                         write!(
-                            "Cast error: Failed to convert {} to temporal for {:?}",
-                            v, data_type
-                        );
+                            f,
+                            "Cast error: Failed to convert {v} to temporal for {data_type:?}"
+                        )
                     }
                 }
             }
