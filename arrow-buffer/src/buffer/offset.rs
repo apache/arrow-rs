@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::buffer::ScalarBuffer;
-use crate::{ArrowNativeType, MutableBuffer};
+use crate::{ArrowNativeType, MutableBuffer, OffsetsBuilder};
 use std::ops::Deref;
 
 /// A non-empty buffer of monotonically increasing, positive integers.
@@ -55,7 +55,6 @@ use std::ops::Deref;
 ///  (offsets[i],
 ///   offsets[i+1])
 /// ```
-
 #[derive(Debug, Clone)]
 pub struct OffsetBuffer<O: ArrowNativeType>(ScalarBuffer<O>);
 
@@ -171,6 +170,14 @@ impl<T: ArrowNativeType> AsRef<[T]> for OffsetBuffer<T> {
     #[inline]
     fn as_ref(&self) -> &[T] {
         self
+    }
+}
+
+impl<O: ArrowNativeType> TryFrom<OffsetsBuilder> for OffsetBuffer<O> {
+    type Error = String;
+
+    fn try_from(value: OffsetsBuilder) -> Result<Self, Self::Error> {
+        value.finish()
     }
 }
 
