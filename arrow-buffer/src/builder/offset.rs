@@ -112,6 +112,7 @@ impl OffsetsBuilder {
         self.offsets.capacity()
     }
 
+    #[allow(clippy::len_without_is_empty)]
     pub fn len(&self) -> usize {
         self.offsets.len()
     }
@@ -141,7 +142,7 @@ impl<IntoIter: IntoIterator<Item = usize>> From<IntoIter> for OffsetsBuilder {
         let mut offsets_vec: Vec<usize> = value
             .into_iter()
             .scan(0usize, |prev, len| {
-                *prev = len + *prev;
+                *prev += len;
                 Some(*prev)
             })
             .collect();
