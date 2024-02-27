@@ -49,17 +49,24 @@ impl FlightError {
 
 impl std::fmt::Display for FlightError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        // TODO better format / error
-        write!(f, "{self:?}")
+        match self {
+            FlightError::Arrow(inner) => inner.fmt(f),
+            FlightError::NotYetImplemented(desc) => write!(f, "Not yet implemented: {}", desc),
+            FlightError::Tonic(inner) => inner.fmt(f),
+            FlightError::ProtocolError(desc) => write!(f, "Protocol error: {}", desc),
+            FlightError::DecodeError(desc) => write!(f, "Decode error: {}", desc),
+            FlightError::ExternalError(source) => write!(f, "External error: {}", source),
+        }
     }
 }
 
 impl Error for FlightError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
-        if let Self::ExternalError(e) = self {
-            Some(e.as_ref())
-        } else {
-            None
+        match self {
+            FlightError::Arrow(inner) => inner.source(),
+            FlightError::Tonic(inner) => inner.source(),
+            FlightError::ExternalError(source) => Some(&**source),
+            _ => None,
         }
     }
 }
