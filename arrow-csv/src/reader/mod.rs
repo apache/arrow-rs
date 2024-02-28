@@ -149,7 +149,7 @@ lazy_static! {
         r"(?i)^(true)$|^(false)$(?-i)", //BOOLEAN
         r"^-?(\d+)$", //INTEGER
         r"^-?((\d*\.\d+|\d+\.\d*)([eE]-?\d+)?|\d+([eE]-?\d+))$", //DECIMAL
-        r"^\d{4}-\d\d-\d\d$", //DATE32
+        r"^(?:(?:\d{4}-\d\d-\d\d)|(?:\d\d/\d\d/\d{4})|(?:\d\d-\d\d-\d{4})|(?:\d{4}/\d\d/\d\d)|(?:\d\d/\d\d/\d{4})|(?:\d{4}-\d\d-\d\d))$", // new date32
         r"^\d{4}-\d\d-\d\d[T ]\d\d:\d\d:\d\d(?:[^\d\.].*)?$", //Timestamp(Second)
         r"^\d{4}-\d\d-\d\d[T ]\d\d:\d\d:\d\d\.\d{1,3}(?:[^\d].*)?$", //Timestamp(Millisecond)
         r"^\d{4}-\d\d-\d\d[T ]\d\d:\d\d:\d\d\.\d{1,6}(?:[^\d].*)?$", //Timestamp(Microsecond)
@@ -2355,5 +2355,23 @@ mod tests {
             }
             assert_eq!(&t.get(), expected, "{values:?}")
         }
+    }
+    #[test]
+    fn test_recognize_date() -> Result<()> {
+        let mut file = File::open("test/data/dates.csv").unwrap();
+        let (schema, _) = Format::default()
+            .with_header(true)
+            .infer_schema(&mut file, None)
+            .unwrap();
+        let gt_schema = Schema::new(vec![
+            Field::new("mm/dd/yyyy", DataType::Date32, true),
+            Field::new("mm-dd-yyyy", DataType::Date32, true),
+            Field::new("dd/mm/yyyy", DataType::Date32, true),
+            Field::new("dd-mm-yyyy", DataType::Date32, true),
+            Field::new("yyyy/mm/dd", DataType::Date32, true),
+            Field::new("yyyy-mm-dd", DataType::Date32, true),
+        ]);
+        assert_eq!(schema, gt_schema);
+        Ok(())
     }
 }

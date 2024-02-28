@@ -556,65 +556,30 @@ fn parse_date(string: &str) -> Option<NaiveDate> {
             .map(|dt| dt.date_naive())
             .ok();
     };
-    let mut digits = [0; 10];
-    let mut mask = 0;
+    use regex::Regex;
+    let re = Regex::new(
+        r"^(?:(\d{1,2})[/\-](\d{1,2})[/\-](\d{1,4})|(\d{1,4})[/\-](\d{1,2})[/\-](\d{1,2}))$",
+    )
+    .ok()?;
 
-    // Treating all bytes the same way, helps LLVM vectorise this correctly
-    for (idx, (o, i)) in digits.iter_mut().zip(string.bytes()).enumerate() {
-        *o = i.wrapping_sub(b'0');
-        mask |= ((*o < 10) as u16) << idx
+    if let Some(caps) = re.captures(string) {
+        if let (Some(dm_or_md), Some(md_or_dm), Some(year)) =
+            (caps.get(1), caps.get(2), caps.get(3))
+        {
+            let dm_or_md = dm_or_md.as_str().parse::<u32>().ok()?;
+            let md_or_dm = md_or_dm.as_str().parse::<u32>().ok()?;
+            let year = year.as_str().parse::<i32>().ok()?;
+            return NaiveDate::from_ymd_opt(year, dm_or_md, md_or_dm);
+        }
+        if let (Some(year), Some(month), Some(day)) = (caps.get(4), caps.get(5), caps.get(6)) {
+            let year = year.as_str().parse::<i32>().ok()?;
+            let month = month.as_str().parse::<u32>().ok()?;
+            let day = day.as_str().parse::<u32>().ok()?;
+            return NaiveDate::from_ymd_opt(year, month, day);
+        }
     }
 
-    const HYPHEN: u8 = b'-'.wrapping_sub(b'0');
-
-    //  refer to https://www.rfc-editor.org/rfc/rfc3339#section-3
-    if digits[4] != HYPHEN {
-        let (year, month, day) = match (mask, string.len()) {
-            (0b11111111, 8) => (
-                digits[0] as u16 * 1000
-                    + digits[1] as u16 * 100
-                    + digits[2] as u16 * 10
-                    + digits[3] as u16,
-                digits[4] * 10 + digits[5],
-                digits[6] * 10 + digits[7],
-            ),
-            _ => return None,
-        };
-        return NaiveDate::from_ymd_opt(year as _, month as _, day as _);
-    }
-
-    let (month, day) = match mask {
-        0b1101101111 => {
-            if digits[7] != HYPHEN {
-                return None;
-            }
-            (digits[5] * 10 + digits[6], digits[8] * 10 + digits[9])
-        }
-        0b101101111 => {
-            if digits[7] != HYPHEN {
-                return None;
-            }
-            (digits[5] * 10 + digits[6], digits[8])
-        }
-        0b110101111 => {
-            if digits[6] != HYPHEN {
-                return None;
-            }
-            (digits[5], digits[7] * 10 + digits[8])
-        }
-        0b10101111 => {
-            if digits[6] != HYPHEN {
-                return None;
-            }
-            (digits[5], digits[7])
-        }
-        _ => return None,
-    };
-
-    let year =
-        digits[0] as u16 * 1000 + digits[1] as u16 * 100 + digits[2] as u16 * 10 + digits[3] as u16;
-
-    NaiveDate::from_ymd_opt(year as _, month as _, day as _)
+    None
 }
 
 impl Parser for Date32Type {
