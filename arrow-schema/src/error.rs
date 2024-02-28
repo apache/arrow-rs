@@ -115,7 +115,7 @@ impl Display for ArrowError {
 impl Error for ArrowError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
-            ArrowError::ExternalError(source) => Some(&**source),
+            ArrowError::ExternalError(source) => Some(source.as_ref()),
             ArrowError::IoError(_, source) => Some(source),
             _ => None,
         }

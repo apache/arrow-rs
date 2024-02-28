@@ -65,7 +65,7 @@ impl Error for FlightError {
         match self {
             FlightError::Arrow(inner) => inner.source(),
             FlightError::Tonic(inner) => inner.source(),
-            FlightError::ExternalError(source) => Some(&**source),
+            FlightError::ExternalError(source) => Some(source.as_ref()),
             _ => None,
         }
     }
