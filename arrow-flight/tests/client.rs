@@ -935,7 +935,7 @@ async fn test_cancel_flight_info_error_no_response() {
 
         assert_eq!(
             err.to_string(),
-            "ProtocolError(\"Received no response for cancel_flight_info call\")"
+            "Protocol error: Received no response for cancel_flight_info call"
         );
         // server still got the request
         let expected_request = Action::new("CancelFlightInfo", request.encode_to_vec());
@@ -985,7 +985,7 @@ async fn test_renew_flight_endpoint_error_no_response() {
 
         assert_eq!(
             err.to_string(),
-            "ProtocolError(\"Received no response for renew_flight_endpoint call\")"
+            "Protocol error: Received no response for renew_flight_endpoint call"
         );
         // server still got the request
         let expected_request = Action::new("RenewFlightEndpoint", request.encode_to_vec());
