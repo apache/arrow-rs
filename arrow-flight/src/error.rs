@@ -50,9 +50,9 @@ impl FlightError {
 impl std::fmt::Display for FlightError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            FlightError::Arrow(inner) => inner.fmt(f),
+            FlightError::Arrow(source) => write!(f, "Arrow error: {}", source),
             FlightError::NotYetImplemented(desc) => write!(f, "Not yet implemented: {}", desc),
-            FlightError::Tonic(inner) => inner.fmt(f),
+            FlightError::Tonic(source) => write!(f, "Tonic error: {}", source),
             FlightError::ProtocolError(desc) => write!(f, "Protocol error: {}", desc),
             FlightError::DecodeError(desc) => write!(f, "Decode error: {}", desc),
             FlightError::ExternalError(source) => write!(f, "External error: {}", source),
@@ -63,8 +63,8 @@ impl std::fmt::Display for FlightError {
 impl Error for FlightError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
-            FlightError::Arrow(inner) => inner.source(),
-            FlightError::Tonic(inner) => inner.source(),
+            FlightError::Arrow(source) => Some(source),
+            FlightError::Tonic(source) => Some(source),
             FlightError::ExternalError(source) => Some(source.as_ref()),
             _ => None,
         }

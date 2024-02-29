@@ -287,7 +287,7 @@ async fn test_mismatched_record_batch_schema() {
     let err = result.unwrap_err();
     assert_eq!(
         err.to_string(),
-        "Invalid argument error: number of columns(1) must match number of fields(2) in schema"
+        "Arrow error: Invalid argument error: number of columns(1) must match number of fields(2) in schema"
     );
 }
 
