@@ -114,10 +114,10 @@ impl Display for ArrowError {
 
 impl Error for ArrowError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
-        if let Self::ExternalError(e) = self {
-            Some(e.as_ref())
-        } else {
-            None
+        match self {
+            ArrowError::ExternalError(source) => Some(source.as_ref()),
+            ArrowError::IoError(_, source) => Some(source),
+            _ => None,
         }
     }
 }

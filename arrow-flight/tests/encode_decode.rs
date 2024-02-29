@@ -57,7 +57,7 @@ async fn test_error() {
     let result: Result<Vec<_>, _> = decode_stream.try_collect().await;
 
     let result = result.unwrap_err();
-    assert_eq!(result.to_string(), r#"NotYetImplemented("foo")"#);
+    assert_eq!(result.to_string(), "Not yet implemented: foo");
 }
 
 #[tokio::test]
@@ -287,7 +287,7 @@ async fn test_mismatched_record_batch_schema() {
     let err = result.unwrap_err();
     assert_eq!(
         err.to_string(),
-        "Arrow(InvalidArgumentError(\"number of columns(1) must match number of fields(2) in schema\"))"
+        "Arrow error: Invalid argument error: number of columns(1) must match number of fields(2) in schema"
     );
 }
 
@@ -312,7 +312,7 @@ async fn test_chained_streams_batch_decoder() {
     let err = result.unwrap_err();
     assert_eq!(
         err.to_string(),
-        "ProtocolError(\"Unexpectedly saw multiple Schema messages in FlightData stream\")"
+        "Protocol error: Unexpectedly saw multiple Schema messages in FlightData stream"
     );
 }
 
