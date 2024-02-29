@@ -283,20 +283,20 @@ impl LocalFileSystem {
             }),
         })
     }
-}
 
-impl Config {
     /// Return an absolute filesystem path of the given file location
-    fn path_to_filesystem(&self, location: &Path) -> Result<PathBuf> {
+    pub fn path_to_filesystem(&self, location: &Path) -> Result<PathBuf> {
         ensure!(
             is_valid_file_path(location),
             InvalidPathSnafu {
                 path: location.as_ref()
             }
         );
-        self.prefix_to_filesystem(location)
+        self.config.prefix_to_filesystem(location)
     }
+}
 
+impl Config {
     /// Return an absolute filesystem path of the given location
     fn prefix_to_filesystem(&self, location: &Path) -> Result<PathBuf> {
         let mut url = self.root.clone();
@@ -340,7 +340,7 @@ impl ObjectStore for LocalFileSystem {
             return Err(crate::Error::NotImplemented);
         }
 
-        let path = self.config.path_to_filesystem(location)?;
+        let path = self.path_to_filesystem(location)?;
         maybe_spawn_blocking(move || {
             let (mut file, suffix) = new_staged_upload(&path)?;
             let staging_path = staged_upload_path(&path, &suffix);
@@ -399,7 +399,7 @@ impl ObjectStore for LocalFileSystem {
         &self,
         location: &Path,
     ) -> Result<(MultipartId, Box<dyn AsyncWrite + Unpin + Send>)> {
-        let dest = self.config.path_to_filesystem(location)?;
+        let dest = self.path_to_filesystem(location)?;
 
         let (file, suffix) = new_staged_upload(&dest)?;
         Ok((
@@ -409,7 +409,7 @@ impl ObjectStore for LocalFileSystem {
     }
 
     async fn abort_multipart(&self, location: &Path, multipart_id: &MultipartId) -> Result<()> {
-        let dest = self.config.path_to_filesystem(location)?;
+        let dest = self.path_to_filesystem(location)?;
         let path: PathBuf = staged_upload_path(&dest, multipart_id);
 
         maybe_spawn_blocking(move || match std::fs::remove_file(&path) {
@@ -424,7 +424,7 @@ impl ObjectStore for LocalFileSystem {
 
     async fn get_opts(&self, location: &Path, options: GetOptions) -> Result<GetResult> {
         let location = location.clone();
-        let path = self.config.path_to_filesystem(&location)?;
+        let path = self.path_to_filesystem(&location)?;
         maybe_spawn_blocking(move || {
             let (file, metadata) = open_file(&path)?;
             let meta = convert_metadata(metadata, location)?;
@@ -445,7 +445,7 @@ impl ObjectStore for LocalFileSystem {
     }
 
     async fn get_range(&self, location: &Path, range: Range<usize>) -> Result<Bytes> {
-        let path = self.config.path_to_filesystem(location)?;
+        let path = self.path_to_filesystem(location)?;
         maybe_spawn_blocking(move || {
             let (mut file, _) = open_file(&path)?;
             read_range(&mut file, &path, range)
@@ -454,7 +454,7 @@ impl ObjectStore for LocalFileSystem {
     }
 
     async fn get_ranges(&self, location: &Path, ranges: &[Range<usize>]) -> Result<Vec<Bytes>> {
-        let path = self.config.path_to_filesystem(location)?;
+        let path = self.path_to_filesystem(location)?;
         let ranges = ranges.to_vec();
         maybe_spawn_blocking(move || {
             // Vectored IO might be faster
@@ -468,7 +468,7 @@ impl ObjectStore for LocalFileSystem {
     }
 
     async fn delete(&self, location: &Path) -> Result<()> {
-        let path = self.config.path_to_filesystem(location)?;
+        let path = self.path_to_filesystem(location)?;
         maybe_spawn_blocking(move || match std::fs::remove_file(&path) {
             Ok(_) => Ok(()),
             Err(e) => Err(match e.kind() {
@@ -599,8 +599,8 @@ impl ObjectStore for LocalFileSystem {
     }
 
     async fn copy(&self, from: &Path, to: &Path) -> Result<()> {
-        let from = self.config.path_to_filesystem(from)?;
-        let to = self.config.path_to_filesystem(to)?;
+        let from = self.path_to_filesystem(from)?;
+        let to = self.path_to_filesystem(to)?;
         let mut id = 0;
         // In order to make this atomic we:
         //
@@ -628,8 +628,8 @@ impl ObjectStore for LocalFileSystem {
     }
 
     async fn rename(&self, from: &Path, to: &Path) -> Result<()> {
-        let from = self.config.path_to_filesystem(from)?;
-        let to = self.config.path_to_filesystem(to)?;
+        let from = self.path_to_filesystem(from)?;
+        let to = self.path_to_filesystem(to)?;
         maybe_spawn_blocking(move || loop {
             match std::fs::rename(&from, &to) {
                 Ok(_) => return Ok(()),
@@ -643,8 +643,8 @@ impl ObjectStore for LocalFileSystem {
     }
 
     async fn copy_if_not_exists(&self, from: &Path, to: &Path) -> Result<()> {
-        let from = self.config.path_to_filesystem(from)?;
-        let to = self.config.path_to_filesystem(to)?;
+        let from = self.path_to_filesystem(from)?;
+        let to = self.path_to_filesystem(to)?;
 
         maybe_spawn_blocking(move || loop {
             match std::fs::hard_link(&from, &to) {
@@ -1235,7 +1235,7 @@ mod tests {
         let url = Url::from_directory_path(&canonical).unwrap();
         let path = Path::parse(url.path()).unwrap();
 
-        let roundtrip = integration.config.path_to_filesystem(&path).unwrap();
+        let roundtrip = integration.path_to_filesystem(&path).unwrap();
 
         // Needed as on Windows canonicalize returns extended length path syntax
         // C:\Users\circleci -> \\?\C:\Users\circleci
