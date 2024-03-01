@@ -49,7 +49,7 @@
 //!
 //! // Read the JSON data
 //! let cursor = Cursor::new(buf);
-//! let mut reader = ReaderBuilder::new(batch.schema()).build(cursor).unwrap();
+//! let mut reader = ReaderBuilder::new(batch.schema().clone()).build(cursor).unwrap();
 //! let batch = reader.next().unwrap().unwrap();
 //!
 //! // Reverse the base64 encoding

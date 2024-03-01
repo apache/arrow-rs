@@ -320,7 +320,7 @@ impl FlightDataEncoder {
         let schema = match &self.schema {
             Some(schema) => schema.clone(),
             // encode the schema if this is the first time we have seen it
-            None => self.encode_schema(&batch.schema()),
+            None => self.encode_schema(batch.schema()),
         };
 
         // encode the batch

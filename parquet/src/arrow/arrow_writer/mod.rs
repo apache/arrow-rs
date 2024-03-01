@@ -71,7 +71,7 @@ mod levels;
 /// let to_write = RecordBatch::try_from_iter([("col", col)]).unwrap();
 ///
 /// let mut buffer = Vec::new();
-/// let mut writer = ArrowWriter::try_new(&mut buffer, to_write.schema(), None).unwrap();
+/// let mut writer = ArrowWriter::try_new(&mut buffer, to_write.schema().clone(), None).unwrap();
 /// writer.write(&to_write).unwrap();
 /// writer.close().unwrap();
 ///

@@ -579,7 +579,7 @@ pub fn read_footer_length(buf: [u8; 10]) -> Result<usize, ArrowError> {
 /// let back = fb_to_schema(footer.schema().unwrap());
 /// assert_eq!(&back, schema.as_ref());
 ///
-/// let mut decoder = FileDecoder::new(schema, footer.version());
+/// let mut decoder = FileDecoder::new(schema.clone(), footer.version());
 ///
 /// // Read dictionaries
 /// for block in footer.dictionaries().iter().flatten() {

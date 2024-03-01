@@ -36,7 +36,7 @@
 //!
 //! // Apply indices to batch columns
 //! let columns = batch.columns().iter().map(|c| take(&*c, &indices, None).unwrap()).collect();
-//! let sorted = RecordBatch::try_new(batch.schema(), columns).unwrap();
+//! let sorted = RecordBatch::try_new(batch.schema().clone(), columns).unwrap();
 //!
 //! let col1 = sorted.column(0).as_primitive::<Int32Type>();
 //! assert_eq!(col1.values(), &[2, 1, 4, 3]);

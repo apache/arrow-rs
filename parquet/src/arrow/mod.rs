@@ -46,7 +46,7 @@
 //!     .set_compression(Compression::SNAPPY)
 //!     .build();
 //!
-//! let mut writer = ArrowWriter::try_new(file, batch.schema(), Some(props)).unwrap();
+//! let mut writer = ArrowWriter::try_new(file, batch.schema().clone(), Some(props)).unwrap();
 //!
 //! writer.write(&batch).expect("Writing batch");
 //!

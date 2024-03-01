@@ -562,9 +562,10 @@ impl Index<&str> for RecordBatch {
 ///
 /// let batches: Vec<RecordBatch> = vec![record_batch.clone(), record_batch.clone()];
 ///
-/// let mut reader = RecordBatchIterator::new(batches.into_iter().map(Ok), record_batch.schema());
+/// let mut reader = RecordBatchIterator::new(batches.into_iter().map(Ok),
+/// record_batch.schema().clone());
 ///
-/// assert_eq!(reader.schema(), record_batch.schema());
+/// assert_eq!(&reader.schema(), record_batch.schema());
 /// assert_eq!(reader.next().unwrap().unwrap(), record_batch);
 /// # assert_eq!(reader.next().unwrap().unwrap(), record_batch);
 /// # assert!(reader.next().is_none());
