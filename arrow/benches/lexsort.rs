@@ -20,8 +20,10 @@ use arrow::row::{RowConverter, SortField};
 use arrow::util::bench_util::{
     create_dict_from_values, create_primitive_array, create_string_array_with_len,
 };
+use arrow::util::data_gen::create_random_array;
 use arrow_array::types::Int32Type;
 use arrow_array::{Array, ArrayRef, UInt32Array};
+use arrow_schema::{DataType, Field};
 use criterion::{criterion_group, criterion_main, Criterion};
 use std::sync::Arc;
 
@@ -33,6 +35,10 @@ enum Column {
     Optional16CharString,
     Optional50CharString,
     Optional100Value50CharStringDict,
+    RequiredI32List,
+    OptionalI32List,
+    Required4CharStringList,
+    Optional4CharStringList,
 }
 
 impl std::fmt::Debug for Column {
@@ -44,6 +50,10 @@ impl std::fmt::Debug for Column {
             Column::Optional16CharString => "str_opt(16)",
             Column::Optional50CharString => "str_opt(50)",
             Column::Optional100Value50CharStringDict => "dict(100,str_opt(50))",
+            Column::RequiredI32List => "i32_list",
+            Column::OptionalI32List => "i32_list_opt",
+            Column::Required4CharStringList => "str_list(4)",
+            Column::Optional4CharStringList => "str_list_opt(4)",
         };
         f.write_str(s)
     }
@@ -69,6 +79,38 @@ impl Column {
                     0.1,
                     &create_string_array_with_len::<i32>(100, 0., 50),
                 ))
+            }
+            Column::RequiredI32List => {
+                let field = Field::new(
+                    "_1",
+                    DataType::List(Arc::new(Field::new("item", DataType::Int32, false))),
+                    true,
+                );
+                create_random_array(&field, size, 0., 1.).unwrap()
+            }
+            Column::OptionalI32List => {
+                let field = Field::new(
+                    "_1",
+                    DataType::List(Arc::new(Field::new("item", DataType::Int32, true))),
+                    true,
+                );
+                create_random_array(&field, size, 0.2, 1.).unwrap()
+            }
+            Column::Required4CharStringList => {
+                let field = Field::new(
+                    "_1",
+                    DataType::List(Arc::new(Field::new("item", DataType::Utf8, false))),
+                    true,
+                );
+                create_random_array(&field, size, 0., 1.).unwrap()
+            }
+            Column::Optional4CharStringList => {
+                let field = Field::new(
+                    "_1",
+                    DataType::List(Arc::new(Field::new("item", DataType::Utf8, true))),
+                    true,
+                );
+                create_random_array(&field, size, 0.2, 1.).unwrap()
             }
         }
     }
@@ -148,6 +190,23 @@ fn add_benchmark(c: &mut Criterion) {
             Column::Optional100Value50CharStringDict,
             Column::Optional100Value50CharStringDict,
             Column::Optional100Value50CharStringDict,
+            Column::Optional50CharString,
+        ],
+        &[Column::OptionalI32, Column::RequiredI32List],
+        &[Column::OptionalI32, Column::OptionalI32List],
+        &[Column::OptionalI32List, Column::OptionalI32],
+        &[Column::RequiredI32, Column::Required4CharStringList],
+        &[Column::Required4CharStringList, Column::RequiredI32],
+        &[Column::RequiredI32, Column::Optional4CharStringList],
+        &[Column::Optional4CharStringList, Column::RequiredI32],
+        &[
+            Column::RequiredI32,
+            Column::RequiredI32List,
+            Column::Required16CharString,
+        ],
+        &[
+            Column::OptionalI32,
+            Column::OptionalI32List,
             Column::Optional50CharString,
         ],
     ];
