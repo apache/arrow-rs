@@ -193,7 +193,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
     ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status> {
         self.check_token(&request)?;
         let batch = Self::fake_result().map_err(|e| status!("Could not fake a result", e))?;
-        let schema = batch.schema();
+        let schema = batch.schema().clone();
         let batches = vec![batch];
         let flight_data = batches_to_flight_data(schema.as_ref(), batches)
             .map_err(|e| status!("Could not convert batches", e))?
@@ -643,7 +643,8 @@ impl FlightSqlService for FlightSqlServiceImpl {
         self.check_token(&request)?;
         let schema = Self::fake_result()
             .map_err(|e| status!("Error getting result schema", e))?
-            .schema();
+            .schema()
+            .clone();
         let message = SchemaAsIpc::new(&schema, &IpcWriteOptions::default())
             .try_into()
             .map_err(|e| status!("Unable to serialize schema", e))?;

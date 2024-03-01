@@ -438,7 +438,7 @@ impl SqlInfoData {
     /// Return the schema of the RecordBatch that will be returned
     /// from [`CommandGetSqlInfo`]
     pub fn schema(&self) -> SchemaRef {
-        self.batch.schema()
+        self.batch.schema().clone()
     }
 }
 

@@ -1429,7 +1429,7 @@ mod tests {
 
     fn roundtrip_ipc(rb: &RecordBatch) -> RecordBatch {
         let mut buf = Vec::new();
-        let mut writer = crate::writer::FileWriter::try_new(&mut buf, &rb.schema()).unwrap();
+        let mut writer = crate::writer::FileWriter::try_new(&mut buf, rb.schema()).unwrap();
         writer.write(rb).unwrap();
         writer.finish().unwrap();
         drop(writer);
@@ -1440,7 +1440,7 @@ mod tests {
 
     fn roundtrip_ipc_stream(rb: &RecordBatch) -> RecordBatch {
         let mut buf = Vec::new();
-        let mut writer = crate::writer::StreamWriter::try_new(&mut buf, &rb.schema()).unwrap();
+        let mut writer = crate::writer::StreamWriter::try_new(&mut buf, rb.schema()).unwrap();
         writer.write(rb).unwrap();
         writer.finish().unwrap();
         drop(writer);
@@ -1815,7 +1815,7 @@ mod tests {
         let batch = RecordBatch::new_empty(schema);
 
         let mut buf = Vec::new();
-        let mut writer = crate::writer::FileWriter::try_new(&mut buf, &batch.schema()).unwrap();
+        let mut writer = crate::writer::FileWriter::try_new(&mut buf, batch.schema()).unwrap();
         writer.write(&batch).unwrap();
         writer.finish().unwrap();
         drop(writer);
@@ -1842,7 +1842,7 @@ mod tests {
         let batch = RecordBatch::new_empty(schema);
 
         let mut buf = Vec::new();
-        let mut writer = crate::writer::FileWriter::try_new(&mut buf, &batch.schema()).unwrap();
+        let mut writer = crate::writer::FileWriter::try_new(&mut buf, batch.schema()).unwrap();
         writer.write(&batch).unwrap();
         writer.finish().unwrap();
         drop(writer);

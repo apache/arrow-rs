@@ -1264,7 +1264,7 @@ mod tests {
         .unwrap();
 
         let mut buf = Vec::with_capacity(1024);
-        let mut writer = ArrowWriter::try_new(&mut buf, data.schema(), None).unwrap();
+        let mut writer = ArrowWriter::try_new(&mut buf, data.schema().clone(), None).unwrap();
         writer.write(&data).unwrap();
         writer.close().unwrap();
 
@@ -1338,7 +1338,8 @@ mod tests {
         let props = WriterProperties::builder()
             .set_max_row_group_size(3)
             .build();
-        let mut writer = ArrowWriter::try_new(&mut buf, data.schema(), Some(props)).unwrap();
+        let mut writer =
+            ArrowWriter::try_new(&mut buf, data.schema().clone(), Some(props)).unwrap();
         writer.write(&data).unwrap();
         writer.close().unwrap();
 
@@ -1690,7 +1691,7 @@ mod tests {
             let mut reader = builder.with_projection(mask).build().unwrap();
             let sync_reader_schema = reader.schema();
             let batch = reader.next().unwrap().unwrap();
-            let sync_batch_schema = batch.schema();
+            let sync_batch_schema = batch.schema().clone();
             assert_schemas(sync_builder_schema, sync_reader_schema, sync_batch_schema);
 
             // asynchronous should be same
@@ -1701,7 +1702,7 @@ mod tests {
             let mut reader = builder.with_projection(mask).build().unwrap();
             let async_reader_schema = reader.schema().clone();
             let batch = reader.next().await.unwrap().unwrap();
-            let async_batch_schema = batch.schema();
+            let async_batch_schema = batch.schema().clone();
             assert_schemas(
                 async_builder_schema,
                 async_reader_schema,

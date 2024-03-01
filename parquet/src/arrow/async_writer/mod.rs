@@ -282,7 +282,7 @@ mod tests {
 
         let mut buffer = Vec::new();
         let mut writer =
-            AsyncArrowWriter::try_new(&mut buffer, to_write.schema(), 0, None).unwrap();
+            AsyncArrowWriter::try_new(&mut buffer, to_write.schema().clone(), 0, None).unwrap();
         writer.write(&to_write).await.unwrap();
         writer.close().await.unwrap();
 
@@ -433,7 +433,8 @@ mod tests {
         let temp = tempfile::tempfile().unwrap();
 
         let file = tokio::fs::File::from_std(temp.try_clone().unwrap());
-        let mut writer = AsyncArrowWriter::try_new(file, to_write.schema(), 0, None).unwrap();
+        let mut writer =
+            AsyncArrowWriter::try_new(file, to_write.schema().clone(), 0, None).unwrap();
         writer.write(&to_write).await.unwrap();
         writer.close().await.unwrap();
 
@@ -461,7 +462,7 @@ mod tests {
             let temp = tempfile::tempfile().unwrap();
             let file = tokio::fs::File::from_std(temp.try_clone().unwrap());
             let mut writer =
-                AsyncArrowWriter::try_new(file, batch.schema(), buffer_size, None).unwrap();
+                AsyncArrowWriter::try_new(file, batch.schema().clone(), buffer_size, None).unwrap();
 
             // starts empty
             assert_eq!(writer.in_progress_size(), 0);

@@ -510,7 +510,7 @@ impl PreparedStatement<Channel> {
             let descriptor = FlightDescriptor::new_cmd(cmd.as_any().encode_to_vec());
             let flight_stream_builder = FlightDataEncoderBuilder::new()
                 .with_flight_descriptor(Some(descriptor))
-                .with_schema(params_batch.schema());
+                .with_schema(params_batch.schema().clone());
             let flight_data = flight_stream_builder
                 .build(futures::stream::iter(
                     self.parameter_binding.clone().map(Ok),

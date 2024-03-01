@@ -89,7 +89,7 @@ impl XdbcTypeInfoData {
     /// Return the schema of the RecordBatch that will be returned
     /// from [`CommandGetXdbcTypeInfo`]
     pub fn schema(&self) -> SchemaRef {
-        self.batch.schema()
+        self.batch.schema().clone()
     }
 }
 
@@ -262,7 +262,7 @@ impl XdbcTypeInfoDataBuilder {
             .collect::<std::result::Result<Vec<_>, _>>()?;
 
         Ok(XdbcTypeInfoData {
-            batch: RecordBatch::try_new(batch.schema(), columns)?,
+            batch: RecordBatch::try_new(batch.schema().clone(), columns)?,
         })
     }
 

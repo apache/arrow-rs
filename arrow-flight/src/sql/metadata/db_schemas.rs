@@ -160,7 +160,10 @@ impl GetDbSchemasBuilder {
             .map(|c| take(c, &indices, None))
             .collect::<std::result::Result<Vec<_>, _>>()?;
 
-        Ok(RecordBatch::try_new(filtered_batch.schema(), columns)?)
+        Ok(RecordBatch::try_new(
+            filtered_batch.schema().clone(),
+            columns,
+        )?)
     }
 
     /// Return the schema of the RecordBatch that will be returned

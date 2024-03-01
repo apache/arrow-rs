@@ -570,7 +570,7 @@ mod tests {
         let (_, baseline_flight_batch) = make_flight_data(&batch, &options);
 
         let big_batch = batch.slice(0, batch.num_rows() - 1);
-        let optimized_big_batch = prepare_batch_for_flight(&big_batch, Arc::clone(&schema), false)
+        let optimized_big_batch = prepare_batch_for_flight(&big_batch, Arc::clone(schema), false)
             .expect("failed to optimize");
         let (_, optimized_big_flight_batch) = make_flight_data(&optimized_big_batch, &options);
 
@@ -581,7 +581,7 @@ mod tests {
 
         let small_batch = batch.slice(0, 1);
         let optimized_small_batch =
-            prepare_batch_for_flight(&small_batch, Arc::clone(&schema), false)
+            prepare_batch_for_flight(&small_batch, Arc::clone(schema), false)
                 .expect("failed to optimize");
         let (_, optimized_small_flight_batch) = make_flight_data(&optimized_small_batch, &options);
 

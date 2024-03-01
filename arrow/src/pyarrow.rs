@@ -386,7 +386,7 @@ impl FromPyArrow for RecordBatch {
 impl ToPyArrow for RecordBatch {
     fn to_pyarrow(&self, py: Python) -> PyResult<PyObject> {
         // Workaround apache/arrow#37669 by returning RecordBatchIterator
-        let reader = RecordBatchIterator::new(vec![Ok(self.clone())], self.schema());
+        let reader = RecordBatchIterator::new(vec![Ok(self.clone())], self.schema().clone());
         let reader: Box<dyn RecordBatchReader + Send> = Box::new(reader);
         let py_reader = reader.into_pyarrow(py)?;
         py_reader.call_method0(py, "read_next_batch")
