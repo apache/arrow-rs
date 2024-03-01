@@ -231,9 +231,9 @@ impl RecordBatch {
         })
     }
 
-    /// Returns the [`Schema`] of the record batch.
-    pub fn schema(&self) -> SchemaRef {
-        self.schema.clone()
+    /// Returns a reference to the [`Schema`] of the record batch.
+    pub fn schema(&self) -> &SchemaRef {
+        &self.schema
     }
 
     /// Projects the schema onto the specified columns

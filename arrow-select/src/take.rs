@@ -821,7 +821,7 @@ pub fn take_record_batch(
         .iter()
         .map(|c| take(c, indices, None))
         .collect::<Result<Vec<_>, _>>()?;
-    RecordBatch::try_new(record_batch.schema(), columns)
+    RecordBatch::try_new(record_batch.schema().clone(), columns)
 }
 
 #[cfg(test)]

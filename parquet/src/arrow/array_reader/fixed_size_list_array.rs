@@ -608,7 +608,7 @@ mod tests {
             .expect("unable to read record batch");
 
         // Verify values of both read columns match
-        assert_eq!(schema, actual.schema());
+        assert_eq!(&schema, actual.schema());
         let actual_list = actual
             .column(0)
             .as_any()

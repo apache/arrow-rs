@@ -41,7 +41,7 @@ async fn test_empty() {
 #[tokio::test]
 async fn test_empty_batch() {
     let batch = make_primitive_batch(5);
-    let empty = RecordBatch::new_empty(batch.schema());
+    let empty = RecordBatch::new_empty(batch.schema().clone());
     roundtrip(vec![empty]).await;
 }
 
@@ -90,7 +90,7 @@ async fn test_primitive_many() {
 #[tokio::test]
 async fn test_primitive_empty() {
     let batch = make_primitive_batch(5);
-    let empty = RecordBatch::new_empty(batch.schema());
+    let empty = RecordBatch::new_empty(batch.schema().clone());
 
     roundtrip(vec![batch, empty]).await;
 }

@@ -185,7 +185,7 @@ pub fn filter_record_batch(
         .map(|a| filter_array(a, &filter))
         .collect::<Result<Vec<_>, _>>()?;
     let options = RecordBatchOptions::default().with_row_count(Some(filter.count()));
-    RecordBatch::try_new_with_options(record_batch.schema(), filtered_arrays, &options)
+    RecordBatch::try_new_with_options(record_batch.schema().clone(), filtered_arrays, &options)
 }
 
 /// A builder to construct [`FilterPredicate`]

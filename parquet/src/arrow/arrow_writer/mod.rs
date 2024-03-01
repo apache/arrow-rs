@@ -1491,9 +1491,12 @@ mod tests {
             .set_write_batch_size(1)
             .build();
 
-        let mut writer =
-            ArrowWriter::try_new(file.try_clone().unwrap(), batch.schema(), Some(props))
-                .expect("Unable to write file");
+        let mut writer = ArrowWriter::try_new(
+            file.try_clone().unwrap(),
+            batch.schema().clone(),
+            Some(props),
+        )
+        .expect("Unable to write file");
         writer.write(&batch).unwrap();
         writer.close().unwrap();
 
@@ -1553,7 +1556,7 @@ mod tests {
 
         let mut writer = ArrowWriter::try_new(
             file.try_clone().unwrap(),
-            expected_batch.schema(),
+            expected_batch.schema().clone(),
             Some(props),
         )
         .expect("Unable to write file");
@@ -1795,9 +1798,12 @@ mod tests {
         let expected_batch = RecordBatch::try_new(Arc::new(schema), vec![values]).unwrap();
         let file = tempfile::tempfile().unwrap();
 
-        let mut writer =
-            ArrowWriter::try_new(file.try_clone().unwrap(), expected_batch.schema(), None)
-                .expect("Unable to write file");
+        let mut writer = ArrowWriter::try_new(
+            file.try_clone().unwrap(),
+            expected_batch.schema().clone(),
+            None,
+        )
+        .expect("Unable to write file");
         writer.write(&expected_batch).unwrap();
         writer.close().unwrap();
     }
@@ -1809,8 +1815,8 @@ mod tests {
         let batch = RecordBatch::try_new(Arc::new(schema), vec![values]).unwrap();
 
         let mut out = Vec::with_capacity(1024);
-        let mut writer =
-            ArrowWriter::try_new(&mut out, batch.schema(), None).expect("Unable to write file");
+        let mut writer = ArrowWriter::try_new(&mut out, batch.schema().clone(), None)
+            .expect("Unable to write file");
         writer.write(&batch).unwrap();
         let file_meta_data = writer.close().unwrap();
         for row_group in file_meta_data.row_groups {
@@ -2732,7 +2738,7 @@ mod tests {
 
         let mut read = ParquetRecordBatchReader::try_new(Bytes::from(buf), 1024).unwrap();
         let back = read.next().unwrap().unwrap();
-        assert_eq!(back.schema(), file_schema);
+        assert_eq!(back.schema(), &file_schema);
         assert_ne!(back.schema(), batch.schema());
         assert_eq!(back.column(0).as_ref(), batch.column(0).as_ref());
     }
@@ -2748,7 +2754,7 @@ mod tests {
         // build a record batch
         let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(a)]).unwrap();
 
-        let mut writer = ArrowWriter::try_new(vec![], batch.schema(), None).unwrap();
+        let mut writer = ArrowWriter::try_new(vec![], batch.schema().clone(), None).unwrap();
 
         // starts empty
         assert_eq!(writer.in_progress_size(), 0);
@@ -2787,7 +2793,7 @@ mod tests {
         .unwrap();
 
         let mut buf = Vec::with_capacity(1024);
-        let mut writer = ArrowWriter::try_new(&mut buf, batch.schema(), None).unwrap();
+        let mut writer = ArrowWriter::try_new(&mut buf, batch.schema().clone(), None).unwrap();
         writer.write(&batch).unwrap();
         writer.close().unwrap();
 

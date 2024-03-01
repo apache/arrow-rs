@@ -1794,7 +1794,7 @@ mod tests {
         let roundtrip = read_record_batch(
             &b,
             ipc_batch,
-            batch.schema(),
+            batch.schema().clone(),
             &Default::default(),
             None,
             &message.version(),

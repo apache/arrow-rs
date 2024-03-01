@@ -60,7 +60,7 @@ fn do_test(test: LayoutTest) {
     let mut buf = Vec::with_capacity(1024);
 
     let mut writer =
-        ArrowWriter::try_new(&mut buf, test.batches[0].schema(), Some(test.props)).unwrap();
+        ArrowWriter::try_new(&mut buf, test.batches[0].schema().clone(), Some(test.props)).unwrap();
     for batch in test.batches {
         writer.write(&batch).unwrap();
     }

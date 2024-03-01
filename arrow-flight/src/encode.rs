@@ -611,7 +611,7 @@ mod tests {
                 DecodedPayload::None => {}
                 DecodedPayload::Schema(s) => assert_eq!(s, expected_schema),
                 DecodedPayload::RecordBatch(b) => {
-                    assert_eq!(b.schema(), expected_schema);
+                    assert_eq!(b.schema(), &expected_schema);
                     let expected_array = StringArray::from(vec!["a", "a", "b"]);
                     let actual_array = b.column_by_name("dict").unwrap();
                     let actual_array = downcast_array::<StringArray>(actual_array);
@@ -650,7 +650,7 @@ mod tests {
                 DecodedPayload::None => {}
                 DecodedPayload::Schema(s) => assert_eq!(s, schema),
                 DecodedPayload::RecordBatch(b) => {
-                    assert_eq!(b.schema(), schema);
+                    assert_eq!(b.schema(), &schema);
 
                     let actual_array = Arc::new(downcast_array::<DictionaryArray<UInt16Type>>(
                         b.column_by_name("dict").unwrap(),
@@ -683,7 +683,8 @@ mod tests {
         )
         .expect("cannot create record batch");
 
-        prepare_batch_for_flight(&batch, batch.schema(), false).expect("failed to optimize");
+        prepare_batch_for_flight(&batch, batch.schema().clone(), false)
+            .expect("failed to optimize");
     }
 
     pub fn make_flight_data(

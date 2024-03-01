@@ -254,7 +254,7 @@ mod tests {
         let schema_ref = Arc::new(schema);
         let batch = create_random_batch(schema_ref.clone(), size, 0.35, 0.7).unwrap();
 
-        assert_eq!(batch.schema(), schema_ref);
+        assert_eq!(batch.schema(), &schema_ref);
         assert_eq!(batch.num_columns(), schema_ref.fields().len());
         for array in batch.columns() {
             assert_eq!(array.len(), size);
@@ -277,7 +277,7 @@ mod tests {
         let schema_ref = Arc::new(schema);
         let batch = create_random_batch(schema_ref.clone(), size, 0.35, 0.7).unwrap();
 
-        assert_eq!(batch.schema(), schema_ref);
+        assert_eq!(batch.schema(), &schema_ref);
         assert_eq!(batch.num_columns(), schema_ref.fields().len());
         for array in batch.columns() {
             assert_eq!(array.null_count(), 0);

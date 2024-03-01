@@ -451,7 +451,7 @@ mod tests {
                 .unwrap();
 
         let mut buffer = Vec::with_capacity(1024);
-        let mut writer = ArrowWriter::try_new(&mut buffer, written.schema(), None).unwrap();
+        let mut writer = ArrowWriter::try_new(&mut buffer, written.schema().clone(), None).unwrap();
         writer.write(&written).unwrap();
         writer.close().unwrap();
 

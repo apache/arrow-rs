@@ -1225,7 +1225,7 @@ mod tests {
                 .unwrap();
 
         let mut buffer = Vec::with_capacity(1024);
-        let mut writer = ArrowWriter::try_new(&mut buffer, written.schema(), None).unwrap();
+        let mut writer = ArrowWriter::try_new(&mut buffer, written.schema().clone(), None).unwrap();
         writer.write(&written).unwrap();
         writer.close().unwrap();
 
@@ -1258,7 +1258,7 @@ mod tests {
                 .unwrap();
 
         let mut buffer = Vec::with_capacity(1024);
-        let mut writer = ArrowWriter::try_new(&mut buffer, written.schema(), None).unwrap();
+        let mut writer = ArrowWriter::try_new(&mut buffer, written.schema().clone(), None).unwrap();
         writer.write(&written).unwrap();
         writer.close().unwrap();
 
@@ -1295,7 +1295,7 @@ mod tests {
                 .unwrap();
 
         let mut buffer = Vec::with_capacity(1024);
-        let mut writer = ArrowWriter::try_new(&mut buffer, written.schema(), None).unwrap();
+        let mut writer = ArrowWriter::try_new(&mut buffer, written.schema().clone(), None).unwrap();
         writer.write(&written).unwrap();
         writer.close().unwrap();
 
@@ -2321,9 +2321,12 @@ mod tests {
                 .build();
 
             let file = tempfile().unwrap();
-            let mut writer =
-                ArrowWriter::try_new(file.try_clone().unwrap(), batch.schema(), Some(props))
-                    .unwrap();
+            let mut writer = ArrowWriter::try_new(
+                file.try_clone().unwrap(),
+                batch.schema().clone(),
+                Some(props),
+            )
+            .unwrap();
             writer.write(&batch).unwrap();
             writer.close().unwrap();
             file
@@ -2844,7 +2847,7 @@ mod tests {
         .unwrap();
 
         let mut buffer = Vec::with_capacity(1024);
-        let mut writer = ArrowWriter::try_new(&mut buffer, written.schema(), None).unwrap();
+        let mut writer = ArrowWriter::try_new(&mut buffer, written.schema().clone(), None).unwrap();
         writer.write(&written).unwrap();
         writer.close().unwrap();
 
@@ -2872,7 +2875,8 @@ mod tests {
             .build();
 
         let mut buffer = Vec::with_capacity(1024);
-        let mut writer = ArrowWriter::try_new(&mut buffer, batch.schema(), Some(props)).unwrap();
+        let mut writer =
+            ArrowWriter::try_new(&mut buffer, batch.schema().clone(), Some(props)).unwrap();
         writer.write(&batch).unwrap();
         writer.close().unwrap();
 
@@ -2913,7 +2917,7 @@ mod tests {
         .unwrap();
 
         let mut buffer = Vec::with_capacity(1024);
-        let mut writer = ArrowWriter::try_new(&mut buffer, batch.schema(), None).unwrap();
+        let mut writer = ArrowWriter::try_new(&mut buffer, batch.schema().clone(), None).unwrap();
         writer.write(&batch).unwrap();
         writer.close().unwrap();
 
@@ -2928,7 +2932,7 @@ mod tests {
         assert_eq!(t4, PhysicalType::FIXED_LEN_BYTE_ARRAY);
 
         let mut reader = builder.build().unwrap();
-        assert_eq!(batch.schema(), reader.schema());
+        assert_eq!(batch.schema(), &reader.schema());
 
         let out = reader.next().unwrap().unwrap();
         assert_eq!(batch, out);

@@ -1582,7 +1582,7 @@ mod tests {
 
         let schema = reader.schema();
         let batch_schema = batch.schema();
-        assert_eq!(schema, batch_schema);
+        assert_eq!(&schema, batch_schema);
 
         let a = schema.column_with_name("a").unwrap();
         assert_eq!(0, a.0);
@@ -1630,7 +1630,7 @@ mod tests {
 
         let schema = reader.schema();
         let batch_schema = batch.schema();
-        assert_eq!(schema, batch_schema);
+        assert_eq!(&schema, batch_schema);
 
         let a = schema.column_with_name("a").unwrap();
         assert_eq!(&DataType::Int64, a.1.data_type());
@@ -1971,7 +1971,7 @@ mod tests {
 
         let schema = reader.schema();
         let batch_schema = batch.schema();
-        assert_eq!(schema, batch_schema);
+        assert_eq!(&schema, batch_schema);
 
         let a = schema.column_with_name("a").unwrap();
         assert_eq!(
@@ -2004,7 +2004,7 @@ mod tests {
 
         let schema = reader.schema();
         let batch_schema = batch.schema();
-        assert_eq!(schema, batch_schema);
+        assert_eq!(&schema, batch_schema);
 
         let a = schema.column_with_name("a").unwrap();
         assert_eq!(
@@ -2033,7 +2033,7 @@ mod tests {
 
         let schema = reader.schema();
         let batch_schema = batch.schema();
-        assert_eq!(schema, batch_schema);
+        assert_eq!(&schema, batch_schema);
 
         let a = schema.column_with_name("a").unwrap();
         assert_eq!(&DataType::Date64, a.1.data_type());
@@ -2063,7 +2063,7 @@ mod tests {
 
         let schema = reader.schema();
         let batch_schema = batch.schema();
-        assert_eq!(schema, batch_schema);
+        assert_eq!(&schema, batch_schema);
 
         let a = schema.column_with_name("a").unwrap();
         assert_eq!(&DataType::Time64(TimeUnit::Nanosecond), a.1.data_type());
@@ -2098,7 +2098,7 @@ mod tests {
             sum_num_rows += batch.num_rows();
             num_batches += 1;
             let batch_schema = batch.schema();
-            assert_eq!(schema, batch_schema);
+            assert_eq!(&schema, batch_schema);
             let a_array = batch.column(col_a_index).as_primitive::<Int64Type>();
             sum_a += (0..a_array.len()).map(|i| a_array.value(i)).sum::<i64>();
         }
