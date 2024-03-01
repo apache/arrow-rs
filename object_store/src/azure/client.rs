@@ -36,7 +36,6 @@ use base64::Engine;
 use bytes::{Buf, Bytes};
 use chrono::{DateTime, Utc};
 use hyper::http::HeaderName;
-use itertools::Itertools;
 use reqwest::header::CONTENT_TYPE;
 use reqwest::{
     header::{HeaderValue, CONTENT_LENGTH, IF_MATCH, IF_NONE_MATCH},
@@ -564,7 +563,7 @@ struct ListResultInternal {
 }
 
 fn to_list_result(value: ListResultInternal, prefix: Option<&str>) -> Result<ListResult> {
-    let prefix = prefix.map(Path::from).unwrap_or_default();
+    let prefix = prefix.unwrap_or_default();
     let common_prefixes = value
         .blobs
         .blob_prefix
@@ -576,18 +575,14 @@ fn to_list_result(value: ListResultInternal, prefix: Option<&str>) -> Result<Lis
         .blobs
         .blobs
         .into_iter()
-        .map(ObjectMeta::try_from)
-        // Note: workaround for gen2 accounts with hierarchical namespaces. These accounts also
-        // return path segments as "directories" and include blobs in list requests with prefix,
-        // if the prefix matches the blob. When we want directories, its always via
-        // the BlobPrefix mechanics, and during lists we state that prefixes are evaluated on path segment basis.
-        .filter_map_ok(|obj| {
-            if obj.size > 0 && obj.location.as_ref().len() > prefix.as_ref().len() {
-                Some(obj)
-            } else {
-                None
-            }
+        // Note: Filters out directories from list results when hierarchical namespaces are
+        // enabled. When we want directories, its always via the BlobPrefix mechanics,
+        // and during lists we state that prefixes are evaluated on path segment basis.
+        .filter(|blob| {
+            !matches!(blob.properties.resource_type.as_ref(), Some(typ) if typ == "directory")
+                && blob.name.len() > prefix.len()
         })
+        .map(ObjectMeta::try_from)
         .collect::<Result<_>>()?;
 
     Ok(ListResult {
@@ -657,6 +652,8 @@ struct BlobProperties {
     pub content_language: Option<String>,
     #[serde(rename = "Etag")]
     pub e_tag: Option<String>,
+    #[serde(rename = "ResourceType")]
+    pub resource_type: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
