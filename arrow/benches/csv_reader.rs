@@ -43,7 +43,7 @@ fn do_bench(c: &mut Criterion, name: &str, cols: Vec<ArrayRef>) {
         c.bench_function(&format!("{name} - {batch_size}"), |b| {
             b.iter(|| {
                 let cursor = Cursor::new(buf.as_slice());
-                let reader = csv::ReaderBuilder::new(batch.schema())
+                let reader = csv::ReaderBuilder::new(batch.schema().clone())
                     .with_batch_size(batch_size)
                     .with_header(true)
                     .build_buffered(cursor)

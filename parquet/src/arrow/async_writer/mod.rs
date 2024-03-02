@@ -36,7 +36,7 @@
 //!
 //! let mut buffer = Vec::new();
 //! let mut writer =
-//!     AsyncArrowWriter::try_new(&mut buffer, to_write.schema(), 0, None).unwrap();
+//!     AsyncArrowWriter::try_new(&mut buffer, to_write.schema().clone(), 0, None).unwrap();
 //! writer.write(&to_write).await.unwrap();
 //! writer.close().await.unwrap();
 //!
