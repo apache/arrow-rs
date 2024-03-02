@@ -3820,14 +3820,14 @@ mod tests {
             SortColumn {
                 values: Arc::new(PrimitiveArray::<T>::from(primitive_array_data.clone()))
                     as ArrayRef,
-                options: primitive_array_options.clone(),
+                options: primitive_array_options,
             },
             SortColumn {
                 values: Arc::new(FixedSizeListArray::from_iter_primitive::<T, _, _>(
                     list_array_data.clone(),
                     1,
                 )) as ArrayRef,
-                options: list_array_options.clone(),
+                options: list_array_options,
             },
         ];
 
