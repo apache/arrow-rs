@@ -238,7 +238,7 @@ impl UnionArray {
     ///
     /// # Panics
     ///
-    /// Panics if `index` is greater than or equal to the length of the array.
+    /// Panics if `index` is greater than or equal to the number of child arrays
     pub fn type_id(&self, index: usize) -> i8 {
         assert!(index < self.type_ids.len());
         self.type_ids[index]
