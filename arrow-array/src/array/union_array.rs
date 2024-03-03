@@ -226,7 +226,7 @@ impl UnionArray {
     ///
     /// # Panics
     ///
-    /// Panics if the `type_id` provided is less than zero or greater than or equal the number of types
+    /// Panics if the `type_id` provided is not present in the array's DataType
     /// in the `Union`.
     pub fn child(&self, type_id: i8) -> &ArrayRef {
         assert!((type_id as usize) < self.fields.len());
