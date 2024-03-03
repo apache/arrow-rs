@@ -570,7 +570,7 @@ mod tests {
         // Should have merged inputs together
         // Not 30 as this is done on a best-effort basis
         let values_len = dictionary.values().len();
-        assert!(values_len < 40 && values_len >= 30, "{values_len}")
+        assert!((30..40).contains(&values_len), "{values_len}")
     }
 
     #[test]
