@@ -17,7 +17,7 @@
 
 use crate::buffer::ScalarBuffer;
 use crate::{ArrowNativeType, MutableBuffer, OffsetsBuilder};
-use std::ops::Deref;
+use std::ops::{Add, Deref, Sub};
 
 /// A non-empty buffer of monotonically increasing, positive integers.
 ///
@@ -173,10 +173,10 @@ impl<T: ArrowNativeType> AsRef<[T]> for OffsetBuffer<T> {
     }
 }
 
-impl<O: ArrowNativeType> TryFrom<OffsetsBuilder> for OffsetBuffer<O> {
-    type Error = String;
-
-    fn try_from(value: OffsetsBuilder) -> Result<Self, Self::Error> {
+impl<O: ArrowNativeType + Add<Output = O> + Sub<Output = O>> From<OffsetsBuilder<O>>
+    for OffsetBuffer<O>
+{
+    fn from(value: OffsetsBuilder<O>) -> Self {
         value.finish()
     }
 }
