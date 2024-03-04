@@ -521,18 +521,19 @@ impl PreparedStatement<Channel> {
                 .await
                 .map_err(flight_error_to_arrow_error)?;
 
-            let result = self
+            // Attempt to update the stored handle with any updated handle in the DoPut result.
+            // Not all servers support this, so ignore any errors when attempting to decode.
+            if let Some(result) = self
                 .flight_sql_client
                 .do_put(stream::iter(flight_data))
                 .await?
                 .message()
                 .await
                 .map_err(status_to_arrow_error)?
-                .unwrap();
-            // Attempt to update the stored handle with any updated handle in the DoPut result.
-            // Not all servers support this, so ignore any errors when attempting to decode.
-            if let Ok(Some(handle)) = self.unpack_prepared_statement_handle(&result) {
-                self.handle = handle;
+            {
+                if let Some(handle) = self.unpack_prepared_statement_handle(&result)? {
+                    self.handle = handle;
+                }
             }
         }
         Ok(())
@@ -548,7 +549,7 @@ impl PreparedStatement<Channel> {
         let any = Any::decode(&*put_result.app_metadata).map_err(decode_error_to_arrow_error)?;
         Ok(any
             .unpack::<DoPutPreparedStatementResult>()?
-            .map(|result| result.prepared_statement_handle))
+            .and_then(|result| result.prepared_statement_handle))
     }
 
     /// Close the prepared statement, so that this PreparedStatement can not used
