@@ -210,10 +210,10 @@ impl<W: AsyncWrite + Unpin + Send> AsyncArrowWriter<W> {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow_array::{ArrayRef, BinaryArray, Int32Array, Int64Array, RecordBatchReader};
     use bytes::Bytes;
+    use std::sync::Arc;
     use tokio::pin;
 
     use crate::arrow::arrow_reader::{ParquetRecordBatchReader, ParquetRecordBatchReaderBuilder};
