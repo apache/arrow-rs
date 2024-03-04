@@ -212,7 +212,7 @@ mod tests {
                 );
                 Ok(())
             }
-            Ok(_) => return Err("builder.finish should return Err".to_string()),
+            Ok(_) => Err("builder.finish should return Err".to_string()),
         }
     }
 
