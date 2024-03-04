@@ -213,6 +213,13 @@ pub enum DataType {
     /// A single LargeUtf8 array can store up to [`i64::MAX`] bytes
     /// of string data in total.
     LargeUtf8,
+    /// A variable-length string in Unicode with UTF-8 encoding
+    ///
+    /// Logically the same as [`Self::Utf8``], but the internal representation uses a view
+    /// struct that contains the string length and either the string's entire data
+    /// inline (for small strings) or an inlined prefix, an index of another buffer,
+    /// and an offset pointing to a slice in that buffer (for non-small strings).
+    Utf8View,
     /// A list of some logical data type with variable length.
     ///
     /// A single List array can store up to [`i32::MAX`] elements in total.
@@ -522,7 +529,7 @@ impl DataType {
             DataType::Interval(IntervalUnit::MonthDayNano) => Some(16),
             DataType::Decimal128(_, _) => Some(16),
             DataType::Decimal256(_, _) => Some(32),
-            DataType::Utf8 | DataType::LargeUtf8 => None,
+            DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => None,
             DataType::Binary | DataType::LargeBinary | DataType::BinaryView => None,
             DataType::FixedSizeBinary(_) => None,
             DataType::List(_) | DataType::LargeList(_) | DataType::Map(_, _) => None,
@@ -565,6 +572,7 @@ impl DataType {
                 | DataType::BinaryView
                 | DataType::Utf8
                 | DataType::LargeUtf8
+                | DataType::Utf8View
                 | DataType::Decimal128(_, _)
                 | DataType::Decimal256(_, _) => 0,
                 DataType::Timestamp(_, s) => s.as_ref().map(|s| s.len()).unwrap_or_default(),

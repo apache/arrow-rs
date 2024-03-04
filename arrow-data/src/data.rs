@@ -109,7 +109,7 @@ pub(crate) fn new_buffers(data_type: &DataType, capacity: usize) -> [MutableBuff
             buffer.push(0i64);
             [buffer, MutableBuffer::new(capacity * mem::size_of::<u8>())]
         }
-        DataType::BinaryView => [
+        DataType::BinaryView | DataType::Utf8View => [
             MutableBuffer::new(capacity * mem::size_of::<u128>()),
             empty_buffer,
         ],
@@ -1545,7 +1545,7 @@ pub fn layout(data_type: &DataType) -> DataTypeLayout {
         DataType::LargeBinary => DataTypeLayout::new_binary::<i64>(),
         DataType::Utf8 => DataTypeLayout::new_binary::<i32>(),
         DataType::LargeUtf8 => DataTypeLayout::new_binary::<i64>(),
-        DataType::BinaryView => unimplemented!("BinaryView"),
+        DataType::BinaryView | DataType::Utf8View => unimplemented!("Not implemented"),
         DataType::FixedSizeList(_, _) => DataTypeLayout::new_empty(), // all in child data
         DataType::List(_) => DataTypeLayout::new_fixed_width::<i32>(),
         DataType::LargeList(_) => DataTypeLayout::new_fixed_width::<i64>(),
