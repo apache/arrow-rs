@@ -244,6 +244,18 @@ impl<W: Write + Send> ArrowWriter<W> {
         self.writer.append_key_value_metadata(kv_metadata)
     }
 
+    /// Returns a reference to the underlying writer.
+    pub fn inner(&self) -> &W {
+        self.writer.inner()
+    }
+
+    /// Returns a mutable reference to the underlying writer.
+    ///
+    /// It is inadvisable to directly write to the underlying writer.
+    pub fn inner_mut(&mut self) -> &mut W {
+        self.writer.inner_mut()
+    }
+
     /// Flushes any outstanding data and returns the underlying writer.
     pub fn into_inner(mut self) -> Result<W> {
         self.flush()?;
@@ -251,9 +263,16 @@ impl<W: Write + Send> ArrowWriter<W> {
     }
 
     /// Close and finalize the underlying Parquet writer
-    pub fn close(mut self) -> Result<crate::format::FileMetaData> {
+    ///
+    /// Unlike [`Self::close`] this does not consume self
+    pub fn finish(&mut self) -> Result<crate::format::FileMetaData> {
         self.flush()?;
-        self.writer.close()
+        self.writer.finish()
+    }
+
+    /// Close and finalize the underlying Parquet writer
+    pub fn close(mut self) -> Result<crate::format::FileMetaData> {
+        self.finish()
     }
 }
 
