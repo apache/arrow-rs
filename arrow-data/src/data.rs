@@ -109,6 +109,10 @@ pub(crate) fn new_buffers(data_type: &DataType, capacity: usize) -> [MutableBuff
             buffer.push(0i64);
             [buffer, MutableBuffer::new(capacity * mem::size_of::<u8>())]
         }
+        DataType::BinaryView => [
+            MutableBuffer::new(capacity * mem::size_of::<u128>()),
+            empty_buffer,
+        ],
         DataType::List(_) | DataType::Map(_, _) => {
             // offset buffer always starts with a zero
             let mut buffer = MutableBuffer::new((1 + capacity) * mem::size_of::<i32>());
@@ -1541,6 +1545,7 @@ pub fn layout(data_type: &DataType) -> DataTypeLayout {
         DataType::LargeBinary => DataTypeLayout::new_binary::<i64>(),
         DataType::Utf8 => DataTypeLayout::new_binary::<i32>(),
         DataType::LargeUtf8 => DataTypeLayout::new_binary::<i64>(),
+        DataType::BinaryView => unimplemented!("BinaryView"),
         DataType::FixedSizeList(_, _) => DataTypeLayout::new_empty(), // all in child data
         DataType::List(_) => DataTypeLayout::new_fixed_width::<i32>(),
         DataType::LargeList(_) => DataTypeLayout::new_fixed_width::<i64>(),

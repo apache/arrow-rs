@@ -543,6 +543,7 @@ pub(crate) fn get_fb_field_type<'a>(
                 .as_union_value(),
             children: Some(fbb.create_vector(&empty_fields[..])),
         },
+        BinaryView => unimplemented!("BinaryView not implemented"),
         Utf8 => FBFieldType {
             type_type: crate::Type::Utf8,
             type_: crate::Utf8Builder::new(fbb).finish().as_union_value(),

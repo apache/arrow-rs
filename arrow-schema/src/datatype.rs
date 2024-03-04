@@ -196,6 +196,13 @@ pub enum DataType {
     /// A single LargeBinary array can store up to [`i64::MAX`] bytes
     /// of binary data in total.
     LargeBinary,
+    /// Opaque binary data of variable length.
+    ///
+    /// Logically the same as [`Self::Binary`], but the internal representation uses a view
+    /// struct that contains the string length and either the string's entire data
+    /// inline (for small strings) or an inlined prefix, an index of another buffer,
+    /// and an offset pointing to a slice in that buffer (for non-small strings).
+    BinaryView,
     /// A variable-length string in Unicode with UTF-8 encoding.
     ///
     /// A single Utf8 array can store up to [`i32::MAX`] bytes
@@ -516,7 +523,7 @@ impl DataType {
             DataType::Decimal128(_, _) => Some(16),
             DataType::Decimal256(_, _) => Some(32),
             DataType::Utf8 | DataType::LargeUtf8 => None,
-            DataType::Binary | DataType::LargeBinary => None,
+            DataType::Binary | DataType::LargeBinary | DataType::BinaryView => None,
             DataType::FixedSizeBinary(_) => None,
             DataType::List(_) | DataType::LargeList(_) | DataType::Map(_, _) => None,
             DataType::FixedSizeList(_, _) => None,
@@ -555,6 +562,7 @@ impl DataType {
                 | DataType::Binary
                 | DataType::FixedSizeBinary(_)
                 | DataType::LargeBinary
+                | DataType::BinaryView
                 | DataType::Utf8
                 | DataType::LargeUtf8
                 | DataType::Decimal128(_, _)

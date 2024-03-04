@@ -507,6 +507,7 @@ impl Field {
             | DataType::Duration(_)
             | DataType::Binary
             | DataType::LargeBinary
+            | DataType::BinaryView
             | DataType::Interval(_)
             | DataType::LargeList(_)
             | DataType::List(_)
