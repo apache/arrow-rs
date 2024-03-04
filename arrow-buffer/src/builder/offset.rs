@@ -54,6 +54,7 @@ impl<O: ArrowNativeType + Add<Output = O> + Sub<Output = O>> OffsetsBuilder<O> {
         self.offsets.push(next_offset);
     }
 
+    /// try to safely push a length of usize type into builder
     #[inline]
     pub fn try_push_usize_length(&mut self, length: usize) -> Result<(), String> {
         self.push_length(O::from_usize(length).ok_or(format!(
@@ -69,7 +70,7 @@ impl<O: ArrowNativeType + Add<Output = O> + Sub<Output = O>> OffsetsBuilder<O> {
             Some(h_bound) => h_bound,
             None => lengths_iter.size_hint().0,
         };
-        self.offsets.reserve(size_hint);
+        self.reserve(size_hint);
         lengths_iter.for_each(|length| self.push_length(length));
     }
 
@@ -104,7 +105,7 @@ impl<O: ArrowNativeType + Add<Output = O> + Sub<Output = O>> OffsetsBuilder<O> {
     }
 
     pub fn capacity(&self) -> usize {
-        self.offsets.capacity()
+        self.offsets.capacity() - 1
     }
 
     #[allow(clippy::len_without_is_empty)]
@@ -112,8 +113,21 @@ impl<O: ArrowNativeType + Add<Output = O> + Sub<Output = O>> OffsetsBuilder<O> {
         self.offsets.len()
     }
 
+    /// Last offset
     pub fn last(&self) -> O {
         *self.offsets.last().unwrap()
+    }
+
+    pub fn reserve(&mut self, additional: usize) {
+        self.offsets.reserve(additional);
+    }
+
+    pub fn reserve_exact(&mut self, additional: usize) {
+        self.offsets.reserve_exact(additional);
+    }
+
+    pub fn shrink_to_fit(&mut self) {
+        self.offsets.shrink_to_fit();
     }
 
     /// get an iterator of lengths from builder's underlying offsets
