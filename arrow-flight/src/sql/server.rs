@@ -399,7 +399,8 @@ pub trait FlightSqlService: Sync + Send + Sized + 'static {
 
     /// Bind parameters to given prepared statement.
     ///
-    /// Returns an opaque handle that the client should pass
+    /// Note that `DoPutPreparedStatementResult` contains an optional
+    /// opaque handle that the client should pass
     /// back to the server during subsequent requests with this
     /// prepared statement.
     async fn do_put_prepared_statement_query(
