@@ -129,7 +129,7 @@ impl Field {
         }
     }
 
-    /// Creates a new `Field`` suitable for [`DataType::List`] and
+    /// Creates a new `Field` suitable for [`DataType::List`] and
     /// [`DataType::LargeList`]
     ///
     /// While not required, this method follows the convention of naming the
