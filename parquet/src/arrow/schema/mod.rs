@@ -481,6 +481,7 @@ fn arrow_to_parquet_type(field: &Field) -> Result<Type> {
                 .with_length(*length)
                 .build()
         }
+        DataType::BinaryView | DataType::Utf8View => unimplemented!("BinaryView/Utf8View not implemented"),
         DataType::Decimal128(precision, scale)
         | DataType::Decimal256(precision, scale) => {
             // Decimal precision determines the Parquet physical type to use.
