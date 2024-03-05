@@ -397,7 +397,7 @@ impl ApplicationDefaultCredentials {
         "gcloud/application_default_credentials.json"
     } else {
         ".config/gcloud/application_default_credentials.json"
-    }
+    };
 
     // Create a new application default credential in the following situations:
     //  1. a file is passed in and the type matches.
