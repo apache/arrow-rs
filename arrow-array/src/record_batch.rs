@@ -236,6 +236,11 @@ impl RecordBatch {
         self.schema.clone()
     }
 
+    /// Returns a reference to the [`Schema`] of the record batch.
+    pub fn schema_ref(&self) -> &SchemaRef {
+        &self.schema
+    }
+
     /// Projects the schema onto the specified columns
     pub fn project(&self, indices: &[usize]) -> Result<RecordBatch, ArrowError> {
         let projected_schema = self.schema.project(indices)?;

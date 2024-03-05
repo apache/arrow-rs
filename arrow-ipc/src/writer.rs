@@ -1436,7 +1436,7 @@ mod tests {
     use super::*;
 
     fn serialize_file(rb: &RecordBatch) -> Vec<u8> {
-        let mut writer = FileWriter::try_new(vec![], &rb.schema()).unwrap();
+        let mut writer = FileWriter::try_new(vec![], rb.schema_ref()).unwrap();
         writer.write(rb).unwrap();
         writer.finish().unwrap();
         writer.into_inner().unwrap()
@@ -1448,7 +1448,7 @@ mod tests {
     }
 
     fn serialize_stream(record: &RecordBatch) -> Vec<u8> {
-        let mut stream_writer = StreamWriter::try_new(vec![], &record.schema()).unwrap();
+        let mut stream_writer = StreamWriter::try_new(vec![], record.schema_ref()).unwrap();
         stream_writer.write(record).unwrap();
         stream_writer.finish().unwrap();
         stream_writer.into_inner().unwrap()
@@ -1982,7 +1982,7 @@ mod tests {
         )
         .expect("new batch");
 
-        let mut writer = StreamWriter::try_new(vec![], &batch.schema()).expect("new writer");
+        let mut writer = StreamWriter::try_new(vec![], batch.schema_ref()).expect("new writer");
         writer.write(&batch).expect("write");
         let outbuf = writer.into_inner().expect("inner");
 
