@@ -271,7 +271,9 @@ pub fn data_type_to_json(data_type: &DataType) -> serde_json::Value {
         DataType::LargeUtf8 => json!({"name": "largeutf8"}),
         DataType::Binary => json!({"name": "binary"}),
         DataType::LargeBinary => json!({"name": "largebinary"}),
-        DataType::BinaryView | DataType::Utf8View => unimplemented!("Not implemented"),
+        DataType::BinaryView | DataType::Utf8View => {
+            unimplemented!("BinaryView/Utf8View not implemented")
+        }
         DataType::FixedSizeBinary(byte_width) => {
             json!({"name": "fixedsizebinary", "byteWidth": byte_width})
         }

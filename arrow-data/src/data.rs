@@ -1545,7 +1545,9 @@ pub fn layout(data_type: &DataType) -> DataTypeLayout {
         DataType::LargeBinary => DataTypeLayout::new_binary::<i64>(),
         DataType::Utf8 => DataTypeLayout::new_binary::<i32>(),
         DataType::LargeUtf8 => DataTypeLayout::new_binary::<i64>(),
-        DataType::BinaryView | DataType::Utf8View => unimplemented!("Not implemented"),
+        DataType::BinaryView | DataType::Utf8View => {
+            unimplemented!("BinvaryView/Utf8View not implemented")
+        }
         DataType::FixedSizeList(_, _) => DataTypeLayout::new_empty(), // all in child data
         DataType::List(_) => DataTypeLayout::new_fixed_width::<i32>(),
         DataType::LargeList(_) => DataTypeLayout::new_fixed_width::<i64>(),

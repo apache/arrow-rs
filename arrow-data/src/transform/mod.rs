@@ -224,7 +224,9 @@ fn build_extend(array: &ArrayData) -> Extend {
         DataType::Decimal256(_, _) => primitive::build_extend::<i256>(array),
         DataType::Utf8 | DataType::Binary => variable_size::build_extend::<i32>(array),
         DataType::LargeUtf8 | DataType::LargeBinary => variable_size::build_extend::<i64>(array),
-        DataType::BinaryView | DataType::Utf8View => unimplemented!("Not implemented"),
+        DataType::BinaryView | DataType::Utf8View => {
+            unimplemented!("BinaryView/Utf8View not implemented")
+        }
         DataType::Map(_, _) | DataType::List(_) => list::build_extend::<i32>(array),
         DataType::LargeList(_) => list::build_extend::<i64>(array),
         DataType::Dictionary(_, _) => unreachable!("should use build_extend_dictionary"),
@@ -267,7 +269,9 @@ fn build_extend_nulls(data_type: &DataType) -> ExtendNulls {
         DataType::Decimal256(_, _) => primitive::extend_nulls::<i256>,
         DataType::Utf8 | DataType::Binary => variable_size::extend_nulls::<i32>,
         DataType::LargeUtf8 | DataType::LargeBinary => variable_size::extend_nulls::<i64>,
-        DataType::BinaryView | DataType::Utf8View => unimplemented!("Not implemented"),
+        DataType::BinaryView | DataType::Utf8View => {
+            unimplemented!("BinaryView/Utf8View not implemented")
+        }
         DataType::Map(_, _) | DataType::List(_) => list::extend_nulls::<i32>,
         DataType::LargeList(_) => list::extend_nulls::<i64>,
         DataType::Dictionary(child_data_type, _) => match child_data_type.as_ref() {
@@ -422,7 +426,7 @@ impl<'a> MutableArrayData<'a> {
             | DataType::Interval(_)
             | DataType::FixedSizeBinary(_) => vec![],
             DataType::BinaryView | DataType::Utf8View => {
-                unimplemented!("Not implemented")
+                unimplemented!("BinaryView/Utf8View not implemented")
             }
             DataType::Map(_, _) | DataType::List(_) | DataType::LargeList(_) => {
                 let children = arrays
