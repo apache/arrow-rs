@@ -465,7 +465,7 @@ async fn roundtrip(input: Vec<RecordBatch>) {
 /// When <https://github.com/apache/arrow-rs/issues/3389> is resolved,
 /// it should be possible to use `roundtrip`
 async fn roundtrip_dictionary(input: Vec<RecordBatch>) {
-    let schema = Arc::new(prepare_schema_for_flight(&input[0].schema()));
+    let schema = Arc::new(prepare_schema_for_flight(input[0].schema_ref()));
     let expected_output: Vec<_> = input
         .iter()
         .map(|batch| prepare_batch_for_flight(batch, schema.clone()).unwrap())

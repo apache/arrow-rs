@@ -3082,7 +3082,7 @@ mod tests {
                     .unwrap();
 
                 let batches = reader.collect::<Result<Vec<_>, _>>().unwrap();
-                let actual = concat_batches(&batch.schema(), &batches).unwrap();
+                let actual = concat_batches(batch.schema_ref(), &batches).unwrap();
                 assert_eq!(actual.num_rows(), selection.row_count());
 
                 let mut batch_offset = 0;
