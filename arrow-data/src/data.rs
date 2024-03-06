@@ -22,7 +22,6 @@ use crate::bit_iterator::BitSliceIterator;
 use arrow_buffer::buffer::{BooleanBuffer, NullBuffer};
 use arrow_buffer::{bit_util, i256, ArrowNativeType, Buffer, MutableBuffer};
 use arrow_schema::{ArrowError, DataType, UnionMode};
-use std::convert::TryInto;
 use std::mem;
 use std::ops::Range;
 use std::sync::Arc;

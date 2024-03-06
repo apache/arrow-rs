@@ -16,10 +16,9 @@
 // under the License.
 
 use crate::builder::*;
-use crate::{ArrayRef, StructArray};
+use crate::StructArray;
 use arrow_buffer::NullBufferBuilder;
 use arrow_schema::{DataType, Fields, IntervalUnit, SchemaBuilder, TimeUnit};
-use std::any::Any;
 use std::sync::Arc;
 
 /// Builder for [`StructArray`]

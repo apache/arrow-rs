@@ -511,7 +511,6 @@ mod tests {
     use crate::RecordBatch;
     use crate::{Float64Array, Int32Array, Int64Array, StringArray};
     use arrow_schema::Schema;
-    use std::sync::Arc;
 
     #[test]
     fn test_dense_i32() {

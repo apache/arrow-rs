@@ -667,7 +667,6 @@ pub const DECIMAL_DEFAULT_SCALE: i8 = 10;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Field, UnionMode};
 
     #[test]
     #[cfg(feature = "serde")]

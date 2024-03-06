@@ -1501,9 +1501,8 @@ mod tests {
     use super::*;
     use crate::builder::{Decimal128Builder, Decimal256Builder};
     use crate::cast::downcast_array;
-    use crate::{ArrayRef, BooleanArray};
+    use crate::BooleanArray;
     use arrow_schema::TimeUnit;
-    use std::sync::Arc;
 
     #[test]
     fn test_primitive_array_from_vec() {

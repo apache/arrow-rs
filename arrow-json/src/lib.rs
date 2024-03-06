@@ -144,10 +144,7 @@ impl JsonSerializable for f64 {
 mod tests {
     use super::*;
 
-    use serde_json::{
-        Number,
-        Value::{Bool, Number as VNumber, String as VString},
-    };
+    use serde_json::Value::{Bool, Number as VNumber, String as VString};
 
     #[test]
     fn test_arrow_native_type_to_json() {

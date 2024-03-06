@@ -17,7 +17,7 @@
 
 use arrow_array::timezone::Tz;
 use arrow_array::types::*;
-use arrow_array::{ArrowNativeTypeOp, ArrowPrimitiveType};
+use arrow_array::ArrowNativeTypeOp;
 use arrow_buffer::ArrowNativeType;
 use arrow_schema::ArrowError;
 use chrono::prelude::*;
@@ -1221,7 +1221,6 @@ fn parse_interval_components(
 mod tests {
     use super::*;
     use arrow_array::temporal_conversions::date32_to_datetime;
-    use arrow_array::timezone::Tz;
     use arrow_buffer::i256;
 
     #[test]

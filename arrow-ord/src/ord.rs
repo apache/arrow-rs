@@ -131,10 +131,8 @@ pub fn build_compare(left: &dyn Array, right: &dyn Array) -> Result<DynComparato
 #[cfg(test)]
 pub mod tests {
     use super::*;
-    use arrow_array::{FixedSizeBinaryArray, Float64Array, Int32Array};
     use arrow_buffer::{i256, OffsetBuffer};
     use half::f16;
-    use std::cmp::Ordering;
     use std::sync::Arc;
 
     #[test]

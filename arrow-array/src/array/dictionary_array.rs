@@ -20,8 +20,7 @@ use crate::cast::AsArray;
 use crate::iterator::ArrayIter;
 use crate::types::*;
 use crate::{
-    make_array, Array, ArrayAccessor, ArrayRef, ArrowNativeTypeOp, ArrowPrimitiveType,
-    PrimitiveArray, StringArray,
+    make_array, Array, ArrayAccessor, ArrayRef, ArrowNativeTypeOp, PrimitiveArray, StringArray,
 };
 use arrow_buffer::bit_util::set_bit;
 use arrow_buffer::buffer::NullBuffer;
@@ -1007,12 +1006,9 @@ impl<K: ArrowDictionaryKeyType> AnyDictionaryArray for DictionaryArray<K> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::builder::PrimitiveDictionaryBuilder;
     use crate::cast::as_dictionary_array;
-    use crate::types::{Int32Type, Int8Type, UInt32Type, UInt8Type};
     use crate::{Int16Array, Int32Array, Int8Array};
     use arrow_buffer::{Buffer, ToByteSlice};
-    use std::sync::Arc;
 
     #[test]
     fn test_dictionary_array() {

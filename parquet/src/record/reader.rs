@@ -804,14 +804,12 @@ mod tests {
     use super::*;
 
     use crate::data_type::Int64Type;
-    use crate::errors::Result;
-    use crate::file::reader::{FileReader, SerializedFileReader};
+    use crate::file::reader::SerializedFileReader;
     use crate::file::writer::SerializedFileWriter;
-    use crate::record::api::{Field, Row, RowAccessor};
+    use crate::record::api::RowAccessor;
     use crate::schema::parser::parse_message_type;
     use crate::util::test_common::file_util::{get_test_file, get_test_path};
     use bytes::Bytes;
-    use std::convert::TryFrom;
 
     // Convenient macros to assemble row, list, map, and group.
 

@@ -154,8 +154,6 @@ mod tests {
     use super::*;
 
     use crate::Array;
-    use crate::FixedSizeBinaryArray;
-    use arrow_schema::DataType;
 
     #[test]
     fn test_fixed_size_binary_builder() {

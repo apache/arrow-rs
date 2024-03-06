@@ -21,7 +21,7 @@ use arrow_buffer::Buffer;
 use arrow_schema::{Schema, SchemaRef};
 use bytes::Bytes;
 use futures::{ready, stream::BoxStream, Stream, StreamExt};
-use std::{collections::HashMap, convert::TryFrom, fmt::Debug, pin::Pin, sync::Arc, task::Poll};
+use std::{collections::HashMap, fmt::Debug, pin::Pin, sync::Arc, task::Poll};
 use tonic::metadata::MetadataMap;
 
 use crate::error::{FlightError, Result};
