@@ -1693,7 +1693,9 @@ mod tests {
         }
 
         let options = GetOptions {
-            if_unmodified_since: Some(meta.last_modified + chrono::Duration::hours(10)),
+            if_unmodified_since: Some(
+                meta.last_modified + chrono::Duration::try_hours(10).unwrap(),
+            ),
             ..GetOptions::default()
         };
         match storage.get_opts(&path, options).await {
@@ -1702,7 +1704,9 @@ mod tests {
         }
 
         let options = GetOptions {
-            if_unmodified_since: Some(meta.last_modified - chrono::Duration::hours(10)),
+            if_unmodified_since: Some(
+                meta.last_modified - chrono::Duration::try_hours(10).unwrap(),
+            ),
             ..GetOptions::default()
         };
         match storage.get_opts(&path, options).await {
@@ -1720,7 +1724,7 @@ mod tests {
         }
 
         let options = GetOptions {
-            if_modified_since: Some(meta.last_modified - chrono::Duration::hours(10)),
+            if_modified_since: Some(meta.last_modified - chrono::Duration::try_hours(10).unwrap()),
             ..GetOptions::default()
         };
         match storage.get_opts(&path, options).await {
