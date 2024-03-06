@@ -20,6 +20,7 @@ use crate::types::{BinaryViewType, ByteViewType, StringViewType};
 use crate::{ArrayRef, GenericByteViewArray};
 use arrow_buffer::{Buffer, BufferBuilder, NullBufferBuilder, ScalarBuffer};
 use arrow_data::ByteView;
+
 use std::any::Any;
 use std::marker::PhantomData;
 use std::sync::Arc;
