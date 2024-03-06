@@ -644,7 +644,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
         let record_batch =
             Self::fake_result().map_err(|e| status!("Error getting result schema", e))?;
         let schema = record_batch.schema_ref();
-        let message = SchemaAsIpc::new(&schema, &IpcWriteOptions::default())
+        let message = SchemaAsIpc::new(schema, &IpcWriteOptions::default())
             .try_into()
             .map_err(|e| status!("Unable to serialize schema", e))?;
         let IpcMessage(schema_bytes) = message;
