@@ -65,7 +65,12 @@ mod union_array;
 pub use union_array::*;
 
 mod run_array;
+
 pub use run_array::*;
+
+mod bytes_view_array;
+
+pub use bytes_view_array::*;
 
 /// An array in the [arrow columnar format](https://arrow.apache.org/docs/format/Columnar.html)
 pub trait Array: std::fmt::Debug + Send + Sync {
@@ -596,8 +601,10 @@ pub fn make_array(data: ArrayData) -> ArrayRef {
         DataType::Binary => Arc::new(BinaryArray::from(data)) as ArrayRef,
         DataType::LargeBinary => Arc::new(LargeBinaryArray::from(data)) as ArrayRef,
         DataType::FixedSizeBinary(_) => Arc::new(FixedSizeBinaryArray::from(data)) as ArrayRef,
+        DataType::BinaryView => Arc::new(BinaryViewArray::from(data)) as ArrayRef,
         DataType::Utf8 => Arc::new(StringArray::from(data)) as ArrayRef,
         DataType::LargeUtf8 => Arc::new(LargeStringArray::from(data)) as ArrayRef,
+        DataType::Utf8View => Arc::new(StringViewArray::from(data)) as ArrayRef,
         DataType::List(_) => Arc::new(ListArray::from(data)) as ArrayRef,
         DataType::LargeList(_) => Arc::new(LargeListArray::from(data)) as ArrayRef,
         DataType::Struct(_) => Arc::new(StructArray::from(data)) as ArrayRef,

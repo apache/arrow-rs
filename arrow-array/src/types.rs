@@ -25,12 +25,14 @@ use crate::timezone::Tz;
 use crate::{ArrowNativeTypeOp, OffsetSizeTrait};
 use arrow_buffer::{i256, Buffer, OffsetBuffer};
 use arrow_data::decimal::{validate_decimal256_precision, validate_decimal_precision};
+use arrow_data::{validate_binary_view, validate_string_view};
 use arrow_schema::{
     ArrowError, DataType, IntervalUnit, TimeUnit, DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE,
     DECIMAL256_MAX_PRECISION, DECIMAL256_MAX_SCALE, DECIMAL_DEFAULT_SCALE,
 };
 use chrono::{Duration, NaiveDate, NaiveDateTime};
 use half::f16;
+use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::ops::{Add, Sub};
 
@@ -1543,6 +1545,101 @@ impl<O: OffsetSizeTrait> ByteArrayType for GenericBinaryType<O> {
 pub type BinaryType = GenericBinaryType<i32>;
 /// An arrow binary array with i64 offsets
 pub type LargeBinaryType = GenericBinaryType<i64>;
+
+mod bytes_view {
+    pub trait Sealed: Send + Sync {}
+    impl Sealed for str {}
+    impl Sealed for [u8] {}
+}
+
+/// A trait over the variable length bytes view array types
+pub trait BytesViewType: bytes_view::Sealed + 'static + PartialEq + AsRef<Self> {
+    /// If element in array is utf8 encoded string.
+    const IS_UTF8: bool;
+
+    /// Datatype of array elements
+    const DATA_TYPE: DataType = if Self::IS_UTF8 {
+        DataType::Utf8View
+    } else {
+        DataType::BinaryView
+    };
+
+    /// "Binary" or "String", for use in displayed or error messages
+    const PREFIX: &'static str;
+
+    /// Type for representing its equivalent rust type i.e
+    /// Utf8Array will have native type has &str
+    /// BinaryArray will have type as [u8]
+    type Native: bytes::ByteArrayNativeType + AsRef<Self::Native> + AsRef<[u8]> + ?Sized;
+
+    /// Type for owned corresponding to `Native`
+    type Owned: Debug + Clone + Sync + Send + AsRef<Self>;
+
+    /// # Safety
+    /// The caller must ensure `index < self.len()`.
+    unsafe fn from_bytes_unchecked(slice: &[u8]) -> &Self;
+
+    /// To bytes slice.
+    fn to_bytes(&self) -> &[u8];
+
+    /// To owned type
+    #[allow(clippy::wrong_self_convention)]
+    fn into_owned(&self) -> Self::Owned;
+
+    /// Verifies that the provided buffers are valid for this array type
+    fn validate(views: &[u128], buffers: &[Buffer]) -> Result<(), ArrowError>;
+}
+
+impl BytesViewType for str {
+    const IS_UTF8: bool = true;
+    const PREFIX: &'static str = "String";
+
+    type Native = str;
+    type Owned = String;
+
+    #[inline(always)]
+    unsafe fn from_bytes_unchecked(slice: &[u8]) -> &Self {
+        std::str::from_utf8_unchecked(slice)
+    }
+
+    #[inline(always)]
+    fn to_bytes(&self) -> &[u8] {
+        self.as_bytes()
+    }
+
+    fn into_owned(&self) -> Self::Owned {
+        self.to_string()
+    }
+
+    fn validate(views: &[u128], buffers: &[Buffer]) -> Result<(), ArrowError> {
+        validate_string_view(views, buffers)
+    }
+}
+
+impl BytesViewType for [u8] {
+    const IS_UTF8: bool = false;
+    const PREFIX: &'static str = "Binary";
+    type Native = [u8];
+    type Owned = Vec<u8>;
+
+    #[inline(always)]
+    unsafe fn from_bytes_unchecked(slice: &[u8]) -> &Self {
+        slice
+    }
+
+    #[inline(always)]
+    fn to_bytes(&self) -> &[u8] {
+        self
+    }
+
+    fn into_owned(&self) -> Self::Owned {
+        self.to_vec()
+    }
+
+    fn validate(views: &[u128], buffers: &[Buffer]) -> Result<(), ArrowError> {
+        validate_binary_view(views, buffers)
+    }
+}
 
 #[cfg(test)]
 mod tests {

@@ -94,7 +94,7 @@ pub struct GenericByteArray<T: ByteArrayType> {
 impl<T: ByteArrayType> Clone for GenericByteArray<T> {
     fn clone(&self) -> Self {
         Self {
-            data_type: self.data_type.clone(),
+            data_type: T::DATA_TYPE,
             value_offsets: self.value_offsets.clone(),
             value_data: self.value_data.clone(),
             nulls: self.nulls.clone(),
@@ -323,7 +323,7 @@ impl<T: ByteArrayType> GenericByteArray<T> {
     /// Returns a zero-copy slice of this array with the indicated offset and length.
     pub fn slice(&self, offset: usize, length: usize) -> Self {
         Self {
-            data_type: self.data_type.clone(),
+            data_type: T::DATA_TYPE,
             value_offsets: self.value_offsets.slice(offset, length),
             value_data: self.value_data.clone(),
             nulls: self.nulls.as_ref().map(|n| n.slice(offset, length)),
@@ -511,7 +511,7 @@ impl<T: ByteArrayType> From<ArrayData> for GenericByteArray<T> {
         Self {
             value_offsets,
             value_data,
-            data_type: data.data_type().clone(),
+            data_type: T::DATA_TYPE,
             nulls: data.nulls().cloned(),
         }
     }
