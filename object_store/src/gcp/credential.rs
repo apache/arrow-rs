@@ -407,7 +407,7 @@ impl ApplicationDefaultCredentials {
             return read_credentials_file::<Self>(path).map(Some);
         }
 
-        let home_var = if cfg!(windows) {"APPDATA"} else {"HOME"};
+        let home_var = if cfg!(windows) { "APPDATA" } else { "HOME" };
         if let Some(home) = env::var_os(home_var) {
             let path = Path::new(&home).join(Self::CREDENTIALS_PATH);
 
