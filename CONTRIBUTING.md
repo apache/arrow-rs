@@ -170,6 +170,18 @@ cargo bench -p arrow
 cargo bench -p arrow-cast --bench parse_time
 ```
 
+To set the baseline for your benchmarks, use the --save-baseline flag:
+
+```bash
+git checkout master
+
+cargo bench --bench parse_time -- --save-baseline master
+
+git checkout feature
+
+cargo bench --bench parse_time -- --baseline master
+```
+
 ## Git Pre-Commit Hook
 
 We can use [git pre-commit hook](https://git-scm.com/book/en/v2/Customizing-Git-Git-Hooks) to automate various kinds of git pre-commit checking/formatting.
