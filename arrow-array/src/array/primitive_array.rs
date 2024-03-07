@@ -1556,7 +1556,10 @@ mod tests {
                 // roundtrip to and from datetime
                 assert_eq!(
                     1550902545147,
-                    arr.value_as_datetime(i).unwrap().timestamp_millis()
+                    arr.value_as_datetime(i)
+                        .unwrap()
+                        .and_utc()
+                        .timestamp_millis()
                 );
             } else {
                 assert!(arr.is_null(i));

@@ -21,6 +21,7 @@ use criterion::Criterion;
 use rand::distributions::{Distribution, Standard, Uniform};
 use rand::Rng;
 
+use chrono::DateTime;
 use std::sync::Arc;
 
 extern crate arrow;
@@ -62,8 +63,6 @@ fn build_utf8_date_array(size: usize, with_nulls: bool) -> ArrayRef {
 }
 
 fn build_utf8_date_time_array(size: usize, with_nulls: bool) -> ArrayRef {
-    use chrono::NaiveDateTime;
-
     // use random numbers to avoid spurious compiler optimizations wrt to branching
     let mut rng = seedable_rng();
     let mut builder = StringBuilder::new();
@@ -73,7 +72,7 @@ fn build_utf8_date_time_array(size: usize, with_nulls: bool) -> ArrayRef {
         if with_nulls && rng.gen::<f32>() > 0.8 {
             builder.append_null();
         } else {
-            let string = NaiveDateTime::from_timestamp_opt(rng.sample(range), 0)
+            let string = DateTime::from_timestamp(rng.sample(range), 0)
                 .unwrap()
                 .format("%Y-%m-%dT%H:%M:%S")
                 .to_string();

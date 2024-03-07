@@ -393,7 +393,11 @@ pub enum ApplicationDefaultCredentials {
 }
 
 impl ApplicationDefaultCredentials {
-    const CREDENTIALS_PATH: &'static str = ".config/gcloud/application_default_credentials.json";
+    const CREDENTIALS_PATH: &'static str = if cfg!(windows) {
+        "gcloud/application_default_credentials.json"
+    } else {
+        ".config/gcloud/application_default_credentials.json"
+    };
 
     // Create a new application default credential in the following situations:
     //  1. a file is passed in and the type matches.
@@ -402,7 +406,9 @@ impl ApplicationDefaultCredentials {
         if let Some(path) = path {
             return read_credentials_file::<Self>(path).map(Some);
         }
-        if let Some(home) = env::var_os("HOME") {
+
+        let home_var = if cfg!(windows) { "APPDATA" } else { "HOME" };
+        if let Some(home) = env::var_os(home_var) {
             let path = Path::new(&home).join(Self::CREDENTIALS_PATH);
 
             // It's expected for this file to not exist unless it has been explicitly configured by the user.
