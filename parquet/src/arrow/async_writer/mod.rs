@@ -116,6 +116,8 @@ impl<W: AsyncWrite + Unpin + Send> AsyncArrowWriter<W> {
     ///
     /// [`Self::write`] will flush this intermediate buffer if it is at least
     /// half full
+    ///
+    /// Please see the documentation on [`Self`] for details on memory usage.
     pub fn try_new(
         writer: W,
         arrow_schema: SchemaRef,
@@ -135,6 +137,8 @@ impl<W: AsyncWrite + Unpin + Send> AsyncArrowWriter<W> {
     ///
     /// [`Self::write`] will flush this intermediate buffer if it is at least
     /// half full
+    ///
+    /// Please see the documentation on [`Self`] for details on memory usage.
     pub fn try_new_with_options(
         writer: W,
         arrow_schema: SchemaRef,
