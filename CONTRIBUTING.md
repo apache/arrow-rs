@@ -92,17 +92,29 @@ export ARROW_TEST_DATA=$(cd ../testing/data; pwd)
 
 From here on, this is a pure Rust project and `cargo` can be used to run tests, benchmarks, docs and examples as usual.
 
-### Running the tests
+## Running the tests
 
 Run tests using the Rust standard `cargo test` command:
 
 ```bash
-# run all tests.
+# run all unit and integration tests
 cargo test
 
-
-# run only tests for the arrow crate
+# run tests for the arrow crate
 cargo test -p arrow
+```
+
+For some changes, you may want to run additional tests. You can find up-to-date information on the current CI tests in [.github/workflows](https://github.com/apache/arrow-rs/tree/master/.github/workflows). Here are some examples of additional tests you may want to run:
+
+```bash
+# run tests for the parquet crate
+cargo test -p parquet
+
+# run arrow tests with all features enabled
+cargo test -p arrow --all-features
+
+# run the doc tests
+cargo test --doc
 ```
 
 ## Code Formatting
@@ -118,10 +130,19 @@ cargo +stable fmt --all -- --check
 
 We recommend using `clippy` for checking lints during development. While we do not yet enforce `clippy` checks, we recommend not introducing new `clippy` errors or warnings.
 
-Run the following to check for clippy lints.
+Run the following to check for `clippy` lints:
 
 ```bash
+# run clippy with default settings
 cargo clippy
+
+```
+
+More comprehensive `clippy` checks can be run by adding flags:
+
+```bash
+# run clippy on the arrow crate with all features enabled, targeting all tests, examples, and benchmarks
+cargo clippy -p arrow --all-features --all-targets
 ```
 
 If you use Visual Studio Code with the `rust-analyzer` plugin, you can enable `clippy` to run each time you save a file. See https://users.rust-lang.org/t/how-to-use-clippy-in-vs-code-with-rust-analyzer/41881.
@@ -133,6 +154,33 @@ Search for `allow(clippy::` in the codebase to identify lints that are ignored/a
 - If you are introducing a line that returns a lint warning or error, you may disable the lint on that line.
 - If you have several lints on a function or module, you may disable the lint on the function or module.
 - If a lint is pervasive across multiple modules, you may disable it at the crate level.
+
+## Running Benchmarks
+
+Running benchmarks are a good way to test the performance of a change. As benchmarks usually take a long time to run, we recommend running targeted tests instead of the full suite.
+
+```bash
+# run all benchmarks
+cargo bench
+
+# run arrow benchmarks
+cargo bench -p arrow
+
+# run benchmark for the parse_time function within the arrow-cast crate
+cargo bench -p arrow-cast --bench parse_time
+```
+
+To set the baseline for your benchmarks, use the --save-baseline flag:
+
+```bash
+git checkout master
+
+cargo bench --bench parse_time -- --save-baseline master
+
+git checkout feature
+
+cargo bench --bench parse_time -- --baseline master
+```
 
 ## Git Pre-Commit Hook
 

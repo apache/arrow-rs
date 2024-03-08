@@ -80,6 +80,32 @@ mod levels;
 ///
 /// assert_eq!(to_write, read);
 /// ```
+///
+/// ## Memory Limiting
+///
+/// The nature of parquet forces buffering of an entire row group before it can be flushed
+/// to the underlying writer. Data is buffered in its encoded form, to reduce memory usage,
+/// but if writing rows containing large strings or very nested data, this may still result in
+/// non-trivial memory usage.
+///
+/// [`ArrowWriter::in_progress_size`] can be used to track the size of the buffered row group,
+/// and potentially trigger an early flush of a row group based on a memory threshold and/or
+/// global memory pressure. However, users should be aware that smaller row groups will result
+/// in higher metadata overheads, and may worsen compression ratios and query performance.
+///
+/// ```no_run
+/// # use std::io::Write;
+/// # use arrow_array::RecordBatch;
+/// # use parquet::arrow::ArrowWriter;
+/// # let mut writer: ArrowWriter<Vec<u8>> = todo!();
+/// # let batch: RecordBatch = todo!();
+/// writer.write(&batch).unwrap();
+/// // Trigger an early flush if buffered size exceeds 1_000_000
+/// if writer.in_progress_size() > 1_000_000 {
+///     writer.flush().unwrap();
+/// }
+/// ```
+///
 pub struct ArrowWriter<W: Write> {
     /// Underlying Parquet writer
     writer: SerializedFileWriter<W>,
@@ -244,6 +270,19 @@ impl<W: Write + Send> ArrowWriter<W> {
         self.writer.append_key_value_metadata(kv_metadata)
     }
 
+    /// Returns a reference to the underlying writer.
+    pub fn inner(&self) -> &W {
+        self.writer.inner()
+    }
+
+    /// Returns a mutable reference to the underlying writer.
+    ///
+    /// It is inadvisable to directly write to the underlying writer, doing so
+    /// will likely result in a corrupt parquet file
+    pub fn inner_mut(&mut self) -> &mut W {
+        self.writer.inner_mut()
+    }
+
     /// Flushes any outstanding data and returns the underlying writer.
     pub fn into_inner(mut self) -> Result<W> {
         self.flush()?;
@@ -251,9 +290,18 @@ impl<W: Write + Send> ArrowWriter<W> {
     }
 
     /// Close and finalize the underlying Parquet writer
-    pub fn close(mut self) -> Result<crate::format::FileMetaData> {
+    ///
+    /// Unlike [`Self::close`] this does not consume self
+    ///
+    /// Attempting to write after calling finish will result in an error
+    pub fn finish(&mut self) -> Result<crate::format::FileMetaData> {
         self.flush()?;
-        self.writer.close()
+        self.writer.finish()
+    }
+
+    /// Close and finalize the underlying Parquet writer
+    pub fn close(mut self) -> Result<crate::format::FileMetaData> {
+        self.finish()
     }
 }
 

@@ -171,11 +171,11 @@ pub fn make_builder(datatype: &DataType, capacity: usize) -> Box<dyn ArrayBuilde
         }
         DataType::List(field) => {
             let builder = make_builder(field.data_type(), capacity);
-            Box::new(ListBuilder::with_capacity(builder, capacity))
+            Box::new(ListBuilder::with_capacity(builder, capacity).with_field(field.clone()))
         }
         DataType::LargeList(field) => {
             let builder = make_builder(field.data_type(), capacity);
-            Box::new(LargeListBuilder::with_capacity(builder, capacity))
+            Box::new(LargeListBuilder::with_capacity(builder, capacity).with_field(field.clone()))
         }
         DataType::Map(field, _) => match field.data_type() {
             DataType::Struct(fields) => {
@@ -186,12 +186,15 @@ pub fn make_builder(datatype: &DataType, capacity: usize) -> Box<dyn ArrayBuilde
                 };
                 let key_builder = make_builder(fields[0].data_type(), capacity);
                 let value_builder = make_builder(fields[1].data_type(), capacity);
-                Box::new(MapBuilder::with_capacity(
-                    Some(map_field_names),
-                    key_builder,
-                    value_builder,
-                    capacity,
-                ))
+                Box::new(
+                    MapBuilder::with_capacity(
+                        Some(map_field_names),
+                        key_builder,
+                        value_builder,
+                        capacity,
+                    )
+                    .with_values_field(fields[1].clone()),
+                )
             }
             t => panic!("The field of Map data type {t:?} should has a child Struct field"),
         },
