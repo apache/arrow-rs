@@ -20,7 +20,7 @@ use crate::{Array, ArrayRef, MapArray, StructArray};
 use arrow_buffer::Buffer;
 use arrow_buffer::{NullBuffer, NullBufferBuilder};
 use arrow_data::ArrayData;
-use arrow_schema::{ArrowError, DataType, Field};
+use arrow_schema::{ArrowError, DataType, Field, FieldRef};
 use std::any::Any;
 use std::sync::Arc;
 
@@ -61,6 +61,7 @@ pub struct MapBuilder<K: ArrayBuilder, V: ArrayBuilder> {
     field_names: MapFieldNames,
     key_builder: K,
     value_builder: V,
+    value_field: Option<FieldRef>,
 }
 
 /// The [`Field`] names for a [`MapArray`]
@@ -106,6 +107,20 @@ impl<K: ArrayBuilder, V: ArrayBuilder> MapBuilder<K, V> {
             field_names: field_names.unwrap_or_default(),
             key_builder,
             value_builder,
+            value_field: None,
+        }
+    }
+
+    /// Override the field passed to [`MapBuilder::new`]
+    ///
+    /// By default a nullable field is created with the name `values`
+    ///
+    /// Note: [`Self::finish`] and [`Self::finish_cloned`] will panic if the
+    /// field's data type does not match that of `V`
+    pub fn with_values_field(self, field: impl Into<FieldRef>) -> Self {
+        Self {
+            value_field: Some(field.into()),
+            ..self
         }
     }
 
@@ -184,11 +199,14 @@ impl<K: ArrayBuilder, V: ArrayBuilder> MapBuilder<K, V> {
             keys_arr.data_type().clone(),
             false, // always non-nullable
         ));
-        let values_field = Arc::new(Field::new(
-            self.field_names.value.as_str(),
-            values_arr.data_type().clone(),
-            true,
-        ));
+        let values_field = match &self.value_field {
+            Some(f) => f.clone(),
+            None => Arc::new(Field::new(
+                self.field_names.value.as_str(),
+                values_arr.data_type().clone(),
+                true,
+            )),
+        };
 
         let struct_array =
             StructArray::from(vec![(keys_field, keys_arr), (values_field, values_arr)]);
@@ -294,6 +312,64 @@ mod tests {
                 .expect("should be an Int32Array")
                 .value(0),
             42
+        );
+    }
+
+    #[test]
+    fn test_with_values_field() {
+        let value_field = Arc::new(Field::new("bars", DataType::Int32, false));
+        let mut builder = MapBuilder::new(None, Int32Builder::new(), Int32Builder::new())
+            .with_values_field(value_field.clone());
+        builder.keys().append_value(1);
+        builder.values().append_value(2);
+        builder.append(true).unwrap();
+        builder.append(false).unwrap(); // This is fine as nullability refers to nullability of values
+        builder.keys().append_value(3);
+        builder.values().append_value(4);
+        builder.append(true).unwrap();
+        let map = builder.finish();
+
+        assert_eq!(map.len(), 3);
+        assert_eq!(
+            map.data_type(),
+            &DataType::Map(
+                Arc::new(Field::new(
+                    "entries",
+                    DataType::Struct(
+                        vec![
+                            Arc::new(Field::new("keys", DataType::Int32, false)),
+                            value_field.clone()
+                        ]
+                        .into()
+                    ),
+                    false,
+                )),
+                false
+            )
+        );
+
+        builder.keys().append_value(5);
+        builder.values().append_value(6);
+        builder.append(true).unwrap();
+        let map = builder.finish();
+
+        assert_eq!(map.len(), 1);
+        assert_eq!(
+            map.data_type(),
+            &DataType::Map(
+                Arc::new(Field::new(
+                    "entries",
+                    DataType::Struct(
+                        vec![
+                            Arc::new(Field::new("keys", DataType::Int32, false)),
+                            value_field
+                        ]
+                        .into()
+                    ),
+                    false,
+                )),
+                false
+            )
         );
     }
 }
