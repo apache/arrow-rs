@@ -67,6 +67,29 @@ use tokio::io::{AsyncWrite, AsyncWriteExt};
 /// It is implemented based on the sync writer [`ArrowWriter`] with an inner buffer.
 /// The buffered data will be flushed to the writer provided by caller when the
 /// buffer's threshold is exceeded.
+///
+/// ## Memory Limiting
+///
+/// The nature of parquet forces buffering of an entire row group before it can be flushed
+/// to the underlying writer. This buffering may exceed the configured buffer size
+/// of [`AsyncArrowWriter`]. Memory usage can be limited by prematurely flushing the row group,
+/// although this will have implications for file size and query performance. See [ArrowWriter]
+/// for more information.
+///
+/// ```no_run
+/// # use tokio::fs::File;
+/// # use arrow_array::RecordBatch;
+/// # use parquet::arrow::AsyncArrowWriter;
+/// # async fn test() {
+/// let mut writer: AsyncArrowWriter<File> = todo!();
+/// let batch: RecordBatch = todo!();
+/// writer.write(&batch).await.unwrap();
+/// // Trigger an early flush if buffered size exceeds 1_000_000
+/// if writer.in_progress_size() > 1_000_000 {
+///     writer.flush().await.unwrap()
+/// }
+/// # }
+/// ```
 pub struct AsyncArrowWriter<W> {
     /// Underlying sync writer
     sync_writer: ArrowWriter<Vec<u8>>,
@@ -82,12 +105,9 @@ impl<W: AsyncWrite + Unpin + Send> AsyncArrowWriter<W> {
     /// Try to create a new Async Arrow Writer.
     ///
     /// `buffer_size` determines the minimum number of bytes to buffer before flushing
-    /// to the underlying [`AsyncWrite`]
-    ///
-    /// The intermediate buffer will automatically be resized if necessary
-    ///
-    /// [`Self::write`] will flush this intermediate buffer if it is at least
-    /// half full
+    /// to the underlying [`AsyncWrite`]. However, the nature of writing parquet may
+    /// force buffering of data in excess of this within the underlying [`ArrowWriter`].
+    /// See the documentation on [`ArrowWriter`] for more details
     pub fn try_new(
         writer: W,
         arrow_schema: SchemaRef,
@@ -101,12 +121,9 @@ impl<W: AsyncWrite + Unpin + Send> AsyncArrowWriter<W> {
     /// Try to create a new Async Arrow Writer with [`ArrowWriterOptions`].
     ///
     /// `buffer_size` determines the minimum number of bytes to buffer before flushing
-    /// to the underlying [`AsyncWrite`]
-    ///
-    /// The intermediate buffer will automatically be resized if necessary
-    ///
-    /// [`Self::write`] will flush this intermediate buffer if it is at least
-    /// half full
+    /// to the underlying [`AsyncWrite`]. However, the nature of writing parquet may
+    /// force buffering of data in excess of this within the underlying [`ArrowWriter`].
+    /// See the documentation on [`ArrowWriter`] for more details
     pub fn try_new_with_options(
         writer: W,
         arrow_schema: SchemaRef,

@@ -423,25 +423,8 @@ impl Buffer {
 
 impl<T: ArrowNativeType> FromIterator<T> for Buffer {
     fn from_iter<I: IntoIterator<Item = T>>(iter: I) -> Self {
-        let mut iterator = iter.into_iter();
-        let size = std::mem::size_of::<T>();
-
-        // first iteration, which will likely reserve sufficient space for the buffer.
-        let mut buffer = match iterator.next() {
-            None => MutableBuffer::new(0),
-            Some(element) => {
-                let (lower, _) = iterator.size_hint();
-                let mut buffer = MutableBuffer::new(lower.saturating_add(1).saturating_mul(size));
-                unsafe {
-                    std::ptr::write(buffer.as_mut_ptr() as *mut T, element);
-                    buffer.set_len(size);
-                }
-                buffer
-            }
-        };
-
-        buffer.extend_from_iter(iterator);
-        buffer.into()
+        let vec = Vec::from_iter(iter);
+        Buffer::from_vec(vec)
     }
 }
 
@@ -822,7 +805,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "failed to round to next highest power of 2")]
+    #[should_panic(expected = "capacity overflow")]
     fn test_from_iter_overflow() {
         let iter_len = usize::MAX / std::mem::size_of::<u64>() + 1;
         let _ = Buffer::from_iter(std::iter::repeat(0_u64).take(iter_len));

@@ -189,7 +189,7 @@ impl FlightSqlServiceImpl {
         let batch = Self::fake_result()?;
 
         Ok(FlightInfo::new()
-            .try_with_schema(&batch.schema())
+            .try_with_schema(batch.schema_ref())
             .expect("encoding schema")
             .with_endpoint(
                 FlightEndpoint::new().with_ticket(Ticket::new(
@@ -245,9 +245,9 @@ impl FlightSqlService for FlightSqlServiceImpl {
             "part_2" => batch.slice(2, 1),
             ticket => panic!("Invalid ticket: {ticket:?}"),
         };
-        let schema = batch.schema();
-        let batches = vec![batch];
-        let flight_data = batches_to_flight_data(schema.as_ref(), batches)
+        let schema = batch.schema_ref();
+        let batches = vec![batch.clone()];
+        let flight_data = batches_to_flight_data(schema, batches)
             .unwrap()
             .into_iter()
             .map(Ok);
