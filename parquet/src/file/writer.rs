@@ -68,7 +68,8 @@ impl<W: Write> TrackedWrite<W> {
 
     /// Returns a mutable reference to the underlying writer.
     ///
-    /// It is inadvisable to directly write to the underlying writer.
+    /// It is inadvisable to directly write to the underlying writer, doing so
+    /// will likely result in data corruption
     pub fn inner_mut(&mut self) -> &mut W {
         self.inner.get_mut()
     }
@@ -224,6 +225,11 @@ impl<W: Write + Send> SerializedFileWriter<W> {
         &self.row_groups
     }
 
+    /// Close and finalize the underlying Parquet writer
+    ///
+    /// Unlike [`Self::close`] this does not consume self
+    ///
+    /// Attempting to write after calling finish will result in an error
     pub fn finish(&mut self) -> Result<parquet::FileMetaData> {
         self.assert_previous_writer_closed()?;
         let metadata = self.write_metadata()?;

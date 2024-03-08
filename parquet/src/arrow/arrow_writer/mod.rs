@@ -251,7 +251,8 @@ impl<W: Write + Send> ArrowWriter<W> {
 
     /// Returns a mutable reference to the underlying writer.
     ///
-    /// It is inadvisable to directly write to the underlying writer.
+    /// It is inadvisable to directly write to the underlying writer, doing so
+    /// will likely result in a corrupt parquet file
     pub fn inner_mut(&mut self) -> &mut W {
         self.writer.inner_mut()
     }
@@ -265,6 +266,8 @@ impl<W: Write + Send> ArrowWriter<W> {
     /// Close and finalize the underlying Parquet writer
     ///
     /// Unlike [`Self::close`] this does not consume self
+    ///
+    /// Attempting to write after calling finish will result in an error
     pub fn finish(&mut self) -> Result<crate::format::FileMetaData> {
         self.flush()?;
         self.writer.finish()
