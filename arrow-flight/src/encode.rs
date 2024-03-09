@@ -390,12 +390,12 @@ impl Stream for FlightDataEncoder {
 /// [`DictionaryArray`]: arrow_array::DictionaryArray
 ///
 /// In the arrow flight protocol dictionary values and keys are sent as two separate messages.
-/// When a sender is encoding a [`RecordBatch`] containing [`DictionaryArray`] columns, it will
-/// first send a dictionary batch (a batch with header [`MessageHeader::DictionaryBatch`]) containing
+/// When a sender is encoding a [`RecordBatch`] containing ['DictionaryArray'] columns, it will
+/// first send a dictionary batch (a batch with header `MessageHeader::DictionaryBatch`) containing
 /// the dictionary values. The receiver is responsible for reading this batch and maintaining state that associates
 /// those dictionary values with the corresponding array using the `dict_id` as a key.
 ///
-/// After sending the dictionary batch the sender will send the array data in a batch with header ['MessageHeader::RecordBatch '].
+/// After sending the dictionary batch the sender will send the array data in a batch with header `MessageHeader::RecordBatch`.
 /// For any dictionary array batches in this message, the encoded flight message will only contain the dictionary keys. The receiver
 /// is then responsible for rebuilding the `DictionaryArray` on the client side using the dictionary values from the DictionaryBatch message
 /// and the keys from the RecordBatch message.
