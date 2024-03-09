@@ -388,29 +388,39 @@ impl Stream for FlightDataEncoder {
 /// Defines how a [`FlightDataEncoder`] encodes [`DictionaryArray`]s
 ///
 /// [`DictionaryArray`]: arrow_array::DictionaryArray
+///
+/// In the arrow flight protocol dictionary values and keys are sent as two separate messages.
+/// When a sender is encoding a [`RecordBatch`] containing [`DictionaryArray`] columns, it will
+/// first send a dictionary batch (a batch with header [`MessageHeader::DictionaryBatch`]) containing
+/// the dictionary values. The receiver is responsible for reading this batch and maintaining state that associates
+/// those dictionary values with the corresponding array using the `dict_id` as a key.
+///
+/// After sending the dictionary batch the sender will send the array data in a batch with header ['MessageHeader::RecordBatch '].
+/// For any dictionary array batches in this message, the encoded flight message will only contain the dictionary keys. The receiver
+/// is then responsible for rebuilding the `DictionaryArray` on the client side using the dictionary values from the DictionaryBatch message
+/// and the keys from the RecordBatch message.
+///
+/// For example, if we have a batch with a `TypedDictionaryArray<'_, UInt32Type, Utf8Type>` (a dictionary array where they keys are `u32` and the
+/// values are `String`), then the DictionaryBatch will contain a `StringArray` and the RecordBatch will contain a `UInt32Array`.
+///
+/// Not that since `dict_id` defined in the `Schema` is used as a key to assicated dictionary values to their arrays it is required that each
+/// `DictionaryArray` in a `RecordBatch` have a unique `dict_id`.
 #[derive(Debug, PartialEq)]
 pub enum DictionaryHandling {
-    /// Expands to the underlying type (default). This likely sends more data
-    /// over the network but requires less memory (dictionaries are not tracked)
-    /// and is more compatible with other arrow flight client implementations
-    /// that may not support `DictionaryEncoding`
+    /// This method should be used if all batches over the entire lifetime fo the flight stream
+    /// share the same dictionary (as determined by pointer-equality of the `DictionaryArray`'s `values` array).
     ///
-    /// An IPC response, streaming or otherwise, defines its schema up front
-    /// which defines the mapping from dictionary IDs. It then sends these
-    /// dictionaries over the wire.
+    /// The shared dictionary will be sent only once and the encoder will error in the case where it detects
+    /// a dictionary which is not pointer-equal to the initial dictionary.
     ///
-    /// This requires identifying the different dictionaries in use, assigning
-    /// them IDs, and sending new dictionaries, delta or otherwise, when needed
-    ///
-    /// See also:
-    /// * <https://github.com/apache/arrow-rs/issues/1206>
+    /// The arrow flight protocol supports delta dictionaries where the sender can send new dictionary values
+    /// incrementally but this is currently not supported in arrow-rs.
     Hydrate,
-    /// Send dictionary FlightData with every RecordBatch that contains a
-    /// [`DictionaryArray`]. See [`Self::Hydrate`] for more tradeoffs. No
-    /// attempt is made to skip sending the same (logical) dictionary values
-    /// twice.
+    /// This method should be used if each batch may contain different dictionary values.  This will require more data to be sent
+    /// across the wire as each batch sent will require a new DictionaryBatch message with all dictionary values for that batch.
     ///
-    /// [`DictionaryArray`]: arrow_array::DictionaryArray
+    /// The dictionary values will be sent for each batch separately and the receiver will use dictionary values
+    /// from the most recent dictionary batch it received for the given `dict_id`.
     Resend,
 }
 
