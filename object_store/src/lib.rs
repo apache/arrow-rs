@@ -496,9 +496,11 @@ pub use tags::TagSet;
 
 pub mod multipart;
 mod parse;
+mod upload;
 mod util;
 
 pub use parse::{parse_url, parse_url_opts};
+pub use upload::*;
 pub use util::GetRange;
 
 use crate::path::Path;
@@ -515,7 +517,6 @@ use std::fmt::{Debug, Formatter};
 use std::io::{Read, Seek, SeekFrom};
 use std::ops::Range;
 use std::sync::Arc;
-use tokio::io::AsyncWrite;
 
 /// An alias for a dynamically dispatched object store implementation.
 pub type DynObjectStore = dyn ObjectStore;
@@ -538,48 +539,11 @@ pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
     /// Save the provided bytes to the specified location with the given options
     async fn put_opts(&self, location: &Path, bytes: Bytes, opts: PutOptions) -> Result<PutResult>;
 
-    /// Get a multi-part upload that allows writing data in chunks.
+    /// Perform a multipart upload
     ///
-    /// Most cloud-based uploads will buffer and upload parts in parallel.
-    ///
-    /// To complete the upload, [AsyncWrite::poll_shutdown] must be called
-    /// to completion. This operation is guaranteed to be atomic, it will either
-    /// make all the written data available at `location`, or fail. No clients
-    /// should be able to observe a partially written object.
-    ///
-    /// For some object stores (S3, GCS, and local in particular), if the
-    /// writer fails or panics, you must call [ObjectStore::abort_multipart]
-    /// to clean up partially written data.
-    ///
-    /// <div class="warning">
-    /// It is recommended applications wait for any in-flight requests to complete by calling `flush`, if
-    /// there may be a significant gap in time (> ~30s) before the next write.
-    /// These gaps can include times where the function returns control to the
-    /// caller while keeping the writer open. If `flush` is not called, futures
-    /// for in-flight requests may be left unpolled long enough for the requests
-    /// to time out, causing the write to fail.
-    /// </div>
-    ///
-    /// For applications requiring fine-grained control of multipart uploads
-    /// see [`MultiPartStore`], although note that this interface cannot be
-    /// supported by all [`ObjectStore`] backends.
-    ///
-    /// For applications looking to implement this interface for a custom
-    /// multipart API, see [`WriteMultiPart`] which handles the complexities
-    /// of performing parallel uploads of fixed size parts.
-    ///
-    /// [`WriteMultiPart`]: multipart::WriteMultiPart
-    /// [`MultiPartStore`]: multipart::MultiPartStore
-    async fn put_multipart(
-        &self,
-        location: &Path,
-    ) -> Result<(MultipartId, Box<dyn AsyncWrite + Unpin + Send>)>;
-
-    /// Cleanup an aborted upload.
-    ///
-    /// See documentation for individual stores for exact behavior, as capabilities
-    /// vary by object store.
-    async fn abort_multipart(&self, location: &Path, multipart_id: &MultipartId) -> Result<()>;
+    /// Client should prefer [`ObjectStore::put`] for small payloads, as streaming uploads
+    /// typically require multiple separate requests. See [`Upload`] for more information
+    async fn upload(&self, location: &Path) -> Result<Box<dyn Upload>>;
 
     /// Return the bytes that are stored at the specified location.
     async fn get(&self, location: &Path) -> Result<GetResult> {
@@ -764,19 +728,8 @@ macro_rules! as_ref_impl {
                 self.as_ref().put_opts(location, bytes, opts).await
             }
 
-            async fn put_multipart(
-                &self,
-                location: &Path,
-            ) -> Result<(MultipartId, Box<dyn AsyncWrite + Unpin + Send>)> {
-                self.as_ref().put_multipart(location).await
-            }
-
-            async fn abort_multipart(
-                &self,
-                location: &Path,
-                multipart_id: &MultipartId,
-            ) -> Result<()> {
-                self.as_ref().abort_multipart(location, multipart_id).await
+            async fn upload(&self, location: &Path) -> Result<Box<dyn Upload>> {
+                self.as_ref().upload(location).await
             }
 
             async fn get(&self, location: &Path) -> Result<GetResult> {
@@ -1247,8 +1200,6 @@ mod tests {
     use futures::stream::FuturesUnordered;
     use rand::distributions::Alphanumeric;
     use rand::{thread_rng, Rng};
-    use std::future::Future;
-    use tokio::io::AsyncWriteExt;
 
     pub(crate) async fn put_get_delete_list(storage: &DynObjectStore) {
         put_get_delete_list_opts(storage).await
@@ -1923,12 +1874,11 @@ mod tests {
         let location = Path::from("test_dir/test_upload_file.txt");
 
         // Can write to storage
-        let data = get_chunks(5_000, 10);
+        let data = get_chunks(5 * 1024 * 1024, 3);
         let bytes_expected = data.concat();
-        let (_, mut writer) = storage.put_multipart(&location).await.unwrap();
-        for chunk in &data {
-            writer.write_all(chunk).await.unwrap();
-        }
+        let mut upload = storage.upload(&location).await.unwrap();
+        let uploads = data.into_iter().map(|x| upload.put_part(x));
+        futures::future::try_join_all(uploads).await.unwrap();
 
         // Object should not yet exist in store
         let meta_res = storage.head(&location).await;
@@ -1944,7 +1894,8 @@ mod tests {
         let result = storage.list_with_delimiter(None).await.unwrap();
         assert_eq!(&result.objects, &[]);
 
-        writer.shutdown().await.unwrap();
+        upload.complete().await.unwrap();
+
         let bytes_written = storage.get(&location).await.unwrap().bytes().await.unwrap();
         assert_eq!(bytes_expected, bytes_written);
 
@@ -1952,22 +1903,19 @@ mod tests {
         // Sizes chosen to ensure we write three parts
         let data = get_chunks(3_200_000, 7);
         let bytes_expected = data.concat();
-        let (_, mut writer) = storage.put_multipart(&location).await.unwrap();
+        let upload = storage.upload(&location).await.unwrap();
+        let mut writer = ChunkedUpload::new(upload);
         for chunk in &data {
-            writer.write_all(chunk).await.unwrap();
+            writer.write(chunk)
         }
-        writer.shutdown().await.unwrap();
+        writer.finish().await.unwrap();
         let bytes_written = storage.get(&location).await.unwrap().bytes().await.unwrap();
         assert_eq!(bytes_expected, bytes_written);
 
         // We can abort an empty write
         let location = Path::from("test_dir/test_abort_upload.txt");
-        let (upload_id, writer) = storage.put_multipart(&location).await.unwrap();
-        drop(writer);
-        storage
-            .abort_multipart(&location, &upload_id)
-            .await
-            .unwrap();
+        let mut upload = storage.upload(&location).await.unwrap();
+        upload.abort().await.unwrap();
         let get_res = storage.get(&location).await;
         assert!(get_res.is_err());
         assert!(matches!(
@@ -1976,17 +1924,13 @@ mod tests {
         ));
 
         // We can abort an in-progress write
-        let (upload_id, mut writer) = storage.put_multipart(&location).await.unwrap();
-        if let Some(chunk) = data.first() {
-            writer.write_all(chunk).await.unwrap();
-            let _ = writer.write(chunk).await.unwrap();
-        }
-        drop(writer);
-
-        storage
-            .abort_multipart(&location, &upload_id)
+        let mut upload = storage.upload(&location).await.unwrap();
+        upload
+            .put_part(data.first().unwrap().clone())
             .await
             .unwrap();
+
+        upload.abort().await.unwrap();
         let get_res = storage.get(&location).await;
         assert!(get_res.is_err());
         assert!(matches!(

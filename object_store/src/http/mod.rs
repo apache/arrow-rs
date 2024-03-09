@@ -46,7 +46,7 @@ use crate::http::client::Client;
 use crate::path::Path;
 use crate::{
     ClientConfigKey, ClientOptions, GetOptions, GetResult, ListResult, MultipartId, ObjectMeta,
-    ObjectStore, PutMode, PutOptions, PutResult, Result, RetryConfig,
+    ObjectStore, PutMode, PutOptions, PutResult, Result, RetryConfig, Upload,
 };
 
 mod client;
@@ -115,15 +115,8 @@ impl ObjectStore for HttpStore {
         })
     }
 
-    async fn put_multipart(
-        &self,
-        _location: &Path,
-    ) -> Result<(MultipartId, Box<dyn AsyncWrite + Unpin + Send>)> {
-        Err(super::Error::NotImplemented)
-    }
-
-    async fn abort_multipart(&self, _location: &Path, _multipart_id: &MultipartId) -> Result<()> {
-        Err(super::Error::NotImplemented)
+    async fn upload(&self, _location: &Path) -> Result<Box<dyn Upload>> {
+        Err(crate::Error::NotImplemented)
     }
 
     async fn get_opts(&self, location: &Path, options: GetOptions) -> Result<GetResult> {

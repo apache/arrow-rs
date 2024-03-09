@@ -18,8 +18,8 @@
 //! An object store that limits the maximum concurrency of the wrapped implementation
 
 use crate::{
-    BoxStream, GetOptions, GetResult, GetResultPayload, ListResult, MultipartId, ObjectMeta,
-    ObjectStore, Path, PutOptions, PutResult, Result, StreamExt,
+    BoxStream, GetOptions, GetResult, GetResultPayload, ListResult, ObjectMeta, ObjectStore, Path,
+    PutOptions, PutResult, Result, StreamExt, Upload, UploadPart,
 };
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -81,18 +81,12 @@ impl<T: ObjectStore> ObjectStore for LimitStore<T> {
         let _permit = self.semaphore.acquire().await.unwrap();
         self.inner.put_opts(location, bytes, opts).await
     }
-    async fn put_multipart(
-        &self,
-        location: &Path,
-    ) -> Result<(MultipartId, Box<dyn AsyncWrite + Unpin + Send>)> {
-        let permit = Arc::clone(&self.semaphore).acquire_owned().await.unwrap();
-        let (id, write) = self.inner.put_multipart(location).await?;
-        Ok((id, Box::new(PermitWrapper::new(write, permit))))
-    }
-
-    async fn abort_multipart(&self, location: &Path, multipart_id: &MultipartId) -> Result<()> {
-        let _permit = self.semaphore.acquire().await.unwrap();
-        self.inner.abort_multipart(location, multipart_id).await
+    async fn upload(&self, location: &Path) -> Result<Box<dyn Upload>> {
+        let upload = self.inner.upload(location).await?;
+        Ok(Box::new(LimitUpload {
+            semaphore: Arc::clone(&self.semaphore),
+            upload,
+        }))
     }
     async fn get(&self, location: &Path) -> Result<GetResult> {
         let permit = Arc::clone(&self.semaphore).acquire_owned().await.unwrap();
@@ -254,6 +248,43 @@ impl<T: AsyncWrite + Unpin> AsyncWrite for PermitWrapper<T> {
 
     fn is_write_vectored(&self) -> bool {
         self.inner.is_write_vectored()
+    }
+}
+
+#[derive(Debug)]
+pub struct LimitUpload {
+    upload: Box<dyn Upload>,
+    semaphore: Arc<Semaphore>,
+}
+
+impl LimitUpload {
+    pub fn new(upload: Box<dyn Upload>, max_concurrency: usize) -> Self {
+        Self {
+            upload,
+            semaphore: Arc::new(Semaphore::new(max_concurrency)),
+        }
+    }
+}
+
+#[async_trait]
+impl Upload for LimitUpload {
+    fn put_part(&mut self, data: Bytes) -> UploadPart {
+        let upload = self.upload.put_part(data);
+        let s = Arc::clone(&self.semaphore);
+        Box::pin(async move {
+            let _permit = s.acquire().await.unwrap();
+            upload.await
+        })
+    }
+
+    async fn complete(&mut self) -> Result<PutResult> {
+        let _permit = self.semaphore.acquire().await.unwrap();
+        self.upload.complete().await
+    }
+
+    async fn abort(&mut self) -> Result<()> {
+        let _permit = self.semaphore.acquire().await.unwrap();
+        self.upload.abort().await
     }
 }
 

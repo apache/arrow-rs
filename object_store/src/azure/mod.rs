@@ -19,15 +19,11 @@
 //!
 //! ## Streaming uploads
 //!
-//! [ObjectStore::put_multipart] will upload data in blocks and write a blob from those
-//! blocks. Data is buffered internally to make blocks of at least 5MB and blocks
-//! are uploaded concurrently.
+//! [ObjectStore::upload] will upload data in blocks and write a blob from those blocks.
 //!
-//! [ObjectStore::abort_multipart] is a no-op, since Azure Blob Store doesn't provide
-//! a way to drop old blocks. Instead unused blocks are automatically cleaned up
-//! after 7 days.
+//! Unused blocks will automatically be dropped after 7 days.
 use crate::{
-    multipart::{MultiPartStore, PartId, PutPart, WriteMultiPart},
+    multipart::{MultiPartStore, PartId},
     path::Path,
     signer::Signer,
     GetOptions, GetResult, ListResult, MultipartId, ObjectMeta, ObjectStore, PutOptions, PutResult,

@@ -40,6 +40,9 @@ pub mod header;
 #[cfg(any(feature = "aws", feature = "gcp"))]
 pub mod s3;
 
+#[cfg(any(feature = "aws", feature = "gcp", feature = "azure"))]
+pub mod parts;
+
 use async_trait::async_trait;
 use std::collections::HashMap;
 use std::str::FromStr;
