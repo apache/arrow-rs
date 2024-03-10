@@ -2564,4 +2564,21 @@ mod tests {
         let debug_str = format!("{:?}", array);
         assert_eq!("PrimitiveArray<Time64(Microsecond)>\n[\n  Cast error: Failed to convert -1 to temporal for Time64(Microsecond),\n  00:00:00,\n  23:59:59,\n  Cast error: Failed to convert 86400000000 to temporal for Time64(Microsecond),\n  Cast error: Failed to convert 86401000000 to temporal for Time64(Microsecond),\n  null,\n]", debug_str);
     }
+
+    #[test]
+    fn test_primitive_with_nulls_into_builder() {
+        let array: Int32Array = vec![
+            Some(1),
+            None,
+            Some(3),
+            Some(4),
+            None,
+            Some(7),
+            None,
+            Some(8),
+        ]
+        .into_iter()
+        .collect();
+        let _ = array.into_builder();
+    }
 }
