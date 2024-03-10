@@ -560,7 +560,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
         &self,
         _query: CommandPreparedStatementQuery,
         request: Request<PeekableFlightDataStream>,
-    ) -> Result<Option<DoPutPreparedStatementResult>, Status> {
+    ) -> Result<DoPutPreparedStatementResult, Status> {
         // just make sure decoding the parameters works
         let parameters = FlightRecordBatchStream::new_from_flight_data(
             request.into_inner().map_err(|e| e.into()),
@@ -579,14 +579,15 @@ impl FlightSqlService for FlightSqlServiceImpl {
                 )));
             }
         }
-        if self.stateless_prepared_statements {
-            let result = DoPutPreparedStatementResult {
-                prepared_statement_handle: UPDATED_PREPARED_STATEMENT_HANDLE.to_string().into(),
-            };
-            Ok(Some(result))
+        let handle = if self.stateless_prepared_statements {
+            UPDATED_PREPARED_STATEMENT_HANDLE.to_string().into()
         } else {
-            Ok(None)
-        }
+            PREPARED_STATEMENT_HANDLE.to_string().into()
+        };
+        let result = DoPutPreparedStatementResult {
+            prepared_statement_handle: Some(handle),
+        };
+        Ok(result)
     }
 
     async fn do_put_prepared_statement_update(
