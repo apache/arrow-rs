@@ -130,7 +130,7 @@ pub(crate) fn new_buffers(data_type: &DataType, capacity: usize) -> [MutableBuff
             buffer.push(0i64);
             [buffer, empty_buffer]
         }
-        DataType(_) => {
+        DataType::LargeListView(_) => {
             let mut buffer = MutableBuffer::new((1 + capacity) * mem::size_of::<i64>());
             buffer.push(0i64);
             [buffer, empty_buffer]
