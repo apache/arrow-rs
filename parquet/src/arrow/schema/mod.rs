@@ -725,7 +725,7 @@ mod tests {
             ProjectionMask::all(),
             None,
         )
-            .unwrap();
+        .unwrap();
         assert_eq!(&arrow_fields, converted_arrow_schema.fields());
     }
 
@@ -1655,7 +1655,7 @@ mod tests {
                     ])),
                     false,
                 )
-                    .with_metadata(meta(&[(PARQUET_FIELD_ID_META_KEY, "4")])),
+                .with_metadata(meta(&[(PARQUET_FIELD_ID_META_KEY, "4")])),
                 Field::new(
                     "c22",
                     DataType::FixedSizeList(
@@ -1677,7 +1677,7 @@ mod tests {
                                     Field::new("c", DataType::Float32, false),
                                     Field::new("d", DataType::Float16, false),
                                 ]
-                                    .into(),
+                                .into(),
                             ),
                             false,
                         ),
@@ -1710,7 +1710,7 @@ mod tests {
                     123,
                     true,
                 )
-                    .with_metadata(meta(&[(PARQUET_FIELD_ID_META_KEY, "6")])),
+                .with_metadata(meta(&[(PARQUET_FIELD_ID_META_KEY, "6")])),
                 Field::new("c32", DataType::LargeBinary, true),
                 Field::new("c33", DataType::LargeUtf8, true),
                 Field::new_large_list(
@@ -1724,7 +1724,7 @@ mod tests {
                                     Field::new("a", DataType::Int16, true),
                                     Field::new("b", DataType::Float64, true),
                                 ]
-                                    .into(),
+                                .into(),
                             ),
                             true,
                         ),
@@ -1759,11 +1759,11 @@ mod tests {
                             .with_metadata(meta(&[(PARQUET_FIELD_ID_META_KEY, "10")])),
                         true,
                     )
-                        .with_metadata(meta(&[(PARQUET_FIELD_ID_META_KEY, "9")])),
+                    .with_metadata(meta(&[(PARQUET_FIELD_ID_META_KEY, "9")])),
                     false, // fails to roundtrip keys_sorted
                     true,
                 )
-                    .with_metadata(meta(&[(PARQUET_FIELD_ID_META_KEY, "7")])),
+                .with_metadata(meta(&[(PARQUET_FIELD_ID_META_KEY, "7")])),
                 Field::new_map(
                     "c41",
                     "my_entries",
