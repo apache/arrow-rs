@@ -22,7 +22,9 @@ use criterion::measurement::WallTime;
 use criterion::{criterion_group, criterion_main, BenchmarkGroup, Criterion};
 use num::FromPrimitive;
 use num_bigint::BigInt;
-use parquet::arrow::array_reader::{make_byte_array_reader, make_fixed_len_byte_array_reader, ListArrayReader};
+use parquet::arrow::array_reader::{
+    make_byte_array_reader, make_fixed_len_byte_array_reader, ListArrayReader,
+};
 use parquet::basic::Type;
 use parquet::data_type::{ByteArray, FixedLenByteArrayType};
 use parquet::util::{DataPageBuilder, DataPageBuilderImpl, InMemoryPageIterator};
