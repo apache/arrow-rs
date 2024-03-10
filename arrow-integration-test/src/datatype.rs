@@ -281,6 +281,9 @@ pub fn data_type_to_json(data_type: &DataType) -> serde_json::Value {
         DataType::Union(_, _) => json!({"name": "union"}),
         DataType::List(_) => json!({ "name": "list"}),
         DataType::LargeList(_) => json!({ "name": "largelist"}),
+        DataType::ListView(_) | DataType::LargeListView(_) => {
+            unimplemented!("ListView/LargeListView not implemented")
+        }
         DataType::FixedSizeList(_, length) => {
             json!({"name":"fixedsizelist", "listSize": length})
         }

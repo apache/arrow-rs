@@ -119,8 +119,18 @@ pub(crate) fn new_buffers(data_type: &DataType, capacity: usize) -> [MutableBuff
             buffer.push(0i32);
             [buffer, empty_buffer]
         }
+        DataType::ListView(_) => {
+            let mut buffer = MutableBuffer::new((1 + capacity) * mem::size_of::<i64>());
+            buffer.push(0i32);
+            [buffer, empty_buffer]
+        }
         DataType::LargeList(_) => {
             // offset buffer always starts with a zero
+            let mut buffer = MutableBuffer::new((1 + capacity) * mem::size_of::<i64>());
+            buffer.push(0i64);
+            [buffer, empty_buffer]
+        }
+        DataType(_) => {
             let mut buffer = MutableBuffer::new((1 + capacity) * mem::size_of::<i64>());
             buffer.push(0i64);
             [buffer, empty_buffer]
@@ -1550,6 +1560,9 @@ pub fn layout(data_type: &DataType) -> DataTypeLayout {
         }
         DataType::FixedSizeList(_, _) => DataTypeLayout::new_empty(), // all in child data
         DataType::List(_) => DataTypeLayout::new_fixed_width::<i32>(),
+        DataType::ListView(_) | DataType::LargeListView(_) => {
+            unimplemented!("ListView/LargeListView not implemented")
+        }
         DataType::LargeList(_) => DataTypeLayout::new_fixed_width::<i64>(),
         DataType::Map(_, _) => DataTypeLayout::new_fixed_width::<i32>(),
         DataType::Struct(_) => DataTypeLayout::new_empty(), // all in child data,

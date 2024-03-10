@@ -510,7 +510,9 @@ impl Field {
             | DataType::BinaryView
             | DataType::Interval(_)
             | DataType::LargeList(_)
+            | DataType::LargeListView(_)
             | DataType::List(_)
+            | DataType::ListView(_)
             | DataType::Map(_, _)
             | DataType::Dictionary(_, _)
             | DataType::RunEndEncoded(_, _)
