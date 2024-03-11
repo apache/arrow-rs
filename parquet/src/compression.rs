@@ -438,6 +438,9 @@ mod lz4_codec {
     }
 }
 
+#[cfg(all(feature = "experimental", any(feature = "lz4", test)))]
+pub use lz4_codec::*;
+
 #[cfg(any(feature = "zstd", test))]
 mod zstd_codec {
     use std::io::{self, Write};
