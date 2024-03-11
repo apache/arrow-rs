@@ -801,7 +801,7 @@ impl Type {
 #[cfg(test)]
 mod test {
     use super::*;
-    use syn::{self, Data, DataStruct, DeriveInput};
+    use syn::{Data, DataStruct, DeriveInput};
 
     fn extract_fields(input: proc_macro2::TokenStream) -> Vec<syn::Field> {
         let input: DeriveInput = syn::parse2(input).unwrap();

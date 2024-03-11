@@ -63,7 +63,6 @@ pub fn to_thrift(encoding_stats: &PageEncodingStats) -> TPageEncodingStats {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::basic::{Encoding, PageType};
 
     #[test]
     fn test_page_encoding_stats_from_thrift() {

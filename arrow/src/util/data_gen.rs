@@ -17,13 +17,12 @@
 
 //! Utilities to generate random arrays and batches
 
-use std::{convert::TryFrom, sync::Arc};
+use std::sync::Arc;
 
 use rand::{distributions::uniform::SampleUniform, Rng};
 
+use crate::array::*;
 use crate::error::{ArrowError, Result};
-use crate::record_batch::{RecordBatch, RecordBatchOptions};
-use crate::{array::*, datatypes::SchemaRef};
 use crate::{
     buffer::{Buffer, MutableBuffer},
     datatypes::*,
@@ -244,7 +243,6 @@ fn create_random_null_buffer(size: usize, null_density: f32) -> Buffer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow_schema::Fields;
 
     #[test]
     fn test_create_batch() {

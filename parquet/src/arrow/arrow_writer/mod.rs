@@ -1002,18 +1002,15 @@ fn get_fsb_array_slice(
 mod tests {
     use super::*;
 
-    use bytes::Bytes;
     use std::fs::File;
-    use std::sync::Arc;
 
     use crate::arrow::arrow_reader::{ParquetRecordBatchReader, ParquetRecordBatchReaderBuilder};
     use crate::arrow::ARROW_SCHEMA_META_KEY;
     use arrow::datatypes::ToByteSlice;
-    use arrow::datatypes::{DataType, Field, Schema, UInt32Type, UInt8Type};
+    use arrow::datatypes::{DataType, Schema};
     use arrow::error::Result as ArrowResult;
     use arrow::util::pretty::pretty_format_batches;
     use arrow::{array::*, buffer::Buffer};
-    use arrow_array::RecordBatch;
     use arrow_buffer::NullBuffer;
     use arrow_schema::Fields;
 

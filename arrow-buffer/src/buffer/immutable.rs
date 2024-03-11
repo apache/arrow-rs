@@ -17,7 +17,6 @@
 
 use std::alloc::Layout;
 use std::fmt::Debug;
-use std::iter::FromIterator;
 use std::ptr::NonNull;
 use std::sync::Arc;
 

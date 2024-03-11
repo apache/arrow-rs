@@ -16,7 +16,6 @@
 // under the License.
 
 use std::collections::HashMap;
-use std::convert::TryFrom;
 use std::pin::Pin;
 use std::sync::Arc;
 
@@ -35,7 +34,6 @@ use arrow_flight::{
     PollInfo, PutResult, SchemaAsIpc, SchemaResult, Ticket,
 };
 use futures::{channel::mpsc, sink::SinkExt, Stream, StreamExt};
-use std::convert::TryInto;
 use tokio::sync::Mutex;
 use tonic::{transport::Server, Request, Response, Status, Streaming};
 

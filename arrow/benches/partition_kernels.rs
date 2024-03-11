@@ -24,7 +24,7 @@ use arrow::compute::kernels::sort::{lexsort, SortColumn};
 use arrow::util::bench_util::*;
 use arrow::{
     array::*,
-    datatypes::{ArrowPrimitiveType, Float64Type, UInt8Type},
+    datatypes::{Float64Type, UInt8Type},
 };
 use arrow_ord::partition::partition;
 use rand::distributions::{Distribution, Standard};

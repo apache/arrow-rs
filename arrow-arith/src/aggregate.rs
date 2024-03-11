@@ -22,7 +22,6 @@ use arrow_array::iterator::ArrayIter;
 use arrow_array::*;
 use arrow_buffer::{ArrowNativeType, NullBuffer};
 use arrow_data::bit_iterator::try_for_each_valid_idx;
-use arrow_schema::ArrowError;
 use arrow_schema::*;
 use std::borrow::BorrowMut;
 use std::ops::{BitAnd, BitOr, BitXor};
@@ -729,7 +728,6 @@ where
 mod tests {
     use super::*;
     use arrow_array::types::*;
-    use arrow_buffer::NullBuffer;
     use std::sync::Arc;
 
     #[test]

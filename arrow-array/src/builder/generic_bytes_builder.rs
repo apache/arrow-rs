@@ -262,7 +262,7 @@ pub type GenericBinaryBuilder<O> = GenericByteBuilder<GenericBinaryType<O>>;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::array::{Array, OffsetSizeTrait};
+    use crate::array::Array;
     use crate::GenericStringArray;
 
     fn _test_generic_binary_builder<O: OffsetSizeTrait>() {

@@ -807,7 +807,6 @@ mod tests {
     use crate::data_type::{BoolType, Int32Type};
     use crate::file::page_index::index::Index;
     use crate::file::properties::EnabledStatistics;
-    use crate::file::reader::ChunkReader;
     use crate::file::serialized_reader::ReadOptionsBuilder;
     use crate::file::{
         properties::{ReaderProperties, WriterProperties, WriterVersion},

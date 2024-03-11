@@ -23,7 +23,6 @@ use criterion::*;
 use arrow::array::*;
 use arrow::csv;
 use arrow::datatypes::*;
-use arrow::record_batch::RecordBatch;
 use std::env;
 use std::fs::File;
 use std::sync::Arc;

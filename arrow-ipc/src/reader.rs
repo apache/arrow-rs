@@ -1190,7 +1190,6 @@ mod tests {
     use crate::root_as_message;
     use arrow_array::builder::{PrimitiveRunBuilder, UnionBuilder};
     use arrow_array::types::*;
-    use arrow_buffer::ArrowNativeType;
     use arrow_data::ArrayDataBuilder;
 
     fn create_test_projection_schema() -> Schema {

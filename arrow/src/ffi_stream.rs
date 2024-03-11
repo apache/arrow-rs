@@ -58,7 +58,6 @@ use arrow_schema::DataType;
 use std::ffi::CStr;
 use std::ptr::addr_of;
 use std::{
-    convert::TryFrom,
     ffi::CString,
     os::raw::{c_char, c_int, c_void},
     sync::Arc,
@@ -392,12 +391,10 @@ pub unsafe fn export_reader_into_raw(
 
 #[cfg(test)]
 mod tests {
-    use arrow_schema::DataType;
-
     use super::*;
 
     use crate::array::Int32Array;
-    use crate::datatypes::{Field, Schema};
+    use crate::datatypes::Field;
 
     struct TestRecordBatchReader {
         schema: SchemaRef,

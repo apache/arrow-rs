@@ -1292,9 +1292,7 @@ fn increment_utf8(mut data: Vec<u8>) -> Option<Vec<u8>> {
 
 #[cfg(test)]
 mod tests {
-    use crate::{file::properties::DEFAULT_COLUMN_INDEX_TRUNCATE_LENGTH, format::BoundaryOrder};
-    use bytes::Bytes;
-    use half::f16;
+    use crate::file::properties::DEFAULT_COLUMN_INDEX_TRUNCATE_LENGTH;
     use rand::distributions::uniform::SampleUniform;
     use std::sync::Arc;
 
@@ -1304,11 +1302,9 @@ mod tests {
     };
     use crate::file::writer::TrackedWrite;
     use crate::file::{
-        properties::{ReaderProperties, WriterProperties},
-        reader::SerializedPageReader,
-        writer::SerializedPageWriter,
+        properties::ReaderProperties, reader::SerializedPageReader, writer::SerializedPageWriter,
     };
-    use crate::schema::types::{ColumnDescriptor, ColumnPath, Type as SchemaType};
+    use crate::schema::types::{ColumnPath, Type as SchemaType};
     use crate::util::test_common::rand_gen::random_numbers_range;
 
     use super::*;

@@ -46,11 +46,7 @@ use base64::prelude::BASE64_STANDARD;
 use base64::Engine;
 use bytes::Bytes;
 use prost_types::Timestamp;
-use std::{
-    convert::{TryFrom, TryInto},
-    fmt,
-    ops::Deref,
-};
+use std::{fmt, ops::Deref};
 
 type ArrowResult<T> = std::result::Result<T, ArrowError>;
 

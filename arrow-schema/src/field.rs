@@ -580,10 +580,7 @@ impl std::fmt::Display for Field {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::Fields;
     use std::collections::hash_map::DefaultHasher;
-    use std::hash::{Hash, Hasher};
-    use std::sync::Arc;
 
     #[test]
     fn test_new_with_string() {

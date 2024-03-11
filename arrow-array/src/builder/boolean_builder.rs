@@ -217,7 +217,6 @@ impl Extend<Option<bool>> for BooleanBuilder {
 mod tests {
     use super::*;
     use crate::Array;
-    use arrow_buffer::Buffer;
 
     #[test]
     fn test_boolean_array_builder() {

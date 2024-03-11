@@ -25,7 +25,7 @@ extern crate arrow;
 use arrow::array::*;
 use arrow_buffer::i256;
 use rand::Rng;
-use std::{convert::TryFrom, sync::Arc};
+use std::sync::Arc;
 
 fn array_from_vec(n: usize) {
     let v: Vec<i32> = (0..n as i32).collect();

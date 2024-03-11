@@ -354,7 +354,7 @@ mod tests {
     use crate::builder::{make_builder, Int32Builder, ListBuilder};
     use crate::cast::AsArray;
     use crate::types::Int32Type;
-    use crate::{Array, Int32Array};
+    use crate::Int32Array;
     use arrow_schema::DataType;
 
     fn _test_generic_list_array_builder<O: OffsetSizeTrait>() {

@@ -308,7 +308,6 @@ mod tests {
     use super::*;
 
     use crate::array::*;
-    use crate::buffer::Buffer;
 
     #[test]
     fn test_compute_row_major_strides() {
