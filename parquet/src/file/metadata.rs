@@ -1241,8 +1241,8 @@ mod tests {
             .set_column_index_offset(Some(8000))
             .set_column_index_length(Some(25))
             .set_unencoded_byte_array_data_bytes(Some(2000))
-            .set_repetition_level_histogram(Some(vec![100,100]))
-            .set_definition_level_histogram(Some(vec![0,200]))
+            .set_repetition_level_histogram(Some(vec![100, 100]))
+            .set_definition_level_histogram(Some(vec![0, 200]))
             .build()
             .unwrap();
 
