@@ -25,6 +25,16 @@ use std::sync::Arc;
 ///
 /// Note that callers should make sure that methods of all the child field builders are
 /// properly called to maintain the consistency of the data structure.
+///
+///
+/// Handling arrays with complex layouts, such as `List<Struct<List<Struct>>>`, in Rust can be challenging due to its strong typing system.
+/// To construct a collection builder ([`ListBuilder`], [`LargeListBuilder`], or [`MapBuilder`]) using [`make_builder`], multiple calls are required. This complexity arises from the recursive approach utilized by [`StructBuilder::from_fields`].
+///
+/// Initially, [`StructBuilder::from_fields`] invokes [`make_builder`], which returns a `Box<dyn ArrayBuilder>`. To obtain the specific collection builder, one must first use [`StructBuilder::field_builder`] to get a `Collection<[Box<dyn ArrayBuilder>]>`. Subsequently, the `values()` result from this operation can be downcast to the desired builder type.
+///
+/// This process necessitates multiple casting steps. For example, when working with [`ListBuilder`], you would first call [`StructBuilder::field_builder::<ListBuilder<Box<dyn ArrayBuilder>>>`] and then downcast the [`Box<dyn ArrayBuilder>`] to the specific [`StructBuilder`] you need.
+///
+/// For a practical example, refer to `examples/collection_arrays.rs`.
 pub struct StructBuilder {
     fields: Fields,
     field_builders: Vec<Box<dyn ArrayBuilder>>,
@@ -88,6 +98,8 @@ impl ArrayBuilder for StructBuilder {
 /// Returns a builder with capacity `capacity` that corresponds to the datatype `DataType`
 /// This function is useful to construct arrays from an arbitrary vectors with known/expected
 /// schema.
+///
+/// See comments on StructBuilder on how to retreive collection builders built by make_builder.
 pub fn make_builder(datatype: &DataType, capacity: usize) -> Box<dyn ArrayBuilder> {
     use crate::builder::*;
     match datatype {
