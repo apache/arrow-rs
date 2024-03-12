@@ -10,9 +10,13 @@ fn main() {
     let col_struct_builder: &mut StructBuilder = example_col.values();
 
     // We can't obtain the ListBuilder<StructBuilder> without issues, because under the hood the StructBuilder was created as a Box<dyn ArrayBuilder>
-    // let mut sb: &mut ListBuilder<StructBuilder> = struct_builder.field_builder(1).unwrap();  //This breaks!
 
-    //We fetch the ListBuilder<Box<dyn ArrayBuilder>> from the StructBuilder first...
+    // let sb = col_struct_builder
+    //     .field_builder::<ListBuilder<StructBuilder>>(0)
+    //     .as_mut()
+    //     .unwrap(); //This panics in runtime, even though we know that the builder is a ListBuilder<StructBuilder>.
+
+    //To keep in line with Rust's strong typing, we fetch a ListBuilder<Box<dyn ArrayBuilder>> from the StructBuilder first...
     let mut list_builder_option =
         col_struct_builder.field_builder::<ListBuilder<Box<dyn ArrayBuilder>>>(0);
 
