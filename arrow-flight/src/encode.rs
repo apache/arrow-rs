@@ -18,10 +18,10 @@
 use std::{collections::VecDeque, fmt::Debug, pin::Pin, sync::Arc, task::Poll};
 
 use crate::{error::Result, FlightData, FlightDescriptor, SchemaAsIpc};
-use arrow_array::cast::{downcast_array, AsArray};
-use arrow_array::{Array, ArrayRef, ListArray, RecordBatch, RecordBatchOptions};
+
+use arrow_array::{Array, ArrayRef, RecordBatch, RecordBatchOptions};
 use arrow_ipc::writer::{DictionaryTracker, IpcDataGenerator, IpcWriteOptions};
-use arrow_ipc::List;
+
 use arrow_schema::{DataType, Field, FieldRef, Fields, Schema, SchemaRef};
 use bytes::Bytes;
 use futures::{ready, stream::BoxStream, Stream, StreamExt};
@@ -601,7 +601,6 @@ fn hydrate_dictionary(
 #[cfg(test)]
 mod tests {
     use arrow_array::builder::StringDictionaryBuilder;
-    use arrow_array::cast::AsArray;
     use arrow_array::*;
     use arrow_array::{cast::downcast_array, types::*};
     use arrow_cast::pretty::pretty_format_batches;
