@@ -16,13 +16,13 @@ fn main() {
     //     .as_mut()
     //     .unwrap(); //This panics in runtime, even though we know that the builder is a ListBuilder<StructBuilder>.
 
-    //To keep in line with Rust's strong typing, we fetch a ListBuilder<Box<dyn ArrayBuilder>> from the StructBuilder first...
+    //To keep in line with Rust's strong typing, we fetch a ListBuilder<Box<dyn ArrayBuilder>> from the column StructBuilder first...
     let mut list_builder_option =
         col_struct_builder.field_builder::<ListBuilder<Box<dyn ArrayBuilder>>>(0);
 
     let list_builder = list_builder_option.as_mut().unwrap();
 
-    // ... and then downcast it to a ListBuilder<StructBuilder>
+    // ... and then downcast the key/value pair values to a StructBuilder
     let struct_builder = list_builder
         .values()
         .as_any_mut()
