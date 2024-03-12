@@ -120,8 +120,8 @@ pub(crate) fn new_buffers(data_type: &DataType, capacity: usize) -> [MutableBuff
             [buffer, empty_buffer]
         }
         DataType::ListView(_) => [
-            MutableBuffer::new(2 * capacity * mem::size_of::<i32>()),
-            empty_buffer,
+            MutableBuffer::new(capacity * mem::size_of::<i32>()),
+            MutableBuffer::new(capacity * mem::size_of::<i32>()),
         ],
         DataType::LargeList(_) => {
             // offset buffer always starts with a zero
@@ -130,8 +130,8 @@ pub(crate) fn new_buffers(data_type: &DataType, capacity: usize) -> [MutableBuff
             [buffer, empty_buffer]
         }
         DataType::LargeListView(_) => [
-            MutableBuffer::new(2 * capacity * mem::size_of::<i64>()),
-            empty_buffer,
+            MutableBuffer::new(capacity * mem::size_of::<i64>()),
+            MutableBuffer::new(capacity * mem::size_of::<i64>()),
         ],
         DataType::FixedSizeBinary(size) => {
             [MutableBuffer::new(capacity * *size as usize), empty_buffer]
