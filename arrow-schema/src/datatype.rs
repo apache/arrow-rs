@@ -235,7 +235,7 @@ pub enum DataType {
     ///
     /// The ListView layout is defined by three buffers:
     /// a validity bitmap, an offsets buffer, and an additional sizes buffer.
-    /// Sizes and offsets have the identical bit width and both 32-bit signed integer options is supported.
+    /// Sizes and offsets are both 32 bits for this type
     ListView(FieldRef),
     /// A list of some logical data type with fixed length.
     FixedSizeList(FieldRef, i32),
