@@ -54,7 +54,7 @@ impl NullBufferBuilder {
     pub fn new_from_buffer(buffer: MutableBuffer, len: usize) -> Self {
         let capacity = buffer.len() * 8;
 
-        assert!(len < capacity);
+        assert!(len <= capacity);
 
         let bitmap_builder = Some(BooleanBufferBuilder::new_from_buffer(buffer, len));
         Self {

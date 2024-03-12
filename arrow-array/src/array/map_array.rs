@@ -441,7 +441,6 @@ mod tests {
     use crate::types::UInt32Type;
     use crate::{Int32Array, UInt32Array};
     use arrow_schema::Fields;
-    use std::sync::Arc;
 
     use super::*;
 

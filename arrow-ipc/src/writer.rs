@@ -1421,14 +1421,12 @@ fn pad_to_8(len: u32) -> usize {
 mod tests {
     use std::io::Cursor;
     use std::io::Seek;
-    use std::sync::Arc;
 
     use arrow_array::builder::GenericListBuilder;
     use arrow_array::builder::MapBuilder;
     use arrow_array::builder::UnionBuilder;
     use arrow_array::builder::{PrimitiveRunBuilder, UInt32Builder};
     use arrow_array::types::*;
-    use arrow_schema::DataType;
 
     use crate::reader::*;
     use crate::MetadataVersion;

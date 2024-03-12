@@ -20,7 +20,7 @@
 
 use std::collections::VecDeque;
 use std::iter;
-use std::{convert::TryFrom, fs::File, io::Read, path::Path, sync::Arc};
+use std::{fs::File, io::Read, path::Path, sync::Arc};
 
 use crate::basic::{Encoding, Type};
 use crate::bloom_filter::Sbbf;
@@ -769,9 +769,6 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
 
 #[cfg(test)]
 mod tests {
-    use bytes::Bytes;
-    use std::sync::Arc;
-
     use crate::format::BoundaryOrder;
 
     use crate::basic::{self, ColumnOrder};

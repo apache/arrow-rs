@@ -26,7 +26,6 @@ use arrow::error::Result;
 
 #[cfg(feature = "prettyprint")]
 use arrow::util::pretty::print_batches;
-use arrow_schema::Fields;
 
 fn main() -> Result<()> {
     // define schema

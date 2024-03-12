@@ -617,10 +617,7 @@ impl ArrayLevels {
 mod tests {
     use super::*;
 
-    use std::sync::Arc;
-
     use arrow_array::builder::*;
-    use arrow_array::cast::AsArray;
     use arrow_array::types::Int32Type;
     use arrow_array::*;
     use arrow_buffer::{Buffer, ToByteSlice};

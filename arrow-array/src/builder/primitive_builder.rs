@@ -17,7 +17,7 @@
 
 use crate::builder::{ArrayBuilder, BufferBuilder};
 use crate::types::*;
-use crate::{ArrayRef, ArrowPrimitiveType, PrimitiveArray};
+use crate::{ArrayRef, PrimitiveArray};
 use arrow_buffer::NullBufferBuilder;
 use arrow_buffer::{Buffer, MutableBuffer};
 use arrow_data::ArrayData;
@@ -359,7 +359,6 @@ impl<P: ArrowPrimitiveType> Extend<Option<P::Native>> for PrimitiveBuilder<P> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow_buffer::Buffer;
     use arrow_schema::TimeUnit;
 
     use crate::array::Array;
@@ -367,7 +366,6 @@ mod tests {
     use crate::array::Date32Array;
     use crate::array::Int32Array;
     use crate::array::TimestampSecondArray;
-    use crate::builder::Int32Builder;
 
     #[test]
     fn test_primitive_array_builder_i32() {

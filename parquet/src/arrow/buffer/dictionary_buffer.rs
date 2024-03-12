@@ -208,7 +208,7 @@ impl<K: ArrowNativeType, V: OffsetSizeTrait> ValuesBuffer for DictionaryBuffer<K
 mod tests {
     use super::*;
     use arrow::compute::cast;
-    use arrow_array::{Array, StringArray};
+    use arrow_array::StringArray;
 
     #[test]
     fn test_dictionary_buffer() {

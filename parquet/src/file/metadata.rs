@@ -1097,7 +1097,7 @@ impl OffsetIndexBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::basic::{Encoding, PageType};
+    use crate::basic::PageType;
 
     #[test]
     fn test_row_group_metadata_thrift_conversion() {
