@@ -583,7 +583,7 @@ fn prepare_batch_for_flight(
     send_dictionaries: bool,
 ) -> Result<RecordBatch> {
     let columns = schema
-        .all_fields()
+        .fields()
         .iter()
         .zip(batch.columns())
         .map(|(field, c)| hydrate_dictionary(c, field.data_type(), send_dictionaries))
