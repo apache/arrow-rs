@@ -19,10 +19,10 @@ use std::{collections::VecDeque, fmt::Debug, pin::Pin, sync::Arc, task::Poll};
 
 use crate::{error::Result, FlightData, FlightDescriptor, SchemaAsIpc};
 
-use arrow_array::{Array, ArrayRef, RecordBatch, RecordBatchOptions};
+use arrow_array::{Array, ArrayRef, RecordBatch, RecordBatchOptions, UnionArray};
 use arrow_ipc::writer::{DictionaryTracker, IpcDataGenerator, IpcWriteOptions};
 
-use arrow_schema::{DataType, Field, FieldRef, Fields, Schema, SchemaRef};
+use arrow_schema::{DataType, Field, FieldRef, Fields, Schema, SchemaRef, UnionMode};
 use bytes::Bytes;
 use futures::{ready, stream::BoxStream, Stream, StreamExt};
 
@@ -442,6 +442,12 @@ fn prepare_field_for_flight(field: &FieldRef, send_dictionaries: bool) -> Field 
             field.is_nullable(),
         )
         .with_metadata(field.metadata().clone()),
+        DataType::LargeList(inner) => Field::new_list(
+            field.name(),
+            prepare_field_for_flight(inner, send_dictionaries),
+            field.is_nullable(),
+        )
+        .with_metadata(field.metadata().clone()),
         DataType::Struct(fields) => {
             let new_fields: Vec<Field> = fields
                 .iter()
@@ -449,6 +455,14 @@ fn prepare_field_for_flight(field: &FieldRef, send_dictionaries: bool) -> Field 
                 .collect();
             Field::new_struct(field.name(), new_fields, field.is_nullable())
                 .with_metadata(field.metadata().clone())
+        }
+        DataType::Union(fields, mode) => {
+            let (type_ids, new_fields): (Vec<i8>, Vec<Field>) = fields
+                .iter()
+                .map(|(type_id, f)| (type_id, prepare_field_for_flight(f, send_dictionaries)))
+                .unzip();
+
+            Field::new_union(field.name(), type_ids, new_fields, *mode)
         }
         DataType::Dictionary(_, value_type) if !send_dictionaries => Field::new(
             field.name(),
@@ -590,9 +604,36 @@ fn hydrate_dictionary(
     data_type: &DataType,
     send_dictionaries: bool,
 ) -> Result<ArrayRef> {
-    let arr = match array.data_type() {
-        DataType::Dictionary(_, value) if !send_dictionaries => arrow_cast::cast(array, value)?,
-        tpe if tpe.is_nested() && !send_dictionaries => arrow_cast::cast(array, data_type)?,
+    let arr = match (array.data_type(), data_type) {
+        (DataType::Dictionary(_, value), _) if !send_dictionaries => {
+            arrow_cast::cast(array, value)?
+        }
+        (DataType::Union(_, UnionMode::Sparse), DataType::Union(fields, UnionMode::Sparse))
+            if !send_dictionaries =>
+        {
+            let union_arr = array.as_any().downcast_ref::<UnionArray>().unwrap();
+
+            let (type_ids, fields): (Vec<i8>, Vec<&FieldRef>) = fields.iter().unzip();
+
+            Arc::new(UnionArray::try_new(
+                &type_ids,
+                union_arr.type_ids().inner().clone(),
+                None,
+                fields
+                    .iter()
+                    .enumerate()
+                    .map(|(col, field)| {
+                        Ok((
+                            field.as_ref().clone(),
+                            arrow_cast::cast(union_arr.child(col as i8), field.data_type())?,
+                        ))
+                    })
+                    .collect::<Result<Vec<_>>>()?,
+            )?)
+        }
+        (tpe, data_type) if tpe.is_nested() && !send_dictionaries => {
+            arrow_cast::cast(array, data_type)?
+        }
         _ => Arc::clone(array),
     };
     Ok(arr)
@@ -603,7 +644,9 @@ mod tests {
     use arrow_array::builder::StringDictionaryBuilder;
     use arrow_array::*;
     use arrow_array::{cast::downcast_array, types::*};
+    use arrow_buffer::Buffer;
     use arrow_cast::pretty::pretty_format_batches;
+    use arrow_schema::UnionMode;
     use std::collections::HashMap;
 
     use crate::decode::{DecodedPayload, FlightDataDecoder};
@@ -809,6 +852,181 @@ mod tests {
                     let list_array = downcast_array::<ListArray>(struct_array.column(0));
 
                     let elem_array = downcast_array::<StringArray>(list_array.value(0).as_ref());
+
+                    assert_eq!(elem_array, expected_array);
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_dictionary_union_hydration() {
+        let struct_fields = vec![Field::new_list(
+            "dict_list",
+            Field::new_dictionary("item", DataType::UInt16, DataType::Utf8, true),
+            true,
+        )];
+
+        let type_ids = vec![0, 1, 2];
+        let union_fields = vec![
+            Field::new_list(
+                "dict_list",
+                Field::new_dictionary("item", DataType::UInt16, DataType::Utf8, true),
+                true,
+            ),
+            Field::new_struct("struct", struct_fields.clone(), true),
+            Field::new("string", DataType::Utf8, true),
+        ];
+
+        let struct_fields = vec![Field::new_list(
+            "dict_list",
+            Field::new_dictionary("item", DataType::UInt16, DataType::Utf8, true),
+            true,
+        )];
+
+        let mut builder = builder::ListBuilder::new(StringDictionaryBuilder::<UInt16Type>::new());
+
+        builder.append_value(vec![Some("a"), None, Some("b")]);
+
+        let arr1 = builder.finish();
+
+        let type_id_buffer = Buffer::from_slice_ref([0_i8]);
+        let arr1 = UnionArray::try_new(
+            &type_ids,
+            type_id_buffer,
+            None,
+            vec![
+                (union_fields[0].clone(), Arc::new(arr1)),
+                (
+                    union_fields[1].clone(),
+                    new_null_array(union_fields[1].data_type(), 1),
+                ),
+                (
+                    union_fields[2].clone(),
+                    new_null_array(union_fields[2].data_type(), 1),
+                ),
+            ],
+        )
+        .unwrap();
+
+        builder.append_value(vec![Some("c"), None, Some("d")]);
+
+        let arr2 = Arc::new(builder.finish());
+        let arr2 = StructArray::new(struct_fields.clone().into(), vec![arr2], None);
+
+        let type_id_buffer = Buffer::from_slice_ref([1_i8]);
+        let arr2 = UnionArray::try_new(
+            &type_ids,
+            type_id_buffer,
+            None,
+            vec![
+                (
+                    union_fields[0].clone(),
+                    new_null_array(union_fields[0].data_type(), 1),
+                ),
+                (union_fields[1].clone(), Arc::new(arr2)),
+                (
+                    union_fields[2].clone(),
+                    new_null_array(union_fields[2].data_type(), 1),
+                ),
+            ],
+        )
+        .unwrap();
+
+        let type_id_buffer = Buffer::from_slice_ref([2_i8]);
+        let arr3 = UnionArray::try_new(
+            &type_ids,
+            type_id_buffer,
+            None,
+            vec![
+                (
+                    union_fields[0].clone(),
+                    new_null_array(union_fields[0].data_type(), 1),
+                ),
+                (
+                    union_fields[1].clone(),
+                    new_null_array(union_fields[1].data_type(), 1),
+                ),
+                (
+                    union_fields[2].clone(),
+                    Arc::new(StringArray::from(vec!["e"])),
+                ),
+            ],
+        )
+        .unwrap();
+
+        let schema = Arc::new(Schema::new(vec![Field::new_union(
+            "union",
+            type_ids.clone(),
+            union_fields.clone(),
+            UnionMode::Sparse,
+        )]));
+
+        let batch1 = RecordBatch::try_new(schema.clone(), vec![Arc::new(arr1)]).unwrap();
+        let batch2 = RecordBatch::try_new(schema.clone(), vec![Arc::new(arr2)]).unwrap();
+        let batch3 = RecordBatch::try_new(schema.clone(), vec![Arc::new(arr3)]).unwrap();
+
+        let stream = futures::stream::iter(vec![Ok(batch1), Ok(batch2), Ok(batch3)]);
+
+        let encoder = FlightDataEncoderBuilder::default().build(stream);
+
+        let mut decoder = FlightDataDecoder::new(encoder);
+
+        let hydrated_struct_fields = vec![Field::new_list(
+            "dict_list",
+            Field::new("item", DataType::Utf8, true),
+            true,
+        )];
+
+        let hydrated_union_fields = vec![
+            Field::new_list("dict_list", Field::new("item", DataType::Utf8, true), true),
+            Field::new_struct("struct", hydrated_struct_fields.clone(), true),
+            Field::new("string", DataType::Utf8, true),
+        ];
+
+        let expected_schema = Schema::new(vec![Field::new_union(
+            "union",
+            type_ids.clone(),
+            hydrated_union_fields,
+            UnionMode::Sparse,
+        )]);
+
+        let expected_schema = Arc::new(expected_schema);
+
+        let mut expected_arrays = vec![
+            StringArray::from_iter(vec![Some("a"), None, Some("b")]),
+            StringArray::from_iter(vec![Some("c"), None, Some("d")]),
+            StringArray::from(vec!["e"]),
+        ]
+        .into_iter();
+
+        let mut batch = 0;
+        while let Some(decoded) = decoder.next().await {
+            let decoded = decoded.unwrap();
+            match decoded.payload {
+                DecodedPayload::None => {}
+                DecodedPayload::Schema(s) => assert_eq!(s, expected_schema),
+                DecodedPayload::RecordBatch(b) => {
+                    assert_eq!(b.schema(), expected_schema);
+                    let expected_array = expected_arrays.next().unwrap();
+                    let union_arr =
+                        downcast_array::<UnionArray>(b.column_by_name("union").unwrap());
+
+                    let elem_array = match batch {
+                        0 => {
+                            let list_array = downcast_array::<ListArray>(union_arr.child(0));
+                            downcast_array::<StringArray>(list_array.value(0).as_ref())
+                        }
+                        1 => {
+                            let struct_array = downcast_array::<StructArray>(union_arr.child(1));
+                            let list_array = downcast_array::<ListArray>(struct_array.column(0));
+
+                            downcast_array::<StringArray>(list_array.value(0).as_ref())
+                        }
+                        _ => downcast_array::<StringArray>(union_arr.child(2)),
+                    };
+
+                    batch += 1;
 
                     assert_eq!(elem_array, expected_array);
                 }
