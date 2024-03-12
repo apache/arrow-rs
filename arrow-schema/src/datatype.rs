@@ -250,7 +250,7 @@ pub enum DataType {
     ///
     /// The LargeListView layout is defined by three buffers:
     /// a validity bitmap, an offsets buffer, and an additional sizes buffer.
-    /// Sizes and offsets have the identical bit width and both 64-bit signed integer options is supported.
+    /// Sizes and offsets are both 64 bits for this type
     LargeListView(FieldRef),
     /// A nested datatype that contains a number of sub-fields.
     Struct(Fields),
