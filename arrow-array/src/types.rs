@@ -1546,14 +1546,16 @@ pub type BinaryType = GenericBinaryType<i32>;
 /// An arrow binary array with i64 offsets
 pub type LargeBinaryType = GenericBinaryType<i64>;
 
-mod bytes_view {
+mod byte_view {
+    use crate::types::{BinaryViewType, StringViewType};
+
     pub trait Sealed: Send + Sync {}
-    impl Sealed for str {}
-    impl Sealed for [u8] {}
+    impl Sealed for StringViewType {}
+    impl Sealed for BinaryViewType {}
 }
 
 /// A trait over the variable length bytes view array types
-pub trait BytesViewType: bytes_view::Sealed + 'static + PartialEq + AsRef<Self> {
+pub trait ByteViewType: byte_view::Sealed + 'static + PartialEq + Send + Sync {
     /// If element in array is utf8 encoded string.
     const IS_UTF8: bool;
 
@@ -1573,68 +1575,37 @@ pub trait BytesViewType: bytes_view::Sealed + 'static + PartialEq + AsRef<Self> 
     type Native: bytes::ByteArrayNativeType + AsRef<Self::Native> + AsRef<[u8]> + ?Sized;
 
     /// Type for owned corresponding to `Native`
-    type Owned: Debug + Clone + Sync + Send + AsRef<Self>;
-
-    /// # Safety
-    /// The caller must ensure `index < self.len()`.
-    unsafe fn from_bytes_unchecked(slice: &[u8]) -> &Self;
-
-    /// To bytes slice.
-    fn to_bytes(&self) -> &[u8];
-
-    /// To owned type
-    #[allow(clippy::wrong_self_convention)]
-    fn into_owned(&self) -> Self::Owned;
+    type Owned: Debug + Clone + Sync + Send + AsRef<Self::Native>;
 
     /// Verifies that the provided buffers are valid for this array type
     fn validate(views: &[u128], buffers: &[Buffer]) -> Result<(), ArrowError>;
 }
 
-impl BytesViewType for str {
+/// [`ByteViewType`] for string arrays
+#[derive(PartialEq)]
+pub struct StringViewType {}
+
+impl ByteViewType for StringViewType {
     const IS_UTF8: bool = true;
     const PREFIX: &'static str = "String";
 
     type Native = str;
     type Owned = String;
 
-    #[inline(always)]
-    unsafe fn from_bytes_unchecked(slice: &[u8]) -> &Self {
-        std::str::from_utf8_unchecked(slice)
-    }
-
-    #[inline(always)]
-    fn to_bytes(&self) -> &[u8] {
-        self.as_bytes()
-    }
-
-    fn into_owned(&self) -> Self::Owned {
-        self.to_string()
-    }
-
     fn validate(views: &[u128], buffers: &[Buffer]) -> Result<(), ArrowError> {
         validate_string_view(views, buffers)
     }
 }
 
-impl BytesViewType for [u8] {
+/// [`BinaryViewType`] for string arrays
+#[derive(PartialEq)]
+pub struct BinaryViewType {}
+
+impl ByteViewType for BinaryViewType {
     const IS_UTF8: bool = false;
     const PREFIX: &'static str = "Binary";
     type Native = [u8];
     type Owned = Vec<u8>;
-
-    #[inline(always)]
-    unsafe fn from_bytes_unchecked(slice: &[u8]) -> &Self {
-        slice
-    }
-
-    #[inline(always)]
-    fn to_bytes(&self) -> &[u8] {
-        self
-    }
-
-    fn into_owned(&self) -> Self::Owned {
-        self.to_vec()
-    }
 
     fn validate(views: &[u128], buffers: &[Buffer]) -> Result<(), ArrowError> {
         validate_binary_view(views, buffers)

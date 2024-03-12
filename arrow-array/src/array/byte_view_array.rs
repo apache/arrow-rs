@@ -16,21 +16,26 @@
 // under the License.
 
 use crate::array::print_long_array;
-use crate::builder::GenericBytesViewBuilder;
+use crate::builder::GenericByteViewBuilder;
 use crate::iterator::ArrayIter;
 use crate::types::bytes::ByteArrayNativeType;
-use crate::types::BytesViewType;
+use crate::types::{BinaryViewType, ByteViewType, StringViewType};
 use crate::{Array, ArrayAccessor, ArrayRef};
 use arrow_buffer::{Buffer, NullBuffer, ScalarBuffer};
-use arrow_data::{ArrayData, ArrayDataBuilder, BytesView};
+use arrow_data::{ArrayData, ArrayDataBuilder, ByteView};
 use arrow_schema::{ArrowError, DataType};
 use std::any::Any;
 use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::sync::Arc;
 
-/// An array of variable length bytes view arrays
-pub struct GenericBytesViewArray<T: BytesViewType + ?Sized> {
+/// [Variable-size Binary View Layout]: An array of variable length bytes view arrays.
+///
+/// Different than [`crate::GenericByteArray`] as it stores both an offset and length
+/// meaning that take / filter operations can be implemented without copying the underlying data.
+///
+/// [Variable-size Binary View Layout]: https://arrow.apache.org/docs/format/Columnar.html#variable-size-binary-view-layout
+pub struct GenericByteViewArray<T: ByteViewType + ?Sized> {
     data_type: DataType,
     views: ScalarBuffer<u128>,
     buffers: Vec<Buffer>,
@@ -38,7 +43,7 @@ pub struct GenericBytesViewArray<T: BytesViewType + ?Sized> {
     nulls: Option<NullBuffer>,
 }
 
-impl<T: BytesViewType + ?Sized> Clone for GenericBytesViewArray<T> {
+impl<T: ByteViewType + ?Sized> Clone for GenericByteViewArray<T> {
     fn clone(&self) -> Self {
         Self {
             data_type: T::DATA_TYPE,
@@ -50,22 +55,22 @@ impl<T: BytesViewType + ?Sized> Clone for GenericBytesViewArray<T> {
     }
 }
 
-impl<T: BytesViewType + ?Sized> GenericBytesViewArray<T> {
-    /// Create a new [`GenericBytesViewArray`] from the provided parts, panicking on failure
+impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
+    /// Create a new [`GenericByteViewArray`] from the provided parts, panicking on failure
     ///
     /// # Panics
     ///
-    /// Panics if [`GenericBytesViewArray::try_new`] returns an error
+    /// Panics if [`GenericByteViewArray::try_new`] returns an error
     pub fn new(views: ScalarBuffer<u128>, buffers: Vec<Buffer>, nulls: Option<NullBuffer>) -> Self {
         Self::try_new(views, buffers, nulls).unwrap()
     }
 
-    /// Create a new [`GenericBytesViewArray`] from the provided parts, returning an error on failure
+    /// Create a new [`GenericByteViewArray`] from the provided parts, returning an error on failure
     ///
     /// # Errors
     ///
     /// * `views.len() != nulls.len()`
-    /// * [BytesViewType::validate] fails
+    /// * [ByteViewType::validate] fails
     pub fn try_new(
         views: ScalarBuffer<u128>,
         buffers: Vec<Buffer>,
@@ -93,7 +98,7 @@ impl<T: BytesViewType + ?Sized> GenericBytesViewArray<T> {
         })
     }
 
-    /// Create a new [`GenericBytesViewArray`] from the provided parts, without validation
+    /// Create a new [`GenericByteViewArray`] from the provided parts, without validation
     ///
     /// # Safety
     ///
@@ -112,7 +117,7 @@ impl<T: BytesViewType + ?Sized> GenericBytesViewArray<T> {
         }
     }
 
-    /// Create a new [`GenericBytesViewArray`] of length `len` where all values are null
+    /// Create a new [`GenericByteViewArray`] of length `len` where all values are null
     pub fn new_null(len: usize) -> Self {
         Self {
             data_type: T::DATA_TYPE,
@@ -123,14 +128,14 @@ impl<T: BytesViewType + ?Sized> GenericBytesViewArray<T> {
         }
     }
 
-    /// Creates a [`GenericBytesViewArray`] based on an iterator of values without nulls
+    /// Creates a [`GenericByteViewArray`] based on an iterator of values without nulls
     pub fn from_iter_values<Ptr, I>(iter: I) -> Self
     where
         Ptr: AsRef<T::Native>,
         I: IntoIterator<Item = Ptr>,
     {
         let iter = iter.into_iter();
-        let mut builder = GenericBytesViewBuilder::<T>::with_capacity(iter.size_hint().0);
+        let mut builder = GenericByteViewBuilder::<T>::with_capacity(iter.size_hint().0);
         for v in iter {
             builder.append_value(v);
         }
@@ -179,7 +184,7 @@ impl<T: BytesViewType + ?Sized> GenericBytesViewArray<T> {
             let ptr = self.views.as_ptr() as *const u8;
             std::slice::from_raw_parts(ptr.add(idx * 16 + 4), len as usize)
         } else {
-            let view = BytesView::from(*v);
+            let view = ByteView::from(*v);
             let data = self.buffers.get_unchecked(view.buffer_index as usize);
             let offset = view.offset as usize;
             data.get_unchecked(offset..offset + len as usize)
@@ -204,7 +209,7 @@ impl<T: BytesViewType + ?Sized> GenericBytesViewArray<T> {
     }
 }
 
-impl<T: BytesViewType + ?Sized> Debug for GenericBytesViewArray<T> {
+impl<T: ByteViewType + ?Sized> Debug for GenericByteViewArray<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         write!(f, "{}ViewArray\n[\n", T::PREFIX)?;
         print_long_array(self, f, |array, index, f| {
@@ -214,7 +219,7 @@ impl<T: BytesViewType + ?Sized> Debug for GenericBytesViewArray<T> {
     }
 }
 
-impl<T: BytesViewType + ?Sized> Array for GenericBytesViewArray<T> {
+impl<T: ByteViewType + ?Sized> Array for GenericByteViewArray<T> {
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -265,19 +270,19 @@ impl<T: BytesViewType + ?Sized> Array for GenericBytesViewArray<T> {
     }
 }
 
-impl<'a, T: BytesViewType + ?Sized> ArrayAccessor for &'a GenericBytesViewArray<T> {
+impl<'a, T: ByteViewType + ?Sized> ArrayAccessor for &'a GenericByteViewArray<T> {
     type Item = &'a T::Native;
 
     fn value(&self, index: usize) -> Self::Item {
-        GenericBytesViewArray::value(self, index)
+        GenericByteViewArray::value(self, index)
     }
 
     unsafe fn value_unchecked(&self, index: usize) -> Self::Item {
-        GenericBytesViewArray::value_unchecked(self, index)
+        GenericByteViewArray::value_unchecked(self, index)
     }
 }
 
-impl<'a, T: BytesViewType + ?Sized> IntoIterator for &'a GenericBytesViewArray<T> {
+impl<'a, T: ByteViewType + ?Sized> IntoIterator for &'a GenericByteViewArray<T> {
     type Item = Option<&'a T::Native>;
     type IntoIter = ArrayIter<Self>;
 
@@ -286,7 +291,7 @@ impl<'a, T: BytesViewType + ?Sized> IntoIterator for &'a GenericBytesViewArray<T
     }
 }
 
-impl<T: BytesViewType + ?Sized> From<ArrayData> for GenericBytesViewArray<T> {
+impl<T: ByteViewType + ?Sized> From<ArrayData> for GenericByteViewArray<T> {
     fn from(value: ArrayData) -> Self {
         let views = value.buffers()[0].clone();
         let views = ScalarBuffer::new(views, value.offset(), value.len());
@@ -301,8 +306,8 @@ impl<T: BytesViewType + ?Sized> From<ArrayData> for GenericBytesViewArray<T> {
     }
 }
 
-impl<T: BytesViewType + ?Sized> From<GenericBytesViewArray<T>> for ArrayData {
-    fn from(mut array: GenericBytesViewArray<T>) -> Self {
+impl<T: ByteViewType + ?Sized> From<GenericByteViewArray<T>> for ArrayData {
+    fn from(mut array: GenericByteViewArray<T>) -> Self {
         let len = array.len();
         array.buffers.insert(0, array.views.into_inner());
         let builder = ArrayDataBuilder::new(T::DATA_TYPE)
@@ -314,22 +319,22 @@ impl<T: BytesViewType + ?Sized> From<GenericBytesViewArray<T>> for ArrayData {
     }
 }
 
-impl<Ptr, T: BytesViewType + ?Sized> FromIterator<Option<Ptr>> for GenericBytesViewArray<T>
+impl<Ptr, T: ByteViewType + ?Sized> FromIterator<Option<Ptr>> for GenericByteViewArray<T>
 where
     Ptr: AsRef<T::Native>,
 {
     fn from_iter<I: IntoIterator<Item = Option<Ptr>>>(iter: I) -> Self {
         let iter = iter.into_iter();
-        let mut builder = GenericBytesViewBuilder::<T>::with_capacity(iter.size_hint().0);
+        let mut builder = GenericByteViewBuilder::<T>::with_capacity(iter.size_hint().0);
         builder.extend(iter);
         builder.finish()
     }
 }
 
-/// A [`GenericBytesViewArray`] of `[u8]`
-pub type BinaryViewArray = GenericBytesViewArray<[u8]>;
+/// A [`GenericByteViewArray`] of `[u8]`
+pub type BinaryViewArray = GenericByteViewArray<BinaryViewType>;
 
-/// A [`GenericBytesViewArray`] of `str`
+/// A [`GenericByteViewArray`] of `str`
 ///
 /// ```
 /// use arrow_array::StringViewArray;
@@ -337,7 +342,7 @@ pub type BinaryViewArray = GenericBytesViewArray<[u8]>;
 /// assert_eq!(array.value(0), "hello");
 /// assert_eq!(array.value(3), "large payload over 12 bytes");
 /// ```
-pub type StringViewArray = GenericBytesViewArray<str>;
+pub type StringViewArray = GenericByteViewArray<StringViewType>;
 
 impl From<Vec<&str>> for StringViewArray {
     fn from(v: Vec<&str>) -> Self {
@@ -348,8 +353,9 @@ impl From<Vec<&str>> for StringViewArray {
 #[cfg(test)]
 mod tests {
     use crate::builder::StringViewBuilder;
-    use crate::types::BytesViewType;
     use crate::{Array, BinaryViewArray, StringViewArray};
+    use arrow_buffer::{Buffer, ScalarBuffer};
+    use arrow_data::ByteView;
 
     #[test]
     fn try_new() {
@@ -363,20 +369,22 @@ mod tests {
         assert_eq!(array.value(3), "large payload over 12 bytes");
 
         let array = BinaryViewArray::from_iter_values(vec![
-            b"hello".to_bytes(),
-            b"world".to_bytes(),
-            b"lulu".to_bytes(),
-            b"large payload over 12 bytes".to_bytes(),
+            b"hello".as_slice(),
+            b"world".as_slice(),
+            b"lulu".as_slice(),
+            b"large payload over 12 bytes".as_slice(),
         ]);
         assert_eq!(array.value(0), b"hello");
         assert_eq!(array.value(3), b"large payload over 12 bytes");
 
+        // test empty array
         let array = {
             let mut builder = StringViewBuilder::new();
             builder.finish()
         };
         assert!(array.is_empty());
 
+        // test builder append
         let array = {
             let mut builder = StringViewBuilder::new();
             builder.append_value("hello");
@@ -387,5 +395,86 @@ mod tests {
         assert_eq!(array.value(0), "hello");
         assert!(array.is_null(1));
         assert_eq!(array.value(2), "large payload over 12 bytes");
+
+        // test builder's in_progress re-created
+        let array = {
+            // make a builder with small block size.
+            let mut builder = StringViewBuilder::new().with_block_size(14);
+            builder.append_value("large payload over 12 bytes");
+            builder.append_option(Some("another large payload over 12 bytes that double than the first one, so that we can trigger the in_progress in builder re-created"));
+            builder.finish()
+        };
+        assert_eq!(array.value(0), "large payload over 12 bytes");
+        assert_eq!(array.value(1), "another large payload over 12 bytes that double than the first one, so that we can trigger the in_progress in builder re-created");
+        assert_eq!(2, array.buffers.len());
+    }
+
+    #[test]
+    #[should_panic(expected = "Invalid buffer index at 0: got index 3 but only has 1 buffers")]
+    fn new_with_invalid_view_data() {
+        let v = "large payload over 12 bytes";
+        let view = ByteView {
+            length: 13,
+            prefix: u32::from_le_bytes(v.as_bytes()[0..4].try_into().unwrap()),
+            buffer_index: 3,
+            offset: 1,
+        };
+        let views = ScalarBuffer::from(vec![view.into()]);
+        let buffers = vec![Buffer::from_slice_ref(v)];
+        StringViewArray::new(views, buffers, None);
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "Encountered non-UTF-8 data at index 0: invalid utf-8 sequence of 1 bytes from index 0"
+    )]
+    fn new_with_invalid_utf8_data() {
+        let v: Vec<u8> = vec![0xf0, 0x80, 0x80, 0x80];
+        let view = ByteView {
+            length: v.len() as u32,
+            prefix: u32::from_le_bytes(v[0..4].try_into().unwrap()),
+            buffer_index: 0,
+            offset: 0,
+        };
+        let views = ScalarBuffer::from(vec![view.into()]);
+        let buffers = vec![Buffer::from_slice_ref(v)];
+        StringViewArray::new(views, buffers, None);
+    }
+
+    #[test]
+    #[should_panic(expected = "View at index 0 contained non-zero padding for string of length 1")]
+    fn new_with_invalid_zero_padding() {
+        let mut data = [0; 12];
+        data[0] = b'H';
+        data[11] = 1; // no zero padding
+
+        let mut view_buffer = [0; 16];
+        view_buffer[0..4].copy_from_slice(&1u32.to_le_bytes());
+        view_buffer[4..].copy_from_slice(&data);
+
+        let view = ByteView::from(u128::from_le_bytes(view_buffer));
+        let views = ScalarBuffer::from(vec![view.into()]);
+        let buffers = vec![];
+        StringViewArray::new(views, buffers, None);
+    }
+
+    #[test]
+    #[should_panic(expected = "Mismatch between embedded prefix and data")]
+    fn test_mismatch_between_embedded_prefix_and_data() {
+        let input_str_1 = "Hello, Rustaceans!";
+        let input_str_2 = "Hallo, Rustaceans!";
+        let length = input_str_1.len() as u32;
+        assert!(input_str_1.len() > 12);
+
+        let mut view_buffer = [0; 16];
+        view_buffer[0..4].copy_from_slice(&length.to_le_bytes());
+        view_buffer[4..8].copy_from_slice(&input_str_1.as_bytes()[0..4]);
+        view_buffer[8..12].copy_from_slice(&0u32.to_le_bytes());
+        view_buffer[12..].copy_from_slice(&0u32.to_le_bytes());
+        let view = ByteView::from(u128::from_le_bytes(view_buffer));
+        let views = ScalarBuffer::from(vec![view.into()]);
+        let buffers = vec![Buffer::from_slice_ref(input_str_2.as_bytes())];
+
+        StringViewArray::new(views, buffers, None);
     }
 }

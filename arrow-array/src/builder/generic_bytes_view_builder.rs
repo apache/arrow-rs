@@ -16,20 +16,20 @@
 // under the License.
 
 use crate::builder::ArrayBuilder;
-use crate::types::BytesViewType;
-use crate::{ArrayRef, GenericBytesViewArray};
+use crate::types::{BinaryViewType, ByteViewType, StringViewType};
+use crate::{ArrayRef, GenericByteViewArray};
 use arrow_buffer::{Buffer, BufferBuilder, NullBufferBuilder, ScalarBuffer};
-use arrow_data::BytesView;
+use arrow_data::ByteView;
 use std::any::Any;
 use std::marker::PhantomData;
 use std::sync::Arc;
 
 const DEFAULT_BLOCK_SIZE: u32 = 8 * 1024;
 
-/// A builder for [`GenericBytesViewArray`]
+/// A builder for [`GenericByteViewArray`]
 ///
 /// See [`Self::append_value`] for the allocation strategy
-pub struct GenericBytesViewBuilder<T: BytesViewType + ?Sized> {
+pub struct GenericByteViewBuilder<T: ByteViewType + ?Sized> {
     views_builder: BufferBuilder<u128>,
     null_buffer_builder: NullBufferBuilder,
     completed: Vec<Buffer>,
@@ -38,13 +38,13 @@ pub struct GenericBytesViewBuilder<T: BytesViewType + ?Sized> {
     phantom: PhantomData<T>,
 }
 
-impl<T: BytesViewType + ?Sized> GenericBytesViewBuilder<T> {
+impl<T: ByteViewType + ?Sized> GenericByteViewBuilder<T> {
     /// Creates a new [`GenericByteViewBuilder`].
     pub fn new() -> Self {
         Self::with_capacity(1024)
     }
 
-    /// Creates a new [`GenericByteViewBuilder`] with space for `capacity` strings
+    /// Creates a new [`GenericByteViewBuilder`] with space for `capacity` string values.
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
             views_builder: BufferBuilder::new(capacity),
@@ -56,7 +56,7 @@ impl<T: BytesViewType + ?Sized> GenericBytesViewBuilder<T> {
         }
     }
 
-    /// Override the minimum size of buffers to allocate for string data
+    /// Override the size of buffers to allocate for holding string data
     pub fn with_block_size(self, block_size: u32) -> Self {
         Self { block_size, ..self }
     }
@@ -93,7 +93,7 @@ impl<T: BytesViewType + ?Sized> GenericBytesViewBuilder<T> {
         let offset = self.in_progress.len() as u32;
         self.in_progress.extend_from_slice(v);
 
-        let view = BytesView {
+        let view = ByteView {
             length,
             prefix: u32::from_le_bytes(v[0..4].try_into().unwrap()),
             buffer_index: self.completed.len() as u32,
@@ -119,8 +119,8 @@ impl<T: BytesViewType + ?Sized> GenericBytesViewBuilder<T> {
         self.views_builder.append(0);
     }
 
-    /// Builds the [`GenericBytesViewArray`] and reset this builder
-    pub fn finish(&mut self) -> GenericBytesViewArray<T> {
+    /// Builds the [`GenericByteViewArray`] and reset this builder
+    pub fn finish(&mut self) -> GenericByteViewArray<T> {
         let mut completed = std::mem::take(&mut self.completed);
         if !self.in_progress.is_empty() {
             completed.push(std::mem::take(&mut self.in_progress).into());
@@ -129,11 +129,11 @@ impl<T: BytesViewType + ?Sized> GenericBytesViewBuilder<T> {
         let views = ScalarBuffer::new(self.views_builder.finish(), 0, len);
         let nulls = self.null_buffer_builder.finish();
         // SAFETY: valid by construction
-        unsafe { GenericBytesViewArray::new_unchecked(views, completed, nulls) }
+        unsafe { GenericByteViewArray::new_unchecked(views, completed, nulls) }
     }
 
-    /// Builds the [`GenericBytesViewArray`] without resetting the builder
-    pub fn finish_cloned(&self) -> GenericBytesViewArray<T> {
+    /// Builds the [`GenericByteViewArray`] without resetting the builder
+    pub fn finish_cloned(&self) -> GenericByteViewArray<T> {
         let mut completed = self.completed.clone();
         if !self.in_progress.is_empty() {
             completed.push(Buffer::from_slice_ref(&self.in_progress));
@@ -143,17 +143,17 @@ impl<T: BytesViewType + ?Sized> GenericBytesViewBuilder<T> {
         let views = ScalarBuffer::new(views, 0, len);
         let nulls = self.null_buffer_builder.finish_cloned();
         // SAFETY: valid by construction
-        unsafe { GenericBytesViewArray::new_unchecked(views, completed, nulls) }
+        unsafe { GenericByteViewArray::new_unchecked(views, completed, nulls) }
     }
 }
 
-impl<T: BytesViewType + ?Sized> Default for GenericBytesViewBuilder<T> {
+impl<T: ByteViewType + ?Sized> Default for GenericByteViewBuilder<T> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<T: BytesViewType + ?Sized> std::fmt::Debug for GenericBytesViewBuilder<T> {
+impl<T: ByteViewType + ?Sized> std::fmt::Debug for GenericByteViewBuilder<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}ViewBuilder", T::PREFIX)?;
         f.debug_struct("")
@@ -165,7 +165,7 @@ impl<T: BytesViewType + ?Sized> std::fmt::Debug for GenericBytesViewBuilder<T> {
     }
 }
 
-impl<T: BytesViewType + ?Sized> ArrayBuilder for GenericBytesViewBuilder<T> {
+impl<T: ByteViewType + ?Sized> ArrayBuilder for GenericByteViewBuilder<T> {
     fn len(&self) -> usize {
         self.null_buffer_builder.len()
     }
@@ -191,8 +191,8 @@ impl<T: BytesViewType + ?Sized> ArrayBuilder for GenericBytesViewBuilder<T> {
     }
 }
 
-impl<T: BytesViewType + ?Sized, V: AsRef<T::Native>> Extend<Option<V>>
-    for GenericBytesViewBuilder<T>
+impl<T: ByteViewType + ?Sized, V: AsRef<T::Native>> Extend<Option<V>>
+    for GenericByteViewBuilder<T>
 {
     #[inline]
     fn extend<I: IntoIterator<Item = Option<V>>>(&mut self, iter: I) {
@@ -206,10 +206,10 @@ impl<T: BytesViewType + ?Sized, V: AsRef<T::Native>> Extend<Option<V>>
 ///
 /// Values can be appended using [`GenericByteViewBuilder::append_value`], and nulls with
 /// [`GenericByteViewBuilder::append_null`] as normal.
-pub type StringViewBuilder = GenericBytesViewBuilder<str>;
+pub type StringViewBuilder = GenericByteViewBuilder<StringViewType>;
 
 ///  Array builder for [`BinaryViewArray`][crate::BinaryViewArray]
 ///
 /// Values can be appended using [`GenericByteViewBuilder::append_value`], and nulls with
 /// [`GenericByteViewBuilder::append_null`] as normal.
-pub type BinaryViewBuilder = GenericBytesViewBuilder<[u8]>;
+pub type BinaryViewBuilder = GenericByteViewBuilder<BinaryViewType>;

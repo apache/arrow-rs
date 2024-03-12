@@ -15,9 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::{ArrayData, BytesView};
+use crate::{ArrayData, ByteView};
 
-pub(super) fn bytes_view_equal(
+pub(super) fn byte_view_equal(
     lhs: &ArrayData,
     rhs: &ArrayData,
     lhs_start: usize,
@@ -53,8 +53,8 @@ pub(super) fn bytes_view_equal(
         }
 
         // check buffers
-        let l_view = BytesView::from(*l);
-        let r_view = BytesView::from(*r);
+        let l_view = ByteView::from(*l);
+        let r_view = ByteView::from(*r);
 
         let l_buffer = &lhs_buffers[l_view.buffer_index as usize];
         let r_buffer = &rhs_buffers[r_view.buffer_index as usize];
@@ -69,3 +69,6 @@ pub(super) fn bytes_view_equal(
     }
     true
 }
+
+#[cfg(test)]
+mod tests {}

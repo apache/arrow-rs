@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use super::{data::new_buffers, ArrayData, ArrayDataBuilder, BytesView};
+use super::{data::new_buffers, ArrayData, ArrayDataBuilder, ByteView};
 use crate::bit_mask::set_bits;
 use arrow_buffer::buffer::{BooleanBuffer, NullBuffer};
 use arrow_buffer::{bit_util, i256, ArrowNativeType, Buffer, MutableBuffer};
@@ -182,7 +182,7 @@ fn build_extend_view(array: &ArrayData, buffer_offset: u32) -> Extend {
                     if len <= 12 {
                         return *v; // Stored inline
                     }
-                    let mut view = BytesView::from(*v);
+                    let mut view = ByteView::from(*v);
                     view.buffer_index += buffer_offset;
                     view.into()
                 }))

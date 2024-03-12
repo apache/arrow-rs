@@ -1592,7 +1592,7 @@ pub struct DataTypeLayout {
     /// Can contain a null bitmask
     pub can_contain_null_mask: bool,
 
-    /// This field only applies to the view type，[`DataType::BinaryView`] and [`DataType::Utf8View`]
+    /// This field only applies to the view type [`DataType::BinaryView`] and [`DataType::Utf8View`]
     /// If `variadic` is true, the number of buffers expected is only lower-bounded by
     /// buffers.len(). Buffers that exceed the lower bound are legal.
     pub variadic: bool,

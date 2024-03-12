@@ -20,7 +20,7 @@ use arrow_schema::ArrowError;
 
 #[derive(Debug, Copy, Clone, Default)]
 #[repr(C)]
-pub struct BytesView {
+pub struct ByteView {
     /// The length of the string/bytes.
     pub length: u32,
     /// First 4 bytes of string/bytes data.
@@ -31,23 +31,31 @@ pub struct BytesView {
     pub offset: u32,
 }
 
-impl BytesView {
+impl ByteView {
     #[inline(always)]
     pub fn as_u128(self) -> u128 {
-        unsafe { std::mem::transmute(self) }
+        (self.length as u128)
+            | ((self.prefix as u128) << 32)
+            | ((self.buffer_index as u128) << 64)
+            | ((self.offset as u128) << 96)
     }
 }
 
-impl From<u128> for BytesView {
+impl From<u128> for ByteView {
     #[inline]
     fn from(value: u128) -> Self {
-        unsafe { std::mem::transmute(value) }
+        Self {
+            length: value as u32,
+            prefix: (value >> 32) as u32,
+            buffer_index: (value >> 64) as u32,
+            offset: (value >> 96) as u32,
+        }
     }
 }
 
-impl From<BytesView> for u128 {
+impl From<ByteView> for u128 {
     #[inline]
-    fn from(value: BytesView) -> Self {
+    fn from(value: ByteView) -> Self {
         value.as_u128()
     }
 }
@@ -60,7 +68,7 @@ pub fn validate_binary_view(views: &[u128], buffers: &[Buffer]) -> Result<(), Ar
 /// Validates the combination of `views` and `buffers` is a valid StringView
 pub fn validate_string_view(views: &[u128], buffers: &[Buffer]) -> Result<(), ArrowError> {
     validate_view_impl(views, buffers, |idx, b| {
-        simdutf8::basic::from_utf8(b).map_err(|e| {
+        std::str::from_utf8(b).map_err(|e| {
             ArrowError::InvalidArgumentError(format!(
                 "Encountered non-UTF-8 data at index {idx}: {e}"
             ))
@@ -83,7 +91,7 @@ where
             }
             f(idx, &v.to_le_bytes()[4..4 + len as usize])?;
         } else {
-            let view = BytesView::from(*v);
+            let view = ByteView::from(*v);
             let data = buffers.get(view.buffer_index as usize).ok_or_else(|| {
                 ArrowError::InvalidArgumentError(format!(
                     "Invalid buffer index at {idx}: got index {} but only has {} buffers",

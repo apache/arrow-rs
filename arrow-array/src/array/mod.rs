@@ -68,9 +68,9 @@ mod run_array;
 
 pub use run_array::*;
 
-mod bytes_view_array;
+mod byte_view_array;
 
-pub use bytes_view_array::*;
+pub use byte_view_array::*;
 
 /// An array in the [arrow columnar format](https://arrow.apache.org/docs/format/Columnar.html)
 pub trait Array: std::fmt::Debug + Send + Sync {
