@@ -344,9 +344,6 @@ fn hash_as_bytes<A: AsBytes + ?Sized>(value: &A) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::format::{
-        BloomFilterAlgorithm, BloomFilterCompression, SplitBlockAlgorithm, Uncompressed, XxHash,
-    };
 
     #[test]
     fn test_hash_bytes() {

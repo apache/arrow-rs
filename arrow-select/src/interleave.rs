@@ -267,10 +267,6 @@ fn interleave_fallback(
 mod tests {
     use super::*;
     use arrow_array::builder::{Int32Builder, ListBuilder};
-    use arrow_array::cast::AsArray;
-    use arrow_array::types::Int32Type;
-    use arrow_array::{Int32Array, ListArray, StringArray};
-    use arrow_schema::DataType;
 
     #[test]
     fn test_primitive() {

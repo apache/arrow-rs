@@ -31,7 +31,6 @@ use arrow::compute::cast;
 use arrow::datatypes::*;
 use arrow::util::bench_util::*;
 use arrow::util::test_util::seedable_rng;
-use arrow_buffer::i256;
 
 fn build_array<T: ArrowPrimitiveType>(size: usize) -> ArrayRef
 where

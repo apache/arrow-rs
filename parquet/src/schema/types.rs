@@ -17,7 +17,7 @@
 
 //! Contains structs and methods to build Parquet schema and schema descriptors.
 
-use std::{collections::HashMap, convert::From, fmt, sync::Arc};
+use std::{collections::HashMap, fmt, sync::Arc};
 
 use crate::format::SchemaElement;
 

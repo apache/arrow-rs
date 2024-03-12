@@ -636,7 +636,6 @@ impl<'a> IntoIterator for &'a FixedSizeBinaryArray {
 mod tests {
     use crate::RecordBatch;
     use arrow_schema::{Field, Schema};
-    use std::sync::Arc;
 
     use super::*;
 

@@ -102,7 +102,7 @@ mod tests {
     use arrow_array::types::Int32Type;
     use arrow_array::{Int32Array, NullArray, StringArray, StructArray};
     use arrow_data::ArrayData;
-    use arrow_schema::{DataType, Field, Fields};
+    use arrow_schema::{Field, Fields};
     use rand::{thread_rng, Rng};
 
     #[test]

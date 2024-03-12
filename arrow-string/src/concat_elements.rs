@@ -207,7 +207,6 @@ pub fn concat_elements_dyn(left: &dyn Array, right: &dyn Array) -> Result<ArrayR
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow_array::StringArray;
     #[test]
     fn test_string_concat() {
         let left = [Some("foo"), Some("bar"), None]

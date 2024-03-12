@@ -34,9 +34,7 @@ use arrow::buffer::{Buffer, MutableBuffer};
 use arrow::compute;
 use arrow::datatypes::*;
 use arrow::error::{ArrowError, Result};
-use arrow::record_batch::{RecordBatch, RecordBatchReader};
 use arrow::util::bit_util;
-use arrow_buffer::i256;
 
 mod datatype;
 mod field;
@@ -1011,9 +1009,6 @@ mod tests {
 
     use std::fs::File;
     use std::io::Read;
-    use std::sync::Arc;
-
-    use arrow::buffer::Buffer;
 
     #[test]
     fn test_schema_equality() {

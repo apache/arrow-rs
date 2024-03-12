@@ -22,7 +22,7 @@
 use bytes::{Buf, Bytes};
 use std::fs::File;
 use std::io::{BufReader, Seek, SeekFrom};
-use std::{boxed::Box, io::Read, sync::Arc};
+use std::{io::Read, sync::Arc};
 
 use crate::bloom_filter::Sbbf;
 use crate::column::page::PageIterator;

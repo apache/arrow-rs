@@ -461,7 +461,6 @@ impl<'a> ImportedArrowArray<'a> {
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
-    use std::convert::TryFrom;
     use std::mem::ManuallyDrop;
     use std::ptr::addr_of_mut;
 
@@ -470,12 +469,6 @@ mod tests {
     use arrow_array::types::{Float64Type, Int32Type};
     use arrow_array::*;
 
-    use crate::array::{
-        make_array, Array, ArrayData, BooleanArray, DictionaryArray, DurationSecondArray,
-        FixedSizeBinaryArray, FixedSizeListArray, GenericBinaryArray, GenericListArray,
-        GenericStringArray, Int32Array, MapArray, OffsetSizeTrait, Time32MillisecondArray,
-        TimestampMillisecondArray, UInt32Array,
-    };
     use crate::compute::kernels;
     use crate::datatypes::{Field, Int8Type};
 

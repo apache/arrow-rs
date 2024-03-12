@@ -195,9 +195,7 @@ pub fn concat_batches<'a>(
 mod tests {
     use super::*;
     use arrow_array::builder::StringDictionaryBuilder;
-    use arrow_array::cast::AsArray;
     use arrow_schema::{Field, Schema};
-    use std::sync::Arc;
 
     #[test]
     fn test_concat_empty_vec() {

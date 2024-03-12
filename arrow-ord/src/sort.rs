@@ -833,7 +833,6 @@ mod tests {
     use half::f16;
     use rand::rngs::StdRng;
     use rand::{Rng, RngCore, SeedableRng};
-    use std::sync::Arc;
 
     fn create_decimal128_array(data: Vec<Option<i128>>) -> Decimal128Array {
         data.into_iter()

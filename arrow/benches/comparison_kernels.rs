@@ -25,7 +25,6 @@ use arrow::compute::kernels::cmp::*;
 use arrow::datatypes::IntervalMonthDayNanoType;
 use arrow::util::bench_util::*;
 use arrow::{array::*, datatypes::Float32Type, datatypes::Int32Type};
-use arrow_array::Scalar;
 use arrow_string::like::*;
 use arrow_string::regexp::regexp_is_match_utf8_scalar;
 

@@ -587,7 +587,6 @@ pub(crate) mod private {
     use crate::util::bit_util::{read_num_bytes, BitReader, BitWriter};
 
     use crate::basic::Type;
-    use std::convert::TryInto;
 
     use super::{ParquetError, Result, SliceAsBytes};
 

@@ -464,7 +464,6 @@ mod tests {
 
     use crate::{BooleanArray, Float32Array, Float64Array, Int32Array, Int64Array, StringArray};
     use arrow_buffer::ToByteSlice;
-    use std::sync::Arc;
 
     #[test]
     fn test_struct_array_builder() {
