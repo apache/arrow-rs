@@ -65,11 +65,15 @@ use tokio::io::{AsyncWrite, AsyncWriteExt};
 ///
 /// ## Memory Usage
 ///
-/// The columnar nature of parquet forces buffering data for an entire row group, as such
-/// [`AsyncArrowWriter`] uses [`ArrowWriter`] to encode each row group in memory, before
-/// flushing it to the provided [`AsyncWrite`]. Memory usage can be limited by prematurely
-/// flushing the row group, although this will have implications for file size and query
-/// performance. See [ArrowWriter] for more information.
+/// This writer eagerly writes data as soon as possible to the underlying [`AsyncWrite`],
+/// permitting fine-grained control over buffering and I/O scheduling. However, the columnar
+/// nature of parquet forces data for an entire row group to be buffered in memory, before
+/// it can be flushed. Depending on the data and the configured row group size, this buffering
+/// may be substantial.
+///
+/// Memory usage can be limited by calling [`Self::flush`] to flush the in progress row group,
+/// although this will likely increase overall file size and reduce query performance.
+/// See [ArrowWriter] for more information.
 ///
 /// ```no_run
 /// # use tokio::fs::File;
