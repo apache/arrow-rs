@@ -62,9 +62,9 @@ use std::sync::Arc;
 ///   let col_struct_builder: &mut StructBuilder = example_col.values();
 ///
 ///   // We can't obtain the ListBuilder<StructBuilder> with the expected generic types, because under the hood
-///   ///the StructBuilder was returned as a Box<dyn ArrayBuilder> and passed as such to the ListBuilder constructor
+///   // the StructBuilder was returned as a Box<dyn ArrayBuilder> and passed as such to the ListBuilder constructor
 ///   
-///   //This panics in runtime, even though we know that the builder is a ListBuilder<StructBuilder>.
+///   // This panics in runtime, even though we know that the builder is a ListBuilder<StructBuilder>.
 ///   // let sb = col_struct_builder
 ///   //     .field_builder::<ListBuilder<StructBuilder>>(0)
 ///   //     .as_mut()
