@@ -664,6 +664,7 @@ pub(crate) fn get_fb_field_type<'a>(
                 children: Some(fbb.create_vector(&[child])),
             }
         }
+        ListView(_) | LargeListView(_) => unimplemented!("ListView/LargeListView not implemented"),
         LargeList(ref list_type) => {
             let child = build_field(fbb, list_type);
             FBFieldType {

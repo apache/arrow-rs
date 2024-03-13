@@ -528,6 +528,7 @@ fn arrow_to_parquet_type(field: &Field) -> Result<Type> {
                 .with_id(id)
                 .build()
         }
+        DataType::ListView(_) | DataType::LargeListView(_) => unimplemented!("ListView/LargeListView not implemented"),
         DataType::Struct(fields) => {
             if fields.is_empty() {
                 return Err(
