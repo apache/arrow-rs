@@ -325,9 +325,10 @@ impl FlightDataEncoder {
             None => self.encode_schema(batch.schema_ref()),
         };
 
-        // encode the batch
-        let send_dictionaries = self.dictionary_handling == DictionaryHandling::Resend;
-        let batch = prepare_batch_for_flight(&batch, schema, send_dictionaries)?;
+        let batch = match self.dictionary_handling {
+            DictionaryHandling::Resend => batch,
+            DictionaryHandling::Hydrate => hydrate_dictionaries(&batch, schema)?,
+        };
 
         for batch in split_batch_for_grpc_response(batch, self.max_flight_data_size) {
             let (flight_dictionaries, flight_batch) = self.encoder.encode_batch(&batch)?;
@@ -407,6 +408,9 @@ impl Stream for FlightDataEncoder {
 ///
 /// Note that since `dict_id` defined in the `Schema` is used as a key to associate dictionary values to their arrays it is required that each
 /// `DictionaryArray` in a `RecordBatch` have a unique `dict_id`.
+///
+/// The current implementation does not support "delta" dictionaries so a new dictionary batch will be sent each time the encoder sees a
+/// dictionary which is not pointer-equal to the previously observed dictionary for a given `dict_id`.
 ///
 /// For clients which may not support `DictionaryEncoding`, the `DictionaryHandling::Hydrate` method will bypass the process defined above
 /// and "hydrate" any `DictionaryArray` in the batch to their underlying value type (e.g. `TypedDictionaryArray<'_, UInt32Type, Utf8Type>` will
@@ -570,23 +574,14 @@ impl FlightIpcEncoder {
     }
 }
 
-/// Prepares a RecordBatch for transport over the Arrow Flight protocol
-///
-/// This means:
-///
-/// 1. Hydrates any dictionaries to its underlying type. See
+/// Hydrates any dictionaries arrays in `batch` to its underlying type. See
 /// hydrate_dictionary for more information.
-///
-fn prepare_batch_for_flight(
-    batch: &RecordBatch,
-    schema: SchemaRef,
-    send_dictionaries: bool,
-) -> Result<RecordBatch> {
+fn hydrate_dictionaries(batch: &RecordBatch, schema: SchemaRef) -> Result<RecordBatch> {
     let columns = schema
         .fields()
         .iter()
         .zip(batch.columns())
-        .map(|(field, c)| hydrate_dictionary(c, field.data_type(), send_dictionaries))
+        .map(|(field, c)| hydrate_dictionary(c, field.data_type()))
         .collect::<Result<Vec<_>>>()?;
 
     let options = RecordBatchOptions::new().with_row_count(Some(batch.num_rows()));
@@ -596,21 +591,10 @@ fn prepare_batch_for_flight(
     )?)
 }
 
-/// Hydrates a dictionary to its underlying type if send_dictionaries is false. If send_dictionaries
-/// is true, dictionaries are sent with every batch which is not as optimal as described in [DictionaryHandling::Hydrate] above,
-/// but does enable sending DictionaryArray's via Flight.
-fn hydrate_dictionary(
-    array: &ArrayRef,
-    data_type: &DataType,
-    send_dictionaries: bool,
-) -> Result<ArrayRef> {
+/// Hydrates a dictionary to its underlying type.
+fn hydrate_dictionary(array: &ArrayRef, data_type: &DataType) -> Result<ArrayRef> {
     let arr = match (array.data_type(), data_type) {
-        (DataType::Dictionary(_, value), _) if !send_dictionaries => {
-            arrow_cast::cast(array, value)?
-        }
-        (DataType::Union(_, UnionMode::Sparse), DataType::Union(fields, UnionMode::Sparse))
-            if !send_dictionaries =>
-        {
+        (DataType::Union(_, UnionMode::Sparse), DataType::Union(fields, UnionMode::Sparse)) => {
             let union_arr = array.as_any().downcast_ref::<UnionArray>().unwrap();
 
             let (type_ids, fields): (Vec<i8>, Vec<&FieldRef>) = fields.iter().unzip();
@@ -631,10 +615,7 @@ fn hydrate_dictionary(
                     .collect::<Result<Vec<_>>>()?,
             )?)
         }
-        (tpe, data_type) if tpe.is_nested() && !send_dictionaries => {
-            arrow_cast::cast(array, data_type)?
-        }
-        _ => Arc::clone(array),
+        (_, data_type) => arrow_cast::cast(array, data_type)?,
     };
     Ok(arr)
 }
@@ -667,8 +648,8 @@ mod tests {
         let (_, baseline_flight_batch) = make_flight_data(&batch, &options);
 
         let big_batch = batch.slice(0, batch.num_rows() - 1);
-        let optimized_big_batch = prepare_batch_for_flight(&big_batch, Arc::clone(schema), false)
-            .expect("failed to optimize");
+        let optimized_big_batch =
+            hydrate_dictionaries(&big_batch, Arc::clone(schema)).expect("failed to optimize");
         let (_, optimized_big_flight_batch) = make_flight_data(&optimized_big_batch, &options);
 
         assert_eq!(
@@ -678,8 +659,7 @@ mod tests {
 
         let small_batch = batch.slice(0, 1);
         let optimized_small_batch =
-            prepare_batch_for_flight(&small_batch, Arc::clone(schema), false)
-                .expect("failed to optimize");
+            hydrate_dictionaries(&small_batch, Arc::clone(schema)).expect("failed to optimize");
         let (_, optimized_small_flight_batch) = make_flight_data(&optimized_small_batch, &options);
 
         assert!(
@@ -1095,7 +1075,7 @@ mod tests {
         )
         .expect("cannot create record batch");
 
-        prepare_batch_for_flight(&batch, batch.schema(), false).expect("failed to optimize");
+        hydrate_dictionaries(&batch, batch.schema()).expect("failed to optimize");
     }
 
     pub fn make_flight_data(
