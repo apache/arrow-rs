@@ -22,8 +22,8 @@ use arrow::array::{
     StringArray, StringDictionaryBuilder, StructArray, UnionBuilder,
 };
 use arrow::datatypes::{Int16Type, Int32Type};
-use arrow_array::builder::{StringBuilder, StructBuilder};
-use arrow_array::{DictionaryArray, FixedSizeListArray};
+use arrow_array::builder::{StringBuilder, StringViewBuilder, StructBuilder};
+use arrow_array::{DictionaryArray, FixedSizeListArray, StringViewArray};
 use arrow_buffer::{Buffer, ToByteSlice};
 use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::{DataType, Field, Fields};
@@ -305,6 +305,50 @@ fn test_fixed_size_binary_array() {
     let b = FixedSizeBinaryArray::try_from_iter(b_input_arg.into_iter()).unwrap();
 
     test_equal(&a, &b, true);
+}
+
+#[test]
+fn test_string_view_equal() {
+    let a1 = StringViewArray::from(vec!["foo", "very long string over 12 bytes", "bar"]);
+    let a2 = StringViewArray::from(vec![
+        "a very long string over 12 bytes",
+        "foo",
+        "very long string over 12 bytes",
+        "bar",
+    ]);
+    test_equal(&a1, &a2.slice(1, 3), true);
+
+    let a1 = StringViewArray::from(vec!["foo", "very long string over 12 bytes", "bar"]);
+    let a2 = StringViewArray::from(vec!["foo", "very long string over 12 bytes", "bar"]);
+    test_equal(&a1, &a2, true);
+
+    let a1_s = a1.slice(1, 1);
+    let a2_s = a2.slice(1, 1);
+    test_equal(&a1_s, &a2_s, true);
+
+    let a1_s = a1.slice(2, 1);
+    let a2_s = a2.slice(0, 1);
+    test_equal(&a1_s, &a2_s, false);
+
+    // test will null value.
+    let a1 = StringViewArray::from(vec!["foo", "very long string over 12 bytes", "bar"]);
+    let a2 = {
+        let mut builder = StringViewBuilder::new();
+        builder.append_value("foo");
+        builder.append_null();
+        builder.append_option(Some("very long string over 12 bytes"));
+        builder.append_value("bar");
+        builder.finish()
+    };
+    test_equal(&a1, &a2, false);
+
+    let a1_s = a1.slice(1, 2);
+    let a2_s = a2.slice(1, 3);
+    test_equal(&a1_s, &a2_s, false);
+
+    let a1_s = a1.slice(1, 2);
+    let a2_s = a2.slice(2, 2);
+    test_equal(&a1_s, &a2_s, true);
 }
 
 #[test]
