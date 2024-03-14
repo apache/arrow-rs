@@ -35,6 +35,62 @@ use std::sync::Arc;
 /// meaning that take / filter operations can be implemented without copying the underlying data.
 ///
 /// [Variable-size Binary View Layout]: https://arrow.apache.org/docs/format/Columnar.html#variable-size-binary-view-layout
+///
+/// A `GenericByteViewArray` stores variable length byte strings. An array of
+/// `N` elements is stored as `N` fixed length "views" and a variable number
+/// of variable length "buffers".
+///
+/// Each view is a `u128` value  layout is different depending on the
+/// length of the string stored at that location:
+///
+/// ```text
+///                         ┌──────┬────────────────────────┐
+///                         │length│      string value      │
+///    Strings (len <= 12)  │      │    (padded with 0)     │
+///                         └──────┴────────────────────────┘
+///                          0    31                      127
+///
+///                         ┌───────┬───────┬───────┬───────┐
+///                         │length │prefix │  buf  │offset │
+///    Strings (len > 12)   │       │       │ index │       │
+///                         └───────┴───────┴───────┴───────┘
+///                          0    31       63      95    127
+/// ```
+///
+/// * Strings with length <= 12 are stored directly in the view.
+///
+/// * Strings with length > 12: The first four bytes are stored inline in the
+/// view and the entire string is stored in one of the buffers.
+///
+/// Unlike [`GenericByteArray`], there are no constraints on the offsets other
+/// than they must point into a valid buffer. However, they can be out of order,
+/// non continuous and overlapping.
+///
+/// For example, in the following diagram, the strings "FishWasInTownToday" and
+/// "CrumpleFacedFish" are both longer than 12 bytes and thus are stored in a
+/// separate buffer while the string "LavaMonster" is stored inlined in the
+/// view. In this case, the same bytes for "Fish" are used to store both strings.
+///
+/// ```text
+///                                                                            ┌───┐
+///                         ┌──────┬──────┬──────┬──────┐               offset │...│
+/// "FishWasInTownTodayYay" │  21  │ Fish │  0   │ 115  │─ ─              103  │Mr.│
+///                         └──────┴──────┴──────┴──────┘   │      ┌ ─ ─ ─ ─ ▶ │Cru│
+///                         ┌──────┬──────┬──────┬──────┐                      │mpl│
+/// "CrumpleFacedFish"      │  16  │ Crum │  0   │ 103  │─ ─│─ ─ ─ ┘           │eFa│
+///                         └──────┴──────┴──────┴──────┘                      │ced│
+///                         ┌──────┬────────────────────┐   └ ─ ─ ─ ─ ─ ─ ─ ─ ▶│Fis│
+/// "LavaMonster"           │  11  │   LavaMonster\0    │                      │hWa│
+///                         └──────┴────────────────────┘               offset │sIn│
+///                                                                       115  │Tow│
+///                                                                            │nTo│
+///                                                                            │day│
+///                                  u128 "views"                              │Yay│
+///                                                                   buffer 0 │...│
+///                                                                            └───┘
+/// ```
+/// [`GenericByteArray`]: crate::array::GenericByteArray
+
 pub struct GenericByteViewArray<T: ByteViewType + ?Sized> {
     data_type: DataType,
     views: ScalarBuffer<u128>,
