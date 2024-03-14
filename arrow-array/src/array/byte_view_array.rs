@@ -34,6 +34,9 @@ use std::sync::Arc;
 /// Different than [`crate::GenericByteArray`] as it stores both an offset and length
 /// meaning that take / filter operations can be implemented without copying the underlying data.
 ///
+/// See [`StringViewArray`] for storing utf8 encoded string data and
+/// [`BinaryViewArray`] for storing bytes.
+///
 /// [Variable-size Binary View Layout]: https://arrow.apache.org/docs/format/Columnar.html#variable-size-binary-view-layout
 ///
 /// A `GenericByteViewArray` stores variable length byte strings. An array of
@@ -388,10 +391,19 @@ where
 }
 
 /// A [`GenericByteViewArray`] of `[u8]`
+///
+/// # Example
+/// ```
+/// use arrow_array::BinaryViewArray;
+/// let array = BinaryViewArray::from_iter_values(vec![b"hello" as &[u8], b"world", b"lulu", b"large payload over 12 bytes"]);
+/// assert_eq!(array.value(0), b"hello");
+/// assert_eq!(array.value(3), b"large payload over 12 bytes");
+/// ```
 pub type BinaryViewArray = GenericByteViewArray<BinaryViewType>;
 
-/// A [`GenericByteViewArray`] of `str`
+/// A [`GenericByteViewArray`] that stores uf8 data
 ///
+/// # Example
 /// ```
 /// use arrow_array::StringViewArray;
 /// let array = StringViewArray::from_iter_values(vec!["hello", "world", "lulu", "large payload over 12 bytes"]);
