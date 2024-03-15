@@ -160,6 +160,15 @@ impl<T: ArrowNativeType> From<Vec<T>> for ScalarBuffer<T> {
     }
 }
 
+impl<T: ArrowNativeType> From<ScalarBuffer<T>> for Vec<T> {
+    fn from(value: ScalarBuffer<T>) -> Self {
+        value
+            .buffer
+            .into_vec()
+            .unwrap_or_else(|buffer| buffer.typed_data::<T>().into())
+    }
+}
+
 impl<T: ArrowNativeType> From<BufferBuilder<T>> for ScalarBuffer<T> {
     fn from(mut value: BufferBuilder<T>) -> Self {
         let len = value.len();
@@ -208,6 +217,8 @@ impl<T: ArrowNativeType> PartialEq<ScalarBuffer<T>> for Vec<T> {
 
 #[cfg(test)]
 mod tests {
+    use std::{ptr::NonNull, sync::Arc};
+
     use super::*;
 
     #[test]
@@ -283,5 +294,54 @@ mod tests {
         let buffer_builder = BufferBuilder::from(input.clone());
         let scalar_buffer = ScalarBuffer::from(buffer_builder);
         assert_eq!(scalar_buffer.as_ref(), input);
+    }
+
+    #[test]
+    fn into_vec() {
+        let input = vec![1u8, 2, 3, 4];
+
+        // No copy
+        let input_buffer = Buffer::from_vec(input.clone());
+        let input_ptr = input_buffer.as_ptr();
+        let input_len = input_buffer.len();
+        let scalar_buffer = ScalarBuffer::<u8>::new(input_buffer, 0, input_len);
+        let vec = Vec::from(scalar_buffer);
+        assert_eq!(vec.as_slice(), input.as_slice());
+        assert_eq!(vec.as_ptr(), input_ptr);
+
+        // Custom allocation - makes a copy
+        let mut input_clone = input.clone();
+        let input_ptr = NonNull::new(input_clone.as_mut_ptr()).unwrap();
+        let dealloc = Arc::new(());
+        let buffer =
+            unsafe { Buffer::from_custom_allocation(input_ptr, input_clone.len(), dealloc as _) };
+        let scalar_buffer = ScalarBuffer::<u8>::new(buffer, 0, input.len());
+        let vec = Vec::from(scalar_buffer);
+        assert_eq!(vec, input.as_slice());
+        assert_ne!(vec.as_ptr(), input_ptr.as_ptr());
+
+        // Offset - makes a copy
+        let input_buffer = Buffer::from_vec(input.clone());
+        let input_ptr = input_buffer.as_ptr();
+        let input_len = input_buffer.len();
+        let scalar_buffer = ScalarBuffer::<u8>::new(input_buffer, 1, input_len - 1);
+        let vec = Vec::from(scalar_buffer);
+        assert_eq!(vec.as_slice(), &input[1..]);
+        assert_ne!(vec.as_ptr(), input_ptr);
+
+        // Different layout - makes a copy
+        let input_buffer = Buffer::from_vec(input.clone());
+        let input_ptr = input_buffer.as_ptr();
+        let scalar_buffer = ScalarBuffer::<u32>::new(input_buffer, 0, 1);
+        let vec = Vec::from(scalar_buffer);
+        assert_eq!(vec, &[0x04_03_02_01]);
+        assert_ne!(vec.as_ptr() as *const u8, input_ptr);
+
+        // Inner buffer Arc ref count != 0 - makes a copy
+        let buffer = Buffer::from_slice_ref(input.as_slice());
+        let scalar_buffer = ScalarBuffer::<u8>::new(buffer, 0, input.len());
+        let vec = Vec::from(scalar_buffer);
+        assert_eq!(vec, input.as_slice());
+        assert_ne!(vec.as_ptr(), input.as_ptr());
     }
 }
