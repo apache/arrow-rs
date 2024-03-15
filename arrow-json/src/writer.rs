@@ -161,6 +161,7 @@ fn struct_array_to_jsonmap_array(
 }
 
 /// Converts an arrow [`Array`] into a `Vec` of Serde JSON [`serde_json::Value`]'s
+#[deprecated(note = "Use Writer")]
 pub fn array_to_json_array(array: &dyn Array) -> Result<Vec<Value>, ArrowError> {
     // For backwards compatibility, default to skip nulls
     array_to_json_array_internal(array, false)
@@ -1837,6 +1838,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn test_array_to_json_array_for_fixed_size_list_array() {
         let expected_json = vec![
             json!([0, 1, 2]),
@@ -1859,6 +1861,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn test_array_to_json_array_for_map_array() {
         let expected_json = serde_json::from_value::<Vec<Value>>(json!([
             [
