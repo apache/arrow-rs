@@ -50,28 +50,21 @@ impl<O: ArrowNativeType + Add<Output = O> + Sub<Output = O>> OffsetBufferBuilder
     /// Try to safely push a length of usize type into builder
     #[inline]
     pub fn try_push_length(&mut self, length: usize) -> Result<(), String> {
-        self.push_length(O::from_usize(length).ok_or("offset overflow".to_string())?);
+        let last_offset = self.offsets.last().unwrap();
+        let next_offset =
+            *last_offset + O::from_usize(length).ok_or("offset overflow".to_string())?;
+        self.offsets.push(next_offset);
         Ok(())
     }
 
-    /// Push a length of usize type into builder
-    pub fn push_length(&mut self, length: O) {
+    /// Push a length of usize type without overflow checking.
+    /// # Safety
+    /// This doesn't check offset overflow, the caller must ensure it.
+    #[inline]
+    pub unsafe fn push_length_unchecked(&mut self, length: usize) {
         let last_offset = self.offsets.last().unwrap();
-        let next_offset = *last_offset + length;
+        let next_offset = *last_offset + O::usize_as(length);
         self.offsets.push(next_offset);
-    }
-
-    /// Extend from another OffsetsBuilder.
-    /// It gets a lengths iterator from another builder and extend the builder with the iter.
-    pub fn extend_with_builder(&mut self, another: OffsetBufferBuilder<O>) {
-        self.reserve(another.len() - 1);
-        let mut last_offset = another.offsets[0];
-        for i in 1..another.offsets.len() {
-            let cur_offset = another.offsets[i];
-            let len = cur_offset - last_offset;
-            self.push_length(len);
-            last_offset = cur_offset;
-        }
     }
 
     /// Takes the builder itself and returns an [`OffsetBuffer`]
@@ -81,7 +74,7 @@ impl<O: ArrowNativeType + Add<Output = O> + Sub<Output = O>> OffsetBufferBuilder
 
     /// Capacity of offsets
     pub fn capacity(&self) -> usize {
-        self.offsets.capacity()
+        self.offsets.capacity() - 1
     }
 
     /// Length of the Offsets
@@ -142,9 +135,9 @@ impl<O: ArrowNativeType + Add<Output = O> + Sub<Output = O>> Extend<O> for Offse
             None => lengths_iter.size_hint().0,
         };
         self.reserve(size_hint);
-        for len in lengths_iter {
-            self.push_length(len);
-        }
+        lengths_iter.for_each(|len| unsafe {
+            self.push_length_unchecked(len.as_usize());
+        });
     }
 }
 
@@ -207,11 +200,8 @@ mod tests {
         let extend_lengths = vec![4, 4, 5, 5];
         builder.extend(extend_lengths);
 
-        let another_builder = vec![1, 2, 3].into();
-        builder.extend_with_builder(another_builder);
-
         let offsets = builder.finish();
-        let expect_offsets = vec![0, 1, 3, 6, 10, 14, 19, 24, 25, 27, 30];
+        let expect_offsets = vec![0, 1, 3, 6, 10, 14, 19, 24];
         assert_eq!(offsets.to_vec(), expect_offsets);
         Ok(())
     }
