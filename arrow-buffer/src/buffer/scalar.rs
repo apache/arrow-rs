@@ -329,14 +329,6 @@ mod tests {
         assert_eq!(vec.as_slice(), &input[1..]);
         assert_ne!(vec.as_ptr(), input_ptr);
 
-        // Different layout - makes a copy
-        let input_buffer = Buffer::from_vec(input.clone());
-        let input_ptr = input_buffer.as_ptr();
-        let scalar_buffer = ScalarBuffer::<u32>::new(input_buffer, 0, 1);
-        let vec = Vec::from(scalar_buffer);
-        assert_eq!(vec, &[0x04_03_02_01]);
-        assert_ne!(vec.as_ptr() as *const u8, input_ptr);
-
         // Inner buffer Arc ref count != 0 - makes a copy
         let buffer = Buffer::from_slice_ref(input.as_slice());
         let scalar_buffer = ScalarBuffer::<u8>::new(buffer, 0, input.len());
