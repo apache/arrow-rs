@@ -259,7 +259,7 @@ impl BufWriter {
         }
     }
 
-    /// Returns the [`MultipartId`] of the last multipart upload created by this
+    /// Returns the [`MultipartId`] of the multipart upload created by this
     /// writer, if any.
     pub fn multipart_id(&self) -> Option<&MultipartId> {
         self.multipart_id.as_ref()
