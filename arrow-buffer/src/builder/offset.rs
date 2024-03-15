@@ -41,18 +41,38 @@ impl<O: ArrowNativeType + Add<Output = O> + Sub<Output = O>> OffsetBufferBuilder
 
     /// Create from offsets.
     /// # Safety
-    /// Caller guarantees that offsets are monotonically increasing values.
+    /// Caller guarantees that offsets are monotonically increasing values
+    /// and the offsets vec is not empty.
     #[inline]
     pub unsafe fn new_unchecked(offsets: Vec<O>) -> Self {
         Self { offsets }
+    }
+
+    /// Try to create an [`OffsetBufferBuilder`] with a lengths iterator
+    pub fn try_from_lengths(lengths: impl IntoIterator<Item = usize>) -> Result<Self, String> {
+        let lengths_iter = lengths.into_iter();
+        let size_hint = match lengths_iter.size_hint().1 {
+            Some(h_bound) => h_bound,
+            None => lengths_iter.size_hint().0,
+        };
+        let mut builder = OffsetBufferBuilder::new(size_hint);
+        for len in lengths_iter {
+            builder.try_push_length(len)?;
+        }
+        Ok(builder)
     }
 
     /// Try to safely push a length of usize type into builder
     #[inline]
     pub fn try_push_length(&mut self, length: usize) -> Result<(), String> {
         let last_offset = self.offsets.last().unwrap();
-        let next_offset =
-            *last_offset + O::from_usize(length).ok_or("offset overflow".to_string())?;
+        let next_offset = O::from_usize(
+            last_offset
+                .as_usize()
+                .checked_add(length)
+                .ok_or("offset overflow".to_string())?,
+        )
+        .ok_or("offset overflow")?;
         self.offsets.push(next_offset);
         Ok(())
     }
@@ -84,46 +104,24 @@ impl<O: ArrowNativeType + Add<Output = O> + Sub<Output = O>> OffsetBufferBuilder
     }
 
     /// Last offset
+    #[inline]
     pub fn last(&self) -> O {
         *self.offsets.last().unwrap()
     }
 
+    #[inline]
     pub fn reserve(&mut self, additional: usize) {
         self.offsets.reserve(additional);
     }
 
+    #[inline]
     pub fn reserve_exact(&mut self, additional: usize) {
         self.offsets.reserve_exact(additional);
     }
 
+    #[inline]
     pub fn shrink_to_fit(&mut self) {
         self.offsets.shrink_to_fit();
-    }
-}
-
-/// Convert an [`IntoIterator`] of lengths to [`OffsetBufferBuilder`]
-impl<IntoIter: IntoIterator<Item = O>, O: ArrowNativeType + Add<Output = O> + Sub<Output = O>>
-    From<IntoIter> for OffsetBufferBuilder<O>
-{
-    fn from(lengths: IntoIter) -> Self {
-        let mut offsets_vec: Vec<O> = lengths
-            .into_iter()
-            .scan(O::usize_as(0), |prev, len| {
-                *prev = *prev + len;
-                Some(*prev)
-            })
-            .collect();
-        offsets_vec.insert(0, O::usize_as(0));
-        unsafe { OffsetBufferBuilder::new_unchecked(offsets_vec) }
-    }
-}
-
-/// Convert an [`FromIterator`] of lengths to [`OffsetBufferBuilder`]
-impl<O: ArrowNativeType + Add<Output = O> + Sub<Output = O>> FromIterator<O>
-    for OffsetBufferBuilder<O>
-{
-    fn from_iter<T: IntoIterator<Item = O>>(lengths: T) -> Self {
-        lengths.into()
     }
 }
 
@@ -135,8 +133,8 @@ impl<O: ArrowNativeType + Add<Output = O> + Sub<Output = O>> Extend<O> for Offse
             None => lengths_iter.size_hint().0,
         };
         self.reserve(size_hint);
-        lengths_iter.for_each(|len| unsafe {
-            self.push_length_unchecked(len.as_usize());
+        lengths_iter.for_each(|len| {
+            self.try_push_length(len.as_usize()).unwrap();
         });
     }
 }
@@ -155,7 +153,7 @@ mod tests {
     #[test]
     fn test_from() -> Result<(), String> {
         let lengths = vec![1, 2, 3, 0, 3, 2, 1];
-        let builder: OffsetBufferBuilder<i32> = lengths.into();
+        let builder = OffsetBufferBuilder::<i32>::try_from_lengths(lengths)?;
 
         assert_eq!(builder.last(), 12);
         assert_eq!(builder.len(), 8);
@@ -168,7 +166,7 @@ mod tests {
     #[test]
     fn test_push() -> Result<(), String> {
         let lengths = vec![1, 2, 3, 0, 3, 2, 1];
-        let mut builder: OffsetBufferBuilder<i32> = lengths.into();
+        let mut builder = OffsetBufferBuilder::<i32>::try_from_lengths(lengths)?;
         builder.try_push_length(1usize)?;
         builder.try_push_length(2usize)?;
         builder.try_push_length(0usize)?;
@@ -181,7 +179,7 @@ mod tests {
     #[test]
     fn test_try_push_unexpect() -> Result<(), String> {
         let lengths = vec![1, 2, 3];
-        let mut builder: OffsetBufferBuilder<i8> = lengths.into();
+        let mut builder = OffsetBufferBuilder::<i8>::try_from_lengths(lengths)?;
         let len = 1 << 20;
         match builder.try_push_length(len) {
             Err(err) => {
@@ -195,7 +193,7 @@ mod tests {
     #[test]
     fn test_extend() -> Result<(), String> {
         let lengths = vec![1, 2, 3];
-        let mut builder: OffsetBufferBuilder<i32> = lengths.into();
+        let mut builder = OffsetBufferBuilder::<i32>::try_from_lengths(lengths)?;
 
         let extend_lengths = vec![4, 4, 5, 5];
         builder.extend(extend_lengths);

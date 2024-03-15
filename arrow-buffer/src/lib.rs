@@ -21,15 +21,17 @@
 #![cfg_attr(miri, feature(strict_provenance))]
 
 pub mod alloc;
-mod bigint;
 pub mod buffer;
+pub use buffer::*;
+
 pub mod builder;
+pub use builder::*;
+
+mod bigint;
 mod bytes;
 mod native;
-mod util;
-
 pub use bigint::i256;
-pub use buffer::*;
-pub use builder::*;
+
 pub use native::*;
+mod util;
 pub use util::*;
