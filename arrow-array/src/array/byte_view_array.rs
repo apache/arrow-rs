@@ -93,7 +93,6 @@ use std::sync::Arc;
 ///                                                                            └───┘
 /// ```
 /// [`GenericByteArray`]: crate::array::GenericByteArray
-
 pub struct GenericByteViewArray<T: ByteViewType + ?Sized> {
     data_type: DataType,
     views: ScalarBuffer<u128>,
