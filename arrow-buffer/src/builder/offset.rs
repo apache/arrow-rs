@@ -106,13 +106,13 @@ impl<O: ArrowNativeType + Add<Output = O> + Sub<Output = O>> OffsetBufferBuilder
         unsafe { OffsetBuffer::new_unchecked(self.offsets.into()) }
     }
 
-    /// Capacity of offsets
+    /// Capacity of offsets excluding the first zero offset
     #[inline]
     pub fn capacity(&self) -> usize {
         self.offsets.capacity() - 1
     }
 
-    /// Length of the Offsets
+    /// Length of the offsets excluding the first zero offset
     #[inline]
     pub fn len(&self) -> usize {
         self.offsets.len() - 1
