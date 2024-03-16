@@ -34,10 +34,6 @@ pub enum ParquetError {
     /// "Not yet implemented" Parquet error.
     /// Returned when functionality is not yet available.
     NYI(String),
-    /// "Disabled feature" Parquet error.
-    /// Returned when functionality is not available because it is an optional
-    /// feature that was not enabled at compile-time.
-    Disabled(&'static str),
     /// "End of file" Parquet error.
     /// Returned when IO related failures occur, e.g. when there are not enough bytes to
     /// decode.
@@ -58,9 +54,6 @@ impl std::fmt::Display for ParquetError {
                 write!(fmt, "Parquet error: {message}")
             }
             ParquetError::NYI(message) => write!(fmt, "NYI: {message}"),
-            ParquetError::Disabled(message) => {
-                write!(fmt, "Disabled feature at compile time: {message}")
-            }
             ParquetError::EOF(message) => write!(fmt, "EOF: {message}"),
             #[cfg(feature = "arrow")]
             ParquetError::ArrowError(message) => write!(fmt, "Arrow: {message}"),
