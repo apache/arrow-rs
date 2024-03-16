@@ -207,6 +207,10 @@ impl AsyncBufRead for BufReader {
 
 /// An async buffered writer compatible with the tokio IO traits
 ///
+/// This writer adaptively uses [`ObjectStore::put`] or
+/// [`ObjectStore::put_multipart`] depending on the amount of data that has
+/// been written.
+///
 /// Up to `capacity` bytes will be buffered in memory, and flushed on shutdown
 /// using [`ObjectStore::put`]. If `capacity` is exceeded, data will instead be
 /// streamed using [`ObjectStore::put_multipart`]
@@ -255,7 +259,8 @@ impl BufWriter {
         }
     }
 
-    /// Returns the [`MultipartId`] if multipart upload
+    /// Returns the [`MultipartId`] of the multipart upload created by this
+    /// writer, if any.
     pub fn multipart_id(&self) -> Option<&MultipartId> {
         self.multipart_id.as_ref()
     }
