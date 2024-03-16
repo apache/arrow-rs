@@ -203,8 +203,11 @@ mod tests {
         let lengths = vec![1, 2, 3];
         let mut builder = OffsetBufferBuilder::<i32>::try_from_lengths(lengths)?;
 
-        let extend_lengths = vec![4, 4, 5, 5];
+        let extend_lengths = vec![4, 4];
         builder.extend(extend_lengths);
+
+        let extend_lengths = vec![5, 5];
+        builder.try_extend(extend_lengths)?;
 
         let offsets = builder.finish();
         let expect_offsets = vec![0, 1, 3, 6, 10, 14, 19, 24];
