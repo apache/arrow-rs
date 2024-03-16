@@ -102,7 +102,7 @@
 //!
 //! This crate does provide [`BufReader`] and [`BufWriter`] adapters
 //! which provide a more filesystem-like API for working with the
-//! [`ObjectStore`] trait, however, they should be used with care 
+//! [`ObjectStore`] trait, however, they should be used with care
 //!
 //! [`BufReader`]: buffered::BufReader
 //! [`BufWriter`]: buffered::BufWriter
