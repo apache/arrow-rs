@@ -87,7 +87,7 @@ impl<O: ArrowNativeType + Add<Output = O> + Sub<Output = O>> OffsetBufferBuilder
         self.offsets.push(next_offset);
     }
 
-    /// Try to extend an IntoIterator<Item = O> of lengths
+    /// Try to extend builder with an IntoIterator<Item = O> of lengths
     pub fn try_extend<T: IntoIterator<Item = O>>(&mut self, lengths: T) -> Result<(), String> {
         let lengths_iter = lengths.into_iter();
         let size_hint = match lengths_iter.size_hint().1 {
@@ -107,14 +107,20 @@ impl<O: ArrowNativeType + Add<Output = O> + Sub<Output = O>> OffsetBufferBuilder
     }
 
     /// Capacity of offsets
+    #[inline]
     pub fn capacity(&self) -> usize {
         self.offsets.capacity() - 1
     }
 
     /// Length of the Offsets
-    #[allow(clippy::len_without_is_empty)]
+    #[inline]
     pub fn len(&self) -> usize {
-        self.offsets.len()
+        self.offsets.len() - 1
+    }
+
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
     }
 
     /// Last offset
@@ -150,9 +156,24 @@ mod tests {
     use crate::{OffsetBuffer, OffsetBufferBuilder};
 
     #[test]
-    fn new_zeroed() -> Result<(), String> {
+    fn test_new_zeroed() -> Result<(), String> {
         let builder: OffsetBufferBuilder<i8> = OffsetBufferBuilder::new_zeroed(3);
+        assert_eq!(builder.is_empty(), false);
+        assert_eq!(builder.capacity(), 3);
+        assert_eq!(builder.len(), 3);
         assert_eq!(builder.finish().to_vec(), vec![0, 0, 0, 0]);
+        Ok(())
+    }
+
+    #[test]
+    fn test_capacity_len() -> Result<(), String> {
+        let mut builder = OffsetBufferBuilder::<i32>::new(1);
+        assert_eq!(builder.is_empty(), true);
+        assert_eq!(builder.capacity(), 1);
+        builder.try_push_length(1)?;
+        assert_eq!(builder.is_empty(), false);
+        assert_eq!(builder.capacity(), 1);
+        assert_eq!(builder.len(), 1);
         Ok(())
     }
 
@@ -162,7 +183,9 @@ mod tests {
         let builder = OffsetBufferBuilder::<i32>::try_from_lengths(lengths)?;
 
         assert_eq!(builder.last(), 12);
-        assert_eq!(builder.len(), 8);
+        assert_eq!(builder.capacity(), 7);
+        assert_eq!(builder.len(), 7);
+        assert_eq!(builder.is_empty(), false);
 
         let offsets = builder.finish();
         assert_eq!(offsets.to_vec(), vec![0, 1, 3, 6, 6, 9, 11, 12]);
