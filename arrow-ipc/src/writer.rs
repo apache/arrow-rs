@@ -1882,15 +1882,24 @@ mod tests {
     fn test_write_binary_view() {
         const LONG_TEST_STRING: &str =
             "This is a long string to make sure binary view array handles it";
-        let schema = Schema::new(vec![Field::new("field1", DataType::BinaryView, true)]);
+        let schema = Schema::new(vec![
+            Field::new("field1", DataType::BinaryView, true),
+            Field::new("field2", DataType::Utf8View, true),
+        ]);
         let values: Vec<Option<&[u8]>> = vec![
             Some(b"foo"),
             Some(b"bar"),
             Some(LONG_TEST_STRING.as_bytes()),
         ];
-        let array = BinaryViewArray::from_iter(values);
-        let record_batch =
-            RecordBatch::try_new(Arc::new(schema.clone()), vec![Arc::new(array)]).unwrap();
+        let binary_array = BinaryViewArray::from_iter(values);
+        let utf8_array = StringViewArray::from_iter(
+            vec![Some("foo"), Some("bar"), Some(LONG_TEST_STRING)].into_iter(),
+        );
+        let record_batch = RecordBatch::try_new(
+            Arc::new(schema.clone()),
+            vec![Arc::new(binary_array), Arc::new(utf8_array)],
+        )
+        .unwrap();
 
         let mut file = tempfile::tempfile().unwrap();
         {
@@ -1900,7 +1909,7 @@ mod tests {
         }
         file.rewind().unwrap();
         {
-            let mut reader = FileReader::try_new(file, None).unwrap();
+            let mut reader = FileReader::try_new(&file, None).unwrap();
             let read_batch = reader.next().unwrap().unwrap();
             read_batch
                 .columns()
@@ -1909,6 +1918,15 @@ mod tests {
                 .for_each(|(a, b)| {
                     assert_eq!(a, b);
                 });
+        }
+        file.rewind().unwrap();
+        {
+            let mut reader = FileReader::try_new(&file, Some(vec![0])).unwrap();
+            let read_batch = reader.next().unwrap().unwrap();
+            assert_eq!(read_batch.num_columns(), 1);
+            let read_array = read_batch.column(0);
+            let write_array = record_batch.column(0);
+            assert_eq!(read_array, write_array);
         }
     }
 
