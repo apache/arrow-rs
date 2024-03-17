@@ -32,11 +32,13 @@ use crate::{
     RetryConfig,
 };
 use async_trait::async_trait;
+use base64::prelude::BASE64_STANDARD;
+use base64::Engine;
 use bytes::{Buf, Bytes};
 use percent_encoding::{percent_encode, utf8_percent_encode, NON_ALPHANUMERIC};
 use reqwest::header::HeaderName;
 use reqwest::{header, Client, Method, RequestBuilder, Response, StatusCode};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use snafu::{OptionExt, ResultExt, Snafu};
 use std::sync::Arc;
 
@@ -101,6 +103,12 @@ enum Error {
 
     #[snafu(display("Got invalid multipart response: {}", source))]
     InvalidMultipartResponse { source: quick_xml::de::DeError },
+
+    #[snafu(display("Error signing blob: {}", source))]
+    SignBlobResponse { source: reqwest::Error },
+
+    #[snafu(display("Got invalid signing blob repsonse: {}", source))]
+    InvalidSignBlobResponse { source: reqwest::Error },
 }
 
 impl From<Error> for crate::Error {
@@ -128,6 +136,28 @@ pub struct GoogleCloudStorageConfig {
     pub retry_config: RetryConfig,
 
     pub client_options: ClientOptions,
+}
+
+impl GoogleCloudStorageConfig {
+    pub fn new(
+        base_url: String,
+        credentials: GcpCredentialProvider,
+        bucket_name: String,
+        retry_config: RetryConfig,
+        client_options: ClientOptions,
+    ) -> Self {
+        Self {
+            base_url,
+            credentials,
+            bucket_name,
+            retry_config,
+            client_options,
+        }
+    }
+
+    pub fn path_url(&self, path: &Path) -> String {
+        format!("{}/{}", self.base_url, path)
+    }
 }
 
 /// A builder for a put request allowing customisation of the headers and query string
@@ -163,6 +193,21 @@ impl<'a> PutRequest<'a> {
     }
 }
 
+/// Sign Blob Request Body
+#[derive(Debug, Serialize)]
+struct SignBlobBody {
+    /// The payload to sign
+    payload: String,
+}
+
+/// Sign Blob Response
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SignBlobResponse {
+    /// The signature for the payload
+    signed_blob: String,
+}
+
 #[derive(Debug)]
 pub struct GoogleCloudStorageClient {
     config: GoogleCloudStorageConfig,
@@ -195,6 +240,48 @@ impl GoogleCloudStorageClient {
 
     async fn get_credential(&self) -> Result<Arc<GcpCredential>> {
         self.config.credentials.get_credential().await
+    }
+
+    /// Create a signature from a string-to-sign using Google Cloud signBlob method.
+    /// form like:
+    /// ```plaintext
+    /// curl -X POST --data-binary @JSON_FILE_NAME \
+    ///-H "Authorization: Bearer OAUTH2_TOKEN" \
+    ///-H "Content-Type: application/json" \
+    ///"https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/SERVICE_ACCOUNT_EMAIL:signBlob"
+    /// ```
+    ///
+    /// 'JSON_FILE_NAME' is a file containing the following JSON object:
+    /// ```plaintext
+    /// {
+    ///  "payload": "REQUEST_INFORMATION"
+    /// }
+    /// ```
+    pub async fn sign_blob(&self, string_to_sign: &str, client_email: &str) -> Result<String> {
+        let body = SignBlobBody {
+            payload: BASE64_STANDARD.encode(string_to_sign),
+        };
+
+        let url = format!(
+            "https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/{}:signBlob",
+            client_email
+        );
+
+        let response = self
+            .client
+            .post(&url)
+            .bearer_auth(&self.get_credential().await?.bearer)
+            .json(&body)
+            .send()
+            .await
+            .context(SignBlobResponseSnafu)?;
+
+        //If successful, the signature is returned in the signedBlob field in the response.
+        let response = response
+            .json::<SignBlobResponse>()
+            .await
+            .context(InvalidSignBlobResponseSnafu)?;
+        Ok(response.signed_blob)
     }
 
     pub fn object_url(&self, path: &Path) -> String {

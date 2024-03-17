@@ -451,6 +451,7 @@ impl GoogleCloudStorageBuilder {
         } else if disable_oauth {
             Arc::new(StaticCredentialProvider::new(GcpCredential {
                 bearer: "".to_string(),
+                client_email: None,
             })) as _
         } else if let Some(credentials) = service_account_credentials {
             Arc::new(TokenCredentialProvider::new(
@@ -483,13 +484,13 @@ impl GoogleCloudStorageBuilder {
             )) as _
         };
 
-        let config = GoogleCloudStorageConfig {
-            base_url: gcs_base_url,
+        let config = GoogleCloudStorageConfig::new(
+            gcs_base_url,
             credentials,
             bucket_name,
-            retry_config: self.retry_config,
-            client_options: self.client_options,
-        };
+            self.retry_config,
+            self.client_options,
+        );
 
         Ok(GoogleCloudStorage {
             client: Arc::new(GoogleCloudStorageClient::new(config)?),
