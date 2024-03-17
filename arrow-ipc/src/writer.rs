@@ -567,7 +567,10 @@ impl IpcDataGenerator {
 fn set_variadic_buffer_counts(counts: &mut Vec<i64>, array: &dyn Array) {
     match array.data_type() {
         DataType::BinaryView | DataType::Utf8View => {
-            counts.push(array.to_data().buffers().len() as i64);
+            // The spec is not clear on whether the view/null buffer should be included in the variadic buffer count.
+            // But from C++ impl https://github.com/apache/arrow/blob/b448b33808f2dd42866195fa4bb44198e2fc26b9/cpp/src/arrow/ipc/writer.cc#L477
+            // we know they are not included.
+            counts.push(array.to_data().buffers().len() as i64 - 1);
         }
         DataType::Struct(_) => {
             let array = array.as_any().downcast_ref::<StructArray>().unwrap();

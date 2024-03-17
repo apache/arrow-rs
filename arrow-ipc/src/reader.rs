@@ -87,7 +87,7 @@ fn create_array(
             let count = variadic_counts
                 .pop_front()
                 .expect("Incorrect variadic count!");
-            let count = count + 1; // add the null buffer.
+            let count = count + 2; // view and null buffer.
             let buffers = (0..count)
                 .map(|_| reader.next_buffer())
                 .collect::<Result<Vec<_>, _>>()?;
@@ -360,6 +360,7 @@ impl<'a> ArrayReader<'a> {
                 let count = variadic_count
                     .pop_front()
                     .expect("Incorrect variadic count!");
+                let count = count + 2; // view and null buffer.
                 for _i in 0..count {
                     self.skip_buffer()
                 }
