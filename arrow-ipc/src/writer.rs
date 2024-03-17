@@ -29,7 +29,10 @@ use flatbuffers::FlatBufferBuilder;
 
 use arrow_array::builder::BufferBuilder;
 use arrow_array::cast::*;
-use arrow_array::types::{Int16Type, Int32Type, Int64Type, RunEndIndexType};
+use arrow_array::types::{
+    Int16Type, Int32Type, Int64Type, Int8Type, RunEndIndexType, UInt16Type, UInt32Type, UInt64Type,
+    UInt8Type,
+};
 use arrow_array::*;
 use arrow_buffer::bit_util;
 use arrow_buffer::{ArrowNativeType, Buffer, MutableBuffer};
@@ -412,6 +415,8 @@ impl IpcDataGenerator {
         let compression_codec: Option<CompressionCodec> =
             batch_compression_type.map(TryInto::try_into).transpose()?;
 
+        let mut variadic_buffer_counts = vec![];
+
         for array in batch.columns() {
             let array_data = array.to_data();
             offset = write_array_data(
@@ -425,6 +430,8 @@ impl IpcDataGenerator {
                 compression_codec,
                 write_options,
             )?;
+
+            set_variadic_buffer_counts(&mut variadic_buffer_counts, array);
         }
         // pad the tail of body data
         let len = arrow_data.len();
@@ -434,6 +441,12 @@ impl IpcDataGenerator {
         // write data
         let buffers = fbb.create_vector(&buffers);
         let nodes = fbb.create_vector(&nodes);
+        let variadic_buffer = if variadic_buffer_counts.is_empty() {
+            None
+        } else {
+            Some(fbb.create_vector(&variadic_buffer_counts))
+        };
+
         let root = {
             let mut batch_builder = crate::RecordBatchBuilder::new(&mut fbb);
             batch_builder.add_length(batch.num_rows() as i64);
@@ -441,6 +454,10 @@ impl IpcDataGenerator {
             batch_builder.add_buffers(buffers);
             if let Some(c) = compression {
                 batch_builder.add_compression(c);
+            }
+
+            if let Some(v) = variadic_buffer {
+                batch_builder.add_variadicBufferCounts(v);
             }
             let b = batch_builder.finish();
             b.as_union_value()
@@ -544,6 +561,54 @@ impl IpcDataGenerator {
             ipc_message: finished_data.to_vec(),
             arrow_data,
         })
+    }
+}
+
+fn set_variadic_buffer_counts(counts: &mut Vec<i64>, array: &dyn Array) {
+    match array.data_type() {
+        DataType::BinaryView | DataType::Utf8View => {
+            counts.push(array.to_data().buffers().len() as i64);
+        }
+        DataType::Struct(_) => {
+            let array = array.as_any().downcast_ref::<StructArray>().unwrap();
+            for column in array.columns() {
+                set_variadic_buffer_counts(counts, column.as_ref());
+            }
+        }
+        DataType::LargeList(_) => {
+            let array = array.as_any().downcast_ref::<LargeListArray>().unwrap();
+            set_variadic_buffer_counts(counts, array.values());
+        }
+        DataType::List(_) => {
+            let array = array.as_any().downcast_ref::<ListArray>().unwrap();
+            set_variadic_buffer_counts(counts, array.values());
+        }
+        DataType::FixedSizeList(_, _) => {
+            let array = array.as_any().downcast_ref::<FixedSizeListArray>().unwrap();
+            set_variadic_buffer_counts(counts, array.values());
+        }
+        DataType::Dictionary(kt, _) => {
+            macro_rules! set_subarray_counts {
+                ($array:expr, $counts:expr, $type:ty, $variant:ident) => {
+                    if &DataType::$variant == kt.as_ref() {
+                        let array = $array
+                            .as_any()
+                            .downcast_ref::<DictionaryArray<$type>>()
+                            .unwrap();
+                        set_variadic_buffer_counts($counts, array.values());
+                    }
+                };
+            }
+            set_subarray_counts!(array, counts, Int8Type, Int8);
+            set_subarray_counts!(array, counts, Int16Type, Int16);
+            set_subarray_counts!(array, counts, Int32Type, Int32);
+            set_subarray_counts!(array, counts, Int64Type, Int64);
+            set_subarray_counts!(array, counts, UInt8Type, UInt8);
+            set_subarray_counts!(array, counts, UInt16Type, UInt16);
+            set_subarray_counts!(array, counts, UInt32Type, UInt32);
+            set_subarray_counts!(array, counts, UInt64Type, UInt64);
+        }
+        _ => {}
     }
 }
 
@@ -1247,6 +1312,17 @@ fn write_array_data(
                 compression_codec,
             )?;
         }
+    } else if matches!(data_type, DataType::BinaryView | DataType::Utf8View) {
+        // Todo: if the array has a offset, we should slice the ArrayData to save space.
+        for buffer in array_data.buffers() {
+            offset = write_buffer(
+                buffer.as_slice(),
+                buffers,
+                arrow_data,
+                offset,
+                compression_codec,
+            )?;
+        }
     } else if matches!(data_type, DataType::LargeBinary | DataType::LargeUtf8) {
         let (offsets, values) = get_byte_array_buffers::<i64>(array_data);
         for buffer in [offsets, values] {
@@ -1800,6 +1876,40 @@ mod tests {
     fn test_write_union_file_v4_v5() {
         write_union_file(IpcWriteOptions::try_new(8, false, MetadataVersion::V4).unwrap());
         write_union_file(IpcWriteOptions::try_new(8, false, MetadataVersion::V5).unwrap());
+    }
+
+    #[test]
+    fn test_write_binary_view() {
+        const LONG_TEST_STRING: &str =
+            "This is a long string to make sure binary view array handles it";
+        let schema = Schema::new(vec![Field::new("field1", DataType::BinaryView, true)]);
+        let values: Vec<Option<&[u8]>> = vec![
+            Some(b"foo"),
+            Some(b"bar"),
+            Some(LONG_TEST_STRING.as_bytes()),
+        ];
+        let array = BinaryViewArray::from_iter(values);
+        let record_batch =
+            RecordBatch::try_new(Arc::new(schema.clone()), vec![Arc::new(array)]).unwrap();
+
+        let mut file = tempfile::tempfile().unwrap();
+        {
+            let mut writer = FileWriter::try_new(&mut file, &schema).unwrap();
+            writer.write(&record_batch).unwrap();
+            writer.finish().unwrap();
+        }
+        file.rewind().unwrap();
+        {
+            let mut reader = FileReader::try_new(file, None).unwrap();
+            let read_batch = reader.next().unwrap().unwrap();
+            read_batch
+                .columns()
+                .iter()
+                .zip(record_batch.columns())
+                .for_each(|(a, b)| {
+                    assert_eq!(a, b);
+                });
+        }
     }
 
     #[test]
