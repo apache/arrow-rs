@@ -249,6 +249,19 @@ impl BufWriter {
             state: BufWriterState::Buffer(path, Vec::new()),
         }
     }
+
+    /// Abort this writer, cleaning up any partially uploaded state
+    ///
+    /// # Panic
+    ///
+    /// Panics if this writer has already been shutdown or aborted
+    pub async fn abort(&mut self) -> crate::Result<()> {
+        match &mut self.state {
+            BufWriterState::Buffer(_, _) | BufWriterState::Prepare(_) => Ok(()),
+            BufWriterState::Flush(_) => panic!("Already shut down"),
+            BufWriterState::Write(x) => x.take().unwrap().abort().await,
+        }
+    }
 }
 
 impl AsyncWrite for BufWriter {
