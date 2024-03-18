@@ -548,7 +548,7 @@ pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
     ///
     /// Client should prefer [`ObjectStore::put`] for small payloads, as streaming uploads
     /// typically require multiple separate requests. See [`Upload`] for more information
-    async fn upload(&self, location: &Path) -> Result<Box<dyn Upload>>;
+    async fn put_multipart(&self, location: &Path) -> Result<Box<dyn Upload>>;
 
     /// Return the bytes that are stored at the specified location.
     async fn get(&self, location: &Path) -> Result<GetResult> {
@@ -733,8 +733,8 @@ macro_rules! as_ref_impl {
                 self.as_ref().put_opts(location, bytes, opts).await
             }
 
-            async fn upload(&self, location: &Path) -> Result<Box<dyn Upload>> {
-                self.as_ref().upload(location).await
+            async fn put_multipart(&self, location: &Path) -> Result<Box<dyn Upload>> {
+                self.as_ref().put_multipart(location).await
             }
 
             async fn get(&self, location: &Path) -> Result<GetResult> {
@@ -1881,7 +1881,7 @@ mod tests {
         // Can write to storage
         let data = get_chunks(5 * 1024 * 1024, 3);
         let bytes_expected = data.concat();
-        let mut upload = storage.upload(&location).await.unwrap();
+        let mut upload = storage.put_multipart(&location).await.unwrap();
         let uploads = data.into_iter().map(|x| upload.put_part(x));
         futures::future::try_join_all(uploads).await.unwrap();
 
@@ -1908,7 +1908,7 @@ mod tests {
         // Sizes chosen to ensure we write three parts
         let data = get_chunks(3_200_000, 7);
         let bytes_expected = data.concat();
-        let upload = storage.upload(&location).await.unwrap();
+        let upload = storage.put_multipart(&location).await.unwrap();
         let mut writer = ChunkedUpload::new(upload);
         for chunk in &data {
             writer.write(chunk)
@@ -1919,7 +1919,7 @@ mod tests {
 
         // We can abort an empty write
         let location = Path::from("test_dir/test_abort_upload.txt");
-        let mut upload = storage.upload(&location).await.unwrap();
+        let mut upload = storage.put_multipart(&location).await.unwrap();
         upload.abort().await.unwrap();
         let get_res = storage.get(&location).await;
         assert!(get_res.is_err());
@@ -1929,7 +1929,7 @@ mod tests {
         ));
 
         // We can abort an in-progress write
-        let mut upload = storage.upload(&location).await.unwrap();
+        let mut upload = storage.put_multipart(&location).await.unwrap();
         upload
             .put_part(data.first().unwrap().clone())
             .await

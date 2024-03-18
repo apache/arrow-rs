@@ -41,7 +41,7 @@ impl ObjectStore for MyStore {
         self.0.put_opts(path, data, opts).await
     }
 
-    async fn upload(&self, _location: &Path) -> Result<Box<dyn Upload>> {
+    async fn put_multipart(&self, _location: &Path) -> Result<Box<dyn Upload>> {
         todo!()
     }
 

@@ -114,7 +114,7 @@ impl ObjectStore for HttpStore {
         })
     }
 
-    async fn upload(&self, _location: &Path) -> Result<Box<dyn Upload>> {
+    async fn put_multipart(&self, _location: &Path) -> Result<Box<dyn Upload>> {
         Err(crate::Error::NotImplemented)
     }
 

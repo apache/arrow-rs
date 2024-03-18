@@ -294,7 +294,7 @@ impl AsyncWrite for BufWriter {
                         let path = std::mem::take(path);
                         let store = Arc::clone(&self.store);
                         self.state = BufWriterState::Prepare(Box::pin(async move {
-                            let upload = store.upload(&path).await?;
+                            let upload = store.put_multipart(&path).await?;
                             let mut chunked = ChunkedUpload::new(upload);
                             chunked.write(&buffer);
                             Ok(chunked)

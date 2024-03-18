@@ -395,7 +395,7 @@ impl ObjectStore for LocalFileSystem {
         .await
     }
 
-    async fn upload(&self, location: &Path) -> Result<Box<dyn Upload>> {
+    async fn put_multipart(&self, location: &Path) -> Result<Box<dyn Upload>> {
         let dest = self.path_to_filesystem(location)?;
         let (file, src) = new_staged_upload(&dest)?;
         Ok(Box::new(LocalUpload::new(src, dest, file)))
@@ -1005,7 +1005,7 @@ mod tests {
 
             // Can't use stream_get test as ChunkedUpload uses a tokio JoinSet
             let p = Path::from("manual_upload");
-            let mut upload = integration.upload(&p).await.unwrap();
+            let mut upload = integration.put_multipart(&p).await.unwrap();
             upload.put_part(Bytes::from_static(b"123")).await.unwrap();
             upload.put_part(Bytes::from_static(b"45678")).await.unwrap();
             let r = upload.complete().await.unwrap();
@@ -1310,10 +1310,10 @@ mod tests {
         let location = Path::from("some_file");
 
         let data = Bytes::from("arbitrary data");
-        let mut u1 = integration.upload(&location).await.unwrap();
+        let mut u1 = integration.put_multipart(&location).await.unwrap();
         u1.put_part(data.clone()).await.unwrap();
 
-        let mut u2 = integration.upload(&location).await.unwrap();
+        let mut u2 = integration.put_multipart(&location).await.unwrap();
         u2.put_part(data).await.unwrap();
 
         let list = flatten_list_stream(&integration, None).await.unwrap();
@@ -1422,7 +1422,7 @@ mod not_wasm_tests {
 
         let location = Path::from("some_file");
         let data = Bytes::from_static(b"hello");
-        let mut upload = integration.upload(&location).await.unwrap();
+        let mut upload = integration.put_multipart(&location).await.unwrap();
         upload.put_part(data).await.unwrap();
 
         let file_count = std::fs::read_dir(root.path()).unwrap().count();

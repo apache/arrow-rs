@@ -19,7 +19,7 @@
 //!
 //! ## Streaming uploads
 //!
-//! [ObjectStore::upload] will upload data in blocks and write a blob from those blocks.
+//! [ObjectStore::put_multipart] will upload data in blocks and write a blob from those blocks.
 //!
 //! Unused blocks will automatically be dropped after 7 days.
 use crate::{
@@ -91,7 +91,7 @@ impl ObjectStore for MicrosoftAzure {
         self.client.put_blob(location, bytes, opts).await
     }
 
-    async fn upload(&self, location: &Path) -> Result<Box<dyn Upload>> {
+    async fn put_multipart(&self, location: &Path) -> Result<Box<dyn Upload>> {
         Ok(Box::new(AzureMultiPartUpload {
             part_idx: 0,
             state: Arc::new(UploadState {

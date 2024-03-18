@@ -66,8 +66,8 @@ impl ObjectStore for ChunkedStore {
         self.inner.put_opts(location, bytes, opts).await
     }
 
-    async fn upload(&self, location: &Path) -> Result<Box<dyn Upload>> {
-        self.inner.upload(location).await
+    async fn put_multipart(&self, location: &Path) -> Result<Box<dyn Upload>> {
+        self.inner.put_multipart(location).await
     }
 
     async fn get_opts(&self, location: &Path, options: GetOptions) -> Result<GetResult> {

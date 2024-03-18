@@ -157,7 +157,7 @@ impl<T: ObjectStore> ObjectStore for ThrottledStore<T> {
         self.inner.put_opts(location, bytes, opts).await
     }
 
-    async fn upload(&self, _location: &Path) -> Result<Box<dyn Upload>> {
+    async fn put_multipart(&self, _location: &Path) -> Result<Box<dyn Upload>> {
         Err(super::Error::NotImplemented)
     }
 

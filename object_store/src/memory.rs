@@ -207,7 +207,7 @@ impl ObjectStore for InMemory {
         })
     }
 
-    async fn upload(&self, location: &Path) -> Result<Box<dyn Upload>> {
+    async fn put_multipart(&self, location: &Path) -> Result<Box<dyn Upload>> {
         Ok(Box::new(InMemoryUpload {
             location: location.clone(),
             parts: vec![],

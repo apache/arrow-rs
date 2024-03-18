@@ -90,9 +90,9 @@ impl<T: ObjectStore> ObjectStore for PrefixStore<T> {
         self.inner.put_opts(&full_path, bytes, opts).await
     }
 
-    async fn upload(&self, location: &Path) -> Result<Box<dyn Upload>> {
+    async fn put_multipart(&self, location: &Path) -> Result<Box<dyn Upload>> {
         let full_path = self.full_path(&location);
-        self.inner.upload(&full_path).await
+        self.inner.put_multipart(&full_path).await
     }
 
     async fn get(&self, location: &Path) -> Result<GetResult> {

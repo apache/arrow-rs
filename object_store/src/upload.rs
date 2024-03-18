@@ -24,6 +24,18 @@ use tokio::task::JoinSet;
 /// An upload part request
 pub type UploadPart = BoxFuture<'static, Result<()>>;
 
+/// A trait allowing writing an object in fixed size chunks
+///
+/// Consecutive chunks of data can be written by calling [`Upload::put_part`] and polling
+/// the returned futures to completion. Multiple futures returned by [`Upload::put_part`]
+/// may be polled in parallel, allowing for concurrent uploads.
+///
+/// Once all part uploads have been polled to completion, the upload can be completed by
+/// calling [`Upload::complete`]. This will make the entire uploaded object visible
+/// as an atomic operation.It is implementation behind behaviour if [`Upload::complete`]
+/// is called before all [`UploadPart`] have been polled to completion.
+///
+/// If
 #[async_trait]
 pub trait Upload: Send + std::fmt::Debug {
     /// Upload the next part
@@ -59,15 +71,30 @@ pub trait Upload: Send + std::fmt::Debug {
     fn put_part(&mut self, data: Bytes) -> UploadPart;
 
     /// Complete the multipart upload
+    ///
+    /// It is implementation defined behaviour if this method is called before polling
+    /// all [`UploadPart`] returned by [`Upload::put_part`] to completion. Additionally,
+    /// it is implementation defined behaviour to call [`Upload::complete`] on an already
+    /// completed or aborted [`Upload`].
     async fn complete(&mut self) -> Result<PutResult>;
 
     /// Abort the multipart upload
     ///
-    /// It is implementation defined behaviour if called concurrently with [`UploadPart::execute`]
+    /// If an [`Upload`] is dropped without [`Upload::complete`] being called,
+    /// some implementations will automatically reap any uploaded parts. However,
+    /// this is not always possible, e.g. for S3 and GCS. [`Upload::abort`] can
+    /// therefore be invoked to perform this cleanup.
+    ///
+    /// It is recommended that where possible users configure appropriate lifecycle
+    /// rules to automatically reap unused parts older than some threshold, as this
+    /// will more reliably handle different failure modes.
+    ///
+    /// It is implementation defined behaviour to call [`Upload::abort`] on an already
+    /// completed or aborted [`Upload`]
     async fn abort(&mut self) -> Result<()>;
 }
 
-/// A synchronous write API for uploading data in parallel
+/// A synchronous write API for uploading data in parallel in fixed size chunks
 ///
 /// Makes use of [`JoinSet`] under the hood to multiplex upload tasks,
 /// avoiding issues caused by sharing a single tokio's cooperative task

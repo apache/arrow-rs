@@ -17,17 +17,14 @@
 
 //! An object store implementation for S3
 //!
-//! ## Multi-part uploads
+//! ## Multipart uploads
 //!
-//! Multi-part uploads can be initiated with the [ObjectStore::put_multipart] method.
-//! Data passed to the writer is automatically buffered to meet the minimum size
-//! requirements for a part. Multiple parts are uploaded concurrently.
+//! Multipart uploads can be initiated with the [ObjectStore::put_multipart] method.
 //!
 //! If the writer fails for any reason, you may have parts uploaded to AWS but not
-//! used that you may be charged for. Use the [ObjectStore::abort_multipart] method
-//! to abort the upload and drop those unneeded parts. In addition, you may wish to
-//! consider implementing [automatic cleanup] of unused parts that are older than one
-//! week.
+//! used that you will be charged for. [`Upload::abort`] may be invoked to drop
+//! these unneeded parts, however, it is recommended that you consider implementing
+//! [automatic cleanup] of unused parts that are older than some threshold.
 //!
 //! [automatic cleanup]: https://aws.amazon.com/blogs/aws/s3-lifecycle-management-update-support-for-multipart-uploads-and-delete-markers/
 
@@ -211,7 +208,7 @@ impl ObjectStore for AmazonS3 {
         }
     }
 
-    async fn upload(&self, location: &Path) -> Result<Box<dyn Upload>> {
+    async fn put_multipart(&self, location: &Path) -> Result<Box<dyn Upload>> {
         let upload_id = self.client.create_multipart(location).await?;
 
         Ok(Box::new(S3MultiPartUpload {
@@ -559,7 +556,7 @@ mod tests {
         store.put(&locations[0], data.clone()).await.unwrap();
         store.copy(&locations[0], &locations[1]).await.unwrap();
 
-        let mut upload = store.upload(&locations[2]).await.unwrap();
+        let mut upload = store.put_multipart(&locations[2]).await.unwrap();
         upload.put_part(data.clone()).await.unwrap();
         upload.complete().await.unwrap();
 
