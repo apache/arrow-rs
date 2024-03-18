@@ -37,7 +37,6 @@ use futures::stream::BoxStream;
 use futures::{StreamExt, TryStreamExt};
 use itertools::Itertools;
 use snafu::{OptionExt, ResultExt, Snafu};
-use tokio::io::AsyncWrite;
 use url::Url;
 
 use crate::client::get::GetClientExt;
@@ -45,7 +44,7 @@ use crate::client::header::get_etag;
 use crate::http::client::Client;
 use crate::path::Path;
 use crate::{
-    ClientConfigKey, ClientOptions, GetOptions, GetResult, ListResult, MultipartId, ObjectMeta,
+    ClientConfigKey, ClientOptions, GetOptions, GetResult, ListResult, ObjectMeta,
     ObjectStore, PutMode, PutOptions, PutResult, Result, RetryConfig, Upload,
 };
 

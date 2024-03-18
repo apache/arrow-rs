@@ -27,7 +27,7 @@ use crate::{
     path::Path,
     signer::Signer,
     GetOptions, GetResult, ListResult, MultipartId, ObjectMeta, ObjectStore, PutOptions, PutResult,
-    Result,
+    Result, Upload, UploadPart,
 };
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -36,7 +36,6 @@ use reqwest::Method;
 use std::fmt::Debug;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::io::AsyncWrite;
 use url::Url;
 
 use crate::client::get::GetClientExt;
@@ -50,6 +49,8 @@ mod credential;
 
 /// [`CredentialProvider`] for [`MicrosoftAzure`]
 pub type AzureCredentialProvider = Arc<dyn CredentialProvider<Credential = AzureCredential>>;
+use crate::azure::client::AzureClient;
+use crate::client::parts::Parts;
 pub use builder::{AzureConfigKey, MicrosoftAzureBuilder};
 pub use credential::AzureCredential;
 
@@ -90,22 +91,17 @@ impl ObjectStore for MicrosoftAzure {
         self.client.put_blob(location, bytes, opts).await
     }
 
-    async fn put_multipart(
-        &self,
-        location: &Path,
-    ) -> Result<(MultipartId, Box<dyn AsyncWrite + Unpin + Send>)> {
-        let inner = AzureMultiPartUpload {
-            client: Arc::clone(&self.client),
-            location: location.to_owned(),
-        };
-        Ok((String::new(), Box::new(WriteMultiPart::new(inner, 8))))
+    async fn upload(&self, location: &Path) -> Result<Box<dyn Upload>> {
+        Ok(Box::new(AzureMultiPartUpload {
+            part_idx: 0,
+            state: Arc::new(UploadState {
+                client: Arc::clone(&self.client),
+                location: location.clone(),
+                parts: Default::default(),
+            }),
+        }))
     }
 
-    async fn abort_multipart(&self, _location: &Path, _multipart_id: &MultipartId) -> Result<()> {
-        // There is no way to drop blocks that have been uploaded. Instead, they simply
-        // expire in 7 days.
-        Ok(())
-    }
 
     async fn get_opts(&self, location: &Path, options: GetOptions) -> Result<GetResult> {
         self.client.get_opts(location, options).await
@@ -193,20 +189,43 @@ impl Signer for MicrosoftAzure {
 /// put_multipart_part -> PUT block
 /// complete -> PUT block list
 /// abort -> No equivalent; blocks are simply dropped after 7 days
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 struct AzureMultiPartUpload {
-    client: Arc<client::AzureClient>,
+    part_idx: usize,
+    state: Arc<UploadState>,
+}
+
+#[derive(Debug)]
+struct UploadState {
     location: Path,
+    parts: Parts,
+    client: Arc<AzureClient>,
 }
 
 #[async_trait]
-impl PutPart for AzureMultiPartUpload {
-    async fn put_part(&self, buf: Vec<u8>, idx: usize) -> Result<PartId> {
-        self.client.put_block(&self.location, idx, buf.into()).await
+impl Upload for AzureMultiPartUpload {
+    fn put_part(&mut self, data: Bytes) -> UploadPart {
+        let idx = self.part_idx;
+        self.part_idx += 1;
+        let state = Arc::clone(&self.state);
+        Box::pin(async move {
+            let part = state.client.put_block(&state.location, idx, data).await?;
+            state.parts.put(idx, part);
+            Ok(())
+        })
     }
 
-    async fn complete(&self, parts: Vec<PartId>) -> Result<()> {
-        self.client.put_block_list(&self.location, parts).await?;
+    async fn complete(&mut self) -> Result<PutResult> {
+        let parts = self.state.parts.finish(self.part_idx)?;
+
+        self.state
+            .client
+            .put_block_list(&self.state.location, parts)
+            .await
+    }
+
+    async fn abort(&mut self) -> Result<()> {
+        // Nothing to do
         Ok(())
     }
 }

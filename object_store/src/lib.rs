@@ -2197,7 +2197,7 @@ mod tests {
     pub(crate) async fn tagging<F, Fut>(storage: &dyn ObjectStore, validate: bool, get_tags: F)
     where
         F: Fn(Path) -> Fut + Send + Sync,
-        Fut: Future<Output = Result<reqwest::Response>> + Send,
+        Fut: std::future::Future<Output = Result<reqwest::Response>> + Send,
     {
         use bytes::Buf;
         use serde::Deserialize;

@@ -27,7 +27,7 @@ use std::io::{Error, ErrorKind, SeekFrom};
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
-use tokio::io::{AsyncBufRead, AsyncRead, AsyncSeek, AsyncWrite, AsyncWriteExt, ReadBuf};
+use tokio::io::{AsyncBufRead, AsyncRead, AsyncSeek, AsyncWrite, ReadBuf};
 
 /// The default buffer size used by [`BufReader`]
 pub const DEFAULT_BUFFER_SIZE: usize = 1024 * 1024;
@@ -367,7 +367,7 @@ mod tests {
     use super::*;
     use crate::memory::InMemory;
     use crate::path::Path;
-    use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncSeekExt};
+    use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 
     #[tokio::test]
     async fn test_buf_reader() {

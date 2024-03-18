@@ -38,18 +38,17 @@ use futures::{StreamExt, TryStreamExt};
 use reqwest::header::{HeaderName, IF_MATCH, IF_NONE_MATCH};
 use reqwest::{Method, StatusCode};
 use std::{sync::Arc, time::Duration};
-use tokio::io::AsyncWrite;
 use url::Url;
 
 use crate::aws::client::{RequestError, S3Client};
 use crate::client::get::GetClientExt;
 use crate::client::list::ListClientExt;
 use crate::client::CredentialProvider;
-use crate::multipart::{MultiPartStore, PartId, PutPart, WriteMultiPart};
+use crate::multipart::{MultiPartStore, PartId};
 use crate::signer::Signer;
 use crate::{
     Error, GetOptions, GetResult, ListResult, MultipartId, ObjectMeta, ObjectStore, Path, PutMode,
-    PutOptions, PutResult, Result,
+    PutOptions, PutResult, Result, Upload, UploadPart,
 };
 
 static TAGS_HEADER: HeaderName = HeaderName::from_static("x-amz-tagging");
@@ -85,6 +84,7 @@ const STORE: &str = "S3";
 
 /// [`CredentialProvider`] for [`AmazonS3`]
 pub type AwsCredentialProvider = Arc<dyn CredentialProvider<Credential = AwsCredential>>;
+use crate::client::parts::Parts;
 pub use credential::{AwsAuthorizer, AwsCredential};
 
 /// Interface for [Amazon S3](https://aws.amazon.com/s3/).
@@ -211,25 +211,18 @@ impl ObjectStore for AmazonS3 {
         }
     }
 
-    async fn put_multipart(
-        &self,
-        location: &Path,
-    ) -> Result<(MultipartId, Box<dyn AsyncWrite + Unpin + Send>)> {
-        let id = self.client.create_multipart(location).await?;
+    async fn upload(&self, location: &Path) -> Result<Box<dyn Upload>> {
+        let upload_id = self.client.create_multipart(location).await?;
 
-        let upload = S3MultiPartUpload {
-            location: location.clone(),
-            upload_id: id.clone(),
-            client: Arc::clone(&self.client),
-        };
-
-        Ok((id, Box::new(WriteMultiPart::new(upload, 8))))
-    }
-
-    async fn abort_multipart(&self, location: &Path, multipart_id: &MultipartId) -> Result<()> {
-        self.client
-            .delete_request(location, &[("uploadId", multipart_id)])
-            .await
+        Ok(Box::new(S3MultiPartUpload {
+            part_idx: 0,
+            state: Arc::new(UploadState {
+                client: Arc::clone(&self.client),
+                location: location.clone(),
+                upload_id: upload_id.clone(),
+                parts: Default::default(),
+            }),
+        }))
     }
 
     async fn get_opts(&self, location: &Path, options: GetOptions) -> Result<GetResult> {
@@ -319,25 +312,50 @@ impl ObjectStore for AmazonS3 {
     }
 }
 
+#[derive(Debug)]
 struct S3MultiPartUpload {
+    part_idx: usize,
+    state: Arc<UploadState>,
+}
+
+#[derive(Debug)]
+struct UploadState {
+    parts: Parts,
     location: Path,
     upload_id: String,
     client: Arc<S3Client>,
 }
 
 #[async_trait]
-impl PutPart for S3MultiPartUpload {
-    async fn put_part(&self, buf: Vec<u8>, part_idx: usize) -> Result<PartId> {
-        self.client
-            .put_part(&self.location, &self.upload_id, part_idx, buf.into())
+impl Upload for S3MultiPartUpload {
+    fn put_part(&mut self, data: Bytes) -> UploadPart {
+        let idx = self.part_idx;
+        self.part_idx += 1;
+        let state = Arc::clone(&self.state);
+        Box::pin(async move {
+            let part = state
+                .client
+                .put_part(&state.location, &state.upload_id, idx, data)
+                .await?;
+            state.parts.put(idx, part);
+            Ok(())
+        })
+    }
+
+    async fn complete(&mut self) -> Result<PutResult> {
+        let parts = self.state.parts.finish(self.part_idx)?;
+
+        self.state
+            .client
+            .complete_multipart(&self.state.location, &self.state.upload_id, parts)
             .await
     }
 
-    async fn complete(&self, completed_parts: Vec<PartId>) -> Result<()> {
-        self.client
-            .complete_multipart(&self.location, &self.upload_id, completed_parts)
-            .await?;
-        Ok(())
+    async fn abort(&mut self) -> Result<()> {
+        self.state
+            .client
+            .delete_request(&self.state.location, &[("uploadId", &self.state.upload_id)])
+            .await
     }
 }
 
@@ -377,7 +395,6 @@ mod tests {
     use crate::{client::get::GetClient, tests::*};
     use bytes::Bytes;
     use hyper::HeaderMap;
-    use tokio::io::AsyncWriteExt;
 
     const NON_EXISTENT_NAME: &str = "nonexistentname";
 
@@ -542,9 +559,9 @@ mod tests {
         store.put(&locations[0], data.clone()).await.unwrap();
         store.copy(&locations[0], &locations[1]).await.unwrap();
 
-        let (_, mut writer) = store.put_multipart(&locations[2]).await.unwrap();
-        writer.write_all(&data).await.unwrap();
-        writer.shutdown().await.unwrap();
+        let mut upload = store.upload(&locations[2]).await.unwrap();
+        upload.put_part(data.clone()).await.unwrap();
+        upload.complete().await.unwrap();
 
         for location in &locations {
             let res = store

@@ -25,7 +25,6 @@ use object_store::path::Path;
 use object_store::*;
 use std::fmt::Formatter;
 use tempfile::tempdir;
-use tokio::io::AsyncWrite;
 
 #[derive(Debug)]
 struct MyStore(LocalFileSystem);
@@ -42,16 +41,10 @@ impl ObjectStore for MyStore {
         self.0.put_opts(path, data, opts).await
     }
 
-    async fn put_multipart(
-        &self,
-        _: &Path,
-    ) -> Result<(MultipartId, Box<dyn AsyncWrite + Unpin + Send>)> {
+    async fn upload(&self, _location: &Path) -> Result<Box<dyn Upload>> {
         todo!()
     }
 
-    async fn abort_multipart(&self, _: &Path, _: &MultipartId) -> Result<()> {
-        todo!()
-    }
 
     async fn get_opts(&self, location: &Path, options: GetOptions) -> Result<GetResult> {
         self.0.get_opts(location, options).await
