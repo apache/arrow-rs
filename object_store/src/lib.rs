@@ -88,11 +88,11 @@
 //!
 //! # Why not a Filesystem Interface?
 //!
-//! Whilst this crate does provide a [`BufReader`], the [`ObjectStore`] interface mirrors the APIs
-//! of object stores and not filesystems, opting to provide stateless APIs instead of the cursor
-//! based interfaces such as [`Read`] or [`Seek`] favoured by filesystems.
+//! The [`ObjectStore`] interface is designed to mirror the APIs
+//! of object stores and *not* filesystems, and thus has stateless APIs instead
+//! of cursor based interfaces such as [`Read`] or [`Seek`] available in filesystems.
 //!
-//! This provides some compelling advantages:
+//! This design provides the following advantages:
 //!
 //! * All operations are atomic, and readers cannot observe partial and/or failed writes
 //! * Methods map directly to object store APIs, providing both efficiency and predictability
@@ -100,7 +100,12 @@
 //! * Allows for functionality not native to filesystems, such as operation preconditions
 //! and atomic multipart uploads
 //!
+//! This crate does provide [`BufReader`] and [`BufWriter`] adapters
+//! which provide a more filesystem-like API for working with the
+//! [`ObjectStore`] trait, however, they should be used with care
+//!
 //! [`BufReader`]: buffered::BufReader
+//! [`BufWriter`]: buffered::BufWriter
 //!
 //! # Adapters
 //!

@@ -30,3 +30,6 @@ pub mod decimal;
 
 #[cfg(feature = "ffi")]
 pub mod ffi;
+
+mod byte_view;
+pub use byte_view::*;

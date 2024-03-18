@@ -22,6 +22,7 @@ use arrow::array::{
     UnionArray,
 };
 use arrow::datatypes::Int16Type;
+use arrow_array::StringViewArray;
 use arrow_buffer::Buffer;
 use arrow_data::transform::MutableArrayData;
 use arrow_data::ArrayData;
@@ -1025,6 +1026,44 @@ fn test_extend_nulls_panic() {
     let int = Int32Array::from(vec![1, 2, 3, 4]).into_data();
     let mut mutable = MutableArrayData::new(vec![&int], false, 4);
     mutable.extend_nulls(2);
+}
+
+#[test]
+fn test_string_view() {
+    let a1 =
+        StringViewArray::from(vec!["foo", "very long string over 12 bytes", "bar"]).into_data();
+    let a2 = StringViewArray::from_iter(vec![
+        Some("bar"),
+        None,
+        Some("long string also over 12 bytes"),
+    ])
+    .into_data();
+
+    a1.validate_full().unwrap();
+    a2.validate_full().unwrap();
+
+    let mut mutable = MutableArrayData::new(vec![&a1, &a2], false, 4);
+    mutable.extend(1, 0, 1);
+    mutable.extend(0, 1, 2);
+    mutable.extend(0, 0, 1);
+    mutable.extend(1, 2, 3);
+
+    let array = StringViewArray::from(mutable.freeze());
+    assert_eq!(array.data_buffers().len(), 2);
+    // Should have reused data buffers
+    assert_eq!(array.data_buffers()[0].as_ptr(), a1.buffers()[1].as_ptr());
+    assert_eq!(array.data_buffers()[1].as_ptr(), a2.buffers()[1].as_ptr());
+
+    let v = array.iter().collect::<Vec<_>>();
+    assert_eq!(
+        v,
+        vec![
+            Some("bar"),
+            Some("very long string over 12 bytes"),
+            Some("foo"),
+            Some("long string also over 12 bytes")
+        ]
+    )
 }
 
 #[test]

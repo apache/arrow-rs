@@ -145,21 +145,40 @@ pub(crate) trait CompressionLevel<T: std::fmt::Display + std::cmp::PartialOrd> {
 /// bytes for the compression type.
 /// This returns `None` if the codec type is `UNCOMPRESSED`.
 pub fn create_codec(codec: CodecType, _options: &CodecOptions) -> Result<Option<Box<dyn Codec>>> {
+    #[allow(unreachable_code, unused_variables)]
     match codec {
-        #[cfg(any(feature = "brotli", test))]
-        CodecType::BROTLI(level) => Ok(Some(Box::new(BrotliCodec::new(level)))),
-        #[cfg(any(feature = "flate2", test))]
-        CodecType::GZIP(level) => Ok(Some(Box::new(GZipCodec::new(level)))),
-        #[cfg(any(feature = "snap", test))]
-        CodecType::SNAPPY => Ok(Some(Box::new(SnappyCodec::new()))),
-        #[cfg(any(feature = "lz4", test))]
-        CodecType::LZ4 => Ok(Some(Box::new(LZ4HadoopCodec::new(
-            _options.backward_compatible_lz4,
-        )))),
-        #[cfg(any(feature = "zstd", test))]
-        CodecType::ZSTD(level) => Ok(Some(Box::new(ZSTDCodec::new(level)))),
-        #[cfg(any(feature = "lz4", test))]
-        CodecType::LZ4_RAW => Ok(Some(Box::new(LZ4RawCodec::new()))),
+        CodecType::BROTLI(level) => {
+            #[cfg(any(feature = "brotli", test))]
+            return Ok(Some(Box::new(BrotliCodec::new(level))));
+            Err(ParquetError::General("Disabled feature at compile time: brotli".into()))
+        },
+        CodecType::GZIP(level) => {
+            #[cfg(any(feature = "flate2", test))]
+            return Ok(Some(Box::new(GZipCodec::new(level))));
+            Err(ParquetError::General("Disabled feature at compile time: flate2".into()))
+        },
+        CodecType::SNAPPY => {
+            #[cfg(any(feature = "snap", test))]
+            return Ok(Some(Box::new(SnappyCodec::new())));
+            Err(ParquetError::General("Disabled feature at compile time: snap".into()))
+        },
+        CodecType::LZ4 => {
+            #[cfg(any(feature = "lz4", test))]
+            return Ok(Some(Box::new(LZ4HadoopCodec::new(
+                _options.backward_compatible_lz4,
+            ))));
+            Err(ParquetError::General("Disabled feature at compile time: lz4".into()))
+        },
+        CodecType::ZSTD(level) => {
+            #[cfg(any(feature = "zstd", test))]
+            return Ok(Some(Box::new(ZSTDCodec::new(level))));
+            Err(ParquetError::General("Disabled feature at compile time: zstd".into()))
+        },
+        CodecType::LZ4_RAW => {
+            #[cfg(any(feature = "lz4", test))]
+            return Ok(Some(Box::new(LZ4RawCodec::new())));
+            Err(ParquetError::General("Disabled feature at compile time: lz4".into()))
+        },
         CodecType::UNCOMPRESSED => Ok(None),
         _ => Err(nyi_err!("The codec type {} is not supported yet", codec)),
     }

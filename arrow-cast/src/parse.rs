@@ -439,6 +439,9 @@ macro_rules! parser_primitive {
     ($t:ty) => {
         impl Parser for $t {
             fn parse(string: &str) -> Option<Self::Native> {
+                if !string.as_bytes().last().is_some_and(|x| x.is_ascii_digit()) {
+                    return None;
+                }
                 match atoi::FromRadix10SignedChecked::from_radix_10_signed_checked(
                     string.as_bytes(),
                 ) {
@@ -2302,5 +2305,23 @@ mod tests {
             let result = parse_decimal::<Decimal256Type>(s, 76, scale);
             assert_eq!(i, result.unwrap());
         }
+    }
+
+    #[test]
+    fn test_parse_empty() {
+        assert_eq!(Int32Type::parse(""), None);
+        assert_eq!(Int64Type::parse(""), None);
+        assert_eq!(UInt32Type::parse(""), None);
+        assert_eq!(UInt64Type::parse(""), None);
+        assert_eq!(Float32Type::parse(""), None);
+        assert_eq!(Float64Type::parse(""), None);
+        assert_eq!(Int32Type::parse("+"), None);
+        assert_eq!(Int64Type::parse("+"), None);
+        assert_eq!(UInt32Type::parse("+"), None);
+        assert_eq!(UInt64Type::parse("+"), None);
+        assert_eq!(Float32Type::parse("+"), None);
+        assert_eq!(Float64Type::parse("+"), None);
+        assert_eq!(TimestampNanosecondType::parse(""), None);
+        assert_eq!(Date32Type::parse(""), None);
     }
 }
