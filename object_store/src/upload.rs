@@ -34,8 +34,6 @@ pub type UploadPart = BoxFuture<'static, Result<()>>;
 /// calling [`Upload::complete`]. This will make the entire uploaded object visible
 /// as an atomic operation.It is implementation behind behaviour if [`Upload::complete`]
 /// is called before all [`UploadPart`] have been polled to completion.
-///
-/// If
 #[async_trait]
 pub trait Upload: Send + std::fmt::Debug {
     /// Upload the next part
