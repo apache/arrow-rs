@@ -627,7 +627,7 @@ impl ObjectStore for LocalFileSystem {
                         if metadata(&from).is_err() {
                             return Err(Error::UnableToCopyFile { from, to, source }.into());
                         } else {
-                            create_parent_dirs(&staged, source)?
+                            create_parent_dirs(&to, source)?
                         }
                     }
                     _ => return Err(Error::UnableToCopyFile { from, to, source }.into()),
