@@ -1003,7 +1003,7 @@ mod tests {
             list_uses_directories_correctly(&integration).await;
             list_with_delimiter(&integration).await;
 
-            // Can't use stream_get test as ChunkedUpload uses a tokio JoinSet
+            // Can't use stream_get test as WriteMultipart uses a tokio JoinSet
             let p = Path::from("manual_upload");
             let mut upload = integration.put_multipart(&p).await.unwrap();
             upload.put_part(Bytes::from_static(b"123")).await.unwrap();

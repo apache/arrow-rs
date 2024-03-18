@@ -18,7 +18,7 @@
 //! Utilities for performing tokio-style buffered IO
 
 use crate::path::Path;
-use crate::{ChunkedUpload, ObjectMeta, ObjectStore};
+use crate::{WriteMultipart, ObjectMeta, ObjectStore};
 use bytes::Bytes;
 use futures::future::{BoxFuture, FutureExt};
 use futures::ready;
@@ -232,9 +232,9 @@ enum BufWriterState {
     /// Buffer up to capacity bytes
     Buffer(Path, Vec<u8>),
     /// [`ObjectStore::put_multipart`]
-    Prepare(BoxFuture<'static, std::io::Result<ChunkedUpload>>),
+    Prepare(BoxFuture<'static, std::io::Result<WriteMultipart>>),
     /// Write to a multipart upload
-    Write(Option<ChunkedUpload>),
+    Write(Option<WriteMultipart>),
     /// [`ObjectStore::put`]
     Flush(BoxFuture<'static, std::io::Result<()>>),
 }
@@ -295,7 +295,7 @@ impl AsyncWrite for BufWriter {
                         let store = Arc::clone(&self.store);
                         self.state = BufWriterState::Prepare(Box::pin(async move {
                             let upload = store.put_multipart(&path).await?;
-                            let mut chunked = ChunkedUpload::new(upload);
+                            let mut chunked = WriteMultipart::new(upload);
                             chunked.write(&buffer);
                             Ok(chunked)
                         }));

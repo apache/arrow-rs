@@ -54,11 +54,11 @@ pub trait MultipartStore: Send + Sync + 'static {
     ///
     /// Most stores require that all parts excluding the last are at least 5 MiB, and some
     /// further require that all parts excluding the last be the same size, e.g. [R2].
-    /// [`ChunkedUpload`] performs writes in fixed size blocks of 5 MiB, and clients wanting
+    /// [`WriteMultipart`] performs writes in fixed size blocks of 5 MiB, and clients wanting
     /// to maximise compatibility should look to do likewise.
     ///
     /// [R2]: https://developers.cloudflare.com/r2/objects/multipart-objects/#limitations
-    /// [`ChunkedUpload`]: crate::upload::ChunkedUpload
+    /// [`WriteMultipart`]: crate::upload::WriteMultipart
     async fn put_part(
         &self,
         path: &Path,

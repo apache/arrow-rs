@@ -1909,7 +1909,7 @@ mod tests {
         let data = get_chunks(3_200_000, 7);
         let bytes_expected = data.concat();
         let upload = storage.put_multipart(&location).await.unwrap();
-        let mut writer = ChunkedUpload::new(upload);
+        let mut writer = WriteMultipart::new(upload);
         for chunk in &data {
             writer.write(chunk)
         }

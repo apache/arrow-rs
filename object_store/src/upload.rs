@@ -98,13 +98,13 @@ pub trait MultipartUpload: Send + std::fmt::Debug {
 /// avoiding issues caused by sharing a single tokio's cooperative task
 /// budget across multiple IO operations.
 ///
-/// The design also takes inspiration from [`Sink`] with [`ChunkedUpload::wait_for_capacity`]
+/// The design also takes inspiration from [`Sink`] with [`WriteMultipart::wait_for_capacity`]
 /// allowing back pressure on producers, prior to buffering the next part. However, unlike
 /// [`Sink`] this back pressure is optional, allowing integration with synchronous producers
 ///
 /// [`Sink`]: futures::sink::Sink
 #[derive(Debug)]
-pub struct ChunkedUpload {
+pub struct WriteMultipart {
     upload: Box<dyn MultipartUpload>,
 
     buffer: Vec<u8>,
@@ -112,13 +112,13 @@ pub struct ChunkedUpload {
     tasks: JoinSet<Result<()>>,
 }
 
-impl ChunkedUpload {
-    /// Create a new [`ChunkedUpload`]
+impl WriteMultipart {
+    /// Create a new [`WriteMultipart`]
     pub fn new(upload: Box<dyn MultipartUpload>) -> Self {
         Self::new_with_capacity(upload, 5 * 1024 * 1024)
     }
 
-    /// Create a new [`ChunkedUpload`] that will upload in fixed `capacity` sized chunks
+    /// Create a new [`WriteMultipart`] that will upload in fixed `capacity` sized chunks
     pub fn new_with_capacity(upload: Box<dyn MultipartUpload>, capacity: usize) -> Self {
         Self {
             upload,
@@ -135,7 +135,7 @@ impl ChunkedUpload {
         Ok(())
     }
 
-    /// Write data to this [`ChunkedUpload`]
+    /// Write data to this [`WriteMultipart`]
     ///
     /// Back pressure can optionally be applied to producers by calling
     /// [`Self::wait_for_capacity`] prior to calling this method
