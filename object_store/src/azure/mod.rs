@@ -26,8 +26,8 @@ use crate::{
     multipart::{MultipartStore, PartId},
     path::Path,
     signer::Signer,
-    GetOptions, GetResult, ListResult, MultipartId, ObjectMeta, ObjectStore, PutOptions, PutResult,
-    Result, Upload, UploadPart,
+    GetOptions, GetResult, ListResult, MultipartId, MultipartUpload, ObjectMeta, ObjectStore,
+    PutOptions, PutResult, Result, UploadPart,
 };
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -91,7 +91,7 @@ impl ObjectStore for MicrosoftAzure {
         self.client.put_blob(location, bytes, opts).await
     }
 
-    async fn put_multipart(&self, location: &Path) -> Result<Box<dyn Upload>> {
+    async fn put_multipart(&self, location: &Path) -> Result<Box<dyn MultipartUpload>> {
         Ok(Box::new(AzureMultiPartUpload {
             part_idx: 0,
             state: Arc::new(UploadState {
@@ -202,7 +202,7 @@ struct UploadState {
 }
 
 #[async_trait]
-impl Upload for AzureMultiPartUpload {
+impl MultipartUpload for AzureMultiPartUpload {
     fn put_part(&mut self, data: Bytes) -> UploadPart {
         let idx = self.part_idx;
         self.part_idx += 1;

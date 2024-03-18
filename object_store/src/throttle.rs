@@ -22,8 +22,8 @@ use std::{convert::TryInto, sync::Arc};
 
 use crate::GetOptions;
 use crate::{
-    path::Path, GetResult, GetResultPayload, ListResult, ObjectMeta, ObjectStore, PutOptions,
-    PutResult, Result, Upload,
+    path::Path, GetResult, GetResultPayload, ListResult, MultipartUpload, ObjectMeta, ObjectStore,
+    PutOptions, PutResult, Result,
 };
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -157,7 +157,7 @@ impl<T: ObjectStore> ObjectStore for ThrottledStore<T> {
         self.inner.put_opts(location, bytes, opts).await
     }
 
-    async fn put_multipart(&self, _location: &Path) -> Result<Box<dyn Upload>> {
+    async fn put_multipart(&self, _location: &Path) -> Result<Box<dyn MultipartUpload>> {
         Err(super::Error::NotImplemented)
     }
 

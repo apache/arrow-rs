@@ -20,8 +20,8 @@
 //! ## Multipart uploads
 //!
 //! [Multipart uploads](https://cloud.google.com/storage/docs/multipart-uploads)
-//! can be initiated with the [ObjectStore::put_multipart] method. If neither [`Upload::complete`]
-//! nor [`Upload::abort`] is invoked, you may have parts uploaded to GCS but not used,
+//! can be initiated with the [ObjectStore::put_multipart] method. If neither [`MultipartUpload::complete`]
+//! nor [`MultipartUpload::abort`] is invoked, you may have parts uploaded to GCS but not used,
 //! that you will be charged for. It is recommended you configure a [lifecycle rule] to
 //! abort incomplete multipart uploads after a certain period of time to avoid being
 //! charged for storing partial uploads
@@ -38,8 +38,8 @@ use std::sync::Arc;
 
 use crate::client::CredentialProvider;
 use crate::{
-    multipart::PartId, path::Path, GetOptions, GetResult, ListResult, MultipartId, ObjectMeta,
-    ObjectStore, PutOptions, PutResult, Result, Upload, UploadPart,
+    multipart::PartId, path::Path, GetOptions, GetResult, ListResult, MultipartId, MultipartUpload,
+    ObjectMeta, ObjectStore, PutOptions, PutResult, Result, UploadPart,
 };
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -100,7 +100,7 @@ struct UploadState {
 }
 
 #[async_trait]
-impl Upload for GCSMultipartUpload {
+impl MultipartUpload for GCSMultipartUpload {
     fn put_part(&mut self, data: Bytes) -> UploadPart {
         let idx = self.part_idx;
         self.part_idx += 1;
@@ -138,7 +138,7 @@ impl ObjectStore for GoogleCloudStorage {
         self.client.put(location, bytes, opts).await
     }
 
-    async fn put_multipart(&self, location: &Path) -> Result<Box<dyn Upload>> {
+    async fn put_multipart(&self, location: &Path) -> Result<Box<dyn MultipartUpload>> {
         let upload_id = self.client.multipart_initiate(location).await?;
 
         Ok(Box::new(GCSMultipartUpload {

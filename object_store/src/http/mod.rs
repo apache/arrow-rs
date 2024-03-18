@@ -44,8 +44,8 @@ use crate::client::header::get_etag;
 use crate::http::client::Client;
 use crate::path::Path;
 use crate::{
-    ClientConfigKey, ClientOptions, GetOptions, GetResult, ListResult, ObjectMeta, ObjectStore,
-    PutMode, PutOptions, PutResult, Result, RetryConfig, Upload,
+    ClientConfigKey, ClientOptions, GetOptions, GetResult, ListResult, MultipartUpload, ObjectMeta,
+    ObjectStore, PutMode, PutOptions, PutResult, Result, RetryConfig,
 };
 
 mod client;
@@ -114,7 +114,7 @@ impl ObjectStore for HttpStore {
         })
     }
 
-    async fn put_multipart(&self, _location: &Path) -> Result<Box<dyn Upload>> {
+    async fn put_multipart(&self, _location: &Path) -> Result<Box<dyn MultipartUpload>> {
         Err(crate::Error::NotImplemented)
     }
 

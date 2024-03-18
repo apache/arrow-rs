@@ -18,8 +18,8 @@
 //! An object store that limits the maximum concurrency of the wrapped implementation
 
 use crate::{
-    BoxStream, GetOptions, GetResult, GetResultPayload, ListResult, ObjectMeta, ObjectStore, Path,
-    PutOptions, PutResult, Result, StreamExt, Upload, UploadPart,
+    BoxStream, GetOptions, GetResult, GetResultPayload, ListResult, MultipartUpload, ObjectMeta,
+    ObjectStore, Path, PutOptions, PutResult, Result, StreamExt, UploadPart,
 };
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -79,7 +79,7 @@ impl<T: ObjectStore> ObjectStore for LimitStore<T> {
         let _permit = self.semaphore.acquire().await.unwrap();
         self.inner.put_opts(location, bytes, opts).await
     }
-    async fn put_multipart(&self, location: &Path) -> Result<Box<dyn Upload>> {
+    async fn put_multipart(&self, location: &Path) -> Result<Box<dyn MultipartUpload>> {
         let upload = self.inner.put_multipart(location).await?;
         Ok(Box::new(LimitUpload {
             semaphore: Arc::clone(&self.semaphore),
@@ -213,16 +213,16 @@ impl<T: Stream + Unpin> Stream for PermitWrapper<T> {
     }
 }
 
-/// An [`Upload`] wrapper that limits the maximum number of concurrent requests
+/// An [`MultipartUpload`] wrapper that limits the maximum number of concurrent requests
 #[derive(Debug)]
 pub struct LimitUpload {
-    upload: Box<dyn Upload>,
+    upload: Box<dyn MultipartUpload>,
     semaphore: Arc<Semaphore>,
 }
 
 impl LimitUpload {
     /// Create a new [`LimitUpload`] limiting `upload` to `max_concurrency` concurrent requests
-    pub fn new(upload: Box<dyn Upload>, max_concurrency: usize) -> Self {
+    pub fn new(upload: Box<dyn MultipartUpload>, max_concurrency: usize) -> Self {
         Self {
             upload,
             semaphore: Arc::new(Semaphore::new(max_concurrency)),
@@ -231,7 +231,7 @@ impl LimitUpload {
 }
 
 #[async_trait]
-impl Upload for LimitUpload {
+impl MultipartUpload for LimitUpload {
     fn put_part(&mut self, data: Bytes) -> UploadPart {
         let upload = self.upload.put_part(data);
         let s = Arc::clone(&self.semaphore);

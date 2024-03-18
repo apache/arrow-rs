@@ -31,8 +31,8 @@ use crate::multipart::{MultipartStore, PartId};
 use crate::util::InvalidGetRange;
 use crate::GetOptions;
 use crate::{
-    path::Path, GetRange, GetResult, GetResultPayload, ListResult, MultipartId, ObjectMeta,
-    ObjectStore, PutMode, PutOptions, PutResult, Result, UpdateVersion, Upload, UploadPart,
+    path::Path, GetRange, GetResult, GetResultPayload, ListResult, MultipartId, MultipartUpload,
+    ObjectMeta, ObjectStore, PutMode, PutOptions, PutResult, Result, UpdateVersion, UploadPart,
 };
 
 /// A specialized `Error` for in-memory object store-related errors
@@ -210,7 +210,7 @@ impl ObjectStore for InMemory {
         })
     }
 
-    async fn put_multipart(&self, location: &Path) -> Result<Box<dyn Upload>> {
+    async fn put_multipart(&self, location: &Path) -> Result<Box<dyn MultipartUpload>> {
         Ok(Box::new(InMemoryUpload {
             location: location.clone(),
             parts: vec![],
@@ -476,7 +476,7 @@ struct InMemoryUpload {
 }
 
 #[async_trait]
-impl Upload for InMemoryUpload {
+impl MultipartUpload for InMemoryUpload {
     fn put_part(&mut self, data: Bytes) -> UploadPart {
         self.parts.push(data);
         Box::pin(futures::future::ready(Ok(())))

@@ -22,7 +22,7 @@
 //! Multipart uploads can be initiated with the [ObjectStore::put_multipart] method.
 //!
 //! If the writer fails for any reason, you may have parts uploaded to AWS but not
-//! used that you will be charged for. [`Upload::abort`] may be invoked to drop
+//! used that you will be charged for. [`MultipartUpload::abort`] may be invoked to drop
 //! these unneeded parts, however, it is recommended that you consider implementing
 //! [automatic cleanup] of unused parts that are older than some threshold.
 //!
@@ -44,8 +44,8 @@ use crate::client::CredentialProvider;
 use crate::multipart::{MultipartStore, PartId};
 use crate::signer::Signer;
 use crate::{
-    Error, GetOptions, GetResult, ListResult, MultipartId, ObjectMeta, ObjectStore, Path, PutMode,
-    PutOptions, PutResult, Result, Upload, UploadPart,
+    Error, GetOptions, GetResult, ListResult, MultipartId, MultipartUpload, ObjectMeta,
+    ObjectStore, Path, PutMode, PutOptions, PutResult, Result, UploadPart,
 };
 
 static TAGS_HEADER: HeaderName = HeaderName::from_static("x-amz-tagging");
@@ -208,7 +208,7 @@ impl ObjectStore for AmazonS3 {
         }
     }
 
-    async fn put_multipart(&self, location: &Path) -> Result<Box<dyn Upload>> {
+    async fn put_multipart(&self, location: &Path) -> Result<Box<dyn MultipartUpload>> {
         let upload_id = self.client.create_multipart(location).await?;
 
         Ok(Box::new(S3MultiPartUpload {
@@ -324,7 +324,7 @@ struct UploadState {
 }
 
 #[async_trait]
-impl Upload for S3MultiPartUpload {
+impl MultipartUpload for S3MultiPartUpload {
     fn put_part(&mut self, data: Bytes) -> UploadPart {
         let idx = self.part_idx;
         self.part_idx += 1;

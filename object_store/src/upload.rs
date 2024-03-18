@@ -26,16 +26,16 @@ pub type UploadPart = BoxFuture<'static, Result<()>>;
 
 /// A trait allowing writing an object in fixed size chunks
 ///
-/// Consecutive chunks of data can be written by calling [`Upload::put_part`] and polling
-/// the returned futures to completion. Multiple futures returned by [`Upload::put_part`]
+/// Consecutive chunks of data can be written by calling [`MultipartUpload::put_part`] and polling
+/// the returned futures to completion. Multiple futures returned by [`MultipartUpload::put_part`]
 /// may be polled in parallel, allowing for concurrent uploads.
 ///
 /// Once all part uploads have been polled to completion, the upload can be completed by
-/// calling [`Upload::complete`]. This will make the entire uploaded object visible
-/// as an atomic operation.It is implementation behind behaviour if [`Upload::complete`]
+/// calling [`MultipartUpload::complete`]. This will make the entire uploaded object visible
+/// as an atomic operation.It is implementation behind behaviour if [`MultipartUpload::complete`]
 /// is called before all [`UploadPart`] have been polled to completion.
 #[async_trait]
-pub trait Upload: Send + std::fmt::Debug {
+pub trait MultipartUpload: Send + std::fmt::Debug {
     /// Upload the next part
     ///
     /// Returns a stream
@@ -50,11 +50,11 @@ pub trait Upload: Send + std::fmt::Debug {
     ///
     /// ```no_run
     /// # use futures::StreamExt;
-    /// # use object_store::Upload;
+    /// # use object_store::MultipartUpload;
     /// #
     /// # async fn test() {
     /// #
-    /// let mut upload: Box<&dyn Upload> = todo!();
+    /// let mut upload: Box<&dyn MultipartUpload> = todo!();
     /// let mut p1 = upload.put_part(vec![0; 10 * 1024 * 1024].into());
     /// let mut p2 = upload.put_part(vec![1; 10 * 1024 * 1024].into());
     ///
@@ -71,24 +71,24 @@ pub trait Upload: Send + std::fmt::Debug {
     /// Complete the multipart upload
     ///
     /// It is implementation defined behaviour if this method is called before polling
-    /// all [`UploadPart`] returned by [`Upload::put_part`] to completion. Additionally,
-    /// it is implementation defined behaviour to call [`Upload::complete`] on an already
-    /// completed or aborted [`Upload`].
+    /// all [`UploadPart`] returned by [`MultipartUpload::put_part`] to completion. Additionally,
+    /// it is implementation defined behaviour to call [`MultipartUpload::complete`] on an already
+    /// completed or aborted [`MultipartUpload`].
     async fn complete(&mut self) -> Result<PutResult>;
 
     /// Abort the multipart upload
     ///
-    /// If an [`Upload`] is dropped without [`Upload::complete`] being called,
+    /// If an [`MultipartUpload`] is dropped without [`MultipartUpload::complete`] being called,
     /// some implementations will automatically reap any uploaded parts. However,
-    /// this is not always possible, e.g. for S3 and GCS. [`Upload::abort`] can
+    /// this is not always possible, e.g. for S3 and GCS. [`MultipartUpload::abort`] can
     /// therefore be invoked to perform this cleanup.
     ///
     /// It is recommended that where possible users configure appropriate lifecycle
     /// rules to automatically reap unused parts older than some threshold, as this
     /// will more reliably handle different failure modes.
     ///
-    /// It is implementation defined behaviour to call [`Upload::abort`] on an already
-    /// completed or aborted [`Upload`]
+    /// It is implementation defined behaviour to call [`MultipartUpload::abort`] on an already
+    /// completed or aborted [`MultipartUpload`]
     async fn abort(&mut self) -> Result<()>;
 }
 
@@ -105,7 +105,7 @@ pub trait Upload: Send + std::fmt::Debug {
 /// [`Sink`]: futures::sink::Sink
 #[derive(Debug)]
 pub struct ChunkedUpload {
-    upload: Box<dyn Upload>,
+    upload: Box<dyn MultipartUpload>,
 
     buffer: Vec<u8>,
 
@@ -114,12 +114,12 @@ pub struct ChunkedUpload {
 
 impl ChunkedUpload {
     /// Create a new [`ChunkedUpload`]
-    pub fn new(upload: Box<dyn Upload>) -> Self {
+    pub fn new(upload: Box<dyn MultipartUpload>) -> Self {
         Self::new_with_capacity(upload, 5 * 1024 * 1024)
     }
 
     /// Create a new [`ChunkedUpload`] that will upload in fixed `capacity` sized chunks
-    pub fn new_with_capacity(upload: Box<dyn Upload>, capacity: usize) -> Self {
+    pub fn new_with_capacity(upload: Box<dyn MultipartUpload>, capacity: usize) -> Self {
         Self {
             upload,
             buffer: Vec::with_capacity(capacity),

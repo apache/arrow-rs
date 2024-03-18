@@ -547,8 +547,8 @@ pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
     /// Perform a multipart upload
     ///
     /// Client should prefer [`ObjectStore::put`] for small payloads, as streaming uploads
-    /// typically require multiple separate requests. See [`Upload`] for more information
-    async fn put_multipart(&self, location: &Path) -> Result<Box<dyn Upload>>;
+    /// typically require multiple separate requests. See [`MultipartUpload`] for more information
+    async fn put_multipart(&self, location: &Path) -> Result<Box<dyn MultipartUpload>>;
 
     /// Return the bytes that are stored at the specified location.
     async fn get(&self, location: &Path) -> Result<GetResult> {
@@ -733,7 +733,7 @@ macro_rules! as_ref_impl {
                 self.as_ref().put_opts(location, bytes, opts).await
             }
 
-            async fn put_multipart(&self, location: &Path) -> Result<Box<dyn Upload>> {
+            async fn put_multipart(&self, location: &Path) -> Result<Box<dyn MultipartUpload>> {
                 self.as_ref().put_multipart(location).await
             }
 
