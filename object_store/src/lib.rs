@@ -2155,6 +2155,35 @@ mod tests {
         storage.delete(&path2).await.unwrap();
     }
 
+    pub(crate) async fn copy_source_not_exists(storage: &DynObjectStore) {
+        // Create two objects
+        let path1 = Path::from("path1");
+        let path2 = Path::from("path2");
+        let nested_path2 = Path::from("nested/path2");
+
+        let source_data = Bytes::from("source_content_sample_data");
+        storage.put(&path1, source_data.clone()).await.unwrap();
+
+        // succeeded when source path does exist
+        storage.copy(&path1, &path2).await.unwrap();
+        let destination_data = storage.get(&path2).await.unwrap().bytes().await.unwrap();
+        assert_eq!(destination_data.as_ref(), source_data);
+
+        // succeeded when source path does exist, even if target path's parent does not exist
+        storage.copy(&path1, &nested_path2).await.unwrap();
+        let destination_data = storage.get(&nested_path2).await.unwrap().bytes().await.unwrap();
+        assert_eq!(destination_data.as_ref(), source_data);
+
+        // failed when source path does not exist
+        storage.delete(&path1).await.unwrap();
+        let result = storage.copy(&path1, &path2).await;
+        assert!(result.is_err());
+
+        // Clean up
+        storage.delete(&path2).await.unwrap();
+        storage.delete(&nested_path2).await.unwrap();
+    }
+
     pub(crate) async fn copy_if_not_exists(storage: &DynObjectStore) {
         // Create two objects
         let path1 = Path::from("test1");
