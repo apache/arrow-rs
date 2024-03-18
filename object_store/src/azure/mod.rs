@@ -23,7 +23,7 @@
 //!
 //! Unused blocks will automatically be dropped after 7 days.
 use crate::{
-    multipart::{MultiPartStore, PartId},
+    multipart::{MultipartStore, PartId},
     path::Path,
     signer::Signer,
     GetOptions, GetResult, ListResult, MultipartId, ObjectMeta, ObjectStore, PutOptions, PutResult,
@@ -231,7 +231,7 @@ impl Upload for AzureMultiPartUpload {
 }
 
 #[async_trait]
-impl MultiPartStore for MicrosoftAzure {
+impl MultipartStore for MicrosoftAzure {
     async fn create_multipart(&self, _: &Path) -> Result<MultipartId> {
         Ok(String::new())
     }

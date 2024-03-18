@@ -24,12 +24,10 @@ use crate::{
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures::{FutureExt, Stream};
-use std::io::{Error, IoSlice};
 use std::ops::Range;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
-use tokio::io::AsyncWrite;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 /// Store wrapper that wraps an inner store and limits the maximum number of concurrent
@@ -215,42 +213,7 @@ impl<T: Stream + Unpin> Stream for PermitWrapper<T> {
     }
 }
 
-impl<T: AsyncWrite + Unpin> AsyncWrite for PermitWrapper<T> {
-    fn poll_write(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        buf: &[u8],
-    ) -> Poll<std::result::Result<usize, Error>> {
-        Pin::new(&mut self.inner).poll_write(cx, buf)
-    }
-
-    fn poll_flush(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-    ) -> Poll<std::result::Result<(), Error>> {
-        Pin::new(&mut self.inner).poll_flush(cx)
-    }
-
-    fn poll_shutdown(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-    ) -> Poll<std::result::Result<(), Error>> {
-        Pin::new(&mut self.inner).poll_shutdown(cx)
-    }
-
-    fn poll_write_vectored(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        bufs: &[IoSlice<'_>],
-    ) -> Poll<std::result::Result<usize, Error>> {
-        Pin::new(&mut self.inner).poll_write_vectored(cx, bufs)
-    }
-
-    fn is_write_vectored(&self) -> bool {
-        self.inner.is_write_vectored()
-    }
-}
-
+/// An [`Upload`] wrapper that limits the maximum number of concurrent requests
 #[derive(Debug)]
 pub struct LimitUpload {
     upload: Box<dyn Upload>,
@@ -258,6 +221,7 @@ pub struct LimitUpload {
 }
 
 impl LimitUpload {
+    /// Create a new [`LimitUpload`] limiting `upload` to `max_concurrency` concurrent requests
     pub fn new(upload: Box<dyn Upload>, max_concurrency: usize) -> Self {
         Self {
             upload,

@@ -29,7 +29,7 @@ use snafu::{OptionExt, ResultExt, Snafu};
 
 use crate::{GetRange, GetResult, GetResultPayload, ListResult, MultipartId, ObjectMeta, ObjectStore, path::Path, PutMode, PutOptions, PutResult, Result, UpdateVersion, Upload, UploadPart};
 use crate::GetOptions;
-use crate::multipart::{MultiPartStore, PartId};
+use crate::multipart::{MultipartStore, PartId};
 use crate::util::InvalidGetRange;
 
 /// A specialized `Error` for in-memory object store-related errors
@@ -374,7 +374,7 @@ impl ObjectStore for InMemory {
 }
 
 #[async_trait]
-impl MultiPartStore for InMemory {
+impl MultipartStore for InMemory {
     async fn create_multipart(&self, _path: &Path) -> Result<MultipartId> {
         let mut storage = self.storage.write();
         let etag = storage.next_etag;

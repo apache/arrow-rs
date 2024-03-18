@@ -49,7 +49,7 @@ use futures::stream::BoxStream;
 use crate::client::get::GetClientExt;
 use crate::client::list::ListClientExt;
 use crate::client::parts::Parts;
-use crate::multipart::MultiPartStore;
+use crate::multipart::MultipartStore;
 pub use builder::{GoogleCloudStorageBuilder, GoogleConfigKey};
 pub use credential::GcpCredential;
 
@@ -186,7 +186,7 @@ impl ObjectStore for GoogleCloudStorage {
 }
 
 #[async_trait]
-impl MultiPartStore for GoogleCloudStorage {
+impl MultipartStore for GoogleCloudStorage {
     async fn create_multipart(&self, path: &Path) -> Result<MultipartId> {
         self.client.multipart_initiate(path).await
     }

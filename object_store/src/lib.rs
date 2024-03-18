@@ -1199,7 +1199,7 @@ mod test_util {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::multipart::MultiPartStore;
+    use crate::multipart::MultipartStore;
     use crate::test_util::flatten_list_stream;
     use chrono::TimeZone;
     use futures::stream::FuturesUnordered;
@@ -2130,7 +2130,7 @@ mod tests {
         storage.delete(&path2).await.unwrap();
     }
 
-    pub(crate) async fn multipart(storage: &dyn ObjectStore, multipart: &dyn MultiPartStore) {
+    pub(crate) async fn multipart(storage: &dyn ObjectStore, multipart: &dyn MultipartStore) {
         let path = Path::from("test_multipart");
         let chunk_size = 5 * 1024 * 1024;
 

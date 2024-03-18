@@ -41,7 +41,7 @@ use crate::aws::client::{RequestError, S3Client};
 use crate::client::get::GetClientExt;
 use crate::client::list::ListClientExt;
 use crate::client::CredentialProvider;
-use crate::multipart::{MultiPartStore, PartId};
+use crate::multipart::{MultipartStore, PartId};
 use crate::signer::Signer;
 use crate::{
     Error, GetOptions, GetResult, ListResult, MultipartId, ObjectMeta, ObjectStore, Path, PutMode,
@@ -357,7 +357,7 @@ impl Upload for S3MultiPartUpload {
 }
 
 #[async_trait]
-impl MultiPartStore for AmazonS3 {
+impl MultipartStore for AmazonS3 {
     async fn create_multipart(&self, path: &Path) -> Result<MultipartId> {
         self.client.create_multipart(path).await
     }

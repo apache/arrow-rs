@@ -43,7 +43,7 @@ pub struct PartId {
 /// [`ObjectStore::put_multipart`]: crate::ObjectStore::put_multipart
 /// [`LocalFileSystem`]: crate::local::LocalFileSystem
 #[async_trait]
-pub trait MultiPartStore: Send + Sync + 'static {
+pub trait MultipartStore: Send + Sync + 'static {
     /// Creates a new multipart upload, returning the [`MultipartId`]
     async fn create_multipart(&self, path: &Path) -> Result<MultipartId>;
 
@@ -54,10 +54,11 @@ pub trait MultiPartStore: Send + Sync + 'static {
     ///
     /// Most stores require that all parts excluding the last are at least 5 MiB, and some
     /// further require that all parts excluding the last be the same size, e.g. [R2].
-    /// [`WriteMultiPart`] performs writes in fixed size blocks of 10 MiB, and clients wanting
+    /// [`ChunkedUpload`] performs writes in fixed size blocks of 5 MiB, and clients wanting
     /// to maximise compatibility should look to do likewise.
     ///
     /// [R2]: https://developers.cloudflare.com/r2/objects/multipart-objects/#limitations
+    /// [`ChunkedUpload`]: crate::upload::ChunkedUpload
     async fn put_part(
         &self,
         path: &Path,
