@@ -579,6 +579,14 @@ impl ObjectStore for LocalFileSystem {
 
     async fn copy(&self, from: &Path, to: &Path) -> Result<()> {
         let from = self.path_to_filesystem(from)?;
+        if !from.exists() {
+            return Err(Error::NotFound {
+                path: from,
+                source: std::io::Error::new(ErrorKind::NotFound, "copy from nonexistent source"),
+            }
+            .into());
+        }
+
         let to = self.path_to_filesystem(to)?;
         let mut id = 0;
         // In order to make this atomic we:

@@ -2103,6 +2103,11 @@ mod tests {
         let contents1 = Bytes::from("cats");
         let contents2 = Bytes::from("dogs");
 
+        // copy() errors if source does not exist
+        let result = storage.copy(&path2, &path1).await;
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), crate::Error::NotFound { .. }));
+
         // copy_if_not_exists() errors if destination already exists
         storage.put(&path1, contents1.clone()).await.unwrap();
         storage.put(&path2, contents2.clone()).await.unwrap();
