@@ -1895,9 +1895,8 @@ mod tests {
             Some(LONG_TEST_STRING.as_bytes()),
         ];
         let binary_array = BinaryViewArray::from_iter(values);
-        let utf8_array = StringViewArray::from_iter(
-            vec![Some("foo"), Some("bar"), Some(LONG_TEST_STRING)].into_iter(),
-        );
+        let utf8_array =
+            StringViewArray::from_iter(vec![Some("foo"), Some("bar"), Some(LONG_TEST_STRING)]);
         let record_batch = RecordBatch::try_new(
             Arc::new(schema.clone()),
             vec![Arc::new(binary_array), Arc::new(utf8_array)],

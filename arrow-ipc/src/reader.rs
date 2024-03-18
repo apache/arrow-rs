@@ -86,7 +86,7 @@ fn create_array(
         BinaryView | Utf8View => {
             let count = variadic_counts
                 .pop_front()
-                .expect("Incorrect variadic count!");
+                .ok_or(ArrowError::IpcError("Incorrect variadic count!".to_owned()))?;
             let count = count + 2; // view and null buffer.
             let buffers = (0..count)
                 .map(|_| reader.next_buffer())
@@ -359,7 +359,7 @@ impl<'a> ArrayReader<'a> {
             Utf8View | BinaryView => {
                 let count = variadic_count
                     .pop_front()
-                    .expect("Incorrect variadic count!");
+                    .ok_or(ArrowError::IpcError("Incorrect variadic count!".to_owned()))?;
                 let count = count + 2; // view and null buffer.
                 for _i in 0..count {
                     self.skip_buffer()
