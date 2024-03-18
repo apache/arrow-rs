@@ -526,7 +526,7 @@ use std::sync::Arc;
 /// An alias for a dynamically dispatched object store implementation.
 pub type DynObjectStore = dyn ObjectStore;
 
-/// Id type for multi-part uploads.
+/// Id type for multipart uploads.
 pub type MultipartId = String;
 
 /// Universal API to multiple object store services.

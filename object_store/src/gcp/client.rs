@@ -272,7 +272,7 @@ impl GoogleCloudStorageClient {
         })
     }
 
-    /// Initiate a multi-part upload <https://cloud.google.com/storage/docs/xml-api/post-object-multipart>
+    /// Initiate a multipart upload <https://cloud.google.com/storage/docs/xml-api/post-object-multipart>
     pub async fn multipart_initiate(&self, path: &Path) -> Result<MultipartId> {
         let credential = self.get_credential().await?;
         let url = self.object_url(path);

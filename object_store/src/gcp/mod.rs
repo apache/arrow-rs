@@ -17,9 +17,9 @@
 
 //! An object store implementation for Google Cloud Storage
 //!
-//! ## Multi-part uploads
+//! ## Multipart uploads
 //!
-//! [Multi-part uploads](https://cloud.google.com/storage/docs/multipart-uploads)
+//! [Multipart uploads](https://cloud.google.com/storage/docs/multipart-uploads)
 //! can be initiated with the [ObjectStore::put_multipart] method. If neither [`Upload::complete`]
 //! nor [`Upload::abort`] is invoked, you may have parts uploaded to GCS but not used,
 //! that you will be charged for. It is recommended you configure a [lifecycle rule] to
