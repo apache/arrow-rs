@@ -102,7 +102,6 @@ impl ObjectStore for MicrosoftAzure {
         }))
     }
 
-
     async fn get_opts(&self, location: &Path, options: GetOptions) -> Result<GetResult> {
         self.client.get_opts(location, options).await
     }

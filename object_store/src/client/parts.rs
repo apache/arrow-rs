@@ -15,8 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use parking_lot::Mutex;
 use crate::multipart::PartId;
+use parking_lot::Mutex;
 
 /// An interior mutable collection of upload parts and their corresponding part index
 #[derive(Debug, Default)]

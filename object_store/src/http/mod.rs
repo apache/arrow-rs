@@ -44,8 +44,8 @@ use crate::client::header::get_etag;
 use crate::http::client::Client;
 use crate::path::Path;
 use crate::{
-    ClientConfigKey, ClientOptions, GetOptions, GetResult, ListResult, ObjectMeta,
-    ObjectStore, PutMode, PutOptions, PutResult, Result, RetryConfig, Upload,
+    ClientConfigKey, ClientOptions, GetOptions, GetResult, ListResult, ObjectMeta, ObjectStore,
+    PutMode, PutOptions, PutResult, Result, RetryConfig, Upload,
 };
 
 mod client;

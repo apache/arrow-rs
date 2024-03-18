@@ -27,10 +27,13 @@ use futures::{stream::BoxStream, StreamExt};
 use parking_lot::RwLock;
 use snafu::{OptionExt, ResultExt, Snafu};
 
-use crate::{GetRange, GetResult, GetResultPayload, ListResult, MultipartId, ObjectMeta, ObjectStore, path::Path, PutMode, PutOptions, PutResult, Result, UpdateVersion, Upload, UploadPart};
-use crate::GetOptions;
 use crate::multipart::{MultipartStore, PartId};
 use crate::util::InvalidGetRange;
+use crate::GetOptions;
+use crate::{
+    path::Path, GetRange, GetResult, GetResultPayload, ListResult, MultipartId, ObjectMeta,
+    ObjectStore, PutMode, PutOptions, PutResult, Result, UpdateVersion, Upload, UploadPart,
+};
 
 /// A specialized `Error` for in-memory object store-related errors
 #[derive(Debug, Snafu)]

@@ -24,8 +24,8 @@
 use async_trait::async_trait;
 use bytes::Bytes;
 
-use crate::{MultipartId, PutResult, Result};
 use crate::path::Path;
+use crate::{MultipartId, PutResult, Result};
 
 /// Represents a part of a file that has been successfully uploaded in a multipart upload process.
 #[derive(Debug, Clone)]

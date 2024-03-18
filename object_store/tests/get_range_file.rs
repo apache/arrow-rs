@@ -45,7 +45,6 @@ impl ObjectStore for MyStore {
         todo!()
     }
 
-
     async fn get_opts(&self, location: &Path, options: GetOptions) -> Result<GetResult> {
         self.0.get_opts(location, options).await
     }
