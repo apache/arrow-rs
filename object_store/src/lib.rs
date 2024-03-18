@@ -269,12 +269,11 @@
 //!
 //! #  Multipart Upload
 //!
-//! Use the [`ObjectStore::put_multipart`] method to atomically write a large amount of data,
-//! with implementations automatically handling parallel, chunked upload where appropriate.
+//! Use the [`ObjectStore::put_multipart`] method to atomically write a large amount of data
 //!
 //! ```
 //! # use object_store::local::LocalFileSystem;
-//! # use object_store::ObjectStore;
+//! # use object_store::{ObjectStore, WriteMultipart};
 //! # use std::sync::Arc;
 //! # use bytes::Bytes;
 //! # use tokio::io::AsyncWriteExt;
@@ -286,12 +285,10 @@
 //! #
 //! let object_store: Arc<dyn ObjectStore> = get_object_store();
 //! let path = Path::from("data/large_file");
-//! let (_id, mut writer) =  object_store.put_multipart(&path).await.unwrap();
-//!
-//! let bytes = Bytes::from_static(b"hello");
-//! writer.write_all(&bytes).await.unwrap();
-//! writer.flush().await.unwrap();
-//! writer.shutdown().await.unwrap();
+//! let upload =  object_store.put_multipart(&path).await.unwrap();
+//! let mut write = WriteMultipart::new(upload);
+//! write.write(b"hello");
+//! write.finish().await.unwrap();
 //! # }
 //! ```
 //!

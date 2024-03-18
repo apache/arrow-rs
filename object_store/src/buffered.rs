@@ -18,7 +18,7 @@
 //! Utilities for performing tokio-style buffered IO
 
 use crate::path::Path;
-use crate::{WriteMultipart, ObjectMeta, ObjectStore};
+use crate::{ObjectMeta, ObjectStore, WriteMultipart};
 use bytes::Bytes;
 use futures::future::{BoxFuture, FutureExt};
 use futures::ready;

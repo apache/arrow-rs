@@ -38,8 +38,6 @@ pub type UploadPart = BoxFuture<'static, Result<()>>;
 pub trait MultipartUpload: Send + std::fmt::Debug {
     /// Upload the next part
     ///
-    /// Returns a stream
-    ///
     /// Most stores require that all parts excluding the last are at least 5 MiB, and some
     /// further require that all parts excluding the last be the same size, e.g. [R2].
     /// Clients wanting to maximise compatibility should therefore perform writes in
@@ -55,13 +53,10 @@ pub trait MultipartUpload: Send + std::fmt::Debug {
     /// # async fn test() {
     /// #
     /// let mut upload: Box<&dyn MultipartUpload> = todo!();
-    /// let mut p1 = upload.put_part(vec![0; 10 * 1024 * 1024].into());
-    /// let mut p2 = upload.put_part(vec![1; 10 * 1024 * 1024].into());
-    ///
-    /// let (u1, u2) = futures::future::join(p1.next(), p2.next()).await;
-    /// u1.unwrap().unwrap();
-    /// u2.unwrap().unwrap();
-    /// let result = upload.complete().await.unwrap();
+    /// let p1 = upload.put_part(vec![0; 10 * 1024 * 1024].into());
+    /// let p2 = upload.put_part(vec![1; 10 * 1024 * 1024].into());
+    /// futures::future::try_join(p1, p2).await.unwrap();
+    /// upload.complete().await.unwrap();
     /// # }
     /// ```
     ///
@@ -72,23 +67,24 @@ pub trait MultipartUpload: Send + std::fmt::Debug {
     ///
     /// It is implementation defined behaviour if this method is called before polling
     /// all [`UploadPart`] returned by [`MultipartUpload::put_part`] to completion. Additionally,
-    /// it is implementation defined behaviour to call [`MultipartUpload::complete`] on an already
-    /// completed or aborted [`MultipartUpload`].
+    /// it is implementation defined behaviour to call [`MultipartUpload::complete`]
+    /// on an already completed or aborted [`MultipartUpload`].
     async fn complete(&mut self) -> Result<PutResult>;
 
     /// Abort the multipart upload
     ///
-    /// If an [`MultipartUpload`] is dropped without [`MultipartUpload::complete`] being called,
+    /// If a [`MultipartUpload`] is dropped without calling [`MultipartUpload::complete`],
     /// some implementations will automatically reap any uploaded parts. However,
     /// this is not always possible, e.g. for S3 and GCS. [`MultipartUpload::abort`] can
     /// therefore be invoked to perform this cleanup.
     ///
-    /// It is recommended that where possible users configure appropriate lifecycle
-    /// rules to automatically reap unused parts older than some threshold, as this
-    /// will more reliably handle different failure modes.
+    /// It is recommended that where possible users configure lifecycle rules
+    /// to automatically reap unused parts older than some threshold, as this
+    /// will more reliably handle different failure modes. See [crate::aws] and
+    /// [crate::gcp] for more information.
     ///
-    /// It is implementation defined behaviour to call [`MultipartUpload::abort`] on an already
-    /// completed or aborted [`MultipartUpload`]
+    /// It is implementation defined behaviour to call [`MultipartUpload::abort`]
+    /// on an already completed or aborted [`MultipartUpload`]
     async fn abort(&mut self) -> Result<()>;
 }
 

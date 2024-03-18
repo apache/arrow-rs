@@ -20,11 +20,11 @@
 //! ## Multipart uploads
 //!
 //! [Multipart uploads](https://cloud.google.com/storage/docs/multipart-uploads)
-//! can be initiated with the [ObjectStore::put_multipart] method. If neither [`MultipartUpload::complete`]
-//! nor [`MultipartUpload::abort`] is invoked, you may have parts uploaded to GCS but not used,
-//! that you will be charged for. It is recommended you configure a [lifecycle rule] to
-//! abort incomplete multipart uploads after a certain period of time to avoid being
-//! charged for storing partial uploads
+//! can be initiated with the [ObjectStore::put_multipart] method. If neither
+//! [`MultipartUpload::complete`] nor [`MultipartUpload::abort`] is invoked, you may
+//! have parts uploaded to GCS but not used, that you will be charged for. It is recommended
+//! you configure a [lifecycle rule] to abort incomplete multipart uploads after a certain
+//! period of time to avoid being charged for storing partial uploads.
 //!
 //! ## Using HTTP/2
 //!
