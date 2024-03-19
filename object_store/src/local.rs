@@ -16,33 +16,31 @@
 // under the License.
 
 //! An object store implementation for a local filesystem
+use std::fs::{metadata, symlink_metadata, File, Metadata, OpenOptions};
+use std::io::{ErrorKind, Read, Seek, SeekFrom, Write};
+use std::ops::Range;
+use std::sync::Arc;
+use std::time::SystemTime;
+use std::{collections::BTreeSet, convert::TryFrom, io};
+use std::{collections::VecDeque, path::PathBuf};
+
+use async_trait::async_trait;
+use bytes::Bytes;
+use chrono::{DateTime, Utc};
+use futures::{stream::BoxStream, StreamExt};
+use futures::{FutureExt, TryStreamExt};
+use parking_lot::Mutex;
+use snafu::{ensure, OptionExt, ResultExt, Snafu};
+use url::Url;
+use walkdir::{DirEntry, WalkDir};
+
 use crate::{
     maybe_spawn_blocking,
     path::{absolute_path_to_url, Path},
     util::InvalidGetRange,
-    GetOptions, GetResult, GetResultPayload, ListResult, MultipartId, ObjectMeta, ObjectStore,
-    PutMode, PutOptions, PutResult, Result,
+    GetOptions, GetResult, GetResultPayload, ListResult, MultipartUpload, ObjectMeta, ObjectStore,
+    PutMode, PutOptions, PutResult, Result, UploadPart,
 };
-use async_trait::async_trait;
-use bytes::Bytes;
-use chrono::{DateTime, Utc};
-use futures::future::BoxFuture;
-use futures::ready;
-use futures::{stream::BoxStream, StreamExt};
-use futures::{FutureExt, TryStreamExt};
-use snafu::{ensure, ResultExt, Snafu};
-use std::fs::{metadata, symlink_metadata, File, Metadata, OpenOptions};
-use std::io::{ErrorKind, Read, Seek, SeekFrom, Write};
-use std::ops::Range;
-use std::pin::Pin;
-use std::sync::Arc;
-use std::task::Poll;
-use std::time::SystemTime;
-use std::{collections::BTreeSet, convert::TryFrom, io};
-use std::{collections::VecDeque, path::PathBuf};
-use tokio::io::AsyncWrite;
-use url::Url;
-use walkdir::{DirEntry, WalkDir};
 
 /// A specialized `Error` for filesystem object store-related errors
 #[derive(Debug, Snafu)]
@@ -155,6 +153,9 @@ pub(crate) enum Error {
     InvalidPath {
         path: String,
     },
+
+    #[snafu(display("Upload aborted"))]
+    Aborted,
 }
 
 impl From<Error> for super::Error {
@@ -342,8 +343,7 @@ impl ObjectStore for LocalFileSystem {
 
         let path = self.path_to_filesystem(location)?;
         maybe_spawn_blocking(move || {
-            let (mut file, suffix) = new_staged_upload(&path)?;
-            let staging_path = staged_upload_path(&path, &suffix);
+            let (mut file, staging_path) = new_staged_upload(&path)?;
             let mut e_tag = None;
 
             let err = match file.write_all(&bytes) {
@@ -395,31 +395,10 @@ impl ObjectStore for LocalFileSystem {
         .await
     }
 
-    async fn put_multipart(
-        &self,
-        location: &Path,
-    ) -> Result<(MultipartId, Box<dyn AsyncWrite + Unpin + Send>)> {
+    async fn put_multipart(&self, location: &Path) -> Result<Box<dyn MultipartUpload>> {
         let dest = self.path_to_filesystem(location)?;
-
-        let (file, suffix) = new_staged_upload(&dest)?;
-        Ok((
-            suffix.clone(),
-            Box::new(LocalUpload::new(dest, suffix, Arc::new(file))),
-        ))
-    }
-
-    async fn abort_multipart(&self, location: &Path, multipart_id: &MultipartId) -> Result<()> {
-        let dest = self.path_to_filesystem(location)?;
-        let path: PathBuf = staged_upload_path(&dest, multipart_id);
-
-        maybe_spawn_blocking(move || match std::fs::remove_file(&path) {
-            Ok(_) => Ok(()),
-            Err(source) => match source.kind() {
-                ErrorKind::NotFound => Ok(()), // Already deleted
-                _ => Err(Error::UnableToDeleteFile { path, source }.into()),
-            },
-        })
-        .await
+        let (file, src) = new_staged_upload(&dest)?;
+        Ok(Box::new(LocalUpload::new(src, dest, file)))
     }
 
     async fn get_opts(&self, location: &Path, options: GetOptions) -> Result<GetResult> {
@@ -677,17 +656,17 @@ fn create_parent_dirs(path: &std::path::Path, source: io::Error) -> Result<()> {
     Ok(())
 }
 
-/// Generates a unique file path `{base}#{suffix}`, returning the opened `File` and `suffix`
+/// Generates a unique file path `{base}#{suffix}`, returning the opened `File` and `path`
 ///
 /// Creates any directories if necessary
-fn new_staged_upload(base: &std::path::Path) -> Result<(File, String)> {
+fn new_staged_upload(base: &std::path::Path) -> Result<(File, PathBuf)> {
     let mut multipart_id = 1;
     loop {
         let suffix = multipart_id.to_string();
         let path = staged_upload_path(base, &suffix);
         let mut options = OpenOptions::new();
         match options.read(true).write(true).create_new(true).open(&path) {
-            Ok(f) => return Ok((f, suffix)),
+            Ok(f) => return Ok((f, path)),
             Err(source) => match source.kind() {
                 ErrorKind::AlreadyExists => multipart_id += 1,
                 ErrorKind::NotFound => create_parent_dirs(&path, source)?,
@@ -705,194 +684,91 @@ fn staged_upload_path(dest: &std::path::Path, suffix: &str) -> PathBuf {
     staging_path.into()
 }
 
-enum LocalUploadState {
-    /// Upload is ready to send new data
-    Idle(Arc<File>),
-    /// In the middle of a write
-    Writing(Arc<File>, BoxFuture<'static, Result<usize, io::Error>>),
-    /// In the middle of syncing data and closing file.
-    ///
-    /// Future will contain last reference to file, so it will call drop on completion.
-    ShuttingDown(BoxFuture<'static, Result<(), io::Error>>),
-    /// File is being moved from it's temporary location to the final location
-    Committing(BoxFuture<'static, Result<(), io::Error>>),
-    /// Upload is complete
-    Complete,
+#[derive(Debug)]
+struct LocalUpload {
+    /// The upload state
+    state: Arc<UploadState>,
+    /// The location of the temporary file
+    src: Option<PathBuf>,
+    /// The next offset to write into the file
+    offset: u64,
 }
 
-struct LocalUpload {
-    inner_state: LocalUploadState,
+#[derive(Debug)]
+struct UploadState {
     dest: PathBuf,
-    multipart_id: MultipartId,
+    file: Mutex<Option<File>>,
 }
 
 impl LocalUpload {
-    pub fn new(dest: PathBuf, multipart_id: MultipartId, file: Arc<File>) -> Self {
+    pub fn new(src: PathBuf, dest: PathBuf, file: File) -> Self {
         Self {
-            inner_state: LocalUploadState::Idle(file),
-            dest,
-            multipart_id,
+            state: Arc::new(UploadState {
+                dest,
+                file: Mutex::new(Some(file)),
+            }),
+            src: Some(src),
+            offset: 0,
         }
     }
 }
 
-impl AsyncWrite for LocalUpload {
-    fn poll_write(
-        mut self: Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-        buf: &[u8],
-    ) -> Poll<Result<usize, io::Error>> {
-        let invalid_state = |condition: &str| -> Poll<Result<usize, io::Error>> {
-            Poll::Ready(Err(io::Error::new(
-                ErrorKind::InvalidInput,
-                format!("Tried to write to file {condition}."),
-            )))
-        };
+#[async_trait]
+impl MultipartUpload for LocalUpload {
+    fn put_part(&mut self, data: Bytes) -> UploadPart {
+        let offset = self.offset;
+        self.offset += data.len() as u64;
 
-        if let Ok(runtime) = tokio::runtime::Handle::try_current() {
-            let mut data: Vec<u8> = buf.to_vec();
-            let data_len = data.len();
-
-            loop {
-                match &mut self.inner_state {
-                    LocalUploadState::Idle(file) => {
-                        let file = Arc::clone(file);
-                        let file2 = Arc::clone(&file);
-                        let data: Vec<u8> = std::mem::take(&mut data);
-                        self.inner_state = LocalUploadState::Writing(
-                            file,
-                            Box::pin(
-                                runtime
-                                    .spawn_blocking(move || (&*file2).write_all(&data))
-                                    .map(move |res| match res {
-                                        Err(err) => Err(io::Error::new(ErrorKind::Other, err)),
-                                        Ok(res) => res.map(move |_| data_len),
-                                    }),
-                            ),
-                        );
-                    }
-                    LocalUploadState::Writing(file, inner_write) => {
-                        let res = ready!(inner_write.poll_unpin(cx));
-                        self.inner_state = LocalUploadState::Idle(Arc::clone(file));
-                        return Poll::Ready(res);
-                    }
-                    LocalUploadState::ShuttingDown(_) => {
-                        return invalid_state("when writer is shutting down");
-                    }
-                    LocalUploadState::Committing(_) => {
-                        return invalid_state("when writer is committing data");
-                    }
-                    LocalUploadState::Complete => {
-                        return invalid_state("when writer is complete");
-                    }
-                }
-            }
-        } else if let LocalUploadState::Idle(file) = &self.inner_state {
-            let file = Arc::clone(file);
-            (&*file).write_all(buf)?;
-            Poll::Ready(Ok(buf.len()))
-        } else {
-            // If we are running on this thread, then only possible states are Idle and Complete.
-            invalid_state("when writer is already complete.")
-        }
+        let s = Arc::clone(&self.state);
+        maybe_spawn_blocking(move || {
+            let mut f = s.file.lock();
+            let file = f.as_mut().context(AbortedSnafu)?;
+            file.seek(SeekFrom::Start(offset))
+                .context(SeekSnafu { path: &s.dest })?;
+            file.write_all(&data).context(UnableToCopyDataToFileSnafu)?;
+            Ok(())
+        })
+        .boxed()
     }
 
-    fn poll_flush(
-        self: Pin<&mut Self>,
-        _cx: &mut std::task::Context<'_>,
-    ) -> Poll<Result<(), io::Error>> {
-        Poll::Ready(Ok(()))
+    async fn complete(&mut self) -> Result<PutResult> {
+        let src = self.src.take().context(AbortedSnafu)?;
+        let s = Arc::clone(&self.state);
+        maybe_spawn_blocking(move || {
+            // Ensure no inflight writes
+            let f = s.file.lock().take().context(AbortedSnafu)?;
+            std::fs::rename(&src, &s.dest).context(UnableToRenameFileSnafu)?;
+            let metadata = f.metadata().map_err(|e| Error::Metadata {
+                source: e.into(),
+                path: src.to_string_lossy().to_string(),
+            })?;
+
+            Ok(PutResult {
+                e_tag: Some(get_etag(&metadata)),
+                version: None,
+            })
+        })
+        .await
     }
 
-    fn poll_shutdown(
-        mut self: Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> Poll<Result<(), io::Error>> {
-        if let Ok(runtime) = tokio::runtime::Handle::try_current() {
-            loop {
-                match &mut self.inner_state {
-                    LocalUploadState::Idle(file) => {
-                        // We are moving file into the future, and it will be dropped on it's completion, closing the file.
-                        let file = Arc::clone(file);
-                        self.inner_state = LocalUploadState::ShuttingDown(Box::pin(
-                            runtime
-                                .spawn_blocking(move || (*file).sync_all())
-                                .map(move |res| match res {
-                                    Err(err) => Err(io::Error::new(io::ErrorKind::Other, err)),
-                                    Ok(res) => res,
-                                }),
-                        ));
-                    }
-                    LocalUploadState::ShuttingDown(fut) => match fut.poll_unpin(cx) {
-                        Poll::Ready(res) => {
-                            res?;
-                            let staging_path = staged_upload_path(&self.dest, &self.multipart_id);
-                            let dest = self.dest.clone();
-                            self.inner_state = LocalUploadState::Committing(Box::pin(
-                                runtime
-                                    .spawn_blocking(move || std::fs::rename(&staging_path, &dest))
-                                    .map(move |res| match res {
-                                        Err(err) => Err(io::Error::new(io::ErrorKind::Other, err)),
-                                        Ok(res) => res,
-                                    }),
-                            ));
-                        }
-                        Poll::Pending => {
-                            return Poll::Pending;
-                        }
-                    },
-                    LocalUploadState::Writing(_, _) => {
-                        return Poll::Ready(Err(io::Error::new(
-                            io::ErrorKind::InvalidInput,
-                            "Tried to commit a file where a write is in progress.",
-                        )));
-                    }
-                    LocalUploadState::Committing(fut) => {
-                        let res = ready!(fut.poll_unpin(cx));
-                        self.inner_state = LocalUploadState::Complete;
-                        return Poll::Ready(res);
-                    }
-                    LocalUploadState::Complete => {
-                        return Poll::Ready(Err(io::Error::new(
-                            io::ErrorKind::Other,
-                            "Already complete",
-                        )))
-                    }
-                }
-            }
-        } else {
-            let staging_path = staged_upload_path(&self.dest, &self.multipart_id);
-            match &mut self.inner_state {
-                LocalUploadState::Idle(file) => {
-                    let file = Arc::clone(file);
-                    self.inner_state = LocalUploadState::Complete;
-                    file.sync_all()?;
-                    drop(file);
-                    std::fs::rename(staging_path, &self.dest)?;
-                    Poll::Ready(Ok(()))
-                }
-                _ => {
-                    // If we are running on this thread, then only possible states are Idle and Complete.
-                    Poll::Ready(Err(io::Error::new(ErrorKind::Other, "Already complete")))
-                }
-            }
-        }
+    async fn abort(&mut self) -> Result<()> {
+        let src = self.src.take().context(AbortedSnafu)?;
+        maybe_spawn_blocking(move || {
+            std::fs::remove_file(&src).context(UnableToDeleteFileSnafu { path: &src })?;
+            Ok(())
+        })
+        .await
     }
 }
 
 impl Drop for LocalUpload {
     fn drop(&mut self) {
-        match self.inner_state {
-            LocalUploadState::Complete => (),
-            _ => {
-                self.inner_state = LocalUploadState::Complete;
-                let path = staged_upload_path(&self.dest, &self.multipart_id);
-                // Try to cleanup intermediate file ignoring any error
-                match tokio::runtime::Handle::try_current() {
-                    Ok(r) => drop(r.spawn_blocking(move || std::fs::remove_file(path))),
-                    Err(_) => drop(std::fs::remove_file(path)),
-                };
-            }
+        if let Some(src) = self.src.take() {
+            // Try to clean up intermediate file ignoring any error
+            match tokio::runtime::Handle::try_current() {
+                Ok(r) => drop(r.spawn_blocking(move || std::fs::remove_file(src))),
+                Err(_) => drop(std::fs::remove_file(src)),
+            };
         }
     }
 }
@@ -1095,12 +971,13 @@ fn convert_walkdir_result(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::test_util::flatten_list_stream;
-    use crate::tests::*;
     use futures::TryStreamExt;
     use tempfile::{NamedTempFile, TempDir};
-    use tokio::io::AsyncWriteExt;
+
+    use crate::test_util::flatten_list_stream;
+    use crate::tests::*;
+
+    use super::*;
 
     #[tokio::test]
     async fn file_test() {
@@ -1125,7 +1002,18 @@ mod tests {
             put_get_delete_list(&integration).await;
             list_uses_directories_correctly(&integration).await;
             list_with_delimiter(&integration).await;
-            stream_get(&integration).await;
+
+            // Can't use stream_get test as WriteMultipart uses a tokio JoinSet
+            let p = Path::from("manual_upload");
+            let mut upload = integration.put_multipart(&p).await.unwrap();
+            upload.put_part(Bytes::from_static(b"123")).await.unwrap();
+            upload.put_part(Bytes::from_static(b"45678")).await.unwrap();
+            let r = upload.complete().await.unwrap();
+
+            let get = integration.get(&p).await.unwrap();
+            assert_eq!(get.meta.e_tag.as_ref().unwrap(), r.e_tag.as_ref().unwrap());
+            let actual = get.bytes().await.unwrap();
+            assert_eq!(actual.as_ref(), b"12345678");
         });
     }
 
@@ -1422,12 +1310,11 @@ mod tests {
         let location = Path::from("some_file");
 
         let data = Bytes::from("arbitrary data");
-        let (multipart_id, mut writer) = integration.put_multipart(&location).await.unwrap();
-        writer.write_all(&data).await.unwrap();
+        let mut u1 = integration.put_multipart(&location).await.unwrap();
+        u1.put_part(data.clone()).await.unwrap();
 
-        let (multipart_id_2, mut writer_2) = integration.put_multipart(&location).await.unwrap();
-        assert_ne!(multipart_id, multipart_id_2);
-        writer_2.write_all(&data).await.unwrap();
+        let mut u2 = integration.put_multipart(&location).await.unwrap();
+        u2.put_part(data).await.unwrap();
 
         let list = flatten_list_stream(&integration, None).await.unwrap();
         assert_eq!(list.len(), 0);
@@ -1520,11 +1407,13 @@ mod tests {
 #[cfg(not(target_arch = "wasm32"))]
 #[cfg(test)]
 mod not_wasm_tests {
+    use std::time::Duration;
+
+    use bytes::Bytes;
+    use tempfile::TempDir;
+
     use crate::local::LocalFileSystem;
     use crate::{ObjectStore, Path};
-    use std::time::Duration;
-    use tempfile::TempDir;
-    use tokio::io::AsyncWriteExt;
 
     #[tokio::test]
     async fn test_cleanup_intermediate_files() {
@@ -1532,12 +1421,13 @@ mod not_wasm_tests {
         let integration = LocalFileSystem::new_with_prefix(root.path()).unwrap();
 
         let location = Path::from("some_file");
-        let (_, mut writer) = integration.put_multipart(&location).await.unwrap();
-        writer.write_all(b"hello").await.unwrap();
+        let data = Bytes::from_static(b"hello");
+        let mut upload = integration.put_multipart(&location).await.unwrap();
+        upload.put_part(data).await.unwrap();
 
         let file_count = std::fs::read_dir(root.path()).unwrap().count();
         assert_eq!(file_count, 1);
-        drop(writer);
+        drop(upload);
 
         tokio::time::sleep(Duration::from_millis(1)).await;
 
@@ -1549,12 +1439,14 @@ mod not_wasm_tests {
 #[cfg(target_family = "unix")]
 #[cfg(test)]
 mod unix_test {
-    use crate::local::LocalFileSystem;
-    use crate::{ObjectStore, Path};
+    use std::fs::OpenOptions;
+
     use nix::sys::stat;
     use nix::unistd;
-    use std::fs::OpenOptions;
     use tempfile::TempDir;
+
+    use crate::local::LocalFileSystem;
+    use crate::{ObjectStore, Path};
 
     #[tokio::test]
     async fn test_fifo() {

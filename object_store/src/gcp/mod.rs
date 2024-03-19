@@ -17,18 +17,14 @@
 
 //! An object store implementation for Google Cloud Storage
 //!
-//! ## Multi-part uploads
+//! ## Multipart uploads
 //!
-//! [Multi-part uploads](https://cloud.google.com/storage/docs/multipart-uploads)
-//! can be initiated with the [ObjectStore::put_multipart] method.
-//! Data passed to the writer is automatically buffered to meet the minimum size
-//! requirements for a part. Multiple parts are uploaded concurrently.
-//!
-//! If the writer fails for any reason, you may have parts uploaded to GCS but not
-//! used that you may be charged for. Use the [ObjectStore::abort_multipart] method
-//! to abort the upload and drop those unneeded parts. In addition, you may wish to
-//! consider implementing automatic clean up of unused parts that are older than one
-//! week.
+//! [Multipart uploads](https://cloud.google.com/storage/docs/multipart-uploads)
+//! can be initiated with the [ObjectStore::put_multipart] method. If neither
+//! [`MultipartUpload::complete`] nor [`MultipartUpload::abort`] is invoked, you may
+//! have parts uploaded to GCS but not used, that you will be charged for. It is recommended
+//! you configure a [lifecycle rule] to abort incomplete multipart uploads after a certain
+//! period of time to avoid being charged for storing partial uploads.
 //!
 //! ## Using HTTP/2
 //!
@@ -36,24 +32,24 @@
 //! because it allows much higher throughput in our benchmarks (see
 //! [#5194](https://github.com/apache/arrow-rs/issues/5194)). HTTP/2 can be
 //! enabled by setting [crate::ClientConfigKey::Http1Only] to false.
+//!
+//! [lifecycle rule]: https://cloud.google.com/storage/docs/lifecycle#abort-mpu
 use std::sync::Arc;
 
 use crate::client::CredentialProvider;
 use crate::{
-    multipart::{PartId, PutPart, WriteMultiPart},
-    path::Path,
-    GetOptions, GetResult, ListResult, MultipartId, ObjectMeta, ObjectStore, PutOptions, PutResult,
-    Result,
+    multipart::PartId, path::Path, GetOptions, GetResult, ListResult, MultipartId, MultipartUpload,
+    ObjectMeta, ObjectStore, PutOptions, PutResult, Result, UploadPart,
 };
 use async_trait::async_trait;
 use bytes::Bytes;
 use client::GoogleCloudStorageClient;
 use futures::stream::BoxStream;
-use tokio::io::AsyncWrite;
 
 use crate::client::get::GetClientExt;
 use crate::client::list::ListClientExt;
-use crate::multipart::MultiPartStore;
+use crate::client::parts::Parts;
+use crate::multipart::MultipartStore;
 pub use builder::{GoogleCloudStorageBuilder, GoogleConfigKey};
 pub use credential::GcpCredential;
 
@@ -89,27 +85,50 @@ impl GoogleCloudStorage {
     }
 }
 
+#[derive(Debug)]
 struct GCSMultipartUpload {
+    state: Arc<UploadState>,
+    part_idx: usize,
+}
+
+#[derive(Debug)]
+struct UploadState {
     client: Arc<GoogleCloudStorageClient>,
     path: Path,
     multipart_id: MultipartId,
+    parts: Parts,
 }
 
 #[async_trait]
-impl PutPart for GCSMultipartUpload {
-    /// Upload an object part <https://cloud.google.com/storage/docs/xml-api/put-object-multipart>
-    async fn put_part(&self, buf: Vec<u8>, part_idx: usize) -> Result<PartId> {
-        self.client
-            .put_part(&self.path, &self.multipart_id, part_idx, buf.into())
+impl MultipartUpload for GCSMultipartUpload {
+    fn put_part(&mut self, data: Bytes) -> UploadPart {
+        let idx = self.part_idx;
+        self.part_idx += 1;
+        let state = Arc::clone(&self.state);
+        Box::pin(async move {
+            let part = state
+                .client
+                .put_part(&state.path, &state.multipart_id, idx, data)
+                .await?;
+            state.parts.put(idx, part);
+            Ok(())
+        })
+    }
+
+    async fn complete(&mut self) -> Result<PutResult> {
+        let parts = self.state.parts.finish(self.part_idx)?;
+
+        self.state
+            .client
+            .multipart_complete(&self.state.path, &self.state.multipart_id, parts)
             .await
     }
 
-    /// Complete a multipart upload <https://cloud.google.com/storage/docs/xml-api/post-object-complete>
-    async fn complete(&self, completed_parts: Vec<PartId>) -> Result<()> {
-        self.client
-            .multipart_complete(&self.path, &self.multipart_id, completed_parts)
-            .await?;
-        Ok(())
+    async fn abort(&mut self) -> Result<()> {
+        self.state
+            .client
+            .multipart_cleanup(&self.state.path, &self.state.multipart_id)
+            .await
     }
 }
 
@@ -119,27 +138,18 @@ impl ObjectStore for GoogleCloudStorage {
         self.client.put(location, bytes, opts).await
     }
 
-    async fn put_multipart(
-        &self,
-        location: &Path,
-    ) -> Result<(MultipartId, Box<dyn AsyncWrite + Unpin + Send>)> {
+    async fn put_multipart(&self, location: &Path) -> Result<Box<dyn MultipartUpload>> {
         let upload_id = self.client.multipart_initiate(location).await?;
 
-        let inner = GCSMultipartUpload {
-            client: Arc::clone(&self.client),
-            path: location.clone(),
-            multipart_id: upload_id.clone(),
-        };
-
-        Ok((upload_id, Box::new(WriteMultiPart::new(inner, 8))))
-    }
-
-    async fn abort_multipart(&self, location: &Path, multipart_id: &MultipartId) -> Result<()> {
-        self.client
-            .multipart_cleanup(location, multipart_id)
-            .await?;
-
-        Ok(())
+        Ok(Box::new(GCSMultipartUpload {
+            part_idx: 0,
+            state: Arc::new(UploadState {
+                client: Arc::clone(&self.client),
+                path: location.clone(),
+                multipart_id: upload_id.clone(),
+                parts: Default::default(),
+            }),
+        }))
     }
 
     async fn get_opts(&self, location: &Path, options: GetOptions) -> Result<GetResult> {
@@ -176,7 +186,7 @@ impl ObjectStore for GoogleCloudStorage {
 }
 
 #[async_trait]
-impl MultiPartStore for GoogleCloudStorage {
+impl MultipartStore for GoogleCloudStorage {
     async fn create_multipart(&self, path: &Path) -> Result<MultipartId> {
         self.client.multipart_initiate(path).await
     }

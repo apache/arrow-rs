@@ -37,7 +37,6 @@ use futures::stream::BoxStream;
 use futures::{StreamExt, TryStreamExt};
 use itertools::Itertools;
 use snafu::{OptionExt, ResultExt, Snafu};
-use tokio::io::AsyncWrite;
 use url::Url;
 
 use crate::client::get::GetClientExt;
@@ -45,7 +44,7 @@ use crate::client::header::get_etag;
 use crate::http::client::Client;
 use crate::path::Path;
 use crate::{
-    ClientConfigKey, ClientOptions, GetOptions, GetResult, ListResult, MultipartId, ObjectMeta,
+    ClientConfigKey, ClientOptions, GetOptions, GetResult, ListResult, MultipartUpload, ObjectMeta,
     ObjectStore, PutMode, PutOptions, PutResult, Result, RetryConfig,
 };
 
@@ -115,15 +114,8 @@ impl ObjectStore for HttpStore {
         })
     }
 
-    async fn put_multipart(
-        &self,
-        _location: &Path,
-    ) -> Result<(MultipartId, Box<dyn AsyncWrite + Unpin + Send>)> {
-        Err(super::Error::NotImplemented)
-    }
-
-    async fn abort_multipart(&self, _location: &Path, _multipart_id: &MultipartId) -> Result<()> {
-        Err(super::Error::NotImplemented)
+    async fn put_multipart(&self, _location: &Path) -> Result<Box<dyn MultipartUpload>> {
+        Err(crate::Error::NotImplemented)
     }
 
     async fn get_opts(&self, location: &Path, options: GetOptions) -> Result<GetResult> {

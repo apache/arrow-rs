@@ -269,12 +269,11 @@
 //!
 //! #  Multipart Upload
 //!
-//! Use the [`ObjectStore::put_multipart`] method to atomically write a large amount of data,
-//! with implementations automatically handling parallel, chunked upload where appropriate.
+//! Use the [`ObjectStore::put_multipart`] method to atomically write a large amount of data
 //!
 //! ```
 //! # use object_store::local::LocalFileSystem;
-//! # use object_store::ObjectStore;
+//! # use object_store::{ObjectStore, WriteMultipart};
 //! # use std::sync::Arc;
 //! # use bytes::Bytes;
 //! # use tokio::io::AsyncWriteExt;
@@ -286,12 +285,10 @@
 //! #
 //! let object_store: Arc<dyn ObjectStore> = get_object_store();
 //! let path = Path::from("data/large_file");
-//! let (_id, mut writer) =  object_store.put_multipart(&path).await.unwrap();
-//!
-//! let bytes = Bytes::from_static(b"hello");
-//! writer.write_all(&bytes).await.unwrap();
-//! writer.flush().await.unwrap();
-//! writer.shutdown().await.unwrap();
+//! let upload =  object_store.put_multipart(&path).await.unwrap();
+//! let mut write = WriteMultipart::new(upload);
+//! write.write(b"hello");
+//! write.finish().await.unwrap();
 //! # }
 //! ```
 //!
@@ -501,9 +498,11 @@ pub use tags::TagSet;
 
 pub mod multipart;
 mod parse;
+mod upload;
 mod util;
 
 pub use parse::{parse_url, parse_url_opts};
+pub use upload::*;
 pub use util::GetRange;
 
 use crate::path::Path;
@@ -520,12 +519,11 @@ use std::fmt::{Debug, Formatter};
 use std::io::{Read, Seek, SeekFrom};
 use std::ops::Range;
 use std::sync::Arc;
-use tokio::io::AsyncWrite;
 
 /// An alias for a dynamically dispatched object store implementation.
 pub type DynObjectStore = dyn ObjectStore;
 
-/// Id type for multi-part uploads.
+/// Id type for multipart uploads.
 pub type MultipartId = String;
 
 /// Universal API to multiple object store services.
@@ -543,48 +541,11 @@ pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
     /// Save the provided bytes to the specified location with the given options
     async fn put_opts(&self, location: &Path, bytes: Bytes, opts: PutOptions) -> Result<PutResult>;
 
-    /// Get a multi-part upload that allows writing data in chunks.
+    /// Perform a multipart upload
     ///
-    /// Most cloud-based uploads will buffer and upload parts in parallel.
-    ///
-    /// To complete the upload, [AsyncWrite::poll_shutdown] must be called
-    /// to completion. This operation is guaranteed to be atomic, it will either
-    /// make all the written data available at `location`, or fail. No clients
-    /// should be able to observe a partially written object.
-    ///
-    /// For some object stores (S3, GCS, and local in particular), if the
-    /// writer fails or panics, you must call [ObjectStore::abort_multipart]
-    /// to clean up partially written data.
-    ///
-    /// <div class="warning">
-    /// It is recommended applications wait for any in-flight requests to complete by calling `flush`, if
-    /// there may be a significant gap in time (> ~30s) before the next write.
-    /// These gaps can include times where the function returns control to the
-    /// caller while keeping the writer open. If `flush` is not called, futures
-    /// for in-flight requests may be left unpolled long enough for the requests
-    /// to time out, causing the write to fail.
-    /// </div>
-    ///
-    /// For applications requiring fine-grained control of multipart uploads
-    /// see [`MultiPartStore`], although note that this interface cannot be
-    /// supported by all [`ObjectStore`] backends.
-    ///
-    /// For applications looking to implement this interface for a custom
-    /// multipart API, see [`WriteMultiPart`] which handles the complexities
-    /// of performing parallel uploads of fixed size parts.
-    ///
-    /// [`WriteMultiPart`]: multipart::WriteMultiPart
-    /// [`MultiPartStore`]: multipart::MultiPartStore
-    async fn put_multipart(
-        &self,
-        location: &Path,
-    ) -> Result<(MultipartId, Box<dyn AsyncWrite + Unpin + Send>)>;
-
-    /// Cleanup an aborted upload.
-    ///
-    /// See documentation for individual stores for exact behavior, as capabilities
-    /// vary by object store.
-    async fn abort_multipart(&self, location: &Path, multipart_id: &MultipartId) -> Result<()>;
+    /// Client should prefer [`ObjectStore::put`] for small payloads, as streaming uploads
+    /// typically require multiple separate requests. See [`MultipartUpload`] for more information
+    async fn put_multipart(&self, location: &Path) -> Result<Box<dyn MultipartUpload>>;
 
     /// Return the bytes that are stored at the specified location.
     async fn get(&self, location: &Path) -> Result<GetResult> {
@@ -769,19 +730,8 @@ macro_rules! as_ref_impl {
                 self.as_ref().put_opts(location, bytes, opts).await
             }
 
-            async fn put_multipart(
-                &self,
-                location: &Path,
-            ) -> Result<(MultipartId, Box<dyn AsyncWrite + Unpin + Send>)> {
+            async fn put_multipart(&self, location: &Path) -> Result<Box<dyn MultipartUpload>> {
                 self.as_ref().put_multipart(location).await
-            }
-
-            async fn abort_multipart(
-                &self,
-                location: &Path,
-                multipart_id: &MultipartId,
-            ) -> Result<()> {
-                self.as_ref().abort_multipart(location, multipart_id).await
             }
 
             async fn get(&self, location: &Path) -> Result<GetResult> {
@@ -1246,14 +1196,12 @@ mod test_util {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::multipart::MultiPartStore;
+    use crate::multipart::MultipartStore;
     use crate::test_util::flatten_list_stream;
     use chrono::TimeZone;
     use futures::stream::FuturesUnordered;
     use rand::distributions::Alphanumeric;
     use rand::{thread_rng, Rng};
-    use std::future::Future;
-    use tokio::io::AsyncWriteExt;
 
     pub(crate) async fn put_get_delete_list(storage: &DynObjectStore) {
         put_get_delete_list_opts(storage).await
@@ -1928,12 +1876,11 @@ mod tests {
         let location = Path::from("test_dir/test_upload_file.txt");
 
         // Can write to storage
-        let data = get_chunks(5_000, 10);
+        let data = get_chunks(5 * 1024 * 1024, 3);
         let bytes_expected = data.concat();
-        let (_, mut writer) = storage.put_multipart(&location).await.unwrap();
-        for chunk in &data {
-            writer.write_all(chunk).await.unwrap();
-        }
+        let mut upload = storage.put_multipart(&location).await.unwrap();
+        let uploads = data.into_iter().map(|x| upload.put_part(x));
+        futures::future::try_join_all(uploads).await.unwrap();
 
         // Object should not yet exist in store
         let meta_res = storage.head(&location).await;
@@ -1949,7 +1896,8 @@ mod tests {
         let result = storage.list_with_delimiter(None).await.unwrap();
         assert_eq!(&result.objects, &[]);
 
-        writer.shutdown().await.unwrap();
+        upload.complete().await.unwrap();
+
         let bytes_written = storage.get(&location).await.unwrap().bytes().await.unwrap();
         assert_eq!(bytes_expected, bytes_written);
 
@@ -1957,22 +1905,19 @@ mod tests {
         // Sizes chosen to ensure we write three parts
         let data = get_chunks(3_200_000, 7);
         let bytes_expected = data.concat();
-        let (_, mut writer) = storage.put_multipart(&location).await.unwrap();
+        let upload = storage.put_multipart(&location).await.unwrap();
+        let mut writer = WriteMultipart::new(upload);
         for chunk in &data {
-            writer.write_all(chunk).await.unwrap();
+            writer.write(chunk)
         }
-        writer.shutdown().await.unwrap();
+        writer.finish().await.unwrap();
         let bytes_written = storage.get(&location).await.unwrap().bytes().await.unwrap();
         assert_eq!(bytes_expected, bytes_written);
 
         // We can abort an empty write
         let location = Path::from("test_dir/test_abort_upload.txt");
-        let (upload_id, writer) = storage.put_multipart(&location).await.unwrap();
-        drop(writer);
-        storage
-            .abort_multipart(&location, &upload_id)
-            .await
-            .unwrap();
+        let mut upload = storage.put_multipart(&location).await.unwrap();
+        upload.abort().await.unwrap();
         let get_res = storage.get(&location).await;
         assert!(get_res.is_err());
         assert!(matches!(
@@ -1981,17 +1926,13 @@ mod tests {
         ));
 
         // We can abort an in-progress write
-        let (upload_id, mut writer) = storage.put_multipart(&location).await.unwrap();
-        if let Some(chunk) = data.first() {
-            writer.write_all(chunk).await.unwrap();
-            let _ = writer.write(chunk).await.unwrap();
-        }
-        drop(writer);
-
-        storage
-            .abort_multipart(&location, &upload_id)
+        let mut upload = storage.put_multipart(&location).await.unwrap();
+        upload
+            .put_part(data.first().unwrap().clone())
             .await
             .unwrap();
+
+        upload.abort().await.unwrap();
         let get_res = storage.get(&location).await;
         assert!(get_res.is_err());
         assert!(matches!(
@@ -2186,7 +2127,7 @@ mod tests {
         storage.delete(&path2).await.unwrap();
     }
 
-    pub(crate) async fn multipart(storage: &dyn ObjectStore, multipart: &dyn MultiPartStore) {
+    pub(crate) async fn multipart(storage: &dyn ObjectStore, multipart: &dyn MultipartStore) {
         let path = Path::from("test_multipart");
         let chunk_size = 5 * 1024 * 1024;
 
@@ -2253,7 +2194,7 @@ mod tests {
     pub(crate) async fn tagging<F, Fut>(storage: &dyn ObjectStore, validate: bool, get_tags: F)
     where
         F: Fn(Path) -> Fut + Send + Sync,
-        Fut: Future<Output = Result<reqwest::Response>> + Send,
+        Fut: std::future::Future<Output = Result<reqwest::Response>> + Send,
     {
         use bytes::Buf;
         use serde::Deserialize;
