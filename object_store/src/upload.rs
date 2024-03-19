@@ -74,14 +74,15 @@ pub trait MultipartUpload: Send + std::fmt::Debug {
     /// Abort the multipart upload
     ///
     /// If a [`MultipartUpload`] is dropped without calling [`MultipartUpload::complete`],
-    /// some implementations will automatically reap any uploaded parts. However,
-    /// this is not always possible, e.g. for S3 and GCS. [`MultipartUpload::abort`] can
-    /// therefore be invoked to perform this cleanup.
+    /// some object stores will automatically clean up any previously uploaded parts.
+    /// However, some stores, such as S3 and GCS, cannot perform cleanup on drop.
+    /// As such [`MultipartUpload::abort`] can be invoked to perform this cleanup.
     ///
-    /// Given it is not possible call `abort` in all failure scenarios (e.g. if your program is `SIGKILL`ed due to
-    /// OOM), it is recommended to configure your object store with lifecycle rules
-    /// to automatically cleanup unused parts older than some threshold.
-    /// See [crate::aws] and [crate::gcp] for more information.
+    /// It will not be possible to call `abort` in all failure scenarios, for example
+    /// non-graceful shutdown of the calling application. It is therefore recommended
+    /// object stores are configured with lifecycle rules to automatically cleanup
+    /// unused parts older than some threshold. See [crate::aws] and [crate::gcp]
+    /// for more information.
     ///
     /// It is implementation defined behaviour to call [`MultipartUpload::abort`]
     /// on an already completed or aborted [`MultipartUpload`]
