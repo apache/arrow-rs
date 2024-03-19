@@ -133,9 +133,9 @@ impl WriteMultipart {
     /// Write data to this [`WriteMultipart`]
     ///
     /// Note this method is synchronous (not `async`) and will immediately start new uploads
-    /// as soon as the internal `capacity` is hit, regardless of 
+    /// as soon as the internal `capacity` is hit, regardless of
     /// how many outstanding uploads are already in progress.
-    /// 
+    ///
     /// Back pressure can optionally be applied to producers by calling
     /// [`Self::wait_for_capacity`] prior to calling this method
     pub fn write(&mut self, mut buf: &[u8]) {
