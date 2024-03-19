@@ -677,6 +677,7 @@ impl DictionaryTracker {
     }
 }
 
+/// Writer for an IPC file
 pub struct FileWriter<W: Write> {
     /// The object to write to
     writer: BufWriter<W>,
@@ -701,13 +702,13 @@ pub struct FileWriter<W: Write> {
 }
 
 impl<W: Write> FileWriter<W> {
-    /// Try create a new writer, with the schema written as part of the header
+    /// Try to create a new writer, with the schema written as part of the header
     pub fn try_new(writer: W, schema: &Schema) -> Result<Self, ArrowError> {
         let write_options = IpcWriteOptions::default();
         Self::try_new_with_options(writer, schema, write_options)
     }
 
-    /// Try create a new writer with IpcWriteOptions
+    /// Try to create a new writer with IpcWriteOptions
     pub fn try_new_with_options(
         writer: W,
         schema: &Schema,
@@ -857,6 +858,7 @@ impl<W: Write> RecordBatchWriter for FileWriter<W> {
     }
 }
 
+/// Writer for an IPC stream
 pub struct StreamWriter<W: Write> {
     /// The object to write to
     writer: BufWriter<W>,
@@ -871,7 +873,7 @@ pub struct StreamWriter<W: Write> {
 }
 
 impl<W: Write> StreamWriter<W> {
-    /// Try create a new writer, with the schema written as part of the header
+    /// Try to create a new writer, with the schema written as part of the header
     pub fn try_new(writer: W, schema: &Schema) -> Result<Self, ArrowError> {
         let write_options = IpcWriteOptions::default();
         Self::try_new_with_options(writer, schema, write_options)
