@@ -58,7 +58,7 @@ impl<O: ArrowNativeType> OffsetBufferBuilder<O> {
     ///
     /// # Panics
     ///
-    /// Panics if adding `length` would overflow `usize`
+    /// Panics if offsets overflow `O`
     pub fn finish(self) -> OffsetBuffer<O> {
         O::from_usize(self.last_offset).expect("overflow");
         unsafe { OffsetBuffer::new_unchecked(self.offsets.into()) }
@@ -68,7 +68,7 @@ impl<O: ArrowNativeType> OffsetBufferBuilder<O> {
     ///
     /// # Panics
     ///
-    /// Panics if adding `length` would overflow `usize`
+    /// Panics if offsets overflow `O`
     pub fn finish_cloned(&self) -> OffsetBuffer<O> {
         O::from_usize(self.last_offset).expect("overflow");
         unsafe { OffsetBuffer::new_unchecked(self.offsets.clone().into()) }
