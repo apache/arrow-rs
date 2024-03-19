@@ -78,10 +78,10 @@ pub trait MultipartUpload: Send + std::fmt::Debug {
     /// this is not always possible, e.g. for S3 and GCS. [`MultipartUpload::abort`] can
     /// therefore be invoked to perform this cleanup.
     ///
-    /// It is recommended that where possible users configure lifecycle rules
-    /// to automatically reap unused parts older than some threshold, as this
-    /// will more reliably handle different failure modes. See [crate::aws] and
-    /// [crate::gcp] for more information.
+    /// Given it is not possible call `abort` in all failure scenarios (e.g. if your program is `SIGKILL`ed due to
+    /// OOM), it is recommended to configure your object store with lifecycle rules
+    /// to automatically cleanup unused parts older than some threshold.
+    /// See [crate::aws] and [crate::gcp] for more information.
     ///
     /// It is implementation defined behaviour to call [`MultipartUpload::abort`]
     /// on an already completed or aborted [`MultipartUpload`]
@@ -90,9 +90,7 @@ pub trait MultipartUpload: Send + std::fmt::Debug {
 
 /// A synchronous write API for uploading data in parallel in fixed size chunks
 ///
-/// Makes use of [`JoinSet`] under the hood to multiplex upload tasks,
-/// avoiding issues caused by sharing a single tokio's cooperative task
-/// budget across multiple IO operations.
+/// Uses multiple tokio tasks in a [`JoinSet`] to multiplex upload tasks in parallel
 ///
 /// The design also takes inspiration from [`Sink`] with [`WriteMultipart::wait_for_capacity`]
 /// allowing back pressure on producers, prior to buffering the next part. However, unlike
@@ -109,7 +107,7 @@ pub struct WriteMultipart {
 }
 
 impl WriteMultipart {
-    /// Create a new [`WriteMultipart`]
+    /// Create a new [`WriteMultipart`] that will upload using 5MB chunks
     pub fn new(upload: Box<dyn MultipartUpload>) -> Self {
         Self::new_with_capacity(upload, 5 * 1024 * 1024)
     }
@@ -133,6 +131,10 @@ impl WriteMultipart {
 
     /// Write data to this [`WriteMultipart`]
     ///
+    /// Note this method is synchronous (not `async`) and will immediately start new uploads
+    /// as soon as the internal `capacity` is hit, regardless of 
+    /// how many outstanding uploads are already in progress.
+    /// 
     /// Back pressure can optionally be applied to producers by calling
     /// [`Self::wait_for_capacity`] prior to calling this method
     pub fn write(&mut self, mut buf: &[u8]) {
@@ -153,7 +155,7 @@ impl WriteMultipart {
         self.tasks.spawn(self.upload.put_part(part));
     }
 
-    /// Abort this upload
+    /// Abort this upload, attempting to clean up any successfully uploaded parts
     pub async fn abort(mut self) -> Result<()> {
         self.tasks.shutdown().await;
         self.upload.abort().await
