@@ -20,8 +20,8 @@ use std::task::{Context, Poll};
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures::future::BoxFuture;
-use tokio::task::JoinSet;
 use futures::ready;
+use tokio::task::JoinSet;
 
 use crate::{PutResult, Result};
 
