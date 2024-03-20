@@ -2103,11 +2103,6 @@ mod tests {
         let contents1 = Bytes::from("cats");
         let contents2 = Bytes::from("dogs");
 
-        // copy() errors if source does not exist
-        let result = storage.copy(&path2, &path1).await;
-        assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), crate::Error::NotFound { .. }));
-
         // copy_if_not_exists() errors if destination already exists
         storage.put(&path1, contents1.clone()).await.unwrap();
         storage.put(&path2, contents2.clone()).await.unwrap();
@@ -2125,6 +2120,33 @@ mod tests {
         let new_contents = storage.get(&path2).await.unwrap().bytes().await.unwrap();
         assert_eq!(&new_contents, &contents1);
         let result = storage.get(&path1).await;
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), crate::Error::NotFound { .. }));
+
+        // Clean up
+        storage.delete(&path2).await.unwrap();
+    }
+
+    pub(crate) async fn copy_rename_nonexistent_object(storage: &DynObjectStore) {
+        // Create empty source object
+        let path1 = Path::from("test1");
+
+        // Create destination object
+        let path2 = Path::from("test2");
+        storage.put(&path2, Bytes::from("hello")).await.unwrap();
+
+        // copy() errors if source does not exist
+        let result = storage.copy(&path1, &path2).await;
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), crate::Error::NotFound { .. }));
+
+        // rename() errors if source does not exist
+        let result = storage.rename(&path1, &path2).await;
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), crate::Error::NotFound { .. }));
+
+        // copy_if_not_exists() errors if source does not exist
+        let result = storage.copy_if_not_exists(&path1, &path2).await;
         assert!(result.is_err());
         assert!(matches!(result.unwrap_err(), crate::Error::NotFound { .. }));
 
