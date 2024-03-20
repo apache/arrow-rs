@@ -15,12 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::task::{ready, Context, Poll};
+use std::task::{Context, Poll};
 
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures::future::BoxFuture;
 use tokio::task::JoinSet;
+use futures::ready;
 
 use crate::{PutResult, Result};
 
