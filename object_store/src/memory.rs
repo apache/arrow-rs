@@ -16,27 +16,24 @@
 // under the License.
 
 //! An in-memory object store implementation
-use crate::multipart::{MultiPartStore, PartId};
-use crate::util::InvalidGetRange;
-use crate::{
-    path::Path, GetRange, GetResult, GetResultPayload, ListResult, ObjectMeta, ObjectStore,
-    PutMode, PutOptions, PutResult, Result, UpdateVersion,
-};
-use crate::{GetOptions, MultipartId};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::ops::Range;
+use std::sync::Arc;
+
 use async_trait::async_trait;
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use futures::{stream::BoxStream, StreamExt};
 use parking_lot::RwLock;
 use snafu::{OptionExt, ResultExt, Snafu};
-use std::collections::BTreeSet;
-use std::collections::{BTreeMap, HashMap};
-use std::io;
-use std::ops::Range;
-use std::pin::Pin;
-use std::sync::Arc;
-use std::task::Poll;
-use tokio::io::AsyncWrite;
+
+use crate::multipart::{MultipartStore, PartId};
+use crate::util::InvalidGetRange;
+use crate::GetOptions;
+use crate::{
+    path::Path, GetRange, GetResult, GetResultPayload, ListResult, MultipartId, MultipartUpload,
+    ObjectMeta, ObjectStore, PutMode, PutOptions, PutResult, Result, UpdateVersion, UploadPart,
+};
 
 /// A specialized `Error` for in-memory object store-related errors
 #[derive(Debug, Snafu)]
@@ -213,23 +210,12 @@ impl ObjectStore for InMemory {
         })
     }
 
-    async fn put_multipart(
-        &self,
-        location: &Path,
-    ) -> Result<(MultipartId, Box<dyn AsyncWrite + Unpin + Send>)> {
-        Ok((
-            String::new(),
-            Box::new(InMemoryUpload {
-                location: location.clone(),
-                data: Vec::new(),
-                storage: Arc::clone(&self.storage),
-            }),
-        ))
-    }
-
-    async fn abort_multipart(&self, _location: &Path, _multipart_id: &MultipartId) -> Result<()> {
-        // Nothing to clean up
-        Ok(())
+    async fn put_multipart(&self, location: &Path) -> Result<Box<dyn MultipartUpload>> {
+        Ok(Box::new(InMemoryUpload {
+            location: location.clone(),
+            parts: vec![],
+            storage: Arc::clone(&self.storage),
+        }))
     }
 
     async fn get_opts(&self, location: &Path, options: GetOptions) -> Result<GetResult> {
@@ -391,7 +377,7 @@ impl ObjectStore for InMemory {
 }
 
 #[async_trait]
-impl MultiPartStore for InMemory {
+impl MultipartStore for InMemory {
     async fn create_multipart(&self, _path: &Path) -> Result<MultipartId> {
         let mut storage = self.storage.write();
         let etag = storage.next_etag;
@@ -482,44 +468,41 @@ impl InMemory {
     }
 }
 
+#[derive(Debug)]
 struct InMemoryUpload {
     location: Path,
-    data: Vec<u8>,
+    parts: Vec<Bytes>,
     storage: Arc<RwLock<Storage>>,
 }
 
-impl AsyncWrite for InMemoryUpload {
-    fn poll_write(
-        mut self: Pin<&mut Self>,
-        _cx: &mut std::task::Context<'_>,
-        buf: &[u8],
-    ) -> Poll<Result<usize, io::Error>> {
-        self.data.extend_from_slice(buf);
-        Poll::Ready(Ok(buf.len()))
+#[async_trait]
+impl MultipartUpload for InMemoryUpload {
+    fn put_part(&mut self, data: Bytes) -> UploadPart {
+        self.parts.push(data);
+        Box::pin(futures::future::ready(Ok(())))
     }
 
-    fn poll_flush(
-        self: Pin<&mut Self>,
-        _cx: &mut std::task::Context<'_>,
-    ) -> Poll<Result<(), io::Error>> {
-        Poll::Ready(Ok(()))
+    async fn complete(&mut self) -> Result<PutResult> {
+        let cap = self.parts.iter().map(|x| x.len()).sum();
+        let mut buf = Vec::with_capacity(cap);
+        self.parts.iter().for_each(|x| buf.extend_from_slice(x));
+        let etag = self.storage.write().insert(&self.location, buf.into());
+        Ok(PutResult {
+            e_tag: Some(etag.to_string()),
+            version: None,
+        })
     }
 
-    fn poll_shutdown(
-        mut self: Pin<&mut Self>,
-        _cx: &mut std::task::Context<'_>,
-    ) -> Poll<Result<(), io::Error>> {
-        let data = Bytes::from(std::mem::take(&mut self.data));
-        self.storage.write().insert(&self.location, data);
-        Poll::Ready(Ok(()))
+    async fn abort(&mut self) -> Result<()> {
+        Ok(())
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     use crate::tests::*;
+
+    use super::*;
 
     #[tokio::test]
     async fn in_memory_test() {

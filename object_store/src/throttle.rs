@@ -20,16 +20,15 @@ use parking_lot::Mutex;
 use std::ops::Range;
 use std::{convert::TryInto, sync::Arc};
 
+use crate::GetOptions;
 use crate::{
-    path::Path, GetResult, GetResultPayload, ListResult, ObjectMeta, ObjectStore, PutOptions,
-    PutResult, Result,
+    path::Path, GetResult, GetResultPayload, ListResult, MultipartUpload, ObjectMeta, ObjectStore,
+    PutOptions, PutResult, Result,
 };
-use crate::{GetOptions, MultipartId};
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures::{stream::BoxStream, FutureExt, StreamExt};
 use std::time::Duration;
-use tokio::io::AsyncWrite;
 
 /// Configuration settings for throttled store
 #[derive(Debug, Default, Clone, Copy)]
@@ -158,14 +157,7 @@ impl<T: ObjectStore> ObjectStore for ThrottledStore<T> {
         self.inner.put_opts(location, bytes, opts).await
     }
 
-    async fn put_multipart(
-        &self,
-        _location: &Path,
-    ) -> Result<(MultipartId, Box<dyn AsyncWrite + Unpin + Send>)> {
-        Err(super::Error::NotImplemented)
-    }
-
-    async fn abort_multipart(&self, _location: &Path, _multipart_id: &MultipartId) -> Result<()> {
+    async fn put_multipart(&self, _location: &Path) -> Result<Box<dyn MultipartUpload>> {
         Err(super::Error::NotImplemented)
     }
 

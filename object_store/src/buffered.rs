@@ -18,7 +18,7 @@
 //! Utilities for performing tokio-style buffered IO
 
 use crate::path::Path;
-use crate::{MultipartId, ObjectMeta, ObjectStore};
+use crate::{ObjectMeta, ObjectStore, WriteMultipart};
 use bytes::Bytes;
 use futures::future::{BoxFuture, FutureExt};
 use futures::ready;
@@ -27,7 +27,7 @@ use std::io::{Error, ErrorKind, SeekFrom};
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
-use tokio::io::{AsyncBufRead, AsyncRead, AsyncSeek, AsyncWrite, AsyncWriteExt, ReadBuf};
+use tokio::io::{AsyncBufRead, AsyncRead, AsyncSeek, AsyncWrite, ReadBuf};
 
 /// The default buffer size used by [`BufReader`]
 pub const DEFAULT_BUFFER_SIZE: usize = 1024 * 1024;
@@ -217,7 +217,6 @@ impl AsyncBufRead for BufReader {
 pub struct BufWriter {
     capacity: usize,
     state: BufWriterState,
-    multipart_id: Option<MultipartId>,
     store: Arc<dyn ObjectStore>,
 }
 
@@ -225,22 +224,19 @@ impl std::fmt::Debug for BufWriter {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("BufWriter")
             .field("capacity", &self.capacity)
-            .field("multipart_id", &self.multipart_id)
             .finish()
     }
 }
-
-type MultipartResult = (MultipartId, Box<dyn AsyncWrite + Send + Unpin>);
 
 enum BufWriterState {
     /// Buffer up to capacity bytes
     Buffer(Path, Vec<u8>),
     /// [`ObjectStore::put_multipart`]
-    Prepare(BoxFuture<'static, std::io::Result<MultipartResult>>),
+    Prepare(BoxFuture<'static, std::io::Result<WriteMultipart>>),
     /// Write to a multipart upload
-    Write(Box<dyn AsyncWrite + Send + Unpin>),
+    Write(Option<WriteMultipart>),
     /// [`ObjectStore::put`]
-    Put(BoxFuture<'static, std::io::Result<()>>),
+    Flush(BoxFuture<'static, std::io::Result<()>>),
 }
 
 impl BufWriter {
@@ -255,14 +251,20 @@ impl BufWriter {
             capacity,
             store,
             state: BufWriterState::Buffer(path, Vec::new()),
-            multipart_id: None,
         }
     }
 
-    /// Returns the [`MultipartId`] of the multipart upload created by this
-    /// writer, if any.
-    pub fn multipart_id(&self) -> Option<&MultipartId> {
-        self.multipart_id.as_ref()
+    /// Abort this writer, cleaning up any partially uploaded state
+    ///
+    /// # Panic
+    ///
+    /// Panics if this writer has already been shutdown or aborted
+    pub async fn abort(&mut self) -> crate::Result<()> {
+        match &mut self.state {
+            BufWriterState::Buffer(_, _) | BufWriterState::Prepare(_) => Ok(()),
+            BufWriterState::Flush(_) => panic!("Already shut down"),
+            BufWriterState::Write(x) => x.take().unwrap().abort().await,
+        }
     }
 }
 
@@ -275,12 +277,15 @@ impl AsyncWrite for BufWriter {
         let cap = self.capacity;
         loop {
             return match &mut self.state {
-                BufWriterState::Write(write) => Pin::new(write).poll_write(cx, buf),
-                BufWriterState::Put(_) => panic!("Already shut down"),
+                BufWriterState::Write(Some(write)) => {
+                    write.write(buf);
+                    Poll::Ready(Ok(buf.len()))
+                }
+                BufWriterState::Write(None) | BufWriterState::Flush(_) => {
+                    panic!("Already shut down")
+                }
                 BufWriterState::Prepare(f) => {
-                    let (id, w) = ready!(f.poll_unpin(cx)?);
-                    self.state = BufWriterState::Write(w);
-                    self.multipart_id = Some(id);
+                    self.state = BufWriterState::Write(ready!(f.poll_unpin(cx)?).into());
                     continue;
                 }
                 BufWriterState::Buffer(path, b) => {
@@ -289,9 +294,10 @@ impl AsyncWrite for BufWriter {
                         let path = std::mem::take(path);
                         let store = Arc::clone(&self.store);
                         self.state = BufWriterState::Prepare(Box::pin(async move {
-                            let (id, mut writer) = store.put_multipart(&path).await?;
-                            writer.write_all(&buffer).await?;
-                            Ok((id, writer))
+                            let upload = store.put_multipart(&path).await?;
+                            let mut chunked = WriteMultipart::new(upload);
+                            chunked.write(&buffer);
+                            Ok(chunked)
                         }));
                         continue;
                     }
@@ -305,13 +311,10 @@ impl AsyncWrite for BufWriter {
     fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Error>> {
         loop {
             return match &mut self.state {
-                BufWriterState::Buffer(_, _) => Poll::Ready(Ok(())),
-                BufWriterState::Write(write) => Pin::new(write).poll_flush(cx),
-                BufWriterState::Put(_) => panic!("Already shut down"),
+                BufWriterState::Write(_) | BufWriterState::Buffer(_, _) => Poll::Ready(Ok(())),
+                BufWriterState::Flush(_) => panic!("Already shut down"),
                 BufWriterState::Prepare(f) => {
-                    let (id, w) = ready!(f.poll_unpin(cx)?);
-                    self.state = BufWriterState::Write(w);
-                    self.multipart_id = Some(id);
+                    self.state = BufWriterState::Write(ready!(f.poll_unpin(cx)?).into());
                     continue;
                 }
             };
@@ -322,21 +325,28 @@ impl AsyncWrite for BufWriter {
         loop {
             match &mut self.state {
                 BufWriterState::Prepare(f) => {
-                    let (id, w) = ready!(f.poll_unpin(cx)?);
-                    self.state = BufWriterState::Write(w);
-                    self.multipart_id = Some(id);
+                    self.state = BufWriterState::Write(ready!(f.poll_unpin(cx)?).into());
                 }
                 BufWriterState::Buffer(p, b) => {
                     let buf = std::mem::take(b);
                     let path = std::mem::take(p);
                     let store = Arc::clone(&self.store);
-                    self.state = BufWriterState::Put(Box::pin(async move {
+                    self.state = BufWriterState::Flush(Box::pin(async move {
                         store.put(&path, buf.into()).await?;
                         Ok(())
                     }));
                 }
-                BufWriterState::Put(f) => return f.poll_unpin(cx),
-                BufWriterState::Write(w) => return Pin::new(w).poll_shutdown(cx),
+                BufWriterState::Flush(f) => return f.poll_unpin(cx),
+                BufWriterState::Write(x) => {
+                    let upload = x.take().unwrap();
+                    self.state = BufWriterState::Flush(
+                        async move {
+                            upload.finish().await?;
+                            Ok(())
+                        }
+                        .boxed(),
+                    )
+                }
             }
         }
     }
@@ -357,7 +367,7 @@ mod tests {
     use super::*;
     use crate::memory::InMemory;
     use crate::path::Path;
-    use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncSeekExt};
+    use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 
     #[tokio::test]
     async fn test_buf_reader() {
@@ -448,9 +458,7 @@ mod tests {
         writer.write_all(&[0; 20]).await.unwrap();
         writer.flush().await.unwrap();
         writer.write_all(&[0; 5]).await.unwrap();
-        assert!(writer.multipart_id().is_none());
         writer.shutdown().await.unwrap();
-        assert!(writer.multipart_id().is_none());
         assert_eq!(store.head(&path).await.unwrap().size, 25);
 
         // Test multipart
@@ -458,9 +466,7 @@ mod tests {
         writer.write_all(&[0; 20]).await.unwrap();
         writer.flush().await.unwrap();
         writer.write_all(&[0; 20]).await.unwrap();
-        assert!(writer.multipart_id().is_some());
         writer.shutdown().await.unwrap();
-        assert!(writer.multipart_id().is_some());
 
         assert_eq!(store.head(&path).await.unwrap().size, 40);
     }
