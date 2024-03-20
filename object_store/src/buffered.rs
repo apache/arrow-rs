@@ -377,7 +377,7 @@ mod tests {
         const BYTES: usize = 4096;
 
         let data: Bytes = b"12345678".iter().cycle().copied().take(BYTES).collect();
-        store.put(&existent, data.clone()).await.unwrap();
+        store.put(&existent, data.clone().into()).await.unwrap();
 
         let meta = store.head(&existent).await.unwrap();
 

@@ -534,7 +534,7 @@ async fn instance_creds(
     let token_result = client
         .request(Method::PUT, token_url)
         .header("X-aws-ec2-metadata-token-ttl-seconds", "600") // 10 minute TTL
-        .send_retry(retry_config)
+        .send_retry(retry_config, None)
         .await;
 
     let token = match token_result {
@@ -553,7 +553,7 @@ async fn instance_creds(
         role_request = role_request.header(AWS_EC2_METADATA_TOKEN_HEADER, token);
     }
 
-    let role = role_request.send_retry(retry_config).await?.text().await?;
+    let role = role_request.send_retry(retry_config, None).await?.text().await?;
 
     let creds_url = format!("{endpoint}/{CREDENTIALS_PATH}/{role}");
     let mut creds_request = client.request(Method::GET, creds_url);
@@ -561,7 +561,7 @@ async fn instance_creds(
         creds_request = creds_request.header(AWS_EC2_METADATA_TOKEN_HEADER, token);
     }
 
-    let creds: InstanceCredentials = creds_request.send_retry(retry_config).await?.json().await?;
+    let creds: InstanceCredentials = creds_request.send_retry(retry_config, None).await?.json().await?;
 
     let now = Utc::now();
     let ttl = (creds.expiration - now).to_std().unwrap_or_default();
@@ -624,7 +624,7 @@ async fn web_identity(
             ("Version", "2011-06-15"),
             ("WebIdentityToken", &token),
         ])
-        .send_retry(retry_config)
+        .send_retry(retry_config, None)
         .await?
         .bytes()
         .await?;
@@ -674,7 +674,7 @@ async fn task_credential(
     retry: &RetryConfig,
     url: &str,
 ) -> Result<TemporaryToken<Arc<AwsCredential>>, StdError> {
-    let creds: InstanceCredentials = client.get(url).send_retry(retry).await?.json().await?;
+    let creds: InstanceCredentials = client.get(url).send_retry(retry, None).await?.json().await?;
 
     let now = Utc::now();
     let ttl = (creds.expiration - now).to_std().unwrap_or_default();
@@ -709,7 +709,7 @@ impl TokenProvider for SessionProvider {
         let bytes = client
             .get(format!("{}?session", self.endpoint))
             .with_aws_sigv4(Some(authorizer), None)
-            .send_retry(retry)
+            .send_retry(retry, None)
             .await
             .context(CreateSessionRequestSnafu)?
             .bytes()

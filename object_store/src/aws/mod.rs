@@ -29,7 +29,6 @@
 //! [automatic cleanup]: https://aws.amazon.com/blogs/aws/s3-lifecycle-management-update-support-for-multipart-uploads-and-delete-markers/
 
 use async_trait::async_trait;
-use bytes::Bytes;
 use futures::stream::BoxStream;
 use futures::{StreamExt, TryStreamExt};
 use reqwest::header::{HeaderName, IF_MATCH, IF_NONE_MATCH};
@@ -43,10 +42,7 @@ use crate::client::list::ListClientExt;
 use crate::client::CredentialProvider;
 use crate::multipart::{MultipartStore, PartId};
 use crate::signer::Signer;
-use crate::{
-    Error, GetOptions, GetResult, ListResult, MultipartId, MultipartUpload, ObjectMeta,
-    ObjectStore, Path, PutMode, PutOptions, PutResult, Result, UploadPart,
-};
+use crate::{Error, GetOptions, GetResult, ListResult, MultipartId, MultipartUpload, ObjectMeta, ObjectStore, Path, PutMode, PutOptions, PutPayload, PutResult, Result, UploadPart};
 
 static TAGS_HEADER: HeaderName = HeaderName::from_static("x-amz-tagging");
 
@@ -160,8 +156,8 @@ impl Signer for AmazonS3 {
 
 #[async_trait]
 impl ObjectStore for AmazonS3 {
-    async fn put_opts(&self, location: &Path, bytes: Bytes, opts: PutOptions) -> Result<PutResult> {
-        let mut request = self.client.put_request(location, bytes, true);
+    async fn put_opts(&self, location: &Path, payload: PutPayload, opts: PutOptions) -> Result<PutResult> {
+        let mut request = self.client.put_request(location, payload.into(), true);
         let tags = opts.tags.encoded();
         if !tags.is_empty() && !self.client.config.disable_tagging {
             request = request.header(&TAGS_HEADER, tags);
@@ -325,7 +321,7 @@ struct UploadState {
 
 #[async_trait]
 impl MultipartUpload for S3MultiPartUpload {
-    fn put_part(&mut self, data: Bytes) -> UploadPart {
+    fn put_part(&mut self, data: PutPayload) -> UploadPart {
         let idx = self.part_idx;
         self.part_idx += 1;
         let state = Arc::clone(&self.state);
@@ -367,7 +363,7 @@ impl MultipartStore for AmazonS3 {
         path: &Path,
         id: &MultipartId,
         part_idx: usize,
-        data: Bytes,
+        data: PutPayload,
     ) -> Result<PartId> {
         self.client.put_part(path, id, part_idx, data).await
     }
@@ -390,7 +386,6 @@ impl MultipartStore for AmazonS3 {
 mod tests {
     use super::*;
     use crate::{client::get::GetClient, tests::*};
-    use bytes::Bytes;
     use hyper::HeaderMap;
 
     const NON_EXISTENT_NAME: &str = "nonexistentname";
@@ -479,7 +474,7 @@ mod tests {
         let integration = config.build().unwrap();
 
         let location = Path::from_iter([NON_EXISTENT_NAME]);
-        let data = Bytes::from("arbitrary data");
+        let data = PutPayload::from("arbitrary data");
 
         let err = integration.put(&location, data).await.unwrap_err();
         assert!(matches!(err, crate::Error::NotFound { .. }), "{}", err);
@@ -536,7 +531,7 @@ mod tests {
     async fn s3_encryption(store: &AmazonS3) {
         crate::test_util::maybe_skip_integration!();
 
-        let data = Bytes::from(vec![3u8; 1024]);
+        let data = PutPayload::from(vec![3u8; 1024]);
 
         let encryption_headers: HeaderMap = store.client.config.encryption_headers.clone().into();
         let expected_encryption =

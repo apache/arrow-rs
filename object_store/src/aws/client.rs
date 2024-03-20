@@ -35,7 +35,8 @@ use crate::client::GetOptionsExt;
 use crate::multipart::PartId;
 use crate::path::DELIMITER;
 use crate::{
-    ClientOptions, GetOptions, ListResult, MultipartId, Path, PutResult, Result, RetryConfig,
+    ClientOptions, GetOptions, ListResult, MultipartId, Path, PutPayload, PutResult, Result,
+    RetryConfig,
 };
 use async_trait::async_trait;
 use base64::prelude::BASE64_STANDARD;
@@ -51,11 +52,14 @@ use reqwest::{
     header::{CONTENT_LENGTH, CONTENT_TYPE},
     Client as ReqwestClient, Method, RequestBuilder, Response,
 };
+use ring::digest;
+use ring::digest::Context;
 use serde::{Deserialize, Serialize};
 use snafu::{ResultExt, Snafu};
 use std::sync::Arc;
 
 const VERSION_HEADER: &str = "x-amz-version-id";
+const SHA256_CHECKSUM: &str = "x-amz-checksum-sha256";
 
 /// A specialized `Error` for object store-related errors
 #[derive(Debug, Snafu)]
@@ -265,7 +269,8 @@ pub(crate) struct Request<'a> {
     path: &'a Path,
     config: &'a S3Config,
     builder: RequestBuilder,
-    payload_sha256: Option<Vec<u8>>,
+    payload_sha256: Option<digest::Digest>,
+    payload: Option<PutPayload>,
     use_session_creds: bool,
 }
 
@@ -294,10 +299,12 @@ impl<'a> Request<'a> {
             },
         };
 
+        let sha = self.payload_sha256.as_ref().map(|x| x.as_ref());
+
         let path = self.path.as_ref();
         self.builder
-            .with_aws_sigv4(credential.authorizer(), self.payload_sha256.as_deref())
-            .send_retry(&self.config.retry_config)
+            .with_aws_sigv4(credential.authorizer(), sha)
+            .send_retry(&self.config.retry_config, self.payload)
             .await
             .context(RetrySnafu { path })
     }
@@ -326,7 +333,7 @@ impl S3Client {
     pub fn put_request<'a>(
         &'a self,
         path: &'a Path,
-        bytes: Bytes,
+        payload: PutPayload,
         with_encryption_headers: bool,
     ) -> Request<'a> {
         let url = self.config.path_url(path);
@@ -334,20 +341,25 @@ impl S3Client {
         if with_encryption_headers {
             builder = builder.headers(self.config.encryption_headers.clone().into());
         }
-        let mut payload_sha256 = None;
 
-        if let Some(checksum) = self.config.checksum {
-            let digest = checksum.digest(&bytes);
-            builder = builder.header(checksum.header_name(), BASE64_STANDARD.encode(&digest));
-            if checksum == Checksum::SHA256 {
-                payload_sha256 = Some(digest);
+        let mut sha256 = Context::new(&digest::SHA256);
+        payload.iter().for_each(|x| sha256.update(&x));
+        let payload_sha256 = sha256.finish();
+
+        match self.config.checksum {
+            Some(Checksum::SHA256) => {
+                builder = builder.header(
+                    "x-amz-checksum-sha256",
+                    BASE64_STANDARD.encode(&payload_sha256),
+                )
             }
+            None => {}
         }
 
-        builder = match bytes.is_empty() {
-            true => builder.header(CONTENT_LENGTH, 0), // Handle empty uploads (#4514)
-            false => builder.body(bytes),
-        };
+        // Handle empty uploads (#4514)
+        if payload.iter().all(|x| x.is_empty()) {
+            builder = builder.header(CONTENT_LENGTH, 0);
+        }
 
         if let Some(value) = self.config.client_options.get_content_type(path) {
             builder = builder.header(CONTENT_TYPE, value);
@@ -356,7 +368,8 @@ impl S3Client {
         Request {
             path,
             builder,
-            payload_sha256,
+            payload: Some(payload),
+            payload_sha256: Some(payload_sha256),
             config: &self.config,
             use_session_creds: true,
         }
@@ -375,7 +388,7 @@ impl S3Client {
             .request(Method::DELETE, url)
             .query(query)
             .with_aws_sigv4(credential.authorizer(), None)
-            .send_retry(&self.config.retry_config)
+            .send_retry(&self.config.retry_config, None)
             .await
             .map_err(|e| e.error(STORE, path.to_string()))?;
 
@@ -438,16 +451,8 @@ impl S3Client {
 
         let mut builder = self.client.request(Method::POST, url);
 
-        // Compute checksum - S3 *requires* this for DeleteObjects requests, so we default to
-        // their algorithm if the user hasn't specified one.
-        let checksum = self.config.checksum.unwrap_or(Checksum::SHA256);
-        let digest = checksum.digest(&body);
-        builder = builder.header(checksum.header_name(), BASE64_STANDARD.encode(&digest));
-        let payload_sha256 = if checksum == Checksum::SHA256 {
-            Some(digest)
-        } else {
-            None
-        };
+        let digest = digest::digest(&digest::SHA256, &body);
+        builder = builder.header(SHA256_CHECKSUM, BASE64_STANDARD.encode(&digest));
 
         // S3 *requires* DeleteObjects to include a Content-MD5 header:
         // https://docs.aws.amazon.com/AmazonS3/latest/API/API_DeleteObjects.html
@@ -460,8 +465,8 @@ impl S3Client {
         let response = builder
             .header(CONTENT_TYPE, "application/xml")
             .body(body)
-            .with_aws_sigv4(credential.authorizer(), payload_sha256.as_deref())
-            .send_retry(&self.config.retry_config)
+            .with_aws_sigv4(credential.authorizer(), Some(digest.as_ref()))
+            .send_retry(&self.config.retry_config, None)
             .await
             .context(DeleteObjectsRequestSnafu {})?
             .bytes()
@@ -507,6 +512,7 @@ impl S3Client {
             builder,
             path: from,
             config: &self.config,
+            payload: None,
             payload_sha256: None,
             use_session_creds: false,
         }
@@ -521,7 +527,7 @@ impl S3Client {
             .request(Method::POST, url)
             .headers(self.config.encryption_headers.clone().into())
             .with_aws_sigv4(credential.authorizer(), None)
-            .send_retry(&self.config.retry_config)
+            .send_retry(&self.config.retry_config, None)
             .await
             .context(CreateMultipartRequestSnafu)?
             .bytes()
@@ -539,7 +545,7 @@ impl S3Client {
         path: &Path,
         upload_id: &MultipartId,
         part_idx: usize,
-        data: Bytes,
+        data: PutPayload,
     ) -> Result<PartId> {
         let part = (part_idx + 1).to_string();
 
@@ -563,7 +569,7 @@ impl S3Client {
             // If no parts were uploaded, upload an empty part
             // otherwise the completion request will fail
             let part = self
-                .put_part(location, &upload_id.to_string(), 0, Bytes::new())
+                .put_part(location, &upload_id.to_string(), 0, PutPayload::default())
                 .await?;
             vec![part]
         } else {
@@ -581,7 +587,7 @@ impl S3Client {
             .query(&[("uploadId", upload_id)])
             .body(body)
             .with_aws_sigv4(credential.authorizer(), None)
-            .send_retry(&self.config.retry_config)
+            .send_retry(&self.config.retry_config, None)
             .await
             .context(CompleteMultipartRequestSnafu)?;
 
@@ -609,7 +615,7 @@ impl S3Client {
             .client
             .request(Method::GET, url)
             .with_aws_sigv4(credential.authorizer(), None)
-            .send_retry(&self.config.retry_config)
+            .send_retry(&self.config.retry_config, None)
             .await
             .map_err(|e| e.error(STORE, path.to_string()))?;
         Ok(response)
@@ -644,7 +650,7 @@ impl GetClient for S3Client {
         let response = builder
             .with_get_options(options)
             .with_aws_sigv4(credential.authorizer(), None)
-            .send_retry(&self.config.retry_config)
+            .send_retry(&self.config.retry_config, None)
             .await
             .map_err(|e| e.error(STORE, path.to_string()))?;
 
@@ -690,7 +696,7 @@ impl ListClient for S3Client {
             .request(Method::GET, &url)
             .query(&query)
             .with_aws_sigv4(credential.authorizer(), None)
-            .send_retry(&self.config.retry_config)
+            .send_retry(&self.config.retry_config, None)
             .await
             .context(ListRequestSnafu)?
             .bytes()

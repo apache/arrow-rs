@@ -32,7 +32,6 @@
 //! [WebDAV]: https://en.wikipedia.org/wiki/WebDAV
 
 use async_trait::async_trait;
-use bytes::Bytes;
 use futures::stream::BoxStream;
 use futures::{StreamExt, TryStreamExt};
 use itertools::Itertools;
@@ -43,10 +42,7 @@ use crate::client::get::GetClientExt;
 use crate::client::header::get_etag;
 use crate::http::client::Client;
 use crate::path::Path;
-use crate::{
-    ClientConfigKey, ClientOptions, GetOptions, GetResult, ListResult, MultipartUpload, ObjectMeta,
-    ObjectStore, PutMode, PutOptions, PutResult, Result, RetryConfig,
-};
+use crate::{ClientConfigKey, ClientOptions, GetOptions, GetResult, ListResult, MultipartUpload, ObjectMeta, ObjectStore, PutMode, PutOptions, PutPayload, PutResult, Result, RetryConfig};
 
 mod client;
 
@@ -95,13 +91,13 @@ impl std::fmt::Display for HttpStore {
 
 #[async_trait]
 impl ObjectStore for HttpStore {
-    async fn put_opts(&self, location: &Path, bytes: Bytes, opts: PutOptions) -> Result<PutResult> {
+    async fn put_opts(&self, location: &Path, payload: PutPayload, opts: PutOptions) -> Result<PutResult> {
         if opts.mode != PutMode::Overwrite {
             // TODO: Add support for If header - https://datatracker.ietf.org/doc/html/rfc2518#section-9.4
             return Err(crate::Error::NotImplemented);
         }
 
-        let response = self.client.put(location, bytes).await?;
+        let response = self.client.put(location, payload).await?;
         let e_tag = match get_etag(response.headers()) {
             Ok(e_tag) => Some(e_tag),
             Err(crate::client::header::Error::MissingEtag) => None,

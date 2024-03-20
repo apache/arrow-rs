@@ -20,7 +20,7 @@ use parking_lot::Mutex;
 use std::ops::Range;
 use std::{convert::TryInto, sync::Arc};
 
-use crate::GetOptions;
+use crate::{GetOptions, PutPayload};
 use crate::{
     path::Path, GetResult, GetResultPayload, ListResult, MultipartUpload, ObjectMeta, ObjectStore,
     PutOptions, PutResult, Result,
@@ -147,14 +147,14 @@ impl<T: ObjectStore> std::fmt::Display for ThrottledStore<T> {
 
 #[async_trait]
 impl<T: ObjectStore> ObjectStore for ThrottledStore<T> {
-    async fn put(&self, location: &Path, bytes: Bytes) -> Result<PutResult> {
+    async fn put(&self, location: &Path, payload: PutPayload) -> Result<PutResult> {
         sleep(self.config().wait_put_per_call).await;
-        self.inner.put(location, bytes).await
+        self.inner.put(location, payload).await
     }
 
-    async fn put_opts(&self, location: &Path, bytes: Bytes, opts: PutOptions) -> Result<PutResult> {
+    async fn put_opts(&self, location: &Path, payload: PutPayload, opts: PutOptions) -> Result<PutResult> {
         sleep(self.config().wait_put_per_call).await;
-        self.inner.put_opts(location, bytes, opts).await
+        self.inner.put_opts(location, payload, opts).await
     }
 
     async fn put_multipart(&self, _location: &Path) -> Result<Box<dyn MultipartUpload>> {
@@ -320,7 +320,6 @@ where
 mod tests {
     use super::*;
     use crate::{memory::InMemory, tests::*, GetResultPayload};
-    use bytes::Bytes;
     use futures::TryStreamExt;
     use tokio::time::Duration;
     use tokio::time::Instant;
@@ -472,7 +471,7 @@ mod tests {
 
         if let Some(n_bytes) = n_bytes {
             let data: Vec<_> = std::iter::repeat(1u8).take(n_bytes).collect();
-            let bytes = Bytes::from(data);
+            let bytes = PutPayload::from(data);
             store.put(&path, bytes).await.unwrap();
         } else {
             // ensure object is absent
@@ -497,7 +496,7 @@ mod tests {
         for i in 0..n_entries {
             let path = prefix.child(i.to_string().as_str());
 
-            let data = Bytes::from("bar");
+            let data = PutPayload::from("bar");
             store.put(&path, data).await.unwrap();
         }
 
@@ -566,7 +565,7 @@ mod tests {
 
     async fn measure_put(store: &ThrottledStore<InMemory>, n_bytes: usize) -> Duration {
         let data: Vec<_> = std::iter::repeat(1u8).take(n_bytes).collect();
-        let bytes = Bytes::from(data);
+        let bytes = PutPayload::from(data);
 
         let t0 = Instant::now();
         store.put(&Path::from("foo"), bytes).await.unwrap();

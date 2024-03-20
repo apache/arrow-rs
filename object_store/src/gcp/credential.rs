@@ -333,7 +333,7 @@ async fn make_metadata_request(
         .request(Method::GET, url)
         .header("Metadata-Flavor", "Google")
         .query(&[("audience", "https://www.googleapis.com/oauth2/v4/token")])
-        .send_retry(retry)
+        .send_retry(retry, None)
         .await
         .context(TokenRequestSnafu)?
         .json()
@@ -447,7 +447,7 @@ impl TokenProvider for AuthorizedUserCredentials {
                 ("client_secret", &self.client_secret),
                 ("refresh_token", &self.refresh_token),
             ])
-            .send_retry(retry)
+            .send_retry(retry, None)
             .await
             .context(TokenRequestSnafu)?
             .json::<TokenResponse>()

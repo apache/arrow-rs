@@ -27,7 +27,7 @@ use futures::stream::BoxStream;
 use futures::StreamExt;
 
 use crate::path::Path;
-use crate::Result;
+use crate::{PutPayload, Result};
 use crate::{
     GetOptions, GetResult, GetResultPayload, ListResult, MultipartUpload, ObjectMeta, ObjectStore,
     PutOptions, PutResult,
@@ -62,8 +62,8 @@ impl Display for ChunkedStore {
 
 #[async_trait]
 impl ObjectStore for ChunkedStore {
-    async fn put_opts(&self, location: &Path, bytes: Bytes, opts: PutOptions) -> Result<PutResult> {
-        self.inner.put_opts(location, bytes, opts).await
+    async fn put_opts(&self, location: &Path, payload: PutPayload, opts: PutOptions) -> Result<PutResult> {
+        self.inner.put_opts(location, payload, opts).await
     }
 
     async fn put_multipart(&self, location: &Path) -> Result<Box<dyn MultipartUpload>> {
@@ -177,7 +177,7 @@ mod tests {
         let location = Path::parse("test").unwrap();
         let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
         store
-            .put(&location, Bytes::from(vec![0; 1001]))
+            .put(&location, PutPayload::from(vec![0; 1001]))
             .await
             .unwrap();
 

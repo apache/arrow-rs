@@ -21,9 +21,9 @@ use crate::client::retry::{self, RetryConfig, RetryExt};
 use crate::client::GetOptionsExt;
 use crate::path::{Path, DELIMITER};
 use crate::util::deserialize_rfc1123;
-use crate::{ClientOptions, GetOptions, ObjectMeta, Result};
+use crate::{ClientOptions, GetOptions, ObjectMeta, PutPayload, Result};
 use async_trait::async_trait;
-use bytes::{Buf, Bytes};
+use bytes::Buf;
 use chrono::{DateTime, Utc};
 use percent_encoding::percent_decode_str;
 use reqwest::header::CONTENT_TYPE;
@@ -120,7 +120,7 @@ impl Client {
 
         self.client
             .request(method, url)
-            .send_retry(&self.retry_config)
+            .send_retry(&self.retry_config, None)
             .await
             .context(RequestSnafu)?;
 
@@ -156,16 +156,19 @@ impl Client {
         Ok(())
     }
 
-    pub async fn put(&self, location: &Path, bytes: Bytes) -> Result<Response> {
+    pub async fn put(&self, location: &Path, payload: PutPayload) -> Result<Response> {
         let mut retry = false;
         loop {
             let url = self.path_url(location);
-            let mut builder = self.client.put(url).body(bytes.clone());
+            let mut builder = self.client.put(url);
             if let Some(value) = self.client_options.get_content_type(location) {
                 builder = builder.header(CONTENT_TYPE, value);
             }
 
-            match builder.send_retry(&self.retry_config).await {
+            match builder
+                .send_retry(&self.retry_config, Some(payload.clone()))
+                .await
+            {
                 Ok(response) => return Ok(response),
                 Err(source) => match source.status() {
                     // Some implementations return 404 instead of 409
@@ -189,7 +192,7 @@ impl Client {
             .client
             .request(method, url)
             .header("Depth", depth)
-            .send_retry(&self.retry_config)
+            .send_retry(&self.retry_config, None)
             .await;
 
         let response = match result {
@@ -220,7 +223,7 @@ impl Client {
         let url = self.path_url(path);
         self.client
             .delete(url)
-            .send_retry(&self.retry_config)
+            .send_retry(&self.retry_config, None)
             .await
             .map_err(|source| match source.status() {
                 Some(StatusCode::NOT_FOUND) => crate::Error::NotFound {
@@ -250,7 +253,7 @@ impl Client {
                 builder = builder.header("Overwrite", "F");
             }
 
-            return match builder.send_retry(&self.retry_config).await {
+            return match builder.send_retry(&self.retry_config, None).await {
                 Ok(_) => Ok(()),
                 Err(source) => Err(match source.status() {
                     Some(StatusCode::PRECONDITION_FAILED) if !overwrite => {
@@ -295,7 +298,7 @@ impl GetClient for Client {
 
         let res = builder
             .with_get_options(options)
-            .send_retry(&self.retry_config)
+            .send_retry(&self.retry_config, None)
             .await
             .map_err(|source| match source.status() {
                 // Some stores return METHOD_NOT_ALLOWED for get on directories
