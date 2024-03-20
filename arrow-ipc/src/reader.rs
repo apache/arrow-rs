@@ -60,6 +60,9 @@ fn read_buffer(
 
 /// Coordinates reading arrays based on data types.
 ///
+/// `variadic_counts` encodes the number of buffers to read for variadic types (e.g., Utf8View, BinaryView)
+/// When encounter such types, we pop from the front of the queue to get the number of buffers to read.
+///
 /// Notes:
 /// * In the IPC format, null buffers are always set, but may be empty. We discard them if an array has 0 nulls
 /// * Numeric values inside list arrays are often stored as 64-bit values regardless of their data type size.
@@ -361,7 +364,10 @@ impl<'a> ArrayReader<'a> {
             Utf8View | BinaryView => {
                 let count = variadic_count
                     .pop_front()
-                    .ok_or(ArrowError::IpcError("Incorrect variadic count!".to_owned()))?;
+                    .ok_or(ArrowError::IpcError(format!(
+                        "Missing variadic count for {} column",
+                        field.data_type()
+                    )))?;
                 let count = count + 2; // view and null buffer.
                 for _i in 0..count {
                     self.skip_buffer()

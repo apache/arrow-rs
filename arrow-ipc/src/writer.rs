@@ -1312,7 +1312,12 @@ fn write_array_data(
             )?;
         }
     } else if matches!(data_type, DataType::BinaryView | DataType::Utf8View) {
-        // Todo: if the array has a offset, we should slice the ArrayData to save space.
+        // Slicing the views buffer is safe and easy,
+        // but pruning unneeded data buffers is much more nuanced since it's complicated to prove that no views reference the pruned buffers
+        //
+        // Current implementation just serialize the raw arrays as given and not try to optimize anything.
+        // If users wants to "compact" the arrays prior to sending them over IPC,
+        // they should consider the gc API suggested in #5513
         for buffer in array_data.buffers() {
             offset = write_buffer(
                 buffer.as_slice(),
