@@ -431,7 +431,7 @@ impl IpcDataGenerator {
                 write_options,
             )?;
 
-            set_variadic_buffer_counts(&mut variadic_buffer_counts, array);
+            append_variadic_buffer_counts(&mut variadic_buffer_counts, array);
         }
         // pad the tail of body data
         let len = arrow_data.len();
@@ -564,41 +564,37 @@ impl IpcDataGenerator {
     }
 }
 
-fn set_variadic_buffer_counts(counts: &mut Vec<i64>, array: &dyn Array) {
+fn append_variadic_buffer_counts(counts: &mut Vec<i64>, array: &dyn Array) {
     match array.data_type() {
         DataType::BinaryView | DataType::Utf8View => {
-            // The spec is not clear on whether the view/null buffer should be included in the variadic buffer count.
-            // But from C++ impl https://github.com/apache/arrow/blob/b448b33808f2dd42866195fa4bb44198e2fc26b9/cpp/src/arrow/ipc/writer.cc#L477
-            // we know they are not included.
+            // The spec documents the counts only includes the variadic buffers, not the view/null buffers.
+            // https://arrow.apache.org/docs/format/Columnar.html#variadic-buffers
             counts.push(array.to_data().buffers().len() as i64 - 1);
         }
         DataType::Struct(_) => {
-            let array = array.as_any().downcast_ref::<StructArray>().unwrap();
+            let array = array.as_struct();
             for column in array.columns() {
-                set_variadic_buffer_counts(counts, column.as_ref());
+                append_variadic_buffer_counts(counts, column.as_ref());
             }
         }
         DataType::LargeList(_) => {
-            let array = array.as_any().downcast_ref::<LargeListArray>().unwrap();
-            set_variadic_buffer_counts(counts, array.values());
+            let array: &LargeListArray = array.as_list();
+            append_variadic_buffer_counts(counts, array.values());
         }
         DataType::List(_) => {
-            let array = array.as_any().downcast_ref::<ListArray>().unwrap();
-            set_variadic_buffer_counts(counts, array.values());
+            let array: &ListArray = array.as_list();
+            append_variadic_buffer_counts(counts, array.values());
         }
         DataType::FixedSizeList(_, _) => {
-            let array = array.as_any().downcast_ref::<FixedSizeListArray>().unwrap();
-            set_variadic_buffer_counts(counts, array.values());
+            let array = array.as_fixed_size_list();
+            append_variadic_buffer_counts(counts, array.values());
         }
         DataType::Dictionary(kt, _) => {
             macro_rules! set_subarray_counts {
                 ($array:expr, $counts:expr, $type:ty, $variant:ident) => {
                     if &DataType::$variant == kt.as_ref() {
-                        let array = $array
-                            .as_any()
-                            .downcast_ref::<DictionaryArray<$type>>()
-                            .unwrap();
-                        set_variadic_buffer_counts($counts, array.values());
+                        let array: &DictionaryArray<$type> = $array.as_dictionary();
+                        append_variadic_buffer_counts($counts, array.values());
                     }
                 };
             }
