@@ -86,7 +86,7 @@ fn create_array(
         BinaryView | Utf8View => {
             let count = variadic_counts
                 .pop_front()
-                .ok_or(ArrowError::IpcError("Incorrect variadic count!".to_owned()))?;
+                .ok_or(ArrowError::IpcError(format!("Missing variadic count for {data_type} column")))?;
             let count = count + 2; // view and null buffer.
             let buffers = (0..count)
                 .map(|_| reader.next_buffer())
@@ -432,11 +432,7 @@ pub fn read_record_batch(
         ArrowError::IpcError("Unable to get field nodes from IPC RecordBatch".to_string())
     })?;
 
-    let mut variadic_counts: VecDeque<i64> = if let Some(v) = batch.variadicBufferCounts() {
-        v.iter().collect()
-    } else {
-        VecDeque::default()
-    };
+    let mut variadic_counts: VecDeque<i64> = batch.variadicBufferCounts().into_iter().flatten().collect()
 
     let batch_compression = batch.compression();
     let compression = batch_compression
