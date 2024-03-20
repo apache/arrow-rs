@@ -18,7 +18,7 @@
 //! Utilities for performing tokio-style buffered IO
 
 use crate::path::Path;
-use crate::{ObjectMeta, ObjectStore, WriteMultipart};
+use crate::{ObjectMeta, ObjectStore, PutPayloadMut, WriteMultipart};
 use bytes::Bytes;
 use futures::future::{BoxFuture, FutureExt};
 use futures::ready;
@@ -231,7 +231,7 @@ impl std::fmt::Debug for BufWriter {
 
 enum BufWriterState {
     /// Buffer up to capacity bytes
-    Buffer(Path, Vec<u8>),
+    Buffer(Path, PutPayloadMut),
     /// [`ObjectStore::put_multipart`]
     Prepare(BoxFuture<'static, std::io::Result<WriteMultipart>>),
     /// Write to a multipart upload
@@ -252,7 +252,7 @@ impl BufWriter {
             capacity,
             store,
             max_concurrency: 8,
-            state: BufWriterState::Buffer(path, Vec::new()),
+            state: BufWriterState::Buffer(path, PutPayloadMut::new()),
         }
     }
 
@@ -303,14 +303,16 @@ impl AsyncWrite for BufWriter {
                     continue;
                 }
                 BufWriterState::Buffer(path, b) => {
-                    if b.len().saturating_add(buf.len()) >= cap {
+                    if b.content_length().saturating_add(buf.len()) >= cap {
                         let buffer = std::mem::take(b);
                         let path = std::mem::take(path);
                         let store = Arc::clone(&self.store);
                         self.state = BufWriterState::Prepare(Box::pin(async move {
                             let upload = store.put_multipart(&path).await?;
-                            let mut chunked = WriteMultipart::new(upload);
-                            chunked.write(&buffer);
+                            let mut chunked = WriteMultipart::new_with_chunk_size(upload, cap);
+                            for chunk in buffer.freeze() {
+                                chunked.put(chunk);
+                            }
                             Ok(chunked)
                         }));
                         continue;
@@ -391,7 +393,7 @@ mod tests {
         const BYTES: usize = 4096;
 
         let data: Bytes = b"12345678".iter().cycle().copied().take(BYTES).collect();
-        store.put(&existent, data.clone()).await.unwrap();
+        store.put(&existent, data.clone().into()).await.unwrap();
 
         let meta = store.head(&existent).await.unwrap();
 

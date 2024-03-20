@@ -23,7 +23,7 @@ use std::ops::Range;
 use crate::path::Path;
 use crate::{
     GetOptions, GetResult, ListResult, MultipartUpload, ObjectMeta, ObjectStore, PutOptions,
-    PutResult, Result,
+    PutPayload, PutResult, Result,
 };
 
 #[doc(hidden)]
@@ -80,14 +80,19 @@ impl<T: ObjectStore> PrefixStore<T> {
 
 #[async_trait::async_trait]
 impl<T: ObjectStore> ObjectStore for PrefixStore<T> {
-    async fn put(&self, location: &Path, bytes: Bytes) -> Result<PutResult> {
+    async fn put(&self, location: &Path, payload: PutPayload) -> Result<PutResult> {
         let full_path = self.full_path(location);
-        self.inner.put(&full_path, bytes).await
+        self.inner.put(&full_path, payload).await
     }
 
-    async fn put_opts(&self, location: &Path, bytes: Bytes, opts: PutOptions) -> Result<PutResult> {
+    async fn put_opts(
+        &self,
+        location: &Path,
+        payload: PutPayload,
+        opts: PutOptions,
+    ) -> Result<PutResult> {
         let full_path = self.full_path(location);
-        self.inner.put_opts(&full_path, bytes, opts).await
+        self.inner.put_opts(&full_path, payload, opts).await
     }
 
     async fn put_multipart(&self, location: &Path) -> Result<Box<dyn MultipartUpload>> {
@@ -218,9 +223,8 @@ mod tests {
 
         let location = Path::from("prefix/test_file.json");
         let data = Bytes::from("arbitrary data");
-        let expected_data = data.clone();
 
-        local.put(&location, data).await.unwrap();
+        local.put(&location, data.clone().into()).await.unwrap();
 
         let prefix = PrefixStore::new(local, "prefix");
         let location_prefix = Path::from("test_file.json");
@@ -239,11 +243,11 @@ mod tests {
             .bytes()
             .await
             .unwrap();
-        assert_eq!(&*read_data, expected_data);
+        assert_eq!(&*read_data, data);
 
         let target_prefix = Path::from("/test_written.json");
         prefix
-            .put(&target_prefix, expected_data.clone())
+            .put(&target_prefix, data.clone().into())
             .await
             .unwrap();
 
@@ -256,6 +260,6 @@ mod tests {
 
         let location = Path::from("prefix/test_written.json");
         let read_data = local.get(&location).await.unwrap().bytes().await.unwrap();
-        assert_eq!(&*read_data, expected_data)
+        assert_eq!(&*read_data, data)
     }
 }

@@ -29,11 +29,11 @@ use snafu::{OptionExt, ResultExt, Snafu};
 
 use crate::multipart::{MultipartStore, PartId};
 use crate::util::InvalidGetRange;
-use crate::GetOptions;
 use crate::{
     path::Path, GetRange, GetResult, GetResultPayload, ListResult, MultipartId, MultipartUpload,
     ObjectMeta, ObjectStore, PutMode, PutOptions, PutResult, Result, UpdateVersion, UploadPart,
 };
+use crate::{GetOptions, PutPayload};
 
 /// A specialized `Error` for in-memory object store-related errors
 #[derive(Debug, Snafu)]
@@ -192,10 +192,15 @@ impl std::fmt::Display for InMemory {
 
 #[async_trait]
 impl ObjectStore for InMemory {
-    async fn put_opts(&self, location: &Path, bytes: Bytes, opts: PutOptions) -> Result<PutResult> {
+    async fn put_opts(
+        &self,
+        location: &Path,
+        payload: PutPayload,
+        opts: PutOptions,
+    ) -> Result<PutResult> {
         let mut storage = self.storage.write();
         let etag = storage.next_etag;
-        let entry = Entry::new(bytes, Utc::now(), etag);
+        let entry = Entry::new(payload.into(), Utc::now(), etag);
 
         match opts.mode {
             PutMode::Overwrite => storage.overwrite(location, entry),
@@ -391,14 +396,14 @@ impl MultipartStore for InMemory {
         _path: &Path,
         id: &MultipartId,
         part_idx: usize,
-        data: Bytes,
+        payload: PutPayload,
     ) -> Result<PartId> {
         let mut storage = self.storage.write();
         let upload = storage.upload_mut(id)?;
         if part_idx <= upload.parts.len() {
             upload.parts.resize(part_idx + 1, None);
         }
-        upload.parts[part_idx] = Some(data);
+        upload.parts[part_idx] = Some(payload.into());
         Ok(PartId {
             content_id: Default::default(),
         })
@@ -471,21 +476,22 @@ impl InMemory {
 #[derive(Debug)]
 struct InMemoryUpload {
     location: Path,
-    parts: Vec<Bytes>,
+    parts: Vec<PutPayload>,
     storage: Arc<RwLock<Storage>>,
 }
 
 #[async_trait]
 impl MultipartUpload for InMemoryUpload {
-    fn put_part(&mut self, data: Bytes) -> UploadPart {
-        self.parts.push(data);
+    fn put_part(&mut self, payload: PutPayload) -> UploadPart {
+        self.parts.push(payload);
         Box::pin(futures::future::ready(Ok(())))
     }
 
     async fn complete(&mut self) -> Result<PutResult> {
-        let cap = self.parts.iter().map(|x| x.len()).sum();
+        let cap = self.parts.iter().map(|x| x.content_length()).sum();
         let mut buf = Vec::with_capacity(cap);
-        self.parts.iter().for_each(|x| buf.extend_from_slice(x));
+        let parts = self.parts.iter().flatten();
+        parts.for_each(|x| buf.extend_from_slice(x));
         let etag = self.storage.write().insert(&self.location, buf.into());
         Ok(PutResult {
             e_tag: Some(etag.to_string()),
@@ -552,9 +558,11 @@ mod tests {
         let location = Path::from("some_file");
 
         let data = Bytes::from("arbitrary data");
-        let expected_data = data.clone();
 
-        integration.put(&location, data).await.unwrap();
+        integration
+            .put(&location, data.clone().into())
+            .await
+            .unwrap();
 
         let read_data = integration
             .get(&location)
@@ -563,7 +571,7 @@ mod tests {
             .bytes()
             .await
             .unwrap();
-        assert_eq!(&*read_data, expected_data);
+        assert_eq!(&*read_data, data);
     }
 
     const NON_EXISTENT_NAME: &str = "nonexistentname";
