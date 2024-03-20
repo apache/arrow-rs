@@ -2127,6 +2127,33 @@ mod tests {
         storage.delete(&path2).await.unwrap();
     }
 
+    pub(crate) async fn copy_rename_nonexistent_object(storage: &DynObjectStore) {
+        // Create empty source object
+        let path1 = Path::from("test1");
+
+        // Create destination object
+        let path2 = Path::from("test2");
+        storage.put(&path2, Bytes::from("hello")).await.unwrap();
+
+        // copy() errors if source does not exist
+        let result = storage.copy(&path1, &path2).await;
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), crate::Error::NotFound { .. }));
+
+        // rename() errors if source does not exist
+        let result = storage.rename(&path1, &path2).await;
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), crate::Error::NotFound { .. }));
+
+        // copy_if_not_exists() errors if source does not exist
+        let result = storage.copy_if_not_exists(&path1, &path2).await;
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), crate::Error::NotFound { .. }));
+
+        // Clean up
+        storage.delete(&path2).await.unwrap();
+    }
+
     pub(crate) async fn multipart(storage: &dyn ObjectStore, multipart: &dyn MultipartStore) {
         let path = Path::from("test_multipart");
         let chunk_size = 5 * 1024 * 1024;

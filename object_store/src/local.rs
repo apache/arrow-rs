@@ -598,7 +598,10 @@ impl ObjectStore for LocalFileSystem {
                 }
                 Err(source) => match source.kind() {
                     ErrorKind::AlreadyExists => id += 1,
-                    ErrorKind::NotFound => create_parent_dirs(&to, source)?,
+                    ErrorKind::NotFound => match from.exists() {
+                        true => create_parent_dirs(&to, source)?,
+                        false => return Err(Error::NotFound { path: from, source }.into()),
+                    },
                     _ => return Err(Error::UnableToCopyFile { from, to, source }.into()),
                 },
             }
@@ -613,7 +616,10 @@ impl ObjectStore for LocalFileSystem {
             match std::fs::rename(&from, &to) {
                 Ok(_) => return Ok(()),
                 Err(source) => match source.kind() {
-                    ErrorKind::NotFound => create_parent_dirs(&to, source)?,
+                    ErrorKind::NotFound => match from.exists() {
+                        true => create_parent_dirs(&to, source)?,
+                        false => return Err(Error::NotFound { path: from, source }.into()),
+                    },
                     _ => return Err(Error::UnableToCopyFile { from, to, source }.into()),
                 },
             }
@@ -636,7 +642,10 @@ impl ObjectStore for LocalFileSystem {
                         }
                         .into())
                     }
-                    ErrorKind::NotFound => create_parent_dirs(&to, source)?,
+                    ErrorKind::NotFound => match from.exists() {
+                        true => create_parent_dirs(&to, source)?,
+                        false => return Err(Error::NotFound { path: from, source }.into()),
+                    },
                     _ => return Err(Error::UnableToCopyFile { from, to, source }.into()),
                 },
             }
@@ -990,6 +999,7 @@ mod tests {
         list_with_delimiter(&integration).await;
         rename_and_copy(&integration).await;
         copy_if_not_exists(&integration).await;
+        copy_rename_nonexistent_object(&integration).await;
         stream_get(&integration).await;
         put_opts(&integration, false).await;
     }
