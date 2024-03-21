@@ -212,10 +212,7 @@ impl MultipartUpload for AzureMultiPartUpload {
         self.part_idx += 1;
         let state = Arc::clone(&self.state);
         Box::pin(async move {
-            let part = state
-                .client
-                .put_block(&state.location, idx, data)
-                .await?;
+            let part = state.client.put_block(&state.location, idx, data).await?;
             state.parts.put(idx, part);
             Ok(())
         })
