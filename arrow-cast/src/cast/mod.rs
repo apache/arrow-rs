@@ -37,7 +37,7 @@
 //! assert_eq!(7.0, c.value(2));
 //! ```
 
-pub mod list;
+mod list;
 use crate::list::*;
 
 use chrono::{NaiveTime, Offset, TimeZone, Utc};
