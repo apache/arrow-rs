@@ -21,7 +21,7 @@ use crate::client::backoff::{Backoff, BackoffConfig};
 use crate::PutPayload;
 use futures::future::BoxFuture;
 use futures::FutureExt;
-use reqwest::header::{CONTENT_LENGTH, LOCATION};
+use reqwest::header::LOCATION;
 use reqwest::{Response, StatusCode};
 use snafu::Error as SnafuError;
 use snafu::Snafu;
@@ -197,7 +197,7 @@ impl RetryExt for reqwest::RequestBuilder {
             loop {
                 let mut s = self.try_clone().expect("request body must be cloneable");
                 if let Some(x) = &payload {
-                    s = s.header(CONTENT_LENGTH, x.content_length()).body(x.body())
+                    s = s.body(x.body())
                 }
                 let (client, req) = s.build_split();
                 let req = req.expect("request must be valid");

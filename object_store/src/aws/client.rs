@@ -356,18 +356,13 @@ impl S3Client {
             None => {}
         }
 
-        // Handle empty uploads (#4514)
-        if payload.iter().all(|x| x.is_empty()) {
-            builder = builder.header(CONTENT_LENGTH, 0);
-        }
-
         if let Some(value) = self.config.client_options.get_content_type(path) {
             builder = builder.header(CONTENT_TYPE, value);
         }
 
         Request {
             path,
-            builder,
+            builder: builder.header(CONTENT_LENGTH, payload.content_length()),
             payload: Some(payload),
             payload_sha256: Some(payload_sha256),
             config: &self.config,

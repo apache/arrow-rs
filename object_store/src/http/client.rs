@@ -25,6 +25,7 @@ use crate::{ClientOptions, GetOptions, ObjectMeta, PutPayload, Result};
 use async_trait::async_trait;
 use bytes::Buf;
 use chrono::{DateTime, Utc};
+use hyper::header::CONTENT_LENGTH;
 use percent_encoding::percent_decode_str;
 use reqwest::header::CONTENT_TYPE;
 use reqwest::{Method, Response, StatusCode};
@@ -166,6 +167,7 @@ impl Client {
             }
 
             match builder
+                .header(CONTENT_LENGTH, payload.content_length())
                 .send_retry(&self.retry_config, Some(payload.clone()))
                 .await
             {

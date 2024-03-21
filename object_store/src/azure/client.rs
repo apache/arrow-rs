@@ -190,6 +190,7 @@ impl<'a> PutRequest<'a> {
         let credential = self.config.get_credential().await?;
         let response = self
             .builder
+            .header(CONTENT_LENGTH, self.payload.content_length())
             .with_azure_authorization(&credential, &self.config.account)
             .send_retry(&self.config.retry_config, Some(self.payload))
             .await
@@ -241,7 +242,12 @@ impl AzureClient {
     }
 
     /// Make an Azure PUT request <https://docs.microsoft.com/en-us/rest/api/storageservices/put-blob>
-    pub async fn put_blob(&self, path: &Path, payload: PutPayload, opts: PutOptions) -> Result<PutResult> {
+    pub async fn put_blob(
+        &self,
+        path: &Path,
+        payload: PutPayload,
+        opts: PutOptions,
+    ) -> Result<PutResult> {
         let builder = self.put_request(path, payload);
 
         let builder = match &opts.mode {
@@ -263,7 +269,12 @@ impl AzureClient {
     }
 
     /// PUT a block <https://learn.microsoft.com/en-us/rest/api/storageservices/put-block>
-    pub async fn put_block(&self, path: &Path, part_idx: usize, payload: PutPayload) -> Result<PartId> {
+    pub async fn put_block(
+        &self,
+        path: &Path,
+        part_idx: usize,
+        payload: PutPayload,
+    ) -> Result<PartId> {
         let content_id = format!("{part_idx:20}");
         let block_id = BASE64_STANDARD.encode(&content_id);
 

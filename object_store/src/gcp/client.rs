@@ -33,6 +33,7 @@ use crate::{
 };
 use async_trait::async_trait;
 use bytes::Buf;
+use hyper::header::CONTENT_LENGTH;
 use percent_encoding::{percent_encode, utf8_percent_encode, NON_ALPHANUMERIC};
 use reqwest::header::HeaderName;
 use reqwest::{header, Client, Method, RequestBuilder, Response, StatusCode};
@@ -154,6 +155,7 @@ impl<'a> PutRequest<'a> {
         let response = self
             .builder
             .bearer_auth(&credential.bearer)
+            .header(CONTENT_LENGTH, self.payload.content_length())
             .send_retry(&self.config.retry_config, Some(self.payload))
             .await
             .context(PutRequestSnafu {
