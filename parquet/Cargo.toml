@@ -30,6 +30,8 @@ rust-version = { workspace = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 ahash = { version = "0.8", default-features = false, features = ["compile-time-rng"] }
+# See https://github.com/briansmith/ring/issues/918#issuecomment-2077788925
+ring = { version = "0.17", default-features = false, features = ["wasm32_unknown_unknown_js", "std"], optional = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 ahash = { version = "0.8", default-features = false, features = ["runtime-rng"] }
@@ -70,6 +72,7 @@ half = { version = "2.1", default-features = false, features = ["num-traits"] }
 sysinfo = { version = "0.33.0", optional = true, default-features = false, features = ["system"] }
 crc32fast = { version = "1.4.2", optional = true, default-features = false }
 simdutf8 = { version = "0.1.5", optional = true, default-features = false }
+ring = { version = "0.17", default-features = false, features = ["std"], optional = true }
 
 [dev-dependencies]
 base64 = { version = "0.22", default-features = false, features = ["std"] }
@@ -125,6 +128,8 @@ sysinfo = ["dep:sysinfo"]
 crc = ["dep:crc32fast"]
 # Enable SIMD UTF-8 validation
 simdutf8 = ["dep:simdutf8"]
+# Enable Parquet modular encryption support
+encryption = ["dep:ring"]
 
 
 [[example]]

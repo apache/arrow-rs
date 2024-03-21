@@ -3527,4 +3527,71 @@ mod tests {
             .unwrap();
         assert_eq!(batches.len(), 0);
     }
+
+    #[cfg(feature = "encryption")]
+    #[test]
+    fn test_uniform_encryption_roundtrip() {
+        let arrays = [
+            Int32Array::from((0..100).collect::<Vec<_>>()),
+            Int32Array::from((0..50).collect::<Vec<_>>()),
+            Int32Array::from((200..500).collect::<Vec<_>>()),
+        ];
+
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "int",
+            ArrowDataType::Int32,
+            false,
+        )]));
+
+        let file = tempfile::tempfile().unwrap();
+
+        // todo: add encryption
+        let props = WriterProperties::builder()
+            .set_max_row_group_size(200)
+            .build();
+
+        let mut writer =
+            ArrowWriter::try_new(file.try_clone().unwrap(), schema.clone(), Some(props)).unwrap();
+
+        for array in arrays {
+            let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(array)]).unwrap();
+            writer.write(&batch).unwrap();
+        }
+
+        writer.close().unwrap();
+
+        // todo: try_new_with_decryption
+        let builder = ParquetRecordBatchReaderBuilder::try_new(file).unwrap();
+        assert_eq!(&row_group_sizes(builder.metadata()), &[200, 200, 50]);
+
+        let batches = builder
+            .with_batch_size(100)
+            .build()
+            .unwrap()
+            .collect::<ArrowResult<Vec<_>>>()
+            .unwrap();
+
+        assert_eq!(batches.len(), 5);
+        assert!(batches.iter().all(|x| x.num_columns() == 1));
+
+        let batch_sizes: Vec<_> = batches.iter().map(|x| x.num_rows()).collect();
+
+        assert_eq!(&batch_sizes, &[100, 100, 100, 100, 50]);
+
+        let values: Vec<_> = batches
+            .iter()
+            .flat_map(|x| {
+                x.column(0)
+                    .as_any()
+                    .downcast_ref::<Int32Array>()
+                    .unwrap()
+                    .values()
+                    .iter()
+                    .cloned()
+            })
+            .collect();
+
+        let expected_values: Vec<_> = [0..100, 0..50, 200..500].into_iter().flatten().collect();
+        assert_eq!(&values, &expected_values)
+    }
 }

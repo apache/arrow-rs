@@ -169,6 +169,8 @@ pub struct WriterProperties {
     column_index_truncate_length: Option<usize>,
     statistics_truncate_length: Option<usize>,
     coerce_types: bool,
+    #[cfg(feature = "encryption")]
+    file_encryption_properties: Option<FileEncryptionProperties>,
 }
 
 impl Default for WriterProperties {
