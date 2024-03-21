@@ -1025,14 +1025,8 @@ mod tests {
             // Can't use stream_get test as WriteMultipart uses a tokio JoinSet
             let p = Path::from("manual_upload");
             let mut upload = integration.put_multipart(&p).await.unwrap();
-            upload
-                .put_part(PutPayload::from_static(b"123"))
-                .await
-                .unwrap();
-            upload
-                .put_part(PutPayload::from_static(b"45678"))
-                .await
-                .unwrap();
+            upload.put_part("123".into()).await.unwrap();
+            upload.put_part("45678".into()).await.unwrap();
             let r = upload.complete().await.unwrap();
 
             let get = integration.get(&p).await.unwrap();
@@ -1279,10 +1273,7 @@ mod tests {
 
         // Adding a file through a symlink creates in both paths
         integration
-            .put(
-                &Path::from("b/file.parquet"),
-                PutPayload::from(vec![0, 1, 2]),
-            )
+            .put(&Path::from("b/file.parquet"), vec![0, 1, 2].into())
             .await
             .unwrap();
 

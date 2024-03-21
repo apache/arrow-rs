@@ -616,7 +616,6 @@ pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
     /// ```
     /// # use futures::{StreamExt, TryStreamExt};
     /// # use object_store::local::LocalFileSystem;
-    /// use object_store::PutPayload;
     /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
     /// # let root = tempfile::TempDir::new().unwrap();
     /// # let store = LocalFileSystem::new_with_prefix(root.path()).unwrap();
@@ -625,8 +624,8 @@ pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
     /// # use futures::{StreamExt, TryStreamExt};
     /// #
     /// // Create two objects
-    /// store.put(&Path::from("foo"), PutPayload::from("foo")).await?;
-    /// store.put(&Path::from("bar"), PutPayload::from("bar")).await?;
+    /// store.put(&Path::from("foo"), "foo".into()).await?;
+    /// store.put(&Path::from("bar"), "bar".into()).await?;
     ///
     /// // List object
     /// let locations = store.list(None).map_ok(|m| m.location).boxed();
@@ -1374,7 +1373,7 @@ mod tests {
 
         let file_with_delimiter = Path::from_iter(["a", "b/c", "foo.file"]);
         storage
-            .put(&file_with_delimiter, PutPayload::from("arbitrary"))
+            .put(&file_with_delimiter, "arbitrary".into())
             .await
             .unwrap();
 
@@ -1414,10 +1413,7 @@ mod tests {
 
         let emoji_prefix = Path::from("🙀");
         let emoji_file = Path::from("🙀/😀.parquet");
-        storage
-            .put(&emoji_file, PutPayload::from("arbitrary"))
-            .await
-            .unwrap();
+        storage.put(&emoji_file, "arbitrary".into()).await.unwrap();
 
         storage.head(&emoji_file).await.unwrap();
         storage
@@ -1469,10 +1465,7 @@ mod tests {
         let hello_prefix = Path::parse("%48%45%4C%4C%4F").unwrap();
         let path = hello_prefix.child("foo.parquet");
 
-        storage
-            .put(&path, PutPayload::from(vec![0, 1]))
-            .await
-            .unwrap();
+        storage.put(&path, vec![0, 1].into()).await.unwrap();
         let files = flatten_list_stream(storage, Some(&hello_prefix))
             .await
             .unwrap();
@@ -1512,10 +1505,7 @@ mod tests {
 
         // Can also write non-percent encoded sequences
         let path = Path::parse("%Q.parquet").unwrap();
-        storage
-            .put(&path, PutPayload::from(vec![0, 1]))
-            .await
-            .unwrap();
+        storage.put(&path, vec![0, 1].into()).await.unwrap();
 
         let files = flatten_list_stream(storage, None).await.unwrap();
         assert_eq!(files, vec![path.clone()]);
@@ -1523,10 +1513,7 @@ mod tests {
         storage.delete(&path).await.unwrap();
 
         let path = Path::parse("foo bar/I contain spaces.parquet").unwrap();
-        storage
-            .put(&path, PutPayload::from(vec![0, 1]))
-            .await
-            .unwrap();
+        storage.put(&path, vec![0, 1].into()).await.unwrap();
         storage.head(&path).await.unwrap();
 
         let files = flatten_list_stream(storage, Some(&Path::from("foo bar")))
@@ -2146,10 +2133,7 @@ mod tests {
 
         // Create destination object
         let path2 = Path::from("test2");
-        storage
-            .put(&path2, PutPayload::from("hello"))
-            .await
-            .unwrap();
+        storage.put(&path2, "hello".into()).await.unwrap();
 
         // copy() errors if source does not exist
         let result = storage.copy(&path1, &path2).await;

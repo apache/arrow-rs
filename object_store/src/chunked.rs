@@ -181,10 +181,7 @@ mod tests {
     async fn test_chunked_basic() {
         let location = Path::parse("test").unwrap();
         let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
-        store
-            .put(&location, PutPayload::from(vec![0; 1001]))
-            .await
-            .unwrap();
+        store.put(&location, vec![0; 1001].into()).await.unwrap();
 
         for chunk_size in [10, 20, 31] {
             let store = ChunkedStore::new(Arc::clone(&store), chunk_size);

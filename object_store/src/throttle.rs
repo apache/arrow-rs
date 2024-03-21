@@ -476,8 +476,7 @@ mod tests {
 
         if let Some(n_bytes) = n_bytes {
             let data: Vec<_> = std::iter::repeat(1u8).take(n_bytes).collect();
-            let bytes = PutPayload::from(data);
-            store.put(&path, bytes).await.unwrap();
+            store.put(&path, data.into()).await.unwrap();
         } else {
             // ensure object is absent
             store.delete(&path).await.unwrap();
@@ -500,9 +499,7 @@ mod tests {
         // create new entries
         for i in 0..n_entries {
             let path = prefix.child(i.to_string().as_str());
-
-            let data = PutPayload::from("bar");
-            store.put(&path, data).await.unwrap();
+            store.put(&path, "bar".into()).await.unwrap();
         }
 
         prefix
@@ -570,10 +567,9 @@ mod tests {
 
     async fn measure_put(store: &ThrottledStore<InMemory>, n_bytes: usize) -> Duration {
         let data: Vec<_> = std::iter::repeat(1u8).take(n_bytes).collect();
-        let bytes = PutPayload::from(data);
 
         let t0 = Instant::now();
-        store.put(&Path::from("foo"), bytes).await.unwrap();
+        store.put(&Path::from("foo"), data.into()).await.unwrap();
 
         t0.elapsed()
     }
