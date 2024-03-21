@@ -19,7 +19,7 @@ use crate::builder::ArrayBuilder;
 use crate::{ArrayRef, FixedSizeListArray};
 use arrow_buffer::NullBufferBuilder;
 use arrow_data::ArrayData;
-use arrow_schema::{DataType, Field};
+use arrow_schema::{DataType, Field, FieldRef};
 use std::any::Any;
 use std::sync::Arc;
 
@@ -67,6 +67,7 @@ pub struct FixedSizeListBuilder<T: ArrayBuilder> {
     null_buffer_builder: NullBufferBuilder,
     values_builder: T,
     list_len: i32,
+    field: Option<FieldRef>,
 }
 
 impl<T: ArrayBuilder> FixedSizeListBuilder<T> {
@@ -89,6 +90,20 @@ impl<T: ArrayBuilder> FixedSizeListBuilder<T> {
             null_buffer_builder: NullBufferBuilder::new(capacity),
             values_builder,
             list_len: value_length,
+            field: None,
+        }
+    }
+
+    /// Override the field passed to [`ArrayData::builder`]
+    ///
+    /// By default a nullable field is created with the name `item`
+    ///
+    /// Note: [`Self::finish`] and [`Self::finish_cloned`] will panic if the
+    /// field's data type does not match that of `T`
+    pub fn with_field(self, field: impl Into<FieldRef>) -> Self {
+        Self {
+            field: Some(field.into()),
+            ..self
         }
     }
 }
@@ -164,19 +179,22 @@ where
             self.list_len,
             len,
         );
-
+        let field = match &self.field {
+            Some(f) => f.clone(),
+            None => Arc::new(Field::new("item", values_data.data_type().clone(), true)),
+        };
         let nulls = self.null_buffer_builder.finish();
-        let array_data = ArrayData::builder(DataType::FixedSizeList(
-            Arc::new(Field::new("item", values_data.data_type().clone(), true)),
-            self.list_len,
-        ))
-        .len(len)
-        .add_child_data(values_data)
-        .nulls(nulls);
+        let array_data = ArrayData::builder(DataType::FixedSizeList(field, self.list_len))
+            .len(len)
+            .add_child_data(values_data)
+            .nulls(nulls);
 
-        let array_data = unsafe { array_data.build_unchecked() };
+        let array_data = array_data.build();
 
-        FixedSizeListArray::from(array_data)
+        match array_data {
+            Ok(array_data) => FixedSizeListArray::from(array_data),
+            Err(arrow_error) => panic!("{}", arrow_error),
+        }
     }
 
     /// Builds the [`FixedSizeListBuilder`] without resetting the builder.
@@ -194,17 +212,23 @@ where
         );
 
         let nulls = self.null_buffer_builder.finish_cloned();
-        let array_data = ArrayData::builder(DataType::FixedSizeList(
-            Arc::new(Field::new("item", values_data.data_type().clone(), true)),
-            self.list_len,
-        ))
-        .len(len)
-        .add_child_data(values_data)
-        .nulls(nulls);
 
-        let array_data = unsafe { array_data.build_unchecked() };
+        let field = match &self.field {
+            Some(f) => f.clone(),
+            None => Arc::new(Field::new("item", values_data.data_type().clone(), true)),
+        };
 
-        FixedSizeListArray::from(array_data)
+        let array_data = ArrayData::builder(DataType::FixedSizeList(field, self.list_len))
+            .len(len)
+            .add_child_data(values_data)
+            .nulls(nulls);
+
+        let array_data = array_data.build();
+
+        match array_data {
+            Ok(array_data) => FixedSizeListArray::from(array_data),
+            Err(arrow_error) => panic!("{}", arrow_error),
+        }
     }
 }
 
@@ -245,6 +269,89 @@ mod tests {
         assert_eq!(1, list_array.null_count());
         assert_eq!(6, list_array.value_offset(2));
         assert_eq!(3, list_array.value_length());
+    }
+
+    #[test]
+    fn test_fixed_size_list_array_builder_with_field() {
+        let values_builder = Int32Builder::new();
+        let mut builder = FixedSizeListBuilder::new(values_builder, 3).with_field(Field::new(
+            "list_element",
+            DataType::Int32,
+            true,
+        ));
+
+        //  [[0, 1, 2], null, [3, null, 5], [6, 7, null]]
+        builder.values().append_value(0);
+        builder.values().append_value(1);
+        builder.values().append_value(2);
+        builder.append(true);
+        builder.values().append_null();
+        builder.values().append_null();
+        builder.values().append_null();
+        builder.append(false);
+        builder.values().append_value(3);
+        builder.values().append_null();
+        builder.values().append_value(5);
+        builder.append(true);
+        builder.values().append_value(6);
+        builder.values().append_value(7);
+        builder.values().append_null();
+        builder.append(true);
+        let list_array = builder.finish();
+
+        assert_eq!(DataType::Int32, list_array.value_type());
+        assert_eq!(4, list_array.len());
+        assert_eq!(1, list_array.null_count());
+        assert_eq!(6, list_array.value_offset(2));
+        assert_eq!(3, list_array.value_length());
+    }
+
+    #[test]
+    #[should_panic(expected = "contains nulls not present in parent")]
+    fn test_fixed_size_list_array_builder_with_field_null_panic() {
+        let values_builder = Int32Builder::new();
+        let builder = FixedSizeListBuilder::new(values_builder, 3);
+        let mut builder = builder.with_field(Field::new("list_item", DataType::Int32, false));
+
+        //  [[0, 1, 2], null, [3, null, 5], [6, 7, null]]
+        builder.values().append_value(0);
+        builder.values().append_value(1);
+        builder.values().append_value(2);
+        builder.append(true);
+        builder.values().append_null();
+        builder.values().append_null();
+        builder.values().append_null();
+        builder.append(false);
+        builder.values().append_value(3);
+        builder.values().append_null();
+        builder.values().append_value(5);
+        builder.append(true);
+
+        builder.finish();
+    }
+
+    #[test]
+    #[should_panic(expected = "Expected Int64 but child data had Int32")]
+    fn test_fixed_size_list_array_builder_with_field_type_panic() {
+        let values_builder = Int32Builder::new();
+        let builder = FixedSizeListBuilder::new(values_builder, 3);
+        let mut builder = builder.with_field(Field::new("list_item", DataType::Int64, true));
+
+        //  [[0, 1, 2], null, [3, null, 5], [6, 7, null]]
+        builder.values().append_value(0);
+        builder.values().append_value(1);
+        builder.values().append_value(2);
+        builder.append(true);
+        builder.values().append_null();
+        builder.values().append_null();
+        builder.values().append_null();
+        builder.append(false);
+        builder.values().append_value(3);
+        builder.values().append_value(4);
+        builder.values().append_value(5);
+        builder.append(true);
+
+        builder.finish();
     }
 
     #[test]
