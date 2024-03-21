@@ -20,4 +20,5 @@
 
 pub(crate) mod ciphers;
 pub mod decrypt;
+pub mod encrypt;
 pub(crate) mod modules;
