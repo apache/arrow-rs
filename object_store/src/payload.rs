@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::Error;
 use bytes::Bytes;
 use std::sync::Arc;
 
@@ -48,7 +47,7 @@ impl PutPayload {
     #[cfg(feature = "cloud")]
     pub(crate) fn body(&self) -> reqwest::Body {
         reqwest::Body::wrap_stream(futures::stream::iter(
-            self.clone().into_iter().map(Ok::<_, Error>),
+            self.clone().into_iter().map(Ok::<_, crate::Error>),
         ))
     }
 
