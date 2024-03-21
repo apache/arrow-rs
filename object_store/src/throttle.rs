@@ -20,11 +20,11 @@ use parking_lot::Mutex;
 use std::ops::Range;
 use std::{convert::TryInto, sync::Arc};
 
-use crate::{GetOptions, PutPayload};
 use crate::{
     path::Path, GetResult, GetResultPayload, ListResult, MultipartUpload, ObjectMeta, ObjectStore,
     PutOptions, PutResult, Result,
 };
+use crate::{GetOptions, PutPayload};
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures::{stream::BoxStream, FutureExt, StreamExt};
@@ -152,7 +152,12 @@ impl<T: ObjectStore> ObjectStore for ThrottledStore<T> {
         self.inner.put(location, payload).await
     }
 
-    async fn put_opts(&self, location: &Path, payload: PutPayload, opts: PutOptions) -> Result<PutResult> {
+    async fn put_opts(
+        &self,
+        location: &Path,
+        payload: PutPayload,
+        opts: PutOptions,
+    ) -> Result<PutResult> {
         sleep(self.config().wait_put_per_call).await;
         self.inner.put_opts(location, payload, opts).await
     }

@@ -168,7 +168,7 @@ impl FromIterator<Bytes> for PutPayload {
 impl From<PutPayload> for Bytes {
     fn from(value: PutPayload) -> Self {
         match value.0.len() {
-            0 => Bytes::new(),
+            0 => Self::new(),
             1 => value.0[0].clone(),
             _ => {
                 let mut buf = Vec::with_capacity(value.content_length());

@@ -42,7 +42,10 @@ use crate::client::get::GetClientExt;
 use crate::client::header::get_etag;
 use crate::http::client::Client;
 use crate::path::Path;
-use crate::{ClientConfigKey, ClientOptions, GetOptions, GetResult, ListResult, MultipartUpload, ObjectMeta, ObjectStore, PutMode, PutOptions, PutPayload, PutResult, Result, RetryConfig};
+use crate::{
+    ClientConfigKey, ClientOptions, GetOptions, GetResult, ListResult, MultipartUpload, ObjectMeta,
+    ObjectStore, PutMode, PutOptions, PutPayload, PutResult, Result, RetryConfig,
+};
 
 mod client;
 
@@ -91,7 +94,12 @@ impl std::fmt::Display for HttpStore {
 
 #[async_trait]
 impl ObjectStore for HttpStore {
-    async fn put_opts(&self, location: &Path, payload: PutPayload, opts: PutOptions) -> Result<PutResult> {
+    async fn put_opts(
+        &self,
+        location: &Path,
+        payload: PutPayload,
+        opts: PutOptions,
+    ) -> Result<PutResult> {
         if opts.mode != PutMode::Overwrite {
             // TODO: Add support for If header - https://datatracker.ietf.org/doc/html/rfc2518#section-9.4
             return Err(crate::Error::NotImplemented);

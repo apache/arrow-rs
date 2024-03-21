@@ -42,7 +42,10 @@ use crate::client::list::ListClientExt;
 use crate::client::CredentialProvider;
 use crate::multipart::{MultipartStore, PartId};
 use crate::signer::Signer;
-use crate::{Error, GetOptions, GetResult, ListResult, MultipartId, MultipartUpload, ObjectMeta, ObjectStore, Path, PutMode, PutOptions, PutPayload, PutResult, Result, UploadPart};
+use crate::{
+    Error, GetOptions, GetResult, ListResult, MultipartId, MultipartUpload, ObjectMeta,
+    ObjectStore, Path, PutMode, PutOptions, PutPayload, PutResult, Result, UploadPart,
+};
 
 static TAGS_HEADER: HeaderName = HeaderName::from_static("x-amz-tagging");
 
@@ -156,8 +159,13 @@ impl Signer for AmazonS3 {
 
 #[async_trait]
 impl ObjectStore for AmazonS3 {
-    async fn put_opts(&self, location: &Path, payload: PutPayload, opts: PutOptions) -> Result<PutResult> {
-        let mut request = self.client.put_request(location, payload.into(), true);
+    async fn put_opts(
+        &self,
+        location: &Path,
+        payload: PutPayload,
+        opts: PutOptions,
+    ) -> Result<PutResult> {
+        let mut request = self.client.put_request(location, payload, true);
         let tags = opts.tags.encoded();
         if !tags.is_empty() && !self.client.config.disable_tagging {
             request = request.header(&TAGS_HEADER, tags);

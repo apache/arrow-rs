@@ -27,11 +27,11 @@ use futures::stream::BoxStream;
 use futures::StreamExt;
 
 use crate::path::Path;
-use crate::{PutPayload, Result};
 use crate::{
     GetOptions, GetResult, GetResultPayload, ListResult, MultipartUpload, ObjectMeta, ObjectStore,
     PutOptions, PutResult,
 };
+use crate::{PutPayload, Result};
 
 /// Wraps a [`ObjectStore`] and makes its get response return chunks
 /// in a controllable manner.
@@ -62,7 +62,12 @@ impl Display for ChunkedStore {
 
 #[async_trait]
 impl ObjectStore for ChunkedStore {
-    async fn put_opts(&self, location: &Path, payload: PutPayload, opts: PutOptions) -> Result<PutResult> {
+    async fn put_opts(
+        &self,
+        location: &Path,
+        payload: PutPayload,
+        opts: PutOptions,
+    ) -> Result<PutResult> {
         self.inner.put_opts(location, payload, opts).await
     }
 

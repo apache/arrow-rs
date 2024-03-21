@@ -343,17 +343,14 @@ impl S3Client {
         }
 
         let mut sha256 = Context::new(&digest::SHA256);
-        payload.iter().for_each(|x| sha256.update(&x));
+        payload.iter().for_each(|x| sha256.update(x));
         let payload_sha256 = sha256.finish();
 
-        match self.config.checksum {
-            Some(Checksum::SHA256) => {
-                builder = builder.header(
-                    "x-amz-checksum-sha256",
-                    BASE64_STANDARD.encode(&payload_sha256),
-                )
-            }
-            None => {}
+        if let Some(Checksum::SHA256) = self.config.checksum {
+            builder = builder.header(
+                "x-amz-checksum-sha256",
+                BASE64_STANDARD.encode(payload_sha256),
+            )
         }
 
         if let Some(value) = self.config.client_options.get_content_type(path) {
@@ -447,7 +444,7 @@ impl S3Client {
         let mut builder = self.client.request(Method::POST, url);
 
         let digest = digest::digest(&digest::SHA256, &body);
-        builder = builder.header(SHA256_CHECKSUM, BASE64_STANDARD.encode(&digest));
+        builder = builder.header(SHA256_CHECKSUM, BASE64_STANDARD.encode(digest));
 
         // S3 *requires* DeleteObjects to include a Content-MD5 header:
         // https://docs.aws.amazon.com/AmazonS3/latest/API/API_DeleteObjects.html

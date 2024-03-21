@@ -92,7 +92,7 @@ impl ObjectStore for MicrosoftAzure {
         payload: PutPayload,
         opts: PutOptions,
     ) -> Result<PutResult> {
-        self.client.put_blob(location, payload.into(), opts).await
+        self.client.put_blob(location, payload, opts).await
     }
 
     async fn put_multipart(&self, location: &Path) -> Result<Box<dyn MultipartUpload>> {
@@ -214,7 +214,7 @@ impl MultipartUpload for AzureMultiPartUpload {
         Box::pin(async move {
             let part = state
                 .client
-                .put_block(&state.location, idx, data.into())
+                .put_block(&state.location, idx, data)
                 .await?;
             state.parts.put(idx, part);
             Ok(())
@@ -249,7 +249,7 @@ impl MultipartStore for MicrosoftAzure {
         part_idx: usize,
         data: PutPayload,
     ) -> Result<PartId> {
-        self.client.put_block(path, part_idx, data.into()).await
+        self.client.put_block(path, part_idx, data).await
     }
 
     async fn complete_multipart(
