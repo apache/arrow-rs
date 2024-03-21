@@ -58,7 +58,12 @@ pub fn parse_metadata<R: ChunkReader>(chunk_reader: &R) -> Result<ParquetMetaDat
 /// [Parquet Spec]: https://github.com/apache/parquet-format#metadata
 #[deprecated(since = "53.1.0", note = "Use ParquetMetaDataReader::decode_metadata")]
 pub fn decode_metadata(buf: &[u8]) -> Result<ParquetMetaData> {
-    ParquetMetaDataReader::decode_metadata(buf)
+    ParquetMetaDataReader::decode_metadata(
+        buf,
+        false,
+        #[cfg(feature = "encryption")]
+        None,
+    )
 }
 
 /// Decodes the Parquet footer returning the metadata length in bytes
