@@ -1200,7 +1200,7 @@ mod tests {
         let schema = Schema::new(vec![string_field, binary_field]);
 
         let raw_string_values = vec!["foo", "bar", "baz", "quux"];
-        let raw_binary_values = vec![
+        let raw_binary_values = [
             b"foo".to_vec(),
             b"bar".to_vec(),
             b"baz".to_vec(),
