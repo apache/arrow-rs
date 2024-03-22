@@ -25,27 +25,43 @@ pub use private::{Tz, TzOffset};
 fn parse_fixed_offset(tz: &str) -> Option<FixedOffset> {
     let bytes = tz.as_bytes();
 
-    let mut values = match bytes.len() {
-        // [+-]XX:XX
-        6 if bytes[3] == b':' => [bytes[1], bytes[2], bytes[4], bytes[5]],
-        // [+-]XXXX
-        5 => [bytes[1], bytes[2], bytes[3], bytes[4]],
-        // [+-]XX
-        3 => [bytes[1], bytes[2], b'0', b'0'],
+    let offset_fn = match bytes[0] {
+        b'+' => FixedOffset::east_opt,
+        b'-' => FixedOffset::west_opt,
         _ => return None,
     };
-    values.iter_mut().for_each(|x| *x = x.wrapping_sub(b'0'));
+
+    let values = match bytes.len() {
+        // [+-]XX:XX
+        6 if bytes[3] == b':' => [
+            bytes[1].wrapping_sub(b'0'),
+            bytes[2].wrapping_sub(b'0'),
+            bytes[4].wrapping_sub(b'0'),
+            bytes[5].wrapping_sub(b'0'),
+        ],
+        // [+-]XXXX
+        5 => [
+            bytes[1].wrapping_sub(b'0'),
+            bytes[2].wrapping_sub(b'0'),
+            bytes[3].wrapping_sub(b'0'),
+            bytes[4].wrapping_sub(b'0'),
+        ],
+        // [+-]XX
+        3 => [
+            bytes[1].wrapping_sub(b'0'),
+            bytes[2].wrapping_sub(b'0'),
+            0,
+            0,
+        ],
+        _ => return None,
+    };
     if values.iter().any(|x| *x > 9) {
         return None;
     }
     let secs =
         (values[0] * 10 + values[1]) as i32 * 60 * 60 + (values[2] * 10 + values[3]) as i32 * 60;
 
-    match bytes[0] {
-        b'+' => FixedOffset::east_opt(secs),
-        b'-' => FixedOffset::west_opt(secs),
-        _ => None,
-    }
+    offset_fn(secs)
 }
 
 #[cfg(feature = "chrono-tz")]

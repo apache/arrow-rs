@@ -24,9 +24,18 @@ use chrono::prelude::*;
 use half::f16;
 use std::str::FromStr;
 
+/// Parse nanoseconds from the first `N` values in digits
+#[inline]
+fn parse_nanos<const N: usize>(digits: &[u8]) -> u32 {
+    digits[..N]
+        .iter()
+        .fold(0_u32, |acc, v| acc * 10 + *v as u32)
+        * 10_u32.pow((9 - N) as _)
+}
+
 /// Parse nanoseconds from the first `N` values in digits, subtracting the offset `O`
 #[inline]
-fn parse_nanos<const N: usize, const O: u8>(digits: &[u8]) -> u32 {
+fn parse_nanos_subtracting<const N: usize, const O: u8>(digits: &[u8]) -> u32 {
     digits[..N]
         .iter()
         .fold(0_u32, |acc, v| acc * 10 + v.wrapping_sub(O) as u32)
@@ -57,14 +66,13 @@ impl TimestampParser {
         Self { digits, mask }
     }
 
-    /// Returns true if the byte at `idx` in the original string equals `b`
-    fn test(&self, idx: usize, b: u8) -> bool {
-        self.digits[idx] == b.wrapping_sub(b'0')
-    }
-
     /// Parses a date of the form `1997-01-31`
     fn date(&self) -> Option<NaiveDate> {
-        if self.mask & 0b1111111111 != 0b1101101111 || !self.test(4, b'-') || !self.test(7, b'-') {
+        const DASH: u8 = b'-'.wrapping_sub(b'0');
+        if self.mask & 0b1111111111 != 0b1101101111
+            || self.digits[4] != DASH
+            || self.digits[7] != DASH
+        {
             return None;
         }
 
@@ -88,6 +96,9 @@ impl TimestampParser {
     ///
     /// Returning the end byte offset
     fn time(&self) -> Option<(NaiveTime, usize)> {
+        const PERIOD: u8 = b'.'.wrapping_sub(b'0');
+        const COLON: u8 = b':'.wrapping_sub(b'0');
+
         // Make a NaiveTime handling leap seconds
         let time = |hour, min, sec, nano| match sec {
             60 => {
@@ -99,29 +110,28 @@ impl TimestampParser {
 
         match (self.mask >> 11) & 0b11111111 {
             // 09:26:56
-            0b11011011 if self.test(13, b':') && self.test(16, b':') => {
+            0b11011011 if self.digits[13] == COLON && self.digits[16] == COLON => {
                 let hour = self.digits[11] * 10 + self.digits[12];
                 let minute = self.digits[14] * 10 + self.digits[15];
                 let second = self.digits[17] * 10 + self.digits[18];
 
-                match self.test(19, b'.') {
-                    true => {
-                        let digits = (self.mask >> 20).trailing_ones();
-                        let nanos = match digits {
-                            0 => return None,
-                            1 => parse_nanos::<1, 0>(&self.digits[20..21]),
-                            2 => parse_nanos::<2, 0>(&self.digits[20..22]),
-                            3 => parse_nanos::<3, 0>(&self.digits[20..23]),
-                            4 => parse_nanos::<4, 0>(&self.digits[20..24]),
-                            5 => parse_nanos::<5, 0>(&self.digits[20..25]),
-                            6 => parse_nanos::<6, 0>(&self.digits[20..26]),
-                            7 => parse_nanos::<7, 0>(&self.digits[20..27]),
-                            8 => parse_nanos::<8, 0>(&self.digits[20..28]),
-                            _ => parse_nanos::<9, 0>(&self.digits[20..29]),
-                        };
-                        Some((time(hour, minute, second, nanos)?, 20 + digits as usize))
-                    }
-                    false => Some((time(hour, minute, second, 0)?, 19)),
+                if self.digits[19] == PERIOD {
+                    let digits = (self.mask >> 20).trailing_ones();
+                    let nanos = match digits {
+                        0 => return None,
+                        1 => parse_nanos::<1>(&self.digits[20..21]),
+                        2 => parse_nanos::<2>(&self.digits[20..22]),
+                        3 => parse_nanos::<3>(&self.digits[20..23]),
+                        4 => parse_nanos::<4>(&self.digits[20..24]),
+                        5 => parse_nanos::<5>(&self.digits[20..25]),
+                        6 => parse_nanos::<6>(&self.digits[20..26]),
+                        7 => parse_nanos::<7>(&self.digits[20..27]),
+                        8 => parse_nanos::<8>(&self.digits[20..28]),
+                        _ => parse_nanos::<9>(&self.digits[20..29]),
+                    };
+                    Some((time(hour, minute, second, nanos)?, 20 + digits as usize))
+                } else {
+                    Some((time(hour, minute, second, 0)?, 19))
                 }
             }
             // 092656
@@ -171,25 +181,30 @@ impl TimestampParser {
 ///
 /// [IANA timezones]: https://www.iana.org/time-zones
 pub fn string_to_datetime<T: TimeZone>(timezone: &T, s: &str) -> Result<DateTime<T>, ArrowError> {
+    #[allow(deprecated)]
+    const ZERO_TIME: NaiveTime = NaiveTime::from_hms(0, 0, 0);
+
     let err =
         |ctx: &str| ArrowError::ParseError(format!("Error parsing timestamp from '{s}': {ctx}"));
 
     let bytes = s.as_bytes();
-    if bytes.len() < 10 {
+    let len = bytes.len();
+    if len < 10 {
         return Err(err("timestamp must contain at least 10 characters"));
     }
 
     let parser = TimestampParser::new(bytes);
     let date = parser.date().ok_or_else(|| err("error parsing date"))?;
-    if bytes.len() == 10 {
-        let datetime = date.and_time(NaiveTime::from_hms_opt(0, 0, 0).unwrap());
+    if len == 10 {
+        let datetime = date.and_time(ZERO_TIME);
         return timezone
             .from_local_datetime(&datetime)
             .single()
             .ok_or_else(|| err("error computing timezone offset"));
     }
 
-    if !parser.test(10, b'T') && !parser.test(10, b't') && !parser.test(10, b' ') {
+    let time_sep = bytes[10];
+    if time_sep != b'T' && time_sep != b't' && time_sep != b' ' {
         return Err(err("invalid timestamp separator"));
     }
 
@@ -198,19 +213,19 @@ pub fn string_to_datetime<T: TimeZone>(timezone: &T, s: &str) -> Result<DateTime
 
     if tz_offset == 32 {
         // Decimal overrun
-        while tz_offset < bytes.len() && bytes[tz_offset].is_ascii_digit() {
+        while tz_offset < len && bytes[tz_offset].is_ascii_digit() {
             tz_offset += 1;
         }
     }
 
-    if bytes.len() <= tz_offset {
+    if len <= tz_offset {
         return timezone
             .from_local_datetime(&datetime)
             .single()
             .ok_or_else(|| err("error computing timezone offset"));
     }
 
-    if (bytes[tz_offset] == b'z' || bytes[tz_offset] == b'Z') && tz_offset == bytes.len() - 1 {
+    if (bytes[tz_offset] == b'Z' || bytes[tz_offset] == b'z') && tz_offset == len - 1 {
         return Ok(timezone.from_utc_datetime(&datetime));
     }
 
@@ -358,15 +373,15 @@ fn string_to_time(s: &str) -> Option<NaiveTime> {
                     }
                     match decimal.len() {
                         0 => return None,
-                        1 => parse_nanos::<1, b'0'>(decimal),
-                        2 => parse_nanos::<2, b'0'>(decimal),
-                        3 => parse_nanos::<3, b'0'>(decimal),
-                        4 => parse_nanos::<4, b'0'>(decimal),
-                        5 => parse_nanos::<5, b'0'>(decimal),
-                        6 => parse_nanos::<6, b'0'>(decimal),
-                        7 => parse_nanos::<7, b'0'>(decimal),
-                        8 => parse_nanos::<8, b'0'>(decimal),
-                        _ => parse_nanos::<9, b'0'>(decimal),
+                        1 => parse_nanos_subtracting::<1, b'0'>(decimal),
+                        2 => parse_nanos_subtracting::<2, b'0'>(decimal),
+                        3 => parse_nanos_subtracting::<3, b'0'>(decimal),
+                        4 => parse_nanos_subtracting::<4, b'0'>(decimal),
+                        5 => parse_nanos_subtracting::<5, b'0'>(decimal),
+                        6 => parse_nanos_subtracting::<6, b'0'>(decimal),
+                        7 => parse_nanos_subtracting::<7, b'0'>(decimal),
+                        8 => parse_nanos_subtracting::<8, b'0'>(decimal),
+                        _ => parse_nanos_subtracting::<9, b'0'>(decimal),
                     }
                 }
                 Some(_) => return None,
@@ -1229,9 +1244,13 @@ mod tests {
 
     #[test]
     fn test_parse_nanos() {
-        assert_eq!(parse_nanos::<3, 0>(&[1, 2, 3]), 123_000_000);
-        assert_eq!(parse_nanos::<5, 0>(&[1, 2, 3, 4, 5]), 123_450_000);
-        assert_eq!(parse_nanos::<6, b'0'>(b"123456"), 123_456_000);
+        assert_eq!(parse_nanos::<3>(&[1, 2, 3]), 123_000_000);
+        assert_eq!(parse_nanos::<5>(&[1, 2, 3, 4, 5]), 123_450_000);
+    }
+
+    #[test]
+    fn test_parse_nanos_subtracting() {
+        assert_eq!(parse_nanos_subtracting::<6, b'0'>(b"123456"), 123_456_000);
     }
 
     #[test]
