@@ -1877,7 +1877,7 @@ mod tests {
     #[test]
     fn test_bounded() {
         let schema = Schema::new(vec![Field::new("int", DataType::UInt32, false)]);
-        let data = vec![
+        let data = [
             vec!["0"],
             vec!["1"],
             vec!["2"],
@@ -1919,7 +1919,7 @@ mod tests {
     #[test]
     fn test_empty_projection() {
         let schema = Schema::new(vec![Field::new("int", DataType::UInt32, false)]);
-        let data = vec![vec!["0"], vec!["1"]];
+        let data = [vec!["0"], vec!["1"]];
 
         let data = data
             .iter()
