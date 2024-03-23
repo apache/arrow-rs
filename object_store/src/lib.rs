@@ -520,6 +520,10 @@ use std::io::{Read, Seek, SeekFrom};
 use std::ops::Range;
 use std::sync::Arc;
 
+// Re-exports
+#[cfg(feature = "hyper")]
+pub use hyper;
+
 /// An alias for a dynamically dispatched object store implementation.
 pub type DynObjectStore = dyn ObjectStore;
 
