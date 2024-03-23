@@ -250,3 +250,48 @@ impl StreamDecoder {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::writer::StreamWriter;
+    use arrow_array::{Int32Array, Int64Array, RecordBatch};
+    use arrow_schema::{DataType, Field, Schema};
+
+    // Further tests in arrow-integration-testing/tests/ipc_reader.rs
+
+    #[test]
+    fn test_eos() {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("int32", DataType::Int32, false),
+            Field::new("int64", DataType::Int64, false),
+        ]));
+
+        let input = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(Int32Array::from(vec![1, 2, 3])) as _,
+                Arc::new(Int64Array::from(vec![1, 2, 3])) as _,
+            ],
+        )
+        .unwrap();
+
+        let mut buf = Vec::with_capacity(1024);
+        let mut s = StreamWriter::try_new(&mut buf, &schema).unwrap();
+        s.write(&input).unwrap();
+        s.finish().unwrap();
+        drop(s);
+
+        let buffer = Buffer::from_vec(buf);
+
+        let mut b = buffer.slice_with_length(0, buffer.len() - 1);
+        let mut decoder = StreamDecoder::new();
+        let output = decoder.decode(&mut b).unwrap().unwrap();
+        assert_eq!(output, input);
+        assert_eq!(b.len(), 7); // 8 byte EOS truncated by 1 byte
+        assert!(decoder.decode(&mut b).unwrap().is_none());
+
+        let err = decoder.finish().unwrap_err().to_string();
+        assert_eq!(err, "Ipc error: Unexpected End of Stream");
+    }
+}
