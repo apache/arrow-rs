@@ -237,7 +237,7 @@ impl StreamDecoder {
 
     /// Signal the end of stream
     ///
-    /// Returns an error if this would truncate a message
+    /// Returns an error if any partial data remains in the stream
     pub fn finish(&mut self) -> Result<(), ArrowError> {
         match self.state {
             DecoderState::Finished
@@ -246,7 +246,7 @@ impl StreamDecoder {
                 continuation: false,
                 ..
             } => Ok(()),
-            _ => Err(ArrowError::IpcError("Unexpected EOS".to_string())),
+            _ => Err(ArrowError::IpcError("Unexpected End of Stream".to_string())),
         }
     }
 }
