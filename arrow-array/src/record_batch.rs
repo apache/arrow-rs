@@ -626,9 +626,7 @@ mod tests {
     use std::collections::HashMap;
 
     use super::*;
-    use crate::{
-        BooleanArray, Int32Array, Int64Array, Int8Array, ListArray, StringArray, StringViewArray,
-    };
+    use crate::{BooleanArray, Int32Array, Int64Array, Int8Array, ListArray, StringArray, StringViewArray};
     use arrow_buffer::{Buffer, ToByteSlice};
     use arrow_data::{ArrayData, ArrayDataBuilder};
     use arrow_schema::Fields;
