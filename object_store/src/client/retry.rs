@@ -18,6 +18,7 @@
 //! A shared HTTP client implementation incorporating retries
 
 use crate::client::backoff::{Backoff, BackoffConfig};
+use crate::PutPayload;
 use futures::future::BoxFuture;
 use futures::FutureExt;
 use reqwest::header::LOCATION;
@@ -172,25 +173,37 @@ pub trait RetryExt {
     /// # Panic
     ///
     /// This will panic if the request body is a stream
-    fn send_retry(self, config: &RetryConfig) -> BoxFuture<'static, Result<Response>>;
+    fn send_retry(
+        self,
+        config: &RetryConfig,
+        payload: Option<PutPayload>,
+    ) -> BoxFuture<'static, Result<Response>>;
 }
 
 impl RetryExt for reqwest::RequestBuilder {
-    fn send_retry(self, config: &RetryConfig) -> BoxFuture<'static, Result<Response>> {
+    fn send_retry(
+        self,
+        config: &RetryConfig,
+        payload: Option<PutPayload>,
+    ) -> BoxFuture<'static, Result<Response>> {
         let mut backoff = Backoff::new(&config.backoff);
         let max_retries = config.max_retries;
         let retry_timeout = config.retry_timeout;
-
-        let (client, req) = self.build_split();
-        let req = req.expect("request must be valid");
 
         async move {
             let mut retries = 0;
             let now = Instant::now();
 
             loop {
-                let s = req.try_clone().expect("request body must be cloneable");
-                match client.execute(s).await {
+                let mut s = self.try_clone().expect("request body must be cloneable");
+                if let Some(x) = &payload {
+                    s = s.body(x.body())
+                }
+                let (client, req) = s.build_split();
+                let req = req.expect("request must be valid");
+                let is_safe = req.method().is_safe();
+
+                match client.execute(req).await {
                     Ok(r) => match r.error_for_status_ref() {
                         Ok(_) if r.status().is_success() => return Ok(r),
                         Ok(r) if r.status() == StatusCode::NOT_MODIFIED => {
@@ -259,7 +272,7 @@ impl RetryExt for reqwest::RequestBuilder {
                     Err(e) =>
                     {
                         let mut do_retry = false;
-                        if req.method().is_safe() && e.is_timeout() {
+                        if is_safe && e.is_timeout() {
                             do_retry = true
                         } else if let Some(source) = e.source() {
                             if let Some(e) = source.downcast_ref::<hyper::Error>() {
@@ -324,7 +337,11 @@ mod tests {
             .build()
             .unwrap();
 
-        let do_request = || client.request(Method::GET, mock.url()).send_retry(&retry);
+        let do_request = || {
+            client
+                .request(Method::GET, mock.url())
+                .send_retry(&retry, None)
+        };
 
         // Simple request should work
         let r = do_request().await.unwrap();
@@ -483,7 +500,9 @@ mod tests {
             tokio::time::sleep(Duration::from_secs(10)).await;
             panic!()
         });
-        let res = client.request(Method::PUT, mock.url()).send_retry(&retry);
+        let res = client
+            .request(Method::PUT, mock.url())
+            .send_retry(&retry, None);
         let e = res.await.unwrap_err().to_string();
         assert!(
             e.contains("Error after 0 retries in") && e.contains("operation timed out"),

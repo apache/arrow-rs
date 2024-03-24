@@ -27,11 +27,11 @@ use futures::stream::BoxStream;
 use futures::StreamExt;
 
 use crate::path::Path;
-use crate::Result;
 use crate::{
     GetOptions, GetResult, GetResultPayload, ListResult, MultipartUpload, ObjectMeta, ObjectStore,
     PutOptions, PutResult,
 };
+use crate::{PutPayload, Result};
 
 /// Wraps a [`ObjectStore`] and makes its get response return chunks
 /// in a controllable manner.
@@ -62,8 +62,13 @@ impl Display for ChunkedStore {
 
 #[async_trait]
 impl ObjectStore for ChunkedStore {
-    async fn put_opts(&self, location: &Path, bytes: Bytes, opts: PutOptions) -> Result<PutResult> {
-        self.inner.put_opts(location, bytes, opts).await
+    async fn put_opts(
+        &self,
+        location: &Path,
+        payload: PutPayload,
+        opts: PutOptions,
+    ) -> Result<PutResult> {
+        self.inner.put_opts(location, payload, opts).await
     }
 
     async fn put_multipart(&self, location: &Path) -> Result<Box<dyn MultipartUpload>> {
@@ -176,10 +181,7 @@ mod tests {
     async fn test_chunked_basic() {
         let location = Path::parse("test").unwrap();
         let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
-        store
-            .put(&location, Bytes::from(vec![0; 1001]))
-            .await
-            .unwrap();
+        store.put(&location, vec![0; 1001].into()).await.unwrap();
 
         for chunk_size in [10, 20, 31] {
             let store = ChunkedStore::new(Arc::clone(&store), chunk_size);

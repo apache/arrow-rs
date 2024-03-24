@@ -615,7 +615,7 @@ impl TokenProvider for ClientSecretOAuthProvider {
                 ("scope", AZURE_STORAGE_SCOPE),
                 ("grant_type", "client_credentials"),
             ])
-            .send_retry(retry)
+            .send_retry(retry, None)
             .await
             .context(TokenRequestSnafu)?
             .json()
@@ -723,7 +723,7 @@ impl TokenProvider for ImdsManagedIdentityProvider {
         };
 
         let response: ImdsTokenResponse = builder
-            .send_retry(retry)
+            .send_retry(retry, None)
             .await
             .context(TokenRequestSnafu)?
             .json()
@@ -797,7 +797,7 @@ impl TokenProvider for WorkloadIdentityOAuthProvider {
                 ("scope", AZURE_STORAGE_SCOPE),
                 ("grant_type", "client_credentials"),
             ])
-            .send_retry(retry)
+            .send_retry(retry, None)
             .await
             .context(TokenRequestSnafu)?
             .json()

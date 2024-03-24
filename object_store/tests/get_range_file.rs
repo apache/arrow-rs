@@ -37,8 +37,13 @@ impl std::fmt::Display for MyStore {
 
 #[async_trait]
 impl ObjectStore for MyStore {
-    async fn put_opts(&self, path: &Path, data: Bytes, opts: PutOptions) -> Result<PutResult> {
-        self.0.put_opts(path, data, opts).await
+    async fn put_opts(
+        &self,
+        location: &Path,
+        payload: PutPayload,
+        opts: PutOptions,
+    ) -> Result<PutResult> {
+        self.0.put_opts(location, payload, opts).await
     }
 
     async fn put_multipart(&self, _location: &Path) -> Result<Box<dyn MultipartUpload>> {
@@ -77,7 +82,7 @@ async fn test_get_range() {
     let path = Path::from("foo");
 
     let expected = Bytes::from_static(b"hello world");
-    store.put(&path, expected.clone()).await.unwrap();
+    store.put(&path, expected.clone().into()).await.unwrap();
     let fetched = store.get(&path).await.unwrap().bytes().await.unwrap();
     assert_eq!(expected, fetched);
 
@@ -101,7 +106,7 @@ async fn test_get_opts_over_range() {
     let path = Path::from("foo");
 
     let expected = Bytes::from_static(b"hello world");
-    store.put(&path, expected.clone()).await.unwrap();
+    store.put(&path, expected.clone().into()).await.unwrap();
 
     let opts = GetOptions {
         range: Some(GetRange::Bounded(0..(expected.len() * 2))),

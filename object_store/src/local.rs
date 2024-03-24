@@ -39,7 +39,7 @@ use crate::{
     path::{absolute_path_to_url, Path},
     util::InvalidGetRange,
     GetOptions, GetResult, GetResultPayload, ListResult, MultipartUpload, ObjectMeta, ObjectStore,
-    PutMode, PutOptions, PutResult, Result, UploadPart,
+    PutMode, PutOptions, PutPayload, PutResult, Result, UploadPart,
 };
 
 /// A specialized `Error` for filesystem object store-related errors
@@ -336,7 +336,12 @@ fn is_valid_file_path(path: &Path) -> bool {
 
 #[async_trait]
 impl ObjectStore for LocalFileSystem {
-    async fn put_opts(&self, location: &Path, bytes: Bytes, opts: PutOptions) -> Result<PutResult> {
+    async fn put_opts(
+        &self,
+        location: &Path,
+        payload: PutPayload,
+        opts: PutOptions,
+    ) -> Result<PutResult> {
         if matches!(opts.mode, PutMode::Update(_)) {
             return Err(crate::Error::NotImplemented);
         }
@@ -346,7 +351,7 @@ impl ObjectStore for LocalFileSystem {
             let (mut file, staging_path) = new_staged_upload(&path)?;
             let mut e_tag = None;
 
-            let err = match file.write_all(&bytes) {
+            let err = match payload.iter().try_for_each(|x| file.write_all(x)) {
                 Ok(_) => {
                     let metadata = file.metadata().map_err(|e| Error::Metadata {
                         source: e.into(),
@@ -724,9 +729,9 @@ impl LocalUpload {
 
 #[async_trait]
 impl MultipartUpload for LocalUpload {
-    fn put_part(&mut self, data: Bytes) -> UploadPart {
+    fn put_part(&mut self, data: PutPayload) -> UploadPart {
         let offset = self.offset;
-        self.offset += data.len() as u64;
+        self.offset += data.content_length() as u64;
 
         let s = Arc::clone(&self.state);
         maybe_spawn_blocking(move || {
@@ -734,7 +739,11 @@ impl MultipartUpload for LocalUpload {
             let file = f.as_mut().context(AbortedSnafu)?;
             file.seek(SeekFrom::Start(offset))
                 .context(SeekSnafu { path: &s.dest })?;
-            file.write_all(&data).context(UnableToCopyDataToFileSnafu)?;
+
+            data.iter()
+                .try_for_each(|x| file.write_all(x))
+                .context(UnableToCopyDataToFileSnafu)?;
+
             Ok(())
         })
         .boxed()
@@ -1016,8 +1025,8 @@ mod tests {
             // Can't use stream_get test as WriteMultipart uses a tokio JoinSet
             let p = Path::from("manual_upload");
             let mut upload = integration.put_multipart(&p).await.unwrap();
-            upload.put_part(Bytes::from_static(b"123")).await.unwrap();
-            upload.put_part(Bytes::from_static(b"45678")).await.unwrap();
+            upload.put_part("123".into()).await.unwrap();
+            upload.put_part("45678".into()).await.unwrap();
             let r = upload.complete().await.unwrap();
 
             let get = integration.get(&p).await.unwrap();
@@ -1035,9 +1044,11 @@ mod tests {
         let location = Path::from("nested/file/test_file");
 
         let data = Bytes::from("arbitrary data");
-        let expected_data = data.clone();
 
-        integration.put(&location, data).await.unwrap();
+        integration
+            .put(&location, data.clone().into())
+            .await
+            .unwrap();
 
         let read_data = integration
             .get(&location)
@@ -1046,7 +1057,7 @@ mod tests {
             .bytes()
             .await
             .unwrap();
-        assert_eq!(&*read_data, expected_data);
+        assert_eq!(&*read_data, data);
     }
 
     #[tokio::test]
@@ -1057,9 +1068,11 @@ mod tests {
         let location = Path::from("some_file");
 
         let data = Bytes::from("arbitrary data");
-        let expected_data = data.clone();
 
-        integration.put(&location, data).await.unwrap();
+        integration
+            .put(&location, data.clone().into())
+            .await
+            .unwrap();
 
         let read_data = integration
             .get(&location)
@@ -1068,7 +1081,7 @@ mod tests {
             .bytes()
             .await
             .unwrap();
-        assert_eq!(&*read_data, expected_data);
+        assert_eq!(&*read_data, data);
     }
 
     #[tokio::test]
@@ -1260,7 +1273,7 @@ mod tests {
 
         // Adding a file through a symlink creates in both paths
         integration
-            .put(&Path::from("b/file.parquet"), Bytes::from(vec![0, 1, 2]))
+            .put(&Path::from("b/file.parquet"), vec![0, 1, 2].into())
             .await
             .unwrap();
 
@@ -1279,7 +1292,7 @@ mod tests {
         let directory = Path::from("directory");
         let object = directory.child("child.txt");
         let data = Bytes::from("arbitrary");
-        integration.put(&object, data.clone()).await.unwrap();
+        integration.put(&object, data.clone().into()).await.unwrap();
         integration.head(&object).await.unwrap();
         let result = integration.get(&object).await.unwrap();
         assert_eq!(result.bytes().await.unwrap(), data);
@@ -1319,7 +1332,7 @@ mod tests {
         let integration = LocalFileSystem::new_with_prefix(root.path()).unwrap();
         let location = Path::from("some_file");
 
-        let data = Bytes::from("arbitrary data");
+        let data = PutPayload::from("arbitrary data");
         let mut u1 = integration.put_multipart(&location).await.unwrap();
         u1.put_part(data.clone()).await.unwrap();
 
@@ -1418,12 +1431,10 @@ mod tests {
 #[cfg(test)]
 mod not_wasm_tests {
     use std::time::Duration;
-
-    use bytes::Bytes;
     use tempfile::TempDir;
 
     use crate::local::LocalFileSystem;
-    use crate::{ObjectStore, Path};
+    use crate::{ObjectStore, Path, PutPayload};
 
     #[tokio::test]
     async fn test_cleanup_intermediate_files() {
@@ -1431,7 +1442,7 @@ mod not_wasm_tests {
         let integration = LocalFileSystem::new_with_prefix(root.path()).unwrap();
 
         let location = Path::from("some_file");
-        let data = Bytes::from_static(b"hello");
+        let data = PutPayload::from_static(b"hello");
         let mut upload = integration.put_multipart(&location).await.unwrap();
         upload.put_part(data).await.unwrap();
 

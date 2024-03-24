@@ -15,9 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::{PutResult, Result};
+use crate::{PutPayload, PutResult, Result};
 use async_trait::async_trait;
-use bytes::Bytes;
 use futures::future::BoxFuture;
 use tokio::task::JoinSet;
 
@@ -61,7 +60,7 @@ pub trait MultipartUpload: Send + std::fmt::Debug {
     /// ```
     ///
     /// [R2]: https://developers.cloudflare.com/r2/objects/multipart-objects/#limitations
-    fn put_part(&mut self, data: Bytes) -> UploadPart;
+    fn put_part(&mut self, data: PutPayload) -> UploadPart;
 
     /// Complete the multipart upload
     ///
@@ -152,7 +151,7 @@ impl WriteMultipart {
         }
     }
 
-    fn put_part(&mut self, part: Bytes) {
+    fn put_part(&mut self, part: PutPayload) {
         self.tasks.spawn(self.upload.put_part(part));
     }
 

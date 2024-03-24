@@ -27,10 +27,9 @@ use crate::{
     path::Path,
     signer::Signer,
     GetOptions, GetResult, ListResult, MultipartId, MultipartUpload, ObjectMeta, ObjectStore,
-    PutOptions, PutResult, Result, UploadPart,
+    PutOptions, PutPayload, PutResult, Result, UploadPart,
 };
 use async_trait::async_trait;
-use bytes::Bytes;
 use futures::stream::BoxStream;
 use reqwest::Method;
 use std::fmt::Debug;
@@ -87,8 +86,13 @@ impl std::fmt::Display for MicrosoftAzure {
 
 #[async_trait]
 impl ObjectStore for MicrosoftAzure {
-    async fn put_opts(&self, location: &Path, bytes: Bytes, opts: PutOptions) -> Result<PutResult> {
-        self.client.put_blob(location, bytes, opts).await
+    async fn put_opts(
+        &self,
+        location: &Path,
+        payload: PutPayload,
+        opts: PutOptions,
+    ) -> Result<PutResult> {
+        self.client.put_blob(location, payload, opts).await
     }
 
     async fn put_multipart(&self, location: &Path) -> Result<Box<dyn MultipartUpload>> {
@@ -203,7 +207,7 @@ struct UploadState {
 
 #[async_trait]
 impl MultipartUpload for AzureMultiPartUpload {
-    fn put_part(&mut self, data: Bytes) -> UploadPart {
+    fn put_part(&mut self, data: PutPayload) -> UploadPart {
         let idx = self.part_idx;
         self.part_idx += 1;
         let state = Arc::clone(&self.state);
@@ -240,7 +244,7 @@ impl MultipartStore for MicrosoftAzure {
         path: &Path,
         _: &MultipartId,
         part_idx: usize,
-        data: Bytes,
+        data: PutPayload,
     ) -> Result<PartId> {
         self.client.put_block(path, part_idx, data).await
     }
@@ -265,6 +269,7 @@ impl MultipartStore for MicrosoftAzure {
 mod tests {
     use super::*;
     use crate::tests::*;
+    use bytes::Bytes;
 
     #[tokio::test]
     async fn azure_blob_test() {
@@ -309,7 +314,7 @@ mod tests {
 
         let data = Bytes::from("hello world");
         let path = Path::from("file.txt");
-        integration.put(&path, data.clone()).await.unwrap();
+        integration.put(&path, data.clone().into()).await.unwrap();
 
         let signed = integration
             .signed_url(Method::GET, &path, Duration::from_secs(60))
