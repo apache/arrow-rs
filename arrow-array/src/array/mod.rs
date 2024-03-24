@@ -20,7 +20,7 @@
 mod binary_array;
 
 use crate::types::*;
-use arrow_buffer::{ArrowNativeType, NullBuffer, OffsetBuffer, ScalarBuffer};
+use arrow_buffer::{ArrowNativeType, NullBuffer, OffsetBuffer, ScalarBuffer, SizeBuffer};
 use arrow_data::ArrayData;
 use arrow_schema::{DataType, IntervalUnit, TimeUnit};
 use std::any::Any;
@@ -65,12 +65,13 @@ mod union_array;
 pub use union_array::*;
 
 mod run_array;
-
 pub use run_array::*;
 
 mod byte_view_array;
-
 pub use byte_view_array::*;
+
+mod list_view_array;
+pub use list_view_array::*;
 
 /// An array in the [arrow columnar format](https://arrow.apache.org/docs/format/Columnar.html)
 pub trait Array: std::fmt::Debug + Send + Sync {
@@ -519,6 +520,12 @@ impl<OffsetSize: OffsetSizeTrait> PartialEq for GenericListArray<OffsetSize> {
     }
 }
 
+impl<OffsetSize: OffsetSizeTrait> PartialEq for GenericListViewArray<OffsetSize> {
+    fn eq(&self, other: &Self) -> bool {
+        self.to_data().eq(&other.to_data())
+    }
+}
+
 impl PartialEq for MapArray {
     fn eq(&self, other: &Self) -> bool {
         self.to_data().eq(&other.to_data())
@@ -606,7 +613,9 @@ pub fn make_array(data: ArrayData) -> ArrayRef {
         DataType::LargeUtf8 => Arc::new(LargeStringArray::from(data)) as ArrayRef,
         DataType::Utf8View => Arc::new(StringViewArray::from(data)) as ArrayRef,
         DataType::List(_) => Arc::new(ListArray::from(data)) as ArrayRef,
+        DataType::ListView(_) => Arc::new(ListViewArray::from(data)) as ArrayRef,
         DataType::LargeList(_) => Arc::new(LargeListArray::from(data)) as ArrayRef,
+        DataType::LargeListView(_) => Arc::new(LargeListViewArray::from(data)) as ArrayRef,
         DataType::Struct(_) => Arc::new(StructArray::from(data)) as ArrayRef,
         DataType::Map(_, _) => Arc::new(MapArray::from(data)) as ArrayRef,
         DataType::Union(_, _) => Arc::new(UnionArray::from(data)) as ArrayRef,
@@ -683,6 +692,22 @@ unsafe fn get_offsets<O: ArrowNativeType>(data: &ArrayData) -> OffsetBuffer<O> {
             // Safety:
             // ArrayData is valid
             unsafe { OffsetBuffer::new_unchecked(buffer) }
+        }
+    }
+}
+
+/// Helper function that gets size from an [`ArrayData`]
+///
+/// # Safety
+unsafe fn get_sizes<O: ArrowNativeType>(data: &ArrayData) -> SizeBuffer<O> {
+    match data.is_empty() && data.buffers()[1].is_empty() {
+        true => SizeBuffer::new_empty(),
+        false => {
+            let buffer =
+                ScalarBuffer::new(data.buffers()[1].clone(), data.offset(), data.len());
+            // Safety:
+            // ArrayData is valid
+            SizeBuffer::new(buffer)
         }
     }
 }

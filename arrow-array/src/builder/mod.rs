@@ -181,6 +181,8 @@ pub use generic_byte_run_builder::*;
 mod generic_bytes_view_builder;
 pub use generic_bytes_view_builder::*;
 mod union_builder;
+mod generic_list_view_builder;
+pub use generic_list_view_builder::*;
 
 pub use union_builder::*;
 

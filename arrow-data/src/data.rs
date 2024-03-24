@@ -119,17 +119,21 @@ pub(crate) fn new_buffers(data_type: &DataType, capacity: usize) -> [MutableBuff
             [buffer, empty_buffer]
         }
         DataType::ListView(_) => [
+            // offset buffer
             MutableBuffer::new(capacity * mem::size_of::<i32>()),
+            // size buffer
             MutableBuffer::new(capacity * mem::size_of::<i32>()),
         ],
         DataType::LargeList(_) => {
-            // offset buffer always starts with a zero
+            // offset buffer
             let mut buffer = MutableBuffer::new((1 + capacity) * mem::size_of::<i64>());
             buffer.push(0i64);
             [buffer, empty_buffer]
         }
         DataType::LargeListView(_) => [
+            // offset buffer
             MutableBuffer::new(capacity * mem::size_of::<i64>()),
+            // size buffer
             MutableBuffer::new(capacity * mem::size_of::<i64>()),
         ],
         DataType::FixedSizeBinary(size) => {
@@ -856,6 +860,17 @@ impl ArrayData {
         self.typed_buffer(0, self.len + 1)
     }
 
+    /// Returns a reference to the data in `buffer` as a typed slice
+    /// after validating. The returned slice is guaranteed to have at
+    /// least `len` entries.
+    fn typed_sizes<T: ArrowNativeType + num::Num>(&self) -> Result<&[T], ArrowError> {
+        // An empty list-like array can have 0 sizes
+        if self.len == 0 && self.buffers[1].is_empty() {
+            return Ok(&[]);
+        }
+        self.typed_buffer(0, self.len)
+    }
+
     /// Returns a reference to the data in `buffers[idx]` as a typed slice after validating
     fn typed_buffer<T: ArrowNativeType + num::Num>(
         &self,
@@ -929,6 +944,26 @@ impl ArrayData {
         Ok(())
     }
 
+    fn validate_sizes<T: ArrowNativeType + num::Num + std::fmt::Display>(
+        &self,
+        values_length: usize,
+    ) -> Result<(), ArrowError> {
+       let sizes = self.typed_sizes::<T>()?;
+        if sizes.is_empty() {
+            return Ok(());
+        }
+
+        let total_size: usize = sizes.iter().map(|x| x.to_usize().unwrap()).sum();
+        if total_size > values_length {
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "Total size of {} is larger than values length {}",
+                total_size, values_length,
+            )));
+        }
+
+        Ok(())
+    }
+
     /// Validates the layout of `child_data` ArrayData structures
     fn validate_child_data(&self) -> Result<(), ArrowError> {
         match &self.data_type {
@@ -937,9 +972,21 @@ impl ArrayData {
                 self.validate_offsets::<i32>(values_data.len)?;
                 Ok(())
             }
+            DataType::ListView(field) => {
+                let values_data = self.get_single_valid_child_data(field.data_type())?;
+                self.validate_offsets::<i32>(values_data.len)?;
+                self.validate_sizes::<i32>(values_data.len)?;
+                Ok(())
+            }
             DataType::LargeList(field) => {
                 let values_data = self.get_single_valid_child_data(field.data_type())?;
                 self.validate_offsets::<i64>(values_data.len)?;
+                Ok(())
+            }
+            DataType::LargeListView(field) => {
+                let values_data = self.get_single_valid_child_data(field.data_type())?;
+                self.validate_offsets::<i64>(values_data.len)?;
+                self.validate_sizes::<i64>(values_data.len)?;
                 Ok(())
             }
             DataType::FixedSizeList(field, list_size) => {
@@ -1546,9 +1593,8 @@ pub fn layout(data_type: &DataType) -> DataTypeLayout {
         DataType::BinaryView | DataType::Utf8View => DataTypeLayout::new_view(),
         DataType::FixedSizeList(_, _) => DataTypeLayout::new_empty(), // all in child data
         DataType::List(_) => DataTypeLayout::new_fixed_width::<i32>(),
-        DataType::ListView(_) | DataType::LargeListView(_) => {
-            unimplemented!("ListView/LargeListView not implemented")
-        }
+        DataType::ListView(_) => DataTypeLayout::new_list_view::<i32>(),
+        DataType::LargeListView(_) => DataTypeLayout::new_list_view::<i64>(),
         DataType::LargeList(_) => DataTypeLayout::new_fixed_width::<i64>(),
         DataType::Map(_, _) => DataTypeLayout::new_fixed_width::<i32>(),
         DataType::Struct(_) => DataTypeLayout::new_empty(), // all in child data,
@@ -1647,6 +1693,21 @@ impl DataTypeLayout {
             buffers: vec![BufferSpec::FixedWidth {
                 byte_width: mem::size_of::<u128>(),
                 alignment: mem::align_of::<u128>(),
+            }],
+            can_contain_null_mask: true,
+            variadic: true,
+        }
+    }
+
+    /// Describes a list view type
+    pub fn new_list_view<T>() -> Self {
+        Self {
+            buffers: vec![BufferSpec::FixedWidth {
+                byte_width: mem::size_of::<T>(),
+                alignment: mem::align_of::<T>(),
+            },BufferSpec::FixedWidth {
+                byte_width: mem::size_of::<T>(),
+                alignment: mem::align_of::<T>(),
             }],
             can_contain_null_mask: true,
             variadic: true,

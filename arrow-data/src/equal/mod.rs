@@ -37,6 +37,7 @@ mod structure;
 mod union;
 mod utils;
 mod variable_size;
+mod list_view;
 
 // these methods assume the same type, len and null count.
 // For this reason, they are not exposed and are instead used
@@ -52,6 +53,7 @@ use primitive::primitive_equal;
 use structure::struct_equal;
 use union::union_equal;
 use variable_size::variable_sized_equal;
+use crate::equal::list_view::list_view_equal;
 
 use self::run::run_equal;
 
@@ -102,10 +104,9 @@ fn equal_values(
             byte_view_equal(lhs, rhs, lhs_start, rhs_start, len)
         }
         DataType::List(_) => list_equal::<i32>(lhs, rhs, lhs_start, rhs_start, len),
-        DataType::ListView(_) | DataType::LargeListView(_) => {
-            unimplemented!("ListView/LargeListView not yet implemented")
-        }
-        DataType::LargeList(_) => list_equal::<i64>(lhs, rhs, lhs_start, rhs_start, len),
+        DataType::ListView(_) => list_view_equal::<i32>(lhs, rhs, lhs_start, rhs_start, len),
+        DataType::LargeListView(_) => list_equal::<i64>(lhs, rhs, lhs_start, rhs_start, len),
+        DataType::LargeList(_) => list_view_equal::<i64>(lhs, rhs, lhs_start, rhs_start, len),
         DataType::FixedSizeList(_, _) => fixed_list_equal(lhs, rhs, lhs_start, rhs_start, len),
         DataType::Struct(_) => struct_equal(lhs, rhs, lhs_start, rhs_start, len),
         DataType::Union(_, _) => union_equal(lhs, rhs, lhs_start, rhs_start, len),
