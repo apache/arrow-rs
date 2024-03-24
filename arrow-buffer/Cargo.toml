@@ -47,3 +47,7 @@ rand = { version = "0.8", default-features = false, features = ["std", "std_rng"
 [[bench]]
 name = "i256"
 harness = false
+
+[[bench]]
+name = "offset"
+harness = false

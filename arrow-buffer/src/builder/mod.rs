@@ -18,9 +18,12 @@
 //! Buffer builders
 
 mod boolean;
-pub use boolean::*;
 mod null;
+mod offset;
+
+pub use boolean::*;
 pub use null::*;
+pub use offset::*;
 
 use crate::{ArrowNativeType, Buffer, MutableBuffer};
 use std::{iter, marker::PhantomData};
