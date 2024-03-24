@@ -31,9 +31,12 @@ use arrow_array::{
 };
 use arrow_buffer::bit_util::ceil;
 use arrow_buffer::{BooleanBuffer, MutableBuffer, NullBuffer};
-use arrow_schema::ArrowError;
+use arrow_schema::{ArrowError, DataType};
 use arrow_select::take::take;
+use std::cmp::Ordering;
 use std::ops::Not;
+
+use crate::ord::build_compare;
 
 #[derive(Debug, Copy, Clone)]
 enum Op {
@@ -166,6 +169,48 @@ pub fn not_distinct(lhs: &dyn Datum, rhs: &dyn Datum) -> Result<BooleanArray, Ar
     compare_op(Op::NotDistinct, lhs, rhs)
 }
 
+fn process_nested(
+    l: &dyn Array,
+    r: &dyn Array,
+    op: Op,
+    l_t: &DataType,
+    r_t: &DataType,
+    len: usize,
+) -> Result<Option<BooleanArray>, ArrowError> {
+    use arrow_schema::DataType::*;
+    if let (List(_), List(_)) = (l_t, r_t) {
+        fn process_ordering(
+            l: &dyn Array,
+            r: &dyn Array,
+            target_ord: Ordering,
+            len: usize,
+        ) -> Result<BooleanArray, ArrowError> {
+            let cmp = build_compare(l, r)?;
+            let mut values = BooleanArray::builder(len);
+            for i in 0..len {
+                let ord = cmp(i, i);
+                values.append_value(ord == target_ord);
+            }
+            Ok(values.finish())
+        }
+
+        // Process nested data types
+        match op {
+            Op::Less => Ok(Some(process_ordering(l, r, Ordering::Less, len)?)),
+            Op::Equal => Ok(Some(process_ordering(l, r, Ordering::Equal, len)?)),
+            _ => Err(ArrowError::NotYetImplemented(format!(
+                "Comparison for {op} is NYI"
+            ))),
+        }
+    } else if l_t.is_nested() {
+        Err(ArrowError::NotYetImplemented(format!(
+            "Comparison for {l_t} is NYI"
+        )))
+    } else {
+        Ok(None)
+    }
+}
+
 /// Perform `op` on the provided `Datum`
 #[inline(never)]
 fn compare_op(op: Op, lhs: &dyn Datum, rhs: &dyn Datum) -> Result<BooleanArray, ArrowError> {
@@ -198,10 +243,14 @@ fn compare_op(op: Op, lhs: &dyn Datum, rhs: &dyn Datum) -> Result<BooleanArray, 
     let r = r_v.map(|x| x.values().as_ref()).unwrap_or(r);
     let r_t = r.data_type();
 
-    if l_t != r_t || l_t.is_nested() {
+    if l_t != r_t {
         return Err(ArrowError::InvalidArgumentError(format!(
             "Invalid comparison operation: {l_t} {op} {r_t}"
         )));
+    }
+
+    if let Some(values) = process_nested(l, r, op, l_t, r_t, len)? {
+        return Ok(values);
     }
 
     // Defer computation as may not be necessary
@@ -544,7 +593,11 @@ impl<'a> ArrayOrd for &'a FixedSizeBinaryArray {
 mod tests {
     use std::sync::Arc;
 
-    use arrow_array::{DictionaryArray, Int32Array, Scalar, StringArray};
+    use arrow_array::{
+        types::Int32Type, ArrayRef, DictionaryArray, Int32Array, ListArray, Scalar, StringArray,
+    };
+    use arrow_buffer::OffsetBuffer;
+    use arrow_schema::Field;
 
     use super::*;
 
@@ -701,5 +754,217 @@ mod tests {
         let col = DictionaryArray::try_new(keys, Arc::new(values)).unwrap();
 
         neq(&col.slice(0, col.len() - 1), &col.slice(1, col.len() - 1)).unwrap();
+    }
+
+    #[test]
+    fn test_list_lt() {
+        let l1 = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+            Some(vec![Some(0), Some(1), Some(2)]),
+            None,
+            Some(vec![Some(3), Some(4), Some(5)]),
+        ]);
+        let l2 = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+            Some(vec![Some(1), Some(1), Some(2)]),
+            None,
+            Some(vec![Some(3), Some(4)]),
+        ]);
+        let res = lt(&l1, &l2).unwrap();
+        assert_eq!(res, BooleanArray::from(vec![true, false, false]));
+
+        let l1 = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+            Some(vec![Some(0), Some(1), Some(2)]),
+            None,
+            Some(vec![Some(3), Some(4), Some(5)]),
+        ]);
+        let l2 = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+            Some(vec![Some(0), Some(1), Some(2)]),
+            None,
+            Some(vec![Some(3), Some(4)]),
+        ]);
+        let res = lt(&l1, &l2).unwrap();
+        assert_eq!(res, BooleanArray::from(vec![false, false, false]));
+
+        let l1 = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+            Some(vec![Some(0), Some(1), Some(2)]),
+            None,
+            Some(vec![Some(3), Some(4), Some(5)]),
+        ]);
+        let l2 = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+            Some(vec![Some(0), Some(1), Some(2)]),
+            None,
+            Some(vec![Some(3), Some(4), Some(5), Some(7)]),
+        ]);
+        let res = lt(&l1, &l2).unwrap();
+        assert_eq!(res, BooleanArray::from(vec![false, false, true]));
+    }
+
+    fn array_into_list_array(arr: ArrayRef) -> ListArray {
+        let offsets = OffsetBuffer::from_lengths([arr.len()]);
+        ListArray::new(
+            Arc::new(Field::new("item", arr.data_type().to_owned(), true)),
+            offsets,
+            arr,
+            None,
+        )
+    }
+
+    #[test]
+    fn test_nested_list_lt() {
+        let l1 = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+            Some(vec![Some(0), Some(1), Some(2)]),
+            None,
+            Some(vec![Some(3), Some(4), Some(5)]),
+        ]);
+        let l1 = array_into_list_array(Arc::new(l1));
+        let l2 = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+            Some(vec![Some(1), Some(1), Some(2)]),
+            None,
+            Some(vec![Some(3), Some(4)]),
+        ]);
+        let l2 = array_into_list_array(Arc::new(l2));
+
+        let res = lt(&l1, &l2).unwrap();
+        assert_eq!(res, BooleanArray::from(vec![true]));
+
+        let l1 = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+            Some(vec![Some(1), Some(1), Some(2)]),
+            None,
+            Some(vec![Some(3), Some(4), Some(5)]),
+        ]);
+        let l1 = array_into_list_array(Arc::new(l1));
+        let l2 = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+            Some(vec![Some(1), Some(1), Some(2)]),
+            None,
+            Some(vec![Some(3), Some(4)]),
+        ]);
+        let l2 = array_into_list_array(Arc::new(l2));
+
+        let res = lt(&l1, &l2).unwrap();
+        assert_eq!(res, BooleanArray::from(vec![false]));
+
+        let l1 = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+            Some(vec![Some(0), Some(1), Some(2)]),
+            None,
+            Some(vec![Some(3), Some(4), Some(5)]),
+        ]);
+        let l1 = array_into_list_array(Arc::new(l1));
+        let l2 = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+            Some(vec![Some(0), Some(1), Some(2)]),
+            None,
+            Some(vec![Some(3), Some(4), Some(5), Some(7)]),
+        ]);
+        let l2 = array_into_list_array(Arc::new(l2));
+
+        let res = lt(&l1, &l2).unwrap();
+        assert_eq!(res, BooleanArray::from(vec![true]));
+    }
+
+    #[test]
+    fn test_list_eq() {
+        let l1 = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+            Some(vec![Some(0), Some(1), Some(2)]),
+            None,
+            Some(vec![Some(3), Some(4), Some(5)]),
+        ]);
+        let l2 = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+            Some(vec![Some(1), Some(1), Some(2)]),
+            None,
+            Some(vec![Some(3), Some(4)]),
+        ]);
+        let res = eq(&l1, &l2).unwrap();
+        assert_eq!(res, BooleanArray::from(vec![false, true, false]));
+
+        let l1 = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+            Some(vec![Some(0), Some(1), Some(2)]),
+            None,
+            Some(vec![Some(3), Some(4), Some(5)]),
+        ]);
+        let l2 = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+            Some(vec![Some(0), Some(1), Some(2)]),
+            None,
+            Some(vec![Some(3), Some(4)]),
+        ]);
+        let res = eq(&l1, &l2).unwrap();
+        assert_eq!(res, BooleanArray::from(vec![true, true, false]));
+
+        let l1 = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+            Some(vec![Some(0), Some(1), Some(2)]),
+            None,
+            Some(vec![Some(3), Some(4), Some(5)]),
+        ]);
+        let l2 = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+            Some(vec![Some(0), Some(1), Some(2)]),
+            None,
+            Some(vec![Some(3), Some(4), Some(5), Some(7)]),
+        ]);
+        let res = eq(&l1, &l2).unwrap();
+        assert_eq!(res, BooleanArray::from(vec![true, true, false]));
+    }
+
+    #[test]
+    fn test_nested_list_eq() {
+        let l1 = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+            Some(vec![Some(0), Some(1), Some(2)]),
+            None,
+            Some(vec![Some(3), Some(4), Some(5)]),
+        ]);
+        let l1 = array_into_list_array(Arc::new(l1));
+        let l2 = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+            Some(vec![Some(1), Some(1), Some(2)]),
+            None,
+            Some(vec![Some(3), Some(4)]),
+        ]);
+        let l2 = array_into_list_array(Arc::new(l2));
+
+        let res = eq(&l1, &l2).unwrap();
+        assert_eq!(res, BooleanArray::from(vec![false]));
+
+        let l1 = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+            Some(vec![Some(1), Some(1), Some(2)]),
+            None,
+            Some(vec![Some(3), Some(4), Some(5)]),
+        ]);
+        let l1 = array_into_list_array(Arc::new(l1));
+        let l2 = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+            Some(vec![Some(1), Some(1), Some(2)]),
+            None,
+            Some(vec![Some(3), Some(4)]),
+        ]);
+        let l2 = array_into_list_array(Arc::new(l2));
+
+        let res = eq(&l1, &l2).unwrap();
+        assert_eq!(res, BooleanArray::from(vec![false]));
+
+        let l1 = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+            Some(vec![Some(0), Some(1), Some(2)]),
+            None,
+            Some(vec![Some(3), Some(4), Some(5)]),
+        ]);
+        let l1 = array_into_list_array(Arc::new(l1));
+        let l2 = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+            Some(vec![Some(0), Some(1), Some(2)]),
+            None,
+            Some(vec![Some(3), Some(4), Some(5), Some(7)]),
+        ]);
+        let l2 = array_into_list_array(Arc::new(l2));
+
+        let res = eq(&l1, &l2).unwrap();
+        assert_eq!(res, BooleanArray::from(vec![false]));
+
+        let l1 = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+            Some(vec![Some(0), Some(1), Some(2)]),
+            None,
+            Some(vec![Some(3), Some(4), Some(5)]),
+        ]);
+        let l1 = array_into_list_array(Arc::new(l1));
+        let l2 = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+            Some(vec![Some(0), Some(1), Some(2)]),
+            None,
+            Some(vec![Some(3), Some(4), Some(5)]),
+        ]);
+        let l2 = array_into_list_array(Arc::new(l2));
+
+        let res = eq(&l1, &l2).unwrap();
+        assert_eq!(res, BooleanArray::from(vec![true]));
     }
 }
