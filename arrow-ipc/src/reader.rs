@@ -71,7 +71,11 @@ fn read_buffer(
 ///     - check if the bit width of non-64-bit numbers is 64, and
 ///     - read the buffer as 64-bit (signed integer or float), and
 ///     - cast the 64-bit array to the appropriate data type
-fn create_array(reader: &mut ArrayReader, field: &Field) -> Result<ArrayRef, ArrowError> {
+fn create_array(
+    reader: &mut ArrayReader,
+    field: &Field,
+    enforce_zero_copy: bool,
+) -> Result<ArrayRef, ArrowError> {
     let data_type = field.data_type();
     match data_type {
         Utf8 | Binary | LargeBinary | LargeUtf8 => create_primitive_array(
@@ -82,23 +86,37 @@ fn create_array(reader: &mut ArrayReader, field: &Field) -> Result<ArrayRef, Arr
                 reader.next_buffer()?,
                 reader.next_buffer()?,
             ],
+            enforce_zero_copy,
         ),
         FixedSizeBinary(_) => create_primitive_array(
             reader.next_node(field)?,
             data_type,
             &[reader.next_buffer()?, reader.next_buffer()?],
+            enforce_zero_copy,
         ),
         List(ref list_field) | LargeList(ref list_field) | Map(ref list_field, _) => {
             let list_node = reader.next_node(field)?;
             let list_buffers = [reader.next_buffer()?, reader.next_buffer()?];
-            let values = create_array(reader, list_field)?;
-            create_list_array(list_node, data_type, &list_buffers, values)
+            let values = create_array(reader, list_field, enforce_zero_copy)?;
+            create_list_array(
+                list_node,
+                data_type,
+                &list_buffers,
+                values,
+                enforce_zero_copy,
+            )
         }
         FixedSizeList(ref list_field, _) => {
             let list_node = reader.next_node(field)?;
             let list_buffers = [reader.next_buffer()?];
-            let values = create_array(reader, list_field)?;
-            create_list_array(list_node, data_type, &list_buffers, values)
+            let values = create_array(reader, list_field, enforce_zero_copy)?;
+            create_list_array(
+                list_node,
+                data_type,
+                &list_buffers,
+                values,
+                enforce_zero_copy,
+            )
         }
         Struct(struct_fields) => {
             let struct_node = reader.next_node(field)?;
@@ -109,7 +127,7 @@ fn create_array(reader: &mut ArrayReader, field: &Field) -> Result<ArrayRef, Arr
             // TODO investigate whether just knowing the number of buffers could
             // still work
             for struct_field in struct_fields {
-                let child = create_array(reader, struct_field)?;
+                let child = create_array(reader, struct_field, enforce_zero_copy)?;
                 struct_arrays.push((struct_field.clone(), child));
             }
             let null_count = struct_node.null_count() as usize;
@@ -123,18 +141,23 @@ fn create_array(reader: &mut ArrayReader, field: &Field) -> Result<ArrayRef, Arr
         }
         RunEndEncoded(run_ends_field, values_field) => {
             let run_node = reader.next_node(field)?;
-            let run_ends = create_array(reader, run_ends_field)?;
-            let values = create_array(reader, values_field)?;
+            let run_ends = create_array(reader, run_ends_field, enforce_zero_copy)?;
+            let values = create_array(reader, values_field, enforce_zero_copy)?;
 
             let run_array_length = run_node.length() as usize;
-            let data = ArrayData::builder(data_type.clone())
+            let builder = ArrayData::builder(data_type.clone())
                 .len(run_array_length)
                 .offset(0)
                 .add_child_data(run_ends.into_data())
-                .add_child_data(values.into_data())
-                .build_aligned()?;
+                .add_child_data(values.into_data());
 
-            Ok(make_array(data))
+            let array_data = if enforce_zero_copy {
+                builder.build()?
+            } else {
+                builder.build_aligned()?
+            };
+
+            Ok(make_array(array_data))
         }
         // Create dictionary array from RecordBatch
         Dictionary(_, _) => {
@@ -151,7 +174,13 @@ fn create_array(reader: &mut ArrayReader, field: &Field) -> Result<ArrayRef, Arr
                 ))
             })?;
 
-            create_dictionary_array(index_node, data_type, &index_buffers, value_array.clone())
+            create_dictionary_array(
+                index_node,
+                data_type,
+                &index_buffers,
+                value_array.clone(),
+                enforce_zero_copy,
+            )
         }
         Union(fields, mode) => {
             let union_node = reader.next_node(field)?;
@@ -177,7 +206,7 @@ fn create_array(reader: &mut ArrayReader, field: &Field) -> Result<ArrayRef, Arr
             let mut ids = Vec::with_capacity(fields.len());
 
             for (id, field) in fields.iter() {
-                let child = create_array(reader, field)?;
+                let child = create_array(reader, field, enforce_zero_copy)?;
                 children.push((field.as_ref().clone(), child));
                 ids.push(id);
             }
@@ -196,18 +225,24 @@ fn create_array(reader: &mut ArrayReader, field: &Field) -> Result<ArrayRef, Arr
                 )));
             }
 
-            let data = ArrayData::builder(data_type.clone())
+            let builder = ArrayData::builder(data_type.clone())
                 .len(length as usize)
-                .offset(0)
-                .build_aligned()
-                .unwrap();
+                .offset(0);
+
+            let array_data = if enforce_zero_copy {
+                builder.build()?
+            } else {
+                builder.build_aligned()?
+            };
+
             // no buffer increases
-            Ok(Arc::new(NullArray::from(data)))
+            Ok(Arc::new(NullArray::from(array_data)))
         }
         _ => create_primitive_array(
             reader.next_node(field)?,
             data_type,
             &[reader.next_buffer()?, reader.next_buffer()?],
+            enforce_zero_copy,
         ),
     }
 }
@@ -218,17 +253,17 @@ fn create_primitive_array(
     field_node: &FieldNode,
     data_type: &DataType,
     buffers: &[Buffer],
+    enforce_zero_copy: bool,
 ) -> Result<ArrayRef, ArrowError> {
     let length = field_node.length() as usize;
     let null_buffer = (field_node.null_count() > 0).then_some(buffers[0].clone());
-    let array_data = match data_type {
+    let builder = match data_type {
         Utf8 | Binary | LargeBinary | LargeUtf8 => {
             // read 3 buffers: null buffer (optional), offsets buffer and data buffer
             ArrayData::builder(data_type.clone())
                 .len(length)
                 .buffers(buffers[1..3].to_vec())
                 .null_bit_buffer(null_buffer)
-                .build_aligned()?
         }
         _ if data_type.is_primitive() || matches!(data_type, Boolean | FixedSizeBinary(_)) => {
             // read 2 buffers: null buffer (optional) and data buffer
@@ -236,9 +271,14 @@ fn create_primitive_array(
                 .len(length)
                 .add_buffer(buffers[1].clone())
                 .null_bit_buffer(null_buffer)
-                .build_aligned()?
         }
         t => unreachable!("Data type {:?} either unsupported or not primitive", t),
+    };
+
+    let array_data = if enforce_zero_copy {
+        builder.build()?
+    } else {
+        builder.build_aligned()?
     };
 
     Ok(make_array(array_data))
@@ -251,6 +291,7 @@ fn create_list_array(
     data_type: &DataType,
     buffers: &[Buffer],
     child_array: ArrayRef,
+    enforce_zero_copy: bool,
 ) -> Result<ArrayRef, ArrowError> {
     let null_buffer = (field_node.null_count() > 0).then_some(buffers[0].clone());
     let length = field_node.length() as usize;
@@ -269,7 +310,14 @@ fn create_list_array(
 
         _ => unreachable!("Cannot create list or map array from {:?}", data_type),
     };
-    Ok(make_array(builder.build_aligned()?))
+
+    let array_data = if enforce_zero_copy {
+        builder.build()?
+    } else {
+        builder.build_aligned()?
+    };
+
+    Ok(make_array(array_data))
 }
 
 /// Reads the correct number of buffers based on list type and null_count, and creates a
@@ -279,6 +327,7 @@ fn create_dictionary_array(
     data_type: &DataType,
     buffers: &[Buffer],
     value_array: ArrayRef,
+    enforce_zero_copy: bool,
 ) -> Result<ArrayRef, ArrowError> {
     if let Dictionary(_, _) = *data_type {
         let null_buffer = (field_node.null_count() > 0).then_some(buffers[0].clone());
@@ -288,7 +337,13 @@ fn create_dictionary_array(
             .add_child_data(value_array.into_data())
             .null_bit_buffer(null_buffer);
 
-        Ok(make_array(builder.build_aligned()?))
+        let array_data = if enforce_zero_copy {
+            builder.build()?
+        } else {
+            builder.build_aligned()?
+        };
+
+        Ok(make_array(array_data))
     } else {
         unreachable!("Cannot create dictionary array from {:?}", data_type)
     }
@@ -396,6 +451,7 @@ pub fn read_record_batch(
     dictionaries_by_id: &HashMap<i64, ArrayRef>,
     projection: Option<&[usize]>,
     metadata: &MetadataVersion,
+    enforce_zero_copy: bool,
 ) -> Result<RecordBatch, ArrowError> {
     let buffers = batch.buffers().ok_or_else(|| {
         ArrowError::IpcError("Unable to get buffers from IPC RecordBatch".to_string())
@@ -425,7 +481,7 @@ pub fn read_record_batch(
         for (idx, field) in schema.fields().iter().enumerate() {
             // Create array for projected field
             if let Some(proj_idx) = projection.iter().position(|p| p == &idx) {
-                let child = create_array(&mut reader, field)?;
+                let child = create_array(&mut reader, field, enforce_zero_copy)?;
                 arrays.push((proj_idx, child));
             } else {
                 reader.skip_field(field)?;
@@ -441,7 +497,7 @@ pub fn read_record_batch(
         let mut children = vec![];
         // keep track of index as lists require more than one node
         for field in schema.fields() {
-            let child = create_array(&mut reader, field)?;
+            let child = create_array(&mut reader, field, enforce_zero_copy)?;
             children.push(child);
         }
         RecordBatch::try_new_with_options(schema, children, &options)
@@ -456,6 +512,7 @@ pub fn read_dictionary(
     schema: &Schema,
     dictionaries_by_id: &mut HashMap<i64, ArrayRef>,
     metadata: &MetadataVersion,
+    enforce_zero_copy: bool,
 ) -> Result<(), ArrowError> {
     if batch.isDelta() {
         return Err(ArrowError::InvalidArgumentError(
@@ -485,6 +542,7 @@ pub fn read_dictionary(
                 dictionaries_by_id,
                 None,
                 metadata,
+                enforce_zero_copy,
             )?;
             Some(record_batch.column(0).clone())
         }
@@ -609,6 +667,7 @@ pub struct FileDecoder {
     dictionaries: HashMap<i64, ArrayRef>,
     version: MetadataVersion,
     projection: Option<Vec<usize>>,
+    enforce_zero_copy: bool,
 }
 
 impl FileDecoder {
@@ -619,12 +678,18 @@ impl FileDecoder {
             version,
             dictionaries: Default::default(),
             projection: None,
+            enforce_zero_copy: false,
         }
     }
 
     /// Specify a projection
     pub fn with_projection(mut self, projection: Vec<usize>) -> Self {
         self.projection = Some(projection);
+        self
+    }
+
+    pub fn with_enforce_zero_copy(mut self, enforce_zero_copy: bool) -> Self {
+        self.enforce_zero_copy = enforce_zero_copy;
         self
     }
 
@@ -652,6 +717,7 @@ impl FileDecoder {
                     &self.schema,
                     &mut self.dictionaries,
                     &message.version(),
+                    self.enforce_zero_copy,
                 )
             }
             t => Err(ArrowError::ParseError(format!(
@@ -683,6 +749,7 @@ impl FileDecoder {
                     &self.dictionaries,
                     self.projection.as_deref(),
                     &message.version(),
+                    self.enforce_zero_copy,
                 )
                 .map(Some)
             }
@@ -1125,6 +1192,7 @@ impl<R: Read> StreamReader<R> {
                     &self.dictionaries_by_id,
                     self.projection.as_ref().map(|x| x.0.as_ref()),
                     &message.version(),
+                    false,
                 )
                 .map(Some)
             }
@@ -1144,6 +1212,7 @@ impl<R: Read> StreamReader<R> {
                     &self.schema,
                     &mut self.dictionaries_by_id,
                     &message.version(),
+                    false,
                 )?;
 
                 // read the next message until we encounter a RecordBatch
@@ -1801,9 +1870,54 @@ mod tests {
             &Default::default(),
             None,
             &message.version(),
+            false,
         )
         .unwrap();
         assert_eq!(batch, roundtrip);
+    }
+
+    #[test]
+    fn test_unaligned_throws_error_with_enforce_zero_copy() {
+        let batch = RecordBatch::try_from_iter(vec![(
+            "i32",
+            Arc::new(Int32Array::from(vec![1, 2, 3, 4])) as _,
+        )])
+        .unwrap();
+
+        let gen = IpcDataGenerator {};
+        let mut dict_tracker = DictionaryTracker::new(false);
+        let (_, encoded) = gen
+            .encoded_batch(&batch, &mut dict_tracker, &Default::default())
+            .unwrap();
+
+        let message = root_as_message(&encoded.ipc_message).unwrap();
+
+        // Construct an unaligned buffer
+        let mut buffer = MutableBuffer::with_capacity(encoded.arrow_data.len() + 1);
+        buffer.push(0_u8);
+        buffer.extend_from_slice(&encoded.arrow_data);
+        let b = Buffer::from(buffer).slice(1);
+        assert_ne!(b.as_ptr().align_offset(8), 0);
+
+        let ipc_batch = message.header_as_record_batch().unwrap();
+        let result = read_record_batch(
+            &b,
+            ipc_batch,
+            batch.schema(),
+            &Default::default(),
+            None,
+            &message.version(),
+            true,
+        );
+
+        let error = result.unwrap_err();
+        match error {
+            ArrowError::InvalidArgumentError(e) => {
+                assert!(e.contains("Misaligned"));
+                assert!(e.contains("offset from expected alignment of"));
+            }
+            _ => panic!("Expected InvalidArgumentError"),
+        }
     }
 
     #[test]

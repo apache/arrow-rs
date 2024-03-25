@@ -269,6 +269,7 @@ async fn receive_batch_flight_data(
             &schema,
             dictionaries_by_id,
             &message.version(),
+            false,
         )
         .expect("Error reading dictionary");
 

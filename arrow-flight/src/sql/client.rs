@@ -590,6 +590,7 @@ pub fn arrow_data_from_flight_data(
                 &dictionaries_by_field,
                 None,
                 &ipc_message.version(),
+                false,
             )?;
             Ok(ArrowFlightData::RecordBatch(record_batch))
         }

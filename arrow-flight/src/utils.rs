@@ -99,6 +99,7 @@ pub fn flight_data_to_arrow_batch(
                 dictionaries_by_id,
                 None,
                 &message.version(),
+                false,
             )
         })?
 }
