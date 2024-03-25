@@ -137,11 +137,9 @@ impl<OffsetSize: OffsetSizeTrait, T: ArrayBuilder> GenericListViewBuilder<Offset
     /// Panics if the length of [`Self::values`] exceeds `OffsetSize::MAX`
     #[inline]
     pub fn append(&mut self, is_valid: bool, size: usize) {
-        if is_valid {
-            self.offsets_builder.append(OffsetSize::from_usize(self.values_builder.len() - size).unwrap());
-            let size = OffsetSize::from_usize(size).unwrap();
-            self.sizes_builder.append(size);
-        }
+        self.offsets_builder.append(OffsetSize::from_usize(self.values_builder.len() - size).unwrap());
+        let size = OffsetSize::from_usize(size).unwrap();
+        self.sizes_builder.append(size);
         self.null_buffer_builder.append(is_valid);
     }
 
@@ -186,18 +184,14 @@ impl<OffsetSize: OffsetSizeTrait, T: ArrayBuilder> GenericListViewBuilder<Offset
         let offsets = self.offsets_builder.finish();
         // Safety: Safe by construction
         let offsets = unsafe { OffsetBuffer::new_unchecked(offsets.into()) };
-        self.offsets_builder.append(OffsetSize::zero());
 
         let sizes = self.sizes_builder.finish();
-        // Safety: Safe by construction
         let sizes = SizeBuffer::new(sizes.into());
-        self.sizes_builder.append(OffsetSize::zero());
 
         let field = match &self.field {
             Some(f) => f.clone(),
             None => Arc::new(Field::new("item", values.data_type().clone(), true)),
         };
-
         GenericListViewArray::new(field, offsets, sizes, values ,nulls)
     }
 

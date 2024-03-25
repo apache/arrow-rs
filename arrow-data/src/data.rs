@@ -868,7 +868,7 @@ impl ArrayData {
         if self.len == 0 && self.buffers[1].is_empty() {
             return Ok(&[]);
         }
-        self.typed_buffer(0, self.len)
+        self.typed_buffer(1, self.len)
     }
 
     /// Returns a reference to the data in `buffers[idx]` as a typed slice after validating

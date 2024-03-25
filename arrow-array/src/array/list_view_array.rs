@@ -196,7 +196,7 @@ impl<OffsetSize: OffsetSizeTrait> GenericListViewArray<OffsetSize> {
         self.values.data_type().clone()
     }
 
-    /// Returns ith value of this list array.
+    /// Returns ith value of this list view array.
     /// # Safety
     /// Caller must ensure that the index is within the array bounds
     pub unsafe fn value_unchecked(&self, i: usize) -> ArrayRef {
@@ -205,7 +205,7 @@ impl<OffsetSize: OffsetSizeTrait> GenericListViewArray<OffsetSize> {
         self.values.slice(start, end - start)
     }
 
-    /// Returns ith value of this list array.
+    /// Returns ith value of this list view array.
     pub fn value(&self, i: usize) -> ArrayRef {
         let offset = self.value_offsets()[i].as_usize();
         let length = self.value_sizes()[i].as_usize();
@@ -359,6 +359,7 @@ impl <OffsetSize: OffsetSizeTrait> std::fmt::Debug for GenericListViewArray<Offs
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         let prefix = OffsetSize::PREFIX;
 
+        //todo fix dbg
         write!(f, "{prefix}ListViewArray\n[\n")?;
         print_long_array(self, f, |array, index, f| {
             std::fmt::Debug::fmt(&array.value(index), f)
@@ -442,9 +443,12 @@ impl<OffsetSize: OffsetSizeTrait> GenericListViewArray<OffsetSize> {
 mod tests {
     use super::*;
     use crate::types::Int32Type;
-    use crate::Int32Array;
-    use arrow_buffer::{Buffer, ScalarBuffer};
+    use crate::{Int32Array, Int64Array};
+    use arrow_buffer::{bit_util, Buffer, ScalarBuffer};
+    use arrow_schema::DataType::LargeListView;
     use arrow_schema::Field;
+    use crate::builder::{FixedSizeListBuilder, Int32Builder, ListViewBuilder};
+    use crate::cast::AsArray;
 
     fn create_from_buffers() -> ListViewArray {
         //  [[0, 1, 2], [3, 4, 5], [6, 7]]
@@ -470,7 +474,7 @@ mod tests {
     }
 
     #[test]
-    fn test_empty_list_array() {
+    fn test_empty_list_view_array() {
         // Construct an empty value array
         let value_data = ArrayData::builder(DataType::Int32)
             .len(0)
@@ -498,4 +502,630 @@ mod tests {
     }
 
 
+    #[test]
+    fn test_list_view_array() {
+        // Construct a value array
+        let value_data = ArrayData::builder(DataType::Int32)
+            .len(8)
+            .add_buffer(Buffer::from_slice_ref([0, 1, 2, 3, 4, 5, 6, 7]))
+            .build()
+            .unwrap();
+
+        // Construct a buffer for value offsets, for the nested array:
+        //  [[0, 1, 2], [3, 4, 5], [6, 7]]
+        let value_offsets = Buffer::from_slice_ref([0, 3, 6, 8]);
+        // Construct a buffer for value sizes, for the nested array:
+        let value_sizes = Buffer::from_slice_ref([3, 3, 2, 0]);
+
+        // Construct a list view array from the above two
+        let list_data_type = DataType::ListView(Arc::new(Field::new("item", DataType::Int32, false)));
+        let list_data = ArrayData::builder(list_data_type.clone())
+            .len(3)
+            .add_buffer(value_offsets.clone())
+            .add_buffer(value_sizes.clone())
+            .add_child_data(value_data.clone())
+            .build()
+            .unwrap();
+        let list_array = ListViewArray::from(list_data);
+
+        let values = list_array.values();
+        assert_eq!(value_data, values.to_data());
+        assert_eq!(DataType::Int32, list_array.value_type());
+        assert_eq!(3, list_array.len());
+        assert_eq!(0, list_array.null_count());
+        assert_eq!(6, list_array.value_offsets()[2]);
+        assert_eq!(2, list_array.value_length(2));
+        assert_eq!(
+            0,
+            list_array
+                .value(0)
+                .as_any()
+                .downcast_ref::<Int32Array>()
+                .unwrap()
+                .value(0)
+        );
+        assert_eq!(
+            0,
+            unsafe { list_array.value_unchecked(0) }
+                .as_any()
+                .downcast_ref::<Int32Array>()
+                .unwrap()
+                .value(0)
+        );
+        for i in 0..3 {
+            assert!(list_array.is_valid(i));
+            assert!(!list_array.is_null(i));
+        }
+
+        // Now test with a non-zero offset (skip first element)
+        //  [[3, 4, 5], [6, 7]]
+        let list_data = ArrayData::builder(list_data_type)
+            .len(2)
+            .offset(1)
+            .add_buffer(value_offsets)
+            .add_buffer(value_sizes)
+            .add_child_data(value_data.clone())
+            .build()
+            .unwrap();
+        let list_array = ListViewArray::from(list_data);
+
+        let values = list_array.values();
+        assert_eq!(value_data, values.to_data());
+        assert_eq!(DataType::Int32, list_array.value_type());
+        assert_eq!(2, list_array.len());
+        assert_eq!(0, list_array.null_count());
+        assert_eq!(6, list_array.value_offsets()[1]);
+        assert_eq!(2, list_array.value_length(1));
+        assert_eq!(
+            3,
+            list_array
+                .value(0)
+                .as_any()
+                .downcast_ref::<Int32Array>()
+                .unwrap()
+                .value(0)
+        );
+        assert_eq!(
+            3,
+            unsafe { list_array.value_unchecked(0) }
+                .as_any()
+                .downcast_ref::<Int32Array>()
+                .unwrap()
+                .value(0)
+        );
+    }
+
+    #[test]
+    fn test_large_list_view_array() {
+        // Construct a value array
+        let value_data = ArrayData::builder(DataType::Int32)
+            .len(8)
+            .add_buffer(Buffer::from_slice_ref([0, 1, 2, 3, 4, 5, 6, 7]))
+            .build()
+            .unwrap();
+
+        // Construct a buffer for value offsets, for the nested array:
+        //  [[0, 1, 2], [3, 4, 5], [6, 7]]
+        let value_offsets = Buffer::from_slice_ref([0i64, 3, 6, 8]);
+
+        // Construct a buffer for value sizes, for the nested array:
+        let value_sizes = Buffer::from_slice_ref([3i64, 3, 2, 0]);
+
+        // Construct a list view array from the above two
+        let list_data_type =  DataType::LargeListView(Arc::new(Field::new("item", DataType::Int32, false)));
+        let list_data = ArrayData::builder(list_data_type.clone())
+            .len(3)
+            .add_buffer(value_offsets.clone())
+            .add_buffer(value_sizes.clone())
+            .add_child_data(value_data.clone())
+            .build()
+            .unwrap();
+        let list_array = LargeListViewArray::from(list_data);
+
+        let values = list_array.values();
+        assert_eq!(value_data, values.to_data());
+        assert_eq!(DataType::Int32, list_array.value_type());
+        assert_eq!(3, list_array.len());
+        assert_eq!(0, list_array.null_count());
+        assert_eq!(6, list_array.value_offsets()[2]);
+        assert_eq!(2, list_array.value_length(2));
+        assert_eq!(
+            0,
+            list_array
+                .value(0)
+                .as_any()
+                .downcast_ref::<Int32Array>()
+                .unwrap()
+                .value(0)
+        );
+        assert_eq!(
+            0,
+            unsafe { list_array.value_unchecked(0) }
+                .as_any()
+                .downcast_ref::<Int32Array>()
+                .unwrap()
+                .value(0)
+        );
+        for i in 0..3 {
+            assert!(list_array.is_valid(i));
+            assert!(!list_array.is_null(i));
+        }
+
+        // Now test with a non-zero offset
+        //  [[3, 4, 5], [6, 7]]
+        let list_data = ArrayData::builder(list_data_type)
+            .len(2)
+            .offset(1)
+            .add_buffer(value_offsets)
+            .add_buffer(value_sizes)
+            .add_child_data(value_data.clone())
+            .build()
+            .unwrap();
+        let list_array = LargeListViewArray::from(list_data);
+
+        let values = list_array.values();
+        assert_eq!(value_data, values.to_data());
+        assert_eq!(DataType::Int32, list_array.value_type());
+        assert_eq!(2, list_array.len());
+        assert_eq!(0, list_array.null_count());
+        assert_eq!(6, list_array.value_offsets()[1]);
+        assert_eq!(2, list_array.value_length(1));
+        assert_eq!(
+            3,
+            list_array
+                .value(0)
+                .as_any()
+                .downcast_ref::<Int32Array>()
+                .unwrap()
+                .value(0)
+        );
+        assert_eq!(
+            3,
+            unsafe { list_array.value_unchecked(0) }
+                .as_any()
+                .downcast_ref::<Int32Array>()
+                .unwrap()
+                .value(0)
+        );
+    }
+
+
+    #[test]
+    fn test_list_view_array_slice() {
+        // Construct a value array
+        let value_data = ArrayData::builder(DataType::Int32)
+            .len(10)
+            .add_buffer(Buffer::from_slice_ref([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]))
+            .build()
+            .unwrap();
+
+        // Construct a buffer for value offsets, for the nested array:
+        //  [[0, 1], null, null, [2, 3], [4, 5], null, [6, 7, 8], null, [9]]
+        let value_offsets = Buffer::from_slice_ref([0, 2, 2, 2, 4, 6, 6, 9, 9, 10]);
+        // Construct a buffer for value sizes
+        let value_sizes = Buffer::from_slice_ref([2, 0, 0, 2, 2, 0, 3, 0, 1]);
+        // 01011001 00000001
+        let mut null_bits: [u8; 2] = [0; 2];
+        bit_util::set_bit(&mut null_bits, 0);
+        bit_util::set_bit(&mut null_bits, 3);
+        bit_util::set_bit(&mut null_bits, 4);
+        bit_util::set_bit(&mut null_bits, 6);
+        bit_util::set_bit(&mut null_bits, 8);
+
+        // Construct a list view array from the above two
+        let list_data_type = DataType::ListView(Arc::new(Field::new("item", DataType::Int32, false)));
+        let list_data = ArrayData::builder(list_data_type)
+            .len(9)
+            .add_buffer(value_offsets)
+            .add_buffer(value_sizes)
+            .add_child_data(value_data.clone())
+            .null_bit_buffer(Some(Buffer::from(null_bits)))
+            .build()
+            .unwrap();
+        let list_array = ListViewArray::from(list_data);
+
+        let values = list_array.values();
+        assert_eq!(value_data, values.to_data());
+        assert_eq!(DataType::Int32, list_array.value_type());
+        assert_eq!(9, list_array.len());
+        assert_eq!(4, list_array.null_count());
+        assert_eq!(2, list_array.value_offsets()[3]);
+        assert_eq!(2, list_array.value_length(3));
+
+        let sliced_array = list_array.slice(1, 6);
+        assert_eq!(6, sliced_array.len());
+        assert_eq!(3, sliced_array.null_count());
+
+        for i in 0..sliced_array.len() {
+            if bit_util::get_bit(&null_bits, 1 + i) {
+                assert!(sliced_array.is_valid(i));
+            } else {
+                assert!(sliced_array.is_null(i));
+            }
+        }
+
+        // Check offset and length for each non-null value.
+        let sliced_list_array = sliced_array.as_any().downcast_ref::<ListViewArray>().unwrap();
+        assert_eq!(2, sliced_list_array.value_offsets()[2]);
+        assert_eq!(2, sliced_list_array.value_length(2));
+        assert_eq!(4, sliced_list_array.value_offsets()[3]);
+        assert_eq!(2, sliced_list_array.value_length(3));
+        assert_eq!(6, sliced_list_array.value_offsets()[5]);
+        assert_eq!(3, sliced_list_array.value_length(5));
+    }
+
+    #[test]
+    fn test_large_list_view_array_slice() {
+        // Construct a value array
+        let value_data = ArrayData::builder(DataType::Int32)
+            .len(10)
+            .add_buffer(Buffer::from_slice_ref([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]))
+            .build()
+            .unwrap();
+
+        // Construct a buffer for value offsets, for the nested array:
+        //  [[0, 1], null, null, [2, 3], [4, 5], null, [6, 7, 8], null, [9]]
+        let value_offsets = Buffer::from_slice_ref([0i64, 2, 2, 2, 4, 6, 6, 9, 9, 10]);
+        // Construct a buffer for value sizes
+        let value_sizes = Buffer::from_slice_ref([2i64, 0, 0, 2, 2, 0, 3, 0, 1]);
+        // 01011001 00000001
+        let mut null_bits: [u8; 2] = [0; 2];
+        bit_util::set_bit(&mut null_bits, 0);
+        bit_util::set_bit(&mut null_bits, 3);
+        bit_util::set_bit(&mut null_bits, 4);
+        bit_util::set_bit(&mut null_bits, 6);
+        bit_util::set_bit(&mut null_bits, 8);
+
+        // Construct a list view array from the above two
+        let list_data_type = DataType::LargeListView(Arc::new(Field::new("item", DataType::Int32, false)));
+        let list_data = ArrayData::builder(list_data_type)
+            .len(9)
+            .add_buffer(value_offsets)
+            .add_buffer(value_sizes)
+            .add_child_data(value_data.clone())
+            .null_bit_buffer(Some(Buffer::from(null_bits)))
+            .build()
+            .unwrap();
+        let list_array = LargeListViewArray::from(list_data);
+
+        let values = list_array.values();
+        assert_eq!(value_data, values.to_data());
+        assert_eq!(DataType::Int32, list_array.value_type());
+        assert_eq!(9, list_array.len());
+        assert_eq!(4, list_array.null_count());
+        assert_eq!(2, list_array.value_offsets()[3]);
+        assert_eq!(2, list_array.value_length(3));
+
+        let sliced_array = list_array.slice(1, 6);
+        assert_eq!(6, sliced_array.len());
+        assert_eq!(3, sliced_array.null_count());
+
+        for i in 0..sliced_array.len() {
+            if bit_util::get_bit(&null_bits, 1 + i) {
+                assert!(sliced_array.is_valid(i));
+            } else {
+                assert!(sliced_array.is_null(i));
+            }
+        }
+
+        // Check offset and length for each non-null value.
+        let sliced_list_array = sliced_array
+            .as_any()
+            .downcast_ref::<LargeListViewArray>()
+            .unwrap();
+        assert_eq!(2, sliced_list_array.value_offsets()[2]);
+        assert_eq!(2, sliced_list_array.value_length(2));
+        assert_eq!(4, sliced_list_array.value_offsets()[3]);
+        assert_eq!(2, sliced_list_array.value_length(3));
+        assert_eq!(6, sliced_list_array.value_offsets()[5]);
+        assert_eq!(3, sliced_list_array.value_length(5));
+    }
+
+    #[test]
+    #[should_panic(expected = "index out of bounds: the len is 10 but the index is 10")]
+    fn test_list_view_array_index_out_of_bound() {
+        // Construct a value array
+        let value_data = ArrayData::builder(DataType::Int32)
+            .len(10)
+            .add_buffer(Buffer::from_slice_ref([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]))
+            .build()
+            .unwrap();
+
+        // Construct a buffer for value offsets, for the nested array:
+        //  [[0, 1], null, null, [2, 3], [4, 5], null, [6, 7, 8], null, [9]]
+        let value_offsets = Buffer::from_slice_ref([0i64, 2, 2, 2, 4, 6, 6, 9, 9, 10]);
+        // Construct a buffer for value sizes
+        let value_sizes = Buffer::from_slice_ref([2i64, 0, 0, 2, 2, 0, 3, 0, 1]);
+        // 01011001 00000001
+        let mut null_bits: [u8; 2] = [0; 2];
+        bit_util::set_bit(&mut null_bits, 0);
+        bit_util::set_bit(&mut null_bits, 3);
+        bit_util::set_bit(&mut null_bits, 4);
+        bit_util::set_bit(&mut null_bits, 6);
+        bit_util::set_bit(&mut null_bits, 8);
+
+        // Construct a list array from the above two
+        let list_data_type = LargeListView(Arc::new(Field::new("item", DataType::Int32, false)));
+        let list_data = ArrayData::builder(list_data_type)
+            .len(9)
+            .add_buffer(value_offsets)
+            .add_buffer(value_sizes)
+            .add_child_data(value_data)
+            .null_bit_buffer(Some(Buffer::from(null_bits)))
+            .build()
+            .unwrap();
+        let list_array = LargeListViewArray::from(list_data);
+        assert_eq!(9, list_array.len());
+
+        list_array.value(10);
+    }
+    #[test]
+    #[should_panic(expected = "ListViewArray data should contain two buffer (value offsets & value size), had 0")]
+    #[cfg(not(feature = "force_validate"))]
+    fn test_list_view_array_invalid_buffer_len() {
+        let value_data = unsafe {
+            ArrayData::builder(DataType::Int32)
+                .len(8)
+                .add_buffer(Buffer::from_slice_ref([0, 1, 2, 3, 4, 5, 6, 7]))
+                .build_unchecked()
+        };
+        let list_data_type = DataType::ListView(Arc::new(Field::new("item", DataType::Int32, false)));
+        let list_data = unsafe {
+            ArrayData::builder(list_data_type)
+                .len(3)
+                .add_child_data(value_data)
+                .build_unchecked()
+        };
+        drop(ListViewArray::from(list_data));
+    }
+
+    #[test]
+    #[should_panic(expected = "ListViewArray data should contain two buffer (value offsets & value size), had 1")]
+    #[cfg(not(feature = "force_validate"))]
+    fn test_list_view_array_invalid_child_array_len() {
+        let value_offsets = Buffer::from_slice_ref([0, 2, 5, 7]);
+        let list_data_type = DataType::ListView(Arc::new(Field::new("item", DataType::Int32, false)));
+        let list_data = unsafe {
+            ArrayData::builder(list_data_type)
+                .len(3)
+                .add_buffer(value_offsets)
+                .build_unchecked()
+        };
+        drop(ListViewArray::from(list_data));
+    }
+
+    #[test]
+    #[should_panic(expected = "[Large]ListViewArray's datatype must be [Large]ListViewArray(). It is ListView")]
+    fn test_from_array_data_validation() {
+        let mut builder = ListViewBuilder::new(Int32Builder::new());
+        builder.values().append_value(1);
+        builder.append(true, 0);
+        let array = builder.finish();
+        let _ = LargeListViewArray::from(array.into_data());
+    }
+
+    #[test]
+    fn test_list_view_array_offsets_need_not_start_at_zero() {
+        let value_data = ArrayData::builder(DataType::Int32)
+            .len(8)
+            .add_buffer(Buffer::from_slice_ref([0, 1, 2, 3, 4, 5, 6, 7]))
+            .build()
+            .unwrap();
+
+        let value_offsets = Buffer::from_slice_ref([2, 2, 5, 7]);
+        let value_sizes = Buffer::from_slice_ref([0, 0, 3, 2]);
+
+        let list_data_type = DataType::ListView(Arc::new(Field::new("item", DataType::Int32, false)));
+        let list_data = ArrayData::builder(list_data_type)
+            .len(3)
+            .add_buffer(value_offsets)
+            .add_buffer(value_sizes)
+            .add_child_data(value_data)
+            .build()
+            .unwrap();
+
+        let list_array = ListViewArray::from(list_data);
+        assert_eq!(list_array.value_length(0), 0);
+        assert_eq!(list_array.value_length(1), 3);
+        assert_eq!(list_array.value_length(2), 2);
+    }
+
+    #[test]
+    #[should_panic(expected = "Memory pointer is not aligned with the specified scalar type")]
+    #[cfg(not(feature = "force_validate"))]
+    fn test_list_view_array_alignment() {
+        let offset_buf = Buffer::from_slice_ref([0_u64]);
+        let offset_buf2 = offset_buf.slice(1);
+
+        let size_buf = Buffer::from_slice_ref([0_u64]);
+        let size_buf2 = size_buf.slice(1);
+
+        let values: [i32; 8] = [0; 8];
+        let value_data = unsafe {
+            ArrayData::builder(DataType::Int32)
+                .add_buffer(Buffer::from_slice_ref(values))
+                .build_unchecked()
+        };
+
+        let list_data_type = DataType::ListView(Arc::new(Field::new("item", DataType::Int32, false)));
+        let list_data = unsafe {
+            ArrayData::builder(list_data_type)
+                .add_buffer(offset_buf2)
+                .add_buffer(size_buf2)
+                .add_child_data(value_data)
+                .build_unchecked()
+        };
+        drop(ListViewArray::from(list_data));
+    }
+
+    #[test]
+    fn list_array_equality() {
+        // test scaffold
+        fn do_comparison(
+            lhs_data: Vec<Option<Vec<Option<i32>>>>,
+            rhs_data: Vec<Option<Vec<Option<i32>>>>,
+            should_equal: bool,
+        ) {
+            let lhs = ListViewArray::from_iter_primitive::<Int32Type, _, _>(lhs_data.clone());
+            let rhs = ListViewArray::from_iter_primitive::<Int32Type, _, _>(rhs_data.clone());
+            dbg!(&lhs);
+            dbg!(&rhs);
+            assert_eq!(lhs == rhs, should_equal);
+
+            let lhs = LargeListViewArray::from_iter_primitive::<Int32Type, _, _>(lhs_data);
+            let rhs = LargeListViewArray::from_iter_primitive::<Int32Type, _, _>(rhs_data);
+            assert_eq!(lhs == rhs, should_equal);
+        }
+        //
+        // do_comparison(
+        //     vec![
+        //         Some(vec![Some(0), Some(1), Some(2)]),
+        //         None,
+        //         Some(vec![Some(3), None, Some(5)]),
+        //         Some(vec![Some(6), Some(7)]),
+        //     ],
+        //     vec![
+        //         Some(vec![Some(0), Some(1), Some(2)]),
+        //         None,
+        //         Some(vec![Some(3), None, Some(5)]),
+        //         Some(vec![Some(6), Some(7)]),
+        //     ],
+        //     true,
+        // );
+        //
+        // do_comparison(
+        //     vec![
+        //         None,
+        //         None,
+        //         Some(vec![Some(3), None, Some(5)]),
+        //         Some(vec![Some(6), Some(7)]),
+        //     ],
+        //     vec![
+        //         Some(vec![Some(0), Some(1), Some(2)]),
+        //         None,
+        //         Some(vec![Some(3), None, Some(5)]),
+        //         Some(vec![Some(6), Some(7)]),
+        //     ],
+        //     false,
+        // );
+        //
+        // do_comparison(
+        //     vec![
+        //         None,
+        //         None,
+        //         Some(vec![Some(3), None, Some(5)]),
+        //         Some(vec![Some(6), Some(7)]),
+        //     ],
+        //     vec![
+        //         None,
+        //         None,
+        //         Some(vec![Some(3), None, Some(5)]),
+        //         Some(vec![Some(0), Some(0)]),
+        //     ],
+        //     false,
+        // );
+
+        do_comparison(
+            vec![None, None, Some(vec![Some(1)])],
+            vec![None, None, Some(vec![Some(2)])],
+            false,
+        );
+    }
+
+    #[test]
+    fn test_empty_offsets() {
+        let f = Arc::new(Field::new("element", DataType::Int32, true));
+        let string = ListViewArray::from(
+            ArrayData::builder(DataType::ListView(f.clone()))
+                .buffers(vec![Buffer::from(&[]), Buffer::from(&[])])
+                .add_child_data(ArrayData::new_empty(&DataType::Int32))
+                .build()
+                .unwrap(),
+        );
+        assert_eq!(string.value_offsets(), &[0]);
+        let string = LargeListViewArray::from(
+            ArrayData::builder(DataType::LargeListView(f))
+                .buffers(vec![Buffer::from(&[]),Buffer::from(&[])])
+                .add_child_data(ArrayData::new_empty(&DataType::Int32))
+                .build()
+                .unwrap(),
+        );
+        assert_eq!(string.len(), 0);
+        assert_eq!(string.value_offsets(), &[0]);
+    }
+
+    #[test]
+    fn test_try_new() {
+        let offsets = OffsetBuffer::new(vec![0, 1, 4, 5].into());
+        let sizes = SizeBuffer::new(ScalarBuffer::from([0, 3, 1, 1]));
+        let values = Int32Array::new(vec![1, 2, 3, 4, 5].into(), None);
+        let values = Arc::new(values) as ArrayRef;
+
+        let field = Arc::new(Field::new("element", DataType::Int32, false));
+        ListViewArray::new(field.clone(), offsets.clone(), sizes.clone(), values.clone(), None);
+
+        let nulls = NullBuffer::new_null(3);
+        ListViewArray::new(field.clone(), offsets, sizes.clone(), values.clone(), Some(nulls));
+
+        let nulls = NullBuffer::new_null(3);
+        let offsets = OffsetBuffer::new(vec![0, 1, 2, 4, 5].into());
+        let sizes = SizeBuffer::new(ScalarBuffer::from([0, 1, 1, 2, 1]));
+        let err = LargeListViewArray::try_new(field, offsets.clone(), sizes.clone(), values.clone(), Some(nulls))
+            .unwrap_err();
+
+        assert_eq!(
+            err.to_string(),
+            "Invalid argument error: Incorrect length of null buffer for LargeListViewArray, expected 4 got 3"
+        );
+
+        let field = Arc::new(Field::new("element", DataType::Int64, false));
+        let err = LargeListViewArray::try_new(field.clone(), offsets.clone(), sizes.clone(), values.clone(), None)
+            .unwrap_err();
+
+        assert_eq!(
+            err.to_string(),
+            "Invalid argument error: LargeListViewArray expected data type Int64 got Int32 for \"element\""
+        );
+
+        let nulls = NullBuffer::new_null(7);
+        let values = Int64Array::new(vec![0; 7].into(), Some(nulls));
+        let values = Arc::new(values);
+
+        let err =
+            LargeListViewArray::try_new(field, offsets.clone(), values.clone(), None).unwrap_err();
+
+        assert_eq!(
+            err.to_string(),
+            "Invalid argument error: Non-nullable field of LargeListArray \"element\" cannot contain nulls"
+        );
+
+        let field = Arc::new(Field::new("element", DataType::Int64, true));
+        LargeListViewArray::new(field.clone(), offsets.clone(), values, None);
+
+        let values = Int64Array::new(vec![0; 2].into(), None);
+        let err = LargeListViewArray::try_new(field, offsets, Arc::new(values), None).unwrap_err();
+
+        assert_eq!(
+            err.to_string(),
+            "Invalid argument error: Max offset of 5 exceeds length of values 2"
+        );
+    }
+
+    #[test]
+    fn test_from_fixed_size_list() {
+        let mut builder = FixedSizeListBuilder::new(Int32Builder::new(), 3);
+        builder.values().append_slice(&[1, 2, 3]);
+        builder.append(true);
+        builder.values().append_slice(&[0, 0, 0]);
+        builder.append(false);
+        builder.values().append_slice(&[4, 5, 6]);
+        builder.append(true);
+        let list: ListViewArray = builder.finish().into();
+
+        let values: Vec<_> = list
+            .iter()
+            .map(|x| x.map(|x| x.as_primitive::<Int32Type>().values().to_vec()))
+            .collect();
+        assert_eq!(values, vec![Some(vec![1, 2, 3]), None, Some(vec![4, 5, 6])])
+    }
 }
