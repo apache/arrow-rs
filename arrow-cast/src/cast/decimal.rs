@@ -559,7 +559,7 @@ where
     Ok(Arc::new(value_builder.finish()))
 }
 
-// cast the decimal array to floating-point array
+// Cast the decimal array to floating-point array
 pub(crate) fn cast_decimal_to_float<D: DecimalType, T: ArrowPrimitiveType, F>(
     array: &dyn Array,
     op: F,
