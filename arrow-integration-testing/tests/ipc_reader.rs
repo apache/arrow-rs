@@ -19,10 +19,12 @@
 //! in `testing/arrow-ipc-stream/integration/...`
 
 use arrow::error::ArrowError;
-use arrow::ipc::reader::{FileReader, StreamReader};
+use arrow::ipc::reader::{FileReader, StreamDecoder, StreamReader};
 use arrow::util::test_util::arrow_test_data;
+use arrow_buffer::Buffer;
 use arrow_integration_testing::read_gzip_json;
 use std::fs::File;
+use std::io::Read;
 
 #[test]
 fn read_0_1_4() {
@@ -182,18 +184,45 @@ fn verify_arrow_stream(testdata: &str, version: &str, path: &str) {
     let filename = format!("{testdata}/arrow-ipc-stream/integration/{version}/{path}.stream");
     println!("Verifying {filename}");
 
+    // read expected JSON output
+    let arrow_json = read_gzip_json(version, path);
+
     // Compare contents to the expected output format in JSON
     {
         println!("  verifying content");
         let file = File::open(&filename).unwrap();
         let mut reader = StreamReader::try_new(file, None).unwrap();
 
-        // read expected JSON output
-        let arrow_json = read_gzip_json(version, path);
         assert!(arrow_json.equals_reader(&mut reader).unwrap());
         // the next batch must be empty
         assert!(reader.next().is_none());
         // the stream must indicate that it's finished
         assert!(reader.is_finished());
     }
+
+    // Test stream decoder
+    let expected = arrow_json.get_record_batches().unwrap();
+    for chunk_sizes in [1, 2, 8, 123] {
+        let mut decoder = StreamDecoder::new();
+        let stream = chunked_file(&filename, chunk_sizes);
+        let mut actual = Vec::with_capacity(expected.len());
+        for mut x in stream {
+            while !x.is_empty() {
+                if let Some(x) = decoder.decode(&mut x).unwrap() {
+                    actual.push(x);
+                }
+            }
+        }
+        decoder.finish().unwrap();
+        assert_eq!(expected, actual);
+    }
+}
+
+fn chunked_file(filename: &str, chunk_size: u64) -> impl Iterator<Item = Buffer> {
+    let mut file = File::open(filename).unwrap();
+    std::iter::from_fn(move || {
+        let mut buf = vec![];
+        let read = (&mut file).take(chunk_size).read_to_end(&mut buf).unwrap();
+        (read != 0).then(|| Buffer::from_vec(buf))
+    })
 }

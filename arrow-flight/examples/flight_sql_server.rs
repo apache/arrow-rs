@@ -272,7 +272,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
     ) -> Result<Response<FlightInfo>, Status> {
         let flight_descriptor = request.into_inner();
         let ticket = Ticket {
-            ticket: query.encode_to_vec().into(),
+            ticket: query.as_any().encode_to_vec().into(),
         };
         let endpoint = FlightEndpoint::new().with_ticket(ticket);
 
@@ -292,7 +292,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
     ) -> Result<Response<FlightInfo>, Status> {
         let flight_descriptor = request.into_inner();
         let ticket = Ticket {
-            ticket: query.encode_to_vec().into(),
+            ticket: query.as_any().encode_to_vec().into(),
         };
         let endpoint = FlightEndpoint::new().with_ticket(ticket);
 
@@ -312,7 +312,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
     ) -> Result<Response<FlightInfo>, Status> {
         let flight_descriptor = request.into_inner();
         let ticket = Ticket {
-            ticket: query.encode_to_vec().into(),
+            ticket: query.as_any().encode_to_vec().into(),
         };
         let endpoint = FlightEndpoint::new().with_ticket(ticket);
 
@@ -341,7 +341,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
         request: Request<FlightDescriptor>,
     ) -> Result<Response<FlightInfo>, Status> {
         let flight_descriptor = request.into_inner();
-        let ticket = Ticket::new(query.encode_to_vec());
+        let ticket = Ticket::new(query.as_any().encode_to_vec());
         let endpoint = FlightEndpoint::new().with_ticket(ticket);
 
         let flight_info = FlightInfo::new()
@@ -399,7 +399,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
         request: Request<FlightDescriptor>,
     ) -> Result<Response<FlightInfo>, Status> {
         let flight_descriptor = request.into_inner();
-        let ticket = Ticket::new(query.encode_to_vec());
+        let ticket = Ticket::new(query.as_any().encode_to_vec());
         let endpoint = FlightEndpoint::new().with_ticket(ticket);
 
         let flight_info = FlightInfo::new()

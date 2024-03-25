@@ -416,7 +416,7 @@ impl Decoder {
     /// should be included in the next call to [`Self::decode`]
     ///
     /// There is no requirement that `buf` contains a whole number of records, facilitating
-    /// integration with arbitrary byte streams, such as that yielded by [`BufRead`]
+    /// integration with arbitrary byte streams, such as those yielded by [`BufRead`]
     pub fn decode(&mut self, buf: &[u8]) -> Result<usize, ArrowError> {
         self.tape_decoder.decode(buf)
     }
