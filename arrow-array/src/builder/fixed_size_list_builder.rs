@@ -267,28 +267,54 @@ mod tests {
     use crate::Array;
     use crate::Int32Array;
 
-    #[test]
-    fn test_fixed_size_list_array_builder() {
+    fn make_list_builder(
+        include_null_element: bool,
+        include_null_in_values: bool,
+    ) -> FixedSizeListBuilder<crate::builder::PrimitiveBuilder<crate::types::Int32Type>> {
         let values_builder = Int32Builder::new();
         let mut builder = FixedSizeListBuilder::new(values_builder, 3);
 
-        //  [[0, 1, 2], null, [3, null, 5], [6, 7, null]]
         builder.values().append_value(0);
         builder.values().append_value(1);
         builder.values().append_value(2);
         builder.append(true);
-        builder.values().append_null();
-        builder.values().append_null();
-        builder.values().append_null();
-        builder.append(false);
+
+        builder.values().append_value(2);
         builder.values().append_value(3);
-        builder.values().append_null();
-        builder.values().append_value(5);
+        builder.values().append_value(4);
         builder.append(true);
-        builder.values().append_value(6);
-        builder.values().append_value(7);
-        builder.values().append_null();
-        builder.append(true);
+
+        if include_null_element {
+            builder.values().append_null();
+            builder.values().append_null();
+            builder.values().append_null();
+            builder.append(false);
+        } else {
+            builder.values().append_value(2);
+            builder.values().append_value(3);
+            builder.values().append_value(4);
+            builder.append(true);
+        }
+
+        if include_null_in_values {
+            builder.values().append_value(3);
+            builder.values().append_null();
+            builder.values().append_value(5);
+            builder.append(true);
+        } else {
+            builder.values().append_value(3);
+            builder.values().append_value(4);
+            builder.values().append_value(5);
+            builder.append(true);
+        }
+
+        return builder;
+    }
+
+    #[test]
+    fn test_fixed_size_list_array_builder() {
+        let mut builder = make_list_builder(true, true);
+
         let list_array = builder.finish();
 
         assert_eq!(DataType::Int32, list_array.value_type());
@@ -300,35 +326,13 @@ mod tests {
 
     #[test]
     fn test_fixed_size_list_array_builder_with_field() {
-        let values_builder = Int32Builder::new();
-        let mut builder = FixedSizeListBuilder::new(values_builder, 3).with_field(Field::new(
-            "list_element",
-            DataType::Int32,
-            true,
-        ));
-
-        //  [[0, 1, 2], null, [3, null, 5], [6, 7, null]]
-        builder.values().append_value(0);
-        builder.values().append_value(1);
-        builder.values().append_value(2);
-        builder.append(true);
-        builder.values().append_null();
-        builder.values().append_null();
-        builder.values().append_null();
-        builder.append(false);
-        builder.values().append_value(3);
-        builder.values().append_null();
-        builder.values().append_value(5);
-        builder.append(true);
-        builder.values().append_value(6);
-        builder.values().append_value(7);
-        builder.values().append_null();
-        builder.append(true);
+        let builder = make_list_builder(false, false);
+        let mut builder = builder.with_field(Field::new("list_element", DataType::Int32, false));
         let list_array = builder.finish();
 
         assert_eq!(DataType::Int32, list_array.value_type());
         assert_eq!(4, list_array.len());
-        assert_eq!(1, list_array.null_count());
+        assert_eq!(0, list_array.null_count());
         assert_eq!(6, list_array.value_offset(2));
         assert_eq!(3, list_array.value_length());
     }
@@ -338,23 +342,8 @@ mod tests {
         expected = "field is nullable = false, but the values_builder contains null values"
     )]
     fn test_fixed_size_list_array_builder_with_field_null_panic() {
-        let values_builder = Int32Builder::new();
-        let builder = FixedSizeListBuilder::new(values_builder, 3);
+        let builder = make_list_builder(true, true);
         let mut builder = builder.with_field(Field::new("list_item", DataType::Int32, false));
-
-        //  [[0, 1, 2], null, [3, null, 5], [6, 7, null]]
-        builder.values().append_value(0);
-        builder.values().append_value(1);
-        builder.values().append_value(2);
-        builder.append(true);
-        builder.values().append_null();
-        builder.values().append_null();
-        builder.values().append_null();
-        builder.append(false);
-        builder.values().append_value(3);
-        builder.values().append_null();
-        builder.values().append_value(5);
-        builder.append(true);
 
         builder.finish();
     }
@@ -387,30 +376,9 @@ mod tests {
 
     #[test]
     fn test_fixed_size_list_array_builder_cloned_with_field() {
-        let values_builder = Int32Builder::new();
-        let mut builder = FixedSizeListBuilder::new(values_builder, 3).with_field(Field::new(
-            "list_element",
-            DataType::Int32,
-            true,
-        ));
+        let builder = make_list_builder(true, true);
+        let builder = builder.with_field(Field::new("list_element", DataType::Int32, true));
 
-        //  [[0, 1, 2], null, [3, null, 5], [6, 7, null]]
-        builder.values().append_value(0);
-        builder.values().append_value(1);
-        builder.values().append_value(2);
-        builder.append(true);
-        builder.values().append_null();
-        builder.values().append_null();
-        builder.values().append_null();
-        builder.append(false);
-        builder.values().append_value(3);
-        builder.values().append_null();
-        builder.values().append_value(5);
-        builder.append(true);
-        builder.values().append_value(6);
-        builder.values().append_value(7);
-        builder.values().append_null();
-        builder.append(true);
         let list_array = builder.finish_cloned();
 
         assert_eq!(DataType::Int32, list_array.value_type());
@@ -425,23 +393,8 @@ mod tests {
         expected = "field is nullable = false, but the values_builder contains null values"
     )]
     fn test_fixed_size_list_array_builder_cloned_with_field_null_panic() {
-        let values_builder = Int32Builder::new();
-        let builder = FixedSizeListBuilder::new(values_builder, 3);
-        let mut builder = builder.with_field(Field::new("list_item", DataType::Int32, false));
-
-        //  [[0, 1, 2], null, [3, null, 5], [6, 7, null]]
-        builder.values().append_value(0);
-        builder.values().append_value(1);
-        builder.values().append_value(2);
-        builder.append(true);
-        builder.values().append_null();
-        builder.values().append_null();
-        builder.values().append_null();
-        builder.append(false);
-        builder.values().append_value(3);
-        builder.values().append_null();
-        builder.values().append_value(5);
-        builder.append(true);
+        let builder = make_list_builder(true, true);
+        let builder = builder.with_field(Field::new("list_item", DataType::Int32, false));
 
         builder.finish_cloned();
     }
@@ -451,49 +404,20 @@ mod tests {
         expected = "DataType of field (Int64) should be the same as the values_builder DataType (Int32)"
     )]
     fn test_fixed_size_list_array_builder_cloned_with_field_type_panic() {
-        let values_builder = Int32Builder::new();
-        let builder = FixedSizeListBuilder::new(values_builder, 3);
-        let mut builder = builder.with_field(Field::new("list_item", DataType::Int64, true));
-
-        //  [[0, 1, 2], null, [3, null, 5], [6, 7, null]]
-        builder.values().append_value(0);
-        builder.values().append_value(1);
-        builder.values().append_value(2);
-        builder.append(true);
-        builder.values().append_null();
-        builder.values().append_null();
-        builder.values().append_null();
-        builder.append(false);
-        builder.values().append_value(3);
-        builder.values().append_value(4);
-        builder.values().append_value(5);
-        builder.append(true);
+        let builder = make_list_builder(false, false);
+        let builder = builder.with_field(Field::new("list_item", DataType::Int64, true));
 
         builder.finish_cloned();
     }
 
     #[test]
     fn test_fixed_size_list_array_builder_finish_cloned() {
-        let values_builder = Int32Builder::new();
-        let mut builder = FixedSizeListBuilder::new(values_builder, 3);
+        let mut builder = make_list_builder(true, true);
 
-        //  [[0, 1, 2], null, [3, null, 5], [6, 7, null]]
-        builder.values().append_value(0);
-        builder.values().append_value(1);
-        builder.values().append_value(2);
-        builder.append(true);
-        builder.values().append_null();
-        builder.values().append_null();
-        builder.values().append_null();
-        builder.append(false);
-        builder.values().append_value(3);
-        builder.values().append_null();
-        builder.values().append_value(5);
-        builder.append(true);
         let mut list_array = builder.finish_cloned();
 
         assert_eq!(DataType::Int32, list_array.value_type());
-        assert_eq!(3, list_array.len());
+        assert_eq!(4, list_array.len());
         assert_eq!(1, list_array.null_count());
         assert_eq!(3, list_array.value_length());
 
@@ -508,7 +432,7 @@ mod tests {
         list_array = builder.finish();
 
         assert_eq!(DataType::Int32, list_array.value_type());
-        assert_eq!(5, list_array.len());
+        assert_eq!(6, list_array.len());
         assert_eq!(2, list_array.null_count());
         assert_eq!(6, list_array.value_offset(2));
         assert_eq!(3, list_array.value_length());
