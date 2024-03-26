@@ -522,7 +522,8 @@ impl PreparedStatement<Channel> {
                 .map_err(flight_error_to_arrow_error)?;
 
             // Attempt to update the stored handle with any updated handle in the DoPut result.
-            // Not all servers support this, so ignore any errors when attempting to decode.
+            // Older servers do not respond with a result for DoPut, so skip this step when
+            // the stream closes with no response.
             if let Some(result) = self
                 .flight_sql_client
                 .do_put(stream::iter(flight_data))
