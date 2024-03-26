@@ -696,7 +696,9 @@ fn get_arrow_column_writer(
         ArrowDataType::LargeBinary
         | ArrowDataType::Binary
         | ArrowDataType::Utf8
-        | ArrowDataType::LargeUtf8 => {
+        | ArrowDataType::LargeUtf8
+        | ArrowDataType::BinaryView
+        | ArrowDataType::Utf8View => {
             out.push(bytes(leaves.next().unwrap()))
         }
         ArrowDataType::List(f)
@@ -718,6 +720,9 @@ fn get_arrow_column_writer(
         }
         ArrowDataType::Dictionary(_, value_type) => match value_type.as_ref() {
             ArrowDataType::Utf8 | ArrowDataType::LargeUtf8 | ArrowDataType::Binary | ArrowDataType::LargeBinary => {
+                out.push(bytes(leaves.next().unwrap()))
+            }
+            ArrowDataType::Utf8View | ArrowDataType::BinaryView => {
                 out.push(bytes(leaves.next().unwrap()))
             }
             _ => {
@@ -1216,6 +1221,31 @@ mod tests {
         let batch = RecordBatch::try_new(
             Arc::new(schema),
             vec![Arc::new(string_values), Arc::new(binary_values)],
+        )
+        .unwrap();
+
+        roundtrip(batch, Some(SMALL_SIZE / 2));
+    }
+
+    #[test]
+    fn arrow_writer_binary_view() {
+        let string_field = Field::new("a", DataType::Utf8View, false);
+        let binary_field = Field::new("b", DataType::BinaryView, false);
+        let schema = Schema::new(vec![string_field, binary_field]);
+
+        let raw_string_values = vec!["foo", "bar", "large payload over 12 bytes", "lulu"];
+        let raw_binary_values = vec![
+            b"foo".to_vec(),
+            b"bar".to_vec(),
+            b"large payload over 12 bytes".to_vec(),
+            b"lulu".to_vec(),
+        ];
+
+        let string_view_values = StringViewArray::from(raw_string_values);
+        let binary_view_values = BinaryViewArray::from_iter_values(raw_binary_values);
+        let batch = RecordBatch::try_new(
+            Arc::new(schema),
+            vec![Arc::new(string_view_values), Arc::new(binary_view_values)],
         )
         .unwrap();
 
