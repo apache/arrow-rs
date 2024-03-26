@@ -19,6 +19,7 @@ use std::sync::Arc;
 
 use arrow_schema::{DataType, Fields, SchemaBuilder};
 
+use crate::arrow::array_reader::byte_view_array::make_byte_view_array_reader;
 use crate::arrow::array_reader::empty_array::make_empty_array_reader;
 use crate::arrow::array_reader::fixed_len_byte_array::make_fixed_len_byte_array_reader;
 use crate::arrow::array_reader::{
@@ -29,9 +30,7 @@ use crate::arrow::array_reader::{
 use crate::arrow::schema::{ParquetField, ParquetFieldType};
 use crate::arrow::ProjectionMask;
 use crate::basic::Type as PhysicalType;
-use crate::data_type::{
-    BoolType, DoubleType, FloatType, Int32Type, Int64Type, Int96Type,
-};
+use crate::data_type::{BoolType, DoubleType, FloatType, Int32Type, Int64Type, Int96Type};
 use crate::errors::{ParquetError, Result};
 use crate::schema::types::{ColumnDescriptor, ColumnPath, Type};
 
@@ -55,17 +54,13 @@ fn build_reader(
     row_groups: &dyn RowGroups,
 ) -> Result<Option<Box<dyn ArrayReader>>> {
     match field.field_type {
-        ParquetFieldType::Primitive { .. } => {
-            build_primitive_reader(field, mask, row_groups)
-        }
+        ParquetFieldType::Primitive { .. } => build_primitive_reader(field, mask, row_groups),
         ParquetFieldType::Group { .. } => match &field.arrow_type {
             DataType::Map(_, _) => build_map_reader(field, mask, row_groups),
             DataType::Struct(_) => build_struct_reader(field, mask, row_groups),
             DataType::List(_) => build_list_reader(field, mask, false, row_groups),
             DataType::LargeList(_) => build_list_reader(field, mask, true, row_groups),
-            DataType::FixedSizeList(_, _) => {
-                build_fixed_size_list_reader(field, mask, row_groups)
-            }
+            DataType::FixedSizeList(_, _) => build_fixed_size_list_reader(field, mask, row_groups),
             d => unimplemented!("reading group type {} not implemented", d),
         },
     }
@@ -140,9 +135,9 @@ fn build_list_reader(
                 DataType::List(f) => {
                     DataType::List(Arc::new(f.as_ref().clone().with_data_type(item_type)))
                 }
-                DataType::LargeList(f) => DataType::LargeList(Arc::new(
-                    f.as_ref().clone().with_data_type(item_type),
-                )),
+                DataType::LargeList(f) => {
+                    DataType::LargeList(Arc::new(f.as_ref().clone().with_data_type(item_type)))
+                }
                 _ => unreachable!(),
             };
 
@@ -289,6 +284,9 @@ fn build_primitive_reader(
             Some(DataType::Dictionary(_, _)) => {
                 make_byte_array_dictionary_reader(page_iterator, column_desc, arrow_type)?
             }
+            Some(DataType::Utf8View | DataType::BinaryView) => {
+                make_byte_view_array_reader(page_iterator, column_desc, arrow_type)?
+            }
             _ => make_byte_array_reader(page_iterator, column_desc, arrow_type)?,
         },
         PhysicalType::FIXED_LEN_BYTE_ARRAY => {
@@ -347,8 +345,7 @@ mod tests {
     #[test]
     fn test_create_array_reader() {
         let file = get_test_file("nulls.snappy.parquet");
-        let file_reader: Arc<dyn FileReader> =
-            Arc::new(SerializedFileReader::new(file).unwrap());
+        let file_reader: Arc<dyn FileReader> = Arc::new(SerializedFileReader::new(file).unwrap());
 
         let file_metadata = file_reader.metadata().file_metadata();
         let mask = ProjectionMask::leaves(file_metadata.schema_descr(), [0]);
@@ -359,8 +356,7 @@ mod tests {
         )
         .unwrap();
 
-        let array_reader =
-            build_array_reader(fields.as_ref(), &mask, &file_reader).unwrap();
+        let array_reader = build_array_reader(fields.as_ref(), &mask, &file_reader).unwrap();
 
         // Create arrow types
         let arrow_type = DataType::Struct(Fields::from(vec![Field::new(
