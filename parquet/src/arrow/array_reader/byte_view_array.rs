@@ -16,8 +16,7 @@
 // under the License.
 
 use crate::arrow::array_reader::{read_records, skip_records, ArrayReader};
-use crate::arrow::buffer::bit_util::sign_extend_be;
-use crate::arrow::buffer::offset_buffer::OffsetBuffer;
+use crate::arrow::buffer::view_buffer::ViewBuffer;
 use crate::arrow::decoder::{DeltaByteArrayDecoder, DictIndexDecoder};
 use crate::arrow::record_reader::GenericRecordReader;
 use crate::arrow::schema::parquet_to_arrow_field;
@@ -28,17 +27,13 @@ use crate::data_type::Int32Type;
 use crate::encodings::decoding::{Decoder, DeltaBitPackDecoder};
 use crate::errors::{ParquetError, Result};
 use crate::schema::types::ColumnDescPtr;
-use arrow_array::{
-    Array, ArrayRef, BinaryArray, Decimal128Array, Decimal256Array, OffsetSizeTrait,
-};
-use arrow_buffer::i256;
+use arrow_array::ArrayRef;
 use arrow_schema::DataType as ArrowType;
 use bytes::Bytes;
 use std::any::Any;
-use std::sync::Arc;
 
-/// Returns an [`ArrayReader`] that decodes the provided byte array column
-pub fn make_byte_array_reader(
+/// Returns an [`ArrayReader`] that decodes the provided byte array column to view types.
+pub fn make_byte_view_array_reader(
     pages: Box<dyn PageIterator>,
     column_desc: ColumnDescPtr,
     arrow_type: Option<ArrowType>,
@@ -46,26 +41,16 @@ pub fn make_byte_array_reader(
     // Check if Arrow type is specified, else create it from Parquet type
     let data_type = match arrow_type {
         Some(t) => t,
-        None => parquet_to_arrow_field(column_desc.as_ref())?
-            .data_type()
-            .clone(),
+        None => match parquet_to_arrow_field(column_desc.as_ref())?.data_type() {
+            ArrowType::Utf8 | ArrowType::Utf8View => ArrowType::Utf8View,
+            _ => ArrowType::BinaryView,
+        },
     };
 
     match data_type {
-        ArrowType::Binary
-        | ArrowType::Utf8
-        | ArrowType::Decimal128(_, _)
-        | ArrowType::Decimal256(_, _) => {
+        ArrowType::Utf8View | ArrowType::BinaryView => {
             let reader = GenericRecordReader::new(column_desc);
-            Ok(Box::new(ByteArrayReader::<i32>::new(
-                pages, data_type, reader,
-            )))
-        }
-        ArrowType::LargeUtf8 | ArrowType::LargeBinary => {
-            let reader = GenericRecordReader::new(column_desc);
-            Ok(Box::new(ByteArrayReader::<i64>::new(
-                pages, data_type, reader,
-            )))
+            Ok(Box::new(ByteViewArrayReader::new(pages, data_type, reader)))
         }
         _ => Err(general_err!(
             "invalid data type for byte array reader - {}",
@@ -75,19 +60,19 @@ pub fn make_byte_array_reader(
 }
 
 /// An [`ArrayReader`] for variable length byte arrays
-struct ByteArrayReader<I: OffsetSizeTrait> {
+struct ByteViewArrayReader {
     data_type: ArrowType,
     pages: Box<dyn PageIterator>,
     def_levels_buffer: Option<Vec<i16>>,
     rep_levels_buffer: Option<Vec<i16>>,
-    record_reader: GenericRecordReader<OffsetBuffer<I>, ByteArrayColumnValueDecoder<I>>,
+    record_reader: GenericRecordReader<ViewBuffer, ByteViewArrayColumnValueDecoder>,
 }
 
-impl<I: OffsetSizeTrait> ByteArrayReader<I> {
+impl ByteViewArrayReader {
     fn new(
         pages: Box<dyn PageIterator>,
         data_type: ArrowType,
-        record_reader: GenericRecordReader<OffsetBuffer<I>, ByteArrayColumnValueDecoder<I>>,
+        record_reader: GenericRecordReader<ViewBuffer, ByteViewArrayColumnValueDecoder>,
     ) -> Self {
         Self {
             data_type,
@@ -99,7 +84,7 @@ impl<I: OffsetSizeTrait> ByteArrayReader<I> {
     }
 }
 
-impl<I: OffsetSizeTrait> ArrayReader for ByteArrayReader<I> {
+impl ArrayReader for ByteViewArrayReader {
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -119,31 +104,7 @@ impl<I: OffsetSizeTrait> ArrayReader for ByteArrayReader<I> {
         self.rep_levels_buffer = self.record_reader.consume_rep_levels();
         self.record_reader.reset();
 
-        let array: ArrayRef = match self.data_type {
-            ArrowType::Decimal128(p, s) => {
-                let array = buffer.into_array(null_buffer, ArrowType::Binary);
-                let binary = array.as_any().downcast_ref::<BinaryArray>().unwrap();
-                let decimal = binary
-                    .iter()
-                    .map(|opt| Some(i128::from_be_bytes(sign_extend_be(opt?))))
-                    .collect::<Decimal128Array>()
-                    .with_precision_and_scale(p, s)?;
-
-                Arc::new(decimal)
-            }
-            ArrowType::Decimal256(p, s) => {
-                let array = buffer.into_array(null_buffer, ArrowType::Binary);
-                let binary = array.as_any().downcast_ref::<BinaryArray>().unwrap();
-                let decimal = binary
-                    .iter()
-                    .map(|opt| Some(i256::from_be_bytes(sign_extend_be(opt?))))
-                    .collect::<Decimal256Array>()
-                    .with_precision_and_scale(p, s)?;
-
-                Arc::new(decimal)
-            }
-            _ => buffer.into_array(null_buffer, self.data_type.clone()),
-        };
+        let array: ArrayRef = buffer.into_array(null_buffer, self.data_type.clone());
 
         Ok(array)
     }
@@ -162,14 +123,14 @@ impl<I: OffsetSizeTrait> ArrayReader for ByteArrayReader<I> {
 }
 
 /// A [`ColumnValueDecoder`] for variable length byte arrays
-struct ByteArrayColumnValueDecoder<I: OffsetSizeTrait> {
-    dict: Option<OffsetBuffer<I>>,
-    decoder: Option<ByteArrayDecoder>,
+struct ByteViewArrayColumnValueDecoder {
+    dict: Option<ViewBuffer>,
+    decoder: Option<ByteViewArrayDecoder>,
     validate_utf8: bool,
 }
 
-impl<I: OffsetSizeTrait> ColumnValueDecoder for ByteArrayColumnValueDecoder<I> {
-    type Buffer = OffsetBuffer<I>;
+impl ColumnValueDecoder for ByteViewArrayColumnValueDecoder {
+    type Buffer = ViewBuffer;
 
     fn new(desc: &ColumnDescPtr) -> Self {
         let validate_utf8 = desc.converted_type() == ConvertedType::UTF8;
@@ -197,8 +158,8 @@ impl<I: OffsetSizeTrait> ColumnValueDecoder for ByteArrayColumnValueDecoder<I> {
             ));
         }
 
-        let mut buffer = OffsetBuffer::default();
-        let mut decoder = ByteArrayDecoderPlain::new(
+        let mut buffer = ViewBuffer::default();
+        let mut decoder = ByteViewArrayDecoderPlain::new(
             buf,
             num_values as usize,
             Some(num_values as usize),
@@ -216,7 +177,7 @@ impl<I: OffsetSizeTrait> ColumnValueDecoder for ByteArrayColumnValueDecoder<I> {
         num_levels: usize,
         num_values: Option<usize>,
     ) -> Result<()> {
-        self.decoder = Some(ByteArrayDecoder::new(
+        self.decoder = Some(ByteViewArrayDecoder::new(
             encoding,
             data,
             num_levels,
@@ -245,15 +206,15 @@ impl<I: OffsetSizeTrait> ColumnValueDecoder for ByteArrayColumnValueDecoder<I> {
     }
 }
 
-/// A generic decoder from uncompressed parquet value data to [`OffsetBuffer`]
-pub enum ByteArrayDecoder {
-    Plain(ByteArrayDecoderPlain),
-    Dictionary(ByteArrayDecoderDictionary),
-    DeltaLength(ByteArrayDecoderDeltaLength),
-    DeltaByteArray(ByteArrayDecoderDelta),
+/// A generic decoder from uncompressed parquet value data to [`ViewBuffer`]
+pub enum ByteViewArrayDecoder {
+    Plain(ByteViewArrayDecoderPlain),
+    Dictionary(ByteViewArrayDecoderDictionary),
+    DeltaLength(ByteViewArrayDecoderDeltaLength),
+    DeltaByteArray(ByteViewArrayDecoderDelta),
 }
 
-impl ByteArrayDecoder {
+impl ByteViewArrayDecoder {
     pub fn new(
         encoding: Encoding,
         data: Bytes,
@@ -262,21 +223,23 @@ impl ByteArrayDecoder {
         validate_utf8: bool,
     ) -> Result<Self> {
         let decoder = match encoding {
-            Encoding::PLAIN => ByteArrayDecoder::Plain(ByteArrayDecoderPlain::new(
+            Encoding::PLAIN => ByteViewArrayDecoder::Plain(ByteViewArrayDecoderPlain::new(
                 data,
                 num_levels,
                 num_values,
                 validate_utf8,
             )),
-            Encoding::RLE_DICTIONARY | Encoding::PLAIN_DICTIONARY => ByteArrayDecoder::Dictionary(
-                ByteArrayDecoderDictionary::new(data, num_levels, num_values),
-            ),
-            Encoding::DELTA_LENGTH_BYTE_ARRAY => ByteArrayDecoder::DeltaLength(
-                ByteArrayDecoderDeltaLength::new(data, validate_utf8)?,
-            ),
-            Encoding::DELTA_BYTE_ARRAY => {
-                ByteArrayDecoder::DeltaByteArray(ByteArrayDecoderDelta::new(data, validate_utf8)?)
+            Encoding::RLE_DICTIONARY | Encoding::PLAIN_DICTIONARY => {
+                ByteViewArrayDecoder::Dictionary(ByteViewArrayDecoderDictionary::new(
+                    data, num_levels, num_values,
+                ))
             }
+            Encoding::DELTA_LENGTH_BYTE_ARRAY => ByteViewArrayDecoder::DeltaLength(
+                ByteViewArrayDecoderDeltaLength::new(data, validate_utf8)?,
+            ),
+            Encoding::DELTA_BYTE_ARRAY => ByteViewArrayDecoder::DeltaByteArray(
+                ByteViewArrayDecoderDelta::new(data, validate_utf8)?,
+            ),
             _ => {
                 return Err(general_err!(
                     "unsupported encoding for byte array: {}",
@@ -289,48 +252,45 @@ impl ByteArrayDecoder {
     }
 
     /// Read up to `len` values to `out` with the optional dictionary
-    pub fn read<I: OffsetSizeTrait>(
+    pub fn read(
         &mut self,
-        out: &mut OffsetBuffer<I>,
+        out: &mut ViewBuffer,
         len: usize,
-        dict: Option<&OffsetBuffer<I>>,
+        dict: Option<&ViewBuffer>,
     ) -> Result<usize> {
         match self {
-            ByteArrayDecoder::Plain(d) => d.read(out, len),
-            ByteArrayDecoder::Dictionary(d) => {
+            ByteViewArrayDecoder::Plain(d) => d.read(out, len),
+            ByteViewArrayDecoder::Dictionary(d) => {
                 let dict =
                     dict.ok_or_else(|| general_err!("missing dictionary page for column"))?;
 
                 d.read(out, dict, len)
             }
-            ByteArrayDecoder::DeltaLength(d) => d.read(out, len),
-            ByteArrayDecoder::DeltaByteArray(d) => d.read(out, len),
+            ByteViewArrayDecoder::DeltaLength(d) => d.read(out, len),
+            ByteViewArrayDecoder::DeltaByteArray(d) => d.read(out, len),
         }
     }
 
     /// Skip `len` values
-    pub fn skip<I: OffsetSizeTrait>(
-        &mut self,
-        len: usize,
-        dict: Option<&OffsetBuffer<I>>,
-    ) -> Result<usize> {
+    pub fn skip(&mut self, len: usize, dict: Option<&ViewBuffer>) -> Result<usize> {
         match self {
-            ByteArrayDecoder::Plain(d) => d.skip(len),
-            ByteArrayDecoder::Dictionary(d) => {
+            ByteViewArrayDecoder::Plain(d) => d.skip(len),
+            ByteViewArrayDecoder::Dictionary(d) => {
                 let dict =
                     dict.ok_or_else(|| general_err!("missing dictionary page for column"))?;
 
                 d.skip(dict, len)
             }
-            ByteArrayDecoder::DeltaLength(d) => d.skip(len),
-            ByteArrayDecoder::DeltaByteArray(d) => d.skip(len),
+            ByteViewArrayDecoder::DeltaLength(d) => d.skip(len),
+            ByteViewArrayDecoder::DeltaByteArray(d) => d.skip(len),
         }
     }
 }
 
-/// Decoder from [`Encoding::PLAIN`] data to [`OffsetBuffer`]
-pub struct ByteArrayDecoderPlain {
+/// Decoder from [`Encoding::PLAIN`] data to [`ViewBuffer`]
+pub struct ByteViewArrayDecoderPlain {
     buf: Bytes,
+    /// offset of buf, changed during read or skip.
     offset: usize,
     validate_utf8: bool,
 
@@ -339,7 +299,7 @@ pub struct ByteArrayDecoderPlain {
     max_remaining_values: usize,
 }
 
-impl ByteArrayDecoderPlain {
+impl ByteViewArrayDecoderPlain {
     pub fn new(
         buf: Bytes,
         num_levels: usize,
@@ -354,34 +314,20 @@ impl ByteArrayDecoderPlain {
         }
     }
 
-    pub fn read<I: OffsetSizeTrait>(
-        &mut self,
-        output: &mut OffsetBuffer<I>,
-        len: usize,
-    ) -> Result<usize> {
-        let initial_values_length = output.values.len();
-
+    pub fn read(&mut self, output: &mut ViewBuffer, len: usize) -> Result<usize> {
         let to_read = len.min(self.max_remaining_values);
-        output.offsets.reserve(to_read);
 
         let remaining_bytes = self.buf.len() - self.offset;
         if remaining_bytes == 0 {
             return Ok(0);
         }
 
-        let estimated_bytes = remaining_bytes
-            .checked_mul(to_read)
-            .map(|x| x / self.max_remaining_values)
-            .unwrap_or_default();
-
-        output.values.reserve(estimated_bytes);
-
         let mut read = 0;
 
         let buf = self.buf.as_ref();
         while self.offset < self.buf.len() && read != to_read {
             if self.offset + 4 > buf.len() {
-                return Err(ParquetError::EOF("eof decoding byte array".into()));
+                return Err(ParquetError::EOF("eof decoding byte view array".into()));
             }
             let len_bytes: [u8; 4] = buf[self.offset..self.offset + 4].try_into().unwrap();
             let len = u32::from_le_bytes(len_bytes);
@@ -389,7 +335,7 @@ impl ByteArrayDecoderPlain {
             let start_offset = self.offset + 4;
             let end_offset = start_offset + len as usize;
             if end_offset > buf.len() {
-                return Err(ParquetError::EOF("eof decoding byte array".into()));
+                return Err(ParquetError::EOF("eof decoding byte view array".into()));
             }
 
             output.try_push(&buf[start_offset..end_offset], self.validate_utf8)?;
@@ -399,9 +345,6 @@ impl ByteArrayDecoderPlain {
         }
         self.max_remaining_values -= to_read;
 
-        if self.validate_utf8 {
-            output.check_valid_utf8(initial_values_length)?;
-        }
         Ok(to_read)
     }
 
@@ -424,8 +367,8 @@ impl ByteArrayDecoderPlain {
     }
 }
 
-/// Decoder from [`Encoding::DELTA_LENGTH_BYTE_ARRAY`] data to [`OffsetBuffer`]
-pub struct ByteArrayDecoderDeltaLength {
+/// Decoder from [`Encoding::DELTA_LENGTH_BYTE_ARRAY`] data to [`ViewBuffer`]
+pub struct ByteViewArrayDecoderDeltaLength {
     lengths: Vec<i32>,
     data: Bytes,
     length_offset: usize,
@@ -433,7 +376,7 @@ pub struct ByteArrayDecoderDeltaLength {
     validate_utf8: bool,
 }
 
-impl ByteArrayDecoderDeltaLength {
+impl ByteViewArrayDecoderDeltaLength {
     fn new(data: Bytes, validate_utf8: bool) -> Result<Self> {
         let mut len_decoder = DeltaBitPackDecoder::<Int32Type>::new();
         len_decoder.set_data(data.clone(), 0)?;
@@ -451,20 +394,12 @@ impl ByteArrayDecoderDeltaLength {
         })
     }
 
-    fn read<I: OffsetSizeTrait>(
-        &mut self,
-        output: &mut OffsetBuffer<I>,
-        len: usize,
-    ) -> Result<usize> {
-        let initial_values_length = output.values.len();
-
+    fn read(&mut self, output: &mut ViewBuffer, len: usize) -> Result<usize> {
         let to_read = len.min(self.lengths.len() - self.length_offset);
-        output.offsets.reserve(to_read);
 
         let src_lengths = &self.lengths[self.length_offset..self.length_offset + to_read];
 
         let total_bytes: usize = src_lengths.iter().map(|x| *x as usize).sum();
-        output.values.reserve(total_bytes);
 
         if self.data_offset + total_bytes > self.data.len() {
             return Err(ParquetError::EOF(
@@ -485,9 +420,6 @@ impl ByteArrayDecoderDeltaLength {
         self.data_offset = start_offset;
         self.length_offset += to_read;
 
-        if self.validate_utf8 {
-            output.check_valid_utf8(initial_values_length)?;
-        }
         Ok(to_read)
     }
 
@@ -504,13 +436,13 @@ impl ByteArrayDecoderDeltaLength {
     }
 }
 
-/// Decoder from [`Encoding::DELTA_BYTE_ARRAY`] to [`OffsetBuffer`]
-pub struct ByteArrayDecoderDelta {
+/// Decoder from [`Encoding::DELTA_BYTE_ARRAY`] to [`ViewBuffer`]
+pub struct ByteViewArrayDecoderDelta {
     decoder: DeltaByteArrayDecoder,
     validate_utf8: bool,
 }
 
-impl ByteArrayDecoderDelta {
+impl ByteViewArrayDecoderDelta {
     fn new(data: Bytes, validate_utf8: bool) -> Result<Self> {
         Ok(Self {
             decoder: DeltaByteArrayDecoder::new(data)?,
@@ -518,21 +450,11 @@ impl ByteArrayDecoderDelta {
         })
     }
 
-    fn read<I: OffsetSizeTrait>(
-        &mut self,
-        output: &mut OffsetBuffer<I>,
-        len: usize,
-    ) -> Result<usize> {
-        let initial_values_length = output.values.len();
-        output.offsets.reserve(len.min(self.decoder.remaining()));
-
+    fn read(&mut self, output: &mut ViewBuffer, len: usize) -> Result<usize> {
         let read = self
             .decoder
             .read(len, |bytes| output.try_push(bytes, self.validate_utf8))?;
 
-        if self.validate_utf8 {
-            output.check_valid_utf8(initial_values_length)?;
-        }
         Ok(read)
     }
 
@@ -541,39 +463,30 @@ impl ByteArrayDecoderDelta {
     }
 }
 
-/// Decoder from [`Encoding::RLE_DICTIONARY`] to [`OffsetBuffer`]
-pub struct ByteArrayDecoderDictionary {
+/// Decoder from [`Encoding::RLE_DICTIONARY`] to [`ViewBuffer`]
+pub struct ByteViewArrayDecoderDictionary {
     decoder: DictIndexDecoder,
 }
 
-impl ByteArrayDecoderDictionary {
+impl ByteViewArrayDecoderDictionary {
     fn new(data: Bytes, num_levels: usize, num_values: Option<usize>) -> Self {
         Self {
             decoder: DictIndexDecoder::new(data, num_levels, num_values),
         }
     }
 
-    fn read<I: OffsetSizeTrait>(
-        &mut self,
-        output: &mut OffsetBuffer<I>,
-        dict: &OffsetBuffer<I>,
-        len: usize,
-    ) -> Result<usize> {
+    fn read(&mut self, output: &mut ViewBuffer, dict: &ViewBuffer, len: usize) -> Result<usize> {
         // All data must be NULL
         if dict.is_empty() {
             return Ok(0);
         }
 
         self.decoder.read(len, |keys| {
-            output.extend_from_dictionary(keys, dict.offsets.as_slice(), dict.values.as_slice())
+            output.extend_from_dictionary(keys, &dict.views, &dict.buffers)
         })
     }
 
-    fn skip<I: OffsetSizeTrait>(
-        &mut self,
-        dict: &OffsetBuffer<I>,
-        to_skip: usize,
-    ) -> Result<usize> {
+    fn skip(&mut self, dict: &ViewBuffer, to_skip: usize) -> Result<usize> {
         // All data must be NULL
         if dict.is_empty() {
             return Ok(0);
@@ -588,37 +501,42 @@ mod tests {
     use super::*;
     use crate::arrow::array_reader::test_util::{byte_array_all_encodings, utf8_column};
     use crate::arrow::record_reader::buffer::ValuesBuffer;
-    use arrow_array::{Array, StringArray};
+    use arrow_array::{Array, StringViewArray};
     use arrow_buffer::Buffer;
 
     #[test]
     fn test_byte_array_decoder() {
-        let (pages, encoded_dictionary) =
-            byte_array_all_encodings(vec!["hello", "world", "a", "b"]);
+        let (pages, encoded_dictionary) = byte_array_all_encodings(vec![
+            "hello",
+            "world",
+            "here comes the snow",
+            "large payload over 12 bytes",
+        ]);
 
         let column_desc = utf8_column();
-        let mut decoder = ByteArrayColumnValueDecoder::new(&column_desc);
+        let mut decoder = ByteViewArrayColumnValueDecoder::new(&column_desc);
 
         decoder
             .set_dict(encoded_dictionary, 4, Encoding::RLE_DICTIONARY, false)
             .unwrap();
 
         for (encoding, page) in pages {
-            let mut output = OffsetBuffer::<i32>::default();
+            let mut output = ViewBuffer::default();
             decoder.set_data(encoding, page, 4, Some(4)).unwrap();
 
             assert_eq!(decoder.read(&mut output, 1).unwrap(), 1);
 
-            assert_eq!(output.values.as_slice(), "hello".as_bytes());
-            assert_eq!(output.offsets.as_slice(), &[0, 5]);
+            let first = output.views.first().unwrap();
+            let len = *first as u32;
+
+            assert_eq!(
+                &first.to_le_bytes()[4..4 + len as usize],
+                "hello".as_bytes()
+            );
 
             assert_eq!(decoder.read(&mut output, 1).unwrap(), 1);
-            assert_eq!(output.values.as_slice(), "helloworld".as_bytes());
-            assert_eq!(output.offsets.as_slice(), &[0, 5, 10]);
 
             assert_eq!(decoder.read(&mut output, 2).unwrap(), 2);
-            assert_eq!(output.values.as_slice(), "helloworldab".as_bytes());
-            assert_eq!(output.offsets.as_slice(), &[0, 5, 10, 11, 12]);
 
             assert_eq!(decoder.read(&mut output, 4).unwrap(), 0);
 
@@ -626,8 +544,9 @@ mod tests {
             let valid_buffer = Buffer::from_iter(valid.iter().cloned());
 
             output.pad_nulls(0, 4, valid.len(), valid_buffer.as_slice());
-            let array = output.into_array(Some(valid_buffer), ArrowType::Utf8);
-            let strings = array.as_any().downcast_ref::<StringArray>().unwrap();
+
+            let array = output.into_array(Some(valid_buffer), ArrowType::Utf8View);
+            let strings = array.as_any().downcast_ref::<StringViewArray>().unwrap();
 
             assert_eq!(
                 strings.iter().collect::<Vec<_>>(),
@@ -637,8 +556,8 @@ mod tests {
                     Some("hello"),
                     Some("world"),
                     None,
-                    Some("a"),
-                    Some("b"),
+                    Some("here comes the snow"),
+                    Some("large payload over 12 bytes"),
                     None,
                     None,
                 ]
@@ -649,30 +568,33 @@ mod tests {
     #[test]
     fn test_byte_array_decoder_skip() {
         let (pages, encoded_dictionary) =
-            byte_array_all_encodings(vec!["hello", "world", "a", "b"]);
+            byte_array_all_encodings(vec!["hello", "world", "a", "large payload over 12 bytes"]);
 
         let column_desc = utf8_column();
-        let mut decoder = ByteArrayColumnValueDecoder::new(&column_desc);
+        let mut decoder = ByteViewArrayColumnValueDecoder::new(&column_desc);
 
         decoder
             .set_dict(encoded_dictionary, 4, Encoding::RLE_DICTIONARY, false)
             .unwrap();
 
         for (encoding, page) in pages {
-            let mut output = OffsetBuffer::<i32>::default();
+            let mut output = ViewBuffer::default();
             decoder.set_data(encoding, page, 4, Some(4)).unwrap();
 
             assert_eq!(decoder.read(&mut output, 1).unwrap(), 1);
 
-            assert_eq!(output.values.as_slice(), "hello".as_bytes());
-            assert_eq!(output.offsets.as_slice(), &[0, 5]);
+            let first = output.views.first().unwrap();
+            let len = *first as u32;
+
+            assert_eq!(
+                &first.to_le_bytes()[4..4 + len as usize],
+                "hello".as_bytes()
+            );
 
             assert_eq!(decoder.skip_values(1).unwrap(), 1);
             assert_eq!(decoder.skip_values(1).unwrap(), 1);
 
             assert_eq!(decoder.read(&mut output, 1).unwrap(), 1);
-            assert_eq!(output.values.as_slice(), "hellob".as_bytes());
-            assert_eq!(output.offsets.as_slice(), &[0, 5, 6]);
 
             assert_eq!(decoder.read(&mut output, 4).unwrap(), 0);
 
@@ -680,12 +602,19 @@ mod tests {
             let valid_buffer = Buffer::from_iter(valid.iter().cloned());
 
             output.pad_nulls(0, 2, valid.len(), valid_buffer.as_slice());
-            let array = output.into_array(Some(valid_buffer), ArrowType::Utf8);
-            let strings = array.as_any().downcast_ref::<StringArray>().unwrap();
+            let array = output.into_array(Some(valid_buffer), ArrowType::Utf8View);
+            let strings = array.as_any().downcast_ref::<StringViewArray>().unwrap();
 
             assert_eq!(
                 strings.iter().collect::<Vec<_>>(),
-                vec![None, None, Some("hello"), Some("b"), None, None,]
+                vec![
+                    None,
+                    None,
+                    Some("hello"),
+                    Some("large payload over 12 bytes"),
+                    None,
+                    None,
+                ]
             );
         }
     }
@@ -695,7 +624,7 @@ mod tests {
         let (pages, encoded_dictionary) = byte_array_all_encodings(Vec::<&str>::new());
 
         let column_desc = utf8_column();
-        let mut decoder = ByteArrayColumnValueDecoder::new(&column_desc);
+        let mut decoder = ByteViewArrayColumnValueDecoder::new(&column_desc);
 
         decoder
             .set_dict(encoded_dictionary, 4, Encoding::RLE_DICTIONARY, false)
@@ -703,7 +632,7 @@ mod tests {
 
         // test nulls read
         for (encoding, page) in pages.clone() {
-            let mut output = OffsetBuffer::<i32>::default();
+            let mut output = ViewBuffer::default();
             decoder.set_data(encoding, page, 4, None).unwrap();
             assert_eq!(decoder.read(&mut output, 1024).unwrap(), 0);
         }

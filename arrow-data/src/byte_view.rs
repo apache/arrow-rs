@@ -39,6 +39,11 @@ impl ByteView {
             | ((self.buffer_index as u128) << 64)
             | ((self.offset as u128) << 96)
     }
+
+    #[inline(always)]
+    pub fn as_bytes(self) -> [u8; 16] {
+        self.as_u128().to_le_bytes()
+    }
 }
 
 impl From<u128> for ByteView {
