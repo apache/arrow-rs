@@ -36,6 +36,7 @@ pub(super) fn list_view_equal<T: ArrowNativeType + Integer>(
             return false;
         }
 
+        print!("lhs_offset_start: {}, rhs_offset_start: {}, lhs_size: {}\n", lhs_offset_start, rhs_offset_start, lhs_size);
         // compare values
         if !equal_range(
             &lhs.child_data()[0],
