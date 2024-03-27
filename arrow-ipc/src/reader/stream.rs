@@ -199,6 +199,7 @@ impl StreamDecoder {
                                 &self.dictionaries,
                                 None,
                                 &version,
+                                false,
                             )?;
                             self.state = DecoderState::default();
                             return Ok(Some(batch));
@@ -214,6 +215,7 @@ impl StreamDecoder {
                                 schema,
                                 &mut self.dictionaries,
                                 &version,
+                                false,
                             )?;
                             self.state = DecoderState::default();
                         }

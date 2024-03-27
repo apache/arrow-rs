@@ -63,7 +63,7 @@ impl<T: ArrowNativeType> ScalarBuffer<T> {
     /// This method will panic if
     ///
     /// * `offset` or `len` would result in overflow
-    /// * `buffer` is not aligned to a multiple of `std::mem::size_of::<T>`
+    /// * `buffer` is not aligned to a multiple of `std::mem::align_of::<T>`
     /// * `bytes` is not large enough for the requested slice
     pub fn new(buffer: Buffer, offset: usize, len: usize) -> Self {
         let size = std::mem::size_of::<T>();
