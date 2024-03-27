@@ -688,6 +688,14 @@ impl FileDecoder {
         self
     }
 
+    /// Specify whether to enforce zero copy, which means the array data inside the record batches
+    /// produced by this decoder will always reference the input buffer.
+    ///
+    /// In particular, this means that if there is data that is not aligned properly in the
+    /// input buffer, the decoder will throw rather than copy the data to an aligned buffer.
+    ///
+    /// By default `enforce_zero_copy` is false, meaning it will allocate new buffers and copy
+    /// data if necessary, e.g. if the alignment is not correct.
     pub fn with_enforce_zero_copy(mut self, enforce_zero_copy: bool) -> Self {
         self.enforce_zero_copy = enforce_zero_copy;
         self
