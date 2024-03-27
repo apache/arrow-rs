@@ -246,8 +246,7 @@ impl<OffsetSize: OffsetSizeTrait> GenericListViewArray<OffsetSize> {
     /// Returns the length for value at index `i`.
     #[inline]
     pub fn value_length(&self, i: usize) -> OffsetSize {
-        let offsets = self.value_offsets();
-        offsets[i + 1] - offsets[i]
+        self.value_sizes[i]
     }
 
     /// constructs a new iterator

@@ -158,6 +158,7 @@ impl<OffsetSize: OffsetSizeTrait, T: ArrayBuilder> GenericListViewBuilder<Offset
     #[inline]
     pub fn append_null(&mut self) {
         self.offsets_builder.append(OffsetSize::from_usize(self.values_builder.len()).unwrap());
+        self.sizes_builder.append(OffsetSize::from_usize(0).unwrap());
         self.null_buffer_builder.append_null();
     }
 
@@ -233,11 +234,466 @@ impl<O, B, V, E> Extend<Option<V>> for GenericListViewBuilder<O, B>
         for v in iter {
             match v {
                 Some(elements) => {
+                    let origin_size = self.values_builder.len();
                     self.values_builder.extend(elements);
-                    todo!()
+                    let size = self.values_builder.len() - origin_size;
+                    self.append(true, size);
                 }
                 None => self.append(false, 0),
             }
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::builder::{Int32Builder, ListViewBuilder, make_builder};
+    use crate::cast::AsArray;
+    use crate::types::Int32Type;
+    use crate::{Array, Int32Array};
+    use arrow_schema::DataType;
+
+    fn _test_generic_list_view_array_builder<O: OffsetSizeTrait>() {
+        let values_builder = Int32Builder::with_capacity(10);
+        let mut builder = GenericListViewBuilder::<O, _>::new(values_builder);
+
+        //  [[0, 1, 2], [3, 4, 5], [6, 7]]
+        builder.values().append_value(0);
+        builder.values().append_value(1);
+        builder.values().append_value(2);
+        builder.append(true,3);
+        builder.values().append_value(3);
+        builder.values().append_value(4);
+        builder.values().append_value(5);
+        builder.append(true,3);
+        builder.values().append_value(6);
+        builder.values().append_value(7);
+        builder.append(true,2);
+        let list_array = builder.finish();
+
+        let list_values = list_array.values().as_primitive::<Int32Type>();
+        assert_eq!(list_values.values(), &[0, 1, 2, 3, 4, 5, 6, 7]);
+        assert_eq!(list_array.value_offsets(), [0, 3, 6].map(O::usize_as));
+        assert_eq!(DataType::Int32, list_array.value_type());
+        assert_eq!(3, list_array.len());
+        assert_eq!(0, list_array.null_count());
+        assert_eq!(O::from_usize(6).unwrap(), list_array.value_offsets()[2]);
+        assert_eq!(O::from_usize(2).unwrap(), list_array.value_length(2));
+        for i in 0..2 {
+            assert!(list_array.is_valid(i));
+            assert!(!list_array.is_null(i));
+        }
+    }
+
+    #[test]
+    fn test_list_view_array_builder() {
+        _test_generic_list_view_array_builder::<i32>()
+    }
+
+    #[test]
+    fn test_large_list_view_array_builder() {
+        _test_generic_list_view_array_builder::<i64>()
+    }
+
+    fn _test_generic_list_view_array_builder_nulls<O: OffsetSizeTrait>() {
+        let values_builder = Int32Builder::with_capacity(10);
+        let mut builder = GenericListViewBuilder::<O, _>::new(values_builder);
+
+        //  [[0, 1, 2], null, [3, null, 5], [6, 7]]
+        builder.values().append_value(0);
+        builder.values().append_value(1);
+        builder.values().append_value(2);
+        builder.append(true,3);
+        builder.append(false,0);
+        builder.values().append_value(3);
+        builder.values().append_null();
+        builder.values().append_value(5);
+        builder.append(true,3);
+        builder.values().append_value(6);
+        builder.values().append_value(7);
+        builder.append(true,2);
+
+        let list_array = builder.finish();
+
+        assert_eq!(DataType::Int32, list_array.value_type());
+        assert_eq!(4, list_array.len());
+        assert_eq!(1, list_array.null_count());
+        assert_eq!(O::from_usize(3).unwrap(), list_array.value_offsets()[2]);
+        assert_eq!(O::from_usize(3).unwrap(), list_array.value_length(2));
+    }
+
+    #[test]
+    fn test_list_view_array_builder_nulls() {
+        _test_generic_list_view_array_builder_nulls::<i32>()
+    }
+
+    #[test]
+    fn test_large_list_view_array_builder_nulls() {
+        _test_generic_list_view_array_builder_nulls::<i64>()
+    }
+
+    #[test]
+    fn test_list_view_array_builder_finish() {
+        let values_builder = Int32Array::builder(5);
+        let mut builder = ListViewBuilder::new(values_builder);
+
+        builder.values().append_slice(&[1, 2, 3]);
+        builder.append(true,1);
+        builder.values().append_slice(&[4, 5, 6]);
+        builder.append(true,1);
+
+        let mut arr = builder.finish();
+        assert_eq!(2, arr.len());
+        assert!(builder.is_empty());
+
+        builder.values().append_slice(&[7, 8, 9]);
+        builder.append(true,1);
+        arr = builder.finish();
+        assert_eq!(1, arr.len());
+        assert!(builder.is_empty());
+    }
+
+    #[test]
+    fn test_list_view_array_builder_finish_cloned() {
+        let values_builder = Int32Array::builder(5);
+        let mut builder = ListViewBuilder::new(values_builder);
+
+        builder.values().append_slice(&[1, 2, 3]);
+        builder.append(true,1);
+        builder.values().append_slice(&[4, 5, 6]);
+        builder.append(true,1);
+
+        let mut arr = builder.finish_cloned();
+        assert_eq!(2, arr.len());
+        assert!(!builder.is_empty());
+
+        builder.values().append_slice(&[7, 8, 9]);
+        builder.append(true,1);
+        arr = builder.finish();
+        assert_eq!(3, arr.len());
+        assert!(builder.is_empty());
+    }
+
+    #[test]
+    fn test_list_view_list_view_array_builder() {
+        let primitive_builder = Int32Builder::with_capacity(10);
+        let values_builder = ListViewBuilder::new(primitive_builder);
+        let mut builder = ListViewBuilder::new(values_builder);
+
+        //  [[[1, 2], [3, 4]], [[5, 6, 7], null, [8]], null, [[9, 10]]]
+        builder.values().values().append_value(1);
+        builder.values().values().append_value(2);
+        builder.values().append(true,2);
+        builder.values().values().append_value(3);
+        builder.values().values().append_value(4);
+        builder.values().append(true,2);
+        builder.append(true,2);
+
+        builder.values().values().append_value(5);
+        builder.values().values().append_value(6);
+        builder.values().values().append_value(7);
+        builder.values().append(true,3);
+        builder.values().append(false,0);
+        builder.values().values().append_value(8);
+        builder.values().append(true,1);
+        builder.append(true,3);
+
+        builder.append(false,0);
+
+        builder.values().values().append_value(9);
+        builder.values().values().append_value(10);
+        builder.values().append(true,2);
+        builder.append(true,1);
+
+        let l1 = builder.finish();
+
+        assert_eq!(4, l1.len());
+        assert_eq!(1, l1.null_count());
+
+        assert_eq!(l1.value_offsets(), &[0, 2, 5, 5]);
+        let l2 = l1.values().as_list_view::<i32>();
+
+        assert_eq!(6, l2.len());
+        assert_eq!(1, l2.null_count());
+        assert_eq!(l2.value_offsets(), &[0, 2, 4, 7, 7, 8]);
+
+        let i1 = l2.values().as_primitive::<Int32Type>();
+        assert_eq!(10, i1.len());
+        assert_eq!(0, i1.null_count());
+        assert_eq!(i1.values(), &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+    }
+
+    #[test]
+    fn test_extend() {
+        let mut builder = ListViewBuilder::new(Int32Builder::new());
+        builder.extend([
+            Some(vec![Some(1), Some(2), Some(7), None]),
+            Some(vec![]),
+            Some(vec![Some(4), Some(5)]),
+            None,
+        ]);
+
+        let array = builder.finish();
+        assert_eq!(array.value_offsets(), [0, 4, 4, 6]);
+        assert_eq!(array.null_count(), 1);
+        assert!(array.is_null(3));
+        let elements = array.values().as_primitive::<Int32Type>();
+        assert_eq!(elements.values(), &[1, 2, 7, 0, 4, 5]);
+        assert_eq!(elements.null_count(), 1);
+        assert!(elements.is_null(3));
+    }
+
+    #[test]
+    fn test_boxed_primitive_array_builder() {
+        let values_builder = make_builder(&DataType::Int32, 5);
+        let mut builder = ListViewBuilder::new(values_builder);
+
+        builder
+            .values()
+            .as_any_mut()
+            .downcast_mut::<Int32Builder>()
+            .expect("should be an Int32Builder")
+            .append_slice(&[1, 2, 3]);
+        builder.append(true,1);
+
+        builder
+            .values()
+            .as_any_mut()
+            .downcast_mut::<Int32Builder>()
+            .expect("should be an Int32Builder")
+            .append_slice(&[4, 5, 6]);
+        builder.append(true,1);
+
+        let arr = builder.finish();
+        assert_eq!(2, arr.len());
+
+        let elements = arr.values().as_primitive::<Int32Type>();
+        assert_eq!(elements.values(), &[1, 2, 3, 4, 5, 6]);
+    }
+
+    #[test]
+    fn test_boxed_list_view_list_view_array_builder() {
+        // This test is same as `test_list_list_array_builder` but uses boxed builders.
+        let values_builder = make_builder(
+            &DataType::ListView(Arc::new(Field::new("item", DataType::Int32, true))),
+            10,
+        );
+        test_boxed_generic_list_view_generic_list_view_array_builder::<i32>(values_builder);
+    }
+
+    #[test]
+    fn test_boxed_large_list_view_large_list_view_array_builder() {
+        // This test is same as `test_list_list_array_builder` but uses boxed builders.
+        let values_builder = make_builder(
+            &DataType::LargeListView(Arc::new(Field::new("item", DataType::Int32, true))),
+            10,
+        );
+        test_boxed_generic_list_view_generic_list_view_array_builder::<i64>(values_builder);
+    }
+
+    fn test_boxed_generic_list_view_generic_list_view_array_builder<O: OffsetSizeTrait + PartialEq>(
+        values_builder: Box<dyn ArrayBuilder>,
+    ) {
+        let mut builder: GenericListViewBuilder<O, Box<dyn ArrayBuilder>> =
+            GenericListViewBuilder::<O, Box<dyn ArrayBuilder>>::new(values_builder);
+
+        //  [[[1, 2], [3, 4]], [[5, 6, 7], null, [8]], null, [[9, 10]]]
+        builder
+            .values()
+            .as_any_mut()
+            .downcast_mut::<GenericListViewBuilder<O, Box<dyn ArrayBuilder>>>()
+            .expect("should be an (Large)ListViewBuilder")
+            .values()
+            .as_any_mut()
+            .downcast_mut::<Int32Builder>()
+            .expect("should be an Int32Builder")
+            .append_value(1);
+        builder
+            .values()
+            .as_any_mut()
+            .downcast_mut::<GenericListViewBuilder<O, Box<dyn ArrayBuilder>>>()
+            .expect("should be an (Large)ListViewBuilder")
+            .values()
+            .as_any_mut()
+            .downcast_mut::<Int32Builder>()
+            .expect("should be an Int32Builder")
+            .append_value(2);
+        builder
+            .values()
+            .as_any_mut()
+            .downcast_mut::<GenericListViewBuilder<O, Box<dyn ArrayBuilder>>>()
+            .expect("should be an (Large)ListViewBuilder")
+            .append(true,2);
+        builder
+            .values()
+            .as_any_mut()
+            .downcast_mut::<GenericListViewBuilder<O, Box<dyn ArrayBuilder>>>()
+            .expect("should be an (Large)ListViewBuilder")
+            .values()
+            .as_any_mut()
+            .downcast_mut::<Int32Builder>()
+            .expect("should be an Int32Builder")
+            .append_value(3);
+        builder
+            .values()
+            .as_any_mut()
+            .downcast_mut::<GenericListViewBuilder<O, Box<dyn ArrayBuilder>>>()
+            .expect("should be an (Large)ListViewBuilder")
+            .values()
+            .as_any_mut()
+            .downcast_mut::<Int32Builder>()
+            .expect("should be an Int32Builder")
+            .append_value(4);
+        builder
+            .values()
+            .as_any_mut()
+            .downcast_mut::<GenericListViewBuilder<O, Box<dyn ArrayBuilder>>>()
+            .expect("should be an (Large)ListViewBuilder")
+            .append(true,2);
+        builder.append(true,2);
+
+        builder
+            .values()
+            .as_any_mut()
+            .downcast_mut::<GenericListViewBuilder<O, Box<dyn ArrayBuilder>>>()
+            .expect("should be an (Large)ListViewBuilder")
+            .values()
+            .as_any_mut()
+            .downcast_mut::<Int32Builder>()
+            .expect("should be an Int32Builder")
+            .append_value(5);
+        builder
+            .values()
+            .as_any_mut()
+            .downcast_mut::<GenericListViewBuilder<O, Box<dyn ArrayBuilder>>>()
+            .expect("should be an (Large)ListViewBuilder")
+            .values()
+            .as_any_mut()
+            .downcast_mut::<Int32Builder>()
+            .expect("should be an Int32Builder")
+            .append_value(6);
+        builder
+            .values()
+            .as_any_mut()
+            .downcast_mut::<GenericListViewBuilder<O, Box<dyn ArrayBuilder>>>()
+            .expect("should be an (Large)ListViewBuilder")
+            .values()
+            .as_any_mut()
+            .downcast_mut::<Int32Builder>()
+            .expect("should be an (Large)ListViewBuilder")
+            .append_value(7);
+        builder
+            .values()
+            .as_any_mut()
+            .downcast_mut::<GenericListViewBuilder<O, Box<dyn ArrayBuilder>>>()
+            .expect("should be an (Large)ListViewBuilder")
+            .append(true,3);
+        builder
+            .values()
+            .as_any_mut()
+            .downcast_mut::<GenericListViewBuilder<O, Box<dyn ArrayBuilder>>>()
+            .expect("should be an (Large)ListViewBuilder")
+            .append(false,0);
+        builder
+            .values()
+            .as_any_mut()
+            .downcast_mut::<GenericListViewBuilder<O, Box<dyn ArrayBuilder>>>()
+            .expect("should be an (Large)ListViewBuilder")
+            .values()
+            .as_any_mut()
+            .downcast_mut::<Int32Builder>()
+            .expect("should be an Int32Builder")
+            .append_value(8);
+        builder
+            .values()
+            .as_any_mut()
+            .downcast_mut::<GenericListViewBuilder<O, Box<dyn ArrayBuilder>>>()
+            .expect("should be an (Large)ListViewBuilder")
+            .append(true,1);
+        builder.append(true,3);
+
+        builder.append(false,0);
+
+        builder
+            .values()
+            .as_any_mut()
+            .downcast_mut::<GenericListViewBuilder<O, Box<dyn ArrayBuilder>>>()
+            .expect("should be an (Large)ListViewBuilder")
+            .values()
+            .as_any_mut()
+            .downcast_mut::<Int32Builder>()
+            .expect("should be an Int32Builder")
+            .append_value(9);
+        builder
+            .values()
+            .as_any_mut()
+            .downcast_mut::<GenericListViewBuilder<O, Box<dyn ArrayBuilder>>>()
+            .expect("should be an (Large)ListViewBuilder")
+            .values()
+            .as_any_mut()
+            .downcast_mut::<Int32Builder>()
+            .expect("should be an Int32Builder")
+            .append_value(10);
+        builder
+            .values()
+            .as_any_mut()
+            .downcast_mut::<GenericListViewBuilder<O, Box<dyn ArrayBuilder>>>()
+            .expect("should be an (Large)ListViewBuilder")
+            .append(true,2);
+        builder.append(true,1);
+
+        let l1 = builder.finish();
+
+        assert_eq!(4, l1.len());
+        assert_eq!(1, l1.null_count());
+
+        assert_eq!(l1.value_offsets(), &[0, 2, 5, 5].map(O::usize_as));
+        let l2 = l1.values().as_list_view::<O>();
+
+        assert_eq!(6, l2.len());
+        assert_eq!(1, l2.null_count());
+        assert_eq!(l2.value_offsets(), &[0, 2, 4, 7, 7, 8].map(O::usize_as));
+
+        let i1 = l2.values().as_primitive::<Int32Type>();
+        assert_eq!(10, i1.len());
+        assert_eq!(0, i1.null_count());
+        assert_eq!(i1.values(), &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+    }
+
+    #[test]
+    fn test_with_field() {
+        let field = Arc::new(Field::new("bar", DataType::Int32, false));
+        let mut builder = ListViewBuilder::new(Int32Builder::new()).with_field(field.clone());
+        builder.append_value([Some(1), Some(2), Some(3)]);
+        builder.append_null(); // This is fine as nullability refers to nullability of values
+        builder.append_value([Some(4)]);
+        let array = builder.finish();
+        assert_eq!(array.len(), 3);
+        assert_eq!(array.data_type(), &DataType::ListView(field.clone()));
+
+        builder.append_value([Some(4), Some(5)]);
+        let array = builder.finish();
+        assert_eq!(array.data_type(), &DataType::ListView(field));
+        assert_eq!(array.len(), 1);
+    }
+
+    #[test]
+    #[should_panic(expected = "Non-nullable field of ListViewArray \\\"item\\\" cannot contain nulls")]
+    fn test_checks_nullability() {
+        let field = Arc::new(Field::new("item", DataType::Int32, false));
+        let mut builder = ListViewBuilder::new(Int32Builder::new()).with_field(field.clone());
+        builder.append_value([Some(1), None]);
+        builder.finish();
+    }
+
+    #[test]
+    #[should_panic(expected = "ListViewArray expected data type Int64 got Int32")]
+    fn test_checks_data_type() {
+        let field = Arc::new(Field::new("item", DataType::Int64, false));
+        let mut builder = ListViewBuilder::new(Int32Builder::new()).with_field(field.clone());
+        builder.append_value([Some(1)]);
+        builder.finish();
+    }
+}
+
