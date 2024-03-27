@@ -88,7 +88,7 @@ impl IpcWriteOptions {
         write_legacy_ipc_format: bool,
         metadata_version: crate::MetadataVersion,
     ) -> Result<Self, ArrowError> {
-        if 8 <= alignment && alignment <= 64 && alignment % 8 != 0 {
+        if alignment < 8 || alignment > 64 || alignment % 8 != 0 {
             return Err(ArrowError::InvalidArgumentError(
                 "Alignment should be a multiple of 8 in the range [8, 64]".to_string(),
             ));
