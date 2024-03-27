@@ -84,9 +84,9 @@
 //! let reader = SerializedFileReader::new(file).unwrap();
 //! let metadata = reader.metadata();
 //!
-//! let mut values = vec![0; 8];
-//! let mut def_levels = vec![0; 8];
-//! let mut rep_levels = vec![0; 8];
+//! let mut values = vec![];
+//! let mut def_levels = vec![];
+//! let mut rep_levels = vec![];
 //!
 //! for i in 0..metadata.num_row_groups() {
 //!     let row_group_reader = reader.get_row_group(i).unwrap();
@@ -112,9 +112,9 @@
 //!     }
 //! }
 //!
-//! assert_eq!(values, vec![1, 2, 3, 0, 0, 0, 0, 0]);
-//! assert_eq!(def_levels, vec![3, 3, 3, 2, 2, 0, 0, 0]);
-//! assert_eq!(rep_levels, vec![0, 1, 0, 1, 1, 0, 0, 0]);
+//! assert_eq!(values, vec![1, 2, 3]);
+//! assert_eq!(def_levels, vec![3, 3, 3, 2, 2]);
+//! assert_eq!(rep_levels, vec![0, 1, 0, 1, 1]);
 //! ```
 
 pub mod page;
