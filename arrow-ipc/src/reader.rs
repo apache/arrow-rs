@@ -1801,6 +1801,113 @@ mod tests {
         assert_eq!(input_batch, output_batch);
     }
 
+    const LONG_TEST_STRING: &str =
+        "This is a long string to make sure binary view array handles it";
+
+    #[test]
+    fn test_roundtrip_view_types() {
+        let schema = Schema::new(vec![
+            Field::new("field_1", DataType::BinaryView, true),
+            Field::new("field_2", DataType::Utf8, true),
+            Field::new("field_3", DataType::Utf8View, true),
+        ]);
+        let bin_values: Vec<Option<&[u8]>> = vec![
+            Some(b"foo"),
+            Some(b"bar"),
+            Some(LONG_TEST_STRING.as_bytes()),
+        ];
+        let utf8_values: Vec<Option<&str>> = vec![Some("foo"), Some("bar"), Some(LONG_TEST_STRING)];
+        let bin_view_array = BinaryViewArray::from_iter(bin_values);
+        let utf8_array = StringArray::from_iter(utf8_values.iter());
+        let utf8_view_array = StringViewArray::from_iter(utf8_values);
+        let record_batch = RecordBatch::try_new(
+            Arc::new(schema.clone()),
+            vec![
+                Arc::new(bin_view_array),
+                Arc::new(utf8_array),
+                Arc::new(utf8_view_array),
+            ],
+        )
+        .unwrap();
+
+        assert_eq!(record_batch, roundtrip_ipc(&record_batch));
+        assert_eq!(record_batch, roundtrip_ipc_stream(&record_batch));
+
+        let sliced_batch = record_batch.slice(1, 2);
+        assert_eq!(sliced_batch, roundtrip_ipc(&sliced_batch));
+        assert_eq!(sliced_batch, roundtrip_ipc_stream(&sliced_batch));
+    }
+
+    #[test]
+    fn test_roundtrip_view_types_nested_dict() {
+        let bin_values: Vec<Option<&[u8]>> = vec![
+            Some(b"foo"),
+            Some(b"bar"),
+            Some(LONG_TEST_STRING.as_bytes()),
+            Some(b"field"),
+        ];
+        let utf8_values: Vec<Option<&str>> = vec![
+            Some("foo"),
+            Some("bar"),
+            Some(LONG_TEST_STRING),
+            Some("field"),
+        ];
+        let bin_view_array = Arc::new(BinaryViewArray::from_iter(bin_values));
+        let utf8_view_array = Arc::new(StringViewArray::from_iter(utf8_values));
+
+        let key_dict_keys = Int8Array::from_iter_values([0, 0, 1, 2, 0, 1, 3]);
+        let key_dict_array = DictionaryArray::new(key_dict_keys, utf8_view_array.clone());
+        let keys_field = Arc::new(Field::new_dict(
+            "keys",
+            DataType::Dictionary(Box::new(DataType::Int8), Box::new(DataType::Utf8View)),
+            true,
+            1,
+            false,
+        ));
+
+        let value_dict_keys = Int8Array::from_iter_values([0, 3, 0, 1, 2, 0, 1]);
+        let value_dict_array = DictionaryArray::new(value_dict_keys, bin_view_array);
+        let values_field = Arc::new(Field::new_dict(
+            "values",
+            DataType::Dictionary(Box::new(DataType::Int8), Box::new(DataType::BinaryView)),
+            true,
+            2,
+            false,
+        ));
+        let entry_struct = StructArray::from(vec![
+            (keys_field, make_array(key_dict_array.into_data())),
+            (values_field, make_array(value_dict_array.into_data())),
+        ]);
+
+        let map_data_type = DataType::Map(
+            Arc::new(Field::new(
+                "entries",
+                entry_struct.data_type().clone(),
+                false,
+            )),
+            false,
+        );
+        let entry_offsets = Buffer::from_slice_ref([0, 2, 4, 7]);
+        let map_data = ArrayData::builder(map_data_type)
+            .len(3)
+            .add_buffer(entry_offsets)
+            .add_child_data(entry_struct.into_data())
+            .build()
+            .unwrap();
+        let map_array = MapArray::from(map_data);
+
+        let dict_keys = Int8Array::from_iter_values([0, 1, 0, 1, 1, 2, 0, 1, 2]);
+        let dict_dict_array = DictionaryArray::new(dict_keys, Arc::new(map_array));
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "f1",
+            dict_dict_array.data_type().clone(),
+            false,
+        )]));
+        let batch = RecordBatch::try_new(schema, vec![Arc::new(dict_dict_array)]).unwrap();
+        assert_eq!(batch, roundtrip_ipc(&batch));
+        assert_eq!(batch, roundtrip_ipc_stream(&batch));
+    }
+
     #[test]
     fn test_no_columns_batch() {
         let schema = Arc::new(Schema::empty());

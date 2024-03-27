@@ -29,10 +29,7 @@ use flatbuffers::FlatBufferBuilder;
 
 use arrow_array::builder::BufferBuilder;
 use arrow_array::cast::*;
-use arrow_array::types::{
-    Int16Type, Int32Type, Int64Type, Int8Type, RunEndIndexType, UInt16Type, UInt32Type, UInt64Type,
-    UInt8Type,
-};
+use arrow_array::types::{Int16Type, Int32Type, Int64Type, RunEndIndexType};
 use arrow_array::*;
 use arrow_buffer::bit_util;
 use arrow_buffer::{ArrowNativeType, Buffer, MutableBuffer};
@@ -431,7 +428,7 @@ impl IpcDataGenerator {
                 write_options,
             )?;
 
-            append_variadic_buffer_counts(&mut variadic_buffer_counts, array);
+            append_variadic_buffer_counts(&mut variadic_buffer_counts, &array_data);
         }
         // pad the tail of body data
         let len = arrow_data.len();
@@ -518,6 +515,9 @@ impl IpcDataGenerator {
             write_options,
         )?;
 
+        let mut variadic_buffer_counts = vec![];
+        append_variadic_buffer_counts(&mut variadic_buffer_counts, array_data);
+
         // pad the tail of body data
         let len = arrow_data.len();
         let pad_len = pad_to_8(len as u32);
@@ -526,6 +526,11 @@ impl IpcDataGenerator {
         // write data
         let buffers = fbb.create_vector(&buffers);
         let nodes = fbb.create_vector(&nodes);
+        let variadic_buffer = if variadic_buffer_counts.is_empty() {
+            None
+        } else {
+            Some(fbb.create_vector(&variadic_buffer_counts))
+        };
 
         let root = {
             let mut batch_builder = crate::RecordBatchBuilder::new(&mut fbb);
@@ -534,6 +539,9 @@ impl IpcDataGenerator {
             batch_builder.add_buffers(buffers);
             if let Some(c) = compression {
                 batch_builder.add_compression(c);
+            }
+            if let Some(v) = variadic_buffer {
+                batch_builder.add_variadicBufferCounts(v);
             }
             batch_builder.finish()
         };
@@ -564,50 +572,22 @@ impl IpcDataGenerator {
     }
 }
 
-fn append_variadic_buffer_counts(counts: &mut Vec<i64>, array: &dyn Array) {
+fn append_variadic_buffer_counts(counts: &mut Vec<i64>, array: &ArrayData) {
     match array.data_type() {
         DataType::BinaryView | DataType::Utf8View => {
             // The spec documents the counts only includes the variadic buffers, not the view/null buffers.
             // https://arrow.apache.org/docs/format/Columnar.html#variadic-buffers
-            counts.push(array.to_data().buffers().len() as i64 - 1);
+            counts.push(array.buffers().len() as i64 - 1);
         }
-        DataType::Struct(_) => {
-            let array = array.as_struct();
-            for column in array.columns() {
-                append_variadic_buffer_counts(counts, column.as_ref());
+        DataType::Dictionary(_, _) => {
+            // Dictionary types are handled in `encode_dictionaries`.
+            return;
+        }
+        _ => {
+            for child in array.child_data() {
+                append_variadic_buffer_counts(counts, child)
             }
         }
-        DataType::LargeList(_) => {
-            let array: &LargeListArray = array.as_list();
-            append_variadic_buffer_counts(counts, array.values());
-        }
-        DataType::List(_) => {
-            let array: &ListArray = array.as_list();
-            append_variadic_buffer_counts(counts, array.values());
-        }
-        DataType::FixedSizeList(_, _) => {
-            let array = array.as_fixed_size_list();
-            append_variadic_buffer_counts(counts, array.values());
-        }
-        DataType::Dictionary(kt, _) => {
-            macro_rules! set_subarray_counts {
-                ($array:expr, $counts:expr, $type:ty, $variant:ident) => {
-                    if &DataType::$variant == kt.as_ref() {
-                        let array: &DictionaryArray<$type> = $array.as_dictionary();
-                        append_variadic_buffer_counts($counts, array.values());
-                    }
-                };
-            }
-            set_subarray_counts!(array, counts, Int8Type, Int8);
-            set_subarray_counts!(array, counts, Int16Type, Int16);
-            set_subarray_counts!(array, counts, Int32Type, Int32);
-            set_subarray_counts!(array, counts, Int64Type, Int64);
-            set_subarray_counts!(array, counts, UInt8Type, UInt8);
-            set_subarray_counts!(array, counts, UInt16Type, UInt16);
-            set_subarray_counts!(array, counts, UInt32Type, UInt32);
-            set_subarray_counts!(array, counts, UInt64Type, UInt64);
-        }
-        _ => {}
     }
 }
 
@@ -1883,7 +1863,7 @@ mod tests {
     }
 
     #[test]
-    fn test_write_binary_view() {
+    fn test_write_view_types() {
         const LONG_TEST_STRING: &str =
             "This is a long string to make sure binary view array handles it";
         let schema = Schema::new(vec![
