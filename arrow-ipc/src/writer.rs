@@ -2275,6 +2275,10 @@ mod tests {
     fn test_decimal128_alignment16() {
         const IPC_ALIGNMENT: u8 = 16;
 
+        // Test a bunch of different dimensions to ensure alignment is never an issue.
+        // For example, if we only test `num_cols = 1` then even with alignment 8 this
+        // test would _happen_ to pass, even though for different dimensions like
+        // `num_cols = 2` it would fail.
         for num_cols in 1..100 {
             let num_rows = (num_cols * 7 + 11) % 100; // Deterministic swizzle
 
