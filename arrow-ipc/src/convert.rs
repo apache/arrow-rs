@@ -248,8 +248,10 @@ pub(crate) fn get_data_type(field: crate::Field, may_be_dictionary: bool) -> Dat
         }
         crate::Type::Binary => DataType::Binary,
         crate::Type::LargeBinary => DataType::LargeBinary,
+        crate::Type::BinaryView => DataType::BinaryView,
         crate::Type::Utf8 => DataType::Utf8,
         crate::Type::LargeUtf8 => DataType::LargeUtf8,
+        crate::Type::Utf8View => DataType::Utf8View,
         crate::Type::FixedSizeBinary => {
             let fsb = field.type_as_fixed_size_binary().unwrap();
             DataType::FixedSizeBinary(fsb.byteWidth())
@@ -548,7 +550,11 @@ pub(crate) fn get_fb_field_type<'a>(
                 .as_union_value(),
             children: Some(fbb.create_vector(&empty_fields[..])),
         },
-        BinaryView | Utf8View => unimplemented!("unimplemented"),
+        BinaryView => FBFieldType {
+            type_type: crate::Type::BinaryView,
+            type_: crate::BinaryViewBuilder::new(fbb).finish().as_union_value(),
+            children: Some(fbb.create_vector(&empty_fields[..])),
+        },
         Utf8 => FBFieldType {
             type_type: crate::Type::Utf8,
             type_: crate::Utf8Builder::new(fbb).finish().as_union_value(),
@@ -568,6 +574,11 @@ pub(crate) fn get_fb_field_type<'a>(
                 children: Some(fbb.create_vector(&empty_fields[..])),
             }
         }
+        Utf8View => FBFieldType {
+            type_type: crate::Type::Utf8View,
+            type_: crate::Utf8ViewBuilder::new(fbb).finish().as_union_value(),
+            children: Some(fbb.create_vector(&empty_fields[..])),
+        },
         Date32 => {
             let mut builder = crate::DateBuilder::new(fbb);
             builder.add_unit(crate::DateUnit::DAY);
@@ -921,7 +932,9 @@ mod tests {
                     true,
                 ),
                 Field::new("utf8", DataType::Utf8, false),
+                Field::new("utf8_view", DataType::Utf8View, false),
                 Field::new("binary", DataType::Binary, false),
+                Field::new("binary_view", DataType::BinaryView, false),
                 Field::new_list("list[u8]", Field::new("item", DataType::UInt8, false), true),
                 Field::new_fixed_size_list(
                     "fixed_size_list[u8]",
