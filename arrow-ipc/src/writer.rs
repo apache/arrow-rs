@@ -580,8 +580,8 @@ fn append_variadic_buffer_counts(counts: &mut Vec<i64>, array: &ArrayData) {
             counts.push(array.buffers().len() as i64 - 1);
         }
         DataType::Dictionary(_, _) => {
+            // Do nothing
             // Dictionary types are handled in `encode_dictionaries`.
-            return;
         }
         _ => {
             for child in array.child_data() {
