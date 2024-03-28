@@ -92,6 +92,7 @@ macro_rules! downcast_op {
 struct FallbackEncoder {
     encoder: FallbackEncoderImpl,
     num_values: usize,
+    variable_length_bytes: i64,
 }
 
 /// The fallback encoder in use
@@ -148,6 +149,7 @@ impl FallbackEncoder {
         Ok(Self {
             encoder,
             num_values: 0,
+            variable_length_bytes: 0,
         })
     }
 
@@ -164,7 +166,8 @@ impl FallbackEncoder {
                     let value = values.value(*idx);
                     let value = value.as_ref();
                     buffer.extend_from_slice((value.len() as u32).as_bytes());
-                    buffer.extend_from_slice(value)
+                    buffer.extend_from_slice(value);
+                    self.variable_length_bytes += value.len() as i64;
                 }
             }
             FallbackEncoderImpl::DeltaLength { buffer, lengths } => {
@@ -173,6 +176,7 @@ impl FallbackEncoder {
                     let value = value.as_ref();
                     lengths.put(&[value.len() as i32]).unwrap();
                     buffer.extend_from_slice(value);
+                    self.variable_length_bytes += value.len() as i64;
                 }
             }
             FallbackEncoderImpl::Delta {
@@ -201,6 +205,7 @@ impl FallbackEncoder {
                     buffer.extend_from_slice(&value[prefix_length..]);
                     prefix_lengths.put(&[prefix_length as i32]).unwrap();
                     suffix_lengths.put(&[suffix_length as i32]).unwrap();
+                    self.variable_length_bytes += value.len() as i64;
                 }
             }
         }
@@ -261,12 +266,16 @@ impl FallbackEncoder {
             }
         };
 
+        let var_bytes = Some(self.variable_length_bytes);
+        self.variable_length_bytes = 0;
+
         Ok(DataPageValues {
             buf: buf.into(),
             num_values: std::mem::take(&mut self.num_values),
             encoding,
             min_value,
             max_value,
+            variable_length_bytes: var_bytes,
         })
     }
 }
@@ -307,6 +316,7 @@ impl Storage for ByteArrayStorage {
 struct DictEncoder {
     interner: Interner<ByteArrayStorage>,
     indices: Vec<u64>,
+    variable_length_bytes: i64,
 }
 
 impl DictEncoder {
@@ -322,6 +332,7 @@ impl DictEncoder {
             let value = values.value(*idx);
             let interned = self.interner.intern(value.as_ref());
             self.indices.push(interned);
+            self.variable_length_bytes += value.as_ref().len() as i64;
         }
     }
 
@@ -366,12 +377,16 @@ impl DictEncoder {
 
         self.indices.clear();
 
+        let var_bytes = Some(self.variable_length_bytes);
+        self.variable_length_bytes = 0;
+
         DataPageValues {
             buf: encoder.consume().into(),
             num_values,
             encoding: Encoding::RLE_DICTIONARY,
             min_value,
             max_value,
+            variable_length_bytes: var_bytes,
         }
     }
 }
