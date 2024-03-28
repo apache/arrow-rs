@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! Test
 //!
 //! This crate contains the official Native Rust implementation of
 //! [Apache Parquet](https://parquet.apache.org/), part of
