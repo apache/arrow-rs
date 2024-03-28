@@ -1813,10 +1813,12 @@ mod tests {
         ]);
         let bin_values: Vec<Option<&[u8]>> = vec![
             Some(b"foo"),
+            None,
             Some(b"bar"),
             Some(LONG_TEST_STRING.as_bytes()),
         ];
-        let utf8_values: Vec<Option<&str>> = vec![Some("foo"), Some("bar"), Some(LONG_TEST_STRING)];
+        let utf8_values: Vec<Option<&str>> =
+            vec![Some("foo"), None, Some("bar"), Some(LONG_TEST_STRING)];
         let bin_view_array = BinaryViewArray::from_iter(bin_values);
         let utf8_array = StringArray::from_iter(utf8_values.iter());
         let utf8_view_array = StringViewArray::from_iter(utf8_values);
@@ -1842,12 +1844,14 @@ mod tests {
     fn test_roundtrip_view_types_nested_dict() {
         let bin_values: Vec<Option<&[u8]>> = vec![
             Some(b"foo"),
+            None,
             Some(b"bar"),
             Some(LONG_TEST_STRING.as_bytes()),
             Some(b"field"),
         ];
         let utf8_values: Vec<Option<&str>> = vec![
             Some("foo"),
+            None,
             Some("bar"),
             Some(LONG_TEST_STRING),
             Some("field"),
@@ -1906,6 +1910,10 @@ mod tests {
         let batch = RecordBatch::try_new(schema, vec![Arc::new(dict_dict_array)]).unwrap();
         assert_eq!(batch, roundtrip_ipc(&batch));
         assert_eq!(batch, roundtrip_ipc_stream(&batch));
+
+        let sliced_batch = batch.slice(1, 2);
+        assert_eq!(sliced_batch, roundtrip_ipc(&sliced_batch));
+        assert_eq!(sliced_batch, roundtrip_ipc_stream(&sliced_batch));
     }
 
     #[test]
