@@ -717,7 +717,7 @@ impl GCSAuthorizer {
         let mut headers = HeaderMap::new();
         headers.insert("host", host.parse().unwrap());
 
-        let (_, signed_headers) = self.canonicalize_headers(&headers);
+        let (_, signed_headers) = Self::canonicalize_headers(&headers);
 
         url.query_pairs_mut()
             .append_pair("X-Goog-Algorithm", "GOOG4-RSA-SHA256")
@@ -756,11 +756,11 @@ impl GCSAuthorizer {
     ///```
     ///
     /// <https://cloud.google.com/storage/docs/authentication/canonical-requests>
-    fn canonicalize_request(&self, url: &Url, methond: &Method, headers: &HeaderMap) -> String {
+    fn canonicalize_request(url: &Url, methond: &Method, headers: &HeaderMap) -> String {
         let verb = methond.as_str();
         let path = url.path();
-        let query = self.canonicalize_query(url);
-        let (canaonical_headers, signed_headers) = self.canonicalize_headers(headers);
+        let query = Self::canonicalize_query(url);
+        let (canaonical_headers, signed_headers) = Self::canonicalize_headers(headers);
 
         format!(
             "{}\n{}\n{}\n{}\n\n{}\n{}",
@@ -772,7 +772,7 @@ impl GCSAuthorizer {
     /// form like `max-keys=2&prefix=object`
     ///
     /// <https://cloud.google.com/storage/docs/authentication/canonical-requests#about-query-strings>
-    fn canonicalize_query(&self, url: &Url) -> String {
+    fn canonicalize_query(url: &Url) -> String {
         url.query_pairs()
             .sorted_unstable_by(|a, b| a.0.cmp(&b.0))
             .map(|(k, v)| {
@@ -788,7 +788,7 @@ impl GCSAuthorizer {
     /// Canonicalizes header into the GCP canonical form
     ///
     /// <https://cloud.google.com/storage/docs/authentication/canonical-requests#about-headers>
-    fn canonicalize_headers(&self, header_map: &HeaderMap) -> (String, String) {
+    fn canonicalize_headers(header_map: &HeaderMap) -> (String, String) {
         //FIXME add error handling for invalid header values
         let mut headers = BTreeMap::<String, Vec<&str>>::new();
         for (k, v) in header_map {
@@ -831,7 +831,7 @@ impl GCSAuthorizer {
         url: &Url,
         headers: &HeaderMap,
     ) -> String {
-        let caninical_request = self.canonicalize_request(url, request_method, headers);
+        let caninical_request = Self::canonicalize_request(url, request_method, headers);
         let hashed_canonical_req = hex_digest(caninical_request.as_bytes());
         let scope = self.scope(date);
 
@@ -845,39 +845,38 @@ impl GCSAuthorizer {
     }
 }
 
-//
-// #[cfg(test)]
-// mod tests {
-//     use super::*;
-//
-//     #[test]
-//     fn test_canonicalize_headers() {
-//         let mut input_header = HeaderMap::new();
-//         input_header.insert("content-type", "text/plain".parse().unwrap());
-//         input_header.insert("host", "storage.googleapis.com".parse().unwrap());
-//         input_header.insert("x-goog-meta-reviewer", "jane".parse().unwrap());
-//         input_header.append("x-goog-meta-reviewer", "john".parse().unwrap());
-//         assert_eq!(
-//             canonicalize_headers(&input_header),
-//             (
-//                 "content-type:text/plain
-// host:storage.googleapis.com
-// x-goog-meta-reviewer:jane,john"
-//                     .to_string(),
-//                 "content-type;host;x-goog-meta-reviewer".to_string()
-//             )
-//         );
-//     }
-//
-//     #[test]
-//     fn test_canonicalize_query() {
-//         let mut url = Url::parse("https://storage.googleapis.com/bucket/object").unwrap();
-//         url.query_pairs_mut()
-//             .append_pair("max-keys", "2")
-//             .append_pair("prefix", "object");
-//         assert_eq!(
-//             canonicalize_query(&url),
-//             "max-keys=2&prefix=object".to_string()
-//         );
-//     }
-// }
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_canonicalize_headers() {
+        let mut input_header = HeaderMap::new();
+        input_header.insert("content-type", "text/plain".parse().unwrap());
+        input_header.insert("host", "storage.googleapis.com".parse().unwrap());
+        input_header.insert("x-goog-meta-reviewer", "jane".parse().unwrap());
+        input_header.append("x-goog-meta-reviewer", "john".parse().unwrap());
+        assert_eq!(
+            GCSAuthorizer::canonicalize_headers(&input_header),
+            (
+                "content-type:text/plain
+host:storage.googleapis.com
+x-goog-meta-reviewer:jane,john"
+                    .into(),
+                "content-type;host;x-goog-meta-reviewer".to_string()
+            )
+        );
+    }
+
+    #[test]
+    fn test_canonicalize_query() {
+        let mut url = Url::parse("https://storage.googleapis.com/bucket/object").unwrap();
+        url.query_pairs_mut()
+            .append_pair("max-keys", "2")
+            .append_pair("prefix", "object");
+        assert_eq!(
+            GCSAuthorizer::canonicalize_query(&url),
+            "max-keys=2&prefix=object".to_string()
+        );
+    }
+}
