@@ -18,18 +18,16 @@
 //! An object store that limits the maximum concurrency of the wrapped implementation
 
 use crate::{
-    BoxStream, GetOptions, GetResult, GetResultPayload, ListResult, MultipartId, ObjectMeta,
-    ObjectStore, Path, PutOptions, PutResult, Result, StreamExt,
+    BoxStream, GetOptions, GetResult, GetResultPayload, ListResult, MultipartUpload, ObjectMeta,
+    ObjectStore, Path, PutOptions, PutResult, Result, StreamExt, UploadPart,
 };
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures::{FutureExt, Stream};
-use std::io::{Error, IoSlice};
 use std::ops::Range;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
-use tokio::io::AsyncWrite;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 /// Store wrapper that wraps an inner store and limits the maximum number of concurrent
@@ -81,18 +79,12 @@ impl<T: ObjectStore> ObjectStore for LimitStore<T> {
         let _permit = self.semaphore.acquire().await.unwrap();
         self.inner.put_opts(location, bytes, opts).await
     }
-    async fn put_multipart(
-        &self,
-        location: &Path,
-    ) -> Result<(MultipartId, Box<dyn AsyncWrite + Unpin + Send>)> {
-        let permit = Arc::clone(&self.semaphore).acquire_owned().await.unwrap();
-        let (id, write) = self.inner.put_multipart(location).await?;
-        Ok((id, Box::new(PermitWrapper::new(write, permit))))
-    }
-
-    async fn abort_multipart(&self, location: &Path, multipart_id: &MultipartId) -> Result<()> {
-        let _permit = self.semaphore.acquire().await.unwrap();
-        self.inner.abort_multipart(location, multipart_id).await
+    async fn put_multipart(&self, location: &Path) -> Result<Box<dyn MultipartUpload>> {
+        let upload = self.inner.put_multipart(location).await?;
+        Ok(Box::new(LimitUpload {
+            semaphore: Arc::clone(&self.semaphore),
+            upload,
+        }))
     }
     async fn get(&self, location: &Path) -> Result<GetResult> {
         let permit = Arc::clone(&self.semaphore).acquire_owned().await.unwrap();
@@ -221,39 +213,42 @@ impl<T: Stream + Unpin> Stream for PermitWrapper<T> {
     }
 }
 
-impl<T: AsyncWrite + Unpin> AsyncWrite for PermitWrapper<T> {
-    fn poll_write(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        buf: &[u8],
-    ) -> Poll<std::result::Result<usize, Error>> {
-        Pin::new(&mut self.inner).poll_write(cx, buf)
+/// An [`MultipartUpload`] wrapper that limits the maximum number of concurrent requests
+#[derive(Debug)]
+pub struct LimitUpload {
+    upload: Box<dyn MultipartUpload>,
+    semaphore: Arc<Semaphore>,
+}
+
+impl LimitUpload {
+    /// Create a new [`LimitUpload`] limiting `upload` to `max_concurrency` concurrent requests
+    pub fn new(upload: Box<dyn MultipartUpload>, max_concurrency: usize) -> Self {
+        Self {
+            upload,
+            semaphore: Arc::new(Semaphore::new(max_concurrency)),
+        }
+    }
+}
+
+#[async_trait]
+impl MultipartUpload for LimitUpload {
+    fn put_part(&mut self, data: Bytes) -> UploadPart {
+        let upload = self.upload.put_part(data);
+        let s = Arc::clone(&self.semaphore);
+        Box::pin(async move {
+            let _permit = s.acquire().await.unwrap();
+            upload.await
+        })
     }
 
-    fn poll_flush(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-    ) -> Poll<std::result::Result<(), Error>> {
-        Pin::new(&mut self.inner).poll_flush(cx)
+    async fn complete(&mut self) -> Result<PutResult> {
+        let _permit = self.semaphore.acquire().await.unwrap();
+        self.upload.complete().await
     }
 
-    fn poll_shutdown(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-    ) -> Poll<std::result::Result<(), Error>> {
-        Pin::new(&mut self.inner).poll_shutdown(cx)
-    }
-
-    fn poll_write_vectored(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        bufs: &[IoSlice<'_>],
-    ) -> Poll<std::result::Result<usize, Error>> {
-        Pin::new(&mut self.inner).poll_write_vectored(cx, bufs)
-    }
-
-    fn is_write_vectored(&self) -> bool {
-        self.inner.is_write_vectored()
+    async fn abort(&mut self) -> Result<()> {
+        let _permit = self.semaphore.acquire().await.unwrap();
+        self.upload.abort().await
     }
 }
 

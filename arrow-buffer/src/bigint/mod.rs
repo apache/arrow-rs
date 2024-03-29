@@ -838,9 +838,8 @@ impl ToPrimitive for i256 {
 #[cfg(all(test, not(miri)))] // llvm.x86.subborrow.64 not supported by MIRI
 mod tests {
     use super::*;
-    use num::{BigInt, FromPrimitive, Signed, ToPrimitive};
+    use num::Signed;
     use rand::{thread_rng, Rng};
-    use std::ops::Neg;
 
     #[test]
     fn test_signed_cmp() {

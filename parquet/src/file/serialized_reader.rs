@@ -20,7 +20,7 @@
 
 use std::collections::VecDeque;
 use std::iter;
-use std::{convert::TryFrom, fs::File, io::Read, path::Path, sync::Arc};
+use std::{fs::File, io::Read, path::Path, sync::Arc};
 
 use crate::basic::{Encoding, Type};
 use crate::bloom_filter::Sbbf;
@@ -769,9 +769,6 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
 
 #[cfg(test)]
 mod tests {
-    use bytes::Bytes;
-    use std::sync::Arc;
-
     use crate::format::BoundaryOrder;
 
     use crate::basic::{self, ColumnOrder};
@@ -1247,6 +1244,19 @@ mod tests {
         let metadata = reader.metadata();
         assert_eq!(metadata.num_row_groups(), 0);
         Ok(())
+    }
+
+    #[test]
+    fn test_file_reader_invalid_metadata() {
+        let data = [
+            255, 172, 1, 0, 50, 82, 65, 73, 1, 0, 0, 0, 169, 168, 168, 162, 87, 255, 16, 0, 0, 0,
+            80, 65, 82, 49,
+        ];
+        let ret = SerializedFileReader::new(Bytes::copy_from_slice(&data));
+        assert_eq!(
+            ret.err().unwrap().to_string(),
+            "Parquet error: Could not parse metadata: bad data"
+        );
     }
 
     #[test]

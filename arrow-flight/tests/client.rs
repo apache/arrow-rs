@@ -24,13 +24,15 @@ mod common {
 use arrow_array::{RecordBatch, UInt64Array};
 use arrow_flight::{
     decode::FlightRecordBatchStream, encode::FlightDataEncoderBuilder, error::FlightError, Action,
-    ActionType, Criteria, Empty, FlightClient, FlightData, FlightDescriptor, FlightInfo,
-    HandshakeRequest, HandshakeResponse, PutResult, Ticket,
+    ActionType, CancelFlightInfoRequest, CancelFlightInfoResult, CancelStatus, Criteria, Empty,
+    FlightClient, FlightData, FlightDescriptor, FlightEndpoint, FlightInfo, HandshakeRequest,
+    HandshakeResponse, PollInfo, PutResult, RenewFlightEndpointRequest, Ticket,
 };
 use arrow_schema::{DataType, Field, Schema};
 use bytes::Bytes;
 use common::{server::TestFlightServer, trailers_layer::TrailersLayer};
 use futures::{Future, StreamExt, TryStreamExt};
+use prost::Message;
 use tokio::{net::TcpListener, task::JoinHandle};
 use tonic::{
     transport::{Channel, Uri},
@@ -106,6 +108,7 @@ fn test_flight_info(request: &FlightDescriptor) -> FlightInfo {
         total_bytes: 123,
         total_records: 456,
         ordered: false,
+        app_metadata: Bytes::new(),
     }
 }
 
@@ -136,6 +139,47 @@ async fn test_get_flight_info_error() {
         test_server.set_get_flight_info_response(Err(e.clone()));
 
         let response = client.get_flight_info(request.clone()).await.unwrap_err();
+        expect_status(response, e);
+    })
+    .await;
+}
+
+fn test_poll_info(request: &FlightDescriptor) -> PollInfo {
+    PollInfo {
+        info: Some(test_flight_info(request)),
+        flight_descriptor: None,
+        progress: Some(1.0),
+        expiration_time: None,
+    }
+}
+
+#[tokio::test]
+async fn test_poll_flight_info() {
+    do_test(|test_server, mut client| async move {
+        client.add_header("foo-header", "bar-header-value").unwrap();
+        let request = FlightDescriptor::new_cmd(b"My Command".to_vec());
+
+        let expected_response = test_poll_info(&request);
+        test_server.set_poll_flight_info_response(Ok(expected_response.clone()));
+
+        let response = client.poll_flight_info(request.clone()).await.unwrap();
+
+        assert_eq!(response, expected_response);
+        assert_eq!(test_server.take_poll_flight_info_request(), Some(request));
+        ensure_metadata(&client, &test_server);
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn test_poll_flight_info_error() {
+    do_test(|test_server, mut client| async move {
+        let request = FlightDescriptor::new_cmd(b"My Command".to_vec());
+
+        let e = Status::unauthenticated("DENIED");
+        test_server.set_poll_flight_info_response(Err(e.clone()));
+
+        let response = client.poll_flight_info(request.clone()).await.unwrap_err();
         expect_status(response, e);
     })
     .await;
@@ -847,6 +891,105 @@ async fn test_do_action_error_in_stream() {
         expect_status(response, e);
         // server still got the request
         assert_eq!(test_server.take_do_action_request(), Some(request));
+        ensure_metadata(&client, &test_server);
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn test_cancel_flight_info() {
+    do_test(|test_server, mut client| async move {
+        client.add_header("foo-header", "bar-header-value").unwrap();
+
+        let expected_response = CancelFlightInfoResult::new(CancelStatus::Cancelled);
+        let response = expected_response.encode_to_vec();
+        let response = Ok(arrow_flight::Result::new(response));
+        test_server.set_do_action_response(vec![response]);
+
+        let request = CancelFlightInfoRequest::new(FlightInfo::new());
+        let actual_response = client
+            .cancel_flight_info(request.clone())
+            .await
+            .expect("error making request");
+
+        let expected_request = Action::new("CancelFlightInfo", request.encode_to_vec());
+        assert_eq!(actual_response, expected_response);
+        assert_eq!(test_server.take_do_action_request(), Some(expected_request));
+        ensure_metadata(&client, &test_server);
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn test_cancel_flight_info_error_no_response() {
+    do_test(|test_server, mut client| async move {
+        client.add_header("foo-header", "bar-header-value").unwrap();
+
+        test_server.set_do_action_response(vec![]);
+
+        let request = CancelFlightInfoRequest::new(FlightInfo::new());
+        let err = client
+            .cancel_flight_info(request.clone())
+            .await
+            .unwrap_err();
+
+        assert_eq!(
+            err.to_string(),
+            "Protocol error: Received no response for cancel_flight_info call"
+        );
+        // server still got the request
+        let expected_request = Action::new("CancelFlightInfo", request.encode_to_vec());
+        assert_eq!(test_server.take_do_action_request(), Some(expected_request));
+        ensure_metadata(&client, &test_server);
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn test_renew_flight_endpoint() {
+    do_test(|test_server, mut client| async move {
+        client.add_header("foo-header", "bar-header-value").unwrap();
+
+        let expected_response = FlightEndpoint::new().with_app_metadata(vec![1]);
+        let response = expected_response.encode_to_vec();
+        let response = Ok(arrow_flight::Result::new(response));
+        test_server.set_do_action_response(vec![response]);
+
+        let request =
+            RenewFlightEndpointRequest::new(FlightEndpoint::new().with_app_metadata(vec![0]));
+        let actual_response = client
+            .renew_flight_endpoint(request.clone())
+            .await
+            .expect("error making request");
+
+        let expected_request = Action::new("RenewFlightEndpoint", request.encode_to_vec());
+        assert_eq!(actual_response, expected_response);
+        assert_eq!(test_server.take_do_action_request(), Some(expected_request));
+        ensure_metadata(&client, &test_server);
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn test_renew_flight_endpoint_error_no_response() {
+    do_test(|test_server, mut client| async move {
+        client.add_header("foo-header", "bar-header-value").unwrap();
+
+        test_server.set_do_action_response(vec![]);
+
+        let request = RenewFlightEndpointRequest::new(FlightEndpoint::new());
+        let err = client
+            .renew_flight_endpoint(request.clone())
+            .await
+            .unwrap_err();
+
+        assert_eq!(
+            err.to_string(),
+            "Protocol error: Received no response for renew_flight_endpoint call"
+        );
+        // server still got the request
+        let expected_request = Action::new("RenewFlightEndpoint", request.encode_to_vec());
+        assert_eq!(test_server.take_do_action_request(), Some(expected_request));
         ensure_metadata(&client, &test_server);
     })
     .await;

@@ -15,13 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use super::{
-    data::{into_buffers, new_buffers},
-    ArrayData, ArrayDataBuilder,
-};
+use super::{data::new_buffers, ArrayData, ArrayDataBuilder, ByteView};
 use crate::bit_mask::set_bits;
 use arrow_buffer::buffer::{BooleanBuffer, NullBuffer};
-use arrow_buffer::{bit_util, i256, ArrowNativeType, MutableBuffer};
+use arrow_buffer::{bit_util, i256, ArrowNativeType, Buffer, MutableBuffer};
 use arrow_schema::{ArrowError, DataType, IntervalUnit, UnionMode};
 use half::f16;
 use num::Integer;
@@ -68,36 +65,6 @@ impl<'a> _MutableArrayData<'a> {
             .as_mut()
             .expect("MutableArrayData not nullable")
     }
-
-    fn freeze(self, dictionary: Option<ArrayData>) -> ArrayDataBuilder {
-        let buffers = into_buffers(&self.data_type, self.buffer1, self.buffer2);
-
-        let child_data = match self.data_type {
-            DataType::Dictionary(_, _) => vec![dictionary.unwrap()],
-            _ => {
-                let mut child_data = Vec::with_capacity(self.child_data.len());
-                for child in self.child_data {
-                    child_data.push(child.freeze());
-                }
-                child_data
-            }
-        };
-
-        let nulls = self
-            .null_buffer
-            .map(|nulls| {
-                let bools = BooleanBuffer::new(nulls.into(), 0, self.len);
-                unsafe { NullBuffer::new_unchecked(bools, self.null_count) }
-            })
-            .filter(|n| n.null_count() > 0);
-
-        ArrayDataBuilder::new(self.data_type)
-            .offset(0)
-            .len(self.len)
-            .nulls(nulls)
-            .buffers(buffers)
-            .child_data(child_data)
-    }
 }
 
 fn build_extend_null_bits(array: &ArrayData, use_nulls: bool) -> ExtendNullBits {
@@ -138,26 +105,32 @@ fn build_extend_null_bits(array: &ArrayData, use_nulls: bool) -> ExtendNullBits 
 pub struct MutableArrayData<'a> {
     #[allow(dead_code)]
     arrays: Vec<&'a ArrayData>,
-    // The attributes in [_MutableArrayData] cannot be in [MutableArrayData] due to
-    // mutability invariants (interior mutability):
-    // [MutableArrayData] contains a function that can only mutate [_MutableArrayData], not
-    // [MutableArrayData] itself
+    /// The attributes in [_MutableArrayData] cannot be in [MutableArrayData] due to
+    /// mutability invariants (interior mutability):
+    /// [MutableArrayData] contains a function that can only mutate [_MutableArrayData], not
+    /// [MutableArrayData] itself
     data: _MutableArrayData<'a>,
 
-    // the child data of the `Array` in Dictionary arrays.
-    // This is not stored in `MutableArrayData` because these values constant and only needed
-    // at the end, when freezing [_MutableArrayData].
+    /// the child data of the `Array` in Dictionary arrays.
+    /// This is not stored in `MutableArrayData` because these values constant and only needed
+    /// at the end, when freezing [_MutableArrayData].
     dictionary: Option<ArrayData>,
 
-    // function used to extend values from arrays. This function's lifetime is bound to the array
-    // because it reads values from it.
+    /// Variadic data buffers referenced by views
+    /// This is not stored in `MutableArrayData` because these values constant  and only needed
+    /// at the end, when freezing [_MutableArrayData]
+    variadic_data_buffers: Vec<Buffer>,
+
+    /// function used to extend values from arrays. This function's lifetime is bound to the array
+    /// because it reads values from it.
     extend_values: Vec<Extend<'a>>,
-    // function used to extend nulls from arrays. This function's lifetime is bound to the array
-    // because it reads nulls from it.
+
+    /// function used to extend nulls from arrays. This function's lifetime is bound to the array
+    /// because it reads nulls from it.
     extend_null_bits: Vec<ExtendNullBits<'a>>,
 
-    // function used to extend nulls.
-    // this is independent of the arrays and therefore has no lifetime.
+    /// function used to extend nulls.
+    /// this is independent of the arrays and therefore has no lifetime.
     extend_nulls: ExtendNulls,
 }
 
@@ -197,6 +170,26 @@ fn build_extend_dictionary(array: &ArrayData, offset: usize, max: usize) -> Opti
     }
 }
 
+/// Builds an extend that adds `buffer_offset` to any buffer indices encountered
+fn build_extend_view(array: &ArrayData, buffer_offset: u32) -> Extend {
+    let views = array.buffer::<u128>(0);
+    Box::new(
+        move |mutable: &mut _MutableArrayData, _, start: usize, len: usize| {
+            mutable
+                .buffer1
+                .extend(views[start..start + len].iter().map(|v| {
+                    let len = *v as u32;
+                    if len <= 12 {
+                        return *v; // Stored inline
+                    }
+                    let mut view = ByteView::from(*v);
+                    view.buffer_index += buffer_offset;
+                    view.into()
+                }))
+        },
+    )
+}
+
 fn build_extend(array: &ArrayData) -> Extend {
     match array.data_type() {
         DataType::Null => null::build_extend(array),
@@ -224,7 +217,11 @@ fn build_extend(array: &ArrayData) -> Extend {
         DataType::Decimal256(_, _) => primitive::build_extend::<i256>(array),
         DataType::Utf8 | DataType::Binary => variable_size::build_extend::<i32>(array),
         DataType::LargeUtf8 | DataType::LargeBinary => variable_size::build_extend::<i64>(array),
+        DataType::BinaryView | DataType::Utf8View => unreachable!("should use build_extend_view"),
         DataType::Map(_, _) | DataType::List(_) => list::build_extend::<i32>(array),
+        DataType::ListView(_) | DataType::LargeListView(_) => {
+            unimplemented!("ListView/LargeListView not implemented")
+        }
         DataType::LargeList(_) => list::build_extend::<i64>(array),
         DataType::Dictionary(_, _) => unreachable!("should use build_extend_dictionary"),
         DataType::Struct(_) => structure::build_extend(array),
@@ -266,7 +263,11 @@ fn build_extend_nulls(data_type: &DataType) -> ExtendNulls {
         DataType::Decimal256(_, _) => primitive::extend_nulls::<i256>,
         DataType::Utf8 | DataType::Binary => variable_size::extend_nulls::<i32>,
         DataType::LargeUtf8 | DataType::LargeBinary => variable_size::extend_nulls::<i64>,
+        DataType::BinaryView | DataType::Utf8View => primitive::extend_nulls::<u128>,
         DataType::Map(_, _) | DataType::List(_) => list::extend_nulls::<i32>,
+        DataType::ListView(_) | DataType::LargeListView(_) => {
+            unimplemented!("ListView/LargeListView not implemented")
+        }
         DataType::LargeList(_) => list::extend_nulls::<i64>,
         DataType::Dictionary(child_data_type, _) => match child_data_type.as_ref() {
             DataType::UInt8 => primitive::extend_nulls::<u8>,
@@ -417,8 +418,13 @@ impl<'a> MutableArrayData<'a> {
             | DataType::Binary
             | DataType::LargeUtf8
             | DataType::LargeBinary
+            | DataType::BinaryView
+            | DataType::Utf8View
             | DataType::Interval(_)
             | DataType::FixedSizeBinary(_) => vec![],
+            DataType::ListView(_) | DataType::LargeListView(_) => {
+                unimplemented!("ListView/LargeListView not implemented")
+            }
             DataType::Map(_, _) | DataType::List(_) | DataType::LargeList(_) => {
                 let children = arrays
                     .iter()
@@ -548,6 +554,15 @@ impl<'a> MutableArrayData<'a> {
             _ => (None, false),
         };
 
+        let variadic_data_buffers = match &data_type {
+            DataType::BinaryView | DataType::Utf8View => arrays
+                .iter()
+                .flat_map(|x| x.buffers().iter().skip(1))
+                .map(Buffer::clone)
+                .collect(),
+            _ => vec![],
+        };
+
         let extend_nulls = build_extend_nulls(data_type);
 
         let extend_null_bits = arrays
@@ -580,6 +595,20 @@ impl<'a> MutableArrayData<'a> {
 
                 extend_values.expect("MutableArrayData::new is infallible")
             }
+            DataType::BinaryView | DataType::Utf8View => {
+                let mut next_offset = 0u32;
+                arrays
+                    .iter()
+                    .map(|arr| {
+                        let num_data_buffers = (arr.buffers().len() - 1) as u32;
+                        let offset = next_offset;
+                        next_offset = next_offset
+                            .checked_add(num_data_buffers)
+                            .expect("view buffer index overflow");
+                        build_extend_view(arr, offset)
+                    })
+                    .collect()
+            }
             _ => arrays.iter().map(|array| build_extend(array)).collect(),
         };
 
@@ -596,6 +625,7 @@ impl<'a> MutableArrayData<'a> {
             arrays,
             data,
             dictionary,
+            variadic_data_buffers,
             extend_values,
             extend_null_bits,
             extend_nulls,
@@ -655,13 +685,55 @@ impl<'a> MutableArrayData<'a> {
 
     /// Creates a [ArrayData] from the pushed regions up to this point, consuming `self`.
     pub fn freeze(self) -> ArrayData {
-        unsafe { self.data.freeze(self.dictionary).build_unchecked() }
+        unsafe { self.into_builder().build_unchecked() }
     }
 
     /// Creates a [ArrayDataBuilder] from the pushed regions up to this point, consuming `self`.
     /// This is useful for extending the default behavior of MutableArrayData.
     pub fn into_builder(self) -> ArrayDataBuilder {
-        self.data.freeze(self.dictionary)
+        let data = self.data;
+
+        let buffers = match data.data_type {
+            DataType::Null | DataType::Struct(_) | DataType::FixedSizeList(_, _) => {
+                vec![]
+            }
+            DataType::BinaryView | DataType::Utf8View => {
+                let mut b = self.variadic_data_buffers;
+                b.insert(0, data.buffer1.into());
+                b
+            }
+            DataType::Utf8 | DataType::Binary | DataType::LargeUtf8 | DataType::LargeBinary => {
+                vec![data.buffer1.into(), data.buffer2.into()]
+            }
+            DataType::Union(_, mode) => {
+                match mode {
+                    // Based on Union's DataTypeLayout
+                    UnionMode::Sparse => vec![data.buffer1.into()],
+                    UnionMode::Dense => vec![data.buffer1.into(), data.buffer2.into()],
+                }
+            }
+            _ => vec![data.buffer1.into()],
+        };
+
+        let child_data = match data.data_type {
+            DataType::Dictionary(_, _) => vec![self.dictionary.unwrap()],
+            _ => data.child_data.into_iter().map(|x| x.freeze()).collect(),
+        };
+
+        let nulls = data
+            .null_buffer
+            .map(|nulls| {
+                let bools = BooleanBuffer::new(nulls.into(), 0, data.len);
+                unsafe { NullBuffer::new_unchecked(bools, data.null_count) }
+            })
+            .filter(|n| n.null_count() > 0);
+
+        ArrayDataBuilder::new(data.data_type)
+            .offset(0)
+            .len(data.len)
+            .nulls(nulls)
+            .buffers(buffers)
+            .child_data(child_data)
     }
 }
 

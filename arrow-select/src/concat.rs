@@ -195,9 +195,7 @@ pub fn concat_batches<'a>(
 mod tests {
     use super::*;
     use arrow_array::builder::StringDictionaryBuilder;
-    use arrow_array::cast::AsArray;
     use arrow_schema::{Field, Schema};
-    use std::sync::Arc;
 
     #[test]
     fn test_concat_empty_vec() {
@@ -569,7 +567,8 @@ mod tests {
 
         // Should have merged inputs together
         // Not 30 as this is done on a best-effort basis
-        assert_eq!(dictionary.values().len(), 33)
+        let values_len = dictionary.values().len();
+        assert!((30..40).contains(&values_len), "{values_len}")
     }
 
     #[test]

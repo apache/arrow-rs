@@ -226,9 +226,10 @@ impl UnionArray {
     ///
     /// # Panics
     ///
-    /// Panics if the `type_id` provided is less than zero or greater than the number of types
+    /// Panics if the `type_id` provided is not present in the array's DataType
     /// in the `Union`.
     pub fn child(&self, type_id: i8) -> &ArrayRef {
+        assert!((type_id as usize) < self.fields.len());
         let boxed = &self.fields[type_id as usize];
         boxed.as_ref().expect("invalid type id")
     }
@@ -237,8 +238,9 @@ impl UnionArray {
     ///
     /// # Panics
     ///
-    /// Panics if `index` is greater than the length of the array.
+    /// Panics if `index` is greater than or equal to the number of child arrays
     pub fn type_id(&self, index: usize) -> i8 {
+        assert!(index < self.type_ids.len());
         self.type_ids[index]
     }
 
@@ -256,7 +258,7 @@ impl UnionArray {
     ///
     /// # Panics
     ///
-    /// Panics if `index` is greater than the length of the array.
+    /// Panics if `index` is greater than or equal the length of the array.
     pub fn value_offset(&self, index: usize) -> usize {
         assert!(index < self.len());
         match &self.offsets {
@@ -509,7 +511,6 @@ mod tests {
     use crate::RecordBatch;
     use crate::{Float64Array, Int32Array, Int64Array, StringArray};
     use arrow_schema::Schema;
-    use std::sync::Arc;
 
     #[test]
     fn test_dense_i32() {

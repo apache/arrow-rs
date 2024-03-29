@@ -101,7 +101,7 @@ struct MetadataKeyValue {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::datatypes::{DataType, Field, Fields, IntervalUnit, TimeUnit};
+    use arrow::datatypes::{DataType, Field, IntervalUnit, TimeUnit};
     use serde_json::Value;
     use std::sync::Arc;
 

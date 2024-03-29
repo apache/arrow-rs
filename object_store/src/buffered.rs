@@ -18,7 +18,7 @@
 //! Utilities for performing tokio-style buffered IO
 
 use crate::path::Path;
-use crate::{ObjectMeta, ObjectStore};
+use crate::{ObjectMeta, ObjectStore, WriteMultipart};
 use bytes::Bytes;
 use futures::future::{BoxFuture, FutureExt};
 use futures::ready;
@@ -27,7 +27,7 @@ use std::io::{Error, ErrorKind, SeekFrom};
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
-use tokio::io::{AsyncBufRead, AsyncRead, AsyncSeek, ReadBuf};
+use tokio::io::{AsyncBufRead, AsyncRead, AsyncSeek, AsyncWrite, ReadBuf};
 
 /// The default buffer size used by [`BufReader`]
 pub const DEFAULT_BUFFER_SIZE: usize = 1024 * 1024;
@@ -205,6 +205,153 @@ impl AsyncBufRead for BufReader {
     }
 }
 
+/// An async buffered writer compatible with the tokio IO traits
+///
+/// This writer adaptively uses [`ObjectStore::put`] or
+/// [`ObjectStore::put_multipart`] depending on the amount of data that has
+/// been written.
+///
+/// Up to `capacity` bytes will be buffered in memory, and flushed on shutdown
+/// using [`ObjectStore::put`]. If `capacity` is exceeded, data will instead be
+/// streamed using [`ObjectStore::put_multipart`]
+pub struct BufWriter {
+    capacity: usize,
+    state: BufWriterState,
+    store: Arc<dyn ObjectStore>,
+}
+
+impl std::fmt::Debug for BufWriter {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("BufWriter")
+            .field("capacity", &self.capacity)
+            .finish()
+    }
+}
+
+enum BufWriterState {
+    /// Buffer up to capacity bytes
+    Buffer(Path, Vec<u8>),
+    /// [`ObjectStore::put_multipart`]
+    Prepare(BoxFuture<'static, std::io::Result<WriteMultipart>>),
+    /// Write to a multipart upload
+    Write(Option<WriteMultipart>),
+    /// [`ObjectStore::put`]
+    Flush(BoxFuture<'static, std::io::Result<()>>),
+}
+
+impl BufWriter {
+    /// Create a new [`BufWriter`] from the provided [`ObjectStore`] and [`Path`]
+    pub fn new(store: Arc<dyn ObjectStore>, path: Path) -> Self {
+        Self::with_capacity(store, path, 10 * 1024 * 1024)
+    }
+
+    /// Create a new [`BufWriter`] from the provided [`ObjectStore`], [`Path`] and `capacity`
+    pub fn with_capacity(store: Arc<dyn ObjectStore>, path: Path, capacity: usize) -> Self {
+        Self {
+            capacity,
+            store,
+            state: BufWriterState::Buffer(path, Vec::new()),
+        }
+    }
+
+    /// Abort this writer, cleaning up any partially uploaded state
+    ///
+    /// # Panic
+    ///
+    /// Panics if this writer has already been shutdown or aborted
+    pub async fn abort(&mut self) -> crate::Result<()> {
+        match &mut self.state {
+            BufWriterState::Buffer(_, _) | BufWriterState::Prepare(_) => Ok(()),
+            BufWriterState::Flush(_) => panic!("Already shut down"),
+            BufWriterState::Write(x) => x.take().unwrap().abort().await,
+        }
+    }
+}
+
+impl AsyncWrite for BufWriter {
+    fn poll_write(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<Result<usize, Error>> {
+        let cap = self.capacity;
+        loop {
+            return match &mut self.state {
+                BufWriterState::Write(Some(write)) => {
+                    write.write(buf);
+                    Poll::Ready(Ok(buf.len()))
+                }
+                BufWriterState::Write(None) | BufWriterState::Flush(_) => {
+                    panic!("Already shut down")
+                }
+                BufWriterState::Prepare(f) => {
+                    self.state = BufWriterState::Write(ready!(f.poll_unpin(cx)?).into());
+                    continue;
+                }
+                BufWriterState::Buffer(path, b) => {
+                    if b.len().saturating_add(buf.len()) >= cap {
+                        let buffer = std::mem::take(b);
+                        let path = std::mem::take(path);
+                        let store = Arc::clone(&self.store);
+                        self.state = BufWriterState::Prepare(Box::pin(async move {
+                            let upload = store.put_multipart(&path).await?;
+                            let mut chunked = WriteMultipart::new(upload);
+                            chunked.write(&buffer);
+                            Ok(chunked)
+                        }));
+                        continue;
+                    }
+                    b.extend_from_slice(buf);
+                    Poll::Ready(Ok(buf.len()))
+                }
+            };
+        }
+    }
+
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Error>> {
+        loop {
+            return match &mut self.state {
+                BufWriterState::Write(_) | BufWriterState::Buffer(_, _) => Poll::Ready(Ok(())),
+                BufWriterState::Flush(_) => panic!("Already shut down"),
+                BufWriterState::Prepare(f) => {
+                    self.state = BufWriterState::Write(ready!(f.poll_unpin(cx)?).into());
+                    continue;
+                }
+            };
+        }
+    }
+
+    fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Error>> {
+        loop {
+            match &mut self.state {
+                BufWriterState::Prepare(f) => {
+                    self.state = BufWriterState::Write(ready!(f.poll_unpin(cx)?).into());
+                }
+                BufWriterState::Buffer(p, b) => {
+                    let buf = std::mem::take(b);
+                    let path = std::mem::take(p);
+                    let store = Arc::clone(&self.store);
+                    self.state = BufWriterState::Flush(Box::pin(async move {
+                        store.put(&path, buf.into()).await?;
+                        Ok(())
+                    }));
+                }
+                BufWriterState::Flush(f) => return f.poll_unpin(cx),
+                BufWriterState::Write(x) => {
+                    let upload = x.take().unwrap();
+                    self.state = BufWriterState::Flush(
+                        async move {
+                            upload.finish().await?;
+                            Ok(())
+                        }
+                        .boxed(),
+                    )
+                }
+            }
+        }
+    }
+}
+
 /// Port of standardised function as requires Rust 1.66
 ///
 /// <https://github.com/rust-lang/rust/pull/87601/files#diff-b9390ee807a1dae3c3128dce36df56748ad8d23c6e361c0ebba4d744bf6efdb9R1533>
@@ -220,7 +367,7 @@ mod tests {
     use super::*;
     use crate::memory::InMemory;
     use crate::path::Path;
-    use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncSeekExt};
+    use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 
     #[tokio::test]
     async fn test_buf_reader() {
@@ -299,5 +446,28 @@ mod tests {
             let buffer = reader.fill_buf().await.unwrap();
             assert!(buffer.is_empty());
         }
+    }
+
+    #[tokio::test]
+    async fn test_buf_writer() {
+        let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+        let path = Path::from("file.txt");
+
+        // Test put
+        let mut writer = BufWriter::with_capacity(Arc::clone(&store), path.clone(), 30);
+        writer.write_all(&[0; 20]).await.unwrap();
+        writer.flush().await.unwrap();
+        writer.write_all(&[0; 5]).await.unwrap();
+        writer.shutdown().await.unwrap();
+        assert_eq!(store.head(&path).await.unwrap().size, 25);
+
+        // Test multipart
+        let mut writer = BufWriter::with_capacity(Arc::clone(&store), path.clone(), 30);
+        writer.write_all(&[0; 20]).await.unwrap();
+        writer.flush().await.unwrap();
+        writer.write_all(&[0; 20]).await.unwrap();
+        writer.shutdown().await.unwrap();
+
+        assert_eq!(store.head(&path).await.unwrap().size, 40);
     }
 }

@@ -144,25 +144,41 @@ pub(crate) trait CompressionLevel<T: std::fmt::Display + std::cmp::PartialOrd> {
 /// Given the compression type `codec`, returns a codec used to compress and decompress
 /// bytes for the compression type.
 /// This returns `None` if the codec type is `UNCOMPRESSED`.
-pub fn create_codec(
-    codec: CodecType,
-    _options: &CodecOptions,
-) -> Result<Option<Box<dyn Codec>>> {
+pub fn create_codec(codec: CodecType, _options: &CodecOptions) -> Result<Option<Box<dyn Codec>>> {
+    #[allow(unreachable_code, unused_variables)]
     match codec {
-        #[cfg(any(feature = "brotli", test))]
-        CodecType::BROTLI(level) => Ok(Some(Box::new(BrotliCodec::new(level)))),
-        #[cfg(any(feature = "flate2", test))]
-        CodecType::GZIP(level) => Ok(Some(Box::new(GZipCodec::new(level)))),
-        #[cfg(any(feature = "snap", test))]
-        CodecType::SNAPPY => Ok(Some(Box::new(SnappyCodec::new()))),
-        #[cfg(any(feature = "lz4", test))]
-        CodecType::LZ4 => Ok(Some(Box::new(LZ4HadoopCodec::new(
-            _options.backward_compatible_lz4,
-        )))),
-        #[cfg(any(feature = "zstd", test))]
-        CodecType::ZSTD(level) => Ok(Some(Box::new(ZSTDCodec::new(level)))),
-        #[cfg(any(feature = "lz4", test))]
-        CodecType::LZ4_RAW => Ok(Some(Box::new(LZ4RawCodec::new()))),
+        CodecType::BROTLI(level) => {
+            #[cfg(any(feature = "brotli", test))]
+            return Ok(Some(Box::new(BrotliCodec::new(level))));
+            Err(ParquetError::General("Disabled feature at compile time: brotli".into()))
+        },
+        CodecType::GZIP(level) => {
+            #[cfg(any(feature = "flate2", test))]
+            return Ok(Some(Box::new(GZipCodec::new(level))));
+            Err(ParquetError::General("Disabled feature at compile time: flate2".into()))
+        },
+        CodecType::SNAPPY => {
+            #[cfg(any(feature = "snap", test))]
+            return Ok(Some(Box::new(SnappyCodec::new())));
+            Err(ParquetError::General("Disabled feature at compile time: snap".into()))
+        },
+        CodecType::LZ4 => {
+            #[cfg(any(feature = "lz4", test))]
+            return Ok(Some(Box::new(LZ4HadoopCodec::new(
+                _options.backward_compatible_lz4,
+            ))));
+            Err(ParquetError::General("Disabled feature at compile time: lz4".into()))
+        },
+        CodecType::ZSTD(level) => {
+            #[cfg(any(feature = "zstd", test))]
+            return Ok(Some(Box::new(ZSTDCodec::new(level))));
+            Err(ParquetError::General("Disabled feature at compile time: zstd".into()))
+        },
+        CodecType::LZ4_RAW => {
+            #[cfg(any(feature = "lz4", test))]
+            return Ok(Some(Box::new(LZ4RawCodec::new())));
+            Err(ParquetError::General("Disabled feature at compile time: lz4".into()))
+        },
         CodecType::UNCOMPRESSED => Ok(None),
         _ => Err(nyi_err!("The codec type {} is not supported yet", codec)),
     }
@@ -260,8 +276,7 @@ mod gzip_codec {
         }
 
         fn compress(&mut self, input_buf: &[u8], output_buf: &mut Vec<u8>) -> Result<()> {
-            let mut encoder =
-                write::GzEncoder::new(output_buf, Compression::new(self.level.0));
+            let mut encoder = write::GzEncoder::new(output_buf, Compression::new(self.level.0));
             encoder.write_all(input_buf)?;
             encoder.try_finish().map_err(|e| e.into())
         }
@@ -441,7 +456,8 @@ mod lz4_codec {
         }
     }
 }
-#[cfg(any(feature = "lz4", test))]
+
+#[cfg(all(feature = "experimental", any(feature = "lz4", test)))]
 pub use lz4_codec::*;
 
 #[cfg(any(feature = "zstd", test))]
@@ -619,10 +635,7 @@ mod lz4_hadoop_codec {
     /// Adapted from pola-rs [compression.rs:try_decompress_hadoop](https://pola-rs.github.io/polars/src/parquet2/compression.rs.html#225)
     /// Translated from the apache arrow c++ function [TryDecompressHadoop](https://github.com/apache/arrow/blob/bf18e6e4b5bb6180706b1ba0d597a65a4ce5ca48/cpp/src/arrow/util/compression_lz4.cc#L474).
     /// Returns error if decompression failed.
-    fn try_decompress_hadoop(
-        input_buf: &[u8],
-        output_buf: &mut [u8],
-    ) -> io::Result<usize> {
+    fn try_decompress_hadoop(input_buf: &[u8], output_buf: &mut [u8]) -> io::Result<usize> {
         // Parquet files written with the Hadoop Lz4Codec use their own framing.
         // The input buffer can contain an arbitrary number of "frames", each
         // with the following structure:
@@ -660,11 +673,9 @@ mod lz4_hadoop_codec {
                     "Not enough bytes to hold advertised output",
                 ));
             }
-            let decompressed_size = lz4_flex::decompress_into(
-                &input[..expected_compressed_size as usize],
-                output,
-            )
-            .map_err(|e| ParquetError::External(Box::new(e)))?;
+            let decompressed_size =
+                lz4_flex::decompress_into(&input[..expected_compressed_size as usize], output)
+                    .map_err(|e| ParquetError::External(Box::new(e)))?;
             if decompressed_size != expected_decompressed_size as usize {
                 return Err(io::Error::new(
                     io::ErrorKind::Other,
@@ -712,8 +723,7 @@ mod lz4_hadoop_codec {
                 Ok(n) => {
                     if n != required_len {
                         return Err(ParquetError::General(
-                            "LZ4HadoopCodec uncompress_size is not the expected one"
-                                .into(),
+                            "LZ4HadoopCodec uncompress_size is not the expected one".into(),
                         ));
                     }
                     Ok(n)
@@ -724,20 +734,12 @@ mod lz4_hadoop_codec {
                 Err(_) => {
                     // Truncate any inserted element before tryingg next algorithm.
                     output_buf.truncate(output_len);
-                    match LZ4Codec::new().decompress(
-                        input_buf,
-                        output_buf,
-                        uncompress_size,
-                    ) {
+                    match LZ4Codec::new().decompress(input_buf, output_buf, uncompress_size) {
                         Ok(n) => Ok(n),
                         Err(_) => {
                             // Truncate any inserted element before tryingg next algorithm.
                             output_buf.truncate(output_len);
-                            LZ4RawCodec::new().decompress(
-                                input_buf,
-                                output_buf,
-                                uncompress_size,
-                            )
+                            LZ4RawCodec::new().decompress(input_buf, output_buf, uncompress_size)
                         }
                     }
                 }
@@ -759,8 +761,7 @@ mod lz4_hadoop_codec {
             let compressed_size = compressed_size as u32;
             let uncompressed_size = input_buf.len() as u32;
             output_buf[..SIZE_U32].copy_from_slice(&uncompressed_size.to_be_bytes());
-            output_buf[SIZE_U32..PREFIX_LEN]
-                .copy_from_slice(&compressed_size.to_be_bytes());
+            output_buf[SIZE_U32..PREFIX_LEN].copy_from_slice(&compressed_size.to_be_bytes());
 
             Ok(())
         }

@@ -61,16 +61,24 @@ pub struct MutableBuffer {
 
 impl MutableBuffer {
     /// Allocate a new [MutableBuffer] with initial capacity to be at least `capacity`.
+    ///
+    /// See [`MutableBuffer::with_capacity`].
     #[inline]
     pub fn new(capacity: usize) -> Self {
         Self::with_capacity(capacity)
     }
 
     /// Allocate a new [MutableBuffer] with initial capacity to be at least `capacity`.
+    ///
+    /// # Panics
+    ///
+    /// If `capacity`, when rounded up to the nearest multiple of [`ALIGNMENT`], is greater
+    /// then `isize::MAX`, then this function will panic.
     #[inline]
     pub fn with_capacity(capacity: usize) -> Self {
         let capacity = bit_util::round_upto_multiple_of_64(capacity);
-        let layout = Layout::from_size_align(capacity, ALIGNMENT).unwrap();
+        let layout = Layout::from_size_align(capacity, ALIGNMENT)
+            .expect("failed to create layout for MutableBuffer");
         let data = match layout.size() {
             0 => dangling_ptr(),
             _ => {
@@ -480,7 +488,15 @@ fn dangling_ptr() -> NonNull<u8> {
     // SAFETY: ALIGNMENT is a non-zero usize which is then casted
     // to a *mut T. Therefore, `ptr` is not null and the conditions for
     // calling new_unchecked() are respected.
-    unsafe { NonNull::new_unchecked(ALIGNMENT as *mut u8) }
+    #[cfg(miri)]
+    {
+        // Since miri implies a nightly rust version we can use the unstable strict_provenance feature
+        unsafe { NonNull::new_unchecked(std::ptr::without_provenance_mut(ALIGNMENT)) }
+    }
+    #[cfg(not(miri))]
+    {
+        unsafe { NonNull::new_unchecked(ALIGNMENT as *mut u8) }
+    }
 }
 
 impl<A: ArrowNativeType> Extend<A> for MutableBuffer {
@@ -1001,5 +1017,12 @@ mod tests {
         let buffer = [1u16, 2, 3, 4].into_iter().collect::<MutableBuffer>();
         assert_eq!(buffer.len(), 4 * mem::size_of::<u16>());
         assert_eq!(buffer.as_slice(), &[1, 0, 2, 0, 3, 0, 4, 0]);
+    }
+
+    #[test]
+    #[should_panic(expected = "failed to create layout for MutableBuffer: LayoutError")]
+    fn test_with_capacity_panics_above_max_capacity() {
+        let max_capacity = isize::MAX as usize - (isize::MAX as usize % ALIGNMENT);
+        let _ = MutableBuffer::with_capacity(max_capacity + 1);
     }
 }

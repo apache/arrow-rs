@@ -384,9 +384,9 @@ mod tests {
 
     use std::sync::Arc;
 
-    use crate::basic::{LogicalType, Repetition, Type as PhysicalType};
+    use crate::basic::{Repetition, Type as PhysicalType};
     use crate::errors::Result;
-    use crate::schema::{parser::parse_message_type, types::Type};
+    use crate::schema::parser::parse_message_type;
 
     fn assert_print_parse_message(message: Type) {
         let mut s = String::new();

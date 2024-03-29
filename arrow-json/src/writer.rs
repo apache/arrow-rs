@@ -74,7 +74,36 @@
 //! [`LineDelimitedWriter`] and [`ArrayWriter`] will omit writing keys with null values.
 //! In order to explicitly write null values for keys, configure a custom [`Writer`] by
 //! using a [`WriterBuilder`] to construct a [`Writer`].
-
+//!
+//! ## Writing to [serde_json] JSON Objects
+//!
+//! To serialize [`RecordBatch`]es into an array of
+//! [JSON](https://docs.serde.rs/serde_json/) objects you can reparse the resulting JSON string.
+//! Note that this is less efficient than using the `Writer` API.
+//!
+//! ```
+//! # use std::sync::Arc;
+//! # use arrow_array::{Int32Array, RecordBatch};
+//! # use arrow_schema::{DataType, Field, Schema};
+//! let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+//! let a = Int32Array::from(vec![1, 2, 3]);
+//! let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(a)]).unwrap();
+//!
+//! // Write the record batch out as json bytes (string)
+//! let buf = Vec::new();
+//! let mut writer = arrow_json::ArrayWriter::new(buf);
+//! writer.write_batches(&vec![&batch]).unwrap();
+//! writer.finish().unwrap();
+//! let json_data = writer.into_inner();
+//!
+//! // Parse the string using serde_json
+//! use serde_json::{Map, Value};
+//! let json_rows: Vec<Map<String, Value>> = serde_json::from_reader(json_data.as_slice()).unwrap();
+//! assert_eq!(
+//!     serde_json::Value::Object(json_rows[1].clone()),
+//!     serde_json::json!({"a": 2}),
+//! );
+//! ```
 mod encoder;
 
 use std::iter;
@@ -132,6 +161,7 @@ fn struct_array_to_jsonmap_array(
 }
 
 /// Converts an arrow [`Array`] into a `Vec` of Serde JSON [`serde_json::Value`]'s
+#[deprecated(note = "Use Writer")]
 pub fn array_to_json_array(array: &dyn Array) -> Result<Vec<Value>, ArrowError> {
     // For backwards compatibility, default to skip nulls
     array_to_json_array_internal(array, false)
@@ -804,7 +834,7 @@ mod tests {
     use serde_json::json;
 
     use arrow_array::builder::{Int32Builder, Int64Builder, MapBuilder, StringBuilder};
-    use arrow_buffer::{Buffer, ToByteSlice};
+    use arrow_buffer::{Buffer, NullBuffer, OffsetBuffer, ToByteSlice};
     use arrow_data::ArrayData;
 
     use crate::reader::*;
@@ -925,11 +955,99 @@ mod tests {
     }
 
     #[test]
+    fn write_list_of_dictionary() {
+        let dict_field = Arc::new(Field::new_dictionary(
+            "item",
+            DataType::Int32,
+            DataType::Utf8,
+            true,
+        ));
+        let schema = Schema::new(vec![Field::new_large_list("l", dict_field.clone(), true)]);
+
+        let dict_array: DictionaryArray<Int32Type> =
+            vec![Some("a"), Some("b"), Some("c"), Some("a"), None, Some("c")]
+                .into_iter()
+                .collect();
+        let list_array = LargeListArray::try_new(
+            dict_field,
+            OffsetBuffer::from_lengths([3_usize, 2, 0, 1]),
+            Arc::new(dict_array),
+            Some(NullBuffer::from_iter([true, true, false, true])),
+        )
+        .unwrap();
+
+        let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(list_array)]).unwrap();
+
+        let mut buf = Vec::new();
+        {
+            let mut writer = LineDelimitedWriter::new(&mut buf);
+            writer.write_batches(&[&batch]).unwrap();
+        }
+
+        assert_json_eq(
+            &buf,
+            r#"{"l":["a","b","c"]}
+{"l":["a",null]}
+{}
+{"l":["c"]}
+"#,
+        );
+    }
+
+    #[test]
+    fn write_list_of_dictionary_large_values() {
+        let dict_field = Arc::new(Field::new_dictionary(
+            "item",
+            DataType::Int32,
+            DataType::LargeUtf8,
+            true,
+        ));
+        let schema = Schema::new(vec![Field::new_large_list("l", dict_field.clone(), true)]);
+
+        let keys = PrimitiveArray::<Int32Type>::from(vec![
+            Some(0),
+            Some(1),
+            Some(2),
+            Some(0),
+            None,
+            Some(2),
+        ]);
+        let values = LargeStringArray::from(vec!["a", "b", "c"]);
+        let dict_array = DictionaryArray::try_new(keys, Arc::new(values)).unwrap();
+
+        let list_array = LargeListArray::try_new(
+            dict_field,
+            OffsetBuffer::from_lengths([3_usize, 2, 0, 1]),
+            Arc::new(dict_array),
+            Some(NullBuffer::from_iter([true, true, false, true])),
+        )
+        .unwrap();
+
+        let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(list_array)]).unwrap();
+
+        let mut buf = Vec::new();
+        {
+            let mut writer = LineDelimitedWriter::new(&mut buf);
+            writer.write_batches(&[&batch]).unwrap();
+        }
+
+        assert_json_eq(
+            &buf,
+            r#"{"l":["a","b","c"]}
+{"l":["a",null]}
+{}
+{"l":["c"]}
+"#,
+        );
+    }
+
+    #[test]
     fn write_timestamps() {
         let ts_string = "2018-11-13T17:11:10.011375885995";
         let ts_nanos = ts_string
             .parse::<chrono::NaiveDateTime>()
             .unwrap()
+            .and_utc()
             .timestamp_nanos_opt()
             .unwrap();
         let ts_micros = ts_nanos / 1000;
@@ -983,6 +1101,7 @@ mod tests {
         let ts_nanos = ts_string
             .parse::<chrono::NaiveDateTime>()
             .unwrap()
+            .and_utc()
             .timestamp_nanos_opt()
             .unwrap();
         let ts_micros = ts_nanos / 1000;
@@ -1043,6 +1162,7 @@ mod tests {
         let ts_millis = ts_string
             .parse::<chrono::NaiveDateTime>()
             .unwrap()
+            .and_utc()
             .timestamp_millis();
 
         let arr_date32 = Date32Array::from(vec![
@@ -1163,7 +1283,7 @@ mod tests {
 
         assert_json_eq(
             &buf,
-            r#"{"duration_sec":"PT120S","duration_msec":"PT0.120S","duration_usec":"PT0.000120S","duration_nsec":"PT0.000000120S","name":"a"}
+            r#"{"duration_sec":"PT120S","duration_msec":"PT0.12S","duration_usec":"PT0.00012S","duration_nsec":"PT0.00000012S","name":"a"}
 {"name":"b"}
 "#,
         );
@@ -1718,6 +1838,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn test_array_to_json_array_for_fixed_size_list_array() {
         let expected_json = vec![
             json!([0, 1, 2]),
@@ -1740,6 +1861,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn test_array_to_json_array_for_map_array() {
         let expected_json = serde_json::from_value::<Vec<Value>>(json!([
             [

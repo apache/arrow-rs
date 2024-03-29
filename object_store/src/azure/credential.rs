@@ -36,6 +36,7 @@ use snafu::{ResultExt, Snafu};
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::fmt::Debug;
+use std::ops::Deref;
 use std::process::Command;
 use std::str;
 use std::sync::Arc;
@@ -186,6 +187,18 @@ impl AzureSigner {
     }
 }
 
+fn add_date_and_version_headers(request: &mut Request) {
+    // rfc2822 string should never contain illegal characters
+    let date = Utc::now();
+    let date_str = date.format(RFC1123_FMT).to_string();
+    // we formatted the data string ourselves, so unwrapping should be fine
+    let date_val = HeaderValue::from_str(&date_str).unwrap();
+    request.headers_mut().insert(DATE, date_val);
+    request
+        .headers_mut()
+        .insert(&VERSION, AZURE_VERSION.clone());
+}
+
 /// Authorize a [`Request`] with an [`AzureAuthorizer`]
 #[derive(Debug)]
 pub struct AzureAuthorizer<'a> {
@@ -204,15 +217,7 @@ impl<'a> AzureAuthorizer<'a> {
 
     /// Authorize `request`
     pub fn authorize(&self, request: &mut Request) {
-        // rfc2822 string should never contain illegal characters
-        let date = Utc::now();
-        let date_str = date.format(RFC1123_FMT).to_string();
-        // we formatted the data string ourselves, so unwrapping should be fine
-        let date_val = HeaderValue::from_str(&date_str).unwrap();
-        request.headers_mut().insert(DATE, date_val);
-        request
-            .headers_mut()
-            .insert(&VERSION, AZURE_VERSION.clone());
+        add_date_and_version_headers(request);
 
         match self.credential {
             AzureCredential::AccessKey(key) => {
@@ -250,15 +255,30 @@ impl<'a> AzureAuthorizer<'a> {
 pub(crate) trait CredentialExt {
     /// Apply authorization to requests against azure storage accounts
     /// <https://docs.microsoft.com/en-us/rest/api/storageservices/authorize-requests-to-azure-storage>
-    fn with_azure_authorization(self, credential: &AzureCredential, account: &str) -> Self;
+    fn with_azure_authorization(
+        self,
+        credential: &Option<impl Deref<Target = AzureCredential>>,
+        account: &str,
+    ) -> Self;
 }
 
 impl CredentialExt for RequestBuilder {
-    fn with_azure_authorization(self, credential: &AzureCredential, account: &str) -> Self {
+    fn with_azure_authorization(
+        self,
+        credential: &Option<impl Deref<Target = AzureCredential>>,
+        account: &str,
+    ) -> Self {
         let (client, request) = self.build_split();
         let mut request = request.expect("request valid");
 
-        AzureAuthorizer::new(credential, account).authorize(&mut request);
+        match credential.as_deref() {
+            Some(credential) => {
+                AzureAuthorizer::new(credential, account).authorize(&mut request);
+            }
+            None => {
+                add_date_and_version_headers(&mut request);
+            }
+        }
 
         Self::from_parts(client, request)
     }
@@ -910,17 +930,19 @@ impl CredentialProvider for AzureCliCredential {
 #[cfg(test)]
 mod tests {
     use futures::executor::block_on;
-    use hyper::body::to_bytes;
-    use hyper::{Body, Response};
+    use http_body_util::BodyExt;
+    use hyper::{Response, StatusCode};
     use reqwest::{Client, Method};
     use tempfile::NamedTempFile;
 
     use super::*;
+    use crate::azure::MicrosoftAzureBuilder;
     use crate::client::mock_server::MockServer;
+    use crate::{ObjectStore, Path};
 
     #[tokio::test]
     async fn test_managed_identity() {
-        let server = MockServer::new();
+        let server = MockServer::new().await;
 
         std::env::set_var(MSI_SECRET_ENV_KEY, "env-secret");
 
@@ -942,7 +964,7 @@ mod tests {
             assert_eq!(t, "env-secret");
             let t = req.headers().get("metadata").unwrap().to_str().unwrap();
             assert_eq!(t, "true");
-            Response::new(Body::from(
+            Response::new(
                 r#"
             {
                 "access_token": "TOKEN",
@@ -953,8 +975,9 @@ mod tests {
                 "resource": "https://management.azure.com/",
                 "token_type": "Bearer"
               }
-            "#,
-            ))
+            "#
+                .to_string(),
+            )
         });
 
         let credential = ImdsManagedIdentityProvider::new(
@@ -977,7 +1000,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_workload_identity() {
-        let server = MockServer::new();
+        let server = MockServer::new().await;
         let tokenfile = NamedTempFile::new().unwrap();
         let tenant = "tenant";
         std::fs::write(tokenfile.path(), "federated-token").unwrap();
@@ -990,10 +1013,10 @@ mod tests {
         server.push_fn(move |req| {
             assert_eq!(req.uri().path(), format!("/{tenant}/oauth2/v2.0/token"));
             assert_eq!(req.method(), &Method::POST);
-            let body = block_on(to_bytes(req.into_body())).unwrap();
+            let body = block_on(async move { req.into_body().collect().await.unwrap().to_bytes() });
             let body = String::from_utf8(body.to_vec()).unwrap();
             assert!(body.contains("federated-token"));
-            Response::new(Body::from(
+            Response::new(
                 r#"
             {
                 "access_token": "TOKEN",
@@ -1004,8 +1027,9 @@ mod tests {
                 "resource": "https://management.azure.com/",
                 "token_type": "Bearer"
               }
-            "#,
-            ))
+            "#
+                .to_string(),
+            )
         });
 
         let credential = WorkloadIdentityOAuthProvider::new(
@@ -1024,5 +1048,38 @@ mod tests {
             token.token.as_ref(),
             &AzureCredential::BearerToken("TOKEN".into())
         );
+    }
+
+    #[tokio::test]
+    async fn test_no_credentials() {
+        let server = MockServer::new().await;
+
+        let endpoint = server.url();
+        let store = MicrosoftAzureBuilder::new()
+            .with_account("test")
+            .with_container_name("test")
+            .with_allow_http(true)
+            .with_bearer_token_authorization("token")
+            .with_endpoint(endpoint.to_string())
+            .with_skip_signature(true)
+            .build()
+            .unwrap();
+
+        server.push_fn(|req| {
+            assert_eq!(req.method(), &Method::GET);
+            assert!(req.headers().get("Authorization").is_none());
+            Response::builder()
+                .status(StatusCode::NOT_FOUND)
+                .body("not found".to_string())
+                .unwrap()
+        });
+
+        let path = Path::from("file.txt");
+        match store.get(&path).await {
+            Err(crate::Error::NotFound { .. }) => {}
+            _ => {
+                panic!("unexpected response");
+            }
+        }
     }
 }

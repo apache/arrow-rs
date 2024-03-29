@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::aws::builder::S3EncryptionHeaders;
 use crate::aws::checksum::Checksum;
 use crate::aws::credential::{AwsCredential, CredentialExt};
 use crate::aws::{
@@ -43,6 +44,7 @@ use bytes::{Buf, Bytes};
 use hyper::http;
 use hyper::http::HeaderName;
 use itertools::Itertools;
+use md5::{Digest, Md5};
 use percent_encoding::{utf8_percent_encode, PercentEncode};
 use quick_xml::events::{self as xml_events};
 use reqwest::{
@@ -136,6 +138,7 @@ struct BatchDeleteResponse {
 
 #[derive(Deserialize)]
 enum DeleteObjectResult {
+    #[allow(unused)]
     Deleted(DeletedObject),
     Error(DeleteError),
 }
@@ -181,6 +184,7 @@ pub struct S3Config {
     pub checksum: Option<Checksum>,
     pub copy_if_not_exists: Option<S3CopyIfNotExists>,
     pub conditional_put: Option<S3ConditionalPut>,
+    pub encryption_headers: S3EncryptionHeaders,
 }
 
 impl S3Config {
@@ -320,9 +324,17 @@ impl S3Client {
     /// Make an S3 PUT request <https://docs.aws.amazon.com/AmazonS3/latest/API/API_PutObject.html>
     ///
     /// Returns the ETag
-    pub fn put_request<'a>(&'a self, path: &'a Path, bytes: Bytes) -> Request<'a> {
+    pub fn put_request<'a>(
+        &'a self,
+        path: &'a Path,
+        bytes: Bytes,
+        with_encryption_headers: bool,
+    ) -> Request<'a> {
         let url = self.config.path_url(path);
         let mut builder = self.client.request(Method::PUT, url);
+        if with_encryption_headers {
+            builder = builder.headers(self.config.encryption_headers.clone().into());
+        }
         let mut payload_sha256 = None;
 
         if let Some(checksum) = self.config.checksum {
@@ -438,6 +450,14 @@ impl S3Client {
             None
         };
 
+        // S3 *requires* DeleteObjects to include a Content-MD5 header:
+        // https://docs.aws.amazon.com/AmazonS3/latest/API/API_DeleteObjects.html
+        // >   "The Content-MD5 request header is required for all Multi-Object Delete requests"
+        // Some platforms, like MinIO, enforce this requirement and fail requests without the header.
+        let mut hasher = Md5::new();
+        hasher.update(&body);
+        builder = builder.header("Content-MD5", BASE64_STANDARD.encode(hasher.finalize()));
+
         let response = builder
             .header(CONTENT_TYPE, "application/xml")
             .body(body)
@@ -481,7 +501,8 @@ impl S3Client {
         let builder = self
             .client
             .request(Method::PUT, url)
-            .header("x-amz-copy-source", source);
+            .header("x-amz-copy-source", source)
+            .headers(self.config.encryption_headers.clone().into());
 
         Request {
             builder,
@@ -499,6 +520,7 @@ impl S3Client {
         let response = self
             .client
             .request(Method::POST, url)
+            .headers(self.config.encryption_headers.clone().into())
             .with_aws_sigv4(credential.authorizer(), None)
             .send_retry(&self.config.retry_config)
             .await
@@ -523,7 +545,7 @@ impl S3Client {
         let part = (part_idx + 1).to_string();
 
         let response = self
-            .put_request(path, data)
+            .put_request(path, data, false)
             .query(&[("partNumber", &part), ("uploadId", upload_id)])
             .send()
             .await?;
@@ -538,6 +560,16 @@ impl S3Client {
         upload_id: &str,
         parts: Vec<PartId>,
     ) -> Result<PutResult> {
+        let parts = if parts.is_empty() {
+            // If no parts were uploaded, upload an empty part
+            // otherwise the completion request will fail
+            let part = self
+                .put_part(location, &upload_id.to_string(), 0, Bytes::new())
+                .await?;
+            vec![part]
+        } else {
+            parts
+        };
         let request = CompleteMultipartUpload::from(parts);
         let body = quick_xml::se::to_string(&request).unwrap();
 

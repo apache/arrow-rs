@@ -68,6 +68,7 @@ struct APartiallyCompleteRecord {
 mod tests {
     use super::*;
 
+    use chrono::SubsecRound;
     use std::{env, fs, io::Write, sync::Arc};
 
     use parquet::{
@@ -202,9 +203,8 @@ mod tests {
         out.read_from_row_group(&mut *row_group, 1).unwrap();
 
         // correct for rounding error when writing milliseconds
-        drs[0].now =
-            chrono::naive::NaiveDateTime::from_timestamp_millis(drs[0].now.timestamp_millis())
-                .unwrap();
+
+        drs[0].now = drs[0].now.trunc_subsecs(3);
 
         assert!(out[0].double.is_nan()); // these three lines are necessary because NAN != NAN
         out[0].double = 0.;

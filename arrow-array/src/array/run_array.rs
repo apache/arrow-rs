@@ -654,8 +654,6 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-
     use rand::seq::SliceRandom;
     use rand::thread_rng;
     use rand::Rng;
@@ -663,8 +661,8 @@ mod tests {
     use super::*;
     use crate::builder::PrimitiveRunBuilder;
     use crate::cast::AsArray;
-    use crate::types::{Int16Type, Int32Type, Int8Type, UInt32Type};
-    use crate::{Array, Int32Array, StringArray};
+    use crate::types::{Int8Type, UInt32Type};
+    use crate::{Int32Array, StringArray};
 
     fn build_input_array(size: usize) -> Vec<Option<i32>> {
         // The input array is created by shuffling and repeating

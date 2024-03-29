@@ -44,5 +44,7 @@ pub fn endpoint(ticket: &str, location_uri: impl Into<String>) -> FlightEndpoint
         location: vec![Location {
             uri: location_uri.into(),
         }],
+        expiration_time: None,
+        app_metadata: vec![].into(),
     }
 }

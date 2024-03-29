@@ -349,7 +349,13 @@ impl RowGroupMetaData {
 
     /// Method to convert from Thrift.
     pub fn from_thrift(schema_descr: SchemaDescPtr, mut rg: RowGroup) -> Result<RowGroupMetaData> {
-        assert_eq!(schema_descr.num_columns(), rg.columns.len());
+        if schema_descr.num_columns() != rg.columns.len() {
+            return Err(general_err!(
+                "Column count mismatch. Schema has {} columns while Row Group has {}",
+                schema_descr.num_columns(),
+                rg.columns.len()
+            ));
+        }
         let total_byte_size = rg.total_byte_size;
         let num_rows = rg.num_rows;
         let mut columns = vec![];
@@ -997,7 +1003,7 @@ impl OffsetIndexBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::basic::{Encoding, PageType};
+    use crate::basic::PageType;
 
     #[test]
     fn test_row_group_metadata_thrift_conversion() {
@@ -1037,6 +1043,75 @@ mod tests {
                 "Parquet error: Column length mismatch: 2 != 0"
             );
         }
+    }
+
+    /// Test reading a corrupted Parquet file with 3 columns in its schema but only 2 in its row group
+    #[test]
+    fn test_row_group_metadata_thrift_corrupted() {
+        let schema_descr_2cols = Arc::new(SchemaDescriptor::new(Arc::new(
+            SchemaType::group_type_builder("schema")
+                .with_fields(vec![
+                    Arc::new(
+                        SchemaType::primitive_type_builder("a", Type::INT32)
+                            .build()
+                            .unwrap(),
+                    ),
+                    Arc::new(
+                        SchemaType::primitive_type_builder("b", Type::INT32)
+                            .build()
+                            .unwrap(),
+                    ),
+                ])
+                .build()
+                .unwrap(),
+        )));
+
+        let schema_descr_3cols = Arc::new(SchemaDescriptor::new(Arc::new(
+            SchemaType::group_type_builder("schema")
+                .with_fields(vec![
+                    Arc::new(
+                        SchemaType::primitive_type_builder("a", Type::INT32)
+                            .build()
+                            .unwrap(),
+                    ),
+                    Arc::new(
+                        SchemaType::primitive_type_builder("b", Type::INT32)
+                            .build()
+                            .unwrap(),
+                    ),
+                    Arc::new(
+                        SchemaType::primitive_type_builder("c", Type::INT32)
+                            .build()
+                            .unwrap(),
+                    ),
+                ])
+                .build()
+                .unwrap(),
+        )));
+
+        let row_group_meta_2cols = RowGroupMetaData::builder(schema_descr_2cols.clone())
+            .set_num_rows(1000)
+            .set_total_byte_size(2000)
+            .set_column_metadata(vec![
+                ColumnChunkMetaData::builder(schema_descr_2cols.column(0))
+                    .build()
+                    .unwrap(),
+                ColumnChunkMetaData::builder(schema_descr_2cols.column(1))
+                    .build()
+                    .unwrap(),
+            ])
+            .set_ordinal(1)
+            .build()
+            .unwrap();
+
+        let err =
+            RowGroupMetaData::from_thrift(schema_descr_3cols, row_group_meta_2cols.to_thrift())
+                .unwrap_err()
+                .to_string();
+        assert_eq!(
+            err,
+            "Parquet error: Column count mismatch. Schema has 3 columns while Row Group has 2"
+        );
     }
 
     #[test]

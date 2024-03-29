@@ -141,6 +141,9 @@ impl<T> ArrowReaderBuilder<T> {
     /// An example use case of this would be applying a selection determined by
     /// evaluating predicates against the [`Index`]
     ///
+    /// It is recommended to enable reading the page index if using this functionality, to allow
+    /// more efficient skipping over data pages. See [`ArrowReaderOptions::with_page_index`]
+    ///
     /// [`Index`]: crate::file::page_index::index::Index
     pub fn with_row_selection(self, selection: RowSelection) -> Self {
         Self {
@@ -152,6 +155,9 @@ impl<T> ArrowReaderBuilder<T> {
     /// Provide a [`RowFilter`] to skip decoding rows
     ///
     /// Row filters are applied after row group selection and row selection
+    ///
+    /// It is recommended to enable reading the page index if using this functionality, to allow
+    /// more efficient skipping over data pages. See [`ArrowReaderOptions::with_page_index`].
     pub fn with_row_filter(self, filter: RowFilter) -> Self {
         Self {
             filter: Some(filter),
@@ -163,6 +169,9 @@ impl<T> ArrowReaderBuilder<T> {
     ///
     /// The limit will be applied after any [`Self::with_row_selection`] and [`Self::with_row_filter`]
     /// allowing it to limit the final set of rows decoded after any pushed down predicates
+    ///
+    /// It is recommended to enable reading the page index if using this functionality, to allow
+    /// more efficient skipping over data pages. See [`ArrowReaderOptions::with_page_index`]
     pub fn with_limit(self, limit: usize) -> Self {
         Self {
             limit: Some(limit),
@@ -174,6 +183,9 @@ impl<T> ArrowReaderBuilder<T> {
     ///
     /// The offset will be applied after any [`Self::with_row_selection`] and [`Self::with_row_filter`]
     /// allowing it to skip rows after any pushed down predicates
+    ///
+    /// It is recommended to enable reading the page index if using this functionality, to allow
+    /// more efficient skipping over data pages. See [`ArrowReaderOptions::with_page_index`]
     pub fn with_offset(self, offset: usize) -> Self {
         Self {
             offset: Some(offset),
@@ -741,7 +753,6 @@ mod tests {
         Decimal128Type, Decimal256Type, DecimalType, Float16Type, Float32Type, Float64Type,
     };
     use arrow_array::*;
-    use arrow_array::{RecordBatch, RecordBatchReader};
     use arrow_buffer::{i256, ArrowNativeType, Buffer};
     use arrow_data::ArrayDataBuilder;
     use arrow_schema::{DataType as ArrowDataType, Field, Fields, Schema};
@@ -3082,7 +3093,7 @@ mod tests {
                     .unwrap();
 
                 let batches = reader.collect::<Result<Vec<_>, _>>().unwrap();
-                let actual = concat_batches(&batch.schema(), &batches).unwrap();
+                let actual = concat_batches(batch.schema_ref(), &batches).unwrap();
                 assert_eq!(actual.num_rows(), selection.row_count());
 
                 let mut batch_offset = 0;

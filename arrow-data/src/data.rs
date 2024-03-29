@@ -22,12 +22,11 @@ use crate::bit_iterator::BitSliceIterator;
 use arrow_buffer::buffer::{BooleanBuffer, NullBuffer};
 use arrow_buffer::{bit_util, i256, ArrowNativeType, Buffer, MutableBuffer};
 use arrow_schema::{ArrowError, DataType, UnionMode};
-use std::convert::TryInto;
 use std::mem;
 use std::ops::Range;
 use std::sync::Arc;
 
-use crate::equal;
+use crate::{equal, validate_binary_view, validate_string_view};
 
 /// A collection of [`Buffer`]
 #[doc(hidden)]
@@ -109,18 +108,30 @@ pub(crate) fn new_buffers(data_type: &DataType, capacity: usize) -> [MutableBuff
             buffer.push(0i64);
             [buffer, MutableBuffer::new(capacity * mem::size_of::<u8>())]
         }
+        DataType::BinaryView | DataType::Utf8View => [
+            MutableBuffer::new(capacity * mem::size_of::<u128>()),
+            empty_buffer,
+        ],
         DataType::List(_) | DataType::Map(_, _) => {
             // offset buffer always starts with a zero
             let mut buffer = MutableBuffer::new((1 + capacity) * mem::size_of::<i32>());
             buffer.push(0i32);
             [buffer, empty_buffer]
         }
+        DataType::ListView(_) => [
+            MutableBuffer::new(capacity * mem::size_of::<i32>()),
+            MutableBuffer::new(capacity * mem::size_of::<i32>()),
+        ],
         DataType::LargeList(_) => {
             // offset buffer always starts with a zero
             let mut buffer = MutableBuffer::new((1 + capacity) * mem::size_of::<i64>());
             buffer.push(0i64);
             [buffer, empty_buffer]
         }
+        DataType::LargeListView(_) => [
+            MutableBuffer::new(capacity * mem::size_of::<i64>()),
+            MutableBuffer::new(capacity * mem::size_of::<i64>()),
+        ],
         DataType::FixedSizeBinary(size) => {
             [MutableBuffer::new(capacity * *size as usize), empty_buffer]
         }
@@ -145,29 +156,6 @@ pub(crate) fn new_buffers(data_type: &DataType, capacity: usize) -> [MutableBuff
                 }
             }
         }
-    }
-}
-
-/// Maps 2 [`MutableBuffer`]s into a vector of [Buffer]s whose size depends on `data_type`.
-#[inline]
-pub(crate) fn into_buffers(
-    data_type: &DataType,
-    buffer1: MutableBuffer,
-    buffer2: MutableBuffer,
-) -> Vec<Buffer> {
-    match data_type {
-        DataType::Null | DataType::Struct(_) | DataType::FixedSizeList(_, _) => vec![],
-        DataType::Utf8 | DataType::Binary | DataType::LargeUtf8 | DataType::LargeBinary => {
-            vec![buffer1.into(), buffer2.into()]
-        }
-        DataType::Union(_, mode) => {
-            match mode {
-                // Based on Union's DataTypeLayout
-                UnionMode::Sparse => vec![buffer1.into()],
-                UnionMode::Dense => vec![buffer1.into(), buffer2.into()],
-            }
-        }
-        _ => vec![buffer1.into()],
     }
 }
 
@@ -734,7 +722,10 @@ impl ArrayData {
             )));
         }
 
-        if self.buffers.len() != layout.buffers.len() {
+        // Check data buffers length for view types and other types
+        if self.buffers.len() < layout.buffers.len()
+            || (!layout.variadic && self.buffers.len() != layout.buffers.len())
+        {
             return Err(ArrowError::InvalidArgumentError(format!(
                 "Expected {} buffers in array of type {:?}, got {}",
                 layout.buffers.len(),
@@ -1229,6 +1220,14 @@ impl ArrayData {
             DataType::LargeUtf8 => self.validate_utf8::<i64>(),
             DataType::Binary => self.validate_offsets_full::<i32>(self.buffers[1].len()),
             DataType::LargeBinary => self.validate_offsets_full::<i64>(self.buffers[1].len()),
+            DataType::BinaryView => {
+                let views = self.typed_buffer::<u128>(0, self.len)?;
+                validate_binary_view(views, &self.buffers[1..])
+            }
+            DataType::Utf8View => {
+                let views = self.typed_buffer::<u128>(0, self.len)?;
+                validate_string_view(views, &self.buffers[1..])
+            }
             DataType::List(_) | DataType::Map(_, _) => {
                 let child = &self.child_data[0];
                 self.validate_offsets_full::<i32>(child.len)
@@ -1500,10 +1499,12 @@ pub fn layout(data_type: &DataType) -> DataTypeLayout {
         DataType::Null => DataTypeLayout {
             buffers: vec![],
             can_contain_null_mask: false,
+            variadic: false,
         },
         DataType::Boolean => DataTypeLayout {
             buffers: vec![BufferSpec::BitMap],
             can_contain_null_mask: true,
+            variadic: false,
         },
         DataType::Int8 => DataTypeLayout::new_fixed_width::<i8>(),
         DataType::Int16 => DataTypeLayout::new_fixed_width::<i16>(),
@@ -1535,14 +1536,19 @@ pub fn layout(data_type: &DataType) -> DataTypeLayout {
             DataTypeLayout {
                 buffers: vec![spec],
                 can_contain_null_mask: true,
+                variadic: false,
             }
         }
         DataType::Binary => DataTypeLayout::new_binary::<i32>(),
         DataType::LargeBinary => DataTypeLayout::new_binary::<i64>(),
         DataType::Utf8 => DataTypeLayout::new_binary::<i32>(),
         DataType::LargeUtf8 => DataTypeLayout::new_binary::<i64>(),
+        DataType::BinaryView | DataType::Utf8View => DataTypeLayout::new_view(),
         DataType::FixedSizeList(_, _) => DataTypeLayout::new_empty(), // all in child data
         DataType::List(_) => DataTypeLayout::new_fixed_width::<i32>(),
+        DataType::ListView(_) | DataType::LargeListView(_) => {
+            unimplemented!("ListView/LargeListView not implemented")
+        }
         DataType::LargeList(_) => DataTypeLayout::new_fixed_width::<i64>(),
         DataType::Map(_, _) => DataTypeLayout::new_fixed_width::<i32>(),
         DataType::Struct(_) => DataTypeLayout::new_empty(), // all in child data,
@@ -1569,6 +1575,7 @@ pub fn layout(data_type: &DataType) -> DataTypeLayout {
                     }
                 },
                 can_contain_null_mask: false,
+                variadic: false,
             }
         }
         DataType::Dictionary(key_type, _value_type) => layout(key_type),
@@ -1584,6 +1591,11 @@ pub struct DataTypeLayout {
 
     /// Can contain a null bitmask
     pub can_contain_null_mask: bool,
+
+    /// This field only applies to the view type [`DataType::BinaryView`] and [`DataType::Utf8View`]
+    /// If `variadic` is true, the number of buffers expected is only lower-bounded by
+    /// buffers.len(). Buffers that exceed the lower bound are legal.
+    pub variadic: bool,
 }
 
 impl DataTypeLayout {
@@ -1595,6 +1607,7 @@ impl DataTypeLayout {
                 alignment: mem::align_of::<T>(),
             }],
             can_contain_null_mask: true,
+            variadic: false,
         }
     }
 
@@ -1605,6 +1618,7 @@ impl DataTypeLayout {
         Self {
             buffers: vec![],
             can_contain_null_mask: true,
+            variadic: false,
         }
     }
 
@@ -1623,6 +1637,19 @@ impl DataTypeLayout {
                 BufferSpec::VariableWidth,
             ],
             can_contain_null_mask: true,
+            variadic: false,
+        }
+    }
+
+    /// Describes a view type
+    pub fn new_view() -> Self {
+        Self {
+            buffers: vec![BufferSpec::FixedWidth {
+                byte_width: mem::size_of::<u128>(),
+                alignment: mem::align_of::<u128>(),
+            }],
+            can_contain_null_mask: true,
+            variadic: true,
         }
     }
 }
@@ -1828,7 +1855,7 @@ impl From<ArrayData> for ArrayDataBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow_schema::{Field, UnionFields};
+    use arrow_schema::Field;
 
     // See arrow/tests/array_data_validation.rs for test of array validation
 
@@ -2074,23 +2101,6 @@ mod tests {
         assert!(contains_nulls(Some(&buffer), 0, 3));
         assert!(!contains_nulls(Some(&buffer), 3, 2));
         assert!(!contains_nulls(Some(&buffer), 0, 0));
-    }
-
-    #[test]
-    fn test_into_buffers() {
-        let data_types = vec![
-            DataType::Union(UnionFields::empty(), UnionMode::Dense),
-            DataType::Union(UnionFields::empty(), UnionMode::Sparse),
-        ];
-
-        for data_type in data_types {
-            let buffers = new_buffers(&data_type, 0);
-            let [buffer1, buffer2] = buffers;
-            let buffers = into_buffers(&data_type, buffer1, buffer2);
-
-            let layout = layout(&data_type);
-            assert_eq!(buffers.len(), layout.buffers.len());
-        }
     }
 
     #[test]

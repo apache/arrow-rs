@@ -17,8 +17,6 @@
 
 //! Contains functionality to load an ArrayData from the C Data Interface
 
-use std::convert::TryFrom;
-
 use crate::{error::Result, ffi};
 
 use super::ArrayRef;
@@ -61,7 +59,6 @@ mod tests {
         datatypes::{DataType, Field},
         ffi::{from_ffi, FFI_ArrowArray, FFI_ArrowSchema},
     };
-    use std::convert::TryFrom;
     use std::sync::Arc;
 
     fn test_round_trip(expected: &ArrayData) -> Result<()> {

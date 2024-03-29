@@ -402,7 +402,6 @@ pub type LargeBinaryDictionaryBuilder<K> = GenericByteDictionaryBuilder<K, Gener
 mod tests {
     use super::*;
 
-    use crate::array::Array;
     use crate::array::Int8Array;
     use crate::types::{Int16Type, Int32Type, Int8Type, Utf8Type};
     use crate::{BinaryArray, StringArray};

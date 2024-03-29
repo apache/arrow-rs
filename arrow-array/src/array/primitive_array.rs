@@ -856,13 +856,14 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
 
         let (slice, null_buffer) = builder.slices_mut();
 
-        match try_for_each_valid_idx(len, 0, null_count, null_buffer.as_deref(), |idx| {
+        let r = try_for_each_valid_idx(len, 0, null_count, null_buffer.as_deref(), |idx| {
             unsafe { *slice.get_unchecked_mut(idx) = op(*slice.get_unchecked(idx))? };
             Ok::<_, E>(())
-        }) {
-            Ok(_) => {}
-            Err(err) => return Ok(Err(err)),
-        };
+        });
+
+        if let Err(err) = r {
+            return Ok(Err(err));
+        }
 
         Ok(Ok(builder.finish()))
     }
@@ -1092,20 +1093,31 @@ where
 impl<T: ArrowPrimitiveType> std::fmt::Debug for PrimitiveArray<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         let data_type = self.data_type();
+
         write!(f, "PrimitiveArray<{data_type:?}>\n[\n")?;
         print_long_array(self, f, |array, index, f| match data_type {
             DataType::Date32 | DataType::Date64 => {
                 let v = self.value(index).to_isize().unwrap() as i64;
                 match as_date::<T>(v) {
                     Some(date) => write!(f, "{date:?}"),
-                    None => write!(f, "null"),
+                    None => {
+                        write!(
+                            f,
+                            "Cast error: Failed to convert {v} to temporal for {data_type:?}"
+                        )
+                    }
                 }
             }
             DataType::Time32(_) | DataType::Time64(_) => {
                 let v = self.value(index).to_isize().unwrap() as i64;
                 match as_time::<T>(v) {
                     Some(time) => write!(f, "{time:?}"),
-                    None => write!(f, "null"),
+                    None => {
+                        write!(
+                            f,
+                            "Cast error: Failed to convert {v} to temporal for {data_type:?}"
+                        )
+                    }
                 }
             }
             DataType::Timestamp(_, tz_string_opt) => {
@@ -1489,9 +1501,8 @@ mod tests {
     use super::*;
     use crate::builder::{Decimal128Builder, Decimal256Builder};
     use crate::cast::downcast_array;
-    use crate::{ArrayRef, BooleanArray};
+    use crate::BooleanArray;
     use arrow_schema::TimeUnit;
-    use std::sync::Arc;
 
     #[test]
     fn test_primitive_array_from_vec() {
@@ -1545,7 +1556,10 @@ mod tests {
                 // roundtrip to and from datetime
                 assert_eq!(
                     1550902545147,
-                    arr.value_as_datetime(i).unwrap().timestamp_millis()
+                    arr.value_as_datetime(i)
+                        .unwrap()
+                        .and_utc()
+                        .timestamp_millis()
                 );
             } else {
                 assert!(arr.is_null(i));
@@ -1947,7 +1961,8 @@ mod tests {
         // chrono::NaiveDatetime::from_timestamp_opt returns None while input is invalid
         let arr: PrimitiveArray<Time32SecondType> = vec![-7201, -60054].into();
         assert_eq!(
-            "PrimitiveArray<Time32(Second)>\n[\n  null,\n  null,\n]",
+        "PrimitiveArray<Time32(Second)>\n[\n  Cast error: Failed to convert -7201 to temporal for Time32(Second),\n  Cast error: Failed to convert -60054 to temporal for Time32(Second),\n]",
+            // "PrimitiveArray<Time32(Second)>\n[\n  null,\n  null,\n]",
             format!("{arr:?}")
         )
     }
@@ -2480,5 +2495,89 @@ mod tests {
     #[should_panic(expected = "PrimitiveArray expected data type Int32 got Date32")]
     fn test_with_data_type() {
         Int32Array::new(vec![1, 2, 3, 4].into(), None).with_data_type(DataType::Date32);
+    }
+
+    #[test]
+    fn test_time_32second_output() {
+        let array: Time32SecondArray = vec![
+            Some(-1),
+            Some(0),
+            Some(86_399),
+            Some(86_400),
+            Some(86_401),
+            None,
+        ]
+        .into();
+        let debug_str = format!("{:?}", array);
+        assert_eq!("PrimitiveArray<Time32(Second)>\n[\n  Cast error: Failed to convert -1 to temporal for Time32(Second),\n  00:00:00,\n  23:59:59,\n  Cast error: Failed to convert 86400 to temporal for Time32(Second),\n  Cast error: Failed to convert 86401 to temporal for Time32(Second),\n  null,\n]",
+    debug_str
+    );
+    }
+
+    #[test]
+    fn test_time_32millisecond_debug_output() {
+        let array: Time32MillisecondArray = vec![
+            Some(-1),
+            Some(0),
+            Some(86_399_000),
+            Some(86_400_000),
+            Some(86_401_000),
+            None,
+        ]
+        .into();
+        let debug_str = format!("{:?}", array);
+        assert_eq!("PrimitiveArray<Time32(Millisecond)>\n[\n  Cast error: Failed to convert -1 to temporal for Time32(Millisecond),\n  00:00:00,\n  23:59:59,\n  Cast error: Failed to convert 86400000 to temporal for Time32(Millisecond),\n  Cast error: Failed to convert 86401000 to temporal for Time32(Millisecond),\n  null,\n]",
+            debug_str
+        );
+    }
+
+    #[test]
+    fn test_time_64nanosecond_debug_output() {
+        let array: Time64NanosecondArray = vec![
+            Some(-1),
+            Some(0),
+            Some(86_399 * 1_000_000_000),
+            Some(86_400 * 1_000_000_000),
+            Some(86_401 * 1_000_000_000),
+            None,
+        ]
+        .into();
+        let debug_str = format!("{:?}", array);
+        assert_eq!(
+        "PrimitiveArray<Time64(Nanosecond)>\n[\n  Cast error: Failed to convert -1 to temporal for Time64(Nanosecond),\n  00:00:00,\n  23:59:59,\n  Cast error: Failed to convert 86400000000000 to temporal for Time64(Nanosecond),\n  Cast error: Failed to convert 86401000000000 to temporal for Time64(Nanosecond),\n  null,\n]",
+            debug_str
+        );
+    }
+
+    #[test]
+    fn test_time_64microsecond_debug_output() {
+        let array: Time64MicrosecondArray = vec![
+            Some(-1),
+            Some(0),
+            Some(86_399 * 1_000_000),
+            Some(86_400 * 1_000_000),
+            Some(86_401 * 1_000_000),
+            None,
+        ]
+        .into();
+        let debug_str = format!("{:?}", array);
+        assert_eq!("PrimitiveArray<Time64(Microsecond)>\n[\n  Cast error: Failed to convert -1 to temporal for Time64(Microsecond),\n  00:00:00,\n  23:59:59,\n  Cast error: Failed to convert 86400000000 to temporal for Time64(Microsecond),\n  Cast error: Failed to convert 86401000000 to temporal for Time64(Microsecond),\n  null,\n]", debug_str);
+    }
+
+    #[test]
+    fn test_primitive_with_nulls_into_builder() {
+        let array: Int32Array = vec![
+            Some(1),
+            None,
+            Some(3),
+            Some(4),
+            None,
+            Some(7),
+            None,
+            Some(8),
+        ]
+        .into_iter()
+        .collect();
+        let _ = array.into_builder();
     }
 }

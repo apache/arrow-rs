@@ -17,7 +17,6 @@
 
 use std::alloc::Layout;
 use std::fmt::Debug;
-use std::iter::FromIterator;
 use std::ptr::NonNull;
 use std::sync::Arc;
 
@@ -172,23 +171,33 @@ impl Buffer {
 
     /// Returns a new [Buffer] that is a slice of this buffer starting at `offset`.
     /// Doing so allows the same memory region to be shared between buffers.
+    ///
     /// # Panics
+    ///
     /// Panics iff `offset` is larger than `len`.
     pub fn slice(&self, offset: usize) -> Self {
+        let mut s = self.clone();
+        s.advance(offset);
+        s
+    }
+
+    /// Increases the offset of this buffer by `offset`
+    ///
+    /// # Panics
+    ///
+    /// Panics iff `offset` is larger than `len`.
+    #[inline]
+    pub fn advance(&mut self, offset: usize) {
         assert!(
             offset <= self.length,
             "the offset of the new Buffer cannot exceed the existing length"
         );
+        self.length -= offset;
         // Safety:
         // This cannot overflow as
         // `self.offset + self.length < self.data.len()`
         // `offset < self.length`
-        let ptr = unsafe { self.ptr.add(offset) };
-        Self {
-            data: self.data.clone(),
-            length: self.length - offset,
-            ptr,
-        }
+        self.ptr = unsafe { self.ptr.add(offset) };
     }
 
     /// Returns a new [Buffer] that is a slice of this buffer starting at `offset`,
@@ -423,25 +432,8 @@ impl Buffer {
 
 impl<T: ArrowNativeType> FromIterator<T> for Buffer {
     fn from_iter<I: IntoIterator<Item = T>>(iter: I) -> Self {
-        let mut iterator = iter.into_iter();
-        let size = std::mem::size_of::<T>();
-
-        // first iteration, which will likely reserve sufficient space for the buffer.
-        let mut buffer = match iterator.next() {
-            None => MutableBuffer::new(0),
-            Some(element) => {
-                let (lower, _) = iterator.size_hint();
-                let mut buffer = MutableBuffer::new(lower.saturating_add(1) * size);
-                unsafe {
-                    std::ptr::write(buffer.as_mut_ptr() as *mut T, element);
-                    buffer.set_len(size);
-                }
-                buffer
-            }
-        };
-
-        buffer.extend_from_iter(iterator);
-        buffer.into()
+        let vec = Vec::from_iter(iter);
+        Buffer::from_vec(vec)
     }
 }
 
@@ -819,5 +811,12 @@ mod tests {
         let b = Buffer::from(b);
         let b = b.into_vec::<u32>().unwrap();
         assert_eq!(b, &[1, 3, 5]);
+    }
+
+    #[test]
+    #[should_panic(expected = "capacity overflow")]
+    fn test_from_iter_overflow() {
+        let iter_len = usize::MAX / std::mem::size_of::<u64>() + 1;
+        let _ = Buffer::from_iter(std::iter::repeat(0_u64).take(iter_len));
     }
 }

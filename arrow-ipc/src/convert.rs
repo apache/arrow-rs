@@ -17,12 +17,17 @@
 
 //! Utilities for converting between IPC types and native Arrow types
 
+use arrow_buffer::Buffer;
 use arrow_schema::*;
-use flatbuffers::{FlatBufferBuilder, ForwardsUOffset, UnionWIPOffset, Vector, WIPOffset};
+use flatbuffers::{
+    FlatBufferBuilder, ForwardsUOffset, UnionWIPOffset, Vector, Verifiable, Verifier,
+    VerifierOptions, WIPOffset,
+};
 use std::collections::HashMap;
+use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 
-use crate::{size_prefixed_root_as_message, KeyValue, CONTINUATION_MARKER};
+use crate::{size_prefixed_root_as_message, KeyValue, Message, CONTINUATION_MARKER};
 use DataType::*;
 
 /// Serialize a schema in IPC format
@@ -543,6 +548,7 @@ pub(crate) fn get_fb_field_type<'a>(
                 .as_union_value(),
             children: Some(fbb.create_vector(&empty_fields[..])),
         },
+        BinaryView | Utf8View => unimplemented!("unimplemented"),
         Utf8 => FBFieldType {
             type_type: crate::Type::Utf8,
             type_: crate::Utf8Builder::new(fbb).finish().as_union_value(),
@@ -663,6 +669,7 @@ pub(crate) fn get_fb_field_type<'a>(
                 children: Some(fbb.create_vector(&[child])),
             }
         }
+        ListView(_) | LargeListView(_) => unimplemented!("ListView/LargeListView not implemented"),
         LargeList(ref list_type) => {
             let child = build_field(fbb, list_type);
             FBFieldType {
@@ -804,6 +811,45 @@ pub(crate) fn get_fb_dictionary<'a>(
     builder.finish()
 }
 
+/// An owned container for a validated [`Message`]
+///
+/// Safely decoding a flatbuffer requires validating the various embedded offsets,
+/// see [`Verifier`]. This is a potentially expensive operation, and it is therefore desirable
+/// to only do this once. [`crate::root_as_message`] performs this validation on construction,
+/// however, it returns a [`Message`] borrowing the provided byte slice. This prevents
+/// storing this [`Message`] in the same data structure that owns the buffer, as this
+/// would require self-referential borrows.
+///
+/// [`MessageBuffer`] solves this problem by providing a safe API for a [`Message`]
+/// without a lifetime bound.
+#[derive(Clone)]
+pub struct MessageBuffer(Buffer);
+
+impl Debug for MessageBuffer {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        self.as_ref().fmt(f)
+    }
+}
+
+impl MessageBuffer {
+    /// Try to create a [`MessageBuffer`] from the provided [`Buffer`]
+    pub fn try_new(buf: Buffer) -> Result<Self, ArrowError> {
+        let opts = VerifierOptions::default();
+        let mut v = Verifier::new(&opts, &buf);
+        <ForwardsUOffset<Message>>::run_verifier(&mut v, 0).map_err(|err| {
+            ArrowError::ParseError(format!("Unable to get root as message: {err:?}"))
+        })?;
+        Ok(Self(buf))
+    }
+
+    /// Return the [`Message`]
+    #[inline]
+    pub fn as_ref(&self) -> Message<'_> {
+        // SAFETY: Run verifier on construction
+        unsafe { crate::root_as_message_unchecked(&self.0) }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -877,6 +923,12 @@ mod tests {
                 Field::new("utf8", DataType::Utf8, false),
                 Field::new("binary", DataType::Binary, false),
                 Field::new_list("list[u8]", Field::new("item", DataType::UInt8, false), true),
+                Field::new_fixed_size_list(
+                    "fixed_size_list[u8]",
+                    Field::new("item", DataType::UInt8, false),
+                    2,
+                    true,
+                ),
                 Field::new_list(
                     "list[struct<float32, int32, bool>]",
                     Field::new_struct(

@@ -80,6 +80,32 @@ mod levels;
 ///
 /// assert_eq!(to_write, read);
 /// ```
+///
+/// ## Memory Limiting
+///
+/// The nature of parquet forces buffering of an entire row group before it can be flushed
+/// to the underlying writer. Data is buffered in its encoded form, to reduce memory usage,
+/// but if writing rows containing large strings or very nested data, this may still result in
+/// non-trivial memory usage.
+///
+/// [`ArrowWriter::in_progress_size`] can be used to track the size of the buffered row group,
+/// and potentially trigger an early flush of a row group based on a memory threshold and/or
+/// global memory pressure. However, users should be aware that smaller row groups will result
+/// in higher metadata overheads, and may worsen compression ratios and query performance.
+///
+/// ```no_run
+/// # use std::io::Write;
+/// # use arrow_array::RecordBatch;
+/// # use parquet::arrow::ArrowWriter;
+/// # let mut writer: ArrowWriter<Vec<u8>> = todo!();
+/// # let batch: RecordBatch = todo!();
+/// writer.write(&batch).unwrap();
+/// // Trigger an early flush if buffered size exceeds 1_000_000
+/// if writer.in_progress_size() > 1_000_000 {
+///     writer.flush().unwrap();
+/// }
+/// ```
+///
 pub struct ArrowWriter<W: Write> {
     /// Underlying Parquet writer
     writer: SerializedFileWriter<W>,
@@ -179,6 +205,11 @@ impl<W: Write + Send> ArrowWriter<W> {
             .unwrap_or_default()
     }
 
+    /// Returns the number of bytes written by this instance
+    pub fn bytes_written(&self) -> usize {
+        self.writer.bytes_written()
+    }
+
     /// Encodes the provided [`RecordBatch`]
     ///
     /// If this would cause the current row group to exceed [`WriterProperties::max_row_group_size`]
@@ -239,6 +270,19 @@ impl<W: Write + Send> ArrowWriter<W> {
         self.writer.append_key_value_metadata(kv_metadata)
     }
 
+    /// Returns a reference to the underlying writer.
+    pub fn inner(&self) -> &W {
+        self.writer.inner()
+    }
+
+    /// Returns a mutable reference to the underlying writer.
+    ///
+    /// It is inadvisable to directly write to the underlying writer, doing so
+    /// will likely result in a corrupt parquet file
+    pub fn inner_mut(&mut self) -> &mut W {
+        self.writer.inner_mut()
+    }
+
     /// Flushes any outstanding data and returns the underlying writer.
     pub fn into_inner(mut self) -> Result<W> {
         self.flush()?;
@@ -246,9 +290,18 @@ impl<W: Write + Send> ArrowWriter<W> {
     }
 
     /// Close and finalize the underlying Parquet writer
-    pub fn close(mut self) -> Result<crate::format::FileMetaData> {
+    ///
+    /// Unlike [`Self::close`] this does not consume self
+    ///
+    /// Attempting to write after calling finish will result in an error
+    pub fn finish(&mut self) -> Result<crate::format::FileMetaData> {
         self.flush()?;
-        self.writer.close()
+        self.writer.finish()
+    }
+
+    /// Close and finalize the underlying Parquet writer
+    pub fn close(mut self) -> Result<crate::format::FileMetaData> {
+        self.finish()
     }
 }
 
@@ -949,18 +1002,15 @@ fn get_fsb_array_slice(
 mod tests {
     use super::*;
 
-    use bytes::Bytes;
     use std::fs::File;
-    use std::sync::Arc;
 
     use crate::arrow::arrow_reader::{ParquetRecordBatchReader, ParquetRecordBatchReaderBuilder};
     use crate::arrow::ARROW_SCHEMA_META_KEY;
     use arrow::datatypes::ToByteSlice;
-    use arrow::datatypes::{DataType, Field, Schema, UInt32Type, UInt8Type};
+    use arrow::datatypes::{DataType, Schema};
     use arrow::error::Result as ArrowResult;
     use arrow::util::pretty::pretty_format_batches;
     use arrow::{array::*, buffer::Buffer};
-    use arrow_array::RecordBatch;
     use arrow_buffer::NullBuffer;
     use arrow_schema::Fields;
 
@@ -1150,7 +1200,7 @@ mod tests {
         let schema = Schema::new(vec![string_field, binary_field]);
 
         let raw_string_values = vec!["foo", "bar", "baz", "quux"];
-        let raw_binary_values = vec![
+        let raw_binary_values = [
             b"foo".to_vec(),
             b"bar".to_vec(),
             b"baz".to_vec(),
@@ -2748,6 +2798,7 @@ mod tests {
         // starts empty
         assert_eq!(writer.in_progress_size(), 0);
         assert_eq!(writer.in_progress_rows(), 0);
+        assert_eq!(writer.bytes_written(), 4); // Initial header
         writer.write(&batch).unwrap();
 
         // updated on write
@@ -2760,10 +2811,12 @@ mod tests {
         assert!(writer.in_progress_size() > initial_size);
         assert_eq!(writer.in_progress_rows(), 10);
 
-        // cleared on flush
+        // in progress tracking is cleared, but the overall data written is updated
+        let pre_flush_bytes_written = writer.bytes_written();
         writer.flush().unwrap();
         assert_eq!(writer.in_progress_size(), 0);
         assert_eq!(writer.in_progress_rows(), 0);
+        assert!(writer.bytes_written() > pre_flush_bytes_written);
 
         writer.close().unwrap();
     }

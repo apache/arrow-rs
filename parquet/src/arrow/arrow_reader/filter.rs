@@ -96,6 +96,10 @@ where
 /// leaves 99% of the rows, it may be better to not filter the data from parquet and
 /// apply the filter after the RecordBatch has been fully decoded.
 ///
+/// Additionally, even if a predicate eliminates a moderate number of rows, it may still be faster
+/// to filter the data after the RecordBatch has been fully decoded, if the eliminated rows are
+/// not contiguous.
+///
 /// [`RowSelection`]: crate::arrow::arrow_reader::RowSelection
 pub struct RowFilter {
     /// A list of [`ArrowPredicate`]

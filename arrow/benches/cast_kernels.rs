@@ -21,6 +21,7 @@ use criterion::Criterion;
 use rand::distributions::{Distribution, Standard, Uniform};
 use rand::Rng;
 
+use chrono::DateTime;
 use std::sync::Arc;
 
 extern crate arrow;
@@ -30,7 +31,6 @@ use arrow::compute::cast;
 use arrow::datatypes::*;
 use arrow::util::bench_util::*;
 use arrow::util::test_util::seedable_rng;
-use arrow_buffer::i256;
 
 fn build_array<T: ArrowPrimitiveType>(size: usize) -> ArrayRef
 where
@@ -63,8 +63,6 @@ fn build_utf8_date_array(size: usize, with_nulls: bool) -> ArrayRef {
 }
 
 fn build_utf8_date_time_array(size: usize, with_nulls: bool) -> ArrayRef {
-    use chrono::NaiveDateTime;
-
     // use random numbers to avoid spurious compiler optimizations wrt to branching
     let mut rng = seedable_rng();
     let mut builder = StringBuilder::new();
@@ -74,7 +72,7 @@ fn build_utf8_date_time_array(size: usize, with_nulls: bool) -> ArrayRef {
         if with_nulls && rng.gen::<f32>() > 0.8 {
             builder.append_null();
         } else {
-            let string = NaiveDateTime::from_timestamp_opt(rng.sample(range), 0)
+            let string = DateTime::from_timestamp(rng.sample(range), 0)
                 .unwrap()
                 .format("%Y-%m-%dT%H:%M:%S")
                 .to_string();
@@ -207,7 +205,9 @@ fn add_benchmark(c: &mut Criterion) {
     c.bench_function("cast f32 to string 512", |b| {
         b.iter(|| cast_array(&f32_array, DataType::Utf8))
     });
-
+    c.bench_function("cast f64 to string 512", |b| {
+        b.iter(|| cast_array(&f64_array, DataType::Utf8))
+    });
     c.bench_function("cast timestamp_ms to i64 512", |b| {
         b.iter(|| cast_array(&time_ms_array, DataType::Int64))
     });

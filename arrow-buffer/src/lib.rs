@@ -17,6 +17,9 @@
 
 //! Low-level buffer abstractions for [Apache Arrow Rust](https://docs.rs/arrow)
 
+// used by [`buffer::mutable::dangling_ptr`]
+#![cfg_attr(miri, feature(strict_provenance))]
+
 pub mod alloc;
 pub mod buffer;
 pub use buffer::*;

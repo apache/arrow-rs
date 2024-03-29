@@ -45,11 +45,8 @@ use arrow_ipc::convert::try_schema_from_ipc_buffer;
 use base64::prelude::BASE64_STANDARD;
 use base64::Engine;
 use bytes::Bytes;
-use std::{
-    convert::{TryFrom, TryInto},
-    fmt,
-    ops::Deref,
-};
+use prost_types::Timestamp;
+use std::{fmt, ops::Deref};
 
 type ArrowResult<T> = std::result::Result<T, ArrowError>;
 
@@ -97,6 +94,9 @@ pub mod error;
 pub use gen::Action;
 pub use gen::ActionType;
 pub use gen::BasicAuth;
+pub use gen::CancelFlightInfoRequest;
+pub use gen::CancelFlightInfoResult;
+pub use gen::CancelStatus;
 pub use gen::Criteria;
 pub use gen::Empty;
 pub use gen::FlightData;
@@ -106,7 +106,9 @@ pub use gen::FlightInfo;
 pub use gen::HandshakeRequest;
 pub use gen::HandshakeResponse;
 pub use gen::Location;
+pub use gen::PollInfo;
 pub use gen::PutResult;
+pub use gen::RenewFlightEndpointRequest;
 pub use gen::Result;
 pub use gen::SchemaResult;
 pub use gen::Ticket;
@@ -225,7 +227,7 @@ impl fmt::Display for FlightEndpoint {
         write!(f, " ticket: ")?;
         match &self.ticket {
             Some(value) => write!(f, "{value}"),
-            None => write!(f, " none"),
+            None => write!(f, " None"),
         }?;
         write!(f, ", location: [")?;
         let mut sep = "";
@@ -234,6 +236,13 @@ impl fmt::Display for FlightEndpoint {
             sep = ", ";
         }
         write!(f, "]")?;
+        write!(f, ", expiration_time:")?;
+        match &self.expiration_time {
+            Some(value) => write!(f, " {value}"),
+            None => write!(f, " None"),
+        }?;
+        write!(f, ", app_metadata: ")?;
+        limited_fmt(f, &self.app_metadata, 8)?;
         write!(f, " }}")
     }
 }
@@ -257,6 +266,68 @@ impl fmt::Display for FlightInfo {
         }
         write!(f, "], total_records: {}", self.total_records)?;
         write!(f, ", total_bytes: {}", self.total_bytes)?;
+        write!(f, ", ordered: {}", self.ordered)?;
+        write!(f, ", app_metadata: ")?;
+        limited_fmt(f, &self.app_metadata, 8)?;
+        write!(f, " }}")
+    }
+}
+
+impl fmt::Display for PollInfo {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "PollInfo {{")?;
+        write!(f, " info:")?;
+        match &self.info {
+            Some(value) => write!(f, " {value}"),
+            None => write!(f, " None"),
+        }?;
+        write!(f, ", descriptor:")?;
+        match &self.flight_descriptor {
+            Some(d) => write!(f, " {d}"),
+            None => write!(f, " None"),
+        }?;
+        write!(f, ", progress:")?;
+        match &self.progress {
+            Some(value) => write!(f, " {value}"),
+            None => write!(f, " None"),
+        }?;
+        write!(f, ", expiration_time:")?;
+        match &self.expiration_time {
+            Some(value) => write!(f, " {value}"),
+            None => write!(f, " None"),
+        }?;
+        write!(f, " }}")
+    }
+}
+
+impl fmt::Display for CancelFlightInfoRequest {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "CancelFlightInfoRequest {{")?;
+        write!(f, " info: ")?;
+        match &self.info {
+            Some(value) => write!(f, "{value}")?,
+            None => write!(f, "None")?,
+        };
+        write!(f, " }}")
+    }
+}
+
+impl fmt::Display for CancelFlightInfoResult {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "CancelFlightInfoResult {{")?;
+        write!(f, " status: {}", self.status().as_str_name())?;
+        write!(f, " }}")
+    }
+}
+
+impl fmt::Display for RenewFlightEndpointRequest {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "RenewFlightEndpointRequest {{")?;
+        write!(f, " endpoint: ")?;
+        match &self.endpoint {
+            Some(value) => write!(f, "{value}")?,
+            None => write!(f, "None")?,
+        };
         write!(f, " }}")
     }
 }
@@ -472,9 +543,6 @@ impl FlightInfo {
     ///   // Encode the Arrow schema
     ///   .try_with_schema(&get_schema())
     ///   .expect("encoding failed")
-    ///   .with_descriptor(
-    ///      FlightDescriptor::new_cmd("a command")
-    ///   )
     ///   .with_endpoint(
     ///      FlightEndpoint::new()
     ///        .with_ticket(Ticket::new("ticket contents")
@@ -493,6 +561,7 @@ impl FlightInfo {
             // https://github.com/apache/arrow-rs/blob/17ca4d51d0490f9c65f5adde144f677dbc8300e7/format/Flight.proto#L287-L289
             total_records: -1,
             total_bytes: -1,
+            app_metadata: Bytes::new(),
         }
     }
 
@@ -546,12 +615,103 @@ impl FlightInfo {
         self.ordered = ordered;
         self
     }
+
+    /// Add optional application specific metadata to the message
+    pub fn with_app_metadata(mut self, app_metadata: impl Into<Bytes>) -> Self {
+        self.app_metadata = app_metadata.into();
+        self
+    }
+}
+
+impl PollInfo {
+    /// Create a new, empty [`PollInfo`], providing information for a long-running query
+    ///
+    /// # Example:
+    /// ```
+    /// # use arrow_flight::{FlightInfo, PollInfo, FlightDescriptor};
+    /// # use prost_types::Timestamp;
+    /// // Create a new PollInfo
+    /// let poll_info = PollInfo::new()
+    ///   .with_info(FlightInfo::new())
+    ///   .with_descriptor(FlightDescriptor::new_cmd("RUN QUERY"))
+    ///   .try_with_progress(0.5)
+    ///   .expect("progress should've been valid")
+    ///   .with_expiration_time(
+    ///     "1970-01-01".parse().expect("invalid timestamp")
+    ///   );
+    /// ```
+    pub fn new() -> Self {
+        Self {
+            info: None,
+            flight_descriptor: None,
+            progress: None,
+            expiration_time: None,
+        }
+    }
+
+    /// Add the current available results for the poll call as a [`FlightInfo`]
+    pub fn with_info(mut self, info: FlightInfo) -> Self {
+        self.info = Some(info);
+        self
+    }
+
+    /// Add a [`FlightDescriptor`] that the client should use for the next poll call,
+    /// if the query is not yet complete
+    pub fn with_descriptor(mut self, flight_descriptor: FlightDescriptor) -> Self {
+        self.flight_descriptor = Some(flight_descriptor);
+        self
+    }
+
+    /// Set the query progress if known. Must be in the range [0.0, 1.0] else this will
+    /// return an error
+    pub fn try_with_progress(mut self, progress: f64) -> ArrowResult<Self> {
+        if !(0.0..=1.0).contains(&progress) {
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "PollInfo progress must be in the range [0.0, 1.0], got {progress}"
+            )));
+        }
+        self.progress = Some(progress);
+        Ok(self)
+    }
+
+    /// Specify expiration time for this request
+    pub fn with_expiration_time(mut self, expiration_time: Timestamp) -> Self {
+        self.expiration_time = Some(expiration_time);
+        self
+    }
 }
 
 impl<'a> SchemaAsIpc<'a> {
     pub fn new(schema: &'a Schema, options: &'a IpcWriteOptions) -> Self {
         SchemaAsIpc {
             pair: (schema, options),
+        }
+    }
+}
+
+impl CancelFlightInfoRequest {
+    /// Create a new [`CancelFlightInfoRequest`], providing the [`FlightInfo`]
+    /// of the query to cancel.
+    pub fn new(info: FlightInfo) -> Self {
+        Self { info: Some(info) }
+    }
+}
+
+impl CancelFlightInfoResult {
+    /// Create a new [`CancelFlightInfoResult`] from the provided [`CancelStatus`].
+    pub fn new(status: CancelStatus) -> Self {
+        Self {
+            status: status as i32,
+        }
+    }
+}
+
+impl RenewFlightEndpointRequest {
+    /// Create a new [`RenewFlightEndpointRequest`], providing the [`FlightEndpoint`]
+    /// for which is being requested an extension of its expiration.
+    pub fn new(endpoint: FlightEndpoint) -> Self {
+        Self {
+            endpoint: Some(endpoint),
         }
     }
 }
@@ -631,6 +791,18 @@ impl FlightEndpoint {
     /// [Flight Spec]: https://github.com/apache/arrow-rs/blob/17ca4d51d0490f9c65f5adde144f677dbc8300e7/format/Flight.proto#L307C2-L312
     pub fn with_location(mut self, uri: impl Into<String>) -> Self {
         self.location.push(Location { uri: uri.into() });
+        self
+    }
+
+    /// Specify expiration time for this stream
+    pub fn with_expiration_time(mut self, expiration_time: Timestamp) -> Self {
+        self.expiration_time = Some(expiration_time);
+        self
+    }
+
+    /// Add optional application specific metadata to the message
+    pub fn with_app_metadata(mut self, app_metadata: impl Into<Bytes>) -> Self {
+        self.app_metadata = app_metadata.into();
         self
     }
 }

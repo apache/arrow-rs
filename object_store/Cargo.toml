@@ -17,7 +17,7 @@
 
 [package]
 name = "object_store"
-version = "0.9.0"
+version = "0.9.1"
 edition = "2021"
 license = "MIT/Apache-2.0"
 readme = "README.md"
@@ -44,31 +44,34 @@ url = "2.2"
 walkdir = "2"
 
 # Cloud storage support
-base64 = { version = "0.21", default-features = false, features = ["std"], optional = true }
-hyper = { version = "0.14", default-features = false, optional = true }
+base64 = { version = "0.22", default-features = false, features = ["std"], optional = true }
+hyper = { version = "1.2", default-features = false, optional = true }
 quick-xml = { version = "0.31.0", features = ["serialize", "overlapped-lists"], optional = true }
 serde = { version = "1.0", default-features = false, features = ["derive"], optional = true }
 serde_json = { version = "1.0", default-features = false, optional = true }
 rand = { version = "0.8", default-features = false, features = ["std", "std_rng"], optional = true }
-reqwest = { version = "0.11", default-features = false, features = ["rustls-tls-native-roots"], optional = true }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-native-roots", "http2"], optional = true }
 ring = { version = "0.17", default-features = false, features = ["std"], optional = true }
 rustls-pemfile = { version = "2.0", default-features = false, features = ["std"], optional = true }
 tokio = { version = "1.25.0", features = ["sync", "macros", "rt", "time", "io-util"] }
+md-5 = { version = "0.10.6", default-features = false, optional = true }
 
 [target.'cfg(target_family="unix")'.dev-dependencies]
-nix = { version = "0.27.1", features = ["fs"] }
+nix = { version = "0.28.0", features = ["fs"] }
 
 [features]
 cloud = ["serde", "serde_json", "quick-xml", "hyper", "reqwest", "reqwest/json", "reqwest/stream", "chrono/serde", "base64", "rand", "ring"]
 azure = ["cloud"]
 gcp = ["cloud", "rustls-pemfile"]
-aws = ["cloud"]
+aws = ["cloud", "md-5"]
 http = ["cloud"]
 tls-webpki-roots = ["reqwest?/rustls-tls-webpki-roots"]
 
 [dev-dependencies] # In alphabetical order
 futures-test = "0.3"
-hyper = { version = "0.14.24", features = ["server"] }
+hyper = { version = "1.2", features = ["server"] }
+hyper-util = "0.1"
+http-body-util = "0.1"
 rand = "0.8"
 tempfile = "3.1.0"
 

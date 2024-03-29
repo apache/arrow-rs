@@ -61,6 +61,19 @@ impl<W: Write> TrackedWrite<W> {
         self.bytes_written
     }
 
+    /// Returns a reference to the underlying writer.
+    pub fn inner(&self) -> &W {
+        self.inner.get_ref()
+    }
+
+    /// Returns a mutable reference to the underlying writer.
+    ///
+    /// It is inadvisable to directly write to the underlying writer, doing so
+    /// will likely result in data corruption
+    pub fn inner_mut(&mut self) -> &mut W {
+        self.inner.get_mut()
+    }
+
     /// Returns the underlying writer.
     pub fn into_inner(self) -> Result<W> {
         self.inner.into_inner().map_err(|err| {
@@ -137,6 +150,7 @@ pub struct SerializedFileWriter<W: Write> {
     row_group_index: usize,
     // kv_metadatas will be appended to `props` when `write_metadata`
     kv_metadatas: Vec<KeyValue>,
+    finished: bool,
 }
 
 impl<W: Write> Debug for SerializedFileWriter<W> {
@@ -167,6 +181,7 @@ impl<W: Write + Send> SerializedFileWriter<W> {
             offset_indexes: Vec::new(),
             row_group_index: 0,
             kv_metadatas: Vec::new(),
+            finished: false,
         })
     }
 
@@ -210,11 +225,21 @@ impl<W: Write + Send> SerializedFileWriter<W> {
         &self.row_groups
     }
 
-    /// Closes and finalises file writer, returning the file metadata.
-    pub fn close(mut self) -> Result<parquet::FileMetaData> {
+    /// Close and finalize the underlying Parquet writer
+    ///
+    /// Unlike [`Self::close`] this does not consume self
+    ///
+    /// Attempting to write after calling finish will result in an error
+    pub fn finish(&mut self) -> Result<parquet::FileMetaData> {
         self.assert_previous_writer_closed()?;
         let metadata = self.write_metadata()?;
+        self.buf.flush()?;
         Ok(metadata)
+    }
+
+    /// Closes and finalises file writer, returning the file metadata.
+    pub fn close(mut self) -> Result<parquet::FileMetaData> {
+        self.finish()
     }
 
     /// Writes magic bytes at the beginning of the file.
@@ -303,6 +328,7 @@ impl<W: Write + Send> SerializedFileWriter<W> {
 
     /// Assembles and writes metadata at the end of the file.
     fn write_metadata(&mut self) -> Result<parquet::FileMetaData> {
+        self.finished = true;
         let num_rows = self.row_groups.iter().map(|x| x.num_rows()).sum();
 
         let mut row_groups = self
@@ -366,6 +392,10 @@ impl<W: Write + Send> SerializedFileWriter<W> {
 
     #[inline]
     fn assert_previous_writer_closed(&self) -> Result<()> {
+        if self.finished {
+            return Err(general_err!("SerializedFileWriter already finished"));
+        }
+
         if self.row_group_index != self.row_groups.len() {
             Err(general_err!("Previous row group writer was not closed"))
         } else {
@@ -387,12 +417,29 @@ impl<W: Write + Send> SerializedFileWriter<W> {
         &self.props
     }
 
+    /// Returns a reference to the underlying writer.
+    pub fn inner(&self) -> &W {
+        self.buf.inner()
+    }
+
+    /// Returns a mutable reference to the underlying writer.
+    ///
+    /// It is inadvisable to directly write to the underlying writer.
+    pub fn inner_mut(&mut self) -> &mut W {
+        self.buf.inner_mut()
+    }
+
     /// Writes the file footer and returns the underlying writer.
     pub fn into_inner(mut self) -> Result<W> {
         self.assert_previous_writer_closed()?;
         let _ = self.write_metadata()?;
 
         self.buf.into_inner()
+    }
+
+    /// Returns the number of bytes written to this instance
+    pub fn bytes_written(&self) -> usize {
+        self.buf.bytes_written()
     }
 }
 
@@ -760,7 +807,6 @@ mod tests {
     use crate::data_type::{BoolType, Int32Type};
     use crate::file::page_index::index::Index;
     use crate::file::properties::EnabledStatistics;
-    use crate::file::reader::ChunkReader;
     use crate::file::serialized_reader::ReadOptionsBuilder;
     use crate::file::{
         properties::{ReaderProperties, WriterProperties, WriterVersion},
@@ -1750,7 +1796,7 @@ mod tests {
         b_writer.close().unwrap();
         row_group_writer.close().unwrap();
 
-        let metadata = file_writer.close().unwrap();
+        let metadata = file_writer.finish().unwrap();
         assert_eq!(metadata.row_groups.len(), 1);
         let row_group = &metadata.row_groups[0];
         assert_eq!(row_group.columns.len(), 2);
@@ -1760,6 +1806,11 @@ mod tests {
         // Column "b" should only have offset index
         assert!(row_group.columns[1].offset_index_offset.is_some());
         assert!(row_group.columns[1].column_index_offset.is_none());
+
+        let err = file_writer.next_row_group().err().unwrap().to_string();
+        assert_eq!(err, "Parquet error: SerializedFileWriter already finished");
+
+        drop(file_writer);
 
         let options = ReadOptionsBuilder::new().with_page_index().build();
         let reader = SerializedFileReader::new_with_options(Bytes::from(file), options).unwrap();

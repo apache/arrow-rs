@@ -86,7 +86,6 @@ pub fn b64_decode<E: Engine, O: OffsetSizeTrait>(
 mod tests {
     use super::*;
     use arrow_array::BinaryArray;
-    use base64::prelude::{BASE64_STANDARD, BASE64_STANDARD_NO_PAD};
     use rand::{thread_rng, Rng};
 
     fn test_engine<E: Engine>(e: &E, a: &BinaryArray) {

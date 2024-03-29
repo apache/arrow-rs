@@ -319,7 +319,6 @@ impl<K: ArrowDictionaryKeyType, P: ArrowPrimitiveType> Extend<Option<P::Native>>
 mod tests {
     use super::*;
 
-    use crate::array::Array;
     use crate::array::UInt32Array;
     use crate::array::UInt8Array;
     use crate::builder::Decimal128Builder;

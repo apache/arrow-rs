@@ -404,7 +404,6 @@ pub fn regexp_match(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow_array::{ListArray, StringArray};
 
     #[test]
     fn match_single_group() {

@@ -259,13 +259,16 @@ impl RetryExt for reqwest::RequestBuilder {
                     Err(e) =>
                     {
                         let mut do_retry = false;
-                        if req.method().is_safe() && e.is_timeout() {
+                        if e.is_connect() || ( req.method().is_safe() && e.is_timeout()) {
                             do_retry = true
-                        } else if let Some(source) = e.source() {
-                            if let Some(e) = source.downcast_ref::<hyper::Error>() {
-                                if e.is_connect() || e.is_closed() || e.is_incomplete_message() {
-                                    do_retry = true;
+                        } else {
+                            let mut source = e.source();
+                            while let Some(e) = source {
+                                if let Some(e) = e.downcast_ref::<hyper::Error>() {
+                                    do_retry = e.is_closed() || e.is_incomplete_message();
+                                    break
                                 }
+                                source = e.source();
                             }
                         }
 
@@ -305,13 +308,13 @@ mod tests {
     use crate::client::retry::{Error, RetryExt};
     use crate::RetryConfig;
     use hyper::header::LOCATION;
-    use hyper::{Body, Response};
+    use hyper::Response;
     use reqwest::{Client, Method, StatusCode};
     use std::time::Duration;
 
     #[tokio::test]
     async fn test_retry() {
-        let mock = MockServer::new();
+        let mock = MockServer::new().await;
 
         let retry = RetryConfig {
             backoff: Default::default(),
@@ -334,7 +337,7 @@ mod tests {
         mock.push(
             Response::builder()
                 .status(StatusCode::BAD_REQUEST)
-                .body(Body::from("cupcakes"))
+                .body("cupcakes".to_string())
                 .unwrap(),
         );
 
@@ -350,7 +353,7 @@ mod tests {
         mock.push(
             Response::builder()
                 .status(StatusCode::BAD_REQUEST)
-                .body(Body::empty())
+                .body(String::new())
                 .unwrap(),
         );
 
@@ -366,7 +369,7 @@ mod tests {
         mock.push(
             Response::builder()
                 .status(StatusCode::BAD_GATEWAY)
-                .body(Body::empty())
+                .body(String::new())
                 .unwrap(),
         );
 
@@ -377,7 +380,7 @@ mod tests {
         mock.push(
             Response::builder()
                 .status(StatusCode::NO_CONTENT)
-                .body(Body::empty())
+                .body(String::new())
                 .unwrap(),
         );
 
@@ -389,7 +392,7 @@ mod tests {
             Response::builder()
                 .status(StatusCode::FOUND)
                 .header(LOCATION, "/foo")
-                .body(Body::empty())
+                .body(String::new())
                 .unwrap(),
         );
 
@@ -402,7 +405,7 @@ mod tests {
             Response::builder()
                 .status(StatusCode::FOUND)
                 .header(LOCATION, "/bar")
-                .body(Body::empty())
+                .body(String::new())
                 .unwrap(),
         );
 
@@ -416,7 +419,7 @@ mod tests {
                 Response::builder()
                     .status(StatusCode::FOUND)
                     .header(LOCATION, "/bar")
-                    .body(Body::empty())
+                    .body(String::new())
                     .unwrap(),
             );
         }
@@ -428,7 +431,7 @@ mod tests {
         mock.push(
             Response::builder()
                 .status(StatusCode::FOUND)
-                .body(Body::empty())
+                .body(String::new())
                 .unwrap(),
         );
 
@@ -441,7 +444,7 @@ mod tests {
             mock.push(
                 Response::builder()
                     .status(StatusCode::BAD_GATEWAY)
-                    .body(Body::from("ignored"))
+                    .body("ignored".to_string())
                     .unwrap(),
             );
         }

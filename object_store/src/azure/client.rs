@@ -36,7 +36,6 @@ use base64::Engine;
 use bytes::{Buf, Bytes};
 use chrono::{DateTime, Utc};
 use hyper::http::HeaderName;
-use itertools::Itertools;
 use reqwest::header::CONTENT_TYPE;
 use reqwest::{
     header::{HeaderValue, CONTENT_LENGTH, IF_MATCH, IF_NONE_MATCH},
@@ -114,6 +113,9 @@ pub(crate) enum Error {
 
     #[snafu(display("Generating SAS keys with SAS tokens auth is not supported"))]
     SASforSASNotSupported,
+
+    #[snafu(display("Generating SAS keys while skipping signatures is not supported"))]
+    SASwithSkipSignature,
 }
 
 impl From<Error> for crate::Error {
@@ -139,6 +141,7 @@ pub(crate) struct AzureConfig {
     pub retry_config: RetryConfig,
     pub service: Url,
     pub is_emulator: bool,
+    pub skip_signature: bool,
     pub disable_tagging: bool,
     pub client_options: ClientOptions,
 }
@@ -154,6 +157,13 @@ impl AzureConfig {
             path_mut.push(&self.container).extend(path.parts());
         }
         url
+    }
+    async fn get_credential(&self) -> Result<Option<Arc<AzureCredential>>> {
+        if self.skip_signature {
+            Ok(None)
+        } else {
+            Some(self.credentials.get_credential().await).transpose()
+        }
     }
 }
 
@@ -176,7 +186,7 @@ impl<'a> PutRequest<'a> {
     }
 
     async fn send(self) -> Result<Response> {
-        let credential = self.config.credentials.get_credential().await?;
+        let credential = self.config.get_credential().await?;
         let response = self
             .builder
             .with_azure_authorization(&credential, &self.config.account)
@@ -208,8 +218,8 @@ impl AzureClient {
         &self.config
     }
 
-    async fn get_credential(&self) -> Result<Arc<AzureCredential>> {
-        self.config.credentials.get_credential().await
+    async fn get_credential(&self) -> Result<Option<Arc<AzureCredential>>> {
+        self.config.get_credential().await
     }
 
     fn put_request<'a>(&'a self, path: &'a Path, bytes: Bytes) -> PutRequest<'a> {
@@ -314,7 +324,7 @@ impl AzureClient {
 
         // If using SAS authorization must include the headers in the URL
         // <https://docs.microsoft.com/en-us/rest/api/storageservices/copy-blob#request-headers>
-        if let AzureCredential::SASToken(pairs) = credential.as_ref() {
+        if let Some(AzureCredential::SASToken(pairs)) = credential.as_deref() {
             source.query_pairs_mut().extend_pairs(pairs);
         }
 
@@ -384,8 +394,8 @@ impl AzureClient {
         let credential = self.get_credential().await?;
         let signed_start = chrono::Utc::now();
         let signed_expiry = signed_start + expires_in;
-        match credential.as_ref() {
-            AzureCredential::BearerToken(_) => {
+        match credential.as_deref() {
+            Some(AzureCredential::BearerToken(_)) => {
                 let key = self
                     .get_user_delegation_key(&signed_start, &signed_expiry)
                     .await?;
@@ -398,13 +408,14 @@ impl AzureClient {
                     Some(key),
                 ))
             }
-            AzureCredential::AccessKey(key) => Ok(AzureSigner::new(
+            Some(AzureCredential::AccessKey(key)) => Ok(AzureSigner::new(
                 key.to_owned(),
                 self.config.account.clone(),
                 signed_start,
                 signed_expiry,
                 None,
             )),
+            None => Err(Error::SASwithSkipSignature.into()),
             _ => Err(Error::SASforSASNotSupported.into()),
         }
     }
@@ -552,7 +563,7 @@ struct ListResultInternal {
 }
 
 fn to_list_result(value: ListResultInternal, prefix: Option<&str>) -> Result<ListResult> {
-    let prefix = prefix.map(Path::from).unwrap_or_default();
+    let prefix = prefix.unwrap_or_default();
     let common_prefixes = value
         .blobs
         .blob_prefix
@@ -564,18 +575,14 @@ fn to_list_result(value: ListResultInternal, prefix: Option<&str>) -> Result<Lis
         .blobs
         .blobs
         .into_iter()
-        .map(ObjectMeta::try_from)
-        // Note: workaround for gen2 accounts with hierarchical namespaces. These accounts also
-        // return path segments as "directories" and include blobs in list requests with prefix,
-        // if the prefix matches the blob. When we want directories, its always via
-        // the BlobPrefix mechanics, and during lists we state that prefixes are evaluated on path segment basis.
-        .filter_map_ok(|obj| {
-            if obj.size > 0 && obj.location.as_ref().len() > prefix.as_ref().len() {
-                Some(obj)
-            } else {
-                None
-            }
+        // Note: Filters out directories from list results when hierarchical namespaces are
+        // enabled. When we want directories, its always via the BlobPrefix mechanics,
+        // and during lists we state that prefixes are evaluated on path segment basis.
+        .filter(|blob| {
+            !matches!(blob.properties.resource_type.as_ref(), Some(typ) if typ == "directory")
+                && blob.name.len() > prefix.len()
         })
+        .map(ObjectMeta::try_from)
         .collect::<Result<_>>()?;
 
     Ok(ListResult {
@@ -645,6 +652,8 @@ struct BlobProperties {
     pub content_language: Option<String>,
     #[serde(rename = "Etag")]
     pub e_tag: Option<String>,
+    #[serde(rename = "ResourceType")]
+    pub resource_type: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

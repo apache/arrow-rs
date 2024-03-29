@@ -766,17 +766,60 @@ impl LexicographicalComparator {
     pub fn try_new(columns: &[SortColumn]) -> Result<LexicographicalComparator, ArrowError> {
         let compare_items = columns
             .iter()
-            .map(|column| {
-                // flatten and convert build comparators
-                let values = column.values.as_ref();
-                Ok((
-                    values.logical_nulls(),
-                    build_compare(values, values)?,
-                    column.options.unwrap_or_default(),
-                ))
-            })
+            .map(Self::build_compare_item)
             .collect::<Result<Vec<_>, ArrowError>>()?;
         Ok(LexicographicalComparator { compare_items })
+    }
+
+    fn build_compare_item(column: &SortColumn) -> Result<LexicographicalCompareItem, ArrowError> {
+        let values = column.values.as_ref();
+        let options = column.options.unwrap_or_default();
+        let comparator = match values.data_type() {
+            DataType::List(_) => Self::build_list_compare(values.as_list::<i32>(), options)?,
+            DataType::LargeList(_) => Self::build_list_compare(values.as_list::<i64>(), options)?,
+            DataType::FixedSizeList(_, _) => {
+                Self::build_fixed_size_list_compare(values.as_fixed_size_list(), options)?
+            }
+            _ => build_compare(values, values)?,
+        };
+        Ok((values.logical_nulls(), comparator, options))
+    }
+
+    fn build_list_compare<O: OffsetSizeTrait>(
+        array: &GenericListArray<O>,
+        options: SortOptions,
+    ) -> Result<DynComparator, ArrowError> {
+        let rank = child_rank(array.values().as_ref(), options)?;
+        let offsets = array.offsets().clone();
+        let cmp = Box::new(move |i: usize, j: usize| {
+            macro_rules! nth_value {
+                ($INDEX:expr) => {{
+                    let end = offsets[$INDEX + 1].as_usize();
+                    let start = offsets[$INDEX].as_usize();
+                    &rank[start..end]
+                }};
+            }
+            Ord::cmp(nth_value!(i), nth_value!(j))
+        });
+        Ok(cmp)
+    }
+
+    fn build_fixed_size_list_compare(
+        array: &FixedSizeListArray,
+        options: SortOptions,
+    ) -> Result<DynComparator, ArrowError> {
+        let rank = child_rank(array.values().as_ref(), options)?;
+        let size = array.value_length() as usize;
+        let cmp = Box::new(move |i: usize, j: usize| {
+            macro_rules! nth_value {
+                ($INDEX:expr) => {{
+                    let start = $INDEX * size;
+                    &rank[start..start + size]
+                }};
+            }
+            Ord::cmp(nth_value!(i), nth_value!(j))
+        });
+        Ok(cmp)
     }
 }
 
@@ -790,7 +833,6 @@ mod tests {
     use half::f16;
     use rand::rngs::StdRng;
     use rand::{Rng, RngCore, SeedableRng};
-    use std::sync::Arc;
 
     fn create_decimal128_array(data: Vec<Option<i128>>) -> Decimal128Array {
         data.into_iter()
@@ -3592,6 +3634,258 @@ mod tests {
 
         // Limiting by more rows than present is ok
         test_lex_sort_arrays(input, slice_arrays(expected, 0, 5), Some(10));
+
+        // test with FixedSizeListArray, arrays order: [UInt32, FixedSizeList(UInt32, 1)]
+
+        // case1
+        let primitive_array_data = vec![
+            Some(2),
+            Some(3),
+            Some(2),
+            Some(0),
+            None,
+            Some(2),
+            Some(1),
+            Some(2),
+        ];
+        let list_array_data = vec![
+            None,
+            Some(vec![Some(4)]),
+            Some(vec![Some(3)]),
+            Some(vec![Some(1)]),
+            Some(vec![Some(5)]),
+            Some(vec![Some(0)]),
+            Some(vec![Some(2)]),
+            Some(vec![None]),
+        ];
+
+        let expected_primitive_array_data = vec![
+            None,
+            Some(0),
+            Some(1),
+            Some(2),
+            Some(2),
+            Some(2),
+            Some(2),
+            Some(3),
+        ];
+        let expected_list_array_data = vec![
+            Some(vec![Some(5)]),
+            Some(vec![Some(1)]),
+            Some(vec![Some(2)]),
+            None, // <-
+            Some(vec![None]),
+            Some(vec![Some(0)]),
+            Some(vec![Some(3)]), // <-
+            Some(vec![Some(4)]),
+        ];
+        test_lex_sort_mixed_types_with_fixed_size_list::<Int32Type>(
+            primitive_array_data.clone(),
+            list_array_data.clone(),
+            expected_primitive_array_data.clone(),
+            expected_list_array_data,
+            None,
+            None,
+        );
+
+        // case2
+        let primitive_array_options = SortOptions {
+            descending: false,
+            nulls_first: true,
+        };
+        let list_array_options = SortOptions {
+            descending: false,
+            nulls_first: false, // has been modified
+        };
+        let expected_list_array_data = vec![
+            Some(vec![Some(5)]),
+            Some(vec![Some(1)]),
+            Some(vec![Some(2)]),
+            Some(vec![Some(0)]), // <-
+            Some(vec![Some(3)]),
+            Some(vec![None]),
+            None, // <-
+            Some(vec![Some(4)]),
+        ];
+        test_lex_sort_mixed_types_with_fixed_size_list::<Int32Type>(
+            primitive_array_data.clone(),
+            list_array_data.clone(),
+            expected_primitive_array_data.clone(),
+            expected_list_array_data,
+            Some(primitive_array_options),
+            Some(list_array_options),
+        );
+
+        // case3
+        let primitive_array_options = SortOptions {
+            descending: false,
+            nulls_first: true,
+        };
+        let list_array_options = SortOptions {
+            descending: true, // has been modified
+            nulls_first: true,
+        };
+        let expected_list_array_data = vec![
+            Some(vec![Some(5)]),
+            Some(vec![Some(1)]),
+            Some(vec![Some(2)]),
+            None, // <-
+            Some(vec![None]),
+            Some(vec![Some(3)]),
+            Some(vec![Some(0)]), // <-
+            Some(vec![Some(4)]),
+        ];
+        test_lex_sort_mixed_types_with_fixed_size_list::<Int32Type>(
+            primitive_array_data.clone(),
+            list_array_data.clone(),
+            expected_primitive_array_data,
+            expected_list_array_data,
+            Some(primitive_array_options),
+            Some(list_array_options),
+        );
+
+        // test with ListArray/LargeListArray, arrays order: [List<UInt32>/LargeList<UInt32>, UInt32]
+
+        let list_array_data = vec![
+            Some(vec![Some(2), Some(1)]), // 0
+            None,                         // 10
+            Some(vec![Some(3)]),          // 1
+            Some(vec![Some(2), Some(0)]), // 2
+            Some(vec![None, Some(2)]),    // 3
+            Some(vec![Some(0)]),          // none
+            None,                         // 11
+            Some(vec![Some(2), None]),    // 4
+            Some(vec![None]),             // 5
+            Some(vec![Some(2), Some(1)]), // 6
+        ];
+        let primitive_array_data = vec![
+            Some(0),
+            Some(10),
+            Some(1),
+            Some(2),
+            Some(3),
+            None,
+            Some(11),
+            Some(4),
+            Some(5),
+            Some(6),
+        ];
+        let expected_list_array_data = vec![
+            None,
+            None,
+            Some(vec![None]),
+            Some(vec![None, Some(2)]),
+            Some(vec![Some(0)]),
+            Some(vec![Some(2), None]),
+            Some(vec![Some(2), Some(0)]),
+            Some(vec![Some(2), Some(1)]),
+            Some(vec![Some(2), Some(1)]),
+            Some(vec![Some(3)]),
+        ];
+        let expected_primitive_array_data = vec![
+            Some(10),
+            Some(11),
+            Some(5),
+            Some(3),
+            None,
+            Some(4),
+            Some(2),
+            Some(0),
+            Some(6),
+            Some(1),
+        ];
+        test_lex_sort_mixed_types_with_list::<Int32Type>(
+            list_array_data.clone(),
+            primitive_array_data.clone(),
+            expected_list_array_data,
+            expected_primitive_array_data,
+            None,
+            None,
+        );
+    }
+
+    fn test_lex_sort_mixed_types_with_fixed_size_list<T>(
+        primitive_array_data: Vec<Option<T::Native>>,
+        list_array_data: Vec<Option<Vec<Option<T::Native>>>>,
+        expected_primitive_array_data: Vec<Option<T::Native>>,
+        expected_list_array_data: Vec<Option<Vec<Option<T::Native>>>>,
+        primitive_array_options: Option<SortOptions>,
+        list_array_options: Option<SortOptions>,
+    ) where
+        T: ArrowPrimitiveType,
+        PrimitiveArray<T>: From<Vec<Option<T::Native>>>,
+    {
+        let input = vec![
+            SortColumn {
+                values: Arc::new(PrimitiveArray::<T>::from(primitive_array_data.clone()))
+                    as ArrayRef,
+                options: primitive_array_options,
+            },
+            SortColumn {
+                values: Arc::new(FixedSizeListArray::from_iter_primitive::<T, _, _>(
+                    list_array_data.clone(),
+                    1,
+                )) as ArrayRef,
+                options: list_array_options,
+            },
+        ];
+
+        let expected = vec![
+            Arc::new(PrimitiveArray::<T>::from(
+                expected_primitive_array_data.clone(),
+            )) as ArrayRef,
+            Arc::new(FixedSizeListArray::from_iter_primitive::<T, _, _>(
+                expected_list_array_data.clone(),
+                1,
+            )) as ArrayRef,
+        ];
+
+        test_lex_sort_arrays(input.clone(), expected.clone(), None);
+        test_lex_sort_arrays(input.clone(), slice_arrays(expected.clone(), 0, 5), Some(5));
+    }
+
+    fn test_lex_sort_mixed_types_with_list<T>(
+        list_array_data: Vec<Option<Vec<Option<T::Native>>>>,
+        primitive_array_data: Vec<Option<T::Native>>,
+        expected_list_array_data: Vec<Option<Vec<Option<T::Native>>>>,
+        expected_primitive_array_data: Vec<Option<T::Native>>,
+        list_array_options: Option<SortOptions>,
+        primitive_array_options: Option<SortOptions>,
+    ) where
+        T: ArrowPrimitiveType,
+        PrimitiveArray<T>: From<Vec<Option<T::Native>>>,
+    {
+        macro_rules! run_test {
+            ($ARRAY_TYPE:ident) => {
+                let input = vec![
+                    SortColumn {
+                        values: Arc::new(<$ARRAY_TYPE>::from_iter_primitive::<T, _, _>(
+                            list_array_data.clone(),
+                        )) as ArrayRef,
+                        options: list_array_options.clone(),
+                    },
+                    SortColumn {
+                        values: Arc::new(PrimitiveArray::<T>::from(primitive_array_data.clone()))
+                            as ArrayRef,
+                        options: primitive_array_options.clone(),
+                    },
+                ];
+
+                let expected = vec![
+                    Arc::new(<$ARRAY_TYPE>::from_iter_primitive::<T, _, _>(
+                        expected_list_array_data.clone(),
+                    )) as ArrayRef,
+                    Arc::new(PrimitiveArray::<T>::from(
+                        expected_primitive_array_data.clone(),
+                    )) as ArrayRef,
+                ];
+
+                test_lex_sort_arrays(input.clone(), expected.clone(), None);
+                test_lex_sort_arrays(input.clone(), slice_arrays(expected.clone(), 0, 5), Some(5));
+            };
+        }
+        run_test!(ListArray);
+        run_test!(LargeListArray);
     }
 
     #[test]

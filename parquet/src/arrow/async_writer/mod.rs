@@ -26,17 +26,16 @@
 //! # #[tokio::main(flavor="current_thread")]
 //! # async fn main() {
 //! #
-//! use std::sync::Arc;
-//! use arrow_array::{ArrayRef, Int64Array, RecordBatch, RecordBatchReader};
-//! use bytes::Bytes;
-//! use parquet::arrow::{AsyncArrowWriter, arrow_reader::ParquetRecordBatchReaderBuilder};
-//!
+//! # use std::sync::Arc;
+//! # use arrow_array::{ArrayRef, Int64Array, RecordBatch, RecordBatchReader};
+//! # use bytes::Bytes;
+//! # use parquet::arrow::{AsyncArrowWriter, arrow_reader::ParquetRecordBatchReaderBuilder};
+//! #
 //! let col = Arc::new(Int64Array::from_iter_values([1, 2, 3])) as ArrayRef;
 //! let to_write = RecordBatch::try_from_iter([("col", col)]).unwrap();
 //!
 //! let mut buffer = Vec::new();
-//! let mut writer =
-//!     AsyncArrowWriter::try_new(&mut buffer, to_write.schema(), 0, None).unwrap();
+//! let mut writer = AsyncArrowWriter::try_new(&mut buffer, to_write.schema(), None).unwrap();
 //! writer.write(&to_write).await.unwrap();
 //! writer.close().await.unwrap();
 //!
@@ -51,83 +50,96 @@
 //! # }
 //! ```
 
-use std::{io::Write, sync::Arc};
-
 use crate::{
     arrow::arrow_writer::ArrowWriterOptions,
     arrow::ArrowWriter,
     errors::{ParquetError, Result},
-    file::properties::WriterProperties,
+    file::{metadata::RowGroupMetaDataPtr, properties::WriterProperties},
     format::{FileMetaData, KeyValue},
 };
 use arrow_array::RecordBatch;
 use arrow_schema::SchemaRef;
 use tokio::io::{AsyncWrite, AsyncWriteExt};
 
-/// Async arrow writer.
+/// Encodes [`RecordBatch`] to parquet, outputting to an [`AsyncWrite`]
 ///
-/// It is implemented based on the sync writer [`ArrowWriter`] with an inner buffer.
-/// The buffered data will be flushed to the writer provided by caller when the
-/// buffer's threshold is exceeded.
+/// ## Memory Usage
+///
+/// This writer eagerly writes data as soon as possible to the underlying [`AsyncWrite`],
+/// permitting fine-grained control over buffering and I/O scheduling. However, the columnar
+/// nature of parquet forces data for an entire row group to be buffered in memory, before
+/// it can be flushed. Depending on the data and the configured row group size, this buffering
+/// may be substantial.
+///
+/// Memory usage can be limited by calling [`Self::flush`] to flush the in progress row group,
+/// although this will likely increase overall file size and reduce query performance.
+/// See [ArrowWriter] for more information.
+///
+/// ```no_run
+/// # use tokio::fs::File;
+/// # use arrow_array::RecordBatch;
+/// # use parquet::arrow::AsyncArrowWriter;
+/// # async fn test() {
+/// let mut writer: AsyncArrowWriter<File> = todo!();
+/// let batch: RecordBatch = todo!();
+/// writer.write(&batch).await.unwrap();
+/// // Trigger an early flush if buffered size exceeds 1_000_000
+/// if writer.in_progress_size() > 1_000_000 {
+///     writer.flush().await.unwrap()
+/// }
+/// # }
+/// ```
 pub struct AsyncArrowWriter<W> {
     /// Underlying sync writer
-    sync_writer: ArrowWriter<SharedBuffer>,
+    sync_writer: ArrowWriter<Vec<u8>>,
 
     /// Async writer provided by caller
     async_writer: W,
-
-    /// The inner buffer shared by the `sync_writer` and the `async_writer`
-    shared_buffer: SharedBuffer,
-
-    /// Trigger forced flushing once buffer size reaches this value
-    buffer_size: usize,
 }
 
 impl<W: AsyncWrite + Unpin + Send> AsyncArrowWriter<W> {
-    /// Try to create a new Async Arrow Writer.
-    ///
-    /// `buffer_size` determines the number of bytes to buffer before flushing
-    /// to the underlying [`AsyncWrite`]
-    ///
-    /// The intermediate buffer will automatically be resized if necessary
-    ///
-    /// [`Self::write`] will flush this intermediate buffer if it is at least
-    /// half full
+    /// Try to create a new Async Arrow Writer
     pub fn try_new(
         writer: W,
         arrow_schema: SchemaRef,
-        buffer_size: usize,
         props: Option<WriterProperties>,
     ) -> Result<Self> {
         let options = ArrowWriterOptions::new().with_properties(props.unwrap_or_default());
-        Self::try_new_with_options(writer, arrow_schema, buffer_size, options)
+        Self::try_new_with_options(writer, arrow_schema, options)
     }
 
-    /// Try to create a new Async Arrow Writer with [`ArrowWriterOptions`].
-    ///
-    /// `buffer_size` determines the number of bytes to buffer before flushing
-    /// to the underlying [`AsyncWrite`]
-    ///
-    /// The intermediate buffer will automatically be resized if necessary
-    ///
-    /// [`Self::write`] will flush this intermediate buffer if it is at least
-    /// half full
+    /// Try to create a new Async Arrow Writer with [`ArrowWriterOptions`]
     pub fn try_new_with_options(
         writer: W,
         arrow_schema: SchemaRef,
-        buffer_size: usize,
         options: ArrowWriterOptions,
     ) -> Result<Self> {
-        let shared_buffer = SharedBuffer::new(buffer_size);
-        let sync_writer =
-            ArrowWriter::try_new_with_options(shared_buffer.clone(), arrow_schema, options)?;
+        let sync_writer = ArrowWriter::try_new_with_options(Vec::new(), arrow_schema, options)?;
 
         Ok(Self {
             sync_writer,
             async_writer: writer,
-            shared_buffer,
-            buffer_size,
         })
+    }
+
+    /// Returns metadata for any flushed row groups
+    pub fn flushed_row_groups(&self) -> &[RowGroupMetaDataPtr] {
+        self.sync_writer.flushed_row_groups()
+    }
+
+    /// Returns the estimated length in bytes of the current in progress row group
+    pub fn in_progress_size(&self) -> usize {
+        self.sync_writer.in_progress_size()
+    }
+
+    /// Returns the number of rows buffered in the in progress row group
+    pub fn in_progress_rows(&self) -> usize {
+        self.sync_writer.in_progress_rows()
+    }
+
+    /// Returns the number of bytes written by this instance
+    pub fn bytes_written(&self) -> usize {
+        self.sync_writer.bytes_written()
     }
 
     /// Enqueues the provided `RecordBatch` to be written
@@ -135,13 +147,20 @@ impl<W: AsyncWrite + Unpin + Send> AsyncArrowWriter<W> {
     /// After every sync write by the inner [ArrowWriter], the inner buffer will be
     /// checked and flush if at least half full
     pub async fn write(&mut self, batch: &RecordBatch) -> Result<()> {
+        let before = self.sync_writer.flushed_row_groups().len();
         self.sync_writer.write(batch)?;
-        Self::try_flush(
-            &mut self.shared_buffer,
-            &mut self.async_writer,
-            self.buffer_size,
-        )
-        .await
+        if before != self.sync_writer.flushed_row_groups().len() {
+            self.do_write().await?;
+        }
+        Ok(())
+    }
+
+    /// Flushes all buffered rows into a new row group
+    pub async fn flush(&mut self) -> Result<()> {
+        self.sync_writer.flush()?;
+        self.do_write().await?;
+
+        Ok(())
     }
 
     /// Append [`KeyValue`] metadata in addition to those in [`WriterProperties`]
@@ -155,34 +174,25 @@ impl<W: AsyncWrite + Unpin + Send> AsyncArrowWriter<W> {
     ///
     /// All the data in the inner buffer will be force flushed.
     pub async fn close(mut self) -> Result<FileMetaData> {
-        let metadata = self.sync_writer.close()?;
+        let metadata = self.sync_writer.finish()?;
 
         // Force to flush the remaining data.
-        Self::try_flush(&mut self.shared_buffer, &mut self.async_writer, 0).await?;
+        self.do_write().await?;
         self.async_writer.shutdown().await?;
 
         Ok(metadata)
     }
 
-    /// Flush the data in the [`SharedBuffer`] into the `async_writer` if its size
-    /// exceeds the threshold.
-    async fn try_flush(
-        shared_buffer: &mut SharedBuffer,
-        async_writer: &mut W,
-        buffer_size: usize,
-    ) -> Result<()> {
-        let mut buffer = shared_buffer.buffer.try_lock().unwrap();
-        if buffer.is_empty() || buffer.len() < buffer_size {
-            // no need to flush
-            return Ok(());
-        }
+    /// Flush the data written by `sync_writer` into the `async_writer`
+    async fn do_write(&mut self) -> Result<()> {
+        let buffer = self.sync_writer.inner_mut();
 
-        async_writer
+        self.async_writer
             .write_all(buffer.as_slice())
             .await
             .map_err(|e| ParquetError::External(Box::new(e)))?;
 
-        async_writer
+        self.async_writer
             .flush()
             .await
             .map_err(|e| ParquetError::External(Box::new(e)))?;
@@ -194,41 +204,12 @@ impl<W: AsyncWrite + Unpin + Send> AsyncArrowWriter<W> {
     }
 }
 
-/// A buffer with interior mutability shared by the [`ArrowWriter`] and
-/// [`AsyncArrowWriter`].
-#[derive(Clone)]
-struct SharedBuffer {
-    /// The inner buffer for reading and writing
-    ///
-    /// The lock is used to obtain internal mutability, so no worry about the
-    /// lock contention.
-    buffer: Arc<futures::lock::Mutex<Vec<u8>>>,
-}
-
-impl SharedBuffer {
-    pub fn new(capacity: usize) -> Self {
-        Self {
-            buffer: Arc::new(futures::lock::Mutex::new(Vec::with_capacity(capacity))),
-        }
-    }
-}
-
-impl Write for SharedBuffer {
-    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        let mut buffer = self.buffer.try_lock().unwrap();
-        Write::write(&mut *buffer, buf)
-    }
-
-    fn flush(&mut self) -> std::io::Result<()> {
-        let mut buffer = self.buffer.try_lock().unwrap();
-        Write::flush(&mut *buffer)
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use arrow_array::{ArrayRef, BinaryArray, Int64Array, RecordBatchReader};
+    use arrow::datatypes::{DataType, Field, Schema};
+    use arrow_array::{ArrayRef, BinaryArray, Int32Array, Int64Array, RecordBatchReader};
     use bytes::Bytes;
+    use std::sync::Arc;
     use tokio::pin;
 
     use crate::arrow::arrow_reader::{ParquetRecordBatchReader, ParquetRecordBatchReaderBuilder};
@@ -252,8 +233,7 @@ mod tests {
         let to_write = RecordBatch::try_from_iter([("col", col)]).unwrap();
 
         let mut buffer = Vec::new();
-        let mut writer =
-            AsyncArrowWriter::try_new(&mut buffer, to_write.schema(), 0, None).unwrap();
+        let mut writer = AsyncArrowWriter::try_new(&mut buffer, to_write.schema(), None).unwrap();
         writer.write(&to_write).await.unwrap();
         writer.close().await.unwrap();
 
@@ -281,7 +261,6 @@ mod tests {
         let mut async_writer = AsyncArrowWriter::try_new(
             &mut async_buffer,
             reader.schema(),
-            1024,
             Some(write_props.clone()),
         )
         .unwrap();
@@ -344,54 +323,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_async_writer_with_buffer_flush_threshold() {
-        let write_props = WriterProperties::builder()
-            .set_max_row_group_size(2048)
-            .build();
-        let expect_encode_size = {
-            let reader = get_test_reader();
-            let mut buffer = Vec::new();
-            let mut async_writer = AsyncArrowWriter::try_new(
-                &mut buffer,
-                reader.schema(),
-                0,
-                Some(write_props.clone()),
-            )
-            .unwrap();
-            for record_batch in reader {
-                let record_batch = record_batch.unwrap();
-                async_writer.write(&record_batch).await.unwrap();
-            }
-            async_writer.close().await.unwrap();
-            buffer.len()
-        };
-
-        let test_buffer_flush_thresholds = vec![0, 1024, 40 * 1024, 50 * 1024, 100 * 1024];
-
-        for buffer_flush_threshold in test_buffer_flush_thresholds {
-            let reader = get_test_reader();
-            let mut test_async_sink = TestAsyncSink {
-                sink: Vec::new(),
-                min_accept_bytes: buffer_flush_threshold,
-                expect_total_bytes: expect_encode_size,
-            };
-            let mut async_writer = AsyncArrowWriter::try_new(
-                &mut test_async_sink,
-                reader.schema(),
-                buffer_flush_threshold * 2,
-                Some(write_props.clone()),
-            )
-            .unwrap();
-
-            for record_batch in reader {
-                let record_batch = record_batch.unwrap();
-                async_writer.write(&record_batch).await.unwrap();
-            }
-            async_writer.close().await.unwrap();
-        }
-    }
-
-    #[tokio::test]
     async fn test_async_writer_file() {
         let col = Arc::new(Int64Array::from_iter_values([1, 2, 3])) as ArrayRef;
         let col2 = Arc::new(BinaryArray::from_iter_values(vec![
@@ -404,7 +335,7 @@ mod tests {
         let temp = tempfile::tempfile().unwrap();
 
         let file = tokio::fs::File::from_std(temp.try_clone().unwrap());
-        let mut writer = AsyncArrowWriter::try_new(file, to_write.schema(), 0, None).unwrap();
+        let mut writer = AsyncArrowWriter::try_new(file, to_write.schema(), None).unwrap();
         writer.write(&to_write).await.unwrap();
         writer.close().await.unwrap();
 
@@ -415,5 +346,46 @@ mod tests {
         let read = reader.next().unwrap().unwrap();
 
         assert_eq!(to_write, read);
+    }
+
+    #[tokio::test]
+    async fn in_progress_accounting() {
+        // define schema
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+
+        // create some data
+        let a = Int32Array::from_value(0_i32, 512);
+
+        // build a record batch
+        let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(a)]).unwrap();
+
+        let temp = tempfile::tempfile().unwrap();
+        let file = tokio::fs::File::from_std(temp.try_clone().unwrap());
+        let mut writer = AsyncArrowWriter::try_new(file, batch.schema(), None).unwrap();
+
+        // starts empty
+        assert_eq!(writer.in_progress_size(), 0);
+        assert_eq!(writer.in_progress_rows(), 0);
+        assert_eq!(writer.bytes_written(), 4); // Initial Parquet header
+        writer.write(&batch).await.unwrap();
+
+        // updated on write
+        let initial_size = writer.in_progress_size();
+        assert!(initial_size > 0);
+        assert_eq!(writer.in_progress_rows(), batch.num_rows());
+
+        // updated on second write
+        writer.write(&batch).await.unwrap();
+        assert!(writer.in_progress_size() > initial_size);
+        assert_eq!(writer.in_progress_rows(), batch.num_rows() * 2);
+
+        // in progress tracking is cleared, but the overall data written is updated
+        let pre_flush_bytes_written = writer.bytes_written();
+        writer.flush().await.unwrap();
+        assert_eq!(writer.in_progress_size(), 0);
+        assert_eq!(writer.in_progress_rows(), 0);
+        assert!(writer.bytes_written() > pre_flush_bytes_written);
+
+        writer.close().await.unwrap();
     }
 }

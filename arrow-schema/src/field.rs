@@ -129,7 +129,7 @@ impl Field {
         }
     }
 
-    /// Creates a new `Field`` suitable for [`DataType::List`] and
+    /// Creates a new `Field` suitable for [`DataType::List`] and
     /// [`DataType::LargeList`]
     ///
     /// While not required, this method follows the convention of naming the
@@ -215,6 +215,21 @@ impl Field {
         nullable: bool,
     ) -> Self {
         Self::new(name, DataType::LargeList(value.into()), nullable)
+    }
+
+    /// Create a new [`Field`] with [`DataType::FixedSizeList`]
+    ///
+    /// - `name`: the name of the [`DataType::FixedSizeList`] field
+    /// - `value`: the description of each list element
+    /// - `size`: the size of the fixed size list
+    /// - `nullable`: if the [`DataType::FixedSizeList`] array is nullable
+    pub fn new_fixed_size_list(
+        name: impl Into<String>,
+        value: impl Into<FieldRef>,
+        size: i32,
+        nullable: bool,
+    ) -> Self {
+        Self::new(name, DataType::FixedSizeList(value.into(), size), nullable)
     }
 
     /// Create a new [`Field`] with [`DataType::Map`]
@@ -492,9 +507,12 @@ impl Field {
             | DataType::Duration(_)
             | DataType::Binary
             | DataType::LargeBinary
+            | DataType::BinaryView
             | DataType::Interval(_)
             | DataType::LargeList(_)
+            | DataType::LargeListView(_)
             | DataType::List(_)
+            | DataType::ListView(_)
             | DataType::Map(_, _)
             | DataType::Dictionary(_, _)
             | DataType::RunEndEncoded(_, _)
@@ -502,6 +520,7 @@ impl Field {
             | DataType::FixedSizeBinary(_)
             | DataType::Utf8
             | DataType::LargeUtf8
+            | DataType::Utf8View
             | DataType::Decimal128(_, _)
             | DataType::Decimal256(_, _) => {
                 if from.data_type == DataType::Null {
@@ -563,10 +582,7 @@ impl std::fmt::Display for Field {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::Fields;
     use std::collections::hash_map::DefaultHasher;
-    use std::hash::{Hash, Hasher};
-    use std::sync::Arc;
 
     #[test]
     fn test_new_with_string() {

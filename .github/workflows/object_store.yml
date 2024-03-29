@@ -114,6 +114,7 @@ jobs:
       AWS_ALLOW_HTTP: true
       AWS_COPY_IF_NOT_EXISTS: dynamo:test-table:2000
       AWS_CONDITIONAL_PUT: dynamo:test-table:2000
+      AWS_SERVER_SIDE_ENCRYPTION: aws:kms
       HTTP_URL: "http://localhost:8080"
       GOOGLE_BUCKET: test-bucket
       GOOGLE_SERVICE_ACCOUNT: "/tmp/gcs.json"
@@ -137,10 +138,13 @@ jobs:
 
       - name: Setup LocalStack (AWS emulation)
         run: |
-          echo "LOCALSTACK_CONTAINER=$(docker run -d -p 4566:4566 localstack/localstack@sha256:a0b79cb2430f1818de2c66ce89d41bba40f5a1823410f5a7eaf3494b692eed97)" >> $GITHUB_ENV
+          echo "LOCALSTACK_CONTAINER=$(docker run -d -p 4566:4566 localstack/localstack:3.2.0)" >> $GITHUB_ENV
           echo "EC2_METADATA_CONTAINER=$(docker run -d -p 1338:1338 amazon/amazon-ec2-metadata-mock:v1.9.2 --imdsv2)" >> $GITHUB_ENV
           aws --endpoint-url=http://localhost:4566 s3 mb s3://test-bucket
           aws --endpoint-url=http://localhost:4566 dynamodb create-table --table-name test-table --key-schema AttributeName=path,KeyType=HASH AttributeName=etag,KeyType=RANGE --attribute-definitions AttributeName=path,AttributeType=S AttributeName=etag,AttributeType=S --provisioned-throughput ReadCapacityUnits=5,WriteCapacityUnits=5
+
+          KMS_KEY=$(aws --endpoint-url=http://localhost:4566 kms create-key --description "test key")
+          echo "AWS_SSE_KMS_KEY_ID=$(echo $KMS_KEY | jq -r .KeyMetadata.KeyId)" >> $GITHUB_ENV
 
       - name: Configure Azurite (Azure emulation)
         # the magical connection string is from

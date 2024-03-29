@@ -235,7 +235,7 @@ mod private {
 mod private {
     use super::*;
     use chrono::offset::TimeZone;
-    use chrono::{FixedOffset, LocalResult, NaiveDate, NaiveDateTime, Offset};
+    use chrono::{LocalResult, NaiveDate, NaiveDateTime, Offset};
     use std::str::FromStr;
 
     /// An [`Offset`] for [`Tz`]

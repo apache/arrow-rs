@@ -1303,8 +1303,6 @@ unsafe fn decode_column(
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-
     use rand::distributions::uniform::SampleUniform;
     use rand::distributions::{Distribution, Standard};
     use rand::{thread_rng, Rng};
@@ -1315,7 +1313,7 @@ mod tests {
     use arrow_buffer::i256;
     use arrow_buffer::Buffer;
     use arrow_cast::display::array_value_to_string;
-    use arrow_ord::sort::{LexicographicalComparator, SortColumn, SortOptions};
+    use arrow_ord::sort::{LexicographicalComparator, SortColumn};
 
     use super::*;
 
@@ -2225,7 +2223,7 @@ mod tests {
 
         let first = Int32Array::from(vec![None, Some(2), Some(4)]);
         let second = Int32Array::from(vec![Some(2), None, Some(4)]);
-        let arrays = vec![Arc::new(first) as ArrayRef, Arc::new(second) as ArrayRef];
+        let arrays = [Arc::new(first) as ArrayRef, Arc::new(second) as ArrayRef];
 
         for array in arrays.iter() {
             rows.clear();

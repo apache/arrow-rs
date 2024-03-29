@@ -738,7 +738,7 @@ struct CreateSessionOutput {
 mod tests {
     use super::*;
     use crate::client::mock_server::MockServer;
-    use hyper::{Body, Response};
+    use hyper::Response;
     use reqwest::{Client, Method};
     use std::env;
 
@@ -939,7 +939,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_mock() {
-        let server = MockServer::new();
+        let server = MockServer::new().await;
 
         const IMDSV2_HEADER: &str = "X-aws-ec2-metadata-token";
 
@@ -955,7 +955,7 @@ mod tests {
         server.push_fn(|req| {
             assert_eq!(req.uri().path(), "/latest/api/token");
             assert_eq!(req.method(), &Method::PUT);
-            Response::new(Body::from("cupcakes"))
+            Response::new("cupcakes".to_string())
         });
         server.push_fn(|req| {
             assert_eq!(
@@ -965,14 +965,14 @@ mod tests {
             assert_eq!(req.method(), &Method::GET);
             let t = req.headers().get(IMDSV2_HEADER).unwrap().to_str().unwrap();
             assert_eq!(t, "cupcakes");
-            Response::new(Body::from("myrole"))
+            Response::new("myrole".to_string())
         });
         server.push_fn(|req| {
             assert_eq!(req.uri().path(), "/latest/meta-data/iam/security-credentials/myrole");
             assert_eq!(req.method(), &Method::GET);
             let t = req.headers().get(IMDSV2_HEADER).unwrap().to_str().unwrap();
             assert_eq!(t, "cupcakes");
-            Response::new(Body::from(r#"{"AccessKeyId":"KEYID","Code":"Success","Expiration":"2022-08-30T10:51:04Z","LastUpdated":"2022-08-30T10:21:04Z","SecretAccessKey":"SECRET","Token":"TOKEN","Type":"AWS-HMAC"}"#))
+            Response::new(r#"{"AccessKeyId":"KEYID","Code":"Success","Expiration":"2022-08-30T10:51:04Z","LastUpdated":"2022-08-30T10:21:04Z","SecretAccessKey":"SECRET","Token":"TOKEN","Type":"AWS-HMAC"}"#.to_string())
         });
 
         let creds = instance_creds(&client, &retry_config, endpoint, true)
@@ -989,7 +989,7 @@ mod tests {
             assert_eq!(req.method(), &Method::PUT);
             Response::builder()
                 .status(StatusCode::FORBIDDEN)
-                .body(Body::empty())
+                .body(String::new())
                 .unwrap()
         });
         server.push_fn(|req| {
@@ -999,13 +999,13 @@ mod tests {
             );
             assert_eq!(req.method(), &Method::GET);
             assert!(req.headers().get(IMDSV2_HEADER).is_none());
-            Response::new(Body::from("myrole"))
+            Response::new("myrole".to_string())
         });
         server.push_fn(|req| {
             assert_eq!(req.uri().path(), "/latest/meta-data/iam/security-credentials/myrole");
             assert_eq!(req.method(), &Method::GET);
             assert!(req.headers().get(IMDSV2_HEADER).is_none());
-            Response::new(Body::from(r#"{"AccessKeyId":"KEYID","Code":"Success","Expiration":"2022-08-30T10:51:04Z","LastUpdated":"2022-08-30T10:21:04Z","SecretAccessKey":"SECRET","Token":"TOKEN","Type":"AWS-HMAC"}"#))
+            Response::new(r#"{"AccessKeyId":"KEYID","Code":"Success","Expiration":"2022-08-30T10:51:04Z","LastUpdated":"2022-08-30T10:21:04Z","SecretAccessKey":"SECRET","Token":"TOKEN","Type":"AWS-HMAC"}"#.to_string())
         });
 
         let creds = instance_creds(&client, &retry_config, endpoint, true)
@@ -1020,7 +1020,7 @@ mod tests {
         server.push(
             Response::builder()
                 .status(StatusCode::FORBIDDEN)
-                .body(Body::empty())
+                .body(String::new())
                 .unwrap(),
         );
 

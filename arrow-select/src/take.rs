@@ -420,7 +420,11 @@ fn take_bytes<T: ByteArrayType, IndexType: ArrowPrimitiveType>(
         nulls = Some(null_buf.into())
     }
 
-    T::Offset::from_usize(values.len()).expect("offset overflow");
+    T::Offset::from_usize(values.len()).ok_or(ArrowError::ComputeError(format!(
+        "Offset overflow for {}BinaryArray: {}",
+        T::Offset::PREFIX,
+        values.len()
+    )))?;
 
     let array_data = ArrayData::builder(T::DATA_TYPE)
         .len(data_len)

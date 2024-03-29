@@ -236,6 +236,11 @@ impl RecordBatch {
         self.schema.clone()
     }
 
+    /// Returns a reference to the [`Schema`] of the record batch.
+    pub fn schema_ref(&self) -> &SchemaRef {
+        &self.schema
+    }
+
     /// Projects the schema onto the specified columns
     pub fn project(&self, indices: &[usize]) -> Result<RecordBatch, ArrowError> {
         let projected_schema = self.schema.project(indices)?;
@@ -355,7 +360,7 @@ impl RecordBatch {
     /// assert_eq!(batch.num_columns(), 1);
     /// ```
     pub fn remove_column(&mut self, index: usize) -> ArrayRef {
-        let mut builder = SchemaBuilder::from(self.schema.fields());
+        let mut builder = SchemaBuilder::from(self.schema.as_ref());
         builder.remove(index);
         self.schema = Arc::new(builder.finish());
         self.columns.remove(index)
@@ -618,8 +623,12 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use super::*;
-    use crate::{BooleanArray, Int32Array, Int64Array, Int8Array, ListArray, StringArray};
+    use crate::{
+        BooleanArray, Int32Array, Int64Array, Int8Array, ListArray, StringArray, StringViewArray,
+    };
     use arrow_buffer::{Buffer, ToByteSlice};
     use arrow_data::{ArrayData, ArrayDataBuilder};
     use arrow_schema::Fields;
@@ -637,6 +646,30 @@ mod tests {
         let record_batch =
             RecordBatch::try_new(Arc::new(schema), vec![Arc::new(a), Arc::new(b)]).unwrap();
         check_batch(record_batch, 5)
+    }
+
+    #[test]
+    fn create_string_view_record_batch() {
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Utf8View, false),
+        ]);
+
+        let a = Int32Array::from(vec![1, 2, 3, 4, 5]);
+        let b = StringViewArray::from(vec!["a", "b", "c", "d", "e"]);
+
+        let record_batch =
+            RecordBatch::try_new(Arc::new(schema), vec![Arc::new(a), Arc::new(b)]).unwrap();
+
+        assert_eq!(5, record_batch.num_rows());
+        assert_eq!(2, record_batch.num_columns());
+        assert_eq!(&DataType::Int32, record_batch.schema().field(0).data_type());
+        assert_eq!(
+            &DataType::Utf8View,
+            record_batch.schema().field(1).data_type()
+        );
+        assert_eq!(5, record_batch.column(0).len());
+        assert_eq!(5, record_batch.column(1).len());
     }
 
     #[test]
@@ -1154,5 +1187,32 @@ mod tests {
 
         let size = get_size(reader);
         assert_eq!(size, 0);
+    }
+
+    #[test]
+    fn test_remove_column_maintains_schema_metadata() {
+        let id_array = Int32Array::from(vec![1, 2, 3, 4, 5]);
+        let bool_array = BooleanArray::from(vec![true, false, false, true, true]);
+
+        let mut metadata = HashMap::new();
+        metadata.insert("foo".to_string(), "bar".to_string());
+        let schema = Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("bool", DataType::Boolean, false),
+        ])
+        .with_metadata(metadata);
+
+        let mut batch = RecordBatch::try_new(
+            Arc::new(schema),
+            vec![Arc::new(id_array), Arc::new(bool_array)],
+        )
+        .unwrap();
+
+        let _removed_column = batch.remove_column(0);
+        assert_eq!(batch.schema().metadata().len(), 1);
+        assert_eq!(
+            batch.schema().metadata().get("foo").unwrap().as_str(),
+            "bar"
+        );
     }
 }

@@ -16,26 +16,24 @@
 // under the License.
 
 //! An in-memory object store implementation
-use crate::util::InvalidGetRange;
-use crate::{
-    path::Path, GetRange, GetResult, GetResultPayload, ListResult, ObjectMeta, ObjectStore,
-    PutMode, PutOptions, PutResult, Result, UpdateVersion,
-};
-use crate::{GetOptions, MultipartId};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::ops::Range;
+use std::sync::Arc;
+
 use async_trait::async_trait;
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use futures::{stream::BoxStream, StreamExt};
 use parking_lot::RwLock;
 use snafu::{OptionExt, ResultExt, Snafu};
-use std::collections::BTreeMap;
-use std::collections::BTreeSet;
-use std::io;
-use std::ops::Range;
-use std::pin::Pin;
-use std::sync::Arc;
-use std::task::Poll;
-use tokio::io::AsyncWrite;
+
+use crate::multipart::{MultipartStore, PartId};
+use crate::util::InvalidGetRange;
+use crate::GetOptions;
+use crate::{
+    path::Path, GetRange, GetResult, GetResultPayload, ListResult, MultipartId, MultipartUpload,
+    ObjectMeta, ObjectStore, PutMode, PutOptions, PutResult, Result, UpdateVersion, UploadPart,
+};
 
 /// A specialized `Error` for in-memory object store-related errors
 #[derive(Debug, Snafu)]
@@ -52,6 +50,12 @@ enum Error {
 
     #[snafu(display("ETag required for conditional update"))]
     MissingETag,
+
+    #[snafu(display("MultipartUpload not found: {id}"))]
+    UploadNotFound { id: String },
+
+    #[snafu(display("Missing part at index: {part}"))]
+    MissingPart { part: usize },
 }
 
 impl From<Error> for super::Error {
@@ -101,6 +105,12 @@ impl Entry {
 struct Storage {
     next_etag: usize,
     map: BTreeMap<Path, Entry>,
+    uploads: HashMap<usize, PartStorage>,
+}
+
+#[derive(Debug, Default, Clone)]
+struct PartStorage {
+    parts: Vec<Option<Bytes>>,
 }
 
 type SharedStorage = Arc<RwLock<Storage>>;
@@ -154,6 +164,24 @@ impl Storage {
             }
         }
     }
+
+    fn upload_mut(&mut self, id: &MultipartId) -> Result<&mut PartStorage> {
+        let parts = id
+            .parse()
+            .ok()
+            .and_then(|x| self.uploads.get_mut(&x))
+            .context(UploadNotFoundSnafu { id })?;
+        Ok(parts)
+    }
+
+    fn remove_upload(&mut self, id: &MultipartId) -> Result<PartStorage> {
+        let parts = id
+            .parse()
+            .ok()
+            .and_then(|x| self.uploads.remove(&x))
+            .context(UploadNotFoundSnafu { id })?;
+        Ok(parts)
+    }
 }
 
 impl std::fmt::Display for InMemory {
@@ -182,23 +210,12 @@ impl ObjectStore for InMemory {
         })
     }
 
-    async fn put_multipart(
-        &self,
-        location: &Path,
-    ) -> Result<(MultipartId, Box<dyn AsyncWrite + Unpin + Send>)> {
-        Ok((
-            String::new(),
-            Box::new(InMemoryUpload {
-                location: location.clone(),
-                data: Vec::new(),
-                storage: Arc::clone(&self.storage),
-            }),
-        ))
-    }
-
-    async fn abort_multipart(&self, _location: &Path, _multipart_id: &MultipartId) -> Result<()> {
-        // Nothing to clean up
-        Ok(())
+    async fn put_multipart(&self, location: &Path) -> Result<Box<dyn MultipartUpload>> {
+        Ok(Box::new(InMemoryUpload {
+            location: location.clone(),
+            parts: vec![],
+            storage: Arc::clone(&self.storage),
+        }))
     }
 
     async fn get_opts(&self, location: &Path, options: GetOptions) -> Result<GetResult> {
@@ -359,6 +376,64 @@ impl ObjectStore for InMemory {
     }
 }
 
+#[async_trait]
+impl MultipartStore for InMemory {
+    async fn create_multipart(&self, _path: &Path) -> Result<MultipartId> {
+        let mut storage = self.storage.write();
+        let etag = storage.next_etag;
+        storage.next_etag += 1;
+        storage.uploads.insert(etag, Default::default());
+        Ok(etag.to_string())
+    }
+
+    async fn put_part(
+        &self,
+        _path: &Path,
+        id: &MultipartId,
+        part_idx: usize,
+        data: Bytes,
+    ) -> Result<PartId> {
+        let mut storage = self.storage.write();
+        let upload = storage.upload_mut(id)?;
+        if part_idx <= upload.parts.len() {
+            upload.parts.resize(part_idx + 1, None);
+        }
+        upload.parts[part_idx] = Some(data);
+        Ok(PartId {
+            content_id: Default::default(),
+        })
+    }
+
+    async fn complete_multipart(
+        &self,
+        path: &Path,
+        id: &MultipartId,
+        _parts: Vec<PartId>,
+    ) -> Result<PutResult> {
+        let mut storage = self.storage.write();
+        let upload = storage.remove_upload(id)?;
+
+        let mut cap = 0;
+        for (part, x) in upload.parts.iter().enumerate() {
+            cap += x.as_ref().context(MissingPartSnafu { part })?.len();
+        }
+        let mut buf = Vec::with_capacity(cap);
+        for x in &upload.parts {
+            buf.extend_from_slice(x.as_ref().unwrap())
+        }
+        let etag = storage.insert(path, buf.into());
+        Ok(PutResult {
+            e_tag: Some(etag.to_string()),
+            version: None,
+        })
+    }
+
+    async fn abort_multipart(&self, _path: &Path, id: &MultipartId) -> Result<()> {
+        self.storage.write().remove_upload(id)?;
+        Ok(())
+    }
+}
+
 impl InMemory {
     /// Create new in-memory storage.
     pub fn new() -> Self {
@@ -393,44 +468,41 @@ impl InMemory {
     }
 }
 
+#[derive(Debug)]
 struct InMemoryUpload {
     location: Path,
-    data: Vec<u8>,
+    parts: Vec<Bytes>,
     storage: Arc<RwLock<Storage>>,
 }
 
-impl AsyncWrite for InMemoryUpload {
-    fn poll_write(
-        mut self: Pin<&mut Self>,
-        _cx: &mut std::task::Context<'_>,
-        buf: &[u8],
-    ) -> Poll<Result<usize, io::Error>> {
-        self.data.extend_from_slice(buf);
-        Poll::Ready(Ok(buf.len()))
+#[async_trait]
+impl MultipartUpload for InMemoryUpload {
+    fn put_part(&mut self, data: Bytes) -> UploadPart {
+        self.parts.push(data);
+        Box::pin(futures::future::ready(Ok(())))
     }
 
-    fn poll_flush(
-        self: Pin<&mut Self>,
-        _cx: &mut std::task::Context<'_>,
-    ) -> Poll<Result<(), io::Error>> {
-        Poll::Ready(Ok(()))
+    async fn complete(&mut self) -> Result<PutResult> {
+        let cap = self.parts.iter().map(|x| x.len()).sum();
+        let mut buf = Vec::with_capacity(cap);
+        self.parts.iter().for_each(|x| buf.extend_from_slice(x));
+        let etag = self.storage.write().insert(&self.location, buf.into());
+        Ok(PutResult {
+            e_tag: Some(etag.to_string()),
+            version: None,
+        })
     }
 
-    fn poll_shutdown(
-        mut self: Pin<&mut Self>,
-        _cx: &mut std::task::Context<'_>,
-    ) -> Poll<Result<(), io::Error>> {
-        let data = Bytes::from(std::mem::take(&mut self.data));
-        self.storage.write().insert(&self.location, data);
-        Poll::Ready(Ok(()))
+    async fn abort(&mut self) -> Result<()> {
+        Ok(())
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     use crate::tests::*;
+
+    use super::*;
 
     #[tokio::test]
     async fn in_memory_test() {
@@ -444,6 +516,7 @@ mod tests {
         copy_if_not_exists(&integration).await;
         stream_get(&integration).await;
         put_opts(&integration, true).await;
+        multipart(&integration, &integration).await;
     }
 
     #[tokio::test]

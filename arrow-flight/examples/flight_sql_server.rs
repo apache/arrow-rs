@@ -16,6 +16,7 @@
 // under the License.
 
 use arrow_flight::sql::server::PeekableFlightDataStream;
+use arrow_flight::sql::DoPutPreparedStatementResult;
 use base64::prelude::BASE64_STANDARD;
 use base64::Engine;
 use futures::{stream, Stream, TryStreamExt};
@@ -193,9 +194,9 @@ impl FlightSqlService for FlightSqlServiceImpl {
     ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status> {
         self.check_token(&request)?;
         let batch = Self::fake_result().map_err(|e| status!("Could not fake a result", e))?;
-        let schema = batch.schema();
-        let batches = vec![batch];
-        let flight_data = batches_to_flight_data(schema.as_ref(), batches)
+        let schema = batch.schema_ref();
+        let batches = vec![batch.clone()];
+        let flight_data = batches_to_flight_data(schema, batches)
             .map_err(|e| status!("Could not convert batches", e))?
             .into_iter()
             .map(Ok);
@@ -249,6 +250,8 @@ impl FlightSqlService for FlightSqlServiceImpl {
         let endpoint = FlightEndpoint {
             ticket: Some(ticket),
             location: vec![loc],
+            expiration_time: None,
+            app_metadata: vec![].into(),
         };
         let info = FlightInfo::new()
             .try_with_schema(&schema)
@@ -270,7 +273,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
     ) -> Result<Response<FlightInfo>, Status> {
         let flight_descriptor = request.into_inner();
         let ticket = Ticket {
-            ticket: query.encode_to_vec().into(),
+            ticket: query.as_any().encode_to_vec().into(),
         };
         let endpoint = FlightEndpoint::new().with_ticket(ticket);
 
@@ -290,7 +293,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
     ) -> Result<Response<FlightInfo>, Status> {
         let flight_descriptor = request.into_inner();
         let ticket = Ticket {
-            ticket: query.encode_to_vec().into(),
+            ticket: query.as_any().encode_to_vec().into(),
         };
         let endpoint = FlightEndpoint::new().with_ticket(ticket);
 
@@ -310,7 +313,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
     ) -> Result<Response<FlightInfo>, Status> {
         let flight_descriptor = request.into_inner();
         let ticket = Ticket {
-            ticket: query.encode_to_vec().into(),
+            ticket: query.as_any().encode_to_vec().into(),
         };
         let endpoint = FlightEndpoint::new().with_ticket(ticket);
 
@@ -339,7 +342,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
         request: Request<FlightDescriptor>,
     ) -> Result<Response<FlightInfo>, Status> {
         let flight_descriptor = request.into_inner();
-        let ticket = Ticket::new(query.encode_to_vec());
+        let ticket = Ticket::new(query.as_any().encode_to_vec());
         let endpoint = FlightEndpoint::new().with_ticket(ticket);
 
         let flight_info = FlightInfo::new()
@@ -397,7 +400,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
         request: Request<FlightDescriptor>,
     ) -> Result<Response<FlightInfo>, Status> {
         let flight_descriptor = request.into_inner();
-        let ticket = Ticket::new(query.encode_to_vec());
+        let ticket = Ticket::new(query.as_any().encode_to_vec());
         let endpoint = FlightEndpoint::new().with_ticket(ticket);
 
         let flight_info = FlightInfo::new()
@@ -617,7 +620,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
         &self,
         _query: CommandPreparedStatementQuery,
         _request: Request<PeekableFlightDataStream>,
-    ) -> Result<Response<<Self as FlightService>::DoPutStream>, Status> {
+    ) -> Result<DoPutPreparedStatementResult, Status> {
         Err(Status::unimplemented(
             "do_put_prepared_statement_query not implemented",
         ))
@@ -639,10 +642,10 @@ impl FlightSqlService for FlightSqlServiceImpl {
         request: Request<Action>,
     ) -> Result<ActionCreatePreparedStatementResult, Status> {
         self.check_token(&request)?;
-        let schema = Self::fake_result()
-            .map_err(|e| status!("Error getting result schema", e))?
-            .schema();
-        let message = SchemaAsIpc::new(&schema, &IpcWriteOptions::default())
+        let record_batch =
+            Self::fake_result().map_err(|e| status!("Error getting result schema", e))?;
+        let schema = record_batch.schema_ref();
+        let message = SchemaAsIpc::new(schema, &IpcWriteOptions::default())
             .try_into()
             .map_err(|e| status!("Unable to serialize schema", e))?;
         let IpcMessage(schema_bytes) = message;

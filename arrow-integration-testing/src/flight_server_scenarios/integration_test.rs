@@ -16,7 +16,6 @@
 // under the License.
 
 use std::collections::HashMap;
-use std::convert::TryFrom;
 use std::pin::Pin;
 use std::sync::Arc;
 
@@ -32,10 +31,9 @@ use arrow_flight::{
     flight_descriptor::DescriptorType, flight_service_server::FlightService,
     flight_service_server::FlightServiceServer, Action, ActionType, Criteria, Empty, FlightData,
     FlightDescriptor, FlightEndpoint, FlightInfo, HandshakeRequest, HandshakeResponse, IpcMessage,
-    PutResult, SchemaAsIpc, SchemaResult, Ticket,
+    PollInfo, PutResult, SchemaAsIpc, SchemaResult, Ticket,
 };
 use futures::{channel::mpsc, sink::SinkExt, Stream, StreamExt};
-use std::convert::TryInto;
 use tokio::sync::Mutex;
 use tonic::{transport::Server, Request, Response, Status, Streaming};
 
@@ -196,12 +194,20 @@ impl FlightService for FlightServiceImpl {
                     total_records: total_records as i64,
                     total_bytes: -1,
                     ordered: false,
+                    app_metadata: vec![].into(),
                 };
 
                 Ok(Response::new(info))
             }
             other => Err(Status::unimplemented(format!("Request type: {other}"))),
         }
+    }
+
+    async fn poll_flight_info(
+        &self,
+        _request: Request<FlightDescriptor>,
+    ) -> Result<Response<PollInfo>, Status> {
+        Err(Status::unimplemented("Not yet implemented"))
     }
 
     async fn do_put(

@@ -20,6 +20,10 @@
 //! The `FileReader` and `StreamReader` have similar interfaces,
 //! however the `FileReader` expects a reader that supports `Seek`ing
 
+mod stream;
+
+pub use stream::*;
+
 use flatbuffers::{VectorIter, VerifierOptions};
 use std::collections::HashMap;
 use std::fmt;
@@ -1190,7 +1194,6 @@ mod tests {
     use crate::root_as_message;
     use arrow_array::builder::{PrimitiveRunBuilder, UnionBuilder};
     use arrow_array::types::*;
-    use arrow_buffer::ArrowNativeType;
     use arrow_data::ArrayDataBuilder;
 
     fn create_test_projection_schema() -> Schema {
@@ -1429,7 +1432,7 @@ mod tests {
 
     fn roundtrip_ipc(rb: &RecordBatch) -> RecordBatch {
         let mut buf = Vec::new();
-        let mut writer = crate::writer::FileWriter::try_new(&mut buf, &rb.schema()).unwrap();
+        let mut writer = crate::writer::FileWriter::try_new(&mut buf, rb.schema_ref()).unwrap();
         writer.write(rb).unwrap();
         writer.finish().unwrap();
         drop(writer);
@@ -1440,7 +1443,7 @@ mod tests {
 
     fn roundtrip_ipc_stream(rb: &RecordBatch) -> RecordBatch {
         let mut buf = Vec::new();
-        let mut writer = crate::writer::StreamWriter::try_new(&mut buf, &rb.schema()).unwrap();
+        let mut writer = crate::writer::StreamWriter::try_new(&mut buf, rb.schema_ref()).unwrap();
         writer.write(rb).unwrap();
         writer.finish().unwrap();
         drop(writer);
@@ -1815,7 +1818,7 @@ mod tests {
         let batch = RecordBatch::new_empty(schema);
 
         let mut buf = Vec::new();
-        let mut writer = crate::writer::FileWriter::try_new(&mut buf, &batch.schema()).unwrap();
+        let mut writer = crate::writer::FileWriter::try_new(&mut buf, batch.schema_ref()).unwrap();
         writer.write(&batch).unwrap();
         writer.finish().unwrap();
         drop(writer);
@@ -1842,7 +1845,7 @@ mod tests {
         let batch = RecordBatch::new_empty(schema);
 
         let mut buf = Vec::new();
-        let mut writer = crate::writer::FileWriter::try_new(&mut buf, &batch.schema()).unwrap();
+        let mut writer = crate::writer::FileWriter::try_new(&mut buf, batch.schema_ref()).unwrap();
         writer.write(&batch).unwrap();
         writer.finish().unwrap();
         drop(writer);

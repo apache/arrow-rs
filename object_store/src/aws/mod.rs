@@ -17,17 +17,14 @@
 
 //! An object store implementation for S3
 //!
-//! ## Multi-part uploads
+//! ## Multipart uploads
 //!
-//! Multi-part uploads can be initiated with the [ObjectStore::put_multipart] method.
-//! Data passed to the writer is automatically buffered to meet the minimum size
-//! requirements for a part. Multiple parts are uploaded concurrently.
+//! Multipart uploads can be initiated with the [ObjectStore::put_multipart] method.
 //!
 //! If the writer fails for any reason, you may have parts uploaded to AWS but not
-//! used that you may be charged for. Use the [ObjectStore::abort_multipart] method
-//! to abort the upload and drop those unneeded parts. In addition, you may wish to
-//! consider implementing [automatic cleanup] of unused parts that are older than one
-//! week.
+//! used that you will be charged for. [`MultipartUpload::abort`] may be invoked to drop
+//! these unneeded parts, however, it is recommended that you consider implementing
+//! [automatic cleanup] of unused parts that are older than some threshold.
 //!
 //! [automatic cleanup]: https://aws.amazon.com/blogs/aws/s3-lifecycle-management-update-support-for-multipart-uploads-and-delete-markers/
 
@@ -38,18 +35,17 @@ use futures::{StreamExt, TryStreamExt};
 use reqwest::header::{HeaderName, IF_MATCH, IF_NONE_MATCH};
 use reqwest::{Method, StatusCode};
 use std::{sync::Arc, time::Duration};
-use tokio::io::AsyncWrite;
 use url::Url;
 
 use crate::aws::client::{RequestError, S3Client};
 use crate::client::get::GetClientExt;
 use crate::client::list::ListClientExt;
 use crate::client::CredentialProvider;
-use crate::multipart::{MultiPartStore, PartId, PutPart, WriteMultiPart};
+use crate::multipart::{MultipartStore, PartId};
 use crate::signer::Signer;
 use crate::{
-    Error, GetOptions, GetResult, ListResult, MultipartId, ObjectMeta, ObjectStore, Path, PutMode,
-    PutOptions, PutResult, Result,
+    Error, GetOptions, GetResult, ListResult, MultipartId, MultipartUpload, ObjectMeta,
+    ObjectStore, Path, PutMode, PutOptions, PutResult, Result, UploadPart,
 };
 
 static TAGS_HEADER: HeaderName = HeaderName::from_static("x-amz-tagging");
@@ -62,7 +58,7 @@ mod dynamo;
 mod precondition;
 mod resolve;
 
-pub use builder::{AmazonS3Builder, AmazonS3ConfigKey};
+pub use builder::{AmazonS3Builder, AmazonS3ConfigKey, S3EncryptionHeaders};
 pub use checksum::Checksum;
 pub use dynamo::DynamoCommit;
 pub use precondition::{S3ConditionalPut, S3CopyIfNotExists};
@@ -85,6 +81,7 @@ const STORE: &str = "S3";
 
 /// [`CredentialProvider`] for [`AmazonS3`]
 pub type AwsCredentialProvider = Arc<dyn CredentialProvider<Credential = AwsCredential>>;
+use crate::client::parts::Parts;
 pub use credential::{AwsAuthorizer, AwsCredential};
 
 /// Interface for [Amazon S3](https://aws.amazon.com/s3/).
@@ -164,7 +161,7 @@ impl Signer for AmazonS3 {
 #[async_trait]
 impl ObjectStore for AmazonS3 {
     async fn put_opts(&self, location: &Path, bytes: Bytes, opts: PutOptions) -> Result<PutResult> {
-        let mut request = self.client.put_request(location, bytes);
+        let mut request = self.client.put_request(location, bytes, true);
         let tags = opts.tags.encoded();
         if !tags.is_empty() && !self.client.config.disable_tagging {
             request = request.header(&TAGS_HEADER, tags);
@@ -211,25 +208,18 @@ impl ObjectStore for AmazonS3 {
         }
     }
 
-    async fn put_multipart(
-        &self,
-        location: &Path,
-    ) -> Result<(MultipartId, Box<dyn AsyncWrite + Unpin + Send>)> {
-        let id = self.client.create_multipart(location).await?;
+    async fn put_multipart(&self, location: &Path) -> Result<Box<dyn MultipartUpload>> {
+        let upload_id = self.client.create_multipart(location).await?;
 
-        let upload = S3MultiPartUpload {
-            location: location.clone(),
-            upload_id: id.clone(),
-            client: Arc::clone(&self.client),
-        };
-
-        Ok((id, Box::new(WriteMultiPart::new(upload, 8))))
-    }
-
-    async fn abort_multipart(&self, location: &Path, multipart_id: &MultipartId) -> Result<()> {
-        self.client
-            .delete_request(location, &[("uploadId", multipart_id)])
-            .await
+        Ok(Box::new(S3MultiPartUpload {
+            part_idx: 0,
+            state: Arc::new(UploadState {
+                client: Arc::clone(&self.client),
+                location: location.clone(),
+                upload_id: upload_id.clone(),
+                parts: Default::default(),
+            }),
+        }))
     }
 
     async fn get_opts(&self, location: &Path, options: GetOptions) -> Result<GetResult> {
@@ -319,30 +309,55 @@ impl ObjectStore for AmazonS3 {
     }
 }
 
+#[derive(Debug)]
 struct S3MultiPartUpload {
+    part_idx: usize,
+    state: Arc<UploadState>,
+}
+
+#[derive(Debug)]
+struct UploadState {
+    parts: Parts,
     location: Path,
     upload_id: String,
     client: Arc<S3Client>,
 }
 
 #[async_trait]
-impl PutPart for S3MultiPartUpload {
-    async fn put_part(&self, buf: Vec<u8>, part_idx: usize) -> Result<PartId> {
-        self.client
-            .put_part(&self.location, &self.upload_id, part_idx, buf.into())
+impl MultipartUpload for S3MultiPartUpload {
+    fn put_part(&mut self, data: Bytes) -> UploadPart {
+        let idx = self.part_idx;
+        self.part_idx += 1;
+        let state = Arc::clone(&self.state);
+        Box::pin(async move {
+            let part = state
+                .client
+                .put_part(&state.location, &state.upload_id, idx, data)
+                .await?;
+            state.parts.put(idx, part);
+            Ok(())
+        })
+    }
+
+    async fn complete(&mut self) -> Result<PutResult> {
+        let parts = self.state.parts.finish(self.part_idx)?;
+
+        self.state
+            .client
+            .complete_multipart(&self.state.location, &self.state.upload_id, parts)
             .await
     }
 
-    async fn complete(&self, completed_parts: Vec<PartId>) -> Result<()> {
-        self.client
-            .complete_multipart(&self.location, &self.upload_id, completed_parts)
-            .await?;
-        Ok(())
+    async fn abort(&mut self) -> Result<()> {
+        self.state
+            .client
+            .delete_request(&self.state.location, &[("uploadId", &self.state.upload_id)])
+            .await
     }
 }
 
 #[async_trait]
-impl MultiPartStore for AmazonS3 {
+impl MultipartStore for AmazonS3 {
     async fn create_multipart(&self, path: &Path) -> Result<MultipartId> {
         self.client.create_multipart(path).await
     }
@@ -374,8 +389,9 @@ impl MultiPartStore for AmazonS3 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tests::*;
+    use crate::{client::get::GetClient, tests::*};
     use bytes::Bytes;
+    use hyper::HeaderMap;
 
     const NON_EXISTENT_NAME: &str = "nonexistentname";
 
@@ -397,6 +413,7 @@ mod tests {
         stream_get(&integration).await;
         multipart(&integration, &integration).await;
         signing(&integration).await;
+        s3_encryption(&integration).await;
 
         // Object tagging is not supported by S3 Express One Zone
         if config.session_provider.is_none() {
@@ -514,5 +531,50 @@ mod tests {
             .unwrap();
 
         v2.list_with_delimiter(Some(&prefix)).await.unwrap();
+    }
+
+    async fn s3_encryption(store: &AmazonS3) {
+        crate::test_util::maybe_skip_integration!();
+
+        let data = Bytes::from(vec![3u8; 1024]);
+
+        let encryption_headers: HeaderMap = store.client.config.encryption_headers.clone().into();
+        let expected_encryption =
+            if let Some(encryption_type) = encryption_headers.get("x-amz-server-side-encryption") {
+                encryption_type
+            } else {
+                eprintln!("Skipping S3 encryption test - encryption not configured");
+                return;
+            };
+
+        let locations = [
+            Path::from("test-encryption-1"),
+            Path::from("test-encryption-2"),
+            Path::from("test-encryption-3"),
+        ];
+
+        store.put(&locations[0], data.clone()).await.unwrap();
+        store.copy(&locations[0], &locations[1]).await.unwrap();
+
+        let mut upload = store.put_multipart(&locations[2]).await.unwrap();
+        upload.put_part(data.clone()).await.unwrap();
+        upload.complete().await.unwrap();
+
+        for location in &locations {
+            let res = store
+                .client
+                .get_request(location, GetOptions::default())
+                .await
+                .unwrap();
+            let headers = res.headers();
+            assert_eq!(
+                headers
+                    .get("x-amz-server-side-encryption")
+                    .expect("object is not encrypted"),
+                expected_encryption
+            );
+
+            store.delete(location).await.unwrap();
+        }
     }
 }

@@ -27,6 +27,7 @@ use crate::client::TokenCredentialProvider;
 use crate::config::ConfigValue;
 use crate::{ClientConfigKey, ClientOptions, Result, RetryConfig, StaticCredentialProvider};
 use itertools::Itertools;
+use reqwest::header::{HeaderMap, HeaderValue};
 use serde::{Deserialize, Serialize};
 use snafu::{OptionExt, ResultExt, Snafu};
 use std::str::FromStr;
@@ -83,6 +84,19 @@ enum Error {
 
     #[snafu(display("Failed to parse the region for bucket '{}'", bucket))]
     RegionParse { bucket: String },
+
+    #[snafu(display("Invalid encryption type: {}. Valid values are \"AES256\", \"sse:kms\", and \"sse:kms:dsse\".", passed))]
+    InvalidEncryptionType { passed: String },
+
+    #[snafu(display(
+        "Invalid encryption header values. Header: {}, source: {}",
+        header,
+        source
+    ))]
+    InvalidEncryptionHeader {
+        header: &'static str,
+        source: Box<dyn std::error::Error + Send + Sync + 'static>,
+    },
 }
 
 impl From<Error> for crate::Error {
@@ -160,6 +174,10 @@ pub struct AmazonS3Builder {
     conditional_put: Option<ConfigValue<S3ConditionalPut>>,
     /// Ignore tags
     disable_tagging: ConfigValue<bool>,
+    /// Encryption (See [`S3EncryptionConfigKey`])
+    encryption_type: Option<ConfigValue<S3EncryptionType>>,
+    encryption_kms_key_id: Option<String>,
+    encryption_bucket_key_enabled: Option<ConfigValue<bool>>,
 }
 
 /// Configuration keys for [`AmazonS3Builder`]
@@ -322,6 +340,9 @@ pub enum AmazonS3ConfigKey {
 
     /// Client options
     Client(ClientConfigKey),
+
+    /// Encryption options
+    Encryption(S3EncryptionConfigKey),
 }
 
 impl AsRef<str> for AmazonS3ConfigKey {
@@ -346,6 +367,7 @@ impl AsRef<str> for AmazonS3ConfigKey {
             Self::ConditionalPut => "aws_conditional_put",
             Self::DisableTagging => "aws_disable_tagging",
             Self::Client(opt) => opt.as_ref(),
+            Self::Encryption(opt) => opt.as_ref(),
         }
     }
 }
@@ -377,6 +399,13 @@ impl FromStr for AmazonS3ConfigKey {
             "aws_disable_tagging" | "disable_tagging" => Ok(Self::DisableTagging),
             // Backwards compatibility
             "aws_allow_http" => Ok(Self::Client(ClientConfigKey::AllowHttp)),
+            "aws_server_side_encryption" => Ok(Self::Encryption(
+                S3EncryptionConfigKey::ServerSideEncryption,
+            )),
+            "aws_sse_kms_key_id" => Ok(Self::Encryption(S3EncryptionConfigKey::KmsKeyId)),
+            "aws_sse_bucket_key_enabled" => {
+                Ok(Self::Encryption(S3EncryptionConfigKey::BucketKeyEnabled))
+            }
             _ => match s.parse() {
                 Ok(key) => Ok(Self::Client(key)),
                 Err(_) => Err(Error::UnknownConfigurationKey { key: s.into() }.into()),
@@ -486,6 +515,15 @@ impl AmazonS3Builder {
             AmazonS3ConfigKey::ConditionalPut => {
                 self.conditional_put = Some(ConfigValue::Deferred(value.into()))
             }
+            AmazonS3ConfigKey::Encryption(key) => match key {
+                S3EncryptionConfigKey::ServerSideEncryption => {
+                    self.encryption_type = Some(ConfigValue::Deferred(value.into()))
+                }
+                S3EncryptionConfigKey::KmsKeyId => self.encryption_kms_key_id = Some(value.into()),
+                S3EncryptionConfigKey::BucketKeyEnabled => {
+                    self.encryption_bucket_key_enabled = Some(ConfigValue::Deferred(value.into()))
+                }
+            },
         };
         self
     }
@@ -531,6 +569,16 @@ impl AmazonS3Builder {
                 self.conditional_put.as_ref().map(ToString::to_string)
             }
             AmazonS3ConfigKey::DisableTagging => Some(self.disable_tagging.to_string()),
+            AmazonS3ConfigKey::Encryption(key) => match key {
+                S3EncryptionConfigKey::ServerSideEncryption => {
+                    self.encryption_type.as_ref().map(ToString::to_string)
+                }
+                S3EncryptionConfigKey::KmsKeyId => self.encryption_kms_key_id.clone(),
+                S3EncryptionConfigKey::BucketKeyEnabled => self
+                    .encryption_bucket_key_enabled
+                    .as_ref()
+                    .map(ToString::to_string),
+            },
         }
     }
 
@@ -759,6 +807,35 @@ impl AmazonS3Builder {
         self
     }
 
+    /// Use SSE-KMS for server side encryption.
+    pub fn with_sse_kms_encryption(mut self, kms_key_id: impl Into<String>) -> Self {
+        self.encryption_type = Some(ConfigValue::Parsed(S3EncryptionType::SseKms));
+        if let Some(kms_key_id) = kms_key_id.into().into() {
+            self.encryption_kms_key_id = Some(kms_key_id);
+        }
+        self
+    }
+
+    /// Use dual server side encryption for server side encryption.
+    pub fn with_dsse_kms_encryption(mut self, kms_key_id: impl Into<String>) -> Self {
+        self.encryption_type = Some(ConfigValue::Parsed(S3EncryptionType::DsseKms));
+        if let Some(kms_key_id) = kms_key_id.into().into() {
+            self.encryption_kms_key_id = Some(kms_key_id);
+        }
+        self
+    }
+
+    /// Set whether to enable bucket key for server side encryption. This overrides
+    /// the bucket default setting for bucket keys.
+    ///
+    /// When bucket keys are disabled, each object is encrypted with a unique data key.
+    /// When bucket keys are enabled, a single data key is used for the entire bucket,
+    /// reducing overhead of encryption.
+    pub fn with_bucket_key(mut self, enabled: bool) -> Self {
+        self.encryption_bucket_key_enabled = Some(ConfigValue::Parsed(enabled));
+        self
+    }
+
     /// Create a [`AmazonS3`] instance from the provided values,
     /// consuming `self`.
     pub fn build(mut self) -> Result<AmazonS3> {
@@ -882,6 +959,18 @@ impl AmazonS3Builder {
             (None, None, false) => format!("https://s3.{region}.amazonaws.com/{bucket}"),
         };
 
+        let encryption_headers = if let Some(encryption_type) = self.encryption_type {
+            S3EncryptionHeaders::try_new(
+                &encryption_type.get()?,
+                self.encryption_kms_key_id,
+                self.encryption_bucket_key_enabled
+                    .map(|val| val.get())
+                    .transpose()?,
+            )?
+        } else {
+            S3EncryptionHeaders::default()
+        };
+
         let config = S3Config {
             region,
             endpoint: self.endpoint,
@@ -897,6 +986,7 @@ impl AmazonS3Builder {
             checksum,
             copy_if_not_exists,
             conditional_put: put_precondition,
+            encryption_headers,
         };
 
         let client = Arc::new(S3Client::new(config)?);
@@ -910,6 +1000,121 @@ impl AmazonS3Builder {
 /// <https://docs.aws.amazon.com/AmazonS3/latest/userguide/directory-bucket-naming-rules.html>
 fn parse_bucket_az(bucket: &str) -> Option<&str> {
     Some(bucket.strip_suffix("--x-s3")?.rsplit_once("--")?.1)
+}
+
+/// Encryption configuration options for S3.
+///
+/// These options are used to configure server-side encryption for S3 objects.
+/// To configure them, pass them to [`AmazonS3Builder::with_config`].
+///
+/// Both [SSE-KMS] and [DSSE-KMS] are supported. [SSE-C] is not yet supported.
+///
+/// [SSE-KMS]: https://docs.aws.amazon.com/AmazonS3/latest/userguide/UsingKMSEncryption.html
+/// [DSSE-KMS]: https://docs.aws.amazon.com/AmazonS3/latest/userguide/UsingDSSEncryption.html
+/// [SSE-C]: https://docs.aws.amazon.com/AmazonS3/latest/userguide/ServerSideEncryptionCustomerKeys.html
+#[derive(PartialEq, Eq, Hash, Clone, Debug, Copy, Serialize, Deserialize)]
+#[non_exhaustive]
+pub enum S3EncryptionConfigKey {
+    /// Type of encryption to use. If set, must be one of "AES256", "aws:kms", or "aws:kms:dsse".
+    ServerSideEncryption,
+    /// The KMS key ID to use for server-side encryption. If set, ServerSideEncryption
+    /// must be "aws:kms" or "aws:kms:dsse".
+    KmsKeyId,
+    /// If set to true, will use the bucket's default KMS key for server-side encryption.
+    /// If set to false, will disable the use of the bucket's default KMS key for server-side encryption.
+    BucketKeyEnabled,
+}
+
+impl AsRef<str> for S3EncryptionConfigKey {
+    fn as_ref(&self) -> &str {
+        match self {
+            Self::ServerSideEncryption => "aws_server_side_encryption",
+            Self::KmsKeyId => "aws_sse_kms_key_id",
+            Self::BucketKeyEnabled => "aws_sse_bucket_key_enabled",
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+enum S3EncryptionType {
+    S3,
+    SseKms,
+    DsseKms,
+}
+
+impl crate::config::Parse for S3EncryptionType {
+    fn parse(s: &str) -> Result<Self> {
+        match s {
+            "AES256" => Ok(Self::S3),
+            "aws:kms" => Ok(Self::SseKms),
+            "aws:kms:dsse" => Ok(Self::DsseKms),
+            _ => Err(Error::InvalidEncryptionType { passed: s.into() }.into()),
+        }
+    }
+}
+
+impl From<&S3EncryptionType> for &'static str {
+    fn from(value: &S3EncryptionType) -> Self {
+        match value {
+            S3EncryptionType::S3 => "AES256",
+            S3EncryptionType::SseKms => "aws:kms",
+            S3EncryptionType::DsseKms => "aws:kms:dsse",
+        }
+    }
+}
+
+impl std::fmt::Display for S3EncryptionType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.into())
+    }
+}
+
+/// A sequence of headers to be sent for write requests that specify server-side
+/// encryption.
+///
+/// Whether these headers are sent depends on both the kind of encryption set
+/// and the kind of request being made.
+#[derive(Default, Clone, Debug)]
+pub struct S3EncryptionHeaders(HeaderMap);
+
+impl S3EncryptionHeaders {
+    fn try_new(
+        encryption_type: &S3EncryptionType,
+        key_id: Option<String>,
+        bucket_key_enabled: Option<bool>,
+    ) -> Result<Self> {
+        let mut headers = HeaderMap::new();
+        // Note: if we later add support for SSE-C, we should be sure to use
+        // HeaderValue::set_sensitive to prevent the key from being logged.
+        headers.insert(
+            "x-amz-server-side-encryption",
+            HeaderValue::from_static(encryption_type.into()),
+        );
+        if let Some(key_id) = key_id {
+            headers.insert(
+                "x-amz-server-side-encryption-aws-kms-key-id",
+                key_id
+                    .try_into()
+                    .map_err(|err| Error::InvalidEncryptionHeader {
+                        header: "kms-key-id",
+                        source: Box::new(err),
+                    })?,
+            );
+        }
+        if let Some(bucket_key_enabled) = bucket_key_enabled {
+            headers.insert(
+                "x-amz-server-side-encryption-bucket-key-enabled",
+                HeaderValue::from_static(if bucket_key_enabled { "true" } else { "false" }),
+            );
+        }
+        Ok(Self(headers))
+    }
+}
+
+impl From<S3EncryptionHeaders> for HeaderMap {
+    fn from(headers: S3EncryptionHeaders) -> Self {
+        headers.0
+    }
 }
 
 #[cfg(test)]
@@ -967,7 +1172,10 @@ mod tests {
             .with_config(AmazonS3ConfigKey::DefaultRegion, &aws_default_region)
             .with_config(AmazonS3ConfigKey::Endpoint, &aws_endpoint)
             .with_config(AmazonS3ConfigKey::Token, &aws_session_token)
-            .with_config(AmazonS3ConfigKey::UnsignedPayload, "true");
+            .with_config(AmazonS3ConfigKey::UnsignedPayload, "true")
+            .with_config("aws_server_side_encryption".parse().unwrap(), "AES256")
+            .with_config("aws_sse_kms_key_id".parse().unwrap(), "some_key_id")
+            .with_config("aws_sse_bucket_key_enabled".parse().unwrap(), "true");
 
         assert_eq!(
             builder
@@ -1000,6 +1208,24 @@ mod tests {
         assert_eq!(
             builder
                 .get_config_value(&AmazonS3ConfigKey::UnsignedPayload)
+                .unwrap(),
+            "true"
+        );
+        assert_eq!(
+            builder
+                .get_config_value(&"aws_server_side_encryption".parse().unwrap())
+                .unwrap(),
+            "AES256"
+        );
+        assert_eq!(
+            builder
+                .get_config_value(&"aws_sse_kms_key_id".parse().unwrap())
+                .unwrap(),
+            "some_key_id"
+        );
+        assert_eq!(
+            builder
+                .get_config_value(&"aws_sse_bucket_key_enabled".parse().unwrap())
                 .unwrap(),
             "true"
         );

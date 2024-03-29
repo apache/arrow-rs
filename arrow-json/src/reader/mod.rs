@@ -140,7 +140,6 @@ use chrono::Utc;
 use serde::Serialize;
 
 use arrow_array::timezone::Tz;
-use arrow_array::types::Float32Type;
 use arrow_array::types::*;
 use arrow_array::{downcast_integer, make_array, RecordBatch, RecordBatchReader, StructArray};
 use arrow_data::ArrayData;
@@ -417,7 +416,7 @@ impl Decoder {
     /// should be included in the next call to [`Self::decode`]
     ///
     /// There is no requirement that `buf` contains a whole number of records, facilitating
-    /// integration with arbitrary byte streams, such as that yielded by [`BufRead`]
+    /// integration with arbitrary byte streams, such as those yielded by [`BufRead`]
     pub fn decode(&mut self, buf: &[u8]) -> Result<usize, ArrowError> {
         self.tape_decoder.decode(buf)
     }
@@ -713,20 +712,13 @@ mod tests {
     use serde_json::json;
     use std::fs::File;
     use std::io::{BufReader, Cursor, Seek};
-    use std::sync::Arc;
 
     use arrow_array::cast::AsArray;
-    use arrow_array::types::Int32Type;
-    use arrow_array::{
-        make_array, Array, BooleanArray, Float64Array, ListArray, StringArray, StructArray,
-    };
+    use arrow_array::{Array, BooleanArray, Float64Array, ListArray, StringArray};
     use arrow_buffer::{ArrowNativeType, Buffer};
     use arrow_cast::display::{ArrayFormatter, FormatOptions};
     use arrow_data::ArrayDataBuilder;
-    use arrow_schema::{DataType, Field, FieldRef, Schema};
-
-    use crate::reader::infer_json_schema;
-    use crate::ReaderBuilder;
+    use arrow_schema::Field;
 
     use super::*;
 

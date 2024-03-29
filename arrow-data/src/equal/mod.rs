@@ -25,6 +25,7 @@ use arrow_schema::{DataType, IntervalUnit};
 use half::f16;
 
 mod boolean;
+mod byte_view;
 mod dictionary;
 mod fixed_binary;
 mod fixed_list;
@@ -41,6 +42,7 @@ mod variable_size;
 // For this reason, they are not exposed and are instead used
 // to build the generic functions below (`equal_range` and `equal`).
 use boolean::boolean_equal;
+use byte_view::byte_view_equal;
 use dictionary::dictionary_equal;
 use fixed_binary::fixed_binary_equal;
 use fixed_list::fixed_list_equal;
@@ -96,7 +98,13 @@ fn equal_values(
             variable_sized_equal::<i64>(lhs, rhs, lhs_start, rhs_start, len)
         }
         DataType::FixedSizeBinary(_) => fixed_binary_equal(lhs, rhs, lhs_start, rhs_start, len),
+        DataType::BinaryView | DataType::Utf8View => {
+            byte_view_equal(lhs, rhs, lhs_start, rhs_start, len)
+        }
         DataType::List(_) => list_equal::<i32>(lhs, rhs, lhs_start, rhs_start, len),
+        DataType::ListView(_) | DataType::LargeListView(_) => {
+            unimplemented!("ListView/LargeListView not yet implemented")
+        }
         DataType::LargeList(_) => list_equal::<i64>(lhs, rhs, lhs_start, rhs_start, len),
         DataType::FixedSizeList(_, _) => fixed_list_equal(lhs, rhs, lhs_start, rhs_start, len),
         DataType::Struct(_) => struct_equal(lhs, rhs, lhs_start, rhs_start, len),

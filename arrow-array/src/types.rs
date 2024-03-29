@@ -25,12 +25,14 @@ use crate::timezone::Tz;
 use crate::{ArrowNativeTypeOp, OffsetSizeTrait};
 use arrow_buffer::{i256, Buffer, OffsetBuffer};
 use arrow_data::decimal::{validate_decimal256_precision, validate_decimal_precision};
+use arrow_data::{validate_binary_view, validate_string_view};
 use arrow_schema::{
     ArrowError, DataType, IntervalUnit, TimeUnit, DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE,
     DECIMAL256_MAX_PRECISION, DECIMAL256_MAX_SCALE, DECIMAL_DEFAULT_SCALE,
 };
 use chrono::{Duration, NaiveDate, NaiveDateTime};
 use half::f16;
+use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::ops::{Add, Sub};
 
@@ -390,31 +392,34 @@ impl ArrowTimestampType for TimestampSecondType {
     const UNIT: TimeUnit = TimeUnit::Second;
 
     fn make_value(naive: NaiveDateTime) -> Option<i64> {
-        Some(naive.timestamp())
+        Some(naive.and_utc().timestamp())
     }
 }
 impl ArrowTimestampType for TimestampMillisecondType {
     const UNIT: TimeUnit = TimeUnit::Millisecond;
 
     fn make_value(naive: NaiveDateTime) -> Option<i64> {
-        let millis = naive.timestamp().checked_mul(1_000)?;
-        millis.checked_add(naive.timestamp_subsec_millis() as i64)
+        let utc = naive.and_utc();
+        let millis = utc.timestamp().checked_mul(1_000)?;
+        millis.checked_add(utc.timestamp_subsec_millis() as i64)
     }
 }
 impl ArrowTimestampType for TimestampMicrosecondType {
     const UNIT: TimeUnit = TimeUnit::Microsecond;
 
     fn make_value(naive: NaiveDateTime) -> Option<i64> {
-        let micros = naive.timestamp().checked_mul(1_000_000)?;
-        micros.checked_add(naive.timestamp_subsec_micros() as i64)
+        let utc = naive.and_utc();
+        let micros = utc.timestamp().checked_mul(1_000_000)?;
+        micros.checked_add(utc.timestamp_subsec_micros() as i64)
     }
 }
 impl ArrowTimestampType for TimestampNanosecondType {
     const UNIT: TimeUnit = TimeUnit::Nanosecond;
 
     fn make_value(naive: NaiveDateTime) -> Option<i64> {
-        let nanos = naive.timestamp().checked_mul(1_000_000_000)?;
-        nanos.checked_add(naive.timestamp_subsec_nanos() as i64)
+        let utc = naive.and_utc();
+        let nanos = utc.timestamp().checked_mul(1_000_000_000)?;
+        nanos.checked_add(utc.timestamp_subsec_nanos() as i64)
     }
 }
 
@@ -438,7 +443,7 @@ fn add_day_time<T: ArrowTimestampType>(
     let (days, ms) = IntervalDayTimeType::to_parts(delta);
     let res = as_datetime_with_timezone::<T>(timestamp, tz)?;
     let res = add_days_datetime(res, days)?;
-    let res = res.checked_add_signed(Duration::milliseconds(ms as i64))?;
+    let res = res.checked_add_signed(Duration::try_milliseconds(ms as i64)?)?;
     let res = res.naive_utc();
     T::make_value(res)
 }
@@ -477,7 +482,7 @@ fn subtract_day_time<T: ArrowTimestampType>(
     let (days, ms) = IntervalDayTimeType::to_parts(delta);
     let res = as_datetime_with_timezone::<T>(timestamp, tz)?;
     let res = sub_days_datetime(res, days)?;
-    let res = res.checked_sub_signed(Duration::milliseconds(ms as i64))?;
+    let res = res.checked_sub_signed(Duration::try_milliseconds(ms as i64)?)?;
     let res = res.naive_utc();
     T::make_value(res)
 }
@@ -1001,7 +1006,7 @@ impl Date32Type {
     /// * `i` - The Date32Type to convert
     pub fn to_naive_date(i: <Date32Type as ArrowPrimitiveType>::Native) -> NaiveDate {
         let epoch = NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
-        epoch.add(Duration::days(i as i64))
+        epoch.add(Duration::try_days(i as i64).unwrap())
     }
 
     /// Converts a chrono::NaiveDate into an arrow Date32Type
@@ -1042,8 +1047,8 @@ impl Date32Type {
     ) -> <Date32Type as ArrowPrimitiveType>::Native {
         let (days, ms) = IntervalDayTimeType::to_parts(delta);
         let res = Date32Type::to_naive_date(date);
-        let res = res.add(Duration::days(days as i64));
-        let res = res.add(Duration::milliseconds(ms as i64));
+        let res = res.add(Duration::try_days(days as i64).unwrap());
+        let res = res.add(Duration::try_milliseconds(ms as i64).unwrap());
         Date32Type::from_naive_date(res)
     }
 
@@ -1060,7 +1065,7 @@ impl Date32Type {
         let (months, days, nanos) = IntervalMonthDayNanoType::to_parts(delta);
         let res = Date32Type::to_naive_date(date);
         let res = shift_months(res, months);
-        let res = res.add(Duration::days(days as i64));
+        let res = res.add(Duration::try_days(days as i64).unwrap());
         let res = res.add(Duration::nanoseconds(nanos));
         Date32Type::from_naive_date(res)
     }
@@ -1093,8 +1098,8 @@ impl Date32Type {
     ) -> <Date32Type as ArrowPrimitiveType>::Native {
         let (days, ms) = IntervalDayTimeType::to_parts(delta);
         let res = Date32Type::to_naive_date(date);
-        let res = res.sub(Duration::days(days as i64));
-        let res = res.sub(Duration::milliseconds(ms as i64));
+        let res = res.sub(Duration::try_days(days as i64).unwrap());
+        let res = res.sub(Duration::try_milliseconds(ms as i64).unwrap());
         Date32Type::from_naive_date(res)
     }
 
@@ -1111,7 +1116,7 @@ impl Date32Type {
         let (months, days, nanos) = IntervalMonthDayNanoType::to_parts(delta);
         let res = Date32Type::to_naive_date(date);
         let res = shift_months(res, -months);
-        let res = res.sub(Duration::days(days as i64));
+        let res = res.sub(Duration::try_days(days as i64).unwrap());
         let res = res.sub(Duration::nanoseconds(nanos));
         Date32Type::from_naive_date(res)
     }
@@ -1125,7 +1130,7 @@ impl Date64Type {
     /// * `i` - The Date64Type to convert
     pub fn to_naive_date(i: <Date64Type as ArrowPrimitiveType>::Native) -> NaiveDate {
         let epoch = NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
-        epoch.add(Duration::milliseconds(i))
+        epoch.add(Duration::try_milliseconds(i).unwrap())
     }
 
     /// Converts a chrono::NaiveDate into an arrow Date64Type
@@ -1166,8 +1171,8 @@ impl Date64Type {
     ) -> <Date64Type as ArrowPrimitiveType>::Native {
         let (days, ms) = IntervalDayTimeType::to_parts(delta);
         let res = Date64Type::to_naive_date(date);
-        let res = res.add(Duration::days(days as i64));
-        let res = res.add(Duration::milliseconds(ms as i64));
+        let res = res.add(Duration::try_days(days as i64).unwrap());
+        let res = res.add(Duration::try_milliseconds(ms as i64).unwrap());
         Date64Type::from_naive_date(res)
     }
 
@@ -1184,7 +1189,7 @@ impl Date64Type {
         let (months, days, nanos) = IntervalMonthDayNanoType::to_parts(delta);
         let res = Date64Type::to_naive_date(date);
         let res = shift_months(res, months);
-        let res = res.add(Duration::days(days as i64));
+        let res = res.add(Duration::try_days(days as i64).unwrap());
         let res = res.add(Duration::nanoseconds(nanos));
         Date64Type::from_naive_date(res)
     }
@@ -1217,8 +1222,8 @@ impl Date64Type {
     ) -> <Date64Type as ArrowPrimitiveType>::Native {
         let (days, ms) = IntervalDayTimeType::to_parts(delta);
         let res = Date64Type::to_naive_date(date);
-        let res = res.sub(Duration::days(days as i64));
-        let res = res.sub(Duration::milliseconds(ms as i64));
+        let res = res.sub(Duration::try_days(days as i64).unwrap());
+        let res = res.sub(Duration::try_milliseconds(ms as i64).unwrap());
         Date64Type::from_naive_date(res)
     }
 
@@ -1235,7 +1240,7 @@ impl Date64Type {
         let (months, days, nanos) = IntervalMonthDayNanoType::to_parts(delta);
         let res = Date64Type::to_naive_date(date);
         let res = shift_months(res, -months);
-        let res = res.sub(Duration::days(days as i64));
+        let res = res.sub(Duration::try_days(days as i64).unwrap());
         let res = res.sub(Duration::nanoseconds(nanos));
         Date64Type::from_naive_date(res)
     }
@@ -1540,6 +1545,72 @@ impl<O: OffsetSizeTrait> ByteArrayType for GenericBinaryType<O> {
 pub type BinaryType = GenericBinaryType<i32>;
 /// An arrow binary array with i64 offsets
 pub type LargeBinaryType = GenericBinaryType<i64>;
+
+mod byte_view {
+    use crate::types::{BinaryViewType, StringViewType};
+
+    pub trait Sealed: Send + Sync {}
+    impl Sealed for StringViewType {}
+    impl Sealed for BinaryViewType {}
+}
+
+/// A trait over the variable length bytes view array types
+pub trait ByteViewType: byte_view::Sealed + 'static + PartialEq + Send + Sync {
+    /// If element in array is utf8 encoded string.
+    const IS_UTF8: bool;
+
+    /// Datatype of array elements
+    const DATA_TYPE: DataType = if Self::IS_UTF8 {
+        DataType::Utf8View
+    } else {
+        DataType::BinaryView
+    };
+
+    /// "Binary" or "String", for use in displayed or error messages
+    const PREFIX: &'static str;
+
+    /// Type for representing its equivalent rust type i.e
+    /// Utf8Array will have native type has &str
+    /// BinaryArray will have type as [u8]
+    type Native: bytes::ByteArrayNativeType + AsRef<Self::Native> + AsRef<[u8]> + ?Sized;
+
+    /// Type for owned corresponding to `Native`
+    type Owned: Debug + Clone + Sync + Send + AsRef<Self::Native>;
+
+    /// Verifies that the provided buffers are valid for this array type
+    fn validate(views: &[u128], buffers: &[Buffer]) -> Result<(), ArrowError>;
+}
+
+/// [`ByteViewType`] for string arrays
+#[derive(PartialEq)]
+pub struct StringViewType {}
+
+impl ByteViewType for StringViewType {
+    const IS_UTF8: bool = true;
+    const PREFIX: &'static str = "String";
+
+    type Native = str;
+    type Owned = String;
+
+    fn validate(views: &[u128], buffers: &[Buffer]) -> Result<(), ArrowError> {
+        validate_string_view(views, buffers)
+    }
+}
+
+/// [`BinaryViewType`] for string arrays
+#[derive(PartialEq)]
+pub struct BinaryViewType {}
+
+impl ByteViewType for BinaryViewType {
+    const IS_UTF8: bool = false;
+    const PREFIX: &'static str = "Binary";
+    type Native = [u8];
+    type Owned = Vec<u8>;
+
+    fn validate(views: &[u128], buffers: &[Buffer]) -> Result<(), ArrowError> {
+        validate_binary_view(views, buffers)
+    }
+}
 
 #[cfg(test)]
 mod tests {
