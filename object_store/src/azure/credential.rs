@@ -930,8 +930,8 @@ impl CredentialProvider for AzureCliCredential {
 #[cfg(test)]
 mod tests {
     use futures::executor::block_on;
-    use hyper::body::to_bytes;
-    use hyper::{Body, Response, StatusCode};
+    use http_body_util::BodyExt;
+    use hyper::{Response, StatusCode};
     use reqwest::{Client, Method};
     use tempfile::NamedTempFile;
 
@@ -942,7 +942,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_managed_identity() {
-        let server = MockServer::new();
+        let server = MockServer::new().await;
 
         std::env::set_var(MSI_SECRET_ENV_KEY, "env-secret");
 
@@ -964,7 +964,7 @@ mod tests {
             assert_eq!(t, "env-secret");
             let t = req.headers().get("metadata").unwrap().to_str().unwrap();
             assert_eq!(t, "true");
-            Response::new(Body::from(
+            Response::new(
                 r#"
             {
                 "access_token": "TOKEN",
@@ -975,8 +975,9 @@ mod tests {
                 "resource": "https://management.azure.com/",
                 "token_type": "Bearer"
               }
-            "#,
-            ))
+            "#
+                .to_string(),
+            )
         });
 
         let credential = ImdsManagedIdentityProvider::new(
@@ -999,7 +1000,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_workload_identity() {
-        let server = MockServer::new();
+        let server = MockServer::new().await;
         let tokenfile = NamedTempFile::new().unwrap();
         let tenant = "tenant";
         std::fs::write(tokenfile.path(), "federated-token").unwrap();
@@ -1012,10 +1013,10 @@ mod tests {
         server.push_fn(move |req| {
             assert_eq!(req.uri().path(), format!("/{tenant}/oauth2/v2.0/token"));
             assert_eq!(req.method(), &Method::POST);
-            let body = block_on(to_bytes(req.into_body())).unwrap();
+            let body = block_on(async move { req.into_body().collect().await.unwrap().to_bytes() });
             let body = String::from_utf8(body.to_vec()).unwrap();
             assert!(body.contains("federated-token"));
-            Response::new(Body::from(
+            Response::new(
                 r#"
             {
                 "access_token": "TOKEN",
@@ -1026,8 +1027,9 @@ mod tests {
                 "resource": "https://management.azure.com/",
                 "token_type": "Bearer"
               }
-            "#,
-            ))
+            "#
+                .to_string(),
+            )
         });
 
         let credential = WorkloadIdentityOAuthProvider::new(
@@ -1050,7 +1052,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_no_credentials() {
-        let server = MockServer::new();
+        let server = MockServer::new().await;
 
         let endpoint = server.url();
         let store = MicrosoftAzureBuilder::new()
@@ -1068,7 +1070,7 @@ mod tests {
             assert!(req.headers().get("Authorization").is_none());
             Response::builder()
                 .status(StatusCode::NOT_FOUND)
-                .body(Body::from("not found"))
+                .body("not found".to_string())
                 .unwrap()
         });
 
