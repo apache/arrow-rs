@@ -425,7 +425,7 @@ mod tests {
         }
 
         let e = do_request().await.unwrap_err().to_string();
-        assert!(e.ends_with("too many redirects"), "{}", e);
+        assert!(e.contains("error following redirect for url"), "{}", e);
 
         // Handles redirect missing location
         mock.push(
@@ -489,7 +489,7 @@ mod tests {
         let res = client.request(Method::PUT, mock.url()).send_retry(&retry);
         let e = res.await.unwrap_err().to_string();
         assert!(
-            e.contains("Error after 0 retries in") && e.contains("operation timed out"),
+            e.contains("Error after 0 retries in") && e.contains("error sending request for url"),
             "{e}"
         );
 
