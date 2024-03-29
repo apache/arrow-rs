@@ -70,15 +70,6 @@ pub type GcpCredentialProvider = Arc<dyn CredentialProvider<Credential = GcpCred
 /// [`GcpSigningCredential`] for [`GoogleCloudStorage`]
 pub type GcpSigningCredentialProvider =
     Arc<dyn CredentialProvider<Credential = GcpSigningCredential>>;
-
-// Do not URI-encode any of the unreserved characters that RFC 3986 defines:
-// A-Z, a-z, 0-9, hyphen ( - ), underscore ( _ ), period ( . ), and tilde ( ~ ).
-pub(crate) const STRICT_ENCODE_SET: percent_encoding::AsciiSet = percent_encoding::NON_ALPHANUMERIC
-    .remove(b'-')
-    .remove(b'.')
-    .remove(b'_')
-    .remove(b'~');
-
 /// default payload string for GCS
 pub const DEFAULT_GCS_PLAYLOAD_STRING: &str = "UNSIGNED-PAYLOAD";
 

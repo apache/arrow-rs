@@ -18,7 +18,8 @@
 use crate::client::retry::RetryExt;
 use crate::client::token::TemporaryToken;
 use crate::client::TokenProvider;
-use crate::gcp::{DEFAULT_GCS_PLAYLOAD_STRING, STORE, STRICT_ENCODE_SET};
+use crate::gcp::{DEFAULT_GCS_PLAYLOAD_STRING, STORE};
+use crate::util::{hex_digest, STRICT_ENCODE_SET};
 use crate::RetryConfig;
 use async_trait::async_trait;
 use base64::prelude::BASE64_URL_SAFE_NO_PAD;
@@ -653,23 +654,6 @@ impl TokenProvider for AuthorizedUserCredentials {
             expiry: Some(Instant::now() + Duration::from_secs(response.expires_in)),
         })
     }
-}
-
-/// Computes the SHA256 digest of `body` returned as a hex encoded string
-fn hex_digest(bytes: &[u8]) -> String {
-    let digest = ring::digest::digest(&ring::digest::SHA256, bytes);
-    hex_encode(digest.as_ref())
-}
-
-/// Returns `bytes` as a lower-case hex encoded string
-fn hex_encode(bytes: &[u8]) -> String {
-    use std::fmt::Write;
-    let mut out = String::with_capacity(bytes.len() * 2);
-    for byte in bytes {
-        // String writing is infallible
-        let _ = write!(out, "{byte:02x}");
-    }
-    out
 }
 
 /// Trim whitespace from header values
