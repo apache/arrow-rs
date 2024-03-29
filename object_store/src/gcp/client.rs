@@ -24,7 +24,7 @@ use crate::client::s3::{
     ListResponse,
 };
 use crate::client::GetOptionsExt;
-use crate::gcp::{GcpCredential, GcpCredentialProvider, STORE};
+use crate::gcp::{GcpCredential, GcpCredentialProvider, GcpSigningCredentialProvider, STORE};
 use crate::multipart::PartId;
 use crate::path::{Path, DELIMITER};
 use crate::{
@@ -131,6 +131,8 @@ pub struct GoogleCloudStorageConfig {
 
     pub credentials: GcpCredentialProvider,
 
+    pub sign_credentials: GcpSigningCredentialProvider,
+
     pub bucket_name: String,
 
     pub retry_config: RetryConfig,
@@ -142,6 +144,7 @@ impl GoogleCloudStorageConfig {
     pub fn new(
         base_url: String,
         credentials: GcpCredentialProvider,
+        sign_credentials: GcpSigningCredentialProvider,
         bucket_name: String,
         retry_config: RetryConfig,
         client_options: ClientOptions,
@@ -149,6 +152,7 @@ impl GoogleCloudStorageConfig {
         Self {
             base_url,
             credentials,
+            sign_credentials,
             bucket_name,
             retry_config,
             client_options,
@@ -246,9 +250,9 @@ impl GoogleCloudStorageClient {
     /// form like:
     /// ```plaintext
     /// curl -X POST --data-binary @JSON_FILE_NAME \
-    ///-H "Authorization: Bearer OAUTH2_TOKEN" \
-    ///-H "Content-Type: application/json" \
-    ///"https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/SERVICE_ACCOUNT_EMAIL:signBlob"
+    /// -H "Authorization: Bearer OAUTH2_TOKEN" \
+    /// -H "Content-Type: application/json" \
+    /// "https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/SERVICE_ACCOUNT_EMAIL:signBlob"
     /// ```
     ///
     /// 'JSON_FILE_NAME' is a file containing the following JSON object:

@@ -21,13 +21,19 @@ use crate::gcp::credential::{
     ApplicationDefaultCredentials, InstanceCredentialProvider, ServiceAccountCredentials,
     DEFAULT_GCS_BASE_URL,
 };
-use crate::gcp::{credential, GcpCredential, GcpCredentialProvider, GoogleCloudStorage, STORE};
+use crate::gcp::{
+    credential, GcpCredential, GcpCredentialProvider, GcpSigningCredentialProvider,
+    GoogleCloudStorage, STORE,
+};
 use crate::{ClientConfigKey, ClientOptions, Result, RetryConfig, StaticCredentialProvider};
 use serde::{Deserialize, Serialize};
 use snafu::{OptionExt, ResultExt, Snafu};
 use std::str::FromStr;
 use std::sync::Arc;
 use url::Url;
+
+use super::credential::{AuthorizedUserCredentialsForSign, InstanceSignCredentialProvider};
+use super::GcpSigningCredential;
 
 #[derive(Debug, Snafu)]
 enum Error {
@@ -107,6 +113,8 @@ pub struct GoogleCloudStorageBuilder {
     client_options: ClientOptions,
     /// Credentials
     credentials: Option<GcpCredentialProvider>,
+    /// Credentials for sign url
+    sign_cedentials: Option<GcpSigningCredentialProvider>,
 }
 
 /// Configuration keys for [`GoogleCloudStorageBuilder`]
@@ -202,6 +210,7 @@ impl Default for GoogleCloudStorageBuilder {
             client_options: ClientOptions::new().with_allow_http(true),
             url: None,
             credentials: None,
+            sign_cedentials: None,
         }
     }
 }
@@ -451,15 +460,14 @@ impl GoogleCloudStorageBuilder {
         } else if disable_oauth {
             Arc::new(StaticCredentialProvider::new(GcpCredential {
                 bearer: "".to_string(),
-                client_email: None,
             })) as _
-        } else if let Some(credentials) = service_account_credentials {
+        } else if let Some(credentials) = service_account_credentials.clone() {
             Arc::new(TokenCredentialProvider::new(
                 credentials.token_provider()?,
                 self.client_options.client()?,
                 self.retry_config.clone(),
             )) as _
-        } else if let Some(credentials) = application_default_credentials {
+        } else if let Some(credentials) = application_default_credentials.clone() {
             match credentials {
                 ApplicationDefaultCredentials::AuthorizedUser(token) => {
                     Arc::new(TokenCredentialProvider::new(
@@ -484,9 +492,49 @@ impl GoogleCloudStorageBuilder {
             )) as _
         };
 
+        let sign_crendentials: GcpSigningCredentialProvider =
+            if let Some(sign_credentials) = self.sign_cedentials {
+                sign_credentials
+            } else if disable_oauth {
+                Arc::new(StaticCredentialProvider::new(GcpSigningCredential {
+                    credential: Arc::new(GcpCredential { bearer: "".into() }),
+                    email: None,
+                })) as _
+            } else if let Some(credentials) = service_account_credentials {
+                Arc::new(TokenCredentialProvider::new(
+                    credentials.email_provider()?,
+                    self.client_options.client()?,
+                    self.retry_config.clone(),
+                )) as _
+            } else if let Some(credentials) = application_default_credentials {
+                match credentials {
+                    ApplicationDefaultCredentials::AuthorizedUser(token) => {
+                        Arc::new(TokenCredentialProvider::new(
+                            AuthorizedUserCredentialsForSign::from(token)?,
+                            self.client_options.client()?,
+                            self.retry_config.clone(),
+                        )) as _
+                    }
+                    ApplicationDefaultCredentials::ServiceAccount(token) => {
+                        Arc::new(TokenCredentialProvider::new(
+                            token.email_provider()?,
+                            self.client_options.client()?,
+                            self.retry_config.clone(),
+                        )) as _
+                    }
+                }
+            } else {
+                Arc::new(TokenCredentialProvider::new(
+                    InstanceSignCredentialProvider::default(),
+                    self.client_options.metadata_client()?,
+                    self.retry_config.clone(),
+                )) as _
+            };
+
         let config = GoogleCloudStorageConfig::new(
             gcs_base_url,
             credentials,
+            sign_crendentials,
             bucket_name,
             self.retry_config,
             self.client_options,

@@ -60,7 +60,7 @@ use crate::client::get::GetClientExt;
 use crate::client::list::ListClientExt;
 use crate::multipart::MultiPartStore;
 pub use builder::{GoogleCloudStorageBuilder, GoogleConfigKey};
-pub use credential::GcpCredential;
+pub use credential::{GcpCredential, GcpSigningCredential};
 
 mod builder;
 mod client;
@@ -70,6 +70,10 @@ const STORE: &str = "GCS";
 
 /// [`CredentialProvider`] for [`GoogleCloudStorage`]
 pub type GcpCredentialProvider = Arc<dyn CredentialProvider<Credential = GcpCredential>>;
+
+/// [`GcpSigningCredential`] for [`GoogleCloudStorage`]
+pub type GcpSigningCredentialProvider =
+    Arc<dyn CredentialProvider<Credential = GcpSigningCredential>>;
 
 // Do not URI-encode any of the unreserved characters that RFC 3986 defines:
 // A-Z, a-z, 0-9, hyphen ( - ), underscore ( _ ), period ( . ), and tilde ( ~ ).
@@ -102,6 +106,11 @@ impl GoogleCloudStorage {
     /// Returns the [`GcpCredentialProvider`] used by [`GoogleCloudStorage`]
     pub fn credentials(&self) -> &GcpCredentialProvider {
         &self.client.config().credentials
+    }
+
+    /// Returns the [`GcpSigningCredentialProvider`] used by [`GoogleCloudStorage`]
+    pub fn sign_credential(&self) -> &GcpSigningCredentialProvider {
+        &self.client.config().sign_credentials
     }
 }
 
@@ -232,33 +241,18 @@ impl Signer for GoogleCloudStorage {
         }
 
         let config = self.client.config();
-        let credentials = self.credentials().get_credential().await?;
         let path_url = config.path_url(path);
         let mut url = Url::parse(&path_url).map_err(|e| crate::Error::Generic {
             store: STORE,
             source: format!("Unable to parse url {path_url}: {e}").into(),
         })?;
 
-        let authoriztor = GCSAuthorizer::new();
+        let sign_credential = self.sign_credential().get_credential().await?;
+        let authoriztor = GCSAuthorizer::new(sign_credential);
 
-        let client_email = if credentials.client_email.is_none() {
-            return Err(crate::Error::Generic {
-                store: STORE,
-                source: "Unable to get client email from credentials.".into(),
-            });
-        } else {
-            credentials.client_email.as_ref().unwrap()
-        };
         let host = format!("{}.storage.googleapis.com", config.bucket_name);
         authoriztor
-            .sign(
-                method,
-                &mut url,
-                expires_in,
-                &host,
-                client_email,
-                &self.client,
-            )
+            .sign(method, &mut url, expires_in, &host, &self.client)
             .await?;
 
         Ok(url)
