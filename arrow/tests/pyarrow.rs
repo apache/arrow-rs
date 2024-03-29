@@ -32,9 +32,9 @@ fn test_to_pyarrow() {
 
     let res = Python::with_gil(|py| {
         let py_input = input.to_pyarrow(py)?;
-        let records = RecordBatch::from_pyarrow(py_input.as_ref(py))?;
+        let records = RecordBatch::from_pyarrow(py_input.bind(py).as_gil_ref())?; // TODO
         let py_records = records.to_pyarrow(py)?;
-        RecordBatch::from_pyarrow(py_records.as_ref(py))
+        RecordBatch::from_pyarrow(py_records.bind(py).as_gil_ref()) // TODO
     })
     .unwrap();
 
