@@ -375,6 +375,7 @@ fn filter_array(values: &dyn Array, predicate: &FilterPredicate) -> Result<Array
     }
 }
 
+/// Filter a [`RunArray`] based on a [`FilterPredicate`]
 fn filter_run_end_array(
     re_arr: &RunArray<Int64Type>,
     pred: &FilterPredicate,
