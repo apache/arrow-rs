@@ -21,9 +21,9 @@ use std::sync::Arc;
 
 use arrow_array::builder::BooleanBufferBuilder;
 use arrow_array::cast::AsArray;
-use arrow_array::types::{ArrowDictionaryKeyType, ByteArrayType};
+use arrow_array::types::{ArrowDictionaryKeyType, ByteArrayType, Int64Type};
 use arrow_array::*;
-use arrow_buffer::{bit_util, BooleanBuffer, NullBuffer};
+use arrow_buffer::{bit_util, BooleanBuffer, NullBuffer, RunEndBuffer};
 use arrow_buffer::{Buffer, MutableBuffer};
 use arrow_data::bit_iterator::{BitIndexIterator, BitSliceIterator};
 use arrow_data::transform::MutableArrayData;
@@ -336,6 +336,13 @@ fn filter_array(values: &dyn Array, predicate: &FilterPredicate) -> Result<Array
             DataType::LargeBinary => {
                 Ok(Arc::new(filter_bytes(values.as_binary::<i64>(), predicate)))
             }
+            DataType::RunEndEncoded(_, _) => {
+                if let Some(ree_array) = values.as_any().downcast_ref::<RunArray<Int64Type>>() {
+                    Ok(Arc::new(filter_run_end_array(ree_array, predicate)?))
+                } else {
+                    unimplemented!("Filter not supported for RunEndEncoded type {:?}", values.data_type())
+                }
+            }
             DataType::Dictionary(_, _) => downcast_dictionary_array! {
                 values => Ok(Arc::new(filter_dict(values, predicate))),
                 t => unimplemented!("Filter not supported for dictionary type {:?}", t)
@@ -366,6 +373,42 @@ fn filter_array(values: &dyn Array, predicate: &FilterPredicate) -> Result<Array
             }
         },
     }
+}
+
+fn filter_run_end_array(
+    re_arr: &RunArray<Int64Type>,
+    pred: &FilterPredicate,
+) -> Result<RunArray<Int64Type>, ArrowError> {
+    let run_ends: &RunEndBuffer<i64> = re_arr.run_ends();
+    let mut values_filter = BooleanBufferBuilder::new(run_ends.len());
+    let mut new_run_ends = vec![0i64; run_ends.len()];
+
+    let mut start = 0i64;
+    let mut i = 0;
+    let filter_values = pred.filter.values();
+    let mut count = 0;
+    for end in run_ends.inner() {
+        let mut keep = false;
+        for pred in (start..*end).map(|i| unsafe { filter_values.value_unchecked(i as usize) }) {
+            count += pred as i64;
+            keep |= pred
+        }
+        new_run_ends[i] = count;
+        i += keep as usize;
+        values_filter.append(keep);
+        start = *end;
+    }
+
+    new_run_ends.truncate(i);
+
+    if values_filter.is_empty() {
+        new_run_ends.clear();
+    }
+
+    let values = re_arr.values();
+    let pred = BooleanArray::new(values_filter.finish(), None);
+    let new_values = filter(&values, &pred)?;
+    RunArray::try_new(&PrimitiveArray::from(new_run_ends), &new_values)
 }
 
 /// Computes a new null mask for `data` based on `predicate`
@@ -842,6 +885,72 @@ mod tests {
         assert!(d.is_null(0));
         assert!(!d.is_null(1));
         assert_eq!(9, d.value(1));
+    }
+
+    #[test]
+    fn test_filter_run_end_encoding_array() {
+        let run_ends = Int64Array::from(vec![2, 3, 8]);
+        let values = Int64Array::from(vec![7, -2, 9]);
+        let a = RunArray::try_new(&run_ends, &values).expect("Failed to create RunArray");
+        let b = BooleanArray::from(vec![true, false, true, false, true, false, true, false]);
+        let c = filter(&a, &b).unwrap();
+        let actual = c
+            .as_ref()
+            .as_any()
+            .downcast_ref::<RunArray<Int64Type>>()
+            .unwrap();
+        assert_eq!(4, actual.len());
+
+        let expected = RunArray::try_new(
+            &Int64Array::from(vec![1, 2, 4]),
+            &Int64Array::from(vec![7, -2, 9]),
+        )
+        .expect("Failed to make expected RunArray test is broken");
+
+        assert_eq!(&actual.run_ends().values(), &expected.run_ends().values());
+        assert_eq!(actual.values(), expected.values())
+    }
+
+    #[test]
+    fn test_filter_run_end_encoding_array_remove_value() {
+        let run_ends = Int64Array::from(vec![2, 3, 8, 10]);
+        let values = Int64Array::from(vec![7, -2, 9, -8]);
+        let a = RunArray::try_new(&run_ends, &values).expect("Failed to create RunArray");
+        let b = BooleanArray::from(vec![
+            false, true, false, false, true, false, true, false, false, false,
+        ]);
+        let c = filter(&a, &b).unwrap();
+        let actual = c
+            .as_ref()
+            .as_any()
+            .downcast_ref::<RunArray<Int64Type>>()
+            .unwrap();
+        assert_eq!(3, actual.len());
+
+        let expected =
+            RunArray::try_new(&Int64Array::from(vec![1, 3]), &Int64Array::from(vec![7, 9]))
+                .expect("Failed to make expected RunArray test is broken");
+
+        assert_eq!(&actual.run_ends().values(), &expected.run_ends().values());
+        assert_eq!(actual.values(), expected.values())
+    }
+
+    #[test]
+    fn test_filter_run_end_encoding_array_empty() {
+        let run_ends = Int64Array::from(vec![2, 3, 8, 10]);
+        let values = Int64Array::from(vec![7, -2, 9, -8]);
+        let a = RunArray::try_new(&run_ends, &values).expect("Failed to create RunArray");
+        let b = BooleanArray::from(vec![
+            false, false, false, false, false, false, false, false, false, false,
+        ]);
+        let c = filter(&a, &b).unwrap();
+        let actual = c
+            .as_ref()
+            .as_any()
+            .downcast_ref::<RunArray<Int64Type>>()
+            .unwrap();
+
+        assert_eq!(0, actual.len());
     }
 
     #[test]
