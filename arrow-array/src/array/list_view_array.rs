@@ -17,15 +17,20 @@
 
 use crate::array::{get_offsets, get_sizes, make_array, print_long_array};
 use crate::builder::{GenericListViewBuilder, PrimitiveBuilder};
-use crate::{new_empty_array, Array, ArrayAccessor, ArrayRef, ArrowPrimitiveType, OffsetSizeTrait, FixedSizeListArray};
+use crate::iterator::GenericListViewArrayIter;
+use crate::{
+    new_empty_array, Array, ArrayAccessor, ArrayRef, ArrowPrimitiveType, FixedSizeListArray,
+    OffsetSizeTrait,
+};
 use arrow_buffer::{NullBuffer, OffsetBuffer, SizeBuffer};
 use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::{ArrowError, DataType, FieldRef};
 use std::any::Any;
 use std::ops::Add;
 use std::sync::Arc;
-use crate::iterator::GenericListViewArrayIter;
 
+/// A [`GenericListViewArray`] of variable size lists, storing offsets as `i32`.
+///
 // See [`ListViewBuilder`](crate::builder::ListViewBuilder) for how to construct a [`ListViewArray`]
 pub type ListViewArray = GenericListViewArray<i32>;
 
@@ -47,7 +52,6 @@ pub struct GenericListViewArray<OffsetSize: OffsetSizeTrait> {
     value_sizes: SizeBuffer<OffsetSize>,
     len: usize,
 }
-
 
 impl<OffsetSize: OffsetSizeTrait> Clone for GenericListViewArray<OffsetSize> {
     fn clone(&self) -> Self {
@@ -72,6 +76,7 @@ impl<OffsetSize: OffsetSizeTrait> GenericListViewArray<OffsetSize> {
         DataType::ListView
     };
 
+    /// Returns the data type of the list view array
     pub fn try_new(
         field: FieldRef,
         offsets: OffsetBuffer<OffsetSize>,
@@ -79,8 +84,6 @@ impl<OffsetSize: OffsetSizeTrait> GenericListViewArray<OffsetSize> {
         values: ArrayRef,
         nulls: Option<NullBuffer>,
     ) -> Result<Self, ArrowError> {
-
-        //todo: check illegal offset and size values
         let mut len = 0usize;
         for i in 0..offsets.len() {
             let offset = offsets[i].as_usize();
@@ -95,7 +98,7 @@ impl<OffsetSize: OffsetSizeTrait> GenericListViewArray<OffsetSize> {
         }
 
         let len = offsets.len();
-        if  len != sizes.len() {
+        if len != sizes.len() {
             return Err(ArrowError::InvalidArgumentError(format!(
                 "Length of offsets buffer and sizes buffer must be equal for {}ListViewArray, got {} and {}",
                   OffsetSize::PREFIX, len, sizes.len()
@@ -128,7 +131,6 @@ impl<OffsetSize: OffsetSizeTrait> GenericListViewArray<OffsetSize> {
                 field.name()
             )));
         }
-
 
         Ok(Self {
             data_type: Self::DATA_TYPE_CONSTRUCTOR(field),
@@ -164,7 +166,7 @@ impl<OffsetSize: OffsetSizeTrait> GenericListViewArray<OffsetSize> {
             value_offsets: OffsetBuffer::new_zeroed(len),
             value_sizes: SizeBuffer::new_zeroed(len),
             values,
-            len: 0usize
+            len: 0usize,
         }
     }
 
@@ -182,7 +184,13 @@ impl<OffsetSize: OffsetSizeTrait> GenericListViewArray<OffsetSize> {
             DataType::ListView(f) | DataType::LargeListView(f) => f,
             _ => unreachable!(),
         };
-        (f, self.value_offsets, self.value_sizes, self.values,  self.nulls)
+        (
+            f,
+            self.value_offsets,
+            self.value_sizes,
+            self.values,
+            self.nulls,
+        )
     }
 
     /// Returns a reference to the offsets of this list
@@ -208,7 +216,6 @@ impl<OffsetSize: OffsetSizeTrait> GenericListViewArray<OffsetSize> {
     pub fn sizes(&self) -> &SizeBuffer<OffsetSize> {
         &self.value_sizes
     }
-
 
     /// Returns a clone of the value type of this list.
     pub fn value_type(&self) -> DataType {
@@ -276,11 +283,13 @@ impl<OffsetSize: OffsetSizeTrait> GenericListViewArray<OffsetSize> {
         }
     }
 
+    /// Creates a [`GenericListViewArray`] from an iterator of primitive values
+    ///
     pub fn from_iter_primitive<T, P, I>(iter: I) -> Self
-        where
-            T: ArrowPrimitiveType,
-            P: IntoIterator<Item = Option<<T as ArrowPrimitiveType>::Native>>,
-            I: IntoIterator<Item = Option<P>>,
+    where
+        T: ArrowPrimitiveType,
+        P: IntoIterator<Item = Option<<T as ArrowPrimitiveType>::Native>>,
+        I: IntoIterator<Item = Option<P>>,
     {
         let iter = iter.into_iter();
         let size_hint = iter.size_hint().0;
@@ -315,7 +324,6 @@ impl<'a, OffsetSize: OffsetSizeTrait> ArrayAccessor for &'a GenericListViewArray
         GenericListViewArray::value(self, index)
     }
 }
-
 
 impl<OffsetSize: OffsetSizeTrait> Array for GenericListViewArray<OffsetSize> {
     fn as_any(&self) -> &dyn Any {
@@ -373,7 +381,7 @@ impl<OffsetSize: OffsetSizeTrait> Array for GenericListViewArray<OffsetSize> {
     }
 }
 
-impl <OffsetSize: OffsetSizeTrait> std::fmt::Debug for GenericListViewArray<OffsetSize> {
+impl<OffsetSize: OffsetSizeTrait> std::fmt::Debug for GenericListViewArray<OffsetSize> {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         let prefix = OffsetSize::PREFIX;
         write!(f, "{prefix}ListViewArray\n[\n")?;
@@ -390,7 +398,10 @@ impl<OffsetSize: OffsetSizeTrait> From<GenericListViewArray<OffsetSize>> for Arr
         let builder = ArrayDataBuilder::new(array.data_type)
             .len(len)
             .nulls(array.nulls)
-            .buffers(vec![array.value_offsets.into_inner().into_inner(), array.value_sizes.into_inner().into_inner()])
+            .buffers(vec![
+                array.value_offsets.into_inner().into_inner(),
+                array.value_sizes.into_inner().into_inner(),
+            ])
             .child_data(vec![array.values.to_data()]);
 
         unsafe { builder.build_unchecked() }
@@ -475,17 +486,16 @@ impl<OffsetSize: OffsetSizeTrait> GenericListViewArray<OffsetSize> {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::builder::{FixedSizeListBuilder, Int32Builder, ListViewBuilder};
+    use crate::cast::AsArray;
     use crate::types::Int32Type;
     use crate::{Int32Array, Int64Array};
     use arrow_buffer::{bit_util, Buffer, ScalarBuffer};
     use arrow_schema::DataType::LargeListView;
     use arrow_schema::Field;
-    use crate::builder::{FixedSizeListBuilder, Int32Builder, ListViewBuilder};
-    use crate::cast::AsArray;
 
     fn create_from_buffers() -> ListViewArray {
         //  [[0, 1, 2], [3, 4, 5], [6, 7]]
@@ -494,9 +504,8 @@ mod tests {
         let field = Arc::new(Field::new("item", DataType::Int32, true));
         let sizes = SizeBuffer::new(ScalarBuffer::from(vec![3, 3, 2]));
 
-        ListViewArray::new(field, offsets, sizes,Arc::new(values),  None)
+        ListViewArray::new(field, offsets, sizes, Arc::new(values), None)
     }
-
 
     #[test]
     fn test_from_iter_primitive() {
@@ -525,7 +534,8 @@ mod tests {
         let value_sizes = Buffer::from([]);
 
         // Construct a list view array from the above two
-        let list_data_type = DataType::ListView(Arc::new(Field::new("item", DataType::Int32, false)));
+        let list_data_type =
+            DataType::ListView(Arc::new(Field::new("item", DataType::Int32, false)));
         let list_data = ArrayData::builder(list_data_type)
             .len(0)
             .add_buffer(value_offsets)
@@ -537,7 +547,6 @@ mod tests {
         let list_array = ListViewArray::from(list_data);
         assert_eq!(list_array.len(), 0)
     }
-
 
     #[test]
     fn test_list_view_array() {
@@ -555,7 +564,8 @@ mod tests {
         let value_sizes = Buffer::from_slice_ref([3, 3, 2, 0]);
 
         // Construct a list view array from the above two
-        let list_data_type = DataType::ListView(Arc::new(Field::new("item", DataType::Int32, false)));
+        let list_data_type =
+            DataType::ListView(Arc::new(Field::new("item", DataType::Int32, false)));
         let list_data = ArrayData::builder(list_data_type.clone())
             .len(3)
             .add_buffer(value_offsets.clone())
@@ -651,7 +661,7 @@ mod tests {
         let value_sizes = Buffer::from_slice_ref([3i64, 3, 2, 0]);
 
         // Construct a list view array from the above two
-        let list_data_type =  DataType::LargeListView(Arc::new(Field::new("item", DataType::Int32, false)));
+        let list_data_type = LargeListView(Arc::new(Field::new("item", DataType::Int32, false)));
         let list_data = ArrayData::builder(list_data_type.clone())
             .len(3)
             .add_buffer(value_offsets.clone())
@@ -730,7 +740,6 @@ mod tests {
         );
     }
 
-
     #[test]
     fn test_list_view_array_slice() {
         // Construct a value array
@@ -754,7 +763,8 @@ mod tests {
         bit_util::set_bit(&mut null_bits, 8);
 
         // Construct a list view array from the above two
-        let list_data_type = DataType::ListView(Arc::new(Field::new("item", DataType::Int32, false)));
+        let list_data_type =
+            DataType::ListView(Arc::new(Field::new("item", DataType::Int32, false)));
         let list_data = ArrayData::builder(list_data_type)
             .len(9)
             .add_buffer(value_offsets)
@@ -787,7 +797,10 @@ mod tests {
         }
 
         // Check offset and length for each non-null value.
-        let sliced_list_array = sliced_array.as_any().downcast_ref::<ListViewArray>().unwrap();
+        let sliced_list_array = sliced_array
+            .as_any()
+            .downcast_ref::<ListViewArray>()
+            .unwrap();
         assert_eq!(2, sliced_list_array.value_offsets()[2]);
         assert_eq!(2, sliced_list_array.value_sizes()[2]);
         assert_eq!(2, sliced_list_array.value_length(2));
@@ -824,7 +837,7 @@ mod tests {
         bit_util::set_bit(&mut null_bits, 8);
 
         // Construct a list view array from the above two
-        let list_data_type = DataType::LargeListView(Arc::new(Field::new("item", DataType::Int32, false)));
+        let list_data_type = LargeListView(Arc::new(Field::new("item", DataType::Int32, false)));
         let list_data = ArrayData::builder(list_data_type)
             .len(9)
             .add_buffer(value_offsets)
@@ -913,7 +926,9 @@ mod tests {
         list_array.value(10);
     }
     #[test]
-    #[should_panic(expected = "ListViewArray data should contain two buffer (value offsets & value size), had 0")]
+    #[should_panic(
+        expected = "ListViewArray data should contain two buffer (value offsets & value size), had 0"
+    )]
     #[cfg(not(feature = "force_validate"))]
     fn test_list_view_array_invalid_buffer_len() {
         let value_data = unsafe {
@@ -922,7 +937,8 @@ mod tests {
                 .add_buffer(Buffer::from_slice_ref([0, 1, 2, 3, 4, 5, 6, 7]))
                 .build_unchecked()
         };
-        let list_data_type = DataType::ListView(Arc::new(Field::new("item", DataType::Int32, false)));
+        let list_data_type =
+            DataType::ListView(Arc::new(Field::new("item", DataType::Int32, false)));
         let list_data = unsafe {
             ArrayData::builder(list_data_type)
                 .len(3)
@@ -933,11 +949,14 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "ListViewArray data should contain two buffer (value offsets & value size), had 1")]
+    #[should_panic(
+        expected = "ListViewArray data should contain two buffer (value offsets & value size), had 1"
+    )]
     #[cfg(not(feature = "force_validate"))]
     fn test_list_view_array_invalid_child_array_len() {
         let value_offsets = Buffer::from_slice_ref([0, 2, 5, 7]);
-        let list_data_type = DataType::ListView(Arc::new(Field::new("item", DataType::Int32, false)));
+        let list_data_type =
+            DataType::ListView(Arc::new(Field::new("item", DataType::Int32, false)));
         let list_data = unsafe {
             ArrayData::builder(list_data_type)
                 .len(3)
@@ -948,7 +967,9 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "[Large]ListViewArray's datatype must be [Large]ListViewArray(). It is ListView")]
+    #[should_panic(
+        expected = "[Large]ListViewArray's datatype must be [Large]ListViewArray(). It is ListView"
+    )]
     fn test_from_array_data_validation() {
         let mut builder = ListViewBuilder::new(Int32Builder::new());
         builder.values().append_value(1);
@@ -968,7 +989,8 @@ mod tests {
         let value_offsets = Buffer::from_slice_ref([2, 2, 5, 7]);
         let value_sizes = Buffer::from_slice_ref([0, 0, 3, 2]);
 
-        let list_data_type = DataType::ListView(Arc::new(Field::new("item", DataType::Int32, false)));
+        let list_data_type =
+            DataType::ListView(Arc::new(Field::new("item", DataType::Int32, false)));
         let list_data = ArrayData::builder(list_data_type)
             .len(3)
             .add_buffer(value_offsets)
@@ -1000,7 +1022,8 @@ mod tests {
                 .build_unchecked()
         };
 
-        let list_data_type = DataType::ListView(Arc::new(Field::new("item", DataType::Int32, false)));
+        let list_data_type =
+            DataType::ListView(Arc::new(Field::new("item", DataType::Int32, false)));
         let list_data = unsafe {
             ArrayData::builder(list_data_type)
                 .add_buffer(offset_buf2)
@@ -1098,7 +1121,7 @@ mod tests {
 
         let string = LargeListViewArray::from(
             ArrayData::builder(DataType::LargeListView(f))
-                .buffers(vec![Buffer::from(&[]),Buffer::from(&[])])
+                .buffers(vec![Buffer::from(&[]), Buffer::from(&[])])
                 .add_child_data(ArrayData::new_empty(&DataType::Int32))
                 .build()
                 .unwrap(),
@@ -1111,21 +1134,39 @@ mod tests {
     #[test]
     fn test_try_new() {
         let offsets = OffsetBuffer::new(vec![0, 1, 4, 5].into());
-        let sizes = SizeBuffer::new(vec![1, 3, 1, 0 ].into());
+        let sizes = SizeBuffer::new(vec![1, 3, 1, 0].into());
         let values = Int32Array::new(vec![1, 2, 3, 4, 5].into(), None);
         let values = Arc::new(values) as ArrayRef;
 
         let field = Arc::new(Field::new("element", DataType::Int32, false));
-        ListViewArray::new(field.clone(), offsets.clone(), sizes.clone(), values.clone(), None);
+        ListViewArray::new(
+            field.clone(),
+            offsets.clone(),
+            sizes.clone(),
+            values.clone(),
+            None,
+        );
 
         let nulls = NullBuffer::new_null(4);
-        ListViewArray::new(field.clone(), offsets, sizes.clone(), values.clone(), Some(nulls));
+        ListViewArray::new(
+            field.clone(),
+            offsets,
+            sizes.clone(),
+            values.clone(),
+            Some(nulls),
+        );
 
         let nulls = NullBuffer::new_null(4);
         let offsets = OffsetBuffer::new(vec![0, 1, 2, 3, 4].into());
         let sizes = SizeBuffer::new(vec![1, 1, 1, 1, 0].into());
-        let err = LargeListViewArray::try_new(field, offsets.clone(), sizes.clone(), values.clone(), Some(nulls))
-            .unwrap_err();
+        let err = LargeListViewArray::try_new(
+            field,
+            offsets.clone(),
+            sizes.clone(),
+            values.clone(),
+            Some(nulls),
+        )
+        .unwrap_err();
 
         assert_eq!(
             err.to_string(),
@@ -1133,8 +1174,14 @@ mod tests {
         );
 
         let field = Arc::new(Field::new("element", DataType::Int64, false));
-        let err = LargeListViewArray::try_new(field.clone(), offsets.clone(), sizes.clone(), values.clone(), None)
-            .unwrap_err();
+        let err = LargeListViewArray::try_new(
+            field.clone(),
+            offsets.clone(),
+            sizes.clone(),
+            values.clone(),
+            None,
+        )
+        .unwrap_err();
 
         assert_eq!(
             err.to_string(),
@@ -1145,14 +1192,19 @@ mod tests {
         let values = Int64Array::new(vec![0; 7].into(), Some(nulls));
         let values = Arc::new(values);
 
-        let err =
-            LargeListViewArray::try_new(field, offsets.clone(), sizes.clone(), values.clone(),None).unwrap_err();
+        let err = LargeListViewArray::try_new(
+            field,
+            offsets.clone(),
+            sizes.clone(),
+            values.clone(),
+            None,
+        )
+        .unwrap_err();
 
         assert_eq!(
             err.to_string(),
             "Invalid argument error: Non-nullable field of LargeListViewArray \"element\" cannot contain nulls"
         );
-
     }
 
     #[test]

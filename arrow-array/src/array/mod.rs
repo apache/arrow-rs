@@ -703,8 +703,7 @@ unsafe fn get_sizes<O: ArrowNativeType>(data: &ArrayData) -> SizeBuffer<O> {
     match data.is_empty() && data.buffers()[1].is_empty() {
         true => SizeBuffer::new_empty(),
         false => {
-            let buffer =
-                ScalarBuffer::new(data.buffers()[1].clone(), data.offset(), data.len());
+            let buffer = ScalarBuffer::new(data.buffers()[1].clone(), data.offset(), data.len());
             // Safety:
             // ArrayData is valid
             SizeBuffer::new(buffer)

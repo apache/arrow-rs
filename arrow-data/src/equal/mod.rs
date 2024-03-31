@@ -20,6 +20,7 @@
 //! depend on dynamic casting of `Array`.
 
 use crate::data::ArrayData;
+use crate::equal::list_view::list_view_equal;
 use arrow_buffer::i256;
 use arrow_schema::{DataType, IntervalUnit};
 use half::f16;
@@ -30,6 +31,7 @@ mod dictionary;
 mod fixed_binary;
 mod fixed_list;
 mod list;
+mod list_view;
 mod null;
 mod primitive;
 mod run;
@@ -37,7 +39,6 @@ mod structure;
 mod union;
 mod utils;
 mod variable_size;
-mod list_view;
 
 // these methods assume the same type, len and null count.
 // For this reason, they are not exposed and are instead used
@@ -53,7 +54,6 @@ use primitive::primitive_equal;
 use structure::struct_equal;
 use union::union_equal;
 use variable_size::variable_sized_equal;
-use crate::equal::list_view::list_view_equal;
 
 use self::run::run_equal;
 

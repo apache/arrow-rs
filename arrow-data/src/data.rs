@@ -948,7 +948,7 @@ impl ArrayData {
         &self,
         values_length: usize,
     ) -> Result<(), ArrowError> {
-       let sizes = self.typed_sizes::<T>()?;
+        let sizes = self.typed_sizes::<T>()?;
         if sizes.is_empty() {
             return Ok(());
         }
@@ -1702,13 +1702,16 @@ impl DataTypeLayout {
     /// Describes a list view type
     pub fn new_list_view<T>() -> Self {
         Self {
-            buffers: vec![BufferSpec::FixedWidth {
-                byte_width: mem::size_of::<T>(),
-                alignment: mem::align_of::<T>(),
-            },BufferSpec::FixedWidth {
-                byte_width: mem::size_of::<T>(),
-                alignment: mem::align_of::<T>(),
-            }],
+            buffers: vec![
+                BufferSpec::FixedWidth {
+                    byte_width: mem::size_of::<T>(),
+                    alignment: mem::align_of::<T>(),
+                },
+                BufferSpec::FixedWidth {
+                    byte_width: mem::size_of::<T>(),
+                    alignment: mem::align_of::<T>(),
+                },
+            ],
             can_contain_null_mask: true,
             variadic: true,
         }
