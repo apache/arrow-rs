@@ -109,7 +109,7 @@ impl<T: ToPyArrow> IntoPyArrow for T {
 fn validate_class(expected: &str, value: &Bound<PyAny>) -> PyResult<()> {
     let pyarrow = PyModule::import_bound(value.py(), "pyarrow")?;
     let class = pyarrow.getattr(expected)?;
-    if !value.as_ref().is_instance(class.as_ref())? {
+    if !value.is_instance(&class)? {
         let expected_module = class.getattr("__module__")?;
         let expected_module = expected_module.extract::<&str>()?;
         let expected_name = class.getattr("__name__")?;
