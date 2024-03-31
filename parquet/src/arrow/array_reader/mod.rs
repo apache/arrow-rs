@@ -41,7 +41,6 @@ mod null_array;
 mod primitive_array;
 mod struct_array;
 
-mod byte_view_array;
 #[cfg(test)]
 mod test_util;
 

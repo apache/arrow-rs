@@ -403,7 +403,7 @@ pub type BinaryViewArray = GenericByteViewArray<BinaryViewType>;
 impl BinaryViewArray {
     /// Convert the [`BinaryViewArray`] to [`StringViewArray`]
     /// If items not utf8 data, validate will fail and error returned.
-    pub fn to_stringview(&self) -> Result<StringViewArray, ArrowError> {
+    pub fn to_stringview(self) -> Result<StringViewArray, ArrowError> {
         StringViewType::validate(self.views(), self.data_buffers())?;
         unsafe { Ok(self.to_stringview_unchecked()) }
     }
@@ -411,8 +411,8 @@ impl BinaryViewArray {
     /// Convert the [`BinaryViewArray`] to [`StringViewArray`]
     /// # Safety
     /// Caller is responsible for ensuring that items in array are utf8 data.
-    pub unsafe fn to_stringview_unchecked(&self) -> StringViewArray {
-        StringViewArray::new_unchecked(self.views.clone(), self.buffers.clone(), self.nulls.clone())
+    pub unsafe fn to_stringview_unchecked(self) -> StringViewArray {
+        StringViewArray::new_unchecked(self.views, self.buffers, self.nulls)
     }
 }
 
