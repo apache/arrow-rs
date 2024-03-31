@@ -17,11 +17,15 @@
 
 //! Defines filter kernels
 
+use std::ops::AddAssign;
 use std::sync::Arc;
 
 use arrow_array::builder::BooleanBufferBuilder;
 use arrow_array::cast::AsArray;
-use arrow_array::types::{ArrowDictionaryKeyType, ByteArrayType, Int64Type};
+use arrow_array::types::{
+    ArrowDictionaryKeyType, ArrowPrimitiveType, ByteArrayType, Int16Type, Int32Type, Int64Type,
+    RunEndIndexType,
+};
 use arrow_array::*;
 use arrow_buffer::{bit_util, BooleanBuffer, NullBuffer, RunEndBuffer};
 use arrow_buffer::{Buffer, MutableBuffer};
@@ -337,10 +341,9 @@ fn filter_array(values: &dyn Array, predicate: &FilterPredicate) -> Result<Array
                 Ok(Arc::new(filter_bytes(values.as_binary::<i64>(), predicate)))
             }
             DataType::RunEndEncoded(_, _) => {
-                if let Some(ree_array) = values.as_any().downcast_ref::<RunArray<Int64Type>>() {
-                    Ok(Arc::new(filter_run_end_array(ree_array, predicate)?))
-                } else {
-                    unimplemented!("Filter not supported for RunEndEncoded type {:?}", values.data_type())
+                downcast_run_array!{
+                    values => filter_run_end_array(values, predicate),
+                    t => unimplemented!("Filter not supported for RunEndEncoded type {:?}", t)
                 }
             }
             DataType::Dictionary(_, _) => downcast_dictionary_array! {
@@ -375,27 +378,64 @@ fn filter_array(values: &dyn Array, predicate: &FilterPredicate) -> Result<Array
     }
 }
 
-/// Filter a [`RunArray`] based on a [`FilterPredicate`]
-fn filter_run_end_array(
-    re_arr: &RunArray<Int64Type>,
+fn filter_run_end_array<R: RunEndIndexType>(
+    ree_arr: &RunArray<R>,
     pred: &FilterPredicate,
-) -> Result<RunArray<Int64Type>, ArrowError> {
-    let run_ends: &RunEndBuffer<i64> = re_arr.run_ends();
+) -> Result<ArrayRef, ArrowError> {
+    fn downcast_safe<A: RunEndIndexType, T: RunEndIndexType>(
+        re_arr: &RunArray<A>,
+    ) -> Option<&RunArray<T>> {
+        re_arr.as_any().downcast_ref::<RunArray<T>>()
+    }
+
+    if let Some(ree_array) = downcast_safe::<R, Int64Type>(ree_arr) {
+        let (run_ends, values) = filter_run_end_array_generic(ree_array, pred)?;
+        let ree_arr: RunArray<Int64Type> =
+            RunArray::try_new(&PrimitiveArray::from(run_ends), &values)?;
+        Ok(Arc::new(ree_arr))
+    } else if let Some(ree_array) = downcast_safe::<R, Int32Type>(ree_arr) {
+        let (run_ends, values) = filter_run_end_array_generic(ree_array, pred)?;
+        let ree_arr: RunArray<Int32Type> =
+            RunArray::try_new(&PrimitiveArray::from(run_ends), &values)?;
+        Ok(Arc::new(ree_arr))
+    } else if let Some(ree_array) = downcast_safe::<R, Int16Type>(ree_arr) {
+        let (run_ends, values) = filter_run_end_array_generic(ree_array, pred)?;
+        let ree_arr: RunArray<Int16Type> =
+            RunArray::try_new(&PrimitiveArray::from(run_ends), &values)?;
+        Ok(Arc::new(ree_arr))
+    } else {
+        Err(ArrowError::CastError(
+            "Run ends for RunArray must be i16 or i32 or i64".to_string(),
+        ))
+    }
+}
+
+/// Filter any supported [`RunArray`] based on a [`FilterPredicate`]
+#[allow(clippy::type_complexity)]
+fn filter_run_end_array_generic<R: RunEndIndexType>(
+    re_arr: &RunArray<R>,
+    pred: &FilterPredicate,
+) -> Result<(Vec<R::Native>, Arc<dyn Array>), ArrowError>
+where
+    R::Native: Into<i64> + From<bool>,
+    R::Native: AddAssign,
+{
+    let run_ends: &RunEndBuffer<R::Native> = re_arr.run_ends();
     let mut values_filter = BooleanBufferBuilder::new(run_ends.len());
-    let mut new_run_ends = vec![0i64; run_ends.len()];
+    let mut new_run_ends = vec![R::default_value(); run_ends.len()];
 
     let mut start = 0i64;
     let mut i = 0;
     let filter_values = pred.filter.values();
-    let mut count = 0;
+    let mut count = R::default_value();
 
-    for end in run_ends.inner() {
+    for end in run_ends.inner().into_iter().map(|i| (*i).into()) {
         let mut keep = false;
         // in filter_array the predicate array is checked to have the same len as the run end array
         // this means the largest value in the run_ends is == to pred.len()
         // so we're always within bounds when calling value_unchecked
-        for pred in (start..*end).map(|i| unsafe { filter_values.value_unchecked(i as usize) }) {
-            count += pred as i64;
+        for pred in (start..end).map(|i| unsafe { filter_values.value_unchecked(i as usize) }) {
+            count += R::Native::from(pred);
             keep |= pred
         }
         // this is to avoid branching
@@ -403,7 +443,7 @@ fn filter_run_end_array(
         i += keep as usize;
 
         values_filter.append(keep);
-        start = *end;
+        start = end;
     }
 
     new_run_ends.truncate(i);
@@ -415,7 +455,7 @@ fn filter_run_end_array(
     let values = re_arr.values();
     let pred = BooleanArray::new(values_filter.finish(), None);
     let new_values = filter(&values, &pred)?;
-    RunArray::try_new(&PrimitiveArray::from(new_run_ends), &new_values)
+    Ok((new_run_ends, new_values))
 }
 
 /// Computes a new null mask for `data` based on `predicate`
@@ -917,19 +957,38 @@ mod tests {
 
     #[test]
     fn test_filter_run_end_encoding_array_remove_value() {
-        let run_ends = Int64Array::from(vec![2, 3, 8, 10]);
-        let values = Int64Array::from(vec![7, -2, 9, -8]);
+        let run_ends = Int32Array::from(vec![2, 3, 8, 10]);
+        let values = Int32Array::from(vec![7, -2, 9, -8]);
         let a = RunArray::try_new(&run_ends, &values).expect("Failed to create RunArray");
         let b = BooleanArray::from(vec![
             false, true, false, false, true, false, true, false, false, false,
         ]);
         let c = filter(&a, &b).unwrap();
-        let actual: &RunArray<Int64Type> = as_run_array(&c);
+        let actual: &RunArray<Int32Type> = as_run_array(&c);
         assert_eq!(3, actual.len());
 
         let expected =
-            RunArray::try_new(&Int64Array::from(vec![1, 3]), &Int64Array::from(vec![7, 9]))
+            RunArray::try_new(&Int32Array::from(vec![1, 3]), &Int32Array::from(vec![7, 9]))
                 .expect("Failed to make expected RunArray test is broken");
+
+        assert_eq!(&actual.run_ends().values(), &expected.run_ends().values());
+        assert_eq!(actual.values(), expected.values())
+    }
+
+    #[test]
+    fn test_filter_run_end_encoding_array_remove_all_but_one() {
+        let run_ends = Int16Array::from(vec![2, 3, 8, 10]);
+        let values = Int16Array::from(vec![7, -2, 9, -8]);
+        let a = RunArray::try_new(&run_ends, &values).expect("Failed to create RunArray");
+        let b = BooleanArray::from(vec![
+            false, false, false, false, false, false, true, false, false, false,
+        ]);
+        let c = filter(&a, &b).unwrap();
+        let actual: &RunArray<Int16Type> = as_run_array(&c);
+        assert_eq!(1, actual.len());
+
+        let expected = RunArray::try_new(&Int16Array::from(vec![1]), &Int16Array::from(vec![9]))
+            .expect("Failed to make expected RunArray test is broken");
 
         assert_eq!(&actual.run_ends().values(), &expected.run_ends().values());
         assert_eq!(actual.values(), expected.values())
