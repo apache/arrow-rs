@@ -45,12 +45,12 @@ walkdir = "2"
 
 # Cloud storage support
 base64 = { version = "0.22", default-features = false, features = ["std"], optional = true }
-hyper = { version = "0.14", default-features = false, optional = true }
+hyper = { version = "1.2", default-features = false, optional = true }
 quick-xml = { version = "0.31.0", features = ["serialize", "overlapped-lists"], optional = true }
 serde = { version = "1.0", default-features = false, features = ["derive"], optional = true }
 serde_json = { version = "1.0", default-features = false, optional = true }
 rand = { version = "0.8", default-features = false, features = ["std", "std_rng"], optional = true }
-reqwest = { version = "0.11", default-features = false, features = ["rustls-tls-native-roots"], optional = true }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-native-roots", "http2"], optional = true }
 ring = { version = "0.17", default-features = false, features = ["std"], optional = true }
 rustls-pemfile = { version = "2.0", default-features = false, features = ["std"], optional = true }
 tokio = { version = "1.25.0", features = ["sync", "macros", "rt", "time", "io-util"] }
@@ -69,7 +69,9 @@ tls-webpki-roots = ["reqwest?/rustls-tls-webpki-roots"]
 
 [dev-dependencies] # In alphabetical order
 futures-test = "0.3"
-hyper = { version = "0.14.24", features = ["server"] }
+hyper = { version = "1.2", features = ["server"] }
+hyper-util = "0.1"
+http-body-util = "0.1"
 rand = "0.8"
 tempfile = "3.1.0"
 
