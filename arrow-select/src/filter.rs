@@ -388,14 +388,20 @@ fn filter_run_end_array(
     let mut i = 0;
     let filter_values = pred.filter.values();
     let mut count = 0;
+
     for end in run_ends.inner() {
         let mut keep = false;
+        // in filter_array the predicate array is checked to have the same len as the run end array
+        // this means the largest value in the run_ends is == to pred.len()
+        // so we're always within bounds when calling value_unchecked
         for pred in (start..*end).map(|i| unsafe { filter_values.value_unchecked(i as usize) }) {
             count += pred as i64;
             keep |= pred
         }
+        // this is to avoid branching
         new_run_ends[i] = count;
         i += keep as usize;
+
         values_filter.append(keep);
         start = *end;
     }
@@ -679,6 +685,7 @@ where
 #[cfg(test)]
 mod tests {
     use arrow_array::builder::*;
+    use arrow_array::cast::as_run_array;
     use arrow_array::types::*;
     use rand::distributions::{Alphanumeric, Standard};
     use rand::prelude::*;
@@ -895,11 +902,7 @@ mod tests {
         let a = RunArray::try_new(&run_ends, &values).expect("Failed to create RunArray");
         let b = BooleanArray::from(vec![true, false, true, false, true, false, true, false]);
         let c = filter(&a, &b).unwrap();
-        let actual = c
-            .as_ref()
-            .as_any()
-            .downcast_ref::<RunArray<Int64Type>>()
-            .unwrap();
+        let actual: &RunArray<Int64Type> = as_run_array(&c);
         assert_eq!(4, actual.len());
 
         let expected = RunArray::try_new(
@@ -921,11 +924,7 @@ mod tests {
             false, true, false, false, true, false, true, false, false, false,
         ]);
         let c = filter(&a, &b).unwrap();
-        let actual = c
-            .as_ref()
-            .as_any()
-            .downcast_ref::<RunArray<Int64Type>>()
-            .unwrap();
+        let actual: &RunArray<Int64Type> = as_run_array(&c);
         assert_eq!(3, actual.len());
 
         let expected =
@@ -945,12 +944,7 @@ mod tests {
             false, false, false, false, false, false, false, false, false, false,
         ]);
         let c = filter(&a, &b).unwrap();
-        let actual = c
-            .as_ref()
-            .as_any()
-            .downcast_ref::<RunArray<Int64Type>>()
-            .unwrap();
-
+        let actual: &RunArray<Int64Type> = as_run_array(&c);
         assert_eq!(0, actual.len());
     }
 
