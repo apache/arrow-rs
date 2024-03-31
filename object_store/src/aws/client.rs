@@ -138,6 +138,7 @@ struct BatchDeleteResponse {
 
 #[derive(Deserialize)]
 enum DeleteObjectResult {
+    #[allow(unused)]
     Deleted(DeletedObject),
     Error(DeleteError),
 }

@@ -808,6 +808,25 @@ pub struct DoPutUpdateResult {
     #[prost(int64, tag = "1")]
     pub record_count: i64,
 }
+/// An *optional* response returned when `DoPut` is called with `CommandPreparedStatementQuery`.
+///
+/// *Note on legacy behavior*: previous versions of the protocol did not return any result for
+/// this command, and that behavior should still be supported by clients. In that case, the client
+/// can continue as though the fields in this message were not provided or set to sensible default values.
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct DoPutPreparedStatementResult {
+    /// Represents a (potentially updated) opaque handle for the prepared statement on the server.
+    /// Because the handle could potentially be updated, any previous handles for this prepared
+    /// statement should be considered invalid, and all subsequent requests for this prepared
+    /// statement must use this new handle.
+    /// The updated handle allows implementing query parameters with stateless services.
+    ///
+    /// When an updated handle is not provided by the server, clients should contiue
+    /// using the previous handle provided by `ActionCreatePreparedStatementResonse`.
+    #[prost(bytes = "bytes", optional, tag = "1")]
+    pub prepared_statement_handle: ::core::option::Option<::prost::bytes::Bytes>,
+}
 ///
 /// Request message for the "CancelQuery" action.
 ///

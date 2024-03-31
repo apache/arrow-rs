@@ -20,6 +20,10 @@
 //! The `FileReader` and `StreamReader` have similar interfaces,
 //! however the `FileReader` expects a reader that supports `Seek`ing
 
+mod stream;
+
+pub use stream::*;
+
 use flatbuffers::{VectorIter, VerifierOptions};
 use std::collections::{HashMap, VecDeque};
 use std::fmt;
