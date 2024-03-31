@@ -123,7 +123,7 @@ impl Fields {
     ///         ])), true),
     ///     ])), false)
     /// ]);
-    /// let filtered = fields.filter_leaves(|idx, _| Ok([0, 2, 3, 4].contains(&idx))).unwrap();
+    /// let filtered = fields.filter_leaves(|idx, _| [0, 2, 3, 4].contains(&idx));
     /// let expected = Fields::from(vec![
     ///     Field::new("a", DataType::Int32, true),
     ///     Field::new("b", DataType::Struct(Fields::from(vec![
@@ -136,7 +136,16 @@ impl Fields {
     /// ]);
     /// assert_eq!(filtered, expected);
     /// ```
-    pub fn filter_leaves<F: FnMut(usize, &FieldRef) -> Result<bool, ArrowError>>(
+    pub fn filter_leaves<F: FnMut(usize, &FieldRef) -> bool>(&self, mut filter: F) -> Self {
+        self.try_filter_leaves(|idx, field| Ok(filter(idx, field)))
+            .unwrap()
+    }
+
+    /// Returns a copy of this [`Fields`] containing only those [`FieldRef`] passing a predicate
+    /// or an error if the predicate fails.
+    ///
+    /// See [`Fields::filter_leaves`] for more information.
+    pub fn try_filter_leaves<F: FnMut(usize, &FieldRef) -> Result<bool, ArrowError>>(
         &self,
         mut filter: F,
     ) -> Result<Self, ArrowError> {
@@ -525,16 +534,12 @@ mod tests {
 
         let floats_a = DataType::Struct(vec![floats[0].clone()].into());
 
-        let r = fields
-            .filter_leaves(|idx, _| Ok(idx == 0 || idx == 1))
-            .expect("should be ok");
+        let r = fields.filter_leaves(|idx, _| idx == 0 || idx == 1);
         assert_eq!(r.len(), 2);
         assert_eq!(r[0], fields[0]);
         assert_eq!(r[1].data_type(), &floats_a);
 
-        let r = fields
-            .filter_leaves(|_, f| Ok(f.name() == "a"))
-            .expect("should be ok");
+        let r = fields.filter_leaves(|_, f| f.name() == "a");
         assert_eq!(r.len(), 5);
         assert_eq!(r[0], fields[0]);
         assert_eq!(r[1].data_type(), &floats_a);
@@ -558,20 +563,14 @@ mod tests {
             )
         );
 
-        let r = fields
-            .filter_leaves(|_, f| Ok(f.name() == "floats"))
-            .expect("should be ok");
+        let r = fields.filter_leaves(|_, f| f.name() == "floats");
         assert_eq!(r.len(), 0);
 
-        let r = fields
-            .filter_leaves(|idx, _| Ok(idx == 9))
-            .expect("should be ok");
+        let r = fields.filter_leaves(|idx, _| idx == 9);
         assert_eq!(r.len(), 1);
         assert_eq!(r[0], fields[6]);
 
-        let r = fields
-            .filter_leaves(|idx, _| Ok(idx == 10 || idx == 11))
-            .expect("should be ok");
+        let r = fields.filter_leaves(|idx, _| idx == 10 || idx == 11);
         assert_eq!(r.len(), 1);
         assert_eq!(r[0], fields[7]);
 
@@ -580,20 +579,16 @@ mod tests {
             UnionMode::Dense,
         );
 
-        let r = fields
-            .filter_leaves(|idx, _| Ok(idx == 12))
-            .expect("should be ok");
+        let r = fields.filter_leaves(|idx, _| idx == 12);
         assert_eq!(r.len(), 1);
         assert_eq!(r[0].data_type(), &union);
 
-        let r = fields
-            .filter_leaves(|idx, _| Ok(idx == 14 || idx == 15))
-            .expect("should be ok");
+        let r = fields.filter_leaves(|idx, _| idx == 14 || idx == 15);
         assert_eq!(r.len(), 1);
         assert_eq!(r[0], fields[9]);
 
         // Propagate error
-        let r = fields.filter_leaves(|_, _| Err(ArrowError::SchemaError("error".to_string())));
+        let r = fields.try_filter_leaves(|_, _| Err(ArrowError::SchemaError("error".to_string())));
         assert!(r.is_err());
     }
 }
