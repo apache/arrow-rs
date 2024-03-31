@@ -414,7 +414,7 @@ impl FromPyArrow for ArrowArrayStreamReader {
         // method, so prefer it over _export_to_c.
         // See https://arrow.apache.org/docs/format/CDataInterface/PyCapsuleInterface.html
         if value.hasattr("__arrow_c_stream__")? {
-            let capsule = value.getattr("__arrow_c_schema__")?.call0()?;
+            let capsule = value.getattr("__arrow_c_stream__")?.call0()?;
             let capsule = capsule.downcast::<PyCapsule>()?;
             validate_pycapsule(capsule, "arrow_array_stream")?;
 
