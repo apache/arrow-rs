@@ -73,6 +73,8 @@ pub type GcpSigningCredentialProvider =
 /// default payload string for GCS
 pub const DEFAULT_GCS_PLAYLOAD_STRING: &str = "UNSIGNED-PAYLOAD";
 
+const DEFAULT_HOST: &str = "storage.googleapis.com";
+
 /// Interface for [Google Cloud Storage](https://cloud.google.com/storage/).
 #[derive(Debug)]
 pub struct GoogleCloudStorage {
@@ -251,9 +253,8 @@ impl Signer for GoogleCloudStorage {
         let sign_credential = self.sign_credential().get_credential().await?;
         let authoriztor = GCSAuthorizer::new(sign_credential);
 
-        let host = format!("{}.storage.googleapis.com", config.bucket_name);
         authoriztor
-            .sign(method, &mut url, expires_in, &host, &self.client)
+            .sign(method, &mut url, expires_in, DEFAULT_HOST, &self.client)
             .await?;
 
         Ok(url)

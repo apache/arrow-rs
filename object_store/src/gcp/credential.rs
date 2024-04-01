@@ -47,6 +47,9 @@ use super::client::GoogleCloudStorageClient;
 
 pub const DEFAULT_SCOPE: &str = "https://www.googleapis.com/auth/devstorage.full_control";
 
+/// <https://cloud.google.com/iam/docs/reference/credentials/rest/v1/projects.serviceAccounts/signBlob#authorization-scopes>
+pub const DEFAULT_SIGN_BLOG_SCOPE: &str = "https://www.googleapis.com/auth/cloud-platform";
+
 pub const DEFAULT_GCS_BASE_URL: &str = "https://storage.googleapis.com";
 
 #[derive(Debug, Snafu)]
@@ -359,7 +362,7 @@ impl ServiceAccountCredentials {
             self.private_key_id,
             self.client_email,
             self.private_key,
-            DEFAULT_SCOPE.to_string(),
+            DEFAULT_SIGN_BLOG_SCOPE.to_string(),
         )?)
     }
 }

@@ -27,6 +27,7 @@ use crate::client::GetOptionsExt;
 use crate::gcp::{GcpCredential, GcpCredentialProvider, GcpSigningCredentialProvider, STORE};
 use crate::multipart::PartId;
 use crate::path::{Path, DELIMITER};
+use crate::util::hex_encode;
 use crate::{
     ClientOptions, GetOptions, ListResult, MultipartId, PutMode, PutOptions, PutResult, Result,
     RetryConfig,
@@ -41,6 +42,8 @@ use reqwest::{header, Client, Method, RequestBuilder, Response, StatusCode};
 use serde::{Deserialize, Serialize};
 use snafu::{OptionExt, ResultExt, Snafu};
 use std::sync::Arc;
+
+use super::GcpSigningCredential;
 
 const VERSION_HEADER: &str = "x-goog-generation";
 
@@ -109,6 +112,9 @@ enum Error {
 
     #[snafu(display("Got invalid signing blob repsonse: {}", source))]
     InvalidSignBlobResponse { source: reqwest::Error },
+
+    #[snafu(display("Got invalid signing blob signature: {}", source))]
+    InvalidSignBlobSignature { source: base64::DecodeError },
 }
 
 impl From<Error> for crate::Error {
@@ -160,7 +166,7 @@ impl GoogleCloudStorageConfig {
     }
 
     pub fn path_url(&self, path: &Path) -> String {
-        format!("{}/{}", self.base_url, path)
+        format!("{}/{}/{}", self.base_url, self.bucket_name, path)
     }
 }
 
@@ -246,6 +252,10 @@ impl GoogleCloudStorageClient {
         self.config.credentials.get_credential().await
     }
 
+    async fn get_sign_credential(&self) -> Result<Arc<GcpSigningCredential>> {
+        self.config.sign_credentials.get_credential().await
+    }
+
     /// Create a signature from a string-to-sign using Google Cloud signBlob method.
     /// form like:
     /// ```plaintext
@@ -274,7 +284,7 @@ impl GoogleCloudStorageClient {
         let response = self
             .client
             .post(&url)
-            .bearer_auth(&self.get_credential().await?.bearer)
+            .bearer_auth(&self.get_sign_credential().await?.credential.bearer)
             .json(&body)
             .send()
             .await
@@ -285,7 +295,12 @@ impl GoogleCloudStorageClient {
             .json::<SignBlobResponse>()
             .await
             .context(InvalidSignBlobResponseSnafu)?;
-        Ok(response.signed_blob)
+
+        let signed_blob = BASE64_STANDARD
+            .decode(response.signed_blob)
+            .context(InvalidSignBlobSignatureSnafu)?;
+
+        Ok(hex_encode(&signed_blob))
     }
 
     pub fn object_url(&self, path: &Path) -> String {
