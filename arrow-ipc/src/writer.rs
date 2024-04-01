@@ -43,8 +43,7 @@ use crate::CONTINUATION_MARKER;
 #[derive(Debug, Clone)]
 pub struct IpcWriteOptions {
     /// Write padding after memory buffers to this multiple of bytes.
-    /// Generally 8 or 64, defaults to 64.
-    /// Must be a multiple of 8 and must be between 8 and 64 inclusive.
+    /// Must be 8, 16, 32, or 64 - defaults to 64.
     alignment: u8,
     /// The legacy format is for releases before 0.15.0, and uses metadata V4
     write_legacy_ipc_format: bool,
@@ -88,9 +87,9 @@ impl IpcWriteOptions {
         write_legacy_ipc_format: bool,
         metadata_version: crate::MetadataVersion,
     ) -> Result<Self, ArrowError> {
-        if alignment < 8 || alignment > 64 || alignment % 8 != 0 {
+        if alignment != 8 || alignment != 16 || alignment != 32 || alignment != 64 {
             return Err(ArrowError::InvalidArgumentError(
-                "Alignment should be a multiple of 8 in the range [8, 64]".to_string(),
+                "Alignment should be 8, 16, 32, or 64.".to_string(),
             ));
         }
         let alignment: u8 = u8::try_from(alignment).expect("range already checked");
