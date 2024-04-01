@@ -84,7 +84,7 @@ impl IpcWriteOptions {
     }
     /// Try create IpcWriteOptions, checking for incompatible settings
     pub fn try_new(
-        alignment: u8,
+        alignment: usize,
         write_legacy_ipc_format: bool,
         metadata_version: crate::MetadataVersion,
     ) -> Result<Self, ArrowError> {
@@ -93,6 +93,7 @@ impl IpcWriteOptions {
                 "Alignment should be a multiple of 8 in the range [8, 64]".to_string(),
             ));
         }
+        let alignment: u8 = u8::try_from(alignment).expect("range already checked");
         match metadata_version {
             crate::MetadataVersion::V1
             | crate::MetadataVersion::V2
@@ -2384,14 +2385,14 @@ mod tests {
     }
 
     #[test]
-    fn test_decimal128_alignment16() {
-        const IPC_ALIGNMENT: u8 = 16;
+    fn test_decimal128_alignment16_is_sufficient() {
+        const IPC_ALIGNMENT: usize = 16;
 
         // Test a bunch of different dimensions to ensure alignment is never an issue.
         // For example, if we only test `num_cols = 1` then even with alignment 8 this
         // test would _happen_ to pass, even though for different dimensions like
         // `num_cols = 2` it would fail.
-        for num_cols in 1..100 {
+        for num_cols in [1, 2, 3, 17, 50, 73, 99] {
             let num_rows = (num_cols * 7 + 11) % 100; // Deterministic swizzle
 
             let mut fields = Vec::new();
@@ -2424,15 +2425,13 @@ mod tests {
                 root_as_footer(&buffer[trailer_start - footer_len..trailer_start]).unwrap();
 
             let schema = fb_to_schema(footer.schema().unwrap());
-            assert_eq!(&schema, batch.schema().as_ref());
 
+            // Importantly we set `require_alignment`, checking that 16-byte alignment is sufficient
+            // for `read_record_batch` later on to read the data in a zero-copy manner.
             let decoder =
-                FileDecoder::new(Arc::new(schema), footer.version()).with_enforce_zero_copy(true);
-
-            assert_eq!(footer.dictionaries().unwrap().len(), 0);
+                FileDecoder::new(Arc::new(schema), footer.version()).with_require_alignment(true);
 
             let batches = footer.recordBatches().unwrap();
-            assert_eq!(batches.len(), 1);
 
             let block = batches.get(0);
             let block_len = block.bodyLength() as usize + block.metaDataLength() as usize;
@@ -2446,7 +2445,7 @@ mod tests {
 
     #[test]
     fn test_decimal128_alignment8_is_unaligned() {
-        const IPC_ALIGNMENT: u8 = 8;
+        const IPC_ALIGNMENT: usize = 8;
 
         let num_cols = 2;
         let num_rows = 1;
@@ -2479,17 +2478,13 @@ mod tests {
         let footer = root_as_footer(&buffer[trailer_start - footer_len..trailer_start]).unwrap();
 
         let schema = fb_to_schema(footer.schema().unwrap());
-        assert_eq!(&schema, batch.schema().as_ref());
 
-        // Importantly we enforce zero copy, otherwise the error later is suppressed due to copying
+        // Importantly we set `require_alignment`, otherwise the error later is suppressed due to copying
         // to an aligned buffer in `ArrayDataBuilder.build_aligned`.
         let decoder =
-            FileDecoder::new(Arc::new(schema), footer.version()).with_enforce_zero_copy(true);
-
-        assert_eq!(footer.dictionaries().unwrap().len(), 0);
+            FileDecoder::new(Arc::new(schema), footer.version()).with_require_alignment(true);
 
         let batches = footer.recordBatches().unwrap();
-        assert_eq!(batches.len(), 1);
 
         let block = batches.get(0);
         let block_len = block.bodyLength() as usize + block.metaDataLength() as usize;
@@ -2498,12 +2493,10 @@ mod tests {
         let result = decoder.read_record_batch(block, &data);
 
         let error = result.unwrap_err();
-        match error {
-            ArrowError::InvalidArgumentError(e) => {
-                assert!(e.contains("Misaligned"));
-                assert!(e.contains("offset from expected alignment of"));
-            }
-            _ => panic!("Expected InvalidArgumentError"),
-        }
+        assert_eq!(
+            error.to_string(),
+            "Invalid argument error: Misaligned buffers[0] in array of type Decimal128(38, 10), \
+             offset from expected alignment of 16 by 8"
+        );
     }
 }

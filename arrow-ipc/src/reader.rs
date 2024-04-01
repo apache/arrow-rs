@@ -78,7 +78,7 @@ fn create_array(
     reader: &mut ArrayReader,
     field: &Field,
     variadic_counts: &mut VecDeque<i64>,
-    enforce_zero_copy: bool,
+    require_alignment: bool,
 ) -> Result<ArrayRef, ArrowError> {
     let data_type = field.data_type();
     match data_type {
@@ -90,7 +90,7 @@ fn create_array(
                 reader.next_buffer()?,
                 reader.next_buffer()?,
             ],
-            enforce_zero_copy,
+            require_alignment,
         ),
         BinaryView | Utf8View => {
             let count = variadic_counts
@@ -106,37 +106,37 @@ fn create_array(
                 reader.next_node(field)?,
                 data_type,
                 &buffers,
-                enforce_zero_copy,
+                require_alignment,
             )
         }
         FixedSizeBinary(_) => create_primitive_array(
             reader.next_node(field)?,
             data_type,
             &[reader.next_buffer()?, reader.next_buffer()?],
-            enforce_zero_copy,
+            require_alignment,
         ),
         List(ref list_field) | LargeList(ref list_field) | Map(ref list_field, _) => {
             let list_node = reader.next_node(field)?;
             let list_buffers = [reader.next_buffer()?, reader.next_buffer()?];
-            let values = create_array(reader, list_field, variadic_counts, enforce_zero_copy)?;
+            let values = create_array(reader, list_field, variadic_counts, require_alignment)?;
             create_list_array(
                 list_node,
                 data_type,
                 &list_buffers,
                 values,
-                enforce_zero_copy,
+                require_alignment,
             )
         }
         FixedSizeList(ref list_field, _) => {
             let list_node = reader.next_node(field)?;
             let list_buffers = [reader.next_buffer()?];
-            let values = create_array(reader, list_field, variadic_counts, enforce_zero_copy)?;
+            let values = create_array(reader, list_field, variadic_counts, require_alignment)?;
             create_list_array(
                 list_node,
                 data_type,
                 &list_buffers,
                 values,
-                enforce_zero_copy,
+                require_alignment,
             )
         }
         Struct(struct_fields) => {
@@ -148,7 +148,7 @@ fn create_array(
             // TODO investigate whether just knowing the number of buffers could
             // still work
             for struct_field in struct_fields {
-                let child = create_array(reader, struct_field, variadic_counts, enforce_zero_copy)?;
+                let child = create_array(reader, struct_field, variadic_counts, require_alignment)?;
                 struct_arrays.push((struct_field.clone(), child));
             }
             let null_count = struct_node.null_count() as usize;
@@ -163,8 +163,8 @@ fn create_array(
         RunEndEncoded(run_ends_field, values_field) => {
             let run_node = reader.next_node(field)?;
             let run_ends =
-                create_array(reader, run_ends_field, variadic_counts, enforce_zero_copy)?;
-            let values = create_array(reader, values_field, variadic_counts, enforce_zero_copy)?;
+                create_array(reader, run_ends_field, variadic_counts, require_alignment)?;
+            let values = create_array(reader, values_field, variadic_counts, require_alignment)?;
 
             let run_array_length = run_node.length() as usize;
             let builder = ArrayData::builder(data_type.clone())
@@ -173,7 +173,7 @@ fn create_array(
                 .add_child_data(run_ends.into_data())
                 .add_child_data(values.into_data());
 
-            let array_data = if enforce_zero_copy {
+            let array_data = if require_alignment {
                 builder.build()?
             } else {
                 builder.build_aligned()?
@@ -201,7 +201,7 @@ fn create_array(
                 data_type,
                 &index_buffers,
                 value_array.clone(),
-                enforce_zero_copy,
+                require_alignment,
             )
         }
         Union(fields, mode) => {
@@ -228,7 +228,7 @@ fn create_array(
             let mut ids = Vec::with_capacity(fields.len());
 
             for (id, field) in fields.iter() {
-                let child = create_array(reader, field, variadic_counts, enforce_zero_copy)?;
+                let child = create_array(reader, field, variadic_counts, require_alignment)?;
                 children.push((field.as_ref().clone(), child));
                 ids.push(id);
             }
@@ -251,7 +251,7 @@ fn create_array(
                 .len(length as usize)
                 .offset(0);
 
-            let array_data = if enforce_zero_copy {
+            let array_data = if require_alignment {
                 builder.build()?
             } else {
                 builder.build_aligned()?
@@ -264,7 +264,7 @@ fn create_array(
             reader.next_node(field)?,
             data_type,
             &[reader.next_buffer()?, reader.next_buffer()?],
-            enforce_zero_copy,
+            require_alignment,
         ),
     }
 }
@@ -275,7 +275,7 @@ fn create_primitive_array(
     field_node: &FieldNode,
     data_type: &DataType,
     buffers: &[Buffer],
-    enforce_zero_copy: bool,
+    require_alignment: bool,
 ) -> Result<ArrayRef, ArrowError> {
     let length = field_node.length() as usize;
     let null_buffer = (field_node.null_count() > 0).then_some(buffers[0].clone());
@@ -301,7 +301,7 @@ fn create_primitive_array(
         t => unreachable!("Data type {:?} either unsupported or not primitive", t),
     };
 
-    let array_data = if enforce_zero_copy {
+    let array_data = if require_alignment {
         builder.build()?
     } else {
         builder.build_aligned()?
@@ -317,7 +317,7 @@ fn create_list_array(
     data_type: &DataType,
     buffers: &[Buffer],
     child_array: ArrayRef,
-    enforce_zero_copy: bool,
+    require_alignment: bool,
 ) -> Result<ArrayRef, ArrowError> {
     let null_buffer = (field_node.null_count() > 0).then_some(buffers[0].clone());
     let length = field_node.length() as usize;
@@ -337,7 +337,7 @@ fn create_list_array(
         _ => unreachable!("Cannot create list or map array from {:?}", data_type),
     };
 
-    let array_data = if enforce_zero_copy {
+    let array_data = if require_alignment {
         builder.build()?
     } else {
         builder.build_aligned()?
@@ -353,7 +353,7 @@ fn create_dictionary_array(
     data_type: &DataType,
     buffers: &[Buffer],
     value_array: ArrayRef,
-    enforce_zero_copy: bool,
+    require_alignment: bool,
 ) -> Result<ArrayRef, ArrowError> {
     if let Dictionary(_, _) = *data_type {
         let null_buffer = (field_node.null_count() > 0).then_some(buffers[0].clone());
@@ -363,7 +363,7 @@ fn create_dictionary_array(
             .add_child_data(value_array.into_data())
             .null_bit_buffer(null_buffer);
 
-        let array_data = if enforce_zero_copy {
+        let array_data = if require_alignment {
             builder.build()?
         } else {
             builder.build_aligned()?
@@ -485,7 +485,16 @@ impl<'a> ArrayReader<'a> {
     }
 }
 
-/// Creates a record batch from binary data using the `crate::RecordBatch` indexes and the `Schema`
+/// Creates a record batch from binary data using the `crate::RecordBatch` indexes and the `Schema`.
+///
+/// If `require_alignment` is true, this function will return an error if any array data in the
+/// input `buf` is not properly aligned.
+/// Under the hood it will use [`arrow_data::ArrayDataBuilder::build`] to construct [`arrow_data::ArrayData`].
+///
+/// If `require_alignment` is false, this function will automatically allocate a new aligned buffer
+/// and copy over the data if any array data in the input `buf` is not properly aligned.
+/// (Properly aligned array data will remain zero-copy.)
+/// Under the hood it will use [`arrow_data::ArrayDataBuilder::build_aligned`] to construct [`arrow_data::ArrayData`].
 pub fn read_record_batch(
     buf: &Buffer,
     batch: crate::RecordBatch,
@@ -493,7 +502,7 @@ pub fn read_record_batch(
     dictionaries_by_id: &HashMap<i64, ArrayRef>,
     projection: Option<&[usize]>,
     metadata: &MetadataVersion,
-    enforce_zero_copy: bool,
+    require_alignment: bool,
 ) -> Result<RecordBatch, ArrowError> {
     let buffers = batch.buffers().ok_or_else(|| {
         ArrowError::IpcError("Unable to get buffers from IPC RecordBatch".to_string())
@@ -528,7 +537,7 @@ pub fn read_record_batch(
             // Create array for projected field
             if let Some(proj_idx) = projection.iter().position(|p| p == &idx) {
                 let child =
-                    create_array(&mut reader, field, &mut variadic_counts, enforce_zero_copy)?;
+                    create_array(&mut reader, field, &mut variadic_counts, require_alignment)?;
                 arrays.push((proj_idx, child));
             } else {
                 reader.skip_field(field, &mut variadic_counts)?;
@@ -545,7 +554,7 @@ pub fn read_record_batch(
         let mut children = vec![];
         // keep track of index as lists require more than one node
         for field in schema.fields() {
-            let child = create_array(&mut reader, field, &mut variadic_counts, enforce_zero_copy)?;
+            let child = create_array(&mut reader, field, &mut variadic_counts, require_alignment)?;
             children.push(child);
         }
         assert!(variadic_counts.is_empty());
@@ -561,7 +570,7 @@ pub fn read_dictionary(
     schema: &Schema,
     dictionaries_by_id: &mut HashMap<i64, ArrayRef>,
     metadata: &MetadataVersion,
-    enforce_zero_copy: bool,
+    require_alignment: bool,
 ) -> Result<(), ArrowError> {
     if batch.isDelta() {
         return Err(ArrowError::InvalidArgumentError(
@@ -591,7 +600,7 @@ pub fn read_dictionary(
                 dictionaries_by_id,
                 None,
                 metadata,
-                enforce_zero_copy,
+                require_alignment,
             )?;
             Some(record_batch.column(0).clone())
         }
@@ -716,7 +725,7 @@ pub struct FileDecoder {
     dictionaries: HashMap<i64, ArrayRef>,
     version: MetadataVersion,
     projection: Option<Vec<usize>>,
-    enforce_zero_copy: bool,
+    require_alignment: bool,
 }
 
 impl FileDecoder {
@@ -727,7 +736,7 @@ impl FileDecoder {
             version,
             dictionaries: Default::default(),
             projection: None,
-            enforce_zero_copy: false,
+            require_alignment: false,
         }
     }
 
@@ -737,16 +746,20 @@ impl FileDecoder {
         self
     }
 
-    /// Specify whether to enforce zero copy, which means the array data inside the record batches
-    /// produced by this decoder will always reference the input buffer.
+    /// Specifies whether or not array data in input buffers is required to be properly aligned.
     ///
-    /// In particular, this means that if there is data that is not aligned properly in the
-    /// input buffer, the decoder will throw rather than copy the data to an aligned buffer.
+    /// If `require_alignment` is true, this decoder will return an error if any array data in the
+    /// input `buf` is not properly aligned.
+    /// Under the hood it will use [`arrow_data::ArrayDataBuilder::build`] to construct
+    /// [`arrow_data::ArrayData`].
     ///
-    /// By default `enforce_zero_copy` is false, meaning it will allocate new buffers and copy
-    /// data if necessary, e.g. if the alignment is not correct.
-    pub fn with_enforce_zero_copy(mut self, enforce_zero_copy: bool) -> Self {
-        self.enforce_zero_copy = enforce_zero_copy;
+    /// If `require_alignment` is false (the default), this decoder will automatically allocate a
+    /// new aligned buffer and copy over the data if any array data in the input `buf` is not
+    /// properly aligned. (Properly aligned array data will remain zero-copy.)
+    /// Under the hood it will use [`arrow_data::ArrayDataBuilder::build_aligned`] to construct
+    /// [`arrow_data::ArrayData`].
+    pub fn with_require_alignment(mut self, require_alignment: bool) -> Self {
+        self.require_alignment = require_alignment;
         self
     }
 
@@ -774,7 +787,7 @@ impl FileDecoder {
                     &self.schema,
                     &mut self.dictionaries,
                     &message.version(),
-                    self.enforce_zero_copy,
+                    self.require_alignment,
                 )
             }
             t => Err(ArrowError::ParseError(format!(
@@ -806,7 +819,7 @@ impl FileDecoder {
                     &self.dictionaries,
                     self.projection.as_deref(),
                     &message.version(),
-                    self.enforce_zero_copy,
+                    self.require_alignment,
                 )
                 .map(Some)
             }
@@ -2049,7 +2062,7 @@ mod tests {
     }
 
     #[test]
-    fn test_unaligned_throws_error_with_enforce_zero_copy() {
+    fn test_unaligned_throws_error_with_require_alignment() {
         let batch = RecordBatch::try_from_iter(vec![(
             "i32",
             Arc::new(Int32Array::from(vec![1, 2, 3, 4])) as _,
@@ -2083,13 +2096,11 @@ mod tests {
         );
 
         let error = result.unwrap_err();
-        match error {
-            ArrowError::InvalidArgumentError(e) => {
-                assert!(e.contains("Misaligned"));
-                assert!(e.contains("offset from expected alignment of"));
-            }
-            _ => panic!("Expected InvalidArgumentError"),
-        }
+        assert_eq!(
+            error.to_string(),
+            "Invalid argument error: Misaligned buffers[0] in array of type Int32, \
+             offset from expected alignment of 4 by 1"
+        );
     }
 
     #[test]
