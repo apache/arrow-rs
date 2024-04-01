@@ -2038,41 +2038,6 @@ fn adjust_timestamp_to_timezone<T: ArrowTimestampType>(
     Ok(adjusted)
 }
 
-/// Casts Utf8 to Boolean
-fn cast_utf8_to_boolean<OffsetSize>(
-    from: &dyn Array,
-    cast_options: &CastOptions,
-) -> Result<ArrayRef, ArrowError>
-where
-    OffsetSize: OffsetSizeTrait,
-{
-    let array = from
-        .as_any()
-        .downcast_ref::<GenericStringArray<OffsetSize>>()
-        .unwrap();
-
-    let output_array = array
-        .iter()
-        .map(|value| match value {
-            Some(value) => match value.to_ascii_lowercase().trim() {
-                "t" | "tr" | "tru" | "true" | "y" | "ye" | "yes" | "on" | "1" => Ok(Some(true)),
-                "f" | "fa" | "fal" | "fals" | "false" | "n" | "no" | "of" | "off" | "0" => {
-                    Ok(Some(false))
-                }
-                invalid_value => match cast_options.safe {
-                    true => Ok(None),
-                    false => Err(ArrowError::CastError(format!(
-                        "Cannot cast value '{invalid_value}' to value of Boolean type",
-                    ))),
-                },
-            },
-            None => Ok(None),
-        })
-        .collect::<Result<BooleanArray, _>>()?;
-
-    Ok(Arc::new(output_array))
-}
-
 /// Cast numeric types to Boolean
 ///
 /// Any zero value returns `false` while non-zero returns `true`
