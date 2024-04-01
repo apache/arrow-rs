@@ -40,7 +40,7 @@ fn to_py_err(err: ArrowError) -> PyErr {
 
 /// Returns `array + array` of an int64 array.
 #[pyfunction]
-fn double(array: &PyAny, py: Python) -> PyResult<PyObject> {
+fn double(array: &Bound<PyAny>, py: Python) -> PyResult<PyObject> {
     // import
     let array = make_array(ArrayData::from_pyarrow(array)?);
 
@@ -60,7 +60,7 @@ fn double(array: &PyAny, py: Python) -> PyResult<PyObject> {
 /// calls a lambda function that receives and returns an array
 /// whose result must be the array multiplied by two
 #[pyfunction]
-fn double_py(lambda: &PyAny, py: Python) -> PyResult<bool> {
+fn double_py(lambda: &Bound<PyAny>, py: Python) -> PyResult<bool> {
     // create
     let array = Arc::new(Int64Array::from(vec![Some(1), None, Some(3)]));
     let expected = Arc::new(Int64Array::from(vec![Some(2), None, Some(6)])) as ArrayRef;
@@ -68,7 +68,7 @@ fn double_py(lambda: &PyAny, py: Python) -> PyResult<bool> {
     // to py
     let pyarray = array.to_data().to_pyarrow(py)?;
     let pyarray = lambda.call1((pyarray,))?;
-    let array = make_array(ArrayData::from_pyarrow(pyarray)?);
+    let array = make_array(ArrayData::from_pyarrow(&pyarray)?);
 
     Ok(array == expected)
 }
@@ -82,16 +82,12 @@ fn make_empty_array(datatype: PyArrowType<DataType>, py: Python) -> PyResult<PyO
 
 /// Returns the substring
 #[pyfunction]
-fn substring(
-    array: PyArrowType<ArrayData>,
-    start: i64,
-) -> PyResult<PyArrowType<ArrayData>> {
+fn substring(array: PyArrowType<ArrayData>, start: i64) -> PyResult<PyArrowType<ArrayData>> {
     // import
     let array = make_array(array.0);
 
     // substring
-    let array =
-        kernels::substring::substring(array.as_ref(), start, None).map_err(to_py_err)?;
+    let array = kernels::substring::substring(array.as_ref(), start, None).map_err(to_py_err)?;
 
     Ok(array.to_data().into())
 }
@@ -102,8 +98,7 @@ fn concatenate(array: PyArrowType<ArrayData>, py: Python) -> PyResult<PyObject> 
     let array = make_array(array.0);
 
     // concat
-    let array =
-        kernels::concat::concat(&[array.as_ref(), array.as_ref()]).map_err(to_py_err)?;
+    let array = kernels::concat::concat(&[array.as_ref(), array.as_ref()]).map_err(to_py_err)?;
 
     array.to_data().to_pyarrow(py)
 }
@@ -129,9 +124,7 @@ fn round_trip_array(obj: PyArrowType<ArrayData>) -> PyResult<PyArrowType<ArrayDa
 }
 
 #[pyfunction]
-fn round_trip_record_batch(
-    obj: PyArrowType<RecordBatch>,
-) -> PyResult<PyArrowType<RecordBatch>> {
+fn round_trip_record_batch(obj: PyArrowType<RecordBatch>) -> PyResult<PyArrowType<RecordBatch>> {
     Ok(obj)
 }
 
@@ -168,7 +161,7 @@ fn boxed_reader_roundtrip(
 }
 
 #[pymodule]
-fn arrow_pyarrow_integration_testing(_py: Python, m: &PyModule) -> PyResult<()> {
+fn arrow_pyarrow_integration_testing(_py: Python, m: &Bound<PyModule>) -> PyResult<()> {
     m.add_wrapped(wrap_pyfunction!(double))?;
     m.add_wrapped(wrap_pyfunction!(double_py))?;
     m.add_wrapped(wrap_pyfunction!(make_empty_array))?;
