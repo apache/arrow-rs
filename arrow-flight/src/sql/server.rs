@@ -33,7 +33,8 @@ use super::{
     CommandGetPrimaryKeys, CommandGetSqlInfo, CommandGetTableTypes, CommandGetTables,
     CommandGetXdbcTypeInfo, CommandPreparedStatementQuery, CommandPreparedStatementUpdate,
     CommandStatementQuery, CommandStatementSubstraitPlan, CommandStatementUpdate,
-    DoPutUpdateResult, ProstMessageExt, SqlInfo, TicketStatementQuery,
+    DoPutPreparedStatementResult, DoPutUpdateResult, ProstMessageExt, SqlInfo,
+    TicketStatementQuery,
 };
 use crate::{
     flight_service_server::FlightService, gen::PollInfo, Action, ActionType, Criteria, Empty,
@@ -397,11 +398,15 @@ pub trait FlightSqlService: Sync + Send + Sized + 'static {
     }
 
     /// Bind parameters to given prepared statement.
+    ///
+    /// Returns an opaque handle that the client should pass
+    /// back to the server during subsequent requests with this
+    /// prepared statement.
     async fn do_put_prepared_statement_query(
         &self,
         _query: CommandPreparedStatementQuery,
         _request: Request<PeekableFlightDataStream>,
-    ) -> Result<Response<<Self as FlightService>::DoPutStream>, Status> {
+    ) -> Result<DoPutPreparedStatementResult, Status> {
         Err(Status::unimplemented(
             "do_put_prepared_statement_query has no default implementation",
         ))
@@ -709,7 +714,13 @@ where
                 Ok(Response::new(Box::pin(output)))
             }
             Command::CommandPreparedStatementQuery(command) => {
-                self.do_put_prepared_statement_query(command, request).await
+                let result = self
+                    .do_put_prepared_statement_query(command, request)
+                    .await?;
+                let output = futures::stream::iter(vec![Ok(PutResult {
+                    app_metadata: result.as_any().encode_to_vec().into(),
+                })]);
+                Ok(Response::new(Box::pin(output)))
             }
             Command::CommandStatementSubstraitPlan(command) => {
                 let record_count = self.do_put_substrait_plan(command, request).await?;

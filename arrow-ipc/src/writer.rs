@@ -413,6 +413,8 @@ impl IpcDataGenerator {
         let compression_codec: Option<CompressionCodec> =
             batch_compression_type.map(TryInto::try_into).transpose()?;
 
+        let mut variadic_buffer_counts = vec![];
+
         for array in batch.columns() {
             let array_data = array.to_data();
             offset = write_array_data(
@@ -426,6 +428,8 @@ impl IpcDataGenerator {
                 compression_codec,
                 write_options,
             )?;
+
+            append_variadic_buffer_counts(&mut variadic_buffer_counts, &array_data);
         }
         // pad the tail of body data
         let len = arrow_data.len();
@@ -435,6 +439,12 @@ impl IpcDataGenerator {
         // write data
         let buffers = fbb.create_vector(&buffers);
         let nodes = fbb.create_vector(&nodes);
+        let variadic_buffer = if variadic_buffer_counts.is_empty() {
+            None
+        } else {
+            Some(fbb.create_vector(&variadic_buffer_counts))
+        };
+
         let root = {
             let mut batch_builder = crate::RecordBatchBuilder::new(&mut fbb);
             batch_builder.add_length(batch.num_rows() as i64);
@@ -442,6 +452,10 @@ impl IpcDataGenerator {
             batch_builder.add_buffers(buffers);
             if let Some(c) = compression {
                 batch_builder.add_compression(c);
+            }
+
+            if let Some(v) = variadic_buffer {
+                batch_builder.add_variadicBufferCounts(v);
             }
             let b = batch_builder.finish();
             b.as_union_value()
@@ -502,6 +516,9 @@ impl IpcDataGenerator {
             write_options,
         )?;
 
+        let mut variadic_buffer_counts = vec![];
+        append_variadic_buffer_counts(&mut variadic_buffer_counts, array_data);
+
         // pad the tail of body data
         let len = arrow_data.len();
         let pad_len = pad_to_alignment(write_options.alignment, len);
@@ -510,6 +527,11 @@ impl IpcDataGenerator {
         // write data
         let buffers = fbb.create_vector(&buffers);
         let nodes = fbb.create_vector(&nodes);
+        let variadic_buffer = if variadic_buffer_counts.is_empty() {
+            None
+        } else {
+            Some(fbb.create_vector(&variadic_buffer_counts))
+        };
 
         let root = {
             let mut batch_builder = crate::RecordBatchBuilder::new(&mut fbb);
@@ -518,6 +540,9 @@ impl IpcDataGenerator {
             batch_builder.add_buffers(buffers);
             if let Some(c) = compression {
                 batch_builder.add_compression(c);
+            }
+            if let Some(v) = variadic_buffer {
+                batch_builder.add_variadicBufferCounts(v);
             }
             batch_builder.finish()
         };
@@ -545,6 +570,25 @@ impl IpcDataGenerator {
             ipc_message: finished_data.to_vec(),
             arrow_data,
         })
+    }
+}
+
+fn append_variadic_buffer_counts(counts: &mut Vec<i64>, array: &ArrayData) {
+    match array.data_type() {
+        DataType::BinaryView | DataType::Utf8View => {
+            // The spec documents the counts only includes the variadic buffers, not the view/null buffers.
+            // https://arrow.apache.org/docs/format/Columnar.html#variadic-buffers
+            counts.push(array.buffers().len() as i64 - 1);
+        }
+        DataType::Dictionary(_, _) => {
+            // Do nothing
+            // Dictionary types are handled in `encode_dictionaries`.
+        }
+        _ => {
+            for child in array.child_data() {
+                append_variadic_buffer_counts(counts, child)
+            }
+        }
     }
 }
 
@@ -1256,6 +1300,23 @@ fn write_array_data(
                 write_options.alignment,
             )?;
         }
+    } else if matches!(data_type, DataType::BinaryView | DataType::Utf8View) {
+        // Slicing the views buffer is safe and easy,
+        // but pruning unneeded data buffers is much more nuanced since it's complicated to prove that no views reference the pruned buffers
+        //
+        // Current implementation just serialize the raw arrays as given and not try to optimize anything.
+        // If users wants to "compact" the arrays prior to sending them over IPC,
+        // they should consider the gc API suggested in #5513
+        for buffer in array_data.buffers() {
+            offset = write_buffer(
+                buffer.as_slice(),
+                buffers,
+                arrow_data,
+                offset,
+                compression_codec,
+                write_options.alignment,
+            )?;
+        }
     } else if matches!(data_type, DataType::LargeBinary | DataType::LargeUtf8) {
         let (offsets, values) = get_byte_array_buffers::<i64>(array_data);
         for buffer in [offsets, values] {
@@ -1838,6 +1899,57 @@ mod tests {
     fn test_write_union_file_v4_v5() {
         write_union_file(IpcWriteOptions::try_new(8, false, MetadataVersion::V4).unwrap());
         write_union_file(IpcWriteOptions::try_new(8, false, MetadataVersion::V5).unwrap());
+    }
+
+    #[test]
+    fn test_write_view_types() {
+        const LONG_TEST_STRING: &str =
+            "This is a long string to make sure binary view array handles it";
+        let schema = Schema::new(vec![
+            Field::new("field1", DataType::BinaryView, true),
+            Field::new("field2", DataType::Utf8View, true),
+        ]);
+        let values: Vec<Option<&[u8]>> = vec![
+            Some(b"foo"),
+            Some(b"bar"),
+            Some(LONG_TEST_STRING.as_bytes()),
+        ];
+        let binary_array = BinaryViewArray::from_iter(values);
+        let utf8_array =
+            StringViewArray::from_iter(vec![Some("foo"), Some("bar"), Some(LONG_TEST_STRING)]);
+        let record_batch = RecordBatch::try_new(
+            Arc::new(schema.clone()),
+            vec![Arc::new(binary_array), Arc::new(utf8_array)],
+        )
+        .unwrap();
+
+        let mut file = tempfile::tempfile().unwrap();
+        {
+            let mut writer = FileWriter::try_new(&mut file, &schema).unwrap();
+            writer.write(&record_batch).unwrap();
+            writer.finish().unwrap();
+        }
+        file.rewind().unwrap();
+        {
+            let mut reader = FileReader::try_new(&file, None).unwrap();
+            let read_batch = reader.next().unwrap().unwrap();
+            read_batch
+                .columns()
+                .iter()
+                .zip(record_batch.columns())
+                .for_each(|(a, b)| {
+                    assert_eq!(a, b);
+                });
+        }
+        file.rewind().unwrap();
+        {
+            let mut reader = FileReader::try_new(&file, Some(vec![0])).unwrap();
+            let read_batch = reader.next().unwrap().unwrap();
+            assert_eq!(read_batch.num_columns(), 1);
+            let read_array = read_batch.column(0);
+            let write_array = record_batch.column(0);
+            assert_eq!(read_array, write_array);
+        }
     }
 
     #[test]

@@ -35,7 +35,8 @@ use crate::sql::{
     CommandGetDbSchemas, CommandGetExportedKeys, CommandGetImportedKeys, CommandGetPrimaryKeys,
     CommandGetSqlInfo, CommandGetTableTypes, CommandGetTables, CommandGetXdbcTypeInfo,
     CommandPreparedStatementQuery, CommandPreparedStatementUpdate, CommandStatementQuery,
-    CommandStatementUpdate, DoPutUpdateResult, ProstMessageExt, SqlInfo,
+    CommandStatementUpdate, DoPutPreparedStatementResult, DoPutUpdateResult, ProstMessageExt,
+    SqlInfo,
 };
 use crate::trailers::extract_lazy_trailers;
 use crate::{
@@ -501,6 +502,7 @@ impl PreparedStatement<Channel> {
     }
 
     /// Submit parameters to the server, if any have been set on this prepared statement instance
+    /// Updates our stored prepared statement handle with the handle given by the server response.
     async fn write_bind_params(&mut self) -> Result<(), ArrowError> {
         if let Some(ref params_batch) = self.parameter_binding {
             let cmd = CommandPreparedStatementQuery {
@@ -519,15 +521,36 @@ impl PreparedStatement<Channel> {
                 .await
                 .map_err(flight_error_to_arrow_error)?;
 
-            self.flight_sql_client
+            // Attempt to update the stored handle with any updated handle in the DoPut result.
+            // Older servers do not respond with a result for DoPut, so skip this step when
+            // the stream closes with no response.
+            if let Some(result) = self
+                .flight_sql_client
                 .do_put(stream::iter(flight_data))
                 .await?
-                .try_collect::<Vec<_>>()
+                .message()
                 .await
-                .map_err(status_to_arrow_error)?;
+                .map_err(status_to_arrow_error)?
+            {
+                if let Some(handle) = self.unpack_prepared_statement_handle(&result)? {
+                    self.handle = handle;
+                }
+            }
         }
-
         Ok(())
+    }
+
+    /// Decodes the app_metadata stored in a [`PutResult`] as a
+    /// [`DoPutPreparedStatementResult`] and then returns
+    /// the inner prepared statement handle as [`Bytes`]
+    fn unpack_prepared_statement_handle(
+        &self,
+        put_result: &PutResult,
+    ) -> Result<Option<Bytes>, ArrowError> {
+        let any = Any::decode(&*put_result.app_metadata).map_err(decode_error_to_arrow_error)?;
+        Ok(any
+            .unpack::<DoPutPreparedStatementResult>()?
+            .and_then(|result| result.prepared_statement_handle))
     }
 
     /// Close the prepared statement, so that this PreparedStatement can not used
