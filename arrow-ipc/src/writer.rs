@@ -1120,7 +1120,7 @@ fn write_body_buffers<W: Write>(
     }
 
     writer.flush()?;
-    Ok(total_len as usize)
+    Ok(total_len)
 }
 
 /// Write a record batch to the writer, writing the message size before the message
