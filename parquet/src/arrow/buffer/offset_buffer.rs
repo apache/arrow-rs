@@ -131,7 +131,7 @@ impl<I: OffsetSizeTrait> OffsetBuffer<I> {
         match data_type {
             ArrowType::Utf8View => {
                 let mut builder = self.build_generic_byte_view();
-                Arc::new(builder.finish().to_stringview().unwrap())
+                Arc::new(builder.finish().to_string_view().unwrap())
             }
             ArrowType::BinaryView => {
                 let mut builder = self.build_generic_byte_view();
@@ -154,17 +154,14 @@ impl<I: OffsetSizeTrait> OffsetBuffer<I> {
         }
     }
 
-    fn build_generic_byte_view(&self) -> GenericByteViewBuilder<BinaryViewType> {
+    fn build_generic_byte_view(self) -> GenericByteViewBuilder<BinaryViewType> {
         let mut builder = GenericByteViewBuilder::<BinaryViewType>::with_capacity(self.len());
-        for i in self.offsets.windows(2) {
-            let start = i[0];
-            let end = i[1];
-            let b = unsafe {
-                std::slice::from_raw_parts(
-                    self.values.as_ptr().offset(start.to_isize().unwrap()),
-                    (end - start).to_usize().unwrap(),
-                )
-            };
+        let mut values = self.values;
+        for window in self.offsets.windows(2) {
+            let start = window[0];
+            let end = window[1];
+            let len = (end - start).to_usize().unwrap();
+            let b = values.drain(..len).collect::<Vec<u8>>();
             if b.is_empty() {
                 builder.append_null();
             } else {

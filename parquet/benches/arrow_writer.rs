@@ -96,6 +96,24 @@ fn create_string_bench_batch(
     )?)
 }
 
+fn create_string_and_binary_view_bench_batch(
+    size: usize,
+    null_density: f32,
+    true_density: f32,
+) -> Result<RecordBatch> {
+    let fields = vec![
+        Field::new("_1", DataType::Utf8View, true),
+        Field::new("_2", DataType::BinaryView, true),
+    ];
+    let schema = Schema::new(fields);
+    Ok(create_random_batch(
+        Arc::new(schema),
+        size,
+        null_density,
+        true_density,
+    )?)
+}
+
 fn create_string_dictionary_bench_batch(
     size: usize,
     null_density: f32,
@@ -380,6 +398,22 @@ fn bench_primitive_writer(c: &mut Criterion) {
     });
 
     let batch = create_string_bench_batch(4096, 0.25, 0.75).unwrap();
+    group.throughput(Throughput::Bytes(
+        batch
+            .columns()
+            .iter()
+            .map(|f| f.get_array_memory_size() as u64)
+            .sum(),
+    ));
+    group.bench_function("4096 values string", |b| {
+        b.iter(|| write_batch(&batch).unwrap())
+    });
+
+    group.bench_function("4096 values string with bloom filter", |b| {
+        b.iter(|| write_batch_enable_bloom_filter(&batch).unwrap())
+    });
+
+    let batch = create_string_and_binary_view_bench_batch(4096, 0.25, 0.75).unwrap();
     group.throughput(Throughput::Bytes(
         batch
             .columns()
