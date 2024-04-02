@@ -103,16 +103,6 @@ pub struct GcpSigningCredential {
     pub email: Option<String>,
 }
 
-impl GcpSigningCredential {
-    /// Create a new GcpSigningCredential
-    pub fn new(credential: GcpCredential) -> Self {
-        Self {
-            credential: Arc::new(credential),
-            email: None,
-        }
-    }
-}
-
 /// A Google Cloud Storage Credential
 #[derive(Debug, Eq, PartialEq)]
 pub struct GcpCredential {
