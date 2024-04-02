@@ -253,7 +253,7 @@ impl Signer for GoogleCloudStorage {
         let authoriztor = GCSAuthorizer::new(sign_credential);
 
         authoriztor
-            .sign(method, &mut url, expires_in, DEFAULT_HOST, &self.client)
+            .sign(method, &mut url, expires_in, &self.client)
             .await?;
 
         Ok(url)

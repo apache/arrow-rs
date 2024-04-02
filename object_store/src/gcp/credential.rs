@@ -52,6 +52,7 @@ pub const DEFAULT_SIGN_BLOG_SCOPE: &str = "https://www.googleapis.com/auth/cloud
 pub const DEFAULT_GCS_BASE_URL: &str = "https://storage.googleapis.com";
 
 const DEFAULT_GCS_PLAYLOAD_STRING: &str = "UNSIGNED-PAYLOAD";
+const DEFAULT_GCS_SIGN_BLOB_HOST: &str = "storage.googleapis.com";
 
 #[derive(Debug, Snafu)]
 pub enum Error {
@@ -680,7 +681,6 @@ impl GCSAuthorizer {
         method: Method,
         url: &mut Url,
         expires_in: Duration,
-        host: &str,
         client: &GoogleCloudStorageClient,
     ) -> crate::Result<()> {
         let client_email = self
@@ -693,7 +693,7 @@ impl GCSAuthorizer {
         let credential_with_scope = format!("{}/{}", client_email, scope);
 
         let mut headers = HeaderMap::new();
-        headers.insert("host", host.parse().unwrap());
+        headers.insert("host", DEFAULT_GCS_SIGN_BLOB_HOST.parse().unwrap());
 
         let (_, signed_headers) = Self::canonicalize_headers(&headers);
 
