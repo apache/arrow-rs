@@ -15,10 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use super::client::GoogleCloudStorageClient;
 use crate::client::retry::RetryExt;
 use crate::client::token::TemporaryToken;
 use crate::client::TokenProvider;
-use crate::gcp::{DEFAULT_GCS_PLAYLOAD_STRING, STORE};
+use crate::gcp::STORE;
 use crate::util::{hex_digest, STRICT_ENCODE_SET};
 use crate::RetryConfig;
 use async_trait::async_trait;
@@ -43,14 +44,14 @@ use std::time::{Duration, Instant};
 use tracing::info;
 use url::Url;
 
-use super::client::GoogleCloudStorageClient;
-
 pub const DEFAULT_SCOPE: &str = "https://www.googleapis.com/auth/devstorage.full_control";
 
 /// <https://cloud.google.com/iam/docs/reference/credentials/rest/v1/projects.serviceAccounts/signBlob#authorization-scopes>
 pub const DEFAULT_SIGN_BLOG_SCOPE: &str = "https://www.googleapis.com/auth/cloud-platform";
 
 pub const DEFAULT_GCS_BASE_URL: &str = "https://storage.googleapis.com";
+
+const DEFAULT_GCS_PLAYLOAD_STRING: &str = "UNSIGNED-PAYLOAD";
 
 #[derive(Debug, Snafu)]
 pub enum Error {

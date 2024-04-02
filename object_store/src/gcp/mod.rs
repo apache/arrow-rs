@@ -70,9 +70,8 @@ pub type GcpCredentialProvider = Arc<dyn CredentialProvider<Credential = GcpCred
 /// [`GcpSigningCredential`] for [`GoogleCloudStorage`]
 pub type GcpSigningCredentialProvider =
     Arc<dyn CredentialProvider<Credential = GcpSigningCredential>>;
-/// default payload string for GCS
-pub const DEFAULT_GCS_PLAYLOAD_STRING: &str = "UNSIGNED-PAYLOAD";
 
+/// default sign blob host string
 const DEFAULT_HOST: &str = "storage.googleapis.com";
 
 /// Interface for [Google Cloud Storage](https://cloud.google.com/storage/).
