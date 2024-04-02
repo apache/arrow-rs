@@ -32,6 +32,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 use url::Url;
 
+use super::client::SignMethod;
 use super::credential::{AuthorizedUserCredentialsForSign, InstanceSignCredentialProvider};
 use super::GcpSigningCredential;
 
@@ -499,14 +500,15 @@ impl GoogleCloudStorageBuilder {
                 Arc::new(StaticCredentialProvider::new(GcpSigningCredential {
                     credential: Arc::new(GcpCredential { bearer: "".into() }),
                     email: None,
+                    private_key: None,
                 })) as _
-            } else if let Some(credentials) = service_account_credentials {
+            } else if let Some(credentials) = service_account_credentials.clone() {
                 Arc::new(TokenCredentialProvider::new(
                     credentials.email_provider()?,
                     self.client_options.client()?,
                     self.retry_config.clone(),
                 )) as _
-            } else if let Some(credentials) = application_default_credentials {
+            } else if let Some(credentials) = application_default_credentials.clone() {
                 match credentials {
                     ApplicationDefaultCredentials::AuthorizedUser(token) => {
                         Arc::new(TokenCredentialProvider::new(
@@ -531,6 +533,12 @@ impl GoogleCloudStorageBuilder {
                 )) as _
             };
 
+        let sign_method = if service_account_credentials.is_some() {
+            SignMethod::SignByKey
+        } else {
+            SignMethod::SignBlob
+        };
+
         let config = GoogleCloudStorageConfig::new(
             gcs_base_url,
             credentials,
@@ -538,6 +546,7 @@ impl GoogleCloudStorageBuilder {
             bucket_name,
             self.retry_config,
             self.client_options,
+            sign_method,
         );
 
         Ok(GoogleCloudStorage {

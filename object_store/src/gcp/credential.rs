@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use super::client::GoogleCloudStorageClient;
+use super::client::{GoogleCloudStorageClient, SignMethod};
 use crate::client::retry::RetryExt;
 use crate::client::token::TemporaryToken;
 use crate::client::TokenProvider;
@@ -106,6 +106,8 @@ pub struct GcpSigningCredential {
     pub credential: Arc<GcpCredential>,
     /// client email address
     pub email: Option<String>,
+    /// The private key in RSA format.
+    pub private_key: Option<String>,
 }
 
 /// A Google Cloud Storage Credential
@@ -196,9 +198,8 @@ impl SelfSigningUrl {
 pub struct SelfSignedJwt {
     issuer: String,
     scope: String,
-    key_pair: RsaKeyPair,
-    jwt_header: String,
-    random: ring::rand::SystemRandom,
+    private_key_pem: String,
+    key_id: String,
 }
 
 impl SelfSignedJwt {
@@ -209,20 +210,11 @@ impl SelfSignedJwt {
         private_key_pem: String,
         scope: String,
     ) -> Result<Self> {
-        let key_pair = decode_first_rsa_key(private_key_pem)?;
-        let jwt_header = b64_encode_obj(&JwtHeader {
-            alg: "RS256",
-            typ: Some("JWT"),
-            kid: Some(&key_id),
-            ..Default::default()
-        })?;
-
         Ok(Self {
             issuer,
-            key_pair,
             scope,
-            jwt_header,
-            random: ring::rand::SystemRandom::new(),
+            private_key_pem,
+            key_id,
         })
     }
 }
@@ -240,6 +232,7 @@ impl TokenProvider for SelfSigningUrl {
             token: Arc::new(GcpSigningCredential {
                 credential: token.token,
                 email: Some(self.self_signed_jwt.issuer.clone()),
+                private_key: Some(self.self_signed_jwt.private_key_pem.clone()),
             }),
             expiry: Some(Instant::now() + Duration::from_secs(3600)),
         })
@@ -267,13 +260,21 @@ impl TokenProvider for SelfSignedJwt {
             exp,
         };
 
+        let key_pair = decode_first_rsa_key(self.private_key_pem.clone())?;
+        let jwt_header = b64_encode_obj(&JwtHeader {
+            alg: "RS256",
+            typ: Some("JWT"),
+            kid: Some(&self.key_id),
+            ..Default::default()
+        })?;
+
         let claim_str = b64_encode_obj(&claims)?;
-        let message = [self.jwt_header.as_ref(), claim_str.as_ref()].join(".");
-        let mut sig_bytes = vec![0; self.key_pair.public().modulus_len()];
-        self.key_pair
+        let message = [jwt_header.as_ref(), claim_str.as_ref()].join(".");
+        let mut sig_bytes = vec![0; key_pair.public().modulus_len()];
+        key_pair
             .sign(
                 &ring::signature::RSA_PKCS1_SHA256,
-                &self.random,
+                &ring::rand::SystemRandom::new(),
                 message.as_bytes(),
                 &mut sig_bytes,
             )
@@ -367,7 +368,7 @@ fn seconds_since_epoch() -> u64 {
         .as_secs()
 }
 
-fn decode_first_rsa_key(private_key_pem: String) -> Result<RsaKeyPair> {
+pub fn decode_first_rsa_key(private_key_pem: String) -> Result<RsaKeyPair> {
     use rustls_pemfile::Item;
     use std::io::Cursor;
 
@@ -498,6 +499,7 @@ impl TokenProvider for InstanceSignCredentialProvider {
                     bearer: response.access_token,
                 }),
                 email: Some(email),
+                private_key: None,
             }),
             expiry: Some(Instant::now() + Duration::from_secs(response.expires_in)),
         };
@@ -612,6 +614,7 @@ impl TokenProvider for AuthorizedUserCredentialsForSign {
             token: Arc::new(GcpSigningCredential {
                 credential: token.token,
                 email: Some(client_email),
+                private_key: None,
             }),
             expiry: token.expiry,
         })
@@ -705,9 +708,19 @@ impl GCSAuthorizer {
             .append_pair("X-Goog-SignedHeaders", &signed_headers);
 
         let string_to_sign = self.string_to_sign(date, &method, url, &headers);
-        let signature = client
-            .sign_blob(&string_to_sign, client_email.as_ref())
-            .await?;
+        let signature = match client.config().sign_method {
+            SignMethod::SignByKey => {
+                let private_key = self
+                    .sign_credential
+                    .private_key
+                    .as_ref()
+                    .cloned()
+                    .context(MissingKeySnafu)?;
+
+                client.sign_by_key(&string_to_sign, private_key)?
+            }
+            SignMethod::SignBlob => client.sign_blob(&string_to_sign, &client_email).await?,
+        };
 
         url.query_pairs_mut()
             .append_pair("X-Goog-Signature", &signature);

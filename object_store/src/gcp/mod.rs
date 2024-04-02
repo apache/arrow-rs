@@ -71,9 +71,6 @@ pub type GcpCredentialProvider = Arc<dyn CredentialProvider<Credential = GcpCred
 pub type GcpSigningCredentialProvider =
     Arc<dyn CredentialProvider<Credential = GcpSigningCredential>>;
 
-/// default sign blob host string
-const DEFAULT_HOST: &str = "storage.googleapis.com";
-
 /// Interface for [Google Cloud Storage](https://cloud.google.com/storage/).
 #[derive(Debug)]
 pub struct GoogleCloudStorage {

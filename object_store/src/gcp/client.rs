@@ -24,6 +24,7 @@ use crate::client::s3::{
     ListResponse,
 };
 use crate::client::GetOptionsExt;
+use crate::gcp::credential::decode_first_rsa_key;
 use crate::gcp::{GcpCredential, GcpCredentialProvider, GcpSigningCredentialProvider, STORE};
 use crate::multipart::PartId;
 use crate::path::{Path, DELIMITER};
@@ -115,6 +116,12 @@ enum Error {
 
     #[snafu(display("Got invalid signing blob signature: {}", source))]
     InvalidSignBlobSignature { source: base64::DecodeError },
+
+    #[snafu(display("Private key is empty"))]
+    EmptyPrivateKey,
+
+    #[snafu(display("Error signing by key: {}", source))]
+    SignByKeyFailed { source: ring::error::Unspecified },
 }
 
 impl From<Error> for crate::Error {
@@ -132,6 +139,12 @@ impl From<Error> for crate::Error {
 }
 
 #[derive(Debug)]
+pub enum SignMethod {
+    SignBlob,
+    SignByKey,
+}
+
+#[derive(Debug)]
 pub struct GoogleCloudStorageConfig {
     pub base_url: String,
 
@@ -144,6 +157,8 @@ pub struct GoogleCloudStorageConfig {
     pub retry_config: RetryConfig,
 
     pub client_options: ClientOptions,
+
+    pub sign_method: SignMethod,
 }
 
 impl GoogleCloudStorageConfig {
@@ -154,6 +169,7 @@ impl GoogleCloudStorageConfig {
         bucket_name: String,
         retry_config: RetryConfig,
         client_options: ClientOptions,
+        sign_method: SignMethod,
     ) -> Self {
         Self {
             base_url,
@@ -162,6 +178,7 @@ impl GoogleCloudStorageConfig {
             bucket_name,
             retry_config,
             client_options,
+            sign_method,
         }
     }
 
@@ -301,6 +318,25 @@ impl GoogleCloudStorageClient {
             .context(InvalidSignBlobSignatureSnafu)?;
 
         Ok(hex_encode(&signed_blob))
+    }
+
+    pub fn sign_by_key(&self, string_to_sign: &str, private_key: String) -> Result<String> {
+        if private_key.is_empty() {
+            return Err(Error::EmptyPrivateKey.into());
+        }
+
+        let key_pair = decode_first_rsa_key(private_key)?;
+        let mut signature = vec![0; key_pair.public().modulus_len()];
+        key_pair
+            .sign(
+                &ring::signature::RSA_PKCS1_SHA256,
+                &ring::rand::SystemRandom::new(),
+                string_to_sign.as_bytes(),
+                &mut signature,
+            )
+            .context(SignByKeyFailedSnafu)?;
+
+        Ok(hex_encode(&signature))
     }
 
     pub fn object_url(&self, path: &Path) -> String {
