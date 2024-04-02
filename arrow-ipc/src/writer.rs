@@ -1547,9 +1547,9 @@ mod tests {
     }
 
     fn serialize_stream(record: &RecordBatch) -> Vec<u8> {
-        // Use a smaller-than-default IPC alignment so that the various `truncate_*` tests can be
-        // compactly written, without needing to construct a giant array to spill over the 64-byte
-        // default alignment boundary.
+        // Use 8-byte alignment so that the various `truncate_*` tests can be compactly written,
+        // without needing to construct a giant array to spill over the 64-byte default alignment
+        // boundary.
         const IPC_ALIGNMENT: usize = 8;
 
         let mut stream_writer = StreamWriter::try_new_with_options(
