@@ -23,8 +23,7 @@ use std::sync::Arc;
 use arrow_array::builder::BooleanBufferBuilder;
 use arrow_array::cast::AsArray;
 use arrow_array::types::{
-    ArrowDictionaryKeyType, ArrowPrimitiveType, ByteArrayType, Int16Type, Int32Type, Int64Type,
-    RunEndIndexType,
+    ArrowDictionaryKeyType, ArrowPrimitiveType, ByteArrayType, RunEndIndexType,
 };
 use arrow_array::*;
 use arrow_buffer::{bit_util, BooleanBuffer, NullBuffer, RunEndBuffer};
@@ -342,7 +341,7 @@ fn filter_array(values: &dyn Array, predicate: &FilterPredicate) -> Result<Array
             }
             DataType::RunEndEncoded(_, _) => {
                 downcast_run_array!{
-                    values => filter_run_end_array(values, predicate),
+                    values => Ok(Arc::new(filter_run_end_array(values, predicate)?)),
                     t => unimplemented!("Filter not supported for RunEndEncoded type {:?}", t)
                 }
             }
@@ -378,44 +377,11 @@ fn filter_array(values: &dyn Array, predicate: &FilterPredicate) -> Result<Array
     }
 }
 
-fn filter_run_end_array<R: RunEndIndexType>(
-    ree_arr: &RunArray<R>,
-    pred: &FilterPredicate,
-) -> Result<ArrayRef, ArrowError> {
-    fn downcast_safe<A: RunEndIndexType, T: RunEndIndexType>(
-        re_arr: &RunArray<A>,
-    ) -> Option<&RunArray<T>> {
-        re_arr.as_any().downcast_ref::<RunArray<T>>()
-    }
-
-    if let Some(ree_array) = downcast_safe::<R, Int64Type>(ree_arr) {
-        let (run_ends, values) = filter_run_end_array_generic(ree_array, pred)?;
-        let ree_arr: RunArray<Int64Type> =
-            RunArray::try_new(&PrimitiveArray::from(run_ends), &values)?;
-        Ok(Arc::new(ree_arr))
-    } else if let Some(ree_array) = downcast_safe::<R, Int32Type>(ree_arr) {
-        let (run_ends, values) = filter_run_end_array_generic(ree_array, pred)?;
-        let ree_arr: RunArray<Int32Type> =
-            RunArray::try_new(&PrimitiveArray::from(run_ends), &values)?;
-        Ok(Arc::new(ree_arr))
-    } else if let Some(ree_array) = downcast_safe::<R, Int16Type>(ree_arr) {
-        let (run_ends, values) = filter_run_end_array_generic(ree_array, pred)?;
-        let ree_arr: RunArray<Int16Type> =
-            RunArray::try_new(&PrimitiveArray::from(run_ends), &values)?;
-        Ok(Arc::new(ree_arr))
-    } else {
-        Err(ArrowError::CastError(
-            "Run ends for RunArray must be i16 or i32 or i64".to_string(),
-        ))
-    }
-}
-
 /// Filter any supported [`RunArray`] based on a [`FilterPredicate`]
-#[allow(clippy::type_complexity)]
-fn filter_run_end_array_generic<R: RunEndIndexType>(
+fn filter_run_end_array<R: RunEndIndexType>(
     re_arr: &RunArray<R>,
     pred: &FilterPredicate,
-) -> Result<(Vec<R::Native>, Arc<dyn Array>), ArrowError>
+) -> Result<RunArray<R>, ArrowError>
 where
     R::Native: Into<i64> + From<bool>,
     R::Native: AddAssign,
@@ -454,8 +420,10 @@ where
 
     let values = re_arr.values();
     let pred = BooleanArray::new(values_filter.finish(), None);
-    let new_values = filter(&values, &pred)?;
-    Ok((new_run_ends, new_values))
+    let values = filter(&values, &pred)?;
+
+    let run_ends = PrimitiveArray::<R>::new(new_run_ends.into(), None);
+    RunArray::try_new(&run_ends, &values)
 }
 
 /// Computes a new null mask for `data` based on `predicate`
