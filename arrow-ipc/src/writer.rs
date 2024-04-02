@@ -87,7 +87,9 @@ impl IpcWriteOptions {
         write_legacy_ipc_format: bool,
         metadata_version: crate::MetadataVersion,
     ) -> Result<Self, ArrowError> {
-        if alignment != 8 || alignment != 16 || alignment != 32 || alignment != 64 {
+        let is_alignment_valid =
+            alignment == 8 || alignment == 16 || alignment == 32 || alignment == 64;
+        if !is_alignment_valid {
             return Err(ArrowError::InvalidArgumentError(
                 "Alignment should be 8, 16, 32, or 64.".to_string(),
             ));
@@ -1545,7 +1547,17 @@ mod tests {
     }
 
     fn serialize_stream(record: &RecordBatch) -> Vec<u8> {
-        let mut stream_writer = StreamWriter::try_new(vec![], record.schema_ref()).unwrap();
+        // Use a smaller-than-default IPC alignment so that the various `truncate_*` tests can be
+        // compactly written, without needing to construct a giant array to spill over the 64-byte
+        // default alignment boundary.
+        const IPC_ALIGNMENT: usize = 8;
+
+        let mut stream_writer = StreamWriter::try_new_with_options(
+            vec![],
+            record.schema_ref(),
+            IpcWriteOptions::try_new(IPC_ALIGNMENT, false, MetadataVersion::V5).unwrap(),
+        )
+        .unwrap();
         stream_writer.write(record).unwrap();
         stream_writer.finish().unwrap();
         stream_writer.into_inner().unwrap()
