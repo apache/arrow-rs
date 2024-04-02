@@ -64,6 +64,7 @@ use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::ffi::Py_uintptr_t;
 use pyo3::import_exception;
 use pyo3::prelude::*;
+use pyo3::pybacked::PyBackedStr;
 use pyo3::types::{PyCapsule, PyList, PyTuple};
 
 use crate::array::{make_array, ArrayData};
@@ -110,15 +111,13 @@ fn validate_class(expected: &str, value: &Bound<PyAny>) -> PyResult<()> {
     let pyarrow = PyModule::import_bound(value.py(), "pyarrow")?;
     let class = pyarrow.getattr(expected)?;
     if !value.is_instance(&class)? {
-        let expected_module = class.getattr("__module__")?;
-        let expected_module = expected_module.extract::<&str>()?;
-        let expected_name = class.getattr("__name__")?;
-        let expected_name = expected_name.extract::<&str>()?;
+        let expected_module = class.getattr("__module__")?.extract::<PyBackedStr>()?;
+        let expected_name = class.getattr("__name__")?.extract::<PyBackedStr>()?;
         let found_class = value.get_type();
-        let found_module = found_class.getattr("__module__")?;
-        let found_module = found_module.extract::<&str>()?;
-        let found_name = found_class.getattr("__name__")?;
-        let found_name = found_name.extract::<&str>()?;
+        let found_module = found_class
+            .getattr("__module__")?
+            .extract::<PyBackedStr>()?;
+        let found_name = found_class.getattr("__name__")?.extract::<PyBackedStr>()?;
         return Err(PyTypeError::new_err(format!(
             "Expected instance of {}.{}, got {}.{}",
             expected_module, expected_name, found_module, found_name
