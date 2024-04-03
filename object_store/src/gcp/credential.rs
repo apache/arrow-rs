@@ -15,13 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use super::client::{GoogleCloudStorageClient, SignMethod};
+use super::client::GoogleCloudStorageClient;
 use crate::client::retry::RetryExt;
 use crate::client::token::TemporaryToken;
 use crate::client::TokenProvider;
-use crate::gcp::STORE;
+use crate::gcp::{GcpSigningCredentialProvider, STORE};
 use crate::util::{hex_digest, STRICT_ENCODE_SET};
-use crate::RetryConfig;
+use crate::{RetryConfig, StaticCredentialProvider};
 use async_trait::async_trait;
 use base64::prelude::BASE64_URL_SAFE_NO_PAD;
 use base64::Engine;
@@ -33,7 +33,7 @@ use percent_encoding::utf8_percent_encode;
 use reqwest::{Client, Method};
 use ring::signature::RsaKeyPair;
 use serde::Deserialize;
-use snafu::{OptionExt, ResultExt, Snafu};
+use snafu::{ResultExt, Snafu};
 use std::collections::BTreeMap;
 use std::env;
 use std::fs::File;
@@ -45,9 +45,6 @@ use tracing::info;
 use url::Url;
 
 pub const DEFAULT_SCOPE: &str = "https://www.googleapis.com/auth/devstorage.full_control";
-
-/// <https://cloud.google.com/iam/docs/reference/credentials/rest/v1/projects.serviceAccounts/signBlob#authorization-scopes>
-pub const DEFAULT_SIGN_BLOG_SCOPE: &str = "https://www.googleapis.com/auth/cloud-platform";
 
 pub const DEFAULT_GCS_BASE_URL: &str = "https://storage.googleapis.com";
 
@@ -85,9 +82,6 @@ pub enum Error {
 
     #[snafu(display("Error getting token response body: {}", source))]
     TokenResponseBody { source: reqwest::Error },
-
-    #[snafu(display("No client email for sign url"))]
-    MissingEmail,
 }
 
 impl From<Error> for crate::Error {
@@ -102,11 +96,17 @@ impl From<Error> for crate::Error {
 /// A Google Cloud Storage Credential for signing
 #[derive(Debug, Eq, PartialEq)]
 pub struct GcpSigningCredential {
-    /// Google Cloud Storage Credential
-    pub credential: Arc<GcpCredential>,
-    /// client email address
-    pub email: Option<String>,
-    /// The private key in RSA format.
+    /// The email of the service account
+    pub email: String,
+
+    /// An optional PEM-encoded RSA private key
+    ///
+    /// If provided this will be used to sign the URL, otherwise a call will be made to
+    /// [`iam.serviceAccounts.signBlob`]. This allows supporting credential sources
+    /// that don't expose the service account private key, e.g. [IMDS].
+    ///
+    /// [IMDS]: https://cloud.google.com/docs/authentication/get-id-token#metadata-server
+    /// [`iam.serviceAccounts.signBlob`]: https://cloud.google.com/storage/docs/authentication/creating-signatures
     pub private_key: Option<String>,
 }
 
@@ -172,24 +172,6 @@ struct TokenResponse {
     expires_in: u64,
 }
 
-#[derive(Debug)]
-pub struct SelfSigningUrl {
-    self_signed_jwt: SelfSignedJwt,
-}
-
-impl SelfSigningUrl {
-    pub fn new(
-        key_id: String,
-        issuer: String,
-        private_key_pem: String,
-        scope: String,
-    ) -> Result<Self> {
-        Ok(Self {
-            self_signed_jwt: SelfSignedJwt::new(key_id, issuer, private_key_pem, scope)?,
-        })
-    }
-}
-
 /// Self-signed JWT (JSON Web Token).
 ///
 /// # References
@@ -220,26 +202,6 @@ impl SelfSignedJwt {
 }
 
 #[async_trait]
-impl TokenProvider for SelfSigningUrl {
-    type Credential = GcpSigningCredential;
-    async fn fetch_token(
-        &self,
-        _client: &Client,
-        _retry: &RetryConfig,
-    ) -> crate::Result<TemporaryToken<Arc<GcpSigningCredential>>> {
-        let token = self.self_signed_jwt.fetch_token(_client, _retry).await?;
-        Ok(TemporaryToken {
-            token: Arc::new(GcpSigningCredential {
-                credential: token.token,
-                email: Some(self.self_signed_jwt.issuer.clone()),
-                private_key: Some(self.self_signed_jwt.private_key_pem.clone()),
-            }),
-            expiry: Some(Instant::now() + Duration::from_secs(3600)),
-        })
-    }
-}
-
-#[async_trait]
 impl TokenProvider for SelfSignedJwt {
     type Credential = GcpCredential;
 
@@ -260,7 +222,7 @@ impl TokenProvider for SelfSignedJwt {
             exp,
         };
 
-        let key_pair = decode_first_rsa_key(self.private_key_pem.clone())?;
+        let key_pair = decode_first_rsa_key(&self.private_key_pem)?;
         let jwt_header = b64_encode_obj(&JwtHeader {
             alg: "RS256",
             typ: Some("JWT"),
@@ -350,13 +312,13 @@ impl ServiceAccountCredentials {
         )?)
     }
 
-    pub fn email_provider(self) -> crate::Result<SelfSigningUrl> {
-        Ok(SelfSigningUrl::new(
-            self.private_key_id,
-            self.client_email,
-            self.private_key,
-            DEFAULT_SIGN_BLOG_SCOPE.to_string(),
-        )?)
+    pub fn signing_credentials(self) -> crate::Result<GcpSigningCredentialProvider> {
+        Ok(Arc::new(StaticCredentialProvider::new(
+            GcpSigningCredential {
+                email: self.client_email,
+                private_key: Some(self.private_key),
+            },
+        )))
     }
 }
 
@@ -368,7 +330,7 @@ fn seconds_since_epoch() -> u64 {
         .as_secs()
 }
 
-pub fn decode_first_rsa_key(private_key_pem: String) -> Result<RsaKeyPair> {
+pub fn decode_first_rsa_key(private_key_pem: &str) -> Result<RsaKeyPair> {
     use rustls_pemfile::Item;
     use std::io::Cursor;
 
@@ -444,7 +406,7 @@ impl TokenProvider for InstanceCredentialProvider {
     }
 }
 
-/// Make a request to the metadata server to fetch the client email, using a a given hostname.
+/// Make a request to the metadata server to fetch the client email, using a given hostname.
 async fn make_metadata_request_for_email(
     client: &Client,
     hostname: &str,
@@ -468,10 +430,10 @@ async fn make_metadata_request_for_email(
 ///
 /// <https://cloud.google.com/appengine/docs/legacy/standard/java/accessing-instance-metadata>
 #[derive(Debug, Default)]
-pub struct InstanceSignCredentialProvider {}
+pub struct InstanceSigningCredentialProvider {}
 
 #[async_trait]
-impl TokenProvider for InstanceSignCredentialProvider {
+impl TokenProvider for InstanceSigningCredentialProvider {
     type Credential = GcpSigningCredential;
 
     /// Fetch a token from the metadata server.
@@ -485,9 +447,6 @@ impl TokenProvider for InstanceSignCredentialProvider {
         const METADATA_HOST: &str = "metadata";
 
         info!("fetching token from metadata server");
-        let response = make_metadata_request(client, METADATA_HOST, retry)
-            .or_else(|_| make_metadata_request(client, METADATA_IP, retry))
-            .await?;
 
         let email = make_metadata_request_for_email(client, METADATA_HOST, retry)
             .or_else(|_| make_metadata_request_for_email(client, METADATA_IP, retry))
@@ -495,13 +454,10 @@ impl TokenProvider for InstanceSignCredentialProvider {
 
         let token = TemporaryToken {
             token: Arc::new(GcpSigningCredential {
-                credential: Arc::new(GcpCredential {
-                    bearer: response.access_token,
-                }),
-                email: Some(email),
+                email,
                 private_key: None,
             }),
-            expiry: Some(Instant::now() + Duration::from_secs(response.expires_in)),
+            expiry: None,
         };
         Ok(token)
     }
@@ -568,7 +524,7 @@ pub struct AuthorizedUserCredentials {
 }
 
 #[derive(Debug, Deserialize)]
-pub struct AuthorizedUserCredentialsForSign {
+pub struct AuthorizedUserSigningCredentials {
     credential: AuthorizedUserCredentials,
 }
 
@@ -578,7 +534,7 @@ struct EmailResponse {
     email: String,
 }
 
-impl AuthorizedUserCredentialsForSign {
+impl AuthorizedUserSigningCredentials {
     pub fn from(credential: AuthorizedUserCredentials) -> crate::Result<Self> {
         Ok(Self { credential })
     }
@@ -599,7 +555,7 @@ impl AuthorizedUserCredentialsForSign {
 }
 
 #[async_trait]
-impl TokenProvider for AuthorizedUserCredentialsForSign {
+impl TokenProvider for AuthorizedUserSigningCredentials {
     type Credential = GcpSigningCredential;
 
     async fn fetch_token(
@@ -607,16 +563,14 @@ impl TokenProvider for AuthorizedUserCredentialsForSign {
         client: &Client,
         retry: &RetryConfig,
     ) -> crate::Result<TemporaryToken<Arc<GcpSigningCredential>>> {
-        let token = self.credential.fetch_token(client, retry).await?;
-        let client_email = self.client_email(client, retry).await?;
+        let email = self.client_email(client, retry).await?;
 
         Ok(TemporaryToken {
             token: Arc::new(GcpSigningCredential {
-                credential: token.token,
-                email: Some(client_email),
+                email,
                 private_key: None,
             }),
-            expiry: token.expiry,
+            expiry: None,
         })
     }
 }
@@ -686,14 +640,10 @@ impl GCSAuthorizer {
         expires_in: Duration,
         client: &GoogleCloudStorageClient,
     ) -> crate::Result<()> {
-        let client_email = self
-            .sign_credential
-            .email
-            .clone()
-            .context(MissingEmailSnafu)?;
+        let email = &self.sign_credential.email;
         let date = self.date.unwrap_or_else(Utc::now);
         let scope = self.scope(date);
-        let credential_with_scope = format!("{}/{}", client_email, scope);
+        let credential_with_scope = format!("{}/{}", email, scope);
 
         let mut headers = HeaderMap::new();
         headers.insert("host", DEFAULT_GCS_SIGN_BLOB_HOST.parse().unwrap());
@@ -708,18 +658,9 @@ impl GCSAuthorizer {
             .append_pair("X-Goog-SignedHeaders", &signed_headers);
 
         let string_to_sign = self.string_to_sign(date, &method, url, &headers);
-        let signature = match client.config().sign_method {
-            SignMethod::SignByKey => {
-                let private_key = self
-                    .sign_credential
-                    .private_key
-                    .as_ref()
-                    .cloned()
-                    .context(MissingKeySnafu)?;
-
-                client.sign_by_key(&string_to_sign, private_key)?
-            }
-            SignMethod::SignBlob => client.sign_blob(&string_to_sign, &client_email).await?,
+        let signature = match &self.sign_credential.private_key {
+            Some(private_key) => client.sign_by_key(&string_to_sign, private_key)?,
+            None => client.sign_blob(&string_to_sign, email).await?,
         };
 
         url.query_pairs_mut()

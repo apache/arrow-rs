@@ -95,7 +95,7 @@ impl GoogleCloudStorage {
 
     /// Returns the [`GcpSigningCredentialProvider`] used by [`GoogleCloudStorage`]
     pub fn sign_credential(&self) -> &GcpSigningCredentialProvider {
-        &self.client.config().sign_credentials
+        &self.client.config().signing_credentials
     }
 }
 

@@ -32,9 +32,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 use url::Url;
 
-use super::client::SignMethod;
-use super::credential::{AuthorizedUserCredentialsForSign, InstanceSignCredentialProvider};
-use super::GcpSigningCredential;
+use super::credential::{AuthorizedUserSigningCredentials, InstanceSigningCredentialProvider};
 
 #[derive(Debug, Snafu)]
 enum Error {
@@ -115,7 +113,7 @@ pub struct GoogleCloudStorageBuilder {
     /// Credentials
     credentials: Option<GcpCredentialProvider>,
     /// Credentials for sign url
-    sign_cedentials: Option<GcpSigningCredentialProvider>,
+    signing_cedentials: Option<GcpSigningCredentialProvider>,
 }
 
 /// Configuration keys for [`GoogleCloudStorageBuilder`]
@@ -211,7 +209,7 @@ impl Default for GoogleCloudStorageBuilder {
             client_options: ClientOptions::new().with_allow_http(true),
             url: None,
             credentials: None,
-            sign_cedentials: None,
+            signing_cedentials: None,
         }
     }
 }
@@ -493,60 +491,38 @@ impl GoogleCloudStorageBuilder {
             )) as _
         };
 
-        let sign_crendentials: GcpSigningCredentialProvider =
-            if let Some(sign_credentials) = self.sign_cedentials {
-                sign_credentials
-            } else if disable_oauth {
-                Arc::new(StaticCredentialProvider::new(GcpSigningCredential {
-                    credential: Arc::new(GcpCredential { bearer: "".into() }),
-                    email: None,
-                    private_key: None,
-                })) as _
-            } else if let Some(credentials) = service_account_credentials.clone() {
-                Arc::new(TokenCredentialProvider::new(
-                    credentials.email_provider()?,
-                    self.client_options.client()?,
-                    self.retry_config.clone(),
-                )) as _
-            } else if let Some(credentials) = application_default_credentials.clone() {
-                match credentials {
-                    ApplicationDefaultCredentials::AuthorizedUser(token) => {
-                        Arc::new(TokenCredentialProvider::new(
-                            AuthorizedUserCredentialsForSign::from(token)?,
-                            self.client_options.client()?,
-                            self.retry_config.clone(),
-                        )) as _
-                    }
-                    ApplicationDefaultCredentials::ServiceAccount(token) => {
-                        Arc::new(TokenCredentialProvider::new(
-                            token.email_provider()?,
-                            self.client_options.client()?,
-                            self.retry_config.clone(),
-                        )) as _
-                    }
+        let signing_credentials = if let Some(signing_credentials) = self.signing_cedentials {
+            signing_credentials
+        } else if let Some(credentials) = service_account_credentials.clone() {
+            credentials.signing_credentials()?
+        } else if let Some(credentials) = application_default_credentials.clone() {
+            match credentials {
+                ApplicationDefaultCredentials::AuthorizedUser(token) => {
+                    Arc::new(TokenCredentialProvider::new(
+                        AuthorizedUserSigningCredentials::from(token)?,
+                        self.client_options.client()?,
+                        self.retry_config.clone(),
+                    )) as _
                 }
-            } else {
-                Arc::new(TokenCredentialProvider::new(
-                    InstanceSignCredentialProvider::default(),
-                    self.client_options.metadata_client()?,
-                    self.retry_config.clone(),
-                )) as _
-            };
-
-        let sign_method = if service_account_credentials.is_some() {
-            SignMethod::SignByKey
+                ApplicationDefaultCredentials::ServiceAccount(token) => {
+                    token.signing_credentials()?
+                }
+            }
         } else {
-            SignMethod::SignBlob
+            Arc::new(TokenCredentialProvider::new(
+                InstanceSigningCredentialProvider::default(),
+                self.client_options.metadata_client()?,
+                self.retry_config.clone(),
+            )) as _
         };
 
         let config = GoogleCloudStorageConfig::new(
             gcs_base_url,
             credentials,
-            sign_crendentials,
+            signing_credentials,
             bucket_name,
             self.retry_config,
             self.client_options,
-            sign_method,
         );
 
         Ok(GoogleCloudStorage {

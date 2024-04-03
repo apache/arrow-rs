@@ -44,8 +44,6 @@ use serde::{Deserialize, Serialize};
 use snafu::{OptionExt, ResultExt, Snafu};
 use std::sync::Arc;
 
-use super::GcpSigningCredential;
-
 const VERSION_HEADER: &str = "x-goog-generation";
 
 static VERSION_MATCH: HeaderName = HeaderName::from_static("x-goog-if-generation-match");
@@ -139,46 +137,36 @@ impl From<Error> for crate::Error {
 }
 
 #[derive(Debug)]
-pub enum SignMethod {
-    SignBlob,
-    SignByKey,
-}
-
-#[derive(Debug)]
 pub struct GoogleCloudStorageConfig {
     pub base_url: String,
 
     pub credentials: GcpCredentialProvider,
 
-    pub sign_credentials: GcpSigningCredentialProvider,
+    pub signing_credentials: GcpSigningCredentialProvider,
 
     pub bucket_name: String,
 
     pub retry_config: RetryConfig,
 
     pub client_options: ClientOptions,
-
-    pub sign_method: SignMethod,
 }
 
 impl GoogleCloudStorageConfig {
     pub fn new(
         base_url: String,
         credentials: GcpCredentialProvider,
-        sign_credentials: GcpSigningCredentialProvider,
+        signing_credentials: GcpSigningCredentialProvider,
         bucket_name: String,
         retry_config: RetryConfig,
         client_options: ClientOptions,
-        sign_method: SignMethod,
     ) -> Self {
         Self {
             base_url,
             credentials,
-            sign_credentials,
+            signing_credentials,
             bucket_name,
             retry_config,
             client_options,
-            sign_method,
         }
     }
 
@@ -269,10 +257,6 @@ impl GoogleCloudStorageClient {
         self.config.credentials.get_credential().await
     }
 
-    async fn get_sign_credential(&self) -> Result<Arc<GcpSigningCredential>> {
-        self.config.sign_credentials.get_credential().await
-    }
-
     /// Create a signature from a string-to-sign using Google Cloud signBlob method.
     /// form like:
     /// ```plaintext
@@ -289,6 +273,7 @@ impl GoogleCloudStorageClient {
     /// }
     /// ```
     pub async fn sign_blob(&self, string_to_sign: &str, client_email: &str) -> Result<String> {
+        let credential = self.get_credential().await?;
         let body = SignBlobBody {
             payload: BASE64_STANDARD.encode(string_to_sign),
         };
@@ -301,7 +286,7 @@ impl GoogleCloudStorageClient {
         let response = self
             .client
             .post(&url)
-            .bearer_auth(&self.get_sign_credential().await?.credential.bearer)
+            .bearer_auth(&credential.bearer)
             .json(&body)
             .send()
             .await
@@ -320,7 +305,7 @@ impl GoogleCloudStorageClient {
         Ok(hex_encode(&signed_blob))
     }
 
-    pub fn sign_by_key(&self, string_to_sign: &str, private_key: String) -> Result<String> {
+    pub fn sign_by_key(&self, string_to_sign: &str, private_key: &str) -> Result<String> {
         if private_key.is_empty() {
             return Err(Error::EmptyPrivateKey.into());
         }
