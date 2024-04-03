@@ -319,6 +319,39 @@ impl UnionArray {
             fields,
         }
     }
+
+    /// Deconstruct this array into its constituent parts
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # use arrow_array::types::Int32Type;
+    /// # use arrow_array::builder::UnionBuilder;
+    /// # fn main() -> Result<(), arrow_schema::ArrowError> {
+    /// let mut builder = UnionBuilder::new_dense();
+    /// builder.append::<Int32Type>("a", 1).unwrap();
+    /// let union_array = builder.build()?;
+    /// let (data_type, type_ids, offsets, fields) = union_array.into_parts();
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[allow(clippy::type_complexity)]
+    pub fn into_parts(
+        self,
+    ) -> (
+        DataType,
+        ScalarBuffer<i8>,
+        Option<ScalarBuffer<i32>>,
+        Vec<Option<ArrayRef>>,
+    ) {
+        let Self {
+            data_type,
+            type_ids,
+            offsets,
+            fields,
+        } = self;
+        (data_type, type_ids, offsets, fields)
+    }
 }
 
 impl From<ArrayData> for UnionArray {
@@ -505,6 +538,7 @@ impl std::fmt::Debug for UnionArray {
 mod tests {
     use super::*;
 
+    use crate::array::Int8Type;
     use crate::builder::UnionBuilder;
     use crate::cast::AsArray;
     use crate::types::{Float32Type, Float64Type, Int32Type, Int64Type};
@@ -1200,5 +1234,75 @@ mod tests {
         assert_eq!(v.data_type(), &DataType::Utf8);
         assert_eq!(v.len(), 1);
         assert_eq!(v.as_string::<i32>().value(0), "baz");
+    }
+
+    #[test]
+    fn into_parts() {
+        let mut builder = UnionBuilder::new_dense();
+        builder.append::<Int32Type>("a", 1).unwrap();
+        builder.append::<Int8Type>("b", 2).unwrap();
+        builder.append::<Int32Type>("a", 3).unwrap();
+        let dense_union = builder.build().unwrap();
+
+        let field = [
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int8, false),
+        ];
+        let field_type_ids = [0, 1];
+        let (data_type, type_ids, offsets, fields) = dense_union.into_parts();
+        assert_eq!(
+            data_type,
+            DataType::Union(
+                UnionFields::new(field_type_ids, field.clone()),
+                UnionMode::Dense
+            )
+        );
+        assert_eq!(type_ids, [0, 1, 0]);
+        assert!(offsets.is_some());
+        assert_eq!(offsets.as_ref().unwrap(), &[0, 0, 1]);
+        assert_eq!(fields.len(), 2);
+
+        let result = UnionArray::try_new(
+            &[0, 1],
+            type_ids.into_inner(),
+            offsets.map(ScalarBuffer::into_inner),
+            field
+                .clone()
+                .into_iter()
+                .zip(fields.into_iter().flatten())
+                .collect(),
+        );
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().len(), 3);
+
+        let mut builder = UnionBuilder::new_sparse();
+        builder.append::<Int32Type>("a", 1).unwrap();
+        builder.append::<Int8Type>("b", 2).unwrap();
+        builder.append::<Int32Type>("a", 3).unwrap();
+        let sparse_union = builder.build().unwrap();
+
+        let (data_type, type_ids, offsets, fields) = sparse_union.into_parts();
+        assert_eq!(
+            data_type,
+            DataType::Union(
+                UnionFields::new(field_type_ids, field.clone()),
+                UnionMode::Sparse
+            )
+        );
+        assert_eq!(type_ids, [0, 1, 0]);
+        assert!(offsets.is_none());
+        assert_eq!(fields.len(), 2);
+
+        let result = UnionArray::try_new(
+            &[0, 1],
+            type_ids.into_inner(),
+            offsets.map(ScalarBuffer::into_inner),
+            field
+                .into_iter()
+                .zip(fields.into_iter().flatten())
+                .collect(),
+        );
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().len(), 3);
     }
 }
