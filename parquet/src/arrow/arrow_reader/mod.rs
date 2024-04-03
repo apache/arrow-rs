@@ -270,10 +270,7 @@ impl ArrowReaderMetadata {
         Self::try_new(Arc::new(metadata), options)
     }
 
-    pub(crate) fn try_new(
-        metadata: Arc<ParquetMetaData>,
-        options: ArrowReaderOptions,
-    ) -> Result<Self> {
+    pub fn try_new(metadata: Arc<ParquetMetaData>, options: ArrowReaderOptions) -> Result<Self> {
         let kv_metadata = match options.skip_arrow_metadata {
             true => None,
             false => metadata.file_metadata().key_value_metadata(),
