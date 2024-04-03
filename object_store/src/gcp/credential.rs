@@ -20,7 +20,7 @@ use crate::client::retry::RetryExt;
 use crate::client::token::TemporaryToken;
 use crate::client::TokenProvider;
 use crate::gcp::{GcpSigningCredentialProvider, STORE};
-use crate::util::{hex_digest, STRICT_ENCODE_SET};
+use crate::util::{hex_digest, hex_encode, STRICT_ENCODE_SET};
 use crate::{RetryConfig, StaticCredentialProvider};
 use async_trait::async_trait;
 use base64::prelude::BASE64_URL_SAFE_NO_PAD;
@@ -68,7 +68,7 @@ pub enum Error {
     #[snafu(display("Invalid RSA key: {}", source), context(false))]
     InvalidKey { source: ring::error::KeyRejected },
 
-    #[snafu(display("Error signing jwt: {}", source))]
+    #[snafu(display("Error signing: {}", source))]
     Sign { source: ring::error::Unspecified },
 
     #[snafu(display("Error encoding jwt payload: {}", source))]
@@ -94,7 +94,7 @@ impl From<Error> for crate::Error {
 }
 
 /// A Google Cloud Storage Credential for signing
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Debug)]
 pub struct GcpSigningCredential {
     /// The email of the service account
     pub email: String,
@@ -107,7 +107,53 @@ pub struct GcpSigningCredential {
     ///
     /// [IMDS]: https://cloud.google.com/docs/authentication/get-id-token#metadata-server
     /// [`iam.serviceAccounts.signBlob`]: https://cloud.google.com/storage/docs/authentication/creating-signatures
-    pub private_key: Option<String>,
+    pub private_key: Option<ServiceAccountKey>,
+}
+
+/// A private RSA key for a service account
+#[derive(Debug)]
+pub struct ServiceAccountKey(RsaKeyPair);
+
+impl ServiceAccountKey {
+    /// Parses a pem-encoded RSA key
+    pub fn from_pem(encoded: &[u8]) -> Result<Self> {
+        use rustls_pemfile::Item;
+        use std::io::Cursor;
+
+        let mut cursor = Cursor::new(encoded);
+        let mut reader = BufReader::new(&mut cursor);
+
+        // Reading from string is infallible
+        match rustls_pemfile::read_one(&mut reader).unwrap() {
+            Some(Item::Pkcs8Key(key)) => Self::from_pkcs8(key.secret_pkcs8_der()),
+            Some(Item::Pkcs1Key(key)) => Self::from_der(key.secret_pkcs1_der()),
+            _ => Err(Error::MissingKey),
+        }
+    }
+
+    /// Parses an unencrypted PKCS#8-encoded RSA private key.
+    pub fn from_pkcs8(key: &[u8]) -> Result<Self> {
+        Ok(Self(RsaKeyPair::from_pkcs8(key)?))
+    }
+
+    /// Parses an unencrypted PKCS#8-encoded RSA private key.
+    pub fn from_der(key: &[u8]) -> Result<Self> {
+        Ok(Self(RsaKeyPair::from_der(key)?))
+    }
+
+    fn sign(&self, string_to_sign: &str) -> Result<String> {
+        let mut signature = vec![0; self.0.public().modulus_len()];
+        self.0
+            .sign(
+                &ring::signature::RSA_PKCS1_SHA256,
+                &ring::rand::SystemRandom::new(),
+                string_to_sign.as_bytes(),
+                &mut signature,
+            )
+            .context(SignSnafu)?;
+
+        Ok(hex_encode(&signature))
+    }
 }
 
 /// A Google Cloud Storage Credential
@@ -180,7 +226,7 @@ struct TokenResponse {
 pub struct SelfSignedJwt {
     issuer: String,
     scope: String,
-    private_key_pem: String,
+    private_key: ServiceAccountKey,
     key_id: String,
 }
 
@@ -189,13 +235,13 @@ impl SelfSignedJwt {
     pub fn new(
         key_id: String,
         issuer: String,
-        private_key_pem: String,
+        private_key: ServiceAccountKey,
         scope: String,
     ) -> Result<Self> {
         Ok(Self {
             issuer,
             scope,
-            private_key_pem,
+            private_key,
             key_id,
         })
     }
@@ -222,7 +268,6 @@ impl TokenProvider for SelfSignedJwt {
             exp,
         };
 
-        let key_pair = decode_first_rsa_key(&self.private_key_pem)?;
         let jwt_header = b64_encode_obj(&JwtHeader {
             alg: "RS256",
             typ: Some("JWT"),
@@ -232,8 +277,9 @@ impl TokenProvider for SelfSignedJwt {
 
         let claim_str = b64_encode_obj(&claims)?;
         let message = [jwt_header.as_ref(), claim_str.as_ref()].join(".");
-        let mut sig_bytes = vec![0; key_pair.public().modulus_len()];
-        key_pair
+        let mut sig_bytes = vec![0; self.private_key.0.public().modulus_len()];
+        self.private_key
+            .0
             .sign(
                 &ring::signature::RSA_PKCS1_SHA256,
                 &ring::rand::SystemRandom::new(),
@@ -307,7 +353,7 @@ impl ServiceAccountCredentials {
         Ok(SelfSignedJwt::new(
             self.private_key_id,
             self.client_email,
-            self.private_key,
+            ServiceAccountKey::from_pem(self.private_key.as_bytes())?,
             DEFAULT_SCOPE.to_string(),
         )?)
     }
@@ -316,7 +362,7 @@ impl ServiceAccountCredentials {
         Ok(Arc::new(StaticCredentialProvider::new(
             GcpSigningCredential {
                 email: self.client_email,
-                private_key: Some(self.private_key),
+                private_key: Some(ServiceAccountKey::from_pem(self.private_key.as_bytes())?),
             },
         )))
     }
@@ -328,21 +374,6 @@ fn seconds_since_epoch() -> u64 {
         .duration_since(std::time::SystemTime::UNIX_EPOCH)
         .unwrap()
         .as_secs()
-}
-
-pub fn decode_first_rsa_key(private_key_pem: &str) -> Result<RsaKeyPair> {
-    use rustls_pemfile::Item;
-    use std::io::Cursor;
-
-    let mut cursor = Cursor::new(private_key_pem);
-    let mut reader = BufReader::new(&mut cursor);
-
-    // Reading from string is infallible
-    match rustls_pemfile::read_one(&mut reader).unwrap() {
-        Some(Item::Pkcs8Key(key)) => Ok(RsaKeyPair::from_pkcs8(key.secret_pkcs8_der())?),
-        Some(Item::Pkcs1Key(key)) => Ok(RsaKeyPair::from_der(key.secret_pkcs1_der())?),
-        _ => Err(Error::MissingKey),
-    }
 }
 
 fn b64_encode_obj<T: serde::Serialize>(obj: &T) -> Result<String> {
@@ -659,7 +690,7 @@ impl GCSAuthorizer {
 
         let string_to_sign = self.string_to_sign(date, &method, url, &headers);
         let signature = match &self.sign_credential.private_key {
-            Some(private_key) => client.sign_by_key(&string_to_sign, private_key)?,
+            Some(key) => key.sign(&string_to_sign)?,
             None => client.sign_blob(&string_to_sign, email).await?,
         };
 

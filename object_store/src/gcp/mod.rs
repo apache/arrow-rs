@@ -56,7 +56,7 @@ use crate::client::list::ListClientExt;
 use crate::client::parts::Parts;
 use crate::multipart::MultipartStore;
 pub use builder::{GoogleCloudStorageBuilder, GoogleConfigKey};
-pub use credential::{GcpCredential, GcpSigningCredential};
+pub use credential::{GcpCredential, GcpSigningCredential, ServiceAccountKey};
 
 mod builder;
 mod client;
