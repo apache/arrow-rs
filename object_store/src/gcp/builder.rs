@@ -22,8 +22,8 @@ use crate::gcp::credential::{
     DEFAULT_GCS_BASE_URL,
 };
 use crate::gcp::{
-    credential, GcpCredential, GcpCredentialProvider, GcpSigningCredentialProvider,
-    GoogleCloudStorage, STORE,
+    credential, GcpCredential, GcpCredentialProvider, GcpSigningCredential,
+    GcpSigningCredentialProvider, GoogleCloudStorage, STORE,
 };
 use crate::{ClientConfigKey, ClientOptions, Result, RetryConfig, StaticCredentialProvider};
 use serde::{Deserialize, Serialize};
@@ -493,6 +493,11 @@ impl GoogleCloudStorageBuilder {
 
         let signing_credentials = if let Some(signing_credentials) = self.signing_cedentials {
             signing_credentials
+        } else if disable_oauth {
+            Arc::new(StaticCredentialProvider::new(GcpSigningCredential {
+                email: "".to_string(),
+                private_key: None,
+            })) as _
         } else if let Some(credentials) = service_account_credentials.clone() {
             credentials.signing_credentials()?
         } else if let Some(credentials) = application_default_credentials.clone() {

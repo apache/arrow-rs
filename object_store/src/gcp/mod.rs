@@ -94,7 +94,7 @@ impl GoogleCloudStorage {
     }
 
     /// Returns the [`GcpSigningCredentialProvider`] used by [`GoogleCloudStorage`]
-    pub fn sign_credential(&self) -> &GcpSigningCredentialProvider {
+    pub fn signing_credentials(&self) -> &GcpSigningCredentialProvider {
         &self.client.config().signing_credentials
     }
 }
@@ -246,10 +246,10 @@ impl Signer for GoogleCloudStorage {
             source: format!("Unable to parse url {path_url}: {e}").into(),
         })?;
 
-        let sign_credential = self.sign_credential().get_credential().await?;
-        let authoriztor = GCSAuthorizer::new(sign_credential);
+        let signing_credentials = self.signing_credentials().get_credential().await?;
+        let authorizer = GCSAuthorizer::new(signing_credentials);
 
-        authoriztor
+        authorizer
             .sign(method, &mut url, expires_in, &self.client)
             .await?;
 

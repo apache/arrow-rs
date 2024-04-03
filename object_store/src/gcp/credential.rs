@@ -99,7 +99,7 @@ pub struct GcpSigningCredential {
     /// The email of the service account
     pub email: String,
 
-    /// An optional PEM-encoded RSA private key
+    /// An optional RSA private key
     ///
     /// If provided this will be used to sign the URL, otherwise a call will be made to
     /// [`iam.serviceAccounts.signBlob`]. This allows supporting credential sources
@@ -652,15 +652,15 @@ fn trim_header_value(value: &str) -> String {
 #[derive(Debug)]
 pub struct GCSAuthorizer {
     date: Option<DateTime<Utc>>,
-    sign_credential: Arc<GcpSigningCredential>,
+    credential: Arc<GcpSigningCredential>,
 }
 
 impl GCSAuthorizer {
     /// Create a new [`GCSAuthorizer`]
-    pub fn new(sign_credential: Arc<GcpSigningCredential>) -> Self {
+    pub fn new(credential: Arc<GcpSigningCredential>) -> Self {
         Self {
             date: None,
-            sign_credential,
+            credential,
         }
     }
 
@@ -671,7 +671,7 @@ impl GCSAuthorizer {
         expires_in: Duration,
         client: &GoogleCloudStorageClient,
     ) -> crate::Result<()> {
-        let email = &self.sign_credential.email;
+        let email = &self.credential.email;
         let date = self.date.unwrap_or_else(Utc::now);
         let scope = self.scope(date);
         let credential_with_scope = format!("{}/{}", email, scope);
@@ -689,7 +689,7 @@ impl GCSAuthorizer {
             .append_pair("X-Goog-SignedHeaders", &signed_headers);
 
         let string_to_sign = self.string_to_sign(date, &method, url, &headers);
-        let signature = match &self.sign_credential.private_key {
+        let signature = match &self.credential.private_key {
             Some(key) => key.sign(&string_to_sign)?,
             None => client.sign_blob(&string_to_sign, email).await?,
         };
