@@ -308,7 +308,6 @@ impl FlightDataDecoder {
                     &state.schema,
                     &mut state.dictionaries_by_field,
                     &message.version(),
-                    false,
                 )
                 .map_err(|e| {
                     FlightError::DecodeError(format!("Error decoding ipc dictionary: {e}"))

@@ -308,7 +308,6 @@ async fn record_batch_from_message(
         dictionaries_by_id,
         None,
         &message.version(),
-        false,
     );
 
     arrow_batch_result
@@ -331,7 +330,6 @@ async fn dictionary_from_message(
         &schema_ref,
         dictionaries_by_id,
         &message.version(),
-        false,
     );
     dictionary_batch_result
         .map_err(|e| Status::internal(format!("Could not convert to Dictionary: {e:?}")))
