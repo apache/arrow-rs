@@ -32,6 +32,7 @@ use crate::file::reader::{FilePageIterator, FileReader};
 mod builder;
 mod byte_array;
 mod byte_array_dictionary;
+mod byte_view_array;
 mod empty_array;
 mod fixed_len_byte_array;
 mod fixed_size_list_array;
@@ -46,8 +47,9 @@ mod test_util;
 
 pub use builder::build_array_reader;
 pub use byte_array::make_byte_array_reader;
-pub use byte_array::make_byte_view_array_reader;
 pub use byte_array_dictionary::make_byte_array_dictionary_reader;
+#[allow(unused_imports)] // Only used for benchmarks
+pub use byte_view_array::make_byte_view_array_reader;
 #[allow(unused_imports)] // Only used for benchmarks
 pub use fixed_len_byte_array::make_fixed_len_byte_array_reader;
 pub use fixed_size_list_array::FixedSizeListArrayReader;
