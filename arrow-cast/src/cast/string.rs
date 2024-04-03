@@ -88,7 +88,7 @@ pub(crate) fn cast_string_to_timestamp<O: OffsetSizeTrait, T: ArrowTimestampType
     Ok(Arc::new(out.with_timezone_opt(to_tz.clone())))
 }
 
-pub(crate) fn cast_string_to_timestamp_impl<
+fn cast_string_to_timestamp_impl<
     O: OffsetSizeTrait,
     T: ArrowTimestampType,
     Tz: TimeZone,
