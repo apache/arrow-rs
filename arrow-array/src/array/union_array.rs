@@ -1307,4 +1307,60 @@ mod tests {
         assert!(result.is_ok());
         assert_eq!(result.unwrap().len(), 3);
     }
+
+    #[test]
+    fn into_parts_custom_type_ids() {
+        const TYPE_IDS: [i8; 3] = [8, 4, 9];
+        let data_type = DataType::Union(
+            UnionFields::new(
+                TYPE_IDS,
+                [
+                    Field::new("strings", DataType::Utf8, false),
+                    Field::new("integers", DataType::Int32, false),
+                    Field::new("floats", DataType::Float64, false),
+                ],
+            ),
+            UnionMode::Dense,
+        );
+        let string_array = StringArray::from(vec!["foo", "bar", "baz"]);
+        let int_array = Int32Array::from(vec![5, 6, 4]);
+        let float_array = Float64Array::from(vec![10.0]);
+        let type_ids = Buffer::from_vec(vec![4_i8, 8, 4, 8, 9, 4, 8]);
+        let value_offsets = Buffer::from_vec(vec![0_i32, 0, 1, 1, 0, 2, 2]);
+        let data = ArrayData::builder(data_type)
+            .len(7)
+            .buffers(vec![type_ids, value_offsets])
+            .child_data(vec![
+                string_array.into_data(),
+                int_array.into_data(),
+                float_array.into_data(),
+            ])
+            .build()
+            .unwrap();
+        let array = UnionArray::from(data);
+
+        let (union_fields, union_mode, type_ids, offsets, mut fields) = array.into_parts();
+        assert_eq!(union_mode, UnionMode::Dense);
+        let result = UnionArray::try_new(
+            &TYPE_IDS,
+            type_ids.into_inner(),
+            offsets.map(ScalarBuffer::into_inner),
+            union_fields
+                .iter()
+                .map(|(type_id, field)| {
+                    (
+                        (*Arc::clone(field)).clone(),
+                        fields[type_id as usize].take().unwrap(),
+                    )
+                })
+                .collect(),
+        );
+        assert!(result.is_ok());
+        let array = result.unwrap();
+        assert_eq!(array.len(), 7);
+        let (_, _, _, _, fields) = array.into_parts();
+        for type_id in TYPE_IDS {
+            assert!(fields.get(type_id as usize).is_some_and(Option::is_some))
+        }
+    }
 }
