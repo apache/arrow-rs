@@ -44,7 +44,10 @@ use std::time::{Duration, Instant};
 use tracing::info;
 use url::Url;
 
-pub const DEFAULT_SCOPE: &str = "https://www.googleapis.com/auth/devstorage.full_control";
+pub const DEFAULT_SCOPE: [&str; 2] = [
+    "https://www.googleapis.com/auth/devstorage.full_control",
+    "https://www.googleapis.com/auth/cloud-platform",
+];
 
 pub const DEFAULT_GCS_BASE_URL: &str = "https://storage.googleapis.com";
 
@@ -354,7 +357,7 @@ impl ServiceAccountCredentials {
             self.private_key_id,
             self.client_email,
             ServiceAccountKey::from_pem(self.private_key.as_bytes())?,
-            DEFAULT_SCOPE.to_string(),
+            DEFAULT_SCOPE.join(" ").to_string(),
         )?)
     }
 
@@ -689,10 +692,12 @@ impl GCSAuthorizer {
             .append_pair("X-Goog-SignedHeaders", &signed_headers);
 
         let string_to_sign = self.string_to_sign(date, &method, url, &headers);
-        let signature = match &self.credential.private_key {
-            Some(key) => key.sign(&string_to_sign)?,
-            None => client.sign_blob(&string_to_sign, email).await?,
-        };
+        // let signature = match &self.credential.private_key {
+        //     Some(key) => key.sign(&string_to_sign)?,
+        //     None => client.sign_blob(&string_to_sign, email).await?,
+        // };
+        //
+        let signature = client.sign_blob(&string_to_sign, email).await?;
 
         url.query_pairs_mut()
             .append_pair("X-Goog-Signature", &signature);
