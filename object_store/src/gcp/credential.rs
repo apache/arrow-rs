@@ -692,12 +692,10 @@ impl GCSAuthorizer {
             .append_pair("X-Goog-SignedHeaders", &signed_headers);
 
         let string_to_sign = self.string_to_sign(date, &method, url, &headers);
-        // let signature = match &self.credential.private_key {
-        //     Some(key) => key.sign(&string_to_sign)?,
-        //     None => client.sign_blob(&string_to_sign, email).await?,
-        // };
-        //
-        let signature = client.sign_blob(&string_to_sign, email).await?;
+        let signature = match &self.credential.private_key {
+            Some(key) => key.sign(&string_to_sign)?,
+            None => client.sign_blob(&string_to_sign, email).await?,
+        };
 
         url.query_pairs_mut()
             .append_pair("X-Goog-Signature", &signature);
