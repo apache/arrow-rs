@@ -293,6 +293,36 @@ mod test {
     }
 
     #[tokio::test]
+    #[ignore]
+    async fn gcs_test_sign() {
+        crate::test_util::maybe_skip_integration!();
+        let integration = GoogleCloudStorageBuilder::from_env().build().unwrap();
+
+        let client = reqwest::Client::new();
+
+        let path = Path::from("test_sign");
+        let url = integration
+            .signed_url(Method::PUT, &path, Duration::from_secs(3600))
+            .await
+            .unwrap();
+        println!("PUT {url}");
+
+        let resp = client.put(url).body("data").send().await.unwrap();
+        resp.error_for_status().unwrap();
+
+        let url = integration
+            .signed_url(Method::GET, &path, Duration::from_secs(3600))
+            .await
+            .unwrap();
+        println!("GET {url}");
+
+        let resp = client.get(url).send().await.unwrap();
+        let resp = resp.error_for_status().unwrap();
+        let data = resp.bytes().await.unwrap();
+        assert_eq!(data.as_ref(), b"data");
+    }
+
+    #[tokio::test]
     async fn gcs_test_get_nonexistent_location() {
         crate::test_util::maybe_skip_integration!();
         let integration = GoogleCloudStorageBuilder::from_env().build().unwrap();

@@ -44,10 +44,7 @@ use std::time::{Duration, Instant};
 use tracing::info;
 use url::Url;
 
-pub const DEFAULT_SCOPE: [&str; 2] = [
-    "https://www.googleapis.com/auth/devstorage.full_control",
-    "https://www.googleapis.com/auth/cloud-platform",
-];
+pub const DEFAULT_SCOPE: &str = "https://www.googleapis.com/auth/cloud-platform";
 
 pub const DEFAULT_GCS_BASE_URL: &str = "https://storage.googleapis.com";
 
@@ -357,7 +354,7 @@ impl ServiceAccountCredentials {
             self.private_key_id,
             self.client_email,
             ServiceAccountKey::from_pem(self.private_key.as_bytes())?,
-            DEFAULT_SCOPE.join(" ").to_string(),
+            DEFAULT_SCOPE.to_string(),
         )?)
     }
 
