@@ -485,35 +485,6 @@ impl<'a> ArrayReader<'a> {
     }
 }
 
-pub fn read_record_batch(
-    buf: &Buffer,
-    batch: crate::RecordBatch,
-    schema: SchemaRef,
-    dictionaries_by_id: &HashMap<i64, ArrayRef>,
-    projection: Option<&[usize]>,
-    metadata: &MetadataVersion,
-) -> Result<RecordBatch, ArrowError> {
-    read_record_batch2(
-        buf,
-        batch,
-        schema,
-        dictionaries_by_id,
-        projection,
-        metadata,
-        false,
-    )
-}
-
-pub fn read_dictionary(
-    buf: &Buffer,
-    batch: crate::DictionaryBatch,
-    schema: &Schema,
-    dictionaries_by_id: &mut HashMap<i64, ArrayRef>,
-    metadata: &MetadataVersion,
-) -> Result<(), ArrowError> {
-    read_dictionary2(buf, batch, schema, dictionaries_by_id, metadata, false)
-}
-
 /// Creates a record batch from binary data using the `crate::RecordBatch` indexes and the `Schema`.
 ///
 /// If `require_alignment` is true, this function will return an error if any array data in the
@@ -524,7 +495,38 @@ pub fn read_dictionary(
 /// and copy over the data if any array data in the input `buf` is not properly aligned.
 /// (Properly aligned array data will remain zero-copy.)
 /// Under the hood it will use [`arrow_data::ArrayDataBuilder::build_aligned`] to construct [`arrow_data::ArrayData`].
-fn read_record_batch2(
+pub fn read_record_batch(
+    buf: &Buffer,
+    batch: crate::RecordBatch,
+    schema: SchemaRef,
+    dictionaries_by_id: &HashMap<i64, ArrayRef>,
+    projection: Option<&[usize]>,
+    metadata: &MetadataVersion,
+) -> Result<RecordBatch, ArrowError> {
+    read_record_batch_impl(
+        buf,
+        batch,
+        schema,
+        dictionaries_by_id,
+        projection,
+        metadata,
+        false,
+    )
+}
+
+/// Read the dictionary from the buffer and provided metadata,
+/// updating the `dictionaries_by_id` with the resulting dictionary
+pub fn read_dictionary(
+    buf: &Buffer,
+    batch: crate::DictionaryBatch,
+    schema: &Schema,
+    dictionaries_by_id: &mut HashMap<i64, ArrayRef>,
+    metadata: &MetadataVersion,
+) -> Result<(), ArrowError> {
+    read_dictionary_impl(buf, batch, schema, dictionaries_by_id, metadata, false)
+}
+
+fn read_record_batch_impl(
     buf: &Buffer,
     batch: crate::RecordBatch,
     schema: SchemaRef,
@@ -591,9 +593,7 @@ fn read_record_batch2(
     }
 }
 
-/// Read the dictionary from the buffer and provided metadata,
-/// updating the `dictionaries_by_id` with the resulting dictionary
-fn read_dictionary2(
+fn read_dictionary_impl(
     buf: &Buffer,
     batch: crate::DictionaryBatch,
     schema: &Schema,
@@ -622,7 +622,7 @@ fn read_dictionary2(
             let value = value_type.as_ref().clone();
             let schema = Schema::new(vec![Field::new("", value, true)]);
             // Read a single column
-            let record_batch = read_record_batch2(
+            let record_batch = read_record_batch_impl(
                 buf,
                 batch.data().unwrap(),
                 Arc::new(schema),
@@ -810,7 +810,7 @@ impl FileDecoder {
         match message.header_type() {
             crate::MessageHeader::DictionaryBatch => {
                 let batch = message.header_as_dictionary_batch().unwrap();
-                read_dictionary2(
+                read_dictionary_impl(
                     &buf.slice(block.metaDataLength() as _),
                     batch,
                     &self.schema,
@@ -841,7 +841,7 @@ impl FileDecoder {
                     ArrowError::IpcError("Unable to read IPC message as record batch".to_string())
                 })?;
                 // read the block that makes up the record batch into a buffer
-                read_record_batch2(
+                read_record_batch_impl(
                     &buf.slice(block.metaDataLength() as _),
                     batch,
                     self.schema.clone(),
@@ -1284,7 +1284,7 @@ impl<R: Read> StreamReader<R> {
                 let mut buf = MutableBuffer::from_len_zeroed(message.bodyLength() as usize);
                 self.reader.read_exact(&mut buf)?;
 
-                read_record_batch2(
+                read_record_batch_impl(
                     &buf.into(),
                     batch,
                     self.schema(),
@@ -1305,7 +1305,7 @@ impl<R: Read> StreamReader<R> {
                 let mut buf = MutableBuffer::from_len_zeroed(message.bodyLength() as usize);
                 self.reader.read_exact(&mut buf)?;
 
-                read_dictionary2(
+                read_dictionary_impl(
                     &buf.into(),
                     batch,
                     &self.schema,
@@ -2077,7 +2077,7 @@ mod tests {
         assert_ne!(b.as_ptr().align_offset(8), 0);
 
         let ipc_batch = message.header_as_record_batch().unwrap();
-        let roundtrip = read_record_batch2(
+        let roundtrip = read_record_batch_impl(
             &b,
             ipc_batch,
             batch.schema(),
@@ -2114,7 +2114,7 @@ mod tests {
         assert_ne!(b.as_ptr().align_offset(8), 0);
 
         let ipc_batch = message.header_as_record_batch().unwrap();
-        let result = read_record_batch2(
+        let result = read_record_batch_impl(
             &b,
             ipc_batch,
             batch.schema(),

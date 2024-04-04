@@ -24,7 +24,7 @@ use arrow_buffer::{Buffer, MutableBuffer};
 use arrow_schema::{ArrowError, SchemaRef};
 
 use crate::convert::MessageBuffer;
-use crate::reader::{read_dictionary2, read_record_batch2};
+use crate::reader::{read_dictionary_impl, read_record_batch_impl};
 use crate::{MessageHeader, CONTINUATION_MARKER};
 
 /// A low-level interface for reading [`RecordBatch`] data from a stream of bytes
@@ -211,7 +211,7 @@ impl StreamDecoder {
                             let schema = self.schema.clone().ok_or_else(|| {
                                 ArrowError::IpcError("Missing schema".to_string())
                             })?;
-                            let batch = read_record_batch2(
+                            let batch = read_record_batch_impl(
                                 &body,
                                 batch,
                                 schema,
@@ -228,7 +228,7 @@ impl StreamDecoder {
                             let schema = self.schema.as_deref().ok_or_else(|| {
                                 ArrowError::IpcError("Missing schema".to_string())
                             })?;
-                            read_dictionary2(
+                            read_dictionary_impl(
                                 &body,
                                 dictionary,
                                 schema,
