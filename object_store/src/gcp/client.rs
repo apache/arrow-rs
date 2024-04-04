@@ -106,7 +106,7 @@ enum Error {
     InvalidMultipartResponse { source: quick_xml::de::DeError },
 
     #[snafu(display("Error signing blob: {}", source))]
-    SignBlobResponse { source: reqwest::Error },
+    SignBlobRequest { source: crate::client::retry::Error },
 
     #[snafu(display("Got invalid signing blob repsonse: {}", source))]
     InvalidSignBlobResponse { source: reqwest::Error },
@@ -281,9 +281,9 @@ impl GoogleCloudStorageClient {
             .post(&url)
             .bearer_auth(&credential.bearer)
             .json(&body)
-            .send()
+            .send_retry(&self.config.retry_config)
             .await
-            .context(SignBlobResponseSnafu)?;
+            .context(SignBlobRequestSnafu)?;
 
         //If successful, the signature is returned in the signedBlob field in the response.
         let response = response
