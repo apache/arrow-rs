@@ -24,7 +24,7 @@ use arrow_buffer::{Buffer, MutableBuffer};
 use arrow_schema::{ArrowError, SchemaRef};
 
 use crate::convert::MessageBuffer;
-use crate::reader::{read_dictionary, read_record_batch};
+use crate::reader::{read_dictionary_impl, read_record_batch_impl};
 use crate::{MessageHeader, CONTINUATION_MARKER};
 
 /// A low-level interface for reading [`RecordBatch`] data from a stream of bytes
@@ -40,6 +40,8 @@ pub struct StreamDecoder {
     state: DecoderState,
     /// A scratch buffer when a read is split across multiple `Buffer`
     buf: MutableBuffer,
+    /// Whether or not array data in input buffers are required to be aligned
+    require_alignment: bool,
 }
 
 #[derive(Debug)]
@@ -81,6 +83,23 @@ impl StreamDecoder {
     /// Create a new [`StreamDecoder`]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Specifies whether or not array data in input buffers is required to be properly aligned.
+    ///
+    /// If `require_alignment` is true, this decoder will return an error if any array data in the
+    /// input `buf` is not properly aligned.
+    /// Under the hood it will use [`arrow_data::ArrayDataBuilder::build`] to construct
+    /// [`arrow_data::ArrayData`].
+    ///
+    /// If `require_alignment` is false (the default), this decoder will automatically allocate a
+    /// new aligned buffer and copy over the data if any array data in the input `buf` is not
+    /// properly aligned. (Properly aligned array data will remain zero-copy.)
+    /// Under the hood it will use [`arrow_data::ArrayDataBuilder::build_aligned`] to construct
+    /// [`arrow_data::ArrayData`].
+    pub fn with_require_alignment(mut self, require_alignment: bool) -> Self {
+        self.require_alignment = require_alignment;
+        self
     }
 
     /// Try to read the next [`RecordBatch`] from the provided [`Buffer`]
@@ -192,13 +211,14 @@ impl StreamDecoder {
                             let schema = self.schema.clone().ok_or_else(|| {
                                 ArrowError::IpcError("Missing schema".to_string())
                             })?;
-                            let batch = read_record_batch(
+                            let batch = read_record_batch_impl(
                                 &body,
                                 batch,
                                 schema,
                                 &self.dictionaries,
                                 None,
                                 &version,
+                                self.require_alignment,
                             )?;
                             self.state = DecoderState::default();
                             return Ok(Some(batch));
@@ -208,12 +228,13 @@ impl StreamDecoder {
                             let schema = self.schema.as_deref().ok_or_else(|| {
                                 ArrowError::IpcError("Missing schema".to_string())
                             })?;
-                            read_dictionary(
+                            read_dictionary_impl(
                                 &body,
                                 dictionary,
                                 schema,
                                 &mut self.dictionaries,
                                 &version,
+                                self.require_alignment,
                             )?;
                             self.state = DecoderState::default();
                         }

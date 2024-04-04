@@ -43,8 +43,8 @@ use crate::CONTINUATION_MARKER;
 #[derive(Debug, Clone)]
 pub struct IpcWriteOptions {
     /// Write padding after memory buffers to this multiple of bytes.
-    /// Generally 8 or 64, defaults to 64
-    alignment: usize,
+    /// Must be 8, 16, 32, or 64 - defaults to 64.
+    alignment: u8,
     /// The legacy format is for releases before 0.15.0, and uses metadata V4
     write_legacy_ipc_format: bool,
     /// The metadata version to write. The Rust IPC writer supports V4+
@@ -87,11 +87,14 @@ impl IpcWriteOptions {
         write_legacy_ipc_format: bool,
         metadata_version: crate::MetadataVersion,
     ) -> Result<Self, ArrowError> {
-        if alignment == 0 || alignment % 8 != 0 {
+        let is_alignment_valid =
+            alignment == 8 || alignment == 16 || alignment == 32 || alignment == 64;
+        if !is_alignment_valid {
             return Err(ArrowError::InvalidArgumentError(
-                "Alignment should be greater than 0 and be a multiple of 8".to_string(),
+                "Alignment should be 8, 16, 32, or 64.".to_string(),
             ));
         }
+        let alignment: u8 = u8::try_from(alignment).expect("range already checked");
         match metadata_version {
             crate::MetadataVersion::V1
             | crate::MetadataVersion::V2
@@ -432,8 +435,8 @@ impl IpcDataGenerator {
         }
         // pad the tail of body data
         let len = arrow_data.len();
-        let pad_len = pad_to_8(len as u32);
-        arrow_data.extend_from_slice(&vec![0u8; pad_len][..]);
+        let pad_len = pad_to_alignment(write_options.alignment, len);
+        arrow_data.extend_from_slice(&PADDING[..pad_len]);
 
         // write data
         let buffers = fbb.create_vector(&buffers);
@@ -520,8 +523,8 @@ impl IpcDataGenerator {
 
         // pad the tail of body data
         let len = arrow_data.len();
-        let pad_len = pad_to_8(len as u32);
-        arrow_data.extend_from_slice(&vec![0u8; pad_len][..]);
+        let pad_len = pad_to_alignment(write_options.alignment, len);
+        arrow_data.extend_from_slice(&PADDING[..pad_len]);
 
         // write data
         let buffers = fbb.create_vector(&buffers);
@@ -760,11 +763,11 @@ impl<W: Write> FileWriter<W> {
     ) -> Result<Self, ArrowError> {
         let data_gen = IpcDataGenerator::default();
         let mut writer = BufWriter::new(writer);
-        // write magic to header aligned on 8 byte boundary
-        let header_size = super::ARROW_MAGIC.len() + 2;
-        assert_eq!(header_size, 8);
-        writer.write_all(&super::ARROW_MAGIC[..])?;
-        writer.write_all(&[0, 0])?;
+        // write magic to header aligned on alignment boundary
+        let pad_len = pad_to_alignment(write_options.alignment, super::ARROW_MAGIC.len());
+        let header_size = super::ARROW_MAGIC.len() + pad_len;
+        writer.write_all(&super::ARROW_MAGIC)?;
+        writer.write_all(&PADDING[..pad_len])?;
         // write the schema, set the written bytes to the schema + header
         let encoded_message = data_gen.schema_to_bytes(schema, &write_options);
         let (meta, data) = write_message(&mut writer, encoded_message, &write_options)?;
@@ -1061,13 +1064,13 @@ pub fn write_message<W: Write>(
     write_options: &IpcWriteOptions,
 ) -> Result<(usize, usize), ArrowError> {
     let arrow_data_len = encoded.arrow_data.len();
-    if arrow_data_len % 8 != 0 {
+    if arrow_data_len % usize::from(write_options.alignment) != 0 {
         return Err(ArrowError::MemoryError(
             "Arrow data not aligned".to_string(),
         ));
     }
 
-    let a = write_options.alignment - 1;
+    let a = usize::from(write_options.alignment - 1);
     let buffer = encoded.ipc_message;
     let flatbuf_size = buffer.len();
     let prefix_size = if write_options.write_legacy_ipc_format {
@@ -1089,11 +1092,11 @@ pub fn write_message<W: Write>(
         writer.write_all(&buffer)?;
     }
     // write padding
-    writer.write_all(&vec![0; padding_bytes])?;
+    writer.write_all(&PADDING[..padding_bytes])?;
 
     // write arrow data
     let body_len = if arrow_data_len > 0 {
-        write_body_buffers(&mut writer, &encoded.arrow_data)?
+        write_body_buffers(&mut writer, &encoded.arrow_data, write_options.alignment)?
     } else {
         0
     };
@@ -1101,19 +1104,23 @@ pub fn write_message<W: Write>(
     Ok((aligned_size, body_len))
 }
 
-fn write_body_buffers<W: Write>(mut writer: W, data: &[u8]) -> Result<usize, ArrowError> {
-    let len = data.len() as u32;
-    let pad_len = pad_to_8(len) as u32;
+fn write_body_buffers<W: Write>(
+    mut writer: W,
+    data: &[u8],
+    alignment: u8,
+) -> Result<usize, ArrowError> {
+    let len = data.len();
+    let pad_len = pad_to_alignment(alignment, len);
     let total_len = len + pad_len;
 
     // write body buffer
     writer.write_all(data)?;
     if pad_len > 0 {
-        writer.write_all(&vec![0u8; pad_len as usize][..])?;
+        writer.write_all(&PADDING[..pad_len])?;
     }
 
     writer.flush()?;
-    Ok(total_len as usize)
+    Ok(total_len)
 }
 
 /// Write a record batch to the writer, writing the message size before the message
@@ -1278,6 +1285,7 @@ fn write_array_data(
             arrow_data,
             offset,
             compression_codec,
+            write_options.alignment,
         )?;
     }
 
@@ -1291,6 +1299,7 @@ fn write_array_data(
                 arrow_data,
                 offset,
                 compression_codec,
+                write_options.alignment,
             )?;
         }
     } else if matches!(data_type, DataType::BinaryView | DataType::Utf8View) {
@@ -1307,6 +1316,7 @@ fn write_array_data(
                 arrow_data,
                 offset,
                 compression_codec,
+                write_options.alignment,
             )?;
         }
     } else if matches!(data_type, DataType::LargeBinary | DataType::LargeUtf8) {
@@ -1318,6 +1328,7 @@ fn write_array_data(
                 arrow_data,
                 offset,
                 compression_codec,
+                write_options.alignment,
             )?;
         }
     } else if DataType::is_numeric(data_type)
@@ -1343,7 +1354,14 @@ fn write_array_data(
         } else {
             buffer.as_slice()
         };
-        offset = write_buffer(buffer_slice, buffers, arrow_data, offset, compression_codec)?;
+        offset = write_buffer(
+            buffer_slice,
+            buffers,
+            arrow_data,
+            offset,
+            compression_codec,
+            write_options.alignment,
+        )?;
     } else if matches!(data_type, DataType::Boolean) {
         // Bools are special because the payload (= 1 bit) is smaller than the physical container elements (= bytes).
         // The array data may not start at the physical boundary of the underlying buffer, so we need to shift bits around.
@@ -1351,7 +1369,14 @@ fn write_array_data(
 
         let buffer = &array_data.buffers()[0];
         let buffer = buffer.bit_slice(array_data.offset(), array_data.len());
-        offset = write_buffer(&buffer, buffers, arrow_data, offset, compression_codec)?;
+        offset = write_buffer(
+            &buffer,
+            buffers,
+            arrow_data,
+            offset,
+            compression_codec,
+            write_options.alignment,
+        )?;
     } else if matches!(
         data_type,
         DataType::List(_) | DataType::LargeList(_) | DataType::Map(_, _)
@@ -1372,6 +1397,7 @@ fn write_array_data(
             arrow_data,
             offset,
             compression_codec,
+            write_options.alignment,
         )?;
         offset = write_array_data(
             &sliced_child_data,
@@ -1387,7 +1413,14 @@ fn write_array_data(
         return Ok(offset);
     } else {
         for buffer in array_data.buffers() {
-            offset = write_buffer(buffer, buffers, arrow_data, offset, compression_codec)?;
+            offset = write_buffer(
+                buffer,
+                buffers,
+                arrow_data,
+                offset,
+                compression_codec,
+                write_options.alignment,
+            )?;
         }
     }
 
@@ -1451,6 +1484,7 @@ fn write_buffer(
     arrow_data: &mut Vec<u8>,         // output stream
     offset: i64,                      // current output stream offset
     compression_codec: Option<CompressionCodec>,
+    alignment: u8,
 ) -> Result<i64, ArrowError> {
     let len: i64 = match compression_codec {
         Some(compressor) => compressor.compress_to_vec(buffer, arrow_data)?,
@@ -1466,17 +1500,20 @@ fn write_buffer(
 
     // make new index entry
     buffers.push(crate::Buffer::new(offset, len));
-    // padding and make offset 8 bytes aligned
-    let pad_len = pad_to_8(len as u32) as i64;
-    arrow_data.extend_from_slice(&vec![0u8; pad_len as usize][..]);
+    // padding and make offset aligned
+    let pad_len = pad_to_alignment(alignment, len as usize);
+    arrow_data.extend_from_slice(&PADDING[..pad_len]);
 
-    Ok(offset + len + pad_len)
+    Ok(offset + len + (pad_len as i64))
 }
 
-/// Calculate an 8-byte boundary and return the number of bytes needed to pad to 8 bytes
+const PADDING: [u8; 64] = [0; 64];
+
+/// Calculate an alignment boundary and return the number of bytes needed to pad to the alignment boundary
 #[inline]
-fn pad_to_8(len: u32) -> usize {
-    (((len + 7) & !7) - len) as usize
+fn pad_to_alignment(alignment: u8, len: usize) -> usize {
+    let a = usize::from(alignment - 1);
+    ((len + a) & !a) - len
 }
 
 #[cfg(test)]
@@ -1490,7 +1527,9 @@ mod tests {
     use arrow_array::builder::{PrimitiveRunBuilder, UInt32Builder};
     use arrow_array::types::*;
 
+    use crate::convert::fb_to_schema;
     use crate::reader::*;
+    use crate::root_as_footer;
     use crate::MetadataVersion;
 
     use super::*;
@@ -1508,7 +1547,17 @@ mod tests {
     }
 
     fn serialize_stream(record: &RecordBatch) -> Vec<u8> {
-        let mut stream_writer = StreamWriter::try_new(vec![], record.schema_ref()).unwrap();
+        // Use 8-byte alignment so that the various `truncate_*` tests can be compactly written,
+        // without needing to construct a giant array to spill over the 64-byte default alignment
+        // boundary.
+        const IPC_ALIGNMENT: usize = 8;
+
+        let mut stream_writer = StreamWriter::try_new_with_options(
+            vec![],
+            record.schema_ref(),
+            IpcWriteOptions::try_new(IPC_ALIGNMENT, false, MetadataVersion::V5).unwrap(),
+        )
+        .unwrap();
         stream_writer.write(record).unwrap();
         stream_writer.finish().unwrap();
         stream_writer.into_inner().unwrap()
@@ -2344,5 +2393,121 @@ mod tests {
 
         let in_batch = RecordBatch::try_new(schema, vec![values]).unwrap();
         roundtrip_ensure_sliced_smaller(in_batch, 1000);
+    }
+
+    #[test]
+    fn test_decimal128_alignment16_is_sufficient() {
+        const IPC_ALIGNMENT: usize = 16;
+
+        // Test a bunch of different dimensions to ensure alignment is never an issue.
+        // For example, if we only test `num_cols = 1` then even with alignment 8 this
+        // test would _happen_ to pass, even though for different dimensions like
+        // `num_cols = 2` it would fail.
+        for num_cols in [1, 2, 3, 17, 50, 73, 99] {
+            let num_rows = (num_cols * 7 + 11) % 100; // Deterministic swizzle
+
+            let mut fields = Vec::new();
+            let mut arrays = Vec::new();
+            for i in 0..num_cols {
+                let field = Field::new(&format!("col_{}", i), DataType::Decimal128(38, 10), true);
+                let array = Decimal128Array::from(vec![num_cols as i128; num_rows]);
+                fields.push(field);
+                arrays.push(Arc::new(array) as Arc<dyn Array>);
+            }
+            let schema = Schema::new(fields);
+            let batch = RecordBatch::try_new(Arc::new(schema), arrays).unwrap();
+
+            let mut writer = FileWriter::try_new_with_options(
+                Vec::new(),
+                batch.schema_ref(),
+                IpcWriteOptions::try_new(IPC_ALIGNMENT, false, MetadataVersion::V5).unwrap(),
+            )
+            .unwrap();
+            writer.write(&batch).unwrap();
+            writer.finish().unwrap();
+
+            let out: Vec<u8> = writer.into_inner().unwrap();
+
+            let buffer = Buffer::from_vec(out);
+            let trailer_start = buffer.len() - 10;
+            let footer_len =
+                read_footer_length(buffer[trailer_start..].try_into().unwrap()).unwrap();
+            let footer =
+                root_as_footer(&buffer[trailer_start - footer_len..trailer_start]).unwrap();
+
+            let schema = fb_to_schema(footer.schema().unwrap());
+
+            // Importantly we set `require_alignment`, checking that 16-byte alignment is sufficient
+            // for `read_record_batch` later on to read the data in a zero-copy manner.
+            let decoder =
+                FileDecoder::new(Arc::new(schema), footer.version()).with_require_alignment(true);
+
+            let batches = footer.recordBatches().unwrap();
+
+            let block = batches.get(0);
+            let block_len = block.bodyLength() as usize + block.metaDataLength() as usize;
+            let data = buffer.slice_with_length(block.offset() as _, block_len);
+
+            let batch2 = decoder.read_record_batch(block, &data).unwrap().unwrap();
+
+            assert_eq!(batch, batch2);
+        }
+    }
+
+    #[test]
+    fn test_decimal128_alignment8_is_unaligned() {
+        const IPC_ALIGNMENT: usize = 8;
+
+        let num_cols = 2;
+        let num_rows = 1;
+
+        let mut fields = Vec::new();
+        let mut arrays = Vec::new();
+        for i in 0..num_cols {
+            let field = Field::new(&format!("col_{}", i), DataType::Decimal128(38, 10), true);
+            let array = Decimal128Array::from(vec![num_cols as i128; num_rows]);
+            fields.push(field);
+            arrays.push(Arc::new(array) as Arc<dyn Array>);
+        }
+        let schema = Schema::new(fields);
+        let batch = RecordBatch::try_new(Arc::new(schema), arrays).unwrap();
+
+        let mut writer = FileWriter::try_new_with_options(
+            Vec::new(),
+            batch.schema_ref(),
+            IpcWriteOptions::try_new(IPC_ALIGNMENT, false, MetadataVersion::V5).unwrap(),
+        )
+        .unwrap();
+        writer.write(&batch).unwrap();
+        writer.finish().unwrap();
+
+        let out: Vec<u8> = writer.into_inner().unwrap();
+
+        let buffer = Buffer::from_vec(out);
+        let trailer_start = buffer.len() - 10;
+        let footer_len = read_footer_length(buffer[trailer_start..].try_into().unwrap()).unwrap();
+        let footer = root_as_footer(&buffer[trailer_start - footer_len..trailer_start]).unwrap();
+
+        let schema = fb_to_schema(footer.schema().unwrap());
+
+        // Importantly we set `require_alignment`, otherwise the error later is suppressed due to copying
+        // to an aligned buffer in `ArrayDataBuilder.build_aligned`.
+        let decoder =
+            FileDecoder::new(Arc::new(schema), footer.version()).with_require_alignment(true);
+
+        let batches = footer.recordBatches().unwrap();
+
+        let block = batches.get(0);
+        let block_len = block.bodyLength() as usize + block.metaDataLength() as usize;
+        let data = buffer.slice_with_length(block.offset() as _, block_len);
+
+        let result = decoder.read_record_batch(block, &data);
+
+        let error = result.unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "Invalid argument error: Misaligned buffers[0] in array of type Decimal128(38, 10), \
+             offset from expected alignment of 16 by 8"
+        );
     }
 }
