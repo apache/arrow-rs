@@ -229,7 +229,7 @@ impl<OffsetSize: OffsetSizeTrait> GenericListViewArray<OffsetSize> {
 
     /// Returns a reference to the sizes of this list
     ///
-    /// Unlike [`Self::value_sizes`] this returns the [`SizeBuffer`]
+    /// Unlike [`Self::value_sizes`] this returns the [`ScalarBuffer`]
     /// allowing for zero-copy cloning
     #[inline]
     pub fn sizes(&self) -> &ScalarBuffer<OffsetSize> {
