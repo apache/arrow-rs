@@ -26,6 +26,9 @@ use std::fmt::Write;
 use std::sync::Arc;
 
 /// Builder for [`GenericByteArray`]
+///
+/// For building strings, see docs on [`GenericStringBuilder`].
+/// For building binary, see docs on [`GenericBinaryBuilder`].
 pub struct GenericByteBuilder<T: ByteArrayType> {
     value_builder: UInt8BufferBuilder,
     offsets_builder: BufferBuilder<T::Offset>,
@@ -222,11 +225,12 @@ impl<T: ByteArrayType, V: AsRef<T::Native>> Extend<Option<V>> for GenericByteBui
 /// Array builder for [`GenericStringArray`][crate::GenericStringArray]
 ///
 /// Values can be appended using [`GenericByteBuilder::append_value`], and nulls with
-/// [`GenericByteBuilder::append_null`] as normal.
+/// [`GenericByteBuilder::append_null`].
 ///
-/// Additionally implements [`std::fmt::Write`] with any written data included in the next
+/// Additionally, implements [`std::fmt::Write`] with any written data included in the next
 /// appended value. This allows use with [`std::fmt::Display`] without intermediate allocations
 ///
+/// # Example
 /// ```
 /// # use std::fmt::Write;
 /// # use arrow_array::builder::GenericStringBuilder;
@@ -257,6 +261,27 @@ impl<O: OffsetSizeTrait> Write for GenericStringBuilder<O> {
 }
 
 ///  Array builder for [`GenericBinaryArray`][crate::GenericBinaryArray]
+///
+/// Values can be appended using [`GenericByteBuilder::append_value`], and nulls with
+/// [`GenericByteBuilder::append_null`].
+///
+/// # Example
+/// ```
+/// # use std::fmt::Write;
+/// # use arrow_array::builder::GenericBinaryBuilder;
+/// let mut builder = GenericBinaryBuilder::<i32>::new();
+///
+/// // Write data
+/// builder.append_value("foo");
+///
+/// // Write second value
+/// builder.append_value(&[0,1,2]);
+///
+/// let array = builder.finish();
+/// // binary values
+/// assert_eq!(array.value(0), b"foo");
+/// assert_eq!(array.value(1), b"\x00\x01\x02");
+/// ```
 pub type GenericBinaryBuilder<O> = GenericByteBuilder<GenericBinaryType<O>>;
 
 #[cfg(test)]
