@@ -17,7 +17,7 @@
 
 use crate::builder::ArrayBuilder;
 use crate::{ArrayRef, GenericListViewArray, OffsetSizeTrait};
-use arrow_buffer::{Buffer, BufferBuilder, NullBufferBuilder, OffsetBuffer, SizeBuffer};
+use arrow_buffer::{Buffer, BufferBuilder, NullBufferBuilder, ScalarBuffer};
 use arrow_schema::{Field, FieldRef};
 use std::any::Any;
 use std::sync::Arc;
@@ -185,10 +185,10 @@ where
 
         let offsets = self.offsets_builder.finish();
         // Safety: Safe by construction
-        let offsets = unsafe { OffsetBuffer::new_unchecked(offsets.into()) };
+        let offsets = ScalarBuffer::from(offsets);
 
         let sizes = self.sizes_builder.finish();
-        let sizes = SizeBuffer::new(sizes.into());
+        let sizes = ScalarBuffer::from(sizes);
 
         let field = match &self.field {
             Some(f) => f.clone(),
@@ -204,10 +204,10 @@ where
 
         let offsets = Buffer::from_slice_ref(self.offsets_builder.as_slice());
         // Safety: safe by construction
-        let offsets = unsafe { OffsetBuffer::new_unchecked(offsets.into()) };
+        let offsets = ScalarBuffer::from(offsets);
 
         let sizes = Buffer::from_slice_ref(self.sizes_builder.as_slice());
-        let sizes = SizeBuffer::new(sizes.into());
+        let sizes = ScalarBuffer::from(sizes);
 
         let field = match &self.field {
             Some(f) => f.clone(),

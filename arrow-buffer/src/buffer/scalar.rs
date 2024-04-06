@@ -94,6 +94,19 @@ impl<T: ArrowNativeType> ScalarBuffer<T> {
     pub fn ptr_eq(&self, other: &Self) -> bool {
         self.buffer.ptr_eq(&other.buffer)
     }
+
+    /// Returns the length of this buffer in units of `T`
+    pub fn new_zeroed(len: usize) -> Self {
+        let len_bytes = len.checked_mul(std::mem::size_of::<T>()).expect("overflow");
+        let buffer = MutableBuffer::from_len_zeroed(len_bytes);
+        Self::from(buffer)
+    }
+
+    /// Create a new [`ScalarBuffer`] containing a single 0 value
+    pub fn new_empty() -> Self {
+        let buffer = MutableBuffer::from_len_zeroed(std::mem::size_of::<T>());
+        Self::from(buffer.into_buffer())
+    }
 }
 
 impl<T: ArrowNativeType> Deref for ScalarBuffer<T> {

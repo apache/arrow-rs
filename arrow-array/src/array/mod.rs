@@ -20,7 +20,7 @@
 mod binary_array;
 
 use crate::types::*;
-use arrow_buffer::{ArrowNativeType, NullBuffer, OffsetBuffer, ScalarBuffer, SizeBuffer};
+use arrow_buffer::{ArrowNativeType, NullBuffer, OffsetBuffer, ScalarBuffer};
 use arrow_data::ArrayData;
 use arrow_schema::{DataType, IntervalUnit, TimeUnit};
 use std::any::Any;
@@ -696,18 +696,27 @@ unsafe fn get_offsets<O: ArrowNativeType>(data: &ArrayData) -> OffsetBuffer<O> {
     }
 }
 
-/// Helper function that gets size from an [`ArrayData`]
+/// Helper function that gets list view offset from an [`ArrayData`]
 ///
 /// # Safety
-unsafe fn get_sizes<O: ArrowNativeType>(data: &ArrayData) -> SizeBuffer<O> {
+///
+/// ArrayData must contain a valid [`ScalarBuffer`] as its first buffer
+fn get_view_offsets<O: ArrowNativeType>(data: &ArrayData) -> ScalarBuffer<O> {
+    match data.is_empty() && data.buffers()[0].is_empty() {
+        true => ScalarBuffer::new_empty(),
+        false => ScalarBuffer::new(data.buffers()[0].clone(), data.offset(), data.len() + 1),
+    }
+}
+
+/// Helper function that gets list view size from an [`ArrayData`]
+///
+/// # Safety
+///
+/// ArrayData must contain a valid [`ScalarBuffer`] as its second buffer
+fn get_view_sizes<O: ArrowNativeType>(data: &ArrayData) -> ScalarBuffer<O> {
     match data.is_empty() && data.buffers()[1].is_empty() {
-        true => SizeBuffer::new_empty(),
-        false => {
-            let buffer = ScalarBuffer::new(data.buffers()[1].clone(), data.offset(), data.len());
-            // Safety:
-            // ArrayData is valid
-            SizeBuffer::new(buffer)
-        }
+        true => ScalarBuffer::new_empty(),
+        false => ScalarBuffer::new(data.buffers()[1].clone(), data.offset(), data.len()),
     }
 }
 
