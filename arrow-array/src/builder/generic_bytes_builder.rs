@@ -267,7 +267,6 @@ impl<O: OffsetSizeTrait> Write for GenericStringBuilder<O> {
 ///
 /// # Example
 /// ```
-/// # use std::fmt::Write;
 /// # use arrow_array::builder::GenericBinaryBuilder;
 /// let mut builder = GenericBinaryBuilder::<i32>::new();
 ///
