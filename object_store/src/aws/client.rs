@@ -268,6 +268,7 @@ pub(crate) struct Request<'a> {
     builder: RequestBuilder,
     payload_sha256: Option<Vec<u8>>,
     use_session_creds: bool,
+    idempotent: bool,
 }
 
 impl<'a> Request<'a> {
@@ -285,6 +286,11 @@ impl<'a> Request<'a> {
         Self { builder, ..self }
     }
 
+    pub fn set_idempotent(mut self, idempotent: bool) -> Self {
+        self.idempotent = idempotent;
+        self
+    }
+
     pub async fn send(self) -> Result<Response, RequestError> {
         let credential = match self.use_session_creds {
             true => self.config.get_session_credential().await?,
@@ -298,7 +304,7 @@ impl<'a> Request<'a> {
         let path = self.path.as_ref();
         self.builder
             .with_aws_sigv4(credential.authorizer(), self.payload_sha256.as_deref())
-            .send_retry(&self.config.retry_config)
+            .send_retry_with_idempotency(&self.config.retry_config, self.idempotent)
             .await
             .context(RetrySnafu { path })
     }
@@ -360,6 +366,7 @@ impl S3Client {
             payload_sha256,
             config: &self.config,
             use_session_creds: true,
+            idempotent: false,
         }
     }
 
@@ -462,7 +469,7 @@ impl S3Client {
             .header(CONTENT_TYPE, "application/xml")
             .body(body)
             .with_aws_sigv4(credential.authorizer(), payload_sha256.as_deref())
-            .send_retry(&self.config.retry_config)
+            .send_retry_with_idempotency(&self.config.retry_config, false)
             .await
             .context(DeleteObjectsRequestSnafu {})?
             .bytes()
@@ -510,6 +517,7 @@ impl S3Client {
             config: &self.config,
             payload_sha256: None,
             use_session_creds: false,
+            idempotent: false,
         }
     }
 
@@ -522,7 +530,7 @@ impl S3Client {
             .request(Method::POST, url)
             .headers(self.config.encryption_headers.clone().into())
             .with_aws_sigv4(credential.authorizer(), None)
-            .send_retry(&self.config.retry_config)
+            .send_retry_with_idempotency(&self.config.retry_config, true)
             .await
             .context(CreateMultipartRequestSnafu)?
             .bytes()
@@ -547,6 +555,7 @@ impl S3Client {
         let response = self
             .put_request(path, data, false)
             .query(&[("partNumber", &part), ("uploadId", upload_id)])
+            .set_idempotent(true)
             .send()
             .await?;
 
@@ -582,7 +591,7 @@ impl S3Client {
             .query(&[("uploadId", upload_id)])
             .body(body)
             .with_aws_sigv4(credential.authorizer(), None)
-            .send_retry(&self.config.retry_config)
+            .send_retry_with_idempotency(&self.config.retry_config, true)
             .await
             .context(CompleteMultipartRequestSnafu)?;
 

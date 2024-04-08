@@ -173,6 +173,7 @@ pub struct PutRequest<'a> {
     path: &'a Path,
     config: &'a GoogleCloudStorageConfig,
     builder: RequestBuilder,
+    idempotent: bool,
 }
 
 impl<'a> PutRequest<'a> {
@@ -186,12 +187,17 @@ impl<'a> PutRequest<'a> {
         Self { builder, ..self }
     }
 
+    fn set_idempotent(mut self, idempotent: bool) -> Self {
+        self.idempotent = idempotent;
+        self
+    }
+
     async fn send(self) -> Result<PutResult> {
         let credential = self.config.credentials.get_credential().await?;
         let response = self
             .builder
             .bearer_auth(&credential.bearer)
-            .send_retry(&self.config.retry_config)
+            .send_retry_with_idempotency(&self.config.retry_config, self.idempotent)
             .await
             .context(PutRequestSnafu {
                 path: self.path.as_ref(),
@@ -281,7 +287,7 @@ impl GoogleCloudStorageClient {
             .post(&url)
             .bearer_auth(&credential.bearer)
             .json(&body)
-            .send_retry(&self.config.retry_config)
+            .send_retry_with_idempotency(&self.config.retry_config, true)
             .await
             .context(SignBlobRequestSnafu)?;
 
@@ -329,6 +335,7 @@ impl GoogleCloudStorageClient {
             path,
             builder,
             config: &self.config,
+            idempotent: false,
         }
     }
 
@@ -336,7 +343,7 @@ impl GoogleCloudStorageClient {
         let builder = self.put_request(path, data);
 
         let builder = match &opts.mode {
-            PutMode::Overwrite => builder,
+            PutMode::Overwrite => builder.set_idempotent(true),
             PutMode::Create => builder.header(&VERSION_MATCH, "0"),
             PutMode::Update(v) => {
                 let etag = v.version.as_ref().context(MissingVersionSnafu)?;
@@ -366,7 +373,12 @@ impl GoogleCloudStorageClient {
             ("partNumber", &format!("{}", part_idx + 1)),
             ("uploadId", upload_id),
         ];
-        let result = self.put_request(path, data).query(query).send().await?;
+        let result = self
+            .put_request(path, data)
+            .query(query)
+            .set_idempotent(true)
+            .send()
+            .await?;
 
         Ok(PartId {
             content_id: result.e_tag.unwrap(),
@@ -391,7 +403,7 @@ impl GoogleCloudStorageClient {
             .header(header::CONTENT_TYPE, content_type)
             .header(header::CONTENT_LENGTH, "0")
             .query(&[("uploads", "")])
-            .send_retry(&self.config.retry_config)
+            .send_retry_with_idempotency(&self.config.retry_config, true)
             .await
             .context(PutRequestSnafu {
                 path: path.as_ref(),
@@ -432,7 +444,11 @@ impl GoogleCloudStorageClient {
     ) -> Result<PutResult> {
         if completed_parts.is_empty() {
             // GCS doesn't allow empty multipart uploads
-            let result = self.put_request(path, Default::default()).send().await?;
+            let result = self
+                .put_request(path, Default::default())
+                .set_idempotent(true)
+                .send()
+                .await?;
             self.multipart_cleanup(path, multipart_id).await?;
             return Ok(result);
         }
@@ -456,7 +472,7 @@ impl GoogleCloudStorageClient {
             .bearer_auth(&credential.bearer)
             .query(&[("uploadId", upload_id)])
             .body(data)
-            .send_retry(&self.config.retry_config)
+            .send_retry_with_idempotency(&self.config.retry_config, true)
             .await
             .context(CompleteMultipartRequestSnafu)?;
 
@@ -515,7 +531,7 @@ impl GoogleCloudStorageClient {
             // Needed if reqwest is compiled with native-tls instead of rustls-tls
             // See https://github.com/apache/arrow-rs/pull/3921
             .header(header::CONTENT_LENGTH, 0)
-            .send_retry(&self.config.retry_config)
+            .send_retry_with_idempotency(&self.config.retry_config, !if_not_exists)
             .await
             .map_err(|err| match err.status() {
                 Some(StatusCode::PRECONDITION_FAILED) => crate::Error::AlreadyExists {
