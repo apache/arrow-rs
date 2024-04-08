@@ -171,23 +171,33 @@ impl Buffer {
 
     /// Returns a new [Buffer] that is a slice of this buffer starting at `offset`.
     /// Doing so allows the same memory region to be shared between buffers.
+    ///
     /// # Panics
+    ///
     /// Panics iff `offset` is larger than `len`.
     pub fn slice(&self, offset: usize) -> Self {
+        let mut s = self.clone();
+        s.advance(offset);
+        s
+    }
+
+    /// Increases the offset of this buffer by `offset`
+    ///
+    /// # Panics
+    ///
+    /// Panics iff `offset` is larger than `len`.
+    #[inline]
+    pub fn advance(&mut self, offset: usize) {
         assert!(
             offset <= self.length,
             "the offset of the new Buffer cannot exceed the existing length"
         );
+        self.length -= offset;
         // Safety:
         // This cannot overflow as
         // `self.offset + self.length < self.data.len()`
         // `offset < self.length`
-        let ptr = unsafe { self.ptr.add(offset) };
-        Self {
-            data: self.data.clone(),
-            length: self.length - offset,
-            ptr,
-        }
+        self.ptr = unsafe { self.ptr.add(offset) };
     }
 
     /// Returns a new [Buffer] that is a slice of this buffer starting at `offset`,

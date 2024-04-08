@@ -285,6 +285,35 @@ impl<T: RangeBounds<usize>> From<T> for GetRange {
         }
     }
 }
+// http://docs.aws.amazon.com/general/latest/gr/sigv4-create-canonical-request.html
+//
+// Do not URI-encode any of the unreserved characters that RFC 3986 defines:
+// A-Z, a-z, 0-9, hyphen ( - ), underscore ( _ ), period ( . ), and tilde ( ~ ).
+#[cfg(any(feature = "aws", feature = "gcp"))]
+pub(crate) const STRICT_ENCODE_SET: percent_encoding::AsciiSet = percent_encoding::NON_ALPHANUMERIC
+    .remove(b'-')
+    .remove(b'.')
+    .remove(b'_')
+    .remove(b'~');
+
+/// Computes the SHA256 digest of `body` returned as a hex encoded string
+#[cfg(any(feature = "aws", feature = "gcp"))]
+pub(crate) fn hex_digest(bytes: &[u8]) -> String {
+    let digest = ring::digest::digest(&ring::digest::SHA256, bytes);
+    hex_encode(digest.as_ref())
+}
+
+/// Returns `bytes` as a lower-case hex encoded string
+#[cfg(any(feature = "aws", feature = "gcp"))]
+pub(crate) fn hex_encode(bytes: &[u8]) -> String {
+    use std::fmt::Write;
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        // String writing is infallible
+        let _ = write!(out, "{byte:02x}");
+    }
+    out
+}
 
 #[cfg(test)]
 mod tests {
