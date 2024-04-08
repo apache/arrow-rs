@@ -325,7 +325,7 @@ mod tests {
             builder.append(true);
         }
 
-        return builder;
+        builder
     }
 
     #[test]
