@@ -497,13 +497,11 @@ fn make_view_batches(num_rows: usize) -> RecordBatch {
 
     let binary_array = BinaryViewArray::from_iter(bin_view_values);
     let utf8_array = StringViewArray::from_iter(string_view_values);
-    let record_batch = RecordBatch::try_new(
+    RecordBatch::try_new(
         Arc::new(schema.clone()),
         vec![Arc::new(binary_array), Arc::new(utf8_array)],
     )
-    .unwrap();
-
-    record_batch
+    .unwrap()
 }
 
 /// Encodes input as a FlightData stream, and then decodes it using
