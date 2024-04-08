@@ -143,6 +143,9 @@ fn take_impl<IndexType: ArrowPrimitiveType>(
         DataType::LargeUtf8 => {
             Ok(Arc::new(take_bytes(values.as_string::<i64>(), indices)?))
         }
+        DataType::Utf8View => {
+            Ok(Arc::new(take_byte_view(values.as_string_view(), indices)?))
+        }
         DataType::List(_) => {
             Ok(Arc::new(take_list::<_, Int32Type>(values.as_list(), indices)?))
         }
@@ -203,6 +206,9 @@ fn take_impl<IndexType: ArrowPrimitiveType>(
         }
         DataType::LargeBinary => {
             Ok(Arc::new(take_bytes(values.as_binary::<i64>(), indices)?))
+        }
+        DataType::BinaryView => {
+            Ok(Arc::new(take_byte_view(values.as_binary_view(), indices)?))
         }
         DataType::FixedSizeBinary(size) => {
             let values = values
@@ -435,6 +441,20 @@ fn take_bytes<T: ByteArrayType, IndexType: ArrowPrimitiveType>(
     let array_data = unsafe { array_data.build_unchecked() };
 
     Ok(GenericByteArray::from(array_data))
+}
+
+/// `take` implementation for byte view arrays
+fn take_byte_view<T: ByteViewType, IndexType: ArrowPrimitiveType>(
+    array: &GenericByteViewArray<T>,
+    indices: &PrimitiveArray<IndexType>,
+) -> Result<GenericByteViewArray<T>, ArrowError> {
+    let new_views = take_native(array.views(), indices);
+    let new_nulls = take_nulls(array.nulls(), indices);
+    Ok(GenericByteViewArray::new(
+        new_views,
+        array.data_buffers().to_vec(),
+        new_nulls,
+    ))
 }
 
 /// `take` implementation for list arrays
