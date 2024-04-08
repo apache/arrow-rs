@@ -15,11 +15,15 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::{PutResult, Result};
+use std::task::{Context, Poll};
+
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures::future::BoxFuture;
+use futures::ready;
 use tokio::task::JoinSet;
+
+use crate::{PutResult, Result};
 
 /// An upload part request
 pub type UploadPart = BoxFuture<'static, Result<()>>;
@@ -110,31 +114,44 @@ pub struct WriteMultipart {
 impl WriteMultipart {
     /// Create a new [`WriteMultipart`] that will upload using 5MB chunks
     pub fn new(upload: Box<dyn MultipartUpload>) -> Self {
-        Self::new_with_capacity(upload, 5 * 1024 * 1024)
+        Self::new_with_chunk_size(upload, 5 * 1024 * 1024)
     }
 
-    /// Create a new [`WriteMultipart`] that will upload in fixed `capacity` sized chunks
-    pub fn new_with_capacity(upload: Box<dyn MultipartUpload>, capacity: usize) -> Self {
+    /// Create a new [`WriteMultipart`] that will upload in fixed `chunk_size` sized chunks
+    pub fn new_with_chunk_size(upload: Box<dyn MultipartUpload>, chunk_size: usize) -> Self {
         Self {
             upload,
-            buffer: Vec::with_capacity(capacity),
+            buffer: Vec::with_capacity(chunk_size),
             tasks: Default::default(),
         }
     }
 
-    /// Wait until there are `max_concurrency` or fewer requests in-flight
-    pub async fn wait_for_capacity(&mut self, max_concurrency: usize) -> Result<()> {
-        while self.tasks.len() > max_concurrency {
-            self.tasks.join_next().await.unwrap()??;
+    /// Polls for there to be less than `max_concurrency` [`UploadPart`] in progress
+    ///
+    /// See [`Self::wait_for_capacity`] for an async version of this function
+    pub fn poll_for_capacity(
+        &mut self,
+        cx: &mut Context<'_>,
+        max_concurrency: usize,
+    ) -> Poll<Result<()>> {
+        while !self.tasks.is_empty() && self.tasks.len() >= max_concurrency {
+            ready!(self.tasks.poll_join_next(cx)).unwrap()??
         }
-        Ok(())
+        Poll::Ready(Ok(()))
+    }
+
+    /// Wait until there are less than `max_concurrency` [`UploadPart`] in progress
+    ///
+    /// See [`Self::poll_for_capacity`] for a [`Poll`] version of this function
+    pub async fn wait_for_capacity(&mut self, max_concurrency: usize) -> Result<()> {
+        futures::future::poll_fn(|cx| self.poll_for_capacity(cx, max_concurrency)).await
     }
 
     /// Write data to this [`WriteMultipart`]
     ///
-    /// Note this method is synchronous (not `async`) and will immediately start new uploads
-    /// as soon as the internal `capacity` is hit, regardless of
-    /// how many outstanding uploads are already in progress.
+    /// Note this method is synchronous (not `async`) and will immediately
+    /// start new uploads as soon as the internal `chunk_size` is hit,
+    /// regardless of how many outstanding uploads are already in progress.
     ///
     /// Back pressure can optionally be applied to producers by calling
     /// [`Self::wait_for_capacity`] prior to calling this method
@@ -171,5 +188,38 @@ impl WriteMultipart {
 
         self.wait_for_capacity(0).await?;
         self.upload.complete().await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use futures::FutureExt;
+
+    use crate::memory::InMemory;
+    use crate::path::Path;
+    use crate::throttle::{ThrottleConfig, ThrottledStore};
+    use crate::ObjectStore;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn test_concurrency() {
+        let config = ThrottleConfig {
+            wait_put_per_call: Duration::from_millis(1),
+            ..Default::default()
+        };
+
+        let path = Path::from("foo");
+        let store = ThrottledStore::new(InMemory::new(), config);
+        let upload = store.put_multipart(&path).await.unwrap();
+        let mut write = WriteMultipart::new_with_chunk_size(upload, 10);
+
+        for _ in 0..20 {
+            write.write(&[0; 5]);
+        }
+        assert!(write.wait_for_capacity(10).now_or_never().is_none());
+        write.wait_for_capacity(10).await.unwrap()
     }
 }

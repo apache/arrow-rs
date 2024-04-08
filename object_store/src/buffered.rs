@@ -216,6 +216,7 @@ impl AsyncBufRead for BufReader {
 /// streamed using [`ObjectStore::put_multipart`]
 pub struct BufWriter {
     capacity: usize,
+    max_concurrency: usize,
     state: BufWriterState,
     store: Arc<dyn ObjectStore>,
 }
@@ -250,7 +251,18 @@ impl BufWriter {
         Self {
             capacity,
             store,
+            max_concurrency: 8,
             state: BufWriterState::Buffer(path, Vec::new()),
+        }
+    }
+
+    /// Override the maximum number of in-flight requests for this writer
+    ///
+    /// Defaults to 8
+    pub fn with_max_concurrency(self, max_concurrency: usize) -> Self {
+        Self {
+            max_concurrency,
+            ..self
         }
     }
 
@@ -275,9 +287,11 @@ impl AsyncWrite for BufWriter {
         buf: &[u8],
     ) -> Poll<Result<usize, Error>> {
         let cap = self.capacity;
+        let max_concurrency = self.max_concurrency;
         loop {
             return match &mut self.state {
                 BufWriterState::Write(Some(write)) => {
+                    ready!(write.poll_for_capacity(cx, max_concurrency))?;
                     write.write(buf);
                     Poll::Ready(Ok(buf.len()))
                 }
