@@ -75,6 +75,12 @@ pub trait ArrowNativeType:
     /// in truncation/overflow
     fn to_isize(self) -> Option<isize>;
 
+    /// Convert native type to i64.
+    ///
+    /// Returns `None` if [`Self`] is not an integer or conversion would result
+    /// in truncation/overflow
+    fn to_i64(self) -> Option<i64>;
+
     /// Convert native type from i32.
     ///
     /// Returns `None` if [`Self`] is not `i32`
@@ -116,6 +122,11 @@ macro_rules! native_integer {
 
             #[inline]
             fn to_isize(self) -> Option<isize> {
+                self.try_into().ok()
+            }
+
+            #[inline]
+            fn to_i64(self) -> Option<i64> {
                 self.try_into().ok()
             }
 
@@ -171,6 +182,11 @@ macro_rules! native_float {
             }
 
             #[inline]
+            fn to_i64(self) -> Option<i64> {
+                None
+            }
+
+            #[inline]
             fn as_usize($s) -> usize {
                 $as_usize
             }
@@ -210,6 +226,10 @@ impl ArrowNativeType for i256 {
     }
 
     fn to_isize(self) -> Option<isize> {
+        self.to_i128()?.try_into().ok()
+    }
+
+    fn to_i64(self) -> Option<i64> {
         self.to_i128()?.try_into().ok()
     }
 }
