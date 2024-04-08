@@ -184,6 +184,7 @@ where
 
         let field = match &self.field {
             Some(f) => {
+                let size = self.value_length();
                 assert_eq!(
                     f.data_type(),
                     values_data.data_type(),
@@ -191,11 +192,19 @@ where
                     f.data_type(),
                     values_data.data_type()
                 );
-                if !f.is_nullable() {
+
+                if let Some(a) = values_arr.logical_nulls() {
+                    let nulls_valid = f.is_nullable()
+                        || nulls
+                            .as_ref()
+                            .map(|n| n.expand(size as _).contains(&a))
+                            .unwrap_or_default();
+
                     assert!(
-                        values_data.null_count() == 0,
-                        "field is nullable = false, but the values_builder contains null values"
-                    )
+                        nulls_valid,
+                        "Found unmasked nulls for non-nullable FixedSizeListBuilder field {:?}",
+                        f.name()
+                    );
                 }
                 f.clone()
             }
@@ -230,6 +239,7 @@ where
 
         let field = match &self.field {
             Some(f) => {
+                let size = self.value_length();
                 assert_eq!(
                     f.data_type(),
                     values_data.data_type(),
@@ -237,11 +247,18 @@ where
                     f.data_type(),
                     values_data.data_type()
                 );
-                if !f.is_nullable() {
+                if let Some(a) = values_arr.logical_nulls() {
+                    let nulls_valid = f.is_nullable()
+                        || nulls
+                            .as_ref()
+                            .map(|n| n.expand(size as _).contains(&a))
+                            .unwrap_or_default();
+
                     assert!(
-                        values_data.null_count() == 0,
-                        "field is nullable = false, but the values_builder contains null values"
-                    )
+                        nulls_valid,
+                        "Found unmasked nulls for non-nullable FixedSizeListBuilder field {:?}",
+                        f.name()
+                    );
                 }
                 f.clone()
             }
@@ -338,9 +355,20 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(
-        expected = "field is nullable = false, but the values_builder contains null values"
-    )]
+    fn test_fixed_size_list_array_builder_with_field_and_null() {
+        let builder = make_list_builder(true, false);
+        let mut builder = builder.with_field(Field::new("list_element", DataType::Int32, false));
+        let list_array = builder.finish();
+
+        assert_eq!(DataType::Int32, list_array.value_type());
+        assert_eq!(4, list_array.len());
+        assert_eq!(1, list_array.null_count());
+        assert_eq!(6, list_array.value_offset(2));
+        assert_eq!(3, list_array.value_length());
+    }
+
+    #[test]
+    #[should_panic(expected = "Found unmasked nulls for non-nullable FixedSizeListBuilder field")]
     fn test_fixed_size_list_array_builder_with_field_null_panic() {
         let builder = make_list_builder(true, true);
         let mut builder = builder.with_field(Field::new("list_item", DataType::Int32, false));
@@ -389,14 +417,25 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(
-        expected = "field is nullable = false, but the values_builder contains null values"
-    )]
+    #[should_panic(expected = "Found unmasked nulls for non-nullable FixedSizeListBuilder field")]
     fn test_fixed_size_list_array_builder_cloned_with_field_null_panic() {
         let builder = make_list_builder(true, true);
         let builder = builder.with_field(Field::new("list_item", DataType::Int32, false));
 
         builder.finish_cloned();
+    }
+
+    #[test]
+    fn test_fixed_size_list_array_builder_cloned_with_field_and_null() {
+        let builder = make_list_builder(true, false);
+        let mut builder = builder.with_field(Field::new("list_element", DataType::Int32, false));
+        let list_array = builder.finish();
+
+        assert_eq!(DataType::Int32, list_array.value_type());
+        assert_eq!(4, list_array.len());
+        assert_eq!(1, list_array.null_count());
+        assert_eq!(6, list_array.value_offset(2));
+        assert_eq!(3, list_array.value_length());
     }
 
     #[test]
