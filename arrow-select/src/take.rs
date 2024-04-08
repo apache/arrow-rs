@@ -1444,6 +1444,71 @@ mod tests {
         assert_eq!(result.as_ref(), &expected);
     }
 
+    fn _test_byte_view<T>()
+    where
+        T: ByteViewType,
+        str: AsRef<T::Native>,
+        T::Native: PartialEq,
+    {
+        let index = UInt32Array::from(vec![Some(3), None, Some(1), Some(3), Some(4), Some(2)]);
+        let array = {
+            // ["hello", "world", null, "large payload over 12 bytes", "lulu"]
+            let mut builder = GenericByteViewBuilder::<T>::new();
+            builder.append_value("hello");
+            builder.append_value("world");
+            builder.append_null();
+            builder.append_value("large payload over 12 bytes");
+            builder.append_value("lulu");
+            builder.finish()
+        };
+
+        let actual = take(&array, &index, None).unwrap();
+
+        assert_eq!(actual.len(), index.len());
+
+        let actual = actual
+            .as_any()
+            .downcast_ref::<GenericByteViewArray<T>>()
+            .unwrap();
+
+        let expected = {
+            // ["large payload over 12 bytes", null, "world", "large payload over 12 bytes", "lulu", null]
+            let mut builder = GenericByteViewBuilder::<T>::new();
+            builder.append_value("large payload over 12 bytes");
+            builder.append_null();
+            builder.append_value("world");
+            builder.append_value("large payload over 12 bytes");
+            builder.append_value("lulu");
+            builder.append_null();
+            builder.finish()
+        };
+
+        _assert_byte_view_equal(actual, &expected);
+    }
+
+    fn _assert_byte_view_equal<T>(
+        array1: &GenericByteViewArray<T>,
+        array2: &GenericByteViewArray<T>,
+    ) where
+        T: ByteViewType,
+        T::Native: PartialEq,
+    {
+        assert_eq!(array1.len(), array2.len());
+        for (v1, v2) in array1.iter().zip(array2.iter()) {
+            assert_eq!(v1, v2);
+        }
+    }
+
+    #[test]
+    fn test_take_string_view() {
+        _test_byte_view::<StringViewType>()
+    }
+
+    #[test]
+    fn test_take_binary_view() {
+        _test_byte_view::<BinaryViewType>()
+    }
+
     macro_rules! test_take_list {
         ($offset_type:ty, $list_data_type:ident, $list_array_type:ident) => {{
             // Construct a value array, [[0,0,0], [-1,-2,-1], [], [2,3]]
