@@ -689,11 +689,7 @@ fn parse_e_notation<T: DecimalType>(
 
     // no fractional part
     if fractionals == 0 {
-        bs = match digits {
-            // The first number is 0, for example 0E-3
-            0 => {s.as_bytes().iter().skip(0)},
-            _ => {s.as_bytes().iter().skip(digits as usize)},
-        }
+        bs = s.as_bytes().iter().skip(digits as usize)
     } else {
         // digits + 1 because of the period in the string
         bs = s.as_bytes().iter().skip((digits + 1) as usize);
