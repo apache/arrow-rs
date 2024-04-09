@@ -377,6 +377,18 @@ impl<T: ByteViewType + ?Sized> From<GenericByteViewArray<T>> for ArrayData {
     }
 }
 
+impl<'a, Ptr, T> FromIterator<&'a Option<Ptr>> for GenericByteViewArray<T>
+where
+    Ptr: AsRef<T::Native> + 'a,
+    T: ByteViewType + ?Sized,
+{
+    fn from_iter<I: IntoIterator<Item = &'a Option<Ptr>>>(iter: I) -> Self {
+        iter.into_iter()
+            .map(|o| o.as_ref().map(|p| p.as_ref()))
+            .collect()
+    }
+}
+
 impl<Ptr, T: ByteViewType + ?Sized> FromIterator<Option<Ptr>> for GenericByteViewArray<T>
 where
     Ptr: AsRef<T::Native>,
@@ -400,7 +412,23 @@ where
 /// ```
 pub type BinaryViewArray = GenericByteViewArray<BinaryViewType>;
 
-/// A [`GenericByteViewArray`] that stores uf8 data
+impl BinaryViewArray {
+    /// Convert the [`BinaryViewArray`] to [`StringViewArray`]
+    /// If items not utf8 data, validate will fail and error returned.
+    pub fn to_string_view(self) -> Result<StringViewArray, ArrowError> {
+        StringViewType::validate(self.views(), self.data_buffers())?;
+        unsafe { Ok(self.to_string_view_unchecked()) }
+    }
+
+    /// Convert the [`BinaryViewArray`] to [`StringViewArray`]
+    /// # Safety
+    /// Caller is responsible for ensuring that items in array are utf8 data.
+    pub unsafe fn to_string_view_unchecked(self) -> StringViewArray {
+        StringViewArray::new_unchecked(self.views, self.buffers, self.nulls)
+    }
+}
+
+/// A [`GenericByteViewArray`] that stores utf8 data
 ///
 /// # Example
 /// ```
@@ -411,9 +439,34 @@ pub type BinaryViewArray = GenericByteViewArray<BinaryViewType>;
 /// ```
 pub type StringViewArray = GenericByteViewArray<StringViewType>;
 
+impl StringViewArray {
+    /// Convert the [`StringViewArray`] to [`BinaryViewArray`]
+    pub fn to_binary_view(self) -> BinaryViewArray {
+        unsafe { BinaryViewArray::new_unchecked(self.views, self.buffers, self.nulls) }
+    }
+}
+
 impl From<Vec<&str>> for StringViewArray {
     fn from(v: Vec<&str>) -> Self {
         Self::from_iter_values(v)
+    }
+}
+
+impl From<Vec<Option<&str>>> for StringViewArray {
+    fn from(v: Vec<Option<&str>>) -> Self {
+        v.into_iter().collect()
+    }
+}
+
+impl From<Vec<String>> for StringViewArray {
+    fn from(v: Vec<String>) -> Self {
+        Self::from_iter_values(v)
+    }
+}
+
+impl From<Vec<Option<String>>> for StringViewArray {
+    fn from(v: Vec<Option<String>>) -> Self {
+        v.into_iter().collect()
     }
 }
 
