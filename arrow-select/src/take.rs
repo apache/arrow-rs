@@ -1466,11 +1466,6 @@ mod tests {
 
         assert_eq!(actual.len(), index.len());
 
-        let actual = actual
-            .as_any()
-            .downcast_ref::<GenericByteViewArray<T>>()
-            .unwrap();
-
         let expected = {
             // ["large payload over 12 bytes", null, "world", "large payload over 12 bytes", "lulu", null]
             let mut builder = GenericByteViewBuilder::<T>::new();
@@ -1483,20 +1478,7 @@ mod tests {
             builder.finish()
         };
 
-        _assert_byte_view_equal(actual, &expected);
-    }
-
-    fn _assert_byte_view_equal<T>(
-        array1: &GenericByteViewArray<T>,
-        array2: &GenericByteViewArray<T>,
-    ) where
-        T: ByteViewType,
-        T::Native: PartialEq,
-    {
-        assert_eq!(array1.len(), array2.len());
-        for (v1, v2) in array1.iter().zip(array2.iter()) {
-            assert_eq!(v1, v2);
-        }
+        assert_eq!(actual.as_ref(), &expected);
     }
 
     #[test]
