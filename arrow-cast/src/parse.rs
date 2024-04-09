@@ -679,20 +679,29 @@ fn parse_e_notation<T: DecimalType>(
     precision: u16,
     scale: i16,
 ) -> Result<T::Native, ArrowError> {
-    if digits == 0 && fractionals == 0 {
-        return Err(ArrowError::ParseError(format!(
-            "can't parse the string value {s} to decimal"
-        )));
-    }
-
     let mut exp: i16 = 0;
     let base = T::Native::usize_as(10);
 
     let mut exp_start: bool = false;
     // e has a plus sign
     let mut pos_shift_direction: bool = true;
+    let mut bs;
 
-    let mut bs = s.as_bytes().iter().skip((digits + 1) as usize);
+    // no fractional part
+    if fractionals == 0 {
+        bs = match digits {
+            // The first number is 0, for example 0E-3
+            0 => {s.as_bytes().iter().skip(0)},
+            _ => {s.as_bytes().iter().skip(digits as usize)},
+        }
+    } else {
+        // digits + 1 because of the period in the string
+        bs = s.as_bytes().iter().skip((digits + 1) as usize);
+        // check for leading 0, because in parse_decimal function zeros before the period are not counted
+        if digits == fractionals as u16 {
+            bs.next();
+        };
+    }
 
     while let Some(b) = bs.next() {
         match b {
@@ -749,6 +758,12 @@ fn parse_e_notation<T: DecimalType>(
         }
     }
 
+    if digits == 0 && fractionals == 0 && exp == 0 {
+        return Err(ArrowError::ParseError(format!(
+            "can't parse the string value {s} to decimal"
+        )));
+    }
+
     if !pos_shift_direction {
         // exponent has a large negative sign
         // 1.12345e-30 => 0.0{29}12345, scale = 5
@@ -758,7 +773,7 @@ fn parse_e_notation<T: DecimalType>(
         exp *= -1;
     }
 
-    // comma offset
+    // period offset
     exp = fractionals - exp;
     // We have zeros on the left, we need to count them
     if !pos_shift_direction && exp > digits as i16 {
@@ -2382,6 +2397,11 @@ mod tests {
             ("4749.3e+5", "474930000", 10),
             ("4749.3e-5", "0.047493", 1),
             ("4749.3e+5", "474930000", 1),
+            ("0E-8", "0", 10),
+            ("0E+6", "0", 10),
+            ("1E-8", "0.00000001", 10),
+            ("12E+6", "12000000", 10),
+            ("0.1e-6", "0.0000001", 10),
         ];
         for (e, d, scale) in e_notation_tests {
             let result_128_e = parse_decimal::<Decimal128Type>(e, 20, scale);
@@ -2391,7 +2411,22 @@ mod tests {
             let result_256_d = parse_decimal::<Decimal256Type>(d, 20, scale);
             assert_eq!(result_256_e.unwrap(), result_256_d.unwrap());
         }
-        let can_not_parse_tests = ["123,123", ".", "123.123.123", "", "+", "-", "e", "1.3e+e3"];
+        let can_not_parse_tests = [
+            "123,123",
+            ".",
+            "123.123.123",
+            "",
+            "+",
+            "-",
+            "e",
+            "1.3e+e3",
+            "5.6714ee-2",
+            "4.11ee-+4",
+            "4.11e++4",
+            "1.1e.12",
+            "1.23e+3.",
+            "1.23e+3.1",
+        ];
         for s in can_not_parse_tests {
             let result_128 = parse_decimal::<Decimal128Type>(s, 20, 3);
             assert_eq!(
@@ -2404,7 +2439,16 @@ mod tests {
                 result_256.unwrap_err().to_string()
             );
         }
-        let overflow_parse_tests = ["12345678", "12345678.9", "99999999.99", "9.999999999e7"];
+        let overflow_parse_tests = [
+            "12345678",
+            "1.2345678e7",
+            "12345678.9",
+            "1.23456789e+7",
+            "99999999.99",
+            "9.999999999e7",
+            "12345678908765.123456",
+            "123456789087651234.56e-4",
+        ];
         for s in overflow_parse_tests {
             let result_128 = parse_decimal::<Decimal128Type>(s, 10, 3);
             let expected_128 = "Parser error: parse decimal overflow";
