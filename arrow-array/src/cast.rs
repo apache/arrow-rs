@@ -781,31 +781,31 @@ pub trait AsArray: private::Sealed {
 
     /// Downcast this to a [`StringViewArray`] returning `None` if not possible
     fn as_string_view(&self) -> &StringViewArray {
-        self.as_bytes_view_opt().expect("string view array")
+        self.as_byte_view_opt().expect("string view array")
     }
 
     /// Downcast this to a [`StringViewArray`] returning `None` if not possible
     fn as_string_view_opt(&self) -> Option<&StringViewArray> {
-        self.as_bytes_view_opt()
+        self.as_byte_view_opt()
     }
 
     /// Downcast this to a [`StringViewArray`] returning `None` if not possible
     fn as_binary_view(&self) -> &BinaryViewArray {
-        self.as_bytes_view_opt().expect("binary view array")
+        self.as_byte_view_opt().expect("binary view array")
     }
 
     /// Downcast this to a [`BinaryViewArray`] returning `None` if not possible
     fn as_binary_view_opt(&self) -> Option<&BinaryViewArray> {
-        self.as_bytes_view_opt()
+        self.as_byte_view_opt()
     }
 
     /// Downcast this to a [`GenericByteViewArray`] returning `None` if not possible
-    fn as_bytes_view<T: ByteViewType>(&self) -> &GenericByteViewArray<T> {
-        self.as_bytes_view_opt().expect("byte view array")
+    fn as_byte_view<T: ByteViewType>(&self) -> &GenericByteViewArray<T> {
+        self.as_byte_view_opt().expect("byte view array")
     }
 
     /// Downcast this to a [`GenericByteViewArray`] returning `None` if not possible
-    fn as_bytes_view_opt<T: ByteViewType>(&self) -> Option<&GenericByteViewArray<T>>;
+    fn as_byte_view_opt<T: ByteViewType>(&self) -> Option<&GenericByteViewArray<T>>;
 
     /// Downcast this to a [`StructArray`] returning `None` if not possible
     fn as_struct_opt(&self) -> Option<&StructArray>;
@@ -880,7 +880,7 @@ impl AsArray for dyn Array + '_ {
         self.as_any().downcast_ref()
     }
 
-    fn as_bytes_view_opt<T: ByteViewType>(&self) -> Option<&GenericByteViewArray<T>> {
+    fn as_byte_view_opt<T: ByteViewType>(&self) -> Option<&GenericByteViewArray<T>> {
         self.as_any().downcast_ref()
     }
 
@@ -931,8 +931,8 @@ impl AsArray for ArrayRef {
         self.as_ref().as_bytes_opt()
     }
 
-    fn as_bytes_view_opt<T: ByteViewType>(&self) -> Option<&GenericByteViewArray<T>> {
-        self.as_ref().as_bytes_view_opt()
+    fn as_byte_view_opt<T: ByteViewType>(&self) -> Option<&GenericByteViewArray<T>> {
+        self.as_ref().as_byte_view_opt()
     }
 
     fn as_struct_opt(&self) -> Option<&StructArray> {
