@@ -20,4 +20,3 @@
 pub mod bit_util;
 pub mod dictionary_buffer;
 pub mod offset_buffer;
-pub(crate) mod view_buffer;
