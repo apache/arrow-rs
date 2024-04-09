@@ -335,6 +335,10 @@ impl Schema {
         &self.fields[i]
     }
 
+    pub fn try_field(&self, i: usize) -> Option<&Field> {
+        self.fields.get(i).map(|f| f.as_ref())
+    }
+
     /// Returns an immutable reference of a specific [`Field`] instance selected by name.
     pub fn field_with_name(&self, name: &str) -> Result<&Field, ArrowError> {
         Ok(&self.fields[self.index_of(name)?])
@@ -648,6 +652,13 @@ mod tests {
         assert_eq!(schema.index_of("first_name").unwrap(), 0);
         assert_eq!(schema.index_of("last_name").unwrap(), 1);
         schema.index_of("nickname").unwrap();
+    }
+
+    #[test]
+    fn schema_try_field() {
+        let schema = person_schema();
+        assert!(schema.try_field(0).is_some());
+        assert!(schema.try_field(99999).is_none());
     }
 
     #[test]
