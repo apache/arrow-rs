@@ -331,10 +331,16 @@ impl Schema {
 
     /// Returns an immutable reference of a specific [`Field`] instance selected using an
     /// offset within the internal `fields` vector.
+    ///
+    /// Also consider using `try_field()` method with bounds check.
     pub fn field(&self, i: usize) -> &Field {
         &self.fields[i]
     }
 
+    /// Like `field()` but with bound check.
+    ///
+    /// Returns an immutable reference of a specific [`Field`] instance selected using an
+    /// offset within the internal `fields` vector. And `None` if the index is out of bounds.
     pub fn try_field(&self, i: usize) -> Option<&Field> {
         self.fields.get(i).map(|f| f.as_ref())
     }
