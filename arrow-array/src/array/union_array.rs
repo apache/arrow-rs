@@ -336,7 +336,7 @@ impl UnionArray {
     /// let union_array = builder.build()?;
     ///
     /// // Deconstruct into parts
-    /// let (union_mode, type_ids, offsets, field_type_ids, fields) = union_array.into_parts();
+    /// let (type_ids, offsets, field_type_ids, fields) = union_array.into_parts();
     ///
     /// // Reconstruct from parts
     /// let union_array = UnionArray::try_new(
@@ -352,7 +352,6 @@ impl UnionArray {
     pub fn into_parts(
         self,
     ) -> (
-        UnionMode,
         ScalarBuffer<i8>,
         Option<ScalarBuffer<i32>>,
         Vec<i8>,
@@ -365,7 +364,7 @@ impl UnionArray {
             fields,
         } = self;
         match data_type {
-            DataType::Union(union_fields, union_mode) => {
+            DataType::Union(union_fields, _) => {
                 let union_fields = union_fields.iter().collect::<HashMap<_, _>>();
                 let (field_type_ids, fields) = fields
                     .into_iter()
@@ -380,7 +379,7 @@ impl UnionArray {
                         })
                     })
                     .unzip();
-                (union_mode, type_ids, offsets, field_type_ids, fields)
+                (type_ids, offsets, field_type_ids, fields)
             }
             _ => unreachable!(),
         }
@@ -1281,8 +1280,7 @@ mod tests {
             Field::new("a", DataType::Int32, false),
             Field::new("b", DataType::Int8, false),
         ];
-        let (union_mode, type_ids, offsets, field_type_ids, fields) = dense_union.into_parts();
-        assert_eq!(union_mode, UnionMode::Dense);
+        let (type_ids, offsets, field_type_ids, fields) = dense_union.into_parts();
         assert_eq!(field_type_ids, [0, 1]);
         assert_eq!(
             field.to_vec(),
@@ -1311,8 +1309,7 @@ mod tests {
         builder.append::<Int32Type>("a", 3).unwrap();
         let sparse_union = builder.build().unwrap();
 
-        let (union_mode, type_ids, offsets, field_type_ids, fields) = sparse_union.into_parts();
-        assert_eq!(union_mode, UnionMode::Sparse);
+        let (type_ids, offsets, field_type_ids, fields) = sparse_union.into_parts();
         assert_eq!(type_ids, [0, 1, 0]);
         assert!(offsets.is_none());
 
@@ -1357,8 +1354,7 @@ mod tests {
             .unwrap();
         let array = UnionArray::from(data);
 
-        let (union_mode, type_ids, offsets, field_type_ids, fields) = array.into_parts();
-        assert_eq!(union_mode, UnionMode::Dense);
+        let (type_ids, offsets, field_type_ids, fields) = array.into_parts();
         set_field_type_ids.sort();
         assert_eq!(field_type_ids, set_field_type_ids);
         let result = UnionArray::try_new(
