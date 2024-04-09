@@ -671,16 +671,18 @@ impl Parser for Date64Type {
     }
 }
 
-fn parse_e_notation<T: DecimalType> (
+fn parse_e_notation<T: DecimalType>(
     s: &str,
     mut digits: u16,
     mut fractionals: i16,
     mut result: T::Native,
     precision: u16,
-    scale: i16
+    scale: i16,
 ) -> Result<T::Native, ArrowError> {
-    if digits == 0 && fractionals == 0{
-        return Err(ArrowError::ParseError(format!("can't parse the string value {s} to decimal")));
+    if digits == 0 && fractionals == 0 {
+        return Err(ArrowError::ParseError(format!(
+            "can't parse the string value {s} to decimal"
+        )));
     }
 
     let mut exp: i16 = 0;
@@ -706,7 +708,9 @@ fn parse_e_notation<T: DecimalType> (
                 exp_start = true;
             }
             _ => {
-                return Err(ArrowError::ParseError(format!("can't parse the string value {s} to decimal")));
+                return Err(ArrowError::ParseError(format!(
+                    "can't parse the string value {s} to decimal"
+                )));
             }
         };
 
@@ -716,20 +720,28 @@ fn parse_e_notation<T: DecimalType> (
                 Some(&b'+') => true,
                 Some(b) => {
                     if !b.is_ascii_digit() {
-                        return Err(ArrowError::ParseError(format!("can't parse the string value {s} to decimal")));
+                        return Err(ArrowError::ParseError(format!(
+                            "can't parse the string value {s} to decimal"
+                        )));
                     }
 
                     exp *= 10;
                     exp += (b - b'0') as i16;
 
                     true
-                },
-                None => return Err(ArrowError::ParseError(format!("can't parse the string value {s} to decimal")))
+                }
+                None => {
+                    return Err(ArrowError::ParseError(format!(
+                        "can't parse the string value {s} to decimal"
+                    )))
+                }
             };
 
             for b in bs.by_ref() {
                 if !b.is_ascii_digit() {
-                    return Err(ArrowError::ParseError(format!("can't parse the string value {s} to decimal")));
+                    return Err(ArrowError::ParseError(format!(
+                        "can't parse the string value {s} to decimal"
+                    )));
                 }
                 exp *= 10;
                 exp += (b - b'0') as i16;
@@ -756,9 +768,10 @@ fn parse_e_notation<T: DecimalType> (
     exp = scale - exp;
 
     if (digits as i16 + exp) as u16 > precision {
-        return Err(ArrowError::ParseError(format!("parse decimal overflow ({s})")));
+        return Err(ArrowError::ParseError(format!(
+            "parse decimal overflow ({s})"
+        )));
     }
-
 
     if exp < 0 {
         result = result.div_wrapping(base.pow_wrapping(-exp as _));
@@ -768,7 +781,6 @@ fn parse_e_notation<T: DecimalType> (
 
     Ok(result)
 }
-
 
 /// Parse the string format decimal value to i128/i256 format and checking the precision and scale.
 /// The result value can't be out of bounds.
@@ -825,7 +837,7 @@ pub fn parse_decimal<T: DecimalType>(
                                 scale as i16,
                             ) {
                                 Err(e) => return Err(e),
-                                Ok(v) => v
+                                Ok(v) => v,
                             };
 
                             is_e_notation = true;
@@ -849,7 +861,7 @@ pub fn parse_decimal<T: DecimalType>(
                 }
 
                 if is_e_notation {
-                    break
+                    break;
                 }
 
                 // Fail on "."
@@ -866,10 +878,10 @@ pub fn parse_decimal<T: DecimalType>(
                     fractionals as i16,
                     result,
                     precision as u16,
-                    scale as i16
+                    scale as i16,
                 ) {
                     Err(e) => return Err(e),
-                    Ok(v) => v
+                    Ok(v) => v,
                 };
 
                 is_e_notation = true;
@@ -888,12 +900,16 @@ pub fn parse_decimal<T: DecimalType>(
         if fractionals < scale {
             let exp = scale - fractionals;
             if exp as u8 + digits > precision {
-                return Err(ArrowError::ParseError(format!("parse decimal overflow ({s})")));
+                return Err(ArrowError::ParseError(format!(
+                    "parse decimal overflow ({s})"
+                )));
             }
             let mul = base.pow_wrapping(exp as _);
             result = result.mul_wrapping(mul);
         } else if digits > precision {
-            return Err(ArrowError::ParseError(format!("parse decimal overflow ({s})")));
+            return Err(ArrowError::ParseError(format!(
+                "parse decimal overflow ({s})"
+            )));
         }
     }
 
@@ -903,7 +919,6 @@ pub fn parse_decimal<T: DecimalType>(
         result
     })
 }
-
 
 pub fn parse_interval_year_month(
     value: &str,
