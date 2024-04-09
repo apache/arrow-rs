@@ -18,7 +18,7 @@
 use crate::builder::ArrayBuilder;
 use crate::{ArrayRef, FixedSizeListArray};
 use arrow_buffer::NullBufferBuilder;
-use arrow_schema::{DataType, Field, FieldRef};
+use arrow_schema::{Field, FieldRef};
 use std::any::Any;
 use std::sync::Arc;
 
@@ -93,9 +93,9 @@ impl<T: ArrayBuilder> FixedSizeListBuilder<T> {
         }
     }
 
-    /// Override the field passed to [`ArrayData::builder`]
+    /// Override the field passed to [`FixedSizeListArray::new`]
     ///
-    /// By default a nullable field is created with the name `item`
+    /// By default, a nullable field is created with the name `item`
     ///
     /// Note: [`Self::finish`] and [`Self::finish_cloned`] will panic if the
     /// field's data type does not match that of `T`
@@ -213,6 +213,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use arrow_schema::DataType;
 
     use crate::builder::Int32Builder;
     use crate::Array;
