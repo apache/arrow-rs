@@ -166,128 +166,83 @@ impl Default for RetryConfig {
     }
 }
 
-pub trait RetryExt {
-    /// Dispatch a request with the given retry configuration
-    ///
-    /// # Panic
-    ///
-    /// This will panic if the request body is a stream
-    fn send_retry(self, config: &RetryConfig) -> BoxFuture<'static, Result<Response>>;
-}
+fn send_retry_impl(
+    builder: reqwest::RequestBuilder,
+    config: &RetryConfig,
+    is_idempotent: Option<bool>,
+) -> BoxFuture<'static, Result<Response>> {
+    let mut backoff = Backoff::new(&config.backoff);
+    let max_retries = config.max_retries;
+    let retry_timeout = config.retry_timeout;
 
-impl RetryExt for reqwest::RequestBuilder {
-    fn send_retry(self, config: &RetryConfig) -> BoxFuture<'static, Result<Response>> {
-        let mut backoff = Backoff::new(&config.backoff);
-        let max_retries = config.max_retries;
-        let retry_timeout = config.retry_timeout;
+    let (client, req) = builder.build_split();
+    let req = req.expect("request must be valid");
+    let is_idempotent = is_idempotent.unwrap_or(req.method().is_safe());
 
-        let (client, req) = self.build_split();
-        let req = req.expect("request must be valid");
+    async move {
+        let mut retries = 0;
+        let now = Instant::now();
 
-        async move {
-            let mut retries = 0;
-            let now = Instant::now();
-
-            loop {
-                let s = req.try_clone().expect("request body must be cloneable");
-                match client.execute(s).await {
-                    Ok(r) => match r.error_for_status_ref() {
-                        Ok(_) if r.status().is_success() => return Ok(r),
-                        Ok(r) if r.status() == StatusCode::NOT_MODIFIED => {
-                            return Err(Error::Client {
+        loop {
+            let s = req.try_clone().expect("request body must be cloneable");
+            match client.execute(s).await {
+                Ok(r) => match r.error_for_status_ref() {
+                    Ok(_) if r.status().is_success() => return Ok(r),
+                    Ok(r) if r.status() == StatusCode::NOT_MODIFIED => {
+                        return Err(Error::Client {
+                            body: None,
+                            status: StatusCode::NOT_MODIFIED,
+                        })
+                    }
+                    Ok(r) => {
+                        let is_bare_redirect = r.status().is_redirection() && !r.headers().contains_key(LOCATION);
+                        return match is_bare_redirect {
+                            true => Err(Error::BareRedirect),
+                            // Not actually sure if this is reachable, but here for completeness
+                            false => Err(Error::Client {
                                 body: None,
-                                status: StatusCode::NOT_MODIFIED,
+                                status: r.status(),
                             })
                         }
-                        Ok(r) => {
-                            let is_bare_redirect = r.status().is_redirection() && !r.headers().contains_key(LOCATION);
-                            return match is_bare_redirect {
-                                true => Err(Error::BareRedirect),
-                                // Not actually sure if this is reachable, but here for completeness
-                                false => Err(Error::Client {
-                                    body: None,
-                                    status: r.status(),
-                                })
-                            }
-                        }
-                        Err(e) => {
-                            let status = r.status();
-                            if retries == max_retries
-                                || now.elapsed() > retry_timeout
-                                || !status.is_server_error() {
-
-                                return Err(match status.is_client_error() {
-                                    true => match r.text().await {
-                                        Ok(body) => {
-                                            Error::Client {
-                                                body: Some(body).filter(|b| !b.is_empty()),
-                                                status,
-                                            }
-                                        }
-                                        Err(e) => {
-                                            Error::Reqwest {
-                                                retries,
-                                                max_retries,
-                                                elapsed: now.elapsed(),
-                                                retry_timeout,
-                                                source: e,
-                                            }
-                                        }
-                                    }
-                                    false => Error::Reqwest {
-                                        retries,
-                                        max_retries,
-                                        elapsed: now.elapsed(),
-                                        retry_timeout,
-                                        source: e,
-                                    }
-                                });
-                            }
-
-                            let sleep = backoff.next();
-                            retries += 1;
-                            info!(
-                                "Encountered server error, backing off for {} seconds, retry {} of {}: {}",
-                                sleep.as_secs_f32(),
-                                retries,
-                                max_retries,
-                                e,
-                            );
-                            tokio::time::sleep(sleep).await;
-                        }
-                    },
-                    Err(e) =>
-                    {
-                        let mut do_retry = false;
-                        if e.is_connect() || ( req.method().is_safe() && e.is_timeout()) {
-                            do_retry = true
-                        } else {
-                            let mut source = e.source();
-                            while let Some(e) = source {
-                                if let Some(e) = e.downcast_ref::<hyper::Error>() {
-                                    do_retry = e.is_closed() || e.is_incomplete_message();
-                                    break
-                                }
-                                source = e.source();
-                            }
-                        }
-
+                    }
+                    Err(e) => {
+                        let status = r.status();
                         if retries == max_retries
                             || now.elapsed() > retry_timeout
-                            || !do_retry {
+                            || !status.is_server_error() {
 
-                            return Err(Error::Reqwest {
-                                retries,
-                                max_retries,
-                                elapsed: now.elapsed(),
-                                retry_timeout,
-                                source: e,
-                            })
+                            return Err(match status.is_client_error() {
+                                true => match r.text().await {
+                                    Ok(body) => {
+                                        Error::Client {
+                                            body: Some(body).filter(|b| !b.is_empty()),
+                                            status,
+                                        }
+                                    }
+                                    Err(e) => {
+                                        Error::Reqwest {
+                                            retries,
+                                            max_retries,
+                                            elapsed: now.elapsed(),
+                                            retry_timeout,
+                                            source: e,
+                                        }
+                                    }
+                                }
+                                false => Error::Reqwest {
+                                    retries,
+                                    max_retries,
+                                    elapsed: now.elapsed(),
+                                    retry_timeout,
+                                    source: e,
+                                }
+                            });
                         }
+
                         let sleep = backoff.next();
                         retries += 1;
                         info!(
-                            "Encountered transport error backing off for {} seconds, retry {} of {}: {}", 
+                            "Encountered server error, backing off for {} seconds, retry {} of {}: {}",
                             sleep.as_secs_f32(),
                             retries,
                             max_retries,
@@ -295,10 +250,102 @@ impl RetryExt for reqwest::RequestBuilder {
                         );
                         tokio::time::sleep(sleep).await;
                     }
+                },
+                Err(e) =>
+                {
+                    let mut do_retry = false;
+                    if e.is_connect()
+                        || e.is_body()
+                        || (e.is_request() && !e.is_timeout())
+                        || (is_idempotent && e.is_timeout()) {
+                        do_retry = true
+                    } else {
+                        let mut source = e.source();
+                        while let Some(e) = source {
+                            if let Some(e) = e.downcast_ref::<hyper::Error>() {
+                                do_retry = e.is_closed()
+                                    || e.is_incomplete_message()
+                                    || e.is_body_write_aborted()
+                                    || (is_idempotent && e.is_timeout());
+                                break
+                            }
+                            if let Some(e) = e.downcast_ref::<std::io::Error>() {
+                                if e.kind() == std::io::ErrorKind::TimedOut {
+                                    do_retry = is_idempotent;
+                                } else {
+                                    do_retry = matches!(
+                                        e.kind(),
+                                        std::io::ErrorKind::ConnectionReset
+                                        | std::io::ErrorKind::ConnectionAborted
+                                        | std::io::ErrorKind::BrokenPipe
+                                        | std::io::ErrorKind::UnexpectedEof
+                                    );
+                                }
+                                break;
+                            }
+                            source = e.source();
+                        }
+                    }
+
+                    if retries == max_retries
+                        || now.elapsed() > retry_timeout
+                        || !do_retry {
+
+                        return Err(Error::Reqwest {
+                            retries,
+                            max_retries,
+                            elapsed: now.elapsed(),
+                            retry_timeout,
+                            source: e,
+                        })
+                    }
+                    let sleep = backoff.next();
+                    retries += 1;
+                    info!(
+                        "Encountered transport error backing off for {} seconds, retry {} of {}: {}",
+                        sleep.as_secs_f32(),
+                        retries,
+                        max_retries,
+                        e,
+                    );
+                    tokio::time::sleep(sleep).await;
                 }
             }
         }
-        .boxed()
+    }
+    .boxed()
+}
+
+pub trait RetryExt {
+    /// Dispatch a request with the given retry configuration
+    ///
+    /// # Panic
+    ///
+    /// This will panic if the request body is a stream
+    fn send_retry(self, config: &RetryConfig) -> BoxFuture<'static, Result<Response>>;
+
+    /// Dispatch a request with the given retry configuration and idempotency
+    ///
+    /// # Panic
+    ///
+    /// This will panic if the request body is a stream
+    fn send_retry_with_idempotency(
+        self,
+        config: &RetryConfig,
+        is_idempotent: bool,
+    ) -> BoxFuture<'static, Result<Response>>;
+}
+
+impl RetryExt for reqwest::RequestBuilder {
+    fn send_retry(self, config: &RetryConfig) -> BoxFuture<'static, Result<Response>> {
+        send_retry_impl(self, config, None)
+    }
+    fn send_retry_with_idempotency(
+        self,
+        config: &RetryConfig,
+        is_idempotent: bool,
+    ) -> BoxFuture<'static, Result<Response>> {
+        send_retry_impl(self, config, Some(is_idempotent))
     }
 }
 

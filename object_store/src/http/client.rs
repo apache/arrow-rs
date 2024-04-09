@@ -189,7 +189,7 @@ impl Client {
             .client
             .request(method, url)
             .header("Depth", depth)
-            .send_retry(&self.retry_config)
+            .send_retry_with_idempotency(&self.retry_config, true)
             .await;
 
         let response = match result {

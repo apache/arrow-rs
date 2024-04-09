@@ -517,7 +517,7 @@ async fn instance_creds(
     let token_result = client
         .request(Method::PUT, token_url)
         .header("X-aws-ec2-metadata-token-ttl-seconds", "600") // 10 minute TTL
-        .send_retry(retry_config)
+        .send_retry_with_idempotency(retry_config, true)
         .await;
 
     let token = match token_result {
@@ -607,7 +607,7 @@ async fn web_identity(
             ("Version", "2011-06-15"),
             ("WebIdentityToken", &token),
         ])
-        .send_retry(retry_config)
+        .send_retry_with_idempotency(retry_config, true)
         .await?
         .bytes()
         .await?;

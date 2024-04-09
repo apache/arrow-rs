@@ -159,7 +159,7 @@ impl ObjectStore for AmazonS3 {
         }
 
         match (opts.mode, &self.client.config.conditional_put) {
-            (PutMode::Overwrite, _) => request.do_put().await,
+            (PutMode::Overwrite, _) => request.set_idempotent(true).do_put().await,
             (PutMode::Create | PutMode::Update(_), None) => Err(Error::NotImplemented),
             (PutMode::Create, Some(S3ConditionalPut::ETagMatch)) => {
                 match request.header(&IF_NONE_MATCH, "*").do_put().await {
@@ -268,7 +268,11 @@ impl ObjectStore for AmazonS3 {
     }
 
     async fn copy(&self, from: &Path, to: &Path) -> Result<()> {
-        self.client.copy_request(from, to).send().await?;
+        self.client
+            .copy_request(from, to)
+            .set_idempotent(true)
+            .send()
+            .await?;
         Ok(())
     }
 

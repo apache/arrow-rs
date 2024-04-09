@@ -623,7 +623,7 @@ impl TokenProvider for AuthorizedUserCredentials {
                 ("client_secret", &self.client_secret),
                 ("refresh_token", &self.refresh_token),
             ])
-            .send_retry(retry)
+            .send_retry_with_idempotency(retry, true)
             .await
             .context(TokenRequestSnafu)?
             .json::<TokenResponse>()
@@ -709,12 +709,12 @@ impl GCSAuthorizer {
     /// Canonicalizes query parameters into the GCP canonical form
     /// form like:
     ///```plaintext
-    ///HTTP_VERB  
-    ///PATH_TO_RESOURCE  
-    ///CANONICAL_QUERY_STRING  
-    ///CANONICAL_HEADERS  
+    ///HTTP_VERB
+    ///PATH_TO_RESOURCE
+    ///CANONICAL_QUERY_STRING
+    ///CANONICAL_HEADERS
     ///
-    ///SIGNED_HEADERS  
+    ///SIGNED_HEADERS
     ///PAYLOAD
     ///```
     ///
@@ -780,9 +780,9 @@ impl GCSAuthorizer {
     ///construct the string to sign
     ///form like:
     ///```plaintext
-    ///SIGNING_ALGORITHM  
-    ///ACTIVE_DATETIME  
-    ///CREDENTIAL_SCOPE  
+    ///SIGNING_ALGORITHM
+    ///ACTIVE_DATETIME
+    ///CREDENTIAL_SCOPE
     ///HASHED_CANONICAL_REQUEST
     ///```
     ///`ACTIVE_DATETIME` format:`YYYYMMDD'T'HHMMSS'Z'`

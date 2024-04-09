@@ -186,7 +186,11 @@ impl DynamoCommit {
         to: &Path,
     ) -> Result<()> {
         self.conditional_op(client, to, None, || async {
-            client.copy_request(from, to).send().await?;
+            client
+                .copy_request(from, to)
+                .set_idempotent(false)
+                .send()
+                .await?;
             Ok(())
         })
         .await
