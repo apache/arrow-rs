@@ -245,7 +245,7 @@
 //! # }
 //! ```
 //!
-//! #  Put Object
+//! # Put Object
 //!
 //! Use the [`ObjectStore::put`] method to atomically write data.
 //!
@@ -266,7 +266,7 @@
 //! # }
 //! ```
 //!
-//! #  Multipart Upload
+//! # Multipart Upload
 //!
 //! Use the [`ObjectStore::put_multipart`] method to atomically write a large amount of data
 //!
@@ -316,6 +316,48 @@
 //! let ranges = object_store.get_ranges(&path, &[90..100, 400..600, 0..10]).await.unwrap();
 //! assert_eq!(ranges.len(), 3);
 //! assert_eq!(ranges[0].len(), 10);
+//! # }
+//! ```
+//!
+//! # Vectored Write
+//!
+//! When writing data it is often the case that the size of the output is not known ahead of time.
+//!
+//! A common approach to handling this is to bump-allocate a `Vec`, whereby the underlying
+//! allocation is repeatedly reallocated, each time doubling the capacity. The performance of
+//! this is suboptimal as reallocating memory will often involve copying it to a new location.
+//!
+//! Fortunately, as [`PutPayload`] does not require memory regions to be contiguous, it is
+//! possible to instead allocate memory in chunks and avoid bump allocating. [`PutPayloadMut`]
+//! encapsulates this approach
+//!
+//! ```
+//! # use object_store::local::LocalFileSystem;
+//! # use object_store::{ObjectStore, PutPayloadMut};
+//! # use std::sync::Arc;
+//! # use bytes::Bytes;
+//! # use tokio::io::AsyncWriteExt;
+//! # use object_store::path::Path;
+//! # fn get_object_store() -> Arc<dyn ObjectStore> {
+//! #   Arc::new(LocalFileSystem::new())
+//! # }
+//! # async fn multi_upload() {
+//! #
+//! let object_store: Arc<dyn ObjectStore> = get_object_store();
+//! let path = Path::from("data/large_file");
+//! let mut buffer = PutPayloadMut::new().with_block_size(8192);
+//! for _ in 0..22 {
+//!     buffer.extend_from_slice(&[0; 1024]);
+//! }
+//! let payload = buffer.freeze();
+//!
+//! // Payload consists of 3 separate 8KB allocations
+//! assert_eq!(payload.as_ref().len(), 3);
+//! assert_eq!(payload.as_ref()[0].len(), 8192);
+//! assert_eq!(payload.as_ref()[1].len(), 8192);
+//! assert_eq!(payload.as_ref()[2].len(), 6144);
+//!
+//! object_store.put(&path, payload).await.unwrap();
 //! # }
 //! ```
 //!
