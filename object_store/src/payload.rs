@@ -189,7 +189,7 @@ pub struct PutPayloadMut {
     len: usize,
     completed: Vec<Bytes>,
     in_progress: Vec<u8>,
-    min_block_size: usize,
+    min_alloc: usize,
 }
 
 impl Default for PutPayloadMut {
@@ -199,7 +199,7 @@ impl Default for PutPayloadMut {
             completed: vec![],
             in_progress: vec![],
 
-            min_block_size: 8 * 1024,
+            min_alloc: 8 * 1024,
         }
     }
 }
@@ -211,11 +211,10 @@ impl PutPayloadMut {
     }
 
     /// Override the minimum allocation size
-    pub(crate) fn with_block_size(self, min_block_size: usize) -> Self {
-        Self {
-            min_block_size,
-            ..self
-        }
+    ///
+    /// Defaults to 8KB
+    pub fn with_minimum_allocation_size(self, min_alloc: usize) -> Self {
+        Self { min_alloc, ..self }
     }
 
     /// Write bytes into this [`PutPayloadMut`]
@@ -225,7 +224,7 @@ impl PutPayloadMut {
 
         self.in_progress.extend_from_slice(&slice[..to_copy]);
         if self.in_progress.capacity() == self.in_progress.len() {
-            let new_cap = self.min_block_size.max(slice.len() - to_copy);
+            let new_cap = self.min_alloc.max(slice.len() - to_copy);
             let completed = std::mem::replace(&mut self.in_progress, Vec::with_capacity(new_cap));
             if !completed.is_empty() {
                 self.completed.push(completed.into())
@@ -256,6 +255,7 @@ impl PutPayloadMut {
         self.len
     }
 
+    /// Convert into [`PutPayload`]
     pub fn freeze(mut self) -> PutPayload {
         if !self.in_progress.is_empty() {
             let completed = std::mem::take(&mut self.in_progress).into();
@@ -277,7 +277,7 @@ mod test {
 
     #[test]
     fn test_put_payload() {
-        let mut chunk = PutPayloadMut::new().with_block_size(23);
+        let mut chunk = PutPayloadMut::new().with_minimum_allocation_size(23);
         chunk.extend_from_slice(&[1; 16]);
         chunk.extend_from_slice(&[2; 32]);
         chunk.extend_from_slice(&[2; 5]);
