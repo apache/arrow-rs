@@ -19,7 +19,7 @@ use crate::builder::ArrayBuilder;
 use crate::types::{BinaryViewType, ByteViewType, StringViewType};
 use crate::{ArrayRef, GenericByteViewArray};
 use arrow_buffer::{Buffer, BufferBuilder, NullBufferBuilder, ScalarBuffer};
-use arrow_data::ByteView;
+use arrow_data::{OffsetViewBuilder, OwnedView};
 
 use std::any::Any;
 use std::marker::PhantomData;
@@ -72,35 +72,28 @@ impl<T: ByteViewType + ?Sized> GenericByteViewBuilder<T> {
     #[inline]
     pub fn append_value(&mut self, value: impl AsRef<T::Native>) {
         let v: &[u8] = value.as_ref().as_ref();
-        let length: u32 = v.len().try_into().unwrap();
-        if length <= 12 {
-            let mut view_buffer = [0; 16];
-            view_buffer[0..4].copy_from_slice(&length.to_le_bytes());
-            view_buffer[4..4 + v.len()].copy_from_slice(v);
-            self.views_builder.append(u128::from_le_bytes(view_buffer));
-            self.null_buffer_builder.append_non_null();
-            return;
-        }
 
-        let required_cap = self.in_progress.len() + v.len();
-        if self.in_progress.capacity() < required_cap {
-            let in_progress = Vec::with_capacity(v.len().max(self.block_size as usize));
-            let flushed = std::mem::replace(&mut self.in_progress, in_progress);
-            if !flushed.is_empty() {
-                assert!(self.completed.len() < u32::MAX as usize);
-                self.completed.push(flushed.into());
+        let view: u128 = match OwnedView::from(v) {
+            OwnedView::Inline(view) => view,
+            OwnedView::Offset(view) => {
+                let required_cap = self.in_progress.len() + v.len();
+                if self.in_progress.capacity() < required_cap {
+                    let in_progress = Vec::with_capacity(v.len().max(self.block_size as usize));
+                    let flushed = std::mem::replace(&mut self.in_progress, in_progress);
+                    if !flushed.is_empty() {
+                        assert!(self.completed.len() < u32::MAX as usize);
+                        self.completed.push(flushed.into());
+                    }
+                };
+                let builder = OffsetViewBuilder::from(view)
+                    .with_offset(self.in_progress.len() as u32)
+                    .with_buffer_index(self.completed.len() as u32);
+                // copy the actual data into the in_progress buffer
+                self.in_progress.extend_from_slice(v);
+                builder.into()
             }
         };
-        let offset = self.in_progress.len() as u32;
-        self.in_progress.extend_from_slice(v);
-
-        let view = ByteView {
-            length,
-            prefix: u32::from_le_bytes(v[0..4].try_into().unwrap()),
-            buffer_index: self.completed.len() as u32,
-            offset,
-        };
-        self.views_builder.append(view.into());
+        self.views_builder.append(view);
         self.null_buffer_builder.append_non_null();
     }
 

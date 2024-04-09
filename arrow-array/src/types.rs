@@ -1425,10 +1425,19 @@ pub(crate) mod bytes {
     impl<O: OffsetSizeTrait> ByteArrayTypeSealed for GenericBinaryType<O> {}
 
     pub trait ByteArrayNativeType: std::fmt::Debug + Send + Sync {
+        /// Covert bytes to this native type
+        ///
         /// # Safety
         ///
         /// `b` must be a valid byte sequence for `Self`
         unsafe fn from_bytes_unchecked(b: &[u8]) -> &Self;
+
+        /// Covert bytes to this native type
+        ///
+        /// # Errors
+        ///
+        /// `b` is not  a valid byte sequence for `Self` (e.g. not UTF8)
+        fn try_from_bytes(b: &[u8]) -> Result<&Self, ArrowError>;
     }
 
     impl ByteArrayNativeType for [u8] {
@@ -1436,12 +1445,24 @@ pub(crate) mod bytes {
         unsafe fn from_bytes_unchecked(b: &[u8]) -> &Self {
             b
         }
+
+        #[inline]
+        fn try_from_bytes(b: &[u8]) -> Result<&Self, ArrowError> {
+            Ok(b)
+        }
     }
 
     impl ByteArrayNativeType for str {
         #[inline]
         unsafe fn from_bytes_unchecked(b: &[u8]) -> &Self {
             std::str::from_utf8_unchecked(b)
+        }
+
+        #[inline]
+        fn try_from_bytes(b: &[u8]) -> Result<&Self, ArrowError> {
+            std::str::from_utf8(b).map_err(|e| {
+                ArrowError::InvalidArgumentError(format!("Encountered non UTF-8 data: {e}"))
+            })
         }
     }
 }

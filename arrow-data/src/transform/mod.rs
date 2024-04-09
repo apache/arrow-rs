@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use super::{data::new_buffers, ArrayData, ArrayDataBuilder, ByteView};
+use super::{data::new_buffers, ArrayData, ArrayDataBuilder, View};
 use crate::bit_mask::set_bits;
 use arrow_buffer::buffer::{BooleanBuffer, NullBuffer};
 use arrow_buffer::{bit_util, i256, ArrowNativeType, Buffer, MutableBuffer};
@@ -178,13 +178,17 @@ fn build_extend_view(array: &ArrayData, buffer_offset: u32) -> Extend {
             mutable
                 .buffer1
                 .extend(views[start..start + len].iter().map(|v| {
-                    let len = *v as u32;
-                    if len <= 12 {
-                        return *v; // Stored inline
-                    }
-                    let mut view = ByteView::from(*v);
-                    view.buffer_index += buffer_offset;
-                    view.into()
+                    let new_view: u128 = match View::from(v) {
+                        View::Inline(inline_view) => inline_view.into(),
+                        View::Offset(offset_view) => {
+                            let buffer_index = offset_view.buffer_index() + buffer_offset;
+                            offset_view
+                                .into_builder()
+                                .with_buffer_index(buffer_index)
+                                .build()
+                        }
+                    };
+                    new_view
                 }))
         },
     )
