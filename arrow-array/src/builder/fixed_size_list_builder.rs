@@ -18,8 +18,7 @@
 use crate::builder::ArrayBuilder;
 use crate::{ArrayRef, FixedSizeListArray};
 use arrow_buffer::NullBufferBuilder;
-use arrow_data::ArrayData;
-use arrow_schema::{DataType, Field, FieldRef};
+use arrow_schema::{Field, FieldRef};
 use std::any::Any;
 use std::sync::Arc;
 
@@ -94,9 +93,9 @@ impl<T: ArrayBuilder> FixedSizeListBuilder<T> {
         }
     }
 
-    /// Override the field passed to [`ArrayData::builder`]
+    /// Override the field passed to [`FixedSizeListArray::new`]
     ///
-    /// By default a nullable field is created with the name `item`
+    /// By default, a nullable field is created with the name `item`
     ///
     /// Note: [`Self::finish`] and [`Self::finish_cloned`] will panic if the
     /// field's data type does not match that of `T`
@@ -169,116 +168,52 @@ where
     /// Builds the [`FixedSizeListBuilder`] and reset this builder.
     pub fn finish(&mut self) -> FixedSizeListArray {
         let len = self.len();
-        let values_arr = self.values_builder.finish();
-        let values_data = values_arr.to_data();
+        let values = self.values_builder.finish();
+        let nulls = self.null_buffer_builder.finish();
 
         assert_eq!(
-            values_data.len(), len * self.list_len as usize,
+            values.len(), len * self.list_len as usize,
             "Length of the child array ({}) must be the multiple of the value length ({}) and the array length ({}).",
-            values_data.len(),
+            values.len(),
             self.list_len,
             len,
         );
 
-        let nulls = self.null_buffer_builder.finish();
+        let field = self
+            .field
+            .clone()
+            .unwrap_or_else(|| Arc::new(Field::new("item", values.data_type().clone(), true)));
 
-        let field = match &self.field {
-            Some(f) => {
-                let size = self.value_length();
-                assert_eq!(
-                    f.data_type(),
-                    values_data.data_type(),
-                    "DataType of field ({}) should be the same as the values_builder DataType ({})",
-                    f.data_type(),
-                    values_data.data_type()
-                );
-
-                if let Some(a) = values_arr.logical_nulls() {
-                    let nulls_valid = f.is_nullable()
-                        || nulls
-                            .as_ref()
-                            .map(|n| n.expand(size as _).contains(&a))
-                            .unwrap_or_default();
-
-                    assert!(
-                        nulls_valid,
-                        "Found unmasked nulls for non-nullable FixedSizeListBuilder field {:?}",
-                        f.name()
-                    );
-                }
-                f.clone()
-            }
-            None => Arc::new(Field::new("item", values_data.data_type().clone(), true)),
-        };
-
-        let array_data = ArrayData::builder(DataType::FixedSizeList(field, self.list_len))
-            .len(len)
-            .add_child_data(values_data)
-            .nulls(nulls);
-
-        let array_data = unsafe { array_data.build_unchecked() };
-
-        FixedSizeListArray::from(array_data)
+        FixedSizeListArray::new(field, self.list_len, values, nulls)
     }
 
     /// Builds the [`FixedSizeListBuilder`] without resetting the builder.
     pub fn finish_cloned(&self) -> FixedSizeListArray {
         let len = self.len();
-        let values_arr = self.values_builder.finish_cloned();
-        let values_data = values_arr.to_data();
+        let values = self.values_builder.finish_cloned();
+        let nulls = self.null_buffer_builder.finish_cloned();
 
         assert_eq!(
-            values_data.len(), len * self.list_len as usize,
+            values.len(), len * self.list_len as usize,
             "Length of the child array ({}) must be the multiple of the value length ({}) and the array length ({}).",
-            values_data.len(),
+            values.len(),
             self.list_len,
             len,
         );
 
-        let nulls = self.null_buffer_builder.finish_cloned();
+        let field = self
+            .field
+            .clone()
+            .unwrap_or_else(|| Arc::new(Field::new("item", values.data_type().clone(), true)));
 
-        let field = match &self.field {
-            Some(f) => {
-                let size = self.value_length();
-                assert_eq!(
-                    f.data_type(),
-                    values_data.data_type(),
-                    "DataType of field ({}) should be the same as the values_builder DataType ({})",
-                    f.data_type(),
-                    values_data.data_type()
-                );
-                if let Some(a) = values_arr.logical_nulls() {
-                    let nulls_valid = f.is_nullable()
-                        || nulls
-                            .as_ref()
-                            .map(|n| n.expand(size as _).contains(&a))
-                            .unwrap_or_default();
-
-                    assert!(
-                        nulls_valid,
-                        "Found unmasked nulls for non-nullable FixedSizeListBuilder field {:?}",
-                        f.name()
-                    );
-                }
-                f.clone()
-            }
-            None => Arc::new(Field::new("item", values_data.data_type().clone(), true)),
-        };
-
-        let array_data = ArrayData::builder(DataType::FixedSizeList(field, self.list_len))
-            .len(len)
-            .add_child_data(values_data)
-            .nulls(nulls);
-
-        let array_data = unsafe { array_data.build_unchecked() };
-
-        FixedSizeListArray::from(array_data)
+        FixedSizeListArray::new(field, self.list_len, values, nulls)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use arrow_schema::DataType;
 
     use crate::builder::Int32Builder;
     use crate::Array;
@@ -368,7 +303,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "Found unmasked nulls for non-nullable FixedSizeListBuilder field")]
+    #[should_panic(expected = "Found unmasked nulls for non-nullable FixedSizeListArray")]
     fn test_fixed_size_list_array_builder_with_field_null_panic() {
         let builder = make_list_builder(true, true);
         let mut builder = builder.with_field(Field::new("list_item", DataType::Int32, false));
@@ -377,9 +312,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(
-        expected = "DataType of field (Int64) should be the same as the values_builder DataType (Int32)"
-    )]
+    #[should_panic(expected = "FixedSizeListArray expected data type Int64 got Int32")]
     fn test_fixed_size_list_array_builder_with_field_type_panic() {
         let values_builder = Int32Builder::new();
         let builder = FixedSizeListBuilder::new(values_builder, 3);
@@ -417,7 +350,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "Found unmasked nulls for non-nullable FixedSizeListBuilder field")]
+    #[should_panic(expected = "Found unmasked nulls for non-nullable FixedSizeListArray")]
     fn test_fixed_size_list_array_builder_cloned_with_field_null_panic() {
         let builder = make_list_builder(true, true);
         let builder = builder.with_field(Field::new("list_item", DataType::Int32, false));
@@ -439,9 +372,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(
-        expected = "DataType of field (Int64) should be the same as the values_builder DataType (Int32)"
-    )]
+    #[should_panic(expected = "FixedSizeListArray expected data type Int64 got Int32")]
     fn test_fixed_size_list_array_builder_cloned_with_field_type_panic() {
         let builder = make_list_builder(false, false);
         let builder = builder.with_field(Field::new("list_item", DataType::Int64, true));
