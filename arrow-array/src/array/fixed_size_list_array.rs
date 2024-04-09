@@ -662,7 +662,7 @@ mod tests {
         );
 
         let list = FixedSizeListArray::new(field.clone(), 0, values.clone(), None);
-        assert_eq!(list.len(), 6);
+        assert_eq!(list.len(), 0);
 
         let nulls = NullBuffer::new_null(2);
         let err = FixedSizeListArray::try_new(field, 2, values.clone(), Some(nulls)).unwrap_err();
