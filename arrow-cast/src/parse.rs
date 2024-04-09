@@ -761,7 +761,7 @@ fn parse_e_notation<T: DecimalType> (
 
 
     if exp < 0 {
-        result = result.div_wrapping(base.pow_wrapping((exp * -1) as _));
+        result = result.div_wrapping(base.pow_wrapping(-exp as _));
     } else {
         result = result.mul_wrapping(base.pow_wrapping(exp as _));
     }
@@ -818,11 +818,11 @@ pub fn parse_decimal<T: DecimalType>(
                         if *b == b'e' || *b == b'E' {
                             result = match parse_e_notation::<T>(
                                 s,
-                                digits.clone() as u16,
-                                fractionals.clone() as i16,
+                                digits as u16,
+                                fractionals as i16,
                                 result,
-                                precision.clone() as u16,
-                                scale.clone() as i16,
+                                precision as u16,
+                                scale as i16,
                             ) {
                                 Err(e) => return Err(e),
                                 Ok(v) => v
@@ -862,11 +862,11 @@ pub fn parse_decimal<T: DecimalType>(
             b'e' | b'E' => {
                 result = match parse_e_notation::<T>(
                     s,
-                    digits.clone() as u16,
-                    fractionals.clone() as i16,
+                    digits as u16,
+                    fractionals as i16,
                     result,
-                    precision.clone() as u16,
-                    scale.clone() as i16
+                    precision as u16,
+                    scale as i16
                 ) {
                     Err(e) => return Err(e),
                     Ok(v) => v
