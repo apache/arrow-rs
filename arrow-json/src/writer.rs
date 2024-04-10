@@ -833,7 +833,9 @@ mod tests {
 
     use serde_json::json;
 
-    use arrow_array::builder::{Int32Builder, Int64Builder, MapBuilder, StringBuilder};
+    use arrow_array::builder::{
+        FixedSizeBinaryBuilder, Int32Builder, Int64Builder, MapBuilder, StringBuilder,
+    };
     use arrow_buffer::{Buffer, NullBuffer, OffsetBuffer, ToByteSlice};
     use arrow_data::ArrayData;
 
@@ -2136,5 +2138,33 @@ mod tests {
         assert_eq!(actual, expected);
 
         Ok(())
+    }
+
+    #[test]
+    fn test_writer_fixed_size_binary() {
+        let size = 32;
+        let schema = SchemaRef::new(Schema::new(vec![Field::new(
+            "bytes",
+            DataType::FixedSizeBinary(size),
+            false,
+        )]));
+
+        let mut builder = FixedSizeBinaryBuilder::new(size);
+        let v = hex::decode("a948904f2f0f479b8f8197694b30184b0d2ed1c1cd2a1ec0fb85d299a192a447")
+            .unwrap();
+        builder.append_value(v).unwrap();
+        let array = Arc::new(builder.finish()) as ArrayRef;
+        let batch = RecordBatch::try_new(schema, vec![array]).unwrap();
+
+        let mut buf = Vec::new();
+        {
+            let mut writer = LineDelimitedWriter::new(&mut buf);
+            writer.write(&batch).unwrap();
+        }
+
+        assert_eq!(
+            "{\"bytes\":a948904f2f0f479b8f8197694b30184b0d2ed1c1cd2a1ec0fb85d299a192a447}\n",
+            String::from_utf8(buf).unwrap()
+        );
     }
 }

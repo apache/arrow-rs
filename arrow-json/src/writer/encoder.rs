@@ -99,6 +99,11 @@ fn make_encoder_impl<'a>(
             (Box::new(MapEncoder::try_new(array, options)?) as _,  array.nulls().cloned())
         }
 
+        DataType::FixedSizeBinary(_) => {
+            let array = array.as_any().downcast_ref::<FixedSizeBinaryArray>().unwrap();
+            (Box::new(FixedSizeBinaryEncoder(array.clone())) as _, array.nulls().cloned())
+        }
+
         DataType::Struct(fields) => {
             let array = array.as_struct();
             let encoders = fields.iter().zip(array.columns()).map(|(field, array)| {
@@ -441,5 +446,17 @@ impl<'a> Encoder for MapEncoder<'a> {
             }
         }
         out.push(b'}');
+    }
+}
+
+struct FixedSizeBinaryEncoder(FixedSizeBinaryArray);
+
+impl Encoder for FixedSizeBinaryEncoder {
+    fn encode(&mut self, idx: usize, out: &mut Vec<u8>) {
+        let v = self.0.value(idx);
+        for byte in v {
+            // this write is infallible
+            write!(out, "{byte:02x}").unwrap();
+        }
     }
 }
