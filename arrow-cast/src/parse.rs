@@ -676,6 +676,7 @@ fn parse_e_notation<T: DecimalType>(
     mut digits: u16,
     mut fractionals: i16,
     mut result: T::Native,
+    index: usize,
     precision: u16,
     scale: i16,
 ) -> Result<T::Native, ArrowError> {
@@ -685,18 +686,15 @@ fn parse_e_notation<T: DecimalType>(
     let mut exp_start: bool = false;
     // e has a plus sign
     let mut pos_shift_direction: bool = true;
-    let mut bs;
 
-    // no fractional part
-    if fractionals == 0 {
-        bs = s.as_bytes().iter().skip(digits as usize)
+    // skip to point or exponent index
+    let mut bs;
+    if fractionals > 0 {
+        // it's a fraction, so the point index needs to be skipped, so +1
+        bs = s.as_bytes().iter().skip(index + fractionals as usize + 1);
     } else {
-        // digits + 1 because of the period in the string
-        bs = s.as_bytes().iter().skip((digits + 1) as usize);
-        // check for leading 0, because in parse_decimal function zeros before the period are not counted
-        if digits == fractionals as u16 {
-            bs.next();
-        };
+        // it's actually an integer that is already written into the result, so let's skip on to e
+        bs = s.as_bytes().iter().skip(index);
     }
 
     while let Some(b) = bs.next() {
@@ -769,7 +767,7 @@ fn parse_e_notation<T: DecimalType>(
         exp *= -1;
     }
 
-    // period offset
+    // point offset
     exp = fractionals - exp;
     // We have zeros on the left, we need to count them
     if !pos_shift_direction && exp > digits as i16 {
@@ -818,13 +816,13 @@ pub fn parse_decimal<T: DecimalType>(
         )));
     }
 
-    let mut is_e_notation = false;
+    let mut bs = bs.iter().enumerate();
 
-    let mut bs = bs.iter();
+    let mut is_e_notation = false;
 
     // Overflow checks are not required if 10^(precision - 1) <= T::MAX holds.
     // Thus, if we validate the precision correctly, we can skip overflow checks.
-    while let Some(b) = bs.next() {
+    while let Some((index, b)) = bs.next() {
         match b {
             b'0'..=b'9' => {
                 if digits == 0 && *b == b'0' {
@@ -836,7 +834,9 @@ pub fn parse_decimal<T: DecimalType>(
                 result = result.add_wrapping(T::Native::usize_as((b - b'0') as usize));
             }
             b'.' => {
-                for b in bs.by_ref() {
+                let point_index = index;
+
+                for (_, b) in bs.by_ref() {
                     if !b.is_ascii_digit() {
                         if *b == b'e' || *b == b'E' {
                             result = match parse_e_notation::<T>(
@@ -844,6 +844,7 @@ pub fn parse_decimal<T: DecimalType>(
                                 digits as u16,
                                 fractionals as i16,
                                 result,
+                                point_index,
                                 precision as u16,
                                 scale as i16,
                             ) {
@@ -888,6 +889,7 @@ pub fn parse_decimal<T: DecimalType>(
                     digits as u16,
                     fractionals as i16,
                     result,
+                    index,
                     precision as u16,
                     scale as i16,
                 ) {
@@ -2371,6 +2373,7 @@ mod tests {
             let result_256 = parse_decimal::<Decimal256Type>(s, 20, 3);
             assert_eq!(i256::from_i128(i), result_256.unwrap());
         }
+
         let e_notation_tests = [
             ("1.23e3", "1230.0", 2),
             ("5.6714e+2", "567.14", 4),
@@ -2397,7 +2400,13 @@ mod tests {
             ("0E+6", "0", 10),
             ("1E-8", "0.00000001", 10),
             ("12E+6", "12000000", 10),
+            ("12E-6", "0.000012", 10),
             ("0.1e-6", "0.0000001", 10),
+            ("0.1e+6", "100000", 10),
+            ("0.12e-6", "0.00000012", 10),
+            ("0.12e+6", "120000", 10),
+            ("000000000001e0", "000000000001", 3),
+            ("000001.1034567002e0", "000001.1034567002", 3),
         ];
         for (e, d, scale) in e_notation_tests {
             let result_128_e = parse_decimal::<Decimal128Type>(e, 20, scale);
