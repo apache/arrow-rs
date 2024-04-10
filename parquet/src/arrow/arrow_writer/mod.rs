@@ -17,7 +17,9 @@
 
 //! Contains writer which writes arrow data into parquet data.
 
+use arrow_buffer::i256;
 use bytes::Bytes;
+use half::f16;
 use std::io::{Read, Write};
 use std::iter::Peekable;
 use std::slice::Iter;
@@ -26,7 +28,7 @@ use std::vec::IntoIter;
 use thrift::protocol::TCompactOutputProtocol;
 
 use arrow_array::cast::AsArray;
-use arrow_array::types::*;
+use arrow_array::{types::*, FixedSizeBinaryArray, Int32Array, Int64Array};
 use arrow_array::{ArrayRef, RecordBatch, RecordBatchWriter};
 use arrow_schema::{ArrowError, DataType as ArrowDataType, Field, IntervalUnit, SchemaRef};
 
@@ -739,88 +741,36 @@ fn get_arrow_column_writer(
 }
 
 fn write_leaf(writer: &mut ColumnWriter<'_>, levels: &ArrayLevels) -> Result<usize> {
+    use crate::basic::Type as ParquetType;
     let column = levels.array().as_ref();
     let indices = levels.non_null_indices();
     match writer {
         ColumnWriter::Int32ColumnWriter(ref mut typed) => {
-            match column.data_type() {
-                ArrowDataType::Date64 => {
-                    // If the column is a Date64, we cast it to a Date32, and then interpret that as Int32
-                    let array = arrow_cast::cast(column, &ArrowDataType::Date32)?;
-                    let array = arrow_cast::cast(&array, &ArrowDataType::Int32)?;
-
-                    let array = array.as_primitive::<Int32Type>();
-                    write_primitive(typed, array.values(), levels)
-                }
-                ArrowDataType::UInt32 => {
-                    let values = column.as_primitive::<UInt32Type>().values();
-                    // follow C++ implementation and use overflow/reinterpret cast from  u32 to i32 which will map
-                    // `(i32::MAX as u32)..u32::MAX` to `i32::MIN..0`
-                    let array = values.inner().typed_data::<i32>();
-                    write_primitive(typed, array, levels)
-                }
-                ArrowDataType::Decimal128(_, _) => {
-                    // use the int32 to represent the decimal with low precision
-                    let array = column
-                        .as_primitive::<Decimal128Type>()
-                        .unary::<_, Int32Type>(|v| v as i32);
-                    write_primitive(typed, array.values(), levels)
-                }
-                ArrowDataType::Decimal256(_, _) => {
-                    // use the int32 to represent the decimal with low precision
-                    let array = column
-                        .as_primitive::<Decimal256Type>()
-                        .unary::<_, Int32Type>(|v| v.as_i128() as i32);
-                    write_primitive(typed, array.values(), levels)
-                }
-                _ => {
-                    let array = arrow_cast::cast(column, &ArrowDataType::Int32)?;
-                    let array = array.as_primitive::<Int32Type>();
-                    write_primitive(typed, array.values(), levels)
-                }
-            }
+            let array = coerce_to_parquet_type(column, ParquetType::INT32)?;
+            let array = array.as_primitive::<Int32Type>();
+            write_primitive(typed, array.values(), levels)
         }
         ColumnWriter::BoolColumnWriter(ref mut typed) => {
-            let array = column.as_boolean();
-            typed.write_batch(
-                get_bool_array_slice(array, indices).as_slice(),
-                levels.def_levels(),
-                levels.rep_levels(),
-            )
+            // convert indices to boolean mask
+            let mask = to_boolean_mask(indices, column.len());
+
+            // apply mask
+            let array = arrow_select::filter::filter(column, &mask)?;
+
+            // coerce to parquet type
+            let array = coerce_to_parquet_type(array.as_ref(), ParquetType::BOOLEAN)?;
+
+            let array = array.as_boolean();
+            let values = array
+                .into_iter()
+                .map(Option::unwrap) // TODO: is this safe/necessary?
+                .collect::<Vec<bool>>();
+            typed.write_batch(values.as_slice(), levels.def_levels(), levels.rep_levels())
         }
         ColumnWriter::Int64ColumnWriter(ref mut typed) => {
-            match column.data_type() {
-                ArrowDataType::Int64 => {
-                    let array = column.as_primitive::<Int64Type>();
-                    write_primitive(typed, array.values(), levels)
-                }
-                ArrowDataType::UInt64 => {
-                    let values = column.as_primitive::<UInt64Type>().values();
-                    // follow C++ implementation and use overflow/reinterpret cast from  u64 to i64 which will map
-                    // `(i64::MAX as u64)..u64::MAX` to `i64::MIN..0`
-                    let array = values.inner().typed_data::<i64>();
-                    write_primitive(typed, array, levels)
-                }
-                ArrowDataType::Decimal128(_, _) => {
-                    // use the int64 to represent the decimal with low precision
-                    let array = column
-                        .as_primitive::<Decimal128Type>()
-                        .unary::<_, Int64Type>(|v| v as i64);
-                    write_primitive(typed, array.values(), levels)
-                }
-                ArrowDataType::Decimal256(_, _) => {
-                    // use the int64 to represent the decimal with low precision
-                    let array = column
-                        .as_primitive::<Decimal256Type>()
-                        .unary::<_, Int64Type>(|v| v.as_i128() as i64);
-                    write_primitive(typed, array.values(), levels)
-                }
-                _ => {
-                    let array = arrow_cast::cast(column, &ArrowDataType::Int64)?;
-                    let array = array.as_primitive::<Int64Type>();
-                    write_primitive(typed, array.values(), levels)
-                }
-            }
+            let array = coerce_to_parquet_type(column, ParquetType::INT64)?;
+            let array = array.as_primitive::<Int64Type>();
+            write_primitive(typed, array.values(), levels)
         }
         ColumnWriter::Int96ColumnWriter(ref mut _typed) => {
             unreachable!("Currently unreachable because data type not supported")
@@ -837,61 +787,282 @@ fn write_leaf(writer: &mut ColumnWriter<'_>, levels: &ArrayLevels) -> Result<usi
             unreachable!("should use ByteArrayWriter")
         }
         ColumnWriter::FixedLenByteArrayColumnWriter(ref mut typed) => {
-            let bytes = match column.data_type() {
-                ArrowDataType::Interval(interval_unit) => match interval_unit {
-                    IntervalUnit::YearMonth => {
-                        let array = column
-                            .as_any()
-                            .downcast_ref::<arrow_array::IntervalYearMonthArray>()
-                            .unwrap();
-                        get_interval_ym_array_slice(array, indices)
-                    }
-                    IntervalUnit::DayTime => {
-                        let array = column
-                            .as_any()
-                            .downcast_ref::<arrow_array::IntervalDayTimeArray>()
-                            .unwrap();
-                        get_interval_dt_array_slice(array, indices)
-                    }
-                    _ => {
-                        return Err(ParquetError::NYI(
-                            format!(
-                                "Attempting to write an Arrow interval type {interval_unit:?} to parquet that is not yet implemented"
-                            )
-                        ));
-                    }
-                },
-                ArrowDataType::FixedSizeBinary(_) => {
-                    let array = column
-                        .as_any()
-                        .downcast_ref::<arrow_array::FixedSizeBinaryArray>()
-                        .unwrap();
-                    get_fsb_array_slice(array, indices)
-                }
-                ArrowDataType::Decimal128(_, _) => {
-                    let array = column.as_primitive::<Decimal128Type>();
-                    get_decimal_128_array_slice(array, indices)
-                }
-                ArrowDataType::Decimal256(_, _) => {
-                    let array = column
-                        .as_any()
-                        .downcast_ref::<arrow_array::Decimal256Array>()
-                        .unwrap();
-                    get_decimal_256_array_slice(array, indices)
-                }
-                ArrowDataType::Float16 => {
-                    let array = column.as_primitive::<Float16Type>();
-                    get_float_16_array_slice(array, indices)
-                }
-                _ => {
-                    return Err(ParquetError::NYI(
-                        "Attempting to write an Arrow type that is not yet implemented".to_string(),
-                    ));
-                }
-            };
+            // convert indices to boolean mask
+            let mask = to_boolean_mask(indices, column.len());
+
+            // apply mask
+            let array = arrow_select::filter::filter(column, &mask)?;
+
+            // coerce to parquet type
+            let coerced = coerce_to_parquet_type(&array, ParquetType::FIXED_LEN_BYTE_ARRAY)?;
+
+            // convert to vec of FIXED_LEN_BYTE_ARRAY
+            let bytes = to_flb_arrays(coerced.as_fixed_size_binary());
+
             typed.write_batch(bytes.as_slice(), levels.def_levels(), levels.rep_levels())
         }
     }
+}
+
+use crate::basic::Type;
+use crate::bloom_filter::Sbbf;
+use arrow_array::{Array, BooleanArray};
+
+// TODO: some coercions do not need to copy data, should array & result params should have same lifetime? or use views?
+pub fn coerce_to_parquet_type(array: &dyn Array, parquet_type: Type) -> Result<ArrayRef> {
+    let result = match (array.data_type(), parquet_type) {
+        (ArrowDataType::UInt32, Type::INT32) => {
+            // TODO: revisit to reduce copies
+
+            let values = array.as_primitive::<UInt32Type>().values();
+            // follow C++ implementation and use overflow/reinterpret cast from  u32 to i32 which will map
+            // `(i32::MAX as u32)..u32::MAX` to `i32::MIN..0`
+            let coerced = values.inner().typed_data::<i32>();
+
+            Arc::new(Int32Array::from(Vec::from(coerced)))
+        }
+        (ArrowDataType::Date64, Type::INT32) => {
+            // If the column is a Date64, we cast it to a Date32, and then interpret that as Int32
+            let array = arrow_cast::cast(array, &ArrowDataType::Date32)?;
+            arrow_cast::cast(&array, &ArrowDataType::Int32)?
+        }
+        (ArrowDataType::Decimal128(_, _), Type::INT32) => {
+            // TODO: can do simple cast like other match arms?
+
+            // use the int32 to represent the decimal with low precision
+            let array = array
+                .as_primitive::<Decimal128Type>()
+                .unary::<_, Int32Type>(|v| v as i32);
+
+            Arc::new(array)
+        }
+        (ArrowDataType::Decimal128(_, _), Type::INT64) => {
+            // use the int64 to represent the decimal with low precision
+            let array = array
+                .as_primitive::<Decimal128Type>()
+                .unary::<_, Int64Type>(|v| v as i64);
+
+            Arc::new(array)
+        }
+        (ArrowDataType::Decimal256(_, _), Type::INT32) => {
+            // TODO: can do simple cast like other match arms?
+
+            // use the int32 to represent the decimal with low precision
+            let array = array
+                .as_primitive::<Decimal256Type>()
+                .unary::<_, Int32Type>(|v| v.as_i128() as i32);
+
+            Arc::new(array)
+        }
+        (ArrowDataType::Decimal256(_, _), Type::INT64) => {
+            // use the int64 to represent the decimal with low precision
+            let array = array
+                .as_primitive::<Decimal256Type>()
+                .unary::<_, Int64Type>(|v| v.as_i128() as i64);
+
+            Arc::new(array)
+        }
+        (ArrowDataType::Int64, Type::INT64) => {
+            // TODO: eliminate copy
+            let array = array.as_primitive::<Int64Type>();
+            Arc::new(array.clone())
+        }
+        (ArrowDataType::UInt64, Type::INT64) => {
+            // TODO: revisit to reduce copies
+
+            let values = array.as_primitive::<UInt64Type>().values();
+            // follow C++ implementation and use overflow/reinterpret cast from  u64 to i64 which will map
+            // `(i64::MAX as u64)..u64::MAX` to `i64::MIN..0`
+            let coerced = values.inner().typed_data::<i64>();
+
+            Arc::new(Int64Array::from(Vec::from(coerced)))
+        }
+        (ArrowDataType::Float16, Type::FIXED_LEN_BYTE_ARRAY) => {
+            let array = array.as_primitive::<Float16Type>();
+
+            let coerced: Vec<Option<Vec<u8>>> = array
+                .iter()
+                .map(|x| x.map(f16::to_le_bytes))
+                .map(|x| x.map(|y| y.to_vec())) // clone the data here
+                .collect();
+
+            let coerced_ref: Vec<Option<&[u8]>> = coerced
+                .iter()
+                .map(|x| x.as_ref().map(AsRef::as_ref))
+                .collect();
+
+            Arc::new(FixedSizeBinaryArray::try_from_sparse_iter_with_size(
+                coerced_ref.into_iter(),
+                2,
+            )?)
+        }
+        (ArrowDataType::Decimal128(_, _), Type::FIXED_LEN_BYTE_ARRAY) => {
+            let array = array.as_primitive::<Decimal128Type>();
+
+            let size = decimal_length_from_precision(array.precision());
+
+            let coerced: Vec<Option<Vec<u8>>> = array
+                .iter()
+                .map(|x| x.map(|y| to_dec_128_fsb(y, size)))
+                .collect();
+
+            let coerced_ref: Vec<Option<&[u8]>> = coerced
+                .iter()
+                .map(|x| x.as_ref().map(AsRef::as_ref))
+                .collect();
+
+            Arc::new(FixedSizeBinaryArray::try_from_sparse_iter_with_size(
+                coerced_ref.into_iter(),
+                size as i32,
+            )?)
+        }
+        (ArrowDataType::Decimal256(_, _), Type::FIXED_LEN_BYTE_ARRAY) => {
+            let array = array.as_primitive::<Decimal256Type>();
+
+            let size = decimal_length_from_precision(array.precision());
+
+            let coerced: Vec<Option<Vec<u8>>> = array
+                .iter()
+                .map(|x| x.map(|y| to_dec_256_fsb(y, size)))
+                .collect();
+
+            let coerced_ref: Vec<Option<&[u8]>> = coerced
+                .iter()
+                .map(|x| x.as_ref().map(AsRef::as_ref))
+                .collect();
+
+            Arc::new(FixedSizeBinaryArray::try_from_sparse_iter_with_size(
+                coerced_ref.into_iter(),
+                size as i32,
+            )?)
+        }
+        (ArrowDataType::Interval(IntervalUnit::YearMonth), Type::FIXED_LEN_BYTE_ARRAY) => {
+            let array = array
+                .as_any()
+                .downcast_ref::<arrow_array::IntervalYearMonthArray>()
+                .unwrap();
+
+            let coerced: Vec<Option<Vec<u8>>> = array
+                .iter()
+                .map(|x| x.map(to_interval_ym_fsb))
+                .map(|x| x.map(|y| y.to_vec())) // clone the data here
+                .collect();
+
+            let coerced_ref: Vec<Option<&[u8]>> = coerced
+                .iter()
+                .map(|x| x.as_ref().map(AsRef::as_ref))
+                .collect();
+
+            Arc::new(FixedSizeBinaryArray::try_from_sparse_iter_with_size(
+                coerced_ref.into_iter(),
+                12,
+            )?)
+        }
+        (ArrowDataType::Interval(IntervalUnit::DayTime), Type::FIXED_LEN_BYTE_ARRAY) => {
+            let array = array
+                .as_any()
+                .downcast_ref::<arrow_array::IntervalDayTimeArray>()
+                .unwrap();
+
+            let coerced: Vec<Option<Vec<u8>>> = array
+                .iter()
+                .map(|x| x.map(to_interval_dt_fsb))
+                .map(|x| x.map(|y| y.to_vec())) // clone the data here
+                .collect();
+
+            let coerced_ref: Vec<Option<&[u8]>> = coerced
+                .iter()
+                .map(|x| x.as_ref().map(AsRef::as_ref))
+                .collect();
+
+            Arc::new(FixedSizeBinaryArray::try_from_sparse_iter_with_size(
+                coerced_ref.into_iter(),
+                12,
+            )?)
+        }
+        (ArrowDataType::Interval(interval_unit), parquet_type) => {
+            return Err(ParquetError::NYI(
+                format!(
+                    "Attempted to coerce an Arrow interval type {interval_unit:?} to Parquet type {parquet_type:?}. This is not yet implemented."
+                )
+            ));
+        }
+        (ArrowDataType::FixedSizeBinary(size), Type::FIXED_LEN_BYTE_ARRAY) => {
+            let array = array
+                .as_any()
+                .downcast_ref::<arrow_array::FixedSizeBinaryArray>()
+                .unwrap();
+
+            let coerced: Vec<Option<Vec<u8>>> =
+                array.iter().map(|x| x.map(|y| y.to_vec())).collect();
+
+            let coerced_ref: Vec<Option<&[u8]>> = coerced
+                .iter()
+                .map(|x| x.as_ref().map(AsRef::as_ref))
+                .collect();
+
+            Arc::new(FixedSizeBinaryArray::try_from_sparse_iter_with_size(
+                coerced_ref.into_iter(),
+                *size,
+            )?)
+        }
+        (_, Type::BYTE_ARRAY) => arrow_cast::cast(array, &ArrowDataType::Binary)?,
+        (_, Type::INT32) => arrow_cast::cast(array, &ArrowDataType::Int32)?,
+        (_, Type::INT64) => arrow_cast::cast(array, &ArrowDataType::Int64)?,
+        (_, Type::BOOLEAN) => {
+            // TODO: minimize copy
+            let array = array.as_boolean().to_owned();
+            Arc::new(array)
+        }
+        (arrow_type, parquet_type) => {
+            return Err(ParquetError::NYI(
+                format!(
+                    "Attempted to coerce an Arrow type {arrow_type:?} to Parquet type {parquet_type:?}. This is not yet implemented."
+                )
+            ));
+        }
+    };
+
+    let result = Arc::new(result);
+
+    Ok(result)
+}
+
+pub fn arrow_sbbf_check(
+    array: &dyn Array,
+    parquet_type: Type,
+    sbbf: &Sbbf,
+) -> Result<BooleanArray> {
+    // only returns data types compatible with parquet data types
+    let coerced = coerce_to_parquet_type(array, parquet_type)?;
+
+    let bitmap = match coerced.data_type() {
+        ArrowDataType::Int32 => coerced
+            .as_primitive::<Int32Type>()
+            .unary::<_, Int8Type>(|x| sbbf.check(&x) as i8),
+        ArrowDataType::Int64 => coerced
+            .as_primitive::<Int64Type>()
+            .unary::<_, Int8Type>(|x| sbbf.check(&x) as i8),
+        ArrowDataType::Float32 => coerced
+            .as_primitive::<Float32Type>()
+            .unary::<_, Int8Type>(|x| sbbf.check(&x) as i8),
+        ArrowDataType::Float64 => coerced
+            .as_primitive::<Float64Type>()
+            .unary::<_, Int8Type>(|x| sbbf.check(&x) as i8),
+        ArrowDataType::Binary => coerced
+            .as_binary::<i32>()
+            .iter()
+            .map(|x| x.is_some() && sbbf.check(x.unwrap()))
+            .map(|x| x as i8)
+            .collect::<Vec<_>>()
+            .into(),
+        _ => unreachable!(),
+    };
+
+    let result = arrow_cast::cast(&bitmap, &ArrowDataType::Boolean)?;
+
+    // TODO: fix copy
+    Ok(result.as_boolean().to_owned())
 }
 
 fn write_primitive<E: ColumnValueEncoder>(
@@ -910,97 +1081,61 @@ fn write_primitive<E: ColumnValueEncoder>(
     )
 }
 
-fn get_bool_array_slice(array: &arrow_array::BooleanArray, indices: &[usize]) -> Vec<bool> {
-    let mut values = Vec::with_capacity(indices.len());
+/// Converts non-null indices to a boolean mask
+fn to_boolean_mask(indices: &[usize], len: usize) -> BooleanArray {
+    let mut mask = vec![false; len];
     for i in indices {
-        values.push(array.value(*i))
+        mask[*i] = true;
     }
-    values
+
+    BooleanArray::from(mask)
 }
 
-/// Returns 12-byte values representing 3 values of months, days and milliseconds (4-bytes each).
+fn to_flb_arrays(array: &FixedSizeBinaryArray) -> Vec<FixedLenByteArray> {
+    array
+        .iter()
+        .map(|x| {
+            if x.is_some() {
+                FixedLenByteArray::from(Vec::from(x.unwrap()))
+            } else {
+                FixedLenByteArray::default()
+            }
+        })
+        .collect()
+}
+
+/// Returns a 12-byte value representing 3 values of months, days and milliseconds (4-bytes each).
 /// An Arrow YearMonth interval only stores months, thus only the first 4 bytes are populated.
-fn get_interval_ym_array_slice(
-    array: &arrow_array::IntervalYearMonthArray,
-    indices: &[usize],
-) -> Vec<FixedLenByteArray> {
-    let mut values = Vec::with_capacity(indices.len());
-    for i in indices {
-        let mut value = array.value(*i).to_le_bytes().to_vec();
-        let mut suffix = vec![0; 8];
-        value.append(&mut suffix);
-        values.push(FixedLenByteArray::from(ByteArray::from(value)))
-    }
-    values
+fn to_interval_ym_fsb(months: i32) -> [u8; 12] {
+    let mut result = [0u8; 12];
+    let months = months.to_le_bytes();
+
+    result[0..4].copy_from_slice(&months);
+
+    result
 }
 
 /// Returns 12-byte values representing 3 values of months, days and milliseconds (4-bytes each).
 /// An Arrow DayTime interval only stores days and millis, thus the first 4 bytes are not populated.
-fn get_interval_dt_array_slice(
-    array: &arrow_array::IntervalDayTimeArray,
-    indices: &[usize],
-) -> Vec<FixedLenByteArray> {
-    let mut values = Vec::with_capacity(indices.len());
-    for i in indices {
-        let mut prefix = vec![0; 4];
-        let mut value = array.value(*i).to_le_bytes().to_vec();
-        prefix.append(&mut value);
-        debug_assert_eq!(prefix.len(), 12);
-        values.push(FixedLenByteArray::from(ByteArray::from(prefix)));
-    }
-    values
+fn to_interval_dt_fsb(days_millis: i64) -> [u8; 12] {
+    let mut result = [0u8; 12];
+    let days_millis = days_millis.to_le_bytes();
+
+    result[4..12].copy_from_slice(&days_millis);
+
+    result
 }
 
-fn get_decimal_128_array_slice(
-    array: &arrow_array::Decimal128Array,
-    indices: &[usize],
-) -> Vec<FixedLenByteArray> {
-    let mut values = Vec::with_capacity(indices.len());
-    let size = decimal_length_from_precision(array.precision());
-    for i in indices {
-        let as_be_bytes = array.value(*i).to_be_bytes();
-        let resized_value = as_be_bytes[(16 - size)..].to_vec();
-        values.push(FixedLenByteArray::from(ByteArray::from(resized_value)));
-    }
-    values
+fn to_dec_128_fsb(value: i128, size: usize) -> Vec<u8> {
+    let value = value.to_be_bytes();
+    let start = value.len() - size;
+    value[start..].to_vec()
 }
 
-fn get_decimal_256_array_slice(
-    array: &arrow_array::Decimal256Array,
-    indices: &[usize],
-) -> Vec<FixedLenByteArray> {
-    let mut values = Vec::with_capacity(indices.len());
-    let size = decimal_length_from_precision(array.precision());
-    for i in indices {
-        let as_be_bytes = array.value(*i).to_be_bytes();
-        let resized_value = as_be_bytes[(32 - size)..].to_vec();
-        values.push(FixedLenByteArray::from(ByteArray::from(resized_value)));
-    }
-    values
-}
-
-fn get_float_16_array_slice(
-    array: &arrow_array::Float16Array,
-    indices: &[usize],
-) -> Vec<FixedLenByteArray> {
-    let mut values = Vec::with_capacity(indices.len());
-    for i in indices {
-        let value = array.value(*i).to_le_bytes().to_vec();
-        values.push(FixedLenByteArray::from(ByteArray::from(value)));
-    }
-    values
-}
-
-fn get_fsb_array_slice(
-    array: &arrow_array::FixedSizeBinaryArray,
-    indices: &[usize],
-) -> Vec<FixedLenByteArray> {
-    let mut values = Vec::with_capacity(indices.len());
-    for i in indices {
-        let value = array.value(*i).to_vec();
-        values.push(FixedLenByteArray::from(ByteArray::from(value)))
-    }
-    values
+fn to_dec_256_fsb(value: i256, size: usize) -> Vec<u8> {
+    let value = value.to_be_bytes();
+    let start = value.len() - size;
+    value[start..].to_vec()
 }
 
 #[cfg(test)]
@@ -1718,7 +1853,9 @@ mod tests {
             | DataType::UInt64
             | DataType::UInt32
             | DataType::UInt16
-            | DataType::UInt8 => vec![Encoding::PLAIN, Encoding::DELTA_BINARY_PACKED],
+            | DataType::UInt8
+            | DataType::Date32
+            | DataType::Date64 => vec![Encoding::PLAIN, Encoding::DELTA_BINARY_PACKED],
             DataType::Float32 | DataType::Float64 => {
                 vec![Encoding::PLAIN, Encoding::BYTE_STREAM_SPLIT]
             }
@@ -1784,11 +1921,11 @@ mod tests {
         values_optional::<A, I>(iter);
     }
 
-    fn check_bloom_filter<T: AsBytes>(
+    fn check_bloom_filter(
         files: Vec<File>,
         file_column: String,
-        positive_values: Vec<T>,
-        negative_values: Vec<T>,
+        positive_values: &dyn Array,
+        negative_values: &dyn Array,
     ) {
         files.into_iter().take(1).for_each(|file| {
             let file_reader = SerializedFileReader::new_with_options(
@@ -1826,22 +1963,38 @@ mod tests {
                 }
             }
 
-            positive_values.iter().for_each(|value| {
-                let found = bloom_filters.iter().find(|sbbf| sbbf.check(value));
-                assert!(
-                    found.is_some(),
-                    "{}",
-                    format!("Value {:?} should be in bloom filter", value.as_bytes())
-                );
-            });
+            // get parquet type for `file_column`
+            let parquet_type = metadata
+                .file_metadata()
+                .schema_descr()
+                .columns()
+                .iter()
+                .find(|col| col.path().string() == file_column)
+                .expect("Column not found in schema")
+                .physical_type();
 
-            negative_values.iter().for_each(|value| {
-                let found = bloom_filters.iter().find(|sbbf| sbbf.check(value));
-                assert!(
-                    found.is_none(),
-                    "{}",
-                    format!("Value {:?} should not be in bloom filter", value.as_bytes())
-                );
+            // check each bloom filter
+            bloom_filters.iter().for_each(|sbbf| {
+                let positive_results =
+                    arrow_sbbf_check(positive_values, parquet_type, sbbf).unwrap();
+                let negative_results =
+                    arrow_sbbf_check(negative_values, parquet_type, sbbf).unwrap();
+
+                positive_results.iter().enumerate().for_each(|(i, result)| {
+                    assert!(
+                        result.unwrap_or_default(),
+                        "Positive value at index {:?} should be in bloom filter",
+                        i
+                    );
+                });
+
+                negative_results.iter().enumerate().for_each(|(i, result)| {
+                    assert!(
+                        !result.unwrap_or_default(),
+                        "Negative value at index {:?} should not be in bloom filter",
+                        i
+                    );
+                });
             });
         });
     }
@@ -2062,7 +2215,7 @@ mod tests {
 
     #[test]
     #[should_panic(
-        expected = "Attempting to write an Arrow interval type MonthDayNano to parquet that is not yet implemented"
+        expected = "Attempted to coerce an Arrow interval type MonthDayNano to Parquet type FIXED_LEN_BYTE_ARRAY. This is not yet implemented."
     )]
     fn interval_month_day_nano_single_column() {
         required_and_optional::<IntervalMonthDayNanoArray, _>(0..SMALL_SIZE as i128);
@@ -2079,6 +2232,36 @@ mod tests {
     }
 
     #[test]
+    fn i8_column_bloom_filter() {
+        let array = Arc::new(Int8Array::from_iter(0..SMALL_SIZE as i8));
+        let mut options = RoundTripOptions::new(array, false);
+        options.bloom_filter = true;
+
+        let files = one_column_roundtrip_with_options(options);
+        check_bloom_filter(
+            files,
+            "col".to_string(),
+            &Int8Array::from_iter(0..SMALL_SIZE as i8),
+            &Int8Array::from_iter(SMALL_SIZE as i8 + 1..SMALL_SIZE as i8 + 10),
+        );
+    }
+
+    #[test]
+    fn i16_column_bloom_filter() {
+        let array = Arc::new(Int16Array::from_iter(0..SMALL_SIZE as i16));
+        let mut options = RoundTripOptions::new(array, false);
+        options.bloom_filter = true;
+
+        let files = one_column_roundtrip_with_options(options);
+        check_bloom_filter(
+            files,
+            "col".to_string(),
+            &Int16Array::from_iter(0..SMALL_SIZE as i16),
+            &Int16Array::from_iter(SMALL_SIZE as i16 + 1..SMALL_SIZE as i16 + 10),
+        );
+    }
+
+    #[test]
     fn i32_column_bloom_filter() {
         let array = Arc::new(Int32Array::from_iter(0..SMALL_SIZE as i32));
         let mut options = RoundTripOptions::new(array, false);
@@ -2088,8 +2271,82 @@ mod tests {
         check_bloom_filter(
             files,
             "col".to_string(),
-            (0..SMALL_SIZE as i32).collect(),
-            (SMALL_SIZE as i32 + 1..SMALL_SIZE as i32 + 10).collect(),
+            &Int32Array::from_iter(0..SMALL_SIZE as i32),
+            &Int32Array::from_iter(SMALL_SIZE as i32 + 1..SMALL_SIZE as i32 + 10),
+        );
+    }
+
+    #[test]
+    fn i64_column_bloom_filter() {
+        let array = Arc::new(Int64Array::from_iter(0..SMALL_SIZE as i64));
+        let mut options = RoundTripOptions::new(array, false);
+        options.bloom_filter = true;
+
+        let files = one_column_roundtrip_with_options(options);
+        check_bloom_filter(
+            files,
+            "col".to_string(),
+            &Int64Array::from_iter(0..SMALL_SIZE as i64),
+            &Int64Array::from_iter(SMALL_SIZE as i64 + 1..SMALL_SIZE as i64 + 10),
+        );
+    }
+
+    #[test]
+    fn date32_column_bloom_filter() {
+        use chrono::NaiveDate;
+
+        let epoch = NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
+        let dates = vec![
+            NaiveDate::from_ymd_opt(1915, 11, 25).unwrap(),
+            NaiveDate::from_ymd_opt(1964, 4, 8).unwrap(),
+            NaiveDate::from_ymd_opt(1992, 9, 2).unwrap(),
+            NaiveDate::from_ymd_opt(2030, 1, 1).unwrap(),
+        ];
+        let values: Vec<_> = dates
+            .iter()
+            .map(|d| d.signed_duration_since(epoch).num_days() as i32)
+            .collect();
+
+        let array = Arc::new(Date32Array::from(values.clone()));
+        let mut options = RoundTripOptions::new(array, false);
+        options.bloom_filter = true;
+
+        let files = one_column_roundtrip_with_options(options);
+        check_bloom_filter(
+            files,
+            "col".to_string(),
+            &Date32Array::from(values),
+            &Date32Array::from((0..SMALL_SIZE as i32).collect::<Vec<_>>()),
+        );
+    }
+
+    #[test]
+    fn date64_column_bloom_filter() {
+        use chrono::NaiveDate;
+
+        let epoch = NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
+        let dates = vec![
+            NaiveDate::from_ymd_opt(1915, 11, 25).unwrap(),
+            NaiveDate::from_ymd_opt(1964, 4, 8).unwrap(),
+            NaiveDate::from_ymd_opt(1992, 9, 2).unwrap(),
+            NaiveDate::from_ymd_opt(2030, 1, 1).unwrap(),
+        ];
+        let values: Vec<_> = dates
+            .iter()
+            .map(|d| d.signed_duration_since(epoch).num_milliseconds())
+            .collect();
+
+        let array = Arc::new(Date64Array::from(values.clone()));
+        let mut options = RoundTripOptions::new(array, false);
+        options.bloom_filter = true;
+
+        let files = one_column_roundtrip_with_options(options);
+
+        check_bloom_filter(
+            files,
+            "col".to_string(),
+            &Date64Array::from(values),
+            &Date64Array::from((0..SMALL_SIZE as i64).collect::<Vec<_>>()),
         );
     }
 
@@ -2099,16 +2356,21 @@ mod tests {
         let many_vecs: Vec<_> = std::iter::repeat(one_vec).take(SMALL_SIZE).collect();
         let many_vecs_iter = many_vecs.iter().map(|v| v.as_slice());
 
-        let array = Arc::new(BinaryArray::from_iter_values(many_vecs_iter));
+        let array = Arc::new(BinaryArray::from_iter_values(many_vecs_iter.clone()));
         let mut options = RoundTripOptions::new(array, false);
         options.bloom_filter = true;
 
+        // TODO:: impl Parquet BYTE_ARRAY in coercion & arrow sbbf check
         let files = one_column_roundtrip_with_options(options);
         check_bloom_filter(
             files,
             "col".to_string(),
-            many_vecs,
-            vec![vec![(SMALL_SIZE + 1) as u8]],
+            &BinaryArray::from_iter_values(many_vecs_iter),
+            &BinaryArray::from_iter_values(
+                vec![vec![(SMALL_SIZE + 1) as u8]]
+                    .iter()
+                    .map(|v| v.as_slice()),
+            ),
         );
     }
 
@@ -2128,8 +2390,15 @@ mod tests {
             .enumerate()
             .filter_map(|(i, v)| if i % 2 == 0 { None } else { Some(v.as_str()) })
             .collect();
+
+        // TODO:: impl Parquet BYTE_ARRAY in coercion & arrow sbbf check
         // For null slots, empty string should not be in bloom filter.
-        check_bloom_filter(files, "col".to_string(), optional_raw_values, vec![""]);
+        check_bloom_filter(
+            files,
+            "col".to_string(),
+            &StringArray::from(optional_raw_values),
+            &StringArray::from(vec![""]),
+        );
     }
 
     #[test]
