@@ -2142,29 +2142,43 @@ mod tests {
 
     #[test]
     fn test_writer_fixed_size_binary() {
-        let size = 32;
+        // set up schema:
+        let size = 11;
         let schema = SchemaRef::new(Schema::new(vec![Field::new(
             "bytes",
             DataType::FixedSizeBinary(size),
             false,
         )]));
 
+        // build record batch:
         let mut builder = FixedSizeBinaryBuilder::new(size);
-        let v = hex::decode("a948904f2f0f479b8f8197694b30184b0d2ed1c1cd2a1ec0fb85d299a192a447")
-            .unwrap();
-        builder.append_value(v).unwrap();
+        let values = [b"hello world", b"summer rain"];
+        for v in values {
+            builder.append_value(v).unwrap();
+        }
         let array = Arc::new(builder.finish()) as ArrayRef;
         let batch = RecordBatch::try_new(schema, vec![array]).unwrap();
 
+        // encode JSON:
         let mut buf = Vec::new();
-        {
-            let mut writer = LineDelimitedWriter::new(&mut buf);
+        let json_value: Value = {
+            let mut writer = ArrayWriter::new(&mut buf);
             writer.write(&batch).unwrap();
-        }
+            writer.close().unwrap();
+            serde_json::from_slice(&buf).unwrap()
+        };
 
+        // check the encoded JSON:
         assert_eq!(
-            "{\"bytes\":a948904f2f0f479b8f8197694b30184b0d2ed1c1cd2a1ec0fb85d299a192a447}\n",
-            String::from_utf8(buf).unwrap()
+            json!([
+                {
+                    "bytes":"68656c6c6f20776f726c64"
+                },
+                {
+                    "bytes":"73756d6d6572207261696e"
+                }
+            ]),
+            json_value,
         );
     }
 }

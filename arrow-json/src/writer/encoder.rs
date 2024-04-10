@@ -454,9 +454,11 @@ struct FixedSizeBinaryEncoder(FixedSizeBinaryArray);
 impl Encoder for FixedSizeBinaryEncoder {
     fn encode(&mut self, idx: usize, out: &mut Vec<u8>) {
         let v = self.0.value(idx);
+        out.push(b'"');
         for byte in v {
             // this write is infallible
             write!(out, "{byte:02x}").unwrap();
         }
+        out.push(b'"');
     }
 }
