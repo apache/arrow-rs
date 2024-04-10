@@ -21,6 +21,7 @@
 //!
 //! This is not a canonical format, but provides a human-readable way of verifying language implementations
 
+use arrow_buffer::ScalarBuffer;
 use hex::decode;
 use num::BigInt;
 use num::Signed;
@@ -835,26 +836,18 @@ pub fn array_from_json(
                 ));
             };
 
-            let offset: Option<Buffer> = json_col.offset.map(|offsets| {
-                let offsets: Vec<i32> =
-                    offsets.iter().map(|v| v.as_i64().unwrap() as i32).collect();
-                Buffer::from(&offsets.to_byte_slice())
-            });
+            let offset: Option<ScalarBuffer<i32>> = json_col
+                .offset
+                .map(|offsets| offsets.iter().map(|v| v.as_i64().unwrap() as i32).collect());
 
-            let mut children: Vec<(Field, Arc<dyn Array>)> = vec![];
+            let mut children = Vec::with_capacity(fields.len());
             for ((_, field), col) in fields.iter().zip(json_col.children.unwrap()) {
                 let array = array_from_json(field, col, dictionaries)?;
-                children.push((field.as_ref().clone(), array));
+                children.push(array);
             }
 
-            let field_type_ids = fields.iter().map(|(id, _)| id).collect::<Vec<_>>();
-            let array = UnionArray::try_new(
-                &field_type_ids,
-                Buffer::from(&type_ids.to_byte_slice()),
-                offset,
-                children,
-            )
-            .unwrap();
+            let array =
+                UnionArray::try_new(fields.clone(), type_ids.into(), offset, children).unwrap();
             Ok(Arc::new(array))
         }
         t => Err(ArrowError::JsonError(format!(

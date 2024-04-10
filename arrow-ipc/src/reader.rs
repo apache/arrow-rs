@@ -31,7 +31,7 @@ use std::io::{BufReader, Read, Seek, SeekFrom};
 use std::sync::Arc;
 
 use arrow_array::*;
-use arrow_buffer::{ArrowNativeType, Buffer, MutableBuffer};
+use arrow_buffer::{ArrowNativeType, Buffer, MutableBuffer, ScalarBuffer};
 use arrow_data::ArrayData;
 use arrow_schema::*;
 
@@ -214,26 +214,25 @@ fn create_array(
                 reader.next_buffer()?;
             }
 
-            let type_ids: Buffer = reader.next_buffer()?[..len].into();
+            let type_ids: ScalarBuffer<i8> = reader.next_buffer()?.slice_with_length(0, len).into();
 
             let value_offsets = match mode {
                 UnionMode::Dense => {
-                    let buffer = reader.next_buffer()?;
-                    Some(buffer[..len * 4].into())
+                    let offsets: ScalarBuffer<i32> =
+                        reader.next_buffer()?.slice_with_length(0, len * 4).into();
+                    Some(offsets)
                 }
                 UnionMode::Sparse => None,
             };
 
             let mut children = Vec::with_capacity(fields.len());
-            let mut ids = Vec::with_capacity(fields.len());
 
-            for (id, field) in fields.iter() {
+            for (_id, field) in fields.iter() {
                 let child = create_array(reader, field, variadic_counts, require_alignment)?;
-                children.push((field.as_ref().clone(), child));
-                ids.push(id);
+                children.push(child);
             }
 
-            let array = UnionArray::try_new(&ids, type_ids, value_offsets, children)?;
+            let array = UnionArray::try_new(fields.clone(), type_ids, value_offsets, children)?;
             Ok(Arc::new(array))
         }
         Null => {
