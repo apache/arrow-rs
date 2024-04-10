@@ -2147,38 +2147,72 @@ mod tests {
         let schema = SchemaRef::new(Schema::new(vec![Field::new(
             "bytes",
             DataType::FixedSizeBinary(size),
-            false,
+            true,
         )]));
 
         // build record batch:
         let mut builder = FixedSizeBinaryBuilder::new(size);
-        let values = [b"hello world", b"summer rain"];
-        for v in values {
-            builder.append_value(v).unwrap();
+        let values = [Some(b"hello world"), None, Some(b"summer rain")];
+        for value in values {
+            match value {
+                Some(v) => builder.append_value(v).unwrap(),
+                None => builder.append_null(),
+            }
         }
         let array = Arc::new(builder.finish()) as ArrayRef;
         let batch = RecordBatch::try_new(schema, vec![array]).unwrap();
 
-        // encode JSON:
-        let mut buf = Vec::new();
-        let json_value: Value = {
-            let mut writer = ArrayWriter::new(&mut buf);
-            writer.write(&batch).unwrap();
-            writer.close().unwrap();
-            serde_json::from_slice(&buf).unwrap()
-        };
+        // encode and check JSON with explicit nulls:
+        {
+            let mut buf = Vec::new();
+            let json_value: Value = {
+                let mut writer = WriterBuilder::new()
+                    .with_explicit_nulls(true)
+                    .build::<_, JsonArray>(&mut buf);
+                writer.write(&batch).unwrap();
+                writer.close().unwrap();
+                serde_json::from_slice(&buf).unwrap()
+            };
 
-        // check the encoded JSON:
-        assert_eq!(
-            json!([
-                {
-                    "bytes":"68656c6c6f20776f726c64"
-                },
-                {
-                    "bytes":"73756d6d6572207261696e"
-                }
-            ]),
-            json_value,
-        );
+            assert_eq!(
+                json!([
+                    {
+                        "bytes": "68656c6c6f20776f726c64"
+                    },
+                    {
+                        "bytes": null // the explicit null
+                    },
+                    {
+                        "bytes": "73756d6d6572207261696e"
+                    }
+                ]),
+                json_value,
+            );
+        }
+        // encode and check JSON with no explicit nulls:
+        {
+            let mut buf = Vec::new();
+            let json_value: Value = {
+                // explicit nulls are off by default, so we don't need
+                // to set that when creating the writer:
+                let mut writer = ArrayWriter::new(&mut buf);
+                writer.write(&batch).unwrap();
+                writer.close().unwrap();
+                serde_json::from_slice(&buf).unwrap()
+            };
+
+            assert_eq!(
+                json!([
+                    {
+                        "bytes": "68656c6c6f20776f726c64"
+                    },
+                    {}, // empty because nulls are omitted
+                    {
+                        "bytes": "73756d6d6572207261696e"
+                    }
+                ]),
+                json_value,
+            );
+        }
     }
 }
