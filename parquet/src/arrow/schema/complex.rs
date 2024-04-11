@@ -286,8 +286,8 @@ impl Visitor {
         let map_key = &map_key_value.get_fields()[0];
         let map_value = &map_key_value.get_fields()[1];
 
-        if map_key.get_basic_info().repetition() != Repetition::REQUIRED {
-            return Err(arrow_err!("Map keys must be required"));
+        if map_key.get_basic_info().repetition() == Repetition::REPEATED {
+            return Err(arrow_err!("Map keys cannot be repeated"));
         }
 
         if map_value.get_basic_info().repetition() == Repetition::REPEATED {
