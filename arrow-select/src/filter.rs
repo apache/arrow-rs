@@ -343,7 +343,7 @@ fn filter_array(values: &dyn Array, predicate: &FilterPredicate) -> Result<Array
                 Ok(Arc::new(filter_bytes(values.as_binary::<i64>(), predicate)))
             }
             DataType::BinaryView => {
-                Ok(Arc::new(filter_byte_view(values.as_string_view(), predicate)))
+                Ok(Arc::new(filter_byte_view(values.as_binary_view(), predicate)))
             }
             DataType::RunEndEncoded(_, _) => {
                 downcast_run_array!{
@@ -917,6 +917,69 @@ mod tests {
         assert_eq!(b"hello", d.value(0));
         assert!(!d.is_null(0));
         assert!(d.is_null(1));
+    }
+
+    fn _test_filter_byte_view<T>()
+    where
+        T: ByteViewType,
+        str: AsRef<T::Native>,
+        T::Native: PartialEq,
+    {
+        let array = {
+            // ["hello", "world", null, "large payload over 12 bytes", "lulu"]
+            let mut builder = GenericByteViewBuilder::<T>::new();
+            builder.append_value("hello");
+            builder.append_value("world");
+            builder.append_null();
+            builder.append_value("large payload over 12 bytes");
+            builder.append_value("lulu");
+            builder.finish()
+        };
+
+        {
+            let predicate = BooleanArray::from(vec![true, false, true, true, false]);
+            let actual = filter(&array, &predicate).unwrap();
+
+            assert_eq!(actual.len(), 3);
+
+            let expected = {
+                // ["hello", null, "large payload over 12 bytes"]
+                let mut builder = GenericByteViewBuilder::<T>::new();
+                builder.append_value("hello");
+                builder.append_null();
+                builder.append_value("large payload over 12 bytes");
+                builder.finish()
+            };
+
+            assert_eq!(actual.as_ref(), &expected);
+        }
+
+        {
+            let predicate = BooleanArray::from(vec![true, false, false, false, true]);
+            let actual = filter(&array, &predicate).unwrap();
+
+            assert_eq!(actual.len(), 2);
+
+            let expected = {
+                // ["hello", "lulu"]
+                let mut builder = GenericByteViewBuilder::<T>::new();
+                builder.append_value("hello");
+                builder.append_value("lulu");
+                builder.finish()
+            };
+
+            assert_eq!(actual.as_ref(), &expected);
+        }
+    }
+
+    #[test]
+    fn test_filter_string_view() {
+        _test_filter_byte_view::<StringViewType>()
+    }
+
+    #[test]
+    fn test_filter_binary_view() {
+        _test_filter_byte_view::<BinaryViewType>()
     }
 
     #[test]
