@@ -58,11 +58,6 @@ pub trait ArrowPrimitiveType: primitive::PrimitiveTypeSealed + 'static {
     /// the corresponding Arrow data type of this primitive type.
     const DATA_TYPE: DataType;
 
-    /// Returns the byte width of this primitive type.
-    fn get_byte_width() -> usize {
-        std::mem::size_of::<Self::Native>()
-    }
-
     /// Returns a default value of this primitive type.
     ///
     /// This is useful for aggregate array ops like `sum()`, `mean()`.
