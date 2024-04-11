@@ -719,15 +719,15 @@ impl GCSAuthorizer {
     ///```
     ///
     /// <https://cloud.google.com/storage/docs/authentication/canonical-requests>
-    fn canonicalize_request(url: &Url, methond: &Method, headers: &HeaderMap) -> String {
-        let verb = methond.as_str();
+    fn canonicalize_request(url: &Url, method: &Method, headers: &HeaderMap) -> String {
+        let verb = method.as_str();
         let path = url.path();
         let query = Self::canonicalize_query(url);
-        let (canaonical_headers, signed_headers) = Self::canonicalize_headers(headers);
+        let (canonical_headers, signed_headers) = Self::canonicalize_headers(headers);
 
         format!(
             "{}\n{}\n{}\n{}\n\n{}\n{}",
-            verb, path, query, canaonical_headers, signed_headers, DEFAULT_GCS_PLAYLOAD_STRING
+            verb, path, query, canonical_headers, signed_headers, DEFAULT_GCS_PLAYLOAD_STRING
         )
     }
 
@@ -794,8 +794,8 @@ impl GCSAuthorizer {
         url: &Url,
         headers: &HeaderMap,
     ) -> String {
-        let caninical_request = Self::canonicalize_request(url, request_method, headers);
-        let hashed_canonical_req = hex_digest(caninical_request.as_bytes());
+        let canonical_request = Self::canonicalize_request(url, request_method, headers);
+        let hashed_canonical_req = hex_digest(canonical_request.as_bytes());
         let scope = self.scope(date);
 
         format!(

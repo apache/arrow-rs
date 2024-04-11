@@ -108,7 +108,7 @@ enum Error {
     #[snafu(display("Error signing blob: {}", source))]
     SignBlobRequest { source: crate::client::retry::Error },
 
-    #[snafu(display("Got invalid signing blob repsonse: {}", source))]
+    #[snafu(display("Got invalid signing blob response: {}", source))]
     InvalidSignBlobResponse { source: reqwest::Error },
 
     #[snafu(display("Got invalid signing blob signature: {}", source))]
