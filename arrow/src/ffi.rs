@@ -333,6 +333,11 @@ impl<'a> ImportedArrowArray<'a> {
                     .map(|(i, (_, field))| self.consume_child(i, field.data_type()))
                     .collect::<Result<Vec<_>>>()
             }
+            DataType::RunEndEncoded(run_ends_field, values_field) => Ok([
+                self.consume_child(0, run_ends_field.data_type())?,
+                self.consume_child(1, values_field.data_type())?,
+            ]
+            .to_vec()),
             _ => Ok(Vec::new()),
         }
     }
@@ -1173,6 +1178,38 @@ mod tests {
                 _ => unreachable!(),
             }
         }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_run_array() -> Result<()> {
+        let value_data =
+            PrimitiveArray::<Int8Type>::from_iter_values([10_i8, 11, 12, 13, 14, 15, 16, 17]);
+
+        // Construct a run_ends array:
+        let run_ends_values = [4_i32, 6, 7, 9, 13, 18, 20, 22];
+        let run_ends_data =
+            PrimitiveArray::<Int32Type>::from_iter_values(run_ends_values.iter().copied());
+
+        // Construct a run ends encoded array from the above two
+        let ree_array = RunArray::<Int32Type>::try_new(&run_ends_data, &value_data).unwrap();
+
+        // export it
+        let (array, schema) = to_ffi(&ree_array.to_data())?;
+
+        // (simulate consumer) import it
+        let data = unsafe { from_ffi(array, &schema) }?;
+        let array = make_array(data);
+
+        // perform some operation
+        let array = array
+            .as_any()
+            .downcast_ref::<RunArray<Int32Type>>()
+            .unwrap();
+        assert_eq!(array.data_type(), ree_array.data_type());
+        assert_eq!(array.run_ends().values(), ree_array.run_ends().values());
+        assert_eq!(array.values(), ree_array.values());
 
         Ok(())
     }
