@@ -101,7 +101,7 @@ fn make_encoder_impl<'a>(
 
         DataType::FixedSizeBinary(_) => {
             let array = array.as_any().downcast_ref::<FixedSizeBinaryArray>().unwrap();
-            (Box::new(FixedSizeBinaryEncoder::new(array.clone(), options)) as _, array.nulls().cloned())
+            (Box::new(FixedSizeBinaryEncoder::new(array, options)) as _, array.nulls().cloned())
         }
 
         DataType::Struct(fields) => {
@@ -449,13 +449,13 @@ impl<'a> Encoder for MapEncoder<'a> {
     }
 }
 
-struct FixedSizeBinaryEncoder {
-    array: FixedSizeBinaryArray,
+struct FixedSizeBinaryEncoder<'a> {
+    array: &'a FixedSizeBinaryArray,
     explicit_nulls: bool,
 }
 
-impl FixedSizeBinaryEncoder {
-    fn new(array: FixedSizeBinaryArray, options: &EncoderOptions) -> Self {
+impl<'a> FixedSizeBinaryEncoder<'a> {
+    fn new(array: &'a FixedSizeBinaryArray, options: &EncoderOptions) -> Self {
         Self {
             array,
             explicit_nulls: options.explicit_nulls,
@@ -463,7 +463,7 @@ impl FixedSizeBinaryEncoder {
     }
 }
 
-impl Encoder for FixedSizeBinaryEncoder {
+impl<'a> Encoder for FixedSizeBinaryEncoder<'a> {
     fn encode(&mut self, idx: usize, out: &mut Vec<u8>) {
         if self.array.is_valid(idx) {
             let v = self.array.value(idx);
