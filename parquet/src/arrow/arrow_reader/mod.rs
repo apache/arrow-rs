@@ -2233,7 +2233,6 @@ mod tests {
 
             // data is not valid utf8 we can not construct a correct StringArray
             // safely, so purposely create an invalid StringArray
-
             let array = unsafe {
                 StringViewArray::new_unchecked(
                     array.views().clone(),
@@ -2260,18 +2259,14 @@ mod tests {
     /// returns a BinaryArray with invalid UTF8 data in a character other than
     /// the first (this is checked in a special codepath)
     fn invalid_utf8_later_char<O: OffsetSizeTrait>() -> GenericBinaryArray<O> {
-        // invalid sequence in the first character
+        // invalid sequence in NOT the first character
         // https://stackoverflow.com/questions/1301402/example-invalid-utf8-string
         let valid: &[u8] = b"   ";
         let invalid: &[u8] = &[0x20, 0x20, 0x20, 0xa0, 0xa1, 0x20, 0x20];
         GenericBinaryArray::<O>::from_iter(vec![None, Some(valid), None, Some(invalid)])
     }
 
-    //let invalid_utf8_last_char: &[u8] = &[0x20, 0x20, 0x20, 0x20, 0xa0, 0xa1];
-
-    //
-
-    // writes the array as a column parquet file
+    // writes the array into a single column parquet file
     fn write_to_parquet(array: ArrayRef) -> Vec<u8> {
         let batch = RecordBatch::try_from_iter(vec![("c", array)]).unwrap();
         let mut data = vec![];
@@ -2286,6 +2281,7 @@ mod tests {
         data
     }
 
+    /// read the parquet file into a record batch
     fn read_from_parquet(data: Vec<u8>) -> Result<Vec<RecordBatch>, ArrowError> {
         let reader = ArrowReaderBuilder::try_new(bytes::Bytes::from(data))
             .unwrap()
