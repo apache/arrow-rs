@@ -69,16 +69,16 @@ fn make_encoder_impl<'a>(
         DataType::Float64 => primitive_helper!(Float64Type),
         DataType::Boolean => {
             let array = array.as_boolean();
-            (Box::new(BooleanEncoder(array.clone())), array.nulls().cloned())
+            (Box::new(BooleanEncoder(array)), array.nulls().cloned())
         }
         DataType::Null => (Box::new(NullEncoder), array.logical_nulls()),
         DataType::Utf8 => {
             let array = array.as_string::<i32>();
-            (Box::new(StringEncoder(array.clone())) as _, array.nulls().cloned())
+            (Box::new(StringEncoder(array)) as _, array.nulls().cloned())
         }
         DataType::LargeUtf8 => {
             let array = array.as_string::<i64>();
-            (Box::new(StringEncoder(array.clone())) as _, array.nulls().cloned())
+            (Box::new(StringEncoder(array)) as _, array.nulls().cloned())
         }
         DataType::List(_) => {
             let array = array.as_list::<i32>();
@@ -264,9 +264,9 @@ impl<N: PrimitiveEncode> Encoder for PrimitiveEncoder<N> {
     }
 }
 
-struct BooleanEncoder(BooleanArray);
+struct BooleanEncoder<'a>(&'a BooleanArray);
 
-impl Encoder for BooleanEncoder {
+impl<'a> Encoder for BooleanEncoder<'a> {
     fn encode(&mut self, idx: usize, out: &mut Vec<u8>) {
         match self.0.value(idx) {
             true => out.extend_from_slice(b"true"),
@@ -275,9 +275,9 @@ impl Encoder for BooleanEncoder {
     }
 }
 
-struct StringEncoder<O: OffsetSizeTrait>(GenericStringArray<O>);
+struct StringEncoder<'a, O: OffsetSizeTrait>(&'a GenericStringArray<O>);
 
-impl<O: OffsetSizeTrait> Encoder for StringEncoder<O> {
+impl<'a, O: OffsetSizeTrait> Encoder for StringEncoder<'a, O> {
     fn encode(&mut self, idx: usize, out: &mut Vec<u8>) {
         encode_string(self.0.value(idx), out);
     }
