@@ -113,7 +113,7 @@ pub struct GoogleCloudStorageBuilder {
     /// Credentials
     credentials: Option<GcpCredentialProvider>,
     /// Credentials for sign url
-    signing_cedentials: Option<GcpSigningCredentialProvider>,
+    signing_credentials: Option<GcpSigningCredentialProvider>,
 }
 
 /// Configuration keys for [`GoogleCloudStorageBuilder`]
@@ -209,7 +209,7 @@ impl Default for GoogleCloudStorageBuilder {
             client_options: ClientOptions::new().with_allow_http(true),
             url: None,
             credentials: None,
-            signing_cedentials: None,
+            signing_credentials: None,
         }
     }
 }
@@ -491,7 +491,7 @@ impl GoogleCloudStorageBuilder {
             )) as _
         };
 
-        let signing_credentials = if let Some(signing_credentials) = self.signing_cedentials {
+        let signing_credentials = if let Some(signing_credentials) = self.signing_credentials {
             signing_credentials
         } else if disable_oauth {
             Arc::new(StaticCredentialProvider::new(GcpSigningCredential {
