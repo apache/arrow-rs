@@ -1092,7 +1092,7 @@ mod tests {
             arrow_fields.push(Field::new_map(
                 "my_map4",
                 "map",
-                Field::new("key", DataType::Utf8, false),
+                Field::new("key", DataType::Utf8, false), // The key is always non-nullable (#5630)
                 Field::new("value", DataType::Int32, false),
                 false,
                 false,
