@@ -473,6 +473,7 @@ mod tests {
     use arrow_array::cast::AsArray;
     use arrow_array::types::{Float64Type, Int32Type};
     use arrow_array::*;
+    use arrow_buffer::NullBuffer;
 
     use crate::compute::kernels;
     use crate::datatypes::{Field, Int8Type};
@@ -1189,6 +1190,39 @@ mod tests {
 
         // Construct a run_ends array:
         let run_ends_values = [4_i32, 6, 7, 9, 13, 18, 20, 22];
+        let run_ends_data =
+            PrimitiveArray::<Int32Type>::from_iter_values(run_ends_values.iter().copied());
+
+        // Construct a run ends encoded array from the above two
+        let ree_array = RunArray::<Int32Type>::try_new(&run_ends_data, &value_data).unwrap();
+
+        // export it
+        let (array, schema) = to_ffi(&ree_array.to_data())?;
+
+        // (simulate consumer) import it
+        let data = unsafe { from_ffi(array, &schema) }?;
+        let array = make_array(data);
+
+        // perform some operation
+        let array = array
+            .as_any()
+            .downcast_ref::<RunArray<Int32Type>>()
+            .unwrap();
+        assert_eq!(array.data_type(), ree_array.data_type());
+        assert_eq!(array.run_ends().values(), ree_array.run_ends().values());
+        assert_eq!(array.values(), ree_array.values());
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_nullable_run_array() -> Result<()> {
+        let nulls = NullBuffer::from(vec![true, false, true, true, false]);
+        let value_data =
+            PrimitiveArray::<Int8Type>::new(vec![1_i8, 2, 3, 4, 5].into(), Some(nulls));
+
+        // Construct a run_ends array:
+        let run_ends_values = [5_i32, 6, 7, 8, 10];
         let run_ends_data =
             PrimitiveArray::<Int32Type>::from_iter_values(run_ends_values.iter().copied());
 
