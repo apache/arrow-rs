@@ -346,7 +346,11 @@ impl Visitor {
         // Need both columns to be projected
         match (maybe_key, maybe_value) {
             (Some(key), Some(value)) => {
-                let key_field = Arc::new(convert_field(map_key, &key, arrow_key));
+                let key_field = Arc::new(
+                    convert_field(map_key, &key, arrow_key)
+                        // The key is always non-nullable (#5630)
+                        .with_nullable(false),
+                );
                 let value_field = Arc::new(convert_field(map_value, &value, arrow_value));
                 let field_metadata = match arrow_map {
                     Some(field) => field.metadata().clone(),
