@@ -472,13 +472,13 @@ impl From<Vec<Option<String>>> for StringViewArray {
 
 #[cfg(test)]
 mod tests {
-    use crate::builder::StringViewBuilder;
+    use crate::builder::{BinaryViewBuilder, StringViewBuilder};
     use crate::{Array, BinaryViewArray, StringViewArray};
     use arrow_buffer::{Buffer, ScalarBuffer};
     use arrow_data::ByteView;
 
     #[test]
-    fn try_new() {
+    fn try_new_string() {
         let array = StringViewArray::from_iter_values(vec![
             "hello",
             "world",
@@ -487,7 +487,10 @@ mod tests {
         ]);
         assert_eq!(array.value(0), "hello");
         assert_eq!(array.value(3), "large payload over 12 bytes");
+    }
 
+    #[test]
+    fn try_new_binary() {
         let array = BinaryViewArray::from_iter_values(vec![
             b"hello".as_slice(),
             b"world".as_slice(),
@@ -496,14 +499,30 @@ mod tests {
         ]);
         assert_eq!(array.value(0), b"hello");
         assert_eq!(array.value(3), b"large payload over 12 bytes");
+    }
 
+    #[test]
+    fn try_new_empty_string() {
         // test empty array
         let array = {
             let mut builder = StringViewBuilder::new();
             builder.finish()
         };
         assert!(array.is_empty());
+    }
 
+    #[test]
+    fn try_new_empty_binary() {
+        // test empty array
+        let array = {
+            let mut builder = BinaryViewBuilder::new();
+            builder.finish()
+        };
+        assert!(array.is_empty());
+    }
+
+    #[test]
+    fn test_append_string() {
         // test builder append
         let array = {
             let mut builder = StringViewBuilder::new();
@@ -515,8 +534,25 @@ mod tests {
         assert_eq!(array.value(0), "hello");
         assert!(array.is_null(1));
         assert_eq!(array.value(2), "large payload over 12 bytes");
+    }
 
-        // test builder's in_progress re-created
+    #[test]
+    fn test_append_binary() {
+        // test builder append
+        let array = {
+            let mut builder = BinaryViewBuilder::new();
+            builder.append_value(b"hello");
+            builder.append_null();
+            builder.append_option(Some(b"large payload over 12 bytes"));
+            builder.finish()
+        };
+        assert_eq!(array.value(0), b"hello");
+        assert!(array.is_null(1));
+        assert_eq!(array.value(2), b"large payload over 12 bytes");
+    }
+
+    #[test]
+    fn test_in_progress_recreation() {
         let array = {
             // make a builder with small block size.
             let mut builder = StringViewBuilder::new().with_block_size(14);
