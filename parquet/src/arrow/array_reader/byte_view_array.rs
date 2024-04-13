@@ -315,6 +315,8 @@ impl ByteViewArrayDecoderPlain {
     }
 
     pub fn read(&mut self, output: &mut ViewBuffer, len: usize) -> Result<usize> {
+        let initial_values_length = output.views.len();
+
         let to_read = len.min(self.max_remaining_values);
 
         let remaining_bytes = self.buf.len() - self.offset;
@@ -344,6 +346,10 @@ impl ByteViewArrayDecoderPlain {
             read += 1;
         }
         self.max_remaining_values -= to_read;
+
+        if self.validate_utf8 {
+            output.check_valid_utf8(initial_values_length)?;
+        }
 
         Ok(to_read)
     }
@@ -395,6 +401,8 @@ impl ByteViewArrayDecoderDeltaLength {
     }
 
     fn read(&mut self, output: &mut ViewBuffer, len: usize) -> Result<usize> {
+        let initial_values_length = output.views.len();
+
         let to_read = len.min(self.lengths.len() - self.length_offset);
 
         let src_lengths = &self.lengths[self.length_offset..self.length_offset + to_read];
@@ -419,6 +427,10 @@ impl ByteViewArrayDecoderDeltaLength {
 
         self.data_offset = start_offset;
         self.length_offset += to_read;
+
+        if self.validate_utf8 {
+            output.check_valid_utf8(initial_values_length)?;
+        }
 
         Ok(to_read)
     }
@@ -451,9 +463,14 @@ impl ByteViewArrayDecoderDelta {
     }
 
     fn read(&mut self, output: &mut ViewBuffer, len: usize) -> Result<usize> {
+        let initial_values_length = output.views.len();
         let read = self
             .decoder
             .read(len, |bytes| output.try_push(bytes, self.validate_utf8))?;
+
+        if self.validate_utf8 {
+            output.check_valid_utf8(initial_values_length)?;
+        }
 
         Ok(read)
     }
@@ -482,7 +499,7 @@ impl ByteViewArrayDecoderDictionary {
         }
 
         self.decoder.read(len, |keys| {
-            output.extend_from_dictionary(keys, &dict.views, &dict.buffers)
+            output.extend_from_dictionary(keys, &dict.views, &dict.buffer)
         })
     }
 

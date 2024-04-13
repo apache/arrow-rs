@@ -19,7 +19,7 @@ use crate::arrow::buffer::bit_util::iter_set_bits_rev;
 use crate::arrow::record_reader::buffer::ValuesBuffer;
 use crate::errors::{ParquetError, Result};
 use arrow_array::{make_array, ArrayRef};
-use arrow_buffer::{ArrowNativeType, Buffer};
+use arrow_buffer::{ArrowNativeType, Buffer, ToByteSlice};
 use arrow_data::{ArrayDataBuilder, ByteView};
 use arrow_schema::DataType as ArrowType;
 
@@ -28,7 +28,7 @@ use arrow_schema::DataType as ArrowType;
 #[derive(Debug, Default)]
 pub struct ViewBuffer {
     pub views: Vec<u128>,
-    pub buffers: Vec<u8>,
+    pub buffer: Vec<u8>,
 }
 
 impl ViewBuffer {
@@ -41,6 +41,12 @@ impl ViewBuffer {
         self.len() == 0
     }
 
+    /// If `validate_utf8` this verifies that the first character of `data` is
+    /// the start of a UTF-8 codepoint
+    ///
+    /// Note: This does not verify that the entirety of `data` is valid
+    /// UTF-8. This should be done by calling [`Self::check_valid_utf8`] after
+    /// all data has been written
     pub fn try_push(&mut self, data: &[u8], validate_utf8: bool) -> Result<()> {
         if validate_utf8 {
             if let Some(&b) = data.first() {
@@ -62,8 +68,8 @@ impl ViewBuffer {
             return Ok(());
         }
 
-        let offset = self.buffers.len() as u32;
-        self.buffers.extend_from_slice(data);
+        let offset = self.buffer.len() as u32;
+        self.buffer.extend_from_slice(data);
 
         let view = ByteView {
             length,
@@ -105,13 +111,37 @@ impl ViewBuffer {
         Ok(())
     }
 
+    /// Validates that `&self.views[start_offset..]`'s all data are valid UTF-8 sequence
+    pub fn check_valid_utf8(&self, start_offset: usize) -> Result<()> {
+        let views_slice = &self.views.as_slice()[start_offset..];
+        // check inlined view first
+        for view in views_slice {
+            if *view as u32 > 12 {
+                continue;
+            }
+            let len = *view as u32;
+            if let Err(e) = std::str::from_utf8(&view.to_byte_slice()[4..4 + len as usize]) {
+                return Err(general_err!("encountered non UTF-8 data: {}", e));
+            }
+        }
+        let first_buffer = views_slice.iter().find(|view| (**view) as u32 > 12);
+        if first_buffer.is_none() {
+            return Ok(());
+        }
+        let first_buffer_offset = ((*first_buffer.unwrap()) >> 96) as u32 as usize;
+        match std::str::from_utf8(&self.buffer[first_buffer_offset..]) {
+            Ok(_) => Ok(()),
+            Err(e) => Err(general_err!("encountered non UTF-8 data: {}", e)),
+        }
+    }
+
     /// Converts this into an [`ArrayRef`] with the provided `data_type` and `null_buffer`
     pub fn into_array(self, null_buffer: Option<Buffer>, data_type: ArrowType) -> ArrayRef {
         let len = self.len();
         let array_data_builder = ArrayDataBuilder::new(data_type)
             .len(len)
             .add_buffer(Buffer::from_vec(self.views))
-            .add_buffer(Buffer::from_vec(self.buffers))
+            .add_buffer(Buffer::from_vec(self.buffer))
             .null_bit_buffer(null_buffer);
 
         let data = match cfg!(debug_assertions) {
