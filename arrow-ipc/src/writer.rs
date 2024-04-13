@@ -44,9 +44,9 @@ use crate::CONTINUATION_MARKER;
 pub struct IpcWriteOptions {
     /// Write padding after memory buffers to this multiple of bytes.
     /// Must be 8, 16, 32, or 64 - defaults to 64.
-    alignment: u8,
+    pub alignment: u8,
     /// The legacy format is for releases before 0.15.0, and uses metadata V4
-    write_legacy_ipc_format: bool,
+    pub write_legacy_ipc_format: bool,
     /// The metadata version to write. The Rust IPC writer supports V4+
     ///
     /// *Default versions per crate*
@@ -55,10 +55,10 @@ pub struct IpcWriteOptions {
     ///
     /// version 2.0.0: V4, with legacy format enabled
     /// version 4.0.0: V5
-    metadata_version: crate::MetadataVersion,
+    pub metadata_version: crate::MetadataVersion,
     /// Compression, if desired. Will result in a runtime error
     /// if the corresponding feature is not enabled
-    batch_compression_type: Option<crate::CompressionType>,
+    pub batch_compression_type: Option<crate::CompressionType>,
 }
 
 impl IpcWriteOptions {
@@ -1125,7 +1125,7 @@ fn write_body_buffers<W: Write>(
 
 /// Write a record batch to the writer, writing the message size before the message
 /// if the record batch is being written to a stream
-fn write_continuation<W: Write>(
+pub fn write_continuation<W: Write>(
     mut writer: W,
     write_options: &IpcWriteOptions,
     total_len: i32,
