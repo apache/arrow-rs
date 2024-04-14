@@ -88,6 +88,11 @@ mod private {
         type Err = ArrowError;
 
         fn from_str(tz: &str) -> Result<Self, Self::Err> {
+            let offset_str = if tz.eq_ignore_ascii_case("UTC") {
+                "+00:00"
+            } else {
+                tz
+            };
             match parse_fixed_offset(tz) {
                 Some(offset) => Ok(Self(TzInner::Offset(offset))),
                 None => Ok(Self(TzInner::Timezone(tz.parse().map_err(|e| {
@@ -262,7 +267,12 @@ mod private {
         type Err = ArrowError;
 
         fn from_str(tz: &str) -> Result<Self, Self::Err> {
-            let offset = parse_fixed_offset(tz).ok_or_else(|| {
+            let offset_str = if tz.eq_ignore_ascii_case("UTC") {
+                "+00:00"
+            } else {
+                tz
+            };
+            let offset = parse_fixed_offset(offset_str).ok_or_else(|| {
                 ArrowError::ParseError(format!(
                     "Invalid timezone \"{tz}\": only offset based timezones supported without chrono-tz feature"
                 ))

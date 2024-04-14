@@ -519,6 +519,27 @@ fn as_time_res_with_timezone<T: ArrowPrimitiveType>(
     })
 }
 
+fn trans_timestamp_to_date32(
+    array: &dyn Array,
+    cast_options: &CastOptions,
+) -> Result<Arc<dyn Array>, ArrowError> {
+    use DataType::Int64;
+    let array = cast_with_options(array, &Int64, cast_options)?;
+    let time_array = array.as_primitive::<Int64Type>();
+    let from_size = MILLISECONDS * SECONDS_IN_DAY;
+
+    let mut b = Date32Builder::with_capacity(array.len());
+
+    for i in 0..array.len() {
+        if time_array.is_null(i) {
+            b.append_null();
+        } else {
+            let val = num::integer::div_floor::<i64>(time_array.value(i), from_size) as i32;
+            b.append_value(val);
+        }
+    }
+    Ok(Arc::new(b.finish()) as ArrayRef)
+}
 /// Cast `array` to the provided data type and return a new Array with type `to_type`, if possible.
 ///
 /// Accepts [`CastOptions`] to specify cast behavior.
@@ -1590,24 +1611,69 @@ pub fn cast_with_options(
                 to_tz.clone(),
             ))
         }
-        (Timestamp(from_unit, _), Date32) => {
-            let array = cast_with_options(array, &Int64, cast_options)?;
-            let time_array = array.as_primitive::<Int64Type>();
-            let from_size = time_unit_multiple(from_unit) * SECONDS_IN_DAY;
-
-            let mut b = Date32Builder::with_capacity(array.len());
-
-            for i in 0..array.len() {
-                if time_array.is_null(i) {
-                    b.append_null();
-                } else {
-                    b.append_value(
-                        num::integer::div_floor::<i64>(time_array.value(i), from_size) as i32,
-                    );
-                }
+        (Timestamp(TimeUnit::Microsecond, tz), Date32) => {
+            let tz: Option<Tz> = tz.as_ref().map(|tz| tz.parse()).transpose()?;
+            if let Some(tz) = tz {
+                let array = array
+                    .as_primitive::<TimestampMicrosecondType>()
+                    .try_unary::<_, TimestampMicrosecondType, ArrowError>(|x| {
+                    as_datetime_with_timezone::<TimestampSecondType>(x, tz).map_or(Ok(x), |dt| {
+                        Ok(dt.timestamp()
+                            + dt.offset().fix().local_minus_utc() as i64 * MICROSECONDS)
+                    })
+                })?;
+                trans_timestamp_to_date32(&array, cast_options)
+            } else {
+                trans_timestamp_to_date32(array, cast_options)
             }
-
-            Ok(Arc::new(b.finish()) as ArrayRef)
+        }
+        (Timestamp(TimeUnit::Millisecond, tz), Date32) => {
+            let tz: Option<Tz> = tz.as_ref().map(|tz| tz.parse()).transpose()?;
+            if let Some(tz) = tz {
+                let array = array
+                    .as_primitive::<TimestampMillisecondType>()
+                    .try_unary::<_, TimestampMillisecondType, ArrowError>(|x| {
+                    as_datetime_with_timezone::<TimestampSecondType>(x, tz).map_or(Ok(x), |dt| {
+                        Ok(dt.timestamp()
+                            + dt.offset().fix().local_minus_utc() as i64 * MILLISECONDS)
+                    })
+                })?;
+                trans_timestamp_to_date32(&array, cast_options)
+            } else {
+                trans_timestamp_to_date32(array, cast_options)
+            }
+        }
+        (Timestamp(TimeUnit::Second, tz), Date32) => {
+            let tz: Option<Tz> = tz.as_ref().map(|tz| tz.parse()).transpose()?;
+            if let Some(tz) = tz {
+                let array = array
+                    .as_primitive::<TimestampSecondType>()
+                    .try_unary::<_, TimestampSecondType, ArrowError>(|x| {
+                        as_datetime_with_timezone::<TimestampSecondType>(x, tz)
+                            .map_or(Ok(x), |dt| {
+                                Ok(dt.timestamp() + dt.offset().fix().local_minus_utc() as i64)
+                            })
+                    })?;
+                trans_timestamp_to_date32(&array, cast_options)
+            } else {
+                trans_timestamp_to_date32(array, cast_options)
+            }
+        }
+        (Timestamp(TimeUnit::Nanosecond, tz), Date32) => {
+            let tz: Option<Tz> = tz.as_ref().map(|tz| tz.parse()).transpose()?;
+            if let Some(tz) = tz {
+                let array = array
+                    .as_primitive::<TimestampNanosecondType>()
+                    .try_unary::<_, TimestampNanosecondType, ArrowError>(|x| {
+                    as_datetime_with_timezone::<TimestampSecondType>(x, tz).map_or(Ok(x), |dt| {
+                        Ok(dt.timestamp()
+                            + dt.offset().fix().local_minus_utc() as i64 * NANOSECONDS)
+                    })
+                })?;
+                trans_timestamp_to_date32(&array, cast_options)
+            } else {
+                trans_timestamp_to_date32(array, cast_options)
+            }
         }
         (Timestamp(TimeUnit::Second, _), Date64) => Ok(Arc::new(match cast_options.safe {
             true => {
@@ -4441,7 +4507,17 @@ mod tests {
         assert_eq!(17890, c.value(1));
         assert!(c.is_null(2));
     }
+    #[test]
+    fn test_cast_timestamp_to_date32_zone() {
+        let array = TimestampMillisecondArray::from(vec![Some(25201000), Some(111599000), None])
+            .with_timezone("-07:00".to_string());
 
+        let b = cast(&array, &DataType::Date32).unwrap();
+        let c = b.as_primitive::<Date32Type>();
+        assert_eq!(0, c.value(0));
+        assert_eq!(0, c.value(1));
+        assert!(c.is_null(2));
+    }
     #[test]
     fn test_cast_timestamp_to_date64() {
         let array =
@@ -8473,7 +8549,9 @@ mod tests {
 
         for dt in data_types {
             assert_eq!(
-                cast_with_options(&array, &dt, &cast_options).unwrap_err().to_string(),
+                cast_with_options(&array, &dt, &cast_options)
+                    .unwrap_err()
+                    .to_string(),
                 "Parser error: Invalid timezone \"ZZTOP\": only offset based timezones supported without chrono-tz feature"
             );
         }
