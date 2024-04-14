@@ -327,7 +327,6 @@ impl ByteViewArrayDecoderPlain {
         let mut read = 0;
 
         let buf = self.buf.as_ref();
-        output.add_buffer(self.buf.clone());
         while self.offset < self.buf.len() && read != to_read {
             if self.offset + 4 > buf.len() {
                 return Err(ParquetError::EOF("eof decoding byte view array".into()));
@@ -341,7 +340,7 @@ impl ByteViewArrayDecoderPlain {
                 return Err(ParquetError::EOF("eof decoding byte view array".into()));
             }
 
-            output.try_push_with_offset(start_offset, end_offset)?;
+            output.try_push(&buf[start_offset..end_offset], self.validate_utf8)?;
 
             self.offset = end_offset;
             read += 1;
@@ -417,10 +416,12 @@ impl ByteViewArrayDecoderDeltaLength {
         }
 
         let mut start_offset = self.data_offset;
-        output.add_buffer(self.data.clone());
         for length in src_lengths {
             let end_offset = start_offset + *length as usize;
-            output.try_push_with_offset(start_offset, end_offset)?;
+            output.try_push(
+                &self.data.as_ref()[start_offset..end_offset],
+                self.validate_utf8,
+            )?;
             start_offset = end_offset;
         }
 
@@ -498,7 +499,7 @@ impl ByteViewArrayDecoderDictionary {
         }
 
         self.decoder.read(len, |keys| {
-            output.extend_from_dictionary(keys, &dict.views, dict.plain_buffer.as_ref().unwrap())
+            output.extend_from_dictionary(keys, &dict.views, &dict.buffer)
         })
     }
 
