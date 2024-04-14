@@ -63,7 +63,9 @@ where
 {
     let cap = array.len() * size as usize;
 
-    let mut nulls = (cast_options.safe || array.null_count() != 0).then(|| {
+    // Whether the resulting array may contain null lists
+    let nullable = cast_options.safe || array.null_count() != 0;
+    let mut nulls = nullable.then(|| {
         let mut buffer = BooleanBufferBuilder::new(array.len());
         match array.nulls() {
             Some(n) => buffer.append_buffer(n.inner()),
@@ -74,7 +76,7 @@ where
 
     // Nulls in FixedSizeListArray take up space and so we must pad the values
     let values = array.values().to_data();
-    let mut mutable = MutableArrayData::new(vec![&values], cast_options.safe, cap);
+    let mut mutable = MutableArrayData::new(vec![&values], nullable, cap);
     // The end position in values of the last incorrectly-sized list slice
     let mut last_pos = 0;
     for (idx, w) in array.offsets().windows(2).enumerate() {
