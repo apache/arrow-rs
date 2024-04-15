@@ -519,27 +519,34 @@ fn as_time_res_with_timezone<T: ArrowPrimitiveType>(
     })
 }
 
-fn trans_timestamp_to_date32(
-    array: &dyn Array,
-    cast_options: &CastOptions,
-) -> Result<Arc<dyn Array>, ArrowError> {
-    use DataType::Int64;
-    let array = cast_with_options(array, &Int64, cast_options)?;
-    let time_array = array.as_primitive::<Int64Type>();
-    let from_size = MILLISECONDS * SECONDS_IN_DAY;
+fn timestamp_to_date32<T: ArrowTimestampType>(
+    array: &PrimitiveArray<T>,
+) -> Result<ArrayRef, ArrowError> {
+    let err = |x: i64| {
+        ArrowError::CastError(format!(
+            "Cannot convert {} {x} to datetime",
+            std::any::type_name::<T>()
+        ))
+    };
 
-    let mut b = Date32Builder::with_capacity(array.len());
-
-    for i in 0..array.len() {
-        if time_array.is_null(i) {
-            b.append_null();
-        } else {
-            let val = num::integer::div_floor::<i64>(time_array.value(i), from_size) as i32;
-            b.append_value(val);
+    let array: Date32Array = match array.timezone() {
+        Some(tz) => {
+            let tz: Tz = tz.parse()?;
+            array.try_unary(|x| {
+                as_datetime_with_timezone::<T>(x, tz)
+                    .ok_or_else(|| err(x))
+                    .map(|d| Date32Type::from_naive_date(d.date_naive()))
+            })?
         }
-    }
-    Ok(Arc::new(b.finish()) as ArrayRef)
+        None => array.try_unary(|x| {
+            as_datetime::<T>(x)
+                .ok_or_else(|| err(x))
+                .map(|d| Date32Type::from_naive_date(d.date()))
+        })?,
+    };
+    Ok(Arc::new(array))
 }
+
 /// Cast `array` to the provided data type and return a new Array with type `to_type`, if possible.
 ///
 /// Accepts [`CastOptions`] to specify cast behavior.
@@ -1611,69 +1618,17 @@ pub fn cast_with_options(
                 to_tz.clone(),
             ))
         }
-        (Timestamp(TimeUnit::Microsecond, tz), Date32) => {
-            let tz: Option<Tz> = tz.as_ref().map(|tz| tz.parse()).transpose()?;
-            if let Some(tz) = tz {
-                let array = array
-                    .as_primitive::<TimestampMicrosecondType>()
-                    .try_unary::<_, TimestampMicrosecondType, ArrowError>(|x| {
-                    as_datetime_with_timezone::<TimestampSecondType>(x, tz).map_or(Ok(x), |dt| {
-                        Ok(dt.timestamp()
-                            + dt.offset().fix().local_minus_utc() as i64 * MICROSECONDS)
-                    })
-                })?;
-                trans_timestamp_to_date32(&array, cast_options)
-            } else {
-                trans_timestamp_to_date32(array, cast_options)
-            }
+        (Timestamp(TimeUnit::Microsecond, _), Date32) => {
+            timestamp_to_date32(array.as_primitive::<TimestampMicrosecondType>())
         }
-        (Timestamp(TimeUnit::Millisecond, tz), Date32) => {
-            let tz: Option<Tz> = tz.as_ref().map(|tz| tz.parse()).transpose()?;
-            if let Some(tz) = tz {
-                let array = array
-                    .as_primitive::<TimestampMillisecondType>()
-                    .try_unary::<_, TimestampMillisecondType, ArrowError>(|x| {
-                    as_datetime_with_timezone::<TimestampSecondType>(x, tz).map_or(Ok(x), |dt| {
-                        Ok(dt.timestamp()
-                            + dt.offset().fix().local_minus_utc() as i64 * MILLISECONDS)
-                    })
-                })?;
-                trans_timestamp_to_date32(&array, cast_options)
-            } else {
-                trans_timestamp_to_date32(array, cast_options)
-            }
+        (Timestamp(TimeUnit::Millisecond, _), Date32) => {
+            timestamp_to_date32(array.as_primitive::<TimestampMillisecondType>())
         }
-        (Timestamp(TimeUnit::Second, tz), Date32) => {
-            let tz: Option<Tz> = tz.as_ref().map(|tz| tz.parse()).transpose()?;
-            if let Some(tz) = tz {
-                let array = array
-                    .as_primitive::<TimestampSecondType>()
-                    .try_unary::<_, TimestampSecondType, ArrowError>(|x| {
-                        as_datetime_with_timezone::<TimestampSecondType>(x, tz)
-                            .map_or(Ok(x), |dt| {
-                                Ok(dt.timestamp() + dt.offset().fix().local_minus_utc() as i64)
-                            })
-                    })?;
-                trans_timestamp_to_date32(&array, cast_options)
-            } else {
-                trans_timestamp_to_date32(array, cast_options)
-            }
+        (Timestamp(TimeUnit::Second, _), Date32) => {
+            timestamp_to_date32(array.as_primitive::<TimestampSecondType>())
         }
-        (Timestamp(TimeUnit::Nanosecond, tz), Date32) => {
-            let tz: Option<Tz> = tz.as_ref().map(|tz| tz.parse()).transpose()?;
-            if let Some(tz) = tz {
-                let array = array
-                    .as_primitive::<TimestampNanosecondType>()
-                    .try_unary::<_, TimestampNanosecondType, ArrowError>(|x| {
-                    as_datetime_with_timezone::<TimestampSecondType>(x, tz).map_or(Ok(x), |dt| {
-                        Ok(dt.timestamp()
-                            + dt.offset().fix().local_minus_utc() as i64 * NANOSECONDS)
-                    })
-                })?;
-                trans_timestamp_to_date32(&array, cast_options)
-            } else {
-                trans_timestamp_to_date32(array, cast_options)
-            }
+        (Timestamp(TimeUnit::Nanosecond, _), Date32) => {
+            timestamp_to_date32(array.as_primitive::<TimestampNanosecondType>())
         }
         (Timestamp(TimeUnit::Second, _), Date64) => Ok(Arc::new(match cast_options.safe {
             true => {
@@ -2286,6 +2241,7 @@ where
 #[cfg(test)]
 mod tests {
     use arrow_buffer::{Buffer, NullBuffer};
+    use chrono::NaiveDate;
     use half::f16;
 
     use super::*;
@@ -4509,14 +4465,23 @@ mod tests {
     }
     #[test]
     fn test_cast_timestamp_to_date32_zone() {
-        let array = TimestampMillisecondArray::from(vec![Some(25201000), Some(111599000), None])
-            .with_timezone("-07:00".to_string());
+        let strings = StringArray::from_iter([
+            Some("1970-01-01T00:00:01"),
+            Some("1970-01-01T23:59:59"),
+            None,
+            Some("2020-03-01T02:00:23+00:00"),
+        ]);
+        let dt = DataType::Timestamp(TimeUnit::Millisecond, Some("-07:00".into()));
+        let timestamps = cast(&strings, &dt).unwrap();
+        let dates = cast(timestamps.as_ref(), &DataType::Date32).unwrap();
 
-        let b = cast(&array, &DataType::Date32).unwrap();
-        let c = b.as_primitive::<Date32Type>();
-        assert_eq!(0, c.value(0));
-        assert_eq!(0, c.value(1));
+        let c = dates.as_primitive::<Date32Type>();
+        let expected = NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
+        assert_eq!(c.value_as_date(0).unwrap(), expected);
+        assert_eq!(c.value_as_date(1).unwrap(), expected);
         assert!(c.is_null(2));
+        let expected = NaiveDate::from_ymd_opt(2020, 2, 29).unwrap();
+        assert_eq!(c.value_as_date(3).unwrap(), expected);
     }
     #[test]
     fn test_cast_timestamp_to_date64() {
