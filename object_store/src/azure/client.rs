@@ -27,8 +27,8 @@ use crate::multipart::PartId;
 use crate::path::DELIMITER;
 use crate::util::{deserialize_rfc1123, GetRange};
 use crate::{
-    ClientOptions, GetOptions, ListResult, ObjectMeta, Path, PutMode, PutOptions, PutResult,
-    Result, RetryConfig,
+    ClientOptions, GetOptions, ListResult, ObjectMeta, Path, PutMode, PutOptions, PutPayload,
+    PutResult, Result, RetryConfig,
 };
 use async_trait::async_trait;
 use base64::prelude::BASE64_STANDARD;
@@ -171,6 +171,7 @@ impl AzureConfig {
 struct PutRequest<'a> {
     path: &'a Path,
     config: &'a AzureConfig,
+    payload: PutPayload,
     builder: RequestBuilder,
     idempotent: bool,
 }
@@ -195,8 +196,12 @@ impl<'a> PutRequest<'a> {
         let credential = self.config.get_credential().await?;
         let response = self
             .builder
+            .header(CONTENT_LENGTH, self.payload.content_length())
             .with_azure_authorization(&credential, &self.config.account)
-            .send_retry_with_idempotency(&self.config.retry_config, self.idempotent)
+            .retryable(&self.config.retry_config)
+            .idempotent(true)
+            .payload(Some(self.payload))
+            .send()
             .await
             .context(PutRequestSnafu {
                 path: self.path.as_ref(),
@@ -228,7 +233,7 @@ impl AzureClient {
         self.config.get_credential().await
     }
 
-    fn put_request<'a>(&'a self, path: &'a Path, bytes: Bytes) -> PutRequest<'a> {
+    fn put_request<'a>(&'a self, path: &'a Path, payload: PutPayload) -> PutRequest<'a> {
         let url = self.config.path_url(path);
 
         let mut builder = self.client.request(Method::PUT, url);
@@ -237,21 +242,23 @@ impl AzureClient {
             builder = builder.header(CONTENT_TYPE, value);
         }
 
-        builder = builder
-            .header(CONTENT_LENGTH, HeaderValue::from(bytes.len()))
-            .body(bytes);
-
         PutRequest {
             path,
             builder,
+            payload,
             config: &self.config,
             idempotent: false,
         }
     }
 
     /// Make an Azure PUT request <https://docs.microsoft.com/en-us/rest/api/storageservices/put-blob>
-    pub async fn put_blob(&self, path: &Path, bytes: Bytes, opts: PutOptions) -> Result<PutResult> {
-        let builder = self.put_request(path, bytes);
+    pub async fn put_blob(
+        &self,
+        path: &Path,
+        payload: PutPayload,
+        opts: PutOptions,
+    ) -> Result<PutResult> {
+        let builder = self.put_request(path, payload);
 
         let builder = match &opts.mode {
             PutMode::Overwrite => builder.set_idempotent(true),
@@ -272,11 +279,16 @@ impl AzureClient {
     }
 
     /// PUT a block <https://learn.microsoft.com/en-us/rest/api/storageservices/put-block>
-    pub async fn put_block(&self, path: &Path, part_idx: usize, data: Bytes) -> Result<PartId> {
+    pub async fn put_block(
+        &self,
+        path: &Path,
+        part_idx: usize,
+        payload: PutPayload,
+    ) -> Result<PartId> {
         let content_id = format!("{part_idx:20}");
         let block_id = BASE64_STANDARD.encode(&content_id);
 
-        self.put_request(path, data)
+        self.put_request(path, payload)
             .query(&[("comp", "block"), ("blockid", &block_id)])
             .set_idempotent(true)
             .send()
@@ -349,7 +361,9 @@ impl AzureClient {
 
         builder
             .with_azure_authorization(&credential, &self.config.account)
-            .send_retry_with_idempotency(&self.config.retry_config, true)
+            .retryable(&self.config.retry_config)
+            .idempotent(overwrite)
+            .send()
             .await
             .map_err(|err| err.error(STORE, from.to_string()))?;
 
@@ -382,7 +396,9 @@ impl AzureClient {
             .body(body)
             .query(&[("restype", "service"), ("comp", "userdelegationkey")])
             .with_azure_authorization(&credential, &self.config.account)
-            .send_retry_with_idempotency(&self.config.retry_config, true)
+            .retryable(&self.config.retry_config)
+            .idempotent(true)
+            .send()
             .await
             .context(DelegationKeyRequestSnafu)?
             .bytes()

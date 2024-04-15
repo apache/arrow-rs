@@ -245,15 +245,14 @@
 //! # }
 //! ```
 //!
-//! #  Put Object
+//! # Put Object
 //!
 //! Use the [`ObjectStore::put`] method to atomically write data.
 //!
 //! ```
 //! # use object_store::local::LocalFileSystem;
-//! # use object_store::ObjectStore;
+//! # use object_store::{ObjectStore, PutPayload};
 //! # use std::sync::Arc;
-//! # use bytes::Bytes;
 //! # use object_store::path::Path;
 //! # fn get_object_store() -> Arc<dyn ObjectStore> {
 //! #   Arc::new(LocalFileSystem::new())
@@ -262,12 +261,12 @@
 //! #
 //! let object_store: Arc<dyn ObjectStore> = get_object_store();
 //! let path = Path::from("data/file1");
-//! let bytes = Bytes::from_static(b"hello");
-//! object_store.put(&path, bytes).await.unwrap();
+//! let payload = PutPayload::from_static(b"hello");
+//! object_store.put(&path, payload).await.unwrap();
 //! # }
 //! ```
 //!
-//! #  Multipart Upload
+//! # Multipart Upload
 //!
 //! Use the [`ObjectStore::put_multipart`] method to atomically write a large amount of data
 //!
@@ -317,6 +316,48 @@
 //! let ranges = object_store.get_ranges(&path, &[90..100, 400..600, 0..10]).await.unwrap();
 //! assert_eq!(ranges.len(), 3);
 //! assert_eq!(ranges[0].len(), 10);
+//! # }
+//! ```
+//!
+//! # Vectored Write
+//!
+//! When writing data it is often the case that the size of the output is not known ahead of time.
+//!
+//! A common approach to handling this is to bump-allocate a `Vec`, whereby the underlying
+//! allocation is repeatedly reallocated, each time doubling the capacity. The performance of
+//! this is suboptimal as reallocating memory will often involve copying it to a new location.
+//!
+//! Fortunately, as [`PutPayload`] does not require memory regions to be contiguous, it is
+//! possible to instead allocate memory in chunks and avoid bump allocating. [`PutPayloadMut`]
+//! encapsulates this approach
+//!
+//! ```
+//! # use object_store::local::LocalFileSystem;
+//! # use object_store::{ObjectStore, PutPayloadMut};
+//! # use std::sync::Arc;
+//! # use bytes::Bytes;
+//! # use tokio::io::AsyncWriteExt;
+//! # use object_store::path::Path;
+//! # fn get_object_store() -> Arc<dyn ObjectStore> {
+//! #   Arc::new(LocalFileSystem::new())
+//! # }
+//! # async fn multi_upload() {
+//! #
+//! let object_store: Arc<dyn ObjectStore> = get_object_store();
+//! let path = Path::from("data/large_file");
+//! let mut buffer = PutPayloadMut::new().with_block_size(8192);
+//! for _ in 0..22 {
+//!     buffer.extend_from_slice(&[0; 1024]);
+//! }
+//! let payload = buffer.freeze();
+//!
+//! // Payload consists of 3 separate 8KB allocations
+//! assert_eq!(payload.as_ref().len(), 3);
+//! assert_eq!(payload.as_ref()[0].len(), 8192);
+//! assert_eq!(payload.as_ref()[1].len(), 8192);
+//! assert_eq!(payload.as_ref()[2].len(), 6144);
+//!
+//! object_store.put(&path, payload).await.unwrap();
 //! # }
 //! ```
 //!
@@ -427,7 +468,7 @@
 //!     let new = do_update(r.bytes().await.unwrap());
 //!
 //!     // Attempt to commit transaction
-//!     match store.put_opts(&path, new, PutMode::Update(version).into()).await {
+//!     match store.put_opts(&path, new.into(), PutMode::Update(version).into()).await {
 //!         Ok(_) => break, // Successfully committed
 //!         Err(Error::Precondition { .. }) => continue, // Object has changed, try again
 //!         Err(e) => panic!("{e}")
@@ -498,17 +539,18 @@ pub use tags::TagSet;
 
 pub mod multipart;
 mod parse;
+mod payload;
 mod upload;
 mod util;
 
 pub use parse::{parse_url, parse_url_opts};
+pub use payload::*;
 pub use upload::*;
-pub use util::GetRange;
+pub use util::{coalesce_ranges, collect_bytes, GetRange, OBJECT_STORE_COALESCE_DEFAULT};
 
 use crate::path::Path;
 #[cfg(not(target_arch = "wasm32"))]
 use crate::util::maybe_spawn_blocking;
-pub use crate::util::{coalesce_ranges, collect_bytes, OBJECT_STORE_COALESCE_DEFAULT};
 use async_trait::async_trait;
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
@@ -532,14 +574,20 @@ pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
     /// Save the provided bytes to the specified location
     ///
     /// The operation is guaranteed to be atomic, it will either successfully
-    /// write the entirety of `bytes` to `location`, or fail. No clients
+    /// write the entirety of `payload` to `location`, or fail. No clients
     /// should be able to observe a partially written object
-    async fn put(&self, location: &Path, bytes: Bytes) -> Result<PutResult> {
-        self.put_opts(location, bytes, PutOptions::default()).await
+    async fn put(&self, location: &Path, payload: PutPayload) -> Result<PutResult> {
+        self.put_opts(location, payload, PutOptions::default())
+            .await
     }
 
-    /// Save the provided bytes to the specified location with the given options
-    async fn put_opts(&self, location: &Path, bytes: Bytes, opts: PutOptions) -> Result<PutResult>;
+    /// Save the provided `payload` to `location` with the given options
+    async fn put_opts(
+        &self,
+        location: &Path,
+        payload: PutPayload,
+        opts: PutOptions,
+    ) -> Result<PutResult>;
 
     /// Perform a multipart upload
     ///
@@ -616,11 +664,10 @@ pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
     /// # use object_store::{ObjectStore, ObjectMeta};
     /// # use object_store::path::Path;
     /// # use futures::{StreamExt, TryStreamExt};
-    /// # use bytes::Bytes;
     /// #
     /// // Create two objects
-    /// store.put(&Path::from("foo"), Bytes::from("foo")).await?;
-    /// store.put(&Path::from("bar"), Bytes::from("bar")).await?;
+    /// store.put(&Path::from("foo"), "foo".into()).await?;
+    /// store.put(&Path::from("bar"), "bar".into()).await?;
     ///
     /// // List object
     /// let locations = store.list(None).map_ok(|m| m.location).boxed();
@@ -717,17 +764,17 @@ macro_rules! as_ref_impl {
     ($type:ty) => {
         #[async_trait]
         impl ObjectStore for $type {
-            async fn put(&self, location: &Path, bytes: Bytes) -> Result<PutResult> {
-                self.as_ref().put(location, bytes).await
+            async fn put(&self, location: &Path, payload: PutPayload) -> Result<PutResult> {
+                self.as_ref().put(location, payload).await
             }
 
             async fn put_opts(
                 &self,
                 location: &Path,
-                bytes: Bytes,
+                payload: PutPayload,
                 opts: PutOptions,
             ) -> Result<PutResult> {
-                self.as_ref().put_opts(location, bytes, opts).await
+                self.as_ref().put_opts(location, payload, opts).await
             }
 
             async fn put_multipart(&self, location: &Path) -> Result<Box<dyn MultipartUpload>> {
@@ -1219,8 +1266,7 @@ mod tests {
         let location = Path::from("test_dir/test_file.json");
 
         let data = Bytes::from("arbitrary data");
-        let expected_data = data.clone();
-        storage.put(&location, data).await.unwrap();
+        storage.put(&location, data.clone().into()).await.unwrap();
 
         let root = Path::from("/");
 
@@ -1263,14 +1309,14 @@ mod tests {
         assert!(content_list.is_empty());
 
         let read_data = storage.get(&location).await.unwrap().bytes().await.unwrap();
-        assert_eq!(&*read_data, expected_data);
+        assert_eq!(&*read_data, data);
 
         // Test range request
         let range = 3..7;
         let range_result = storage.get_range(&location, range.clone()).await;
 
         let bytes = range_result.unwrap();
-        assert_eq!(bytes, expected_data.slice(range.clone()));
+        assert_eq!(bytes, data.slice(range.clone()));
 
         let opts = GetOptions {
             range: Some(GetRange::Bounded(2..5)),
@@ -1348,11 +1394,11 @@ mod tests {
         let ranges = vec![0..1, 2..3, 0..5];
         let bytes = storage.get_ranges(&location, &ranges).await.unwrap();
         for (range, bytes) in ranges.iter().zip(bytes) {
-            assert_eq!(bytes, expected_data.slice(range.clone()))
+            assert_eq!(bytes, data.slice(range.clone()))
         }
 
         let head = storage.head(&location).await.unwrap();
-        assert_eq!(head.size, expected_data.len());
+        assert_eq!(head.size, data.len());
 
         storage.delete(&location).await.unwrap();
 
@@ -1369,7 +1415,7 @@ mod tests {
 
         let file_with_delimiter = Path::from_iter(["a", "b/c", "foo.file"]);
         storage
-            .put(&file_with_delimiter, Bytes::from("arbitrary"))
+            .put(&file_with_delimiter, "arbitrary".into())
             .await
             .unwrap();
 
@@ -1409,10 +1455,7 @@ mod tests {
 
         let emoji_prefix = Path::from("🙀");
         let emoji_file = Path::from("🙀/😀.parquet");
-        storage
-            .put(&emoji_file, Bytes::from("arbitrary"))
-            .await
-            .unwrap();
+        storage.put(&emoji_file, "arbitrary".into()).await.unwrap();
 
         storage.head(&emoji_file).await.unwrap();
         storage
@@ -1464,7 +1507,7 @@ mod tests {
         let hello_prefix = Path::parse("%48%45%4C%4C%4F").unwrap();
         let path = hello_prefix.child("foo.parquet");
 
-        storage.put(&path, Bytes::from(vec![0, 1])).await.unwrap();
+        storage.put(&path, vec![0, 1].into()).await.unwrap();
         let files = flatten_list_stream(storage, Some(&hello_prefix))
             .await
             .unwrap();
@@ -1504,7 +1547,7 @@ mod tests {
 
         // Can also write non-percent encoded sequences
         let path = Path::parse("%Q.parquet").unwrap();
-        storage.put(&path, Bytes::from(vec![0, 1])).await.unwrap();
+        storage.put(&path, vec![0, 1].into()).await.unwrap();
 
         let files = flatten_list_stream(storage, None).await.unwrap();
         assert_eq!(files, vec![path.clone()]);
@@ -1512,7 +1555,7 @@ mod tests {
         storage.delete(&path).await.unwrap();
 
         let path = Path::parse("foo bar/I contain spaces.parquet").unwrap();
-        storage.put(&path, Bytes::from(vec![0, 1])).await.unwrap();
+        storage.put(&path, vec![0, 1].into()).await.unwrap();
         storage.head(&path).await.unwrap();
 
         let files = flatten_list_stream(storage, Some(&Path::from("foo bar")))
@@ -1622,7 +1665,7 @@ mod tests {
         delete_fixtures(storage).await;
 
         let path = Path::from("empty");
-        storage.put(&path, Bytes::new()).await.unwrap();
+        storage.put(&path, PutPayload::default()).await.unwrap();
         let meta = storage.head(&path).await.unwrap();
         assert_eq!(meta.size, 0);
         let data = storage.get(&path).await.unwrap().bytes().await.unwrap();
@@ -1879,7 +1922,7 @@ mod tests {
         let data = get_chunks(5 * 1024 * 1024, 3);
         let bytes_expected = data.concat();
         let mut upload = storage.put_multipart(&location).await.unwrap();
-        let uploads = data.into_iter().map(|x| upload.put_part(x));
+        let uploads = data.into_iter().map(|x| upload.put_part(x.into()));
         futures::future::try_join_all(uploads).await.unwrap();
 
         // Object should not yet exist in store
@@ -1928,7 +1971,7 @@ mod tests {
         // We can abort an in-progress write
         let mut upload = storage.put_multipart(&location).await.unwrap();
         upload
-            .put_part(data.first().unwrap().clone())
+            .put_part(data.first().unwrap().clone().into())
             .await
             .unwrap();
 
@@ -1953,7 +1996,7 @@ mod tests {
         let location1 = Path::from("foo/x.json");
         let location2 = Path::from("foo.bar/y.json");
 
-        let data = Bytes::from("arbitrary data");
+        let data = PutPayload::from("arbitrary data");
         storage.put(&location1, data.clone()).await.unwrap();
         storage.put(&location2, data).await.unwrap();
 
@@ -2011,8 +2054,7 @@ mod tests {
         .collect();
 
         for f in &files {
-            let data = data.clone();
-            storage.put(f, data).await.unwrap();
+            storage.put(f, data.clone().into()).await.unwrap();
         }
 
         // ==================== check: prefix-list `mydb/wb` (directory) ====================
@@ -2076,15 +2118,15 @@ mod tests {
         let contents2 = Bytes::from("dogs");
 
         // copy() make both objects identical
-        storage.put(&path1, contents1.clone()).await.unwrap();
-        storage.put(&path2, contents2.clone()).await.unwrap();
+        storage.put(&path1, contents1.clone().into()).await.unwrap();
+        storage.put(&path2, contents2.clone().into()).await.unwrap();
         storage.copy(&path1, &path2).await.unwrap();
         let new_contents = storage.get(&path2).await.unwrap().bytes().await.unwrap();
         assert_eq!(&new_contents, &contents1);
 
         // rename() copies contents and deletes original
-        storage.put(&path1, contents1.clone()).await.unwrap();
-        storage.put(&path2, contents2.clone()).await.unwrap();
+        storage.put(&path1, contents1.clone().into()).await.unwrap();
+        storage.put(&path2, contents2.clone().into()).await.unwrap();
         storage.rename(&path1, &path2).await.unwrap();
         let new_contents = storage.get(&path2).await.unwrap().bytes().await.unwrap();
         assert_eq!(&new_contents, &contents1);
@@ -2104,8 +2146,8 @@ mod tests {
         let contents2 = Bytes::from("dogs");
 
         // copy_if_not_exists() errors if destination already exists
-        storage.put(&path1, contents1.clone()).await.unwrap();
-        storage.put(&path2, contents2.clone()).await.unwrap();
+        storage.put(&path1, contents1.clone().into()).await.unwrap();
+        storage.put(&path2, contents2.clone().into()).await.unwrap();
         let result = storage.copy_if_not_exists(&path1, &path2).await;
         assert!(result.is_err());
         assert!(matches!(
@@ -2133,7 +2175,7 @@ mod tests {
 
         // Create destination object
         let path2 = Path::from("test2");
-        storage.put(&path2, Bytes::from("hello")).await.unwrap();
+        storage.put(&path2, "hello".into()).await.unwrap();
 
         // copy() errors if source does not exist
         let result = storage.copy(&path1, &path2).await;
@@ -2164,7 +2206,7 @@ mod tests {
 
         let parts: Vec<_> = futures::stream::iter(chunks)
             .enumerate()
-            .map(|(idx, b)| multipart.put_part(&path, &id, idx, b))
+            .map(|(idx, b)| multipart.put_part(&path, &id, idx, b.into()))
             .buffered(2)
             .try_collect()
             .await
@@ -2204,7 +2246,7 @@ mod tests {
 
         let data = Bytes::from("hello world");
         let path = Path::from("file.txt");
-        integration.put(&path, data.clone()).await.unwrap();
+        integration.put(&path, data.clone().into()).await.unwrap();
 
         let signed = integration
             .signed_url(Method::GET, &path, Duration::from_secs(60))

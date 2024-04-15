@@ -22,10 +22,9 @@
 //! especially useful when dealing with large files or high-throughput systems.
 
 use async_trait::async_trait;
-use bytes::Bytes;
 
 use crate::path::Path;
-use crate::{MultipartId, PutResult, Result};
+use crate::{MultipartId, PutPayload, PutResult, Result};
 
 /// Represents a part of a file that has been successfully uploaded in a multipart upload process.
 #[derive(Debug, Clone)]
@@ -64,7 +63,7 @@ pub trait MultipartStore: Send + Sync + 'static {
         path: &Path,
         id: &MultipartId,
         part_idx: usize,
-        data: Bytes,
+        data: PutPayload,
     ) -> Result<PartId>;
 
     /// Completes a multipart upload
