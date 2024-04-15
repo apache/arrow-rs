@@ -1450,10 +1450,14 @@ mod not_wasm_tests {
         assert_eq!(file_count, 1);
         drop(upload);
 
-        tokio::time::sleep(Duration::from_millis(1)).await;
-
-        let file_count = std::fs::read_dir(root.path()).unwrap().count();
-        assert_eq!(file_count, 0);
+        for _ in 0..100 {
+            tokio::time::sleep(Duration::from_millis(1)).await;
+            let file_count = std::fs::read_dir(root.path()).unwrap().count();
+            if file_count == 0 {
+                return;
+            }
+        }
+        panic!("Failed to cleanup file in 100ms")
     }
 }
 
