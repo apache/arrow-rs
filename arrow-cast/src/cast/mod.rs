@@ -6806,6 +6806,27 @@ mod tests {
             3,
         )) as ArrayRef;
         assert_eq!(expected.as_ref(), res.as_ref());
+
+        // The safe option is false and the source array contains a null list.
+        // issue: https://github.com/apache/arrow-rs/issues/5642
+        let array = Arc::new(ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+            Some(vec![Some(1), Some(2), Some(3)]),
+            None,
+        ])) as ArrayRef;
+        let res = cast_with_options(
+            array.as_ref(),
+            &DataType::FixedSizeList(Arc::new(Field::new("item", DataType::Int32, true)), 3),
+            &CastOptions {
+                safe: false,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let expected = Arc::new(FixedSizeListArray::from_iter_primitive::<Int32Type, _, _>(
+            vec![Some(vec![Some(1), Some(2), Some(3)]), None],
+            3,
+        )) as ArrayRef;
+        assert_eq!(expected.as_ref(), res.as_ref());
     }
 
     #[test]
