@@ -1770,6 +1770,11 @@ impl ArrayDataBuilder {
         self
     }
 
+    pub fn add_buffers(mut self, bs: Vec<Buffer>) -> Self {
+        self.buffers.extend(bs);
+        self
+    }
+
     pub fn child_data(mut self, v: Vec<ArrayData>) -> Self {
         self.child_data = v;
         self
