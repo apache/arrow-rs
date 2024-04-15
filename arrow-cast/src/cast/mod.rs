@@ -4456,7 +4456,7 @@ mod tests {
     fn test_cast_timestamp_to_date32() {
         let array =
             TimestampMillisecondArray::from(vec![Some(864000000005), Some(1545696000001), None])
-                .with_timezone("UTC".to_string());
+                .with_timezone("+00:00".to_string());
         let b = cast(&array, &DataType::Date32).unwrap();
         let c = b.as_primitive::<Date32Type>();
         assert_eq!(10000, c.value(0));
@@ -8422,7 +8422,7 @@ mod tests {
             .map(|ts| ts / 1_000_000)
             .collect::<Vec<_>>();
 
-        let array = TimestampMillisecondArray::from(ts_array).with_timezone("UTC".to_string());
+        let array = TimestampMillisecondArray::from(ts_array).with_timezone("+00:00".to_string());
         let casted_array = cast(&array, &DataType::Date32).unwrap();
         let date_array = casted_array.as_primitive::<Date32Type>();
         let casted_array = cast(&date_array, &DataType::Utf8).unwrap();
