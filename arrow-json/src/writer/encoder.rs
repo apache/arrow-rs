@@ -88,6 +88,10 @@ fn make_encoder_impl<'a>(
             let array = array.as_list::<i64>();
             (Box::new(ListEncoder::try_new(array, options)?) as _, array.nulls().cloned())
         }
+        DataType::FixedSizeList(_, _) => {
+            let array = array.as_fixed_size_list();
+            (Box::new(FixedSizeListEncoder::try_new(array, options)?) as _, array.nulls().cloned())
+        }
 
         DataType::Dictionary(_, _) => downcast_dictionary_array! {
             array => (Box::new(DictionaryEncoder::try_new(array, options)?) as _,  array.logical_nulls()),
@@ -100,7 +104,7 @@ fn make_encoder_impl<'a>(
         }
 
         DataType::FixedSizeBinary(_) => {
-            let array = array.as_any().downcast_ref::<FixedSizeBinaryArray>().unwrap();
+            let array = array.as_fixed_size_binary();
             (Box::new(FixedSizeBinaryEncoder::new(array)) as _, array.nulls().cloned())
         }
 
@@ -321,6 +325,53 @@ impl<'a, O: OffsetSizeTrait> Encoder for ListEncoder<'a, O> {
             None => (start..end).for_each(|idx| {
                 if idx != start {
                     out.push(b',')
+                }
+                self.encoder.encode(idx, out);
+            }),
+        }
+        out.push(b']');
+    }
+}
+
+struct FixedSizeListEncoder<'a> {
+    value_length: usize,
+    nulls: Option<NullBuffer>,
+    encoder: Box<dyn Encoder + 'a>,
+}
+
+impl<'a> FixedSizeListEncoder<'a> {
+    fn try_new(
+        array: &'a FixedSizeListArray,
+        options: &EncoderOptions,
+    ) -> Result<Self, ArrowError> {
+        let (encoder, nulls) = make_encoder_impl(array.values().as_ref(), options)?;
+        Ok(Self {
+            encoder,
+            nulls,
+            value_length: array.value_length().as_usize(),
+        })
+    }
+}
+
+impl<'a> Encoder for FixedSizeListEncoder<'a> {
+    fn encode(&mut self, idx: usize, out: &mut Vec<u8>) {
+        let start = idx * self.value_length;
+        let end = start + self.value_length;
+        out.push(b'[');
+        match self.nulls.as_ref() {
+            Some(n) => (start..end).for_each(|idx| {
+                if idx != start {
+                    out.push(b',');
+                }
+                if n.is_null(idx) {
+                    out.extend_from_slice(b"null");
+                } else {
+                    self.encoder.encode(idx, out);
+                }
+            }),
+            None => (start..end).for_each(|idx| {
+                if idx != start {
+                    out.push(b',');
                 }
                 self.encoder.encode(idx, out);
             }),

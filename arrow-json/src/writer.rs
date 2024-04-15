@@ -834,7 +834,8 @@ mod tests {
     use serde_json::json;
 
     use arrow_array::builder::{
-        FixedSizeBinaryBuilder, Int32Builder, Int64Builder, MapBuilder, StringBuilder,
+        FixedSizeBinaryBuilder, FixedSizeListBuilder, Int32Builder, Int64Builder, MapBuilder,
+        StringBuilder,
     };
     use arrow_buffer::{Buffer, NullBuffer, OffsetBuffer, ToByteSlice};
     use arrow_data::ArrayData;
@@ -2212,6 +2213,88 @@ mod tests {
                     }
                 ]),
                 json_value,
+            );
+        }
+    }
+
+    #[test]
+    fn test_writer_fixed_size_list() {
+        let size = 3;
+        let field = FieldRef::new(Field::new("item", DataType::Int32, true));
+        let schema = SchemaRef::new(Schema::new(vec![Field::new(
+            "list",
+            DataType::FixedSizeList(field, size),
+            true,
+        )]));
+
+        let values_builder = Int32Builder::new();
+        let mut list_builder = FixedSizeListBuilder::new(values_builder, size);
+        let lists = [
+            Some([Some(1), Some(2), None]),
+            Some([Some(3), None, Some(4)]),
+            Some([None, Some(5), Some(6)]),
+            None,
+        ];
+        for list in lists {
+            match list {
+                Some(l) => {
+                    for value in l {
+                        match value {
+                            Some(v) => list_builder.values().append_value(v),
+                            None => list_builder.values().append_null(),
+                        }
+                    }
+                    list_builder.append(true);
+                }
+                None => {
+                    for _ in 0..size {
+                        list_builder.values().append_null();
+                    }
+                    list_builder.append(false);
+                }
+            }
+        }
+        let array = Arc::new(list_builder.finish()) as ArrayRef;
+        let batch = RecordBatch::try_new(schema, vec![array]).unwrap();
+
+        //encode and check JSON with explicit nulls:
+        {
+            let json_value: Value = {
+                let mut buf = Vec::new();
+                let mut writer = WriterBuilder::new()
+                    .with_explicit_nulls(true)
+                    .build::<_, JsonArray>(&mut buf);
+                writer.write(&batch).unwrap();
+                writer.close().unwrap();
+                serde_json::from_slice(&buf).unwrap()
+            };
+            assert_eq!(
+                json!([
+                    {"list": [1, 2, null]},
+                    {"list": [3, null, 4]},
+                    {"list": [null, 5, 6]},
+                    {"list": null},
+                ]),
+                json_value
+            );
+        }
+        // encode and check JSON with no explicit nulls:
+        {
+            let json_value: Value = {
+                let mut buf = Vec::new();
+                let mut writer = ArrayWriter::new(&mut buf);
+                writer.write(&batch).unwrap();
+                writer.close().unwrap();
+                serde_json::from_slice(&buf).unwrap()
+            };
+            assert_eq!(
+                json!([
+                    {"list": [1, 2, null]},
+                    {"list": [3, null, 4]},
+                    {"list": [null, 5, 6]},
+                    {}, // empty because nulls are omitted
+                ]),
+                json_value
             );
         }
     }
