@@ -183,7 +183,12 @@ impl From<PutPayload> for Bytes {
     }
 }
 
-/// A builder for [`PutPayload`] that allocates memory in chunks
+/// A builder for [`PutPayload`] that avoids reallocating memory
+///
+/// Data is allocated in fixed blocks, which are flushed to [`Bytes`] once full.
+/// Unlike [`Vec`] this avoids needing to repeatedly reallocate blocks of memory,
+/// which typically involves copying all the previously written data to a new
+/// contiguous memory region.
 #[derive(Debug)]
 pub struct PutPayloadMut {
     len: usize,
@@ -210,7 +215,7 @@ impl PutPayloadMut {
         Self::default()
     }
 
-    /// Allocate data in chunks of `block_size`
+    /// Configures the minimum allocation size
     ///
     /// Defaults to 8KB
     pub fn with_block_size(self, block_size: usize) -> Self {
@@ -218,6 +223,10 @@ impl PutPayloadMut {
     }
 
     /// Write bytes into this [`PutPayloadMut`]
+    ///
+    /// If there is an in-progress block, data will be first written to it, flushing
+    /// it to [`Bytes`] once full. If data remains to be written, a new block of memory
+    /// of at least the configured block size will be allocated, to hold the remaining data.
     pub fn extend_from_slice(&mut self, slice: &[u8]) {
         let remaining = self.in_progress.capacity() - self.in_progress.len();
         let to_copy = remaining.min(slice.len());
@@ -234,7 +243,10 @@ impl PutPayloadMut {
         self.len += slice.len();
     }
 
-    /// Append a [`Bytes`] to this [`PutPayloadMut`]
+    /// Append a [`Bytes`] to this [`PutPayloadMut`] without copying
+    ///
+    /// This will close any currently buffered block populated by [`Self::extend_from_slice`],
+    /// and append `bytes` to this payload without copying.
     pub fn push(&mut self, bytes: Bytes) {
         if !self.in_progress.is_empty() {
             let completed = std::mem::take(&mut self.in_progress);
@@ -283,16 +295,20 @@ mod test {
         chunk.extend_from_slice(&[2; 5]);
         chunk.extend_from_slice(&[2; 21]);
         chunk.extend_from_slice(&[2; 40]);
+        chunk.extend_from_slice(&[0; 0]);
+        chunk.push("foobar".into());
+
         let payload = chunk.freeze();
-        assert_eq!(payload.content_length(), 114);
+        assert_eq!(payload.content_length(), 120);
 
         let chunks = payload.as_ref();
-        assert_eq!(chunks.len(), 5);
+        assert_eq!(chunks.len(), 6);
 
         assert_eq!(chunks[0].len(), 23);
         assert_eq!(chunks[1].len(), 25); // 32 - (23 - 16)
         assert_eq!(chunks[2].len(), 23);
         assert_eq!(chunks[3].len(), 23);
         assert_eq!(chunks[4].len(), 20);
+        assert_eq!(chunks[5].len(), 6);
     }
 }

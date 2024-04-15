@@ -151,6 +151,9 @@ impl WriteMultipart {
 
     /// Write data to this [`WriteMultipart`]
     ///
+    /// Data is buffered using [`PutPayloadMut::extend_from_slice`]. Implementations looking to
+    /// write data from owned buffers may prefer [`Self::put`] as this avoids copying.
+    ///
     /// Note this method is synchronous (not `async`) and will immediately
     /// start new uploads as soon as the internal `chunk_size` is hit,
     /// regardless of how many outstanding uploads are already in progress.
@@ -170,7 +173,11 @@ impl WriteMultipart {
         }
     }
 
-    /// Put a chunk of data into this [`WriteMultipart`]
+    /// Put a chunk of data into this [`WriteMultipart`] without copying
+    ///
+    /// Data is buffered using [`PutPayloadMut::push`]. Implementations looking to
+    /// perform writes from non-owned buffers should prefer [`Self::write`] as this
+    /// will allow multiple calls to share the same underlying allocation.
     ///
     /// See [`Self::write`] for information on backpressure
     pub fn put(&mut self, mut bytes: Bytes) {

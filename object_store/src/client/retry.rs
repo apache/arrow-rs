@@ -180,6 +180,9 @@ pub struct RetryableRequest {
 
 impl RetryableRequest {
     /// Set whether this request is idempotent
+    ///
+    /// An idempotent request will be retried on timeout even if the request
+    /// method is not [safe](https://datatracker.ietf.org/doc/html/rfc7231#section-4.2.1)
     pub fn idempotent(self, idempotent: bool) -> Self {
         Self {
             idempotent: Some(idempotent),
@@ -204,16 +207,16 @@ impl RetryableRequest {
             .unwrap_or_else(|| self.request.method().is_safe());
 
         loop {
-            let mut s = self
+            let mut request = self
                 .request
                 .try_clone()
                 .expect("request body must be cloneable");
 
-            if let Some(x) = &self.payload {
-                *s.body_mut() = Some(x.body());
+            if let Some(payload) = &self.payload {
+                *request.body_mut() = Some(payload.body());
             }
 
-            match self.client.execute(s).await {
+            match self.client.execute(request).await {
                 Ok(r) => match r.error_for_status_ref() {
                     Ok(_) if r.status().is_success() => return Ok(r),
                     Ok(r) if r.status() == StatusCode::NOT_MODIFIED => {
