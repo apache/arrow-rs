@@ -27,14 +27,15 @@ use crate::multipart::PartId;
 use crate::path::DELIMITER;
 use crate::util::{deserialize_rfc1123, GetRange};
 use crate::{
-    ClientOptions, GetOptions, ListResult, ObjectMeta, Path, PutMode, PutOptions, PutPayload,
-    PutResult, Result, RetryConfig,
+    Attribute, Attributes, ClientOptions, GetOptions, ListResult, ObjectMeta, Path, PutMode,
+    PutOptions, PutPayload, PutResult, Result, RetryConfig,
 };
 use async_trait::async_trait;
 use base64::prelude::BASE64_STANDARD;
 use base64::Engine;
 use bytes::{Buf, Bytes};
 use chrono::{DateTime, Utc};
+use hyper::header::CACHE_CONTROL;
 use hyper::http::HeaderName;
 use reqwest::header::CONTENT_TYPE;
 use reqwest::{
@@ -187,9 +188,8 @@ impl<'a> PutRequest<'a> {
         Self { builder, ..self }
     }
 
-    fn set_idempotent(mut self, idempotent: bool) -> Self {
-        self.idempotent = idempotent;
-        self
+    fn set_idempotent(self, idempotent: bool) -> Self {
+        Self { idempotent, ..self }
     }
 
     async fn send(self) -> Result<Response> {
@@ -199,7 +199,7 @@ impl<'a> PutRequest<'a> {
             .header(CONTENT_LENGTH, self.payload.content_length())
             .with_azure_authorization(&credential, &self.config.account)
             .retryable(&self.config.retry_config)
-            .idempotent(true)
+            .idempotent(self.idempotent)
             .payload(Some(self.payload))
             .send()
             .await
@@ -233,13 +233,31 @@ impl AzureClient {
         self.config.get_credential().await
     }
 
-    fn put_request<'a>(&'a self, path: &'a Path, payload: PutPayload) -> PutRequest<'a> {
+    fn put_request<'a>(
+        &'a self,
+        path: &'a Path,
+        payload: PutPayload,
+        attributes: Attributes,
+    ) -> PutRequest<'a> {
         let url = self.config.path_url(path);
 
         let mut builder = self.client.request(Method::PUT, url);
 
-        if let Some(value) = self.config().client_options.get_content_type(path) {
-            builder = builder.header(CONTENT_TYPE, value);
+        let mut has_content_type = false;
+        for (k, v) in &attributes {
+            builder = match k {
+                Attribute::CacheControl => builder.header(CACHE_CONTROL, v.as_ref()),
+                Attribute::ContentType => {
+                    has_content_type = true;
+                    builder.header(CONTENT_TYPE, v.as_ref())
+                }
+            };
+        }
+
+        if !has_content_type {
+            if let Some(value) = self.config.client_options.get_content_type(path) {
+                builder = builder.header(CONTENT_TYPE, value);
+            }
         }
 
         PutRequest {
@@ -258,7 +276,7 @@ impl AzureClient {
         payload: PutPayload,
         opts: PutOptions,
     ) -> Result<PutResult> {
-        let builder = self.put_request(path, payload);
+        let builder = self.put_request(path, payload, opts.attributes);
 
         let builder = match &opts.mode {
             PutMode::Overwrite => builder.set_idempotent(true),
@@ -288,7 +306,7 @@ impl AzureClient {
         let content_id = format!("{part_idx:20}");
         let block_id = BASE64_STANDARD.encode(&content_id);
 
-        self.put_request(path, payload)
+        self.put_request(path, payload, Attributes::default())
             .query(&[("comp", "block"), ("blockid", &block_id)])
             .set_idempotent(true)
             .send()
@@ -304,8 +322,9 @@ impl AzureClient {
             .map(|part| BlockId::from(part.content_id))
             .collect();
 
+        let payload = BlockList { blocks }.to_xml().into();
         let response = self
-            .put_request(path, BlockList { blocks }.to_xml().into())
+            .put_request(path, payload, Attributes::default())
             .query(&[("comp", "blocklist")])
             .set_idempotent(true)
             .send()

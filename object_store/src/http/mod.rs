@@ -105,7 +105,7 @@ impl ObjectStore for HttpStore {
             return Err(crate::Error::NotImplemented);
         }
 
-        let response = self.client.put(location, payload).await?;
+        let response = self.client.put(location, payload, opts.attributes).await?;
         let e_tag = match get_etag(response.headers()) {
             Ok(e_tag) => Some(e_tag),
             Err(crate::client::header::Error::MissingEtag) => None,

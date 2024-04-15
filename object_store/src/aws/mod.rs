@@ -156,7 +156,8 @@ impl ObjectStore for AmazonS3 {
         payload: PutPayload,
         opts: PutOptions,
     ) -> Result<PutResult> {
-        let mut request = self.client.put_request(location, payload, true);
+        let attrs = opts.attributes;
+        let mut request = self.client.put_request(location, payload, attrs, true);
         let tags = opts.tags.encoded();
         if !tags.is_empty() && !self.client.config.disable_tagging {
             request = request.header(&TAGS_HEADER, tags);
