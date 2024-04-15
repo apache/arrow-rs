@@ -51,7 +51,7 @@ pub struct AttributeValue(Cow<'static, str>);
 
 impl AsRef<str> for AttributeValue {
     fn as_ref(&self) -> &str {
-        &*self.0
+        &self.0
     }
 }
 
@@ -105,12 +105,12 @@ impl Attributes {
 
     /// Returns the [`AttributeValue`] for `key` if any
     pub fn get(&self, key: &Attribute) -> Option<&AttributeValue> {
-        self.0.get(&key)
+        self.0.get(key)
     }
 
     /// Removes the [`AttributeValue`] for `key` if any
     pub fn remove(&mut self, key: &Attribute) -> Option<AttributeValue> {
-        self.0.remove(&key)
+        self.0.remove(key)
     }
 
     /// Returns an [`AttributesIter`] over this
