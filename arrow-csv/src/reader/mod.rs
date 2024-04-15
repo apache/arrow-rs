@@ -1659,6 +1659,27 @@ mod tests {
     }
 
     #[test]
+    fn test_scientific_notation_with_inference() {
+        let mut file = File::open("test/data/scientific_notation_test.csv").unwrap();
+        let format = Format::default().with_header(false).with_delimiter(b',');
+
+        let (schema, _) = format.infer_schema(&mut file, None).unwrap();
+        file.rewind().unwrap();
+
+        let builder = ReaderBuilder::new(Arc::new(schema))
+            .with_format(format)
+            .with_batch_size(512)
+            .with_projection(vec![0, 1]);
+
+        let mut csv = builder.build(file).unwrap();
+        let batch = csv.next().unwrap().unwrap();
+
+        let schema = batch.schema();
+
+        assert_eq!(&DataType::Float64, schema.field(0).data_type());
+    }
+
+    #[test]
     fn test_parse_invalid_csv() {
         let file = File::open("test/data/various_types_invalid.csv").unwrap();
 
