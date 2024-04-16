@@ -355,6 +355,7 @@ impl<'a> Request<'a> {
         Self {
             builder,
             payload: Some(payload),
+            payload_sha256: Some(payload_sha256),
             ..self
         }
     }
