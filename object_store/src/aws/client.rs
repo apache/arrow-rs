@@ -337,27 +337,25 @@ impl<'a> Request<'a> {
         Self { builder, ..self }
     }
 
-    pub fn with_payload(self, payload: PutPayload) -> Self {
-        let mut builder = self.builder;
+    pub fn with_payload(mut self, payload: PutPayload) -> Self {
+        if !self.config.skip_signature || self.config.checksum.is_some() {
+            let mut sha256 = Context::new(&digest::SHA256);
+            payload.iter().for_each(|x| sha256.update(x));
+            let payload_sha256 = sha256.finish();
 
-        let mut sha256 = Context::new(&digest::SHA256);
-        payload.iter().for_each(|x| sha256.update(x));
-        let payload_sha256 = sha256.finish();
-
-        if let Some(Checksum::SHA256) = self.config.checksum {
-            builder = builder.header(
-                "x-amz-checksum-sha256",
-                BASE64_STANDARD.encode(payload_sha256),
-            );
+            if let Some(Checksum::SHA256) = self.config.checksum {
+                self.builder = self.builder.header(
+                    "x-amz-checksum-sha256",
+                    BASE64_STANDARD.encode(payload_sha256),
+                );
+            }
+            self.payload_sha256 = Some(payload_sha256);
         }
-        builder = builder.header(CONTENT_LENGTH, payload.content_length());
 
-        Self {
-            builder,
-            payload: Some(payload),
-            payload_sha256: Some(payload_sha256),
-            ..self
-        }
+        let content_length = payload.content_length();
+        self.builder = self.builder.header(CONTENT_LENGTH, content_length);
+        self.payload = Some(payload);
+        self
     }
 
     pub async fn send(self) -> Result<Response, RequestError> {
