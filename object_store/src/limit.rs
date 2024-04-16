@@ -19,7 +19,8 @@
 
 use crate::{
     BoxStream, GetOptions, GetResult, GetResultPayload, ListResult, MultipartUpload, ObjectMeta,
-    ObjectStore, Path, PutOptions, PutPayload, PutResult, Result, StreamExt, UploadPart,
+    ObjectStore, Path, PutMultipartOpts, PutOptions, PutPayload, PutResult, Result, StreamExt,
+    UploadPart,
 };
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -91,6 +92,19 @@ impl<T: ObjectStore> ObjectStore for LimitStore<T> {
             upload,
         }))
     }
+
+    async fn put_multipart_opts(
+        &self,
+        location: &Path,
+        opts: PutMultipartOpts,
+    ) -> Result<Box<dyn MultipartUpload>> {
+        let upload = self.inner.put_multipart_opts(location, opts).await?;
+        Ok(Box::new(LimitUpload {
+            semaphore: Arc::clone(&self.semaphore),
+            upload,
+        }))
+    }
+
     async fn get(&self, location: &Path) -> Result<GetResult> {
         let permit = Arc::clone(&self.semaphore).acquire_owned().await.unwrap();
         let r = self.inner.get(location).await?;

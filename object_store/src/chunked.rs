@@ -29,7 +29,7 @@ use futures::StreamExt;
 use crate::path::Path;
 use crate::{
     GetOptions, GetResult, GetResultPayload, ListResult, MultipartUpload, ObjectMeta, ObjectStore,
-    PutOptions, PutResult,
+    PutMultipartOpts, PutOptions, PutResult,
 };
 use crate::{PutPayload, Result};
 
@@ -73,6 +73,14 @@ impl ObjectStore for ChunkedStore {
 
     async fn put_multipart(&self, location: &Path) -> Result<Box<dyn MultipartUpload>> {
         self.inner.put_multipart(location).await
+    }
+
+    async fn put_multipart_opts(
+        &self,
+        location: &Path,
+        opts: PutMultipartOpts,
+    ) -> Result<Box<dyn MultipartUpload>> {
+        self.inner.put_multipart_opts(location, opts).await
     }
 
     async fn get_opts(&self, location: &Path, options: GetOptions) -> Result<GetResult> {

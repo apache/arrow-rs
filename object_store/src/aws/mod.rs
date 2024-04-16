@@ -45,10 +45,12 @@ use crate::signer::Signer;
 use crate::util::STRICT_ENCODE_SET;
 use crate::{
     Error, GetOptions, GetResult, ListResult, MultipartId, MultipartUpload, ObjectMeta,
-    ObjectStore, Path, PutMode, PutOptions, PutPayload, PutResult, Result, UploadPart,
+    ObjectStore, Path, PutMode, PutMultipartOpts, PutOptions, PutPayload, PutResult, Result,
+    UploadPart,
 };
 
 static TAGS_HEADER: HeaderName = HeaderName::from_static("x-amz-tagging");
+static COPY_SOURCE_HEADER: HeaderName = HeaderName::from_static("x-amz-copy-source");
 
 mod builder;
 mod checksum;
@@ -156,12 +158,13 @@ impl ObjectStore for AmazonS3 {
         payload: PutPayload,
         opts: PutOptions,
     ) -> Result<PutResult> {
-        let attrs = opts.attributes;
-        let mut request = self.client.put_request(location, payload, attrs, true);
-        let tags = opts.tags.encoded();
-        if !tags.is_empty() && !self.client.config.disable_tagging {
-            request = request.header(&TAGS_HEADER, tags);
-        }
+        let request = self
+            .client
+            .request(Method::PUT, location)
+            .with_payload(payload)
+            .with_attributes(opts.attributes)
+            .with_tags(opts.tags)
+            .with_encryption_headers();
 
         match (opts.mode, &self.client.config.conditional_put) {
             (PutMode::Overwrite, _) => request.idempotent(true).do_put().await,
@@ -204,8 +207,12 @@ impl ObjectStore for AmazonS3 {
         }
     }
 
-    async fn put_multipart(&self, location: &Path) -> Result<Box<dyn MultipartUpload>> {
-        let upload_id = self.client.create_multipart(location).await?;
+    async fn put_multipart_opts(
+        &self,
+        location: &Path,
+        opts: PutMultipartOpts,
+    ) -> Result<Box<dyn MultipartUpload>> {
+        let upload_id = self.client.create_multipart(location, opts).await?;
 
         Ok(Box::new(S3MultiPartUpload {
             part_idx: 0,
@@ -223,7 +230,8 @@ impl ObjectStore for AmazonS3 {
     }
 
     async fn delete(&self, location: &Path) -> Result<()> {
-        self.client.delete_request(location, &()).await
+        self.client.request(Method::DELETE, location).send().await?;
+        Ok(())
     }
 
     fn delete_stream<'a>(
@@ -351,15 +359,22 @@ impl MultipartUpload for S3MultiPartUpload {
     async fn abort(&mut self) -> Result<()> {
         self.state
             .client
-            .delete_request(&self.state.location, &[("uploadId", &self.state.upload_id)])
-            .await
+            .request(Method::DELETE, &self.state.location)
+            .query(&[("uploadId", &self.state.upload_id)])
+            .idempotent(true)
+            .send()
+            .await?;
+
+        Ok(())
     }
 }
 
 #[async_trait]
 impl MultipartStore for AmazonS3 {
     async fn create_multipart(&self, path: &Path) -> Result<MultipartId> {
-        self.client.create_multipart(path).await
+        self.client
+            .create_multipart(path, PutMultipartOpts::default())
+            .await
     }
 
     async fn put_part(
@@ -382,7 +397,12 @@ impl MultipartStore for AmazonS3 {
     }
 
     async fn abort_multipart(&self, path: &Path, id: &MultipartId) -> Result<()> {
-        self.client.delete_request(path, &[("uploadId", id)]).await
+        self.client
+            .request(Method::DELETE, path)
+            .query(&[("uploadId", id)])
+            .send()
+            .await?;
+        Ok(())
     }
 }
 

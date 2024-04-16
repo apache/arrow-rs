@@ -39,7 +39,7 @@ use crate::{
     path::{absolute_path_to_url, Path},
     util::InvalidGetRange,
     Attributes, GetOptions, GetResult, GetResultPayload, ListResult, MultipartUpload, ObjectMeta,
-    ObjectStore, PutMode, PutOptions, PutPayload, PutResult, Result, UploadPart,
+    ObjectStore, PutMode, PutMultipartOpts, PutOptions, PutPayload, PutResult, Result, UploadPart,
 };
 
 /// A specialized `Error` for filesystem object store-related errors
@@ -404,7 +404,15 @@ impl ObjectStore for LocalFileSystem {
         .await
     }
 
-    async fn put_multipart(&self, location: &Path) -> Result<Box<dyn MultipartUpload>> {
+    async fn put_multipart_opts(
+        &self,
+        location: &Path,
+        opts: PutMultipartOpts,
+    ) -> Result<Box<dyn MultipartUpload>> {
+        if !opts.attributes.is_empty() {
+            return Err(crate::Error::NotImplemented);
+        }
+
         let dest = self.path_to_filesystem(location)?;
         let (file, src) = new_staged_upload(&dest)?;
         Ok(Box::new(LocalUpload::new(src, dest, file)))

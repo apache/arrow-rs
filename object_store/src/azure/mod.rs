@@ -27,7 +27,7 @@ use crate::{
     path::Path,
     signer::Signer,
     GetOptions, GetResult, ListResult, MultipartId, MultipartUpload, ObjectMeta, ObjectStore,
-    PutOptions, PutPayload, PutResult, Result, UploadPart,
+    PutMultipartOpts, PutOptions, PutPayload, PutResult, Result, UploadPart,
 };
 use async_trait::async_trait;
 use futures::stream::BoxStream;
@@ -95,9 +95,14 @@ impl ObjectStore for MicrosoftAzure {
         self.client.put_blob(location, payload, opts).await
     }
 
-    async fn put_multipart(&self, location: &Path) -> Result<Box<dyn MultipartUpload>> {
+    async fn put_multipart_opts(
+        &self,
+        location: &Path,
+        opts: PutMultipartOpts,
+    ) -> Result<Box<dyn MultipartUpload>> {
         Ok(Box::new(AzureMultiPartUpload {
             part_idx: 0,
+            opts,
             state: Arc::new(UploadState {
                 client: Arc::clone(&self.client),
                 location: location.clone(),
@@ -196,6 +201,7 @@ impl Signer for MicrosoftAzure {
 struct AzureMultiPartUpload {
     part_idx: usize,
     state: Arc<UploadState>,
+    opts: PutMultipartOpts,
 }
 
 #[derive(Debug)]
@@ -223,7 +229,7 @@ impl MultipartUpload for AzureMultiPartUpload {
 
         self.state
             .client
-            .put_block_list(&self.state.location, parts)
+            .put_block_list(&self.state.location, parts, std::mem::take(&mut self.opts))
             .await
     }
 
@@ -255,7 +261,9 @@ impl MultipartStore for MicrosoftAzure {
         _: &MultipartId,
         parts: Vec<PartId>,
     ) -> Result<PutResult> {
-        self.client.put_block_list(path, parts).await
+        self.client
+            .put_block_list(path, parts, Default::default())
+            .await
     }
 
     async fn abort_multipart(&self, _: &Path, _: &MultipartId) -> Result<()> {
