@@ -352,7 +352,11 @@ impl<'a> Request<'a> {
         }
         builder = builder.header(CONTENT_LENGTH, payload.content_length());
 
-        Self { builder, ..self }
+        Self {
+            builder,
+            payload: Some(payload),
+            ..self
+        }
     }
 
     pub async fn send(self) -> Result<Response, RequestError> {
@@ -527,7 +531,7 @@ impl S3Client {
         opts: PutMultipartOpts,
     ) -> Result<MultipartId> {
         let response = self
-            .request(Method::PUT, location)
+            .request(Method::POST, location)
             .query(&[("uploads", "")])
             .with_encryption_headers()
             .with_attributes(opts.attributes)
