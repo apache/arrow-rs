@@ -38,8 +38,8 @@ use crate::{
     maybe_spawn_blocking,
     path::{absolute_path_to_url, Path},
     util::InvalidGetRange,
-    GetOptions, GetResult, GetResultPayload, ListResult, MultipartUpload, ObjectMeta, ObjectStore,
-    PutMode, PutOptions, PutPayload, PutResult, Result, UploadPart,
+    Attributes, GetOptions, GetResult, GetResultPayload, ListResult, MultipartUpload, ObjectMeta,
+    ObjectStore, PutMode, PutOptions, PutPayload, PutResult, Result, UploadPart,
 };
 
 /// A specialized `Error` for filesystem object store-related errors
@@ -346,6 +346,10 @@ impl ObjectStore for LocalFileSystem {
             return Err(crate::Error::NotImplemented);
         }
 
+        if !opts.attributes.is_empty() {
+            return Err(crate::Error::NotImplemented);
+        }
+
         let path = self.path_to_filesystem(location)?;
         maybe_spawn_blocking(move || {
             let (mut file, staging_path) = new_staged_upload(&path)?;
@@ -421,6 +425,7 @@ impl ObjectStore for LocalFileSystem {
 
             Ok(GetResult {
                 payload: GetResultPayload::File(file, path),
+                attributes: Attributes::default(),
                 range,
                 meta,
             })

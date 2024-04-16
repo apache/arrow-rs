@@ -156,7 +156,8 @@ impl ObjectStore for AmazonS3 {
         payload: PutPayload,
         opts: PutOptions,
     ) -> Result<PutResult> {
-        let mut request = self.client.put_request(location, payload, true);
+        let attrs = opts.attributes;
+        let mut request = self.client.put_request(location, payload, attrs, true);
         let tags = opts.tags.encoded();
         if !tags.is_empty() && !self.client.config.disable_tagging {
             request = request.header(&TAGS_HEADER, tags);
@@ -403,7 +404,7 @@ mod tests {
         let test_not_exists = config.copy_if_not_exists.is_some();
         let test_conditional_put = config.conditional_put.is_some();
 
-        put_get_delete_list_opts(&integration).await;
+        put_get_delete_list(&integration).await;
         get_opts(&integration).await;
         list_uses_directories_correctly(&integration).await;
         list_with_delimiter(&integration).await;
@@ -412,6 +413,7 @@ mod tests {
         multipart(&integration, &integration).await;
         signing(&integration).await;
         s3_encryption(&integration).await;
+        put_get_attributes(&integration).await;
 
         // Object tagging is not supported by S3 Express One Zone
         if config.session_provider.is_none() {
@@ -432,12 +434,12 @@ mod tests {
         // run integration test with unsigned payload enabled
         let builder = AmazonS3Builder::from_env().with_unsigned_payload(true);
         let integration = builder.build().unwrap();
-        put_get_delete_list_opts(&integration).await;
+        put_get_delete_list(&integration).await;
 
         // run integration test with checksum set to sha256
         let builder = AmazonS3Builder::from_env().with_checksum_algorithm(Checksum::SHA256);
         let integration = builder.build().unwrap();
-        put_get_delete_list_opts(&integration).await;
+        put_get_delete_list(&integration).await;
 
         match &integration.client.config.copy_if_not_exists {
             Some(S3CopyIfNotExists::Dynamo(d)) => dynamo::integration_test(&integration, d).await,

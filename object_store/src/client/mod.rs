@@ -485,7 +485,7 @@ impl ClientOptions {
     /// mime type if it was defined initially through
     /// `ClientOptions::with_content_type_for_suffix`
     ///
-    /// Otherwise returns the default mime type if it was defined
+    /// Otherwise, returns the default mime type if it was defined
     /// earlier through `ClientOptions::with_default_content_type`
     pub fn get_content_type(&self, path: &Path) -> Option<&str> {
         match path.extension() {

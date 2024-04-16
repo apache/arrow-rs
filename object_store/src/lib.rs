@@ -543,6 +543,10 @@ mod payload;
 mod upload;
 mod util;
 
+mod attributes;
+
+pub use attributes::*;
+
 pub use parse::{parse_url, parse_url_opts};
 pub use payload::*;
 pub use upload::*;
@@ -989,6 +993,8 @@ pub struct GetResult {
     pub meta: ObjectMeta,
     /// The range of bytes returned by this request
     pub range: Range<usize>,
+    /// Additional object attributes
+    pub attributes: Attributes,
 }
 
 /// The kind of a [`GetResult`]
@@ -1114,6 +1120,10 @@ pub struct PutOptions {
     ///
     /// Implementations that don't support object tagging should ignore this
     pub tags: TagSet,
+    /// Provide a set of [`Attributes`]
+    ///
+    /// Implementations that don't support an attribute should return an error
+    pub attributes: Attributes,
 }
 
 impl From<PutMode> for PutOptions {
@@ -1251,10 +1261,6 @@ mod tests {
     use rand::{thread_rng, Rng};
 
     pub(crate) async fn put_get_delete_list(storage: &DynObjectStore) {
-        put_get_delete_list_opts(storage).await
-    }
-
-    pub(crate) async fn put_get_delete_list_opts(storage: &DynObjectStore) {
         delete_fixtures(storage).await;
 
         let content_list = flatten_list_stream(storage, None).await.unwrap();
@@ -1672,6 +1678,28 @@ mod tests {
         assert_eq!(data.len(), 0);
 
         storage.delete(&path).await.unwrap();
+    }
+
+    pub(crate) async fn put_get_attributes(integration: &dyn ObjectStore) {
+        // Test handling of attributes
+        let attributes = Attributes::from_iter([
+            (Attribute::ContentType, "text/html; charset=utf-8"),
+            (Attribute::CacheControl, "max-age=604800"),
+        ]);
+
+        let path = Path::from("attributes");
+        let opts = PutOptions {
+            attributes: attributes.clone(),
+            ..Default::default()
+        };
+        match integration.put_opts(&path, "foo".into(), opts).await {
+            Ok(_) => {
+                let r = integration.get(&path).await.unwrap();
+                assert_eq!(r.attributes, attributes);
+            }
+            Err(Error::NotImplemented) => {}
+            Err(e) => panic!("{e}"),
+        }
     }
 
     pub(crate) async fn get_opts(storage: &dyn ObjectStore) {

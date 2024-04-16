@@ -30,8 +30,9 @@ use snafu::{OptionExt, ResultExt, Snafu};
 use crate::multipart::{MultipartStore, PartId};
 use crate::util::InvalidGetRange;
 use crate::{
-    path::Path, GetRange, GetResult, GetResultPayload, ListResult, MultipartId, MultipartUpload,
-    ObjectMeta, ObjectStore, PutMode, PutOptions, PutResult, Result, UpdateVersion, UploadPart,
+    path::Path, Attributes, GetRange, GetResult, GetResultPayload, ListResult, MultipartId,
+    MultipartUpload, ObjectMeta, ObjectStore, PutMode, PutOptions, PutResult, Result,
+    UpdateVersion, UploadPart,
 };
 use crate::{GetOptions, PutPayload};
 
@@ -88,15 +89,22 @@ pub struct InMemory {
 struct Entry {
     data: Bytes,
     last_modified: DateTime<Utc>,
+    attributes: Attributes,
     e_tag: usize,
 }
 
 impl Entry {
-    fn new(data: Bytes, last_modified: DateTime<Utc>, e_tag: usize) -> Self {
+    fn new(
+        data: Bytes,
+        last_modified: DateTime<Utc>,
+        e_tag: usize,
+        attributes: Attributes,
+    ) -> Self {
         Self {
             data,
             last_modified,
             e_tag,
+            attributes,
         }
     }
 }
@@ -116,10 +124,10 @@ struct PartStorage {
 type SharedStorage = Arc<RwLock<Storage>>;
 
 impl Storage {
-    fn insert(&mut self, location: &Path, bytes: Bytes) -> usize {
+    fn insert(&mut self, location: &Path, bytes: Bytes, attributes: Attributes) -> usize {
         let etag = self.next_etag;
         self.next_etag += 1;
-        let entry = Entry::new(bytes, Utc::now(), etag);
+        let entry = Entry::new(bytes, Utc::now(), etag, attributes);
         self.overwrite(location, entry);
         etag
     }
@@ -200,7 +208,7 @@ impl ObjectStore for InMemory {
     ) -> Result<PutResult> {
         let mut storage = self.storage.write();
         let etag = storage.next_etag;
-        let entry = Entry::new(payload.into(), Utc::now(), etag);
+        let entry = Entry::new(payload.into(), Utc::now(), etag, opts.attributes);
 
         match opts.mode {
             PutMode::Overwrite => storage.overwrite(location, entry),
@@ -247,6 +255,7 @@ impl ObjectStore for InMemory {
 
         Ok(GetResult {
             payload: GetResultPayload::Stream(stream.boxed()),
+            attributes: entry.attributes,
             meta,
             range,
         })
@@ -363,7 +372,9 @@ impl ObjectStore for InMemory {
 
     async fn copy(&self, from: &Path, to: &Path) -> Result<()> {
         let entry = self.entry(from).await?;
-        self.storage.write().insert(to, entry.data);
+        self.storage
+            .write()
+            .insert(to, entry.data, entry.attributes);
         Ok(())
     }
 
@@ -376,7 +387,7 @@ impl ObjectStore for InMemory {
             }
             .into());
         }
-        storage.insert(to, entry.data);
+        storage.insert(to, entry.data, entry.attributes);
         Ok(())
     }
 }
@@ -426,7 +437,7 @@ impl MultipartStore for InMemory {
         for x in &upload.parts {
             buf.extend_from_slice(x.as_ref().unwrap())
         }
-        let etag = storage.insert(path, buf.into());
+        let etag = storage.insert(path, buf.into(), Default::default());
         Ok(PutResult {
             e_tag: Some(etag.to_string()),
             version: None,
@@ -492,7 +503,11 @@ impl MultipartUpload for InMemoryUpload {
         let mut buf = Vec::with_capacity(cap);
         let parts = self.parts.iter().flatten();
         parts.for_each(|x| buf.extend_from_slice(x));
-        let etag = self.storage.write().insert(&self.location, buf.into());
+        let etag = self
+            .storage
+            .write()
+            .insert(&self.location, buf.into(), Attributes::new());
+
         Ok(PutResult {
             e_tag: Some(etag.to_string()),
             version: None,
@@ -523,6 +538,7 @@ mod tests {
         stream_get(&integration).await;
         put_opts(&integration, true).await;
         multipart(&integration, &integration).await;
+        put_get_attributes(&integration).await;
     }
 
     #[tokio::test]

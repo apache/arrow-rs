@@ -35,23 +35,21 @@ use crate::client::GetOptionsExt;
 use crate::multipart::PartId;
 use crate::path::DELIMITER;
 use crate::{
-    ClientOptions, GetOptions, ListResult, MultipartId, Path, PutPayload, PutResult, Result,
-    RetryConfig,
+    Attribute, Attributes, ClientOptions, GetOptions, ListResult, MultipartId, Path, PutPayload,
+    PutResult, Result, RetryConfig,
 };
 use async_trait::async_trait;
 use base64::prelude::BASE64_STANDARD;
 use base64::Engine;
 use bytes::{Buf, Bytes};
+use hyper::header::{CACHE_CONTROL, CONTENT_LENGTH};
 use hyper::http;
 use hyper::http::HeaderName;
 use itertools::Itertools;
 use md5::{Digest, Md5};
 use percent_encoding::{utf8_percent_encode, PercentEncode};
 use quick_xml::events::{self as xml_events};
-use reqwest::{
-    header::{CONTENT_LENGTH, CONTENT_TYPE},
-    Client as ReqwestClient, Method, RequestBuilder, Response,
-};
+use reqwest::{header::CONTENT_TYPE, Client as ReqwestClient, Method, RequestBuilder, Response};
 use ring::digest;
 use ring::digest::Context;
 use serde::{Deserialize, Serialize};
@@ -344,6 +342,7 @@ impl S3Client {
         &'a self,
         path: &'a Path,
         payload: PutPayload,
+        attributes: Attributes,
         with_encryption_headers: bool,
     ) -> Request<'a> {
         let url = self.config.path_url(path);
@@ -363,8 +362,21 @@ impl S3Client {
             )
         }
 
-        if let Some(value) = self.config.client_options.get_content_type(path) {
-            builder = builder.header(CONTENT_TYPE, value);
+        let mut has_content_type = false;
+        for (k, v) in &attributes {
+            builder = match k {
+                Attribute::CacheControl => builder.header(CACHE_CONTROL, v.as_ref()),
+                Attribute::ContentType => {
+                    has_content_type = true;
+                    builder.header(CONTENT_TYPE, v.as_ref())
+                }
+            };
+        }
+
+        if !has_content_type {
+            if let Some(value) = self.config.client_options.get_content_type(path) {
+                builder = builder.header(CONTENT_TYPE, value);
+            }
         }
 
         Request {
@@ -556,7 +568,7 @@ impl S3Client {
         let part = (part_idx + 1).to_string();
 
         let response = self
-            .put_request(path, data, false)
+            .put_request(path, data, Attributes::default(), false)
             .query(&[("partNumber", &part), ("uploadId", upload_id)])
             .idempotent(true)
             .send()

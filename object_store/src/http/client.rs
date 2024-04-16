@@ -21,11 +21,11 @@ use crate::client::retry::{self, RetryConfig, RetryExt};
 use crate::client::GetOptionsExt;
 use crate::path::{Path, DELIMITER};
 use crate::util::deserialize_rfc1123;
-use crate::{ClientOptions, GetOptions, ObjectMeta, PutPayload, Result};
+use crate::{Attribute, Attributes, ClientOptions, GetOptions, ObjectMeta, PutPayload, Result};
 use async_trait::async_trait;
 use bytes::Buf;
 use chrono::{DateTime, Utc};
-use hyper::header::CONTENT_LENGTH;
+use hyper::header::{CACHE_CONTROL, CONTENT_LENGTH};
 use percent_encoding::percent_decode_str;
 use reqwest::header::CONTENT_TYPE;
 use reqwest::{Method, Response, StatusCode};
@@ -157,13 +157,32 @@ impl Client {
         Ok(())
     }
 
-    pub async fn put(&self, location: &Path, payload: PutPayload) -> Result<Response> {
+    pub async fn put(
+        &self,
+        location: &Path,
+        payload: PutPayload,
+        attributes: Attributes,
+    ) -> Result<Response> {
         let mut retry = false;
         loop {
             let url = self.path_url(location);
             let mut builder = self.client.put(url);
-            if let Some(value) = self.client_options.get_content_type(location) {
-                builder = builder.header(CONTENT_TYPE, value);
+
+            let mut has_content_type = false;
+            for (k, v) in &attributes {
+                builder = match k {
+                    Attribute::CacheControl => builder.header(CACHE_CONTROL, v.as_ref()),
+                    Attribute::ContentType => {
+                        has_content_type = true;
+                        builder.header(CONTENT_TYPE, v.as_ref())
+                    }
+                };
+            }
+
+            if !has_content_type {
+                if let Some(value) = self.client_options.get_content_type(location) {
+                    builder = builder.header(CONTENT_TYPE, value);
+                }
             }
 
             let resp = builder

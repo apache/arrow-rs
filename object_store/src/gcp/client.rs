@@ -29,14 +29,14 @@ use crate::multipart::PartId;
 use crate::path::{Path, DELIMITER};
 use crate::util::hex_encode;
 use crate::{
-    ClientOptions, GetOptions, ListResult, MultipartId, PutMode, PutOptions, PutPayload, PutResult,
-    Result, RetryConfig,
+    Attribute, Attributes, ClientOptions, GetOptions, ListResult, MultipartId, PutMode, PutOptions,
+    PutPayload, PutResult, Result, RetryConfig,
 };
 use async_trait::async_trait;
 use base64::prelude::BASE64_STANDARD;
 use base64::Engine;
 use bytes::Buf;
-use hyper::header::CONTENT_LENGTH;
+use hyper::header::{CACHE_CONTROL, CONTENT_LENGTH, CONTENT_TYPE};
 use percent_encoding::{percent_encode, utf8_percent_encode, NON_ALPHANUMERIC};
 use reqwest::header::HeaderName;
 use reqwest::{header, Client, Method, RequestBuilder, Response, StatusCode};
@@ -45,6 +45,7 @@ use snafu::{OptionExt, ResultExt, Snafu};
 use std::sync::Arc;
 
 const VERSION_HEADER: &str = "x-goog-generation";
+const DEFAULT_CONTENT_TYPE: &str = "application/octet-stream";
 
 static VERSION_MATCH: HeaderName = HeaderName::from_static("x-goog-if-generation-match");
 
@@ -323,19 +324,31 @@ impl GoogleCloudStorageClient {
     /// Perform a put request <https://cloud.google.com/storage/docs/xml-api/put-object-upload>
     ///
     /// Returns the new ETag
-    pub fn put_request<'a>(&'a self, path: &'a Path, payload: PutPayload) -> PutRequest<'a> {
+    pub fn put_request<'a>(
+        &'a self,
+        path: &'a Path,
+        payload: PutPayload,
+        attributes: Attributes,
+    ) -> PutRequest<'a> {
         let url = self.object_url(path);
+        let mut builder = self.client.request(Method::PUT, url);
 
-        let content_type = self
-            .config
-            .client_options
-            .get_content_type(path)
-            .unwrap_or("application/octet-stream");
+        let mut has_content_type = false;
+        for (k, v) in &attributes {
+            builder = match k {
+                Attribute::CacheControl => builder.header(CACHE_CONTROL, v.as_ref()),
+                Attribute::ContentType => {
+                    has_content_type = true;
+                    builder.header(CONTENT_TYPE, v.as_ref())
+                }
+            };
+        }
 
-        let builder = self
-            .client
-            .request(Method::PUT, url)
-            .header(header::CONTENT_TYPE, content_type);
+        if !has_content_type {
+            let opts = &self.config.client_options;
+            let value = opts.get_content_type(path).unwrap_or(DEFAULT_CONTENT_TYPE);
+            builder = builder.header(CONTENT_TYPE, value)
+        }
 
         PutRequest {
             path,
@@ -352,7 +365,7 @@ impl GoogleCloudStorageClient {
         payload: PutPayload,
         opts: PutOptions,
     ) -> Result<PutResult> {
-        let builder = self.put_request(path, payload);
+        let builder = self.put_request(path, payload, opts.attributes);
 
         let builder = match &opts.mode {
             PutMode::Overwrite => builder.set_idempotent(true),
@@ -386,7 +399,7 @@ impl GoogleCloudStorageClient {
             ("uploadId", upload_id),
         ];
         let result = self
-            .put_request(path, data)
+            .put_request(path, data, Attributes::new())
             .query(query)
             .set_idempotent(true)
             .send()
@@ -459,7 +472,7 @@ impl GoogleCloudStorageClient {
         if completed_parts.is_empty() {
             // GCS doesn't allow empty multipart uploads
             let result = self
-                .put_request(path, Default::default())
+                .put_request(path, Default::default(), Attributes::new())
                 .set_idempotent(true)
                 .send()
                 .await?;
