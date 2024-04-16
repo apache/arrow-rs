@@ -227,14 +227,12 @@ pub mod tests {
 
         let cmp = build_compare(&array, &array).unwrap();
 
-        assert_eq!(Ordering::Less, cmp(0, 1));
-        assert_eq!(Ordering::Greater, cmp(1, 0));
-
-        // somewhat confusingly, while 90M milliseconds is more than 1 day,
-        // it will compare less as the comparison is done on the underlying
-        // values not field by field
-        assert_eq!(Ordering::Greater, cmp(1, 2));
-        assert_eq!(Ordering::Less, cmp(2, 1));
+        // Ordering is based on the underlying values
+        // leading to potentially surprising results
+        assert_eq!(Ordering::Greater, cmp(0, 1));
+        assert_eq!(Ordering::Less, cmp(1, 0));
+        assert_eq!(Ordering::Less, cmp(1, 2));
+        assert_eq!(Ordering::Greater, cmp(2, 1));
     }
 
     #[test]
@@ -271,14 +269,12 @@ pub mod tests {
 
         let cmp = build_compare(&array, &array).unwrap();
 
-        assert_eq!(Ordering::Less, cmp(0, 1));
-        assert_eq!(Ordering::Greater, cmp(1, 0));
-
-        // somewhat confusingly, while 100 days is more than 1 month in all cases
-        // it will compare less as the comparison is done on the underlying
-        // values not field by field
-        assert_eq!(Ordering::Greater, cmp(1, 2));
-        assert_eq!(Ordering::Less, cmp(2, 1));
+        // Ordering is based on the underlying values
+        // leading to potentially surprising results
+        assert_eq!(Ordering::Greater, cmp(0, 1));
+        assert_eq!(Ordering::Less, cmp(1, 0));
+        assert_eq!(Ordering::Less, cmp(1, 2));
+        assert_eq!(Ordering::Greater, cmp(2, 1));
     }
 
     #[test]

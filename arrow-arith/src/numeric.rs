@@ -1346,8 +1346,10 @@ mod tests {
                 IntervalMonthDayNanoType::make_value(35, -19, 41899000000000000)
             ])
         );
-        let a = IntervalMonthDayNanoArray::from(vec![i64::MAX as i128]);
-        let b = IntervalMonthDayNanoArray::from(vec![1]);
+        let max_nanos = IntervalMonthDayNanoType::make_value(0, 0, i64::MAX);
+        let a = IntervalMonthDayNanoArray::from(vec![max_nanos]);
+        let one_nanos = IntervalMonthDayNanoType::make_value(0, 0, 1);
+        let b = IntervalMonthDayNanoArray::from(vec![one_nanos]);
         let err = add(&a, &b).unwrap_err().to_string();
         assert_eq!(
             err,

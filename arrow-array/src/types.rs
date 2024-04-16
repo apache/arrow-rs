@@ -264,11 +264,11 @@ Each field is independent (e.g. there is no constraint that the quantity of
 nanoseconds represents less than a day's worth of time).
 
 ```text
-┌──────────────────────────────┬─────────────┬──────────────┐
-│            Nanos             │    Days     │    Months    │
-│          (64 bits)           │ (32 bits)   │  (32 bits)   │
-└──────────────────────────────┴─────────────┴──────────────┘
-  0                            63            95           127 bit offset
+┌───────────────┬─────────────┬─────────────────────────────┐
+│     Months    │     Days    │            Nanos            │
+│   (32 bits)   │  (32 bits)  │          (64 bits)          │
+└───────────────┴─────────────┴─────────────────────────────┘
+  0            32             64                           128 bit offset
 ```
 Please see the [Arrow Spec](https://github.com/apache/arrow/blob/081b4022fe6f659d8765efc82b3f4787c5039e3c/format/Schema.fbs#L409-L415) for more details
 
@@ -290,9 +290,9 @@ representation which is fast and efficient, but leads
 to potentially surprising results.
 
 For example a
-`IntervalMonthDayNano` of `1 month` will compare as **greater** than a
-`IntervalMonthDayNano` of `100 days` because the binary representation of `1 month`
-is larger than the binary representation of 100 days.
+`IntervalMonthDayNano` of `1 month` will compare as **less** than a
+`IntervalMonthDayNano` of `1 days` because the binary representation of `1 month`
+is smaller than the binary representation of 1 days.
 "#
 );
 make_type!(
@@ -928,13 +928,14 @@ impl IntervalDayTimeType {
             int32_t milliseconds = 0;
             ...
         }
-        64      56      48      40      32      24      16      8       0
-        +-------+-------+-------+-------+-------+-------+-------+-------+
-        |             days              |         milliseconds          |
-        +-------+-------+-------+-------+-------+-------+-------+-------+
+         ┌──────────────┬──────────────┐
+         │     Days     │ Milliseconds │
+         │  (32 bits)   │  (32 bits)   │
+         └──────────────┴──────────────┘
+         0              31            63 bit offset
         */
-        let m = millis as u64 & u32::MAX as u64;
-        let d = (days as u64 & u32::MAX as u64) << 32;
+        let m = (millis as u64 & u32::MAX as u64) << 32;
+        let d = days as u64 & u32::MAX as u64;
         (m | d) as <IntervalDayTimeType as ArrowPrimitiveType>::Native
     }
 
@@ -945,8 +946,8 @@ impl IntervalDayTimeType {
     /// * `i` - The IntervalDayTimeType to convert
     #[inline]
     pub fn to_parts(i: <IntervalDayTimeType as ArrowPrimitiveType>::Native) -> (i32, i32) {
-        let days = (i >> 32) as i32;
-        let ms = i as i32;
+        let days = i as i32;
+        let ms = (i >> 32) as i32;
         (days, ms)
     }
 }
@@ -972,14 +973,16 @@ impl IntervalMonthDayNanoType {
             int32_t days;
             int64_t nanoseconds;
         }
-        128     112     96      80      64      48      32      16      0
-        +-------+-------+-------+-------+-------+-------+-------+-------+
-        |     months    |      days     |             nanos             |
-        +-------+-------+-------+-------+-------+-------+-------+-------+
+        ┌───────────────┬─────────────┬─────────────────────────────┐
+        │     Months    │     Days    │            Nanos            │
+        │   (32 bits)   │  (32 bits)  │          (64 bits)          │
+        └───────────────┴─────────────┴─────────────────────────────┘
+          0            32             64                           128 bit offset
+
         */
-        let m = (months as u128 & u32::MAX as u128) << 96;
-        let d = (days as u128 & u32::MAX as u128) << 64;
-        let n = nanos as u128 & u64::MAX as u128;
+        let m = months as u128 & u32::MAX as u128;
+        let d = (days as u128 & u32::MAX as u128) << 32;
+        let n = (nanos as u128 & u64::MAX as u128) << 64;
         (m | d | n) as <IntervalMonthDayNanoType as ArrowPrimitiveType>::Native
     }
 
@@ -992,9 +995,9 @@ impl IntervalMonthDayNanoType {
     pub fn to_parts(
         i: <IntervalMonthDayNanoType as ArrowPrimitiveType>::Native,
     ) -> (i32, i32, i64) {
-        let months = (i >> 96) as i32;
-        let days = (i >> 64) as i32;
-        let nanos = i as i64;
+        let months = i as i32;
+        let days = (i >> 32) as i32;
+        let nanos = (i >> 64) as i64;
         (months, days, nanos)
     }
 }

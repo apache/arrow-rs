@@ -1714,18 +1714,17 @@ mod tests {
                 IntervalDayTimeType::make_value(1, 3000),
                 // 90M milliseconds
                 IntervalDayTimeType::make_value(0, 90_000_000),
+                IntervalDayTimeType::make_value(4, 10),
             ],
             vec![
                 IntervalDayTimeType::make_value(0, 1000),
                 IntervalDayTimeType::make_value(1, 0),
                 IntervalDayTimeType::make_value(10, 0),
                 IntervalDayTimeType::make_value(2, 1),
-                // NB even though 1 day is less than 90M milliseconds long,
-                // it compares as greater because the underlying type stores
-                // days and milliseconds as different fields
                 IntervalDayTimeType::make_value(0, 12),
+                IntervalDayTimeType::make_value(56, 10),
             ],
-            vec![false, true, true, true ,false]
+            vec![true, false, false, false, false, true]
         );
 
         cmp_vec!(
@@ -1771,7 +1770,7 @@ mod tests {
                 // 100 days (note is treated as greater than 1 month as the underlying integer representation)
                 IntervalMonthDayNanoType::make_value(0, 100, 0),
             ],
-            vec![false, false, true, false, false]
+            vec![false, true, true, true, true]
         );
     }
 
