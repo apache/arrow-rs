@@ -136,7 +136,7 @@ impl UnionArray {
     /// # Safety
     ///
     /// The `type_ids` values should be positive and must match one of the type ids of the fields provided in `fields`.
-    /// These values are used to index into the `child_arrays`.
+    /// These values are used to index into the `children` arrays.
     ///
     /// The `offsets` is provided in the case of a dense union, sparse unions should use `None`.
     /// If provided the `offsets` values should be positive and must be less than the length of the
