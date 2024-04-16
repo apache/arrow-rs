@@ -538,6 +538,7 @@ mod tests {
         stream_get(&integration).await;
         put_opts(&integration, true).await;
         multipart(&integration, &integration).await;
+        put_get_attributes(&integration).await;
     }
 
     #[tokio::test]

@@ -1261,10 +1261,6 @@ mod tests {
     use rand::{thread_rng, Rng};
 
     pub(crate) async fn put_get_delete_list(storage: &DynObjectStore) {
-        put_get_delete_list_opts(storage).await
-    }
-
-    pub(crate) async fn put_get_delete_list_opts(storage: &DynObjectStore) {
         delete_fixtures(storage).await;
 
         let content_list = flatten_list_stream(storage, None).await.unwrap();
@@ -1682,7 +1678,9 @@ mod tests {
         assert_eq!(data.len(), 0);
 
         storage.delete(&path).await.unwrap();
+    }
 
+    pub(crate) async fn put_get_attributes(integration: &dyn ObjectStore) {
         // Test handling of attributes
         let attributes = Attributes::from_iter([
             (Attribute::ContentType, "text/html; charset=utf-8"),
@@ -1694,9 +1692,9 @@ mod tests {
             attributes: attributes.clone(),
             ..Default::default()
         };
-        match storage.put_opts(&path, "foo".into(), opts).await {
+        match integration.put_opts(&path, "foo".into(), opts).await {
             Ok(_) => {
-                let r = storage.get(&path).await.unwrap();
+                let r = integration.get(&path).await.unwrap();
                 assert_eq!(r.attributes, attributes);
             }
             Err(Error::NotImplemented) => {}

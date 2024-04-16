@@ -260,7 +260,7 @@ mod tests {
             .build()
             .unwrap();
 
-        put_get_delete_list_opts(&integration).await;
+        put_get_delete_list(&integration).await;
         list_uses_directories_correctly(&integration).await;
         list_with_delimiter(&integration).await;
         rename_and_copy(&integration).await;

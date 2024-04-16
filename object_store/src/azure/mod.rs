@@ -276,7 +276,7 @@ mod tests {
         crate::test_util::maybe_skip_integration!();
         let integration = MicrosoftAzureBuilder::from_env().build().unwrap();
 
-        put_get_delete_list_opts(&integration).await;
+        put_get_delete_list(&integration).await;
         get_opts(&integration).await;
         list_uses_directories_correctly(&integration).await;
         list_with_delimiter(&integration).await;
@@ -292,7 +292,12 @@ mod tests {
             let client = Arc::clone(&integration.client);
             async move { client.get_blob_tagging(&p).await }
         })
-        .await
+        .await;
+
+        // Azurite doesn't support attributes properly
+        if !integration.client.config().is_emulator {
+            put_get_attributes(&integration).await;
+        }
     }
 
     #[ignore = "Used for manual testing against a real storage account."]
