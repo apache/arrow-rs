@@ -518,10 +518,7 @@ impl GoogleCloudStorageClient {
 
     /// Perform a delete request <https://cloud.google.com/storage/docs/xml-api/delete-object>
     pub async fn delete_request(&self, path: &Path) -> Result<()> {
-        self.request(Method::DELETE, path)
-            .idempotent(true)
-            .send()
-            .await?;
+        self.request(Method::DELETE, path).send().await?;
         Ok(())
     }
 
