@@ -597,7 +597,20 @@ pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
     ///
     /// Client should prefer [`ObjectStore::put`] for small payloads, as streaming uploads
     /// typically require multiple separate requests. See [`MultipartUpload`] for more information
-    async fn put_multipart(&self, location: &Path) -> Result<Box<dyn MultipartUpload>>;
+    async fn put_multipart(&self, location: &Path) -> Result<Box<dyn MultipartUpload>> {
+        self.put_multipart_opts(location, PutMultipartOpts::default())
+            .await
+    }
+
+    /// Perform a multipart upload with options
+    ///
+    /// Client should prefer [`ObjectStore::put`] for small payloads, as streaming uploads
+    /// typically require multiple separate requests. See [`MultipartUpload`] for more information
+    async fn put_multipart_opts(
+        &self,
+        location: &Path,
+        opts: PutMultipartOpts,
+    ) -> Result<Box<dyn MultipartUpload>>;
 
     /// Return the bytes that are stored at the specified location.
     async fn get(&self, location: &Path) -> Result<GetResult> {
@@ -783,6 +796,14 @@ macro_rules! as_ref_impl {
 
             async fn put_multipart(&self, location: &Path) -> Result<Box<dyn MultipartUpload>> {
                 self.as_ref().put_multipart(location).await
+            }
+
+            async fn put_multipart_opts(
+                &self,
+                location: &Path,
+                opts: PutMultipartOpts,
+            ) -> Result<Box<dyn MultipartUpload>> {
+                self.as_ref().put_multipart_opts(location, opts).await
             }
 
             async fn get(&self, location: &Path) -> Result<GetResult> {
@@ -1139,6 +1160,46 @@ impl From<TagSet> for PutOptions {
     fn from(tags: TagSet) -> Self {
         Self {
             tags,
+            ..Default::default()
+        }
+    }
+}
+
+impl From<Attributes> for PutOptions {
+    fn from(attributes: Attributes) -> Self {
+        Self {
+            attributes,
+            ..Default::default()
+        }
+    }
+}
+
+/// Options for [`ObjectStore::put_multipart_opts`]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct PutMultipartOpts {
+    /// Provide a [`TagSet`] for this object
+    ///
+    /// Implementations that don't support object tagging should ignore this
+    pub tags: TagSet,
+    /// Provide a set of [`Attributes`]
+    ///
+    /// Implementations that don't support an attribute should return an error
+    pub attributes: Attributes,
+}
+
+impl From<TagSet> for PutMultipartOpts {
+    fn from(tags: TagSet) -> Self {
+        Self {
+            tags,
+            ..Default::default()
+        }
+    }
+}
+
+impl From<Attributes> for PutMultipartOpts {
+    fn from(attributes: Attributes) -> Self {
+        Self {
+            attributes,
             ..Default::default()
         }
     }
@@ -1688,12 +1749,22 @@ mod tests {
         ]);
 
         let path = Path::from("attributes");
-        let opts = PutOptions {
-            attributes: attributes.clone(),
-            ..Default::default()
-        };
+        let opts = attributes.clone().into();
         match integration.put_opts(&path, "foo".into(), opts).await {
             Ok(_) => {
+                let r = integration.get(&path).await.unwrap();
+                assert_eq!(r.attributes, attributes);
+            }
+            Err(Error::NotImplemented) => {}
+            Err(e) => panic!("{e}"),
+        }
+
+        let opts = attributes.clone().into();
+        match integration.put_multipart_opts(&path, opts).await {
+            Ok(mut w) => {
+                w.put_part("foo".into()).await.unwrap();
+                w.complete().await.unwrap();
+
                 let r = integration.get(&path).await.unwrap();
                 assert_eq!(r.attributes, attributes);
             }
@@ -2332,21 +2403,32 @@ mod tests {
 
         let path = Path::from("tag_test");
         storage
-            .put_opts(&path, "test".into(), tag_set.into())
+            .put_opts(&path, "test".into(), tag_set.clone().into())
             .await
             .unwrap();
+
+        let multi_path = Path::from("tag_test_multi");
+        let mut write = storage
+            .put_multipart_opts(&multi_path, tag_set.into())
+            .await
+            .unwrap();
+
+        write.put_part("foo".into()).await.unwrap();
+        write.complete().await.unwrap();
 
         // Write should always succeed, but certain configurations may simply ignore tags
         if !validate {
             return;
         }
 
-        let resp = get_tags(path.clone()).await.unwrap();
-        let body = resp.bytes().await.unwrap();
+        for path in [path, multi_path] {
+            let resp = get_tags(path.clone()).await.unwrap();
+            let body = resp.bytes().await.unwrap();
 
-        let mut resp: Tagging = quick_xml::de::from_reader(body.reader()).unwrap();
-        resp.list.tags.sort_by(|a, b| a.key.cmp(&b.key));
-        assert_eq!(resp.list.tags, tags);
+            let mut resp: Tagging = quick_xml::de::from_reader(body.reader()).unwrap();
+            resp.list.tags.sort_by(|a, b| a.key.cmp(&b.key));
+            assert_eq!(resp.list.tags, tags);
+        }
     }
 
     async fn delete_fixtures(storage: &DynObjectStore) {

@@ -31,8 +31,8 @@ use crate::multipart::{MultipartStore, PartId};
 use crate::util::InvalidGetRange;
 use crate::{
     path::Path, Attributes, GetRange, GetResult, GetResultPayload, ListResult, MultipartId,
-    MultipartUpload, ObjectMeta, ObjectStore, PutMode, PutOptions, PutResult, Result,
-    UpdateVersion, UploadPart,
+    MultipartUpload, ObjectMeta, ObjectStore, PutMode, PutMultipartOpts, PutOptions, PutResult,
+    Result, UpdateVersion, UploadPart,
 };
 use crate::{GetOptions, PutPayload};
 
@@ -223,9 +223,14 @@ impl ObjectStore for InMemory {
         })
     }
 
-    async fn put_multipart(&self, location: &Path) -> Result<Box<dyn MultipartUpload>> {
+    async fn put_multipart_opts(
+        &self,
+        location: &Path,
+        opts: PutMultipartOpts,
+    ) -> Result<Box<dyn MultipartUpload>> {
         Ok(Box::new(InMemoryUpload {
             location: location.clone(),
+            attributes: opts.attributes,
             parts: vec![],
             storage: Arc::clone(&self.storage),
         }))
@@ -487,6 +492,7 @@ impl InMemory {
 #[derive(Debug)]
 struct InMemoryUpload {
     location: Path,
+    attributes: Attributes,
     parts: Vec<PutPayload>,
     storage: Arc<RwLock<Storage>>,
 }
@@ -503,10 +509,11 @@ impl MultipartUpload for InMemoryUpload {
         let mut buf = Vec::with_capacity(cap);
         let parts = self.parts.iter().flatten();
         parts.for_each(|x| buf.extend_from_slice(x));
-        let etag = self
-            .storage
-            .write()
-            .insert(&self.location, buf.into(), Attributes::new());
+        let etag = self.storage.write().insert(
+            &self.location,
+            buf.into(),
+            std::mem::take(&mut self.attributes),
+        );
 
         Ok(PutResult {
             e_tag: Some(etag.to_string()),

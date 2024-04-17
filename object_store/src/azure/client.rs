@@ -28,16 +28,14 @@ use crate::path::DELIMITER;
 use crate::util::{deserialize_rfc1123, GetRange};
 use crate::{
     Attribute, Attributes, ClientOptions, GetOptions, ListResult, ObjectMeta, Path, PutMode,
-    PutOptions, PutPayload, PutResult, Result, RetryConfig,
+    PutMultipartOpts, PutOptions, PutPayload, PutResult, Result, RetryConfig, TagSet,
 };
 use async_trait::async_trait;
 use base64::prelude::BASE64_STANDARD;
 use base64::Engine;
 use bytes::{Buf, Bytes};
 use chrono::{DateTime, Utc};
-use hyper::header::CACHE_CONTROL;
 use hyper::http::HeaderName;
-use reqwest::header::CONTENT_TYPE;
 use reqwest::{
     header::{HeaderValue, CONTENT_LENGTH, IF_MATCH, IF_NONE_MATCH},
     Client as ReqwestClient, Method, RequestBuilder, Response,
@@ -50,6 +48,8 @@ use std::time::Duration;
 use url::Url;
 
 const VERSION_HEADER: &str = "x-ms-version-id";
+static MS_CACHE_CONTROL: HeaderName = HeaderName::from_static("x-ms-blob-cache-control");
+static MS_CONTENT_TYPE: HeaderName = HeaderName::from_static("x-ms-blob-content-type");
 
 static TAGS_HEADER: HeaderName = HeaderName::from_static("x-ms-tags");
 
@@ -188,8 +188,37 @@ impl<'a> PutRequest<'a> {
         Self { builder, ..self }
     }
 
-    fn set_idempotent(self, idempotent: bool) -> Self {
+    fn idempotent(self, idempotent: bool) -> Self {
         Self { idempotent, ..self }
+    }
+
+    fn with_tags(mut self, tags: TagSet) -> Self {
+        let tags = tags.encoded();
+        if !tags.is_empty() && !self.config.disable_tagging {
+            self.builder = self.builder.header(&TAGS_HEADER, tags);
+        }
+        self
+    }
+
+    fn with_attributes(self, attributes: Attributes) -> Self {
+        let mut builder = self.builder;
+        let mut has_content_type = false;
+        for (k, v) in &attributes {
+            builder = match k {
+                Attribute::CacheControl => builder.header(&MS_CACHE_CONTROL, v.as_ref()),
+                Attribute::ContentType => {
+                    has_content_type = true;
+                    builder.header(&MS_CONTENT_TYPE, v.as_ref())
+                }
+            };
+        }
+
+        if !has_content_type {
+            if let Some(value) = self.config.client_options.get_content_type(self.path) {
+                builder = builder.header(&MS_CONTENT_TYPE, value);
+            }
+        }
+        Self { builder, ..self }
     }
 
     async fn send(self) -> Result<Response> {
@@ -233,32 +262,9 @@ impl AzureClient {
         self.config.get_credential().await
     }
 
-    fn put_request<'a>(
-        &'a self,
-        path: &'a Path,
-        payload: PutPayload,
-        attributes: Attributes,
-    ) -> PutRequest<'a> {
+    fn put_request<'a>(&'a self, path: &'a Path, payload: PutPayload) -> PutRequest<'a> {
         let url = self.config.path_url(path);
-
-        let mut builder = self.client.request(Method::PUT, url);
-
-        let mut has_content_type = false;
-        for (k, v) in &attributes {
-            builder = match k {
-                Attribute::CacheControl => builder.header(CACHE_CONTROL, v.as_ref()),
-                Attribute::ContentType => {
-                    has_content_type = true;
-                    builder.header(CONTENT_TYPE, v.as_ref())
-                }
-            };
-        }
-
-        if !has_content_type {
-            if let Some(value) = self.config.client_options.get_content_type(path) {
-                builder = builder.header(CONTENT_TYPE, value);
-            }
-        }
+        let builder = self.client.request(Method::PUT, url);
 
         PutRequest {
             path,
@@ -276,20 +282,18 @@ impl AzureClient {
         payload: PutPayload,
         opts: PutOptions,
     ) -> Result<PutResult> {
-        let builder = self.put_request(path, payload, opts.attributes);
+        let builder = self
+            .put_request(path, payload)
+            .with_attributes(opts.attributes)
+            .with_tags(opts.tags);
 
         let builder = match &opts.mode {
-            PutMode::Overwrite => builder.set_idempotent(true),
+            PutMode::Overwrite => builder.idempotent(true),
             PutMode::Create => builder.header(&IF_NONE_MATCH, "*"),
             PutMode::Update(v) => {
                 let etag = v.e_tag.as_ref().context(MissingETagSnafu)?;
                 builder.header(&IF_MATCH, etag)
             }
-        };
-
-        let builder = match (opts.tags.encoded(), self.config.disable_tagging) {
-            ("", _) | (_, true) => builder,
-            (tags, false) => builder.header(&TAGS_HEADER, tags),
         };
 
         let response = builder.header(&BLOB_TYPE, "BlockBlob").send().await?;
@@ -306,9 +310,9 @@ impl AzureClient {
         let content_id = format!("{part_idx:20}");
         let block_id = BASE64_STANDARD.encode(&content_id);
 
-        self.put_request(path, payload, Attributes::default())
+        self.put_request(path, payload)
             .query(&[("comp", "block"), ("blockid", &block_id)])
-            .set_idempotent(true)
+            .idempotent(true)
             .send()
             .await?;
 
@@ -316,7 +320,12 @@ impl AzureClient {
     }
 
     /// PUT a block list <https://learn.microsoft.com/en-us/rest/api/storageservices/put-block-list>
-    pub async fn put_block_list(&self, path: &Path, parts: Vec<PartId>) -> Result<PutResult> {
+    pub async fn put_block_list(
+        &self,
+        path: &Path,
+        parts: Vec<PartId>,
+        opts: PutMultipartOpts,
+    ) -> Result<PutResult> {
         let blocks = parts
             .into_iter()
             .map(|part| BlockId::from(part.content_id))
@@ -324,9 +333,11 @@ impl AzureClient {
 
         let payload = BlockList { blocks }.to_xml().into();
         let response = self
-            .put_request(path, payload, Attributes::default())
+            .put_request(path, payload)
+            .with_attributes(opts.attributes)
+            .with_tags(opts.tags)
             .query(&[("comp", "blocklist")])
-            .set_idempotent(true)
+            .idempotent(true)
             .send()
             .await?;
 

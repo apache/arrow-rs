@@ -42,7 +42,8 @@ use crate::gcp::credential::GCSAuthorizer;
 use crate::signer::Signer;
 use crate::{
     multipart::PartId, path::Path, GetOptions, GetResult, ListResult, MultipartId, MultipartUpload,
-    ObjectMeta, ObjectStore, PutOptions, PutPayload, PutResult, Result, UploadPart,
+    ObjectMeta, ObjectStore, PutMultipartOpts, PutOptions, PutPayload, PutResult, Result,
+    UploadPart,
 };
 use async_trait::async_trait;
 use client::GoogleCloudStorageClient;
@@ -156,8 +157,12 @@ impl ObjectStore for GoogleCloudStorage {
         self.client.put(location, payload, opts).await
     }
 
-    async fn put_multipart(&self, location: &Path) -> Result<Box<dyn MultipartUpload>> {
-        let upload_id = self.client.multipart_initiate(location).await?;
+    async fn put_multipart_opts(
+        &self,
+        location: &Path,
+        opts: PutMultipartOpts,
+    ) -> Result<Box<dyn MultipartUpload>> {
+        let upload_id = self.client.multipart_initiate(location, opts).await?;
 
         Ok(Box::new(GCSMultipartUpload {
             part_idx: 0,
@@ -206,7 +211,9 @@ impl ObjectStore for GoogleCloudStorage {
 #[async_trait]
 impl MultipartStore for GoogleCloudStorage {
     async fn create_multipart(&self, path: &Path) -> Result<MultipartId> {
-        self.client.multipart_initiate(path).await
+        self.client
+            .multipart_initiate(path, PutMultipartOpts::default())
+            .await
     }
 
     async fn put_part(

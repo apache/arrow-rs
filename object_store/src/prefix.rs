@@ -22,8 +22,8 @@ use std::ops::Range;
 
 use crate::path::Path;
 use crate::{
-    GetOptions, GetResult, ListResult, MultipartUpload, ObjectMeta, ObjectStore, PutOptions,
-    PutPayload, PutResult, Result,
+    GetOptions, GetResult, ListResult, MultipartUpload, ObjectMeta, ObjectStore, PutMultipartOpts,
+    PutOptions, PutPayload, PutResult, Result,
 };
 
 #[doc(hidden)]
@@ -98,6 +98,15 @@ impl<T: ObjectStore> ObjectStore for PrefixStore<T> {
     async fn put_multipart(&self, location: &Path) -> Result<Box<dyn MultipartUpload>> {
         let full_path = self.full_path(location);
         self.inner.put_multipart(&full_path).await
+    }
+
+    async fn put_multipart_opts(
+        &self,
+        location: &Path,
+        opts: PutMultipartOpts,
+    ) -> Result<Box<dyn MultipartUpload>> {
+        let full_path = self.full_path(location);
+        self.inner.put_multipart_opts(&full_path, opts).await
     }
 
     async fn get(&self, location: &Path) -> Result<GetResult> {
