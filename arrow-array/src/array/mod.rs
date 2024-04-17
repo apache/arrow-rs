@@ -696,30 +696,6 @@ unsafe fn get_offsets<O: ArrowNativeType>(data: &ArrayData) -> OffsetBuffer<O> {
     }
 }
 
-/// Helper function that gets list view offset from an [`ArrayData`]
-///
-/// # Safety
-///
-/// ArrayData must contain a valid [`ScalarBuffer`] as its first buffer
-fn get_view_offsets<O: ArrowNativeType>(data: &ArrayData) -> ScalarBuffer<O> {
-    match data.is_empty() && data.buffers()[0].is_empty() {
-        true => ScalarBuffer::new_empty(),
-        false => ScalarBuffer::new(data.buffers()[0].clone(), data.offset(), data.len() + 1),
-    }
-}
-
-/// Helper function that gets list view size from an [`ArrayData`]
-///
-/// # Safety
-///
-/// ArrayData must contain a valid [`ScalarBuffer`] as its second buffer
-fn get_view_sizes<O: ArrowNativeType>(data: &ArrayData) -> ScalarBuffer<O> {
-    match data.is_empty() && data.buffers()[1].is_empty() {
-        true => ScalarBuffer::new_empty(),
-        false => ScalarBuffer::new(data.buffers()[1].clone(), data.offset(), data.len()),
-    }
-}
-
 /// Helper function for printing potentially long arrays.
 fn print_long_array<A, F>(array: &A, f: &mut std::fmt::Formatter, print_item: F) -> std::fmt::Result
 where

@@ -136,8 +136,7 @@ where
     pub fn append(&mut self, is_valid: bool, size: usize) {
         self.offsets_builder
             .append(OffsetSize::from_usize(self.values_builder.len() - size).unwrap());
-        let size = OffsetSize::from_usize(size).unwrap();
-        self.sizes_builder.append(size);
+        self.sizes_builder.append(OffsetSize::from_usize(self.values_builder.len()).unwrap());
         self.null_buffer_builder.append(is_valid);
     }
 

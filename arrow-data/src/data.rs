@@ -860,17 +860,6 @@ impl ArrayData {
         self.typed_buffer(0, self.len + 1)
     }
 
-    /// Returns a reference to the data in `buffer` as a typed slice
-    /// after validating. The returned slice is guaranteed to have at
-    /// least `len` entries.
-    fn typed_sizes<T: ArrowNativeType + num::Num>(&self) -> Result<&[T], ArrowError> {
-        // An empty list-like array can have 0 sizes
-        if self.len == 0 && self.buffers[1].is_empty() {
-            return Ok(&[]);
-        }
-        self.typed_buffer(1, self.len)
-    }
-
     /// Returns a reference to the data in `buffers[idx]` as a typed slice after validating
     fn typed_buffer<T: ArrowNativeType + num::Num>(
         &self,
@@ -948,7 +937,7 @@ impl ArrayData {
         &self,
         values_length: usize,
     ) -> Result<(), ArrowError> {
-        let sizes = self.typed_sizes::<T>()?;
+        let sizes: &[T] =  self.typed_buffer(1, self.len)?;
         if sizes.is_empty() {
             return Ok(());
         }
@@ -974,7 +963,6 @@ impl ArrayData {
             }
             DataType::ListView(field) => {
                 let values_data = self.get_single_valid_child_data(field.data_type())?;
-                self.validate_offsets::<i32>(values_data.len)?;
                 self.validate_sizes::<i32>(values_data.len)?;
                 Ok(())
             }
@@ -985,7 +973,6 @@ impl ArrayData {
             }
             DataType::LargeListView(field) => {
                 let values_data = self.get_single_valid_child_data(field.data_type())?;
-                self.validate_offsets::<i64>(values_data.len)?;
                 self.validate_sizes::<i64>(values_data.len)?;
                 Ok(())
             }

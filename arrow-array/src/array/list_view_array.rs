@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::array::{get_view_offsets, get_view_sizes, make_array, print_long_array};
+use crate::array::{make_array, print_long_array};
 use crate::builder::{GenericListViewBuilder, PrimitiveBuilder};
 use crate::iterator::GenericListViewArrayIter;
 use crate::{
@@ -50,7 +50,6 @@ pub struct GenericListViewArray<OffsetSize: OffsetSizeTrait> {
     values: ArrayRef,
     value_offsets: ScalarBuffer<OffsetSize>,
     value_sizes: ScalarBuffer<OffsetSize>,
-    len: usize,
 }
 
 impl<OffsetSize: OffsetSizeTrait> Clone for GenericListViewArray<OffsetSize> {
@@ -61,7 +60,6 @@ impl<OffsetSize: OffsetSizeTrait> Clone for GenericListViewArray<OffsetSize> {
             values: self.values.clone(),
             value_offsets: self.value_offsets.clone(),
             value_sizes: self.value_sizes.clone(),
-            len: self.len,
         }
     }
 }
@@ -96,25 +94,6 @@ impl<OffsetSize: OffsetSizeTrait> GenericListViewArray<OffsetSize> {
         values: ArrayRef,
         nulls: Option<NullBuffer>,
     ) -> Result<Self, ArrowError> {
-        for i in 0..offsets.len() {
-            let length = values.len();
-            let offset = offsets[i].as_usize();
-            let size = sizes[i].as_usize();
-            if offset > length {
-                return Err(ArrowError::InvalidArgumentError(format!(
-                    "Invalid offset value for {}ListViewArray, offset: {}, length: {}",
-                    OffsetSize::PREFIX,
-                    offset,
-                    length
-                )));
-            }
-            if offset + size > values.len() {
-                return Err(ArrowError::InvalidArgumentError(format!(
-                    "Invalid offset and size values for {}ListViewArray, offset: {}, size: {}, values.len(): {}",
-                    OffsetSize::PREFIX, offset, size, values.len()
-                )));
-            }
-        }
 
         let len = offsets.len();
         if let Some(n) = nulls.as_ref() {
@@ -132,6 +111,28 @@ impl<OffsetSize: OffsetSizeTrait> GenericListViewArray<OffsetSize> {
                 OffsetSize::PREFIX, len, sizes.len()
             )));
         }
+
+        for i in 0..offsets.len() {
+            let length = values.len();
+            let offset = offsets[i].as_usize();
+            let size = sizes[i].as_usize();
+            if offset > length {
+                return Err(ArrowError::InvalidArgumentError(format!(
+                    "Invalid offset value for {}ListViewArray, offset: {}, length: {}",
+                    OffsetSize::PREFIX,
+                    offset,
+                    length
+                )));
+            }
+            if offset.saturating_add(size) > values.len() {
+                return Err(ArrowError::InvalidArgumentError(format!(
+                    "Invalid offset and size values for {}ListViewArray, offset: {}, size: {}, values.len(): {}",
+                    OffsetSize::PREFIX, offset, size, values.len()
+                )));
+            }
+        }
+
+
 
         if !field.is_nullable() && values.is_nullable() {
             return Err(ArrowError::InvalidArgumentError(format!(
@@ -157,7 +158,6 @@ impl<OffsetSize: OffsetSizeTrait> GenericListViewArray<OffsetSize> {
             values,
             value_offsets: offsets,
             value_sizes: sizes,
-            len,
         })
     }
 
@@ -185,7 +185,6 @@ impl<OffsetSize: OffsetSizeTrait> GenericListViewArray<OffsetSize> {
             value_offsets: ScalarBuffer::new_zeroed(len),
             value_sizes: ScalarBuffer::new_zeroed(len),
             values,
-            len: 0usize,
         }
     }
 
@@ -298,7 +297,6 @@ impl<OffsetSize: OffsetSizeTrait> GenericListViewArray<OffsetSize> {
             values: self.values.clone(),
             value_offsets: self.value_offsets.slice(offset, length),
             value_sizes: self.value_sizes.slice(offset, length),
-            len: length,
         }
     }
 
@@ -366,11 +364,11 @@ impl<OffsetSize: OffsetSizeTrait> Array for GenericListViewArray<OffsetSize> {
     }
 
     fn len(&self) -> usize {
-        self.len
+        self.values.len()
     }
 
     fn is_empty(&self) -> bool {
-        self.value_offsets.len() <= 1
+        self.values.is_empty()
     }
 
     fn offset(&self) -> usize {
@@ -384,6 +382,7 @@ impl<OffsetSize: OffsetSizeTrait> Array for GenericListViewArray<OffsetSize> {
     fn get_buffer_memory_size(&self) -> usize {
         let mut size = self.values.get_buffer_memory_size();
         size += self.value_offsets.inner().capacity();
+        size += self.value_sizes.inner().capacity();
         if let Some(n) = self.nulls.as_ref() {
             size += n.buffer().capacity();
         }
@@ -393,6 +392,7 @@ impl<OffsetSize: OffsetSizeTrait> Array for GenericListViewArray<OffsetSize> {
     fn get_array_memory_size(&self) -> usize {
         let mut size = std::mem::size_of::<Self>() + self.values.get_array_memory_size();
         size += self.value_offsets.inner().capacity();
+        size += self.value_sizes.inner().capacity();
         if let Some(n) = self.nulls.as_ref() {
             size += n.buffer().capacity();
         }
@@ -460,7 +460,6 @@ impl<OffsetSize: OffsetSizeTrait> From<FixedSizeListArray> for GenericListViewAr
             values: value.values().clone(),
             value_offsets: offsets,
             value_sizes: sizes,
-            len: value.len(),
         }
     }
 }
@@ -502,8 +501,8 @@ impl<OffsetSize: OffsetSizeTrait> GenericListViewArray<OffsetSize> {
         let values = make_array(values);
         // SAFETY:
         // ArrayData is valid, and verified type above
-        let value_offsets = get_view_offsets(&data);
-        let value_sizes = get_view_sizes(&data);
+        let value_offsets = ScalarBuffer::new(data.buffers()[0].clone(), data.offset(), data.len());
+        let value_sizes = ScalarBuffer::new(data.buffers()[1].clone(), data.offset(), data.len());
 
         Ok(Self {
             data_type: data.data_type().clone(),
@@ -511,7 +510,6 @@ impl<OffsetSize: OffsetSizeTrait> GenericListViewArray<OffsetSize> {
             values,
             value_offsets,
             value_sizes,
-            len: data.len(),
         })
     }
 }
