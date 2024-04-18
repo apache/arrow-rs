@@ -2002,7 +2002,7 @@ mod tests {
         use chrono::NaiveDate;
 
         let epoch = NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
-        let dates = vec![
+        let dates = [
             NaiveDate::from_ymd_opt(1915, 11, 25).unwrap(),
             NaiveDate::from_ymd_opt(1964, 4, 8).unwrap(),
             NaiveDate::from_ymd_opt(1992, 9, 2).unwrap(),
@@ -2033,7 +2033,7 @@ mod tests {
         use chrono::NaiveDate;
 
         let epoch = NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
-        let dates = vec![
+        let dates = [
             NaiveDate::from_ymd_opt(1915, 11, 25).unwrap(),
             NaiveDate::from_ymd_opt(1964, 4, 8).unwrap(),
             NaiveDate::from_ymd_opt(1992, 9, 2).unwrap(),
@@ -2076,9 +2076,7 @@ mod tests {
             "col".to_string(),
             array.clone(),
             Arc::new(BinaryArray::from_iter_values(
-                vec![vec![(SMALL_SIZE + 1) as u8]]
-                    .iter()
-                    .map(|v| v.as_slice()),
+                [vec![(SMALL_SIZE + 1) as u8]].iter().map(|v| v.as_slice()),
             )),
         );
     }
