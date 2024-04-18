@@ -19,7 +19,7 @@ use crate::array::print_long_array;
 use crate::iterator::FixedSizeBinaryIter;
 use crate::{Array, ArrayAccessor, ArrayRef, FixedSizeListArray};
 use arrow_buffer::buffer::NullBuffer;
-use arrow_buffer::{bit_util, ArrowNativeType, BooleanBuffer, Buffer, MutableBuffer};
+use arrow_buffer::{bit_util, ArrowNativeType, BooleanBuffer, MutableBuffer, ScalarBuffer};
 use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::{ArrowError, DataType};
 use std::any::Any;
@@ -52,7 +52,7 @@ use std::sync::Arc;
 #[derive(Clone)]
 pub struct FixedSizeBinaryArray {
     data_type: DataType, // Must be DataType::FixedSizeBinary(value_length)
-    value_data: Buffer,
+    value_data: ScalarBuffer<u8>,
     nulls: Option<NullBuffer>,
     len: usize,
     value_length: i32,
@@ -64,7 +64,7 @@ impl FixedSizeBinaryArray {
     /// # Panics
     ///
     /// Panics if [`Self::try_new`] returns an error
-    pub fn new(size: i32, values: Buffer, nulls: Option<NullBuffer>) -> Self {
+    pub fn new(size: i32, values: ScalarBuffer<u8>, nulls: Option<NullBuffer>) -> Self {
         Self::try_new(size, values, nulls).unwrap()
     }
 
@@ -76,7 +76,7 @@ impl FixedSizeBinaryArray {
     /// * `values.len() / size != nulls.len()`
     pub fn try_new(
         size: i32,
-        values: Buffer,
+        values: ScalarBuffer<u8>,
         nulls: Option<NullBuffer>,
     ) -> Result<Self, ArrowError> {
         let data_type = DataType::FixedSizeBinary(size);
@@ -124,7 +124,7 @@ impl FixedSizeBinaryArray {
     }
 
     /// Deconstruct this array into its constituent parts
-    pub fn into_parts(self) -> (i32, Buffer, Option<NullBuffer>) {
+    pub fn into_parts(self) -> (i32, ScalarBuffer<u8>, Option<NullBuffer>) {
         (self.value_length, self.value_data, self.nulls)
     }
 
@@ -178,16 +178,16 @@ impl FixedSizeBinaryArray {
 
     /// Returns the values of this array.
     ///
-    /// Unlike [`Self::value_data`] this returns the [`Buffer`]
+    /// Unlike [`Self::value_data`] this returns the [`ScalarBuffer`]
     /// allowing for zero-copy cloning.
     #[inline]
-    pub fn values(&self) -> &Buffer {
+    pub fn values(&self) -> &ScalarBuffer<u8> {
         &self.value_data
     }
 
     /// Returns the raw value data.
     pub fn value_data(&self) -> &[u8] {
-        self.value_data.as_slice()
+        self.value_data.as_ref()
     }
 
     /// Returns a zero-copy slice of this array with the indicated offset and length.
@@ -203,7 +203,7 @@ impl FixedSizeBinaryArray {
             data_type: self.data_type.clone(),
             nulls: self.nulls.as_ref().map(|n| n.slice(offset, len)),
             value_length: self.value_length,
-            value_data: self.value_data.slice_with_length(offset * size, len * size),
+            value_data: self.value_data.slice(offset * size, len * size),
             len,
         }
     }
@@ -473,8 +473,11 @@ impl From<ArrayData> for FixedSizeBinaryArray {
         };
 
         let size = value_length as usize;
-        let value_data =
-            data.buffers()[0].slice_with_length(data.offset() * size, data.len() * size);
+        let value_data = ScalarBuffer::new(
+            data.buffers()[0].clone(),
+            data.offset() * size,
+            data.len() * size,
+        );
 
         Self {
             data_type: data.data_type().clone(),
@@ -490,7 +493,7 @@ impl From<FixedSizeBinaryArray> for ArrayData {
     fn from(array: FixedSizeBinaryArray) -> Self {
         let builder = ArrayDataBuilder::new(array.data_type)
             .len(array.len)
-            .buffers(vec![array.value_data])
+            .buffers(vec![array.value_data.into_inner()])
             .nulls(array.nulls);
 
         unsafe { builder.build_unchecked() }
@@ -599,7 +602,7 @@ impl Array for FixedSizeBinaryArray {
     }
 
     fn get_buffer_memory_size(&self) -> usize {
-        let mut sum = self.value_data.capacity();
+        let mut sum = self.value_data.inner().capacity();
         if let Some(n) = &self.nulls {
             sum += n.buffer().capacity();
         }
@@ -635,6 +638,7 @@ impl<'a> IntoIterator for &'a FixedSizeBinaryArray {
 #[cfg(test)]
 mod tests {
     use crate::RecordBatch;
+    use arrow_buffer::Buffer;
     use arrow_schema::{Field, Schema};
 
     use super::*;
@@ -938,7 +942,7 @@ mod tests {
 
     #[test]
     fn test_constructors() {
-        let buffer = Buffer::from_vec(vec![0_u8; 10]);
+        let buffer = [0_u8; 10].into_iter().collect::<ScalarBuffer<u8>>();
         let a = FixedSizeBinaryArray::new(2, buffer.clone(), None);
         assert_eq!(a.len(), 5);
 

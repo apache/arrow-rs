@@ -638,7 +638,7 @@ mod tests {
 
     #[test]
     fn test_fixed_size_binary() {
-        let array = FixedSizeBinaryArray::new(4, [0; 16].into(), None);
+        let array = FixedSizeBinaryArray::new(4, [0; 16].into_iter().collect(), None);
         let result = length(&array).unwrap();
         assert_eq!(result.as_ref(), &Int32Array::from(vec![4; 4]));
 
