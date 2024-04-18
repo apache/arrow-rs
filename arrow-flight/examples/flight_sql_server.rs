@@ -24,7 +24,9 @@ use once_cell::sync::Lazy;
 use prost::Message;
 use std::collections::HashSet;
 use std::pin::Pin;
+use std::str::FromStr;
 use std::sync::Arc;
+use tonic::metadata::MetadataValue;
 use tonic::transport::Server;
 use tonic::transport::{Certificate, Identity, ServerTlsConfig};
 use tonic::{Request, Response, Status, Streaming};
@@ -184,7 +186,21 @@ impl FlightSqlService for FlightSqlServiceImpl {
         };
         let result = Ok(result);
         let output = futures::stream::iter(vec![result]);
-        return Ok(Response::new(Box::pin(output)));
+
+        let token = format!("Bearer {}", FAKE_TOKEN);
+        let mut response: Response<
+            Pin<
+                Box<
+                    dyn Stream<Item = std::result::Result<HandshakeResponse, Status>>
+                        + std::marker::Send,
+                >,
+            >,
+        > = Response::new(Box::pin(output));
+        response.metadata_mut().append(
+            "authorization",
+            MetadataValue::from_str(token.as_str()).unwrap(),
+        );
+        return Ok(response);
     }
 
     async fn do_get_fallback(
@@ -999,15 +1015,6 @@ mod tests {
                 .to_string()
                 .contains("Invalid credentials"));
 
-            // forget to set_token
-            client.handshake("admin", "password").await.unwrap();
-            assert!(client
-                .prepare("select 1;".to_string(), None)
-                .await
-                .unwrap_err()
-                .to_string()
-                .contains("No authorization header"));
-
             // Invalid Tokens
             client.handshake("admin", "password").await.unwrap();
             client.set_token("wrong token".to_string());
@@ -1017,6 +1024,12 @@ mod tests {
                 .unwrap_err()
                 .to_string()
                 .contains("invalid token"));
+
+            client.clear_token();
+
+            // Successful call (token is automatically set by handshake)
+            client.handshake("admin", "password").await.unwrap();
+            client.prepare("select 1;".to_string(), None).await.unwrap();
         })
         .await
     }
