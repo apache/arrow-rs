@@ -929,6 +929,43 @@ impl ArrayData {
         Ok(())
     }
 
+    /// Does a cheap sanity check that the `self.len` values in `buffer` are valid
+    /// offsets and sizes (of type T) into some other buffer of `values_length` bytes long
+    fn validate_offsets_and_sizes<T: ArrowNativeType + num::Num + std::fmt::Display>(
+        &self,
+        values_length: usize,
+    ) -> Result<(), ArrowError> {
+        let offsets: &[T] = self.typed_buffer(0, self.len)?;
+        let sizes: &[T] = self.typed_buffer(1, self.len)?;
+        for i in 0..values_length {
+            let size = sizes[i].to_usize().ok_or_else(|| {
+                ArrowError::InvalidArgumentError(format!(
+                    "Error converting size[{}] ({}) to usize for {}",
+                    i, sizes[i], self.data_type
+                ))
+            })?;
+            let offset = offsets[i].to_usize().ok_or_else(|| {
+                ArrowError::InvalidArgumentError(format!(
+                    "Error converting offset[{}] ({}) to usize for {}",
+                    i, offsets[i], self.data_type
+                ))
+            })?;
+            if offset > values_length {
+                return Err(ArrowError::InvalidArgumentError(format!(
+                    "Size {} at index {} is offset {} is out of bounds for {}",
+                    size, i, offset, self.data_type
+                )));
+            }
+            if size > values_length - offset {
+                return Err(ArrowError::InvalidArgumentError(format!(
+                    "Size {} at index {} is larger than the remaining values for {}",
+                    size, i, self.data_type
+                )));
+            }
+        }
+        Ok(())
+    }
+
     /// Validates the layout of `child_data` ArrayData structures
     fn validate_child_data(&self) -> Result<(), ArrowError> {
         match &self.data_type {
@@ -940,6 +977,16 @@ impl ArrayData {
             DataType::LargeList(field) => {
                 let values_data = self.get_single_valid_child_data(field.data_type())?;
                 self.validate_offsets::<i64>(values_data.len)?;
+                Ok(())
+            }
+            DataType::ListView(field) => {
+                let values_data = self.get_single_valid_child_data(field.data_type())?;
+                self.validate_offsets_and_sizes::<i32>(values_data.len)?;
+                Ok(())
+            }
+            DataType::LargeListView(field) => {
+                let values_data = self.get_single_valid_child_data(field.data_type())?;
+                self.validate_offsets_and_sizes::<i64>(values_data.len)?;
                 Ok(())
             }
             DataType::FixedSizeList(field, list_size) => {
@@ -1546,9 +1593,8 @@ pub fn layout(data_type: &DataType) -> DataTypeLayout {
         DataType::BinaryView | DataType::Utf8View => DataTypeLayout::new_view(),
         DataType::FixedSizeList(_, _) => DataTypeLayout::new_nullable_empty(), // all in child data
         DataType::List(_) => DataTypeLayout::new_fixed_width::<i32>(),
-        DataType::ListView(_) | DataType::LargeListView(_) => {
-            unimplemented!("ListView/LargeListView not implemented")
-        }
+        DataType::ListView(_) => DataTypeLayout::new_list_view::<i32>(),
+        DataType::LargeListView(_) => DataTypeLayout::new_list_view::<i64>(),
         DataType::LargeList(_) => DataTypeLayout::new_fixed_width::<i64>(),
         DataType::Map(_, _) => DataTypeLayout::new_fixed_width::<i32>(),
         DataType::Struct(_) => DataTypeLayout::new_nullable_empty(), // all in child data,
@@ -1657,6 +1703,24 @@ impl DataTypeLayout {
                 byte_width: mem::size_of::<u128>(),
                 alignment: mem::align_of::<u128>(),
             }],
+            can_contain_null_mask: true,
+            variadic: true,
+        }
+    }
+
+    /// Describes a list view type
+    pub fn new_list_view<T>() -> Self {
+        Self {
+            buffers: vec![
+                BufferSpec::FixedWidth {
+                    byte_width: mem::size_of::<T>(),
+                    alignment: mem::align_of::<T>(),
+                },
+                BufferSpec::FixedWidth {
+                    byte_width: mem::size_of::<T>(),
+                    alignment: mem::align_of::<T>(),
+                },
+            ],
             can_contain_null_mask: true,
             variadic: true,
         }
