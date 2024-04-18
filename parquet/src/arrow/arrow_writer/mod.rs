@@ -2067,7 +2067,7 @@ mod tests {
         let many_vecs_iter = many_vecs.iter().map(|v| v.as_slice());
 
         let array = Arc::new(BinaryArray::from_iter_values(many_vecs_iter));
-        let mut options = RoundTripOptions::new(array, false);
+        let mut options = RoundTripOptions::new(array.clone(), false);
         options.bloom_filter = true;
 
         let files = one_column_roundtrip_with_options(options);
