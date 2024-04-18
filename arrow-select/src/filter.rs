@@ -23,10 +23,10 @@ use std::sync::Arc;
 use arrow_array::builder::BooleanBufferBuilder;
 use arrow_array::cast::AsArray;
 use arrow_array::types::{
-    ArrowDictionaryKeyType, ArrowPrimitiveType, ByteArrayType, RunEndIndexType,
+    ArrowDictionaryKeyType, ArrowPrimitiveType, ByteArrayType, ByteViewType, RunEndIndexType,
 };
 use arrow_array::*;
-use arrow_buffer::{bit_util, BooleanBuffer, NullBuffer, RunEndBuffer};
+use arrow_buffer::{bit_util, ArrowNativeType, BooleanBuffer, NullBuffer, RunEndBuffer};
 use arrow_buffer::{Buffer, MutableBuffer};
 use arrow_data::bit_iterator::{BitIndexIterator, BitSliceIterator};
 use arrow_data::transform::MutableArrayData;
@@ -333,11 +333,17 @@ fn filter_array(values: &dyn Array, predicate: &FilterPredicate) -> Result<Array
             DataType::LargeUtf8 => {
                 Ok(Arc::new(filter_bytes(values.as_string::<i64>(), predicate)))
             }
+            DataType::Utf8View => {
+                Ok(Arc::new(filter_byte_view(values.as_string_view(), predicate)))
+            }
             DataType::Binary => {
                 Ok(Arc::new(filter_bytes(values.as_binary::<i32>(), predicate)))
             }
             DataType::LargeBinary => {
                 Ok(Arc::new(filter_bytes(values.as_binary::<i64>(), predicate)))
+            }
+            DataType::BinaryView => {
+                Ok(Arc::new(filter_byte_view(values.as_binary_view(), predicate)))
             }
             DataType::RunEndEncoded(_, _) => {
                 downcast_run_array!{
@@ -508,12 +514,8 @@ fn filter_boolean(array: &BooleanArray, predicate: &FilterPredicate) -> BooleanA
     BooleanArray::from(data)
 }
 
-/// `filter` implementation for primitive arrays
-fn filter_primitive<T>(array: &PrimitiveArray<T>, predicate: &FilterPredicate) -> PrimitiveArray<T>
-where
-    T: ArrowPrimitiveType,
-{
-    let values = array.values();
+#[inline(never)]
+fn filter_native<T: ArrowNativeType>(values: &[T], predicate: &FilterPredicate) -> Buffer {
     assert!(values.len() >= predicate.filter.len());
 
     let buffer = match &predicate.strategy {
@@ -546,9 +548,19 @@ where
         IterationStrategy::All | IterationStrategy::None => unreachable!(),
     };
 
+    buffer.into()
+}
+
+/// `filter` implementation for primitive arrays
+fn filter_primitive<T>(array: &PrimitiveArray<T>, predicate: &FilterPredicate) -> PrimitiveArray<T>
+where
+    T: ArrowPrimitiveType,
+{
+    let values = array.values();
+    let buffer = filter_native(values, predicate);
     let mut builder = ArrayDataBuilder::new(array.data_type().clone())
         .len(predicate.count)
-        .add_buffer(buffer.into());
+        .add_buffer(buffer);
 
     if let Some((null_count, nulls)) = filter_null_mask(array.nulls(), predicate) {
         builder = builder.null_count(null_count).null_bit_buffer(Some(nulls));
@@ -671,6 +683,25 @@ where
 
     let data = unsafe { builder.build_unchecked() };
     GenericByteArray::from(data)
+}
+
+/// `filter` implementation for byte view arrays.
+fn filter_byte_view<T: ByteViewType>(
+    array: &GenericByteViewArray<T>,
+    predicate: &FilterPredicate,
+) -> GenericByteViewArray<T> {
+    let new_view_buffer = filter_native(array.views(), predicate);
+
+    let mut builder = ArrayDataBuilder::new(T::DATA_TYPE)
+        .len(predicate.count)
+        .add_buffer(new_view_buffer)
+        .add_buffers(array.data_buffers().to_vec());
+
+    if let Some((null_count, nulls)) = filter_null_mask(array.nulls(), predicate) {
+        builder = builder.null_count(null_count).null_bit_buffer(Some(nulls));
+    }
+
+    GenericByteViewArray::from(unsafe { builder.build_unchecked() })
 }
 
 /// `filter` implementation for dictionaries
@@ -886,6 +917,69 @@ mod tests {
         assert_eq!(b"hello", d.value(0));
         assert!(!d.is_null(0));
         assert!(d.is_null(1));
+    }
+
+    fn _test_filter_byte_view<T>()
+    where
+        T: ByteViewType,
+        str: AsRef<T::Native>,
+        T::Native: PartialEq,
+    {
+        let array = {
+            // ["hello", "world", null, "large payload over 12 bytes", "lulu"]
+            let mut builder = GenericByteViewBuilder::<T>::new();
+            builder.append_value("hello");
+            builder.append_value("world");
+            builder.append_null();
+            builder.append_value("large payload over 12 bytes");
+            builder.append_value("lulu");
+            builder.finish()
+        };
+
+        {
+            let predicate = BooleanArray::from(vec![true, false, true, true, false]);
+            let actual = filter(&array, &predicate).unwrap();
+
+            assert_eq!(actual.len(), 3);
+
+            let expected = {
+                // ["hello", null, "large payload over 12 bytes"]
+                let mut builder = GenericByteViewBuilder::<T>::new();
+                builder.append_value("hello");
+                builder.append_null();
+                builder.append_value("large payload over 12 bytes");
+                builder.finish()
+            };
+
+            assert_eq!(actual.as_ref(), &expected);
+        }
+
+        {
+            let predicate = BooleanArray::from(vec![true, false, false, false, true]);
+            let actual = filter(&array, &predicate).unwrap();
+
+            assert_eq!(actual.len(), 2);
+
+            let expected = {
+                // ["hello", "lulu"]
+                let mut builder = GenericByteViewBuilder::<T>::new();
+                builder.append_value("hello");
+                builder.append_value("lulu");
+                builder.finish()
+            };
+
+            assert_eq!(actual.as_ref(), &expected);
+        }
+    }
+
+    #[test]
+    fn test_filter_string_view() {
+        _test_filter_byte_view::<StringViewType>()
+    }
+
+    #[test]
+    fn test_filter_binary_view() {
+        _test_filter_byte_view::<BinaryViewType>()
     }
 
     #[test]

@@ -18,10 +18,10 @@
 //! A shared HTTP client implementation incorporating retries
 
 use crate::client::backoff::{Backoff, BackoffConfig};
+use crate::PutPayload;
 use futures::future::BoxFuture;
-use futures::FutureExt;
 use reqwest::header::LOCATION;
-use reqwest::{Response, StatusCode};
+use reqwest::{Client, Request, Response, StatusCode};
 use snafu::Error as SnafuError;
 use snafu::Snafu;
 use std::time::{Duration, Instant};
@@ -166,26 +166,57 @@ impl Default for RetryConfig {
     }
 }
 
-fn send_retry_impl(
-    builder: reqwest::RequestBuilder,
-    config: &RetryConfig,
-    is_idempotent: Option<bool>,
-) -> BoxFuture<'static, Result<Response>> {
-    let mut backoff = Backoff::new(&config.backoff);
-    let max_retries = config.max_retries;
-    let retry_timeout = config.retry_timeout;
+pub struct RetryableRequest {
+    client: Client,
+    request: Request,
 
-    let (client, req) = builder.build_split();
-    let req = req.expect("request must be valid");
-    let is_idempotent = is_idempotent.unwrap_or(req.method().is_safe());
+    max_retries: usize,
+    retry_timeout: Duration,
+    backoff: Backoff,
 
-    async move {
+    idempotent: Option<bool>,
+    payload: Option<PutPayload>,
+}
+
+impl RetryableRequest {
+    /// Set whether this request is idempotent
+    ///
+    /// An idempotent request will be retried on timeout even if the request
+    /// method is not [safe](https://datatracker.ietf.org/doc/html/rfc7231#section-4.2.1)
+    pub fn idempotent(self, idempotent: bool) -> Self {
+        Self {
+            idempotent: Some(idempotent),
+            ..self
+        }
+    }
+
+    /// Provide a [`PutPayload`]
+    pub fn payload(self, payload: Option<PutPayload>) -> Self {
+        Self { payload, ..self }
+    }
+
+    pub async fn send(self) -> Result<Response> {
+        let max_retries = self.max_retries;
+        let retry_timeout = self.retry_timeout;
         let mut retries = 0;
         let now = Instant::now();
 
+        let mut backoff = self.backoff;
+        let is_idempotent = self
+            .idempotent
+            .unwrap_or_else(|| self.request.method().is_safe());
+
         loop {
-            let s = req.try_clone().expect("request body must be cloneable");
-            match client.execute(s).await {
+            let mut request = self
+                .request
+                .try_clone()
+                .expect("request body must be cloneable");
+
+            if let Some(payload) = &self.payload {
+                *request.body_mut() = Some(payload.body());
+            }
+
+            match self.client.execute(request).await {
                 Ok(r) => match r.error_for_status_ref() {
                     Ok(_) if r.status().is_success() => return Ok(r),
                     Ok(r) if r.status() == StatusCode::NOT_MODIFIED => {
@@ -195,47 +226,44 @@ fn send_retry_impl(
                         })
                     }
                     Ok(r) => {
-                        let is_bare_redirect = r.status().is_redirection() && !r.headers().contains_key(LOCATION);
+                        let is_bare_redirect =
+                            r.status().is_redirection() && !r.headers().contains_key(LOCATION);
                         return match is_bare_redirect {
                             true => Err(Error::BareRedirect),
                             // Not actually sure if this is reachable, but here for completeness
                             false => Err(Error::Client {
                                 body: None,
                                 status: r.status(),
-                            })
-                        }
+                            }),
+                        };
                     }
                     Err(e) => {
                         let status = r.status();
                         if retries == max_retries
                             || now.elapsed() > retry_timeout
-                            || !status.is_server_error() {
-
+                            || !status.is_server_error()
+                        {
                             return Err(match status.is_client_error() {
                                 true => match r.text().await {
-                                    Ok(body) => {
-                                        Error::Client {
-                                            body: Some(body).filter(|b| !b.is_empty()),
-                                            status,
-                                        }
-                                    }
-                                    Err(e) => {
-                                        Error::Reqwest {
-                                            retries,
-                                            max_retries,
-                                            elapsed: now.elapsed(),
-                                            retry_timeout,
-                                            source: e,
-                                        }
-                                    }
-                                }
+                                    Ok(body) => Error::Client {
+                                        body: Some(body).filter(|b| !b.is_empty()),
+                                        status,
+                                    },
+                                    Err(e) => Error::Reqwest {
+                                        retries,
+                                        max_retries,
+                                        elapsed: now.elapsed(),
+                                        retry_timeout,
+                                        source: e,
+                                    },
+                                },
                                 false => Error::Reqwest {
                                     retries,
                                     max_retries,
                                     elapsed: now.elapsed(),
                                     retry_timeout,
                                     source: e,
-                                }
+                                },
                             });
                         }
 
@@ -251,13 +279,13 @@ fn send_retry_impl(
                         tokio::time::sleep(sleep).await;
                     }
                 },
-                Err(e) =>
-                {
+                Err(e) => {
                     let mut do_retry = false;
                     if e.is_connect()
                         || e.is_body()
                         || (e.is_request() && !e.is_timeout())
-                        || (is_idempotent && e.is_timeout()) {
+                        || (is_idempotent && e.is_timeout())
+                    {
                         do_retry = true
                     } else {
                         let mut source = e.source();
@@ -267,7 +295,7 @@ fn send_retry_impl(
                                     || e.is_incomplete_message()
                                     || e.is_body_write_aborted()
                                     || (is_idempotent && e.is_timeout());
-                                break
+                                break;
                             }
                             if let Some(e) = e.downcast_ref::<std::io::Error>() {
                                 if e.kind() == std::io::ErrorKind::TimedOut {
@@ -276,9 +304,9 @@ fn send_retry_impl(
                                     do_retry = matches!(
                                         e.kind(),
                                         std::io::ErrorKind::ConnectionReset
-                                        | std::io::ErrorKind::ConnectionAborted
-                                        | std::io::ErrorKind::BrokenPipe
-                                        | std::io::ErrorKind::UnexpectedEof
+                                            | std::io::ErrorKind::ConnectionAborted
+                                            | std::io::ErrorKind::BrokenPipe
+                                            | std::io::ErrorKind::UnexpectedEof
                                     );
                                 }
                                 break;
@@ -287,17 +315,14 @@ fn send_retry_impl(
                         }
                     }
 
-                    if retries == max_retries
-                        || now.elapsed() > retry_timeout
-                        || !do_retry {
-
+                    if retries == max_retries || now.elapsed() > retry_timeout || !do_retry {
                         return Err(Error::Reqwest {
                             retries,
                             max_retries,
                             elapsed: now.elapsed(),
                             retry_timeout,
                             source: e,
-                        })
+                        });
                     }
                     let sleep = backoff.next();
                     retries += 1;
@@ -313,39 +338,39 @@ fn send_retry_impl(
             }
         }
     }
-    .boxed()
 }
 
 pub trait RetryExt {
+    /// Return a [`RetryableRequest`]
+    fn retryable(self, config: &RetryConfig) -> RetryableRequest;
+
     /// Dispatch a request with the given retry configuration
     ///
     /// # Panic
     ///
     /// This will panic if the request body is a stream
     fn send_retry(self, config: &RetryConfig) -> BoxFuture<'static, Result<Response>>;
-
-    /// Dispatch a request with the given retry configuration and idempotency
-    ///
-    /// # Panic
-    ///
-    /// This will panic if the request body is a stream
-    fn send_retry_with_idempotency(
-        self,
-        config: &RetryConfig,
-        is_idempotent: bool,
-    ) -> BoxFuture<'static, Result<Response>>;
 }
 
 impl RetryExt for reqwest::RequestBuilder {
-    fn send_retry(self, config: &RetryConfig) -> BoxFuture<'static, Result<Response>> {
-        send_retry_impl(self, config, None)
+    fn retryable(self, config: &RetryConfig) -> RetryableRequest {
+        let (client, request) = self.build_split();
+        let request = request.expect("request must be valid");
+
+        RetryableRequest {
+            client,
+            request,
+            max_retries: config.max_retries,
+            retry_timeout: config.retry_timeout,
+            backoff: Backoff::new(&config.backoff),
+            idempotent: None,
+            payload: None,
+        }
     }
-    fn send_retry_with_idempotency(
-        self,
-        config: &RetryConfig,
-        is_idempotent: bool,
-    ) -> BoxFuture<'static, Result<Response>> {
-        send_retry_impl(self, config, Some(is_idempotent))
+
+    fn send_retry(self, config: &RetryConfig) -> BoxFuture<'static, Result<Response>> {
+        let request = self.retryable(config);
+        Box::pin(async move { request.send().await })
     }
 }
 

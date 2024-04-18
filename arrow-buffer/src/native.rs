@@ -47,6 +47,11 @@ mod private {
 pub trait ArrowNativeType:
     std::fmt::Debug + Send + Sync + Copy + PartialOrd + Default + private::Sealed + 'static
 {
+    /// Returns the byte width of this native type.
+    fn get_byte_width() -> usize {
+        std::mem::size_of::<Self>()
+    }
+
     /// Convert native integer type from usize
     ///
     /// Returns `None` if [`Self`] is not an integer or conversion would result

@@ -27,10 +27,9 @@ use crate::{
     path::Path,
     signer::Signer,
     GetOptions, GetResult, ListResult, MultipartId, MultipartUpload, ObjectMeta, ObjectStore,
-    PutOptions, PutResult, Result, UploadPart,
+    PutMultipartOpts, PutOptions, PutPayload, PutResult, Result, UploadPart,
 };
 use async_trait::async_trait;
-use bytes::Bytes;
 use futures::stream::BoxStream;
 use reqwest::Method;
 use std::fmt::Debug;
@@ -87,13 +86,23 @@ impl std::fmt::Display for MicrosoftAzure {
 
 #[async_trait]
 impl ObjectStore for MicrosoftAzure {
-    async fn put_opts(&self, location: &Path, bytes: Bytes, opts: PutOptions) -> Result<PutResult> {
-        self.client.put_blob(location, bytes, opts).await
+    async fn put_opts(
+        &self,
+        location: &Path,
+        payload: PutPayload,
+        opts: PutOptions,
+    ) -> Result<PutResult> {
+        self.client.put_blob(location, payload, opts).await
     }
 
-    async fn put_multipart(&self, location: &Path) -> Result<Box<dyn MultipartUpload>> {
+    async fn put_multipart_opts(
+        &self,
+        location: &Path,
+        opts: PutMultipartOpts,
+    ) -> Result<Box<dyn MultipartUpload>> {
         Ok(Box::new(AzureMultiPartUpload {
             part_idx: 0,
+            opts,
             state: Arc::new(UploadState {
                 client: Arc::clone(&self.client),
                 location: location.clone(),
@@ -192,6 +201,7 @@ impl Signer for MicrosoftAzure {
 struct AzureMultiPartUpload {
     part_idx: usize,
     state: Arc<UploadState>,
+    opts: PutMultipartOpts,
 }
 
 #[derive(Debug)]
@@ -203,7 +213,7 @@ struct UploadState {
 
 #[async_trait]
 impl MultipartUpload for AzureMultiPartUpload {
-    fn put_part(&mut self, data: Bytes) -> UploadPart {
+    fn put_part(&mut self, data: PutPayload) -> UploadPart {
         let idx = self.part_idx;
         self.part_idx += 1;
         let state = Arc::clone(&self.state);
@@ -219,7 +229,7 @@ impl MultipartUpload for AzureMultiPartUpload {
 
         self.state
             .client
-            .put_block_list(&self.state.location, parts)
+            .put_block_list(&self.state.location, parts, std::mem::take(&mut self.opts))
             .await
     }
 
@@ -240,7 +250,7 @@ impl MultipartStore for MicrosoftAzure {
         path: &Path,
         _: &MultipartId,
         part_idx: usize,
-        data: Bytes,
+        data: PutPayload,
     ) -> Result<PartId> {
         self.client.put_block(path, part_idx, data).await
     }
@@ -251,7 +261,9 @@ impl MultipartStore for MicrosoftAzure {
         _: &MultipartId,
         parts: Vec<PartId>,
     ) -> Result<PutResult> {
-        self.client.put_block_list(path, parts).await
+        self.client
+            .put_block_list(path, parts, Default::default())
+            .await
     }
 
     async fn abort_multipart(&self, _: &Path, _: &MultipartId) -> Result<()> {
@@ -265,13 +277,14 @@ impl MultipartStore for MicrosoftAzure {
 mod tests {
     use super::*;
     use crate::tests::*;
+    use bytes::Bytes;
 
     #[tokio::test]
     async fn azure_blob_test() {
         crate::test_util::maybe_skip_integration!();
         let integration = MicrosoftAzureBuilder::from_env().build().unwrap();
 
-        put_get_delete_list_opts(&integration).await;
+        put_get_delete_list(&integration).await;
         get_opts(&integration).await;
         list_uses_directories_correctly(&integration).await;
         list_with_delimiter(&integration).await;
@@ -287,7 +300,12 @@ mod tests {
             let client = Arc::clone(&integration.client);
             async move { client.get_blob_tagging(&p).await }
         })
-        .await
+        .await;
+
+        // Azurite doesn't support attributes properly
+        if !integration.client.config().is_emulator {
+            put_get_attributes(&integration).await;
+        }
     }
 
     #[ignore = "Used for manual testing against a real storage account."]
@@ -309,7 +327,7 @@ mod tests {
 
         let data = Bytes::from("hello world");
         let path = Path::from("file.txt");
-        integration.put(&path, data.clone()).await.unwrap();
+        integration.put(&path, data.clone().into()).await.unwrap();
 
         let signed = integration
             .signed_url(Method::GET, &path, Duration::from_secs(60))

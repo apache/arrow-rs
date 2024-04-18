@@ -615,7 +615,9 @@ impl TokenProvider for ClientSecretOAuthProvider {
                 ("scope", AZURE_STORAGE_SCOPE),
                 ("grant_type", "client_credentials"),
             ])
-            .send_retry_with_idempotency(retry, true)
+            .retryable(retry)
+            .idempotent(true)
+            .send()
             .await
             .context(TokenRequestSnafu)?
             .json()
@@ -797,7 +799,9 @@ impl TokenProvider for WorkloadIdentityOAuthProvider {
                 ("scope", AZURE_STORAGE_SCOPE),
                 ("grant_type", "client_credentials"),
             ])
-            .send_retry_with_idempotency(retry, true)
+            .retryable(retry)
+            .idempotent(true)
+            .send()
             .await
             .context(TokenRequestSnafu)?
             .json()
