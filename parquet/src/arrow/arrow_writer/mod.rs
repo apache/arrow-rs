@@ -830,13 +830,8 @@ fn to_boolean_mask(indices: &[usize], len: usize) -> BooleanArray {
 fn to_flb_arrays(array: &FixedSizeBinaryArray) -> Vec<FixedLenByteArray> {
     array
         .iter()
-        .map(|x| {
-            if x.is_some() {
-                FixedLenByteArray::from(Vec::from(x.unwrap()))
-            } else {
-                FixedLenByteArray::default()
-            }
-        })
+        .map(|x| x.map(Vec::from))
+        .map(|x| x.map_or_else(FixedLenByteArray::default, FixedLenByteArray::from))
         .collect()
 }
 
@@ -2071,7 +2066,7 @@ mod tests {
         let many_vecs: Vec<_> = std::iter::repeat(one_vec).take(SMALL_SIZE).collect();
         let many_vecs_iter = many_vecs.iter().map(|v| v.as_slice());
 
-        let array = Arc::new(BinaryArray::from_iter_values(many_vecs_iter.clone()));
+        let array = Arc::new(BinaryArray::from_iter_values(many_vecs_iter));
         let mut options = RoundTripOptions::new(array, false);
         options.bloom_filter = true;
 
@@ -2079,7 +2074,7 @@ mod tests {
         check_bloom_filter(
             files,
             "col".to_string(),
-            Arc::new(BinaryArray::from_iter_values(many_vecs_iter)),
+            array.clone(),
             Arc::new(BinaryArray::from_iter_values(
                 vec![vec![(SMALL_SIZE + 1) as u8]]
                     .iter()
