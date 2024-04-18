@@ -1930,16 +1930,84 @@ mod tests {
     }
 
     #[test]
-    fn i8_column_bloom_filter() {
-        let array = Arc::new(Int8Array::from_iter(0..SMALL_SIZE as i8));
-        let mut options = RoundTripOptions::new(array, false);
+    fn u8_column_bloom_filter() {
+        let array = Arc::new(UInt8Array::from_iter(0..SMALL_SIZE as u8));
+        let mut options = RoundTripOptions::new(array.clone(), false);
         options.bloom_filter = true;
 
         let files = one_column_roundtrip_with_options(options);
         check_bloom_filter(
             files,
             "col".to_string(),
-            Arc::new(Int8Array::from_iter(0..SMALL_SIZE as i8)),
+            array.clone(),
+            Arc::new(UInt8Array::from_iter(
+                SMALL_SIZE as u8 + 1..SMALL_SIZE as u8 + 10,
+            )),
+        );
+    }
+
+    #[test]
+    fn u16_column_bloom_filter() {
+        let array = Arc::new(UInt16Array::from_iter(0..SMALL_SIZE as u16));
+        let mut options = RoundTripOptions::new(array.clone(), false);
+        options.bloom_filter = true;
+
+        let files = one_column_roundtrip_with_options(options);
+        check_bloom_filter(
+            files,
+            "col".to_string(),
+            array.clone(),
+            Arc::new(UInt16Array::from_iter(
+                SMALL_SIZE as u16 + 1..SMALL_SIZE as u16 + 10,
+            )),
+        );
+    }
+
+    #[test]
+    fn u32_column_bloom_filter() {
+        let array = Arc::new(UInt32Array::from_iter(0..SMALL_SIZE as u32));
+        let mut options = RoundTripOptions::new(array.clone(), false);
+        options.bloom_filter = true;
+
+        let files = one_column_roundtrip_with_options(options);
+        check_bloom_filter(
+            files,
+            "col".to_string(),
+            array.clone(),
+            Arc::new(UInt32Array::from_iter(
+                SMALL_SIZE as u32 + 1..SMALL_SIZE as u32 + 10,
+            )),
+        );
+    }
+
+    #[test]
+    fn u64_column_bloom_filter() {
+        let array = Arc::new(UInt64Array::from_iter(0..SMALL_SIZE as u64));
+        let mut options = RoundTripOptions::new(array.clone(), false);
+        options.bloom_filter = true;
+
+        let files = one_column_roundtrip_with_options(options);
+        check_bloom_filter(
+            files,
+            "col".to_string(),
+            array.clone(),
+            Arc::new(UInt64Array::from_iter(
+                SMALL_SIZE as u64 + 1..SMALL_SIZE as u64 + 10,
+            )),
+        );
+    }
+
+    #[test]
+    fn i8_column_bloom_filter() {
+        let array = Arc::new(Int8Array::from_iter(0..SMALL_SIZE as i8));
+        let mut options = RoundTripOptions::new(array.clone(), false);
+        options.bloom_filter = true;
+
+        let files = one_column_roundtrip_with_options(options);
+        check_bloom_filter(
+            files,
+            "col".to_string(),
+            array.clone(),
             Arc::new(Int8Array::from_iter(
                 SMALL_SIZE as i8 + 1..SMALL_SIZE as i8 + 10,
             )),
@@ -1949,14 +2017,14 @@ mod tests {
     #[test]
     fn i16_column_bloom_filter() {
         let array = Arc::new(Int16Array::from_iter(0..SMALL_SIZE as i16));
-        let mut options = RoundTripOptions::new(array, false);
+        let mut options = RoundTripOptions::new(array.clone(), false);
         options.bloom_filter = true;
 
         let files = one_column_roundtrip_with_options(options);
         check_bloom_filter(
             files,
             "col".to_string(),
-            Arc::new(Int16Array::from_iter(0..SMALL_SIZE as i16)),
+            array.clone(),
             Arc::new(Int16Array::from_iter(
                 SMALL_SIZE as i16 + 1..SMALL_SIZE as i16 + 10,
             )),
@@ -1966,14 +2034,14 @@ mod tests {
     #[test]
     fn i32_column_bloom_filter() {
         let array = Arc::new(Int32Array::from_iter(0..SMALL_SIZE as i32));
-        let mut options = RoundTripOptions::new(array, false);
+        let mut options = RoundTripOptions::new(array.clone(), false);
         options.bloom_filter = true;
 
         let files = one_column_roundtrip_with_options(options);
         check_bloom_filter(
             files,
             "col".to_string(),
-            Arc::new(Int32Array::from_iter(0..SMALL_SIZE as i32)),
+            array.clone(),
             Arc::new(Int32Array::from_iter(
                 SMALL_SIZE as i32 + 1..SMALL_SIZE as i32 + 10,
             )),
@@ -1983,14 +2051,14 @@ mod tests {
     #[test]
     fn i64_column_bloom_filter() {
         let array = Arc::new(Int64Array::from_iter(0..SMALL_SIZE as i64));
-        let mut options = RoundTripOptions::new(array, false);
+        let mut options = RoundTripOptions::new(array.clone(), false);
         options.bloom_filter = true;
 
         let files = one_column_roundtrip_with_options(options);
         check_bloom_filter(
             files,
             "col".to_string(),
-            Arc::new(Int64Array::from_iter(0..SMALL_SIZE as i64)),
+            array.clone(),
             Arc::new(Int64Array::from_iter(
                 SMALL_SIZE as i64 + 1..SMALL_SIZE as i64 + 10,
             )),
@@ -2014,14 +2082,14 @@ mod tests {
             .collect();
 
         let array = Arc::new(Date32Array::from(values.clone()));
-        let mut options = RoundTripOptions::new(array, false);
+        let mut options = RoundTripOptions::new(array.clone(), false);
         options.bloom_filter = true;
 
         let files = one_column_roundtrip_with_options(options);
         check_bloom_filter(
             files,
             "col".to_string(),
-            Arc::new(Date32Array::from(values)),
+            array.clone(),
             Arc::new(Date32Array::from(
                 (0..SMALL_SIZE as i32).collect::<Vec<_>>(),
             )),
@@ -2045,7 +2113,7 @@ mod tests {
             .collect();
 
         let array = Arc::new(Date64Array::from(values.clone()));
-        let mut options = RoundTripOptions::new(array, false);
+        let mut options = RoundTripOptions::new(array.clone(), false);
         options.bloom_filter = true;
 
         let files = one_column_roundtrip_with_options(options);
@@ -2053,7 +2121,7 @@ mod tests {
         check_bloom_filter(
             files,
             "col".to_string(),
-            Arc::new(Date64Array::from(values)),
+            array.clone(),
             Arc::new(Date64Array::from(
                 (0..SMALL_SIZE as i64).collect::<Vec<_>>(),
             )),
