@@ -63,13 +63,15 @@ use std::{
     sync::Arc,
 };
 
+use arrow_data::ffi::FFI_ArrowArray;
+use arrow_schema::{ffi::FFI_ArrowSchema, ArrowError, Schema, SchemaRef};
+
 use crate::array::Array;
 use crate::array::StructArray;
-use crate::datatypes::{Schema, SchemaRef};
-use crate::error::ArrowError;
-use crate::error::Result;
-use crate::ffi::*;
+use crate::ffi::from_ffi_and_data_type;
 use crate::record_batch::{RecordBatch, RecordBatchReader};
+
+type Result<T> = std::result::Result<T, ArrowError>; // TODO(alexandreyc): we should probably move Result to arrow_schema
 
 const ENOMEM: i32 = 12;
 const EIO: i32 = 5;
@@ -393,8 +395,10 @@ pub unsafe fn export_reader_into_raw(
 mod tests {
     use super::*;
 
+    use arrow_schema::Field;
+
     use crate::array::Int32Array;
-    use crate::datatypes::Field;
+    use crate::ffi::from_ffi;
 
     struct TestRecordBatchReader {
         schema: SchemaRef,
