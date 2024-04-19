@@ -83,6 +83,7 @@ const ENOSYS: i32 = 78;
 /// This was created by bindgen
 #[repr(C)]
 #[derive(Debug)]
+#[allow(missing_docs)]
 pub struct FFI_ArrowArrayStream {
     pub get_schema: Option<
         unsafe extern "C" fn(arg1: *mut FFI_ArrowArrayStream, out: *mut FFI_ArrowSchema) -> c_int,

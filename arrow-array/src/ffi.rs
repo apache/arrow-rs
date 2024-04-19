@@ -118,8 +118,8 @@ type Result<T> = std::result::Result<T, ArrowError>; // TODO(alexandreyc): we sh
 /// Assumes that these pointers represent valid C Data Interfaces, both in memory
 /// representation and lifetime via the `release` mechanism.
 ///
-/// This function copies the content of two FFI structs [ffi::FFI_ArrowArray] and
-/// [ffi::FFI_ArrowSchema] in the array to the location pointed by the raw pointers.
+/// This function copies the content of two FFI structs [arrow_data::ffi::FFI_ArrowArray] and
+/// [arrow_schema::ffi::FFI_ArrowSchema] in the array to the location pointed by the raw pointers.
 /// Usually the raw pointers are provided by the array data consumer.
 #[deprecated(note = "Use FFI_ArrowArray::new and FFI_ArrowSchema::try_from")]
 pub unsafe fn export_array_into_raw(
