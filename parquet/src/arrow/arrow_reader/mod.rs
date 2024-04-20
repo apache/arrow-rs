@@ -23,7 +23,7 @@ use std::sync::Arc;
 use arrow_array::cast::AsArray;
 use arrow_array::Array;
 use arrow_array::{RecordBatch, RecordBatchReader};
-use arrow_schema::{ArrowError, DataType as ArrowType, Schema, SchemaRef};
+use arrow_schema::{can_reinterpret, ArrowError, DataType as ArrowType, Schema, SchemaRef};
 use arrow_select::filter::prep_null_mask_filter;
 
 use crate::arrow::array_reader::{build_array_reader, ArrayReader};
@@ -33,10 +33,8 @@ use crate::errors::{ParquetError, Result};
 use crate::file::metadata::ParquetMetaData;
 use crate::file::reader::{ChunkReader, SerializedPageReader};
 use crate::schema::types::SchemaDescriptor;
-
 mod filter;
 mod selection;
-
 pub use crate::arrow::array_reader::RowGroups;
 use crate::column::page::{PageIterator, PageReader};
 use crate::file::footer;
@@ -191,6 +189,81 @@ impl<T> ArrowReaderBuilder<T> {
             offset: Some(offset),
             ..self
         }
+    }
+    pub fn with_new_schema(self, new_schema: SchemaRef) -> Self {
+        Self {
+            schema: new_schema,
+            ..self
+        }
+    }
+
+    pub fn with_new_parquet_field(self, parquet_field: Option<Arc<ParquetField>>) -> Self {
+        Self {
+            fields: parquet_field,
+            ..self
+        }
+    }
+    /// specify the arrow schema to read from this parquet file
+    /// will error if the types in the parquet file can not be converted
+    /// into the specific types.
+    /// Will ignore any embedded metadata about types when written
+    pub fn with_reinterpret_schema(self, new_schema: SchemaRef) -> Self {
+        // // Check if self.fields is Some and if it contains a DataType::Struct
+        if let Some(field_ref) = &self.fields {
+            match &field_ref.arrow_type {
+                arrow_schema::DataType::Struct(existing_fields) => {
+                    // Retrieve all fields from the new_schema
+                    let all_fields = new_schema.fields();
+
+                    // Check if all fields in the new_schema can be cast with existing_fields
+                    if all_fields.len() == existing_fields.len()
+                        && all_fields.iter().zip(existing_fields.iter()).all(
+                            |(new_field, existing_field)| {
+                                // Compare field names and determine if types can be cast
+                                new_field.name() == existing_field.name()
+                                    && can_reinterpret(
+                                        existing_field.data_type(),
+                                        new_field.data_type(),
+                                    )
+                            },
+                        )
+                    {
+                        let new_data_types =
+                            arrow_schema::DataType::Struct(new_schema.fields.clone());
+                        // If all checks pass, update the schema and the arrow_type of the fields
+                        let new_parquet_field = ParquetField {
+                            rep_level: field_ref.rep_level,
+                            def_level: field_ref.def_level,
+                            nullable: field_ref.nullable,
+                            arrow_type: new_data_types,
+                            field_type: field_ref.field_type.clone(),
+                        };
+                        return self
+                            .with_new_schema(new_schema)
+                            .with_new_parquet_field(Some(Arc::new(new_parquet_field)));
+                    }
+                }
+                // supposed to be a primitive type
+                other_types => {
+                    let all_fields = new_schema.all_fields();
+                    assert!(all_fields.len() == 1);
+                    if can_reinterpret(other_types, all_fields[0].data_type()) {
+                        let new_parquet_field = ParquetField {
+                            rep_level: field_ref.rep_level,
+                            def_level: field_ref.def_level,
+                            nullable: field_ref.nullable,
+                            arrow_type: all_fields[0].data_type().clone(),
+                            field_type: field_ref.field_type.clone(),
+                        };
+                        return self
+                            .with_new_schema(new_schema)
+                            .with_new_parquet_field(Some(Arc::new(new_parquet_field)));
+                    }
+                }
+            }
+        }
+        // Return self without changes if fields don't match or fields are not a struct
+        self
     }
 }
 
@@ -636,7 +709,6 @@ impl ParquetRecordBatchReader {
             ArrowType::Struct(ref fields) => Schema::new(fields.clone()),
             _ => unreachable!("Struct array reader's data type is not struct!"),
         };
-
         Self {
             batch_size,
             array_reader,
@@ -752,7 +824,7 @@ mod tests {
     use arrow_array::*;
     use arrow_buffer::{i256, ArrowNativeType, Buffer};
     use arrow_data::ArrayDataBuilder;
-    use arrow_schema::{ArrowError, DataType as ArrowDataType, Field, Fields, Schema};
+    use arrow_schema::{ArrowError, DataType as ArrowDataType, Field, Fields, Schema, TimeUnit};
     use arrow_select::concat::concat_batches;
 
     use crate::arrow::arrow_reader::{
@@ -3233,5 +3305,52 @@ mod tests {
                 }
             }
         }
+    }
+    #[test]
+    fn test_reinterpret_timestamp() -> Result<()> {
+        use arrow_schema::DataType;
+        use std::collections::HashMap;
+        let testdata = arrow::util::test_util::parquet_test_data();
+        let path = format!("{testdata}/alltypes_plain.parquet");
+        let file = File::open(path).unwrap();
+        let fields = vec![
+            Field::new("id", DataType::Int32, true),
+            Field::new("bool_col", DataType::Boolean, true),
+            Field::new("tinyint_col", DataType::Int32, true),
+            Field::new("smallint_col", DataType::Int32, true),
+            Field::new("int_col", DataType::Int32, true),
+            Field::new("bigint_col", DataType::Int64, true),
+            Field::new("float_col", DataType::Float32, true),
+            Field::new("double_col", DataType::Float64, true),
+            Field::new("date_string_col", DataType::Binary, true),
+            Field::new("string_col", DataType::Binary, true),
+            Field::new(
+                "timestamp_col",
+                DataType::Timestamp(TimeUnit::Nanosecond, Some(Arc::from("+07:00"))),
+                true,
+            ),
+        ];
+        let new_schema = Arc::new(Schema::new_with_metadata(fields, HashMap::new()));
+        let builder = ParquetRecordBatchReaderBuilder::try_new(file)?.with_batch_size(8192);
+        assert_eq!(
+            builder.schema().field(10).clone(),
+            Field::new(
+                "timestamp_col",
+                DataType::Timestamp(TimeUnit::Nanosecond, None),
+                true
+            )
+        );
+        let builder = builder.with_reinterpret_schema(new_schema);
+        let parquet_reader = builder.build()?;
+        let schema = parquet_reader.schema;
+        assert_eq!(
+            schema.field(10).clone(),
+            Field::new(
+                "timestamp_col",
+                DataType::Timestamp(TimeUnit::Nanosecond, Some(Arc::from("+07:00"))),
+                true,
+            )
+        );
+        Ok(())
     }
 }

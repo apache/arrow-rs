@@ -17,7 +17,7 @@
 
 use std::sync::Arc;
 
-use arrow_schema::{DataType, Fields, SchemaBuilder};
+use arrow_schema::{can_reinterpret, DataType, Fields, SchemaBuilder};
 
 use crate::arrow::array_reader::byte_array::make_byte_view_array_reader;
 use crate::arrow::array_reader::empty_array::make_empty_array_reader;
@@ -315,7 +315,12 @@ fn build_struct_reader(
         if let Some(reader) = build_reader(parquet, mask, row_groups)? {
             // Need to retrieve underlying data type to handle projection
             let child_type = reader.get_data_type().clone();
-            builder.push(arrow.as_ref().clone().with_data_type(child_type));
+            // in case the user has provided the reference schema, if could reinterpret, we use the provied schema
+            if can_reinterpret(&child_type, arrow.data_type()) {
+                builder.push(arrow.as_ref().clone())
+            } else {
+                builder.push(arrow.as_ref().clone().with_data_type(child_type));
+            }
             readers.push(reader);
         }
     }

@@ -688,6 +688,32 @@ pub const DECIMAL256_MAX_SCALE: i8 = 76;
 /// values
 pub const DECIMAL_DEFAULT_SCALE: i8 = 10;
 
+// used for <https://github.com/apache/arrow-rs/pull/5605> we should decide what two different
+// Datatype could be reinterpret
+pub fn can_reinterpret(from_type: &DataType, to_type: &DataType) -> bool {
+    use DataType::*;
+    if from_type == to_type {
+        return true;
+    }
+    // Handle integers and unsigned integers separately
+    let is_compatible_integer = matches!(
+        (from_type, to_type),
+        (Int8, UInt8)
+            | (UInt8, Int8)
+            | (Int16, UInt16)
+            | (UInt16, Int16)
+            | (Int32, UInt32)
+            | (UInt32, Int32)
+            | (Int64, UInt64)
+            | (UInt64, Int64)
+    );
+
+    let is_compatible_timestamp = matches!((from_type, to_type),
+        (Timestamp(unit1, _), Timestamp(unit2, _)) if unit1 == unit2
+    );
+
+    is_compatible_integer || is_compatible_timestamp
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -984,5 +1010,40 @@ mod tests {
             ),
             UnionMode::Dense,
         );
+    }
+
+    #[test]
+    fn test_could_reinterpret() {
+        // Testing integer and unsigned integer reinterpretation
+        assert!(can_reinterpret(&DataType::Int32, &DataType::UInt32),);
+        assert!(can_reinterpret(&DataType::UInt32, &DataType::Int32),);
+        assert!(!can_reinterpret(&DataType::Int32, &DataType::Int64),);
+
+        // Testing timestamp reinterpretation with same time units and timezones
+        let tz_utc = Some(Arc::from("UTC"));
+        let tz_est = Some(Arc::from("+07:00"));
+        assert!(can_reinterpret(
+            &DataType::Timestamp(TimeUnit::Second, tz_utc.clone()),
+            &DataType::Timestamp(TimeUnit::Second, tz_est.clone())
+        ),);
+        assert!(can_reinterpret(
+            &DataType::Timestamp(TimeUnit::Microsecond, tz_utc.clone()),
+            &DataType::Timestamp(TimeUnit::Microsecond, tz_est.clone())
+        ),);
+        assert!(!can_reinterpret(
+            &DataType::Timestamp(TimeUnit::Second, tz_utc.clone()),
+            &DataType::Timestamp(TimeUnit::Millisecond, tz_utc.clone())
+        ),);
+        assert!(can_reinterpret(
+            &DataType::Timestamp(TimeUnit::Second, tz_utc),
+            &DataType::Timestamp(TimeUnit::Second, tz_est)
+        ),);
+
+        // Testing negative cases for mixed types
+        assert!(!can_reinterpret(&DataType::Int32, &DataType::Float32),);
+        assert!(!can_reinterpret(
+            &DataType::Timestamp(TimeUnit::Second, None),
+            &DataType::Int64
+        ),);
     }
 }
