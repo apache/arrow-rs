@@ -1544,14 +1544,14 @@ pub fn layout(data_type: &DataType) -> DataTypeLayout {
         DataType::Utf8 => DataTypeLayout::new_binary::<i32>(),
         DataType::LargeUtf8 => DataTypeLayout::new_binary::<i64>(),
         DataType::BinaryView | DataType::Utf8View => DataTypeLayout::new_view(),
-        DataType::FixedSizeList(_, _) => DataTypeLayout::new_empty(), // all in child data
+        DataType::FixedSizeList(_, _) => DataTypeLayout::new_nullable_empty(), // all in child data
         DataType::List(_) => DataTypeLayout::new_fixed_width::<i32>(),
         DataType::ListView(_) | DataType::LargeListView(_) => {
             unimplemented!("ListView/LargeListView not implemented")
         }
         DataType::LargeList(_) => DataTypeLayout::new_fixed_width::<i64>(),
         DataType::Map(_, _) => DataTypeLayout::new_fixed_width::<i32>(),
-        DataType::Struct(_) => DataTypeLayout::new_empty(), // all in child data,
+        DataType::Struct(_) => DataTypeLayout::new_nullable_empty(), // all in child data,
         DataType::RunEndEncoded(_, _) => DataTypeLayout::new_empty(), // all in child data,
         DataType::Union(_, mode) => {
             let type_ids = BufferSpec::FixedWidth {
@@ -1612,12 +1612,21 @@ impl DataTypeLayout {
     }
 
     /// Describes arrays which have no data of their own
-    /// (e.g. FixedSizeList). Note such arrays may still have a Null
-    /// Bitmap
-    pub fn new_empty() -> Self {
+    /// but may still have a Null Bitmap (e.g. FixedSizeList)
+    pub fn new_nullable_empty() -> Self {
         Self {
             buffers: vec![],
             can_contain_null_mask: true,
+            variadic: false,
+        }
+    }
+
+    /// Describes arrays which have no data of their own
+    /// (e.g. RunEndEncoded).
+    pub fn new_empty() -> Self {
+        Self {
+            buffers: vec![],
+            can_contain_null_mask: false,
             variadic: false,
         }
     }
@@ -1758,6 +1767,11 @@ impl ArrayDataBuilder {
 
     pub fn add_buffer(mut self, b: Buffer) -> Self {
         self.buffers.push(b);
+        self
+    }
+
+    pub fn add_buffers(mut self, bs: Vec<Buffer>) -> Self {
+        self.buffers.extend(bs);
         self
     }
 

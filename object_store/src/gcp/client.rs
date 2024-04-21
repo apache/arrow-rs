@@ -29,21 +29,23 @@ use crate::multipart::PartId;
 use crate::path::{Path, DELIMITER};
 use crate::util::hex_encode;
 use crate::{
-    ClientOptions, GetOptions, ListResult, MultipartId, PutMode, PutOptions, PutResult, Result,
-    RetryConfig,
+    Attribute, Attributes, ClientOptions, GetOptions, ListResult, MultipartId, PutMode,
+    PutMultipartOpts, PutOptions, PutPayload, PutResult, Result, RetryConfig,
 };
 use async_trait::async_trait;
 use base64::prelude::BASE64_STANDARD;
 use base64::Engine;
-use bytes::{Buf, Bytes};
+use bytes::Buf;
+use hyper::header::{CACHE_CONTROL, CONTENT_LENGTH, CONTENT_TYPE};
 use percent_encoding::{percent_encode, utf8_percent_encode, NON_ALPHANUMERIC};
 use reqwest::header::HeaderName;
-use reqwest::{header, Client, Method, RequestBuilder, Response, StatusCode};
+use reqwest::{Client, Method, RequestBuilder, Response, StatusCode};
 use serde::{Deserialize, Serialize};
 use snafu::{OptionExt, ResultExt, Snafu};
 use std::sync::Arc;
 
 const VERSION_HEADER: &str = "x-goog-generation";
+const DEFAULT_CONTENT_TYPE: &str = "application/octet-stream";
 
 static VERSION_MATCH: HeaderName = HeaderName::from_static("x-goog-if-generation-match");
 
@@ -64,14 +66,8 @@ enum Error {
         path: String,
     },
 
-    #[snafu(display("Error performing delete request {}: {}", path, source))]
-    DeleteRequest {
-        source: crate::client::retry::Error,
-        path: String,
-    },
-
-    #[snafu(display("Error performing put request {}: {}", path, source))]
-    PutRequest {
+    #[snafu(display("Error performing request {}: {}", path, source))]
+    Request {
         source: crate::client::retry::Error,
         path: String,
     },
@@ -108,7 +104,7 @@ enum Error {
     #[snafu(display("Error signing blob: {}", source))]
     SignBlobRequest { source: crate::client::retry::Error },
 
-    #[snafu(display("Got invalid signing blob repsonse: {}", source))]
+    #[snafu(display("Got invalid signing blob response: {}", source))]
     InvalidSignBlobResponse { source: reqwest::Error },
 
     #[snafu(display("Got invalid signing blob signature: {}", source))]
@@ -118,9 +114,9 @@ enum Error {
 impl From<Error> for crate::Error {
     fn from(err: Error) -> Self {
         match err {
-            Error::GetRequest { source, path }
-            | Error::DeleteRequest { source, path }
-            | Error::PutRequest { source, path } => source.error(STORE, path),
+            Error::GetRequest { source, path } | Error::Request { source, path } => {
+                source.error(STORE, path)
+            }
             _ => Self::Generic {
                 store: STORE,
                 source: Box::new(err),
@@ -169,13 +165,15 @@ impl GoogleCloudStorageConfig {
 }
 
 /// A builder for a put request allowing customisation of the headers and query string
-pub struct PutRequest<'a> {
+pub struct Request<'a> {
     path: &'a Path,
     config: &'a GoogleCloudStorageConfig,
+    payload: Option<PutPayload>,
     builder: RequestBuilder,
+    idempotent: bool,
 }
 
-impl<'a> PutRequest<'a> {
+impl<'a> Request<'a> {
     fn header(self, k: &HeaderName, v: &str) -> Self {
         let builder = self.builder.header(k, v);
         Self { builder, ..self }
@@ -186,17 +184,58 @@ impl<'a> PutRequest<'a> {
         Self { builder, ..self }
     }
 
-    async fn send(self) -> Result<PutResult> {
+    fn idempotent(mut self, idempotent: bool) -> Self {
+        self.idempotent = idempotent;
+        self
+    }
+
+    fn with_attributes(self, attributes: Attributes) -> Self {
+        let mut builder = self.builder;
+        let mut has_content_type = false;
+        for (k, v) in &attributes {
+            builder = match k {
+                Attribute::CacheControl => builder.header(CACHE_CONTROL, v.as_ref()),
+                Attribute::ContentType => {
+                    has_content_type = true;
+                    builder.header(CONTENT_TYPE, v.as_ref())
+                }
+            };
+        }
+
+        if !has_content_type {
+            let value = self.config.client_options.get_content_type(self.path);
+            builder = builder.header(CONTENT_TYPE, value.unwrap_or(DEFAULT_CONTENT_TYPE))
+        }
+        Self { builder, ..self }
+    }
+
+    fn with_payload(self, payload: PutPayload) -> Self {
+        let content_length = payload.content_length();
+        Self {
+            builder: self.builder.header(CONTENT_LENGTH, content_length),
+            payload: Some(payload),
+            ..self
+        }
+    }
+
+    async fn send(self) -> Result<Response> {
         let credential = self.config.credentials.get_credential().await?;
-        let response = self
+        let resp = self
             .builder
             .bearer_auth(&credential.bearer)
-            .send_retry(&self.config.retry_config)
+            .retryable(&self.config.retry_config)
+            .idempotent(self.idempotent)
+            .payload(self.payload)
+            .send()
             .await
-            .context(PutRequestSnafu {
+            .context(RequestSnafu {
                 path: self.path.as_ref(),
             })?;
+        Ok(resp)
+    }
 
+    async fn do_put(self) -> Result<PutResult> {
+        let response = self.send().await?;
         Ok(get_put_result(response.headers(), VERSION_HEADER).context(MetadataSnafu)?)
     }
 }
@@ -281,7 +320,9 @@ impl GoogleCloudStorageClient {
             .post(&url)
             .bearer_auth(&credential.bearer)
             .json(&body)
-            .send_retry(&self.config.retry_config)
+            .retryable(&self.config.retry_config)
+            .idempotent(true)
+            .send()
             .await
             .context(SignBlobRequestSnafu)?;
 
@@ -309,34 +350,31 @@ impl GoogleCloudStorageClient {
     /// Perform a put request <https://cloud.google.com/storage/docs/xml-api/put-object-upload>
     ///
     /// Returns the new ETag
-    pub fn put_request<'a>(&'a self, path: &'a Path, payload: Bytes) -> PutRequest<'a> {
-        let url = self.object_url(path);
+    pub fn request<'a>(&'a self, method: Method, path: &'a Path) -> Request<'a> {
+        let builder = self.client.request(method, self.object_url(path));
 
-        let content_type = self
-            .config
-            .client_options
-            .get_content_type(path)
-            .unwrap_or("application/octet-stream");
-
-        let builder = self
-            .client
-            .request(Method::PUT, url)
-            .header(header::CONTENT_TYPE, content_type)
-            .header(header::CONTENT_LENGTH, payload.len())
-            .body(payload);
-
-        PutRequest {
+        Request {
             path,
             builder,
+            payload: None,
             config: &self.config,
+            idempotent: false,
         }
     }
 
-    pub async fn put(&self, path: &Path, data: Bytes, opts: PutOptions) -> Result<PutResult> {
-        let builder = self.put_request(path, data);
+    pub async fn put(
+        &self,
+        path: &Path,
+        payload: PutPayload,
+        opts: PutOptions,
+    ) -> Result<PutResult> {
+        let builder = self
+            .request(Method::PUT, path)
+            .with_payload(payload)
+            .with_attributes(opts.attributes);
 
         let builder = match &opts.mode {
-            PutMode::Overwrite => builder,
+            PutMode::Overwrite => builder.idempotent(true),
             PutMode::Create => builder.header(&VERSION_MATCH, "0"),
             PutMode::Update(v) => {
                 let etag = v.version.as_ref().context(MissingVersionSnafu)?;
@@ -344,7 +382,7 @@ impl GoogleCloudStorageClient {
             }
         };
 
-        match (opts.mode, builder.send().await) {
+        match (opts.mode, builder.do_put().await) {
             (PutMode::Create, Err(crate::Error::Precondition { path, source })) => {
                 Err(crate::Error::AlreadyExists { path, source })
             }
@@ -360,13 +398,19 @@ impl GoogleCloudStorageClient {
         path: &Path,
         upload_id: &MultipartId,
         part_idx: usize,
-        data: Bytes,
+        data: PutPayload,
     ) -> Result<PartId> {
         let query = &[
             ("partNumber", &format!("{}", part_idx + 1)),
             ("uploadId", upload_id),
         ];
-        let result = self.put_request(path, data).query(query).send().await?;
+        let result = self
+            .request(Method::PUT, path)
+            .with_payload(data)
+            .query(query)
+            .idempotent(true)
+            .do_put()
+            .await?;
 
         Ok(PartId {
             content_id: result.e_tag.unwrap(),
@@ -374,28 +418,18 @@ impl GoogleCloudStorageClient {
     }
 
     /// Initiate a multipart upload <https://cloud.google.com/storage/docs/xml-api/post-object-multipart>
-    pub async fn multipart_initiate(&self, path: &Path) -> Result<MultipartId> {
-        let credential = self.get_credential().await?;
-        let url = self.object_url(path);
-
-        let content_type = self
-            .config
-            .client_options
-            .get_content_type(path)
-            .unwrap_or("application/octet-stream");
-
+    pub async fn multipart_initiate(
+        &self,
+        path: &Path,
+        opts: PutMultipartOpts,
+    ) -> Result<MultipartId> {
         let response = self
-            .client
-            .request(Method::POST, &url)
-            .bearer_auth(&credential.bearer)
-            .header(header::CONTENT_TYPE, content_type)
-            .header(header::CONTENT_LENGTH, "0")
+            .request(Method::POST, path)
+            .with_attributes(opts.attributes)
+            .header(&CONTENT_LENGTH, "0")
             .query(&[("uploads", "")])
-            .send_retry(&self.config.retry_config)
-            .await
-            .context(PutRequestSnafu {
-                path: path.as_ref(),
-            })?;
+            .send()
+            .await?;
 
         let data = response.bytes().await.context(PutResponseBodySnafu)?;
         let result: InitiateMultipartUploadResult =
@@ -412,12 +446,12 @@ impl GoogleCloudStorageClient {
         self.client
             .request(Method::DELETE, &url)
             .bearer_auth(&credential.bearer)
-            .header(header::CONTENT_TYPE, "application/octet-stream")
-            .header(header::CONTENT_LENGTH, "0")
+            .header(CONTENT_TYPE, "application/octet-stream")
+            .header(CONTENT_LENGTH, "0")
             .query(&[("uploadId", multipart_id)])
             .send_retry(&self.config.retry_config)
             .await
-            .context(PutRequestSnafu {
+            .context(RequestSnafu {
                 path: path.as_ref(),
             })?;
 
@@ -432,7 +466,11 @@ impl GoogleCloudStorageClient {
     ) -> Result<PutResult> {
         if completed_parts.is_empty() {
             // GCS doesn't allow empty multipart uploads
-            let result = self.put_request(path, Default::default()).send().await?;
+            let result = self
+                .request(Method::PUT, path)
+                .idempotent(true)
+                .do_put()
+                .await?;
             self.multipart_cleanup(path, multipart_id).await?;
             return Ok(result);
         }
@@ -456,7 +494,9 @@ impl GoogleCloudStorageClient {
             .bearer_auth(&credential.bearer)
             .query(&[("uploadId", upload_id)])
             .body(data)
-            .send_retry(&self.config.retry_config)
+            .retryable(&self.config.retry_config)
+            .idempotent(true)
+            .send()
             .await
             .context(CompleteMultipartRequestSnafu)?;
 
@@ -478,18 +518,7 @@ impl GoogleCloudStorageClient {
 
     /// Perform a delete request <https://cloud.google.com/storage/docs/xml-api/delete-object>
     pub async fn delete_request(&self, path: &Path) -> Result<()> {
-        let credential = self.get_credential().await?;
-        let url = self.object_url(path);
-
-        let builder = self.client.request(Method::DELETE, url);
-        builder
-            .bearer_auth(&credential.bearer)
-            .send_retry(&self.config.retry_config)
-            .await
-            .context(DeleteRequestSnafu {
-                path: path.as_ref(),
-            })?;
-
+        self.request(Method::DELETE, path).send().await?;
         Ok(())
     }
 
@@ -514,8 +543,10 @@ impl GoogleCloudStorageClient {
             .bearer_auth(&credential.bearer)
             // Needed if reqwest is compiled with native-tls instead of rustls-tls
             // See https://github.com/apache/arrow-rs/pull/3921
-            .header(header::CONTENT_LENGTH, 0)
-            .send_retry(&self.config.retry_config)
+            .header(CONTENT_LENGTH, 0)
+            .retryable(&self.config.retry_config)
+            .idempotent(!if_not_exists)
+            .send()
             .await
             .map_err(|err| match err.status() {
                 Some(StatusCode::PRECONDITION_FAILED) => crate::Error::AlreadyExists {

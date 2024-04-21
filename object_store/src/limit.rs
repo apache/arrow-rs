@@ -19,7 +19,8 @@
 
 use crate::{
     BoxStream, GetOptions, GetResult, GetResultPayload, ListResult, MultipartUpload, ObjectMeta,
-    ObjectStore, Path, PutOptions, PutResult, Result, StreamExt, UploadPart,
+    ObjectStore, Path, PutMultipartOpts, PutOptions, PutPayload, PutResult, Result, StreamExt,
+    UploadPart,
 };
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -70,14 +71,19 @@ impl<T: ObjectStore> std::fmt::Display for LimitStore<T> {
 
 #[async_trait]
 impl<T: ObjectStore> ObjectStore for LimitStore<T> {
-    async fn put(&self, location: &Path, bytes: Bytes) -> Result<PutResult> {
+    async fn put(&self, location: &Path, payload: PutPayload) -> Result<PutResult> {
         let _permit = self.semaphore.acquire().await.unwrap();
-        self.inner.put(location, bytes).await
+        self.inner.put(location, payload).await
     }
 
-    async fn put_opts(&self, location: &Path, bytes: Bytes, opts: PutOptions) -> Result<PutResult> {
+    async fn put_opts(
+        &self,
+        location: &Path,
+        payload: PutPayload,
+        opts: PutOptions,
+    ) -> Result<PutResult> {
         let _permit = self.semaphore.acquire().await.unwrap();
-        self.inner.put_opts(location, bytes, opts).await
+        self.inner.put_opts(location, payload, opts).await
     }
     async fn put_multipart(&self, location: &Path) -> Result<Box<dyn MultipartUpload>> {
         let upload = self.inner.put_multipart(location).await?;
@@ -86,6 +92,19 @@ impl<T: ObjectStore> ObjectStore for LimitStore<T> {
             upload,
         }))
     }
+
+    async fn put_multipart_opts(
+        &self,
+        location: &Path,
+        opts: PutMultipartOpts,
+    ) -> Result<Box<dyn MultipartUpload>> {
+        let upload = self.inner.put_multipart_opts(location, opts).await?;
+        Ok(Box::new(LimitUpload {
+            semaphore: Arc::clone(&self.semaphore),
+            upload,
+        }))
+    }
+
     async fn get(&self, location: &Path) -> Result<GetResult> {
         let permit = Arc::clone(&self.semaphore).acquire_owned().await.unwrap();
         let r = self.inner.get(location).await?;
@@ -232,7 +251,7 @@ impl LimitUpload {
 
 #[async_trait]
 impl MultipartUpload for LimitUpload {
-    fn put_part(&mut self, data: Bytes) -> UploadPart {
+    fn put_part(&mut self, data: PutPayload) -> UploadPart {
         let upload = self.upload.put_part(data);
         let s = Arc::clone(&self.semaphore);
         Box::pin(async move {

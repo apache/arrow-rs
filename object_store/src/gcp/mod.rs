@@ -42,10 +42,10 @@ use crate::gcp::credential::GCSAuthorizer;
 use crate::signer::Signer;
 use crate::{
     multipart::PartId, path::Path, GetOptions, GetResult, ListResult, MultipartId, MultipartUpload,
-    ObjectMeta, ObjectStore, PutOptions, PutResult, Result, UploadPart,
+    ObjectMeta, ObjectStore, PutMultipartOpts, PutOptions, PutPayload, PutResult, Result,
+    UploadPart,
 };
 use async_trait::async_trait;
-use bytes::Bytes;
 use client::GoogleCloudStorageClient;
 use futures::stream::BoxStream;
 use hyper::Method;
@@ -115,14 +115,14 @@ struct UploadState {
 
 #[async_trait]
 impl MultipartUpload for GCSMultipartUpload {
-    fn put_part(&mut self, data: Bytes) -> UploadPart {
+    fn put_part(&mut self, payload: PutPayload) -> UploadPart {
         let idx = self.part_idx;
         self.part_idx += 1;
         let state = Arc::clone(&self.state);
         Box::pin(async move {
             let part = state
                 .client
-                .put_part(&state.path, &state.multipart_id, idx, data)
+                .put_part(&state.path, &state.multipart_id, idx, payload)
                 .await?;
             state.parts.put(idx, part);
             Ok(())
@@ -148,12 +148,21 @@ impl MultipartUpload for GCSMultipartUpload {
 
 #[async_trait]
 impl ObjectStore for GoogleCloudStorage {
-    async fn put_opts(&self, location: &Path, bytes: Bytes, opts: PutOptions) -> Result<PutResult> {
-        self.client.put(location, bytes, opts).await
+    async fn put_opts(
+        &self,
+        location: &Path,
+        payload: PutPayload,
+        opts: PutOptions,
+    ) -> Result<PutResult> {
+        self.client.put(location, payload, opts).await
     }
 
-    async fn put_multipart(&self, location: &Path) -> Result<Box<dyn MultipartUpload>> {
-        let upload_id = self.client.multipart_initiate(location).await?;
+    async fn put_multipart_opts(
+        &self,
+        location: &Path,
+        opts: PutMultipartOpts,
+    ) -> Result<Box<dyn MultipartUpload>> {
+        let upload_id = self.client.multipart_initiate(location, opts).await?;
 
         Ok(Box::new(GCSMultipartUpload {
             part_idx: 0,
@@ -202,7 +211,9 @@ impl ObjectStore for GoogleCloudStorage {
 #[async_trait]
 impl MultipartStore for GoogleCloudStorage {
     async fn create_multipart(&self, path: &Path) -> Result<MultipartId> {
-        self.client.multipart_initiate(path).await
+        self.client
+            .multipart_initiate(path, PutMultipartOpts::default())
+            .await
     }
 
     async fn put_part(
@@ -210,9 +221,9 @@ impl MultipartStore for GoogleCloudStorage {
         path: &Path,
         id: &MultipartId,
         part_idx: usize,
-        data: Bytes,
+        payload: PutPayload,
     ) -> Result<PartId> {
-        self.client.put_part(path, id, part_idx, data).await
+        self.client.put_part(path, id, part_idx, payload).await
     }
 
     async fn complete_multipart(
@@ -260,7 +271,6 @@ impl Signer for GoogleCloudStorage {
 #[cfg(test)]
 mod test {
 
-    use bytes::Bytes;
     use credential::DEFAULT_GCS_BASE_URL;
 
     use crate::tests::*;
@@ -289,6 +299,8 @@ mod test {
             // Fake GCS server doesn't currently honor preconditions
             get_opts(&integration).await;
             put_opts(&integration, true).await;
+            // Fake GCS server doesn't currently support attributes
+            put_get_attributes(&integration).await;
         }
     }
 
@@ -391,7 +403,7 @@ mod test {
         let integration = config.with_bucket_name(NON_EXISTENT_NAME).build().unwrap();
 
         let location = Path::from_iter([NON_EXISTENT_NAME]);
-        let data = Bytes::from("arbitrary data");
+        let data = PutPayload::from("arbitrary data");
 
         let err = integration
             .put(&location, data)

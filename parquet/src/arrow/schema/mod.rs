@@ -464,9 +464,10 @@ fn arrow_to_parquet_type(field: &Field) -> Result<Type> {
                 .with_length(*length)
                 .build()
         }
-        DataType::BinaryView | DataType::Utf8View => {
-            unimplemented!("BinaryView/Utf8View not implemented")
-        }
+        DataType::BinaryView => Type::primitive_type_builder(name, PhysicalType::BYTE_ARRAY)
+            .with_repetition(repetition)
+            .with_id(id)
+            .build(),
         DataType::Decimal128(precision, scale) | DataType::Decimal256(precision, scale) => {
             // Decimal precision determines the Parquet physical type to use.
             // Following the: https://github.com/apache/parquet-format/blob/master/LogicalTypes.md#decimal
@@ -499,6 +500,11 @@ fn arrow_to_parquet_type(field: &Field) -> Result<Type> {
                 .with_id(id)
                 .build()
         }
+        DataType::Utf8View => Type::primitive_type_builder(name, PhysicalType::BYTE_ARRAY)
+            .with_logical_type(Some(LogicalType::String))
+            .with_repetition(repetition)
+            .with_id(id)
+            .build(),
         DataType::List(f) | DataType::FixedSizeList(f, _) | DataType::LargeList(f) => {
             Type::group_type_builder(name)
                 .with_fields(vec![Arc::new(

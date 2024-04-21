@@ -119,6 +119,42 @@ pub fn create_string_array_with_len<Offset: OffsetSizeTrait>(
         .collect()
 }
 
+/// Creates a random (but fixed-seeded) array of a given size, null density and length
+pub fn create_string_view_array_with_len(
+    size: usize,
+    null_density: f32,
+    str_len: usize,
+    mixed: bool,
+) -> StringViewArray {
+    let rng = &mut seedable_rng();
+
+    let mut lengths = Vec::with_capacity(size);
+
+    // if mixed, we creates first half that string length small than 12 bytes and second half large than 12 bytes
+    if mixed {
+        for _ in 0..size / 2 {
+            lengths.push(rng.gen_range(1..12));
+        }
+        for _ in size / 2..size {
+            lengths.push(rng.gen_range(12..=std::cmp::max(30, str_len)));
+        }
+    } else {
+        lengths.resize(size, str_len);
+    }
+
+    lengths
+        .into_iter()
+        .map(|len| {
+            if rng.gen::<f32>() < null_density {
+                None
+            } else {
+                let value: Vec<u8> = rng.sample_iter(&Alphanumeric).take(len).collect();
+                Some(String::from_utf8(value).unwrap())
+            }
+        })
+        .collect()
+}
+
 /// Creates an random (but fixed-seeded) array of a given size and null density
 /// consisting of random 4 character alphanumeric strings
 pub fn create_string_dict_array<K: ArrowDictionaryKeyType>(

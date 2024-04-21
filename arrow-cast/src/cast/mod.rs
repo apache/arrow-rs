@@ -519,6 +519,34 @@ fn as_time_res_with_timezone<T: ArrowPrimitiveType>(
     })
 }
 
+fn timestamp_to_date32<T: ArrowTimestampType>(
+    array: &PrimitiveArray<T>,
+) -> Result<ArrayRef, ArrowError> {
+    let err = |x: i64| {
+        ArrowError::CastError(format!(
+            "Cannot convert {} {x} to datetime",
+            std::any::type_name::<T>()
+        ))
+    };
+
+    let array: Date32Array = match array.timezone() {
+        Some(tz) => {
+            let tz: Tz = tz.parse()?;
+            array.try_unary(|x| {
+                as_datetime_with_timezone::<T>(x, tz)
+                    .ok_or_else(|| err(x))
+                    .map(|d| Date32Type::from_naive_date(d.date_naive()))
+            })?
+        }
+        None => array.try_unary(|x| {
+            as_datetime::<T>(x)
+                .ok_or_else(|| err(x))
+                .map(|d| Date32Type::from_naive_date(d.date()))
+        })?,
+    };
+    Ok(Arc::new(array))
+}
+
 /// Cast `array` to the provided data type and return a new Array with type `to_type`, if possible.
 ///
 /// Accepts [`CastOptions`] to specify cast behavior.
@@ -1590,24 +1618,17 @@ pub fn cast_with_options(
                 to_tz.clone(),
             ))
         }
-        (Timestamp(from_unit, _), Date32) => {
-            let array = cast_with_options(array, &Int64, cast_options)?;
-            let time_array = array.as_primitive::<Int64Type>();
-            let from_size = time_unit_multiple(from_unit) * SECONDS_IN_DAY;
-
-            let mut b = Date32Builder::with_capacity(array.len());
-
-            for i in 0..array.len() {
-                if time_array.is_null(i) {
-                    b.append_null();
-                } else {
-                    b.append_value(
-                        num::integer::div_floor::<i64>(time_array.value(i), from_size) as i32,
-                    );
-                }
-            }
-
-            Ok(Arc::new(b.finish()) as ArrayRef)
+        (Timestamp(TimeUnit::Microsecond, _), Date32) => {
+            timestamp_to_date32(array.as_primitive::<TimestampMicrosecondType>())
+        }
+        (Timestamp(TimeUnit::Millisecond, _), Date32) => {
+            timestamp_to_date32(array.as_primitive::<TimestampMillisecondType>())
+        }
+        (Timestamp(TimeUnit::Second, _), Date32) => {
+            timestamp_to_date32(array.as_primitive::<TimestampSecondType>())
+        }
+        (Timestamp(TimeUnit::Nanosecond, _), Date32) => {
+            timestamp_to_date32(array.as_primitive::<TimestampNanosecondType>())
         }
         (Timestamp(TimeUnit::Second, _), Date64) => Ok(Arc::new(match cast_options.safe {
             true => {
@@ -2220,6 +2241,7 @@ where
 #[cfg(test)]
 mod tests {
     use arrow_buffer::{Buffer, NullBuffer};
+    use chrono::NaiveDate;
     use half::f16;
 
     use super::*;
@@ -4434,14 +4456,33 @@ mod tests {
     fn test_cast_timestamp_to_date32() {
         let array =
             TimestampMillisecondArray::from(vec![Some(864000000005), Some(1545696000001), None])
-                .with_timezone("UTC".to_string());
+                .with_timezone("+00:00".to_string());
         let b = cast(&array, &DataType::Date32).unwrap();
         let c = b.as_primitive::<Date32Type>();
         assert_eq!(10000, c.value(0));
         assert_eq!(17890, c.value(1));
         assert!(c.is_null(2));
     }
+    #[test]
+    fn test_cast_timestamp_to_date32_zone() {
+        let strings = StringArray::from_iter([
+            Some("1970-01-01T00:00:01"),
+            Some("1970-01-01T23:59:59"),
+            None,
+            Some("2020-03-01T02:00:23+00:00"),
+        ]);
+        let dt = DataType::Timestamp(TimeUnit::Millisecond, Some("-07:00".into()));
+        let timestamps = cast(&strings, &dt).unwrap();
+        let dates = cast(timestamps.as_ref(), &DataType::Date32).unwrap();
 
+        let c = dates.as_primitive::<Date32Type>();
+        let expected = NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
+        assert_eq!(c.value_as_date(0).unwrap(), expected);
+        assert_eq!(c.value_as_date(1).unwrap(), expected);
+        assert!(c.is_null(2));
+        let expected = NaiveDate::from_ymd_opt(2020, 2, 29).unwrap();
+        assert_eq!(c.value_as_date(3).unwrap(), expected);
+    }
     #[test]
     fn test_cast_timestamp_to_date64() {
         let array =
@@ -6765,6 +6806,27 @@ mod tests {
             3,
         )) as ArrayRef;
         assert_eq!(expected.as_ref(), res.as_ref());
+
+        // The safe option is false and the source array contains a null list.
+        // issue: https://github.com/apache/arrow-rs/issues/5642
+        let array = Arc::new(ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+            Some(vec![Some(1), Some(2), Some(3)]),
+            None,
+        ])) as ArrayRef;
+        let res = cast_with_options(
+            array.as_ref(),
+            &DataType::FixedSizeList(Arc::new(Field::new("item", DataType::Int32, true)), 3),
+            &CastOptions {
+                safe: false,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let expected = Arc::new(FixedSizeListArray::from_iter_primitive::<Int32Type, _, _>(
+            vec![Some(vec![Some(1), Some(2), Some(3)]), None],
+            3,
+        )) as ArrayRef;
+        assert_eq!(expected.as_ref(), res.as_ref());
     }
 
     #[test]
@@ -8381,7 +8443,7 @@ mod tests {
             .map(|ts| ts / 1_000_000)
             .collect::<Vec<_>>();
 
-        let array = TimestampMillisecondArray::from(ts_array).with_timezone("UTC".to_string());
+        let array = TimestampMillisecondArray::from(ts_array).with_timezone("+00:00".to_string());
         let casted_array = cast(&array, &DataType::Date32).unwrap();
         let date_array = casted_array.as_primitive::<Date32Type>();
         let casted_array = cast(&date_array, &DataType::Utf8).unwrap();
@@ -8473,7 +8535,9 @@ mod tests {
 
         for dt in data_types {
             assert_eq!(
-                cast_with_options(&array, &dt, &cast_options).unwrap_err().to_string(),
+                cast_with_options(&array, &dt, &cast_options)
+                    .unwrap_err()
+                    .to_string(),
                 "Parser error: Invalid timezone \"ZZTOP\": only offset based timezones supported without chrono-tz feature"
             );
         }

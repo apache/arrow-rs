@@ -696,7 +696,9 @@ fn get_arrow_column_writer(
         ArrowDataType::LargeBinary
         | ArrowDataType::Binary
         | ArrowDataType::Utf8
-        | ArrowDataType::LargeUtf8 => {
+        | ArrowDataType::LargeUtf8
+        | ArrowDataType::BinaryView
+        | ArrowDataType::Utf8View => {
             out.push(bytes(leaves.next().unwrap()))
         }
         ArrowDataType::List(f)
@@ -718,6 +720,9 @@ fn get_arrow_column_writer(
         }
         ArrowDataType::Dictionary(_, value_type) => match value_type.as_ref() {
             ArrowDataType::Utf8 | ArrowDataType::LargeUtf8 | ArrowDataType::Binary | ArrowDataType::LargeBinary => {
+                out.push(bytes(leaves.next().unwrap()))
+            }
+            ArrowDataType::Utf8View | ArrowDataType::BinaryView => {
                 out.push(bytes(leaves.next().unwrap()))
             }
             _ => {
@@ -1220,6 +1225,40 @@ mod tests {
         .unwrap();
 
         roundtrip(batch, Some(SMALL_SIZE / 2));
+    }
+
+    #[test]
+    fn arrow_writer_binary_view() {
+        let string_field = Field::new("a", DataType::Utf8View, false);
+        let binary_field = Field::new("b", DataType::BinaryView, false);
+        let nullable_string_field = Field::new("a", DataType::Utf8View, true);
+        let schema = Schema::new(vec![string_field, binary_field, nullable_string_field]);
+
+        let raw_string_values = vec!["foo", "bar", "large payload over 12 bytes", "lulu"];
+        let raw_binary_values = vec![
+            b"foo".to_vec(),
+            b"bar".to_vec(),
+            b"large payload over 12 bytes".to_vec(),
+            b"lulu".to_vec(),
+        ];
+        let nullable_string_values =
+            vec![Some("foo"), None, Some("large payload over 12 bytes"), None];
+
+        let string_view_values = StringViewArray::from(raw_string_values);
+        let binary_view_values = BinaryViewArray::from_iter_values(raw_binary_values);
+        let nullable_string_view_values = StringViewArray::from(nullable_string_values);
+        let batch = RecordBatch::try_new(
+            Arc::new(schema),
+            vec![
+                Arc::new(string_view_values),
+                Arc::new(binary_view_values),
+                Arc::new(nullable_string_view_values),
+            ],
+        )
+        .unwrap();
+
+        roundtrip(batch.clone(), Some(SMALL_SIZE / 2));
+        roundtrip(batch, None);
     }
 
     fn get_decimal_batch(precision: u8, scale: i8) -> RecordBatch {

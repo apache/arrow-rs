@@ -1097,7 +1097,7 @@ impl<T: ArrowPrimitiveType> std::fmt::Debug for PrimitiveArray<T> {
         write!(f, "PrimitiveArray<{data_type:?}>\n[\n")?;
         print_long_array(self, f, |array, index, f| match data_type {
             DataType::Date32 | DataType::Date64 => {
-                let v = self.value(index).to_isize().unwrap() as i64;
+                let v = self.value(index).to_i64().unwrap();
                 match as_date::<T>(v) {
                     Some(date) => write!(f, "{date:?}"),
                     None => {
@@ -1109,7 +1109,7 @@ impl<T: ArrowPrimitiveType> std::fmt::Debug for PrimitiveArray<T> {
                 }
             }
             DataType::Time32(_) | DataType::Time64(_) => {
-                let v = self.value(index).to_isize().unwrap() as i64;
+                let v = self.value(index).to_i64().unwrap();
                 match as_time::<T>(v) {
                     Some(time) => write!(f, "{time:?}"),
                     None => {
@@ -1121,7 +1121,7 @@ impl<T: ArrowPrimitiveType> std::fmt::Debug for PrimitiveArray<T> {
                 }
             }
             DataType::Timestamp(_, tz_string_opt) => {
-                let v = self.value(index).to_isize().unwrap() as i64;
+                let v = self.value(index).to_i64().unwrap();
                 match tz_string_opt {
                     // for Timestamp with TimeZone
                     Some(tz_string) => {

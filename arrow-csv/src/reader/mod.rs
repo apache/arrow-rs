@@ -148,7 +148,7 @@ lazy_static! {
     static ref REGEX_SET: RegexSet = RegexSet::new([
         r"(?i)^(true)$|^(false)$(?-i)", //BOOLEAN
         r"^-?(\d+)$", //INTEGER
-        r"^-?((\d*\.\d+|\d+\.\d*)([eE]-?\d+)?|\d+([eE]-?\d+))$", //DECIMAL
+        r"^-?((\d*\.\d+|\d+\.\d*)([eE][-+]?\d+)?|\d+([eE][-+]?\d+))$", //DECIMAL
         r"^\d{4}-\d\d-\d\d$", //DATE32
         r"^\d{4}-\d\d-\d\d[T ]\d\d:\d\d:\d\d(?:[^\d\.].*)?$", //Timestamp(Second)
         r"^\d{4}-\d\d-\d\d[T ]\d\d:\d\d:\d\d\.\d{1,3}(?:[^\d].*)?$", //Timestamp(Millisecond)
@@ -1656,6 +1656,27 @@ mod tests {
         assert_eq!(4, batch.num_columns());
 
         assert_eq!(batch.schema().as_ref(), &expected_schema);
+    }
+
+    #[test]
+    fn test_scientific_notation_with_inference() {
+        let mut file = File::open("test/data/scientific_notation_test.csv").unwrap();
+        let format = Format::default().with_header(false).with_delimiter(b',');
+
+        let (schema, _) = format.infer_schema(&mut file, None).unwrap();
+        file.rewind().unwrap();
+
+        let builder = ReaderBuilder::new(Arc::new(schema))
+            .with_format(format)
+            .with_batch_size(512)
+            .with_projection(vec![0, 1]);
+
+        let mut csv = builder.build(file).unwrap();
+        let batch = csv.next().unwrap().unwrap();
+
+        let schema = batch.schema();
+
+        assert_eq!(&DataType::Float64, schema.field(0).data_type());
     }
 
     #[test]

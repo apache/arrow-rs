@@ -19,10 +19,10 @@ use std::ops::Range;
 
 use crate::client::header::{header_meta, HeaderConfig};
 use crate::path::Path;
-use crate::{GetOptions, GetRange, GetResult, GetResultPayload, Result};
+use crate::{Attribute, Attributes, GetOptions, GetRange, GetResult, GetResultPayload, Result};
 use async_trait::async_trait;
 use futures::{StreamExt, TryStreamExt};
-use hyper::header::CONTENT_RANGE;
+use hyper::header::{CACHE_CONTROL, CONTENT_RANGE, CONTENT_TYPE};
 use hyper::StatusCode;
 use reqwest::header::ToStrError;
 use reqwest::Response;
@@ -117,6 +117,12 @@ enum GetResultError {
     #[snafu(display("Content-Range header contained non UTF-8 characters"))]
     InvalidContentRange { source: ToStrError },
 
+    #[snafu(display("Cache-Control header contained non UTF-8 characters"))]
+    InvalidCacheControl { source: ToStrError },
+
+    #[snafu(display("Content-Type header contained non UTF-8 characters"))]
+    InvalidContentType { source: ToStrError },
+
     #[snafu(display("Requested {expected:?}, got {actual:?}"))]
     UnexpectedRange {
         expected: Range<usize>,
@@ -161,6 +167,16 @@ fn get_result<T: GetClient>(
         0..meta.size
     };
 
+    let mut attributes = Attributes::new();
+    if let Some(x) = response.headers().get(CACHE_CONTROL) {
+        let x = x.to_str().context(InvalidCacheControlSnafu)?;
+        attributes.insert(Attribute::CacheControl, x.to_string().into());
+    }
+    if let Some(x) = response.headers().get(CONTENT_TYPE) {
+        let x = x.to_str().context(InvalidContentTypeSnafu)?;
+        attributes.insert(Attribute::ContentType, x.to_string().into());
+    }
+
     let stream = response
         .bytes_stream()
         .map_err(|source| crate::Error::Generic {
@@ -172,6 +188,7 @@ fn get_result<T: GetClient>(
     Ok(GetResult {
         range,
         meta,
+        attributes,
         payload: GetResultPayload::Stream(stream),
     })
 }

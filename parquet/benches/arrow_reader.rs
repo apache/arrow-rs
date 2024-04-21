@@ -23,7 +23,8 @@ use criterion::{criterion_group, criterion_main, BenchmarkGroup, Criterion};
 use num::FromPrimitive;
 use num_bigint::BigInt;
 use parquet::arrow::array_reader::{
-    make_byte_array_reader, make_fixed_len_byte_array_reader, ListArrayReader,
+    make_byte_array_reader, make_byte_view_array_reader, make_fixed_len_byte_array_reader,
+    ListArrayReader,
 };
 use parquet::basic::Type;
 use parquet::data_type::{ByteArray, FixedLenByteArrayType};
@@ -500,6 +501,13 @@ fn create_string_byte_array_reader(
     column_desc: ColumnDescPtr,
 ) -> Box<dyn ArrayReader> {
     make_byte_array_reader(Box::new(page_iterator), column_desc, None).unwrap()
+}
+
+fn create_string_view_byte_array_reader(
+    page_iterator: impl PageIterator + 'static,
+    column_desc: ColumnDescPtr,
+) -> Box<dyn ArrayReader> {
+    make_byte_view_array_reader(Box::new(page_iterator), column_desc, None).unwrap()
 }
 
 fn create_string_byte_array_dictionary_reader(
@@ -983,6 +991,95 @@ fn add_benches(c: &mut Criterion) {
     group.bench_function("dictionary encoded, optional, half NULLs", |b| {
         b.iter(|| {
             let array_reader = create_string_byte_array_dictionary_reader(
+                dictionary_string_half_null_data.clone(),
+                optional_string_column_desc.clone(),
+            );
+            count = bench_array_reader(array_reader);
+        });
+        assert_eq!(count, EXPECTED_VALUE_COUNT);
+    });
+
+    group.finish();
+
+    // string view benchmarks
+    //==============================
+
+    let mut group = c.benchmark_group("arrow_array_reader/StringViewArray");
+
+    // string, plain encoded, no NULLs
+    let plain_string_no_null_data =
+        build_plain_encoded_string_page_iterator(mandatory_string_column_desc.clone(), 0.0);
+    group.bench_function("plain encoded, mandatory, no NULLs", |b| {
+        b.iter(|| {
+            let array_reader = create_string_view_byte_array_reader(
+                plain_string_no_null_data.clone(),
+                mandatory_string_column_desc.clone(),
+            );
+            count = bench_array_reader(array_reader);
+        });
+        assert_eq!(count, EXPECTED_VALUE_COUNT);
+    });
+
+    let plain_string_no_null_data =
+        build_plain_encoded_string_page_iterator(optional_string_column_desc.clone(), 0.0);
+    group.bench_function("plain encoded, optional, no NULLs", |b| {
+        b.iter(|| {
+            let array_reader = create_string_view_byte_array_reader(
+                plain_string_no_null_data.clone(),
+                optional_string_column_desc.clone(),
+            );
+            count = bench_array_reader(array_reader);
+        });
+        assert_eq!(count, EXPECTED_VALUE_COUNT);
+    });
+
+    // string, plain encoded, half NULLs
+    let plain_string_half_null_data =
+        build_plain_encoded_string_page_iterator(optional_string_column_desc.clone(), 0.5);
+    group.bench_function("plain encoded, optional, half NULLs", |b| {
+        b.iter(|| {
+            let array_reader = create_string_view_byte_array_reader(
+                plain_string_half_null_data.clone(),
+                optional_string_column_desc.clone(),
+            );
+            count = bench_array_reader(array_reader);
+        });
+        assert_eq!(count, EXPECTED_VALUE_COUNT);
+    });
+
+    // string, dictionary encoded, no NULLs
+    let dictionary_string_no_null_data =
+        build_dictionary_encoded_string_page_iterator(mandatory_string_column_desc.clone(), 0.0);
+    group.bench_function("dictionary encoded, mandatory, no NULLs", |b| {
+        b.iter(|| {
+            let array_reader = create_string_view_byte_array_reader(
+                dictionary_string_no_null_data.clone(),
+                mandatory_string_column_desc.clone(),
+            );
+            count = bench_array_reader(array_reader);
+        });
+        assert_eq!(count, EXPECTED_VALUE_COUNT);
+    });
+
+    let dictionary_string_no_null_data =
+        build_dictionary_encoded_string_page_iterator(optional_string_column_desc.clone(), 0.0);
+    group.bench_function("dictionary encoded, optional, no NULLs", |b| {
+        b.iter(|| {
+            let array_reader = create_string_view_byte_array_reader(
+                dictionary_string_no_null_data.clone(),
+                optional_string_column_desc.clone(),
+            );
+            count = bench_array_reader(array_reader);
+        });
+        assert_eq!(count, EXPECTED_VALUE_COUNT);
+    });
+
+    // string, dictionary encoded, half NULLs
+    let dictionary_string_half_null_data =
+        build_dictionary_encoded_string_page_iterator(optional_string_column_desc.clone(), 0.5);
+    group.bench_function("dictionary encoded, optional, half NULLs", |b| {
+        b.iter(|| {
+            let array_reader = create_string_view_byte_array_reader(
                 dictionary_string_half_null_data.clone(),
                 optional_string_column_desc.clone(),
             );
