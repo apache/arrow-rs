@@ -481,11 +481,67 @@ fn set_column_for_json_rows(
                 row.insert(col_name.to_string(), serde_json::Value::Object(obj));
             }
         }
+        DataType::Decimal128(_precision, _scale) | DataType::Decimal256(_precision, _scale) => {
+            to_json_float(rows, array, col_name, explicit_nulls)?;
+        }
         _ => {
             return Err(ArrowError::JsonError(format!(
-                "data type {:?} not supported in nested map for json writer",
+                "data type {:?} not supported for json writer",
                 array.data_type()
-            )))
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn to_json_float(
+    rows: &mut [Option<JsonMap<String, Value>>],
+    array: &ArrayRef,
+    col_name: &str,
+    explicit_nulls: bool,
+) -> Result<(), ArrowError> {
+    let options = FormatOptions::default();
+    let formatter = ArrayFormatter::try_new(array.as_ref(), &options)?;
+    let nulls = array.nulls();
+    let rows = rows
+        .iter_mut()
+        .enumerate()
+        .filter_map(|(idx, maybe_row)| maybe_row.as_mut().map(|row| (idx, row)));
+
+    for (idx, row) in rows {
+        let maybe_value = nulls
+            .map(|x| x.is_valid(idx))
+            .unwrap_or(true)
+            .then(|| {
+                let num = formatter
+                    .value(idx)
+                    .to_string()
+                    .parse::<f64>()
+                    .map_err(|e| {
+                        ArrowError::ParseError(format!(
+                            "Cannot convert {} to f64: {}",
+                            formatter.value(idx),
+                            e
+                        ))
+                    });
+
+                num.and_then(|num| {
+                    serde_json::Number::from_f64(num)
+                        .ok_or_else(|| {
+                            ArrowError::CastError(format!(
+                                "Cannot convert {} to f64",
+                                formatter.value(idx)
+                            ))
+                        })
+                        .map(Value::Number)
+                })
+            })
+            .map_or_else(|| Ok(None), |result| result.map(Some));
+
+        if let Some(j) = maybe_value? {
+            row.insert(col_name.to_string(), j);
+        } else if explicit_nulls {
+            row.insert(col_name.to_string(), Value::Null);
         }
     }
     Ok(())
