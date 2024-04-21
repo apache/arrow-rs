@@ -17,8 +17,8 @@
 
 //! Defines sort kernel for `ArrayRef`
 
-use crate::ord::{Compare, DynComparator};
 use crate::ord::build_compare;
+use crate::ord::{Compare, DynComparator};
 use arrow_array::builder::BufferBuilder;
 use arrow_array::cast::*;
 use arrow_array::types::*;

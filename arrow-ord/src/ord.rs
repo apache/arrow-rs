@@ -86,22 +86,17 @@ impl From<Ordering> for Compare {
 /// Compare the values at two arbitrary indices in two arrays.
 pub type DynComparator = Box<dyn Fn(usize, usize) -> Compare + Send + Sync>;
 
-
 fn compare_primitive<T: ArrowPrimitiveType>(left: &dyn Array, right: &dyn Array) -> DynComparator
 where
     T::Native: ArrowNativeTypeOp,
 {
     let left = left.as_primitive::<T>().clone();
     let right = right.as_primitive::<T>().clone();
-    Box::new(move |i, j| {
-        match (left.is_null(i), right.is_null(j)) {
-            (true, true) => Compare::BothNull,
-            (true, false) => Compare::LeftNull,
-            (false, true) => Compare::RightNull,
-            (false, false) => {
-                left.value(i).compare(right.value(j)).into()
-            }
-        }
+    Box::new(move |i, j| match (left.is_null(i), right.is_null(j)) {
+        (true, true) => Compare::BothNull,
+        (true, false) => Compare::LeftNull,
+        (false, true) => Compare::RightNull,
+        (false, false) => left.value(i).compare(right.value(j)).into(),
     })
 }
 
@@ -109,7 +104,12 @@ fn compare_boolean(left: &dyn Array, right: &dyn Array) -> DynComparator {
     let left: BooleanArray = left.as_boolean().clone();
     let right: BooleanArray = right.as_boolean().clone();
 
-    Box::new(move |i, j| left.value(i).cmp(&right.value(j)).into())
+    Box::new(move |i, j| match (left.is_null(i), right.is_null(j)) {
+        (true, true) => Compare::BothNull,
+        (true, false) => Compare::LeftNull,
+        (false, true) => Compare::RightNull,
+        (false, false) => left.value(i).cmp(&right.value(j)).into(),
+    })
 }
 
 fn compare_bytes<T: ByteArrayType>(left: &dyn Array, right: &dyn Array) -> DynComparator {
@@ -204,8 +204,6 @@ pub mod tests {
     use half::f16;
     use std::sync::Arc;
 
-
-
     #[test]
     fn test_fixed_size_binary() {
         let items = vec![vec![1u8], vec![2u8]];
@@ -242,6 +240,18 @@ pub mod tests {
         assert_eq!(Compare::LeftNull, cmp(1, 1));
         assert_eq!(Compare::RightNull, cmp(2, 2));
         assert_eq!(Compare::Greater, cmp(2, 0));
+    }
+
+    #[test]
+    fn test_bool() {
+        let a1 = BooleanArray::from(vec![Some(true), None, Some(false)]);
+        let a2 = BooleanArray::from(vec![Some(false), Some(true), None]);
+        let cmp = build_compare(&a1, &a2).unwrap();
+        assert_eq!(Compare::Greater, cmp(0, 0));
+        assert_eq!(Compare::Equal, cmp(0, 1));
+        assert_eq!(Compare::LeftNull, cmp(1, 0));
+        assert_eq!(Compare::BothNull, cmp(1, 2));
+        assert_eq!(Compare::RightNull, cmp(2, 2));
     }
 
     #[test]
