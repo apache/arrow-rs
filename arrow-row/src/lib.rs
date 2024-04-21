@@ -2194,7 +2194,7 @@ mod tests {
                 for j in 0..len {
                     let row_i = rows.row(i);
                     let row_j = rows.row(j);
-                    let row_cmp: Compare = row_i.cmp(&row_j).into();
+                    let row_cmp = row_i.cmp(&row_j);
                     let lex_cmp = comparator.compare(i, j);
                     assert_eq!(
                         row_cmp,
