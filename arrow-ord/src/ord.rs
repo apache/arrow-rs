@@ -116,10 +116,15 @@ fn compare_bytes<T: ByteArrayType>(left: &dyn Array, right: &dyn Array) -> DynCo
     let left = left.as_bytes::<T>().clone();
     let right = right.as_bytes::<T>().clone();
 
-    Box::new(move |i, j| {
-        let l: &[u8] = left.value(i).as_ref();
-        let r: &[u8] = right.value(j).as_ref();
-        l.cmp(r).into()
+    Box::new(move |i, j| match (left.is_null(i), right.is_null(j)) {
+        (true, true) => Compare::BothNull,
+        (true, false) => Compare::LeftNull,
+        (false, true) => Compare::RightNull,
+        (false, false) => {
+            let l: &[u8] = left.value(i).as_ref();
+            let r: &[u8] = right.value(j).as_ref();
+            l.cmp(r).into()
+        }
     })
 }
 
@@ -134,11 +139,17 @@ fn compare_dict<K: ArrowDictionaryKeyType>(
     let left_keys = left.keys().clone();
     let right_keys = right.keys().clone();
 
-    // TODO: Handle value nulls (#2687)
     Ok(Box::new(move |i, j| {
-        let l = left_keys.value(i).as_usize();
-        let r = right_keys.value(j).as_usize();
-        cmp(l, r).into()
+        match (left_keys.is_null(i), right_keys.is_null(j)) {
+            (true, true) => Compare::BothNull,
+            (true, false) => Compare::LeftNull,
+            (false, true) => Compare::RightNull,
+            (false, false) => {
+                let l = left_keys.value(i).as_usize();
+                let r = right_keys.value(j).as_usize();
+                cmp(l, r).into()
+            }
+        }
     }))
 }
 
@@ -177,7 +188,18 @@ pub fn build_compare(left: &dyn Array, right: &dyn Array) -> Result<DynComparato
         (FixedSizeBinary(_), FixedSizeBinary(_)) => {
             let left = left.as_fixed_size_binary().clone();
             let right = right.as_fixed_size_binary().clone();
-            Ok(Box::new(move |i, j| left.value(i).cmp(right.value(j)).into()))
+            Ok(Box::new(move |i, j| {
+                match (left.is_null(i), right.is_null(j)) {
+                    (true, true) => Compare::BothNull,
+                    (true, false) => Compare::LeftNull,
+                    (false, true) => Compare::RightNull,
+                    (false, false) => {
+                        let l = left.value(i).as_ref();
+                        let r = right.value(j).as_ref();
+                        l.cmp(r).into()
+                    }
+                }
+            }))
         },
         (Dictionary(l_key, _), Dictionary(r_key, _)) => {
              macro_rules! dict_helper {
@@ -200,18 +222,41 @@ pub fn build_compare(left: &dyn Array, right: &dyn Array) -> Result<DynComparato
 #[cfg(test)]
 pub mod tests {
     use super::*;
+    use arrow_array::builder::StringDictionaryBuilder;
     use arrow_buffer::{i256, OffsetBuffer};
     use half::f16;
     use std::sync::Arc;
 
     #[test]
     fn test_fixed_size_binary() {
-        let items = vec![vec![1u8], vec![2u8]];
-        let array = FixedSizeBinaryArray::try_from_iter(items.into_iter()).unwrap();
+        let input_arg = vec![
+            None,
+            Some(vec![7, 8]),
+            Some(vec![9, 10]),
+            None,
+            Some(vec![13, 14]),
+        ];
+        let a1 =
+            FixedSizeBinaryArray::try_from_sparse_iter_with_size(input_arg.into_iter(), 2).unwrap();
 
-        let cmp = build_compare(&array, &array).unwrap();
+        let input_arg = vec![
+            Some(vec![7, 8]),
+            Some(vec![1, 3]),
+            None,
+            Some(vec![238, 3]),
+            None,
+        ];
+        let a2 =
+            FixedSizeBinaryArray::try_from_sparse_iter_with_size(input_arg.into_iter(), 2).unwrap();
 
-        assert_eq!(Compare::Less, cmp(0, 1));
+        let cmp = build_compare(&a1, &a2).unwrap();
+
+        assert_eq!(Compare::Equal, cmp(1, 0));
+        assert_eq!(Compare::LeftNull, cmp(0, 0));
+        assert_eq!(Compare::Greater, cmp(2, 1));
+        assert_eq!(Compare::BothNull, cmp(0, 2));
+        assert_eq!(Compare::LeftNull, cmp(3, 3));
+        assert_eq!(Compare::RightNull, cmp(4, 2));
     }
 
     #[test]
@@ -391,14 +436,34 @@ pub mod tests {
 
     #[test]
     fn test_dict() {
-        let data = vec!["a", "b", "c", "a", "a", "c", "c"];
-        let array = data.into_iter().collect::<DictionaryArray<Int16Type>>();
+        let mut builder = StringDictionaryBuilder::<Int32Type>::new();
+        builder.append_value("a");
+        builder.append_value("b");
+        builder.append_null();
+        builder.append_value("b");
+        builder.append_null();
+        builder.append_null();
+        builder.append_value("c");
+        let a1 = builder.finish();
 
-        let cmp = build_compare(&array, &array).unwrap();
+        let mut builder = StringDictionaryBuilder::<Int32Type>::new();
+        builder.append_null();
+        builder.append_value("a");
+        builder.append_value("b");
+        builder.append_value("b");
+        builder.append_value("c");
+        builder.append_null();
+        builder.append_null();
+        let a2 = builder.finish();
 
-        assert_eq!(Compare::Less, cmp(0, 1));
-        assert_eq!(Compare::Equal, cmp(3, 4));
-        assert_eq!(Compare::Greater, cmp(2, 3));
+        let cmp = build_compare(&a1, &a2).unwrap();
+
+        assert_eq!(Compare::RightNull, cmp(0, 0));
+        assert_eq!(Compare::LeftNull, cmp(2, 1));
+        assert_eq!(Compare::Equal, cmp(1, 2));
+        assert_eq!(Compare::LeftNull, cmp(2, 3));
+        assert_eq!(Compare::BothNull, cmp(2, 0));
+        assert_eq!(Compare::Greater, cmp(6, 1));
     }
 
     #[test]
@@ -566,6 +631,19 @@ pub mod tests {
         assert_eq!(Compare::Less, cmp(0, 1));
         assert_eq!(Compare::Greater, cmp(0, 2));
         assert_eq!(Compare::Equal, cmp(1, 1));
+    }
+
+    #[test]
+    fn test_string() {
+        let a1 = StringArray::from(vec![Some("a"), None, Some("abcd")]);
+        let a2 = StringArray::from(vec![Some("ab"), Some("abcd"), None]);
+        let cmp = build_compare(&a1, &a2).unwrap();
+        assert_eq!(Compare::Less, cmp(0, 0));
+        assert_eq!(Compare::Equal, cmp(2, 1));
+        assert_eq!(Compare::Greater, cmp(2, 0));
+        assert_eq!(Compare::RightNull, cmp(0, 2));
+        assert_eq!(Compare::BothNull, cmp(1, 2));
+        assert_eq!(Compare::LeftNull, cmp(1, 1));
     }
 
     #[test]
