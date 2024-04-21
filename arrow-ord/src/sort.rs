@@ -17,7 +17,8 @@
 
 //! Defines sort kernel for `ArrayRef`
 
-use crate::ord::{build_compare, DynComparator};
+use crate::ord::{Compare, DynComparator};
+use crate::ord::build_compare;
 use arrow_array::builder::BufferBuilder;
 use arrow_array::cast::*;
 use arrow_array::types::*;
@@ -685,7 +686,7 @@ pub fn lexsort_to_indices(
     let lexicographical_comparator = LexicographicalComparator::try_new(columns)?;
     // uint32 can be sorted unstably
     sort_unstable_by(&mut value_indices, len, |a, b| {
-        lexicographical_comparator.compare(*a, *b)
+        lexicographical_comparator.compare(*a, *b).ordering(true)
     });
 
     Ok(UInt32Array::from_iter_values(
@@ -718,7 +719,7 @@ pub struct LexicographicalComparator {
 
 impl LexicographicalComparator {
     /// lexicographically compare values at the wrapped columns with given indices.
-    pub fn compare(&self, a_idx: usize, b_idx: usize) -> Ordering {
+    pub fn compare(&self, a_idx: usize, b_idx: usize) -> Compare {
         for (nulls, comparator, sort_option) in &self.compare_items {
             let (lhs_valid, rhs_valid) = match nulls {
                 Some(n) => (n.is_valid(a_idx), n.is_valid(b_idx)),
@@ -729,7 +730,7 @@ impl LexicographicalComparator {
                 (true, true) => {
                     match (comparator)(a_idx, b_idx) {
                         // equal, move on to next column
-                        Ordering::Equal => continue,
+                        Compare::Equal => continue,
                         order => {
                             if sort_option.descending {
                                 return order.reverse();
@@ -741,16 +742,16 @@ impl LexicographicalComparator {
                 }
                 (false, true) => {
                     return if sort_option.nulls_first {
-                        Ordering::Less
+                        Compare::Less
                     } else {
-                        Ordering::Greater
+                        Compare::Greater
                     };
                 }
                 (true, false) => {
                     return if sort_option.nulls_first {
-                        Ordering::Greater
+                        Compare::Greater
                     } else {
-                        Ordering::Less
+                        Compare::Less
                     };
                 }
                 // equal, move on to next column
@@ -758,7 +759,7 @@ impl LexicographicalComparator {
             }
         }
 
-        Ordering::Equal
+        Compare::Equal
     }
 
     /// Create a new lex comparator that will wrap the given sort columns and give comparison
@@ -799,7 +800,7 @@ impl LexicographicalComparator {
                     &rank[start..end]
                 }};
             }
-            Ord::cmp(nth_value!(i), nth_value!(j))
+            Ord::cmp(nth_value!(i), nth_value!(j)).into()
         });
         Ok(cmp)
     }
@@ -817,7 +818,7 @@ impl LexicographicalComparator {
                     &rank[start..start + size]
                 }};
             }
-            Ord::cmp(nth_value!(i), nth_value!(j))
+            Ord::cmp(nth_value!(i), nth_value!(j)).into()
         });
         Ok(cmp)
     }
@@ -4202,11 +4203,11 @@ mod tests {
         }])
         .unwrap();
         // 1.cmp(NULL)
-        assert_eq!(comparator.compare(0, 1), Ordering::Greater);
+        assert_eq!(comparator.compare(0, 1), Compare::Greater);
         // NULL.cmp(NULL)
-        assert_eq!(comparator.compare(2, 1), Ordering::Equal);
+        assert_eq!(comparator.compare(2, 1), Compare::Equal);
         // NULL.cmp(4)
-        assert_eq!(comparator.compare(2, 3), Ordering::Less);
+        assert_eq!(comparator.compare(2, 3), Compare::Less);
     }
 
     #[test]

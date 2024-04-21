@@ -24,8 +24,68 @@ use arrow_buffer::ArrowNativeType;
 use arrow_schema::ArrowError;
 use std::cmp::Ordering;
 
+#[derive(Debug, PartialEq, Eq)]
+pub enum Compare {
+    Less,
+    Greater,
+    Equal,
+    LeftNull,
+    RightNull,
+    BothNull,
+}
+
+impl Compare {
+    pub fn ordering(&self, null_first: bool) -> Ordering {
+        match self {
+            Self::Less => Ordering::Less,
+            Self::Greater => Ordering::Greater,
+            Self::Equal => Ordering::Equal,
+            Self::LeftNull => {
+                if null_first {
+                    Ordering::Less
+                } else {
+                    Ordering::Greater
+                }
+            }
+            Self::RightNull => {
+                if null_first {
+                    Ordering::Greater
+                } else {
+                    Ordering::Less
+                }
+            }
+            Self::BothNull => Ordering::Equal,
+        }
+    }
+
+    #[inline]
+    pub fn is_null(&self) -> bool {
+        matches!(self, Self::LeftNull | Self::RightNull | Self::BothNull)
+    }
+
+    #[inline]
+    pub const fn reverse(self) -> Self {
+        match self {
+            Self::Less => Self::Greater,
+            Self::Greater => Self::Less,
+            _ => self,
+        }
+    }
+}
+
+impl From<Ordering> for Compare {
+    fn from(ordering: Ordering) -> Self {
+        match ordering {
+            Ordering::Less => Self::Less,
+            Ordering::Greater => Self::Greater,
+            Ordering::Equal => Self::Equal,
+        }
+    }
+}
+
 /// Compare the values at two arbitrary indices in two arrays.
-pub type DynComparator = Box<dyn Fn(usize, usize) -> Ordering + Send + Sync>;
+pub type DynComparator = Box<dyn Fn(usize, usize) -> Compare + Send + Sync>;
+
 
 fn compare_primitive<T: ArrowPrimitiveType>(left: &dyn Array, right: &dyn Array) -> DynComparator
 where
@@ -33,14 +93,23 @@ where
 {
     let left = left.as_primitive::<T>().clone();
     let right = right.as_primitive::<T>().clone();
-    Box::new(move |i, j| left.value(i).compare(right.value(j)))
+    Box::new(move |i, j| {
+        match (left.is_null(i), right.is_null(j)) {
+            (true, true) => Compare::BothNull,
+            (true, false) => Compare::LeftNull,
+            (false, true) => Compare::RightNull,
+            (false, false) => {
+                left.value(i).compare(right.value(j)).into()
+            }
+        }
+    })
 }
 
 fn compare_boolean(left: &dyn Array, right: &dyn Array) -> DynComparator {
     let left: BooleanArray = left.as_boolean().clone();
     let right: BooleanArray = right.as_boolean().clone();
 
-    Box::new(move |i, j| left.value(i).cmp(&right.value(j)))
+    Box::new(move |i, j| left.value(i).cmp(&right.value(j)).into())
 }
 
 fn compare_bytes<T: ByteArrayType>(left: &dyn Array, right: &dyn Array) -> DynComparator {
@@ -50,7 +119,7 @@ fn compare_bytes<T: ByteArrayType>(left: &dyn Array, right: &dyn Array) -> DynCo
     Box::new(move |i, j| {
         let l: &[u8] = left.value(i).as_ref();
         let r: &[u8] = right.value(j).as_ref();
-        l.cmp(r)
+        l.cmp(r).into()
     })
 }
 
@@ -69,7 +138,7 @@ fn compare_dict<K: ArrowDictionaryKeyType>(
     Ok(Box::new(move |i, j| {
         let l = left_keys.value(i).as_usize();
         let r = right_keys.value(j).as_usize();
-        cmp(l, r)
+        cmp(l, r).into()
     }))
 }
 
@@ -108,7 +177,7 @@ pub fn build_compare(left: &dyn Array, right: &dyn Array) -> Result<DynComparato
         (FixedSizeBinary(_), FixedSizeBinary(_)) => {
             let left = left.as_fixed_size_binary().clone();
             let right = right.as_fixed_size_binary().clone();
-            Ok(Box::new(move |i, j| left.value(i).cmp(right.value(j))))
+            Ok(Box::new(move |i, j| left.value(i).cmp(right.value(j)).into()))
         },
         (Dictionary(l_key, _), Dictionary(r_key, _)) => {
              macro_rules! dict_helper {
@@ -135,6 +204,8 @@ pub mod tests {
     use half::f16;
     use std::sync::Arc;
 
+
+
     #[test]
     fn test_fixed_size_binary() {
         let items = vec![vec![1u8], vec![2u8]];
@@ -142,7 +213,7 @@ pub mod tests {
 
         let cmp = build_compare(&array, &array).unwrap();
 
-        assert_eq!(Ordering::Less, cmp(0, 1));
+        assert_eq!(Compare::Less, cmp(0, 1));
     }
 
     #[test]
@@ -154,26 +225,23 @@ pub mod tests {
 
         let cmp = build_compare(&array1, &array2).unwrap();
 
-        assert_eq!(Ordering::Less, cmp(0, 0));
+        assert_eq!(Compare::Less, cmp(0, 0));
     }
 
     #[test]
     fn test_i32() {
-        let array = Int32Array::from(vec![1, 2]);
+        let a1 = Int32Array::from(vec![Some(1), None, Some(5)]);
 
-        let cmp = build_compare(&array, &array).unwrap();
+        let cmp = build_compare(&a1, &a1).unwrap();
+        assert_eq!(Compare::Less, cmp(0, 2));
+        assert_eq!(Compare::BothNull, cmp(1, 1));
 
-        assert_eq!(Ordering::Less, (cmp)(0, 1));
-    }
-
-    #[test]
-    fn test_i32_i32() {
-        let array1 = Int32Array::from(vec![1]);
-        let array2 = Int32Array::from(vec![2]);
-
-        let cmp = build_compare(&array1, &array2).unwrap();
-
-        assert_eq!(Ordering::Less, cmp(0, 0));
+        let a2 = Int32Array::from(vec![Some(3), Some(4), None]);
+        let cmp = build_compare(&a1, &a2).unwrap();
+        assert_eq!(Compare::Less, cmp(0, 0));
+        assert_eq!(Compare::LeftNull, cmp(1, 1));
+        assert_eq!(Compare::RightNull, cmp(2, 2));
+        assert_eq!(Compare::Greater, cmp(2, 0));
     }
 
     #[test]
@@ -182,7 +250,7 @@ pub mod tests {
 
         let cmp = build_compare(&array, &array).unwrap();
 
-        assert_eq!(Ordering::Less, cmp(0, 1));
+        assert_eq!(Compare::Less, cmp(0, 1));
     }
 
     #[test]
@@ -191,7 +259,7 @@ pub mod tests {
 
         let cmp = build_compare(&array, &array).unwrap();
 
-        assert_eq!(Ordering::Less, cmp(0, 1));
+        assert_eq!(Compare::Less, cmp(0, 1));
     }
 
     #[test]
@@ -200,8 +268,8 @@ pub mod tests {
 
         let cmp = build_compare(&array, &array).unwrap();
 
-        assert_eq!(Ordering::Less, cmp(0, 1));
-        assert_eq!(Ordering::Equal, cmp(1, 1));
+        assert_eq!(Compare::Less, cmp(0, 1));
+        assert_eq!(Compare::Equal, cmp(1, 1));
     }
 
     #[test]
@@ -210,8 +278,8 @@ pub mod tests {
 
         let cmp = build_compare(&array, &array).unwrap();
 
-        assert_eq!(Ordering::Less, cmp(0, 1));
-        assert_eq!(Ordering::Greater, cmp(1, 0));
+        assert_eq!(Compare::Less, cmp(0, 1));
+        assert_eq!(Compare::Greater, cmp(1, 0));
     }
 
     #[test]
@@ -227,14 +295,14 @@ pub mod tests {
 
         let cmp = build_compare(&array, &array).unwrap();
 
-        assert_eq!(Ordering::Less, cmp(0, 1));
-        assert_eq!(Ordering::Greater, cmp(1, 0));
+        assert_eq!(Compare::Less, cmp(0, 1));
+        assert_eq!(Compare::Greater, cmp(1, 0));
 
         // somewhat confusingly, while 90M milliseconds is more than 1 day,
         // it will compare less as the comparison is done on the underlying
         // values not field by field
-        assert_eq!(Ordering::Greater, cmp(1, 2));
-        assert_eq!(Ordering::Less, cmp(2, 1));
+        assert_eq!(Compare::Greater, cmp(1, 2));
+        assert_eq!(Compare::Less, cmp(2, 1));
     }
 
     #[test]
@@ -250,12 +318,12 @@ pub mod tests {
 
         let cmp = build_compare(&array, &array).unwrap();
 
-        assert_eq!(Ordering::Less, cmp(0, 1));
-        assert_eq!(Ordering::Greater, cmp(1, 0));
+        assert_eq!(Compare::Less, cmp(0, 1));
+        assert_eq!(Compare::Greater, cmp(1, 0));
 
         // the underlying representation is months, so both quantities are the same
-        assert_eq!(Ordering::Equal, cmp(1, 2));
-        assert_eq!(Ordering::Equal, cmp(2, 1));
+        assert_eq!(Compare::Equal, cmp(1, 2));
+        assert_eq!(Compare::Equal, cmp(2, 1));
     }
 
     #[test]
@@ -271,14 +339,14 @@ pub mod tests {
 
         let cmp = build_compare(&array, &array).unwrap();
 
-        assert_eq!(Ordering::Less, cmp(0, 1));
-        assert_eq!(Ordering::Greater, cmp(1, 0));
+        assert_eq!(Compare::Less, cmp(0, 1));
+        assert_eq!(Compare::Greater, cmp(1, 0));
 
         // somewhat confusingly, while 100 days is more than 1 month in all cases
         // it will compare less as the comparison is done on the underlying
         // values not field by field
-        assert_eq!(Ordering::Greater, cmp(1, 2));
-        assert_eq!(Ordering::Less, cmp(2, 1));
+        assert_eq!(Compare::Greater, cmp(1, 2));
+        assert_eq!(Compare::Less, cmp(2, 1));
     }
 
     #[test]
@@ -290,8 +358,8 @@ pub mod tests {
             .unwrap();
 
         let cmp = build_compare(&array, &array).unwrap();
-        assert_eq!(Ordering::Less, cmp(1, 0));
-        assert_eq!(Ordering::Greater, cmp(0, 2));
+        assert_eq!(Compare::Less, cmp(1, 0));
+        assert_eq!(Compare::Greater, cmp(0, 2));
     }
 
     #[test]
@@ -307,8 +375,8 @@ pub mod tests {
         .unwrap();
 
         let cmp = build_compare(&array, &array).unwrap();
-        assert_eq!(Ordering::Less, cmp(1, 0));
-        assert_eq!(Ordering::Greater, cmp(0, 2));
+        assert_eq!(Compare::Less, cmp(1, 0));
+        assert_eq!(Compare::Greater, cmp(0, 2));
     }
 
     #[test]
@@ -318,9 +386,9 @@ pub mod tests {
 
         let cmp = build_compare(&array, &array).unwrap();
 
-        assert_eq!(Ordering::Less, cmp(0, 1));
-        assert_eq!(Ordering::Equal, cmp(3, 4));
-        assert_eq!(Ordering::Greater, cmp(2, 3));
+        assert_eq!(Compare::Less, cmp(0, 1));
+        assert_eq!(Compare::Equal, cmp(3, 4));
+        assert_eq!(Compare::Greater, cmp(2, 3));
     }
 
     #[test]
@@ -332,9 +400,9 @@ pub mod tests {
 
         let cmp = build_compare(&a1, &a2).unwrap();
 
-        assert_eq!(Ordering::Less, cmp(0, 0));
-        assert_eq!(Ordering::Equal, cmp(0, 3));
-        assert_eq!(Ordering::Greater, cmp(1, 3));
+        assert_eq!(Compare::Less, cmp(0, 0));
+        assert_eq!(Compare::Equal, cmp(0, 3));
+        assert_eq!(Compare::Greater, cmp(1, 3));
     }
 
     #[test]
@@ -349,11 +417,11 @@ pub mod tests {
 
         let cmp = build_compare(&array1, &array2).unwrap();
 
-        assert_eq!(Ordering::Less, cmp(0, 0));
-        assert_eq!(Ordering::Less, cmp(0, 3));
-        assert_eq!(Ordering::Equal, cmp(3, 3));
-        assert_eq!(Ordering::Greater, cmp(3, 1));
-        assert_eq!(Ordering::Greater, cmp(3, 2));
+        assert_eq!(Compare::Less, cmp(0, 0));
+        assert_eq!(Compare::Less, cmp(0, 3));
+        assert_eq!(Compare::Equal, cmp(3, 3));
+        assert_eq!(Compare::Greater, cmp(3, 1));
+        assert_eq!(Compare::Greater, cmp(3, 2));
     }
 
     #[test]
@@ -368,11 +436,11 @@ pub mod tests {
 
         let cmp = build_compare(&array1, &array2).unwrap();
 
-        assert_eq!(Ordering::Less, cmp(0, 0));
-        assert_eq!(Ordering::Less, cmp(0, 3));
-        assert_eq!(Ordering::Equal, cmp(3, 3));
-        assert_eq!(Ordering::Greater, cmp(3, 1));
-        assert_eq!(Ordering::Greater, cmp(3, 2));
+        assert_eq!(Compare::Less, cmp(0, 0));
+        assert_eq!(Compare::Less, cmp(0, 3));
+        assert_eq!(Compare::Equal, cmp(3, 3));
+        assert_eq!(Compare::Greater, cmp(3, 1));
+        assert_eq!(Compare::Greater, cmp(3, 2));
     }
 
     #[test]
@@ -387,11 +455,11 @@ pub mod tests {
 
         let cmp = build_compare(&array1, &array2).unwrap();
 
-        assert_eq!(Ordering::Less, cmp(0, 0));
-        assert_eq!(Ordering::Less, cmp(0, 3));
-        assert_eq!(Ordering::Equal, cmp(3, 3));
-        assert_eq!(Ordering::Greater, cmp(3, 1));
-        assert_eq!(Ordering::Greater, cmp(3, 2));
+        assert_eq!(Compare::Less, cmp(0, 0));
+        assert_eq!(Compare::Less, cmp(0, 3));
+        assert_eq!(Compare::Equal, cmp(3, 3));
+        assert_eq!(Compare::Greater, cmp(3, 1));
+        assert_eq!(Compare::Greater, cmp(3, 2));
     }
 
     #[test]
@@ -406,11 +474,11 @@ pub mod tests {
 
         let cmp = build_compare(&array1, &array2).unwrap();
 
-        assert_eq!(Ordering::Less, cmp(0, 0));
-        assert_eq!(Ordering::Less, cmp(0, 3));
-        assert_eq!(Ordering::Equal, cmp(3, 3));
-        assert_eq!(Ordering::Greater, cmp(3, 1));
-        assert_eq!(Ordering::Greater, cmp(3, 2));
+        assert_eq!(Compare::Less, cmp(0, 0));
+        assert_eq!(Compare::Less, cmp(0, 3));
+        assert_eq!(Compare::Equal, cmp(3, 3));
+        assert_eq!(Compare::Greater, cmp(3, 1));
+        assert_eq!(Compare::Greater, cmp(3, 2));
     }
 
     #[test]
@@ -425,11 +493,11 @@ pub mod tests {
 
         let cmp = build_compare(&array1, &array2).unwrap();
 
-        assert_eq!(Ordering::Less, cmp(0, 0));
-        assert_eq!(Ordering::Less, cmp(0, 3));
-        assert_eq!(Ordering::Equal, cmp(3, 3));
-        assert_eq!(Ordering::Greater, cmp(3, 1));
-        assert_eq!(Ordering::Greater, cmp(3, 2));
+        assert_eq!(Compare::Less, cmp(0, 0));
+        assert_eq!(Compare::Less, cmp(0, 3));
+        assert_eq!(Compare::Equal, cmp(3, 3));
+        assert_eq!(Compare::Greater, cmp(3, 1));
+        assert_eq!(Compare::Greater, cmp(3, 2));
     }
 
     #[test]
@@ -444,11 +512,11 @@ pub mod tests {
 
         let cmp = build_compare(&array1, &array2).unwrap();
 
-        assert_eq!(Ordering::Less, cmp(0, 0));
-        assert_eq!(Ordering::Less, cmp(0, 3));
-        assert_eq!(Ordering::Equal, cmp(3, 3));
-        assert_eq!(Ordering::Greater, cmp(3, 1));
-        assert_eq!(Ordering::Greater, cmp(3, 2));
+        assert_eq!(Compare::Less, cmp(0, 0));
+        assert_eq!(Compare::Less, cmp(0, 3));
+        assert_eq!(Compare::Equal, cmp(3, 3));
+        assert_eq!(Compare::Greater, cmp(3, 1));
+        assert_eq!(Compare::Greater, cmp(3, 2));
     }
 
     #[test]
@@ -473,11 +541,11 @@ pub mod tests {
 
         let cmp = build_compare(&array1, &array2).unwrap();
 
-        assert_eq!(Ordering::Less, cmp(0, 0));
-        assert_eq!(Ordering::Less, cmp(0, 3));
-        assert_eq!(Ordering::Equal, cmp(3, 3));
-        assert_eq!(Ordering::Greater, cmp(3, 1));
-        assert_eq!(Ordering::Greater, cmp(3, 2));
+        assert_eq!(Compare::Less, cmp(0, 0));
+        assert_eq!(Compare::Less, cmp(0, 3));
+        assert_eq!(Compare::Equal, cmp(3, 3));
+        assert_eq!(Compare::Greater, cmp(3, 1));
+        assert_eq!(Compare::Greater, cmp(3, 2));
     }
 
     fn test_bytes_impl<T: ByteArrayType>() {
@@ -485,9 +553,9 @@ pub mod tests {
         let a = GenericByteArray::<T>::new(offsets, b"abcdefa".into(), None);
         let cmp = build_compare(&a, &a).unwrap();
 
-        assert_eq!(Ordering::Less, cmp(0, 1));
-        assert_eq!(Ordering::Greater, cmp(0, 2));
-        assert_eq!(Ordering::Equal, cmp(1, 1));
+        assert_eq!(Compare::Less, cmp(0, 1));
+        assert_eq!(Compare::Greater, cmp(0, 2));
+        assert_eq!(Compare::Equal, cmp(1, 1));
     }
 
     #[test]
