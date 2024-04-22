@@ -77,7 +77,7 @@ pyarrow = ["pyo3", "ffi"]
 # but is run as part of our CI checks
 force_validate = ["arrow-data/force_validate"]
 # Enable ffi support
-ffi = ["arrow-schema/ffi", "arrow-data/ffi"]
+ffi = ["arrow-schema/ffi", "arrow-data/ffi", "arrow-array/ffi"]
 chrono-tz = ["arrow-array/chrono-tz"]
 
 [dev-dependencies]

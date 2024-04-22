@@ -29,11 +29,11 @@
 //!
 //! ```rust
 //! # use std::sync::Arc;
-//! # use arrow::array::{Int32Array, Array, ArrayData, make_array};
-//! # use arrow::error::Result;
-//! # use arrow_arith::numeric::add;
-//! # use arrow::ffi::{to_ffi, from_ffi};
-//! # fn main() -> Result<()> {
+//! # use arrow_array::{Int32Array, Array, make_array};
+//! # use arrow_data::ArrayData;
+//! # use arrow_array::ffi::{to_ffi, from_ffi};
+//! # use arrow_schema::ArrowError;
+//! # fn main() -> Result<(), ArrowError> {
 //! // create an array natively
 //!
 //! let array = Int32Array::from(vec![Some(1), None, Some(3)]);
@@ -46,11 +46,8 @@
 //! let data = unsafe { from_ffi(out_array, &out_schema) }?;
 //! let array = Int32Array::from(data);
 //!
-//! // perform some operation
-//! let array = add(&array, &array)?;
-//!
 //! // verify
-//! assert_eq!(array.as_ref(), &Int32Array::from(vec![Some(2), None, Some(6)]));
+//! assert_eq!(array, Int32Array::from(vec![Some(1), None, Some(3)]));
 //! #
 //! # Ok(())
 //! # }
@@ -60,9 +57,9 @@
 //!
 //! ```
 //! # use std::ptr::addr_of_mut;
-//! # use arrow::ffi::{from_ffi, FFI_ArrowArray, FFI_ArrowSchema};
+//! # use arrow_array::ffi::{from_ffi, FFI_ArrowArray};
 //! # use arrow_array::{ArrayRef, make_array};
-//! # use arrow_schema::ArrowError;
+//! # use arrow_schema::{ArrowError, ffi::FFI_ArrowSchema};
 //! #
 //! /// A foreign data container that can export to C Data interface
 //! struct ForeignArray {};
@@ -106,16 +103,39 @@ To export an array, create an `ArrowArray` using [ArrowArray::try_new].
 
 use std::{mem::size_of, ptr::NonNull, sync::Arc};
 
+use arrow_buffer::{bit_util, Buffer, MutableBuffer};
 pub use arrow_data::ffi::FFI_ArrowArray;
-pub use arrow_schema::ffi::{FFI_ArrowSchema, Flags};
+use arrow_data::{layout, ArrayData};
+pub use arrow_schema::ffi::FFI_ArrowSchema;
+use arrow_schema::{ArrowError, DataType, UnionMode};
 
-use arrow_schema::UnionMode;
+use crate::array::ArrayRef;
 
-use crate::array::{layout, ArrayData};
-use crate::buffer::{Buffer, MutableBuffer};
-use crate::datatypes::DataType;
-use crate::error::{ArrowError, Result};
-use crate::util::bit_util;
+type Result<T> = std::result::Result<T, ArrowError>;
+
+/// Exports an array to raw pointers of the C Data Interface provided by the consumer.
+/// # Safety
+/// Assumes that these pointers represent valid C Data Interfaces, both in memory
+/// representation and lifetime via the `release` mechanism.
+///
+/// This function copies the content of two FFI structs [arrow_data::ffi::FFI_ArrowArray] and
+/// [arrow_schema::ffi::FFI_ArrowSchema] in the array to the location pointed by the raw pointers.
+/// Usually the raw pointers are provided by the array data consumer.
+#[deprecated(note = "Use FFI_ArrowArray::new and FFI_ArrowSchema::try_from")]
+pub unsafe fn export_array_into_raw(
+    src: ArrayRef,
+    out_array: *mut FFI_ArrowArray,
+    out_schema: *mut FFI_ArrowSchema,
+) -> Result<()> {
+    let data = src.to_data();
+    let array = FFI_ArrowArray::new(&data);
+    let schema = FFI_ArrowSchema::try_from(data.data_type())?;
+
+    std::ptr::write_unaligned(out_array, array);
+    std::ptr::write_unaligned(out_schema, schema);
+
+    Ok(())
+}
 
 // returns the number of bits that buffer `i` (in the C data interface) is expected to have.
 // This is set by the Arrow specification
@@ -464,19 +484,17 @@ impl<'a> ImportedArrowArray<'a> {
 }
 
 #[cfg(test)]
-mod tests {
+mod tests_to_then_from_ffi {
     use std::collections::HashMap;
     use std::mem::ManuallyDrop;
-    use std::ptr::addr_of_mut;
 
-    use arrow_array::builder::UnionBuilder;
-    use arrow_array::cast::AsArray;
-    use arrow_array::types::{Float64Type, Int32Type};
-    use arrow_array::*;
     use arrow_buffer::NullBuffer;
+    use arrow_schema::Field;
 
-    use crate::compute::kernels;
-    use crate::datatypes::{Field, Int8Type};
+    use crate::builder::UnionBuilder;
+    use crate::cast::AsArray;
+    use crate::types::{Float64Type, Int32Type, Int8Type};
+    use crate::*;
 
     use super::*;
 
@@ -490,10 +508,9 @@ mod tests {
 
         // (simulate consumer) import it
         let array = Int32Array::from(unsafe { from_ffi(array, &schema) }.unwrap());
-        let array = kernels::numeric::add(&array, &array).unwrap();
 
         // verify
-        assert_eq!(array.as_ref(), &Int32Array::from(vec![2, 4, 6]));
+        assert_eq!(array, Int32Array::from(vec![1, 2, 3]));
     }
 
     #[test]
@@ -535,15 +552,9 @@ mod tests {
         // (simulate consumer) import it
         let data = unsafe { from_ffi(array, &schema) }?;
         let array = make_array(data);
-
-        // perform some operation
         let array = array.as_any().downcast_ref::<Int32Array>().unwrap();
+
         assert_eq!(array, &Int32Array::from(vec![Some(2), None]));
-
-        let array = kernels::numeric::add(array, array).unwrap();
-
-        // verify
-        assert_eq!(array.as_ref(), &Int32Array::from(vec![Some(4), None]));
 
         // (drop/release)
         Ok(())
@@ -589,21 +600,13 @@ mod tests {
         let array = make_array(data);
 
         // perform some operation
-        let array = kernels::concat::concat(&[array.as_ref(), array.as_ref()]).unwrap();
         let array = array
             .as_any()
             .downcast_ref::<GenericStringArray<Offset>>()
             .unwrap();
 
         // verify
-        let expected = GenericStringArray::<Offset>::from(vec![
-            Some("a"),
-            None,
-            Some("aaa"),
-            Some("a"),
-            None,
-            Some("aaa"),
-        ]);
+        let expected = GenericStringArray::<Offset>::from(vec![Some("a"), None, Some("aaa")]);
         assert_eq!(array, &expected);
 
         // (drop/release)
@@ -694,23 +697,13 @@ mod tests {
         // (simulate consumer) import it
         let data = unsafe { from_ffi(array, &schema) }?;
         let array = make_array(data);
-
-        // perform some operation
-        let array = kernels::concat::concat(&[array.as_ref(), array.as_ref()]).unwrap();
         let array = array
             .as_any()
             .downcast_ref::<GenericBinaryArray<Offset>>()
             .unwrap();
 
         // verify
-        let expected: Vec<Option<&[u8]>> = vec![
-            Some(b"a"),
-            None,
-            Some(b"aaa"),
-            Some(b"a"),
-            None,
-            Some(b"aaa"),
-        ];
+        let expected: Vec<Option<&[u8]>> = vec![Some(b"a"), None, Some(b"aaa")];
         let expected = GenericBinaryArray::<Offset>::from(expected);
         assert_eq!(array, &expected);
 
@@ -739,15 +732,12 @@ mod tests {
         // (simulate consumer) import it
         let data = unsafe { from_ffi(array, &schema) }?;
         let array = make_array(data);
-
-        // perform some operation
         let array = array.as_any().downcast_ref::<BooleanArray>().unwrap();
-        let array = kernels::boolean::not(array)?;
 
         // verify
         assert_eq!(
             array,
-            BooleanArray::from(vec![None, Some(false), Some(true)])
+            &BooleanArray::from(vec![None, Some(true), Some(false)])
         );
 
         // (drop/release)
@@ -765,9 +755,6 @@ mod tests {
         // (simulate consumer) import it
         let data = unsafe { from_ffi(array, &schema) }?;
         let array = make_array(data);
-
-        // perform some operation
-        let array = kernels::concat::concat(&[array.as_ref(), array.as_ref()]).unwrap();
         let array = array
             .as_any()
             .downcast_ref::<Time32MillisecondArray>()
@@ -776,7 +763,7 @@ mod tests {
         // verify
         assert_eq!(
             array,
-            &Time32MillisecondArray::from(vec![None, Some(1), Some(2), None, Some(1), Some(2)])
+            &Time32MillisecondArray::from(vec![None, Some(1), Some(2)])
         );
 
         // (drop/release)
@@ -794,9 +781,6 @@ mod tests {
         // (simulate consumer) import it
         let data = unsafe { from_ffi(array, &schema) }?;
         let array = make_array(data);
-
-        // perform some operation
-        let array = kernels::concat::concat(&[array.as_ref(), array.as_ref()]).unwrap();
         let array = array
             .as_any()
             .downcast_ref::<TimestampMillisecondArray>()
@@ -805,7 +789,7 @@ mod tests {
         // verify
         assert_eq!(
             array,
-            &TimestampMillisecondArray::from(vec![None, Some(1), Some(2), None, Some(1), Some(2)])
+            &TimestampMillisecondArray::from(vec![None, Some(1), Some(2)])
         );
 
         // (drop/release)
@@ -830,9 +814,6 @@ mod tests {
         // (simulate consumer) import it
         let data = unsafe { from_ffi(array, &schema) }?;
         let array = make_array(data);
-
-        // perform some operation
-        let array = kernels::concat::concat(&[array.as_ref(), array.as_ref()]).unwrap();
         let array = array
             .as_any()
             .downcast_ref::<FixedSizeBinaryArray>()
@@ -843,12 +824,6 @@ mod tests {
             array,
             &FixedSizeBinaryArray::try_from_sparse_iter_with_size(
                 vec![
-                    None,
-                    Some(vec![10, 10, 10]),
-                    None,
-                    Some(vec![20, 20, 20]),
-                    Some(vec![30, 30, 30]),
-                    None,
                     None,
                     Some(vec![10, 10, 10]),
                     None,
@@ -891,9 +866,6 @@ mod tests {
         // (simulate consumer) import it
         let data = unsafe { from_ffi(array, &schema) }?;
         let array = make_array(data);
-
-        // perform some operation
-        let array = kernels::concat::concat(&[array.as_ref(), array.as_ref()]).unwrap();
         let array = array.as_any().downcast_ref::<FixedSizeListArray>().unwrap();
 
         // 0010 0100
@@ -903,15 +875,14 @@ mod tests {
 
         let mut w = vec![];
         w.extend_from_slice(&v);
-        w.extend_from_slice(&v);
 
         let expected_value_data = ArrayData::builder(DataType::Int32)
-            .len(18)
+            .len(9)
             .add_buffer(Buffer::from_slice_ref(&w))
             .build()?;
 
         let expected_list_data = ArrayData::builder(list_data_type)
-            .len(6)
+            .len(3)
             .null_bit_buffer(Some(Buffer::from(expected_validity_bits)))
             .add_child_data(expected_value_data)
             .build()?;
@@ -936,16 +907,13 @@ mod tests {
         // (simulate consumer) import it
         let data = unsafe { from_ffi(array, &schema) }?;
         let array = make_array(data);
-
-        // perform some operation
-        let array = kernels::concat::concat(&[array.as_ref(), array.as_ref()]).unwrap();
         let actual = array
             .as_any()
             .downcast_ref::<DictionaryArray<Int8Type>>()
             .unwrap();
 
         // verify
-        let new_values = vec!["a", "aaa", "aaa", "a", "aaa", "aaa"];
+        let new_values = vec!["a", "aaa", "aaa"];
         let expected: DictionaryArray<Int8Type> = new_values.into_iter().collect();
         assert_eq!(actual, &expected);
 
@@ -956,7 +924,6 @@ mod tests {
     #[test]
     #[allow(deprecated)]
     fn test_export_array_into_raw() -> Result<()> {
-        use crate::array::export_array_into_raw;
         let array = make_array(Int32Array::from(vec![1, 2, 3]).into_data());
 
         // Assume two raw pointers provided by the consumer
@@ -964,8 +931,8 @@ mod tests {
         let mut out_schema = FFI_ArrowSchema::empty();
 
         {
-            let out_array_ptr = addr_of_mut!(out_array);
-            let out_schema_ptr = addr_of_mut!(out_schema);
+            let out_array_ptr = std::ptr::addr_of_mut!(out_array);
+            let out_schema_ptr = std::ptr::addr_of_mut!(out_schema);
             unsafe {
                 export_array_into_raw(array, out_array_ptr, out_schema_ptr)?;
             }
@@ -977,10 +944,9 @@ mod tests {
 
         // perform some operation
         let array = array.as_any().downcast_ref::<Int32Array>().unwrap();
-        let array = kernels::numeric::add(array, array).unwrap();
 
         // verify
-        assert_eq!(array.as_ref(), &Int32Array::from(vec![2, 4, 6]));
+        assert_eq!(array, &Int32Array::from(vec![1, 2, 3]));
         Ok(())
     }
 
@@ -995,9 +961,6 @@ mod tests {
         // (simulate consumer) import it
         let data = unsafe { from_ffi(array, &schema) }?;
         let array = make_array(data);
-
-        // perform some operation
-        let array = kernels::concat::concat(&[array.as_ref(), array.as_ref()]).unwrap();
         let array = array
             .as_any()
             .downcast_ref::<DurationSecondArray>()
@@ -1006,7 +969,7 @@ mod tests {
         // verify
         assert_eq!(
             array,
-            &DurationSecondArray::from(vec![None, Some(1), Some(2), None, Some(1), Some(2)])
+            &DurationSecondArray::from(vec![None, Some(1), Some(2)])
         );
 
         // (drop/release)
@@ -1246,5 +1209,215 @@ mod tests {
         assert_eq!(array.values(), ree_array.values());
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests_from_ffi {
+    use std::sync::Arc;
+
+    use arrow_buffer::{bit_util, buffer::Buffer};
+    use arrow_data::ArrayData;
+    use arrow_schema::{DataType, Field};
+
+    use crate::{
+        array::{
+            Array, BooleanArray, DictionaryArray, FixedSizeBinaryArray, FixedSizeListArray,
+            Int32Array, Int64Array, StringArray, StructArray, UInt32Array, UInt64Array,
+        },
+        ffi::{from_ffi, FFI_ArrowArray, FFI_ArrowSchema},
+    };
+
+    use super::Result;
+
+    fn test_round_trip(expected: &ArrayData) -> Result<()> {
+        // here we export the array
+        let array = FFI_ArrowArray::new(expected);
+        let schema = FFI_ArrowSchema::try_from(expected.data_type())?;
+
+        // simulate an external consumer by being the consumer
+        let result = &unsafe { from_ffi(array, &schema) }?;
+
+        assert_eq!(result, expected);
+        Ok(())
+    }
+
+    #[test]
+    fn test_u32() -> Result<()> {
+        let array = UInt32Array::from(vec![Some(2), None, Some(1), None]);
+        let data = array.into_data();
+        test_round_trip(&data)
+    }
+
+    #[test]
+    fn test_u64() -> Result<()> {
+        let array = UInt64Array::from(vec![Some(2), None, Some(1), None]);
+        let data = array.into_data();
+        test_round_trip(&data)
+    }
+
+    #[test]
+    fn test_i64() -> Result<()> {
+        let array = Int64Array::from(vec![Some(2), None, Some(1), None]);
+        let data = array.into_data();
+        test_round_trip(&data)
+    }
+
+    #[test]
+    fn test_struct() -> Result<()> {
+        let inner = StructArray::from(vec![
+            (
+                Arc::new(Field::new("a1", DataType::Boolean, false)),
+                Arc::new(BooleanArray::from(vec![true, true, false, false])) as Arc<dyn Array>,
+            ),
+            (
+                Arc::new(Field::new("a2", DataType::UInt32, false)),
+                Arc::new(UInt32Array::from(vec![1, 2, 3, 4])),
+            ),
+        ]);
+
+        let array = StructArray::from(vec![
+            (
+                Arc::new(Field::new("a", inner.data_type().clone(), false)),
+                Arc::new(inner) as Arc<dyn Array>,
+            ),
+            (
+                Arc::new(Field::new("b", DataType::Boolean, false)),
+                Arc::new(BooleanArray::from(vec![false, false, true, true])) as Arc<dyn Array>,
+            ),
+            (
+                Arc::new(Field::new("c", DataType::UInt32, false)),
+                Arc::new(UInt32Array::from(vec![42, 28, 19, 31])),
+            ),
+        ]);
+        let data = array.into_data();
+        test_round_trip(&data)
+    }
+
+    #[test]
+    fn test_dictionary() -> Result<()> {
+        let values = StringArray::from(vec![Some("foo"), Some("bar"), None]);
+        let keys = Int32Array::from(vec![
+            Some(0),
+            Some(1),
+            None,
+            Some(1),
+            Some(1),
+            None,
+            Some(1),
+            Some(2),
+            Some(1),
+            None,
+        ]);
+        let array = DictionaryArray::new(keys, Arc::new(values));
+
+        let data = array.into_data();
+        test_round_trip(&data)
+    }
+
+    #[test]
+    fn test_fixed_size_binary() -> Result<()> {
+        let values = vec![vec![10, 10, 10], vec![20, 20, 20], vec![30, 30, 30]];
+        let array = FixedSizeBinaryArray::try_from_iter(values.into_iter())?;
+
+        let data = array.into_data();
+        test_round_trip(&data)
+    }
+
+    #[test]
+    fn test_fixed_size_binary_with_nulls() -> Result<()> {
+        let values = vec![
+            None,
+            Some(vec![10, 10, 10]),
+            None,
+            Some(vec![20, 20, 20]),
+            Some(vec![30, 30, 30]),
+            None,
+        ];
+        let array = FixedSizeBinaryArray::try_from_sparse_iter_with_size(values.into_iter(), 3)?;
+
+        let data = array.into_data();
+        test_round_trip(&data)
+    }
+
+    #[test]
+    fn test_fixed_size_list() -> Result<()> {
+        let v: Vec<i64> = (0..9).collect();
+        let value_data = ArrayData::builder(DataType::Int64)
+            .len(9)
+            .add_buffer(Buffer::from_slice_ref(v))
+            .build()?;
+        let list_data_type =
+            DataType::FixedSizeList(Arc::new(Field::new("f", DataType::Int64, false)), 3);
+        let list_data = ArrayData::builder(list_data_type)
+            .len(3)
+            .add_child_data(value_data)
+            .build()?;
+        let array = FixedSizeListArray::from(list_data);
+
+        let data = array.into_data();
+        test_round_trip(&data)
+    }
+
+    #[test]
+    fn test_fixed_size_list_with_nulls() -> Result<()> {
+        // 0100 0110
+        let mut validity_bits: [u8; 1] = [0; 1];
+        bit_util::set_bit(&mut validity_bits, 1);
+        bit_util::set_bit(&mut validity_bits, 2);
+        bit_util::set_bit(&mut validity_bits, 6);
+
+        let v: Vec<i16> = (0..16).collect();
+        let value_data = ArrayData::builder(DataType::Int16)
+            .len(16)
+            .add_buffer(Buffer::from_slice_ref(v))
+            .build()?;
+        let list_data_type =
+            DataType::FixedSizeList(Arc::new(Field::new("f", DataType::Int16, false)), 2);
+        let list_data = ArrayData::builder(list_data_type)
+            .len(8)
+            .null_bit_buffer(Some(Buffer::from(validity_bits)))
+            .add_child_data(value_data)
+            .build()?;
+        let array = FixedSizeListArray::from(list_data);
+
+        let data = array.into_data();
+        test_round_trip(&data)
+    }
+
+    #[test]
+    fn test_fixed_size_list_nested() -> Result<()> {
+        let v: Vec<i32> = (0..16).collect();
+        let value_data = ArrayData::builder(DataType::Int32)
+            .len(16)
+            .add_buffer(Buffer::from_slice_ref(v))
+            .build()?;
+
+        let offsets: Vec<i32> = vec![0, 2, 4, 6, 8, 10, 12, 14, 16];
+        let value_offsets = Buffer::from_slice_ref(offsets);
+        let inner_list_data_type =
+            DataType::List(Arc::new(Field::new("item", DataType::Int32, false)));
+        let inner_list_data = ArrayData::builder(inner_list_data_type.clone())
+            .len(8)
+            .add_buffer(value_offsets)
+            .add_child_data(value_data)
+            .build()?;
+
+        // 0000 0100
+        let mut validity_bits: [u8; 1] = [0; 1];
+        bit_util::set_bit(&mut validity_bits, 2);
+
+        let list_data_type =
+            DataType::FixedSizeList(Arc::new(Field::new("f", inner_list_data_type, false)), 2);
+        let list_data = ArrayData::builder(list_data_type)
+            .len(4)
+            .null_bit_buffer(Some(Buffer::from(validity_bits)))
+            .add_child_data(inner_list_data)
+            .build()?;
+
+        let array = FixedSizeListArray::from(list_data);
+
+        let data = array.into_data();
+        test_round_trip(&data)
     }
 }
