@@ -190,14 +190,8 @@ impl FlightSqlService for FlightSqlServiceImpl {
         let output = futures::stream::iter(vec![result]);
 
         let token = format!("Bearer {}", FAKE_TOKEN);
-        let mut response: Response<
-            Pin<
-                Box<
-                    dyn Stream<Item = std::result::Result<HandshakeResponse, Status>>
-                        + std::marker::Send,
-                >,
-            >,
-        > = Response::new(Box::pin(output));
+        let mut response: Response<Pin<Box<dyn Stream<Item = _> + Send>>> =
+            Response::new(Box::pin(output));
         response.metadata_mut().append(
             "authorization",
             MetadataValue::from_str(token.as_str()).unwrap(),
