@@ -37,7 +37,7 @@ use bytes::{Buf, Bytes};
 use chrono::{DateTime, Utc};
 use hyper::http::HeaderName;
 use reqwest::{
-    header::{HeaderValue, CONTENT_LENGTH, IF_MATCH, IF_NONE_MATCH},
+    header::{HeaderMap, HeaderValue, CONTENT_LENGTH, CONTENT_TYPE, IF_MATCH, IF_NONE_MATCH},
     Client as ReqwestClient, Method, RequestBuilder, Response,
 };
 use serde::{Deserialize, Serialize};
@@ -46,6 +46,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 use url::Url;
+
 
 const VERSION_HEADER: &str = "x-ms-version-id";
 const USER_DEFINED_METADATA_HEADER_PREFIX: &str = "x-ms-meta-";
@@ -77,6 +78,43 @@ pub(crate) enum Error {
     DeleteRequest {
         source: crate::client::retry::Error,
         path: String,
+    },
+
+    #[snafu(display("Error performing bulk delete request: {}", source))]
+    BulkDeleteRequest {
+        source: crate::client::retry::Error
+    },
+
+    #[snafu(display("Error receiving bulk delete request body: {}", source))]
+    BulkDeleteRequestBody {
+        source: reqwest::Error
+    },
+
+    #[snafu(display(
+        "Bulk delete request failed due to invalid input: {} (code: {})",
+        reason,
+        code
+    ))]
+    BulkDeleteRequestInvalidInput {
+        code: String,
+        reason: String,
+    },
+
+    #[snafu(display("Got invalid bulk delete response: {}", reason))]
+    InvalidBulkDeleteResponse {
+        reason: String
+    },
+
+    #[snafu(display(
+        "Bulk delete request failed for key {}: {} (code: {})",
+        path,
+        reason,
+        code
+    ))]
+    DeleteFailed {
+        path: String,
+        code: String,
+        reason: String,
     },
 
     #[snafu(display("Error performing list request: {}", source))]
@@ -247,6 +285,148 @@ impl<'a> PutRequest<'a> {
     }
 }
 
+#[inline]
+fn extend(dst: &mut Vec<u8>, data: &[u8]) {
+    dst.extend_from_slice(data);
+}
+
+// Write header names as title case. The header name is assumed to be ASCII.
+fn title_case(dst: &mut Vec<u8>, name: &[u8]) {
+    dst.reserve(name.len());
+
+    // Ensure first character is uppercased
+    let mut prev = b'-';
+    for &(mut c) in name {
+        if prev == b'-' {
+            c.make_ascii_uppercase();
+        }
+        dst.push(c);
+        prev = c;
+    }
+}
+
+fn write_headers(headers: &HeaderMap, dst: &mut Vec<u8>) {
+    for (name, value) in headers {
+        if name == "content-id" {
+            extend(dst, b"Content-ID");
+        } else {
+            title_case(dst, name.as_str().as_bytes());
+        }
+        extend(dst, b": ");
+        extend(dst, value.as_bytes());
+        extend(dst, b"\r\n");
+    }
+}
+
+fn serialize_part_request(dst: &mut Vec<u8>, boundary: &str, idx: usize, request: reqwest::Request, relative_url: String) {
+    // Encode start marker for part
+    extend(dst, b"--");
+    extend(dst, boundary.as_bytes());
+    extend(dst, b"\r\n");
+
+    // Encode part headers
+    let mut part_headers = HeaderMap::new();
+    part_headers.insert(CONTENT_TYPE, "application/http".parse().unwrap());
+    part_headers.insert("Content-Transfer-Encoding", "binary".parse().unwrap());
+    part_headers.insert("Content-ID", HeaderValue::from(idx));
+    write_headers(&part_headers, dst);
+    extend(dst, b"\r\n");
+
+    // Encode the subrequest request-line
+    extend(dst, b"DELETE ");
+    extend(dst, format!("/{} ", relative_url).as_bytes());
+    extend(dst, b"HTTP/1.1");
+    extend(dst, b"\r\n");
+
+    // Encode subrequest headers
+    write_headers(request.headers(), dst);
+    extend(dst, b"\r\n");
+    extend(dst, b"\r\n");
+}
+
+fn parse_response_part(remaining: &mut &[u8], results: &mut Vec<Result<Path>>, paths: &[Path]) -> Result<()> {
+
+    let invalid_response = |msg: &str| {
+        Error::InvalidBulkDeleteResponse {
+            reason: msg.to_string()
+        }
+    };
+
+    // Parse part headers and retrieve part id
+    let mut headers = [httparse::EMPTY_HEADER; 4];
+    let id = match httparse::parse_headers(remaining, &mut headers) {
+        Ok(httparse::Status::Complete((pos, headers))) => {
+            *remaining = &remaining[pos..];
+            headers
+                .iter()
+                .find(|h| h.name.to_lowercase() == "content-id")
+                .and_then(|h| std::str::from_utf8(h.value).ok())
+                .and_then(|v| v.parse::<usize>().ok())
+        }
+        _ => {
+            return Err(invalid_response("unable to parse parse headers").into())
+        }
+    };
+
+    // Parse part response headers
+    let mut headers = [httparse::EMPTY_HEADER; 10];
+    let mut part_response = httparse::Response::new(&mut headers);
+    let content_length = match part_response.parse(remaining) {
+        Ok(httparse::Status::Complete(pos)) => {
+            *remaining = &remaining[pos..];
+            part_response
+                .headers
+                .iter()
+                .find(|h| h.name.to_lowercase() == "content-length")
+                .and_then(|h| std::str::from_utf8(h.value).ok())
+                .and_then(|v| v.parse::<usize>().ok())
+                .unwrap_or_default()
+        }
+        _ => {
+            return Err(invalid_response("unable to parse response").into())
+        }
+    };
+
+    let part_body = &remaining[..content_length];
+
+    // Set slice past part body
+    *remaining = &remaining[content_length..];
+
+    if !part_body.is_empty() {
+        // Skips CRLF after body if non-empty
+        *remaining = remaining
+            .strip_prefix(b"\r\n")
+            .ok_or_else(|| invalid_response("missing part separator"))?;
+    }
+
+    match (id, part_response.code) {
+        (Some(_id), Some(code)) if (200..300).contains(&code) => {}
+        (Some(id), Some(code)) => {
+            results[id] = Err(Error::DeleteFailed {
+                path: paths[id].as_ref().to_string(),
+                code: code.to_string(),
+                reason: part_response.reason
+                    .unwrap_or_default()
+                    .to_string(),
+            }.into());
+        }
+        (None, Some(code)) => {
+            return Err(Error::BulkDeleteRequestInvalidInput {
+                code: code.to_string(),
+                reason: part_response.reason
+                    .unwrap_or_default()
+                    .to_string(),
+            }.into())
+        }
+        _ => {
+            return Err(invalid_response("missing part response status code").into())
+        }
+    }
+
+    Ok(())
+}
+
+
 #[derive(Debug)]
 pub(crate) struct AzureClient {
     config: AzureConfig,
@@ -378,6 +558,104 @@ impl AzureClient {
             })?;
 
         Ok(())
+    }
+
+    pub async fn bulk_delete_request(&self, paths: Vec<Path>) -> Result<Vec<Result<Path>>> {
+        if paths.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let credential = self.get_credential().await?;
+
+        let boundary = format!("batch_{}", uuid::Uuid::new_v4());
+
+        let mut body_bytes = Vec::with_capacity(paths.len() * 256);
+
+        for (idx, path) in paths.iter().enumerate() {
+            let url = self.config.path_url(path);
+
+            // Build subrequest with proper authorization
+            let request = self.client.request(Method::DELETE, url)
+                .header(CONTENT_LENGTH, HeaderValue::from(0))
+                .with_azure_authorization(&credential, &self.config.account)
+                .build().unwrap();
+
+            // Url for part requests must be relative and without base
+            let relative_url = self.config.service.make_relative(request.url()).unwrap();
+
+            serialize_part_request(&mut body_bytes, &boundary, idx, request, relative_url)
+        }
+
+        // Encode end marker
+        extend(&mut body_bytes, b"--");
+        extend(&mut body_bytes, boundary.as_bytes());
+        extend(&mut body_bytes, b"--");
+        extend(&mut body_bytes, b"\r\n");
+
+        // Send multipart request
+        let url = self.config.path_url(&Path::from("/"));
+        let batch_response = self.client.request(Method::POST, url)
+            .query(&[("restype", "container"), ("comp", "batch")])
+            .header(CONTENT_TYPE, HeaderValue::from_str(format!("multipart/mixed; boundary={}", boundary).as_str()).unwrap())
+            .header(CONTENT_LENGTH, HeaderValue::from(body_bytes.len()))
+            .body(body_bytes)
+            .with_azure_authorization(&credential, &self.config.account)
+            .send_retry(&self.config.retry_config)
+            .await
+            .context(BulkDeleteRequestSnafu {})?;
+
+        let invalid_response = |msg: &str| {
+            Error::InvalidBulkDeleteResponse {
+                reason: msg.to_string()
+            }
+        };
+
+        let content_type = batch_response
+            .headers()
+            .get(CONTENT_TYPE)
+            .ok_or_else(|| invalid_response("missing Content-Type"))?;
+
+        let boundary = content_type
+            .as_ref()
+            .strip_prefix(b"multipart/mixed; boundary=")
+            .ok_or_else(|| invalid_response("invalid Content-Type value"))?
+            .to_vec();
+
+        let start_marker = [
+            b"--".as_slice(),
+            boundary.as_slice(),
+            b"\r\n"
+        ].concat();
+
+        let end_marker = [
+            b"--".as_slice(),
+            boundary.as_slice(),
+            b"--"
+        ].concat();
+
+        let response_body = batch_response
+            .bytes()
+            .await
+            .context(BulkDeleteRequestBodySnafu {})?;
+
+        let mut results: Vec<Result<Path>> = paths.iter().cloned().map(Ok).collect();
+
+        let mut remaining = response_body.as_ref();
+
+        loop {
+            // Check for part marker
+            remaining = remaining
+                .strip_prefix(start_marker.as_slice())
+                .ok_or_else(|| invalid_response("missing start marker for part"))?;
+
+            parse_response_part(&mut remaining, &mut results, &paths)?;
+
+            if remaining == end_marker {
+                break;
+            }
+        }
+
+        Ok(results)
     }
 
     /// Make an Azure Copy request <https://docs.microsoft.com/en-us/rest/api/storageservices/copy-blob>
