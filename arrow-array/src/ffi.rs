@@ -111,7 +111,7 @@ use arrow_schema::{ArrowError, DataType, UnionMode};
 
 use crate::array::ArrayRef;
 
-type Result<T> = std::result::Result<T, ArrowError>; // TODO(alexandreyc): we should probably move Result to arrow_schema
+type Result<T> = std::result::Result<T, ArrowError>;
 
 /// Exports an array to raw pointers of the C Data Interface provided by the consumer.
 /// # Safety

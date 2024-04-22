@@ -71,7 +71,7 @@ use crate::array::StructArray;
 use crate::ffi::from_ffi_and_data_type;
 use crate::record_batch::{RecordBatch, RecordBatchReader};
 
-type Result<T> = std::result::Result<T, ArrowError>; // TODO(alexandreyc): we should probably move Result to arrow_schema
+type Result<T> = std::result::Result<T, ArrowError>;
 
 const ENOMEM: i32 = 12;
 const EIO: i32 = 5;
