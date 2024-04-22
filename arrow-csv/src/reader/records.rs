@@ -56,6 +56,12 @@ pub struct RecordDecoder {
     ///
     /// We track this independently of Vec to avoid re-zeroing memory
     data_len: usize,
+
+    /// Whether rows with less than expected columns are considered valid
+    ///
+    /// Default value is false
+    /// When enabled fills in missing columns with null
+    truncated_rows: bool,
 }
 
 impl RecordDecoder {
@@ -70,6 +76,7 @@ impl RecordDecoder {
             data_len: 0,
             data: vec![],
             num_rows: 0,
+            truncated_rows: false,
         }
     }
 
@@ -127,10 +134,19 @@ impl RecordDecoder {
                     }
                     ReadRecordResult::Record => {
                         if self.current_field != self.num_columns {
-                            return Err(ArrowError::CsvError(format!(
-                                "incorrect number of fields for line {}, expected {} got {}",
-                                self.line_number, self.num_columns, self.current_field
-                            )));
+                            if self.truncated_rows && self.current_field < self.num_columns {
+                                // If the number of fields is less than expected, pad with nulls
+                                let fill_count = self.num_columns - self.current_field;
+                                let fill_value = self.offsets[self.offsets_len - 1];
+                                self.offsets[self.offsets_len..self.offsets_len + fill_count]
+                                    .fill(fill_value);
+                                self.offsets_len += fill_count;
+                            } else {
+                                return Err(ArrowError::CsvError(format!(
+                                    "incorrect number of fields for line {}, expected {} got {}",
+                                    self.line_number, self.num_columns, self.current_field
+                                )));
+                            }
                         }
                         read += 1;
                         self.current_field = 0;
@@ -170,6 +186,11 @@ impl RecordDecoder {
         self.offsets_len = 1;
         self.data_len = 0;
         self.num_rows = 0;
+    }
+
+    /// Sets the decoder to allow rows with less than the expected number columns
+    pub fn set_truncated_rows(&mut self, allow: bool) {
+        self.truncated_rows = allow;
     }
 
     /// Flushes the current contents of the reader
@@ -357,6 +378,16 @@ mod tests {
         let mut decoder = RecordDecoder::new(Reader::new(), 1);
         let (read, bytes) = decoder.decode(csv.as_bytes(), 3).unwrap();
         assert_eq!(read, 2);
+        assert_eq!(bytes, csv.len());
+    }
+
+    #[test]
+    fn test_truncated_rows() {
+        let csv = "a,b\nv\n,1\n,2\n,3\n";
+        let mut decoder = RecordDecoder::new(Reader::new(), 2);
+        decoder.set_truncated_rows(true);
+        let (read, bytes) = decoder.decode(csv.as_bytes(), 5).unwrap();
+        assert_eq!(read, 5);
         assert_eq!(bytes, csv.len());
     }
 }
