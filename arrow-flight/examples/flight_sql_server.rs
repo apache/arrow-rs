@@ -54,7 +54,7 @@ use arrow_flight::utils::batches_to_flight_data;
 use arrow_flight::{
     flight_service_server::FlightService, flight_service_server::FlightServiceServer, Action,
     FlightData, FlightDescriptor, FlightEndpoint, FlightInfo, HandshakeRequest, HandshakeResponse,
-    IpcMessage, Location, SchemaAsIpc, Ticket,
+    IpcMessage, SchemaAsIpc, Ticket,
 };
 use arrow_ipc::writer::IpcWriteOptions;
 use arrow_schema::{ArrowError, DataType, Field, Schema};
