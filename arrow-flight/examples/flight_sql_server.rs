@@ -108,9 +108,7 @@ static INSTANCE_XBDC_DATA: Lazy<XdbcTypeInfoData> = Lazy::new(|| {
 static TABLES: Lazy<Vec<&'static str>> = Lazy::new(|| vec!["flight_sql.example.table"]);
 
 #[derive(Clone)]
-pub struct FlightSqlServiceImpl {
-    location: String,
-}
+pub struct FlightSqlServiceImpl {}
 
 impl FlightSqlServiceImpl {
     fn check_token<T>(&self, req: &Request<T>) -> Result<(), Status> {
@@ -252,9 +250,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
         let schema = (*batch.schema()).clone();
         let num_rows = batch.num_rows();
         let num_bytes = batch.get_array_memory_size();
-        let loc = Location {
-            uri: self.location.clone(),
-        };
+
         let fetch = FetchResults {
             handle: handle.to_string(),
         };
@@ -262,7 +258,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
         let ticket = Ticket { ticket: buf };
         let endpoint = FlightEndpoint {
             ticket: Some(ticket),
-            location: vec![loc],
+            location: vec![],
             expiration_time: None,
             app_metadata: vec![].into(),
         };
@@ -746,9 +742,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let key = std::fs::read_to_string("arrow-flight/examples/data/server.key")?;
         let client_ca = std::fs::read_to_string("arrow-flight/examples/data/client_ca.pem")?;
 
-        let svc = FlightServiceServer::new(FlightSqlServiceImpl {
-            location: format!("grpc+tls://{}", addr_str),
-        });
+        let svc = FlightServiceServer::new(FlightSqlServiceImpl {});
         let tls_config = ServerTlsConfig::new()
             .identity(Identity::from_pem(&cert, &key))
             .client_ca_root(Certificate::from_pem(&client_ca));
@@ -759,9 +753,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .serve(addr)
             .await?;
     } else {
-        let svc = FlightServiceServer::new(FlightSqlServiceImpl {
-            location: format!("grpc+tcp://{}", addr_str),
-        });
+        let svc = FlightServiceServer::new(FlightSqlServiceImpl {});
 
         Server::builder().add_service(svc).serve(addr).await?;
     }
@@ -845,9 +837,7 @@ mod tests {
         let uds = UnixListener::bind(path.clone()).unwrap();
         let stream = UnixListenerStream::new(uds);
 
-        let service = FlightSqlServiceImpl {
-            location: format!("grpc+unix://{}", path.clone()),
-        };
+        let service = FlightSqlServiceImpl {};
         let serve_future = Server::builder()
             .add_service(FlightServiceServer::new(service))
             .serve_with_incoming(stream);
@@ -877,9 +867,7 @@ mod tests {
         let (incoming, addr) = bind_tcp().await;
         let uri = format!("http://{}:{}", addr.ip(), addr.port());
 
-        let service = FlightSqlServiceImpl {
-            location: format!("grpc+tcp://{}:{}", addr.ip(), addr.port()),
-        };
+        let service = FlightSqlServiceImpl {};
         let serve_future = Server::builder()
             .add_service(FlightServiceServer::new(service))
             .serve_with_incoming(incoming);
@@ -913,9 +901,7 @@ mod tests {
         let (incoming, addr) = bind_tcp().await;
         let uri = format!("https://{}:{}", addr.ip(), addr.port());
 
-        let svc = FlightServiceServer::new(FlightSqlServiceImpl {
-            location: format!("grc+tls://{}:{}", addr.ip(), addr.port()),
-        });
+        let svc = FlightServiceServer::new(FlightSqlServiceImpl {});
 
         let serve_future = Server::builder()
             .tls_config(tls_config)
