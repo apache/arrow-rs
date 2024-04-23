@@ -147,18 +147,17 @@ pub fn timestamp_ms_to_datetime(v: i64) -> Option<DateTime<Utc>> {
     )
 }
 
-/// converts a `i64` representing a `timestamp(us)` to [`NaiveDateTime`]
+/// converts a `i64` representing a `timestamp(us)` to [`DateTime<Utc>`]
 #[inline]
-pub fn timestamp_us_to_datetime(v: i64) -> Option<NaiveDateTime> {
+pub fn timestamp_us_to_datetime(v: i64) -> Option<DateTime<Utc>> {
     let (sec, micro_sec) = split_second(v, MICROSECONDS);
 
-    let datetime = DateTime::from_timestamp(
+    DateTime::from_timestamp(
         // extract seconds from microseconds
         sec,
         // discard extracted seconds and convert microseconds to nanoseconds
         micro_sec * MILLISECONDS as u32,
-    )?;
-    Some(datetime.naive_utc())
+    )
 }
 
 /// converts a `i64` representing a `timestamp(ns)` to [`NaiveDateTime`]
@@ -212,7 +211,7 @@ pub fn as_datetime<T: ArrowPrimitiveType>(v: i64) -> Option<NaiveDateTime> {
         DataType::Timestamp(unit, _) => match unit {
             TimeUnit::Second => timestamp_s_to_datetime(v).map(|x| x.naive_utc()),
             TimeUnit::Millisecond => timestamp_ms_to_datetime(v).map(|x| x.naive_utc()),
-            TimeUnit::Microsecond => timestamp_us_to_datetime(v),
+            TimeUnit::Microsecond => timestamp_us_to_datetime(v).map(|x| x.naive_utc()),
             TimeUnit::Nanosecond => timestamp_ns_to_datetime(v),
         },
         // interval is not yet fully documented [ARROW-3097]
@@ -294,12 +293,12 @@ mod tests {
     fn negative_input_timestamp_us_to_datetime() {
         assert_eq!(
             timestamp_us_to_datetime(-1),
-            DateTime::from_timestamp(-1, 999_999_000).map(|x| x.naive_utc())
+            DateTime::from_timestamp(-1, 999_999_000)
         );
 
         assert_eq!(
             timestamp_us_to_datetime(-1_000_001),
-            DateTime::from_timestamp(-2, 999_999_000).map(|x| x.naive_utc())
+            DateTime::from_timestamp(-2, 999_999_000)
         );
     }
 
