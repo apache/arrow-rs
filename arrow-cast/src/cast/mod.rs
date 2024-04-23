@@ -5044,8 +5044,8 @@ mod tests {
         let b = cast(&array, &DataType::Utf8).unwrap();
         let c = b.as_any().downcast_ref::<StringArray>().unwrap();
         assert_eq!(&DataType::Utf8, c.data_type());
-        assert_eq!("1997-05-19T00:00:00", c.value(0));
-        assert_eq!("2018-12-25T00:00:00", c.value(1));
+        assert_eq!("1997-05-19T00:00:00Z", c.value(0));
+        assert_eq!("2018-12-25T00:00:00Z", c.value(1));
     }
 
     #[test]

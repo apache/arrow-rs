@@ -566,7 +566,7 @@ macro_rules! temporal_display {
 
 #[inline]
 fn date32_to_date(value: i32) -> Option<NaiveDate> {
-    Some(date32_to_datetime(value)?.date())
+    Some(date32_to_datetime(value)?.date_naive())
 }
 
 temporal_display!(date32_to_date, date_format, Date32Type);
