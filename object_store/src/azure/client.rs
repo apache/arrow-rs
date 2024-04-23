@@ -394,6 +394,18 @@ fn parse_response_part(
 
     match (id, part_response.code) {
         (Some(_id), Some(code)) if (200..300).contains(&code) => {}
+        (Some(id), Some(404)) => {
+            results[id] = Err(crate::Error::NotFound {
+                path: paths[id].as_ref().to_string(),
+                source: Error::DeleteFailed {
+                    path: paths[id].as_ref().to_string(),
+                    code: 404.to_string(),
+                    reason: part_response.reason.unwrap_or_default().to_string(),
+                }
+                .into(),
+            }
+            .into());
+        }
         (Some(id), Some(code)) => {
             results[id] = Err(Error::DeleteFailed {
                 path: paths[id].as_ref().to_string(),
