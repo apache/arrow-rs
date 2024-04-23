@@ -372,7 +372,7 @@ impl ExtractDatePartExt for PrimitiveArray<TimestampMicrosecondType> {
             let map_func = get_date_time_part_extract_fn(part);
             self.unary_opt(|d| {
                 timestamp_us_to_datetime(d)
-                    .map(|c| Utc.from_utc_datetime(&c).with_timezone(&tz))
+                    .map(|d| d.with_timezone(&tz))
                     .map(map_func)
             })
         } else {
