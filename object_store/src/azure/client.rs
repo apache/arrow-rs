@@ -403,8 +403,7 @@ fn parse_response_part(
                     reason: part_response.reason.unwrap_or_default().to_string(),
                 }
                 .into(),
-            }
-            .into());
+            });
         }
         (Some(id), Some(code)) => {
             results[id] = Err(Error::DeleteFailed {
