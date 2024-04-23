@@ -732,7 +732,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
 /// This example shows how to run a FlightSql server
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let addr_str = "127.0.0.1:50051";
+    let addr_str = "0.0.0.0:50051";
     let addr = addr_str.parse()?;
 
     println!("Listening on {:?}", addr);
