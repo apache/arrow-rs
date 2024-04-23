@@ -40,15 +40,15 @@ pub const NANOSECONDS_IN_DAY: i64 = SECONDS_IN_DAY * NANOSECONDS;
 /// Number of days between 0001-01-01 and 1970-01-01
 pub const EPOCH_DAYS_FROM_CE: i32 = 719_163;
 
-/// converts a `i32` representing a `date32` to [`NaiveDateTime`]
+/// converts a `i32` representing a `date32` to [`DateTime<Utc>`]
 #[inline]
-pub fn date32_to_datetime(v: i32) -> Option<NaiveDateTime> {
-    Some(DateTime::from_timestamp(v as i64 * SECONDS_IN_DAY, 0)?.naive_utc())
+pub fn date32_to_datetime(v: i32) -> Option<DateTime<Utc>> {
+    DateTime::from_timestamp(v as i64 * SECONDS_IN_DAY, 0)
 }
 
-/// converts a `i64` representing a `date64` to [`NaiveDateTime`]
+/// converts a `i64` representing a `date64` to [`DateTime<Utc>`]
 #[inline]
-pub fn date64_to_datetime(v: i64) -> Option<NaiveDateTime> {
+pub fn date64_to_datetime(v: i64) -> Option<DateTime<Utc>> {
     let (sec, milli_sec) = split_second(v, MILLISECONDS);
 
     let datetime = DateTime::from_timestamp(
@@ -57,7 +57,7 @@ pub fn date64_to_datetime(v: i64) -> Option<NaiveDateTime> {
         // discard extracted seconds and convert milliseconds to nanoseconds
         milli_sec * MICROSECONDS as u32,
     )?;
-    Some(datetime.naive_utc())
+    Some(datetime)
 }
 
 /// converts a `i32` representing a `time32(s)` to [`NaiveDateTime`]
@@ -207,8 +207,8 @@ pub fn duration_ns_to_duration(v: i64) -> Duration {
 /// Converts an [`ArrowPrimitiveType`] to [`NaiveDateTime`]
 pub fn as_datetime<T: ArrowPrimitiveType>(v: i64) -> Option<NaiveDateTime> {
     match T::DATA_TYPE {
-        DataType::Date32 => date32_to_datetime(v as i32),
-        DataType::Date64 => date64_to_datetime(v),
+        DataType::Date32 => date32_to_datetime(v as i32).map(|x| x.naive_utc()),
+        DataType::Date64 => date64_to_datetime(v).map(|x| x.naive_utc()),
         DataType::Time32(_) | DataType::Time64(_) => None,
         DataType::Timestamp(unit, _) => match unit {
             TimeUnit::Second => timestamp_s_to_datetime(v),
@@ -321,12 +321,12 @@ mod tests {
     fn negative_input_date64_to_datetime() {
         assert_eq!(
             date64_to_datetime(-1),
-            DateTime::from_timestamp(-1, 999_000_000).map(|x| x.naive_utc())
+            DateTime::from_timestamp(-1, 999_000_000)
         );
 
         assert_eq!(
             date64_to_datetime(-1_001),
-            DateTime::from_timestamp(-2, 999_000_000).map(|x| x.naive_utc())
+            DateTime::from_timestamp(-2, 999_000_000)
         );
     }
 
