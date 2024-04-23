@@ -128,10 +128,10 @@ pub fn time_to_time64ns(v: NaiveTime) -> i64 {
     v.num_seconds_from_midnight() as i64 * NANOSECONDS + v.nanosecond() as i64
 }
 
-/// converts a `i64` representing a `timestamp(s)` to [`NaiveDateTime`]
+/// converts a `i64` representing a `timestamp(s)` to [`DateTime<Utc>`]
 #[inline]
-pub fn timestamp_s_to_datetime(v: i64) -> Option<NaiveDateTime> {
-    Some(DateTime::from_timestamp(v, 0)?.naive_utc())
+pub fn timestamp_s_to_datetime(v: i64) -> Option<DateTime<Utc>> {
+    DateTime::from_timestamp(v, 0)
 }
 
 /// converts a `i64` representing a `timestamp(ms)` to [`NaiveDateTime`]
@@ -211,7 +211,7 @@ pub fn as_datetime<T: ArrowPrimitiveType>(v: i64) -> Option<NaiveDateTime> {
         DataType::Date64 => date64_to_datetime(v).map(|x| x.naive_utc()),
         DataType::Time32(_) | DataType::Time64(_) => None,
         DataType::Timestamp(unit, _) => match unit {
-            TimeUnit::Second => timestamp_s_to_datetime(v),
+            TimeUnit::Second => timestamp_s_to_datetime(v).map(|x| x.naive_utc()),
             TimeUnit::Millisecond => timestamp_ms_to_datetime(v),
             TimeUnit::Microsecond => timestamp_us_to_datetime(v),
             TimeUnit::Nanosecond => timestamp_ns_to_datetime(v),
