@@ -63,6 +63,7 @@ pub mod flight_descriptor {
 }
 
 /// Low Level [tonic] [`FlightServiceClient`](gen::flight_service_client::FlightServiceClient).
+#[cfg(feature = "client")]
 pub mod flight_service_client {
     use super::gen;
     pub use gen::flight_service_client::FlightServiceClient;
@@ -76,8 +77,11 @@ pub mod flight_service_server {
     pub use gen::flight_service_server::FlightServiceServer;
 }
 
-/// Mid Level [`FlightClient`]
+/// Mid Level [`FlightClient`].
+#[cfg(feature = "client")]
 pub mod client;
+
+#[cfg(feature = "client")]
 pub use client::FlightClient;
 
 /// Decoder to create [`RecordBatch`](arrow_array::RecordBatch) streams from [`FlightData`] streams.

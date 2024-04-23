@@ -29,6 +29,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // protoc in unbuntu builder needs this option
         .protoc_arg("--experimental_allow_proto3_optional")
         .out_dir("src")
+        .client_mod_attribute("arrow.flight.protocol", "#[cfg(feature = \"client\")]")
         .compile_with_config(prost_config(), &[proto_path], &[proto_dir])?;
 
     // read file contents to string
