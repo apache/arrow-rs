@@ -60,13 +60,13 @@ pub fn date64_to_datetime(v: i64) -> Option<DateTime<Utc>> {
     Some(datetime)
 }
 
-/// converts a `i32` representing a `time32(s)` to [`NaiveDateTime`]
+/// converts a `i32` representing a `time32(s)` to [`NaiveTime`]
 #[inline]
 pub fn time32s_to_time(v: i32) -> Option<NaiveTime> {
     NaiveTime::from_num_seconds_from_midnight_opt(v as u32, 0)
 }
 
-/// converts a `i32` representing a `time32(ms)` to [`NaiveDateTime`]
+/// converts a `i32` representing a `time32(ms)` to [`NaiveTime`]
 #[inline]
 pub fn time32ms_to_time(v: i32) -> Option<NaiveTime> {
     let v = v as i64;
@@ -79,7 +79,7 @@ pub fn time32ms_to_time(v: i32) -> Option<NaiveTime> {
     )
 }
 
-/// converts a `i64` representing a `time64(us)` to [`NaiveDateTime`]
+/// converts a `i64` representing a `time64(us)` to [`NaiveTime`]
 #[inline]
 pub fn time64us_to_time(v: i64) -> Option<NaiveTime> {
     NaiveTime::from_num_seconds_from_midnight_opt(
@@ -91,7 +91,7 @@ pub fn time64us_to_time(v: i64) -> Option<NaiveTime> {
     )
 }
 
-/// converts a `i64` representing a `time64(ns)` to [`NaiveDateTime`]
+/// converts a `i64` representing a `time64(ns)` to [`NaiveTime`]
 #[inline]
 pub fn time64ns_to_time(v: i64) -> Option<NaiveTime> {
     NaiveTime::from_num_seconds_from_midnight_opt(
