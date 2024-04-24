@@ -80,7 +80,7 @@ tower = "0.4.13"
 
 [[example]]
 name = "flight_sql_server"
-required-features = ["flight-sql-experimental", "tls"]
+required-features = ["client", "flight-sql-experimental", "tls"]
 
 [[bin]]
 name = "flight_sql_client"
