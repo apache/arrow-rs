@@ -555,7 +555,7 @@ fn timestamp_to_date32<T: ArrowTimestampType>(
         None => array.try_unary(|x| {
             as_datetime::<T>(x)
                 .ok_or_else(|| err(x))
-                .map(|d| Date32Type::from_naive_date(d.date()))
+                .map(|d| Date32Type::from_naive_date(d.date_naive()))
         })?,
     };
     Ok(Arc::new(array))
@@ -2196,7 +2196,7 @@ fn adjust_timestamp_to_timezone<T: ArrowTimestampType>(
     cast_options: &CastOptions,
 ) -> Result<PrimitiveArray<Int64Type>, ArrowError> {
     let adjust = |o| {
-        let local = as_datetime::<T>(o)?;
+        let local = as_datetime::<T>(o)?.naive_local();
         let offset = to_tz.offset_from_local_datetime(&local).single()?;
         T::make_value(local - offset.fix())
     };

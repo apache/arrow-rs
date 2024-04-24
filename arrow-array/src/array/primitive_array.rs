@@ -1152,7 +1152,7 @@ where
     /// If a data type cannot be converted to `NaiveDateTime`, a `None` is returned.
     /// A valid value is expected, thus the user should first check for validity.
     pub fn value_as_datetime(&self, i: usize) -> Option<NaiveDateTime> {
-        as_datetime::<T>(i64::from(self.value(i)))
+        as_datetime::<T>(i64::from(self.value(i))).map(|datetime| datetime.naive_utc())
     }
 
     /// Returns value as a chrono `NaiveDateTime`, handling time resolution with the provided tz
@@ -1966,7 +1966,7 @@ mod tests {
         let arr: PrimitiveArray<TimestampMillisecondType> =
             TimestampMillisecondArray::from(vec![1546214400000, 1546214400000, -1546214400000]);
         assert_eq!(
-            "PrimitiveArray<Timestamp(Millisecond, None)>\n[\n  2018-12-31T00:00:00,\n  2018-12-31T00:00:00,\n  1921-01-02T00:00:00,\n]",
+            "PrimitiveArray<Timestamp(Millisecond, None)>\n[\n  2018-12-31T00:00:00Z,\n  2018-12-31T00:00:00Z,\n  1921-01-02T00:00:00Z,\n]",
             format!("{arr:?}")
         );
     }
@@ -2004,7 +2004,7 @@ mod tests {
         println!("{arr:?}");
 
         assert_eq!(
-            "PrimitiveArray<Timestamp(Millisecond, Some(\"Asia/Taipei\"))>\n[\n  2018-12-31T00:00:00 (Unknown Time Zone 'Asia/Taipei'),\n  2018-12-31T00:00:00 (Unknown Time Zone 'Asia/Taipei'),\n  1921-01-02T00:00:00 (Unknown Time Zone 'Asia/Taipei'),\n]",
+            "PrimitiveArray<Timestamp(Millisecond, Some(\"Asia/Taipei\"))>\n[\n  2018-12-31T00:00:00Z (Unknown Time Zone 'Asia/Taipei'),\n  2018-12-31T00:00:00Z (Unknown Time Zone 'Asia/Taipei'),\n  1921-01-02T00:00:00Z (Unknown Time Zone 'Asia/Taipei'),\n]",
             format!("{arr:?}")
         );
     }
@@ -2026,7 +2026,7 @@ mod tests {
             TimestampMillisecondArray::from(vec![1546214400000, 1546214400000, -1546214400000])
                 .with_timezone("xxx".to_string());
         assert_eq!(
-            "PrimitiveArray<Timestamp(Millisecond, Some(\"xxx\"))>\n[\n  2018-12-31T00:00:00 (Unknown Time Zone 'xxx'),\n  2018-12-31T00:00:00 (Unknown Time Zone 'xxx'),\n  1921-01-02T00:00:00 (Unknown Time Zone 'xxx'),\n]",
+            "PrimitiveArray<Timestamp(Millisecond, Some(\"xxx\"))>\n[\n  2018-12-31T00:00:00Z (Unknown Time Zone 'xxx'),\n  2018-12-31T00:00:00Z (Unknown Time Zone 'xxx'),\n  1921-01-02T00:00:00Z (Unknown Time Zone 'xxx'),\n]",
             format!("{arr:?}")
         );
     }

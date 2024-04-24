@@ -20,7 +20,7 @@
 use crate::timezone::Tz;
 use crate::ArrowPrimitiveType;
 use arrow_schema::{DataType, TimeUnit};
-use chrono::{DateTime, Duration, NaiveDate, NaiveDateTime, NaiveTime, TimeZone, Timelike, Utc};
+use chrono::{DateTime, Duration, NaiveDate, NaiveTime, Timelike, Utc};
 
 /// Number of seconds in a day
 pub const SECONDS_IN_DAY: i64 = 86_400;
@@ -201,17 +201,17 @@ pub fn duration_ns_to_duration(v: i64) -> Duration {
     Duration::nanoseconds(v)
 }
 
-/// Converts an [`ArrowPrimitiveType`] to [`NaiveDateTime`]
-pub fn as_datetime<T: ArrowPrimitiveType>(v: i64) -> Option<NaiveDateTime> {
+/// Converts an [`ArrowPrimitiveType`] to [`DateTime<Utc>`]
+pub fn as_datetime<T: ArrowPrimitiveType>(v: i64) -> Option<DateTime<Utc>> {
     match T::DATA_TYPE {
-        DataType::Date32 => date32_to_datetime(v as i32).map(|x| x.naive_utc()),
-        DataType::Date64 => date64_to_datetime(v).map(|x| x.naive_utc()),
+        DataType::Date32 => date32_to_datetime(v as i32),
+        DataType::Date64 => date64_to_datetime(v),
         DataType::Time32(_) | DataType::Time64(_) => None,
         DataType::Timestamp(unit, _) => match unit {
-            TimeUnit::Second => timestamp_s_to_datetime(v).map(|x| x.naive_utc()),
-            TimeUnit::Millisecond => timestamp_ms_to_datetime(v).map(|x| x.naive_utc()),
-            TimeUnit::Microsecond => timestamp_us_to_datetime(v).map(|x| x.naive_utc()),
-            TimeUnit::Nanosecond => timestamp_ns_to_datetime(v).map(|x| x.naive_utc()),
+            TimeUnit::Second => timestamp_s_to_datetime(v),
+            TimeUnit::Millisecond => timestamp_ms_to_datetime(v),
+            TimeUnit::Microsecond => timestamp_us_to_datetime(v),
+            TimeUnit::Nanosecond => timestamp_ns_to_datetime(v),
         },
         // interval is not yet fully documented [ARROW-3097]
         DataType::Interval(_) => None,
@@ -221,13 +221,12 @@ pub fn as_datetime<T: ArrowPrimitiveType>(v: i64) -> Option<NaiveDateTime> {
 
 /// Converts an [`ArrowPrimitiveType`] to [`DateTime<Tz>`]
 pub fn as_datetime_with_timezone<T: ArrowPrimitiveType>(v: i64, tz: Tz) -> Option<DateTime<Tz>> {
-    let naive = as_datetime::<T>(v)?;
-    Some(Utc.from_utc_datetime(&naive).with_timezone(&tz))
+    as_datetime::<T>(v).map(|d| d.with_timezone(&tz))
 }
 
 /// Converts an [`ArrowPrimitiveType`] to [`NaiveDate`]
 pub fn as_date<T: ArrowPrimitiveType>(v: i64) -> Option<NaiveDate> {
-    as_datetime::<T>(v).map(|datetime| datetime.date())
+    as_datetime::<T>(v).map(|datetime| datetime.date_naive())
 }
 
 /// Converts an [`ArrowPrimitiveType`] to [`NaiveTime`]

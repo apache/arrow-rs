@@ -1212,9 +1212,9 @@ mod tests {
         assert_eq!(
             &format_array(r4.as_ref()),
             &[
-                "1977-11-01 00:00:00".to_string(),
-                "2008-08-01 04:00:20".to_string(),
-                "1966-09-30 04:23:20".to_string()
+                "1977-11-01 00:00:00 UTC".to_string(),
+                "2008-08-01 04:00:20 UTC".to_string(),
+                "1966-09-30 04:23:20 UTC".to_string()
             ]
         );
 
@@ -1230,9 +1230,9 @@ mod tests {
         assert_eq!(
             &format_array(r6.as_ref()),
             &[
-                "1970-01-06 00:07:34".to_string(),
-                "2010-02-26 04:00:20".to_string(),
-                "1960-02-06 04:23:16".to_string()
+                "1970-01-06 00:07:34 UTC".to_string(),
+                "2010-02-26 04:00:20 UTC".to_string(),
+                "1960-02-06 04:23:16 UTC".to_string()
             ]
         );
 
@@ -1248,9 +1248,9 @@ mod tests {
         assert_eq!(
             &format_array(r8.as_ref()),
             &[
-                "1998-10-04 23:59:17".to_string(),
-                "1960-09-29 04:00:33".to_string(),
-                "1960-07-02 04:31:33".to_string()
+                "1998-10-04 23:59:17 UTC".to_string(),
+                "1960-09-29 04:00:33 UTC".to_string(),
+                "1960-07-02 04:31:33 UTC".to_string()
             ]
         );
 
@@ -1259,9 +1259,9 @@ mod tests {
         assert_eq!(
             &format_array(r9.as_ref()),
             &[
-                "1970-01-02 00:00:00".to_string(),
-                "2010-04-02 04:00:20".to_string(),
-                "1960-01-31 04:23:20".to_string()
+                "1970-01-02 00:00:00 UTC".to_string(),
+                "2010-04-02 04:00:20 UTC".to_string(),
+                "1960-01-31 04:23:20 UTC".to_string()
             ]
         );
     }

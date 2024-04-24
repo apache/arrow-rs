@@ -520,7 +520,7 @@ macro_rules! timestamp_display {
                         value,
                         self.data_type()
                     ))
-                })?;
+                })?.naive_utc();
 
                 write_timestamp(f, naive, s.0, s.1.clone())
             }
