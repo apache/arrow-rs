@@ -19,7 +19,7 @@
 
 use crate::path::Path;
 use crate::{
-    Attributes, ObjectMeta, ObjectStore, PutMultipartOpts, PutOptions, PutPayloadMut,
+    Attributes, ObjectMeta, ObjectStore, PutMultipartOpts, PutOptions, PutPayloadMut, TagSet,
     WriteMultipart,
 };
 use bytes::Bytes;
@@ -221,6 +221,7 @@ pub struct BufWriter {
     capacity: usize,
     max_concurrency: usize,
     attributes: Option<Attributes>,
+    tags: Option<TagSet>,
     state: BufWriterState,
     store: Arc<dyn ObjectStore>,
 }
@@ -257,6 +258,7 @@ impl BufWriter {
             store,
             max_concurrency: 8,
             attributes: None,
+            tags: None,
             state: BufWriterState::Buffer(path, PutPayloadMut::new()),
         }
     }
@@ -275,6 +277,14 @@ impl BufWriter {
     pub fn with_attributes(self, attributes: Attributes) -> Self {
         Self {
             attributes: Some(attributes),
+            ..self
+        }
+    }
+
+    /// Set the tags of the uploaded object
+    pub fn with_tags(self, tags: TagSet) -> Self {
+        Self {
+            tags: Some(tags),
             ..self
         }
     }
@@ -321,7 +331,7 @@ impl AsyncWrite for BufWriter {
                         let path = std::mem::take(path);
                         let opts = PutMultipartOpts {
                             attributes: self.attributes.take().unwrap_or_default(),
-                            ..Default::default()
+                            tags: self.tags.take().unwrap_or_default(),
                         };
                         let store = Arc::clone(&self.store);
                         self.state = BufWriterState::Prepare(Box::pin(async move {
@@ -365,6 +375,7 @@ impl AsyncWrite for BufWriter {
                     let path = std::mem::take(p);
                     let opts = PutOptions {
                         attributes: self.attributes.take().unwrap_or_default(),
+                        tags: self.tags.take().unwrap_or_default(),
                         ..Default::default()
                     };
                     let store = Arc::clone(&self.store);
@@ -486,6 +497,7 @@ mod tests {
         }
     }
 
+    // Note: `BufWriter::with_tags` functionality is tested in `crate::tests::tagging`
     #[tokio::test]
     async fn test_buf_writer() {
         let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
