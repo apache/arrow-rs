@@ -956,7 +956,7 @@ impl ArrayData {
                     size, i, offset, self.data_type
                 )));
             }
-            if size > values_length - offset {
+            if size + offset > values_length {
                 return Err(ArrowError::InvalidArgumentError(format!(
                     "Size {} at index {} is larger than the remaining values for {}",
                     size, i, self.data_type
