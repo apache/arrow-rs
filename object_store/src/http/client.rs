@@ -25,9 +25,11 @@ use crate::{Attribute, Attributes, ClientOptions, GetOptions, ObjectMeta, PutPay
 use async_trait::async_trait;
 use bytes::Buf;
 use chrono::{DateTime, Utc};
-use hyper::header::{CACHE_CONTROL, CONTENT_LENGTH};
+use hyper::header::{
+    CACHE_CONTROL, CONTENT_DISPOSITION, CONTENT_ENCODING, CONTENT_LANGUAGE, CONTENT_LENGTH,
+    CONTENT_TYPE,
+};
 use percent_encoding::percent_decode_str;
-use reqwest::header::CONTENT_TYPE;
 use reqwest::{Method, Response, StatusCode};
 use serde::Deserialize;
 use snafu::{OptionExt, ResultExt, Snafu};
@@ -172,6 +174,11 @@ impl Client {
             for (k, v) in &attributes {
                 builder = match k {
                     Attribute::CacheControl => builder.header(CACHE_CONTROL, v.as_ref()),
+                    Attribute::ContentDisposition => {
+                        builder.header(CONTENT_DISPOSITION, v.as_ref())
+                    }
+                    Attribute::ContentEncoding => builder.header(CONTENT_ENCODING, v.as_ref()),
+                    Attribute::ContentLanguage => builder.header(CONTENT_LANGUAGE, v.as_ref()),
                     Attribute::ContentType => {
                         has_content_type = true;
                         builder.header(CONTENT_TYPE, v.as_ref())
