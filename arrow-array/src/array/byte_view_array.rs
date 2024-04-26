@@ -428,6 +428,18 @@ impl BinaryViewArray {
     }
 }
 
+impl From<Vec<&[u8]>> for BinaryViewArray {
+    fn from(v: Vec<&[u8]>) -> Self {
+        Self::from_iter_values(v)
+    }
+}
+
+impl From<Vec<Option<&[u8]>>> for BinaryViewArray {
+    fn from(v: Vec<Option<&[u8]>>) -> Self {
+        v.into_iter().collect()
+    }
+}
+
 /// A [`GenericByteViewArray`] that stores utf8 data
 ///
 /// # Example

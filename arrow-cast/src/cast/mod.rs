@@ -46,6 +46,8 @@ use crate::cast::dictionary::*;
 use crate::cast::list::*;
 use crate::cast::string::*;
 
+use arrow_buffer::ScalarBuffer;
+use arrow_data::ByteView;
 use chrono::{NaiveTime, Offset, TimeZone, Utc};
 use std::cmp::Ordering;
 use std::sync::Arc;
@@ -119,6 +121,8 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
             | Utf8
             | LargeBinary
             | LargeUtf8
+            | BinaryView
+            | Utf8View
             | List(_)
             | LargeList(_)
             | FixedSizeList(_, _)
@@ -192,8 +196,8 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
             DataType::is_integer(to_type) || DataType::is_floating(to_type) || to_type == &Utf8 || to_type == &LargeUtf8
         }
 
-        (Binary, LargeBinary | Utf8 | LargeUtf8 | FixedSizeBinary(_)) => true,
-        (LargeBinary, Binary | Utf8 | LargeUtf8 | FixedSizeBinary(_)) => true,
+        (Binary, LargeBinary | Utf8 | LargeUtf8 | FixedSizeBinary(_) | BinaryView) => true,
+        (LargeBinary, Binary | Utf8 | LargeUtf8 | FixedSizeBinary(_) | BinaryView) => true,
         (FixedSizeBinary(_), Binary | LargeBinary) => true,
         (
             Utf8 | LargeUtf8,
@@ -213,6 +217,7 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
             | Timestamp(Nanosecond, _)
             | Interval(_),
         ) => true,
+        (Utf8 | LargeUtf8, Utf8View) => true,
         (Utf8 | LargeUtf8, _) => to_type.is_numeric() && to_type != &Float16,
         (_, Utf8 | LargeUtf8) => from_type.is_primitive(),
 
@@ -611,6 +616,8 @@ pub fn cast_with_options(
             | Utf8
             | LargeBinary
             | LargeUtf8
+            | BinaryView
+            | Utf8View
             | List(_)
             | LargeList(_)
             | FixedSizeList(_, _)
@@ -1120,6 +1127,7 @@ pub fn cast_with_options(
                 let binary = BinaryArray::from(array.as_string::<i32>().clone());
                 cast_byte_container::<BinaryType, LargeBinaryType>(&binary)
             }
+            Utf8View => cast_byte_to_view::<Utf8Type, StringViewType>(array),
             LargeUtf8 => cast_byte_container::<Utf8Type, LargeUtf8Type>(array),
             Time32(TimeUnit::Second) => parse_string::<Time32SecondType, i32>(array, cast_options),
             Time32(TimeUnit::Millisecond) => {
@@ -1179,6 +1187,7 @@ pub fn cast_with_options(
             LargeBinary => Ok(Arc::new(LargeBinaryArray::from(
                 array.as_string::<i64>().clone(),
             ))),
+            Utf8View => cast_byte_to_view::<LargeUtf8Type, StringViewType>(array),
             Time32(TimeUnit::Second) => parse_string::<Time32SecondType, i64>(array, cast_options),
             Time32(TimeUnit::Millisecond) => {
                 parse_string::<Time32MillisecondType, i64>(array, cast_options)
@@ -1226,6 +1235,7 @@ pub fn cast_with_options(
             FixedSizeBinary(size) => {
                 cast_binary_to_fixed_size_binary::<i32>(array, *size, cast_options)
             }
+            BinaryView => cast_byte_to_view::<BinaryType, BinaryViewType>(array),
             _ => Err(ArrowError::CastError(format!(
                 "Casting from {from_type:?} to {to_type:?} not supported",
             ))),
@@ -1240,6 +1250,7 @@ pub fn cast_with_options(
             FixedSizeBinary(size) => {
                 cast_binary_to_fixed_size_binary::<i64>(array, *size, cast_options)
             }
+            BinaryView => cast_byte_to_view::<LargeBinaryType, BinaryViewType>(array),
             _ => Err(ArrowError::CastError(format!(
                 "Casting from {from_type:?} to {to_type:?} not supported",
             ))),
@@ -2236,6 +2247,56 @@ where
     let array_data = unsafe { builder.build_unchecked() };
 
     Ok(Arc::new(GenericByteArray::<TO>::from(array_data)))
+}
+
+/// Helper function to cast from one `ByteArrayType` array to `ByteViewType` array.
+fn cast_byte_to_view<FROM, V>(array: &dyn Array) -> Result<ArrayRef, ArrowError>
+where
+    FROM: ByteArrayType,
+    FROM::Offset: OffsetSizeTrait + ToPrimitive,
+    V: ByteViewType,
+{
+    let data = array.to_data();
+    assert_eq!(data.data_type(), &FROM::DATA_TYPE);
+
+    let len = array.len();
+    let str_values_buf = data.buffers()[1].clone();
+    let offsets = data.buffers()[0].typed_data::<FROM::Offset>();
+
+    let mut views_builder = BufferBuilder::<u128>::new(len);
+    for w in offsets.windows(2) {
+        let offset = w[0].to_u32().unwrap();
+        let end = w[1].to_u32().unwrap();
+        let value_buf = &str_values_buf[offset as usize..end as usize];
+        let length = end - offset;
+
+        if length <= 12 {
+            let mut view_buffer = [0; 16];
+            view_buffer[0..4].copy_from_slice(&length.to_le_bytes());
+            view_buffer[4..4 + value_buf.len()].copy_from_slice(value_buf);
+            views_builder.append(u128::from_le_bytes(view_buffer));
+        } else {
+            let view = ByteView {
+                length,
+                prefix: u32::from_le_bytes(value_buf[0..4].try_into().unwrap()),
+                buffer_index: 0,
+                offset,
+            };
+            views_builder.append(view.into());
+        }
+    }
+
+    assert_eq!(views_builder.len(), len);
+
+    // Safety: the input was a valid array so it valid UTF8 (if string). And
+    // all offsets were valid and we created the views correctly
+    Ok(Arc::new(unsafe {
+        GenericByteViewArray::<V>::new_unchecked(
+            ScalarBuffer::new(views_builder.finish(), 0, len),
+            vec![str_values_buf],
+            data.nulls().cloned(),
+        )
+    }))
 }
 
 #[cfg(test)]
@@ -5042,6 +5103,70 @@ mod tests {
                 .collect::<Vec<_>>();
             assert_eq!(expect, out);
         }
+    }
+
+    #[test]
+    fn test_string_to_view() {
+        _test_string_to_view::<i32>();
+        _test_string_to_view::<i64>();
+    }
+
+    fn _test_string_to_view<O>()
+    where
+        O: OffsetSizeTrait,
+    {
+        let data = vec![
+            Some("hello"),
+            Some("world"),
+            None,
+            Some("large payload over 12 bytes"),
+            Some("lulu"),
+        ];
+
+        let string_array = GenericStringArray::<O>::from(data.clone());
+
+        assert!(can_cast_types(
+            string_array.data_type(),
+            &DataType::Utf8View
+        ));
+
+        let string_view_array = cast(&string_array, &DataType::Utf8View).unwrap();
+        assert_eq!(string_view_array.data_type(), &DataType::Utf8View);
+
+        let expect_string_view_array = StringViewArray::from(data);
+        assert_eq!(string_view_array.as_ref(), &expect_string_view_array);
+    }
+
+    #[test]
+    fn test_bianry_to_view() {
+        _test_binary_to_view::<i32>();
+        _test_binary_to_view::<i64>();
+    }
+
+    fn _test_binary_to_view<O>()
+    where
+        O: OffsetSizeTrait,
+    {
+        let data: Vec<Option<&[u8]>> = vec![
+            Some(b"hello"),
+            Some(b"world"),
+            None,
+            Some(b"large payload over 12 bytes"),
+            Some(b"lulu"),
+        ];
+
+        let binary_array = GenericBinaryArray::<O>::from(data.clone());
+
+        assert!(can_cast_types(
+            binary_array.data_type(),
+            &DataType::BinaryView
+        ));
+
+        let binary_view_array = cast(&binary_array, &DataType::BinaryView).unwrap();
+        assert_eq!(binary_view_array.data_type(), &DataType::BinaryView);
+
+        let expect_binary_view_array = BinaryViewArray::from(data);
+        assert_eq!(binary_view_array.as_ref(), &expect_binary_view_array);
     }
 
     #[test]
