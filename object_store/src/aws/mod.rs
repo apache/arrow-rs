@@ -437,10 +437,16 @@ mod tests {
 
         // Object tagging is not supported by S3 Express One Zone
         if config.session_provider.is_none() {
-            tagging(&integration, !config.disable_tagging, |p| {
-                let client = Arc::clone(&integration.client);
-                async move { client.get_object_tagging(&p).await }
-            })
+            tagging(
+                Arc::new(AmazonS3 {
+                    client: Arc::clone(&integration.client),
+                }),
+                !config.disable_tagging,
+                |p| {
+                    let client = Arc::clone(&integration.client);
+                    async move { client.get_object_tagging(&p).await }
+                },
+            )
             .await;
         }
 

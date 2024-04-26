@@ -1314,12 +1314,14 @@ mod test_util {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::buffered::BufWriter;
     use crate::multipart::MultipartStore;
     use crate::test_util::flatten_list_stream;
     use chrono::TimeZone;
     use futures::stream::FuturesUnordered;
     use rand::distributions::Alphanumeric;
     use rand::{thread_rng, Rng};
+    use tokio::io::AsyncWriteExt;
 
     pub(crate) async fn put_get_delete_list(storage: &DynObjectStore) {
         delete_fixtures(storage).await;
@@ -2365,7 +2367,7 @@ mod tests {
     }
 
     #[cfg(any(feature = "aws", feature = "azure"))]
-    pub(crate) async fn tagging<F, Fut>(storage: &dyn ObjectStore, validate: bool, get_tags: F)
+    pub(crate) async fn tagging<F, Fut>(storage: Arc<dyn ObjectStore>, validate: bool, get_tags: F)
     where
         F: Fn(Path) -> Fut + Send + Sync,
         Fut: std::future::Future<Output = Result<reqwest::Response>> + Send,
@@ -2415,19 +2417,24 @@ mod tests {
 
         let multi_path = Path::from("tag_test_multi");
         let mut write = storage
-            .put_multipart_opts(&multi_path, tag_set.into())
+            .put_multipart_opts(&multi_path, tag_set.clone().into())
             .await
             .unwrap();
 
         write.put_part("foo".into()).await.unwrap();
         write.complete().await.unwrap();
 
+        let buf_path = Path::from("tag_test_buf");
+        let mut buf = BufWriter::new(storage, buf_path.clone()).with_tags(tag_set);
+        buf.write_all(b"foo").await.unwrap();
+        buf.shutdown().await.unwrap();
+
         // Write should always succeed, but certain configurations may simply ignore tags
         if !validate {
             return;
         }
 
-        for path in [path, multi_path] {
+        for path in [path, multi_path, buf_path] {
             let resp = get_tags(path.clone()).await.unwrap();
             let body = resp.bytes().await.unwrap();
 

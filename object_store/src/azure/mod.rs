@@ -296,10 +296,16 @@ mod tests {
         signing(&integration).await;
 
         let validate = !integration.client.config().disable_tagging;
-        tagging(&integration, validate, |p| {
-            let client = Arc::clone(&integration.client);
-            async move { client.get_blob_tagging(&p).await }
-        })
+        tagging(
+            Arc::new(MicrosoftAzure {
+                client: Arc::clone(&integration.client),
+            }),
+            validate,
+            |p| {
+                let client = Arc::clone(&integration.client);
+                async move { client.get_blob_tagging(&p).await }
+            },
+        )
         .await;
 
         // Azurite doesn't support attributes properly
