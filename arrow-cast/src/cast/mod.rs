@@ -2257,8 +2257,9 @@ where
     V: ByteViewType,
 {
     let data = array.to_data();
-    let len = array.len();
     assert_eq!(data.data_type(), &FROM::DATA_TYPE);
+
+    let len = array.len();
     let str_values_buf = data.buffers()[1].clone();
     let offsets = data.buffers()[0].typed_data::<FROM::Offset>();
 
@@ -2286,11 +2287,14 @@ where
     }
 
     assert_eq!(views_builder.len(), len);
-    Ok(Arc::new(GenericByteViewArray::<V>::new(
-        ScalarBuffer::new(views_builder.finish(), 0, len),
-        vec![str_values_buf],
-        data.nulls().cloned(),
-    )))
+
+    Ok(Arc::new(unsafe {
+        GenericByteViewArray::<V>::new_unchecked(
+            ScalarBuffer::new(views_builder.finish(), 0, len),
+            vec![str_values_buf],
+            data.nulls().cloned(),
+        )
+    }))
 }
 
 #[cfg(test)]
