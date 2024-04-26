@@ -23,6 +23,18 @@ use std::ops::Deref;
 #[non_exhaustive]
 #[derive(Debug, Hash, Eq, PartialEq, Clone)]
 pub enum Attribute {
+    /// Specifies how the object should be handled by a browser
+    ///
+    /// See [Content-Disposition](https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Content-Disposition)
+    ContentDisposition,
+    /// Specifies the encodings applied to the object
+    ///
+    /// See [Content-Encoding](https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Content-Encoding)
+    ContentEncoding,
+    /// Specifies the language of the object
+    ///
+    /// See [Content-Language](https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Content-Language)
+    ContentLanguage,
     /// Specifies the MIME type of the object
     ///
     /// This takes precedence over any [ClientOptions](crate::ClientOptions) configuration
@@ -177,12 +189,15 @@ mod tests {
     #[test]
     fn test_attributes_basic() {
         let mut attributes = Attributes::from_iter([
+            (Attribute::ContentDisposition, "inline"),
+            (Attribute::ContentEncoding, "gzip"),
+            (Attribute::ContentLanguage, "en-US"),
             (Attribute::ContentType, "test"),
             (Attribute::CacheControl, "control"),
         ]);
 
         assert!(!attributes.is_empty());
-        assert_eq!(attributes.len(), 2);
+        assert_eq!(attributes.len(), 5);
 
         assert_eq!(
             attributes.get(&Attribute::ContentType),
@@ -195,17 +210,30 @@ mod tests {
             attributes.insert(Attribute::CacheControl, "v1".into()),
             Some(metav)
         );
-        assert_eq!(attributes.len(), 2);
+        assert_eq!(attributes.len(), 5);
 
         assert_eq!(
             attributes.remove(&Attribute::CacheControl).unwrap(),
             "v1".into()
         );
-        assert_eq!(attributes.len(), 1);
+        assert_eq!(attributes.len(), 4);
 
         let metav: AttributeValue = "v2".into();
         attributes.insert(Attribute::CacheControl, metav.clone());
         assert_eq!(attributes.get(&Attribute::CacheControl), Some(&metav));
-        assert_eq!(attributes.len(), 2);
+        assert_eq!(attributes.len(), 5);
+
+        assert_eq!(
+            attributes.get(&Attribute::ContentDisposition),
+            Some(&"inline".into())
+        );
+        assert_eq!(
+            attributes.get(&Attribute::ContentEncoding),
+            Some(&"gzip".into())
+        );
+        assert_eq!(
+            attributes.get(&Attribute::ContentLanguage),
+            Some(&"en-US".into())
+        );
     }
 }

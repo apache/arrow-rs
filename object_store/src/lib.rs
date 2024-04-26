@@ -1744,8 +1744,14 @@ mod tests {
     pub(crate) async fn put_get_attributes(integration: &dyn ObjectStore) {
         // Test handling of attributes
         let attributes = Attributes::from_iter([
-            (Attribute::ContentType, "text/html; charset=utf-8"),
             (Attribute::CacheControl, "max-age=604800"),
+            (
+                Attribute::ContentDisposition,
+                r#"attachment; filename="test.html""#,
+            ),
+            (Attribute::ContentEncoding, "gzip"),
+            (Attribute::ContentLanguage, "en-US"),
+            (Attribute::ContentType, "text/html; charset=utf-8"),
         ]);
 
         let path = Path::from("attributes");

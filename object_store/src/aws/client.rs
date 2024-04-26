@@ -42,14 +42,17 @@ use async_trait::async_trait;
 use base64::prelude::BASE64_STANDARD;
 use base64::Engine;
 use bytes::{Buf, Bytes};
-use hyper::header::{CACHE_CONTROL, CONTENT_LENGTH};
+use hyper::header::{
+    CACHE_CONTROL, CONTENT_DISPOSITION, CONTENT_ENCODING, CONTENT_LANGUAGE, CONTENT_LENGTH,
+    CONTENT_TYPE,
+};
 use hyper::http::HeaderName;
 use hyper::{http, HeaderMap};
 use itertools::Itertools;
 use md5::{Digest, Md5};
 use percent_encoding::{utf8_percent_encode, PercentEncode};
 use quick_xml::events::{self as xml_events};
-use reqwest::{header::CONTENT_TYPE, Client as ReqwestClient, Method, RequestBuilder, Response};
+use reqwest::{Client as ReqwestClient, Method, RequestBuilder, Response};
 use ring::digest;
 use ring::digest::Context;
 use serde::{Deserialize, Serialize};
@@ -322,6 +325,9 @@ impl<'a> Request<'a> {
         for (k, v) in &attributes {
             builder = match k {
                 Attribute::CacheControl => builder.header(CACHE_CONTROL, v.as_ref()),
+                Attribute::ContentDisposition => builder.header(CONTENT_DISPOSITION, v.as_ref()),
+                Attribute::ContentEncoding => builder.header(CONTENT_ENCODING, v.as_ref()),
+                Attribute::ContentLanguage => builder.header(CONTENT_LANGUAGE, v.as_ref()),
                 Attribute::ContentType => {
                     has_content_type = true;
                     builder.header(CONTENT_TYPE, v.as_ref())

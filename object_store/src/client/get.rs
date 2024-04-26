@@ -22,7 +22,10 @@ use crate::path::Path;
 use crate::{Attribute, Attributes, GetOptions, GetRange, GetResult, GetResultPayload, Result};
 use async_trait::async_trait;
 use futures::{StreamExt, TryStreamExt};
-use hyper::header::{CACHE_CONTROL, CONTENT_RANGE, CONTENT_TYPE};
+use hyper::header::{
+    CACHE_CONTROL, CONTENT_DISPOSITION, CONTENT_ENCODING, CONTENT_LANGUAGE, CONTENT_RANGE,
+    CONTENT_TYPE,
+};
 use hyper::StatusCode;
 use reqwest::header::ToStrError;
 use reqwest::Response;
@@ -120,6 +123,15 @@ enum GetResultError {
     #[snafu(display("Cache-Control header contained non UTF-8 characters"))]
     InvalidCacheControl { source: ToStrError },
 
+    #[snafu(display("Content-Disposition header contained non UTF-8 characters"))]
+    InvalidContentDisposition { source: ToStrError },
+
+    #[snafu(display("Content-Encoding header contained non UTF-8 characters"))]
+    InvalidContentEncoding { source: ToStrError },
+
+    #[snafu(display("Content-Language header contained non UTF-8 characters"))]
+    InvalidContentLanguage { source: ToStrError },
+
     #[snafu(display("Content-Type header contained non UTF-8 characters"))]
     InvalidContentType { source: ToStrError },
 
@@ -167,15 +179,47 @@ fn get_result<T: GetClient>(
         0..meta.size
     };
 
-    let mut attributes = Attributes::new();
-    if let Some(x) = response.headers().get(CACHE_CONTROL) {
-        let x = x.to_str().context(InvalidCacheControlSnafu)?;
-        attributes.insert(Attribute::CacheControl, x.to_string().into());
+    macro_rules! parse_attributes {
+        ($headers:expr, $(($header:expr, $attr:expr, $err:expr)),*) => {{
+            let mut attributes = Attributes::new();
+            $(
+            if let Some(x) = $headers.get($header) {
+                let x = x.to_str().context($err)?;
+                attributes.insert($attr, x.to_string().into());
+            }
+            )*
+            attributes
+        }}
     }
-    if let Some(x) = response.headers().get(CONTENT_TYPE) {
-        let x = x.to_str().context(InvalidContentTypeSnafu)?;
-        attributes.insert(Attribute::ContentType, x.to_string().into());
-    }
+
+    let attributes = parse_attributes!(
+        response.headers(),
+        (
+            CACHE_CONTROL,
+            Attribute::CacheControl,
+            InvalidCacheControlSnafu
+        ),
+        (
+            CONTENT_DISPOSITION,
+            Attribute::ContentDisposition,
+            InvalidContentDispositionSnafu
+        ),
+        (
+            CONTENT_ENCODING,
+            Attribute::ContentEncoding,
+            InvalidContentEncodingSnafu
+        ),
+        (
+            CONTENT_LANGUAGE,
+            Attribute::ContentLanguage,
+            InvalidContentLanguageSnafu
+        ),
+        (
+            CONTENT_TYPE,
+            Attribute::ContentType,
+            InvalidContentTypeSnafu
+        )
+    );
 
     let stream = response
         .bytes_stream()
