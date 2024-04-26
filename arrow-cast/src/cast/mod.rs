@@ -2288,8 +2288,8 @@ where
 
     assert_eq!(views_builder.len(), len);
 
-    /// Safety: the input was a valid array so the data was UTF8 (if string) and all offsets were valid
-    /// and we created the views correctly
+    // Safety: the input was a valid array so it valid UTF8 (if string). And
+    // all offsets were valid and we created the views correctly
     Ok(Arc::new(unsafe {
         GenericByteViewArray::<V>::new_unchecked(
             ScalarBuffer::new(views_builder.finish(), 0, len),
