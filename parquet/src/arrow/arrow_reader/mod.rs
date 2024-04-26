@@ -1463,6 +1463,17 @@ mod tests {
             true,
         )]));
         assert_eq!(batch.schema().as_ref(), &expected_schema);
+
+        assert_eq!(batch.num_rows(), 1);
+        assert_eq!(batch.column(0).null_count(), 0);
+        assert_eq!(
+            batch.column(0).as_map().keys().as_ref(),
+            &StringArray::from(vec!["parent", "name"])
+        );
+        assert_eq!(
+            batch.column(0).as_map().values().as_ref(),
+            &StringArray::from(vec!["another", "report"])
+        );
     }
 
     /// Parameters for single_column_reader_test
