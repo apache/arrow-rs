@@ -40,6 +40,7 @@
 mod decimal;
 mod dictionary;
 mod list;
+mod map;
 mod string;
 use crate::cast::decimal::*;
 use crate::cast::dictionary::*;
@@ -65,6 +66,7 @@ use arrow_schema::*;
 use arrow_select::take::take;
 use num::cast::AsPrimitive;
 use num::{NumCast, ToPrimitive};
+use crate::cast::map::cast_map_values;
 
 /// CastOptions provides a way to override the default cast behaviors
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -159,6 +161,12 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
             can_cast_types(from_type, list_to.data_type())},
         (FixedSizeList(list_from,size), _) if *size == 1 => {
             can_cast_types(list_from.data_type(), to_type)},
+        (Map(_,ordered_from), Map(_, ordered_to)) if ordered_from == ordered_to =>
+            match (from_type.key_type(), to_type.key_type(), from_type.value_type(), to_type.value_type()) {
+                (Some(from_key), Some(to_key), Some(from_value), Some(to_value)) =>
+                    can_cast_types(&from_key, &to_key) && can_cast_types(&from_value, &to_value),
+                _ => false
+            },
         // cast one decimal type to another decimal type
         (Decimal128(_, _), Decimal128(_, _)) => true,
         (Decimal256(_, _), Decimal256(_, _)) => true,
@@ -802,6 +810,14 @@ pub fn cast_with_options(
         (FixedSizeList(_, size), _) if *size == 1 => {
             cast_single_element_fixed_size_list_to_values(array, to_type, cast_options)
         }
+        (Map(_, ordered1), Map(_, ordered2)) if ordered1 == ordered2 =>
+            cast_map_values(
+                array.as_map_opt()
+                    .ok_or(ArrowError::CastError("Type describes a map but the array is not a map".to_string()))?,
+                to_type,
+                cast_options,
+                ordered1.to_owned()
+            ),
         (Decimal128(_, s1), Decimal128(p2, s2)) => {
             cast_decimal_to_decimal_same_type::<Decimal128Type>(
                 array.as_primitive(),
@@ -7359,6 +7375,54 @@ mod tests {
             .build()
             .unwrap();
         FixedSizeListArray::from(list_data)
+    }
+
+    #[test]
+    fn test_cast_map_containers() {
+        let keys = vec!["0", "1", "5", "6", "7"];
+        let values: Vec<&[u8]> = vec![b"test_val_1", b"test_val_2", b"long_test_val_3", b"4", b"test_val_5"];
+        let entry_offsets = vec![0u32, 1, 1, 4, 5, 5];
+
+        let array = MapArray::new_from_strings(
+            keys.into_iter(),
+            &BinaryArray::from_vec(values),
+            &entry_offsets,
+        ).unwrap();
+
+        let new_type = DataType::Map(Arc::new(Field::new("entries_new", DataType::Struct(
+            vec![
+                Field::new("key_new", DataType::Utf8, false),
+                Field::new("value_values", DataType::Binary, false)
+            ].into()
+        ), false)), false);
+
+        let array = cast(
+            &array,
+            &new_type.clone()).unwrap();
+        let map_array = array.as_map();
+
+        assert_eq!(new_type, map_array.data_type().clone());
+
+        let key_string = map_array
+            .keys()
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap()
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>();
+        assert_eq!(&key_string, &vec!["0", "1", "5", "6", "7"]);
+
+        let values_string_array = cast(map_array
+                                           .values(), &DataType::Utf8).unwrap();
+        let values_string = values_string_array
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap()
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>();
+        assert_eq!(&values_string, &vec!["test_val_1", "test_val_2", "long_test_val_3", "4", "test_val_5"]);
     }
 
     #[test]
