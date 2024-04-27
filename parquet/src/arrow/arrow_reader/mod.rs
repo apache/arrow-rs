@@ -1458,7 +1458,7 @@ mod tests {
                     ])),
                     false,
                 )),
-                false.into(),
+                false,
             ),
             true,
         )]));

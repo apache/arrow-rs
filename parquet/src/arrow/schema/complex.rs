@@ -286,8 +286,16 @@ impl Visitor {
         let map_key = &map_key_value.get_fields()[0];
         let map_value = &map_key_value.get_fields()[1];
 
-        if map_key.get_basic_info().repetition() == Repetition::REPEATED {
+        match map_key.get_basic_info().repetition() {
+            Repetition::REPEATED => {
             return Err(arrow_err!("Map keys cannot be repeated"));
+            }
+            Repetition::REQUIRED | Repetition::OPTIONAL => {
+                // Relaxed check for having repetition REQUIRED as there exists
+                // parquet writers and files that do not conform to this standard.
+                // This allows us to consume a broader range of existing files even
+                // if they are out of spec.
+            }
         }
 
         if map_value.get_basic_info().repetition() == Repetition::REPEATED {
