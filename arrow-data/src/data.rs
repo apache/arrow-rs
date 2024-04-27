@@ -22,7 +22,7 @@ use crate::bit_iterator::BitSliceIterator;
 use arrow_buffer::buffer::{BooleanBuffer, NullBuffer};
 use arrow_buffer::{bit_util, i256, ArrowNativeType, Buffer, MutableBuffer};
 use arrow_schema::{ArrowError, DataType, UnionMode};
-use std::mem;
+use std::{mem, usize};
 use std::ops::Range;
 use std::sync::Arc;
 
@@ -950,12 +950,6 @@ impl ArrayData {
                     i, offsets[i], self.data_type
                 ))
             })?;
-            if offset > values_length {
-                return Err(ArrowError::InvalidArgumentError(format!(
-                    "Size {} at index {} is offset {} is out of bounds for {}",
-                    size, i, offset, self.data_type
-                )));
-            }
             if size + offset > values_length {
                 return Err(ArrowError::InvalidArgumentError(format!(
                     "Size {} at index {} is larger than the remaining values for {}",
