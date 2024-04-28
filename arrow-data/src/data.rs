@@ -950,7 +950,7 @@ impl ArrayData {
                     i, offsets[i], self.data_type
                 ))
             })?;
-            if size + offset > values_length {
+            if size.checked_add(offset).expect("Offset and size have exceeded the usize boundary") > values_length {
                 return Err(ArrowError::InvalidArgumentError(format!(
                     "Size {} at index {} is larger than the remaining values for {}",
                     size, i, self.data_type
