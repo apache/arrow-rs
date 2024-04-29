@@ -311,14 +311,14 @@ mod tests {
     #[cfg(feature = "http")]
     async fn test_url_http() {
         use crate::client::mock_server::MockServer;
-        use hyper::{header::USER_AGENT, Body, Response};
+        use hyper::{header::USER_AGENT, Response};
 
-        let server = MockServer::new();
+        let server = MockServer::new().await;
 
         server.push_fn(|r| {
             assert_eq!(r.uri().path(), "/foo/bar");
             assert_eq!(r.headers().get(USER_AGENT).unwrap(), "test_url");
-            Response::new(Body::empty())
+            Response::new(String::new())
         });
 
         let test = format!("{}/foo/bar", server.url());

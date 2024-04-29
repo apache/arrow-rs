@@ -20,16 +20,16 @@ use parking_lot::Mutex;
 use std::ops::Range;
 use std::{convert::TryInto, sync::Arc};
 
+use crate::multipart::{MultipartStore, PartId};
 use crate::{
-    path::Path, GetResult, GetResultPayload, ListResult, ObjectMeta, ObjectStore, PutOptions,
-    PutResult, Result,
+    path::Path, GetResult, GetResultPayload, ListResult, MultipartId, MultipartUpload, ObjectMeta,
+    ObjectStore, PutMultipartOpts, PutOptions, PutPayload, PutResult, Result,
 };
-use crate::{GetOptions, MultipartId};
+use crate::{GetOptions, UploadPart};
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures::{stream::BoxStream, FutureExt, StreamExt};
 use std::time::Duration;
-use tokio::io::AsyncWrite;
 
 /// Configuration settings for throttled store
 #[derive(Debug, Default, Clone, Copy)]
@@ -111,12 +111,12 @@ async fn sleep(duration: Duration) {
 /// **Note that the behavior of the wrapper is deterministic and might not reflect real-world
 /// conditions!**
 #[derive(Debug)]
-pub struct ThrottledStore<T: ObjectStore> {
+pub struct ThrottledStore<T> {
     inner: T,
     config: Arc<Mutex<ThrottleConfig>>,
 }
 
-impl<T: ObjectStore> ThrottledStore<T> {
+impl<T> ThrottledStore<T> {
     /// Create new wrapper with zero waiting times.
     pub fn new(inner: T, config: ThrottleConfig) -> Self {
         Self {
@@ -148,25 +148,39 @@ impl<T: ObjectStore> std::fmt::Display for ThrottledStore<T> {
 
 #[async_trait]
 impl<T: ObjectStore> ObjectStore for ThrottledStore<T> {
-    async fn put(&self, location: &Path, bytes: Bytes) -> Result<PutResult> {
+    async fn put(&self, location: &Path, payload: PutPayload) -> Result<PutResult> {
         sleep(self.config().wait_put_per_call).await;
-        self.inner.put(location, bytes).await
+        self.inner.put(location, payload).await
     }
 
-    async fn put_opts(&self, location: &Path, bytes: Bytes, opts: PutOptions) -> Result<PutResult> {
-        sleep(self.config().wait_put_per_call).await;
-        self.inner.put_opts(location, bytes, opts).await
-    }
-
-    async fn put_multipart(
+    async fn put_opts(
         &self,
-        _location: &Path,
-    ) -> Result<(MultipartId, Box<dyn AsyncWrite + Unpin + Send>)> {
-        Err(super::Error::NotImplemented)
+        location: &Path,
+        payload: PutPayload,
+        opts: PutOptions,
+    ) -> Result<PutResult> {
+        sleep(self.config().wait_put_per_call).await;
+        self.inner.put_opts(location, payload, opts).await
     }
 
-    async fn abort_multipart(&self, _location: &Path, _multipart_id: &MultipartId) -> Result<()> {
-        Err(super::Error::NotImplemented)
+    async fn put_multipart(&self, location: &Path) -> Result<Box<dyn MultipartUpload>> {
+        let upload = self.inner.put_multipart(location).await?;
+        Ok(Box::new(ThrottledUpload {
+            upload,
+            sleep: self.config().wait_put_per_call,
+        }))
+    }
+
+    async fn put_multipart_opts(
+        &self,
+        location: &Path,
+        opts: PutMultipartOpts,
+    ) -> Result<Box<dyn MultipartUpload>> {
+        let upload = self.inner.put_multipart_opts(location, opts).await?;
+        Ok(Box::new(ThrottledUpload {
+            upload,
+            sleep: self.config().wait_put_per_call,
+        }))
     }
 
     async fn get(&self, location: &Path) -> Result<GetResult> {
@@ -324,11 +338,67 @@ where
         .boxed()
 }
 
+#[async_trait]
+impl<T: MultipartStore> MultipartStore for ThrottledStore<T> {
+    async fn create_multipart(&self, path: &Path) -> Result<MultipartId> {
+        self.inner.create_multipart(path).await
+    }
+
+    async fn put_part(
+        &self,
+        path: &Path,
+        id: &MultipartId,
+        part_idx: usize,
+        data: PutPayload,
+    ) -> Result<PartId> {
+        sleep(self.config().wait_put_per_call).await;
+        self.inner.put_part(path, id, part_idx, data).await
+    }
+
+    async fn complete_multipart(
+        &self,
+        path: &Path,
+        id: &MultipartId,
+        parts: Vec<PartId>,
+    ) -> Result<PutResult> {
+        self.inner.complete_multipart(path, id, parts).await
+    }
+
+    async fn abort_multipart(&self, path: &Path, id: &MultipartId) -> Result<()> {
+        self.inner.abort_multipart(path, id).await
+    }
+}
+
+#[derive(Debug)]
+struct ThrottledUpload {
+    upload: Box<dyn MultipartUpload>,
+    sleep: Duration,
+}
+
+#[async_trait]
+impl MultipartUpload for ThrottledUpload {
+    fn put_part(&mut self, data: PutPayload) -> UploadPart {
+        let duration = self.sleep;
+        let put = self.upload.put_part(data);
+        Box::pin(async move {
+            sleep(duration).await;
+            put.await
+        })
+    }
+
+    async fn complete(&mut self) -> Result<PutResult> {
+        self.upload.complete().await
+    }
+
+    async fn abort(&mut self) -> Result<()> {
+        self.upload.abort().await
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::{memory::InMemory, tests::*, GetResultPayload};
-    use bytes::Bytes;
     use futures::TryStreamExt;
     use tokio::time::Duration;
     use tokio::time::Instant;
@@ -359,6 +429,8 @@ mod tests {
         list_with_delimiter(&store).await;
         rename_and_copy(&store).await;
         copy_if_not_exists(&store).await;
+        stream_get(&store).await;
+        multipart(&store, &store).await;
     }
 
     #[tokio::test]
@@ -480,8 +552,7 @@ mod tests {
 
         if let Some(n_bytes) = n_bytes {
             let data: Vec<_> = std::iter::repeat(1u8).take(n_bytes).collect();
-            let bytes = Bytes::from(data);
-            store.put(&path, bytes).await.unwrap();
+            store.put(&path, data.into()).await.unwrap();
         } else {
             // ensure object is absent
             store.delete(&path).await.unwrap();
@@ -504,9 +575,7 @@ mod tests {
         // create new entries
         for i in 0..n_entries {
             let path = prefix.child(i.to_string().as_str());
-
-            let data = Bytes::from("bar");
-            store.put(&path, data).await.unwrap();
+            store.put(&path, "bar".into()).await.unwrap();
         }
 
         prefix
@@ -574,10 +643,9 @@ mod tests {
 
     async fn measure_put(store: &ThrottledStore<InMemory>, n_bytes: usize) -> Duration {
         let data: Vec<_> = std::iter::repeat(1u8).take(n_bytes).collect();
-        let bytes = Bytes::from(data);
 
         let t0 = Instant::now();
-        store.put(&Path::from("foo"), bytes).await.unwrap();
+        store.put(&Path::from("foo"), data.into()).await.unwrap();
 
         t0.elapsed()
     }

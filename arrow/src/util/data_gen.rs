@@ -121,9 +121,18 @@ pub fn create_random_array(
         },
         Utf8 => Arc::new(create_string_array::<i32>(size, null_density)),
         LargeUtf8 => Arc::new(create_string_array::<i64>(size, null_density)),
+        Utf8View => Arc::new(create_string_view_array_with_len(
+            size,
+            null_density,
+            4,
+            false,
+        )),
         Binary => Arc::new(create_binary_array::<i32>(size, null_density)),
         LargeBinary => Arc::new(create_binary_array::<i64>(size, null_density)),
         FixedSizeBinary(len) => Arc::new(create_fsb_array(size, null_density, *len as usize)),
+        BinaryView => Arc::new(
+            create_string_view_array_with_len(size, null_density, 4, false).to_binary_view(),
+        ),
         List(_) => create_random_list_array(field, size, null_density, true_density)?,
         LargeList(_) => create_random_list_array(field, size, null_density, true_density)?,
         Struct(fields) => Arc::new(StructArray::try_from(

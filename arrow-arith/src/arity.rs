@@ -21,6 +21,7 @@ use arrow_array::builder::BufferBuilder;
 use arrow_array::types::ArrowDictionaryKeyType;
 use arrow_array::*;
 use arrow_buffer::buffer::NullBuffer;
+use arrow_buffer::ArrowNativeType;
 use arrow_buffer::{Buffer, MutableBuffer};
 use arrow_data::ArrayData;
 use arrow_schema::ArrowError;
@@ -386,7 +387,7 @@ where
     O: ArrowPrimitiveType,
     F: Fn(A::Item, B::Item) -> Result<O::Native, ArrowError>,
 {
-    let mut buffer = MutableBuffer::new(len * O::get_byte_width());
+    let mut buffer = MutableBuffer::new(len * O::Native::get_byte_width());
     for idx in 0..len {
         unsafe {
             buffer.push_unchecked(op(a.value_unchecked(idx), b.value_unchecked(idx))?);

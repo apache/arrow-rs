@@ -17,13 +17,16 @@
 
 //! Defines filter kernels
 
+use std::ops::AddAssign;
 use std::sync::Arc;
 
 use arrow_array::builder::BooleanBufferBuilder;
 use arrow_array::cast::AsArray;
-use arrow_array::types::{ArrowDictionaryKeyType, ByteArrayType};
+use arrow_array::types::{
+    ArrowDictionaryKeyType, ArrowPrimitiveType, ByteArrayType, ByteViewType, RunEndIndexType,
+};
 use arrow_array::*;
-use arrow_buffer::{bit_util, BooleanBuffer, NullBuffer};
+use arrow_buffer::{bit_util, ArrowNativeType, BooleanBuffer, NullBuffer, RunEndBuffer};
 use arrow_buffer::{Buffer, MutableBuffer};
 use arrow_data::bit_iterator::{BitIndexIterator, BitSliceIterator};
 use arrow_data::transform::MutableArrayData;
@@ -330,11 +333,23 @@ fn filter_array(values: &dyn Array, predicate: &FilterPredicate) -> Result<Array
             DataType::LargeUtf8 => {
                 Ok(Arc::new(filter_bytes(values.as_string::<i64>(), predicate)))
             }
+            DataType::Utf8View => {
+                Ok(Arc::new(filter_byte_view(values.as_string_view(), predicate)))
+            }
             DataType::Binary => {
                 Ok(Arc::new(filter_bytes(values.as_binary::<i32>(), predicate)))
             }
             DataType::LargeBinary => {
                 Ok(Arc::new(filter_bytes(values.as_binary::<i64>(), predicate)))
+            }
+            DataType::BinaryView => {
+                Ok(Arc::new(filter_byte_view(values.as_binary_view(), predicate)))
+            }
+            DataType::RunEndEncoded(_, _) => {
+                downcast_run_array!{
+                    values => Ok(Arc::new(filter_run_end_array(values, predicate)?)),
+                    t => unimplemented!("Filter not supported for RunEndEncoded type {:?}", t)
+                }
             }
             DataType::Dictionary(_, _) => downcast_dictionary_array! {
                 values => Ok(Arc::new(filter_dict(values, predicate))),
@@ -366,6 +381,55 @@ fn filter_array(values: &dyn Array, predicate: &FilterPredicate) -> Result<Array
             }
         },
     }
+}
+
+/// Filter any supported [`RunArray`] based on a [`FilterPredicate`]
+fn filter_run_end_array<R: RunEndIndexType>(
+    re_arr: &RunArray<R>,
+    pred: &FilterPredicate,
+) -> Result<RunArray<R>, ArrowError>
+where
+    R::Native: Into<i64> + From<bool>,
+    R::Native: AddAssign,
+{
+    let run_ends: &RunEndBuffer<R::Native> = re_arr.run_ends();
+    let mut values_filter = BooleanBufferBuilder::new(run_ends.len());
+    let mut new_run_ends = vec![R::default_value(); run_ends.len()];
+
+    let mut start = 0i64;
+    let mut i = 0;
+    let filter_values = pred.filter.values();
+    let mut count = R::default_value();
+
+    for end in run_ends.inner().into_iter().map(|i| (*i).into()) {
+        let mut keep = false;
+        // in filter_array the predicate array is checked to have the same len as the run end array
+        // this means the largest value in the run_ends is == to pred.len()
+        // so we're always within bounds when calling value_unchecked
+        for pred in (start..end).map(|i| unsafe { filter_values.value_unchecked(i as usize) }) {
+            count += R::Native::from(pred);
+            keep |= pred
+        }
+        // this is to avoid branching
+        new_run_ends[i] = count;
+        i += keep as usize;
+
+        values_filter.append(keep);
+        start = end;
+    }
+
+    new_run_ends.truncate(i);
+
+    if values_filter.is_empty() {
+        new_run_ends.clear();
+    }
+
+    let values = re_arr.values();
+    let pred = BooleanArray::new(values_filter.finish(), None);
+    let values = filter(&values, &pred)?;
+
+    let run_ends = PrimitiveArray::<R>::new(new_run_ends.into(), None);
+    RunArray::try_new(&run_ends, &values)
 }
 
 /// Computes a new null mask for `data` based on `predicate`
@@ -450,12 +514,8 @@ fn filter_boolean(array: &BooleanArray, predicate: &FilterPredicate) -> BooleanA
     BooleanArray::from(data)
 }
 
-/// `filter` implementation for primitive arrays
-fn filter_primitive<T>(array: &PrimitiveArray<T>, predicate: &FilterPredicate) -> PrimitiveArray<T>
-where
-    T: ArrowPrimitiveType,
-{
-    let values = array.values();
+#[inline(never)]
+fn filter_native<T: ArrowNativeType>(values: &[T], predicate: &FilterPredicate) -> Buffer {
     assert!(values.len() >= predicate.filter.len());
 
     let buffer = match &predicate.strategy {
@@ -488,9 +548,19 @@ where
         IterationStrategy::All | IterationStrategy::None => unreachable!(),
     };
 
+    buffer.into()
+}
+
+/// `filter` implementation for primitive arrays
+fn filter_primitive<T>(array: &PrimitiveArray<T>, predicate: &FilterPredicate) -> PrimitiveArray<T>
+where
+    T: ArrowPrimitiveType,
+{
+    let values = array.values();
+    let buffer = filter_native(values, predicate);
     let mut builder = ArrayDataBuilder::new(array.data_type().clone())
         .len(predicate.count)
-        .add_buffer(buffer.into());
+        .add_buffer(buffer);
 
     if let Some((null_count, nulls)) = filter_null_mask(array.nulls(), predicate) {
         builder = builder.null_count(null_count).null_bit_buffer(Some(nulls));
@@ -615,6 +685,25 @@ where
     GenericByteArray::from(data)
 }
 
+/// `filter` implementation for byte view arrays.
+fn filter_byte_view<T: ByteViewType>(
+    array: &GenericByteViewArray<T>,
+    predicate: &FilterPredicate,
+) -> GenericByteViewArray<T> {
+    let new_view_buffer = filter_native(array.views(), predicate);
+
+    let mut builder = ArrayDataBuilder::new(T::DATA_TYPE)
+        .len(predicate.count)
+        .add_buffer(new_view_buffer)
+        .add_buffers(array.data_buffers().to_vec());
+
+    if let Some((null_count, nulls)) = filter_null_mask(array.nulls(), predicate) {
+        builder = builder.null_count(null_count).null_bit_buffer(Some(nulls));
+    }
+
+    GenericByteViewArray::from(unsafe { builder.build_unchecked() })
+}
+
 /// `filter` implementation for dictionaries
 fn filter_dict<T>(array: &DictionaryArray<T>, predicate: &FilterPredicate) -> DictionaryArray<T>
 where
@@ -635,6 +724,7 @@ where
 #[cfg(test)]
 mod tests {
     use arrow_array::builder::*;
+    use arrow_array::cast::as_run_array;
     use arrow_array::types::*;
     use rand::distributions::{Alphanumeric, Standard};
     use rand::prelude::*;
@@ -829,6 +919,69 @@ mod tests {
         assert!(d.is_null(1));
     }
 
+    fn _test_filter_byte_view<T>()
+    where
+        T: ByteViewType,
+        str: AsRef<T::Native>,
+        T::Native: PartialEq,
+    {
+        let array = {
+            // ["hello", "world", null, "large payload over 12 bytes", "lulu"]
+            let mut builder = GenericByteViewBuilder::<T>::new();
+            builder.append_value("hello");
+            builder.append_value("world");
+            builder.append_null();
+            builder.append_value("large payload over 12 bytes");
+            builder.append_value("lulu");
+            builder.finish()
+        };
+
+        {
+            let predicate = BooleanArray::from(vec![true, false, true, true, false]);
+            let actual = filter(&array, &predicate).unwrap();
+
+            assert_eq!(actual.len(), 3);
+
+            let expected = {
+                // ["hello", null, "large payload over 12 bytes"]
+                let mut builder = GenericByteViewBuilder::<T>::new();
+                builder.append_value("hello");
+                builder.append_null();
+                builder.append_value("large payload over 12 bytes");
+                builder.finish()
+            };
+
+            assert_eq!(actual.as_ref(), &expected);
+        }
+
+        {
+            let predicate = BooleanArray::from(vec![true, false, false, false, true]);
+            let actual = filter(&array, &predicate).unwrap();
+
+            assert_eq!(actual.len(), 2);
+
+            let expected = {
+                // ["hello", "lulu"]
+                let mut builder = GenericByteViewBuilder::<T>::new();
+                builder.append_value("hello");
+                builder.append_value("lulu");
+                builder.finish()
+            };
+
+            assert_eq!(actual.as_ref(), &expected);
+        }
+    }
+
+    #[test]
+    fn test_filter_string_view() {
+        _test_filter_byte_view::<StringViewType>()
+    }
+
+    #[test]
+    fn test_filter_binary_view() {
+        _test_filter_byte_view::<BinaryViewType>()
+    }
+
     #[test]
     fn test_filter_array_slice_with_null() {
         let a = Int32Array::from(vec![Some(5), None, Some(7), Some(8), Some(9)]).slice(1, 4);
@@ -842,6 +995,78 @@ mod tests {
         assert!(d.is_null(0));
         assert!(!d.is_null(1));
         assert_eq!(9, d.value(1));
+    }
+
+    #[test]
+    fn test_filter_run_end_encoding_array() {
+        let run_ends = Int64Array::from(vec![2, 3, 8]);
+        let values = Int64Array::from(vec![7, -2, 9]);
+        let a = RunArray::try_new(&run_ends, &values).expect("Failed to create RunArray");
+        let b = BooleanArray::from(vec![true, false, true, false, true, false, true, false]);
+        let c = filter(&a, &b).unwrap();
+        let actual: &RunArray<Int64Type> = as_run_array(&c);
+        assert_eq!(4, actual.len());
+
+        let expected = RunArray::try_new(
+            &Int64Array::from(vec![1, 2, 4]),
+            &Int64Array::from(vec![7, -2, 9]),
+        )
+        .expect("Failed to make expected RunArray test is broken");
+
+        assert_eq!(&actual.run_ends().values(), &expected.run_ends().values());
+        assert_eq!(actual.values(), expected.values())
+    }
+
+    #[test]
+    fn test_filter_run_end_encoding_array_remove_value() {
+        let run_ends = Int32Array::from(vec![2, 3, 8, 10]);
+        let values = Int32Array::from(vec![7, -2, 9, -8]);
+        let a = RunArray::try_new(&run_ends, &values).expect("Failed to create RunArray");
+        let b = BooleanArray::from(vec![
+            false, true, false, false, true, false, true, false, false, false,
+        ]);
+        let c = filter(&a, &b).unwrap();
+        let actual: &RunArray<Int32Type> = as_run_array(&c);
+        assert_eq!(3, actual.len());
+
+        let expected =
+            RunArray::try_new(&Int32Array::from(vec![1, 3]), &Int32Array::from(vec![7, 9]))
+                .expect("Failed to make expected RunArray test is broken");
+
+        assert_eq!(&actual.run_ends().values(), &expected.run_ends().values());
+        assert_eq!(actual.values(), expected.values())
+    }
+
+    #[test]
+    fn test_filter_run_end_encoding_array_remove_all_but_one() {
+        let run_ends = Int16Array::from(vec![2, 3, 8, 10]);
+        let values = Int16Array::from(vec![7, -2, 9, -8]);
+        let a = RunArray::try_new(&run_ends, &values).expect("Failed to create RunArray");
+        let b = BooleanArray::from(vec![
+            false, false, false, false, false, false, true, false, false, false,
+        ]);
+        let c = filter(&a, &b).unwrap();
+        let actual: &RunArray<Int16Type> = as_run_array(&c);
+        assert_eq!(1, actual.len());
+
+        let expected = RunArray::try_new(&Int16Array::from(vec![1]), &Int16Array::from(vec![9]))
+            .expect("Failed to make expected RunArray test is broken");
+
+        assert_eq!(&actual.run_ends().values(), &expected.run_ends().values());
+        assert_eq!(actual.values(), expected.values())
+    }
+
+    #[test]
+    fn test_filter_run_end_encoding_array_empty() {
+        let run_ends = Int64Array::from(vec![2, 3, 8, 10]);
+        let values = Int64Array::from(vec![7, -2, 9, -8]);
+        let a = RunArray::try_new(&run_ends, &values).expect("Failed to create RunArray");
+        let b = BooleanArray::from(vec![
+            false, false, false, false, false, false, false, false, false, false,
+        ]);
+        let c = filter(&a, &b).unwrap();
+        let actual: &RunArray<Int64Type> = as_run_array(&c);
+        assert_eq!(0, actual.len());
     }
 
     #[test]

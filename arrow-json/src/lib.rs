@@ -69,18 +69,6 @@
 pub mod reader;
 pub mod writer;
 
-#[doc(hidden)]
-#[deprecated(note = "Use Decoder")]
-pub type RawDecoder = reader::Decoder;
-
-#[doc(hidden)]
-#[deprecated(note = "Use Reader")]
-pub type RawReader<R> = Reader<R>;
-
-#[doc(hidden)]
-#[deprecated(note = "Use ReaderBuilder")]
-pub type RawReaderBuilder = ReaderBuilder;
-
 pub use self::reader::{Reader, ReaderBuilder};
 pub use self::writer::{ArrayWriter, LineDelimitedWriter, Writer, WriterBuilder};
 use half::f16;

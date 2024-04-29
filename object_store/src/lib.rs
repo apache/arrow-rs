@@ -88,11 +88,11 @@
 //!
 //! # Why not a Filesystem Interface?
 //!
-//! Whilst this crate does provide a [`BufReader`], the [`ObjectStore`] interface mirrors the APIs
-//! of object stores and not filesystems, opting to provide stateless APIs instead of the cursor
-//! based interfaces such as [`Read`] or [`Seek`] favoured by filesystems.
+//! The [`ObjectStore`] interface is designed to mirror the APIs
+//! of object stores and *not* filesystems, and thus has stateless APIs instead
+//! of cursor based interfaces such as [`Read`] or [`Seek`] available in filesystems.
 //!
-//! This provides some compelling advantages:
+//! This design provides the following advantages:
 //!
 //! * All operations are atomic, and readers cannot observe partial and/or failed writes
 //! * Methods map directly to object store APIs, providing both efficiency and predictability
@@ -100,7 +100,12 @@
 //! * Allows for functionality not native to filesystems, such as operation preconditions
 //! and atomic multipart uploads
 //!
+//! This crate does provide [`BufReader`] and [`BufWriter`] adapters
+//! which provide a more filesystem-like API for working with the
+//! [`ObjectStore`] trait, however, they should be used with care
+//!
 //! [`BufReader`]: buffered::BufReader
+//! [`BufWriter`]: buffered::BufWriter
 //!
 //! # Adapters
 //!
@@ -240,15 +245,14 @@
 //! # }
 //! ```
 //!
-//! #  Put Object
+//! # Put Object
 //!
 //! Use the [`ObjectStore::put`] method to atomically write data.
 //!
 //! ```
 //! # use object_store::local::LocalFileSystem;
-//! # use object_store::ObjectStore;
+//! # use object_store::{ObjectStore, PutPayload};
 //! # use std::sync::Arc;
-//! # use bytes::Bytes;
 //! # use object_store::path::Path;
 //! # fn get_object_store() -> Arc<dyn ObjectStore> {
 //! #   Arc::new(LocalFileSystem::new())
@@ -257,19 +261,18 @@
 //! #
 //! let object_store: Arc<dyn ObjectStore> = get_object_store();
 //! let path = Path::from("data/file1");
-//! let bytes = Bytes::from_static(b"hello");
-//! object_store.put(&path, bytes).await.unwrap();
+//! let payload = PutPayload::from_static(b"hello");
+//! object_store.put(&path, payload).await.unwrap();
 //! # }
 //! ```
 //!
-//! #  Multipart Upload
+//! # Multipart Upload
 //!
-//! Use the [`ObjectStore::put_multipart`] method to atomically write a large amount of data,
-//! with implementations automatically handling parallel, chunked upload where appropriate.
+//! Use the [`ObjectStore::put_multipart`] method to atomically write a large amount of data
 //!
 //! ```
 //! # use object_store::local::LocalFileSystem;
-//! # use object_store::ObjectStore;
+//! # use object_store::{ObjectStore, WriteMultipart};
 //! # use std::sync::Arc;
 //! # use bytes::Bytes;
 //! # use tokio::io::AsyncWriteExt;
@@ -281,12 +284,10 @@
 //! #
 //! let object_store: Arc<dyn ObjectStore> = get_object_store();
 //! let path = Path::from("data/large_file");
-//! let (_id, mut writer) =  object_store.put_multipart(&path).await.unwrap();
-//!
-//! let bytes = Bytes::from_static(b"hello");
-//! writer.write_all(&bytes).await.unwrap();
-//! writer.flush().await.unwrap();
-//! writer.shutdown().await.unwrap();
+//! let upload =  object_store.put_multipart(&path).await.unwrap();
+//! let mut write = WriteMultipart::new(upload);
+//! write.write(b"hello");
+//! write.finish().await.unwrap();
 //! # }
 //! ```
 //!
@@ -315,6 +316,48 @@
 //! let ranges = object_store.get_ranges(&path, &[90..100, 400..600, 0..10]).await.unwrap();
 //! assert_eq!(ranges.len(), 3);
 //! assert_eq!(ranges[0].len(), 10);
+//! # }
+//! ```
+//!
+//! # Vectored Write
+//!
+//! When writing data it is often the case that the size of the output is not known ahead of time.
+//!
+//! A common approach to handling this is to bump-allocate a `Vec`, whereby the underlying
+//! allocation is repeatedly reallocated, each time doubling the capacity. The performance of
+//! this is suboptimal as reallocating memory will often involve copying it to a new location.
+//!
+//! Fortunately, as [`PutPayload`] does not require memory regions to be contiguous, it is
+//! possible to instead allocate memory in chunks and avoid bump allocating. [`PutPayloadMut`]
+//! encapsulates this approach
+//!
+//! ```
+//! # use object_store::local::LocalFileSystem;
+//! # use object_store::{ObjectStore, PutPayloadMut};
+//! # use std::sync::Arc;
+//! # use bytes::Bytes;
+//! # use tokio::io::AsyncWriteExt;
+//! # use object_store::path::Path;
+//! # fn get_object_store() -> Arc<dyn ObjectStore> {
+//! #   Arc::new(LocalFileSystem::new())
+//! # }
+//! # async fn multi_upload() {
+//! #
+//! let object_store: Arc<dyn ObjectStore> = get_object_store();
+//! let path = Path::from("data/large_file");
+//! let mut buffer = PutPayloadMut::new().with_block_size(8192);
+//! for _ in 0..22 {
+//!     buffer.extend_from_slice(&[0; 1024]);
+//! }
+//! let payload = buffer.freeze();
+//!
+//! // Payload consists of 3 separate 8KB allocations
+//! assert_eq!(payload.as_ref().len(), 3);
+//! assert_eq!(payload.as_ref()[0].len(), 8192);
+//! assert_eq!(payload.as_ref()[1].len(), 8192);
+//! assert_eq!(payload.as_ref()[2].len(), 6144);
+//!
+//! object_store.put(&path, payload).await.unwrap();
 //! # }
 //! ```
 //!
@@ -425,7 +468,7 @@
 //!     let new = do_update(r.bytes().await.unwrap());
 //!
 //!     // Attempt to commit transaction
-//!     match store.put_opts(&path, new, PutMode::Update(version).into()).await {
+//!     match store.put_opts(&path, new.into(), PutMode::Update(version).into()).await {
 //!         Ok(_) => break, // Successfully committed
 //!         Err(Error::Precondition { .. }) => continue, // Object has changed, try again
 //!         Err(e) => panic!("{e}")
@@ -496,15 +539,22 @@ pub use tags::TagSet;
 
 pub mod multipart;
 mod parse;
+mod payload;
+mod upload;
 mod util;
 
+mod attributes;
+
+pub use attributes::*;
+
 pub use parse::{parse_url, parse_url_opts};
-pub use util::GetRange;
+pub use payload::*;
+pub use upload::*;
+pub use util::{coalesce_ranges, collect_bytes, GetRange, OBJECT_STORE_COALESCE_DEFAULT};
 
 use crate::path::Path;
 #[cfg(not(target_arch = "wasm32"))]
 use crate::util::maybe_spawn_blocking;
-pub use crate::util::{coalesce_ranges, collect_bytes, OBJECT_STORE_COALESCE_DEFAULT};
 use async_trait::async_trait;
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
@@ -515,12 +565,11 @@ use std::fmt::{Debug, Formatter};
 use std::io::{Read, Seek, SeekFrom};
 use std::ops::Range;
 use std::sync::Arc;
-use tokio::io::AsyncWrite;
 
 /// An alias for a dynamically dispatched object store implementation.
 pub type DynObjectStore = dyn ObjectStore;
 
-/// Id type for multi-part uploads.
+/// Id type for multipart uploads.
 pub type MultipartId = String;
 
 /// Universal API to multiple object store services.
@@ -529,57 +578,39 @@ pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
     /// Save the provided bytes to the specified location
     ///
     /// The operation is guaranteed to be atomic, it will either successfully
-    /// write the entirety of `bytes` to `location`, or fail. No clients
+    /// write the entirety of `payload` to `location`, or fail. No clients
     /// should be able to observe a partially written object
-    async fn put(&self, location: &Path, bytes: Bytes) -> Result<PutResult> {
-        self.put_opts(location, bytes, PutOptions::default()).await
+    async fn put(&self, location: &Path, payload: PutPayload) -> Result<PutResult> {
+        self.put_opts(location, payload, PutOptions::default())
+            .await
     }
 
-    /// Save the provided bytes to the specified location with the given options
-    async fn put_opts(&self, location: &Path, bytes: Bytes, opts: PutOptions) -> Result<PutResult>;
-
-    /// Get a multi-part upload that allows writing data in chunks.
-    ///
-    /// Most cloud-based uploads will buffer and upload parts in parallel.
-    ///
-    /// To complete the upload, [AsyncWrite::poll_shutdown] must be called
-    /// to completion. This operation is guaranteed to be atomic, it will either
-    /// make all the written data available at `location`, or fail. No clients
-    /// should be able to observe a partially written object.
-    ///
-    /// For some object stores (S3, GCS, and local in particular), if the
-    /// writer fails or panics, you must call [ObjectStore::abort_multipart]
-    /// to clean up partially written data.
-    ///
-    /// <div class="warning">
-    /// It is recommended applications wait for any in-flight requests to complete by calling `flush`, if
-    /// there may be a significant gap in time (> ~30s) before the next write.
-    /// These gaps can include times where the function returns control to the
-    /// caller while keeping the writer open. If `flush` is not called, futures
-    /// for in-flight requests may be left unpolled long enough for the requests
-    /// to time out, causing the write to fail.
-    /// </div>
-    ///
-    /// For applications requiring fine-grained control of multipart uploads
-    /// see [`MultiPartStore`], although note that this interface cannot be
-    /// supported by all [`ObjectStore`] backends.
-    ///
-    /// For applications looking to implement this interface for a custom
-    /// multipart API, see [`WriteMultiPart`] which handles the complexities
-    /// of performing parallel uploads of fixed size parts.
-    ///
-    /// [`WriteMultiPart`]: multipart::WriteMultiPart
-    /// [`MultiPartStore`]: multipart::MultiPartStore
-    async fn put_multipart(
+    /// Save the provided `payload` to `location` with the given options
+    async fn put_opts(
         &self,
         location: &Path,
-    ) -> Result<(MultipartId, Box<dyn AsyncWrite + Unpin + Send>)>;
+        payload: PutPayload,
+        opts: PutOptions,
+    ) -> Result<PutResult>;
 
-    /// Cleanup an aborted upload.
+    /// Perform a multipart upload
     ///
-    /// See documentation for individual stores for exact behavior, as capabilities
-    /// vary by object store.
-    async fn abort_multipart(&self, location: &Path, multipart_id: &MultipartId) -> Result<()>;
+    /// Client should prefer [`ObjectStore::put`] for small payloads, as streaming uploads
+    /// typically require multiple separate requests. See [`MultipartUpload`] for more information
+    async fn put_multipart(&self, location: &Path) -> Result<Box<dyn MultipartUpload>> {
+        self.put_multipart_opts(location, PutMultipartOpts::default())
+            .await
+    }
+
+    /// Perform a multipart upload with options
+    ///
+    /// Client should prefer [`ObjectStore::put`] for small payloads, as streaming uploads
+    /// typically require multiple separate requests. See [`MultipartUpload`] for more information
+    async fn put_multipart_opts(
+        &self,
+        location: &Path,
+        opts: PutMultipartOpts,
+    ) -> Result<Box<dyn MultipartUpload>>;
 
     /// Return the bytes that are stored at the specified location.
     async fn get(&self, location: &Path) -> Result<GetResult> {
@@ -650,11 +681,10 @@ pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
     /// # use object_store::{ObjectStore, ObjectMeta};
     /// # use object_store::path::Path;
     /// # use futures::{StreamExt, TryStreamExt};
-    /// # use bytes::Bytes;
     /// #
     /// // Create two objects
-    /// store.put(&Path::from("foo"), Bytes::from("foo")).await?;
-    /// store.put(&Path::from("bar"), Bytes::from("bar")).await?;
+    /// store.put(&Path::from("foo"), "foo".into()).await?;
+    /// store.put(&Path::from("bar"), "bar".into()).await?;
     ///
     /// // List object
     /// let locations = store.list(None).map_ok(|m| m.location).boxed();
@@ -751,32 +781,29 @@ macro_rules! as_ref_impl {
     ($type:ty) => {
         #[async_trait]
         impl ObjectStore for $type {
-            async fn put(&self, location: &Path, bytes: Bytes) -> Result<PutResult> {
-                self.as_ref().put(location, bytes).await
+            async fn put(&self, location: &Path, payload: PutPayload) -> Result<PutResult> {
+                self.as_ref().put(location, payload).await
             }
 
             async fn put_opts(
                 &self,
                 location: &Path,
-                bytes: Bytes,
+                payload: PutPayload,
                 opts: PutOptions,
             ) -> Result<PutResult> {
-                self.as_ref().put_opts(location, bytes, opts).await
+                self.as_ref().put_opts(location, payload, opts).await
             }
 
-            async fn put_multipart(
-                &self,
-                location: &Path,
-            ) -> Result<(MultipartId, Box<dyn AsyncWrite + Unpin + Send>)> {
+            async fn put_multipart(&self, location: &Path) -> Result<Box<dyn MultipartUpload>> {
                 self.as_ref().put_multipart(location).await
             }
 
-            async fn abort_multipart(
+            async fn put_multipart_opts(
                 &self,
                 location: &Path,
-                multipart_id: &MultipartId,
-            ) -> Result<()> {
-                self.as_ref().abort_multipart(location, multipart_id).await
+                opts: PutMultipartOpts,
+            ) -> Result<Box<dyn MultipartUpload>> {
+                self.as_ref().put_multipart_opts(location, opts).await
             }
 
             async fn get(&self, location: &Path) -> Result<GetResult> {
@@ -987,6 +1014,8 @@ pub struct GetResult {
     pub meta: ObjectMeta,
     /// The range of bytes returned by this request
     pub range: Range<usize>,
+    /// Additional object attributes
+    pub attributes: Attributes,
 }
 
 /// The kind of a [`GetResult`]
@@ -1112,6 +1141,10 @@ pub struct PutOptions {
     ///
     /// Implementations that don't support object tagging should ignore this
     pub tags: TagSet,
+    /// Provide a set of [`Attributes`]
+    ///
+    /// Implementations that don't support an attribute should return an error
+    pub attributes: Attributes,
 }
 
 impl From<PutMode> for PutOptions {
@@ -1127,6 +1160,46 @@ impl From<TagSet> for PutOptions {
     fn from(tags: TagSet) -> Self {
         Self {
             tags,
+            ..Default::default()
+        }
+    }
+}
+
+impl From<Attributes> for PutOptions {
+    fn from(attributes: Attributes) -> Self {
+        Self {
+            attributes,
+            ..Default::default()
+        }
+    }
+}
+
+/// Options for [`ObjectStore::put_multipart_opts`]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct PutMultipartOpts {
+    /// Provide a [`TagSet`] for this object
+    ///
+    /// Implementations that don't support object tagging should ignore this
+    pub tags: TagSet,
+    /// Provide a set of [`Attributes`]
+    ///
+    /// Implementations that don't support an attribute should return an error
+    pub attributes: Attributes,
+}
+
+impl From<TagSet> for PutMultipartOpts {
+    fn from(tags: TagSet) -> Self {
+        Self {
+            tags,
+            ..Default::default()
+        }
+    }
+}
+
+impl From<Attributes> for PutMultipartOpts {
+    fn from(attributes: Attributes) -> Self {
+        Self {
+            attributes,
             ..Default::default()
         }
     }
@@ -1241,20 +1314,16 @@ mod test_util {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::multipart::MultiPartStore;
+    use crate::buffered::BufWriter;
+    use crate::multipart::MultipartStore;
     use crate::test_util::flatten_list_stream;
     use chrono::TimeZone;
     use futures::stream::FuturesUnordered;
     use rand::distributions::Alphanumeric;
     use rand::{thread_rng, Rng};
-    use std::future::Future;
     use tokio::io::AsyncWriteExt;
 
     pub(crate) async fn put_get_delete_list(storage: &DynObjectStore) {
-        put_get_delete_list_opts(storage).await
-    }
-
-    pub(crate) async fn put_get_delete_list_opts(storage: &DynObjectStore) {
         delete_fixtures(storage).await;
 
         let content_list = flatten_list_stream(storage, None).await.unwrap();
@@ -1266,8 +1335,7 @@ mod tests {
         let location = Path::from("test_dir/test_file.json");
 
         let data = Bytes::from("arbitrary data");
-        let expected_data = data.clone();
-        storage.put(&location, data).await.unwrap();
+        storage.put(&location, data.clone().into()).await.unwrap();
 
         let root = Path::from("/");
 
@@ -1310,14 +1378,14 @@ mod tests {
         assert!(content_list.is_empty());
 
         let read_data = storage.get(&location).await.unwrap().bytes().await.unwrap();
-        assert_eq!(&*read_data, expected_data);
+        assert_eq!(&*read_data, data);
 
         // Test range request
         let range = 3..7;
         let range_result = storage.get_range(&location, range.clone()).await;
 
         let bytes = range_result.unwrap();
-        assert_eq!(bytes, expected_data.slice(range.clone()));
+        assert_eq!(bytes, data.slice(range.clone()));
 
         let opts = GetOptions {
             range: Some(GetRange::Bounded(2..5)),
@@ -1395,11 +1463,11 @@ mod tests {
         let ranges = vec![0..1, 2..3, 0..5];
         let bytes = storage.get_ranges(&location, &ranges).await.unwrap();
         for (range, bytes) in ranges.iter().zip(bytes) {
-            assert_eq!(bytes, expected_data.slice(range.clone()))
+            assert_eq!(bytes, data.slice(range.clone()))
         }
 
         let head = storage.head(&location).await.unwrap();
-        assert_eq!(head.size, expected_data.len());
+        assert_eq!(head.size, data.len());
 
         storage.delete(&location).await.unwrap();
 
@@ -1416,7 +1484,7 @@ mod tests {
 
         let file_with_delimiter = Path::from_iter(["a", "b/c", "foo.file"]);
         storage
-            .put(&file_with_delimiter, Bytes::from("arbitrary"))
+            .put(&file_with_delimiter, "arbitrary".into())
             .await
             .unwrap();
 
@@ -1456,10 +1524,7 @@ mod tests {
 
         let emoji_prefix = Path::from("🙀");
         let emoji_file = Path::from("🙀/😀.parquet");
-        storage
-            .put(&emoji_file, Bytes::from("arbitrary"))
-            .await
-            .unwrap();
+        storage.put(&emoji_file, "arbitrary".into()).await.unwrap();
 
         storage.head(&emoji_file).await.unwrap();
         storage
@@ -1511,7 +1576,7 @@ mod tests {
         let hello_prefix = Path::parse("%48%45%4C%4C%4F").unwrap();
         let path = hello_prefix.child("foo.parquet");
 
-        storage.put(&path, Bytes::from(vec![0, 1])).await.unwrap();
+        storage.put(&path, vec![0, 1].into()).await.unwrap();
         let files = flatten_list_stream(storage, Some(&hello_prefix))
             .await
             .unwrap();
@@ -1551,7 +1616,7 @@ mod tests {
 
         // Can also write non-percent encoded sequences
         let path = Path::parse("%Q.parquet").unwrap();
-        storage.put(&path, Bytes::from(vec![0, 1])).await.unwrap();
+        storage.put(&path, vec![0, 1].into()).await.unwrap();
 
         let files = flatten_list_stream(storage, None).await.unwrap();
         assert_eq!(files, vec![path.clone()]);
@@ -1559,7 +1624,7 @@ mod tests {
         storage.delete(&path).await.unwrap();
 
         let path = Path::parse("foo bar/I contain spaces.parquet").unwrap();
-        storage.put(&path, Bytes::from(vec![0, 1])).await.unwrap();
+        storage.put(&path, vec![0, 1].into()).await.unwrap();
         storage.head(&path).await.unwrap();
 
         let files = flatten_list_stream(storage, Some(&Path::from("foo bar")))
@@ -1669,13 +1734,51 @@ mod tests {
         delete_fixtures(storage).await;
 
         let path = Path::from("empty");
-        storage.put(&path, Bytes::new()).await.unwrap();
+        storage.put(&path, PutPayload::default()).await.unwrap();
         let meta = storage.head(&path).await.unwrap();
         assert_eq!(meta.size, 0);
         let data = storage.get(&path).await.unwrap().bytes().await.unwrap();
         assert_eq!(data.len(), 0);
 
         storage.delete(&path).await.unwrap();
+    }
+
+    pub(crate) async fn put_get_attributes(integration: &dyn ObjectStore) {
+        // Test handling of attributes
+        let attributes = Attributes::from_iter([
+            (Attribute::CacheControl, "max-age=604800"),
+            (
+                Attribute::ContentDisposition,
+                r#"attachment; filename="test.html""#,
+            ),
+            (Attribute::ContentEncoding, "gzip"),
+            (Attribute::ContentLanguage, "en-US"),
+            (Attribute::ContentType, "text/html; charset=utf-8"),
+        ]);
+
+        let path = Path::from("attributes");
+        let opts = attributes.clone().into();
+        match integration.put_opts(&path, "foo".into(), opts).await {
+            Ok(_) => {
+                let r = integration.get(&path).await.unwrap();
+                assert_eq!(r.attributes, attributes);
+            }
+            Err(Error::NotImplemented) => {}
+            Err(e) => panic!("{e}"),
+        }
+
+        let opts = attributes.clone().into();
+        match integration.put_multipart_opts(&path, opts).await {
+            Ok(mut w) => {
+                w.put_part("foo".into()).await.unwrap();
+                w.complete().await.unwrap();
+
+                let r = integration.get(&path).await.unwrap();
+                assert_eq!(r.attributes, attributes);
+            }
+            Err(Error::NotImplemented) => {}
+            Err(e) => panic!("{e}"),
+        }
     }
 
     pub(crate) async fn get_opts(storage: &dyn ObjectStore) {
@@ -1923,12 +2026,11 @@ mod tests {
         let location = Path::from("test_dir/test_upload_file.txt");
 
         // Can write to storage
-        let data = get_chunks(5_000, 10);
+        let data = get_chunks(5 * 1024 * 1024, 3);
         let bytes_expected = data.concat();
-        let (_, mut writer) = storage.put_multipart(&location).await.unwrap();
-        for chunk in &data {
-            writer.write_all(chunk).await.unwrap();
-        }
+        let mut upload = storage.put_multipart(&location).await.unwrap();
+        let uploads = data.into_iter().map(|x| upload.put_part(x.into()));
+        futures::future::try_join_all(uploads).await.unwrap();
 
         // Object should not yet exist in store
         let meta_res = storage.head(&location).await;
@@ -1944,7 +2046,8 @@ mod tests {
         let result = storage.list_with_delimiter(None).await.unwrap();
         assert_eq!(&result.objects, &[]);
 
-        writer.shutdown().await.unwrap();
+        upload.complete().await.unwrap();
+
         let bytes_written = storage.get(&location).await.unwrap().bytes().await.unwrap();
         assert_eq!(bytes_expected, bytes_written);
 
@@ -1952,22 +2055,19 @@ mod tests {
         // Sizes chosen to ensure we write three parts
         let data = get_chunks(3_200_000, 7);
         let bytes_expected = data.concat();
-        let (_, mut writer) = storage.put_multipart(&location).await.unwrap();
+        let upload = storage.put_multipart(&location).await.unwrap();
+        let mut writer = WriteMultipart::new(upload);
         for chunk in &data {
-            writer.write_all(chunk).await.unwrap();
+            writer.write(chunk)
         }
-        writer.shutdown().await.unwrap();
+        writer.finish().await.unwrap();
         let bytes_written = storage.get(&location).await.unwrap().bytes().await.unwrap();
         assert_eq!(bytes_expected, bytes_written);
 
         // We can abort an empty write
         let location = Path::from("test_dir/test_abort_upload.txt");
-        let (upload_id, writer) = storage.put_multipart(&location).await.unwrap();
-        drop(writer);
-        storage
-            .abort_multipart(&location, &upload_id)
-            .await
-            .unwrap();
+        let mut upload = storage.put_multipart(&location).await.unwrap();
+        upload.abort().await.unwrap();
         let get_res = storage.get(&location).await;
         assert!(get_res.is_err());
         assert!(matches!(
@@ -1976,17 +2076,13 @@ mod tests {
         ));
 
         // We can abort an in-progress write
-        let (upload_id, mut writer) = storage.put_multipart(&location).await.unwrap();
-        if let Some(chunk) = data.first() {
-            writer.write_all(chunk).await.unwrap();
-            let _ = writer.write(chunk).await.unwrap();
-        }
-        drop(writer);
-
-        storage
-            .abort_multipart(&location, &upload_id)
+        let mut upload = storage.put_multipart(&location).await.unwrap();
+        upload
+            .put_part(data.first().unwrap().clone().into())
             .await
             .unwrap();
+
+        upload.abort().await.unwrap();
         let get_res = storage.get(&location).await;
         assert!(get_res.is_err());
         assert!(matches!(
@@ -2007,7 +2103,7 @@ mod tests {
         let location1 = Path::from("foo/x.json");
         let location2 = Path::from("foo.bar/y.json");
 
-        let data = Bytes::from("arbitrary data");
+        let data = PutPayload::from("arbitrary data");
         storage.put(&location1, data.clone()).await.unwrap();
         storage.put(&location2, data).await.unwrap();
 
@@ -2065,8 +2161,7 @@ mod tests {
         .collect();
 
         for f in &files {
-            let data = data.clone();
-            storage.put(f, data).await.unwrap();
+            storage.put(f, data.clone().into()).await.unwrap();
         }
 
         // ==================== check: prefix-list `mydb/wb` (directory) ====================
@@ -2130,15 +2225,15 @@ mod tests {
         let contents2 = Bytes::from("dogs");
 
         // copy() make both objects identical
-        storage.put(&path1, contents1.clone()).await.unwrap();
-        storage.put(&path2, contents2.clone()).await.unwrap();
+        storage.put(&path1, contents1.clone().into()).await.unwrap();
+        storage.put(&path2, contents2.clone().into()).await.unwrap();
         storage.copy(&path1, &path2).await.unwrap();
         let new_contents = storage.get(&path2).await.unwrap().bytes().await.unwrap();
         assert_eq!(&new_contents, &contents1);
 
         // rename() copies contents and deletes original
-        storage.put(&path1, contents1.clone()).await.unwrap();
-        storage.put(&path2, contents2.clone()).await.unwrap();
+        storage.put(&path1, contents1.clone().into()).await.unwrap();
+        storage.put(&path2, contents2.clone().into()).await.unwrap();
         storage.rename(&path1, &path2).await.unwrap();
         let new_contents = storage.get(&path2).await.unwrap().bytes().await.unwrap();
         assert_eq!(&new_contents, &contents1);
@@ -2158,8 +2253,8 @@ mod tests {
         let contents2 = Bytes::from("dogs");
 
         // copy_if_not_exists() errors if destination already exists
-        storage.put(&path1, contents1.clone()).await.unwrap();
-        storage.put(&path2, contents2.clone()).await.unwrap();
+        storage.put(&path1, contents1.clone().into()).await.unwrap();
+        storage.put(&path2, contents2.clone().into()).await.unwrap();
         let result = storage.copy_if_not_exists(&path1, &path2).await;
         assert!(result.is_err());
         assert!(matches!(
@@ -2181,7 +2276,34 @@ mod tests {
         storage.delete(&path2).await.unwrap();
     }
 
-    pub(crate) async fn multipart(storage: &dyn ObjectStore, multipart: &dyn MultiPartStore) {
+    pub(crate) async fn copy_rename_nonexistent_object(storage: &DynObjectStore) {
+        // Create empty source object
+        let path1 = Path::from("test1");
+
+        // Create destination object
+        let path2 = Path::from("test2");
+        storage.put(&path2, "hello".into()).await.unwrap();
+
+        // copy() errors if source does not exist
+        let result = storage.copy(&path1, &path2).await;
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), crate::Error::NotFound { .. }));
+
+        // rename() errors if source does not exist
+        let result = storage.rename(&path1, &path2).await;
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), crate::Error::NotFound { .. }));
+
+        // copy_if_not_exists() errors if source does not exist
+        let result = storage.copy_if_not_exists(&path1, &path2).await;
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), crate::Error::NotFound { .. }));
+
+        // Clean up
+        storage.delete(&path2).await.unwrap();
+    }
+
+    pub(crate) async fn multipart(storage: &dyn ObjectStore, multipart: &dyn MultipartStore) {
         let path = Path::from("test_multipart");
         let chunk_size = 5 * 1024 * 1024;
 
@@ -2191,7 +2313,7 @@ mod tests {
 
         let parts: Vec<_> = futures::stream::iter(chunks)
             .enumerate()
-            .map(|(idx, b)| multipart.put_part(&path, &id, idx, b))
+            .map(|(idx, b)| multipart.put_part(&path, &id, idx, b.into()))
             .buffered(2)
             .try_collect()
             .await
@@ -2231,7 +2353,7 @@ mod tests {
 
         let data = Bytes::from("hello world");
         let path = Path::from("file.txt");
-        integration.put(&path, data.clone()).await.unwrap();
+        integration.put(&path, data.clone().into()).await.unwrap();
 
         let signed = integration
             .signed_url(Method::GET, &path, Duration::from_secs(60))
@@ -2245,10 +2367,10 @@ mod tests {
     }
 
     #[cfg(any(feature = "aws", feature = "azure"))]
-    pub(crate) async fn tagging<F, Fut>(storage: &dyn ObjectStore, validate: bool, get_tags: F)
+    pub(crate) async fn tagging<F, Fut>(storage: Arc<dyn ObjectStore>, validate: bool, get_tags: F)
     where
         F: Fn(Path) -> Fut + Send + Sync,
-        Fut: Future<Output = Result<reqwest::Response>> + Send,
+        Fut: std::future::Future<Output = Result<reqwest::Response>> + Send,
     {
         use bytes::Buf;
         use serde::Deserialize;
@@ -2289,21 +2411,37 @@ mod tests {
 
         let path = Path::from("tag_test");
         storage
-            .put_opts(&path, "test".into(), tag_set.into())
+            .put_opts(&path, "test".into(), tag_set.clone().into())
             .await
             .unwrap();
+
+        let multi_path = Path::from("tag_test_multi");
+        let mut write = storage
+            .put_multipart_opts(&multi_path, tag_set.clone().into())
+            .await
+            .unwrap();
+
+        write.put_part("foo".into()).await.unwrap();
+        write.complete().await.unwrap();
+
+        let buf_path = Path::from("tag_test_buf");
+        let mut buf = BufWriter::new(storage, buf_path.clone()).with_tags(tag_set);
+        buf.write_all(b"foo").await.unwrap();
+        buf.shutdown().await.unwrap();
 
         // Write should always succeed, but certain configurations may simply ignore tags
         if !validate {
             return;
         }
 
-        let resp = get_tags(path.clone()).await.unwrap();
-        let body = resp.bytes().await.unwrap();
+        for path in [path, multi_path, buf_path] {
+            let resp = get_tags(path.clone()).await.unwrap();
+            let body = resp.bytes().await.unwrap();
 
-        let mut resp: Tagging = quick_xml::de::from_reader(body.reader()).unwrap();
-        resp.list.tags.sort_by(|a, b| a.key.cmp(&b.key));
-        assert_eq!(resp.list.tags, tags);
+            let mut resp: Tagging = quick_xml::de::from_reader(body.reader()).unwrap();
+            resp.list.tags.sort_by(|a, b| a.key.cmp(&b.key));
+            assert_eq!(resp.list.tags, tags);
+        }
     }
 
     async fn delete_fixtures(storage: &DynObjectStore) {

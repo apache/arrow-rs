@@ -626,7 +626,9 @@ mod tests {
     use std::collections::HashMap;
 
     use super::*;
-    use crate::{BooleanArray, Int32Array, Int64Array, Int8Array, ListArray, StringArray};
+    use crate::{
+        BooleanArray, Int32Array, Int64Array, Int8Array, ListArray, StringArray, StringViewArray,
+    };
     use arrow_buffer::{Buffer, ToByteSlice};
     use arrow_data::{ArrayData, ArrayDataBuilder};
     use arrow_schema::Fields;
@@ -644,6 +646,30 @@ mod tests {
         let record_batch =
             RecordBatch::try_new(Arc::new(schema), vec![Arc::new(a), Arc::new(b)]).unwrap();
         check_batch(record_batch, 5)
+    }
+
+    #[test]
+    fn create_string_view_record_batch() {
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Utf8View, false),
+        ]);
+
+        let a = Int32Array::from(vec![1, 2, 3, 4, 5]);
+        let b = StringViewArray::from(vec!["a", "b", "c", "d", "e"]);
+
+        let record_batch =
+            RecordBatch::try_new(Arc::new(schema), vec![Arc::new(a), Arc::new(b)]).unwrap();
+
+        assert_eq!(5, record_batch.num_rows());
+        assert_eq!(2, record_batch.num_columns());
+        assert_eq!(&DataType::Int32, record_batch.schema().field(0).data_type());
+        assert_eq!(
+            &DataType::Utf8View,
+            record_batch.schema().field(1).data_type()
+        );
+        assert_eq!(5, record_batch.column(0).len());
+        assert_eq!(5, record_batch.column(1).len());
     }
 
     #[test]

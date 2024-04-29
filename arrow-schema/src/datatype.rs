@@ -228,12 +228,30 @@ pub enum DataType {
     ///
     /// A single List array can store up to [`i32::MAX`] elements in total.
     List(FieldRef),
+
+    /// (NOT YET FULLY SUPPORTED)  A list of some logical data type with variable length.
+    ///
+    /// Note this data type is not yet fully supported. Using it with arrow APIs may result in `panic`s.
+    ///
+    /// The ListView layout is defined by three buffers:
+    /// a validity bitmap, an offsets buffer, and an additional sizes buffer.
+    /// Sizes and offsets are both 32 bits for this type
+    ListView(FieldRef),
     /// A list of some logical data type with fixed length.
     FixedSizeList(FieldRef, i32),
     /// A list of some logical data type with variable length and 64-bit offsets.
     ///
     /// A single LargeList array can store up to [`i64::MAX`] elements in total.
     LargeList(FieldRef),
+
+    /// (NOT YET FULLY SUPPORTED)  A list of some logical data type with variable length and 64-bit offsets.
+    ///
+    /// Note this data type is not yet fully supported. Using it with arrow APIs may result in `panic`s.
+    ///
+    /// The LargeListView layout is defined by three buffers:
+    /// a validity bitmap, an offsets buffer, and an additional sizes buffer.
+    /// Sizes and offsets are both 64 bits for this type
+    LargeListView(FieldRef),
     /// A nested datatype that contains a number of sub-fields.
     Struct(Fields),
     /// A nested datatype that can represent slots of differing types. Components:
@@ -536,7 +554,11 @@ impl DataType {
             DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => None,
             DataType::Binary | DataType::LargeBinary | DataType::BinaryView => None,
             DataType::FixedSizeBinary(_) => None,
-            DataType::List(_) | DataType::LargeList(_) | DataType::Map(_, _) => None,
+            DataType::List(_)
+            | DataType::ListView(_)
+            | DataType::LargeList(_)
+            | DataType::LargeListView(_)
+            | DataType::Map(_, _) => None,
             DataType::FixedSizeList(_, _) => None,
             DataType::Struct(_) => None,
             DataType::Union(_, _) => None,
@@ -581,8 +603,10 @@ impl DataType {
                 | DataType::Decimal256(_, _) => 0,
                 DataType::Timestamp(_, s) => s.as_ref().map(|s| s.len()).unwrap_or_default(),
                 DataType::List(field)
+                | DataType::ListView(field)
                 | DataType::FixedSizeList(field, _)
                 | DataType::LargeList(field)
+                | DataType::LargeListView(field)
                 | DataType::Map(field, _) => field.size(),
                 DataType::Struct(fields) => fields.size(),
                 DataType::Union(fields, _) => fields.size(),
