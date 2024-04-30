@@ -62,7 +62,10 @@ impl std::fmt::Display for Op {
     }
 }
 
-/// Perform `left == right` operation on two [`Datum`]
+/// Perform `left == right` operation on two [`Datum`].
+///
+/// Comparing null values on either side will yield a null in the corresponding
+/// slot of the resulting [`BooleanArray`].
 ///
 /// For floating values like f32 and f64, this comparison produces an ordering in accordance to
 /// the totalOrder predicate as defined in the IEEE 754 (2008 revision) floating point standard.
@@ -74,7 +77,10 @@ pub fn eq(lhs: &dyn Datum, rhs: &dyn Datum) -> Result<BooleanArray, ArrowError> 
     compare_op(Op::Equal, lhs, rhs)
 }
 
-/// Perform `left != right` operation on two [`Datum`]
+/// Perform `left != right` operation on two [`Datum`].
+///
+/// Comparing null values on either side will yield a null in the corresponding
+/// slot of the resulting [`BooleanArray`].
 ///
 /// For floating values like f32 and f64, this comparison produces an ordering in accordance to
 /// the totalOrder predicate as defined in the IEEE 754 (2008 revision) floating point standard.
@@ -86,7 +92,10 @@ pub fn neq(lhs: &dyn Datum, rhs: &dyn Datum) -> Result<BooleanArray, ArrowError>
     compare_op(Op::NotEqual, lhs, rhs)
 }
 
-/// Perform `left < right` operation on two [`Datum`]
+/// Perform `left < right` operation on two [`Datum`].
+///
+/// Comparing null values on either side will yield a null in the corresponding
+/// slot of the resulting [`BooleanArray`].
 ///
 /// For floating values like f32 and f64, this comparison produces an ordering in accordance to
 /// the totalOrder predicate as defined in the IEEE 754 (2008 revision) floating point standard.
@@ -98,7 +107,10 @@ pub fn lt(lhs: &dyn Datum, rhs: &dyn Datum) -> Result<BooleanArray, ArrowError> 
     compare_op(Op::Less, lhs, rhs)
 }
 
-/// Perform `left <= right` operation on two [`Datum`]
+/// Perform `left <= right` operation on two [`Datum`].
+///
+/// Comparing null values on either side will yield a null in the corresponding
+/// slot of the resulting [`BooleanArray`].
 ///
 /// For floating values like f32 and f64, this comparison produces an ordering in accordance to
 /// the totalOrder predicate as defined in the IEEE 754 (2008 revision) floating point standard.
@@ -110,7 +122,10 @@ pub fn lt_eq(lhs: &dyn Datum, rhs: &dyn Datum) -> Result<BooleanArray, ArrowErro
     compare_op(Op::LessEqual, lhs, rhs)
 }
 
-/// Perform `left > right` operation on two [`Datum`]
+/// Perform `left > right` operation on two [`Datum`].
+///
+/// Comparing null values on either side will yield a null in the corresponding
+/// slot of the resulting [`BooleanArray`].
 ///
 /// For floating values like f32 and f64, this comparison produces an ordering in accordance to
 /// the totalOrder predicate as defined in the IEEE 754 (2008 revision) floating point standard.
@@ -122,7 +137,10 @@ pub fn gt(lhs: &dyn Datum, rhs: &dyn Datum) -> Result<BooleanArray, ArrowError> 
     compare_op(Op::Greater, lhs, rhs)
 }
 
-/// Perform `left >= right` operation on two [`Datum`]
+/// Perform `left >= right` operation on two [`Datum`].
+///
+/// Comparing null values on either side will yield a null in the corresponding
+/// slot of the resulting [`BooleanArray`].
 ///
 /// For floating values like f32 and f64, this comparison produces an ordering in accordance to
 /// the totalOrder predicate as defined in the IEEE 754 (2008 revision) floating point standard.

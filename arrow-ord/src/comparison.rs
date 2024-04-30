@@ -1031,8 +1031,7 @@ where
     crate::cmp::neq(&left, &Scalar::new(&right))
 }
 
-/// Perform `left < right` operation on two [`PrimitiveArray`]s. Null values are less than non-null
-/// values.
+/// Perform `left < right` operation on two [`PrimitiveArray`]s.
 ///
 /// For floating values like f32 and f64, this comparison produces an ordering in accordance to
 /// the totalOrder predicate as defined in the IEEE 754 (2008 revision) floating point standard.
@@ -1052,7 +1051,6 @@ where
 }
 
 /// Perform `left < right` operation on a [`PrimitiveArray`] and a scalar value.
-/// Null values are less than non-null values.
 ///
 /// For floating values like f32 and f64, this comparison produces an ordering in accordance to
 /// the totalOrder predicate as defined in the IEEE 754 (2008 revision) floating point standard.
@@ -1069,8 +1067,7 @@ where
     crate::cmp::lt(&left, &Scalar::new(&right))
 }
 
-/// Perform `left <= right` operation on two [`PrimitiveArray`]s. Null values are less than non-null
-/// values.
+/// Perform `left <= right` operation on two [`PrimitiveArray`]s.
 ///
 /// For floating values like f32 and f64, this comparison produces an ordering in accordance to
 /// the totalOrder predicate as defined in the IEEE 754 (2008 revision) floating point standard.
@@ -1090,7 +1087,6 @@ where
 }
 
 /// Perform `left <= right` operation on a [`PrimitiveArray`] and a scalar value.
-/// Null values are less than non-null values.
 ///
 /// For floating values like f32 and f64, this comparison produces an ordering in accordance to
 /// the totalOrder predicate as defined in the IEEE 754 (2008 revision) floating point standard.
@@ -1110,8 +1106,7 @@ where
     crate::cmp::lt_eq(&left, &Scalar::new(&right))
 }
 
-/// Perform `left > right` operation on two [`PrimitiveArray`]s. Non-null values are greater than null
-/// values.
+/// Perform `left > right` operation on two [`PrimitiveArray`]s.
 ///
 /// For floating values like f32 and f64, this comparison produces an ordering in accordance to
 /// the totalOrder predicate as defined in the IEEE 754 (2008 revision) floating point standard.
@@ -1131,7 +1126,6 @@ where
 }
 
 /// Perform `left > right` operation on a [`PrimitiveArray`] and a scalar value.
-/// Non-null values are greater than null values.
 ///
 /// For floating values like f32 and f64, this comparison produces an ordering in accordance to
 /// the totalOrder predicate as defined in the IEEE 754 (2008 revision) floating point standard.
@@ -1148,8 +1142,7 @@ where
     crate::cmp::gt(&left, &Scalar::new(&right))
 }
 
-/// Perform `left >= right` operation on two [`PrimitiveArray`]s. Non-null values are greater than null
-/// values.
+/// Perform `left >= right` operation on two [`PrimitiveArray`]s.
 ///
 /// For floating values like f32 and f64, this comparison produces an ordering in accordance to
 /// the totalOrder predicate as defined in the IEEE 754 (2008 revision) floating point standard.
@@ -1169,7 +1162,6 @@ where
 }
 
 /// Perform `left >= right` operation on a [`PrimitiveArray`] and a scalar value.
-/// Non-null values are greater than null values.
 ///
 /// For floating values like f32 and f64, this comparison produces an ordering in accordance to
 /// the totalOrder predicate as defined in the IEEE 754 (2008 revision) floating point standard.
