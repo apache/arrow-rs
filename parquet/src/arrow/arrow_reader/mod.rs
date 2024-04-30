@@ -1436,6 +1436,46 @@ mod tests {
         assert_eq!(row_count, 300);
     }
 
+    #[test]
+    fn test_read_incorrect_map_schema_file() {
+        let testdata = arrow::util::test_util::parquet_test_data();
+        // see https://github.com/apache/parquet-testing/pull/47
+        let path = format!("{testdata}/incorrect_map_schema.parquet");
+        let file = File::open(path).unwrap();
+        let mut record_reader = ParquetRecordBatchReader::try_new(file, 32).unwrap();
+
+        let batch = record_reader.next().unwrap().unwrap();
+        assert_eq!(batch.num_rows(), 1);
+
+        let expected_schema = Schema::new(Fields::from(vec![Field::new(
+            "my_map",
+            ArrowDataType::Map(
+                Arc::new(Field::new(
+                    "key_value",
+                    ArrowDataType::Struct(Fields::from(vec![
+                        Field::new("key", ArrowDataType::Utf8, false),
+                        Field::new("value", ArrowDataType::Utf8, true),
+                    ])),
+                    false,
+                )),
+                false,
+            ),
+            true,
+        )]));
+        assert_eq!(batch.schema().as_ref(), &expected_schema);
+
+        assert_eq!(batch.num_rows(), 1);
+        assert_eq!(batch.column(0).null_count(), 0);
+        assert_eq!(
+            batch.column(0).as_map().keys().as_ref(),
+            &StringArray::from(vec!["parent", "name"])
+        );
+        assert_eq!(
+            batch.column(0).as_map().values().as_ref(),
+            &StringArray::from(vec!["another", "report"])
+        );
+    }
+
     /// Parameters for single_column_reader_test
     #[derive(Clone)]
     struct TestOptions {
