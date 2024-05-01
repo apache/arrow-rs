@@ -218,6 +218,8 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
             | Interval(_),
         ) => true,
         (Utf8 | LargeUtf8, Utf8View) => true,
+        (Utf8View, Utf8 | LargeUtf8) => true,
+        (BinaryView, Binary | LargeBinary) => true,
         (Utf8 | LargeUtf8, _) => to_type.is_numeric() && to_type != &Float16,
         (_, Utf8 | LargeUtf8) => from_type.is_primitive(),
 
@@ -1262,6 +1264,12 @@ pub fn cast_with_options(
                 "Casting from {from_type:?} to {to_type:?} not supported",
             ))),
         },
+        (Utf8View, Utf8) => cast_view_to_byte::<StringViewType, GenericStringType<i32>>(array),
+        (Utf8View, LargeUtf8) => cast_view_to_byte::<StringViewType, GenericStringType<i64>>(array),
+        (BinaryView, Binary) => cast_view_to_byte::<BinaryViewType, GenericBinaryType<i32>>(array),
+        (BinaryView, LargeBinary) => {
+            cast_view_to_byte::<BinaryViewType, GenericBinaryType<i64>>(array)
+        }
         (from_type, LargeUtf8) if from_type.is_primitive() => {
             value_to_string::<i64>(array, cast_options)
         }
@@ -2297,6 +2305,32 @@ where
             data.nulls().cloned(),
         )
     }))
+}
+
+/// Helper function to cast from one `ByteViewType` array to `ByteArrayType` array.
+fn cast_view_to_byte<FROM, TO>(array: &dyn Array) -> Result<ArrayRef, ArrowError>
+where
+    FROM: ByteViewType,
+    TO: ByteArrayType,
+    FROM::Native: AsRef<TO::Native>,
+{
+    let data = array.to_data();
+    let view_array = GenericByteViewArray::<FROM>::from(data);
+
+    let len = view_array.len();
+    let bytes = view_array
+        .views()
+        .iter()
+        .map(|v| ByteView::from(*v).length as usize)
+        .sum::<usize>();
+
+    let mut byte_array_builder = GenericByteBuilder::<TO>::with_capacity(len, bytes);
+
+    for val in view_array.iter() {
+        byte_array_builder.append_option(val);
+    }
+
+    Ok(Arc::new(byte_array_builder.finish()))
 }
 
 #[cfg(test)]
@@ -5167,6 +5201,82 @@ mod tests {
 
         let expect_binary_view_array = BinaryViewArray::from(data);
         assert_eq!(binary_view_array.as_ref(), &expect_binary_view_array);
+    }
+
+    #[test]
+    fn test_view_to_string() {
+        _test_view_to_string::<i32>();
+        _test_view_to_string::<i64>();
+    }
+
+    fn _test_view_to_string<O>()
+    where
+        O: OffsetSizeTrait,
+    {
+        let data: Vec<Option<&str>> = vec![
+            Some("hello"),
+            Some("world"),
+            None,
+            Some("large payload over 12 bytes"),
+            Some("lulu"),
+        ];
+
+        let view_array = {
+            // ["hello", "world", null, "large payload over 12 bytes", "lulu"]
+            let mut builder = StringViewBuilder::new().with_block_size(8); // multiple buffers.
+            for s in data.iter() {
+                builder.append_option(*s);
+            }
+            builder.finish()
+        };
+
+        let expected_string_array = GenericStringArray::<O>::from(data);
+        let expected_type = expected_string_array.data_type();
+
+        assert!(can_cast_types(view_array.data_type(), expected_type));
+
+        let string_array = cast(&view_array, expected_type).unwrap();
+        assert_eq!(string_array.data_type(), expected_type);
+
+        assert_eq!(string_array.as_ref(), &expected_string_array);
+    }
+
+    #[test]
+    fn test_view_to_binary() {
+        _test_view_to_binary::<i32>();
+        _test_view_to_binary::<i64>();
+    }
+
+    fn _test_view_to_binary<O>()
+    where
+        O: OffsetSizeTrait,
+    {
+        let data: Vec<Option<&[u8]>> = vec![
+            Some(b"hello"),
+            Some(b"world"),
+            None,
+            Some(b"large payload over 12 bytes"),
+            Some(b"lulu"),
+        ];
+
+        let view_array = {
+            // ["hello", "world", null, "large payload over 12 bytes", "lulu"]
+            let mut builder = BinaryViewBuilder::new().with_block_size(8); // multiple buffers.
+            for s in data.iter() {
+                builder.append_option(*s);
+            }
+            builder.finish()
+        };
+
+        let expected_binary_array = GenericBinaryArray::<O>::from(data);
+        let expected_type = expected_binary_array.data_type();
+
+        assert!(can_cast_types(view_array.data_type(), expected_type));
+
+        let binary_array = cast(&view_array, expected_type).unwrap();
+        assert_eq!(binary_array.data_type(), expected_type);
+
+        assert_eq!(binary_array.as_ref(), &expected_binary_array);
     }
 
     #[test]
