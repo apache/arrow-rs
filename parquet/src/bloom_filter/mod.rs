@@ -50,7 +50,7 @@
 //!
 //! Here is a table of calculated sizes for various FPP and NDV:
 //!
-//! | NDV       | FPP       | Nb      | Size (KB) |
+//! | NDV       | FPP       | b       | Size (KB) |
 //! |-----------|-----------|---------|-----------|
 //! | 10,000    | 0.1       | 256     | 8         |
 //! | 10,000    | 0.01      | 512     | 16        |
