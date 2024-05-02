@@ -68,7 +68,6 @@ use arrow_select::take::take;
 use num::cast::AsPrimitive;
 use num::{NumCast, ToPrimitive};
 
-
 /// CastOptions provides a way to override the default cast behaviors
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CastOptions<'a> {
@@ -165,7 +164,7 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
         (Map(from_entries,ordered_from), Map(to_entries, ordered_to)) if ordered_from == ordered_to =>
             match (key_field(from_entries), key_field(to_entries), value_field(from_entries), value_field(to_entries)) {
                 (Some(from_key), Some(to_key), Some(from_value), Some(to_value)) =>
-                    can_cast_types(from_key.data_type(), to_key.data_type()) && can_cast_types(&from_value.data_type(), &to_value.data_type()),
+                    can_cast_types(from_key.data_type(), to_key.data_type()) && can_cast_types(from_value.data_type(), to_value.data_type()),
                 _ => false
             },
         // cast one decimal type to another decimal type
@@ -811,13 +810,9 @@ pub fn cast_with_options(
         (FixedSizeList(_, size), _) if *size == 1 => {
             cast_single_element_fixed_size_list_to_values(array, to_type, cast_options)
         }
-        (Map(_, ordered1), Map(_, ordered2)) if ordered1 == ordered2 =>
-            cast_map_values(
-                array.as_map(),
-                &to_type,
-                cast_options,
-                ordered1.to_owned()
-            ),
+        (Map(_, ordered1), Map(_, ordered2)) if ordered1 == ordered2 => {
+            cast_map_values(array.as_map(), to_type, cast_options, ordered1.to_owned())
+        }
         (Decimal128(_, s1), Decimal128(p2, s2)) => {
             cast_decimal_to_decimal_same_type::<Decimal128Type>(
                 array.as_primitive(),
@@ -7402,18 +7397,26 @@ mod tests {
         let array = builder.finish();
 
         let new_ordered = true;
-        let new_type = DataType::Map(Arc::new(Field::new("entries", DataType::Struct(
-            vec![
-                Field::new("key", DataType::Utf8, false),
-                Field::new("value", DataType::Utf8, false),
-            ].into()
-        ), false)), new_ordered);
+        let new_type = DataType::Map(
+            Arc::new(Field::new(
+                "entries",
+                DataType::Struct(
+                    vec![
+                        Field::new("key", DataType::Utf8, false),
+                        Field::new("value", DataType::Utf8, false),
+                    ]
+                    .into(),
+                ),
+                false,
+            )),
+            new_ordered,
+        );
 
-        let new_array_result = cast(
-            &array,
-            &new_type.clone());
+        let new_array_result = cast(&array, &new_type.clone());
         assert!(!can_cast_types(array.data_type(), &new_type));
-        assert!(matches!(new_array_result, Err(ArrowError::CastError(t)) if t == r#"Casting from Map(Field { name: "entries", data_type: Struct([Field { name: "key", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "value", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }]), nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, false) to Map(Field { name: "entries", data_type: Struct([Field { name: "key", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "value", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }]), nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, true) not supported"#));
+        assert!(
+            matches!(new_array_result, Err(ArrowError::CastError(t)) if t == r#"Casting from Map(Field { name: "entries", data_type: Struct([Field { name: "key", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "value", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }]), nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, false) to Map(Field { name: "entries", data_type: Struct([Field { name: "key", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "value", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }]), nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, true) not supported"#)
+        );
     }
 
     #[test]
@@ -7441,18 +7444,26 @@ mod tests {
         let array = builder.finish();
 
         let new_ordered = true;
-        let new_type = DataType::Map(Arc::new(Field::new("entries", DataType::Struct(
-            vec![
-                Field::new("key", DataType::Utf8, false),
-                Field::new("value", DataType::Duration(TimeUnit::Second), false),
-            ].into()
-        ), false)), new_ordered);
+        let new_type = DataType::Map(
+            Arc::new(Field::new(
+                "entries",
+                DataType::Struct(
+                    vec![
+                        Field::new("key", DataType::Utf8, false),
+                        Field::new("value", DataType::Duration(TimeUnit::Second), false),
+                    ]
+                    .into(),
+                ),
+                false,
+            )),
+            new_ordered,
+        );
 
-        let new_array_result = cast(
-            &array,
-            &new_type.clone());
+        let new_array_result = cast(&array, &new_type.clone());
         assert!(!can_cast_types(array.data_type(), &new_type));
-        assert!(matches!(new_array_result, Err(ArrowError::CastError(t)) if t == r#"Casting from Map(Field { name: "entries", data_type: Struct([Field { name: "key", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "value", data_type: Interval(DayTime), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }]), nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, false) to Map(Field { name: "entries", data_type: Struct([Field { name: "key", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "value", data_type: Duration(Second), nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }]), nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, true) not supported"#));
+        assert!(
+            matches!(new_array_result, Err(ArrowError::CastError(t)) if t == r#"Casting from Map(Field { name: "entries", data_type: Struct([Field { name: "key", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "value", data_type: Interval(DayTime), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }]), nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, false) to Map(Field { name: "entries", data_type: Struct([Field { name: "key", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "value", data_type: Duration(Second), nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }]), nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, true) not supported"#)
+        );
     }
 
     #[test]
@@ -7478,18 +7489,24 @@ mod tests {
 
         let array = builder.finish();
 
-        let new_type = DataType::Map(Arc::new(Field::new("entries_new", DataType::Struct(
-            vec![
-                Field::new("key_new", DataType::Utf8, false),
-                Field::new("value_values", DataType::Utf8, false),
-            ].into()
-        ), false)), false);
+        let new_type = DataType::Map(
+            Arc::new(Field::new(
+                "entries_new",
+                DataType::Struct(
+                    vec![
+                        Field::new("key_new", DataType::Utf8, false),
+                        Field::new("value_values", DataType::Utf8, false),
+                    ]
+                    .into(),
+                ),
+                false,
+            )),
+            false,
+        );
 
         assert_ne!(new_type, array.data_type().clone());
 
-        let new_array = cast(
-            &array,
-            &new_type.clone()).unwrap();
+        let new_array = cast(&array, &new_type.clone()).unwrap();
         assert_eq!(new_type, new_array.data_type().clone());
         let map_array = new_array.as_map();
 
@@ -7506,8 +7523,7 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(&key_string, &vec!["0", "1"]);
 
-        let values_string_array = cast(map_array
-                                           .values(), &DataType::Utf8).unwrap();
+        let values_string_array = cast(map_array.values(), &DataType::Utf8).unwrap();
         let values_string = values_string_array
             .as_any()
             .downcast_ref::<StringArray>()
@@ -7541,16 +7557,22 @@ mod tests {
 
         let array = builder.finish();
 
-        let new_type = DataType::Map(Arc::new(Field::new("entries", DataType::Struct(
-            vec![
-                Field::new("key", DataType::Utf8, false),
-                Field::new("value", DataType::Utf8, false),
-            ].into()
-        ), false)), false);
+        let new_type = DataType::Map(
+            Arc::new(Field::new(
+                "entries",
+                DataType::Struct(
+                    vec![
+                        Field::new("key", DataType::Utf8, false),
+                        Field::new("value", DataType::Utf8, false),
+                    ]
+                    .into(),
+                ),
+                false,
+            )),
+            false,
+        );
 
-        let new_array = cast(
-            &array,
-            &new_type.clone()).unwrap();
+        let new_array = cast(&array, &new_type.clone()).unwrap();
         assert_eq!(new_type, new_array.data_type().clone());
         let map_array = new_array.as_map();
 
@@ -7567,8 +7589,7 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(&key_string, &vec!["0", "1"]);
 
-        let values_string_array = cast(map_array
-                                           .values(), &DataType::Utf8).unwrap();
+        let values_string_array = cast(map_array.values(), &DataType::Utf8).unwrap();
         let values_string = values_string_array
             .as_any()
             .downcast_ref::<StringArray>()
