@@ -63,6 +63,7 @@
 //! }
 //! ```
 
+use std::fmt::Formatter;
 use std::io::{Error, ErrorKind, Result, Write};
 
 #[derive(Debug)]
@@ -83,10 +84,9 @@ impl Default for StringWriter {
         Self::new()
     }
 }
-
-impl ToString for StringWriter {
-    fn to_string(&self) -> String {
-        self.data.clone()
+impl std::fmt::Display for StringWriter {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.data)
     }
 }
 

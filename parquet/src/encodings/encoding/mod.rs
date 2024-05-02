@@ -24,7 +24,7 @@ use crate::data_type::private::ParquetValueType;
 use crate::data_type::*;
 use crate::encodings::rle::RleEncoder;
 use crate::errors::{ParquetError, Result};
-use crate::util::bit_util::{self, num_required_bits, BitWriter};
+use crate::util::bit_util::{num_required_bits, BitWriter};
 
 use bytes::Bytes;
 pub use dict_encoder::DictEncoder;
@@ -47,12 +47,13 @@ pub trait Encoder<T: DataType>: Send {
     /// identified by `valid_bits`.
     ///
     /// Returns the number of non-null values encoded.
+    #[cfg(test)]
     fn put_spaced(&mut self, values: &[T::T], valid_bits: &[u8]) -> Result<usize> {
         let num_values = values.len();
         let mut buffer = Vec::with_capacity(num_values);
         // TODO: this is pretty inefficient. Revisit in future.
         for (i, item) in values.iter().enumerate().take(num_values) {
-            if bit_util::get_bit(valid_bits, i) {
+            if crate::util::bit_util::get_bit(valid_bits, i) {
                 buffer.push(item.clone());
             }
         }
@@ -727,6 +728,7 @@ mod tests {
     use crate::encodings::decoding::{get_decoder, Decoder, DictDecoder, PlainDecoder};
     use crate::schema::types::{ColumnDescPtr, ColumnDescriptor, ColumnPath, Type as SchemaType};
     use crate::util::test_common::rand_gen::{random_bytes, RandGen};
+    use crate::util::bit_util;
 
     const TEST_SET_SIZE: usize = 1024;
 
