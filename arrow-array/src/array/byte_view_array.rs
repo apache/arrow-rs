@@ -25,6 +25,7 @@ use arrow_buffer::{Buffer, NullBuffer, ScalarBuffer};
 use arrow_data::{ArrayData, ArrayDataBuilder, ByteView};
 use arrow_schema::{ArrowError, DataType};
 use std::any::Any;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::sync::Arc;
@@ -265,6 +266,51 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
             phantom: Default::default(),
         }
     }
+
+    /// Returns whether this array is a compact view
+    pub(self) fn is_compact_view(&self) -> bool {
+        todo!()
+    }
+
+    /// Returns a compact version of this array
+    ///
+    /// # Compaction
+    ///
+    /// before compaction:
+    /// ```text
+    ///                                        ┌──────┐                 
+    ///                                        │......│                 
+    ///                                        │......│                 
+    /// ┌────────────────────┐       ┌ ─ ─ ─ ▶ │Data1 │   Large buffer  
+    /// │       View 1       │─ ─ ─ ─          │......│  with data that
+    /// ├────────────────────┤                 │......│ is not referred
+    /// │       View 2       │─ ─ ─ ─ ─ ─ ─ ─▶ │Data2 │ to by View 1 or
+    /// └────────────────────┘                 │......│      View 2     
+    ///                                        │......│                 
+    ///    2 views, refer to                   │......│                 
+    ///   small portions of a                  └──────┘                 
+    ///      large buffer                                               
+    /// ```
+    ///                                                                
+    /// after compaction:
+    ///
+    /// ```text
+    /// ┌────────────────────┐                 ┌─────┐    After gc, only
+    /// │       View 1       │─ ─ ─ ─ ─ ─ ─ ─▶ │Data1│     data that is  
+    /// ├────────────────────┤       ┌ ─ ─ ─ ▶ │Data2│    pointed to by  
+    /// │       View 2       │─ ─ ─ ─          └─────┘     the views is  
+    /// └────────────────────┘                                 left      
+    ///                                                                  
+    ///                                                                  
+    ///         2 views                                                  
+    /// ```
+    /// this method will compact the data buffers to only include the data
+    /// that is pointed to by the views
+    /// and return a new array with the compacted data buffers.
+    /// the original array will be left as is.
+    pub fn compact(&self) -> Self {
+        todo!()
+    }
 }
 
 impl<T: ByteViewType + ?Sized> Debug for GenericByteViewArray<T> {
@@ -482,6 +528,60 @@ impl From<Vec<Option<String>>> for StringViewArray {
     }
 }
 
+/// A helper struct that used to check if the array is compact view
+///
+/// # Note
+///
+/// The checker is lazy and will not check the array until `finish` is called.
+///
+/// This is based on the assumption that the array will most likely to be not compact,
+/// so it is likely to scan the entire array.
+///
+/// Then it is better to do the check at once, rather than doing it for each accumulate operation.
+struct CompactChecker {
+    length: usize,
+    coverage: BTreeMap<usize, usize>,
+}
+
+impl CompactChecker {
+    pub fn new(length: usize) -> Self {
+        Self {
+            length,
+            coverage: BTreeMap::new(),
+        }
+    }
+
+    /// Accumulate a new covered interval to the checker
+    pub fn accumulate(&mut self, offset: usize, length: usize) {
+        if length == 0 {
+            return;
+        }
+        let end = offset + length;
+        if let Some(val) = self.coverage.get_mut(&offset) {
+            if *val < end {
+                *val = end;
+            }
+        } else {
+            self.coverage.insert(offset, end);
+        }
+    }
+
+    /// Check if the checker is fully covered
+    pub fn finish(&self) -> bool {
+        // check if the coverage is continuous and full
+        let mut last_end = 0;
+        // todo: can be optimized
+        for (start, end) in self.coverage.iter() {
+            if *start > last_end {
+                return false;
+            }
+            last_end = *end;
+        }
+
+        last_end == self.length
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::builder::{BinaryViewBuilder, StringViewBuilder};
@@ -644,5 +744,65 @@ mod tests {
         let buffers = vec![Buffer::from_slice_ref(input_str_2.as_bytes())];
 
         StringViewArray::new(views, buffers, None);
+    }
+
+    #[test]
+    fn test_compact_checker() {
+        use super::CompactChecker;
+        // single coverage, full
+        let mut checker = CompactChecker::new(10);
+        checker.accumulate(0, 10);
+        assert!(checker.finish());
+        // single coverage, partial
+        let mut checker = CompactChecker::new(10);
+        checker.accumulate(0, 5);
+        assert!(!checker.finish());
+        // multiple coverage, no overlapping, partial
+        let mut checker = CompactChecker::new(10);
+        checker.accumulate(0, 5);
+        checker.accumulate(5, 4);
+        assert!(!checker.finish());
+
+        //multiple coverage, no overlapping, full
+        let mut checker = CompactChecker::new(10);
+        checker.accumulate(0, 5);
+        checker.accumulate(5, 5);
+        assert!(checker.finish());
+        //multiple coverage, overlapping, partial
+        let mut checker = CompactChecker::new(10);
+        checker.accumulate(0, 5);
+        checker.accumulate(4, 5);
+        assert!(!checker.finish());
+
+        //multiple coverage, overlapping, full
+        let mut checker = CompactChecker::new(10);
+        checker.accumulate(0, 5);
+        checker.accumulate(4, 6);
+        assert!(checker.finish());
+        //mutiple coverage, no overlapping, full, out of order
+        let mut checker = CompactChecker::new(10);
+        checker.accumulate(4, 6);
+        checker.accumulate(0, 4);
+        assert!(checker.finish());
+
+        // multiple coverage, overlapping, full, out of order
+        let mut checker = CompactChecker::new(10);
+        checker.accumulate(4, 6);
+        checker.accumulate(0, 4);
+        assert!(checker.finish());
+
+        // multiple coverage, overlapping, full, containing null
+        let mut checker = CompactChecker::new(10);
+        checker.accumulate(0, 5);
+        checker.accumulate(5, 0);
+        checker.accumulate(5, 5);
+        assert!(checker.finish());
+        // multiple coverage, overlapping, full, containing null
+        let mut checker = CompactChecker::new(10);
+        checker.accumulate(0, 5);
+        checker.accumulate(5, 0);
+        checker.accumulate(4, 6);
+        checker.accumulate(5, 5);
+        assert!(checker.finish());
     }
 }
