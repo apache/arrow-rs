@@ -25,14 +25,8 @@ use url::Url;
 
 #[derive(Debug, Snafu)]
 enum Error {
-    #[snafu(display("Unable to convert URL \"{}\" to filesystem path", url))]
-    InvalidUrl { url: Url },
-
     #[snafu(display("Unable to recognise URL \"{}\"", url))]
     Unrecognised { url: Url },
-
-    #[snafu(display("Feature {scheme:?} not enabled"))]
-    NotEnabled { scheme: ObjectStoreScheme },
 
     #[snafu(context(false))]
     Path { source: crate::path::Error },
