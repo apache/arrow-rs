@@ -204,8 +204,8 @@ impl<T: ObjectStore> ObjectStore for PrefixStore<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::local::LocalFileSystem;
     use crate::integration::*;
+    use crate::local::LocalFileSystem;
 
     use tempfile::TempDir;
 
