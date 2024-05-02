@@ -64,9 +64,6 @@ enum Error {
     Metadata {
         source: crate::client::header::Error,
     },
-
-    #[snafu(display("Request error: {}", source))]
-    Reqwest { source: reqwest::Error },
 }
 
 impl From<Error> for crate::Error {
