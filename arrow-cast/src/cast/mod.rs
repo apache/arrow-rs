@@ -7382,13 +7382,13 @@ mod tests {
         let string_builder = StringBuilder::new();
         let value_builder = StringBuilder::new();
         let mut builder = MapBuilder::new(
-            Some(MapFieldNames{
+            Some(MapFieldNames {
                 entry: "entries".to_string(),
                 key: "key".to_string(),
                 value: "value".to_string(),
             }),
             string_builder,
-            value_builder
+            value_builder,
         );
 
         builder.keys().append_value("0");
@@ -7405,7 +7405,7 @@ mod tests {
         let new_type = DataType::Map(Arc::new(Field::new("entries", DataType::Struct(
             vec![
                 Field::new("key", DataType::Utf8, false),
-                Field::new("value", DataType::Utf8, false)
+                Field::new("value", DataType::Utf8, false),
             ].into()
         ), false)), new_ordered);
 
@@ -7421,13 +7421,13 @@ mod tests {
         let string_builder = StringBuilder::new();
         let value_builder = IntervalDayTimeArray::builder(2);
         let mut builder = MapBuilder::new(
-            Some(MapFieldNames{
+            Some(MapFieldNames {
                 entry: "entries".to_string(),
                 key: "key".to_string(),
                 value: "value".to_string(),
             }),
             string_builder,
-            value_builder
+            value_builder,
         );
 
         builder.keys().append_value("0");
@@ -7444,7 +7444,7 @@ mod tests {
         let new_type = DataType::Map(Arc::new(Field::new("entries", DataType::Struct(
             vec![
                 Field::new("key", DataType::Utf8, false),
-                Field::new("value", DataType::Duration(TimeUnit::Second), false)
+                Field::new("value", DataType::Duration(TimeUnit::Second), false),
             ].into()
         ), false)), new_ordered);
 
@@ -7460,13 +7460,13 @@ mod tests {
         let string_builder = StringBuilder::new();
         let value_builder = StringBuilder::new();
         let mut builder = MapBuilder::new(
-            Some(MapFieldNames{
+            Some(MapFieldNames {
                 entry: "entries".to_string(),
                 key: "key".to_string(),
                 value: "value".to_string(),
             }),
             string_builder,
-            value_builder
+            value_builder,
         );
 
         builder.keys().append_value("0");
@@ -7481,7 +7481,7 @@ mod tests {
         let new_type = DataType::Map(Arc::new(Field::new("entries_new", DataType::Struct(
             vec![
                 Field::new("key_new", DataType::Utf8, false),
-                Field::new("value_values", DataType::Utf8, false)
+                Field::new("value_values", DataType::Utf8, false),
             ].into()
         ), false)), false);
 
@@ -7523,13 +7523,13 @@ mod tests {
         let string_builder = StringBuilder::new();
         let value_builder = Int8Builder::new();
         let mut builder = MapBuilder::new(
-            Some(MapFieldNames{
+            Some(MapFieldNames {
                 entry: "entries".to_string(),
                 key: "key".to_string(),
                 value: "value".to_string(),
             }),
             string_builder,
-            value_builder
+            value_builder,
         );
 
         builder.keys().append_value("0");
@@ -7544,7 +7544,7 @@ mod tests {
         let new_type = DataType::Map(Arc::new(Field::new("entries", DataType::Struct(
             vec![
                 Field::new("key", DataType::Utf8, false),
-                Field::new("value", DataType::Utf8, false)
+                Field::new("value", DataType::Utf8, false),
             ].into()
         ), false)), false);
 
