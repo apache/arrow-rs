@@ -398,7 +398,7 @@ impl MultipartUpload for ThrottledUpload {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{memory::InMemory, tests::*, GetResultPayload};
+    use crate::{integration::*, memory::InMemory, GetResultPayload};
     use futures::TryStreamExt;
     use tokio::time::Duration;
     use tokio::time::Instant;

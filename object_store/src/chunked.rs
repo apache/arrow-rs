@@ -181,7 +181,7 @@ mod tests {
     use crate::local::LocalFileSystem;
     use crate::memory::InMemory;
     use crate::path::Path;
-    use crate::tests::*;
+    use crate::integration::*;
 
     use super::*;
 

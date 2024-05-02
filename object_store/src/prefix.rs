@@ -205,8 +205,7 @@ impl<T: ObjectStore> ObjectStore for PrefixStore<T> {
 mod tests {
     use super::*;
     use crate::local::LocalFileSystem;
-    use crate::test_util::flatten_list_stream;
-    use crate::tests::*;
+    use crate::integration::*;
 
     use tempfile::TempDir;
 
