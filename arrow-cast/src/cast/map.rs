@@ -36,8 +36,8 @@ pub(crate) fn cast_map_values(
     let entries_field = if let DataType::Map(entries_field, _) = to_data_type {
         Some(entries_field)
     } else {
-        None
-    }.ok_or(ArrowError::CastError("to_data_type is not a map type.".to_string()))?;
+       return Err(ArrowError::CastError("Internal Error: to_data_type is not a map type.".to_string())))
+    };
 
     Ok(Arc::new(MapArray::new(
         entries_field.clone(),
