@@ -21,8 +21,8 @@
 //! # Bloom Filter Size
 //!
 //! Parquet uses the [Split Block Bloom Filter][sbbf-paper] (SBBF) as its bloom filter
-//! implementation. For each column upon which bloom filters are enabled, there will be an SBBF
-//! stored in the metadata for each row group in the parquet file. The size of each filter is
+//! implementation. For each column upon which bloom filters are enabled, the offset and length of an SBBF
+//! is stored in  the metadata for each row group in the parquet file. The size of each filter is
 //! initialized using a calculation based on the desired number of distinct values (NDV) and false
 //! positive probability (FPP). The FPP for a SBBF can be approximated as<sup>[1][bf-formulae]</sup>:
 //!
