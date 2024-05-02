@@ -325,18 +325,18 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
     /// and return a new array with the compacted data buffers.
     /// The original array will be left as is.
     pub fn gc(&self) -> Self {
-        let compact_check = self.compact_check();
+        let check_result = self.compact_check();
 
-        if compact_check.iter().all(|x| *x) {
+        if check_result.iter().all(|x| *x) {
             return self.clone();
         }
 
         let mut new_views = Vec::with_capacity(self.views.len());
         let mut new_bufs: Vec<Vec<u8>> = vec![vec![]; self.buffers.len()];
-        for view in self.views.iter() {
+        for (i, view) in self.views.iter().enumerate() {
             let mut bv = ByteView::from(*view);
             let idx = bv.buffer_index as usize;
-            if bv.length <= 12 || compact_check[idx] {
+            if self.is_null(i) || bv.length <= 12 || check_result[idx] {
                 new_views.push(*view);
                 continue;
             }
@@ -362,7 +362,7 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
             .iter()
             .enumerate()
             .map(|(idx, buf)| {
-                if compact_check[idx] {
+                if check_result[idx] {
                     buf.clone()
                 } else {
                     new_bufs[idx].clone()
@@ -604,14 +604,15 @@ impl From<Vec<Option<String>>> for StringViewArray {
 /// Then it is better to do the check at once, rather than doing it for each accumulate operation.
 struct CompactChecker {
     length: usize,
-    coverage: BTreeMap<usize, usize>,
+    intervals: BTreeMap<usize, usize>,
 }
 
 impl CompactChecker {
+    /// Create a new checker with the expected length of the buffer
     pub fn new(length: usize) -> Self {
         Self {
             length,
-            coverage: BTreeMap::new(),
+            intervals: BTreeMap::new(),
         }
     }
 
@@ -621,21 +622,21 @@ impl CompactChecker {
             return;
         }
         let end = offset + length;
-        if let Some(val) = self.coverage.get_mut(&offset) {
+        if let Some(val) = self.intervals.get_mut(&offset) {
             if *val < end {
                 *val = end;
             }
         } else {
-            self.coverage.insert(offset, end);
+            self.intervals.insert(offset, end);
         }
     }
 
     /// Check if the checker is fully covered
-    pub fn finish(&self) -> bool {
+    pub fn finish(self) -> bool {
         // check if the coverage is continuous and full
         let mut last_end = 0;
         // todo: can be optimized
-        for (start, end) in self.coverage.iter() {
+        for (start, end) in self.intervals.iter() {
             if *start > last_end {
                 return false;
             }
@@ -923,6 +924,31 @@ mod tests {
         assert_ne!(array.buffers[0].as_ptr(), compacted.buffers[0].as_ptr());
         assert_eq!(array.value(0), compacted.value(0));
         assert_eq!(array.value(1), compacted.value(1));
+        assert!(compacted.compact_check().iter().all(|x| *x));
+
+        // test compact on multiple buffers
+        let mut array = {
+            let mut builder = StringViewBuilder::new().with_block_size(15);
+            builder.append_value("how to unfold your love");
+            builder.append_option(Some("I don't know how someone controlled you"));
+            builder.finish()
+        };
+
+        // verify it's not same buffer
+        assert_eq!(array.buffers.len(), 2);
+        // shrink the view
+
+        let mut view = ByteView::from(array.views[1]);
+        view.length = 15;
+        let new_views = ScalarBuffer::from(vec![array.views[0], view.into()]);
+        array.views = new_views;
+
+        let compacted = array.gc();
+        assert_eq!(compacted.buffers.len(), 2);
+        assert_eq!(array.value(0), compacted.value(0));
+        assert_eq!(array.value(1), compacted.value(1));
+        assert_eq!(array.buffers[0].as_ptr(), compacted.buffers[0].as_ptr());
+        assert_ne!(array.buffers[1].as_ptr(), compacted.buffers[1].as_ptr());
         assert!(compacted.compact_check().iter().all(|x| *x));
     }
 }
