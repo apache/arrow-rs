@@ -670,42 +670,6 @@ impl DataType {
     pub fn new_fixed_size_list(data_type: DataType, size: i32, nullable: bool) -> Self {
         DataType::FixedSizeList(Arc::new(Field::new_list_field(data_type, nullable)), size)
     }
-
-    /// Gets the key field in a map data type.  For all other types returns None.
-    pub fn key_field(&self) -> Option<FieldRef> {
-        if let DataType::Map(entries_field, _) = self {
-            if let DataType::Struct(fields) = entries_field.data_type() {
-                fields.get(0).cloned()
-            } else {
-                None
-            }
-        } else {
-            None
-        }
-    }
-
-    /// Gets the value field in a map data type.  For all other types returns None.
-    pub fn value_field(&self) -> Option<FieldRef> {
-        if let DataType::Map(entries_field, _) = self {
-            if let DataType::Struct(fields) = entries_field.data_type() {
-                fields.get(1).cloned()
-            } else {
-                None
-            }
-        } else {
-            None
-        }
-    }
-
-    /// Gets the data type of the keys in a map data type.  For all other types returns None.
-    pub fn key_type(&self) -> Option<DataType> {
-        self.key_field().map(|f| f.data_type().clone())
-    }
-
-    /// Gets the data type of the values in a map data type.  For all other types returns None.
-    pub fn value_type(&self) -> Option<DataType> {
-        self.value_field().map(|f| f.data_type().clone())
-    }
 }
 
 /// The maximum precision for [DataType::Decimal128] values

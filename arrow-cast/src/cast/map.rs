@@ -25,25 +25,41 @@ pub(crate) fn cast_map_values(
     cast_options: &CastOptions,
     to_ordered: bool,
 ) -> Result<ArrayRef, ArrowError> {
-    let key_array = cast_with_options(from.keys(), &to_data_type.key_type().ok_or(ArrowError::CastError("map is missing key type".to_string()))?, cast_options)?;
-    let value_array = cast_with_options(from.values(), &to_data_type.value_type().ok_or(ArrowError::CastError("map is missing value type".to_string()))?, cast_options)?;
-
-    let to_fields = Fields::from(vec![
-        to_data_type.key_field().ok_or(ArrowError::CastError("map is missing key field".to_string()))?,
-        to_data_type.value_field().ok_or(ArrowError::CastError("map is missing value field".to_string()))?,
-    ]);
-
     let entries_field = if let DataType::Map(entries_field, _) = to_data_type {
-        Some(entries_field)
+        entries_field
     } else {
-       return Err(ArrowError::CastError("Internal Error: to_data_type is not a map type.".to_string())))
+        return Err(ArrowError::CastError("Internal Error: to_data_type is not a map type.".to_string()));
     };
+
+    let key_field = key_field(entries_field).ok_or(ArrowError::CastError("map is missing key field".to_string()))?;
+    let value_field = value_field(entries_field).ok_or(ArrowError::CastError("map is missing value field".to_string()))?;
+
+    let key_array = cast_with_options(from.keys(), key_field.data_type(), cast_options)?;
+    let value_array = cast_with_options(from.values(), value_field.data_type(), cast_options)?;
 
     Ok(Arc::new(MapArray::new(
         entries_field.clone(),
         from.offsets().clone(),
-        StructArray::new(to_fields, vec![key_array, value_array], from.nulls().cloned()),
+        StructArray::new(Fields::from(vec![key_field, value_field]), vec![key_array, value_array], from.nulls().cloned()),
         from.nulls().cloned(),
         to_ordered,
     )))
+}
+
+/// Gets the key field from the entries of a map.  For all other types returns None.
+pub(crate) fn key_field(entries_field: &FieldRef) -> Option<FieldRef> {
+    if let DataType::Struct(fields) = entries_field.data_type() {
+        fields.get(0).cloned()
+    } else {
+        None
+    }
+}
+
+/// Gets the value field from the entries of a map.  For all other types returns None.
+pub(crate) fn value_field(entries_field: &FieldRef) -> Option<FieldRef> {
+    if let DataType::Struct(fields) = entries_field.data_type() {
+        fields.get(1).cloned()
+    } else {
+        None
+    }
 }
