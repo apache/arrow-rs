@@ -392,7 +392,7 @@ mod tests {
 
         assert_eq!(list_array.null_count(), 0);
         // Despite the list item field being a nullable struct, struct fields randomly generated do not
-        // respect nullability and null density as the generator uses the FromIterator trait
+        // respect nullability and null density as the generator uses the TryFrom<Vec<(str, Array)>> trait
         assert_eq!(list_array.as_list::<i32>().values().null_count(), 0);
         assert!(list_array.as_list::<i32>().values().as_struct().column_by_name("null_int").unwrap().null_count() > 0);
         assert_eq!(list_array.as_list::<i32>().values().as_struct().column_by_name("int").unwrap().null_count(), 0);
