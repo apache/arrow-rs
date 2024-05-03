@@ -594,8 +594,6 @@ impl From<Vec<Option<String>>> for StringViewArray {
 
 /// A helper struct that used to check if the array is compact view
 ///
-/// # Note
-///
 /// The checker is lazy and will not check the array until `finish` is called.
 ///
 /// This is based on the assumption that the array will most likely to be not compact,
@@ -622,6 +620,12 @@ impl CompactChecker {
             return;
         }
         let end = offset + length;
+        if end > self.length {
+            panic!(
+                "Invalid interval: offset {} length {} is out of bound of length {}",
+                offset, length, self.length
+            );
+        }
         if let Some(val) = self.intervals.get_mut(&offset) {
             if *val < end {
                 *val = end;
@@ -635,12 +639,14 @@ impl CompactChecker {
     pub fn finish(self) -> bool {
         // check if the coverage is continuous and full
         let mut last_end = 0;
-        // todo: can be optimized
+
         for (start, end) in self.intervals.iter() {
             if *start > last_end {
                 return false;
             }
-            last_end = *end;
+            if *end > last_end {
+                last_end = *end;
+            }
         }
 
         last_end == self.length
@@ -812,16 +818,20 @@ mod tests {
     }
 
     #[test]
+    #[should_panic(expected = "Invalid interval: offset 0 length 13 is out of bound of length 12")]
     fn test_compact_checker() {
         use super::CompactChecker;
+
         // single coverage, full
         let mut checker = CompactChecker::new(10);
         checker.accumulate(0, 10);
         assert!(checker.finish());
+
         // single coverage, partial
         let mut checker = CompactChecker::new(10);
         checker.accumulate(0, 5);
         assert!(!checker.finish());
+
         // multiple coverage, no overlapping, partial
         let mut checker = CompactChecker::new(10);
         checker.accumulate(0, 5);
@@ -833,6 +843,7 @@ mod tests {
         checker.accumulate(0, 5);
         checker.accumulate(5, 5);
         assert!(checker.finish());
+
         //multiple coverage, overlapping, partial
         let mut checker = CompactChecker::new(10);
         checker.accumulate(0, 5);
@@ -844,6 +855,7 @@ mod tests {
         checker.accumulate(0, 5);
         checker.accumulate(4, 6);
         assert!(checker.finish());
+
         //mutiple coverage, no overlapping, full, out of order
         let mut checker = CompactChecker::new(10);
         checker.accumulate(4, 6);
@@ -862,6 +874,7 @@ mod tests {
         checker.accumulate(5, 0);
         checker.accumulate(5, 5);
         assert!(checker.finish());
+
         // multiple coverage, overlapping, full, containing null
         let mut checker = CompactChecker::new(10);
         checker.accumulate(0, 5);
@@ -869,35 +882,54 @@ mod tests {
         checker.accumulate(4, 6);
         checker.accumulate(5, 5);
         assert!(checker.finish());
+
+        // multiple coverage, overlapping, full, containing null
+        //
+        // this case is for attacking those implementation that only check
+        // the lower-bound of the interval
+        let mut checker = CompactChecker::new(10);
+        checker.accumulate(0, 5);
+        checker.accumulate(5, 0);
+        checker.accumulate(1, 9);
+        checker.accumulate(2, 3);
+        checker.accumulate(3, 1);
+        checker.accumulate(9, 1);
+        assert!(checker.finish());
+
+        // panic case, out of bound
+        let mut checker = CompactChecker::new(12);
+        checker.accumulate(0, 13);
+        checker.finish();
     }
 
     #[test]
     fn test_gc() {
+        // ---------------------------------------------------------------------
         // test compact on compacted data
+
         let array = {
             let mut builder = StringViewBuilder::new();
             builder.append_value("I look at you all");
             builder.append_option(Some("see the love there that's sleeping"));
             builder.finish()
         };
-
         let compacted = array.gc();
         // verify it is a shallow copy
         assert_eq!(array.buffers[0].as_ptr(), compacted.buffers[0].as_ptr());
 
+        // ---------------------------------------------------------------------
         // test compact on non-compacted data
+
         let mut array = {
             let mut builder = StringViewBuilder::new();
             builder.append_value("while my guitar gently weeps");
             builder.finish()
         };
-
         // shrink the view
         let mut view = ByteView::from(array.views[0]);
         view.length = 15;
         let new_views = ScalarBuffer::from(vec![view.into()]);
         array.views = new_views;
-
         let compacted = array.gc();
         // verify it is a deep copy
         assert_ne!(array.buffers[0].as_ptr(), compacted.buffers[0].as_ptr());
@@ -906,7 +938,9 @@ mod tests {
         // verify compacted
         assert!(compacted.compact_check().iter().all(|x| *x));
 
+        // ---------------------------------------------------------------------
         // test compact on array containing null
+
         let mut array = {
             let mut builder = StringViewBuilder::new();
             builder.append_null();
@@ -926,7 +960,9 @@ mod tests {
         assert_eq!(array.value(1), compacted.value(1));
         assert!(compacted.compact_check().iter().all(|x| *x));
 
+        // ---------------------------------------------------------------------
         // test compact on multiple buffers
+
         let mut array = {
             let mut builder = StringViewBuilder::new().with_block_size(15);
             builder.append_value("how to unfold your love");
