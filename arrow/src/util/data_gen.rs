@@ -390,8 +390,6 @@ mod tests {
 
         let list_array = create_random_array(&list_field, 100, 0.95, 0.5).unwrap();
 
-        dbg!(&list_array);
-
         assert_eq!(list_array.null_count(), 0);
         // Despite the list item field being a nullable struct, struct fields randomly generated do not
         // respect nullability and null density as the generator uses the FromIterator trait
