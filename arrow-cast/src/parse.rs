@@ -437,7 +437,7 @@ impl Parser for Float64Type {
 
 /// This API is only stable since 1.70 so can't use it when current MSRV is lower
 #[inline(always)]
-pub fn is_some_and<T>(opt: Option<T>, f: impl FnOnce(T) -> bool) -> bool {
+fn is_some_and<T>(opt: Option<T>, f: impl FnOnce(T) -> bool) -> bool {
     match opt {
         None => false,
         Some(x) => f(x),
