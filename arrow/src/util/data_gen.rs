@@ -183,15 +183,33 @@ pub fn create_random_array(
         ),
         List(_) => create_random_list_array(field, size, null_density, true_density)?,
         LargeList(_) => create_random_list_array(field, size, null_density, true_density)?,
-        Struct(fields) => Arc::new(StructArray::try_from(
-            fields
+        Struct(fields) => {
+            let child_arrays = fields
                 .iter()
                 .map(|struct_field| {
                     create_random_array(struct_field, size, null_density, true_density)
-                        .map(|array_ref| (struct_field.name().as_str(), array_ref))
                 })
-                .collect::<Result<Vec<(&str, ArrayRef)>>>()?,
-        )?),
+                .collect::<Result<Vec<_>>>()?;
+            match field.is_nullable() {
+                true => {
+                    let nulls = create_random_null_buffer(size, null_density);
+                    let children = fields
+                        .iter()
+                        .map(|struct_field| (*struct_field).clone())
+                        .zip(child_arrays)
+                        .collect::<Vec<_>>();
+                    Arc::new(StructArray::from((children, nulls)))
+                }
+                false => {
+                    let children = fields
+                        .iter()
+                        .map(|struct_field| struct_field.name().as_str())
+                        .zip(child_arrays)
+                        .collect::<Vec<_>>();
+                    Arc::new(StructArray::try_from(children)?)
+                }
+            }
+        }
         d @ Dictionary(_, value_type) if crate::compute::can_cast_types(value_type, d) => {
             let f = Field::new(
                 field.name(),
@@ -457,9 +475,7 @@ mod tests {
         let list_array = create_random_array(&list_field, 100, 0.95, 0.5).unwrap();
 
         assert_eq!(list_array.null_count(), 0);
-        // Despite the list item field being a nullable struct, struct fields randomly generated do not
-        // respect nullability and null density as the generator uses the TryFrom<Vec<(str, Array)>> trait
-        assert_eq!(list_array.as_list::<i32>().values().null_count(), 0);
+        assert!(list_array.as_list::<i32>().values().null_count() > 0);
         assert!(
             list_array
                 .as_list::<i32>()
