@@ -67,29 +67,71 @@ pub fn create_random_array(
     use DataType::*;
     Ok(match field.data_type() {
         Null => Arc::new(NullArray::new(size)) as ArrayRef,
-        Boolean => Arc::new(create_boolean_array(size, primitive_null_density, true_density)),
-        Int8 => Arc::new(create_primitive_array::<Int8Type>(size, primitive_null_density)),
-        Int16 => Arc::new(create_primitive_array::<Int16Type>(size, primitive_null_density)),
-        Int32 => Arc::new(create_primitive_array::<Int32Type>(size, primitive_null_density)),
-        Int64 => Arc::new(create_primitive_array::<Int64Type>(size, primitive_null_density)),
-        UInt8 => Arc::new(create_primitive_array::<UInt8Type>(size, primitive_null_density)),
-        UInt16 => Arc::new(create_primitive_array::<UInt16Type>(size, primitive_null_density)),
-        UInt32 => Arc::new(create_primitive_array::<UInt32Type>(size, primitive_null_density)),
-        UInt64 => Arc::new(create_primitive_array::<UInt64Type>(size, primitive_null_density)),
+        Boolean => Arc::new(create_boolean_array(
+            size,
+            primitive_null_density,
+            true_density,
+        )),
+        Int8 => Arc::new(create_primitive_array::<Int8Type>(
+            size,
+            primitive_null_density,
+        )),
+        Int16 => Arc::new(create_primitive_array::<Int16Type>(
+            size,
+            primitive_null_density,
+        )),
+        Int32 => Arc::new(create_primitive_array::<Int32Type>(
+            size,
+            primitive_null_density,
+        )),
+        Int64 => Arc::new(create_primitive_array::<Int64Type>(
+            size,
+            primitive_null_density,
+        )),
+        UInt8 => Arc::new(create_primitive_array::<UInt8Type>(
+            size,
+            primitive_null_density,
+        )),
+        UInt16 => Arc::new(create_primitive_array::<UInt16Type>(
+            size,
+            primitive_null_density,
+        )),
+        UInt32 => Arc::new(create_primitive_array::<UInt32Type>(
+            size,
+            primitive_null_density,
+        )),
+        UInt64 => Arc::new(create_primitive_array::<UInt64Type>(
+            size,
+            primitive_null_density,
+        )),
         Float16 => {
             return Err(ArrowError::NotYetImplemented(
                 "Float16 is not implemented".to_string(),
             ))
         }
-        Float32 => Arc::new(create_primitive_array::<Float32Type>(size, primitive_null_density)),
-        Float64 => Arc::new(create_primitive_array::<Float64Type>(size, primitive_null_density)),
+        Float32 => Arc::new(create_primitive_array::<Float32Type>(
+            size,
+            primitive_null_density,
+        )),
+        Float64 => Arc::new(create_primitive_array::<Float64Type>(
+            size,
+            primitive_null_density,
+        )),
         Timestamp(_, _) => {
-            let int64_array =
-                Arc::new(create_primitive_array::<Int64Type>(size, primitive_null_density)) as ArrayRef;
+            let int64_array = Arc::new(create_primitive_array::<Int64Type>(
+                size,
+                primitive_null_density,
+            )) as ArrayRef;
             return crate::compute::cast(&int64_array, field.data_type());
         }
-        Date32 => Arc::new(create_primitive_array::<Date32Type>(size, primitive_null_density)),
-        Date64 => Arc::new(create_primitive_array::<Date64Type>(size, primitive_null_density)),
+        Date32 => Arc::new(create_primitive_array::<Date32Type>(
+            size,
+            primitive_null_density,
+        )),
+        Date64 => Arc::new(create_primitive_array::<Date64Type>(
+            size,
+            primitive_null_density,
+        )),
         Time32(unit) => match unit {
             TimeUnit::Second => Arc::new(create_primitive_array::<Time32SecondType>(
                 size,
@@ -130,9 +172,14 @@ pub fn create_random_array(
         )),
         Binary => Arc::new(create_binary_array::<i32>(size, primitive_null_density)),
         LargeBinary => Arc::new(create_binary_array::<i64>(size, primitive_null_density)),
-        FixedSizeBinary(len) => Arc::new(create_fsb_array(size, primitive_null_density, *len as usize)),
+        FixedSizeBinary(len) => Arc::new(create_fsb_array(
+            size,
+            primitive_null_density,
+            *len as usize,
+        )),
         BinaryView => Arc::new(
-            create_string_view_array_with_len(size, primitive_null_density, 4, false).to_binary_view(),
+            create_string_view_array_with_len(size, primitive_null_density, 4, false)
+                .to_binary_view(),
         ),
         List(_) => create_random_list_array(field, size, null_density, true_density)?,
         LargeList(_) => create_random_list_array(field, size, null_density, true_density)?,
@@ -356,7 +403,11 @@ mod tests {
 
     #[test]
     fn test_create_list_array_nested_nullability() {
-        let list_field = Field::new_list("not_null_list", Field::new_list_field(DataType::Boolean, true), false);
+        let list_field = Field::new_list(
+            "not_null_list",
+            Field::new_list_field(DataType::Boolean, true),
+            false,
+        );
 
         let list_array = create_random_array(&list_field, 100, 0.95, 0.5).unwrap();
 
@@ -375,8 +426,22 @@ mod tests {
         let struct_array = create_random_array(&struct_field, 100, 0.95, 0.5).unwrap();
 
         assert_eq!(struct_array.null_count(), 0);
-        assert!(struct_array.as_struct().column_by_name("null_int").unwrap().null_count() > 0);
-        assert_eq!(struct_array.as_struct().column_by_name("int").unwrap().null_count(), 0);
+        assert!(
+            struct_array
+                .as_struct()
+                .column_by_name("null_int")
+                .unwrap()
+                .null_count()
+                > 0
+        );
+        assert_eq!(
+            struct_array
+                .as_struct()
+                .column_by_name("int")
+                .unwrap()
+                .null_count(),
+            0
+        );
     }
 
     #[test]
@@ -385,7 +450,8 @@ mod tests {
             Field::new("null_int", DataType::Int32, true),
             Field::new("int", DataType::Int32, false),
         ];
-        let list_item_field = Field::new_list_field(DataType::Struct(struct_child_fields.into()), true);
+        let list_item_field =
+            Field::new_list_field(DataType::Struct(struct_child_fields.into()), true);
         let list_field = Field::new_list("not_null_list", list_item_field, false);
 
         let list_array = create_random_array(&list_field, 100, 0.95, 0.5).unwrap();
@@ -394,7 +460,25 @@ mod tests {
         // Despite the list item field being a nullable struct, struct fields randomly generated do not
         // respect nullability and null density as the generator uses the TryFrom<Vec<(str, Array)>> trait
         assert_eq!(list_array.as_list::<i32>().values().null_count(), 0);
-        assert!(list_array.as_list::<i32>().values().as_struct().column_by_name("null_int").unwrap().null_count() > 0);
-        assert_eq!(list_array.as_list::<i32>().values().as_struct().column_by_name("int").unwrap().null_count(), 0);
+        assert!(
+            list_array
+                .as_list::<i32>()
+                .values()
+                .as_struct()
+                .column_by_name("null_int")
+                .unwrap()
+                .null_count()
+                > 0
+        );
+        assert_eq!(
+            list_array
+                .as_list::<i32>()
+                .values()
+                .as_struct()
+                .column_by_name("int")
+                .unwrap()
+                .null_count(),
+            0
+        );
     }
 }
