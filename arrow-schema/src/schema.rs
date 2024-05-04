@@ -65,7 +65,6 @@ impl SchemaBuilder {
     ///
     /// Panics if index out of bounds
     pub fn field(&mut self, idx: usize) -> &FieldRef {
-        assert!(idx < self.fields.len());
         &mut self.fields[idx]
     }
 
