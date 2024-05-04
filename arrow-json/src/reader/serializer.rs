@@ -309,16 +309,16 @@ impl<'a, 'b> SerializeMap for ObjectSerializer<'a, 'b> {
     type Ok = ();
     type Error = SerializerError;
 
-    fn serialize_key<T: ?Sized>(&mut self, key: &T) -> Result<(), Self::Error>
+    fn serialize_key<T>(&mut self, key: &T) -> Result<(), Self::Error>
     where
-        T: Serialize,
+        T: Serialize + ?Sized,
     {
         key.serialize(&mut *self.serializer)
     }
 
-    fn serialize_value<T: ?Sized>(&mut self, value: &T) -> Result<(), Self::Error>
+    fn serialize_value<T>(&mut self, value: &T) -> Result<(), Self::Error>
     where
-        T: Serialize,
+        T: Serialize + ?Sized,
     {
         value.serialize(&mut *self.serializer)
     }
@@ -333,13 +333,9 @@ impl<'a, 'b> SerializeStruct for ObjectSerializer<'a, 'b> {
     type Ok = ();
     type Error = SerializerError;
 
-    fn serialize_field<T: ?Sized>(
-        &mut self,
-        key: &'static str,
-        value: &T,
-    ) -> Result<(), Self::Error>
+    fn serialize_field<T>(&mut self, key: &'static str, value: &T) -> Result<(), Self::Error>
     where
-        T: Serialize,
+        T: Serialize + ?Sized,
     {
         key.serialize(&mut *self.serializer)?;
         value.serialize(&mut *self.serializer)
@@ -376,9 +372,9 @@ impl<'a, 'b> SerializeSeq for ListSerializer<'a, 'b> {
     type Ok = ();
     type Error = SerializerError;
 
-    fn serialize_element<T: ?Sized>(&mut self, value: &T) -> Result<(), Self::Error>
+    fn serialize_element<T>(&mut self, value: &T) -> Result<(), Self::Error>
     where
-        T: Serialize,
+        T: Serialize + ?Sized,
     {
         value.serialize(&mut *self.serializer)
     }
@@ -393,9 +389,9 @@ impl<'a, 'b> SerializeTuple for ListSerializer<'a, 'b> {
     type Ok = ();
     type Error = SerializerError;
 
-    fn serialize_element<T: ?Sized>(&mut self, value: &T) -> Result<(), Self::Error>
+    fn serialize_element<T>(&mut self, value: &T) -> Result<(), Self::Error>
     where
-        T: Serialize,
+        T: Serialize + ?Sized,
     {
         value.serialize(&mut *self.serializer)
     }
@@ -410,9 +406,9 @@ impl<'a, 'b> SerializeTupleStruct for ListSerializer<'a, 'b> {
     type Ok = ();
     type Error = SerializerError;
 
-    fn serialize_field<T: ?Sized>(&mut self, value: &T) -> Result<(), Self::Error>
+    fn serialize_field<T>(&mut self, value: &T) -> Result<(), Self::Error>
     where
-        T: Serialize,
+        T: Serialize + ?Sized,
     {
         value.serialize(&mut *self.serializer)
     }

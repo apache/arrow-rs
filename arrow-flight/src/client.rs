@@ -417,9 +417,7 @@ impl FlightClient {
     ///
     /// // encode the batch as a stream of `FlightData`
     /// let flight_data_stream = FlightDataEncoderBuilder::new()
-    ///   .build(futures::stream::iter(vec![Ok(batch)]))
-    ///   // data encoder return Results, but do_exchange requires FlightData
-    ///   .map(|batch|batch.unwrap());
+    ///   .build(futures::stream::iter(vec![Ok(batch)]));
     ///
     /// // send the stream and get the results as `RecordBatches`
     /// let response: Vec<RecordBatch> = client
@@ -431,20 +429,40 @@ impl FlightClient {
     ///   .expect("error calling do_exchange");
     /// # }
     /// ```
-    pub async fn do_exchange<S: Stream<Item = FlightData> + Send + 'static>(
+    pub async fn do_exchange<S: Stream<Item = Result<FlightData>> + Send + 'static>(
         &mut self,
         request: S,
     ) -> Result<FlightRecordBatchStream> {
-        let request = self.make_request(request);
+        let (sender, mut receiver) = futures::channel::oneshot::channel();
 
-        let response = self
-            .inner
-            .do_exchange(request)
-            .await?
-            .into_inner()
-            .map_err(FlightError::Tonic);
+        // Intercepts client errors and sends them to the oneshot channel above
+        let mut request = Box::pin(request); // Pin to heap
+        let mut sender = Some(sender); // Wrap into Option so can be taken
+        let request_stream = futures::stream::poll_fn(move |cx| {
+            Poll::Ready(match ready!(request.poll_next_unpin(cx)) {
+                Some(Ok(data)) => Some(data),
+                Some(Err(e)) => {
+                    let _ = sender.take().unwrap().send(e);
+                    None
+                }
+                None => None,
+            })
+        });
 
-        Ok(FlightRecordBatchStream::new_from_flight_data(response))
+        let request = self.make_request(request_stream);
+        let mut response_stream = self.inner.do_exchange(request).await?.into_inner();
+
+        // Forwards errors from the error oneshot with priority over responses from server
+        let error_stream = futures::stream::poll_fn(move |cx| {
+            if let Poll::Ready(Ok(err)) = receiver.poll_unpin(cx) {
+                return Poll::Ready(Some(Err(err)));
+            }
+            let next = ready!(response_stream.poll_next_unpin(cx));
+            Poll::Ready(next.map(|x| x.map_err(FlightError::Tonic)))
+        });
+
+        // combine the response from the server and any error from the client
+        Ok(FlightRecordBatchStream::new_from_flight_data(error_stream))
     }
 
     /// Make a `ListFlights` call to the server with the provided

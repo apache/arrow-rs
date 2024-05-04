@@ -155,12 +155,21 @@ struct StructArrayEncoder<'a> {
     explicit_nulls: bool,
 }
 
+/// This API is only stable since 1.70 so can't use it when current MSRV is lower
+#[inline(always)]
+fn is_some_and<T>(opt: Option<T>, f: impl FnOnce(T) -> bool) -> bool {
+    match opt {
+        None => false,
+        Some(x) => f(x),
+    }
+}
+
 impl<'a> Encoder for StructArrayEncoder<'a> {
     fn encode(&mut self, idx: usize, out: &mut Vec<u8>) {
         out.push(b'{');
         let mut is_first = true;
         for field_encoder in &mut self.encoders {
-            let is_null = field_encoder.nulls.as_ref().is_some_and(|n| n.is_null(idx));
+            let is_null = is_some_and(field_encoder.nulls.as_ref(), |n| n.is_null(idx));
             if is_null && !self.explicit_nulls {
                 continue;
             }
@@ -447,13 +456,13 @@ impl<'a> MapEncoder<'a> {
         let (values, value_nulls) = make_encoder_impl(values, options)?;
 
         // We sanity check nulls as these are currently not enforced by MapArray (#1697)
-        if key_nulls.is_some_and(|x| x.null_count() != 0) {
+        if is_some_and(key_nulls, |x| x.null_count() != 0) {
             return Err(ArrowError::InvalidArgumentError(
                 "Encountered nulls in MapArray keys".to_string(),
             ));
         }
 
-        if array.entries().nulls().is_some_and(|x| x.null_count() != 0) {
+        if is_some_and(array.entries().nulls(), |x| x.null_count() != 0) {
             return Err(ArrowError::InvalidArgumentError(
                 "Encountered nulls in MapArray entries".to_string(),
             ));
@@ -478,7 +487,7 @@ impl<'a> Encoder for MapEncoder<'a> {
 
         out.push(b'{');
         for idx in start..end {
-            let is_null = self.value_nulls.as_ref().is_some_and(|n| n.is_null(idx));
+            let is_null = is_some_and(self.value_nulls.as_ref(), |n| n.is_null(idx));
             if is_null && !self.explicit_nulls {
                 continue;
             }
