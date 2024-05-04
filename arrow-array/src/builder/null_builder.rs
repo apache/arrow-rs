@@ -60,13 +60,13 @@ impl NullBuilder {
     }
 
     /// Creates a new null builder with space for `capacity` elements without re-allocating
-    #[deprecated = "there is no actual notion of capacity in the NullBuilder, and the way it emulates capacity is surprising"]
-    pub fn with_capacity(capacity: usize) -> Self {
-        Self { len: capacity }
+    #[deprecated = "there is no actual notion of capacity in the NullBuilder, so emulating it makes little sense"]
+    pub fn with_capacity(_capacity: usize) -> Self {
+        Self::new()
     }
 
     /// Returns the capacity of this builder measured in slots of type `T`
-    #[deprecated = "there is no actual notion of capacity in the NullBuilder, and the way it emulates capacity is surprising"]
+    #[deprecated = "there is no actual notion of capacity in the NullBuilder, so emulating it makes little sense"]
     pub fn capacity(&self) -> usize {
         self.len
     }
