@@ -645,6 +645,8 @@ impl<'a> MutableArrayData<'a> {
     /// or `end` > the length of the `index`th array
     pub fn extend(&mut self, index: usize, start: usize, end: usize) {
         let len = end - start;
+        assert!(index < self.extend_null_bits.len());
+        assert!(index < self.extend_values.len());
         (self.extend_null_bits[index])(&mut self.data, start, len);
         (self.extend_values[index])(&mut self.data, index, start, len);
         self.data.len += len;

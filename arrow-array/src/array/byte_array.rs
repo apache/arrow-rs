@@ -232,6 +232,7 @@ impl<T: ByteArrayType> GenericByteArray<T> {
     #[inline]
     pub fn value_length(&self, i: usize) -> T::Offset {
         let offsets = self.value_offsets();
+        assert!(i + 1 < offsets.len());
         offsets[i + 1] - offsets[i]
     }
 

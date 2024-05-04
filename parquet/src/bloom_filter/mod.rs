@@ -179,7 +179,7 @@ fn num_of_bits_from_ndv_fpp(ndv: u64, fpp: f64) -> usize {
 
 impl Sbbf {
     /// Create a new [Sbbf] with given number of distinct values and false positive probability.
-    /// Will panic if `fpp` is greater than 1.0 or less than 0.0.
+    /// Will panic if `fpp` is greater than or equal to 1.0 or less than 0.0.
     pub(crate) fn new_with_ndv_fpp(ndv: u64, fpp: f64) -> Result<Self, ParquetError> {
         if !(0.0..1.0).contains(&fpp) {
             return Err(ParquetError::General(format!(
