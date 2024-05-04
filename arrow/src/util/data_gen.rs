@@ -183,33 +183,7 @@ pub fn create_random_array(
         ),
         List(_) => create_random_list_array(field, size, null_density, true_density)?,
         LargeList(_) => create_random_list_array(field, size, null_density, true_density)?,
-        Struct(fields) => {
-            let child_arrays = fields
-                .iter()
-                .map(|struct_field| {
-                    create_random_array(struct_field, size, null_density, true_density)
-                })
-                .collect::<Result<Vec<_>>>()?;
-            match field.is_nullable() {
-                true => {
-                    let nulls = create_random_null_buffer(size, null_density);
-                    let children = fields
-                        .iter()
-                        .map(|struct_field| (*struct_field).clone())
-                        .zip(child_arrays)
-                        .collect::<Vec<_>>();
-                    Arc::new(StructArray::from((children, nulls)))
-                }
-                false => {
-                    let children = fields
-                        .iter()
-                        .map(|struct_field| struct_field.name().as_str())
-                        .zip(child_arrays)
-                        .collect::<Vec<_>>();
-                    Arc::new(StructArray::try_from(children)?)
-                }
-            }
-        }
+        Struct(_) => create_random_struct_array(field, size, null_density, true_density)?,
         d @ Dictionary(_, value_type) if crate::compute::can_cast_types(value_type, d) => {
             let f = Field::new(
                 field.name(),
@@ -219,6 +193,7 @@ pub fn create_random_array(
             let v = create_random_array(&f, size, null_density, true_density)?;
             crate::compute::cast(&v, d)?
         }
+        Map(_, _) => create_random_map_array(field, size, null_density, true_density)?,
         other => {
             return Err(ArrowError::NotYetImplemented(format!(
                 "Generating random arrays not yet implemented for {other:?}"
@@ -278,6 +253,100 @@ fn create_random_list_array(
         )
     };
     Ok(make_array(list_data))
+}
+
+#[inline]
+fn create_random_struct_array(
+    field: &Field,
+    size: usize,
+    null_density: f32,
+    true_density: f32,
+) -> Result<ArrayRef> {
+    let struct_fields = match field.data_type() {
+        DataType::Struct(fields) => fields,
+        _ => {
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "Cannot create struct array for field {field:?}"
+            )))
+        }
+    };
+
+    let child_arrays = struct_fields
+        .iter()
+        .map(|struct_field| create_random_array(struct_field, size, null_density, true_density))
+        .collect::<Result<Vec<_>>>()?;
+
+    match field.is_nullable() {
+        true => {
+            let nulls = create_random_null_buffer(size, null_density);
+            let children = struct_fields
+                .iter()
+                .map(|struct_field| (*struct_field).clone())
+                .zip(child_arrays)
+                .collect::<Vec<_>>();
+            Ok(Arc::new(StructArray::from((children, nulls))))
+        }
+        false => {
+            let children = struct_fields
+                .iter()
+                .map(|struct_field| struct_field.name().as_str())
+                .zip(child_arrays)
+                .collect::<Vec<_>>();
+            Ok(Arc::new(StructArray::try_from(children)?))
+        }
+    }
+}
+
+#[inline]
+fn create_random_map_array(
+    field: &Field,
+    size: usize,
+    null_density: f32,
+    true_density: f32,
+) -> Result<ArrayRef> {
+    // Override null density with 0.0 if the array is non-nullable
+    let map_null_density = match field.is_nullable() {
+        true => null_density,
+        false => 0.0,
+    };
+
+    let entries_field = match field.data_type() {
+        DataType::Map(f, _) => f,
+        _ => {
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "Cannot create map array for field {field:?}"
+            )))
+        }
+    };
+
+    let (offsets, child_len) = create_random_offsets::<i32>(size, 0, 5);
+    let offsets = Buffer::from(offsets.to_byte_slice());
+
+    let entries = create_random_array(
+        entries_field,
+        child_len as usize,
+        null_density,
+        true_density,
+    )?
+    .to_data();
+
+    let null_buffer = match field.is_nullable() {
+        true => Some(create_random_null_buffer(size, map_null_density)),
+        false => None,
+    };
+
+    let map_data = unsafe {
+        ArrayData::new_unchecked(
+            field.data_type().clone(),
+            size,
+            None,
+            null_buffer,
+            0,
+            vec![offsets],
+            vec![entries],
+        )
+    };
+    Ok(make_array(map_data))
 }
 
 /// Generate random offsets for list arrays
@@ -496,5 +565,32 @@ mod tests {
                 .null_count(),
             0
         );
+    }
+
+    #[test]
+    fn test_create_map_array() {
+        let map_field = Field::new_map(
+            "map",
+            "entries",
+            Field::new("key", DataType::Utf8, false),
+            Field::new("value", DataType::Utf8, true),
+            false,
+            false,
+        );
+        let array = create_random_array(&map_field, 100, 0.8, 0.5).unwrap();
+
+        assert_eq!(array.len(), 100);
+        // Map field is not null
+        assert_eq!(array.null_count(), 0);
+        // Maps have multiple values like a list, so internal arrays are longer
+        assert!(array.as_map().keys().len() > array.len());
+        assert!(array.as_map().values().len() > array.len());
+        // Keys are not nullable
+        assert_eq!(array.as_map().keys().null_count(), 0);
+        // Values are nullable
+        assert!(array.as_map().values().null_count() > 0);
+
+        assert_eq!(array.as_map().keys().data_type(), &DataType::Utf8);
+        assert_eq!(array.as_map().values().data_type(), &DataType::Utf8);
     }
 }
