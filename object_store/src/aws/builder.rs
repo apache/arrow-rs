@@ -70,20 +70,8 @@ enum Error {
     #[snafu(display("Configuration key: '{}' is not known.", key))]
     UnknownConfigurationKey { key: String },
 
-    #[snafu(display("Bucket '{}' not found", bucket))]
-    BucketNotFound { bucket: String },
-
-    #[snafu(display("Failed to resolve region for bucket '{}'", bucket))]
-    ResolveRegion {
-        bucket: String,
-        source: reqwest::Error,
-    },
-
     #[snafu(display("Invalid Zone suffix for bucket '{bucket}'"))]
     ZoneSuffix { bucket: String },
-
-    #[snafu(display("Failed to parse the region for bucket '{}'", bucket))]
-    RegionParse { bucket: String },
 
     #[snafu(display("Invalid encryption type: {}. Valid values are \"AES256\", \"sse:kms\", and \"sse:kms:dsse\".", passed))]
     InvalidEncryptionType { passed: String },

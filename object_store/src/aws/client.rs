@@ -66,12 +66,6 @@ const SHA256_CHECKSUM: &str = "x-amz-checksum-sha256";
 #[derive(Debug, Snafu)]
 #[allow(missing_docs)]
 pub(crate) enum Error {
-    #[snafu(display("Error fetching get response body {}: {}", path, source))]
-    GetResponseBody {
-        source: reqwest::Error,
-        path: String,
-    },
-
     #[snafu(display("Error performing DeleteObjects request: {}", source))]
     DeleteObjectsRequest { source: crate::client::retry::Error },
 

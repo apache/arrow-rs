@@ -60,11 +60,6 @@ enum Error {
     #[snafu(display("Configuration key: '{}' is not known.", key))]
     UnknownConfigurationKey { key: String },
 
-    #[snafu(display("Unable to extract metadata from headers: {}", source))]
-    Metadata {
-        source: crate::client::header::Error,
-    },
-
     #[snafu(display("GCP credential error: {}", source))]
     Credential { source: credential::Error },
 }
