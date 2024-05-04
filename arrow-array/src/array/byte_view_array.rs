@@ -25,7 +25,10 @@ use arrow_buffer::{Buffer, NullBuffer, ScalarBuffer};
 use arrow_data::{ArrayData, ArrayDataBuilder, ByteView};
 use arrow_schema::{ArrowError, DataType};
 use std::any::Any;
+
+#[cfg(test)]
 use std::collections::BTreeMap;
+
 use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::sync::Arc;
@@ -268,7 +271,7 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
     }
 
     // TODO: remove this after GC is implemented
-    #[allow(dead_code)]
+    #[cfg(test)]
     /// Returns whether the buffers are compact
     pub(self) fn compact_check(&self) -> Vec<bool> {
         let mut checkers: Vec<_> = self
@@ -512,13 +515,14 @@ impl From<Vec<Option<String>>> for StringViewArray {
 /// so it is likely to scan the entire array.
 ///
 /// Then it is better to do the check at once, rather than doing it for each accumulate operation.
+#[cfg(test)]
 struct CompactChecker {
     length: usize,
     intervals: BTreeMap<usize, usize>,
 }
 
-/// TODO: remove this after GC is implemented
-#[allow(dead_code)]
+// TODO: remove this after GC is implemented
+#[cfg(test)]
 impl CompactChecker {
     /// Create a new checker with the expected length of the buffer
     pub fn new(length: usize) -> Self {
