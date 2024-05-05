@@ -548,7 +548,7 @@ mod tests {
     }
 
     #[test]
-    fn test_boxed_primitive_aray_builder() {
+    fn test_boxed_primitive_array_builder() {
         let values_builder = make_builder(&DataType::Int32, 5);
         let mut builder = ListBuilder::new(values_builder);
 
