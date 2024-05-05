@@ -26,9 +26,7 @@ use arrow_data::{ArrayData, ArrayDataBuilder, ByteView};
 use arrow_schema::{ArrowError, DataType};
 use std::any::Any;
 
-#[cfg(test)]
 use std::collections::BTreeMap;
-
 use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::sync::Arc;
@@ -270,8 +268,11 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
         }
     }
 
-    // TODO: remove this after GC is implemented
-    #[cfg(test)]
+    /// check if the array is a compact view
+    pub fn is_compact(&self) -> bool {
+        self.compact_check().iter().all(|&x| x)
+    }
+
     /// Returns whether the buffers are compact
     pub(self) fn compact_check(&self) -> Vec<bool> {
         let mut checkers: Vec<_> = self
@@ -515,14 +516,11 @@ impl From<Vec<Option<String>>> for StringViewArray {
 /// so it is likely to scan the entire array.
 ///
 /// Then it is better to do the check at once, rather than doing it for each accumulate operation.
-#[cfg(test)]
 struct CompactChecker {
     length: usize,
     intervals: BTreeMap<usize, usize>,
 }
 
-// TODO: remove this after GC is implemented
-#[cfg(test)]
 impl CompactChecker {
     /// Create a new checker with the expected length of the buffer
     pub fn new(length: usize) -> Self {
@@ -831,6 +829,7 @@ mod tests {
         // array should have only one buffer
         let array = builder.finish();
         let compact_check = array.compact_check();
+        assert!(array.is_compact());
         assert_eq!(compact_check.len(), 1);
         assert!(compact_check.iter().all(|&x| x));
 
@@ -839,5 +838,6 @@ mod tests {
         let compact_check = sliced.compact_check();
         assert_eq!(compact_check.len(), 1);
         assert!(!compact_check.iter().all(|&x| x));
+        assert!(!sliced.is_compact());
     }
 }
