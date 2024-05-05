@@ -744,12 +744,6 @@ mod tests {
     #[test]
     #[should_panic(expected = "index out of bounds: the len is 9 but the index is 10")]
     fn test_list_view_array_index_out_of_bound() {
-        // Construct a value array
-        let value_data = ArrayData::builder(DataType::Int32)
-            .len(10)
-            .add_buffer(Buffer::from_slice_ref([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]))
-            .build()
-            .unwrap();
 
         // 01011001 00000001
         let mut null_bits: [u8; 2] = [0; 2];
@@ -817,11 +811,6 @@ mod tests {
 
     #[test]
     fn test_list_view_array_offsets_need_not_start_at_zero() {
-        let value_data = ArrayData::builder(DataType::Int32)
-            .len(8)
-            .add_buffer(Buffer::from_slice_ref([0, 1, 2, 3, 4, 5, 6, 7]))
-            .build()
-            .unwrap();
 
         let field = Arc::new(Field::new("item", DataType::Int32, true));
         let sizes = ScalarBuffer::from(vec![0i32, 0, 3]);
