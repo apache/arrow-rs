@@ -64,9 +64,6 @@ enum Error {
     Metadata {
         source: crate::client::header::Error,
     },
-
-    #[snafu(display("Request error: {}", source))]
-    Reqwest { source: reqwest::Error },
 }
 
 impl From<Error> for crate::Error {
@@ -249,13 +246,14 @@ impl HttpBuilder {
 
 #[cfg(test)]
 mod tests {
+    use crate::integration::*;
     use crate::tests::*;
 
     use super::*;
 
     #[tokio::test]
     async fn http_test() {
-        crate::test_util::maybe_skip_integration!();
+        maybe_skip_integration!();
         let url = std::env::var("HTTP_URL").expect("HTTP_URL must be set");
         let options = ClientOptions::new().with_allow_http(true);
         let integration = HttpBuilder::new()

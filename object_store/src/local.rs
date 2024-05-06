@@ -1005,8 +1005,7 @@ mod tests {
     use futures::TryStreamExt;
     use tempfile::{NamedTempFile, TempDir};
 
-    use crate::test_util::flatten_list_stream;
-    use crate::tests::*;
+    use crate::integration::*;
 
     use super::*;
 

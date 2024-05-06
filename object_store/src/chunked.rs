@@ -178,10 +178,10 @@ impl ObjectStore for ChunkedStore {
 mod tests {
     use futures::StreamExt;
 
+    use crate::integration::*;
     use crate::local::LocalFileSystem;
     use crate::memory::InMemory;
     use crate::path::Path;
-    use crate::tests::*;
 
     use super::*;
 

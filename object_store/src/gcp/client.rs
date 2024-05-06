@@ -81,12 +81,6 @@ enum Error {
     #[snafu(display("Got invalid put response: {}", source))]
     InvalidPutResponse { source: quick_xml::de::DeError },
 
-    #[snafu(display("Error performing post request {}: {}", path, source))]
-    PostRequest {
-        source: crate::client::retry::Error,
-        path: String,
-    },
-
     #[snafu(display("Unable to extract metadata from headers: {}", source))]
     Metadata {
         source: crate::client::header::Error,

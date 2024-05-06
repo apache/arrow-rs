@@ -536,7 +536,7 @@ impl ApplicationDefaultCredentials {
             let path = Path::new(&home).join(Self::CREDENTIALS_PATH);
 
             // It's expected for this file to not exist unless it has been explicitly configured by the user.
-            if path.try_exists().unwrap_or(false) {
+            if path.exists() {
                 return read_credentials_file::<Self>(path).map(Some);
             }
         }

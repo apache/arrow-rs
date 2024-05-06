@@ -40,7 +40,13 @@ struct Args {
     arrow: String,
     #[clap(short, long, help("Path to JSON file"))]
     json: String,
-    #[clap(value_enum, short, long, default_value_t = Mode::Validate, help="Mode of integration testing tool")]
+    #[clap(
+        value_enum,
+        short,
+        long,
+        default_value = "VALIDATE",
+        help = "Mode of integration testing tool"
+    )]
     mode: Mode,
     #[clap(short, long)]
     verbose: bool,

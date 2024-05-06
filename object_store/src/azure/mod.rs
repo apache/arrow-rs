@@ -276,12 +276,13 @@ impl MultipartStore for MicrosoftAzure {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::integration::*;
     use crate::tests::*;
     use bytes::Bytes;
 
     #[tokio::test]
     async fn azure_blob_test() {
-        crate::test_util::maybe_skip_integration!();
+        maybe_skip_integration!();
         let integration = MicrosoftAzureBuilder::from_env().build().unwrap();
 
         put_get_delete_list(&integration).await;

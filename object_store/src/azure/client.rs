@@ -67,12 +67,6 @@ pub(crate) enum Error {
         path: String,
     },
 
-    #[snafu(display("Error getting get response body {}: {}", path, source))]
-    GetResponseBody {
-        source: reqwest::Error,
-        path: String,
-    },
-
     #[snafu(display("Error performing put request {}: {}", path, source))]
     PutRequest {
         source: crate::client::retry::Error,
@@ -93,11 +87,6 @@ pub(crate) enum Error {
 
     #[snafu(display("Got invalid list response: {}", source))]
     InvalidListResponse { source: quick_xml::de::DeError },
-
-    #[snafu(display("Error authorizing request: {}", source))]
-    Authorization {
-        source: crate::azure::credential::Error,
-    },
 
     #[snafu(display("Unable to extract metadata from headers: {}", source))]
     Metadata {

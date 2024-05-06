@@ -67,8 +67,11 @@ impl NullArray {
     }
 
     /// Returns a new null array builder
-    pub fn builder(capacity: usize) -> NullBuilder {
-        NullBuilder::with_capacity(capacity)
+    ///
+    /// Note that the `capacity` parameter to this function is _deprecated_. It
+    /// now does nothing, and will be removed in a future version.
+    pub fn builder(_capacity: usize) -> NullBuilder {
+        NullBuilder::new()
     }
 }
 

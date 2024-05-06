@@ -48,6 +48,7 @@ pub trait ListClientExt {
 
     fn list(&self, prefix: Option<&Path>) -> BoxStream<'_, Result<ObjectMeta>>;
 
+    #[allow(unused)]
     fn list_with_offset(
         &self,
         prefix: Option<&Path>,

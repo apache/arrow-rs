@@ -16,7 +16,61 @@
 // under the License.
 
 //! Bloom filter implementation specific to Parquet, as described
-//! in the [spec](https://github.com/apache/parquet-format/blob/master/BloomFilter.md).
+//! in the [spec][parquet-bf-spec].
+//!
+//! # Bloom Filter Size
+//!
+//! Parquet uses the [Split Block Bloom Filter][sbbf-paper] (SBBF) as its bloom filter
+//! implementation. For each column upon which bloom filters are enabled, the offset and length of an SBBF
+//! is stored in  the metadata for each row group in the parquet file. The size of each filter is
+//! initialized using a calculation based on the desired number of distinct values (NDV) and false
+//! positive probability (FPP). The FPP for a SBBF can be approximated as<sup>[1][bf-formulae]</sup>:
+//!
+//! ```text
+//! f = (1 - e^(-k * n / m))^k
+//! ```
+//!
+//! Where, `f` is the FPP, `k` the number of hash functions, `n` the NDV, and `m` the total number
+//! of bits in the bloom filter. This can be re-arranged to determine the total number of bits
+//! required to achieve a given FPP and NDV:
+//!
+//! ```text
+//! m = -k * n / ln(1 - f^(1/k))
+//! ```
+//!
+//! SBBFs use eight hash functions to cleanly fit in SIMD lanes<sup>[2][sbbf-paper]</sup>, therefore
+//! `k` is set to 8. The SBBF will spread those `m` bits accross a set of `b` blocks that
+//! are each 256 bits, i.e., 32 bytes, in size. The number of blocks is chosen as:
+//!
+//! ```text
+//! b = NP2(m/8) / 32
+//! ```
+//!
+//! Where, `NP2` denotes *the next power of two*, and `m` is divided by 8 to be represented as bytes.
+//!
+//! Here is a table of calculated sizes for various FPP and NDV:
+//!
+//! | NDV       | FPP       | b       | Size (KB) |
+//! |-----------|-----------|---------|-----------|
+//! | 10,000    | 0.1       | 256     | 8         |
+//! | 10,000    | 0.01      | 512     | 16        |
+//! | 10,000    | 0.001     | 1,024   | 32        |
+//! | 10,000    | 0.0001    | 1,024   | 32        |
+//! | 100,000   | 0.1       | 4,096   | 128       |
+//! | 100,000   | 0.01      | 4,096   | 128       |
+//! | 100,000   | 0.001     | 8,192   | 256       |
+//! | 100,000   | 0.0001    | 16,384  | 512       |
+//! | 100,000   | 0.00001   | 16,384  | 512       |
+//! | 1,000,000 | 0.1       | 32,768  | 1,024     |
+//! | 1,000,000 | 0.01      | 65,536  | 2,048     |
+//! | 1,000,000 | 0.001     | 65,536  | 2,048     |
+//! | 1,000,000 | 0.0001    | 131,072 | 4,096     |
+//! | 1,000,000 | 0.00001   | 131,072 | 4,096     |
+//! | 1,000,000 | 0.000001  | 262,144 | 8,192     |
+//!
+//! [parquet-bf-spec]: https://github.com/apache/parquet-format/blob/master/BloomFilter.md
+//! [sbbf-paper]: https://arxiv.org/pdf/2101.01719
+//! [bf-formulae]: http://tfk.mit.edu/pdf/bloom.pdf
 
 use crate::data_type::AsBytes;
 use crate::errors::ParquetError;
@@ -179,7 +233,7 @@ fn num_of_bits_from_ndv_fpp(ndv: u64, fpp: f64) -> usize {
 
 impl Sbbf {
     /// Create a new [Sbbf] with given number of distinct values and false positive probability.
-    /// Will panic if `fpp` is greater than 1.0 or less than 0.0.
+    /// Will return an error if `fpp` is greater than or equal to 1.0 or less than 0.0.
     pub(crate) fn new_with_ndv_fpp(ndv: u64, fpp: f64) -> Result<Self, ParquetError> {
         if !(0.0..1.0).contains(&fpp) {
             return Err(ParquetError::General(format!(

@@ -125,7 +125,7 @@
 
 mod records;
 
-use arrow_array::builder::PrimitiveBuilder;
+use arrow_array::builder::{NullBuilder, PrimitiveBuilder};
 use arrow_array::types::*;
 use arrow_array::*;
 use arrow_cast::parse::{parse_decimal, string_to_datetime, Parser};
@@ -759,7 +759,11 @@ fn parse(
                         null_regex,
                     )
                 }
-                DataType::Null => Ok(Arc::new(NullArray::builder(rows.len()).finish()) as ArrayRef),
+                DataType::Null => Ok(Arc::new({
+                    let mut builder = NullBuilder::new();
+                    builder.append_nulls(rows.len());
+                    builder.finish()
+                }) as ArrayRef),
                 DataType::Utf8 => Ok(Arc::new(
                     rows.iter()
                         .map(|row| {
