@@ -84,6 +84,19 @@ impl<'a> View<'a> {
             Self::Offset(OffsetView::from(v))
         }
     }
+
+    /// Convert the view to a `u128`
+    pub fn to_u128(&self) -> u128 {
+        match self {
+            Self::Inline(inline) => inline.to_u128(),
+            Self::Offset(offset) => offset.to_u128(),
+        }
+    }
+
+    /// Return an [`OwnedView`] representing this view
+    pub fn to_owned(&self) -> OwnedView {
+        OwnedView::new(self.to_u128())
+    }
 }
 
 impl<'a> From<&'a u128> for View<'a> {
@@ -233,8 +246,8 @@ impl<'a> InlineView<'a> {
         self.0
     }
 
-    /// Convert this inline view to a u128
-    pub fn into_u128(self) -> u128 {
+    /// Convert this view to a u128
+    pub fn to_u128(&self) -> u128 {
         *self.0
     }
 
@@ -300,7 +313,7 @@ impl<'a> From<InlineView<'a>> for &'a u128 {
 impl<'a> From<InlineView<'a>> for u128 {
     #[inline(always)]
     fn from(view: InlineView) -> Self {
-        view.into_u128()
+        view.to_u128()
     }
 }
 
@@ -337,7 +350,7 @@ impl<'a> OffsetView<'a> {
         self.0
     }
 
-    /// Convert this inline view to a u128
+    /// Convert this view to a u128
     pub fn to_u128(&self) -> u128 {
         *self.0
     }
