@@ -276,25 +276,23 @@ fn create_random_struct_array(
         .map(|struct_field| create_random_array(struct_field, size, null_density, true_density))
         .collect::<Result<Vec<_>>>()?;
 
-    match field.is_nullable() {
+    let null_buffer = match field.is_nullable() {
         true => {
-            let nulls = create_random_null_buffer(size, null_density);
-            let children = struct_fields
-                .iter()
-                .map(|struct_field| (*struct_field).clone())
-                .zip(child_arrays)
-                .collect::<Vec<_>>();
-            Ok(Arc::new(StructArray::from((children, nulls))))
+            let nulls = arrow_buffer::BooleanBuffer::new(
+                create_random_null_buffer(size, null_density),
+                0,
+                size,
+            );
+            Some(nulls.into())
         }
-        false => {
-            let children = struct_fields
-                .iter()
-                .map(|struct_field| struct_field.name().as_str())
-                .zip(child_arrays)
-                .collect::<Vec<_>>();
-            Ok(Arc::new(StructArray::try_from(children)?))
-        }
-    }
+        false => None,
+    };
+
+    Ok(Arc::new(StructArray::try_new(
+        struct_fields.clone(),
+        child_arrays,
+        null_buffer,
+    )?))
 }
 
 #[inline]
