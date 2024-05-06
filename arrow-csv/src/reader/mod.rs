@@ -1164,9 +1164,11 @@ impl ReaderBuilder {
     /// Builds a decoder that can be used to decode CSV from an arbitrary byte stream
     pub fn build_decoder(self) -> Decoder {
         let delimiter = self.format.build_parser();
-        let mut record_decoder = RecordDecoder::new(delimiter, self.schema.fields().len());
-
-        record_decoder.set_truncated_rows(self.format.truncated_rows);
+        let record_decoder = RecordDecoder::new(
+            delimiter,
+            self.schema.fields().len(),
+            self.format.truncated_rows,
+        );
 
         let header = self.format.header as usize;
 
@@ -2207,10 +2209,9 @@ mod tests {
 
         let batches = reader.collect::<Result<Vec<_>, _>>();
         assert!(batches.is_ok());
-        let batch = batches.unwrap().into_iter().nth(0).unwrap();
+        let batch = batches.unwrap().into_iter().next().unwrap();
         // Empty rows are skipped by the underlying csv parser
         assert_eq!(batch.num_rows(), 3);
-
 
         let reader = ReaderBuilder::new(schema.clone())
             .with_header(true)
