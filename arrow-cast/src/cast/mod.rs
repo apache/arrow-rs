@@ -8061,20 +8061,29 @@ mod tests {
     fn test_cast_outside_supported_range_for_nanoseconds() {
         const EXPECTED_ERROR_MESSAGE: &str = "The dates that can be represented as nanoseconds have to be between 1677-09-21T00:12:44.0 and 2262-04-11T23:47:16.854775804";
 
-        let array = StringArray::from(vec![
-            Some("1650-01-01 01:01:01.000001"),
-        ]);
-    
+        let array = StringArray::from(vec![Some("1650-01-01 01:01:01.000001")]);
+
         let cast_options = CastOptions {
             safe: false,
             format_options: FormatOptions::default(),
         };
 
-        let result = cast_string_to_timestamp::<i32, TimestampNanosecondType>(&array, &None::<Arc<str>>, &cast_options);
-    
+        let result = cast_string_to_timestamp::<i32, TimestampNanosecondType>(
+            &array,
+            &None::<Arc<str>>,
+            &cast_options,
+        );
+
         assert!(result.is_err());
         let err = result.unwrap_err();
-        assert_eq!(err.to_string(), format!("Cast error: Overflow converting {} to Nanosecond. {}", array.value(0), EXPECTED_ERROR_MESSAGE));
+        assert_eq!(
+            err.to_string(),
+            format!(
+                "Cast error: Overflow converting {} to Nanosecond. {}",
+                array.value(0),
+                EXPECTED_ERROR_MESSAGE
+            )
+        );
     }
 
     #[test]
