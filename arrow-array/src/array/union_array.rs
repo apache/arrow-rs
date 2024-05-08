@@ -23,7 +23,6 @@ use arrow_schema::{ArrowError, DataType, UnionFields, UnionMode};
 /// Contains the `UnionArray` type.
 ///
 use std::any::Any;
-use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 /// An array of [values of varying types](https://arrow.apache.org/docs/format/Columnar.html#union-layout)
@@ -185,63 +184,43 @@ impl UnionArray {
             ));
         }
 
-        // Specified field type ids must be positive.
-        let field_type_ids = fields
-            .iter()
-            .map(|(type_id, _)| {
-                if type_id >= 0 {
-                    Ok(type_id)
-                } else {
-                    Err(ArrowError::InvalidArgumentError(
-                        "Type Ids must be positive".to_owned(),
-                    ))
-                }
-            })
-            .collect::<Result<HashSet<_>, _>>()?;
-
         // There must be an offset value for every type id value.
-        if offsets
-            .as_ref()
-            .is_some_and(|offsets| offsets.len() != type_ids.len())
-        {
-            return Err(ArrowError::InvalidArgumentError(
-                "Type Ids and Offsets lengths must match".to_string(),
-            ));
-        }
-
-        // Type id values must match one of the fields.
-        if type_ids
-            .iter()
-            .any(|type_id| !field_type_ids.contains(type_id))
-        {
-            return Err(ArrowError::InvalidArgumentError(
-                "Type Ids values must match one of the field type ids".to_owned(),
-            ));
+        if let Some(offsets) = &offsets {
+            if offsets.len() != type_ids.len() {
+                return Err(ArrowError::InvalidArgumentError(
+                    "Type Ids and Offsets lengths must match".to_string(),
+                ));
+            }
         }
 
         // Create mapping from type id to array lengths.
-        let array_lens = fields
-            .iter()
-            .map(|(type_id, _)| type_id)
-            .zip(
-                children
-                    .iter()
-                    .map(Array::len)
-                    .map(i32::try_from)
-                    .map(Result::unwrap),
-            )
-            .collect::<HashMap<_, _>>();
+        let max_id = fields.iter().map(|(i, _)| i).max().unwrap_or_default() as usize;
+        let mut array_lens = vec![i32::MIN; max_id + 1];
+        for (cd, (field_id, _)) in children.iter().zip(fields.iter()) {
+            array_lens[field_id as usize] = cd.len() as i32;
+        }
+
+        // Type id values must match one of the fields.
+        for id in &type_ids {
+            match array_lens.get(*id as usize) {
+                Some(x) if *x != i32::MIN => {}
+                _ => {
+                    return Err(ArrowError::InvalidArgumentError(
+                        "Type Ids values must match one of the field type ids".to_owned(),
+                    ))
+                }
+            }
+        }
 
         // Check the value offsets are in bounds.
-        if offsets.as_ref().is_some_and(|offsets| {
-            type_ids
-                .iter()
-                .zip(offsets.iter())
-                .any(|(type_id, &offset)| offset < 0 || offset > array_lens[type_id])
-        }) {
-            return Err(ArrowError::InvalidArgumentError(
-                "Offsets must be positive and within the length of the Array".to_owned(),
-            ));
+        if let Some(offsets) = &offsets {
+            let mut iter = type_ids.iter().zip(offsets.iter());
+            if iter.any(|(type_id, &offset)| offset < 0 || offset >= array_lens[*type_id as usize])
+            {
+                return Err(ArrowError::InvalidArgumentError(
+                    "Offsets must be positive and within the length of the Array".to_owned(),
+                ));
+            }
         }
 
         // Safety:
@@ -586,6 +565,7 @@ impl std::fmt::Debug for UnionArray {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashSet;
 
     use crate::array::Int8Type;
     use crate::builder::UnionBuilder;
@@ -1366,5 +1346,63 @@ mod tests {
         assert!(result.is_ok());
         let array = result.unwrap();
         assert_eq!(array.len(), 7);
+    }
+
+    #[test]
+    fn test_invalid() {
+        let fields = UnionFields::new(
+            [3, 2],
+            [
+                Field::new("a", DataType::Utf8, false),
+                Field::new("b", DataType::Utf8, false),
+            ],
+        );
+        let children = vec![
+            Arc::new(StringArray::from_iter_values(["a", "b"])) as _,
+            Arc::new(StringArray::from_iter_values(["c", "d"])) as _,
+        ];
+
+        let type_ids = vec![3, 3, 2].into();
+        UnionArray::try_new(fields.clone(), type_ids, None, children.clone()).unwrap();
+
+        let type_ids = vec![1, 2].into();
+        let err = UnionArray::try_new(fields.clone(), type_ids, None, children).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Invalid argument error: Type Ids values must match one of the field type ids"
+        );
+
+        let children = vec![
+            Arc::new(StringArray::from_iter_values(["a", "b"])) as _,
+            Arc::new(StringArray::from_iter_values(["c"])) as _,
+        ];
+        let type_ids = ScalarBuffer::from(vec![3_i8, 3, 2]);
+        let offsets = Some(vec![0, 1, 0].into());
+        UnionArray::try_new(fields.clone(), type_ids.clone(), offsets, children.clone()).unwrap();
+
+        let offsets = Some(vec![0, 1, 1].into());
+        let err = UnionArray::try_new(fields.clone(), type_ids.clone(), offsets, children.clone())
+            .unwrap_err();
+
+        assert_eq!(
+            err.to_string(),
+            "Invalid argument error: Offsets must be positive and within the length of the Array"
+        );
+
+        let offsets = Some(vec![0, 1].into());
+        let err =
+            UnionArray::try_new(fields.clone(), type_ids.clone(), offsets, children).unwrap_err();
+
+        assert_eq!(
+            err.to_string(),
+            "Invalid argument error: Type Ids and Offsets lengths must match"
+        );
+
+        let err = UnionArray::try_new(fields.clone(), type_ids, None, vec![]).unwrap_err();
+
+        assert_eq!(
+            err.to_string(),
+            "Invalid argument error: Union fields length must match child arrays length"
+        );
     }
 }
