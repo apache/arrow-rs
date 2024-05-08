@@ -1366,6 +1366,14 @@ mod tests {
         UnionArray::try_new(fields.clone(), type_ids, None, children.clone()).unwrap();
 
         let type_ids = vec![1, 2].into();
+        let err =
+            UnionArray::try_new(fields.clone(), type_ids, None, children.clone()).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Invalid argument error: Type Ids values must match one of the field type ids"
+        );
+
+        let type_ids = vec![7, 2].into();
         let err = UnionArray::try_new(fields.clone(), type_ids, None, children).unwrap_err();
         assert_eq!(
             err.to_string(),
