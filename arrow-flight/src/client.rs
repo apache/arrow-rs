@@ -710,10 +710,14 @@ impl<T, E> Stream for FallibleRequestStream<T, E> {
         match ready!(request_streams.poll_next_unpin(cx)) {
             Some(Ok(data)) => Poll::Ready(Some(data)),
             Some(Err(e)) => {
-                // unwrap() here is safe, ownership of sender will
-                // be moved only once as this stream will not be polled
-                // again
-                let _ = pinned.sender.take().unwrap().send(e);
+                // in theory this should only ever be called once
+                // as this stream should not be polled again after returning
+                // None, however we still check for None to be safe
+                if let Some(sender) = pinned.sender.take() {
+                    // an error means the other end of the channel is not around
+                    // to receive the error, so ignore it
+                    let _ = sender.send(e);
+                }
                 Poll::Ready(None)
             }
             None => Poll::Ready(None),
