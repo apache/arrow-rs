@@ -32,7 +32,6 @@
 //! [WebDAV]: https://en.wikipedia.org/wiki/WebDAV
 
 use async_trait::async_trait;
-use bytes::Bytes;
 use futures::stream::BoxStream;
 use futures::{StreamExt, TryStreamExt};
 use itertools::Itertools;
@@ -45,7 +44,7 @@ use crate::http::client::Client;
 use crate::path::Path;
 use crate::{
     ClientConfigKey, ClientOptions, GetOptions, GetResult, ListResult, MultipartUpload, ObjectMeta,
-    ObjectStore, PutMode, PutOptions, PutResult, Result, RetryConfig,
+    ObjectStore, PutMode, PutMultipartOpts, PutOptions, PutPayload, PutResult, Result, RetryConfig,
 };
 
 mod client;
@@ -65,9 +64,6 @@ enum Error {
     Metadata {
         source: crate::client::header::Error,
     },
-
-    #[snafu(display("Request error: {}", source))]
-    Reqwest { source: reqwest::Error },
 }
 
 impl From<Error> for crate::Error {
@@ -95,13 +91,18 @@ impl std::fmt::Display for HttpStore {
 
 #[async_trait]
 impl ObjectStore for HttpStore {
-    async fn put_opts(&self, location: &Path, bytes: Bytes, opts: PutOptions) -> Result<PutResult> {
+    async fn put_opts(
+        &self,
+        location: &Path,
+        payload: PutPayload,
+        opts: PutOptions,
+    ) -> Result<PutResult> {
         if opts.mode != PutMode::Overwrite {
             // TODO: Add support for If header - https://datatracker.ietf.org/doc/html/rfc2518#section-9.4
             return Err(crate::Error::NotImplemented);
         }
 
-        let response = self.client.put(location, bytes).await?;
+        let response = self.client.put(location, payload, opts.attributes).await?;
         let e_tag = match get_etag(response.headers()) {
             Ok(e_tag) => Some(e_tag),
             Err(crate::client::header::Error::MissingEtag) => None,
@@ -114,7 +115,11 @@ impl ObjectStore for HttpStore {
         })
     }
 
-    async fn put_multipart(&self, _location: &Path) -> Result<Box<dyn MultipartUpload>> {
+    async fn put_multipart_opts(
+        &self,
+        _location: &Path,
+        _opts: PutMultipartOpts,
+    ) -> Result<Box<dyn MultipartUpload>> {
         Err(crate::Error::NotImplemented)
     }
 
@@ -241,13 +246,14 @@ impl HttpBuilder {
 
 #[cfg(test)]
 mod tests {
+    use crate::integration::*;
     use crate::tests::*;
 
     use super::*;
 
     #[tokio::test]
     async fn http_test() {
-        crate::test_util::maybe_skip_integration!();
+        maybe_skip_integration!();
         let url = std::env::var("HTTP_URL").expect("HTTP_URL must be set");
         let options = ClientOptions::new().with_allow_http(true);
         let integration = HttpBuilder::new()
@@ -256,7 +262,7 @@ mod tests {
             .build()
             .unwrap();
 
-        put_get_delete_list_opts(&integration).await;
+        put_get_delete_list(&integration).await;
         list_uses_directories_correctly(&integration).await;
         list_with_delimiter(&integration).await;
         rename_and_copy(&integration).await;

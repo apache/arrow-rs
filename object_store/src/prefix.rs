@@ -22,8 +22,8 @@ use std::ops::Range;
 
 use crate::path::Path;
 use crate::{
-    GetOptions, GetResult, ListResult, MultipartUpload, ObjectMeta, ObjectStore, PutOptions,
-    PutResult, Result,
+    GetOptions, GetResult, ListResult, MultipartUpload, ObjectMeta, ObjectStore, PutMultipartOpts,
+    PutOptions, PutPayload, PutResult, Result,
 };
 
 #[doc(hidden)]
@@ -80,19 +80,33 @@ impl<T: ObjectStore> PrefixStore<T> {
 
 #[async_trait::async_trait]
 impl<T: ObjectStore> ObjectStore for PrefixStore<T> {
-    async fn put(&self, location: &Path, bytes: Bytes) -> Result<PutResult> {
+    async fn put(&self, location: &Path, payload: PutPayload) -> Result<PutResult> {
         let full_path = self.full_path(location);
-        self.inner.put(&full_path, bytes).await
+        self.inner.put(&full_path, payload).await
     }
 
-    async fn put_opts(&self, location: &Path, bytes: Bytes, opts: PutOptions) -> Result<PutResult> {
+    async fn put_opts(
+        &self,
+        location: &Path,
+        payload: PutPayload,
+        opts: PutOptions,
+    ) -> Result<PutResult> {
         let full_path = self.full_path(location);
-        self.inner.put_opts(&full_path, bytes, opts).await
+        self.inner.put_opts(&full_path, payload, opts).await
     }
 
     async fn put_multipart(&self, location: &Path) -> Result<Box<dyn MultipartUpload>> {
         let full_path = self.full_path(location);
         self.inner.put_multipart(&full_path).await
+    }
+
+    async fn put_multipart_opts(
+        &self,
+        location: &Path,
+        opts: PutMultipartOpts,
+    ) -> Result<Box<dyn MultipartUpload>> {
+        let full_path = self.full_path(location);
+        self.inner.put_multipart_opts(&full_path, opts).await
     }
 
     async fn get(&self, location: &Path) -> Result<GetResult> {
@@ -190,9 +204,8 @@ impl<T: ObjectStore> ObjectStore for PrefixStore<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::integration::*;
     use crate::local::LocalFileSystem;
-    use crate::test_util::flatten_list_stream;
-    use crate::tests::*;
 
     use tempfile::TempDir;
 
@@ -218,9 +231,8 @@ mod tests {
 
         let location = Path::from("prefix/test_file.json");
         let data = Bytes::from("arbitrary data");
-        let expected_data = data.clone();
 
-        local.put(&location, data).await.unwrap();
+        local.put(&location, data.clone().into()).await.unwrap();
 
         let prefix = PrefixStore::new(local, "prefix");
         let location_prefix = Path::from("test_file.json");
@@ -239,11 +251,11 @@ mod tests {
             .bytes()
             .await
             .unwrap();
-        assert_eq!(&*read_data, expected_data);
+        assert_eq!(&*read_data, data);
 
         let target_prefix = Path::from("/test_written.json");
         prefix
-            .put(&target_prefix, expected_data.clone())
+            .put(&target_prefix, data.clone().into())
             .await
             .unwrap();
 
@@ -256,6 +268,6 @@ mod tests {
 
         let location = Path::from("prefix/test_written.json");
         let read_data = local.get(&location).await.unwrap().bytes().await.unwrap();
-        assert_eq!(&*read_data, expected_data)
+        assert_eq!(&*read_data, data)
     }
 }

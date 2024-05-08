@@ -17,7 +17,7 @@
 
 [package]
 name = "object_store"
-version = "0.9.1"
+version = "0.10.0"
 edition = "2021"
 license = "MIT/Apache-2.0"
 readme = "README.md"
@@ -66,6 +66,7 @@ gcp = ["cloud", "rustls-pemfile"]
 aws = ["cloud", "md-5"]
 http = ["cloud"]
 tls-webpki-roots = ["reqwest?/rustls-tls-webpki-roots"]
+integration = []
 
 [dev-dependencies] # In alphabetical order
 futures-test = "0.3"

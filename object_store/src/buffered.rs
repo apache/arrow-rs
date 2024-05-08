@@ -18,7 +18,10 @@
 //! Utilities for performing tokio-style buffered IO
 
 use crate::path::Path;
-use crate::{ObjectMeta, ObjectStore, WriteMultipart};
+use crate::{
+    Attributes, ObjectMeta, ObjectStore, PutMultipartOpts, PutOptions, PutPayloadMut, TagSet,
+    WriteMultipart,
+};
 use bytes::Bytes;
 use futures::future::{BoxFuture, FutureExt};
 use futures::ready;
@@ -217,6 +220,8 @@ impl AsyncBufRead for BufReader {
 pub struct BufWriter {
     capacity: usize,
     max_concurrency: usize,
+    attributes: Option<Attributes>,
+    tags: Option<TagSet>,
     state: BufWriterState,
     store: Arc<dyn ObjectStore>,
 }
@@ -231,7 +236,7 @@ impl std::fmt::Debug for BufWriter {
 
 enum BufWriterState {
     /// Buffer up to capacity bytes
-    Buffer(Path, Vec<u8>),
+    Buffer(Path, PutPayloadMut),
     /// [`ObjectStore::put_multipart`]
     Prepare(BoxFuture<'static, std::io::Result<WriteMultipart>>),
     /// Write to a multipart upload
@@ -252,7 +257,9 @@ impl BufWriter {
             capacity,
             store,
             max_concurrency: 8,
-            state: BufWriterState::Buffer(path, Vec::new()),
+            attributes: None,
+            tags: None,
+            state: BufWriterState::Buffer(path, PutPayloadMut::new()),
         }
     }
 
@@ -262,6 +269,22 @@ impl BufWriter {
     pub fn with_max_concurrency(self, max_concurrency: usize) -> Self {
         Self {
             max_concurrency,
+            ..self
+        }
+    }
+
+    /// Set the attributes of the uploaded object
+    pub fn with_attributes(self, attributes: Attributes) -> Self {
+        Self {
+            attributes: Some(attributes),
+            ..self
+        }
+    }
+
+    /// Set the tags of the uploaded object
+    pub fn with_tags(self, tags: TagSet) -> Self {
+        Self {
+            tags: Some(tags),
             ..self
         }
     }
@@ -303,14 +326,20 @@ impl AsyncWrite for BufWriter {
                     continue;
                 }
                 BufWriterState::Buffer(path, b) => {
-                    if b.len().saturating_add(buf.len()) >= cap {
+                    if b.content_length().saturating_add(buf.len()) >= cap {
                         let buffer = std::mem::take(b);
                         let path = std::mem::take(path);
+                        let opts = PutMultipartOpts {
+                            attributes: self.attributes.take().unwrap_or_default(),
+                            tags: self.tags.take().unwrap_or_default(),
+                        };
                         let store = Arc::clone(&self.store);
                         self.state = BufWriterState::Prepare(Box::pin(async move {
-                            let upload = store.put_multipart(&path).await?;
-                            let mut chunked = WriteMultipart::new(upload);
-                            chunked.write(&buffer);
+                            let upload = store.put_multipart_opts(&path, opts).await?;
+                            let mut chunked = WriteMultipart::new_with_chunk_size(upload, cap);
+                            for chunk in buffer.freeze() {
+                                chunked.put(chunk);
+                            }
                             Ok(chunked)
                         }));
                         continue;
@@ -344,9 +373,14 @@ impl AsyncWrite for BufWriter {
                 BufWriterState::Buffer(p, b) => {
                     let buf = std::mem::take(b);
                     let path = std::mem::take(p);
+                    let opts = PutOptions {
+                        attributes: self.attributes.take().unwrap_or_default(),
+                        tags: self.tags.take().unwrap_or_default(),
+                        ..Default::default()
+                    };
                     let store = Arc::clone(&self.store);
                     self.state = BufWriterState::Flush(Box::pin(async move {
-                        store.put(&path, buf.into()).await?;
+                        store.put_opts(&path, buf.into(), opts).await?;
                         Ok(())
                     }));
                 }
@@ -381,6 +415,7 @@ mod tests {
     use super::*;
     use crate::memory::InMemory;
     use crate::path::Path;
+    use crate::{Attribute, GetOptions};
     use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 
     #[tokio::test]
@@ -391,7 +426,7 @@ mod tests {
         const BYTES: usize = 4096;
 
         let data: Bytes = b"12345678".iter().cycle().copied().take(BYTES).collect();
-        store.put(&existent, data.clone()).await.unwrap();
+        store.put(&existent, data.clone().into()).await.unwrap();
 
         let meta = store.head(&existent).await.unwrap();
 
@@ -462,26 +497,54 @@ mod tests {
         }
     }
 
+    // Note: `BufWriter::with_tags` functionality is tested in `crate::tests::tagging`
     #[tokio::test]
     async fn test_buf_writer() {
         let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
         let path = Path::from("file.txt");
+        let attributes = Attributes::from_iter([
+            (Attribute::ContentType, "text/html"),
+            (Attribute::CacheControl, "max-age=604800"),
+        ]);
 
         // Test put
-        let mut writer = BufWriter::with_capacity(Arc::clone(&store), path.clone(), 30);
+        let mut writer = BufWriter::with_capacity(Arc::clone(&store), path.clone(), 30)
+            .with_attributes(attributes.clone());
         writer.write_all(&[0; 20]).await.unwrap();
         writer.flush().await.unwrap();
         writer.write_all(&[0; 5]).await.unwrap();
         writer.shutdown().await.unwrap();
-        assert_eq!(store.head(&path).await.unwrap().size, 25);
+        let response = store
+            .get_opts(
+                &path,
+                GetOptions {
+                    head: true,
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.meta.size, 25);
+        assert_eq!(response.attributes, attributes);
 
         // Test multipart
-        let mut writer = BufWriter::with_capacity(Arc::clone(&store), path.clone(), 30);
+        let mut writer = BufWriter::with_capacity(Arc::clone(&store), path.clone(), 30)
+            .with_attributes(attributes.clone());
         writer.write_all(&[0; 20]).await.unwrap();
         writer.flush().await.unwrap();
         writer.write_all(&[0; 20]).await.unwrap();
         writer.shutdown().await.unwrap();
-
-        assert_eq!(store.head(&path).await.unwrap().size, 40);
+        let response = store
+            .get_opts(
+                &path,
+                GetOptions {
+                    head: true,
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.meta.size, 40);
+        assert_eq!(response.attributes, attributes);
     }
 }

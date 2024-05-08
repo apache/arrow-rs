@@ -59,6 +59,7 @@ pub trait ArrowPrimitiveType: primitive::PrimitiveTypeSealed + 'static {
     const DATA_TYPE: DataType;
 
     /// Returns the byte width of this primitive type.
+    #[deprecated(note = "Use ArrowNativeType::get_byte_width")]
     fn get_byte_width() -> usize {
         std::mem::size_of::<Self::Native>()
     }

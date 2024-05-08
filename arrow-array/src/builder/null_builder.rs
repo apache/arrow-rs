@@ -60,11 +60,13 @@ impl NullBuilder {
     }
 
     /// Creates a new null builder with space for `capacity` elements without re-allocating
-    pub fn with_capacity(capacity: usize) -> Self {
-        Self { len: capacity }
+    #[deprecated = "there is no actual notion of capacity in the NullBuilder, so emulating it makes little sense"]
+    pub fn with_capacity(_capacity: usize) -> Self {
+        Self::new()
     }
 
     /// Returns the capacity of this builder measured in slots of type `T`
+    #[deprecated = "there is no actual notion of capacity in the NullBuilder, so emulating it makes little sense"]
     pub fn capacity(&self) -> usize {
         self.len
     }
@@ -158,7 +160,7 @@ mod tests {
         builder.append_empty_values(4);
 
         let arr = builder.finish();
-        assert_eq!(20, arr.len());
+        assert_eq!(10, arr.len());
         assert_eq!(0, arr.offset());
         assert_eq!(0, arr.null_count());
         assert!(arr.is_nullable());
@@ -171,10 +173,10 @@ mod tests {
         builder.append_empty_value();
         builder.append_empty_values(3);
         let mut array = builder.finish_cloned();
-        assert_eq!(21, array.len());
+        assert_eq!(5, array.len());
 
         builder.append_empty_values(5);
         array = builder.finish();
-        assert_eq!(26, array.len());
+        assert_eq!(10, array.len());
     }
 }

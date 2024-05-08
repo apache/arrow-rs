@@ -75,6 +75,7 @@ fn is_leaf(data_type: &DataType) -> bool {
             | DataType::Float32
             | DataType::Float64
             | DataType::Utf8
+            | DataType::Utf8View
             | DataType::LargeUtf8
             | DataType::Timestamp(_, _)
             | DataType::Date32
@@ -85,6 +86,7 @@ fn is_leaf(data_type: &DataType) -> bool {
             | DataType::Interval(_)
             | DataType::Binary
             | DataType::LargeBinary
+            | DataType::BinaryView
             | DataType::Decimal128(_, _)
             | DataType::Decimal256(_, _)
             | DataType::FixedSizeBinary(_)

@@ -186,11 +186,7 @@ impl DynamoCommit {
         to: &Path,
     ) -> Result<()> {
         self.conditional_op(client, to, None, || async {
-            client
-                .copy_request(from, to)
-                .set_idempotent(false)
-                .send()
-                .await?;
+            client.copy_request(from, to).send().await?;
             Ok(())
         })
         .await
@@ -453,18 +449,6 @@ struct PutItem<'a> {
     /// that failed a condition check.
     #[serde(skip_serializing_if = "Option::is_none")]
     return_values_on_condition_check_failure: Option<ReturnValues>,
-}
-
-/// A DynamoDB [GetItem] payload
-///
-/// [GetItem]: https://docs.aws.amazon.com/amazondynamodb/latest/APIReference/API_GetItem.html
-#[derive(Serialize)]
-#[serde(rename_all = "PascalCase")]
-struct GetItem<'a> {
-    /// The table name
-    table_name: &'a str,
-    /// The primary key
-    key: Map<'a, &'a str, AttributeValue<'a>>,
 }
 
 #[derive(Deserialize)]

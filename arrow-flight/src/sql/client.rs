@@ -97,6 +97,11 @@ impl FlightSqlServiceClient<Channel> {
         self.token = Some(token);
     }
 
+    /// Clear the auth token.
+    pub fn clear_token(&mut self) {
+        self.token = None;
+    }
+
     /// Set header value.
     pub fn set_header(&mut self, key: impl Into<String>, value: impl Into<String>) {
         let key: String = key.into();

@@ -424,6 +424,14 @@ impl TryFrom<&FFI_ArrowSchema> for DataType {
                 let map_keys_sorted = c_schema.map_keys_sorted();
                 DataType::Map(Arc::new(Field::try_from(c_child)?), map_keys_sorted)
             }
+            "+r" => {
+                let c_run_ends = c_schema.child(0);
+                let c_values = c_schema.child(1);
+                DataType::RunEndEncoded(
+                    Arc::new(Field::try_from(c_run_ends)?),
+                    Arc::new(Field::try_from(c_values)?),
+                )
+            }
             // Parametrized types, requiring string parse
             other => {
                 match other.splitn(2, ':').collect::<Vec<&str>>().as_slice() {
@@ -616,6 +624,10 @@ impl TryFrom<&DataType> for FFI_ArrowSchema {
                 .iter()
                 .map(FFI_ArrowSchema::try_from)
                 .collect::<Result<Vec<_>, ArrowError>>()?,
+            DataType::RunEndEncoded(run_ends, values) => vec![
+                FFI_ArrowSchema::try_from(run_ends.as_ref())?,
+                FFI_ArrowSchema::try_from(values.as_ref())?,
+            ],
             _ => vec![],
         };
         let dictionary = if let DataType::Dictionary(_, value_data_type) = dtype {
@@ -681,6 +693,7 @@ fn get_format_string(dtype: &DataType) -> Result<String, ArrowError> {
         DataType::LargeList(_) => Ok("+L".to_string()),
         DataType::Struct(_) => Ok("+s".to_string()),
         DataType::Map(_, _) => Ok("+m".to_string()),
+        DataType::RunEndEncoded(_, _) => Ok("+r".to_string()),
         DataType::Dictionary(key_data_type, _) => get_format_string(key_data_type),
         DataType::Union(fields, mode) => {
             let formats = fields
@@ -807,6 +820,10 @@ mod tests {
             DataType::Utf8,
             true,
         )])));
+        round_trip_type(DataType::RunEndEncoded(
+            Arc::new(Field::new("run_ends", DataType::Int32, false)),
+            Arc::new(Field::new("values", DataType::Binary, true)),
+        ));
     }
 
     #[test]

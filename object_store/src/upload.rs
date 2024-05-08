@@ -17,13 +17,12 @@
 
 use std::task::{Context, Poll};
 
+use crate::{PutPayload, PutPayloadMut, PutResult, Result};
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures::future::BoxFuture;
 use futures::ready;
 use tokio::task::JoinSet;
-
-use crate::{PutResult, Result};
 
 /// An upload part request
 pub type UploadPart = BoxFuture<'static, Result<()>>;
@@ -65,7 +64,7 @@ pub trait MultipartUpload: Send + std::fmt::Debug {
     /// ```
     ///
     /// [R2]: https://developers.cloudflare.com/r2/objects/multipart-objects/#limitations
-    fn put_part(&mut self, data: Bytes) -> UploadPart;
+    fn put_part(&mut self, data: PutPayload) -> UploadPart;
 
     /// Complete the multipart upload
     ///
@@ -106,7 +105,9 @@ pub trait MultipartUpload: Send + std::fmt::Debug {
 pub struct WriteMultipart {
     upload: Box<dyn MultipartUpload>,
 
-    buffer: Vec<u8>,
+    buffer: PutPayloadMut,
+
+    chunk_size: usize,
 
     tasks: JoinSet<Result<()>>,
 }
@@ -121,7 +122,8 @@ impl WriteMultipart {
     pub fn new_with_chunk_size(upload: Box<dyn MultipartUpload>, chunk_size: usize) -> Self {
         Self {
             upload,
-            buffer: Vec::with_capacity(chunk_size),
+            chunk_size,
+            buffer: PutPayloadMut::new(),
             tasks: Default::default(),
         }
     }
@@ -149,6 +151,9 @@ impl WriteMultipart {
 
     /// Write data to this [`WriteMultipart`]
     ///
+    /// Data is buffered using [`PutPayloadMut::extend_from_slice`]. Implementations looking to
+    /// write data from owned buffers may prefer [`Self::put`] as this avoids copying.
+    ///
     /// Note this method is synchronous (not `async`) and will immediately
     /// start new uploads as soon as the internal `chunk_size` is hit,
     /// regardless of how many outstanding uploads are already in progress.
@@ -157,19 +162,38 @@ impl WriteMultipart {
     /// [`Self::wait_for_capacity`] prior to calling this method
     pub fn write(&mut self, mut buf: &[u8]) {
         while !buf.is_empty() {
-            let capacity = self.buffer.capacity();
-            let remaining = capacity - self.buffer.len();
+            let remaining = self.chunk_size - self.buffer.content_length();
             let to_read = buf.len().min(remaining);
             self.buffer.extend_from_slice(&buf[..to_read]);
             if to_read == remaining {
-                let part = std::mem::replace(&mut self.buffer, Vec::with_capacity(capacity));
-                self.put_part(part.into())
+                let buffer = std::mem::take(&mut self.buffer);
+                self.put_part(buffer.into())
             }
             buf = &buf[to_read..]
         }
     }
 
-    fn put_part(&mut self, part: Bytes) {
+    /// Put a chunk of data into this [`WriteMultipart`] without copying
+    ///
+    /// Data is buffered using [`PutPayloadMut::push`]. Implementations looking to
+    /// perform writes from non-owned buffers should prefer [`Self::write`] as this
+    /// will allow multiple calls to share the same underlying allocation.
+    ///
+    /// See [`Self::write`] for information on backpressure
+    pub fn put(&mut self, mut bytes: Bytes) {
+        while !bytes.is_empty() {
+            let remaining = self.chunk_size - self.buffer.content_length();
+            if bytes.len() < remaining {
+                self.buffer.push(bytes);
+                return;
+            }
+            self.buffer.push(bytes.split_to(remaining));
+            let buffer = std::mem::take(&mut self.buffer);
+            self.put_part(buffer.into())
+        }
+    }
+
+    pub(crate) fn put_part(&mut self, part: PutPayload) {
         self.tasks.spawn(self.upload.put_part(part));
     }
 

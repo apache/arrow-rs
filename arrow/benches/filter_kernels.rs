@@ -214,6 +214,32 @@ fn add_benchmark(c: &mut Criterion) {
     c.bench_function("filter single record batch", |b| {
         b.iter(|| filter_record_batch(&batch, &filter_array))
     });
+
+    let data_array = create_string_view_array_with_len(size, 0.5, 4, false);
+    c.bench_function("filter context short string view (kept 1/2)", |b| {
+        b.iter(|| bench_built_filter(&filter, &data_array))
+    });
+    c.bench_function(
+        "filter context short string view high selectivity (kept 1023/1024)",
+        |b| b.iter(|| bench_built_filter(&dense_filter, &data_array)),
+    );
+    c.bench_function(
+        "filter context short string view low selectivity (kept 1/1024)",
+        |b| b.iter(|| bench_built_filter(&sparse_filter, &data_array)),
+    );
+
+    let data_array = create_string_view_array_with_len(size, 0.5, 4, true);
+    c.bench_function("filter context mixed string view (kept 1/2)", |b| {
+        b.iter(|| bench_built_filter(&filter, &data_array))
+    });
+    c.bench_function(
+        "filter context mixed string view high selectivity (kept 1023/1024)",
+        |b| b.iter(|| bench_built_filter(&dense_filter, &data_array)),
+    );
+    c.bench_function(
+        "filter context mixed string view low selectivity (kept 1/1024)",
+        |b| b.iter(|| bench_built_filter(&sparse_filter, &data_array)),
+    );
 }
 
 criterion_group!(benches, add_benchmark);

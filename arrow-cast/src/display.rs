@@ -282,7 +282,9 @@ fn make_formatter<'a>(
         DataType::Boolean => array_format(as_boolean_array(array), options),
         DataType::Utf8 => array_format(array.as_string::<i32>(), options),
         DataType::LargeUtf8 => array_format(array.as_string::<i64>(), options),
+        DataType::Utf8View => array_format(array.as_string_view(), options),
         DataType::Binary => array_format(array.as_binary::<i32>(), options),
+        DataType::BinaryView => array_format(array.as_binary_view(), options),
         DataType::LargeBinary => array_format(array.as_binary::<i64>(), options),
         DataType::FixedSizeBinary(_) => {
             let a = array.as_any().downcast_ref::<FixedSizeBinaryArray>().unwrap();
@@ -733,7 +735,24 @@ impl<'a, O: OffsetSizeTrait> DisplayIndex for &'a GenericStringArray<O> {
     }
 }
 
+impl<'a> DisplayIndex for &'a StringViewArray {
+    fn write(&self, idx: usize, f: &mut dyn Write) -> FormatResult {
+        write!(f, "{}", self.value(idx))?;
+        Ok(())
+    }
+}
+
 impl<'a, O: OffsetSizeTrait> DisplayIndex for &'a GenericBinaryArray<O> {
+    fn write(&self, idx: usize, f: &mut dyn Write) -> FormatResult {
+        let v = self.value(idx);
+        for byte in v {
+            write!(f, "{byte:02x}")?;
+        }
+        Ok(())
+    }
+}
+
+impl<'a> DisplayIndex for &'a BinaryViewArray {
     fn write(&self, idx: usize, f: &mut dyn Write) -> FormatResult {
         let v = self.value(idx);
         for byte in v {

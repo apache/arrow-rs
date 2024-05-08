@@ -1398,9 +1398,9 @@ mod tests {
         );
     }
 
-    fn _test_take_string<'a, K: 'static>()
+    fn _test_take_string<'a, K>()
     where
-        K: Array + PartialEq + From<Vec<Option<&'a str>>>,
+        K: Array + PartialEq + From<Vec<Option<&'a str>>> + 'static,
     {
         let index = UInt32Array::from(vec![Some(3), None, Some(1), Some(3), Some(4)]);
 

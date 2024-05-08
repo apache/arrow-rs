@@ -363,9 +363,9 @@ pub use arrow_csv as csv;
 pub mod datatypes;
 pub mod error;
 #[cfg(feature = "ffi")]
-pub mod ffi;
+pub use arrow_array::ffi;
 #[cfg(feature = "ffi")]
-pub mod ffi_stream;
+pub use arrow_array::ffi_stream;
 #[cfg(feature = "ipc")]
 pub use arrow_ipc as ipc;
 #[cfg(feature = "json")]

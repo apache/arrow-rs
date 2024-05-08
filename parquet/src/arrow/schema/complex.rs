@@ -286,8 +286,16 @@ impl Visitor {
         let map_key = &map_key_value.get_fields()[0];
         let map_value = &map_key_value.get_fields()[1];
 
-        if map_key.get_basic_info().repetition() != Repetition::REQUIRED {
-            return Err(arrow_err!("Map keys must be required"));
+        match map_key.get_basic_info().repetition() {
+            Repetition::REPEATED => {
+            return Err(arrow_err!("Map keys cannot be repeated"));
+            }
+            Repetition::REQUIRED | Repetition::OPTIONAL => {
+                // Relaxed check for having repetition REQUIRED as there exists
+                // parquet writers and files that do not conform to this standard.
+                // This allows us to consume a broader range of existing files even
+                // if they are out of spec.
+            }
         }
 
         if map_value.get_basic_info().repetition() == Repetition::REPEATED {
@@ -346,7 +354,11 @@ impl Visitor {
         // Need both columns to be projected
         match (maybe_key, maybe_value) {
             (Some(key), Some(value)) => {
-                let key_field = Arc::new(convert_field(map_key, &key, arrow_key));
+                let key_field = Arc::new(
+                    convert_field(map_key, &key, arrow_key)
+                        // The key is always non-nullable (#5630)
+                        .with_nullable(false),
+                );
                 let value_field = Arc::new(convert_field(map_value, &value, arrow_value));
                 let field_metadata = match arrow_map {
                     Some(field) => field.metadata().clone(),

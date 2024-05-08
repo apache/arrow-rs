@@ -27,8 +27,8 @@ use crate::schema::types::ColumnDescPtr;
 use crate::util::bit_util::num_required_bits;
 use crate::util::interner::{Interner, Storage};
 use arrow_array::{
-    Array, ArrayAccessor, BinaryArray, DictionaryArray, LargeBinaryArray, LargeStringArray,
-    StringArray,
+    Array, ArrayAccessor, BinaryArray, BinaryViewArray, DictionaryArray, LargeBinaryArray,
+    LargeStringArray, StringArray, StringViewArray,
 };
 use arrow_schema::DataType;
 
@@ -66,11 +66,15 @@ macro_rules! downcast_op {
             DataType::LargeUtf8 => {
                 $op($array.as_any().downcast_ref::<LargeStringArray>().unwrap()$(, $arg)*)
             }
+            DataType::Utf8View => $op($array.as_any().downcast_ref::<StringViewArray>().unwrap()$(, $arg)*),
             DataType::Binary => {
                 $op($array.as_any().downcast_ref::<BinaryArray>().unwrap()$(, $arg)*)
             }
             DataType::LargeBinary => {
                 $op($array.as_any().downcast_ref::<LargeBinaryArray>().unwrap()$(, $arg)*)
+            }
+            DataType::BinaryView => {
+                $op($array.as_any().downcast_ref::<BinaryViewArray>().unwrap()$(, $arg)*)
             }
             DataType::Dictionary(key, value) => match value.as_ref() {
                 DataType::Utf8 => downcast_dict_op!(key, StringArray, $array, $op$(, $arg)*),

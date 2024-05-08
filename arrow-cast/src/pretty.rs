@@ -18,11 +18,14 @@
 //! Utilities for pretty printing record batches. Note this module is not
 //! available unless `feature = "prettyprint"` is enabled.
 
-use crate::display::{ArrayFormatter, FormatOptions};
+use std::fmt::Display;
+
+use comfy_table::{Cell, Table};
+
 use arrow_array::{Array, ArrayRef, RecordBatch};
 use arrow_schema::ArrowError;
-use comfy_table::{Cell, Table};
-use std::fmt::Display;
+
+use crate::display::{ArrayFormatter, FormatOptions};
 
 /// Create a visual representation of record batches
 pub fn pretty_format_batches(results: &[RecordBatch]) -> Result<impl Display, ArrowError> {
@@ -131,17 +134,20 @@ fn create_column(
 
 #[cfg(test)]
 mod tests {
+    use std::fmt::Write;
+    use std::sync::Arc;
 
-    use super::*;
-    use crate::display::array_value_to_string;
+    use half::f16;
+
     use arrow_array::builder::*;
     use arrow_array::types::*;
     use arrow_array::*;
     use arrow_buffer::ScalarBuffer;
     use arrow_schema::*;
-    use half::f16;
-    use std::fmt::Write;
-    use std::sync::Arc;
+
+    use crate::display::array_value_to_string;
+
+    use super::*;
 
     #[test]
     fn test_pretty_format_batches() {
@@ -315,6 +321,82 @@ mod tests {
         let actual: Vec<&str> = table.lines().collect();
 
         assert_eq!(expected, actual, "Actual result:\n{table}");
+    }
+
+    #[test]
+    fn test_pretty_format_string_view() {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "d1",
+            DataType::Utf8View,
+            true,
+        )]));
+
+        // Use a small capacity so we end up with multiple views
+        let mut builder = StringViewBuilder::with_capacity(20);
+        builder.append_value("hello");
+        builder.append_null();
+        builder.append_value("longer than 12 bytes");
+        builder.append_value("another than 12 bytes");
+        builder.append_null();
+        builder.append_value("small");
+
+        let array: ArrayRef = Arc::new(builder.finish());
+        let batch = RecordBatch::try_new(schema, vec![array]).unwrap();
+        let table = pretty_format_batches(&[batch]).unwrap().to_string();
+        let expected = vec![
+            "+-----------------------+",
+            "| d1                    |",
+            "+-----------------------+",
+            "| hello                 |",
+            "|                       |",
+            "| longer than 12 bytes  |",
+            "| another than 12 bytes |",
+            "|                       |",
+            "| small                 |",
+            "+-----------------------+",
+        ];
+
+        let actual: Vec<&str> = table.lines().collect();
+
+        assert_eq!(expected, actual, "Actual result:\n{table:#?}");
+    }
+
+    #[test]
+    fn test_pretty_format_binary_view() {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "d1",
+            DataType::BinaryView,
+            true,
+        )]));
+
+        // Use a small capacity so we end up with multiple views
+        let mut builder = BinaryViewBuilder::with_capacity(20);
+        builder.append_value(b"hello");
+        builder.append_null();
+        builder.append_value(b"longer than 12 bytes");
+        builder.append_value(b"another than 12 bytes");
+        builder.append_null();
+        builder.append_value(b"small");
+
+        let array: ArrayRef = Arc::new(builder.finish());
+        let batch = RecordBatch::try_new(schema, vec![array]).unwrap();
+        let table = pretty_format_batches(&[batch]).unwrap().to_string();
+        let expected = vec![
+            "+--------------------------------------------+",
+            "| d1                                         |",
+            "+--------------------------------------------+",
+            "| 68656c6c6f                                 |",
+            "|                                            |",
+            "| 6c6f6e676572207468616e203132206279746573   |",
+            "| 616e6f74686572207468616e203132206279746573 |",
+            "|                                            |",
+            "| 736d616c6c                                 |",
+            "+--------------------------------------------+",
+        ];
+
+        let actual: Vec<&str> = table.lines().collect();
+
+        assert_eq!(expected, actual, "Actual result:\n\n{table:#?}");
     }
 
     #[test]
