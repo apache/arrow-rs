@@ -229,18 +229,15 @@ fn take_impl<IndexType: ArrowPrimitiveType>(
             }
         }
         DataType::Union(fields, UnionMode::Sparse) => {
-            let mut field_type_ids = Vec::with_capacity(fields.len());
             let mut children = Vec::with_capacity(fields.len());
             let values = values.as_any().downcast_ref::<UnionArray>().unwrap();
-            let type_ids = take_native(values.type_ids(), indices).into_inner();
-            for (type_id, field) in fields.iter() {
+            let type_ids = take_native(values.type_ids(), indices);
+            for (type_id, _field) in fields.iter() {
                 let values = values.child(type_id);
                 let values = take_impl(values, indices)?;
-                let field = (**field).clone();
-                children.push((field, values));
-                field_type_ids.push(type_id);
+                children.push(values);
             }
-            let array = UnionArray::try_new(field_type_ids.as_slice(), type_ids, None, children)?;
+            let array = UnionArray::try_new(fields.clone(), type_ids, None, children)?;
             Ok(Arc::new(array))
         }
         t => unimplemented!("Take not supported for data type {:?}", t)
@@ -2151,19 +2148,22 @@ mod tests {
             None,
         ]);
         let strings = StringArray::from(vec![Some("a"), None, Some("c"), None, Some("d")]);
-        let type_ids = Buffer::from_slice_ref(vec![1i8; 5]);
+        let type_ids = [1; 5].into_iter().collect::<ScalarBuffer<i8>>();
 
-        let children: Vec<(Field, Arc<dyn Array>)> = vec![
+        let union_fields = [
             (
-                Field::new("f1", structs.data_type().clone(), true),
-                Arc::new(structs),
+                0,
+                Arc::new(Field::new("f1", structs.data_type().clone(), true)),
             ),
             (
-                Field::new("f2", strings.data_type().clone(), true),
-                Arc::new(strings),
+                1,
+                Arc::new(Field::new("f2", strings.data_type().clone(), true)),
             ),
-        ];
-        let array = UnionArray::try_new(&[0, 1], type_ids, None, children).unwrap();
+        ]
+        .into_iter()
+        .collect();
+        let children = vec![Arc::new(structs) as Arc<dyn Array>, Arc::new(strings)];
+        let array = UnionArray::try_new(union_fields, type_ids, None, children).unwrap();
 
         let indices = vec![0, 3, 1, 0, 2, 4];
         let index = UInt32Array::from(indices.clone());

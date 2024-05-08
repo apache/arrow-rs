@@ -420,8 +420,6 @@ impl UnionFields {
     }
 
     /// Returns an iterator over the fields and type ids in this [`UnionFields`]
-    ///
-    /// Note: the iteration order is not guaranteed
     pub fn iter(&self) -> impl Iterator<Item = (i8, &FieldRef)> + '_ {
         self.0.iter().map(|(id, f)| (*id, f))
     }
