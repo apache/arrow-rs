@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow_buffer::Buffer;
+use arrow_buffer::{Buffer, ToByteSlice};
 use arrow_schema::ArrowError;
 
 #[derive(Debug, Copy, Clone, Default)]
@@ -32,6 +32,18 @@ pub struct ByteView {
 }
 
 impl ByteView {
+    /// Try to create a [`ByteView`] from the provided `v`
+    ///
+    /// If `v` instead contains the binary data inline, returns an `Err` containing it
+    #[inline]
+    pub fn try_new(v: &u128) -> Result<Self, &[u8]> {
+        let len = *v as u32;
+        match len <= 12 {
+            true => Err(&v.to_byte_slice()[4..4 + len as usize]),
+            false => Ok(Self::from(*v)),
+        }
+    }
+
     #[inline(always)]
     pub fn as_u128(self) -> u128 {
         (self.length as u128)

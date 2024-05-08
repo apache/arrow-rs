@@ -237,15 +237,13 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
     /// Caller is responsible for ensuring that the index is within the bounds of the array
     pub unsafe fn value_unchecked(&self, idx: usize) -> &T::Native {
         let v = self.views.get_unchecked(idx);
-        let len = *v as u32;
-        let b = if len <= 12 {
-            let ptr = self.views.as_ptr() as *const u8;
-            std::slice::from_raw_parts(ptr.add(idx * 16 + 4), len as usize)
-        } else {
-            let view = ByteView::from(*v);
-            let data = self.buffers.get_unchecked(view.buffer_index as usize);
-            let offset = view.offset as usize;
-            data.get_unchecked(offset..offset + len as usize)
+        let b = match ByteView::try_new(v) {
+            Ok(view) => {
+                let data = self.buffers.get_unchecked(view.buffer_index as usize);
+                let offset = view.offset as usize;
+                data.get_unchecked(offset..offset + view.length as usize)
+            }
+            Err(b) => b,
         };
         T::Native::from_bytes_unchecked(b)
     }
