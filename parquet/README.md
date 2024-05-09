@@ -34,9 +34,18 @@ This crate is tested with the latest stable version of Rust. We do not currently
 
 ## Versioning / Releases
 
-The arrow crate follows the [SemVer standard](https://doc.rust-lang.org/cargo/reference/semver.html) defined by Cargo and works well within the Rust crate ecosystem.
+The `parquet` crate follows the [SemVer standard] defined by Cargo and works well
+within the Rust crate ecosystem. See the [repository README] for more details on
+the release schedule and version.
 
-However, for historical reasons, this crate uses versions with major numbers greater than `0.x` (e.g. `19.0.0`), unlike many other crates in the Rust ecosystem which spend extended time releasing versions `0.x` to signal planned ongoing API changes. Minor arrow releases contain only compatible changes, while major releases may contain breaking API changes.
+[SemVer standard]: https://doc.rust-lang.org/cargo/reference/semver.html 
+[repository README]: https://github.com/apache/arrow-rs
+
+Note that for historical reasons, this crate uses versions with major numbers
+greater than `0.x` (e.g. `19.0.0`), unlike many other crates in the Rust
+ecosystem which spend extended time releasing versions `0.x` to signal planned
+ongoing API changes. Minor arrow releases contain only compatible changes, while
+major releases may contain breaking API changes.
 
 ## Feature Flags
 
