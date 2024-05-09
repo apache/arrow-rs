@@ -54,7 +54,7 @@ For example:
 | Jun 2024         | `52.0.0` | Major, potentially breaking API changes |
 | Jul 2024         | `52.1.0` | Minor, NO breaking API changes          |
 | Aug 2024         | `52.2.0` | Minor, NO breaking API changes          |
-| Sep 2024         | `52.0.0` | Major, potentially breaking API changes |
+| Sep 2024         | `53.0.0` | Major, potentially breaking API changes |
 
 [this ticket]: https://github.com/apache/arrow-rs/issues/5368
 
