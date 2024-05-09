@@ -38,8 +38,8 @@ The `parquet` crate follows the [SemVer standard] defined by Cargo and works wel
 within the Rust crate ecosystem. See the [repository README] for more details on
 the release schedule and version.
 
-[SemVer standard]: https://doc.rust-lang.org/cargo/reference/semver.html 
-[repository README]: https://github.com/apache/arrow-rs
+[semver standard]: https://doc.rust-lang.org/cargo/reference/semver.html
+[repository readme]: https://github.com/apache/arrow-rs
 
 Note that for historical reasons, this crate uses versions with major numbers
 greater than `0.x` (e.g. `19.0.0`), unlike many other crates in the Rust
