@@ -34,7 +34,29 @@ This repo contains the following main components:
 
 The current development version the API documentation in this repo can be found [here](https://arrow.apache.org/rust).
 
-There are two related crates in a different repository
+## Release Versioning and Schedule
+
+The Arrow Rust project releases approximately monthly and follows [Semantic
+Versioning](https://semver.org/).
+
+Starting June 2024, we plan to release new major versions with potentially
+breaking API changes once a quarter, and release incremental minor versions in
+the intervening months. See [this ticket] for more details.
+
+For example:
+
+| Approximate Date | Version  | Notes                                   |
+|------------------|----------|-----------------------------------------|
+| Jun 2024         | `52.0.0` | Major, potentially breaking API changes |
+| Jul 2024         | `52.1.0` | Minor, NO breaking API changes          |
+| Aug 2024         | `52.2.0` | Minor, NO breaking API changes          |
+| Sep 2024         | `52.0.0` | Major, potentially breaking API changes |
+
+[this ticket]: https://github.com/apache/arrow-rs/issues/5368
+
+## Related Projects
+
+There are two related crates in different repositories
 
 | Crate      | Description                             | Documentation                 |
 | ---------- | --------------------------------------- | ----------------------------- |
