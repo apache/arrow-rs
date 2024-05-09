@@ -44,7 +44,7 @@ Due to available maintainer and testing bandwidth, `arrow` crates (`arrow`,
 as the `parquet` and `parquet-derive` crates.
 
 Starting June 2024, we plan to release new major versions with potentially
-breaking API changes once a quarter, and release incremental minor versions in
+breaking API changes at most once a quarter, and release incremental minor versions in
 the intervening months. See [this ticket] for more details.
 
 For example:
