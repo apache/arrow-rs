@@ -39,6 +39,10 @@ The current development version the API documentation in this repo can be found 
 The Arrow Rust project releases approximately monthly and follows [Semantic
 Versioning](https://semver.org/).
 
+Due to available maintainer and testing bandwidth, `arrow` crates (`arrow`,
+`arrow-flight`, etc.) are released on the same schedule with the same versions
+as the `parquet` and `parquet-derive` crates.
+
 Starting June 2024, we plan to release new major versions with potentially
 breaking API changes once a quarter, and release incremental minor versions in
 the intervening months. See [this ticket] for more details.
