@@ -282,7 +282,7 @@ mod tests {
         for method in [0.0, 0.5, 1.0] {
             for _ in 0..10 {
                 for chunk_size in [1, 17, 23] {
-                    let upload = Box::new(InstrumentedUpload::default());
+                    let upload = Box::<InstrumentedUpload>::default();
                     let chunks = Arc::clone(&upload.chunks);
                     let mut write = WriteMultipart::new_with_chunk_size(upload, chunk_size);
 
