@@ -425,7 +425,8 @@ impl<'a> ImportedArrowArray<'a> {
                 (length + 1) * (bits / 8)
             }
             (DataType::Utf8, 2) | (DataType::Binary, 2) => {
-                // the len of the data buffer (buffer 2) equals the last value of the offset buffer (buffer 1)
+                // the len of the data buffer (buffer 2) equals the difference between the last value
+                // and the first value of the offset buffer (buffer 1).
                 let len = self.buffer_len(1, dt)?;
                 // first buffer is the null buffer => add(1)
                 // we assume that pointer is aligned for `i32`, as Utf8 uses `i32` offsets.
@@ -438,7 +439,8 @@ impl<'a> ImportedArrowArray<'a> {
                 end - start
             }
             (DataType::LargeUtf8, 2) | (DataType::LargeBinary, 2) => {
-                // the len of the data buffer (buffer 2) equals the last value of the offset buffer (buffer 1)
+                // the len of the data buffer (buffer 2) equals the difference between the last value
+                // and the first value of the offset buffer (buffer 1).
                 let len = self.buffer_len(1, dt)?;
                 // first buffer is the null buffer => add(1)
                 // we assume that pointer is aligned for `i64`, as Large uses `i64` offsets.
