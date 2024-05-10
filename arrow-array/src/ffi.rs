@@ -431,8 +431,11 @@ impl<'a> ImportedArrowArray<'a> {
                 // we assume that pointer is aligned for `i32`, as Utf8 uses `i32` offsets.
                 #[allow(clippy::cast_ptr_alignment)]
                 let offset_buffer = self.array.buffer(1) as *const i32;
+                // get first offset
+                let start = (unsafe { *offset_buffer.add(0) }) as usize;
                 // get last offset
-                (unsafe { *offset_buffer.add(len / size_of::<i32>() - 1) }) as usize
+                let end = (unsafe { *offset_buffer.add(len / size_of::<i32>() - 1) }) as usize;
+                end - start
             }
             (DataType::LargeUtf8, 2) | (DataType::LargeBinary, 2) => {
                 // the len of the data buffer (buffer 2) equals the last value of the offset buffer (buffer 1)
@@ -441,8 +444,11 @@ impl<'a> ImportedArrowArray<'a> {
                 // we assume that pointer is aligned for `i64`, as Large uses `i64` offsets.
                 #[allow(clippy::cast_ptr_alignment)]
                 let offset_buffer = self.array.buffer(1) as *const i64;
+                // get first offset
+                let start = (unsafe { *offset_buffer.add(0) }) as usize;
                 // get last offset
-                (unsafe { *offset_buffer.add(len / size_of::<i64>() - 1) }) as usize
+                let end = (unsafe { *offset_buffer.add(len / size_of::<i64>() - 1) }) as usize;
+                end - start
             }
             // buffer len of primitive types
             _ => {
