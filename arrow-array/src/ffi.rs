@@ -1456,8 +1456,6 @@ mod tests_from_ffi {
         assert_eq!(offset_buf_len, 4);
         assert_eq!(data_buf_len, 0);
 
-        test_round_trip(&imported_array.consume()?);
-
-        Ok(())
+        test_round_trip(&imported_array.consume()?)
     }
 }
