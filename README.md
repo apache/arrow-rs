@@ -36,8 +36,10 @@ The current development version the API documentation in this repo can be found 
 
 ## Release Versioning and Schedule
 
+### `arrow` and `parquet` crates
+
 The Arrow Rust project releases approximately monthly and follows [Semantic
-Versioning](https://semver.org/).
+Versioning].
 
 Due to available maintainer and testing bandwidth, `arrow` crates (`arrow`,
 `arrow-flight`, etc.) are released on the same schedule with the same versions
@@ -57,6 +59,15 @@ For example:
 | Sep 2024         | `53.0.0` | Major, potentially breaking API changes |
 
 [this ticket]: https://github.com/apache/arrow-rs/issues/5368
+[semantic versioning]: https://semver.org/
+
+### `object_store` crate
+
+The [`object_store`] crate is released independently of the `arrow` and
+`parquet` crates and follows [Semantic Versioning]. We aim to release new
+versions approximately every 2 months.
+
+[`object_store`]: https://crates.io/crates/object_store
 
 ## Related Projects
 
