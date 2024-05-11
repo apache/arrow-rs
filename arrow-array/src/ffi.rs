@@ -1224,7 +1224,7 @@ mod tests_to_then_from_ffi {
 mod tests_from_ffi {
     use std::sync::Arc;
 
-    use arrow_buffer::{bit_util, buffer::Buffer};
+    use arrow_buffer::{bit_util, buffer::Buffer, MutableBuffer, OffsetBuffer};
     use arrow_data::ArrayData;
     use arrow_schema::{DataType, Field};
 
@@ -1236,7 +1236,7 @@ mod tests_from_ffi {
         ffi::{from_ffi, FFI_ArrowArray, FFI_ArrowSchema},
     };
 
-    use super::Result;
+    use super::{ImportedArrowArray, Result};
 
     fn test_round_trip(expected: &ArrayData) -> Result<()> {
         // here we export the array
@@ -1427,5 +1427,35 @@ mod tests_from_ffi {
 
         let data = array.into_data();
         test_round_trip(&data)
+    }
+
+    #[test]
+    fn test_empty_string_with_non_zero_offset() -> Result<()> {
+        // Simulate an empty string array with a non-zero offset from a producer
+        let data: Buffer = MutableBuffer::new(0).into();
+        let offsets = OffsetBuffer::new(vec![123].into());
+        let string_array =
+            unsafe { StringArray::new_unchecked(offsets.clone(), data.clone(), None) };
+
+        let data = string_array.into_data();
+
+        let array = FFI_ArrowArray::new(&data);
+        let schema = FFI_ArrowSchema::try_from(data.data_type())?;
+
+        let dt = DataType::try_from(&schema)?;
+        let array = Arc::new(array);
+        let imported_array = ImportedArrowArray {
+            array: &array,
+            data_type: dt,
+            owner: &array,
+        };
+
+        let offset_buf_len = imported_array.buffer_len(1, &imported_array.data_type)?;
+        let data_buf_len = imported_array.buffer_len(2, &imported_array.data_type)?;
+
+        assert_eq!(offset_buf_len, 4);
+        assert_eq!(data_buf_len, 0);
+
+        Ok(())
     }
 }
