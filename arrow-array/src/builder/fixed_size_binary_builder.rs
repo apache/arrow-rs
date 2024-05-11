@@ -115,6 +115,11 @@ impl FixedSizeBinaryBuilder {
         let array_data = unsafe { array_data_builder.build_unchecked() };
         FixedSizeBinaryArray::from(array_data)
     }
+
+    /// Returns the current null buffer as a slice
+    pub fn validity_slice(&self) -> Option<&[u8]> {
+        self.null_buffer_builder.as_slice()
+    }
 }
 
 impl ArrayBuilder for FixedSizeBinaryBuilder {

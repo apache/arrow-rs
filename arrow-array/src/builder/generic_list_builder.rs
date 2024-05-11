@@ -326,6 +326,11 @@ where
     pub fn offsets_slice(&self) -> &[OffsetSize] {
         self.offsets_builder.as_slice()
     }
+
+    /// Returns the current null buffer as a slice
+    pub fn validity_slice(&self) -> Option<&[u8]> {
+        self.null_buffer_builder.as_slice()
+    }
 }
 
 impl<O, B, V, E> Extend<Option<V>> for GenericListBuilder<O, B>
