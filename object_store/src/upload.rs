@@ -217,9 +217,13 @@ impl WriteMultipart {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
     use std::time::Duration;
 
     use futures::FutureExt;
+    use parking_lot::Mutex;
+    use rand::prelude::StdRng;
+    use rand::{Rng, SeedableRng};
 
     use crate::memory::InMemory;
     use crate::path::Path;
@@ -245,5 +249,70 @@ mod tests {
         }
         assert!(write.wait_for_capacity(10).now_or_never().is_none());
         write.wait_for_capacity(10).await.unwrap()
+    }
+
+    #[derive(Debug, Default)]
+    struct InstrumentedUpload {
+        chunks: Arc<Mutex<Vec<PutPayload>>>,
+    }
+
+    #[async_trait]
+    impl MultipartUpload for InstrumentedUpload {
+        fn put_part(&mut self, data: PutPayload) -> UploadPart {
+            self.chunks.lock().push(data);
+            futures::future::ready(Ok(())).boxed()
+        }
+
+        async fn complete(&mut self) -> Result<PutResult> {
+            Ok(PutResult {
+                e_tag: None,
+                version: None,
+            })
+        }
+
+        async fn abort(&mut self) -> Result<()> {
+            unimplemented!()
+        }
+    }
+
+    #[tokio::test]
+    async fn test_write_multipart() {
+        let mut rng = StdRng::seed_from_u64(42);
+
+        for method in [0.0, 0.5, 1.0] {
+            for _ in 0..10 {
+                for chunk_size in [1, 17, 23] {
+                    let upload = Box::<InstrumentedUpload>::default();
+                    let chunks = Arc::clone(&upload.chunks);
+                    let mut write = WriteMultipart::new_with_chunk_size(upload, chunk_size);
+
+                    let mut expected = Vec::with_capacity(1024);
+
+                    for _ in 0..50 {
+                        let chunk_size = rng.gen_range(0..30);
+                        let data: Vec<_> = (0..chunk_size).map(|_| rng.gen()).collect();
+                        expected.extend_from_slice(&data);
+
+                        match rng.gen_bool(method) {
+                            true => write.put(data.into()),
+                            false => write.write(&data),
+                        }
+                    }
+                    write.finish().await.unwrap();
+
+                    let chunks = chunks.lock();
+
+                    let actual: Vec<_> = chunks.iter().flatten().flatten().copied().collect();
+                    assert_eq!(expected, actual);
+
+                    for chunk in chunks.iter().take(chunks.len() - 1) {
+                        assert_eq!(chunk.content_length(), chunk_size)
+                    }
+
+                    let last_chunk = chunks.last().unwrap().content_length();
+                    assert!(last_chunk <= chunk_size, "{chunk_size}");
+                }
+            }
+        }
     }
 }

@@ -799,6 +799,18 @@ pub async fn stream_get(storage: &DynObjectStore) {
     let meta = storage.head(&location).await.unwrap();
     assert_eq!(meta.size, 6);
 
+    let location = Path::from("test_dir/test_put_part_mixed.txt");
+    let upload = storage.put_multipart(&location).await.unwrap();
+    let mut write = WriteMultipart::new(upload);
+    write.put(vec![0; 2].into());
+    write.write(&[1, 2, 3]);
+    write.put(vec![4, 5, 6, 7].into());
+    write.finish().await.unwrap();
+
+    let r = storage.get(&location).await.unwrap();
+    let r = r.bytes().await.unwrap();
+    assert_eq!(r.as_ref(), &[0, 0, 1, 2, 3, 4, 5, 6, 7]);
+
     // We can abort an empty write
     let location = Path::from("test_dir/test_abort_upload.txt");
     let mut upload = storage.put_multipart(&location).await.unwrap();
