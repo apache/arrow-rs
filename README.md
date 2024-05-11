@@ -25,12 +25,13 @@ Welcome to the implementation of Arrow, the popular in-memory columnar format, i
 
 This repo contains the following main components:
 
-| Crate        | Description                                                               | Latest API Docs                                | README                         |
-| ------------ | ------------------------------------------------------------------------- | ---------------------------------------------- | ------------------------------ |
-| arrow        | Core functionality (memory layout, arrays, low level computations)        | [docs.rs](https://docs.rs/arrow/latest)        | [(README)][arrow-readme]       |
-| parquet      | Support for Parquet columnar file format                                  | [docs.rs](https://docs.rs/parquet/latest)      | [(README)][parquet-readme]     |
-| arrow-flight | Support for Arrow-Flight IPC protocol                                     | [docs.rs](https://docs.rs/arrow-flight/latest) | [(README)][flight-readme]      |
-| object-store | Support for object store interactions (aws, azure, gcp, local, in-memory) | [docs.rs](https://docs.rs/object_store/latest) | [(README)][objectstore-readme] |
+| Crate         | Description                                                                 | Latest API Docs                                 | README                           |
+| ------------- | --------------------------------------------------------------------------- | ----------------------------------------------- | -------------------------------  |
+| arrow         | Core functionality (memory layout, arrays, low level computations)          | [docs.rs](https://docs.rs/arrow/latest)         | [(README)][arrow-readme]         |
+| arrow-flight  | Support for Arrow-Flight IPC protocol                                       | [docs.rs](https://docs.rs/arrow-flight/latest)  | [(README)][flight-readme]        |
+| object-store  | Support for object store interactions (aws, azure, gcp, local, in-memory)   | [docs.rs](https://docs.rs/object_store/latest)  | [(README)][objectstore-readme]   |
+| parquet       | Support for Parquet columnar file format                                    | [docs.rs](https://docs.rs/parquet/latest)       | [(README)][parquet-readme]       |
+| parquet_derive| A crate for deriving RecordWriter/RecordReader for arbitrary, simple structs| [docs.rs](https://docs.rs/parquet-derive/latest)| [(README)][parquet-derive-readme]|
 
 The current development version the API documentation in this repo can be found [here](https://arrow.apache.org/rust).
 
@@ -101,5 +102,6 @@ There is more information in the [contributing] guide.
 [datafusion-readme]: https://github.com/apache/arrow-datafusion/blob/main/README.md
 [ballista-readme]: https://github.com/apache/arrow-ballista/blob/main/README.md
 [objectstore-readme]: object_store/README.md
+[parquet-derive-readme]: parquet_derive/README.md
 [issues]: https://github.com/apache/arrow-rs/issues
 [discussions]: https://github.com/apache/arrow-rs/discussions
