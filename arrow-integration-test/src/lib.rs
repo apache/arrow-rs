@@ -397,13 +397,10 @@ pub fn array_from_json(
 
                                     match (days, milliseconds) {
                                         (Value::Number(d), Value::Number(m)) => {
-                                            let mut bytes = [0_u8; 8];
-                                            let m = (m.as_i64().unwrap() as i32).to_le_bytes();
-                                            let d = (d.as_i64().unwrap() as i32).to_le_bytes();
-
-                                            let c = [d, m].concat();
-                                            bytes.copy_from_slice(c.as_slice());
-                                            i64::from_le_bytes(bytes)
+                                            IntervalDayTimeType::make_value(
+                                                d.as_i64().unwrap() as i32,
+                                                m.as_i64().unwrap() as i32,
+                                            )
                                         }
                                         _ => {
                                             panic!("Unable to parse {value:?} as interval daytime")
@@ -519,16 +516,11 @@ pub fn array_from_json(
                                     Value::Number(months),
                                     Value::Number(days),
                                     Value::Number(nanoseconds),
-                                ) => {
-                                    let months = months.as_i64().unwrap() as i32;
-                                    let days = days.as_i64().unwrap() as i32;
-                                    let nanoseconds = nanoseconds.as_i64().unwrap();
-                                    let months_days_ns: i128 =
-                                        ((nanoseconds as i128) & 0xFFFFFFFFFFFFFFFF) << 64
-                                            | ((days as i128) & 0xFFFFFFFF) << 32
-                                            | ((months as i128) & 0xFFFFFFFF);
-                                    months_days_ns
-                                }
+                                ) => IntervalMonthDayNanoType::make_value(
+                                    months.as_i64().unwrap() as i32,
+                                    days.as_i64().unwrap() as i32,
+                                    nanoseconds.as_i64().unwrap(),
+                                ),
                                 (_, _, _) => {
                                     panic!("Unable to parse {v:?} as MonthDayNano")
                                 }
