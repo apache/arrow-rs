@@ -942,11 +942,11 @@ fn get_interval_dt_array_slice(
 ) -> Vec<FixedLenByteArray> {
     let mut values = Vec::with_capacity(indices.len());
     for i in indices {
-        let mut prefix = vec![0; 4];
-        let mut value = array.value(*i).to_le_bytes().to_vec();
-        prefix.append(&mut value);
-        debug_assert_eq!(prefix.len(), 12);
-        values.push(FixedLenByteArray::from(ByteArray::from(prefix)));
+        let mut out = [0; 12];
+        let value = array.value(*i);
+        out[4..8].copy_from_slice(&value.days.to_le_bytes());
+        out[8..12].copy_from_slice(&value.milliseconds.to_le_bytes());
+        values.push(FixedLenByteArray::from(ByteArray::from(out.to_vec())));
     }
     values
 }
@@ -1016,7 +1016,7 @@ mod tests {
     use arrow::error::Result as ArrowResult;
     use arrow::util::pretty::pretty_format_batches;
     use arrow::{array::*, buffer::Buffer};
-    use arrow_buffer::NullBuffer;
+    use arrow_buffer::{IntervalDayTime, IntervalMonthDayNano, NullBuffer};
     use arrow_schema::Fields;
 
     use crate::basic::Encoding;
@@ -2057,7 +2057,12 @@ mod tests {
 
     #[test]
     fn interval_day_time_single_column() {
-        required_and_optional::<IntervalDayTimeArray, _>(0..SMALL_SIZE as i64);
+        required_and_optional::<IntervalDayTimeArray, _>(vec![
+            IntervalDayTime::new(0, 1),
+            IntervalDayTime::new(0, 3),
+            IntervalDayTime::new(3, -2),
+            IntervalDayTime::new(-200, 4),
+        ]);
     }
 
     #[test]
@@ -2065,7 +2070,12 @@ mod tests {
         expected = "Attempting to write an Arrow interval type MonthDayNano to parquet that is not yet implemented"
     )]
     fn interval_month_day_nano_single_column() {
-        required_and_optional::<IntervalMonthDayNanoArray, _>(0..SMALL_SIZE as i128);
+        required_and_optional::<IntervalMonthDayNanoArray, _>(vec![
+            IntervalMonthDayNano::new(0, 1, 5),
+            IntervalMonthDayNano::new(0, 3, 2),
+            IntervalMonthDayNano::new(3, -2, -5),
+            IntervalMonthDayNano::new(-200, 4, -1),
+        ]);
     }
 
     #[test]

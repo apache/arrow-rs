@@ -946,7 +946,7 @@ where
 ///         return Ok(d.with_values(r));
 ///     }
 ///     downcast_primitive_array! {
-///         a => Ok(Arc::new(a.iter().map(|x| x.map(|x| x.to_string())).collect::<StringArray>())),
+///         a => Ok(Arc::new(a.iter().map(|x| x.map(|x| format!("{x:?}"))).collect::<StringArray>())),
 ///         d => Err(ArrowError::InvalidArgumentError(format!("{d:?} not supported")))
 ///     }
 /// }

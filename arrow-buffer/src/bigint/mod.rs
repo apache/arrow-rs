@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::arith::derive_arith;
 use crate::bigint::div::div_rem;
 use num::cast::AsPrimitive;
 use num::{BigInt, FromPrimitive, ToPrimitive};
@@ -638,55 +639,13 @@ fn mulx(a: u128, b: u128) -> (u128, u128) {
     (low, high)
 }
 
-macro_rules! derive_op {
-    ($t:ident, $op:ident, $wrapping:ident, $checked:ident) => {
-        impl std::ops::$t for i256 {
-            type Output = i256;
+derive_arith!(i256, Add, add, wrapping_add, checked_add);
+derive_arith!(i256, Sub, sub, wrapping_sub, checked_sub);
+derive_arith!(i256, Mul, mul, wrapping_mul, checked_mul);
+derive_arith!(i256, Div, div, wrapping_div, checked_div);
+derive_arith!(i256, Rem, rem, wrapping_rem, checked_rem);
 
-            #[cfg(debug_assertions)]
-            fn $op(self, rhs: Self) -> Self::Output {
-                self.$checked(rhs).expect("i256 overflow")
-            }
-
-            #[cfg(not(debug_assertions))]
-            fn $op(self, rhs: Self) -> Self::Output {
-                self.$wrapping(rhs)
-            }
-        }
-
-        impl<'a> std::ops::$t<i256> for &'a i256 {
-            type Output = i256;
-
-            fn $op(self, rhs: i256) -> Self::Output {
-                (*self).$op(rhs)
-            }
-        }
-
-        impl<'a> std::ops::$t<&'a i256> for i256 {
-            type Output = i256;
-
-            fn $op(self, rhs: &'a i256) -> Self::Output {
-                self.$op(*rhs)
-            }
-        }
-
-        impl<'a, 'b> std::ops::$t<&'b i256> for &'a i256 {
-            type Output = i256;
-
-            fn $op(self, rhs: &'b i256) -> Self::Output {
-                (*self).$op(*rhs)
-            }
-        }
-    };
-}
-
-derive_op!(Add, add, wrapping_add, checked_add);
-derive_op!(Sub, sub, wrapping_sub, checked_sub);
-derive_op!(Mul, mul, wrapping_mul, checked_mul);
-derive_op!(Div, div, wrapping_div, checked_div);
-derive_op!(Rem, rem, wrapping_rem, checked_rem);
-
-impl std::ops::Neg for i256 {
+impl Neg for i256 {
     type Output = i256;
 
     #[cfg(debug_assertions)]

@@ -23,7 +23,7 @@ use crate::delta::{
 use crate::temporal_conversions::as_datetime_with_timezone;
 use crate::timezone::Tz;
 use crate::{ArrowNativeTypeOp, OffsetSizeTrait};
-use arrow_buffer::{i256, Buffer, OffsetBuffer};
+use arrow_buffer::{i256, Buffer, IntervalDayTime, IntervalMonthDayNano, OffsetBuffer};
 use arrow_data::decimal::{validate_decimal256_precision, validate_decimal_precision};
 use arrow_data::{validate_binary_view, validate_string_view};
 use arrow_schema::{
@@ -220,7 +220,7 @@ make_type!(
 );
 make_type!(
     IntervalDayTimeType,
-    i64,
+    IntervalDayTime,
     DataType::Interval(IntervalUnit::DayTime),
     r#"A “calendar” interval type in days and milliseconds.
 
@@ -247,7 +247,7 @@ which can lead to surprising results. Please see the description of ordering on
 );
 make_type!(
     IntervalMonthDayNanoType,
-    i128,
+    IntervalMonthDayNano,
     DataType::Interval(IntervalUnit::MonthDayNano),
     r#"A “calendar” interval type in months, days, and nanoseconds.
 
@@ -264,11 +264,11 @@ Each field is independent (e.g. there is no constraint that the quantity of
 nanoseconds represents less than a day's worth of time).
 
 ```text
-┌──────────────────────────────┬─────────────┬──────────────┐
-│            Nanos             │    Days     │    Months    │
-│          (64 bits)           │ (32 bits)   │  (32 bits)   │
-└──────────────────────────────┴─────────────┴──────────────┘
-  0                            63            95           127 bit offset
+┌───────────────┬─────────────┬─────────────────────────────┐
+│     Months    │     Days    │            Nanos            │
+│   (32 bits)   │  (32 bits)  │          (64 bits)          │
+└───────────────┴─────────────┴─────────────────────────────┘
+  0            32             64                           128 bit offset
 ```
 Please see the [Arrow Spec](https://github.com/apache/arrow/blob/081b4022fe6f659d8765efc82b3f4787c5039e3c/format/Schema.fbs#L409-L415) for more details
 
@@ -917,25 +917,8 @@ impl IntervalDayTimeType {
     /// * `days` - The number of days (+/-) represented in this interval
     /// * `millis` - The number of milliseconds (+/-) represented in this interval
     #[inline]
-    pub fn make_value(
-        days: i32,
-        millis: i32,
-    ) -> <IntervalDayTimeType as ArrowPrimitiveType>::Native {
-        /*
-        https://github.com/apache/arrow/blob/02c8598d264c839a5b5cf3109bfd406f3b8a6ba5/cpp/src/arrow/type.h#L1433
-        struct DayMilliseconds {
-            int32_t days = 0;
-            int32_t milliseconds = 0;
-            ...
-        }
-        64      56      48      40      32      24      16      8       0
-        +-------+-------+-------+-------+-------+-------+-------+-------+
-        |             days              |         milliseconds          |
-        +-------+-------+-------+-------+-------+-------+-------+-------+
-        */
-        let m = millis as u64 & u32::MAX as u64;
-        let d = (days as u64 & u32::MAX as u64) << 32;
-        (m | d) as <IntervalDayTimeType as ArrowPrimitiveType>::Native
+    pub fn make_value(days: i32, milliseconds: i32) -> IntervalDayTime {
+        IntervalDayTime { days, milliseconds }
     }
 
     /// Turns a IntervalDayTimeType into a tuple of (days, milliseconds)
@@ -944,10 +927,8 @@ impl IntervalDayTimeType {
     ///
     /// * `i` - The IntervalDayTimeType to convert
     #[inline]
-    pub fn to_parts(i: <IntervalDayTimeType as ArrowPrimitiveType>::Native) -> (i32, i32) {
-        let days = (i >> 32) as i32;
-        let ms = i as i32;
-        (days, ms)
+    pub fn to_parts(i: IntervalDayTime) -> (i32, i32) {
+        (i.days, i.milliseconds)
     }
 }
 
@@ -960,27 +941,12 @@ impl IntervalMonthDayNanoType {
     /// * `days` - The number of days (+/-) represented in this interval
     /// * `nanos` - The number of nanoseconds (+/-) represented in this interval
     #[inline]
-    pub fn make_value(
-        months: i32,
-        days: i32,
-        nanos: i64,
-    ) -> <IntervalMonthDayNanoType as ArrowPrimitiveType>::Native {
-        /*
-        https://github.com/apache/arrow/blob/02c8598d264c839a5b5cf3109bfd406f3b8a6ba5/cpp/src/arrow/type.h#L1475
-        struct MonthDayNanos {
-            int32_t months;
-            int32_t days;
-            int64_t nanoseconds;
+    pub fn make_value(months: i32, days: i32, nanoseconds: i64) -> IntervalMonthDayNano {
+        IntervalMonthDayNano {
+            months,
+            days,
+            nanoseconds,
         }
-        128     112     96      80      64      48      32      16      0
-        +-------+-------+-------+-------+-------+-------+-------+-------+
-        |     months    |      days     |             nanos             |
-        +-------+-------+-------+-------+-------+-------+-------+-------+
-        */
-        let m = (months as u128 & u32::MAX as u128) << 96;
-        let d = (days as u128 & u32::MAX as u128) << 64;
-        let n = nanos as u128 & u64::MAX as u128;
-        (m | d | n) as <IntervalMonthDayNanoType as ArrowPrimitiveType>::Native
     }
 
     /// Turns a IntervalMonthDayNanoType into a tuple of (months, days, nanos)
@@ -989,13 +955,8 @@ impl IntervalMonthDayNanoType {
     ///
     /// * `i` - The IntervalMonthDayNanoType to convert
     #[inline]
-    pub fn to_parts(
-        i: <IntervalMonthDayNanoType as ArrowPrimitiveType>::Native,
-    ) -> (i32, i32, i64) {
-        let months = (i >> 96) as i32;
-        let days = (i >> 64) as i32;
-        let nanos = i as i64;
-        (months, days, nanos)
+    pub fn to_parts(i: IntervalMonthDayNano) -> (i32, i32, i64) {
+        (i.months, i.days, i.nanoseconds)
     }
 }
 
