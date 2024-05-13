@@ -230,6 +230,7 @@ pub struct Format {
     escape: Option<u8>,
     quote: Option<u8>,
     terminator: Option<u8>,
+    comment: Option<u8>,
     null_regex: NullRegex,
     truncated_rows: bool,
 }
@@ -257,6 +258,11 @@ impl Format {
 
     pub fn with_terminator(mut self, terminator: u8) -> Self {
         self.terminator = Some(terminator);
+        self
+    }
+
+    pub fn with_comment(mut self, comment: u8) -> Self {
+        self.comment = Some(comment);
         self
     }
 
@@ -353,6 +359,9 @@ impl Format {
         if let Some(t) = self.terminator {
             builder.terminator(csv::Terminator::Any(t));
         }
+        if let Some(comment) = self.comment {
+            builder.comment(Some(comment));
+        }
         builder.from_reader(reader)
     }
 
@@ -360,6 +369,7 @@ impl Format {
     fn build_parser(&self) -> csv_core::Reader {
         let mut builder = csv_core::ReaderBuilder::new();
         builder.escape(self.escape);
+        builder.comment(self.comment);
 
         if let Some(c) = self.delimiter {
             builder.delimiter(c);
@@ -1106,6 +1116,11 @@ impl ReaderBuilder {
 
     pub fn with_terminator(mut self, terminator: u8) -> Self {
         self.format.terminator = Some(terminator);
+        self
+    }
+
+    pub fn with_comment(mut self, comment: u8) -> Self {
+        self.format.comment = Some(comment);
         self
     }
 
@@ -2535,5 +2550,41 @@ mod tests {
             }
             assert_eq!(&t.get(), expected, "{values:?}")
         }
+    }
+
+    #[test]
+    fn test_comment() {
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::Int8, false),
+            Field::new("b", DataType::Int8, false),
+        ]);
+
+        let csv = "# comment1 \n1,2\n#comment2\n11,22";
+        let mut read = Cursor::new(csv.as_bytes());
+        let reader = ReaderBuilder::new(Arc::new(schema))
+            .with_comment(b'#')
+            .build(&mut read)
+            .unwrap();
+
+        let batches = reader.collect::<Result<Vec<_>, _>>().unwrap();
+        assert_eq!(batches.len(), 1);
+        let b = batches.first().unwrap();
+        assert_eq!(b.num_columns(), 2);
+        assert_eq!(
+            b.column(0)
+                .as_any()
+                .downcast_ref::<Int8Array>()
+                .unwrap()
+                .values(),
+            &vec![1, 11]
+        );
+        assert_eq!(
+            b.column(1)
+                .as_any()
+                .downcast_ref::<Int8Array>()
+                .unwrap()
+                .values(),
+            &vec![2, 22]
+        );
     }
 }
