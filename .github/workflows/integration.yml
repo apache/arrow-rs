@@ -95,11 +95,10 @@ jobs:
         with:
           path: rust
           fetch-depth: 0
-      # Workaround https://github.com/rust-lang/jobserver-rs/issues/87
-      # Can be removed once https://github.com/rust-lang/jobserver-rs/pull/88 is released
-      - name: Downgrade jobserver
+      # Workaround https://github.com/rust-lang/rust/issues/125067
+      - name: Downgrade rust
         working-directory: rust
-        run: cargo update -p cc --precise 1.0.94 && cargo update -p jobserver --precise 0.1.28
+        run: rustup override set 1.77
       - name: Build
         run: conda run --no-capture-output ci/scripts/integration_arrow_build.sh $PWD /build
       - name: Run
