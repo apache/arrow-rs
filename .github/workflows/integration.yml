@@ -95,6 +95,12 @@ jobs:
         with:
           path: rust
           fetch-depth: 0
+      - name: Checkout Arrow nanoarrow
+        uses: actions/checkout@v4
+        with:
+          repository: apache/arrow-nanoarrow
+          path: nanoarrow
+          fetch-depth: 0
       # Workaround https://github.com/rust-lang/rust/issues/125067
       - name: Downgrade rust
         working-directory: rust
