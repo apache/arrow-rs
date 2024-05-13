@@ -166,6 +166,14 @@ impl BooleanBuilder {
         BooleanArray::from(array_data)
     }
 
+    /// Returns the current values buffer as a slice
+    ///
+    /// Boolean values are bit-packed into bytes, so to read the i-th boolean,
+    /// you must compute `values_slice[i / 8] & (1 << (i % 8)) == 0`.
+    pub fn values_slice(&self) -> &[u8] {
+        self.values_builder.as_slice()
+    }
+
     /// Returns the current null buffer as a slice
     pub fn validity_slice(&self) -> Option<&[u8]> {
         self.null_buffer_builder.as_slice()
