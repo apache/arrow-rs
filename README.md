@@ -17,22 +17,29 @@
   under the License.
 -->
 
-# Native Rust implementation of Apache Arrow and Parquet
+# Native Rust implementation of Apache Arrow and Apache Parquet
 
 [![Coverage Status](https://codecov.io/gh/apache/arrow-rs/rust/branch/master/graph/badge.svg)](https://codecov.io/gh/apache/arrow-rs?branch=master)
 
-Welcome to the implementation of Arrow, the popular in-memory columnar format, in [Rust][rust].
+Welcome to the [Rust][rust] implementation of [Apache Arrow], the popular in-memory columnar format.
 
 This repo contains the following main components:
 
-| Crate        | Description                                                               | Latest API Docs                                | README                         |
-| ------------ | ------------------------------------------------------------------------- | ---------------------------------------------- | ------------------------------ |
-| arrow        | Core functionality (memory layout, arrays, low level computations)        | [docs.rs](https://docs.rs/arrow/latest)        | [(README)][arrow-readme]       |
-| parquet      | Support for Parquet columnar file format                                  | [docs.rs](https://docs.rs/parquet/latest)      | [(README)][parquet-readme]     |
-| arrow-flight | Support for Arrow-Flight IPC protocol                                     | [docs.rs](https://docs.rs/arrow-flight/latest) | [(README)][flight-readme]      |
-| object-store | Support for object store interactions (aws, azure, gcp, local, in-memory) | [docs.rs](https://docs.rs/object_store/latest) | [(README)][objectstore-readme] |
+| Crate            | Description                                               | Latest API Docs                                | README                         |
+| ---------------- | --------------------------------------------------------- | ---------------------------------------------- | ------------------------------ |
+| [`arrow`]        | Core Arrow functionality (memory layout, arrays, kernels) | [docs.rs](https://docs.rs/arrow/latest)        | [(README)][arrow-readme]       |
+| [`parquet`]      | Parquet columnar file format                              | [docs.rs](https://docs.rs/parquet/latest)      | [(README)][parquet-readme]     |
+| [`arrow-flight`] | Arrow-Flight IPC protocol                                 | [docs.rs](https://docs.rs/arrow-flight/latest) | [(README)][flight-readme]      |
+| [`object-store`] | object store (aws, azure, gcp, local, in-memory)          | [docs.rs](https://docs.rs/object_store/latest) | [(README)][objectstore-readme] |
 
 The current development version the API documentation in this repo can be found [here](https://arrow.apache.org/rust).
+
+[apache arrow]: https://arrow.apache.org/
+[`arrow`]: https://crates.io/crates/arrow
+[`parquet`]: https://crates.io/crates/parquet
+[`parquet-derive`]: https://crates.io/crates/parquet-derive
+[`arrow-flight`]: https://crates.io/crates/arrow-flight
+[`object-store`]: https://crates.io/crates/object-store
 
 ## Release Versioning and Schedule
 
@@ -41,9 +48,9 @@ The current development version the API documentation in this repo can be found 
 The Arrow Rust project releases approximately monthly and follows [Semantic
 Versioning].
 
-Due to available maintainer and testing bandwidth, `arrow` crates (`arrow`,
-`arrow-flight`, etc.) are released on the same schedule with the same versions
-as the `parquet` and `parquet-derive` crates.
+Due to available maintainer and testing bandwidth, [`arrow`] crates ([`arrow`],
+[`arrow-flight`], etc.) are released on the same schedule with the same versions
+as the [`parquet`] and [`parquet-derive`] crates.
 
 Starting June 2024, we plan to release new major versions with potentially
 breaking API changes at most once a quarter, and release incremental minor versions in
@@ -73,22 +80,30 @@ versions approximately every 2 months.
 
 There are two related crates in different repositories
 
-| Crate      | Description                             | Documentation                 |
-| ---------- | --------------------------------------- | ----------------------------- |
-| DataFusion | In-memory query engine with SQL support | [(README)][datafusion-readme] |
-| Ballista   | Distributed query execution             | [(README)][ballista-readme]   |
+| Crate          | Description                             | Documentation                 |
+| -------------- | --------------------------------------- | ----------------------------- |
+| [`datafusion`] | In-memory query engine with SQL support | [(README)][datafusion-readme] |
+| [`ballista`]   | Distributed query execution             | [(README)][ballista-readme]   |
 
-Collectively, these crates support a vast array of functionality for analytic computations in Rust.
+[`datafusion`]: https://crates.io/crates/datafusion
+[`ballista`]: https://crates.io/crates/datafusion-ballista
 
-For example, you can write an SQL query or a `DataFrame` (using the `datafusion` crate), run it against a parquet file (using the `parquet` crate), evaluate it in-memory using Arrow's columnar format (using the `arrow` crate), and send to another process (using the `arrow-flight` crate).
+Collectively, these crates support a wider array of functionality for analytic computations in Rust.
 
-Generally speaking, the `arrow` crate offers functionality for using Arrow arrays, and `datafusion` offers most operations typically found in SQL, including `join`s and window functions.
+For example, you can write SQL queries or a `DataFrame` (using the
+[`datafusion`] crate) to read a parquet file (using the [`parquet`] crate),
+evaluate it in-memory using Arrow's columnar format (using the [`arrow`] crate),
+and send to another process (using the [`arrow-flight`] crate).
+
+Generally speaking, the [`arrow`] crate offers functionality for using Arrow
+arrays, and [`datafusion`] offers most operations typically found in SQL,
+including `join`s and window functions.
 
 You can find more details about each crate in their respective READMEs.
 
 ## Arrow Rust Community
 
-The `dev@arrow.apache.org` mailing list serves as the core communication channel for the Arrow community. Instructions for signing up and links to the archives can be found at the [Arrow Community](https://arrow.apache.org/community/) page. All major announcements and communications happen there.
+The `dev@arrow.apache.org` mailing list serves as the core communication channel for the Arrow community. Instructions for signing up and links to the archives can be found on the [Arrow Community](https://arrow.apache.org/community/) page. All major announcements and communications happen there.
 
 The Rust Arrow community also uses the official [ASF Slack](https://s.apache.org/slack-invite) for informal discussions and coordination. This is
 a great place to meet other contributors and get guidance on where to contribute. Join us in the `#arrow-rust` channel and feel free to ask for an invite via:
@@ -109,8 +124,8 @@ There is more information in the [contributing] guide.
 [contributing]: CONTRIBUTING.md
 [parquet-readme]: parquet/README.md
 [flight-readme]: arrow-flight/README.md
-[datafusion-readme]: https://github.com/apache/arrow-datafusion/blob/main/README.md
-[ballista-readme]: https://github.com/apache/arrow-ballista/blob/main/README.md
+[datafusion-readme]: https://github.com/apache/datafusion/blob/main/README.md
+[ballista-readme]: https://github.com/apache/datafusion-ballista/blob/main/README.md
 [objectstore-readme]: object_store/README.md
 [issues]: https://github.com/apache/arrow-rs/issues
 [discussions]: https://github.com/apache/arrow-rs/discussions
