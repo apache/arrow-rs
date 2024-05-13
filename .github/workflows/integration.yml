@@ -57,6 +57,7 @@ jobs:
     env:
       ARROW_USE_CCACHE: OFF
       ARROW_CPP_EXE_PATH: /build/cpp/debug
+      ARROW_NANOARROW_EXE_PATH: /build/nanoarrow
       ARROW_RUST_EXE_PATH: /build/rust/debug
       BUILD_DOCS_CPP: OFF
       ARROW_INTEGRATION_CPP: ON
@@ -64,6 +65,7 @@ jobs:
       ARROW_INTEGRATION_GO: ON
       ARROW_INTEGRATION_JAVA: ON
       ARROW_INTEGRATION_JS: ON
+      ARCHERY_INTEGRATION_WITH_NANOARROW: ON
       # https://github.com/apache/arrow/pull/38403/files#r1371281630
       ARCHERY_INTEGRATION_WITH_RUST: ON
       # These are necessary because the github runner overrides $HOME
