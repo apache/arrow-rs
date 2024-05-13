@@ -57,8 +57,7 @@ jobs:
     env:
       ARROW_USE_CCACHE: OFF
       ARROW_CPP_EXE_PATH: /build/cpp/debug
-      ARROW_NANOARROW_PATH: "${{ github.workspace }}/nanoarrow"
-      ARROW_NANOARROW_EXE_PATH: /build/nanoarrow
+      ARROW_NANOARROW_PATH: /build/nanoarrow
       ARROW_RUST_EXE_PATH: /build/rust/debug
       BUILD_DOCS_CPP: OFF
       ARROW_INTEGRATION_CPP: ON
