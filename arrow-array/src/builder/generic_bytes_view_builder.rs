@@ -146,6 +146,11 @@ impl<T: ByteViewType + ?Sized> GenericByteViewBuilder<T> {
         // SAFETY: valid by construction
         unsafe { GenericByteViewArray::new_unchecked(views, completed, nulls) }
     }
+
+    /// Returns the current null buffer as a slice
+    pub fn validity_slice(&self) -> Option<&[u8]> {
+        self.null_buffer_builder.as_slice()
+    }
 }
 
 impl<T: ByteViewType + ?Sized> Default for GenericByteViewBuilder<T> {

@@ -299,6 +299,11 @@ where
 
         DictionaryArray::from(unsafe { builder.build_unchecked() })
     }
+
+    /// Returns the current null buffer as a slice
+    pub fn validity_slice(&self) -> Option<&[u8]> {
+        self.keys_builder.validity_slice()
+    }
 }
 
 impl<K: ArrowDictionaryKeyType, T: ByteArrayType, V: AsRef<T::Native>> Extend<Option<V>>

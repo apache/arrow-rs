@@ -302,6 +302,11 @@ where
     pub fn values_slice_mut(&mut self) -> &mut [V::Native] {
         self.values_builder.values_slice_mut()
     }
+
+    /// Returns the current null buffer as a slice
+    pub fn validity_slice(&self) -> Option<&[u8]> {
+        self.keys_builder.validity_slice()
+    }
 }
 
 impl<K: ArrowDictionaryKeyType, P: ArrowPrimitiveType> Extend<Option<P::Native>>
