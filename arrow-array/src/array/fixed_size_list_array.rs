@@ -371,6 +371,19 @@ impl From<FixedSizeListArray> for ArrayData {
     }
 }
 
+impl<'a> TryFrom<&'a dyn Array> for &'a FixedSizeListArray {
+    type Error = ArrowError;
+
+    fn try_from(value: &'a dyn Array) -> Result<Self, Self::Error> {
+        value.as_any().downcast_ref().ok_or_else(|| {
+            ArrowError::InvalidArgumentError(format!(
+                "Can't convert a {} to a FixedSizeListArray",
+                value.data_type()
+            ))
+        })
+    }
+}
+
 impl Array for FixedSizeListArray {
     fn as_any(&self) -> &dyn Any {
         self
@@ -466,7 +479,7 @@ mod tests {
 
     use crate::cast::AsArray;
     use crate::types::Int32Type;
-    use crate::{new_empty_array, Int32Array};
+    use crate::{new_empty_array, Int32Array, NullArray};
 
     use super::*;
 
@@ -688,5 +701,23 @@ mod tests {
         let values = new_empty_array(&DataType::Int32);
         let list = FixedSizeListArray::new(field.clone(), 0, values, Some(nulls));
         assert_eq!(list.len(), 2);
+    }
+
+    #[test]
+    fn test_fixed_size_list_array_try_from_dyn_array_ok() {
+        let array = FixedSizeListArray::from_iter_primitive::<Int32Type, _, _>(
+            vec![Some(vec![Some(0), Some(1), Some(2)])],
+            3,
+        );
+
+        <&FixedSizeListArray>::try_from(&array as &dyn Array).unwrap();
+    }
+
+    #[test]
+    #[should_panic(expected = "Can't convert a Null to a FixedSizeListArray")]
+    fn test_fixed_size_list_array_try_from_dyn_array_err() {
+        let array = NullArray::new(0);
+
+        <&FixedSizeListArray>::try_from(&array as &dyn Array).unwrap();
     }
 }

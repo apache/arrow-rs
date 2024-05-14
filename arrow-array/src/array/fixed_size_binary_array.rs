@@ -497,6 +497,19 @@ impl From<FixedSizeBinaryArray> for ArrayData {
     }
 }
 
+impl<'a> TryFrom<&'a dyn Array> for &'a FixedSizeBinaryArray {
+    type Error = ArrowError;
+
+    fn try_from(value: &'a dyn Array) -> Result<Self, Self::Error> {
+        value.as_any().downcast_ref().ok_or_else(|| {
+            ArrowError::InvalidArgumentError(format!(
+                "Can't convert a {} to a FixedSizeBinaryArray",
+                value.data_type()
+            ))
+        })
+    }
+}
+
 /// Creates a `FixedSizeBinaryArray` from `FixedSizeList<u8>` array
 impl From<FixedSizeListArray> for FixedSizeBinaryArray {
     fn from(v: FixedSizeListArray) -> Self {
@@ -634,7 +647,7 @@ impl<'a> IntoIterator for &'a FixedSizeBinaryArray {
 
 #[cfg(test)]
 mod tests {
-    use crate::RecordBatch;
+    use crate::{NullArray, RecordBatch};
     use arrow_schema::{Field, Schema};
 
     use super::*;
@@ -896,6 +909,21 @@ mod tests {
             Some(b"four"),
         ];
         let _ = FixedSizeBinaryArray::from(values);
+    }
+
+    #[test]
+    fn test_fixed_size_binary_array_try_from_dyn_array_ok() {
+        let array = FixedSizeBinaryArray::from(vec!["ab".as_bytes()]);
+
+        <&FixedSizeBinaryArray>::try_from(&array as &dyn Array).unwrap();
+    }
+
+    #[test]
+    #[should_panic(expected = "Can't convert a Null to a FixedSizeBinaryArray")]
+    fn test_fixed_size_binary_array_try_from_dyn_array_err() {
+        let array = NullArray::new(0);
+
+        <&FixedSizeBinaryArray>::try_from(&array as &dyn Array).unwrap();
     }
 
     #[test]

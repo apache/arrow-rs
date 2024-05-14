@@ -442,6 +442,19 @@ impl From<UnionArray> for ArrayData {
     }
 }
 
+impl<'a> TryFrom<&'a dyn Array> for &'a UnionArray {
+    type Error = ArrowError;
+
+    fn try_from(value: &'a dyn Array) -> Result<Self, Self::Error> {
+        value.as_any().downcast_ref().ok_or_else(|| {
+            ArrowError::InvalidArgumentError(format!(
+                "Can't convert a {} to a UnionArray",
+                value.data_type()
+            ))
+        })
+    }
+}
+
 impl Array for UnionArray {
     fn as_any(&self) -> &dyn Any {
         self
@@ -571,8 +584,8 @@ mod tests {
     use crate::builder::UnionBuilder;
     use crate::cast::AsArray;
     use crate::types::{Float32Type, Float64Type, Int32Type, Int64Type};
-    use crate::RecordBatch;
     use crate::{Float64Array, Int32Array, Int64Array, StringArray};
+    use crate::{NullArray, RecordBatch};
     use arrow_buffer::Buffer;
     use arrow_schema::{Field, Schema};
 
@@ -1412,5 +1425,33 @@ mod tests {
             err.to_string(),
             "Invalid argument error: Union fields length must match child arrays length"
         );
+    }
+
+    #[test]
+    fn test_union_array_try_from_dyn_array_ok() {
+        let fields = UnionFields::new(
+            [3, 2],
+            [
+                Field::new("a", DataType::Utf8, false),
+                Field::new("b", DataType::Utf8, false),
+            ],
+        );
+        let children = vec![
+            Arc::new(StringArray::from_iter_values(["a", "b"])) as _,
+            Arc::new(StringArray::from_iter_values(["c", "d"])) as _,
+        ];
+
+        let type_ids = vec![3, 3, 2].into();
+        let array = UnionArray::try_new(fields, type_ids, None, children).unwrap();
+
+        <&UnionArray>::try_from(&array as &dyn Array).unwrap();
+    }
+
+    #[test]
+    #[should_panic(expected = "Can't convert a Null to a UnionArray")]
+    fn test_union_array_try_from_dyn_array_err() {
+        let array = NullArray::new(0);
+
+        <&UnionArray>::try_from(&array as &dyn Array).unwrap();
     }
 }

@@ -627,6 +627,20 @@ impl<T: ArrowDictionaryKeyType> From<DictionaryArray<T>> for ArrayData {
     }
 }
 
+impl<'a, T: ArrowDictionaryKeyType> TryFrom<&'a dyn Array> for &'a DictionaryArray<T> {
+    type Error = ArrowError;
+
+    fn try_from(value: &'a dyn Array) -> Result<Self, Self::Error> {
+        value.as_any().downcast_ref().ok_or_else(|| {
+            ArrowError::InvalidArgumentError(format!(
+                "Can't convert a {} to a DictionaryArray({}, _)",
+                value.data_type(),
+                T::DATA_TYPE
+            ))
+        })
+    }
+}
+
 /// Constructs a `DictionaryArray` from an iterator of optional strings.
 ///
 /// # Example:
@@ -801,6 +815,32 @@ impl<'a, K: ArrowDictionaryKeyType, V> Copy for TypedDictionaryArray<'a, K, V> {
 impl<'a, K: ArrowDictionaryKeyType, V> std::fmt::Debug for TypedDictionaryArray<'a, K, V> {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         writeln!(f, "TypedDictionaryArray({:?})", self.dictionary)
+    }
+}
+
+impl<'a, K: ArrowDictionaryKeyType, V: 'static> TryFrom<&'a dyn Array>
+    for TypedDictionaryArray<'a, K, V>
+{
+    type Error = ArrowError;
+
+    fn try_from(value: &'a dyn Array) -> Result<Self, Self::Error> {
+        let dict = <&'a DictionaryArray<K>>::try_from(value).map_err(|err| {
+            ArrowError::InvalidArgumentError(format!(
+                "TypedDictionaryArray({}, {}): {}",
+                K::DATA_TYPE,
+                std::any::type_name::<V>(),
+                err
+            ))
+        })?;
+
+        dict.downcast_dict().ok_or_else(|| {
+            ArrowError::InvalidArgumentError(format!(
+                "Can't convert a {} to a TypedDictionaryArray({}, {})",
+                value.data_type(),
+                K::DATA_TYPE,
+                std::any::type_name::<V>()
+            ))
+        })
     }
 }
 
@@ -1007,7 +1047,7 @@ impl<K: ArrowDictionaryKeyType> AnyDictionaryArray for DictionaryArray<K> {
 mod tests {
     use super::*;
     use crate::cast::as_dictionary_array;
-    use crate::{Int16Array, Int32Array, Int8Array};
+    use crate::{Int16Array, Int32Array, Int8Array, NullArray};
     use arrow_buffer::{Buffer, ToByteSlice};
 
     #[test]
@@ -1272,6 +1312,50 @@ mod tests {
     fn test_from_array_data_validation() {
         let a = DictionaryArray::<Int32Type>::from_iter(["32"]);
         let _ = DictionaryArray::<Int64Type>::from(a.into_data());
+    }
+
+    #[test]
+    fn test_dict_array_try_from_dyn_array_ok() {
+        let array = DictionaryArray::<Int32Type>::from_iter(["32"]);
+
+        <&DictionaryArray<Int32Type>>::try_from(&array as &dyn Array).unwrap();
+    }
+
+    #[test]
+    #[should_panic(expected = "Can't convert a Null to a DictionaryArray(Int32, _)")]
+    fn test_dict_array_try_from_dyn_array_err() {
+        let array = NullArray::new(0);
+
+        <&DictionaryArray<Int32Type>>::try_from(&array as &dyn Array).unwrap();
+    }
+
+    #[test]
+    fn test_typed_dict_array_try_from_dyn_array_ok() {
+        let array = DictionaryArray::<Int32Type>::from_iter(["32"]);
+        let typed = array.downcast_dict::<StringArray>().unwrap();
+
+        <TypedDictionaryArray<Int32Type, StringArray>>::try_from(&typed as &dyn Array).unwrap();
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "TypedDictionaryArray(Int32, arrow_array::array::byte_array::GenericByteArray<arrow_array::types::GenericStringType<i32>>): Invalid argument error: Can't convert a Null to a DictionaryArray(Int32, _)"
+    )]
+    fn test_typed_dict_array_try_from_dyn_array_err() {
+        let array = NullArray::new(0);
+
+        <TypedDictionaryArray<Int32Type, StringArray>>::try_from(&array as &dyn Array).unwrap();
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "Can't convert a Dictionary(Int32, Utf8) to a TypedDictionaryArray(Int32, arrow_array::array::null_array::NullArray"
+    )]
+    fn test_typed_dict_array_try_from_dyn_array_err_inner() {
+        let array = DictionaryArray::<Int32Type>::from_iter(["32"]);
+        let typed = array.downcast_dict::<StringArray>().unwrap();
+
+        <TypedDictionaryArray<Int32Type, NullArray>>::try_from(&typed as &dyn Array).unwrap();
     }
 
     #[test]

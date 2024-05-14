@@ -321,6 +321,19 @@ impl From<StructArray> for ArrayData {
     }
 }
 
+impl<'a> TryFrom<&'a dyn Array> for &'a StructArray {
+    type Error = ArrowError;
+
+    fn try_from(value: &'a dyn Array) -> Result<Self, Self::Error> {
+        value.as_any().downcast_ref().ok_or_else(|| {
+            ArrowError::InvalidArgumentError(format!(
+                "Can't convert a {} to a StructArray",
+                value.data_type()
+            ))
+        })
+    }
+}
+
 impl TryFrom<Vec<(&str, ArrayRef)>> for StructArray {
     type Error = ArrowError;
 
@@ -462,7 +475,9 @@ impl Index<&str> for StructArray {
 mod tests {
     use super::*;
 
-    use crate::{BooleanArray, Float32Array, Float64Array, Int32Array, Int64Array, StringArray};
+    use crate::{
+        BooleanArray, Float32Array, Float64Array, Int32Array, Int64Array, NullArray, StringArray,
+    };
     use arrow_buffer::ToByteSlice;
 
     #[test]
@@ -730,5 +745,20 @@ mod tests {
             Arc::new(Field::new("c", DataType::Int32, false)),
             Arc::new(Int32Array::from(vec![Some(42), None, Some(19)])) as ArrayRef,
         )]));
+    }
+
+    #[test]
+    fn test_struct_array_try_from_dyn_array_ok() {
+        let array = StructArray::from(vec![]);
+
+        <&StructArray>::try_from(&array as &dyn Array).unwrap();
+    }
+
+    #[test]
+    #[should_panic(expected = "Can't convert a Null to a StructArray")]
+    fn test_struct_array_try_from_dyn_array_err() {
+        let array = NullArray::new(0);
+
+        <&StructArray>::try_from(&array as &dyn Array).unwrap();
     }
 }

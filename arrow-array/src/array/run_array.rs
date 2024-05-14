@@ -302,6 +302,20 @@ impl<R: RunEndIndexType> From<RunArray<R>> for ArrayData {
     }
 }
 
+impl<'a, R: RunEndIndexType> TryFrom<&'a dyn Array> for &'a RunArray<R> {
+    type Error = ArrowError;
+
+    fn try_from(value: &'a dyn Array) -> Result<Self, Self::Error> {
+        value.as_any().downcast_ref().ok_or_else(|| {
+            ArrowError::InvalidArgumentError(format!(
+                "Can't convert a {} to a RunArray({}, _)",
+                value.data_type(),
+                R::DATA_TYPE
+            ))
+        })
+    }
+}
+
 impl<T: RunEndIndexType> Array for RunArray<T> {
     fn as_any(&self) -> &dyn Any {
         self
@@ -652,6 +666,30 @@ where
     }
 }
 
+impl<'a, R: RunEndIndexType, V: 'static> TryFrom<&'a dyn Array> for TypedRunArray<'a, R, V> {
+    type Error = ArrowError;
+
+    fn try_from(value: &'a dyn Array) -> Result<Self, Self::Error> {
+        let run_array = <&'a RunArray<R>>::try_from(value).map_err(|err| {
+            ArrowError::InvalidArgumentError(format!(
+                "TypedRunArray({}, {}): {}",
+                R::DATA_TYPE,
+                std::any::type_name::<V>(),
+                err
+            ))
+        })?;
+
+        run_array.downcast().ok_or_else(|| {
+            ArrowError::InvalidArgumentError(format!(
+                "Can't convert a {} to a TypedRunArray({}, {})",
+                value.data_type(),
+                R::DATA_TYPE,
+                std::any::type_name::<V>()
+            ))
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use rand::seq::SliceRandom;
@@ -662,6 +700,7 @@ mod tests {
     use crate::builder::PrimitiveRunBuilder;
     use crate::cast::AsArray;
     use crate::types::{Int8Type, UInt32Type};
+    use crate::NullArray;
     use crate::{Int32Array, StringArray};
 
     fn build_input_array(size: usize) -> Vec<Option<i32>> {
@@ -1089,5 +1128,53 @@ mod tests {
             let n = n.into_iter().collect::<Vec<_>>();
             assert_eq!(&n, &expected[offset..offset + length], "{offset} {length}");
         }
+    }
+
+    #[test]
+    fn test_run_array_try_from_dyn_array_ok() {
+        let array = RunArray::<Int32Type>::from_iter(["32"]);
+
+        <&RunArray<Int32Type>>::try_from(&array as &dyn Array).unwrap();
+    }
+
+    #[test]
+    #[should_panic(expected = "Can't convert a Null to a RunArray(Int32, _)")]
+    fn test_run_array_try_from_dyn_array_err() {
+        let array = NullArray::new(0);
+
+        <&RunArray<Int32Type>>::try_from(&array as &dyn Array).unwrap();
+    }
+
+    #[test]
+    fn test_typed_run_array_try_from_dyn_array_ok() {
+        let orig = ["a", "b", "a", "b"];
+        let ree_array = RunArray::<Int32Type>::from_iter(orig);
+
+        let typed = ree_array.downcast::<StringArray>().unwrap();
+
+        <TypedRunArray<Int32Type, StringArray>>::try_from(&typed as &dyn Array).unwrap();
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "TypedRunArray(Int32, arrow_array::array::byte_array::GenericByteArray<arrow_array::types::GenericStringType<i32>>): Invalid argument error: Can't convert a Null to a RunArray(Int32, _)"
+    )]
+    fn test_typed_run_array_try_from_dyn_array_err() {
+        let array = NullArray::new(0);
+
+        <TypedRunArray<Int32Type, StringArray>>::try_from(&array as &dyn Array).unwrap();
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "Can't convert a RunEndEncoded(Field { name: \\\"run_ends\\\", data_type: Int32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: \\\"values\\\", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }) to a TypedRunArray(Int32, arrow_array::array::null_array::NullArray)"
+    )]
+    fn test_typed_run_array_try_from_dyn_array_err_inner() {
+        let orig = ["a", "b", "a", "b"];
+        let ree_array = RunArray::<Int32Type>::from_iter(orig);
+
+        let typed = ree_array.downcast::<StringArray>().unwrap();
+
+        <TypedRunArray<Int32Type, NullArray>>::try_from(&typed as &dyn Array).unwrap();
     }
 }
