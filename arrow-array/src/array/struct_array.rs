@@ -15,7 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::{make_array, new_null_array, Array, ArrayRef, RecordBatch};
+
+use crate::{make_array, new_null_array, Array, ArrayAccessor, ArrayRef, RecordBatch};
 use arrow_buffer::{BooleanBuffer, Buffer, NullBuffer};
 use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::{ArrowError, DataType, Field, FieldRef, Fields, SchemaBuilder};
@@ -469,6 +470,100 @@ impl Index<&str> for StructArray {
     fn index(&self, name: &str) -> &Self::Output {
         self.column_by_name(name).unwrap()
     }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct TypedStructArray<'a, T> {
+    fields: T,
+    struct_: &'a StructArray,
+}
+
+impl<'a, T> TypedStructArray<'a, T> {
+    pub fn fields(&self) -> &T {
+        &self.fields
+    }
+}
+
+impl<'a, T: TryFrom<&'a StructArray, Error = ArrowError>> TryFrom<&'a dyn Array>
+    for TypedStructArray<'a, T>
+{
+    type Error = ArrowError;
+
+    fn try_from(value: &'a dyn Array) -> Result<Self, Self::Error> {
+        let struct_ = <&'a StructArray>::try_from(value)?;
+
+        Ok(Self {
+            fields: T::try_from(&struct_)?,
+            struct_: struct_,
+        })
+    }
+}
+
+impl<'a, T: std::fmt::Debug + Send + Sync> Array for TypedStructArray<'a, T> {
+    fn as_any(&self) -> &dyn std::any::Any {
+        self.struct_.as_any()
+    }
+
+    fn to_data(&self) -> ArrayData {
+        self.struct_.to_data()
+    }
+
+    fn into_data(self) -> ArrayData {
+        self.struct_.into_data()
+    }
+
+    fn data_type(&self) -> &DataType {
+        self.struct_.data_type()
+    }
+
+    fn slice(&self, offset: usize, length: usize) -> ArrayRef {
+        Array::slice(&self.struct_, offset, length)
+    }
+
+    fn len(&self) -> usize {
+        self.struct_.len()
+    }
+
+    fn is_empty(&self) -> bool {
+        self.struct_.is_empty()
+    }
+
+    fn offset(&self) -> usize {
+        self.struct_.offset()
+    }
+
+    fn nulls(&self) -> Option<&NullBuffer> {
+        self.struct_.nulls()
+    }
+
+    fn get_buffer_memory_size(&self) -> usize {
+        self.struct_.get_buffer_memory_size()
+    }
+
+    fn get_array_memory_size(&self) -> usize {
+        self.struct_.get_array_memory_size()
+    }
+}
+
+impl<'a, T: TypedStructInnerAccessor<'a>> ArrayAccessor for TypedStructArray<'a, T> {
+    type Item = T::Item;
+
+    fn value(&self, index: ::std::primitive::usize) -> Self::Item {
+        assert!(
+            index < self.len(),
+            "Trying to access an element at index {} from a TypedStructArray of length {}",
+            index,
+            self.len()
+        );
+        unsafe { self.value_unchecked(index) }
+    }
+
+    unsafe fn value_unchecked(&self, index: ::std::primitive::usize) -> Self::Item {
+        (*self, index).into()
+    }
+}
+pub trait TypedStructInnerAccessor<'a>: std::fmt::Debug + Send + Sync + Sized + 'a + Copy {
+    type Item: std::fmt::Debug + Send + Sync + From<(TypedStructArray<'a, Self>, usize)>;
 }
 
 #[cfg(test)]
