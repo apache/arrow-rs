@@ -168,8 +168,8 @@ impl BooleanBuilder {
 
     /// Returns the current values buffer as a slice
     ///
-    /// Boolean values are bit-packed into bytes, so to read the i-th boolean,
-    /// you must compute `values_slice[i / 8] & (1 << (i % 8)) == 0`.
+    /// Boolean values are bit-packed into bytes. To extract the i-th boolean
+    /// from the bytes, you can use `arrow_buffer::bit_util::get_bit()`.
     pub fn values_slice(&self) -> &[u8] {
         self.values_builder.as_slice()
     }
