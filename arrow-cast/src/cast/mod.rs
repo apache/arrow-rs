@@ -8074,7 +8074,6 @@ mod tests {
             &cast_options,
         );
 
-        assert!(result.is_err());
         let err = result.unwrap_err();
         assert_eq!(
             err.to_string(),
