@@ -199,7 +199,11 @@
 //! # use arrow_array::types::Int32Type;
 //! # use arrow_select::filter::filter;
 //! let array = Int32Array::from_iter(0..100);
-//! let predicate = gt(&array, &Int32Array::new_scalar(60)).unwrap();
+//! // Create a 32-bit integer scalar (single) value:
+//! let scalar = Int32Array::new_scalar(60);
+//! // find all rows in the array that are greater than 60
+//! let predicate = gt(&array, &scalar).unwrap();
+//! // copy all matching rows into a new array
 //! let filtered = filter(&array, &predicate).unwrap();
 //!
 //! let expected = Int32Array::from_iter(61..100);
