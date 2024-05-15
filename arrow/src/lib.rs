@@ -185,7 +185,7 @@
 //! This module also implements many common vertical operations:
 //!
 //! * All mathematical binary operators, such as [`sub`](compute::kernels::numeric::sub)
-//! * All boolean binary operators such as [`equality`](compute::kernels::comparison::eq)
+//! * All boolean binary operators such as [`equality`](compute::kernels::cmp::eq)
 //! * [`cast`](compute::kernels::cast::cast)
 //! * [`filter`](compute::kernels::filter::filter)
 //! * [`take`](compute::kernels::take::take)
