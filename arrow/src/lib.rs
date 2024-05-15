@@ -185,7 +185,7 @@
 //! This module also implements many common vertical operations:
 //!
 //! * All mathematical binary operators, such as [`sub`](compute::kernels::numeric::sub)
-//! * All boolean binary operators such as [`equality`](compute::kernels::comparison::eq)
+//! * All boolean binary operators such as [`equality`](compute::kernels::cmp::eq)
 //! * [`cast`](compute::kernels::cast::cast)
 //! * [`filter`](compute::kernels::filter::filter)
 //! * [`take`](compute::kernels::take::take)
@@ -193,13 +193,17 @@
 //! * some string operators such as [`substring`](compute::kernels::substring::substring) and [`length`](compute::kernels::length::length)
 //!
 //! ```
-//! # use arrow::compute::gt_scalar;
+//! # use arrow::compute::kernels::cmp::gt;
 //! # use arrow_array::cast::AsArray;
 //! # use arrow_array::Int32Array;
 //! # use arrow_array::types::Int32Type;
 //! # use arrow_select::filter::filter;
 //! let array = Int32Array::from_iter(0..100);
-//! let predicate = gt_scalar(&array, 60).unwrap();
+//! // Create a 32-bit integer scalar (single) value:
+//! let scalar = Int32Array::new_scalar(60);
+//! // find all rows in the array that are greater than 60
+//! let predicate = gt(&array, &scalar).unwrap();
+//! // copy all matching rows into a new array
 //! let filtered = filter(&array, &predicate).unwrap();
 //!
 //! let expected = Int32Array::from_iter(61..100);

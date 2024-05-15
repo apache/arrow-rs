@@ -137,6 +137,12 @@ impl<T: Array> Scalar<T> {
         assert_eq!(array.len(), 1);
         Self(array)
     }
+
+    /// Returns the inner array
+    #[inline]
+    pub fn into_inner(self) -> T {
+        self.0
+    }
 }
 
 impl<T: Array> Datum for Scalar<T> {
