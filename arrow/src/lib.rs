@@ -193,13 +193,13 @@
 //! * some string operators such as [`substring`](compute::kernels::substring::substring) and [`length`](compute::kernels::length::length)
 //!
 //! ```
-//! # use arrow::compute::gt_scalar;
+//! # use arrow::compute::kernels::cmp::gt;
 //! # use arrow_array::cast::AsArray;
 //! # use arrow_array::Int32Array;
 //! # use arrow_array::types::Int32Type;
 //! # use arrow_select::filter::filter;
 //! let array = Int32Array::from_iter(0..100);
-//! let predicate = gt_scalar(&array, 60).unwrap();
+//! let predicate = gt(&array, &Int32Array::new_scalar(60)).unwrap();
 //! let filtered = filter(&array, &predicate).unwrap();
 //!
 //! let expected = Int32Array::from_iter(61..100);
