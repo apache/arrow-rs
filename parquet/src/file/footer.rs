@@ -78,12 +78,22 @@ pub fn decode_metadata(buf: &[u8]) -> Result<ParquetMetaData> {
         row_groups.push(RowGroupMetaData::from_thrift(schema_descr.clone(), rg)?);
     }
     let column_orders = parse_column_orders(t_file_metadata.column_orders, &schema_descr);
+    let kv_metadata = t_file_metadata.key_value_metadata.map(|x| {
+        x.into_iter()
+            .map(|x| {
+                KeyValue::new(
+                    x.key.into_owned().into(),
+                    x.value.map(|x| x.into_owned().into()),
+                )
+            })
+            .collect()
+    });
 
     let file_metadata = FileMetaData::new(
         t_file_metadata.version,
         t_file_metadata.num_rows,
-        t_file_metadata.created_by,
-        t_file_metadata.key_value_metadata,
+        t_file_metadata.created_by.map(|x| x.to_string()),
+        kv_metadata,
         schema_descr,
         column_orders,
     );

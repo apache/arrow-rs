@@ -958,6 +958,7 @@ impl ReaderPropertiesBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::borrow::Cow;
 
     #[test]
     fn test_writer_version() {
@@ -1063,8 +1064,8 @@ mod tests {
             .set_max_row_group_size(40)
             .set_created_by("default".to_owned())
             .set_key_value_metadata(Some(vec![KeyValue::new(
-                "key".to_string(),
-                "value".to_string(),
+                "key".into(),
+                Cow::Borrowed("value"),
             )]))
             // global column settings
             .set_encoding(Encoding::DELTA_BINARY_PACKED)
@@ -1091,9 +1092,7 @@ mod tests {
         assert_eq!(props.created_by(), "default");
         assert_eq!(
             props.key_value_metadata(),
-            Some(&vec![
-                KeyValue::new("key".to_string(), "value".to_string(),)
-            ])
+            Some(&vec![KeyValue::new("key".into(), Cow::Borrowed("value"))])
         );
 
         assert_eq!(

@@ -274,7 +274,7 @@ pub struct PageMetadata {
     pub is_dict: bool,
 }
 
-impl TryFrom<&PageHeader> for PageMetadata {
+impl<'a> TryFrom<&PageHeader<'a>> for PageMetadata {
     type Error = ParquetError;
 
     fn try_from(value: &PageHeader) -> std::result::Result<Self, Self::Error> {

@@ -167,7 +167,7 @@ impl ParquetMetaData {
     }
 }
 
-pub type KeyValue = crate::format::KeyValue;
+pub type KeyValue = crate::format::KeyValue<'static>;
 
 /// Reference counted pointer for [`FileMetaData`].
 pub type FileMetaDataPtr = Arc<FileMetaData>;
@@ -376,7 +376,7 @@ impl RowGroupMetaData {
     }
 
     /// Method to convert to Thrift.
-    pub fn to_thrift(&self) -> RowGroup {
+    pub fn to_thrift(&self) -> RowGroup<'static> {
         RowGroup {
             columns: self.columns().iter().map(|v| v.to_thrift()).collect(),
             total_byte_size: self.total_byte_size,
@@ -647,7 +647,7 @@ impl ColumnChunkMetaData {
             .map(Encoding::try_from)
             .collect::<Result<_>>()?;
         let compression = Compression::try_from(col_metadata.codec)?;
-        let file_path = cc.file_path;
+        let file_path = cc.file_path.map(|x| x.to_string());
         let file_offset = cc.file_offset;
         let num_values = col_metadata.num_values;
         let total_compressed_size = col_metadata.total_compressed_size;
@@ -697,11 +697,11 @@ impl ColumnChunkMetaData {
     }
 
     /// Method to convert to Thrift.
-    pub fn to_thrift(&self) -> ColumnChunk {
+    pub fn to_thrift(&self) -> ColumnChunk<'static> {
         let column_metadata = self.to_column_metadata_thrift();
 
         ColumnChunk {
-            file_path: self.file_path().map(|s| s.to_owned()),
+            file_path: self.file_path().map(|s| s.to_string().into()),
             file_offset: self.file_offset,
             meta_data: Some(column_metadata),
             offset_index_offset: self.offset_index_offset,
@@ -714,11 +714,14 @@ impl ColumnChunkMetaData {
     }
 
     /// Method to convert to Thrift `ColumnMetaData`
-    pub fn to_column_metadata_thrift(&self) -> ColumnMetaData {
+    pub fn to_column_metadata_thrift(&self) -> ColumnMetaData<'static> {
+        let path_parts = self.column_path().parts();
+        let path_in_schema = path_parts.iter().map(|x| x.clone().into()).collect();
+
         ColumnMetaData {
+            path_in_schema,
             type_: self.column_type().into(),
             encodings: self.encodings().iter().map(|&v| v.into()).collect(),
-            path_in_schema: self.column_path().as_ref().to_vec(),
             codec: self.compression.into(),
             num_values: self.num_values,
             total_uncompressed_size: self.total_uncompressed_size,
@@ -941,11 +944,11 @@ impl ColumnIndexBuilder {
     }
 
     /// Build and get the thrift metadata of column index
-    pub fn build_to_thrift(self) -> ColumnIndex {
+    pub fn build_to_thrift(self) -> ColumnIndex<'static> {
         ColumnIndex::new(
             self.null_pages,
-            self.min_values,
-            self.max_values,
+            self.min_values.into_iter().map(|x| x.into()).collect(),
+            self.max_values.into_iter().map(|x| x.into()).collect(),
             self.boundary_order,
             self.null_counts,
         )

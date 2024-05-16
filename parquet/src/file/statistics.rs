@@ -239,7 +239,7 @@ pub fn from_thrift(
 }
 
 // Convert Statistics into Thrift definition.
-pub fn to_thrift(stats: Option<&Statistics>) -> Option<TStatistics> {
+pub fn to_thrift(stats: Option<&Statistics>) -> Option<TStatistics<'static>> {
     let stats = stats?;
 
     let mut thrift_stats = TStatistics {
@@ -260,8 +260,8 @@ pub fn to_thrift(stats: Option<&Statistics>) -> Option<TStatistics> {
     // Get min/max if set.
     let (min, max, min_exact, max_exact) = if stats.has_min_max_set() {
         (
-            Some(stats.min_bytes().to_vec()),
-            Some(stats.max_bytes().to_vec()),
+            Some(stats.min_bytes().to_vec().into()),
+            Some(stats.max_bytes().to_vec().into()),
             Some(stats.min_is_exact()),
             Some(stats.max_is_exact()),
         )

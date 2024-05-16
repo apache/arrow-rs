@@ -19,6 +19,7 @@
 //! representations.
 use bytes::Bytes;
 use half::f16;
+use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::fmt;
 use std::mem;
@@ -207,6 +208,12 @@ impl<'a> From<&'a [u8]> for ByteArray {
         Self {
             data: Some(v.into()),
         }
+    }
+}
+
+impl<'a> From<Cow<'a, [u8]>> for ByteArray {
+    fn from(value: Cow<'a, [u8]>) -> Self {
+        value.to_vec().into()
     }
 }
 

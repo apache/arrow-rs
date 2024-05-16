@@ -353,14 +353,14 @@ impl<'a, R: 'static + ChunkReader> RowGroupReader for SerializedRowGroupReader<'
 }
 
 /// Reads a [`PageHeader`] from the provided [`Read`]
-pub(crate) fn read_page_header<T: Read>(input: &mut T) -> Result<PageHeader> {
+pub(crate) fn read_page_header<T: Read>(input: &mut T) -> Result<PageHeader<'static>> {
     let mut prot = TCompactInputProtocol::new(input);
     let page_header = PageHeader::read_from_in_protocol(&mut prot)?;
     Ok(page_header)
 }
 
 /// Reads a [`PageHeader`] from the provided [`Read`] returning the number of bytes read
-fn read_page_header_len<T: Read>(input: &mut T) -> Result<(usize, PageHeader)> {
+fn read_page_header_len<T: Read>(input: &mut T) -> Result<(usize, PageHeader<'static>)> {
     /// A wrapper around a [`std::io::Read`] that keeps track of the bytes read
     struct TrackedRead<R> {
         inner: R,
@@ -385,7 +385,7 @@ fn read_page_header_len<T: Read>(input: &mut T) -> Result<(usize, PageHeader)> {
 
 /// Decodes a [`Page`] from the provided `buffer`
 pub(crate) fn decode_page(
-    page_header: PageHeader,
+    page_header: PageHeader<'_>,
     buffer: Bytes,
     physical_type: Type,
     decompressor: Option<&mut Box<dyn Codec>>,
@@ -494,7 +494,7 @@ enum SerializedPageReaderState {
         remaining_bytes: usize,
 
         // If the next page header has already been "peeked", we will cache it and it`s length here
-        next_page_header: Option<Box<PageHeader>>,
+        next_page_header: Option<Box<PageHeader<'static>>>,
     },
     Pages {
         /// Remaining page locations
@@ -1118,10 +1118,10 @@ mod tests {
         assert_eq!(metadata[0].key, "parquet.proto.descriptor");
 
         assert_eq!(metadata[1].key, "writer.model.name");
-        assert_eq!(metadata[1].value, Some("protobuf".to_owned()));
+        assert_eq!(metadata[1].value.as_deref(), Some("protobuf"));
 
         assert_eq!(metadata[2].key, "parquet.proto.class");
-        assert_eq!(metadata[2].value, Some("foo.baz.Foobaz$Event".to_owned()));
+        assert_eq!(metadata[2].value.as_deref(), Some("foo.baz.Foobaz$Event"));
     }
 
     #[test]

@@ -166,14 +166,14 @@ impl<W: AsyncWrite + Unpin + Send> AsyncArrowWriter<W> {
     /// Append [`KeyValue`] metadata in addition to those in [`WriterProperties`]
     ///
     /// This method allows to append metadata after [`RecordBatch`]es are written.
-    pub fn append_key_value_metadata(&mut self, kv_metadata: KeyValue) {
+    pub fn append_key_value_metadata(&mut self, kv_metadata: KeyValue<'static>) {
         self.sync_writer.append_key_value_metadata(kv_metadata);
     }
 
     /// Close and finalize the writer.
     ///
     /// All the data in the inner buffer will be force flushed.
-    pub async fn close(mut self) -> Result<FileMetaData> {
+    pub async fn close(mut self) -> Result<FileMetaData<'static>> {
         let metadata = self.sync_writer.finish()?;
 
         // Force to flush the remaining data.

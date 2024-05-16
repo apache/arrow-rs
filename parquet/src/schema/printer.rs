@@ -76,12 +76,7 @@ pub fn print_file_metadata(out: &mut dyn io::Write, file_metadata: &FileMetaData
     if let Some(metadata) = file_metadata.key_value_metadata() {
         writeln!(out, "metadata:");
         for kv in metadata.iter() {
-            writeln!(
-                out,
-                "  {}: {}",
-                &kv.key,
-                kv.value.as_ref().unwrap_or(&"".to_owned())
-            );
+            writeln!(out, "  {}: {}", &kv.key, kv.value.as_deref().unwrap_or(""));
         }
     }
     let schema = file_metadata.schema();

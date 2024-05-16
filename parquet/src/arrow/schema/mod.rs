@@ -198,8 +198,8 @@ pub(crate) fn add_encoded_arrow_schema_to_metadata(schema: &Schema, props: &mut 
     let encoded = encode_arrow_schema(schema);
 
     let schema_kv = KeyValue {
-        key: super::ARROW_SCHEMA_META_KEY.to_string(),
-        value: Some(encoded),
+        key: super::ARROW_SCHEMA_META_KEY.into(),
+        value: Some(encoded.into()),
     };
 
     let meta = props
@@ -210,7 +210,7 @@ pub(crate) fn add_encoded_arrow_schema_to_metadata(schema: &Schema, props: &mut 
     let schema_meta = meta
         .iter()
         .enumerate()
-        .find(|(_, kv)| kv.key.as_str() == super::ARROW_SCHEMA_META_KEY);
+        .find(|(_, kv)| kv.key.as_ref() == super::ARROW_SCHEMA_META_KEY);
     match schema_meta {
         Some((i, _)) => {
             meta.remove(i);
@@ -245,7 +245,7 @@ fn parse_key_value_metadata(
                 .filter_map(|kv| {
                     kv.value
                         .as_ref()
-                        .map(|value| (kv.key.clone(), value.clone()))
+                        .map(|value| (kv.key.to_string(), value.to_string()))
                 })
                 .collect();
 
@@ -579,6 +579,7 @@ fn field_id(field: &Field) -> Option<i32> {
 mod tests {
     use super::*;
 
+    use std::borrow::Cow;
     use std::{collections::HashMap, sync::Arc};
 
     use arrow::datatypes::{DataType, Field, IntervalUnit, TimeUnit};
@@ -1581,8 +1582,8 @@ mod tests {
         let parquet_group_type = parse_message_type(message_type).unwrap();
 
         let key_value_metadata = vec![
-            KeyValue::new("foo".to_owned(), Some("bar".to_owned())),
-            KeyValue::new("baz".to_owned(), None),
+            KeyValue::new("foo".into(), Cow::Borrowed("bar")),
+            KeyValue::new("baz".into(), None),
         ];
 
         let mut expected_metadata: HashMap<String, String> = HashMap::new();
