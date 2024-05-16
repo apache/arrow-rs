@@ -51,7 +51,7 @@ pub trait TSerializable<'de>: Sized {
 /// A more performant implementation of [`TCompactInputProtocol`] that reads a slice
 ///
 /// [`TCompactInputProtocol`]: thrift::protocol::TCompactInputProtocol
-pub(crate) struct TCompactSliceInputProtocol<'a> {
+pub struct TCompactSliceInputProtocol<'a> {
     buf: &'a [u8],
     // Identifier of the last field deserialized for a struct.
     last_read_field_id: i16,
