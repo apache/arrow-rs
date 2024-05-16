@@ -246,11 +246,11 @@ impl ArrowNativeType for IntervalMonthDayNano {
     }
 
     fn as_usize(self) -> usize {
-        (self.months as usize) | ((self.days as usize) << 32)
+        ((self.months as u64) | ((self.days as u64) << 32)) as usize
     }
 
     fn usize_as(i: usize) -> Self {
-        Self::new(i as _, (i >> 32) as _, 0)
+        Self::new(i as _, ((i as u64) >> 32) as _, 0)
     }
 
     fn to_usize(self) -> Option<usize> {
@@ -273,11 +273,11 @@ impl ArrowNativeType for IntervalDayTime {
     }
 
     fn as_usize(self) -> usize {
-        (self.days as usize) | ((self.milliseconds as usize) << 32)
+        ((self.days as u64) | ((self.milliseconds as u64) << 32)) as usize
     }
 
     fn usize_as(i: usize) -> Self {
-        Self::new(i as _, (i >> 32) as _)
+        Self::new(i as _, ((i as u64) >> 32) as _)
     }
 
     fn to_usize(self) -> Option<usize> {
