@@ -44,12 +44,12 @@ use crate::file::page_index::index_reader;
 pub use filter::{ArrowPredicate, ArrowPredicateFn, RowFilter};
 pub use selection::{RowSelection, RowSelector};
 
-/// A generic builder for constructing sync or async arrow parquet readers. This is not intended
-/// to be used directly, instead you should use the specialization for the type of reader
-/// you wish to use
+/// Builder for constructing parquet readers into arrow.
 ///
-/// * For a synchronous API - [`ParquetRecordBatchReaderBuilder`]
-/// * For an asynchronous API - [`ParquetRecordBatchStreamBuilder`]
+/// Most users should use one of the following specializations:
+///
+/// * synchronous API: [`ParquetRecordBatchReaderBuilder::try_new`]
+/// * `async` API: [`ParquetRecordBatchStreamBuilder::try_new`]
 ///
 /// [`ParquetRecordBatchStreamBuilder`]: crate::arrow::async_reader::ParquetRecordBatchStreamBuilder
 pub struct ArrowReaderBuilder<T> {
