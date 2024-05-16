@@ -1110,6 +1110,7 @@ mod test {
             a_fix_byte_buf: [u8; 10],
             a_complex_option: ::std::option::Option<&Vec<u8>>,
             a_complex_vec: &::std::vec::Vec<&Option<u8>>,
+            a_uuid: ::uuid::Uuid,
           }
         };
 
@@ -1129,7 +1130,45 @@ mod test {
                 BasicType::BYTE_ARRAY,
                 BasicType::FIXED_LEN_BYTE_ARRAY,
                 BasicType::BYTE_ARRAY,
-                BasicType::INT32
+                BasicType::INT32,
+                BasicType::FIXED_LEN_BYTE_ARRAY,
+            ]
+        )
+    }
+
+    #[test]
+    fn test_type_length() {
+        let snippet: proc_macro2::TokenStream = quote! {
+          struct LotsOfInnerTypes {
+            a_buf: ::std::vec::Vec<u8>,
+            a_number: i32,
+            a_verbose_option: ::std::option::Option<bool>,
+            a_silly_string: String,
+            a_fix_byte_buf: [u8; 10],
+            a_complex_option: ::std::option::Option<&Vec<u8>>,
+            a_complex_vec: &::std::vec::Vec<&Option<u8>>,
+            a_uuid: ::uuid::Uuid,
+          }
+        };
+
+        let fields = extract_fields(snippet);
+        let converted_fields: Vec<_> = fields.iter().map(Type::from).collect();
+        let lengths: Vec<_> = converted_fields
+            .iter()
+            .map(|ty| ty.length())
+            .collect();
+
+        assert_eq!(
+            lengths,
+            vec![
+                None,
+                None,
+                None,
+                None,
+                Some(syn::parse_quote!(10)),
+                None,
+                None,
+                Some(syn::parse_quote!(16)),
             ]
         )
     }
