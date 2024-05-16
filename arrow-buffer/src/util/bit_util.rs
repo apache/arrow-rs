@@ -17,18 +17,6 @@
 
 //! Utils for working with bits
 
-const BIT_MASK: [u8; 8] = [1, 2, 4, 8, 16, 32, 64, 128];
-const UNSET_BIT_MASK: [u8; 8] = [
-    255 - 1,
-    255 - 2,
-    255 - 4,
-    255 - 8,
-    255 - 16,
-    255 - 32,
-    255 - 64,
-    255 - 128,
-];
-
 /// Returns the nearest number that is `>=` than `num` and is a multiple of 64
 #[inline]
 pub fn round_upto_multiple_of_64(num: usize) -> usize {
@@ -47,7 +35,7 @@ pub fn round_upto_power_of_2(num: usize, factor: usize) -> usize {
 /// Returns whether bit at position `i` in `data` is set or not
 #[inline]
 pub fn get_bit(data: &[u8], i: usize) -> bool {
-    (data[i >> 3] & BIT_MASK[i & 7]) != 0
+    data[i / 8] & (1 << (i % 8)) != 0
 }
 
 /// Returns whether bit at position `i` in `data` is set or not.
@@ -58,13 +46,13 @@ pub fn get_bit(data: &[u8], i: usize) -> bool {
 /// responsible to guarantee that `i` is within bounds.
 #[inline]
 pub unsafe fn get_bit_raw(data: *const u8, i: usize) -> bool {
-    (*data.add(i >> 3) & BIT_MASK[i & 7]) != 0
+    (*data.add(i / 8) & (1 << (i % 8))) != 0
 }
 
 /// Sets bit at position `i` for `data` to 1
 #[inline]
 pub fn set_bit(data: &mut [u8], i: usize) {
-    data[i >> 3] |= BIT_MASK[i & 7];
+    data[i / 8] |= 1 << (i % 8);
 }
 
 /// Sets bit at position `i` for `data`
@@ -75,13 +63,13 @@ pub fn set_bit(data: &mut [u8], i: usize) {
 /// responsible to guarantee that `i` is within bounds.
 #[inline]
 pub unsafe fn set_bit_raw(data: *mut u8, i: usize) {
-    *data.add(i >> 3) |= BIT_MASK[i & 7];
+    *data.add(i / 8) |= 1 << (i % 8);
 }
 
 /// Sets bit at position `i` for `data` to 0
 #[inline]
 pub fn unset_bit(data: &mut [u8], i: usize) {
-    data[i >> 3] &= UNSET_BIT_MASK[i & 7];
+    data[i / 8] &= !(1 << (i % 8));
 }
 
 /// Sets bit at position `i` for `data` to 0
@@ -92,7 +80,7 @@ pub fn unset_bit(data: &mut [u8], i: usize) {
 /// responsible to guarantee that `i` is within bounds.
 #[inline]
 pub unsafe fn unset_bit_raw(data: *mut u8, i: usize) {
-    *data.add(i >> 3) &= UNSET_BIT_MASK[i & 7];
+    *data.add(i / 8) &= !(1 << (i % 8));
 }
 
 /// Returns the ceil of `value`/`divisor`
