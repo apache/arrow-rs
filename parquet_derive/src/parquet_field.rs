@@ -136,7 +136,7 @@ impl Field {
                 Type::Option(_) => unimplemented!("Unsupported nesting encountered"),
                 Type::Reference(_, ref second_type)
                 | Type::Vec(ref second_type)
-                | Type::Array(ref second_type)
+                | Type::Array(ref second_type, _)
                 | Type::Slice(ref second_type) => match **second_type {
                     Type::TypePath(_) => Some(self.optional_definition_levels()),
                     _ => unimplemented!("Unsupported nesting encountered"),
@@ -144,11 +144,11 @@ impl Field {
             },
             Type::Reference(_, ref first_type)
             | Type::Vec(ref first_type)
-            | Type::Array(ref first_type)
+            | Type::Array(ref first_type, _)
             | Type::Slice(ref first_type) => match **first_type {
                 Type::TypePath(_) => None,
                 Type::Vec(ref second_type)
-                | Type::Array(ref second_type)
+                | Type::Array(ref second_type, _)
                 | Type::Slice(ref second_type) => match **second_type {
                     Type::TypePath(_) => None,
                     Type::Reference(_, ref third_type) => match **third_type {
@@ -161,7 +161,7 @@ impl Field {
                     match **second_type {
                         Type::TypePath(_) => Some(self.optional_definition_levels()),
                         Type::Vec(ref third_type)
-                        | Type::Array(ref third_type)
+                        | Type::Array(ref third_type, _)
                         | Type::Slice(ref third_type) => match **third_type {
                             Type::TypePath(_) => Some(self.optional_definition_levels()),
                             Type::Reference(_, ref fourth_type) => match **fourth_type {
@@ -467,7 +467,7 @@ impl Field {
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug, PartialEq)]
 enum Type {
-    Array(Box<Type>),
+    Array(Box<Type>, syn::Expr),
     Option(Box<Type>),
     Slice(Box<Type>),
     Vec(Box<Type>),
@@ -540,7 +540,7 @@ impl Type {
             Type::TypePath(_) => parent_ty.unwrap_or(ty),
             Type::Option(ref first_type)
             | Type::Vec(ref first_type)
-            | Type::Array(ref first_type)
+            | Type::Array(ref first_type, _)
             | Type::Slice(ref first_type)
             | Type::Reference(_, ref first_type) => {
                 Type::leaf_type_recursive_helper(first_type, Some(ty))
@@ -558,7 +558,7 @@ impl Type {
             Type::TypePath(ref type_) => type_,
             Type::Option(ref first_type)
             | Type::Vec(ref first_type)
-            | Type::Array(ref first_type)
+            | Type::Array(ref first_type, _)
             | Type::Slice(ref first_type)
             | Type::Reference(_, ref first_type) => match **first_type {
                 Type::TypePath(ref type_) => type_,
@@ -605,7 +605,7 @@ impl Type {
         let leaf_type = self.leaf_type_recursive();
 
         match leaf_type {
-            Type::Array(ref first_type) => {
+            Type::Array(ref first_type, _length) => {
                 if let Type::TypePath(_) = **first_type {
                     if last_part == "u8" {
                         return BasicType::FIXED_LEN_BYTE_ARRAY;
@@ -642,30 +642,22 @@ impl Type {
         }
     }
 
-    fn length(&self) -> Option<i32> {
+    fn length(&self) -> Option<syn::Expr> {
         let last_part = self.last_part();
         let leaf_type = self.leaf_type_recursive();
 
-        match leaf_type {
-            Type::Array(ref first_type) => {
-                if let Type::TypePath(_) = **first_type {
-                    if last_part == "u8" {
-                        return Some(1);
-                    }
+        // `[u8; N]` => Some(N)
+        if let Type::Array(ref first_type, length) = leaf_type {
+            if let Type::TypePath(_) = **first_type {
+                if last_part == "u8" {
+                    return Some(length.clone());
                 }
             }
-            Type::Vec(ref first_type) | Type::Slice(ref first_type) => {
-                if let Type::TypePath(_) = **first_type {
-                    if last_part == "u8" {
-                        return None;
-                    }
-                }
-            }
-            _ => (),
         }
 
         match last_part.trim() {
-            "Uuid" => Some(16),
+            // Uuid => [u8; 16] => Some(16)
+            "Uuid" => Some(syn::parse_quote!(16)),
             _ => None,
         }
     }
@@ -675,7 +667,7 @@ impl Type {
         let leaf_type = self.leaf_type_recursive();
 
         match leaf_type {
-            Type::Array(ref first_type) => {
+            Type::Array(ref first_type, _length) => {
                 if let Type::TypePath(_) = **first_type {
                     if last_part == "u8" {
                         return quote! { None };
@@ -816,7 +808,7 @@ impl Type {
 
     fn from_type_array(f: &syn::Field, ta: &syn::TypeArray) -> Self {
         let inner_type = Type::from_type(f, ta.elem.as_ref());
-        Type::Array(Box::new(inner_type))
+        Type::Array(Box::new(inner_type), ta.len.clone())
     }
 
     fn from_type_slice(f: &syn::Field, ts: &syn::TypeSlice) -> Self {
