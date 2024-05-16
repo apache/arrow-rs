@@ -112,8 +112,11 @@ fn cast_string_to_timestamp_impl<O: OffsetSizeTrait, T: ArrowTimestampType, Tz: 
             .map(|v| {
                 v.map(|v| {
                     let naive = string_to_datetime(tz, v)?.naive_utc();
-                    T::make_value(naive).ok_or_else(|| {
-                        ArrowError::CastError(format!(
+                    T::make_value(naive).ok_or_else(|| match T::UNIT {
+                        TimeUnit::Nanosecond => ArrowError::CastError(format!(
+                            "Overflow converting {naive} to Nanosecond. The dates that can be represented as nanoseconds have to be between 1677-09-21T00:12:44.0 and 2262-04-11T23:47:16.854775804"
+                        )),
+                        _ => ArrowError::CastError(format!(
                             "Overflow converting {naive} to {:?}",
                             T::UNIT
                         ))
