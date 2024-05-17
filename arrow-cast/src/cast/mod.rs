@@ -6677,6 +6677,46 @@ mod tests {
         let expected = Int32Array::from(vec![Some(5)]);
         assert_eq!(&expected, actual);
 
+        // FixedSizeList<T>[1] => FixedSizeList<U>[1]
+        let from_array = Arc::new(FixedSizeListArray::from_iter_primitive::<Int16Type, _, _>(
+            [(Some([Some(5)]))],
+            1,
+        )) as ArrayRef;
+        let to_field = Arc::new(Field::new("dummy", DataType::Float32, false));
+        let actual = cast(&from_array, &DataType::FixedSizeList(to_field.clone(), 1)).unwrap();
+        let expected = Arc::new(FixedSizeListArray::new(
+            to_field.clone(),
+            1,
+            Arc::new(Float32Array::from(vec![Some(5.0)])) as ArrayRef,
+            None,
+        )) as ArrayRef;
+        assert_eq!(*expected, *actual);
+
+        // FixedSizeList<T>[1] => FixedSizeList<FixdSizedList<U>[1]>[1]
+        let from_array = Arc::new(FixedSizeListArray::from_iter_primitive::<Int16Type, _, _>(
+            [(Some([Some(5)]))],
+            1,
+        )) as ArrayRef;
+        let to_field_inner = Arc::new(Field::new("item", DataType::Float32, false));
+        let to_field = Arc::new(Field::new(
+            "dummy",
+            DataType::FixedSizeList(to_field_inner.clone(), 1),
+            false,
+        ));
+        let actual = cast(&from_array, &DataType::FixedSizeList(to_field.clone(), 1)).unwrap();
+        let expected = Arc::new(FixedSizeListArray::new(
+            to_field.clone(),
+            1,
+            Arc::new(FixedSizeListArray::new(
+                to_field_inner.clone(),
+                1,
+                Arc::new(Float32Array::from(vec![Some(5.0)])) as ArrayRef,
+                None,
+            )) as ArrayRef,
+            None,
+        )) as ArrayRef;
+        assert_eq!(*expected, *actual);
+
         // T => FixedSizeList<T>[1] (non-nullable)
         let field = Arc::new(Field::new("dummy", DataType::Float32, false));
         let from_array = Arc::new(Int8Array::from(vec![Some(5)])) as ArrayRef;
