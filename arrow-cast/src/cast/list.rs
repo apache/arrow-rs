@@ -41,6 +41,15 @@ pub(crate) fn cast_values_to_fixed_size_list(
     Ok(Arc::new(list))
 }
 
+pub(crate) fn cast_single_element_fixed_size_list_to_values(
+    array: &dyn Array,
+    to: &DataType,
+    cast_options: &CastOptions,
+) -> Result<ArrayRef, ArrowError> {
+    let values = array.as_fixed_size_list().values();
+    cast_with_options(values, to, cast_options)
+}
+
 pub(crate) fn cast_fixed_size_list_to_list<OffsetSize>(
     array: &dyn Array,
 ) -> Result<ArrayRef, ArrowError>
