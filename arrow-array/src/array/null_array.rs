@@ -21,7 +21,7 @@ use crate::builder::NullBuilder;
 use crate::{Array, ArrayRef};
 use arrow_buffer::buffer::NullBuffer;
 use arrow_data::{ArrayData, ArrayDataBuilder};
-use arrow_schema::DataType;
+use arrow_schema::{ArrowError, DataType};
 use std::any::Any;
 use std::sync::Arc;
 
@@ -162,8 +162,23 @@ impl std::fmt::Debug for NullArray {
     }
 }
 
+impl<'a> TryFrom<&'a dyn Array> for &'a NullArray {
+    type Error = ArrowError;
+
+    fn try_from(value: &'a dyn Array) -> Result<Self, Self::Error> {
+        value.as_any().downcast_ref().ok_or_else(|| {
+            ArrowError::InvalidArgumentError(format!(
+                "Can't convert a {} to a NullArray",
+                value.data_type()
+            ))
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use crate::BooleanArray;
+
     use super::*;
 
     #[test]
@@ -193,5 +208,20 @@ mod tests {
     fn test_debug_null_array() {
         let array = NullArray::new(1024 * 1024);
         assert_eq!(format!("{array:?}"), "NullArray(1048576)");
+    }
+
+    #[test]
+    fn test_null_array_try_from_dyn_array_ok() {
+        let array = NullArray::new(0);
+
+        <&NullArray>::try_from(&array as &dyn Array).unwrap();
+    }
+
+    #[test]
+    #[should_panic(expected = "Can't convert a Boolean to a NullArray")]
+    fn test_null_array_try_from_dyn_array_err() {
+        let array = BooleanArray::from(vec![true]);
+
+        <&NullArray>::try_from(&array as &dyn Array).unwrap();
     }
 }

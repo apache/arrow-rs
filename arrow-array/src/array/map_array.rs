@@ -252,6 +252,19 @@ impl From<MapArray> for ArrayData {
     }
 }
 
+impl<'a> TryFrom<&'a dyn Array> for &'a MapArray {
+    type Error = ArrowError;
+
+    fn try_from(value: &'a dyn Array) -> Result<Self, Self::Error> {
+        value.as_any().downcast_ref().ok_or_else(|| {
+            ArrowError::InvalidArgumentError(format!(
+                "Can't convert a {} to a MapArray",
+                value.data_type()
+            ))
+        })
+    }
+}
+
 impl MapArray {
     fn try_new_from_array_data(data: ArrayData) -> Result<Self, ArrowError> {
         if !matches!(data.data_type(), DataType::Map(_, _)) {
@@ -439,7 +452,7 @@ impl From<MapArray> for ListArray {
 mod tests {
     use crate::cast::AsArray;
     use crate::types::UInt32Type;
-    use crate::{Int32Array, UInt32Array};
+    use crate::{Int32Array, NullArray, UInt32Array};
     use arrow_schema::Fields;
 
     use super::*;
@@ -797,5 +810,29 @@ mod tests {
             err.to_string(),
             "Invalid argument error: MapArray entries must contain two children, got 3"
         );
+    }
+
+    #[test]
+    fn test_map_array_try_from_dyn_array_ok() {
+        let keys = vec!["a", "b", "c", "d", "e", "f", "g", "h"];
+        let values_data = UInt32Array::from(vec![0u32, 10, 20, 30, 40, 50, 60, 70]);
+
+        // Construct a buffer for value offsets, for the nested array:
+        //  [[a, b, c], [d, e, f], [g, h]]
+        let entry_offsets = [0, 3, 6, 8];
+
+        let array =
+            MapArray::new_from_strings(keys.clone().into_iter(), &values_data, &entry_offsets)
+                .unwrap();
+
+        <&MapArray>::try_from(&array as &dyn Array).unwrap();
+    }
+
+    #[test]
+    #[should_panic(expected = "Can't convert a Null to a MapArray")]
+    fn test_map_array_try_from_dyn_array_err() {
+        let array = NullArray::new(0);
+
+        <&MapArray>::try_from(&array as &dyn Array).unwrap();
     }
 }

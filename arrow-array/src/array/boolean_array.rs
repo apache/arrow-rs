@@ -21,7 +21,7 @@ use crate::iterator::BooleanIter;
 use crate::{Array, ArrayAccessor, ArrayRef, Scalar};
 use arrow_buffer::{bit_util, BooleanBuffer, MutableBuffer, NullBuffer};
 use arrow_data::{ArrayData, ArrayDataBuilder};
-use arrow_schema::DataType;
+use arrow_schema::{ArrowError, DataType};
 use std::any::Any;
 use std::sync::Arc;
 
@@ -384,6 +384,19 @@ impl From<BooleanArray> for ArrayData {
     }
 }
 
+impl<'a> TryFrom<&'a dyn Array> for &'a BooleanArray {
+    type Error = ArrowError;
+
+    fn try_from(value: &'a dyn Array) -> Result<Self, Self::Error> {
+        value.as_any().downcast_ref().ok_or_else(|| {
+            ArrowError::InvalidArgumentError(format!(
+                "Can't convert a {} to a BooleanArray",
+                value.data_type()
+            ))
+        })
+    }
+}
+
 impl<'a> IntoIterator for &'a BooleanArray {
     type Item = Option<bool>;
     type IntoIter = BooleanIter<'a>;
@@ -448,6 +461,8 @@ impl From<BooleanBuffer> for BooleanArray {
 
 #[cfg(test)]
 mod tests {
+    use crate::NullArray;
+
     use super::*;
     use arrow_buffer::Buffer;
     use rand::{thread_rng, Rng};
@@ -594,6 +609,21 @@ mod tests {
     #[should_panic(expected = "BooleanArray expected ArrayData with type Boolean got Int32")]
     fn test_from_array_data_validation() {
         let _ = BooleanArray::from(ArrayData::new_empty(&DataType::Int32));
+    }
+
+    #[test]
+    fn test_boolean_array_try_from_dyn_array_ok() {
+        let array = BooleanArray::from(vec![false, true, false, true]);
+
+        <&BooleanArray>::try_from(&array as &dyn Array).unwrap();
+    }
+
+    #[test]
+    #[should_panic(expected = "Can't convert a Null to a BooleanArray")]
+    fn test_boolean_array_try_from_dyn_array_err() {
+        let array = NullArray::new(0);
+
+        <&BooleanArray>::try_from(&array as &dyn Array).unwrap();
     }
 
     #[test]

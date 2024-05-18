@@ -1402,6 +1402,19 @@ impl<T: ArrowPrimitiveType> From<ArrayData> for PrimitiveArray<T> {
     }
 }
 
+impl<'a, T: ArrowPrimitiveType> TryFrom<&'a dyn Array> for &'a PrimitiveArray<T> {
+    type Error = ArrowError;
+
+    fn try_from(value: &'a dyn Array) -> Result<Self, Self::Error> {
+        value.as_any().downcast_ref().ok_or_else(|| {
+            ArrowError::InvalidArgumentError(format!(
+                "Can't convert a {} to a PrimitiveArray",
+                value.data_type()
+            ))
+        })
+    }
+}
+
 impl<T: DecimalType + ArrowPrimitiveType> PrimitiveArray<T> {
     /// Returns a Decimal array with the same data as self, with the
     /// specified precision and scale.
@@ -1501,7 +1514,7 @@ mod tests {
     use super::*;
     use crate::builder::{Decimal128Builder, Decimal256Builder};
     use crate::cast::downcast_array;
-    use crate::BooleanArray;
+    use crate::{BooleanArray, NullArray};
     use arrow_schema::TimeUnit;
 
     #[test]
@@ -2579,5 +2592,20 @@ mod tests {
         .into_iter()
         .collect();
         let _ = array.into_builder();
+    }
+
+    #[test]
+    fn test_primitive_array_try_from_dyn_array_ok() {
+        let array = Int32Array::from(vec![1]);
+
+        <&Int32Array>::try_from(&array as &dyn Array).unwrap();
+    }
+
+    #[test]
+    #[should_panic(expected = "Can't convert a Null to a PrimitiveArray")]
+    fn test_primitive_array_try_from_dyn_array_err() {
+        let array = NullArray::new(0);
+
+        <&Int32Array>::try_from(&array as &dyn Array).unwrap();
     }
 }

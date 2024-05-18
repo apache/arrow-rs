@@ -377,6 +377,19 @@ impl<T: ByteViewType + ?Sized> From<GenericByteViewArray<T>> for ArrayData {
     }
 }
 
+impl<'a, T: ByteViewType + ?Sized> TryFrom<&'a dyn Array> for &'a GenericByteViewArray<T> {
+    type Error = ArrowError;
+
+    fn try_from(value: &'a dyn Array) -> Result<Self, Self::Error> {
+        value.as_any().downcast_ref().ok_or_else(|| {
+            ArrowError::InvalidArgumentError(format!(
+                "Can't convert a {} to a GenericByteViewArray",
+                value.data_type()
+            ))
+        })
+    }
+}
+
 impl<'a, Ptr, T> FromIterator<&'a Option<Ptr>> for GenericByteViewArray<T>
 where
     Ptr: AsRef<T::Native> + 'a,
@@ -484,8 +497,9 @@ impl From<Vec<Option<String>>> for StringViewArray {
 
 #[cfg(test)]
 mod tests {
+    use crate::array::StringViewType;
     use crate::builder::{BinaryViewBuilder, StringViewBuilder};
-    use crate::{Array, BinaryViewArray, StringViewArray};
+    use crate::{Array, BinaryViewArray, GenericByteViewArray, NullArray, StringViewArray};
     use arrow_buffer::{Buffer, ScalarBuffer};
     use arrow_data::ByteView;
 
@@ -644,5 +658,20 @@ mod tests {
         let buffers = vec![Buffer::from_slice_ref(input_str_2.as_bytes())];
 
         StringViewArray::new(views, buffers, None);
+    }
+
+    #[test]
+    fn test_byte_view_array_try_from_dyn_array_ok() {
+        let array = <GenericByteViewArray<StringViewType>>::from(vec!["a", "b"]);
+
+        <&GenericByteViewArray<StringViewType>>::try_from(&array as &dyn Array).unwrap();
+    }
+
+    #[test]
+    #[should_panic(expected = "Can't convert a Null to a GenericByteViewArray")]
+    fn test_byte_view_array_try_from_dyn_array_err() {
+        let array = NullArray::new(0);
+
+        <&GenericByteViewArray<StringViewType>>::try_from(&array as &dyn Array).unwrap();
     }
 }

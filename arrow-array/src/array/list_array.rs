@@ -390,6 +390,19 @@ impl<OffsetSize: OffsetSizeTrait> From<GenericListArray<OffsetSize>> for ArrayDa
     }
 }
 
+impl<'a, OffsetSize: OffsetSizeTrait> TryFrom<&'a dyn Array> for &'a GenericListArray<OffsetSize> {
+    type Error = ArrowError;
+
+    fn try_from(value: &'a dyn Array) -> Result<Self, Self::Error> {
+        value.as_any().downcast_ref().ok_or_else(|| {
+            ArrowError::InvalidArgumentError(format!(
+                "Can't convert a {} to a GenericListArray",
+                value.data_type()
+            ))
+        })
+    }
+}
+
 impl<OffsetSize: OffsetSizeTrait> From<FixedSizeListArray> for GenericListArray<OffsetSize> {
     fn from(value: FixedSizeListArray) -> Self {
         let (field, size) = match value.data_type() {
@@ -552,7 +565,7 @@ mod tests {
     use crate::builder::{FixedSizeListBuilder, Int32Builder, ListBuilder};
     use crate::cast::AsArray;
     use crate::types::Int32Type;
-    use crate::{Int32Array, Int64Array};
+    use crate::{Int32Array, Int64Array, NullArray};
     use arrow_buffer::{bit_util, Buffer, ScalarBuffer};
     use arrow_schema::Field;
 
@@ -1220,5 +1233,24 @@ mod tests {
             .map(|x| x.map(|x| x.as_primitive::<Int32Type>().values().to_vec()))
             .collect();
         assert_eq!(values, vec![Some(vec![1, 2, 3]), None, Some(vec![4, 5, 6])])
+    }
+
+    #[test]
+    fn test_list_array_try_from_dyn_array_ok() {
+        let array = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![Some(vec![
+            Some(0),
+            Some(1),
+            Some(2),
+        ])]);
+
+        <&ListArray>::try_from(&array as &dyn Array).unwrap();
+    }
+
+    #[test]
+    #[should_panic(expected = "Can't convert a Null to a GenericListArray")]
+    fn test_list_array_try_from_dyn_array_err() {
+        let array = NullArray::new(0);
+
+        <&ListArray>::try_from(&array as &dyn Array).unwrap();
     }
 }

@@ -21,6 +21,7 @@ members = [
     "arrow",
     "arrow-arith",
     "arrow-array",
+    "arrow-array-derive",
     "arrow-avro",
     "arrow-buffer",
     "arrow-cast",

@@ -531,6 +531,19 @@ impl<T: ByteArrayType> From<GenericByteArray<T>> for ArrayData {
     }
 }
 
+impl<'a, T: ByteArrayType> TryFrom<&'a dyn Array> for &'a GenericByteArray<T> {
+    type Error = ArrowError;
+
+    fn try_from(value: &'a dyn Array) -> Result<Self, Self::Error> {
+        value.as_any().downcast_ref().ok_or_else(|| {
+            ArrowError::InvalidArgumentError(format!(
+                "Can't convert a {} to a GenericByteArray",
+                value.data_type()
+            ))
+        })
+    }
+}
+
 impl<'a, T: ByteArrayType> IntoIterator for &'a GenericByteArray<T> {
     type Item = Option<&'a T::Native>;
     type IntoIter = ArrayIter<Self>;
@@ -565,7 +578,9 @@ where
 
 #[cfg(test)]
 mod tests {
-    use crate::{BinaryArray, StringArray};
+    use crate::{
+        array::GenericStringType, Array, BinaryArray, GenericByteArray, NullArray, StringArray,
+    };
     use arrow_buffer::{Buffer, NullBuffer, OffsetBuffer};
 
     #[test]
@@ -613,5 +628,20 @@ mod tests {
         );
 
         BinaryArray::new(offsets, non_ascii_data, None);
+    }
+
+    #[test]
+    fn test_byte_array_try_from_dyn_array_ok() {
+        let array = <GenericByteArray<GenericStringType<i32>>>::from(vec!["a", "b"]);
+
+        <&GenericByteArray<GenericStringType<i32>>>::try_from(&array as &dyn Array).unwrap();
+    }
+
+    #[test]
+    #[should_panic(expected = "Can't convert a Null to a GenericByteArray")]
+    fn test_byte_array_try_from_dyn_array_err() {
+        let array = NullArray::new(0);
+
+        <&GenericByteArray<GenericStringType<i32>>>::try_from(&array as &dyn Array).unwrap();
     }
 }
