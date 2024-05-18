@@ -744,7 +744,6 @@ mod tests {
     #[test]
     #[should_panic(expected = "index out of bounds: the len is 9 but the index is 10")]
     fn test_list_view_array_index_out_of_bound() {
-
         // 01011001 00000001
         let mut null_bits: [u8; 2] = [0; 2];
         bit_util::set_bit(&mut null_bits, 0);
@@ -811,7 +810,6 @@ mod tests {
 
     #[test]
     fn test_list_view_array_offsets_need_not_start_at_zero() {
-
         let field = Arc::new(Field::new("item", DataType::Int32, true));
         let sizes = ScalarBuffer::from(vec![0i32, 0, 3]);
         let offsets = ScalarBuffer::from(vec![2i32, 2, 5]);
