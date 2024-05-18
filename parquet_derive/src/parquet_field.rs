@@ -1153,10 +1153,7 @@ mod test {
 
         let fields = extract_fields(snippet);
         let converted_fields: Vec<_> = fields.iter().map(Type::from).collect();
-        let lengths: Vec<_> = converted_fields
-            .iter()
-            .map(|ty| ty.length())
-            .collect();
+        let lengths: Vec<_> = converted_fields.iter().map(|ty| ty.length()).collect();
 
         assert_eq!(
             lengths,
