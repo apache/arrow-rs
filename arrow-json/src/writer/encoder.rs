@@ -105,7 +105,17 @@ fn make_encoder_impl<'a>(
 
         DataType::FixedSizeBinary(_) => {
             let array = array.as_fixed_size_binary();
-            (Box::new(FixedSizeBinaryEncoder::new(array)) as _, array.nulls().cloned())
+            (Box::new(BinaryEncoder::new(array)) as _, array.nulls().cloned())
+        }
+
+        DataType::Binary => {
+            let array: &BinaryArray = array.as_binary();
+            (Box::new(BinaryEncoder::new(array)) as _, array.nulls().cloned())
+        }
+
+        DataType::LargeBinary => {
+            let array: &LargeBinaryArray = array.as_binary();
+            (Box::new(BinaryEncoder::new(array)) as _, array.nulls().cloned())
         }
 
         DataType::Struct(fields) => {
@@ -509,18 +519,40 @@ impl<'a> Encoder for MapEncoder<'a> {
     }
 }
 
-struct FixedSizeBinaryEncoder<'a>(&'a FixedSizeBinaryArray);
+trait ValueAsBytes {
+    fn value_as_bytes(&self, index: usize) -> &[u8];
+}
 
-impl<'a> FixedSizeBinaryEncoder<'a> {
-    fn new(array: &'a FixedSizeBinaryArray) -> Self {
+impl ValueAsBytes for FixedSizeBinaryArray {
+    fn value_as_bytes(&self, index: usize) -> &[u8] {
+        self.value(index)
+    }
+}
+
+impl ValueAsBytes for BinaryArray {
+    fn value_as_bytes(&self, index: usize) -> &[u8] {
+        self.value(index)
+    }
+}
+
+impl ValueAsBytes for LargeBinaryArray {
+    fn value_as_bytes(&self, index: usize) -> &[u8] {
+        self.value(index)
+    }
+}
+
+struct BinaryEncoder<'a, B>(&'a B);
+
+impl<'a, B> BinaryEncoder<'a, B> {
+    fn new(array: &'a B) -> Self {
         Self(array)
     }
 }
 
-impl<'a> Encoder for FixedSizeBinaryEncoder<'a> {
+impl<'a, B: ValueAsBytes> Encoder for BinaryEncoder<'a, B> {
     fn encode(&mut self, idx: usize, out: &mut Vec<u8>) {
         out.push(b'"');
-        for byte in self.0.value(idx) {
+        for byte in self.0.value_as_bytes(idx) {
             // this write is infallible
             write!(out, "{byte:02x}").unwrap();
         }
