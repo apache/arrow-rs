@@ -86,7 +86,7 @@ There are two related crates in different repositories
 | [`ballista`]   | Distributed query execution             | [(README)][ballista-readme]   |
 
 [`datafusion`]: https://crates.io/crates/datafusion
-[`ballista`]: https://crates.io/crates/datafusion-ballista
+[`ballista`]: https://crates.io/crates/ballista
 
 Collectively, these crates support a wider array of functionality for analytic computations in Rust.
 
