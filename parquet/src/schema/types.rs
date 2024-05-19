@@ -1155,7 +1155,7 @@ fn from_thrift_helper(elements: &[SchemaElement], index: usize) -> Result<(usize
 }
 
 /// Method to convert to Thrift.
-pub fn to_thrift(schema: &Type) -> Result<Vec<SchemaElement>> {
+pub fn to_thrift(schema: &Type) -> Result<Vec<SchemaElement<'static>>> {
     if !schema.is_group() {
         return Err(general_err!("Root schema must be Group type"));
     }
@@ -1183,7 +1183,7 @@ fn to_thrift_helper(schema: &Type, elements: &mut Vec<SchemaElement>) {
                     None
                 },
                 repetition_type: Some(basic_info.repetition().into()),
-                name: basic_info.name().to_owned(),
+                name: basic_info.name().to_owned().into(),
                 num_children: None,
                 converted_type: basic_info.converted_type().into(),
                 scale: if scale >= 0 { Some(scale) } else { None },
@@ -1216,7 +1216,7 @@ fn to_thrift_helper(schema: &Type, elements: &mut Vec<SchemaElement>) {
                 type_: None,
                 type_length: None,
                 repetition_type: repetition,
-                name: basic_info.name().to_owned(),
+                name: basic_info.name().to_owned().into(),
                 num_children: Some(fields.len() as i32),
                 converted_type: basic_info.converted_type().into(),
                 scale: None,

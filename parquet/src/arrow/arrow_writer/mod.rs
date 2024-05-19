@@ -294,13 +294,13 @@ impl<W: Write + Send> ArrowWriter<W> {
     /// Unlike [`Self::close`] this does not consume self
     ///
     /// Attempting to write after calling finish will result in an error
-    pub fn finish(&mut self) -> Result<crate::format::FileMetaData> {
+    pub fn finish(&mut self) -> Result<crate::format::FileMetaData<'static>> {
         self.flush()?;
         self.writer.finish()
     }
 
     /// Close and finalize the underlying Parquet writer
-    pub fn close(mut self) -> Result<crate::format::FileMetaData> {
+    pub fn close(mut self) -> Result<crate::format::FileMetaData<'static>> {
         self.finish()
     }
 }
@@ -3054,7 +3054,7 @@ mod tests {
         {
             assert!(!key_value_metadata
                 .iter()
-                .any(|kv| kv.key.as_str() == ARROW_SCHEMA_META_KEY));
+                .any(|kv| kv.key.as_ref() == ARROW_SCHEMA_META_KEY));
         }
     }
 

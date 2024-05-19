@@ -17,16 +17,34 @@
 
 //! Custom thrift definitions
 
+use std::borrow::Cow;
 use thrift::protocol::{
-    TFieldIdentifier, TInputProtocol, TListIdentifier, TMapIdentifier, TMessageIdentifier,
-    TOutputProtocol, TSetIdentifier, TStructIdentifier, TType,
+    TCompactInputProtocol, TFieldIdentifier, TInputProtocol, TListIdentifier, TMapIdentifier,
+    TMessageIdentifier, TOutputProtocol, TSetIdentifier, TStructIdentifier, TType,
 };
+use thrift::transport::TReadTransport;
+
+pub trait TInputProtocolRef<'de>: TInputProtocol {
+    fn read_buf(&mut self) -> thrift::Result<Cow<'de, [u8]>>;
+
+    fn read_str(&mut self) -> thrift::Result<Cow<'de, str>>;
+}
+
+impl<'de, T: TReadTransport> TInputProtocolRef<'de> for TCompactInputProtocol<T> {
+    fn read_buf(&mut self) -> thrift::Result<Cow<'de, [u8]>> {
+        Ok(self.read_bytes()?.into())
+    }
+
+    fn read_str(&mut self) -> thrift::Result<Cow<'de, str>> {
+        Ok(self.read_string()?.into())
+    }
+}
 
 /// Reads and writes the struct to Thrift protocols.
 ///
 /// Unlike [`thrift::protocol::TSerializable`] this uses generics instead of trait objects
-pub trait TSerializable: Sized {
-    fn read_from_in_protocol<T: TInputProtocol>(i_prot: &mut T) -> thrift::Result<Self>;
+pub trait TSerializable<'de>: Sized {
+    fn read_from_in_protocol<T: TInputProtocolRef<'de>>(i_prot: &mut T) -> thrift::Result<Self>;
     fn write_to_out_protocol<T: TOutputProtocol>(&self, o_prot: &mut T) -> thrift::Result<()>;
 }
 
@@ -90,6 +108,29 @@ impl<'a> TCompactSliceInputProtocol<'a> {
         };
 
         Ok((element_type, element_count))
+    }
+}
+
+impl<'de> TInputProtocolRef<'de> for TCompactSliceInputProtocol<'de> {
+    fn read_buf(&mut self) -> thrift::Result<Cow<'de, [u8]>> {
+        let len = self.read_vlq()? as usize;
+        let ret = self.buf.get(..len).ok_or_else(eof_error)?;
+        self.buf = &self.buf[len..];
+        Ok(ret.into())
+    }
+
+    fn read_str(&mut self) -> thrift::Result<Cow<'de, str>> {
+        match self.read_buf()? {
+            Cow::Borrowed(s) => Ok(std::str::from_utf8(s)
+                .map_err(|e| {
+                    thrift::Error::Protocol(thrift::ProtocolError {
+                        kind: thrift::ProtocolErrorKind::InvalidData,
+                        message: e.to_string(),
+                    })
+                })?
+                .into()),
+            Cow::Owned(v) => Ok(String::from_utf8(v)?.into()),
+        }
     }
 }
 
@@ -180,10 +221,7 @@ impl<'a> TInputProtocol for TCompactSliceInputProtocol<'a> {
     }
 
     fn read_bytes(&mut self) -> thrift::Result<Vec<u8>> {
-        let len = self.read_vlq()? as usize;
-        let ret = self.buf.get(..len).ok_or_else(eof_error)?.to_vec();
-        self.buf = &self.buf[len..];
-        Ok(ret)
+        Ok(self.read_buf()?.into_owned())
     }
 
     fn read_i8(&mut self) -> thrift::Result<i8> {

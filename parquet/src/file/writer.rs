@@ -119,7 +119,7 @@ pub type OnCloseRowGroup<'a> = Box<
     dyn FnOnce(
             RowGroupMetaDataPtr,
             Vec<Option<Sbbf>>,
-            Vec<Option<ColumnIndex>>,
+            Vec<Option<ColumnIndex<'static>>>,
             Vec<Option<OffsetIndex>>,
         ) -> Result<()>
         + 'a
@@ -145,7 +145,7 @@ pub struct SerializedFileWriter<W: Write> {
     props: WriterPropertiesPtr,
     row_groups: Vec<RowGroupMetaDataPtr>,
     bloom_filters: Vec<Vec<Option<Sbbf>>>,
-    column_indexes: Vec<Vec<Option<ColumnIndex>>>,
+    column_indexes: Vec<Vec<Option<ColumnIndex<'static>>>>,
     offset_indexes: Vec<Vec<Option<OffsetIndex>>>,
     row_group_index: usize,
     // kv_metadatas will be appended to `props` when `write_metadata`
@@ -230,7 +230,7 @@ impl<W: Write + Send> SerializedFileWriter<W> {
     /// Unlike [`Self::close`] this does not consume self
     ///
     /// Attempting to write after calling finish will result in an error
-    pub fn finish(&mut self) -> Result<parquet::FileMetaData> {
+    pub fn finish(&mut self) -> Result<parquet::FileMetaData<'static>> {
         self.assert_previous_writer_closed()?;
         let metadata = self.write_metadata()?;
         self.buf.flush()?;
@@ -238,7 +238,7 @@ impl<W: Write + Send> SerializedFileWriter<W> {
     }
 
     /// Closes and finalises file writer, returning the file metadata.
-    pub fn close(mut self) -> Result<parquet::FileMetaData> {
+    pub fn close(mut self) -> Result<parquet::FileMetaData<'static>> {
         self.finish()
     }
 
@@ -327,7 +327,7 @@ impl<W: Write + Send> SerializedFileWriter<W> {
     }
 
     /// Assembles and writes metadata at the end of the file.
-    fn write_metadata(&mut self) -> Result<parquet::FileMetaData> {
+    fn write_metadata(&mut self) -> Result<parquet::FileMetaData<'static>> {
         self.finished = true;
         let num_rows = self.row_groups.iter().map(|x| x.num_rows()).sum();
 
@@ -368,7 +368,7 @@ impl<W: Write + Send> SerializedFileWriter<W> {
             key_value_metadata,
             version: self.props.writer_version().as_num(),
             schema: types::to_thrift(self.schema.as_ref())?,
-            created_by: Some(self.props.created_by().to_owned()),
+            created_by: Some(self.props.created_by().to_owned().into()),
             column_orders,
             encryption_algorithm: None,
             footer_signing_key_metadata: None,
@@ -464,7 +464,7 @@ pub struct SerializedRowGroupWriter<'a, W: Write> {
     row_group_metadata: Option<RowGroupMetaDataPtr>,
     column_chunks: Vec<ColumnChunkMetaData>,
     bloom_filters: Vec<Option<Sbbf>>,
-    column_indexes: Vec<Option<ColumnIndex>>,
+    column_indexes: Vec<Option<ColumnIndex<'static>>>,
     offset_indexes: Vec<Option<OffsetIndex>>,
     row_group_index: i16,
     file_offset: i64,
@@ -794,6 +794,7 @@ impl<'a, W: Write + Send> PageWriter for SerializedPageWriter<'a, W> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::borrow::Cow;
 
     use bytes::Bytes;
     use std::fs::File;
@@ -1001,8 +1002,8 @@ mod tests {
         let props = Arc::new(
             WriterProperties::builder()
                 .set_key_value_metadata(Some(vec![KeyValue::new(
-                    "key".to_string(),
-                    "value".to_string(),
+                    "key".into(),
+                    Cow::Borrowed("value"),
                 )]))
                 .build(),
         );
@@ -1045,8 +1046,8 @@ mod tests {
         let props = Arc::new(
             WriterProperties::builder()
                 .set_key_value_metadata(Some(vec![KeyValue::new(
-                    "key".to_string(),
-                    "value".to_string(),
+                    "key".into(),
+                    Cow::Borrowed("value"),
                 )]))
                 .set_writer_version(WriterVersion::PARQUET_2_0)
                 .build(),
@@ -1102,8 +1103,8 @@ mod tests {
         let props = Arc::new(
             WriterProperties::builder()
                 .set_key_value_metadata(Some(vec![KeyValue::new(
-                    "key".to_string(),
-                    "value".to_string(),
+                    "key".into(),
+                    Cow::Borrowed("value"),
                 )]))
                 .set_sorting_columns(expected_result.clone())
                 .build(),
@@ -1390,7 +1391,7 @@ mod tests {
         file: W,
         data: Vec<Vec<i32>>,
         compression: Compression,
-    ) -> crate::format::FileMetaData
+    ) -> crate::format::FileMetaData<'static>
     where
         W: Write + Send,
         R: ChunkReader + From<W> + 'static,
@@ -1405,7 +1406,7 @@ mod tests {
         data: Vec<Vec<D::T>>,
         value: F,
         compression: Compression,
-    ) -> crate::format::FileMetaData
+    ) -> crate::format::FileMetaData<'static>
     where
         W: Write + Send,
         R: ChunkReader + From<W> + 'static,
@@ -1476,7 +1477,10 @@ mod tests {
 
     /// File write-read roundtrip.
     /// `data` consists of arrays of values for each row group.
-    fn test_file_roundtrip(file: File, data: Vec<Vec<i32>>) -> crate::format::FileMetaData {
+    fn test_file_roundtrip(
+        file: File,
+        data: Vec<Vec<i32>>,
+    ) -> crate::format::FileMetaData<'static> {
         test_roundtrip_i32::<File, File>(file, data, Compression::UNCOMPRESSED)
     }
 
@@ -1611,8 +1615,8 @@ mod tests {
 
     #[test]
     fn test_append_metadata() {
-        let kv1 = KeyValue::new("cupcakes".to_string(), "awesome".to_string());
-        let kv2 = KeyValue::new("bingo".to_string(), "bongo".to_string());
+        let kv1 = KeyValue::new("cupcakes".into(), Cow::Borrowed("awesome"));
+        let kv2 = KeyValue::new("bingo".into(), Cow::Borrowed("bongo"));
 
         test_kv_metadata(None, None);
         test_kv_metadata(Some(vec![kv1.clone()]), None);

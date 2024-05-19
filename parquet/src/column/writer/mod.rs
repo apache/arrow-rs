@@ -172,7 +172,7 @@ pub struct ColumnCloseResult {
     /// Optional bloom filter for this column
     pub bloom_filter: Option<Sbbf>,
     /// Optional column index, for filtering
-    pub column_index: Option<ColumnIndex>,
+    pub column_index: Option<ColumnIndex<'static>>,
     /// Optional offset index, identifying page locations
     pub offset_index: Option<OffsetIndex>,
 }
@@ -2563,8 +2563,8 @@ mod tests {
                 // first page is [1,2,3,4]
                 // second page is [-5,2,4,8]
                 // note that we don't increment here, as this is a non BinaryArray type.
-                assert_eq!(stats.min_bytes(), column_index.min_values[1].as_slice());
-                assert_eq!(stats.max_bytes(), column_index.max_values.get(1).unwrap());
+                assert_eq!(stats.min_bytes(), column_index.min_values[1].as_ref());
+                assert_eq!(stats.max_bytes(), column_index.max_values[1].as_ref());
             } else {
                 panic!("expecting Statistics::Int32");
             }
@@ -2619,14 +2619,14 @@ mod tests {
                 let column_index_max_value = &column_index.max_values[0];
 
                 // Column index stats are truncated, while the column chunk's aren't.
-                assert_ne!(stats.min_bytes(), column_index_min_value.as_slice());
-                assert_ne!(stats.max_bytes(), column_index_max_value.as_slice());
+                assert_ne!(stats.min_bytes(), column_index_min_value.as_ref());
+                assert_ne!(stats.max_bytes(), column_index_max_value.as_ref());
 
                 assert_eq!(
                     column_index_min_value.len(),
                     DEFAULT_COLUMN_INDEX_TRUNCATE_LENGTH.unwrap()
                 );
-                assert_eq!(column_index_min_value.as_slice(), &[97_u8; 64]);
+                assert_eq!(column_index_min_value.as_ref(), &[97_u8; 64]);
                 assert_eq!(
                     column_index_max_value.len(),
                     DEFAULT_COLUMN_INDEX_TRUNCATE_LENGTH.unwrap()
@@ -2682,14 +2682,14 @@ mod tests {
             assert_eq!(stats.null_count(), 0);
             assert_eq!(stats.distinct_count(), None);
             if let Statistics::FixedLenByteArray(_stats) = stats {
-                let column_index_min_value = &column_index.min_values[0];
-                let column_index_max_value = &column_index.max_values[0];
+                let column_index_min_value = column_index.min_values[0].as_ref();
+                let column_index_max_value = column_index.max_values[0].as_ref();
 
                 assert_eq!(column_index_min_value.len(), 1);
                 assert_eq!(column_index_max_value.len(), 1);
 
-                assert_eq!("B".as_bytes(), column_index_min_value.as_slice());
-                assert_eq!("C".as_bytes(), column_index_max_value.as_slice());
+                assert_eq!("B".as_bytes(), column_index_min_value.as_ref());
+                assert_eq!("C".as_bytes(), column_index_max_value.as_ref());
 
                 assert_ne!(column_index_min_value, stats.min_bytes());
                 assert_ne!(column_index_max_value, stats.max_bytes());
@@ -2719,8 +2719,8 @@ mod tests {
         // stats should still be written
         // ensure bytes weren't truncated for column index
         let column_index = r.column_index.unwrap();
-        let column_index_min_bytes = column_index.min_values[0].as_slice();
-        let column_index_max_bytes = column_index.max_values[0].as_slice();
+        let column_index_min_bytes = column_index.min_values[0].as_ref();
+        let column_index_max_bytes = column_index.max_values[0].as_ref();
         assert_eq!(expected_value, column_index_min_bytes);
         assert_eq!(expected_value, column_index_max_bytes);
 
@@ -2759,8 +2759,8 @@ mod tests {
         // stats should still be written
         // ensure bytes weren't truncated for column index
         let column_index = r.column_index.unwrap();
-        let column_index_min_bytes = column_index.min_values[0].as_slice();
-        let column_index_max_bytes = column_index.max_values[0].as_slice();
+        let column_index_min_bytes = column_index.min_values[0].as_ref();
+        let column_index_max_bytes = column_index.max_values[0].as_ref();
         assert_eq!(expected_value, column_index_min_bytes);
         assert_eq!(expected_value, column_index_max_bytes);
 

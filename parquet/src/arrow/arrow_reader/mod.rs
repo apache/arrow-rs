@@ -2027,7 +2027,7 @@ mod tests {
         schema: TypePtr,
         field: Option<Field>,
         opts: &TestOptions,
-    ) -> Result<crate::format::FileMetaData> {
+    ) -> Result<crate::format::FileMetaData<'static>> {
         let mut writer_props = opts.writer_props();
         if let Some(field) = field {
             let arrow_schema = Schema::new(vec![field]);
