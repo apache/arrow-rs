@@ -157,6 +157,8 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
         (_, LargeList(list_to)) => can_cast_types(from_type, list_to.data_type()),
         (_, FixedSizeList(list_to,size)) if *size == 1 => {
             can_cast_types(from_type, list_to.data_type())},
+        (FixedSizeList(list_from,size), _) if *size == 1 => {
+            can_cast_types(list_from.data_type(), to_type)},
         // cast one decimal type to another decimal type
         (Decimal128(_, _), Decimal128(_, _)) => true,
         (Decimal256(_, _), Decimal256(_, _)) => true,
@@ -711,6 +713,9 @@ pub fn cast_with_options(
         (_, LargeList(ref to)) => cast_values_to_list::<i64>(array, to, cast_options),
         (_, FixedSizeList(ref to, size)) if *size == 1 => {
             cast_values_to_fixed_size_list(array, to, *size, cast_options)
+        }
+        (FixedSizeList(_, size), _) if *size == 1 => {
+            cast_single_element_fixed_size_list_to_values(array, to_type, cast_options)
         }
         (Decimal128(_, s1), Decimal128(p2, s2)) => {
             cast_decimal_to_decimal_same_type::<Decimal128Type>(
@@ -6896,6 +6901,85 @@ mod tests {
     }
 
     #[test]
+    fn test_cast_single_element_fixed_size_list() {
+        // FixedSizeList<T>[1] => T
+        let from_array = Arc::new(FixedSizeListArray::from_iter_primitive::<Int16Type, _, _>(
+            [(Some([Some(5)]))],
+            1,
+        )) as ArrayRef;
+        let casted_array = cast(&from_array, &DataType::Int32).unwrap();
+        let actual: &Int32Array = casted_array.as_primitive();
+        let expected = Int32Array::from(vec![Some(5)]);
+        assert_eq!(&expected, actual);
+
+        // FixedSizeList<T>[1] => FixedSizeList<U>[1]
+        let from_array = Arc::new(FixedSizeListArray::from_iter_primitive::<Int16Type, _, _>(
+            [(Some([Some(5)]))],
+            1,
+        )) as ArrayRef;
+        let to_field = Arc::new(Field::new("dummy", DataType::Float32, false));
+        let actual = cast(&from_array, &DataType::FixedSizeList(to_field.clone(), 1)).unwrap();
+        let expected = Arc::new(FixedSizeListArray::new(
+            to_field.clone(),
+            1,
+            Arc::new(Float32Array::from(vec![Some(5.0)])) as ArrayRef,
+            None,
+        )) as ArrayRef;
+        assert_eq!(*expected, *actual);
+
+        // FixedSizeList<T>[1] => FixedSizeList<FixdSizedList<U>[1]>[1]
+        let from_array = Arc::new(FixedSizeListArray::from_iter_primitive::<Int16Type, _, _>(
+            [(Some([Some(5)]))],
+            1,
+        )) as ArrayRef;
+        let to_field_inner = Arc::new(Field::new("item", DataType::Float32, false));
+        let to_field = Arc::new(Field::new(
+            "dummy",
+            DataType::FixedSizeList(to_field_inner.clone(), 1),
+            false,
+        ));
+        let actual = cast(&from_array, &DataType::FixedSizeList(to_field.clone(), 1)).unwrap();
+        let expected = Arc::new(FixedSizeListArray::new(
+            to_field.clone(),
+            1,
+            Arc::new(FixedSizeListArray::new(
+                to_field_inner.clone(),
+                1,
+                Arc::new(Float32Array::from(vec![Some(5.0)])) as ArrayRef,
+                None,
+            )) as ArrayRef,
+            None,
+        )) as ArrayRef;
+        assert_eq!(*expected, *actual);
+
+        // T => FixedSizeList<T>[1] (non-nullable)
+        let field = Arc::new(Field::new("dummy", DataType::Float32, false));
+        let from_array = Arc::new(Int8Array::from(vec![Some(5)])) as ArrayRef;
+        let casted_array = cast(&from_array, &DataType::FixedSizeList(field.clone(), 1)).unwrap();
+        let actual = casted_array.as_fixed_size_list();
+        let expected = Arc::new(FixedSizeListArray::new(
+            field.clone(),
+            1,
+            Arc::new(Float32Array::from(vec![Some(5.0)])) as ArrayRef,
+            None,
+        )) as ArrayRef;
+        assert_eq!(expected.as_ref(), actual);
+
+        // T => FixedSizeList<T>[1] (nullable)
+        let field = Arc::new(Field::new("nullable", DataType::Float32, true));
+        let from_array = Arc::new(Int8Array::from(vec![None])) as ArrayRef;
+        let casted_array = cast(&from_array, &DataType::FixedSizeList(field.clone(), 1)).unwrap();
+        let actual = casted_array.as_fixed_size_list();
+        let expected = Arc::new(FixedSizeListArray::new(
+            field.clone(),
+            1,
+            Arc::new(Float32Array::from(vec![None])) as ArrayRef,
+            None,
+        )) as ArrayRef;
+        assert_eq!(expected.as_ref(), actual);
+    }
+
+    #[test]
     fn test_cast_list_containers() {
         // large-list to list
         let array = Arc::new(make_large_list_array()) as ArrayRef;
@@ -8055,6 +8139,34 @@ mod tests {
         let overflow_array = Arc::new(overflow_str_array) as ArrayRef;
 
         test_cast_string_to_decimal256_overflow(overflow_array);
+    }
+
+    #[test]
+    fn test_cast_outside_supported_range_for_nanoseconds() {
+        const EXPECTED_ERROR_MESSAGE: &str = "The dates that can be represented as nanoseconds have to be between 1677-09-21T00:12:44.0 and 2262-04-11T23:47:16.854775804";
+
+        let array = StringArray::from(vec![Some("1650-01-01 01:01:01.000001")]);
+
+        let cast_options = CastOptions {
+            safe: false,
+            format_options: FormatOptions::default(),
+        };
+
+        let result = cast_string_to_timestamp::<i32, TimestampNanosecondType>(
+            &array,
+            &None::<Arc<str>>,
+            &cast_options,
+        );
+
+        let err = result.unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            format!(
+                "Cast error: Overflow converting {} to Nanosecond. {}",
+                array.value(0),
+                EXPECTED_ERROR_MESSAGE
+            )
+        );
     }
 
     #[test]
