@@ -76,8 +76,7 @@ pub type ParquetOffsetIndex = Vec<Vec<Vec<PageLocation>>>;
 ///
 /// * File level metadata: [`FileMetaData`]
 /// * Row Group level metadata: [`RowGroupMetaData`]
-/// * (Optional) "Page Index": [`ParquetColumnIndex`]
-/// * (Optional) Offset index: [`ParquetOffsetIndex`]
+/// * (Optional) "Page Index" structures: [`ParquetColumnIndex`] and [`ParquetOffsetIndex`]
 ///
 /// [`parquet.thrift`]: https://github.com/apache/parquet-format/blob/master/src/main/thrift/parquet.thrift
 ///
@@ -91,9 +90,9 @@ pub struct ParquetMetaData {
     file_metadata: FileMetaData,
     /// Row group metadata
     row_groups: Vec<RowGroupMetaData>,
-    /// Page index for all pages in each column chunk
+    /// Page level index for each page in each column chunk
     column_index: Option<ParquetColumnIndex>,
-    /// Offset index for all pages in each column chunk
+    /// Offset index for all each page in each column chunk
     offset_index: Option<ParquetOffsetIndex>,
 }
 
