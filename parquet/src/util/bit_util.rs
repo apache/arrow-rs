@@ -172,9 +172,9 @@ pub struct BitWriter {
 }
 
 impl BitWriter {
-    pub fn new(max_bytes: usize) -> Self {
+    pub fn new(initial_capacity: usize) -> Self {
         Self {
-            buffer: Vec::with_capacity(max_bytes),
+            buffer: Vec::with_capacity(initial_capacity),
             buffered_values: 0,
             bit_offset: 0,
         }
@@ -304,12 +304,7 @@ impl BitWriter {
     /// `offset + num_bytes`. Also that if size of `T` is larger than `num_bytes`, extra
     /// higher ordered bytes will be ignored.
     #[inline]
-    pub fn put_aligned_offset<T: AsBytes>(
-        &mut self,
-        val: T,
-        num_bytes: usize,
-        offset: usize,
-    ) {
+    pub fn put_aligned_offset<T: AsBytes>(&mut self, val: T, num_bytes: usize, offset: usize) {
         let slice = val.as_bytes();
         let len = num_bytes.min(slice.len());
         self.buffer[offset..offset + len].copy_from_slice(&slice[..len])
@@ -405,8 +400,8 @@ impl BitReader {
             self.load_buffered_values()
         }
 
-        let mut v = trailing_bits(self.buffered_values, self.bit_offset + num_bits)
-            >> self.bit_offset;
+        let mut v =
+            trailing_bits(self.buffered_values, self.bit_offset + num_bits) >> self.bit_offset;
         self.bit_offset += num_bits;
 
         if self.bit_offset >= 64 {
@@ -571,8 +566,7 @@ impl BitReader {
             false => num_values,
         };
 
-        let end_bit_offset =
-            self.byte_offset * 8 + values_to_read * num_bits + self.bit_offset;
+        let end_bit_offset = self.byte_offset * 8 + values_to_read * num_bits + self.bit_offset;
 
         self.byte_offset = end_bit_offset / 8;
         self.bit_offset = end_bit_offset % 8;
@@ -585,11 +579,7 @@ impl BitReader {
     }
 
     /// Reads up to `num_bytes` to `buf` returning the number of bytes read
-    pub(crate) fn get_aligned_bytes(
-        &mut self,
-        buf: &mut Vec<u8>,
-        num_bytes: usize,
-    ) -> usize {
+    pub(crate) fn get_aligned_bytes(&mut self, buf: &mut Vec<u8>, num_bytes: usize) -> usize {
         // Align to byte offset
         self.byte_offset = self.get_byte_offset();
         self.bit_offset = 0;
@@ -998,8 +988,7 @@ mod tests {
             .collect();
 
         // Generic values used to check against actual values read from `get_batch`.
-        let expected_values: Vec<T> =
-            values.iter().map(|v| from_le_slice(v.as_bytes())).collect();
+        let expected_values: Vec<T> = values.iter().map(|v| from_le_slice(v.as_bytes())).collect();
 
         (0..total).for_each(|i| writer.put_value(values[i], num_bits));
 
