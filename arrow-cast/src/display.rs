@@ -660,19 +660,16 @@ impl<'a> DisplayIndex for &'a PrimitiveArray<IntervalYearMonthType> {
 
 impl<'a> DisplayIndex for &'a PrimitiveArray<IntervalDayTimeType> {
     fn write(&self, idx: usize, f: &mut dyn Write) -> FormatResult {
-        let value: u64 = self.value(idx) as u64;
+        let value = self.value(idx);
 
-        let days_parts: i32 = ((value & 0xFFFFFFFF00000000) >> 32) as i32;
-        let milliseconds_part: i32 = (value & 0xFFFFFFFF) as i32;
-
-        let secs = milliseconds_part / 1_000;
+        let secs = value.milliseconds / 1_000;
         let mins = secs / 60;
         let hours = mins / 60;
 
         let secs = secs - (mins * 60);
         let mins = mins - (hours * 60);
 
-        let milliseconds = milliseconds_part % 1_000;
+        let milliseconds = value.milliseconds % 1_000;
 
         let secs_sign = if secs < 0 || milliseconds < 0 {
             "-"
@@ -683,7 +680,7 @@ impl<'a> DisplayIndex for &'a PrimitiveArray<IntervalDayTimeType> {
         write!(
             f,
             "0 years 0 mons {} days {} hours {} mins {}{}.{:03} secs",
-            days_parts,
+            value.days,
             hours,
             mins,
             secs_sign,
@@ -696,28 +693,24 @@ impl<'a> DisplayIndex for &'a PrimitiveArray<IntervalDayTimeType> {
 
 impl<'a> DisplayIndex for &'a PrimitiveArray<IntervalMonthDayNanoType> {
     fn write(&self, idx: usize, f: &mut dyn Write) -> FormatResult {
-        let value: u128 = self.value(idx) as u128;
+        let value = self.value(idx);
 
-        let months_part: i32 = ((value & 0xFFFFFFFF000000000000000000000000) >> 96) as i32;
-        let days_part: i32 = ((value & 0xFFFFFFFF0000000000000000) >> 64) as i32;
-        let nanoseconds_part: i64 = (value & 0xFFFFFFFFFFFFFFFF) as i64;
-
-        let secs = nanoseconds_part / 1_000_000_000;
+        let secs = value.nanoseconds / 1_000_000_000;
         let mins = secs / 60;
         let hours = mins / 60;
 
         let secs = secs - (mins * 60);
         let mins = mins - (hours * 60);
 
-        let nanoseconds = nanoseconds_part % 1_000_000_000;
+        let nanoseconds = value.nanoseconds % 1_000_000_000;
 
         let secs_sign = if secs < 0 || nanoseconds < 0 { "-" } else { "" };
 
         write!(
             f,
             "0 years {} mons {} days {} hours {} mins {}{}.{:09} secs",
-            months_part,
-            days_part,
+            value.months,
+            value.days,
             hours,
             mins,
             secs_sign,

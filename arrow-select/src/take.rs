@@ -845,6 +845,7 @@ pub fn take_record_batch(
 mod tests {
     use super::*;
     use arrow_array::builder::*;
+    use arrow_buffer::{IntervalDayTime, IntervalMonthDayNano};
     use arrow_schema::{Field, Fields, TimeUnit};
 
     fn test_take_decimal_arrays(
@@ -1158,20 +1159,26 @@ mod tests {
         .unwrap();
 
         // interval_day_time
+        let v1 = IntervalDayTime::new(0, 0);
+        let v2 = IntervalDayTime::new(2, 0);
+        let v3 = IntervalDayTime::new(-15, 0);
         test_take_primitive_arrays::<IntervalDayTimeType>(
-            vec![Some(0), None, Some(2), Some(-15), None],
+            vec![Some(v1), None, Some(v2), Some(v3), None],
             &index,
             None,
-            vec![Some(-15), None, None, Some(-15), Some(2)],
+            vec![Some(v3), None, None, Some(v3), Some(v2)],
         )
         .unwrap();
 
         // interval_month_day_nano
+        let v1 = IntervalMonthDayNano::new(0, 0, 0);
+        let v2 = IntervalMonthDayNano::new(2, 0, 0);
+        let v3 = IntervalMonthDayNano::new(-15, 0, 0);
         test_take_primitive_arrays::<IntervalMonthDayNanoType>(
-            vec![Some(0), None, Some(2), Some(-15), None],
+            vec![Some(v1), None, Some(v2), Some(v3), None],
             &index,
             None,
-            vec![Some(-15), None, None, Some(-15), Some(2)],
+            vec![Some(v3), None, None, Some(v3), Some(v2)],
         )
         .unwrap();
 
