@@ -6,7 +6,8 @@
 #![allow(unused_imports)]
 #![allow(unused_extern_crates)]
 #![allow(clippy::too_many_arguments, clippy::type_complexity, clippy::vec_box, clippy::wrong_self_convention)]
-#![cfg_attr(rustfmt, rustfmt_skip)]
+// Fix unexpected `cfg` condition name: `rustfmt` https://github.com/apache/arrow-rs/issues/5725
+//#![cfg_attr(rustfmt, rustfmt_skip)]
 
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
