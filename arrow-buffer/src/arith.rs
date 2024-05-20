@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+/// Derives `std::ops::$op` for `$ty` calling `$wrapping` or `$checked` variants
+/// based on if debug_assertions enabled
 macro_rules! derive_arith {
     ($ty:ty, $t:ident, $op:ident, $wrapping:ident, $checked:ident) => {
         impl std::ops::$t for $ty {
