@@ -142,7 +142,7 @@ mod tests {
     use arrow_array::builder::*;
     use arrow_array::types::*;
     use arrow_array::*;
-    use arrow_buffer::ScalarBuffer;
+    use arrow_buffer::{IntervalDayTime, IntervalMonthDayNano, ScalarBuffer};
     use arrow_schema::*;
 
     use crate::display::array_value_to_string;
@@ -963,12 +963,12 @@ mod tests {
     #[test]
     fn test_pretty_format_interval_day_time() {
         let arr = Arc::new(arrow_array::IntervalDayTimeArray::from(vec![
-            Some(-600000),
-            Some(4294966295),
-            Some(4294967295),
-            Some(1),
-            Some(10),
-            Some(100),
+            Some(IntervalDayTime::new(-1, -600_000)),
+            Some(IntervalDayTime::new(0, -1001)),
+            Some(IntervalDayTime::new(0, -1)),
+            Some(IntervalDayTime::new(0, 1)),
+            Some(IntervalDayTime::new(0, 10)),
+            Some(IntervalDayTime::new(0, 100)),
         ]));
 
         let schema = Arc::new(Schema::new(vec![Field::new(
@@ -1002,19 +1002,19 @@ mod tests {
     #[test]
     fn test_pretty_format_interval_month_day_nano_array() {
         let arr = Arc::new(arrow_array::IntervalMonthDayNanoArray::from(vec![
-            Some(-600000000000),
-            Some(18446744072709551615),
-            Some(18446744073709551615),
-            Some(1),
-            Some(10),
-            Some(100),
-            Some(1_000),
-            Some(10_000),
-            Some(100_000),
-            Some(1_000_000),
-            Some(10_000_000),
-            Some(100_000_000),
-            Some(1_000_000_000),
+            Some(IntervalMonthDayNano::new(-1, -1, -600_000_000_000)),
+            Some(IntervalMonthDayNano::new(0, 0, -1_000_000_001)),
+            Some(IntervalMonthDayNano::new(0, 0, -1)),
+            Some(IntervalMonthDayNano::new(0, 0, 1)),
+            Some(IntervalMonthDayNano::new(0, 0, 10)),
+            Some(IntervalMonthDayNano::new(0, 0, 100)),
+            Some(IntervalMonthDayNano::new(0, 0, 1_000)),
+            Some(IntervalMonthDayNano::new(0, 0, 10_000)),
+            Some(IntervalMonthDayNano::new(0, 0, 100_000)),
+            Some(IntervalMonthDayNano::new(0, 0, 1_000_000)),
+            Some(IntervalMonthDayNano::new(0, 0, 10_000_000)),
+            Some(IntervalMonthDayNano::new(0, 0, 100_000_000)),
+            Some(IntervalMonthDayNano::new(0, 0, 1_000_000_000)),
         ]));
 
         let schema = Arc::new(Schema::new(vec![Field::new(

@@ -1502,6 +1502,7 @@ mod tests {
     use crate::builder::{Decimal128Builder, Decimal256Builder};
     use crate::cast::downcast_array;
     use crate::BooleanArray;
+    use arrow_buffer::{IntervalDayTime, IntervalMonthDayNano};
     use arrow_schema::TimeUnit;
 
     #[test]
@@ -1624,33 +1625,46 @@ mod tests {
         assert_eq!(-5, arr.value(2));
         assert_eq!(-5, arr.values()[2]);
 
-        // a day_time interval contains days and milliseconds, but we do not yet have accessors for the values
-        let arr = IntervalDayTimeArray::from(vec![Some(1), None, Some(-5)]);
-        assert_eq!(3, arr.len());
-        assert_eq!(0, arr.offset());
-        assert_eq!(1, arr.null_count());
-        assert_eq!(1, arr.value(0));
-        assert_eq!(1, arr.values()[0]);
-        assert!(arr.is_null(1));
-        assert_eq!(-5, arr.value(2));
-        assert_eq!(-5, arr.values()[2]);
+        let v0 = IntervalDayTime {
+            days: 34,
+            milliseconds: 1,
+        };
+        let v2 = IntervalDayTime {
+            days: -2,
+            milliseconds: -5,
+        };
 
-        // a month_day_nano interval contains months, days and nanoseconds,
-        // but we do not yet have accessors for the values.
-        // TODO: implement month, day, and nanos access method for month_day_nano.
-        let arr = IntervalMonthDayNanoArray::from(vec![
-            Some(100000000000000000000),
-            None,
-            Some(-500000000000000000000),
-        ]);
+        let arr = IntervalDayTimeArray::from(vec![Some(v0), None, Some(v2)]);
+
         assert_eq!(3, arr.len());
         assert_eq!(0, arr.offset());
         assert_eq!(1, arr.null_count());
-        assert_eq!(100000000000000000000, arr.value(0));
-        assert_eq!(100000000000000000000, arr.values()[0]);
+        assert_eq!(v0, arr.value(0));
+        assert_eq!(v0, arr.values()[0]);
         assert!(arr.is_null(1));
-        assert_eq!(-500000000000000000000, arr.value(2));
-        assert_eq!(-500000000000000000000, arr.values()[2]);
+        assert_eq!(v2, arr.value(2));
+        assert_eq!(v2, arr.values()[2]);
+
+        let v0 = IntervalMonthDayNano {
+            months: 2,
+            days: 34,
+            nanoseconds: -1,
+        };
+        let v2 = IntervalMonthDayNano {
+            months: -3,
+            days: -2,
+            nanoseconds: 4,
+        };
+
+        let arr = IntervalMonthDayNanoArray::from(vec![Some(v0), None, Some(v2)]);
+        assert_eq!(3, arr.len());
+        assert_eq!(0, arr.offset());
+        assert_eq!(1, arr.null_count());
+        assert_eq!(v0, arr.value(0));
+        assert_eq!(v0, arr.values()[0]);
+        assert!(arr.is_null(1));
+        assert_eq!(v2, arr.value(2));
+        assert_eq!(v2, arr.values()[2]);
     }
 
     #[test]
@@ -2460,7 +2474,7 @@ mod tests {
         expected = "PrimitiveArray expected data type Interval(MonthDayNano) got Interval(DayTime)"
     )]
     fn test_invalid_interval_type() {
-        let array = IntervalDayTimeArray::from(vec![1, 2, 3]);
+        let array = IntervalDayTimeArray::from(vec![IntervalDayTime::ZERO]);
         let _ = IntervalMonthDayNanoArray::from(array.into_data());
     }
 

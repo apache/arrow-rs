@@ -183,7 +183,8 @@ impl FixedSizeListArray {
                 || nulls
                     .as_ref()
                     .map(|n| n.expand(size as _).contains(&a))
-                    .unwrap_or_default();
+                    .unwrap_or_default()
+                || (nulls.is_none() && a.null_count() == 0);
 
             if !nulls_valid {
                 return Err(ArrowError::InvalidArgumentError(format!(

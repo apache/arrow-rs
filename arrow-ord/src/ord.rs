@@ -131,7 +131,7 @@ pub fn build_compare(left: &dyn Array, right: &dyn Array) -> Result<DynComparato
 #[cfg(test)]
 pub mod tests {
     use super::*;
-    use arrow_buffer::{i256, OffsetBuffer};
+    use arrow_buffer::{i256, IntervalDayTime, OffsetBuffer};
     use half::f16;
     use std::sync::Arc;
 
@@ -396,21 +396,25 @@ pub mod tests {
 
     #[test]
     fn test_interval_dict() {
-        let values = IntervalDayTimeArray::from(vec![1, 0, 2, 5]);
+        let v1 = IntervalDayTime::new(0, 1);
+        let v2 = IntervalDayTime::new(0, 2);
+        let v3 = IntervalDayTime::new(12, 2);
+
+        let values = IntervalDayTimeArray::from(vec![Some(v1), Some(v2), None, Some(v3)]);
         let keys = Int8Array::from_iter_values([0, 0, 1, 3]);
         let array1 = DictionaryArray::new(keys, Arc::new(values));
 
-        let values = IntervalDayTimeArray::from(vec![2, 3, 4, 5]);
+        let values = IntervalDayTimeArray::from(vec![Some(v3), Some(v2), None, Some(v1)]);
         let keys = Int8Array::from_iter_values([0, 1, 1, 3]);
         let array2 = DictionaryArray::new(keys, Arc::new(values));
 
         let cmp = build_compare(&array1, &array2).unwrap();
 
-        assert_eq!(Ordering::Less, cmp(0, 0));
-        assert_eq!(Ordering::Less, cmp(0, 3));
-        assert_eq!(Ordering::Equal, cmp(3, 3));
-        assert_eq!(Ordering::Greater, cmp(3, 1));
-        assert_eq!(Ordering::Greater, cmp(3, 2));
+        assert_eq!(Ordering::Less, cmp(0, 0)); // v1 vs v3
+        assert_eq!(Ordering::Equal, cmp(0, 3)); // v1 vs v1
+        assert_eq!(Ordering::Greater, cmp(3, 3)); // v3 vs v1
+        assert_eq!(Ordering::Greater, cmp(3, 1)); // v3 vs v2
+        assert_eq!(Ordering::Greater, cmp(3, 2)); // v3 vs v2
     }
 
     #[test]

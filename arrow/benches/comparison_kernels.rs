@@ -22,9 +22,9 @@ use criterion::Criterion;
 extern crate arrow;
 
 use arrow::compute::kernels::cmp::*;
-use arrow::datatypes::IntervalMonthDayNanoType;
 use arrow::util::bench_util::*;
 use arrow::{array::*, datatypes::Float32Type, datatypes::Int32Type};
+use arrow_buffer::IntervalMonthDayNano;
 use arrow_string::like::*;
 use arrow_string::regexp::regexp_is_match_utf8_scalar;
 
@@ -59,10 +59,8 @@ fn add_benchmark(c: &mut Criterion) {
     let arr_a = create_primitive_array_with_seed::<Float32Type>(SIZE, 0.0, 42);
     let arr_b = create_primitive_array_with_seed::<Float32Type>(SIZE, 0.0, 43);
 
-    let arr_month_day_nano_a =
-        create_primitive_array_with_seed::<IntervalMonthDayNanoType>(SIZE, 0.0, 43);
-    let arr_month_day_nano_b =
-        create_primitive_array_with_seed::<IntervalMonthDayNanoType>(SIZE, 0.0, 43);
+    let arr_month_day_nano_a = create_month_day_nano_array_with_seed(SIZE, 0.0, 43);
+    let arr_month_day_nano_b = create_month_day_nano_array_with_seed(SIZE, 0.0, 43);
 
     let arr_string = create_string_array::<i32>(SIZE, 0.0);
     let scalar = Float32Array::from(vec![1.0]);
@@ -134,7 +132,7 @@ fn add_benchmark(c: &mut Criterion) {
     c.bench_function("eq MonthDayNano", |b| {
         b.iter(|| eq(&arr_month_day_nano_a, &arr_month_day_nano_b))
     });
-    let scalar = IntervalMonthDayNanoArray::new_scalar(123);
+    let scalar = IntervalMonthDayNanoArray::new_scalar(IntervalMonthDayNano::new(123, 0, 0));
 
     c.bench_function("eq scalar MonthDayNano", |b| {
         b.iter(|| eq(&arr_month_day_nano_b, &scalar).unwrap())
