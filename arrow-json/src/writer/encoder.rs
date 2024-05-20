@@ -519,40 +519,26 @@ impl<'a> Encoder for MapEncoder<'a> {
     }
 }
 
-trait ValueAsBytes {
-    fn value_as_bytes(&self, index: usize) -> &[u8];
-}
+/// New-type wrapper for encoding the binary types in arrow: `Binary`, `LargeBinary`
+/// and `FixedSizeBinary` as hex strings in JSON.
+struct BinaryEncoder<B>(B);
 
-impl ValueAsBytes for FixedSizeBinaryArray {
-    fn value_as_bytes(&self, index: usize) -> &[u8] {
-        self.value(index)
-    }
-}
-
-impl ValueAsBytes for BinaryArray {
-    fn value_as_bytes(&self, index: usize) -> &[u8] {
-        self.value(index)
-    }
-}
-
-impl ValueAsBytes for LargeBinaryArray {
-    fn value_as_bytes(&self, index: usize) -> &[u8] {
-        self.value(index)
-    }
-}
-
-struct BinaryEncoder<'a, B>(&'a B);
-
-impl<'a, B> BinaryEncoder<'a, B> {
-    fn new(array: &'a B) -> Self {
+impl<'a, B> BinaryEncoder<B>
+where
+    B: ArrayAccessor<Item = &'a [u8]>,
+{
+    fn new(array: B) -> Self {
         Self(array)
     }
 }
 
-impl<'a, B: ValueAsBytes> Encoder for BinaryEncoder<'a, B> {
+impl<'a, B> Encoder for BinaryEncoder<B>
+where
+    B: ArrayAccessor<Item = &'a [u8]>,
+{
     fn encode(&mut self, idx: usize, out: &mut Vec<u8>) {
         out.push(b'"');
-        for byte in self.0.value_as_bytes(idx) {
+        for byte in self.0.value(idx) {
             // this write is infallible
             write!(out, "{byte:02x}").unwrap();
         }
