@@ -1565,9 +1565,13 @@ mod tests {
         Ok(())
     }
 
-    fn binary_encoding_test<O: OffsetSizeTrait>(data_type: DataType) {
+    fn binary_encoding_test<O: OffsetSizeTrait>() {
         // set up schema
-        let schema = SchemaRef::new(Schema::new(vec![Field::new("bytes", data_type, true)]));
+        let schema = SchemaRef::new(Schema::new(vec![Field::new(
+            "bytes",
+            GenericBinaryType::<O>::DATA_TYPE,
+            true,
+        )]));
 
         // build record batch:
         let mut builder = GenericByteBuilder::<GenericBinaryType<O>>::new();
@@ -1638,8 +1642,10 @@ mod tests {
 
     #[test]
     fn test_writer_binary() {
-        binary_encoding_test::<i32>(DataType::Binary);
-        binary_encoding_test::<i64>(DataType::LargeBinary);
+        // Binary:
+        binary_encoding_test::<i32>();
+        // LargeBinary:
+        binary_encoding_test::<i64>();
     }
 
     #[test]
