@@ -228,7 +228,7 @@ impl ArrowReaderMetadata {
 /// breaking the pre-existing ParquetRecordBatchStreamBuilder API
 pub struct AsyncReader<T>(T);
 
-/// A builder used to construct a [`ParquetRecordBatchStream`] for a parquet file
+/// A builder used to construct a [`ParquetRecordBatchStream`] for `async` reading of a parquet file
 ///
 /// In particular, this handles reading the parquet file metadata, allowing consumers
 /// to use this information to select what specific columns, row groups, etc...
@@ -239,21 +239,8 @@ pub type ParquetRecordBatchStreamBuilder<T> = ArrowReaderBuilder<AsyncReader<T>>
 
 impl<T: AsyncFileReader + Send + 'static> ParquetRecordBatchStreamBuilder<T> {
     /// Create a new [`ParquetRecordBatchStreamBuilder`] with the provided parquet file
-    pub async fn new(input: T) -> Result<Self> {
-        Self::new_with_options(input, Default::default()).await
-    }
-
-    /// Create a new [`ParquetRecordBatchStreamBuilder`] with the provided parquet file
-    /// and [`ArrowReaderOptions`]
-    pub async fn new_with_options(mut input: T, options: ArrowReaderOptions) -> Result<Self> {
-        let metadata = ArrowReaderMetadata::load_async(&mut input, options).await?;
-        Ok(Self::new_with_metadata(input, metadata))
-    }
-
-    /// Create a [`ParquetRecordBatchStreamBuilder`] from the provided [`ArrowReaderMetadata`]
     ///
-    /// This allows loading metadata once and using it to create multiple builders with
-    /// potentially different settings
+    /// # Example
     ///
     /// ```
     /// # use std::fs::metadata;
@@ -268,23 +255,75 @@ impl<T: AsyncFileReader + Send + 'static> ParquetRecordBatchStreamBuilder<T> {
     /// # #[tokio::main(flavor="current_thread")]
     /// # async fn main() {
     /// #
-    /// let mut file = tempfile().unwrap();
+    /// # let mut file = tempfile().unwrap();
     /// # let schema = Arc::new(Schema::new(vec![Field::new("i32", DataType::Int32, false)]));
     /// # let mut writer = ArrowWriter::try_new(&mut file, schema.clone(), None).unwrap();
     /// # let batch = RecordBatch::try_new(schema, vec![Arc::new(Int32Array::from(vec![1, 2, 3]))]).unwrap();
     /// # writer.write(&batch).unwrap();
     /// # writer.close().unwrap();
-    /// #
+    /// // Open async file containing parquet data
     /// let mut file = tokio::fs::File::from_std(file);
+    /// // construct the reader
+    /// let mut reader = ParquetRecordBatchStreamBuilder::new(file)
+    ///   .await.unwrap().build().unwrap();
+    /// // Read batche
+    /// let batch: RecordBatch = reader.next().await.unwrap().unwrap();
+    /// # }
+    /// ```
+    pub async fn new(input: T) -> Result<Self> {
+        Self::new_with_options(input, Default::default()).await
+    }
+
+    /// Create a new [`ParquetRecordBatchStreamBuilder`] with the provided parquet file
+    /// and [`ArrowReaderOptions`]
+    pub async fn new_with_options(mut input: T, options: ArrowReaderOptions) -> Result<Self> {
+        let metadata = ArrowReaderMetadata::load_async(&mut input, options).await?;
+        Ok(Self::new_with_metadata(input, metadata))
+    }
+
+    /// Create a [`ParquetRecordBatchStreamBuilder`] from the provided [`ArrowReaderMetadata`]
+    ///
+    /// This allows loading metadata once and using it to create multiple builders with
+    /// potentially different settings, that can be read in parallel.
+    ///
+    /// # Example of reading from multiple streams in parallel
+    ///
+    /// ```
+    /// # use std::fs::metadata;
+    /// # use std::sync::Arc;
+    /// # use bytes::Bytes;
+    /// # use arrow_array::{Int32Array, RecordBatch};
+    /// # use arrow_schema::{DataType, Field, Schema};
+    /// # use parquet::arrow::arrow_reader::ArrowReaderMetadata;
+    /// # use parquet::arrow::{ArrowWriter, ParquetRecordBatchStreamBuilder};
+    /// # use tempfile::tempfile;
+    /// # use futures::StreamExt;
+    /// # #[tokio::main(flavor="current_thread")]
+    /// # async fn main() {
+    /// #
+    /// # let mut file = tempfile().unwrap();
+    /// # let schema = Arc::new(Schema::new(vec![Field::new("i32", DataType::Int32, false)]));
+    /// # let mut writer = ArrowWriter::try_new(&mut file, schema.clone(), None).unwrap();
+    /// # let batch = RecordBatch::try_new(schema, vec![Arc::new(Int32Array::from(vec![1, 2, 3]))]).unwrap();
+    /// # writer.write(&batch).unwrap();
+    /// # writer.close().unwrap();
+    /// // open file with parquet data
+    /// let mut file = tokio::fs::File::from_std(file);
+    /// // load metadata once
     /// let meta = ArrowReaderMetadata::load_async(&mut file, Default::default()).await.unwrap();
+    /// // create two readers, a and b, from the same underlying file
+    /// // without reading the metadata again
     /// let mut a = ParquetRecordBatchStreamBuilder::new_with_metadata(
     ///     file.try_clone().await.unwrap(),
     ///     meta.clone()
     /// ).build().unwrap();
     /// let mut b = ParquetRecordBatchStreamBuilder::new_with_metadata(file, meta).build().unwrap();
     ///
-    /// // Should be able to read from both in parallel
-    /// assert_eq!(a.next().await.unwrap().unwrap(), b.next().await.unwrap().unwrap());
+    /// // Can read batches from both readers in parallel
+    /// assert_eq!(
+    ///   a.next().await.unwrap().unwrap(),
+    ///   b.next().await.unwrap().unwrap(),
+    /// );
     /// # }
     /// ```
     pub fn new_with_metadata(input: T, metadata: ArrowReaderMetadata) -> Self {

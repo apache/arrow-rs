@@ -49,9 +49,9 @@ pub use selection::{RowSelection, RowSelector};
 /// Most users should use one of the following specializations:
 ///
 /// * synchronous API: [`ParquetRecordBatchReaderBuilder::try_new`]
-/// * `async` API: [`ParquetRecordBatchStreamBuilder::new_with_metadata`]
+/// * `async` API: [`ParquetRecordBatchStreamBuilder::new`]
 ///
-/// [`ParquetRecordBatchStreamBuilder::new_with_metadata`]: crate::arrow::async_reader::ParquetRecordBatchStreamBuilder::new_with_metadata
+/// [`ParquetRecordBatchStreamBuilder::new`]: crate::arrow::async_reader::ParquetRecordBatchStreamBuilder::new
 pub struct ArrowReaderBuilder<T> {
     pub(crate) input: T,
 
