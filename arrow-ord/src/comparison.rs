@@ -119,7 +119,7 @@ mod tests {
         ListBuilder, PrimitiveDictionaryBuilder, StringBuilder, StringDictionaryBuilder,
     };
     use arrow_array::types::*;
-    use arrow_buffer::{i256, ArrowNativeType, Buffer};
+    use arrow_buffer::{i256, ArrowNativeType, Buffer, IntervalDayTime, IntervalMonthDayNano};
     use arrow_data::ArrayData;
     use arrow_schema::{DataType, Field};
     use half::f16;
@@ -856,26 +856,48 @@ mod tests {
 
     #[test]
     fn test_interval_array() {
-        let a = IntervalDayTimeArray::from(vec![Some(0), Some(6), Some(834), None, Some(3), None]);
-        let b =
-            IntervalDayTimeArray::from(vec![Some(70), Some(6), Some(833), Some(6), Some(3), None]);
+        let a = IntervalDayTimeArray::from(vec![
+            Some(IntervalDayTime::new(0, 1)),
+            Some(IntervalDayTime::new(0, 6)),
+            Some(IntervalDayTime::new(4, 834)),
+            None,
+            Some(IntervalDayTime::new(2, 3)),
+            None
+        ]);
+        let b = IntervalDayTimeArray::from(vec![
+            Some(IntervalDayTime::new(0, 4)),
+            Some(IntervalDayTime::new(0, 6)),
+            Some(IntervalDayTime::new(0, 834)),
+            None,
+            Some(IntervalDayTime::new(2, 3)),
+            None
+        ]);
         let res = crate::cmp::eq(&a, &b).unwrap();
         assert_eq!(
             &res,
             &BooleanArray::from(vec![Some(false), Some(true), Some(false), None, Some(true), None])
         );
 
-        let a =
-            IntervalMonthDayNanoArray::from(vec![Some(0), Some(6), Some(834), None, Some(3), None]);
-        let b = IntervalMonthDayNanoArray::from(
-            vec![Some(86), Some(5), Some(8), Some(6), Some(3), None],
-        );
+        let a = IntervalMonthDayNanoArray::from(vec![
+            Some(IntervalMonthDayNano::new(0, 0, 6)),
+            Some(IntervalMonthDayNano::new(2, 0, 0)),
+            Some(IntervalMonthDayNano::new(2, -5, 0)),
+            None,
+            Some(IntervalMonthDayNano::new(0, 0, 2)),
+            Some(IntervalMonthDayNano::new(5, 0, -23)),
+        ]);
+        let b = IntervalMonthDayNanoArray::from(vec![
+            Some(IntervalMonthDayNano::new(0, 0, 6)),
+            Some(IntervalMonthDayNano::new(2, 3, 0)),
+            Some(IntervalMonthDayNano::new(5, -5, 0)),
+            None,
+            Some(IntervalMonthDayNano::new(-1, 0, 2)),
+            None,
+        ]);
         let res = crate::cmp::lt(&a, &b).unwrap();
         assert_eq!(
             &res,
-            &BooleanArray::from(
-                vec![Some(true), Some(false), Some(false), None, Some(false), None]
-            )
+            &BooleanArray::from(vec![Some(false), Some(true), Some(true), None, Some(false), None])
         );
 
         let a =
@@ -1421,10 +1443,22 @@ mod tests {
 
     #[test]
     fn test_interval_dyn_scalar() {
-        let array = IntervalDayTimeArray::from(vec![Some(1), None, Some(8), None, Some(10)]);
+        let array = IntervalDayTimeArray::from(vec![
+            Some(IntervalDayTime::new(1, 0)),
+            None,
+            Some(IntervalDayTime::new(8, 0)),
+            None,
+            Some(IntervalDayTime::new(10, 0)),
+        ]);
         test_primitive_dyn_scalar(array);
 
-        let array = IntervalMonthDayNanoArray::from(vec![Some(1), None, Some(8), None, Some(10)]);
+        let array = IntervalMonthDayNanoArray::from(vec![
+            Some(IntervalMonthDayNano::new(1, 0, 0)),
+            None,
+            Some(IntervalMonthDayNano::new(8, 0, 0)),
+            None,
+            Some(IntervalMonthDayNano::new(10, 0, 0)),
+        ]);
         test_primitive_dyn_scalar(array);
 
         let array = IntervalYearMonthArray::from(vec![Some(1), None, Some(8), None, Some(10)]);
@@ -2054,11 +2088,16 @@ mod tests {
 
     #[test]
     fn test_eq_dyn_neq_dyn_dictionary_interval_array() {
-        let values = IntervalDayTimeArray::from(vec![1, 6, 10, 2, 3, 5]);
+        let values = IntervalDayTimeArray::from(vec![
+            Some(IntervalDayTime::new(0, 1)),
+            Some(IntervalDayTime::new(0, 1)),
+            Some(IntervalDayTime::new(0, 6)),
+            Some(IntervalDayTime::new(4, 10)),
+        ]);
         let values = Arc::new(values) as ArrayRef;
 
         let keys1 = UInt64Array::from_iter_values([1_u64, 0, 3]);
-        let keys2 = UInt64Array::from_iter_values([2_u64, 0, 3]);
+        let keys2 = UInt64Array::from_iter_values([2_u64, 1, 3]);
         let dict_array1 = DictionaryArray::new(keys1, values.clone());
         let dict_array2 = DictionaryArray::new(keys2, values.clone());
 

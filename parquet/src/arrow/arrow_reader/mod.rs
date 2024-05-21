@@ -750,7 +750,7 @@ mod tests {
         Decimal128Type, Decimal256Type, DecimalType, Float16Type, Float32Type, Float64Type,
     };
     use arrow_array::*;
-    use arrow_buffer::{i256, ArrowNativeType, Buffer};
+    use arrow_buffer::{i256, ArrowNativeType, Buffer, IntervalDayTime};
     use arrow_data::ArrayDataBuilder;
     use arrow_schema::{ArrowError, DataType as ArrowDataType, Field, Fields, Schema};
     use arrow_select::concat::concat_batches;
@@ -1060,8 +1060,12 @@ mod tests {
                 Arc::new(
                     vals.iter()
                         .map(|x| {
-                            x.as_ref()
-                                .map(|b| i64::from_le_bytes(b.as_ref()[4..12].try_into().unwrap()))
+                            x.as_ref().map(|b| IntervalDayTime {
+                                days: i32::from_le_bytes(b.as_ref()[4..8].try_into().unwrap()),
+                                milliseconds: i32::from_le_bytes(
+                                    b.as_ref()[8..12].try_into().unwrap(),
+                                ),
+                            })
                         })
                         .collect::<IntervalDayTimeArray>(),
                 )

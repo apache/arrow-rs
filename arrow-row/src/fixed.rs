@@ -19,7 +19,9 @@ use crate::array::PrimitiveArray;
 use crate::null_sentinel;
 use arrow_array::builder::BufferBuilder;
 use arrow_array::{ArrowPrimitiveType, BooleanArray, FixedSizeBinaryArray};
-use arrow_buffer::{bit_util, i256, ArrowNativeType, Buffer, MutableBuffer};
+use arrow_buffer::{
+    bit_util, i256, ArrowNativeType, Buffer, IntervalDayTime, IntervalMonthDayNano, MutableBuffer,
+};
 use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::{DataType, SortOptions};
 use half::f16;
@@ -160,6 +162,44 @@ impl FixedLengthEncoding for f64 {
         let bits = i64::decode(encoded);
         let val = bits ^ (((bits >> 63) as u64) >> 1) as i64;
         Self::from_bits(val as u64)
+    }
+}
+
+impl FixedLengthEncoding for IntervalDayTime {
+    type Encoded = [u8; 8];
+
+    fn encode(self) -> Self::Encoded {
+        let mut out = [0_u8; 8];
+        out[..4].copy_from_slice(&self.days.encode());
+        out[4..].copy_from_slice(&self.milliseconds.encode());
+        out
+    }
+
+    fn decode(encoded: Self::Encoded) -> Self {
+        Self {
+            days: i32::decode(encoded[..4].try_into().unwrap()),
+            milliseconds: i32::decode(encoded[4..].try_into().unwrap()),
+        }
+    }
+}
+
+impl FixedLengthEncoding for IntervalMonthDayNano {
+    type Encoded = [u8; 16];
+
+    fn encode(self) -> Self::Encoded {
+        let mut out = [0_u8; 16];
+        out[..4].copy_from_slice(&self.months.encode());
+        out[4..8].copy_from_slice(&self.days.encode());
+        out[8..].copy_from_slice(&self.nanoseconds.encode());
+        out
+    }
+
+    fn decode(encoded: Self::Encoded) -> Self {
+        Self {
+            months: i32::decode(encoded[..4].try_into().unwrap()),
+            days: i32::decode(encoded[4..8].try_into().unwrap()),
+            nanoseconds: i64::decode(encoded[8..].try_into().unwrap()),
+        }
     }
 }
 

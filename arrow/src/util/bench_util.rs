@@ -20,7 +20,7 @@
 use crate::array::*;
 use crate::datatypes::*;
 use crate::util::test_util::seedable_rng;
-use arrow_buffer::Buffer;
+use arrow_buffer::{Buffer, IntervalMonthDayNano};
 use rand::distributions::uniform::SampleUniform;
 use rand::thread_rng;
 use rand::Rng;
@@ -67,6 +67,24 @@ where
                 None
             } else {
                 Some(rng.gen())
+            }
+        })
+        .collect()
+}
+
+pub fn create_month_day_nano_array_with_seed(
+    size: usize,
+    null_density: f32,
+    seed: u64,
+) -> IntervalMonthDayNanoArray {
+    let mut rng = StdRng::seed_from_u64(seed);
+
+    (0..size)
+        .map(|_| {
+            if rng.gen::<f32>() < null_density {
+                None
+            } else {
+                Some(IntervalMonthDayNano::new(rng.gen(), rng.gen(), rng.gen()))
             }
         })
         .collect()
