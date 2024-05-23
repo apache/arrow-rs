@@ -869,7 +869,7 @@ pub fn parse_decimal<T: DecimalType>(
                             "can't parse the string value {s} to decimal"
                         )));
                     }
-                    if fractionals == scale {
+                    if fractionals == scale && scale != 0 {
                         // We have processed all the digits that we need. All that
                         // is left is to validate that the rest of the string contains
                         // valid digits.
@@ -2416,6 +2416,8 @@ mod tests {
             ("0.12e+6", "120000", 10),
             ("000000000001e0", "000000000001", 3),
             ("000001.1034567002e0", "000001.1034567002", 3),
+            ("1.234e16", "12340000000000000", 0),
+            ("123.4e16", "1234000000000000000", 0),
         ];
         for (e, d, scale) in e_notation_tests {
             let result_128_e = parse_decimal::<Decimal128Type>(e, 20, scale);
@@ -2454,17 +2456,19 @@ mod tests {
             );
         }
         let overflow_parse_tests = [
-            "12345678",
-            "1.2345678e7",
-            "12345678.9",
-            "1.23456789e+7",
-            "99999999.99",
-            "9.999999999e7",
-            "12345678908765.123456",
-            "123456789087651234.56e-4",
+            ("12345678", 3),
+            ("1.2345678e7", 3),
+            ("12345678.9", 3),
+            ("1.23456789e+7", 3),
+            ("99999999.99", 3),
+            ("9.999999999e7", 3),
+            ("12345678908765.123456", 3),
+            ("123456789087651234.56e-4", 3),
+            ("1234560000000", 0),
+            ("1.23456e12", 0),
         ];
-        for s in overflow_parse_tests {
-            let result_128 = parse_decimal::<Decimal128Type>(s, 10, 3);
+        for (s, scale) in overflow_parse_tests {
+            let result_128 = parse_decimal::<Decimal128Type>(s, 10, scale);
             let expected_128 = "Parser error: parse decimal overflow";
             let actual_128 = result_128.unwrap_err().to_string();
 
@@ -2473,7 +2477,7 @@ mod tests {
                 "actual: '{actual_128}', expected: '{expected_128}'"
             );
 
-            let result_256 = parse_decimal::<Decimal256Type>(s, 10, 3);
+            let result_256 = parse_decimal::<Decimal256Type>(s, 10, scale);
             let expected_256 = "Parser error: parse decimal overflow";
             let actual_256 = result_256.unwrap_err().to_string();
 

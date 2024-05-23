@@ -105,7 +105,17 @@ fn make_encoder_impl<'a>(
 
         DataType::FixedSizeBinary(_) => {
             let array = array.as_fixed_size_binary();
-            (Box::new(FixedSizeBinaryEncoder::new(array)) as _, array.nulls().cloned())
+            (Box::new(BinaryEncoder::new(array)) as _, array.nulls().cloned())
+        }
+
+        DataType::Binary => {
+            let array: &BinaryArray = array.as_binary();
+            (Box::new(BinaryEncoder::new(array)) as _, array.nulls().cloned())
+        }
+
+        DataType::LargeBinary => {
+            let array: &LargeBinaryArray = array.as_binary();
+            (Box::new(BinaryEncoder::new(array)) as _, array.nulls().cloned())
         }
 
         DataType::Struct(fields) => {
@@ -509,15 +519,23 @@ impl<'a> Encoder for MapEncoder<'a> {
     }
 }
 
-struct FixedSizeBinaryEncoder<'a>(&'a FixedSizeBinaryArray);
+/// New-type wrapper for encoding the binary types in arrow: `Binary`, `LargeBinary`
+/// and `FixedSizeBinary` as hex strings in JSON.
+struct BinaryEncoder<B>(B);
 
-impl<'a> FixedSizeBinaryEncoder<'a> {
-    fn new(array: &'a FixedSizeBinaryArray) -> Self {
+impl<'a, B> BinaryEncoder<B>
+where
+    B: ArrayAccessor<Item = &'a [u8]>,
+{
+    fn new(array: B) -> Self {
         Self(array)
     }
 }
 
-impl<'a> Encoder for FixedSizeBinaryEncoder<'a> {
+impl<'a, B> Encoder for BinaryEncoder<B>
+where
+    B: ArrayAccessor<Item = &'a [u8]>,
+{
     fn encode(&mut self, idx: usize, out: &mut Vec<u8>) {
         out.push(b'"');
         for byte in self.0.value(idx) {

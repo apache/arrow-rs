@@ -46,7 +46,7 @@ use crate::cast::dictionary::*;
 use crate::cast::list::*;
 use crate::cast::string::*;
 
-use arrow_buffer::ScalarBuffer;
+use arrow_buffer::{IntervalMonthDayNano, ScalarBuffer};
 use arrow_data::ByteView;
 use chrono::{NaiveTime, Offset, TimeZone, Utc};
 use std::cmp::Ordering;
@@ -157,6 +157,8 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
         (_, LargeList(list_to)) => can_cast_types(from_type, list_to.data_type()),
         (_, FixedSizeList(list_to,size)) if *size == 1 => {
             can_cast_types(from_type, list_to.data_type())},
+        (FixedSizeList(list_from,size), _) if *size == 1 => {
+            can_cast_types(list_from.data_type(), to_type)},
         // cast one decimal type to another decimal type
         (Decimal128(_, _), Decimal128(_, _)) => true,
         (Decimal256(_, _), Decimal256(_, _)) => true,
@@ -275,11 +277,6 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
             DayTime => false,
             MonthDayNano => false,
         },
-        (Int64, Interval(to_type)) => match to_type {
-            YearMonth => false,
-            DayTime => true,
-            MonthDayNano => false,
-        },
         (Duration(_), Interval(MonthDayNano)) => true,
         (Interval(MonthDayNano), Duration(_)) => true,
         (Interval(YearMonth), Interval(MonthDayNano)) => true,
@@ -392,9 +389,9 @@ fn cast_month_day_nano_to_duration<D: ArrowTemporalType<Native = i64>>(
     };
 
     if cast_options.safe {
-        let iter = array
-            .iter()
-            .map(|v| v.and_then(|v| (v >> 64 == 0).then_some((v as i64) / scale)));
+        let iter = array.iter().map(|v| {
+            v.and_then(|v| (v.days == 0 && v.months == 0).then_some(v.nanoseconds / scale))
+        });
         Ok(Arc::new(unsafe {
             PrimitiveArray::<D>::from_trusted_len_iter(iter)
         }))
@@ -402,8 +399,8 @@ fn cast_month_day_nano_to_duration<D: ArrowTemporalType<Native = i64>>(
         let vec = array
             .iter()
             .map(|v| {
-                v.map(|v| match v >> 64 {
-                    0 => Ok((v as i64) / scale),
+                v.map(|v| match v.days == 0 && v.months == 0 {
+                    true => Ok((v.nanoseconds) / scale),
                     _ => Err(ArrowError::ComputeError(
                         "Cannot convert interval containing non-zero months or days to duration"
                             .to_string(),
@@ -442,9 +439,12 @@ fn cast_duration_to_interval<D: ArrowTemporalType<Native = i64>>(
     };
 
     if cast_options.safe {
-        let iter = array
-            .iter()
-            .map(|v| v.and_then(|v| v.checked_mul(scale).map(|v| v as i128)));
+        let iter = array.iter().map(|v| {
+            v.and_then(|v| {
+                v.checked_mul(scale)
+                    .map(|v| IntervalMonthDayNano::new(0, 0, v))
+            })
+        });
         Ok(Arc::new(unsafe {
             PrimitiveArray::<IntervalMonthDayNanoType>::from_trusted_len_iter(iter)
         }))
@@ -454,7 +454,7 @@ fn cast_duration_to_interval<D: ArrowTemporalType<Native = i64>>(
             .map(|v| {
                 v.map(|v| {
                     if let Ok(v) = v.mul_checked(scale) {
-                        Ok(v as i128)
+                        Ok(IntervalMonthDayNano::new(0, 0, v))
                     } else {
                         Err(ArrowError::ComputeError(format!(
                             "Cannot cast to {:?}. Overflowing on {:?}",
@@ -711,6 +711,9 @@ pub fn cast_with_options(
         (_, LargeList(ref to)) => cast_values_to_list::<i64>(array, to, cast_options),
         (_, FixedSizeList(ref to, size)) if *size == 1 => {
             cast_values_to_fixed_size_list(array, to, *size, cast_options)
+        }
+        (FixedSizeList(_, size), _) if *size == 1 => {
+            cast_single_element_fixed_size_list_to_values(array, to_type, cast_options)
         }
         (Decimal128(_, s1), Decimal128(p2, s2)) => {
             cast_decimal_to_decimal_same_type::<Decimal128Type>(
@@ -1959,17 +1962,8 @@ pub fn cast_with_options(
         (Interval(IntervalUnit::DayTime), Interval(IntervalUnit::MonthDayNano)) => {
             cast_interval_day_time_to_interval_month_day_nano(array, cast_options)
         }
-        (Interval(IntervalUnit::YearMonth), Int64) => {
-            cast_numeric_arrays::<IntervalYearMonthType, Int64Type>(array, cast_options)
-        }
-        (Interval(IntervalUnit::DayTime), Int64) => {
-            cast_reinterpret_arrays::<IntervalDayTimeType, Int64Type>(array)
-        }
         (Int32, Interval(IntervalUnit::YearMonth)) => {
             cast_reinterpret_arrays::<Int32Type, IntervalYearMonthType>(array)
-        }
-        (Int64, Interval(IntervalUnit::DayTime)) => {
-            cast_reinterpret_arrays::<Int64Type, IntervalDayTimeType>(array)
         }
         (_, _) => Err(ArrowError::CastError(format!(
             "Casting from {from_type:?} to {to_type:?} not supported",
@@ -2335,7 +2329,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use arrow_buffer::{Buffer, NullBuffer};
+    use arrow_buffer::{Buffer, IntervalDayTime, NullBuffer};
     use chrono::NaiveDate;
     use half::f16;
 
@@ -5060,25 +5054,6 @@ mod tests {
     }
 
     #[test]
-    fn test_cast_interval_to_i64() {
-        let base = vec![5, 6, 7, 8];
-
-        let interval_arrays = vec![
-            Arc::new(IntervalDayTimeArray::from(base.clone())) as ArrayRef,
-            Arc::new(IntervalYearMonthArray::from(
-                base.iter().map(|x| *x as i32).collect::<Vec<i32>>(),
-            )) as ArrayRef,
-        ];
-
-        for arr in interval_arrays {
-            assert!(can_cast_types(arr.data_type(), &DataType::Int64));
-            let result = cast(&arr, &DataType::Int64).unwrap();
-            let result = result.as_primitive::<Int64Type>();
-            assert_eq!(base.as_slice(), result.values());
-        }
-    }
-
-    #[test]
     fn test_cast_to_strings() {
         let a = Int32Array::from(vec![1, 2, 3]);
         let out = cast(&a, &DataType::Utf8).unwrap();
@@ -6896,6 +6871,85 @@ mod tests {
     }
 
     #[test]
+    fn test_cast_single_element_fixed_size_list() {
+        // FixedSizeList<T>[1] => T
+        let from_array = Arc::new(FixedSizeListArray::from_iter_primitive::<Int16Type, _, _>(
+            [(Some([Some(5)]))],
+            1,
+        )) as ArrayRef;
+        let casted_array = cast(&from_array, &DataType::Int32).unwrap();
+        let actual: &Int32Array = casted_array.as_primitive();
+        let expected = Int32Array::from(vec![Some(5)]);
+        assert_eq!(&expected, actual);
+
+        // FixedSizeList<T>[1] => FixedSizeList<U>[1]
+        let from_array = Arc::new(FixedSizeListArray::from_iter_primitive::<Int16Type, _, _>(
+            [(Some([Some(5)]))],
+            1,
+        )) as ArrayRef;
+        let to_field = Arc::new(Field::new("dummy", DataType::Float32, false));
+        let actual = cast(&from_array, &DataType::FixedSizeList(to_field.clone(), 1)).unwrap();
+        let expected = Arc::new(FixedSizeListArray::new(
+            to_field.clone(),
+            1,
+            Arc::new(Float32Array::from(vec![Some(5.0)])) as ArrayRef,
+            None,
+        )) as ArrayRef;
+        assert_eq!(*expected, *actual);
+
+        // FixedSizeList<T>[1] => FixedSizeList<FixdSizedList<U>[1]>[1]
+        let from_array = Arc::new(FixedSizeListArray::from_iter_primitive::<Int16Type, _, _>(
+            [(Some([Some(5)]))],
+            1,
+        )) as ArrayRef;
+        let to_field_inner = Arc::new(Field::new("item", DataType::Float32, false));
+        let to_field = Arc::new(Field::new(
+            "dummy",
+            DataType::FixedSizeList(to_field_inner.clone(), 1),
+            false,
+        ));
+        let actual = cast(&from_array, &DataType::FixedSizeList(to_field.clone(), 1)).unwrap();
+        let expected = Arc::new(FixedSizeListArray::new(
+            to_field.clone(),
+            1,
+            Arc::new(FixedSizeListArray::new(
+                to_field_inner.clone(),
+                1,
+                Arc::new(Float32Array::from(vec![Some(5.0)])) as ArrayRef,
+                None,
+            )) as ArrayRef,
+            None,
+        )) as ArrayRef;
+        assert_eq!(*expected, *actual);
+
+        // T => FixedSizeList<T>[1] (non-nullable)
+        let field = Arc::new(Field::new("dummy", DataType::Float32, false));
+        let from_array = Arc::new(Int8Array::from(vec![Some(5)])) as ArrayRef;
+        let casted_array = cast(&from_array, &DataType::FixedSizeList(field.clone(), 1)).unwrap();
+        let actual = casted_array.as_fixed_size_list();
+        let expected = Arc::new(FixedSizeListArray::new(
+            field.clone(),
+            1,
+            Arc::new(Float32Array::from(vec![Some(5.0)])) as ArrayRef,
+            None,
+        )) as ArrayRef;
+        assert_eq!(expected.as_ref(), actual);
+
+        // T => FixedSizeList<T>[1] (nullable)
+        let field = Arc::new(Field::new("nullable", DataType::Float32, true));
+        let from_array = Arc::new(Int8Array::from(vec![None])) as ArrayRef;
+        let casted_array = cast(&from_array, &DataType::FixedSizeList(field.clone(), 1)).unwrap();
+        let actual = casted_array.as_fixed_size_list();
+        let expected = Arc::new(FixedSizeListArray::new(
+            field.clone(),
+            1,
+            Arc::new(Float32Array::from(vec![None])) as ArrayRef,
+            None,
+        )) as ArrayRef;
+        assert_eq!(expected.as_ref(), actual);
+    }
+
+    #[test]
     fn test_cast_list_containers() {
         // large-list to list
         let array = Arc::new(make_large_list_array()) as ArrayRef;
@@ -8058,6 +8112,34 @@ mod tests {
     }
 
     #[test]
+    fn test_cast_outside_supported_range_for_nanoseconds() {
+        const EXPECTED_ERROR_MESSAGE: &str = "The dates that can be represented as nanoseconds have to be between 1677-09-21T00:12:44.0 and 2262-04-11T23:47:16.854775804";
+
+        let array = StringArray::from(vec![Some("1650-01-01 01:01:01.000001")]);
+
+        let cast_options = CastOptions {
+            safe: false,
+            format_options: FormatOptions::default(),
+        };
+
+        let result = cast_string_to_timestamp::<i32, TimestampNanosecondType>(
+            &array,
+            &None::<Arc<str>>,
+            &cast_options,
+        );
+
+        let err = result.unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            format!(
+                "Cast error: Overflow converting {} to Nanosecond. {}",
+                array.value(0),
+                EXPECTED_ERROR_MESSAGE
+            )
+        );
+    }
+
+    #[test]
     fn test_cast_date32_to_timestamp() {
         let a = Date32Array::from(vec![Some(18628), Some(18993), None]); // 2021-1-1, 2022-1-1
         let array = Arc::new(a) as ArrayRef;
@@ -8379,7 +8461,10 @@ mod tests {
             casted_array.data_type(),
             &DataType::Interval(IntervalUnit::MonthDayNano)
         );
-        assert_eq!(casted_array.value(0), 1234567000000000);
+        assert_eq!(
+            casted_array.value(0),
+            IntervalMonthDayNano::new(0, 0, 1234567000000000)
+        );
 
         let array = vec![i64::MAX];
         let casted_array = cast_from_duration_to_interval::<DurationSecondType>(
@@ -8409,7 +8494,10 @@ mod tests {
             casted_array.data_type(),
             &DataType::Interval(IntervalUnit::MonthDayNano)
         );
-        assert_eq!(casted_array.value(0), 1234567000000);
+        assert_eq!(
+            casted_array.value(0),
+            IntervalMonthDayNano::new(0, 0, 1234567000000)
+        );
 
         let array = vec![i64::MAX];
         let casted_array = cast_from_duration_to_interval::<DurationMillisecondType>(
@@ -8439,7 +8527,10 @@ mod tests {
             casted_array.data_type(),
             &DataType::Interval(IntervalUnit::MonthDayNano)
         );
-        assert_eq!(casted_array.value(0), 1234567000);
+        assert_eq!(
+            casted_array.value(0),
+            IntervalMonthDayNano::new(0, 0, 1234567000)
+        );
 
         let array = vec![i64::MAX];
         let casted_array = cast_from_duration_to_interval::<DurationMicrosecondType>(
@@ -8469,7 +8560,10 @@ mod tests {
             casted_array.data_type(),
             &DataType::Interval(IntervalUnit::MonthDayNano)
         );
-        assert_eq!(casted_array.value(0), 1234567);
+        assert_eq!(
+            casted_array.value(0),
+            IntervalMonthDayNano::new(0, 0, 1234567)
+        );
 
         let array = vec![i64::MAX];
         let casted_array = cast_from_duration_to_interval::<DurationNanosecondType>(
@@ -8480,7 +8574,10 @@ mod tests {
             },
         )
         .unwrap();
-        assert_eq!(casted_array.value(0), 9223372036854775807);
+        assert_eq!(
+            casted_array.value(0),
+            IntervalMonthDayNano::new(0, 0, i64::MAX)
+        );
     }
 
     /// helper function to test casting from interval to duration
@@ -8505,14 +8602,15 @@ mod tests {
             safe: false,
             format_options: FormatOptions::default(),
         };
+        let v = IntervalMonthDayNano::new(0, 0, 1234567);
 
         // from interval month day nano to duration second
-        let array = vec![1234567].into();
+        let array = vec![v].into();
         let casted_array: DurationSecondArray =
             cast_from_interval_to_duration(&array, &nullable).unwrap();
         assert_eq!(casted_array.value(0), 0);
 
-        let array = vec![i128::MAX].into();
+        let array = vec![IntervalMonthDayNano::MAX].into();
         let casted_array: DurationSecondArray =
             cast_from_interval_to_duration(&array, &nullable).unwrap();
         assert!(!casted_array.is_valid(0));
@@ -8521,12 +8619,12 @@ mod tests {
         assert!(res.is_err());
 
         // from interval month day nano to duration millisecond
-        let array = vec![1234567].into();
+        let array = vec![v].into();
         let casted_array: DurationMillisecondArray =
             cast_from_interval_to_duration(&array, &nullable).unwrap();
         assert_eq!(casted_array.value(0), 1);
 
-        let array = vec![i128::MAX].into();
+        let array = vec![IntervalMonthDayNano::MAX].into();
         let casted_array: DurationMillisecondArray =
             cast_from_interval_to_duration(&array, &nullable).unwrap();
         assert!(!casted_array.is_valid(0));
@@ -8535,12 +8633,12 @@ mod tests {
         assert!(res.is_err());
 
         // from interval month day nano to duration microsecond
-        let array = vec![1234567].into();
+        let array = vec![v].into();
         let casted_array: DurationMicrosecondArray =
             cast_from_interval_to_duration(&array, &nullable).unwrap();
         assert_eq!(casted_array.value(0), 1234);
 
-        let array = vec![i128::MAX].into();
+        let array = vec![IntervalMonthDayNano::MAX].into();
         let casted_array =
             cast_from_interval_to_duration::<DurationMicrosecondType>(&array, &nullable).unwrap();
         assert!(!casted_array.is_valid(0));
@@ -8550,12 +8648,12 @@ mod tests {
         assert!(casted_array.is_err());
 
         // from interval month day nano to duration nanosecond
-        let array = vec![1234567].into();
+        let array = vec![v].into();
         let casted_array: DurationNanosecondArray =
             cast_from_interval_to_duration(&array, &nullable).unwrap();
         assert_eq!(casted_array.value(0), 1234567);
 
-        let array = vec![i128::MAX].into();
+        let array = vec![IntervalMonthDayNano::MAX].into();
         let casted_array: DurationNanosecondArray =
             cast_from_interval_to_duration(&array, &nullable).unwrap();
         assert!(!casted_array.is_valid(0));
@@ -8618,12 +8716,15 @@ mod tests {
             casted_array.data_type(),
             &DataType::Interval(IntervalUnit::MonthDayNano)
         );
-        assert_eq!(casted_array.value(0), 97812474910747780469848774134464512);
+        assert_eq!(
+            casted_array.value(0),
+            IntervalMonthDayNano::new(1234567, 0, 0)
+        );
     }
 
     /// helper function to test casting from interval day time to interval month day nano
     fn cast_from_interval_day_time_to_interval_month_day_nano(
-        array: Vec<i64>,
+        array: Vec<IntervalDayTime>,
         cast_options: &CastOptions,
     ) -> Result<PrimitiveArray<IntervalMonthDayNanoType>, ArrowError> {
         let array = PrimitiveArray::<IntervalDayTimeType>::from(array);
@@ -8641,7 +8742,7 @@ mod tests {
     #[test]
     fn test_cast_from_interval_day_time_to_interval_month_day_nano() {
         // from interval day time to interval month day nano
-        let array = vec![123];
+        let array = vec![IntervalDayTime::new(123, 0)];
         let casted_array =
             cast_from_interval_day_time_to_interval_month_day_nano(array, &CastOptions::default())
                 .unwrap();
@@ -8649,7 +8750,7 @@ mod tests {
             casted_array.data_type(),
             &DataType::Interval(IntervalUnit::MonthDayNano)
         );
-        assert_eq!(casted_array.value(0), 123000000);
+        assert_eq!(casted_array.value(0), IntervalMonthDayNano::new(0, 123, 0));
     }
 
     #[test]

@@ -57,10 +57,11 @@ impl<T> PageIndex<T> {
 
 #[derive(Debug, Clone, PartialEq)]
 #[allow(non_camel_case_types)]
-/// Typed statistics for a data page in a column chunk. This structure
-/// is obtained from decoding the [ColumnIndex] in the parquet file
-/// and can be used to skip decoding pages while reading the file
-/// data.
+/// Typed statistics for a data page in a column chunk.
+///
+/// This structure is part of the "Page Index" and is optionally part of
+/// [ColumnIndex] in the parquet file and can be used to skip decoding pages
+/// while reading the file data.
 pub enum Index {
     /// Sometimes reading page index from parquet file
     /// will only return pageLocations without min_max index,

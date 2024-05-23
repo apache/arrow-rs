@@ -17,7 +17,7 @@
 
 use crate::array::print_long_array;
 use crate::iterator::FixedSizeBinaryIter;
-use crate::{Array, ArrayAccessor, ArrayRef, FixedSizeListArray};
+use crate::{Array, ArrayAccessor, ArrayRef, FixedSizeListArray, Scalar};
 use arrow_buffer::buffer::NullBuffer;
 use arrow_buffer::{bit_util, ArrowNativeType, BooleanBuffer, Buffer, MutableBuffer};
 use arrow_data::{ArrayData, ArrayDataBuilder};
@@ -66,6 +66,12 @@ impl FixedSizeBinaryArray {
     /// Panics if [`Self::try_new`] returns an error
     pub fn new(size: i32, values: Buffer, nulls: Option<NullBuffer>) -> Self {
         Self::try_new(size, values, nulls).unwrap()
+    }
+
+    /// Create a new [`Scalar`] from `value`
+    pub fn new_scalar(value: impl AsRef<[u8]>) -> Scalar<Self> {
+        let v = value.as_ref();
+        Scalar::new(Self::new(v.len() as _, Buffer::from(v), None))
     }
 
     /// Create a new [`FixedSizeBinaryArray`] from the provided parts, returning an error on failure
@@ -547,6 +553,12 @@ impl From<Vec<Option<&[u8]>>> for FixedSizeBinaryArray {
 
 impl From<Vec<&[u8]>> for FixedSizeBinaryArray {
     fn from(v: Vec<&[u8]>) -> Self {
+        Self::try_from_iter(v.into_iter()).unwrap()
+    }
+}
+
+impl<const N: usize> From<Vec<&[u8; N]>> for FixedSizeBinaryArray {
+    fn from(v: Vec<&[u8; N]>) -> Self {
         Self::try_from_iter(v.into_iter()).unwrap()
     }
 }

@@ -20,6 +20,7 @@
 //! Though some common methods are available on enum, use pattern match to extract
 //! actual min and max values from statistics, see below:
 //!
+//! # Examples
 //! ```rust
 //! use parquet::file::statistics::Statistics;
 //!

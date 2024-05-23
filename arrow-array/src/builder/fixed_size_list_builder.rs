@@ -208,6 +208,11 @@ where
 
         FixedSizeListArray::new(field, self.list_len, values, nulls)
     }
+
+    /// Returns the current null buffer as a slice
+    pub fn validity_slice(&self) -> Option<&[u8]> {
+        self.null_buffer_builder.as_slice()
+    }
 }
 
 #[cfg(test)]

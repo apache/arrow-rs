@@ -20,7 +20,9 @@
 
 use crate::bit_iterator::BitSliceIterator;
 use arrow_buffer::buffer::{BooleanBuffer, NullBuffer};
-use arrow_buffer::{bit_util, i256, ArrowNativeType, Buffer, MutableBuffer};
+use arrow_buffer::{
+    bit_util, i256, ArrowNativeType, Buffer, IntervalDayTime, IntervalMonthDayNano, MutableBuffer,
+};
 use arrow_schema::{ArrowError, DataType, UnionMode};
 use std::ops::Range;
 use std::sync::Arc;
@@ -1568,8 +1570,10 @@ pub fn layout(data_type: &DataType) -> DataTypeLayout {
         DataType::Time32(_) => DataTypeLayout::new_fixed_width::<i32>(),
         DataType::Time64(_) => DataTypeLayout::new_fixed_width::<i64>(),
         DataType::Interval(YearMonth) => DataTypeLayout::new_fixed_width::<i32>(),
-        DataType::Interval(DayTime) => DataTypeLayout::new_fixed_width::<i64>(),
-        DataType::Interval(MonthDayNano) => DataTypeLayout::new_fixed_width::<i128>(),
+        DataType::Interval(DayTime) => DataTypeLayout::new_fixed_width::<IntervalDayTime>(),
+        DataType::Interval(MonthDayNano) => {
+            DataTypeLayout::new_fixed_width::<IntervalMonthDayNano>()
+        }
         DataType::Duration(_) => DataTypeLayout::new_fixed_width::<i64>(),
         DataType::Decimal128(_, _) => DataTypeLayout::new_fixed_width::<i128>(),
         DataType::Decimal256(_, _) => DataTypeLayout::new_fixed_width::<i256>(),
