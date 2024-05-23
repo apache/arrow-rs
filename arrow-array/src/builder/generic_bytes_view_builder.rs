@@ -23,10 +23,10 @@ use arrow_buffer::{Buffer, BufferBuilder, NullBufferBuilder, ScalarBuffer};
 use arrow_data::ByteView;
 use arrow_schema::ArrowError;
 
-use crate::{ArrayRef, GenericByteViewArray};
 use crate::builder::ArrayBuilder;
-use crate::types::{BinaryViewType, ByteViewType, StringViewType};
 use crate::types::bytes::ByteArrayNativeType;
+use crate::types::{BinaryViewType, ByteViewType, StringViewType};
+use crate::{ArrayRef, GenericByteViewArray};
 
 const DEFAULT_BLOCK_SIZE: u32 = 8 * 1024;
 
