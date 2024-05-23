@@ -1386,6 +1386,8 @@ pub(crate) mod bytes {
     impl<O: OffsetSizeTrait> ByteArrayTypeSealed for GenericBinaryType<O> {}
 
     pub trait ByteArrayNativeType: std::fmt::Debug + Send + Sync {
+        fn from_bytes_checked(b: &[u8]) -> Option<&Self>;
+
         /// # Safety
         ///
         /// `b` must be a valid byte sequence for `Self`
@@ -1394,12 +1396,22 @@ pub(crate) mod bytes {
 
     impl ByteArrayNativeType for [u8] {
         #[inline]
+        fn from_bytes_checked(b: &[u8]) -> Option<&Self> {
+            Some(b)
+        }
+
+        #[inline]
         unsafe fn from_bytes_unchecked(b: &[u8]) -> &Self {
             b
         }
     }
 
     impl ByteArrayNativeType for str {
+        #[inline]
+        fn from_bytes_checked(b: &[u8]) -> Option<&Self> {
+            std::str::from_utf8(b).ok()
+        }
+
         #[inline]
         unsafe fn from_bytes_unchecked(b: &[u8]) -> &Self {
             std::str::from_utf8_unchecked(b)
