@@ -57,7 +57,7 @@ tokio = { version = "1.25.0", features = ["sync", "macros", "rt", "time", "io-ut
 md-5 = { version = "0.10.6", default-features = false, optional = true }
 
 [target.'cfg(target_family="unix")'.dev-dependencies]
-nix = { version = "0.28.0", features = ["fs"] }
+nix = { version = "0.29.0", features = ["fs"] }
 
 [features]
 cloud = ["serde", "serde_json", "quick-xml", "hyper", "reqwest", "reqwest/json", "reqwest/stream", "chrono/serde", "base64", "rand", "ring"]
