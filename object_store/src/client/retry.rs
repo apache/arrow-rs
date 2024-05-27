@@ -401,7 +401,13 @@ impl RetryExt for reqwest::RequestBuilder {
 
     fn send_retry(self, ctx: &RequestContext) -> BoxFuture<'static, Result<Response>> {
         let request = self.retryable(&ctx.config);
-        Box::pin(async move { request.send().await })
+        let semaphore = Arc::clone(&ctx.semaphore);
+        Box::pin(async move {
+            let permit = semaphore.acquire_owned().await.unwrap();
+            let response = request.send().await;
+            drop(permit);
+            response
+        })
     }
 }
 

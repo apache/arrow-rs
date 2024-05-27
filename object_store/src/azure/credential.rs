@@ -942,7 +942,6 @@ mod tests {
     use super::*;
     use crate::azure::MicrosoftAzureBuilder;
     use crate::client::mock_server::MockServer;
-    use crate::RetryConfig;
     use crate::{ObjectStore, Path};
 
     #[tokio::test]
