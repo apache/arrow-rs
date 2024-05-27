@@ -143,7 +143,7 @@ pub struct RequestContext {
 
 impl Default for RequestContext {
     fn default() -> Self {
-        RequestContext {
+        Self {
             config: RetryConfig::default(),
             semaphore: Arc::new(Semaphore::new(5)),
         }
