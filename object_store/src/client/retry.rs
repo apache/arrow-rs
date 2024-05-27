@@ -369,7 +369,7 @@ pub trait RetryExt {
     /// # Panic
     ///
     /// This will panic if the request body is a stream
-    fn send_retry(self, config: &RetryConfig) -> BoxFuture<'static, Result<Response>>;
+    fn send_retry(self, ctx: &RequestContext) -> BoxFuture<'static, Result<Response>>;
 }
 
 impl RetryExt for reqwest::RequestBuilder {
@@ -388,8 +388,8 @@ impl RetryExt for reqwest::RequestBuilder {
         }
     }
 
-    fn send_retry(self, config: &RetryConfig) -> BoxFuture<'static, Result<Response>> {
-        let request = self.retryable(config);
+    fn send_retry(self, ctx: &RequestContext) -> BoxFuture<'static, Result<Response>> {
+        let request = self.retryable(&ctx.config);
         Box::pin(async move { request.send().await })
     }
 }
@@ -397,12 +397,14 @@ impl RetryExt for reqwest::RequestBuilder {
 #[cfg(test)]
 mod tests {
     use crate::client::mock_server::MockServer;
-    use crate::client::retry::{Error, RetryExt};
+    use crate::client::retry::{Error, RetryExt, RequestContext};
     use crate::RetryConfig;
     use hyper::header::LOCATION;
     use hyper::Response;
     use reqwest::{Client, Method, StatusCode};
     use std::time::Duration;
+    use tokio::sync::Semaphore;
+    use std::sync::Arc;
 
     #[tokio::test]
     async fn test_retry() {
@@ -413,13 +415,17 @@ mod tests {
             max_retries: 2,
             retry_timeout: Duration::from_secs(1000),
         };
+        let request_ctx = RequestContext {
+            config: retry,
+            semaphore: Arc::new(Semaphore::new(5)),
+        };
 
         let client = Client::builder()
             .timeout(Duration::from_millis(100))
             .build()
             .unwrap();
 
-        let do_request = || client.request(Method::GET, mock.url()).send_retry(&retry);
+        let do_request = || client.request(Method::GET, mock.url()).send_retry(&request_ctx);
 
         // Simple request should work
         let r = do_request().await.unwrap();
@@ -532,7 +538,7 @@ mod tests {
         assert_eq!(e.to_string(), "Received redirect without LOCATION, this normally indicates an incorrectly configured region");
 
         // Gives up after the retrying the specified number of times
-        for _ in 0..=retry.max_retries {
+        for _ in 0..=request_ctx.config.max_retries {
             mock.push(
                 Response::builder()
                     .status(StatusCode::BAD_GATEWAY)
@@ -554,7 +560,7 @@ mod tests {
         assert_eq!(r.status(), StatusCode::OK);
 
         // Gives up after retrying multiple panics
-        for _ in 0..=retry.max_retries {
+        for _ in 0..=request_ctx.config.max_retries {
             mock.push_fn(|_| panic!());
         }
         let e = do_request().await.unwrap_err().to_string();
@@ -578,7 +584,7 @@ mod tests {
             tokio::time::sleep(Duration::from_secs(10)).await;
             panic!()
         });
-        let res = client.request(Method::PUT, mock.url()).send_retry(&retry);
+        let res = client.request(Method::PUT, mock.url()).send_retry(&request_ctx);
         let e = res.await.unwrap_err().to_string();
         assert!(
             e.contains("Error after 0 retries in") && e.contains("error sending request for url"),
