@@ -36,7 +36,7 @@ use crate::multipart::PartId;
 use crate::path::DELIMITER;
 use crate::{
     Attribute, Attributes, ClientOptions, GetOptions, ListResult, MultipartId, Path,
-    PutMultipartOpts, PutPayload, PutResult, Result, RetryConfig, TagSet,
+    PutMultipartOpts, PutPayload, PutResult, RequestContext, Result, TagSet,
 };
 use async_trait::async_trait;
 use base64::prelude::BASE64_STANDARD;
@@ -172,7 +172,7 @@ pub struct S3Config {
     pub bucket_endpoint: String,
     pub credentials: AwsCredentialProvider,
     pub session_provider: Option<AwsCredentialProvider>,
-    pub retry_config: RetryConfig,
+    pub request_context: RequestContext,
     pub client_options: ClientOptions,
     pub sign_payload: bool,
     pub skip_signature: bool,
@@ -373,7 +373,7 @@ impl<'a> Request<'a> {
         let path = self.path.as_ref();
         self.builder
             .with_aws_sigv4(credential.authorizer(), sha)
-            .retryable(&self.config.retry_config)
+            .retryable(&self.config.request_context.config)
             .idempotent(self.idempotent)
             .payload(self.payload)
             .send()
@@ -483,7 +483,7 @@ impl S3Client {
             .header(CONTENT_TYPE, "application/xml")
             .body(body)
             .with_aws_sigv4(credential.authorizer(), Some(digest.as_ref()))
-            .send_retry(&self.config.retry_config)
+            .send_retry(&self.config.request_context)
             .await
             .context(DeleteObjectsRequestSnafu {})?
             .bytes()
@@ -597,7 +597,7 @@ impl S3Client {
             .query(&[("uploadId", upload_id)])
             .body(body)
             .with_aws_sigv4(credential.authorizer(), None)
-            .retryable(&self.config.retry_config)
+            .retryable(&self.config.request_context.config)
             .idempotent(true)
             .send()
             .await
@@ -627,7 +627,7 @@ impl S3Client {
             .client
             .request(Method::GET, url)
             .with_aws_sigv4(credential.authorizer(), None)
-            .send_retry(&self.config.retry_config)
+            .send_retry(&self.config.request_context)
             .await
             .map_err(|e| e.error(STORE, path.to_string()))?;
         Ok(response)
@@ -662,7 +662,7 @@ impl GetClient for S3Client {
         let response = builder
             .with_get_options(options)
             .with_aws_sigv4(credential.authorizer(), None)
-            .send_retry(&self.config.retry_config)
+            .send_retry(&self.config.request_context)
             .await
             .map_err(|e| e.error(STORE, path.to_string()))?;
 
@@ -708,7 +708,7 @@ impl ListClient for S3Client {
             .request(Method::GET, &url)
             .query(&query)
             .with_aws_sigv4(credential.authorizer(), None)
-            .send_retry(&self.config.retry_config)
+            .send_retry(&self.config.request_context)
             .await
             .context(ListRequestSnafu)?
             .bytes()
