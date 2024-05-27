@@ -30,7 +30,7 @@ use crate::path::{Path, DELIMITER};
 use crate::util::hex_encode;
 use crate::{
     Attribute, Attributes, ClientOptions, GetOptions, ListResult, MultipartId, PutMode,
-    PutMultipartOpts, PutOptions, PutPayload, PutResult, Result, RetryConfig,
+    PutMultipartOpts, PutOptions, PutPayload, PutResult, RequestContext, Result,
 };
 use async_trait::async_trait;
 use base64::prelude::BASE64_STANDARD;
@@ -132,7 +132,7 @@ pub struct GoogleCloudStorageConfig {
 
     pub bucket_name: String,
 
-    pub retry_config: RetryConfig,
+    pub request_ctx: RequestContext,
 
     pub client_options: ClientOptions,
 }
@@ -143,7 +143,7 @@ impl GoogleCloudStorageConfig {
         credentials: GcpCredentialProvider,
         signing_credentials: GcpSigningCredentialProvider,
         bucket_name: String,
-        retry_config: RetryConfig,
+        request_ctx: RequestContext,
         client_options: ClientOptions,
     ) -> Self {
         Self {
@@ -151,7 +151,7 @@ impl GoogleCloudStorageConfig {
             credentials,
             signing_credentials,
             bucket_name,
-            retry_config,
+            request_ctx,
             client_options,
         }
     }
@@ -223,7 +223,7 @@ impl<'a> Request<'a> {
         let resp = self
             .builder
             .bearer_auth(&credential.bearer)
-            .retryable(&self.config.retry_config)
+            .retryable(&self.config.request_ctx.config)
             .idempotent(self.idempotent)
             .payload(self.payload)
             .send()
@@ -320,7 +320,7 @@ impl GoogleCloudStorageClient {
             .post(&url)
             .bearer_auth(&credential.bearer)
             .json(&body)
-            .retryable(&self.config.retry_config)
+            .retryable(&self.config.request_ctx.config)
             .idempotent(true)
             .send()
             .await
@@ -449,7 +449,7 @@ impl GoogleCloudStorageClient {
             .header(CONTENT_TYPE, "application/octet-stream")
             .header(CONTENT_LENGTH, "0")
             .query(&[("uploadId", multipart_id)])
-            .send_retry(&self.config.retry_config)
+            .send_retry(&self.config.request_ctx)
             .await
             .context(RequestSnafu {
                 path: path.as_ref(),
@@ -494,7 +494,7 @@ impl GoogleCloudStorageClient {
             .bearer_auth(&credential.bearer)
             .query(&[("uploadId", upload_id)])
             .body(data)
-            .retryable(&self.config.retry_config)
+            .retryable(&self.config.request_ctx.config)
             .idempotent(true)
             .send()
             .await
@@ -544,7 +544,7 @@ impl GoogleCloudStorageClient {
             // Needed if reqwest is compiled with native-tls instead of rustls-tls
             // See https://github.com/apache/arrow-rs/pull/3921
             .header(CONTENT_LENGTH, 0)
-            .retryable(&self.config.retry_config)
+            .retryable(&self.config.request_ctx.config)
             .idempotent(!if_not_exists)
             .send()
             .await
@@ -591,7 +591,7 @@ impl GetClient for GoogleCloudStorageClient {
 
         let response = request
             .with_get_options(options)
-            .send_retry(&self.config.retry_config)
+            .send_retry(&self.config.request_ctx)
             .await
             .context(GetRequestSnafu {
                 path: path.as_ref(),
@@ -641,7 +641,7 @@ impl ListClient for GoogleCloudStorageClient {
             .request(Method::GET, url)
             .query(&query)
             .bearer_auth(&credential.bearer)
-            .send_retry(&self.config.retry_config)
+            .send_retry(&self.config.request_ctx)
             .await
             .context(ListRequestSnafu)?
             .bytes()

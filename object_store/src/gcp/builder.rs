@@ -25,9 +25,10 @@ use crate::gcp::{
     credential, GcpCredential, GcpCredentialProvider, GcpSigningCredential,
     GcpSigningCredentialProvider, GoogleCloudStorage, STORE,
 };
-use crate::{ClientConfigKey, ClientOptions, Result, RetryConfig, StaticCredentialProvider};
+use crate::{ClientConfigKey, ClientOptions, RequestContext, Result, RetryConfig, StaticCredentialProvider};
 use serde::{Deserialize, Serialize};
 use snafu::{OptionExt, ResultExt, Snafu};
+use tokio::sync::Semaphore;
 use std::str::FromStr;
 use std::sync::Arc;
 use url::Url;
@@ -101,8 +102,8 @@ pub struct GoogleCloudStorageBuilder {
     service_account_key: Option<String>,
     /// Path to the application credentials file.
     application_credentials_path: Option<String>,
-    /// Retry config
-    retry_config: RetryConfig,
+    /// Request Context
+    request_ctx: RequestContext,
     /// Client options
     client_options: ClientOptions,
     /// Credentials
@@ -200,7 +201,7 @@ impl Default for GoogleCloudStorageBuilder {
             service_account_path: None,
             service_account_key: None,
             application_credentials_path: None,
-            retry_config: Default::default(),
+            request_ctx: Default::default(),
             client_options: ClientOptions::new().with_allow_http(true),
             url: None,
             credentials: None,
@@ -383,7 +384,7 @@ impl GoogleCloudStorageBuilder {
 
     /// Set the retry configuration
     pub fn with_retry(mut self, retry_config: RetryConfig) -> Self {
-        self.retry_config = retry_config;
+        self.request_ctx.config = retry_config;
         self
     }
 
@@ -410,6 +411,12 @@ impl GoogleCloudStorageBuilder {
     /// Sets the client options, overriding any already set
     pub fn with_client_options(mut self, options: ClientOptions) -> Self {
         self.client_options = options;
+        self
+    }
+
+    /// Docs
+    pub fn with_sempahore_permits(mut self, permits: usize) -> Self {
+        self.request_ctx.semaphore = Arc::new(Semaphore::new(permits));
         self
     }
 
@@ -459,7 +466,7 @@ impl GoogleCloudStorageBuilder {
             Arc::new(TokenCredentialProvider::new(
                 credentials.token_provider()?,
                 self.client_options.client()?,
-                self.retry_config.clone(),
+                self.request_ctx.clone(),
             )) as _
         } else if let Some(credentials) = application_default_credentials.clone() {
             match credentials {
@@ -467,14 +474,14 @@ impl GoogleCloudStorageBuilder {
                     Arc::new(TokenCredentialProvider::new(
                         token,
                         self.client_options.client()?,
-                        self.retry_config.clone(),
+                        self.request_ctx.clone(),
                     )) as _
                 }
                 ApplicationDefaultCredentials::ServiceAccount(token) => {
                     Arc::new(TokenCredentialProvider::new(
                         token.token_provider()?,
                         self.client_options.client()?,
-                        self.retry_config.clone(),
+                        self.request_ctx.clone(),
                     )) as _
                 }
             }
@@ -482,7 +489,7 @@ impl GoogleCloudStorageBuilder {
             Arc::new(TokenCredentialProvider::new(
                 InstanceCredentialProvider::default(),
                 self.client_options.metadata_client()?,
-                self.retry_config.clone(),
+                self.request_ctx.clone(),
             )) as _
         };
 
@@ -501,7 +508,7 @@ impl GoogleCloudStorageBuilder {
                     Arc::new(TokenCredentialProvider::new(
                         AuthorizedUserSigningCredentials::from(token)?,
                         self.client_options.client()?,
-                        self.retry_config.clone(),
+                        self.request_ctx.clone(),
                     )) as _
                 }
                 ApplicationDefaultCredentials::ServiceAccount(token) => {
@@ -512,7 +519,7 @@ impl GoogleCloudStorageBuilder {
             Arc::new(TokenCredentialProvider::new(
                 InstanceSigningCredentialProvider::default(),
                 self.client_options.metadata_client()?,
-                self.retry_config.clone(),
+                self.request_ctx.clone(),
             )) as _
         };
 
@@ -521,7 +528,7 @@ impl GoogleCloudStorageBuilder {
             credentials,
             signing_credentials,
             bucket_name,
-            self.retry_config,
+            self.request_ctx,
             self.client_options,
         );
 
