@@ -136,7 +136,7 @@ pub struct AmazonS3Builder {
     /// Url
     url: Option<String>,
     /// Request context
-    request_context: RequestContext,
+    request_ctx: RequestContext,
     /// When set to true, fallback to IMDSv1
     imdsv1_fallback: ConfigValue<bool>,
     /// When set to true, virtual hosted style request has to be used
@@ -695,7 +695,7 @@ impl AmazonS3Builder {
 
     /// Set the retry configuration
     pub fn with_retry(mut self, retry_config: RetryConfig) -> Self {
-        self.request_context.config = retry_config;
+        self.request_ctx.config = retry_config;
         self
     }
 
@@ -827,7 +827,7 @@ impl AmazonS3Builder {
 
     /// Docs
     pub fn with_sempahore_permits(mut self, permits: usize) -> Self {
-        self.request_context.semaphore = Arc::new(Semaphore::new(permits));
+        self.request_ctx.semaphore = Arc::new(Semaphore::new(permits));
         self
     }
 
@@ -890,13 +890,13 @@ impl AmazonS3Builder {
             Arc::new(TokenCredentialProvider::new(
                 token,
                 client,
-                self.request_context.clone(),
+                self.request_ctx.clone(),
             )) as _
         } else if let Some(uri) = self.container_credentials_relative_uri {
             info!("Using Task credential provider");
             Arc::new(TaskCredentialProvider {
                 url: format!("http://169.254.170.2{uri}"),
-                request_ctx: self.request_context.clone(),
+                request_ctx: self.request_ctx.clone(),
                 // The instance metadata endpoint is access over HTTP
                 client: self.client_options.clone().with_allow_http(true).client()?,
                 cache: Default::default(),
@@ -915,7 +915,7 @@ impl AmazonS3Builder {
             Arc::new(TokenCredentialProvider::new(
                 token,
                 self.client_options.metadata_client()?,
-                self.request_context.clone(),
+                self.request_ctx.clone(),
             )) as _
         };
 
@@ -934,7 +934,7 @@ impl AmazonS3Builder {
                             credentials: Arc::clone(&credentials),
                         },
                         self.client_options.client()?,
-                        self.request_context.clone(),
+                        self.request_ctx.clone(),
                     )
                     .with_min_ttl(Duration::from_secs(60)), // Credentials only valid for 5 minutes
                 );
@@ -973,7 +973,7 @@ impl AmazonS3Builder {
             bucket_endpoint,
             credentials,
             session_provider,
-            request_context: self.request_context,
+            request_ctx: self.request_ctx,
             client_options: self.client_options,
             sign_payload: !self.unsigned_payload.get()?,
             skip_signature: self.skip_signature.get()?,
