@@ -121,8 +121,12 @@ impl From<Error> for std::io::Error {
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
 
+/// Docs
+#[derive(Debug)]
 pub struct RequestContext {
+    /// Retry configuration
     pub config: RetryConfig,
+    /// Semaphore that limits the number of retry requests
     pub semaphore: Arc<Semaphore>,
 }
 
