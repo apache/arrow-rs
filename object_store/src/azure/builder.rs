@@ -23,10 +23,11 @@ use crate::azure::credential::{
 use crate::azure::{AzureCredential, AzureCredentialProvider, MicrosoftAzure, STORE};
 use crate::client::TokenCredentialProvider;
 use crate::config::ConfigValue;
-use crate::{ClientConfigKey, ClientOptions, Result, RetryConfig, StaticCredentialProvider};
+use crate::{ClientConfigKey, ClientOptions, RequestContext, Result, RetryConfig, StaticCredentialProvider};
 use percent_encoding::percent_decode_str;
 use serde::{Deserialize, Serialize};
 use snafu::{OptionExt, ResultExt, Snafu};
+use tokio::sync::Semaphore;
 use std::str::FromStr;
 use std::sync::Arc;
 use url::Url;
@@ -159,7 +160,7 @@ pub struct MicrosoftAzureBuilder {
     /// When set to true, azure cli has to be used for acquiring access token
     use_azure_cli: ConfigValue<bool>,
     /// Retry config
-    retry_config: RetryConfig,
+    request_ctx: RequestContext,
     /// Client options
     client_options: ClientOptions,
     /// Credentials
@@ -740,7 +741,7 @@ impl MicrosoftAzureBuilder {
 
     /// Set the retry configuration
     pub fn with_retry(mut self, retry_config: RetryConfig) -> Self {
-        self.retry_config = retry_config;
+        self.request_ctx.config = retry_config;
         self
     }
 
@@ -803,6 +804,12 @@ impl MicrosoftAzureBuilder {
     /// If set to `true` will ignore any tags provided to put_opts
     pub fn with_disable_tagging(mut self, ignore: bool) -> Self {
         self.disable_tagging = ignore.into();
+        self
+    }
+
+    /// Docs
+    pub fn with_sempahore_permits(mut self, permits: usize) -> Self {
+        self.request_ctx.semaphore = Arc::new(Semaphore::new(permits));
         self
     }
 
@@ -873,7 +880,7 @@ impl MicrosoftAzureBuilder {
                 Arc::new(TokenCredentialProvider::new(
                     client_credential,
                     self.client_options.client()?,
-                    self.retry_config.clone(),
+                    self.request_ctx.clone(),
                 )) as _
             } else if let (Some(client_id), Some(client_secret), Some(tenant_id)) =
                 (&self.client_id, self.client_secret, &self.tenant_id)
@@ -887,7 +894,7 @@ impl MicrosoftAzureBuilder {
                 Arc::new(TokenCredentialProvider::new(
                     client_credential,
                     self.client_options.client()?,
-                    self.retry_config.clone(),
+                    self.request_ctx.clone(),
                 )) as _
             } else if let Some(query_pairs) = self.sas_query_pairs {
                 static_creds(AzureCredential::SASToken(query_pairs))
@@ -905,7 +912,7 @@ impl MicrosoftAzureBuilder {
                 Arc::new(TokenCredentialProvider::new(
                     msi_credential,
                     self.client_options.metadata_client()?,
-                    self.retry_config.clone(),
+                    self.request_ctx.clone(),
                 )) as _
             };
             (false, url, credential, account_name)
@@ -917,7 +924,7 @@ impl MicrosoftAzureBuilder {
             skip_signature: self.skip_signature.get()?,
             container,
             disable_tagging: self.disable_tagging.get()?,
-            retry_config: self.retry_config,
+            request_ctx: self.request_ctx,
             client_options: self.client_options,
             service: storage_url,
             credentials: auth,

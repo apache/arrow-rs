@@ -953,7 +953,7 @@ mod tests {
 
         let endpoint = server.url();
         let client = Client::new();
-        let retry_config = RetryConfig::default();
+        let request_ctx = RequestContext::default();
 
         // Test IMDS
         server.push_fn(|req| {
@@ -993,7 +993,7 @@ mod tests {
         );
 
         let token = credential
-            .fetch_token(&client, &retry_config)
+            .fetch_token(&client, &request_ctx)
             .await
             .unwrap();
 
@@ -1012,7 +1012,7 @@ mod tests {
 
         let endpoint = server.url();
         let client = Client::new();
-        let retry_config = RetryConfig::default();
+        let request_ctx = RequestContext::default();
 
         // Test IMDS
         server.push_fn(move |req| {
@@ -1045,7 +1045,7 @@ mod tests {
         );
 
         let token = credential
-            .fetch_token(&client, &retry_config)
+            .fetch_token(&client, &request_ctx)
             .await
             .unwrap();
 
