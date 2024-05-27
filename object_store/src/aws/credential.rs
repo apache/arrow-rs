@@ -438,12 +438,17 @@ impl TokenProvider for InstanceCredentialProvider {
         client: &Client,
         request_ctx: &RequestContext,
     ) -> Result<TemporaryToken<Arc<AwsCredential>>> {
-        instance_creds(client, request_ctx, &self.metadata_endpoint, self.imdsv1_fallback)
-            .await
-            .map_err(|source| crate::Error::Generic {
-                store: STORE,
-                source,
-            })
+        instance_creds(
+            client,
+            request_ctx,
+            &self.metadata_endpoint,
+            self.imdsv1_fallback,
+        )
+        .await
+        .map_err(|source| crate::Error::Generic {
+            store: STORE,
+            source,
+        })
     }
 }
 
@@ -661,7 +666,12 @@ async fn task_credential(
     request_ctx: &RequestContext,
     url: &str,
 ) -> Result<TemporaryToken<Arc<AwsCredential>>, StdError> {
-    let creds: InstanceCredentials = client.get(url).send_retry(request_ctx).await?.json().await?;
+    let creds: InstanceCredentials = client
+        .get(url)
+        .send_retry(request_ctx)
+        .await?
+        .json()
+        .await?;
 
     let now = Utc::now();
     let ttl = (creds.expiration - now).to_std().unwrap_or_default();

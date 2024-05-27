@@ -992,10 +992,7 @@ mod tests {
             Some(format!("{endpoint}/metadata/identity/oauth2/token")),
         );
 
-        let token = credential
-            .fetch_token(&client, &request_ctx)
-            .await
-            .unwrap();
+        let token = credential.fetch_token(&client, &request_ctx).await.unwrap();
 
         assert_eq!(
             token.token.as_ref(),
@@ -1044,10 +1041,7 @@ mod tests {
             Some(endpoint.to_string()),
         );
 
-        let token = credential
-            .fetch_token(&client, &request_ctx)
-            .await
-            .unwrap();
+        let token = credential.fetch_token(&client, &request_ctx).await.unwrap();
 
         assert_eq!(
             token.token.as_ref(),

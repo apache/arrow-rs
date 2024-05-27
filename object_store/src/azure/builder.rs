@@ -23,13 +23,15 @@ use crate::azure::credential::{
 use crate::azure::{AzureCredential, AzureCredentialProvider, MicrosoftAzure, STORE};
 use crate::client::TokenCredentialProvider;
 use crate::config::ConfigValue;
-use crate::{ClientConfigKey, ClientOptions, RequestContext, Result, RetryConfig, StaticCredentialProvider};
+use crate::{
+    ClientConfigKey, ClientOptions, RequestContext, Result, RetryConfig, StaticCredentialProvider,
+};
 use percent_encoding::percent_decode_str;
 use serde::{Deserialize, Serialize};
 use snafu::{OptionExt, ResultExt, Snafu};
-use tokio::sync::Semaphore;
 use std::str::FromStr;
 use std::sync::Arc;
+use tokio::sync::Semaphore;
 use url::Url;
 
 /// The well-known account used by Azurite and the legacy Azure Storage Emulator.
@@ -807,7 +809,7 @@ impl MicrosoftAzureBuilder {
         self
     }
 
-    /// Docs
+    /// Set the number of permits for the semaphore controlling concurrency.
     pub fn with_sempahore_permits(mut self, permits: usize) -> Self {
         self.request_ctx.semaphore = Arc::new(Semaphore::new(permits));
         self

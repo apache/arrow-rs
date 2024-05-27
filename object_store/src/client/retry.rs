@@ -121,12 +121,23 @@ impl From<Error> for std::io::Error {
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
 
-/// Docs
+/// Holds the configuration and controls the concurrency for retry requests.
+///
+/// `RequestContext` contains the retry configuration and a semaphore to limit
+/// the number of concurrent retry requests, ensuring that requests do not
+/// overwhelm the server.
 #[derive(Debug, Clone)]
 pub struct RequestContext {
-    /// Retry configuration
+    /// Configuration for retrying requests.
+    ///
+    /// This configuration defines how retries should be handled, including
+    /// the backoff strategy and maximum retry limits.
     pub config: RetryConfig,
-    /// Semaphore that limits the number of retry requests
+
+    /// Semaphore to limit the number of concurrent retry requests.
+    ///
+    /// The semaphore controls the number of retry requests that can be executed
+    /// concurrently, preventing too many requests from being sent at once.
     pub semaphore: Arc<Semaphore>,
 }
 
@@ -397,14 +408,14 @@ impl RetryExt for reqwest::RequestBuilder {
 #[cfg(test)]
 mod tests {
     use crate::client::mock_server::MockServer;
-    use crate::client::retry::{Error, RetryExt, RequestContext};
+    use crate::client::retry::{Error, RequestContext, RetryExt};
     use crate::RetryConfig;
     use hyper::header::LOCATION;
     use hyper::Response;
     use reqwest::{Client, Method, StatusCode};
+    use std::sync::Arc;
     use std::time::Duration;
     use tokio::sync::Semaphore;
-    use std::sync::Arc;
 
     #[tokio::test]
     async fn test_retry() {
@@ -425,7 +436,11 @@ mod tests {
             .build()
             .unwrap();
 
-        let do_request = || client.request(Method::GET, mock.url()).send_retry(&request_ctx);
+        let do_request = || {
+            client
+                .request(Method::GET, mock.url())
+                .send_retry(&request_ctx)
+        };
 
         // Simple request should work
         let r = do_request().await.unwrap();
@@ -584,7 +599,9 @@ mod tests {
             tokio::time::sleep(Duration::from_secs(10)).await;
             panic!()
         });
-        let res = client.request(Method::PUT, mock.url()).send_retry(&request_ctx);
+        let res = client
+            .request(Method::PUT, mock.url())
+            .send_retry(&request_ctx);
         let e = res.await.unwrap_err().to_string();
         assert!(
             e.contains("Error after 0 retries in") && e.contains("error sending request for url"),

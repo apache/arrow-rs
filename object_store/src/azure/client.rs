@@ -27,7 +27,8 @@ use crate::multipart::PartId;
 use crate::path::DELIMITER;
 use crate::util::{deserialize_rfc1123, GetRange};
 use crate::{
-    Attribute, Attributes, ClientOptions, GetOptions, ListResult, ObjectMeta, Path, PutMode, PutMultipartOpts, PutOptions, PutPayload, PutResult, RequestContext, Result, TagSet
+    Attribute, Attributes, ClientOptions, GetOptions, ListResult, ObjectMeta, Path, PutMode,
+    PutMultipartOpts, PutOptions, PutPayload, PutResult, RequestContext, Result, TagSet,
 };
 use async_trait::async_trait;
 use base64::prelude::BASE64_STANDARD;

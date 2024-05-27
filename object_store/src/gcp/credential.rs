@@ -570,7 +570,11 @@ impl AuthorizedUserSigningCredentials {
         Ok(Self { credential })
     }
 
-    async fn client_email(&self, client: &Client, request_ctx: &RequestContext) -> crate::Result<String> {
+    async fn client_email(
+        &self,
+        client: &Client,
+        request_ctx: &RequestContext,
+    ) -> crate::Result<String> {
         let response = client
             .request(Method::GET, "https://oauth2.googleapis.com/tokeninfo")
             .query(&[("access_token", &self.credential.refresh_token)])

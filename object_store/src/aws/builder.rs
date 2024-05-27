@@ -25,15 +25,17 @@ use crate::aws::{
 };
 use crate::client::TokenCredentialProvider;
 use crate::config::ConfigValue;
-use crate::{ClientConfigKey, ClientOptions, RequestContext, Result, RetryConfig, StaticCredentialProvider};
+use crate::{
+    ClientConfigKey, ClientOptions, RequestContext, Result, RetryConfig, StaticCredentialProvider,
+};
 use itertools::Itertools;
 use reqwest::header::{HeaderMap, HeaderValue};
 use serde::{Deserialize, Serialize};
 use snafu::{OptionExt, ResultExt, Snafu};
-use tokio::sync::Semaphore;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
+use tokio::sync::Semaphore;
 use tracing::info;
 use url::Url;
 
@@ -825,7 +827,7 @@ impl AmazonS3Builder {
         self
     }
 
-    /// Docs
+    /// Set the number of permits for the semaphore controlling concurrency.
     pub fn with_sempahore_permits(mut self, permits: usize) -> Self {
         self.request_ctx.semaphore = Arc::new(Semaphore::new(permits));
         self
