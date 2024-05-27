@@ -334,7 +334,7 @@ impl DynamoCommit {
             .json(&req)
             .header("X-Amz-Target", target)
             .with_aws_sigv4(authorizer, None)
-            .send_retry(&s3.config.retry_config)
+            .send_retry(&s3.config.request_context)
             .await
     }
 }

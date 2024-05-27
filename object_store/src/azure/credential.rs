@@ -20,7 +20,7 @@ use crate::client::retry::RetryExt;
 use crate::client::token::{TemporaryToken, TokenCache};
 use crate::client::{CredentialProvider, TokenProvider};
 use crate::util::hmac_sha256;
-use crate::RetryConfig;
+use crate::RequestContext;
 use async_trait::async_trait;
 use base64::prelude::BASE64_STANDARD;
 use base64::Engine;
@@ -604,7 +604,7 @@ impl TokenProvider for ClientSecretOAuthProvider {
     async fn fetch_token(
         &self,
         client: &Client,
-        retry: &RetryConfig,
+        request_ctx: &RequestContext,
     ) -> crate::Result<TemporaryToken<Arc<AzureCredential>>> {
         let response: OAuthTokenResponse = client
             .request(Method::POST, &self.token_url)
@@ -615,7 +615,7 @@ impl TokenProvider for ClientSecretOAuthProvider {
                 ("scope", AZURE_STORAGE_SCOPE),
                 ("grant_type", "client_credentials"),
             ])
-            .retryable(retry)
+            .retryable(&request_ctx.config)
             .idempotent(true)
             .send()
             .await
@@ -694,7 +694,7 @@ impl TokenProvider for ImdsManagedIdentityProvider {
     async fn fetch_token(
         &self,
         client: &Client,
-        retry: &RetryConfig,
+        request_ctx: &RequestContext,
     ) -> crate::Result<TemporaryToken<Arc<AzureCredential>>> {
         let mut query_items = vec![
             ("api-version", MSI_API_VERSION),
@@ -725,7 +725,7 @@ impl TokenProvider for ImdsManagedIdentityProvider {
         };
 
         let response: ImdsTokenResponse = builder
-            .send_retry(retry)
+            .send_retry(request_ctx)
             .await
             .context(TokenRequestSnafu)?
             .json()
@@ -780,7 +780,7 @@ impl TokenProvider for WorkloadIdentityOAuthProvider {
     async fn fetch_token(
         &self,
         client: &Client,
-        retry: &RetryConfig,
+        request_ctx: &RequestContext,
     ) -> crate::Result<TemporaryToken<Arc<AzureCredential>>> {
         let token_str = std::fs::read_to_string(&self.federated_token_file)
             .map_err(|_| Error::FederatedTokenFile)?;
@@ -799,7 +799,7 @@ impl TokenProvider for WorkloadIdentityOAuthProvider {
                 ("scope", AZURE_STORAGE_SCOPE),
                 ("grant_type", "client_credentials"),
             ])
-            .retryable(retry)
+            .retryable(&request_ctx.config)
             .idempotent(true)
             .send()
             .await
@@ -942,6 +942,7 @@ mod tests {
     use super::*;
     use crate::azure::MicrosoftAzureBuilder;
     use crate::client::mock_server::MockServer;
+    use crate::RetryConfig;
     use crate::{ObjectStore, Path};
 
     #[tokio::test]
