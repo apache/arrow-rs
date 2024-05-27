@@ -24,7 +24,9 @@ use reqwest::header::LOCATION;
 use reqwest::{Client, Request, Response, StatusCode};
 use snafu::Error as SnafuError;
 use snafu::Snafu;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
+use tokio::sync::Semaphore;
 use tracing::info;
 
 /// Retry request error
@@ -118,6 +120,20 @@ impl From<Error> for std::io::Error {
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
+
+pub struct RequestContext {
+    pub config: RetryConfig,
+    pub semaphore: Arc<Semaphore>,
+}
+
+impl Default for RequestContext {
+    fn default() -> Self {
+        RequestContext {
+            config: RetryConfig::default(),
+            semaphore: Arc::new(Semaphore::new(5)),
+        }
+    }
+}
 
 /// The configuration for how to respond to request errors
 ///
