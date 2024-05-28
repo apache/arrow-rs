@@ -295,16 +295,9 @@ mod variable;
 ///
 /// Lists are encoded by first encoding all child elements to the row format.
 ///
-/// A "canonical byte array" is then constructed by concatenating the row
-/// encodings of all their elements into a single binary array, followed
-/// by the lengths of each encoded row, and the number of elements, encoded
-/// as big endian `u32`.
-///
-/// This canonical byte array is then encoded using the variable length byte
-/// encoding described above.
-///
-/// _The lengths are not strictly necessary but greatly simplify decode, they
-/// may be removed in a future iteration_.
+/// A list value is then encoded as the concatenation of each of the child elements,
+/// separately encoded using the variable length encoding described above, followed
+/// by the variable length encoding of an empty byte array.
 ///
 /// For example given:
 ///
@@ -323,23 +316,22 @@ mod variable;
 ///     └──┴──┘     └──┴──┘     └──┴──┘     └──┴──┘        └──┴──┘
 ///```
 ///
-/// Which would be grouped into the following canonical byte arrays:
+/// Which would be encoded as
 ///
 /// ```text
-///                         ┌──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┐
-///  [1_u8, 2_u8, 3_u8]     │01│01│01│02│01│03│00│00│00│02│00│00│00│02│00│00│00│02│00│00│00│03│
-///                         └──┴──┴──┴──┴──┴──┴──┴──┴──┴──┴──┴──┴──┴──┴──┴──┴──┴──┴──┴──┴──┴──┘
-///                          └──── rows ────┘   └───────── row lengths ─────────┘  └─ count ─┘
+///                         ┌──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┐
+///  [1_u8, 2_u8, 3_u8]     │02│01│01│00│00│02│02│01│02│00│00│02│02│01│03│00│00│02│01│
+///                         └──┴──┴──┴──┴──┴──┴──┴──┴──┴──┴──┴──┴──┴──┴──┴──┴──┴──┴──┘
+///                          └──── 1_u8 ────┘   └──── 2_u8 ────┘  └──── 3_u8 ────┘
 ///
-///                         ┌──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┐
-///  [1_u8, null]           │01│01│00│00│00│00│00│02│00│00│00│02│00│00│00│02│
-///                         └──┴──┴──┴──┴──┴──┴──┴──┴──┴──┴──┴──┴──┴──┴──┴──┘
+///                         ┌──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┐
+///  [1_u8, null]           │02│01│01│00│00│02│02│00│00│00│00│02│01│
+///                         └──┴──┴──┴──┴──┴──┴──┴──┴──┴──┴──┴──┴──┘
+///                          └──── 1_u8 ────┘   └──── null ────┘
+///
 ///```
 ///
 /// With `[]` represented by an empty byte array, and `null` a null byte array.
-///
-/// These byte arrays will then be encoded using the variable length byte encoding
-/// described above.
 ///
 /// # Ordering
 ///
@@ -2270,5 +2262,17 @@ mod tests {
         let back = converter.convert_rows(&rows).unwrap();
 
         dictionary_eq(&back[0], &array);
+    }
+
+    #[test]
+    fn test_list_prefix() {
+        let mut a = ListBuilder::new(Int8Builder::new());
+        a.append_value([None]);
+        a.append_value([None, None]);
+        let a = a.finish();
+
+        let converter = RowConverter::new(vec![SortField::new(a.data_type().clone())]).unwrap();
+        let rows = converter.convert_columns(&[Arc::new(a) as _]).unwrap();
+        assert_eq!(rows.row(0).cmp(&rows.row(1)), Ordering::Less);
     }
 }
