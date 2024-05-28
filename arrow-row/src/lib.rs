@@ -2174,7 +2174,7 @@ mod tests {
                     let formatter = ArrayFormatter::try_new(x.values.as_ref(), &opts).unwrap();
                     formatter.value(row).to_string()
                 }
-                false => String::new(),
+                false => "NULL".to_string(),
             })
             .collect();
         t.join(",")
