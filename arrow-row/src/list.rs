@@ -147,10 +147,10 @@ pub unsafe fn decode<O: OffsetSizeTrait>(
             let decoded = super::variable::decode_blocks(&row[row_offset..], opts, |x| {
                 values_bytes.extend_from_slice(x)
             });
+            row_offset += decoded;
             if decoded <= 1 {
                 break;
             }
-            row_offset += decoded;
             values_offsets.push(values_bytes.len());
         }
         *row = &row[row_offset..];
