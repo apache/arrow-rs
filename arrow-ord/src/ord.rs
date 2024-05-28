@@ -259,6 +259,8 @@ pub fn build_compare(left: &dyn Array, right: &dyn Array) -> Result<DynComparato
 /// Returns a comparison function that compares two values at two different positions
 /// between the two arrays.
 ///
+/// For comparing arrays element-wise, see also the vectorised kernels in [`crate::cmp`].
+///
 /// If `nulls_first` is true `NULL` values will be considered less than any non-null value,
 /// otherwise they will be considered greater.
 ///
@@ -289,10 +291,21 @@ pub fn build_compare(left: &dyn Array, right: &dyn Array) -> Result<DynComparato
 ///
 /// # Postgres-compatible Nested Comparison
 ///
-/// Whilst SQL prescribes ternary logic for nulls, that is comparing a value against a null yields
-/// a NULL, many systems, including postgres, instead apply a total ordering to comparison
-/// of nested nulls. That is nulls within nested types are either greater than any value,
-/// or less than any value (Spark). This could be implemented as below
+/// Whilst SQL prescribes ternary logic for nulls, that is comparing a value against a NULL yields
+/// a NULL, many systems, including postgres, instead apply a total ordering to comparison of
+/// nested nulls. That is nulls within nested types are either greater than any value (postgres),
+/// or less than any value (Spark).
+///
+/// In particular
+///
+/// ```ignore
+/// { a: 1, b: null } == { a: 1, b: null } => true
+/// { a: 1, b: null } == { a: 1, b: 1 } => false
+/// { a: 1, b: null } == null => null
+/// null == null => null
+/// ```
+///
+/// This could be implemented as below
 ///
 /// ```
 /// # use arrow_array::{Array, BooleanArray};
@@ -366,7 +379,9 @@ pub fn make_comparator(
 #[cfg(test)]
 pub mod tests {
     use super::*;
+    use arrow_array::builder::{Int32Builder, ListBuilder};
     use arrow_buffer::{i256, IntervalDayTime, OffsetBuffer};
+    use arrow_schema::{DataType, Field, Fields};
     use half::f16;
     use std::sync::Arc;
 
@@ -735,5 +750,158 @@ pub mod tests {
         test_bytes_impl::<LargeUtf8Type>();
         test_bytes_impl::<BinaryType>();
         test_bytes_impl::<LargeBinaryType>();
+    }
+
+    #[test]
+    fn test_lists() {
+        let mut a = ListBuilder::new(ListBuilder::new(Int32Builder::new()));
+        a.extend([
+            Some(vec![Some(vec![Some(1), Some(2), None]), Some(vec![None])]),
+            Some(vec![
+                Some(vec![Some(1), Some(2), Some(3)]),
+                Some(vec![Some(1)]),
+            ]),
+            Some(vec![]),
+        ]);
+        let a = a.finish();
+        let mut b = ListBuilder::new(ListBuilder::new(Int32Builder::new()));
+        b.extend([
+            Some(vec![Some(vec![Some(1), Some(2), None]), Some(vec![None])]),
+            Some(vec![
+                Some(vec![Some(1), Some(2), None]),
+                Some(vec![Some(1)]),
+            ]),
+            Some(vec![
+                Some(vec![Some(1), Some(2), Some(3), Some(4)]),
+                Some(vec![Some(1)]),
+            ]),
+            None,
+        ]);
+        let b = b.finish();
+
+        let opts = SortOptions {
+            descending: false,
+            nulls_first: true,
+        };
+        let cmp = make_comparator(&a, &b, opts).unwrap();
+        assert_eq!(cmp(0, 0), Ordering::Equal);
+        assert_eq!(cmp(0, 1), Ordering::Less);
+        assert_eq!(cmp(0, 2), Ordering::Less);
+        assert_eq!(cmp(1, 2), Ordering::Less);
+        assert_eq!(cmp(1, 3), Ordering::Greater);
+        assert_eq!(cmp(2, 0), Ordering::Less);
+
+        let opts = SortOptions {
+            descending: true,
+            nulls_first: true,
+        };
+        let cmp = make_comparator(&a, &b, opts).unwrap();
+        assert_eq!(cmp(0, 0), Ordering::Equal);
+        assert_eq!(cmp(0, 1), Ordering::Less);
+        assert_eq!(cmp(0, 2), Ordering::Less);
+        assert_eq!(cmp(1, 2), Ordering::Greater);
+        assert_eq!(cmp(1, 3), Ordering::Greater);
+        assert_eq!(cmp(2, 0), Ordering::Greater);
+
+        let opts = SortOptions {
+            descending: true,
+            nulls_first: false,
+        };
+        let cmp = make_comparator(&a, &b, opts).unwrap();
+        assert_eq!(cmp(0, 0), Ordering::Equal);
+        assert_eq!(cmp(0, 1), Ordering::Greater);
+        assert_eq!(cmp(0, 2), Ordering::Greater);
+        assert_eq!(cmp(1, 2), Ordering::Greater);
+        assert_eq!(cmp(1, 3), Ordering::Less);
+        assert_eq!(cmp(2, 0), Ordering::Greater);
+
+        let opts = SortOptions {
+            descending: false,
+            nulls_first: false,
+        };
+        let cmp = make_comparator(&a, &b, opts).unwrap();
+        assert_eq!(cmp(0, 0), Ordering::Equal);
+        assert_eq!(cmp(0, 1), Ordering::Greater);
+        assert_eq!(cmp(0, 2), Ordering::Greater);
+        assert_eq!(cmp(1, 2), Ordering::Less);
+        assert_eq!(cmp(1, 3), Ordering::Less);
+        assert_eq!(cmp(2, 0), Ordering::Less);
+    }
+
+    #[test]
+    fn test_struct() {
+        let fields = Fields::from(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new_list("b", Field::new("item", DataType::Int32, true), true),
+        ]);
+
+        let a = Int32Array::from(vec![Some(1), Some(2), None, None]);
+        let mut b = ListBuilder::new(Int32Builder::new());
+        b.extend([Some(vec![Some(1), Some(2)]), Some(vec![None]), None, None]);
+        let b = b.finish();
+
+        let nulls = Some(NullBuffer::from_iter([true, true, true, false]));
+        let values = vec![Arc::new(a) as _, Arc::new(b) as _];
+        let s1 = StructArray::new(fields.clone(), values, nulls);
+
+        let a = Int32Array::from(vec![None, Some(2), None]);
+        let mut b = ListBuilder::new(Int32Builder::new());
+        b.extend([None, None, Some(vec![])]);
+        let b = b.finish();
+
+        let values = vec![Arc::new(a) as _, Arc::new(b) as _];
+        let s2 = StructArray::new(fields.clone(), values, None);
+
+        let opts = SortOptions {
+            descending: false,
+            nulls_first: true,
+        };
+        let cmp = make_comparator(&s1, &s2, opts).unwrap();
+        assert_eq!(cmp(0, 1), Ordering::Less); // (1, [1, 2]) cmp (2, None)
+        assert_eq!(cmp(0, 0), Ordering::Greater); // (1, [1, 2]) cmp (None, None)
+        assert_eq!(cmp(1, 1), Ordering::Greater); // (2, [None]) cmp (2, None)
+        assert_eq!(cmp(2, 2), Ordering::Less); // (None, None) cmp (None, [])
+        assert_eq!(cmp(3, 0), Ordering::Less); // None cmp (None, [])
+        assert_eq!(cmp(2, 0), Ordering::Equal); // (None, None) cmp (None, None)
+        assert_eq!(cmp(3, 0), Ordering::Less); // None cmp (None, None)
+
+        let opts = SortOptions {
+            descending: true,
+            nulls_first: true,
+        };
+        let cmp = make_comparator(&s1, &s2, opts).unwrap();
+        assert_eq!(cmp(0, 1), Ordering::Greater); // (1, [1, 2]) cmp (2, None)
+        assert_eq!(cmp(0, 0), Ordering::Greater); // (1, [1, 2]) cmp (None, None)
+        assert_eq!(cmp(1, 1), Ordering::Greater); // (2, [None]) cmp (2, None)
+        assert_eq!(cmp(2, 2), Ordering::Less); // (None, None) cmp (None, [])
+        assert_eq!(cmp(3, 0), Ordering::Less); // None cmp (None, [])
+        assert_eq!(cmp(2, 0), Ordering::Equal); // (None, None) cmp (None, None)
+        assert_eq!(cmp(3, 0), Ordering::Less); // None cmp (None, None)
+
+        let opts = SortOptions {
+            descending: true,
+            nulls_first: false,
+        };
+        let cmp = make_comparator(&s1, &s2, opts).unwrap();
+        assert_eq!(cmp(0, 1), Ordering::Greater); // (1, [1, 2]) cmp (2, None)
+        assert_eq!(cmp(0, 0), Ordering::Less); // (1, [1, 2]) cmp (None, None)
+        assert_eq!(cmp(1, 1), Ordering::Less); // (2, [None]) cmp (2, None)
+        assert_eq!(cmp(2, 2), Ordering::Greater); // (None, None) cmp (None, [])
+        assert_eq!(cmp(3, 0), Ordering::Greater); // None cmp (None, [])
+        assert_eq!(cmp(2, 0), Ordering::Equal); // (None, None) cmp (None, None)
+        assert_eq!(cmp(3, 0), Ordering::Greater); // None cmp (None, None)
+
+        let opts = SortOptions {
+            descending: false,
+            nulls_first: false,
+        };
+        let cmp = make_comparator(&s1, &s2, opts).unwrap();
+        assert_eq!(cmp(0, 1), Ordering::Less); // (1, [1, 2]) cmp (2, None)
+        assert_eq!(cmp(0, 0), Ordering::Less); // (1, [1, 2]) cmp (None, None)
+        assert_eq!(cmp(1, 1), Ordering::Less); // (2, [None]) cmp (2, None)
+        assert_eq!(cmp(2, 2), Ordering::Greater); // (None, None) cmp (None, [])
+        assert_eq!(cmp(3, 0), Ordering::Greater); // None cmp (None, [])
+        assert_eq!(cmp(2, 0), Ordering::Equal); // (None, None) cmp (None, None)
+        assert_eq!(cmp(3, 0), Ordering::Greater); // None cmp (None, None)
     }
 }

@@ -1302,9 +1302,9 @@ mod tests {
     use arrow_array::builder::*;
     use arrow_array::types::*;
     use arrow_array::*;
-    use arrow_buffer::i256;
-    use arrow_buffer::Buffer;
-    use arrow_cast::display::array_value_to_string;
+    use arrow_buffer::{i256, NullBuffer};
+    use arrow_buffer::{Buffer, OffsetBuffer};
+    use arrow_cast::display::{ArrayFormatter, FormatOptions};
     use arrow_ord::sort::{LexicographicalComparator, SortColumn};
 
     use super::*;
@@ -2099,9 +2099,35 @@ mod tests {
         builder.finish()
     }
 
+    fn generate_struct(len: usize, valid_percent: f64) -> StructArray {
+        let mut rng = thread_rng();
+        let nulls = NullBuffer::from_iter((0..len).map(|_| rng.gen_bool(valid_percent)));
+        let a = generate_primitive_array::<Int32Type>(len, valid_percent);
+        let b = generate_strings::<i32>(len, valid_percent);
+        let fields = Fields::from(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Utf8, true),
+        ]);
+        let values = vec![Arc::new(a) as _, Arc::new(b) as _];
+        StructArray::new(fields, values, Some(nulls))
+    }
+
+    fn generate_list<F>(len: usize, valid_percent: f64, values: F) -> ListArray
+    where
+        F: FnOnce(usize) -> ArrayRef,
+    {
+        let mut rng = thread_rng();
+        let offsets = OffsetBuffer::<i32>::from_lengths((0..len).map(|_| rng.gen_range(0..10)));
+        let values_len = offsets.last().unwrap().to_usize().unwrap();
+        let values = values(values_len);
+        let nulls = NullBuffer::from_iter((0..len).map(|_| rng.gen_bool(valid_percent)));
+        let field = Arc::new(Field::new("item", values.data_type().clone(), true));
+        ListArray::new(field, offsets, values, Some(nulls))
+    }
+
     fn generate_column(len: usize) -> ArrayRef {
         let mut rng = thread_rng();
-        match rng.gen_range(0..10) {
+        match rng.gen_range(0..14) {
             0 => Arc::new(generate_primitive_array::<Int32Type>(len, 0.8)),
             1 => Arc::new(generate_primitive_array::<UInt32Type>(len, 0.8)),
             2 => Arc::new(generate_primitive_array::<Int64Type>(len, 0.8)),
@@ -2125,6 +2151,16 @@ mod tests {
                 0.8,
             )),
             9 => Arc::new(generate_fixed_size_binary(len, 0.8)),
+            10 => Arc::new(generate_struct(len, 0.8)),
+            11 => Arc::new(generate_list(len, 0.8, |values_len| {
+                Arc::new(generate_primitive_array::<Int64Type>(values_len, 0.8))
+            })),
+            12 => Arc::new(generate_list(len, 0.8, |values_len| {
+                Arc::new(generate_strings::<i32>(values_len, 0.8))
+            })),
+            13 => Arc::new(generate_list(len, 0.8, |values_len| {
+                Arc::new(generate_struct(values_len, 0.8))
+            })),
             _ => unreachable!(),
         }
     }
@@ -2132,7 +2168,14 @@ mod tests {
     fn print_row(cols: &[SortColumn], row: usize) -> String {
         let t: Vec<_> = cols
             .iter()
-            .map(|x| array_value_to_string(&x.values, row).unwrap())
+            .map(|x| match x.values.is_valid(row) {
+                true => {
+                    let opts = FormatOptions::default().with_null("NULL");
+                    let formatter = ArrayFormatter::try_new(x.values.as_ref(), &opts).unwrap();
+                    formatter.value(row).to_string()
+                }
+                false => String::new(),
+            })
             .collect();
         t.join(",")
     }
