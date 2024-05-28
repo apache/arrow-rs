@@ -28,24 +28,29 @@
 //! # Format Overview
 //!
 //! Parquet is a columnar format, which means that unlike row formats like [CSV], values are
-//! iterated along columns instead of rows. Parquet is similar in spirit to [Arrow], with Parquet
-//! focusing on storage efficiency whereas Arrow prioritizes compute efficiency.
+//! iterated along columns instead of rows. Parquet is similar in spirit to [Arrow], but
+//! focuses on storage efficiency whereas Arrow prioritizes compute efficiency.
 //!
 //! Parquet files are partitioned for scalability. Each file contains metadata,
 //! along with zero or more "row groups", each row group containing one or
 //! more columns. The APIs in this crate reflect this structure.
 //!
-//! Parquet distinguishes between "logical" and "physical" data types.
-//! For instance, strings (logical type) are stored as byte arrays (physical type).
-//! Likewise, temporal types like dates, times, timestamps, etc. (logical type)
-//! are stored as integers (physical type). This crate exposes both kinds of types.
+//! Data in Parquet files is strongly typed and differentiates between logical
+//! and physical types (see [`schema`]). In addition, Parquet files may contain
+//! other metadata, such as statistics, which can be used to optimize reading
+//! (see [`file::metadata`]).
+//! For more details about the Parquet format itself, see the [Parquet spec]
 //!
-//! For more details about the Parquet format, see the
-//! [Parquet spec](https://github.com/apache/parquet-format/blob/master/README.md#file-format).
+//! [Parquet spec]: https://github.com/apache/parquet-format/blob/master/README.md#file-format
 //!
 //! # APIs
 //!
 //! This crate exposes a number of APIs for different use-cases.
+//!
+//! ## Metadata and Schema
+//!
+//! The [`schema`] module provides APIs to work with Parquet schemas. The
+//! [`file::metadata`] module provides APIs to work with Parquet metadata.
 //!
 //! ## Read/Write Arrow
 //!
@@ -64,7 +69,7 @@
 //!
 //! ## Read/Write Parquet
 //!
-//! Workloads needing finer-grained control, or looking to not take a dependency on arrow,
+//! Workloads needing finer-grained control, or avoid a dependence on arrow,
 //! can use the lower-level APIs in [`mod@file`]. These APIs expose the underlying parquet
 //! data model, and therefore require knowledge of the underlying parquet format,
 //! including the details of [Dremel] record shredding and [Logical Types]. Most workloads

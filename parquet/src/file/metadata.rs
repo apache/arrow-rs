@@ -15,23 +15,20 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Contains information about available Parquet metadata.
+//! Parquet metadata structures
 //!
-//! The hierarchy of metadata is as follows:
+//! * [`ParquetMetaData`]: Top level metadata container, read from the Parquet
+//!   file footer.
 //!
-//! [`ParquetMetaData`](struct.ParquetMetaData.html) contains
-//! [`FileMetaData`](struct.FileMetaData.html) and zero or more
-//! [`RowGroupMetaData`](struct.RowGroupMetaData.html) for each row group.
+//! * [`FileMetaData`]: File level metadata such as schema, row counts and
+//!   version.
 //!
-//! [`FileMetaData`](struct.FileMetaData.html) includes file version, application specific
-//! metadata.
+//! * [`RowGroupMetaData`]: Metadata for each Row Group with a File, such as
+//!   location and number of rows, and column chunks.
 //!
-//! Each [`RowGroupMetaData`](struct.RowGroupMetaData.html) contains information about row
-//! group and one or more [`ColumnChunkMetaData`](struct.ColumnChunkMetaData.html) for
-//! each column chunk.
-//!
-//! [`ColumnChunkMetaData`](struct.ColumnChunkMetaData.html) has information about column
-//! chunk (primitive leaf column), including encoding/compression, number of values, etc.
+//! * [`ColumnChunkMetaData`]: Metadata for each column chunk (primitive leaf)
+//!   within a Row Group including encoding and compression information,
+//!   number of values, statistics, etc.
 
 use std::ops::Range;
 use std::sync::Arc;
@@ -61,7 +58,7 @@ use crate::schema::types::{
 /// column in the third row group of the parquet file.
 pub type ParquetColumnIndex = Vec<Vec<Index>>;
 
-/// [`PageLocation`] for each datapage of each row group of each column.
+/// [`PageLocation`] for each data page of each row group of each column.
 ///
 /// `offset_index[row_group_number][column_number][page_number]` holds
 /// the [`PageLocation`] corresponding to page `page_number` of column
@@ -72,14 +69,30 @@ pub type ParquetColumnIndex = Vec<Vec<Index>>;
 /// parquet file.
 pub type ParquetOffsetIndex = Vec<Vec<Vec<PageLocation>>>;
 
-/// Global Parquet metadata.
+/// Global Parquet metadata, including [`FileMetaData`], [`RowGroupMetaData`].
+///
+/// This structure is stored in the footer of Parquet files, in the format
+/// defined by [`parquet.thrift`]. It contains:
+///
+/// * File level metadata: [`FileMetaData`]
+/// * Row Group level metadata: [`RowGroupMetaData`]
+/// * (Optional) "Page Index" structures: [`ParquetColumnIndex`] and [`ParquetOffsetIndex`]
+///
+/// [`parquet.thrift`]: https://github.com/apache/parquet-format/blob/master/src/main/thrift/parquet.thrift
+///
+/// This structure is read by the various readers in this crate or can be read
+/// directly from a file using the [`parse_metadata`] function.
+///
+/// [`parse_metadata`]: crate::file::footer::parse_metadata
 #[derive(Debug, Clone)]
 pub struct ParquetMetaData {
+    /// File level metadata
     file_metadata: FileMetaData,
+    /// Row group metadata
     row_groups: Vec<RowGroupMetaData>,
-    /// Page index for all pages in each column chunk
+    /// Page level index for each page in each column chunk
     column_index: Option<ParquetColumnIndex>,
-    /// Offset index for all pages in each column chunk
+    /// Offset index for all each page in each column chunk
     offset_index: Option<ParquetOffsetIndex>,
 }
 
@@ -172,7 +185,9 @@ pub type KeyValue = crate::format::KeyValue;
 /// Reference counted pointer for [`FileMetaData`].
 pub type FileMetaDataPtr = Arc<FileMetaData>;
 
-/// Metadata for a Parquet file.
+/// File level metadata for a Parquet file.
+///
+/// Includes the version of the file, metadata, number of rows, schema, and column orders
 #[derive(Debug, Clone)]
 pub struct FileMetaData {
     version: i32,
@@ -271,7 +286,10 @@ impl FileMetaData {
 /// Reference counted pointer for [`RowGroupMetaData`].
 pub type RowGroupMetaDataPtr = Arc<RowGroupMetaData>;
 
-/// Metadata for a row group.
+/// Metadata for a row group
+///
+/// Includes [`ColumnChunkMetaData`] for each column in the row group, the number of rows
+/// the total byte size of the row group, and the [`SchemaDescriptor`] for the row group.
 #[derive(Debug, Clone, PartialEq)]
 pub struct RowGroupMetaData {
     columns: Vec<ColumnChunkMetaData>,
@@ -279,8 +297,9 @@ pub struct RowGroupMetaData {
     sorting_columns: Option<Vec<SortingColumn>>,
     total_byte_size: i64,
     schema_descr: SchemaDescPtr,
-    // We can't infer from file offset of first column since there may empty columns in row group.
+    /// We can't infer from file offset of first column since there may empty columns in row group.
     file_offset: Option<i64>,
+    /// Ordinal position of this row group in file
     ordinal: Option<i16>,
 }
 
@@ -335,7 +354,10 @@ impl RowGroupMetaData {
         self.schema_descr.clone()
     }
 
-    /// Returns ordinal of this row group in file
+    /// Returns ordinal position of this row group in file.
+    ///
+    /// For example if this is the first row group in the file, this will return 0.
+    /// If this is the second row group in the file, this will return 1.
     #[inline(always)]
     pub fn ordinal(&self) -> Option<i16> {
         self.ordinal

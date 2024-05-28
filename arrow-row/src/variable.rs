@@ -83,15 +83,23 @@ pub fn encode<'a, I: Iterator<Item = Option<&'a [u8]>>>(
     }
 }
 
+pub fn encode_null(out: &mut [u8], opts: SortOptions) -> usize {
+    out[0] = null_sentinel(opts);
+    1
+}
+
+pub fn encode_empty(out: &mut [u8], opts: SortOptions) -> usize {
+    out[0] = match opts.descending {
+        true => !EMPTY_SENTINEL,
+        false => EMPTY_SENTINEL,
+    };
+    1
+}
+
 pub fn encode_one(out: &mut [u8], val: Option<&[u8]>, opts: SortOptions) -> usize {
     match val {
-        Some([]) => {
-            out[0] = match opts.descending {
-                true => !EMPTY_SENTINEL,
-                false => EMPTY_SENTINEL,
-            };
-            1
-        }
+        None => encode_null(out, opts),
+        Some([]) => encode_empty(out, opts),
         Some(val) => {
             // Write `2_u8` to demarcate as non-empty, non-null string
             out[0] = NON_EMPTY_SENTINEL;
@@ -110,10 +118,6 @@ pub fn encode_one(out: &mut [u8], val: Option<&[u8]>, opts: SortOptions) -> usiz
                 out[..len].iter_mut().for_each(|v| *v = !*v)
             }
             len
-        }
-        None => {
-            out[0] = null_sentinel(opts);
-            1
         }
     }
 }
@@ -148,7 +152,7 @@ fn encode_blocks<const SIZE: usize>(out: &mut [u8], val: &[u8]) -> usize {
     end_offset
 }
 
-fn decode_blocks(row: &[u8], options: SortOptions, mut f: impl FnMut(&[u8])) -> usize {
+pub fn decode_blocks(row: &[u8], options: SortOptions, mut f: impl FnMut(&[u8])) -> usize {
     let (non_empty_sentinel, continuation) = match options.descending {
         true => (!NON_EMPTY_SENTINEL, !BLOCK_CONTINUATION),
         false => (NON_EMPTY_SENTINEL, BLOCK_CONTINUATION),
