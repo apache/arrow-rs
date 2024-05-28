@@ -419,7 +419,7 @@ pub type Decimal256Array = PrimitiveArray<Decimal256Type>;
 
 pub use crate::types::ArrowPrimitiveType;
 
-/// An array of primtive values, of type [`ArrowPrimitiveType`]
+/// An array of primitive values, of type [`ArrowPrimitiveType`]
 ///
 /// # Example: From a Vec
 ///
