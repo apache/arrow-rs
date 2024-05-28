@@ -170,11 +170,8 @@ pub unsafe fn decode<O: OffsetSizeTrait>(
         })
         .collect();
 
-    println!("Decoded Child rows: {child_rows:?}");
-
     let child = converter.convert_raw(&mut child_rows, validate_utf8)?;
     assert_eq!(child.len(), 1);
-    println!("{child:?}");
 
     let child_data = child[0].to_data();
 
