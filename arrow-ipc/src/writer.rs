@@ -1205,7 +1205,7 @@ fn reencode_offsets<O: OffsetSizeTrait>(
     let end_offset = offset_slice.last().unwrap();
 
     let offsets = match start_offset.as_usize() {
-        0 => offsets.clone(),
+        0 => offsets.slice_with_length(0, offset_slice.len() * O::get_byte_width()),
         _ => offset_slice.iter().map(|x| *x - *start_offset).collect(),
     };
 
