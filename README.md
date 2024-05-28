@@ -38,7 +38,7 @@ The current development version the API documentation in this repo can be found 
 [apache arrow]: https://arrow.apache.org/
 [`arrow`]: https://crates.io/crates/arrow
 [`parquet`]: https://crates.io/crates/parquet
-[`parquet-derive`]: https://crates.io/crates/parquet-derive
+[`parquet_derive`]: https://crates.io/crates/parquet-derive
 [`arrow-flight`]: https://crates.io/crates/arrow-flight
 [`object-store`]: https://crates.io/crates/object-store
 
