@@ -17,13 +17,13 @@
 
 //! Defines sort kernel for `ArrayRef`
 
-use crate::ord::{build_compare, DynComparator};
+use crate::ord::{make_comparator, DynComparator};
 use arrow_array::builder::BufferBuilder;
 use arrow_array::cast::*;
 use arrow_array::types::*;
 use arrow_array::*;
+use arrow_buffer::ArrowNativeType;
 use arrow_buffer::BooleanBufferBuilder;
-use arrow_buffer::{ArrowNativeType, NullBuffer};
 use arrow_data::ArrayDataBuilder;
 use arrow_schema::{ArrowError, DataType};
 use arrow_select::take::take;
@@ -704,60 +704,21 @@ where
     }
 }
 
-type LexicographicalCompareItem = (
-    Option<NullBuffer>, // nulls
-    DynComparator,      // comparator
-    SortOptions,        // sort_option
-);
-
 /// A lexicographical comparator that wraps given array data (columns) and can lexicographically compare data
 /// at given two indices. The lifetime is the same at the data wrapped.
 pub struct LexicographicalComparator {
-    compare_items: Vec<LexicographicalCompareItem>,
+    compare_items: Vec<DynComparator>,
 }
 
 impl LexicographicalComparator {
     /// lexicographically compare values at the wrapped columns with given indices.
     pub fn compare(&self, a_idx: usize, b_idx: usize) -> Ordering {
-        for (nulls, comparator, sort_option) in &self.compare_items {
-            let (lhs_valid, rhs_valid) = match nulls {
-                Some(n) => (n.is_valid(a_idx), n.is_valid(b_idx)),
-                None => (true, true),
-            };
-
-            match (lhs_valid, rhs_valid) {
-                (true, true) => {
-                    match (comparator)(a_idx, b_idx) {
-                        // equal, move on to next column
-                        Ordering::Equal => continue,
-                        order => {
-                            if sort_option.descending {
-                                return order.reverse();
-                            } else {
-                                return order;
-                            }
-                        }
-                    }
-                }
-                (false, true) => {
-                    return if sort_option.nulls_first {
-                        Ordering::Less
-                    } else {
-                        Ordering::Greater
-                    };
-                }
-                (true, false) => {
-                    return if sort_option.nulls_first {
-                        Ordering::Greater
-                    } else {
-                        Ordering::Less
-                    };
-                }
-                // equal, move on to next column
-                (false, false) => continue,
+        for comparator in &self.compare_items {
+            match comparator(a_idx, b_idx) {
+                Ordering::Equal => continue,
+                r => return r,
             }
         }
-
         Ordering::Equal
     }
 
@@ -766,60 +727,15 @@ impl LexicographicalComparator {
     pub fn try_new(columns: &[SortColumn]) -> Result<LexicographicalComparator, ArrowError> {
         let compare_items = columns
             .iter()
-            .map(Self::build_compare_item)
+            .map(|c| {
+                make_comparator(
+                    c.values.as_ref(),
+                    c.values.as_ref(),
+                    c.options.unwrap_or_default(),
+                )
+            })
             .collect::<Result<Vec<_>, ArrowError>>()?;
         Ok(LexicographicalComparator { compare_items })
-    }
-
-    fn build_compare_item(column: &SortColumn) -> Result<LexicographicalCompareItem, ArrowError> {
-        let values = column.values.as_ref();
-        let options = column.options.unwrap_or_default();
-        let comparator = match values.data_type() {
-            DataType::List(_) => Self::build_list_compare(values.as_list::<i32>(), options)?,
-            DataType::LargeList(_) => Self::build_list_compare(values.as_list::<i64>(), options)?,
-            DataType::FixedSizeList(_, _) => {
-                Self::build_fixed_size_list_compare(values.as_fixed_size_list(), options)?
-            }
-            _ => build_compare(values, values)?,
-        };
-        Ok((values.logical_nulls(), comparator, options))
-    }
-
-    fn build_list_compare<O: OffsetSizeTrait>(
-        array: &GenericListArray<O>,
-        options: SortOptions,
-    ) -> Result<DynComparator, ArrowError> {
-        let rank = child_rank(array.values().as_ref(), options)?;
-        let offsets = array.offsets().clone();
-        let cmp = Box::new(move |i: usize, j: usize| {
-            macro_rules! nth_value {
-                ($INDEX:expr) => {{
-                    let end = offsets[$INDEX + 1].as_usize();
-                    let start = offsets[$INDEX].as_usize();
-                    &rank[start..end]
-                }};
-            }
-            Ord::cmp(nth_value!(i), nth_value!(j))
-        });
-        Ok(cmp)
-    }
-
-    fn build_fixed_size_list_compare(
-        array: &FixedSizeListArray,
-        options: SortOptions,
-    ) -> Result<DynComparator, ArrowError> {
-        let rank = child_rank(array.values().as_ref(), options)?;
-        let size = array.value_length() as usize;
-        let cmp = Box::new(move |i: usize, j: usize| {
-            macro_rules! nth_value {
-                ($INDEX:expr) => {{
-                    let start = $INDEX * size;
-                    &rank[start..start + size]
-                }};
-            }
-            Ord::cmp(nth_value!(i), nth_value!(j))
-        });
-        Ok(cmp)
     }
 }
 
@@ -829,7 +745,7 @@ mod tests {
     use arrow_array::builder::{
         FixedSizeListBuilder, Int64Builder, ListBuilder, PrimitiveRunBuilder,
     };
-    use arrow_buffer::i256;
+    use arrow_buffer::{i256, NullBuffer};
     use half::f16;
     use rand::rngs::StdRng;
     use rand::{Rng, RngCore, SeedableRng};
