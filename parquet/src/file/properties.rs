@@ -680,11 +680,19 @@ impl WriterPropertiesBuilder {
 /// predicate using the statistics.
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub enum EnabledStatistics {
-    /// Compute no statistics
+    /// Compute no statistics.
     None,
     /// Compute column chunk-level statistics but not page-level.
+    ///
+    /// Setting this option will store one set of statistics for each relevant
+    /// column for each row group. The more row groups written, the more
+    /// statistics will be stored.
     Chunk,
-    /// Compute page-level and column chunk-level statistics
+    /// Compute page-level and column chunk-level statistics.
+    ///
+    /// Setting this option will store one set of statistics for each relevant
+    /// column for each page and row group. The more row groups and the more
+    /// pages written, the more statistics will be stored.
     Page,
 }
 
