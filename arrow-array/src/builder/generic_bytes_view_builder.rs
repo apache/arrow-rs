@@ -355,6 +355,7 @@ mod tests {
         v.try_append_view(2, 0, 3).unwrap(); // cup
         v.try_append_view(2, 0, 8).unwrap(); // cupcakes
         v.try_append_view(0, 13, 4).unwrap(); // 😁
+        v.try_append_view(0, 13, 0).unwrap(); //
 
         // Test longer strings
         v.try_append_view(3, 0, 16).unwrap(); // Many strings are
@@ -378,6 +379,7 @@ mod tests {
                 "cup",
                 "cupcakes",
                 "😁",
+                "",
                 "Many strings are",
                 "This is a very long",
                 "are here contained of great",
@@ -396,5 +398,17 @@ mod tests {
 
         let err = v.try_append_view(0, 13, 2).unwrap_err();
         assert_eq!(err.to_string(), "Invalid argument error: Invalid view data");
+
+        let err = v.try_append_view(0, 40, 0).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Invalid argument error: Range 40..40 out of bounds for block of length 17"
+        );
+
+        let err = v.try_append_view(5, 0, 0).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Invalid argument error: No block found with index 5"
+        );
     }
 }
