@@ -39,7 +39,7 @@ const DEFAULT_BLOCK_SIZE: u32 = 8 * 1024;
 ///
 /// # Append Values
 ///
-/// To avoid bump allocating this builder allocates data in fixed size blocks, configurable
+/// To avoid bump allocating, this builder allocates data in fixed size blocks, configurable
 /// using [`GenericByteViewBuilder::with_block_size`]. [`GenericByteViewBuilder::append_value`]
 /// writes values larger than 12 bytes to the current in-progress block, with values smaller
 /// than 12 bytes inlined into the views. If a value is appended that will not fit in the
@@ -327,3 +327,74 @@ pub type StringViewBuilder = GenericByteViewBuilder<StringViewType>;
 /// Values can be appended using [`GenericByteViewBuilder::append_value`], and nulls with
 /// [`GenericByteViewBuilder::append_null`] as normal.
 pub type BinaryViewBuilder = GenericByteViewBuilder<BinaryViewType>;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::Array;
+
+    #[test]
+    fn test_string_view() {
+        let b1 = Buffer::from(b"world\xFFbananas\xF0\x9F\x98\x81");
+        let b2 = Buffer::from(b"cupcakes");
+        let b3 = Buffer::from(b"Many strings are here contained of great length and verbosity");
+
+        let mut v = StringViewBuilder::new();
+        assert_eq!(v.append_block(b1), 0);
+
+        v.append_value("This is a very long string that exceeds the inline length");
+        v.append_value("This is another very long string that exceeds the inline length");
+
+        assert_eq!(v.append_block(b2), 2);
+        assert_eq!(v.append_block(b3), 3);
+
+        // Test short strings
+        v.try_append_view(0, 0, 5).unwrap(); // world
+        v.try_append_view(0, 6, 7).unwrap(); // bananas
+        v.try_append_view(2, 3, 5).unwrap(); // cake
+        v.try_append_view(2, 0, 3).unwrap(); // cup
+        v.try_append_view(2, 0, 8).unwrap(); // cupcakes
+        v.try_append_view(0, 13, 4).unwrap(); // 😁
+
+        // Test longer strings
+        v.try_append_view(3, 0, 16).unwrap(); // Many strings are
+        v.try_append_view(1, 0, 19).unwrap(); // This is a very long
+        v.try_append_view(3, 13, 27).unwrap(); // here contained of great length
+
+        v.append_value("I do so like long strings");
+
+        let array = v.finish_cloned();
+        array.to_data().validate_full().unwrap();
+        assert_eq!(array.data_buffers().len(), 5);
+        let actual: Vec<_> = array.iter().map(Option::unwrap).collect();
+        assert_eq!(
+            actual,
+            &[
+                "This is a very long string that exceeds the inline length",
+                "This is another very long string that exceeds the inline length",
+                "world",
+                "bananas",
+                "cakes",
+                "cup",
+                "cupcakes",
+                "😁",
+                "Many strings are",
+                "This is a very long",
+                "are here contained of great",
+                "I do so like long strings"
+            ]
+        );
+
+        let err = v.try_append_view(0, u32::MAX, 1).unwrap_err();
+        assert_eq!(err.to_string(), "Invalid argument error: Range 4294967295..4294967296 out of bounds for block of length 17");
+
+        let err = v.try_append_view(0, 1, u32::MAX).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Invalid argument error: Range 1..4294967296 out of bounds for block of length 17"
+        );
+
+        let err = v.try_append_view(0, 13, 2).unwrap_err();
+        assert_eq!(err.to_string(), "Invalid argument error: Invalid view data");
+    }
+}
