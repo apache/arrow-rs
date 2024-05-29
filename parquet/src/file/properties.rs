@@ -675,7 +675,7 @@ impl WriterPropertiesBuilder {
 /// Enabling statistics makes the resulting Parquet file larger and requires
 /// more time to read the parquet footer.
 ///
-/// Statistics can be used to improve query performance by efficient row groups
+/// Statistics can be used to improve query performance by pruning row groups
 /// and pages during query execution if the query engine supports evaluating the
 /// predicate using the statistics.
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
