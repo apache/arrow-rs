@@ -31,7 +31,8 @@ use arrow_array::{ArrayRef, RecordBatch, RecordBatchWriter};
 use arrow_schema::{ArrowError, DataType as ArrowDataType, Field, IntervalUnit, SchemaRef};
 
 use super::schema::{
-    add_encoded_arrow_schema_to_metadata, arrow_to_parquet_schema, decimal_length_from_precision,
+    add_encoded_arrow_schema_to_metadata, arrow_to_parquet_schema,
+    arrow_to_parquet_schema_with_root, decimal_length_from_precision,
 };
 
 use crate::arrow::arrow_writer::byte_array::ByteArrayEncoder;
@@ -160,7 +161,10 @@ impl<W: Write + Send> ArrowWriter<W> {
         arrow_schema: SchemaRef,
         options: ArrowWriterOptions,
     ) -> Result<Self> {
-        let schema = arrow_to_parquet_schema(&arrow_schema)?;
+        let schema = match options.schema_root {
+            Some(s) => arrow_to_parquet_schema_with_root(&arrow_schema, &s)?,
+            None => arrow_to_parquet_schema(&arrow_schema)?,
+        };
         let mut props = options.properties;
         if !options.skip_arrow_metadata {
             // add serialized arrow schema
@@ -323,6 +327,7 @@ impl<W: Write + Send> RecordBatchWriter for ArrowWriter<W> {
 pub struct ArrowWriterOptions {
     properties: WriterProperties,
     skip_arrow_metadata: bool,
+    schema_root: Option<String>,
 }
 
 impl ArrowWriterOptions {
@@ -343,6 +348,16 @@ impl ArrowWriterOptions {
     pub fn with_skip_arrow_metadata(self, skip_arrow_metadata: bool) -> Self {
         Self {
             skip_arrow_metadata,
+            ..self
+        }
+    }
+
+    /// Overrides the name of the root parquet schema element
+    ///
+    /// Defaults to `"arrow_schema"`
+    pub fn with_schema_root(self, name: String) -> Self {
+        Self {
+            schema_root: Some(name),
             ..self
         }
     }

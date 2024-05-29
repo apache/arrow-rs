@@ -223,15 +223,21 @@ pub(crate) fn add_encoded_arrow_schema_to_metadata(schema: &Schema, props: &mut 
 }
 
 /// Convert arrow schema to parquet schema
+///
+/// The name of the root schema element defaults to `"arrow_schema"`, this can be
+/// overridden with [`arrow_to_parquet_schema_with_root`]
 pub fn arrow_to_parquet_schema(schema: &Schema) -> Result<SchemaDescriptor> {
+    arrow_to_parquet_schema_with_root(schema, "arrow_schema")
+}
+
+/// Convert arrow schema to parquet schema specifying the name of the root schema element
+pub fn arrow_to_parquet_schema_with_root(schema: &Schema, root: &str) -> Result<SchemaDescriptor> {
     let fields = schema
         .fields()
         .iter()
         .map(|field| arrow_to_parquet_type(field).map(Arc::new))
         .collect::<Result<_>>()?;
-    let group = Type::group_type_builder("arrow_schema")
-        .with_fields(fields)
-        .build()?;
+    let group = Type::group_type_builder(root).with_fields(fields).build()?;
     Ok(SchemaDescriptor::new(Arc::new(group)))
 }
 
