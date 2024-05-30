@@ -295,16 +295,9 @@ mod variable;
 ///
 /// Lists are encoded by first encoding all child elements to the row format.
 ///
-/// A "canonical byte array" is then constructed by concatenating the row
-/// encodings of all their elements into a single binary array, followed
-/// by the lengths of each encoded row, and the number of elements, encoded
-/// as big endian `u32`.
-///
-/// This canonical byte array is then encoded using the variable length byte
-/// encoding described above.
-///
-/// _The lengths are not strictly necessary but greatly simplify decode, they
-/// may be removed in a future iteration_.
+/// A list value is then encoded as the concatenation of each of the child elements,
+/// separately encoded using the variable length encoding described above, followed
+/// by the variable length encoding of an empty byte array.
 ///
 /// For example given:
 ///
@@ -323,23 +316,22 @@ mod variable;
 ///     └──┴──┘     └──┴──┘     └──┴──┘     └──┴──┘        └──┴──┘
 ///```
 ///
-/// Which would be grouped into the following canonical byte arrays:
+/// Which would be encoded as
 ///
 /// ```text
-///                         ┌──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┐
-///  [1_u8, 2_u8, 3_u8]     │01│01│01│02│01│03│00│00│00│02│00│00│00│02│00│00│00│02│00│00│00│03│
-///                         └──┴──┴──┴──┴──┴──┴──┴──┴──┴──┴──┴──┴──┴──┴──┴──┴──┴──┴──┴──┴──┴──┘
-///                          └──── rows ────┘   └───────── row lengths ─────────┘  └─ count ─┘
+///                         ┌──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┐
+///  [1_u8, 2_u8, 3_u8]     │02│01│01│00│00│02│02│01│02│00│00│02│02│01│03│00│00│02│01│
+///                         └──┴──┴──┴──┴──┴──┴──┴──┴──┴──┴──┴──┴──┴──┴──┴──┴──┴──┴──┘
+///                          └──── 1_u8 ────┘   └──── 2_u8 ────┘  └──── 3_u8 ────┘
 ///
-///                         ┌──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┐
-///  [1_u8, null]           │01│01│00│00│00│00│00│02│00│00│00│02│00│00│00│02│
-///                         └──┴──┴──┴──┴──┴──┴──┴──┴──┴──┴──┴──┴──┴──┴──┴──┘
+///                         ┌──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┐
+///  [1_u8, null]           │02│01│01│00│00│02│02│00│00│00│00│02│01│
+///                         └──┴──┴──┴──┴──┴──┴──┴──┴──┴──┴──┴──┴──┘
+///                          └──── 1_u8 ────┘   └──── null ────┘
+///
 ///```
 ///
 /// With `[]` represented by an empty byte array, and `null` a null byte array.
-///
-/// These byte arrays will then be encoded using the variable length byte encoding
-/// described above.
 ///
 /// # Ordering
 ///
@@ -1310,9 +1302,9 @@ mod tests {
     use arrow_array::builder::*;
     use arrow_array::types::*;
     use arrow_array::*;
-    use arrow_buffer::i256;
-    use arrow_buffer::Buffer;
-    use arrow_cast::display::array_value_to_string;
+    use arrow_buffer::{i256, NullBuffer};
+    use arrow_buffer::{Buffer, OffsetBuffer};
+    use arrow_cast::display::{ArrayFormatter, FormatOptions};
     use arrow_ord::sort::{LexicographicalComparator, SortColumn};
 
     use super::*;
@@ -2107,9 +2099,35 @@ mod tests {
         builder.finish()
     }
 
+    fn generate_struct(len: usize, valid_percent: f64) -> StructArray {
+        let mut rng = thread_rng();
+        let nulls = NullBuffer::from_iter((0..len).map(|_| rng.gen_bool(valid_percent)));
+        let a = generate_primitive_array::<Int32Type>(len, valid_percent);
+        let b = generate_strings::<i32>(len, valid_percent);
+        let fields = Fields::from(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Utf8, true),
+        ]);
+        let values = vec![Arc::new(a) as _, Arc::new(b) as _];
+        StructArray::new(fields, values, Some(nulls))
+    }
+
+    fn generate_list<F>(len: usize, valid_percent: f64, values: F) -> ListArray
+    where
+        F: FnOnce(usize) -> ArrayRef,
+    {
+        let mut rng = thread_rng();
+        let offsets = OffsetBuffer::<i32>::from_lengths((0..len).map(|_| rng.gen_range(0..10)));
+        let values_len = offsets.last().unwrap().to_usize().unwrap();
+        let values = values(values_len);
+        let nulls = NullBuffer::from_iter((0..len).map(|_| rng.gen_bool(valid_percent)));
+        let field = Arc::new(Field::new("item", values.data_type().clone(), true));
+        ListArray::new(field, offsets, values, Some(nulls))
+    }
+
     fn generate_column(len: usize) -> ArrayRef {
         let mut rng = thread_rng();
-        match rng.gen_range(0..10) {
+        match rng.gen_range(0..14) {
             0 => Arc::new(generate_primitive_array::<Int32Type>(len, 0.8)),
             1 => Arc::new(generate_primitive_array::<UInt32Type>(len, 0.8)),
             2 => Arc::new(generate_primitive_array::<Int64Type>(len, 0.8)),
@@ -2133,6 +2151,16 @@ mod tests {
                 0.8,
             )),
             9 => Arc::new(generate_fixed_size_binary(len, 0.8)),
+            10 => Arc::new(generate_struct(len, 0.8)),
+            11 => Arc::new(generate_list(len, 0.8, |values_len| {
+                Arc::new(generate_primitive_array::<Int64Type>(values_len, 0.8))
+            })),
+            12 => Arc::new(generate_list(len, 0.8, |values_len| {
+                Arc::new(generate_strings::<i32>(values_len, 0.8))
+            })),
+            13 => Arc::new(generate_list(len, 0.8, |values_len| {
+                Arc::new(generate_struct(values_len, 0.8))
+            })),
             _ => unreachable!(),
         }
     }
@@ -2140,7 +2168,14 @@ mod tests {
     fn print_row(cols: &[SortColumn], row: usize) -> String {
         let t: Vec<_> = cols
             .iter()
-            .map(|x| array_value_to_string(&x.values, row).unwrap())
+            .map(|x| match x.values.is_valid(row) {
+                true => {
+                    let opts = FormatOptions::default().with_null("NULL");
+                    let formatter = ArrayFormatter::try_new(x.values.as_ref(), &opts).unwrap();
+                    formatter.value(row).to_string()
+                }
+                false => "NULL".to_string(),
+            })
             .collect();
         t.join(",")
     }
@@ -2270,5 +2305,17 @@ mod tests {
         let back = converter.convert_rows(&rows).unwrap();
 
         dictionary_eq(&back[0], &array);
+    }
+
+    #[test]
+    fn test_list_prefix() {
+        let mut a = ListBuilder::new(Int8Builder::new());
+        a.append_value([None]);
+        a.append_value([None, None]);
+        let a = a.finish();
+
+        let converter = RowConverter::new(vec![SortField::new(a.data_type().clone())]).unwrap();
+        let rows = converter.convert_columns(&[Arc::new(a) as _]).unwrap();
+        assert_eq!(rows.row(0).cmp(&rows.row(1)), Ordering::Less);
     }
 }

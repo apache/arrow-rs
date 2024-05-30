@@ -504,7 +504,7 @@ impl ObjectStore for LocalFileSystem {
 
             match config.filesystem_to_path(entry.path()) {
                 Ok(path) => match is_valid_file_path(&path) {
-                    true => Some(convert_entry(entry, path)),
+                    true => convert_entry(entry, path).transpose(),
                     false => None,
                 },
                 Err(e) => Some(Err(e)),
@@ -581,8 +581,8 @@ impl ObjectStore for LocalFileSystem {
 
                     if is_directory {
                         common_prefixes.insert(prefix.child(common_prefix));
-                    } else {
-                        objects.push(convert_entry(entry, entry_location)?);
+                    } else if let Some(metadata) = convert_entry(entry, entry_location)? {
+                        objects.push(metadata);
                     }
                 }
             }
@@ -894,12 +894,21 @@ fn open_file(path: &PathBuf) -> Result<(File, Metadata)> {
     Ok(ret)
 }
 
-fn convert_entry(entry: DirEntry, location: Path) -> Result<ObjectMeta> {
-    let metadata = entry.metadata().map_err(|e| Error::Metadata {
-        source: e.into(),
-        path: location.to_string(),
-    })?;
-    convert_metadata(metadata, location)
+fn convert_entry(entry: DirEntry, location: Path) -> Result<Option<ObjectMeta>> {
+    match entry.metadata() {
+        Ok(metadata) => convert_metadata(metadata, location).map(Some),
+        Err(e) => {
+            if let Some(io_err) = e.io_error() {
+                if io_err.kind() == ErrorKind::NotFound {
+                    return Ok(None);
+                }
+            }
+            Err(Error::Metadata {
+                source: e.into(),
+                path: location.to_string(),
+            })?
+        }
+    }
 }
 
 fn last_modified(metadata: &Metadata) -> DateTime<Utc> {

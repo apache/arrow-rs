@@ -669,14 +669,30 @@ impl WriterPropertiesBuilder {
     }
 }
 
-/// Controls the level of statistics to be computed by the writer
+/// Controls the level of statistics to be computed by the writer and stored in
+/// the parquet file.
+///
+/// Enabling statistics makes the resulting Parquet file larger and requires
+/// more time to read the parquet footer.
+///
+/// Statistics can be used to improve query performance by pruning row groups
+/// and pages during query execution if the query engine supports evaluating the
+/// predicate using the statistics.
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub enum EnabledStatistics {
-    /// Compute no statistics
+    /// Compute no statistics.
     None,
-    /// Compute chunk-level statistics but not page-level
+    /// Compute column chunk-level statistics but not page-level.
+    ///
+    /// Setting this option will store one set of statistics for each relevant
+    /// column for each row group. The more row groups written, the more
+    /// statistics will be stored.
     Chunk,
-    /// Compute page-level and chunk-level statistics
+    /// Compute page-level and column chunk-level statistics.
+    ///
+    /// Setting this option will store one set of statistics for each relevant
+    /// column for each page and row group. The more row groups and the more
+    /// pages written, the more statistics will be stored.
     Page,
 }
 

@@ -665,6 +665,23 @@ impl BasicTypeInfo {
 // Parquet descriptor definitions
 
 /// Represents the location of a column in a Parquet schema
+///
+/// # Example: refer to column named `'my_column'`
+/// ```
+/// # use parquet::schema::types::ColumnPath;
+/// let column_path = ColumnPath::from("my_column");
+/// ```
+///
+/// # Example: refer to column named `c` in a nested struct `{a: {b: {c: ...}}}`
+/// ```
+/// # use parquet::schema::types::ColumnPath;
+/// // form path 'a.b.c'
+/// let column_path = ColumnPath::from(vec![
+///   String::from("a"),
+///   String::from("b"),
+///   String::from("c")
+/// ]);
+/// ```
 #[derive(Clone, PartialEq, Debug, Eq, Hash)]
 pub struct ColumnPath {
     parts: Vec<String>,
