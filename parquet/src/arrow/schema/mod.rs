@@ -1582,8 +1582,8 @@ mod tests {
         let parquet_group_type = parse_message_type(message_type).unwrap();
 
         let key_value_metadata = vec![
-            KeyValue::new("foo".into(), Cow::Borrowed("bar")),
-            KeyValue::new("baz".into(), None),
+            KeyValue::new("foo", Some(Cow::Borrowed("bar"))),
+            KeyValue::new("baz", None),
         ];
 
         let mut expected_metadata: HashMap<String, String> = HashMap::new();

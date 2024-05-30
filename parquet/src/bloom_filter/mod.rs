@@ -80,12 +80,11 @@ use crate::format::{
     BloomFilterAlgorithm, BloomFilterCompression, BloomFilterHash, BloomFilterHeader,
     SplitBlockAlgorithm, Uncompressed, XxHash,
 };
-use crate::thrift::{TCompactSliceInputProtocol, TSerializable};
 use bytes::Bytes;
 use std::hash::Hasher;
 use std::io::Write;
 use std::sync::Arc;
-use thrift::protocol::{TCompactOutputProtocol, TOutputProtocol};
+use compact_thrift_rs::{CompactThriftProtocol, SliceInput};
 use twox_hash::XxHash64;
 
 /// Salt as defined in the [spec](https://github.com/apache/parquet-format/blob/master/BloomFilter.md#technical-approach).
@@ -205,8 +204,8 @@ pub(crate) fn read_bloom_filter_header_and_length(
     buffer: Bytes,
 ) -> Result<(BloomFilterHeader, u64), ParquetError> {
     let total_length = buffer.len();
-    let mut prot = TCompactSliceInputProtocol::new(buffer.as_ref());
-    let header = BloomFilterHeader::read_from_in_protocol(&mut prot)
+    let mut prot = SliceInput::new(buffer.as_ref());
+    let header = BloomFilterHeader::read(&mut prot)
         .map_err(|e| ParquetError::General(format!("Could not read bloom filter header: {e}")))?;
     Ok((header, (total_length - prot.as_slice().len()) as u64))
 }
@@ -270,12 +269,11 @@ impl Sbbf {
     /// flush the writer in order to boost performance of bulk writing all blocks. Caller
     /// must remember to flush the writer.
     pub(crate) fn write<W: Write>(&self, mut writer: W) -> Result<(), ParquetError> {
-        let mut protocol = TCompactOutputProtocol::new(&mut writer);
         let header = self.header();
-        header.write_to_out_protocol(&mut protocol).map_err(|e| {
+        header.write(&mut writer).map_err(|e| {
             ParquetError::General(format!("Could not write bloom filter header: {e}"))
         })?;
-        protocol.flush()?;
+        writer.flush()?;
         self.write_bitset(&mut writer)?;
         Ok(())
     }
@@ -296,7 +294,7 @@ impl Sbbf {
     fn header(&self) -> BloomFilterHeader {
         BloomFilterHeader {
             // 8 i32 per block, 4 bytes per i32
-            num_bytes: self.0.len() as i32 * 4 * 8,
+            numBytes: self.0.len() as i32 * 4 * 8,
             algorithm: BloomFilterAlgorithm::BLOCK(SplitBlockAlgorithm {}),
             hash: BloomFilterHash::XXHASH(XxHash {}),
             compression: BloomFilterCompression::UNCOMPRESSED(Uncompressed {}),
@@ -343,7 +341,7 @@ impl Sbbf {
         let bitset = match column_metadata.bloom_filter_length() {
             Some(_) => buffer.slice((bitset_offset - offset) as usize..),
             None => {
-                let bitset_length: usize = header.num_bytes.try_into().map_err(|_| {
+                let bitset_length: usize = header.numBytes.try_into().map_err(|_| {
                     ParquetError::General("Bloom filter length is invalid".to_string())
                 })?;
                 reader.get_bytes(bitset_offset, bitset_length)?
@@ -455,7 +453,7 @@ mod tests {
                 algorithm,
                 compression,
                 hash,
-                num_bytes,
+                numBytes,
             },
             read_length,
         ) = read_bloom_filter_header_and_length(Bytes::copy_from_slice(buffer)).unwrap();
@@ -469,7 +467,7 @@ mod tests {
             BloomFilterCompression::UNCOMPRESSED(Uncompressed {})
         );
         assert_eq!(hash, BloomFilterHash::XXHASH(XxHash {}));
-        assert_eq!(num_bytes, 32_i32);
+        assert_eq!(numBytes, 32_i32);
         assert_eq!(20, SBBF_HEADER_SIZE_ESTIMATE);
     }
 

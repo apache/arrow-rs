@@ -172,7 +172,7 @@ impl CompressedPage {
         let page_type = self.page_type();
 
         let mut page_header = PageHeader {
-            type_: page_type.into(),
+            r#type: page_type.into(),
             uncompressed_page_size: uncompressed_size as i32,
             compressed_page_size: compressed_size as i32,
             // TODO: Add support for crc checksum
@@ -278,7 +278,7 @@ impl<'a> TryFrom<&PageHeader<'a>> for PageMetadata {
     type Error = ParquetError;
 
     fn try_from(value: &PageHeader) -> std::result::Result<Self, Self::Error> {
-        match value.type_ {
+        match value.r#type {
             crate::format::PageType::DATA_PAGE => {
                 let header = value.data_page_header.as_ref().unwrap();
                 Ok(PageMetadata {

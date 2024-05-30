@@ -104,16 +104,18 @@ macro_rules! experimental {
 pub mod errors;
 pub mod basic;
 
-/// Automatically generated code for reading parquet thrift definition.
-// see parquet/CONTRIBUTING.md for instructions on regenerating
-#[allow(clippy::derivable_impls, clippy::match_single_binding)]
-// Don't try and format auto generated code
-#[rustfmt::skip]
-pub mod format;
+pub mod format {
+    pub use parquet_format::format::*;
+}
+
+pub type CompactSliceInputProtocol<'i> = SliceInput<'i>;
+
+// pub mod compact_format;
 
 #[macro_use]
 pub mod data_type;
 
+use compact_thrift_rs::SliceInput;
 // Exported for external use, such as benchmarks
 #[cfg(feature = "experimental")]
 #[doc(hidden)]
@@ -129,5 +131,3 @@ pub mod bloom_filter;
 pub mod file;
 pub mod record;
 pub mod schema;
-
-pub mod thrift;

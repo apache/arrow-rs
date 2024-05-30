@@ -24,8 +24,8 @@ use crate::file::metadata::ColumnChunkMetaData;
 use crate::file::page_index::index::{Index, NativeIndex};
 use crate::file::reader::ChunkReader;
 use crate::format::{ColumnIndex, OffsetIndex, PageLocation};
-use crate::thrift::{TCompactSliceInputProtocol, TSerializable};
 use std::ops::Range;
+use compact_thrift_rs::{CompactThriftProtocol, SliceInput};
 
 /// Computes the covering range of two optional ranges
 ///
@@ -110,15 +110,15 @@ pub fn read_pages_locations<R: ChunkReader>(
 }
 
 pub(crate) fn decode_offset_index(data: &[u8]) -> Result<Vec<PageLocation>, ParquetError> {
-    let mut prot = TCompactSliceInputProtocol::new(data);
-    let offset = OffsetIndex::read_from_in_protocol(&mut prot)?;
+    let mut prot = SliceInput::new(data);
+    let offset = OffsetIndex::read(&mut prot)?;
     Ok(offset.page_locations)
 }
 
 pub(crate) fn decode_column_index(data: &[u8], column_type: Type) -> Result<Index, ParquetError> {
-    let mut prot = TCompactSliceInputProtocol::new(data);
+    let mut prot = SliceInput::new(data);
 
-    let index = ColumnIndex::read_from_in_protocol(&mut prot)?;
+    let index = ColumnIndex::read(&mut prot)?;
 
     let index = match column_type {
         Type::BOOLEAN => Index::BOOLEAN(NativeIndex::<bool>::try_new(index)?),

@@ -640,7 +640,7 @@ impl ColumnChunkMetaData {
             return Err(general_err!("Expected to have column metadata"));
         }
         let mut col_metadata: ColumnMetaData = cc.meta_data.unwrap();
-        let column_type = Type::try_from(col_metadata.type_)?;
+        let column_type = Type::try_from(col_metadata.r#type)?;
         let encodings = col_metadata
             .encodings
             .drain(0..)
@@ -720,7 +720,7 @@ impl ColumnChunkMetaData {
 
         ColumnMetaData {
             path_in_schema,
-            type_: self.column_type().into(),
+            r#type: self.column_type().into(),
             encodings: self.encodings().iter().map(|&v| v.into()).collect(),
             codec: self.compression.into(),
             num_values: self.num_values,
@@ -737,6 +737,7 @@ impl ColumnChunkMetaData {
                 .map(|vec| vec.iter().map(page_encoding_stats::to_thrift).collect()),
             bloom_filter_offset: self.bloom_filter_offset,
             bloom_filter_length: self.bloom_filter_length,
+            size_statistics: None,
         }
     }
 
@@ -947,10 +948,12 @@ impl ColumnIndexBuilder {
     pub fn build_to_thrift(self) -> ColumnIndex<'static> {
         ColumnIndex::new(
             self.null_pages,
-            self.min_values.into_iter().map(|x| x.into()).collect(),
-            self.max_values.into_iter().map(|x| x.into()).collect(),
+            self.min_values.into_iter().map(|x| x.into()).collect::<Vec<_>>(),
+            self.max_values.into_iter().map(|x| x.into()).collect::<Vec<_>>(),
             self.boundary_order,
             self.null_counts,
+            None,
+            None,
         )
     }
 }
@@ -999,7 +1002,7 @@ impl OffsetIndexBuilder {
             .zip(self.first_row_index_array.iter())
             .map(|((offset, size), row_index)| PageLocation::new(*offset, *size, *row_index))
             .collect::<Vec<_>>();
-        OffsetIndex::new(locations)
+        OffsetIndex::new(locations, None)
     }
 }
 

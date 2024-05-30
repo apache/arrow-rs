@@ -1064,7 +1064,7 @@ mod tests {
             .set_max_row_group_size(40)
             .set_created_by("default".to_owned())
             .set_key_value_metadata(Some(vec![KeyValue::new(
-                "key".into(),
+                "key",
                 Cow::Borrowed("value"),
             )]))
             // global column settings
@@ -1092,7 +1092,7 @@ mod tests {
         assert_eq!(props.created_by(), "default");
         assert_eq!(
             props.key_value_metadata(),
-            Some(&vec![KeyValue::new("key".into(), Cow::Borrowed("value"))])
+            Some(&vec![KeyValue::new("key", Cow::Borrowed("value"))])
         );
 
         assert_eq!(

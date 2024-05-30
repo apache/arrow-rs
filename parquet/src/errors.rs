@@ -19,6 +19,7 @@
 
 use std::error::Error;
 use std::{cell, io, result, str};
+use compact_thrift_rs::ThriftError;
 
 #[cfg(feature = "arrow")]
 use arrow_schema::ArrowError;
@@ -87,8 +88,8 @@ impl From<snap::Error> for ParquetError {
     }
 }
 
-impl From<thrift::Error> for ParquetError {
-    fn from(e: thrift::Error) -> ParquetError {
+impl From<ThriftError> for ParquetError {
+    fn from(e: ThriftError) -> Self {
         ParquetError::External(Box::new(e))
     }
 }

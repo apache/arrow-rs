@@ -608,7 +608,7 @@ impl<'a> GroupTypeBuilder<'a> {
 
 /// Basic type info. This contains information such as the name of the type,
 /// the repetition level, the logical type and the kind of the type (group, primitive).
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct BasicTypeInfo {
     name: String,
     repetition: Option<Repetition>,
@@ -1067,7 +1067,7 @@ fn from_thrift_helper(elements: &[SchemaElement], index: usize) -> Result<(usize
     // LogicalType is only present in v2 Parquet files. ConvertedType is always
     // populated, regardless of the version of the file (v1 or v2).
     let logical_type = element
-        .logical_type
+        .logicalType
         .as_ref()
         .map(|value| LogicalType::from(value.clone()));
     let field_id = elements[index].field_id;
@@ -1085,7 +1085,7 @@ fn from_thrift_helper(elements: &[SchemaElement], index: usize) -> Result<(usize
                 ));
             }
             let repetition = Repetition::try_from(elements[index].repetition_type.unwrap())?;
-            if let Some(type_) = elements[index].type_ {
+            if let Some(type_) = elements[index].r#type {
                 let physical_type = PhysicalType::try_from(type_)?;
                 let length = elements[index].type_length.unwrap_or(-1);
                 let scale = elements[index].scale.unwrap_or(-1);
@@ -1176,7 +1176,7 @@ fn to_thrift_helper(schema: &Type, elements: &mut Vec<SchemaElement>) {
             precision,
         } => {
             let element = SchemaElement {
-                type_: Some(physical_type.into()),
+                r#type: Some(physical_type.into()),
                 type_length: if type_length >= 0 {
                     Some(type_length)
                 } else {
@@ -1197,7 +1197,7 @@ fn to_thrift_helper(schema: &Type, elements: &mut Vec<SchemaElement>) {
                 } else {
                     None
                 },
-                logical_type: basic_info.logical_type().map(|value| value.into()),
+                logicalType: basic_info.logical_type().map(|value| value.into()),
             };
 
             elements.push(element);
@@ -1213,7 +1213,7 @@ fn to_thrift_helper(schema: &Type, elements: &mut Vec<SchemaElement>) {
             };
 
             let element = SchemaElement {
-                type_: None,
+                r#type: None,
                 type_length: None,
                 repetition_type: repetition,
                 name: basic_info.name().to_owned().into(),
@@ -1226,7 +1226,7 @@ fn to_thrift_helper(schema: &Type, elements: &mut Vec<SchemaElement>) {
                 } else {
                     None
                 },
-                logical_type: basic_info.logical_type().map(|value| value.into()),
+                logicalType: basic_info.logical_type().map(|value| value.into()),
             };
 
             elements.push(element);

@@ -16,9 +16,9 @@
 // under the License.
 
 use std::{io::Read, sync::Arc};
+use compact_thrift_rs::{CompactThriftProtocol, SliceInput};
 
 use crate::format::{ColumnOrder as TColumnOrder, FileMetaData as TFileMetaData};
-use crate::thrift::{TCompactSliceInputProtocol, TSerializable};
 
 use crate::basic::ColumnOrder;
 
@@ -68,8 +68,8 @@ pub fn parse_metadata<R: ChunkReader>(chunk_reader: &R) -> Result<ParquetMetaDat
 /// Decodes [`ParquetMetaData`] from the provided bytes
 pub fn decode_metadata(buf: &[u8]) -> Result<ParquetMetaData> {
     // TODO: row group filtering
-    let mut prot = TCompactSliceInputProtocol::new(buf);
-    let t_file_metadata: TFileMetaData = TFileMetaData::read_from_in_protocol(&mut prot)
+    let mut prot = SliceInput::new(buf);
+    let t_file_metadata: TFileMetaData = TFileMetaData::read(&mut prot)
         .map_err(|e| ParquetError::General(format!("Could not parse metadata: {e}")))?;
     let schema = types::from_thrift(&t_file_metadata.schema)?;
     let schema_descr = Arc::new(SchemaDescriptor::new(schema));
@@ -81,10 +81,10 @@ pub fn decode_metadata(buf: &[u8]) -> Result<ParquetMetaData> {
     let kv_metadata = t_file_metadata.key_value_metadata.map(|x| {
         x.into_iter()
             .map(|x| {
-                KeyValue::new(
-                    x.key.into_owned().into(),
-                    x.value.map(|x| x.into_owned().into()),
-                )
+                KeyValue {
+                    key: x.key.into_owned().into(),
+                    value: x.value.map(|x| x.into_owned().into()),
+                }
             })
             .collect()
     });
@@ -130,7 +130,7 @@ fn parse_column_orders(
             let mut res = Vec::new();
             for (i, column) in schema_descr.columns().iter().enumerate() {
                 match orders[i] {
-                    TColumnOrder::TYPEORDER(_) => {
+                    TColumnOrder::TYPE_ORDER(_) => {
                         let sort_order = ColumnOrder::get_sort_order(
                             column.logical_type(),
                             column.converted_type(),
@@ -208,8 +208,8 @@ mod tests {
         let schema_descr = SchemaDescriptor::new(Arc::new(schema));
 
         let t_column_orders = Some(vec![
-            TColumnOrder::TYPEORDER(TypeDefinedOrder::new()),
-            TColumnOrder::TYPEORDER(TypeDefinedOrder::new()),
+            TColumnOrder::TYPE_ORDER(TypeDefinedOrder::new()),
+            TColumnOrder::TYPE_ORDER(TypeDefinedOrder::new()),
         ]);
 
         assert_eq!(
@@ -230,7 +230,7 @@ mod tests {
         let schema = SchemaType::group_type_builder("schema").build().unwrap();
         let schema_descr = SchemaDescriptor::new(Arc::new(schema));
 
-        let t_column_orders = Some(vec![TColumnOrder::TYPEORDER(TypeDefinedOrder::new())]);
+        let t_column_orders = Some(vec![TColumnOrder::TYPE_ORDER(TypeDefinedOrder::new())]);
 
         parse_column_orders(t_column_orders, &schema_descr);
     }

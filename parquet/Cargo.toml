@@ -47,7 +47,7 @@ arrow-ipc = { workspace = true, optional = true }
 object_store = { version = "0.10.0", default-features = false, optional = true }
 
 bytes = { version = "1.1", default-features = false, features = ["std"] }
-thrift = { version = "0.17", default-features = false }
+#thrift = { version = "0.17", default-features = false }
 snap = { version = "1.0", default-features = false, optional = true }
 brotli = { version = "6.0", default-features = false, features = ["std"], optional = true }
 flate2 = { version = "1.0", default-features = false, features = ["rust_backend"], optional = true }
@@ -70,6 +70,9 @@ hashbrown = { version = "0.14", default-features = false }
 twox-hash = { version = "1.6", default-features = false }
 paste = { version = "1.0" }
 half = { version = "2.1", default-features = false, features = ["num-traits"] }
+
+compact-thrift-rs = { version = "0.1.0", git = "https://github.com/jhorstmann/compact-thrift.git" }
+parquet-format = { version = "0.1.0", git = "https://github.com/jhorstmann/compact-thrift.git" }
 
 [dev-dependencies]
 base64 = { version = "0.22", default-features = false, features = ["std"] }

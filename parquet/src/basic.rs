@@ -167,7 +167,7 @@ pub enum ConvertedType {
 /// This is an *entirely new* struct as of version
 /// 4.0.0. The struct previously named `LogicalType` was renamed to
 /// [`ConvertedType`]. Please see the README.md for more details.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum LogicalType {
     String,
     Map,
@@ -765,16 +765,16 @@ impl From<parquet::LogicalType> for LogicalType {
             },
             parquet::LogicalType::DATE(_) => LogicalType::Date,
             parquet::LogicalType::TIME(t) => LogicalType::Time {
-                is_adjusted_to_u_t_c: t.is_adjusted_to_u_t_c,
+                is_adjusted_to_u_t_c: t.isAdjustedToUTC,
                 unit: t.unit,
             },
             parquet::LogicalType::TIMESTAMP(t) => LogicalType::Timestamp {
-                is_adjusted_to_u_t_c: t.is_adjusted_to_u_t_c,
+                is_adjusted_to_u_t_c: t.isAdjustedToUTC,
                 unit: t.unit,
             },
             parquet::LogicalType::INTEGER(t) => LogicalType::Integer {
-                bit_width: t.bit_width,
-                is_signed: t.is_signed,
+                bit_width: t.bitWidth,
+                is_signed: t.isSigned,
             },
             parquet::LogicalType::UNKNOWN(_) => LogicalType::Unknown,
             parquet::LogicalType::JSON(_) => LogicalType::Json,
@@ -800,22 +800,22 @@ impl From<LogicalType> for parquet::LogicalType {
                 is_adjusted_to_u_t_c,
                 unit,
             } => parquet::LogicalType::TIME(TimeType {
-                is_adjusted_to_u_t_c,
+                isAdjustedToUTC: is_adjusted_to_u_t_c,
                 unit,
             }),
             LogicalType::Timestamp {
                 is_adjusted_to_u_t_c,
                 unit,
             } => parquet::LogicalType::TIMESTAMP(TimestampType {
-                is_adjusted_to_u_t_c,
+                isAdjustedToUTC: is_adjusted_to_u_t_c,
                 unit,
             }),
             LogicalType::Integer {
                 bit_width,
                 is_signed,
             } => parquet::LogicalType::INTEGER(IntType {
-                bit_width,
-                is_signed,
+                bitWidth: bit_width,
+                isSigned: is_signed,
             }),
             LogicalType::Unknown => parquet::LogicalType::UNKNOWN(Default::default()),
             LogicalType::Json => parquet::LogicalType::JSON(Default::default()),

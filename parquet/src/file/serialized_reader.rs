@@ -39,9 +39,8 @@ use crate::format::{PageHeader, PageLocation, PageType};
 use crate::record::reader::RowIter;
 use crate::record::Row;
 use crate::schema::types::Type as SchemaType;
-use crate::thrift::{TCompactSliceInputProtocol, TSerializable};
 use bytes::Bytes;
-use thrift::protocol::TCompactInputProtocol;
+use compact_thrift_rs::{CompactThriftProtocol, SliceInput};
 
 impl TryFrom<File> for SerializedFileReader<File> {
     type Error = ParquetError;
@@ -354,8 +353,7 @@ impl<'a, R: 'static + ChunkReader> RowGroupReader for SerializedRowGroupReader<'
 
 /// Reads a [`PageHeader`] from the provided [`Read`]
 pub(crate) fn read_page_header<T: Read>(input: &mut T) -> Result<PageHeader<'static>> {
-    let mut prot = TCompactInputProtocol::new(input);
-    let page_header = PageHeader::read_from_in_protocol(&mut prot)?;
+    let page_header = PageHeader::read(input)?;
     Ok(page_header)
 }
 
@@ -433,7 +431,7 @@ pub(crate) fn decode_page(
         _ => buffer,
     };
 
-    let result = match page_header.type_ {
+    let result = match page_header.r#type {
         PageType::DICTIONARY_PAGE => {
             let dict_header = page_header.dictionary_page_header.as_ref().ok_or_else(|| {
                 ParquetError::General("Missing dictionary page header".to_string())
@@ -478,7 +476,7 @@ pub(crate) fn decode_page(
         }
         _ => {
             // For unknown page type (e.g., INDEX_PAGE), skip and read next.
-            unimplemented!("Page type {:?} is not supported", page_header.type_)
+            unimplemented!("Page type {:?} is not supported", page_header.r#type)
         }
     };
 
@@ -610,7 +608,7 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
                     *offset += data_len;
                     *remaining -= data_len;
 
-                    if header.type_ == PageType::INDEX_PAGE {
+                    if header.r#type == PageType::INDEX_PAGE {
                         continue;
                     }
 
@@ -649,8 +647,8 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
 
                     let buffer = self.reader.get_bytes(front.offset as u64, page_len)?;
 
-                    let mut prot = TCompactSliceInputProtocol::new(buffer.as_ref());
-                    let header = PageHeader::read_from_in_protocol(&mut prot)?;
+                    let mut prot = SliceInput::new(buffer.as_ref());
+                    let header = PageHeader::read(&mut prot)?;
                     let offset = buffer.len() - prot.as_slice().len();
 
                     let bytes = buffer.slice(offset..);
