@@ -552,10 +552,9 @@ impl PreparedStatement<Channel> {
         &self,
         put_result: &PutResult,
     ) -> Result<Option<Bytes>, ArrowError> {
-        let any = Any::decode(&*put_result.app_metadata).map_err(decode_error_to_arrow_error)?;
-        Ok(any
-            .unpack::<DoPutPreparedStatementResult>()?
-            .and_then(|result| result.prepared_statement_handle))
+        let result: DoPutPreparedStatementResult =
+            Message::decode(&*put_result.app_metadata).map_err(decode_error_to_arrow_error)?;
+        Ok(result.prepared_statement_handle)
     }
 
     /// Close the prepared statement, so that this PreparedStatement can not used
