@@ -15,8 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Utilities for pretty printing record batches. Note this module is not
-//! available unless `feature = "prettyprint"` is enabled.
+//! Utilities for pretty printing [`RecordBatch`]es and [`Array`]s.
+//!
+//! Note this module is not available unless `feature = "prettyprint"` is enabled.
+//!
+//! [`RecordBatch`]: arrow_array::RecordBatch
+//! [`Array`]: arrow_array::Array
 
 use std::fmt::Display;
 

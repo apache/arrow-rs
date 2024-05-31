@@ -15,6 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! [`Parser`] implementations for converting strings to Arrow types
+//!
+//! Used by the CSV and JSON readers to convert strings to Arrow types
 use arrow_array::timezone::Tz;
 use arrow_array::types::*;
 use arrow_array::ArrowNativeTypeOp;
@@ -405,8 +408,29 @@ fn string_to_time(s: &str) -> Option<NaiveTime> {
     )
 }
 
-/// Specialized parsing implementations
-/// used by csv and json reader
+/// Specialized parsing implementations used by csv and json reader
+///
+/// You can also use this to parse strings to Arrow types.
+///
+/// # Example
+///
+/// To parse a string to a [`Date32Type`]:
+///
+/// ```
+/// use arrow_cast::parse::Parser;
+/// use arrow_array::types::Date32Type;
+/// let date = Date32Type::parse("2021-01-01").unwrap();
+/// assert_eq!(date, 18628);
+/// ```
+///
+/// To parse a string to a [`TimestampNanosecondType`]:
+///
+/// ```
+/// use arrow_cast::parse::Parser;
+/// use arrow_array::types::TimestampNanosecondType;
+/// let ts = TimestampNanosecondType::parse("2021-01-01T00:00:00.123456789Z").unwrap();
+/// assert_eq!(ts, 1609459200123456789);
+/// ```
 pub trait Parser: ArrowPrimitiveType {
     fn parse(string: &str) -> Option<Self::Native>;
 
