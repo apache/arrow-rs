@@ -408,9 +408,9 @@ fn string_to_time(s: &str) -> Option<NaiveTime> {
     )
 }
 
-/// Specialized parsing implementations used by csv and json reader
+/// Specialized parsing implementations to convert strings to Arrow types.
 ///
-/// You can also use this to parse strings to Arrow types.
+/// This is used by csv and json reader and can be used directly as well.
 ///
 /// # Example
 ///

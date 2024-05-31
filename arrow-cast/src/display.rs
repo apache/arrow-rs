@@ -17,7 +17,7 @@
 
 //! Functions for printing array values as human-readable strings.
 //!
-//! This is often used  for debugging or logging purposes.
+//! This is often used for debugging or logging purposes.
 //!
 //! See the [`pretty`] crate for additional functions for
 //! record batch pretty printing.
