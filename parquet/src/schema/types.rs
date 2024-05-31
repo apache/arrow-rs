@@ -357,7 +357,13 @@ impl<'a> PrimitiveTypeBuilder<'a> {
                     (LogicalType::String, PhysicalType::BYTE_ARRAY) => {}
                     (LogicalType::Json, PhysicalType::BYTE_ARRAY) => {}
                     (LogicalType::Bson, PhysicalType::BYTE_ARRAY) => {}
-                    (LogicalType::Uuid, PhysicalType::FIXED_LEN_BYTE_ARRAY) => {}
+                    (LogicalType::Uuid, PhysicalType::FIXED_LEN_BYTE_ARRAY) if self.length == 16 => {}
+                    (LogicalType::Uuid, PhysicalType::FIXED_LEN_BYTE_ARRAY) => {
+                        return Err(general_err!(
+                            "UUID cannot annotate field '{}' because it is not a FIXED_LEN_BYTE_ARRAY(16) field",
+                            self.name
+                        ))
+                    }
                     (LogicalType::Float16, PhysicalType::FIXED_LEN_BYTE_ARRAY)
                         if self.length == 2 => {}
                     (LogicalType::Float16, PhysicalType::FIXED_LEN_BYTE_ARRAY) => {
@@ -1592,6 +1598,20 @@ mod tests {
             assert_eq!(
                 format!("{e}"),
                 "Parquet error: FLOAT16 cannot annotate field 'foo' because it is not a FIXED_LEN_BYTE_ARRAY(2) field"
+            );
+        }
+
+        // Must have length 16
+        result = Type::primitive_type_builder("foo", PhysicalType::FIXED_LEN_BYTE_ARRAY)
+            .with_repetition(Repetition::REQUIRED)
+            .with_logical_type(Some(LogicalType::Uuid))
+            .with_length(15)
+            .build();
+        assert!(result.is_err());
+        if let Err(e) = result {
+            assert_eq!(
+                format!("{e}"),
+                "Parquet error: UUID cannot annotate field 'foo' because it is not a FIXED_LEN_BYTE_ARRAY(16) field"
             );
         }
     }
