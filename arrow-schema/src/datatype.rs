@@ -680,7 +680,7 @@ impl DataType {
 /// the definitions of well-known extension types so as to improve
 /// interoperability between different systems integrating Arrow columnar data.
 ///
-/// https://arrow.apache.org/docs/format/CanonicalExtensions.html
+/// <https://arrow.apache.org/docs/format/CanonicalExtensions.html>
 #[non_exhaustive]
 #[derive(Debug, Clone)]
 pub enum ExtensionType {
