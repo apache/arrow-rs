@@ -15,22 +15,22 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Defines cast kernels for `ArrayRef`, to convert `Array`s between
-//! supported datatypes.
+//! Cast kernels to convert [`ArrayRef`]  between supported datatypes.
+//!
+//! See [`cast_with_options`] for more information on specific conversions.
 //!
 //! Example:
 //!
 //! ```
-//! use arrow_array::*;
-//! use arrow_cast::cast;
-//! use arrow_schema::DataType;
-//! use std::sync::Arc;
-//! use arrow_array::types::Float64Type;
-//! use arrow_array::cast::AsArray;
-//!
+//! # use arrow_array::*;
+//! # use arrow_cast::cast;
+//! # use arrow_schema::DataType;
+//! # use std::sync::Arc;
+//! # use arrow_array::types::Float64Type;
+//! # use arrow_array::cast::AsArray;
+//! // int32 to float64
 //! let a = Int32Array::from(vec![5, 6, 7]);
-//! let array = Arc::new(a) as ArrayRef;
-//! let b = cast(&array, &DataType::Float64).unwrap();
+//! let b = cast(&a, &DataType::Float64).unwrap();
 //! let c = b.as_primitive::<Float64Type>();
 //! assert_eq!(5.0, c.value(0));
 //! assert_eq!(6.0, c.value(1));
@@ -554,11 +554,13 @@ fn timestamp_to_date32<T: ArrowTimestampType>(
     Ok(Arc::new(array))
 }
 
-/// Cast `array` to the provided data type and return a new Array with type `to_type`, if possible.
+/// Try to cast `array` to `to_type` if possible.
 ///
-/// Accepts [`CastOptions`] to specify cast behavior.
+/// Returns a new Array with type `to_type` if possible.
 ///
-/// ## Behavior
+/// Accepts [`CastOptions`] to specify cast behavior. See also [`cast()`].
+///
+/// # Behavior
 /// * Boolean to Utf8: `true` => '1', `false` => `0`
 /// * Utf8 to boolean: `true`, `yes`, `on`, `1` => `true`, `false`, `no`, `off`, `0` => `false`,
 ///   short variants are accepted, other strings return null or error
@@ -577,10 +579,95 @@ fn timestamp_to_date32<T: ArrowTimestampType>(
 ///   (i.e. casting `6.4999` to Decimal(10, 1) becomes `6.5`). Prior to  version `26.0.0`,
 ///   casting would truncate instead (i.e. outputs `6.4` instead)
 ///
-/// Unsupported Casts
+/// Unsupported Casts (check with `can_cast_types` before calling):
 /// * To or from `StructArray`
 /// * List to primitive
 /// * Interval and duration
+///
+/// # Timestamps and Timezones
+///
+/// Timestamps are stored with an optional timezone in Arrow.
+///
+/// ## Casting timestamps to a timestamp without timezone / UTC
+/// ```
+/// # use arrow_array::Int64Array;
+/// # use arrow_array::types::TimestampSecondType;
+/// # use arrow_cast::{cast, display};
+/// # use arrow_array::cast::AsArray;
+/// # use arrow_schema::{DataType, TimeUnit};
+/// // can use "UTC" if chrono-tz feature is enabled, here use offset based timezone
+/// let data_type = DataType::Timestamp(TimeUnit::Second, None);
+/// let a = Int64Array::from(vec![1_000_000_000, 2_000_000_000, 3_000_000_000]);
+/// let b = cast(&a, &data_type).unwrap();
+/// let b = b.as_primitive::<TimestampSecondType>(); // downcast to result type
+/// assert_eq!(2_000_000_000, b.value(1)); // values are the same as the type has no timezone
+/// // use display to show them (note has no trailing Z)
+/// assert_eq!("2033-05-18T03:33:20", display::array_value_to_string(&b, 1).unwrap());
+/// ```
+///
+/// ## Casting timestamps to a timestamp with timezone
+///
+/// Similarly to the previous example, if you cast numeric values to a timestamp
+/// with timezone, the cast kernel will not change the underlying values
+/// but display and othe functions will interpret them as being in the provided timezone.
+///
+/// ```
+/// # use arrow_array::Int64Array;
+/// # use arrow_array::types::TimestampSecondType;
+/// # use arrow_cast::{cast, display};
+/// # use arrow_array::cast::AsArray;
+/// # use arrow_schema::{DataType, TimeUnit};
+/// // can use "Americas/New_York" if chrono-tz feature is enabled, here use offset based timezone
+/// let data_type = DataType::Timestamp(TimeUnit::Second, Some("-05:00".into()));
+/// let a = Int64Array::from(vec![1_000_000_000, 2_000_000_000, 3_000_000_000]);
+/// let b = cast(&a, &data_type).unwrap();
+/// let b = b.as_primitive::<TimestampSecondType>(); // downcast to result type
+/// assert_eq!(2_000_000_000, b.value(1)); // values are still the same
+/// // They are displayed in the target timezone (note the offset -05:00)
+/// assert_eq!("2033-05-17T22:33:20-05:00", display::array_value_to_string(&b, 1).unwrap());
+/// ```
+/// # Casting timestamps without timezone to timestamps with timezone
+///
+/// When casting from a timestamp without timezone to a timestamp with
+/// timezone, the cast kernel treats the underlying timestamp values as being in
+/// UTC and adjusts them to the provided timezone.
+///
+/// However, note that when casting from a timestamp with timezone BACK to a
+/// timestamp without timezone the cast kernel does not adjust the values.
+///
+/// Thus round trip casting a timestamp without timezone to a timestamp with
+/// timezone and back to a timestamp without timezone results in different
+/// values than the starting values.
+///
+/// ```
+/// # use arrow_array::Int64Array;
+/// # use arrow_array::types::{TimestampSecondType};
+/// # use arrow_cast::{cast, display};
+/// # use arrow_array::cast::AsArray;
+/// # use arrow_schema::{DataType, TimeUnit};
+/// let data_type  = DataType::Timestamp(TimeUnit::Second, None);
+/// let data_type_tz = DataType::Timestamp(TimeUnit::Second, Some("-05:00".into()));
+/// let a = Int64Array::from(vec![1_000_000_000, 2_000_000_000, 3_000_000_000]);
+/// let b = cast(&a, &data_type).unwrap(); // cast to timestamp without timezone
+/// let b = b.as_primitive::<TimestampSecondType>(); // downcast to result type
+/// assert_eq!(2_000_000_000, b.value(1)); // values are still the same
+/// // They are displayed without a timezone (note lack of offset or Z)
+/// assert_eq!("2033-05-18T03:33:20", display::array_value_to_string(&b, 1).unwrap());
+///
+/// // Convert timestamps without a timezone to timestamps with a timezone
+/// let c = cast(&b, &data_type_tz).unwrap();
+/// let c = c.as_primitive::<TimestampSecondType>(); // downcast to result type
+/// assert_eq!(2_000_018_000, c.value(1)); // value has been adjusted by offset
+/// // When displayed, they are displayed without a timezone (note lack of offset or Z)
+/// assert_eq!("2033-05-18T03:33:20-05:00", display::array_value_to_string(&c, 1).unwrap());
+///
+/// // Convert from timestamp with timezone back to timestamp without timezone
+/// let d = cast(&c, &data_type).unwrap();
+/// let d = d.as_primitive::<TimestampSecondType>(); // downcast to result type
+/// assert_eq!(2_000_018_000, d.value(1)); // value has not been adjusted
+/// // When displayed, the timestamp is adjusted (08:33:20 instead of 03:33:20 as in previous example)
+/// assert_eq!("2033-05-18T08:33:20", display::array_value_to_string(&d, 1).unwrap());
+/// ```
 pub fn cast_with_options(
     array: &dyn Array,
     to_type: &DataType,
