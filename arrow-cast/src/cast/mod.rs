@@ -623,7 +623,7 @@ fn timestamp_to_date32<T: ArrowTimestampType>(
 /// let b = cast(&a, &data_type).unwrap();
 /// let b = b.as_primitive::<TimestampSecondType>(); // downcast to result type
 /// assert_eq!(2_000_000_000, b.value(1)); // values are still the same
-/// // They are displayed in the target timezone (note the offset -05:00)
+/// // displayed in the target timezone (note the offset -05:00)
 /// assert_eq!("2033-05-17T22:33:20-05:00", display::array_value_to_string(&b, 1).unwrap());
 /// ```
 /// # Casting timestamps without timezone to timestamps with timezone
@@ -651,21 +651,21 @@ fn timestamp_to_date32<T: ArrowTimestampType>(
 /// let b = cast(&a, &data_type).unwrap(); // cast to timestamp without timezone
 /// let b = b.as_primitive::<TimestampSecondType>(); // downcast to result type
 /// assert_eq!(2_000_000_000, b.value(1)); // values are still the same
-/// // They are displayed without a timezone (note lack of offset or Z)
+/// // displayed without a timezone (note lack of offset or Z)
 /// assert_eq!("2033-05-18T03:33:20", display::array_value_to_string(&b, 1).unwrap());
 ///
 /// // Convert timestamps without a timezone to timestamps with a timezone
 /// let c = cast(&b, &data_type_tz).unwrap();
 /// let c = c.as_primitive::<TimestampSecondType>(); // downcast to result type
 /// assert_eq!(2_000_018_000, c.value(1)); // value has been adjusted by offset
-/// // When displayed, they are displayed without a timezone (note lack of offset or Z)
+/// // displayed with the target timezone offset (-05:00)
 /// assert_eq!("2033-05-18T03:33:20-05:00", display::array_value_to_string(&c, 1).unwrap());
 ///
 /// // Convert from timestamp with timezone back to timestamp without timezone
 /// let d = cast(&c, &data_type).unwrap();
 /// let d = d.as_primitive::<TimestampSecondType>(); // downcast to result type
 /// assert_eq!(2_000_018_000, d.value(1)); // value has not been adjusted
-/// // When displayed, the timestamp is adjusted (08:33:20 instead of 03:33:20 as in previous example)
+/// // NOTE: the timestamp is adjusted (08:33:20 instead of 03:33:20 as in previous example)
 /// assert_eq!("2033-05-18T08:33:20", display::array_value_to_string(&d, 1).unwrap());
 /// ```
 pub fn cast_with_options(
