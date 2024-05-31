@@ -69,7 +69,7 @@ mod parquet_field;
 ///
 ///  let mut row_group = writer.next_row_group().unwrap();
 ///  samples.as_slice().write_to_row_group(&mut row_group).unwrap();
-///  writer.close_row_group(row_group).unwrap();
+///  row_group.close().unwrap();
 ///  writer.close().unwrap();
 /// }
 /// ```
