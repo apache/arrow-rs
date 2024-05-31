@@ -609,7 +609,7 @@ fn timestamp_to_date32<T: ArrowTimestampType>(
 ///
 /// Similarly to the previous example, if you cast numeric values to a timestamp
 /// with timezone, the cast kernel will not change the underlying values
-/// but display and othe functions will interpret them as being in the provided timezone.
+/// but display and other functions will interpret them as being in the provided timezone.
 ///
 /// ```
 /// # use arrow_array::Int64Array;
