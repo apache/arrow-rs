@@ -293,7 +293,15 @@ impl LocalFileSystem {
                 path: location.as_ref()
             }
         );
-        self.config.prefix_to_filesystem(location)
+        let path = self.config.prefix_to_filesystem(location)?;
+
+        #[cfg(target_os = "windows")]
+        let path = {
+            let mut path = path;
+            PathBuf::from(path.to_string_lossy().replace(":", "%3A"))
+        };
+
+        Ok(path)
     }
 }
 
@@ -1445,6 +1453,23 @@ mod tests {
         let mut list = flatten_list_stream(&integration, None).await.unwrap();
         list.sort_unstable();
         assert_eq!(list, vec![c, a]);
+    }
+
+
+    #[tokio::test]
+    #[cfg(target_os = "windows")]
+    async fn filesystem_filename_with_colon() {
+        let root = TempDir::new().unwrap();
+        let integration = LocalFileSystem::new_with_prefix(root.path()).unwrap();
+        let path = Path::parse("file%3Aname.parquet").unwrap();
+        let location = Path::parse("file:name.parquet").unwrap();
+
+        integration.put(&location, "test".into()).await.unwrap();
+        let list = flatten_list_stream(&integration, None).await.unwrap();
+        assert_eq!(list, vec![path.clone()]);
+
+        let result = integration.get(&location).await.unwrap().bytes().await.unwrap();
+        assert_eq!(result, Bytes::from("test"));
     }
 }
 
