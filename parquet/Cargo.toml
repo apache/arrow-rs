@@ -52,10 +52,10 @@ snap = { version = "1.0", default-features = false, optional = true }
 brotli = { version = "6.0", default-features = false, features = ["std"], optional = true }
 flate2 = { version = "1.0", default-features = false, features = ["rust_backend"], optional = true }
 lz4_flex = { version = "0.11", default-features = false, features = ["std", "frame"], optional = true }
+zstd = { version = "0.13", optional = true, default-features = false }
 # TODO: temporary to fix parquet wasm build
 # upstream issue: https://github.com/gyscos/zstd-rs/issues/269
-zstd = { version = "<0.13.1", optional = true, default-features = false }
-zstd-sys = { version = "<2.0.10", optional = true, default-features = false }
+zstd-sys = { version = ">=2.0.0, <2.0.10", optional = true, default-features = false }
 chrono = { workspace = true }
 num = { version = "0.4", default-features = false }
 num-bigint = { version = "0.4", default-features = false }
@@ -79,10 +79,10 @@ tempfile = { version = "3.0", default-features = false }
 brotli = { version = "6.0", default-features = false, features = ["std"] }
 flate2 = { version = "1.0", default-features = false, features = ["rust_backend"] }
 lz4_flex = { version = "0.11", default-features = false, features = ["std", "frame"] }
+zstd = { version = "0.13", default-features = false }
 # TODO: temporary to fix parquet wasm build
 # upstream issue: https://github.com/gyscos/zstd-rs/issues/269
-zstd = { version = "<0.13.1", default-features = false }
-zstd-sys = { version = "<2.0.10", default-features = false }
+zstd-sys = { version = ">=2.0.0, <2.0.10", default-features = false }
 serde_json = { version = "1.0", features = ["std"], default-features = false }
 arrow = { workspace = true, features = ["ipc", "test_utils", "prettyprint", "json"] }
 tokio = { version = "1.0", default-features = false, features = ["macros", "rt", "io-util", "fs"] }
