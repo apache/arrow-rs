@@ -15,9 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::{RowConverter, Rows, SortField};
-use arrow_array::builder::BufferBuilder;
+use crate::{null_sentinel, RowConverter, Rows, SortField};
 use arrow_array::{Array, GenericListArray, OffsetSizeTrait};
+use arrow_buffer::{Buffer, MutableBuffer};
 use arrow_data::ArrayDataBuilder;
 use arrow_schema::{ArrowError, SortOptions};
 use std::ops::Range;
@@ -43,12 +43,10 @@ pub fn compute_lengths<O: OffsetSizeTrait>(
 fn encoded_len(rows: &Rows, range: Option<Range<usize>>) -> usize {
     match range {
         None => 1,
-        Some(range) if range.start == range.end => 1,
         Some(range) => {
-            let element_count = range.end - range.start;
-            let row_bytes = range.map(|i| rows.row(i).as_ref().len()).sum::<usize>();
-            let total = (1 + element_count) * std::mem::size_of::<u32>() + row_bytes;
-            super::variable::padded_length(Some(total))
+            1 + range
+                .map(|i| super::variable::padded_length(Some(rows.row(i).as_ref().len())))
+                .sum::<usize>()
         }
     }
 }
@@ -63,7 +61,6 @@ pub fn encode<O: OffsetSizeTrait>(
     opts: SortOptions,
     array: &GenericListArray<O>,
 ) {
-    let mut temporary = vec![];
     offsets
         .iter_mut()
         .skip(1)
@@ -74,42 +71,28 @@ pub fn encode<O: OffsetSizeTrait>(
             let end = offsets[1].as_usize();
             let range = array.is_valid(idx).then_some(start..end);
             let out = &mut data[*offset..];
-            *offset += encode_one(out, &mut temporary, rows, range, opts)
+            *offset += encode_one(out, rows, range, opts)
         });
 }
 
 #[inline]
 fn encode_one(
     out: &mut [u8],
-    temporary: &mut Vec<u8>,
     rows: &Rows,
     range: Option<Range<usize>>,
     opts: SortOptions,
 ) -> usize {
-    temporary.clear();
-
     match range {
-        None => super::variable::encode_one(out, None, opts),
-        Some(range) if range.start == range.end => {
-            super::variable::encode_one(out, Some(&[]), opts)
-        }
+        None => super::variable::encode_null(out, opts),
+        Some(range) if range.start == range.end => super::variable::encode_empty(out, opts),
         Some(range) => {
-            for row in range.clone().map(|i| rows.row(i)) {
-                temporary.extend_from_slice(row.as_ref());
+            let mut offset = 0;
+            for i in range {
+                let row = rows.row(i);
+                offset += super::variable::encode_one(&mut out[offset..], Some(row.data), opts);
             }
-            for row in range.clone().map(|i| rows.row(i)) {
-                let len: u32 = row
-                    .as_ref()
-                    .len()
-                    .try_into()
-                    .expect("ListArray or LargeListArray containing a list of more than u32::MAX items is not supported");
-                temporary.extend_from_slice(&len.to_be_bytes());
-            }
-            let row_count: u32 = (range.end - range.start)
-                .try_into()
-                .expect("lists containing more than u32::MAX elements not supported");
-            temporary.extend_from_slice(&row_count.to_be_bytes());
-            super::variable::encode_one(out, Some(temporary), opts)
+            offset += super::variable::encode_empty(&mut out[offset..], opts);
+            offset
         }
     }
 }
@@ -125,50 +108,78 @@ pub unsafe fn decode<O: OffsetSizeTrait>(
     field: &SortField,
     validate_utf8: bool,
 ) -> Result<GenericListArray<O>, ArrowError> {
-    let canonical = super::variable::decode_binary::<i64>(rows, field.options);
+    let opts = field.options;
 
-    let mut offsets = BufferBuilder::<O>::new(rows.len() + 1);
-    offsets.append(O::from_usize(0).unwrap());
-    let mut current_offset = 0;
+    let mut values_bytes = 0;
 
-    let mut child_rows = Vec::with_capacity(rows.len());
-    canonical.value_offsets().windows(2).for_each(|w| {
-        let start = w[0] as usize;
-        let end = w[1] as usize;
-        if start == end {
-            // Null or empty list
-            offsets.append(O::from_usize(current_offset).unwrap());
-            return;
-        }
+    let mut offset = 0;
+    let mut offsets = Vec::with_capacity(rows.len() + 1);
+    offsets.push(O::usize_as(0));
 
-        let row = &canonical.value_data()[start..end];
-        let element_count_start = row.len() - 4;
-        let element_count =
-            u32::from_be_bytes((&row[element_count_start..]).try_into().unwrap()) as usize;
-
-        let lengths_start = element_count_start - (element_count * 4);
+    for row in rows.iter_mut() {
         let mut row_offset = 0;
-        row[lengths_start..element_count_start]
-            .chunks_exact(4)
-            .for_each(|chunk| {
-                let len = u32::from_be_bytes(chunk.try_into().unwrap());
-                let next_row_offset = row_offset + len as usize;
-                child_rows.push(&row[row_offset..next_row_offset]);
-                row_offset = next_row_offset;
+        loop {
+            let decoded = super::variable::decode_blocks(&row[row_offset..], opts, |x| {
+                values_bytes += x.len();
             });
+            if decoded <= 1 {
+                offsets.push(O::usize_as(offset));
+                break;
+            }
+            row_offset += decoded;
+            offset += 1;
+        }
+    }
+    O::from_usize(offset).expect("overflow");
 
-        current_offset += element_count;
-        offsets.append(O::from_usize(current_offset).unwrap());
+    let mut null_count = 0;
+    let nulls = MutableBuffer::collect_bool(rows.len(), |x| {
+        let valid = rows[x][0] != null_sentinel(opts);
+        null_count += !valid as usize;
+        valid
     });
+
+    let mut values_offsets = Vec::with_capacity(offset);
+    let mut values_bytes = Vec::with_capacity(values_bytes);
+    for row in rows.iter_mut() {
+        let mut row_offset = 0;
+        loop {
+            let decoded = super::variable::decode_blocks(&row[row_offset..], opts, |x| {
+                values_bytes.extend_from_slice(x)
+            });
+            row_offset += decoded;
+            if decoded <= 1 {
+                break;
+            }
+            values_offsets.push(values_bytes.len());
+        }
+        *row = &row[row_offset..];
+    }
+
+    if opts.descending {
+        values_bytes.iter_mut().for_each(|o| *o = !*o);
+    }
+
+    let mut last_value_offset = 0;
+    let mut child_rows: Vec<_> = values_offsets
+        .into_iter()
+        .map(|offset| {
+            let v = &values_bytes[last_value_offset..offset];
+            last_value_offset = offset;
+            v
+        })
+        .collect();
 
     let child = converter.convert_raw(&mut child_rows, validate_utf8)?;
     assert_eq!(child.len(), 1);
+
     let child_data = child[0].to_data();
 
     let builder = ArrayDataBuilder::new(field.data_type.clone())
         .len(rows.len())
-        .nulls(canonical.nulls().cloned())
-        .add_buffer(offsets.finish())
+        .null_count(null_count)
+        .null_bit_buffer(Some(nulls.into()))
+        .add_buffer(Buffer::from_vec(offsets))
         .add_child_data(child_data);
 
     Ok(GenericListArray::from(unsafe { builder.build_unchecked() }))

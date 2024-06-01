@@ -357,7 +357,13 @@ impl<'a> PrimitiveTypeBuilder<'a> {
                     (LogicalType::String, PhysicalType::BYTE_ARRAY) => {}
                     (LogicalType::Json, PhysicalType::BYTE_ARRAY) => {}
                     (LogicalType::Bson, PhysicalType::BYTE_ARRAY) => {}
-                    (LogicalType::Uuid, PhysicalType::FIXED_LEN_BYTE_ARRAY) => {}
+                    (LogicalType::Uuid, PhysicalType::FIXED_LEN_BYTE_ARRAY) if self.length == 16 => {}
+                    (LogicalType::Uuid, PhysicalType::FIXED_LEN_BYTE_ARRAY) => {
+                        return Err(general_err!(
+                            "UUID cannot annotate field '{}' because it is not a FIXED_LEN_BYTE_ARRAY(16) field",
+                            self.name
+                        ))
+                    }
                     (LogicalType::Float16, PhysicalType::FIXED_LEN_BYTE_ARRAY)
                         if self.length == 2 => {}
                     (LogicalType::Float16, PhysicalType::FIXED_LEN_BYTE_ARRAY) => {
@@ -665,6 +671,23 @@ impl BasicTypeInfo {
 // Parquet descriptor definitions
 
 /// Represents the location of a column in a Parquet schema
+///
+/// # Example: refer to column named `'my_column'`
+/// ```
+/// # use parquet::schema::types::ColumnPath;
+/// let column_path = ColumnPath::from("my_column");
+/// ```
+///
+/// # Example: refer to column named `c` in a nested struct `{a: {b: {c: ...}}}`
+/// ```
+/// # use parquet::schema::types::ColumnPath;
+/// // form path 'a.b.c'
+/// let column_path = ColumnPath::from(vec![
+///   String::from("a"),
+///   String::from("b"),
+///   String::from("c")
+/// ]);
+/// ```
 #[derive(Clone, PartialEq, Debug, Eq, Hash)]
 pub struct ColumnPath {
     parts: Vec<String>,
@@ -1575,6 +1598,20 @@ mod tests {
             assert_eq!(
                 format!("{e}"),
                 "Parquet error: FLOAT16 cannot annotate field 'foo' because it is not a FIXED_LEN_BYTE_ARRAY(2) field"
+            );
+        }
+
+        // Must have length 16
+        result = Type::primitive_type_builder("foo", PhysicalType::FIXED_LEN_BYTE_ARRAY)
+            .with_repetition(Repetition::REQUIRED)
+            .with_logical_type(Some(LogicalType::Uuid))
+            .with_length(15)
+            .build();
+        assert!(result.is_err());
+        if let Err(e) = result {
+            assert_eq!(
+                format!("{e}"),
+                "Parquet error: UUID cannot annotate field 'foo' because it is not a FIXED_LEN_BYTE_ARRAY(16) field"
             );
         }
     }

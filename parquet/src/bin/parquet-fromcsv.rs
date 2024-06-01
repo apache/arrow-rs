@@ -81,6 +81,7 @@ use std::{
 use arrow_csv::ReaderBuilder;
 use arrow_schema::{ArrowError, Schema};
 use clap::{Parser, ValueEnum};
+use parquet::arrow::arrow_writer::ArrowWriterOptions;
 use parquet::{
     arrow::{parquet_to_arrow_schema, ArrowWriter},
     basic::Compression,
@@ -333,13 +334,6 @@ fn configure_reader_builder(args: &Args, arrow_schema: Arc<Schema>) -> ReaderBui
     builder
 }
 
-fn arrow_schema_from_string(schema: &str) -> Result<Arc<Schema>, ParquetFromCsvError> {
-    let schema = Arc::new(parse_message_type(schema)?);
-    let desc = SchemaDescriptor::new(schema);
-    let arrow_schema = Arc::new(parquet_to_arrow_schema(&desc, None)?);
-    Ok(arrow_schema)
-}
-
 fn convert_csv_to_parquet(args: &Args) -> Result<(), ParquetFromCsvError> {
     let schema = read_to_string(args.schema_path()).map_err(|e| {
         ParquetFromCsvError::with_context(
@@ -347,7 +341,9 @@ fn convert_csv_to_parquet(args: &Args) -> Result<(), ParquetFromCsvError> {
             &format!("Failed to open schema file {:#?}", args.schema_path()),
         )
     })?;
-    let arrow_schema = arrow_schema_from_string(&schema)?;
+    let parquet_schema = Arc::new(parse_message_type(&schema)?);
+    let desc = SchemaDescriptor::new(parquet_schema);
+    let arrow_schema = Arc::new(parquet_to_arrow_schema(&desc, None)?);
 
     // create output parquet writer
     let parquet_file = File::create(&args.output_file).map_err(|e| {
@@ -357,9 +353,12 @@ fn convert_csv_to_parquet(args: &Args) -> Result<(), ParquetFromCsvError> {
         )
     })?;
 
-    let writer_properties = Some(configure_writer_properties(args));
+    let options = ArrowWriterOptions::new()
+        .with_properties(configure_writer_properties(args))
+        .with_schema_root(desc.name().to_string());
+
     let mut arrow_writer =
-        ArrowWriter::try_new(parquet_file, arrow_schema.clone(), writer_properties)
+        ArrowWriter::try_new_with_options(parquet_file, arrow_schema.clone(), options)
             .map_err(|e| ParquetFromCsvError::with_context(e, "Failed to create ArrowWriter"))?;
 
     // open input file
@@ -426,6 +425,7 @@ mod tests {
     use clap::{CommandFactory, Parser};
     use flate2::write::GzEncoder;
     use parquet::basic::{BrotliLevel, GzipLevel, ZstdLevel};
+    use parquet::file::reader::{FileReader, SerializedFileReader};
     use snap::write::FrameEncoder;
     use tempfile::NamedTempFile;
 
@@ -647,7 +647,7 @@ mod tests {
 
     fn test_convert_compressed_csv_to_parquet(csv_compression: Compression) {
         let schema = NamedTempFile::new().unwrap();
-        let schema_text = r"message schema {
+        let schema_text = r"message my_amazing_schema {
             optional int32 id;
             optional binary name (STRING);
         }";
@@ -728,6 +728,10 @@ mod tests {
             help: None,
         };
         convert_csv_to_parquet(&args).unwrap();
+
+        let file = SerializedFileReader::new(output_parquet.into_file()).unwrap();
+        let schema_name = file.metadata().file_metadata().schema().name();
+        assert_eq!(schema_name, "my_amazing_schema");
     }
 
     #[test]
