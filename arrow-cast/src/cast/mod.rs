@@ -629,8 +629,8 @@ fn timestamp_to_date32<T: ArrowTimestampType>(
 /// # Casting timestamps without timezone to timestamps with timezone
 ///
 /// When casting from a timestamp without timezone to a timestamp with
-/// timezone, the cast kernel treats the underlying timestamp values as being in
-/// UTC and adjusts them to the provided timezone.
+/// timezone, the cast kernel interprets the timestamp values as being in
+/// the destination timezone and then adjusts the underlying value to UTC as required
 ///
 /// However, note that when casting from a timestamp with timezone BACK to a
 /// timestamp without timezone the cast kernel does not adjust the values.
