@@ -15,8 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Cast kernel for [Apache Arrow](https://docs.rs/arrow)
-
+//! Functions for converting from one data type to another in [Apache Arrow](https://docs.rs/arrow)
 pub mod cast;
 pub use cast::*;
 pub mod display;

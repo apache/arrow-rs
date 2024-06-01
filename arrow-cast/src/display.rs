@@ -15,10 +15,14 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Functions for printing array values, as strings, for debugging
-//! purposes. See the `pretty` crate for additional functions for
+//! Functions for printing array values as human-readable strings.
+//!
+//! This is often used for debugging or logging purposes.
+//!
+//! See the [`pretty`] crate for additional functions for
 //! record batch pretty printing.
-
+//!
+//! [`pretty`]: crate::pretty
 use std::fmt::{Display, Formatter, Write};
 use std::ops::Range;
 
