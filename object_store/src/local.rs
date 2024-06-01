@@ -1455,7 +1455,6 @@ mod tests {
         assert_eq!(list, vec![c, a]);
     }
 
-
     #[tokio::test]
     #[cfg(target_os = "windows")]
     async fn filesystem_filename_with_colon() {
@@ -1468,7 +1467,13 @@ mod tests {
         let list = flatten_list_stream(&integration, None).await.unwrap();
         assert_eq!(list, vec![path.clone()]);
 
-        let result = integration.get(&location).await.unwrap().bytes().await.unwrap();
+        let result = integration
+            .get(&location)
+            .await
+            .unwrap()
+            .bytes()
+            .await
+            .unwrap();
         assert_eq!(result, Bytes::from("test"));
     }
 }
