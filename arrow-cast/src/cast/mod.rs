@@ -1602,9 +1602,8 @@ pub fn cast_with_options(
             };
             // Normalize timezone
             let adjusted = match (from_tz, to_tz) {
-                // Only this case needs to be adjusted because we're casting from
-                // unknown time offset to some time offset, we want the time to be
-                // unchanged.
+                // We're casting from unknown time offset to some time offset,
+                // we want the time to be unchanged.
                 //
                 // i.e. Timestamp('2001-01-01T00:00', None) -> Timestamp('2001-01-01T00:00', '+0700')
                 (None, Some(to_tz)) => {
@@ -1629,6 +1628,35 @@ pub fn cast_with_options(
                             TimestampNanosecondType,
                         >(
                             converted, &to_tz, cast_options
+                        )?,
+                    }
+                }
+                // We're casting from a time offset to a local time offset,
+                // we want the time to be unchanged.
+                //
+                // i.e. Timestamp('2001-01-01T00:00', '+0700') -> Timestamp('2001-01-01T00:00', None)
+                (Some(from_tz), None) => {
+                    let from_tz: Tz = from_tz.parse()?;
+                    match to_unit {
+                        TimeUnit::Second => adjust_timestamp_from_timezone::<TimestampSecondType>(
+                            converted,
+                            from_tz,
+                            cast_options,
+                        )?,
+                        TimeUnit::Millisecond => adjust_timestamp_from_timezone::<
+                            TimestampMillisecondType,
+                        >(
+                            converted, from_tz, cast_options
+                        )?,
+                        TimeUnit::Microsecond => adjust_timestamp_from_timezone::<
+                            TimestampMicrosecondType,
+                        >(
+                            converted, from_tz, cast_options
+                        )?,
+                        TimeUnit::Nanosecond => adjust_timestamp_from_timezone::<
+                            TimestampNanosecondType,
+                        >(
+                            converted, from_tz, cast_options
                         )?,
                     }
                 }
@@ -2059,6 +2087,27 @@ fn adjust_timestamp_to_timezone<T: ArrowTimestampType>(
         let local = as_datetime::<T>(o)?;
         let offset = to_tz.offset_from_local_datetime(&local).single()?;
         T::make_value(local - offset.fix())
+    };
+    let adjusted = if cast_options.safe {
+        array.unary_opt::<_, Int64Type>(adjust)
+    } else {
+        array.try_unary::<_, Int64Type, _>(|o| {
+            adjust(o).ok_or_else(|| {
+                ArrowError::CastError("Cannot cast timezone to different timezone".to_string())
+            })
+        })?
+    };
+    Ok(adjusted)
+}
+
+fn adjust_timestamp_from_timezone<T: ArrowTimestampType>(
+    array: PrimitiveArray<Int64Type>,
+    tz: Tz,
+    cast_options: &CastOptions,
+) -> Result<PrimitiveArray<Int64Type>, ArrowError> {
+    let adjust = |o| {
+        let local = as_datetime_with_timezone::<T>(o, tz)?;
+        T::make_value(local.naive_local())
     };
     let adjusted = if cast_options.safe {
         array.unary_opt::<_, Int64Type>(adjust)
@@ -4791,9 +4840,15 @@ mod tests {
 
         let string_array = cast(&timestamp_array, &DataType::Utf8).unwrap();
         let result = string_array.as_string::<i32>();
-        assert_eq!("2000-01-01T00:00:00.123", result.value(0));
-        assert_eq!("2010-01-01T00:00:00.123", result.value(1));
+        assert_eq!("2000-01-01T07:00:00.123", result.value(0));
+        assert_eq!("2010-01-01T07:00:00.123", result.value(1));
         assert!(result.is_null(2));
+
+        let array = StringArray::from(vec!["2010-01-01T00:00:00.123456+08:00"]);
+        let data_type = DataType::Timestamp(TimeUnit::Nanosecond, None);
+        let cast = cast(&array, &data_type).unwrap();
+        let value = cast.as_primitive::<TimestampNanosecondType>().value_as_datetime(0).unwrap();
+        assert_eq!(value.to_string(), "2009-12-31 16:00:00.123456");
     }
 
     // Cast Timestamp(_, Some(timezone)) -> Timestamp(_, Some(timezone))
