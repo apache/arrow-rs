@@ -639,11 +639,51 @@ fn mulx(a: u128, b: u128) -> (u128, u128) {
     (low, high)
 }
 
-derive_arith!(i256, Add, add, wrapping_add, checked_add);
-derive_arith!(i256, Sub, sub, wrapping_sub, checked_sub);
-derive_arith!(i256, Mul, mul, wrapping_mul, checked_mul);
-derive_arith!(i256, Div, div, wrapping_div, checked_div);
-derive_arith!(i256, Rem, rem, wrapping_rem, checked_rem);
+derive_arith!(
+    i256,
+    Add,
+    AddAssign,
+    add,
+    add_assign,
+    wrapping_add,
+    checked_add
+);
+derive_arith!(
+    i256,
+    Sub,
+    SubAssign,
+    sub,
+    sub_assign,
+    wrapping_sub,
+    checked_sub
+);
+derive_arith!(
+    i256,
+    Mul,
+    MulAssign,
+    mul,
+    mul_assign,
+    wrapping_mul,
+    checked_mul
+);
+derive_arith!(
+    i256,
+    Div,
+    DivAssign,
+    div,
+    div_assign,
+    wrapping_div,
+    checked_div
+);
+derive_arith!(
+    i256,
+    Rem,
+    RemAssign,
+    rem,
+    rem_assign,
+    wrapping_rem,
+    checked_rem
+);
 
 impl Neg for i256 {
     type Output = i256;

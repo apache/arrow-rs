@@ -225,11 +225,51 @@ impl Neg for IntervalMonthDayNano {
     }
 }
 
-derive_arith!(IntervalMonthDayNano, Add, add, wrapping_add, checked_add);
-derive_arith!(IntervalMonthDayNano, Sub, sub, wrapping_sub, checked_sub);
-derive_arith!(IntervalMonthDayNano, Mul, mul, wrapping_mul, checked_mul);
-derive_arith!(IntervalMonthDayNano, Div, div, wrapping_div, checked_div);
-derive_arith!(IntervalMonthDayNano, Rem, rem, wrapping_rem, checked_rem);
+derive_arith!(
+    IntervalMonthDayNano,
+    Add,
+    AddAssign,
+    add,
+    add_assign,
+    wrapping_add,
+    checked_add
+);
+derive_arith!(
+    IntervalMonthDayNano,
+    Sub,
+    SubAssign,
+    sub,
+    sub_assign,
+    wrapping_sub,
+    checked_sub
+);
+derive_arith!(
+    IntervalMonthDayNano,
+    Mul,
+    MulAssign,
+    mul,
+    mul_assign,
+    wrapping_mul,
+    checked_mul
+);
+derive_arith!(
+    IntervalMonthDayNano,
+    Div,
+    DivAssign,
+    div,
+    div_assign,
+    wrapping_div,
+    checked_div
+);
+derive_arith!(
+    IntervalMonthDayNano,
+    Rem,
+    RemAssign,
+    rem,
+    rem_assign,
+    wrapping_rem,
+    checked_rem
+);
 
 /// Value of an IntervalDayTime array
 #[derive(Debug, Default, Copy, Clone, Eq, PartialEq, Hash, Ord, PartialOrd)]
@@ -417,8 +457,48 @@ impl Neg for IntervalDayTime {
     }
 }
 
-derive_arith!(IntervalDayTime, Add, add, wrapping_add, checked_add);
-derive_arith!(IntervalDayTime, Sub, sub, wrapping_sub, checked_sub);
-derive_arith!(IntervalDayTime, Mul, mul, wrapping_mul, checked_mul);
-derive_arith!(IntervalDayTime, Div, div, wrapping_div, checked_div);
-derive_arith!(IntervalDayTime, Rem, rem, wrapping_rem, checked_rem);
+derive_arith!(
+    IntervalDayTime,
+    Add,
+    AddAssign,
+    add,
+    add_assign,
+    wrapping_add,
+    checked_add
+);
+derive_arith!(
+    IntervalDayTime,
+    Sub,
+    SubAssign,
+    sub,
+    sub_assign,
+    wrapping_sub,
+    checked_sub
+);
+derive_arith!(
+    IntervalDayTime,
+    Mul,
+    MulAssign,
+    mul,
+    mul_assign,
+    wrapping_mul,
+    checked_mul
+);
+derive_arith!(
+    IntervalDayTime,
+    Div,
+    DivAssign,
+    div,
+    div_assign,
+    wrapping_div,
+    checked_div
+);
+derive_arith!(
+    IntervalDayTime,
+    Rem,
+    RemAssign,
+    rem,
+    rem_assign,
+    wrapping_rem,
+    checked_rem
+);

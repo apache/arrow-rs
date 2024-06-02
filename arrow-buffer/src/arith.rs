@@ -18,7 +18,7 @@
 /// Derives `std::ops::$t` for `$ty` calling `$wrapping` or `$checked` variants
 /// based on if debug_assertions enabled
 macro_rules! derive_arith {
-    ($ty:ty, $t:ident, $op:ident, $wrapping:ident, $checked:ident) => {
+    ($ty:ty, $t:ident, $t_assign:ident, $op:ident, $op_assign:ident, $wrapping:ident, $checked:ident) => {
         impl std::ops::$t for $ty {
             type Output = $ty;
 
@@ -34,17 +34,17 @@ macro_rules! derive_arith {
             }
         }
 
-        ::paste::paste! {
-            impl std::ops::[< $t Assign >] for $ty {
-                #[cfg(debug_assertions)]
-                fn [< $op _assign >](&mut self, rhs: Self) {
-                    *self = self.$checked(rhs).expect(concat!(stringify!($ty), " overflow"));
-                }
+        impl std::ops::$t_assign for $ty {
+            #[cfg(debug_assertions)]
+            fn $op_assign(&mut self, rhs: Self) {
+                *self = self
+                    .$checked(rhs)
+                    .expect(concat!(stringify!($ty), " overflow"));
+            }
 
-                #[cfg(not(debug_assertions))]
-                fn [< $op _assign >](&mut self, rhs: Self) {
-                    *self = self.$wrapping(rhs);
-                }
+            #[cfg(not(debug_assertions))]
+            fn $op_assign(&mut self, rhs: Self) {
+                *self = self.$wrapping(rhs);
             }
         }
 
