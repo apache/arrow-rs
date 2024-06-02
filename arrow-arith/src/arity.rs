@@ -224,14 +224,15 @@ where
 /// This function gives error if the arrays have different lengths.
 /// This function gives error of original [`PrimitiveArray`] `a` if it is not a mutable
 /// primitive array.
-pub fn binary_mut<T, F>(
+pub fn binary_mut<T, U, F>(
     a: PrimitiveArray<T>,
-    b: &PrimitiveArray<T>,
+    b: &PrimitiveArray<U>,
     op: F,
 ) -> Result<Result<PrimitiveArray<T>, ArrowError>, PrimitiveArray<T>>
 where
     T: ArrowPrimitiveType,
-    F: Fn(T::Native, T::Native) -> T::Native,
+    U: ArrowPrimitiveType,
+    F: Fn(T::Native, U::Native) -> T::Native,
 {
     if a.len() != b.len() {
         return Ok(Err(ArrowError::ComputeError(
