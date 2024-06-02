@@ -66,7 +66,7 @@ mod parquet_field;
 ///       a_str: "I'm false"
 ///     }
 ///   ];
-///  let mut file = File::open("some_file.parquet").unwrap();
+///  let file = File::open("some_file.parquet").unwrap();
 ///
 ///  let schema = samples.as_slice().schema().unwrap();
 ///
@@ -167,7 +167,7 @@ pub fn parquet_record_writer(input: proc_macro::TokenStream) -> proc_macro::Toke
 ///
 /// pub fn read_some_records() -> Vec<ACompleteRecord> {
 ///   let mut samples: Vec<ACompleteRecord> = Vec::new();
-///   let mut file = File::open("some_file.parquet").unwrap();
+///   let file = File::open("some_file.parquet").unwrap();
 ///
 ///   let reader = SerializedFileReader::new(file).unwrap();
 ///   let mut row_group = reader.get_row_group(0).unwrap();
