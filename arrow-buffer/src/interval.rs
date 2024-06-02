@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::arith::derive_arith;
-use std::ops::Neg;
+use std::ops::{AddAssign, Neg, SubAssign};
 
 /// Value of an IntervalMonthDayNano array
 #[derive(Debug, Default, Copy, Clone, Eq, PartialEq, Hash, Ord, PartialOrd)]
@@ -225,6 +225,34 @@ impl Neg for IntervalMonthDayNano {
     }
 }
 
+impl AddAssign for IntervalMonthDayNano {
+    #[cfg(debug_assertions)]
+    fn add_assign(&mut self, rhs: Self) {
+        *self = self
+            .checked_add(rhs)
+            .expect("IntervalMonthDayNano overflow");
+    }
+
+    #[cfg(not(debug_assertions))]
+    fn add_assign(&mut self, rhs: Self) {
+        *self = self.wrapping_add(rhs);
+    }
+}
+
+impl SubAssign for IntervalMonthDayNano {
+    #[cfg(debug_assertions)]
+    fn sub_assign(&mut self, rhs: Self) {
+        *self = self
+            .checked_sub(rhs)
+            .expect("IntervalMonthDayNano underflow");
+    }
+
+    #[cfg(not(debug_assertions))]
+    fn sub_assign(&mut self, rhs: Self) {
+        *self = self.wrapping_sub(rhs);
+    }
+}
+
 derive_arith!(IntervalMonthDayNano, Add, add, wrapping_add, checked_add);
 derive_arith!(IntervalMonthDayNano, Sub, sub, wrapping_sub, checked_sub);
 derive_arith!(IntervalMonthDayNano, Mul, mul, wrapping_mul, checked_mul);
@@ -414,6 +442,30 @@ impl Neg for IntervalDayTime {
     #[cfg(not(debug_assertions))]
     fn neg(self) -> Self::Output {
         self.wrapping_neg()
+    }
+}
+
+impl AddAssign for IntervalDayTime {
+    #[cfg(debug_assertions)]
+    fn add_assign(&mut self, rhs: Self) {
+        *self = self.checked_add(rhs).expect("IntervalDayTime overflow");
+    }
+
+    #[cfg(not(debug_assertions))]
+    fn add_assign(&mut self, rhs: Self) {
+        *self = self.wrapping_add(rhs);
+    }
+}
+
+impl SubAssign for IntervalDayTime {
+    #[cfg(debug_assertions)]
+    fn sub_assign(&mut self, rhs: Self) {
+        *self = self.checked_sub(rhs).expect("IntervalDayTime underflow");
+    }
+
+    #[cfg(not(debug_assertions))]
+    fn sub_assign(&mut self, rhs: Self) {
+        *self = self.wrapping_sub(rhs);
     }
 }
 
