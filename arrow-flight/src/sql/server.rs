@@ -718,7 +718,7 @@ where
                     .do_put_prepared_statement_query(command, request)
                     .await?;
                 let output = futures::stream::iter(vec![Ok(PutResult {
-                    app_metadata: result.as_any().encode_to_vec().into(),
+                    app_metadata: result.encode_to_vec().into(),
                 })]);
                 Ok(Response::new(Box::pin(output)))
             }
