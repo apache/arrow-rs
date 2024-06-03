@@ -262,12 +262,14 @@ where
 /// # Example
 /// ```
 /// # use arrow_arith::arity::binary_mut;
-/// # use arrow_array::Float32Array;
+/// # use arrow_array::{Float32Array, Int32Array};
 /// # use arrow_array::types::Int32Type;
+/// // compute a + b for each element
 /// let a = Float32Array::from(vec![Some(5.1f32), None, Some(6.8)]);
-/// let b = Float32Array::from(vec![Some(1.0f32), None, Some(2.0)]);
+/// let b = Int32Array::from(vec![Some(1), None, Some(2)]);
 /// // compute a + b, updating the value in a in place if possible
-/// let a = binary_mut(a, &b, |a, b| a + b).unwrap().unwrap();
+/// let a = binary_mut(a, &b, |a, b| a + b as f32).unwrap().unwrap();
+/// // a is updated in place
 /// assert_eq!(a, Float32Array::from(vec![Some(6.1), None, Some(8.8)]));
 /// ```
 ///
@@ -384,15 +386,7 @@ where
 ///
 /// Like [`try_unary`] the function is only evaluated for non-null indices
 ///
-/// Mutable primitive array means that the buffer is not shared with other arrays.
-/// As a result, this mutates the buffer directly without allocating new buffer.
-///
-/// # Error
-///
-/// Return an error if the arrays have different lengths or
-/// the operation is under erroneous.
-/// This function gives error of original [`PrimitiveArray`] `a` if it is not a mutable
-/// primitive array.
+/// See [`binary_mut`] for errors and buffer reuse information
 pub fn try_binary_mut<T, F>(
     a: PrimitiveArray<T>,
     b: &PrimitiveArray<T>,
