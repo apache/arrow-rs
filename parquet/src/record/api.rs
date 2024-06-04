@@ -23,13 +23,14 @@ use chrono::{TimeZone, Utc};
 use half::f16;
 use num::traits::Float;
 use num_bigint::{BigInt, Sign};
-#[cfg(any(feature = "json", test))]
-use serde_json::Value;
 
 use crate::basic::{ConvertedType, LogicalType, Type as PhysicalType};
 use crate::data_type::{ByteArray, Decimal, Int96};
 use crate::errors::{ParquetError, Result};
 use crate::schema::types::ColumnDescPtr;
+
+#[cfg(any(feature = "json", test))]
+use serde_json::Value;
 
 /// Macro as a shortcut to generate 'not yet implemented' panic error.
 macro_rules! nyi {
@@ -921,12 +922,12 @@ fn convert_decimal_to_string(decimal: &Decimal) -> String {
 #[cfg(test)]
 #[allow(clippy::many_single_char_names)]
 mod tests {
+    use super::*;
+
     use std::f64::consts::PI;
     use std::sync::Arc;
 
     use crate::schema::types::{ColumnDescriptor, ColumnPath, PrimitiveTypeBuilder};
-
-    use super::*;
 
     /// Creates test column descriptor based on provided type parameters.
     macro_rules! make_column_descr {
@@ -1385,24 +1386,24 @@ mod tests {
             ("x".to_string(), Field::Null),
             ("Y".to_string(), Field::Int(2)),
             ("z".to_string(), Field::Float(3.1)),
-            ("a".to_string(), Field::Str("abc".to_string())),
+            ("a".to_string(), Field::Str("abc".to_string()))
         ]))
-            .is_primitive());
+        .is_primitive());
 
         assert!(!Field::ListInternal(make_list(vec![
             Field::Int(2),
             Field::Int(1),
             Field::Null,
-            Field::Int(12),
+            Field::Int(12)
         ]))
-            .is_primitive());
+        .is_primitive());
 
         assert!(!Field::MapInternal(make_map(vec![
             (Field::Int(1), Field::Float(1.2)),
             (Field::Int(2), Field::Float(4.5)),
-            (Field::Int(3), Field::Float(2.3)),
+            (Field::Int(3), Field::Float(2.3))
         ]))
-            .is_primitive());
+        .is_primitive());
     }
 
     #[test]
@@ -1940,9 +1941,8 @@ mod tests {
 #[cfg(test)]
 #[allow(clippy::many_single_char_names)]
 mod api_tests {
-    use crate::record::Field;
-
     use super::{make_list, make_map, make_row};
+    use crate::record::Field;
 
     #[test]
     fn test_field_visibility() {
