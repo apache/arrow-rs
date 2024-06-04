@@ -1721,11 +1721,7 @@ pub fn cast_with_options(
                 }
                 _ => converted,
             };
-            Ok(make_timestamp_array(
-                &adjusted,
-                *to_unit,
-                to_tz.clone(),
-            ))
+            Ok(make_timestamp_array(&adjusted, *to_unit, to_tz.clone()))
         }
         (Timestamp(TimeUnit::Microsecond, _), Date32) => {
             timestamp_to_date32(array.as_primitive::<TimestampMicrosecondType>())
