@@ -1660,7 +1660,7 @@ pub fn cast_with_options(
             let array = cast_with_options(array, &Int64, cast_options)?;
             Ok(make_timestamp_array(
                 array.as_primitive(),
-                unit.clone(),
+                *unit,
                 tz.clone(),
             ))
         }
@@ -1723,7 +1723,7 @@ pub fn cast_with_options(
             };
             Ok(make_timestamp_array(
                 &adjusted,
-                to_unit.clone(),
+                *to_unit,
                 to_tz.clone(),
             ))
         }
@@ -4020,7 +4020,7 @@ mod tests {
                 TimeUnit::Microsecond,
                 TimeUnit::Nanosecond,
             ] {
-                let to_type = DataType::Timestamp(time_unit.clone(), None);
+                let to_type = DataType::Timestamp(*time_unit, None);
                 let b = cast(array, &to_type).unwrap();
 
                 match time_unit {
