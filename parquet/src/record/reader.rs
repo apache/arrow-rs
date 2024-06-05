@@ -1286,11 +1286,13 @@ mod tests {
             ("a".to_string(), Field::Str("My string".to_owned())),
             ("b".to_string(), Field::Int(1))
         ];
-        assert_eq!(r.into_columns(),
-                   vec![
-                       ("a".to_string(), Field::Str("My string".to_owned())),
-                       ("b".to_string(), Field::Int(1)),
-                   ]);
+        assert_eq!(
+            r.into_columns(),
+            vec![
+                ("a".to_string(), Field::Str("My string".to_owned())),
+                ("b".to_string(), Field::Int(1)),
+            ]
+        );
     }
 
     #[test]
