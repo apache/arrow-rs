@@ -70,6 +70,7 @@ hashbrown = { version = "0.14", default-features = false }
 twox-hash = { version = "1.6", default-features = false }
 paste = { version = "1.0" }
 half = { version = "2.1", default-features = false, features = ["num-traits"] }
+varint-simd = { version = "0.4.0", features = ["native-optimizations"] }
 
 [dev-dependencies]
 base64 = { version = "0.22", default-features = false, features = ["std"] }
