@@ -496,7 +496,7 @@ pub struct ColumnChunkMetaData {
     data_page_offset: i64,
     index_page_offset: Option<i64>,
     dictionary_page_offset: Option<i64>,
-    statistics: Option<Statistics>,
+    statistics: Option<Box<Statistics>>,
     encoding_stats: Option<Vec<PageEncodingStats>>,
     bloom_filter_offset: Option<i64>,
     bloom_filter_length: Option<i32>,
@@ -603,7 +603,7 @@ impl ColumnChunkMetaData {
     /// Returns statistics that are set for this column chunk,
     /// or `None` if no statistics are available.
     pub fn statistics(&self) -> Option<&Statistics> {
-        self.statistics.as_ref()
+        self.statistics.as_ref().map(|x| x.as_ref())
     }
 
     /// Returns the offset for the page encoding stats,
@@ -749,7 +749,7 @@ impl ColumnChunkMetaData {
             data_page_offset: self.data_page_offset,
             index_page_offset: self.index_page_offset,
             dictionary_page_offset: self.dictionary_page_offset,
-            statistics: statistics::to_thrift(self.statistics.as_ref()),
+            statistics: statistics::to_thrift(self.statistics.as_ref().map(|x| x.as_ref())),
             encoding_stats: self
                 .encoding_stats
                 .as_ref()
@@ -856,7 +856,7 @@ impl ColumnChunkMetaDataBuilder {
 
     /// Sets statistics for this column chunk.
     pub fn set_statistics(mut self, value: Statistics) -> Self {
-        self.0.statistics = Some(value);
+        self.0.statistics = Some(Box::new(value));
         self
     }
 

@@ -768,7 +768,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
 
         // update column and offset index
         self.update_column_offset_index(page_statistics.as_ref());
-        let page_statistics = page_statistics.map(Statistics::from);
+        let page_statistics = page_statistics.map(Statistics::from).map(Box::new);
 
         let compressed_page = match self.props.writer_version() {
             WriterVersion::PARQUET_1_0 => {
