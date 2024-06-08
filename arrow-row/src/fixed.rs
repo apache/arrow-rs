@@ -222,7 +222,9 @@ pub fn encode<T: FixedLengthEncoding, I: IntoIterator<Item = Option<T>>>(
     i: I,
     opts: SortOptions,
 ) {
-    for (offset, maybe_val) in offsets.iter_mut().skip(1).zip(i) {
+    let mut offset_idx = 1;
+    for maybe_val in i {
+        let offset = &mut offsets[offset_idx];
         let end_offset = *offset + T::ENCODED_LEN;
         if let Some(val) = maybe_val {
             let to_write = &mut data[*offset..end_offset];
@@ -237,6 +239,7 @@ pub fn encode<T: FixedLengthEncoding, I: IntoIterator<Item = Option<T>>>(
             data[*offset] = null_sentinel(opts);
         }
         *offset = end_offset;
+        offset_idx += 1;
     }
 }
 
@@ -247,7 +250,9 @@ pub fn encode_fixed_size_binary(
     opts: SortOptions,
 ) {
     let len = array.value_length() as usize;
-    for (offset, maybe_val) in offsets.iter_mut().skip(1).zip(array.iter()) {
+    let mut offset_idx = 1;
+    for maybe_val in array {
+        let offset = &mut offsets[offset_idx];
         let end_offset = *offset + len + 1;
         if let Some(val) = maybe_val {
             let to_write = &mut data[*offset..end_offset];
@@ -261,6 +266,7 @@ pub fn encode_fixed_size_binary(
             data[*offset] = null_sentinel(opts);
         }
         *offset = end_offset;
+        offset_idx += 1;
     }
 }
 
