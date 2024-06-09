@@ -1146,9 +1146,21 @@ fn encode_column(
     match encoder {
         Encoder::Stateless => {
             downcast_primitive_array! {
-                column => fixed::encode(data, offsets, column, opts),
+                column => {
+                    if column.is_nullable(){
+                        fixed::encode(data, offsets, column, opts)
+                    } else {
+                        fixed::encode_not_null(data, offsets, column, opts)
+                    }
+                }
                 DataType::Null => {}
-                DataType::Boolean => fixed::encode(data, offsets, column.as_boolean(), opts),
+                DataType::Boolean => {
+                    if column.is_nullable(){
+                        fixed::encode_bool(data, offsets, column.as_boolean(), opts)
+                    } else {
+                        fixed::encode_bool_not_null(data, offsets, column.as_boolean(), opts)
+                    }
+                }
                 DataType::Binary => {
                     variable::encode(data, offsets, as_generic_binary_array::<i32>(column).iter(), opts)
                 }

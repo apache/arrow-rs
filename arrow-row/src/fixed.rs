@@ -18,7 +18,7 @@
 use crate::array::PrimitiveArray;
 use crate::null_sentinel;
 use arrow_array::builder::BufferBuilder;
-use arrow_array::{ArrowPrimitiveType, BooleanArray, FixedSizeBinaryArray};
+use arrow_array::{Array, ArrowPrimitiveType, BooleanArray, FixedSizeBinaryArray};
 use arrow_buffer::{
     bit_util, i256, ArrowNativeType, Buffer, IntervalDayTime, IntervalMonthDayNano, MutableBuffer,
 };
@@ -216,16 +216,18 @@ where
 ///
 /// - 1 byte `0` if null or `1` if valid
 /// - bytes of [`FixedLengthEncoding`]
-pub fn encode<T: FixedLengthEncoding, I: IntoIterator<Item = Option<T>>>(
+pub fn encode<T: ArrowPrimitiveType>(
     data: &mut [u8],
     offsets: &mut [usize],
-    i: I,
+    array: &PrimitiveArray<T>,
     opts: SortOptions,
-) {
+) where
+    T::Native: FixedLengthEncoding,
+{
     let mut offset_idx = 1;
-    for maybe_val in i {
+    for maybe_val in array {
         let offset = &mut offsets[offset_idx];
-        let end_offset = *offset + T::ENCODED_LEN;
+        let end_offset = *offset + T::Native::ENCODED_LEN;
         if let Some(val) = maybe_val {
             let to_write = &mut data[*offset..end_offset];
             to_write[0] = 1;
@@ -238,6 +240,97 @@ pub fn encode<T: FixedLengthEncoding, I: IntoIterator<Item = Option<T>>>(
         } else {
             data[*offset] = null_sentinel(opts);
         }
+        *offset = end_offset;
+        offset_idx += 1;
+    }
+}
+
+/// Encoding for non-nullable primitive arrays.
+/// Iterates directly over the `values`, and skips NULLs-checking.
+pub fn encode_not_null<T: ArrowPrimitiveType>(
+    data: &mut [u8],
+    offsets: &mut [usize],
+    array: &PrimitiveArray<T>,
+    opts: SortOptions,
+) where
+    T::Native: FixedLengthEncoding,
+{
+    assert!(!array.is_nullable());
+
+    let mut offset_idx = 1;
+    for val in array.values() {
+        let offset = &mut offsets[offset_idx];
+        let end_offset = *offset + T::Native::ENCODED_LEN;
+
+        let to_write = &mut data[*offset..end_offset];
+        to_write[0] = 1;
+        let mut encoded = val.encode();
+        if opts.descending {
+            // Flip bits to reverse order
+            encoded.as_mut().iter_mut().for_each(|v| *v = !*v)
+        }
+        to_write[1..].copy_from_slice(encoded.as_ref());
+
+        *offset = end_offset;
+        offset_idx += 1;
+    }
+}
+
+/// Boolean values are encoded as
+///
+/// - 1 byte `0` if null or `1` if valid
+/// - bytes of [`FixedLengthEncoding`]
+pub fn encode_bool(
+    data: &mut [u8],
+    offsets: &mut [usize],
+    array: &BooleanArray,
+    opts: SortOptions,
+) {
+    let mut offset_idx = 1;
+    for maybe_val in array {
+        let offset = &mut offsets[offset_idx];
+        let end_offset = *offset + bool::ENCODED_LEN;
+        if let Some(val) = maybe_val {
+            let to_write = &mut data[*offset..end_offset];
+            to_write[0] = 1;
+            let mut encoded = val.encode();
+            if opts.descending {
+                // Flip bits to reverse order
+                encoded.as_mut().iter_mut().for_each(|v| *v = !*v)
+            }
+            to_write[1..].copy_from_slice(encoded.as_ref())
+        } else {
+            data[*offset] = null_sentinel(opts);
+        }
+        *offset = end_offset;
+        offset_idx += 1;
+    }
+}
+
+/// Encoding for non-nullable boolean arrays.
+/// Iterates directly over `values`, and skips NULLs-checking.
+pub fn encode_bool_not_null(
+    data: &mut [u8],
+    offsets: &mut [usize],
+    array: &BooleanArray,
+    opts: SortOptions,
+) {
+    assert!(!array.is_nullable());
+
+    let mut offset_idx = 1;
+    for val in array.values() {
+        let offset = &mut offsets[offset_idx];
+        let end_offset = *offset + bool::ENCODED_LEN;
+
+        let to_write = &mut data[*offset..end_offset];
+        to_write[0] = 1;
+        let mut encoded = val.encode();
+        if opts.descending {
+            // Flip bits to reverse order
+            encoded.as_mut().iter_mut().for_each(|v| *v = !*v)
+        }
+        to_write[1..].copy_from_slice(encoded.as_ref());
+
         *offset = end_offset;
         offset_idx += 1;
     }
