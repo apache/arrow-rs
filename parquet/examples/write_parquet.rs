@@ -34,7 +34,6 @@ fn main() -> Result<()> {
     let properties = WriterProperties::builder()
         .set_column_bloom_filter_enabled("id".into(), true)
         .set_column_encoding("id".into(), Encoding::DELTA_BINARY_PACKED)
-        .set_bloom_filter_position(BloomFilterPosition::End)
         .build();
     let schema = Arc::new(Schema::new(vec![Field::new("id", UInt64, false)]));
     // Create parquet file that will be read.
