@@ -68,6 +68,9 @@ twox-hash = { version = "1.6", default-features = false }
 paste = { version = "1.0" }
 half = { version = "2.1", default-features = false, features = ["num-traits"] }
 
+dsi-progress-logger = { version = "0.2.4", optional = true }
+simplelog = { version = "0.12.2", optional = true }
+
 [dev-dependencies]
 base64 = { version = "0.22", default-features = false, features = ["std"] }
 criterion = { version = "0.5", default-features = false }
@@ -104,11 +107,18 @@ experimental = []
 async = ["futures", "tokio"]
 # Enable object_store integration
 object_store = ["dep:object_store", "async"]
+# Enable progress logging
+log = ["dep:simplelog", "dep:dsi-progress-logger"]
 
 [[example]]
 name = "read_parquet"
 required-features = ["arrow"]
 path = "./examples/read_parquet.rs"
+
+[[example]]
+name = "write_parquet"
+required-features = ["log"]
+path = "./examples/write_parquet.rs"
 
 [[example]]
 name = "async_read_parquet"
