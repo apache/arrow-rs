@@ -54,6 +54,22 @@ fn binary_capacity<T: ByteArrayType>(arrays: &[&dyn Array]) -> Capacities {
     Capacities::Binary(item_capacity, Some(bytes_capacity))
 }
 
+fn fixed_size_list_capacity(arrays: &[&dyn Array], data_type: &DataType) -> Capacities {
+    if let DataType::FixedSizeList(f, _) = data_type {
+        let item_capacity = arrays.iter().map(|a| a.len()).sum();
+        let values: Vec<&dyn arrow_array::Array> = arrays
+            .iter()
+            .map(|a| a.as_fixed_size_list().values().as_ref())
+            .collect();
+        Capacities::FixedSizeList(
+            item_capacity,
+            Some(Box::new(get_capacity(&values, f.data_type()))),
+        )
+    } else {
+        unreachable!("illegal data type for fixed size list")
+    }
+}
+
 fn concat_dictionaries<K: ArrowDictionaryKeyType>(
     arrays: &[&dyn Array],
 ) -> Result<ArrayRef, ArrowError> {
@@ -107,6 +123,17 @@ macro_rules! dict_helper {
     };
 }
 
+fn get_capacity(arrays: &[&dyn Array], data_type: &DataType) -> Capacities {
+    match data_type {
+        DataType::Utf8 => binary_capacity::<Utf8Type>(arrays),
+        DataType::LargeUtf8 => binary_capacity::<LargeUtf8Type>(arrays),
+        DataType::Binary => binary_capacity::<BinaryType>(arrays),
+        DataType::LargeBinary => binary_capacity::<LargeBinaryType>(arrays),
+        DataType::FixedSizeList(_, _) => fixed_size_list_capacity(arrays, data_type),
+        _ => Capacities::Array(arrays.iter().map(|a| a.len()).sum()),
+    }
+}
+
 /// Concatenate multiple [Array] of the same type into a single [ArrayRef].
 pub fn concat(arrays: &[&dyn Array]) -> Result<ArrayRef, ArrowError> {
     if arrays.is_empty() {
@@ -124,27 +151,15 @@ pub fn concat(arrays: &[&dyn Array]) -> Result<ArrayRef, ArrowError> {
             "It is not possible to concatenate arrays of different data types.".to_string(),
         ));
     }
-
-    let capacity = match d {
-        DataType::Utf8 => binary_capacity::<Utf8Type>(arrays),
-        DataType::LargeUtf8 => binary_capacity::<LargeUtf8Type>(arrays),
-        DataType::Binary => binary_capacity::<BinaryType>(arrays),
-        DataType::LargeBinary => binary_capacity::<LargeBinaryType>(arrays),
-        DataType::Dictionary(k, _) => downcast_integer! {
+    if let DataType::Dictionary(k, _) = d {
+        downcast_integer! {
             k.as_ref() => (dict_helper, arrays),
             _ => unreachable!("illegal dictionary key type {k}")
-        },
-        DataType::FixedSizeList(_, size) => {
-            let item_capacity = arrays.iter().map(|a| a.len()).sum();
-            Capacities::FixedSizeList(
-                item_capacity,
-                Some(Box::new(Capacities::Array(item_capacity * *size as usize))),
-            )
-        }
-        _ => Capacities::Array(arrays.iter().map(|a| a.len()).sum()),
-    };
-
-    concat_fallback(arrays, capacity)
+        };
+    } else {
+        let capacity = get_capacity(arrays, d);
+        concat_fallback(arrays, capacity)
+    }
 }
 
 /// Concatenates arrays using MutableArrayData
