@@ -326,6 +326,11 @@ where
     pub fn offsets_slice(&self) -> &[OffsetSize] {
         self.offsets_builder.as_slice()
     }
+
+    /// Returns the current null buffer as a slice
+    pub fn validity_slice(&self) -> Option<&[u8]> {
+        self.null_buffer_builder.as_slice()
+    }
 }
 
 impl<O, B, V, E> Extend<Option<V>> for GenericListBuilder<O, B>
@@ -548,7 +553,7 @@ mod tests {
     }
 
     #[test]
-    fn test_boxed_primitive_aray_builder() {
+    fn test_boxed_primitive_array_builder() {
         let values_builder = make_builder(&DataType::Int32, 5);
         let mut builder = ListBuilder::new(values_builder);
 

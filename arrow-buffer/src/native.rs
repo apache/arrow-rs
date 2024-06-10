@@ -15,18 +15,21 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::i256;
+use crate::{i256, IntervalDayTime, IntervalMonthDayNano};
 use half::f16;
 
 mod private {
     pub trait Sealed {}
 }
 
-/// Trait expressing a Rust type that has the same in-memory representation
-/// as Arrow. This includes `i16`, `f32`, but excludes `bool` (which in arrow is represented in bits).
+/// Trait expressing a Rust type that has the same in-memory representation as
+/// Arrow.
 ///
-/// In little endian machines, types that implement [`ArrowNativeType`] can be memcopied to arrow buffers
-/// as is.
+/// This includes `i16`, `f32`, but excludes `bool` (which in arrow is
+/// represented in bits).
+///
+/// In little endian machines, types that implement [`ArrowNativeType`] can be
+/// memcopied to arrow buffers as is.
 ///
 /// # Transmute Safety
 ///
@@ -47,6 +50,11 @@ mod private {
 pub trait ArrowNativeType:
     std::fmt::Debug + Send + Sync + Copy + PartialOrd + Default + private::Sealed + 'static
 {
+    /// Returns the byte width of this native type.
+    fn get_byte_width() -> usize {
+        std::mem::size_of::<Self>()
+    }
+
     /// Convert native integer type from usize
     ///
     /// Returns `None` if [`Self`] is not an integer or conversion would result
@@ -74,6 +82,12 @@ pub trait ArrowNativeType:
     /// Returns `None` if [`Self`] is not an integer or conversion would result
     /// in truncation/overflow
     fn to_isize(self) -> Option<isize>;
+
+    /// Convert native type to i64.
+    ///
+    /// Returns `None` if [`Self`] is not an integer or conversion would result
+    /// in truncation/overflow
+    fn to_i64(self) -> Option<i64>;
 
     /// Convert native type from i32.
     ///
@@ -116,6 +130,11 @@ macro_rules! native_integer {
 
             #[inline]
             fn to_isize(self) -> Option<isize> {
+                self.try_into().ok()
+            }
+
+            #[inline]
+            fn to_i64(self) -> Option<i64> {
                 self.try_into().ok()
             }
 
@@ -171,6 +190,11 @@ macro_rules! native_float {
             }
 
             #[inline]
+            fn to_i64(self) -> Option<i64> {
+                None
+            }
+
+            #[inline]
             fn as_usize($s) -> usize {
                 $as_usize
             }
@@ -211,6 +235,64 @@ impl ArrowNativeType for i256 {
 
     fn to_isize(self) -> Option<isize> {
         self.to_i128()?.try_into().ok()
+    }
+
+    fn to_i64(self) -> Option<i64> {
+        self.to_i128()?.try_into().ok()
+    }
+}
+
+impl private::Sealed for IntervalMonthDayNano {}
+impl ArrowNativeType for IntervalMonthDayNano {
+    fn from_usize(_: usize) -> Option<Self> {
+        None
+    }
+
+    fn as_usize(self) -> usize {
+        ((self.months as u64) | ((self.days as u64) << 32)) as usize
+    }
+
+    fn usize_as(i: usize) -> Self {
+        Self::new(i as _, ((i as u64) >> 32) as _, 0)
+    }
+
+    fn to_usize(self) -> Option<usize> {
+        None
+    }
+
+    fn to_isize(self) -> Option<isize> {
+        None
+    }
+
+    fn to_i64(self) -> Option<i64> {
+        None
+    }
+}
+
+impl private::Sealed for IntervalDayTime {}
+impl ArrowNativeType for IntervalDayTime {
+    fn from_usize(_: usize) -> Option<Self> {
+        None
+    }
+
+    fn as_usize(self) -> usize {
+        ((self.days as u64) | ((self.milliseconds as u64) << 32)) as usize
+    }
+
+    fn usize_as(i: usize) -> Self {
+        Self::new(i as _, ((i as u64) >> 32) as _)
+    }
+
+    fn to_usize(self) -> Option<usize> {
+        None
+    }
+
+    fn to_isize(self) -> Option<isize> {
+        None
+    }
+
+    fn to_i64(self) -> Option<i64> {
+        None
     }
 }
 
@@ -256,5 +338,19 @@ mod tests {
         assert_eq!(a.as_usize(), usize::MAX);
         assert!(a.to_usize().is_none());
         assert_eq!(a.to_isize().unwrap(), -1);
+    }
+
+    #[test]
+    fn test_interval_usize() {
+        assert_eq!(IntervalDayTime::new(1, 0).as_usize(), 1);
+        assert_eq!(IntervalMonthDayNano::new(1, 0, 0).as_usize(), 1);
+
+        let a = IntervalDayTime::new(23, 53);
+        let b = IntervalDayTime::usize_as(a.as_usize());
+        assert_eq!(a, b);
+
+        let a = IntervalMonthDayNano::new(23, 53, 0);
+        let b = IntervalMonthDayNano::usize_as(a.as_usize());
+        assert_eq!(a, b);
     }
 }

@@ -19,10 +19,13 @@
 //!
 //! Provides access to file and row group readers and writers, record API, metadata, etc.
 //!
-//! See [`serialized_reader::SerializedFileReader`](serialized_reader/struct.SerializedFileReader.html) or
-//! [`writer::SerializedFileWriter`](writer/struct.SerializedFileWriter.html) for a
-//! starting reference, [`metadata::ParquetMetaData`](metadata/index.html) for file
-//! metadata, and [`statistics`](statistics/index.html) for working with statistics.
+//! # See Also:
+//! * [`SerializedFileReader`] and [`SerializedFileWriter`] for reading / writing parquet
+//! * [`metadata`]: for working with metadata such as schema
+//! * [`statistics`]: for working with statistics in metadata
+//!
+//! [`SerializedFileReader`]: serialized_reader::SerializedFileReader
+//! [`SerializedFileWriter`]: writer::SerializedFileWriter
 //!
 //! # Example of writing a new file
 //!

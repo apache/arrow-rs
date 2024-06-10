@@ -416,7 +416,7 @@ impl Decoder {
     /// should be included in the next call to [`Self::decode`]
     ///
     /// There is no requirement that `buf` contains a whole number of records, facilitating
-    /// integration with arbitrary byte streams, such as that yielded by [`BufRead`]
+    /// integration with arbitrary byte streams, such as those yielded by [`BufRead`]
     pub fn decode(&mut self, buf: &[u8]) -> Result<usize, ArrowError> {
         self.tape_decoder.decode(buf)
     }
@@ -2210,6 +2210,30 @@ mod tests {
         assert_eq!(batch.num_columns(), 1);
         let values = batch.column(0).as_primitive::<TimestampSecondType>();
         assert_eq!(values.values(), &[1681319393, -7200]);
+    }
+
+    #[test]
+    fn test_serialize_decimal() {
+        let json = vec![
+            json!({"decimal": 1.234}),
+            json!({"decimal": "1.234"}),
+            json!({"decimal": 1234}),
+            json!({"decimal": "1234"}),
+        ];
+        let schema = Schema::new(vec![Field::new(
+            "decimal",
+            DataType::Decimal128(10, 3),
+            true,
+        )]);
+        let mut decoder = ReaderBuilder::new(Arc::new(schema))
+            .build_decoder()
+            .unwrap();
+        decoder.serialize(&json).unwrap();
+        let batch = decoder.flush().unwrap().unwrap();
+        assert_eq!(batch.num_rows(), 4);
+        assert_eq!(batch.num_columns(), 1);
+        let values = batch.column(0).as_primitive::<Decimal128Type>();
+        assert_eq!(values.values(), &[1234, 1234, 1234000, 1234000]);
     }
 
     #[test]

@@ -75,6 +75,7 @@ pub use gen::CommandPreparedStatementUpdate;
 pub use gen::CommandStatementQuery;
 pub use gen::CommandStatementSubstraitPlan;
 pub use gen::CommandStatementUpdate;
+pub use gen::DoPutPreparedStatementResult;
 pub use gen::DoPutUpdateResult;
 pub use gen::Nullable;
 pub use gen::Searchable;
@@ -251,6 +252,7 @@ prost_message_ext!(
     CommandStatementSubstraitPlan,
     CommandStatementUpdate,
     DoPutUpdateResult,
+    DoPutPreparedStatementResult,
     TicketStatementQuery,
 );
 

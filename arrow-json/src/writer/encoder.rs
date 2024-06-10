@@ -69,16 +69,16 @@ fn make_encoder_impl<'a>(
         DataType::Float64 => primitive_helper!(Float64Type),
         DataType::Boolean => {
             let array = array.as_boolean();
-            (Box::new(BooleanEncoder(array.clone())), array.nulls().cloned())
+            (Box::new(BooleanEncoder(array)), array.nulls().cloned())
         }
         DataType::Null => (Box::new(NullEncoder), array.logical_nulls()),
         DataType::Utf8 => {
             let array = array.as_string::<i32>();
-            (Box::new(StringEncoder(array.clone())) as _, array.nulls().cloned())
+            (Box::new(StringEncoder(array)) as _, array.nulls().cloned())
         }
         DataType::LargeUtf8 => {
             let array = array.as_string::<i64>();
-            (Box::new(StringEncoder(array.clone())) as _, array.nulls().cloned())
+            (Box::new(StringEncoder(array)) as _, array.nulls().cloned())
         }
         DataType::List(_) => {
             let array = array.as_list::<i32>();
@@ -87,6 +87,10 @@ fn make_encoder_impl<'a>(
         DataType::LargeList(_) => {
             let array = array.as_list::<i64>();
             (Box::new(ListEncoder::try_new(array, options)?) as _, array.nulls().cloned())
+        }
+        DataType::FixedSizeList(_, _) => {
+            let array = array.as_fixed_size_list();
+            (Box::new(FixedSizeListEncoder::try_new(array, options)?) as _, array.nulls().cloned())
         }
 
         DataType::Dictionary(_, _) => downcast_dictionary_array! {
@@ -97,6 +101,21 @@ fn make_encoder_impl<'a>(
         DataType::Map(_, _) => {
             let array = array.as_map();
             (Box::new(MapEncoder::try_new(array, options)?) as _,  array.nulls().cloned())
+        }
+
+        DataType::FixedSizeBinary(_) => {
+            let array = array.as_fixed_size_binary();
+            (Box::new(BinaryEncoder::new(array)) as _, array.nulls().cloned())
+        }
+
+        DataType::Binary => {
+            let array: &BinaryArray = array.as_binary();
+            (Box::new(BinaryEncoder::new(array)) as _, array.nulls().cloned())
+        }
+
+        DataType::LargeBinary => {
+            let array: &LargeBinaryArray = array.as_binary();
+            (Box::new(BinaryEncoder::new(array)) as _, array.nulls().cloned())
         }
 
         DataType::Struct(fields) => {
@@ -146,12 +165,21 @@ struct StructArrayEncoder<'a> {
     explicit_nulls: bool,
 }
 
+/// This API is only stable since 1.70 so can't use it when current MSRV is lower
+#[inline(always)]
+fn is_some_and<T>(opt: Option<T>, f: impl FnOnce(T) -> bool) -> bool {
+    match opt {
+        None => false,
+        Some(x) => f(x),
+    }
+}
+
 impl<'a> Encoder for StructArrayEncoder<'a> {
     fn encode(&mut self, idx: usize, out: &mut Vec<u8>) {
         out.push(b'{');
         let mut is_first = true;
         for field_encoder in &mut self.encoders {
-            let is_null = field_encoder.nulls.as_ref().is_some_and(|n| n.is_null(idx));
+            let is_null = is_some_and(field_encoder.nulls.as_ref(), |n| n.is_null(idx));
             if is_null && !self.explicit_nulls {
                 continue;
             }
@@ -259,9 +287,9 @@ impl<N: PrimitiveEncode> Encoder for PrimitiveEncoder<N> {
     }
 }
 
-struct BooleanEncoder(BooleanArray);
+struct BooleanEncoder<'a>(&'a BooleanArray);
 
-impl Encoder for BooleanEncoder {
+impl<'a> Encoder for BooleanEncoder<'a> {
     fn encode(&mut self, idx: usize, out: &mut Vec<u8>) {
         match self.0.value(idx) {
             true => out.extend_from_slice(b"true"),
@@ -270,9 +298,9 @@ impl Encoder for BooleanEncoder {
     }
 }
 
-struct StringEncoder<O: OffsetSizeTrait>(GenericStringArray<O>);
+struct StringEncoder<'a, O: OffsetSizeTrait>(&'a GenericStringArray<O>);
 
-impl<O: OffsetSizeTrait> Encoder for StringEncoder<O> {
+impl<'a, O: OffsetSizeTrait> Encoder for StringEncoder<'a, O> {
     fn encode(&mut self, idx: usize, out: &mut Vec<u8>) {
         encode_string(self.0.value(idx), out);
     }
@@ -316,6 +344,53 @@ impl<'a, O: OffsetSizeTrait> Encoder for ListEncoder<'a, O> {
             None => (start..end).for_each(|idx| {
                 if idx != start {
                     out.push(b',')
+                }
+                self.encoder.encode(idx, out);
+            }),
+        }
+        out.push(b']');
+    }
+}
+
+struct FixedSizeListEncoder<'a> {
+    value_length: usize,
+    nulls: Option<NullBuffer>,
+    encoder: Box<dyn Encoder + 'a>,
+}
+
+impl<'a> FixedSizeListEncoder<'a> {
+    fn try_new(
+        array: &'a FixedSizeListArray,
+        options: &EncoderOptions,
+    ) -> Result<Self, ArrowError> {
+        let (encoder, nulls) = make_encoder_impl(array.values().as_ref(), options)?;
+        Ok(Self {
+            encoder,
+            nulls,
+            value_length: array.value_length().as_usize(),
+        })
+    }
+}
+
+impl<'a> Encoder for FixedSizeListEncoder<'a> {
+    fn encode(&mut self, idx: usize, out: &mut Vec<u8>) {
+        let start = idx * self.value_length;
+        let end = start + self.value_length;
+        out.push(b'[');
+        match self.nulls.as_ref() {
+            Some(n) => (start..end).for_each(|idx| {
+                if idx != start {
+                    out.push(b',');
+                }
+                if n.is_null(idx) {
+                    out.extend_from_slice(b"null");
+                } else {
+                    self.encoder.encode(idx, out);
+                }
+            }),
+            None => (start..end).for_each(|idx| {
+                if idx != start {
+                    out.push(b',');
                 }
                 self.encoder.encode(idx, out);
             }),
@@ -391,13 +466,13 @@ impl<'a> MapEncoder<'a> {
         let (values, value_nulls) = make_encoder_impl(values, options)?;
 
         // We sanity check nulls as these are currently not enforced by MapArray (#1697)
-        if key_nulls.is_some_and(|x| x.null_count() != 0) {
+        if is_some_and(key_nulls, |x| x.null_count() != 0) {
             return Err(ArrowError::InvalidArgumentError(
                 "Encountered nulls in MapArray keys".to_string(),
             ));
         }
 
-        if array.entries().nulls().is_some_and(|x| x.null_count() != 0) {
+        if is_some_and(array.entries().nulls(), |x| x.null_count() != 0) {
             return Err(ArrowError::InvalidArgumentError(
                 "Encountered nulls in MapArray entries".to_string(),
             ));
@@ -422,7 +497,7 @@ impl<'a> Encoder for MapEncoder<'a> {
 
         out.push(b'{');
         for idx in start..end {
-            let is_null = self.value_nulls.as_ref().is_some_and(|n| n.is_null(idx));
+            let is_null = is_some_and(self.value_nulls.as_ref(), |n| n.is_null(idx));
             if is_null && !self.explicit_nulls {
                 continue;
             }
@@ -441,5 +516,32 @@ impl<'a> Encoder for MapEncoder<'a> {
             }
         }
         out.push(b'}');
+    }
+}
+
+/// New-type wrapper for encoding the binary types in arrow: `Binary`, `LargeBinary`
+/// and `FixedSizeBinary` as hex strings in JSON.
+struct BinaryEncoder<B>(B);
+
+impl<'a, B> BinaryEncoder<B>
+where
+    B: ArrayAccessor<Item = &'a [u8]>,
+{
+    fn new(array: B) -> Self {
+        Self(array)
+    }
+}
+
+impl<'a, B> Encoder for BinaryEncoder<B>
+where
+    B: ArrayAccessor<Item = &'a [u8]>,
+{
+    fn encode(&mut self, idx: usize, out: &mut Vec<u8>) {
+        out.push(b'"');
+        for byte in self.0.value(idx) {
+            // this write is infallible
+            write!(out, "{byte:02x}").unwrap();
+        }
+        out.push(b'"');
     }
 }

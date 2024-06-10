@@ -20,7 +20,10 @@
 use std::{collections::HashMap, sync::Arc};
 
 use arrow_array::types::Int32Type;
-use arrow_array::{ArrayRef, DictionaryArray, Float64Array, RecordBatch, UInt8Array};
+use arrow_array::{
+    ArrayRef, BinaryViewArray, DictionaryArray, Float64Array, RecordBatch, StringViewArray,
+    UInt8Array,
+};
 use arrow_cast::pretty::pretty_format_batches;
 use arrow_flight::flight_descriptor::DescriptorType;
 use arrow_flight::FlightDescriptor;
@@ -107,6 +110,22 @@ async fn test_dictionary_many() {
         make_dictionary_batch(9),
         make_dictionary_batch(5),
         make_dictionary_batch(5),
+    ])
+    .await;
+}
+
+#[tokio::test]
+async fn test_view_types_one() {
+    roundtrip(vec![make_view_batches(5)]).await;
+}
+
+#[tokio::test]
+async fn test_view_types_many() {
+    roundtrip(vec![
+        make_view_batches(5),
+        make_view_batches(9),
+        make_view_batches(5),
+        make_view_batches(5),
     ])
     .await;
 }
@@ -450,8 +469,43 @@ fn make_dictionary_batch(num_rows: usize) -> RecordBatch {
     RecordBatch::try_from_iter(vec![("a", Arc::new(a) as ArrayRef)]).unwrap()
 }
 
+fn make_view_batches(num_rows: usize) -> RecordBatch {
+    const LONG_TEST_STRING: &str =
+        "This is a long string to make sure binary view array handles it";
+    let schema = Schema::new(vec![
+        Field::new("field1", DataType::BinaryView, true),
+        Field::new("field2", DataType::Utf8View, true),
+    ]);
+
+    let string_view_values: Vec<Option<&str>> = (0..num_rows)
+        .map(|i| match i % 3 {
+            0 => None,
+            1 => Some("foo"),
+            2 => Some(LONG_TEST_STRING),
+            _ => unreachable!(),
+        })
+        .collect();
+
+    let bin_view_values: Vec<Option<&[u8]>> = (0..num_rows)
+        .map(|i| match i % 3 {
+            0 => None,
+            1 => Some("bar".as_bytes()),
+            2 => Some(LONG_TEST_STRING.as_bytes()),
+            _ => unreachable!(),
+        })
+        .collect();
+
+    let binary_array = BinaryViewArray::from_iter(bin_view_values);
+    let utf8_array = StringViewArray::from_iter(string_view_values);
+    RecordBatch::try_new(
+        Arc::new(schema.clone()),
+        vec![Arc::new(binary_array), Arc::new(utf8_array)],
+    )
+    .unwrap()
+}
+
 /// Encodes input as a FlightData stream, and then decodes it using
-/// FlightRecordBatchStream and valides the decoded record batches
+/// FlightRecordBatchStream and validates the decoded record batches
 /// match the input.
 async fn roundtrip(input: Vec<RecordBatch>) {
     let expected_output = input.clone();
@@ -459,7 +513,7 @@ async fn roundtrip(input: Vec<RecordBatch>) {
 }
 
 /// Encodes input as a FlightData stream, and then decodes it using
-/// FlightRecordBatchStream and valides the decoded record batches
+/// FlightRecordBatchStream and validates the decoded record batches
 /// match the expected input.
 ///
 /// When <https://github.com/apache/arrow-rs/issues/3389> is resolved,

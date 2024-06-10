@@ -27,8 +27,8 @@ use crate::multipart::PartId;
 use crate::path::DELIMITER;
 use crate::util::{deserialize_rfc1123, GetRange};
 use crate::{
-    ClientOptions, GetOptions, ListResult, ObjectMeta, Path, PutMode, PutOptions, PutResult,
-    Result, RetryConfig,
+    Attribute, Attributes, ClientOptions, GetOptions, ListResult, ObjectMeta, Path, PutMode,
+    PutMultipartOpts, PutOptions, PutPayload, PutResult, Result, RetryConfig, TagSet,
 };
 use async_trait::async_trait;
 use base64::prelude::BASE64_STANDARD;
@@ -36,7 +36,6 @@ use base64::Engine;
 use bytes::{Buf, Bytes};
 use chrono::{DateTime, Utc};
 use hyper::http::HeaderName;
-use reqwest::header::CONTENT_TYPE;
 use reqwest::{
     header::{HeaderValue, CONTENT_LENGTH, IF_MATCH, IF_NONE_MATCH},
     Client as ReqwestClient, Method, RequestBuilder, Response,
@@ -49,6 +48,12 @@ use std::time::Duration;
 use url::Url;
 
 const VERSION_HEADER: &str = "x-ms-version-id";
+static MS_CACHE_CONTROL: HeaderName = HeaderName::from_static("x-ms-blob-cache-control");
+static MS_CONTENT_TYPE: HeaderName = HeaderName::from_static("x-ms-blob-content-type");
+static MS_CONTENT_DISPOSITION: HeaderName =
+    HeaderName::from_static("x-ms-blob-content-disposition");
+static MS_CONTENT_ENCODING: HeaderName = HeaderName::from_static("x-ms-blob-content-encoding");
+static MS_CONTENT_LANGUAGE: HeaderName = HeaderName::from_static("x-ms-blob-content-language");
 
 static TAGS_HEADER: HeaderName = HeaderName::from_static("x-ms-tags");
 
@@ -59,12 +64,6 @@ pub(crate) enum Error {
     #[snafu(display("Error performing get request {}: {}", path, source))]
     GetRequest {
         source: crate::client::retry::Error,
-        path: String,
-    },
-
-    #[snafu(display("Error getting get response body {}: {}", path, source))]
-    GetResponseBody {
-        source: reqwest::Error,
         path: String,
     },
 
@@ -88,11 +87,6 @@ pub(crate) enum Error {
 
     #[snafu(display("Got invalid list response: {}", source))]
     InvalidListResponse { source: quick_xml::de::DeError },
-
-    #[snafu(display("Error authorizing request: {}", source))]
-    Authorization {
-        source: crate::azure::credential::Error,
-    },
 
     #[snafu(display("Unable to extract metadata from headers: {}", source))]
     Metadata {
@@ -171,7 +165,9 @@ impl AzureConfig {
 struct PutRequest<'a> {
     path: &'a Path,
     config: &'a AzureConfig,
+    payload: PutPayload,
     builder: RequestBuilder,
+    idempotent: bool,
 }
 
 impl<'a> PutRequest<'a> {
@@ -185,12 +181,54 @@ impl<'a> PutRequest<'a> {
         Self { builder, ..self }
     }
 
+    fn idempotent(self, idempotent: bool) -> Self {
+        Self { idempotent, ..self }
+    }
+
+    fn with_tags(mut self, tags: TagSet) -> Self {
+        let tags = tags.encoded();
+        if !tags.is_empty() && !self.config.disable_tagging {
+            self.builder = self.builder.header(&TAGS_HEADER, tags);
+        }
+        self
+    }
+
+    fn with_attributes(self, attributes: Attributes) -> Self {
+        let mut builder = self.builder;
+        let mut has_content_type = false;
+        for (k, v) in &attributes {
+            builder = match k {
+                Attribute::CacheControl => builder.header(&MS_CACHE_CONTROL, v.as_ref()),
+                Attribute::ContentDisposition => {
+                    builder.header(&MS_CONTENT_DISPOSITION, v.as_ref())
+                }
+                Attribute::ContentEncoding => builder.header(&MS_CONTENT_ENCODING, v.as_ref()),
+                Attribute::ContentLanguage => builder.header(&MS_CONTENT_LANGUAGE, v.as_ref()),
+                Attribute::ContentType => {
+                    has_content_type = true;
+                    builder.header(&MS_CONTENT_TYPE, v.as_ref())
+                }
+            };
+        }
+
+        if !has_content_type {
+            if let Some(value) = self.config.client_options.get_content_type(self.path) {
+                builder = builder.header(&MS_CONTENT_TYPE, value);
+            }
+        }
+        Self { builder, ..self }
+    }
+
     async fn send(self) -> Result<Response> {
         let credential = self.config.get_credential().await?;
         let response = self
             .builder
+            .header(CONTENT_LENGTH, self.payload.content_length())
             .with_azure_authorization(&credential, &self.config.account)
-            .send_retry(&self.config.retry_config)
+            .retryable(&self.config.retry_config)
+            .idempotent(self.idempotent)
+            .payload(Some(self.payload))
+            .send()
             .await
             .context(PutRequestSnafu {
                 path: self.path.as_ref(),
@@ -222,32 +260,33 @@ impl AzureClient {
         self.config.get_credential().await
     }
 
-    fn put_request<'a>(&'a self, path: &'a Path, bytes: Bytes) -> PutRequest<'a> {
+    fn put_request<'a>(&'a self, path: &'a Path, payload: PutPayload) -> PutRequest<'a> {
         let url = self.config.path_url(path);
-
-        let mut builder = self.client.request(Method::PUT, url);
-
-        if let Some(value) = self.config().client_options.get_content_type(path) {
-            builder = builder.header(CONTENT_TYPE, value);
-        }
-
-        builder = builder
-            .header(CONTENT_LENGTH, HeaderValue::from(bytes.len()))
-            .body(bytes);
+        let builder = self.client.request(Method::PUT, url);
 
         PutRequest {
             path,
             builder,
+            payload,
             config: &self.config,
+            idempotent: false,
         }
     }
 
     /// Make an Azure PUT request <https://docs.microsoft.com/en-us/rest/api/storageservices/put-blob>
-    pub async fn put_blob(&self, path: &Path, bytes: Bytes, opts: PutOptions) -> Result<PutResult> {
-        let builder = self.put_request(path, bytes);
+    pub async fn put_blob(
+        &self,
+        path: &Path,
+        payload: PutPayload,
+        opts: PutOptions,
+    ) -> Result<PutResult> {
+        let builder = self
+            .put_request(path, payload)
+            .with_attributes(opts.attributes)
+            .with_tags(opts.tags);
 
         let builder = match &opts.mode {
-            PutMode::Overwrite => builder,
+            PutMode::Overwrite => builder.idempotent(true),
             PutMode::Create => builder.header(&IF_NONE_MATCH, "*"),
             PutMode::Update(v) => {
                 let etag = v.e_tag.as_ref().context(MissingETagSnafu)?;
@@ -255,22 +294,23 @@ impl AzureClient {
             }
         };
 
-        let builder = match (opts.tags.encoded(), self.config.disable_tagging) {
-            ("", _) | (_, true) => builder,
-            (tags, false) => builder.header(&TAGS_HEADER, tags),
-        };
-
         let response = builder.header(&BLOB_TYPE, "BlockBlob").send().await?;
         Ok(get_put_result(response.headers(), VERSION_HEADER).context(MetadataSnafu)?)
     }
 
     /// PUT a block <https://learn.microsoft.com/en-us/rest/api/storageservices/put-block>
-    pub async fn put_block(&self, path: &Path, part_idx: usize, data: Bytes) -> Result<PartId> {
+    pub async fn put_block(
+        &self,
+        path: &Path,
+        part_idx: usize,
+        payload: PutPayload,
+    ) -> Result<PartId> {
         let content_id = format!("{part_idx:20}");
         let block_id = BASE64_STANDARD.encode(&content_id);
 
-        self.put_request(path, data)
+        self.put_request(path, payload)
             .query(&[("comp", "block"), ("blockid", &block_id)])
+            .idempotent(true)
             .send()
             .await?;
 
@@ -278,15 +318,24 @@ impl AzureClient {
     }
 
     /// PUT a block list <https://learn.microsoft.com/en-us/rest/api/storageservices/put-block-list>
-    pub async fn put_block_list(&self, path: &Path, parts: Vec<PartId>) -> Result<PutResult> {
+    pub async fn put_block_list(
+        &self,
+        path: &Path,
+        parts: Vec<PartId>,
+        opts: PutMultipartOpts,
+    ) -> Result<PutResult> {
         let blocks = parts
             .into_iter()
             .map(|part| BlockId::from(part.content_id))
             .collect();
 
+        let payload = BlockList { blocks }.to_xml().into();
         let response = self
-            .put_request(path, BlockList { blocks }.to_xml().into())
+            .put_request(path, payload)
+            .with_attributes(opts.attributes)
+            .with_tags(opts.tags)
             .query(&[("comp", "blocklist")])
+            .idempotent(true)
             .send()
             .await?;
 
@@ -340,7 +389,9 @@ impl AzureClient {
 
         builder
             .with_azure_authorization(&credential, &self.config.account)
-            .send_retry(&self.config.retry_config)
+            .retryable(&self.config.retry_config)
+            .idempotent(overwrite)
+            .send()
             .await
             .map_err(|err| err.error(STORE, from.to_string()))?;
 
@@ -373,7 +424,9 @@ impl AzureClient {
             .body(body)
             .query(&[("restype", "service"), ("comp", "userdelegationkey")])
             .with_azure_authorization(&credential, &self.config.account)
-            .send_retry(&self.config.retry_config)
+            .retryable(&self.config.retry_config)
+            .idempotent(true)
+            .send()
             .await
             .context(DelegationKeyRequestSnafu)?
             .bytes()

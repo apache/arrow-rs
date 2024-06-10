@@ -223,15 +223,21 @@ pub(crate) fn add_encoded_arrow_schema_to_metadata(schema: &Schema, props: &mut 
 }
 
 /// Convert arrow schema to parquet schema
+///
+/// The name of the root schema element defaults to `"arrow_schema"`, this can be
+/// overridden with [`arrow_to_parquet_schema_with_root`]
 pub fn arrow_to_parquet_schema(schema: &Schema) -> Result<SchemaDescriptor> {
+    arrow_to_parquet_schema_with_root(schema, "arrow_schema")
+}
+
+/// Convert arrow schema to parquet schema specifying the name of the root schema element
+pub fn arrow_to_parquet_schema_with_root(schema: &Schema, root: &str) -> Result<SchemaDescriptor> {
     let fields = schema
         .fields()
         .iter()
         .map(|field| arrow_to_parquet_type(field).map(Arc::new))
         .collect::<Result<_>>()?;
-    let group = Type::group_type_builder("arrow_schema")
-        .with_fields(fields)
-        .build()?;
+    let group = Type::group_type_builder(root).with_fields(fields).build()?;
     Ok(SchemaDescriptor::new(Arc::new(group)))
 }
 
@@ -464,9 +470,10 @@ fn arrow_to_parquet_type(field: &Field) -> Result<Type> {
                 .with_length(*length)
                 .build()
         }
-        DataType::BinaryView | DataType::Utf8View => {
-            unimplemented!("BinaryView/Utf8View not implemented")
-        }
+        DataType::BinaryView => Type::primitive_type_builder(name, PhysicalType::BYTE_ARRAY)
+            .with_repetition(repetition)
+            .with_id(id)
+            .build(),
         DataType::Decimal128(precision, scale) | DataType::Decimal256(precision, scale) => {
             // Decimal precision determines the Parquet physical type to use.
             // Following the: https://github.com/apache/parquet-format/blob/master/LogicalTypes.md#decimal
@@ -499,6 +506,11 @@ fn arrow_to_parquet_type(field: &Field) -> Result<Type> {
                 .with_id(id)
                 .build()
         }
+        DataType::Utf8View => Type::primitive_type_builder(name, PhysicalType::BYTE_ARRAY)
+            .with_logical_type(Some(LogicalType::String))
+            .with_repetition(repetition)
+            .with_id(id)
+            .build(),
         DataType::List(f) | DataType::FixedSizeList(f, _) | DataType::LargeList(f) => {
             Type::group_type_builder(name)
                 .with_fields(vec![Arc::new(
@@ -1012,6 +1024,12 @@ mod tests {
               OPTIONAL int32 value;
             }
           }
+          REQUIRED group my_map4 (MAP) {
+            REPEATED group map {
+              OPTIONAL binary key (UTF8);
+              REQUIRED int32 value;
+            }
+          }
         }
         ";
 
@@ -1066,6 +1084,24 @@ mod tests {
                 Field::new("value", DataType::Int32, true),
                 false,
                 true,
+            ));
+        }
+
+        // // Map<String, Integer> (non-compliant nullable key)
+        // group my_map (MAP_KEY_VALUE) {
+        //   repeated group map {
+        //     optional binary key (UTF8);
+        //     required int32 value;
+        //   }
+        // }
+        {
+            arrow_fields.push(Field::new_map(
+                "my_map4",
+                "map",
+                Field::new("key", DataType::Utf8, false), // The key is always non-nullable (#5630)
+                Field::new("value", DataType::Int32, false),
+                false,
+                false,
             ));
         }
 

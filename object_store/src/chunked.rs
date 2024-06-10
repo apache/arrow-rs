@@ -25,14 +25,13 @@ use async_trait::async_trait;
 use bytes::{BufMut, Bytes, BytesMut};
 use futures::stream::BoxStream;
 use futures::StreamExt;
-use tokio::io::AsyncWrite;
 
 use crate::path::Path;
 use crate::{
-    GetOptions, GetResult, GetResultPayload, ListResult, ObjectMeta, ObjectStore, PutOptions,
-    PutResult,
+    GetOptions, GetResult, GetResultPayload, ListResult, MultipartUpload, ObjectMeta, ObjectStore,
+    PutMultipartOpts, PutOptions, PutResult,
 };
-use crate::{MultipartId, Result};
+use crate::{PutPayload, Result};
 
 /// Wraps a [`ObjectStore`] and makes its get response return chunks
 /// in a controllable manner.
@@ -63,19 +62,25 @@ impl Display for ChunkedStore {
 
 #[async_trait]
 impl ObjectStore for ChunkedStore {
-    async fn put_opts(&self, location: &Path, bytes: Bytes, opts: PutOptions) -> Result<PutResult> {
-        self.inner.put_opts(location, bytes, opts).await
-    }
-
-    async fn put_multipart(
+    async fn put_opts(
         &self,
         location: &Path,
-    ) -> Result<(MultipartId, Box<dyn AsyncWrite + Unpin + Send>)> {
+        payload: PutPayload,
+        opts: PutOptions,
+    ) -> Result<PutResult> {
+        self.inner.put_opts(location, payload, opts).await
+    }
+
+    async fn put_multipart(&self, location: &Path) -> Result<Box<dyn MultipartUpload>> {
         self.inner.put_multipart(location).await
     }
 
-    async fn abort_multipart(&self, location: &Path, multipart_id: &MultipartId) -> Result<()> {
-        self.inner.abort_multipart(location, multipart_id).await
+    async fn put_multipart_opts(
+        &self,
+        location: &Path,
+        opts: PutMultipartOpts,
+    ) -> Result<Box<dyn MultipartUpload>> {
+        self.inner.put_multipart_opts(location, opts).await
     }
 
     async fn get_opts(&self, location: &Path, options: GetOptions) -> Result<GetResult> {
@@ -173,10 +178,10 @@ impl ObjectStore for ChunkedStore {
 mod tests {
     use futures::StreamExt;
 
+    use crate::integration::*;
     use crate::local::LocalFileSystem;
     use crate::memory::InMemory;
     use crate::path::Path;
-    use crate::tests::*;
 
     use super::*;
 
@@ -184,10 +189,7 @@ mod tests {
     async fn test_chunked_basic() {
         let location = Path::parse("test").unwrap();
         let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
-        store
-            .put(&location, Bytes::from(vec![0; 1001]))
-            .await
-            .unwrap();
+        store.put(&location, vec![0; 1001].into()).await.unwrap();
 
         for chunk_size in [10, 20, 31] {
             let store = ChunkedStore::new(Arc::clone(&store), chunk_size);

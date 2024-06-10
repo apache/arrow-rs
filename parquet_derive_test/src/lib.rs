@@ -42,6 +42,7 @@ struct ACompleteRecord<'a> {
     pub borrowed_maybe_a_string: &'a Option<String>,
     pub borrowed_maybe_a_str: &'a Option<&'a str>,
     pub now: chrono::NaiveDateTime,
+    pub uuid: uuid::Uuid,
     pub byte_vec: Vec<u8>,
     pub maybe_byte_vec: Option<Vec<u8>>,
     pub borrowed_byte_vec: &'a [u8],
@@ -61,6 +62,7 @@ struct APartiallyCompleteRecord {
     pub double: f64,
     pub now: chrono::NaiveDateTime,
     pub date: chrono::NaiveDate,
+    pub uuid: uuid::Uuid,
     pub byte_vec: Vec<u8>,
 }
 
@@ -105,6 +107,7 @@ mod tests {
             OPTIONAL BINARY          borrowed_maybe_a_string (STRING);
             OPTIONAL BINARY          borrowed_maybe_a_str (STRING);
             REQUIRED INT64           now (TIMESTAMP_MILLIS);
+            REQUIRED FIXED_LEN_BYTE_ARRAY (16) uuid (UUID);
             REQUIRED BINARY          byte_vec;
             OPTIONAL BINARY          maybe_byte_vec;
             REQUIRED BINARY          borrowed_byte_vec;
@@ -144,6 +147,7 @@ mod tests {
             borrowed_maybe_a_string: &maybe_a_string,
             borrowed_maybe_a_str: &maybe_a_str,
             now: chrono::Utc::now().naive_local(),
+            uuid: uuid::Uuid::new_v4(),
             byte_vec: vec![0x65, 0x66, 0x67],
             maybe_byte_vec: Some(vec![0x88, 0x89, 0x90]),
             borrowed_byte_vec: &borrowed_byte_vec,
@@ -179,6 +183,7 @@ mod tests {
             double: std::f64::NAN,
             now: chrono::Utc::now().naive_local(),
             date: chrono::naive::NaiveDate::from_ymd_opt(2015, 3, 14).unwrap(),
+            uuid: uuid::Uuid::new_v4(),
             byte_vec: vec![0x65, 0x66, 0x67],
         }];
 

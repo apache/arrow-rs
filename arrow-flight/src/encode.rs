@@ -597,20 +597,17 @@ fn hydrate_dictionary(array: &ArrayRef, data_type: &DataType) -> Result<ArrayRef
         (DataType::Union(_, UnionMode::Sparse), DataType::Union(fields, UnionMode::Sparse)) => {
             let union_arr = array.as_any().downcast_ref::<UnionArray>().unwrap();
 
-            let (type_ids, fields): (Vec<i8>, Vec<&FieldRef>) = fields.iter().unzip();
-
             Arc::new(UnionArray::try_new(
-                &type_ids,
-                union_arr.type_ids().inner().clone(),
+                fields.clone(),
+                union_arr.type_ids().clone(),
                 None,
                 fields
                     .iter()
-                    .enumerate()
-                    .map(|(col, field)| {
-                        Ok((
-                            field.as_ref().clone(),
-                            arrow_cast::cast(union_arr.child(col as i8), field.data_type())?,
-                        ))
+                    .map(|(type_id, field)| {
+                        Ok(arrow_cast::cast(
+                            union_arr.child(type_id),
+                            field.data_type(),
+                        )?)
                     })
                     .collect::<Result<Vec<_>>>()?,
             )?)
@@ -625,9 +622,10 @@ mod tests {
     use arrow_array::builder::StringDictionaryBuilder;
     use arrow_array::*;
     use arrow_array::{cast::downcast_array, types::*};
-    use arrow_buffer::Buffer;
+    use arrow_buffer::ScalarBuffer;
     use arrow_cast::pretty::pretty_format_batches;
-    use arrow_schema::UnionMode;
+    use arrow_ipc::MetadataVersion;
+    use arrow_schema::{UnionFields, UnionMode};
     use std::collections::HashMap;
 
     use crate::decode::{DecodedPayload, FlightDataDecoder};
@@ -638,7 +636,8 @@ mod tests {
     /// ensure only the batch's used data (not the allocated data) is sent
     /// <https://github.com/apache/arrow-rs/issues/208>
     fn test_encode_flight_data() {
-        let options = IpcWriteOptions::default();
+        // use 8-byte alignment - default alignment is 64 which produces bigger ipc data
+        let options = IpcWriteOptions::try_new(8, false, MetadataVersion::V5).unwrap();
         let c1 = UInt32Array::from(vec![1, 2, 3, 4, 5, 6]);
 
         let batch = RecordBatch::try_from_iter(vec![("a", Arc::new(c1) as ArrayRef)])
@@ -847,16 +846,23 @@ mod tests {
             true,
         )];
 
-        let type_ids = vec![0, 1, 2];
-        let union_fields = vec![
-            Field::new_list(
-                "dict_list",
-                Field::new_dictionary("item", DataType::UInt16, DataType::Utf8, true),
-                true,
+        let union_fields = [
+            (
+                0,
+                Arc::new(Field::new_list(
+                    "dict_list",
+                    Field::new_dictionary("item", DataType::UInt16, DataType::Utf8, true),
+                    true,
+                )),
             ),
-            Field::new_struct("struct", struct_fields.clone(), true),
-            Field::new("string", DataType::Utf8, true),
-        ];
+            (
+                1,
+                Arc::new(Field::new_struct("struct", struct_fields.clone(), true)),
+            ),
+            (2, Arc::new(Field::new("string", DataType::Utf8, true))),
+        ]
+        .into_iter()
+        .collect::<UnionFields>();
 
         let struct_fields = vec![Field::new_list(
             "dict_list",
@@ -870,21 +876,15 @@ mod tests {
 
         let arr1 = builder.finish();
 
-        let type_id_buffer = Buffer::from_slice_ref([0_i8]);
+        let type_id_buffer = [0].into_iter().collect::<ScalarBuffer<i8>>();
         let arr1 = UnionArray::try_new(
-            &type_ids,
+            union_fields.clone(),
             type_id_buffer,
             None,
             vec![
-                (union_fields[0].clone(), Arc::new(arr1)),
-                (
-                    union_fields[1].clone(),
-                    new_null_array(union_fields[1].data_type(), 1),
-                ),
-                (
-                    union_fields[2].clone(),
-                    new_null_array(union_fields[2].data_type(), 1),
-                ),
+                Arc::new(arr1) as Arc<dyn Array>,
+                new_null_array(union_fields.iter().nth(1).unwrap().1.data_type(), 1),
+                new_null_array(union_fields.iter().nth(2).unwrap().1.data_type(), 1),
             ],
         )
         .unwrap();
@@ -894,47 +894,36 @@ mod tests {
         let arr2 = Arc::new(builder.finish());
         let arr2 = StructArray::new(struct_fields.clone().into(), vec![arr2], None);
 
-        let type_id_buffer = Buffer::from_slice_ref([1_i8]);
+        let type_id_buffer = [1].into_iter().collect::<ScalarBuffer<i8>>();
         let arr2 = UnionArray::try_new(
-            &type_ids,
+            union_fields.clone(),
             type_id_buffer,
             None,
             vec![
-                (
-                    union_fields[0].clone(),
-                    new_null_array(union_fields[0].data_type(), 1),
-                ),
-                (union_fields[1].clone(), Arc::new(arr2)),
-                (
-                    union_fields[2].clone(),
-                    new_null_array(union_fields[2].data_type(), 1),
-                ),
+                new_null_array(union_fields.iter().next().unwrap().1.data_type(), 1),
+                Arc::new(arr2),
+                new_null_array(union_fields.iter().nth(2).unwrap().1.data_type(), 1),
             ],
         )
         .unwrap();
 
-        let type_id_buffer = Buffer::from_slice_ref([2_i8]);
+        let type_id_buffer = [2].into_iter().collect::<ScalarBuffer<i8>>();
         let arr3 = UnionArray::try_new(
-            &type_ids,
+            union_fields.clone(),
             type_id_buffer,
             None,
             vec![
-                (
-                    union_fields[0].clone(),
-                    new_null_array(union_fields[0].data_type(), 1),
-                ),
-                (
-                    union_fields[1].clone(),
-                    new_null_array(union_fields[1].data_type(), 1),
-                ),
-                (
-                    union_fields[2].clone(),
-                    Arc::new(StringArray::from(vec!["e"])),
-                ),
+                new_null_array(union_fields.iter().next().unwrap().1.data_type(), 1),
+                new_null_array(union_fields.iter().nth(1).unwrap().1.data_type(), 1),
+                Arc::new(StringArray::from(vec!["e"])),
             ],
         )
         .unwrap();
 
+        let (type_ids, union_fields): (Vec<_>, Vec<_>) = union_fields
+            .iter()
+            .map(|(type_id, field_ref)| (type_id, (*Arc::clone(field_ref)).clone()))
+            .unzip();
         let schema = Arc::new(Schema::new(vec![Field::new_union(
             "union",
             type_ids.clone(),
@@ -1343,6 +1332,8 @@ mod tests {
 
             let mut stream = FlightDataEncoderBuilder::new()
                 .with_max_flight_data_size(max_flight_data_size)
+                // use 8-byte alignment - default alignment is 64 which produces bigger ipc data
+                .with_options(IpcWriteOptions::try_new(8, false, MetadataVersion::V5).unwrap())
                 .build(futures::stream::iter([Ok(batch.clone())]));
 
             let mut i = 0;

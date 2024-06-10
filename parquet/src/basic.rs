@@ -459,7 +459,7 @@ pub enum PageType {
 /// min/max.
 ///
 /// See reference in
-/// <https://github.com/apache/parquet-cpp/blob/master/src/parquet/types.h>
+/// <https://github.com/apache/arrow/blob/main/cpp/src/parquet/types.h>
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[allow(non_camel_case_types)]
 pub enum SortOrder {

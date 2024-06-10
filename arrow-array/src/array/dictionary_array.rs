@@ -20,7 +20,8 @@ use crate::cast::AsArray;
 use crate::iterator::ArrayIter;
 use crate::types::*;
 use crate::{
-    make_array, Array, ArrayAccessor, ArrayRef, ArrowNativeTypeOp, PrimitiveArray, StringArray,
+    make_array, Array, ArrayAccessor, ArrayRef, ArrowNativeTypeOp, PrimitiveArray, Scalar,
+    StringArray,
 };
 use arrow_buffer::bit_util::set_bit;
 use arrow_buffer::buffer::NullBuffer;
@@ -310,6 +311,14 @@ impl<K: ArrowDictionaryKeyType> DictionaryArray<K> {
             values,
             is_ordered: false,
         })
+    }
+
+    /// Create a new [`Scalar`] from `value`
+    pub fn new_scalar<T: Array + 'static>(value: Scalar<T>) -> Scalar<Self> {
+        Scalar::new(Self::new(
+            PrimitiveArray::new(vec![K::Native::usize_as(0)].into(), None),
+            Arc::new(value.into_inner()),
+        ))
     }
 
     /// Create a new [`DictionaryArray`] without performing validation
@@ -937,7 +946,7 @@ where
 ///         return Ok(d.with_values(r));
 ///     }
 ///     downcast_primitive_array! {
-///         a => Ok(Arc::new(a.iter().map(|x| x.map(|x| x.to_string())).collect::<StringArray>())),
+///         a => Ok(Arc::new(a.iter().map(|x| x.map(|x| format!("{x:?}"))).collect::<StringArray>())),
 ///         d => Err(ArrowError::InvalidArgumentError(format!("{d:?} not supported")))
 ///     }
 /// }

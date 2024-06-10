@@ -32,7 +32,7 @@ use arrow_array::{
     TimestampMicrosecondArray, TimestampMillisecondArray, TimestampNanosecondArray,
     TimestampSecondArray, UInt16Array, UInt32Array, UInt64Array, UInt8Array, UnionArray,
 };
-use arrow_buffer::{i256, Buffer};
+use arrow_buffer::{i256, Buffer, IntervalDayTime, IntervalMonthDayNano};
 use arrow_cast::pretty::pretty_format_columns;
 use arrow_cast::{can_cast_types, cast};
 use arrow_data::ArrayData;
@@ -249,8 +249,14 @@ fn get_arrays_of_all_types() -> Vec<ArrayRef> {
         Arc::new(Time64MicrosecondArray::from(vec![1000, 2000])),
         Arc::new(Time64NanosecondArray::from(vec![1000, 2000])),
         Arc::new(IntervalYearMonthArray::from(vec![1000, 2000])),
-        Arc::new(IntervalDayTimeArray::from(vec![1000, 2000])),
-        Arc::new(IntervalMonthDayNanoArray::from(vec![1000, 2000])),
+        Arc::new(IntervalDayTimeArray::from(vec![
+            IntervalDayTime::new(0, 1000),
+            IntervalDayTime::new(0, 2000),
+        ])),
+        Arc::new(IntervalMonthDayNanoArray::from(vec![
+            IntervalMonthDayNano::new(0, 0, 1000),
+            IntervalMonthDayNano::new(0, 0, 1000),
+        ])),
         Arc::new(DurationSecondArray::from(vec![1000, 2000])),
         Arc::new(DurationMillisecondArray::from(vec![1000, 2000])),
         Arc::new(DurationMicrosecondArray::from(vec![1000, 2000])),
@@ -579,7 +585,7 @@ fn test_pretty_format_timestamp_second_with_incorrect_fixed_offset_timezone() {
     let err = format_timezone("08:00").unwrap_err().to_string();
     assert_eq!(
         err,
-        "Parser error: Invalid timezone \"08:00\": '08:00' is not a valid timezone"
+        "Parser error: Invalid timezone \"08:00\": failed to parse timezone"
     );
 }
 
@@ -588,6 +594,6 @@ fn test_pretty_format_timestamp_second_with_unknown_timezone() {
     let err = format_timezone("unknown").unwrap_err().to_string();
     assert_eq!(
         err,
-        "Parser error: Invalid timezone \"unknown\": 'unknown' is not a valid timezone"
+        "Parser error: Invalid timezone \"unknown\": failed to parse timezone"
     );
 }

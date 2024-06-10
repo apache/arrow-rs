@@ -305,13 +305,21 @@ pub type ListBuilder<T> = GenericListBuilder<i32, T>;
 pub type LargeListBuilder<T> = GenericListBuilder<i64, T>;
 
 /// Builder for [`BinaryArray`](crate::array::BinaryArray)
+///
+/// See examples on [`GenericBinaryBuilder`]
 pub type BinaryBuilder = GenericBinaryBuilder<i32>;
 
 /// Builder for [`LargeBinaryArray`](crate::array::LargeBinaryArray)
+///
+/// See examples on [`GenericBinaryBuilder`]
 pub type LargeBinaryBuilder = GenericBinaryBuilder<i64>;
 
 /// Builder for [`StringArray`](crate::array::StringArray)
+///
+/// See examples on [`GenericStringBuilder`]
 pub type StringBuilder = GenericStringBuilder<i32>;
 
 /// Builder for [`LargeStringArray`](crate::array::LargeStringArray)
+///
+/// See examples on [`GenericStringBuilder`]
 pub type LargeStringBuilder = GenericStringBuilder<i64>;

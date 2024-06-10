@@ -17,9 +17,9 @@
 
 use crate::{make_array, Array, ArrayRef};
 use arrow_buffer::buffer::NullBuffer;
-use arrow_buffer::{Buffer, ScalarBuffer};
+use arrow_buffer::ScalarBuffer;
 use arrow_data::{ArrayData, ArrayDataBuilder};
-use arrow_schema::{ArrowError, DataType, Field, UnionFields, UnionMode};
+use arrow_schema::{ArrowError, DataType, UnionFields, UnionMode};
 /// Contains the `UnionArray` type.
 ///
 use std::any::Any;
@@ -42,25 +42,30 @@ use std::sync::Arc;
 /// # Examples
 /// ## Create a dense UnionArray `[1, 3.2, 34]`
 /// ```
-/// use arrow_buffer::Buffer;
+/// use arrow_buffer::ScalarBuffer;
 /// use arrow_schema::*;
 /// use std::sync::Arc;
 /// use arrow_array::{Array, Int32Array, Float64Array, UnionArray};
 ///
 /// let int_array = Int32Array::from(vec![1, 34]);
 /// let float_array = Float64Array::from(vec![3.2]);
-/// let type_id_buffer = Buffer::from_slice_ref(&[0_i8, 1, 0]);
-/// let value_offsets_buffer = Buffer::from_slice_ref(&[0_i32, 0, 1]);
+/// let type_ids = [0, 1, 0].into_iter().collect::<ScalarBuffer<i8>>();
+/// let offsets = [0, 0, 1].into_iter().collect::<ScalarBuffer<i32>>();
 ///
-/// let children: Vec<(Field, Arc<dyn Array>)> = vec![
-///     (Field::new("A", DataType::Int32, false), Arc::new(int_array)),
-///     (Field::new("B", DataType::Float64, false), Arc::new(float_array)),
+/// let union_fields = [
+///     (0, Arc::new(Field::new("A", DataType::Int32, false))),
+///     (1, Arc::new(Field::new("B", DataType::Float64, false))),
+/// ].into_iter().collect::<UnionFields>();
+///
+/// let children = vec![
+///     Arc::new(int_array) as Arc<dyn Array>,
+///     Arc::new(float_array),
 /// ];
 ///
 /// let array = UnionArray::try_new(
-///     &vec![0, 1],
-///     type_id_buffer,
-///     Some(value_offsets_buffer),
+///     union_fields,
+///     type_ids,
+///     Some(offsets),
 ///     children,
 /// ).unwrap();
 ///
@@ -76,23 +81,28 @@ use std::sync::Arc;
 ///
 /// ## Create a sparse UnionArray `[1, 3.2, 34]`
 /// ```
-/// use arrow_buffer::Buffer;
+/// use arrow_buffer::ScalarBuffer;
 /// use arrow_schema::*;
 /// use std::sync::Arc;
 /// use arrow_array::{Array, Int32Array, Float64Array, UnionArray};
 ///
 /// let int_array = Int32Array::from(vec![Some(1), None, Some(34)]);
 /// let float_array = Float64Array::from(vec![None, Some(3.2), None]);
-/// let type_id_buffer = Buffer::from_slice_ref(&[0_i8, 1, 0]);
+/// let type_ids = [0_i8, 1, 0].into_iter().collect::<ScalarBuffer<i8>>();
 ///
-/// let children: Vec<(Field, Arc<dyn Array>)> = vec![
-///     (Field::new("A", DataType::Int32, false), Arc::new(int_array)),
-///     (Field::new("B", DataType::Float64, false), Arc::new(float_array)),
+/// let union_fields = [
+///     (0, Arc::new(Field::new("A", DataType::Int32, false))),
+///     (1, Arc::new(Field::new("B", DataType::Float64, false))),
+/// ].into_iter().collect::<UnionFields>();
+///
+/// let children = vec![
+///     Arc::new(int_array) as Arc<dyn Array>,
+///     Arc::new(float_array),
 /// ];
 ///
 /// let array = UnionArray::try_new(
-///     &vec![0, 1],
-///     type_id_buffer,
+///     union_fields,
+///     type_ids,
 ///     None,
 ///     children,
 /// ).unwrap();
@@ -124,102 +134,99 @@ impl UnionArray {
     ///
     /// # Safety
     ///
-    /// The `type_ids` `Buffer` should contain `i8` values.  These values should be greater than
-    /// zero and must be less than the number of children provided in `child_arrays`.  These values
-    /// are used to index into the `child_arrays`.
+    /// The `type_ids` values should be positive and must match one of the type ids of the fields provided in `fields`.
+    /// These values are used to index into the `children` arrays.
     ///
-    /// The `value_offsets` `Buffer` is only provided in the case of a dense union, sparse unions
-    /// should use `None`.  If provided the `value_offsets` `Buffer` should contain `i32` values.
-    /// The values in this array should be greater than zero and must be less than the length of the
-    /// overall array.
+    /// The `offsets` is provided in the case of a dense union, sparse unions should use `None`.
+    /// If provided the `offsets` values should be positive and must be less than the length of the
+    /// corresponding array.
     ///
     /// In both cases above we use signed integer types to maintain compatibility with other
     /// Arrow implementations.
-    ///
-    /// In both of the cases above we are accepting `Buffer`'s which are assumed to be representing
-    /// `i8` and `i32` values respectively.  `Buffer` objects are untyped and no attempt is made
-    /// to ensure that the data provided is valid.
     pub unsafe fn new_unchecked(
-        field_type_ids: &[i8],
-        type_ids: Buffer,
-        value_offsets: Option<Buffer>,
-        child_arrays: Vec<(Field, ArrayRef)>,
+        fields: UnionFields,
+        type_ids: ScalarBuffer<i8>,
+        offsets: Option<ScalarBuffer<i32>>,
+        children: Vec<ArrayRef>,
     ) -> Self {
-        let (fields, field_values): (Vec<_>, Vec<_>) = child_arrays.into_iter().unzip();
-        let len = type_ids.len();
-
-        let mode = if value_offsets.is_some() {
+        let mode = if offsets.is_some() {
             UnionMode::Dense
         } else {
             UnionMode::Sparse
         };
 
-        let builder = ArrayData::builder(DataType::Union(
-            UnionFields::new(field_type_ids.iter().copied(), fields),
-            mode,
-        ))
-        .add_buffer(type_ids)
-        .child_data(field_values.into_iter().map(|a| a.into_data()).collect())
-        .len(len);
+        let len = type_ids.len();
+        let builder = ArrayData::builder(DataType::Union(fields, mode))
+            .add_buffer(type_ids.into_inner())
+            .child_data(children.into_iter().map(Array::into_data).collect())
+            .len(len);
 
-        let data = match value_offsets {
-            Some(b) => builder.add_buffer(b).build_unchecked(),
+        let data = match offsets {
+            Some(offsets) => builder.add_buffer(offsets.into_inner()).build_unchecked(),
             None => builder.build_unchecked(),
         };
         Self::from(data)
     }
 
     /// Attempts to create a new `UnionArray`, validating the inputs provided.
+    ///
+    /// The order of child arrays child array order must match the fields order
     pub fn try_new(
-        field_type_ids: &[i8],
-        type_ids: Buffer,
-        value_offsets: Option<Buffer>,
-        child_arrays: Vec<(Field, ArrayRef)>,
+        fields: UnionFields,
+        type_ids: ScalarBuffer<i8>,
+        offsets: Option<ScalarBuffer<i32>>,
+        children: Vec<ArrayRef>,
     ) -> Result<Self, ArrowError> {
-        if let Some(b) = &value_offsets {
-            if ((type_ids.len()) * 4) != b.len() {
+        // There must be a child array for every field.
+        if fields.len() != children.len() {
+            return Err(ArrowError::InvalidArgumentError(
+                "Union fields length must match child arrays length".to_string(),
+            ));
+        }
+
+        // There must be an offset value for every type id value.
+        if let Some(offsets) = &offsets {
+            if offsets.len() != type_ids.len() {
                 return Err(ArrowError::InvalidArgumentError(
-                    "Type Ids and Offsets represent a different number of array slots.".to_string(),
+                    "Type Ids and Offsets lengths must match".to_string(),
                 ));
             }
         }
 
-        // Check the type_ids
-        let type_id_slice: &[i8] = type_ids.typed_data();
-        let invalid_type_ids = type_id_slice
-            .iter()
-            .filter(|i| *i < &0)
-            .collect::<Vec<&i8>>();
-        if !invalid_type_ids.is_empty() {
-            return Err(ArrowError::InvalidArgumentError(format!(
-                "Type Ids must be positive and cannot be greater than the number of \
-                child arrays, found:\n{invalid_type_ids:?}"
-            )));
+        // Create mapping from type id to array lengths.
+        let max_id = fields.iter().map(|(i, _)| i).max().unwrap_or_default() as usize;
+        let mut array_lens = vec![i32::MIN; max_id + 1];
+        for (cd, (field_id, _)) in children.iter().zip(fields.iter()) {
+            array_lens[field_id as usize] = cd.len() as i32;
         }
 
-        // Check the value offsets if provided
-        if let Some(offset_buffer) = &value_offsets {
-            let max_len = type_ids.len() as i32;
-            let offsets_slice: &[i32] = offset_buffer.typed_data();
-            let invalid_offsets = offsets_slice
-                .iter()
-                .filter(|i| *i < &0 || *i > &max_len)
-                .collect::<Vec<&i32>>();
-            if !invalid_offsets.is_empty() {
-                return Err(ArrowError::InvalidArgumentError(format!(
-                    "Offsets must be positive and within the length of the Array, \
-                    found:\n{invalid_offsets:?}"
-                )));
+        // Type id values must match one of the fields.
+        for id in &type_ids {
+            match array_lens.get(*id as usize) {
+                Some(x) if *x != i32::MIN => {}
+                _ => {
+                    return Err(ArrowError::InvalidArgumentError(
+                        "Type Ids values must match one of the field type ids".to_owned(),
+                    ))
+                }
             }
         }
 
-        // Unsafe Justification: arguments were validated above (and
-        // re-revalidated as part of data().validate() below)
-        let new_self =
-            unsafe { Self::new_unchecked(field_type_ids, type_ids, value_offsets, child_arrays) };
-        new_self.to_data().validate()?;
+        // Check the value offsets are in bounds.
+        if let Some(offsets) = &offsets {
+            let mut iter = type_ids.iter().zip(offsets.iter());
+            if iter.any(|(type_id, &offset)| offset < 0 || offset >= array_lens[*type_id as usize])
+            {
+                return Err(ArrowError::InvalidArgumentError(
+                    "Offsets must be positive and within the length of the Array".to_owned(),
+                ));
+            }
+        }
 
-        Ok(new_self)
+        // Safety:
+        // - Arguments validated above.
+        let union_array = unsafe { Self::new_unchecked(fields, type_ids, offsets, children) };
+        Ok(union_array)
     }
 
     /// Accesses the child array for `type_id`.
@@ -317,6 +324,60 @@ impl UnionArray {
             type_ids: self.type_ids.slice(offset, length),
             offsets,
             fields,
+        }
+    }
+
+    /// Deconstruct this array into its constituent parts
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # use arrow_array::array::UnionArray;
+    /// # use arrow_array::types::Int32Type;
+    /// # use arrow_array::builder::UnionBuilder;
+    /// # use arrow_buffer::ScalarBuffer;
+    /// # fn main() -> Result<(), arrow_schema::ArrowError> {
+    /// let mut builder = UnionBuilder::new_dense();
+    /// builder.append::<Int32Type>("a", 1).unwrap();
+    /// let union_array = builder.build()?;
+    ///
+    /// // Deconstruct into parts
+    /// let (union_fields, type_ids, offsets, children) = union_array.into_parts();
+    ///
+    /// // Reconstruct from parts
+    /// let union_array = UnionArray::try_new(
+    ///     union_fields,
+    ///     type_ids,
+    ///     offsets,
+    ///     children,
+    /// );
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[allow(clippy::type_complexity)]
+    pub fn into_parts(
+        self,
+    ) -> (
+        UnionFields,
+        ScalarBuffer<i8>,
+        Option<ScalarBuffer<i32>>,
+        Vec<ArrayRef>,
+    ) {
+        let Self {
+            data_type,
+            type_ids,
+            offsets,
+            mut fields,
+        } = self;
+        match data_type {
+            DataType::Union(union_fields, _) => {
+                let children = union_fields
+                    .iter()
+                    .map(|(type_id, _)| fields[type_id as usize].take().unwrap())
+                    .collect();
+                (union_fields, type_ids, offsets, children)
+            }
+            _ => unreachable!(),
         }
     }
 }
@@ -504,13 +565,16 @@ impl std::fmt::Debug for UnionArray {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashSet;
 
+    use crate::array::Int8Type;
     use crate::builder::UnionBuilder;
     use crate::cast::AsArray;
     use crate::types::{Float32Type, Float64Type, Int32Type, Int64Type};
     use crate::RecordBatch;
     use crate::{Float64Array, Int32Array, Int64Array, StringArray};
-    use arrow_schema::Schema;
+    use arrow_buffer::Buffer;
+    use arrow_schema::{Field, Schema};
 
     #[test]
     fn test_dense_i32() {
@@ -743,30 +807,27 @@ mod tests {
         let int_array = Int32Array::from(vec![5, 6]);
         let float_array = Float64Array::from(vec![10.0]);
 
-        let type_ids = [1_i8, 0, 0, 2, 0, 1];
-        let offsets = [0_i32, 0, 1, 0, 2, 1];
+        let type_ids = [1, 0, 0, 2, 0, 1].into_iter().collect::<ScalarBuffer<i8>>();
+        let offsets = [0, 0, 1, 0, 2, 1]
+            .into_iter()
+            .collect::<ScalarBuffer<i32>>();
 
-        let type_id_buffer = Buffer::from_slice_ref(type_ids);
-        let value_offsets_buffer = Buffer::from_slice_ref(offsets);
-
-        let children: Vec<(Field, Arc<dyn Array>)> = vec![
-            (
-                Field::new("A", DataType::Utf8, false),
-                Arc::new(string_array),
-            ),
-            (Field::new("B", DataType::Int32, false), Arc::new(int_array)),
-            (
-                Field::new("C", DataType::Float64, false),
-                Arc::new(float_array),
-            ),
-        ];
-        let array = UnionArray::try_new(
-            &[0, 1, 2],
-            type_id_buffer,
-            Some(value_offsets_buffer),
-            children,
-        )
-        .unwrap();
+        let fields = [
+            (0, Arc::new(Field::new("A", DataType::Utf8, false))),
+            (1, Arc::new(Field::new("B", DataType::Int32, false))),
+            (2, Arc::new(Field::new("C", DataType::Float64, false))),
+        ]
+        .into_iter()
+        .collect::<UnionFields>();
+        let children = [
+            Arc::new(string_array) as Arc<dyn Array>,
+            Arc::new(int_array),
+            Arc::new(float_array),
+        ]
+        .into_iter()
+        .collect();
+        let array =
+            UnionArray::try_new(fields, type_ids.clone(), Some(offsets.clone()), children).unwrap();
 
         // Check type ids
         assert_eq!(*array.type_ids(), type_ids);
@@ -1200,5 +1261,156 @@ mod tests {
         assert_eq!(v.data_type(), &DataType::Utf8);
         assert_eq!(v.len(), 1);
         assert_eq!(v.as_string::<i32>().value(0), "baz");
+    }
+
+    #[test]
+    fn into_parts() {
+        let mut builder = UnionBuilder::new_dense();
+        builder.append::<Int32Type>("a", 1).unwrap();
+        builder.append::<Int8Type>("b", 2).unwrap();
+        builder.append::<Int32Type>("a", 3).unwrap();
+        let dense_union = builder.build().unwrap();
+
+        let field = [
+            &Arc::new(Field::new("a", DataType::Int32, false)),
+            &Arc::new(Field::new("b", DataType::Int8, false)),
+        ];
+        let (union_fields, type_ids, offsets, children) = dense_union.into_parts();
+        assert_eq!(
+            union_fields
+                .iter()
+                .map(|(_, field)| field)
+                .collect::<Vec<_>>(),
+            field
+        );
+        assert_eq!(type_ids, [0, 1, 0]);
+        assert!(offsets.is_some());
+        assert_eq!(offsets.as_ref().unwrap(), &[0, 0, 1]);
+
+        let result = UnionArray::try_new(union_fields, type_ids, offsets, children);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().len(), 3);
+
+        let mut builder = UnionBuilder::new_sparse();
+        builder.append::<Int32Type>("a", 1).unwrap();
+        builder.append::<Int8Type>("b", 2).unwrap();
+        builder.append::<Int32Type>("a", 3).unwrap();
+        let sparse_union = builder.build().unwrap();
+
+        let (union_fields, type_ids, offsets, children) = sparse_union.into_parts();
+        assert_eq!(type_ids, [0, 1, 0]);
+        assert!(offsets.is_none());
+
+        let result = UnionArray::try_new(union_fields, type_ids, offsets, children);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().len(), 3);
+    }
+
+    #[test]
+    fn into_parts_custom_type_ids() {
+        let set_field_type_ids: [i8; 3] = [8, 4, 9];
+        let data_type = DataType::Union(
+            UnionFields::new(
+                set_field_type_ids,
+                [
+                    Field::new("strings", DataType::Utf8, false),
+                    Field::new("integers", DataType::Int32, false),
+                    Field::new("floats", DataType::Float64, false),
+                ],
+            ),
+            UnionMode::Dense,
+        );
+        let string_array = StringArray::from(vec!["foo", "bar", "baz"]);
+        let int_array = Int32Array::from(vec![5, 6, 4]);
+        let float_array = Float64Array::from(vec![10.0]);
+        let type_ids = Buffer::from_vec(vec![4_i8, 8, 4, 8, 9, 4, 8]);
+        let value_offsets = Buffer::from_vec(vec![0_i32, 0, 1, 1, 0, 2, 2]);
+        let data = ArrayData::builder(data_type)
+            .len(7)
+            .buffers(vec![type_ids, value_offsets])
+            .child_data(vec![
+                string_array.into_data(),
+                int_array.into_data(),
+                float_array.into_data(),
+            ])
+            .build()
+            .unwrap();
+        let array = UnionArray::from(data);
+
+        let (union_fields, type_ids, offsets, children) = array.into_parts();
+        assert_eq!(
+            type_ids.iter().collect::<HashSet<_>>(),
+            set_field_type_ids.iter().collect::<HashSet<_>>()
+        );
+        let result = UnionArray::try_new(union_fields, type_ids, offsets, children);
+        assert!(result.is_ok());
+        let array = result.unwrap();
+        assert_eq!(array.len(), 7);
+    }
+
+    #[test]
+    fn test_invalid() {
+        let fields = UnionFields::new(
+            [3, 2],
+            [
+                Field::new("a", DataType::Utf8, false),
+                Field::new("b", DataType::Utf8, false),
+            ],
+        );
+        let children = vec![
+            Arc::new(StringArray::from_iter_values(["a", "b"])) as _,
+            Arc::new(StringArray::from_iter_values(["c", "d"])) as _,
+        ];
+
+        let type_ids = vec![3, 3, 2].into();
+        UnionArray::try_new(fields.clone(), type_ids, None, children.clone()).unwrap();
+
+        let type_ids = vec![1, 2].into();
+        let err =
+            UnionArray::try_new(fields.clone(), type_ids, None, children.clone()).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Invalid argument error: Type Ids values must match one of the field type ids"
+        );
+
+        let type_ids = vec![7, 2].into();
+        let err = UnionArray::try_new(fields.clone(), type_ids, None, children).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Invalid argument error: Type Ids values must match one of the field type ids"
+        );
+
+        let children = vec![
+            Arc::new(StringArray::from_iter_values(["a", "b"])) as _,
+            Arc::new(StringArray::from_iter_values(["c"])) as _,
+        ];
+        let type_ids = ScalarBuffer::from(vec![3_i8, 3, 2]);
+        let offsets = Some(vec![0, 1, 0].into());
+        UnionArray::try_new(fields.clone(), type_ids.clone(), offsets, children.clone()).unwrap();
+
+        let offsets = Some(vec![0, 1, 1].into());
+        let err = UnionArray::try_new(fields.clone(), type_ids.clone(), offsets, children.clone())
+            .unwrap_err();
+
+        assert_eq!(
+            err.to_string(),
+            "Invalid argument error: Offsets must be positive and within the length of the Array"
+        );
+
+        let offsets = Some(vec![0, 1].into());
+        let err =
+            UnionArray::try_new(fields.clone(), type_ids.clone(), offsets, children).unwrap_err();
+
+        assert_eq!(
+            err.to_string(),
+            "Invalid argument error: Type Ids and Offsets lengths must match"
+        );
+
+        let err = UnionArray::try_new(fields.clone(), type_ids, None, vec![]).unwrap_err();
+
+        assert_eq!(
+            err.to_string(),
+            "Invalid argument error: Union fields length must match child arrays length"
+        );
     }
 }

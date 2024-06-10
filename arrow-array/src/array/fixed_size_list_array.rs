@@ -152,16 +152,22 @@ impl FixedSizeListArray {
             ArrowError::InvalidArgumentError(format!("Size cannot be negative, got {}", size))
         })?;
 
-        let len = values.len() / s.max(1);
-        if let Some(n) = nulls.as_ref() {
-            if n.len() != len {
-                return Err(ArrowError::InvalidArgumentError(format!(
-                    "Incorrect length of null buffer for FixedSizeListArray, expected {} got {}",
-                    len,
-                    n.len(),
-                )));
+        let len = match s {
+            0 => nulls.as_ref().map(|x| x.len()).unwrap_or_default(),
+            _ => {
+                let len = values.len() / s.max(1);
+                if let Some(n) = nulls.as_ref() {
+                    if n.len() != len {
+                        return Err(ArrowError::InvalidArgumentError(format!(
+                            "Incorrect length of null buffer for FixedSizeListArray, expected {} got {}",
+                            len,
+                            n.len(),
+                        )));
+                    }
+                }
+                len
             }
-        }
+        };
 
         if field.data_type() != values.data_type() {
             return Err(ArrowError::InvalidArgumentError(format!(
@@ -177,7 +183,8 @@ impl FixedSizeListArray {
                 || nulls
                     .as_ref()
                     .map(|n| n.expand(size as _).contains(&a))
-                    .unwrap_or_default();
+                    .unwrap_or_default()
+                || (nulls.is_none() && a.null_count() == 0);
 
             if !nulls_valid {
                 return Err(ArrowError::InvalidArgumentError(format!(
@@ -460,7 +467,7 @@ mod tests {
 
     use crate::cast::AsArray;
     use crate::types::Int32Type;
-    use crate::Int32Array;
+    use crate::{new_empty_array, Int32Array};
 
     use super::*;
 
@@ -656,7 +663,7 @@ mod tests {
         );
 
         let list = FixedSizeListArray::new(field.clone(), 0, values.clone(), None);
-        assert_eq!(list.len(), 6);
+        assert_eq!(list.len(), 0);
 
         let nulls = NullBuffer::new_null(2);
         let err = FixedSizeListArray::try_new(field, 2, values.clone(), Some(nulls)).unwrap_err();
@@ -673,5 +680,14 @@ mod tests {
         let field = Arc::new(Field::new("item", DataType::Int64, true));
         let err = FixedSizeListArray::try_new(field, 2, values, None).unwrap_err();
         assert_eq!(err.to_string(), "Invalid argument error: FixedSizeListArray expected data type Int64 got Int32 for \"item\"");
+    }
+
+    #[test]
+    fn empty_fixed_size_list() {
+        let field = Arc::new(Field::new("item", DataType::Int32, true));
+        let nulls = NullBuffer::new_null(2);
+        let values = new_empty_array(&DataType::Int32);
+        let list = FixedSizeListArray::new(field.clone(), 0, values, Some(nulls));
+        assert_eq!(list.len(), 2);
     }
 }

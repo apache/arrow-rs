@@ -1172,13 +1172,6 @@ fn compare_greater<T: ParquetValueType>(descr: &ColumnDescriptor, a: &T, b: &T) 
 // https://github.com/apache/parquet-mr/blob/master/parquet-column/src/main/java/org/apache/parquet/column/values/factory/DefaultV1ValuesWriterFactory.java
 // https://github.com/apache/parquet-mr/blob/master/parquet-column/src/main/java/org/apache/parquet/column/values/factory/DefaultV2ValuesWriterFactory.java
 
-/// Trait to define default encoding for types, including whether or not the type
-/// supports dictionary encoding.
-trait EncodingWriteSupport {
-    /// Returns true if dictionary is supported for column writer, false otherwise.
-    fn has_dictionary_support(props: &WriterProperties) -> bool;
-}
-
 /// Returns encoding for a column when no other encoding is provided in writer properties.
 fn fallback_encoding(kind: Type, props: &WriterProperties) -> Encoding {
     match (kind, props.writer_version()) {

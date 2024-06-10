@@ -228,7 +228,7 @@ impl ArrowReaderMetadata {
 /// breaking the pre-existing ParquetRecordBatchStreamBuilder API
 pub struct AsyncReader<T>(T);
 
-/// A builder used to construct a [`ParquetRecordBatchStream`] for a parquet file
+/// A builder used to construct a [`ParquetRecordBatchStream`] for `async` reading of a parquet file
 ///
 /// In particular, this handles reading the parquet file metadata, allowing consumers
 /// to use this information to select what specific columns, row groups, etc...
@@ -239,21 +239,8 @@ pub type ParquetRecordBatchStreamBuilder<T> = ArrowReaderBuilder<AsyncReader<T>>
 
 impl<T: AsyncFileReader + Send + 'static> ParquetRecordBatchStreamBuilder<T> {
     /// Create a new [`ParquetRecordBatchStreamBuilder`] with the provided parquet file
-    pub async fn new(input: T) -> Result<Self> {
-        Self::new_with_options(input, Default::default()).await
-    }
-
-    /// Create a new [`ParquetRecordBatchStreamBuilder`] with the provided parquet file
-    /// and [`ArrowReaderOptions`]
-    pub async fn new_with_options(mut input: T, options: ArrowReaderOptions) -> Result<Self> {
-        let metadata = ArrowReaderMetadata::load_async(&mut input, options).await?;
-        Ok(Self::new_with_metadata(input, metadata))
-    }
-
-    /// Create a [`ParquetRecordBatchStreamBuilder`] from the provided [`ArrowReaderMetadata`]
     ///
-    /// This allows loading metadata once and using it to create multiple builders with
-    /// potentially different settings
+    /// # Example
     ///
     /// ```
     /// # use std::fs::metadata;
@@ -268,23 +255,75 @@ impl<T: AsyncFileReader + Send + 'static> ParquetRecordBatchStreamBuilder<T> {
     /// # #[tokio::main(flavor="current_thread")]
     /// # async fn main() {
     /// #
-    /// let mut file = tempfile().unwrap();
+    /// # let mut file = tempfile().unwrap();
     /// # let schema = Arc::new(Schema::new(vec![Field::new("i32", DataType::Int32, false)]));
     /// # let mut writer = ArrowWriter::try_new(&mut file, schema.clone(), None).unwrap();
     /// # let batch = RecordBatch::try_new(schema, vec![Arc::new(Int32Array::from(vec![1, 2, 3]))]).unwrap();
     /// # writer.write(&batch).unwrap();
     /// # writer.close().unwrap();
-    /// #
+    /// // Open async file containing parquet data
     /// let mut file = tokio::fs::File::from_std(file);
+    /// // construct the reader
+    /// let mut reader = ParquetRecordBatchStreamBuilder::new(file)
+    ///   .await.unwrap().build().unwrap();
+    /// // Read batche
+    /// let batch: RecordBatch = reader.next().await.unwrap().unwrap();
+    /// # }
+    /// ```
+    pub async fn new(input: T) -> Result<Self> {
+        Self::new_with_options(input, Default::default()).await
+    }
+
+    /// Create a new [`ParquetRecordBatchStreamBuilder`] with the provided parquet file
+    /// and [`ArrowReaderOptions`]
+    pub async fn new_with_options(mut input: T, options: ArrowReaderOptions) -> Result<Self> {
+        let metadata = ArrowReaderMetadata::load_async(&mut input, options).await?;
+        Ok(Self::new_with_metadata(input, metadata))
+    }
+
+    /// Create a [`ParquetRecordBatchStreamBuilder`] from the provided [`ArrowReaderMetadata`]
+    ///
+    /// This allows loading metadata once and using it to create multiple builders with
+    /// potentially different settings, that can be read in parallel.
+    ///
+    /// # Example of reading from multiple streams in parallel
+    ///
+    /// ```
+    /// # use std::fs::metadata;
+    /// # use std::sync::Arc;
+    /// # use bytes::Bytes;
+    /// # use arrow_array::{Int32Array, RecordBatch};
+    /// # use arrow_schema::{DataType, Field, Schema};
+    /// # use parquet::arrow::arrow_reader::ArrowReaderMetadata;
+    /// # use parquet::arrow::{ArrowWriter, ParquetRecordBatchStreamBuilder};
+    /// # use tempfile::tempfile;
+    /// # use futures::StreamExt;
+    /// # #[tokio::main(flavor="current_thread")]
+    /// # async fn main() {
+    /// #
+    /// # let mut file = tempfile().unwrap();
+    /// # let schema = Arc::new(Schema::new(vec![Field::new("i32", DataType::Int32, false)]));
+    /// # let mut writer = ArrowWriter::try_new(&mut file, schema.clone(), None).unwrap();
+    /// # let batch = RecordBatch::try_new(schema, vec![Arc::new(Int32Array::from(vec![1, 2, 3]))]).unwrap();
+    /// # writer.write(&batch).unwrap();
+    /// # writer.close().unwrap();
+    /// // open file with parquet data
+    /// let mut file = tokio::fs::File::from_std(file);
+    /// // load metadata once
     /// let meta = ArrowReaderMetadata::load_async(&mut file, Default::default()).await.unwrap();
+    /// // create two readers, a and b, from the same underlying file
+    /// // without reading the metadata again
     /// let mut a = ParquetRecordBatchStreamBuilder::new_with_metadata(
     ///     file.try_clone().await.unwrap(),
     ///     meta.clone()
     /// ).build().unwrap();
     /// let mut b = ParquetRecordBatchStreamBuilder::new_with_metadata(file, meta).build().unwrap();
     ///
-    /// // Should be able to read from both in parallel
-    /// assert_eq!(a.next().await.unwrap().unwrap(), b.next().await.unwrap().unwrap());
+    /// // Can read batches from both readers in parallel
+    /// assert_eq!(
+    ///   a.next().await.unwrap().unwrap(),
+    ///   b.next().await.unwrap().unwrap(),
+    /// );
     /// # }
     /// ```
     pub fn new_with_metadata(input: T, metadata: ArrowReaderMetadata) -> Self {
@@ -1856,5 +1895,93 @@ mod tests {
             }
             assert_eq!(total_rows, expected);
         }
+    }
+
+    #[tokio::test]
+    async fn test_row_filter_nested() {
+        let a = StringArray::from_iter_values(["a", "b", "b", "b", "c", "c"]);
+        let b = StructArray::from(vec![
+            (
+                Arc::new(Field::new("aa", DataType::Utf8, true)),
+                Arc::new(StringArray::from(vec!["a", "b", "b", "b", "c", "c"])) as ArrayRef,
+            ),
+            (
+                Arc::new(Field::new("bb", DataType::Utf8, true)),
+                Arc::new(StringArray::from(vec!["1", "2", "3", "4", "5", "6"])) as ArrayRef,
+            ),
+        ]);
+        let c = Int32Array::from_iter(0..6);
+        let data = RecordBatch::try_from_iter([
+            ("a", Arc::new(a) as ArrayRef),
+            ("b", Arc::new(b) as ArrayRef),
+            ("c", Arc::new(c) as ArrayRef),
+        ])
+        .unwrap();
+
+        let mut buf = Vec::with_capacity(1024);
+        let mut writer = ArrowWriter::try_new(&mut buf, data.schema(), None).unwrap();
+        writer.write(&data).unwrap();
+        writer.close().unwrap();
+
+        let data: Bytes = buf.into();
+        let metadata = parse_metadata(&data).unwrap();
+        let parquet_schema = metadata.file_metadata().schema_descr_ptr();
+
+        let test = TestReader {
+            data,
+            metadata: Arc::new(metadata),
+            requests: Default::default(),
+        };
+        let requests = test.requests.clone();
+
+        let a_scalar = StringArray::from_iter_values(["b"]);
+        let a_filter = ArrowPredicateFn::new(
+            ProjectionMask::leaves(&parquet_schema, vec![0]),
+            move |batch| eq(batch.column(0), &Scalar::new(&a_scalar)),
+        );
+
+        let b_scalar = StringArray::from_iter_values(["4"]);
+        let b_filter = ArrowPredicateFn::new(
+            ProjectionMask::leaves(&parquet_schema, vec![2]),
+            move |batch| {
+                // Filter on the second element of the struct.
+                let struct_array = batch
+                    .column(0)
+                    .as_any()
+                    .downcast_ref::<StructArray>()
+                    .unwrap();
+                eq(struct_array.column(0), &Scalar::new(&b_scalar))
+            },
+        );
+
+        let filter = RowFilter::new(vec![Box::new(a_filter), Box::new(b_filter)]);
+
+        let mask = ProjectionMask::leaves(&parquet_schema, vec![0, 3]);
+        let stream = ParquetRecordBatchStreamBuilder::new(test)
+            .await
+            .unwrap()
+            .with_projection(mask.clone())
+            .with_batch_size(1024)
+            .with_row_filter(filter)
+            .build()
+            .unwrap();
+
+        let batches: Vec<_> = stream.try_collect().await.unwrap();
+        assert_eq!(batches.len(), 1);
+
+        let batch = &batches[0];
+        assert_eq!(batch.num_rows(), 1);
+        assert_eq!(batch.num_columns(), 2);
+
+        let col = batch.column(0);
+        let val = col.as_any().downcast_ref::<StringArray>().unwrap().value(0);
+        assert_eq!(val, "b");
+
+        let col = batch.column(1);
+        let val = col.as_any().downcast_ref::<Int32Array>().unwrap().value(0);
+        assert_eq!(val, 3);
+
+        // Should only have made 3 requests
+        assert_eq!(requests.lock().unwrap().len(), 3);
     }
 }

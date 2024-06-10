@@ -31,7 +31,8 @@ use arrow_array::{ArrayRef, RecordBatch, RecordBatchWriter};
 use arrow_schema::{ArrowError, DataType as ArrowDataType, Field, IntervalUnit, SchemaRef};
 
 use super::schema::{
-    add_encoded_arrow_schema_to_metadata, arrow_to_parquet_schema, decimal_length_from_precision,
+    add_encoded_arrow_schema_to_metadata, arrow_to_parquet_schema,
+    arrow_to_parquet_schema_with_root, decimal_length_from_precision,
 };
 
 use crate::arrow::arrow_writer::byte_array::ByteArrayEncoder;
@@ -160,7 +161,10 @@ impl<W: Write + Send> ArrowWriter<W> {
         arrow_schema: SchemaRef,
         options: ArrowWriterOptions,
     ) -> Result<Self> {
-        let schema = arrow_to_parquet_schema(&arrow_schema)?;
+        let schema = match options.schema_root {
+            Some(s) => arrow_to_parquet_schema_with_root(&arrow_schema, &s)?,
+            None => arrow_to_parquet_schema(&arrow_schema)?,
+        };
         let mut props = options.properties;
         if !options.skip_arrow_metadata {
             // add serialized arrow schema
@@ -324,6 +328,7 @@ impl<W: Write + Send> RecordBatchWriter for ArrowWriter<W> {
 pub struct ArrowWriterOptions {
     properties: WriterProperties,
     skip_arrow_metadata: bool,
+    schema_root: Option<String>,
 }
 
 impl ArrowWriterOptions {
@@ -344,6 +349,16 @@ impl ArrowWriterOptions {
     pub fn with_skip_arrow_metadata(self, skip_arrow_metadata: bool) -> Self {
         Self {
             skip_arrow_metadata,
+            ..self
+        }
+    }
+
+    /// Overrides the name of the root parquet schema element
+    ///
+    /// Defaults to `"arrow_schema"`
+    pub fn with_schema_root(self, name: String) -> Self {
+        Self {
+            schema_root: Some(name),
             ..self
         }
     }
@@ -697,7 +712,9 @@ fn get_arrow_column_writer(
         ArrowDataType::LargeBinary
         | ArrowDataType::Binary
         | ArrowDataType::Utf8
-        | ArrowDataType::LargeUtf8 => {
+        | ArrowDataType::LargeUtf8
+        | ArrowDataType::BinaryView
+        | ArrowDataType::Utf8View => {
             out.push(bytes(leaves.next().unwrap()))
         }
         ArrowDataType::List(f)
@@ -719,6 +736,9 @@ fn get_arrow_column_writer(
         }
         ArrowDataType::Dictionary(_, value_type) => match value_type.as_ref() {
             ArrowDataType::Utf8 | ArrowDataType::LargeUtf8 | ArrowDataType::Binary | ArrowDataType::LargeBinary => {
+                out.push(bytes(leaves.next().unwrap()))
+            }
+            ArrowDataType::Utf8View | ArrowDataType::BinaryView => {
                 out.push(bytes(leaves.next().unwrap()))
             }
             _ => {
@@ -938,11 +958,11 @@ fn get_interval_dt_array_slice(
 ) -> Vec<FixedLenByteArray> {
     let mut values = Vec::with_capacity(indices.len());
     for i in indices {
-        let mut prefix = vec![0; 4];
-        let mut value = array.value(*i).to_le_bytes().to_vec();
-        prefix.append(&mut value);
-        debug_assert_eq!(prefix.len(), 12);
-        values.push(FixedLenByteArray::from(ByteArray::from(prefix)));
+        let mut out = [0; 12];
+        let value = array.value(*i);
+        out[4..8].copy_from_slice(&value.days.to_le_bytes());
+        out[8..12].copy_from_slice(&value.milliseconds.to_le_bytes());
+        values.push(FixedLenByteArray::from(ByteArray::from(out.to_vec())));
     }
     values
 }
@@ -1012,7 +1032,7 @@ mod tests {
     use arrow::error::Result as ArrowResult;
     use arrow::util::pretty::pretty_format_batches;
     use arrow::{array::*, buffer::Buffer};
-    use arrow_buffer::NullBuffer;
+    use arrow_buffer::{IntervalDayTime, IntervalMonthDayNano, NullBuffer};
     use arrow_schema::Fields;
 
     use crate::basic::Encoding;
@@ -1201,7 +1221,7 @@ mod tests {
         let schema = Schema::new(vec![string_field, binary_field]);
 
         let raw_string_values = vec!["foo", "bar", "baz", "quux"];
-        let raw_binary_values = vec![
+        let raw_binary_values = [
             b"foo".to_vec(),
             b"bar".to_vec(),
             b"baz".to_vec(),
@@ -1221,6 +1241,40 @@ mod tests {
         .unwrap();
 
         roundtrip(batch, Some(SMALL_SIZE / 2));
+    }
+
+    #[test]
+    fn arrow_writer_binary_view() {
+        let string_field = Field::new("a", DataType::Utf8View, false);
+        let binary_field = Field::new("b", DataType::BinaryView, false);
+        let nullable_string_field = Field::new("a", DataType::Utf8View, true);
+        let schema = Schema::new(vec![string_field, binary_field, nullable_string_field]);
+
+        let raw_string_values = vec!["foo", "bar", "large payload over 12 bytes", "lulu"];
+        let raw_binary_values = vec![
+            b"foo".to_vec(),
+            b"bar".to_vec(),
+            b"large payload over 12 bytes".to_vec(),
+            b"lulu".to_vec(),
+        ];
+        let nullable_string_values =
+            vec![Some("foo"), None, Some("large payload over 12 bytes"), None];
+
+        let string_view_values = StringViewArray::from(raw_string_values);
+        let binary_view_values = BinaryViewArray::from_iter_values(raw_binary_values);
+        let nullable_string_view_values = StringViewArray::from(nullable_string_values);
+        let batch = RecordBatch::try_new(
+            Arc::new(schema),
+            vec![
+                Arc::new(string_view_values),
+                Arc::new(binary_view_values),
+                Arc::new(nullable_string_view_values),
+            ],
+        )
+        .unwrap();
+
+        roundtrip(batch.clone(), Some(SMALL_SIZE / 2));
+        roundtrip(batch, None);
     }
 
     fn get_decimal_batch(precision: u8, scale: i8) -> RecordBatch {
@@ -2019,7 +2073,12 @@ mod tests {
 
     #[test]
     fn interval_day_time_single_column() {
-        required_and_optional::<IntervalDayTimeArray, _>(0..SMALL_SIZE as i64);
+        required_and_optional::<IntervalDayTimeArray, _>(vec![
+            IntervalDayTime::new(0, 1),
+            IntervalDayTime::new(0, 3),
+            IntervalDayTime::new(3, -2),
+            IntervalDayTime::new(-200, 4),
+        ]);
     }
 
     #[test]
@@ -2027,7 +2086,12 @@ mod tests {
         expected = "Attempting to write an Arrow interval type MonthDayNano to parquet that is not yet implemented"
     )]
     fn interval_month_day_nano_single_column() {
-        required_and_optional::<IntervalMonthDayNanoArray, _>(0..SMALL_SIZE as i128);
+        required_and_optional::<IntervalMonthDayNanoArray, _>(vec![
+            IntervalMonthDayNano::new(0, 1, 5),
+            IntervalMonthDayNano::new(0, 3, 2),
+            IntervalMonthDayNano::new(3, -2, -5),
+            IntervalMonthDayNano::new(-200, 4, -1),
+        ]);
     }
 
     #[test]

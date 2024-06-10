@@ -143,6 +143,9 @@ fn take_impl<IndexType: ArrowPrimitiveType>(
         DataType::LargeUtf8 => {
             Ok(Arc::new(take_bytes(values.as_string::<i64>(), indices)?))
         }
+        DataType::Utf8View => {
+            Ok(Arc::new(take_byte_view(values.as_string_view(), indices)?))
+        }
         DataType::List(_) => {
             Ok(Arc::new(take_list::<_, Int32Type>(values.as_list(), indices)?))
         }
@@ -204,6 +207,9 @@ fn take_impl<IndexType: ArrowPrimitiveType>(
         DataType::LargeBinary => {
             Ok(Arc::new(take_bytes(values.as_binary::<i64>(), indices)?))
         }
+        DataType::BinaryView => {
+            Ok(Arc::new(take_byte_view(values.as_binary_view(), indices)?))
+        }
         DataType::FixedSizeBinary(size) => {
             let values = values
                 .as_any()
@@ -223,18 +229,15 @@ fn take_impl<IndexType: ArrowPrimitiveType>(
             }
         }
         DataType::Union(fields, UnionMode::Sparse) => {
-            let mut field_type_ids = Vec::with_capacity(fields.len());
             let mut children = Vec::with_capacity(fields.len());
             let values = values.as_any().downcast_ref::<UnionArray>().unwrap();
-            let type_ids = take_native(values.type_ids(), indices).into_inner();
-            for (type_id, field) in fields.iter() {
+            let type_ids = take_native(values.type_ids(), indices);
+            for (type_id, _field) in fields.iter() {
                 let values = values.child(type_id);
                 let values = take_impl(values, indices)?;
-                let field = (**field).clone();
-                children.push((field, values));
-                field_type_ids.push(type_id);
+                children.push(values);
             }
-            let array = UnionArray::try_new(field_type_ids.as_slice(), type_ids, None, children)?;
+            let array = UnionArray::try_new(fields.clone(), type_ids, None, children)?;
             Ok(Arc::new(array))
         }
         t => unimplemented!("Take not supported for data type {:?}", t)
@@ -435,6 +438,20 @@ fn take_bytes<T: ByteArrayType, IndexType: ArrowPrimitiveType>(
     let array_data = unsafe { array_data.build_unchecked() };
 
     Ok(GenericByteArray::from(array_data))
+}
+
+/// `take` implementation for byte view arrays
+fn take_byte_view<T: ByteViewType, IndexType: ArrowPrimitiveType>(
+    array: &GenericByteViewArray<T>,
+    indices: &PrimitiveArray<IndexType>,
+) -> Result<GenericByteViewArray<T>, ArrowError> {
+    let new_views = take_native(array.views(), indices);
+    let new_nulls = take_nulls(array.nulls(), indices);
+    Ok(GenericByteViewArray::new(
+        new_views,
+        array.data_buffers().to_vec(),
+        new_nulls,
+    ))
 }
 
 /// `take` implementation for list arrays
@@ -828,6 +845,7 @@ pub fn take_record_batch(
 mod tests {
     use super::*;
     use arrow_array::builder::*;
+    use arrow_buffer::{IntervalDayTime, IntervalMonthDayNano};
     use arrow_schema::{Field, Fields, TimeUnit};
 
     fn test_take_decimal_arrays(
@@ -1141,20 +1159,26 @@ mod tests {
         .unwrap();
 
         // interval_day_time
+        let v1 = IntervalDayTime::new(0, 0);
+        let v2 = IntervalDayTime::new(2, 0);
+        let v3 = IntervalDayTime::new(-15, 0);
         test_take_primitive_arrays::<IntervalDayTimeType>(
-            vec![Some(0), None, Some(2), Some(-15), None],
+            vec![Some(v1), None, Some(v2), Some(v3), None],
             &index,
             None,
-            vec![Some(-15), None, None, Some(-15), Some(2)],
+            vec![Some(v3), None, None, Some(v3), Some(v2)],
         )
         .unwrap();
 
         // interval_month_day_nano
+        let v1 = IntervalMonthDayNano::new(0, 0, 0);
+        let v2 = IntervalMonthDayNano::new(2, 0, 0);
+        let v3 = IntervalMonthDayNano::new(-15, 0, 0);
         test_take_primitive_arrays::<IntervalMonthDayNanoType>(
-            vec![Some(0), None, Some(2), Some(-15), None],
+            vec![Some(v1), None, Some(v2), Some(v3), None],
             &index,
             None,
-            vec![Some(-15), None, None, Some(-15), Some(2)],
+            vec![Some(v3), None, None, Some(v3), Some(v2)],
         )
         .unwrap();
 
@@ -1381,9 +1405,9 @@ mod tests {
         );
     }
 
-    fn _test_take_string<'a, K: 'static>()
+    fn _test_take_string<'a, K>()
     where
-        K: Array + PartialEq + From<Vec<Option<&'a str>>>,
+        K: Array + PartialEq + From<Vec<Option<&'a str>>> + 'static,
     {
         let index = UInt32Array::from(vec![Some(3), None, Some(1), Some(3), Some(4)]);
 
@@ -1422,6 +1446,53 @@ mod tests {
         let expected = StringArray::from(vec![None, None, Some("hello"), Some("world")]);
         let result = take(&strings, &indices_slice, None).unwrap();
         assert_eq!(result.as_ref(), &expected);
+    }
+
+    fn _test_byte_view<T>()
+    where
+        T: ByteViewType,
+        str: AsRef<T::Native>,
+        T::Native: PartialEq,
+    {
+        let index = UInt32Array::from(vec![Some(3), None, Some(1), Some(3), Some(4), Some(2)]);
+        let array = {
+            // ["hello", "world", null, "large payload over 12 bytes", "lulu"]
+            let mut builder = GenericByteViewBuilder::<T>::new();
+            builder.append_value("hello");
+            builder.append_value("world");
+            builder.append_null();
+            builder.append_value("large payload over 12 bytes");
+            builder.append_value("lulu");
+            builder.finish()
+        };
+
+        let actual = take(&array, &index, None).unwrap();
+
+        assert_eq!(actual.len(), index.len());
+
+        let expected = {
+            // ["large payload over 12 bytes", null, "world", "large payload over 12 bytes", "lulu", null]
+            let mut builder = GenericByteViewBuilder::<T>::new();
+            builder.append_value("large payload over 12 bytes");
+            builder.append_null();
+            builder.append_value("world");
+            builder.append_value("large payload over 12 bytes");
+            builder.append_value("lulu");
+            builder.append_null();
+            builder.finish()
+        };
+
+        assert_eq!(actual.as_ref(), &expected);
+    }
+
+    #[test]
+    fn test_take_string_view() {
+        _test_byte_view::<StringViewType>()
+    }
+
+    #[test]
+    fn test_take_binary_view() {
+        _test_byte_view::<BinaryViewType>()
     }
 
     macro_rules! test_take_list {
@@ -2084,19 +2155,22 @@ mod tests {
             None,
         ]);
         let strings = StringArray::from(vec![Some("a"), None, Some("c"), None, Some("d")]);
-        let type_ids = Buffer::from_slice_ref(vec![1i8; 5]);
+        let type_ids = [1; 5].into_iter().collect::<ScalarBuffer<i8>>();
 
-        let children: Vec<(Field, Arc<dyn Array>)> = vec![
+        let union_fields = [
             (
-                Field::new("f1", structs.data_type().clone(), true),
-                Arc::new(structs),
+                0,
+                Arc::new(Field::new("f1", structs.data_type().clone(), true)),
             ),
             (
-                Field::new("f2", strings.data_type().clone(), true),
-                Arc::new(strings),
+                1,
+                Arc::new(Field::new("f2", strings.data_type().clone(), true)),
             ),
-        ];
-        let array = UnionArray::try_new(&[0, 1], type_ids, None, children).unwrap();
+        ]
+        .into_iter()
+        .collect();
+        let children = vec![Arc::new(structs) as Arc<dyn Array>, Arc::new(strings)];
+        let array = UnionArray::try_new(union_fields, type_ids, None, children).unwrap();
 
         let indices = vec![0, 3, 1, 0, 2, 4];
         let index = UInt32Array::from(indices.clone());

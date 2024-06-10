@@ -19,28 +19,22 @@
 //!
 //! ## Streaming uploads
 //!
-//! [ObjectStore::put_multipart] will upload data in blocks and write a blob from those
-//! blocks. Data is buffered internally to make blocks of at least 5MB and blocks
-//! are uploaded concurrently.
+//! [ObjectStore::put_multipart] will upload data in blocks and write a blob from those blocks.
 //!
-//! [ObjectStore::abort_multipart] is a no-op, since Azure Blob Store doesn't provide
-//! a way to drop old blocks. Instead unused blocks are automatically cleaned up
-//! after 7 days.
+//! Unused blocks will automatically be dropped after 7 days.
 use crate::{
-    multipart::{MultiPartStore, PartId, PutPart, WriteMultiPart},
+    multipart::{MultipartStore, PartId},
     path::Path,
     signer::Signer,
-    GetOptions, GetResult, ListResult, MultipartId, ObjectMeta, ObjectStore, PutOptions, PutResult,
-    Result,
+    GetOptions, GetResult, ListResult, MultipartId, MultipartUpload, ObjectMeta, ObjectStore,
+    PutMultipartOpts, PutOptions, PutPayload, PutResult, Result, UploadPart,
 };
 use async_trait::async_trait;
-use bytes::Bytes;
 use futures::stream::BoxStream;
 use reqwest::Method;
 use std::fmt::Debug;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::io::AsyncWrite;
 use url::Url;
 
 use crate::client::get::GetClientExt;
@@ -54,6 +48,8 @@ mod credential;
 
 /// [`CredentialProvider`] for [`MicrosoftAzure`]
 pub type AzureCredentialProvider = Arc<dyn CredentialProvider<Credential = AzureCredential>>;
+use crate::azure::client::AzureClient;
+use crate::client::parts::Parts;
 pub use builder::{AzureConfigKey, MicrosoftAzureBuilder};
 pub use credential::AzureCredential;
 
@@ -90,25 +86,29 @@ impl std::fmt::Display for MicrosoftAzure {
 
 #[async_trait]
 impl ObjectStore for MicrosoftAzure {
-    async fn put_opts(&self, location: &Path, bytes: Bytes, opts: PutOptions) -> Result<PutResult> {
-        self.client.put_blob(location, bytes, opts).await
-    }
-
-    async fn put_multipart(
+    async fn put_opts(
         &self,
         location: &Path,
-    ) -> Result<(MultipartId, Box<dyn AsyncWrite + Unpin + Send>)> {
-        let inner = AzureMultiPartUpload {
-            client: Arc::clone(&self.client),
-            location: location.to_owned(),
-        };
-        Ok((String::new(), Box::new(WriteMultiPart::new(inner, 8))))
+        payload: PutPayload,
+        opts: PutOptions,
+    ) -> Result<PutResult> {
+        self.client.put_blob(location, payload, opts).await
     }
 
-    async fn abort_multipart(&self, _location: &Path, _multipart_id: &MultipartId) -> Result<()> {
-        // There is no way to drop blocks that have been uploaded. Instead, they simply
-        // expire in 7 days.
-        Ok(())
+    async fn put_multipart_opts(
+        &self,
+        location: &Path,
+        opts: PutMultipartOpts,
+    ) -> Result<Box<dyn MultipartUpload>> {
+        Ok(Box::new(AzureMultiPartUpload {
+            part_idx: 0,
+            opts,
+            state: Arc::new(UploadState {
+                client: Arc::clone(&self.client),
+                location: location.clone(),
+                parts: Default::default(),
+            }),
+        }))
     }
 
     async fn get_opts(&self, location: &Path, options: GetOptions) -> Result<GetResult> {
@@ -197,26 +197,50 @@ impl Signer for MicrosoftAzure {
 /// put_multipart_part -> PUT block
 /// complete -> PUT block list
 /// abort -> No equivalent; blocks are simply dropped after 7 days
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 struct AzureMultiPartUpload {
-    client: Arc<client::AzureClient>,
+    part_idx: usize,
+    state: Arc<UploadState>,
+    opts: PutMultipartOpts,
+}
+
+#[derive(Debug)]
+struct UploadState {
     location: Path,
+    parts: Parts,
+    client: Arc<AzureClient>,
 }
 
 #[async_trait]
-impl PutPart for AzureMultiPartUpload {
-    async fn put_part(&self, buf: Vec<u8>, idx: usize) -> Result<PartId> {
-        self.client.put_block(&self.location, idx, buf.into()).await
+impl MultipartUpload for AzureMultiPartUpload {
+    fn put_part(&mut self, data: PutPayload) -> UploadPart {
+        let idx = self.part_idx;
+        self.part_idx += 1;
+        let state = Arc::clone(&self.state);
+        Box::pin(async move {
+            let part = state.client.put_block(&state.location, idx, data).await?;
+            state.parts.put(idx, part);
+            Ok(())
+        })
     }
 
-    async fn complete(&self, parts: Vec<PartId>) -> Result<()> {
-        self.client.put_block_list(&self.location, parts).await?;
+    async fn complete(&mut self) -> Result<PutResult> {
+        let parts = self.state.parts.finish(self.part_idx)?;
+
+        self.state
+            .client
+            .put_block_list(&self.state.location, parts, std::mem::take(&mut self.opts))
+            .await
+    }
+
+    async fn abort(&mut self) -> Result<()> {
+        // Nothing to do
         Ok(())
     }
 }
 
 #[async_trait]
-impl MultiPartStore for MicrosoftAzure {
+impl MultipartStore for MicrosoftAzure {
     async fn create_multipart(&self, _: &Path) -> Result<MultipartId> {
         Ok(String::new())
     }
@@ -226,7 +250,7 @@ impl MultiPartStore for MicrosoftAzure {
         path: &Path,
         _: &MultipartId,
         part_idx: usize,
-        data: Bytes,
+        data: PutPayload,
     ) -> Result<PartId> {
         self.client.put_block(path, part_idx, data).await
     }
@@ -237,7 +261,9 @@ impl MultiPartStore for MicrosoftAzure {
         _: &MultipartId,
         parts: Vec<PartId>,
     ) -> Result<PutResult> {
-        self.client.put_block_list(path, parts).await
+        self.client
+            .put_block_list(path, parts, Default::default())
+            .await
     }
 
     async fn abort_multipart(&self, _: &Path, _: &MultipartId) -> Result<()> {
@@ -250,14 +276,16 @@ impl MultiPartStore for MicrosoftAzure {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::integration::*;
     use crate::tests::*;
+    use bytes::Bytes;
 
     #[tokio::test]
     async fn azure_blob_test() {
-        crate::test_util::maybe_skip_integration!();
+        maybe_skip_integration!();
         let integration = MicrosoftAzureBuilder::from_env().build().unwrap();
 
-        put_get_delete_list_opts(&integration).await;
+        put_get_delete_list(&integration).await;
         get_opts(&integration).await;
         list_uses_directories_correctly(&integration).await;
         list_with_delimiter(&integration).await;
@@ -269,11 +297,22 @@ mod tests {
         signing(&integration).await;
 
         let validate = !integration.client.config().disable_tagging;
-        tagging(&integration, validate, |p| {
-            let client = Arc::clone(&integration.client);
-            async move { client.get_blob_tagging(&p).await }
-        })
-        .await
+        tagging(
+            Arc::new(MicrosoftAzure {
+                client: Arc::clone(&integration.client),
+            }),
+            validate,
+            |p| {
+                let client = Arc::clone(&integration.client);
+                async move { client.get_blob_tagging(&p).await }
+            },
+        )
+        .await;
+
+        // Azurite doesn't support attributes properly
+        if !integration.client.config().is_emulator {
+            put_get_attributes(&integration).await;
+        }
     }
 
     #[ignore = "Used for manual testing against a real storage account."]
@@ -295,7 +334,7 @@ mod tests {
 
         let data = Bytes::from("hello world");
         let path = Path::from("file.txt");
-        integration.put(&path, data.clone()).await.unwrap();
+        integration.put(&path, data.clone().into()).await.unwrap();
 
         let signed = integration
             .signed_url(Method::GET, &path, Duration::from_secs(60))

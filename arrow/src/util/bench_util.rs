@@ -20,7 +20,7 @@
 use crate::array::*;
 use crate::datatypes::*;
 use crate::util::test_util::seedable_rng;
-use arrow_buffer::Buffer;
+use arrow_buffer::{Buffer, IntervalMonthDayNano};
 use rand::distributions::uniform::SampleUniform;
 use rand::thread_rng;
 use rand::Rng;
@@ -72,6 +72,24 @@ where
         .collect()
 }
 
+pub fn create_month_day_nano_array_with_seed(
+    size: usize,
+    null_density: f32,
+    seed: u64,
+) -> IntervalMonthDayNanoArray {
+    let mut rng = StdRng::seed_from_u64(seed);
+
+    (0..size)
+        .map(|_| {
+            if rng.gen::<f32>() < null_density {
+                None
+            } else {
+                Some(IntervalMonthDayNano::new(rng.gen(), rng.gen(), rng.gen()))
+            }
+        })
+        .collect()
+}
+
 /// Creates an random (but fixed-seeded) array of a given size and null density
 pub fn create_boolean_array(size: usize, null_density: f32, true_density: f32) -> BooleanArray
 where
@@ -114,6 +132,42 @@ pub fn create_string_array_with_len<Offset: OffsetSizeTrait>(
                 let value = rng.sample_iter(&Alphanumeric).take(str_len).collect();
                 let value = String::from_utf8(value).unwrap();
                 Some(value)
+            }
+        })
+        .collect()
+}
+
+/// Creates a random (but fixed-seeded) array of a given size, null density and length
+pub fn create_string_view_array_with_len(
+    size: usize,
+    null_density: f32,
+    str_len: usize,
+    mixed: bool,
+) -> StringViewArray {
+    let rng = &mut seedable_rng();
+
+    let mut lengths = Vec::with_capacity(size);
+
+    // if mixed, we creates first half that string length small than 12 bytes and second half large than 12 bytes
+    if mixed {
+        for _ in 0..size / 2 {
+            lengths.push(rng.gen_range(1..12));
+        }
+        for _ in size / 2..size {
+            lengths.push(rng.gen_range(12..=std::cmp::max(30, str_len)));
+        }
+    } else {
+        lengths.resize(size, str_len);
+    }
+
+    lengths
+        .into_iter()
+        .map(|len| {
+            if rng.gen::<f32>() < null_density {
+                None
+            } else {
+                let value: Vec<u8> = rng.sample_iter(&Alphanumeric).take(len).collect();
+                Some(String::from_utf8(value).unwrap())
             }
         })
         .collect()

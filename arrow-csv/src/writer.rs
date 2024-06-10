@@ -131,15 +131,15 @@ impl<W: Write> Writer<W> {
         let converters = batch
             .columns()
             .iter()
-            .map(|a| match a.data_type() {
-                d if d.is_nested() => Err(ArrowError::CsvError(format!(
-                    "Nested type {} is not supported in CSV",
-                    a.data_type()
-                ))),
-                DataType::Binary | DataType::LargeBinary => Err(ArrowError::CsvError(
-                    "Binary data cannot be written to CSV".to_string(),
-                )),
-                _ => ArrayFormatter::try_new(a.as_ref(), &options),
+            .map(|a| {
+                if a.data_type().is_nested() {
+                    Err(ArrowError::CsvError(format!(
+                        "Nested type {} is not supported in CSV",
+                        a.data_type()
+                    )))
+                } else {
+                    ArrayFormatter::try_new(a.as_ref(), &options)
+                }
             })
             .collect::<Result<Vec<_>, ArrowError>>()?;
 
@@ -425,7 +425,10 @@ mod tests {
     use super::*;
 
     use crate::ReaderBuilder;
-    use arrow_array::builder::{Decimal128Builder, Decimal256Builder};
+    use arrow_array::builder::{
+        BinaryBuilder, Decimal128Builder, Decimal256Builder, FixedSizeBinaryBuilder,
+        LargeBinaryBuilder,
+    };
     use arrow_array::types::*;
     use arrow_buffer::i256;
     use std::io::{Cursor, Read, Seek};
@@ -757,6 +760,57 @@ sed do eiusmod tempor,-556132.25,1,,2019-04-18T02:45:55.555,23:46:03,foo
 2019-04-18T10:54:47.378Z,2019-04-18T10:54:47.378,1970-01-04,00:20:34
 2021-10-30T06:59:07Z,2021-10-30T06:59:07,1970-01-03,06:51:20\n",
             String::from_utf8(buffer).unwrap()
+        );
+    }
+
+    #[test]
+    fn test_write_csv_binary() {
+        let fixed_size = 8;
+        let schema = SchemaRef::new(Schema::new(vec![
+            Field::new("c1", DataType::Binary, true),
+            Field::new("c2", DataType::FixedSizeBinary(fixed_size), true),
+            Field::new("c3", DataType::LargeBinary, true),
+        ]));
+        let mut c1_builder = BinaryBuilder::new();
+        c1_builder.append_value(b"Homer");
+        c1_builder.append_value(b"Bart");
+        c1_builder.append_null();
+        c1_builder.append_value(b"Ned");
+        let mut c2_builder = FixedSizeBinaryBuilder::new(fixed_size);
+        c2_builder.append_value(b"Simpson ").unwrap();
+        c2_builder.append_value(b"Simpson ").unwrap();
+        c2_builder.append_null();
+        c2_builder.append_value(b"Flanders").unwrap();
+        let mut c3_builder = LargeBinaryBuilder::new();
+        c3_builder.append_null();
+        c3_builder.append_null();
+        c3_builder.append_value(b"Comic Book Guy");
+        c3_builder.append_null();
+
+        let batch = RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(c1_builder.finish()) as ArrayRef,
+                Arc::new(c2_builder.finish()) as ArrayRef,
+                Arc::new(c3_builder.finish()) as ArrayRef,
+            ],
+        )
+        .unwrap();
+
+        let mut buf = Vec::new();
+        let builder = WriterBuilder::new();
+        let mut writer = builder.build(&mut buf);
+        writer.write(&batch).unwrap();
+        drop(writer);
+        assert_eq!(
+            "\
+            c1,c2,c3\n\
+            486f6d6572,53696d70736f6e20,\n\
+            42617274,53696d70736f6e20,\n\
+            ,,436f6d696320426f6f6b20477579\n\
+            4e6564,466c616e64657273,\n\
+            ",
+            String::from_utf8(buf).unwrap()
         );
     }
 }

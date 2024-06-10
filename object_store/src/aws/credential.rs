@@ -19,7 +19,7 @@ use crate::aws::{AwsCredentialProvider, STORE, STRICT_ENCODE_SET, STRICT_PATH_EN
 use crate::client::retry::RetryExt;
 use crate::client::token::{TemporaryToken, TokenCache};
 use crate::client::TokenProvider;
-use crate::util::hmac_sha256;
+use crate::util::{hex_digest, hex_encode, hmac_sha256};
 use crate::{CredentialProvider, Result, RetryConfig};
 use async_trait::async_trait;
 use bytes::Buf;
@@ -342,23 +342,6 @@ impl CredentialExt for RequestBuilder {
     }
 }
 
-/// Computes the SHA256 digest of `body` returned as a hex encoded string
-fn hex_digest(bytes: &[u8]) -> String {
-    let digest = ring::digest::digest(&ring::digest::SHA256, bytes);
-    hex_encode(digest.as_ref())
-}
-
-/// Returns `bytes` as a lower-case hex encoded string
-fn hex_encode(bytes: &[u8]) -> String {
-    use std::fmt::Write;
-    let mut out = String::with_capacity(bytes.len() * 2);
-    for byte in bytes {
-        // String writing is infallible
-        let _ = write!(out, "{byte:02x}");
-    }
-    out
-}
-
 /// Canonicalizes query parameters into the AWS canonical form
 ///
 /// <https://docs.aws.amazon.com/general/latest/gr/sigv4-create-canonical-request.html>
@@ -534,7 +517,9 @@ async fn instance_creds(
     let token_result = client
         .request(Method::PUT, token_url)
         .header("X-aws-ec2-metadata-token-ttl-seconds", "600") // 10 minute TTL
-        .send_retry(retry_config)
+        .retryable(retry_config)
+        .idempotent(true)
+        .send()
         .await;
 
     let token = match token_result {
@@ -624,7 +609,9 @@ async fn web_identity(
             ("Version", "2011-06-15"),
             ("WebIdentityToken", &token),
         ])
-        .send_retry(retry_config)
+        .retryable(retry_config)
+        .idempotent(true)
+        .send()
         .await?
         .bytes()
         .await?;
@@ -738,7 +725,7 @@ struct CreateSessionOutput {
 mod tests {
     use super::*;
     use crate::client::mock_server::MockServer;
-    use hyper::{Body, Response};
+    use hyper::Response;
     use reqwest::{Client, Method};
     use std::env;
 
@@ -939,7 +926,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_mock() {
-        let server = MockServer::new();
+        let server = MockServer::new().await;
 
         const IMDSV2_HEADER: &str = "X-aws-ec2-metadata-token";
 
@@ -955,7 +942,7 @@ mod tests {
         server.push_fn(|req| {
             assert_eq!(req.uri().path(), "/latest/api/token");
             assert_eq!(req.method(), &Method::PUT);
-            Response::new(Body::from("cupcakes"))
+            Response::new("cupcakes".to_string())
         });
         server.push_fn(|req| {
             assert_eq!(
@@ -965,14 +952,14 @@ mod tests {
             assert_eq!(req.method(), &Method::GET);
             let t = req.headers().get(IMDSV2_HEADER).unwrap().to_str().unwrap();
             assert_eq!(t, "cupcakes");
-            Response::new(Body::from("myrole"))
+            Response::new("myrole".to_string())
         });
         server.push_fn(|req| {
             assert_eq!(req.uri().path(), "/latest/meta-data/iam/security-credentials/myrole");
             assert_eq!(req.method(), &Method::GET);
             let t = req.headers().get(IMDSV2_HEADER).unwrap().to_str().unwrap();
             assert_eq!(t, "cupcakes");
-            Response::new(Body::from(r#"{"AccessKeyId":"KEYID","Code":"Success","Expiration":"2022-08-30T10:51:04Z","LastUpdated":"2022-08-30T10:21:04Z","SecretAccessKey":"SECRET","Token":"TOKEN","Type":"AWS-HMAC"}"#))
+            Response::new(r#"{"AccessKeyId":"KEYID","Code":"Success","Expiration":"2022-08-30T10:51:04Z","LastUpdated":"2022-08-30T10:21:04Z","SecretAccessKey":"SECRET","Token":"TOKEN","Type":"AWS-HMAC"}"#.to_string())
         });
 
         let creds = instance_creds(&client, &retry_config, endpoint, true)
@@ -989,7 +976,7 @@ mod tests {
             assert_eq!(req.method(), &Method::PUT);
             Response::builder()
                 .status(StatusCode::FORBIDDEN)
-                .body(Body::empty())
+                .body(String::new())
                 .unwrap()
         });
         server.push_fn(|req| {
@@ -999,13 +986,13 @@ mod tests {
             );
             assert_eq!(req.method(), &Method::GET);
             assert!(req.headers().get(IMDSV2_HEADER).is_none());
-            Response::new(Body::from("myrole"))
+            Response::new("myrole".to_string())
         });
         server.push_fn(|req| {
             assert_eq!(req.uri().path(), "/latest/meta-data/iam/security-credentials/myrole");
             assert_eq!(req.method(), &Method::GET);
             assert!(req.headers().get(IMDSV2_HEADER).is_none());
-            Response::new(Body::from(r#"{"AccessKeyId":"KEYID","Code":"Success","Expiration":"2022-08-30T10:51:04Z","LastUpdated":"2022-08-30T10:21:04Z","SecretAccessKey":"SECRET","Token":"TOKEN","Type":"AWS-HMAC"}"#))
+            Response::new(r#"{"AccessKeyId":"KEYID","Code":"Success","Expiration":"2022-08-30T10:51:04Z","LastUpdated":"2022-08-30T10:21:04Z","SecretAccessKey":"SECRET","Token":"TOKEN","Type":"AWS-HMAC"}"#.to_string())
         });
 
         let creds = instance_creds(&client, &retry_config, endpoint, true)
@@ -1020,7 +1007,7 @@ mod tests {
         server.push(
             Response::builder()
                 .status(StatusCode::FORBIDDEN)
-                .body(Body::empty())
+                .body(String::new())
                 .unwrap(),
         );
 

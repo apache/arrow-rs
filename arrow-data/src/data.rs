@@ -20,11 +20,13 @@
 
 use crate::bit_iterator::BitSliceIterator;
 use arrow_buffer::buffer::{BooleanBuffer, NullBuffer};
-use arrow_buffer::{bit_util, i256, ArrowNativeType, Buffer, MutableBuffer};
+use arrow_buffer::{
+    bit_util, i256, ArrowNativeType, Buffer, IntervalDayTime, IntervalMonthDayNano, MutableBuffer,
+};
 use arrow_schema::{ArrowError, DataType, UnionMode};
-use std::mem;
 use std::ops::Range;
 use std::sync::Arc;
+use std::{mem, usize};
 
 use crate::{equal, validate_binary_view, validate_string_view};
 
@@ -929,6 +931,41 @@ impl ArrayData {
         Ok(())
     }
 
+    /// Does a cheap sanity check that the `self.len` values in `buffer` are valid
+    /// offsets and sizes (of type T) into some other buffer of `values_length` bytes long
+    fn validate_offsets_and_sizes<T: ArrowNativeType + num::Num + std::fmt::Display>(
+        &self,
+        values_length: usize,
+    ) -> Result<(), ArrowError> {
+        let offsets: &[T] = self.typed_buffer(0, self.len)?;
+        let sizes: &[T] = self.typed_buffer(1, self.len)?;
+        for i in 0..values_length {
+            let size = sizes[i].to_usize().ok_or_else(|| {
+                ArrowError::InvalidArgumentError(format!(
+                    "Error converting size[{}] ({}) to usize for {}",
+                    i, sizes[i], self.data_type
+                ))
+            })?;
+            let offset = offsets[i].to_usize().ok_or_else(|| {
+                ArrowError::InvalidArgumentError(format!(
+                    "Error converting offset[{}] ({}) to usize for {}",
+                    i, offsets[i], self.data_type
+                ))
+            })?;
+            if size
+                .checked_add(offset)
+                .expect("Offset and size have exceeded the usize boundary")
+                > values_length
+            {
+                return Err(ArrowError::InvalidArgumentError(format!(
+                    "Size {} at index {} is larger than the remaining values for {}",
+                    size, i, self.data_type
+                )));
+            }
+        }
+        Ok(())
+    }
+
     /// Validates the layout of `child_data` ArrayData structures
     fn validate_child_data(&self) -> Result<(), ArrowError> {
         match &self.data_type {
@@ -940,6 +977,16 @@ impl ArrayData {
             DataType::LargeList(field) => {
                 let values_data = self.get_single_valid_child_data(field.data_type())?;
                 self.validate_offsets::<i64>(values_data.len)?;
+                Ok(())
+            }
+            DataType::ListView(field) => {
+                let values_data = self.get_single_valid_child_data(field.data_type())?;
+                self.validate_offsets_and_sizes::<i32>(values_data.len)?;
+                Ok(())
+            }
+            DataType::LargeListView(field) => {
+                let values_data = self.get_single_valid_child_data(field.data_type())?;
+                self.validate_offsets_and_sizes::<i64>(values_data.len)?;
                 Ok(())
             }
             DataType::FixedSizeList(field, list_size) => {
@@ -1523,8 +1570,10 @@ pub fn layout(data_type: &DataType) -> DataTypeLayout {
         DataType::Time32(_) => DataTypeLayout::new_fixed_width::<i32>(),
         DataType::Time64(_) => DataTypeLayout::new_fixed_width::<i64>(),
         DataType::Interval(YearMonth) => DataTypeLayout::new_fixed_width::<i32>(),
-        DataType::Interval(DayTime) => DataTypeLayout::new_fixed_width::<i64>(),
-        DataType::Interval(MonthDayNano) => DataTypeLayout::new_fixed_width::<i128>(),
+        DataType::Interval(DayTime) => DataTypeLayout::new_fixed_width::<IntervalDayTime>(),
+        DataType::Interval(MonthDayNano) => {
+            DataTypeLayout::new_fixed_width::<IntervalMonthDayNano>()
+        }
         DataType::Duration(_) => DataTypeLayout::new_fixed_width::<i64>(),
         DataType::Decimal128(_, _) => DataTypeLayout::new_fixed_width::<i128>(),
         DataType::Decimal256(_, _) => DataTypeLayout::new_fixed_width::<i256>(),
@@ -1544,14 +1593,13 @@ pub fn layout(data_type: &DataType) -> DataTypeLayout {
         DataType::Utf8 => DataTypeLayout::new_binary::<i32>(),
         DataType::LargeUtf8 => DataTypeLayout::new_binary::<i64>(),
         DataType::BinaryView | DataType::Utf8View => DataTypeLayout::new_view(),
-        DataType::FixedSizeList(_, _) => DataTypeLayout::new_empty(), // all in child data
+        DataType::FixedSizeList(_, _) => DataTypeLayout::new_nullable_empty(), // all in child data
         DataType::List(_) => DataTypeLayout::new_fixed_width::<i32>(),
-        DataType::ListView(_) | DataType::LargeListView(_) => {
-            unimplemented!("ListView/LargeListView not implemented")
-        }
+        DataType::ListView(_) => DataTypeLayout::new_list_view::<i32>(),
+        DataType::LargeListView(_) => DataTypeLayout::new_list_view::<i64>(),
         DataType::LargeList(_) => DataTypeLayout::new_fixed_width::<i64>(),
         DataType::Map(_, _) => DataTypeLayout::new_fixed_width::<i32>(),
-        DataType::Struct(_) => DataTypeLayout::new_empty(), // all in child data,
+        DataType::Struct(_) => DataTypeLayout::new_nullable_empty(), // all in child data,
         DataType::RunEndEncoded(_, _) => DataTypeLayout::new_empty(), // all in child data,
         DataType::Union(_, mode) => {
             let type_ids = BufferSpec::FixedWidth {
@@ -1612,12 +1660,21 @@ impl DataTypeLayout {
     }
 
     /// Describes arrays which have no data of their own
-    /// (e.g. FixedSizeList). Note such arrays may still have a Null
-    /// Bitmap
-    pub fn new_empty() -> Self {
+    /// but may still have a Null Bitmap (e.g. FixedSizeList)
+    pub fn new_nullable_empty() -> Self {
         Self {
             buffers: vec![],
             can_contain_null_mask: true,
+            variadic: false,
+        }
+    }
+
+    /// Describes arrays which have no data of their own
+    /// (e.g. RunEndEncoded).
+    pub fn new_empty() -> Self {
+        Self {
+            buffers: vec![],
+            can_contain_null_mask: false,
             variadic: false,
         }
     }
@@ -1648,6 +1705,24 @@ impl DataTypeLayout {
                 byte_width: mem::size_of::<u128>(),
                 alignment: mem::align_of::<u128>(),
             }],
+            can_contain_null_mask: true,
+            variadic: true,
+        }
+    }
+
+    /// Describes a list view type
+    pub fn new_list_view<T>() -> Self {
+        Self {
+            buffers: vec![
+                BufferSpec::FixedWidth {
+                    byte_width: mem::size_of::<T>(),
+                    alignment: mem::align_of::<T>(),
+                },
+                BufferSpec::FixedWidth {
+                    byte_width: mem::size_of::<T>(),
+                    alignment: mem::align_of::<T>(),
+                },
+            ],
             can_contain_null_mask: true,
             variadic: true,
         }
@@ -1758,6 +1833,11 @@ impl ArrayDataBuilder {
 
     pub fn add_buffer(mut self, b: Buffer) -> Self {
         self.buffers.push(b);
+        self
+    }
+
+    pub fn add_buffers(mut self, bs: Vec<Buffer>) -> Self {
+        self.buffers.extend(bs);
         self
     }
 
