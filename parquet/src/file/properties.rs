@@ -636,7 +636,7 @@ impl WriterPropertiesBuilder {
     /// Sets flag to enable/disable dictionary encoding for a specific column.
     ///
     /// Takes precedence over [`Self::set_dictionary_enabled`].
-    fn set_column_dictionary_enabled(mut self, col: ColumnPath, value: bool) -> Self {
+    pub fn set_column_dictionary_enabled(mut self, col: ColumnPath, value: bool) -> Self {
         self.get_mut_props(col).set_dictionary_enabled(value);
         self
     }
