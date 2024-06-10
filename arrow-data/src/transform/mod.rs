@@ -516,9 +516,7 @@ impl<'a> MutableArrayData<'a> {
                     .map(|array| &array.child_data()[0])
                     .collect::<Vec<_>>();
                 let capacities =
-                    if let Capacities::FixedSizeList(capacity, ref child_capacities) =
-                        capacities
-                    {
+                    if let Capacities::FixedSizeList(capacity, ref child_capacities) = capacities {
                         child_capacities
                             .clone()
                             .map(|c| *c)

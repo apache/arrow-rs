@@ -140,7 +140,7 @@ pub fn concat(arrays: &[&dyn Array]) -> Result<ArrayRef, ArrowError> {
                 item_capacity,
                 Some(Box::new(Capacities::Array(item_capacity * *size as usize))),
             )
-        },
+        }
         _ => Capacities::Array(arrays.iter().map(|a| a.len()).sum()),
     };
 

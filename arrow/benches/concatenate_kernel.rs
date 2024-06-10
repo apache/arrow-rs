@@ -90,13 +90,15 @@ fn add_benchmark(c: &mut Criterion) {
         2,
         Arc::new(create_primitive_array::<Int32Type>(1024, 0.0)),
         None,
-    ).unwrap();
+    )
+    .unwrap();
     let v2 = FixedSizeListArray::try_new(
         Arc::new(Field::new("item", DataType::Int32, true)),
         2,
         Arc::new(create_primitive_array::<Int32Type>(1024, 0.0)),
         None,
-    ).unwrap();
+    )
+    .unwrap();
     c.bench_function("concat fixed size lists", |b| {
         b.iter(|| bench_concat(&v1, &v2))
     });
