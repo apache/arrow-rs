@@ -44,7 +44,7 @@ use crate::column::writer::{
 use crate::data_type::{ByteArray, FixedLenByteArray};
 use crate::errors::{ParquetError, Result};
 use crate::file::metadata::{ColumnChunkMetaData, KeyValue, RowGroupMetaDataPtr};
-use crate::file::properties::{WriterProperties, WriterPropertiesPtr};
+use crate::file::properties::{BloomFilterPosition, WriterProperties, WriterPropertiesPtr};
 use crate::file::reader::{ChunkReader, Length};
 use crate::file::writer::{SerializedFileWriter, SerializedRowGroupWriter};
 use crate::schema::types::{ColumnDescPtr, SchemaDescriptor};
@@ -264,7 +264,11 @@ impl<W: Write + Send> ArrowWriter<W> {
             chunk.append_to_row_group(&mut row_group_writer)?;
         }
         let row_group_metadata = row_group_writer.close()?;
-        self.writer.write_bloom_filters(&mut [row_group_metadata.to_thrift()])?;
+        match self.writer.properties().bloom_filter_position() {
+            BloomFilterPosition::AfterRowGroup =>
+                self.writer.write_bloom_filters(&mut [row_group_metadata.to_thrift()])?,
+            BloomFilterPosition::End => (),
+        }
         Ok(())
     }
 
@@ -1757,6 +1761,7 @@ mod tests {
                             .set_dictionary_page_size_limit(dictionary_size.max(1))
                             .set_encoding(*encoding)
                             .set_bloom_filter_enabled(bloom_filter)
+                            .set_bloom_filter_position(BloomFilterPosition::End)
                             .build();
 
                         files.push(roundtrip_opts(&expected_batch, props))
