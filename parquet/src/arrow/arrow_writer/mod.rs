@@ -1689,6 +1689,7 @@ mod tests {
         values: ArrayRef,
         schema: SchemaRef,
         bloom_filter: bool,
+        bloom_filter_position: BloomFilterPosition,
     }
 
     impl RoundTripOptions {
@@ -1699,6 +1700,7 @@ mod tests {
                 values,
                 schema: Arc::new(schema),
                 bloom_filter: false,
+                bloom_filter_position: BloomFilterPosition::AfterRowGroup,
             }
         }
     }
@@ -1718,6 +1720,7 @@ mod tests {
             values,
             schema,
             bloom_filter,
+            bloom_filter_position,
         } = options;
 
         let encodings = match values.data_type() {
@@ -1758,7 +1761,7 @@ mod tests {
                             .set_dictionary_page_size_limit(dictionary_size.max(1))
                             .set_encoding(*encoding)
                             .set_bloom_filter_enabled(bloom_filter)
-                            .set_bloom_filter_position(BloomFilterPosition::AfterRowGroup)
+                            .set_bloom_filter_position(bloom_filter_position)
                             .build();
 
                         files.push(roundtrip_opts(&expected_batch, props))
@@ -2104,6 +2107,22 @@ mod tests {
 
         // BinaryArrays can't be built from Vec<Option<&str>>, so only call `values_required`
         values_required::<BinaryArray, _>(many_vecs_iter);
+    }
+
+    #[test]
+    fn i32_column_bloom_filter_at_end() {
+        let array = Arc::new(Int32Array::from_iter(0..SMALL_SIZE as i32));
+        let mut options = RoundTripOptions::new(array, false);
+        options.bloom_filter = true;
+        options.bloom_filter_position = BloomFilterPosition::End;
+
+        let files = one_column_roundtrip_with_options(options);
+        check_bloom_filter(
+            files,
+            "col".to_string(),
+            (0..SMALL_SIZE as i32).collect(),
+            (SMALL_SIZE as i32 + 1..SMALL_SIZE as i32 + 10).collect(),
+        );
     }
 
     #[test]
