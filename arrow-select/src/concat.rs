@@ -374,6 +374,37 @@ mod tests {
     }
 
     #[test]
+    fn test_concat_primitive_fixed_size_list_arrays() {
+        let list1 = vec![
+            Some(vec![Some(-1), None]),
+            None,
+            Some(vec![Some(10), Some(20)]),
+        ];
+        let list1_array =
+            FixedSizeListArray::from_iter_primitive::<Int64Type, _, _>(list1.clone(), 2);
+
+        let list2 = vec![
+            None,
+            Some(vec![Some(100), None]),
+            Some(vec![Some(102), Some(103)]),
+        ];
+        let list2_array =
+            FixedSizeListArray::from_iter_primitive::<Int64Type, _, _>(list2.clone(), 2);
+
+        let list3 = vec![Some(vec![Some(1000), Some(1001)])];
+        let list3_array =
+            FixedSizeListArray::from_iter_primitive::<Int64Type, _, _>(list3.clone(), 2);
+
+        let array_result = concat(&[&list1_array, &list2_array, &list3_array]).unwrap();
+
+        let expected = list1.into_iter().chain(list2).chain(list3);
+        let array_expected =
+            FixedSizeListArray::from_iter_primitive::<Int64Type, _, _>(expected, 2);
+
+        assert_eq!(array_result.as_ref(), &array_expected as &dyn Array);
+    }
+
+    #[test]
     fn test_concat_struct_arrays() {
         let field = Arc::new(Field::new("field", DataType::Int64, true));
         let input_primitive_1: ArrayRef = Arc::new(PrimitiveArray::<Int64Type>::from(vec![
