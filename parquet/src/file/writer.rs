@@ -434,7 +434,7 @@ impl<W: Write + Send> SerializedFileWriter<W> {
 /// and returns the updated row group metadata.
 fn write_bloom_filters<W: Write + Send>(
     buf: &mut TrackedWrite<W>,
-    bloom_filters: &mut Vec<Vec<Option<Sbbf>>>,
+    bloom_filters: &mut [Vec<Option<Sbbf>>],
     row_group: &mut RowGroupMetaData,
 ) -> Result<()> {
     // iter row group
