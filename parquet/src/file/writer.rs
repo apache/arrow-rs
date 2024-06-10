@@ -274,13 +274,19 @@ impl<W: Write + Send> SerializedFileWriter<W> {
     }
 
     /// Serialize all the bloom filter to the file
-    fn write_bloom_filters(&mut self, row_groups: &mut [RowGroup]) -> Result<()> {
+    pub fn write_bloom_filters(&mut self, row_groups: &mut [RowGroup]) -> Result<()> {
         // iter row group
         // iter each column
         // write bloom filter to the file
-        for (row_group_idx, row_group) in row_groups.iter_mut().enumerate() {
+        for row_group in row_groups.iter_mut() {
+            let row_group_idx: u16 = row_group
+                .ordinal
+                .expect("Missing row group ordinal")
+                .try_into()
+                .expect("Negative row group ordinal");
+            let row_group_idx = row_group_idx as usize;
             for (column_idx, column_chunk) in row_group.columns.iter_mut().enumerate() {
-                match &self.bloom_filters[row_group_idx][column_idx] {
+                match self.bloom_filters[row_group_idx][column_idx].take() {
                     Some(bloom_filter) => {
                         let start_offset = self.buf.bytes_written();
                         bloom_filter.write(&mut self.buf)?;
@@ -338,7 +344,6 @@ impl<W: Write + Send> SerializedFileWriter<W> {
             .map(|v| v.to_thrift())
             .collect::<Vec<_>>();
 
-        self.write_bloom_filters(&mut row_groups)?;
         // Write column indexes and offset indexes
         self.write_column_indexes(&mut row_groups)?;
         self.write_offset_indexes(&mut row_groups)?;

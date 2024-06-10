@@ -259,7 +259,8 @@ impl<W: Write + Send> ArrowWriter<W> {
         for chunk in in_progress.close()? {
             chunk.append_to_row_group(&mut row_group_writer)?;
         }
-        row_group_writer.close()?;
+        let row_group_metadata = row_group_writer.close()?;
+        self.writer.write_bloom_filters(&mut [row_group_metadata.to_thrift()])?;
         Ok(())
     }
 
