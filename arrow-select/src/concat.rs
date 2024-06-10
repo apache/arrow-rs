@@ -134,6 +134,13 @@ pub fn concat(arrays: &[&dyn Array]) -> Result<ArrayRef, ArrowError> {
             k.as_ref() => (dict_helper, arrays),
             _ => unreachable!("illegal dictionary key type {k}")
         },
+        DataType::FixedSizeList(_, size) => {
+            let item_capacity = arrays.iter().map(|a| a.len()).sum();
+            Capacities::FixedSizeList(
+                item_capacity,
+                Some(Box::new(Capacities::Array(item_capacity * *size as usize))),
+            )
+        },
         _ => Capacities::Array(arrays.iter().map(|a| a.len()).sum()),
     };
 
