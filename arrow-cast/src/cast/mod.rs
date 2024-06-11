@@ -5255,18 +5255,36 @@ mod tests {
 
     #[test]
     fn test_dict_to_view() {
-        let string_view_array = StringViewArray::from_iter(VIEW_TEST_DATA);
-        let string_dict_array: DictionaryArray<Int8Type> = VIEW_TEST_DATA.into_iter().collect();
+        let values = StringArray::from_iter(VIEW_TEST_DATA);
+        let keys = Int8Array::from_iter([Some(1), Some(0), None, Some(3), None, Some(1), Some(4)]);
+        let string_dict_array =
+            DictionaryArray::<Int8Type>::try_new(keys, Arc::new(values)).unwrap();
+        let typed_dict = string_dict_array.downcast_dict::<StringArray>().unwrap();
+
+        let string_view_array = {
+            let mut builder = StringViewBuilder::new().with_block_size(8); // multiple buffers.
+            for v in typed_dict.into_iter() {
+                builder.append_option(v);
+            }
+            builder.finish()
+        };
         let expected_string_array_type = string_view_array.data_type();
         let casted_string_array = cast(&string_dict_array, expected_string_array_type).unwrap();
         assert_eq!(casted_string_array.data_type(), expected_string_array_type);
         assert_eq!(casted_string_array.as_ref(), &string_view_array);
 
-        let binary_view_array = BinaryViewArray::from_iter(VIEW_TEST_DATA);
-        let binary_dict_array = string_dict_array.downcast_dict::<StringArray>().unwrap();
-        let binary_buffer = cast(&binary_dict_array.values(), &DataType::Binary).unwrap();
+        let binary_buffer = cast(&typed_dict.values(), &DataType::Binary).unwrap();
         let binary_dict_array =
-            DictionaryArray::<Int8Type>::new(binary_dict_array.keys().clone(), binary_buffer);
+            DictionaryArray::<Int8Type>::new(typed_dict.keys().clone(), binary_buffer);
+        let typed_binary_dict = binary_dict_array.downcast_dict::<BinaryArray>().unwrap();
+
+        let binary_view_array = {
+            let mut builder = BinaryViewBuilder::new().with_block_size(8); // multiple buffers.
+            for v in typed_binary_dict.into_iter() {
+                builder.append_option(v);
+            }
+            builder.finish()
+        };
         let expected_binary_array_type = binary_view_array.data_type();
         let casted_binary_array = cast(&binary_dict_array, expected_binary_array_type).unwrap();
         assert_eq!(casted_binary_array.data_type(), expected_binary_array_type);
