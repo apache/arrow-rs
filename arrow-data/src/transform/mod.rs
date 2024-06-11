@@ -504,7 +504,7 @@ impl<'a> MutableArrayData<'a> {
                     MutableArrayData::new(value_child, use_nulls, array_capacity),
                 ]
             }
-            DataType::FixedSizeList(_, _) => {
+            DataType::FixedSizeList(_, size) => {
                 let children = arrays
                     .iter()
                     .map(|array| &array.child_data()[0])
@@ -514,9 +514,9 @@ impl<'a> MutableArrayData<'a> {
                         child_capacities
                             .clone()
                             .map(|c| *c)
-                            .unwrap_or(Capacities::Array(capacity))
+                            .unwrap_or(Capacities::Array(capacity * *size as usize))
                     } else {
-                        Capacities::Array(array_capacity)
+                        Capacities::Array(array_capacity * *size as usize)
                     };
                 vec![MutableArrayData::with_capacities(
                     children, use_nulls, capacities,
