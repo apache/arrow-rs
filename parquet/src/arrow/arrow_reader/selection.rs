@@ -85,7 +85,7 @@ impl RowSelector {
 /// // you can also create a selection from consecutive ranges
 /// let ranges = vec![5..10, 10..15];
 /// let selection =
-///   RowSelection::from_consecutive_ranges(ranges.into_iter(), Some(20));
+///   RowSelection::from_consecutive_ranges(ranges.into_iter(), 20);
 /// let actual: Vec<RowSelector> = selection.into();
 /// assert_eq!(actual, expected);
 /// ```
@@ -118,13 +118,13 @@ impl RowSelection {
             SlicesIterator::new(filter).map(move |(start, end)| start + offset..end + offset)
         });
 
-        Self::from_consecutive_ranges(iter, Some(total_rows))
+        Self::from_consecutive_ranges(iter, total_rows)
     }
 
     /// Creates a [`RowSelection`] from an iterator of consecutive ranges to keep
     pub fn from_consecutive_ranges<I: Iterator<Item = Range<usize>>>(
         ranges: I,
-        total_rows_opt: Option<usize>,
+        total_rows: usize,
     ) -> Self {
         let mut selectors: Vec<RowSelector> = Vec::with_capacity(ranges.size_hint().0);
         let mut last_end = 0;
@@ -148,10 +148,8 @@ impl RowSelection {
             last_end = range.end;
         }
 
-        if let Some(total_rows) = total_rows_opt {
-            if last_end != total_rows {
-                selectors.push(RowSelector::skip(total_rows - last_end))
-            }
+        if last_end != total_rows {
+            selectors.push(RowSelector::skip(total_rows - last_end))
         }
 
         Self { selectors }
@@ -1147,7 +1145,7 @@ mod tests {
     #[test]
     fn test_from_ranges() {
         let ranges = [1..3, 4..6, 6..6, 8..8, 9..10];
-        let selection = RowSelection::from_consecutive_ranges(ranges.into_iter(), Some(10));
+        let selection = RowSelection::from_consecutive_ranges(ranges.into_iter(), 10);
         assert_eq!(
             selection.selectors,
             vec![
@@ -1162,23 +1160,9 @@ mod tests {
 
         let out_of_order_ranges = [1..3, 8..10, 4..7];
         let result = std::panic::catch_unwind(|| {
-            RowSelection::from_consecutive_ranges(out_of_order_ranges.into_iter(), Some(10))
+            RowSelection::from_consecutive_ranges(out_of_order_ranges.into_iter(), 10)
         });
         assert!(result.is_err());
-
-        // test without total rows specified
-        let ranges = [1..3, 4..6];
-        let selection = RowSelection::from_consecutive_ranges(ranges.into_iter(), None);
-
-        assert_eq!(
-            selection.selectors,
-            vec![
-                RowSelector::skip(1),
-                RowSelector::select(2),
-                RowSelector::skip(1),
-                RowSelector::select(2),
-            ]
-        );
     }
 
     #[test]
