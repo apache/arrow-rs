@@ -61,7 +61,7 @@ fn fixed_size_list_capacity(arrays: &[&dyn Array], data_type: &DataType) -> Capa
             .iter()
             .map(|a| a.as_fixed_size_list().values().as_ref())
             .collect();
-        Capacities::FixedSizeList(
+        Capacities::List(
             item_capacity,
             Some(Box::new(get_capacity(&values, f.data_type()))),
         )

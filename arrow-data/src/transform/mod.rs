@@ -320,11 +320,6 @@ pub enum Capacities {
     /// * the capacity of the array offsets
     /// * the capacity of the child data
     List(usize, Option<Box<Capacities>>),
-    /// FixedSizeList data type
-    /// Define
-    /// * the capacity of the array
-    /// * the capacity of the child data
-    FixedSizeList(usize, Option<Box<Capacities>>),
     /// Struct type
     /// * the capacity of the array
     /// * the capacities of the fields
@@ -390,11 +385,10 @@ impl<'a> MutableArrayData<'a> {
                 array_capacity = *capacity;
                 new_buffers(data_type, *capacity)
             }
-            (DataType::List(_) | DataType::LargeList(_), Capacities::List(capacity, _)) => {
-                array_capacity = *capacity;
-                new_buffers(data_type, *capacity)
-            }
-            (DataType::FixedSizeList(_, _), Capacities::FixedSizeList(capacity, _)) => {
+            (
+                DataType::List(_) | DataType::LargeList(_) | DataType::FixedSizeList(_, _),
+                Capacities::List(capacity, _),
+            ) => {
                 array_capacity = *capacity;
                 new_buffers(data_type, *capacity)
             }
@@ -516,7 +510,7 @@ impl<'a> MutableArrayData<'a> {
                     .map(|array| &array.child_data()[0])
                     .collect::<Vec<_>>();
                 let capacities =
-                    if let Capacities::FixedSizeList(capacity, ref child_capacities) = capacities {
+                    if let Capacities::List(capacity, ref child_capacities) = capacities {
                         child_capacities
                             .clone()
                             .map(|c| *c)
