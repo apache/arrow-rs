@@ -155,23 +155,42 @@ impl<T> ArrowReaderBuilder<T> {
     ///
     /// # Example
     ///
-    /// Given a parquet file with 3 row groups, and a row group filter of
-    /// `[0, 2]`, in order to only scan rows 50-100 in row group 2:
+    /// Given a parquet file with 4 row groups, and a row group filter of `[0,
+    /// 2, 3]`, in order to scan rows 50-100 in row group 2 and rows 200-300 in
+    /// row group 3:
     ///
     /// ```text
     ///   Row Group 0, 1000 rows (selected)
     ///   Row Group 1, 1000 rows (skipped)
     ///   Row Group 2, 1000 rows (selected, but want to only scan rows 50-100)
+    ///   Row Group 3, 1000 rows (selected, but want to only scan rows 200-300)
     /// ```
     ///
-    /// You would pass the following [`RowSelection`]:
+    /// You could pass the following [`RowSelection`]:
     ///
     /// ```text
     ///  Select 1000    (scan all rows in row group 0)
-    ///  Select 50-100 (scan rows 50-100 in row group 2)
+    ///  Skip 50        (skip the first 50 rows in row group 2)
+    ///  Select 50      (scan rows 50-100 in row group 2)
+    ///  Skip 900       (skip the remaining rows in row group 2)
+    ///  Skip 200       (skip the first 200 rows in row group 3)
+    ///  Select 100     (scan rows 200-300 in row group 3)
+    ///  Skip 700       (skip the remaining rows in row group 3)
+    /// ```
+    /// Note there is no entry for the (entirely) skipped row group 1.
+    ///
+    /// Note you can represent the same selection with fewer entries. Instead of
+    ///
+    /// ```text
+    ///  Skip 900       (skip the remaining rows in row group 2)
+    ///  Skip 200       (skip the first 200 rows in row group 3)
     /// ```
     ///
-    /// Note there is no entry for the (entirely) skipped row group 1.
+    /// you could use
+    ///
+    /// ```text
+    /// Skip 1100      (skip the remaining 900 rows in row group 2 and the first 200 rows in row group 3)
+    /// ```
     ///
     /// [`Index`]: crate::file::page_index::index::Index
     pub fn with_row_selection(self, selection: RowSelection) -> Self {
