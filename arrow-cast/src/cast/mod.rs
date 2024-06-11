@@ -5205,10 +5205,10 @@ mod tests {
 
     const VIEW_TEST_DATA: [Option<&str>; 5] = [
         Some("hello"),
-        Some("world"),
+        Some("repeated"),
         None,
         Some("large payload over 12 bytes"),
-        Some("lulu"),
+        Some("repeated"),
     ];
 
     fn _test_string_to_view<O>()
@@ -5350,23 +5350,15 @@ mod tests {
     where
         O: OffsetSizeTrait,
     {
-        let data: Vec<Option<&[u8]>> = vec![
-            Some(b"hello"),
-            Some(b"world"),
-            None,
-            Some(b"large payload over 12 bytes"),
-            Some(b"lulu"),
-        ];
-
         let view_array = {
             let mut builder = BinaryViewBuilder::new().with_block_size(8); // multiple buffers.
-            for s in data.iter() {
+            for s in VIEW_TEST_DATA.iter() {
                 builder.append_option(*s);
             }
             builder.finish()
         };
 
-        let expected_binary_array = GenericBinaryArray::<O>::from(data);
+        let expected_binary_array = GenericBinaryArray::<O>::from_iter(VIEW_TEST_DATA);
         let expected_type = expected_binary_array.data_type();
 
         assert!(can_cast_types(view_array.data_type(), expected_type));
