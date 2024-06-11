@@ -132,7 +132,7 @@ jobs:
         # and url 2.5.1, updates to 1.67
         run: |
           cargo update -p tokio --precise 1.29.1
-          cargo update -p url --precise 2.5.1
+          cargo update -p url --precise 2.5.0
       - name: Check object_store
         working-directory: object_store
         run: cargo msrv --log-target stdout verify
