@@ -299,7 +299,7 @@ impl WriterProperties {
             .unwrap_or(DEFAULT_DICTIONARY_ENABLED)
     }
 
-    /// Returns the type of  statistics written for a column.
+    /// Returns which statistics are written for a column.
     pub fn statistics_enabled(&self, col: &ColumnPath) -> EnabledStatistics {
         self.column_properties
             .get(col)
@@ -641,7 +641,7 @@ impl WriterPropertiesBuilder {
         self
     }
 
-    /// Sets flag to enable/disable statistics for a specific column.
+    /// Sets statistics level for a specific column.
     ///
     /// Takes precedence over [`Self::set_statistics_enabled`].
     pub fn set_column_statistics_enabled(
