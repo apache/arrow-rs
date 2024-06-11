@@ -429,9 +429,11 @@ impl<'a> PrimitiveTypeBuilder<'a> {
                 }
             }
             ConvertedType::INTERVAL => {
-                if self.physical_type != PhysicalType::FIXED_LEN_BYTE_ARRAY || self.length != 12 {
+                if self.physical_type != PhysicalType::FIXED_LEN_BYTE_ARRAY
+                    || (self.length != 12 && self.length != 16)
+                {
                     return Err(general_err!(
-                        "INTERVAL cannot annotate field '{}' because it is not a FIXED_LEN_BYTE_ARRAY(12) field",
+                        "INTERVAL cannot annotate field '{}' because it is not a FIXED_LEN_BYTE_ARRAY(12) or FIXED_LEN_BYTE_ARRAY(16) field",
                         self.name
                     ));
                 }
@@ -1512,7 +1514,7 @@ mod tests {
         if let Err(e) = result {
             assert_eq!(
                 format!("{e}"),
-                "Parquet error: INTERVAL cannot annotate field 'foo' because it is not a FIXED_LEN_BYTE_ARRAY(12) field"
+                "Parquet error: INTERVAL cannot annotate field 'foo' because it is not a FIXED_LEN_BYTE_ARRAY(12) or FIXED_LEN_BYTE_ARRAY(16) field"
             );
         }
 
@@ -1525,7 +1527,7 @@ mod tests {
         if let Err(e) = result {
             assert_eq!(
                 format!("{e}"),
-                "Parquet error: INTERVAL cannot annotate field 'foo' because it is not a FIXED_LEN_BYTE_ARRAY(12) field"
+                "Parquet error: INTERVAL cannot annotate field 'foo' because it is not a FIXED_LEN_BYTE_ARRAY(12) or FIXED_LEN_BYTE_ARRAY(16) field"
             );
         }
 

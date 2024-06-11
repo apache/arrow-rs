@@ -868,6 +868,14 @@ fn write_leaf(writer: &mut ColumnWriter<'_>, levels: &ArrayLevels) -> Result<usi
                             .unwrap();
                         get_interval_dt_array_slice(array, indices)
                     }
+                    IntervalUnit::MonthDayNano => {
+                        let array = column
+                            .as_any()
+                            .downcast_ref::<arrow_array::IntervalMonthDayNanoArray>()
+                            .unwrap();
+
+                        get_interval_mdn_array_slice(array, indices)
+                    }
                     _ => {
                         return Err(ParquetError::NYI(
                             format!(
@@ -961,6 +969,23 @@ fn get_interval_dt_array_slice(
         let value = array.value(*i);
         out[4..8].copy_from_slice(&value.days.to_le_bytes());
         out[8..12].copy_from_slice(&value.milliseconds.to_le_bytes());
+        values.push(FixedLenByteArray::from(ByteArray::from(out.to_vec())));
+    }
+    values
+}
+
+/// Returns 16-byte values representing 3 values of months (4-bytes), days (4-bytes) and nanoseconds (8-bytes).
+fn get_interval_mdn_array_slice(
+    array: &arrow_array::IntervalMonthDayNanoArray,
+    indices: &[usize],
+) -> Vec<FixedLenByteArray> {
+    let mut values = Vec::with_capacity(indices.len());
+    for i in indices {
+        let mut out = [0; 16];
+        let value = array.value(*i);
+        out[0..4].copy_from_slice(&value.months.to_le_bytes());
+        out[4..8].copy_from_slice(&value.days.to_le_bytes());
+        out[8..16].copy_from_slice(&value.nanoseconds.to_le_bytes());
         values.push(FixedLenByteArray::from(ByteArray::from(out.to_vec())));
     }
     values
@@ -2081,9 +2106,6 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(
-        expected = "Attempting to write an Arrow interval type MonthDayNano to parquet that is not yet implemented"
-    )]
     fn interval_month_day_nano_single_column() {
         required_and_optional::<IntervalMonthDayNanoArray, _>(vec![
             IntervalMonthDayNano::new(0, 1, 5),

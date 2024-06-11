@@ -29,7 +29,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use arrow_ipc::writer;
-use arrow_schema::{DataType, Field, Fields, Schema, TimeUnit};
+use arrow_schema::{DataType, Field, Fields, IntervalUnit, Schema, TimeUnit};
 
 use crate::basic::{
     ConvertedType, LogicalType, Repetition, TimeUnit as ParquetTimeUnit, Type as PhysicalType,
@@ -449,12 +449,17 @@ fn arrow_to_parquet_type(field: &Field) -> Result<Type> {
             .with_id(id)
             .build(),
         DataType::Duration(_) => Err(arrow_err!("Converting Duration to parquet not supported",)),
-        DataType::Interval(_) => {
+        DataType::Interval(unit) => {
+            let length = match unit {
+                IntervalUnit::YearMonth | IntervalUnit::DayTime => 12,
+                IntervalUnit::MonthDayNano => 16,
+            };
+
             Type::primitive_type_builder(name, PhysicalType::FIXED_LEN_BYTE_ARRAY)
                 .with_converted_type(ConvertedType::INTERVAL)
                 .with_repetition(repetition)
                 .with_id(id)
-                .with_length(12)
+                .with_length(length)
                 .build()
         }
         DataType::Binary | DataType::LargeBinary => {
