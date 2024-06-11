@@ -132,7 +132,7 @@ fn view_from_dict_values<K: ArrowDictionaryKeyType, T: ByteViewType, V: ByteArra
 
                 // Safety
                 // (1) The index is within bounds as they are offsets
-                // (2) The append_view is safe 
+                // (2) The append_view is safe
                 unsafe {
                     let offset = value_offsets.get_unchecked(idx).as_usize();
                     let end = value_offsets.get_unchecked(idx + 1).as_usize();
