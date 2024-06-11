@@ -85,8 +85,95 @@ pub(crate) fn dictionary_cast<K: ArrowDictionaryKeyType>(
 
             Ok(new_array)
         }
+        Utf8View => {
+            // `unpack_dictionary` can handle Utf8View/BinaryView types, but incurs unnecessary data copy of the value buffer.
+            // we handle it here to avoid the copy.
+            let dict_array = array
+                .as_dictionary::<K>()
+                .downcast_dict::<StringArray>()
+                .unwrap();
+
+            let string_values = dict_array.values();
+            let value_offsets = string_values.value_offsets();
+            let value_buffer = string_values.values().clone();
+
+            let view_buffer =
+                view_from_dict_values(value_offsets, &value_buffer, dict_array.keys());
+
+            // Safety:
+            // the buffer is from StringArray which is utf8.
+            let string_view = unsafe {
+                StringViewArray::new_unchecked(
+                    view_buffer,
+                    vec![value_buffer],
+                    dict_array.nulls().cloned(),
+                )
+            };
+            Ok(Arc::new(string_view))
+        }
+        BinaryView => {
+            // `unpack_dictionary` can handle Utf8View/BinaryView types, but incurs unnecessary data copy of the value buffer.
+            // we handle it here to avoid the copy.
+            let dict_array = array
+                .as_dictionary::<K>()
+                .downcast_dict::<BinaryArray>()
+                .unwrap();
+
+            let binary_values = dict_array.values();
+            let value_offsets = binary_values.value_offsets();
+            let value_buffer = binary_values.values().clone();
+
+            let view_buffer =
+                view_from_dict_values(value_offsets, &value_buffer, dict_array.keys());
+            let binary_view = unsafe {
+                BinaryViewArray::new_unchecked(
+                    view_buffer,
+                    vec![value_buffer],
+                    dict_array.nulls().cloned(),
+                )
+            };
+            Ok(Arc::new(binary_view))
+        }
         _ => unpack_dictionary::<K>(array, to_type, cast_options),
     }
+}
+
+fn view_from_dict_values<K: ArrowDictionaryKeyType>(
+    value_offsets: &[i32],
+    value_buffer: &arrow_buffer::Buffer,
+    keys: &PrimitiveArray<K>,
+) -> ScalarBuffer<u128> {
+    let mut view_builder = BufferBuilder::<u128>::new(keys.len());
+    for i in keys.iter() {
+        match i {
+            Some(v) => {
+                let idx = v.to_usize().unwrap();
+                let offset = value_offsets[idx];
+                let end = value_offsets[idx + 1];
+                let length = end - offset;
+                let value_buf = &value_buffer[offset as usize..end as usize];
+
+                if length <= 12 {
+                    let mut view_buffer = [0; 16];
+                    view_buffer[0..4].copy_from_slice(&length.to_le_bytes());
+                    view_buffer[4..4 + value_buf.len()].copy_from_slice(value_buf);
+                    view_builder.append(u128::from_le_bytes(view_buffer));
+                } else {
+                    let view = ByteView {
+                        length: length as u32,
+                        prefix: u32::from_le_bytes(value_buf[0..4].try_into().unwrap()),
+                        buffer_index: 0,
+                        offset: offset as u32,
+                    };
+                    view_builder.append(view.into());
+                }
+            }
+            None => {
+                view_builder.append_n_zeroed(1);
+            }
+        }
+    }
+    ScalarBuffer::new(view_builder.finish(), 0, keys.len())
 }
 
 // Unpack a dictionary where the keys are of type <K> into a flattened array of type to_type
