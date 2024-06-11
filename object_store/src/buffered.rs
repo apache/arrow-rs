@@ -410,9 +410,8 @@ impl AsyncWrite for BufWriter {
 /// using [`ObjectStore::put`]. If `capacity` is exceeded, data will instead be
 /// streamed using [`ObjectStore::put_multipart`]
 ///
-/// # TODO
-///
-/// Add attributes and tags support.
+/// Notes: Attribute and tag support are not yet implemented
+#[derive(Debug)]
 pub struct BufUploader {
     store: Arc<dyn ObjectStore>,
     path: Path,
@@ -424,22 +423,9 @@ pub struct BufUploader {
     write_multipart: Option<WriteMultipart>,
 }
 
-impl std::fmt::Debug for BufUploader {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("BufUploader")
-            .field("chunk_size", &self.chunk_size)
-            .finish()
-    }
-}
-
 impl BufUploader {
     /// Create a new [`BufUploader`] from the provided [`ObjectStore`] and [`Path`]
-    pub fn new(store: Arc<dyn ObjectStore>, path: Path) -> Self {
-        Self::with_chunk_size(store, path, 5 * 1024 * 1024)
-    }
-
-    /// Create a new [`BufUploader`] from the provided [`ObjectStore`], [`Path`] and `capacity`
-    pub fn with_chunk_size(store: Arc<dyn ObjectStore>, path: Path, chunk_size: usize) -> Self {
+    pub fn new(store: Arc<dyn ObjectStore>, path: Path, chunk_size: usize) -> Self {
         Self {
             store,
             path,
@@ -535,6 +521,7 @@ mod tests {
     use crate::memory::InMemory;
     use crate::path::Path;
     use crate::{Attribute, GetOptions};
+    use itertools::Itertools;
     use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 
     #[tokio::test]
@@ -673,9 +660,15 @@ mod tests {
         let path = Path::from("file.txt");
 
         // Test put
-        let mut writer = BufUploader::with_chunk_size(Arc::clone(&store), path.clone(), 30);
-        writer.put(Bytes::from(vec![0; 20])).await.unwrap();
-        writer.put(Bytes::from(vec![0; 5])).await.unwrap();
+        let mut writer = BufUploader::new(Arc::clone(&store), path.clone(), 30);
+        writer
+            .put(Bytes::from((0..20).collect_vec()))
+            .await
+            .unwrap();
+        writer
+            .put(Bytes::from((20..25).collect_vec()))
+            .await
+            .unwrap();
         writer.finish().await.unwrap();
         let response = store
             .get_opts(
@@ -688,11 +681,18 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response.meta.size, 25);
+        assert_eq!(response.bytes().await.unwrap(), (0..25).collect_vec());
 
         // Test multipart
-        let mut writer = BufUploader::with_chunk_size(Arc::clone(&store), path.clone(), 30);
-        writer.put(Bytes::from(vec![0; 20])).await.unwrap();
-        writer.put(Bytes::from(vec![0; 20])).await.unwrap();
+        let mut writer = BufUploader::new(Arc::clone(&store), path.clone(), 30);
+        writer
+            .put(Bytes::from((0..20).collect_vec()))
+            .await
+            .unwrap();
+        writer
+            .put(Bytes::from((20..40).collect_vec()))
+            .await
+            .unwrap();
         writer.finish().await.unwrap();
         let response = store
             .get_opts(
@@ -705,5 +705,6 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response.meta.size, 40);
+        assert_eq!(response.bytes().await.unwrap(), (0..40).collect_vec());
     }
 }
