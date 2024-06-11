@@ -696,8 +696,8 @@ impl WriterPropertiesBuilder {
     /// The column [`Index`] is written when [`Self::set_statistics_enabled`] is
     /// set to [`EnabledStatistics::Page`].
     ///
-    /// * If `Some`, Must be greater than 0, otherwise will panic
-    /// * If `None` - there's no effective limit.
+    /// * If `Some`, must be greater than 0, otherwise will panic
+    /// * If `None`, there's no effective limit.
     ///
     /// [`Index`]: crate::file::page_index::index::Index
     pub fn set_column_index_truncate_length(mut self, max_length: Option<usize>) -> Self {
@@ -716,8 +716,8 @@ impl WriterPropertiesBuilder {
     /// Row group level [`Statistics`] are written when [`Self::set_statistics_enabled`] is
     /// set to [`EnabledStatistics::Chunk`] or [`EnabledStatistics::Page`].
     ///
-    /// * If `Some`, Must be greater than 0, otherwise will panic
-    /// * If `None` - there's no effective limit.
+    /// * If `Some`, must be greater than 0, otherwise will panic
+    /// * If `None`, there's no effective limit.
     ///
     /// [`Statistics`]: crate::file::statistics::Statistics
     pub fn set_statistics_truncate_length(mut self, max_length: Option<usize>) -> Self {
