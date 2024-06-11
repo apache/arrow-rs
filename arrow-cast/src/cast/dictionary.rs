@@ -189,24 +189,28 @@ pub(crate) fn cast_to_dictionary<K: ArrowDictionaryKeyType>(
             pack_numeric_to_dictionary::<K, Decimal256Type>(array, dict_value_type, cast_options)
         }
         Utf8 => {
+            // If the input is a view type, we can avoid casting (thus copying) the data
             if array.data_type() == &DataType::Utf8View {
                 return string_view_to_dictionary::<K, i32>(array);
             }
             pack_byte_to_dictionary::<K, GenericStringType<i32>>(array, cast_options)
         }
         LargeUtf8 => {
+            // If the input is a view type, we can avoid casting (thus copying) the data
             if array.data_type() == &DataType::Utf8View {
                 return string_view_to_dictionary::<K, i64>(array);
             }
             pack_byte_to_dictionary::<K, GenericStringType<i64>>(array, cast_options)
         }
         Binary => {
+            // If the input is a view type, we can avoid casting (thus copying) the data
             if array.data_type() == &DataType::BinaryView {
                 return binary_view_to_dictionary::<K, i32>(array);
             }
             pack_byte_to_dictionary::<K, GenericBinaryType<i32>>(array, cast_options)
         }
         LargeBinary => {
+            // If the input is a view type, we can avoid casting (thus copying) the data
             if array.data_type() == &DataType::BinaryView {
                 return binary_view_to_dictionary::<K, i64>(array);
             }
@@ -269,7 +273,7 @@ where
         }
     }
 
-    return Ok(Arc::new(b.finish()));
+    Ok(Arc::new(b.finish()))
 }
 
 pub(crate) fn binary_view_to_dictionary<K, O: OffsetSizeTrait>(
@@ -295,7 +299,7 @@ where
         }
     }
 
-    return Ok(Arc::new(b.finish()));
+    Ok(Arc::new(b.finish()))
 }
 
 // Packs the data as a GenericByteDictionaryBuilder, if possible, with the
