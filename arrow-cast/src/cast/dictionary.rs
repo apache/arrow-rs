@@ -129,12 +129,16 @@ fn view_from_dict_values<K: ArrowDictionaryKeyType, T: ByteViewType, V: ByteArra
         match i {
             Some(v) => {
                 let idx = v.to_usize().unwrap();
-                let offset = value_offsets[idx];
-                let end = value_offsets[idx + 1];
-                let length = end - offset;
-                builder
-                    .try_append_view(0, offset.as_usize() as u32, length.as_usize() as u32)
-                    .unwrap();
+
+                // Safety
+                // (1) The index is within bounds as they are offsets
+                // (2) The append_view is safe 
+                unsafe {
+                    let offset = value_offsets.get_unchecked(idx).as_usize();
+                    let end = value_offsets.get_unchecked(idx + 1).as_usize();
+                    let length = end - offset;
+                    builder.append_view_unchecked(0, offset as u32, length as u32)
+                }
             }
             None => {
                 builder.append_null();

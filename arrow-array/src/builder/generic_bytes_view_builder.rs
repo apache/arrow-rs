@@ -116,6 +116,36 @@ impl<T: ByteViewType + ?Sized> GenericByteViewBuilder<T> {
         offset as u32
     }
 
+    /// Append a view of the given `block`, `offset` and `length`
+    ///
+    /// # Safety
+    /// (1) The block must have been added using [`Self::append_block`]
+    /// (2) The range `offset..offset+length` must be within the bounds of the block
+    /// (3) The data in the block must be valid of type `T`
+    pub unsafe fn append_view_unchecked(&mut self, block: u32, offset: u32, len: u32) {
+        let b = self.completed.get_unchecked(block as usize);
+        let start = offset as usize;
+        let end = start.saturating_add(len as usize);
+        let b = b.get_unchecked(start..end);
+
+        if len <= 12 {
+            let mut view_buffer = [0; 16];
+            view_buffer[0..4].copy_from_slice(&len.to_le_bytes());
+            view_buffer[4..4 + b.len()].copy_from_slice(b);
+            self.views_builder.append(u128::from_le_bytes(view_buffer));
+        } else {
+            let view = ByteView {
+                length: len,
+                prefix: u32::from_le_bytes(b[0..4].try_into().unwrap()),
+                buffer_index: block,
+                offset,
+            };
+            self.views_builder.append(view.into());
+        }
+
+        self.null_buffer_builder.append_non_null();
+    }
+
     /// Try to append a view of the given `block`, `offset` and `length`
     ///
     /// See [`Self::append_block`]
@@ -139,22 +169,9 @@ impl<T: ByteViewType + ?Sized> GenericByteViewBuilder<T> {
             ));
         }
 
-        if len <= 12 {
-            let mut view_buffer = [0; 16];
-            view_buffer[0..4].copy_from_slice(&len.to_le_bytes());
-            view_buffer[4..4 + b.len()].copy_from_slice(b);
-            self.views_builder.append(u128::from_le_bytes(view_buffer));
-        } else {
-            let view = ByteView {
-                length: len,
-                prefix: u32::from_le_bytes(b[0..4].try_into().unwrap()),
-                buffer_index: block,
-                offset,
-            };
-            self.views_builder.append(view.into());
+        unsafe {
+            self.append_view_unchecked(block, offset, len);
         }
-
-        self.null_buffer_builder.append_non_null();
         Ok(())
     }
 
