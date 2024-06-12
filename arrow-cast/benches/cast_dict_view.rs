@@ -30,8 +30,7 @@ fn make_dict_array() -> DictionaryArray<UInt64Type> {
     ]);
     let keys = UInt64Array::from_iter((0..10_000).map(|v| v % 3));
 
-    let dict = DictionaryArray::new(keys, Arc::new(values));
-    dict
+    DictionaryArray::new(keys, Arc::new(values))
 }
 
 fn criterion_benchmark(c: &mut Criterion) {
