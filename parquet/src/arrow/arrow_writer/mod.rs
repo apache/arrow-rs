@@ -107,6 +107,20 @@ mod levels;
 /// }
 /// ```
 ///
+/// ## Type Support
+///
+/// The writer supports writing all Arrow [`DataType`]s that have a direct mapping to
+/// Parquet types including  [`StructArray`] and [`ListArray`].
+///
+/// The following are not supported:
+///
+/// * [`IntervalMonthDayNanoArray`]: Parquet does not [support nanosecond intervals].
+///
+/// [`DataType`]: arrow::datatypes::DataType
+/// [`StructArray`]: arrow::array::StructArray
+/// [`ListArray`]: arrow::array::ListArray
+/// [`IntervalMonthDayNanoArray`]: arrow::array::IntervalMonthDayNanoArray
+/// [support nanosecond intervals]: https://github.com/apache/parquet-format/blob/master/LogicalTypes.md#interval
 pub struct ArrowWriter<W: Write> {
     /// Underlying Parquet writer
     writer: SerializedFileWriter<W>,
