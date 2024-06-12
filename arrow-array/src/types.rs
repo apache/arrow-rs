@@ -47,9 +47,11 @@ impl BooleanType {
     pub const DATA_TYPE: DataType = DataType::Boolean;
 }
 
-/// Trait bridging the dynamic-typed nature of Arrow (via [`DataType`]) with the
-/// static-typed nature of rust types ([`ArrowNativeType`]) for all types that implement [`ArrowNativeType`].
+/// Trait for [primitive values], bridging the dynamic-typed nature of Arrow
+/// (via [`DataType`]) with the static-typed nature of rust types
+/// ([`ArrowNativeType`]) for all types that implement [`ArrowNativeType`].
 ///
+/// [primitive values]: https://arrow.apache.org/docs/format/Columnar.html#fixed-size-primitive-layout
 /// [`ArrowNativeType`]: arrow_buffer::ArrowNativeType
 pub trait ArrowPrimitiveType: primitive::PrimitiveTypeSealed + 'static {
     /// Corresponding Rust native type for the primitive type.
