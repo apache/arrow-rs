@@ -20,7 +20,7 @@
 use std::sync::Arc;
 
 use arrow_array::cast::AsArray;
-use chrono::{Datelike, NaiveDateTime, Offset, TimeZone, Timelike, Utc};
+use chrono::{Datelike, NaiveDateTime, Offset, TimeZone, Timelike};
 
 use arrow_array::temporal_conversions::{
     date32_to_datetime, date64_to_datetime, timestamp_ms_to_datetime, timestamp_ns_to_datetime,
@@ -325,7 +325,7 @@ impl ExtractDatePartExt for PrimitiveArray<TimestampSecondType> {
                 let map_func = get_date_time_part_extract_fn(part);
                 self.unary_opt(|d| {
                     timestamp_s_to_datetime(d)
-                        .map(|c| Utc.from_utc_datetime(&c).with_timezone(&tz))
+                        .map(|d| d.with_timezone(&tz))
                         .map(map_func)
                 })
             } else {
@@ -342,7 +342,7 @@ impl ExtractDatePartExt for PrimitiveArray<TimestampMillisecondType> {
             let map_func = get_date_time_part_extract_fn(part);
             self.unary_opt(|d| {
                 timestamp_ms_to_datetime(d)
-                    .map(|c| Utc.from_utc_datetime(&c).with_timezone(&tz))
+                    .map(|d| d.with_timezone(&tz))
                     .map(map_func)
             })
         } else {
@@ -359,7 +359,7 @@ impl ExtractDatePartExt for PrimitiveArray<TimestampMicrosecondType> {
             let map_func = get_date_time_part_extract_fn(part);
             self.unary_opt(|d| {
                 timestamp_us_to_datetime(d)
-                    .map(|c| Utc.from_utc_datetime(&c).with_timezone(&tz))
+                    .map(|d| d.with_timezone(&tz))
                     .map(map_func)
             })
         } else {
@@ -376,7 +376,7 @@ impl ExtractDatePartExt for PrimitiveArray<TimestampNanosecondType> {
             let map_func = get_date_time_part_extract_fn(part);
             self.unary_opt(|d| {
                 timestamp_ns_to_datetime(d)
-                    .map(|c| Utc.from_utc_datetime(&c).with_timezone(&tz))
+                    .map(|d| d.with_timezone(&tz))
                     .map(map_func)
             })
         } else {

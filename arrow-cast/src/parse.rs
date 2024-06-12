@@ -1712,7 +1712,7 @@ mod tests {
             let expected = NaiveDate::parse_from_str(case, "%Y-%m-%d")
                 .or(NaiveDate::parse_from_str(case, "%Y-%m-%d %H:%M:%S"))
                 .unwrap();
-            assert_eq!(v.date(), expected);
+            assert_eq!(v.date_naive(), expected);
         }
 
         let err_cases = [

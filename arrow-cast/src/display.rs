@@ -520,7 +520,7 @@ macro_rules! timestamp_display {
                         value,
                         self.data_type()
                     ))
-                })?;
+                })?.naive_utc();
 
                 write_timestamp(f, naive, s.0, s.1.clone())
             }
@@ -566,7 +566,7 @@ macro_rules! temporal_display {
 
 #[inline]
 fn date32_to_date(value: i32) -> Option<NaiveDate> {
-    Some(date32_to_datetime(value)?.date())
+    Some(date32_to_datetime(value)?.date_naive())
 }
 
 temporal_display!(date32_to_date, date_format, Date32Type);
