@@ -19,10 +19,10 @@
 
 use crate::path::Path;
 use crate::{
-    Attributes, ObjectMeta, ObjectStore, PutMultipartOpts, PutOptions, PutPayloadMut, PutResult,
-    TagSet, WriteMultipart,
+    Attributes, ObjectMeta, ObjectStore, PutMultipartOpts, PutOptions, PutPayloadMut, TagSet,
+    WriteMultipart,
 };
-use bytes::{Buf, Bytes};
+use bytes::Bytes;
 use futures::future::{BoxFuture, FutureExt};
 use futures::ready;
 use std::cmp::Ordering;
@@ -238,11 +238,11 @@ enum BufWriterState {
     /// Buffer up to capacity bytes
     Buffer(Path, PutPayloadMut),
     /// [`ObjectStore::put_multipart`]
-    Prepare(BoxFuture<'static, std::io::Result<WriteMultipart>>),
+    Prepare(BoxFuture<'static, crate::Result<WriteMultipart>>),
     /// Write to a multipart upload
     Write(Option<WriteMultipart>),
     /// [`ObjectStore::put`]
-    Flush(BoxFuture<'static, std::io::Result<()>>),
+    Flush(BoxFuture<'static, crate::Result<()>>),
 }
 
 impl BufWriter {
@@ -286,6 +286,52 @@ impl BufWriter {
         Self {
             tags: Some(tags),
             ..self
+        }
+    }
+
+    /// Write data to the writer in [`Bytes`].
+    ///
+    /// Unlike [`AsyncWrite::write`], put can write data without extra copying.
+    ///
+    /// This API is recommended while the data source generates [`Bytes`].
+    pub async fn put(&mut self, bytes: Bytes) -> crate::Result<()> {
+        loop {
+            return match &mut self.state {
+                BufWriterState::Write(Some(write)) => {
+                    write.wait_for_capacity(self.max_concurrency).await?;
+                    write.put(bytes);
+                    Ok(())
+                }
+                BufWriterState::Write(None) | BufWriterState::Flush(_) => {
+                    panic!("Already shut down")
+                }
+                BufWriterState::Prepare(f) => {
+                    self.state = BufWriterState::Write(f.await?.into());
+                    continue;
+                }
+                BufWriterState::Buffer(path, b) => {
+                    if b.content_length().saturating_add(bytes.len()) < self.capacity {
+                        b.push(bytes);
+                        Ok(())
+                    } else {
+                        let buffer = std::mem::take(b);
+                        let path = std::mem::take(path);
+                        let opts = PutMultipartOpts {
+                            attributes: self.attributes.take().unwrap_or_default(),
+                            tags: self.tags.take().unwrap_or_default(),
+                        };
+                        let upload = self.store.put_multipart_opts(&path, opts).await?;
+                        let mut chunked =
+                            WriteMultipart::new_with_chunk_size(upload, self.capacity);
+                        for chunk in buffer.freeze() {
+                            chunked.put(chunk);
+                        }
+                        chunked.put(bytes);
+                        self.state = BufWriterState::Write(Some(chunked));
+                        Ok(())
+                    }
+                }
+            };
         }
     }
 
@@ -384,7 +430,7 @@ impl AsyncWrite for BufWriter {
                         Ok(())
                     }));
                 }
-                BufWriterState::Flush(f) => return f.poll_unpin(cx),
+                BufWriterState::Flush(f) => return f.poll_unpin(cx).map_err(std::io::Error::from),
                 BufWriterState::Write(x) => {
                     let upload = x.take().unwrap();
                     self.state = BufWriterState::Flush(
@@ -397,111 +443,6 @@ impl AsyncWrite for BufWriter {
                 }
             }
         }
-    }
-}
-
-/// A buffered multipart uploader.
-///
-/// This uploader adaptively uses [`ObjectStore::put`] or
-/// [`ObjectStore::put_multipart`] depending on the amount of data that has
-/// been written.
-///
-/// Up to `capacity` bytes will be buffered in memory, and flushed on shutdown
-/// using [`ObjectStore::put`]. If `capacity` is exceeded, data will instead be
-/// streamed using [`ObjectStore::put_multipart`]
-///
-/// Notes: Attribute and tag support are not yet implemented
-#[derive(Debug)]
-pub struct BufUploader {
-    store: Arc<dyn ObjectStore>,
-    path: Path,
-
-    chunk_size: usize,
-    max_concurrency: usize,
-
-    buffer: PutPayloadMut,
-    write_multipart: Option<WriteMultipart>,
-}
-
-impl BufUploader {
-    /// Create a new [`BufUploader`] from the provided [`ObjectStore`] and [`Path`]
-    pub fn new(store: Arc<dyn ObjectStore>, path: Path, chunk_size: usize) -> Self {
-        Self {
-            store,
-            path,
-            chunk_size,
-            max_concurrency: 8,
-            buffer: PutPayloadMut::new(),
-            write_multipart: None,
-        }
-    }
-
-    /// Override the maximum number of in-flight requests for this writer
-    ///
-    /// Defaults to 8
-    pub fn with_max_concurrency(self, max_concurrency: usize) -> Self {
-        Self {
-            max_concurrency,
-            ..self
-        }
-    }
-
-    /// Write data to the uploader
-    pub async fn put(&mut self, mut bytes: Bytes) -> crate::Result<()> {
-        // If we have have write_multipart in progress, put into `WriteMultipart` directly.
-        if let Some(writer) = self.write_multipart.as_mut() {
-            writer.wait_for_capacity(self.max_concurrency).await?;
-            writer.put(bytes);
-            return Ok(());
-        }
-
-        // If we have not started a multipart upload, and the buffer is not full, push the bytes.
-        if self.buffer.content_length() + bytes.len() <= self.chunk_size {
-            self.buffer.push(bytes);
-            return Ok(());
-        }
-
-        // Otherwise, we need to create a WriteMultipart and push all data in.
-        let mut write_multipart = WriteMultipart::new_with_chunk_size(
-            self.store.put_multipart(&self.path).await?,
-            self.chunk_size,
-        );
-
-        // NOTE: buffer length must be less than chunk_size, already checked.
-        let in_buffer = bytes.split_to(self.chunk_size - self.buffer.content_length());
-        self.buffer.push(in_buffer);
-        write_multipart.put_part(std::mem::take(&mut self.buffer).freeze());
-
-        // It's possible that we have more data to write.
-        if bytes.has_remaining() {
-            write_multipart.put(bytes);
-        }
-
-        self.write_multipart = Some(write_multipart);
-        Ok(())
-    }
-
-    /// Finish the upload and create the file.
-    pub async fn finish(&mut self) -> crate::Result<PutResult> {
-        match self.write_multipart.take() {
-            Some(w) => w.finish().await,
-            None => {
-                self.store
-                    .put(&self.path, std::mem::take(&mut self.buffer).freeze())
-                    .await
-            }
-        }
-    }
-
-    /// Abort the upload and cleanup all data.
-    pub async fn abort(&mut self) -> crate::Result<()> {
-        // take and drop all content in buffer.
-        std::mem::take(&mut self.buffer);
-
-        if let Some(write_multipart) = self.write_multipart.take() {
-            write_multipart.abort().await?;
-        }
-        Ok(())
     }
 }
 
@@ -655,12 +596,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_buf_uploader() {
+    async fn test_buf_writer_with_put() {
         let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
         let path = Path::from("file.txt");
 
         // Test put
-        let mut writer = BufUploader::new(Arc::clone(&store), path.clone(), 30);
+        let mut writer = BufWriter::with_capacity(Arc::clone(&store), path.clone(), 30);
         writer
             .put(Bytes::from((0..20).collect_vec()))
             .await
@@ -669,7 +610,7 @@ mod tests {
             .put(Bytes::from((20..25).collect_vec()))
             .await
             .unwrap();
-        writer.finish().await.unwrap();
+        writer.shutdown().await.unwrap();
         let response = store
             .get_opts(
                 &path,
@@ -684,7 +625,7 @@ mod tests {
         assert_eq!(response.bytes().await.unwrap(), (0..25).collect_vec());
 
         // Test multipart
-        let mut writer = BufUploader::new(Arc::clone(&store), path.clone(), 30);
+        let mut writer = BufWriter::with_capacity(Arc::clone(&store), path.clone(), 30);
         writer
             .put(Bytes::from((0..20).collect_vec()))
             .await
@@ -693,7 +634,7 @@ mod tests {
             .put(Bytes::from((20..40).collect_vec()))
             .await
             .unwrap();
-        writer.finish().await.unwrap();
+        writer.shutdown().await.unwrap();
         let response = store
             .get_opts(
                 &path,
