@@ -291,7 +291,7 @@ impl BufWriter {
 
     /// Write data to the writer in [`Bytes`].
     ///
-    /// Unlike [`AsyncWrite::write`], put can write data without extra copying.
+    /// Unlike [`AsyncWrite::poll_write`], `put` can write data without extra copying.
     ///
     /// This API is recommended while the data source generates [`Bytes`].
     pub async fn put(&mut self, bytes: Bytes) -> crate::Result<()> {
