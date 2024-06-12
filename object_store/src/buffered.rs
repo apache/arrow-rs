@@ -305,6 +305,12 @@ impl BufWriter {
                 BufWriterState::Write(None) | BufWriterState::Flush(_) => {
                     panic!("Already shut down")
                 }
+                // NOTE
+                //
+                // This case should never happen in practice, but rust async API does
+                // make it possible for users to call `put` before `poll_write` returns `Ready`.
+                //
+                // We allow such usage by `await` the future and continue the loop.
                 BufWriterState::Prepare(f) => {
                     self.state = BufWriterState::Write(f.await?.into());
                     continue;
