@@ -156,16 +156,19 @@ impl<I: OffsetSizeTrait> OffsetBuffer<I> {
 
     fn build_generic_byte_view(self) -> GenericByteViewBuilder<BinaryViewType> {
         let mut builder = GenericByteViewBuilder::<BinaryViewType>::with_capacity(self.len());
-        let mut values = self.values;
+        let buffer = self.values.into();
+        builder.append_block(buffer);
         for window in self.offsets.windows(2) {
             let start = window[0];
             let end = window[1];
             let len = (end - start).to_usize().unwrap();
-            let b = values.drain(..len).collect::<Vec<u8>>();
-            if b.is_empty() {
-                builder.append_null();
+
+            if len != 0 {
+                builder
+                    .try_append_view(0, start.as_usize() as u32, len as u32)
+                    .unwrap();
             } else {
-                builder.append_value(b);
+                builder.append_null();
             }
         }
         builder
