@@ -57,14 +57,26 @@ fn binary_capacity<T: ByteArrayType>(arrays: &[&dyn Array]) -> Capacities {
 fn fixed_size_list_capacity(arrays: &[&dyn Array], data_type: &DataType) -> Capacities {
     if let DataType::FixedSizeList(f, _) = data_type {
         let item_capacity = arrays.iter().map(|a| a.len()).sum();
-        let values: Vec<&dyn arrow_array::Array> = arrays
-            .iter()
-            .map(|a| a.as_fixed_size_list().values().as_ref())
-            .collect();
-        Capacities::List(
-            item_capacity,
-            Some(Box::new(get_capacity(&values, f.data_type()))),
-        )
+        let child_data_type = f.data_type();
+        match child_data_type {
+            // These types should match the types that `get_capacity`
+            // has special handling for.
+            DataType::Utf8
+            | DataType::LargeUtf8
+            | DataType::Binary
+            | DataType::LargeBinary
+            | DataType::FixedSizeList(_, _) => {
+                let values: Vec<&dyn arrow_array::Array> = arrays
+                    .iter()
+                    .map(|a| a.as_fixed_size_list().values().as_ref())
+                    .collect();
+                Capacities::List(
+                    item_capacity,
+                    Some(Box::new(get_capacity(&values, child_data_type))),
+                )
+            },
+            _ => Capacities::Array(item_capacity),
+        }
     } else {
         unreachable!("illegal data type for fixed size list")
     }
