@@ -116,10 +116,10 @@ mod levels;
 ///
 /// * [`IntervalMonthDayNanoArray`]: Parquet does not [support nanosecond intervals].
 ///
-/// [`DataType`]: arrow::datatypes::DataType
-/// [`StructArray`]: arrow::array::StructArray
-/// [`ListArray`]: arrow::array::ListArray
-/// [`IntervalMonthDayNanoArray`]: arrow::array::IntervalMonthDayNanoArray
+/// [`DataType`]: https://docs.rs/arrow/latest/arrow/datatypes/enum.DataType.html
+/// [`StructArray`]: https://docs.rs/arrow/latest/arrow/array/struct.StructArray.html
+/// [`ListArray`]: https://docs.rs/arrow/latest/arrow/array/type.ListArray.html
+/// [`IntervalMonthDayNanoArray`]: https://docs.rs/arrow/latest/arrow/array/type.IntervalMonthDayNanoArray.html
 /// [support nanosecond intervals]: https://github.com/apache/parquet-format/blob/master/LogicalTypes.md#interval
 pub struct ArrowWriter<W: Write> {
     /// Underlying Parquet writer
