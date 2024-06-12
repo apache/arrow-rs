@@ -876,13 +876,6 @@ fn write_leaf(writer: &mut ColumnWriter<'_>, levels: &ArrayLevels) -> Result<usi
 
                         get_interval_mdn_array_slice(array, indices)
                     }
-                    _ => {
-                        return Err(ParquetError::NYI(
-                            format!(
-                                "Attempting to write an Arrow interval type {interval_unit:?} to parquet that is not yet implemented"
-                            )
-                        ));
-                    }
                 },
                 ArrowDataType::FixedSizeBinary(_) => {
                     let array = column
