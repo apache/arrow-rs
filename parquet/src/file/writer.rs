@@ -212,6 +212,7 @@ impl<W: Write + Send> SerializedFileWriter<W> {
             row_bloom_filters.push(row_group_bloom_filter);
             row_column_indexes.push(row_group_column_index);
             row_offset_indexes.push(row_group_offset_index);
+            // write bloom filters out immediately after the row group if requested
             match bloom_filter_position {
                 BloomFilterPosition::AfterRowGroup => {
                     write_bloom_filters(buf, row_bloom_filters, &mut metadata)?
@@ -315,6 +316,7 @@ impl<W: Write + Send> SerializedFileWriter<W> {
         self.finished = true;
         let num_rows = self.row_groups.iter().map(|x| x.num_rows()).sum();
 
+        // write out any remaining bloom filters after all row groups
         for row_group in &mut self.row_groups {
             write_bloom_filters(&mut self.buf, &mut self.bloom_filters, row_group)?;
         }

@@ -508,7 +508,7 @@ impl WriterPropertiesBuilder {
         self
     }
 
-    /// Sets where in the final file Bloom Filters are written
+    /// Sets where in the final file Bloom Filters are written (default `AfterRowGroup`)
     pub fn set_bloom_filter_position(mut self, value: BloomFilterPosition) -> Self {
         self.bloom_filter_position = value;
         self
