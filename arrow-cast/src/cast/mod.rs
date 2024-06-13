@@ -5205,10 +5205,10 @@ mod tests {
 
     const VIEW_TEST_DATA: [Option<&str>; 5] = [
         Some("hello"),
-        Some("world"),
+        Some("repeated"),
         None,
         Some("large payload over 12 bytes"),
-        Some("lulu"),
+        Some("repeated"),
     ];
 
     fn _test_string_to_view<O>()
@@ -5292,6 +5292,26 @@ mod tests {
     }
 
     #[test]
+    fn test_view_to_dict() {
+        let string_view_array = StringViewArray::from_iter(VIEW_TEST_DATA);
+        let string_dict_array: DictionaryArray<Int8Type> = VIEW_TEST_DATA.into_iter().collect();
+        let casted_type = string_dict_array.data_type();
+        let casted_dict_array = cast(&string_view_array, casted_type).unwrap();
+        assert_eq!(casted_dict_array.data_type(), casted_type);
+        assert_eq!(casted_dict_array.as_ref(), &string_dict_array);
+
+        let binary_view_array = BinaryViewArray::from_iter(VIEW_TEST_DATA);
+        let binary_dict_array = string_dict_array.downcast_dict::<StringArray>().unwrap();
+        let binary_buffer = cast(&binary_dict_array.values(), &DataType::Binary).unwrap();
+        let binary_dict_array =
+            DictionaryArray::<Int8Type>::new(binary_dict_array.keys().clone(), binary_buffer);
+        let casted_type = binary_dict_array.data_type();
+        let casted_binary_array = cast(&binary_view_array, casted_type).unwrap();
+        assert_eq!(casted_binary_array.data_type(), casted_type);
+        assert_eq!(casted_binary_array.as_ref(), &binary_dict_array);
+    }
+
+    #[test]
     fn test_view_to_string() {
         _test_view_to_string::<i32>();
         _test_view_to_string::<i64>();
@@ -5330,23 +5350,15 @@ mod tests {
     where
         O: OffsetSizeTrait,
     {
-        let data: Vec<Option<&[u8]>> = vec![
-            Some(b"hello"),
-            Some(b"world"),
-            None,
-            Some(b"large payload over 12 bytes"),
-            Some(b"lulu"),
-        ];
-
         let view_array = {
             let mut builder = BinaryViewBuilder::new().with_block_size(8); // multiple buffers.
-            for s in data.iter() {
+            for s in VIEW_TEST_DATA.iter() {
                 builder.append_option(*s);
             }
             builder.finish()
         };
 
-        let expected_binary_array = GenericBinaryArray::<O>::from(data);
+        let expected_binary_array = GenericBinaryArray::<O>::from_iter(VIEW_TEST_DATA);
         let expected_type = expected_binary_array.data_type();
 
         assert!(can_cast_types(view_array.data_type(), expected_type));
