@@ -450,20 +450,17 @@ fn write_bloom_filters<W: Write + Send>(
         .expect("Negative row group ordinal");
     let row_group_idx = row_group_idx as usize;
     for (column_idx, column_chunk) in row_group.columns_mut().iter_mut().enumerate() {
-        match bloom_filters[row_group_idx][column_idx].take() {
-            Some(bloom_filter) => {
-                let start_offset = buf.bytes_written();
-                bloom_filter.write(&mut *buf)?;
-                let end_offset = buf.bytes_written();
-                // set offset and index for bloom filter
-                *column_chunk = column_chunk
-                    .clone()
-                    .into_builder()
-                    .set_bloom_filter_offset(Some(start_offset as i64))
-                    .set_bloom_filter_length(Some((end_offset - start_offset) as i32))
-                    .build()?;
-            }
-            None => {}
+        if let Some(bloom_filter) = bloom_filters[row_group_idx][column_idx].take() {
+            let start_offset = buf.bytes_written();
+            bloom_filter.write(&mut *buf)?;
+            let end_offset = buf.bytes_written();
+            // set offset and index for bloom filter
+            *column_chunk = column_chunk
+                .clone()
+                .into_builder()
+                .set_bloom_filter_offset(Some(start_offset as i64))
+                .set_bloom_filter_length(Some((end_offset - start_offset) as i32))
+                .build()?;
         }
     }
     Ok(())
