@@ -24,9 +24,9 @@ use arrow_buffer::{
     bit_util, i256, ArrowNativeType, Buffer, IntervalDayTime, IntervalMonthDayNano, MutableBuffer,
 };
 use arrow_schema::{ArrowError, DataType, UnionMode};
+use std::mem;
 use std::ops::Range;
 use std::sync::Arc;
-use std::{mem, usize};
 
 use crate::{equal, validate_binary_view, validate_string_view};
 
