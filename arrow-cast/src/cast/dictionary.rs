@@ -188,10 +188,34 @@ pub(crate) fn cast_to_dictionary<K: ArrowDictionaryKeyType>(
         Decimal256(_, _) => {
             pack_numeric_to_dictionary::<K, Decimal256Type>(array, dict_value_type, cast_options)
         }
-        Utf8 => pack_byte_to_dictionary::<K, GenericStringType<i32>>(array, cast_options),
-        LargeUtf8 => pack_byte_to_dictionary::<K, GenericStringType<i64>>(array, cast_options),
-        Binary => pack_byte_to_dictionary::<K, GenericBinaryType<i32>>(array, cast_options),
-        LargeBinary => pack_byte_to_dictionary::<K, GenericBinaryType<i64>>(array, cast_options),
+        Utf8 => {
+            // If the input is a view type, we can avoid casting (thus copying) the data
+            if array.data_type() == &DataType::Utf8View {
+                return string_view_to_dictionary::<K, i32>(array);
+            }
+            pack_byte_to_dictionary::<K, GenericStringType<i32>>(array, cast_options)
+        }
+        LargeUtf8 => {
+            // If the input is a view type, we can avoid casting (thus copying) the data
+            if array.data_type() == &DataType::Utf8View {
+                return string_view_to_dictionary::<K, i64>(array);
+            }
+            pack_byte_to_dictionary::<K, GenericStringType<i64>>(array, cast_options)
+        }
+        Binary => {
+            // If the input is a view type, we can avoid casting (thus copying) the data
+            if array.data_type() == &DataType::BinaryView {
+                return binary_view_to_dictionary::<K, i32>(array);
+            }
+            pack_byte_to_dictionary::<K, GenericBinaryType<i32>>(array, cast_options)
+        }
+        LargeBinary => {
+            // If the input is a view type, we can avoid casting (thus copying) the data
+            if array.data_type() == &DataType::BinaryView {
+                return binary_view_to_dictionary::<K, i64>(array);
+            }
+            pack_byte_to_dictionary::<K, GenericBinaryType<i64>>(array, cast_options)
+        }
         _ => Err(ArrowError::CastError(format!(
             "Unsupported output type for dictionary packing: {dict_value_type:?}"
         ))),
@@ -223,6 +247,58 @@ where
             b.append(values.value(i))?;
         }
     }
+    Ok(Arc::new(b.finish()))
+}
+
+pub(crate) fn string_view_to_dictionary<K, O: OffsetSizeTrait>(
+    array: &dyn Array,
+) -> Result<ArrayRef, ArrowError>
+where
+    K: ArrowDictionaryKeyType,
+{
+    let mut b = GenericByteDictionaryBuilder::<K, GenericStringType<O>>::with_capacity(
+        array.len(),
+        1024,
+        1024,
+    );
+    let string_view = array.as_any().downcast_ref::<StringViewArray>().unwrap();
+    for v in string_view.iter() {
+        match v {
+            Some(v) => {
+                b.append(v)?;
+            }
+            None => {
+                b.append_null();
+            }
+        }
+    }
+
+    Ok(Arc::new(b.finish()))
+}
+
+pub(crate) fn binary_view_to_dictionary<K, O: OffsetSizeTrait>(
+    array: &dyn Array,
+) -> Result<ArrayRef, ArrowError>
+where
+    K: ArrowDictionaryKeyType,
+{
+    let mut b = GenericByteDictionaryBuilder::<K, GenericBinaryType<O>>::with_capacity(
+        array.len(),
+        1024,
+        1024,
+    );
+    let binary_view = array.as_any().downcast_ref::<BinaryViewArray>().unwrap();
+    for v in binary_view.iter() {
+        match v {
+            Some(v) => {
+                b.append(v)?;
+            }
+            None => {
+                b.append_null();
+            }
+        }
+    }
+
     Ok(Arc::new(b.finish()))
 }
 
