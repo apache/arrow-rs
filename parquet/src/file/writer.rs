@@ -1469,7 +1469,7 @@ mod tests {
             assert_eq!(flushed.len(), idx + 1);
             assert_eq!(Some(idx as i16), last_group.ordinal());
             assert_eq!(Some(row_group_file_offset as i64), last_group.file_offset());
-            assert_eq!(flushed[idx], Arc::unwrap_or_clone(last_group));
+            assert_eq!(&flushed[idx], last_group.as_ref());
         }
         let file_metadata = file_writer.close().unwrap();
 
