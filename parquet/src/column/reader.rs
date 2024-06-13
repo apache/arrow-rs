@@ -672,8 +672,8 @@ mod tests {
         NUM_PAGES,
         NUM_LEVELS,
         16,
-        std::i32::MIN,
-        std::i32::MAX
+        i32::MIN,
+        i32::MAX
     );
     test!(
         test_read_plain_v2_int32,
@@ -684,8 +684,8 @@ mod tests {
         NUM_PAGES,
         NUM_LEVELS,
         16,
-        std::i32::MIN,
-        std::i32::MAX
+        i32::MIN,
+        i32::MAX
     );
 
     test!(
@@ -697,8 +697,8 @@ mod tests {
         NUM_PAGES,
         NUM_LEVELS,
         17,
-        std::i32::MIN,
-        std::i32::MAX
+        i32::MIN,
+        i32::MAX
     );
     test!(
         test_read_plain_v2_int32_uneven,
@@ -709,8 +709,8 @@ mod tests {
         NUM_PAGES,
         NUM_LEVELS,
         17,
-        std::i32::MIN,
-        std::i32::MAX
+        i32::MIN,
+        i32::MAX
     );
 
     test!(
@@ -722,8 +722,8 @@ mod tests {
         NUM_PAGES,
         NUM_LEVELS,
         512,
-        std::i32::MIN,
-        std::i32::MAX
+        i32::MIN,
+        i32::MAX
     );
     test!(
         test_read_plain_v2_int32_multi_page,
@@ -734,8 +734,8 @@ mod tests {
         NUM_PAGES,
         NUM_LEVELS,
         512,
-        std::i32::MIN,
-        std::i32::MAX
+        i32::MIN,
+        i32::MAX
     );
 
     // test cases when column descriptor has MAX_DEF_LEVEL = 0 and MAX_REP_LEVEL = 0
@@ -748,8 +748,8 @@ mod tests {
         NUM_PAGES,
         NUM_LEVELS,
         16,
-        std::i32::MIN,
-        std::i32::MAX
+        i32::MIN,
+        i32::MAX
     );
     test!(
         test_read_plain_v2_int32_required_non_repeated,
@@ -760,8 +760,8 @@ mod tests {
         NUM_PAGES,
         NUM_LEVELS,
         16,
-        std::i32::MIN,
-        std::i32::MAX
+        i32::MIN,
+        i32::MAX
     );
 
     test!(
@@ -773,8 +773,8 @@ mod tests {
         NUM_PAGES,
         NUM_LEVELS,
         16,
-        std::i64::MIN,
-        std::i64::MAX
+        i64::MIN,
+        i64::MAX
     );
     test!(
         test_read_plain_v2_int64,
@@ -785,8 +785,8 @@ mod tests {
         NUM_PAGES,
         NUM_LEVELS,
         16,
-        std::i64::MIN,
-        std::i64::MAX
+        i64::MIN,
+        i64::MAX
     );
 
     test!(
@@ -798,8 +798,8 @@ mod tests {
         NUM_PAGES,
         NUM_LEVELS,
         17,
-        std::i64::MIN,
-        std::i64::MAX
+        i64::MIN,
+        i64::MAX
     );
     test!(
         test_read_plain_v2_int64_uneven,
@@ -810,8 +810,8 @@ mod tests {
         NUM_PAGES,
         NUM_LEVELS,
         17,
-        std::i64::MIN,
-        std::i64::MAX
+        i64::MIN,
+        i64::MAX
     );
 
     test!(
@@ -823,8 +823,8 @@ mod tests {
         NUM_PAGES,
         NUM_LEVELS,
         512,
-        std::i64::MIN,
-        std::i64::MAX
+        i64::MIN,
+        i64::MAX
     );
     test!(
         test_read_plain_v2_int64_multi_page,
@@ -835,8 +835,8 @@ mod tests {
         NUM_PAGES,
         NUM_LEVELS,
         512,
-        std::i64::MIN,
-        std::i64::MAX
+        i64::MIN,
+        i64::MAX
     );
 
     // test cases when column descriptor has MAX_DEF_LEVEL = 0 and MAX_REP_LEVEL = 0
@@ -849,8 +849,8 @@ mod tests {
         NUM_PAGES,
         NUM_LEVELS,
         16,
-        std::i64::MIN,
-        std::i64::MAX
+        i64::MIN,
+        i64::MAX
     );
     test!(
         test_read_plain_v2_int64_required_non_repeated,
@@ -861,8 +861,8 @@ mod tests {
         NUM_PAGES,
         NUM_LEVELS,
         16,
-        std::i64::MIN,
-        std::i64::MAX
+        i64::MIN,
+        i64::MAX
     );
 
     test!(
@@ -1037,8 +1037,8 @@ mod tests {
             num_pages,
             num_levels,
             batch_size,
-            std::i32::MIN,
-            std::i32::MAX,
+            i32::MIN,
+            i32::MAX,
             false,
         );
     }

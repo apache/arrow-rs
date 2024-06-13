@@ -331,6 +331,10 @@ impl Schema {
 
     /// Returns an immutable reference of a specific [`Field`] instance selected using an
     /// offset within the internal `fields` vector.
+    ///
+    /// # Panics
+    ///
+    /// Panics if index out of bounds
     pub fn field(&self, i: usize) -> &Field {
         &self.fields[i]
     }

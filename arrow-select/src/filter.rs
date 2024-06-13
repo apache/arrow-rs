@@ -552,7 +552,10 @@ fn filter_native<T: ArrowNativeType>(values: &[T], predicate: &FilterPredicate) 
 }
 
 /// `filter` implementation for primitive arrays
-fn filter_primitive<T>(array: &PrimitiveArray<T>, predicate: &FilterPredicate) -> PrimitiveArray<T>
+pub(crate) fn filter_primitive<T>(
+    array: &PrimitiveArray<T>,
+    predicate: &FilterPredicate,
+) -> PrimitiveArray<T>
 where
     T: ArrowPrimitiveType,
 {
