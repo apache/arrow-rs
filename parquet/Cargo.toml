@@ -67,9 +67,7 @@ hashbrown = { version = "0.14", default-features = false }
 twox-hash = { version = "1.6", default-features = false }
 paste = { version = "1.0" }
 half = { version = "2.1", default-features = false, features = ["num-traits"] }
-
-dsi-progress-logger = { version = "0.2.4", optional = true }
-simplelog = { version = "0.12.2", optional = true }
+sysinfo = { version = "0.30.12", optional = true, default-features = false }
 
 [dev-dependencies]
 base64 = { version = "0.22", default-features = false, features = ["std"] }
@@ -117,8 +115,8 @@ async = ["futures", "tokio"]
 object_store = ["dep:object_store", "async"]
 # Group Zstd dependencies
 zstd = ["dep:zstd", "zstd-sys"]
-# Enable progress logging
-log = ["dep:simplelog", "dep:dsi-progress-logger"]
+# Display memory in example/write_parquet.rs
+sysinfo = ["dep:sysinfo"]
 
 [[example]]
 name = "read_parquet"
@@ -127,7 +125,7 @@ path = "./examples/read_parquet.rs"
 
 [[example]]
 name = "write_parquet"
-required-features = ["log"]
+required-features = ["cli", "sysinfo"]
 path = "./examples/write_parquet.rs"
 
 [[example]]
