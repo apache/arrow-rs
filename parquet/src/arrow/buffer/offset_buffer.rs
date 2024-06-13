@@ -157,7 +157,7 @@ impl<I: OffsetSizeTrait> OffsetBuffer<I> {
     fn build_generic_byte_view(self) -> GenericByteViewBuilder<BinaryViewType> {
         let mut builder = GenericByteViewBuilder::<BinaryViewType>::with_capacity(self.len());
         let buffer = self.values.into();
-        builder.append_block(buffer);
+        let block = builder.append_block(buffer);
         for window in self.offsets.windows(2) {
             let start = window[0];
             let end = window[1];
@@ -165,7 +165,7 @@ impl<I: OffsetSizeTrait> OffsetBuffer<I> {
 
             if len != 0 {
                 builder
-                    .try_append_view(0, start.as_usize() as u32, len as u32)
+                    .try_append_view(block, start.as_usize() as u32, len as u32)
                     .unwrap();
             } else {
                 builder.append_null();
