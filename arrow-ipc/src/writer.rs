@@ -1742,7 +1742,7 @@ mod tests {
         let array1 = NullArray::new(32);
         let array2 = Int32Array::from(vec![1; 32]);
         let array3 = NullArray::new(32);
-        let array4 = Float64Array::from(vec![std::f64::NAN; 32]);
+        let array4 = Float64Array::from(vec![f64::NAN; 32]);
         let batch = RecordBatch::try_new(
             Arc::new(schema.clone()),
             vec![
