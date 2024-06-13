@@ -85,8 +85,67 @@ pub(crate) fn dictionary_cast<K: ArrowDictionaryKeyType>(
 
             Ok(new_array)
         }
+        Utf8View => {
+            // `unpack_dictionary` can handle Utf8View/BinaryView types, but incurs unnecessary data copy of the value buffer.
+            // we handle it here to avoid the copy.
+            let dict_array = array
+                .as_dictionary::<K>()
+                .downcast_dict::<StringArray>()
+                .unwrap();
+
+            let string_view = view_from_dict_values::<K, StringViewType, GenericStringType<i32>>(
+                dict_array.values(),
+                dict_array.keys(),
+            );
+            Ok(Arc::new(string_view))
+        }
+        BinaryView => {
+            // `unpack_dictionary` can handle Utf8View/BinaryView types, but incurs unnecessary data copy of the value buffer.
+            // we handle it here to avoid the copy.
+            let dict_array = array
+                .as_dictionary::<K>()
+                .downcast_dict::<BinaryArray>()
+                .unwrap();
+
+            let binary_view = view_from_dict_values::<K, BinaryViewType, BinaryType>(
+                dict_array.values(),
+                dict_array.keys(),
+            );
+            Ok(Arc::new(binary_view))
+        }
         _ => unpack_dictionary::<K>(array, to_type, cast_options),
     }
+}
+
+fn view_from_dict_values<K: ArrowDictionaryKeyType, T: ByteViewType, V: ByteArrayType>(
+    array: &GenericByteArray<V>,
+    keys: &PrimitiveArray<K>,
+) -> GenericByteViewArray<T> {
+    let value_buffer = array.values();
+    let value_offsets = array.value_offsets();
+    let mut builder = GenericByteViewBuilder::<T>::with_capacity(keys.len());
+    builder.append_block(value_buffer.clone());
+    for i in keys.iter() {
+        match i {
+            Some(v) => {
+                let idx = v.to_usize().unwrap();
+
+                // Safety
+                // (1) The index is within bounds as they are offsets
+                // (2) The append_view is safe
+                unsafe {
+                    let offset = value_offsets.get_unchecked(idx).as_usize();
+                    let end = value_offsets.get_unchecked(idx + 1).as_usize();
+                    let length = end - offset;
+                    builder.append_view_unchecked(0, offset as u32, length as u32)
+                }
+            }
+            None => {
+                builder.append_null();
+            }
+        }
+    }
+    builder.finish()
 }
 
 // Unpack a dictionary where the keys are of type <K> into a flattened array of type to_type
