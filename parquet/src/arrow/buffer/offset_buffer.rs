@@ -164,9 +164,10 @@ impl<I: OffsetSizeTrait> OffsetBuffer<I> {
             let len = (end - start).to_usize().unwrap();
 
             if len != 0 {
-                builder
-                    .try_append_view(block, start.as_usize() as u32, len as u32)
-                    .unwrap();
+                // Safety: (1) the buffer is valid (2) the offsets are valid (3) the values in between are of ByteViewType
+                unsafe {
+                    builder.append_view_unchecked(block, start.as_usize() as u32, len as u32);
+                }
             } else {
                 builder.append_null();
             }
