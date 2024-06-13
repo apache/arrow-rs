@@ -271,12 +271,18 @@ impl ArrowReaderOptions {
         }
     }
 
-    /// Enable decoding of the [`PageIndex`], if present (defaults to `false`)
+    /// Enable reading [`PageIndex`], if present (defaults to `false`)
     ///
     /// The `PageIndex` can be used to push down predicates to the parquet scan,
     /// potentially eliminating unnecessary IO, by some query engines.
     ///
+    /// If this is enabled, [`ParquetMetaData::column_index`] and
+    /// [`ParquetMetaData::offset_index`] will be populated if the corresponding
+    /// information is present in the file.
+    ///
     /// [`PageIndex`]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
+    /// [`ParquetMetaData::column_index`]: crate::file::metadata::ParquetMetaData::column_index
+    /// [`ParquetMetaData::offset_index`]: crate::file::metadata::ParquetMetaData::offset_index
     pub fn with_page_index(self, page_index: bool) -> Self {
         Self { page_index, ..self }
     }

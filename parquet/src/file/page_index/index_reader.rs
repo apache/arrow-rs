@@ -73,8 +73,8 @@ pub fn read_columns_indexes<R: ChunkReader>(
         .collect()
 }
 
-/// Reads per-page [`PageLocation`] for all columns of a row group by
-/// decoding the [`OffsetIndex`].
+/// Reads [`OffsetIndex`],  per-page [`PageLocation`] for all columns of a row
+/// group.
 ///
 /// Returns a vector of `location[column_number][page_number]`
 ///

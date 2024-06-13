@@ -30,6 +30,7 @@
 //!   within a Row Group including encoding and compression information,
 //!   number of values, statistics, etc.
 
+use crate::arrow::arrow_reader::ArrowReaderOptions;
 use std::ops::Range;
 use std::sync::Arc;
 
@@ -69,20 +70,20 @@ pub type ParquetColumnIndex = Vec<Vec<Index>>;
 /// parquet file.
 pub type ParquetOffsetIndex = Vec<Vec<Vec<PageLocation>>>;
 
-/// Global Parquet metadata, including [`FileMetaData`], [`RowGroupMetaData`].
+/// Parsed metadata for a single Parquet file
 ///
 /// This structure is stored in the footer of Parquet files, in the format
-/// defined by [`parquet.thrift`]. It contains:
+/// defined by [`parquet.thrift`].
 ///
-/// * File level metadata: [`FileMetaData`]
-/// * Row Group level metadata: [`RowGroupMetaData`]
-/// * (Optional) "Page Index" structures: [`ParquetColumnIndex`] and [`ParquetOffsetIndex`]
-///
-/// [`parquet.thrift`]: https://github.com/apache/parquet-format/blob/master/src/main/thrift/parquet.thrift
+/// # Overview
+/// * [`FileMetaData`]: Information about the overall file (such as the schema) (See [`Self::file_metadata`])
+/// * [`RowGroupMetaData`]: Information about each Row Group (see [`Self::row_groups`])
+/// * [`ParquetColumnIndex`] and [`ParquetOffsetIndex`]: Optional "Page Index" structures (see [`Self::column_index`] and [`Self::offset_index`])
 ///
 /// This structure is read by the various readers in this crate or can be read
 /// directly from a file using the [`parse_metadata`] function.
 ///
+/// [`parquet.thrift`]: https://github.com/apache/parquet-format/blob/master/src/main/thrift/parquet.thrift
 /// [`parse_metadata`]: crate::file::footer::parse_metadata
 #[derive(Debug, Clone)]
 pub struct ParquetMetaData {
@@ -152,6 +153,9 @@ impl ParquetMetaData {
     }
 
     /// Returns the column index for this file if loaded
+    ///
+    /// Returns `None` if the parquet file does not have a `ColumnIndex` or
+    /// [ArrowReaderOptions::with_page_index] was set to false.
     pub fn column_index(&self) -> Option<&ParquetColumnIndex> {
         self.column_index.as_ref()
     }
@@ -162,7 +166,10 @@ impl ParquetMetaData {
         self.offset_index.as_ref()
     }
 
-    /// Returns offset indexes in this file.
+    /// Returns offset indexes in this file, if loaded
+    ///
+    /// Returns `None` if the parquet file does not have a `OffsetIndex` or
+    /// [ArrowReaderOptions::with_page_index] was set to false.
     pub fn offset_index(&self) -> Option<&ParquetOffsetIndex> {
         self.offset_index.as_ref()
     }
