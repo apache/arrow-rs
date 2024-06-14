@@ -35,7 +35,7 @@ logging = ["tracing-subscriber"]
 
 [dependencies]
 arrow = { path = "../arrow", default-features = false, features = ["test_utils", "ipc", "ipc_compression", "json", "ffi"] }
-arrow-flight = { path = "../arrow-flight", default-features = false }
+arrow-flight = { path = "../arrow-flight", default-features = false, features = ["client"] }
 arrow-buffer = { path = "../arrow-buffer", default-features = false }
 arrow-integration-test = { path = "../arrow-integration-test", default-features = false }
 async-trait = { version = "0.1.41", default-features = false }
