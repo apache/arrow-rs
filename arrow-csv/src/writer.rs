@@ -375,6 +375,17 @@ impl WriterBuilder {
         self.timestamp_format.as_deref()
     }
 
+    /// Set the CSV file's timestamp tz format
+    pub fn with_timestamp_tz_format(mut self, tz_format: String) -> Self {
+        self.timestamp_tz_format = Some(tz_format);
+        self
+    }
+
+    /// Get the CSV file's timestamp tz format if set, defaults to RFC3339
+    pub fn timestamp_tz_format(&self) -> Option<&str> {
+        self.timestamp_tz_format.as_deref()
+    }
+
     /// Set the value to represent null in output
     pub fn with_null(mut self, null_value: String) -> Self {
         self.null_value = Some(null_value);
