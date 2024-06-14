@@ -699,6 +699,7 @@ mod tests {
     #[test]
     fn test_gc() {
         let test_data = [
+            Some("longer than 12 bytes"),
             Some("short"),
             Some("t"),
             Some("longer than 12 bytes"),
@@ -711,9 +712,11 @@ mod tests {
             test_data.into_iter().for_each(|v| builder.append_option(v));
             builder.finish()
         };
+        assert!(array.buffers.len() > 1);
 
         fn check_gc(to_test: &StringViewArray) {
             let gc = to_test.gc();
+            assert_ne!(to_test.data_buffers().len(), gc.data_buffers().len());
 
             to_test.iter().zip(gc.iter()).for_each(|(a, b)| {
                 assert_eq!(a, b);
