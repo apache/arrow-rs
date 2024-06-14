@@ -698,29 +698,33 @@ mod tests {
 
     #[test]
     fn test_gc() {
-        let mut array = StringViewArray::from_iter_values(["while my guitar gently weeps"]);
-        // shrink the view
-        let mut view = ByteView::from(array.views[0]);
-        view.length = 15;
-        let new_views = ScalarBuffer::from(vec![view.into()]);
-        array.views = new_views;
-        let compacted = array.gc();
-        assert_ne!(array.buffers[0].as_ptr(), compacted.buffers[0].as_ptr());
-        assert_eq!(array.value(0), compacted.value(0));
+        let test_data = [
+            Some("short"),
+            Some("t"),
+            Some("longer than 12 bytes"),
+            None,
+            Some("short"),
+        ];
 
-        // test compact on array containing null
-        let mut array =
-            StringViewArray::from_iter([None, Some("I don't know why nobody told you")]);
+        let array = {
+            let mut builder = StringViewBuilder::new().with_block_size(8); // create multiple buffers
+            test_data.into_iter().for_each(|v| builder.append_option(v));
+            builder.finish()
+        };
 
-        let mut view = ByteView::from(array.views[1]);
-        view.length = 15;
-        let new_views = ScalarBuffer::from(vec![array.views[0], view.into()]);
-        array.views = new_views;
+        fn check_gc(to_test: &StringViewArray) {
+            let gc = to_test.gc();
 
-        let compacted = array.gc();
+            to_test.iter().zip(gc.iter()).for_each(|(a, b)| {
+                assert_eq!(a, b);
+            });
+            assert_eq!(to_test.len(), gc.len());
+        }
 
-        assert_ne!(array.buffers[0].as_ptr(), compacted.buffers[0].as_ptr());
-        assert_eq!(array.value(0), compacted.value(0));
-        assert_eq!(array.value(1), compacted.value(1));
+        check_gc(&array);
+        check_gc(&array.slice(1, 3));
+        check_gc(&array.slice(2, 1));
+        check_gc(&array.slice(2, 2));
+        check_gc(&array.slice(3, 1));
     }
 }
