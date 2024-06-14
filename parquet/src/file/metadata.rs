@@ -29,8 +29,6 @@
 //! * [`ColumnChunkMetaData`]: Metadata for each column chunk (primitive leaf)
 //!   within a Row Group including encoding and compression information,
 //!   number of values, statistics, etc.
-
-use crate::arrow::arrow_reader::ArrowReaderOptions;
 use std::ops::Range;
 use std::sync::Arc;
 
@@ -156,6 +154,8 @@ impl ParquetMetaData {
     ///
     /// Returns `None` if the parquet file does not have a `ColumnIndex` or
     /// [ArrowReaderOptions::with_page_index] was set to false.
+    ///
+    /// [ArrowReaderOptions::with_page_index]: https://docs.rs/parquet/latest/parquet/arrow/arrow_reader/struct.ArrowReaderOptions.html#method.with_page_index
     pub fn column_index(&self) -> Option<&ParquetColumnIndex> {
         self.column_index.as_ref()
     }
@@ -170,6 +170,8 @@ impl ParquetMetaData {
     ///
     /// Returns `None` if the parquet file does not have a `OffsetIndex` or
     /// [ArrowReaderOptions::with_page_index] was set to false.
+    ///
+    /// [ArrowReaderOptions::with_page_index]: https://docs.rs/parquet/latest/parquet/arrow/arrow_reader/struct.ArrowReaderOptions.html#method.with_page_index
     pub fn offset_index(&self) -> Option<&ParquetOffsetIndex> {
         self.offset_index.as_ref()
     }
