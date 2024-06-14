@@ -25,7 +25,7 @@ use futures::{FutureExt, TryFutureExt};
 use object_store::{ObjectMeta, ObjectStore};
 
 use crate::arrow::async_reader::{AsyncFileReader, MetadataLoader};
-use crate::errors::{ParquetError, Result};
+use crate::errors::Result;
 use crate::file::metadata::ParquetMetaData;
 
 /// Reads Parquet files in object storage using [`ObjectStore`].
@@ -105,7 +105,7 @@ impl AsyncFileReader for ParquetObjectReader {
     fn get_bytes(&mut self, range: Range<usize>) -> BoxFuture<'_, Result<Bytes>> {
         self.store
             .get_range(&self.meta.location, range)
-            .map_err(|e| ParquetError::General(format!("AsyncChunkReader::get_bytes error: {e}")))
+            .map_err(|e| e.into())
             .boxed()
     }
 
@@ -117,11 +117,7 @@ impl AsyncFileReader for ParquetObjectReader {
             self.store
                 .get_ranges(&self.meta.location, &ranges)
                 .await
-                .map_err(|e| {
-                    ParquetError::General(format!(
-                        "ParquetObjectReader::get_byte_ranges error: {e}"
-                    ))
-                })
+                .map_err(|e| e.into())
         }
         .boxed()
     }
