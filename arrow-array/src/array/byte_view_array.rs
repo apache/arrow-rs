@@ -266,7 +266,7 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
         }
     }
 
-    /// Returns a buffer compact version of this array
+    /// Returns a "compacted" version of this array
     ///
     /// The original array will *not* be modified
     ///
