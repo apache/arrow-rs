@@ -2308,7 +2308,7 @@ mod tests {
             ),
             (
                 invalid_utf8_later_char::<i32>(),
-                "Parquet argument error: Parquet error: encountered non UTF-8 data: invalid utf-8 sequence of 1 bytes from index 3",
+                "Parquet argument error: Parquet error: encountered non UTF-8 data: invalid utf-8 sequence of 1 bytes from index 6",
             ),
         ];
         for (array, expected_error) in cases {
