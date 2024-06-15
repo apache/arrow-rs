@@ -71,6 +71,11 @@ impl Buffer {
         }
     }
 
+    /// Returns the internal byte buffer.
+    pub fn get_bytes(&self) -> Arc<Bytes> {
+        self.data.clone()
+    }
+
     /// Create a [`Buffer`] from the provided [`Vec`] without copying
     #[inline]
     pub fn from_vec<T: ArrowNativeType>(vec: Vec<T>) -> Self {

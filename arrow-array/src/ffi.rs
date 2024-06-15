@@ -1225,6 +1225,7 @@ mod tests_from_ffi {
     use std::sync::Arc;
 
     use arrow_buffer::{bit_util, buffer::Buffer, MutableBuffer, OffsetBuffer};
+    use arrow_data::transform::MutableArrayData;
     use arrow_data::ArrayData;
     use arrow_schema::{DataType, Field};
 
@@ -1234,6 +1235,7 @@ mod tests_from_ffi {
             Int32Array, Int64Array, StringArray, StructArray, UInt32Array, UInt64Array,
         },
         ffi::{from_ffi, FFI_ArrowArray, FFI_ArrowSchema},
+        make_array, ArrayRef,
     };
 
     use super::{ImportedArrowArray, Result};
@@ -1457,5 +1459,59 @@ mod tests_from_ffi {
         assert_eq!(data_buf_len, 0);
 
         test_round_trip(&imported_array.consume()?)
+    }
+
+    fn export_string(array: StringArray) -> StringArray {
+        let data = array.into_data();
+
+        let array = FFI_ArrowArray::new(&data);
+        let schema = FFI_ArrowSchema::try_from(data.data_type()).unwrap();
+
+        let array = unsafe { from_ffi(array, &schema) }.unwrap();
+        StringArray::from(array)
+    }
+
+    fn extend_array(array: &dyn Array) -> ArrayRef {
+        let len = array.len();
+        let data = array.to_data();
+
+        let mut mutable = MutableArrayData::new(vec![&data], false, len);
+        mutable.extend(0, 0, len);
+        make_array(mutable.freeze())
+    }
+
+    #[test]
+    fn test_extend_imported_string_slice() {
+        let mut strings = vec![];
+
+        for i in 0..1000 {
+            strings.push(format!("string: {}", i));
+        }
+
+        let string_array = StringArray::from(strings);
+
+        let imported = export_string(string_array.clone());
+        assert_eq!(imported.len(), 1000);
+        assert_eq!(imported.value(0), "string: 0");
+        assert_eq!(imported.value(499), "string: 499");
+
+        let copied = extend_array(&imported);
+        assert_eq!(
+            copied.as_any().downcast_ref::<StringArray>().unwrap(),
+            &imported
+        );
+
+        let slice = string_array.slice(500, 500);
+
+        let imported = export_string(slice);
+        assert_eq!(imported.len(), 500);
+        assert_eq!(imported.value(0), "string: 500");
+        assert_eq!(imported.value(499), "string: 999");
+
+        let copied = extend_array(&imported);
+        assert_eq!(
+            copied.as_any().downcast_ref::<StringArray>().unwrap(),
+            &imported
+        );
     }
 }
