@@ -20,7 +20,7 @@ use crate::builder::GenericByteViewBuilder;
 use crate::iterator::ArrayIter;
 use crate::types::bytes::ByteArrayNativeType;
 use crate::types::{BinaryViewType, ByteViewType, StringViewType};
-use crate::{Array, ArrayAccessor, ArrayRef};
+use crate::{Array, ArrayAccessor, ArrayRef, Scalar};
 use arrow_buffer::{Buffer, NullBuffer, ScalarBuffer};
 use arrow_data::{ArrayData, ArrayDataBuilder, ByteView};
 use arrow_schema::{ArrowError, DataType};
@@ -184,6 +184,11 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
             nulls: Some(NullBuffer::new_null(len)),
             phantom: Default::default(),
         }
+    }
+
+    /// Create a new [`Scalar`] from `value`
+    pub fn new_scalar(value: impl AsRef<T::Native>) -> Scalar<Self> {
+        Scalar::new(Self::from_iter_values(std::iter::once(value)))
     }
 
     /// Creates a [`GenericByteViewArray`] based on an iterator of values without nulls

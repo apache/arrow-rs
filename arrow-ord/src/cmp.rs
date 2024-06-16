@@ -24,10 +24,10 @@
 //!
 
 use arrow_array::cast::AsArray;
-use arrow_array::types::ByteArrayType;
+use arrow_array::types::{ByteArrayType, ByteViewType};
 use arrow_array::{
     downcast_primitive_array, AnyDictionaryArray, Array, ArrowNativeTypeOp, BooleanArray, Datum,
-    FixedSizeBinaryArray, GenericByteArray,
+    FixedSizeBinaryArray, GenericByteArray, GenericByteViewArray,
 };
 use arrow_buffer::bit_util::ceil;
 use arrow_buffer::{BooleanBuffer, MutableBuffer, NullBuffer};
@@ -228,6 +228,7 @@ fn compare_op(op: Op, lhs: &dyn Datum, rhs: &dyn Datum) -> Result<BooleanArray, 
             (l, r) => apply(op, l.values().as_ref(), l_s, l_v, r.values().as_ref(), r_s, r_v),
             (Boolean, Boolean) => apply(op, l.as_boolean(), l_s, l_v, r.as_boolean(), r_s, r_v),
             (Utf8, Utf8) => apply(op, l.as_string::<i32>(), l_s, l_v, r.as_string::<i32>(), r_s, r_v),
+            (Utf8View, Utf8View) => apply(op, l.as_string_view(), l_s, l_v, r.as_string_view(), r_s, r_v),
             (LargeUtf8, LargeUtf8) => apply(op, l.as_string::<i64>(), l_s, l_v, r.as_string::<i64>(), r_s, r_v),
             (Binary, Binary) => apply(op, l.as_binary::<i32>(), l_s, l_v, r.as_binary::<i32>(), r_s, r_v),
             (LargeBinary, LargeBinary) => apply(op, l.as_binary::<i64>(), l_s, l_v, r.as_binary::<i64>(), r_s, r_v),
@@ -459,7 +460,7 @@ fn apply_op_vectored<T: ArrayOrd>(
 }
 
 trait ArrayOrd {
-    type Item: Copy + Default;
+    type Item: Copy;
 
     fn len(&self) -> usize;
 
@@ -535,6 +536,136 @@ impl<'a, T: ByteArrayType> ArrayOrd for &'a GenericByteArray<T> {
 
     fn is_lt(l: Self::Item, r: Self::Item) -> bool {
         l < r
+    }
+}
+
+/// Comparing two ByteView types are non-trivial.
+/// It takes a bit of patience to understand why we don't just compare two &[u8] directly.
+///
+/// ByteView types give us the following two advantages, and we need to be careful not to lose them:
+/// (1) For string/byte smaller than 12 bytes, the entire data is inlined in the view.
+///     Meaning that reading one array element requires only one memory access
+///     (two memory access required for StringArray, one for offset buffer, the other for value buffer).
+///
+/// (2) For string/byte larger than 12 bytes, we can still be faster than (for certain operations) StringArray/ByteArray,
+///     thanks to the inlined 4 bytes.
+///
+///     Consider equality check:
+///     If the first four bytes of the two strings are different, we can return false immediately (with just one memory access).
+///     If we are unlucky and the first four bytes are the same, we need to fallback to compare two full strings.
+///
+/// If we directly load the data using `GenericByteViewArray::value_unchecked`, we load the entire string and make multiple memory accesses;
+/// but most of the time (eq, ord), we only only need to look at the first 4 bytes to know the answer, thus not utilizing the inlined data.
+impl<'a, T: ByteViewType> ArrayOrd for &'a GenericByteViewArray<T> {
+    type Item = (&'a GenericByteViewArray<T>, usize);
+
+    /// # Equality check flow
+    /// (1) if both string are smaller than 12 bytes, we can directly compare the data inlined to the view.
+    /// (2) if any of the string is larger than 12 bytes, we need to compare the full string.
+    ///     (2.1) if the inlined 4 bytes are different, we can return false immediately.
+    ///     (2.2) o.w., we need to compare the full string.
+    ///
+    /// # Safety
+    /// (1) Indexing. The Self::Item.1 encodes the index value, which is already checked in `value` function,
+    ///               so it is safe to index into the views.
+    /// (2) Slice data from view. We know the bytes 4-8 are inlined data (per spec), so it is safe to slice from the view.
+    fn is_eq(l: Self::Item, r: Self::Item) -> bool {
+        let l_view = unsafe { l.0.views().get_unchecked(l.1) };
+        let l_len = *l_view as u32;
+
+        let r_view = unsafe { r.0.views().get_unchecked(r.1) };
+        let r_len = *r_view as u32;
+
+        if l_len != r_len {
+            return false;
+        }
+
+        if l_len <= 12 {
+            let l_data = unsafe {
+                std::slice::from_raw_parts(
+                    (l_view as *const u128 as *const u8).wrapping_add(4),
+                    l_len as usize,
+                )
+            };
+            let r_data = unsafe {
+                std::slice::from_raw_parts(
+                    (r_view as *const u128 as *const u8).wrapping_add(4),
+                    r_len as usize,
+                )
+            };
+            l_data == r_data
+        } else {
+            let l_inlined_data = unsafe {
+                std::slice::from_raw_parts((l_view as *const u128 as *const u8).wrapping_add(4), 4)
+            };
+            let r_inlined_data = unsafe {
+                std::slice::from_raw_parts((r_view as *const u128 as *const u8).wrapping_add(4), 4)
+            };
+            if l_inlined_data != r_inlined_data {
+                return false;
+            }
+
+            let l_full_data: &[u8] = unsafe { l.0.value_unchecked(l.1).as_ref() };
+            let r_full_data: &[u8] = unsafe { r.0.value_unchecked(r.1).as_ref() };
+            l_full_data == r_full_data
+        }
+    }
+
+    /// # Ordering check flow
+    /// (1) if both string are smaller than 12 bytes, we can directly compare the data inlined to the view.
+    /// (2) if any of the string is larger than 12 bytes, we need to compare the full string.
+    ///     (2.1) if the inlined 4 bytes are different, we can return the result immediately.
+    ///     (2.2) o.w., we need to compare the full string.
+    ///
+    /// # Safety
+    /// (1) Indexing. The Self::Item.1 encodes the index value, which is already checked in `value` function,
+    ///              so it is safe to index into the views.
+    /// (2) Slice data from view. We know the bytes 4-8 are inlined data (per spec), so it is safe to slice from the view.
+    fn is_lt(l: Self::Item, r: Self::Item) -> bool {
+        let l_view = l.0.views().get(l.1).unwrap();
+        let l_len = *l_view as u32;
+
+        let r_view = r.0.views().get(r.1).unwrap();
+        let r_len = *r_view as u32;
+
+        if l_len <= 12 && r_len <= 12 {
+            let l_data = unsafe {
+                std::slice::from_raw_parts(
+                    (l_view as *const u128 as *const u8).wrapping_add(4),
+                    l_len as usize,
+                )
+            };
+            let r_data = unsafe {
+                std::slice::from_raw_parts(
+                    (r_view as *const u128 as *const u8).wrapping_add(4),
+                    r_len as usize,
+                )
+            };
+            return l_data < r_data;
+        }
+        // one of the string is larger than 12 bytes,
+        // we then try to compare the inlined data first
+        let l_inlined_data = unsafe {
+            std::slice::from_raw_parts((l_view as *const u128 as *const u8).wrapping_add(4), 4)
+        };
+        let r_inlined_data = unsafe {
+            std::slice::from_raw_parts((r_view as *const u128 as *const u8).wrapping_add(4), 4)
+        };
+        if r_inlined_data != l_inlined_data {
+            return l_inlined_data < r_inlined_data;
+        }
+        // unfortunately, we need to compare the full data
+        let l_full_data: &[u8] = unsafe { l.0.value_unchecked(l.1).as_ref() };
+        let r_full_data: &[u8] = unsafe { r.0.value_unchecked(r.1).as_ref() };
+        l_full_data < r_full_data
+    }
+
+    fn len(&self) -> usize {
+        Array::len(self)
+    }
+
+    unsafe fn value_unchecked(&self, idx: usize) -> Self::Item {
+        (self, idx)
     }
 }
 
