@@ -297,16 +297,6 @@ impl<OffsetSize: OffsetSizeTrait> GenericListViewArray<OffsetSize> {
         }
     }
 
-    /// Creates a [`GenericListViewArray`] from an iterator of primitive values
-    ///
-    pub fn from_iter_primitive<T, P, I>(_iter: I) -> Self
-    where
-        T: ArrowPrimitiveType,
-        P: IntoIterator<Item = Option<<T as ArrowPrimitiveType>::Native>>,
-        I: IntoIterator<Item = Option<P>>,
-    {
-        panic!("Not yet implemented, wait list view array builder to be implemented")
-    }
 }
 
 impl<'a, OffsetSize: OffsetSizeTrait> ArrayAccessor for &'a GenericListViewArray<OffsetSize> {
@@ -968,23 +958,4 @@ mod tests {
         assert_eq!(values, vec![Some(vec![1, 2, 3]), None, Some(vec![4, 5, 6])])
     }
 
-    #[test]
-    #[should_panic(
-        expected = "Not yet implemented, wait list view array builder to be implemented"
-    )]
-    fn test_from_iter_primitive() {
-        let data = vec![
-            Some(vec![Some(0), Some(1), Some(2)]),
-            Some(vec![Some(3), Some(4), Some(5)]),
-            Some(vec![Some(6), Some(7)]),
-        ];
-        let list_array = ListViewArray::from_iter_primitive::<Int32Type, _, _>(data);
-
-        let field = Arc::new(Field::new("item", DataType::Int32, true));
-        let sizes = ScalarBuffer::from(vec![3, 3, 2]);
-        let offsets = ScalarBuffer::from(vec![0, 3, 6]);
-        let values = Int32Array::from(vec![0, 1, 2, 3, 4, 5, 6, 7]);
-        let another = ListViewArray::new(field, offsets, sizes, Arc::new(values), None);
-        assert_eq!(list_array, another)
-    }
 }
