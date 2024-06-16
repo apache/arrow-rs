@@ -24,10 +24,7 @@ use arrow_schema::{ArrowError, DataType, FieldRef};
 
 use crate::array::{make_array, print_long_array};
 use crate::iterator::GenericListViewArrayIter;
-use crate::{
-    new_empty_array, Array, ArrayAccessor, ArrayRef, FixedSizeListArray,
-    OffsetSizeTrait,
-};
+use crate::{new_empty_array, Array, ArrayAccessor, ArrayRef, FixedSizeListArray, OffsetSizeTrait};
 
 /// A [`GenericListViewArray`] of variable size lists, storing offsets as `i32`.
 ///
@@ -296,7 +293,6 @@ impl<OffsetSize: OffsetSizeTrait> GenericListViewArray<OffsetSize> {
             value_sizes: self.value_sizes.slice(offset, length),
         }
     }
-
 }
 
 impl<'a, OffsetSize: OffsetSizeTrait> ArrayAccessor for &'a GenericListViewArray<OffsetSize> {
@@ -529,13 +525,7 @@ mod tests {
         assert_eq!(6, list_array.value_offsets()[2]);
         assert_eq!(2, list_array.value_sizes()[2]);
         assert_eq!(2, list_array.value_length(2));
-        assert_eq!(
-            0,
-            list_array
-                .value(0)
-                .as_primitive::<Int32Type>()
-                .value(0)
-        );
+        assert_eq!(0, list_array.value(0).as_primitive::<Int32Type>().value(0));
         assert_eq!(
             0,
             unsafe { list_array.value_unchecked(0) }
@@ -571,13 +561,7 @@ mod tests {
         assert_eq!(6, list_array.value_offsets()[2]);
         assert_eq!(2, list_array.value_sizes()[2]);
         assert_eq!(2, list_array.value_length(2));
-        assert_eq!(
-            0,
-            list_array
-                .value(0)
-                .as_primitive::<Int32Type>()
-                .value(0)
-        );
+        assert_eq!(0, list_array.value(0).as_primitive::<Int32Type>().value(0));
         assert_eq!(
             0,
             unsafe { list_array.value_unchecked(0) }
@@ -951,9 +935,4 @@ mod tests {
         let sizes = list.value_sizes();
         assert_eq!(sizes, &[3, 3, 3]);
     }
-
-
-
-
-
 }
