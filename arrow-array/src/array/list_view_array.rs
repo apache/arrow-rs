@@ -25,7 +25,7 @@ use arrow_schema::{ArrowError, DataType, FieldRef};
 use crate::array::{make_array, print_long_array};
 use crate::iterator::GenericListViewArrayIter;
 use crate::{
-    new_empty_array, Array, ArrayAccessor, ArrayRef, ArrowPrimitiveType, FixedSizeListArray,
+    new_empty_array, Array, ArrayAccessor, ArrayRef, FixedSizeListArray,
     OffsetSizeTrait,
 };
 
@@ -409,15 +409,13 @@ impl<OffsetSize: OffsetSizeTrait> From<FixedSizeListArray> for GenericListViewAr
             DataType::FixedSizeList(f, size) => (f, *size as usize),
             _ => unreachable!(),
         };
-        let iter = std::iter::repeat(size).take(value.len());
-        let mut offsets = Vec::with_capacity(iter.size_hint().0);
-        offsets.push(OffsetSize::usize_as(0));
+        let mut offsets = Vec::with_capacity(size);
         let mut acc = 0_usize;
         let iter = std::iter::repeat(size).take(value.len());
         let mut sizes = Vec::with_capacity(iter.size_hint().0);
         for size in iter {
-            acc = acc.checked_add(size).expect("usize overflow");
             offsets.push(OffsetSize::usize_as(acc));
+            acc = acc.checked_add(size).expect("usize overflow");
             sizes.push(OffsetSize::usize_as(size));
         }
         OffsetSize::from_usize(acc).expect("offset overflow");
@@ -535,17 +533,13 @@ mod tests {
             0,
             list_array
                 .value(0)
-                .as_any()
-                .downcast_ref::<Int32Array>()
-                .unwrap()
+                .as_primitive::<Int32Type>()
                 .value(0)
         );
         assert_eq!(
             0,
             unsafe { list_array.value_unchecked(0) }
-                .as_any()
-                .downcast_ref::<Int32Array>()
-                .unwrap()
+                .as_primitive::<Int32Type>()
                 .value(0)
         );
         for i in 0..3 {
@@ -581,17 +575,13 @@ mod tests {
             0,
             list_array
                 .value(0)
-                .as_any()
-                .downcast_ref::<Int32Array>()
-                .unwrap()
+                .as_primitive::<Int32Type>()
                 .value(0)
         );
         assert_eq!(
             0,
             unsafe { list_array.value_unchecked(0) }
-                .as_any()
-                .downcast_ref::<Int32Array>()
-                .unwrap()
+                .as_primitive::<Int32Type>()
                 .value(0)
         );
         for i in 0..3 {
@@ -955,7 +945,15 @@ mod tests {
             .iter()
             .map(|x| x.map(|x| x.as_primitive::<Int32Type>().values().to_vec()))
             .collect();
-        assert_eq!(values, vec![Some(vec![1, 2, 3]), None, Some(vec![4, 5, 6])])
+        assert_eq!(values, vec![Some(vec![1, 2, 3]), None, Some(vec![4, 5, 6])]);
+        let offsets = list.value_offsets();
+        assert_eq!(offsets, &[0, 3, 6]);
+        let sizes = list.value_sizes();
+        assert_eq!(sizes, &[3, 3, 3]);
     }
+
+
+
+
 
 }
