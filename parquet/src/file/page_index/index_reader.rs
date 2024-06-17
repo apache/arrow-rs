@@ -24,8 +24,8 @@ use crate::file::metadata::ColumnChunkMetaData;
 use crate::file::page_index::index::{Index, NativeIndex};
 use crate::file::reader::ChunkReader;
 use crate::format::{ColumnIndex, OffsetIndex, PageLocation};
-use std::ops::Range;
 use compact_thrift_rs::{CompactThriftProtocol, SliceInput};
+use std::ops::Range;
 
 /// Computes the covering range of two optional ranges
 ///

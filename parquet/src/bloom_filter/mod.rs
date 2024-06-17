@@ -81,10 +81,10 @@ use crate::format::{
     SplitBlockAlgorithm, Uncompressed, XxHash,
 };
 use bytes::Bytes;
+use compact_thrift_rs::{CompactThriftProtocol, SliceInput};
 use std::hash::Hasher;
 use std::io::Write;
 use std::sync::Arc;
-use compact_thrift_rs::{CompactThriftProtocol, SliceInput};
 use twox_hash::XxHash64;
 
 /// Salt as defined in the [spec](https://github.com/apache/parquet-format/blob/master/BloomFilter.md#technical-approach).

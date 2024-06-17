@@ -18,12 +18,12 @@
 //! Contains writer which writes arrow data into parquet data.
 
 use bytes::Bytes;
+use compact_thrift_rs::CompactThriftProtocol;
 use std::io::{Read, Write};
 use std::iter::Peekable;
 use std::slice::Iter;
 use std::sync::{Arc, Mutex};
 use std::vec::IntoIter;
-use compact_thrift_rs::CompactThriftProtocol;
 
 use arrow_array::cast::AsArray;
 use arrow_array::types::*;

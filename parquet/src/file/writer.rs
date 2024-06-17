@@ -21,10 +21,10 @@
 use crate::bloom_filter::Sbbf;
 use crate::format as parquet;
 use crate::format::{ColumnIndex, OffsetIndex, RowGroup};
+use compact_thrift_rs::CompactThriftProtocol;
 use std::fmt::Debug;
 use std::io::{BufWriter, IoSlice, Read};
 use std::{io::Write, sync::Arc};
-use compact_thrift_rs::CompactThriftProtocol;
 
 use crate::column::writer::{get_typed_column_writer_mut, ColumnCloseResult, ColumnWriterImpl};
 use crate::column::{
@@ -773,9 +773,7 @@ impl<'a, W: Write + Send> PageWriter for SerializedPageWriter<'a, W> {
     }
 
     fn write_metadata(&mut self, metadata: &ColumnChunkMetaData) -> Result<()> {
-        metadata
-            .to_column_metadata_thrift()
-            .write(&mut self.sink)?;
+        metadata.to_column_metadata_thrift().write(&mut self.sink)?;
         Ok(())
     }
 

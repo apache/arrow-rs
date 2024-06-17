@@ -15,8 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::{io::Read, sync::Arc};
 use compact_thrift_rs::{CompactThriftProtocol, SliceInput};
+use std::{io::Read, sync::Arc};
 
 use crate::format::{ColumnOrder as TColumnOrder, FileMetaData as TFileMetaData};
 

@@ -1,5 +1,4 @@
 use compact_thrift_rs::*;
-use compact_thrift_rs::macros::*;
 
 /*
  * Licensed to the Apache Software Foundation (ASF) under one

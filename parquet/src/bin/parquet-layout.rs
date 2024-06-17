@@ -37,14 +37,13 @@ use std::fs::File;
 use std::io::Read;
 
 use clap::Parser;
+use compact_thrift_rs::CompactThriftProtocol;
 use serde::Serialize;
-use thrift::protocol::TCompactInputProtocol;
 
 use parquet::basic::{Compression, Encoding};
 use parquet::errors::Result;
 use parquet::file::reader::ChunkReader;
 use parquet::format::PageHeader;
-use parquet::thrift::TSerializable;
 
 #[derive(Serialize, Debug)]
 struct ParquetFile {
@@ -175,8 +174,7 @@ fn read_page_header<C: ChunkReader>(reader: &C, offset: u64) -> Result<(usize, P
 
     let input = reader.get_read(offset)?;
     let mut tracked = TrackedRead(input, 0);
-    let mut prot = TCompactInputProtocol::new(&mut tracked);
-    let header = PageHeader::read_from_in_protocol(&mut prot)?;
+    let header = PageHeader::read(&mut tracked)?;
     Ok((tracked.1, header))
 }
 
