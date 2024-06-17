@@ -799,9 +799,7 @@ sed do eiusmod tempor,-556132.25,1,,2019-04-18T02:45:55.555,23:46:03,foo
         let mut writer = WriterBuilder::new()
             .with_timestamp_tz_format("%M:%H".to_string())
             .build(&mut file);
-        for batch in vec![&batch] {
-            writer.write(batch).unwrap();
-        }
+        writer.write(&batch).unwrap();
 
         drop(writer);
         file.rewind().unwrap();
