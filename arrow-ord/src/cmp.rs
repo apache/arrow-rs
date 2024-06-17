@@ -550,7 +550,6 @@ impl<'a, T: ByteArrayType> ArrayOrd for &'a GenericByteArray<T> {
 ///
 /// (2) For string/byte larger than 12 bytes, we can still be faster than (for certain operations) StringArray/ByteArray,
 ///     thanks to the inlined 4 bytes.
-///
 ///     Consider equality check:
 ///     If the first four bytes of the two strings are different, we can return false immediately (with just one memory access).
 ///     If we are unlucky and the first four bytes are the same, we need to fallback to compare two full strings.
