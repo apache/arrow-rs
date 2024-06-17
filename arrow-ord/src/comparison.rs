@@ -1128,8 +1128,8 @@ mod tests {
         ($test_name:ident, $left:expr, $right:expr, $op:expr, $expected:expr) => {
             #[test]
             fn $test_name() {
-                let left = StringViewArray::from($left);
-                let right = StringViewArray::from($right);
+                let left = StringViewArray::from_iter_values($left);
+                let right = StringViewArray::from_iter_values($right);
                 let res = $op(&left, &right).unwrap();
                 let expected = $expected;
                 assert_eq!(expected.len(), res.len());
@@ -1210,7 +1210,7 @@ mod tests {
         ($test_name:ident, $left:expr, $right:expr, $op:expr, $expected:expr) => {
             #[test]
             fn $test_name() {
-                let left = StringViewArray::from($left);
+                let left = StringViewArray::from_iter_values($left);
                 let right = StringViewArray::new_scalar($right);
                 let res = $op(&left, &right).unwrap();
                 let expected = $expected;
@@ -1230,7 +1230,16 @@ mod tests {
         };
     }
 
-    const LARGE_STRING: &str = "larger than 12 bytes string";
+    const LARGE_1: &str = "prefix-larger than 12 bytes string";
+    const LARGE_2: &str = "prefix-larger but different string";
+    const SMALL_1: &str = "pref1";
+    const SMALL_2: &str = "pref2";
+    /// Below are two carefully crafted arrays that compares:
+    /// (1) 2 large strings that have the same first 4 bytes but are different in the remaining bytes
+    /// (2) 1 large and 1 small string that are the same in the first 4 bytes but different in the remaining bytes
+    /// (3) 2 small strings that are the same in the first 4 byes
+    const TEST_ARRAY_1: [&str; 5] = [LARGE_1, LARGE_1, SMALL_1, SMALL_1, LARGE_1];
+    const TEST_ARRAY_2: [&str; 5] = [LARGE_1, LARGE_2, SMALL_1, SMALL_2, SMALL_1];
 
     test_utf8!(
         test_utf8_array_eq,
@@ -1241,10 +1250,10 @@ mod tests {
     );
     test_utf8_view!(
         test_utf8_view_array_eq,
-        vec![LARGE_STRING, "arrow", "arrow", "arrow"],
-        vec![LARGE_STRING, "parquet", "datafusion", "flight"],
+        TEST_ARRAY_1,
+        TEST_ARRAY_2,
         crate::cmp::eq,
-        [true, false, false, false]
+        [true, false, true, false, false]
     );
     test_utf8_scalar!(
         test_utf8_array_eq_scalar,
@@ -1255,10 +1264,10 @@ mod tests {
     );
     test_utf8_view_scalar!(
         test_utf8_view_array_eq_large_scalar,
-        vec![LARGE_STRING, "parquet", "datafusion", "flight"],
-        LARGE_STRING,
+        TEST_ARRAY_2,
+        LARGE_1,
         crate::cmp::eq,
-        [true, false, false, false]
+        [true, false, false, false, false]
     );
 
     test_utf8!(
@@ -1270,10 +1279,10 @@ mod tests {
     );
     test_utf8_view!(
         test_utf8_view_array_neq,
-        vec!["arrow", "arrow", LARGE_STRING, LARGE_STRING],
-        vec!["arrow", LARGE_STRING, "datafusion", LARGE_STRING],
+        TEST_ARRAY_1,
+        TEST_ARRAY_2,
         crate::cmp::neq,
-        [false, true, true, false]
+        [false, true, false, true, true]
     );
     test_utf8_scalar!(
         test_utf8_array_neq_scalar,
@@ -1284,10 +1293,10 @@ mod tests {
     );
     test_utf8_view_scalar!(
         test_utf8_view_array_neq_scalar,
-        vec!["arrow", LARGE_STRING, "datafusion", "flight"],
-        LARGE_STRING,
+        TEST_ARRAY_2,
+        LARGE_1,
         crate::cmp::neq,
-        [true, false, true, true]
+        [false, true, true, true, true]
     );
 
     test_utf8!(
@@ -1299,10 +1308,10 @@ mod tests {
     );
     test_utf8_view!(
         test_utf8_view_array_lt,
-        vec!["arrow", LARGE_STRING, "flight", LARGE_STRING],
-        vec!["flight", "flight", LARGE_STRING, LARGE_STRING],
+        TEST_ARRAY_1,
+        TEST_ARRAY_2,
         crate::cmp::lt,
-        [true, false, true, false]
+        [false, false, false, true, false]
     );
     test_utf8_scalar!(
         test_utf8_array_lt_scalar,
@@ -1313,10 +1322,10 @@ mod tests {
     );
     test_utf8_view_scalar!(
         test_utf8_view_array_lt_scalar,
-        vec!["arrow", LARGE_STRING, "flight", "parquet"],
-        "flight",
+        TEST_ARRAY_2,
+        LARGE_1,
         crate::cmp::lt,
-        [true, false, false, false]
+        [false, true, true, true, true]
     );
 
     test_utf8!(
@@ -1328,10 +1337,10 @@ mod tests {
     );
     test_utf8_view!(
         test_utf8_view_array_lt_eq,
-        vec!["arrow", LARGE_STRING, "flight", LARGE_STRING],
-        vec!["flight", "flight", LARGE_STRING, LARGE_STRING],
+        TEST_ARRAY_1,
+        TEST_ARRAY_2,
         crate::cmp::lt_eq,
-        [true, false, true, true]
+        [true, false, true, true, false]
     );
     test_utf8_scalar!(
         test_utf8_array_lt_eq_scalar,
@@ -1342,10 +1351,10 @@ mod tests {
     );
     test_utf8_view_scalar!(
         test_utf8_view_array_lt_eq_scalar,
-        vec!["arrow", LARGE_STRING, "flight", "parquet"],
-        "flight",
+        TEST_ARRAY_2,
+        LARGE_1,
         crate::cmp::lt_eq,
-        [true, false, true, false]
+        [true, true, true, true, true]
     );
 
     test_utf8!(
@@ -1357,10 +1366,10 @@ mod tests {
     );
     test_utf8_view!(
         test_utf8_view_array_gt,
-        vec!["arrow", LARGE_STRING, "flight", LARGE_STRING],
-        vec!["flight", "flight", LARGE_STRING, LARGE_STRING],
+        TEST_ARRAY_1,
+        TEST_ARRAY_2,
         crate::cmp::gt,
-        [false, true, false, false]
+        [false, true, false, false, true]
     );
     test_utf8_scalar!(
         test_utf8_array_gt_scalar,
@@ -1371,10 +1380,10 @@ mod tests {
     );
     test_utf8_view_scalar!(
         test_utf8_view_array_gt_scalar,
-        vec!["arrow", LARGE_STRING, "flight", "parquet"],
-        "flight",
+        TEST_ARRAY_2,
+        LARGE_1,
         crate::cmp::gt,
-        [false, true, false, true]
+        [false, false, false, false, false]
     );
 
     test_utf8!(
@@ -1386,10 +1395,10 @@ mod tests {
     );
     test_utf8_view!(
         test_utf8_view_array_gt_eq,
-        vec!["arrow", LARGE_STRING, "flight", LARGE_STRING],
-        vec!["flight", "flight", LARGE_STRING, LARGE_STRING],
+        TEST_ARRAY_1,
+        TEST_ARRAY_2,
         crate::cmp::gt_eq,
-        [false, true, false, true]
+        [true, true, true, false, true]
     );
     test_utf8_scalar!(
         test_utf8_array_gt_eq_scalar,
@@ -1400,10 +1409,10 @@ mod tests {
     );
     test_utf8_view_scalar!(
         test_utf8_view_array_gt_eq_scalar,
-        vec!["arrow", LARGE_STRING, "flight", "parquet"],
-        LARGE_STRING,
+        TEST_ARRAY_2,
+        LARGE_1,
         crate::cmp::gt_eq,
-        [false, true, false, true]
+        [true, false, false, false, false]
     );
 
     #[test]

@@ -244,7 +244,7 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
         let v = self.views.get_unchecked(idx);
         let len = *v as u32;
         let b = if len <= 12 {
-            Self::inline_value(&v, len as usize)
+            Self::inline_value(v, len as usize)
         } else {
             let view = ByteView::from(*v);
             let data = self.buffers.get_unchecked(view.buffer_index as usize);
