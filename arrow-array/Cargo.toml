@@ -35,14 +35,10 @@ bench = false
 
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-ahash = { version = "0.8", default-features = false, features = [
-    "compile-time-rng",
-] }
+ahash = { version = "0.8", default-features = false, features = ["compile-time-rng"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-ahash = { version = "0.8", default-features = false, features = [
-    "runtime-rng",
-] }
+ahash = { version = "0.8", default-features = false, features = ["runtime-rng"] }
 
 [dependencies]
 arrow-buffer = { workspace = true }
@@ -58,10 +54,7 @@ hashbrown = { version = "0.14", default-features = false }
 ffi = ["arrow-schema/ffi", "arrow-data/ffi"]
 
 [dev-dependencies]
-rand = { version = "0.8", default-features = false, features = [
-    "std",
-    "std_rng",
-] }
+rand = { version = "0.8", default-features = false, features = ["std", "std_rng"] }
 criterion = { version = "0.5", default-features = false }
 
 [build-dependencies]
