@@ -43,6 +43,7 @@ fn apply_hint(parquet: DataType, hint: DataType) -> DataType {
         (DataType::Int32 | DataType::Int64, DataType::Timestamp(_, _)) => hint,
         (DataType::Int32, DataType::Time32(_)) => hint,
         (DataType::Int64, DataType::Time64(_)) => hint,
+        (DataType::Int64, DataType::Duration(_)) => hint,
 
         // Date64 doesn't have a corresponding LogicalType / ConvertedType
         (DataType::Int64, DataType::Date64) => hint,
