@@ -21,11 +21,10 @@
 use crate::bloom_filter::Sbbf;
 use crate::format as parquet;
 use crate::format::{ColumnIndex, OffsetIndex, RowGroup};
-use crate::thrift::TSerializable;
 use std::fmt::Debug;
 use std::io::{BufWriter, IoSlice, Read};
 use std::{io::Write, sync::Arc};
-use thrift::protocol::TCompactOutputProtocol;
+use compact_thrift_rs::CompactThriftProtocol;
 
 use crate::column::writer::{get_typed_column_writer_mut, ColumnCloseResult, ColumnWriterImpl};
 use crate::column::{
@@ -258,8 +257,7 @@ impl<W: Write + Send> SerializedFileWriter<W> {
                 match &self.offset_indexes[row_group_idx][column_idx] {
                     Some(offset_index) => {
                         let start_offset = self.buf.bytes_written();
-                        let mut protocol = TCompactOutputProtocol::new(&mut self.buf);
-                        offset_index.write_to_out_protocol(&mut protocol)?;
+                        offset_index.write(&mut self.buf)?;
                         let end_offset = self.buf.bytes_written();
                         // set offset and index for offset index
                         column_metadata.offset_index_offset = Some(start_offset as i64);
@@ -311,8 +309,7 @@ impl<W: Write + Send> SerializedFileWriter<W> {
                 match &self.column_indexes[row_group_idx][column_idx] {
                     Some(column_index) => {
                         let start_offset = self.buf.bytes_written();
-                        let mut protocol = TCompactOutputProtocol::new(&mut self.buf);
-                        column_index.write_to_out_protocol(&mut protocol)?;
+                        column_index.write(&mut self.buf)?;
                         let end_offset = self.buf.bytes_written();
                         // set offset and index for offset index
                         column_metadata.column_index_offset = Some(start_offset as i64);
@@ -355,7 +352,7 @@ impl<W: Write + Send> SerializedFileWriter<W> {
         // Even if the column has an undefined sort order, such as INTERVAL, this
         // is still technically the defined TYPEORDER so it should still be set.
         let column_orders = (0..self.schema_descr().num_columns())
-            .map(|_| parquet::ColumnOrder::TYPEORDER(parquet::TypeDefinedOrder {}))
+            .map(|_| parquet::ColumnOrder::TYPE_ORDER(parquet::TypeDefinedOrder {}))
             .collect();
         // This field is optional, perhaps in cases where no min/max fields are set
         // in any Statistics or ColumnIndex object in the whole file.
@@ -377,8 +374,7 @@ impl<W: Write + Send> SerializedFileWriter<W> {
         // Write file metadata
         let start_pos = self.buf.bytes_written();
         {
-            let mut protocol = TCompactOutputProtocol::new(&mut self.buf);
-            file_metadata.write_to_out_protocol(&mut protocol)?;
+            file_metadata.write(&mut self.buf)?;
         }
         let end_pos = self.buf.bytes_written();
 
@@ -750,8 +746,7 @@ impl<'a, W: Write> SerializedPageWriter<'a, W> {
     fn serialize_page_header(&mut self, header: parquet::PageHeader) -> Result<usize> {
         let start_pos = self.sink.bytes_written();
         {
-            let mut protocol = TCompactOutputProtocol::new(&mut self.sink);
-            header.write_to_out_protocol(&mut protocol)?;
+            header.write(&mut self.sink)?;
         }
         Ok(self.sink.bytes_written() - start_pos)
     }
@@ -778,10 +773,9 @@ impl<'a, W: Write + Send> PageWriter for SerializedPageWriter<'a, W> {
     }
 
     fn write_metadata(&mut self, metadata: &ColumnChunkMetaData) -> Result<()> {
-        let mut protocol = TCompactOutputProtocol::new(&mut self.sink);
         metadata
             .to_column_metadata_thrift()
-            .write_to_out_protocol(&mut protocol)?;
+            .write(&mut self.sink)?;
         Ok(())
     }
 

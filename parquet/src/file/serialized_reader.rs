@@ -39,9 +39,8 @@ use crate::format::{PageHeader, PageLocation, PageType};
 use crate::record::reader::RowIter;
 use crate::record::Row;
 use crate::schema::types::Type as SchemaType;
-use crate::thrift::{TCompactSliceInputProtocol, TSerializable};
 use bytes::Bytes;
-use thrift::protocol::TCompactInputProtocol;
+use compact_thrift_rs::{CompactThriftProtocol, SliceInput};
 
 impl TryFrom<File> for SerializedFileReader<File> {
     type Error = ParquetError;
@@ -354,8 +353,7 @@ impl<'a, R: 'static + ChunkReader> RowGroupReader for SerializedRowGroupReader<'
 
 /// Reads a [`PageHeader`] from the provided [`Read`]
 pub(crate) fn read_page_header<T: Read>(input: &mut T) -> Result<PageHeader> {
-    let mut prot = TCompactInputProtocol::new(input);
-    let page_header = PageHeader::read_from_in_protocol(&mut prot)?;
+    let page_header = PageHeader::read(input)?;
     Ok(page_header)
 }
 
@@ -649,8 +647,8 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
 
                     let buffer = self.reader.get_bytes(front.offset as u64, page_len)?;
 
-                    let mut prot = TCompactSliceInputProtocol::new(buffer.as_ref());
-                    let header = PageHeader::read_from_in_protocol(&mut prot)?;
+                    let mut prot = SliceInput::new(buffer.as_ref());
+                    let header = PageHeader::read(&mut prot)?;
                     let offset = buffer.len() - prot.as_slice().len();
 
                     let bytes = buffer.slice(offset..);
@@ -1255,7 +1253,7 @@ mod tests {
         let ret = SerializedFileReader::new(Bytes::copy_from_slice(&data));
         assert_eq!(
             ret.err().unwrap().to_string(),
-            "Parquet error: Could not parse metadata: bad data"
+            "Parquet error: Could not parse metadata: InvalidType"
         );
     }
 

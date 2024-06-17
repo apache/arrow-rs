@@ -87,8 +87,8 @@ impl From<snap::Error> for ParquetError {
     }
 }
 
-impl From<thrift::Error> for ParquetError {
-    fn from(e: thrift::Error) -> ParquetError {
+impl From<compact_thrift_rs::ThriftError> for ParquetError {
+    fn from(e: compact_thrift_rs::ThriftError) -> ParquetError {
         ParquetError::External(Box::new(e))
     }
 }
