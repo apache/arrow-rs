@@ -20,7 +20,7 @@ use crate::builder::GenericByteViewBuilder;
 use crate::iterator::ArrayIter;
 use crate::types::bytes::ByteArrayNativeType;
 use crate::types::{BinaryViewType, ByteViewType, StringViewType};
-use crate::{Array, ArrayAccessor, ArrayRef};
+use crate::{Array, ArrayAccessor, ArrayRef, Scalar};
 use arrow_buffer::{Buffer, NullBuffer, ScalarBuffer};
 use arrow_data::{ArrayData, ArrayDataBuilder, ByteView};
 use arrow_schema::{ArrowError, DataType};
@@ -186,6 +186,11 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
         }
     }
 
+    /// Create a new [`Scalar`] from `value`
+    pub fn new_scalar(value: impl AsRef<T::Native>) -> Scalar<Self> {
+        Scalar::new(Self::from_iter_values(std::iter::once(value)))
+    }
+
     /// Creates a [`GenericByteViewArray`] based on an iterator of values without nulls
     pub fn from_iter_values<Ptr, I>(iter: I) -> Self
     where
@@ -239,8 +244,7 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
         let v = self.views.get_unchecked(idx);
         let len = *v as u32;
         let b = if len <= 12 {
-            let ptr = self.views.as_ptr() as *const u8;
-            std::slice::from_raw_parts(ptr.add(idx * 16 + 4), len as usize)
+            Self::inline_value(v, len as usize)
         } else {
             let view = ByteView::from(*v);
             let data = self.buffers.get_unchecked(view.buffer_index as usize);
@@ -248,6 +252,17 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
             data.get_unchecked(offset..offset + len as usize)
         };
         T::Native::from_bytes_unchecked(b)
+    }
+
+    /// Returns the inline value of the view.
+    ///
+    /// # Safety
+    /// - The `view` must be a valid element from `Self::views()` that adheres to the view layout.
+    /// - The `len` must be the length of the inlined value. It should never be larger than 12.
+    #[inline(always)]
+    pub unsafe fn inline_value(view: &u128, len: usize) -> &[u8] {
+        debug_assert!(len <= 12);
+        std::slice::from_raw_parts((view as *const u128 as *const u8).wrapping_add(4), len)
     }
 
     /// constructs a new iterator
