@@ -553,10 +553,12 @@ impl<'a, T: ByteArrayType> ArrayOrd for &'a GenericByteArray<T> {
 ///     Consider equality check:
 ///     If the first four bytes of the two strings are different, we can return false immediately (with just one memory access).
 ///     If we are unlucky and the first four bytes are the same, we need to fallback to compare two full strings.
-///
-/// If we directly load the data using `GenericByteViewArray::value_unchecked`, we load the entire string and make multiple memory accesses;
-/// but most of the time (eq, ord), we only only need to look at the first 4 bytes to know the answer, thus not utilizing the inlined data.
 impl<'a, T: ByteViewType> ArrayOrd for &'a GenericByteViewArray<T> {
+    /// Item.0 is the array, Item.1 is the index into the array.
+    /// Why don't we just store Item.0[Item.1] as the item?
+    ///  - Because if we do so, we materialize the entire string (i.e., make multiple memory accesses), which might be unnecessary.
+    ///  - Most of the time (eq, ord), we only need to look at the first 4 bytes to know the answer,
+    ///     e.g., if the inlined 4 bytes are different, we can directly return unequal without looking at the full string.
     type Item = (&'a GenericByteViewArray<T>, usize);
 
     /// # Equality check flow
@@ -581,26 +583,12 @@ impl<'a, T: ByteViewType> ArrayOrd for &'a GenericByteViewArray<T> {
         }
 
         if l_len <= 12 {
-            let l_data = unsafe {
-                std::slice::from_raw_parts(
-                    (l_view as *const u128 as *const u8).wrapping_add(4),
-                    l_len as usize,
-                )
-            };
-            let r_data = unsafe {
-                std::slice::from_raw_parts(
-                    (r_view as *const u128 as *const u8).wrapping_add(4),
-                    r_len as usize,
-                )
-            };
+            let l_data = unsafe { GenericByteViewArray::<T>::inline_value(l_view, l_len as usize) };
+            let r_data = unsafe { GenericByteViewArray::<T>::inline_value(r_view, r_len as usize) };
             l_data == r_data
         } else {
-            let l_inlined_data = unsafe {
-                std::slice::from_raw_parts((l_view as *const u128 as *const u8).wrapping_add(4), 4)
-            };
-            let r_inlined_data = unsafe {
-                std::slice::from_raw_parts((r_view as *const u128 as *const u8).wrapping_add(4), 4)
-            };
+            let l_inlined_data = unsafe { GenericByteViewArray::<T>::inline_value(l_view, 4) };
+            let r_inlined_data = unsafe { GenericByteViewArray::<T>::inline_value(r_view, 4) };
             if l_inlined_data != r_inlined_data {
                 return false;
             }
@@ -629,28 +617,14 @@ impl<'a, T: ByteViewType> ArrayOrd for &'a GenericByteViewArray<T> {
         let r_len = *r_view as u32;
 
         if l_len <= 12 && r_len <= 12 {
-            let l_data = unsafe {
-                std::slice::from_raw_parts(
-                    (l_view as *const u128 as *const u8).wrapping_add(4),
-                    l_len as usize,
-                )
-            };
-            let r_data = unsafe {
-                std::slice::from_raw_parts(
-                    (r_view as *const u128 as *const u8).wrapping_add(4),
-                    r_len as usize,
-                )
-            };
+            let l_data = unsafe { GenericByteViewArray::<T>::inline_value(l_view, l_len as usize) };
+            let r_data = unsafe { GenericByteViewArray::<T>::inline_value(r_view, r_len as usize) };
             return l_data < r_data;
         }
         // one of the string is larger than 12 bytes,
         // we then try to compare the inlined data first
-        let l_inlined_data = unsafe {
-            std::slice::from_raw_parts((l_view as *const u128 as *const u8).wrapping_add(4), 4)
-        };
-        let r_inlined_data = unsafe {
-            std::slice::from_raw_parts((r_view as *const u128 as *const u8).wrapping_add(4), 4)
-        };
+        let l_inlined_data = unsafe { GenericByteViewArray::<T>::inline_value(l_view, 4) };
+        let r_inlined_data = unsafe { GenericByteViewArray::<T>::inline_value(r_view, 4) };
         if r_inlined_data != l_inlined_data {
             return l_inlined_data < r_inlined_data;
         }
