@@ -1269,6 +1269,13 @@ mod tests {
         crate::cmp::eq,
         [true, false, false, false, false]
     );
+    test_utf8_view_scalar!(
+        test_utf8_view_array_eq_small_scalar,
+        TEST_ARRAY_2,
+        SMALL_1,
+        crate::cmp::eq,
+        [false, false, true, false, true]
+    );
 
     test_utf8!(
         test_utf8_array_neq,
@@ -1326,6 +1333,13 @@ mod tests {
         LARGE_1,
         crate::cmp::lt,
         [false, true, true, true, true]
+    );
+    test_utf8_view_scalar!(
+        test_utf8_view_array_lt_scalar_small,
+        TEST_ARRAY_2,
+        SMALL_1,
+        crate::cmp::lt,
+        [false, false, false, false, false]
     );
 
     test_utf8!(
@@ -1385,6 +1399,13 @@ mod tests {
         crate::cmp::gt,
         [false, false, false, false, false]
     );
+    test_utf8_view_scalar!(
+        test_utf8_view_array_gt_scalar_small,
+        TEST_ARRAY_2,
+        SMALL_1,
+        crate::cmp::gt,
+        [true, true, false, true, false]
+    );
 
     test_utf8!(
         test_utf8_array_gt_eq,
@@ -1413,6 +1434,13 @@ mod tests {
         LARGE_1,
         crate::cmp::gt_eq,
         [true, false, false, false, false]
+    );
+    test_utf8_view_scalar!(
+        test_utf8_view_array_gt_eq_scalar_small,
+        TEST_ARRAY_2,
+        SMALL_1,
+        crate::cmp::gt_eq,
+        [true, true, true, true, true]
     );
 
     #[test]
