@@ -244,8 +244,10 @@ impl FixedSizeListArray {
 
     /// Returns ith value of this list array.
     pub fn value(&self, i: usize) -> ArrayRef {
-        self.values
-            .slice(self.value_offset(i) as usize, self.value_length() as usize)
+        self.values.slice(
+            self.value_offset_at(i) as usize,
+            self.value_length() as usize,
+        )
     }
 
     /// Returns the offset for value at index `i`.
@@ -253,7 +255,7 @@ impl FixedSizeListArray {
     /// Note this doesn't do any bound checking, for performance reason.
     #[inline]
     pub fn value_offset(&self, i: usize) -> i32 {
-        self.value_offset_at(i)
+        self.value_offset_at(i) as i32
     }
 
     /// Returns the length for an element.
@@ -265,8 +267,8 @@ impl FixedSizeListArray {
     }
 
     #[inline]
-    const fn value_offset_at(&self, i: usize) -> i32 {
-        i as i32 * self.value_length
+    const fn value_offset_at(&self, i: usize) -> usize {
+        i * self.value_length as usize
     }
 
     /// Returns a zero-copy slice of this array with the indicated offset and length.
