@@ -1461,7 +1461,7 @@ mod tests_from_ffi {
         test_round_trip(&imported_array.consume()?)
     }
 
-    fn export_string(array: StringArray) -> StringArray {
+    fn roundtrip_string_array(array: StringArray) -> StringArray {
         let data = array.into_data();
 
         let array = FFI_ArrowArray::new(&data);
@@ -1490,7 +1490,7 @@ mod tests_from_ffi {
 
         let string_array = StringArray::from(strings);
 
-        let imported = export_string(string_array.clone());
+        let imported = roundtrip_string_array(string_array.clone());
         assert_eq!(imported.len(), 1000);
         assert_eq!(imported.value(0), "string: 0");
         assert_eq!(imported.value(499), "string: 499");
@@ -1503,7 +1503,7 @@ mod tests_from_ffi {
 
         let slice = string_array.slice(500, 500);
 
-        let imported = export_string(slice);
+        let imported = roundtrip_string_array(slice);
         assert_eq!(imported.len(), 500);
         assert_eq!(imported.value(0), "string: 500");
         assert_eq!(imported.value(499), "string: 999");

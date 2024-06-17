@@ -141,8 +141,7 @@ impl FFI_ArrowArray {
                 // the `FFI_ArrowArray` offset field.
                 Some(unsafe {
                     let b = &data.buffers()[0];
-                    b.as_ptr().offset_from(b.get_bytes().ptr().as_ptr()) as usize
-                        / std::mem::size_of::<i32>()
+                    b.ptr_offset() / std::mem::size_of::<i32>()
                 })
             }
             DataType::LargeUtf8 | DataType::LargeBinary => {
@@ -153,8 +152,7 @@ impl FFI_ArrowArray {
                 // the `FFI_ArrowArray` offset field.
                 Some(unsafe {
                     let b = &data.buffers()[0];
-                    b.as_ptr().offset_from(b.get_bytes().ptr().as_ptr()) as usize
-                        / std::mem::size_of::<i64>()
+                    b.ptr_offset() / std::mem::size_of::<i64>()
                 })
             }
             _ => None,
@@ -195,7 +193,7 @@ impl FFI_ArrowArray {
                         ) => {
                             // For offset buffer, take original pointer without offset.
                             // Buffer offset should be handled by `FFI_ArrowArray` offset field.
-                            Some(b.get_bytes().ptr().as_ptr() as *const c_void)
+                            Some(b.data_ptr().as_ptr() as *const c_void)
                         }
                         // For other buffers, note that `raw_data` takes into account the buffer's offset
                         _ => Some(b.as_ptr() as *const c_void),
