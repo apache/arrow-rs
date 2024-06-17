@@ -898,7 +898,6 @@ impl AmazonS3Builder {
             info!("Using Instance credential provider");
 
             let token = InstanceCredentialProvider {
-                cache: Default::default(),
                 imdsv1_fallback: self.imdsv1_fallback.get()?,
                 metadata_endpoint: self
                     .metadata_endpoint

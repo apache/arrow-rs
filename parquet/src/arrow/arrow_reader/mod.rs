@@ -248,7 +248,9 @@ impl<T> ArrowReaderBuilder<T> {
 /// is then read from the file, including projection and filter pushdown
 #[derive(Debug, Clone, Default)]
 pub struct ArrowReaderOptions {
+    /// Should the reader strip any user defined metadata from the Arrow schema
     skip_arrow_metadata: bool,
+    /// If true, attempt to read `OffsetIndex` and `ColumnIndex`
     pub(crate) page_index: bool,
 }
 
@@ -271,34 +273,58 @@ impl ArrowReaderOptions {
         }
     }
 
-    /// Enable decoding of the [`PageIndex`], if present (defaults to `false`)
+    /// Enable reading [`PageIndex`], if present (defaults to `false`)
     ///
     /// The `PageIndex` can be used to push down predicates to the parquet scan,
     /// potentially eliminating unnecessary IO, by some query engines.
     ///
+    /// If this is enabled, [`ParquetMetaData::column_index`] and
+    /// [`ParquetMetaData::offset_index`] will be populated if the corresponding
+    /// information is present in the file.
+    ///
     /// [`PageIndex`]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
+    /// [`ParquetMetaData::column_index`]: crate::file::metadata::ParquetMetaData::column_index
+    /// [`ParquetMetaData::offset_index`]: crate::file::metadata::ParquetMetaData::offset_index
     pub fn with_page_index(self, page_index: bool) -> Self {
         Self { page_index, ..self }
     }
 }
 
-/// The cheaply clone-able metadata necessary to construct a [`ArrowReaderBuilder`]
+/// The metadata necessary to construct a [`ArrowReaderBuilder`]
 ///
-/// This allows loading the metadata for a file once and then using this to construct
-/// multiple separate readers, for example, to distribute readers across multiple threads
+/// Note this structure is cheaply clone-able as it consists of several arcs.
+///
+/// This structure allows
+///
+/// 1. Loading metadata for a file once and then using that same metadata to
+/// construct multiple separate readers, for example, to distribute readers
+/// across multiple threads
+///
+/// 2. Using a cached copy of the [`ParquetMetadata`] rather than reading it
+/// from the file each time a reader is constructed.
+///
+/// [`ParquetMetadata`]: crate::file::metadata::ParquetMetaData
 #[derive(Debug, Clone)]
 pub struct ArrowReaderMetadata {
+    /// The Parquet Metadata, if known aprior
     pub(crate) metadata: Arc<ParquetMetaData>,
-
+    /// The Arrow Schema
     pub(crate) schema: SchemaRef,
 
     pub(crate) fields: Option<Arc<ParquetField>>,
 }
 
 impl ArrowReaderMetadata {
-    /// Loads [`ArrowReaderMetadata`] from the provided [`ChunkReader`]
+    /// Loads [`ArrowReaderMetadata`] from the provided [`ChunkReader`], if necessary
     ///
-    /// See [`ParquetRecordBatchReaderBuilder::new_with_metadata`] for how this can be used
+    /// See [`ParquetRecordBatchReaderBuilder::new_with_metadata`] for an
+    /// example of how this can be used
+    ///
+    /// # Notes
+    ///
+    /// If `options` has [`ArrowReaderOptions::with_page_index`] true, but
+    /// `Self::metadata` is missing the page index, this function will attempt
+    /// to load the page index by making an object store request.
     pub fn load<T: ChunkReader>(reader: &T, options: ArrowReaderOptions) -> Result<Self> {
         let mut metadata = footer::parse_metadata(reader)?;
         if options.page_index {
@@ -320,6 +346,12 @@ impl ArrowReaderMetadata {
         Self::try_new(Arc::new(metadata), options)
     }
 
+    /// Create a new [`ArrowReaderMetadata`]
+    ///
+    /// # Notes
+    ///
+    /// This function does not attempt to load the PageIndex if not present in the metadata.
+    /// See [`Self::load`] for more details.
     pub fn try_new(metadata: Arc<ParquetMetaData>, options: ArrowReaderOptions) -> Result<Self> {
         let kv_metadata = match options.skip_arrow_metadata {
             true => None,
@@ -407,9 +439,17 @@ impl<T: ChunkReader + 'static> ParquetRecordBatchReaderBuilder<T> {
 
     /// Create a [`ParquetRecordBatchReaderBuilder`] from the provided [`ArrowReaderMetadata`]
     ///
-    /// This allows loading metadata once and using it to create multiple builders with
-    /// potentially different settings
+    /// This interface allows:
     ///
+    /// 1. Loading metadata once and using it to create multiple builders with
+    /// potentially different settings or run on different threads
+    ///
+    /// 2. Using a cached copy of the metadata rather than re-reading it from the
+    /// file each time a reader is constructed.
+    ///
+    /// See the docs on [`ArrowReaderMetadata`] for more details
+    ///
+    /// # Example
     /// ```
     /// # use std::fs::metadata;
     /// # use std::sync::Arc;

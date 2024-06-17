@@ -573,6 +573,7 @@ impl ArrayData {
                 DataType::Binary | DataType::Utf8 => {
                     (vec![zeroed((len + 1) * 4), zeroed(0)], vec![], true)
                 }
+                DataType::BinaryView | DataType::Utf8View => (vec![zeroed(len * 16)], vec![], true),
                 DataType::LargeBinary | DataType::LargeUtf8 => {
                     (vec![zeroed((len + 1) * 8), zeroed(0)], vec![], true)
                 }
@@ -2208,5 +2209,21 @@ mod tests {
 
         data.align_buffers();
         data.validate_full().unwrap();
+    }
+
+    #[test]
+    fn test_null_view_types() {
+        let array_len = 32;
+        let array = ArrayData::new_null(&DataType::BinaryView, array_len);
+        assert_eq!(array.len(), array_len);
+        for i in 0..array.len() {
+            assert!(array.is_null(i));
+        }
+
+        let array = ArrayData::new_null(&DataType::Utf8View, array_len);
+        assert_eq!(array.len(), array_len);
+        for i in 0..array.len() {
+            assert!(array.is_null(i));
+        }
     }
 }

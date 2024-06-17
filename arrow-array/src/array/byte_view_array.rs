@@ -265,6 +265,56 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
             phantom: Default::default(),
         }
     }
+
+    /// Returns a "compacted" version of this array
+    ///
+    /// The original array will *not* be modified
+    ///
+    /// # Garbage Collection
+    ///
+    /// Before GC:
+    /// ```text
+    ///                                        ┌──────┐                 
+    ///                                        │......│                 
+    ///                                        │......│                 
+    /// ┌────────────────────┐       ┌ ─ ─ ─ ▶ │Data1 │   Large buffer  
+    /// │       View 1       │─ ─ ─ ─          │......│  with data that
+    /// ├────────────────────┤                 │......│ is not referred
+    /// │       View 2       │─ ─ ─ ─ ─ ─ ─ ─▶ │Data2 │ to by View 1 or
+    /// └────────────────────┘                 │......│      View 2     
+    ///                                        │......│                 
+    ///    2 views, refer to                   │......│                 
+    ///   small portions of a                  └──────┘                 
+    ///      large buffer                                               
+    /// ```
+    ///                                                                
+    /// After GC:
+    ///
+    /// ```text
+    /// ┌────────────────────┐                 ┌─────┐    After gc, only
+    /// │       View 1       │─ ─ ─ ─ ─ ─ ─ ─▶ │Data1│     data that is  
+    /// ├────────────────────┤       ┌ ─ ─ ─ ▶ │Data2│    pointed to by  
+    /// │       View 2       │─ ─ ─ ─          └─────┘     the views is  
+    /// └────────────────────┘                                 left      
+    ///                                                                  
+    ///                                                                  
+    ///         2 views                                                  
+    /// ```
+    /// This method will compact the data buffers by recreating the view array and only include the data
+    /// that is pointed to by the views.
+    ///
+    /// Note that it will copy the array regardless of whether the original array is compact.
+    /// Use with caution as this can be an expensive operation, only use it when you are sure that the view
+    /// array is significantly smaller than when it is originally created, e.g., after filtering or slicing.
+    pub fn gc(&self) -> Self {
+        let mut builder = GenericByteViewBuilder::<T>::with_capacity(self.len());
+
+        for v in self.iter() {
+            builder.append_option(v);
+        }
+
+        builder.finish()
+    }
 }
 
 impl<T: ByteViewType + ?Sized> Debug for GenericByteViewArray<T> {
@@ -644,5 +694,40 @@ mod tests {
         let buffers = vec![Buffer::from_slice_ref(input_str_2.as_bytes())];
 
         StringViewArray::new(views, buffers, None);
+    }
+
+    #[test]
+    fn test_gc() {
+        let test_data = [
+            Some("longer than 12 bytes"),
+            Some("short"),
+            Some("t"),
+            Some("longer than 12 bytes"),
+            None,
+            Some("short"),
+        ];
+
+        let array = {
+            let mut builder = StringViewBuilder::new().with_block_size(8); // create multiple buffers
+            test_data.into_iter().for_each(|v| builder.append_option(v));
+            builder.finish()
+        };
+        assert!(array.buffers.len() > 1);
+
+        fn check_gc(to_test: &StringViewArray) {
+            let gc = to_test.gc();
+            assert_ne!(to_test.data_buffers().len(), gc.data_buffers().len());
+
+            to_test.iter().zip(gc.iter()).for_each(|(a, b)| {
+                assert_eq!(a, b);
+            });
+            assert_eq!(to_test.len(), gc.len());
+        }
+
+        check_gc(&array);
+        check_gc(&array.slice(1, 3));
+        check_gc(&array.slice(2, 1));
+        check_gc(&array.slice(2, 2));
+        check_gc(&array.slice(3, 1));
     }
 }
