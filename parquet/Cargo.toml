@@ -67,7 +67,7 @@ twox-hash = { version = "1.6", default-features = false }
 paste = { version = "1.0" }
 half = { version = "2.1", default-features = false, features = ["num-traits"] }
 
-compact-thrift-rs = { version = "0.1.0", git = "https://github.com/jhorstmann/compact-thrift.git", commit = "41c9f931312f8245b56633fe0074a63cdf8e7ba6" }
+compact-thrift-rs = { version = "0.1.0", git = "https://github.com/jhorstmann/compact-thrift.git", rev = "5c773e3ea83a6ca4ad41e224dc47695dfc67478d" }
 
 [dev-dependencies]
 base64 = { version = "0.22", default-features = false, features = ["std"] }
