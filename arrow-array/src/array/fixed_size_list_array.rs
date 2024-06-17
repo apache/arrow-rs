@@ -244,10 +244,8 @@ impl FixedSizeListArray {
 
     /// Returns ith value of this list array.
     pub fn value(&self, i: usize) -> ArrayRef {
-        self.values.slice(
-            self.value_offset_at(i) as usize,
-            self.value_length() as usize,
-        )
+        self.values
+            .slice(self.value_offset_at(i), self.value_length() as usize)
     }
 
     /// Returns the offset for value at index `i`.
