@@ -221,6 +221,23 @@ fn get_result<T: GetClient>(
         )
     );
 
+    // Add attributes that match the user-defined metadata prefix (e.g. x-amz-meta-)
+    let attributes = if let Some(prefix) = T::HEADER_CONFIG.user_defined_metadata_prefix {
+        let mut attributes = attributes.clone();
+        for (key, val) in response.headers() {
+            if key.as_str().starts_with(prefix) {
+                let suffix = key.as_str()[prefix.len()..].to_string();
+                attributes.insert(
+                    Attribute::Metadata(suffix),
+                    val.to_str().unwrap().to_string().into()
+                );
+            }
+        }
+        attributes
+    } else {
+        attributes
+    };
+
     let stream = response
         .bytes_stream()
         .map_err(|source| crate::Error::Generic {
@@ -253,6 +270,7 @@ mod tests {
             etag_required: false,
             last_modified_required: false,
             version_header: None,
+            user_defined_metadata_prefix: None,
         };
 
         async fn get_request(&self, _: &Path, _: GetOptions) -> Result<Response> {

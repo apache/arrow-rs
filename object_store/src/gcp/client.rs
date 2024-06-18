@@ -49,9 +49,9 @@ use std::sync::Arc;
 
 const VERSION_HEADER: &str = "x-goog-generation";
 const DEFAULT_CONTENT_TYPE: &str = "application/octet-stream";
+const USER_DEFINED_METADATA_HEADER_PREFIX: &str = "x-goog-meta-";
 
 static VERSION_MATCH: HeaderName = HeaderName::from_static("x-goog-if-generation-match");
-static USER_DEFINED_METADATA_HEADER_PREFIX: HeaderName = HeaderName::from_static("x-goog-meta-");
 
 #[derive(Debug, Snafu)]
 enum Error {
@@ -200,9 +200,8 @@ impl<'a> Request<'a> {
                     has_content_type = true;
                     builder.header(CONTENT_TYPE, v.as_ref())
                 }
-                Attribute::Metadata(k) => {
-                    builder.header(&format!("{}{}", USER_DEFINED_METADATA_HEADER_PREFIX, key), value);
-                }
+                Attribute::Metadata(k_suffix) => {
+                    builder.header(&format!("{}{}", USER_DEFINED_METADATA_HEADER_PREFIX, k_suffix), v.as_ref())                }
             };
         }
 
@@ -571,6 +570,7 @@ impl GetClient for GoogleCloudStorageClient {
         etag_required: true,
         last_modified_required: true,
         version_header: Some(VERSION_HEADER),
+        user_defined_metadata_prefix: Some(USER_DEFINED_METADATA_HEADER_PREFIX),
     };
 
     /// Perform a get request <https://cloud.google.com/storage/docs/xml-api/get-object-download>

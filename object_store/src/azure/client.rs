@@ -48,6 +48,7 @@ use std::time::Duration;
 use url::Url;
 
 const VERSION_HEADER: &str = "x-ms-version-id";
+const USER_DEFINED_METADATA_HEADER_PREFIX: &str = "x-ms-meta-";
 static MS_CACHE_CONTROL: HeaderName = HeaderName::from_static("x-ms-blob-cache-control");
 static MS_CONTENT_TYPE: HeaderName = HeaderName::from_static("x-ms-blob-content-type");
 static MS_CONTENT_DISPOSITION: HeaderName =
@@ -56,7 +57,6 @@ static MS_CONTENT_ENCODING: HeaderName = HeaderName::from_static("x-ms-blob-cont
 static MS_CONTENT_LANGUAGE: HeaderName = HeaderName::from_static("x-ms-blob-content-language");
 
 static TAGS_HEADER: HeaderName = HeaderName::from_static("x-ms-tags");
-static USER_DEFINED_METADATA_HEADER_PREFIX: HeaderName = HeaderName::from_static("x-ms-meta-");
 
 /// A specialized `Error` for object store-related errors
 #[derive(Debug, Snafu)]
@@ -209,8 +209,8 @@ impl<'a> PutRequest<'a> {
                     has_content_type = true;
                     builder.header(&MS_CONTENT_TYPE, v.as_ref())
                 }
-                Attribute::Metadata(k) => {
-                    builder.header(&format!("{}{}", USER_DEFINED_METADATA_HEADER_PREFIX, key), value);
+                Attribute::Metadata(k_suffix) => {
+                    builder.header(&format!("{}{}", USER_DEFINED_METADATA_HEADER_PREFIX, k_suffix), v.as_ref())
                 }
             };
         }
@@ -503,6 +503,7 @@ impl GetClient for AzureClient {
         etag_required: true,
         last_modified_required: true,
         version_header: Some(VERSION_HEADER),
+        user_defined_metadata_prefix: Some(USER_DEFINED_METADATA_HEADER_PREFIX),
     };
 
     /// Make an Azure GET request
