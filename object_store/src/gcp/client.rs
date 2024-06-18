@@ -201,7 +201,8 @@ impl<'a> Request<'a> {
                     builder.header(CONTENT_TYPE, v.as_ref())
                 }
                 Attribute::Metadata(k_suffix) => {
-                    builder.header(&format!("{}{}", USER_DEFINED_METADATA_HEADER_PREFIX, k_suffix), v.as_ref())                }
+                    builder.header(&format!("{}{}", USER_DEFINED_METADATA_HEADER_PREFIX, k_suffix), v.as_ref())
+                }
             };
         }
 
