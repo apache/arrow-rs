@@ -209,9 +209,10 @@ impl<'a> PutRequest<'a> {
                     has_content_type = true;
                     builder.header(&MS_CONTENT_TYPE, v.as_ref())
                 }
-                Attribute::Metadata(k_suffix) => {
-                    builder.header(&format!("{}{}", USER_DEFINED_METADATA_HEADER_PREFIX, k_suffix), v.as_ref())
-                }
+                Attribute::Metadata(k_suffix) => builder.header(
+                    &format!("{}{}", USER_DEFINED_METADATA_HEADER_PREFIX, k_suffix),
+                    v.as_ref(),
+                ),
             };
         }
 

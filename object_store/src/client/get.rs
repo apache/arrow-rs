@@ -229,7 +229,7 @@ fn get_result<T: GetClient>(
                 let suffix = key.as_str()[prefix.len()..].to_string();
                 attributes.insert(
                     Attribute::Metadata(suffix),
-                    val.to_str().unwrap().to_string().into()
+                    val.to_str().unwrap().to_string().into(),
                 );
             }
         }
@@ -418,7 +418,10 @@ mod tests {
         let res = get_result::<TestClient>(&path, None, resp).unwrap();
         assert_eq!(res.meta.size, 12);
         assert_eq!(res.range, 0..12);
-        assert_eq!(res.attributes.get(&Attribute::Metadata("foo".to_string())), Some(&"bar".into()));
+        assert_eq!(
+            res.attributes.get(&Attribute::Metadata("foo".to_string())),
+            Some(&"bar".into())
+        );
         let bytes = res.bytes().await.unwrap();
         assert_eq!(bytes.len(), 12);
     }

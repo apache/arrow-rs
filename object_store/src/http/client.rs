@@ -182,7 +182,7 @@ impl Client {
                     Attribute::ContentType => {
                         has_content_type = true;
                         builder.header(CONTENT_TYPE, v.as_ref())
-                    },
+                    }
                     // Ignore metadata attributes
                     Attribute::Metadata(_) => builder,
                 };
