@@ -43,7 +43,7 @@ impl From<Error> for super::Error {
 
 /// Recognises various URL formats, identifying the relevant [`ObjectStore`]
 #[derive(Debug, Eq, PartialEq)]
-enum ObjectStoreScheme {
+pub enum ObjectStoreScheme {
     /// Url corresponding to [`LocalFileSystem`]
     Local,
     /// Url corresponding to [`InMemory`]
@@ -62,7 +62,7 @@ impl ObjectStoreScheme {
     /// Create an [`ObjectStoreScheme`] from the provided [`Url`]
     ///
     /// Returns the [`ObjectStoreScheme`] and the remaining [`Path`]
-    fn parse(url: &Url) -> Result<(Self, Path), Error> {
+    pub fn parse(url: &Url) -> Result<(Self, Path), Error> {
         let strip_bucket = || Some(url.path().strip_prefix('/')?.split_once('/')?.1);
 
         let (scheme, path) = match (url.scheme(), url.host_str()) {

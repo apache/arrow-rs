@@ -550,7 +550,7 @@ pub mod integration;
 
 pub use attributes::*;
 
-pub use parse::{parse_url, parse_url_opts};
+pub use parse::{parse_url, parse_url_opts, ObjectStoreScheme};
 pub use payload::*;
 pub use upload::*;
 pub use util::{coalesce_ranges, collect_bytes, GetRange, OBJECT_STORE_COALESCE_DEFAULT};
