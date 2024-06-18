@@ -270,7 +270,7 @@ mod tests {
             etag_required: false,
             last_modified_required: false,
             version_header: None,
-            user_defined_metadata_prefix: None,
+            user_defined_metadata_prefix: Some("x-test-meta-"),
         };
 
         async fn get_request(&self, _: &Path, _: GetOptions) -> Result<Response> {
@@ -283,6 +283,7 @@ mod tests {
         range: Option<Range<usize>>,
         status: StatusCode,
         content_range: Option<&str>,
+        headers: Option<Vec<(&str, &str)>>,
     ) -> Response {
         let mut builder = http::Response::builder();
         if let Some(range) = content_range {
@@ -293,6 +294,12 @@ mod tests {
             Some(range) => vec![0_u8; range.end - range.start],
             None => vec![0_u8; object_size],
         };
+
+        if let Some(headers) = headers {
+            for (key, value) in headers {
+                builder = builder.header(key, value);
+            }
+        }
 
         builder
             .status(status)
@@ -306,7 +313,7 @@ mod tests {
     async fn test_get_result() {
         let path = Path::from("test");
 
-        let resp = make_response(12, None, StatusCode::OK, None);
+        let resp = make_response(12, None, StatusCode::OK, None, None);
         let res = get_result::<TestClient>(&path, None, resp).unwrap();
         assert_eq!(res.meta.size, 12);
         assert_eq!(res.range, 0..12);
@@ -320,6 +327,7 @@ mod tests {
             Some(2..3),
             StatusCode::PARTIAL_CONTENT,
             Some("bytes 2-2/12"),
+            None,
         );
         let res = get_result::<TestClient>(&path, Some(get_range.clone()), resp).unwrap();
         assert_eq!(res.meta.size, 12);
@@ -327,7 +335,7 @@ mod tests {
         let bytes = res.bytes().await.unwrap();
         assert_eq!(bytes.len(), 1);
 
-        let resp = make_response(12, Some(2..3), StatusCode::OK, None);
+        let resp = make_response(12, Some(2..3), StatusCode::OK, None, None);
         let err = get_result::<TestClient>(&path, Some(get_range.clone()), resp).unwrap_err();
         assert_eq!(
             err.to_string(),
@@ -339,6 +347,7 @@ mod tests {
             Some(2..3),
             StatusCode::PARTIAL_CONTENT,
             Some("bytes 2-3/12"),
+            None,
         );
         let err = get_result::<TestClient>(&path, Some(get_range.clone()), resp).unwrap_err();
         assert_eq!(err.to_string(), "Requested 2..3, got 2..4");
@@ -348,6 +357,7 @@ mod tests {
             Some(2..3),
             StatusCode::PARTIAL_CONTENT,
             Some("bytes 2-2/*"),
+            None,
         );
         let err = get_result::<TestClient>(&path, Some(get_range.clone()), resp).unwrap_err();
         assert_eq!(
@@ -355,7 +365,7 @@ mod tests {
             "Failed to parse value for CONTENT_RANGE header: \"bytes 2-2/*\""
         );
 
-        let resp = make_response(12, Some(2..3), StatusCode::PARTIAL_CONTENT, None);
+        let resp = make_response(12, Some(2..3), StatusCode::PARTIAL_CONTENT, None, None);
         let err = get_result::<TestClient>(&path, Some(get_range.clone()), resp).unwrap_err();
         assert_eq!(
             err.to_string(),
@@ -367,6 +377,7 @@ mod tests {
             Some(2..3),
             StatusCode::PARTIAL_CONTENT,
             Some("bytes 2-3/2"),
+            None,
         );
         let err = get_result::<TestClient>(&path, Some(get_range.clone()), resp).unwrap_err();
         assert_eq!(
@@ -379,6 +390,7 @@ mod tests {
             Some(2..6),
             StatusCode::PARTIAL_CONTENT,
             Some("bytes 2-5/6"),
+            None,
         );
         let res = get_result::<TestClient>(&path, Some(GetRange::Suffix(4)), resp).unwrap();
         assert_eq!(res.meta.size, 6);
@@ -391,8 +403,23 @@ mod tests {
             Some(2..6),
             StatusCode::PARTIAL_CONTENT,
             Some("bytes 2-3/6"),
+            None,
         );
         let err = get_result::<TestClient>(&path, Some(GetRange::Suffix(4)), resp).unwrap_err();
         assert_eq!(err.to_string(), "Requested 2..6, got 2..4");
+
+        let resp = make_response(
+            12,
+            None,
+            StatusCode::OK,
+            None,
+            Some(vec![("x-test-meta-foo", "bar")]),
+        );
+        let res = get_result::<TestClient>(&path, None, resp).unwrap();
+        assert_eq!(res.meta.size, 12);
+        assert_eq!(res.range, 0..12);
+        assert_eq!(res.attributes.get(&Attribute::Metadata("foo".to_string())), Some(&"bar".into()));
+        let bytes = res.bytes().await.unwrap();
+        assert_eq!(bytes.len(), 12);
     }
 }
