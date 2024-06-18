@@ -62,6 +62,8 @@ use std::sync::Arc;
 const VERSION_HEADER: &str = "x-amz-version-id";
 const SHA256_CHECKSUM: &str = "x-amz-checksum-sha256";
 
+static USER_DEFINED_METADATA_HEADER_PREFIX: HeaderName = HeaderName::from_static("x-amz-meta-");
+
 /// A specialized `Error` for object store-related errors
 #[derive(Debug, Snafu)]
 #[allow(missing_docs)]
@@ -325,6 +327,9 @@ impl<'a> Request<'a> {
                 Attribute::ContentType => {
                     has_content_type = true;
                     builder.header(CONTENT_TYPE, v.as_ref())
+                }
+                Attribute::Metadata(k) => {
+                    builder.header(&format!("{}{}", USER_DEFINED_METADATA_HEADER_PREFIX, key), value);
                 }
             };
         }

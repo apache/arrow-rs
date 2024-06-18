@@ -51,6 +51,7 @@ const VERSION_HEADER: &str = "x-goog-generation";
 const DEFAULT_CONTENT_TYPE: &str = "application/octet-stream";
 
 static VERSION_MATCH: HeaderName = HeaderName::from_static("x-goog-if-generation-match");
+static USER_DEFINED_METADATA_HEADER_PREFIX: HeaderName = HeaderName::from_static("x-goog-meta-");
 
 #[derive(Debug, Snafu)]
 enum Error {
@@ -198,6 +199,9 @@ impl<'a> Request<'a> {
                 Attribute::ContentType => {
                     has_content_type = true;
                     builder.header(CONTENT_TYPE, v.as_ref())
+                }
+                Attribute::Metadata(k) => {
+                    builder.header(&format!("{}{}", USER_DEFINED_METADATA_HEADER_PREFIX, key), value);
                 }
             };
         }

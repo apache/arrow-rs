@@ -56,6 +56,7 @@ static MS_CONTENT_ENCODING: HeaderName = HeaderName::from_static("x-ms-blob-cont
 static MS_CONTENT_LANGUAGE: HeaderName = HeaderName::from_static("x-ms-blob-content-language");
 
 static TAGS_HEADER: HeaderName = HeaderName::from_static("x-ms-tags");
+static USER_DEFINED_METADATA_HEADER_PREFIX: HeaderName = HeaderName::from_static("x-ms-meta-");
 
 /// A specialized `Error` for object store-related errors
 #[derive(Debug, Snafu)]
@@ -207,6 +208,9 @@ impl<'a> PutRequest<'a> {
                 Attribute::ContentType => {
                     has_content_type = true;
                     builder.header(&MS_CONTENT_TYPE, v.as_ref())
+                }
+                Attribute::Metadata(k) => {
+                    builder.header(&format!("{}{}", USER_DEFINED_METADATA_HEADER_PREFIX, key), value);
                 }
             };
         }
