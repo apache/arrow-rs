@@ -1147,18 +1147,18 @@ fn encode_column(
         Encoder::Stateless => {
             downcast_primitive_array! {
                 column => {
-                    if column.is_nullable(){
-                        fixed::encode(data, offsets, column, opts)
+                    if let Some(nulls) = column.nulls().filter(|n| n.null_count() > 0){
+                        fixed::encode(data, offsets, column.values(), nulls, opts)
                     } else {
-                        fixed::encode_not_null(data, offsets, column, opts)
+                        fixed::encode_not_null(data, offsets, column.values(), opts)
                     }
                 }
                 DataType::Null => {}
                 DataType::Boolean => {
-                    if column.is_nullable(){
-                        fixed::encode_bool(data, offsets, column.as_boolean(), opts)
+                    if let Some(nulls) = column.nulls().filter(|n| n.null_count() > 0){
+                        fixed::encode_boolean(data, offsets, column.as_boolean().values(), nulls, opts)
                     } else {
-                        fixed::encode_bool_not_null(data, offsets, column.as_boolean(), opts)
+                        fixed::encode_boolean_not_null(data, offsets, column.as_boolean().values(), opts)
                     }
                 }
                 DataType::Binary => {
