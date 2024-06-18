@@ -139,10 +139,7 @@ impl FFI_ArrowArray {
                 // the consumer to calculate incorrect length of data buffer (buffer 1).
                 // We need to get the offset of the offset buffer and fill it in
                 // the `FFI_ArrowArray` offset field.
-                Some(unsafe {
-                    let b = &data.buffers()[0];
-                    b.ptr_offset() / std::mem::size_of::<i32>()
-                })
+                Some(data.buffers()[0].ptr_offset() / std::mem::size_of::<i32>())
             }
             DataType::LargeUtf8 | DataType::LargeBinary => {
                 // Offset buffer is possible a slice of the buffer.
@@ -150,10 +147,7 @@ impl FFI_ArrowArray {
                 // the consumer to calculate incorrect length of data buffer (buffer 1).
                 // We need to get the offset of the offset buffer and fill it in
                 // the `FFI_ArrowArray` offset field.
-                Some(unsafe {
-                    let b = &data.buffers()[0];
-                    b.ptr_offset() / std::mem::size_of::<i64>()
-                })
+                Some(data.buffers()[0].ptr_offset() / std::mem::size_of::<i64>())
             }
             _ => None,
         };

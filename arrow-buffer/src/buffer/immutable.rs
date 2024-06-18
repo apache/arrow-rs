@@ -74,14 +74,9 @@ impl Buffer {
     /// Returns the offset, in bytes, of `Self::ptr` to `Self::data`
     ///
     /// self.ptr and self.data can be different after slicing or advancing the buffer.
-    ///
-    /// # Safety
-    ///
-    /// This function is unsafe as it uses unsafe function `offset_from`. Under certain
-    /// conditions, this function can cause undefined behavior. See the documentation of
-    /// `offset_from` for more information.
-    pub unsafe fn ptr_offset(&self) -> usize {
-        self.ptr.offset_from(self.data.ptr().as_ptr()) as usize
+    pub fn ptr_offset(&self) -> usize {
+        // Safety: `ptr` is always in bounds of `data`.
+        unsafe { self.ptr.offset_from(self.data.ptr().as_ptr()) as usize }
     }
 
     /// Returns the pointer to the start of the buffer without the offset.
