@@ -192,7 +192,7 @@ fn get_result<T: GetClient>(
         }}
     }
 
-    let attributes = parse_attributes!(
+    let mut attributes = parse_attributes!(
         response.headers(),
         (
             CACHE_CONTROL,
@@ -222,21 +222,18 @@ fn get_result<T: GetClient>(
     );
 
     // Add attributes that match the user-defined metadata prefix (e.g. x-amz-meta-)
-    let attributes = if let Some(prefix) = T::HEADER_CONFIG.user_defined_metadata_prefix {
-        let mut attributes = attributes.clone();
+    if let Some(prefix) = T::HEADER_CONFIG.user_defined_metadata_prefix {
         for (key, val) in response.headers() {
-            if key.as_str().starts_with(prefix) {
-                let suffix = key.as_str()[prefix.len()..].to_string();
-                attributes.insert(
-                    Attribute::Metadata(suffix),
-                    val.to_str().unwrap().to_string().into(),
-                );
+            if let Some(suffix) = key.as_str().strip_prefix(prefix) {
+                if let Ok(val_str) = val.to_str() {
+                    attributes.insert(
+                        Attribute::Metadata(suffix.to_string()),
+                        val_str.to_string().into(),
+                    );
+                }
             }
         }
-        attributes
-    } else {
-        attributes
-    };
+    }
 
     let stream = response
         .bytes_stream()
