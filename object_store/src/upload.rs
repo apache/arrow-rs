@@ -92,17 +92,18 @@ pub trait MultipartUpload: Send + std::fmt::Debug {
     async fn abort(&mut self) -> Result<()>;
 }
 
-impl <W: MultipartUpload + ?Sized> for Box<W> {
+#[async_trait]
+impl<W: MultipartUpload + ?Sized> MultipartUpload for Box<W> {
     fn put_part(&mut self, data: PutPayload) -> UploadPart {
         (**self).put_part(data)
     }
 
-    fn complete(&mut self) -> BoxFuture<'static, Result<PutResult>> {
-        (**self).complete()
+    async fn complete(&mut self) -> Result<PutResult> {
+        (**self).complete().await
     }
 
-    fn abort(&mut self) -> BoxFuture<'static, Result<()>> {
-        (**self).abort()
+    async fn abort(&mut self) -> Result<()> {
+        (**self).abort().await
     }
 }
 
