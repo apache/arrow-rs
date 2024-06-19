@@ -97,11 +97,11 @@ impl <W: MultipartUpload + ?Sized> for Box<W> {
         (**self).put_part(data)
     }
 
-    fn complete(&mut self) -> BoxFuture<'static, Result<PutResult, Error>> {
+    fn complete(&mut self) -> BoxFuture<'static, Result<PutResult>> {
         (**self).complete()
     }
 
-    fn abort(&mut self) -> BoxFuture<'static, Result<(), Error>> {
+    fn abort(&mut self) -> BoxFuture<'static, Result<()>> {
         (**self).abort()
     }
 }
