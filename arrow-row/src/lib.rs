@@ -1102,7 +1102,7 @@ fn row_lengths(cols: &[ArrayRef], encoders: &[Encoder]) -> Vec<usize> {
                         let len = len.to_usize().unwrap();
                         lengths.iter_mut().for_each(|x| *x += 1 + len)
                     }
-                    _ => unreachable!(),
+                    _ => unimplemented!("unsupported data type: {}", array.data_type()),
                 }
             }
             Encoder::Dictionary(values, null) => {
@@ -1186,7 +1186,7 @@ fn encode_column(
                     let array = column.as_any().downcast_ref().unwrap();
                     fixed::encode_fixed_size_binary(data, offsets, array, opts)
                 }
-                _ => unreachable!(),
+                _ => unimplemented!("unsupported data type: {}", column.data_type()),
             }
         }
         Encoder::Dictionary(values, nulls) => {
@@ -1276,7 +1276,7 @@ unsafe fn decode_column(
                 DataType::LargeUtf8 => Arc::new(decode_string::<i64>(rows, options, validate_utf8)),
                 DataType::Utf8View => Arc::new(decode_string_view(rows, options, validate_utf8)),
                 DataType::Dictionary(_, _) => todo!(),
-                _ => unreachable!()
+                _ => unimplemented!("unsupported data type: {}", data_type),
             }
         }
         Codec::Dictionary(converter, _) => {
@@ -2077,6 +2077,19 @@ mod tests {
             .collect()
     }
 
+    fn generate_byte_view(len: usize, valid_percent: f64) -> BinaryViewArray {
+        let mut rng = thread_rng();
+        (0..len)
+            .map(|_| {
+                rng.gen_bool(valid_percent).then(|| {
+                    let len = rng.gen_range(0..100);
+                    let bytes: Vec<_> = (0..len).map(|_| rng.gen_range(0..128)).collect();
+                    bytes
+                })
+            })
+            .collect()
+    }
+
     fn generate_dictionary<K>(
         values: ArrayRef,
         len: usize,
@@ -2157,7 +2170,7 @@ mod tests {
 
     fn generate_column(len: usize) -> ArrayRef {
         let mut rng = thread_rng();
-        match rng.gen_range(0..15) {
+        match rng.gen_range(0..16) {
             0 => Arc::new(generate_primitive_array::<Int32Type>(len, 0.8)),
             1 => Arc::new(generate_primitive_array::<UInt32Type>(len, 0.8)),
             2 => Arc::new(generate_primitive_array::<Int64Type>(len, 0.8)),
@@ -2192,6 +2205,7 @@ mod tests {
                 Arc::new(generate_struct(values_len, 0.8))
             })),
             14 => Arc::new(generate_string_view(len, 0.8)),
+            15 => Arc::new(generate_byte_view(len, 0.8)),
             _ => unreachable!(),
         }
     }
