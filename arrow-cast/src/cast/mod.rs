@@ -2340,30 +2340,11 @@ where
     FROM: ByteArrayType,
     FROM::Offset: OffsetSizeTrait + ToPrimitive,
     V: ByteViewType,
+    FROM::Native: PartialEq<V::Native>,
 {
     let byte_array: &GenericByteArray<FROM> = array.as_bytes();
-    let len = array.len();
-    let str_values_buf = byte_array.values().clone();
-    let offsets = byte_array.offsets();
-
-    let mut views_builder = GenericByteViewBuilder::<V>::with_capacity(len);
-    let block = views_builder.append_block(str_values_buf);
-    for (i, w) in offsets.windows(2).enumerate() {
-        let offset = w[0].to_u32().unwrap();
-        let end = w[1].to_u32().unwrap();
-        let length = end - offset;
-
-        if byte_array.is_null(i) {
-            views_builder.append_null();
-        } else {
-            // Safety: the input was a valid array so it valid UTF8 (if string). And
-            // all offsets were valid and we created the views correctly
-            unsafe { views_builder.append_view_unchecked(block, offset, length) }
-        }
-    }
-
-    assert_eq!(views_builder.len(), len);
-    Ok(Arc::new(views_builder.finish()))
+    let byte_view_array = GenericByteViewArray::<V>::from(byte_array);
+    Ok(Arc::new(byte_view_array))
 }
 
 /// Helper function to cast from one `ByteViewType` array to `ByteArrayType` array.

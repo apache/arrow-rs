@@ -268,3 +268,24 @@ pub unsafe fn decode_string<I: OffsetSizeTrait>(
     // Row data must have come from a valid UTF-8 array
     GenericStringArray::from(builder.build_unchecked())
 }
+
+pub unsafe fn decode_binary_view(rows: &mut [&[u8]], options: SortOptions) -> BinaryViewArray {
+    let decoded: GenericBinaryArray<i64> = decode_binary(rows, options);
+
+    // Better performance might be to directly build the binary view instead of building to BinaryArray and then casting
+    // I suspect that the overhead is not a big deal.
+    // If it is, we can reimplement the `decode_binary_view` function to directly build the StringViewArray
+    BinaryViewArray::from(&decoded)
+}
+
+pub unsafe fn decode_string_view(
+    rows: &mut [&[u8]],
+    options: SortOptions,
+    validate_utf8: bool,
+) -> StringViewArray {
+    let decoded: GenericStringArray<i64> = decode_string(rows, options, validate_utf8);
+    // Better performance might be to directly build the string view instead of building to StringArray and then casting
+    // I suspect that the overhead is not a big deal.
+    // If it is, we can reimplement the `decode_string_view` function to directly build the StringViewArray
+    StringViewArray::from(&decoded)
+}
