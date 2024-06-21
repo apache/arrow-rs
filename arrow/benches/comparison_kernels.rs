@@ -58,10 +58,7 @@ fn bench_regexp_is_match_utf8_scalar(arr_a: &StringArray, value_b: &str) {
     .unwrap();
 }
 
-fn make_string_array<'a>(
-    size: usize,
-    rng: &'a mut StdRng,
-) -> impl Iterator<Item = Option<String>> + 'a {
+fn make_string_array(size: usize, rng: &mut StdRng) -> impl Iterator<Item = Option<String>> + '_ {
     (0..size).map(|_| {
         let len = rng.gen_range(0..64);
         let bytes = (0..len).map(|_| rng.gen_range(0..128)).collect();
