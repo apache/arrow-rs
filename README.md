@@ -79,7 +79,7 @@ versions approximately every 2 months.
 
 ## Related Projects
 
-There are two related crates in different repositories
+There are several related crates in different repositories
 
 | Crate                    | Description                                 | Documentation                           |
 | ------------------------ | ------------------------------------------- | --------------------------------------- |
