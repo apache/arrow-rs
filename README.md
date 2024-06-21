@@ -81,13 +81,17 @@ versions approximately every 2 months.
 
 There are two related crates in different repositories
 
-| Crate          | Description                             | Documentation                 |
-| -------------- | --------------------------------------- | ----------------------------- |
-| [`datafusion`] | In-memory query engine with SQL support | [(README)][datafusion-readme] |
-| [`ballista`]   | Distributed query execution             | [(README)][ballista-readme]   |
+| Crate                    | Description                                 | Documentation                           |
+| ------------------------ | ------------------------------------------- | --------------------------------------- |
+| [`datafusion`]           | In-memory query engine with SQL support     | [(README)][datafusion-readme]           |
+| [`ballista`]             | Distributed query execution                 | [(README)][ballista-readme]             |
+| [`object_store_opendal`] | Use [`opendal`] as [`object_store`] backend | [(README)][object_store_opendal-readme] |
 
 [`datafusion`]: https://crates.io/crates/datafusion
 [`ballista`]: https://crates.io/crates/ballista
+[`object_store_opendal`]: https://crates.io/crates/object_store_opendal
+[`opendal`]: https://crates.io/crates/opendal
+[`object_store_opendal-readme`]: https://github.com/apache/opendal/blob/main/integrations/object_store/README.md
 
 Collectively, these crates support a wider array of functionality for analytic computations in Rust.
 
