@@ -448,17 +448,17 @@ mod tests {
 
                 let left = StringArray::from($left);
                 let right = StringArray::from_iter_values([$right]);
-                let res = $op(&left, &right).unwrap();
+                let res = $op(&left, &Scalar::new(&right)).unwrap();
                 assert_eq!(res, expected);
 
                 let left = LargeStringArray::from($left);
                 let right = LargeStringArray::from_iter_values([$right]);
-                let res = $op(&left, &right).unwrap();
+                let res = $op(&left, &Scalar::new(&right)).unwrap();
                 assert_eq!(res, expected);
 
                 let left = StringViewArray::from($left);
                 let right = StringViewArray::from_iter_values([$right]);
-                let res = $op(&left, &right).unwrap();
+                let res = $op(&left, &Scalar::new(&right)).unwrap();
                 assert_eq!(res, expected);
             }
         };
