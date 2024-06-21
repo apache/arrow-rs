@@ -66,3 +66,7 @@ harness = false
 [[bench]]
 name = "gc_view_types"
 harness = false
+
+[[bench]]
+name = "fixed_size_list_array"
+harness = false

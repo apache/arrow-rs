@@ -131,6 +131,37 @@ impl FFI_ArrowArray {
             data.buffers().iter().map(|b| Some(b.clone())).collect()
         };
 
+        // Handle buffer offset for offset buffer.
+        let offset_offset = match data.data_type() {
+            DataType::Utf8 | DataType::Binary => {
+                // Offset buffer is possible a slice of the buffer.
+                // If we use slice pointer as exported buffer pointer, it will cause
+                // the consumer to calculate incorrect length of data buffer (buffer 1).
+                // We need to get the offset of the offset buffer and fill it in
+                // the `FFI_ArrowArray` offset field.
+                Some(data.buffers()[0].ptr_offset() / std::mem::size_of::<i32>())
+            }
+            DataType::LargeUtf8 | DataType::LargeBinary => {
+                // Offset buffer is possible a slice of the buffer.
+                // If we use slice pointer as exported buffer pointer, it will cause
+                // the consumer to calculate incorrect length of data buffer (buffer 1).
+                // We need to get the offset of the offset buffer and fill it in
+                // the `FFI_ArrowArray` offset field.
+                Some(data.buffers()[0].ptr_offset() / std::mem::size_of::<i64>())
+            }
+            _ => None,
+        };
+
+        let offset = if let Some(offset) = offset_offset {
+            if data.offset() != 0 {
+                // TODO: Adjust for data offset
+                panic!("The ArrayData of a slice offset buffer should not have offset");
+            }
+            offset
+        } else {
+            data.offset()
+        };
+
         // `n_buffers` is the number of buffers by the spec.
         let n_buffers = {
             data_layout.buffers.len() + {
@@ -143,9 +174,25 @@ impl FFI_ArrowArray {
 
         let buffers_ptr = buffers
             .iter()
-            .flat_map(|maybe_buffer| match maybe_buffer {
-                // note that `raw_data` takes into account the buffer's offset
-                Some(b) => Some(b.as_ptr() as *const c_void),
+            .enumerate()
+            .flat_map(|(buffer_idx, maybe_buffer)| match maybe_buffer {
+                Some(b) => {
+                    match (data.data_type(), buffer_idx) {
+                        (
+                            DataType::Utf8
+                            | DataType::LargeUtf8
+                            | DataType::Binary
+                            | DataType::LargeBinary,
+                            1,
+                        ) => {
+                            // For offset buffer, take original pointer without offset.
+                            // Buffer offset should be handled by `FFI_ArrowArray` offset field.
+                            Some(b.data_ptr().as_ptr() as *const c_void)
+                        }
+                        // For other buffers, note that `raw_data` takes into account the buffer's offset
+                        _ => Some(b.as_ptr() as *const c_void),
+                    }
+                }
                 // This is for null buffer. We only put a null pointer for
                 // null buffer if by spec it can contain null mask.
                 None if data_layout.can_contain_null_mask => Some(std::ptr::null()),
@@ -186,7 +233,7 @@ impl FFI_ArrowArray {
         Self {
             length: data.len() as i64,
             null_count: null_count as i64,
-            offset: data.offset() as i64,
+            offset: offset as i64,
             n_buffers,
             n_children,
             buffers: private_data.buffers_ptr.as_mut_ptr(),
