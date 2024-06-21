@@ -91,7 +91,7 @@ There are several related crates in different repositories
 [`ballista`]: https://crates.io/crates/ballista
 [`object_store_opendal`]: https://crates.io/crates/object_store_opendal
 [`opendal`]: https://crates.io/crates/opendal
-[`object_store_opendal-readme`]: https://github.com/apache/opendal/blob/main/integrations/object_store/README.md
+[object_store_opendal-readme]: https://github.com/apache/opendal/blob/main/integrations/object_store/README.md
 
 Collectively, these crates support a wider array of functionality for analytic computations in Rust.
 
