@@ -375,6 +375,17 @@ impl WriterBuilder {
         self.timestamp_format.as_deref()
     }
 
+    /// Set the CSV file's timestamp tz format
+    pub fn with_timestamp_tz_format(mut self, tz_format: String) -> Self {
+        self.timestamp_tz_format = Some(tz_format);
+        self
+    }
+
+    /// Get the CSV file's timestamp tz format if set, defaults to RFC3339
+    pub fn timestamp_tz_format(&self) -> Option<&str> {
+        self.timestamp_tz_format.as_deref()
+    }
+
     /// Set the value to represent null in output
     pub fn with_null(mut self, null_value: String) -> Self {
         self.null_value = Some(null_value);
@@ -759,6 +770,44 @@ sed do eiusmod tempor,-556132.25,1,,2019-04-18T02:45:55.555,23:46:03,foo
             "c1,c2,c3,c4
 2019-04-18T10:54:47.378Z,2019-04-18T10:54:47.378,1970-01-04,00:20:34
 2021-10-30T06:59:07Z,2021-10-30T06:59:07,1970-01-03,06:51:20\n",
+            String::from_utf8(buffer).unwrap()
+        );
+    }
+
+    #[test]
+    fn test_write_csv_tz_format() {
+        let schema = Schema::new(vec![
+            Field::new(
+                "c1",
+                DataType::Timestamp(TimeUnit::Millisecond, Some("+02:00".into())),
+                true,
+            ),
+            Field::new(
+                "c2",
+                DataType::Timestamp(TimeUnit::Second, Some("+04:00".into())),
+                true,
+            ),
+        ]);
+        let c1 = TimestampMillisecondArray::from(vec![Some(1_000), Some(2_000)])
+            .with_timezone("+02:00".to_string());
+        let c2 = TimestampSecondArray::from(vec![Some(1_000_000), None])
+            .with_timezone("+04:00".to_string());
+        let batch =
+            RecordBatch::try_new(Arc::new(schema), vec![Arc::new(c1), Arc::new(c2)]).unwrap();
+
+        let mut file = tempfile::tempfile().unwrap();
+        let mut writer = WriterBuilder::new()
+            .with_timestamp_tz_format("%M:%H".to_string())
+            .build(&mut file);
+        writer.write(&batch).unwrap();
+
+        drop(writer);
+        file.rewind().unwrap();
+        let mut buffer: Vec<u8> = vec![];
+        file.read_to_end(&mut buffer).unwrap();
+
+        assert_eq!(
+            "c1,c2\n00:02,46:17\n00:02,\n",
             String::from_utf8(buffer).unwrap()
         );
     }

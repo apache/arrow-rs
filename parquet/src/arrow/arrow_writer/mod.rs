@@ -107,6 +107,20 @@ mod levels;
 /// }
 /// ```
 ///
+/// ## Type Support
+///
+/// The writer supports writing all Arrow [`DataType`]s that have a direct mapping to
+/// Parquet types including  [`StructArray`] and [`ListArray`].
+///
+/// The following are not supported:
+///
+/// * [`IntervalMonthDayNanoArray`]: Parquet does not [support nanosecond intervals].
+///
+/// [`DataType`]: https://docs.rs/arrow/latest/arrow/datatypes/enum.DataType.html
+/// [`StructArray`]: https://docs.rs/arrow/latest/arrow/array/struct.StructArray.html
+/// [`ListArray`]: https://docs.rs/arrow/latest/arrow/array/type.ListArray.html
+/// [`IntervalMonthDayNanoArray`]: https://docs.rs/arrow/latest/arrow/array/type.IntervalMonthDayNanoArray.html
+/// [support nanosecond intervals]: https://github.com/apache/parquet-format/blob/master/LogicalTypes.md#interval
 pub struct ArrowWriter<W: Write> {
     /// Underlying Parquet writer
     writer: SerializedFileWriter<W>,
@@ -2110,6 +2124,16 @@ mod tests {
     }
 
     #[test]
+    fn binary_view_single_column() {
+        let one_vec: Vec<u8> = (0..SMALL_SIZE as u8).collect();
+        let many_vecs: Vec<_> = std::iter::repeat(one_vec).take(SMALL_SIZE).collect();
+        let many_vecs_iter = many_vecs.iter().map(|v| v.as_slice());
+
+        // BinaryArrays can't be built from Vec<Option<&str>>, so only call `values_required`
+        values_required::<BinaryViewArray, _>(many_vecs_iter);
+    }
+
+    #[test]
     fn i32_column_bloom_filter_at_end() {
         let array = Arc::new(Int32Array::from_iter(0..SMALL_SIZE as i32));
         let mut options = RoundTripOptions::new(array, false);
@@ -2215,6 +2239,14 @@ mod tests {
         let raw_strs = raw_values.iter().map(|s| s.as_str());
 
         required_and_optional::<LargeStringArray, _>(raw_strs);
+    }
+
+    #[test]
+    fn string_view_single_column() {
+        let raw_values: Vec<_> = (0..SMALL_SIZE).map(|i| i.to_string()).collect();
+        let raw_strs = raw_values.iter().map(|s| s.as_str());
+
+        required_and_optional::<StringViewArray, _>(raw_strs);
     }
 
     #[test]

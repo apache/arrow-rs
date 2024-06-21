@@ -46,7 +46,7 @@ use crate::cast::dictionary::*;
 use crate::cast::list::*;
 use crate::cast::string::*;
 
-use arrow_buffer::{IntervalMonthDayNano, ScalarBuffer};
+use arrow_buffer::IntervalMonthDayNano;
 use arrow_data::ByteView;
 use chrono::{NaiveTime, Offset, TimeZone, Utc};
 use std::cmp::Ordering;
@@ -2341,47 +2341,29 @@ where
     FROM::Offset: OffsetSizeTrait + ToPrimitive,
     V: ByteViewType,
 {
-    let data = array.to_data();
-    assert_eq!(data.data_type(), &FROM::DATA_TYPE);
-
+    let byte_array: &GenericByteArray<FROM> = array.as_bytes();
     let len = array.len();
-    let str_values_buf = data.buffers()[1].clone();
-    let offsets = data.buffers()[0].typed_data::<FROM::Offset>();
+    let str_values_buf = byte_array.values().clone();
+    let offsets = byte_array.offsets();
 
-    let mut views_builder = BufferBuilder::<u128>::new(len);
-    for w in offsets.windows(2) {
+    let mut views_builder = GenericByteViewBuilder::<V>::with_capacity(len);
+    let block = views_builder.append_block(str_values_buf);
+    for (i, w) in offsets.windows(2).enumerate() {
         let offset = w[0].to_u32().unwrap();
         let end = w[1].to_u32().unwrap();
-        let value_buf = &str_values_buf[offset as usize..end as usize];
         let length = end - offset;
 
-        if length <= 12 {
-            let mut view_buffer = [0; 16];
-            view_buffer[0..4].copy_from_slice(&length.to_le_bytes());
-            view_buffer[4..4 + value_buf.len()].copy_from_slice(value_buf);
-            views_builder.append(u128::from_le_bytes(view_buffer));
+        if byte_array.is_null(i) {
+            views_builder.append_null();
         } else {
-            let view = ByteView {
-                length,
-                prefix: u32::from_le_bytes(value_buf[0..4].try_into().unwrap()),
-                buffer_index: 0,
-                offset,
-            };
-            views_builder.append(view.into());
+            // Safety: the input was a valid array so it valid UTF8 (if string). And
+            // all offsets were valid and we created the views correctly
+            unsafe { views_builder.append_view_unchecked(block, offset, length) }
         }
     }
 
     assert_eq!(views_builder.len(), len);
-
-    // Safety: the input was a valid array so it valid UTF8 (if string). And
-    // all offsets were valid and we created the views correctly
-    Ok(Arc::new(unsafe {
-        GenericByteViewArray::<V>::new_unchecked(
-            ScalarBuffer::new(views_builder.finish(), 0, len),
-            vec![str_values_buf],
-            data.nulls().cloned(),
-        )
-    }))
+    Ok(Arc::new(views_builder.finish()))
 }
 
 /// Helper function to cast from one `ByteViewType` array to `ByteArrayType` array.
