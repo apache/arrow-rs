@@ -7434,10 +7434,10 @@ mod tests {
         );
 
         builder.keys().append_value("0");
-        builder.values().append_value(1);
+        builder.values().append_value(IntervalDayTime::new(1, 1));
         builder.append(true).unwrap();
         builder.keys().append_value("1");
-        builder.values().append_value(2);
+        builder.values().append_value(IntervalDayTime::new(2, 2));
         builder.append(true).unwrap();
 
         // map builder returns unsorted map by default
@@ -7486,6 +7486,7 @@ mod tests {
         builder.keys().append_value("1");
         builder.values().append_value("test_val_2");
         builder.append(true).unwrap();
+        builder.append(false).unwrap();
 
         let array = builder.finish();
 
@@ -7532,6 +7533,11 @@ mod tests {
             .flatten()
             .collect::<Vec<_>>();
         assert_eq!(&values_string, &vec!["test_val_1", "test_val_2"]);
+
+        assert_eq!(
+            map_array.nulls(),
+            Some(&NullBuffer::from(vec![true, true, false]))
+        );
     }
 
     #[test]

@@ -48,7 +48,7 @@ pub(crate) fn cast_map_values(
         StructArray::new(
             Fields::from(vec![key_field, value_field]),
             vec![key_array, value_array],
-            from.nulls().cloned(),
+            from.entries().nulls().cloned(),
         ),
         from.nulls().cloned(),
         to_ordered,
