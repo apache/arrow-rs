@@ -43,6 +43,8 @@ pub const DEFAULT_STATISTICS_ENABLED: EnabledStatistics = EnabledStatistics::Pag
 pub const DEFAULT_MAX_STATISTICS_SIZE: usize = 4096;
 /// Default value for [`WriterProperties::max_row_group_size`]
 pub const DEFAULT_MAX_ROW_GROUP_SIZE: usize = 1024 * 1024;
+/// Default value for [`WriterProperties::bloom_filter_position`]
+pub const DEFAULT_BLOOM_FILTER_POSITION: BloomFilterPosition = BloomFilterPosition::AfterRowGroup;
 /// Default value for [`WriterProperties::created_by`]
 pub const DEFAULT_CREATED_BY: &str = concat!("parquet-rs version ", env!("CARGO_PKG_VERSION"));
 /// Default value for [`WriterProperties::column_index_truncate_length`]
@@ -84,6 +86,24 @@ impl FromStr for WriterVersion {
             _ => Err(format!("Invalid writer version: {}", s)),
         }
     }
+}
+
+/// Where in the file [`ArrowWriter`](crate::arrow::arrow_writer::ArrowWriter) should
+/// write Bloom filters
+///
+/// Basic constant, which is not part of the Thrift definition.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BloomFilterPosition {
+    /// Write Bloom Filters of each row group right after the row group
+    ///
+    /// This saves memory by writing it as soon as it is computed, at the cost
+    /// of data locality for readers
+    AfterRowGroup,
+    /// Write Bloom Filters at the end of the file
+    ///
+    /// This allows better data locality for readers, at the cost of memory usage
+    /// for writers.
+    End,
 }
 
 /// Reference counted writer properties.
@@ -130,6 +150,7 @@ pub struct WriterProperties {
     data_page_row_count_limit: usize,
     write_batch_size: usize,
     max_row_group_size: usize,
+    bloom_filter_position: BloomFilterPosition,
     writer_version: WriterVersion,
     created_by: String,
     pub(crate) key_value_metadata: Option<Vec<KeyValue>>,
@@ -215,6 +236,11 @@ impl WriterProperties {
     /// Returns maximum number of rows in a row group.
     pub fn max_row_group_size(&self) -> usize {
         self.max_row_group_size
+    }
+
+    /// Returns maximum number of rows in a row group.
+    pub fn bloom_filter_position(&self) -> BloomFilterPosition {
+        self.bloom_filter_position
     }
 
     /// Returns configured writer version.
@@ -338,6 +364,7 @@ pub struct WriterPropertiesBuilder {
     data_page_row_count_limit: usize,
     write_batch_size: usize,
     max_row_group_size: usize,
+    bloom_filter_position: BloomFilterPosition,
     writer_version: WriterVersion,
     created_by: String,
     key_value_metadata: Option<Vec<KeyValue>>,
@@ -357,6 +384,7 @@ impl WriterPropertiesBuilder {
             data_page_row_count_limit: usize::MAX,
             write_batch_size: DEFAULT_WRITE_BATCH_SIZE,
             max_row_group_size: DEFAULT_MAX_ROW_GROUP_SIZE,
+            bloom_filter_position: DEFAULT_BLOOM_FILTER_POSITION,
             writer_version: DEFAULT_WRITER_VERSION,
             created_by: DEFAULT_CREATED_BY.to_string(),
             key_value_metadata: None,
@@ -376,6 +404,7 @@ impl WriterPropertiesBuilder {
             data_page_row_count_limit: self.data_page_row_count_limit,
             write_batch_size: self.write_batch_size,
             max_row_group_size: self.max_row_group_size,
+            bloom_filter_position: self.bloom_filter_position,
             writer_version: self.writer_version,
             created_by: self.created_by,
             key_value_metadata: self.key_value_metadata,
@@ -484,6 +513,12 @@ impl WriterPropertiesBuilder {
     pub fn set_max_row_group_size(mut self, value: usize) -> Self {
         assert!(value > 0, "Cannot have a 0 max row group size");
         self.max_row_group_size = value;
+        self
+    }
+
+    /// Sets where in the final file Bloom Filters are written (default `AfterRowGroup`)
+    pub fn set_bloom_filter_position(mut self, value: BloomFilterPosition) -> Self {
+        self.bloom_filter_position = value;
         self
     }
 
@@ -1052,6 +1087,7 @@ mod tests {
         );
         assert_eq!(props.write_batch_size(), DEFAULT_WRITE_BATCH_SIZE);
         assert_eq!(props.max_row_group_size(), DEFAULT_MAX_ROW_GROUP_SIZE);
+        assert_eq!(props.bloom_filter_position(), DEFAULT_BLOOM_FILTER_POSITION);
         assert_eq!(props.writer_version(), DEFAULT_WRITER_VERSION);
         assert_eq!(props.created_by(), DEFAULT_CREATED_BY);
         assert_eq!(props.key_value_metadata(), None);

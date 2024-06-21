@@ -333,6 +333,11 @@ impl RowGroupMetaData {
         &self.columns
     }
 
+    /// Returns mutable slice of column chunk metadata.
+    pub fn columns_mut(&mut self) -> &mut [ColumnChunkMetaData] {
+        &mut self.columns
+    }
+
     /// Number of rows in this row group.
     pub fn num_rows(&self) -> i64 {
         self.num_rows
