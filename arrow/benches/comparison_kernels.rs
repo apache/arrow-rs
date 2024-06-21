@@ -33,6 +33,10 @@ use rand::Rng;
 
 const SIZE: usize = 65536;
 
+fn bench_like_utf8view_scalar(arr_a: &StringViewArray, value_b: &str) {
+    like(arr_a, &StringViewArray::new_scalar(value_b)).unwrap();
+}
+
 fn bench_like_utf8_scalar(arr_a: &StringArray, value_b: &str) {
     like(arr_a, &StringArray::new_scalar(value_b)).unwrap();
 }
@@ -76,6 +80,8 @@ fn add_benchmark(c: &mut Criterion) {
     let arr_string = create_string_array::<i32>(SIZE, 0.0);
 
     let scalar = Float32Array::from(vec![1.0]);
+
+    // eq benchmarks
 
     c.bench_function("eq Float32", |b| b.iter(|| eq(&arr_a, &arr_b)));
     c.bench_function("eq scalar Float32", |b| {
@@ -161,24 +167,13 @@ fn add_benchmark(c: &mut Criterion) {
     let string_right = StringArray::from_iter(array_gen);
     let string_view_right = StringViewArray::from_iter(string_right.iter());
 
+    let scalar = StringArray::new_scalar("xxxx");
     c.bench_function("eq scalar StringArray", |b| {
-        b.iter(|| {
-            eq(
-                &Scalar::new(StringArray::from_iter_values(["xxxx"])),
-                &string_left,
-            )
-            .unwrap()
-        })
+        b.iter(|| eq(&scalar, &string_left).unwrap())
     });
 
     c.bench_function("eq scalar StringViewArray", |b| {
-        b.iter(|| {
-            eq(
-                &Scalar::new(StringViewArray::from_iter_values(["xxxx"])),
-                &string_view_left,
-            )
-            .unwrap()
-        })
+        b.iter(|| eq(&scalar, &string_view_left).unwrap())
     });
 
     c.bench_function("eq StringArray StringArray", |b| {
@@ -188,6 +183,8 @@ fn add_benchmark(c: &mut Criterion) {
     c.bench_function("eq StringViewArray StringViewArray", |b| {
         b.iter(|| eq(&string_view_left, &string_view_right).unwrap())
     });
+
+    // StringArray: LIKE benchmarks
 
     c.bench_function("like_utf8 scalar equals", |b| {
         b.iter(|| bench_like_utf8_scalar(&arr_string, "xxxx"))
@@ -209,6 +206,30 @@ fn add_benchmark(c: &mut Criterion) {
         b.iter(|| bench_like_utf8_scalar(&arr_string, "%xx_xx%xxx"))
     });
 
+    // StringViewArray: LIKE benchmarks
+    // Note: since like/nlike share the same implementation, we only benchmark one
+    c.bench_function("like_utf8view scalar equals", |b| {
+        b.iter(|| bench_like_utf8view_scalar(&string_view_left, "xxxx"))
+    });
+
+    c.bench_function("like_utf8view scalar contains", |b| {
+        b.iter(|| bench_like_utf8view_scalar(&string_view_left, "%xxxx%"))
+    });
+
+    c.bench_function("like_utf8view scalar ends with", |b| {
+        b.iter(|| bench_like_utf8view_scalar(&string_view_left, "xxxx%"))
+    });
+
+    c.bench_function("like_utf8view scalar starts with", |b| {
+        b.iter(|| bench_like_utf8view_scalar(&string_view_left, "%xxxx"))
+    });
+
+    c.bench_function("like_utf8view scalar complex", |b| {
+        b.iter(|| bench_like_utf8view_scalar(&string_view_left, "%xx_xx%xxx"))
+    });
+
+    // StringArray: NOT LIKE benchmarks
+
     c.bench_function("nlike_utf8 scalar equals", |b| {
         b.iter(|| bench_nlike_utf8_scalar(&arr_string, "xxxx"))
     });
@@ -228,6 +249,8 @@ fn add_benchmark(c: &mut Criterion) {
     c.bench_function("nlike_utf8 scalar complex", |b| {
         b.iter(|| bench_nlike_utf8_scalar(&arr_string, "%xx_xx%xxx"))
     });
+
+    // StringArray: ILIKE benchmarks
 
     c.bench_function("ilike_utf8 scalar equals", |b| {
         b.iter(|| bench_ilike_utf8_scalar(&arr_string, "xxXX"))
@@ -249,6 +272,8 @@ fn add_benchmark(c: &mut Criterion) {
         b.iter(|| bench_ilike_utf8_scalar(&arr_string, "%xx_xX%xXX"))
     });
 
+    // StringArray: NOT ILIKE benchmarks
+
     c.bench_function("nilike_utf8 scalar equals", |b| {
         b.iter(|| bench_nilike_utf8_scalar(&arr_string, "xxXX"))
     });
@@ -269,6 +294,8 @@ fn add_benchmark(c: &mut Criterion) {
         b.iter(|| bench_nilike_utf8_scalar(&arr_string, "%xx_xX%xXX"))
     });
 
+    // StringArray: REGEXP_MATCHES benchmarks
+
     c.bench_function("egexp_matches_utf8 scalar starts with", |b| {
         b.iter(|| bench_regexp_is_match_utf8_scalar(&arr_string, "^xx"))
     });
@@ -276,6 +303,8 @@ fn add_benchmark(c: &mut Criterion) {
     c.bench_function("egexp_matches_utf8 scalar ends with", |b| {
         b.iter(|| bench_regexp_is_match_utf8_scalar(&arr_string, "xx$"))
     });
+
+    // DictionaryArray benchmarks
 
     let strings = create_string_array::<i32>(20, 0.);
     let dict_arr_a = create_dict_from_values::<Int32Type>(SIZE, 0., &strings);
