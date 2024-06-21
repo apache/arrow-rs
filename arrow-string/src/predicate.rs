@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow_array::{BooleanArray, GenericStringArray, OffsetSizeTrait};
+use arrow_array::{ArrayAccessor, BooleanArray};
 use arrow_schema::ArrowError;
 use memchr::memchr2;
 use regex::{Regex, RegexBuilder};
@@ -95,11 +95,10 @@ impl<'a> Predicate<'a> {
     ///
     /// If `negate` is true the result of the predicate will be negated
     #[inline(never)]
-    pub fn evaluate_array<O: OffsetSizeTrait>(
-        &self,
-        array: &GenericStringArray<O>,
-        negate: bool,
-    ) -> BooleanArray {
+    pub fn evaluate_array<'i, T>(&self, array: T, negate: bool) -> BooleanArray
+    where
+        T: ArrayAccessor<Item = &'i str>,
+    {
         match self {
             Predicate::Eq(v) => BooleanArray::from_unary(array, |haystack| {
                 (haystack.len() == v.len() && haystack == *v) != negate

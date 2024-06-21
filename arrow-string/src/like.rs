@@ -20,6 +20,7 @@ use arrow_array::cast::AsArray;
 use arrow_array::*;
 use arrow_schema::*;
 use arrow_select::take::take;
+use iterator::ArrayIter;
 use std::sync::Arc;
 
 #[derive(Debug)]
@@ -126,24 +127,59 @@ fn like_op(op: Op, lhs: &dyn Datum, rhs: &dyn Datum) -> Result<BooleanArray, Arr
     let r = r_v.map(|x| x.values().as_ref()).unwrap_or(r);
 
     match (l.data_type(), r.data_type()) {
-        (Utf8, Utf8) => apply::<i32>(op, l.as_string(), l_s, l_v, r.as_string(), r_s, r_v),
-        (LargeUtf8, LargeUtf8) => {
-            apply::<i64>(op, l.as_string(), l_s, l_v, r.as_string(), r_s, r_v)
+        (Utf8, Utf8) => {
+            apply::<&GenericStringArray<i32>>(op, l.as_string(), l_s, l_v, r.as_string(), r_s, r_v)
         }
+        (LargeUtf8, LargeUtf8) => {
+            apply::<&GenericStringArray<i64>>(op, l.as_string(), l_s, l_v, r.as_string(), r_s, r_v)
+        }
+        (Utf8View, Utf8View) => apply::<&StringViewArray>(
+            op,
+            l.as_string_view(),
+            l_s,
+            l_v,
+            r.as_string_view(),
+            r_s,
+            r_v,
+        ),
         (l_t, r_t) => Err(ArrowError::InvalidArgumentError(format!(
             "Invalid string operation: {l_t} {op} {r_t}"
         ))),
     }
 }
 
-fn apply<O: OffsetSizeTrait>(
+trait StringArrayType<'a>: ArrayAccessor<Item = &'a str> + Sized {
+    fn is_ascii(&self) -> bool;
+    fn iter(&self) -> ArrayIter<Self>;
+}
+
+impl<'a, O: OffsetSizeTrait> StringArrayType<'a> for &'a GenericStringArray<O> {
+    fn is_ascii(&self) -> bool {
+        GenericStringArray::<O>::is_ascii(self)
+    }
+
+    fn iter(&self) -> ArrayIter<Self> {
+        GenericStringArray::<O>::iter(self)
+    }
+}
+impl<'a> StringArrayType<'a> for &'a StringViewArray {
+    fn is_ascii(&self) -> bool {
+        StringViewArray::is_ascii(self)
+    }
+
+    fn iter(&self) -> ArrayIter<Self> {
+        StringViewArray::iter(self)
+    }
+}
+
+fn apply<'a, T: StringArrayType<'a> + 'a>(
     op: Op,
-    l: &GenericStringArray<O>,
+    l: T,
     l_s: bool,
-    l_v: Option<&dyn AnyDictionaryArray>,
-    r: &GenericStringArray<O>,
+    l_v: Option<&'a dyn AnyDictionaryArray>,
+    r: T,
     r_s: bool,
-    r_v: Option<&dyn AnyDictionaryArray>,
+    r_v: Option<&'a dyn AnyDictionaryArray>,
 ) -> Result<BooleanArray, ArrowError> {
     let l_len = l_v.map(|l| l.len()).unwrap_or(l.len());
     if r_s {
@@ -155,7 +191,7 @@ fn apply<O: OffsetSizeTrait>(
         if r.is_null(idx) {
             return Ok(BooleanArray::new_null(l_len));
         }
-        op_scalar(op, l, l_v, r.value(idx))
+        op_scalar::<T>(op, l, l_v, r.value(idx))
     } else {
         match (l_s, l_v, r_v) {
             (true, None, None) => {
@@ -187,9 +223,9 @@ fn apply<O: OffsetSizeTrait>(
 }
 
 #[inline(never)]
-fn op_scalar<O: OffsetSizeTrait>(
+fn op_scalar<'a, T: StringArrayType<'a>>(
     op: Op,
-    l: &GenericStringArray<O>,
+    l: T,
     l_v: Option<&dyn AnyDictionaryArray>,
     r: &str,
 ) -> Result<BooleanArray, ArrowError> {
@@ -207,8 +243,8 @@ fn op_scalar<O: OffsetSizeTrait>(
     })
 }
 
-fn vectored_iter<'a, O: OffsetSizeTrait>(
-    a: &'a GenericStringArray<O>,
+fn vectored_iter<'a, T: StringArrayType<'a> + 'a>(
+    a: T,
     a_v: &'a dyn AnyDictionaryArray,
 ) -> impl Iterator<Item = Option<&'a str>> + 'a {
     let nulls = a_v.nulls();
@@ -382,14 +418,19 @@ mod tests {
                 let right = StringArray::from($right);
                 let res = $op(&left, &right).unwrap();
                 assert_eq!(res, expected);
-            }
-        };
-    }
 
-    macro_rules! test_dict_utf8 {
-        ($test_name:ident, $left:expr, $right:expr, $op:expr, $expected:expr) => {
-            #[test]
-            fn $test_name() {
+                let expected = BooleanArray::from($expected);
+                let left = LargeStringArray::from($left);
+                let right = LargeStringArray::from($right);
+                let res = $op(&left, &right).unwrap();
+                assert_eq!(res, expected);
+
+                let expected = BooleanArray::from($expected);
+                let left = StringViewArray::from($left);
+                let right = StringViewArray::from($right);
+                let res = $op(&left, &right).unwrap();
+                assert_eq!(res, expected);
+
                 let expected = BooleanArray::from($expected);
                 let left: DictionaryArray<Int8Type> = $left.into_iter().collect();
                 let right: DictionaryArray<Int8Type> = $right.into_iter().collect();
@@ -406,17 +447,20 @@ mod tests {
                 let expected = BooleanArray::from($expected);
 
                 let left = StringArray::from($left);
-                let res = $op(&left, $right).unwrap();
+                let right = StringArray::from_iter_values([$right]);
+                let res = $op(&left, &right).unwrap();
                 assert_eq!(res, expected);
 
                 let left = LargeStringArray::from($left);
-                let res = $op(&left, $right).unwrap();
+                let right = LargeStringArray::from_iter_values([$right]);
+                let res = $op(&left, &right).unwrap();
+                assert_eq!(res, expected);
+
+                let left = StringViewArray::from($left);
+                let right = StringViewArray::from_iter_values([$right]);
+                let res = $op(&left, &right).unwrap();
                 assert_eq!(res, expected);
             }
-        };
-        ($test_name:ident, $test_name_dyn:ident, $left:expr, $right:expr, $op:expr, $op_dyn:expr, $expected:expr) => {
-            test_utf8_scalar!($test_name, $left, $right, $op, $expected);
-            test_utf8_scalar!($test_name_dyn, $left, $right, $op_dyn, $expected);
         };
     }
 
@@ -424,65 +468,47 @@ mod tests {
         test_utf8_array_like,
         vec!["arrow", "arrow", "arrow", "arrow", "arrow", "arrows", "arrow", "arrow"],
         vec!["arrow", "ar%", "%ro%", "foo", "arr", "arrow_", "arrow_", ".*"],
-        like_utf8,
-        vec![true, true, true, false, false, true, false, false]
-    );
-
-    test_dict_utf8!(
-        test_utf8_array_like_dict,
-        vec!["arrow", "arrow", "arrow", "arrow", "arrow", "arrows", "arrow", "arrow"],
-        vec!["arrow", "ar%", "%ro%", "foo", "arr", "arrow_", "arrow_", ".*"],
-        like_dyn,
+        like,
         vec![true, true, true, false, false, true, false, false]
     );
 
     test_utf8_scalar!(
         test_utf8_array_like_scalar_escape_testing,
-        test_utf8_array_like_scalar_dyn_escape_testing,
         vec!["varchar(255)", "int(255)", "varchar", "int"],
         "%(%)%",
-        like_utf8_scalar,
-        like_utf8_scalar_dyn,
+        like,
         vec![true, true, false, false]
     );
 
     test_utf8_scalar!(
         test_utf8_array_like_scalar_escape_regex,
-        test_utf8_array_like_scalar_dyn_escape_regex,
         vec![".*", "a", "*"],
         ".*",
-        like_utf8_scalar,
-        like_utf8_scalar_dyn,
+        like,
         vec![true, false, false]
     );
 
     test_utf8_scalar!(
         test_utf8_array_like_scalar_escape_regex_dot,
-        test_utf8_array_like_scalar_dyn_escape_regex_dot,
         vec![".", "a", "*"],
         ".",
-        like_utf8_scalar,
-        like_utf8_scalar_dyn,
+        like,
         vec![true, false, false]
     );
 
     test_utf8_scalar!(
         test_utf8_array_like_scalar,
-        test_utf8_array_like_scalar_dyn,
         vec!["arrow", "parquet", "datafusion", "flight"],
         "%ar%",
-        like_utf8_scalar,
-        like_utf8_scalar_dyn,
+        like,
         vec![true, true, false, false]
     );
 
     test_utf8_scalar!(
         test_utf8_array_like_scalar_start,
-        test_utf8_array_like_scalar_dyn_start,
         vec!["arrow", "parrow", "arrows", "arr"],
         "arrow%",
-        like_utf8_scalar,
-        like_utf8_scalar_dyn,
+        like,
         vec![true, false, true, false]
     );
 
@@ -490,21 +516,17 @@ mod tests {
     // demonstrate that `SQL STARTSWITH` works as expected.
     test_utf8_scalar!(
         test_utf8_array_starts_with_scalar_start,
-        test_utf8_array_starts_with_scalar_dyn_start,
         vec!["arrow", "parrow", "arrows", "arr"],
         "arrow",
-        starts_with_utf8_scalar,
-        starts_with_utf8_scalar_dyn,
+        starts_with,
         vec![true, false, true, false]
     );
 
     test_utf8_scalar!(
         test_utf8_array_like_scalar_end,
-        test_utf8_array_like_scalar_dyn_end,
         vec!["arrow", "parrow", "arrows", "arr"],
         "%arrow",
-        like_utf8_scalar,
-        like_utf8_scalar_dyn,
+        like,
         vec![true, true, false, false]
     );
 
@@ -512,51 +534,41 @@ mod tests {
     // demonstrate that `SQL ENDSWITH` works as expected.
     test_utf8_scalar!(
         test_utf8_array_ends_with_scalar_end,
-        test_utf8_array_ends_with_scalar_dyn_end,
         vec!["arrow", "parrow", "arrows", "arr"],
         "arrow",
-        ends_with_utf8_scalar,
-        ends_with_utf8_scalar_dyn,
+        ends_with,
         vec![true, true, false, false]
     );
 
     test_utf8_scalar!(
         test_utf8_array_like_scalar_equals,
-        test_utf8_array_like_scalar_dyn_equals,
         vec!["arrow", "parrow", "arrows", "arr"],
         "arrow",
-        like_utf8_scalar,
-        like_utf8_scalar_dyn,
+        like,
         vec![true, false, false, false]
     );
 
     test_utf8_scalar!(
         test_utf8_array_like_scalar_one,
-        test_utf8_array_like_scalar_dyn_one,
         vec!["arrow", "arrows", "parrow", "arr"],
         "arrow_",
-        like_utf8_scalar,
-        like_utf8_scalar_dyn,
+        like,
         vec![false, true, false, false]
     );
 
     test_utf8_scalar!(
         test_utf8_scalar_like_escape,
-        test_utf8_scalar_like_dyn_escape,
         vec!["a%", "a\\x"],
         "a\\%",
-        like_utf8_scalar,
-        like_utf8_scalar_dyn,
+        like,
         vec![true, false]
     );
 
     test_utf8_scalar!(
         test_utf8_scalar_like_escape_contains,
-        test_utf8_scalar_like_dyn_escape_contains,
         vec!["ba%", "ba\\x"],
         "%a\\%",
-        like_utf8_scalar,
-        like_utf8_scalar_dyn,
+        like,
         vec![true, false]
     );
 
@@ -564,15 +576,7 @@ mod tests {
         test_utf8_scalar_ilike_regex,
         vec!["%%%"],
         vec![r"\%_\%"],
-        ilike_utf8,
-        vec![true]
-    );
-
-    test_dict_utf8!(
-        test_utf8_scalar_ilike_regex_dict,
-        vec!["%%%"],
-        vec![r"\%_\%"],
-        ilike_dyn,
+        ilike,
         vec![true]
     );
 
@@ -580,94 +584,70 @@ mod tests {
         test_utf8_array_nlike,
         vec!["arrow", "arrow", "arrow", "arrow", "arrow", "arrows", "arrow"],
         vec!["arrow", "ar%", "%ro%", "foo", "arr", "arrow_", "arrow_"],
-        nlike_utf8,
-        vec![false, false, false, true, true, false, true]
-    );
-
-    test_dict_utf8!(
-        test_utf8_array_nlike_dict,
-        vec!["arrow", "arrow", "arrow", "arrow", "arrow", "arrows", "arrow"],
-        vec!["arrow", "ar%", "%ro%", "foo", "arr", "arrow_", "arrow_"],
-        nlike_dyn,
+        nlike,
         vec![false, false, false, true, true, false, true]
     );
 
     test_utf8_scalar!(
         test_utf8_array_nlike_escape_testing,
-        test_utf8_array_nlike_escape_dyn_testing_dyn,
         vec!["varchar(255)", "int(255)", "varchar", "int"],
         "%(%)%",
-        nlike_utf8_scalar,
-        nlike_utf8_scalar_dyn,
+        nlike,
         vec![false, false, true, true]
     );
 
     test_utf8_scalar!(
         test_utf8_array_nlike_scalar_escape_regex,
-        test_utf8_array_nlike_scalar_dyn_escape_regex,
         vec![".*", "a", "*"],
         ".*",
-        nlike_utf8_scalar,
-        nlike_utf8_scalar_dyn,
+        nlike,
         vec![false, true, true]
     );
 
     test_utf8_scalar!(
         test_utf8_array_nlike_scalar_escape_regex_dot,
-        test_utf8_array_nlike_scalar_dyn_escape_regex_dot,
         vec![".", "a", "*"],
         ".",
-        nlike_utf8_scalar,
-        nlike_utf8_scalar_dyn,
+        nlike,
         vec![false, true, true]
     );
     test_utf8_scalar!(
         test_utf8_array_nlike_scalar,
-        test_utf8_array_nlike_scalar_dyn,
         vec!["arrow", "parquet", "datafusion", "flight"],
         "%ar%",
-        nlike_utf8_scalar,
-        nlike_utf8_scalar_dyn,
+        nlike,
         vec![false, false, true, true]
     );
 
     test_utf8_scalar!(
         test_utf8_array_nlike_scalar_start,
-        test_utf8_array_nlike_scalar_dyn_start,
         vec!["arrow", "parrow", "arrows", "arr"],
         "arrow%",
-        nlike_utf8_scalar,
-        nlike_utf8_scalar_dyn,
+        nlike,
         vec![false, true, false, true]
     );
 
     test_utf8_scalar!(
         test_utf8_array_nlike_scalar_end,
-        test_utf8_array_nlike_scalar_dyn_end,
         vec!["arrow", "parrow", "arrows", "arr"],
         "%arrow",
-        nlike_utf8_scalar,
-        nlike_utf8_scalar_dyn,
+        nlike,
         vec![false, false, true, true]
     );
 
     test_utf8_scalar!(
         test_utf8_array_nlike_scalar_equals,
-        test_utf8_array_nlike_scalar_dyn_equals,
         vec!["arrow", "parrow", "arrows", "arr"],
         "arrow",
-        nlike_utf8_scalar,
-        nlike_utf8_scalar_dyn,
+        nlike,
         vec![false, true, true, true]
     );
 
     test_utf8_scalar!(
         test_utf8_array_nlike_scalar_one,
-        test_utf8_array_nlike_scalar_dyn_one,
         vec!["arrow", "arrows", "parrow", "arr"],
         "arrow_",
-        nlike_utf8_scalar,
-        nlike_utf8_scalar_dyn,
+        nlike,
         vec![true, false, true, true]
     );
 
@@ -675,82 +655,61 @@ mod tests {
         test_utf8_array_ilike,
         vec!["arrow", "arrow", "ARROW", "arrow", "ARROW", "ARROWS", "arROw"],
         vec!["arrow", "ar%", "%ro%", "foo", "ar%r", "arrow_", "arrow_"],
-        ilike_utf8,
-        vec![true, true, true, false, false, true, false]
-    );
-
-    test_dict_utf8!(
-        test_utf8_array_ilike_dict,
-        vec!["arrow", "arrow", "ARROW", "arrow", "ARROW", "ARROWS", "arROw"],
-        vec!["arrow", "ar%", "%ro%", "foo", "ar%r", "arrow_", "arrow_"],
-        ilike_dyn,
+        ilike,
         vec![true, true, true, false, false, true, false]
     );
 
     test_utf8_scalar!(
         ilike_utf8_scalar_escape_testing,
-        ilike_utf8_scalar_escape_dyn_testing,
         vec!["varchar(255)", "int(255)", "varchar", "int"],
         "%(%)%",
-        ilike_utf8_scalar,
-        ilike_utf8_scalar_dyn,
+        ilike,
         vec![true, true, false, false]
     );
 
     test_utf8_scalar!(
         test_utf8_array_ilike_scalar,
-        test_utf8_array_ilike_dyn_scalar,
         vec!["arrow", "parquet", "datafusion", "flight"],
         "%AR%",
-        ilike_utf8_scalar,
-        ilike_utf8_scalar_dyn,
+        ilike,
         vec![true, true, false, false]
     );
 
     test_utf8_scalar!(
         test_utf8_array_ilike_scalar_start,
-        test_utf8_array_ilike_scalar_dyn_start,
         vec!["arrow", "parrow", "arrows", "ARR"],
         "aRRow%",
-        ilike_utf8_scalar,
-        ilike_utf8_scalar_dyn,
+        ilike,
         vec![true, false, true, false]
     );
 
     test_utf8_scalar!(
         test_utf8_array_ilike_scalar_end,
-        test_utf8_array_ilike_scalar_dyn_end,
         vec!["ArroW", "parrow", "ARRowS", "arr"],
         "%arrow",
-        ilike_utf8_scalar,
-        ilike_utf8_scalar_dyn,
+        ilike,
         vec![true, true, false, false]
     );
 
     test_utf8_scalar!(
         test_utf8_array_ilike_scalar_equals,
-        test_utf8_array_ilike_scalar_dyn_equals,
         vec!["arrow", "parrow", "arrows", "arr"],
         "Arrow",
-        ilike_utf8_scalar,
-        ilike_utf8_scalar_dyn,
+        ilike,
         vec![true, false, false, false]
     );
 
     // We only implement loose matching
     test_utf8_scalar!(
         test_utf8_array_ilike_unicode,
-        test_utf8_array_ilike_unicode_dyn,
         vec!["FFkoß", "FFkoSS", "FFkoss", "FFkoS", "FFkos", "ﬀkoSS", "ﬀkoß", "FFKoSS"],
         "FFkoSS",
-        ilike_utf8_scalar,
-        ilike_utf8_scalar_dyn,
+        ilike,
         vec![false, true, true, false, false, false, false, true]
     );
 
     test_utf8_scalar!(
         test_utf8_array_ilike_unicode_starts,
-        test_utf8_array_ilike_unicode_start_dyn,
         vec![
             "FFkoßsdlkdf",
             "FFkoSSsdlkdf",
@@ -763,14 +722,12 @@ mod tests {
             "FFKoSS",
         ],
         "FFkoSS%",
-        ilike_utf8_scalar,
-        ilike_utf8_scalar_dyn,
+        ilike,
         vec![false, true, true, false, false, false, false, true, true]
     );
 
     test_utf8_scalar!(
         test_utf8_array_ilike_unicode_ends,
-        test_utf8_array_ilike_unicode_ends_dyn,
         vec![
             "sdlkdfFFkoß",
             "sdlkdfFFkoSS",
@@ -783,14 +740,12 @@ mod tests {
             "FFKoSS",
         ],
         "%FFkoSS",
-        ilike_utf8_scalar,
-        ilike_utf8_scalar_dyn,
+        ilike,
         vec![false, true, true, false, false, false, false, true, true]
     );
 
     test_utf8_scalar!(
         test_utf8_array_ilike_unicode_contains,
-        test_utf8_array_ilike_unicode_contains_dyn,
         vec![
             "sdlkdfFkoßsdfs",
             "sdlkdfFkoSSdggs",
@@ -804,8 +759,7 @@ mod tests {
             "FFKoSS",
         ],
         "%FFkoSS%",
-        ilike_utf8_scalar,
-        ilike_utf8_scalar_dyn,
+        ilike,
         vec![false, true, true, false, false, false, false, true, true, true]
     );
 
@@ -816,7 +770,6 @@ mod tests {
     // NOTE: 5 of the values were changed because the original used a case insensitive `ilike`.
     test_utf8_scalar!(
         test_utf8_array_contains_unicode_contains,
-        test_utf8_array_contains_unicode_contains_dyn,
         vec![
             "sdlkdfFkoßsdfs",
             "sdlkdFFkoSSdggs", // Original was case insensitive "sdlkdfFkoSSdggs"
@@ -830,14 +783,12 @@ mod tests {
             "FFkoSS",                // "FFKoSS"
         ],
         "FFkoSS",
-        contains_utf8_scalar,
-        contains_utf8_scalar_dyn,
+        contains,
         vec![false, true, true, false, false, false, false, true, true, true]
     );
 
     test_utf8_scalar!(
         test_utf8_array_ilike_unicode_complex,
-        test_utf8_array_ilike_unicode_complex_dyn,
         vec![
             "sdlkdfFooßsdfs",
             "sdlkdfFooSSdggs",
@@ -851,18 +802,15 @@ mod tests {
             "FFKoSS",
         ],
         "%FF__SS%",
-        ilike_utf8_scalar,
-        ilike_utf8_scalar_dyn,
+        ilike,
         vec![false, true, true, false, false, false, false, true, true, true]
     );
 
     test_utf8_scalar!(
         test_utf8_array_ilike_scalar_one,
-        test_utf8_array_ilike_scalar_dyn_one,
         vec!["arrow", "arrows", "parrow", "arr"],
         "arrow_",
-        ilike_utf8_scalar,
-        ilike_utf8_scalar_dyn,
+        ilike,
         vec![false, true, false, false]
     );
 
@@ -870,75 +818,55 @@ mod tests {
         test_utf8_array_nilike,
         vec!["arrow", "arrow", "ARROW", "arrow", "ARROW", "ARROWS", "arROw"],
         vec!["arrow", "ar%", "%ro%", "foo", "ar%r", "arrow_", "arrow_"],
-        nilike_utf8,
-        vec![false, false, false, true, true, false, true]
-    );
-
-    test_dict_utf8!(
-        test_utf8_array_nilike_dict,
-        vec!["arrow", "arrow", "ARROW", "arrow", "ARROW", "ARROWS", "arROw"],
-        vec!["arrow", "ar%", "%ro%", "foo", "ar%r", "arrow_", "arrow_"],
-        nilike_dyn,
+        nilike,
         vec![false, false, false, true, true, false, true]
     );
 
     test_utf8_scalar!(
         nilike_utf8_scalar_escape_testing,
-        nilike_utf8_scalar_escape_dyn_testing,
         vec!["varchar(255)", "int(255)", "varchar", "int"],
         "%(%)%",
-        nilike_utf8_scalar,
-        nilike_utf8_scalar_dyn,
+        nilike,
         vec![false, false, true, true]
     );
 
     test_utf8_scalar!(
         test_utf8_array_nilike_scalar,
-        test_utf8_array_nilike_dyn_scalar,
         vec!["arrow", "parquet", "datafusion", "flight"],
         "%AR%",
-        nilike_utf8_scalar,
-        nilike_utf8_scalar_dyn,
+        nilike,
         vec![false, false, true, true]
     );
 
     test_utf8_scalar!(
         test_utf8_array_nilike_scalar_start,
-        test_utf8_array_nilike_scalar_dyn_start,
         vec!["arrow", "parrow", "arrows", "ARR"],
         "aRRow%",
-        nilike_utf8_scalar,
-        nilike_utf8_scalar_dyn,
+        nilike,
         vec![false, true, false, true]
     );
 
     test_utf8_scalar!(
         test_utf8_array_nilike_scalar_end,
-        test_utf8_array_nilike_scalar_dyn_end,
         vec!["ArroW", "parrow", "ARRowS", "arr"],
         "%arrow",
-        nilike_utf8_scalar,
-        nilike_utf8_scalar_dyn,
+        nilike,
         vec![false, false, true, true]
     );
 
     test_utf8_scalar!(
         test_utf8_array_nilike_scalar_equals,
-        test_utf8_array_nilike_scalar_dyn_equals,
         vec!["arRow", "parrow", "arrows", "arr"],
         "Arrow",
-        nilike_utf8_scalar,
-        nilike_utf8_scalar_dyn,
+        nilike,
         vec![false, true, true, true]
     );
 
     test_utf8_scalar!(
         test_utf8_array_nilike_scalar_one,
-        test_utf8_array_nilike_scalar_dyn_one,
         vec!["arrow", "arrows", "parrow", "arr"],
         "arrow_",
-        nilike_utf8_scalar,
-        nilike_utf8_scalar_dyn,
+        nilike,
         vec![true, false, true, true]
     );
 
