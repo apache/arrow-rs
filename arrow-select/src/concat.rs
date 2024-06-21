@@ -74,7 +74,7 @@ fn fixed_size_list_capacity(arrays: &[&dyn Array], data_type: &DataType) -> Capa
                     item_capacity,
                     Some(Box::new(get_capacity(&values, child_data_type))),
                 )
-            },
+            }
             _ => Capacities::Array(item_capacity),
         }
     } else {
