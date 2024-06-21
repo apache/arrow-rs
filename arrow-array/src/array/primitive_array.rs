@@ -357,7 +357,7 @@ pub type Time64NanosecondArray = PrimitiveArray<Time64NanosecondType>;
 ///
 /// # Example
 /// ```
-/// #use arrow_array::IntervalYearMonthArray;
+/// # use arrow_array::IntervalYearMonthArray;
 /// let array = IntervalYearMonthArray::from(vec![
 ///   2,  // 2 months
 ///   25, // 2 years and 1 month
