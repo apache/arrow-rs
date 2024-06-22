@@ -40,10 +40,12 @@
 mod decimal;
 mod dictionary;
 mod list;
+mod map;
 mod string;
 use crate::cast::decimal::*;
 use crate::cast::dictionary::*;
 use crate::cast::list::*;
+use crate::cast::map::*;
 use crate::cast::string::*;
 
 use arrow_buffer::IntervalMonthDayNano;
@@ -159,6 +161,12 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
             can_cast_types(from_type, list_to.data_type())},
         (FixedSizeList(list_from,size), _) if *size == 1 => {
             can_cast_types(list_from.data_type(), to_type)},
+        (Map(from_entries,ordered_from), Map(to_entries, ordered_to)) if ordered_from == ordered_to =>
+            match (key_field(from_entries), key_field(to_entries), value_field(from_entries), value_field(to_entries)) {
+                (Some(from_key), Some(to_key), Some(from_value), Some(to_value)) =>
+                    can_cast_types(from_key.data_type(), to_key.data_type()) && can_cast_types(from_value.data_type(), to_value.data_type()),
+                _ => false
+            },
         // cast one decimal type to another decimal type
         (Decimal128(_, _), Decimal128(_, _)) => true,
         (Decimal256(_, _), Decimal256(_, _)) => true,
@@ -801,6 +809,9 @@ pub fn cast_with_options(
         }
         (FixedSizeList(_, size), _) if *size == 1 => {
             cast_single_element_fixed_size_list_to_values(array, to_type, cast_options)
+        }
+        (Map(_, ordered1), Map(_, ordered2)) if ordered1 == ordered2 => {
+            cast_map_values(array.as_map(), to_type, cast_options, ordered1.to_owned())
         }
         (Decimal128(_, s1), Decimal128(p2, s2)) => {
             cast_decimal_to_decimal_same_type::<Decimal128Type>(
@@ -7359,6 +7370,240 @@ mod tests {
             .build()
             .unwrap();
         FixedSizeListArray::from(list_data)
+    }
+
+    #[test]
+    fn test_cast_map_dont_allow_change_of_order() {
+        let string_builder = StringBuilder::new();
+        let value_builder = StringBuilder::new();
+        let mut builder = MapBuilder::new(
+            Some(MapFieldNames {
+                entry: "entries".to_string(),
+                key: "key".to_string(),
+                value: "value".to_string(),
+            }),
+            string_builder,
+            value_builder,
+        );
+
+        builder.keys().append_value("0");
+        builder.values().append_value("test_val_1");
+        builder.append(true).unwrap();
+        builder.keys().append_value("1");
+        builder.values().append_value("test_val_2");
+        builder.append(true).unwrap();
+
+        // map builder returns unsorted map by default
+        let array = builder.finish();
+
+        let new_ordered = true;
+        let new_type = DataType::Map(
+            Arc::new(Field::new(
+                "entries",
+                DataType::Struct(
+                    vec![
+                        Field::new("key", DataType::Utf8, false),
+                        Field::new("value", DataType::Utf8, false),
+                    ]
+                    .into(),
+                ),
+                false,
+            )),
+            new_ordered,
+        );
+
+        let new_array_result = cast(&array, &new_type.clone());
+        assert!(!can_cast_types(array.data_type(), &new_type));
+        assert!(
+            matches!(new_array_result, Err(ArrowError::CastError(t)) if t == r#"Casting from Map(Field { name: "entries", data_type: Struct([Field { name: "key", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "value", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }]), nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, false) to Map(Field { name: "entries", data_type: Struct([Field { name: "key", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "value", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }]), nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, true) not supported"#)
+        );
+    }
+
+    #[test]
+    fn test_cast_map_dont_allow_when_container_cant_cast() {
+        let string_builder = StringBuilder::new();
+        let value_builder = IntervalDayTimeArray::builder(2);
+        let mut builder = MapBuilder::new(
+            Some(MapFieldNames {
+                entry: "entries".to_string(),
+                key: "key".to_string(),
+                value: "value".to_string(),
+            }),
+            string_builder,
+            value_builder,
+        );
+
+        builder.keys().append_value("0");
+        builder.values().append_value(IntervalDayTime::new(1, 1));
+        builder.append(true).unwrap();
+        builder.keys().append_value("1");
+        builder.values().append_value(IntervalDayTime::new(2, 2));
+        builder.append(true).unwrap();
+
+        // map builder returns unsorted map by default
+        let array = builder.finish();
+
+        let new_ordered = true;
+        let new_type = DataType::Map(
+            Arc::new(Field::new(
+                "entries",
+                DataType::Struct(
+                    vec![
+                        Field::new("key", DataType::Utf8, false),
+                        Field::new("value", DataType::Duration(TimeUnit::Second), false),
+                    ]
+                    .into(),
+                ),
+                false,
+            )),
+            new_ordered,
+        );
+
+        let new_array_result = cast(&array, &new_type.clone());
+        assert!(!can_cast_types(array.data_type(), &new_type));
+        assert!(
+            matches!(new_array_result, Err(ArrowError::CastError(t)) if t == r#"Casting from Map(Field { name: "entries", data_type: Struct([Field { name: "key", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "value", data_type: Interval(DayTime), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }]), nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, false) to Map(Field { name: "entries", data_type: Struct([Field { name: "key", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "value", data_type: Duration(Second), nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }]), nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, true) not supported"#)
+        );
+    }
+
+    #[test]
+    fn test_cast_map_field_names() {
+        let string_builder = StringBuilder::new();
+        let value_builder = StringBuilder::new();
+        let mut builder = MapBuilder::new(
+            Some(MapFieldNames {
+                entry: "entries".to_string(),
+                key: "key".to_string(),
+                value: "value".to_string(),
+            }),
+            string_builder,
+            value_builder,
+        );
+
+        builder.keys().append_value("0");
+        builder.values().append_value("test_val_1");
+        builder.append(true).unwrap();
+        builder.keys().append_value("1");
+        builder.values().append_value("test_val_2");
+        builder.append(true).unwrap();
+        builder.append(false).unwrap();
+
+        let array = builder.finish();
+
+        let new_type = DataType::Map(
+            Arc::new(Field::new(
+                "entries_new",
+                DataType::Struct(
+                    vec![
+                        Field::new("key_new", DataType::Utf8, false),
+                        Field::new("value_values", DataType::Utf8, false),
+                    ]
+                    .into(),
+                ),
+                false,
+            )),
+            false,
+        );
+
+        assert_ne!(new_type, array.data_type().clone());
+
+        let new_array = cast(&array, &new_type.clone()).unwrap();
+        assert_eq!(new_type, new_array.data_type().clone());
+        let map_array = new_array.as_map();
+
+        assert_ne!(new_type, array.data_type().clone());
+        assert_eq!(new_type, map_array.data_type().clone());
+
+        let key_string = map_array
+            .keys()
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap()
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>();
+        assert_eq!(&key_string, &vec!["0", "1"]);
+
+        let values_string_array = cast(map_array.values(), &DataType::Utf8).unwrap();
+        let values_string = values_string_array
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap()
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>();
+        assert_eq!(&values_string, &vec!["test_val_1", "test_val_2"]);
+
+        assert_eq!(
+            map_array.nulls(),
+            Some(&NullBuffer::from(vec![true, true, false]))
+        );
+    }
+
+    #[test]
+    fn test_cast_map_contained_values() {
+        let string_builder = StringBuilder::new();
+        let value_builder = Int8Builder::new();
+        let mut builder = MapBuilder::new(
+            Some(MapFieldNames {
+                entry: "entries".to_string(),
+                key: "key".to_string(),
+                value: "value".to_string(),
+            }),
+            string_builder,
+            value_builder,
+        );
+
+        builder.keys().append_value("0");
+        builder.values().append_value(44);
+        builder.append(true).unwrap();
+        builder.keys().append_value("1");
+        builder.values().append_value(22);
+        builder.append(true).unwrap();
+
+        let array = builder.finish();
+
+        let new_type = DataType::Map(
+            Arc::new(Field::new(
+                "entries",
+                DataType::Struct(
+                    vec![
+                        Field::new("key", DataType::Utf8, false),
+                        Field::new("value", DataType::Utf8, false),
+                    ]
+                    .into(),
+                ),
+                false,
+            )),
+            false,
+        );
+
+        let new_array = cast(&array, &new_type.clone()).unwrap();
+        assert_eq!(new_type, new_array.data_type().clone());
+        let map_array = new_array.as_map();
+
+        assert_ne!(new_type, array.data_type().clone());
+        assert_eq!(new_type, map_array.data_type().clone());
+
+        let key_string = map_array
+            .keys()
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap()
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>();
+        assert_eq!(&key_string, &vec!["0", "1"]);
+
+        let values_string_array = cast(map_array.values(), &DataType::Utf8).unwrap();
+        let values_string = values_string_array
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap()
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>();
+        assert_eq!(&values_string, &vec!["44", "22"]);
     }
 
     #[test]
