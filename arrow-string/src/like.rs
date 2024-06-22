@@ -488,7 +488,16 @@ mod tests {
 
     test_utf8!(
         test_utf8_array_like,
-        vec!["arrow", "arrow", "arrow", "arrow", "arrow", "arrows", "arrow", "arrow"],
+        vec![
+            "arrow",
+            "arrow_long_string_more than 12 bytes",
+            "arrow",
+            "arrow",
+            "arrow",
+            "arrows",
+            "arrow",
+            "arrow"
+        ],
         vec!["arrow", "ar%", "%ro%", "foo", "arr", "arrow_", "arrow_", ".*"],
         like,
         vec![true, true, true, false, false, true, false, false]
@@ -496,7 +505,12 @@ mod tests {
 
     test_utf8_scalar!(
         test_utf8_array_like_scalar_escape_testing,
-        vec!["varchar(255)", "int(255)", "varchar", "int"],
+        vec![
+            "varchar(255)",
+            "int(255)longer than 12 bytes",
+            "varchar",
+            "int"
+        ],
         "%(%)%",
         like,
         vec![true, true, false, false]
@@ -520,78 +534,120 @@ mod tests {
 
     test_utf8_scalar!(
         test_utf8_array_like_scalar,
-        vec!["arrow", "parquet", "datafusion", "flight"],
+        vec![
+            "arrow",
+            "parquet",
+            "datafusion",
+            "flight",
+            "long string arrow test 12 bytes"
+        ],
         "%ar%",
         like,
-        vec![true, true, false, false]
+        vec![true, true, false, false, true]
     );
 
     test_utf8_scalar!(
         test_utf8_array_like_scalar_start,
-        vec!["arrow", "parrow", "arrows", "arr"],
+        vec![
+            "arrow",
+            "parrow",
+            "arrows",
+            "arr",
+            "arrow long string longer than 12 bytes"
+        ],
         "arrow%",
         like,
-        vec![true, false, true, false]
+        vec![true, false, true, false, true]
     );
 
     // Replicates `test_utf8_array_like_scalar_start` `test_utf8_array_like_scalar_dyn_start` to
     // demonstrate that `SQL STARTSWITH` works as expected.
     test_utf8_scalar!(
         test_utf8_array_starts_with_scalar_start,
-        vec!["arrow", "parrow", "arrows", "arr"],
+        vec![
+            "arrow",
+            "parrow",
+            "arrows",
+            "arr",
+            "arrow long string longer than 12 bytes"
+        ],
         "arrow",
         starts_with,
-        vec![true, false, true, false]
+        vec![true, false, true, false, true]
     );
 
     test_utf8_scalar!(
         test_utf8_array_like_scalar_end,
-        vec!["arrow", "parrow", "arrows", "arr"],
+        vec![
+            "arrow",
+            "parrow",
+            "arrows",
+            "arr",
+            "arrow long string longer than 12 bytes"
+        ],
         "%arrow",
         like,
-        vec![true, true, false, false]
+        vec![true, true, false, false, false]
     );
 
     // Replicates `test_utf8_array_like_scalar_end` `test_utf8_array_like_scalar_dyn_end` to
     // demonstrate that `SQL ENDSWITH` works as expected.
     test_utf8_scalar!(
         test_utf8_array_ends_with_scalar_end,
-        vec!["arrow", "parrow", "arrows", "arr"],
+        vec![
+            "arrow",
+            "parrow",
+            "arrows",
+            "arr",
+            "arrow long string longer than 12 bytes"
+        ],
         "arrow",
         ends_with,
-        vec![true, true, false, false]
+        vec![true, true, false, false, false]
     );
 
     test_utf8_scalar!(
         test_utf8_array_like_scalar_equals,
-        vec!["arrow", "parrow", "arrows", "arr"],
+        vec![
+            "arrow",
+            "parrow",
+            "arrows",
+            "arr",
+            "arrow long string longer than 12 bytes"
+        ],
         "arrow",
         like,
-        vec![true, false, false, false]
+        vec![true, false, false, false, false]
     );
 
     test_utf8_scalar!(
         test_utf8_array_like_scalar_one,
-        vec!["arrow", "arrows", "parrow", "arr"],
+        vec![
+            "arrow",
+            "arrows",
+            "parrow",
+            "arr",
+            "arrow long string longer than 12 bytes"
+        ],
         "arrow_",
         like,
-        vec![false, true, false, false]
+        vec![false, true, false, false, false]
     );
 
     test_utf8_scalar!(
         test_utf8_scalar_like_escape,
-        vec!["a%", "a\\x"],
+        vec!["a%", "a\\x", "arrow long string longer than 12 bytes"],
         "a\\%",
         like,
-        vec![true, false]
+        vec![true, false, false]
     );
 
     test_utf8_scalar!(
         test_utf8_scalar_like_escape_contains,
-        vec!["ba%", "ba\\x"],
+        vec!["ba%", "ba\\x", "arrow long string longer than 12 bytes"],
         "%a\\%",
         like,
-        vec![true, false]
+        vec![true, false, false]
     );
 
     test_utf8!(
@@ -604,7 +660,15 @@ mod tests {
 
     test_utf8!(
         test_utf8_array_nlike,
-        vec!["arrow", "arrow", "arrow", "arrow", "arrow", "arrows", "arrow"],
+        vec![
+            "arrow",
+            "arrow",
+            "arrow long string longer than 12 bytes",
+            "arrow",
+            "arrow",
+            "arrows",
+            "arrow"
+        ],
         vec!["arrow", "ar%", "%ro%", "foo", "arr", "arrow_", "arrow_"],
         nlike,
         vec![false, false, false, true, true, false, true]
@@ -612,7 +676,12 @@ mod tests {
 
     test_utf8_scalar!(
         test_utf8_array_nlike_escape_testing,
-        vec!["varchar(255)", "int(255)", "varchar", "int"],
+        vec![
+            "varchar(255)",
+            "int(255) arrow long string longer than 12 bytes",
+            "varchar",
+            "int"
+        ],
         "%(%)%",
         nlike,
         vec![false, false, true, true]
@@ -635,47 +704,85 @@ mod tests {
     );
     test_utf8_scalar!(
         test_utf8_array_nlike_scalar,
-        vec!["arrow", "parquet", "datafusion", "flight"],
+        vec![
+            "arrow",
+            "parquet",
+            "datafusion",
+            "flight",
+            "arrow long string longer than 12 bytes"
+        ],
         "%ar%",
         nlike,
-        vec![false, false, true, true]
+        vec![false, false, true, true, false]
     );
 
     test_utf8_scalar!(
         test_utf8_array_nlike_scalar_start,
-        vec!["arrow", "parrow", "arrows", "arr"],
+        vec![
+            "arrow",
+            "parrow",
+            "arrows",
+            "arr",
+            "arrow long string longer than 12 bytes"
+        ],
         "arrow%",
         nlike,
-        vec![false, true, false, true]
+        vec![false, true, false, true, false]
     );
 
     test_utf8_scalar!(
         test_utf8_array_nlike_scalar_end,
-        vec!["arrow", "parrow", "arrows", "arr"],
+        vec![
+            "arrow",
+            "parrow",
+            "arrows",
+            "arr",
+            "arrow long string longer than 12 bytes"
+        ],
         "%arrow",
         nlike,
-        vec![false, false, true, true]
+        vec![false, false, true, true, true]
     );
 
     test_utf8_scalar!(
         test_utf8_array_nlike_scalar_equals,
-        vec!["arrow", "parrow", "arrows", "arr"],
+        vec![
+            "arrow",
+            "parrow",
+            "arrows",
+            "arr",
+            "arrow long string longer than 12 bytes"
+        ],
         "arrow",
         nlike,
-        vec![false, true, true, true]
+        vec![false, true, true, true, true]
     );
 
     test_utf8_scalar!(
         test_utf8_array_nlike_scalar_one,
-        vec!["arrow", "arrows", "parrow", "arr"],
+        vec![
+            "arrow",
+            "arrows",
+            "parrow",
+            "arr",
+            "arrow long string longer than 12 bytes"
+        ],
         "arrow_",
         nlike,
-        vec![true, false, true, true]
+        vec![true, false, true, true, true]
     );
 
     test_utf8!(
         test_utf8_array_ilike,
-        vec!["arrow", "arrow", "ARROW", "arrow", "ARROW", "ARROWS", "arROw"],
+        vec![
+            "arrow",
+            "arrow",
+            "ARROW long string longer than 12 bytes",
+            "arrow",
+            "ARROW",
+            "ARROWS",
+            "arROw"
+        ],
         vec!["arrow", "ar%", "%ro%", "foo", "ar%r", "arrow_", "arrow_"],
         ilike,
         vec![true, true, true, false, false, true, false]
@@ -683,7 +790,12 @@ mod tests {
 
     test_utf8_scalar!(
         ilike_utf8_scalar_escape_testing,
-        vec!["varchar(255)", "int(255)", "varchar", "int"],
+        vec![
+            "varchar(255)",
+            "int(255) long string longer than 12 bytes",
+            "varchar",
+            "int"
+        ],
         "%(%)%",
         ilike,
         vec![true, true, false, false]
@@ -691,43 +803,77 @@ mod tests {
 
     test_utf8_scalar!(
         test_utf8_array_ilike_scalar,
-        vec!["arrow", "parquet", "datafusion", "flight"],
+        vec![
+            "arrow",
+            "parquet",
+            "datafusion",
+            "flight",
+            "arrow long string longer than 12 bytes"
+        ],
         "%AR%",
         ilike,
-        vec![true, true, false, false]
+        vec![true, true, false, false, true]
     );
 
     test_utf8_scalar!(
         test_utf8_array_ilike_scalar_start,
-        vec!["arrow", "parrow", "arrows", "ARR"],
+        vec![
+            "arrow",
+            "parrow",
+            "arrows",
+            "ARR",
+            "arrow long string longer than 12 bytes"
+        ],
         "aRRow%",
         ilike,
-        vec![true, false, true, false]
+        vec![true, false, true, false, true]
     );
 
     test_utf8_scalar!(
         test_utf8_array_ilike_scalar_end,
-        vec!["ArroW", "parrow", "ARRowS", "arr"],
+        vec![
+            "ArroW",
+            "parrow",
+            "ARRowS",
+            "arr",
+            "arrow long string longer than 12 bytes"
+        ],
         "%arrow",
         ilike,
-        vec![true, true, false, false]
+        vec![true, true, false, false, false]
     );
 
     test_utf8_scalar!(
         test_utf8_array_ilike_scalar_equals,
-        vec!["arrow", "parrow", "arrows", "arr"],
+        vec![
+            "arrow",
+            "parrow",
+            "arrows",
+            "arr",
+            "arrow long string longer than 12 bytes"
+        ],
         "Arrow",
         ilike,
-        vec![true, false, false, false]
+        vec![true, false, false, false, false]
     );
 
     // We only implement loose matching
     test_utf8_scalar!(
         test_utf8_array_ilike_unicode,
-        vec!["FFkoß", "FFkoSS", "FFkoss", "FFkoS", "FFkos", "ﬀkoSS", "ﬀkoß", "FFKoSS"],
+        vec![
+            "FFkoß",
+            "FFkoSS",
+            "FFkoss",
+            "FFkoS",
+            "FFkos",
+            "ﬀkoSS",
+            "ﬀkoß",
+            "FFKoSS",
+            "longer than 12 bytes FFKoSS"
+        ],
         "FFkoSS",
         ilike,
-        vec![false, true, true, false, false, false, false, true]
+        vec![false, true, true, false, false, false, false, true, false]
     );
 
     test_utf8_scalar!(
@@ -742,10 +888,11 @@ mod tests {
             "ﬀkoß",
             "FfkosSsdfd",
             "FFKoSS",
+            "longer than 12 bytes FFKoSS",
         ],
         "FFkoSS%",
         ilike,
-        vec![false, true, true, false, false, false, false, true, true]
+        vec![false, true, true, false, false, false, false, true, true, false]
     );
 
     test_utf8_scalar!(
@@ -760,10 +907,11 @@ mod tests {
             "ﬀkoß",
             "h😃klFfkosS",
             "FFKoSS",
+            "longer than 12 bytes FFKoSS",
         ],
         "%FFkoSS",
         ilike,
-        vec![false, true, true, false, false, false, false, true, true]
+        vec![false, true, true, false, false, false, false, true, true, true]
     );
 
     test_utf8_scalar!(
@@ -779,10 +927,11 @@ mod tests {
             "😃sadlksffkosSsh😃klF",
             "😱slgffkosSsh😃klF",
             "FFKoSS",
+            "longer than 12 bytes FFKoSS",
         ],
         "%FFkoSS%",
         ilike,
-        vec![false, true, true, false, false, false, false, true, true, true]
+        vec![false, true, true, false, false, false, false, true, true, true, true]
     );
 
     // Replicates `test_utf8_array_ilike_unicode_contains` and
@@ -803,10 +952,11 @@ mod tests {
             "😃sadlksFFkoSSsh😃klF", // Original was case insensitive "😃sadlksffkosSsh😃klF"
             "😱slgFFkoSSsh😃klF",    // Original was case insensitive "😱slgffkosSsh😃klF"
             "FFkoSS",                // "FFKoSS"
+            "longer than 12 bytes FFKoSS",
         ],
         "FFkoSS",
         contains,
-        vec![false, true, true, false, false, false, false, true, true, true]
+        vec![false, true, true, false, false, false, false, true, true, true, false]
     );
 
     test_utf8_scalar!(
@@ -822,23 +972,38 @@ mod tests {
             "😃sadlksffofsSsh😃klF",
             "😱slgffoesSsh😃klF",
             "FFKoSS",
+            "longer than 12 bytes FFKoSS",
         ],
         "%FF__SS%",
         ilike,
-        vec![false, true, true, false, false, false, false, true, true, true]
+        vec![false, true, true, false, false, false, false, true, true, true, true]
     );
 
     test_utf8_scalar!(
         test_utf8_array_ilike_scalar_one,
-        vec!["arrow", "arrows", "parrow", "arr"],
+        vec![
+            "arrow",
+            "arrows",
+            "parrow",
+            "arr",
+            "arrow long string longer than 12 bytes"
+        ],
         "arrow_",
         ilike,
-        vec![false, true, false, false]
+        vec![false, true, false, false, false]
     );
 
     test_utf8!(
         test_utf8_array_nilike,
-        vec!["arrow", "arrow", "ARROW", "arrow", "ARROW", "ARROWS", "arROw"],
+        vec![
+            "arrow",
+            "arrow",
+            "ARROW longer than 12 bytes string",
+            "arrow",
+            "ARROW",
+            "ARROWS",
+            "arROw"
+        ],
         vec!["arrow", "ar%", "%ro%", "foo", "ar%r", "arrow_", "arrow_"],
         nilike,
         vec![false, false, false, true, true, false, true]
@@ -846,7 +1011,12 @@ mod tests {
 
     test_utf8_scalar!(
         nilike_utf8_scalar_escape_testing,
-        vec!["varchar(255)", "int(255)", "varchar", "int"],
+        vec![
+            "varchar(255)",
+            "int(255) longer than 12 bytes string",
+            "varchar",
+            "int"
+        ],
         "%(%)%",
         nilike,
         vec![false, false, true, true]
@@ -854,42 +1024,72 @@ mod tests {
 
     test_utf8_scalar!(
         test_utf8_array_nilike_scalar,
-        vec!["arrow", "parquet", "datafusion", "flight"],
+        vec![
+            "arrow",
+            "parquet",
+            "datafusion",
+            "flight",
+            "arrow long string longer than 12 bytes"
+        ],
         "%AR%",
         nilike,
-        vec![false, false, true, true]
+        vec![false, false, true, true, false]
     );
 
     test_utf8_scalar!(
         test_utf8_array_nilike_scalar_start,
-        vec!["arrow", "parrow", "arrows", "ARR"],
+        vec![
+            "arrow",
+            "parrow",
+            "arrows",
+            "ARR",
+            "arrow long string longer than 12 bytes"
+        ],
         "aRRow%",
         nilike,
-        vec![false, true, false, true]
+        vec![false, true, false, true, false]
     );
 
     test_utf8_scalar!(
         test_utf8_array_nilike_scalar_end,
-        vec!["ArroW", "parrow", "ARRowS", "arr"],
+        vec![
+            "ArroW",
+            "parrow",
+            "ARRowS",
+            "arr",
+            "arrow long string longer than 12 bytes"
+        ],
         "%arrow",
         nilike,
-        vec![false, false, true, true]
+        vec![false, false, true, true, true]
     );
 
     test_utf8_scalar!(
         test_utf8_array_nilike_scalar_equals,
-        vec!["arRow", "parrow", "arrows", "arr"],
+        vec![
+            "arRow",
+            "parrow",
+            "arrows",
+            "arr",
+            "arrow long string longer than 12 bytes"
+        ],
         "Arrow",
         nilike,
-        vec![false, true, true, true]
+        vec![false, true, true, true, true]
     );
 
     test_utf8_scalar!(
         test_utf8_array_nilike_scalar_one,
-        vec!["arrow", "arrows", "parrow", "arr"],
+        vec![
+            "arrow",
+            "arrows",
+            "parrow",
+            "arr",
+            "arrow long string longer than 12 bytes"
+        ],
         "arrow_",
         nilike,
-        vec![true, false, true, true]
+        vec![true, false, true, true, true]
     );
 
     #[test]
