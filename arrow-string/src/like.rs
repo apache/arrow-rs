@@ -148,6 +148,13 @@ fn like_op(op: Op, lhs: &dyn Datum, rhs: &dyn Datum) -> Result<BooleanArray, Arr
     }
 }
 
+/// A trait for Arrow String Arrays, currently three types are supported:
+/// - `StringArray`
+/// - `LargeStringArray`
+/// - `StringViewArray`
+///
+/// This trait helps to abstract over the different types of string arrays
+/// so that we don't need to duplicate the implementation for each type.
 trait StringArrayType<'a>: ArrayAccessor<Item = &'a str> + Sized {
     fn is_ascii(&self) -> bool;
     fn iter(&self) -> ArrayIter<Self>;
@@ -409,29 +416,33 @@ mod tests {
     use super::*;
     use arrow_array::types::Int8Type;
 
+    /// Applying `op(left, right)`, both sides are arrays
+    /// The macro tests four types of array implementations:
+    /// - `StringArray`
+    /// - `LargeStringArray`
+    /// - `StringViewArray`
+    /// - `DictionaryArray`
     macro_rules! test_utf8 {
         ($test_name:ident, $left:expr, $right:expr, $op:expr, $expected:expr) => {
             #[test]
             fn $test_name() {
                 let expected = BooleanArray::from($expected);
+
                 let left = StringArray::from($left);
                 let right = StringArray::from($right);
                 let res = $op(&left, &right).unwrap();
                 assert_eq!(res, expected);
 
-                let expected = BooleanArray::from($expected);
                 let left = LargeStringArray::from($left);
                 let right = LargeStringArray::from($right);
                 let res = $op(&left, &right).unwrap();
                 assert_eq!(res, expected);
 
-                let expected = BooleanArray::from($expected);
                 let left = StringViewArray::from($left);
                 let right = StringViewArray::from($right);
                 let res = $op(&left, &right).unwrap();
                 assert_eq!(res, expected);
 
-                let expected = BooleanArray::from($expected);
                 let left: DictionaryArray<Int8Type> = $left.into_iter().collect();
                 let right: DictionaryArray<Int8Type> = $right.into_iter().collect();
                 let res = $op(&left, &right).unwrap();
@@ -440,6 +451,12 @@ mod tests {
         };
     }
 
+    /// Applying `op(left, right)`, left side is array, right side is scalar
+    /// The macro tests four types of array implementations:
+    /// - `StringArray`
+    /// - `LargeStringArray`
+    /// - `StringViewArray`
+    /// - `DictionaryArray`
     macro_rules! test_utf8_scalar {
         ($test_name:ident, $left:expr, $right:expr, $op:expr, $expected:expr) => {
             #[test]
@@ -458,6 +475,11 @@ mod tests {
 
                 let left = StringViewArray::from($left);
                 let right = StringViewArray::from_iter_values([$right]);
+                let res = $op(&left, &Scalar::new(&right)).unwrap();
+                assert_eq!(res, expected);
+
+                let left: DictionaryArray<Int8Type> = $left.into_iter().collect();
+                let right: DictionaryArray<Int8Type> = [$right].into_iter().collect();
                 let res = $op(&left, &Scalar::new(&right)).unwrap();
                 assert_eq!(res, expected);
             }
