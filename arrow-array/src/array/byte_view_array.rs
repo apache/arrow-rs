@@ -335,6 +335,18 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
     }
 
     /// Comparing two [`GenericByteViewArray`] at index `left_idx` and `right_idx`
+    pub fn compare(
+        left: &GenericByteViewArray<T>,
+        left_idx: usize,
+        right: &GenericByteViewArray<T>,
+        right_idx: usize,
+    ) -> std::cmp::Ordering {
+        assert!(left_idx < left.len());
+        assert!(right_idx < right.len());
+        unsafe { Self::compare_unchecked(left, left_idx, right, right_idx) }
+    }
+
+    /// Comparing two [`GenericByteViewArray`] at index `left_idx` and `right_idx`
     ///
     /// Comparing two ByteView types are non-trivial.
     /// It takes a bit of patience to understand why we don't just compare two &[u8] directly.
@@ -360,19 +372,18 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
     ///     (2.2) o.w., we need to compare the full string.
     ///
     /// # Safety
-    /// (1) Indexing. The Self::Item.1 encodes the index value, which is already checked in `value` function,
-    ///              so it is safe to index into the views.
-    /// (2) Slice data from view. We know the bytes 4-8 are inlined data (per spec), so it is safe to slice from the view.
-    pub fn compare(
+    /// The left/right_idx must within range of each array
+    #[inline]
+    pub unsafe fn compare_unchecked(
         left: &GenericByteViewArray<T>,
         left_idx: usize,
         right: &GenericByteViewArray<T>,
         right_idx: usize,
     ) -> std::cmp::Ordering {
-        let l_view = left.views().get(left_idx).unwrap();
+        let l_view = left.views().get_unchecked(left_idx);
         let l_len = *l_view as u32;
 
-        let r_view = right.views().get(right_idx).unwrap();
+        let r_view = right.views().get_unchecked(right_idx);
         let r_len = *r_view as u32;
 
         if l_len <= 12 && r_len <= 12 {

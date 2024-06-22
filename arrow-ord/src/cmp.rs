@@ -542,15 +542,30 @@ impl<'a, T: ByteArrayType> ArrayOrd for &'a GenericByteArray<T> {
 
 impl<'a, T: ByteViewType> ArrayOrd for &'a GenericByteViewArray<T> {
     /// This is the item type for the GenericByteViewArray::compare
+    /// Item.0 is the array, Item.1 is the index
     type Item = (&'a GenericByteViewArray<T>, usize);
 
     fn is_eq(l: Self::Item, r: Self::Item) -> bool {
-        // Make sure to use GenericByteViewArray::compare for optimized comparison
-        GenericByteViewArray::compare(l.0, l.1, r.0, r.1).is_eq()
+        // # Safety
+        // The index is within bounds as it is checked in value()
+        let l_view = unsafe { l.0.views().get_unchecked(l.1) };
+        let l_len = *l_view as u32;
+
+        let r_view = unsafe { r.0.views().get_unchecked(r.1) };
+        let r_len = *r_view as u32;
+        // This is a fast path for equality check.
+        // TODO: need more investigation why this check matters, but it does in the benchmark.
+        if l_len != r_len {
+            return false;
+        }
+
+        unsafe { GenericByteViewArray::compare_unchecked(l.0, l.1, r.0, r.1).is_eq() }
     }
 
     fn is_lt(l: Self::Item, r: Self::Item) -> bool {
-        GenericByteViewArray::<T>::compare(l.0, l.1, r.0, r.1).is_lt()
+        // # Safety
+        // The index is within bounds as it is checked in value()
+        unsafe { GenericByteViewArray::<T>::compare_unchecked(l.0, l.1, r.0, r.1).is_lt() }
     }
 
     fn len(&self) -> usize {
