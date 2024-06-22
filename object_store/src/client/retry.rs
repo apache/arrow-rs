@@ -253,7 +253,9 @@ impl RetryableRequest {
 
                                     let mut hyper_headers = hyper::HeaderMap::new();
                                     for (header_name, header_value) in headers {
-                                        hyper_headers.insert(header_name.unwrap(), header_value);
+                                        if let Some(name) = header_name {
+                                            hyper_headers.insert(name, header_value);
+                                        }
                                     }
 
                                     *success_response.headers_mut() = hyper_headers;
