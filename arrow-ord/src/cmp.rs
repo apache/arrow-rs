@@ -597,7 +597,7 @@ impl<'a> ArrayOrd for &'a FixedSizeBinaryArray {
     }
 }
 
-/// Comparing two [`GenericByteViewArray`] at index `left_idx` and `right_idx`
+/// Compares two [`GenericByteViewArray`] at index `left_idx` and `right_idx`
 pub fn compare_byte_view<T: ByteViewType>(
     left: &GenericByteViewArray<T>,
     left_idx: usize,
