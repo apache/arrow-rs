@@ -241,18 +241,8 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
     }
 
     /// Returns the element at index `i`
-    ///
-    ///
     /// # Safety
     /// Caller is responsible for ensuring that the index is within the bounds of the array
-    //
-    // This function can't be inlined, ow it causes the caller function to run out of registers and cause register spilling.
-    // Basically you can't just call `l_full_data = left.value_unchecked(...)`,
-    // the compiler tries to inline the `value_unchecked` function, which introduces many unnecessary variables on stack.
-    // Looking at the assembly, the auto-inlined version run out of the registers, which causes register spilling, which then causes unnecessary memory access.
-    //
-    // TLDR: don't change it, unless you have examined the assembly output.
-    #[inline(never)]
     pub unsafe fn value_unchecked(&self, idx: usize) -> &T::Native {
         let v = self.views.get_unchecked(idx);
         let len = *v as u32;
@@ -343,7 +333,6 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
 
         builder.finish()
     }
-
 }
 
 impl<T: ByteViewType + ?Sized> Debug for GenericByteViewArray<T> {
