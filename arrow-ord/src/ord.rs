@@ -146,7 +146,7 @@ fn compare_byte_view<T: ByteViewType>(
     let l = left.clone();
     let r = right.clone();
     compare(left, right, opts, move |i, j| {
-        GenericByteViewArray::compare(&l, i, &r, j)
+        crate::cmp::compare_byte_view(&l, i, &r, j)
     })
 }
 
