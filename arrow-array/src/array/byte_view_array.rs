@@ -21,7 +21,7 @@ use crate::iterator::ArrayIter;
 use crate::types::bytes::ByteArrayNativeType;
 use crate::types::{BinaryViewType, ByteViewType, StringViewType};
 use crate::{Array, ArrayAccessor, ArrayRef, GenericByteArray, OffsetSizeTrait, Scalar};
-use arrow_buffer::{Buffer, NullBuffer, ScalarBuffer};
+use arrow_buffer::{ArrowNativeType, Buffer, NullBuffer, ScalarBuffer};
 use arrow_data::{ArrayData, ArrayDataBuilder, ByteView};
 use arrow_schema::{ArrowError, DataType};
 use num::ToPrimitive;
@@ -527,20 +527,31 @@ where
         let str_values_buf = byte_array.values().clone();
         let offsets = byte_array.offsets();
 
-        let mut views_builder = GenericByteViewBuilder::<V>::with_capacity(len);
-        let block = views_builder.append_block(str_values_buf);
-        for (i, w) in offsets.windows(2).enumerate() {
-            let offset = w[0].to_u32().unwrap();
-            let end = w[1].to_u32().unwrap();
-            let length = end - offset;
+        let can_reuse_buffer = match offsets.last() {
+            Some(offset) => offset.as_usize() < u32::MAX as usize,
+            None => true,
+        };
 
-            if byte_array.is_null(i) {
-                views_builder.append_null();
-            } else {
-                // Safety: the input was a valid array so it valid UTF8 (if string). And
-                // all offsets were valid and we created the views correctly
-                unsafe { views_builder.append_view_unchecked(block, offset, length) }
+        let mut views_builder = GenericByteViewBuilder::<V>::with_capacity(len);
+        if can_reuse_buffer {
+            let block = views_builder.append_block(str_values_buf);
+            for (i, w) in offsets.windows(2).enumerate() {
+                let offset = w[0].as_usize();
+                let end = w[1].as_usize();
+                let length = end - offset;
+
+                if byte_array.is_null(i) {
+                    views_builder.append_null();
+                } else {
+                    // Safety: the input was a valid array so it valid UTF8 (if string). And
+                    // all offsets were valid and we created the views correctly
+                    unsafe {
+                        views_builder.append_view_unchecked(block, offset as u32, length as u32)
+                    }
+                }
             }
+        } else {
+            GenericByteViewArray::<V>::from_iter(value.iter());
         }
 
         assert_eq!(views_builder.len(), len);
