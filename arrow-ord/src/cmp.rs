@@ -732,7 +732,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_list_eq_list() {
+    fn test_list_cmp_list() {
         let data = vec![
             Some(vec![Some(0), Some(1), Some(2)]),
             None,
@@ -808,7 +808,7 @@ mod tests {
     }
 
     #[test]
-    fn test_list_eq_scalar_list() {
+    fn test_list_cmp_scalar_list() {
         let list_data = vec![
             Some(vec![Some(0), Some(1), Some(2)]),
             None,
@@ -836,7 +836,7 @@ mod tests {
     }
 
     #[test]
-    fn test_scalar_list_eq_scalar_list() {
+    fn test_scalar_list_cmp_scalar_list() {
         fn test_scalar_list_helper(
             op: Op,
             data1: Vec<Option<i32>>,
