@@ -269,11 +269,11 @@ fn add_benchmark(c: &mut Criterion) {
         b.iter(|| bench_nilike_utf8_scalar(&arr_string, "%xx_xX%xXX"))
     });
 
-    c.bench_function("egexp_matches_utf8 scalar starts with", |b| {
+    c.bench_function("regexp_matches_utf8 scalar starts with", |b| {
         b.iter(|| bench_regexp_is_match_utf8_scalar(&arr_string, "^xx"))
     });
 
-    c.bench_function("egexp_matches_utf8 scalar ends with", |b| {
+    c.bench_function("regexp_matches_utf8 scalar ends with", |b| {
         b.iter(|| bench_regexp_is_match_utf8_scalar(&arr_string, "xx$"))
     });
 
