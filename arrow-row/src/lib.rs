@@ -1275,8 +1275,7 @@ unsafe fn decode_column(
                 DataType::Utf8 => Arc::new(decode_string::<i32>(rows, options, validate_utf8)),
                 DataType::LargeUtf8 => Arc::new(decode_string::<i64>(rows, options, validate_utf8)),
                 DataType::Utf8View => Arc::new(decode_string_view(rows, options, validate_utf8)),
-                DataType::Dictionary(_, _) => todo!(),
-                _ => unimplemented!("unsupported data type: {}", data_type),
+                _ => return Err(ArrowError::NotYetImplemented(format!("unsupported data type: {}", data_type)))
             }
         }
         Codec::Dictionary(converter, _) => {

@@ -460,7 +460,7 @@ where
                     views_builder.append_null();
                 } else {
                     // Safety: the input was a valid array so it valid UTF8 (if string). And
-                    // all offsets were valid 
+                    // all offsets were valid
                     unsafe {
                         views_builder.append_view_unchecked(block, offset as u32, length as u32)
                     }
