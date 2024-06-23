@@ -31,9 +31,11 @@ use arrow_array::{
 };
 use arrow_buffer::bit_util::ceil;
 use arrow_buffer::{BooleanBuffer, MutableBuffer, NullBuffer};
-use arrow_schema::ArrowError;
+use arrow_schema::{ArrowError, DataType, SortOptions};
 use arrow_select::take::take;
 use std::ops::Not;
+
+use crate::ord::make_comparator;
 
 #[derive(Debug, Copy, Clone)]
 enum Op {
@@ -184,6 +186,58 @@ pub fn not_distinct(lhs: &dyn Datum, rhs: &dyn Datum) -> Result<BooleanArray, Ar
     compare_op(Op::NotDistinct, lhs, rhs)
 }
 
+/// Compare on nested type List, Struct, and so on
+#[allow(clippy::too_many_arguments)]
+fn process_nested(
+    op: Op,
+    l: &dyn Array,
+    is_l_scalar: bool,
+    l_t: &DataType,
+    r: &dyn Array,
+    is_r_scalar: bool,
+    r_t: &DataType,
+    len: usize,
+) -> Result<Option<BooleanArray>, ArrowError> {
+    if let (DataType::List(_), DataType::List(_)) = (l_t, r_t) {
+        let cmp = make_comparator(l, r, SortOptions::default())?;
+
+        if !matches!(
+            op,
+            Op::Equal | Op::Less | Op::Greater | Op::LessEqual | Op::GreaterEqual | Op::NotEqual
+        ) {
+            return Err(ArrowError::NotYetImplemented(format!(
+                "Comparison operator {op} for {l_t} is NYI"
+            )));
+        }
+
+        let cmp_with_op = |i, j| match op {
+            Op::Equal => cmp(i, j).is_eq(),
+            Op::Less => cmp(i, j).is_lt(),
+            Op::Greater => cmp(i, j).is_gt(),
+            Op::LessEqual => !cmp(i, j).is_gt(),
+            Op::GreaterEqual => !cmp(i, j).is_lt(),
+            Op::NotEqual => !cmp(i, j).is_eq(),
+            _ => unreachable!("other operatations shoulbe be catched above"),
+        };
+
+        let values = match (is_l_scalar, is_r_scalar) {
+            (false, false) => (0..len).map(|i| cmp_with_op(i, i)).collect(),
+            (true, false) => (0..len).map(|i| cmp_with_op(0, i)).collect(),
+            (false, true) => (0..len).map(|i| cmp_with_op(i, 0)).collect(),
+            (true, true) => std::iter::once(cmp_with_op(0, 0)).collect(),
+        };
+
+        let nulls = NullBuffer::union(l.nulls(), r.nulls());
+        Ok(Some(BooleanArray::new(values, nulls)))
+    } else if l_t.is_nested() {
+        Err(ArrowError::NotYetImplemented(format!(
+            "Comparison for {l_t} is NYI"
+        )))
+    } else {
+        Ok(None)
+    }
+}
+
 /// Perform `op` on the provided `Datum`
 #[inline(never)]
 fn compare_op(op: Op, lhs: &dyn Datum, rhs: &dyn Datum) -> Result<BooleanArray, ArrowError> {
@@ -216,10 +270,14 @@ fn compare_op(op: Op, lhs: &dyn Datum, rhs: &dyn Datum) -> Result<BooleanArray, 
     let r = r_v.map(|x| x.values().as_ref()).unwrap_or(r);
     let r_t = r.data_type();
 
-    if l_t != r_t || l_t.is_nested() {
+    if l_t != r_t {
         return Err(ArrowError::InvalidArgumentError(format!(
             "Invalid comparison operation: {l_t} {op} {r_t}"
         )));
+    }
+
+    if let Some(values) = process_nested(op, l, l_s, l_t, r, r_s, r_t, len)? {
+        return Ok(values);
     }
 
     // Defer computation as may not be necessary
@@ -667,9 +725,186 @@ impl<'a> ArrayOrd for &'a FixedSizeBinaryArray {
 mod tests {
     use std::sync::Arc;
 
-    use arrow_array::{DictionaryArray, Int32Array, Scalar, StringArray};
+    use arrow_array::{
+        types::Int32Type, DictionaryArray, Int32Array, ListArray, Scalar, StringArray,
+    };
 
     use super::*;
+
+    #[test]
+    fn test_list_eq_list() {
+        let data = vec![
+            Some(vec![Some(0), Some(1), Some(2)]),
+            None,
+            Some(vec![Some(3), None, Some(4)]),
+            Some(vec![None, Some(6), Some(7)]),
+            Some(vec![None, Some(1), Some(2)]),
+        ];
+        let list_array1 = ListArray::from_iter_primitive::<Int32Type, _, _>(data.clone());
+        let data = vec![
+            Some(vec![Some(0), Some(1), Some(2)]),
+            None,
+            Some(vec![Some(3), None, Some(5)]),
+            Some(vec![None, Some(6), Some(6)]),
+            Some(vec![None, Some(1)]),
+        ];
+        let list_array2 = ListArray::from_iter_primitive::<Int32Type, _, _>(data);
+        let res: Vec<Option<bool>> = eq(&list_array1, &list_array2).unwrap().iter().collect();
+        assert_eq!(
+            &res,
+            &[Some(true), None, Some(false), Some(false), Some(false)]
+        );
+        let res: Vec<Option<bool>> = neq(&list_array1, &list_array2).unwrap().iter().collect();
+        assert_eq!(
+            &res,
+            &[Some(false), None, Some(true), Some(true), Some(true)]
+        );
+        let res: Vec<Option<bool>> = lt(&list_array1, &list_array2).unwrap().iter().collect();
+        assert_eq!(
+            &res,
+            &[Some(false), None, Some(true), Some(false), Some(false)]
+        );
+        let res: Vec<Option<bool>> = lt_eq(&list_array1, &list_array2).unwrap().iter().collect();
+        assert_eq!(
+            &res,
+            &[Some(true), None, Some(true), Some(false), Some(false)]
+        );
+        let res: Vec<Option<bool>> = gt(&list_array1, &list_array2).unwrap().iter().collect();
+        assert_eq!(
+            &res,
+            &[Some(false), None, Some(false), Some(true), Some(true)]
+        );
+        let res: Vec<Option<bool>> = gt_eq(&list_array1, &list_array2).unwrap().iter().collect();
+        assert_eq!(
+            &res,
+            &[Some(true), None, Some(false), Some(true), Some(true)]
+        );
+    }
+
+    // replciate scalar data to the same size of list and do list to list comparison
+    fn test_scalar_list_helper(
+        op: Op,
+        list_data: Vec<Option<Vec<Option<i32>>>>,
+        scalar_data: Vec<Option<i32>>,
+    ) {
+        let len = list_data.len();
+        let list_array1 = ListArray::from_iter_primitive::<Int32Type, _, _>(list_data);
+        let list_array2 = ListArray::from_iter_primitive::<Int32Type, _, _>(
+            std::iter::repeat(Some(scalar_data.clone())).take(len),
+        );
+        let scalar_array = Scalar::new(ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+            Some(scalar_data),
+        ]));
+
+        let res1: Vec<Option<bool>> = compare_op(op, &list_array1, &list_array2)
+            .unwrap()
+            .iter()
+            .collect();
+        let res2: Vec<Option<bool>> = compare_op(op, &list_array1, &scalar_array)
+            .unwrap()
+            .iter()
+            .collect();
+        assert_eq!(res1, res2);
+    }
+
+    #[test]
+    fn test_list_eq_scalar_list() {
+        let list_data = vec![
+            Some(vec![Some(0), Some(1), Some(2)]),
+            None,
+            Some(vec![Some(0), Some(1)]),
+            Some(vec![Some(0), Some(1), Some(2), Some(3)]),
+            Some(vec![Some(0), None, Some(2)]),
+        ];
+        for data in vec![
+            // scalar data to test
+            vec![Some(0), Some(1), Some(2)],
+            vec![Some(3)],
+            vec![Some(0), None, Some(1)],
+        ] {
+            for op in vec![
+                Op::Equal,
+                Op::Less,
+                Op::Greater,
+                Op::NotEqual,
+                Op::LessEqual,
+                Op::GreaterEqual,
+            ] {
+                test_scalar_list_helper(op, list_data.clone(), data.clone());
+            }
+        }
+    }
+
+    #[test]
+    fn test_scalar_list_eq_scalar_list() {
+        fn test_scalar_list_helper(
+            op: Op,
+            data1: Vec<Option<i32>>,
+            data2: Vec<Option<i32>>,
+            expect: &[Option<bool>],
+        ) {
+            let data = vec![Some(data1)];
+            let scalar_array1 =
+                Scalar::new(ListArray::from_iter_primitive::<Int32Type, _, _>(data));
+            let data = vec![Some(data2)];
+            let scalar_array2 =
+                Scalar::new(ListArray::from_iter_primitive::<Int32Type, _, _>(data));
+            let res: Vec<Option<bool>> = compare_op(op, &scalar_array1, &scalar_array2)
+                .unwrap()
+                .iter()
+                .collect();
+            assert_eq!(&res, expect);
+        }
+
+        test_scalar_list_helper(
+            Op::Equal,
+            vec![Some(0), Some(1), Some(2)],
+            vec![Some(0), Some(1), Some(2)],
+            &[Some(true)],
+        );
+        test_scalar_list_helper(
+            Op::NotEqual,
+            vec![Some(0), Some(1), Some(2)],
+            vec![Some(0), Some(1), Some(2)],
+            &[Some(false)],
+        );
+        test_scalar_list_helper(
+            Op::Less,
+            vec![Some(0), Some(1), Some(2)],
+            vec![Some(0), Some(1), Some(4)],
+            &[Some(true)],
+        );
+        test_scalar_list_helper(
+            Op::Less,
+            vec![Some(0), Some(1), Some(2)],
+            vec![Some(0), Some(1)],
+            &[Some(false)],
+        );
+        test_scalar_list_helper(
+            Op::LessEqual,
+            vec![Some(0), Some(1)],
+            vec![Some(0), Some(1)],
+            &[Some(true)],
+        );
+        test_scalar_list_helper(
+            Op::Greater,
+            vec![Some(0), Some(1), Some(2)],
+            vec![Some(0), Some(1), Some(4)],
+            &[Some(false)],
+        );
+        test_scalar_list_helper(
+            Op::GreaterEqual,
+            vec![Some(0), Some(1), Some(2)],
+            vec![Some(0), Some(1)],
+            &[Some(true)],
+        );
+        test_scalar_list_helper(
+            Op::GreaterEqual,
+            vec![Some(0), Some(1)],
+            vec![Some(0), Some(1)],
+            &[Some(true)],
+        );
+    }
 
     #[test]
     fn test_null_dict() {
