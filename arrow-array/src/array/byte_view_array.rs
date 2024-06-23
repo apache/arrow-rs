@@ -432,6 +432,8 @@ impl<T: ByteViewType + ?Sized> From<ArrayData> for GenericByteViewArray<T> {
     }
 }
 
+/// Convert a [`GenericByteArray`] to a [`GenericByteViewArray`] but in a smart way:
+/// If the offsets are all less than u32::MAX, then we directly build the view array on top of existing buffer.
 impl<FROM, V> From<&GenericByteArray<FROM>> for GenericByteViewArray<V>
 where
     FROM: ByteArrayType,
