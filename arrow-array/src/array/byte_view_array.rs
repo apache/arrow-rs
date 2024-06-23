@@ -245,7 +245,7 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
     ///
     /// # Safety
     /// Caller is responsible for ensuring that the index is within the bounds of the array
-    // 
+    //
     // This function can't be inlined, ow it causes the caller function to run out of registers and cause register spilling.
     // Basically you can't just call `l_full_data = left.value_unchecked(...)`,
     // the compiler tries to inline the `value_unchecked` function, which introduces many unnecessary variables on stack.
