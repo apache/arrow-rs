@@ -520,10 +520,7 @@ where
     FROM::Offset: OffsetSizeTrait + ToPrimitive,
     V: ByteViewType<Native = FROM::Native>,
 {
-    fn from(value: &GenericByteArray<FROM>) -> Self {
-        let byte_array = value;
-        let len = byte_array.len();
-        let str_values_buf = byte_array.values().clone();
+    fn from(byte_array: &GenericByteArray<FROM>) -> Self {
         let offsets = byte_array.offsets();
 
         let can_reuse_buffer = match offsets.last() {
@@ -531,8 +528,10 @@ where
             None => true,
         };
 
-        let mut views_builder = GenericByteViewBuilder::<V>::with_capacity(len);
         if can_reuse_buffer {
+            let len = byte_array.len();
+            let mut views_builder = GenericByteViewBuilder::<V>::with_capacity(len);
+            let str_values_buf = byte_array.values().clone();
             let block = views_builder.append_block(str_values_buf);
             for (i, w) in offsets.windows(2).enumerate() {
                 let offset = w[0].as_usize();
@@ -549,12 +548,12 @@ where
                     }
                 }
             }
+            assert_eq!(views_builder.len(), len);
+            views_builder.finish()
         } else {
-            GenericByteViewArray::<V>::from_iter(value.iter());
+            // TODO: the first u32::MAX can still be reused
+            GenericByteViewArray::<V>::from_iter(byte_array.iter())
         }
-
-        assert_eq!(views_builder.len(), len);
-        views_builder.finish()
     }
 }
 

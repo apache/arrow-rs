@@ -2339,8 +2339,7 @@ fn cast_byte_to_view<FROM, V>(array: &dyn Array) -> Result<ArrayRef, ArrowError>
 where
     FROM: ByteArrayType,
     FROM::Offset: OffsetSizeTrait + ToPrimitive,
-    V: ByteViewType,
-    FROM::Native: PartialEq<V::Native>,
+    V: ByteViewType<Native = FROM::Native>,
 {
     let byte_array: &GenericByteArray<FROM> = array.as_bytes();
     let byte_view_array = GenericByteViewArray::<V>::from(byte_array);
