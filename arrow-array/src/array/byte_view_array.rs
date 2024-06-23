@@ -518,8 +518,7 @@ impl<FROM, V> From<&GenericByteArray<FROM>> for GenericByteViewArray<V>
 where
     FROM: ByteArrayType,
     FROM::Offset: OffsetSizeTrait + ToPrimitive,
-    V: ByteViewType,
-    FROM::Native: PartialEq<V::Native>, // this prevent users to convert between byte and string types.
+    V: ByteViewType<Native = FROM::Native>,
 {
     fn from(value: &GenericByteArray<FROM>) -> Self {
         let byte_array = value;
