@@ -171,6 +171,26 @@ fn add_benchmark(c: &mut Criterion) {
         })
     });
 
+    c.bench_function("lt scalar StringViewArray", |b| {
+        b.iter(|| {
+            lt(
+                &Scalar::new(StringViewArray::from_iter_values(["xxxx"])),
+                &string_view_left,
+            )
+            .unwrap()
+        })
+    });
+
+    c.bench_function("lt scalar StringArray", |b| {
+        b.iter(|| {
+            lt(
+                &Scalar::new(StringArray::from_iter_values(["xxxx"])),
+                &string_left,
+            )
+            .unwrap()
+        })
+    });
+
     c.bench_function("eq scalar StringViewArray", |b| {
         b.iter(|| {
             eq(

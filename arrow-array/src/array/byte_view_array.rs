@@ -373,7 +373,7 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
     ///
     /// # Safety
     /// The left/right_idx must within range of each array
-    #[inline]
+    #[inline(always)]
     pub unsafe fn compare_unchecked(
         left: &GenericByteViewArray<T>,
         left_idx: usize,
@@ -401,8 +401,28 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
         }
 
         // unfortunately, we need to compare the full data
-        let l_full_data: &[u8] = unsafe { left.value_unchecked(left_idx).as_ref() };
-        let r_full_data: &[u8] = unsafe { right.value_unchecked(right_idx).as_ref() };
+        //
+        // The following code is very delicate, make sure you benchmark the comparison kernels after you change them.
+        // Basically you can't just call `l_full_data = left.value_unchecked(...)`,
+        // because the compiler will try to inline the `value_unchecked` function, which introduces many unnecessary variables on stack.
+        // Looking at the assembly, the auto-inlined version run out of the registers, which causes register spilling, which then causes unnecessary memory access.
+        // The manually inlined introduce less branches and less variables on stack.
+        //
+        // TLDR: don't change it, unless you have examined the assembly output.
+        let l_full_data: &[u8] = {
+            let view = ByteView::from(*l_view);
+            let data = left.buffers.get_unchecked(view.buffer_index as usize);
+            let offset = view.offset as usize;
+            data.get_unchecked(offset..offset + l_len as usize)
+        };
+
+        let r_full_data: &[u8] = {
+            let view = ByteView::from(*r_view);
+            let data = right.buffers.get_unchecked(view.buffer_index as usize);
+            let offset = view.offset as usize;
+            data.get_unchecked(offset..offset + r_len as usize)
+        };
+
         l_full_data.cmp(r_full_data)
     }
 }

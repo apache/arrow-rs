@@ -554,7 +554,7 @@ impl<'a, T: ByteViewType> ArrayOrd for &'a GenericByteViewArray<T> {
         let r_view = unsafe { r.0.views().get_unchecked(r.1) };
         let r_len = *r_view as u32;
         // This is a fast path for equality check.
-        // TODO: need more investigation why this check matters, but it does in the benchmark.
+        // We don't need to look at the actual bytes to determine if they are equal.
         if l_len != r_len {
             return false;
         }
