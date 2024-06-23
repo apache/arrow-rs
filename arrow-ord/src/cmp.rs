@@ -816,13 +816,13 @@ mod tests {
             Some(vec![Some(0), Some(1), Some(2), Some(3)]),
             Some(vec![Some(0), None, Some(2)]),
         ];
-        for data in vec![
+        for data in [
             // scalar data to test
             vec![Some(0), Some(1), Some(2)],
             vec![Some(3)],
             vec![Some(0), None, Some(1)],
         ] {
-            for op in vec![
+            for op in [
                 Op::Equal,
                 Op::Less,
                 Op::Greater,
