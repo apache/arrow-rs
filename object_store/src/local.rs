@@ -742,18 +742,23 @@ impl LocalUpload {
 #[async_trait]
 impl MultipartUpload for LocalUpload {
     fn put_part(&mut self, data: PutPayload) -> UploadPart {
+        println!("put_part");
         let offset = self.offset;
         self.offset += data.content_length() as u64;
 
         let s = Arc::clone(&self.state);
         let file = Arc::clone(&s.file);
         maybe_spawn_blocking(move || {
+            println!("seek");
             (&*file)
                 .seek(SeekFrom::Start(offset))
                 .context(SeekSnafu { path: &s.dest })?;
 
             data.iter()
-                .try_for_each(|x| (&*file).write_all(x))
+                .try_for_each(|x| {
+                    println!("write all");
+                    (&*file).write_all(x)
+                })
                 .context(UnableToCopyDataToFileSnafu)?;
 
             Ok(())
@@ -764,14 +769,15 @@ impl MultipartUpload for LocalUpload {
     async fn complete(&mut self) -> Result<PutResult> {
         let src = self.src.take().context(AbortedSnafu)?;
         let s = Arc::clone(&self.state);
-        let file = Arc::clone(&s.file);
         maybe_spawn_blocking(move || {
+            println!("complete");
             std::fs::rename(&src, &s.dest).context(UnableToRenameFileSnafu)?;
-            let metadata = file.as_ref().metadata().map_err(|e| Error::Metadata {
+            let metadata = s.file.as_ref().metadata().map_err(|e| Error::Metadata {
                 source: e.into(),
                 path: src.to_string_lossy().to_string(),
             })?;
 
+            println!("complete -- done");
             Ok(PutResult {
                 e_tag: Some(get_etag(&metadata)),
                 version: None,
@@ -783,7 +789,9 @@ impl MultipartUpload for LocalUpload {
     async fn abort(&mut self) -> Result<()> {
         let src = self.src.take().context(AbortedSnafu)?;
         maybe_spawn_blocking(move || {
+            println!("remove");
             std::fs::remove_file(&src).context(UnableToDeleteFileSnafu { path: &src })?;
+            println!("remove -- done");
             Ok(())
         })
         .await
