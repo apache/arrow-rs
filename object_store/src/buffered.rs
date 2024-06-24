@@ -438,7 +438,12 @@ impl AsyncWrite for BufWriter {
                 }
                 BufWriterState::Flush(f) => return f.poll_unpin(cx).map_err(std::io::Error::from),
                 BufWriterState::Write(x) => {
-                    let upload = x.take().unwrap();
+                    let mut upload = x.take().ok_or({
+                        std::io::Error::new(
+                            ErrorKind::InvalidInput,
+                            "Cannot shutdown a writer that has already been shut down",
+                        )
+                    })?;
                     self.state = BufWriterState::Flush(
                         async move {
                             upload.finish().await?;
