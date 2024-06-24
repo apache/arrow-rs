@@ -135,6 +135,21 @@ fn compare_bytes<T: ByteArrayType>(
     })
 }
 
+fn compare_byte_view<T: ByteViewType>(
+    left: &dyn Array,
+    right: &dyn Array,
+    opts: SortOptions,
+) -> DynComparator {
+    let left = left.as_byte_view::<T>();
+    let right = right.as_byte_view::<T>();
+
+    let l = left.clone();
+    let r = right.clone();
+    compare(left, right, opts, move |i, j| {
+        crate::cmp::compare_byte_view(&l, i, &r, j)
+    })
+}
+
 fn compare_dict<K: ArrowDictionaryKeyType>(
     left: &dyn Array,
     right: &dyn Array,
@@ -342,8 +357,10 @@ pub fn make_comparator(
         (Boolean, Boolean) => Ok(compare_boolean(left, right, opts)),
         (Utf8, Utf8) => Ok(compare_bytes::<Utf8Type>(left, right, opts)),
         (LargeUtf8, LargeUtf8) => Ok(compare_bytes::<LargeUtf8Type>(left, right, opts)),
+        (Utf8View, Utf8View) => Ok(compare_byte_view::<StringViewType>(left, right, opts)),
         (Binary, Binary) => Ok(compare_bytes::<BinaryType>(left, right, opts)),
         (LargeBinary, LargeBinary) => Ok(compare_bytes::<LargeBinaryType>(left, right, opts)),
+        (BinaryView, BinaryView) => Ok(compare_byte_view::<BinaryViewType>(left, right, opts)),
         (FixedSizeBinary(_), FixedSizeBinary(_)) => {
             let left = left.as_fixed_size_binary();
             let right = right.as_fixed_size_binary();

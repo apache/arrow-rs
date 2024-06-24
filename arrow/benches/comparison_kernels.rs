@@ -17,6 +17,7 @@
 
 #[macro_use]
 extern crate criterion;
+use arrow::util::test_util::seedable_rng;
 use criterion::Criterion;
 
 extern crate arrow;
@@ -27,6 +28,8 @@ use arrow::{array::*, datatypes::Float32Type, datatypes::Int32Type};
 use arrow_buffer::IntervalMonthDayNano;
 use arrow_string::like::*;
 use arrow_string::regexp::regexp_is_match_utf8_scalar;
+use rand::rngs::StdRng;
+use rand::Rng;
 
 const SIZE: usize = 65536;
 
@@ -55,6 +58,14 @@ fn bench_regexp_is_match_utf8_scalar(arr_a: &StringArray, value_b: &str) {
     .unwrap();
 }
 
+fn make_string_array(size: usize, rng: &mut StdRng) -> impl Iterator<Item = Option<String>> + '_ {
+    (0..size).map(|_| {
+        let len = rng.gen_range(0..64);
+        let bytes = (0..len).map(|_| rng.gen_range(0..128)).collect();
+        Some(String::from_utf8(bytes).unwrap())
+    })
+}
+
 fn add_benchmark(c: &mut Criterion) {
     let arr_a = create_primitive_array_with_seed::<Float32Type>(SIZE, 0.0, 42);
     let arr_b = create_primitive_array_with_seed::<Float32Type>(SIZE, 0.0, 43);
@@ -63,6 +74,7 @@ fn add_benchmark(c: &mut Criterion) {
     let arr_month_day_nano_b = create_month_day_nano_array_with_seed(SIZE, 0.0, 43);
 
     let arr_string = create_string_array::<i32>(SIZE, 0.0);
+
     let scalar = Float32Array::from(vec![1.0]);
 
     c.bench_function("eq Float32", |b| b.iter(|| eq(&arr_a, &arr_b)));
@@ -136,6 +148,65 @@ fn add_benchmark(c: &mut Criterion) {
 
     c.bench_function("eq scalar MonthDayNano", |b| {
         b.iter(|| eq(&arr_month_day_nano_b, &scalar).unwrap())
+    });
+
+    let mut rng = seedable_rng();
+    let mut array_gen = make_string_array(1024 * 1024 * 8, &mut rng);
+    let string_left = StringArray::from_iter(array_gen);
+    let string_view_left = StringViewArray::from_iter(string_left.iter());
+
+    // reference to the same rng to make sure we generate **different** array data,
+    // ow. the left and right will be identical
+    array_gen = make_string_array(1024 * 1024 * 8, &mut rng);
+    let string_right = StringArray::from_iter(array_gen);
+    let string_view_right = StringViewArray::from_iter(string_right.iter());
+
+    c.bench_function("eq scalar StringArray", |b| {
+        b.iter(|| {
+            eq(
+                &Scalar::new(StringArray::from_iter_values(["xxxx"])),
+                &string_left,
+            )
+            .unwrap()
+        })
+    });
+
+    c.bench_function("lt scalar StringViewArray", |b| {
+        b.iter(|| {
+            lt(
+                &Scalar::new(StringViewArray::from_iter_values(["xxxx"])),
+                &string_view_left,
+            )
+            .unwrap()
+        })
+    });
+
+    c.bench_function("lt scalar StringArray", |b| {
+        b.iter(|| {
+            lt(
+                &Scalar::new(StringArray::from_iter_values(["xxxx"])),
+                &string_left,
+            )
+            .unwrap()
+        })
+    });
+
+    c.bench_function("eq scalar StringViewArray", |b| {
+        b.iter(|| {
+            eq(
+                &Scalar::new(StringViewArray::from_iter_values(["xxxx"])),
+                &string_view_left,
+            )
+            .unwrap()
+        })
+    });
+
+    c.bench_function("eq StringArray StringArray", |b| {
+        b.iter(|| eq(&string_left, &string_right).unwrap())
+    });
+
+    c.bench_function("eq StringViewArray StringViewArray", |b| {
+        b.iter(|| eq(&string_view_left, &string_view_right).unwrap())
     });
 
     c.bench_function("like_utf8 scalar equals", |b| {
@@ -218,11 +289,11 @@ fn add_benchmark(c: &mut Criterion) {
         b.iter(|| bench_nilike_utf8_scalar(&arr_string, "%xx_xX%xXX"))
     });
 
-    c.bench_function("egexp_matches_utf8 scalar starts with", |b| {
+    c.bench_function("regexp_matches_utf8 scalar starts with", |b| {
         b.iter(|| bench_regexp_is_match_utf8_scalar(&arr_string, "^xx"))
     });
 
-    c.bench_function("egexp_matches_utf8 scalar ends with", |b| {
+    c.bench_function("regexp_matches_utf8 scalar ends with", |b| {
         b.iter(|| bench_regexp_is_match_utf8_scalar(&arr_string, "xx$"))
     });
 
