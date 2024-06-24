@@ -172,6 +172,26 @@ fn add_benchmark(c: &mut Criterion) {
         b.iter(|| eq(&scalar, &string_left).unwrap())
     });
 
+    c.bench_function("lt scalar StringViewArray", |b| {
+        b.iter(|| {
+            lt(
+                &Scalar::new(StringViewArray::from_iter_values(["xxxx"])),
+                &string_view_left,
+            )
+            .unwrap()
+        })
+    });
+
+    c.bench_function("lt scalar StringArray", |b| {
+        b.iter(|| {
+            lt(
+                &Scalar::new(StringArray::from_iter_values(["xxxx"])),
+                &string_left,
+            )
+            .unwrap()
+        })
+    });
+
     c.bench_function("eq scalar StringViewArray", |b| {
         b.iter(|| eq(&scalar, &string_view_left).unwrap())
     });
@@ -294,13 +314,11 @@ fn add_benchmark(c: &mut Criterion) {
         b.iter(|| bench_nilike_utf8_scalar(&arr_string, "%xx_xX%xXX"))
     });
 
-    // StringArray: REGEXP_MATCHES benchmarks
-
-    c.bench_function("egexp_matches_utf8 scalar starts with", |b| {
+    c.bench_function("regexp_matches_utf8 scalar starts with", |b| {
         b.iter(|| bench_regexp_is_match_utf8_scalar(&arr_string, "^xx"))
     });
 
-    c.bench_function("egexp_matches_utf8 scalar ends with", |b| {
+    c.bench_function("regexp_matches_utf8 scalar ends with", |b| {
         b.iter(|| bench_regexp_is_match_utf8_scalar(&arr_string, "xx$"))
     });
 

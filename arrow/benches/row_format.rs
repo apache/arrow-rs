@@ -23,8 +23,8 @@ use arrow::array::ArrayRef;
 use arrow::datatypes::{Int64Type, UInt64Type};
 use arrow::row::{RowConverter, SortField};
 use arrow::util::bench_util::{
-    create_dict_from_values, create_primitive_array, create_string_array_with_len,
-    create_string_dict_array,
+    create_boolean_array, create_dict_from_values, create_primitive_array,
+    create_string_array_with_len, create_string_dict_array,
 };
 use arrow_array::types::Int32Type;
 use arrow_array::Array;
@@ -60,8 +60,20 @@ fn row_bench(c: &mut Criterion) {
     let cols = vec![Arc::new(create_primitive_array::<UInt64Type>(4096, 0.)) as ArrayRef];
     do_bench(c, "4096 u64(0)", cols);
 
+    let cols = vec![Arc::new(create_primitive_array::<UInt64Type>(4096, 0.3)) as ArrayRef];
+    do_bench(c, "4096 u64(0.3)", cols);
+
     let cols = vec![Arc::new(create_primitive_array::<Int64Type>(4096, 0.)) as ArrayRef];
     do_bench(c, "4096 i64(0)", cols);
+
+    let cols = vec![Arc::new(create_primitive_array::<Int64Type>(4096, 0.3)) as ArrayRef];
+    do_bench(c, "4096 i64(0.3)", cols);
+
+    let cols = vec![Arc::new(create_boolean_array(4096, 0., 0.5)) as ArrayRef];
+    do_bench(c, "4096 bool(0, 0.5)", cols);
+
+    let cols = vec![Arc::new(create_boolean_array(4096, 0.3, 0.5)) as ArrayRef];
+    do_bench(c, "4096 bool(0.3, 0.5)", cols);
 
     let cols = vec![Arc::new(create_string_array_with_len::<i32>(4096, 0., 10)) as ArrayRef];
     do_bench(c, "4096 string(10, 0)", cols);

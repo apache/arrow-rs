@@ -16,18 +16,21 @@
 // under the License.
 
 use crate::array::print_long_array;
-use crate::builder::GenericByteViewBuilder;
+use crate::builder::{ArrayBuilder, GenericByteViewBuilder};
 use crate::iterator::ArrayIter;
 use crate::types::bytes::ByteArrayNativeType;
 use crate::types::{BinaryViewType, ByteViewType, StringViewType};
-use crate::{Array, ArrayAccessor, ArrayRef, Scalar};
-use arrow_buffer::{Buffer, NullBuffer, ScalarBuffer};
+use crate::{Array, ArrayAccessor, ArrayRef, GenericByteArray, OffsetSizeTrait, Scalar};
+use arrow_buffer::{ArrowNativeType, Buffer, NullBuffer, ScalarBuffer};
 use arrow_data::{ArrayData, ArrayDataBuilder, ByteView};
 use arrow_schema::{ArrowError, DataType};
+use num::ToPrimitive;
 use std::any::Any;
 use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::sync::Arc;
+
+use super::ByteArrayType;
 
 /// [Variable-size Binary View Layout]: An array of variable length bytes view arrays.
 ///
@@ -425,6 +428,51 @@ impl<T: ByteViewType + ?Sized> From<ArrayData> for GenericByteViewArray<T> {
             buffers,
             nulls: value.nulls().cloned(),
             phantom: Default::default(),
+        }
+    }
+}
+
+/// Convert a [`GenericByteArray`] to a [`GenericByteViewArray`] but in a smart way:
+/// If the offsets are all less than u32::MAX, then we directly build the view array on top of existing buffer.
+impl<FROM, V> From<&GenericByteArray<FROM>> for GenericByteViewArray<V>
+where
+    FROM: ByteArrayType,
+    FROM::Offset: OffsetSizeTrait + ToPrimitive,
+    V: ByteViewType<Native = FROM::Native>,
+{
+    fn from(byte_array: &GenericByteArray<FROM>) -> Self {
+        let offsets = byte_array.offsets();
+
+        let can_reuse_buffer = match offsets.last() {
+            Some(offset) => offset.as_usize() < u32::MAX as usize,
+            None => true,
+        };
+
+        if can_reuse_buffer {
+            let len = byte_array.len();
+            let mut views_builder = GenericByteViewBuilder::<V>::with_capacity(len);
+            let str_values_buf = byte_array.values().clone();
+            let block = views_builder.append_block(str_values_buf);
+            for (i, w) in offsets.windows(2).enumerate() {
+                let offset = w[0].as_usize();
+                let end = w[1].as_usize();
+                let length = end - offset;
+
+                if byte_array.is_null(i) {
+                    views_builder.append_null();
+                } else {
+                    // Safety: the input was a valid array so it valid UTF8 (if string). And
+                    // all offsets were valid
+                    unsafe {
+                        views_builder.append_view_unchecked(block, offset as u32, length as u32)
+                    }
+                }
+            }
+            assert_eq!(views_builder.len(), len);
+            views_builder.finish()
+        } else {
+            // TODO: the first u32::MAX can still be reused
+            GenericByteViewArray::<V>::from_iter(byte_array.iter())
         }
     }
 }

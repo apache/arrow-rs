@@ -92,6 +92,21 @@ pub trait MultipartUpload: Send + std::fmt::Debug {
     async fn abort(&mut self) -> Result<()>;
 }
 
+#[async_trait]
+impl<W: MultipartUpload + ?Sized> MultipartUpload for Box<W> {
+    fn put_part(&mut self, data: PutPayload) -> UploadPart {
+        (**self).put_part(data)
+    }
+
+    async fn complete(&mut self) -> Result<PutResult> {
+        (**self).complete().await
+    }
+
+    async fn abort(&mut self) -> Result<()> {
+        (**self).abort().await
+    }
+}
+
 /// A synchronous write API for uploading data in parallel in fixed size chunks
 ///
 /// Uses multiple tokio tasks in a [`JoinSet`] to multiplex upload tasks in parallel

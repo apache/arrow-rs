@@ -31,7 +31,7 @@ use std::io::{BufReader, Read, Seek, SeekFrom};
 use std::sync::Arc;
 
 use arrow_array::*;
-use arrow_buffer::{ArrowNativeType, Buffer, MutableBuffer, ScalarBuffer};
+use arrow_buffer::{ArrowNativeType, BooleanBuffer, Buffer, MutableBuffer, ScalarBuffer};
 use arrow_data::ArrayData;
 use arrow_schema::*;
 
@@ -152,7 +152,15 @@ fn create_array(
                 struct_arrays.push((struct_field.clone(), child));
             }
             let null_count = struct_node.null_count() as usize;
-            let struct_array = if null_count > 0 {
+            let struct_array = if struct_arrays.is_empty() {
+                // `StructArray::from` can't infer the correct row count
+                // if we have zero fields
+                let len = struct_node.length() as usize;
+                StructArray::new_empty_fields(
+                    len,
+                    (null_count > 0).then(|| BooleanBuffer::new(null_buffer, 0, len).into()),
+                )
+            } else if null_count > 0 {
                 // create struct array from fields, arrays and null data
                 StructArray::from((struct_arrays, null_buffer))
             } else {
@@ -1361,6 +1369,7 @@ mod tests {
     use crate::root_as_message;
     use arrow_array::builder::{PrimitiveRunBuilder, UnionBuilder};
     use arrow_array::types::*;
+    use arrow_buffer::NullBuffer;
     use arrow_data::ArrayDataBuilder;
 
     fn create_test_projection_schema() -> Schema {
@@ -1697,6 +1706,18 @@ mod tests {
     #[test]
     fn test_roundtrip_sparse_union() {
         check_union_with_builder(UnionBuilder::new_sparse());
+    }
+
+    #[test]
+    fn test_roundtrip_struct_empty_fields() {
+        let nulls = NullBuffer::from(&[true, true, false][..]);
+        let rb = RecordBatch::try_from_iter([(
+            "",
+            Arc::new(StructArray::new_empty_fields(nulls.len(), Some(nulls))) as _,
+        )])
+        .unwrap();
+        let rb2 = roundtrip_ipc(&rb);
+        assert_eq!(rb, rb2);
     }
 
     #[test]
