@@ -748,6 +748,7 @@ impl MultipartUpload for LocalUpload {
 
         let s = Arc::clone(&self.state);
         maybe_spawn_blocking(move || {
+            println!("Writing part: {}", data.content_length());
             let mut f = s.file.lock();
             let file = f.as_mut().context(AbortedSnafu)?;
             file.seek(SeekFrom::Start(offset))
@@ -767,6 +768,7 @@ impl MultipartUpload for LocalUpload {
         let s = Arc::clone(&self.state);
         maybe_spawn_blocking(move || {
             // Ensure no inflight writes
+            println!("Completing");
             let f = s.file.lock().take().context(AbortedSnafu)?;
             std::fs::rename(&src, &s.dest).context(UnableToRenameFileSnafu)?;
             let metadata = f.metadata().map_err(|e| Error::Metadata {
