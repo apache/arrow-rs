@@ -1229,13 +1229,14 @@ mod tests_from_ffi {
     use arrow_data::ArrayData;
     use arrow_schema::{DataType, Field};
 
+    use crate::types::Int32Type;
     use crate::{
         array::{
             Array, BooleanArray, DictionaryArray, FixedSizeBinaryArray, FixedSizeListArray,
             Int32Array, Int64Array, StringArray, StructArray, UInt32Array, UInt64Array,
         },
         ffi::{from_ffi, FFI_ArrowArray, FFI_ArrowSchema},
-        make_array, ArrayRef,
+        make_array, ArrayRef, ListArray,
     };
 
     use super::{ImportedArrowArray, Result};
@@ -1511,6 +1512,42 @@ mod tests_from_ffi {
         let copied = extend_array(&imported);
         assert_eq!(
             copied.as_any().downcast_ref::<StringArray>().unwrap(),
+            &imported
+        );
+    }
+
+    fn roundtrip_list_array(array: ListArray) -> ListArray {
+        let data = array.into_data();
+
+        let array = FFI_ArrowArray::new(&data);
+        let schema = FFI_ArrowSchema::try_from(data.data_type()).unwrap();
+
+        let array = unsafe { from_ffi(array, &schema) }.unwrap();
+        ListArray::from(array)
+    }
+
+    #[test]
+    fn test_extend_imported_list_slice() {
+        let mut data = vec![];
+
+        for _i in 0..1000 {
+            let mut list = vec![];
+            for j in 0..100 {
+                list.push(Some(j));
+            }
+            data.push(Some(list));
+        }
+
+        let list_array = ListArray::from_iter_primitive::<Int32Type, _, _>(data);
+
+        let slice = list_array.slice(500, 500);
+        let imported = roundtrip_list_array(slice.clone());
+        assert_eq!(imported.len(), 500);
+        assert_eq!(&slice, &imported);
+
+        let copied = extend_array(&imported);
+        assert_eq!(
+            copied.as_any().downcast_ref::<ListArray>().unwrap(),
             &imported
         );
     }
