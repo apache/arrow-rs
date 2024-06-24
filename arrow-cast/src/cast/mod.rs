@@ -1230,7 +1230,7 @@ pub fn cast_with_options(
                 let binary = BinaryArray::from(array.as_string::<i32>().clone());
                 cast_byte_container::<BinaryType, LargeBinaryType>(&binary)
             }
-            Utf8View => cast_byte_to_view::<Utf8Type, StringViewType>(array),
+            Utf8View => Ok(Arc::new(StringViewArray::from(array.as_string::<i32>()))),
             LargeUtf8 => cast_byte_container::<Utf8Type, LargeUtf8Type>(array),
             Time32(TimeUnit::Second) => parse_string::<Time32SecondType, i32>(array, cast_options),
             Time32(TimeUnit::Millisecond) => {
@@ -1290,7 +1290,7 @@ pub fn cast_with_options(
             LargeBinary => Ok(Arc::new(LargeBinaryArray::from(
                 array.as_string::<i64>().clone(),
             ))),
-            Utf8View => cast_byte_to_view::<LargeUtf8Type, StringViewType>(array),
+            Utf8View => Ok(Arc::new(StringViewArray::from(array.as_string::<i64>()))),
             Time32(TimeUnit::Second) => parse_string::<Time32SecondType, i64>(array, cast_options),
             Time32(TimeUnit::Millisecond) => {
                 parse_string::<Time32MillisecondType, i64>(array, cast_options)
@@ -1338,7 +1338,7 @@ pub fn cast_with_options(
             FixedSizeBinary(size) => {
                 cast_binary_to_fixed_size_binary::<i32>(array, *size, cast_options)
             }
-            BinaryView => cast_byte_to_view::<BinaryType, BinaryViewType>(array),
+            BinaryView => Ok(Arc::new(BinaryViewArray::from(array.as_binary::<i32>()))),
             _ => Err(ArrowError::CastError(format!(
                 "Casting from {from_type:?} to {to_type:?} not supported",
             ))),
@@ -1353,7 +1353,7 @@ pub fn cast_with_options(
             FixedSizeBinary(size) => {
                 cast_binary_to_fixed_size_binary::<i64>(array, *size, cast_options)
             }
-            BinaryView => cast_byte_to_view::<LargeBinaryType, BinaryViewType>(array),
+            BinaryView => Ok(Arc::new(BinaryViewArray::from(array.as_binary::<i64>()))),
             _ => Err(ArrowError::CastError(format!(
                 "Casting from {from_type:?} to {to_type:?} not supported",
             ))),
@@ -2343,38 +2343,6 @@ where
     let array_data = unsafe { builder.build_unchecked() };
 
     Ok(Arc::new(GenericByteArray::<TO>::from(array_data)))
-}
-
-/// Helper function to cast from one `ByteArrayType` array to `ByteViewType` array.
-fn cast_byte_to_view<FROM, V>(array: &dyn Array) -> Result<ArrayRef, ArrowError>
-where
-    FROM: ByteArrayType,
-    FROM::Offset: OffsetSizeTrait + ToPrimitive,
-    V: ByteViewType,
-{
-    let byte_array: &GenericByteArray<FROM> = array.as_bytes();
-    let len = array.len();
-    let str_values_buf = byte_array.values().clone();
-    let offsets = byte_array.offsets();
-
-    let mut views_builder = GenericByteViewBuilder::<V>::with_capacity(len);
-    let block = views_builder.append_block(str_values_buf);
-    for (i, w) in offsets.windows(2).enumerate() {
-        let offset = w[0].to_u32().unwrap();
-        let end = w[1].to_u32().unwrap();
-        let length = end - offset;
-
-        if byte_array.is_null(i) {
-            views_builder.append_null();
-        } else {
-            // Safety: the input was a valid array so it valid UTF8 (if string). And
-            // all offsets were valid and we created the views correctly
-            unsafe { views_builder.append_view_unchecked(block, offset, length) }
-        }
-    }
-
-    assert_eq!(views_builder.len(), len);
-    Ok(Arc::new(views_builder.finish()))
 }
 
 /// Helper function to cast from one `ByteViewType` array to `ByteArrayType` array.
