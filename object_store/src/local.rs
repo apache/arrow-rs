@@ -757,7 +757,13 @@ impl MultipartUpload for LocalUpload {
             data.iter()
                 .try_for_each(|x| {
                     println!("write all");
-                    (&*file).write_all(x)
+                    match (&*file).write(x) {
+                        Ok(_) => Ok(()),
+                        Err(e) => {
+                            println!("write all error: {:?}", e);
+                            Err(e)
+                        }
+                    }
                 })
                 .context(UnableToCopyDataToFileSnafu)?;
 
