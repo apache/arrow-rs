@@ -29,7 +29,6 @@ use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use futures::{stream::BoxStream, StreamExt};
 use futures::{FutureExt, TryStreamExt};
-use parking_lot::Mutex;
 use snafu::{ensure, OptionExt, ResultExt, Snafu};
 use url::Url;
 use walkdir::{DirEntry, WalkDir};
@@ -724,7 +723,7 @@ struct LocalUpload {
 #[derive(Debug)]
 struct UploadState {
     dest: PathBuf,
-    file: Mutex<Option<File>>,
+    file: Arc<File>,
 }
 
 impl LocalUpload {
@@ -732,7 +731,7 @@ impl LocalUpload {
         Self {
             state: Arc::new(UploadState {
                 dest,
-                file: Mutex::new(Some(file)),
+                file: Arc::new(file),
             }),
             src: Some(src),
             offset: 0,
@@ -747,15 +746,14 @@ impl MultipartUpload for LocalUpload {
         self.offset += data.content_length() as u64;
 
         let s = Arc::clone(&self.state);
+        let file = Arc::clone(&s.file);
         maybe_spawn_blocking(move || {
-            println!("Writing part: {}", data.content_length());
-            let mut f = s.file.lock();
-            let file = f.as_mut().context(AbortedSnafu)?;
-            file.seek(SeekFrom::Start(offset))
+            (&*file)
+                .seek(SeekFrom::Start(offset))
                 .context(SeekSnafu { path: &s.dest })?;
 
             data.iter()
-                .try_for_each(|x| file.write_all(x))
+                .try_for_each(|x| (&*file).write_all(x))
                 .context(UnableToCopyDataToFileSnafu)?;
 
             Ok(())
@@ -766,12 +764,10 @@ impl MultipartUpload for LocalUpload {
     async fn complete(&mut self) -> Result<PutResult> {
         let src = self.src.take().context(AbortedSnafu)?;
         let s = Arc::clone(&self.state);
+        let file = Arc::clone(&s.file);
         maybe_spawn_blocking(move || {
-            // Ensure no inflight writes
-            println!("Completing");
-            let f = s.file.lock().take().context(AbortedSnafu)?;
             std::fs::rename(&src, &s.dest).context(UnableToRenameFileSnafu)?;
-            let metadata = f.metadata().map_err(|e| Error::Metadata {
+            let metadata = file.as_ref().metadata().map_err(|e| Error::Metadata {
                 source: e.into(),
                 path: src.to_string_lossy().to_string(),
             })?;
