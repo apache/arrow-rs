@@ -1530,10 +1530,10 @@ mod tests_from_ffi {
     fn test_extend_imported_list_slice() {
         let mut data = vec![];
 
-        for _i in 0..1000 {
+        for i in 0..1000 {
             let mut list = vec![];
             for j in 0..100 {
-                list.push(Some(j));
+                list.push(Some(i * 1000 + j));
             }
             data.push(Some(list));
         }
