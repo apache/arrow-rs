@@ -131,10 +131,10 @@ cargo +stable fmt --all -- --check
 Our [release schedule] allows breaking API changes only in major releases.
 This means that if your PR has a breaking API change, it should be marked as
 `api-change` and it will not be merged until development opens for the next
-major release.
+major release. See [this ticket] for details.
 
 [release schedule]: README.md#release-versioning-and-schedule
-
+[this ticket]:https://github.com/apache/arrow-rs/issues/5907
 
 ## Clippy Lints
 
