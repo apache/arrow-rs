@@ -126,6 +126,16 @@ PR be sure to run the following and check for lint issues:
 cargo +stable fmt --all -- --check
 ```
 
+## Breaking Changes
+
+Our [release schedule] allows breaking API changes only in major releases.
+This means that if your PR has a breaking API change, it should be marked as
+`api-change` and it will not be merged until development opens for the next
+major release.
+
+[release schedule]: README.md#release-versioning-and-schedule
+
+
 ## Clippy Lints
 
 We recommend using `clippy` for checking lints during development. While we do not yet enforce `clippy` checks, we recommend not introducing new `clippy` errors or warnings.
