@@ -128,21 +128,14 @@ cargo +stable fmt --all -- --check
 
 ## Clippy Lints
 
-We recommend using `clippy` for checking lints during development. While we do not yet enforce `clippy` checks, we recommend not introducing new `clippy` errors or warnings.
+We use `clippy` for checking lints during development, and CI runs `clippy` checks.
 
 Run the following to check for `clippy` lints:
 
 ```bash
 # run clippy with default settings
-cargo clippy
+cargo clippy --workspace --all-targets --all-features -- -D warnings
 
-```
-
-More comprehensive `clippy` checks can be run by adding flags:
-
-```bash
-# run clippy on the arrow crate with all features enabled, targeting all tests, examples, and benchmarks
-cargo clippy -p arrow --all-features --all-targets
 ```
 
 If you use Visual Studio Code with the `rust-analyzer` plugin, you can enable `clippy` to run each time you save a file. See https://users.rust-lang.org/t/how-to-use-clippy-in-vs-code-with-rust-analyzer/41881.
