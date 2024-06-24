@@ -569,6 +569,20 @@ impl StringViewArray {
     pub fn to_binary_view(self) -> BinaryViewArray {
         unsafe { BinaryViewArray::new_unchecked(self.views, self.buffers, self.nulls) }
     }
+
+    /// Returns true if all data within this array is ASCII
+    pub fn is_ascii(&self) -> bool {
+        // Alternative (but incorrect): directly check the underlying buffers
+        // (1) Our string view might be sparse, i.e., a subset of the buffers,
+        //      so even if the buffer is not ascii, we can still be ascii.
+        // (2) It is quite difficult to know the range of each buffer (unlike StringArray)
+        // This means that this operation is quite expensive, shall we cache the result?
+        //  i.e. track `is_ascii` in the builder.
+        self.iter().all(|v| match v {
+            Some(v) => v.is_ascii(),
+            None => true,
+        })
+    }
 }
 
 impl From<Vec<&str>> for StringViewArray {
