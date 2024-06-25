@@ -297,8 +297,15 @@ impl LocalFileSystem {
 
         #[cfg(target_os = "windows")]
         let path = {
-            let mut path = path;
-            PathBuf::from(path.to_string_lossy().replace(":", "%3A"))
+            let path = path.to_string_lossy();
+
+            // Assume the first char is the drive letter and the next is a colon.
+            let mut out = String::new();
+            let drive = &path[..2]; // The drive letter and colon (e.g., "C:")
+            let filepath = &path[2..].replace(':', "%3A"); // Replace subsequent colons
+            out.push_str(drive);
+            out.push_str(filepath);
+            PathBuf::from(out)
         };
 
         Ok(path)
