@@ -15,36 +15,57 @@
 // specific language governing permissions and limitations
 // under the License.
 
-
-// Draft program for testing the parquet-rs library
-
-use std::fs::{canonicalize, File};
-use std::path::Path;
 use arrow::util::display::array_value_to_string;
 use arrow::util::pretty::pretty_format_columns;
 use parquet::arrow::arrow_reader::ArrowReaderBuilder;
+use pretty_assertions::assert_eq;
 use serde::Serialize;
-use serde_json::json;
+use serde_json::{json, Value};
+/// Test driver for parquet-integration testing
+use std::fs::{canonicalize, File};
+use std::path::{Path, PathBuf};
 
 fn main() {
-    println!("PWD: {:?}", std::env::var("PWD"));
-    let parquet_data_path = "/Users/andrewlamb/Software/arrow-rs/parquet-testing/data";
-    let expected_data_path = "/Users/andrewlamb/Software/arrow-rs/parquet-integration-testing/data";
+    // paths are relative to arrow-rs/parquet-integration-testing
+    let parquet_data_path =
+        PathBuf::from("../parquet-testing/data").canonicalize().unwrap();
+    let expected_data_path =
+        PathBuf::from("data").canonicalize().unwrap();
+    let output_data_path =
+        PathBuf::from("out").canonicalize().unwrap();
 
-    let filenames = vec!["alltypes_plain.parquet", "alltypes_plain_dictionary.parquet"];
+    std::fs::create_dir_all(&output_data_path).unwrap();
+
+    let filenames = vec![
+        "alltypes_plain.parquet",
+        //"alltypes_plain_dictionary.parquet",
+    ];
 
     for filename in filenames {
-        let parquet_file_path = Path::from(parquet_data_path).join(filename).canonicalize().unwrap();
-        let expected_file_path = Path::from(expected_data_path).join(format!("{}filename}.json"));
+        let parquet_file_path = parquet_data_path.join(filename);
+
+        let expected_file_path = expected_data_path
+            .join(format!("{filename}.json"));
+
+        // For development, also write the actual parsed value to a file
+        let output_file_path = output_data_path
+            .join(format!("{filename}.json"));
+
+
 
         println!("Begin test: {filename}");
-        println!("  Reading parquet file: {parquet_file_path}");
-        println!("  Expected JSON file: {expected_file_path}");
+        println!("  Input parquet file: {parquet_file_path:?}");
+        println!("  Expected JSON file: {expected_file_path:?}");
+        println!("  Output JSON file: {output_file_path:?}");
+
         let parquet_json = read_parquet_data(&parquet_file_path);
-        let expected_json = std::fs::read_to_string(expected_file_path);
+        let output_file = File::create(&output_file_path).unwrap();
+        serde_json::to_writer(output_file, &parquet_json).unwrap();
+
+        let expected_file = File::open(expected_file_path).unwrap();
+        let expected_json: Value = serde_json::from_reader(expected_file).unwrap();
+        assert_eq!(parquet_json, expected_json)
     }
-
-
 }
 
 // prototype demonstration of checking type support for parquet-rs encoding
@@ -78,10 +99,9 @@ fn main() {
 // ```
 
 /// The function reads a parquet file and writes a JSON representation of the data within
-fn read_parquet_data(parquet_data_path: &str) -> String {
-    let file = File::open(&parquet_data_path).unwrap();
+fn read_parquet_data(parquet_data_path: &Path) -> Value {
+    let file = File::open(parquet_data_path).unwrap();
     let mut reader = ArrowReaderBuilder::try_new(file).unwrap().build().unwrap();
-
 
     let mut rows = vec![];
     while let Some(batch) = reader.next() {
@@ -99,10 +119,8 @@ fn read_parquet_data(parquet_data_path: &str) -> String {
         }
     }
 
-    let value = json!({
+    json!({
         "filename": parquet_data_path,
         "rows": rows
-    });
-
-    serde_json::to_string_pretty(&value).unwrap();
+    })
 }

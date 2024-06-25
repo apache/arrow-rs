@@ -18,18 +18,13 @@
 [package]
 name = "python-integration-testing"
 description = "Binaries used for testing parquet-rs compatibility (NOT published to crates.io)"
-version = { workspace = true }
-homepage = { workspace = true }
-repository = { workspace = true }
-authors = { workspace = true }
-license = { workspace = true }
-edition = { workspace = true }
 publish = false
-rust-version = { workspace = true }
+edition = "2021"
 
 
 [dependencies]
-arrow = { path = "../arrow" }
-parquet = { path = "../parquet" }
+arrow = { path = "../arrow", features = ["prettyprint"] }
+parquet = { path = "../parquet", features = ["arrow"]}
+serde = "1.0.203"
 serde_json = { version = "1.0", default-features = false, features = ["std"] }
 pretty_assertions = "1.4.0"
