@@ -33,7 +33,8 @@ fn main() {
     ];
 
     for filename in filenames {
-        integration_test.read_test(filename);
+        integration_test.data_test(filename);
+        integration_test.metadata_test(filename)
     }
 }
 
@@ -89,31 +90,75 @@ impl IntegrationTest {
     ///   ]
     /// }
     /// ```
-    fn read_test(&self, filename: &str) {
+    fn data_test(&self, filename: &str) {
         let parquet_file_path = self.parquet_data_path.join(filename);
-
-        let expected_file_path = self.expected_data_path.join(format!("{filename}.json"));
+        let expected_file_path = self.expected_data_path.join(format!("{filename}.data.json"));
 
         // For ease of development, write the actual parsed value to a file (to
         // permit easy updates, for example)
-        let output_file_path = self.output_data_path.join(format!("{filename}.json"));
+        let output_file_path = self.output_data_path.join(format!("{filename}.data.json"));
 
-        println!("Begin test: {filename}");
+        println!("Begin data test: {filename}");
         println!("  Input parquet file: {parquet_file_path:?}");
         println!("  Expected JSON file: {expected_file_path:?}");
         println!("  Output JSON file: {output_file_path:?}");
 
         let parquet_json = read_parquet_data(&parquet_file_path);
         let output_file = File::create(&output_file_path).unwrap();
-        serde_json::to_writer(output_file, &parquet_json).unwrap();
+        serde_json::to_writer_pretty(output_file, &parquet_json).unwrap();
 
-        let expected_file = File::open(expected_file_path).unwrap();
-        let expected_json: Value = serde_json::from_reader(expected_file).unwrap();
+        // read expected file if present, default to {} if not
+        let expected_json = if let Ok(expected_file) = File::open(expected_file_path) {
+            serde_json::from_reader(expected_file).unwrap()
+        } else {
+            json!({})
+        };
+        assert_eq!(parquet_json, expected_json)
+    }
+
+    /// Read a parquet file, create a JSON representation of its metadata, and compares to the
+    /// known good value in data
+    ///
+    /// The output JSON looks like this:
+    ///
+    /// ```text
+    /// {
+    ///   filename: "filename.parquet",
+    ///   ..
+    ///     ..
+    /// }
+    /// ```
+    fn metadata_test(&self, filename: &str) {
+        let parquet_file_path = self.parquet_data_path.join(filename);
+        let expected_file_path = self.expected_data_path.join(format!("{filename}.metadata.json"));
+
+        // For ease of development, write the actual parsed value to a file (to
+        // permit easy updates, for example)
+        let output_file_path = self.output_data_path.join(format!("{filename}.metadata.json"));
+
+        println!("Begin metadata test: {filename}");
+        println!("  Input parquet file: {parquet_file_path:?}");
+        println!("  Expected JSON file: {expected_file_path:?}");
+        println!("  Output JSON file: {output_file_path:?}");
+
+        let parquet_json = read_parquet_metadata(&parquet_file_path);
+        let output_file = File::create(&output_file_path).unwrap();
+        serde_json::to_writer_pretty(output_file, &parquet_json).unwrap();
+
+        // read expected file if present, default to {} if not
+        let expected_json = if let Ok(expected_file) = File::open(expected_file_path) {
+            serde_json::from_reader(expected_file).unwrap()
+        } else {
+            json!({})
+        };
         assert_eq!(parquet_json, expected_json)
     }
 }
 
-/// The function reads a parquet file and writes a JSON representation of the data within
+
+
+/// The function reads a parquet file and returns a JSON representation of the
+/// data within
 fn read_parquet_data(parquet_data_path: &Path) -> Value {
     let file = File::open(parquet_data_path).unwrap();
     let mut reader = ArrowReaderBuilder::try_new(file).unwrap().build().unwrap();
@@ -134,8 +179,33 @@ fn read_parquet_data(parquet_data_path: &Path) -> Value {
         }
     }
 
+    let filename = parquet_data_path.file_name().unwrap().to_string_lossy();
+
     json!({
-        "filename": parquet_data_path,
+        "filename": filename,
         "rows": rows
+    })
+}
+
+
+/// The function reads a parquet file and writes a JSON representation of the
+/// metatadata (thrift encoded) within
+fn read_parquet_metadata(parquet_data_path: &Path) -> Value {
+    let file = File::open(parquet_data_path).unwrap();
+    let metadata = ArrowReaderBuilder::try_new(file).unwrap().metadata().clone();
+
+    // todo print out schema
+    let row_groups : Vec<_> = metadata.row_groups().iter()
+        .map(|rg| {
+        json!({
+            "num_rows": rg.num_rows(),
+        })
+    }).collect();;
+
+    let filename = parquet_data_path.file_name().unwrap().to_string_lossy();
+
+    json!({
+        "filename33": filename,
+        "row_goups": row_groups,
     })
 }
