@@ -436,7 +436,16 @@ impl<'a> ImportedArrowArray<'a> {
                 let start = (unsafe { *offset_buffer.add(0) }) as usize;
                 // get last offset
                 let end = (unsafe { *offset_buffer.add(len / size_of::<i32>() - 1) }) as usize;
-                end - start
+
+                if cfg!(feature = "ffi_enforce_no_offset") {
+                    if end == start {
+                        0
+                    } else {
+                        end
+                    }
+                } else {
+                    end - start
+                }
             }
             (DataType::LargeUtf8, 2) | (DataType::LargeBinary, 2) => {
                 // the len of the data buffer (buffer 2) equals the difference between the last value
@@ -450,7 +459,16 @@ impl<'a> ImportedArrowArray<'a> {
                 let start = (unsafe { *offset_buffer.add(0) }) as usize;
                 // get last offset
                 let end = (unsafe { *offset_buffer.add(len / size_of::<i64>() - 1) }) as usize;
-                end - start
+
+                if cfg!(feature = "ffi_enforce_no_offset") {
+                    if end == start {
+                        0
+                    } else {
+                        end
+                    }
+                } else {
+                    end - start
+                }
             }
             // buffer len of primitive types
             _ => {

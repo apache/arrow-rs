@@ -152,7 +152,9 @@ impl FFI_ArrowArray {
             _ => None,
         };
 
-        let offset = if let Some(offset) = offset_offset {
+        let offset = if cfg!(feature = "ffi_enforce_no_offset") {
+            data.offset()
+        } else if let Some(offset) = offset_offset {
             if data.offset() != 0 {
                 // TODO: Adjust for data offset
                 panic!("The ArrayData of a slice offset buffer should not have offset");
@@ -184,7 +186,7 @@ impl FFI_ArrowArray {
                             | DataType::Binary
                             | DataType::LargeBinary,
                             1,
-                        ) => {
+                        ) if !cfg!(feature = "ffi_enforce_no_offset") => {
                             // For offset buffer, take original pointer without offset.
                             // Buffer offset should be handled by `FFI_ArrowArray` offset field.
                             Some(b.data_ptr().as_ptr() as *const c_void)

@@ -95,6 +95,8 @@ jobs:
         run: cargo test -p arrow
       - name: Test arrow with all features except pyarrow
         run: cargo test -p arrow --features=force_validate,prettyprint,ipc_compression,ffi,chrono-tz
+      - name: Test arrow with ffi_enforce_no_offset
+        run: cargo test -p arrow --features=force_validate,prettyprint,ipc_compression,ffi,ffi_enforce_no_offset,chrono-tz
       - name: Run examples
         run: |
           # Test arrow examples
@@ -129,6 +131,8 @@ jobs:
         run: cargo check -p arrow --no-default-features --all-targets --features test_utils
       - name: Check compilation --no-default-features --all-targets --features ffi
         run: cargo check -p arrow --no-default-features --all-targets --features ffi
+      - name: Check compilation --no-default-features --all-targets --features ffi,ffi_enforce_no_offset
+        run: cargo check -p arrow --no-default-features --all-targets --features ffi,ffi_enforce_no_offset
       - name: Check compilation --no-default-features --all-targets --features chrono-tz
         run: cargo check -p arrow --no-default-features --all-targets --features chrono-tz
 

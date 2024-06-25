@@ -53,6 +53,20 @@ hashbrown = { version = "0.14", default-features = false }
 [features]
 ffi = ["arrow-schema/ffi", "arrow-data/ffi"]
 
+# HACKY: For offset-ed offset buffer of variable-sized binary array
+# The valid FFI output is to record the offset buffer's offset into FFI's
+# `offset` field and expose the beginning of the buffer as the pointer.
+# So the consumer can calculate correctly the length of data buffer.
+# However, due to Arrow Java's issue: https://github.com/apache/arrow/issues/42156,
+# Arrow Java does not support `offset` field in the FFI output. It causes
+# no sliced binary array can be passed between arrow-rs and Arrow Java.
+# To workaround this issue, we have to enforce offset-ed offset buffer to
+# be exposed at the sliced buffer's beginning. When calculating the length
+# of data buffer, we assume the first element of the offset buffer is always 0
+# (this is how Arrow Java and arrow-rs do). This is a hacky solution and
+# should be removed once Arrow Java supports `offset` field in the FFI output.
+ffi_enforce_no_offset = ["arrow-data/ffi_enforce_no_offset"]
+
 [dev-dependencies]
 rand = { version = "0.8", default-features = false, features = ["std", "std_rng"] }
 criterion = { version = "0.5", default-features = false }
