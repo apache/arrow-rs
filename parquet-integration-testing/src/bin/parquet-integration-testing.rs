@@ -24,6 +24,8 @@ use serde_json::{json, Value};
 /// Test driver for parquet-integration testing
 use std::fs::{canonicalize, File};
 use std::path::{Path, PathBuf};
+use parquet::file::metadata::ColumnChunkMetaData;
+use parquet::format::ColumnMetaData;
 
 fn main() {
     let integration_test = IntegrationTest::new();
@@ -197,8 +199,15 @@ fn read_parquet_metadata(parquet_data_path: &Path) -> Value {
     // todo print out schema
     let row_groups : Vec<_> = metadata.row_groups().iter()
         .map(|rg| {
+            let columns: Vec<_> = rg.columns().iter()
+                .map(column_metadata_to_json)
+                .collect();
         json!({
             "num_rows": rg.num_rows(),
+            "total_byte_size": rg.total_byte_size(),
+            "file_offset": rg.file_offset(),
+            "ordinal": rg.ordinal(),
+            "columns": columns,
         })
     }).collect();;
 
@@ -208,4 +217,18 @@ fn read_parquet_metadata(parquet_data_path: &Path) -> Value {
         "filename33": filename,
         "row_goups": row_groups,
     })
+}
+
+fn column_metadata_to_json(column_metadata: &ColumnChunkMetaData) -> Value {
+
+    json!({
+        "file_path": column_metadata.file_path(),
+        "file_offset": column_metadata.file_offset(),
+        // todo: column metadata
+        // "num_values": column_metadata.num_values(),
+        // todo column-type/ column-path/descr
+        //"file_path": column_metadata.file_path(),
+
+    })
+
 }
