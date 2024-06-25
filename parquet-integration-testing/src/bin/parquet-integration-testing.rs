@@ -26,32 +26,77 @@ use std::fs::{canonicalize, File};
 use std::path::{Path, PathBuf};
 
 fn main() {
-    // paths are relative to arrow-rs/parquet-integration-testing
-    let parquet_data_path =
-        PathBuf::from("../parquet-testing/data").canonicalize().unwrap();
-    let expected_data_path =
-        PathBuf::from("data").canonicalize().unwrap();
-    let output_data_path =
-        PathBuf::from("out").canonicalize().unwrap();
-
-    std::fs::create_dir_all(&output_data_path).unwrap();
+    let integration_test = IntegrationTest::new();
 
     let filenames = vec![
         "alltypes_plain.parquet",
-        //"alltypes_plain_dictionary.parquet",
     ];
 
     for filename in filenames {
-        let parquet_file_path = parquet_data_path.join(filename);
+        integration_test.read_test(filename);
+    }
+}
 
-        let expected_file_path = expected_data_path
-            .join(format!("{filename}.json"));
+// prototype demonstration of checking type support for parquet-rs encoding
+// check read support by reading a file with the specified encoding correctly
+#[derive(Debug)]
+struct IntegrationTest {
+    parquet_data_path: PathBuf,
+    expected_data_path: PathBuf,
+    output_data_path: PathBuf,
+}
 
-        // For development, also write the actual parsed value to a file
-        let output_file_path = output_data_path
-            .join(format!("{filename}.json"));
+impl IntegrationTest {
+    pub fn new() -> Self {
+        // TODO error handling
 
+        // paths are relative to arrow-rs/parquet-integration-testing
+        let parquet_data_path = PathBuf::from("../parquet-testing/data")
+            .canonicalize()
+            .unwrap();
+        let expected_data_path = PathBuf::from("data").canonicalize().unwrap();
+        let output_data_path = PathBuf::from("out").canonicalize().unwrap();
 
+        std::fs::create_dir_all(&output_data_path).unwrap();
+
+        Self {
+            parquet_data_path,
+            expected_data_path,
+            output_data_path,
+        }
+    }
+
+    /// Read a parquet file, create a JSON representation, and compare to the
+    /// known good value in data
+    ///
+    /// The output JSON looks like this:
+    ///
+    /// ```text
+    /// {
+    ///   filename: "filename.parquet",
+    ///   rows: [
+    ///     {
+    ///       "column1": "value1",
+    ///       "column2": 123,
+    ///       "column3": null
+    ///     },
+    ///     ..
+    ///     {
+    ///       "column1": "value2",
+    ///       "column2": 456,
+    ///       "column3": "value3"
+    ///     }
+    ///   ]
+    /// }
+    /// ```
+    fn read_test(&self, filename: &str) {
+        let parquet_file_path = self.parquet_data_path.join(filename);
+
+        let expected_file_path = self.expected_data_path.join(format!("{filename}.json"));
+
+        // For ease of development, write the actual parsed value to a file (to
+        // permit easy updates, for example)
+        let output_file_path = self.output_data_path.join(format!("{filename}.json"));
 
         println!("Begin test: {filename}");
         println!("  Input parquet file: {parquet_file_path:?}");
@@ -67,36 +112,6 @@ fn main() {
         assert_eq!(parquet_json, expected_json)
     }
 }
-
-// prototype demonstration of checking type support for parquet-rs encoding
-// check read support by reading a file with the specified encoding correctly
-
-// | PLAIN                                     |       |        |       |       |
-// | PLAIN_DICTIONARY                          |       |        |       |       |
-// | RLE_DICTIONARY                            |       |        |       |       |
-// | RLE                                       |       |        |       |       |
-// | BIT_PACKED (deprecated)                   |       |        |       |       |
-// | DELTA_BINARY_PACKED                       |       |        |       |       |
-
-// The idea is to produce a file like this:
-// ```text
-// {
-//   filename: "filename.parquet",
-//   rows: [
-//     {
-//       "column1": "value1",
-//       "column2": 123,
-//       "column3": null
-//     },
-//     ..
-//     {
-//       "column1": "value2",
-//       "column2": 456,
-//       "column3": "value3"
-//     }
-//   ]
-// }
-// ```
 
 /// The function reads a parquet file and writes a JSON representation of the data within
 fn read_parquet_data(parquet_data_path: &Path) -> Value {
