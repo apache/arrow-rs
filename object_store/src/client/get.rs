@@ -135,6 +135,9 @@ enum GetResultError {
     #[snafu(display("Content-Type header contained non UTF-8 characters"))]
     InvalidContentType { source: ToStrError },
 
+    #[snafu(display("Metadata value for \"{key:?}\" contained non UTF-8 characters"))]
+    InvalidMetadata { key: String },
+
     #[snafu(display("Requested {expected:?}, got {actual:?}"))]
     UnexpectedRange {
         expected: Range<usize>,
@@ -230,6 +233,11 @@ fn get_result<T: GetClient>(
                         Attribute::Metadata(suffix.to_string().into()),
                         val_str.to_string().into(),
                     );
+                } else {
+                    return Err(GetResultError::InvalidMetadata {
+                        key: key.to_string(),
+                    }
+                    .into());
                 }
             }
         }
