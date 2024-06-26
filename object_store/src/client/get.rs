@@ -227,7 +227,7 @@ fn get_result<T: GetClient>(
             if let Some(suffix) = key.as_str().strip_prefix(prefix) {
                 if let Ok(val_str) = val.to_str() {
                     attributes.insert(
-                        Attribute::Metadata(suffix.to_string()),
+                        Attribute::Metadata(suffix.to_string().into()),
                         val_str.to_string().into(),
                     );
                 }
@@ -416,7 +416,7 @@ mod tests {
         assert_eq!(res.meta.size, 12);
         assert_eq!(res.range, 0..12);
         assert_eq!(
-            res.attributes.get(&Attribute::Metadata("foo".to_string())),
+            res.attributes.get(&Attribute::Metadata("foo".into())),
             Some(&"bar".into())
         );
         let bytes = res.bytes().await.unwrap();

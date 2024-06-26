@@ -48,7 +48,7 @@ pub enum Attribute {
     /// Specifies a user-defined metadata field for the object
     ///
     /// The String is a user-defined key
-    Metadata(String),
+    Metadata(Cow<'static, str>),
 }
 
 /// The value of an [`Attribute`]
@@ -198,7 +198,7 @@ mod tests {
             (Attribute::ContentLanguage, "en-US"),
             (Attribute::ContentType, "test"),
             (Attribute::CacheControl, "control"),
-            (Attribute::Metadata("key1".to_string()), "value1"),
+            (Attribute::Metadata("key1".into()), "value1"),
         ]);
 
         assert!(!attributes.is_empty());
@@ -241,7 +241,7 @@ mod tests {
             Some(&"en-US".into())
         );
         assert_eq!(
-            attributes.get(&Attribute::Metadata("key1".to_string())),
+            attributes.get(&Attribute::Metadata("key1".into())),
             Some(&"value1".into())
         );
     }
