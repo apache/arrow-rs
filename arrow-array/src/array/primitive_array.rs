@@ -351,19 +351,51 @@ pub type Time64MicrosecondArray = PrimitiveArray<Time64MicrosecondType>;
 /// hold values such as `00:02:00.123456789`
 pub type Time64NanosecondArray = PrimitiveArray<Time64NanosecondType>;
 
-/// A [`PrimitiveArray`] of “calendar” intervals in months
+/// A [`PrimitiveArray`] of “calendar” intervals in whole months
 ///
 /// See [`IntervalYearMonthType`] for details on representation and caveats.
+///
+/// # Example
+/// ```
+/// # use arrow_array::IntervalYearMonthArray;
+/// let array = IntervalYearMonthArray::from(vec![
+///   2,  // 2 months
+///   25, // 2 years and 1 month
+///   -1  // -1 months
+/// ]);
+/// ```
 pub type IntervalYearMonthArray = PrimitiveArray<IntervalYearMonthType>;
 
 /// A [`PrimitiveArray`] of “calendar” intervals in days and milliseconds
 ///
-/// See [`IntervalDayTimeType`] for details on representation and caveats.
+/// See [`IntervalDayTime`] for details on representation and caveats.
+///
+/// # Example
+/// ```
+/// # use arrow_array::IntervalDayTimeArray;
+/// use arrow_array::types::IntervalDayTime;
+/// let array = IntervalDayTimeArray::from(vec![
+///   IntervalDayTime::new(1, 1000),                 // 1 day, 1000 milliseconds
+///   IntervalDayTime::new(33, 0),                  // 33 days, 0 milliseconds
+///   IntervalDayTime::new(0, 12 * 60 * 60 * 1000), // 0 days, 12 hours
+/// ]);
+/// ```
 pub type IntervalDayTimeArray = PrimitiveArray<IntervalDayTimeType>;
 
 /// A [`PrimitiveArray`] of “calendar” intervals in  months, days, and nanoseconds.
 ///
-/// See [`IntervalMonthDayNanoType`] for details on representation and caveats.
+/// See [`IntervalMonthDayNano`] for details on representation and caveats.
+///
+/// # Example
+/// ```
+/// # use arrow_array::IntervalMonthDayNanoArray;
+/// use arrow_array::types::IntervalMonthDayNano;
+/// let array = IntervalMonthDayNanoArray::from(vec![
+///   IntervalMonthDayNano::new(1, 2, 1000),             // 1 month, 2 days, 1 nanosecond
+///   IntervalMonthDayNano::new(12, 1, 0),               // 12 months, 1 days, 0 nanoseconds
+///   IntervalMonthDayNano::new(0, 0, 12 * 1000 * 1000), // 0 days, 12 milliseconds
+/// ]);
+/// ```
 pub type IntervalMonthDayNanoArray = PrimitiveArray<IntervalMonthDayNanoType>;
 
 /// A [`PrimitiveArray`] of elapsed durations in seconds
