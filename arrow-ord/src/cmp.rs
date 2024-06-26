@@ -236,7 +236,7 @@ fn compare_op(op: Op, lhs: &dyn Datum, rhs: &dyn Datum) -> Result<BooleanArray, 
         return Err(ArrowError::InvalidArgumentError(format!(
             "Nested comparison: {l_t} {op} {r_t} (hint: use make_comparator instead)"
         )));
-    } else if l_t != r_t || l_t.is_nested() {
+    } else if l_t != r_t {
         return Err(ArrowError::InvalidArgumentError(format!(
             "Invalid comparison operation: {l_t} {op} {r_t}"
         )));
