@@ -143,6 +143,11 @@ impl<T: DataType> DictEncoder<T> {
     fn bit_width(&self) -> u8 {
         num_required_bits(self.num_entries().saturating_sub(1) as u64)
     }
+
+    /// Returns the estimated total memory usage
+    pub(crate) fn estimated_memory_size(&self) -> usize {
+        self.interner.storage().size_in_bytes + self.indices.len() * 8
+    }
 }
 
 impl<T: DataType> Encoder<T> for DictEncoder<T> {

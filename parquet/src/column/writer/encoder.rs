@@ -93,6 +93,9 @@ pub trait ColumnValueEncoder {
     /// Returns true if this encoder has a dictionary page
     fn has_dictionary(&self) -> bool;
 
+    /// Returns the estimated total memory usage of the encoder
+    fn estimated_memory_size(&self) -> usize;
+
     /// Returns an estimate of the dictionary page size in bytes, or `None` if no dictionary
     fn estimated_dict_page_size(&self) -> Option<usize>;
 
@@ -225,6 +228,15 @@ impl<T: DataType> ColumnValueEncoder for ColumnValueEncoderImpl<T> {
 
     fn has_dictionary(&self) -> bool {
         self.dict_encoder.is_some()
+    }
+
+    fn estimated_memory_size(&self) -> usize {
+        match &self.dict_encoder {
+            Some(encoder) => encoder.estimated_memory_size(),
+            // TODO: for now, we are ignoring the memory overhead for unflushed data
+            // in the other encoders (besides DictEncoder)
+            _ => self.encoder.estimated_data_encoded_size(),
+        }
     }
 
     fn estimated_dict_page_size(&self) -> Option<usize> {

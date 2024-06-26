@@ -431,7 +431,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
     /// of the current memory usage and not it's anticipated encoded size.
     #[cfg(feature = "arrow")]
     pub(crate) fn memory_size(&self) -> usize {
-        todo!("TODO in next commit")
+        self.column_metrics.total_bytes_written as usize + self.encoder.estimated_memory_size()
     }
 
     /// Returns total number of bytes written by this column writer so far.

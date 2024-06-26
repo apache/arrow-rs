@@ -334,6 +334,10 @@ impl DictEncoder {
         num_required_bits(length.saturating_sub(1) as u64)
     }
 
+    fn estimated_memory_size(&self) -> usize {
+        self.interner.storage().page.len() + self.indices.len() * 8
+    }
+
     fn estimated_data_page_size(&self) -> usize {
         let bit_width = self.bit_width();
         1 + RleEncoder::max_buffer_size(bit_width, self.indices.len())
@@ -441,6 +445,13 @@ impl ColumnValueEncoder for ByteArrayEncoder {
 
     fn has_dictionary(&self) -> bool {
         self.dict_encoder.is_some()
+    }
+
+    fn estimated_memory_size(&self) -> usize {
+        match &self.dict_encoder {
+            Some(encoder) => encoder.estimated_memory_size(),
+            None => self.fallback.estimated_data_page_size(),
+        }
     }
 
     fn estimated_dict_page_size(&self) -> Option<usize> {
