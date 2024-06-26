@@ -654,6 +654,13 @@ pub(crate) mod private {
 
         /// Return the value as an mutable Any to allow for downcasts without transmutation
         fn as_mut_any(&mut self) -> &mut dyn std::any::Any;
+
+        /// Returns the number of bytes of memory this instance uses on the heap.
+        ///
+        /// Defaults to none (0)
+        fn heap_size(&self) -> usize {
+            0
+        }
     }
 
     impl ParquetValueType for bool {
@@ -968,6 +975,13 @@ pub(crate) mod private {
         fn as_mut_any(&mut self) -> &mut dyn std::any::Any {
             self
         }
+
+        fn heap_size(&self) -> usize {
+            // note: this is an estimate, not exact, so just return the size
+            // of the actual data used, don't try to handle the fact that it may
+            // be shared.
+            self.data.as_ref().map(|data| data.len()).unwrap_or(0)
+        }
     }
 
     impl ParquetValueType for super::FixedLenByteArray {
@@ -1053,6 +1067,10 @@ pub(crate) mod private {
         #[inline]
         fn as_mut_any(&mut self) -> &mut dyn std::any::Any {
             self
+        }
+
+        fn heap_size(&self) -> usize {
+            self.0.heap_size()
         }
     }
 }
