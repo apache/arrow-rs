@@ -425,32 +425,32 @@ impl<'a> ImportedArrowArray<'a> {
                 (length + 1) * (bits / 8)
             }
             (DataType::Utf8, 2) | (DataType::Binary, 2) => {
-                // the len of the data buffer (buffer 2) equals the difference between the last value
-                // and the first value of the offset buffer (buffer 1).
+                if self.array.is_empty() {
+                    return Ok(0);
+                }
+
+                // the len of the data buffer (buffer 2) equals the last value of the offset buffer (buffer 1)
                 let len = self.buffer_len(1, dt)?;
                 // first buffer is the null buffer => add(1)
                 // we assume that pointer is aligned for `i32`, as Utf8 uses `i32` offsets.
                 #[allow(clippy::cast_ptr_alignment)]
                 let offset_buffer = self.array.buffer(1) as *const i32;
-                // get first offset
-                let start = (unsafe { *offset_buffer.add(0) }) as usize;
                 // get last offset
-                let end = (unsafe { *offset_buffer.add(len / size_of::<i32>() - 1) }) as usize;
-                end - start
+                (unsafe { *offset_buffer.add(len / size_of::<i32>() - 1) }) as usize
             }
             (DataType::LargeUtf8, 2) | (DataType::LargeBinary, 2) => {
-                // the len of the data buffer (buffer 2) equals the difference between the last value
-                // and the first value of the offset buffer (buffer 1).
+                if self.array.is_empty() {
+                    return Ok(0);
+                }
+
+                // the len of the data buffer (buffer 2) equals the last value of the offset buffer (buffer 1)
                 let len = self.buffer_len(1, dt)?;
                 // first buffer is the null buffer => add(1)
                 // we assume that pointer is aligned for `i64`, as Large uses `i64` offsets.
                 #[allow(clippy::cast_ptr_alignment)]
                 let offset_buffer = self.array.buffer(1) as *const i64;
-                // get first offset
-                let start = (unsafe { *offset_buffer.add(0) }) as usize;
                 // get last offset
-                let end = (unsafe { *offset_buffer.add(len / size_of::<i64>() - 1) }) as usize;
-                end - start
+                (unsafe { *offset_buffer.add(len / size_of::<i64>() - 1) }) as usize
             }
             // buffer len of primitive types
             _ => {
