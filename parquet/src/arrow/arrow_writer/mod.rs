@@ -203,7 +203,21 @@ impl<W: Write + Send> ArrowWriter<W> {
         self.writer.flushed_row_groups()
     }
 
-    /// Returns the estimated length in bytes of the current in progress row group
+    /// Returns the estimated memory usage of the current in progress row group.
+    ///
+    /// This includes the current encoded size of written bytes, as well as
+    /// the size of the unencoded data not yet flushed.
+    pub fn memory_size(&self) -> usize {
+        match &self.in_progress {
+            Some(in_progress) => in_progress.writers.iter().map(|x| x.memory_size()).sum(),
+            None => 0,
+        }
+    }
+
+    /// Returns the estimated length in encoded bytes of the current in progress row group.
+    ///
+    /// This includes an estimate of any data that has not yet been flushed to a page,
+    /// based on it's anticipated encoded size.
     pub fn in_progress_size(&self) -> usize {
         match &self.in_progress {
             Some(in_progress) => in_progress
@@ -629,7 +643,21 @@ impl ArrowColumnWriter {
         Ok(ArrowColumnChunk { data, close })
     }
 
-    /// Returns the estimated total bytes for this column writer
+    /// Returns the estimated total memory usage.
+    ///
+    /// Unlike [`Self::get_estimated_total_bytes`] this is an estimate
+    /// of the current memory usage and not it's anticipated encoded size.
+    pub fn memory_size(&self) -> usize {
+        match &self.writer {
+            ArrowColumnWriterImpl::ByteArray(c) => c.memory_size(),
+            ArrowColumnWriterImpl::Column(c) => c.memory_size(),
+        }
+    }
+
+    /// Returns the estimated total encoded bytes for this column writer.
+    ///
+    /// This includes an estimate of any data that has not yet been flushed to a page,
+    /// based on it's anticipated encoded size.
     pub fn get_estimated_total_bytes(&self) -> usize {
         match &self.writer {
             ArrowColumnWriterImpl::ByteArray(c) => c.get_estimated_total_bytes() as _,
