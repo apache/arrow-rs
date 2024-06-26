@@ -236,8 +236,7 @@ fn get_result<T: GetClient>(
                 } else {
                     return Err(GetResultError::InvalidMetadata {
                         key: key.to_string(),
-                    }
-                    .into());
+                    });
                 }
             }
         }
