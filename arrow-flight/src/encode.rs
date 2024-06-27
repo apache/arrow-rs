@@ -333,8 +333,6 @@ impl FlightDataEncoder {
             None => self.encode_schema(batch.schema_ref()),
         };
 
-        println!("schema: {schema:#?}");
-
         let batch = match self.dictionary_handling {
             DictionaryHandling::Resend => batch,
             DictionaryHandling::Hydrate => hydrate_dictionaries(&batch, schema)?,
