@@ -207,7 +207,7 @@ impl ColumnValueDecoder for ByteViewArrayColumnValueDecoder {
     }
 }
 
-/// A generic decoder from uncompressed parquet value data to [`OffsetBuffer`]
+/// A generic decoder from uncompressed parquet value data to [`ViewBuffer`]
 pub enum ByteViewArrayDecoder {
     Plain(ByteViewArrayDecoderPlain),
 }
@@ -262,7 +262,7 @@ impl ByteViewArrayDecoder {
     }
 }
 
-/// Decoder from [`Encoding::PLAIN`] data to [`OffsetBuffer`]
+/// Decoder from [`Encoding::PLAIN`] data to [`ViewBuffer`]
 pub struct ByteViewArrayDecoderPlain {
     buf: Bytes,
     offset: usize,
