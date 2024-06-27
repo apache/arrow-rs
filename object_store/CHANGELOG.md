@@ -19,46 +19,58 @@
 
 # Changelog
 
-## [object_store_0.9.1](https://github.com/apache/arrow-rs/tree/object_store_0.9.1) (2024-03-01)
+## [object_store_0.10.0](https://github.com/apache/arrow-rs/tree/object_store_0.10.0) (2024-04-17)
 
-[Full Changelog](https://github.com/apache/arrow-rs/compare/object_store_0.9.0...object_store_0.9.1)
+[Full Changelog](https://github.com/apache/arrow-rs/compare/object_store_0.9.1...object_store_0.10.0)
+
+**Breaking changes:**
+
+- Add put\_multipart\_opts \(\#5435\) [\#5652](https://github.com/apache/arrow-rs/pull/5652) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)] ([tustvold](https://github.com/tustvold))
+- Add Attributes API \(\#5329\) [\#5650](https://github.com/apache/arrow-rs/pull/5650) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)] ([tustvold](https://github.com/tustvold))
+- Support non-contiguous put payloads / vectored writes \(\#5514\) [\#5538](https://github.com/apache/arrow-rs/pull/5538) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)] ([tustvold](https://github.com/tustvold))
+- Replace AsyncWrite with Upload trait and rename MultiPartStore to MultipartStore \(\#5458\) [\#5500](https://github.com/apache/arrow-rs/pull/5500) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)] ([tustvold](https://github.com/tustvold))
 
 **Implemented enhancements:**
 
-- \[object\_store\] Enable anonymous read access for Azure [\#5424](https://github.com/apache/arrow-rs/issues/5424) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)]
-- Support for additional URL formats in object\_store for Azure blob [\#5370](https://github.com/apache/arrow-rs/issues/5370) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)]
-- Mention "Http" support in README [\#5320](https://github.com/apache/arrow-rs/issues/5320) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)]
-- Pass Options to HttpBuilder in parse\_url\_opts [\#5310](https://github.com/apache/arrow-rs/issues/5310) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)]
-- Remove Localstack DynamoDB Workaround Once Fixed Upstream [\#5267](https://github.com/apache/arrow-rs/issues/5267) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)]
-- Can I use S3 server side encryption [\#5087](https://github.com/apache/arrow-rs/issues/5087) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)]
+- Improve Retry Coverage [\#5608](https://github.com/apache/arrow-rs/issues/5608) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)]
+- Zero Copy Support [\#5593](https://github.com/apache/arrow-rs/issues/5593)
+- ObjectStore bulk delete [\#5591](https://github.com/apache/arrow-rs/issues/5591)
+- Retry on Broken Connection [\#5589](https://github.com/apache/arrow-rs/issues/5589)
+- Inconsistent Multipart Nomenclature [\#5526](https://github.com/apache/arrow-rs/issues/5526) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)]
+- \[ObjectStore\] Non-Contiguous Write Payloads [\#5514](https://github.com/apache/arrow-rs/issues/5514) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)]
+- In Object Store, return version & etag on multipart put. [\#5443](https://github.com/apache/arrow-rs/issues/5443) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)]
+- Release Object Store 0.9.1 [\#5436](https://github.com/apache/arrow-rs/issues/5436) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)]
+- object\_store: allow setting content-type per request [\#5329](https://github.com/apache/arrow-rs/issues/5329) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)]
+- GCS Signed URL Support [\#5233](https://github.com/apache/arrow-rs/issues/5233)
 
 **Fixed bugs:**
 
-- delete\_stream fails in MinIO [\#5414](https://github.com/apache/arrow-rs/issues/5414) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)]
-- \[object\_store\] Completing an empty Multipart Upload fails for AWS S3 [\#5404](https://github.com/apache/arrow-rs/issues/5404) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)]
-- Multipart upload can leave futures unpolled, leading to timeout [\#5366](https://github.com/apache/arrow-rs/issues/5366) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)]
-- Broken Link in README \(Rust Object Store\) Content [\#5309](https://github.com/apache/arrow-rs/issues/5309) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)]
+- \[object\_store\] minor bug: typos present in local variable  [\#5628](https://github.com/apache/arrow-rs/issues/5628) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)]
+- \[arrow-csv\] Schema inference requires csv on disk [\#5551](https://github.com/apache/arrow-rs/issues/5551)
+- Local object store copy/rename with nonexistent `from` file loops forever instead of erroring [\#5503](https://github.com/apache/arrow-rs/issues/5503) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)]
+- object store ApplicationDefaultCredentials auth is not working on windows  [\#5466](https://github.com/apache/arrow-rs/issues/5466) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)]
+- MicrosoftAzure store list result omits empty objects [\#5451](https://github.com/apache/arrow-rs/issues/5451) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)]
+
+**Documentation updates:**
+
+- Minor: add additional documentation about `BufWriter` [\#5519](https://github.com/apache/arrow-rs/pull/5519) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)] ([alamb](https://github.com/alamb))
 
 **Merged pull requests:**
 
-- Expose path\_to\_filesystem public [\#5441](https://github.com/apache/arrow-rs/pull/5441) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)] ([metesynnada](https://github.com/metesynnada))
-- Update nix requirement from 0.27.1 to 0.28.0 in /object\_store [\#5432](https://github.com/apache/arrow-rs/pull/5432) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)] ([dependabot[bot]](https://github.com/apps/dependabot))
-- Add BufWriter for Adapative Put / Multipart Upload [\#5431](https://github.com/apache/arrow-rs/pull/5431) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)] ([tustvold](https://github.com/tustvold))
-- Enable anonymous access for MicrosoftAzure [\#5425](https://github.com/apache/arrow-rs/pull/5425) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)] ([andrebsguedes](https://github.com/andrebsguedes))
-- fix\(object\_store\): Include Content-MD5 header for S3 DeleteObjects [\#5415](https://github.com/apache/arrow-rs/pull/5415) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)] ([paraseba](https://github.com/paraseba))
-- docds\(object\_store\): Mention HTTP/WebDAV in README [\#5409](https://github.com/apache/arrow-rs/pull/5409) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)] ([Xuanwo](https://github.com/Xuanwo))
-- \[object\_store\] Fix empty Multipart Upload for AWS S3 [\#5405](https://github.com/apache/arrow-rs/pull/5405) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)] ([andrebsguedes](https://github.com/andrebsguedes))
-- feat: S3 server-side encryption [\#5402](https://github.com/apache/arrow-rs/pull/5402) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)] ([wjones127](https://github.com/wjones127))
-- Pull container name from URL for Azure blob [\#5371](https://github.com/apache/arrow-rs/pull/5371) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)] ([bradvoth](https://github.com/bradvoth))
-- docs\(object-store\): add warning to flush [\#5369](https://github.com/apache/arrow-rs/pull/5369) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)] ([wjones127](https://github.com/wjones127))
-- Minor\(docs\): update master to main for DataFusion/Ballista [\#5363](https://github.com/apache/arrow-rs/pull/5363) ([caicancai](https://github.com/caicancai))
-- Test parse\_url\_opts for HTTP \(\#5310\) [\#5316](https://github.com/apache/arrow-rs/pull/5316) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)] ([tustvold](https://github.com/tustvold))
-- Update IOx links [\#5312](https://github.com/apache/arrow-rs/pull/5312) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)] ([tustvold](https://github.com/tustvold))
-- Pass options to HTTPBuilder in parse\_url\_opts \(\#5310\) [\#5311](https://github.com/apache/arrow-rs/pull/5311) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)] ([tustvold](https://github.com/tustvold))
-- Bump actions/cache from 3 to 4 [\#5308](https://github.com/apache/arrow-rs/pull/5308) ([dependabot[bot]](https://github.com/apps/dependabot))
-- Remove localstack DynamoDB workaround \(\#5267\) [\#5307](https://github.com/apache/arrow-rs/pull/5307) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)] ([tustvold](https://github.com/tustvold))
-- refactor: log server error during object store retries [\#5294](https://github.com/apache/arrow-rs/pull/5294) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)] ([crepererum](https://github.com/crepererum))
-- Prepare arrow 50.0.0 [\#5291](https://github.com/apache/arrow-rs/pull/5291) ([tustvold](https://github.com/tustvold))
-- Enable JS tests again [\#5287](https://github.com/apache/arrow-rs/pull/5287) ([domoritz](https://github.com/domoritz))
+- minor-fix: removed typos in object\_store sub crate [\#5629](https://github.com/apache/arrow-rs/pull/5629) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)] ([Silemo](https://github.com/Silemo))
+- Retry on More Error Classes [\#5609](https://github.com/apache/arrow-rs/pull/5609) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)] ([andrebsguedes](https://github.com/andrebsguedes))
+- Fix handling of empty multipart uploads for GCS [\#5590](https://github.com/apache/arrow-rs/pull/5590) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)] ([tustvold](https://github.com/tustvold))
+- Upgrade object\_store dependency to use chrono `0.4.34` [\#5578](https://github.com/apache/arrow-rs/pull/5578) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)] ([l1nxy](https://github.com/l1nxy))
+- Fix Latest Clippy Lints for object\_store [\#5546](https://github.com/apache/arrow-rs/pull/5546) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)] ([tustvold](https://github.com/tustvold))
+- Update reqwest 0.12 and http 1.0 [\#5536](https://github.com/apache/arrow-rs/pull/5536) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)] ([tustvold](https://github.com/tustvold))
+- Implement MultipartStore for ThrottledStore [\#5533](https://github.com/apache/arrow-rs/pull/5533) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)] ([tustvold](https://github.com/tustvold))
+- fix: copy/rename return error if source is nonexistent [\#5528](https://github.com/apache/arrow-rs/pull/5528) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)] ([dimbtp](https://github.com/dimbtp))
+- Prepare arrow 51.0.0 [\#5516](https://github.com/apache/arrow-rs/pull/5516) ([tustvold](https://github.com/tustvold))
+- Implement MultiPartStore for InMemory [\#5495](https://github.com/apache/arrow-rs/pull/5495) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)] ([tustvold](https://github.com/tustvold))
+- Add more comprehensive documentation on testing and benchmarking to CONTRIBUTING.md [\#5478](https://github.com/apache/arrow-rs/pull/5478) ([monkwire](https://github.com/monkwire))
+- add support for gcp application default auth on windows in object store [\#5473](https://github.com/apache/arrow-rs/pull/5473) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)] ([Itayazolay](https://github.com/Itayazolay))
+- Update base64 requirement from 0.21 to 0.22 in /object\_store [\#5465](https://github.com/apache/arrow-rs/pull/5465) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)] ([dependabot[bot]](https://github.com/apps/dependabot))
+- Uses ResourceType for filtering list directories instead of workaround [\#5452](https://github.com/apache/arrow-rs/pull/5452) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)] ([andrebsguedes](https://github.com/andrebsguedes))
+- Add GCS signed URL support [\#5300](https://github.com/apache/arrow-rs/pull/5300) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)] ([l1nxy](https://github.com/l1nxy))
 
 \* *This Changelog was automatically generated by [github_changelog_generator](https://github.com/github-changelog-generator/github-changelog-generator)*

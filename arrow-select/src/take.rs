@@ -143,6 +143,9 @@ fn take_impl<IndexType: ArrowPrimitiveType>(
         DataType::LargeUtf8 => {
             Ok(Arc::new(take_bytes(values.as_string::<i64>(), indices)?))
         }
+        DataType::Utf8View => {
+            Ok(Arc::new(take_byte_view(values.as_string_view(), indices)?))
+        }
         DataType::List(_) => {
             Ok(Arc::new(take_list::<_, Int32Type>(values.as_list(), indices)?))
         }
@@ -203,6 +206,9 @@ fn take_impl<IndexType: ArrowPrimitiveType>(
         }
         DataType::LargeBinary => {
             Ok(Arc::new(take_bytes(values.as_binary::<i64>(), indices)?))
+        }
+        DataType::BinaryView => {
+            Ok(Arc::new(take_byte_view(values.as_binary_view(), indices)?))
         }
         DataType::FixedSizeBinary(size) => {
             let values = values
@@ -435,6 +441,20 @@ fn take_bytes<T: ByteArrayType, IndexType: ArrowPrimitiveType>(
     let array_data = unsafe { array_data.build_unchecked() };
 
     Ok(GenericByteArray::from(array_data))
+}
+
+/// `take` implementation for byte view arrays
+fn take_byte_view<T: ByteViewType, IndexType: ArrowPrimitiveType>(
+    array: &GenericByteViewArray<T>,
+    indices: &PrimitiveArray<IndexType>,
+) -> Result<GenericByteViewArray<T>, ArrowError> {
+    let new_views = take_native(array.views(), indices);
+    let new_nulls = take_nulls(array.nulls(), indices);
+    Ok(GenericByteViewArray::new(
+        new_views,
+        array.data_buffers().to_vec(),
+        new_nulls,
+    ))
 }
 
 /// `take` implementation for list arrays
@@ -1422,6 +1442,53 @@ mod tests {
         let expected = StringArray::from(vec![None, None, Some("hello"), Some("world")]);
         let result = take(&strings, &indices_slice, None).unwrap();
         assert_eq!(result.as_ref(), &expected);
+    }
+
+    fn _test_byte_view<T>()
+    where
+        T: ByteViewType,
+        str: AsRef<T::Native>,
+        T::Native: PartialEq,
+    {
+        let index = UInt32Array::from(vec![Some(3), None, Some(1), Some(3), Some(4), Some(2)]);
+        let array = {
+            // ["hello", "world", null, "large payload over 12 bytes", "lulu"]
+            let mut builder = GenericByteViewBuilder::<T>::new();
+            builder.append_value("hello");
+            builder.append_value("world");
+            builder.append_null();
+            builder.append_value("large payload over 12 bytes");
+            builder.append_value("lulu");
+            builder.finish()
+        };
+
+        let actual = take(&array, &index, None).unwrap();
+
+        assert_eq!(actual.len(), index.len());
+
+        let expected = {
+            // ["large payload over 12 bytes", null, "world", "large payload over 12 bytes", "lulu", null]
+            let mut builder = GenericByteViewBuilder::<T>::new();
+            builder.append_value("large payload over 12 bytes");
+            builder.append_null();
+            builder.append_value("world");
+            builder.append_value("large payload over 12 bytes");
+            builder.append_value("lulu");
+            builder.append_null();
+            builder.finish()
+        };
+
+        assert_eq!(actual.as_ref(), &expected);
+    }
+
+    #[test]
+    fn test_take_string_view() {
+        _test_byte_view::<StringViewType>()
+    }
+
+    #[test]
+    fn test_take_binary_view() {
+        _test_byte_view::<BinaryViewType>()
     }
 
     macro_rules! test_take_list {

@@ -579,7 +579,7 @@ fn test_pretty_format_timestamp_second_with_incorrect_fixed_offset_timezone() {
     let err = format_timezone("08:00").unwrap_err().to_string();
     assert_eq!(
         err,
-        "Parser error: Invalid timezone \"08:00\": '08:00' is not a valid timezone"
+        "Parser error: Invalid timezone \"08:00\": failed to parse timezone"
     );
 }
 
@@ -588,6 +588,6 @@ fn test_pretty_format_timestamp_second_with_unknown_timezone() {
     let err = format_timezone("unknown").unwrap_err().to_string();
     assert_eq!(
         err,
-        "Parser error: Invalid timezone \"unknown\": 'unknown' is not a valid timezone"
+        "Parser error: Invalid timezone \"unknown\": failed to parse timezone"
     );
 }

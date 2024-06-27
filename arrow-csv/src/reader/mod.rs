@@ -148,7 +148,7 @@ lazy_static! {
     static ref REGEX_SET: RegexSet = RegexSet::new([
         r"(?i)^(true)$|^(false)$(?-i)", //BOOLEAN
         r"^-?(\d+)$", //INTEGER
-        r"^-?((\d*\.\d+|\d+\.\d*)([eE]-?\d+)?|\d+([eE]-?\d+))$", //DECIMAL
+        r"^-?((\d*\.\d+|\d+\.\d*)([eE][-+]?\d+)?|\d+([eE][-+]?\d+))$", //DECIMAL
         r"^\d{4}-\d\d-\d\d$", //DATE32
         r"^\d{4}-\d\d-\d\d[T ]\d\d:\d\d:\d\d(?:[^\d\.].*)?$", //Timestamp(Second)
         r"^\d{4}-\d\d-\d\d[T ]\d\d:\d\d:\d\d\.\d{1,3}(?:[^\d].*)?$", //Timestamp(Millisecond)
@@ -1659,6 +1659,27 @@ mod tests {
     }
 
     #[test]
+    fn test_scientific_notation_with_inference() {
+        let mut file = File::open("test/data/scientific_notation_test.csv").unwrap();
+        let format = Format::default().with_header(false).with_delimiter(b',');
+
+        let (schema, _) = format.infer_schema(&mut file, None).unwrap();
+        file.rewind().unwrap();
+
+        let builder = ReaderBuilder::new(Arc::new(schema))
+            .with_format(format)
+            .with_batch_size(512)
+            .with_projection(vec![0, 1]);
+
+        let mut csv = builder.build(file).unwrap();
+        let batch = csv.next().unwrap().unwrap();
+
+        let schema = batch.schema();
+
+        assert_eq!(&DataType::Float64, schema.field(0).data_type());
+    }
+
+    #[test]
     fn test_parse_invalid_csv() {
         let file = File::open("test/data/various_types_invalid.csv").unwrap();
 
@@ -1877,7 +1898,7 @@ mod tests {
     #[test]
     fn test_bounded() {
         let schema = Schema::new(vec![Field::new("int", DataType::UInt32, false)]);
-        let data = vec![
+        let data = [
             vec!["0"],
             vec!["1"],
             vec!["2"],
@@ -1919,7 +1940,7 @@ mod tests {
     #[test]
     fn test_empty_projection() {
         let schema = Schema::new(vec![Field::new("int", DataType::UInt32, false)]);
-        let data = vec![vec!["0"], vec!["1"]];
+        let data = [vec!["0"], vec!["1"]];
 
         let data = data
             .iter()

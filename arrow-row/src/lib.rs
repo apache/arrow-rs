@@ -2223,7 +2223,7 @@ mod tests {
 
         let first = Int32Array::from(vec![None, Some(2), Some(4)]);
         let second = Int32Array::from(vec![Some(2), None, Some(4)]);
-        let arrays = vec![Arc::new(first) as ArrayRef, Arc::new(second) as ArrayRef];
+        let arrays = [Arc::new(first) as ArrayRef, Arc::new(second) as ArrayRef];
 
         for array in arrays.iter() {
             rows.clear();

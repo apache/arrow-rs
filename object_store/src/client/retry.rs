@@ -18,10 +18,10 @@
 //! A shared HTTP client implementation incorporating retries
 
 use crate::client::backoff::{Backoff, BackoffConfig};
+use crate::PutPayload;
 use futures::future::BoxFuture;
-use futures::FutureExt;
 use reqwest::header::LOCATION;
-use reqwest::{Response, StatusCode};
+use reqwest::{Client, Request, Response, StatusCode};
 use snafu::Error as SnafuError;
 use snafu::Snafu;
 use std::time::{Duration, Instant};
@@ -166,7 +166,184 @@ impl Default for RetryConfig {
     }
 }
 
+pub struct RetryableRequest {
+    client: Client,
+    request: Request,
+
+    max_retries: usize,
+    retry_timeout: Duration,
+    backoff: Backoff,
+
+    idempotent: Option<bool>,
+    payload: Option<PutPayload>,
+}
+
+impl RetryableRequest {
+    /// Set whether this request is idempotent
+    ///
+    /// An idempotent request will be retried on timeout even if the request
+    /// method is not [safe](https://datatracker.ietf.org/doc/html/rfc7231#section-4.2.1)
+    pub fn idempotent(self, idempotent: bool) -> Self {
+        Self {
+            idempotent: Some(idempotent),
+            ..self
+        }
+    }
+
+    /// Provide a [`PutPayload`]
+    pub fn payload(self, payload: Option<PutPayload>) -> Self {
+        Self { payload, ..self }
+    }
+
+    pub async fn send(self) -> Result<Response> {
+        let max_retries = self.max_retries;
+        let retry_timeout = self.retry_timeout;
+        let mut retries = 0;
+        let now = Instant::now();
+
+        let mut backoff = self.backoff;
+        let is_idempotent = self
+            .idempotent
+            .unwrap_or_else(|| self.request.method().is_safe());
+
+        loop {
+            let mut request = self
+                .request
+                .try_clone()
+                .expect("request body must be cloneable");
+
+            if let Some(payload) = &self.payload {
+                *request.body_mut() = Some(payload.body());
+            }
+
+            match self.client.execute(request).await {
+                Ok(r) => match r.error_for_status_ref() {
+                    Ok(_) if r.status().is_success() => return Ok(r),
+                    Ok(r) if r.status() == StatusCode::NOT_MODIFIED => {
+                        return Err(Error::Client {
+                            body: None,
+                            status: StatusCode::NOT_MODIFIED,
+                        })
+                    }
+                    Ok(r) => {
+                        let is_bare_redirect =
+                            r.status().is_redirection() && !r.headers().contains_key(LOCATION);
+                        return match is_bare_redirect {
+                            true => Err(Error::BareRedirect),
+                            // Not actually sure if this is reachable, but here for completeness
+                            false => Err(Error::Client {
+                                body: None,
+                                status: r.status(),
+                            }),
+                        };
+                    }
+                    Err(e) => {
+                        let status = r.status();
+                        if retries == max_retries
+                            || now.elapsed() > retry_timeout
+                            || !status.is_server_error()
+                        {
+                            return Err(match status.is_client_error() {
+                                true => match r.text().await {
+                                    Ok(body) => Error::Client {
+                                        body: Some(body).filter(|b| !b.is_empty()),
+                                        status,
+                                    },
+                                    Err(e) => Error::Reqwest {
+                                        retries,
+                                        max_retries,
+                                        elapsed: now.elapsed(),
+                                        retry_timeout,
+                                        source: e,
+                                    },
+                                },
+                                false => Error::Reqwest {
+                                    retries,
+                                    max_retries,
+                                    elapsed: now.elapsed(),
+                                    retry_timeout,
+                                    source: e,
+                                },
+                            });
+                        }
+
+                        let sleep = backoff.next();
+                        retries += 1;
+                        info!(
+                            "Encountered server error, backing off for {} seconds, retry {} of {}: {}",
+                            sleep.as_secs_f32(),
+                            retries,
+                            max_retries,
+                            e,
+                        );
+                        tokio::time::sleep(sleep).await;
+                    }
+                },
+                Err(e) => {
+                    let mut do_retry = false;
+                    if e.is_connect()
+                        || e.is_body()
+                        || (e.is_request() && !e.is_timeout())
+                        || (is_idempotent && e.is_timeout())
+                    {
+                        do_retry = true
+                    } else {
+                        let mut source = e.source();
+                        while let Some(e) = source {
+                            if let Some(e) = e.downcast_ref::<hyper::Error>() {
+                                do_retry = e.is_closed()
+                                    || e.is_incomplete_message()
+                                    || e.is_body_write_aborted()
+                                    || (is_idempotent && e.is_timeout());
+                                break;
+                            }
+                            if let Some(e) = e.downcast_ref::<std::io::Error>() {
+                                if e.kind() == std::io::ErrorKind::TimedOut {
+                                    do_retry = is_idempotent;
+                                } else {
+                                    do_retry = matches!(
+                                        e.kind(),
+                                        std::io::ErrorKind::ConnectionReset
+                                            | std::io::ErrorKind::ConnectionAborted
+                                            | std::io::ErrorKind::BrokenPipe
+                                            | std::io::ErrorKind::UnexpectedEof
+                                    );
+                                }
+                                break;
+                            }
+                            source = e.source();
+                        }
+                    }
+
+                    if retries == max_retries || now.elapsed() > retry_timeout || !do_retry {
+                        return Err(Error::Reqwest {
+                            retries,
+                            max_retries,
+                            elapsed: now.elapsed(),
+                            retry_timeout,
+                            source: e,
+                        });
+                    }
+                    let sleep = backoff.next();
+                    retries += 1;
+                    info!(
+                        "Encountered transport error backing off for {} seconds, retry {} of {}: {}",
+                        sleep.as_secs_f32(),
+                        retries,
+                        max_retries,
+                        e,
+                    );
+                    tokio::time::sleep(sleep).await;
+                }
+            }
+        }
+    }
+}
+
 pub trait RetryExt {
+    /// Return a [`RetryableRequest`]
+    fn retryable(self, config: &RetryConfig) -> RetryableRequest;
+
     /// Dispatch a request with the given retry configuration
     ///
     /// # Panic
@@ -176,126 +353,24 @@ pub trait RetryExt {
 }
 
 impl RetryExt for reqwest::RequestBuilder {
-    fn send_retry(self, config: &RetryConfig) -> BoxFuture<'static, Result<Response>> {
-        let mut backoff = Backoff::new(&config.backoff);
-        let max_retries = config.max_retries;
-        let retry_timeout = config.retry_timeout;
+    fn retryable(self, config: &RetryConfig) -> RetryableRequest {
+        let (client, request) = self.build_split();
+        let request = request.expect("request must be valid");
 
-        let (client, req) = self.build_split();
-        let req = req.expect("request must be valid");
-
-        async move {
-            let mut retries = 0;
-            let now = Instant::now();
-
-            loop {
-                let s = req.try_clone().expect("request body must be cloneable");
-                match client.execute(s).await {
-                    Ok(r) => match r.error_for_status_ref() {
-                        Ok(_) if r.status().is_success() => return Ok(r),
-                        Ok(r) if r.status() == StatusCode::NOT_MODIFIED => {
-                            return Err(Error::Client {
-                                body: None,
-                                status: StatusCode::NOT_MODIFIED,
-                            })
-                        }
-                        Ok(r) => {
-                            let is_bare_redirect = r.status().is_redirection() && !r.headers().contains_key(LOCATION);
-                            return match is_bare_redirect {
-                                true => Err(Error::BareRedirect),
-                                // Not actually sure if this is reachable, but here for completeness
-                                false => Err(Error::Client {
-                                    body: None,
-                                    status: r.status(),
-                                })
-                            }
-                        }
-                        Err(e) => {
-                            let status = r.status();
-                            if retries == max_retries
-                                || now.elapsed() > retry_timeout
-                                || !status.is_server_error() {
-
-                                return Err(match status.is_client_error() {
-                                    true => match r.text().await {
-                                        Ok(body) => {
-                                            Error::Client {
-                                                body: Some(body).filter(|b| !b.is_empty()),
-                                                status,
-                                            }
-                                        }
-                                        Err(e) => {
-                                            Error::Reqwest {
-                                                retries,
-                                                max_retries,
-                                                elapsed: now.elapsed(),
-                                                retry_timeout,
-                                                source: e,
-                                            }
-                                        }
-                                    }
-                                    false => Error::Reqwest {
-                                        retries,
-                                        max_retries,
-                                        elapsed: now.elapsed(),
-                                        retry_timeout,
-                                        source: e,
-                                    }
-                                });
-                            }
-
-                            let sleep = backoff.next();
-                            retries += 1;
-                            info!(
-                                "Encountered server error, backing off for {} seconds, retry {} of {}: {}",
-                                sleep.as_secs_f32(),
-                                retries,
-                                max_retries,
-                                e,
-                            );
-                            tokio::time::sleep(sleep).await;
-                        }
-                    },
-                    Err(e) =>
-                    {
-                        let mut do_retry = false;
-                        if req.method().is_safe() && e.is_timeout() {
-                            do_retry = true
-                        } else if let Some(source) = e.source() {
-                            if let Some(e) = source.downcast_ref::<hyper::Error>() {
-                                if e.is_connect() || e.is_closed() || e.is_incomplete_message() {
-                                    do_retry = true;
-                                }
-                            }
-                        }
-
-                        if retries == max_retries
-                            || now.elapsed() > retry_timeout
-                            || !do_retry {
-
-                            return Err(Error::Reqwest {
-                                retries,
-                                max_retries,
-                                elapsed: now.elapsed(),
-                                retry_timeout,
-                                source: e,
-                            })
-                        }
-                        let sleep = backoff.next();
-                        retries += 1;
-                        info!(
-                            "Encountered transport error backing off for {} seconds, retry {} of {}: {}", 
-                            sleep.as_secs_f32(),
-                            retries,
-                            max_retries,
-                            e,
-                        );
-                        tokio::time::sleep(sleep).await;
-                    }
-                }
-            }
+        RetryableRequest {
+            client,
+            request,
+            max_retries: config.max_retries,
+            retry_timeout: config.retry_timeout,
+            backoff: Backoff::new(&config.backoff),
+            idempotent: None,
+            payload: None,
         }
-        .boxed()
+    }
+
+    fn send_retry(self, config: &RetryConfig) -> BoxFuture<'static, Result<Response>> {
+        let request = self.retryable(config);
+        Box::pin(async move { request.send().await })
     }
 }
 
@@ -305,13 +380,13 @@ mod tests {
     use crate::client::retry::{Error, RetryExt};
     use crate::RetryConfig;
     use hyper::header::LOCATION;
-    use hyper::{Body, Response};
+    use hyper::Response;
     use reqwest::{Client, Method, StatusCode};
     use std::time::Duration;
 
     #[tokio::test]
     async fn test_retry() {
-        let mock = MockServer::new();
+        let mock = MockServer::new().await;
 
         let retry = RetryConfig {
             backoff: Default::default(),
@@ -334,7 +409,7 @@ mod tests {
         mock.push(
             Response::builder()
                 .status(StatusCode::BAD_REQUEST)
-                .body(Body::from("cupcakes"))
+                .body("cupcakes".to_string())
                 .unwrap(),
         );
 
@@ -350,7 +425,7 @@ mod tests {
         mock.push(
             Response::builder()
                 .status(StatusCode::BAD_REQUEST)
-                .body(Body::empty())
+                .body(String::new())
                 .unwrap(),
         );
 
@@ -366,7 +441,7 @@ mod tests {
         mock.push(
             Response::builder()
                 .status(StatusCode::BAD_GATEWAY)
-                .body(Body::empty())
+                .body(String::new())
                 .unwrap(),
         );
 
@@ -377,7 +452,7 @@ mod tests {
         mock.push(
             Response::builder()
                 .status(StatusCode::NO_CONTENT)
-                .body(Body::empty())
+                .body(String::new())
                 .unwrap(),
         );
 
@@ -389,7 +464,7 @@ mod tests {
             Response::builder()
                 .status(StatusCode::FOUND)
                 .header(LOCATION, "/foo")
-                .body(Body::empty())
+                .body(String::new())
                 .unwrap(),
         );
 
@@ -402,7 +477,7 @@ mod tests {
             Response::builder()
                 .status(StatusCode::FOUND)
                 .header(LOCATION, "/bar")
-                .body(Body::empty())
+                .body(String::new())
                 .unwrap(),
         );
 
@@ -416,19 +491,19 @@ mod tests {
                 Response::builder()
                     .status(StatusCode::FOUND)
                     .header(LOCATION, "/bar")
-                    .body(Body::empty())
+                    .body(String::new())
                     .unwrap(),
             );
         }
 
         let e = do_request().await.unwrap_err().to_string();
-        assert!(e.ends_with("too many redirects"), "{}", e);
+        assert!(e.contains("error following redirect for url"), "{}", e);
 
         // Handles redirect missing location
         mock.push(
             Response::builder()
                 .status(StatusCode::FOUND)
-                .body(Body::empty())
+                .body(String::new())
                 .unwrap(),
         );
 
@@ -441,7 +516,7 @@ mod tests {
             mock.push(
                 Response::builder()
                     .status(StatusCode::BAD_GATEWAY)
-                    .body(Body::from("ignored"))
+                    .body("ignored".to_string())
                     .unwrap(),
             );
         }
@@ -486,7 +561,7 @@ mod tests {
         let res = client.request(Method::PUT, mock.url()).send_retry(&retry);
         let e = res.await.unwrap_err().to_string();
         assert!(
-            e.contains("Error after 0 retries in") && e.contains("operation timed out"),
+            e.contains("Error after 0 retries in") && e.contains("error sending request for url"),
             "{e}"
         );
 

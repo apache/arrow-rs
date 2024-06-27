@@ -16,7 +16,6 @@
 // under the License.
 
 use crate::config::Parse;
-use ring::digest::{self, digest as ring_digest};
 use std::str::FromStr;
 
 #[allow(non_camel_case_types)]
@@ -25,20 +24,6 @@ use std::str::FromStr;
 pub enum Checksum {
     /// SHA-256 algorithm.
     SHA256,
-}
-
-impl Checksum {
-    pub(super) fn digest(&self, bytes: &[u8]) -> Vec<u8> {
-        match self {
-            Self::SHA256 => ring_digest(&digest::SHA256, bytes).as_ref().to_owned(),
-        }
-    }
-
-    pub(super) fn header_name(&self) -> &'static str {
-        match self {
-            Self::SHA256 => "x-amz-checksum-sha256",
-        }
-    }
 }
 
 impl std::fmt::Display for Checksum {

@@ -197,6 +197,10 @@ pub use scalar::*;
 pub mod builder;
 pub mod cast;
 mod delta;
+#[cfg(feature = "ffi")]
+pub mod ffi;
+#[cfg(feature = "ffi")]
+pub mod ffi_stream;
 pub mod iterator;
 pub mod run_iterator;
 pub mod temporal_conversions;
