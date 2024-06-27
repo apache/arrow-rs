@@ -695,8 +695,6 @@ impl DictionaryTracker {
     ///   has never been seen before, return `Ok(true)` to indicate that the dictionary was just
     ///   inserted.
     pub fn insert(&mut self, dict_id: i64, column: &ArrayRef) -> Result<bool, ArrowError> {
-        println!("\n\ninserting dict id {dict_id}\n\n");
-
         let dict_data = column.to_data();
         let dict_values = &dict_data.child_data()[0];
 
