@@ -1891,6 +1891,7 @@ mod tests {
                 assert!(size_stats.repetition_level_histogram.is_none());
                 assert!(size_stats.definition_level_histogram.is_some());
                 if let Some(ref def_hist) = size_stats.definition_level_histogram {
+                    assert_eq!(def_hist.len(), 2);
                     assert_eq!(def_hist[0], 0);
                     assert_eq!(def_hist[1], num_rows);
                 }
