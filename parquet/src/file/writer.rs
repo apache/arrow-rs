@@ -1398,7 +1398,7 @@ mod tests {
         file: W,
         data: Vec<Vec<i32>>,
         compression: Compression,
-        repetition: Repetition,
+        def_levels: Option<&[i16]>,
     ) -> crate::format::FileMetaData
     where
         W: Write + Send,
@@ -1409,7 +1409,7 @@ mod tests {
             data,
             |r| r.get_int(0).unwrap(),
             compression,
-            repetition,
+            def_levels,
         )
     }
 
@@ -1420,7 +1420,7 @@ mod tests {
         data: Vec<Vec<D::T>>,
         value: F,
         compression: Compression,
-        repetition: Repetition,
+        def_levels: Option<&[i16]>,
     ) -> crate::format::FileMetaData
     where
         W: Write + Send,
@@ -1428,6 +1428,10 @@ mod tests {
         D: DataType,
         F: Fn(Row) -> D::T,
     {
+        let repetition = match def_levels {
+            Some(_) => Repetition::OPTIONAL,
+            _ => Repetition::REQUIRED,
+        };
         let schema = Arc::new(
             types::Type::group_type_builder("schema")
                 .with_fields(vec![Arc::new(
@@ -1451,15 +1455,9 @@ mod tests {
             let row_group_file_offset = file_writer.buf.bytes_written();
             let mut row_group_writer = file_writer.next_row_group().unwrap();
             if let Some(mut writer) = row_group_writer.next_column().unwrap() {
-                let def_vec = vec![1; subset.len()];
-                let def_lvls = if repetition != Repetition::REQUIRED {
-                    Some(def_vec.as_slice())
-                } else {
-                    None
-                };
                 rows += writer
                     .typed::<D>()
-                    .write_batch(&subset[..], def_lvls, None)
+                    .write_batch(&subset[..], def_levels, None)
                     .unwrap() as i64;
                 writer.close().unwrap();
             }
@@ -1474,24 +1472,28 @@ mod tests {
 
         let reader = SerializedFileReader::new(R::from(file)).unwrap();
         assert_eq!(reader.num_row_groups(), data.len());
-        assert_eq!(
-            reader.metadata().file_metadata().num_rows(),
-            rows,
-            "row count in metadata not equal to number of rows written"
-        );
-        for (i, item) in data.iter().enumerate().take(reader.num_row_groups()) {
-            let row_group_reader = reader.get_row_group(i).unwrap();
-            let iter = row_group_reader.get_row_iter(None).unwrap();
-            let res: Vec<_> = iter.map(|row| row.unwrap()).map(&value).collect();
-            let row_group_size = row_group_reader.metadata().total_byte_size();
-            let uncompressed_size: i64 = row_group_reader
-                .metadata()
-                .columns()
-                .iter()
-                .map(|v| v.uncompressed_size())
-                .sum();
-            assert_eq!(row_group_size, uncompressed_size);
-            assert_eq!(res, *item);
+        // Row based API does not like nulls, so skip these validation steps if nulls might
+        // be present.
+        if repetition == Repetition::REQUIRED {
+            assert_eq!(
+                reader.metadata().file_metadata().num_rows(),
+                rows,
+                "row count in metadata not equal to number of rows written"
+            );
+            for (i, item) in data.iter().enumerate().take(reader.num_row_groups()) {
+                let row_group_reader = reader.get_row_group(i).unwrap();
+                let iter = row_group_reader.get_row_iter(None).unwrap();
+                let res: Vec<_> = iter.map(|row| row.unwrap()).map(&value).collect();
+                let row_group_size = row_group_reader.metadata().total_byte_size();
+                let uncompressed_size: i64 = row_group_reader
+                    .metadata()
+                    .columns()
+                    .iter()
+                    .map(|v| v.uncompressed_size())
+                    .sum();
+                assert_eq!(row_group_size, uncompressed_size);
+                assert_eq!(res, *item);
+            }
         }
         file_metadata
     }
@@ -1499,12 +1501,7 @@ mod tests {
     /// File write-read roundtrip.
     /// `data` consists of arrays of values for each row group.
     fn test_file_roundtrip(file: File, data: Vec<Vec<i32>>) -> crate::format::FileMetaData {
-        test_roundtrip_i32::<File, File>(
-            file,
-            data,
-            Compression::UNCOMPRESSED,
-            Repetition::REQUIRED,
-        )
+        test_roundtrip_i32::<File, File>(file, data, Compression::UNCOMPRESSED, None)
     }
 
     #[test]
@@ -1549,12 +1546,7 @@ mod tests {
     }
 
     fn test_bytes_roundtrip(data: Vec<Vec<i32>>, compression: Compression) {
-        test_roundtrip_i32::<Vec<u8>, Bytes>(
-            Vec::with_capacity(1024),
-            data,
-            compression,
-            Repetition::REQUIRED,
-        );
+        test_roundtrip_i32::<Vec<u8>, Bytes>(Vec::with_capacity(1024), data, compression, None);
     }
 
     #[test]
@@ -1565,7 +1557,7 @@ mod tests {
             vec![my_bool_values],
             |r| r.get_bool(0).unwrap(),
             Compression::UNCOMPRESSED,
-            Repetition::REQUIRED,
+            None,
         );
     }
 
@@ -1577,7 +1569,7 @@ mod tests {
             vec![my_bool_values],
             |r| r.get_bool(0).unwrap(),
             Compression::SNAPPY,
-            Repetition::REQUIRED,
+            None,
         );
     }
 
@@ -1865,16 +1857,19 @@ mod tests {
 
     #[test]
     fn test_size_statistics() {
-        let num_rows: i64 = 5;
-        let data = vec![ByteArrayType::gen_vec(32, num_rows as usize)];
+        let num_rows: usize = 5;
+        let data = vec![ByteArrayType::gen_vec(32, num_rows)];
         let unenc_size: i64 = data[0].iter().map(|x| x.len() as i64).sum();
         let file: File = tempfile::tempfile().unwrap();
+        let def_vec = vec![1; num_rows];
+        let def_levels = Some(def_vec.as_slice());
+
         let file_metadata = test_roundtrip::<File, File, ByteArrayType, _>(
             file,
             data,
             |r| r.get_bytes(0).unwrap().clone(),
             Compression::UNCOMPRESSED,
-            Repetition::OPTIONAL,
+            def_levels,
         );
 
         assert_eq!(file_metadata.row_groups.len(), 1);
@@ -1893,7 +1888,37 @@ mod tests {
                 if let Some(ref def_hist) = size_stats.definition_level_histogram {
                     assert_eq!(def_hist.len(), 2);
                     assert_eq!(def_hist[0], 0);
-                    assert_eq!(def_hist[1], num_rows);
+                    assert_eq!(def_hist[1], num_rows as i64);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_size_statistics_with_nulls() {
+        let def_levels = [1, 1, 0, 1, 0];
+        let data = vec![vec![1, 2, 3, 4, 5]];
+        let file: File = tempfile::tempfile().unwrap();
+        let file_metadata = test_roundtrip_i32::<File, File>(
+            file,
+            data,
+            Compression::UNCOMPRESSED,
+            Some(&def_levels),
+        );
+
+        assert_eq!(file_metadata.row_groups.len(), 1);
+        assert_eq!(file_metadata.row_groups[0].columns.len(), 1);
+        assert!(file_metadata.row_groups[0].columns[0].meta_data.is_some());
+
+        if let Some(ref meta_data) = file_metadata.row_groups[0].columns[0].meta_data {
+            assert!(meta_data.size_statistics.is_some());
+            if let Some(ref size_stats) = meta_data.size_statistics {
+                assert!(size_stats.repetition_level_histogram.is_none());
+                assert!(size_stats.definition_level_histogram.is_some());
+                if let Some(ref def_hist) = size_stats.definition_level_histogram {
+                    assert_eq!(def_hist.len(), 2);
+                    assert_eq!(def_hist[0], 2); // two nulls
+                    assert_eq!(def_hist[1], 3); // three non-null
                 }
             }
         }
