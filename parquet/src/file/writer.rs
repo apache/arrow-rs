@@ -811,7 +811,7 @@ mod tests {
     use crate::column::page::{Page, PageReader};
     use crate::column::reader::get_typed_column_reader;
     use crate::compression::{create_codec, Codec, CodecOptionsBuilder};
-    use crate::data_type::{BoolType, Int32Type};
+    use crate::data_type::{BoolType, ByteArrayType, Int32Type};
     use crate::file::page_index::index::Index;
     use crate::file::properties::EnabledStatistics;
     use crate::file::serialized_reader::ReadOptionsBuilder;
@@ -824,6 +824,7 @@ mod tests {
     use crate::record::{Row, RowAccessor};
     use crate::schema::parser::parse_message_type;
     use crate::schema::types::{ColumnDescriptor, ColumnPath};
+    use crate::util::test_common::rand_gen::RandGen;
 
     #[test]
     fn test_row_group_writer_error_not_all_columns_written() {
@@ -1834,5 +1835,32 @@ mod tests {
         assert!(matches!(a_idx, Index::INT32(_)), "{a_idx:?}");
         let b_idx = &column_index[0][1];
         assert!(matches!(b_idx, Index::NONE), "{b_idx:?}");
+    }
+
+    #[test]
+    fn test_unencoded_byte_array_size() {
+        let data = vec![ByteArrayType::gen_vec(32, 5)];
+        let unenc_size: i64 = data[0].iter().map(|x| x.len() as i64).sum();
+        let file: File = tempfile::tempfile().unwrap();
+        let file_metadata = test_roundtrip::<File, File, ByteArrayType, _>(
+            file,
+            data,
+            |r| r.get_bytes(0).unwrap().clone(),
+            Compression::UNCOMPRESSED,
+        );
+
+        assert_eq!(file_metadata.row_groups.len(), 1);
+        assert_eq!(file_metadata.row_groups[0].columns.len(), 1);
+        assert!(file_metadata.row_groups[0].columns[0].meta_data.is_some());
+
+        if let Some(ref meta_data) = file_metadata.row_groups[0].columns[0].meta_data {
+            assert!(meta_data.size_statistics.is_some());
+            if let Some(ref size_stats) = meta_data.size_statistics {
+                assert_eq!(
+                    unenc_size,
+                    size_stats.unencoded_byte_array_data_bytes.unwrap_or(0)
+                )
+            }
+        }
     }
 }
