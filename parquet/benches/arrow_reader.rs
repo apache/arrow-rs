@@ -63,6 +63,8 @@ fn build_test_schema() -> SchemaDescPtr {
                     optional BYTE_ARRAY element (UTF8);
                 }
             }
+            REQUIRED BYTE_ARRAY mandatory_binary_leaf;
+            OPTIONAL BYTE_ARRAY optional_binary_leaf;
         }
         ";
     parse_message_type(message_type)
@@ -71,8 +73,8 @@ fn build_test_schema() -> SchemaDescPtr {
 }
 
 // test data params
-const NUM_ROW_GROUPS: usize = 1;
-const PAGES_PER_GROUP: usize = 2;
+const NUM_ROW_GROUPS: usize = 2;
+const PAGES_PER_GROUP: usize = 4;
 const VALUES_PER_PAGE: usize = 10_000;
 const BATCH_SIZE: usize = 8192;
 const MAX_LIST_LEN: usize = 10;
@@ -261,7 +263,7 @@ where
     InMemoryPageIterator::new(pages)
 }
 
-fn build_plain_encoded_string_page_iterator(
+fn build_plain_encoded_byte_array_page_iterator(
     column_desc: ColumnDescPtr,
     null_density: f32,
 ) -> impl PageIterator + Clone {
@@ -496,11 +498,18 @@ fn create_decimal_by_bytes_reader(
     }
 }
 
-fn create_string_byte_array_reader(
+fn create_byte_array_reader(
     page_iterator: impl PageIterator + 'static,
     column_desc: ColumnDescPtr,
 ) -> Box<dyn ArrayReader> {
     make_byte_array_reader(Box::new(page_iterator), column_desc, None).unwrap()
+}
+
+fn create_byte_view_array_reader(
+    page_iterator: impl PageIterator + 'static,
+    column_desc: ColumnDescPtr,
+) -> Box<dyn ArrayReader> {
+    make_byte_view_array_reader(Box::new(page_iterator), column_desc, None).unwrap()
 }
 
 fn create_string_view_byte_array_reader(
@@ -525,7 +534,7 @@ fn create_string_list_reader(
     page_iterator: impl PageIterator + 'static,
     column_desc: ColumnDescPtr,
 ) -> Box<dyn ArrayReader> {
-    let items = create_string_byte_array_reader(page_iterator, column_desc);
+    let items = create_byte_array_reader(page_iterator, column_desc);
     let field = Field::new("item", DataType::Utf8, true);
     let data_type = DataType::List(Arc::new(field));
     Box::new(ListArrayReader::<i32>::new(items, data_type, 2, 1, true))
@@ -845,6 +854,8 @@ fn add_benches(c: &mut Criterion) {
     let mandatory_int64_column_desc = schema.column(4);
     let optional_int64_column_desc = schema.column(5);
     let string_list_desc = schema.column(14);
+    let mandatory_binary_column_desc = schema.column(15);
+    let optional_binary_column_desc = schema.column(16);
 
     // primitive / int32 benchmarks
     // =============================
@@ -879,10 +890,10 @@ fn add_benches(c: &mut Criterion) {
 
     // string, plain encoded, no NULLs
     let plain_string_no_null_data =
-        build_plain_encoded_string_page_iterator(mandatory_string_column_desc.clone(), 0.0);
+        build_plain_encoded_byte_array_page_iterator(mandatory_string_column_desc.clone(), 0.0);
     group.bench_function("plain encoded, mandatory, no NULLs", |b| {
         b.iter(|| {
-            let array_reader = create_string_byte_array_reader(
+            let array_reader = create_byte_array_reader(
                 plain_string_no_null_data.clone(),
                 mandatory_string_column_desc.clone(),
             );
@@ -892,10 +903,10 @@ fn add_benches(c: &mut Criterion) {
     });
 
     let plain_string_no_null_data =
-        build_plain_encoded_string_page_iterator(optional_string_column_desc.clone(), 0.0);
+        build_plain_encoded_byte_array_page_iterator(optional_string_column_desc.clone(), 0.0);
     group.bench_function("plain encoded, optional, no NULLs", |b| {
         b.iter(|| {
-            let array_reader = create_string_byte_array_reader(
+            let array_reader = create_byte_array_reader(
                 plain_string_no_null_data.clone(),
                 optional_string_column_desc.clone(),
             );
@@ -906,10 +917,10 @@ fn add_benches(c: &mut Criterion) {
 
     // string, plain encoded, half NULLs
     let plain_string_half_null_data =
-        build_plain_encoded_string_page_iterator(optional_string_column_desc.clone(), 0.5);
+        build_plain_encoded_byte_array_page_iterator(optional_string_column_desc.clone(), 0.5);
     group.bench_function("plain encoded, optional, half NULLs", |b| {
         b.iter(|| {
-            let array_reader = create_string_byte_array_reader(
+            let array_reader = create_byte_array_reader(
                 plain_string_half_null_data.clone(),
                 optional_string_column_desc.clone(),
             );
@@ -923,7 +934,7 @@ fn add_benches(c: &mut Criterion) {
         build_dictionary_encoded_string_page_iterator(mandatory_string_column_desc.clone(), 0.0);
     group.bench_function("dictionary encoded, mandatory, no NULLs", |b| {
         b.iter(|| {
-            let array_reader = create_string_byte_array_reader(
+            let array_reader = create_byte_array_reader(
                 dictionary_string_no_null_data.clone(),
                 mandatory_string_column_desc.clone(),
             );
@@ -936,7 +947,7 @@ fn add_benches(c: &mut Criterion) {
         build_dictionary_encoded_string_page_iterator(optional_string_column_desc.clone(), 0.0);
     group.bench_function("dictionary encoded, optional, no NULLs", |b| {
         b.iter(|| {
-            let array_reader = create_string_byte_array_reader(
+            let array_reader = create_byte_array_reader(
                 dictionary_string_no_null_data.clone(),
                 optional_string_column_desc.clone(),
             );
@@ -950,9 +961,187 @@ fn add_benches(c: &mut Criterion) {
         build_dictionary_encoded_string_page_iterator(optional_string_column_desc.clone(), 0.5);
     group.bench_function("dictionary encoded, optional, half NULLs", |b| {
         b.iter(|| {
-            let array_reader = create_string_byte_array_reader(
+            let array_reader = create_byte_array_reader(
                 dictionary_string_half_null_data.clone(),
                 optional_string_column_desc.clone(),
+            );
+            count = bench_array_reader(array_reader);
+        });
+        assert_eq!(count, EXPECTED_VALUE_COUNT);
+    });
+
+    group.finish();
+
+    // binary benchmarks
+    //==============================
+
+    let mut group = c.benchmark_group("arrow_array_reader/BinaryArray");
+
+    // byte array, plain encoded, no NULLs
+    let plain_byte_array_no_null_data =
+        build_plain_encoded_byte_array_page_iterator(mandatory_binary_column_desc.clone(), 0.0);
+    group.bench_function("plain encoded, mandatory, no NULLs", |b| {
+        b.iter(|| {
+            let array_reader = create_byte_array_reader(
+                plain_byte_array_no_null_data.clone(),
+                mandatory_binary_column_desc.clone(),
+            );
+            count = bench_array_reader(array_reader);
+        });
+        assert_eq!(count, EXPECTED_VALUE_COUNT);
+    });
+
+    let plain_byte_array_no_null_data =
+        build_plain_encoded_byte_array_page_iterator(optional_binary_column_desc.clone(), 0.0);
+    group.bench_function("plain encoded, optional, no NULLs", |b| {
+        b.iter(|| {
+            let array_reader = create_byte_array_reader(
+                plain_byte_array_no_null_data.clone(),
+                optional_binary_column_desc.clone(),
+            );
+            count = bench_array_reader(array_reader);
+        });
+        assert_eq!(count, EXPECTED_VALUE_COUNT);
+    });
+
+    // byte array, plain encoded, half NULLs
+    let plain_byte_array_half_null_data =
+        build_plain_encoded_byte_array_page_iterator(optional_binary_column_desc.clone(), 0.5);
+    group.bench_function("plain encoded, optional, half NULLs", |b| {
+        b.iter(|| {
+            let array_reader = create_byte_array_reader(
+                plain_byte_array_half_null_data.clone(),
+                optional_binary_column_desc.clone(),
+            );
+            count = bench_array_reader(array_reader);
+        });
+        assert_eq!(count, EXPECTED_VALUE_COUNT);
+    });
+
+    // byte array, dictionary encoded, no NULLs
+    let dictionary_byte_array_no_null_data =
+        build_dictionary_encoded_string_page_iterator(mandatory_binary_column_desc.clone(), 0.0);
+    group.bench_function("dictionary encoded, mandatory, no NULLs", |b| {
+        b.iter(|| {
+            let array_reader = create_byte_array_reader(
+                dictionary_byte_array_no_null_data.clone(),
+                mandatory_binary_column_desc.clone(),
+            );
+            count = bench_array_reader(array_reader);
+        });
+        assert_eq!(count, EXPECTED_VALUE_COUNT);
+    });
+
+    let dictionary_byte_array_no_null_data =
+        build_dictionary_encoded_string_page_iterator(optional_binary_column_desc.clone(), 0.0);
+    group.bench_function("dictionary encoded, optional, no NULLs", |b| {
+        b.iter(|| {
+            let array_reader = create_byte_array_reader(
+                dictionary_byte_array_no_null_data.clone(),
+                optional_binary_column_desc.clone(),
+            );
+            count = bench_array_reader(array_reader);
+        });
+        assert_eq!(count, EXPECTED_VALUE_COUNT);
+    });
+
+    // string, dictionary encoded, half NULLs
+    let dictionary_byte_array_half_null_data =
+        build_dictionary_encoded_string_page_iterator(optional_binary_column_desc.clone(), 0.5);
+    group.bench_function("dictionary encoded, optional, half NULLs", |b| {
+        b.iter(|| {
+            let array_reader = create_byte_array_reader(
+                dictionary_byte_array_half_null_data.clone(),
+                optional_binary_column_desc.clone(),
+            );
+            count = bench_array_reader(array_reader);
+        });
+        assert_eq!(count, EXPECTED_VALUE_COUNT);
+    });
+
+    group.finish();
+
+    // binary view benchmarks
+    //==============================
+
+    let mut group = c.benchmark_group("arrow_array_reader/BinaryViewArray");
+
+    // binary view, plain encoded, no NULLs
+    let plain_byte_array_no_null_data =
+        build_plain_encoded_byte_array_page_iterator(mandatory_binary_column_desc.clone(), 0.0);
+    group.bench_function("plain encoded, mandatory, no NULLs", |b| {
+        b.iter(|| {
+            let array_reader = create_byte_view_array_reader(
+                plain_byte_array_no_null_data.clone(),
+                mandatory_binary_column_desc.clone(),
+            );
+            count = bench_array_reader(array_reader);
+        });
+        assert_eq!(count, EXPECTED_VALUE_COUNT);
+    });
+
+    let plain_byte_array_no_null_data =
+        build_plain_encoded_byte_array_page_iterator(optional_binary_column_desc.clone(), 0.0);
+    group.bench_function("plain encoded, optional, no NULLs", |b| {
+        b.iter(|| {
+            let array_reader = create_byte_view_array_reader(
+                plain_byte_array_no_null_data.clone(),
+                optional_binary_column_desc.clone(),
+            );
+            count = bench_array_reader(array_reader);
+        });
+        assert_eq!(count, EXPECTED_VALUE_COUNT);
+    });
+
+    // binary view, plain encoded, half NULLs
+    let plain_byte_array_half_null_data =
+        build_plain_encoded_byte_array_page_iterator(optional_binary_column_desc.clone(), 0.5);
+    group.bench_function("plain encoded, optional, half NULLs", |b| {
+        b.iter(|| {
+            let array_reader = create_byte_view_array_reader(
+                plain_byte_array_half_null_data.clone(),
+                optional_binary_column_desc.clone(),
+            );
+            count = bench_array_reader(array_reader);
+        });
+        assert_eq!(count, EXPECTED_VALUE_COUNT);
+    });
+
+    // binary view, dictionary encoded, no NULLs
+    let dictionary_byte_array_no_null_data =
+        build_dictionary_encoded_string_page_iterator(mandatory_binary_column_desc.clone(), 0.0);
+    group.bench_function("dictionary encoded, mandatory, no NULLs", |b| {
+        b.iter(|| {
+            let array_reader = create_byte_view_array_reader(
+                dictionary_byte_array_no_null_data.clone(),
+                mandatory_binary_column_desc.clone(),
+            );
+            count = bench_array_reader(array_reader);
+        });
+        assert_eq!(count, EXPECTED_VALUE_COUNT);
+    });
+
+    let dictionary_byte_array_no_null_data =
+        build_dictionary_encoded_string_page_iterator(optional_binary_column_desc.clone(), 0.0);
+    group.bench_function("dictionary encoded, optional, no NULLs", |b| {
+        b.iter(|| {
+            let array_reader = create_byte_view_array_reader(
+                dictionary_byte_array_no_null_data.clone(),
+                optional_binary_column_desc.clone(),
+            );
+            count = bench_array_reader(array_reader);
+        });
+        assert_eq!(count, EXPECTED_VALUE_COUNT);
+    });
+
+    // binary view, dictionary encoded, half NULLs
+    let dictionary_byte_array_half_null_data =
+        build_dictionary_encoded_string_page_iterator(optional_binary_column_desc.clone(), 0.5);
+    group.bench_function("dictionary encoded, optional, half NULLs", |b| {
+        b.iter(|| {
+            let array_reader = create_byte_view_array_reader(
+                dictionary_byte_array_half_null_data.clone(),
+                optional_binary_column_desc.clone(),
             );
             count = bench_array_reader(array_reader);
         });
@@ -969,7 +1158,7 @@ fn add_benches(c: &mut Criterion) {
     group.bench_function("dictionary encoded, mandatory, no NULLs", |b| {
         b.iter(|| {
             let array_reader = create_string_byte_array_dictionary_reader(
-                dictionary_string_no_null_data.clone(),
+                dictionary_byte_array_no_null_data.clone(),
                 mandatory_string_column_desc.clone(),
             );
             count = bench_array_reader(array_reader);
@@ -980,7 +1169,7 @@ fn add_benches(c: &mut Criterion) {
     group.bench_function("dictionary encoded, optional, no NULLs", |b| {
         b.iter(|| {
             let array_reader = create_string_byte_array_dictionary_reader(
-                dictionary_string_no_null_data.clone(),
+                dictionary_byte_array_no_null_data.clone(),
                 optional_string_column_desc.clone(),
             );
             count = bench_array_reader(array_reader);
@@ -991,7 +1180,7 @@ fn add_benches(c: &mut Criterion) {
     group.bench_function("dictionary encoded, optional, half NULLs", |b| {
         b.iter(|| {
             let array_reader = create_string_byte_array_dictionary_reader(
-                dictionary_string_half_null_data.clone(),
+                dictionary_byte_array_half_null_data.clone(),
                 optional_string_column_desc.clone(),
             );
             count = bench_array_reader(array_reader);
@@ -1008,7 +1197,7 @@ fn add_benches(c: &mut Criterion) {
 
     // string, plain encoded, no NULLs
     let plain_string_no_null_data =
-        build_plain_encoded_string_page_iterator(mandatory_string_column_desc.clone(), 0.0);
+        build_plain_encoded_byte_array_page_iterator(mandatory_string_column_desc.clone(), 0.0);
     group.bench_function("plain encoded, mandatory, no NULLs", |b| {
         b.iter(|| {
             let array_reader = create_string_view_byte_array_reader(
@@ -1021,7 +1210,7 @@ fn add_benches(c: &mut Criterion) {
     });
 
     let plain_string_no_null_data =
-        build_plain_encoded_string_page_iterator(optional_string_column_desc.clone(), 0.0);
+        build_plain_encoded_byte_array_page_iterator(optional_string_column_desc.clone(), 0.0);
     group.bench_function("plain encoded, optional, no NULLs", |b| {
         b.iter(|| {
             let array_reader = create_string_view_byte_array_reader(
@@ -1035,7 +1224,7 @@ fn add_benches(c: &mut Criterion) {
 
     // string, plain encoded, half NULLs
     let plain_string_half_null_data =
-        build_plain_encoded_string_page_iterator(optional_string_column_desc.clone(), 0.5);
+        build_plain_encoded_byte_array_page_iterator(optional_string_column_desc.clone(), 0.5);
     group.bench_function("plain encoded, optional, half NULLs", |b| {
         b.iter(|| {
             let array_reader = create_string_view_byte_array_reader(
