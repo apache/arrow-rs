@@ -273,6 +273,7 @@ mod test {
 
     use credential::DEFAULT_GCS_BASE_URL;
 
+    use crate::integration::*;
     use crate::tests::*;
 
     use super::*;
@@ -281,7 +282,7 @@ mod test {
 
     #[tokio::test]
     async fn gcs_test() {
-        crate::test_util::maybe_skip_integration!();
+        maybe_skip_integration!();
         let integration = GoogleCloudStorageBuilder::from_env().build().unwrap();
 
         put_get_delete_list(&integration).await;
@@ -307,7 +308,7 @@ mod test {
     #[tokio::test]
     #[ignore]
     async fn gcs_test_sign() {
-        crate::test_util::maybe_skip_integration!();
+        maybe_skip_integration!();
         let integration = GoogleCloudStorageBuilder::from_env().build().unwrap();
 
         let client = reqwest::Client::new();
@@ -336,7 +337,7 @@ mod test {
 
     #[tokio::test]
     async fn gcs_test_get_nonexistent_location() {
-        crate::test_util::maybe_skip_integration!();
+        maybe_skip_integration!();
         let integration = GoogleCloudStorageBuilder::from_env().build().unwrap();
 
         let location = Path::from_iter([NON_EXISTENT_NAME]);
@@ -351,7 +352,7 @@ mod test {
 
     #[tokio::test]
     async fn gcs_test_get_nonexistent_bucket() {
-        crate::test_util::maybe_skip_integration!();
+        maybe_skip_integration!();
         let config = GoogleCloudStorageBuilder::from_env();
         let integration = config.with_bucket_name(NON_EXISTENT_NAME).build().unwrap();
 
@@ -369,7 +370,7 @@ mod test {
 
     #[tokio::test]
     async fn gcs_test_delete_nonexistent_location() {
-        crate::test_util::maybe_skip_integration!();
+        maybe_skip_integration!();
         let integration = GoogleCloudStorageBuilder::from_env().build().unwrap();
 
         let location = Path::from_iter([NON_EXISTENT_NAME]);
@@ -383,7 +384,7 @@ mod test {
 
     #[tokio::test]
     async fn gcs_test_delete_nonexistent_bucket() {
-        crate::test_util::maybe_skip_integration!();
+        maybe_skip_integration!();
         let config = GoogleCloudStorageBuilder::from_env();
         let integration = config.with_bucket_name(NON_EXISTENT_NAME).build().unwrap();
 
@@ -398,7 +399,7 @@ mod test {
 
     #[tokio::test]
     async fn gcs_test_put_nonexistent_bucket() {
-        crate::test_util::maybe_skip_integration!();
+        maybe_skip_integration!();
         let config = GoogleCloudStorageBuilder::from_env();
         let integration = config.with_bucket_name(NON_EXISTENT_NAME).build().unwrap();
 

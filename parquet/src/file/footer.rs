@@ -27,14 +27,30 @@ use crate::file::{metadata::*, reader::ChunkReader, FOOTER_SIZE, PARQUET_MAGIC};
 
 use crate::schema::types::{self, SchemaDescriptor};
 
-/// Layout of Parquet file
+/// Reads the [ParquetMetaData] from the footer of the parquet file.
+///
+/// # Layout of Parquet file
+/// ```text
 /// +---------------------------+-----+---+
 /// |      Rest of file         |  B  | A |
 /// +---------------------------+-----+---+
-/// where A: parquet footer, B: parquet metadata.
+/// ```
+/// where
+/// * `A`: parquet footer which stores the length of the metadata.
+/// * `B`: parquet metadata.
 ///
-/// The reader first reads DEFAULT_FOOTER_SIZE bytes from the end of the file.
-/// If it is not enough according to the length indicated in the footer, it reads more bytes.
+/// # I/O
+///
+/// This method first reads the last 8 bytes of the file via
+/// [`ChunkReader::get_read`] to get the the parquet footer which contains the
+/// metadata length.
+///
+/// It then issues a second `get_read` to read the encoded metadata
+/// metadata.
+///
+/// # See Also
+/// [`decode_metadata`] for decoding the metadata from the bytes.
+/// [`decode_footer`] for decoding the metadata length from the footer.
 pub fn parse_metadata<R: ChunkReader>(chunk_reader: &R) -> Result<ParquetMetaData> {
     // check file is large enough to hold footer
     let file_size = chunk_reader.len();
@@ -65,7 +81,13 @@ pub fn parse_metadata<R: ChunkReader>(chunk_reader: &R) -> Result<ParquetMetaDat
     decode_metadata(chunk_reader.get_bytes(start, metadata_len)?.as_ref())
 }
 
-/// Decodes [`ParquetMetaData`] from the provided bytes
+/// Decodes [`ParquetMetaData`] from the provided bytes.
+///
+/// Typically this is used to decode the metadata from the end of a parquet
+/// file. The format of `buf` is the Thift compact binary protocol, as specified
+/// by the [Parquet Spec].
+///
+/// [Parquet Spec]: https://github.com/apache/parquet-format#metadata
 pub fn decode_metadata(buf: &[u8]) -> Result<ParquetMetaData> {
     // TODO: row group filtering
     let mut prot = TCompactSliceInputProtocol::new(buf);
@@ -90,7 +112,17 @@ pub fn decode_metadata(buf: &[u8]) -> Result<ParquetMetaData> {
     Ok(ParquetMetaData::new(file_metadata, row_groups))
 }
 
-/// Decodes the footer returning the metadata length in bytes
+/// Decodes the Parquet footer returning the metadata length in bytes
+///
+/// A parquet footer is 8 bytes long and has the following layout:
+/// * 4 bytes for the metadata length
+/// * 4 bytes for the magic bytes 'PAR1'
+///
+/// ```text
+/// +-----+--------+
+/// | len | 'PAR1' |
+/// +-----+--------+
+/// ```
 pub fn decode_footer(slice: &[u8; FOOTER_SIZE]) -> Result<usize> {
     // check this is indeed a parquet file
     if slice[4..] != PARQUET_MAGIC {

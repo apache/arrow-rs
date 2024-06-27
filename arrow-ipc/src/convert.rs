@@ -176,15 +176,15 @@ pub fn try_schema_from_ipc_buffer(buffer: &[u8]) -> Result<Schema, ArrowError> {
     //   4 bytes - the byte length of the payload
     //   a flatbuffer Message whose header is the Schema
     if buffer.len() >= 4 {
-        // check continuation maker
-        let continuation_maker = &buffer[0..4];
-        let begin_offset: usize = if continuation_maker.eq(&CONTINUATION_MARKER) {
+        // check continuation marker
+        let continuation_marker = &buffer[0..4];
+        let begin_offset: usize = if continuation_marker.eq(&CONTINUATION_MARKER) {
             // 4 bytes: CONTINUATION_MARKER
             // 4 bytes: length
             // buffer
             4
         } else {
-            // backward compatibility for buffer without the continuation maker
+            // backward compatibility for buffer without the continuation marker
             // 4 bytes: length
             // buffer
             0
@@ -198,7 +198,7 @@ pub fn try_schema_from_ipc_buffer(buffer: &[u8]) -> Result<Schema, ArrowError> {
         Ok(fb_to_schema(ipc_schema))
     } else {
         Err(ArrowError::ParseError(
-            "The buffer length is less than 4 and missing the continuation maker or length of buffer".to_string()
+            "The buffer length is less than 4 and missing the continuation marker or length of buffer".to_string()
         ))
     }
 }

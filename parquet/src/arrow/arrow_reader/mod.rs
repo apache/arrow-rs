@@ -44,14 +44,14 @@ use crate::file::page_index::index_reader;
 pub use filter::{ArrowPredicate, ArrowPredicateFn, RowFilter};
 pub use selection::{RowSelection, RowSelector};
 
-/// A generic builder for constructing sync or async arrow parquet readers. This is not intended
-/// to be used directly, instead you should use the specialization for the type of reader
-/// you wish to use
+/// Builder for constructing parquet readers into arrow.
 ///
-/// * For a synchronous API - [`ParquetRecordBatchReaderBuilder`]
-/// * For an asynchronous API - [`ParquetRecordBatchStreamBuilder`]
+/// Most users should use one of the following specializations:
 ///
-/// [`ParquetRecordBatchStreamBuilder`]: crate::arrow::async_reader::ParquetRecordBatchStreamBuilder
+/// * synchronous API: [`ParquetRecordBatchReaderBuilder::try_new`]
+/// * `async` API: [`ParquetRecordBatchStreamBuilder::new`]
+///
+/// [`ParquetRecordBatchStreamBuilder::new`]: crate::arrow::async_reader::ParquetRecordBatchStreamBuilder::new
 pub struct ArrowReaderBuilder<T> {
     pub(crate) input: T,
 
@@ -117,6 +117,8 @@ impl<T> ArrowReaderBuilder<T> {
     }
 
     /// Only read data from the provided row group indexes
+    ///
+    /// This is also called row group filtering
     pub fn with_row_groups(self, row_groups: Vec<usize>) -> Self {
         Self {
             row_groups: Some(row_groups),
@@ -135,14 +137,60 @@ impl<T> ArrowReaderBuilder<T> {
     /// Provide a [`RowSelection`] to filter out rows, and avoid fetching their
     /// data into memory.
     ///
-    /// Row group filtering is applied prior to this, and therefore rows from skipped
-    /// row groups should not be included in the [`RowSelection`]
+    /// This feature is used to restrict which rows are decoded within row
+    /// groups, skipping ranges of rows that are not needed. Such selections
+    /// could be determined by evaluating predicates against the parquet page
+    /// [`Index`] or some other external information available to a query
+    /// engine.
     ///
-    /// An example use case of this would be applying a selection determined by
-    /// evaluating predicates against the [`Index`]
+    /// # Notes
     ///
-    /// It is recommended to enable reading the page index if using this functionality, to allow
-    /// more efficient skipping over data pages. See [`ArrowReaderOptions::with_page_index`]
+    /// Row group filtering (see [`Self::with_row_groups`]) is applied prior to
+    /// applying the row selection, and therefore rows from skipped row groups
+    /// should not be included in the [`RowSelection`] (see example below)
+    ///
+    /// It is recommended to enable writing the page index if using this
+    /// functionality, to allow more efficient skipping over data pages. See
+    /// [`ArrowReaderOptions::with_page_index`].
+    ///
+    /// # Example
+    ///
+    /// Given a parquet file with 4 row groups, and a row group filter of `[0,
+    /// 2, 3]`, in order to scan rows 50-100 in row group 2 and rows 200-300 in
+    /// row group 3:
+    ///
+    /// ```text
+    ///   Row Group 0, 1000 rows (selected)
+    ///   Row Group 1, 1000 rows (skipped)
+    ///   Row Group 2, 1000 rows (selected, but want to only scan rows 50-100)
+    ///   Row Group 3, 1000 rows (selected, but want to only scan rows 200-300)
+    /// ```
+    ///
+    /// You could pass the following [`RowSelection`]:
+    ///
+    /// ```text
+    ///  Select 1000    (scan all rows in row group 0)
+    ///  Skip 50        (skip the first 50 rows in row group 2)
+    ///  Select 50      (scan rows 50-100 in row group 2)
+    ///  Skip 900       (skip the remaining rows in row group 2)
+    ///  Skip 200       (skip the first 200 rows in row group 3)
+    ///  Select 100     (scan rows 200-300 in row group 3)
+    ///  Skip 700       (skip the remaining rows in row group 3)
+    /// ```
+    /// Note there is no entry for the (entirely) skipped row group 1.
+    ///
+    /// Note you can represent the same selection with fewer entries. Instead of
+    ///
+    /// ```text
+    ///  Skip 900       (skip the remaining rows in row group 2)
+    ///  Skip 200       (skip the first 200 rows in row group 3)
+    /// ```
+    ///
+    /// you could use
+    ///
+    /// ```text
+    /// Skip 1100      (skip the remaining 900 rows in row group 2 and the first 200 rows in row group 3)
+    /// ```
     ///
     /// [`Index`]: crate::file::page_index::index::Index
     pub fn with_row_selection(self, selection: RowSelection) -> Self {
@@ -200,7 +248,9 @@ impl<T> ArrowReaderBuilder<T> {
 /// is then read from the file, including projection and filter pushdown
 #[derive(Debug, Clone, Default)]
 pub struct ArrowReaderOptions {
+    /// Should the reader strip any user defined metadata from the Arrow schema
     skip_arrow_metadata: bool,
+    /// If true, attempt to read `OffsetIndex` and `ColumnIndex`
     pub(crate) page_index: bool,
 }
 
@@ -210,12 +260,12 @@ impl ArrowReaderOptions {
         Self::default()
     }
 
+    /// Skip decoding the embedded arrow metadata (defaults to `false`)
+    ///
     /// Parquet files generated by some writers may contain embedded arrow
-    /// schema and metadata. This may not be correct or compatible with your system.
-    ///
-    /// For example:[ARROW-16184](https://issues.apache.org/jira/browse/ARROW-16184)
-    ///
-    /// Set `skip_arrow_metadata` to true, to skip decoding this
+    /// schema and metadata.
+    /// This may not be correct or compatible with your system,
+    /// for example: [ARROW-16184](https://issues.apache.org/jira/browse/ARROW-16184)
     pub fn with_skip_arrow_metadata(self, skip_arrow_metadata: bool) -> Self {
         Self {
             skip_arrow_metadata,
@@ -223,32 +273,58 @@ impl ArrowReaderOptions {
         }
     }
 
-    /// Set this true to enable decoding of the [PageIndex] if present. This can be used
-    /// to push down predicates to the parquet scan, potentially eliminating unnecessary IO
+    /// Enable reading [`PageIndex`], if present (defaults to `false`)
     ///
-    /// [PageIndex]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
+    /// The `PageIndex` can be used to push down predicates to the parquet scan,
+    /// potentially eliminating unnecessary IO, by some query engines.
+    ///
+    /// If this is enabled, [`ParquetMetaData::column_index`] and
+    /// [`ParquetMetaData::offset_index`] will be populated if the corresponding
+    /// information is present in the file.
+    ///
+    /// [`PageIndex`]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
+    /// [`ParquetMetaData::column_index`]: crate::file::metadata::ParquetMetaData::column_index
+    /// [`ParquetMetaData::offset_index`]: crate::file::metadata::ParquetMetaData::offset_index
     pub fn with_page_index(self, page_index: bool) -> Self {
         Self { page_index, ..self }
     }
 }
 
-/// The cheaply clone-able metadata necessary to construct a [`ArrowReaderBuilder`]
+/// The metadata necessary to construct a [`ArrowReaderBuilder`]
 ///
-/// This allows loading the metadata for a file once and then using this to construct
-/// multiple separate readers, for example, to distribute readers across multiple threads
+/// Note this structure is cheaply clone-able as it consists of several arcs.
+///
+/// This structure allows
+///
+/// 1. Loading metadata for a file once and then using that same metadata to
+/// construct multiple separate readers, for example, to distribute readers
+/// across multiple threads
+///
+/// 2. Using a cached copy of the [`ParquetMetadata`] rather than reading it
+/// from the file each time a reader is constructed.
+///
+/// [`ParquetMetadata`]: crate::file::metadata::ParquetMetaData
 #[derive(Debug, Clone)]
 pub struct ArrowReaderMetadata {
+    /// The Parquet Metadata, if known aprior
     pub(crate) metadata: Arc<ParquetMetaData>,
-
+    /// The Arrow Schema
     pub(crate) schema: SchemaRef,
 
     pub(crate) fields: Option<Arc<ParquetField>>,
 }
 
 impl ArrowReaderMetadata {
-    /// Loads [`ArrowReaderMetadata`] from the provided [`ChunkReader`]
+    /// Loads [`ArrowReaderMetadata`] from the provided [`ChunkReader`], if necessary
     ///
-    /// See [`ParquetRecordBatchReaderBuilder::new_with_metadata`] for how this can be used
+    /// See [`ParquetRecordBatchReaderBuilder::new_with_metadata`] for an
+    /// example of how this can be used
+    ///
+    /// # Notes
+    ///
+    /// If `options` has [`ArrowReaderOptions::with_page_index`] true, but
+    /// `Self::metadata` is missing the page index, this function will attempt
+    /// to load the page index by making an object store request.
     pub fn load<T: ChunkReader>(reader: &T, options: ArrowReaderOptions) -> Result<Self> {
         let mut metadata = footer::parse_metadata(reader)?;
         if options.page_index {
@@ -270,6 +346,12 @@ impl ArrowReaderMetadata {
         Self::try_new(Arc::new(metadata), options)
     }
 
+    /// Create a new [`ArrowReaderMetadata`]
+    ///
+    /// # Notes
+    ///
+    /// This function does not attempt to load the PageIndex if not present in the metadata.
+    /// See [`Self::load`] for more details.
     pub fn try_new(metadata: Arc<ParquetMetaData>, options: ArrowReaderOptions) -> Result<Self> {
         let kv_metadata = match options.skip_arrow_metadata {
             true => None,
@@ -357,9 +439,17 @@ impl<T: ChunkReader + 'static> ParquetRecordBatchReaderBuilder<T> {
 
     /// Create a [`ParquetRecordBatchReaderBuilder`] from the provided [`ArrowReaderMetadata`]
     ///
-    /// This allows loading metadata once and using it to create multiple builders with
-    /// potentially different settings
+    /// This interface allows:
     ///
+    /// 1. Loading metadata once and using it to create multiple builders with
+    /// potentially different settings or run on different threads
+    ///
+    /// 2. Using a cached copy of the metadata rather than re-reading it from the
+    /// file each time a reader is constructed.
+    ///
+    /// See the docs on [`ArrowReaderMetadata`] for more details
+    ///
+    /// # Example
     /// ```
     /// # use std::fs::metadata;
     /// # use std::sync::Arc;
@@ -750,7 +840,7 @@ mod tests {
         Decimal128Type, Decimal256Type, DecimalType, Float16Type, Float32Type, Float64Type,
     };
     use arrow_array::*;
-    use arrow_buffer::{i256, ArrowNativeType, Buffer};
+    use arrow_buffer::{i256, ArrowNativeType, Buffer, IntervalDayTime};
     use arrow_data::ArrayDataBuilder;
     use arrow_schema::{ArrowError, DataType as ArrowDataType, Field, Fields, Schema};
     use arrow_select::concat::concat_batches;
@@ -1060,8 +1150,12 @@ mod tests {
                 Arc::new(
                     vals.iter()
                         .map(|x| {
-                            x.as_ref()
-                                .map(|b| i64::from_le_bytes(b.as_ref()[4..12].try_into().unwrap()))
+                            x.as_ref().map(|b| IntervalDayTime {
+                                days: i32::from_le_bytes(b.as_ref()[4..8].try_into().unwrap()),
+                                milliseconds: i32::from_le_bytes(
+                                    b.as_ref()[8..12].try_into().unwrap(),
+                                ),
+                            })
                         })
                         .collect::<IntervalDayTimeArray>(),
                 )
@@ -1434,6 +1528,46 @@ mod tests {
             }
         }
         assert_eq!(row_count, 300);
+    }
+
+    #[test]
+    fn test_read_incorrect_map_schema_file() {
+        let testdata = arrow::util::test_util::parquet_test_data();
+        // see https://github.com/apache/parquet-testing/pull/47
+        let path = format!("{testdata}/incorrect_map_schema.parquet");
+        let file = File::open(path).unwrap();
+        let mut record_reader = ParquetRecordBatchReader::try_new(file, 32).unwrap();
+
+        let batch = record_reader.next().unwrap().unwrap();
+        assert_eq!(batch.num_rows(), 1);
+
+        let expected_schema = Schema::new(Fields::from(vec![Field::new(
+            "my_map",
+            ArrowDataType::Map(
+                Arc::new(Field::new(
+                    "key_value",
+                    ArrowDataType::Struct(Fields::from(vec![
+                        Field::new("key", ArrowDataType::Utf8, false),
+                        Field::new("value", ArrowDataType::Utf8, true),
+                    ])),
+                    false,
+                )),
+                false,
+            ),
+            true,
+        )]));
+        assert_eq!(batch.schema().as_ref(), &expected_schema);
+
+        assert_eq!(batch.num_rows(), 1);
+        assert_eq!(batch.column(0).null_count(), 0);
+        assert_eq!(
+            batch.column(0).as_map().keys().as_ref(),
+            &StringArray::from(vec!["parent", "name"])
+        );
+        assert_eq!(
+            batch.column(0).as_map().values().as_ref(),
+            &StringArray::from(vec!["another", "report"])
+        );
     }
 
     /// Parameters for single_column_reader_test

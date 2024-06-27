@@ -17,13 +17,13 @@
 
 //! Defines sort kernel for `ArrayRef`
 
-use crate::ord::{build_compare, DynComparator};
+use crate::ord::{make_comparator, DynComparator};
 use arrow_array::builder::BufferBuilder;
 use arrow_array::cast::*;
 use arrow_array::types::*;
 use arrow_array::*;
+use arrow_buffer::ArrowNativeType;
 use arrow_buffer::BooleanBufferBuilder;
-use arrow_buffer::{ArrowNativeType, NullBuffer};
 use arrow_data::ArrayDataBuilder;
 use arrow_schema::{ArrowError, DataType};
 use arrow_select::take::take;
@@ -206,8 +206,10 @@ pub fn sort_to_indices(
         DataType::Boolean => sort_boolean(array.as_boolean(), v, n, options, limit),
         DataType::Utf8 => sort_bytes(array.as_string::<i32>(), v, n, options, limit),
         DataType::LargeUtf8 => sort_bytes(array.as_string::<i64>(), v, n, options, limit),
+        DataType::Utf8View => sort_byte_view(array.as_string_view(), v, n, options, limit),
         DataType::Binary => sort_bytes(array.as_binary::<i32>(), v, n, options, limit),
         DataType::LargeBinary => sort_bytes(array.as_binary::<i64>(), v, n, options, limit),
+        DataType::BinaryView => sort_byte_view(array.as_binary_view(), v, n, options, limit),
         DataType::FixedSizeBinary(_) => sort_fixed_size_binary(array.as_fixed_size_binary(), v, n, options, limit),
         DataType::List(_) => sort_list(array.as_list::<i32>(), v, n, options, limit)?,
         DataType::LargeList(_) => sort_list(array.as_list::<i64>(), v, n, options, limit)?,
@@ -274,6 +276,20 @@ fn sort_bytes<T: ByteArrayType>(
         .map(|index| (index, values.value(index as usize).as_ref()))
         .collect::<Vec<(u32, &[u8])>>();
 
+    sort_impl(options, &mut valids, &nulls, limit, Ord::cmp).into()
+}
+
+fn sort_byte_view<T: ByteViewType>(
+    values: &GenericByteViewArray<T>,
+    value_indices: Vec<u32>,
+    nulls: Vec<u32>,
+    options: SortOptions,
+    limit: Option<usize>,
+) -> UInt32Array {
+    let mut valids = value_indices
+        .into_iter()
+        .map(|index| (index, values.value(index as usize).as_ref()))
+        .collect::<Vec<(u32, &[u8])>>();
     sort_impl(options, &mut valids, &nulls, limit, Ord::cmp).into()
 }
 
@@ -704,60 +720,21 @@ where
     }
 }
 
-type LexicographicalCompareItem = (
-    Option<NullBuffer>, // nulls
-    DynComparator,      // comparator
-    SortOptions,        // sort_option
-);
-
 /// A lexicographical comparator that wraps given array data (columns) and can lexicographically compare data
 /// at given two indices. The lifetime is the same at the data wrapped.
 pub struct LexicographicalComparator {
-    compare_items: Vec<LexicographicalCompareItem>,
+    compare_items: Vec<DynComparator>,
 }
 
 impl LexicographicalComparator {
     /// lexicographically compare values at the wrapped columns with given indices.
     pub fn compare(&self, a_idx: usize, b_idx: usize) -> Ordering {
-        for (nulls, comparator, sort_option) in &self.compare_items {
-            let (lhs_valid, rhs_valid) = match nulls {
-                Some(n) => (n.is_valid(a_idx), n.is_valid(b_idx)),
-                None => (true, true),
-            };
-
-            match (lhs_valid, rhs_valid) {
-                (true, true) => {
-                    match (comparator)(a_idx, b_idx) {
-                        // equal, move on to next column
-                        Ordering::Equal => continue,
-                        order => {
-                            if sort_option.descending {
-                                return order.reverse();
-                            } else {
-                                return order;
-                            }
-                        }
-                    }
-                }
-                (false, true) => {
-                    return if sort_option.nulls_first {
-                        Ordering::Less
-                    } else {
-                        Ordering::Greater
-                    };
-                }
-                (true, false) => {
-                    return if sort_option.nulls_first {
-                        Ordering::Greater
-                    } else {
-                        Ordering::Less
-                    };
-                }
-                // equal, move on to next column
-                (false, false) => continue,
+        for comparator in &self.compare_items {
+            match comparator(a_idx, b_idx) {
+                Ordering::Equal => continue,
+                r => return r,
             }
         }
-
         Ordering::Equal
     }
 
@@ -766,60 +743,15 @@ impl LexicographicalComparator {
     pub fn try_new(columns: &[SortColumn]) -> Result<LexicographicalComparator, ArrowError> {
         let compare_items = columns
             .iter()
-            .map(Self::build_compare_item)
+            .map(|c| {
+                make_comparator(
+                    c.values.as_ref(),
+                    c.values.as_ref(),
+                    c.options.unwrap_or_default(),
+                )
+            })
             .collect::<Result<Vec<_>, ArrowError>>()?;
         Ok(LexicographicalComparator { compare_items })
-    }
-
-    fn build_compare_item(column: &SortColumn) -> Result<LexicographicalCompareItem, ArrowError> {
-        let values = column.values.as_ref();
-        let options = column.options.unwrap_or_default();
-        let comparator = match values.data_type() {
-            DataType::List(_) => Self::build_list_compare(values.as_list::<i32>(), options)?,
-            DataType::LargeList(_) => Self::build_list_compare(values.as_list::<i64>(), options)?,
-            DataType::FixedSizeList(_, _) => {
-                Self::build_fixed_size_list_compare(values.as_fixed_size_list(), options)?
-            }
-            _ => build_compare(values, values)?,
-        };
-        Ok((values.logical_nulls(), comparator, options))
-    }
-
-    fn build_list_compare<O: OffsetSizeTrait>(
-        array: &GenericListArray<O>,
-        options: SortOptions,
-    ) -> Result<DynComparator, ArrowError> {
-        let rank = child_rank(array.values().as_ref(), options)?;
-        let offsets = array.offsets().clone();
-        let cmp = Box::new(move |i: usize, j: usize| {
-            macro_rules! nth_value {
-                ($INDEX:expr) => {{
-                    let end = offsets[$INDEX + 1].as_usize();
-                    let start = offsets[$INDEX].as_usize();
-                    &rank[start..end]
-                }};
-            }
-            Ord::cmp(nth_value!(i), nth_value!(j))
-        });
-        Ok(cmp)
-    }
-
-    fn build_fixed_size_list_compare(
-        array: &FixedSizeListArray,
-        options: SortOptions,
-    ) -> Result<DynComparator, ArrowError> {
-        let rank = child_rank(array.values().as_ref(), options)?;
-        let size = array.value_length() as usize;
-        let cmp = Box::new(move |i: usize, j: usize| {
-            macro_rules! nth_value {
-                ($INDEX:expr) => {{
-                    let start = $INDEX * size;
-                    &rank[start..start + size]
-                }};
-            }
-            Ord::cmp(nth_value!(i), nth_value!(j))
-        });
-        Ok(cmp)
     }
 }
 
@@ -829,7 +761,7 @@ mod tests {
     use arrow_array::builder::{
         FixedSizeListBuilder, Int64Builder, ListBuilder, PrimitiveRunBuilder,
     };
-    use arrow_buffer::i256;
+    use arrow_buffer::{i256, NullBuffer};
     use half::f16;
     use rand::rngs::StdRng;
     use rand::{Rng, RngCore, SeedableRng};
@@ -974,13 +906,21 @@ mod tests {
         };
         assert_eq!(&output, &expected);
 
-        let output = LargeStringArray::from(data);
-        let expected = Arc::new(LargeStringArray::from(expected_data)) as ArrayRef;
+        let output = LargeStringArray::from(data.clone());
+        let expected = Arc::new(LargeStringArray::from(expected_data.clone())) as ArrayRef;
         let output = match limit {
             Some(_) => sort_limit(&(Arc::new(output) as ArrayRef), options, limit).unwrap(),
             _ => sort(&(Arc::new(output) as ArrayRef), options).unwrap(),
         };
-        assert_eq!(&output, &expected)
+        assert_eq!(&output, &expected);
+
+        let output = StringViewArray::from(data);
+        let expected = Arc::new(StringViewArray::from(expected_data)) as ArrayRef;
+        let output = match limit {
+            Some(_) => sort_limit(&(Arc::new(output) as ArrayRef), options, limit).unwrap(),
+            _ => sort(&(Arc::new(output) as ArrayRef), options).unwrap(),
+        };
+        assert_eq!(&output, &expected);
     }
 
     fn test_sort_string_dict_arrays<T: ArrowDictionaryKeyType>(
@@ -2507,8 +2447,10 @@ mod tests {
                 None,
                 Some("bad"),
                 Some("sad"),
+                Some("long string longer than 12 bytes"),
                 None,
                 Some("glad"),
+                Some("lang string longer than 12 bytes"),
                 Some("-ad"),
             ],
             None,
@@ -2519,6 +2461,8 @@ mod tests {
                 Some("-ad"),
                 Some("bad"),
                 Some("glad"),
+                Some("lang string longer than 12 bytes"),
+                Some("long string longer than 12 bytes"),
                 Some("sad"),
             ],
         );
@@ -2528,8 +2472,10 @@ mod tests {
                 None,
                 Some("bad"),
                 Some("sad"),
+                Some("long string longer than 12 bytes"),
                 None,
                 Some("glad"),
+                Some("lang string longer than 12 bytes"),
                 Some("-ad"),
             ],
             Some(SortOptions {
@@ -2539,6 +2485,8 @@ mod tests {
             None,
             vec![
                 Some("sad"),
+                Some("long string longer than 12 bytes"),
+                Some("lang string longer than 12 bytes"),
                 Some("glad"),
                 Some("bad"),
                 Some("-ad"),
@@ -2551,9 +2499,11 @@ mod tests {
             vec![
                 None,
                 Some("bad"),
+                Some("long string longer than 12 bytes"),
                 Some("sad"),
                 None,
                 Some("glad"),
+                Some("lang string longer than 12 bytes"),
                 Some("-ad"),
             ],
             Some(SortOptions {
@@ -2567,6 +2517,8 @@ mod tests {
                 Some("-ad"),
                 Some("bad"),
                 Some("glad"),
+                Some("lang string longer than 12 bytes"),
+                Some("long string longer than 12 bytes"),
                 Some("sad"),
             ],
         );
@@ -2575,9 +2527,11 @@ mod tests {
             vec![
                 None,
                 Some("bad"),
+                Some("long string longer than 12 bytes"),
                 Some("sad"),
                 None,
                 Some("glad"),
+                Some("lang string longer than 12 bytes"),
                 Some("-ad"),
             ],
             Some(SortOptions {
@@ -2589,6 +2543,8 @@ mod tests {
                 None,
                 None,
                 Some("sad"),
+                Some("long string longer than 12 bytes"),
+                Some("lang string longer than 12 bytes"),
                 Some("glad"),
                 Some("bad"),
                 Some("-ad"),
@@ -2599,9 +2555,11 @@ mod tests {
             vec![
                 None,
                 Some("bad"),
+                Some("long string longer than 12 bytes"),
                 Some("sad"),
                 None,
                 Some("glad"),
+                Some("lang string longer than 12 bytes"),
                 Some("-ad"),
             ],
             Some(SortOptions {
@@ -2614,17 +2572,27 @@ mod tests {
 
         // valid values less than limit with extra nulls
         test_sort_string_arrays(
-            vec![Some("def"), None, None, Some("abc")],
+            vec![
+                Some("def long string longer than 12"),
+                None,
+                None,
+                Some("abc"),
+            ],
             Some(SortOptions {
                 descending: false,
                 nulls_first: false,
             }),
             Some(3),
-            vec![Some("abc"), Some("def"), None],
+            vec![Some("abc"), Some("def long string longer than 12"), None],
         );
 
         test_sort_string_arrays(
-            vec![Some("def"), None, None, Some("abc")],
+            vec![
+                Some("def long string longer than 12"),
+                None,
+                None,
+                Some("abc"),
+            ],
             Some(SortOptions {
                 descending: false,
                 nulls_first: true,
@@ -2635,7 +2603,7 @@ mod tests {
 
         // more nulls than limit
         test_sort_string_arrays(
-            vec![Some("def"), None, None, None],
+            vec![Some("def long string longer than 12"), None, None, None],
             Some(SortOptions {
                 descending: false,
                 nulls_first: true,
@@ -2645,13 +2613,13 @@ mod tests {
         );
 
         test_sort_string_arrays(
-            vec![Some("def"), None, None, None],
+            vec![Some("def long string longer than 12"), None, None, None],
             Some(SortOptions {
                 descending: false,
                 nulls_first: false,
             }),
             Some(2),
-            vec![Some("def"), None],
+            vec![Some("def long string longer than 12"), None],
         );
     }
 

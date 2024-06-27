@@ -57,6 +57,7 @@ jobs:
     env:
       ARROW_USE_CCACHE: OFF
       ARROW_CPP_EXE_PATH: /build/cpp/debug
+      ARROW_NANOARROW_PATH: /build/nanoarrow
       ARROW_RUST_EXE_PATH: /build/rust/debug
       BUILD_DOCS_CPP: OFF
       ARROW_INTEGRATION_CPP: ON
@@ -64,8 +65,9 @@ jobs:
       ARROW_INTEGRATION_GO: ON
       ARROW_INTEGRATION_JAVA: ON
       ARROW_INTEGRATION_JS: ON
+      ARCHERY_INTEGRATION_WITH_NANOARROW: "1"
       # https://github.com/apache/arrow/pull/38403/files#r1371281630
-      ARCHERY_INTEGRATION_WITH_RUST: ON
+      ARCHERY_INTEGRATION_WITH_RUST: "1"
       # These are necessary because the github runner overrides $HOME
       # https://github.com/actions/runner/issues/863
       RUSTUP_HOME: /root/.rustup
@@ -95,11 +97,16 @@ jobs:
         with:
           path: rust
           fetch-depth: 0
-      # Workaround https://github.com/rust-lang/jobserver-rs/issues/87
-      # Can be removed once https://github.com/rust-lang/jobserver-rs/pull/88 is released
-      - name: Downgrade jobserver
+      - name: Checkout Arrow nanoarrow
+        uses: actions/checkout@v4
+        with:
+          repository: apache/arrow-nanoarrow
+          path: nanoarrow
+          fetch-depth: 0
+      # Workaround https://github.com/rust-lang/rust/issues/125067
+      - name: Downgrade rust
         working-directory: rust
-        run: cargo update -p cc --precise 1.0.94 && cargo update -p jobserver --precise 0.1.28
+        run: rustup override set 1.77
       - name: Build
         run: conda run --no-capture-output ci/scripts/integration_arrow_build.sh $PWD /build
       - name: Run

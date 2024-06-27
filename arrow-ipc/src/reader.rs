@@ -31,7 +31,7 @@ use std::io::{BufReader, Read, Seek, SeekFrom};
 use std::sync::Arc;
 
 use arrow_array::*;
-use arrow_buffer::{ArrowNativeType, Buffer, MutableBuffer};
+use arrow_buffer::{ArrowNativeType, BooleanBuffer, Buffer, MutableBuffer, ScalarBuffer};
 use arrow_data::ArrayData;
 use arrow_schema::*;
 
@@ -152,7 +152,15 @@ fn create_array(
                 struct_arrays.push((struct_field.clone(), child));
             }
             let null_count = struct_node.null_count() as usize;
-            let struct_array = if null_count > 0 {
+            let struct_array = if struct_arrays.is_empty() {
+                // `StructArray::from` can't infer the correct row count
+                // if we have zero fields
+                let len = struct_node.length() as usize;
+                StructArray::new_empty_fields(
+                    len,
+                    (null_count > 0).then(|| BooleanBuffer::new(null_buffer, 0, len).into()),
+                )
+            } else if null_count > 0 {
                 // create struct array from fields, arrays and null data
                 StructArray::from((struct_arrays, null_buffer))
             } else {
@@ -214,26 +222,25 @@ fn create_array(
                 reader.next_buffer()?;
             }
 
-            let type_ids: Buffer = reader.next_buffer()?[..len].into();
+            let type_ids: ScalarBuffer<i8> = reader.next_buffer()?.slice_with_length(0, len).into();
 
             let value_offsets = match mode {
                 UnionMode::Dense => {
-                    let buffer = reader.next_buffer()?;
-                    Some(buffer[..len * 4].into())
+                    let offsets: ScalarBuffer<i32> =
+                        reader.next_buffer()?.slice_with_length(0, len * 4).into();
+                    Some(offsets)
                 }
                 UnionMode::Sparse => None,
             };
 
             let mut children = Vec::with_capacity(fields.len());
-            let mut ids = Vec::with_capacity(fields.len());
 
-            for (id, field) in fields.iter() {
+            for (_id, field) in fields.iter() {
                 let child = create_array(reader, field, variadic_counts, require_alignment)?;
-                children.push((field.as_ref().clone(), child));
-                ids.push(id);
+                children.push(child);
             }
 
-            let array = UnionArray::try_new(&ids, type_ids, value_offsets, children)?;
+            let array = UnionArray::try_new(fields.clone(), type_ids, value_offsets, children)?;
             Ok(Arc::new(array))
         }
         Null => {
@@ -1362,6 +1369,7 @@ mod tests {
     use crate::root_as_message;
     use arrow_array::builder::{PrimitiveRunBuilder, UnionBuilder};
     use arrow_array::types::*;
+    use arrow_buffer::NullBuffer;
     use arrow_data::ArrayDataBuilder;
 
     fn create_test_projection_schema() -> Schema {
@@ -1698,6 +1706,18 @@ mod tests {
     #[test]
     fn test_roundtrip_sparse_union() {
         check_union_with_builder(UnionBuilder::new_sparse());
+    }
+
+    #[test]
+    fn test_roundtrip_struct_empty_fields() {
+        let nulls = NullBuffer::from(&[true, true, false][..]);
+        let rb = RecordBatch::try_from_iter([(
+            "",
+            Arc::new(StructArray::new_empty_fields(nulls.len(), Some(nulls))) as _,
+        )])
+        .unwrap();
+        let rb2 = roundtrip_ipc(&rb);
+        assert_eq!(rb, rb2);
     }
 
     #[test]

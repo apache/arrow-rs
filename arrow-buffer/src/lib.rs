@@ -28,10 +28,17 @@ pub mod builder;
 pub use builder::*;
 
 mod bigint;
-mod bytes;
-mod native;
 pub use bigint::i256;
 
+mod bytes;
+
+mod native;
 pub use native::*;
+
 mod util;
 pub use util::*;
+
+mod interval;
+pub use interval::*;
+
+mod arith;

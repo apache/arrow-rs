@@ -19,7 +19,7 @@
 
 use crate::basic::Type;
 use crate::data_type::private::ParquetValueType;
-use crate::data_type::{ByteArray, FixedLenByteArray, Int96};
+use crate::data_type::{AsBytes, ByteArray, FixedLenByteArray, Int96};
 use crate::errors::ParquetError;
 use crate::format::{BoundaryOrder, ColumnIndex};
 use crate::util::bit_util::from_le_slice;
@@ -55,12 +55,26 @@ impl<T> PageIndex<T> {
     }
 }
 
+impl<T> PageIndex<T>
+where
+    T: AsBytes,
+{
+    pub fn max_bytes(&self) -> Option<&[u8]> {
+        self.max.as_ref().map(|x| x.as_bytes())
+    }
+
+    pub fn min_bytes(&self) -> Option<&[u8]> {
+        self.min.as_ref().map(|x| x.as_bytes())
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 #[allow(non_camel_case_types)]
-/// Typed statistics for a data page in a column chunk. This structure
-/// is obtained from decoding the [ColumnIndex] in the parquet file
-/// and can be used to skip decoding pages while reading the file
-/// data.
+/// Typed statistics for a data page in a column chunk.
+///
+/// This structure is part of the "Page Index" and is optionally part of
+/// [ColumnIndex] in the parquet file and can be used to skip decoding pages
+/// while reading the file data.
 pub enum Index {
     /// Sometimes reading page index from parquet file
     /// will only return pageLocations without min_max index,
@@ -153,5 +167,40 @@ impl<T: ParquetValueType> NativeIndex<T> {
             indexes,
             boundary_order: index.boundary_order,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_page_index_min_max_null() {
+        let page_index = PageIndex {
+            min: Some(-123),
+            max: Some(234),
+            null_count: Some(0),
+        };
+
+        assert_eq!(page_index.min().unwrap(), &-123);
+        assert_eq!(page_index.max().unwrap(), &234);
+        assert_eq!(page_index.min_bytes().unwrap(), (-123).as_bytes());
+        assert_eq!(page_index.max_bytes().unwrap(), 234.as_bytes());
+        assert_eq!(page_index.null_count().unwrap(), 0);
+    }
+
+    #[test]
+    fn test_page_index_min_max_null_none() {
+        let page_index: PageIndex<i32> = PageIndex {
+            min: None,
+            max: None,
+            null_count: None,
+        };
+
+        assert_eq!(page_index.min(), None);
+        assert_eq!(page_index.max(), None);
+        assert_eq!(page_index.min_bytes(), None);
+        assert_eq!(page_index.max_bytes(), None);
+        assert_eq!(page_index.null_count(), None);
     }
 }

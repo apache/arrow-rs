@@ -342,6 +342,94 @@ fn test_validate_offsets_last_too_large() {
     .unwrap();
 }
 
+/// Test that the list of type `data_type` generates correct offset and size out of bounds errors
+fn check_list_view_offsets_sizes<T: ArrowNativeType>(
+    data_type: DataType,
+    offsets: Vec<T>,
+    sizes: Vec<T>,
+) {
+    let values: Int32Array = [Some(1), Some(2), Some(3), Some(4)].into_iter().collect();
+    let offsets_buffer = Buffer::from_slice_ref(offsets);
+    let sizes_buffer = Buffer::from_slice_ref(sizes);
+    ArrayData::try_new(
+        data_type,
+        4,
+        None,
+        0,
+        vec![offsets_buffer, sizes_buffer],
+        vec![values.into_data()],
+    )
+    .unwrap();
+}
+
+#[test]
+#[should_panic(expected = "Size 3 at index 3 is larger than the remaining values for ListView")]
+fn test_validate_list_view_offsets_sizes() {
+    let field_type = Field::new("f", DataType::Int32, true);
+    check_list_view_offsets_sizes::<i32>(
+        DataType::ListView(Arc::new(field_type)),
+        vec![0, 1, 1, 2],
+        vec![1, 1, 1, 3],
+    );
+}
+
+#[test]
+#[should_panic(
+    expected = "Size 3 at index 3 is larger than the remaining values for LargeListView"
+)]
+fn test_validate_large_list_view_offsets_sizes() {
+    let field_type = Field::new("f", DataType::Int32, true);
+    check_list_view_offsets_sizes::<i64>(
+        DataType::LargeListView(Arc::new(field_type)),
+        vec![0, 1, 1, 2],
+        vec![1, 1, 1, 3],
+    );
+}
+
+#[test]
+#[should_panic(expected = "Error converting offset[1] (-1) to usize for ListView")]
+fn test_validate_list_view_negative_offsets() {
+    let field_type = Field::new("f", DataType::Int32, true);
+    check_list_view_offsets_sizes::<i32>(
+        DataType::ListView(Arc::new(field_type)),
+        vec![0, -1, 1, 2],
+        vec![1, 1, 1, 3],
+    );
+}
+
+#[test]
+#[should_panic(expected = "Error converting size[2] (-1) to usize for ListView")]
+fn test_validate_list_view_negative_sizes() {
+    let field_type = Field::new("f", DataType::Int32, true);
+    check_list_view_offsets_sizes::<i32>(
+        DataType::ListView(Arc::new(field_type)),
+        vec![0, 1, 1, 2],
+        vec![1, 1, -1, 3],
+    );
+}
+
+#[test]
+#[should_panic(expected = "Error converting offset[1] (-1) to usize for LargeListView")]
+fn test_validate_large_list_view_negative_offsets() {
+    let field_type = Field::new("f", DataType::Int32, true);
+    check_list_view_offsets_sizes::<i64>(
+        DataType::LargeListView(Arc::new(field_type)),
+        vec![0, -1, 1, 2],
+        vec![1, 1, 1, 3],
+    );
+}
+
+#[test]
+#[should_panic(expected = "Error converting size[2] (-1) to usize for LargeListView")]
+fn test_validate_large_list_view_negative_sizes() {
+    let field_type = Field::new("f", DataType::Int32, true);
+    check_list_view_offsets_sizes::<i64>(
+        DataType::LargeListView(Arc::new(field_type)),
+        vec![0, 1, 1, 2],
+        vec![1, 1, -1, 3],
+    );
+}
+
 #[test]
 #[should_panic(
     expected = "Values length 4 is less than the length (2) multiplied by the value size (2) for FixedSizeList"

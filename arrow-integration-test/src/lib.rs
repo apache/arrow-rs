@@ -21,6 +21,7 @@
 //!
 //! This is not a canonical format, but provides a human-readable way of verifying language implementations
 
+use arrow_buffer::{IntervalDayTime, IntervalMonthDayNano, ScalarBuffer};
 use hex::decode;
 use num::BigInt;
 use num::Signed;
@@ -31,7 +32,6 @@ use std::sync::Arc;
 
 use arrow::array::*;
 use arrow::buffer::{Buffer, MutableBuffer};
-use arrow::compute;
 use arrow::datatypes::*;
 use arrow::error::{ArrowError, Result};
 use arrow::util::bit_util;
@@ -348,10 +348,7 @@ pub fn array_from_json(
             }
             Ok(Arc::new(b.finish()))
         }
-        DataType::Int32
-        | DataType::Date32
-        | DataType::Time32(_)
-        | DataType::Interval(IntervalUnit::YearMonth) => {
+        DataType::Int32 | DataType::Date32 | DataType::Time32(_) => {
             let mut b = Int32Builder::with_capacity(json_col.count);
             for (is_valid, value) in json_col
                 .validity
@@ -366,14 +363,29 @@ pub fn array_from_json(
                 };
             }
             let array = Arc::new(b.finish()) as ArrayRef;
-            compute::cast(&array, field.data_type())
+            arrow::compute::cast(&array, field.data_type())
+        }
+        DataType::Interval(IntervalUnit::YearMonth) => {
+            let mut b = IntervalYearMonthBuilder::with_capacity(json_col.count);
+            for (is_valid, value) in json_col
+                .validity
+                .as_ref()
+                .unwrap()
+                .iter()
+                .zip(json_col.data.unwrap())
+            {
+                match is_valid {
+                    1 => b.append_value(value.as_i64().unwrap() as i32),
+                    _ => b.append_null(),
+                };
+            }
+            Ok(Arc::new(b.finish()))
         }
         DataType::Int64
         | DataType::Date64
         | DataType::Time64(_)
         | DataType::Timestamp(_, _)
-        | DataType::Duration(_)
-        | DataType::Interval(IntervalUnit::DayTime) => {
+        | DataType::Duration(_) => {
             let mut b = Int64Builder::with_capacity(json_col.count);
             for (is_valid, value) in json_col
                 .validity
@@ -386,6 +398,25 @@ pub fn array_from_json(
                     1 => b.append_value(match value {
                         Value::Number(n) => n.as_i64().unwrap(),
                         Value::String(s) => s.parse().expect("Unable to parse string as i64"),
+                        _ => panic!("Unable to parse {value:?} as number"),
+                    }),
+                    _ => b.append_null(),
+                };
+            }
+            let array = Arc::new(b.finish()) as ArrayRef;
+            arrow::compute::cast(&array, field.data_type())
+        }
+        DataType::Interval(IntervalUnit::DayTime) => {
+            let mut b = IntervalDayTimeBuilder::with_capacity(json_col.count);
+            for (is_valid, value) in json_col
+                .validity
+                .as_ref()
+                .unwrap()
+                .iter()
+                .zip(json_col.data.unwrap())
+            {
+                match is_valid {
+                    1 => b.append_value(match value {
                         Value::Object(ref map)
                             if map.contains_key("days") && map.contains_key("milliseconds") =>
                         {
@@ -396,13 +427,9 @@ pub fn array_from_json(
 
                                     match (days, milliseconds) {
                                         (Value::Number(d), Value::Number(m)) => {
-                                            let mut bytes = [0_u8; 8];
-                                            let m = (m.as_i64().unwrap() as i32).to_le_bytes();
-                                            let d = (d.as_i64().unwrap() as i32).to_le_bytes();
-
-                                            let c = [d, m].concat();
-                                            bytes.copy_from_slice(c.as_slice());
-                                            i64::from_le_bytes(bytes)
+                                            let days = d.as_i64().unwrap() as _;
+                                            let millis = m.as_i64().unwrap() as _;
+                                            IntervalDayTime::new(days, millis)
                                         }
                                         _ => {
                                             panic!("Unable to parse {value:?} as interval daytime")
@@ -417,8 +444,7 @@ pub fn array_from_json(
                     _ => b.append_null(),
                 };
             }
-            let array = Arc::new(b.finish()) as ArrayRef;
-            compute::cast(&array, field.data_type())
+            Ok(Arc::new(b.finish()))
         }
         DataType::UInt8 => {
             let mut b = UInt8Builder::with_capacity(json_col.count);
@@ -522,11 +548,7 @@ pub fn array_from_json(
                                     let months = months.as_i64().unwrap() as i32;
                                     let days = days.as_i64().unwrap() as i32;
                                     let nanoseconds = nanoseconds.as_i64().unwrap();
-                                    let months_days_ns: i128 =
-                                        ((nanoseconds as i128) & 0xFFFFFFFFFFFFFFFF) << 64
-                                            | ((days as i128) & 0xFFFFFFFF) << 32
-                                            | ((months as i128) & 0xFFFFFFFF);
-                                    months_days_ns
+                                    IntervalMonthDayNano::new(months, days, nanoseconds)
                                 }
                                 (_, _, _) => {
                                     panic!("Unable to parse {v:?} as MonthDayNano")
@@ -835,26 +857,18 @@ pub fn array_from_json(
                 ));
             };
 
-            let offset: Option<Buffer> = json_col.offset.map(|offsets| {
-                let offsets: Vec<i32> =
-                    offsets.iter().map(|v| v.as_i64().unwrap() as i32).collect();
-                Buffer::from(&offsets.to_byte_slice())
-            });
+            let offset: Option<ScalarBuffer<i32>> = json_col
+                .offset
+                .map(|offsets| offsets.iter().map(|v| v.as_i64().unwrap() as i32).collect());
 
-            let mut children: Vec<(Field, Arc<dyn Array>)> = vec![];
+            let mut children = Vec::with_capacity(fields.len());
             for ((_, field), col) in fields.iter().zip(json_col.children.unwrap()) {
                 let array = array_from_json(field, col, dictionaries)?;
-                children.push((field.as_ref().clone(), array));
+                children.push(array);
             }
 
-            let field_type_ids = fields.iter().map(|(id, _)| id).collect::<Vec<_>>();
-            let array = UnionArray::try_new(
-                &field_type_ids,
-                Buffer::from(&type_ids.to_byte_slice()),
-                offset,
-                children,
-            )
-            .unwrap();
+            let array =
+                UnionArray::try_new(fields.clone(), type_ids.into(), offset, children).unwrap();
             Ok(Arc::new(array))
         }
         t => Err(ArrowError::JsonError(format!(

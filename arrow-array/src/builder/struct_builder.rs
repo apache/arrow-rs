@@ -168,7 +168,7 @@ impl ArrayBuilder for StructBuilder {
 pub fn make_builder(datatype: &DataType, capacity: usize) -> Box<dyn ArrayBuilder> {
     use crate::builder::*;
     match datatype {
-        DataType::Null => Box::new(NullBuilder::with_capacity(capacity)),
+        DataType::Null => Box::new(NullBuilder::new()),
         DataType::Boolean => Box::new(BooleanBuilder::with_capacity(capacity)),
         DataType::Int8 => Box::new(Int8Builder::with_capacity(capacity)),
         DataType::Int16 => Box::new(Int16Builder::with_capacity(capacity)),
@@ -380,6 +380,11 @@ impl StructBuilder {
                 ));
             }
         });
+    }
+
+    /// Returns the current null buffer as a slice
+    pub fn validity_slice(&self) -> Option<&[u8]> {
+        self.null_buffer_builder.as_slice()
     }
 }
 

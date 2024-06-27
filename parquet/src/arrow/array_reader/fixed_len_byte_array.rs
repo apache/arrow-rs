@@ -30,7 +30,7 @@ use arrow_array::{
     ArrayRef, Decimal128Array, Decimal256Array, FixedSizeBinaryArray, Float16Array,
     IntervalDayTimeArray, IntervalYearMonthArray,
 };
-use arrow_buffer::{i256, Buffer};
+use arrow_buffer::{i256, Buffer, IntervalDayTime};
 use arrow_data::ArrayDataBuilder;
 use arrow_schema::{DataType as ArrowType, IntervalUnit};
 use bytes::Bytes;
@@ -195,7 +195,14 @@ impl ArrayReader for FixedLenByteArrayReader {
                     IntervalUnit::DayTime => Arc::new(
                         binary
                             .iter()
-                            .map(|o| o.map(|b| i64::from_le_bytes(b[4..12].try_into().unwrap())))
+                            .map(|o| {
+                                o.map(|b| {
+                                    IntervalDayTime::new(
+                                        i32::from_le_bytes(b[4..8].try_into().unwrap()),
+                                        i32::from_le_bytes(b[8..12].try_into().unwrap()),
+                                    )
+                                })
+                            })
                             .collect::<IntervalDayTimeArray>(),
                     ) as ArrayRef,
                     IntervalUnit::MonthDayNano => {

@@ -252,7 +252,8 @@ impl PutPayloadMut {
             let completed = std::mem::take(&mut self.in_progress);
             self.completed.push(completed.into())
         }
-        self.completed.push(bytes)
+        self.len += bytes.len();
+        self.completed.push(bytes);
     }
 
     /// Returns `true` if this [`PutPayloadMut`] contains no bytes
@@ -310,5 +311,18 @@ mod test {
         assert_eq!(chunks[3].len(), 23);
         assert_eq!(chunks[4].len(), 20);
         assert_eq!(chunks[5].len(), 6);
+    }
+
+    #[test]
+    fn test_content_length() {
+        let mut chunk = PutPayloadMut::new();
+        chunk.push(vec![0; 23].into());
+        assert_eq!(chunk.content_length(), 23);
+        chunk.extend_from_slice(&[0; 4]);
+        assert_eq!(chunk.content_length(), 27);
+        chunk.push(vec![0; 121].into());
+        assert_eq!(chunk.content_length(), 148);
+        let payload = chunk.freeze();
+        assert_eq!(payload.content_length(), 148);
     }
 }

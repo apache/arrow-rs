@@ -25,7 +25,7 @@ use arrow_array::cast::AsArray;
 use arrow_array::timezone::Tz;
 use arrow_array::types::*;
 use arrow_array::*;
-use arrow_buffer::ArrowNativeType;
+use arrow_buffer::{ArrowNativeType, IntervalDayTime, IntervalMonthDayNano};
 use arrow_schema::{ArrowError, DataType, IntervalUnit, TimeUnit};
 
 use crate::arity::{binary, try_binary};
@@ -343,12 +343,12 @@ trait TimestampOp: ArrowTimestampType {
     type Duration: ArrowPrimitiveType<Native = i64>;
 
     fn add_year_month(timestamp: i64, delta: i32, tz: Tz) -> Option<i64>;
-    fn add_day_time(timestamp: i64, delta: i64, tz: Tz) -> Option<i64>;
-    fn add_month_day_nano(timestamp: i64, delta: i128, tz: Tz) -> Option<i64>;
+    fn add_day_time(timestamp: i64, delta: IntervalDayTime, tz: Tz) -> Option<i64>;
+    fn add_month_day_nano(timestamp: i64, delta: IntervalMonthDayNano, tz: Tz) -> Option<i64>;
 
     fn sub_year_month(timestamp: i64, delta: i32, tz: Tz) -> Option<i64>;
-    fn sub_day_time(timestamp: i64, delta: i64, tz: Tz) -> Option<i64>;
-    fn sub_month_day_nano(timestamp: i64, delta: i128, tz: Tz) -> Option<i64>;
+    fn sub_day_time(timestamp: i64, delta: IntervalDayTime, tz: Tz) -> Option<i64>;
+    fn sub_month_day_nano(timestamp: i64, delta: IntervalMonthDayNano, tz: Tz) -> Option<i64>;
 }
 
 macro_rules! timestamp {
@@ -360,11 +360,11 @@ macro_rules! timestamp {
                 Self::add_year_months(left, right, tz)
             }
 
-            fn add_day_time(left: i64, right: i64, tz: Tz) -> Option<i64> {
+            fn add_day_time(left: i64, right: IntervalDayTime, tz: Tz) -> Option<i64> {
                 Self::add_day_time(left, right, tz)
             }
 
-            fn add_month_day_nano(left: i64, right: i128, tz: Tz) -> Option<i64> {
+            fn add_month_day_nano(left: i64, right: IntervalMonthDayNano, tz: Tz) -> Option<i64> {
                 Self::add_month_day_nano(left, right, tz)
             }
 
@@ -372,11 +372,11 @@ macro_rules! timestamp {
                 Self::subtract_year_months(left, right, tz)
             }
 
-            fn sub_day_time(left: i64, right: i64, tz: Tz) -> Option<i64> {
+            fn sub_day_time(left: i64, right: IntervalDayTime, tz: Tz) -> Option<i64> {
                 Self::subtract_day_time(left, right, tz)
             }
 
-            fn sub_month_day_nano(left: i64, right: i128, tz: Tz) -> Option<i64> {
+            fn sub_month_day_nano(left: i64, right: IntervalMonthDayNano, tz: Tz) -> Option<i64> {
                 Self::subtract_month_day_nano(left, right, tz)
             }
         }
@@ -506,12 +506,12 @@ fn timestamp_op<T: TimestampOp>(
 /// Note: these should be fallible (#4456)
 trait DateOp: ArrowTemporalType {
     fn add_year_month(timestamp: Self::Native, delta: i32) -> Self::Native;
-    fn add_day_time(timestamp: Self::Native, delta: i64) -> Self::Native;
-    fn add_month_day_nano(timestamp: Self::Native, delta: i128) -> Self::Native;
+    fn add_day_time(timestamp: Self::Native, delta: IntervalDayTime) -> Self::Native;
+    fn add_month_day_nano(timestamp: Self::Native, delta: IntervalMonthDayNano) -> Self::Native;
 
     fn sub_year_month(timestamp: Self::Native, delta: i32) -> Self::Native;
-    fn sub_day_time(timestamp: Self::Native, delta: i64) -> Self::Native;
-    fn sub_month_day_nano(timestamp: Self::Native, delta: i128) -> Self::Native;
+    fn sub_day_time(timestamp: Self::Native, delta: IntervalDayTime) -> Self::Native;
+    fn sub_month_day_nano(timestamp: Self::Native, delta: IntervalMonthDayNano) -> Self::Native;
 }
 
 macro_rules! date {
@@ -521,11 +521,11 @@ macro_rules! date {
                 Self::add_year_months(left, right)
             }
 
-            fn add_day_time(left: Self::Native, right: i64) -> Self::Native {
+            fn add_day_time(left: Self::Native, right: IntervalDayTime) -> Self::Native {
                 Self::add_day_time(left, right)
             }
 
-            fn add_month_day_nano(left: Self::Native, right: i128) -> Self::Native {
+            fn add_month_day_nano(left: Self::Native, right: IntervalMonthDayNano) -> Self::Native {
                 Self::add_month_day_nano(left, right)
             }
 
@@ -533,11 +533,11 @@ macro_rules! date {
                 Self::subtract_year_months(left, right)
             }
 
-            fn sub_day_time(left: Self::Native, right: i64) -> Self::Native {
+            fn sub_day_time(left: Self::Native, right: IntervalDayTime) -> Self::Native {
                 Self::subtract_day_time(left, right)
             }
 
-            fn sub_month_day_nano(left: Self::Native, right: i128) -> Self::Native {
+            fn sub_month_day_nano(left: Self::Native, right: IntervalMonthDayNano) -> Self::Native {
                 Self::subtract_month_day_nano(left, right)
             }
         }
@@ -1346,13 +1346,10 @@ mod tests {
                 IntervalMonthDayNanoType::make_value(35, -19, 41899000000000000)
             ])
         );
-        let a = IntervalMonthDayNanoArray::from(vec![i64::MAX as i128]);
-        let b = IntervalMonthDayNanoArray::from(vec![1]);
+        let a = IntervalMonthDayNanoArray::from(vec![IntervalMonthDayNano::MAX]);
+        let b = IntervalMonthDayNanoArray::from(vec![IntervalMonthDayNano::ONE]);
         let err = add(&a, &b).unwrap_err().to_string();
-        assert_eq!(
-            err,
-            "Compute error: Overflow happened on: 9223372036854775807 + 1"
-        );
+        assert_eq!(err, "Compute error: Overflow happened on: 2147483647 + 1");
     }
 
     fn test_duration_impl<T: ArrowPrimitiveType<Native = i64>>() {

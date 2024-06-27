@@ -19,7 +19,10 @@ use crate::array::PrimitiveArray;
 use crate::null_sentinel;
 use arrow_array::builder::BufferBuilder;
 use arrow_array::{ArrowPrimitiveType, BooleanArray, FixedSizeBinaryArray};
-use arrow_buffer::{bit_util, i256, ArrowNativeType, Buffer, MutableBuffer};
+use arrow_buffer::{
+    bit_util, i256, ArrowNativeType, BooleanBuffer, Buffer, IntervalDayTime, IntervalMonthDayNano,
+    MutableBuffer, NullBuffer,
+};
 use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::{DataType, SortOptions};
 use half::f16;
@@ -163,6 +166,44 @@ impl FixedLengthEncoding for f64 {
     }
 }
 
+impl FixedLengthEncoding for IntervalDayTime {
+    type Encoded = [u8; 8];
+
+    fn encode(self) -> Self::Encoded {
+        let mut out = [0_u8; 8];
+        out[..4].copy_from_slice(&self.days.encode());
+        out[4..].copy_from_slice(&self.milliseconds.encode());
+        out
+    }
+
+    fn decode(encoded: Self::Encoded) -> Self {
+        Self {
+            days: i32::decode(encoded[..4].try_into().unwrap()),
+            milliseconds: i32::decode(encoded[4..].try_into().unwrap()),
+        }
+    }
+}
+
+impl FixedLengthEncoding for IntervalMonthDayNano {
+    type Encoded = [u8; 16];
+
+    fn encode(self) -> Self::Encoded {
+        let mut out = [0_u8; 16];
+        out[..4].copy_from_slice(&self.months.encode());
+        out[4..8].copy_from_slice(&self.days.encode());
+        out[8..].copy_from_slice(&self.nanoseconds.encode());
+        out
+    }
+
+    fn decode(encoded: Self::Encoded) -> Self {
+        Self {
+            months: i32::decode(encoded[..4].try_into().unwrap()),
+            days: i32::decode(encoded[4..8].try_into().unwrap()),
+            nanoseconds: i64::decode(encoded[8..].try_into().unwrap()),
+        }
+    }
+}
+
 /// Returns the total encoded length (including null byte) for a value of type `T::Native`
 pub const fn encoded_len<T>(_col: &PrimitiveArray<T>) -> usize
 where
@@ -176,18 +217,20 @@ where
 ///
 /// - 1 byte `0` if null or `1` if valid
 /// - bytes of [`FixedLengthEncoding`]
-pub fn encode<T: FixedLengthEncoding, I: IntoIterator<Item = Option<T>>>(
+pub fn encode<T: FixedLengthEncoding>(
     data: &mut [u8],
     offsets: &mut [usize],
-    i: I,
+    values: &[T],
+    nulls: &NullBuffer,
     opts: SortOptions,
 ) {
-    for (offset, maybe_val) in offsets.iter_mut().skip(1).zip(i) {
+    for (value_idx, is_valid) in nulls.iter().enumerate() {
+        let offset = &mut offsets[value_idx + 1];
         let end_offset = *offset + T::ENCODED_LEN;
-        if let Some(val) = maybe_val {
+        if is_valid {
             let to_write = &mut data[*offset..end_offset];
             to_write[0] = 1;
-            let mut encoded = val.encode();
+            let mut encoded = values[value_idx].encode();
             if opts.descending {
                 // Flip bits to reverse order
                 encoded.as_mut().iter_mut().for_each(|v| *v = !*v)
@@ -196,6 +239,86 @@ pub fn encode<T: FixedLengthEncoding, I: IntoIterator<Item = Option<T>>>(
         } else {
             data[*offset] = null_sentinel(opts);
         }
+        *offset = end_offset;
+    }
+}
+
+/// Encoding for non-nullable primitive arrays.
+/// Iterates directly over the `values`, and skips NULLs-checking.
+pub fn encode_not_null<T: FixedLengthEncoding>(
+    data: &mut [u8],
+    offsets: &mut [usize],
+    values: &[T],
+    opts: SortOptions,
+) {
+    for (value_idx, val) in values.iter().enumerate() {
+        let offset = &mut offsets[value_idx + 1];
+        let end_offset = *offset + T::ENCODED_LEN;
+
+        let to_write = &mut data[*offset..end_offset];
+        to_write[0] = 1;
+        let mut encoded = val.encode();
+        if opts.descending {
+            // Flip bits to reverse order
+            encoded.as_mut().iter_mut().for_each(|v| *v = !*v)
+        }
+        to_write[1..].copy_from_slice(encoded.as_ref());
+
+        *offset = end_offset;
+    }
+}
+
+/// Boolean values are encoded as
+///
+/// - 1 byte `0` if null or `1` if valid
+/// - bytes of [`FixedLengthEncoding`]
+pub fn encode_boolean(
+    data: &mut [u8],
+    offsets: &mut [usize],
+    values: &BooleanBuffer,
+    nulls: &NullBuffer,
+    opts: SortOptions,
+) {
+    for (idx, is_valid) in nulls.iter().enumerate() {
+        let offset = &mut offsets[idx + 1];
+        let end_offset = *offset + bool::ENCODED_LEN;
+        if is_valid {
+            let to_write = &mut data[*offset..end_offset];
+            to_write[0] = 1;
+            let mut encoded = values.value(idx).encode();
+            if opts.descending {
+                // Flip bits to reverse order
+                encoded.as_mut().iter_mut().for_each(|v| *v = !*v)
+            }
+            to_write[1..].copy_from_slice(encoded.as_ref())
+        } else {
+            data[*offset] = null_sentinel(opts);
+        }
+        *offset = end_offset;
+    }
+}
+
+/// Encoding for non-nullable boolean arrays.
+/// Iterates directly over `values`, and skips NULLs-checking.
+pub fn encode_boolean_not_null(
+    data: &mut [u8],
+    offsets: &mut [usize],
+    values: &BooleanBuffer,
+    opts: SortOptions,
+) {
+    for (value_idx, val) in values.iter().enumerate() {
+        let offset = &mut offsets[value_idx + 1];
+        let end_offset = *offset + bool::ENCODED_LEN;
+
+        let to_write = &mut data[*offset..end_offset];
+        to_write[0] = 1;
+        let mut encoded = val.encode();
+        if opts.descending {
+            // Flip bits to reverse order
+            encoded.as_mut().iter_mut().for_each(|v| *v = !*v)
+        }
+        to_write[1..].copy_from_slice(encoded.as_ref());
+
         *offset = end_offset;
     }
 }

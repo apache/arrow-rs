@@ -2213,6 +2213,30 @@ mod tests {
     }
 
     #[test]
+    fn test_serialize_decimal() {
+        let json = vec![
+            json!({"decimal": 1.234}),
+            json!({"decimal": "1.234"}),
+            json!({"decimal": 1234}),
+            json!({"decimal": "1234"}),
+        ];
+        let schema = Schema::new(vec![Field::new(
+            "decimal",
+            DataType::Decimal128(10, 3),
+            true,
+        )]);
+        let mut decoder = ReaderBuilder::new(Arc::new(schema))
+            .build_decoder()
+            .unwrap();
+        decoder.serialize(&json).unwrap();
+        let batch = decoder.flush().unwrap().unwrap();
+        assert_eq!(batch.num_rows(), 4);
+        assert_eq!(batch.num_columns(), 1);
+        let values = batch.column(0).as_primitive::<Decimal128Type>();
+        assert_eq!(values.values(), &[1234, 1234, 1234000, 1234000]);
+    }
+
+    #[test]
     fn test_serde_field() {
         let field = Field::new("int", DataType::Int32, true);
         let mut decoder = ReaderBuilder::new_with_field(field)
@@ -2258,8 +2282,8 @@ mod tests {
     fn test_coercing_primitive_into_string_decoder() {
         let buf = &format!(
             r#"[{{"a": 1, "b": "A", "c": "T"}}, {{"a": 2, "b": "BB", "c": "F"}}, {{"a": {}, "b": 123, "c": false}}, {{"a": {}, "b": 789, "c": true}}]"#,
-            (std::i32::MAX as i64 + 10),
-            std::i64::MAX - 10
+            (i32::MAX as i64 + 10),
+            i64::MAX - 10
         );
         let schema = Schema::new(vec![
             Field::new("a", DataType::Float64, true),
@@ -2282,8 +2306,8 @@ mod tests {
                     Arc::new(Float64Array::from(vec![
                         1.0,
                         2.0,
-                        (std::i32::MAX as i64 + 10) as f64,
-                        (std::i64::MAX - 10) as f64
+                        (i32::MAX as i64 + 10) as f64,
+                        (i64::MAX - 10) as f64
                     ])),
                     Arc::new(StringArray::from(vec!["A", "BB", "123", "789"])),
                     Arc::new(StringArray::from(vec!["T", "F", "false", "true"])),

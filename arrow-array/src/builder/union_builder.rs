@@ -23,7 +23,8 @@ use arrow_buffer::{ArrowNativeType, Buffer};
 use arrow_data::ArrayDataBuilder;
 use arrow_schema::{ArrowError, DataType, Field};
 use std::any::Any;
-use std::collections::HashMap;
+use std::collections::BTreeMap;
+use std::sync::Arc;
 
 /// `FieldData` is a helper struct to track the state of the fields in the `UnionBuilder`.
 #[derive(Debug)]
@@ -142,7 +143,7 @@ pub struct UnionBuilder {
     /// The current number of slots in the array
     len: usize,
     /// Maps field names to `FieldData` instances which track the builders for that field
-    fields: HashMap<String, FieldData>,
+    fields: BTreeMap<String, FieldData>,
     /// Builder to keep track of type ids
     type_id_builder: Int8BufferBuilder,
     /// Builder to keep track of offsets (`None` for sparse unions)
@@ -165,7 +166,7 @@ impl UnionBuilder {
     pub fn with_capacity_dense(capacity: usize) -> Self {
         Self {
             len: 0,
-            fields: HashMap::default(),
+            fields: Default::default(),
             type_id_builder: Int8BufferBuilder::new(capacity),
             value_offset_builder: Some(Int32BufferBuilder::new(capacity)),
             initial_capacity: capacity,
@@ -176,7 +177,7 @@ impl UnionBuilder {
     pub fn with_capacity_sparse(capacity: usize) -> Self {
         Self {
             len: 0,
-            fields: HashMap::default(),
+            fields: Default::default(),
             type_id_builder: Int8BufferBuilder::new(capacity),
             value_offset_builder: None,
             initial_capacity: capacity,
@@ -274,40 +275,39 @@ impl UnionBuilder {
     }
 
     /// Builds this builder creating a new `UnionArray`.
-    pub fn build(mut self) -> Result<UnionArray, ArrowError> {
-        let type_id_buffer = self.type_id_builder.finish();
-        let value_offsets_buffer = self.value_offset_builder.map(|mut b| b.finish());
-        let mut children = Vec::new();
-        for (
-            name,
-            FieldData {
-                type_id,
-                data_type,
-                mut values_buffer,
-                slots,
-                null_buffer_builder: mut bitmap_builder,
-            },
-        ) in self.fields.into_iter()
-        {
-            let buffer = values_buffer.finish();
-            let arr_data_builder = ArrayDataBuilder::new(data_type.clone())
-                .add_buffer(buffer)
-                .len(slots)
-                .nulls(bitmap_builder.finish());
-
-            let arr_data_ref = unsafe { arr_data_builder.build_unchecked() };
-            let array_ref = make_array(arr_data_ref);
-            children.push((type_id, (Field::new(name, data_type, false), array_ref)))
-        }
-
-        children.sort_by(|a, b| {
-            a.0.partial_cmp(&b.0)
-                .expect("This will never be None as type ids are always i8 values.")
-        });
-        let children: Vec<_> = children.into_iter().map(|(_, b)| b).collect();
-
-        let type_ids: Vec<i8> = (0_i8..children.len() as i8).collect();
-
-        UnionArray::try_new(&type_ids, type_id_buffer, value_offsets_buffer, children)
+    pub fn build(self) -> Result<UnionArray, ArrowError> {
+        let mut children = Vec::with_capacity(self.fields.len());
+        let union_fields = self
+            .fields
+            .into_iter()
+            .map(
+                |(
+                    name,
+                    FieldData {
+                        type_id,
+                        data_type,
+                        mut values_buffer,
+                        slots,
+                        mut null_buffer_builder,
+                    },
+                )| {
+                    let array_ref = make_array(unsafe {
+                        ArrayDataBuilder::new(data_type.clone())
+                            .add_buffer(values_buffer.finish())
+                            .len(slots)
+                            .nulls(null_buffer_builder.finish())
+                            .build_unchecked()
+                    });
+                    children.push(array_ref);
+                    (type_id, Arc::new(Field::new(name, data_type, false)))
+                },
+            )
+            .collect();
+        UnionArray::try_new(
+            union_fields,
+            self.type_id_builder.into(),
+            self.value_offset_builder.map(Into::into),
+            children,
+        )
     }
 }

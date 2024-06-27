@@ -1565,6 +1565,89 @@ mod tests {
         Ok(())
     }
 
+    fn binary_encoding_test<O: OffsetSizeTrait>() {
+        // set up schema
+        let schema = SchemaRef::new(Schema::new(vec![Field::new(
+            "bytes",
+            GenericBinaryType::<O>::DATA_TYPE,
+            true,
+        )]));
+
+        // build record batch:
+        let mut builder = GenericByteBuilder::<GenericBinaryType<O>>::new();
+        let values = [Some(b"Ned Flanders"), None, Some(b"Troy McClure")];
+        for value in values {
+            match value {
+                Some(v) => builder.append_value(v),
+                None => builder.append_null(),
+            }
+        }
+        let array = Arc::new(builder.finish()) as ArrayRef;
+        let batch = RecordBatch::try_new(schema, vec![array]).unwrap();
+
+        // encode and check JSON with explicit nulls:
+        {
+            let mut buf = Vec::new();
+            let json_value: Value = {
+                let mut writer = WriterBuilder::new()
+                    .with_explicit_nulls(true)
+                    .build::<_, JsonArray>(&mut buf);
+                writer.write(&batch).unwrap();
+                writer.close().unwrap();
+                serde_json::from_slice(&buf).unwrap()
+            };
+
+            assert_eq!(
+                json!([
+                    {
+                        "bytes": "4e656420466c616e64657273"
+                    },
+                    {
+                        "bytes": null // the explicit null
+                    },
+                    {
+                        "bytes": "54726f79204d63436c757265"
+                    }
+                ]),
+                json_value,
+            );
+        }
+
+        // encode and check JSON with no explicit nulls:
+        {
+            let mut buf = Vec::new();
+            let json_value: Value = {
+                // explicit nulls are off by default, so we don't need
+                // to set that when creating the writer:
+                let mut writer = ArrayWriter::new(&mut buf);
+                writer.write(&batch).unwrap();
+                writer.close().unwrap();
+                serde_json::from_slice(&buf).unwrap()
+            };
+
+            assert_eq!(
+                json!([
+                    {
+                        "bytes": "4e656420466c616e64657273"
+                    },
+                    {}, // empty because nulls are omitted
+                    {
+                        "bytes": "54726f79204d63436c757265"
+                    }
+                ]),
+                json_value
+            );
+        }
+    }
+
+    #[test]
+    fn test_writer_binary() {
+        // Binary:
+        binary_encoding_test::<i32>();
+        // LargeBinary:
+        binary_encoding_test::<i64>();
+    }
+
     #[test]
     fn test_writer_fixed_size_binary() {
         // set up schema:

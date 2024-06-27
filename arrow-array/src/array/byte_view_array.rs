@@ -16,18 +16,21 @@
 // under the License.
 
 use crate::array::print_long_array;
-use crate::builder::GenericByteViewBuilder;
+use crate::builder::{ArrayBuilder, GenericByteViewBuilder};
 use crate::iterator::ArrayIter;
 use crate::types::bytes::ByteArrayNativeType;
 use crate::types::{BinaryViewType, ByteViewType, StringViewType};
-use crate::{Array, ArrayAccessor, ArrayRef};
-use arrow_buffer::{Buffer, NullBuffer, ScalarBuffer};
+use crate::{Array, ArrayAccessor, ArrayRef, GenericByteArray, OffsetSizeTrait, Scalar};
+use arrow_buffer::{ArrowNativeType, Buffer, NullBuffer, ScalarBuffer};
 use arrow_data::{ArrayData, ArrayDataBuilder, ByteView};
 use arrow_schema::{ArrowError, DataType};
+use num::ToPrimitive;
 use std::any::Any;
 use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::sync::Arc;
+
+use super::ByteArrayType;
 
 /// [Variable-size Binary View Layout]: An array of variable length bytes view arrays.
 ///
@@ -186,6 +189,11 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
         }
     }
 
+    /// Create a new [`Scalar`] from `value`
+    pub fn new_scalar(value: impl AsRef<T::Native>) -> Scalar<Self> {
+        Scalar::new(Self::from_iter_values(std::iter::once(value)))
+    }
+
     /// Creates a [`GenericByteViewArray`] based on an iterator of values without nulls
     pub fn from_iter_values<Ptr, I>(iter: I) -> Self
     where
@@ -239,8 +247,7 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
         let v = self.views.get_unchecked(idx);
         let len = *v as u32;
         let b = if len <= 12 {
-            let ptr = self.views.as_ptr() as *const u8;
-            std::slice::from_raw_parts(ptr.add(idx * 16 + 4), len as usize)
+            Self::inline_value(v, len as usize)
         } else {
             let view = ByteView::from(*v);
             let data = self.buffers.get_unchecked(view.buffer_index as usize);
@@ -248,6 +255,17 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
             data.get_unchecked(offset..offset + len as usize)
         };
         T::Native::from_bytes_unchecked(b)
+    }
+
+    /// Returns the inline value of the view.
+    ///
+    /// # Safety
+    /// - The `view` must be a valid element from `Self::views()` that adheres to the view layout.
+    /// - The `len` must be the length of the inlined value. It should never be larger than 12.
+    #[inline(always)]
+    pub unsafe fn inline_value(view: &u128, len: usize) -> &[u8] {
+        debug_assert!(len <= 12);
+        std::slice::from_raw_parts((view as *const u128 as *const u8).wrapping_add(4), len)
     }
 
     /// constructs a new iterator
@@ -264,6 +282,56 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
             nulls: self.nulls.as_ref().map(|n| n.slice(offset, length)),
             phantom: Default::default(),
         }
+    }
+
+    /// Returns a "compacted" version of this array
+    ///
+    /// The original array will *not* be modified
+    ///
+    /// # Garbage Collection
+    ///
+    /// Before GC:
+    /// ```text
+    ///                                        ┌──────┐                 
+    ///                                        │......│                 
+    ///                                        │......│                 
+    /// ┌────────────────────┐       ┌ ─ ─ ─ ▶ │Data1 │   Large buffer  
+    /// │       View 1       │─ ─ ─ ─          │......│  with data that
+    /// ├────────────────────┤                 │......│ is not referred
+    /// │       View 2       │─ ─ ─ ─ ─ ─ ─ ─▶ │Data2 │ to by View 1 or
+    /// └────────────────────┘                 │......│      View 2     
+    ///                                        │......│                 
+    ///    2 views, refer to                   │......│                 
+    ///   small portions of a                  └──────┘                 
+    ///      large buffer                                               
+    /// ```
+    ///                                                                
+    /// After GC:
+    ///
+    /// ```text
+    /// ┌────────────────────┐                 ┌─────┐    After gc, only
+    /// │       View 1       │─ ─ ─ ─ ─ ─ ─ ─▶ │Data1│     data that is  
+    /// ├────────────────────┤       ┌ ─ ─ ─ ▶ │Data2│    pointed to by  
+    /// │       View 2       │─ ─ ─ ─          └─────┘     the views is  
+    /// └────────────────────┘                                 left      
+    ///                                                                  
+    ///                                                                  
+    ///         2 views                                                  
+    /// ```
+    /// This method will compact the data buffers by recreating the view array and only include the data
+    /// that is pointed to by the views.
+    ///
+    /// Note that it will copy the array regardless of whether the original array is compact.
+    /// Use with caution as this can be an expensive operation, only use it when you are sure that the view
+    /// array is significantly smaller than when it is originally created, e.g., after filtering or slicing.
+    pub fn gc(&self) -> Self {
+        let mut builder = GenericByteViewBuilder::<T>::with_capacity(self.len());
+
+        for v in self.iter() {
+            builder.append_option(v);
+        }
+
+        builder.finish()
     }
 }
 
@@ -364,6 +432,51 @@ impl<T: ByteViewType + ?Sized> From<ArrayData> for GenericByteViewArray<T> {
     }
 }
 
+/// Convert a [`GenericByteArray`] to a [`GenericByteViewArray`] but in a smart way:
+/// If the offsets are all less than u32::MAX, then we directly build the view array on top of existing buffer.
+impl<FROM, V> From<&GenericByteArray<FROM>> for GenericByteViewArray<V>
+where
+    FROM: ByteArrayType,
+    FROM::Offset: OffsetSizeTrait + ToPrimitive,
+    V: ByteViewType<Native = FROM::Native>,
+{
+    fn from(byte_array: &GenericByteArray<FROM>) -> Self {
+        let offsets = byte_array.offsets();
+
+        let can_reuse_buffer = match offsets.last() {
+            Some(offset) => offset.as_usize() < u32::MAX as usize,
+            None => true,
+        };
+
+        if can_reuse_buffer {
+            let len = byte_array.len();
+            let mut views_builder = GenericByteViewBuilder::<V>::with_capacity(len);
+            let str_values_buf = byte_array.values().clone();
+            let block = views_builder.append_block(str_values_buf);
+            for (i, w) in offsets.windows(2).enumerate() {
+                let offset = w[0].as_usize();
+                let end = w[1].as_usize();
+                let length = end - offset;
+
+                if byte_array.is_null(i) {
+                    views_builder.append_null();
+                } else {
+                    // Safety: the input was a valid array so it valid UTF8 (if string). And
+                    // all offsets were valid
+                    unsafe {
+                        views_builder.append_view_unchecked(block, offset as u32, length as u32)
+                    }
+                }
+            }
+            assert_eq!(views_builder.len(), len);
+            views_builder.finish()
+        } else {
+            // TODO: the first u32::MAX can still be reused
+            GenericByteViewArray::<V>::from_iter(byte_array.iter())
+        }
+    }
+}
+
 impl<T: ByteViewType + ?Sized> From<GenericByteViewArray<T>> for ArrayData {
     fn from(mut array: GenericByteViewArray<T>) -> Self {
         let len = array.len();
@@ -455,6 +568,20 @@ impl StringViewArray {
     /// Convert the [`StringViewArray`] to [`BinaryViewArray`]
     pub fn to_binary_view(self) -> BinaryViewArray {
         unsafe { BinaryViewArray::new_unchecked(self.views, self.buffers, self.nulls) }
+    }
+
+    /// Returns true if all data within this array is ASCII
+    pub fn is_ascii(&self) -> bool {
+        // Alternative (but incorrect): directly check the underlying buffers
+        // (1) Our string view might be sparse, i.e., a subset of the buffers,
+        //      so even if the buffer is not ascii, we can still be ascii.
+        // (2) It is quite difficult to know the range of each buffer (unlike StringArray)
+        // This means that this operation is quite expensive, shall we cache the result?
+        //  i.e. track `is_ascii` in the builder.
+        self.iter().all(|v| match v {
+            Some(v) => v.is_ascii(),
+            None => true,
+        })
     }
 }
 
@@ -644,5 +771,40 @@ mod tests {
         let buffers = vec![Buffer::from_slice_ref(input_str_2.as_bytes())];
 
         StringViewArray::new(views, buffers, None);
+    }
+
+    #[test]
+    fn test_gc() {
+        let test_data = [
+            Some("longer than 12 bytes"),
+            Some("short"),
+            Some("t"),
+            Some("longer than 12 bytes"),
+            None,
+            Some("short"),
+        ];
+
+        let array = {
+            let mut builder = StringViewBuilder::new().with_block_size(8); // create multiple buffers
+            test_data.into_iter().for_each(|v| builder.append_option(v));
+            builder.finish()
+        };
+        assert!(array.buffers.len() > 1);
+
+        fn check_gc(to_test: &StringViewArray) {
+            let gc = to_test.gc();
+            assert_ne!(to_test.data_buffers().len(), gc.data_buffers().len());
+
+            to_test.iter().zip(gc.iter()).for_each(|(a, b)| {
+                assert_eq!(a, b);
+            });
+            assert_eq!(to_test.len(), gc.len());
+        }
+
+        check_gc(&array);
+        check_gc(&array.slice(1, 3));
+        check_gc(&array.slice(2, 1));
+        check_gc(&array.slice(2, 2));
+        check_gc(&array.slice(3, 1));
     }
 }

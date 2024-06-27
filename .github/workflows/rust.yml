@@ -119,17 +119,20 @@ jobs:
         run: cargo update -p ahash --precise 0.8.7
       - name: Check arrow
         working-directory: arrow
-        run: cargo msrv verify
+        run: cargo msrv --log-target stdout verify
       - name: Check parquet
         working-directory: parquet
-        run: cargo msrv verify
+        run: cargo msrv --log-target stdout verify
       - name: Check arrow-flight
         working-directory: arrow-flight
-        run: cargo msrv verify
+        run: cargo msrv --log-target stdout verify
       - name: Downgrade object_store dependencies
         working-directory: object_store
-        # Necessary because 1.30.0 updates MSRV to 1.63
-        run: cargo update -p tokio --precise 1.29.1
+        # Necessary because tokio 1.30.0 updates MSRV to 1.63
+        # and url 2.5.1, updates to 1.67
+        run: |
+          cargo update -p tokio --precise 1.29.1
+          cargo update -p url --precise 2.5.0
       - name: Check object_store
         working-directory: object_store
-        run: cargo msrv verify
+        run: cargo msrv --log-target stdout verify

@@ -425,6 +425,10 @@ impl<'a> ImportedArrowArray<'a> {
                 (length + 1) * (bits / 8)
             }
             (DataType::Utf8, 2) | (DataType::Binary, 2) => {
+                if self.array.is_empty() {
+                    return Ok(0);
+                }
+
                 // the len of the data buffer (buffer 2) equals the last value of the offset buffer (buffer 1)
                 let len = self.buffer_len(1, dt)?;
                 // first buffer is the null buffer => add(1)
@@ -435,6 +439,10 @@ impl<'a> ImportedArrowArray<'a> {
                 (unsafe { *offset_buffer.add(len / size_of::<i32>() - 1) }) as usize
             }
             (DataType::LargeUtf8, 2) | (DataType::LargeBinary, 2) => {
+                if self.array.is_empty() {
+                    return Ok(0);
+                }
+
                 // the len of the data buffer (buffer 2) equals the last value of the offset buffer (buffer 1)
                 let len = self.buffer_len(1, dt)?;
                 // first buffer is the null buffer => add(1)
@@ -1216,19 +1224,22 @@ mod tests_to_then_from_ffi {
 mod tests_from_ffi {
     use std::sync::Arc;
 
-    use arrow_buffer::{bit_util, buffer::Buffer};
+    use arrow_buffer::{bit_util, buffer::Buffer, MutableBuffer, OffsetBuffer};
+    use arrow_data::transform::MutableArrayData;
     use arrow_data::ArrayData;
     use arrow_schema::{DataType, Field};
 
+    use crate::types::Int32Type;
     use crate::{
         array::{
             Array, BooleanArray, DictionaryArray, FixedSizeBinaryArray, FixedSizeListArray,
             Int32Array, Int64Array, StringArray, StructArray, UInt32Array, UInt64Array,
         },
         ffi::{from_ffi, FFI_ArrowArray, FFI_ArrowSchema},
+        make_array, ArrayRef, ListArray,
     };
 
-    use super::Result;
+    use super::{ImportedArrowArray, Result};
 
     fn test_round_trip(expected: &ArrayData) -> Result<()> {
         // here we export the array
@@ -1419,5 +1430,125 @@ mod tests_from_ffi {
 
         let data = array.into_data();
         test_round_trip(&data)
+    }
+
+    #[test]
+    fn test_empty_string_with_non_zero_offset() -> Result<()> {
+        // Simulate an empty string array with a non-zero offset from a producer
+        let data: Buffer = MutableBuffer::new(0).into();
+        let offsets = OffsetBuffer::new(vec![123].into());
+        let string_array =
+            unsafe { StringArray::new_unchecked(offsets.clone(), data.clone(), None) };
+
+        let data = string_array.into_data();
+
+        let array = FFI_ArrowArray::new(&data);
+        let schema = FFI_ArrowSchema::try_from(data.data_type())?;
+
+        let dt = DataType::try_from(&schema)?;
+        let array = Arc::new(array);
+        let imported_array = ImportedArrowArray {
+            array: &array,
+            data_type: dt,
+            owner: &array,
+        };
+
+        let offset_buf_len = imported_array.buffer_len(1, &imported_array.data_type)?;
+        let data_buf_len = imported_array.buffer_len(2, &imported_array.data_type)?;
+
+        assert_eq!(offset_buf_len, 4);
+        assert_eq!(data_buf_len, 0);
+
+        test_round_trip(&imported_array.consume()?)
+    }
+
+    fn roundtrip_string_array(array: StringArray) -> StringArray {
+        let data = array.into_data();
+
+        let array = FFI_ArrowArray::new(&data);
+        let schema = FFI_ArrowSchema::try_from(data.data_type()).unwrap();
+
+        let array = unsafe { from_ffi(array, &schema) }.unwrap();
+        StringArray::from(array)
+    }
+
+    fn extend_array(array: &dyn Array) -> ArrayRef {
+        let len = array.len();
+        let data = array.to_data();
+
+        let mut mutable = MutableArrayData::new(vec![&data], false, len);
+        mutable.extend(0, 0, len);
+        make_array(mutable.freeze())
+    }
+
+    #[test]
+    fn test_extend_imported_string_slice() {
+        let mut strings = vec![];
+
+        for i in 0..1000 {
+            strings.push(format!("string: {}", i));
+        }
+
+        let string_array = StringArray::from(strings);
+
+        let imported = roundtrip_string_array(string_array.clone());
+        assert_eq!(imported.len(), 1000);
+        assert_eq!(imported.value(0), "string: 0");
+        assert_eq!(imported.value(499), "string: 499");
+
+        let copied = extend_array(&imported);
+        assert_eq!(
+            copied.as_any().downcast_ref::<StringArray>().unwrap(),
+            &imported
+        );
+
+        let slice = string_array.slice(500, 500);
+
+        let imported = roundtrip_string_array(slice);
+        assert_eq!(imported.len(), 500);
+        assert_eq!(imported.value(0), "string: 500");
+        assert_eq!(imported.value(499), "string: 999");
+
+        let copied = extend_array(&imported);
+        assert_eq!(
+            copied.as_any().downcast_ref::<StringArray>().unwrap(),
+            &imported
+        );
+    }
+
+    fn roundtrip_list_array(array: ListArray) -> ListArray {
+        let data = array.into_data();
+
+        let array = FFI_ArrowArray::new(&data);
+        let schema = FFI_ArrowSchema::try_from(data.data_type()).unwrap();
+
+        let array = unsafe { from_ffi(array, &schema) }.unwrap();
+        ListArray::from(array)
+    }
+
+    #[test]
+    fn test_extend_imported_list_slice() {
+        let mut data = vec![];
+
+        for i in 0..1000 {
+            let mut list = vec![];
+            for j in 0..100 {
+                list.push(Some(i * 1000 + j));
+            }
+            data.push(Some(list));
+        }
+
+        let list_array = ListArray::from_iter_primitive::<Int32Type, _, _>(data);
+
+        let slice = list_array.slice(500, 500);
+        let imported = roundtrip_list_array(slice.clone());
+        assert_eq!(imported.len(), 500);
+        assert_eq!(&slice, &imported);
+
+        let copied = extend_array(&imported);
+        assert_eq!(
+            copied.as_any().downcast_ref::<ListArray>().unwrap(),
+            &imported
+        );
     }
 }

@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow_buffer::{i256, ArrowNativeType};
+use arrow_buffer::{i256, ArrowNativeType, IntervalDayTime, IntervalMonthDayNano};
 use arrow_schema::ArrowError;
 use half::f16;
 use num::complex::ComplexFloat;
@@ -139,7 +139,10 @@ pub trait ArrowNativeTypeOp: ArrowNativeType {
 
 macro_rules! native_type_op {
     ($t:tt) => {
-        native_type_op!($t, 0, 1, $t::MIN, $t::MAX);
+        native_type_op!($t, 0, 1);
+    };
+    ($t:tt, $zero:expr, $one: expr) => {
+        native_type_op!($t, $zero, $one, $t::MIN, $t::MAX);
     };
     ($t:tt, $zero:expr, $one: expr, $min: expr, $max: expr) => {
         impl ArrowNativeTypeOp for $t {
@@ -283,6 +286,13 @@ native_type_op!(u16);
 native_type_op!(u32);
 native_type_op!(u64);
 native_type_op!(i256, i256::ZERO, i256::ONE, i256::MIN, i256::MAX);
+
+native_type_op!(IntervalDayTime, IntervalDayTime::ZERO, IntervalDayTime::ONE);
+native_type_op!(
+    IntervalMonthDayNano,
+    IntervalMonthDayNano::ZERO,
+    IntervalMonthDayNano::ONE
+);
 
 macro_rules! native_type_float_op {
     ($t:tt, $zero:expr, $one:expr, $min:expr, $max:expr) => {

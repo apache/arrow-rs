@@ -56,10 +56,16 @@ pub struct RecordDecoder {
     ///
     /// We track this independently of Vec to avoid re-zeroing memory
     data_len: usize,
+
+    /// Whether rows with less than expected columns are considered valid
+    ///
+    /// Default value is false
+    /// When enabled fills in missing columns with null
+    truncated_rows: bool,
 }
 
 impl RecordDecoder {
-    pub fn new(delimiter: Reader, num_columns: usize) -> Self {
+    pub fn new(delimiter: Reader, num_columns: usize, truncated_rows: bool) -> Self {
         Self {
             delimiter,
             num_columns,
@@ -70,6 +76,7 @@ impl RecordDecoder {
             data_len: 0,
             data: vec![],
             num_rows: 0,
+            truncated_rows,
         }
     }
 
@@ -127,10 +134,19 @@ impl RecordDecoder {
                     }
                     ReadRecordResult::Record => {
                         if self.current_field != self.num_columns {
-                            return Err(ArrowError::CsvError(format!(
-                                "incorrect number of fields for line {}, expected {} got {}",
-                                self.line_number, self.num_columns, self.current_field
-                            )));
+                            if self.truncated_rows && self.current_field < self.num_columns {
+                                // If the number of fields is less than expected, pad with nulls
+                                let fill_count = self.num_columns - self.current_field;
+                                let fill_value = self.offsets[self.offsets_len - 1];
+                                self.offsets[self.offsets_len..self.offsets_len + fill_count]
+                                    .fill(fill_value);
+                                self.offsets_len += fill_count;
+                            } else {
+                                return Err(ArrowError::CsvError(format!(
+                                    "incorrect number of fields for line {}, expected {} got {}",
+                                    self.line_number, self.num_columns, self.current_field
+                                )));
+                            }
                         }
                         read += 1;
                         self.current_field = 0;
@@ -299,7 +315,7 @@ mod tests {
         .into_iter();
 
         let mut reader = BufReader::with_capacity(3, Cursor::new(csv.as_bytes()));
-        let mut decoder = RecordDecoder::new(Reader::new(), 3);
+        let mut decoder = RecordDecoder::new(Reader::new(), 3, false);
 
         loop {
             let to_read = 3;
@@ -333,7 +349,7 @@ mod tests {
     #[test]
     fn test_invalid_fields() {
         let csv = "a,b\nb,c\na\n";
-        let mut decoder = RecordDecoder::new(Reader::new(), 2);
+        let mut decoder = RecordDecoder::new(Reader::new(), 2, false);
         let err = decoder.decode(csv.as_bytes(), 4).unwrap_err().to_string();
 
         let expected = "Csv error: incorrect number of fields for line 3, expected 2 got 1";
@@ -341,7 +357,7 @@ mod tests {
         assert_eq!(err, expected);
 
         // Test with initial skip
-        let mut decoder = RecordDecoder::new(Reader::new(), 2);
+        let mut decoder = RecordDecoder::new(Reader::new(), 2, false);
         let (skipped, bytes) = decoder.decode(csv.as_bytes(), 1).unwrap();
         assert_eq!(skipped, 1);
         decoder.clear();
@@ -354,9 +370,18 @@ mod tests {
     #[test]
     fn test_skip_insufficient_rows() {
         let csv = "a\nv\n";
-        let mut decoder = RecordDecoder::new(Reader::new(), 1);
+        let mut decoder = RecordDecoder::new(Reader::new(), 1, false);
         let (read, bytes) = decoder.decode(csv.as_bytes(), 3).unwrap();
         assert_eq!(read, 2);
+        assert_eq!(bytes, csv.len());
+    }
+
+    #[test]
+    fn test_truncated_rows() {
+        let csv = "a,b\nv\n,1\n,2\n,3\n";
+        let mut decoder = RecordDecoder::new(Reader::new(), 2, true);
+        let (read, bytes) = decoder.decode(csv.as_bytes(), 5).unwrap();
+        assert_eq!(read, 5);
         assert_eq!(bytes, csv.len());
     }
 }

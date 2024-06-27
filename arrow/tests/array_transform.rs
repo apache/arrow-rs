@@ -17,16 +17,16 @@
 
 use arrow::array::{
     Array, ArrayRef, BooleanArray, Decimal128Array, DictionaryArray, FixedSizeBinaryArray,
-    Int16Array, Int32Array, Int64Array, Int64Builder, ListArray, ListBuilder, MapBuilder,
-    NullArray, StringArray, StringBuilder, StringDictionaryBuilder, StructArray, UInt8Array,
-    UnionArray,
+    FixedSizeListBuilder, Int16Array, Int32Array, Int64Array, Int64Builder, ListArray, ListBuilder,
+    MapBuilder, NullArray, StringArray, StringBuilder, StringDictionaryBuilder, StructArray,
+    UInt16Array, UInt16Builder, UInt8Array, UnionArray,
 };
 use arrow::datatypes::Int16Type;
 use arrow_array::StringViewArray;
-use arrow_buffer::Buffer;
+use arrow_buffer::{Buffer, ScalarBuffer};
 use arrow_data::transform::MutableArrayData;
 use arrow_data::ArrayData;
-use arrow_schema::{DataType, Field, Fields};
+use arrow_schema::{DataType, Field, Fields, UnionFields};
 use std::sync::Arc;
 
 #[allow(unused)]
@@ -482,17 +482,25 @@ fn test_union_dense() {
         Some(4),
         Some(5),
     ]));
-    let offsets = Buffer::from_slice_ref([0, 0, 1, 1, 2, 2, 3, 4i32]);
-    let type_ids = Buffer::from_slice_ref([42, 84, 42, 84, 84, 42, 84, 84i8]);
+    let offsets = [0, 0, 1, 1, 2, 2, 3, 4]
+        .into_iter()
+        .collect::<ScalarBuffer<i32>>();
+    let type_ids = [42, 84, 42, 84, 84, 42, 84, 84]
+        .into_iter()
+        .collect::<ScalarBuffer<i8>>();
+
+    let union_fields = [
+        (84, Arc::new(Field::new("int", DataType::Int32, false))),
+        (42, Arc::new(Field::new("string", DataType::Utf8, false))),
+    ]
+    .into_iter()
+    .collect::<UnionFields>();
 
     let array = UnionArray::try_new(
-        &[84, 42],
+        union_fields.clone(),
         type_ids,
         Some(offsets),
-        vec![
-            (Field::new("int", DataType::Int32, false), ints),
-            (Field::new("string", DataType::Utf8, false), strings),
-        ],
+        vec![ints, strings],
     )
     .unwrap()
     .into_data();
@@ -507,19 +515,11 @@ fn test_union_dense() {
     // Expected data
     let strings: ArrayRef = Arc::new(StringArray::from(vec![Some("doe")]));
     let ints: ArrayRef = Arc::new(Int32Array::from(vec![Some(3), Some(4)]));
-    let offsets = Buffer::from_slice_ref([0, 0, 1i32]);
-    let type_ids = Buffer::from_slice_ref([84, 42, 84i8]);
+    let offsets = [0, 0, 1].into_iter().collect::<ScalarBuffer<i32>>();
+    let type_ids = [84, 42, 84].into_iter().collect::<ScalarBuffer<i8>>();
 
-    let expected = UnionArray::try_new(
-        &[84, 42],
-        type_ids,
-        Some(offsets),
-        vec![
-            (Field::new("int", DataType::Int32, false), ints),
-            (Field::new("string", DataType::Utf8, false), strings),
-        ],
-    )
-    .unwrap();
+    let expected =
+        UnionArray::try_new(union_fields, type_ids, Some(offsets), vec![ints, strings]).unwrap();
 
     assert_eq!(array.to_data(), expected.to_data());
 }
@@ -1074,43 +1074,42 @@ fn test_mixed_types() {
     MutableArrayData::new(vec![&a, &b], false, 4);
 }
 
-/*
-// this is an old test used on a meanwhile removed dead code
-// that is still useful when `MutableArrayData` supports fixed-size lists.
 #[test]
-fn test_fixed_size_list_append() -> Result<()> {
-    let int_builder = UInt16Builder::new(64);
+fn test_fixed_size_list_append() {
+    let int_builder = UInt16Builder::with_capacity(64);
     let mut builder = FixedSizeListBuilder::<UInt16Builder>::new(int_builder, 2);
-    builder.values().append_slice(&[1, 2])?;
-    builder.append(true)?;
-    builder.values().append_slice(&[3, 4])?;
-    builder.append(false)?;
-    builder.values().append_slice(&[5, 6])?;
-    builder.append(true)?;
+    builder.values().append_slice(&[1, 2]);
+    builder.append(true);
+    builder.values().append_slice(&[3, 4]);
+    builder.append(false);
+    builder.values().append_slice(&[5, 6]);
+    builder.append(true);
+    let a = builder.finish().into_data();
 
-    let a_builder = UInt16Builder::new(64);
+    let a_builder = UInt16Builder::with_capacity(64);
     let mut a_builder = FixedSizeListBuilder::<UInt16Builder>::new(a_builder, 2);
-    a_builder.values().append_slice(&[7, 8])?;
-    a_builder.append(true)?;
-    a_builder.values().append_slice(&[9, 10])?;
-    a_builder.append(true)?;
-    a_builder.values().append_slice(&[11, 12])?;
-    a_builder.append(false)?;
-    a_builder.values().append_slice(&[13, 14])?;
-    a_builder.append(true)?;
-    a_builder.values().append_null()?;
-    a_builder.values().append_null()?;
-    a_builder.append(true)?;
-    let a = a_builder.finish();
+    a_builder.values().append_slice(&[7, 8]);
+    a_builder.append(true);
+    a_builder.values().append_slice(&[9, 10]);
+    a_builder.append(true);
+    a_builder.values().append_slice(&[11, 12]);
+    a_builder.append(false);
+    a_builder.values().append_slice(&[13, 14]);
+    a_builder.append(true);
+    a_builder.values().append_null();
+    a_builder.values().append_null();
+    a_builder.append(true);
+    let b = a_builder.finish().into_data();
+
+    let mut mutable = MutableArrayData::new(vec![&a, &b], false, 10);
+    mutable.extend(0, 0, a.len());
+    mutable.extend(1, 0, b.len());
 
     // append array
-    builder.append_data(&[
-        a.data(),
-        a.slice(1, 3).data(),
-        a.slice(2, 1).data(),
-        a.slice(5, 0).data(),
-    ])?;
-    let finished = builder.finish();
+    mutable.extend(1, 1, 4);
+    mutable.extend(1, 2, 3);
+
+    let finished = mutable.freeze();
 
     let expected_int_array = UInt16Array::from(vec![
         Some(1),
@@ -1141,23 +1140,14 @@ fn test_fixed_size_list_append() -> Result<()> {
         Some(11),
         Some(12),
     ]);
-    let expected_list_data = ArrayData::new(
-        DataType::FixedSizeList(
-            Arc::new(Field::new("item", DataType::UInt16, true)),
-            2,
-        ),
+    let expected_fixed_size_list_data = ArrayData::try_new(
+        DataType::FixedSizeList(Arc::new(Field::new("item", DataType::UInt16, true)), 2),
         12,
-        None,
-        None,
+        Some(Buffer::from(&[0b11011101, 0b101])),
         0,
         vec![],
-        vec![expected_int_array.data()],
-    );
-    let expected_list =
-        FixedSizeListArray::from(Arc::new(expected_list_data) as ArrayData);
-    assert_eq!(&expected_list.values(), &finished.values());
-    assert_eq!(expected_list.len(), finished.len());
-
-    Ok(())
+        vec![expected_int_array.to_data()],
+    )
+    .unwrap();
+    assert_eq!(finished, expected_fixed_size_list_data);
 }
-*/

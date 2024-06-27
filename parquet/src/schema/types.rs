@@ -37,8 +37,10 @@ pub type SchemaDescPtr = Arc<SchemaDescriptor>;
 pub type ColumnDescPtr = Arc<ColumnDescriptor>;
 
 /// Representation of a Parquet type.
+///
 /// Used to describe primitive leaf fields and structs, including top-level schema.
-/// Note that the top-level schema type is represented using `GroupType` whose
+///
+/// Note that the top-level schema is represented using [`Type::GroupType`] whose
 /// repetition is `None`.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Type {
@@ -355,7 +357,13 @@ impl<'a> PrimitiveTypeBuilder<'a> {
                     (LogicalType::String, PhysicalType::BYTE_ARRAY) => {}
                     (LogicalType::Json, PhysicalType::BYTE_ARRAY) => {}
                     (LogicalType::Bson, PhysicalType::BYTE_ARRAY) => {}
-                    (LogicalType::Uuid, PhysicalType::FIXED_LEN_BYTE_ARRAY) => {}
+                    (LogicalType::Uuid, PhysicalType::FIXED_LEN_BYTE_ARRAY) if self.length == 16 => {}
+                    (LogicalType::Uuid, PhysicalType::FIXED_LEN_BYTE_ARRAY) => {
+                        return Err(general_err!(
+                            "UUID cannot annotate field '{}' because it is not a FIXED_LEN_BYTE_ARRAY(16) field",
+                            self.name
+                        ))
+                    }
                     (LogicalType::Float16, PhysicalType::FIXED_LEN_BYTE_ARRAY)
                         if self.length == 2 => {}
                     (LogicalType::Float16, PhysicalType::FIXED_LEN_BYTE_ARRAY) => {
@@ -662,7 +670,24 @@ impl BasicTypeInfo {
 // ----------------------------------------------------------------------
 // Parquet descriptor definitions
 
-/// Represents a path in a nested schema
+/// Represents the location of a column in a Parquet schema
+///
+/// # Example: refer to column named `'my_column'`
+/// ```
+/// # use parquet::schema::types::ColumnPath;
+/// let column_path = ColumnPath::from("my_column");
+/// ```
+///
+/// # Example: refer to column named `c` in a nested struct `{a: {b: {c: ...}}}`
+/// ```
+/// # use parquet::schema::types::ColumnPath;
+/// // form path 'a.b.c'
+/// let column_path = ColumnPath::from(vec![
+///   String::from("a"),
+///   String::from("b"),
+///   String::from("c")
+/// ]);
+/// ```
 #[derive(Clone, PartialEq, Debug, Eq, Hash)]
 pub struct ColumnPath {
     parts: Vec<String>,
@@ -737,21 +762,22 @@ impl AsRef<[String]> for ColumnPath {
     }
 }
 
-/// A descriptor for leaf-level primitive columns.
-/// This encapsulates information such as definition and repetition levels and is used to
+/// Physical type for leaf-level primitive columns.
+///
+/// Also includes the maximum definition and repetition levels required to
 /// re-assemble nested data.
 #[derive(Debug, PartialEq)]
 pub struct ColumnDescriptor {
-    // The "leaf" primitive type of this column
+    /// The "leaf" primitive type of this column
     primitive_type: TypePtr,
 
-    // The maximum definition level for this column
+    /// The maximum definition level for this column
     max_def_level: i16,
 
-    // The maximum repetition level for this column
+    /// The maximum repetition level for this column
     max_rep_level: i16,
 
-    // The path of this column. For instance, "a.b.c.d".
+    /// The path of this column. For instance, "a.b.c.d".
     path: ColumnPath,
 }
 
@@ -860,24 +886,33 @@ impl ColumnDescriptor {
     }
 }
 
-/// A schema descriptor. This encapsulates the top-level schemas for all the columns,
-/// as well as all descriptors for all the primitive columns.
+/// Schema of a Parquet file.
+///
+/// Encapsulates the file's schema ([`Type`]) and [`ColumnDescriptor`]s for
+/// each primitive (leaf) column.
 #[derive(PartialEq)]
 pub struct SchemaDescriptor {
-    // The top-level schema (the "message" type).
-    // This must be a `GroupType` where each field is a root column type in the schema.
+    /// The top-level logical schema (the "message" type).
+    ///
+    /// This must be a [`Type::GroupType`] where each field is a root
+    /// column type in the schema.
     schema: TypePtr,
 
-    // All the descriptors for primitive columns in this schema, constructed from
-    // `schema` in DFS order.
+    /// The descriptors for the physical type of each leaf column in this schema
+    ///
+    /// Constructed from `schema` in DFS order.
     leaves: Vec<ColumnDescPtr>,
 
-    // Mapping from a leaf column's index to the root column index that it
-    // comes from. For instance: the leaf `a.b.c.d` would have a link back to `a`:
-    // -- a  <-----+
-    // -- -- b     |
-    // -- -- -- c  |
-    // -- -- -- -- d
+    /// Mapping from a leaf column's index to the root column index that it
+    /// comes from.
+    ///
+    /// For instance: the leaf `a.b.c.d` would have a link back to `a`:
+    /// ```text
+    /// -- a  <-----+
+    /// -- -- b     |
+    /// -- -- -- c  |
+    /// -- -- -- -- d
+    /// ```
     leaf_to_base: Vec<usize>,
 }
 
@@ -1563,6 +1598,20 @@ mod tests {
             assert_eq!(
                 format!("{e}"),
                 "Parquet error: FLOAT16 cannot annotate field 'foo' because it is not a FIXED_LEN_BYTE_ARRAY(2) field"
+            );
+        }
+
+        // Must have length 16
+        result = Type::primitive_type_builder("foo", PhysicalType::FIXED_LEN_BYTE_ARRAY)
+            .with_repetition(Repetition::REQUIRED)
+            .with_logical_type(Some(LogicalType::Uuid))
+            .with_length(15)
+            .build();
+        assert!(result.is_err());
+        if let Err(e) = result {
+            assert_eq!(
+                format!("{e}"),
+                "Parquet error: UUID cannot annotate field 'foo' because it is not a FIXED_LEN_BYTE_ARRAY(16) field"
             );
         }
     }

@@ -424,7 +424,6 @@ fn canonicalize_headers(header_map: &HeaderMap) -> (String, String) {
 /// <https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/configuring-instance-metadata-service.html>
 #[derive(Debug)]
 pub struct InstanceCredentialProvider {
-    pub cache: TokenCache<Arc<AwsCredential>>,
     pub imdsv1_fallback: bool,
     pub metadata_endpoint: String,
 }

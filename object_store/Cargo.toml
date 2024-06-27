@@ -17,7 +17,7 @@
 
 [package]
 name = "object_store"
-version = "0.10.0"
+version = "0.10.1"
 edition = "2021"
 license = "MIT/Apache-2.0"
 readme = "README.md"
@@ -35,7 +35,7 @@ bytes = "1.0"
 chrono = { version = "0.4.34", default-features = false, features = ["clock"] }
 futures = "0.3"
 humantime = "2.1"
-itertools = "0.12.0"
+itertools = "0.13.0"
 parking_lot = { version = "0.12" }
 percent-encoding = "2.1"
 snafu = "0.7"
@@ -46,7 +46,7 @@ walkdir = "2"
 # Cloud storage support
 base64 = { version = "0.22", default-features = false, features = ["std"], optional = true }
 hyper = { version = "1.2", default-features = false, optional = true }
-quick-xml = { version = "0.31.0", features = ["serialize", "overlapped-lists"], optional = true }
+quick-xml = { version = "0.34.0", features = ["serialize", "overlapped-lists"], optional = true }
 serde = { version = "1.0", default-features = false, features = ["derive"], optional = true }
 serde_json = { version = "1.0", default-features = false, optional = true }
 rand = { version = "0.8", default-features = false, features = ["std", "std_rng"], optional = true }
@@ -57,7 +57,7 @@ tokio = { version = "1.25.0", features = ["sync", "macros", "rt", "time", "io-ut
 md-5 = { version = "0.10.6", default-features = false, optional = true }
 
 [target.'cfg(target_family="unix")'.dev-dependencies]
-nix = { version = "0.28.0", features = ["fs"] }
+nix = { version = "0.29.0", features = ["fs"] }
 
 [features]
 cloud = ["serde", "serde_json", "quick-xml", "hyper", "reqwest", "reqwest/json", "reqwest/stream", "chrono/serde", "base64", "rand", "ring"]
@@ -66,6 +66,7 @@ gcp = ["cloud", "rustls-pemfile"]
 aws = ["cloud", "md-5"]
 http = ["cloud"]
 tls-webpki-roots = ["reqwest?/rustls-tls-webpki-roots"]
+integration = []
 
 [dev-dependencies] # In alphabetical order
 futures-test = "0.3"

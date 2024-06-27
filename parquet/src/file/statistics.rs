@@ -20,6 +20,7 @@
 //! Though some common methods are available on enum, use pattern match to extract
 //! actual min and max values from statistics, see below:
 //!
+//! # Examples
 //! ```rust
 //! use parquet::file::statistics::Statistics;
 //!
@@ -271,8 +272,8 @@ pub fn to_thrift(stats: Option<&Statistics>) -> Option<TStatistics> {
 
     if stats.is_min_max_backwards_compatible() {
         // Copy to deprecated min, max values for compatibility with older readers
-        thrift_stats.min = min.clone();
-        thrift_stats.max = max.clone();
+        thrift_stats.min.clone_from(&min);
+        thrift_stats.max.clone_from(&max);
     }
 
     if !stats.is_min_max_deprecated() {

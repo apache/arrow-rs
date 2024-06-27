@@ -1526,6 +1526,7 @@ mod tests {
     use arrow_array::builder::UnionBuilder;
     use arrow_array::builder::{PrimitiveRunBuilder, UInt32Builder};
     use arrow_array::types::*;
+    use arrow_buffer::ScalarBuffer;
 
     use crate::convert::fb_to_schema;
     use crate::reader::*;
@@ -1741,7 +1742,7 @@ mod tests {
         let array1 = NullArray::new(32);
         let array2 = Int32Array::from(vec![1; 32]);
         let array3 = NullArray::new(32);
-        let array4 = Float64Array::from(vec![std::f64::NAN; 32]);
+        let array4 = Float64Array::from(vec![f64::NAN; 32]);
         let batch = RecordBatch::try_new(
             Arc::new(schema.clone()),
             vec![
@@ -1800,12 +1801,12 @@ mod tests {
 
         // Dict field with id 2
         let dctfield = Field::new_dict("dict", array.data_type().clone(), false, 2, false);
+        let union_fields = [(0, Arc::new(dctfield))].into_iter().collect();
 
-        let types = Buffer::from_slice_ref([0_i8, 0, 0]);
-        let offsets = Buffer::from_slice_ref([0_i32, 1, 2]);
+        let types = [0, 0, 0].into_iter().collect::<ScalarBuffer<i8>>();
+        let offsets = [0, 1, 2].into_iter().collect::<ScalarBuffer<i32>>();
 
-        let union =
-            UnionArray::try_new(&[0], types, Some(offsets), vec![(dctfield, array)]).unwrap();
+        let union = UnionArray::try_new(union_fields, types, Some(offsets), vec![array]).unwrap();
 
         let schema = Arc::new(Schema::new(vec![Field::new(
             "union",
