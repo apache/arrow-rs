@@ -1045,6 +1045,66 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn test_send_multiple_dictionaries() {
+        // Create a schema with two dictionary fields that have the same dict ID
+        let schema = Arc::new(Schema::new(vec![Field::new_dictionary(
+            "dict_1",
+            DataType::UInt16,
+            DataType::Utf8,
+            false,
+        ),Field::new_dictionary(
+            "dict_2",
+            DataType::UInt16,
+            DataType::Utf8,
+            false,
+        )]));
+
+        let arr_one_1: Arc<DictionaryArray<UInt16Type>> =
+            Arc::new(vec!["a", "a", "b"].into_iter().collect());
+        let arr_one_2: Arc<DictionaryArray<UInt16Type>> =
+            Arc::new(vec!["c", "c", "d"].into_iter().collect());
+        let arr_two_1: Arc<DictionaryArray<UInt16Type>> =
+            Arc::new(vec!["b", "a", "c"].into_iter().collect());
+        let arr_two_2: Arc<DictionaryArray<UInt16Type>> =
+            Arc::new(vec!["k", "d", "e"].into_iter().collect());
+        let batch_one = RecordBatch::try_new(schema.clone(), vec![arr_one_1.clone(), arr_one_2.clone()]).unwrap();
+        let batch_two = RecordBatch::try_new(schema.clone(), vec![arr_two_1.clone(), arr_two_2.clone()]).unwrap();
+
+        let encoder = FlightDataEncoderBuilder::default()
+            .with_dictionary_handling(DictionaryHandling::Resend)
+            .build(futures::stream::iter(vec![Ok(batch_one), Ok(batch_two)]));
+
+        let mut decoder = FlightDataDecoder::new(encoder);
+        let mut expected_array_1 = arr_one_1;
+        let mut expected_array_2 = arr_one_2;
+        while let Some(decoded) = decoder.next().await {
+            let decoded = decoded.unwrap();
+            match decoded.payload {
+                DecodedPayload::None => {}
+                DecodedPayload::Schema(s) => assert_eq!(s, schema),
+                DecodedPayload::RecordBatch(b) => {
+                    assert_eq!(b.schema(), schema);
+
+                    let actual_1 = Arc::new(downcast_array::<DictionaryArray<UInt16Type>>(
+                        b.column_by_name("dict_1").unwrap(),
+                    ));
+
+                    assert_eq!(actual_1, expected_array_1);
+
+                    let actual_2 = Arc::new(downcast_array::<DictionaryArray<UInt16Type>>(
+                        b.column_by_name("dict_2").unwrap(),
+                    ));
+
+                    assert_eq!(actual_2, expected_array_2);
+
+                    expected_array_1 = arr_two_1.clone();
+                    expected_array_2 = arr_two_2.clone();
+                }
+            }
+        }
+    }
+
     #[test]
     fn test_schema_metadata_encoded() {
         let schema = Schema::new(vec![Field::new("data", DataType::Int32, false)]).with_metadata(
