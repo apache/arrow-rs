@@ -163,7 +163,7 @@ impl Default for IpcWriteOptions {
 ///
 /// // encode the batch into zero or more encoded dictionaries
 /// // and the data for the actual array.
-/// let data_gen = IpcDataGenerator {};
+/// let data_gen = IpcDataGenerator::default();
 /// let (encoded_dictionaries, encoded_message) = data_gen
 ///   .encoded_batch(&batch, &mut dictionary_tracker, &options)
 ///   .unwrap();
@@ -204,21 +204,22 @@ impl IpcDataGenerator {
         encoded_dictionaries: &mut Vec<EncodedData>,
         dictionary_tracker: &mut DictionaryTracker,
         write_options: &IpcWriteOptions,
+        next_dict_id: &mut i64,
     ) -> Result<(), ArrowError> {
         match column.data_type() {
-            DataType::Struct(fields) => {
+            DataType::Struct(_) => {
                 let s = as_struct_array(column);
-                for (field, column) in fields.iter().zip(s.columns()) {
+                for column in s.columns() {
                     self.encode_dictionaries(
-                        field,
                         column,
                         encoded_dictionaries,
                         dictionary_tracker,
                         write_options,
+                        next_dict_id,
                     )?;
                 }
             }
-            DataType::RunEndEncoded(_, values) => {
+            DataType::RunEndEncoded(_, _) => {
                 let data = column.to_data();
                 if data.child_data().len() != 2 {
                     return Err(ArrowError::InvalidArgumentError(format!(
@@ -230,82 +231,77 @@ impl IpcDataGenerator {
                 // only for values array.
                 let values_array = make_array(data.child_data()[1].clone());
                 self.encode_dictionaries(
-                    values,
                     &values_array,
                     encoded_dictionaries,
                     dictionary_tracker,
                     write_options,
+                    next_dict_id,
                 )?;
             }
-            DataType::List(field) => {
+            DataType::List(_) => {
                 let list = as_list_array(column);
                 self.encode_dictionaries(
-                    field,
                     list.values(),
                     encoded_dictionaries,
                     dictionary_tracker,
                     write_options,
+                    next_dict_id,
                 )?;
             }
-            DataType::LargeList(field) => {
+            DataType::LargeList(_) => {
                 let list = as_large_list_array(column);
                 self.encode_dictionaries(
-                    field,
                     list.values(),
                     encoded_dictionaries,
                     dictionary_tracker,
                     write_options,
+                    next_dict_id,
                 )?;
             }
-            DataType::FixedSizeList(field, _) => {
+            DataType::FixedSizeList(_, _) => {
                 let list = column
                     .as_any()
                     .downcast_ref::<FixedSizeListArray>()
                     .expect("Unable to downcast to fixed size list array");
                 self.encode_dictionaries(
-                    field,
                     list.values(),
                     encoded_dictionaries,
                     dictionary_tracker,
                     write_options,
+                    next_dict_id,
                 )?;
             }
-            DataType::Map(field, _) => {
+            DataType::Map(_, _) => {
                 let map_array = as_map_array(column);
-
-                let (keys, values) = match field.data_type() {
-                    DataType::Struct(fields) if fields.len() == 2 => (&fields[0], &fields[1]),
-                    _ => panic!("Incorrect field data type {:?}", field.data_type()),
-                };
 
                 // keys
                 self.encode_dictionaries(
-                    keys,
                     map_array.keys(),
                     encoded_dictionaries,
                     dictionary_tracker,
                     write_options,
+                    next_dict_id,
                 )?;
 
                 // values
                 self.encode_dictionaries(
-                    values,
                     map_array.values(),
                     encoded_dictionaries,
                     dictionary_tracker,
                     write_options,
+                    next_dict_id,
                 )?;
             }
             DataType::Union(fields, _) => {
                 let union = as_union_array(column);
-                for (type_id, field) in fields.iter() {
+                for (type_id, _) in fields.iter() {
                     let column = union.child(type_id);
                     self.encode_dictionaries(
-                        field,
                         column,
                         encoded_dictionaries,
                         dictionary_tracker,
                         write_options,
+                        next_dict_id,
                     )?;
                 }
             }
@@ -317,17 +313,17 @@ impl IpcDataGenerator {
 
     fn encode_dictionaries(
         &self,
-        field: &Field,
         column: &ArrayRef,
         encoded_dictionaries: &mut Vec<EncodedData>,
         dictionary_tracker: &mut DictionaryTracker,
         write_options: &IpcWriteOptions,
+        next_dict_id: &mut i64,
     ) -> Result<(), ArrowError> {
         match column.data_type() {
             DataType::Dictionary(_key_type, _value_type) => {
-                let dict_id = field
-                    .dict_id()
-                    .expect("All Dictionary types have `dict_id`");
+                let dict_id = *next_dict_id;
+                *next_dict_id += 1;
+
                 let dict_data = column.to_data();
                 let dict_values = &dict_data.child_data()[0];
 
@@ -338,6 +334,7 @@ impl IpcDataGenerator {
                     encoded_dictionaries,
                     dictionary_tracker,
                     write_options,
+                    next_dict_id,
                 )?;
 
                 let emit = dictionary_tracker.insert(dict_id, column)?;
@@ -355,6 +352,7 @@ impl IpcDataGenerator {
                 encoded_dictionaries,
                 dictionary_tracker,
                 write_options,
+                next_dict_id,
             )?,
         }
 
@@ -373,14 +371,16 @@ impl IpcDataGenerator {
         let schema = batch.schema();
         let mut encoded_dictionaries = Vec::with_capacity(schema.all_fields().len());
 
-        for (i, field) in schema.fields().iter().enumerate() {
+        let mut next_dict_id = 0;
+
+        for i in 0..schema.fields().len() {
             let column = batch.column(i);
             self.encode_dictionaries(
-                field,
                 column,
                 &mut encoded_dictionaries,
                 dictionary_tracker,
                 write_options,
+                &mut next_dict_id,
             )?;
         }
 
@@ -695,6 +695,8 @@ impl DictionaryTracker {
     ///   has never been seen before, return `Ok(true)` to indicate that the dictionary was just
     ///   inserted.
     pub fn insert(&mut self, dict_id: i64, column: &ArrayRef) -> Result<bool, ArrowError> {
+        println!("\n\ninserting dict id {dict_id}\n\n");
+
         let dict_data = column.to_data();
         let dict_values = &dict_data.child_data()[0];
 
@@ -1821,8 +1823,9 @@ mod tests {
         gen.encoded_batch(&batch, &mut dict_tracker, &Default::default())
             .unwrap();
 
-        // Dictionary with id 2 should have been written to the dict tracker
-        assert!(dict_tracker.written.contains_key(&2));
+        // The encoder will assign dict IDs itself to ensure uniqueness and ignore the dict ID in the schema
+        // so we expect the dict will be keyed to 0
+        assert!(dict_tracker.written.contains_key(&0));
     }
 
     #[test]
@@ -1856,8 +1859,9 @@ mod tests {
         gen.encoded_batch(&batch, &mut dict_tracker, &Default::default())
             .unwrap();
 
-        // Dictionary with id 2 should have been written to the dict tracker
-        assert!(dict_tracker.written.contains_key(&2));
+        // The encoder will assign dict IDs itself to ensure uniqueness and ignore the dict ID in the schema
+        // so we expect the dict will be keyed to 0
+        assert!(dict_tracker.written.contains_key(&0));
     }
 
     fn write_union_file(options: IpcWriteOptions) {

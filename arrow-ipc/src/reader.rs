@@ -617,7 +617,8 @@ fn read_dictionary_impl(
     let id = batch.id();
     let fields_using_this_dictionary = schema.fields_with_dict_id(id);
     let first_field = fields_using_this_dictionary.first().ok_or_else(|| {
-        ArrowError::InvalidArgumentError("dictionary id not found in schema".to_string())
+        println!("schema: {schema:#?}");
+        ArrowError::InvalidArgumentError(format!("dictionary id {id} not found in schema"))
     })?;
 
     // As the dictionary batch does not contain the type of the
@@ -643,7 +644,7 @@ fn read_dictionary_impl(
         _ => None,
     }
     .ok_or_else(|| {
-        ArrowError::InvalidArgumentError("dictionary id not found in schema".to_string())
+        ArrowError::InvalidArgumentError(format!("dictionary id {id} not found in schema"))
     })?;
 
     // We don't currently record the isOrdered field. This could be general
@@ -1812,7 +1813,7 @@ mod tests {
             "values",
             DataType::Dictionary(Box::new(DataType::Int8), Box::new(DataType::Utf8)),
             true,
-            1,
+            2,
             false,
         ));
         let entry_struct = StructArray::from(vec![
