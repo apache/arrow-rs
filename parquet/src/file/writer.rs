@@ -1398,12 +1398,19 @@ mod tests {
         file: W,
         data: Vec<Vec<i32>>,
         compression: Compression,
+        repetition: Repetition,
     ) -> crate::format::FileMetaData
     where
         W: Write + Send,
         R: ChunkReader + From<W> + 'static,
     {
-        test_roundtrip::<W, R, Int32Type, _>(file, data, |r| r.get_int(0).unwrap(), compression)
+        test_roundtrip::<W, R, Int32Type, _>(
+            file,
+            data,
+            |r| r.get_int(0).unwrap(),
+            compression,
+            repetition,
+        )
     }
 
     /// Tests roundtrip of data of type `D` written using `W` and read using `R`
@@ -1413,6 +1420,7 @@ mod tests {
         data: Vec<Vec<D::T>>,
         value: F,
         compression: Compression,
+        repetition: Repetition,
     ) -> crate::format::FileMetaData
     where
         W: Write + Send,
@@ -1424,7 +1432,7 @@ mod tests {
             types::Type::group_type_builder("schema")
                 .with_fields(vec![Arc::new(
                     types::Type::primitive_type_builder("col1", D::get_physical_type())
-                        .with_repetition(Repetition::REQUIRED)
+                        .with_repetition(repetition)
                         .build()
                         .unwrap(),
                 )])
@@ -1443,9 +1451,15 @@ mod tests {
             let row_group_file_offset = file_writer.buf.bytes_written();
             let mut row_group_writer = file_writer.next_row_group().unwrap();
             if let Some(mut writer) = row_group_writer.next_column().unwrap() {
+                let def_vec = vec![1; subset.len()];
+                let def_lvls = if repetition != Repetition::REQUIRED {
+                    Some(def_vec.as_slice())
+                } else {
+                    None
+                };
                 rows += writer
                     .typed::<D>()
-                    .write_batch(&subset[..], None, None)
+                    .write_batch(&subset[..], def_lvls, None)
                     .unwrap() as i64;
                 writer.close().unwrap();
             }
@@ -1485,7 +1499,12 @@ mod tests {
     /// File write-read roundtrip.
     /// `data` consists of arrays of values for each row group.
     fn test_file_roundtrip(file: File, data: Vec<Vec<i32>>) -> crate::format::FileMetaData {
-        test_roundtrip_i32::<File, File>(file, data, Compression::UNCOMPRESSED)
+        test_roundtrip_i32::<File, File>(
+            file,
+            data,
+            Compression::UNCOMPRESSED,
+            Repetition::REQUIRED,
+        )
     }
 
     #[test]
@@ -1530,7 +1549,12 @@ mod tests {
     }
 
     fn test_bytes_roundtrip(data: Vec<Vec<i32>>, compression: Compression) {
-        test_roundtrip_i32::<Vec<u8>, Bytes>(Vec::with_capacity(1024), data, compression);
+        test_roundtrip_i32::<Vec<u8>, Bytes>(
+            Vec::with_capacity(1024),
+            data,
+            compression,
+            Repetition::REQUIRED,
+        );
     }
 
     #[test]
@@ -1541,6 +1565,7 @@ mod tests {
             vec![my_bool_values],
             |r| r.get_bool(0).unwrap(),
             Compression::UNCOMPRESSED,
+            Repetition::REQUIRED,
         );
     }
 
@@ -1552,6 +1577,7 @@ mod tests {
             vec![my_bool_values],
             |r| r.get_bool(0).unwrap(),
             Compression::SNAPPY,
+            Repetition::REQUIRED,
         );
     }
 
@@ -1838,8 +1864,9 @@ mod tests {
     }
 
     #[test]
-    fn test_unencoded_byte_array_size() {
-        let data = vec![ByteArrayType::gen_vec(32, 5)];
+    fn test_size_statistics() {
+        let num_rows: i64 = 5;
+        let data = vec![ByteArrayType::gen_vec(32, num_rows as usize)];
         let unenc_size: i64 = data[0].iter().map(|x| x.len() as i64).sum();
         let file: File = tempfile::tempfile().unwrap();
         let file_metadata = test_roundtrip::<File, File, ByteArrayType, _>(
@@ -1847,6 +1874,7 @@ mod tests {
             data,
             |r| r.get_bytes(0).unwrap().clone(),
             Compression::UNCOMPRESSED,
+            Repetition::OPTIONAL,
         );
 
         assert_eq!(file_metadata.row_groups.len(), 1);
@@ -1859,7 +1887,13 @@ mod tests {
                 assert_eq!(
                     unenc_size,
                     size_stats.unencoded_byte_array_data_bytes.unwrap_or(0)
-                )
+                );
+                assert!(size_stats.repetition_level_histogram.is_none());
+                assert!(size_stats.definition_level_histogram.is_some());
+                if let Some(ref def_hist) = size_stats.definition_level_histogram {
+                    assert_eq!(def_hist[0], 0);
+                    assert_eq!(def_hist[1], num_rows);
+                }
             }
         }
     }
