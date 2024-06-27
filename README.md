@@ -57,6 +57,12 @@ Starting June 2024, we plan to release new major versions with potentially
 breaking API changes at most once a quarter, and release incremental minor versions in
 the intervening months. See [this ticket] for more details.
 
+To keep our maintenance burden down, we do regularly scheduled releases (major
+and minor) from the `master` branch. How we handle PRs with breaking API changes
+is described in the [contributing] guide.
+
+[contributing]: CONTRIBUTING.md#breaking-changes
+
 For example:
 
 | Approximate Date | Version  | Notes                                   |
