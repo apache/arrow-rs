@@ -385,7 +385,10 @@ impl<'a> MutableArrayData<'a> {
                 array_capacity = *capacity;
                 new_buffers(data_type, *capacity)
             }
-            (DataType::List(_) | DataType::LargeList(_), Capacities::List(capacity, _)) => {
+            (
+                DataType::List(_) | DataType::LargeList(_) | DataType::FixedSizeList(_, _),
+                Capacities::List(capacity, _),
+            ) => {
                 array_capacity = *capacity;
                 new_buffers(data_type, *capacity)
             }
@@ -501,12 +504,23 @@ impl<'a> MutableArrayData<'a> {
                     MutableArrayData::new(value_child, use_nulls, array_capacity),
                 ]
             }
-            DataType::FixedSizeList(_, _) => {
+            DataType::FixedSizeList(_, size) => {
                 let children = arrays
                     .iter()
                     .map(|array| &array.child_data()[0])
                     .collect::<Vec<_>>();
-                vec![MutableArrayData::new(children, use_nulls, array_capacity)]
+                let capacities =
+                    if let Capacities::List(capacity, ref child_capacities) = capacities {
+                        child_capacities
+                            .clone()
+                            .map(|c| *c)
+                            .unwrap_or(Capacities::Array(capacity * *size as usize))
+                    } else {
+                        Capacities::Array(array_capacity * *size as usize)
+                    };
+                vec![MutableArrayData::with_capacities(
+                    children, use_nulls, capacities,
+                )]
             }
             DataType::Union(fields, _) => (0..fields.len())
                 .map(|i| {

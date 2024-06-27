@@ -206,8 +206,10 @@ pub fn sort_to_indices(
         DataType::Boolean => sort_boolean(array.as_boolean(), v, n, options, limit),
         DataType::Utf8 => sort_bytes(array.as_string::<i32>(), v, n, options, limit),
         DataType::LargeUtf8 => sort_bytes(array.as_string::<i64>(), v, n, options, limit),
+        DataType::Utf8View => sort_byte_view(array.as_string_view(), v, n, options, limit),
         DataType::Binary => sort_bytes(array.as_binary::<i32>(), v, n, options, limit),
         DataType::LargeBinary => sort_bytes(array.as_binary::<i64>(), v, n, options, limit),
+        DataType::BinaryView => sort_byte_view(array.as_binary_view(), v, n, options, limit),
         DataType::FixedSizeBinary(_) => sort_fixed_size_binary(array.as_fixed_size_binary(), v, n, options, limit),
         DataType::List(_) => sort_list(array.as_list::<i32>(), v, n, options, limit)?,
         DataType::LargeList(_) => sort_list(array.as_list::<i64>(), v, n, options, limit)?,
@@ -274,6 +276,20 @@ fn sort_bytes<T: ByteArrayType>(
         .map(|index| (index, values.value(index as usize).as_ref()))
         .collect::<Vec<(u32, &[u8])>>();
 
+    sort_impl(options, &mut valids, &nulls, limit, Ord::cmp).into()
+}
+
+fn sort_byte_view<T: ByteViewType>(
+    values: &GenericByteViewArray<T>,
+    value_indices: Vec<u32>,
+    nulls: Vec<u32>,
+    options: SortOptions,
+    limit: Option<usize>,
+) -> UInt32Array {
+    let mut valids = value_indices
+        .into_iter()
+        .map(|index| (index, values.value(index as usize).as_ref()))
+        .collect::<Vec<(u32, &[u8])>>();
     sort_impl(options, &mut valids, &nulls, limit, Ord::cmp).into()
 }
 
@@ -890,13 +906,21 @@ mod tests {
         };
         assert_eq!(&output, &expected);
 
-        let output = LargeStringArray::from(data);
-        let expected = Arc::new(LargeStringArray::from(expected_data)) as ArrayRef;
+        let output = LargeStringArray::from(data.clone());
+        let expected = Arc::new(LargeStringArray::from(expected_data.clone())) as ArrayRef;
         let output = match limit {
             Some(_) => sort_limit(&(Arc::new(output) as ArrayRef), options, limit).unwrap(),
             _ => sort(&(Arc::new(output) as ArrayRef), options).unwrap(),
         };
-        assert_eq!(&output, &expected)
+        assert_eq!(&output, &expected);
+
+        let output = StringViewArray::from(data);
+        let expected = Arc::new(StringViewArray::from(expected_data)) as ArrayRef;
+        let output = match limit {
+            Some(_) => sort_limit(&(Arc::new(output) as ArrayRef), options, limit).unwrap(),
+            _ => sort(&(Arc::new(output) as ArrayRef), options).unwrap(),
+        };
+        assert_eq!(&output, &expected);
     }
 
     fn test_sort_string_dict_arrays<T: ArrowDictionaryKeyType>(
@@ -2423,8 +2447,10 @@ mod tests {
                 None,
                 Some("bad"),
                 Some("sad"),
+                Some("long string longer than 12 bytes"),
                 None,
                 Some("glad"),
+                Some("lang string longer than 12 bytes"),
                 Some("-ad"),
             ],
             None,
@@ -2435,6 +2461,8 @@ mod tests {
                 Some("-ad"),
                 Some("bad"),
                 Some("glad"),
+                Some("lang string longer than 12 bytes"),
+                Some("long string longer than 12 bytes"),
                 Some("sad"),
             ],
         );
@@ -2444,8 +2472,10 @@ mod tests {
                 None,
                 Some("bad"),
                 Some("sad"),
+                Some("long string longer than 12 bytes"),
                 None,
                 Some("glad"),
+                Some("lang string longer than 12 bytes"),
                 Some("-ad"),
             ],
             Some(SortOptions {
@@ -2455,6 +2485,8 @@ mod tests {
             None,
             vec![
                 Some("sad"),
+                Some("long string longer than 12 bytes"),
+                Some("lang string longer than 12 bytes"),
                 Some("glad"),
                 Some("bad"),
                 Some("-ad"),
@@ -2467,9 +2499,11 @@ mod tests {
             vec![
                 None,
                 Some("bad"),
+                Some("long string longer than 12 bytes"),
                 Some("sad"),
                 None,
                 Some("glad"),
+                Some("lang string longer than 12 bytes"),
                 Some("-ad"),
             ],
             Some(SortOptions {
@@ -2483,6 +2517,8 @@ mod tests {
                 Some("-ad"),
                 Some("bad"),
                 Some("glad"),
+                Some("lang string longer than 12 bytes"),
+                Some("long string longer than 12 bytes"),
                 Some("sad"),
             ],
         );
@@ -2491,9 +2527,11 @@ mod tests {
             vec![
                 None,
                 Some("bad"),
+                Some("long string longer than 12 bytes"),
                 Some("sad"),
                 None,
                 Some("glad"),
+                Some("lang string longer than 12 bytes"),
                 Some("-ad"),
             ],
             Some(SortOptions {
@@ -2505,6 +2543,8 @@ mod tests {
                 None,
                 None,
                 Some("sad"),
+                Some("long string longer than 12 bytes"),
+                Some("lang string longer than 12 bytes"),
                 Some("glad"),
                 Some("bad"),
                 Some("-ad"),
@@ -2515,9 +2555,11 @@ mod tests {
             vec![
                 None,
                 Some("bad"),
+                Some("long string longer than 12 bytes"),
                 Some("sad"),
                 None,
                 Some("glad"),
+                Some("lang string longer than 12 bytes"),
                 Some("-ad"),
             ],
             Some(SortOptions {
@@ -2530,17 +2572,27 @@ mod tests {
 
         // valid values less than limit with extra nulls
         test_sort_string_arrays(
-            vec![Some("def"), None, None, Some("abc")],
+            vec![
+                Some("def long string longer than 12"),
+                None,
+                None,
+                Some("abc"),
+            ],
             Some(SortOptions {
                 descending: false,
                 nulls_first: false,
             }),
             Some(3),
-            vec![Some("abc"), Some("def"), None],
+            vec![Some("abc"), Some("def long string longer than 12"), None],
         );
 
         test_sort_string_arrays(
-            vec![Some("def"), None, None, Some("abc")],
+            vec![
+                Some("def long string longer than 12"),
+                None,
+                None,
+                Some("abc"),
+            ],
             Some(SortOptions {
                 descending: false,
                 nulls_first: true,
@@ -2551,7 +2603,7 @@ mod tests {
 
         // more nulls than limit
         test_sort_string_arrays(
-            vec![Some("def"), None, None, None],
+            vec![Some("def long string longer than 12"), None, None, None],
             Some(SortOptions {
                 descending: false,
                 nulls_first: true,
@@ -2561,13 +2613,13 @@ mod tests {
         );
 
         test_sort_string_arrays(
-            vec![Some("def"), None, None, None],
+            vec![Some("def long string longer than 12"), None, None, None],
             Some(SortOptions {
                 descending: false,
                 nulls_first: false,
             }),
             Some(2),
-            vec![Some("def"), None],
+            vec![Some("def long string longer than 12"), None],
         );
     }
 

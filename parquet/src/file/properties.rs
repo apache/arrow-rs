@@ -37,6 +37,8 @@ pub const DEFAULT_COMPRESSION: Compression = Compression::UNCOMPRESSED;
 pub const DEFAULT_DICTIONARY_ENABLED: bool = true;
 /// Default value for [`WriterProperties::dictionary_page_size_limit`]
 pub const DEFAULT_DICTIONARY_PAGE_SIZE_LIMIT: usize = DEFAULT_PAGE_SIZE;
+/// Default value for [`WriterProperties::data_page_row_count_limit`]
+pub const DEFAULT_DATA_PAGE_ROW_COUNT_LIMIT: usize = 20_000;
 /// Default value for [`WriterProperties::statistics_enabled`]
 pub const DEFAULT_STATISTICS_ENABLED: EnabledStatistics = EnabledStatistics::Page;
 /// Default value for [`WriterProperties::max_statistics_size`]
@@ -354,7 +356,7 @@ impl WriterPropertiesBuilder {
         Self {
             data_page_size_limit: DEFAULT_PAGE_SIZE,
             dictionary_page_size_limit: DEFAULT_DICTIONARY_PAGE_SIZE_LIMIT,
-            data_page_row_count_limit: usize::MAX,
+            data_page_row_count_limit: DEFAULT_DATA_PAGE_ROW_COUNT_LIMIT,
             write_batch_size: DEFAULT_WRITE_BATCH_SIZE,
             max_row_group_size: DEFAULT_MAX_ROW_GROUP_SIZE,
             writer_version: DEFAULT_WRITER_VERSION,
@@ -424,7 +426,7 @@ impl WriterPropertiesBuilder {
         self
     }
 
-    /// Sets best effort maximum number of rows in a data page (defaults to `usize::MAX`).
+    /// Sets best effort maximum number of rows in a data page (defaults to `20_000`).
     ///
     /// The parquet writer will attempt to limit the number of rows in
     /// each `DataPage` to this value. Reducing this value will result
