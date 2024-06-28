@@ -139,7 +139,12 @@ impl IpcWriteOptions {
     }
 
     /// Set whether the IPC writer should preserve the dictionary IDs in the schema
-    /// or auto-assign uniquer dictionary IDs during encoding
+    /// or auto-assign uniquer dictionary IDs during encoding (defaults to true)
+    ///
+    /// If this option is true,  the application must handle assigning ids
+    /// to the dictionary batches in order to encode them correctly
+    ///
+    /// The default will change to `false`  in future releases
     pub fn with_preserve_dict_id(mut self, preserve_dict_id: bool) -> Self {
         self.preserve_dict_id = preserve_dict_id;
         self
