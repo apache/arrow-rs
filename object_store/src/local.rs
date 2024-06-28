@@ -1533,12 +1533,13 @@ mod not_wasm_tests {
 mod unix_test {
     use std::fs::OpenOptions;
 
+    use futures::StreamExt;
     use nix::sys::stat;
     use nix::unistd;
     use tempfile::TempDir;
 
     use crate::local::LocalFileSystem;
-    use crate::{ObjectStore, Path};
+    use crate::{ObjectStore, Path, PutPayload};
 
     #[tokio::test]
     async fn test_fifo() {
@@ -1557,5 +1558,50 @@ mod unix_test {
         integration.get(&location).await.unwrap();
 
         spawned.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_delete_prefix() {
+        let root = TempDir::new().unwrap();
+        let filename_one = "test/first";
+        let filename_two: &str = "test/second";
+        let filename_three: &str = "real/third";
+
+        let integration = LocalFileSystem::new_with_prefix(root.path()).unwrap();
+        let first_file_path =
+            Path::parse(root.path().join(filename_one).to_str().unwrap()).unwrap();
+        let second_file_path =
+            Path::parse(root.path().join(filename_two).to_str().unwrap()).unwrap();
+        let third_file_path =
+            Path::parse(root.path().join(filename_three).to_str().unwrap()).unwrap();
+        integration
+            .put(&first_file_path, PutPayload::new())
+            .await
+            .unwrap();
+        integration
+            .put(&second_file_path, PutPayload::new())
+            .await
+            .unwrap();
+        integration
+            .put(&third_file_path, PutPayload::new())
+            .await
+            .unwrap();
+
+        let list = integration.list(None).count().await;
+        assert_eq!(list, 3);
+
+        let prefix_path = Path::parse(root.path().join("test").to_str().unwrap()).unwrap();
+        integration.delete_prefix(Some(&prefix_path)).await.unwrap();
+
+        let list = integration.list(None).count().await;
+        assert_eq!(list, 1);
+        assert!(integration.head(&first_file_path).await.is_err());
+        assert!(integration.head(&second_file_path).await.is_err());
+        assert!(integration.head(&third_file_path).await.is_ok());
+
+        integration.delete_prefix(None).await.unwrap();
+        assert!(integration.head(&third_file_path).await.is_err());
+        let list = integration.list(None).count().await;
+        assert_eq!(list, 0);
     }
 }
