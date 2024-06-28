@@ -198,7 +198,7 @@ impl WriteMultipart {
     }
 
     /// Abort this upload, attempting to clean up any successfully uploaded parts
-    pub async fn abort(&mut self) -> Result<()> {
+    pub async fn abort(mut self) -> Result<()> {
         self.tasks.shutdown().await;
         self.upload.abort().await
     }
