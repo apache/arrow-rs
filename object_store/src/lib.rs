@@ -897,10 +897,6 @@ macro_rules! as_ref_impl {
             async fn rename_if_not_exists(&self, from: &Path, to: &Path) -> Result<()> {
                 self.as_ref().rename_if_not_exists(from, to).await
             }
-
-            async fn delete_prefix(&self, prefix: Option<&Path>, ttl: u64) -> Result<()> {
-                self.as_ref().delete_prefix(prefix, ttl).await
-            }
         }
     };
 }
