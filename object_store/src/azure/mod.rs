@@ -30,7 +30,7 @@ use crate::{
     PutMultipartOpts, PutOptions, PutPayload, PutResult, Result, UploadPart,
 };
 use async_trait::async_trait;
-use futures::{stream::BoxStream, StreamExt};
+use futures::{stream::BoxStream, StreamExt, TryStreamExt};
 use reqwest::Method;
 use std::fmt::Debug;
 use std::sync::Arc;
@@ -136,11 +136,11 @@ impl ObjectStore for MicrosoftAzure {
     }
 
     async fn delete_prefix(&self, prefix: Option<&Path>) -> Result<()> {
-        let mut to_delete = self.list(prefix);
+        let locations = self.list(prefix).map_ok(|meta| meta.location).boxed();
 
-        while let Some(del) = to_delete.next().await.transpose()? {
-            self.delete(&del.location).await?;
-        }
+        self.delete_stream(locations)
+            .try_collect::<Vec<Path>>()
+            .await?;
 
         Ok(())
     }

@@ -23,6 +23,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
+use futures::TryStreamExt;
 use futures::{stream::BoxStream, StreamExt};
 use parking_lot::RwLock;
 use snafu::{OptionExt, ResultExt, Snafu};
@@ -397,11 +398,11 @@ impl ObjectStore for InMemory {
     }
 
     async fn delete_prefix(&self, prefix: Option<&Path>) -> Result<()> {
-        let mut to_delete = self.list(prefix);
+        let locations = self.list(prefix).map_ok(|meta| meta.location).boxed();
 
-        while let Some(del) = to_delete.next().await.transpose()? {
-            self.delete(&del.location).await?;
-        }
+        self.delete_stream(locations)
+            .try_collect::<Vec<Path>>()
+            .await?;
 
         Ok(())
     }

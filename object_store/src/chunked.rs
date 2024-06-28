@@ -24,7 +24,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use bytes::{BufMut, Bytes, BytesMut};
 use futures::stream::BoxStream;
-use futures::StreamExt;
+use futures::{StreamExt, TryStreamExt};
 
 use crate::path::Path;
 use crate::{
@@ -174,11 +174,11 @@ impl ObjectStore for ChunkedStore {
     }
 
     async fn delete_prefix(&self, prefix: Option<&Path>) -> Result<()> {
-        let mut to_delete = self.list(prefix);
+        let locations = self.list(prefix).map_ok(|meta| meta.location).boxed();
 
-        while let Some(del) = to_delete.next().await.transpose()? {
-            self.delete(&del.location).await?;
-        }
+        self.delete_stream(locations)
+            .try_collect::<Vec<Path>>()
+            .await?;
 
         Ok(())
     }
