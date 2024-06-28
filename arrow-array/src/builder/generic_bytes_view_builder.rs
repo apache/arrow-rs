@@ -333,10 +333,7 @@ pub type StringViewBuilder = GenericByteViewBuilder<StringViewType>;
 pub type BinaryViewBuilder = GenericByteViewBuilder<BinaryViewType>;
 
 /// Create a view based on the given data, block id and offset
-///
-/// # Safety
-/// The caller must ensure that using `block_id` and `offset` will point to the correct `data`
-pub unsafe fn make_view_unchecked(data: &[u8], block_id: u32, offset: u32) -> u128 {
+pub fn make_view_unchecked(data: &[u8], block_id: u32, offset: u32) -> u128 {
     let len = data.len() as u32;
     if len <= 12 {
         let mut view_buffer = [0; 16];
