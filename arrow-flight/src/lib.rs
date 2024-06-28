@@ -876,7 +876,7 @@ mod tests {
 
         // V4 with write_legacy_ipc_format = true
         // this will not write the continuation marker
-        let option = IpcWriteOptions::try_new(8, true, MetadataVersion::V4, true).unwrap();
+        let option = IpcWriteOptions::try_new(8, true, MetadataVersion::V4).unwrap();
         let schema_ipc = SchemaAsIpc::new(&schema, &option);
         let result: SchemaResult = schema_ipc.try_into().unwrap();
         let des_schema: Schema = (&result).try_into().unwrap();

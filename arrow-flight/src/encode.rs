@@ -687,7 +687,7 @@ mod tests {
     /// <https://github.com/apache/arrow-rs/issues/208>
     fn test_encode_flight_data() {
         // use 8-byte alignment - default alignment is 64 which produces bigger ipc data
-        let options = IpcWriteOptions::try_new(8, false, MetadataVersion::V5, true).unwrap();
+        let options = IpcWriteOptions::try_new(8, false, MetadataVersion::V5).unwrap();
         let c1 = UInt32Array::from(vec![1, 2, 3, 4, 5, 6]);
 
         let batch = RecordBatch::try_from_iter(vec![("a", Arc::new(c1) as ArrayRef)])
@@ -1583,9 +1583,7 @@ mod tests {
             let mut stream = FlightDataEncoderBuilder::new()
                 .with_max_flight_data_size(max_flight_data_size)
                 // use 8-byte alignment - default alignment is 64 which produces bigger ipc data
-                .with_options(
-                    IpcWriteOptions::try_new(8, false, MetadataVersion::V5, true).unwrap(),
-                )
+                .with_options(IpcWriteOptions::try_new(8, false, MetadataVersion::V5).unwrap())
                 .build(futures::stream::iter([Ok(batch.clone())]));
 
             let mut i = 0;

@@ -98,12 +98,12 @@ fn write_2_0_0_compression() {
 
     // writer options for each compression type
     let all_options = [
-        IpcWriteOptions::try_new(8, false, ipc::MetadataVersion::V5, true)
+        IpcWriteOptions::try_new(8, false, ipc::MetadataVersion::V5)
             .unwrap()
             .try_with_compression(Some(ipc::CompressionType::LZ4_FRAME))
             .unwrap(),
         // write IPC version 5 with zstd
-        IpcWriteOptions::try_new(8, false, ipc::MetadataVersion::V5, true)
+        IpcWriteOptions::try_new(8, false, ipc::MetadataVersion::V5)
             .unwrap()
             .try_with_compression(Some(ipc::CompressionType::ZSTD))
             .unwrap(),

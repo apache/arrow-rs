@@ -91,7 +91,6 @@ impl IpcWriteOptions {
         alignment: usize,
         write_legacy_ipc_format: bool,
         metadata_version: crate::MetadataVersion,
-        preserve_dict_id: bool,
     ) -> Result<Self, ArrowError> {
         let is_alignment_valid =
             alignment == 8 || alignment == 16 || alignment == 32 || alignment == 64;
@@ -112,7 +111,7 @@ impl IpcWriteOptions {
                 write_legacy_ipc_format,
                 metadata_version,
                 batch_compression_type: None,
-                preserve_dict_id,
+                preserve_dict_id: true,
             }),
             crate::MetadataVersion::V5 => {
                 if write_legacy_ipc_format {
@@ -125,7 +124,7 @@ impl IpcWriteOptions {
                         write_legacy_ipc_format,
                         metadata_version,
                         batch_compression_type: None,
-                        preserve_dict_id,
+                        preserve_dict_id: true,
                     })
                 }
             }
@@ -1105,7 +1104,7 @@ impl<W: Write> StreamWriter<W> {
     ///
     /// let schema = Schema::empty();
     /// let buffer: Vec<u8> = Vec::new();
-    /// let options = IpcWriteOptions::try_new(8, false, MetadataVersion::V5,true)?;
+    /// let options = IpcWriteOptions::try_new(8, false, MetadataVersion::V5)?;
     /// let stream_writer = StreamWriter::try_new_with_options(buffer, &schema, options)?;
     ///
     /// assert_eq!(stream_writer.into_inner()?, expected);
@@ -1636,7 +1635,7 @@ mod tests {
         let mut stream_writer = StreamWriter::try_new_with_options(
             vec![],
             record.schema_ref(),
-            IpcWriteOptions::try_new(IPC_ALIGNMENT, false, MetadataVersion::V5, true).unwrap(),
+            IpcWriteOptions::try_new(IPC_ALIGNMENT, false, MetadataVersion::V5).unwrap(),
         )
         .unwrap();
         stream_writer.write(record).unwrap();
@@ -1661,7 +1660,7 @@ mod tests {
         let mut file = tempfile::tempfile().unwrap();
 
         {
-            let write_option = IpcWriteOptions::try_new(8, false, crate::MetadataVersion::V5, true)
+            let write_option = IpcWriteOptions::try_new(8, false, crate::MetadataVersion::V5)
                 .unwrap()
                 .try_with_compression(Some(crate::CompressionType::LZ4_FRAME))
                 .unwrap();
@@ -1701,7 +1700,7 @@ mod tests {
 
         let mut file = tempfile::tempfile().unwrap();
         {
-            let write_option = IpcWriteOptions::try_new(8, false, crate::MetadataVersion::V5, true)
+            let write_option = IpcWriteOptions::try_new(8, false, crate::MetadataVersion::V5)
                 .unwrap()
                 .try_with_compression(Some(crate::CompressionType::LZ4_FRAME))
                 .unwrap();
@@ -1740,7 +1739,7 @@ mod tests {
             RecordBatch::try_new(Arc::new(schema.clone()), vec![Arc::new(array)]).unwrap();
         let mut file = tempfile::tempfile().unwrap();
         {
-            let write_option = IpcWriteOptions::try_new(8, false, crate::MetadataVersion::V5, true)
+            let write_option = IpcWriteOptions::try_new(8, false, crate::MetadataVersion::V5)
                 .unwrap()
                 .try_with_compression(Some(crate::CompressionType::ZSTD))
                 .unwrap();
@@ -1861,16 +1860,16 @@ mod tests {
     }
     #[test]
     fn test_write_null_file_v4() {
-        write_null_file(IpcWriteOptions::try_new(8, false, MetadataVersion::V4, true).unwrap());
-        write_null_file(IpcWriteOptions::try_new(8, true, MetadataVersion::V4, true).unwrap());
-        write_null_file(IpcWriteOptions::try_new(64, false, MetadataVersion::V4, true).unwrap());
-        write_null_file(IpcWriteOptions::try_new(64, true, MetadataVersion::V4, true).unwrap());
+        write_null_file(IpcWriteOptions::try_new(8, false, MetadataVersion::V4).unwrap());
+        write_null_file(IpcWriteOptions::try_new(8, true, MetadataVersion::V4).unwrap());
+        write_null_file(IpcWriteOptions::try_new(64, false, MetadataVersion::V4).unwrap());
+        write_null_file(IpcWriteOptions::try_new(64, true, MetadataVersion::V4).unwrap());
     }
 
     #[test]
     fn test_write_null_file_v5() {
-        write_null_file(IpcWriteOptions::try_new(8, false, MetadataVersion::V5, true).unwrap());
-        write_null_file(IpcWriteOptions::try_new(64, false, MetadataVersion::V5, true).unwrap());
+        write_null_file(IpcWriteOptions::try_new(8, false, MetadataVersion::V5).unwrap());
+        write_null_file(IpcWriteOptions::try_new(64, false, MetadataVersion::V5).unwrap());
     }
 
     #[test]
@@ -1990,8 +1989,8 @@ mod tests {
 
     #[test]
     fn test_write_union_file_v4_v5() {
-        write_union_file(IpcWriteOptions::try_new(8, false, MetadataVersion::V4, true).unwrap());
-        write_union_file(IpcWriteOptions::try_new(8, false, MetadataVersion::V5, true).unwrap());
+        write_union_file(IpcWriteOptions::try_new(8, false, MetadataVersion::V4).unwrap());
+        write_union_file(IpcWriteOptions::try_new(8, false, MetadataVersion::V5).unwrap());
     }
 
     #[test]
@@ -2501,7 +2500,7 @@ mod tests {
             let mut writer = FileWriter::try_new_with_options(
                 Vec::new(),
                 batch.schema_ref(),
-                IpcWriteOptions::try_new(IPC_ALIGNMENT, false, MetadataVersion::V5, true).unwrap(),
+                IpcWriteOptions::try_new(IPC_ALIGNMENT, false, MetadataVersion::V5).unwrap(),
             )
             .unwrap();
             writer.write(&batch).unwrap();
@@ -2556,7 +2555,7 @@ mod tests {
         let mut writer = FileWriter::try_new_with_options(
             Vec::new(),
             batch.schema_ref(),
-            IpcWriteOptions::try_new(IPC_ALIGNMENT, false, MetadataVersion::V5, true).unwrap(),
+            IpcWriteOptions::try_new(IPC_ALIGNMENT, false, MetadataVersion::V5).unwrap(),
         )
         .unwrap();
         writer.write(&batch).unwrap();
