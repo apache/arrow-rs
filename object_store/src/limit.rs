@@ -195,10 +195,6 @@ impl<T: ObjectStore> ObjectStore for LimitStore<T> {
         let _permit = self.semaphore.acquire().await.unwrap();
         self.inner.rename_if_not_exists(from, to).await
     }
-
-    async fn delete_prefix(&self, prefix: Option<&Path>, ttl: u64) -> Result<()> {
-        self.inner.delete_prefix(prefix, ttl).await
-    }
 }
 
 fn permit_get_result(r: GetResult, permit: OwnedSemaphorePermit) -> GetResult {
