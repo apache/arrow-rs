@@ -237,13 +237,21 @@ impl<T: DataType> ColumnValueEncoder for ColumnValueEncoderImpl<T> {
     }
 
     fn estimated_memory_size(&self) -> usize {
-        match &self.dict_encoder {
+        let encoder_size = match &self.dict_encoder {
             // For this DictEncoder, we have unencoded bytes in the buffer.
             Some(encoder) => encoder.estimated_memory_size(),
             // Whereas for all other encoders the buffer contains encoded bytes.
             // Therefore, we can use the estimated_data_encoded_size.
             _ => self.encoder.estimated_data_encoded_size(),
-        }
+        };
+
+        let bloom_filter_size = self
+            .bloom_filter
+            .as_ref()
+            .map(|bf| bf.byte_size())
+            .unwrap_or_default();
+
+        encoder_size + bloom_filter_size
     }
 
     fn estimated_dict_page_size(&self) -> Option<usize> {

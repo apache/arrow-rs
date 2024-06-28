@@ -452,12 +452,20 @@ impl ColumnValueEncoder for ByteArrayEncoder {
     }
 
     fn estimated_memory_size(&self) -> usize {
-        match &self.dict_encoder {
+        let encoder_size = match &self.dict_encoder {
             Some(encoder) => encoder.estimated_memory_size(),
             // For the FallbackEncoder, these unflushed bytes are already encoded.
             // Therefore, the size should be the same as estimated_data_page_size.
             None => self.fallback.estimated_data_page_size(),
-        }
+        };
+
+        let bloom_filter_size = self
+            .bloom_filter
+            .as_ref()
+            .map(|bf| bf.byte_size())
+            .unwrap_or_default();
+
+        encoder_size + bloom_filter_size
     }
 
     fn estimated_dict_page_size(&self) -> Option<usize> {
