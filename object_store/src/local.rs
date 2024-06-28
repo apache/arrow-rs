@@ -26,7 +26,7 @@ use std::{collections::VecDeque, path::PathBuf};
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Duration, Utc};
 use futures::{stream::BoxStream, StreamExt};
 use futures::{FutureExt, TryStreamExt};
 use parking_lot::Mutex;
@@ -683,8 +683,8 @@ impl ObjectStore for LocalFileSystem {
         .await
     }
 
-    async fn delete_prefix(&self, prefix: Option<&Path>, ttl: u64) -> Result<()> {
-        let ttl = chrono::Duration::try_seconds(ttl as i64).unwrap();
+    async fn delete_prefix(&self, prefix: Option<&Path>, ttl: Option<u64>) -> Result<()> {
+        let ttl = ttl.map_or(Duration::zero(), |v| chrono::Duration::seconds(v as i64));
         let config = self.config.as_ref();
         let path = if let Some(p) = prefix {
             config.prefix_to_filesystem(p)?
@@ -1501,6 +1501,94 @@ mod tests {
         list.sort_unstable();
         assert_eq!(list, vec![c, a]);
     }
+
+    #[tokio::test]
+    async fn test_delete_prefix() {
+        let root = TempDir::new().unwrap();
+        let filename_one = "test/first";
+        let filename_two: &str = "test/second";
+        let filename_three: &str = "real/third";
+
+        let integration = LocalFileSystem::new_with_prefix(root.path()).unwrap();
+        let first_file_path =
+            Path::parse(root.path().join(filename_one).to_str().unwrap()).unwrap();
+        let second_file_path =
+            Path::parse(root.path().join(filename_two).to_str().unwrap()).unwrap();
+        let third_file_path =
+            Path::parse(root.path().join(filename_three).to_str().unwrap()).unwrap();
+        integration
+            .put(&first_file_path, PutPayload::new())
+            .await
+            .unwrap();
+        integration
+            .put(&second_file_path, PutPayload::new())
+            .await
+            .unwrap();
+        integration
+            .put(&third_file_path, PutPayload::new())
+            .await
+            .unwrap();
+
+        let list = integration.list(None).count().await;
+        assert_eq!(list, 3);
+
+        let prefix_path = Path::parse(root.path().join("test").to_str().unwrap()).unwrap();
+        integration
+            .delete_prefix(Some(&prefix_path), None)
+            .await
+            .unwrap();
+
+        let list = integration.list(None).count().await;
+        assert_eq!(list, 1);
+        assert!(integration.head(&first_file_path).await.is_err());
+        assert!(integration.head(&second_file_path).await.is_err());
+        assert!(integration.head(&third_file_path).await.is_ok());
+
+        integration.delete_prefix(None, None).await.unwrap();
+        assert!(integration.head(&third_file_path).await.is_err());
+        let list = integration.list(None).count().await;
+        assert_eq!(list, 0);
+    }
+
+    #[tokio::test]
+    async fn test_delete_prefix_respecting_modified_time() {
+        let root = TempDir::new().unwrap();
+        let filename_one = "test/first";
+        let filename_two: &str = "test/second";
+
+        let integration = LocalFileSystem::new_with_prefix(root.path()).unwrap();
+        let first_file_path =
+            Path::parse(root.path().join(filename_one).to_str().unwrap()).unwrap();
+        let second_file_path =
+            Path::parse(root.path().join(filename_two).to_str().unwrap()).unwrap();
+        integration
+            .put(&first_file_path, PutPayload::new())
+            .await
+            .unwrap();
+        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+        integration
+            .put(&second_file_path, PutPayload::new())
+            .await
+            .unwrap();
+
+        let list = integration.list(None).count().await;
+        assert_eq!(list, 2);
+
+        let prefix_path = Path::parse(root.path().join("test").to_str().unwrap()).unwrap();
+        integration
+            .delete_prefix(Some(&prefix_path), Some(1))
+            .await
+            .unwrap();
+
+        let list = integration.list(None).count().await;
+        assert_eq!(list, 1);
+        assert!(integration.head(&first_file_path).await.is_err());
+        assert!(integration.head(&second_file_path).await.is_ok());
+
+        integration.delete_prefix(None, None).await.unwrap();
+        let list = integration.list(None).count().await;
+        assert_eq!(list, 0);
+    }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -1542,13 +1630,12 @@ mod not_wasm_tests {
 mod unix_test {
     use std::fs::OpenOptions;
 
-    use futures::StreamExt;
     use nix::sys::stat;
     use nix::unistd;
     use tempfile::TempDir;
 
     use crate::local::LocalFileSystem;
-    use crate::{ObjectStore, Path, PutPayload};
+    use crate::{ObjectStore, Path};
 
     #[tokio::test]
     async fn test_fifo() {
@@ -1567,53 +1654,5 @@ mod unix_test {
         integration.get(&location).await.unwrap();
 
         spawned.await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn test_delete_prefix() {
-        let root = TempDir::new().unwrap();
-        let filename_one = "test/first";
-        let filename_two: &str = "test/second";
-        let filename_three: &str = "real/third";
-
-        let integration = LocalFileSystem::new_with_prefix(root.path()).unwrap();
-        let first_file_path =
-            Path::parse(root.path().join(filename_one).to_str().unwrap()).unwrap();
-        let second_file_path =
-            Path::parse(root.path().join(filename_two).to_str().unwrap()).unwrap();
-        let third_file_path =
-            Path::parse(root.path().join(filename_three).to_str().unwrap()).unwrap();
-        integration
-            .put(&first_file_path, PutPayload::new())
-            .await
-            .unwrap();
-        integration
-            .put(&second_file_path, PutPayload::new())
-            .await
-            .unwrap();
-        integration
-            .put(&third_file_path, PutPayload::new())
-            .await
-            .unwrap();
-
-        let list = integration.list(None).count().await;
-        assert_eq!(list, 3);
-
-        let prefix_path = Path::parse(root.path().join("test").to_str().unwrap()).unwrap();
-        integration
-            .delete_prefix(Some(&prefix_path), 60)
-            .await
-            .unwrap();
-
-        let list = integration.list(None).count().await;
-        assert_eq!(list, 1);
-        assert!(integration.head(&first_file_path).await.is_err());
-        assert!(integration.head(&second_file_path).await.is_err());
-        assert!(integration.head(&third_file_path).await.is_ok());
-
-        integration.delete_prefix(None, 60).await.unwrap();
-        assert!(integration.head(&third_file_path).await.is_err());
-        let list = integration.list(None).count().await;
-        assert_eq!(list, 0);
     }
 }
