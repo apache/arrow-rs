@@ -167,7 +167,7 @@ pub enum ConvertedType {
 /// This is an *entirely new* struct as of version
 /// 4.0.0. The struct previously named `LogicalType` was renamed to
 /// [`ConvertedType`]. Please see the README.md for more details.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum LogicalType {
     String,
     Map,
