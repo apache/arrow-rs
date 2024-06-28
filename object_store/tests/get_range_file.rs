@@ -78,7 +78,7 @@ impl ObjectStore for MyStore {
         todo!()
     }
 
-    async fn delete_prefix(&self, _: Option<&Path>) -> Result<()> {
+    async fn delete_prefix(&self, _: Option<&Path>, _ttl: u64) -> Result<()> {
         todo!()
     }
 }
