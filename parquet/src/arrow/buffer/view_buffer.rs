@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::arrow::record_reader::buffer::ValuesBuffer;
-use arrow_array::{builder::make_view_unchecked, make_array, ArrayRef};
+use arrow_array::{builder::make_view, make_array, ArrayRef};
 use arrow_buffer::Buffer;
 use arrow_data::ArrayDataBuilder;
 use arrow_schema::DataType as ArrowType;
@@ -51,7 +51,7 @@ impl ViewBuffer {
         let end = offset.saturating_add(len);
         let b = b.get_unchecked(offset as usize..end as usize);
 
-        let view = make_view_unchecked(b, block, offset);
+        let view = make_view(b, block, offset);
 
         self.views.push(view);
     }
