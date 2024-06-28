@@ -21,6 +21,7 @@ use thrift::protocol::{
     TFieldIdentifier, TInputProtocol, TListIdentifier, TMapIdentifier, TMessageIdentifier,
     TOutputProtocol, TSetIdentifier, TStructIdentifier, TType,
 };
+use varint_simd::{SignedVarIntTarget, VarIntTarget as _};
 
 /// Reads and writes the struct to Thrift protocols.
 ///
@@ -60,21 +61,17 @@ impl<'a> TCompactSliceInputProtocol<'a> {
     }
 
     fn read_vlq(&mut self) -> thrift::Result<u64> {
-        let mut in_progress = 0;
-        let mut shift = 0;
-        loop {
-            let byte = self.read_byte()?;
-            in_progress |= ((byte & 0x7F) as u64) << shift;
-            shift += 7;
-            if byte & 0x80 == 0 {
-                return Ok(in_progress);
-            }
-        }
+        let (val, shift) = unsafe { varint_simd::decode_unsafe(self.buf.as_ptr()) };
+        self.buf = &self.buf[shift..];
+        Ok(val)
     }
 
-    fn read_zig_zag(&mut self) -> thrift::Result<i64> {
-        let val = self.read_vlq()?;
-        Ok((val >> 1) as i64 ^ -((val & 1) as i64))
+    fn read_zig_zag<T: SignedVarIntTarget>(&mut self) -> thrift::Result<T> {
+        let (val, shift) = unsafe { varint_simd::decode_unsafe::<T::Unsigned>(self.buf.as_ptr()) };
+        let val = val.unzigzag();
+
+        self.buf = &self.buf[shift..];
+        Ok(val)
     }
 
     fn read_list_set_begin(&mut self) -> thrift::Result<(TType, i32)> {
@@ -191,11 +188,11 @@ impl<'a> TInputProtocol for TCompactSliceInputProtocol<'a> {
     }
 
     fn read_i16(&mut self) -> thrift::Result<i16> {
-        Ok(self.read_zig_zag()? as _)
+        Ok(self.read_zig_zag()?)
     }
 
     fn read_i32(&mut self) -> thrift::Result<i32> {
-        Ok(self.read_zig_zag()? as _)
+        Ok(self.read_zig_zag()?)
     }
 
     fn read_i64(&mut self) -> thrift::Result<i64> {

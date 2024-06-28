@@ -122,8 +122,8 @@ macro_rules! statistics_enum_func {
 /// Converts Thrift definition into `Statistics`.
 pub fn from_thrift(
     physical_type: Type,
-    thrift_stats: Option<TStatistics>,
-) -> Result<Option<Statistics>> {
+    thrift_stats: Option<Box<TStatistics>>,
+) -> Result<Option<Box<Statistics>>> {
     Ok(match thrift_stats {
         Some(stats) => {
             // Number of nulls recorded, when it is not available, we just mark it as 0.
@@ -233,14 +233,14 @@ pub fn from_thrift(
                 ),
             };
 
-            Some(res)
+            Some(Box::new(res))
         }
         None => None,
     })
 }
 
 // Convert Statistics into Thrift definition.
-pub fn to_thrift(stats: Option<&Statistics>) -> Option<TStatistics> {
+pub fn to_thrift(stats: Option<&Statistics>) -> Option<Box<TStatistics>> {
     let stats = stats?;
 
     let mut thrift_stats = TStatistics {
@@ -284,7 +284,7 @@ pub fn to_thrift(stats: Option<&Statistics>) -> Option<TStatistics> {
     thrift_stats.is_min_value_exact = min_exact;
     thrift_stats.is_max_value_exact = max_exact;
 
-    Some(thrift_stats)
+    Some(Box::new(thrift_stats))
 }
 
 /// Statistics for a column chunk and data page.
@@ -681,7 +681,7 @@ mod tests {
             is_min_value_exact: None,
         };
 
-        from_thrift(Type::INT32, Some(thrift_stats)).unwrap();
+        from_thrift(Type::INT32, Some(Box::new(thrift_stats))).unwrap();
     }
 
     #[test]
@@ -833,7 +833,7 @@ mod tests {
         fn check_stats(stats: Statistics) {
             let tpe = stats.physical_type();
             let thrift_stats = to_thrift(Some(&stats));
-            assert_eq!(from_thrift(tpe, thrift_stats).unwrap(), Some(stats));
+            assert_eq!(from_thrift(tpe, thrift_stats).unwrap(), Some(Box::new(stats)));
         }
 
         check_stats(Statistics::boolean(Some(false), Some(true), None, 7, true));

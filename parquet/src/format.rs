@@ -2155,11 +2155,11 @@ pub struct DataPageHeader {
   /// Encoding used for repetition levels *
   pub repetition_level_encoding: Encoding,
   /// Optional statistics for the data in this page*
-  pub statistics: Option<Statistics>,
+  pub statistics: Option<Box<Statistics>>,
 }
 
 impl DataPageHeader {
-  pub fn new<F5>(num_values: i32, encoding: Encoding, definition_level_encoding: Encoding, repetition_level_encoding: Encoding, statistics: F5) -> DataPageHeader where F5: Into<Option<Statistics>> {
+  pub fn new<F5>(num_values: i32, encoding: Encoding, definition_level_encoding: Encoding, repetition_level_encoding: Encoding, statistics: F5) -> DataPageHeader where F5: Into<Option<Box<Statistics>>> {
     DataPageHeader {
       num_values,
       encoding,
@@ -2177,7 +2177,7 @@ impl crate::thrift::TSerializable for DataPageHeader {
     let mut f_2: Option<Encoding> = None;
     let mut f_3: Option<Encoding> = None;
     let mut f_4: Option<Encoding> = None;
-    let mut f_5: Option<Statistics> = None;
+    let mut f_5: Option<Box<Statistics>> = None;
     loop {
       let field_ident = i_prot.read_field_begin()?;
       if field_ident.field_type == TType::Stop {
@@ -2202,7 +2202,7 @@ impl crate::thrift::TSerializable for DataPageHeader {
           f_4 = Some(val);
         },
         5 => {
-          let val = Statistics::read_from_in_protocol(i_prot)?;
+          let val = Box::new(Statistics::read_from_in_protocol(i_prot)?);
           f_5 = Some(val);
         },
         _ => {
@@ -2405,11 +2405,11 @@ pub struct DataPageHeaderV2 {
   /// If missing it is considered compressed
   pub is_compressed: Option<bool>,
   /// optional statistics for the data in this page *
-  pub statistics: Option<Statistics>,
+  pub statistics: Option<Box<Statistics>>,
 }
 
 impl DataPageHeaderV2 {
-  pub fn new<F7, F8>(num_values: i32, num_nulls: i32, num_rows: i32, encoding: Encoding, definition_levels_byte_length: i32, repetition_levels_byte_length: i32, is_compressed: F7, statistics: F8) -> DataPageHeaderV2 where F7: Into<Option<bool>>, F8: Into<Option<Statistics>> {
+  pub fn new<F7, F8>(num_values: i32, num_nulls: i32, num_rows: i32, encoding: Encoding, definition_levels_byte_length: i32, repetition_levels_byte_length: i32, is_compressed: F7, statistics: F8) -> DataPageHeaderV2 where F7: Into<Option<bool>>, F8: Into<Option<Box<Statistics>>> {
     DataPageHeaderV2 {
       num_values,
       num_nulls,
@@ -2433,7 +2433,7 @@ impl crate::thrift::TSerializable for DataPageHeaderV2 {
     let mut f_5: Option<i32> = None;
     let mut f_6: Option<i32> = None;
     let mut f_7: Option<bool> = None;
-    let mut f_8: Option<Statistics> = None;
+    let mut f_8: Option<Box<Statistics>> = None;
     loop {
       let field_ident = i_prot.read_field_begin()?;
       if field_ident.field_type == TType::Stop {
@@ -2470,7 +2470,7 @@ impl crate::thrift::TSerializable for DataPageHeaderV2 {
           f_7 = Some(val);
         },
         8 => {
-          let val = Statistics::read_from_in_protocol(i_prot)?;
+          let val = Box::new(Statistics::read_from_in_protocol(i_prot)?);
           f_8 = Some(val);
         },
         _ => {
@@ -3404,7 +3404,7 @@ pub struct ColumnMetaData {
   /// Byte offset from the beginning of file to first (only) dictionary page *
   pub dictionary_page_offset: Option<i64>,
   /// optional statistics for this column chunk
-  pub statistics: Option<Statistics>,
+  pub statistics: Option<Box<Statistics>>,
   /// Set of all encodings used for pages in this column chunk.
   /// This information can be used to determine if all data pages are
   /// dictionary encoded for example *
@@ -3420,7 +3420,7 @@ pub struct ColumnMetaData {
 }
 
 impl ColumnMetaData {
-  pub fn new<F8, F10, F11, F12, F13, F14, F15>(type_: Type, encodings: Vec<Encoding>, path_in_schema: Vec<String>, codec: CompressionCodec, num_values: i64, total_uncompressed_size: i64, total_compressed_size: i64, key_value_metadata: F8, data_page_offset: i64, index_page_offset: F10, dictionary_page_offset: F11, statistics: F12, encoding_stats: F13, bloom_filter_offset: F14, bloom_filter_length: F15) -> ColumnMetaData where F8: Into<Option<Vec<KeyValue>>>, F10: Into<Option<i64>>, F11: Into<Option<i64>>, F12: Into<Option<Statistics>>, F13: Into<Option<Vec<PageEncodingStats>>>, F14: Into<Option<i64>>, F15: Into<Option<i32>> {
+  pub fn new<F8, F10, F11, F12, F13, F14, F15>(type_: Type, encodings: Vec<Encoding>, path_in_schema: Vec<String>, codec: CompressionCodec, num_values: i64, total_uncompressed_size: i64, total_compressed_size: i64, key_value_metadata: F8, data_page_offset: i64, index_page_offset: F10, dictionary_page_offset: F11, statistics: F12, encoding_stats: F13, bloom_filter_offset: F14, bloom_filter_length: F15) -> ColumnMetaData where F8: Into<Option<Vec<KeyValue>>>, F10: Into<Option<i64>>, F11: Into<Option<i64>>, F12: Into<Option<Box<Statistics>>>, F13: Into<Option<Vec<PageEncodingStats>>>, F14: Into<Option<i64>>, F15: Into<Option<i32>> {
     ColumnMetaData {
       type_,
       encodings,
@@ -3455,7 +3455,7 @@ impl crate::thrift::TSerializable for ColumnMetaData {
     let mut f_9: Option<i64> = None;
     let mut f_10: Option<i64> = None;
     let mut f_11: Option<i64> = None;
-    let mut f_12: Option<Statistics> = None;
+    let mut f_12: Option<Box<Statistics>> = None;
     let mut f_13: Option<Vec<PageEncodingStats>> = None;
     let mut f_14: Option<i64> = None;
     let mut f_15: Option<i32> = None;
@@ -3529,7 +3529,7 @@ impl crate::thrift::TSerializable for ColumnMetaData {
           f_11 = Some(val);
         },
         12 => {
-          let val = Statistics::read_from_in_protocol(i_prot)?;
+          let val =  Box::new(Statistics::read_from_in_protocol(i_prot)?);
           f_12 = Some(val);
         },
         13 => {

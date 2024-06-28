@@ -37,7 +37,7 @@ pub enum Page {
         encoding: Encoding,
         def_level_encoding: Encoding,
         rep_level_encoding: Encoding,
-        statistics: Option<Statistics>,
+        statistics: Option<Box<Statistics>>,
     },
     DataPageV2 {
         buf: Bytes,
@@ -48,7 +48,7 @@ pub enum Page {
         def_levels_byte_len: u32,
         rep_levels_byte_len: u32,
         is_compressed: bool,
-        statistics: Option<Statistics>,
+        statistics: Option<Box<Statistics>>,
     },
     DictionaryPage {
         buf: Bytes,
@@ -98,8 +98,8 @@ impl Page {
     /// Returns optional [`Statistics`].
     pub fn statistics(&self) -> Option<&Statistics> {
         match self {
-            Page::DataPage { ref statistics, .. } => statistics.as_ref(),
-            Page::DataPageV2 { ref statistics, .. } => statistics.as_ref(),
+            Page::DataPage { ref statistics, .. } => statistics.as_ref().map(|s| s.as_ref()),
+            Page::DataPageV2 { ref statistics, .. } => statistics.as_ref().map(|s| s.as_ref()),
             Page::DictionaryPage { .. } => None,
         }
     }
@@ -195,7 +195,9 @@ impl CompressedPage {
                     encoding: encoding.into(),
                     definition_level_encoding: def_level_encoding.into(),
                     repetition_level_encoding: rep_level_encoding.into(),
-                    statistics: crate::file::statistics::to_thrift(statistics.as_ref()),
+                    statistics: crate::file::statistics::to_thrift(
+                        statistics.as_ref().map(|s| s.as_ref()),
+                    ),
                 };
                 page_header.data_page_header = Some(data_page_header);
             }
@@ -216,7 +218,9 @@ impl CompressedPage {
                     definition_levels_byte_length: def_levels_byte_len as i32,
                     repetition_levels_byte_length: rep_levels_byte_len as i32,
                     is_compressed: Some(is_compressed),
-                    statistics: crate::file::statistics::to_thrift(statistics.as_ref()),
+                    statistics: crate::file::statistics::to_thrift(
+                        statistics.as_ref().map(|s| s.as_ref()),
+                    ),
                 };
                 page_header.data_page_header_v2 = Some(data_page_header_v2);
             }
@@ -376,7 +380,7 @@ mod tests {
             encoding: Encoding::PLAIN,
             def_level_encoding: Encoding::RLE,
             rep_level_encoding: Encoding::RLE,
-            statistics: Some(Statistics::int32(Some(1), Some(2), None, 1, true)),
+            statistics: Some(Box::new(Statistics::int32(Some(1), Some(2), None, 1, true))),
         };
         assert_eq!(data_page.page_type(), PageType::DATA_PAGE);
         assert_eq!(data_page.buffer(), vec![0, 1, 2].as_slice());
@@ -396,7 +400,7 @@ mod tests {
             def_levels_byte_len: 30,
             rep_levels_byte_len: 40,
             is_compressed: false,
-            statistics: Some(Statistics::int32(Some(1), Some(2), None, 1, true)),
+            statistics: Some(Box::new(Statistics::int32(Some(1), Some(2), None, 1, true))),
         };
         assert_eq!(data_page_v2.page_type(), PageType::DATA_PAGE_V2);
         assert_eq!(data_page_v2.buffer(), vec![0, 1, 2].as_slice());
@@ -428,7 +432,7 @@ mod tests {
             encoding: Encoding::PLAIN,
             def_level_encoding: Encoding::RLE,
             rep_level_encoding: Encoding::RLE,
-            statistics: Some(Statistics::int32(Some(1), Some(2), None, 1, true)),
+            statistics: Some(Box::new(Statistics::int32(Some(1), Some(2), None, 1, true))),
         };
 
         let cpage = CompressedPage::new(data_page, 5);

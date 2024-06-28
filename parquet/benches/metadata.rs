@@ -20,6 +20,11 @@ use criterion::*;
 use parquet::file::reader::SerializedFileReader;
 use parquet::file::serialized_reader::ReadOptionsBuilder;
 
+use mimalloc::MiMalloc;
+
+#[global_allocator]
+static GLOBAL: MiMalloc = MiMalloc;
+
 fn criterion_benchmark(c: &mut Criterion) {
     // Read file into memory to isolate filesystem performance
     let file = "../parquet-testing/data/alltypes_tiny_pages.parquet";
