@@ -600,7 +600,10 @@ impl FlightIpcEncoder {
         Self {
             options,
             data_gen: IpcDataGenerator::default(),
-            dictionary_tracker: DictionaryTracker::new(error_on_replacement, preserve_dict_id),
+            dictionary_tracker: DictionaryTracker::new_with_preserve_dict_id(
+                error_on_replacement,
+                preserve_dict_id,
+            ),
         }
     }
 
@@ -1299,7 +1302,7 @@ mod tests {
             HashMap::from([("some_key".to_owned(), "some_value".to_owned())]),
         );
 
-        let mut dictionary_tracker = DictionaryTracker::new(false, true);
+        let mut dictionary_tracker = DictionaryTracker::new_with_preserve_dict_id(false, true);
 
         let got = prepare_schema_for_flight(&schema, &mut dictionary_tracker, false);
         assert!(got.metadata().contains_key("some_key"));
@@ -1322,7 +1325,7 @@ mod tests {
         options: &IpcWriteOptions,
     ) -> (Vec<FlightData>, FlightData) {
         let data_gen = IpcDataGenerator::default();
-        let mut dictionary_tracker = DictionaryTracker::new(false, true);
+        let mut dictionary_tracker = DictionaryTracker::new_with_preserve_dict_id(false, true);
 
         let (encoded_dictionaries, encoded_batch) = data_gen
             .encoded_batch(batch, &mut dictionary_tracker, options)

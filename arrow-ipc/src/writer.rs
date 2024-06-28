@@ -139,7 +139,7 @@ impl IpcWriteOptions {
     }
 
     /// Set whether the IPC writer should preserve the dictionary IDs in the schema
-    /// or auto-assign uniquer dictionary IDs during encoding (defaults to true)
+    /// or auto-assign unique dictionary IDs during encoding (defaults to true)
     ///
     /// If this option is true,  the application must handle assigning ids
     /// to the dictionary batches in order to encode them correctly
@@ -183,7 +183,7 @@ impl Default for IpcWriteOptions {
 /// // Error of dictionary ids are replaced.
 /// let error_on_replacement = true;
 /// let options = IpcWriteOptions::default();
-/// let mut dictionary_tracker = DictionaryTracker::new(error_on_replacement,true);
+/// let mut dictionary_tracker = DictionaryTracker::new(error_on_replacement);
 ///
 /// // encode the batch into zero or more encoded dictionaries
 /// // and the data for the actual array.
@@ -730,7 +730,21 @@ impl DictionaryTracker {
     /// is used, otherwise a unique dictionary ID will be assigned by incrementing
     /// the last seen dictionary ID (or using `0` if no other dictionary IDs have been
     /// seen)
-    pub fn new(error_on_replacement: bool, preserve_dict_id: bool) -> Self {
+    pub fn new(error_on_replacement: bool) -> Self {
+        Self {
+            written: HashMap::new(),
+            dict_ids: Vec::new(),
+            error_on_replacement,
+            preserve_dict_id: true,
+        }
+    }
+
+    /// Create a new [`DictionaryTracker`].
+    ///
+    /// If `error_on_replacement`
+    /// is true, an error will be generated if an update to an
+    /// existing dictionary is attempted.
+    pub fn new_with_preserve_dict_id(error_on_replacement: bool, preserve_dict_id: bool) -> Self {
         Self {
             written: HashMap::new(),
             dict_ids: Vec::new(),
@@ -862,7 +876,10 @@ impl<W: Write> FileWriter<W> {
             dictionary_blocks: vec![],
             record_blocks: vec![],
             finished: false,
-            dictionary_tracker: DictionaryTracker::new(true, preserve_dict_id),
+            dictionary_tracker: DictionaryTracker::new_with_preserve_dict_id(
+                true,
+                preserve_dict_id,
+            ),
             custom_metadata: HashMap::new(),
             data_gen,
         })
@@ -1024,7 +1041,10 @@ impl<W: Write> StreamWriter<W> {
             writer,
             write_options,
             finished: false,
-            dictionary_tracker: DictionaryTracker::new(false, preserve_dict_id),
+            dictionary_tracker: DictionaryTracker::new_with_preserve_dict_id(
+                false,
+                preserve_dict_id,
+            ),
             data_gen,
         })
     }
@@ -1901,7 +1921,7 @@ mod tests {
         let batch = RecordBatch::try_new(schema, vec![Arc::new(union)]).unwrap();
 
         let gen = IpcDataGenerator {};
-        let mut dict_tracker = DictionaryTracker::new(false, true);
+        let mut dict_tracker = DictionaryTracker::new_with_preserve_dict_id(false, true);
         gen.encoded_batch(&batch, &mut dict_tracker, &Default::default())
             .unwrap();
 
@@ -1937,7 +1957,7 @@ mod tests {
         let batch = RecordBatch::try_new(schema, vec![struct_array]).unwrap();
 
         let gen = IpcDataGenerator {};
-        let mut dict_tracker = DictionaryTracker::new(false, true);
+        let mut dict_tracker = DictionaryTracker::new_with_preserve_dict_id(false, true);
         gen.encoded_batch(&batch, &mut dict_tracker, &Default::default())
             .unwrap();
 

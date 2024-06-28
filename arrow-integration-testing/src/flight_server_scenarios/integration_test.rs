@@ -119,7 +119,8 @@ impl FlightService for FlightServiceImpl {
             .enumerate()
             .flat_map(|(counter, batch)| {
                 let data_gen = writer::IpcDataGenerator::default();
-                let mut dictionary_tracker = writer::DictionaryTracker::new(false, true);
+                let mut dictionary_tracker =
+                    writer::DictionaryTracker::new_with_preserve_dict_id(false, true);
 
                 let (encoded_dictionaries, encoded_batch) = data_gen
                     .encoded_batch(batch, &mut dictionary_tracker, &options)
