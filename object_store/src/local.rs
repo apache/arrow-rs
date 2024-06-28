@@ -91,8 +91,20 @@ pub(crate) enum Error {
         path: PathBuf,
     },
 
+    #[snafu(display("Unable to delete dir {}: {}", path.display(), source))]
+    UnableToDeleteDir {
+        source: io::Error,
+        path: PathBuf,
+    },
+
     #[snafu(display("Unable to open file {}: {}", path.display(), source))]
     UnableToOpenFile {
+        source: io::Error,
+        path: PathBuf,
+    },
+
+    #[snafu(display("Unable to open dir {}: {}", path.display(), source))]
+    UnableToOpenDir {
         source: io::Error,
         path: PathBuf,
     },
@@ -679,12 +691,28 @@ impl ObjectStore for LocalFileSystem {
             config.root.to_file_path().map_err(|_| Error::Aborted)?
         };
 
-        maybe_spawn_blocking(move || match std::fs::remove_dir_all(&path) {
-            Ok(_) => Ok(()),
-            Err(e) => Err(match e.kind() {
-                ErrorKind::NotFound => Error::NotFound { path, source: e }.into(),
-                _ => Error::UnableToDeleteFile { path, source: e }.into(),
-            }),
+        maybe_spawn_blocking(move || {
+            let mut dir =
+                std::fs::read_dir(&path).context(UnableToOpenDirSnafu { path: path.clone() })?;
+
+            while let Some(child) = dir.next().transpose().map_err(|_| Error::Aborted)? {
+                let path = child.path();
+                let meta = child.metadata().map_err(|e| Error::Metadata {
+                    source: e.into(),
+                    path: path.to_string_lossy().to_string(),
+                })?;
+                if meta.is_dir() {
+                    std::fs::remove_dir_all(&path).context(UnableToDeleteDirSnafu {
+                        path: &path.to_string_lossy().to_string(),
+                    })?;
+                } else {
+                    std::fs::remove_file(&path).context(UnableToDeleteFileSnafu {
+                        path: &path.to_string_lossy().to_string(),
+                    })?
+                }
+            }
+
+            Ok(())
         })
         .await
     }
