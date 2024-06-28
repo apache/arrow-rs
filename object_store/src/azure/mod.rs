@@ -30,6 +30,7 @@ use crate::{
     PutMultipartOpts, PutOptions, PutPayload, PutResult, Result, UploadPart,
 };
 use async_trait::async_trait;
+use chrono::Utc;
 use futures::{stream::BoxStream, StreamExt, TryStreamExt};
 use reqwest::Method;
 use std::fmt::Debug;
@@ -135,8 +136,19 @@ impl ObjectStore for MicrosoftAzure {
         self.client.copy_request(from, to, false).await
     }
 
-    async fn delete_prefix(&self, prefix: Option<&Path>) -> Result<()> {
-        let locations = self.list(prefix).map_ok(|meta| meta.location).boxed();
+    async fn delete_prefix(&self, prefix: Option<&Path>, ttl: u64) -> Result<()> {
+        let ttl = chrono::Duration::try_seconds(ttl as i64).unwrap();
+        let locations = self
+            .list(prefix)
+            .try_filter_map(|meta| async move {
+                let cutoff = Utc::now() - ttl;
+                if meta.last_modified < cutoff {
+                    Ok(Some(meta.location))
+                } else {
+                    Ok(None)
+                }
+            })
+            .boxed();
 
         self.delete_stream(locations)
             .try_collect::<Vec<Path>>()

@@ -780,7 +780,7 @@ pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
     }
 
     /// Delete all objects under specified prefix path, otherwise delete all objects
-    async fn delete_prefix(&self, prefix: Option<&Path>) -> Result<()>;
+    async fn delete_prefix(&self, prefix: Option<&Path>, ttl: u64) -> Result<()>;
 }
 
 macro_rules! as_ref_impl {
@@ -879,8 +879,8 @@ macro_rules! as_ref_impl {
                 self.as_ref().rename_if_not_exists(from, to).await
             }
 
-            async fn delete_prefix(&self, prefix: Option<&Path>) -> Result<()> {
-                self.as_ref().delete_prefix(prefix).await
+            async fn delete_prefix(&self, prefix: Option<&Path>, ttl: u64) -> Result<()> {
+                self.as_ref().delete_prefix(prefix, ttl).await
             }
         }
     };

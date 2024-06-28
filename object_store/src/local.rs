@@ -683,7 +683,8 @@ impl ObjectStore for LocalFileSystem {
         .await
     }
 
-    async fn delete_prefix(&self, prefix: Option<&Path>) -> Result<()> {
+    async fn delete_prefix(&self, prefix: Option<&Path>, ttl: u64) -> Result<()> {
+        let ttl = chrono::Duration::try_seconds(ttl as i64).unwrap();
         let config = self.config.as_ref();
         let path = if let Some(p) = prefix {
             config.prefix_to_filesystem(p)?
@@ -701,14 +702,22 @@ impl ObjectStore for LocalFileSystem {
                     source: e.into(),
                     path: path.to_string_lossy().to_string(),
                 })?;
-                if meta.is_dir() {
-                    std::fs::remove_dir_all(&path).context(UnableToDeleteDirSnafu {
-                        path: &path.to_string_lossy().to_string(),
-                    })?;
-                } else {
-                    std::fs::remove_file(&path).context(UnableToDeleteFileSnafu {
-                        path: &path.to_string_lossy().to_string(),
-                    })?
+                let cutoff = Utc::now() - ttl;
+                let last_modified: DateTime<Utc> = meta
+                    .modified()
+                    .map(chrono::DateTime::from)
+                    .map_err(|_| Error::Aborted)?;
+
+                if last_modified < cutoff {
+                    if meta.is_dir() {
+                        std::fs::remove_dir_all(&path).context(UnableToDeleteDirSnafu {
+                            path: &path.to_string_lossy().to_string(),
+                        })?;
+                    } else {
+                        std::fs::remove_file(&path).context(UnableToDeleteFileSnafu {
+                            path: &path.to_string_lossy().to_string(),
+                        })?
+                    }
                 }
             }
 
@@ -1591,7 +1600,10 @@ mod unix_test {
         assert_eq!(list, 3);
 
         let prefix_path = Path::parse(root.path().join("test").to_str().unwrap()).unwrap();
-        integration.delete_prefix(Some(&prefix_path)).await.unwrap();
+        integration
+            .delete_prefix(Some(&prefix_path), 60)
+            .await
+            .unwrap();
 
         let list = integration.list(None).count().await;
         assert_eq!(list, 1);
@@ -1599,7 +1611,7 @@ mod unix_test {
         assert!(integration.head(&second_file_path).await.is_err());
         assert!(integration.head(&third_file_path).await.is_ok());
 
-        integration.delete_prefix(None).await.unwrap();
+        integration.delete_prefix(None, 60).await.unwrap();
         assert!(integration.head(&third_file_path).await.is_err());
         let list = integration.list(None).count().await;
         assert_eq!(list, 0);
