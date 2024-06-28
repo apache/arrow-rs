@@ -29,6 +29,7 @@ use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use futures::{stream::BoxStream, StreamExt};
 use futures::{FutureExt, TryStreamExt};
+use parking_lot::Mutex;
 use snafu::{ensure, OptionExt, ResultExt, Snafu};
 use url::Url;
 use walkdir::{DirEntry, WalkDir};
@@ -723,7 +724,7 @@ struct LocalUpload {
 #[derive(Debug)]
 struct UploadState {
     dest: PathBuf,
-    file: Arc<File>,
+    file: Mutex<Option<File>>,
 }
 
 impl LocalUpload {
@@ -731,7 +732,7 @@ impl LocalUpload {
         Self {
             state: Arc::new(UploadState {
                 dest,
-                file: Arc::new(file),
+                file: Mutex::new(Some(file)),
             }),
             src: Some(src),
             offset: 0,
@@ -742,29 +743,18 @@ impl LocalUpload {
 #[async_trait]
 impl MultipartUpload for LocalUpload {
     fn put_part(&mut self, data: PutPayload) -> UploadPart {
-        println!("put_part");
         let offset = self.offset;
         self.offset += data.content_length() as u64;
 
         let s = Arc::clone(&self.state);
-        let file = Arc::clone(&s.file);
         maybe_spawn_blocking(move || {
-            println!("seek");
-            (&*file)
-                .seek(SeekFrom::Start(offset))
+            let mut f = s.file.lock();
+            let file = f.as_mut().context(AbortedSnafu)?;
+            file.seek(SeekFrom::Start(offset))
                 .context(SeekSnafu { path: &s.dest })?;
 
             data.iter()
-                .try_for_each(|x| {
-                    println!("write all");
-                    match (&*file).write(x) {
-                        Ok(_) => Ok(()),
-                        Err(e) => {
-                            println!("write all error: {:?}", e);
-                            Err(e)
-                        }
-                    }
-                })
+                .try_for_each(|x| file.write_all(x))
                 .context(UnableToCopyDataToFileSnafu)?;
 
             Ok(())
@@ -776,14 +766,14 @@ impl MultipartUpload for LocalUpload {
         let src = self.src.take().context(AbortedSnafu)?;
         let s = Arc::clone(&self.state);
         maybe_spawn_blocking(move || {
-            println!("complete");
+            // Ensure no inflight writes
+            let f = s.file.lock().take().context(AbortedSnafu)?;
             std::fs::rename(&src, &s.dest).context(UnableToRenameFileSnafu)?;
-            let metadata = s.file.as_ref().metadata().map_err(|e| Error::Metadata {
+            let metadata = f.metadata().map_err(|e| Error::Metadata {
                 source: e.into(),
                 path: src.to_string_lossy().to_string(),
             })?;
 
-            println!("complete -- done");
             Ok(PutResult {
                 e_tag: Some(get_etag(&metadata)),
                 version: None,
@@ -795,9 +785,7 @@ impl MultipartUpload for LocalUpload {
     async fn abort(&mut self) -> Result<()> {
         let src = self.src.take().context(AbortedSnafu)?;
         maybe_spawn_blocking(move || {
-            println!("remove");
             std::fs::remove_file(&src).context(UnableToDeleteFileSnafu { path: &src })?;
-            println!("remove -- done");
             Ok(())
         })
         .await
