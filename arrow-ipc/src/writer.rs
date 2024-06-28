@@ -59,6 +59,9 @@ pub struct IpcWriteOptions {
     /// Compression, if desired. Will result in a runtime error
     /// if the corresponding feature is not enabled
     batch_compression_type: Option<crate::CompressionType>,
+    /// Flag indicating whether the writer should preserver the dictionary IDs defined in the
+    /// schema or generate unique dictionary IDs internally during encoding.
+    preserve_dict_id: bool,
 }
 
 impl IpcWriteOptions {
@@ -81,11 +84,12 @@ impl IpcWriteOptions {
         }
         Ok(self)
     }
-    /// Try create IpcWriteOptions, checking for incompatible settings
+    /// Try to create IpcWriteOptions, checking for incompatible settings
     pub fn try_new(
         alignment: usize,
         write_legacy_ipc_format: bool,
         metadata_version: crate::MetadataVersion,
+        preserve_dict_id: bool,
     ) -> Result<Self, ArrowError> {
         let is_alignment_valid =
             alignment == 8 || alignment == 16 || alignment == 32 || alignment == 64;
@@ -106,6 +110,7 @@ impl IpcWriteOptions {
                 write_legacy_ipc_format,
                 metadata_version,
                 batch_compression_type: None,
+                preserve_dict_id,
             }),
             crate::MetadataVersion::V5 => {
                 if write_legacy_ipc_format {
@@ -118,6 +123,7 @@ impl IpcWriteOptions {
                         write_legacy_ipc_format,
                         metadata_version,
                         batch_compression_type: None,
+                        preserve_dict_id,
                     })
                 }
             }
@@ -125,6 +131,15 @@ impl IpcWriteOptions {
                 "Unsupported crate::MetadataVersion {z:?}"
             ))),
         }
+    }
+
+    pub fn preserve_dict_id(&self) -> bool {
+        self.preserve_dict_id
+    }
+
+    pub fn with_preserve_dict_id(mut self, preserve_dict_id: bool) -> Self {
+        self.preserve_dict_id = preserve_dict_id;
+        self
     }
 }
 
@@ -135,6 +150,7 @@ impl Default for IpcWriteOptions {
             write_legacy_ipc_format: false,
             metadata_version: crate::MetadataVersion::V5,
             batch_compression_type: None,
+            preserve_dict_id: true,
         }
     }
 }
@@ -159,7 +175,7 @@ impl Default for IpcWriteOptions {
 /// // Error of dictionary ids are replaced.
 /// let error_on_replacement = true;
 /// let options = IpcWriteOptions::default();
-/// let mut dictionary_tracker = DictionaryTracker::new(error_on_replacement);
+/// let mut dictionary_tracker = DictionaryTracker::new(error_on_replacement,true);
 ///
 /// // encode the batch into zero or more encoded dictionaries
 /// // and the data for the actual array.
@@ -198,28 +214,29 @@ impl IpcDataGenerator {
         }
     }
 
-    fn _encode_dictionaries(
+    fn _encode_dictionaries<I: Iterator<Item = i64>>(
         &self,
         column: &ArrayRef,
         encoded_dictionaries: &mut Vec<EncodedData>,
         dictionary_tracker: &mut DictionaryTracker,
         write_options: &IpcWriteOptions,
-        next_dict_id: &mut i64,
+        dict_id: &mut I,
     ) -> Result<(), ArrowError> {
         match column.data_type() {
-            DataType::Struct(_) => {
+            DataType::Struct(fields) => {
                 let s = as_struct_array(column);
-                for column in s.columns() {
+                for (field, column) in fields.iter().zip(s.columns()) {
                     self.encode_dictionaries(
+                        field,
                         column,
                         encoded_dictionaries,
                         dictionary_tracker,
                         write_options,
-                        next_dict_id,
+                        dict_id,
                     )?;
                 }
             }
-            DataType::RunEndEncoded(_, _) => {
+            DataType::RunEndEncoded(_, values) => {
                 let data = column.to_data();
                 if data.child_data().len() != 2 {
                     return Err(ArrowError::InvalidArgumentError(format!(
@@ -231,77 +248,89 @@ impl IpcDataGenerator {
                 // only for values array.
                 let values_array = make_array(data.child_data()[1].clone());
                 self.encode_dictionaries(
+                    values,
                     &values_array,
                     encoded_dictionaries,
                     dictionary_tracker,
                     write_options,
-                    next_dict_id,
+                    dict_id,
                 )?;
             }
-            DataType::List(_) => {
+            DataType::List(field) => {
                 let list = as_list_array(column);
                 self.encode_dictionaries(
+                    field,
                     list.values(),
                     encoded_dictionaries,
                     dictionary_tracker,
                     write_options,
-                    next_dict_id,
+                    dict_id,
                 )?;
             }
-            DataType::LargeList(_) => {
+            DataType::LargeList(field) => {
                 let list = as_large_list_array(column);
                 self.encode_dictionaries(
+                    field,
                     list.values(),
                     encoded_dictionaries,
                     dictionary_tracker,
                     write_options,
-                    next_dict_id,
+                    dict_id,
                 )?;
             }
-            DataType::FixedSizeList(_, _) => {
+            DataType::FixedSizeList(field, _) => {
                 let list = column
                     .as_any()
                     .downcast_ref::<FixedSizeListArray>()
                     .expect("Unable to downcast to fixed size list array");
                 self.encode_dictionaries(
+                    field,
                     list.values(),
                     encoded_dictionaries,
                     dictionary_tracker,
                     write_options,
-                    next_dict_id,
+                    dict_id,
                 )?;
             }
-            DataType::Map(_, _) => {
+            DataType::Map(field, _) => {
                 let map_array = as_map_array(column);
+
+                let (keys, values) = match field.data_type() {
+                    DataType::Struct(fields) if fields.len() == 2 => (&fields[0], &fields[1]),
+                    _ => panic!("Incorrect field data type {:?}", field.data_type()),
+                };
 
                 // keys
                 self.encode_dictionaries(
+                    keys,
                     map_array.keys(),
                     encoded_dictionaries,
                     dictionary_tracker,
                     write_options,
-                    next_dict_id,
+                    dict_id,
                 )?;
 
                 // values
                 self.encode_dictionaries(
+                    values,
                     map_array.values(),
                     encoded_dictionaries,
                     dictionary_tracker,
                     write_options,
-                    next_dict_id,
+                    dict_id,
                 )?;
             }
             DataType::Union(fields, _) => {
                 let union = as_union_array(column);
-                for (type_id, _) in fields.iter() {
+                for (type_id, field) in fields.iter() {
                     let column = union.child(type_id);
                     self.encode_dictionaries(
+                        field,
                         column,
                         encoded_dictionaries,
                         dictionary_tracker,
                         write_options,
-                        next_dict_id,
+                        dict_id,
                     )?;
                 }
             }
@@ -311,18 +340,23 @@ impl IpcDataGenerator {
         Ok(())
     }
 
-    fn encode_dictionaries(
+    fn encode_dictionaries<I: Iterator<Item = i64>>(
         &self,
+        field: &Field,
         column: &ArrayRef,
         encoded_dictionaries: &mut Vec<EncodedData>,
         dictionary_tracker: &mut DictionaryTracker,
         write_options: &IpcWriteOptions,
-        next_dict_id: &mut i64,
+        dict_id_seq: &mut I,
     ) -> Result<(), ArrowError> {
         match column.data_type() {
             DataType::Dictionary(_key_type, _value_type) => {
-                let dict_id = *next_dict_id;
-                *next_dict_id += 1;
+                let dict_id = dict_id_seq
+                    .next()
+                    .or_else(|| field.dict_id())
+                    .ok_or_else(|| {
+                        ArrowError::IpcError(format!("no dict id for field {}", field.name()))
+                    })?;
 
                 let dict_data = column.to_data();
                 let dict_values = &dict_data.child_data()[0];
@@ -334,7 +368,7 @@ impl IpcDataGenerator {
                     encoded_dictionaries,
                     dictionary_tracker,
                     write_options,
-                    next_dict_id,
+                    dict_id_seq,
                 )?;
 
                 let emit = dictionary_tracker.insert(dict_id, column)?;
@@ -352,7 +386,7 @@ impl IpcDataGenerator {
                 encoded_dictionaries,
                 dictionary_tracker,
                 write_options,
-                next_dict_id,
+                dict_id_seq,
             )?,
         }
 
@@ -371,16 +405,17 @@ impl IpcDataGenerator {
         let schema = batch.schema();
         let mut encoded_dictionaries = Vec::with_capacity(schema.all_fields().len());
 
-        let mut next_dict_id = 0;
+        let mut dict_id = dictionary_tracker.dict_ids.clone().into_iter();
 
-        for i in 0..schema.fields().len() {
+        for (i, field) in schema.fields().iter().enumerate() {
             let column = batch.column(i);
             self.encode_dictionaries(
+                field,
                 column,
                 &mut encoded_dictionaries,
                 dictionary_tracker,
                 write_options,
-                &mut next_dict_id,
+                &mut dict_id,
             )?;
         }
 
@@ -671,18 +706,41 @@ fn into_zero_offset_run_array<R: RunEndIndexType>(
 /// isn't allowed in the `FileWriter`.
 pub struct DictionaryTracker {
     written: HashMap<i64, ArrayData>,
+    dict_ids: Vec<i64>,
     error_on_replacement: bool,
+    preserve_dict_id: bool,
 }
 
 impl DictionaryTracker {
     /// Create a new [`DictionaryTracker`]. If `error_on_replacement`
     /// is true, an error will be generated if an update to an
     /// existing dictionary is attempted.
-    pub fn new(error_on_replacement: bool) -> Self {
+    pub fn new(error_on_replacement: bool, preserve_dict_id: bool) -> Self {
         Self {
             written: HashMap::new(),
+            dict_ids: Vec::new(),
             error_on_replacement,
+            preserve_dict_id,
         }
+    }
+
+    pub fn push_dict_id(&mut self, field: &Field) -> i64 {
+        let next = if self.preserve_dict_id {
+            field.dict_id().expect("no dict_id in field")
+        } else {
+            self.dict_ids
+                .last()
+                .copied()
+                .map(|i| i + 1)
+                .unwrap_or_default()
+        };
+
+        self.dict_ids.push(next);
+        next
+    }
+
+    pub fn dict_id(&mut self) -> &[i64] {
+        &self.dict_ids
     }
 
     /// Keep track of the dictionary with the given ID and values. Behavior:
@@ -771,6 +829,7 @@ impl<W: Write> FileWriter<W> {
         // write the schema, set the written bytes to the schema + header
         let encoded_message = data_gen.schema_to_bytes(schema, &write_options);
         let (meta, data) = write_message(&mut writer, encoded_message, &write_options)?;
+        let preserve_dict_id = write_options.preserve_dict_id;
         Ok(Self {
             writer,
             write_options,
@@ -779,7 +838,7 @@ impl<W: Write> FileWriter<W> {
             dictionary_blocks: vec![],
             record_blocks: vec![],
             finished: false,
-            dictionary_tracker: DictionaryTracker::new(true),
+            dictionary_tracker: DictionaryTracker::new(true, preserve_dict_id),
             custom_metadata: HashMap::new(),
             data_gen,
         })
@@ -936,11 +995,12 @@ impl<W: Write> StreamWriter<W> {
         // write the schema, set the written bytes to the schema
         let encoded_message = data_gen.schema_to_bytes(schema, &write_options);
         write_message(&mut writer, encoded_message, &write_options)?;
+        let preserve_dict_id = write_options.preserve_dict_id;
         Ok(Self {
             writer,
             write_options,
             finished: false,
-            dictionary_tracker: DictionaryTracker::new(false),
+            dictionary_tracker: DictionaryTracker::new(false, preserve_dict_id),
             data_gen,
         })
     }
@@ -1025,7 +1085,7 @@ impl<W: Write> StreamWriter<W> {
     ///
     /// let schema = Schema::empty();
     /// let buffer: Vec<u8> = Vec::new();
-    /// let options = IpcWriteOptions::try_new(8, false, MetadataVersion::V5)?;
+    /// let options = IpcWriteOptions::try_new(8, false, MetadataVersion::V5,true)?;
     /// let stream_writer = StreamWriter::try_new_with_options(buffer, &schema, options)?;
     ///
     /// assert_eq!(stream_writer.into_inner()?, expected);
@@ -1556,7 +1616,7 @@ mod tests {
         let mut stream_writer = StreamWriter::try_new_with_options(
             vec![],
             record.schema_ref(),
-            IpcWriteOptions::try_new(IPC_ALIGNMENT, false, MetadataVersion::V5).unwrap(),
+            IpcWriteOptions::try_new(IPC_ALIGNMENT, false, MetadataVersion::V5, true).unwrap(),
         )
         .unwrap();
         stream_writer.write(record).unwrap();
@@ -1581,7 +1641,7 @@ mod tests {
         let mut file = tempfile::tempfile().unwrap();
 
         {
-            let write_option = IpcWriteOptions::try_new(8, false, crate::MetadataVersion::V5)
+            let write_option = IpcWriteOptions::try_new(8, false, crate::MetadataVersion::V5, true)
                 .unwrap()
                 .try_with_compression(Some(crate::CompressionType::LZ4_FRAME))
                 .unwrap();
@@ -1621,7 +1681,7 @@ mod tests {
 
         let mut file = tempfile::tempfile().unwrap();
         {
-            let write_option = IpcWriteOptions::try_new(8, false, crate::MetadataVersion::V5)
+            let write_option = IpcWriteOptions::try_new(8, false, crate::MetadataVersion::V5, true)
                 .unwrap()
                 .try_with_compression(Some(crate::CompressionType::LZ4_FRAME))
                 .unwrap();
@@ -1660,7 +1720,7 @@ mod tests {
             RecordBatch::try_new(Arc::new(schema.clone()), vec![Arc::new(array)]).unwrap();
         let mut file = tempfile::tempfile().unwrap();
         {
-            let write_option = IpcWriteOptions::try_new(8, false, crate::MetadataVersion::V5)
+            let write_option = IpcWriteOptions::try_new(8, false, crate::MetadataVersion::V5, true)
                 .unwrap()
                 .try_with_compression(Some(crate::CompressionType::ZSTD))
                 .unwrap();
@@ -1781,16 +1841,16 @@ mod tests {
     }
     #[test]
     fn test_write_null_file_v4() {
-        write_null_file(IpcWriteOptions::try_new(8, false, MetadataVersion::V4).unwrap());
-        write_null_file(IpcWriteOptions::try_new(8, true, MetadataVersion::V4).unwrap());
-        write_null_file(IpcWriteOptions::try_new(64, false, MetadataVersion::V4).unwrap());
-        write_null_file(IpcWriteOptions::try_new(64, true, MetadataVersion::V4).unwrap());
+        write_null_file(IpcWriteOptions::try_new(8, false, MetadataVersion::V4, true).unwrap());
+        write_null_file(IpcWriteOptions::try_new(8, true, MetadataVersion::V4, true).unwrap());
+        write_null_file(IpcWriteOptions::try_new(64, false, MetadataVersion::V4, true).unwrap());
+        write_null_file(IpcWriteOptions::try_new(64, true, MetadataVersion::V4, true).unwrap());
     }
 
     #[test]
     fn test_write_null_file_v5() {
-        write_null_file(IpcWriteOptions::try_new(8, false, MetadataVersion::V5).unwrap());
-        write_null_file(IpcWriteOptions::try_new(64, false, MetadataVersion::V5).unwrap());
+        write_null_file(IpcWriteOptions::try_new(8, false, MetadataVersion::V5, true).unwrap());
+        write_null_file(IpcWriteOptions::try_new(64, false, MetadataVersion::V5, true).unwrap());
     }
 
     #[test]
@@ -1817,13 +1877,13 @@ mod tests {
         let batch = RecordBatch::try_new(schema, vec![Arc::new(union)]).unwrap();
 
         let gen = IpcDataGenerator {};
-        let mut dict_tracker = DictionaryTracker::new(false);
+        let mut dict_tracker = DictionaryTracker::new(false, true);
         gen.encoded_batch(&batch, &mut dict_tracker, &Default::default())
             .unwrap();
 
         // The encoder will assign dict IDs itself to ensure uniqueness and ignore the dict ID in the schema
         // so we expect the dict will be keyed to 0
-        assert!(dict_tracker.written.contains_key(&0));
+        assert!(dict_tracker.written.contains_key(&2));
     }
 
     #[test]
@@ -1853,13 +1913,11 @@ mod tests {
         let batch = RecordBatch::try_new(schema, vec![struct_array]).unwrap();
 
         let gen = IpcDataGenerator {};
-        let mut dict_tracker = DictionaryTracker::new(false);
+        let mut dict_tracker = DictionaryTracker::new(false, true);
         gen.encoded_batch(&batch, &mut dict_tracker, &Default::default())
             .unwrap();
 
-        // The encoder will assign dict IDs itself to ensure uniqueness and ignore the dict ID in the schema
-        // so we expect the dict will be keyed to 0
-        assert!(dict_tracker.written.contains_key(&0));
+        assert!(dict_tracker.written.contains_key(&2));
     }
 
     fn write_union_file(options: IpcWriteOptions) {
@@ -1912,8 +1970,8 @@ mod tests {
 
     #[test]
     fn test_write_union_file_v4_v5() {
-        write_union_file(IpcWriteOptions::try_new(8, false, MetadataVersion::V4).unwrap());
-        write_union_file(IpcWriteOptions::try_new(8, false, MetadataVersion::V5).unwrap());
+        write_union_file(IpcWriteOptions::try_new(8, false, MetadataVersion::V4, true).unwrap());
+        write_union_file(IpcWriteOptions::try_new(8, false, MetadataVersion::V5, true).unwrap());
     }
 
     #[test]
@@ -2423,7 +2481,7 @@ mod tests {
             let mut writer = FileWriter::try_new_with_options(
                 Vec::new(),
                 batch.schema_ref(),
-                IpcWriteOptions::try_new(IPC_ALIGNMENT, false, MetadataVersion::V5).unwrap(),
+                IpcWriteOptions::try_new(IPC_ALIGNMENT, false, MetadataVersion::V5, true).unwrap(),
             )
             .unwrap();
             writer.write(&batch).unwrap();
@@ -2478,7 +2536,7 @@ mod tests {
         let mut writer = FileWriter::try_new_with_options(
             Vec::new(),
             batch.schema_ref(),
-            IpcWriteOptions::try_new(IPC_ALIGNMENT, false, MetadataVersion::V5).unwrap(),
+            IpcWriteOptions::try_new(IPC_ALIGNMENT, false, MetadataVersion::V5, true).unwrap(),
         )
         .unwrap();
         writer.write(&batch).unwrap();

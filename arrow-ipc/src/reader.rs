@@ -617,7 +617,6 @@ fn read_dictionary_impl(
     let id = batch.id();
     let fields_using_this_dictionary = schema.fields_with_dict_id(id);
     let first_field = fields_using_this_dictionary.first().ok_or_else(|| {
-        println!("schema: {schema:#?}");
         ArrowError::InvalidArgumentError(format!("dictionary id {id} not found in schema"))
     })?;
 
@@ -2083,7 +2082,7 @@ mod tests {
         .unwrap();
 
         let gen = IpcDataGenerator {};
-        let mut dict_tracker = DictionaryTracker::new(false);
+        let mut dict_tracker = DictionaryTracker::new(false, true);
         let (_, encoded) = gen
             .encoded_batch(&batch, &mut dict_tracker, &Default::default())
             .unwrap();
@@ -2120,7 +2119,7 @@ mod tests {
         .unwrap();
 
         let gen = IpcDataGenerator {};
-        let mut dict_tracker = DictionaryTracker::new(false);
+        let mut dict_tracker = DictionaryTracker::new(false, true);
         let (_, encoded) = gen
             .encoded_batch(&batch, &mut dict_tracker, &Default::default())
             .unwrap();

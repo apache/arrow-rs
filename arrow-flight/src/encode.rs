@@ -248,9 +248,6 @@ pub struct FlightDataEncoder {
     /// Deterimines how `DictionaryArray`s are encoded for transport.
     /// See [`DictionaryHandling`] for more information.
     dictionary_handling: DictionaryHandling,
-    /// Tracks dictionary IDs for dictionary fields so that we can assign a unique
-    /// dictionary ID for each field
-    next_dict_id: i64,
 }
 
 impl FlightDataEncoder {
@@ -276,7 +273,6 @@ impl FlightDataEncoder {
             done: false,
             descriptor,
             dictionary_handling,
-            next_dict_id: 0,
         };
 
         // If schema is known up front, enqueue it immediately
@@ -310,7 +306,7 @@ impl FlightDataEncoder {
         let send_dictionaries = self.dictionary_handling == DictionaryHandling::Resend;
         let schema = Arc::new(prepare_schema_for_flight(
             schema,
-            &mut self.next_dict_id,
+            &mut self.encoder.dictionary_tracker,
             send_dictionaries,
         ));
         let mut schema_flight_data = self.encoder.encode_schema(&schema);
@@ -448,26 +444,26 @@ pub enum DictionaryHandling {
 
 fn prepare_field_for_flight(
     field: &FieldRef,
-    next_dict_id: &mut i64,
+    dictionary_tracker: &mut DictionaryTracker,
     send_dictionaries: bool,
 ) -> Field {
     match field.data_type() {
         DataType::List(inner) => Field::new_list(
             field.name(),
-            prepare_field_for_flight(inner, next_dict_id, send_dictionaries),
+            prepare_field_for_flight(inner, dictionary_tracker, send_dictionaries),
             field.is_nullable(),
         )
         .with_metadata(field.metadata().clone()),
         DataType::LargeList(inner) => Field::new_list(
             field.name(),
-            prepare_field_for_flight(inner, next_dict_id, send_dictionaries),
+            prepare_field_for_flight(inner, dictionary_tracker, send_dictionaries),
             field.is_nullable(),
         )
         .with_metadata(field.metadata().clone()),
         DataType::Struct(fields) => {
             let new_fields: Vec<Field> = fields
                 .iter()
-                .map(|f| prepare_field_for_flight(f, next_dict_id, send_dictionaries))
+                .map(|f| prepare_field_for_flight(f, dictionary_tracker, send_dictionaries))
                 .collect();
             Field::new_struct(field.name(), new_fields, field.is_nullable())
                 .with_metadata(field.metadata().clone())
@@ -478,7 +474,7 @@ fn prepare_field_for_flight(
                 .map(|(type_id, f)| {
                     (
                         type_id,
-                        prepare_field_for_flight(f, next_dict_id, send_dictionaries),
+                        prepare_field_for_flight(f, dictionary_tracker, send_dictionaries),
                     )
                 })
                 .unzip();
@@ -494,8 +490,8 @@ fn prepare_field_for_flight(
                 )
                 .with_metadata(field.metadata().clone())
             } else {
-                let dict_id = *next_dict_id;
-                *next_dict_id += 1;
+                let dict_id = dictionary_tracker.push_dict_id(field.as_ref());
+
                 Field::new_dict(
                     field.name(),
                     field.data_type().clone(),
@@ -517,7 +513,7 @@ fn prepare_field_for_flight(
 /// See hydrate_dictionary for more information
 fn prepare_schema_for_flight(
     schema: &Schema,
-    next_dict_id: &mut i64,
+    dictionary_tracker: &mut DictionaryTracker,
     send_dictionaries: bool,
 ) -> Schema {
     let fields: Fields = schema
@@ -533,8 +529,7 @@ fn prepare_schema_for_flight(
                     )
                     .with_metadata(field.metadata().clone())
                 } else {
-                    let dict_id = *next_dict_id;
-                    *next_dict_id += 1;
+                    let dict_id = dictionary_tracker.push_dict_id(field.as_ref());
                     Field::new_dict(
                         field.name(),
                         field.data_type().clone(),
@@ -546,7 +541,7 @@ fn prepare_schema_for_flight(
                 }
             }
             tpe if tpe.is_nested() => {
-                prepare_field_for_flight(field, next_dict_id, send_dictionaries)
+                prepare_field_for_flight(field, dictionary_tracker, send_dictionaries)
             }
             _ => field.as_ref().clone(),
         })
@@ -601,10 +596,11 @@ struct FlightIpcEncoder {
 
 impl FlightIpcEncoder {
     fn new(options: IpcWriteOptions, error_on_replacement: bool) -> Self {
+        let preserve_dict_id = options.preserve_dict_id();
         Self {
             options,
             data_gen: IpcDataGenerator::default(),
-            dictionary_tracker: DictionaryTracker::new(error_on_replacement),
+            dictionary_tracker: DictionaryTracker::new(error_on_replacement, preserve_dict_id),
         }
     }
 
@@ -691,7 +687,7 @@ mod tests {
     /// <https://github.com/apache/arrow-rs/issues/208>
     fn test_encode_flight_data() {
         // use 8-byte alignment - default alignment is 64 which produces bigger ipc data
-        let options = IpcWriteOptions::try_new(8, false, MetadataVersion::V5).unwrap();
+        let options = IpcWriteOptions::try_new(8, false, MetadataVersion::V5, true).unwrap();
         let c1 = UInt32Array::from(vec![1, 2, 3, 4, 5, 6]);
 
         let batch = RecordBatch::try_from_iter(vec![("a", Arc::new(c1) as ArrayRef)])
@@ -1277,6 +1273,7 @@ mod tests {
         let expected_schema = batches.first().unwrap().schema();
 
         let encoder = FlightDataEncoderBuilder::default()
+            .with_options(IpcWriteOptions::default().with_preserve_dict_id(false))
             .with_dictionary_handling(DictionaryHandling::Resend)
             .build(futures::stream::iter(batches.clone().into_iter().map(Ok)));
 
@@ -1302,9 +1299,9 @@ mod tests {
             HashMap::from([("some_key".to_owned(), "some_value".to_owned())]),
         );
 
-        let mut next_dict_id = 0;
+        let mut dictionary_tracker = DictionaryTracker::new(false, true);
 
-        let got = prepare_schema_for_flight(&schema, &mut next_dict_id, false);
+        let got = prepare_schema_for_flight(&schema, &mut dictionary_tracker, false);
         assert!(got.metadata().contains_key("some_key"));
     }
 
@@ -1325,7 +1322,7 @@ mod tests {
         options: &IpcWriteOptions,
     ) -> (Vec<FlightData>, FlightData) {
         let data_gen = IpcDataGenerator::default();
-        let mut dictionary_tracker = DictionaryTracker::new(false);
+        let mut dictionary_tracker = DictionaryTracker::new(false, true);
 
         let (encoded_dictionaries, encoded_batch) = data_gen
             .encoded_batch(batch, &mut dictionary_tracker, options)
@@ -1586,7 +1583,9 @@ mod tests {
             let mut stream = FlightDataEncoderBuilder::new()
                 .with_max_flight_data_size(max_flight_data_size)
                 // use 8-byte alignment - default alignment is 64 which produces bigger ipc data
-                .with_options(IpcWriteOptions::try_new(8, false, MetadataVersion::V5).unwrap())
+                .with_options(
+                    IpcWriteOptions::try_new(8, false, MetadataVersion::V5, true).unwrap(),
+                )
                 .build(futures::stream::iter([Ok(batch.clone())]));
 
             let mut i = 0;
