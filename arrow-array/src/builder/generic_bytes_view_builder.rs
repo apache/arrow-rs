@@ -128,21 +128,8 @@ impl<T: ByteViewType + ?Sized> GenericByteViewBuilder<T> {
         let end = start.saturating_add(len as usize);
         let b = b.get_unchecked(start..end);
 
-        if len <= 12 {
-            let mut view_buffer = [0; 16];
-            view_buffer[0..4].copy_from_slice(&len.to_le_bytes());
-            view_buffer[4..4 + b.len()].copy_from_slice(b);
-            self.views_builder.append(u128::from_le_bytes(view_buffer));
-        } else {
-            let view = ByteView {
-                length: len,
-                prefix: u32::from_le_bytes(b[0..4].try_into().unwrap()),
-                buffer_index: block,
-                offset,
-            };
-            self.views_builder.append(view.into());
-        }
-
+        let view = make_view_unchecked(b, block, offset);
+        self.views_builder.append(view);
         self.null_buffer_builder.append_non_null();
     }
 
@@ -344,6 +331,25 @@ pub type StringViewBuilder = GenericByteViewBuilder<StringViewType>;
 /// Values can be appended using [`GenericByteViewBuilder::append_value`], and nulls with
 /// [`GenericByteViewBuilder::append_null`] as normal.
 pub type BinaryViewBuilder = GenericByteViewBuilder<BinaryViewType>;
+
+/// Create a view based on the given data, block id and offset
+pub fn make_view_unchecked(data: &[u8], block_id: u32, offset: u32) -> u128 {
+    let len = data.len() as u32;
+    if len <= 12 {
+        let mut view_buffer = [0; 16];
+        view_buffer[0..4].copy_from_slice(&len.to_le_bytes());
+        view_buffer[4..4 + data.len()].copy_from_slice(data);
+        u128::from_le_bytes(view_buffer)
+    } else {
+        let view = ByteView {
+            length: len,
+            prefix: u32::from_le_bytes(data[0..4].try_into().unwrap()),
+            buffer_index: block_id,
+            offset,
+        };
+        view.into()
+    }
+}
 
 #[cfg(test)]
 mod tests {

@@ -16,13 +16,16 @@
 // under the License.
 
 use crate::arrow::record_reader::buffer::ValuesBuffer;
-use arrow_array::{make_array, ArrayRef};
+use arrow_array::{builder::make_view_unchecked, make_array, ArrayRef};
 use arrow_buffer::Buffer;
-use arrow_data::{ArrayDataBuilder, ByteView};
+use arrow_data::ArrayDataBuilder;
 use arrow_schema::DataType as ArrowType;
 
 /// A buffer of view type byte arrays that can be converted into
 /// `GenericByteViewArray`
+///
+/// Note this does not reuse `GenericByteViewBuilder` due to the need to call `pad_nulls`
+/// and reuse the existing logic for Vec in the parquet crate
 #[derive(Debug, Default)]
 pub struct ViewBuffer {
     pub views: Vec<u128>,
@@ -38,31 +41,19 @@ impl ViewBuffer {
     }
 
     /// # Safety
-    /// Similar to `GenericByteViewBuilder::append_view_unchecked`, this method is only safe when:
+    /// This method is only safe when:
     /// - `block` is a valid index, i.e., the return value of `append_block`
     /// - `offset` and `offset + len` are valid indices into the buffer
     /// - The `(offset, offset + len)` is valid value for the native type.
     #[allow(unused)]
     pub unsafe fn append_view_unchecked(&mut self, block: u32, offset: u32, len: u32) {
         let b = self.buffers.get_unchecked(block as usize);
-        let start = offset as usize;
-        let end = start.saturating_add(len as usize);
-        let b = b.get_unchecked(start..end);
+        let end = offset.saturating_add(len);
+        let b = b.get_unchecked(offset as usize..end as usize);
 
-        if len <= 12 {
-            let mut view_buffer = [0; 16];
-            view_buffer[0..4].copy_from_slice(&len.to_le_bytes());
-            view_buffer[4..4 + b.len()].copy_from_slice(b);
-            self.views.push(u128::from_le_bytes(view_buffer));
-        } else {
-            let view = ByteView {
-                length: len,
-                prefix: u32::from_le_bytes(b[0..4].try_into().unwrap()),
-                buffer_index: block,
-                offset,
-            };
-            self.views.push(view.into());
-        }
+        let view = make_view_unchecked(b, block, offset);
+
+        self.views.push(view);
     }
 
     /// Converts this into an [`ArrayRef`] with the provided `data_type` and `null_buffer`
