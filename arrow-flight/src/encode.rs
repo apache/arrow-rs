@@ -490,7 +490,7 @@ fn prepare_field_for_flight(
                 )
                 .with_metadata(field.metadata().clone())
             } else {
-                let dict_id = dictionary_tracker.push_dict_id(field.as_ref());
+                let dict_id = dictionary_tracker.set_dict_id(field.as_ref());
 
                 Field::new_dict(
                     field.name(),
@@ -529,7 +529,7 @@ fn prepare_schema_for_flight(
                     )
                     .with_metadata(field.metadata().clone())
                 } else {
-                    let dict_id = dictionary_tracker.push_dict_id(field.as_ref());
+                    let dict_id = dictionary_tracker.set_dict_id(field.as_ref());
                     Field::new_dict(
                         field.name(),
                         field.data_type().clone(),

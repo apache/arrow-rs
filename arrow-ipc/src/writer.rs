@@ -61,6 +61,8 @@ pub struct IpcWriteOptions {
     batch_compression_type: Option<crate::CompressionType>,
     /// Flag indicating whether the writer should preserver the dictionary IDs defined in the
     /// schema or generate unique dictionary IDs internally during encoding.
+    ///
+    /// Defaults to `true`
     preserve_dict_id: bool,
 }
 
@@ -137,6 +139,8 @@ impl IpcWriteOptions {
         self.preserve_dict_id
     }
 
+    /// Set whether the IPC writer should preserve the dictionary IDs in the schema
+    /// or auto-assign uniquer dictionary IDs during encoding
     pub fn with_preserve_dict_id(mut self, preserve_dict_id: bool) -> Self {
         self.preserve_dict_id = preserve_dict_id;
         self
@@ -712,9 +716,16 @@ pub struct DictionaryTracker {
 }
 
 impl DictionaryTracker {
-    /// Create a new [`DictionaryTracker`]. If `error_on_replacement`
+    /// Create a new [`DictionaryTracker`].
+    ///
+    /// If `error_on_replacement`
     /// is true, an error will be generated if an update to an
     /// existing dictionary is attempted.
+    ///
+    /// If `preserve_dict_id` is true, the dictionary ID defined in the schema
+    /// is used, otherwise a unique dictionary ID will be assigned by incrementing
+    /// the last seen dictionary ID (or using `0` if no other dictionary IDs have been
+    /// seen)
     pub fn new(error_on_replacement: bool, preserve_dict_id: bool) -> Self {
         Self {
             written: HashMap::new(),
@@ -724,7 +735,14 @@ impl DictionaryTracker {
         }
     }
 
-    pub fn push_dict_id(&mut self, field: &Field) -> i64 {
+    /// Set the dictionary ID for `field`.
+    ///
+    /// If `preserve_dict_id` is true, this will return the `dict_id` in `field` (or panic if `field` does
+    /// not have a `dict_id` defined).
+    ///
+    /// If `preserve_dict_id` is false, this will return the value of the last `dict_id` assigned incremented by 1
+    /// or 0 in the case where no dictionary IDs have yet been assigned
+    pub fn set_dict_id(&mut self, field: &Field) -> i64 {
         let next = if self.preserve_dict_id {
             field.dict_id().expect("no dict_id in field")
         } else {
@@ -739,6 +757,8 @@ impl DictionaryTracker {
         next
     }
 
+    /// Return the sequence of dictionary IDs in the order they should be observed while
+    /// traversing the schema
     pub fn dict_id(&mut self) -> &[i64] {
         &self.dict_ids
     }
