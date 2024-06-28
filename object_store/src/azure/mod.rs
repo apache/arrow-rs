@@ -30,7 +30,7 @@ use crate::{
     PutMultipartOpts, PutOptions, PutPayload, PutResult, Result, UploadPart,
 };
 use async_trait::async_trait;
-use futures::stream::BoxStream;
+use futures::{stream::BoxStream, StreamExt};
 use reqwest::Method;
 use std::fmt::Debug;
 use std::sync::Arc;
@@ -133,6 +133,16 @@ impl ObjectStore for MicrosoftAzure {
 
     async fn copy_if_not_exists(&self, from: &Path, to: &Path) -> Result<()> {
         self.client.copy_request(from, to, false).await
+    }
+
+    async fn delete_prefix(&self, prefix: Option<&Path>) -> Result<()> {
+        let mut to_delete = self.list(prefix);
+
+        while let Some(del) = to_delete.next().await.transpose()? {
+            self.delete(&del.location).await?;
+        }
+
+        Ok(())
     }
 }
 

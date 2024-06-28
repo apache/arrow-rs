@@ -199,6 +199,10 @@ impl<T: ObjectStore> ObjectStore for PrefixStore<T> {
         let full_to = self.full_path(to);
         self.inner.rename_if_not_exists(&full_from, &full_to).await
     }
+
+    async fn delete_prefix(&self, prefix: Option<&Path>) -> Result<()> {
+        self.inner.delete_prefix(prefix).await
+    }
 }
 
 #[cfg(test)]

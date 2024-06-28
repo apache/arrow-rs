@@ -172,6 +172,16 @@ impl ObjectStore for ChunkedStore {
     async fn copy_if_not_exists(&self, from: &Path, to: &Path) -> Result<()> {
         self.inner.copy_if_not_exists(from, to).await
     }
+
+    async fn delete_prefix(&self, prefix: Option<&Path>) -> Result<()> {
+        let mut to_delete = self.list(prefix);
+
+        while let Some(del) = to_delete.next().await.transpose()? {
+            self.delete(&del.location).await?;
+        }
+
+        Ok(())
+    }
 }
 
 #[cfg(test)]

@@ -299,6 +299,10 @@ impl<T: ObjectStore> ObjectStore for ThrottledStore<T> {
 
         self.inner.rename_if_not_exists(from, to).await
     }
+
+    async fn delete_prefix(&self, prefix: Option<&Path>) -> Result<()> {
+        self.delete_prefix(prefix).await
+    }
 }
 
 /// Saturated `usize` to `u32` cast.

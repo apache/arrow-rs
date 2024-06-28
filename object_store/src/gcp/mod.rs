@@ -48,6 +48,7 @@ use crate::{
 use async_trait::async_trait;
 use client::GoogleCloudStorageClient;
 use futures::stream::BoxStream;
+use futures::StreamExt;
 use hyper::Method;
 use url::Url;
 
@@ -205,6 +206,16 @@ impl ObjectStore for GoogleCloudStorage {
 
     async fn copy_if_not_exists(&self, from: &Path, to: &Path) -> Result<()> {
         self.client.copy_request(from, to, true).await
+    }
+
+    async fn delete_prefix(&self, prefix: Option<&Path>) -> Result<()> {
+        let mut to_delete = self.list(prefix);
+
+        while let Some(del) = to_delete.next().await.transpose()? {
+            self.delete(&del.location).await?;
+        }
+
+        Ok(())
     }
 }
 

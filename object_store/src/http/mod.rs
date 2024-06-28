@@ -193,6 +193,16 @@ impl ObjectStore for HttpStore {
     async fn copy_if_not_exists(&self, from: &Path, to: &Path) -> Result<()> {
         self.client.copy(from, to, false).await
     }
+
+    async fn delete_prefix(&self, prefix: Option<&Path>) -> Result<()> {
+        let mut to_delete = self.list(prefix);
+
+        while let Some(del) = to_delete.next().await.transpose()? {
+            self.delete(&del.location).await?;
+        }
+
+        Ok(())
+    }
 }
 
 /// Configure a connection to a generic HTTP server

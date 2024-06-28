@@ -670,6 +670,24 @@ impl ObjectStore for LocalFileSystem {
         })
         .await
     }
+
+    async fn delete_prefix(&self, prefix: Option<&Path>) -> Result<()> {
+        let config = self.config.as_ref();
+        let path = if let Some(p) = prefix {
+            config.prefix_to_filesystem(p)?
+        } else {
+            config.root.to_file_path().map_err(|_| Error::Aborted)?
+        };
+
+        maybe_spawn_blocking(move || match std::fs::remove_dir_all(&path) {
+            Ok(_) => Ok(()),
+            Err(e) => Err(match e.kind() {
+                ErrorKind::NotFound => Error::NotFound { path, source: e }.into(),
+                _ => Error::UnableToDeleteFile { path, source: e }.into(),
+            }),
+        })
+        .await
+    }
 }
 
 /// Creates the parent directories of `path` or returns an error based on `source` if no parent

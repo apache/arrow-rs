@@ -77,6 +77,10 @@ impl ObjectStore for MyStore {
     async fn copy_if_not_exists(&self, _: &Path, _: &Path) -> Result<()> {
         todo!()
     }
+
+    async fn delete_prefix(&self, _: Option<&Path>) -> Result<()> {
+        todo!()
+    }
 }
 
 #[tokio::test]

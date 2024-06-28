@@ -315,6 +315,16 @@ impl ObjectStore for AmazonS3 {
             Ok(_) => Ok(()),
         }
     }
+
+    async fn delete_prefix(&self, prefix: Option<&Path>) -> Result<()> {
+        let mut to_delete = self.list(prefix);
+
+        while let Some(del) = to_delete.next().await.transpose()? {
+            self.delete(&del.location).await?;
+        }
+
+        Ok(())
+    }
 }
 
 #[derive(Debug)]
