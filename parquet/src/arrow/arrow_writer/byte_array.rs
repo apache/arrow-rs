@@ -465,7 +465,10 @@ impl ColumnValueEncoder for ByteArrayEncoder {
             .map(|bf| bf.byte_size())
             .unwrap_or_default();
 
-        encoder_size + bloom_filter_size
+        let stats_size = self.min_value.as_ref().map(|v| v.len()).unwrap_or_default()
+            + self.max_value.as_ref().map(|v| v.len()).unwrap_or_default();
+
+        encoder_size + bloom_filter_size + stats_size
     }
 
     fn estimated_dict_page_size(&self) -> Option<usize> {
