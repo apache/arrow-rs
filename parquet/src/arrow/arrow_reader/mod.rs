@@ -283,6 +283,9 @@ impl ArrowReaderOptions {
     /// For example, if you wanted to cast from an Int64 in the Parquet file to a Timestamp
     /// in the Arrow schema.
     ///
+    /// The supplied schema must have the same number of columns as the parquet schema and
+    /// the column names need to be the same.
+    ///
     pub fn with_schema(self, schema: SchemaRef) -> Self {
         Self {
             supplied_schema: Some(schema),
@@ -372,26 +375,7 @@ impl ArrowReaderMetadata {
     /// See [`Self::load`] for more details.
     pub fn try_new(metadata: Arc<ParquetMetaData>, options: ArrowReaderOptions) -> Result<Self> {
         match options.supplied_schema {
-            Some(supplied_schema) => {
-                let parquet_schema = metadata.file_metadata().schema_descr();
-                let field_levels = parquet_to_arrow_field_levels(
-                    parquet_schema,
-                    ProjectionMask::all(),
-                    Some(supplied_schema.fields()),
-                )?;
-                let inferred_schema = Schema::new(field_levels.fields);
-                if supplied_schema.contains(&inferred_schema) {
-                    Ok(Self {
-                        metadata,
-                        schema: Arc::from(inferred_schema),
-                        fields: field_levels.levels.map(Arc::new),
-                    })
-                } else {
-                    Err(ParquetError::ArrowError(
-                        "supplied schema does not match the parquet schema".into(),
-                    ))
-                }
-            }
+            Some(supplied_schema) => Self::with_supplied_schema(metadata, supplied_schema.clone()),
             None => {
                 let kv_metadata = match options.skip_arrow_metadata {
                     true => None,
@@ -408,6 +392,56 @@ impl ArrowReaderMetadata {
                     metadata,
                     schema: Arc::new(schema),
                     fields: fields.map(Arc::new),
+                })
+            }
+        }
+    }
+
+    fn with_supplied_schema(
+        metadata: Arc<ParquetMetaData>,
+        supplied_schema: SchemaRef,
+    ) -> Result<Self> {
+        let parquet_schema = metadata.file_metadata().schema_descr();
+        let field_levels = parquet_to_arrow_field_levels(
+            parquet_schema,
+            ProjectionMask::all(),
+            Some(supplied_schema.fields()),
+        )?;
+        let fields = field_levels.fields;
+        let inferred_len = fields.len();
+        let supplied_len = supplied_schema.fields().len();
+        // Ensure the supplied schema has the same number of columns as the parquet schema.
+        // parquet_to_arrow_field_levels is expected to throw an error if the schemas have
+        // different lengths, but we check here to be safe.
+        if inferred_len != supplied_len {
+            Err(arrow_err!(format!(
+                "incompatible arrow schema, expected {} columns received {}",
+                inferred_len, supplied_len
+            )))
+        } else {
+            let diff_fields: Vec<_> = supplied_schema
+                .fields()
+                .iter()
+                .zip(fields.iter())
+                .filter_map(|(field1, field2)| {
+                    if field1 != field2 {
+                        Some(field1.name().clone())
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+
+            if !diff_fields.is_empty() {
+                Err(ParquetError::ArrowError(format!(
+                    "incompatible arrow schema, the following fields could not be cast: [{}]",
+                    diff_fields.join(", ")
+                )))
+            } else {
+                Ok(Self {
+                    metadata,
+                    schema: supplied_schema,
+                    fields: field_levels.levels.map(Arc::new),
                 })
             }
         }
@@ -2664,129 +2698,272 @@ mod tests {
         assert_eq!(reader.schema(), schema_without_metadata);
     }
 
-    fn gen_parquet_file<T>(values: &[T::T], file: File) -> Result<crate::format::FileMetaData>
+    fn write_parquet_from_iter<I, F>(value: I) -> File
     where
-        T: DataType,
+        I: IntoIterator<Item = (F, ArrayRef)>,
+        F: AsRef<str>,
     {
-        let len = match T::get_physical_type() {
-            crate::basic::Type::INT96 => 12,
-            _ => -1,
-        };
-
-        let fields = vec![Arc::new(
-            Type::primitive_type_builder("leaf", T::get_physical_type())
-                .with_repetition(Repetition::REQUIRED)
-                .with_converted_type(ConvertedType::NONE)
-                .with_length(len)
-                .build()
-                .unwrap(),
-        )];
-
-        let schema = Arc::new(
-            Type::group_type_builder("test_schema")
-                .with_fields(fields)
-                .build()
-                .unwrap(),
-        );
-        let mut writer = SerializedFileWriter::new(file, schema, Default::default())?;
-
-        let mut row_group_writer = writer.next_row_group()?;
-        let mut column_writer = row_group_writer.next_column()?.unwrap();
-
-        column_writer.typed::<T>().write_batch(values, None, None)?;
-
-        column_writer.close()?;
-        row_group_writer.close()?;
-        writer.close()
+        let batch = RecordBatch::try_from_iter(value).unwrap();
+        let file = tempfile().unwrap();
+        let mut writer =
+            ArrowWriter::try_new(file.try_clone().unwrap(), batch.schema().clone(), None).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+        file
     }
 
-    fn get_builder_with_schema(
-        file: File,
-        schema: SchemaRef,
-    ) -> Result<ParquetRecordBatchReaderBuilder<File>> {
+    fn run_schema_test_with_error<I, F>(value: I, schema: SchemaRef, expected_error: &str)
+    where
+        I: IntoIterator<Item = (F, ArrayRef)>,
+        F: AsRef<str>,
+    {
+        let file = write_parquet_from_iter(value);
         let options_with_schema = ArrowReaderOptions::new().with_schema(schema.clone());
-        ParquetRecordBatchReaderBuilder::try_new_with_options(
+        let builder = ParquetRecordBatchReaderBuilder::try_new_with_options(
             file.try_clone().unwrap(),
             options_with_schema,
-        )
+        );
+        assert_eq!(builder.err().unwrap().to_string(), expected_error);
     }
 
     #[test]
-    fn test_with_schema_int64_to_timestamp() {
-        let values: Vec<i64> = vec![0];
-        let file = tempfile().unwrap();
-        gen_parquet_file::<Int64Type>(&values, file.try_clone().unwrap()).unwrap();
-        let supplied_schema = Arc::new(Schema::new(vec![Field::new(
-            "leaf",
-            ArrowDataType::Timestamp(
-                arrow::datatypes::TimeUnit::Nanosecond,
-                Some("+01:00".into()),
-            ),
-            false,
-        )]));
-        let builder =
-            get_builder_with_schema(file.try_clone().unwrap(), supplied_schema.clone()).unwrap();
-
-        let mut arrow_reader = builder.build().unwrap();
-
-        assert_eq!(arrow_reader.schema(), supplied_schema);
-
-        let batch = arrow_reader.next().unwrap().unwrap();
-        assert_eq!(batch.num_columns(), 1);
-        assert_eq!(batch.num_rows(), 1);
-        assert_eq!(
-            batch
-                .column(0)
-                .as_any()
-                .downcast_ref::<TimestampNanosecondArray>()
-                .unwrap()
-                .value_as_datetime_with_tz(0, "+01:00".parse().unwrap())
-                .map(|v| v.to_string())
-                .unwrap(),
-            "1970-01-01 01:00:00 +01:00"
+    fn test_schema_too_few_columns() {
+        run_schema_test_with_error(
+            vec![
+                ("int64", Arc::new(Int64Array::from(vec![0])) as ArrayRef),
+                ("int32", Arc::new(Int32Array::from(vec![0])) as ArrayRef),
+            ],
+            Arc::new(Schema::new(vec![Field::new(
+                "int64",
+                ArrowDataType::Int64,
+                false,
+            )])),
+            "Arrow: incompatible arrow schema, expected 2 struct fields got 1",
         );
     }
 
     #[test]
     fn test_schema_too_many_columns() {
-        let values: Vec<i64> = vec![0];
-        let file = tempfile().unwrap();
-        gen_parquet_file::<Int64Type>(&values, file.try_clone().unwrap()).unwrap();
-        let supplied_schema = Arc::new(Schema::new(vec![
-            Field::new("leaf", ArrowDataType::Int64, false),
-            Field::new("extra", ArrowDataType::Int32, true),
-        ]));
-        let options_with_schema = ArrowReaderOptions::new().with_schema(supplied_schema.clone());
-        let builder = ParquetRecordBatchReaderBuilder::try_new_with_options(
-            file.try_clone().unwrap(),
-            options_with_schema,
-        );
-
-        assert_eq!(
-            builder.err().unwrap().to_string(),
-            "Arrow: incompatible arrow schema, expected 1 struct fields got 2"
+        run_schema_test_with_error(
+            vec![("int64", Arc::new(Int64Array::from(vec![0])) as ArrayRef)],
+            Arc::new(Schema::new(vec![
+                Field::new("int64", ArrowDataType::Int64, false),
+                Field::new("int32", ArrowDataType::Int32, false),
+            ])),
+            "Arrow: incompatible arrow schema, expected 1 struct fields got 2",
         );
     }
 
     #[test]
-    fn test_schema_incompatible_column() {
-        let values: Vec<i64> = vec![0];
-        let file = tempfile().unwrap();
-        gen_parquet_file::<Int64Type>(&values, file.try_clone().unwrap()).unwrap();
-        let supplied_schema = Arc::new(Schema::new(vec![Field::new(
-            "leaf",
-            ArrowDataType::Int32,
-            false,
-        )]));
-        let options_with_schema = ArrowReaderOptions::new().with_schema(supplied_schema.clone());
-        let builder = ParquetRecordBatchReaderBuilder::try_new_with_options(
+    fn test_schema_mismatched_column_names() {
+        run_schema_test_with_error(
+            vec![("int64", Arc::new(Int64Array::from(vec![0])) as ArrayRef)],
+            Arc::new(Schema::new(vec![Field::new(
+                "other",
+                ArrowDataType::Int64,
+                false,
+            )])),
+            "Arrow: incompatible arrow schema, expected field named int64 got other",
+        );
+    }
+
+    #[test]
+    fn test_schema_incompatible_columns() {
+        run_schema_test_with_error(
+            vec![
+                (
+                    "col1_invalid",
+                    Arc::new(Int64Array::from(vec![0])) as ArrayRef,
+                ),
+                (
+                    "col2_valid",
+                    Arc::new(Int32Array::from(vec![0])) as ArrayRef,
+                ),
+                (
+                    "col3_invalid",
+                    Arc::new(Date64Array::from(vec![0])) as ArrayRef,
+                ),
+            ],
+            Arc::new(Schema::new(vec![
+                Field::new("col1_invalid", ArrowDataType::Int32, false),
+                Field::new("col2_valid", ArrowDataType::Int32, false),
+                Field::new("col3_invalid", ArrowDataType::Int32, false),
+            ])),
+            "Arrow: incompatible arrow schema, the following fields could not be cast: [col1_invalid, col3_invalid]",
+        );
+    }
+
+    #[test]
+    fn test_one_incompatible_nested_column() {
+        let nested_fields = Fields::from(vec![
+            Field::new("nested1_valid", ArrowDataType::Utf8, false),
+            Field::new("nested1_invalid", ArrowDataType::Int64, false),
+        ]);
+        let nested = StructArray::try_new(
+            nested_fields,
+            vec![
+                Arc::new(StringArray::from(vec!["a"])) as ArrayRef,
+                Arc::new(Int64Array::from(vec![0])) as ArrayRef,
+            ],
+            None,
+        )
+        .expect("struct array");
+        let supplied_nested_fields = Fields::from(vec![
+            Field::new("nested1_valid", ArrowDataType::Utf8, false),
+            Field::new("nested1_invalid", ArrowDataType::Int32, false),
+        ]);
+        run_schema_test_with_error(
+            vec![
+                ("col1", Arc::new(Int64Array::from(vec![0])) as ArrayRef),
+                ("col2", Arc::new(Int32Array::from(vec![0])) as ArrayRef),
+                ("nested", Arc::new(nested) as ArrayRef),
+            ],
+            Arc::new(Schema::new(vec![
+                Field::new("col1", ArrowDataType::Int64, false),
+                Field::new("col2", ArrowDataType::Int32, false),
+                Field::new(
+                    "nested",
+                    ArrowDataType::Struct(supplied_nested_fields),
+                    false,
+                ),
+            ])),
+            "Arrow: incompatible arrow schema, the following fields could not be cast: [nested]",
+        );
+    }
+
+    #[test]
+    fn test_with_schema() {
+        let nested_fields = Fields::from(vec![
+            Field::new("utf8_to_dict", ArrowDataType::Utf8, false),
+            Field::new("int64_to_ts_nano", ArrowDataType::Int64, false),
+        ]);
+
+        let nested_arrays: Vec<ArrayRef> = vec![
+            Arc::new(StringArray::from(vec!["a", "a", "a", "b"])) as ArrayRef,
+            Arc::new(Int64Array::from(vec![1, 2, 3, 4])) as ArrayRef,
+        ];
+
+        let nested = StructArray::try_new(nested_fields, nested_arrays, None).unwrap();
+
+        let file = write_parquet_from_iter(vec![
+            (
+                "int32_to_ts_second",
+                Arc::new(Int32Array::from(vec![0, 1, 2, 3])) as ArrayRef,
+            ),
+            (
+                "date32_to_date64",
+                Arc::new(Date32Array::from(vec![0, 1, 2, 3])) as ArrayRef,
+            ),
+            ("nested", Arc::new(nested) as ArrayRef),
+        ]);
+
+        let supplied_nested_fields = Fields::from(vec![
+            Field::new(
+                "utf8_to_dict",
+                ArrowDataType::Dictionary(
+                    Box::new(ArrowDataType::Int32),
+                    Box::new(ArrowDataType::Utf8),
+                ),
+                false,
+            ),
+            Field::new(
+                "int64_to_ts_nano",
+                ArrowDataType::Timestamp(
+                    arrow::datatypes::TimeUnit::Nanosecond,
+                    Some("+10:00".into()),
+                ),
+                false,
+            ),
+        ]);
+
+        let supplied_schema = Arc::new(Schema::new(vec![
+            Field::new(
+                "int32_to_ts_second",
+                ArrowDataType::Timestamp(arrow::datatypes::TimeUnit::Second, Some("+01:00".into())),
+                false,
+            ),
+            Field::new("date32_to_date64", ArrowDataType::Date64, false),
+            Field::new(
+                "nested",
+                ArrowDataType::Struct(supplied_nested_fields),
+                false,
+            ),
+        ]));
+
+        let options = ArrowReaderOptions::new().with_schema(supplied_schema.clone());
+        let mut arrow_reader = ParquetRecordBatchReaderBuilder::try_new_with_options(
             file.try_clone().unwrap(),
-            options_with_schema,
+            options,
+        )
+        .expect("reader builder with schema")
+        .build()
+        .expect("reader with schema");
+
+        assert_eq!(arrow_reader.schema(), supplied_schema);
+        let batch = arrow_reader.next().unwrap().unwrap();
+        assert_eq!(batch.num_columns(), 3);
+        assert_eq!(batch.num_rows(), 4);
+        assert_eq!(
+            batch
+                .column(0)
+                .as_any()
+                .downcast_ref::<TimestampSecondArray>()
+                .expect("downcast to timestamp second")
+                .value_as_datetime_with_tz(0, "+01:00".parse().unwrap())
+                .map(|v| v.to_string())
+                .expect("value as datetime"),
+            "1970-01-01 01:00:00 +01:00"
+        );
+        assert_eq!(
+            batch
+                .column(1)
+                .as_any()
+                .downcast_ref::<Date64Array>()
+                .expect("downcast to date64")
+                .value_as_date(0)
+                .map(|v| v.to_string())
+                .expect("value as date"),
+            "1970-01-01"
+        );
+
+        let nested = batch
+            .column(2)
+            .as_any()
+            .downcast_ref::<StructArray>()
+            .expect("downcast to struct");
+
+        let nested_dict = nested
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int32DictionaryArray>()
+            .expect("downcast to dictionary");
+
+        assert_eq!(
+            nested_dict
+                .values()
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .expect("downcast to string")
+                .iter()
+                .collect::<Vec<_>>(),
+            vec![Some("a"), Some("b")]
         );
 
         assert_eq!(
-            builder.err().unwrap().to_string(),
-            "Arrow: supplied schema does not match the parquet schema"
+            nested_dict.keys().iter().collect::<Vec<_>>(),
+            vec![Some(0), Some(0), Some(0), Some(1)]
+        );
+
+        assert_eq!(
+            nested
+                .column(1)
+                .as_any()
+                .downcast_ref::<TimestampNanosecondArray>()
+                .expect("downcast to timestamp nanosecond")
+                .value_as_datetime_with_tz(0, "+10:00".parse().unwrap())
+                .map(|v| v.to_string())
+                .expect("value as datetime"),
+            "1970-01-01 10:00:00.000000001 +10:00"
         );
     }
 
