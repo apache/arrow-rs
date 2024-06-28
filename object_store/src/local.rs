@@ -465,13 +465,31 @@ impl ObjectStore for LocalFileSystem {
     }
 
     async fn delete(&self, location: &Path) -> Result<()> {
+        let config = Arc::clone(&self.config);
         let path = self.path_to_filesystem(location)?;
-        maybe_spawn_blocking(move || match std::fs::remove_file(&path) {
-            Ok(_) => Ok(()),
-            Err(e) => Err(match e.kind() {
-                ErrorKind::NotFound => Error::NotFound { path, source: e }.into(),
-                _ => Error::UnableToDeleteFile { path, source: e }.into(),
-            }),
+        maybe_spawn_blocking(move || {
+            if let Err(e) = std::fs::remove_file(&path) {
+                Err(match e.kind() {
+                    ErrorKind::NotFound => Error::NotFound { path, source: e }.into(),
+                    _ => Error::UnableToDeleteFile { path, source: e }.into(),
+                })
+            } else {
+                let root = &config.root;
+                let root = root
+                    .to_file_path()
+                    .map_err(|_| Error::InvalidUrl { url: root.clone() })?;
+                let mut parent = path.parent();
+
+                while let Some(loc) = parent {
+                    if loc != root && std::fs::remove_dir(loc).is_ok() {
+                        parent = loc.parent();
+                    } else {
+                        break;
+                    }
+                }
+
+                Ok(())
+            }
         })
         .await
     }
