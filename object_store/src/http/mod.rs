@@ -32,7 +32,6 @@
 //! [WebDAV]: https://en.wikipedia.org/wiki/WebDAV
 
 use async_trait::async_trait;
-use chrono::Utc;
 use futures::stream::BoxStream;
 use futures::{StreamExt, TryStreamExt};
 use itertools::Itertools;
@@ -193,27 +192,6 @@ impl ObjectStore for HttpStore {
 
     async fn copy_if_not_exists(&self, from: &Path, to: &Path) -> Result<()> {
         self.client.copy(from, to, false).await
-    }
-
-    async fn delete_prefix(&self, prefix: Option<&Path>, ttl: u64) -> Result<()> {
-        let ttl = chrono::Duration::try_seconds(ttl as i64).unwrap();
-        let locations = self
-            .list(prefix)
-            .try_filter_map(|meta| async move {
-                let cutoff = Utc::now() - ttl;
-                if meta.last_modified < cutoff {
-                    Ok(Some(meta.location))
-                } else {
-                    Ok(None)
-                }
-            })
-            .boxed();
-
-        self.delete_stream(locations)
-            .try_collect::<Vec<Path>>()
-            .await?;
-
-        Ok(())
     }
 }
 
