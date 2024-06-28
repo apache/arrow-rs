@@ -210,6 +210,10 @@ impl FallbackEncoder {
         }
     }
 
+    /// Returns an estimate of the data page size in bytes
+    ///
+    /// This includes:
+    /// <already_written_encoded_byte_size> + <estimated_encoded_size_of_unflushed_bytes>
     fn estimated_data_page_size(&self) -> usize {
         match &self.encoder {
             FallbackEncoderImpl::Plain { buffer, .. } => buffer.len(),
@@ -450,6 +454,8 @@ impl ColumnValueEncoder for ByteArrayEncoder {
     fn estimated_memory_size(&self) -> usize {
         match &self.dict_encoder {
             Some(encoder) => encoder.estimated_memory_size(),
+            // For the FallbackEncoder, these unflushed bytes are already encoded.
+            // Therefore, the size should be the same as estimated_data_page_size.
             None => self.fallback.estimated_data_page_size(),
         }
     }
@@ -458,6 +464,10 @@ impl ColumnValueEncoder for ByteArrayEncoder {
         Some(self.dict_encoder.as_ref()?.estimated_dict_page_size())
     }
 
+    /// Returns an estimate of the data page size in bytes
+    ///
+    /// This includes:
+    /// <already_written_encoded_byte_size> + <estimated_encoded_size_of_unflushed_bytes>
     fn estimated_data_page_size(&self) -> usize {
         match &self.dict_encoder {
             Some(encoder) => encoder.estimated_data_page_size(),

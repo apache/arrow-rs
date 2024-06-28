@@ -94,12 +94,18 @@ pub trait ColumnValueEncoder {
     fn has_dictionary(&self) -> bool;
 
     /// Returns the estimated total memory usage of the encoder
+    ///
+    /// This should include:
+    /// <already_written_encoded_byte_size> + <current_memory_size_of_unflushed_bytes> + <bytes_associated_with_processing>
     fn estimated_memory_size(&self) -> usize;
 
     /// Returns an estimate of the dictionary page size in bytes, or `None` if no dictionary
     fn estimated_dict_page_size(&self) -> Option<usize>;
 
     /// Returns an estimate of the data page size in bytes
+    ///
+    /// This should include:
+    /// <already_written_encoded_byte_size> + <estimated_encoded_size_of_unflushed_bytes>
     fn estimated_data_page_size(&self) -> usize;
 
     /// Flush the dictionary page for this column chunk if any. Any subsequent calls to
@@ -232,9 +238,10 @@ impl<T: DataType> ColumnValueEncoder for ColumnValueEncoderImpl<T> {
 
     fn estimated_memory_size(&self) -> usize {
         match &self.dict_encoder {
+            // For this DictEncoder, we have unencoded bytes in the buffer.
             Some(encoder) => encoder.estimated_memory_size(),
-            // TODO: for now, we are ignoring the memory overhead for unflushed data
-            // in the other encoders (besides DictEncoder)
+            // Whereas for all other encoders the buffer contains encoded bytes.
+            // Therefore, we can use the estimated_data_encoded_size.
             _ => self.encoder.estimated_data_encoded_size(),
         }
     }

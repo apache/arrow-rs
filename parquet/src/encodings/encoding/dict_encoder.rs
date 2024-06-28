@@ -145,6 +145,11 @@ impl<T: DataType> DictEncoder<T> {
     }
 
     /// Returns the estimated total memory usage
+    ///
+    /// For this encoder, the indices are unencoded bytes (refer to [`Self::write_indices`]).
+    /// 
+    /// Therefore, we have a specific memory estimate (during encoding) of:
+    /// <already_written_encoded_byte_size> + <current_memory_size_of_unflushed_bytes>
     pub(crate) fn estimated_memory_size(&self) -> usize {
         self.interner.storage().size_in_bytes + self.indices.len() * 8
     }
@@ -166,6 +171,10 @@ impl<T: DataType> Encoder<T> for DictEncoder<T> {
         Encoding::PLAIN_DICTIONARY
     }
 
+    /// Returns an estimate of the data page size in bytes
+    ///
+    /// This includes:
+    /// <already_written_encoded_byte_size> + <estimated_encoded_size_of_unflushed_bytes>
     fn estimated_data_encoded_size(&self) -> usize {
         let bit_width = self.bit_width();
         RleEncoder::max_buffer_size(bit_width, self.indices.len())
