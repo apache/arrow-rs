@@ -23,6 +23,9 @@ use arrow_schema::DataType as ArrowType;
 
 /// A buffer of view type byte arrays that can be converted into
 /// `GenericByteViewArray`
+///
+/// Note this does not reuse `GenericByteViewBuilder` due to the need to call `pad_nulls` 
+/// and reuse the existing logic for Vec in the parquet crate
 #[derive(Debug, Default)]
 pub struct ViewBuffer {
     pub views: Vec<u128>,
