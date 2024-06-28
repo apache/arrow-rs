@@ -1923,4 +1923,58 @@ mod tests {
             }
         }
     }
+
+    #[test]
+    fn test_size_statistics_with_repetition() {
+        let message_type = "
+            message test_schema {
+                OPTIONAL group i32_list (LIST) {
+                    REPEATED group list {
+                        OPTIONAL INT32 element;
+                    }
+                }
+            }
+        ";
+        let schema = Arc::new(parse_message_type(message_type).unwrap());
+        let data = [1, 2, 3, 4, 5];
+        let def_levels = [3, 3, 3, 3, 3];
+        let rep_levels = [0, 1, 1, 0, 1];
+        let file = tempfile::tempfile().unwrap();
+        let props = Default::default();
+        let mut writer = SerializedFileWriter::new(file, schema, props).unwrap();
+        let mut row_group_writer = writer.next_row_group().unwrap();
+
+        let mut col_writer = row_group_writer.next_column().unwrap().unwrap();
+        col_writer
+            .typed::<Int32Type>()
+            .write_batch(&data, Some(&def_levels), Some(&rep_levels))
+            .unwrap();
+        col_writer.close().unwrap();
+        row_group_writer.close().unwrap();
+        let file_metadata = writer.finish().unwrap();
+
+        assert_eq!(file_metadata.row_groups.len(), 1);
+        assert_eq!(file_metadata.row_groups[0].columns.len(), 1);
+        assert!(file_metadata.row_groups[0].columns[0].meta_data.is_some());
+
+        if let Some(ref meta_data) = file_metadata.row_groups[0].columns[0].meta_data {
+            assert!(meta_data.size_statistics.is_some());
+            if let Some(ref size_stats) = meta_data.size_statistics {
+                assert!(size_stats.repetition_level_histogram.is_some());
+                assert!(size_stats.definition_level_histogram.is_some());
+                if let Some(ref def_hist) = size_stats.definition_level_histogram {
+                    assert_eq!(def_hist.len(), 4);
+                    assert_eq!(def_hist[0], 0);
+                    assert_eq!(def_hist[1], 0);
+                    assert_eq!(def_hist[2], 0);
+                    assert_eq!(def_hist[3], 5);
+                }
+                if let Some(ref rep_hist) = size_stats.repetition_level_histogram {
+                    assert_eq!(rep_hist.len(), 2);
+                    assert_eq!(rep_hist[0], 2);
+                    assert_eq!(rep_hist[1], 3);
+                }
+            }
+        }
+    }
 }
