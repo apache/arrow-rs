@@ -26,7 +26,7 @@ use std::{collections::VecDeque, path::PathBuf};
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use chrono::{DateTime, Duration, Utc};
+use chrono::{DateTime, Utc};
 use futures::{stream::BoxStream, StreamExt};
 use futures::{FutureExt, TryStreamExt};
 use parking_lot::Mutex;
@@ -683,8 +683,7 @@ impl ObjectStore for LocalFileSystem {
         .await
     }
 
-    async fn delete_prefix(&self, prefix: Option<&Path>, ttl: Option<u64>) -> Result<()> {
-        let ttl = ttl.map_or(Duration::zero(), |v| chrono::Duration::seconds(v as i64));
+    async fn delete_prefixed(&self, prefix: Option<&Path>) -> Result<()> {
         let config = self.config.as_ref();
         let path = if let Some(p) = prefix {
             config.prefix_to_filesystem(p)?
@@ -702,22 +701,15 @@ impl ObjectStore for LocalFileSystem {
                     source: e.into(),
                     path: path.to_string_lossy().to_string(),
                 })?;
-                let cutoff = Utc::now() - ttl;
-                let last_modified: DateTime<Utc> = meta
-                    .modified()
-                    .map(chrono::DateTime::from)
-                    .map_err(|_| Error::Aborted)?;
 
-                if last_modified < cutoff {
-                    if meta.is_dir() {
-                        std::fs::remove_dir_all(&path).context(UnableToDeleteDirSnafu {
-                            path: &path.to_string_lossy().to_string(),
-                        })?;
-                    } else {
-                        std::fs::remove_file(&path).context(UnableToDeleteFileSnafu {
-                            path: &path.to_string_lossy().to_string(),
-                        })?
-                    }
+                if meta.is_dir() {
+                    std::fs::remove_dir_all(&path).context(UnableToDeleteDirSnafu {
+                        path: &path.to_string_lossy().to_string(),
+                    })?;
+                } else {
+                    std::fs::remove_file(&path).context(UnableToDeleteFileSnafu {
+                        path: &path.to_string_lossy().to_string(),
+                    })?
                 }
             }
 
@@ -1534,7 +1526,7 @@ mod tests {
 
         let prefix_path = Path::parse(root.path().join("test").to_str().unwrap()).unwrap();
         integration
-            .delete_prefix(Some(&prefix_path), None)
+            .delete_prefixed(Some(&prefix_path))
             .await
             .unwrap();
 
@@ -1544,48 +1536,8 @@ mod tests {
         assert!(integration.head(&second_file_path).await.is_err());
         assert!(integration.head(&third_file_path).await.is_ok());
 
-        integration.delete_prefix(None, None).await.unwrap();
+        integration.delete_prefixed(None).await.unwrap();
         assert!(integration.head(&third_file_path).await.is_err());
-        let list = integration.list(None).count().await;
-        assert_eq!(list, 0);
-    }
-
-    #[tokio::test]
-    async fn test_delete_prefix_respecting_modified_time() {
-        let root = TempDir::new().unwrap();
-        let filename_one = "test/first";
-        let filename_two: &str = "test/second";
-
-        let integration = LocalFileSystem::new_with_prefix(root.path()).unwrap();
-        let first_file_path =
-            Path::parse(root.path().join(filename_one).to_str().unwrap()).unwrap();
-        let second_file_path =
-            Path::parse(root.path().join(filename_two).to_str().unwrap()).unwrap();
-        integration
-            .put(&first_file_path, PutPayload::new())
-            .await
-            .unwrap();
-        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-        integration
-            .put(&second_file_path, PutPayload::new())
-            .await
-            .unwrap();
-
-        let list = integration.list(None).count().await;
-        assert_eq!(list, 2);
-
-        let prefix_path = Path::parse(root.path().join("test").to_str().unwrap()).unwrap();
-        integration
-            .delete_prefix(Some(&prefix_path), Some(1))
-            .await
-            .unwrap();
-
-        let list = integration.list(None).count().await;
-        assert_eq!(list, 1);
-        assert!(integration.head(&first_file_path).await.is_err());
-        assert!(integration.head(&second_file_path).await.is_ok());
-
-        integration.delete_prefix(None, None).await.unwrap();
         let list = integration.list(None).count().await;
         assert_eq!(list, 0);
     }
