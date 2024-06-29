@@ -286,6 +286,40 @@ impl ArrowReaderOptions {
     /// The supplied schema must have the same number of columns as the parquet schema and
     /// the column names need to be the same.
     ///
+    /// # Example
+    /// ```
+    /// use std::io::Bytes;
+    /// use std::sync::Arc;
+    /// use tempfile::tempfile;
+    /// use arrow_array::{ArrayRef, Int32Array, RecordBatch};
+    /// use arrow_schema::{DataType, Field, Schema, TimeUnit};
+    /// use parquet::arrow::arrow_reader::{ArrowReaderOptions, ParquetRecordBatchReaderBuilder};
+    /// use parquet::arrow::ArrowWriter;
+    ///
+    /// // Write data - schema is inferred from the data to be Int32
+    /// let file = tempfile().unwrap();
+    /// let batch = RecordBatch::try_from_iter(vec![
+    ///     ("col_1", Arc::new(Int32Array::from(vec![1, 2, 3])) as ArrayRef),
+    /// ]).unwrap();
+    /// let mut writer = ArrowWriter::try_new(file.try_clone().unwrap(), batch.schema(), None).unwrap();
+    /// writer.write(&batch).unwrap();
+    /// writer.close().unwrap();
+    ///
+    /// // Read the file back.
+    /// // Supply a schema that interprets the Int32 column as a Timestamp.
+    /// let supplied_schema = Arc::new(Schema::new(vec![
+    ///     Field::new("col_1", DataType::Timestamp(TimeUnit::Nanosecond, None), false)
+    /// ]));
+    /// let options = ArrowReaderOptions::new().with_schema(supplied_schema.clone());
+    /// let mut builder = ParquetRecordBatchReaderBuilder::try_new_with_options(
+    ///     file.try_clone().unwrap(),
+    ///     options
+    /// ).expect("Error if the schema is not compatible with the parquet file schema.");
+    ///
+    /// // Create the reader and read the data using the supplied schema.
+    /// let mut reader = builder.build().unwrap();
+    /// let _batch = reader.next().unwrap().unwrap();   
+    /// ```
     pub fn with_schema(self, schema: SchemaRef) -> Self {
         Self {
             supplied_schema: Some(schema),
