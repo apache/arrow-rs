@@ -688,7 +688,9 @@ impl ObjectStore for LocalFileSystem {
         let path = if let Some(p) = prefix {
             config.prefix_to_filesystem(p)?
         } else {
-            config.root.to_file_path().map_err(|_| Error::Aborted)?
+            config.root.to_file_path().map_err(|_| Error::InvalidUrl {
+                url: config.root.clone(),
+            })?
         };
 
         maybe_spawn_blocking(move || {
