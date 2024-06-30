@@ -81,6 +81,7 @@ struct APartiallyOptionalRecord {
     pub double: f64,
     pub now: chrono::NaiveDateTime,
     pub date: chrono::NaiveDate,
+    pub uuid: uuid::Uuid,
     pub byte_vec: Vec<u8>,
 }
 
@@ -250,6 +251,7 @@ mod tests {
             double: std::f64::NAN,
             now: chrono::Utc::now().naive_local(),
             date: chrono::naive::NaiveDate::from_ymd_opt(2015, 3, 14).unwrap(),
+            uuid: uuid::Uuid::new_v4(),
             byte_vec: vec![0x65, 0x66, 0x67],
         }];
 

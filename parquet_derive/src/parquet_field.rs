@@ -239,7 +239,8 @@ impl Field {
     /// because this parsing logic is not sophisticated enough for definition
     /// levels beyond 2.
     ///
-    /// `Option` types and references not supported
+    /// `Option` types and references not supported, but the column itself can be nullable
+    /// (i.e., def_level==1), as long as the values are all valid.
     pub fn reader_snippet(&self) -> proc_macro2::TokenStream {
         let ident = &self.ident;
         let column_reader = self.ty.column_reader();
