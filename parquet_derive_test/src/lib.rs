@@ -248,7 +248,7 @@ mod tests {
             maybe_u64: Some(4563424),
             isize: -365,
             float: 3.5,
-            double: std::f64::NAN,
+            double: f64::NAN,
             now: chrono::Utc::now().naive_local(),
             date: chrono::naive::NaiveDate::from_ymd_opt(2015, 3, 14).unwrap(),
             uuid: uuid::Uuid::new_v4(),
