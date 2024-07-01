@@ -385,7 +385,7 @@ impl Sbbf {
     }
 
     /// Return the total in memory size of this bloom filter in bytes
-    pub(crate) fn memory_size(&self) -> usize {
+    pub(crate) fn estimated_memory_size(&self) -> usize {
         self.0.capacity() * std::mem::size_of::<Block>()
     }
 }

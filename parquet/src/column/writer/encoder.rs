@@ -235,18 +235,16 @@ impl<T: DataType> ColumnValueEncoder for ColumnValueEncoderImpl<T> {
     }
 
     fn estimated_memory_size(&self) -> usize {
-        let encoder_size = match &self.dict_encoder {
-            // For this DictEncoder, we have unencoded bytes in the buffer.
-            Some(encoder) => encoder.estimated_memory_size(),
-            // Whereas for all other encoders the buffer contains encoded bytes.
-            // Therefore, we can use the estimated_data_encoded_size.
-            _ => self.encoder.estimated_data_encoded_size(),
-        };
+        let encoder_size = self
+            .dict_encoder
+            .as_ref()
+            .map(|encoder| encoder.estimated_memory_size())
+            .unwrap_or_default();
 
         let bloom_filter_size = self
             .bloom_filter
             .as_ref()
-            .map(|bf| bf.memory_size())
+            .map(|bf| bf.estimated_memory_size())
             .unwrap_or_default();
 
         encoder_size + bloom_filter_size

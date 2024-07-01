@@ -467,7 +467,7 @@ impl ColumnValueEncoder for ByteArrayEncoder {
         let bloom_filter_size = self
             .bloom_filter
             .as_ref()
-            .map(|bf| bf.memory_size())
+            .map(|bf| bf.estimated_memory_size())
             .unwrap_or_default();
 
         let stats_size = self.min_value.as_ref().map(|v| v.len()).unwrap_or_default()
