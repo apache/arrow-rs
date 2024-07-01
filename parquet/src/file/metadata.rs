@@ -674,11 +674,15 @@ impl ColumnChunkMetaData {
     }
 
     /// Returns the repetition level histogram.
+    ///
+    /// The returned value `vec[i]` is how many values are at repetition level `i`.
     pub fn repetition_level_histogram(&self) -> Option<&Vec<i64>> {
         self.repetition_level_histogram.as_ref()
     }
 
-    /// Returns the repetition level histogram.
+    /// Returns the definition level histogram.
+    ///
+    /// The returned value `vec[i]` is how many values are at definition level `i`.
     pub fn definition_level_histogram(&self) -> Option<&Vec<i64>> {
         self.definition_level_histogram.as_ref()
     }
