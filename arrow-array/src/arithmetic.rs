@@ -237,7 +237,7 @@ macro_rules! native_type_op {
             #[inline]
             fn neg_checked(self) -> Result<Self, ArrowError> {
                 self.checked_neg().ok_or_else(|| {
-                    ArrowError::ComputeError(format!("Overflow happened on: {:?}", self))
+                    ArrowError::ComputeError(format!("Overflow happened on: - {:?}", self))
                 })
             }
 
