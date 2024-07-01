@@ -428,12 +428,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
     /// Returns the estimated total memory usage.
     ///
     /// Unlike [`Self::get_estimated_total_bytes`] this is an estimate
-    /// of the current memory usage and not it's anticipated encoded size.
-    ///
-    /// This includes:
-    /// <already_written_encoded_byte_size> + <current_memory_size_of_unflushed_bytes> + <bytes_associated_with_processing>
-    ///
-    /// In the vast majority of cases our unflushed bytes are already encoded.
+    /// of the current memory usage and not the final anticipated encoded size.
     #[cfg(feature = "arrow")]
     pub(crate) fn memory_size(&self) -> usize {
         self.column_metrics.total_bytes_written as usize + self.encoder.estimated_memory_size()
@@ -453,9 +448,6 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
     /// Unlike [`Self::get_total_bytes_written`] this includes an estimate
     /// of any data that has not yet been flushed to a page, based on it's
     /// anticipated encoded size.
-    ///
-    /// This includes:
-    /// <already_written_encoded_byte_size> + <estimated_encoded_size_of_unflushed_bytes>
     #[cfg(feature = "arrow")]
     pub(crate) fn get_estimated_total_bytes(&self) -> u64 {
         self.column_metrics.total_bytes_written

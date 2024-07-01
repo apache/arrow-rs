@@ -95,14 +95,12 @@ pub trait ColumnValueEncoder {
 
     /// Returns the estimated total memory usage of the encoder
     ///
-    /// This should include:
-    /// <already_written_encoded_byte_size> + <current_memory_size_of_unflushed_bytes> + <bytes_associated_with_processing>
     fn estimated_memory_size(&self) -> usize;
 
-    /// Returns an estimate of the dictionary page size in bytes, or `None` if no dictionary
+    /// Returns an estimate of the encoded size of dictionary page size in bytes, or `None` if no dictionary
     fn estimated_dict_page_size(&self) -> Option<usize>;
 
-    /// Returns an estimate of the data page size in bytes
+    /// Returns an estimate of the encoded data page size in bytes
     ///
     /// This should include:
     /// <already_written_encoded_byte_size> + <estimated_encoded_size_of_unflushed_bytes>
