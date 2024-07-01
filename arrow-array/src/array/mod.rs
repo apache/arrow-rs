@@ -72,6 +72,10 @@ mod byte_view_array;
 
 pub use byte_view_array::*;
 
+mod list_view_array;
+
+pub use list_view_array::*;
+
 /// An array in the [arrow columnar format](https://arrow.apache.org/docs/format/Columnar.html)
 pub trait Array: std::fmt::Debug + Send + Sync {
     /// Returns the array as [`Any`] so that it can be
@@ -519,6 +523,12 @@ impl<OffsetSize: OffsetSizeTrait> PartialEq for GenericListArray<OffsetSize> {
     }
 }
 
+impl<OffsetSize: OffsetSizeTrait> PartialEq for GenericListViewArray<OffsetSize> {
+    fn eq(&self, other: &Self) -> bool {
+        self.to_data().eq(&other.to_data())
+    }
+}
+
 impl PartialEq for MapArray {
     fn eq(&self, other: &Self) -> bool {
         self.to_data().eq(&other.to_data())
@@ -607,6 +617,8 @@ pub fn make_array(data: ArrayData) -> ArrayRef {
         DataType::Utf8View => Arc::new(StringViewArray::from(data)) as ArrayRef,
         DataType::List(_) => Arc::new(ListArray::from(data)) as ArrayRef,
         DataType::LargeList(_) => Arc::new(LargeListArray::from(data)) as ArrayRef,
+        DataType::ListView(_) => Arc::new(ListViewArray::from(data)) as ArrayRef,
+        DataType::LargeListView(_) => Arc::new(LargeListViewArray::from(data)) as ArrayRef,
         DataType::Struct(_) => Arc::new(StructArray::from(data)) as ArrayRef,
         DataType::Map(_, _) => Arc::new(MapArray::from(data)) as ArrayRef,
         DataType::Union(_, _) => Arc::new(UnionArray::from(data)) as ArrayRef,

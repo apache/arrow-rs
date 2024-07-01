@@ -21,7 +21,7 @@ use crate::array::{
     ArrayAccessor, BooleanArray, FixedSizeBinaryArray, GenericBinaryArray, GenericListArray,
     GenericStringArray, PrimitiveArray,
 };
-use crate::{FixedSizeListArray, MapArray};
+use crate::{FixedSizeListArray, GenericListViewArray, MapArray};
 use arrow_buffer::NullBuffer;
 
 /// An iterator that returns Some(T) or None, that can be used on any [`ArrayAccessor`]
@@ -143,7 +143,8 @@ pub type FixedSizeListIter<'a> = ArrayIter<&'a FixedSizeListArray>;
 pub type GenericListArrayIter<'a, O> = ArrayIter<&'a GenericListArray<O>>;
 /// an iterator that returns Some(T) or None, that can be used on any MapArray
 pub type MapArrayIter<'a> = ArrayIter<&'a MapArray>;
-
+/// an iterator that returns Some(T) or None, that can be used on any ListArray
+pub type GenericListViewArrayIter<'a, O> = ArrayIter<&'a GenericListViewArray<O>>;
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
