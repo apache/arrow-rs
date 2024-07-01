@@ -668,7 +668,7 @@ impl ColumnChunkMetaData {
         Some(offset..(offset + length))
     }
 
-    /// Returns the number of bytes of variable length data.
+    /// Returns the number of bytes of variable length data after decoding
     pub fn unencoded_byte_array_data_bytes(&self) -> Option<i64> {
         self.unencoded_byte_array_data_bytes
     }
