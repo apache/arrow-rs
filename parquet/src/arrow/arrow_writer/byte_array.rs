@@ -309,7 +309,7 @@ impl Storage for ByteArrayStorage {
         key as u64
     }
 
-    #[cfg(arrow)]
+    #[allow(dead_code)] // not used in parquet_derive, so is dead there
     fn estimated_memory_size(&self) -> usize {
         self.page.capacity() * std::mem::size_of::<u8>()
             + self.values.capacity() * std::mem::size_of::<std::ops::Range<usize>>()
