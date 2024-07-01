@@ -235,7 +235,9 @@ impl<T: DataType> ColumnValueEncoder for ColumnValueEncoderImpl<T> {
     }
 
     fn estimated_memory_size(&self) -> usize {
-        let encoder_size = self
+        let encoder_size = self.encoder.estimated_memory_size();
+
+        let dict_encoder_size = self
             .dict_encoder
             .as_ref()
             .map(|encoder| encoder.estimated_memory_size())
@@ -247,7 +249,7 @@ impl<T: DataType> ColumnValueEncoder for ColumnValueEncoderImpl<T> {
             .map(|bf| bf.estimated_memory_size())
             .unwrap_or_default();
 
-        encoder_size + bloom_filter_size
+        encoder_size + dict_encoder_size + bloom_filter_size
     }
 
     fn estimated_dict_page_size(&self) -> Option<usize> {

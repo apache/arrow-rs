@@ -149,15 +149,6 @@ impl<T: DataType> DictEncoder<T> {
         num_required_bits(self.num_entries().saturating_sub(1) as u64)
     }
 
-    /// Returns the estimated total memory usage
-    ///
-    /// For this encoder, the indices are unencoded bytes (refer to [`Self::write_indices`]).
-    /// 
-    /// Therefore, we have a specific memory estimate (during encoding) of:
-    /// <already_written_encoded_byte_size> + <current_memory_size_of_unflushed_bytes>
-    pub(crate) fn estimated_memory_size(&self) -> usize {
-        self.interner.storage().size_in_bytes + self.indices.len() * 8
-    }
 }
 
 impl<T: DataType> Encoder<T> for DictEncoder<T> {
@@ -187,5 +178,12 @@ impl<T: DataType> Encoder<T> for DictEncoder<T> {
 
     fn flush_buffer(&mut self) -> Result<Bytes> {
         self.write_indices()
+    }
+
+    /// Returns the estimated total memory usage
+    ///
+    /// For this encoder, the indices are unencoded bytes (refer to [`Self::write_indices`]).
+    fn estimated_memory_size(&self) -> usize {
+        self.interner.storage().size_in_bytes + self.indices.len() * 8
     }
 }
