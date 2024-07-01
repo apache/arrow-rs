@@ -586,9 +586,9 @@ pub(crate) mod private {
     use crate::encodings::decoding::PlainDecoderDetails;
     use crate::util::bit_util::{read_num_bytes, BitReader, BitWriter};
 
-    use crate::basic::Type;
-
     use super::{ParquetError, Result, SliceAsBytes};
+    use crate::basic::Type;
+    use crate::file::metadata::HeapSize;
 
     /// Sealed trait to start to remove specialisation from implementations
     ///
@@ -606,6 +606,7 @@ pub(crate) mod private {
         + SliceAsBytes
         + PartialOrd
         + Send
+        + HeapSize
         + crate::encodings::decoding::private::GetDecoder
         + crate::file::statistics::private::MakeStatistics
     {
@@ -654,13 +655,6 @@ pub(crate) mod private {
 
         /// Return the value as an mutable Any to allow for downcasts without transmutation
         fn as_mut_any(&mut self) -> &mut dyn std::any::Any;
-
-        /// Returns the number of bytes of memory this instance uses on the heap.
-        ///
-        /// Defaults to none (0)
-        fn heap_size(&self) -> usize {
-            0
-        }
     }
 
     impl ParquetValueType for bool {
@@ -893,6 +887,12 @@ pub(crate) mod private {
         }
     }
 
+    impl HeapSize for super::Int96 {
+        fn heap_size(&self) -> usize {
+            0 // no heap allocations
+        }
+    }
+
     impl ParquetValueType for super::ByteArray {
         const PHYSICAL_TYPE: Type = Type::BYTE_ARRAY;
 
@@ -975,7 +975,9 @@ pub(crate) mod private {
         fn as_mut_any(&mut self) -> &mut dyn std::any::Any {
             self
         }
+    }
 
+    impl HeapSize for super::ByteArray {
         fn heap_size(&self) -> usize {
             // note: this is an estimate, not exact, so just return the size
             // of the actual data used, don't try to handle the fact that it may
@@ -1068,7 +1070,9 @@ pub(crate) mod private {
         fn as_mut_any(&mut self) -> &mut dyn std::any::Any {
             self
         }
+    }
 
+    impl HeapSize for super::FixedLenByteArray {
         fn heap_size(&self) -> usize {
             self.0.heap_size()
         }

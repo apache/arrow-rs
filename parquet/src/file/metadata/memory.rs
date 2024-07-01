@@ -28,7 +28,7 @@ use crate::format::{BoundaryOrder, PageLocation, SortingColumn};
 use std::sync::Arc;
 
 /// Trait for calculating the size of various containers
-pub(crate) trait HeapSize {
+pub trait HeapSize {
     /// Return the size of any bytes allocated on the heap by this object,
     /// including heap memory in those structures
     ///
@@ -176,11 +176,30 @@ impl<T: ParquetValueType> HeapSize for ValueStatistics<T> {
         self.min().heap_size() + self.max().heap_size()
     }
 }
-
-// Note this impl gets most primitive types like bool, i32, etc
-impl<T: ParquetValueType> HeapSize for T {
+impl HeapSize for bool {
     fn heap_size(&self) -> usize {
-        self.heap_size()
+        0 // no heap allocations
+    }
+}
+impl HeapSize for i32 {
+    fn heap_size(&self) -> usize {
+        0 // no heap allocations
+    }
+}
+impl HeapSize for i64 {
+    fn heap_size(&self) -> usize {
+        0 // no heap allocations
+    }
+}
+
+impl HeapSize for f32 {
+    fn heap_size(&self) -> usize {
+        0 // no heap allocations
+    }
+}
+impl HeapSize for f64 {
+    fn heap_size(&self) -> usize {
+        0 // no heap allocations
     }
 }
 
