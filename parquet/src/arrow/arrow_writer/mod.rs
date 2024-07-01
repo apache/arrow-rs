@@ -210,7 +210,8 @@ impl<W: Write + Send> ArrowWriter<W> {
 
     /// Estimated memory usage, in bytes, of this `ArrowWriter`
     ///
-    /// See [`ArrowColumnWriter::memory_size`] for details
+    /// This estimate is formed bu summing the values of
+    /// [`ArrowColumnWriter::memory_size`] all in progress columns.
     pub fn memory_size(&self) -> usize {
         match &self.in_progress {
             Some(in_progress) => in_progress.writers.iter().map(|x| x.memory_size()).sum(),
