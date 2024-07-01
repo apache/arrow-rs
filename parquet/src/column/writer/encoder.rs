@@ -246,7 +246,7 @@ impl<T: DataType> ColumnValueEncoder for ColumnValueEncoderImpl<T> {
         let bloom_filter_size = self
             .bloom_filter
             .as_ref()
-            .map(|bf| bf.byte_size())
+            .map(|bf| bf.memory_size())
             .unwrap_or_default();
 
         encoder_size + bloom_filter_size

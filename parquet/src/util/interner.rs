@@ -32,6 +32,9 @@ pub trait Storage {
 
     /// Adds a new element, returning the key
     fn push(&mut self, value: &Self::Value) -> Self::Key;
+
+    /// Return an estimate of the memory used in this storage, in bytes
+   fn estimated_memory_size(&self) -> usize;
 }
 
 /// A generic value interner supporting various different [`Storage`]
@@ -80,6 +83,13 @@ impl<S: Storage> Interner<S> {
                     .0
             }
         }
+    }
+
+    /// Return estimate of the memory used, in bytes
+    pub fn estimated_memory_size(&self) -> usize {
+        self.storage.estimated_memory_size() +
+            // estimate size of dedup hashmap as just th size of the keys
+            self.dedup.capacity() + std::mem::size_of::<S::Key>()
     }
 
     /// Returns the storage for this interner

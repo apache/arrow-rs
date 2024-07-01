@@ -34,6 +34,7 @@ use crate::util::interner::{Interner, Storage};
 struct KeyStorage<T: DataType> {
     uniques: Vec<T::T>,
 
+    /// size of unique values (keys) in the dictionary, in bytes.
     size_in_bytes: usize,
 
     type_length: usize,
@@ -60,6 +61,10 @@ impl<T: DataType> Storage for KeyStorage<T> {
         let key = self.uniques.len() as u64;
         self.uniques.push(value.clone());
         key
+    }
+
+    fn estimated_memory_size(&self) -> usize {
+        self.size_in_bytes + self.uniques.capacity() * std::mem::size_of::<T::T>()
     }
 }
 

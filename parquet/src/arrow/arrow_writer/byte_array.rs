@@ -308,6 +308,11 @@ impl Storage for ByteArrayStorage {
 
         key as u64
     }
+
+    fn estimated_memory_size(&self) -> usize {
+        self.page.capacity() * std::mem::size_of::<u8>()
+            + self.values.capacity() * std::mem::size_of::<std::ops::Range<usize>>()
+    }
 }
 
 /// A dictionary encoder for byte array data
@@ -339,7 +344,7 @@ impl DictEncoder {
     }
 
     fn estimated_memory_size(&self) -> usize {
-        self.interner.storage().page.len() + self.indices.len() * 8
+        self.interner.estimated_memory_size() + self.indices.capacity() * std::mem::size_of::<u64>()
     }
 
     fn estimated_data_page_size(&self) -> usize {
@@ -462,7 +467,7 @@ impl ColumnValueEncoder for ByteArrayEncoder {
         let bloom_filter_size = self
             .bloom_filter
             .as_ref()
-            .map(|bf| bf.byte_size())
+            .map(|bf| bf.memory_size())
             .unwrap_or_default();
 
         let stats_size = self.min_value.as_ref().map(|v| v.len()).unwrap_or_default()
