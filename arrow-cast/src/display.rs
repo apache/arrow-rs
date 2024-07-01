@@ -656,7 +656,7 @@ impl<'a> DisplayIndex for &'a PrimitiveArray<IntervalYearMonthType> {
 
         write!(
             f,
-            "{years} years {month} mons 0 days 0 hours 0 mins 0.00 secs",
+            "{years} years {month} mons",
         )?;
         Ok(())
     }
@@ -666,31 +666,15 @@ impl<'a> DisplayIndex for &'a PrimitiveArray<IntervalDayTimeType> {
     fn write(&self, idx: usize, f: &mut dyn Write) -> FormatResult {
         let value = self.value(idx);
 
-        let secs = value.milliseconds / 1_000;
-        let mins = secs / 60;
-        let hours = mins / 60;
+        if value.days != 0 {
+            write!(f, "{} days ", value.days,)?;
+        }
 
-        let secs = secs - (mins * 60);
-        let mins = mins - (hours * 60);
+        if value.milliseconds != 0 {
+            let millis_fmt = MillisecondsFormatter(value.milliseconds);
+            millis_fmt.fmt(f)?;
+        }
 
-        let milliseconds = value.milliseconds % 1_000;
-
-        let secs_sign = if secs < 0 || milliseconds < 0 {
-            "-"
-        } else {
-            ""
-        };
-
-        write!(
-            f,
-            "0 years 0 mons {} days {} hours {} mins {}{}.{:03} secs",
-            value.days,
-            hours,
-            mins,
-            secs_sign,
-            secs.abs(),
-            milliseconds.abs(),
-        )?;
         Ok(())
     }
 }
@@ -699,28 +683,84 @@ impl<'a> DisplayIndex for &'a PrimitiveArray<IntervalMonthDayNanoType> {
     fn write(&self, idx: usize, f: &mut dyn Write) -> FormatResult {
         let value = self.value(idx);
 
-        let secs = value.nanoseconds / 1_000_000_000;
+        if value.months != 0 {
+            write!(f, "{} mons ", value.months,)?;
+        }
+
+        if value.days != 0 {
+            write!(f, "{} days ", value.days,)?;
+        }
+
+        if value.nanoseconds != 0 {
+            let nano_fmt = NanosecondsFormatter(value.nanoseconds);
+            nano_fmt.fmt(f)?;
+        }
+
+        Ok(())
+    }
+}
+
+struct NanosecondsFormatter(i64);
+
+impl Display for NanosecondsFormatter {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        let secs = self.0 / 1_000_000_000;
         let mins = secs / 60;
         let hours = mins / 60;
 
         let secs = secs - (mins * 60);
         let mins = mins - (hours * 60);
 
-        let nanoseconds = value.nanoseconds % 1_000_000_000;
+        let nanoseconds = self.0 % 1_000_000_000;
 
-        let secs_sign = if secs < 0 || nanoseconds < 0 { "-" } else { "" };
+        if hours != 0 {
+            write!(f, "{} hours ", hours,)?;
+        }
 
-        write!(
-            f,
-            "0 years {} mons {} days {} hours {} mins {}{}.{:09} secs",
-            value.months,
-            value.days,
-            hours,
-            mins,
-            secs_sign,
-            secs.abs(),
-            nanoseconds.abs(),
-        )?;
+        if mins != 0 {
+            write!(f, "{} mins ", mins,)?;
+        }
+
+        if secs != 0 || nanoseconds != 0 {
+            let secs_sign = if secs < 0 || nanoseconds < 0 { "-" } else { "" };
+            write!(f, "{}{}.{:09} secs", secs_sign, secs, nanoseconds)?;
+        }
+
+        Ok(())
+    }
+}
+
+struct MillisecondsFormatter(i32);
+
+impl Display for MillisecondsFormatter {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        let secs = self.0 / 1_000;
+        let mins = secs / 60;
+        let hours = mins / 60;
+
+        let secs = secs - (mins * 60);
+        let mins = mins - (hours * 60);
+
+        let milliseconds = self.0 % 1_000;
+
+        if hours != 0 {
+            write!(f, "{} hours ", hours,)?;
+        }
+
+        if mins != 0 {
+            write!(f, "{} mins ", mins,)?;
+        }
+
+        if secs != 0 || milliseconds != 0 {
+            let secs_sign = if secs < 0 || milliseconds < 0 {
+                "-"
+            } else {
+                ""
+            };
+
+            write!(f, "{}{}.{:03} secs", secs_sign, secs, milliseconds)?;
+        }
+
         Ok(())
     }
 }
