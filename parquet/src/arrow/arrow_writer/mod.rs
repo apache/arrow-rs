@@ -2947,12 +2947,23 @@ mod tests {
         assert_eq!(writer.in_progress_rows(), 5);
         let initial_memory = writer.memory_size();
         assert!(initial_memory > 0);
+        // memory estimate is larger than estimated encoded size
+        assert!(
+            initial_size <= initial_memory,
+            "{initial_size} <= {initial_memory}"
+        );
 
         // updated on second write
         writer.write(&batch).unwrap();
         assert!(writer.in_progress_size() > initial_size);
         assert_eq!(writer.in_progress_rows(), 10);
         assert!(writer.memory_size() > initial_memory);
+        assert!(
+            writer.in_progress_size() <= writer.memory_size(),
+            "in_progress_size {} <= memory_size {}",
+            writer.in_progress_size(),
+            writer.memory_size()
+        );
 
         // in progress tracking is cleared, but the overall data written is updated
         let pre_flush_bytes_written = writer.bytes_written();
