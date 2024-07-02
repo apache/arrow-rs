@@ -293,7 +293,22 @@ impl LocalFileSystem {
                 path: location.as_ref()
             }
         );
-        self.config.prefix_to_filesystem(location)
+        let path = self.config.prefix_to_filesystem(location)?;
+
+        #[cfg(target_os = "windows")]
+        let path = {
+            let path = path.to_string_lossy();
+
+            // Assume the first char is the drive letter and the next is a colon.
+            let mut out = String::new();
+            let drive = &path[..2]; // The drive letter and colon (e.g., "C:")
+            let filepath = &path[2..].replace(':', "%3A"); // Replace subsequent colons
+            out.push_str(drive);
+            out.push_str(filepath);
+            PathBuf::from(out)
+        };
+
+        Ok(path)
     }
 }
 
@@ -1018,6 +1033,7 @@ mod tests {
     use super::*;
 
     #[tokio::test]
+    #[cfg(target_family = "unix")]
     async fn file_test() {
         let root = TempDir::new().unwrap();
         let integration = LocalFileSystem::new_with_prefix(root.path()).unwrap();
@@ -1034,6 +1050,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(target_family = "unix")]
     fn test_non_tokio() {
         let root = TempDir::new().unwrap();
         let integration = LocalFileSystem::new_with_prefix(root.path()).unwrap();
@@ -1444,6 +1461,28 @@ mod tests {
         let mut list = flatten_list_stream(&integration, None).await.unwrap();
         list.sort_unstable();
         assert_eq!(list, vec![c, a]);
+    }
+
+    #[tokio::test]
+    #[cfg(target_os = "windows")]
+    async fn filesystem_filename_with_colon() {
+        let root = TempDir::new().unwrap();
+        let integration = LocalFileSystem::new_with_prefix(root.path()).unwrap();
+        let path = Path::parse("file%3Aname.parquet").unwrap();
+        let location = Path::parse("file:name.parquet").unwrap();
+
+        integration.put(&location, "test".into()).await.unwrap();
+        let list = flatten_list_stream(&integration, None).await.unwrap();
+        assert_eq!(list, vec![path.clone()]);
+
+        let result = integration
+            .get(&location)
+            .await
+            .unwrap()
+            .bytes()
+            .await
+            .unwrap();
+        assert_eq!(result, Bytes::from("test"));
     }
 }
 
