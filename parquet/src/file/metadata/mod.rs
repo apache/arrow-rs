@@ -1408,7 +1408,7 @@ mod tests {
             column_orders,
         );
         let parquet_meta = ParquetMetaData::new(file_metadata.clone(), row_group_meta.clone());
-        let base_expected_size = 1320;
+        let base_expected_size = 1472;
         assert_eq!(parquet_meta.memory_size(), base_expected_size);
 
         let mut column_index = ColumnIndexBuilder::new();
@@ -1428,7 +1428,7 @@ mod tests {
             None,
         );
 
-        let bigger_expected_size = 2304;
+        let bigger_expected_size = 2776;
         // more set fields means more memory usage
         assert!(bigger_expected_size > base_expected_size);
         assert_eq!(parquet_meta.memory_size(), bigger_expected_size);
