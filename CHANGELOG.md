@@ -23,46 +23,44 @@
 
 [Full Changelog](https://github.com/apache/arrow-rs/compare/52.0.0...52.1.0)
 
+
 **Implemented enhancements:**
 
-- Relax `WriteMultipart` API to support aborting after completion [\#5977](https://github.com/apache/arrow-rs/issues/5977)
 - Implement `eq` comparison for StructArray [\#5960](https://github.com/apache/arrow-rs/issues/5960) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
-- A new feature as a workaround hack to unavailable offset support in Arrow Java [\#5959](https://github.com/apache/arrow-rs/issues/5959)
-- Add `min_bytes` and `max_bytes` to `PageIndex` [\#5949](https://github.com/apache/arrow-rs/issues/5949)
-- Error message in ArrowNativeTypeOp::neg\_checked doesn't include the operation [\#5944](https://github.com/apache/arrow-rs/issues/5944)
+- A new feature as a workaround hack to unavailable offset support in Arrow Java [\#5959](https://github.com/apache/arrow-rs/issues/5959) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- Add `min_bytes` and `max_bytes` to `PageIndex` [\#5949](https://github.com/apache/arrow-rs/issues/5949) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
+- Error message in ArrowNativeTypeOp::neg\_checked doesn't include the operation [\#5944](https://github.com/apache/arrow-rs/issues/5944) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
 - Add object\_store\_opendal as related projects [\#5925](https://github.com/apache/arrow-rs/issues/5925)
 - Opaque retry errors make debugging difficult [\#5923](https://github.com/apache/arrow-rs/issues/5923)
-- Implement arrow-row en/decoding for GenericByteView types [\#5921](https://github.com/apache/arrow-rs/issues/5921)
-- Make ObjectStoreScheme in the object\_store crate public [\#5911](https://github.com/apache/arrow-rs/issues/5911)
+- Implement arrow-row en/decoding for GenericByteView types [\#5921](https://github.com/apache/arrow-rs/issues/5921) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
 - The arrow-rs repo is very large [\#5908](https://github.com/apache/arrow-rs/issues/5908)
-- \[DISCUSS\] Release arrow-rs / parquet patch release `52.0.1` [\#5906](https://github.com/apache/arrow-rs/issues/5906)
-- Implement `compare_op` for `GenericBinaryView`  [\#5897](https://github.com/apache/arrow-rs/issues/5897)
-- New null with view types are not supported [\#5893](https://github.com/apache/arrow-rs/issues/5893)
-- Cleanup ByteView construction [\#5878](https://github.com/apache/arrow-rs/issues/5878)
-- `cast` kernel support for `StringViewArray` and `BinaryViewArray` `\<--\> `DictionaryArray` [\#5861](https://github.com/apache/arrow-rs/issues/5861)
-- parquet::ArrowWriter show allow writing Bloom filters before the end of the file [\#5859](https://github.com/apache/arrow-rs/issues/5859)
+- \[DISCUSS\] Release arrow-rs / parquet patch release `52.0.1` [\#5906](https://github.com/apache/arrow-rs/issues/5906) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- Implement `compare_op` for `GenericBinaryView`  [\#5897](https://github.com/apache/arrow-rs/issues/5897) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- New null with view types are not supported [\#5893](https://github.com/apache/arrow-rs/issues/5893) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- Cleanup ByteView construction [\#5878](https://github.com/apache/arrow-rs/issues/5878) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- `cast` kernel support for `StringViewArray` and `BinaryViewArray` `\<--\> `DictionaryArray` [\#5861](https://github.com/apache/arrow-rs/issues/5861) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- parquet::ArrowWriter show allow writing Bloom filters before the end of the file [\#5859](https://github.com/apache/arrow-rs/issues/5859) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
 - API to get memory usage for parquet ArrowWriter [\#5851](https://github.com/apache/arrow-rs/issues/5851) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
 - Support writing `IntervalMonthDayNanoArray` to parquet via Arrow Writer  [\#5849](https://github.com/apache/arrow-rs/issues/5849) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
 - Write parquet statistics for `IntervalDayTimeArray` , `IntervalMonthDayNanoArray` and `IntervalYearMonthArray` [\#5847](https://github.com/apache/arrow-rs/issues/5847) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
-- Make `RowSelection::from_consecutive_ranges` public [\#5846](https://github.com/apache/arrow-rs/issues/5846)
-- `Schema::try_merge` should be able to merge List of any data type with List of Null data type [\#5843](https://github.com/apache/arrow-rs/issues/5843)
-- Add a way to move `fields` out of parquet `Row` [\#5841](https://github.com/apache/arrow-rs/issues/5841)
-- Make `TimeUnit` and `IntervalUnit` `Copy` [\#5839](https://github.com/apache/arrow-rs/issues/5839)
-- Add BufUploader to implement same feature upon `WriteMultipart` like `BufWriter` [\#5834](https://github.com/apache/arrow-rs/issues/5834)
-- Limit Parquet Page Row Count By Default to reduce writer memory requirements with highly compressable columns [\#5797](https://github.com/apache/arrow-rs/issues/5797)
-- Report / blog on parquet metadata sizes for "large" \(1000+\) numbers of columns [\#5770](https://github.com/apache/arrow-rs/issues/5770)
-- Structured ByteView Access \(underlying StringView/BinaryView representation\) [\#5736](https://github.com/apache/arrow-rs/issues/5736)
+- Make `RowSelection::from_consecutive_ranges` public [\#5846](https://github.com/apache/arrow-rs/issues/5846) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
+- `Schema::try_merge` should be able to merge List of any data type with List of Null data type [\#5843](https://github.com/apache/arrow-rs/issues/5843) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- Add a way to move `fields` out of parquet `Row` [\#5841](https://github.com/apache/arrow-rs/issues/5841) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
+- Make `TimeUnit` and `IntervalUnit` `Copy` [\#5839](https://github.com/apache/arrow-rs/issues/5839) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- Limit Parquet Page Row Count By Default to reduce writer memory requirements with highly compressable columns [\#5797](https://github.com/apache/arrow-rs/issues/5797) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
+- Report / blog on parquet metadata sizes for "large" \(1000+\) numbers of columns [\#5770](https://github.com/apache/arrow-rs/issues/5770) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- Structured ByteView Access \(underlying StringView/BinaryView representation\) [\#5736](https://github.com/apache/arrow-rs/issues/5736) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
 - \[parquet\_derive\] support OPTIONAL \(def\_level = 1\) columns by default [\#5716](https://github.com/apache/arrow-rs/issues/5716)
-- Maps cast to other Maps with different Elements, Key and Value Names [\#5702](https://github.com/apache/arrow-rs/issues/5702)
-- Provide Arrow Schema Hint to Parquet Reader [\#5657](https://github.com/apache/arrow-rs/issues/5657)
+- Maps cast to other Maps with different Elements, Key and Value Names [\#5702](https://github.com/apache/arrow-rs/issues/5702) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- Provide Arrow Schema Hint to Parquet Reader [\#5657](https://github.com/apache/arrow-rs/issues/5657) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
 
 **Fixed bugs:**
 
-- Wrong error type in case of invalid amount in Interval components [\#5986](https://github.com/apache/arrow-rs/issues/5986)
+- Wrong error type in case of invalid amount in Interval components [\#5986](https://github.com/apache/arrow-rs/issues/5986) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
 - Empty and Null structarray fails to IPC roundtrip  [\#5920](https://github.com/apache/arrow-rs/issues/5920)
-- FixedSizeList got out of range when the total length of the underlying values over i32::MAX [\#5901](https://github.com/apache/arrow-rs/issues/5901)
-- Out of range when extending on a slice of string array imported through FFI [\#5896](https://github.com/apache/arrow-rs/issues/5896)
-- cargo msrv test is failing on main for `object_store` [\#5864](https://github.com/apache/arrow-rs/issues/5864)
+- FixedSizeList got out of range when the total length of the underlying values over i32::MAX [\#5901](https://github.com/apache/arrow-rs/issues/5901) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- Out of range when extending on a slice of string array imported through FFI [\#5896](https://github.com/apache/arrow-rs/issues/5896) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- cargo msrv test is failing on main for `object_store` [\#5864](https://github.com/apache/arrow-rs/issues/5864) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
 
 **Documentation updates:**
 
@@ -73,7 +71,7 @@
 
 **Closed issues:**
 
-- Implement benchmarks for `compare_op` for `GenericBinaryView` [\#5903](https://github.com/apache/arrow-rs/issues/5903)
+- Implement benchmarks for `compare_op` for `GenericBinaryView` [\#5903](https://github.com/apache/arrow-rs/issues/5903) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
 
 **Merged pull requests:**
 
