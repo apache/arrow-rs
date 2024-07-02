@@ -240,6 +240,7 @@ impl From<Error> for super::Error {
 #[derive(Debug)]
 pub struct LocalFileSystem {
     config: Arc<Config>,
+    automatic_cleanup: bool,
 }
 
 #[derive(Debug)]
@@ -266,6 +267,7 @@ impl LocalFileSystem {
             config: Arc::new(Config {
                 root: Url::parse("file:///").unwrap(),
             }),
+            automatic_cleanup: false,
         }
     }
 
@@ -282,6 +284,7 @@ impl LocalFileSystem {
             config: Arc::new(Config {
                 root: absolute_path_to_url(path)?,
             }),
+            automatic_cleanup: false,
         })
     }
 
@@ -294,6 +297,12 @@ impl LocalFileSystem {
             }
         );
         self.config.prefix_to_filesystem(location)
+    }
+
+    /// Enable automatic cleanup of empty directories when deleting files
+    pub fn with_automatic_cleanup(mut self) -> Self {
+        self.automatic_cleanup = true;
+        self
     }
 }
 
@@ -467,13 +476,14 @@ impl ObjectStore for LocalFileSystem {
     async fn delete(&self, location: &Path) -> Result<()> {
         let config = Arc::clone(&self.config);
         let path = self.path_to_filesystem(location)?;
+        let automactic_cleanup = self.automatic_cleanup;
         maybe_spawn_blocking(move || {
             if let Err(e) = std::fs::remove_file(&path) {
                 Err(match e.kind() {
                     ErrorKind::NotFound => Error::NotFound { path, source: e }.into(),
                     _ => Error::UnableToDeleteFile { path, source: e }.into(),
                 })
-            } else {
+            } else if automactic_cleanup {
                 let root = &config.root;
                 let root = root
                     .to_file_path()
@@ -488,6 +498,8 @@ impl ObjectStore for LocalFileSystem {
                     }
                 }
 
+                Ok(())
+            } else {
                 Ok(())
             }
         })
