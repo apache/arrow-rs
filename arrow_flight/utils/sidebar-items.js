@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["batches_to_flight_data","flight_data_from_arrow_batch","flight_data_from_arrow_schema","flight_data_to_arrow_batch","flight_data_to_batches","flight_schema_from_arrow_schema","ipc_message_from_arrow_schema"]};

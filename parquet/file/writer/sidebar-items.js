@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"struct":["SerializedColumnWriter","SerializedFileWriter","SerializedPageWriter","SerializedRowGroupWriter","TrackedWrite"],"type":["OnCloseColumnChunk","OnCloseRowGroup"]};

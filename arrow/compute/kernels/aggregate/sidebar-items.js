@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["bit_and","bit_or","bit_xor","bool_and","bool_or","max","max_array","max_binary","max_boolean","max_string","min","min_array","min_binary","min_boolean","min_string","sum","sum_array","sum_array_checked","sum_checked"]};
