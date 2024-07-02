@@ -58,7 +58,7 @@ pub fn make_byte_view_array_reader(
     }
 }
 
-/// An [`ArrayReader`] for variable length byte arrays
+/// An [`ArrayReader`] for variable length byte view arrays
 #[allow(unused)]
 struct ByteViewArrayReader {
     data_type: ArrowType,
