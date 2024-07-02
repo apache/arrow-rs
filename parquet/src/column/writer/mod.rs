@@ -72,7 +72,13 @@ pub enum ColumnWriter<'a> {
 }
 
 impl<'a> ColumnWriter<'a> {
-    /// Returns the estimated total bytes for this column writer
+    /// Returns the estimated total memory usage
+    #[cfg(feature = "arrow")]
+    pub(crate) fn memory_size(&self) -> usize {
+        downcast_writer!(self, typed, typed.memory_size())
+    }
+
+    /// Returns the estimated total encoded bytes for this column writer
     #[cfg(feature = "arrow")]
     pub(crate) fn get_estimated_total_bytes(&self) -> u64 {
         downcast_writer!(self, typed, typed.get_estimated_total_bytes())
@@ -442,6 +448,15 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         )
     }
 
+    /// Returns the estimated total memory usage.
+    ///
+    /// Unlike [`Self::get_estimated_total_bytes`] this is an estimate
+    /// of the current memory usage and not the final anticipated encoded size.
+    #[cfg(feature = "arrow")]
+    pub(crate) fn memory_size(&self) -> usize {
+        self.column_metrics.total_bytes_written as usize + self.encoder.estimated_memory_size()
+    }
+
     /// Returns total number of bytes written by this column writer so far.
     /// This value is also returned when column writer is closed.
     ///
@@ -451,10 +466,11 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         self.column_metrics.total_bytes_written
     }
 
-    /// Returns the estimated total bytes for this column writer
+    /// Returns the estimated total encoded bytes for this column writer.
     ///
     /// Unlike [`Self::get_total_bytes_written`] this includes an estimate
-    /// of any data that has not yet been flushed to a page
+    /// of any data that has not yet been flushed to a page, based on it's
+    /// anticipated encoded size.
     #[cfg(feature = "arrow")]
     pub(crate) fn get_estimated_total_bytes(&self) -> u64 {
         self.column_metrics.total_bytes_written

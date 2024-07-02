@@ -226,7 +226,15 @@ impl WriteMultipart {
         }
 
         self.wait_for_capacity(0).await?;
-        self.upload.complete().await
+
+        match self.upload.complete().await {
+            Err(e) => {
+                self.tasks.shutdown().await;
+                self.upload.abort().await?;
+                Err(e)
+            }
+            Ok(result) => Ok(result),
+        }
     }
 }
 

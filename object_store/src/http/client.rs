@@ -183,6 +183,8 @@ impl Client {
                         has_content_type = true;
                         builder.header(CONTENT_TYPE, v.as_ref())
                     }
+                    // Ignore metadata attributes
+                    Attribute::Metadata(_) => builder,
                 };
             }
 
@@ -319,6 +321,7 @@ impl GetClient for Client {
         etag_required: false,
         last_modified_required: false,
         version_header: None,
+        user_defined_metadata_prefix: None,
     };
 
     async fn get_request(&self, path: &Path, options: GetOptions) -> Result<Response> {

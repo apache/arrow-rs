@@ -1381,8 +1381,8 @@ fn parse_interval_components(
 
     // invalid amounts?
     if !invalid_amounts.is_empty() {
-        return Err(ArrowError::NotYetImplemented(format!(
-            "Unsupported Interval Expression with value {value:?}"
+        return Err(ArrowError::ParseError(format!(
+            "Invalid input syntax for type interval: {value:?}"
         )));
     }
 

@@ -61,6 +61,7 @@ use std::sync::Arc;
 
 const VERSION_HEADER: &str = "x-amz-version-id";
 const SHA256_CHECKSUM: &str = "x-amz-checksum-sha256";
+const USER_DEFINED_METADATA_HEADER_PREFIX: &str = "x-amz-meta-";
 
 /// A specialized `Error` for object store-related errors
 #[derive(Debug, Snafu)]
@@ -326,6 +327,10 @@ impl<'a> Request<'a> {
                     has_content_type = true;
                     builder.header(CONTENT_TYPE, v.as_ref())
                 }
+                Attribute::Metadata(k_suffix) => builder.header(
+                    &format!("{}{}", USER_DEFINED_METADATA_HEADER_PREFIX, k_suffix),
+                    v.as_ref(),
+                ),
             };
         }
 
@@ -642,6 +647,7 @@ impl GetClient for S3Client {
         etag_required: false,
         last_modified_required: false,
         version_header: Some(VERSION_HEADER),
+        user_defined_metadata_prefix: Some(USER_DEFINED_METADATA_HEADER_PREFIX),
     };
 
     /// Make an S3 GET request <https://docs.aws.amazon.com/AmazonS3/latest/API/API_GetObject.html>

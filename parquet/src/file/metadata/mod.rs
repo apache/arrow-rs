@@ -29,6 +29,8 @@
 //! * [`ColumnChunkMetaData`]: Metadata for each column chunk (primitive leaf)
 //!   within a Row Group including encoding and compression information,
 //!   number of values, statistics, etc.
+mod memory;
+
 use std::ops::Range;
 use std::sync::Arc;
 
@@ -39,6 +41,7 @@ use crate::format::{
 
 use crate::basic::{ColumnOrder, Compression, Encoding, Type};
 use crate::errors::{ParquetError, Result};
+pub(crate) use crate::file::metadata::memory::HeapSize;
 use crate::file::page_encoding_stats::{self, PageEncodingStats};
 use crate::file::page_index::index::Index;
 use crate::file::statistics::{self, Statistics};
@@ -189,6 +192,28 @@ impl ParquetMetaData {
     /// [ArrowReaderOptions::with_page_index]: https://docs.rs/parquet/latest/parquet/arrow/arrow_reader/struct.ArrowReaderOptions.html#method.with_page_index
     pub fn unencoded_byte_array_data_bytes(&self) -> Option<&Vec<Vec<Option<Vec<i64>>>>> {
         self.unencoded_byte_array_data_bytes.as_ref()
+    }
+
+    /// Estimate of the bytes allocated to store `ParquetMetadata`
+    ///
+    /// # Notes:
+    ///
+    /// 1. Includes size of self
+    ///
+    /// 2. Includes heap memory for sub fields such as [`FileMetaData`] and
+    /// [`RowGroupMetaData`].
+    ///
+    /// 3. Includes memory from shared pointers (e.g. [`SchemaDescPtr`]). This
+    /// means `memory_size` will over estimate the memory size if such pointers
+    /// are shared.
+    ///
+    /// 4. Does not include any allocator overheads
+    pub fn memory_size(&self) -> usize {
+        std::mem::size_of::<Self>()
+            + self.file_metadata.heap_size()
+            + self.row_groups.heap_size()
+            + self.column_index.heap_size()
+            + self.offset_index.heap_size()
     }
 
     /// Override the column index
@@ -1149,7 +1174,8 @@ impl OffsetIndexBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::basic::PageType;
+    use crate::basic::{PageType, SortOrder};
+    use crate::file::page_index::index::NativeIndex;
 
     #[test]
     fn test_row_group_metadata_thrift_conversion() {
@@ -1343,6 +1369,69 @@ mod tests {
         let compressed_size_exp: i64 = 1000;
 
         assert_eq!(compressed_size_res, compressed_size_exp);
+    }
+
+    #[test]
+    fn test_memory_size() {
+        let schema_descr = get_test_schema_descr();
+
+        let columns = schema_descr
+            .columns()
+            .iter()
+            .map(|column_descr| ColumnChunkMetaData::builder(column_descr.clone()).build())
+            .collect::<Result<Vec<_>>>()
+            .unwrap();
+        let row_group_meta = RowGroupMetaData::builder(schema_descr.clone())
+            .set_num_rows(1000)
+            .set_column_metadata(columns)
+            .build()
+            .unwrap();
+        let row_group_meta = vec![row_group_meta];
+
+        let version = 2;
+        let num_rows = 1000;
+        let created_by = Some(String::from("test harness"));
+        let key_value_metadata = Some(vec![KeyValue::new(
+            String::from("Foo"),
+            Some(String::from("bar")),
+        )]);
+        let column_orders = Some(vec![
+            ColumnOrder::UNDEFINED,
+            ColumnOrder::TYPE_DEFINED_ORDER(SortOrder::UNSIGNED),
+        ]);
+        let file_metadata = FileMetaData::new(
+            version,
+            num_rows,
+            created_by,
+            key_value_metadata,
+            schema_descr,
+            column_orders,
+        );
+        let parquet_meta = ParquetMetaData::new(file_metadata.clone(), row_group_meta.clone());
+        let base_expected_size = 1320;
+        assert_eq!(parquet_meta.memory_size(), base_expected_size);
+
+        let mut column_index = ColumnIndexBuilder::new();
+        column_index.append(false, vec![1u8], vec![2u8, 3u8], 4);
+        let column_index = column_index.build_to_thrift();
+        let native_index = NativeIndex::<bool>::try_new(column_index).unwrap();
+
+        // Now, add in OffsetIndex
+        let parquet_meta = ParquetMetaData::new_with_page_index(
+            file_metadata,
+            row_group_meta,
+            Some(vec![vec![Index::BOOLEAN(native_index)]]),
+            Some(vec![vec![
+                vec![PageLocation::new(1, 2, 3)],
+                vec![PageLocation::new(1, 2, 3)],
+            ]]),
+            None,
+        );
+
+        let bigger_expected_size = 2304;
+        // more set fields means more memory usage
+        assert!(bigger_expected_size > base_expected_size);
+        assert_eq!(parquet_meta.memory_size(), bigger_expected_size);
     }
 
     /// Returns sample schema descriptor so we can create column metadata.

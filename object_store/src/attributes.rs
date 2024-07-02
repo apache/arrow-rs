@@ -45,6 +45,10 @@ pub enum Attribute {
     ///
     /// See [Cache-Control](https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Cache-Control)
     CacheControl,
+    /// Specifies a user-defined metadata field for the object
+    ///
+    /// The String is a user-defined key
+    Metadata(Cow<'static, str>),
 }
 
 /// The value of an [`Attribute`]
@@ -194,10 +198,11 @@ mod tests {
             (Attribute::ContentLanguage, "en-US"),
             (Attribute::ContentType, "test"),
             (Attribute::CacheControl, "control"),
+            (Attribute::Metadata("key1".into()), "value1"),
         ]);
 
         assert!(!attributes.is_empty());
-        assert_eq!(attributes.len(), 5);
+        assert_eq!(attributes.len(), 6);
 
         assert_eq!(
             attributes.get(&Attribute::ContentType),
@@ -210,18 +215,18 @@ mod tests {
             attributes.insert(Attribute::CacheControl, "v1".into()),
             Some(metav)
         );
-        assert_eq!(attributes.len(), 5);
+        assert_eq!(attributes.len(), 6);
 
         assert_eq!(
             attributes.remove(&Attribute::CacheControl).unwrap(),
             "v1".into()
         );
-        assert_eq!(attributes.len(), 4);
+        assert_eq!(attributes.len(), 5);
 
         let metav: AttributeValue = "v2".into();
         attributes.insert(Attribute::CacheControl, metav.clone());
         assert_eq!(attributes.get(&Attribute::CacheControl), Some(&metav));
-        assert_eq!(attributes.len(), 5);
+        assert_eq!(attributes.len(), 6);
 
         assert_eq!(
             attributes.get(&Attribute::ContentDisposition),
@@ -234,6 +239,10 @@ mod tests {
         assert_eq!(
             attributes.get(&Attribute::ContentLanguage),
             Some(&"en-US".into())
+        );
+        assert_eq!(
+            attributes.get(&Attribute::Metadata("key1".into())),
+            Some(&"value1".into())
         );
     }
 }
