@@ -197,21 +197,23 @@ impl WriteMultipart {
         self.tasks.spawn(self.upload.put_part(part));
     }
 
-    /// Abort this upload, attempting to clean up any successfully uploaded parts
-    pub async fn abort(mut self) -> Result<()> {
-        self.tasks.shutdown().await;
-        self.upload.abort().await
-    }
-
     /// Flush final chunk, and await completion of all in-flight requests
-    pub async fn finish(&mut self) -> Result<PutResult> {
+    pub async fn finish(mut self) -> Result<PutResult> {
         if !self.buffer.is_empty() {
             let part = std::mem::take(&mut self.buffer);
             self.put_part(part.into())
         }
 
         self.wait_for_capacity(0).await?;
-        self.upload.complete().await
+
+        match self.upload.complete().await {
+            Err(e) => {
+                self.tasks.shutdown().await;
+                self.upload.abort().await?;
+                Err(e)
+            }
+            Ok(result) => Ok(result),
+        }
     }
 }
 

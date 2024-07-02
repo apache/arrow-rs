@@ -340,19 +340,6 @@ impl BufWriter {
             };
         }
     }
-
-    /// Abort this writer, cleaning up any partially uploaded state
-    ///
-    /// # Panic
-    ///
-    /// Panics if this writer has already been shutdown or aborted
-    pub async fn abort(&mut self) -> crate::Result<()> {
-        match &mut self.state {
-            BufWriterState::Buffer(_, _) | BufWriterState::Prepare(_) => Ok(()),
-            BufWriterState::Flush(_) => panic!("Already shut down"),
-            BufWriterState::Write(x) => x.take().unwrap().abort().await,
-        }
-    }
 }
 
 impl AsyncWrite for BufWriter {
@@ -438,7 +425,7 @@ impl AsyncWrite for BufWriter {
                 }
                 BufWriterState::Flush(f) => return f.poll_unpin(cx).map_err(std::io::Error::from),
                 BufWriterState::Write(x) => {
-                    let mut upload = x.take().ok_or_else(|| {
+                    let upload = x.take().ok_or_else(|| {
                         std::io::Error::new(
                             ErrorKind::InvalidInput,
                             "Cannot shutdown a writer that has already been shut down",
