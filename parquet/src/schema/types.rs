@@ -19,6 +19,7 @@
 
 use std::{collections::HashMap, fmt, sync::Arc};
 
+use crate::file::metadata::HeapSize;
 use crate::format::SchemaElement;
 
 use crate::basic::{
@@ -55,6 +56,15 @@ pub enum Type {
         basic_info: BasicTypeInfo,
         fields: Vec<TypePtr>,
     },
+}
+
+impl HeapSize for Type {
+    fn heap_size(&self) -> usize {
+        match self {
+            Type::PrimitiveType { basic_info, .. } => basic_info.heap_size(),
+            Type::GroupType { basic_info, fields } => basic_info.heap_size() + fields.heap_size(),
+        }
+    }
 }
 
 impl Type {
@@ -625,6 +635,13 @@ pub struct BasicTypeInfo {
     id: Option<i32>,
 }
 
+impl HeapSize for BasicTypeInfo {
+    fn heap_size(&self) -> usize {
+        // no heap allocations in any other subfield
+        self.name.heap_size()
+    }
+}
+
 impl BasicTypeInfo {
     /// Returns field name.
     pub fn name(&self) -> &str {
@@ -691,6 +708,12 @@ impl BasicTypeInfo {
 #[derive(Clone, PartialEq, Debug, Eq, Hash)]
 pub struct ColumnPath {
     parts: Vec<String>,
+}
+
+impl HeapSize for ColumnPath {
+    fn heap_size(&self) -> usize {
+        self.parts.heap_size()
+    }
 }
 
 impl ColumnPath {
@@ -779,6 +802,12 @@ pub struct ColumnDescriptor {
 
     /// The path of this column. For instance, "a.b.c.d".
     path: ColumnPath,
+}
+
+impl HeapSize for ColumnDescriptor {
+    fn heap_size(&self) -> usize {
+        self.primitive_type.heap_size() + self.path.heap_size()
+    }
 }
 
 impl ColumnDescriptor {
@@ -922,6 +951,13 @@ impl fmt::Debug for SchemaDescriptor {
         f.debug_struct("SchemaDescriptor")
             .field("schema", &self.schema)
             .finish()
+    }
+}
+
+// Need to implement HeapSize in this module as the fields are private
+impl HeapSize for SchemaDescriptor {
+    fn heap_size(&self) -> usize {
+        self.schema.heap_size() + self.leaves.heap_size() + self.leaf_to_base.heap_size()
     }
 }
 
