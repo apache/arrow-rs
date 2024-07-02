@@ -1923,11 +1923,14 @@ mod tests {
             assert_eq!(rep_hist[1], 5);
         };
 
+        // check that histograms are set properly in the write and read metadata
+        // also check that unencoded_byte_array_data_bytes is not set
         if let Some(ref meta_data) = file_metadata.row_groups[0].columns[0].meta_data {
             assert!(meta_data.size_statistics.is_some());
             if let Some(ref size_stats) = meta_data.size_statistics {
                 assert!(size_stats.repetition_level_histogram.is_some());
                 assert!(size_stats.definition_level_histogram.is_some());
+                assert!(size_stats.unencoded_byte_array_data_bytes.is_none());
                 if let Some(ref def_hist) = size_stats.definition_level_histogram {
                     check_def_hist(def_hist)
                 }
@@ -1949,6 +1952,7 @@ mod tests {
         let column = rowgroup.metadata().column(0);
         assert!(column.definition_level_histogram().is_some());
         assert!(column.repetition_level_histogram().is_some());
+        assert!(column.unencoded_byte_array_data_bytes().is_none());
         if let Some(def_hist) = column.definition_level_histogram() {
             check_def_hist(def_hist)
         }
@@ -1974,5 +1978,7 @@ mod tests {
         if let Some(rep_hist) = col_idx.repetition_level_histogram() {
             check_rep_hist(rep_hist)
         }
+
+        // TODO check no unencoded_byte_array_data_bytes in offset index
     }
 }
