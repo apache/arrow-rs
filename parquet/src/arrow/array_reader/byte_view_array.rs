@@ -30,7 +30,6 @@ use bytes::Bytes;
 use std::any::Any;
 
 /// Returns an [`ArrayReader`] that decodes the provided byte array column to view types.
-#[allow(unused)]
 pub fn make_byte_view_array_reader(
     pages: Box<dyn PageIterator>,
     column_desc: ColumnDescPtr,
@@ -59,7 +58,6 @@ pub fn make_byte_view_array_reader(
 }
 
 /// An [`ArrayReader`] for variable length byte arrays
-#[allow(unused)]
 struct ByteViewArrayReader {
     data_type: ArrowType,
     pages: Box<dyn PageIterator>,
@@ -69,7 +67,6 @@ struct ByteViewArrayReader {
 }
 
 impl ByteViewArrayReader {
-    #[allow(unused)]
     fn new(
         pages: Box<dyn PageIterator>,
         data_type: ArrowType,
