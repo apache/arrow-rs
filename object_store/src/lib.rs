@@ -778,6 +778,17 @@ pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
         self.copy_if_not_exists(from, to).await?;
         self.delete(from).await
     }
+
+    /// Delete all objects under specified prefix path, otherwise delete all objects
+    async fn delete_prefixed(&self, prefix: Option<&Path>) -> Result<()> {
+        let locations = self.list(prefix).map_ok(|meta| meta.location).boxed();
+
+        self.delete_stream(locations)
+            .try_collect::<Vec<Path>>()
+            .await?;
+
+        Ok(())
+    }
 }
 
 macro_rules! as_ref_impl {

@@ -91,8 +91,20 @@ pub(crate) enum Error {
         path: PathBuf,
     },
 
+    #[snafu(display("Unable to delete dir {}: {}", path.display(), source))]
+    UnableToDeleteDir {
+        source: io::Error,
+        path: PathBuf,
+    },
+
     #[snafu(display("Unable to open file {}: {}", path.display(), source))]
     UnableToOpenFile {
+        source: io::Error,
+        path: PathBuf,
+    },
+
+    #[snafu(display("Unable to open dir {}: {}", path.display(), source))]
+    UnableToOpenDir {
         source: io::Error,
         path: PathBuf,
     },
@@ -667,6 +679,43 @@ impl ObjectStore for LocalFileSystem {
                     _ => return Err(Error::UnableToCopyFile { from, to, source }.into()),
                 },
             }
+        })
+        .await
+    }
+
+    async fn delete_prefixed(&self, prefix: Option<&Path>) -> Result<()> {
+        let config = self.config.as_ref();
+        let path = if let Some(p) = prefix {
+            config.prefix_to_filesystem(p)?
+        } else {
+            config.root.to_file_path().map_err(|_| Error::InvalidUrl {
+                url: config.root.clone(),
+            })?
+        };
+
+        maybe_spawn_blocking(move || {
+            let mut dir =
+                std::fs::read_dir(&path).context(UnableToOpenDirSnafu { path: path.clone() })?;
+
+            while let Some(child) = dir.next().transpose().map_err(|_| Error::Aborted)? {
+                let path = child.path();
+                let meta = child.metadata().map_err(|e| Error::Metadata {
+                    source: e.into(),
+                    path: path.to_string_lossy().to_string(),
+                })?;
+
+                if meta.is_dir() {
+                    std::fs::remove_dir_all(&path).context(UnableToDeleteDirSnafu {
+                        path: &path.to_string_lossy().to_string(),
+                    })?;
+                } else {
+                    std::fs::remove_file(&path).context(UnableToDeleteFileSnafu {
+                        path: &path.to_string_lossy().to_string(),
+                    })?
+                }
+            }
+
+            Ok(())
         })
         .await
     }
@@ -1444,6 +1493,54 @@ mod tests {
         let mut list = flatten_list_stream(&integration, None).await.unwrap();
         list.sort_unstable();
         assert_eq!(list, vec![c, a]);
+    }
+
+    #[tokio::test]
+    async fn test_delete_prefix() {
+        let root = TempDir::new().unwrap();
+        let filename_one = "test/first";
+        let filename_two: &str = "test/second";
+        let filename_three: &str = "real/third";
+
+        let integration = LocalFileSystem::new_with_prefix(root.path()).unwrap();
+        let first_file_path =
+            Path::parse(root.path().join(filename_one).to_str().unwrap()).unwrap();
+        let second_file_path =
+            Path::parse(root.path().join(filename_two).to_str().unwrap()).unwrap();
+        let third_file_path =
+            Path::parse(root.path().join(filename_three).to_str().unwrap()).unwrap();
+        integration
+            .put(&first_file_path, PutPayload::new())
+            .await
+            .unwrap();
+        integration
+            .put(&second_file_path, PutPayload::new())
+            .await
+            .unwrap();
+        integration
+            .put(&third_file_path, PutPayload::new())
+            .await
+            .unwrap();
+
+        let list = integration.list(None).count().await;
+        assert_eq!(list, 3);
+
+        let prefix_path = Path::parse(root.path().join("test").to_str().unwrap()).unwrap();
+        integration
+            .delete_prefixed(Some(&prefix_path))
+            .await
+            .unwrap();
+
+        let list = integration.list(None).count().await;
+        assert_eq!(list, 1);
+        assert!(integration.head(&first_file_path).await.is_err());
+        assert!(integration.head(&second_file_path).await.is_err());
+        assert!(integration.head(&third_file_path).await.is_ok());
+
+        integration.delete_prefixed(None).await.unwrap();
+        assert!(integration.head(&third_file_path).await.is_err());
+        let list = integration.list(None).count().await;
+        assert_eq!(list, 0);
     }
 }
 
