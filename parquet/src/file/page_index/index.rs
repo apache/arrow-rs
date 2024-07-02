@@ -231,7 +231,10 @@ mod tests {
         assert_eq!(page_index.max_bytes().unwrap(), 234.as_bytes());
         assert_eq!(page_index.null_count().unwrap(), 0);
         assert_eq!(page_index.repetition_level_histogram(), Some(&vec![1, 2]));
-        assert_eq!(page_index.definition_level_histogram(), Some(&vec![1, 2, 3]));
+        assert_eq!(
+            page_index.definition_level_histogram(),
+            Some(&vec![1, 2, 3])
+        );
     }
 
     #[test]
