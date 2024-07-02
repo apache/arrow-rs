@@ -1041,7 +1041,10 @@ fn convert_walkdir_result(
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+
     use futures::TryStreamExt;
+    use itertools::Itertools;
     use tempfile::{NamedTempFile, TempDir};
 
     use crate::integration::*;
@@ -1475,6 +1478,34 @@ mod tests {
         let mut list = flatten_list_stream(&integration, None).await.unwrap();
         list.sort_unstable();
         assert_eq!(list, vec![c, a]);
+    }
+
+    #[tokio::test]
+    async fn delete_dirs_automatically() {
+        let root = TempDir::new().unwrap();
+        let integration = LocalFileSystem::new_with_prefix(root.path())
+            .unwrap()
+            .with_automatic_cleanup(true);
+        let location = Path::from("nested/file/test_file");
+        let data = Bytes::from("arbitrary data");
+
+        integration
+            .put(&location, data.clone().into())
+            .await
+            .unwrap();
+
+        let read_data = integration
+            .get(&location)
+            .await
+            .unwrap()
+            .bytes()
+            .await
+            .unwrap();
+
+        assert_eq!(&*read_data, data);
+        assert!(fs::read_dir(root.path()).unwrap().count() > 0);
+        integration.delete(&location).await.unwrap();
+        assert!(fs::read_dir(root.path()).unwrap().count() == 0);
     }
 }
 
