@@ -1888,8 +1888,12 @@ mod tests {
         let def_levels = [3, 3, 0, 3, 2, 1, 3, 3, 3, 3];
         let rep_levels = [0, 1, 0, 0, 1, 0, 0, 1, 1, 1];
         let file = tempfile::tempfile().unwrap();
-        let props = Default::default();
-        let mut writer = SerializedFileWriter::new(file, schema, props).unwrap();
+        let props = Arc::new(
+            WriterProperties::builder()
+                .set_statistics_enabled(EnabledStatistics::Page)
+                .build(),
+        );
+        let mut writer = SerializedFileWriter::new(&file, schema, props).unwrap();
         let mut row_group_writer = writer.next_row_group().unwrap();
 
         let mut col_writer = row_group_writer.next_column().unwrap().unwrap();
@@ -1899,11 +1903,25 @@ mod tests {
             .unwrap();
         col_writer.close().unwrap();
         row_group_writer.close().unwrap();
-        let file_metadata = writer.finish().unwrap();
+        let file_metadata = writer.close().unwrap();
 
         assert_eq!(file_metadata.row_groups.len(), 1);
         assert_eq!(file_metadata.row_groups[0].columns.len(), 1);
         assert!(file_metadata.row_groups[0].columns[0].meta_data.is_some());
+
+        let check_def_hist = |def_hist: &Vec<i64>| {
+            assert_eq!(def_hist.len(), 4);
+            assert_eq!(def_hist[0], 1);
+            assert_eq!(def_hist[1], 1);
+            assert_eq!(def_hist[2], 1);
+            assert_eq!(def_hist[3], 7);
+        };
+
+        let check_rep_hist = |rep_hist: &Vec<i64>| {
+            assert_eq!(rep_hist.len(), 2);
+            assert_eq!(rep_hist[0], 5);
+            assert_eq!(rep_hist[1], 5);
+        };
 
         if let Some(ref meta_data) = file_metadata.row_groups[0].columns[0].meta_data {
             assert!(meta_data.size_statistics.is_some());
@@ -1911,18 +1929,50 @@ mod tests {
                 assert!(size_stats.repetition_level_histogram.is_some());
                 assert!(size_stats.definition_level_histogram.is_some());
                 if let Some(ref def_hist) = size_stats.definition_level_histogram {
-                    assert_eq!(def_hist.len(), 4);
-                    assert_eq!(def_hist[0], 1);
-                    assert_eq!(def_hist[1], 1);
-                    assert_eq!(def_hist[2], 1);
-                    assert_eq!(def_hist[3], 7);
+                    check_def_hist(def_hist)
                 }
                 if let Some(ref rep_hist) = size_stats.repetition_level_histogram {
-                    assert_eq!(rep_hist.len(), 2);
-                    assert_eq!(rep_hist[0], 5);
-                    assert_eq!(rep_hist[1], 5);
+                    check_rep_hist(rep_hist)
                 }
             }
+        }
+
+        // check that the read metadata is also correct
+        let options = ReadOptionsBuilder::new().with_page_index().build();
+        let reader = SerializedFileReader::new_with_options(file, options).unwrap();
+
+        let rfile_metadata = reader.metadata().file_metadata();
+        assert_eq!(rfile_metadata.num_rows(), file_metadata.num_rows);
+        assert_eq!(reader.num_row_groups(), 1);
+        let rowgroup = reader.get_row_group(0).unwrap();
+        assert_eq!(rowgroup.num_columns(), 1);
+        let column = rowgroup.metadata().column(0);
+        assert!(column.definition_level_histogram().is_some());
+        assert!(column.repetition_level_histogram().is_some());
+        if let Some(def_hist) = column.definition_level_histogram() {
+            check_def_hist(def_hist)
+        }
+        if let Some(rep_hist) = column.repetition_level_histogram() {
+            check_rep_hist(rep_hist)
+        }
+
+        // check histogram in column index as well
+        assert!(reader.metadata().column_index().is_some());
+        let column_index = reader.metadata().column_index().unwrap();
+        assert_eq!(column_index.len(), 1);
+        assert_eq!(column_index[0].len(), 1);
+        let col_idx = if let Index::INT32(index) = &column_index[0][0] {
+            assert_eq!(index.indexes.len(), 1);
+            &index.indexes[0]
+        } else {
+            unreachable!()
+        };
+
+        if let Some(def_hist) = col_idx.definition_level_histogram() {
+            check_def_hist(def_hist)
+        }
+        if let Some(rep_hist) = col_idx.repetition_level_histogram() {
+            check_rep_hist(rep_hist)
         }
     }
 }
