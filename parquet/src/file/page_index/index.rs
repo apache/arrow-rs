@@ -160,7 +160,7 @@ impl<T: ParquetValueType> NativeIndex<T> {
                 for i in 0..len {
                     let page_idx = i * num_levels;
                     let page_hist = hist[page_idx..page_idx + num_levels].to_vec();
-                    res[i] = Some(page_hist);
+                    res.push(Some(page_hist));
                 }
                 res
             } else {
