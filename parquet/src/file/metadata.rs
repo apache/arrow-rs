@@ -93,6 +93,8 @@ pub struct ParquetMetaData {
     column_index: Option<ParquetColumnIndex>,
     /// Offset index for all each page in each column chunk
     offset_index: Option<ParquetOffsetIndex>,
+    /// `unencoded_byte_array_data_bytes` from the offset index
+    unencoded_byte_array_data_bytes: Option<Vec<Vec<Option<Vec<i64>>>>>,
 }
 
 impl ParquetMetaData {
@@ -104,6 +106,7 @@ impl ParquetMetaData {
             row_groups,
             column_index: None,
             offset_index: None,
+            unencoded_byte_array_data_bytes: None,
         }
     }
 
@@ -114,12 +117,14 @@ impl ParquetMetaData {
         row_groups: Vec<RowGroupMetaData>,
         column_index: Option<ParquetColumnIndex>,
         offset_index: Option<ParquetOffsetIndex>,
+        unencoded_byte_array_data_bytes: Option<Vec<Vec<Option<Vec<i64>>>>>,
     ) -> Self {
         ParquetMetaData {
             file_metadata,
             row_groups,
             column_index,
             offset_index,
+            unencoded_byte_array_data_bytes,
         }
     }
 
@@ -174,6 +179,16 @@ impl ParquetMetaData {
     /// [ArrowReaderOptions::with_page_index]: https://docs.rs/parquet/latest/parquet/arrow/arrow_reader/struct.ArrowReaderOptions.html#method.with_page_index
     pub fn offset_index(&self) -> Option<&ParquetOffsetIndex> {
         self.offset_index.as_ref()
+    }
+
+    /// Returns `unencoded_byte_array_data_bytes` from the offset indexes in this file, if loaded
+    ///
+    /// Returns `None` if the parquet file does not have a `OffsetIndex` or
+    /// [ArrowReaderOptions::with_page_index] was set to false.
+    ///
+    /// [ArrowReaderOptions::with_page_index]: https://docs.rs/parquet/latest/parquet/arrow/arrow_reader/struct.ArrowReaderOptions.html#method.with_page_index
+    pub fn unencoded_byte_array_data_bytes(&self) -> Option<&Vec<Vec<Option<Vec<i64>>>>> {
+        self.unencoded_byte_array_data_bytes.as_ref()
     }
 
     /// Override the column index

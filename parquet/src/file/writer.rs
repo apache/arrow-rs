@@ -1909,7 +1909,10 @@ mod tests {
         if let Some(def_hist) = column.definition_level_histogram() {
             check_def_hist(def_hist)
         }
-        assert_eq!(unenc_size, column.unencoded_byte_array_data_bytes().unwrap_or(0));
+        assert_eq!(
+            unenc_size,
+            column.unencoded_byte_array_data_bytes().unwrap_or(0)
+        );
 
         // check histogram in column index as well
         assert!(reader.metadata().column_index().is_some());
@@ -1926,6 +1929,19 @@ mod tests {
         assert!(col_idx.repetition_level_histogram().is_none());
         if let Some(def_hist) = col_idx.definition_level_histogram() {
             check_def_hist(def_hist)
+        }
+
+        assert!(reader
+            .metadata()
+            .unencoded_byte_array_data_bytes()
+            .is_some());
+        let unenc_sizes = reader.metadata().unencoded_byte_array_data_bytes().unwrap();
+        assert_eq!(unenc_sizes.len(), 1);
+        assert_eq!(unenc_sizes[0].len(), 1);
+        assert!(unenc_sizes[0][0].is_some());
+        if let Some(page_sizes) = &unenc_sizes[0][0] {
+            assert_eq!(page_sizes.len(), 1);
+            assert_eq!(page_sizes[0], unenc_size);
         }
     }
 
@@ -2042,6 +2058,13 @@ mod tests {
             check_rep_hist(rep_hist)
         }
 
-        // TODO check no unencoded_byte_array_data_bytes in offset index
+        assert!(reader
+            .metadata()
+            .unencoded_byte_array_data_bytes()
+            .is_some());
+        let unenc_sizes = reader.metadata().unencoded_byte_array_data_bytes().unwrap();
+        assert_eq!(unenc_sizes.len(), 1);
+        assert_eq!(unenc_sizes[0].len(), 1);
+        assert!(unenc_sizes[0][0].is_none());
     }
 }

@@ -211,12 +211,20 @@ impl<R: 'static + ChunkReader> SerializedFileReader<R> {
         if options.enable_page_index {
             let mut columns_indexes = vec![];
             let mut offset_indexes = vec![];
+            let mut unenc_byte_sizes = vec![];
 
             for rg in &mut filtered_row_groups {
                 let column_index = index_reader::read_columns_indexes(&chunk_reader, rg.columns())?;
                 let offset_index = index_reader::read_pages_locations(&chunk_reader, rg.columns())?;
+                // TODO the following should be in an `OffsetIndex` struct along with the page
+                // locations. For now keeping them separate to avoid breaking API changes.
+                let unenc_bytes = index_reader::read_unencoded_byte_array_data_bytes(
+                    &chunk_reader,
+                    rg.columns(),
+                )?;
                 columns_indexes.push(column_index);
                 offset_indexes.push(offset_index);
+                unenc_byte_sizes.push(unenc_bytes);
             }
 
             Ok(Self {
@@ -226,6 +234,7 @@ impl<R: 'static + ChunkReader> SerializedFileReader<R> {
                     filtered_row_groups,
                     Some(columns_indexes),
                     Some(offset_indexes),
+                    Some(unenc_byte_sizes),
                 )),
                 props: Arc::new(options.props),
             })
