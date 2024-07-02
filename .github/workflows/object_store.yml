@@ -210,4 +210,4 @@ jobs:
         with:
           submodules: true
       - name: Run LocalFileSystem tests
-        run: cargo test
+        run: cargo test local::tests

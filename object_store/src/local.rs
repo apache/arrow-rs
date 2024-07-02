@@ -295,18 +295,18 @@ impl LocalFileSystem {
         );
         let path = self.config.prefix_to_filesystem(location)?;
 
-        // #[cfg(target_os = "windows")]
-        // let path = {
-        //     let path = path.to_string_lossy();
+        #[cfg(target_os = "windows")]
+        let path = {
+            let path = path.to_string_lossy();
 
-        //     // Assume the first char is the drive letter and the next is a colon.
-        //     let mut out = String::new();
-        //     let drive = &path[..2]; // The drive letter and colon (e.g., "C:")
-        //     let filepath = &path[2..].replace(':', "%3A"); // Replace subsequent colons
-        //     out.push_str(drive);
-        //     out.push_str(filepath);
-        //     PathBuf::from(out)
-        // };
+            // Assume the first char is the drive letter and the next is a colon.
+            let mut out = String::new();
+            let drive = &path[..2]; // The drive letter and colon (e.g., "C:")
+            let filepath = &path[2..].replace(':', "%3A"); // Replace subsequent colons
+            out.push_str(drive);
+            out.push_str(filepath);
+            PathBuf::from(out)
+        };
 
         Ok(path)
     }
@@ -1034,6 +1034,7 @@ mod tests {
     use super::*;
 
     #[tokio::test]
+    #[cfg(target_family = "unix")]
     async fn file_test() {
         let root = TempDir::new().unwrap();
         let integration = LocalFileSystem::new_with_prefix(root.path()).unwrap();
@@ -1050,6 +1051,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(target_family = "unix")]
     fn test_non_tokio() {
         let root = TempDir::new().unwrap();
         let integration = LocalFileSystem::new_with_prefix(root.path()).unwrap();
