@@ -988,8 +988,8 @@ pub struct ColumnIndexBuilder {
     max_values: Vec<Vec<u8>>,
     null_counts: Vec<i64>,
     boundary_order: BoundaryOrder,
-    repetition_level_histograms: Vec<i64>,
-    definition_level_histograms: Vec<i64>,
+    repetition_level_histograms: Option<Vec<i64>>,
+    definition_level_histograms: Option<Vec<i64>>,
     // If one page can't get build index, need to ignore all index in this column
     valid: bool,
 }
@@ -1008,8 +1008,8 @@ impl ColumnIndexBuilder {
             max_values: Vec::new(),
             null_counts: Vec::new(),
             boundary_order: BoundaryOrder::UNORDERED,
-            repetition_level_histograms: Vec::new(),
-            definition_level_histograms: Vec::new(),
+            repetition_level_histograms: None,
+            definition_level_histograms: None,
             valid: true,
         }
     }
@@ -1033,12 +1033,14 @@ impl ColumnIndexBuilder {
         definition_level_histogram: &Option<Vec<i64>>,
     ) {
         if let Some(ref rep_lvl_hist) = repetition_level_histogram {
-            self.repetition_level_histograms.reserve(rep_lvl_hist.len());
-            self.repetition_level_histograms.extend(rep_lvl_hist);
+            let hist = self.repetition_level_histograms.get_or_insert(Vec::new());
+            hist.reserve(rep_lvl_hist.len());
+            hist.extend(rep_lvl_hist);
         }
         if let Some(ref def_lvl_hist) = definition_level_histogram {
-            self.definition_level_histograms.reserve(def_lvl_hist.len());
-            self.definition_level_histograms.extend(def_lvl_hist);
+            let hist = self.definition_level_histograms.get_or_insert(Vec::new());
+            hist.reserve(def_lvl_hist.len());
+            hist.extend(def_lvl_hist);
         }
     }
 
