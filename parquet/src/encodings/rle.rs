@@ -286,6 +286,13 @@ impl RleEncoder {
         }
         self.repeat_count = 0;
     }
+
+    /// return the estimated memory size of this encoder.
+    pub(crate) fn estimated_memory_size(&self) -> usize {
+        self.bit_writer.estimated_memory_size()
+        + std::mem::size_of::<Self>()
+
+    }
 }
 
 /// Size, in number of `i32s` of buffer to use for RLE batch reading

@@ -68,6 +68,9 @@ pub trait Encoder<T: DataType>: Send {
     /// Method call must be O(1).
     fn estimated_data_encoded_size(&self) -> usize;
 
+    /// Returns an estimate of the memory use of this encoder, in bytes
+    fn estimated_memory_size(&self) -> usize;
+
     /// Flushes the underlying byte buffer that's being processed by this encoder, and
     /// return the immutable copy of it. This will also reset the internal state.
     fn flush_buffer(&mut self) -> Result<Bytes>;
@@ -158,6 +161,11 @@ impl<T: DataType> Encoder<T> for PlainEncoder<T> {
         T::T::encode(values, &mut self.buffer, &mut self.bit_writer)?;
         Ok(())
     }
+
+    /// Return the estimated memory size of this encoder.
+    fn estimated_memory_size(&self) -> usize {
+        self.buffer.capacity() * std::mem::size_of::<u8>() + self.bit_writer.estimated_memory_size()
+    }
 }
 
 // ----------------------------------------------------------------------
@@ -242,6 +250,13 @@ impl<T: DataType> Encoder<T> for RleValueEncoder<T> {
         buf[..4].copy_from_slice(&len.to_le_bytes());
 
         Ok(buf.into())
+    }
+
+    /// return the estimated memory size of this encoder.
+    fn estimated_memory_size(&self) -> usize {
+        self.encoder
+            .as_ref()
+            .map_or(0, |enc| enc.estimated_memory_size())
     }
 }
 
@@ -477,6 +492,15 @@ impl<T: DataType> Encoder<T> for DeltaBitPackEncoder<T> {
 
         Ok(buffer.into())
     }
+
+    /// return the estimated memory size of this encoder.
+    fn estimated_memory_size(&self) -> usize {
+        self.page_header_writer.estimated_memory_size()
+            + self.bit_writer.estimated_memory_size()
+            + self.deltas.capacity() * std::mem::size_of::<i64>()
+        + std::mem::size_of::<Self>()
+
+    }
 }
 
 /// Helper trait to define specific conversions and subtractions when computing deltas
@@ -614,6 +638,14 @@ impl<T: DataType> Encoder<T> for DeltaLengthByteArrayEncoder<T> {
 
         Ok(total_bytes.into())
     }
+
+    /// return the estimated memory size of this encoder.
+    fn estimated_memory_size(&self) -> usize {
+        self.len_encoder.estimated_memory_size()
+            + self.data.len()
+        + std::mem::size_of::<Self>()
+
+    }
 }
 
 // ----------------------------------------------------------------------
@@ -716,6 +748,14 @@ impl<T: DataType> Encoder<T> for DeltaByteArrayEncoder<T> {
                 "DeltaByteArrayEncoder only supports ByteArrayType and FixedLenByteArrayType"
             ),
         }
+    }
+
+    /// return the estimated memory size of this encoder.
+    fn estimated_memory_size(&self) -> usize {
+        self.prefix_len_encoder.estimated_memory_size()
+            + self.suffix_writer.estimated_memory_size()
+        + (self.previous.capacity() * std::mem::size_of::<u8>())
+
     }
 }
 

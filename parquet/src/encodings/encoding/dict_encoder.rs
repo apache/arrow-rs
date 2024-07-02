@@ -34,6 +34,7 @@ use crate::util::interner::{Interner, Storage};
 struct KeyStorage<T: DataType> {
     uniques: Vec<T::T>,
 
+    /// size of unique values (keys) in the dictionary, in bytes.
     size_in_bytes: usize,
 
     type_length: usize,
@@ -60,6 +61,10 @@ impl<T: DataType> Storage for KeyStorage<T> {
         let key = self.uniques.len() as u64;
         self.uniques.push(value.clone());
         key
+    }
+
+    fn estimated_memory_size(&self) -> usize {
+        self.size_in_bytes + self.uniques.capacity() * std::mem::size_of::<T::T>()
     }
 }
 
@@ -143,6 +148,7 @@ impl<T: DataType> DictEncoder<T> {
     fn bit_width(&self) -> u8 {
         num_required_bits(self.num_entries().saturating_sub(1) as u64)
     }
+
 }
 
 impl<T: DataType> Encoder<T> for DictEncoder<T> {
@@ -161,6 +167,10 @@ impl<T: DataType> Encoder<T> for DictEncoder<T> {
         Encoding::PLAIN_DICTIONARY
     }
 
+    /// Returns an estimate of the data page size in bytes
+    ///
+    /// This includes:
+    /// <already_written_encoded_byte_size> + <estimated_encoded_size_of_unflushed_bytes>
     fn estimated_data_encoded_size(&self) -> usize {
         let bit_width = self.bit_width();
         RleEncoder::max_buffer_size(bit_width, self.indices.len())
@@ -168,5 +178,12 @@ impl<T: DataType> Encoder<T> for DictEncoder<T> {
 
     fn flush_buffer(&mut self) -> Result<Bytes> {
         self.write_indices()
+    }
+
+    /// Returns the estimated total memory usage
+    ///
+    /// For this encoder, the indices are unencoded bytes (refer to [`Self::write_indices`]).
+    fn estimated_memory_size(&self) -> usize {
+        self.interner.storage().size_in_bytes + self.indices.len() * std::mem::size_of::<usize>()
     }
 }

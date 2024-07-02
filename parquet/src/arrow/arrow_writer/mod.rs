@@ -84,15 +84,20 @@ mod levels;
 ///
 /// ## Memory Limiting
 ///
-/// The nature of parquet forces buffering of an entire row group before it can be flushed
-/// to the underlying writer. Data is buffered in its encoded form, to reduce memory usage,
-/// but if writing rows containing large strings or very nested data, this may still result in
-/// non-trivial memory usage.
+/// The nature of parquet forces buffering of an entire row group before it can
+/// be flushed to the underlying writer. Data is mostly buffered in its encoded
+/// form, reducing memory usage. However, some data such as dictionary keys or
+/// large strings or very nested data may still result in non-trivial memory
+/// usage.
 ///
-/// [`ArrowWriter::in_progress_size`] can be used to track the size of the buffered row group,
-/// and potentially trigger an early flush of a row group based on a memory threshold and/or
-/// global memory pressure. However, users should be aware that smaller row groups will result
-/// in higher metadata overheads, and may worsen compression ratios and query performance.
+/// See Also:
+/// * [`ArrowWriter::memory_size`]: the current memory usage of the writer.
+/// * [`ArrowWriter::in_progress_size`]: Estimated size of the buffered row group,
+///
+/// Call [`Self::flush`] to trigger an early flush of a row group based on a
+/// memory threshold and/or global memory pressure. However,  smaller row groups
+/// result in higher metadata overheads, and thus may worsen compression ratios
+/// and query performance.
 ///
 /// ```no_run
 /// # use std::io::Write;
@@ -101,7 +106,7 @@ mod levels;
 /// # let mut writer: ArrowWriter<Vec<u8>> = todo!();
 /// # let batch: RecordBatch = todo!();
 /// writer.write(&batch).unwrap();
-/// // Trigger an early flush if buffered size exceeds 1_000_000
+/// // Trigger an early flush if anticipated size exceeds 1_000_000
 /// if writer.in_progress_size() > 1_000_000 {
 ///     writer.flush().unwrap();
 /// }
@@ -203,7 +208,23 @@ impl<W: Write + Send> ArrowWriter<W> {
         self.writer.flushed_row_groups()
     }
 
-    /// Returns the estimated length in bytes of the current in progress row group
+    /// Estimated memory usage, in bytes, of this `ArrowWriter`
+    ///
+    /// This estimate is formed bu summing the values of
+    /// [`ArrowColumnWriter::memory_size`] all in progress columns.
+    pub fn memory_size(&self) -> usize {
+        match &self.in_progress {
+            Some(in_progress) => in_progress.writers.iter().map(|x| x.memory_size()).sum(),
+            None => 0,
+        }
+    }
+
+    /// Anticipated encoded size of the in progress row group.
+    ///
+    /// This estimate the row group size after being completely encoded is,
+    /// formed by summing the values of
+    /// [`ArrowColumnWriter::get_estimated_total_bytes`] for all in progress
+    /// columns.
     pub fn in_progress_size(&self) -> usize {
         match &self.in_progress {
             Some(in_progress) => in_progress
@@ -629,7 +650,30 @@ impl ArrowColumnWriter {
         Ok(ArrowColumnChunk { data, close })
     }
 
-    /// Returns the estimated total bytes for this column writer
+    /// Returns the estimated total memory usage by the writer.
+    ///
+    /// This  [`Self::get_estimated_total_bytes`] this is an estimate
+    /// of the current memory usage and not it's anticipated encoded size.
+    ///
+    /// This includes:
+    /// 1. Data buffered in encoded form
+    /// 2. Data buffered in un-encoded form (e.g. `usize` dictionary keys)
+    ///
+    /// This value should be greater than or equal to [`Self::get_estimated_total_bytes`]
+    pub fn memory_size(&self) -> usize {
+        match &self.writer {
+            ArrowColumnWriterImpl::ByteArray(c) => c.memory_size(),
+            ArrowColumnWriterImpl::Column(c) => c.memory_size(),
+        }
+    }
+
+    /// Returns the estimated total encoded bytes for this column writer.
+    ///
+    /// This includes:
+    /// 1. Data buffered in encoded form
+    /// 2. An estimate of how large the data buffered in un-encoded form would be once encoded
+    ///
+    /// This value should be less than or equal to [`Self::memory_size`]
     pub fn get_estimated_total_bytes(&self) -> usize {
         match &self.writer {
             ArrowColumnWriterImpl::ByteArray(c) => c.get_estimated_total_bytes() as _,
@@ -2894,6 +2938,7 @@ mod tests {
         // starts empty
         assert_eq!(writer.in_progress_size(), 0);
         assert_eq!(writer.in_progress_rows(), 0);
+        assert_eq!(writer.memory_size(), 0);
         assert_eq!(writer.bytes_written(), 4); // Initial header
         writer.write(&batch).unwrap();
 
@@ -2901,17 +2946,31 @@ mod tests {
         let initial_size = writer.in_progress_size();
         assert!(initial_size > 0);
         assert_eq!(writer.in_progress_rows(), 5);
+        let initial_memory = writer.memory_size();
+        assert!(initial_memory > 0);
+        // memory estimate is larger than estimated encoded size
+        assert!(
+            initial_size <= initial_memory,
+            "{initial_size} <= {initial_memory}"
+        );
 
         // updated on second write
         writer.write(&batch).unwrap();
         assert!(writer.in_progress_size() > initial_size);
         assert_eq!(writer.in_progress_rows(), 10);
+        assert!(writer.memory_size() > initial_memory);
+        assert!(
+            writer.in_progress_size() <= writer.memory_size(),
+            "in_progress_size {} <= memory_size {}",
+            writer.in_progress_size(),
+            writer.memory_size()
+        );
 
         // in progress tracking is cleared, but the overall data written is updated
         let pre_flush_bytes_written = writer.bytes_written();
         writer.flush().unwrap();
         assert_eq!(writer.in_progress_size(), 0);
-        assert_eq!(writer.in_progress_rows(), 0);
+        assert_eq!(writer.memory_size(), 0);
         assert!(writer.bytes_written() > pre_flush_bytes_written);
 
         writer.close().unwrap();
