@@ -28,7 +28,7 @@ use crate::path::DELIMITER;
 use crate::util::{deserialize_rfc1123, GetRange};
 use crate::{
     Attribute, Attributes, ClientOptions, GetOptions, ListResult, ObjectMeta, Path, PutMode,
-    PutMultipartOpts, PutOptions, PutPayload, PutResult, Result, RetryConfig, TagSet,
+    PutMultipartOpts, PutOptions, PutPayload, PutResult, RequestContext, Result, TagSet,
 };
 use async_trait::async_trait;
 use base64::prelude::BASE64_STANDARD;
@@ -133,7 +133,7 @@ pub(crate) struct AzureConfig {
     pub account: String,
     pub container: String,
     pub credentials: AzureCredentialProvider,
-    pub retry_config: RetryConfig,
+    pub request_ctx: RequestContext,
     pub service: Url,
     pub is_emulator: bool,
     pub skip_signature: bool,
@@ -230,7 +230,7 @@ impl<'a> PutRequest<'a> {
             .builder
             .header(CONTENT_LENGTH, self.payload.content_length())
             .with_azure_authorization(&credential, &self.config.account)
-            .retryable(&self.config.retry_config)
+            .retryable(&self.config.request_ctx.config)
             .idempotent(self.idempotent)
             .payload(Some(self.payload))
             .send()
@@ -361,7 +361,7 @@ impl AzureClient {
             .query(query)
             .header(&DELETE_SNAPSHOTS, "include")
             .with_azure_authorization(&credential, &self.config.account)
-            .send_retry(&self.config.retry_config)
+            .send_retry(&self.config.request_ctx)
             .await
             .context(DeleteRequestSnafu {
                 path: path.as_ref(),
@@ -394,7 +394,7 @@ impl AzureClient {
 
         builder
             .with_azure_authorization(&credential, &self.config.account)
-            .retryable(&self.config.retry_config)
+            .retryable(&self.config.request_ctx.config)
             .idempotent(overwrite)
             .send()
             .await
@@ -429,7 +429,7 @@ impl AzureClient {
             .body(body)
             .query(&[("restype", "service"), ("comp", "userdelegationkey")])
             .with_azure_authorization(&credential, &self.config.account)
-            .retryable(&self.config.retry_config)
+            .retryable(&self.config.request_ctx.config)
             .idempotent(true)
             .send()
             .await
@@ -487,7 +487,7 @@ impl AzureClient {
             .request(Method::GET, url)
             .query(&[("comp", "tags")])
             .with_azure_authorization(&credential, &self.config.account)
-            .send_retry(&self.config.retry_config)
+            .send_retry(&self.config.request_ctx)
             .await
             .context(GetRequestSnafu {
                 path: path.as_ref(),
@@ -539,7 +539,7 @@ impl GetClient for AzureClient {
         let response = builder
             .with_get_options(options)
             .with_azure_authorization(&credential, &self.config.account)
-            .send_retry(&self.config.retry_config)
+            .send_retry(&self.config.request_ctx)
             .await
             .context(GetRequestSnafu {
                 path: path.as_ref(),
@@ -595,7 +595,7 @@ impl ListClient for AzureClient {
             .request(Method::GET, url)
             .query(&query)
             .with_azure_authorization(&credential, &self.config.account)
-            .send_retry(&self.config.retry_config)
+            .send_retry(&self.config.request_ctx)
             .await
             .context(ListRequestSnafu)?
             .bytes()

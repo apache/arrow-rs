@@ -25,7 +25,9 @@ use crate::aws::{
 };
 use crate::client::TokenCredentialProvider;
 use crate::config::ConfigValue;
-use crate::{ClientConfigKey, ClientOptions, Result, RetryConfig, StaticCredentialProvider};
+use crate::{
+    ClientConfigKey, ClientOptions, RequestContext, Result, RetryConfig, StaticCredentialProvider,
+};
 use itertools::Itertools;
 use reqwest::header::{HeaderMap, HeaderValue};
 use serde::{Deserialize, Serialize};
@@ -33,6 +35,7 @@ use snafu::{OptionExt, ResultExt, Snafu};
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
+use tokio::sync::Semaphore;
 use tracing::info;
 use url::Url;
 
@@ -134,8 +137,8 @@ pub struct AmazonS3Builder {
     token: Option<String>,
     /// Url
     url: Option<String>,
-    /// Retry config
-    retry_config: RetryConfig,
+    /// Request context
+    request_ctx: RequestContext,
     /// When set to true, fallback to IMDSv1
     imdsv1_fallback: ConfigValue<bool>,
     /// When set to true, virtual hosted style request has to be used
@@ -694,7 +697,7 @@ impl AmazonS3Builder {
 
     /// Set the retry configuration
     pub fn with_retry(mut self, retry_config: RetryConfig) -> Self {
-        self.retry_config = retry_config;
+        self.request_ctx.config = retry_config;
         self
     }
 
@@ -824,6 +827,12 @@ impl AmazonS3Builder {
         self
     }
 
+    /// Set the number of permits for the semaphore controlling concurrency.
+    pub fn with_sempahore_permits(mut self, permits: usize) -> Self {
+        self.request_ctx.semaphore = Arc::new(Semaphore::new(permits));
+        self
+    }
+
     /// Create a [`AmazonS3`] instance from the provided values,
     /// consuming `self`.
     pub fn build(mut self) -> Result<AmazonS3> {
@@ -883,13 +892,13 @@ impl AmazonS3Builder {
             Arc::new(TokenCredentialProvider::new(
                 token,
                 client,
-                self.retry_config.clone(),
+                self.request_ctx.clone(),
             )) as _
         } else if let Some(uri) = self.container_credentials_relative_uri {
             info!("Using Task credential provider");
             Arc::new(TaskCredentialProvider {
                 url: format!("http://169.254.170.2{uri}"),
-                retry: self.retry_config.clone(),
+                request_ctx: self.request_ctx.clone(),
                 // The instance metadata endpoint is access over HTTP
                 client: self.client_options.clone().with_allow_http(true).client()?,
                 cache: Default::default(),
@@ -907,7 +916,7 @@ impl AmazonS3Builder {
             Arc::new(TokenCredentialProvider::new(
                 token,
                 self.client_options.metadata_client()?,
-                self.retry_config.clone(),
+                self.request_ctx.clone(),
             )) as _
         };
 
@@ -926,7 +935,7 @@ impl AmazonS3Builder {
                             credentials: Arc::clone(&credentials),
                         },
                         self.client_options.client()?,
-                        self.retry_config.clone(),
+                        self.request_ctx.clone(),
                     )
                     .with_min_ttl(Duration::from_secs(60)), // Credentials only valid for 5 minutes
                 );
@@ -965,7 +974,7 @@ impl AmazonS3Builder {
             bucket_endpoint,
             credentials,
             session_provider,
-            retry_config: self.retry_config,
+            request_ctx: self.request_ctx,
             client_options: self.client_options,
             sign_payload: !self.unsigned_payload.get()?,
             skip_signature: self.skip_signature.get()?,

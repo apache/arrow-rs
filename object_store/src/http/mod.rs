@@ -44,7 +44,8 @@ use crate::http::client::Client;
 use crate::path::Path;
 use crate::{
     ClientConfigKey, ClientOptions, GetOptions, GetResult, ListResult, MultipartUpload, ObjectMeta,
-    ObjectStore, PutMode, PutMultipartOpts, PutOptions, PutPayload, PutResult, Result, RetryConfig,
+    ObjectStore, PutMode, PutMultipartOpts, PutOptions, PutPayload, PutResult, RequestContext,
+    Result, RetryConfig,
 };
 
 mod client;
@@ -200,7 +201,7 @@ impl ObjectStore for HttpStore {
 pub struct HttpBuilder {
     url: Option<String>,
     client_options: ClientOptions,
-    retry_config: RetryConfig,
+    request_ctx: RequestContext,
 }
 
 impl HttpBuilder {
@@ -217,7 +218,7 @@ impl HttpBuilder {
 
     /// Set the retry configuration
     pub fn with_retry(mut self, retry_config: RetryConfig) -> Self {
-        self.retry_config = retry_config;
+        self.request_ctx.config = retry_config;
         self
     }
 
@@ -239,7 +240,7 @@ impl HttpBuilder {
         let parsed = Url::parse(&url).context(UnableToParseUrlSnafu { url })?;
 
         Ok(HttpStore {
-            client: Client::new(parsed, self.client_options, self.retry_config)?,
+            client: Client::new(parsed, self.client_options, self.request_ctx)?,
         })
     }
 }

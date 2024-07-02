@@ -662,23 +662,23 @@ where
 mod cloud {
     use super::*;
     use crate::client::token::{TemporaryToken, TokenCache};
-    use crate::RetryConfig;
+    use crate::RequestContext;
 
     /// A [`CredentialProvider`] that uses [`Client`] to fetch temporary tokens
     #[derive(Debug)]
     pub struct TokenCredentialProvider<T: TokenProvider> {
         inner: T,
         client: Client,
-        retry: RetryConfig,
+        request_ctx: RequestContext,
         cache: TokenCache<Arc<T::Credential>>,
     }
 
     impl<T: TokenProvider> TokenCredentialProvider<T> {
-        pub fn new(inner: T, client: Client, retry: RetryConfig) -> Self {
+        pub fn new(inner: T, client: Client, request_ctx: RequestContext) -> Self {
             Self {
                 inner,
                 client,
-                retry,
+                request_ctx,
                 cache: Default::default(),
             }
         }
@@ -697,7 +697,7 @@ mod cloud {
 
         async fn get_credential(&self) -> Result<Arc<Self::Credential>> {
             self.cache
-                .get_or_insert_with(|| self.inner.fetch_token(&self.client, &self.retry))
+                .get_or_insert_with(|| self.inner.fetch_token(&self.client, &self.request_ctx))
                 .await
         }
     }
@@ -709,7 +709,7 @@ mod cloud {
         async fn fetch_token(
             &self,
             client: &Client,
-            retry: &RetryConfig,
+            request_ctx: &RequestContext,
         ) -> Result<TemporaryToken<Arc<Self::Credential>>>;
     }
 }
