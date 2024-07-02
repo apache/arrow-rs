@@ -724,7 +724,7 @@ struct LocalUpload {
 #[derive(Debug)]
 struct UploadState {
     dest: PathBuf,
-    file: Mutex<Option<File>>,
+    file: Mutex<File>,
 }
 
 impl LocalUpload {
@@ -732,7 +732,7 @@ impl LocalUpload {
         Self {
             state: Arc::new(UploadState {
                 dest,
-                file: Mutex::new(Some(file)),
+                file: Mutex::new(file),
             }),
             src: Some(src),
             offset: 0,
@@ -748,8 +748,7 @@ impl MultipartUpload for LocalUpload {
 
         let s = Arc::clone(&self.state);
         maybe_spawn_blocking(move || {
-            let mut f = s.file.lock();
-            let file = f.as_mut().context(AbortedSnafu)?;
+            let mut file = s.file.lock();
             file.seek(SeekFrom::Start(offset))
                 .context(SeekSnafu { path: &s.dest })?;
 
@@ -767,9 +766,9 @@ impl MultipartUpload for LocalUpload {
         let s = Arc::clone(&self.state);
         maybe_spawn_blocking(move || {
             // Ensure no inflight writes
-            let f = s.file.lock().take().context(AbortedSnafu)?;
+            let file = s.file.lock();
             std::fs::rename(&src, &s.dest).context(UnableToRenameFileSnafu)?;
-            let metadata = f.metadata().map_err(|e| Error::Metadata {
+            let metadata = file.metadata().map_err(|e| Error::Metadata {
                 source: e.into(),
                 path: src.to_string_lossy().to_string(),
             })?;
