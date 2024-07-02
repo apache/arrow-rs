@@ -114,6 +114,17 @@ fn build_decimal256_array(size: usize, precision: u8, scale: i8) -> ArrayRef {
     )
 }
 
+fn build_dict_array(size: usize) -> ArrayRef {
+    let values = StringArray::from_iter([
+        Some("small"),
+        Some("larger string more than 12 bytes"),
+        None,
+    ]);
+    let keys = UInt64Array::from_iter((0..size as u64).map(|v| v % 3));
+
+    Arc::new(DictionaryArray::new(keys, Arc::new(values)))
+}
+
 // cast array from specified primitive array type to desired data type
 fn cast_array(array: &ArrayRef, to_type: DataType) {
     criterion::black_box(cast(array, &to_type).unwrap());
@@ -137,6 +148,9 @@ fn add_benchmark(c: &mut Criterion) {
 
     let decimal128_array = build_decimal128_array(512, 10, 3);
     let decimal256_array = build_decimal256_array(512, 50, 3);
+
+    let dict_array = build_dict_array(10_000);
+    let string_view_array = cast(&dict_array, &DataType::Utf8View).unwrap();
 
     c.bench_function("cast int32 to int32 512", |b| {
         b.iter(|| cast_array(&i32_array, DataType::Int32))
@@ -236,6 +250,17 @@ fn add_benchmark(c: &mut Criterion) {
     });
     c.bench_function("cast decimal256 to decimal256 512 with same scale", |b| {
         b.iter(|| cast_array(&decimal256_array, DataType::Decimal256(60, 3)))
+    });
+    c.bench_function("cast dict to string view", |b| {
+        b.iter(|| cast_array(&dict_array, DataType::Utf8View))
+    });
+    c.bench_function("cast string view to dict", |b| {
+        b.iter(|| {
+            cast_array(
+                &string_view_array,
+                DataType::Dictionary(Box::new(DataType::UInt64), Box::new(DataType::Utf8)),
+            )
+        })
     });
 }
 

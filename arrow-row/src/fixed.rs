@@ -20,7 +20,8 @@ use crate::null_sentinel;
 use arrow_array::builder::BufferBuilder;
 use arrow_array::{ArrowPrimitiveType, BooleanArray, FixedSizeBinaryArray};
 use arrow_buffer::{
-    bit_util, i256, ArrowNativeType, Buffer, IntervalDayTime, IntervalMonthDayNano, MutableBuffer,
+    bit_util, i256, ArrowNativeType, BooleanBuffer, Buffer, IntervalDayTime, IntervalMonthDayNano,
+    MutableBuffer, NullBuffer,
 };
 use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::{DataType, SortOptions};
@@ -216,18 +217,20 @@ where
 ///
 /// - 1 byte `0` if null or `1` if valid
 /// - bytes of [`FixedLengthEncoding`]
-pub fn encode<T: FixedLengthEncoding, I: IntoIterator<Item = Option<T>>>(
+pub fn encode<T: FixedLengthEncoding>(
     data: &mut [u8],
     offsets: &mut [usize],
-    i: I,
+    values: &[T],
+    nulls: &NullBuffer,
     opts: SortOptions,
 ) {
-    for (offset, maybe_val) in offsets.iter_mut().skip(1).zip(i) {
+    for (value_idx, is_valid) in nulls.iter().enumerate() {
+        let offset = &mut offsets[value_idx + 1];
         let end_offset = *offset + T::ENCODED_LEN;
-        if let Some(val) = maybe_val {
+        if is_valid {
             let to_write = &mut data[*offset..end_offset];
             to_write[0] = 1;
-            let mut encoded = val.encode();
+            let mut encoded = values[value_idx].encode();
             if opts.descending {
                 // Flip bits to reverse order
                 encoded.as_mut().iter_mut().for_each(|v| *v = !*v)
@@ -236,6 +239,86 @@ pub fn encode<T: FixedLengthEncoding, I: IntoIterator<Item = Option<T>>>(
         } else {
             data[*offset] = null_sentinel(opts);
         }
+        *offset = end_offset;
+    }
+}
+
+/// Encoding for non-nullable primitive arrays.
+/// Iterates directly over the `values`, and skips NULLs-checking.
+pub fn encode_not_null<T: FixedLengthEncoding>(
+    data: &mut [u8],
+    offsets: &mut [usize],
+    values: &[T],
+    opts: SortOptions,
+) {
+    for (value_idx, val) in values.iter().enumerate() {
+        let offset = &mut offsets[value_idx + 1];
+        let end_offset = *offset + T::ENCODED_LEN;
+
+        let to_write = &mut data[*offset..end_offset];
+        to_write[0] = 1;
+        let mut encoded = val.encode();
+        if opts.descending {
+            // Flip bits to reverse order
+            encoded.as_mut().iter_mut().for_each(|v| *v = !*v)
+        }
+        to_write[1..].copy_from_slice(encoded.as_ref());
+
+        *offset = end_offset;
+    }
+}
+
+/// Boolean values are encoded as
+///
+/// - 1 byte `0` if null or `1` if valid
+/// - bytes of [`FixedLengthEncoding`]
+pub fn encode_boolean(
+    data: &mut [u8],
+    offsets: &mut [usize],
+    values: &BooleanBuffer,
+    nulls: &NullBuffer,
+    opts: SortOptions,
+) {
+    for (idx, is_valid) in nulls.iter().enumerate() {
+        let offset = &mut offsets[idx + 1];
+        let end_offset = *offset + bool::ENCODED_LEN;
+        if is_valid {
+            let to_write = &mut data[*offset..end_offset];
+            to_write[0] = 1;
+            let mut encoded = values.value(idx).encode();
+            if opts.descending {
+                // Flip bits to reverse order
+                encoded.as_mut().iter_mut().for_each(|v| *v = !*v)
+            }
+            to_write[1..].copy_from_slice(encoded.as_ref())
+        } else {
+            data[*offset] = null_sentinel(opts);
+        }
+        *offset = end_offset;
+    }
+}
+
+/// Encoding for non-nullable boolean arrays.
+/// Iterates directly over `values`, and skips NULLs-checking.
+pub fn encode_boolean_not_null(
+    data: &mut [u8],
+    offsets: &mut [usize],
+    values: &BooleanBuffer,
+    opts: SortOptions,
+) {
+    for (value_idx, val) in values.iter().enumerate() {
+        let offset = &mut offsets[value_idx + 1];
+        let end_offset = *offset + bool::ENCODED_LEN;
+
+        let to_write = &mut data[*offset..end_offset];
+        to_write[0] = 1;
+        let mut encoded = val.encode();
+        if opts.descending {
+            // Flip bits to reverse order
+            encoded.as_mut().iter_mut().for_each(|v| *v = !*v)
+        }
+        to_write[1..].copy_from_slice(encoded.as_ref());
+
         *offset = end_offset;
     }
 }

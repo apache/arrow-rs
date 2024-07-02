@@ -888,15 +888,15 @@ mod tests {
 
         test_neg_primitive::<Int32Type>(
             &[i32::MIN],
-            Err("Compute error: Overflow happened on: -2147483648"),
+            Err("Compute error: Overflow happened on: - -2147483648"),
         );
         test_neg_primitive::<Int64Type>(
             &[i64::MIN],
-            Err("Compute error: Overflow happened on: -9223372036854775808"),
+            Err("Compute error: Overflow happened on: - -9223372036854775808"),
         );
         test_neg_primitive::<DurationSecondType>(
             &[i64::MIN],
-            Err("Compute error: Overflow happened on: -9223372036854775808"),
+            Err("Compute error: Overflow happened on: - -9223372036854775808"),
         );
 
         let r = neg_wrapping(&Int32Array::from(vec![i32::MIN])).unwrap();
@@ -911,7 +911,7 @@ mod tests {
 
         assert_eq!(
             err,
-            "Compute error: Overflow happened on: -9223372036854775808"
+            "Compute error: Overflow happened on: - -9223372036854775808"
         );
 
         let a = Decimal128Array::from(vec![1, 3, -44, 2, 4])

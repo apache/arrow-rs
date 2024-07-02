@@ -126,23 +126,26 @@ PR be sure to run the following and check for lint issues:
 cargo +stable fmt --all -- --check
 ```
 
+## Breaking Changes
+
+Our [release schedule] allows breaking API changes only in major releases.
+This means that if your PR has a breaking API change, it should be marked as
+`api-change` and it will not be merged until development opens for the next
+major release. See [this ticket] for details.
+
+[release schedule]: README.md#release-versioning-and-schedule
+[this ticket]: https://github.com/apache/arrow-rs/issues/5907
+
 ## Clippy Lints
 
-We recommend using `clippy` for checking lints during development. While we do not yet enforce `clippy` checks, we recommend not introducing new `clippy` errors or warnings.
+We use `clippy` for checking lints during development, and CI runs `clippy` checks.
 
 Run the following to check for `clippy` lints:
 
 ```bash
 # run clippy with default settings
-cargo clippy
+cargo clippy --workspace --all-targets --all-features -- -D warnings
 
-```
-
-More comprehensive `clippy` checks can be run by adding flags:
-
-```bash
-# run clippy on the arrow crate with all features enabled, targeting all tests, examples, and benchmarks
-cargo clippy -p arrow --all-features --all-targets
 ```
 
 If you use Visual Studio Code with the `rust-analyzer` plugin, you can enable `clippy` to run each time you save a file. See https://users.rust-lang.org/t/how-to-use-clippy-in-vs-code-with-rust-analyzer/41881.

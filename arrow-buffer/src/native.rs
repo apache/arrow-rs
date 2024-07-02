@@ -22,11 +22,14 @@ mod private {
     pub trait Sealed {}
 }
 
-/// Trait expressing a Rust type that has the same in-memory representation
-/// as Arrow. This includes `i16`, `f32`, but excludes `bool` (which in arrow is represented in bits).
+/// Trait expressing a Rust type that has the same in-memory representation as
+/// Arrow.
 ///
-/// In little endian machines, types that implement [`ArrowNativeType`] can be memcopied to arrow buffers
-/// as is.
+/// This includes `i16`, `f32`, but excludes `bool` (which in arrow is
+/// represented in bits).
+///
+/// In little endian machines, types that implement [`ArrowNativeType`] can be
+/// memcopied to arrow buffers as is.
 ///
 /// # Transmute Safety
 ///

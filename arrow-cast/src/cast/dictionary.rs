@@ -85,8 +85,67 @@ pub(crate) fn dictionary_cast<K: ArrowDictionaryKeyType>(
 
             Ok(new_array)
         }
+        Utf8View => {
+            // `unpack_dictionary` can handle Utf8View/BinaryView types, but incurs unnecessary data copy of the value buffer.
+            // we handle it here to avoid the copy.
+            let dict_array = array
+                .as_dictionary::<K>()
+                .downcast_dict::<StringArray>()
+                .unwrap();
+
+            let string_view = view_from_dict_values::<K, StringViewType, GenericStringType<i32>>(
+                dict_array.values(),
+                dict_array.keys(),
+            );
+            Ok(Arc::new(string_view))
+        }
+        BinaryView => {
+            // `unpack_dictionary` can handle Utf8View/BinaryView types, but incurs unnecessary data copy of the value buffer.
+            // we handle it here to avoid the copy.
+            let dict_array = array
+                .as_dictionary::<K>()
+                .downcast_dict::<BinaryArray>()
+                .unwrap();
+
+            let binary_view = view_from_dict_values::<K, BinaryViewType, BinaryType>(
+                dict_array.values(),
+                dict_array.keys(),
+            );
+            Ok(Arc::new(binary_view))
+        }
         _ => unpack_dictionary::<K>(array, to_type, cast_options),
     }
+}
+
+fn view_from_dict_values<K: ArrowDictionaryKeyType, T: ByteViewType, V: ByteArrayType>(
+    array: &GenericByteArray<V>,
+    keys: &PrimitiveArray<K>,
+) -> GenericByteViewArray<T> {
+    let value_buffer = array.values();
+    let value_offsets = array.value_offsets();
+    let mut builder = GenericByteViewBuilder::<T>::with_capacity(keys.len());
+    builder.append_block(value_buffer.clone());
+    for i in keys.iter() {
+        match i {
+            Some(v) => {
+                let idx = v.to_usize().unwrap();
+
+                // Safety
+                // (1) The index is within bounds as they are offsets
+                // (2) The append_view is safe
+                unsafe {
+                    let offset = value_offsets.get_unchecked(idx).as_usize();
+                    let end = value_offsets.get_unchecked(idx + 1).as_usize();
+                    let length = end - offset;
+                    builder.append_view_unchecked(0, offset as u32, length as u32)
+                }
+            }
+            None => {
+                builder.append_null();
+            }
+        }
+    }
+    builder.finish()
 }
 
 // Unpack a dictionary where the keys are of type <K> into a flattened array of type to_type
@@ -129,10 +188,34 @@ pub(crate) fn cast_to_dictionary<K: ArrowDictionaryKeyType>(
         Decimal256(_, _) => {
             pack_numeric_to_dictionary::<K, Decimal256Type>(array, dict_value_type, cast_options)
         }
-        Utf8 => pack_byte_to_dictionary::<K, GenericStringType<i32>>(array, cast_options),
-        LargeUtf8 => pack_byte_to_dictionary::<K, GenericStringType<i64>>(array, cast_options),
-        Binary => pack_byte_to_dictionary::<K, GenericBinaryType<i32>>(array, cast_options),
-        LargeBinary => pack_byte_to_dictionary::<K, GenericBinaryType<i64>>(array, cast_options),
+        Utf8 => {
+            // If the input is a view type, we can avoid casting (thus copying) the data
+            if array.data_type() == &DataType::Utf8View {
+                return string_view_to_dictionary::<K, i32>(array);
+            }
+            pack_byte_to_dictionary::<K, GenericStringType<i32>>(array, cast_options)
+        }
+        LargeUtf8 => {
+            // If the input is a view type, we can avoid casting (thus copying) the data
+            if array.data_type() == &DataType::Utf8View {
+                return string_view_to_dictionary::<K, i64>(array);
+            }
+            pack_byte_to_dictionary::<K, GenericStringType<i64>>(array, cast_options)
+        }
+        Binary => {
+            // If the input is a view type, we can avoid casting (thus copying) the data
+            if array.data_type() == &DataType::BinaryView {
+                return binary_view_to_dictionary::<K, i32>(array);
+            }
+            pack_byte_to_dictionary::<K, GenericBinaryType<i32>>(array, cast_options)
+        }
+        LargeBinary => {
+            // If the input is a view type, we can avoid casting (thus copying) the data
+            if array.data_type() == &DataType::BinaryView {
+                return binary_view_to_dictionary::<K, i64>(array);
+            }
+            pack_byte_to_dictionary::<K, GenericBinaryType<i64>>(array, cast_options)
+        }
         _ => Err(ArrowError::CastError(format!(
             "Unsupported output type for dictionary packing: {dict_value_type:?}"
         ))),
@@ -164,6 +247,58 @@ where
             b.append(values.value(i))?;
         }
     }
+    Ok(Arc::new(b.finish()))
+}
+
+pub(crate) fn string_view_to_dictionary<K, O: OffsetSizeTrait>(
+    array: &dyn Array,
+) -> Result<ArrayRef, ArrowError>
+where
+    K: ArrowDictionaryKeyType,
+{
+    let mut b = GenericByteDictionaryBuilder::<K, GenericStringType<O>>::with_capacity(
+        array.len(),
+        1024,
+        1024,
+    );
+    let string_view = array.as_any().downcast_ref::<StringViewArray>().unwrap();
+    for v in string_view.iter() {
+        match v {
+            Some(v) => {
+                b.append(v)?;
+            }
+            None => {
+                b.append_null();
+            }
+        }
+    }
+
+    Ok(Arc::new(b.finish()))
+}
+
+pub(crate) fn binary_view_to_dictionary<K, O: OffsetSizeTrait>(
+    array: &dyn Array,
+) -> Result<ArrayRef, ArrowError>
+where
+    K: ArrowDictionaryKeyType,
+{
+    let mut b = GenericByteDictionaryBuilder::<K, GenericBinaryType<O>>::with_capacity(
+        array.len(),
+        1024,
+        1024,
+    );
+    let binary_view = array.as_any().downcast_ref::<BinaryViewArray>().unwrap();
+    for v in binary_view.iter() {
+        match v {
+            Some(v) => {
+                b.append(v)?;
+            }
+            None => {
+                b.append_null();
+            }
+        }
+    }
+
     Ok(Arc::new(b.finish()))
 }
 

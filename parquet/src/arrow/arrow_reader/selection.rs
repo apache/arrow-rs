@@ -81,6 +81,13 @@ impl RowSelector {
 ///
 /// let actual: Vec<RowSelector> = selection.into();
 /// assert_eq!(actual, expected);
+///
+/// // you can also create a selection from consecutive ranges
+/// let ranges = vec![5..10, 10..15];
+/// let selection =
+///   RowSelection::from_consecutive_ranges(ranges.into_iter(), 20);
+/// let actual: Vec<RowSelector> = selection.into();
+/// assert_eq!(actual, expected);
 /// ```
 ///
 /// A [`RowSelection`] maintains the following invariants:
@@ -115,7 +122,7 @@ impl RowSelection {
     }
 
     /// Creates a [`RowSelection`] from an iterator of consecutive ranges to keep
-    pub(crate) fn from_consecutive_ranges<I: Iterator<Item = Range<usize>>>(
+    pub fn from_consecutive_ranges<I: Iterator<Item = Range<usize>>>(
         ranges: I,
         total_rows: usize,
     ) -> Self {
@@ -1136,7 +1143,7 @@ mod tests {
     }
 
     #[test]
-    fn test_empty_ranges() {
+    fn test_from_ranges() {
         let ranges = [1..3, 4..6, 6..6, 8..8, 9..10];
         let selection = RowSelection::from_consecutive_ranges(ranges.into_iter(), 10);
         assert_eq!(
@@ -1149,7 +1156,13 @@ mod tests {
                 RowSelector::skip(3),
                 RowSelector::select(1)
             ]
-        )
+        );
+
+        let out_of_order_ranges = [1..3, 8..10, 4..7];
+        let result = std::panic::catch_unwind(|| {
+            RowSelection::from_consecutive_ranges(out_of_order_ranges.into_iter(), 10)
+        });
+        assert!(result.is_err());
     }
 
     #[test]

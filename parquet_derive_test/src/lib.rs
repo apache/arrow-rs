@@ -66,6 +66,25 @@ struct APartiallyCompleteRecord {
     pub byte_vec: Vec<u8>,
 }
 
+// This struct has OPTIONAL columns
+// If these fields are guaranteed to be valid
+// we can load this struct into APartiallyCompleteRecord
+#[derive(PartialEq, ParquetRecordWriter, Debug)]
+struct APartiallyOptionalRecord {
+    pub bool: bool,
+    pub string: String,
+    pub maybe_i16: Option<i16>,
+    pub maybe_i32: Option<i32>,
+    pub maybe_u64: Option<u64>,
+    pub isize: isize,
+    pub float: f32,
+    pub double: f64,
+    pub now: chrono::NaiveDateTime,
+    pub date: chrono::NaiveDate,
+    pub uuid: uuid::Uuid,
+    pub byte_vec: Vec<u8>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -141,9 +160,9 @@ mod tests {
             maybe_usize: Some(4456),
             isize: -365,
             float: 3.5,
-            double: std::f64::NAN,
+            double: f64::NAN,
             maybe_float: None,
-            maybe_double: Some(std::f64::MAX),
+            maybe_double: Some(f64::MAX),
             borrowed_maybe_a_string: &maybe_a_string,
             borrowed_maybe_a_str: &maybe_a_str,
             now: chrono::Utc::now().naive_local(),
@@ -180,7 +199,7 @@ mod tests {
             u64: 4563424,
             isize: -365,
             float: 3.5,
-            double: std::f64::NAN,
+            double: f64::NAN,
             now: chrono::Utc::now().naive_local(),
             date: chrono::naive::NaiveDate::from_ymd_opt(2015, 3, 14).unwrap(),
             uuid: uuid::Uuid::new_v4(),
@@ -216,6 +235,47 @@ mod tests {
         drs[0].double = 0.;
 
         assert_eq!(drs[0], out[0]);
+    }
+
+    #[test]
+    fn test_parquet_derive_read_optional_but_valid_column() {
+        let file = get_temp_file("test_parquet_derive_read_optional", &[]);
+        let drs: Vec<APartiallyOptionalRecord> = vec![APartiallyOptionalRecord {
+            bool: true,
+            string: "a string".into(),
+            maybe_i16: Some(-45),
+            maybe_i32: Some(456),
+            maybe_u64: Some(4563424),
+            isize: -365,
+            float: 3.5,
+            double: f64::NAN,
+            now: chrono::Utc::now().naive_local(),
+            date: chrono::naive::NaiveDate::from_ymd_opt(2015, 3, 14).unwrap(),
+            uuid: uuid::Uuid::new_v4(),
+            byte_vec: vec![0x65, 0x66, 0x67],
+        }];
+
+        let generated_schema = drs.as_slice().schema().unwrap();
+
+        let props = Default::default();
+        let mut writer =
+            SerializedFileWriter::new(file.try_clone().unwrap(), generated_schema, props).unwrap();
+
+        let mut row_group = writer.next_row_group().unwrap();
+        drs.as_slice().write_to_row_group(&mut row_group).unwrap();
+        row_group.close().unwrap();
+        writer.close().unwrap();
+
+        use parquet::file::{reader::FileReader, serialized_reader::SerializedFileReader};
+        let reader = SerializedFileReader::new(file).unwrap();
+        let mut out: Vec<APartiallyCompleteRecord> = Vec::new();
+
+        let mut row_group = reader.get_row_group(0).unwrap();
+        out.read_from_row_group(&mut *row_group, 1).unwrap();
+
+        assert_eq!(drs[0].maybe_i16.unwrap(), out[0].i16);
+        assert_eq!(drs[0].maybe_i32.unwrap(), out[0].i32);
+        assert_eq!(drs[0].maybe_u64.unwrap(), out[0].u64);
     }
 
     /// Returns file handle for a temp file in 'target' directory with a provided content

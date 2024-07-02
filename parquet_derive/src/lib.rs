@@ -39,9 +39,13 @@ mod parquet_field;
 ///
 /// Example:
 ///
-/// ```ignore
+/// ```no_run
+/// use parquet_derive::ParquetRecordWriter;
+/// use std::io::{self, Write};
 /// use parquet::file::properties::WriterProperties;
 /// use parquet::file::writer::SerializedFileWriter;
+/// use parquet::record::RecordWriter;
+/// use std::fs::File;
 ///
 /// use std::sync::Arc;
 ///
@@ -62,14 +66,15 @@ mod parquet_field;
 ///       a_str: "I'm false"
 ///     }
 ///   ];
+///  let file = File::open("some_file.parquet").unwrap();
 ///
-///  let schema = samples.as_slice().schema();
+///  let schema = samples.as_slice().schema().unwrap();
 ///
 ///  let mut writer = SerializedFileWriter::new(file, schema, Default::default()).unwrap();
 ///
 ///  let mut row_group = writer.next_row_group().unwrap();
 ///  samples.as_slice().write_to_row_group(&mut row_group).unwrap();
-///  writer.close_row_group(row_group).unwrap();
+///  row_group.close().unwrap();
 ///  writer.close().unwrap();
 /// }
 /// ```
@@ -148,9 +153,11 @@ pub fn parquet_record_writer(input: proc_macro::TokenStream) -> proc_macro::Toke
 ///
 /// Example:
 ///
-/// ```ignore
+/// ```no_run
+/// use parquet::record::RecordReader;
 /// use parquet::file::{serialized_reader::SerializedFileReader, reader::FileReader};
 /// use parquet_derive::{ParquetRecordReader};
+/// use std::fs::File;
 ///
 /// #[derive(ParquetRecordReader)]
 /// struct ACompleteRecord {
@@ -160,6 +167,7 @@ pub fn parquet_record_writer(input: proc_macro::TokenStream) -> proc_macro::Toke
 ///
 /// pub fn read_some_records() -> Vec<ACompleteRecord> {
 ///   let mut samples: Vec<ACompleteRecord> = Vec::new();
+///   let file = File::open("some_file.parquet").unwrap();
 ///
 ///   let reader = SerializedFileReader::new(file).unwrap();
 ///   let mut row_group = reader.get_row_group(0).unwrap();

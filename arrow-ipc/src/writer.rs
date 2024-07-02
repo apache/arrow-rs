@@ -59,6 +59,11 @@ pub struct IpcWriteOptions {
     /// Compression, if desired. Will result in a runtime error
     /// if the corresponding feature is not enabled
     batch_compression_type: Option<crate::CompressionType>,
+    /// Flag indicating whether the writer should preserver the dictionary IDs defined in the
+    /// schema or generate unique dictionary IDs internally during encoding.
+    ///
+    /// Defaults to `true`
+    preserve_dict_id: bool,
 }
 
 impl IpcWriteOptions {
@@ -81,7 +86,7 @@ impl IpcWriteOptions {
         }
         Ok(self)
     }
-    /// Try create IpcWriteOptions, checking for incompatible settings
+    /// Try to create IpcWriteOptions, checking for incompatible settings
     pub fn try_new(
         alignment: usize,
         write_legacy_ipc_format: bool,
@@ -106,6 +111,7 @@ impl IpcWriteOptions {
                 write_legacy_ipc_format,
                 metadata_version,
                 batch_compression_type: None,
+                preserve_dict_id: true,
             }),
             crate::MetadataVersion::V5 => {
                 if write_legacy_ipc_format {
@@ -118,6 +124,7 @@ impl IpcWriteOptions {
                         write_legacy_ipc_format,
                         metadata_version,
                         batch_compression_type: None,
+                        preserve_dict_id: true,
                     })
                 }
             }
@@ -125,6 +132,22 @@ impl IpcWriteOptions {
                 "Unsupported crate::MetadataVersion {z:?}"
             ))),
         }
+    }
+
+    pub fn preserve_dict_id(&self) -> bool {
+        self.preserve_dict_id
+    }
+
+    /// Set whether the IPC writer should preserve the dictionary IDs in the schema
+    /// or auto-assign unique dictionary IDs during encoding (defaults to true)
+    ///
+    /// If this option is true,  the application must handle assigning ids
+    /// to the dictionary batches in order to encode them correctly
+    ///
+    /// The default will change to `false`  in future releases
+    pub fn with_preserve_dict_id(mut self, preserve_dict_id: bool) -> Self {
+        self.preserve_dict_id = preserve_dict_id;
+        self
     }
 }
 
@@ -135,6 +158,7 @@ impl Default for IpcWriteOptions {
             write_legacy_ipc_format: false,
             metadata_version: crate::MetadataVersion::V5,
             batch_compression_type: None,
+            preserve_dict_id: true,
         }
     }
 }
@@ -163,7 +187,7 @@ impl Default for IpcWriteOptions {
 ///
 /// // encode the batch into zero or more encoded dictionaries
 /// // and the data for the actual array.
-/// let data_gen = IpcDataGenerator {};
+/// let data_gen = IpcDataGenerator::default();
 /// let (encoded_dictionaries, encoded_message) = data_gen
 ///   .encoded_batch(&batch, &mut dictionary_tracker, &options)
 ///   .unwrap();
@@ -198,12 +222,13 @@ impl IpcDataGenerator {
         }
     }
 
-    fn _encode_dictionaries(
+    fn _encode_dictionaries<I: Iterator<Item = i64>>(
         &self,
         column: &ArrayRef,
         encoded_dictionaries: &mut Vec<EncodedData>,
         dictionary_tracker: &mut DictionaryTracker,
         write_options: &IpcWriteOptions,
+        dict_id: &mut I,
     ) -> Result<(), ArrowError> {
         match column.data_type() {
             DataType::Struct(fields) => {
@@ -215,6 +240,7 @@ impl IpcDataGenerator {
                         encoded_dictionaries,
                         dictionary_tracker,
                         write_options,
+                        dict_id,
                     )?;
                 }
             }
@@ -235,6 +261,7 @@ impl IpcDataGenerator {
                     encoded_dictionaries,
                     dictionary_tracker,
                     write_options,
+                    dict_id,
                 )?;
             }
             DataType::List(field) => {
@@ -245,6 +272,7 @@ impl IpcDataGenerator {
                     encoded_dictionaries,
                     dictionary_tracker,
                     write_options,
+                    dict_id,
                 )?;
             }
             DataType::LargeList(field) => {
@@ -255,6 +283,7 @@ impl IpcDataGenerator {
                     encoded_dictionaries,
                     dictionary_tracker,
                     write_options,
+                    dict_id,
                 )?;
             }
             DataType::FixedSizeList(field, _) => {
@@ -268,6 +297,7 @@ impl IpcDataGenerator {
                     encoded_dictionaries,
                     dictionary_tracker,
                     write_options,
+                    dict_id,
                 )?;
             }
             DataType::Map(field, _) => {
@@ -285,6 +315,7 @@ impl IpcDataGenerator {
                     encoded_dictionaries,
                     dictionary_tracker,
                     write_options,
+                    dict_id,
                 )?;
 
                 // values
@@ -294,6 +325,7 @@ impl IpcDataGenerator {
                     encoded_dictionaries,
                     dictionary_tracker,
                     write_options,
+                    dict_id,
                 )?;
             }
             DataType::Union(fields, _) => {
@@ -306,6 +338,7 @@ impl IpcDataGenerator {
                         encoded_dictionaries,
                         dictionary_tracker,
                         write_options,
+                        dict_id,
                     )?;
                 }
             }
@@ -315,19 +348,24 @@ impl IpcDataGenerator {
         Ok(())
     }
 
-    fn encode_dictionaries(
+    fn encode_dictionaries<I: Iterator<Item = i64>>(
         &self,
         field: &Field,
         column: &ArrayRef,
         encoded_dictionaries: &mut Vec<EncodedData>,
         dictionary_tracker: &mut DictionaryTracker,
         write_options: &IpcWriteOptions,
+        dict_id_seq: &mut I,
     ) -> Result<(), ArrowError> {
         match column.data_type() {
             DataType::Dictionary(_key_type, _value_type) => {
-                let dict_id = field
-                    .dict_id()
-                    .expect("All Dictionary types have `dict_id`");
+                let dict_id = dict_id_seq
+                    .next()
+                    .or_else(|| field.dict_id())
+                    .ok_or_else(|| {
+                        ArrowError::IpcError(format!("no dict id for field {}", field.name()))
+                    })?;
+
                 let dict_data = column.to_data();
                 let dict_values = &dict_data.child_data()[0];
 
@@ -338,6 +376,7 @@ impl IpcDataGenerator {
                     encoded_dictionaries,
                     dictionary_tracker,
                     write_options,
+                    dict_id_seq,
                 )?;
 
                 let emit = dictionary_tracker.insert(dict_id, column)?;
@@ -355,6 +394,7 @@ impl IpcDataGenerator {
                 encoded_dictionaries,
                 dictionary_tracker,
                 write_options,
+                dict_id_seq,
             )?,
         }
 
@@ -373,6 +413,8 @@ impl IpcDataGenerator {
         let schema = batch.schema();
         let mut encoded_dictionaries = Vec::with_capacity(schema.all_fields().len());
 
+        let mut dict_id = dictionary_tracker.dict_ids.clone().into_iter();
+
         for (i, field) in schema.fields().iter().enumerate() {
             let column = batch.column(i);
             self.encode_dictionaries(
@@ -381,6 +423,7 @@ impl IpcDataGenerator {
                 &mut encoded_dictionaries,
                 dictionary_tracker,
                 write_options,
+                &mut dict_id,
             )?;
         }
 
@@ -671,18 +714,71 @@ fn into_zero_offset_run_array<R: RunEndIndexType>(
 /// isn't allowed in the `FileWriter`.
 pub struct DictionaryTracker {
     written: HashMap<i64, ArrayData>,
+    dict_ids: Vec<i64>,
     error_on_replacement: bool,
+    preserve_dict_id: bool,
 }
 
 impl DictionaryTracker {
-    /// Create a new [`DictionaryTracker`]. If `error_on_replacement`
+    /// Create a new [`DictionaryTracker`].
+    ///
+    /// If `error_on_replacement`
     /// is true, an error will be generated if an update to an
     /// existing dictionary is attempted.
+    ///
+    /// If `preserve_dict_id` is true, the dictionary ID defined in the schema
+    /// is used, otherwise a unique dictionary ID will be assigned by incrementing
+    /// the last seen dictionary ID (or using `0` if no other dictionary IDs have been
+    /// seen)
     pub fn new(error_on_replacement: bool) -> Self {
         Self {
             written: HashMap::new(),
+            dict_ids: Vec::new(),
             error_on_replacement,
+            preserve_dict_id: true,
         }
+    }
+
+    /// Create a new [`DictionaryTracker`].
+    ///
+    /// If `error_on_replacement`
+    /// is true, an error will be generated if an update to an
+    /// existing dictionary is attempted.
+    pub fn new_with_preserve_dict_id(error_on_replacement: bool, preserve_dict_id: bool) -> Self {
+        Self {
+            written: HashMap::new(),
+            dict_ids: Vec::new(),
+            error_on_replacement,
+            preserve_dict_id,
+        }
+    }
+
+    /// Set the dictionary ID for `field`.
+    ///
+    /// If `preserve_dict_id` is true, this will return the `dict_id` in `field` (or panic if `field` does
+    /// not have a `dict_id` defined).
+    ///
+    /// If `preserve_dict_id` is false, this will return the value of the last `dict_id` assigned incremented by 1
+    /// or 0 in the case where no dictionary IDs have yet been assigned
+    pub fn set_dict_id(&mut self, field: &Field) -> i64 {
+        let next = if self.preserve_dict_id {
+            field.dict_id().expect("no dict_id in field")
+        } else {
+            self.dict_ids
+                .last()
+                .copied()
+                .map(|i| i + 1)
+                .unwrap_or_default()
+        };
+
+        self.dict_ids.push(next);
+        next
+    }
+
+    /// Return the sequence of dictionary IDs in the order they should be observed while
+    /// traversing the schema
+    pub fn dict_id(&mut self) -> &[i64] {
+        &self.dict_ids
     }
 
     /// Keep track of the dictionary with the given ID and values. Behavior:
@@ -771,6 +867,7 @@ impl<W: Write> FileWriter<W> {
         // write the schema, set the written bytes to the schema + header
         let encoded_message = data_gen.schema_to_bytes(schema, &write_options);
         let (meta, data) = write_message(&mut writer, encoded_message, &write_options)?;
+        let preserve_dict_id = write_options.preserve_dict_id;
         Ok(Self {
             writer,
             write_options,
@@ -779,7 +876,10 @@ impl<W: Write> FileWriter<W> {
             dictionary_blocks: vec![],
             record_blocks: vec![],
             finished: false,
-            dictionary_tracker: DictionaryTracker::new(true),
+            dictionary_tracker: DictionaryTracker::new_with_preserve_dict_id(
+                true,
+                preserve_dict_id,
+            ),
             custom_metadata: HashMap::new(),
             data_gen,
         })
@@ -936,11 +1036,15 @@ impl<W: Write> StreamWriter<W> {
         // write the schema, set the written bytes to the schema
         let encoded_message = data_gen.schema_to_bytes(schema, &write_options);
         write_message(&mut writer, encoded_message, &write_options)?;
+        let preserve_dict_id = write_options.preserve_dict_id;
         Ok(Self {
             writer,
             write_options,
             finished: false,
-            dictionary_tracker: DictionaryTracker::new(false),
+            dictionary_tracker: DictionaryTracker::new_with_preserve_dict_id(
+                false,
+                preserve_dict_id,
+            ),
             data_gen,
         })
     }
@@ -1742,7 +1846,7 @@ mod tests {
         let array1 = NullArray::new(32);
         let array2 = Int32Array::from(vec![1; 32]);
         let array3 = NullArray::new(32);
-        let array4 = Float64Array::from(vec![std::f64::NAN; 32]);
+        let array4 = Float64Array::from(vec![f64::NAN; 32]);
         let batch = RecordBatch::try_new(
             Arc::new(schema.clone()),
             vec![
@@ -1817,11 +1921,12 @@ mod tests {
         let batch = RecordBatch::try_new(schema, vec![Arc::new(union)]).unwrap();
 
         let gen = IpcDataGenerator {};
-        let mut dict_tracker = DictionaryTracker::new(false);
+        let mut dict_tracker = DictionaryTracker::new_with_preserve_dict_id(false, true);
         gen.encoded_batch(&batch, &mut dict_tracker, &Default::default())
             .unwrap();
 
-        // Dictionary with id 2 should have been written to the dict tracker
+        // The encoder will assign dict IDs itself to ensure uniqueness and ignore the dict ID in the schema
+        // so we expect the dict will be keyed to 0
         assert!(dict_tracker.written.contains_key(&2));
     }
 
@@ -1852,11 +1957,10 @@ mod tests {
         let batch = RecordBatch::try_new(schema, vec![struct_array]).unwrap();
 
         let gen = IpcDataGenerator {};
-        let mut dict_tracker = DictionaryTracker::new(false);
+        let mut dict_tracker = DictionaryTracker::new_with_preserve_dict_id(false, true);
         gen.encoded_batch(&batch, &mut dict_tracker, &Default::default())
             .unwrap();
 
-        // Dictionary with id 2 should have been written to the dict tracker
         assert!(dict_tracker.written.contains_key(&2));
     }
 

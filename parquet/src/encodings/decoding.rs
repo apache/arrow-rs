@@ -1624,14 +1624,14 @@ mod tests {
     #[test]
     fn test_delta_bit_packed_int64_min_max() {
         let block_data = vec![
-            i64::min_value(),
-            i64::max_value(),
-            i64::min_value(),
-            i64::max_value(),
-            i64::min_value(),
-            i64::max_value(),
-            i64::min_value(),
-            i64::max_value(),
+            i64::MIN,
+            i64::MAX,
+            i64::MIN,
+            i64::MAX,
+            i64::MIN,
+            i64::MAX,
+            i64::MIN,
+            i64::MAX,
         ];
         test_delta_bit_packed_decode::<Int64Type>(vec![block_data]);
     }

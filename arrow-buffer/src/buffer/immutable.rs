@@ -71,6 +71,19 @@ impl Buffer {
         }
     }
 
+    /// Returns the offset, in bytes, of `Self::ptr` to `Self::data`
+    ///
+    /// self.ptr and self.data can be different after slicing or advancing the buffer.
+    pub fn ptr_offset(&self) -> usize {
+        // Safety: `ptr` is always in bounds of `data`.
+        unsafe { self.ptr.offset_from(self.data.ptr().as_ptr()) as usize }
+    }
+
+    /// Returns the pointer to the start of the buffer without the offset.
+    pub fn data_ptr(&self) -> NonNull<u8> {
+        self.data.ptr()
+    }
+
     /// Create a [`Buffer`] from the provided [`Vec`] without copying
     #[inline]
     pub fn from_vec<T: ArrowNativeType>(vec: Vec<T>) -> Self {

@@ -23,7 +23,7 @@ use crate::delta::{
 use crate::temporal_conversions::as_datetime_with_timezone;
 use crate::timezone::Tz;
 use crate::{ArrowNativeTypeOp, OffsetSizeTrait};
-use arrow_buffer::{i256, Buffer, IntervalDayTime, IntervalMonthDayNano, OffsetBuffer};
+use arrow_buffer::{i256, Buffer, OffsetBuffer};
 use arrow_data::decimal::{validate_decimal256_precision, validate_decimal_precision};
 use arrow_data::{validate_binary_view, validate_string_view};
 use arrow_schema::{
@@ -36,6 +36,9 @@ use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::ops::{Add, Sub};
 
+// re-export types so that they can be used without importing arrow_buffer explicitly
+pub use arrow_buffer::{IntervalDayTime, IntervalMonthDayNano};
+
 // BooleanType is special: its bit-width is not the size of the primitive type, and its `index`
 // operation assumes bit-packing.
 /// A boolean datatype
@@ -47,9 +50,11 @@ impl BooleanType {
     pub const DATA_TYPE: DataType = DataType::Boolean;
 }
 
-/// Trait bridging the dynamic-typed nature of Arrow (via [`DataType`]) with the
-/// static-typed nature of rust types ([`ArrowNativeType`]) for all types that implement [`ArrowNativeType`].
+/// Trait for [primitive values], bridging the dynamic-typed nature of Arrow
+/// (via [`DataType`]) with the static-typed nature of rust types
+/// ([`ArrowNativeType`]) for all types that implement [`ArrowNativeType`].
 ///
+/// [primitive values]: https://arrow.apache.org/docs/format/Columnar.html#fixed-size-primitive-layout
 /// [`ArrowNativeType`]: arrow_buffer::ArrowNativeType
 pub trait ArrowPrimitiveType: primitive::PrimitiveTypeSealed + 'static {
     /// Corresponding Rust native type for the primitive type.
@@ -216,84 +221,19 @@ make_type!(
     IntervalYearMonthType,
     i32,
     DataType::Interval(IntervalUnit::YearMonth),
-    "A “calendar” interval stored as the number of whole months."
+    "A 32-bit “calendar” interval type representing the number of whole months."
 );
 make_type!(
     IntervalDayTimeType,
     IntervalDayTime,
     DataType::Interval(IntervalUnit::DayTime),
-    r#"A “calendar” interval type in days and milliseconds.
-
-## Representation
-This type is stored as a single 64 bit integer, interpreted as two i32 fields:
-1. the number of elapsed days
-2. The number of milliseconds (no leap seconds),
-
-```text
- ┌──────────────┬──────────────┐
- │     Days     │ Milliseconds │
- │  (32 bits)   │  (32 bits)   │
- └──────────────┴──────────────┘
- 0              31            63 bit offset
-```
-Please see the [Arrow Spec](https://github.com/apache/arrow/blob/081b4022fe6f659d8765efc82b3f4787c5039e3c/format/Schema.fbs#L406-L408) for more details
-
-## Note on Comparing and Ordering for Calendar Types
-
-Values of `IntervalDayTimeType` are compared using their binary representation,
-which can lead to surprising results. Please see the description of ordering on
-[`IntervalMonthDayNanoType`] for more details
-"#
+    "A “calendar” interval type representing days and milliseconds. See [`IntervalDayTime`] for more details."
 );
 make_type!(
     IntervalMonthDayNanoType,
     IntervalMonthDayNano,
     DataType::Interval(IntervalUnit::MonthDayNano),
-    r#"A “calendar” interval type in months, days, and nanoseconds.
-
-## Representation
-This type is stored as a single 128 bit integer,
-interpreted as three different signed integral fields:
-
-1. The number of months (32 bits)
-2. The number days (32 bits)
-2. The number of nanoseconds (64 bits).
-
-Nanoseconds does not allow for leap seconds.
-Each field is independent (e.g. there is no constraint that the quantity of
-nanoseconds represents less than a day's worth of time).
-
-```text
-┌───────────────┬─────────────┬─────────────────────────────┐
-│     Months    │     Days    │            Nanos            │
-│   (32 bits)   │  (32 bits)  │          (64 bits)          │
-└───────────────┴─────────────┴─────────────────────────────┘
-  0            32             64                           128 bit offset
-```
-Please see the [Arrow Spec](https://github.com/apache/arrow/blob/081b4022fe6f659d8765efc82b3f4787c5039e3c/format/Schema.fbs#L409-L415) for more details
-
-## Note on Comparing and Ordering for Calendar Types
-Values of `IntervalMonthDayNanoType` are compared using their binary representation,
-which can lead to surprising results.
-
-Spans of time measured in calendar units are not fixed in absolute size (e.g.
-number of seconds) which makes defining comparisons and ordering non trivial.
-For example `1 month` is 28 days for February but `1 month` is 31 days
-in December.
-
-This makes the seemingly simple operation of comparing two intervals
-complicated in practice. For example is `1 month` more or less than `30 days`? The
-answer depends on what month you are talking about.
-
-This crate defines comparisons for calendar types using their binary
-representation which is fast and efficient, but leads
-to potentially surprising results.
-
-For example a
-`IntervalMonthDayNano` of `1 month` will compare as **greater** than a
-`IntervalMonthDayNano` of `100 days` because the binary representation of `1 month`
-is larger than the binary representation of 100 days.
-"#
+    r"A “calendar” interval type representing months, days, and nanoseconds. See [`IntervalMonthDayNano`] for more details."
 );
 make_type!(
     DurationSecondType,
