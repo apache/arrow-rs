@@ -31,7 +31,7 @@ use std::io::{BufReader, Read, Seek, SeekFrom};
 use std::sync::Arc;
 
 use arrow_array::*;
-use arrow_buffer::{ArrowNativeType, Buffer, MutableBuffer, ScalarBuffer};
+use arrow_buffer::{ArrowNativeType, BooleanBuffer, Buffer, MutableBuffer, ScalarBuffer};
 use arrow_data::ArrayData;
 use arrow_schema::*;
 
@@ -152,7 +152,15 @@ fn create_array(
                 struct_arrays.push((struct_field.clone(), child));
             }
             let null_count = struct_node.null_count() as usize;
-            let struct_array = if null_count > 0 {
+            let struct_array = if struct_arrays.is_empty() {
+                // `StructArray::from` can't infer the correct row count
+                // if we have zero fields
+                let len = struct_node.length() as usize;
+                StructArray::new_empty_fields(
+                    len,
+                    (null_count > 0).then(|| BooleanBuffer::new(null_buffer, 0, len).into()),
+                )
+            } else if null_count > 0 {
                 // create struct array from fields, arrays and null data
                 StructArray::from((struct_arrays, null_buffer))
             } else {
@@ -609,7 +617,7 @@ fn read_dictionary_impl(
     let id = batch.id();
     let fields_using_this_dictionary = schema.fields_with_dict_id(id);
     let first_field = fields_using_this_dictionary.first().ok_or_else(|| {
-        ArrowError::InvalidArgumentError("dictionary id not found in schema".to_string())
+        ArrowError::InvalidArgumentError(format!("dictionary id {id} not found in schema"))
     })?;
 
     // As the dictionary batch does not contain the type of the
@@ -635,7 +643,7 @@ fn read_dictionary_impl(
         _ => None,
     }
     .ok_or_else(|| {
-        ArrowError::InvalidArgumentError("dictionary id not found in schema".to_string())
+        ArrowError::InvalidArgumentError(format!("dictionary id {id} not found in schema"))
     })?;
 
     // We don't currently record the isOrdered field. This could be general
@@ -1361,6 +1369,7 @@ mod tests {
     use crate::root_as_message;
     use arrow_array::builder::{PrimitiveRunBuilder, UnionBuilder};
     use arrow_array::types::*;
+    use arrow_buffer::NullBuffer;
     use arrow_data::ArrayDataBuilder;
 
     fn create_test_projection_schema() -> Schema {
@@ -1700,6 +1709,18 @@ mod tests {
     }
 
     #[test]
+    fn test_roundtrip_struct_empty_fields() {
+        let nulls = NullBuffer::from(&[true, true, false][..]);
+        let rb = RecordBatch::try_from_iter([(
+            "",
+            Arc::new(StructArray::new_empty_fields(nulls.len(), Some(nulls))) as _,
+        )])
+        .unwrap();
+        let rb2 = roundtrip_ipc(&rb);
+        assert_eq!(rb, rb2);
+    }
+
+    #[test]
     fn test_roundtrip_stream_run_array_sliced() {
         let run_array_1: Int32RunArray = vec!["a", "a", "a", "b", "b", "c", "c", "c"]
             .into_iter()
@@ -1791,7 +1812,7 @@ mod tests {
             "values",
             DataType::Dictionary(Box::new(DataType::Int8), Box::new(DataType::Utf8)),
             true,
-            1,
+            2,
             false,
         ));
         let entry_struct = StructArray::from(vec![
@@ -2061,7 +2082,7 @@ mod tests {
         .unwrap();
 
         let gen = IpcDataGenerator {};
-        let mut dict_tracker = DictionaryTracker::new(false);
+        let mut dict_tracker = DictionaryTracker::new_with_preserve_dict_id(false, true);
         let (_, encoded) = gen
             .encoded_batch(&batch, &mut dict_tracker, &Default::default())
             .unwrap();
@@ -2098,7 +2119,7 @@ mod tests {
         .unwrap();
 
         let gen = IpcDataGenerator {};
-        let mut dict_tracker = DictionaryTracker::new(false);
+        let mut dict_tracker = DictionaryTracker::new_with_preserve_dict_id(false, true);
         let (_, encoded) = gen
             .encoded_batch(&batch, &mut dict_tracker, &Default::default())
             .unwrap();

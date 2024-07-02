@@ -483,6 +483,30 @@ impl Field {
                     ));
                 }
             },
+            DataType::List(field) => match &from.data_type {
+                DataType::List(from_field) => {
+                    let mut f = (**field).clone();
+                    f.try_merge(from_field)?;
+                    (*field) = Arc::new(f);
+                },
+                _ => {
+                    return Err(ArrowError::SchemaError(
+                        format!("Fail to merge schema field '{}' because the from data_type = {} is not DataType::List",
+                            self.name, from.data_type)
+                ))}
+            },
+            DataType::LargeList(field) => match &from.data_type {
+                DataType::LargeList(from_field) => {
+                    let mut f = (**field).clone();
+                    f.try_merge(from_field)?;
+                    (*field) = Arc::new(f);
+                },
+                _ => {
+                    return Err(ArrowError::SchemaError(
+                        format!("Fail to merge schema field '{}' because the from data_type = {} is not DataType::LargeList",
+                            self.name, from.data_type)
+                ))}
+            },
             DataType::Null => {
                 self.nullable = true;
                 self.data_type = from.data_type.clone();
@@ -509,9 +533,7 @@ impl Field {
             | DataType::LargeBinary
             | DataType::BinaryView
             | DataType::Interval(_)
-            | DataType::LargeList(_)
             | DataType::LargeListView(_)
-            | DataType::List(_)
             | DataType::ListView(_)
             | DataType::Map(_, _)
             | DataType::Dictionary(_, _)
@@ -621,6 +643,93 @@ mod test {
             .try_merge(&Field::new("c2", DataType::Null, true))
             .expect("should widen type to nullable utf8");
         assert_eq!(Field::new("c2", DataType::Utf8, true), field2);
+    }
+
+    #[test]
+    fn test_merge_with_nested_null() {
+        let mut struct1 = Field::new(
+            "s1",
+            DataType::Struct(Fields::from(vec![Field::new(
+                "inner",
+                DataType::Float32,
+                false,
+            )])),
+            false,
+        );
+
+        let struct2 = Field::new(
+            "s2",
+            DataType::Struct(Fields::from(vec![Field::new(
+                "inner",
+                DataType::Null,
+                false,
+            )])),
+            true,
+        );
+
+        struct1
+            .try_merge(&struct2)
+            .expect("should widen inner field's type to nullable float");
+        assert_eq!(
+            Field::new(
+                "s1",
+                DataType::Struct(Fields::from(vec![Field::new(
+                    "inner",
+                    DataType::Float32,
+                    true,
+                )])),
+                true,
+            ),
+            struct1
+        );
+
+        let mut list1 = Field::new(
+            "l1",
+            DataType::List(Field::new("inner", DataType::Float32, false).into()),
+            false,
+        );
+
+        let list2 = Field::new(
+            "l2",
+            DataType::List(Field::new("inner", DataType::Null, false).into()),
+            true,
+        );
+
+        list1
+            .try_merge(&list2)
+            .expect("should widen inner field's type to nullable float");
+        assert_eq!(
+            Field::new(
+                "l1",
+                DataType::List(Field::new("inner", DataType::Float32, true).into()),
+                true,
+            ),
+            list1
+        );
+
+        let mut large_list1 = Field::new(
+            "ll1",
+            DataType::LargeList(Field::new("inner", DataType::Float32, false).into()),
+            false,
+        );
+
+        let large_list2 = Field::new(
+            "ll2",
+            DataType::LargeList(Field::new("inner", DataType::Null, false).into()),
+            true,
+        );
+
+        large_list1
+            .try_merge(&large_list2)
+            .expect("should widen inner field's type to nullable float");
+        assert_eq!(
+            Field::new(
+                "ll1",
+                DataType::LargeList(Field::new("inner", DataType::Float32, true).into()),
+                true,
+            ),
+            large_list1
+        );
     }
 
     #[test]

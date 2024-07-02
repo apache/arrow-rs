@@ -1281,6 +1281,21 @@ mod tests {
     }
 
     #[test]
+    fn test_into_columns_in_row() {
+        let r = row![
+            ("a".to_string(), Field::Str("My string".to_owned())),
+            ("b".to_string(), Field::Int(1))
+        ];
+        assert_eq!(
+            r.into_columns(),
+            vec![
+                ("a".to_string(), Field::Str("My string".to_owned())),
+                ("b".to_string(), Field::Int(1)),
+            ]
+        );
+    }
+
+    #[test]
     fn test_file_reader_rows_projection_map() {
         let schema = "
       message spark_schema {

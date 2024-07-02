@@ -57,6 +57,26 @@ impl Row {
         self.fields.len()
     }
 
+    /// Move columns data out of the row. Useful to avoid internal data cloning.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use std::fs::File;
+    /// use parquet::record::Row;
+    /// use parquet::file::reader::{FileReader, SerializedFileReader};
+    ///
+    /// let file = File::open("/path/to/file").unwrap();
+    /// let reader = SerializedFileReader::new(file).unwrap();
+    /// let row: Row = reader.get_row_iter(None).unwrap().next().unwrap().unwrap();
+    /// let columns = row.into_columns();
+    /// println!("row columns: {:?}", columns);
+    ///
+    /// ```
+    pub fn into_columns(self) -> Vec<(String, Field)> {
+        self.fields
+    }
+
     /// Get an iterator to go through all columns in the row.
     ///
     /// # Example

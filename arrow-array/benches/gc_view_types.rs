@@ -15,12 +15,34 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Functions for converting from one data type to another in [Apache Arrow](https://docs.rs/arrow)
-pub mod cast;
-pub use cast::*;
-pub mod display;
-pub mod parse;
-#[cfg(feature = "prettyprint")]
-pub mod pretty;
+use arrow_array::StringViewArray;
+use criterion::*;
 
-pub mod base64;
+fn gen_view_array(size: usize) -> StringViewArray {
+    StringViewArray::from_iter((0..size).map(|v| match v % 3 {
+        0 => Some("small"),
+        1 => Some("larger than 12 bytes array"),
+        2 => None,
+        _ => unreachable!("unreachable"),
+    }))
+}
+
+fn criterion_benchmark(c: &mut Criterion) {
+    let array = gen_view_array(100_000);
+
+    c.bench_function("gc view types all", |b| {
+        b.iter(|| {
+            black_box(array.gc());
+        });
+    });
+
+    let sliced = array.slice(0, 100_000 / 2);
+    c.bench_function("gc view types slice half", |b| {
+        b.iter(|| {
+            black_box(sliced.gc());
+        });
+    });
+}
+
+criterion_group!(benches, criterion_benchmark);
+criterion_main!(benches);
