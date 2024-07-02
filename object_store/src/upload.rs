@@ -197,6 +197,11 @@ impl WriteMultipart {
         self.tasks.spawn(self.upload.put_part(part));
     }
 
+    pub async fn abort(mut self) -> Result<()> {
+        self.tasks.shutdown().await;
+        self.upload.abort().await
+    }
+
     /// Flush final chunk, and await completion of all in-flight requests
     pub async fn finish(mut self) -> Result<PutResult> {
         if !self.buffer.is_empty() {
