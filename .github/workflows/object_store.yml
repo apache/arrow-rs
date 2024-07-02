@@ -198,3 +198,18 @@ jobs:
         run: cargo build --target wasm32-unknown-unknown
       - name: Build wasm32-wasi
         run: cargo build --target wasm32-wasi
+
+  windows:
+    name: cargo test (win64)
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: object_store
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+      - name: Setup Rust toolchain
+        uses: ./.github/actions/setup-windows-builder
+      - name: Run object_store tests
+        run: cargo test --features=aws,azure,gcp,http
