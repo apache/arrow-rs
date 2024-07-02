@@ -300,8 +300,8 @@ impl LocalFileSystem {
     }
 
     /// Enable automatic cleanup of empty directories when deleting files
-    pub fn with_automatic_cleanup(mut self) -> Self {
-        self.automatic_cleanup = true;
+    pub fn with_automatic_cleanup(mut self, automatic_cleanup: bool) -> Self {
+        self.automatic_cleanup = automatic_cleanup;
         self
     }
 }
