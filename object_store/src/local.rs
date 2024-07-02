@@ -1044,7 +1044,6 @@ mod tests {
     use std::fs;
 
     use futures::TryStreamExt;
-    use itertools::Itertools;
     use tempfile::{NamedTempFile, TempDir};
 
     use crate::integration::*;
