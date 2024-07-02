@@ -1839,30 +1839,93 @@ mod tests {
 
     #[test]
     fn test_byte_array_size_statistics() {
-        let num_rows: usize = 5;
-        let data = vec![ByteArrayType::gen_vec(32, num_rows)];
-        let unenc_size: i64 = data[0].iter().map(|x| x.len() as i64).sum();
+        let message_type = "
+            message test_schema {
+                OPTIONAL BYTE_ARRAY a (UTF8);
+            }
+        ";
+        let schema = Arc::new(parse_message_type(message_type).unwrap());
+        let data = ByteArrayType::gen_vec(32, 7);
+        let def_levels = [1, 1, 1, 1, 0, 1, 0, 1, 0, 1];
+        let unenc_size: i64 = data.iter().map(|x| x.len() as i64).sum();
         let file: File = tempfile::tempfile().unwrap();
-
-        let file_metadata = test_roundtrip::<File, File, ByteArrayType, _>(
-            file,
-            data,
-            |r| r.get_bytes(0).unwrap().clone(),
-            Compression::UNCOMPRESSED,
+        let props = Arc::new(
+            WriterProperties::builder()
+                .set_statistics_enabled(EnabledStatistics::Page)
+                .build(),
         );
+
+        let mut writer = SerializedFileWriter::new(&file, schema, props).unwrap();
+        let mut row_group_writer = writer.next_row_group().unwrap();
+
+        let mut col_writer = row_group_writer.next_column().unwrap().unwrap();
+        col_writer
+            .typed::<ByteArrayType>()
+            .write_batch(&data, Some(&def_levels), None)
+            .unwrap();
+        col_writer.close().unwrap();
+        row_group_writer.close().unwrap();
+        let file_metadata = writer.close().unwrap();
 
         assert_eq!(file_metadata.row_groups.len(), 1);
         assert_eq!(file_metadata.row_groups[0].columns.len(), 1);
         assert!(file_metadata.row_groups[0].columns[0].meta_data.is_some());
 
+        let check_def_hist = |def_hist: &Vec<i64>| {
+            assert_eq!(def_hist.len(), 2);
+            assert_eq!(def_hist[0], 3);
+            assert_eq!(def_hist[1], 7);
+        };
+
         if let Some(ref meta_data) = file_metadata.row_groups[0].columns[0].meta_data {
             assert!(meta_data.size_statistics.is_some());
             if let Some(ref size_stats) = meta_data.size_statistics {
+                assert!(size_stats.repetition_level_histogram.is_none());
+                assert!(size_stats.definition_level_histogram.is_some());
+                assert!(size_stats.unencoded_byte_array_data_bytes.is_some());
                 assert_eq!(
                     unenc_size,
                     size_stats.unencoded_byte_array_data_bytes.unwrap_or(0)
                 );
+                if let Some(ref def_hist) = size_stats.definition_level_histogram {
+                    check_def_hist(def_hist)
+                }
             }
+        }
+
+        // check that the read metadata is also correct
+        let options = ReadOptionsBuilder::new().with_page_index().build();
+        let reader = SerializedFileReader::new_with_options(file, options).unwrap();
+
+        let rfile_metadata = reader.metadata().file_metadata();
+        assert_eq!(rfile_metadata.num_rows(), file_metadata.num_rows);
+        assert_eq!(reader.num_row_groups(), 1);
+        let rowgroup = reader.get_row_group(0).unwrap();
+        assert_eq!(rowgroup.num_columns(), 1);
+        let column = rowgroup.metadata().column(0);
+        assert!(column.definition_level_histogram().is_some());
+        assert!(column.repetition_level_histogram().is_none());
+        assert!(column.unencoded_byte_array_data_bytes().is_some());
+        if let Some(def_hist) = column.definition_level_histogram() {
+            check_def_hist(def_hist)
+        }
+        assert_eq!(unenc_size, column.unencoded_byte_array_data_bytes().unwrap_or(0));
+
+        // check histogram in column index as well
+        assert!(reader.metadata().column_index().is_some());
+        let column_index = reader.metadata().column_index().unwrap();
+        assert_eq!(column_index.len(), 1);
+        assert_eq!(column_index[0].len(), 1);
+        let col_idx = if let Index::BYTE_ARRAY(index) = &column_index[0][0] {
+            assert_eq!(index.indexes.len(), 1);
+            &index.indexes[0]
+        } else {
+            unreachable!()
+        };
+
+        assert!(col_idx.repetition_level_histogram().is_none());
+        if let Some(def_hist) = col_idx.definition_level_histogram() {
+            check_def_hist(def_hist)
         }
     }
 
@@ -1884,7 +1947,7 @@ mod tests {
         // row 3: []
         // row 4: [7, 8, 9, 10]
         let schema = Arc::new(parse_message_type(message_type).unwrap());
-        let data = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+        let data = [1, 2, 4, 7, 8, 9, 10];
         let def_levels = [3, 3, 0, 3, 2, 1, 3, 3, 3, 3];
         let rep_levels = [0, 1, 0, 0, 1, 0, 0, 1, 1, 1];
         let file = tempfile::tempfile().unwrap();
