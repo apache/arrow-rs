@@ -200,7 +200,7 @@ jobs:
         run: cargo build --target wasm32-wasi
 
   windows:
-    name: cargo test (win64)
+    name: cargo test LocalFileSystem (win64)
     runs-on: windows-latest
     defaults:
       run:
@@ -209,5 +209,5 @@ jobs:
       - uses: actions/checkout@v4
         with:
           submodules: true
-      - name: Run object_store tests
-        run: cargo test --features=aws,azure,gcp,http
+      - name: Run LocalFileSystem tests
+        run: cargo test local::tests

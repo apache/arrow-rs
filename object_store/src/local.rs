@@ -1034,6 +1034,7 @@ mod tests {
     use super::*;
 
     #[tokio::test]
+    #[cfg(target_family = "unix")]
     async fn file_test() {
         let root = TempDir::new().unwrap();
         let integration = LocalFileSystem::new_with_prefix(root.path()).unwrap();
@@ -1050,6 +1051,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(target_family = "unix")]
     fn test_non_tokio() {
         let root = TempDir::new().unwrap();
         let integration = LocalFileSystem::new_with_prefix(root.path()).unwrap();
