@@ -329,6 +329,11 @@ impl BitWriter {
         let u: u64 = ((v << 1) ^ (v >> 63)) as u64;
         self.put_vlq_int(u)
     }
+
+    /// Returns an estimate of the memory used, in bytes
+    pub fn estimated_memory_size(&self) -> usize {
+        self.buffer.capacity() * size_of::<u8>()
+    }
 }
 
 /// Maximum byte length for a VLQ encoded integer
