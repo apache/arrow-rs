@@ -4403,17 +4403,17 @@ mod tests {
         test_unsafe_string_to_interval_err!(
             vec![Some("foobar")],
             IntervalUnit::YearMonth,
-            r#"Not yet implemented: Unsupported Interval Expression with value "foobar""#
+            r#"Parser error: Invalid input syntax for type interval: "foobar""#
         );
         test_unsafe_string_to_interval_err!(
             vec![Some("foobar")],
             IntervalUnit::DayTime,
-            r#"Not yet implemented: Unsupported Interval Expression with value "foobar""#
+            r#"Parser error: Invalid input syntax for type interval: "foobar""#
         );
         test_unsafe_string_to_interval_err!(
             vec![Some("foobar")],
             IntervalUnit::MonthDayNano,
-            r#"Not yet implemented: Unsupported Interval Expression with value "foobar""#
+            r#"Parser error: Invalid input syntax for type interval: "foobar""#
         );
         test_unsafe_string_to_interval_err!(
             vec![Some("2 months 31 days 1 second")],
