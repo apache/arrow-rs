@@ -376,6 +376,13 @@ impl ByteViewArrayDecoderDictionary {
         }
     }
 
+    /// Reads the next indexes from self.decoder
+    /// the indexes are assumed to be indexes into `dict`
+    /// the output values are written to output
+    ///
+    /// Assumptions / Optimization
+    /// This function checks if dict.buffers() are the last buffers in `output`, and if so
+    /// reuses the dictionary page buffers directly without copying data
     fn read(&mut self, output: &mut ViewBuffer, dict: &ViewBuffer, len: usize) -> Result<usize> {
         if dict.is_empty() || len == 0 {
             return Ok(0);
@@ -395,22 +402,23 @@ impl ByteViewArrayDecoderDictionary {
             }
         };
 
-        // Calculate the offset of the dictionary buffers in the output buffers
-        // For example if the 2nd buffer in the dictionary is the 5th buffer in the output buffers,
-        // then the base_buffer_idx is 5 - 2 = 3
-        let base_buffer_idx = if need_to_create_new_buffer {
-            let old_len = output.buffers.len();
+        if need_to_create_new_buffer {
             for b in dict.buffers.iter() {
                 output.buffers.push(b.clone());
             }
-            old_len as u32
-        } else {
-            output.buffers.len() as u32 - dict.buffers.len() as u32
-        };
+        }
+
+        // Calculate the offset of the dictionary buffers in the output buffers
+        // For example if the 2nd buffer in the dictionary is the 5th buffer in the output buffers,
+        // then the base_buffer_idx is 5 - 2 = 3
+        let base_buffer_idx = output.buffers.len() as u32 - dict.buffers.len() as u32;
 
         self.decoder.read(len, |keys| {
             for k in keys {
-                let view = unsafe { dict.views.get_unchecked(*k as usize) };
+                let view = dict
+                    .views
+                    .get(*k as usize)
+                    .ok_or_else(|| general_err!("invalid key={} for dictionary", *k))?;
                 let len = *view as u32;
                 if len <= 12 {
                     // directly append the view if it is inlined
