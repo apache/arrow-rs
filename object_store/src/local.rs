@@ -240,6 +240,7 @@ impl From<Error> for super::Error {
 #[derive(Debug)]
 pub struct LocalFileSystem {
     config: Arc<Config>,
+    // if you want to delete empty directories when deleting files
     automatic_cleanup: bool,
 }
 
@@ -488,6 +489,8 @@ impl ObjectStore for LocalFileSystem {
                 let root = root
                     .to_file_path()
                     .map_err(|_| Error::InvalidUrl { url: root.clone() })?;
+
+                // here we will try to traverse up and delete an empty dir if possible until we reach the root or get an error
                 let mut parent = path.parent();
 
                 while let Some(loc) = parent {
