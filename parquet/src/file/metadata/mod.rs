@@ -824,6 +824,19 @@ impl ColumnChunkMetaData {
 
     /// Method to convert to Thrift `ColumnMetaData`
     pub fn to_column_metadata_thrift(&self) -> ColumnMetaData {
+        let size_statistics = if self.unencoded_byte_array_data_bytes.is_some()
+            || self.repetition_level_histogram.is_some()
+            || self.definition_level_histogram.is_some()
+        {
+            Some(SizeStatistics {
+                unencoded_byte_array_data_bytes: self.unencoded_byte_array_data_bytes,
+                repetition_level_histogram: self.repetition_level_histogram.clone(),
+                definition_level_histogram: self.definition_level_histogram.clone(),
+            })
+        } else {
+            None
+        };
+
         ColumnMetaData {
             type_: self.column_type().into(),
             encodings: self.encodings().iter().map(|&v| v.into()).collect(),
@@ -843,11 +856,7 @@ impl ColumnChunkMetaData {
                 .map(|vec| vec.iter().map(page_encoding_stats::to_thrift).collect()),
             bloom_filter_offset: self.bloom_filter_offset,
             bloom_filter_length: self.bloom_filter_length,
-            size_statistics: Some(SizeStatistics {
-                unencoded_byte_array_data_bytes: self.unencoded_byte_array_data_bytes,
-                repetition_level_histogram: self.repetition_level_histogram.clone(),
-                definition_level_histogram: self.definition_level_histogram.clone(),
-            }),
+            size_statistics,
         }
     }
 

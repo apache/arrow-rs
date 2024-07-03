@@ -1037,10 +1037,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
             .set_total_uncompressed_size(total_uncompressed_size)
             .set_num_values(num_values)
             .set_data_page_offset(data_page_offset)
-            .set_dictionary_page_offset(dict_page_offset)
-            .set_unencoded_byte_array_data_bytes(self.column_metrics.variable_length_bytes)
-            .set_repetition_level_histogram(self.column_metrics.repetition_level_histogram.take())
-            .set_definition_level_histogram(self.column_metrics.definition_level_histogram.take());
+            .set_dictionary_page_offset(dict_page_offset);
 
         if self.statistics_enabled != EnabledStatistics::None {
             let backwards_compatible_min_max = self.descr.sort_order().is_signed();
@@ -1103,7 +1100,15 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
                 stats => stats,
             };
 
-            builder = builder.set_statistics(statistics);
+            builder = builder
+                .set_statistics(statistics)
+                .set_unencoded_byte_array_data_bytes(self.column_metrics.variable_length_bytes)
+                .set_repetition_level_histogram(
+                    self.column_metrics.repetition_level_histogram.take(),
+                )
+                .set_definition_level_histogram(
+                    self.column_metrics.definition_level_histogram.take(),
+                );
         }
 
         let metadata = builder.build()?;
