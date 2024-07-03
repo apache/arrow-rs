@@ -19,7 +19,7 @@ use std::fmt;
 use std::str::FromStr;
 use std::sync::Arc;
 
-use crate::{Field, FieldRef, Fields, UnionFields, ArrowError};
+use crate::{ArrowError, Field, FieldRef, Fields, UnionFields};
 
 /// The set of datatypes that are supported by this implementation of Apache Arrow.
 ///

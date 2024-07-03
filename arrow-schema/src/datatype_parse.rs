@@ -17,7 +17,7 @@
 
 use std::{fmt::Display, iter::Peekable, str::Chars, sync::Arc};
 
-use crate::{DataType, ArrowError, TimeUnit, IntervalUnit, Field};
+use crate::{ArrowError, DataType, Field, IntervalUnit, TimeUnit};
 
 pub(crate) fn parse_data_type(val: &str) -> ArrowResult<DataType> {
     Parser::new(val).parse()
@@ -33,7 +33,6 @@ fn make_error(val: &str, msg: &str) -> ArrowError {
 fn make_error_expected(val: &str, expected: &Token, actual: &Token) -> ArrowError {
     make_error(val, &format!("Expected '{expected}', got '{actual}'"))
 }
-
 
 #[derive(Debug)]
 /// Implementation of `parse_data_type`, modeled after <https://github.com/sqlparser-rs/sqlparser-rs>
@@ -374,10 +373,7 @@ impl<'a> Tokenizer<'a> {
             // if it started with a number, try parsing it as an integer
             if c == '-' || c.is_numeric() {
                 let val: i64 = self.word.parse().map_err(|e| {
-                    make_error(
-                        self.val,
-                        &format!("parsing {} as integer: {e}", self.word),
-                    )
+                    make_error(self.val, &format!("parsing {} as integer: {e}", self.word))
                 })?;
                 return Ok(Token::Integer(val));
             }
@@ -390,7 +386,10 @@ impl<'a> Tokenizer<'a> {
                     if last_c != '"' || len < 2 {
                         return Err(make_error(
                             self.val,
-                            &format!("parsing {} as double quoted string: last char must be \"", self.word),
+                            &format!(
+                                "parsing {} as double quoted string: last char must be \"",
+                                self.word
+                            ),
                         ));
                     }
                 }
@@ -398,7 +397,10 @@ impl<'a> Tokenizer<'a> {
                 if len == 2 {
                     return Err(make_error(
                         self.val,
-                        &format!("parsing {} as double quoted string: empty string isn't supported", self.word),
+                        &format!(
+                            "parsing {} as double quoted string: empty string isn't supported",
+                            self.word
+                        ),
                     ));
                 }
 
@@ -675,10 +677,7 @@ mod test {
                 Box::new(DataType::Int8),
                 Box::new(
                     // nested dictionaries are probably a bad idea but they are possible
-                    DataType::Dictionary(
-                        Box::new(DataType::Int8),
-                        Box::new(DataType::Utf8),
-                    ),
+                    DataType::Dictionary(Box::new(DataType::Int8), Box::new(DataType::Utf8)),
                 ),
             ),
             // TODO support more structured types (List, LargeList, Struct, Union, Map, RunEndEncoded, etc)
@@ -761,9 +760,7 @@ mod test {
         for (data_type_string, expected_message) in cases {
             print!("Parsing '{data_type_string}', expecting '{expected_message}'");
             match parse_data_type(data_type_string) {
-                Ok(d) => panic!(
-                    "Expected error while parsing '{data_type_string}', but got '{d}'"
-                ),
+                Ok(d) => panic!("Expected error while parsing '{data_type_string}', but got '{d}'"),
                 Err(e) => {
                     let message = e.to_string();
                     assert!(
@@ -784,4 +781,3 @@ mod test {
         assert_eq!(err.to_string(), "Parser error: Unsupported type 'foobar'. Must be a supported arrow type name such as 'Int32' or 'Timestamp(Nanosecond, None)'. Error unrecognized word: foobar");
     }
 }
-
