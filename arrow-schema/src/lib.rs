@@ -19,6 +19,7 @@
 
 mod datatype;
 pub use datatype::*;
+mod datatype_parse;
 mod error;
 pub use error::*;
 mod field;

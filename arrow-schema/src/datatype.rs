@@ -18,7 +18,7 @@
 use std::fmt;
 use std::sync::Arc;
 
-use crate::{Field, FieldRef, Fields, UnionFields};
+use crate::{Field, FieldRef, Fields, UnionFields, ArrowError};
 
 /// The set of datatypes that are supported by this implementation of Apache Arrow.
 ///
@@ -370,6 +370,27 @@ pub enum UnionMode {
 impl fmt::Display for DataType {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{self:?}")
+    }
+}
+
+/// Parses `str` into a `DataType`.
+///
+/// This is the reverse of [`DataType`]'s `Display`
+/// impl, and maintains the invariant that
+/// `DataType::try_from(&data_type.to_string()).unwrap() == data_type`
+///
+/// # Example
+/// ```
+/// use arrow_schema::DataType;
+///
+/// let data_type: DataType = DataType::try_from("Int32").unwrap();
+/// assert_eq!(data_type, DataType::Int32);
+/// ```
+impl TryFrom<&str> for DataType {
+    type Error = ArrowError;
+
+    fn try_from(value: &str) -> Result<Self, ArrowError> {
+        crate::datatype_parse::parse_data_type(value)
     }
 }
 
@@ -984,5 +1005,11 @@ mod tests {
             ),
             UnionMode::Dense,
         );
+    }
+
+    #[test]
+    fn test_try_from_str() {
+        let data_type: DataType = "Int32".try_into().unwrap();
+        assert_eq!(data_type, DataType::Int32);
     }
 }
