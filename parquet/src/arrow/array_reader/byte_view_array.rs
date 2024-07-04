@@ -315,26 +315,30 @@ impl ByteViewArrayDecoderPlain {
         let mut read = 0;
         output.views.reserve(to_read);
         while self.offset < self.buf.len() && read != to_read {
-            if self.offset + 4 > self.buf.len() {
-                return Err(ParquetError::EOF("eof decoding byte array".into()));
-            }
-            let len_bytes: [u8; 4] = unsafe {
-                buf.get_unchecked(self.offset..self.offset + 4)
-                    .try_into()
-                    .unwrap()
+            let len_bytes = buf.get(self.offset..self.offset + 4);
+            let len = match len_bytes {
+                None => {
+                    return Err(ParquetError::EOF("eof decoding byte array".into()));
+                }
+                Some(l) => u32::from_le_bytes(l.try_into().unwrap()),
             };
-            let len = u32::from_le_bytes(len_bytes);
 
             let start_offset = self.offset + 4;
             let end_offset = start_offset + len as usize;
-            if end_offset > buf.len() {
+            if end_offset > buf.len() || end_offset < start_offset {
                 return Err(ParquetError::EOF("eof decoding byte array".into()));
             }
 
             if self.validate_utf8 {
-                check_valid_utf8(unsafe { buf.get_unchecked(start_offset..end_offset) })?;
+                check_valid_utf8(
+                    // SAFETY: bounds are checked above.
+                    unsafe { buf.get_unchecked(start_offset..end_offset) },
+                )?;
             }
 
+            // SAFETY: bounds are checked above, block_id comes from a call to append_block, and
+            // we are dealing with byte arrays with no alignment requirements.
+            // FIXME: what about UTF8 arrays if validate_utf8 is false?
             unsafe {
                 output.append_view_unchecked(block_id, start_offset as u32, len);
             }
@@ -422,7 +426,7 @@ impl ByteViewArrayDecoderDictionary {
                 let len = *view as u32;
                 if len <= 12 {
                     // directly append the view if it is inlined
-                    // Safety: the view is from the dictionary, so it is valid
+                    // SAFETY: the view is from the dictionary, so it is valid
                     unsafe {
                         output.append_raw_view_unchecked(view);
                     }
@@ -430,7 +434,7 @@ impl ByteViewArrayDecoderDictionary {
                     // correct the buffer index and append the view
                     let mut view = ByteView::from(*view);
                     view.buffer_index += base_buffer_idx;
-                    // Safety: the view is from the dictionary,
+                    // SAFETY: the view is from the dictionary,
                     // we corrected the index value to point it to output buffer, so it is valid
                     unsafe {
                         output.append_raw_view_unchecked(&view.into());

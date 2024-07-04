@@ -154,12 +154,20 @@ impl ArrayReader for FixedLenByteArrayReader {
 
     fn consume_batch(&mut self) -> Result<ArrayRef> {
         let record_data = self.record_reader.consume_record_data();
+        assert_eq!(
+            self.byte_length,
+            record_data.byte_length.unwrap_or_default()
+        );
 
         let array_data = ArrayDataBuilder::new(ArrowType::FixedSizeBinary(self.byte_length as i32))
             .len(self.record_reader.num_values())
             .add_buffer(Buffer::from_vec(record_data.buffer))
             .null_bit_buffer(self.record_reader.consume_bitmap_buffer());
 
+        // SAFETY: Assuming that a RecordReader produces a valid FixedLenByteArrayBuffer (as
+        // otherwise that code itself would be unsound), this call is safe if self.byte_length
+        // matches the byte length of the FixedLenByteArrayBuffer produced by the RecordReader
+        // matches the byte length passed as a type parameter to ArrayDataBuilder.
         let binary = FixedSizeBinaryArray::from(unsafe { array_data.build_unchecked() });
 
         // TODO: An improvement might be to do this conversion on read

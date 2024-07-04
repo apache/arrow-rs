@@ -435,6 +435,10 @@ impl BitReader {
     /// This function panics if
     /// - `num_bits` is larger than the bit-capacity of `T`
     ///
+    // FIXME: soundness issue - this method can be used to write arbitrary bytes to any
+    // T. A possible fix would be to make `FromBytes` an unsafe trait (or to use a
+    // separate marker trait) which requires all bit patterns of T to be valid (note that this is
+    // not the case for `T` = `bool`).
     pub fn get_batch<T: FromBytes>(&mut self, batch: &mut [T], num_bits: usize) -> usize {
         assert!(num_bits <= size_of::<T>() * 8);
 
@@ -461,6 +465,9 @@ impl BitReader {
         match size_of::<T>() {
             1 => {
                 let ptr = batch.as_mut_ptr() as *mut u8;
+                // SAFETY: batch is properly aligned and sized. Caller guarantees that T
+                // can be safely seen as a slice of bytes through FromBytes bound
+                // (FIXME: not actually true right now)
                 let out = unsafe { std::slice::from_raw_parts_mut(ptr, batch.len()) };
                 while values_to_read - i >= 8 {
                     let out_slice = (&mut out[i..i + 8]).try_into().unwrap();
@@ -471,6 +478,9 @@ impl BitReader {
             }
             2 => {
                 let ptr = batch.as_mut_ptr() as *mut u16;
+                // SAFETY: batch is properly aligned and sized. Caller guarantees that T
+                // can be safely seen as a slice of bytes through FromBytes bound
+                // (FIXME: not actually true right now)
                 let out = unsafe { std::slice::from_raw_parts_mut(ptr, batch.len()) };
                 while values_to_read - i >= 16 {
                     let out_slice = (&mut out[i..i + 16]).try_into().unwrap();
@@ -481,6 +491,9 @@ impl BitReader {
             }
             4 => {
                 let ptr = batch.as_mut_ptr() as *mut u32;
+                // SAFETY: batch is properly aligned and sized. Caller guarantees that T
+                // can be safely seen as a slice of bytes through FromBytes bound
+                // (FIXME: not actually true right now)
                 let out = unsafe { std::slice::from_raw_parts_mut(ptr, batch.len()) };
                 while values_to_read - i >= 32 {
                     let out_slice = (&mut out[i..i + 32]).try_into().unwrap();
@@ -491,6 +504,9 @@ impl BitReader {
             }
             8 => {
                 let ptr = batch.as_mut_ptr() as *mut u64;
+                // SAFETY: batch is properly aligned and sized. Caller guarantees that T
+                // can be safely seen as a slice of bytes through FromBytes bound
+                // (FIXME: not actually true right now)
                 let out = unsafe { std::slice::from_raw_parts_mut(ptr, batch.len()) };
                 while values_to_read - i >= 64 {
                     let out_slice = (&mut out[i..i + 64]).try_into().unwrap();
