@@ -449,7 +449,7 @@ mod tests {
             ]
         );
 
-        let view0 = array.views().get(0).unwrap();
+        let view0 = array.views().first().unwrap();
         let view2 = array.views().get(2).unwrap();
         let view4 = array.views().get(4).unwrap();
 
