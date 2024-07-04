@@ -37,7 +37,6 @@ impl ViewBuffer {
         self.views.is_empty()
     }
 
-    #[allow(unused)]
     pub fn append_block(&mut self, block: Buffer) -> u32 {
         let block_id = self.buffers.len() as u32;
         self.buffers.push(block);
@@ -49,7 +48,6 @@ impl ViewBuffer {
     /// - `block` is a valid index, i.e., the return value of `append_block`
     /// - `offset` and `offset + len` are valid indices into the buffer
     /// - The `(offset, offset + len)` is valid value for the native type.
-    #[allow(unused)]
     pub unsafe fn append_view_unchecked(&mut self, block: u32, offset: u32, len: u32) {
         let b = self.buffers.get_unchecked(block as usize);
         let end = offset.saturating_add(len);

@@ -74,36 +74,6 @@ pub fn make_byte_array_reader(
     }
 }
 
-/// Returns an [`ArrayReader`] that decodes the provided byte array column to view types.
-pub fn make_byte_view_array_reader(
-    pages: Box<dyn PageIterator>,
-    column_desc: ColumnDescPtr,
-    arrow_type: Option<ArrowType>,
-) -> Result<Box<dyn ArrayReader>> {
-    // Check if Arrow type is specified, else create it from Parquet type
-    let data_type = match arrow_type {
-        Some(t) => t,
-        None => match parquet_to_arrow_field(column_desc.as_ref())?.data_type() {
-            ArrowType::Utf8 | ArrowType::Utf8View => ArrowType::Utf8View,
-            _ => ArrowType::BinaryView,
-        },
-    };
-
-    match data_type {
-        ArrowType::BinaryView | ArrowType::Utf8View => {
-            let reader = GenericRecordReader::new(column_desc);
-            Ok(Box::new(ByteArrayReader::<i32>::new(
-                pages, data_type, reader,
-            )))
-        }
-
-        _ => Err(general_err!(
-            "invalid data type for byte array reader read to view type - {}",
-            data_type
-        )),
-    }
-}
-
 /// An [`ArrayReader`] for variable length byte arrays
 struct ByteArrayReader<I: OffsetSizeTrait> {
     data_type: ArrowType,

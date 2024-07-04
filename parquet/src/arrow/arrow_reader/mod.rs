@@ -2460,22 +2460,12 @@ mod tests {
             ),
             (
                 invalid_utf8_later_char::<i32>(),
-                "Parquet argument error: Parquet error: encountered non UTF-8 data: invalid utf-8 sequence of 1 bytes from index 6",
+                "Parquet argument error: Parquet error: encountered non UTF-8 data: invalid utf-8 sequence of 1 bytes from index 3",
             ),
         ];
         for (array, expected_error) in cases {
-            // cast not yet implemented for BinaryView
-            // https://github.com/apache/arrow-rs/issues/5508
-            // so copy directly
-            let mut builder = BinaryViewBuilder::with_capacity(100);
-            for v in array.iter() {
-                if let Some(v) = v {
-                    builder.append_value(v);
-                } else {
-                    builder.append_null();
-                }
-            }
-            let array = builder.finish();
+            let array = arrow_cast::cast(&array, &ArrowDataType::BinaryView).unwrap();
+            let array = array.as_binary_view();
 
             // data is not valid utf8 we can not construct a correct StringArray
             // safely, so purposely create an invalid StringArray

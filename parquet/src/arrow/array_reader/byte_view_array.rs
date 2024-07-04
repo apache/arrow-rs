@@ -17,22 +17,23 @@
 
 use crate::arrow::array_reader::{read_records, skip_records, ArrayReader};
 use crate::arrow::buffer::view_buffer::ViewBuffer;
-use crate::arrow::decoder::DictIndexDecoder;
+use crate::arrow::decoder::{DeltaByteArrayDecoder, DictIndexDecoder};
 use crate::arrow::record_reader::GenericRecordReader;
 use crate::arrow::schema::parquet_to_arrow_field;
 use crate::basic::{ConvertedType, Encoding};
 use crate::column::page::PageIterator;
 use crate::column::reader::decoder::ColumnValueDecoder;
+use crate::data_type::Int32Type;
+use crate::encodings::decoding::{Decoder, DeltaBitPackDecoder};
 use crate::errors::{ParquetError, Result};
 use crate::schema::types::ColumnDescPtr;
-use arrow_array::ArrayRef;
+use arrow_array::{builder::make_view, ArrayRef};
 use arrow_data::ByteView;
 use arrow_schema::DataType as ArrowType;
 use bytes::Bytes;
 use std::any::Any;
 
 /// Returns an [`ArrayReader`] that decodes the provided byte array column to view types.
-#[allow(unused)]
 pub fn make_byte_view_array_reader(
     pages: Box<dyn PageIterator>,
     column_desc: ColumnDescPtr,
@@ -61,7 +62,6 @@ pub fn make_byte_view_array_reader(
 }
 
 /// An [`ArrayReader`] for variable length byte arrays
-#[allow(unused)]
 struct ByteViewArrayReader {
     data_type: ArrowType,
     pages: Box<dyn PageIterator>,
@@ -213,6 +213,8 @@ impl ColumnValueDecoder for ByteViewArrayColumnValueDecoder {
 pub enum ByteViewArrayDecoder {
     Plain(ByteViewArrayDecoderPlain),
     Dictionary(ByteViewArrayDecoderDictionary),
+    DeltaLength(ByteViewArrayDecoderDeltaLength),
+    DeltaByteArray(ByteViewArrayDecoderDelta),
 }
 
 impl ByteViewArrayDecoder {
@@ -235,9 +237,12 @@ impl ByteViewArrayDecoder {
                     data, num_levels, num_values,
                 ))
             }
-            Encoding::DELTA_LENGTH_BYTE_ARRAY | Encoding::DELTA_BYTE_ARRAY => {
-                unimplemented!("stay tuned!")
-            }
+            Encoding::DELTA_LENGTH_BYTE_ARRAY => ByteViewArrayDecoder::DeltaLength(
+                ByteViewArrayDecoderDeltaLength::new(data, validate_utf8)?,
+            ),
+            Encoding::DELTA_BYTE_ARRAY => ByteViewArrayDecoder::DeltaByteArray(
+                ByteViewArrayDecoderDelta::new(data, validate_utf8)?,
+            ),
             _ => {
                 return Err(general_err!(
                     "unsupported encoding for byte array: {}",
@@ -263,6 +268,8 @@ impl ByteViewArrayDecoder {
                     .ok_or_else(|| general_err!("dictionary required for dictionary encoding"))?;
                 d.read(out, dict, len)
             }
+            ByteViewArrayDecoder::DeltaLength(d) => d.read(out, len),
+            ByteViewArrayDecoder::DeltaByteArray(d) => d.read(out, len),
         }
     }
 
@@ -275,6 +282,8 @@ impl ByteViewArrayDecoder {
                     .ok_or_else(|| general_err!("dictionary required for dictionary encoding"))?;
                 d.skip(dict, len)
             }
+            ByteViewArrayDecoder::DeltaLength(d) => d.skip(len),
+            ByteViewArrayDecoder::DeltaByteArray(d) => d.skip(len),
         }
     }
 }
@@ -487,8 +496,144 @@ impl ByteViewArrayDecoderDictionary {
     }
 }
 
+/// Decoder from [`Encoding::DELTA_LENGTH_BYTE_ARRAY`] data to [`ViewBuffer`]
+pub struct ByteViewArrayDecoderDeltaLength {
+    lengths: Vec<i32>,
+    data: Bytes,
+    length_offset: usize,
+    data_offset: usize,
+    validate_utf8: bool,
+}
+
+impl ByteViewArrayDecoderDeltaLength {
+    fn new(data: Bytes, validate_utf8: bool) -> Result<Self> {
+        let mut len_decoder = DeltaBitPackDecoder::<Int32Type>::new();
+        len_decoder.set_data(data.clone(), 0)?;
+        let values = len_decoder.values_left();
+
+        let mut lengths = vec![0; values];
+        len_decoder.get(&mut lengths)?;
+
+        Ok(Self {
+            lengths,
+            data,
+            validate_utf8,
+            length_offset: 0,
+            data_offset: len_decoder.get_offset(),
+        })
+    }
+
+    fn read(&mut self, output: &mut ViewBuffer, len: usize) -> Result<usize> {
+        let to_read = len.min(self.lengths.len() - self.length_offset);
+        output.views.reserve(to_read);
+
+        let src_lengths = &self.lengths[self.length_offset..self.length_offset + to_read];
+
+        let total_bytes: usize = src_lengths.iter().map(|x| *x as usize).sum();
+
+        if self.data_offset + total_bytes > self.data.len() {
+            return Err(ParquetError::EOF(
+                "Insufficient delta length byte array bytes".to_string(),
+            ));
+        }
+
+        let block_id = output.append_block(self.data.clone().into());
+
+        let mut start_offset = self.data_offset;
+        let initial_offset = start_offset;
+        for length in src_lengths {
+            // # Safety
+            // The length is from the delta length decoder, so it is valid
+            // The start_offset is calculated from the lengths, so it is valid
+            unsafe { output.append_view_unchecked(block_id, start_offset as u32, *length as u32) }
+
+            start_offset += *length as usize;
+        }
+
+        // Delta length encoding has continuous strings, we can validate utf8 in one go
+        if self.validate_utf8 {
+            check_valid_utf8(&self.data[initial_offset..start_offset])?;
+        }
+
+        self.data_offset = start_offset;
+        self.length_offset += to_read;
+
+        Ok(to_read)
+    }
+
+    fn skip(&mut self, to_skip: usize) -> Result<usize> {
+        let remain_values = self.lengths.len() - self.length_offset;
+        let to_skip = remain_values.min(to_skip);
+
+        let src_lengths = &self.lengths[self.length_offset..self.length_offset + to_skip];
+        let total_bytes: usize = src_lengths.iter().map(|x| *x as usize).sum();
+
+        self.data_offset += total_bytes;
+        self.length_offset += to_skip;
+        Ok(to_skip)
+    }
+}
+
+/// Decoder from [`Encoding::DELTA_BYTE_ARRAY`] to [`ViewBuffer`]
+pub struct ByteViewArrayDecoderDelta {
+    decoder: DeltaByteArrayDecoder,
+    validate_utf8: bool,
+}
+
+impl ByteViewArrayDecoderDelta {
+    fn new(data: Bytes, validate_utf8: bool) -> Result<Self> {
+        Ok(Self {
+            decoder: DeltaByteArrayDecoder::new(data)?,
+            validate_utf8,
+        })
+    }
+
+    // Unlike other encodings, we need to copy the data because we can not reuse the DeltaByteArray data in Arrow.
+    fn read(&mut self, output: &mut ViewBuffer, len: usize) -> Result<usize> {
+        output.views.reserve(len.min(self.decoder.remaining()));
+
+        let mut buffer: Vec<u8> = Vec::with_capacity(4096);
+
+        let buffer_id = output.buffers.len() as u32;
+
+        let read = self.decoder.read(len, |bytes| {
+            let offset = buffer.len();
+            buffer.extend_from_slice(bytes);
+            let view = make_view(bytes, buffer_id, offset as u32);
+            // # Safety
+            // The buffer_id is the last buffer in the output buffers
+            // The offset is calculated from the buffer, so it is valid
+            unsafe {
+                output.append_raw_view_unchecked(&view);
+            }
+            Ok(())
+        })?;
+
+        // The buffer is dense, so we can validate utf8 in one go
+        if self.validate_utf8 {
+            check_valid_utf8(&buffer)?;
+        }
+        let actual_block_id = output.append_block(buffer.into());
+        assert_eq!(actual_block_id, buffer_id);
+        Ok(read)
+    }
+
+    fn skip(&mut self, to_skip: usize) -> Result<usize> {
+        self.decoder.skip(to_skip)
+    }
+}
+
 /// Check that `val` is a valid UTF-8 sequence
 pub fn check_valid_utf8(val: &[u8]) -> Result<()> {
+    if let Some(&b) = val.first() {
+        // A valid code-point iff it does not start with 0b10xxxxxx
+        // Bit-magic taken from `std::str::is_char_boundary`
+        if (b as i8) < -0x40 {
+            return Err(ParquetError::General(
+                "encountered non UTF-8 data".to_string(),
+            ));
+        }
+    }
     match std::str::from_utf8(val) {
         Ok(_) => Ok(()),
         Err(e) => Err(general_err!("encountered non UTF-8 data: {}", e)),
@@ -525,13 +670,6 @@ mod tests {
             .unwrap();
 
         for (encoding, page) in pages {
-            if encoding != Encoding::PLAIN
-                && encoding != Encoding::RLE_DICTIONARY
-                && encoding != Encoding::PLAIN_DICTIONARY
-            {
-                // skip unsupported encodings for now as they are not yet implemented
-                continue;
-            }
             let mut output = ViewBuffer::default();
             decoder.set_data(encoding, page, 4, Some(4)).unwrap();
 
