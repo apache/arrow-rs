@@ -289,7 +289,7 @@ impl ReaderBuilder {
 
         let decoder = make_decoder(data_type, self.coerce_primitive, self.strict_mode, nullable)?;
 
-        let num_fields = self.schema.all_fields().len();
+        let num_fields = self.schema.flattened_fields().len();
 
         Ok(Decoder {
             decoder,

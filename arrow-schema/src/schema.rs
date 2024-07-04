@@ -325,8 +325,15 @@ impl Schema {
 
     /// Returns a vector with references to all fields (including nested fields)
     #[inline]
-    pub fn all_fields(&self) -> Vec<&Field> {
+    pub fn flattened_fields(&self) -> Vec<&Field> {
         self.fields.iter().flat_map(|f| f.fields()).collect()
+    }
+
+    /// Returns a vector with references to all fields (including nested fields)
+    #[deprecated(since = "52.1.0", note = "Use `flattened_fields` instead")]
+    #[inline]
+    pub fn all_fields(&self) -> Vec<&Field> {
+        self.flattened_fields()
     }
 
     /// Returns an immutable reference of a specific [`Field`] instance selected using an

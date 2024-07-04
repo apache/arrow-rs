@@ -1650,7 +1650,7 @@ mod tests {
     #[tokio::test]
     async fn test_parquet_record_batch_stream_schema() {
         fn get_all_field_names(schema: &Schema) -> Vec<&String> {
-            schema.all_fields().iter().map(|f| f.name()).collect()
+            schema.flattened_fields().iter().map(|f| f.name()).collect()
         }
 
         // ParquetRecordBatchReaderBuilder::schema differs from
