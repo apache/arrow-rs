@@ -35,6 +35,7 @@ use arrow_buffer::ArrowNativeType;
 use arrow_schema::*;
 use chrono::{NaiveDate, NaiveDateTime, SecondsFormat, TimeZone, Utc};
 use lexical_core::FormattedSize;
+use num::Signed;
 
 type TimeFormat<'a> = Option<&'a str>;
 
@@ -654,10 +655,7 @@ impl<'a> DisplayIndex for &'a PrimitiveArray<IntervalYearMonthType> {
         let years = (interval / 12_f64).floor();
         let month = interval - (years * 12_f64);
 
-        write!(
-            f,
-            "{years} years {month} mons",
-        )?;
+        write!(f, "{years} years {month} mons",)?;
         Ok(())
     }
 }
@@ -672,7 +670,7 @@ impl<'a> DisplayIndex for &'a PrimitiveArray<IntervalDayTimeType> {
 
         if value.milliseconds != 0 {
             let millis_fmt = MillisecondsFormatter(value.milliseconds);
-            millis_fmt.fmt(f)?;
+            f.write_fmt(format_args!("{millis_fmt}"))?;
         }
 
         Ok(())
@@ -693,7 +691,7 @@ impl<'a> DisplayIndex for &'a PrimitiveArray<IntervalMonthDayNanoType> {
 
         if value.nanoseconds != 0 {
             let nano_fmt = NanosecondsFormatter(value.nanoseconds);
-            nano_fmt.fmt(f)?;
+            f.write_fmt(format_args!("{nano_fmt}"))?;
         }
 
         Ok(())
@@ -723,7 +721,13 @@ impl Display for NanosecondsFormatter {
 
         if secs != 0 || nanoseconds != 0 {
             let secs_sign = if secs < 0 || nanoseconds < 0 { "-" } else { "" };
-            write!(f, "{}{}.{:09} secs", secs_sign, secs, nanoseconds)?;
+            write!(
+                f,
+                "{}{}.{:09} secs",
+                secs_sign,
+                secs.abs(),
+                nanoseconds.abs()
+            )?;
         }
 
         Ok(())
@@ -758,7 +762,13 @@ impl Display for MillisecondsFormatter {
                 ""
             };
 
-            write!(f, "{}{}.{:03} secs", secs_sign, secs, milliseconds)?;
+            write!(
+                f,
+                "{}{}.{:03} secs",
+                secs_sign,
+                secs.abs(),
+                milliseconds.abs()
+            )?;
         }
 
         Ok(())
