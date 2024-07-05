@@ -883,6 +883,11 @@ impl Rows {
             config: self.config.clone(),
         }
     }
+
+    pub fn print(&self) {
+        println!("self.buffer: {:?}", self.buffer);
+        println!("self.offsets: {:?}", self.offsets);
+    }
 }
 
 impl<'a> IntoIterator for &'a Rows {
