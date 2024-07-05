@@ -873,7 +873,7 @@ impl Rows {
         let mut new_buffers = vec![];
         let mut new_offsets = vec![0];
         for idx in offset..offset+n {
-            new_buffers.extend(self.buffer[self.offsets[idx]..self.offsets[idx+1]]);
+            new_buffers.extend(self.buffer[self.offsets[idx]..self.offsets[idx+1]].to_vec());
             new_offsets.push(new_buffers.len());
         }
         Self{
