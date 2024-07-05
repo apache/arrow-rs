@@ -27,6 +27,8 @@ use crate::format::{ColumnIndex, OffsetIndex, PageLocation};
 use crate::thrift::{TCompactSliceInputProtocol, TSerializable};
 use std::ops::Range;
 
+use super::offset_index::ParquetOffsetIndex;
+
 /// Computes the covering range of two optional ranges
 ///
 /// For example `acc_range(Some(7..9), Some(1..3)) = Some(1..9)`
@@ -109,21 +111,21 @@ pub fn read_pages_locations<R: ChunkReader>(
         .collect()
 }
 
-/// Reads [`OffsetIndex`],  per-page [`unencoded_byte_array_data_bytes`] for all columns of a row
-/// group.
+/// Reads per-column [`ParquetOffsetIndex`] for all columns of a row group by
+/// decoding [`OffsetIndex`] .
 ///
-/// Returns a vector of `unencoded_byte_array_data_bytes[column_number][page_number]`
+/// Returns a vector of `index[column_number]`.
 ///
-/// Return an empty vector if this row group does not contain an
-/// [`OffsetIndex]`.
+/// Returns an empty vector if this row group does not contain an
+/// [`OffsetIndex`].
 ///
-/// See [Column Index Documentation] for more details.
+/// See [Offset Index Documentation] for more details.
 ///
-/// [Column Index Documentation]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
-pub fn read_unencoded_byte_array_data_bytes<R: ChunkReader>(
+/// [Offset Index Documentation]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
+pub fn read_offset_indexes<R: ChunkReader>(
     reader: &R,
     chunks: &[ColumnChunkMetaData],
-) -> Result<Vec<Option<Vec<i64>>>, ParquetError> {
+) -> Result<Vec<ParquetOffsetIndex>, ParquetError> {
     let fetch = chunks
         .iter()
         .fold(None, |range, c| acc_range(range, c.offset_index_range()));
@@ -139,18 +141,16 @@ pub fn read_unencoded_byte_array_data_bytes<R: ChunkReader>(
     chunks
         .iter()
         .map(|c| match c.offset_index_range() {
-            Some(r) => decode_unencoded_byte_array_data_bytes(get(r)),
+            Some(r) => decode_full_offset_index(get(r)),
             None => Err(general_err!("missing offset index")),
         })
         .collect()
 }
 
-pub(crate) fn decode_unencoded_byte_array_data_bytes(
-    data: &[u8],
-) -> Result<Option<Vec<i64>>, ParquetError> {
+pub(crate) fn decode_full_offset_index(data: &[u8]) -> Result<ParquetOffsetIndex, ParquetError> {
     let mut prot = TCompactSliceInputProtocol::new(data);
     let offset = OffsetIndex::read_from_in_protocol(&mut prot)?;
-    Ok(offset.unencoded_byte_array_data_bytes)
+    ParquetOffsetIndex::try_new(offset)
 }
 
 pub(crate) fn decode_offset_index(data: &[u8]) -> Result<Vec<PageLocation>, ParquetError> {

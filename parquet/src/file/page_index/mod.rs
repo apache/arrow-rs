@@ -21,3 +21,4 @@
 
 pub mod index;
 pub mod index_reader;
+pub mod offset_index;
