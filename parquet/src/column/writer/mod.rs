@@ -3027,6 +3027,30 @@ mod tests {
     }
 
     #[test]
+    fn test_no_column_index_when_stats_disabled() {
+        // https://github.com/apache/arrow-rs/issues/6010
+        // Test that column index is not created/written for all-nulls column when page
+        // statistics are disabled.
+        let descr = Arc::new(get_test_column_descr::<Int32Type>(1, 0));
+        let props = Arc::new(
+            WriterProperties::builder()
+                .set_statistics_enabled(EnabledStatistics::None)
+                .build(),
+        );
+        let column_writer = get_column_writer(descr.clone(), props, get_test_page_writer());
+        let mut writer = get_typed_column_writer::<Int32Type>(column_writer);
+
+        let data = Vec::new();
+        let def_levels = vec![0; 10];
+        writer.write_batch(&data, Some(&def_levels), None).unwrap();
+        writer.flush_data_pages().unwrap();
+
+        let column_close_result = writer.close().unwrap();
+        assert!(column_close_result.offset_index.is_some());
+        assert!(column_close_result.column_index.is_none());
+    }
+
+    #[test]
     fn test_boundary_order() -> Result<()> {
         let descr = Arc::new(get_test_column_descr::<Int32Type>(1, 0));
         // min max both ascending
