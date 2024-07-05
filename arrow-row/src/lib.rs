@@ -876,6 +876,7 @@ impl Rows {
             new_buffers.extend(self.buffer[self.offsets[idx]..self.offsets[idx+1]].to_vec());
             new_offsets.push(new_buffers.len());
         }
+        debug_assert_eq!(new_offsets.len(), n+1);
         Self{
             buffer: new_buffers,
             offsets: new_offsets,
