@@ -22,12 +22,11 @@ use crate::data_type::Int96;
 use crate::errors::ParquetError;
 use crate::file::metadata::ColumnChunkMetaData;
 use crate::file::page_index::index::{Index, NativeIndex};
+use crate::file::page_index::offset_index::ParquetOffsetIndex;
 use crate::file::reader::ChunkReader;
 use crate::format::{ColumnIndex, OffsetIndex, PageLocation};
 use crate::thrift::{TCompactSliceInputProtocol, TSerializable};
 use std::ops::Range;
-
-use super::offset_index::ParquetOffsetIndex;
 
 /// Computes the covering range of two optional ranges
 ///
