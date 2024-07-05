@@ -260,6 +260,12 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         // Used for level information
         encodings.insert(Encoding::RLE);
 
+        // Disable column_index_builder if not collecting page statistics.
+        let mut column_index_builder = ColumnIndexBuilder::new();
+        if statistics_enabled != EnabledStatistics::Page {
+            column_index_builder.to_invalid()
+        }
+
         Self {
             descr,
             props,
@@ -289,7 +295,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
                 num_column_nulls: 0,
                 column_distinct_count: None,
             },
-            column_index_builder: ColumnIndexBuilder::new(),
+            column_index_builder,
             offset_index_builder: OffsetIndexBuilder::new(),
             encodings,
             data_page_boundary_ascending: true,
