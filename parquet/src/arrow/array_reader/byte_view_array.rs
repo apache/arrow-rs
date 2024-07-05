@@ -336,8 +336,9 @@ impl ByteViewArrayDecoderPlain {
             if self.validate_utf8 {
                 // It seems you are trying to understand what's going on here, take a breath and be patient.
                 // Utf-8 validation is a non-trivial task, here are some background facts:
-                // (1) Validating one 100 bytes of utf-8 is much faster than validating ten 10 bytes of utf-8.
-                //     Potentially because of the auto SIMD by compiler, someone please confirm this :)
+                // (1) Validating one 2048-byte string is much faster than validating 128 of 16-byte string.
+                //     As shown in https://github.com/apache/arrow-rs/pull/6009#issuecomment-2211174229
+                //     Potentially because the SIMD operations favor longer strings.
                 // (2) Practical strings are short, 99% of strings are smaller than 100 bytes, as shown in paper:
                 //     https://www.vldb.org/pvldb/vol17/p148-zeng.pdf, Figure 5f.
                 // (3) Parquet plain encoding makes utf-8 validation harder,
@@ -346,7 +347,10 @@ impl ByteViewArrayDecoderPlain {
                 //     I.e., the validation cannot validate the buffer in one pass, but instead, validate strings chunk by chunk.
                 //
                 // Given the above observations, the goal is to do batch validation as much as possible.
-                // The key idea is that if the length is smaller than 128 (99% of the case), then the length bytes are valid utf-8 (bc they are ASCII).
+                // The key idea is that if the length is smaller than 128 (99% of the case), then the length bytes are valid utf-8, as reasoned blow:
+                // If the length is smaller than 128, its 4-byte encoding are [0, 0, 0, len].
+                // Each of the byte is a valid ASCII character, so they are valid utf-8.
+                // Since they are all smaller than 128, the won't break a utf-8 code point (won't mess with later bytes).
                 //
                 // The implementation keeps a water mark `utf8_validation_begin` to track the beginning of the buffer that is not validated.
                 // If the length is smaller than 128, then we continue to next string.
