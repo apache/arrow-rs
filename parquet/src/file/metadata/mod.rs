@@ -708,7 +708,8 @@ impl ColumnChunkMetaData {
         Some(offset..(offset + length))
     }
 
-    /// Returns the number of bytes of variable length data after decoding
+    /// Returns the number of bytes of variable length data after decoding.
+    /// Only set for BYTE_ARRAY columns.
     pub fn unencoded_byte_array_data_bytes(&self) -> Option<i64> {
         self.unencoded_byte_array_data_bytes
     }
