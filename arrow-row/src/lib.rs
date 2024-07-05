@@ -871,7 +871,7 @@ impl Rows {
 
     pub fn slice(&self, offset: usize, n: usize) -> Rows{
         let mut new_buffers = vec![];
-        let mut new_offsets: vec![0];
+        let mut new_offsets = vec![0];
         for idx in offset..offset+n {
             new_buffers.extend(self.buffer[self.offsets[idx]..self.offsets[idx+1]]);
             new_offsets.push(new_buffers.len());
