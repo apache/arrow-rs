@@ -3037,7 +3037,7 @@ mod tests {
                 .set_statistics_enabled(EnabledStatistics::None)
                 .build(),
         );
-        let column_writer = get_column_writer(descr.clone(), props, get_test_page_writer());
+        let column_writer = get_column_writer(descr, props, get_test_page_writer());
         let mut writer = get_typed_column_writer::<Int32Type>(column_writer);
 
         let data = Vec::new();
