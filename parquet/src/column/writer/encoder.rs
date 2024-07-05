@@ -154,8 +154,7 @@ impl<T: DataType> ColumnValueEncoderImpl<T> {
             }
 
             if let Some(var_bytes) = T::T::variable_length_bytes(slice) {
-                self.variable_length_bytes =
-                    Some(var_bytes + self.variable_length_bytes.unwrap_or(0));
+                *self.variable_length_bytes.get_or_insert(0) += var_bytes;
             }
         }
 

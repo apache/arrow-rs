@@ -844,8 +844,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         };
 
         if let Some(var_bytes) = values_data.variable_length_bytes {
-            self.column_metrics.variable_length_bytes =
-                Some(self.column_metrics.variable_length_bytes.unwrap_or(0) + var_bytes);
+            *self.column_metrics.variable_length_bytes.get_or_insert(0) += var_bytes;
         }
 
         // update column and offset index
