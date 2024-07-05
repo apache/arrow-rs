@@ -4343,7 +4343,7 @@ mod tests {
                 Some("30 days"),
                 None,
                 None,
-              ]
+            ]
         );
     }
 

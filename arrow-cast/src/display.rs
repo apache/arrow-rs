@@ -668,10 +668,10 @@ impl<'a> DisplayIndex for &'a PrimitiveArray<IntervalDayTimeType> {
             write!(f, "{} days", value.days)?;
             first_part = false;
         }
-        
+
         if value.milliseconds != 0 {
             let millis_fmt = MillisecondsFormatter {
-                milliseconds:value.milliseconds,
+                milliseconds: value.milliseconds,
                 first_part,
             };
 
@@ -715,7 +715,7 @@ impl<'a> DisplayIndex for &'a PrimitiveArray<IntervalMonthDayNanoType> {
 
 struct NanosecondsFormatter {
     nanoseconds: i64,
-    first_part: bool, 
+    first_part: bool,
 }
 
 impl Display for NanosecondsFormatter {
@@ -777,7 +777,7 @@ impl Display for NanosecondsFormatter {
 
 struct MillisecondsFormatter {
     milliseconds: i32,
-    first_part: bool, 
+    first_part: bool,
 }
 
 impl Display for MillisecondsFormatter {
