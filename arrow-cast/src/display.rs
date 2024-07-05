@@ -23,7 +23,6 @@
 //! record batch pretty printing.
 //!
 //! [`pretty`]: crate::pretty
-use std::f32::consts::E;
 use std::fmt::{Display, Formatter, Write};
 use std::ops::Range;
 
@@ -36,7 +35,6 @@ use arrow_buffer::ArrowNativeType;
 use arrow_schema::*;
 use chrono::{NaiveDate, NaiveDateTime, SecondsFormat, TimeZone, Utc};
 use lexical_core::FormattedSize;
-use num::Signed;
 
 type TimeFormat<'a> = Option<&'a str>;
 
@@ -667,7 +665,7 @@ impl<'a> DisplayIndex for &'a PrimitiveArray<IntervalDayTimeType> {
         let mut first_part = true;
 
         if value.days != 0 {
-            write!(f, "{} days ", value.days)?;
+            write!(f, "{} days", value.days)?;
             first_part = false;
         }
         
@@ -690,16 +688,16 @@ impl<'a> DisplayIndex for &'a PrimitiveArray<IntervalMonthDayNanoType> {
         let mut first_part = true;
 
         if value.months != 0 {
-            write!(f, "{} mons ", value.months)?;
+            write!(f, "{} mons", value.months)?;
             first_part = false;
         }
 
         if value.days != 0 {
             if first_part {
-                write!(f, "{} days ", value.days)?;
+                write!(f, "{} days", value.days)?;
                 first_part = false;
             } else {
-                write!(f, " {} days ", value.days)?;
+                write!(f, " {} days", value.days)?;
             }
         }
 
@@ -722,6 +720,8 @@ struct NanosecondsFormatter {
 
 impl Display for NanosecondsFormatter {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        let mut first_part = self.first_part;
+
         let secs = self.nanoseconds / 1_000_000_000;
         let mins = secs / 60;
         let hours = mins / 60;
@@ -732,18 +732,18 @@ impl Display for NanosecondsFormatter {
         let nanoseconds = self.nanoseconds % 1_000_000_000;
 
         if hours != 0 {
-            if self.first_part {
+            if first_part {
                 write!(f, "{} hours", hours)?;
-                self.first_part = false;
+                first_part = false;
             } else {
                 write!(f, " {} hours", hours)?;
             }
         }
 
         if mins != 0 {
-            if self.first_part {
+            if first_part {
                 write!(f, "{} mins", mins)?;
-                self.first_part = false;
+                first_part = false;
             } else {
                 write!(f, " {} mins", mins)?;
             }
@@ -752,7 +752,7 @@ impl Display for NanosecondsFormatter {
         if secs != 0 || nanoseconds != 0 {
             let secs_sign = if secs < 0 || nanoseconds < 0 { "-" } else { "" };
 
-            if self.first_part {
+            if first_part {
                 write!(
                     f,
                     "{}{}.{:09} secs",
@@ -782,6 +782,8 @@ struct MillisecondsFormatter {
 
 impl Display for MillisecondsFormatter {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        let mut first_part = self.first_part;
+
         let secs = self.milliseconds / 1_000;
         let mins = secs / 60;
         let hours = mins / 60;
@@ -792,20 +794,20 @@ impl Display for MillisecondsFormatter {
         let milliseconds = self.milliseconds % 1_000;
 
         if hours != 0 {
-            if self.first_part {
+            if first_part {
                 write!(f, "{} hours", hours,)?;
+                first_part = false;
             } else {
                 write!(f, " {} hours", hours,)?;
-                self.first_part = false;
             }
         }
 
         if mins != 0 {
-            if self.first_part {
+            if first_part {
                 write!(f, "{} mins", mins,)?;
+                first_part = false;
             } else {
                 write!(f, " {} mins", mins,)?;
-                self.first_part = false;
             }
         }
 
@@ -816,7 +818,7 @@ impl Display for MillisecondsFormatter {
                 ""
             };
 
-            if self.first_part {
+            if first_part {
                 write!(
                     f,
                     "{}{}.{:03} secs",
