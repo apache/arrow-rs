@@ -37,7 +37,6 @@
 //!
 //! [Flight SQL]: https://arrow.apache.org/docs/format/FlightSql.html
 #![allow(rustdoc::invalid_html_tags)]
-#![allow(rustdoc::unportable_markdown)]
 
 use arrow_ipc::{convert, writer, writer::EncodedData, writer::IpcWriteOptions};
 use arrow_schema::{ArrowError, Schema};
