@@ -58,7 +58,9 @@ pub struct GenericByteViewBuilder<T: ByteViewType + ?Sized> {
     completed: Vec<Buffer>,
     in_progress: Vec<u8>,
     block_size: u32,
-    string_tracker: Option<(HashTable<usize>, ahash::RandomState)>, // map <string hash> -> <index to the views>
+    /// Some if deduplicating strings
+    /// map `<string hash> -> <index to the views>`
+    string_tracker: Option<(HashTable<usize>, ahash::RandomState)>
     phantom: PhantomData<T>,
 }
 
@@ -87,6 +89,7 @@ impl<T: ByteViewType + ?Sized> GenericByteViewBuilder<T> {
     }
 
     /// Deduplicate strings while building the array
+    ///
     /// This will potentially decrease the memory usage if the array have repeated strings
     /// It will also increase the time to build the array as it needs to hash the strings
     pub fn deduplicate_strings(self) -> Self {
