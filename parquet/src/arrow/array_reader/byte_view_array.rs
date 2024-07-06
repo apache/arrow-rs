@@ -347,7 +347,7 @@ impl ByteViewArrayDecoderPlain {
                 //     I.e., the validation cannot validate the buffer in one pass, but instead, validate strings chunk by chunk.
                 //
                 // Given the above observations, the goal is to do batch validation as much as possible.
-                // The key idea is that if the length is smaller than 128 (99% of the case), then the length bytes are valid utf-8, as reasoned blow:
+                // The key idea is that if the length is smaller than 128 (99% of the case), then the length bytes are valid utf-8, as reasoned below:
                 // If the length is smaller than 128, its 4-byte encoding are [0, 0, 0, len].
                 // Each of the byte is a valid ASCII character, so they are valid utf-8.
                 // Since they are all smaller than 128, the won't break a utf-8 code point (won't mess with later bytes).
