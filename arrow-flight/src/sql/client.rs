@@ -69,10 +69,14 @@ pub struct FlightSqlServiceClient<T> {
 impl FlightSqlServiceClient<Channel> {
     /// Creates a new FlightSql client that connects to a server over an arbitrary tonic `Channel`
     pub fn new(channel: Channel) -> Self {
-        let flight_client = FlightServiceClient::new(channel);
-        FlightSqlServiceClient {
+        Self::new_from_inner(FlightServiceClient::new(channel))
+    }
+
+    /// Creates a new higher level client with the provided lower level client
+    pub fn new_from_inner(inner: FlightServiceClient<Channel>) -> Self {
+        Self {
             token: None,
-            flight_client,
+            flight_client: inner,
             headers: HashMap::default(),
         }
     }
