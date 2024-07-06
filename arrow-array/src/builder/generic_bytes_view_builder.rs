@@ -22,6 +22,7 @@ use std::sync::Arc;
 use arrow_buffer::{Buffer, BufferBuilder, NullBufferBuilder, ScalarBuffer};
 use arrow_data::ByteView;
 use arrow_schema::ArrowError;
+use hashbrown::hash_table::Entry;
 use hashbrown::HashTable;
 
 use crate::builder::ArrayBuilder;
@@ -60,7 +61,7 @@ pub struct GenericByteViewBuilder<T: ByteViewType + ?Sized> {
     block_size: u32,
     /// Some if deduplicating strings
     /// map `<string hash> -> <index to the views>`
-    string_tracker: Option<(HashTable<usize>, ahash::RandomState)>
+    string_tracker: Option<(HashTable<usize>, ahash::RandomState)>,
     phantom: PhantomData<T>,
 }
 
@@ -92,7 +93,7 @@ impl<T: ByteViewType + ?Sized> GenericByteViewBuilder<T> {
     ///
     /// This will potentially decrease the memory usage if the array have repeated strings
     /// It will also increase the time to build the array as it needs to hash the strings
-    pub fn deduplicate_strings(self) -> Self {
+    pub fn with_deduplicate_strings(self) -> Self {
         Self {
             string_tracker: Some((
                 HashTable::with_capacity(self.views_builder.capacity()),
@@ -238,34 +239,38 @@ impl<T: ByteViewType + ?Sized> GenericByteViewBuilder<T> {
             return;
         }
 
-        // if string is long, we can optionally check duplication.
-        let hash_val = match &self.string_tracker {
-            Some((ht, hasher)) => {
-                let hash_val = hasher.hash_one(v);
+        // Deduplication if:
+        // (1) deduplication is enabled.
+        // (2) len > 12
+        if let Some((mut ht, hasher)) = self.string_tracker.take() {
+            let hash_val = hasher.hash_one(v);
+            let hasher_fn = |v: &_| hasher.hash_one(v);
 
-                // we can not use ht.entry here because we are under immutable borrow.
-                let find = ht.find(hash_val, |idx| {
+            let entry = ht.entry(
+                hash_val,
+                |idx| {
                     let stored_value = self.get_value(*idx);
                     v == stored_value
-                });
-
-                // If the string already exists, we will directly use the view
-                if let Some(idx) = find {
+                },
+                hasher_fn,
+            );
+            match entry {
+                Entry::Occupied(occupied) => {
+                    // If the string already exists, we will directly use the view
+                    let idx = occupied.get();
                     self.views_builder
                         .append(self.views_builder.as_slice()[*idx]);
                     self.null_buffer_builder.append_non_null();
+                    self.string_tracker = Some((ht, hasher));
                     return;
                 }
-                // return the hash value to be reused later.
-                Some(hash_val)
+                Entry::Vacant(vacant) => {
+                    // o.w. we insert the (string hash -> view index)
+                    // the idx is current length of views_builder, as we are inserting a new view
+                    vacant.insert(self.views_builder.len());
+                }
             }
-            None => None,
-        };
-        let view_idx = self.views_builder.len();
-        if let Some(hash_val) = hash_val {
-            let (ht, hasher) = self.string_tracker.as_mut().unwrap();
-            let hasher = |v: &_| hasher.hash_one(v);
-            ht.insert_unique(hash_val, view_idx, hasher);
+            self.string_tracker = Some((ht, hasher));
         }
 
         let required_cap = self.in_progress.len() + v.len();
@@ -428,36 +433,38 @@ mod tests {
 
     #[test]
     fn test_string_view_deduplicate() {
-        let mut builder = StringViewBuilder::new().deduplicate_strings();
+        let value_1 = "long string to test string view";
+        let value_2 = "not so similar string but long";
 
-        let duplicated_value = "long string to test string view";
-        builder.append_value(duplicated_value);
-        builder.append_value("short");
-        builder.append_value(duplicated_value);
-        builder.append_null();
-        builder.append_value(duplicated_value);
+        let mut builder = StringViewBuilder::new()
+            .with_deduplicate_strings()
+            .with_block_size(value_1.len() as u32 * 2); // so that we will have multiple buffers
+
+        let values = vec![
+            Some(value_1),
+            Some(value_2),
+            Some("short"),
+            Some(value_1),
+            None,
+            Some(value_2),
+            Some(value_1),
+        ];
+        builder.extend(values.clone());
 
         let array = builder.finish_cloned();
         array.to_data().validate_full().unwrap();
-        assert_eq!(array.data_buffers().len(), 1);
+        assert_eq!(array.data_buffers().len(), 1); // without duplication we would need 3 buffers.
         let actual: Vec<_> = array.iter().collect();
-        assert_eq!(
-            actual,
-            &[
-                Some(duplicated_value),
-                Some("short"),
-                Some(duplicated_value),
-                None,
-                Some(duplicated_value)
-            ]
-        );
+        assert_eq!(actual, values);
 
         let view0 = array.views().first().unwrap();
-        let view2 = array.views().get(2).unwrap();
-        let view4 = array.views().get(4).unwrap();
+        let view3 = array.views().get(3).unwrap();
+        let view6 = array.views().get(6).unwrap();
 
-        assert_eq!(view0, view2);
-        assert_eq!(view0, view4);
+        assert_eq!(view0, view3);
+        assert_eq!(view0, view6);
+
+        assert_eq!(array.views().get(1), array.views().get(5));
     }
 
     #[test]
