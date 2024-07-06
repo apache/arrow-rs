@@ -20,6 +20,8 @@
 use crate::errors::ParquetError;
 use crate::format::{OffsetIndex, PageLocation};
 
+/// [`OffsetIndex`] information for a column chunk. Contains offsets and sizes for each page
+/// in the chunk. Optionally stores fully decoded page sizes for BYTE_ARRAY columns.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ParquetOffsetIndex {
     pub page_locations: Vec<PageLocation>,
@@ -27,6 +29,7 @@ pub struct ParquetOffsetIndex {
 }
 
 impl ParquetOffsetIndex {
+    /// Creates a new [`ParquetOffsetIndex`] from an [`OffsetIndex`].
     pub(crate) fn try_new(index: OffsetIndex) -> Result<Self, ParquetError> {
         Ok(Self {
             page_locations: index.page_locations,
@@ -34,10 +37,13 @@ impl ParquetOffsetIndex {
         })
     }
 
+    /// Vector of [`PageLocation`] objects, one per page in the chunk.
     pub fn page_locations(&self) -> &Vec<PageLocation> {
         &self.page_locations
     }
 
+    /// Optional vector of unencoded page sizes, one per page in the chunk. Only defined
+    /// for BYTE_ARRAY columns.
     pub fn unencoded_byte_array_data_bytes(&self) -> Option<&Vec<i64>> {
         self.unencoded_byte_array_data_bytes.as_ref()
     }
