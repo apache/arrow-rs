@@ -148,7 +148,7 @@ impl SqlInfoName for u32 {
 /// *              int32_to_int32_list_map: map<key: int32, value: list<$data$: int32>>
 /// * >
 /// ```
-///[flightsql]: (https://github.com/apache/arrow/blob/f9324b79bf4fc1ec7e97b32e3cce16e75ef0f5e3/format/FlightSql.proto#L32-L43
+///[flightsql]: https://github.com/apache/arrow/blob/f9324b79bf4fc1ec7e97b32e3cce16e75ef0f5e3/format/FlightSql.proto#L32-L43
 ///[Union Spec]: https://arrow.apache.org/docs/format/Columnar.html#dense-union
 struct SqlInfoUnionBuilder {
     // Values for each child type
@@ -361,7 +361,7 @@ impl SqlInfoDataBuilder {
 
     /// Encode the contents of this list according to the [FlightSQL spec]
     ///
-    /// [FlightSQL spec]: (https://github.com/apache/arrow/blob/f9324b79bf4fc1ec7e97b32e3cce16e75ef0f5e3/format/FlightSql.proto#L32-L43
+    /// [FlightSQL spec]: https://github.com/apache/arrow/blob/f9324b79bf4fc1ec7e97b32e3cce16e75ef0f5e3/format/FlightSql.proto#L32-L43
     pub fn build(self) -> Result<SqlInfoData> {
         let mut name_builder = UInt32Builder::new();
         let mut value_builder = SqlInfoUnionBuilder::new();

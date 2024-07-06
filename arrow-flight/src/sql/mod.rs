@@ -45,6 +45,7 @@ use prost::Message;
 
 mod gen {
     #![allow(clippy::all)]
+    #![allow(rustdoc::unportable_markdown)]
     include!("arrow.flight.protocol.sql.rs");
 }
 
