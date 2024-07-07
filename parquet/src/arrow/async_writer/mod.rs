@@ -50,6 +50,9 @@
 //! # }
 //! ```
 
+#[cfg(feature = "object_store")]
+mod store;
+
 use crate::{
     arrow::arrow_writer::ArrowWriterOptions,
     arrow::ArrowWriter,
