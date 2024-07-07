@@ -18,21 +18,48 @@
 use bytes::Bytes;
 use futures::future::BoxFuture;
 use futures::TryFutureExt;
+use std::sync::Arc;
 
 use crate::arrow::async_writer::AsyncFileWriter;
 use crate::errors::{ParquetError, Result};
 use object_store::buffered::BufWriter;
+use object_store::path::Path;
 use object_store::ObjectStore;
 use tokio::io::AsyncWriteExt;
 
-impl AsyncFileWriter for BufWriter {
+#[derive(Debug)]
+pub struct ParquetObjectWriter {
+    w: BufWriter,
+}
+
+impl ParquetObjectWriter {
+    /// Create a new [`ParquetObjectWriter`] that writes to the specified path in the given store.
+    ///
+    /// To configure the writer behavior, please build [`BufWriter`] and then use [`Self::from_raw`]
+    pub fn new(store: Arc<dyn ObjectStore>, path: Path) -> Self {
+        Self::from_raw(BufWriter::new(store, path))
+    }
+
+    /// Construct a new ParquetObjectWriter via a existing BufWriter.
+    pub fn from_raw(w: BufWriter) -> Self {
+        Self { w }
+    }
+
+    /// Consume the writer and return the underlying BufWriter.
+    pub fn into_raw(self) -> BufWriter {
+        self.w
+    }
+}
+
+impl AsyncFileWriter for ParquetObjectWriter {
     fn write(&mut self, bs: Bytes) -> BoxFuture<'_, Result<()>> {
-        Box::pin(async { BufWriter::put(self, bs).await })
+        Box::pin(async { self.w.put(self, bs).await })
     }
 
     fn complete(&mut self) -> BoxFuture<'_, Result<()>> {
         Box::pin(async {
-            BufWriter::shutdown(self)
+            self.w
+                .shutdown()
                 .await
                 .map_err(|err| ParquetError::External(Box::new(err)))
         })
@@ -56,14 +83,14 @@ mod tests {
         let col = Arc::new(Int64Array::from_iter_values([1, 2, 3])) as ArrayRef;
         let to_write = RecordBatch::try_from_iter([("col", col)]).unwrap();
 
-        let object_store_writer = BufWriter::new(store.clone(), "test".into());
+        let object_store_writer = ParquetObjectWriter::new(store.clone(), Path::from("test"));
         let mut writer =
             AsyncArrowWriter::try_new(object_store_writer, to_write.schema(), None).unwrap();
         writer.write(&to_write).await.unwrap();
         writer.close().await.unwrap();
 
         let buffer = store
-            .get("test".into())
+            .get(&Path::from("test"))
             .await
             .unwrap()
             .bytes()
