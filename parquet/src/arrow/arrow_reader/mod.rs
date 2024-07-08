@@ -2456,7 +2456,7 @@ mod tests {
         let cases = [
             (
                 invalid_utf8_first_char::<i32>(),
-                "Parquet argument error: Parquet error: encountered non UTF-8 data",
+                "Parquet argument error: Parquet error: encountered non UTF-8 data: invalid utf-8 sequence of 1 bytes from index 0",
             ),
             (
                 invalid_utf8_later_char::<i32>(),
