@@ -314,6 +314,8 @@ impl ByteViewArrayDecoderPlain {
         let buf = self.buf.as_ref();
         let mut read = 0;
         output.views.reserve(to_read);
+
+        let mut utf8_validation_begin = self.offset;
         while self.offset < self.buf.len() && read != to_read {
             if self.offset + 4 > self.buf.len() {
                 return Err(ParquetError::EOF("eof decoding byte array".into()));
@@ -332,7 +334,38 @@ impl ByteViewArrayDecoderPlain {
             }
 
             if self.validate_utf8 {
-                check_valid_utf8(unsafe { buf.get_unchecked(start_offset..end_offset) })?;
+                // It seems you are trying to understand what's going on here, take a breath and be patient.
+                // Utf-8 validation is a non-trivial task, here are some background facts:
+                // (1) Validating one 2048-byte string is much faster than validating 128 of 16-byte string.
+                //     As shown in https://github.com/apache/arrow-rs/pull/6009#issuecomment-2211174229
+                //     Potentially because the SIMD operations favor longer strings.
+                // (2) Practical strings are short, 99% of strings are smaller than 100 bytes, as shown in paper:
+                //     https://www.vldb.org/pvldb/vol17/p148-zeng.pdf, Figure 5f.
+                // (3) Parquet plain encoding makes utf-8 validation harder,
+                //     because it stores the length of each string right before the string.
+                //     This means naive utf-8 validation will be slow, because the validation need to skip the length bytes.
+                //     I.e., the validation cannot validate the buffer in one pass, but instead, validate strings chunk by chunk.
+                //
+                // Given the above observations, the goal is to do batch validation as much as possible.
+                // The key idea is that if the length is smaller than 128 (99% of the case), then the length bytes are valid utf-8, as reasoned below:
+                // If the length is smaller than 128, its 4-byte encoding are [0, 0, 0, len].
+                // Each of the byte is a valid ASCII character, so they are valid utf-8.
+                // Since they are all smaller than 128, the won't break a utf-8 code point (won't mess with later bytes).
+                //
+                // The implementation keeps a water mark `utf8_validation_begin` to track the beginning of the buffer that is not validated.
+                // If the length is smaller than 128, then we continue to next string.
+                // If the length is larger than 128, then we validate the buffer before the length bytes, and move the water mark to the beginning of next string.
+                if len < 128 {
+                    // fast path, move to next string.
+                    // the len bytes are valid utf8.
+                } else {
+                    // unfortunately, the len bytes may not be valid utf8, we need to wrap up and validate everything before it.
+                    check_valid_utf8(unsafe {
+                        buf.get_unchecked(utf8_validation_begin..self.offset)
+                    })?;
+                    // move the cursor to skip the len bytes.
+                    utf8_validation_begin = start_offset;
+                }
             }
 
             unsafe {
@@ -340,6 +373,11 @@ impl ByteViewArrayDecoderPlain {
             }
             self.offset = end_offset;
             read += 1;
+        }
+
+        // validate the last part of the buffer
+        if self.validate_utf8 {
+            check_valid_utf8(unsafe { buf.get_unchecked(utf8_validation_begin..self.offset) })?;
         }
 
         self.max_remaining_values -= to_read;
