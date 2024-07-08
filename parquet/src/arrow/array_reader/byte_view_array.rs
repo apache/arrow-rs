@@ -554,7 +554,7 @@ impl ByteViewArrayDecoderDeltaLength {
             // # Safety
             // The length is from the delta length decoder, so it is valid
             // The start_offset is calculated from the lengths, so it is valid
-            // `start_offset` + *length is guaranteed to be within the bounds of `data`, as checked in `new`
+            // `start_offset + length` is guaranteed to be within the bounds of `data`, as checked in `new`
             unsafe { output.append_view_unchecked(block_id, current_offset as u32, *length as u32) }
 
             current_offset += *length as usize;
@@ -600,51 +600,62 @@ impl ByteViewArrayDecoderDelta {
 
     // Unlike other encodings, we need to copy the data.
     //
-    //  DeltaByteArray data is stored using shared prefixes/suffixes, 
+    //  DeltaByteArray data is stored using shared prefixes/suffixes,
     // which results in potentially non-contiguous
     // strings, while Arrow encodings require contiguous strings
     //
     // <https://parquet.apache.org/docs/file-format/data-pages/encodings/#delta-strings-delta_byte_array--7>
-    
+
     fn read(&mut self, output: &mut ViewBuffer, len: usize) -> Result<usize> {
         output.views.reserve(len.min(self.decoder.remaining()));
 
         // array buffer only have long strings
         let mut array_buffer: Vec<u8> = Vec::with_capacity(4096);
 
-        // utf8 validation buffer have all strings, we batch the strings in one buffer to accelerate validation
-        let mut utf8_validation_buffer = if self.validate_utf8 {
-            Some(Vec::with_capacity(4096))
-        } else {
-            None
-        };
-
         let buffer_id = output.buffers.len() as u32;
 
-        let read = self.decoder.read(len, |bytes| {
-            let offset = array_buffer.len();
-            let view = make_view(bytes, buffer_id, offset as u32);
-            if bytes.len() > 12 {
-                // only copy the data to buffer if the string can not be inlined.
-                array_buffer.extend_from_slice(bytes);
-            }
-            if let Some(v) = utf8_validation_buffer.as_mut() {
-                v.extend_from_slice(bytes);
-            }
+        let read = if !self.validate_utf8 {
+            self.decoder.read(len, |bytes| {
+                let offset = array_buffer.len();
+                let view = make_view(bytes, buffer_id, offset as u32);
+                if bytes.len() > 12 {
+                    // only copy the data to buffer if the string can not be inlined.
+                    array_buffer.extend_from_slice(bytes);
+                }
 
-            // # Safety
-            // The buffer_id is the last buffer in the output buffers
-            // The offset is calculated from the buffer, so it is valid
-            // Utf-8 validation is done later
-            unsafe {
-                output.append_raw_view_unchecked(&view);
-            }
-            Ok(())
-        })?;
+                // # Safety
+                // The buffer_id is the last buffer in the output buffers
+                // The offset is calculated from the buffer, so it is valid
+                unsafe {
+                    output.append_raw_view_unchecked(&view);
+                }
+                Ok(())
+            })?
+        } else {
+            // utf8 validation buffer have all strings, we batch the strings in one buffer to accelerate validation
+            let mut utf8_validation_buffer = Vec::with_capacity(4096);
 
-        utf8_validation_buffer
-            .map(|v| check_valid_utf8(&v))
-            .transpose()?;
+            let v = self.decoder.read(len, |bytes| {
+                let offset = array_buffer.len();
+                let view = make_view(bytes, buffer_id, offset as u32);
+                if bytes.len() > 12 {
+                    // only copy the data to buffer if the string can not be inlined.
+                    array_buffer.extend_from_slice(bytes);
+                }
+                utf8_validation_buffer.extend_from_slice(bytes);
+
+                // # Safety
+                // The buffer_id is the last buffer in the output buffers
+                // The offset is calculated from the buffer, so it is valid
+                // Utf-8 validation is done later
+                unsafe {
+                    output.append_raw_view_unchecked(&view);
+                }
+                Ok(())
+            })?;
+            check_valid_utf8(&utf8_validation_buffer)?;
+            v
+        };
 
         let actual_block_id = output.append_block(array_buffer.into());
         assert_eq!(actual_block_id, buffer_id);
