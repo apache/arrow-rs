@@ -365,7 +365,7 @@ impl Schema {
     }
 
     /// Returns a vector with references to all fields (including nested fields)
-    #[deprecated(since = "52.1.0", note = "Use `flattened_fields` instead")]
+    #[deprecated(since = "52.2.0", note = "Use `flattened_fields` instead")]
     #[inline]
     pub fn all_fields(&self) -> Vec<&Field> {
         self.flattened_fields()
