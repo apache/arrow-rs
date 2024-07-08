@@ -338,12 +338,26 @@ impl Schema {
     ///
     /// let f3_inner1 = Arc::new(Field::new("c_inner1", DataType::Int8, false));
     /// let f3_inner2 = Arc::new(Field::new("c_inner2", DataType::Int8, false));
-    /// let f3 = Arc::new(Field::new("c", DataType::Struct(vec![f3_inner1.clone(), f3_inner2.clone()].into()), false));
+    /// let f3 = Arc::new(Field::new(
+    ///     "c",
+    ///     DataType::Struct(vec![f3_inner1.clone(), f3_inner2.clone()].into()),
+    ///     false
+    /// ));
     ///
     /// let mut schema = Schema::new(vec![
     ///   f1.clone(), f2.clone(), f3.clone()
     /// ]);
-    /// assert_eq!(schema.flattened_fields(), vec![f1.as_ref(), f2.as_ref(), f2_inner.as_ref(), f3.as_ref(), f3_inner1.as_ref(), f3_inner2.as_ref()]);
+    /// assert_eq!(
+    ///     schema.flattened_fields(),
+    ///     vec![
+    ///         f1.as_ref(),
+    ///         f2.as_ref(),
+    ///         f2_inner.as_ref(),
+    ///         f3.as_ref(),
+    ///         f3_inner1.as_ref(),
+    ///         f3_inner2.as_ref()
+    ///    ]
+    /// );
     /// ```
     #[inline]
     pub fn flattened_fields(&self) -> Vec<&Field> {
