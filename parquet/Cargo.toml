@@ -86,10 +86,10 @@ object_store = { version = "0.10.0", default-features = false, features = ["azur
 # TODO: temporary to fix parquet wasm build
 # upstream issue: https://github.com/gyscos/zstd-rs/issues/269
 [target.'cfg(target_family = "wasm")'.dependencies]
-zstd-sys = { version = ">=2.0.0, <2.0.12", optional = true, default-features = false }
+zstd-sys = { version = ">=2.0.0, <2.0.13", optional = true, default-features = false }
 
 [target.'cfg(target_family = "wasm")'.dev-dependencies]
-zstd-sys = { version = ">=2.0.0, <2.0.12", default-features = false }
+zstd-sys = { version = ">=2.0.0, <2.0.13", default-features = false }
 
 [package.metadata.docs.rs]
 all-features = true
