@@ -28,6 +28,8 @@ use arrow_schema::DataType as ArrowType;
 /// and reuse the existing logic for Vec in the parquet crate
 #[derive(Debug, Default)]
 pub struct ViewBuffer {
+    // FIXME: decide and document a safety invariant for the `views` and `buffers` in this struct,
+    // and document safety in the code modifying it accordingly.
     pub views: Vec<u128>,
     pub buffers: Vec<Buffer>,
 }
@@ -48,12 +50,14 @@ impl ViewBuffer {
     /// This method is only safe when:
     /// - `block` is a valid index, i.e., the return value of `append_block`
     /// - `offset` and `offset + len` are valid indices into the buffer
-    /// - The `(offset, offset + len)` is valid value for the native type.
+    /// - The buffer memory in the `(offset, offset + len)` range represent valid values for the native type.
     #[allow(unused)]
     pub unsafe fn append_view_unchecked(&mut self, block: u32, offset: u32, len: u32) {
-        let b = self.buffers.get_unchecked(block as usize);
+        // SAFETY: Caller guarantees that `block` is a valid block index.
+        let b = unsafe { self.buffers.get_unchecked(block as usize) };
         let end = offset.saturating_add(len);
-        let b = b.get_unchecked(offset as usize..end as usize);
+        // SAFETY: Caller guarantees that (offset, offset+len) are valid indices for the buffer.
+        let b = unsafe { b.get_unchecked(offset as usize..end as usize) };
 
         let view = make_view(b, block, offset);
 
@@ -71,6 +75,9 @@ impl ViewBuffer {
 
     /// Converts this into an [`ArrayRef`] with the provided `data_type` and `null_buffer`
     #[allow(unused)]
+    // FIXME: this method should be unsafe: the caller must guarantee the null_buffer to be valid,
+    // and if calling with data_type == ArrowType::Utf8View, the array views must refer to valid
+    // utf8.
     pub fn into_array(self, null_buffer: Option<Buffer>, data_type: &ArrowType) -> ArrayRef {
         let len = self.views.len();
         let views = Buffer::from_vec(self.views);
@@ -81,7 +88,8 @@ impl ViewBuffer {
                     .add_buffer(views)
                     .add_buffers(self.buffers)
                     .null_bit_buffer(null_buffer);
-                // We have checked that the data is utf8 when building the buffer, so it is safe
+                // SAFETY: caller guarantees that all the views refer to valid utf8, and the null
+                // buffer to be large enough, if any.
                 let array = unsafe { builder.build_unchecked() };
                 make_array(array)
             }
@@ -91,6 +99,7 @@ impl ViewBuffer {
                     .add_buffer(views)
                     .add_buffers(self.buffers)
                     .null_bit_buffer(null_buffer);
+                // SAFETY: caller guarantees validity of the `views` and null buffer.
                 let array = unsafe { builder.build_unchecked() };
                 make_array(array)
             }

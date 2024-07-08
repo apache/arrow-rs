@@ -146,6 +146,10 @@ impl<I: OffsetSizeTrait> OffsetBuffer<I> {
 
                 let data = match cfg!(debug_assertions) {
                     true => array_data_builder.build().unwrap(),
+                    // SAFETY: FIXME: this is unsound. data_type is passed by the caller without
+                    // any validation, which might result in creating invalid arrays, and this is a
+                    // safe function which cannot have preconditions. Similar considerations apply
+                    // to null_buffer.
                     false => unsafe { array_data_builder.build_unchecked() },
                 };
 
@@ -164,7 +168,8 @@ impl<I: OffsetSizeTrait> OffsetBuffer<I> {
             let len = (end - start).to_usize().unwrap();
 
             if len != 0 {
-                // Safety: (1) the buffer is valid (2) the offsets are valid (3) the values in between are of ByteViewType
+                // SAFETY: (1) the buffer is valid (2) the offsets are valid (3) the values in between are of ByteViewType.
+                // This follows from `self` being itself valid.
                 unsafe {
                     builder.append_view_unchecked(block, start.as_usize() as u32, len as u32);
                 }

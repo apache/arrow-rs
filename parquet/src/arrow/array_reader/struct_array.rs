@@ -112,10 +112,10 @@ impl ArrayReader for StructArrayReader {
             .collect::<Result<Vec<_>>>()?;
 
         // check that array child data has same size
-        let children_array_len =
-            children_array.first().map(|arr| arr.len()).ok_or_else(|| {
-                general_err!("Struct array reader should have at least one child!")
-            })?;
+        let children_array_len = children_array
+            .first()
+            .map(|arr| arr.len())
+            .ok_or_else(|| general_err!("Struct array reader should have at least one child!"))?;
 
         let all_children_len_eq = children_array
             .iter()
@@ -169,10 +169,10 @@ impl ArrayReader for StructArrayReader {
                 return Err(general_err!("Failed to decode level data for struct array"));
             }
 
-            array_data_builder =
-                array_data_builder.null_bit_buffer(Some(bitmap_builder.into()));
+            array_data_builder = array_data_builder.null_bit_buffer(Some(bitmap_builder.into()));
         }
 
+        // SAFETY: FIXME: document why this call is safe.
         let array_data = unsafe { array_data_builder.build_unchecked() };
         Ok(Arc::new(StructArray::from(array_data)))
     }
@@ -282,13 +282,12 @@ mod tests {
         //    null,
         // ]
 
-        let expected_l =
-            Arc::new(ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
-                Some(vec![Some(1), Some(2), None]),
-                Some(vec![]),
-                None,
-                None,
-            ]));
+        let expected_l = Arc::new(ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+            Some(vec![Some(1), Some(2), None]),
+            Some(vec![]),
+            None,
+            None,
+        ]));
 
         let validity = Buffer::from([0b00000111]);
         let struct_fields = vec![(
