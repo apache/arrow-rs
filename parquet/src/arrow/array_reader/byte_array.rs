@@ -442,6 +442,23 @@ impl ByteArrayDecoderDeltaLength {
         let mut lengths = vec![0; values];
         len_decoder.get(&mut lengths)?;
 
+        let mut total_bytes = 0;
+
+        for l in lengths.iter() {
+            if *l < 0 {
+                return Err(ParquetError::General(
+                    "negative delta length byte array length".to_string(),
+                ));
+            }
+            total_bytes += *l as usize;
+        }
+
+        if total_bytes + len_decoder.get_offset() > data.len() {
+            return Err(ParquetError::General(
+                "Insufficient delta length byte array bytes".to_string(),
+            ));
+        }
+
         Ok(Self {
             lengths,
             data,
@@ -466,23 +483,17 @@ impl ByteArrayDecoderDeltaLength {
         let total_bytes: usize = src_lengths.iter().map(|x| *x as usize).sum();
         output.values.reserve(total_bytes);
 
-        if self.data_offset + total_bytes > self.data.len() {
-            return Err(ParquetError::EOF(
-                "Insufficient delta length byte array bytes".to_string(),
-            ));
-        }
-
-        let mut start_offset = self.data_offset;
+        let mut current_offset = self.data_offset;
         for length in src_lengths {
-            let end_offset = start_offset + *length as usize;
+            let end_offset = current_offset + *length as usize;
             output.try_push(
-                &self.data.as_ref()[start_offset..end_offset],
+                &self.data.as_ref()[current_offset..end_offset],
                 self.validate_utf8,
             )?;
-            start_offset = end_offset;
+            current_offset = end_offset;
         }
 
-        self.data_offset = start_offset;
+        self.data_offset = current_offset;
         self.length_offset += to_read;
 
         if self.validate_utf8 {

@@ -514,6 +514,23 @@ impl ByteViewArrayDecoderDeltaLength {
         let mut lengths = vec![0; values];
         len_decoder.get(&mut lengths)?;
 
+        let mut total_bytes = 0;
+
+        for l in lengths.iter() {
+            if *l < 0 {
+                return Err(ParquetError::General(
+                    "negative delta length byte array length".to_string(),
+                ));
+            }
+            total_bytes += *l as usize;
+        }
+
+        if total_bytes + len_decoder.get_offset() > data.len() {
+            return Err(ParquetError::General(
+                "Insufficient delta length byte array bytes".to_string(),
+            ));
+        }
+
         Ok(Self {
             lengths,
             data,
@@ -529,33 +546,26 @@ impl ByteViewArrayDecoderDeltaLength {
 
         let src_lengths = &self.lengths[self.length_offset..self.length_offset + to_read];
 
-        let total_bytes: usize = src_lengths.iter().map(|x| *x as usize).sum();
-
-        if self.data_offset + total_bytes > self.data.len() {
-            return Err(ParquetError::EOF(
-                "Insufficient delta length byte array bytes".to_string(),
-            ));
-        }
-
         let block_id = output.append_block(self.data.clone().into());
 
-        let mut start_offset = self.data_offset;
-        let initial_offset = start_offset;
+        let mut current_offset = self.data_offset;
+        let initial_offset = current_offset;
         for length in src_lengths {
             // # Safety
             // The length is from the delta length decoder, so it is valid
             // The start_offset is calculated from the lengths, so it is valid
-            unsafe { output.append_view_unchecked(block_id, start_offset as u32, *length as u32) }
+            // `start_offset` + *length is guaranteed to be within the bounds of `data`, as checked in `new`
+            unsafe { output.append_view_unchecked(block_id, current_offset as u32, *length as u32) }
 
-            start_offset += *length as usize;
+            current_offset += *length as usize;
         }
 
         // Delta length encoding has continuous strings, we can validate utf8 in one go
         if self.validate_utf8 {
-            check_valid_utf8(&self.data[initial_offset..start_offset])?;
+            check_valid_utf8(&self.data[initial_offset..current_offset])?;
         }
 
-        self.data_offset = start_offset;
+        self.data_offset = current_offset;
         self.length_offset += to_read;
 
         Ok(to_read)
@@ -592,28 +602,44 @@ impl ByteViewArrayDecoderDelta {
     fn read(&mut self, output: &mut ViewBuffer, len: usize) -> Result<usize> {
         output.views.reserve(len.min(self.decoder.remaining()));
 
-        let mut buffer: Vec<u8> = Vec::with_capacity(4096);
+        // array buffer only have long strings
+        let mut array_buffer: Vec<u8> = Vec::with_capacity(4096);
+
+        // utf8 validation buffer have all strings, we batch the strings in one buffer to accelerate validation
+        let mut utf8_validation_buffer = if self.validate_utf8 {
+            Some(Vec::with_capacity(4096))
+        } else {
+            None
+        };
 
         let buffer_id = output.buffers.len() as u32;
 
         let read = self.decoder.read(len, |bytes| {
-            let offset = buffer.len();
-            buffer.extend_from_slice(bytes);
+            let offset = array_buffer.len();
             let view = make_view(bytes, buffer_id, offset as u32);
+            if len > 12 {
+                // only copy the data to buffer if the string can not be inlined.
+                array_buffer.extend_from_slice(bytes);
+            }
+            if let Some(v) = utf8_validation_buffer.as_mut() {
+                v.extend_from_slice(bytes);
+            }
+
             // # Safety
             // The buffer_id is the last buffer in the output buffers
             // The offset is calculated from the buffer, so it is valid
+            // Utf-8 validation is done later
             unsafe {
                 output.append_raw_view_unchecked(&view);
             }
             Ok(())
         })?;
 
-        // The buffer is dense, so we can validate utf8 in one go
-        if self.validate_utf8 {
-            check_valid_utf8(&buffer)?;
-        }
-        let actual_block_id = output.append_block(buffer.into());
+        utf8_validation_buffer
+            .map(|v| check_valid_utf8(&v))
+            .transpose()?;
+
+        let actual_block_id = output.append_block(array_buffer.into());
         assert_eq!(actual_block_id, buffer_id);
         Ok(read)
     }
