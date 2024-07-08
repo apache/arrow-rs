@@ -632,7 +632,9 @@ impl ByteViewArrayDecoderDelta {
                 Ok(())
             })?
         } else {
-            // utf8 validation buffer have all strings, we batch the strings in one buffer to accelerate validation
+            // utf8 validation buffer has only short strings. These short
+            // strings are inlined into the views but we copy them into a
+            // contiguous buffer to accelerate validation.®
             let mut utf8_validation_buffer = Vec::with_capacity(4096);
 
             let v = self.decoder.read(len, |bytes| {
@@ -641,8 +643,9 @@ impl ByteViewArrayDecoderDelta {
                 if bytes.len() > 12 {
                     // only copy the data to buffer if the string can not be inlined.
                     array_buffer.extend_from_slice(bytes);
+                } else {
+                    utf8_validation_buffer.extend_from_slice(bytes);
                 }
-                utf8_validation_buffer.extend_from_slice(bytes);
 
                 // # Safety
                 // The buffer_id is the last buffer in the output buffers
@@ -653,6 +656,7 @@ impl ByteViewArrayDecoderDelta {
                 }
                 Ok(())
             })?;
+            check_valid_utf8(&array_buffer)?;
             check_valid_utf8(&utf8_validation_buffer)?;
             v
         };
