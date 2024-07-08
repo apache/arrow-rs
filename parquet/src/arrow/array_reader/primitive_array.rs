@@ -179,6 +179,11 @@ where
             .add_buffer(record_data)
             .null_bit_buffer(self.record_reader.consume_bitmap_buffer());
 
+        // SAFETY: Assuming that the RecordReader's null buffer is sufficiently sized for the
+        // corresponding Vec<T> buffer (or None), this is safe, as we have a single buffer
+        // obtained from a vector of `T`s, which must therefore have a valid memory representation
+        // for T. The type mapping above ensures that a valid T results in a valid Arrow array of
+        // type `arrow_data_type`.
         let array_data = unsafe { array_data.build_unchecked() };
         let array: ArrayRef = match T::get_physical_type() {
             PhysicalType::BOOLEAN => Arc::new(BooleanArray::from(array_data)),

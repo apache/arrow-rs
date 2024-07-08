@@ -225,6 +225,7 @@ impl<OffsetSize: OffsetSizeTrait> ArrayReader for ListArrayReader<OffsetSize> {
             data_builder = data_builder.null_bit_buffer(Some(builder.into()))
         }
 
+        // SAFETY: FIXME: document why this call is safe.
         let list_data = unsafe { data_builder.build_unchecked() };
 
         let result_array = GenericListArray::<OffsetSize>::from(list_data);

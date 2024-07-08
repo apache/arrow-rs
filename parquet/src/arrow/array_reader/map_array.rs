@@ -99,7 +99,7 @@ impl ArrayReader for MapArrayReader {
         let data = array.to_data();
         let builder = data.into_builder().data_type(self.data_type.clone());
 
-        // SAFETY - we can assume that ListArrayReader produces valid ListArray
+        // SAFETY: we can assume that ListArrayReader produces valid ListArray
         // of the expected type, and as such its output can be reinterpreted as
         // a MapArray without validation
         Ok(Arc::new(MapArray::from(unsafe {

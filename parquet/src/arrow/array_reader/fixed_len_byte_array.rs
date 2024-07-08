@@ -160,6 +160,12 @@ impl ArrayReader for FixedLenByteArrayReader {
             .add_buffer(Buffer::from_vec(record_data.buffer))
             .null_bit_buffer(self.record_reader.consume_bitmap_buffer());
 
+        // SAFETY: Assuming that a RecordReader produces a valid FixedLenByteArrayBuffer (as
+        // otherwise that code itself would be unsound), this call is safe if self.byte_length
+        // matches the byte length of the FixedLenByteArrayBuffer produced by the RecordReader
+        // matches the byte length passed as a type parameter to ArrayDataBuilder.
+        // FIXME: how do we know that the byte lengths match? What if record_data.byte_length
+        // is None?
         let binary = FixedSizeBinaryArray::from(unsafe { array_data.build_unchecked() });
 
         // TODO: An improvement might be to do this conversion on read

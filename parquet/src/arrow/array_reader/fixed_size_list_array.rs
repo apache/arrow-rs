@@ -202,6 +202,7 @@ impl ArrayReader for FixedSizeListArrayReader {
             list_builder = list_builder.null_bit_buffer(Some(builder.into()));
         }
 
+        // SAFETY: FIXME: document why this call is safe.
         let list_data = unsafe { list_builder.build_unchecked() };
 
         let result_array = FixedSizeListArray::from(list_data);
