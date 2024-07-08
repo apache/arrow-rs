@@ -617,7 +617,7 @@ impl ByteViewArrayDecoderDelta {
         let read = self.decoder.read(len, |bytes| {
             let offset = array_buffer.len();
             let view = make_view(bytes, buffer_id, offset as u32);
-            if len > 12 {
+            if bytes.len() > 12 {
                 // only copy the data to buffer if the string can not be inlined.
                 array_buffer.extend_from_slice(bytes);
             }
@@ -651,15 +651,6 @@ impl ByteViewArrayDecoderDelta {
 
 /// Check that `val` is a valid UTF-8 sequence
 pub fn check_valid_utf8(val: &[u8]) -> Result<()> {
-    if let Some(&b) = val.first() {
-        // A valid code-point iff it does not start with 0b10xxxxxx
-        // Bit-magic taken from `std::str::is_char_boundary`
-        if (b as i8) < -0x40 {
-            return Err(ParquetError::General(
-                "encountered non UTF-8 data".to_string(),
-            ));
-        }
-    }
     match std::str::from_utf8(val) {
         Ok(_) => Ok(()),
         Err(e) => Err(general_err!("encountered non UTF-8 data: {}", e)),
