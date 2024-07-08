@@ -598,7 +598,14 @@ impl ByteViewArrayDecoderDelta {
         })
     }
 
-    // Unlike other encodings, we need to copy the data because we can not reuse the DeltaByteArray data in Arrow.
+    // Unlike other encodings, we need to copy the data.
+    //
+    //  DeltaByteArray data is stored using shared prefixes/suffixes, 
+    // which results in potentially non-contiguous
+    // strings, while Arrow encodings require contiguous strings
+    //
+    // <https://parquet.apache.org/docs/file-format/data-pages/encodings/#delta-strings-delta_byte_array--7>
+    
     fn read(&mut self, output: &mut ViewBuffer, len: usize) -> Result<usize> {
         output.views.reserve(len.min(self.decoder.remaining()));
 
