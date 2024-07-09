@@ -869,25 +869,17 @@ impl Rows {
             + self.offsets.len() * std::mem::size_of::<usize>()
     }
 
-    pub fn slice(&self, offset: usize, n: usize) -> Rows{
-        let mut new_buffers = vec![];
-        let mut new_offsets = vec![0];
-        for idx in offset..offset+n {
-            println!("idx: {:?}", idx);
-            new_buffers.extend(self.buffer[self.offsets[idx]..self.offsets[idx+1]].to_vec());
-            new_offsets.push(new_buffers.len());
-        }
-        debug_assert_eq!(new_offsets.len(), n+1);
-        Self{
-            buffer: new_buffers,
+    pub fn slice(&self, offset: usize, length: usize) -> Rows {
+        let new_buffer = self.buffer[self.offsets[offset]..self.offsets[offset + length]].to_vec();
+        let new_offsets = self.offsets[offset..offset + length + 1]
+            .iter()
+            .map(|value| value - self.offsets[offset])
+            .collect::<Vec<_>>();
+        Self {
+            buffer: new_buffer,
             offsets: new_offsets,
             config: self.config.clone(),
         }
-    }
-
-    pub fn print(&self) {
-        println!("self.buffer: {:?}", self.buffer);
-        println!("self.offsets: {:?}", self.offsets);
     }
 }
 
@@ -2394,5 +2386,22 @@ mod tests {
         let converter = RowConverter::new(vec![SortField::new(a.data_type().clone())]).unwrap();
         let rows = converter.convert_columns(&[Arc::new(a) as _]).unwrap();
         assert_eq!(rows.row(0).cmp(&rows.row(1)), Ordering::Less);
+    }
+
+    #[test]
+    fn test_rows_slice() {
+        let converter = RowConverter::new(vec![SortField::new(DataType::Boolean)]).unwrap();
+
+        let col = Arc::new(BooleanArray::from_iter([None, Some(false), Some(true)])) as ArrayRef;
+
+        let rows = converter.convert_columns(&[Arc::clone(&col)]).unwrap();
+        let rows_sliced = rows.slice(1, 2);
+        let sliced_col = col.slice(1, 2);
+        let rows_from_sliced_arr = converter
+            .convert_columns(&[Arc::clone(&sliced_col)])
+            .unwrap();
+        assert_eq!(rows_sliced.num_rows(), 2);
+        assert_eq!(rows_sliced.row(0), rows_from_sliced_arr.row(0));
+        assert_eq!(rows_sliced.row(1), rows_from_sliced_arr.row(1));
     }
 }
