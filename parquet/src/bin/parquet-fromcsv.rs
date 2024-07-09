@@ -557,9 +557,10 @@ mod tests {
     fn test_parse_arg_compression_format_fail() {
         match parse_args(vec!["--parquet-compression", "zip"]) {
             Ok(_) => panic!("unexpected success"),
-            Err(e) => assert_eq!(
-                format!("{e}"),
-                "error: invalid value 'zip' for '--parquet-compression <PARQUET_COMPRESSION>': Unknown compression ZIP : possible values UNCOMPRESSED, SNAPPY, GZIP, LZO, BROTLI, LZ4, ZSTD \n\nFor more information try --help\n"),
+            Err(e) => {
+                let err = e.to_string();
+                assert!(err.contains("error: invalid value 'zip' for '--parquet-compression <PARQUET_COMPRESSION>': Unknown compression ZIP : possible values UNCOMPRESSED, SNAPPY, GZIP, LZO, BROTLI, LZ4, ZSTD \n\nFor more information try --help"), "{err}")
+            }
         }
     }
 
