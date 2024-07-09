@@ -71,7 +71,6 @@ struct ByteViewArrayReader {
 }
 
 impl ByteViewArrayReader {
-    #[allow(unused)]
     fn new(
         pages: Box<dyn PageIterator>,
         data_type: ArrowType,
@@ -316,7 +315,8 @@ impl ByteViewArrayDecoderPlain {
     }
 
     pub fn read(&mut self, output: &mut ViewBuffer, len: usize) -> Result<usize> {
-        let block_id = output.append_block(self.buf.clone().into());
+        let buf = arrow_buffer::Buffer::from_bytes(self.buf.clone().into());
+        let block_id = output.append_block(buf);
 
         let to_read = len.min(self.max_remaining_values);
 
@@ -546,7 +546,8 @@ impl ByteViewArrayDecoderDeltaLength {
 
         let src_lengths = &self.lengths[self.length_offset..self.length_offset + to_read];
 
-        let block_id = output.append_block(self.data.clone().into());
+        let bytes = arrow_buffer::Buffer::from_bytes(self.data.clone().into());
+        let block_id = output.append_block(bytes);
 
         let mut current_offset = self.data_offset;
         let initial_offset = current_offset;
