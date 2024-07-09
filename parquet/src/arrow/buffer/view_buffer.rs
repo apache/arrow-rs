@@ -68,7 +68,6 @@ impl ViewBuffer {
     }
 
     /// Converts this into an [`ArrayRef`] with the provided `data_type` and `null_buffer`
-    #[allow(unused)]
     pub fn into_array(self, null_buffer: Option<Buffer>, data_type: &ArrowType) -> ArrayRef {
         let len = self.views.len();
         let views = Buffer::from_vec(self.views);

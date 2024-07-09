@@ -315,6 +315,8 @@ impl ByteViewArrayDecoderPlain {
     }
 
     pub fn read(&mut self, output: &mut ViewBuffer, len: usize) -> Result<usize> {
+        // Here we convert `bytes::Bytes` into `arrow_buffer::Bytes`, which is zero copy
+        // Then we convert `arrow_buffer::Bytes` into `arrow_buffer:Buffer`, which is also zero copy
         let buf = arrow_buffer::Buffer::from_bytes(self.buf.clone().into());
         let block_id = output.append_block(buf);
 
@@ -546,6 +548,8 @@ impl ByteViewArrayDecoderDeltaLength {
 
         let src_lengths = &self.lengths[self.length_offset..self.length_offset + to_read];
 
+        // Here we convert `bytes::Bytes` into `arrow_buffer::Bytes`, which is zero copy
+        // Then we convert `arrow_buffer::Bytes` into `arrow_buffer:Buffer`, which is also zero copy
         let bytes = arrow_buffer::Buffer::from_bytes(self.data.clone().into());
         let block_id = output.append_block(bytes);
 
