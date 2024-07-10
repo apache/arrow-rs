@@ -24,7 +24,7 @@ use arrow::datatypes::{Int64Type, UInt64Type};
 use arrow::row::{RowConverter, SortField};
 use arrow::util::bench_util::{
     create_boolean_array, create_dict_from_values, create_primitive_array,
-    create_string_array_with_len, create_string_dict_array,
+    create_string_array_with_len, create_string_dict_array, create_string_view_array_with_len,
 };
 use arrow_array::types::Int32Type;
 use arrow_array::Array;
@@ -86,6 +86,18 @@ fn row_bench(c: &mut Criterion) {
 
     let cols = vec![Arc::new(create_string_array_with_len::<i32>(4096, 0.5, 100)) as ArrayRef];
     do_bench(c, "4096 string(100, 0.5)", cols);
+
+    let cols = vec![Arc::new(create_string_view_array_with_len(4096, 0., 10, false)) as ArrayRef];
+    do_bench(c, "4096 string view(10, 0)", cols);
+
+    let cols = vec![Arc::new(create_string_view_array_with_len(4096, 0., 30, false)) as ArrayRef];
+    do_bench(c, "4096 string view(30, 0)", cols);
+
+    let cols = vec![Arc::new(create_string_view_array_with_len(4096, 0., 100, false)) as ArrayRef];
+    do_bench(c, "4096 string view(100, 0)", cols);
+
+    let cols = vec![Arc::new(create_string_view_array_with_len(4096, 0.5, 100, false)) as ArrayRef];
+    do_bench(c, "4096 string view(100, 0.5)", cols);
 
     let cols = vec![Arc::new(create_string_dict_array::<Int32Type>(4096, 0., 10)) as ArrayRef];
     do_bench(c, "4096 string_dictionary(10, 0)", cols);
