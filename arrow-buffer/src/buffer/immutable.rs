@@ -356,16 +356,21 @@ impl Buffer {
     }
 }
 
-/// Creating a `Buffer` instance by copying the memory from a `AsRef<[u8]>` into a newly
-/// allocated memory region.
-impl<T: AsRef<[u8]>> From<T> for Buffer {
-    fn from(p: T) -> Self {
-        // allocate aligned memory buffer
-        let slice = p.as_ref();
-        let len = slice.len();
-        let mut buffer = MutableBuffer::new(len);
-        buffer.extend_from_slice(slice);
-        buffer.into()
+impl From<&[u8]> for Buffer {
+    fn from(p: &[u8]) -> Self {
+        Self::from_slice_ref(p)
+    }
+}
+
+impl<const N: usize> From<[u8; N]> for Buffer {
+    fn from(p: [u8; N]) -> Self {
+        Self::from_slice_ref(p)
+    }
+}
+
+impl<const N: usize> From<&[u8; N]> for Buffer {
+    fn from(p: &[u8; N]) -> Self {
+        Self::from_slice_ref(p)
     }
 }
 
