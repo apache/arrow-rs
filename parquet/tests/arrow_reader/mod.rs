@@ -1,8 +1,25 @@
+// Licensed to the Apache Software Foundation (ASF) under one
+// or more contributor license agreements.  See the NOTICE file
+// distributed with this work for additional information
+// regarding copyright ownership.  The ASF licenses this file
+// to you under the Apache License, Version 2.0 (the
+// "License"); you may not use this file except in compliance
+// with the License.  You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing,
+// software distributed under the License is distributed on an
+// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+// KIND, either express or implied.  See the License for the
+// specific language governing permissions and limitations
+// under the License.
+
 use arrow_array::types::{Int32Type, Int8Type};
 use arrow_array::{
-    make_array, Array, ArrayRef, BinaryArray, BooleanArray, Date32Array, Date64Array,
-    Decimal128Array, Decimal256Array, DictionaryArray, FixedSizeBinaryArray, Float16Array,
-    Float32Array, Float64Array, Int16Array, Int32Array, Int64Array, Int8Array, LargeBinaryArray,
+    Array, ArrayRef, BinaryArray, BooleanArray, Date32Array, Date64Array, Decimal128Array,
+    Decimal256Array, DictionaryArray, FixedSizeBinaryArray, Float16Array, Float32Array,
+    Float64Array, Int16Array, Int32Array, Int64Array, Int8Array, LargeBinaryArray,
     LargeStringArray, RecordBatch, StringArray, StructArray, Time32MillisecondArray,
     Time32SecondArray, Time64MicrosecondArray, Time64NanosecondArray, TimestampMicrosecondArray,
     TimestampMillisecondArray, TimestampNanosecondArray, TimestampSecondArray, UInt16Array,
@@ -71,392 +88,6 @@ enum Scenario {
     PeriodsInColumnNames,
     StructArray,
     UTF8,
-}
-
-/// Create a test parquet file with various data types
-async fn make_test_file_rg(scenario: Scenario, row_per_group: usize) -> NamedTempFile {
-    let mut output_file = tempfile::Builder::new()
-        .prefix("parquet_pruning")
-        .suffix(".parquet")
-        .tempfile()
-        .expect("tempfile creation");
-
-    let props = WriterProperties::builder()
-        .set_max_row_group_size(row_per_group)
-        .set_bloom_filter_enabled(true)
-        .set_statistics_enabled(EnabledStatistics::Page)
-        .build();
-
-    let batches = create_data_batch(scenario);
-    let schema = batches[0].schema();
-
-    let mut writer = ArrowWriter::try_new(&mut output_file, schema, Some(props)).unwrap();
-
-    for batch in batches {
-        writer.write(&batch).expect("writing batch");
-    }
-    writer.close().unwrap();
-
-    output_file
-}
-
-fn create_data_batch(scenario: Scenario) -> Vec<RecordBatch> {
-    match scenario {
-        Scenario::Boolean => {
-            vec![
-                make_boolean_batch(vec![Some(true), Some(false), Some(true), Some(false), None]),
-                make_boolean_batch(vec![
-                    Some(false),
-                    Some(false),
-                    Some(false),
-                    Some(false),
-                    Some(false),
-                ]),
-            ]
-        }
-        Scenario::Timestamps => {
-            vec![
-                make_timestamp_batch(TimeDelta::try_seconds(0).unwrap()),
-                make_timestamp_batch(TimeDelta::try_seconds(10).unwrap()),
-                make_timestamp_batch(TimeDelta::try_minutes(10).unwrap()),
-                make_timestamp_batch(TimeDelta::try_days(10).unwrap()),
-            ]
-        }
-        Scenario::Dates => {
-            vec![
-                make_date_batch(TimeDelta::try_days(0).unwrap()),
-                make_date_batch(TimeDelta::try_days(10).unwrap()),
-                make_date_batch(TimeDelta::try_days(300).unwrap()),
-                make_date_batch(TimeDelta::try_days(3600).unwrap()),
-            ]
-        }
-        Scenario::Int => {
-            vec![
-                make_int_batches(-5, 0),
-                make_int_batches(-4, 1),
-                make_int_batches(0, 5),
-                make_int_batches(5, 10),
-            ]
-        }
-        Scenario::Int32Range => {
-            vec![make_int32_range(0, 10), make_int32_range(200000, 300000)]
-        }
-        Scenario::UInt => {
-            vec![
-                make_uint_batches(0, 5),
-                make_uint_batches(1, 6),
-                make_uint_batches(5, 10),
-                make_uint_batches(250, 255),
-            ]
-        }
-        Scenario::UInt32Range => {
-            vec![make_uint32_range(0, 10), make_uint32_range(200000, 300000)]
-        }
-        Scenario::NumericLimits => {
-            vec![make_numeric_limit_batch()]
-        }
-        Scenario::Float16 => {
-            vec![
-                make_f16_batch(
-                    vec![-5.0, -4.0, -3.0, -2.0, -1.0]
-                        .into_iter()
-                        .map(f16::from_f32)
-                        .collect(),
-                ),
-                make_f16_batch(
-                    vec![-4.0, -3.0, -2.0, -1.0, 0.0]
-                        .into_iter()
-                        .map(f16::from_f32)
-                        .collect(),
-                ),
-                make_f16_batch(
-                    vec![0.0, 1.0, 2.0, 3.0, 4.0]
-                        .into_iter()
-                        .map(f16::from_f32)
-                        .collect(),
-                ),
-                make_f16_batch(
-                    vec![5.0, 6.0, 7.0, 8.0, 9.0]
-                        .into_iter()
-                        .map(f16::from_f32)
-                        .collect(),
-                ),
-            ]
-        }
-        Scenario::Float32 => {
-            vec![
-                make_f32_batch(vec![-5.0, -4.0, -3.0, -2.0, -1.0]),
-                make_f32_batch(vec![-4.0, -3.0, -2.0, -1.0, 0.0]),
-                make_f32_batch(vec![0.0, 1.0, 2.0, 3.0, 4.0]),
-                make_f32_batch(vec![5.0, 6.0, 7.0, 8.0, 9.0]),
-            ]
-        }
-        Scenario::Float64 => {
-            vec![
-                make_f64_batch(vec![-5.0, -4.0, -3.0, -2.0, -1.0]),
-                make_f64_batch(vec![-4.0, -3.0, -2.0, -1.0, 0.0]),
-                make_f64_batch(vec![0.0, 1.0, 2.0, 3.0, 4.0]),
-                make_f64_batch(vec![5.0, 6.0, 7.0, 8.0, 9.0]),
-            ]
-        }
-        Scenario::Decimal => {
-            // decimal record batch
-            vec![
-                make_decimal_batch(vec![100, 200, 300, 400, 600], 9, 2),
-                make_decimal_batch(vec![-500, 100, 300, 400, 600], 9, 2),
-                make_decimal_batch(vec![2000, 3000, 3000, 4000, 6000], 9, 2),
-            ]
-        }
-        Scenario::Decimal256 => {
-            // decimal256 record batch
-            vec![
-                make_decimal256_batch(
-                    vec![
-                        i256::from(100),
-                        i256::from(200),
-                        i256::from(300),
-                        i256::from(400),
-                        i256::from(600),
-                    ],
-                    9,
-                    2,
-                ),
-                make_decimal256_batch(
-                    vec![
-                        i256::from(-500),
-                        i256::from(100),
-                        i256::from(300),
-                        i256::from(400),
-                        i256::from(600),
-                    ],
-                    9,
-                    2,
-                ),
-                make_decimal256_batch(
-                    vec![
-                        i256::from(2000),
-                        i256::from(3000),
-                        i256::from(3000),
-                        i256::from(4000),
-                        i256::from(6000),
-                    ],
-                    9,
-                    2,
-                ),
-            ]
-        }
-        Scenario::ByteArray => {
-            // frontends first, then backends. All in order, except frontends 4 and 7
-            // are swapped to cause a statistics false positive on the 'fixed size' column.
-            vec![
-                make_bytearray_batch(
-                    "all frontends",
-                    vec![
-                        "frontend one",
-                        "frontend two",
-                        "frontend three",
-                        "frontend seven",
-                        "frontend five",
-                    ],
-                    vec![
-                        b"frontend one",
-                        b"frontend two",
-                        b"frontend three",
-                        b"frontend seven",
-                        b"frontend five",
-                    ],
-                    vec![b"fe1", b"fe2", b"fe3", b"fe7", b"fe5"],
-                    vec![
-                        b"frontend one",
-                        b"frontend two",
-                        b"frontend three",
-                        b"frontend seven",
-                        b"frontend five",
-                    ],
-                ),
-                make_bytearray_batch(
-                    "mixed",
-                    vec![
-                        "frontend six",
-                        "frontend four",
-                        "backend one",
-                        "backend two",
-                        "backend three",
-                    ],
-                    vec![
-                        b"frontend six",
-                        b"frontend four",
-                        b"backend one",
-                        b"backend two",
-                        b"backend three",
-                    ],
-                    vec![b"fe6", b"fe4", b"be1", b"be2", b"be3"],
-                    vec![
-                        b"frontend six",
-                        b"frontend four",
-                        b"backend one",
-                        b"backend two",
-                        b"backend three",
-                    ],
-                ),
-                make_bytearray_batch(
-                    "all backends",
-                    vec![
-                        "backend four",
-                        "backend five",
-                        "backend six",
-                        "backend seven",
-                        "backend eight",
-                    ],
-                    vec![
-                        b"backend four",
-                        b"backend five",
-                        b"backend six",
-                        b"backend seven",
-                        b"backend eight",
-                    ],
-                    vec![b"be4", b"be5", b"be6", b"be7", b"be8"],
-                    vec![
-                        b"backend four",
-                        b"backend five",
-                        b"backend six",
-                        b"backend seven",
-                        b"backend eight",
-                    ],
-                ),
-            ]
-        }
-        Scenario::Dictionary => {
-            vec![make_dict_batch()]
-        }
-        Scenario::PeriodsInColumnNames => {
-            vec![
-                // all frontend
-                make_names_batch(
-                    "HTTP GET / DISPATCH",
-                    vec!["frontend", "frontend", "frontend", "frontend", "frontend"],
-                ),
-                // both frontend and backend
-                make_names_batch(
-                    "HTTP PUT / DISPATCH",
-                    vec!["frontend", "frontend", "backend", "backend", "backend"],
-                ),
-                // all backend
-                make_names_batch(
-                    "HTTP GET / DISPATCH",
-                    vec!["backend", "backend", "backend", "backend", "backend"],
-                ),
-            ]
-        }
-        Scenario::StructArray => {
-            let struct_array_data = struct_array(vec![
-                (Some(1), Some(6.0), Some(12.0)),
-                (Some(2), Some(8.5), None),
-                (None, Some(8.5), Some(14.0)),
-            ]);
-
-            let schema = Arc::new(Schema::new(vec![Field::new(
-                "struct",
-                struct_array_data.data_type().clone(),
-                true,
-            )]));
-            vec![RecordBatch::try_new(schema, vec![struct_array_data]).unwrap()]
-        }
-        Scenario::Time32Second => {
-            vec![
-                make_time32_batches(Scenario::Time32Second, vec![18506, 18507, 18508, 18509]),
-                make_time32_batches(Scenario::Time32Second, vec![18510, 18511, 18512, 18513]),
-                make_time32_batches(Scenario::Time32Second, vec![18514, 18515, 18516, 18517]),
-                make_time32_batches(Scenario::Time32Second, vec![18518, 18519, 18520, 18521]),
-            ]
-        }
-        Scenario::Time32Millisecond => {
-            vec![
-                make_time32_batches(
-                    Scenario::Time32Millisecond,
-                    vec![3600000, 3600001, 3600002, 3600003],
-                ),
-                make_time32_batches(
-                    Scenario::Time32Millisecond,
-                    vec![3600004, 3600005, 3600006, 3600007],
-                ),
-                make_time32_batches(
-                    Scenario::Time32Millisecond,
-                    vec![3600008, 3600009, 3600010, 3600011],
-                ),
-                make_time32_batches(
-                    Scenario::Time32Millisecond,
-                    vec![3600012, 3600013, 3600014, 3600015],
-                ),
-            ]
-        }
-        Scenario::Time64Microsecond => {
-            vec![
-                make_time64_batches(
-                    Scenario::Time64Microsecond,
-                    vec![1234567890123, 1234567890124, 1234567890125, 1234567890126],
-                ),
-                make_time64_batches(
-                    Scenario::Time64Microsecond,
-                    vec![1234567890127, 1234567890128, 1234567890129, 1234567890130],
-                ),
-                make_time64_batches(
-                    Scenario::Time64Microsecond,
-                    vec![1234567890131, 1234567890132, 1234567890133, 1234567890134],
-                ),
-                make_time64_batches(
-                    Scenario::Time64Microsecond,
-                    vec![1234567890135, 1234567890136, 1234567890137, 1234567890138],
-                ),
-            ]
-        }
-        Scenario::Time64Nanosecond => {
-            vec![
-                make_time64_batches(
-                    Scenario::Time64Nanosecond,
-                    vec![
-                        987654321012345,
-                        987654321012346,
-                        987654321012347,
-                        987654321012348,
-                    ],
-                ),
-                make_time64_batches(
-                    Scenario::Time64Nanosecond,
-                    vec![
-                        987654321012349,
-                        987654321012350,
-                        987654321012351,
-                        987654321012352,
-                    ],
-                ),
-                make_time64_batches(
-                    Scenario::Time64Nanosecond,
-                    vec![
-                        987654321012353,
-                        987654321012354,
-                        987654321012355,
-                        987654321012356,
-                    ],
-                ),
-                make_time64_batches(
-                    Scenario::Time64Nanosecond,
-                    vec![
-                        987654321012357,
-                        987654321012358,
-                        987654321012359,
-                        987654321012360,
-                    ],
-                ),
-            ]
-        }
-        Scenario::UTF8 => {
-            vec![
-                make_utf8_batch(vec![Some("a"), Some("b"), Some("c"), Some("d"), None]),
-                make_utf8_batch(vec![Some("e"), Some("f"), Some("g"), Some("h"), Some("i")]),
-            ]
-        }
-    }
 }
 
 fn make_boolean_batch(v: Vec<Option<bool>>) -> RecordBatch {
@@ -983,4 +614,390 @@ fn make_dict_batch() -> RecordBatch {
         ("int_dict_i8", Arc::new(dict_i8_int_array) as _),
     ])
     .unwrap()
+}
+
+fn create_data_batch(scenario: Scenario) -> Vec<RecordBatch> {
+    match scenario {
+        Scenario::Boolean => {
+            vec![
+                make_boolean_batch(vec![Some(true), Some(false), Some(true), Some(false), None]),
+                make_boolean_batch(vec![
+                    Some(false),
+                    Some(false),
+                    Some(false),
+                    Some(false),
+                    Some(false),
+                ]),
+            ]
+        }
+        Scenario::Timestamps => {
+            vec![
+                make_timestamp_batch(TimeDelta::try_seconds(0).unwrap()),
+                make_timestamp_batch(TimeDelta::try_seconds(10).unwrap()),
+                make_timestamp_batch(TimeDelta::try_minutes(10).unwrap()),
+                make_timestamp_batch(TimeDelta::try_days(10).unwrap()),
+            ]
+        }
+        Scenario::Dates => {
+            vec![
+                make_date_batch(TimeDelta::try_days(0).unwrap()),
+                make_date_batch(TimeDelta::try_days(10).unwrap()),
+                make_date_batch(TimeDelta::try_days(300).unwrap()),
+                make_date_batch(TimeDelta::try_days(3600).unwrap()),
+            ]
+        }
+        Scenario::Int => {
+            vec![
+                make_int_batches(-5, 0),
+                make_int_batches(-4, 1),
+                make_int_batches(0, 5),
+                make_int_batches(5, 10),
+            ]
+        }
+        Scenario::Int32Range => {
+            vec![make_int32_range(0, 10), make_int32_range(200000, 300000)]
+        }
+        Scenario::UInt => {
+            vec![
+                make_uint_batches(0, 5),
+                make_uint_batches(1, 6),
+                make_uint_batches(5, 10),
+                make_uint_batches(250, 255),
+            ]
+        }
+        Scenario::UInt32Range => {
+            vec![make_uint32_range(0, 10), make_uint32_range(200000, 300000)]
+        }
+        Scenario::NumericLimits => {
+            vec![make_numeric_limit_batch()]
+        }
+        Scenario::Float16 => {
+            vec![
+                make_f16_batch(
+                    vec![-5.0, -4.0, -3.0, -2.0, -1.0]
+                        .into_iter()
+                        .map(f16::from_f32)
+                        .collect(),
+                ),
+                make_f16_batch(
+                    vec![-4.0, -3.0, -2.0, -1.0, 0.0]
+                        .into_iter()
+                        .map(f16::from_f32)
+                        .collect(),
+                ),
+                make_f16_batch(
+                    vec![0.0, 1.0, 2.0, 3.0, 4.0]
+                        .into_iter()
+                        .map(f16::from_f32)
+                        .collect(),
+                ),
+                make_f16_batch(
+                    vec![5.0, 6.0, 7.0, 8.0, 9.0]
+                        .into_iter()
+                        .map(f16::from_f32)
+                        .collect(),
+                ),
+            ]
+        }
+        Scenario::Float32 => {
+            vec![
+                make_f32_batch(vec![-5.0, -4.0, -3.0, -2.0, -1.0]),
+                make_f32_batch(vec![-4.0, -3.0, -2.0, -1.0, 0.0]),
+                make_f32_batch(vec![0.0, 1.0, 2.0, 3.0, 4.0]),
+                make_f32_batch(vec![5.0, 6.0, 7.0, 8.0, 9.0]),
+            ]
+        }
+        Scenario::Float64 => {
+            vec![
+                make_f64_batch(vec![-5.0, -4.0, -3.0, -2.0, -1.0]),
+                make_f64_batch(vec![-4.0, -3.0, -2.0, -1.0, 0.0]),
+                make_f64_batch(vec![0.0, 1.0, 2.0, 3.0, 4.0]),
+                make_f64_batch(vec![5.0, 6.0, 7.0, 8.0, 9.0]),
+            ]
+        }
+        Scenario::Decimal => {
+            // decimal record batch
+            vec![
+                make_decimal_batch(vec![100, 200, 300, 400, 600], 9, 2),
+                make_decimal_batch(vec![-500, 100, 300, 400, 600], 9, 2),
+                make_decimal_batch(vec![2000, 3000, 3000, 4000, 6000], 9, 2),
+            ]
+        }
+        Scenario::Decimal256 => {
+            // decimal256 record batch
+            vec![
+                make_decimal256_batch(
+                    vec![
+                        i256::from(100),
+                        i256::from(200),
+                        i256::from(300),
+                        i256::from(400),
+                        i256::from(600),
+                    ],
+                    9,
+                    2,
+                ),
+                make_decimal256_batch(
+                    vec![
+                        i256::from(-500),
+                        i256::from(100),
+                        i256::from(300),
+                        i256::from(400),
+                        i256::from(600),
+                    ],
+                    9,
+                    2,
+                ),
+                make_decimal256_batch(
+                    vec![
+                        i256::from(2000),
+                        i256::from(3000),
+                        i256::from(3000),
+                        i256::from(4000),
+                        i256::from(6000),
+                    ],
+                    9,
+                    2,
+                ),
+            ]
+        }
+        Scenario::ByteArray => {
+            // frontends first, then backends. All in order, except frontends 4 and 7
+            // are swapped to cause a statistics false positive on the 'fixed size' column.
+            vec![
+                make_bytearray_batch(
+                    "all frontends",
+                    vec![
+                        "frontend one",
+                        "frontend two",
+                        "frontend three",
+                        "frontend seven",
+                        "frontend five",
+                    ],
+                    vec![
+                        b"frontend one",
+                        b"frontend two",
+                        b"frontend three",
+                        b"frontend seven",
+                        b"frontend five",
+                    ],
+                    vec![b"fe1", b"fe2", b"fe3", b"fe7", b"fe5"],
+                    vec![
+                        b"frontend one",
+                        b"frontend two",
+                        b"frontend three",
+                        b"frontend seven",
+                        b"frontend five",
+                    ],
+                ),
+                make_bytearray_batch(
+                    "mixed",
+                    vec![
+                        "frontend six",
+                        "frontend four",
+                        "backend one",
+                        "backend two",
+                        "backend three",
+                    ],
+                    vec![
+                        b"frontend six",
+                        b"frontend four",
+                        b"backend one",
+                        b"backend two",
+                        b"backend three",
+                    ],
+                    vec![b"fe6", b"fe4", b"be1", b"be2", b"be3"],
+                    vec![
+                        b"frontend six",
+                        b"frontend four",
+                        b"backend one",
+                        b"backend two",
+                        b"backend three",
+                    ],
+                ),
+                make_bytearray_batch(
+                    "all backends",
+                    vec![
+                        "backend four",
+                        "backend five",
+                        "backend six",
+                        "backend seven",
+                        "backend eight",
+                    ],
+                    vec![
+                        b"backend four",
+                        b"backend five",
+                        b"backend six",
+                        b"backend seven",
+                        b"backend eight",
+                    ],
+                    vec![b"be4", b"be5", b"be6", b"be7", b"be8"],
+                    vec![
+                        b"backend four",
+                        b"backend five",
+                        b"backend six",
+                        b"backend seven",
+                        b"backend eight",
+                    ],
+                ),
+            ]
+        }
+        Scenario::Dictionary => {
+            vec![make_dict_batch()]
+        }
+        Scenario::PeriodsInColumnNames => {
+            vec![
+                // all frontend
+                make_names_batch(
+                    "HTTP GET / DISPATCH",
+                    vec!["frontend", "frontend", "frontend", "frontend", "frontend"],
+                ),
+                // both frontend and backend
+                make_names_batch(
+                    "HTTP PUT / DISPATCH",
+                    vec!["frontend", "frontend", "backend", "backend", "backend"],
+                ),
+                // all backend
+                make_names_batch(
+                    "HTTP GET / DISPATCH",
+                    vec!["backend", "backend", "backend", "backend", "backend"],
+                ),
+            ]
+        }
+        Scenario::StructArray => {
+            let struct_array_data = struct_array(vec![
+                (Some(1), Some(6.0), Some(12.0)),
+                (Some(2), Some(8.5), None),
+                (None, Some(8.5), Some(14.0)),
+            ]);
+
+            let schema = Arc::new(Schema::new(vec![Field::new(
+                "struct",
+                struct_array_data.data_type().clone(),
+                true,
+            )]));
+            vec![RecordBatch::try_new(schema, vec![struct_array_data]).unwrap()]
+        }
+        Scenario::Time32Second => {
+            vec![
+                make_time32_batches(Scenario::Time32Second, vec![18506, 18507, 18508, 18509]),
+                make_time32_batches(Scenario::Time32Second, vec![18510, 18511, 18512, 18513]),
+                make_time32_batches(Scenario::Time32Second, vec![18514, 18515, 18516, 18517]),
+                make_time32_batches(Scenario::Time32Second, vec![18518, 18519, 18520, 18521]),
+            ]
+        }
+        Scenario::Time32Millisecond => {
+            vec![
+                make_time32_batches(
+                    Scenario::Time32Millisecond,
+                    vec![3600000, 3600001, 3600002, 3600003],
+                ),
+                make_time32_batches(
+                    Scenario::Time32Millisecond,
+                    vec![3600004, 3600005, 3600006, 3600007],
+                ),
+                make_time32_batches(
+                    Scenario::Time32Millisecond,
+                    vec![3600008, 3600009, 3600010, 3600011],
+                ),
+                make_time32_batches(
+                    Scenario::Time32Millisecond,
+                    vec![3600012, 3600013, 3600014, 3600015],
+                ),
+            ]
+        }
+        Scenario::Time64Microsecond => {
+            vec![
+                make_time64_batches(
+                    Scenario::Time64Microsecond,
+                    vec![1234567890123, 1234567890124, 1234567890125, 1234567890126],
+                ),
+                make_time64_batches(
+                    Scenario::Time64Microsecond,
+                    vec![1234567890127, 1234567890128, 1234567890129, 1234567890130],
+                ),
+                make_time64_batches(
+                    Scenario::Time64Microsecond,
+                    vec![1234567890131, 1234567890132, 1234567890133, 1234567890134],
+                ),
+                make_time64_batches(
+                    Scenario::Time64Microsecond,
+                    vec![1234567890135, 1234567890136, 1234567890137, 1234567890138],
+                ),
+            ]
+        }
+        Scenario::Time64Nanosecond => {
+            vec![
+                make_time64_batches(
+                    Scenario::Time64Nanosecond,
+                    vec![
+                        987654321012345,
+                        987654321012346,
+                        987654321012347,
+                        987654321012348,
+                    ],
+                ),
+                make_time64_batches(
+                    Scenario::Time64Nanosecond,
+                    vec![
+                        987654321012349,
+                        987654321012350,
+                        987654321012351,
+                        987654321012352,
+                    ],
+                ),
+                make_time64_batches(
+                    Scenario::Time64Nanosecond,
+                    vec![
+                        987654321012353,
+                        987654321012354,
+                        987654321012355,
+                        987654321012356,
+                    ],
+                ),
+                make_time64_batches(
+                    Scenario::Time64Nanosecond,
+                    vec![
+                        987654321012357,
+                        987654321012358,
+                        987654321012359,
+                        987654321012360,
+                    ],
+                ),
+            ]
+        }
+        Scenario::UTF8 => {
+            vec![
+                make_utf8_batch(vec![Some("a"), Some("b"), Some("c"), Some("d"), None]),
+                make_utf8_batch(vec![Some("e"), Some("f"), Some("g"), Some("h"), Some("i")]),
+            ]
+        }
+    }
+}
+
+/// Create a test parquet file with various data types
+async fn make_test_file_rg(scenario: Scenario, row_per_group: usize) -> NamedTempFile {
+    let mut output_file = tempfile::Builder::new()
+        .prefix("parquet_pruning")
+        .suffix(".parquet")
+        .tempfile()
+        .expect("tempfile creation");
+
+    let props = WriterProperties::builder()
+        .set_max_row_group_size(row_per_group)
+        .set_bloom_filter_enabled(true)
+        .set_statistics_enabled(EnabledStatistics::Page)
+        .build();
+
+    let batches = create_data_batch(scenario);
+    let schema = batches[0].schema();
+
+    let mut writer = ArrowWriter::try_new(&mut output_file, schema, Some(props)).unwrap();
+
+    for batch in batches {
+        writer.write(&batch).expect("writing batch");
+    }
+    writer.close().unwrap();
+
+    output_file
 }

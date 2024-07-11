@@ -17,8 +17,7 @@
 
 //! [`StatisticsConverter`] to convert statistics in parquet format to arrow [`ArrayRef`].
 
-// TODO: potentially move this to arrow-rs: https://github.com/apache/arrow-rs/issues/4328
-
+use crate::arrow::buffer::bit_util::sign_extend_be;
 use crate::data_type::{ByteArray, FixedLenByteArray};
 use crate::errors::{ParquetError, Result};
 use crate::file::metadata::{ParquetColumnIndex, ParquetOffsetIndex, RowGroupMetaData};
@@ -63,19 +62,6 @@ pub(crate) fn from_bytes_to_f16(b: &[u8]) -> Option<f16> {
         [low, high] => Some(f16::from_be_bytes([*high, *low])),
         _ => None,
     }
-}
-
-// Copy from arrow-rs
-// https://github.com/apache/arrow-rs/blob/198af7a3f4aa20f9bd003209d9f04b0f37bb120e/parquet/src/arrow/buffer/bit_util.rs#L54
-// Convert the byte slice to fixed length byte array with the length of N.
-fn sign_extend_be<const N: usize>(b: &[u8]) -> [u8; N] {
-    assert!(b.len() <= N, "Array too large, expected less than {N}");
-    let is_negative = (b[0] & 128u8) == 128u8;
-    let mut result = if is_negative { [255u8; N] } else { [0u8; N] };
-    for (d, s) in result.iter_mut().skip(N - b.len()).zip(b) {
-        *d = *s;
-    }
-    result
 }
 
 /// Define an adapter iterator for extracting statistics from an iterator of
@@ -974,7 +960,7 @@ macro_rules! get_data_page_statistics {
 /// Lookups up the parquet column by name
 ///
 /// Returns the parquet column index and the corresponding arrow field
-pub(crate) fn parquet_column<'a>(
+pub fn parquet_column<'a>(
     parquet_schema: &SchemaDescriptor,
     arrow_schema: &'a Schema,
     name: &str,
@@ -1129,6 +1115,7 @@ impl<'a> StatisticsConverter<'a> {
     /// ```no_run
     /// # use arrow::datatypes::Schema;
     /// # use arrow_array::ArrayRef;
+    /// # use parquet::arrow::arrow_reader::statistics::StatisticsConverter;
     /// # use parquet::file::metadata::ParquetMetaData;
     /// # fn get_parquet_metadata() -> ParquetMetaData { unimplemented!() }
     /// # fn get_arrow_schema() -> Schema { unimplemented!() }
@@ -1235,6 +1222,7 @@ impl<'a> StatisticsConverter<'a> {
     /// ```no_run
     /// # use arrow::datatypes::Schema;
     /// # use arrow_array::ArrayRef;
+    /// # use parquet::arrow::arrow_reader::statistics::StatisticsConverter;
     /// # use parquet::file::metadata::ParquetMetaData;
     /// # fn get_parquet_metadata() -> ParquetMetaData { unimplemented!() }
     /// # fn get_arrow_schema() -> Schema { unimplemented!() }
