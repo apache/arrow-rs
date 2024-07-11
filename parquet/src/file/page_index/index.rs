@@ -25,14 +25,17 @@ use crate::format::{BoundaryOrder, ColumnIndex};
 use crate::util::bit_util::from_le_slice;
 use std::fmt::Debug;
 
-/// PageIndex Statistics for one data page, as described in [Column Index].
+/// Statistics for one data page
+///
+/// This structure is the parsed representation of the [`ColumnIndex`] from the
+/// Parquet file footer, as described in the Parquet [PageIndex documentation].
 ///
 /// One significant difference from the row group level
 /// [`Statistics`](crate::format::Statistics) is that page level
 /// statistics may not store actual column values as min and max
 /// (e.g. they may store truncated strings to save space)
 ///
-/// [Column Index]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
+/// [PageIndex documentation]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct PageIndex<T> {
     /// The minimum value, It is None when all values are null
@@ -72,7 +75,7 @@ where
 #[allow(non_camel_case_types)]
 /// Typed statistics for a data page in a column chunk.
 ///
-/// This structure is part of the "Page Index" and is optionally part of
+/// This structure is part of the "Page Index" and is stored in the
 /// [ColumnIndex] in the parquet file and can be used to skip decoding pages
 /// while reading the file data.
 pub enum Index {
@@ -117,7 +120,7 @@ impl Index {
     }
 }
 
-/// Stores the [`PageIndex`] for each page of a column
+/// Stores the values for [`PageIndex`]
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct NativeIndex<T: ParquetValueType> {
     /// The indexes, one item per page
