@@ -790,6 +790,7 @@ impl ColumnChunkMetaData {
                 .map(|vec| vec.iter().map(page_encoding_stats::to_thrift).collect()),
             bloom_filter_offset: self.bloom_filter_offset,
             bloom_filter_length: self.bloom_filter_length,
+            size_statistics: None,
         }
     }
 
@@ -1004,6 +1005,8 @@ impl ColumnIndexBuilder {
             self.max_values,
             self.boundary_order,
             self.null_counts,
+            None,
+            None,
         )
     }
 }
@@ -1052,7 +1055,7 @@ impl OffsetIndexBuilder {
             .zip(self.first_row_index_array.iter())
             .map(|((offset, size), row_index)| PageLocation::new(*offset, *size, *row_index))
             .collect::<Vec<_>>();
-        OffsetIndex::new(locations)
+        OffsetIndex::new(locations, None)
     }
 }
 
