@@ -709,7 +709,9 @@ impl ColumnChunkMetaData {
     }
 
     /// Returns the number of bytes of variable length data after decoding.
-    /// Only set for BYTE_ARRAY columns.
+    ///
+    /// Only set for BYTE_ARRAY columns. This field may not be set by older
+    /// writers.
     pub fn unencoded_byte_array_data_bytes(&self) -> Option<i64> {
         self.unencoded_byte_array_data_bytes
     }
@@ -717,6 +719,7 @@ impl ColumnChunkMetaData {
     /// Returns the repetition level histogram.
     ///
     /// The returned value `vec[i]` is how many values are at repetition level `i`.
+    /// This field may not be set by older writers.
     pub fn repetition_level_histogram(&self) -> Option<&Vec<i64>> {
         self.repetition_level_histogram.as_ref()
     }
@@ -724,6 +727,7 @@ impl ColumnChunkMetaData {
     /// Returns the definition level histogram.
     ///
     /// The returned value `vec[i]` is how many values are at definition level `i`.
+    /// This field may not be set by older writers.
     pub fn definition_level_histogram(&self) -> Option<&Vec<i64>> {
         self.definition_level_histogram.as_ref()
     }
