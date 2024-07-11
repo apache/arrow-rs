@@ -274,7 +274,7 @@ impl FallbackEncoder {
             }
         };
 
-        let var_bytes = Some(self.variable_length_bytes);
+        let variable_length_bytes = Some(self.variable_length_bytes);
         self.variable_length_bytes = 0;
 
         Ok(DataPageValues {
@@ -283,7 +283,7 @@ impl FallbackEncoder {
             encoding,
             min_value,
             max_value,
-            variable_length_bytes: var_bytes,
+            variable_length_bytes,
         })
     }
 }
@@ -395,7 +395,7 @@ impl DictEncoder {
 
         self.indices.clear();
 
-        let var_bytes = Some(self.variable_length_bytes);
+        let variable_length_bytes = Some(self.variable_length_bytes);
         self.variable_length_bytes = 0;
 
         DataPageValues {
@@ -404,7 +404,7 @@ impl DictEncoder {
             encoding: Encoding::RLE_DICTIONARY,
             min_value,
             max_value,
-            variable_length_bytes: var_bytes,
+            variable_length_bytes,
         }
     }
 }
