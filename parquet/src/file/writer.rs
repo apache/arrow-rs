@@ -1877,21 +1877,22 @@ mod tests {
             assert_eq!(def_hist[1], 7);
         };
 
-        if let Some(ref meta_data) = file_metadata.row_groups[0].columns[0].meta_data {
-            assert!(meta_data.size_statistics.is_some());
-            if let Some(ref size_stats) = meta_data.size_statistics {
-                assert!(size_stats.repetition_level_histogram.is_none());
-                assert!(size_stats.definition_level_histogram.is_some());
-                assert!(size_stats.unencoded_byte_array_data_bytes.is_some());
-                assert_eq!(
-                    unenc_size,
-                    size_stats.unencoded_byte_array_data_bytes.unwrap_or(0)
-                );
-                if let Some(ref def_hist) = size_stats.definition_level_histogram {
-                    check_def_hist(def_hist)
-                }
-            }
-        }
+        assert!(file_metadata.row_groups[0].columns[0].meta_data.is_some());
+        let meta_data = file_metadata.row_groups[0].columns[0]
+            .meta_data
+            .as_ref()
+            .unwrap();
+        assert!(meta_data.size_statistics.is_some());
+        let size_stats = meta_data.size_statistics.as_ref().unwrap();
+
+        assert!(size_stats.repetition_level_histogram.is_none());
+        assert!(size_stats.definition_level_histogram.is_some());
+        assert!(size_stats.unencoded_byte_array_data_bytes.is_some());
+        assert_eq!(
+            unenc_size,
+            size_stats.unencoded_byte_array_data_bytes.unwrap()
+        );
+        check_def_hist(size_stats.definition_level_histogram.as_ref().unwrap());
 
         // check that the read metadata is also correct
         let options = ReadOptionsBuilder::new().with_page_index().build();
@@ -1906,12 +1907,10 @@ mod tests {
         assert!(column.definition_level_histogram().is_some());
         assert!(column.repetition_level_histogram().is_none());
         assert!(column.unencoded_byte_array_data_bytes().is_some());
-        if let Some(def_hist) = column.definition_level_histogram() {
-            check_def_hist(def_hist)
-        }
+        check_def_hist(column.definition_level_histogram().unwrap());
         assert_eq!(
             unenc_size,
-            column.unencoded_byte_array_data_bytes().unwrap_or(0)
+            column.unencoded_byte_array_data_bytes().unwrap()
         );
 
         // check histogram in column index as well
@@ -1927,9 +1926,8 @@ mod tests {
         };
 
         assert!(col_idx.repetition_level_histogram().is_none());
-        if let Some(def_hist) = col_idx.definition_level_histogram() {
-            check_def_hist(def_hist)
-        }
+        assert!(col_idx.definition_level_histogram().is_some());
+        check_def_hist(col_idx.definition_level_histogram().unwrap());
 
         assert!(reader
             .metadata()
@@ -1939,10 +1937,9 @@ mod tests {
         assert_eq!(unenc_sizes.len(), 1);
         assert_eq!(unenc_sizes[0].len(), 1);
         assert!(unenc_sizes[0][0].is_some());
-        if let Some(page_sizes) = &unenc_sizes[0][0] {
-            assert_eq!(page_sizes.len(), 1);
-            assert_eq!(page_sizes[0], unenc_size);
-        }
+        let page_sizes = unenc_sizes[0][0].as_ref().unwrap();
+        assert_eq!(page_sizes.len(), 1);
+        assert_eq!(page_sizes[0], unenc_size);
     }
 
     #[test]
@@ -2004,20 +2001,18 @@ mod tests {
 
         // check that histograms are set properly in the write and read metadata
         // also check that unencoded_byte_array_data_bytes is not set
-        if let Some(ref meta_data) = file_metadata.row_groups[0].columns[0].meta_data {
-            assert!(meta_data.size_statistics.is_some());
-            if let Some(ref size_stats) = meta_data.size_statistics {
-                assert!(size_stats.repetition_level_histogram.is_some());
-                assert!(size_stats.definition_level_histogram.is_some());
-                assert!(size_stats.unencoded_byte_array_data_bytes.is_none());
-                if let Some(ref def_hist) = size_stats.definition_level_histogram {
-                    check_def_hist(def_hist)
-                }
-                if let Some(ref rep_hist) = size_stats.repetition_level_histogram {
-                    check_rep_hist(rep_hist)
-                }
-            }
-        }
+        assert!(file_metadata.row_groups[0].columns[0].meta_data.is_some());
+        let meta_data = file_metadata.row_groups[0].columns[0]
+            .meta_data
+            .as_ref()
+            .unwrap();
+        assert!(meta_data.size_statistics.is_some());
+        let size_stats = meta_data.size_statistics.as_ref().unwrap();
+        assert!(size_stats.repetition_level_histogram.is_some());
+        assert!(size_stats.definition_level_histogram.is_some());
+        assert!(size_stats.unencoded_byte_array_data_bytes.is_none());
+        check_def_hist(size_stats.definition_level_histogram.as_ref().unwrap());
+        check_rep_hist(size_stats.repetition_level_histogram.as_ref().unwrap());
 
         // check that the read metadata is also correct
         let options = ReadOptionsBuilder::new().with_page_index().build();
@@ -2032,12 +2027,8 @@ mod tests {
         assert!(column.definition_level_histogram().is_some());
         assert!(column.repetition_level_histogram().is_some());
         assert!(column.unencoded_byte_array_data_bytes().is_none());
-        if let Some(def_hist) = column.definition_level_histogram() {
-            check_def_hist(def_hist)
-        }
-        if let Some(rep_hist) = column.repetition_level_histogram() {
-            check_rep_hist(rep_hist)
-        }
+        check_def_hist(column.definition_level_histogram().unwrap());
+        check_rep_hist(column.repetition_level_histogram().unwrap());
 
         // check histogram in column index as well
         assert!(reader.metadata().column_index().is_some());
@@ -2051,12 +2042,8 @@ mod tests {
             unreachable!()
         };
 
-        if let Some(def_hist) = col_idx.definition_level_histogram() {
-            check_def_hist(def_hist)
-        }
-        if let Some(rep_hist) = col_idx.repetition_level_histogram() {
-            check_rep_hist(rep_hist)
-        }
+        check_def_hist(col_idx.definition_level_histogram().unwrap());
+        check_rep_hist(col_idx.repetition_level_histogram().unwrap());
 
         assert!(reader
             .metadata()
