@@ -72,6 +72,7 @@ arrow-cast = { workspace = true, features = ["prettyprint"] }
 assert_cmd = "2.0.8"
 http = "1.1.0"
 http-body = "1.0.0"
+hyper-util = "0.1"
 pin-project-lite = "0.2"
 tempfile = "3.3"
 tokio-stream = { version = "0.1", features = ["net"] }
