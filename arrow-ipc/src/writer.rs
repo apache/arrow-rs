@@ -411,7 +411,7 @@ impl IpcDataGenerator {
         write_options: &IpcWriteOptions,
     ) -> Result<(Vec<EncodedData>, EncodedData), ArrowError> {
         let schema = batch.schema();
-        let mut encoded_dictionaries = Vec::with_capacity(schema.all_fields().len());
+        let mut encoded_dictionaries = Vec::with_capacity(schema.flattened_fields().len());
 
         let mut dict_id = dictionary_tracker.dict_ids.clone().into_iter();
 
