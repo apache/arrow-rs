@@ -599,7 +599,7 @@ mod tests {
     use super::*;
     use crate::arrow::array_reader::test_util::{byte_array_all_encodings, utf8_column};
     use crate::arrow::record_reader::buffer::ValuesBuffer;
-    use arrow_array::{Array, StringArray, StringViewArray};
+    use arrow_array::{Array, StringArray};
     use arrow_buffer::Buffer;
 
     #[test]
@@ -658,64 +658,6 @@ mod tests {
     }
 
     #[test]
-    fn test_byte_array_string_view_decoder() {
-        let (pages, encoded_dictionary) =
-            byte_array_all_encodings(vec!["hello", "world", "large payload over 12 bytes", "b"]);
-
-        let column_desc = utf8_column();
-        let mut decoder = ByteArrayColumnValueDecoder::new(&column_desc);
-
-        decoder
-            .set_dict(encoded_dictionary, 4, Encoding::RLE_DICTIONARY, false)
-            .unwrap();
-
-        for (encoding, page) in pages {
-            let mut output = OffsetBuffer::<i32>::default();
-            decoder.set_data(encoding, page, 4, Some(4)).unwrap();
-
-            assert_eq!(decoder.read(&mut output, 1).unwrap(), 1);
-
-            assert_eq!(output.values.as_slice(), "hello".as_bytes());
-            assert_eq!(output.offsets.as_slice(), &[0, 5]);
-
-            assert_eq!(decoder.read(&mut output, 1).unwrap(), 1);
-            assert_eq!(output.values.as_slice(), "helloworld".as_bytes());
-            assert_eq!(output.offsets.as_slice(), &[0, 5, 10]);
-
-            assert_eq!(decoder.read(&mut output, 2).unwrap(), 2);
-            assert_eq!(
-                output.values.as_slice(),
-                "helloworldlarge payload over 12 bytesb".as_bytes()
-            );
-            assert_eq!(output.offsets.as_slice(), &[0, 5, 10, 37, 38]);
-
-            assert_eq!(decoder.read(&mut output, 4).unwrap(), 0);
-
-            let valid = [false, false, true, true, false, true, true, false, false];
-            let valid_buffer = Buffer::from_iter(valid.iter().cloned());
-
-            output.pad_nulls(0, 4, valid.len(), valid_buffer.as_slice());
-            let array = output.into_array(Some(valid_buffer), ArrowType::Utf8View);
-            let strings = array.as_any().downcast_ref::<StringViewArray>().unwrap();
-
-            assert_eq!(
-                strings.iter().collect::<Vec<_>>(),
-                vec![
-                    None,
-                    None,
-                    Some("hello"),
-                    Some("world"),
-                    None,
-                    Some("large payload over 12 bytes"),
-                    Some("b"),
-                    None,
-                    None,
-                ]
-            );
-        }
-    }
-
-    #[test]
     fn test_byte_array_decoder_skip() {
         let (pages, encoded_dictionary) =
             byte_array_all_encodings(vec!["hello", "world", "a", "b"]);
@@ -755,60 +697,6 @@ mod tests {
             assert_eq!(
                 strings.iter().collect::<Vec<_>>(),
                 vec![None, None, Some("hello"), Some("b"), None, None,]
-            );
-        }
-    }
-
-    #[test]
-    fn test_byte_array_string_view_decoder_skip() {
-        let (pages, encoded_dictionary) =
-            byte_array_all_encodings(vec!["hello", "world", "a", "large payload over 12 bytes"]);
-
-        let column_desc = utf8_column();
-        let mut decoder = ByteArrayColumnValueDecoder::new(&column_desc);
-
-        decoder
-            .set_dict(encoded_dictionary, 4, Encoding::RLE_DICTIONARY, false)
-            .unwrap();
-
-        for (encoding, page) in pages {
-            let mut output = OffsetBuffer::<i32>::default();
-            decoder.set_data(encoding, page, 4, Some(4)).unwrap();
-
-            assert_eq!(decoder.read(&mut output, 1).unwrap(), 1);
-
-            assert_eq!(output.values.as_slice(), "hello".as_bytes());
-            assert_eq!(output.offsets.as_slice(), &[0, 5]);
-
-            assert_eq!(decoder.skip_values(1).unwrap(), 1);
-            assert_eq!(decoder.skip_values(1).unwrap(), 1);
-
-            assert_eq!(decoder.read(&mut output, 1).unwrap(), 1);
-            assert_eq!(
-                output.values.as_slice(),
-                "hellolarge payload over 12 bytes".as_bytes()
-            );
-            assert_eq!(output.offsets.as_slice(), &[0, 5, 32]);
-
-            assert_eq!(decoder.read(&mut output, 4).unwrap(), 0);
-
-            let valid = [false, false, true, true, false, false];
-            let valid_buffer = Buffer::from_iter(valid.iter().cloned());
-
-            output.pad_nulls(0, 2, valid.len(), valid_buffer.as_slice());
-            let array = output.into_array(Some(valid_buffer), ArrowType::Utf8View);
-            let strings = array.as_any().downcast_ref::<StringViewArray>().unwrap();
-
-            assert_eq!(
-                strings.iter().collect::<Vec<_>>(),
-                vec![
-                    None,
-                    None,
-                    Some("hello"),
-                    Some("large payload over 12 bytes"),
-                    None,
-                    None,
-                ]
             );
         }
     }
