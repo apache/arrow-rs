@@ -88,13 +88,13 @@ fn main() {
     // buffer.
     let value_data = ArrayData::builder(DataType::Int32)
         .len(8)
-        .add_buffer(Buffer::from(&[0, 1, 2, 3, 4, 5, 6, 7].to_byte_slice()))
+        .add_buffer(Buffer::from([0, 1, 2, 3, 4, 5, 6, 7].to_byte_slice()))
         .build()
         .unwrap();
 
     // Construct a buffer for value offsets, for the nested array:
     //  [[0, 1, 2], [3, 4, 5], [6, 7]]
-    let value_offsets = Buffer::from(&[0, 3, 6, 8].to_byte_slice());
+    let value_offsets = Buffer::from([0, 3, 6, 8].to_byte_slice());
 
     // Construct a list array from the above two
     let list_data_type = DataType::List(Arc::new(Field::new("item", DataType::Int32, false)));
