@@ -50,7 +50,12 @@ use crate::schema::types::{
     Type as SchemaType,
 };
 
-/// [`Index`] for each row group of each column.
+/// Page level statistics for each column chunk of each row group.
+///
+/// This structure is an memory representation of multiple [`ColumnIndex`]
+/// structures in a parquet file footer, as described in the Parquet [PageIndex
+/// documentation]. Each [`Index`] holds statistics about all the pages in a
+/// particular column chunk.
 ///
 /// `column_index[row_group_number][column_number]` holds the
 /// [`Index`] corresponding to column `column_number` of row group
@@ -58,15 +63,14 @@ use crate::schema::types::{
 ///
 /// For example `column_index[2][3]` holds the [`Index`] for the forth
 /// column in the third row group of the parquet file.
+///
+/// [PageIndex documentation]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
 pub type ParquetColumnIndex = Vec<Vec<Index>>;
 
 /// [`PageLocation`] for each data page of each row group of each column
 ///
 /// This structure is the parsed representation of the [`OffsetIndex`] from the
 /// Parquet file footer, as described in the Parquet [PageIndex documentation].
-///
-/// This structure is the parsed representation of the [`ColumnIndex`] in a parquet
-/// file footer.
 ///
 /// `offset_index[row_group_number][column_number][page_number]` holds
 /// the [`PageLocation`] corresponding to page `page_number` of column
