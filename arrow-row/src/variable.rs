@@ -244,8 +244,11 @@ pub fn decode_binary<I: OffsetSizeTrait>(
     unsafe { GenericBinaryArray::from(builder.build_unchecked()) }
 }
 
-/// Decodes a binary view array from `rows` with the provided `options`
-pub fn decode_binary_view(rows: &mut [&[u8]], options: SortOptions) -> BinaryViewArray {
+fn decode_binary_view_inner(
+    rows: &mut [&[u8]],
+    options: SortOptions,
+    check_utf8: bool,
+) -> BinaryViewArray {
     let len = rows.len();
 
     let mut null_count = 0;
@@ -300,6 +303,12 @@ pub fn decode_binary_view(rows: &mut [&[u8]], options: SortOptions) -> BinaryVie
         }
     }
 
+    if check_utf8 {
+        // the values contains all data, no matter if it is short or long
+        // we can validate utf8 in one go.
+        std::str::from_utf8(values.as_slice()).unwrap();
+    }
+
     let builder = ArrayDataBuilder::new(DataType::BinaryView)
         .len(len)
         .null_count(null_count)
@@ -310,6 +319,11 @@ pub fn decode_binary_view(rows: &mut [&[u8]], options: SortOptions) -> BinaryVie
     // SAFETY:
     // Valid by construction above
     unsafe { BinaryViewArray::from(builder.build_unchecked()) }
+}
+
+/// Decodes a binary view array from `rows` with the provided `options`
+pub fn decode_binary_view(rows: &mut [&[u8]], options: SortOptions) -> BinaryViewArray {
+    decode_binary_view_inner(rows, options, false)
 }
 
 /// Decodes a string array from `rows` with the provided `options`
@@ -348,12 +362,6 @@ pub unsafe fn decode_string_view(
     options: SortOptions,
     validate_utf8: bool,
 ) -> StringViewArray {
-    let decoded = decode_binary_view(rows, options);
-    if !validate_utf8 {
-        return decoded.to_string_view_unchecked();
-    }
-
-    decoded
-        .to_string_view()
-        .expect("Decoding string view encountered invalid utf8!")
+    let view = decode_binary_view_inner(rows, options, validate_utf8);
+    view.to_string_view_unchecked()
 }
