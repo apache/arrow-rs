@@ -90,4 +90,9 @@ impl<T: DataType> Encoder<T> for ByteStreamSplitEncoder<T> {
         self.buffer.clear();
         Ok(encoded.into())
     }
+
+    /// return the estimated memory size of this encoder.
+    fn estimated_memory_size(&self) -> usize {
+        self.buffer.capacity() * std::mem::size_of::<u8>()
+    }
 }

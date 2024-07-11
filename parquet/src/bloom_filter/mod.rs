@@ -134,7 +134,8 @@ impl Block {
 
     #[inline]
     fn to_ne_bytes(self) -> [u8; 32] {
-        unsafe { std::mem::transmute(self) }
+        // SAFETY: [u32; 8] and [u8; 32] have the same size and neither has invalid bit patterns.
+        unsafe { std::mem::transmute(self.0) }
     }
 
     #[inline]
@@ -382,6 +383,11 @@ impl Sbbf {
     fn check_hash(&self, hash: u64) -> bool {
         let block_index = self.hash_to_block_index(hash);
         self.0[block_index].check(hash as u32)
+    }
+
+    /// Return the total in memory size of this bloom filter in bytes
+    pub(crate) fn estimated_memory_size(&self) -> usize {
+        self.0.capacity() * std::mem::size_of::<Block>()
     }
 }
 

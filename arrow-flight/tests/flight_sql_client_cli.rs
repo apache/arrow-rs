@@ -568,7 +568,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
         .try_collect::<Vec<_>>()
         .await?;
 
-        for (left, right) in parameters[0].schema().all_fields().iter().zip(vec![
+        for (left, right) in parameters[0].schema().flattened_fields().iter().zip(vec![
             Field::new("$1", DataType::Utf8, false),
             Field::new("$2", DataType::Int64, true),
         ]) {
