@@ -16,19 +16,69 @@
 // under the License.
 
 use std::fmt;
+use std::str::FromStr;
 use std::sync::Arc;
 
-use crate::{Field, FieldRef, Fields, UnionFields};
+use crate::{ArrowError, Field, FieldRef, Fields, UnionFields};
 
-/// The set of datatypes that are supported by this implementation of Apache Arrow.
+/// Datatypes supported by this implementation of Apache Arrow.
 ///
-/// The Arrow specification on data types includes some more types.
-/// See also [`Schema.fbs`](https://github.com/apache/arrow/blob/main/format/Schema.fbs)
-/// for Arrow's specification.
+/// The variants of this enum include primitive fixed size types as well as
+/// parametric or nested types. See [`Schema.fbs`] for Arrow's specification.
 ///
-/// The variants of this enum include primitive fixed size types as well as parametric or
-/// nested types.
-/// Currently the Rust implementation supports the following nested types:
+/// # Examples
+///
+/// Primitive types
+/// ```
+/// # use arrow_schema::DataType;
+/// // create a new 32-bit signed integer
+/// let data_type = DataType::Int32;
+/// ```
+///
+/// Nested Types
+/// ```
+/// # use arrow_schema::{DataType, Field};
+/// # use std::sync::Arc;
+/// // create a new list of 32-bit signed integers directly
+/// let list_data_type = DataType::List(Arc::new(Field::new("item", DataType::Int32, true)));
+/// // Create the same list type with constructor
+/// let list_data_type2 = DataType::new_list(DataType::Int32, true);
+/// assert_eq!(list_data_type, list_data_type2);
+/// ```
+///
+/// Dictionary Types
+/// ```
+/// # use arrow_schema::{DataType};
+/// // String Dictionary (key type Int32 and value type Utf8)
+/// let data_type = DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8));
+/// ```
+///
+/// Timestamp Types
+/// ```
+/// # use arrow_schema::{DataType, TimeUnit};
+/// // timestamp with millisecond precision without timezone specified
+/// let data_type = DataType::Timestamp(TimeUnit::Millisecond, None);
+/// // timestamp with nanosecond precision in UTC timezone
+/// let data_type = DataType::Timestamp(TimeUnit::Nanosecond, Some("UTC".into()));
+///```
+///
+/// # Display and FromStr
+///
+/// The `Display` and `FromStr` implementations for `DataType` are
+/// human-readable, parseable, and reversible.
+///
+/// ```
+/// # use arrow_schema::DataType;
+/// let data_type = DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8));
+/// let data_type_string = data_type.to_string();
+/// assert_eq!(data_type_string, "Dictionary(Int32, Utf8)");
+/// // display can be parsed back into the original type
+/// let parsed_data_type: DataType = data_type.to_string().parse().unwrap();
+/// assert_eq!(data_type, parsed_data_type);
+/// ```
+///
+/// # Nested Support
+/// Currently, the Rust implementation supports the following nested types:
 ///  - `List<T>`
 ///  - `LargeList<T>`
 ///  - `FixedSizeList<T>`
@@ -38,7 +88,10 @@ use crate::{Field, FieldRef, Fields, UnionFields};
 ///
 /// Nested types can themselves be nested within other arrays.
 /// For more information on these types please see
-/// [the physical memory layout of Apache Arrow](https://arrow.apache.org/docs/format/Columnar.html#physical-memory-layout).
+/// [the physical memory layout of Apache Arrow]
+///
+/// [`Schema.fbs`]: https://github.com/apache/arrow/blob/main/format/Schema.fbs
+/// [the physical memory layout of Apache Arrow]: https://arrow.apache.org/docs/format/Columnar.html#physical-memory-layout
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum DataType {
@@ -370,6 +423,35 @@ pub enum UnionMode {
 impl fmt::Display for DataType {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{self:?}")
+    }
+}
+
+/// Parses `str` into a `DataType`.
+///
+/// This is the reverse of [`DataType`]'s `Display`
+/// impl, and maintains the invariant that
+/// `DataType::try_from(&data_type.to_string()).unwrap() == data_type`
+///
+/// # Example
+/// ```
+/// use arrow_schema::DataType;
+///
+/// let data_type: DataType = "Int32".parse().unwrap();
+/// assert_eq!(data_type, DataType::Int32);
+/// ```
+impl FromStr for DataType {
+    type Err = ArrowError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        crate::datatype_parse::parse_data_type(s)
+    }
+}
+
+impl TryFrom<&str> for DataType {
+    type Error = ArrowError;
+
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        value.parse()
     }
 }
 
@@ -984,5 +1066,17 @@ mod tests {
             ),
             UnionMode::Dense,
         );
+    }
+
+    #[test]
+    fn test_try_from_str() {
+        let data_type: DataType = "Int32".try_into().unwrap();
+        assert_eq!(data_type, DataType::Int32);
+    }
+
+    #[test]
+    fn test_from_str() {
+        let data_type: DataType = "UInt64".parse().unwrap();
+        assert_eq!(data_type, DataType::UInt64);
     }
 }

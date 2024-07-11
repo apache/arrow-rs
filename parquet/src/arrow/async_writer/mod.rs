@@ -176,7 +176,16 @@ impl<W: AsyncFileWriter> AsyncArrowWriter<W> {
         self.sync_writer.flushed_row_groups()
     }
 
-    /// Returns the estimated length in bytes of the current in progress row group
+    /// Estimated memory usage, in bytes, of this `ArrowWriter`
+    ///
+    /// See [ArrowWriter::memory_size] for more information.
+    pub fn memory_size(&self) -> usize {
+        self.sync_writer.memory_size()
+    }
+
+    /// Anticipated encoded size of the in progress row group.
+    ///
+    /// See [ArrowWriter::memory_size] for more information.
     pub fn in_progress_size(&self) -> usize {
         self.sync_writer.in_progress_size()
     }
@@ -419,16 +428,30 @@ mod tests {
         let initial_size = writer.in_progress_size();
         assert!(initial_size > 0);
         assert_eq!(writer.in_progress_rows(), batch.num_rows());
+        let initial_memory = writer.memory_size();
+        // memory estimate is larger than estimated encoded size
+        assert!(
+            initial_size <= initial_memory,
+            "{initial_size} <= {initial_memory}"
+        );
 
         // updated on second write
         writer.write(&batch).await.unwrap();
         assert!(writer.in_progress_size() > initial_size);
         assert_eq!(writer.in_progress_rows(), batch.num_rows() * 2);
+        assert!(writer.memory_size() > initial_memory);
+        assert!(
+            writer.in_progress_size() <= writer.memory_size(),
+            "in_progress_size {} <= memory_size {}",
+            writer.in_progress_size(),
+            writer.memory_size()
+        );
 
         // in progress tracking is cleared, but the overall data written is updated
         let pre_flush_bytes_written = writer.bytes_written();
         writer.flush().await.unwrap();
         assert_eq!(writer.in_progress_size(), 0);
+        assert_eq!(writer.memory_size(), 0);
         assert_eq!(writer.in_progress_rows(), 0);
         assert!(writer.bytes_written() > pre_flush_bytes_written);
 

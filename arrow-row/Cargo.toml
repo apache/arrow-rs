@@ -46,7 +46,6 @@ arrow-data = { workspace = true }
 arrow-schema = { workspace = true }
 
 half = { version = "2.1", default-features = false }
-hashbrown = { version = "0.14", default-features = false }
 
 [dev-dependencies]
 arrow-cast = { workspace = true }
