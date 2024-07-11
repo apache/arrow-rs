@@ -1511,6 +1511,12 @@ mod tests {
         assert_eq!(list, vec![path.clone()]);
 
         let result = integration
+            .get(&location)
+            .await
+            .unwrap()
+            .bytes()
+            .await
+            .unwrap();
         assert_eq!(result, Bytes::from("test"));
     }
 
