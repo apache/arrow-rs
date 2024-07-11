@@ -22,6 +22,8 @@ use std::sync::Arc;
 use arrow_buffer::{Buffer, BufferBuilder, NullBufferBuilder, ScalarBuffer};
 use arrow_data::ByteView;
 use arrow_schema::ArrowError;
+use hashbrown::hash_table::Entry;
+use hashbrown::HashTable;
 
 use crate::builder::ArrayBuilder;
 use crate::types::bytes::ByteArrayNativeType;
@@ -57,6 +59,9 @@ pub struct GenericByteViewBuilder<T: ByteViewType + ?Sized> {
     completed: Vec<Buffer>,
     in_progress: Vec<u8>,
     block_size: u32,
+    /// Some if deduplicating strings
+    /// map `<string hash> -> <index to the views>`
+    string_tracker: Option<(HashTable<usize>, ahash::RandomState)>,
     phantom: PhantomData<T>,
 }
 
@@ -74,6 +79,7 @@ impl<T: ByteViewType + ?Sized> GenericByteViewBuilder<T> {
             completed: vec![],
             in_progress: vec![],
             block_size: DEFAULT_BLOCK_SIZE,
+            string_tracker: None,
             phantom: Default::default(),
         }
     }
@@ -81,6 +87,20 @@ impl<T: ByteViewType + ?Sized> GenericByteViewBuilder<T> {
     /// Override the size of buffers to allocate for holding string data
     pub fn with_block_size(self, block_size: u32) -> Self {
         Self { block_size, ..self }
+    }
+
+    /// Deduplicate strings while building the array
+    ///
+    /// This will potentially decrease the memory usage if the array have repeated strings
+    /// It will also increase the time to build the array as it needs to hash the strings
+    pub fn with_deduplicate_strings(self) -> Self {
+        Self {
+            string_tracker: Some((
+                HashTable::with_capacity(self.views_builder.capacity()),
+                Default::default(),
+            )),
+            ..self
+        }
     }
 
     /// Append a new data block returning the new block offset
@@ -179,6 +199,26 @@ impl<T: ByteViewType + ?Sized> GenericByteViewBuilder<T> {
         self.completed.push(block);
     }
 
+    /// Returns the value at the given index
+    /// Useful if we want to know what value has been inserted to the builder
+    fn get_value(&self, index: usize) -> &[u8] {
+        let view = self.views_builder.as_slice().get(index).unwrap();
+        let len = *view as u32;
+        if len <= 12 {
+            // # Safety
+            // The view is valid from the builder
+            unsafe { GenericByteViewArray::<T>::inline_value(view, len as usize) }
+        } else {
+            let view = ByteView::from(*view);
+            if view.buffer_index < self.completed.len() as u32 {
+                let block = &self.completed[view.buffer_index as usize];
+                &block[view.offset as usize..view.offset as usize + view.length as usize]
+            } else {
+                &self.in_progress[view.offset as usize..view.offset as usize + view.length as usize]
+            }
+        }
+    }
+
     /// Appends a value into the builder
     ///
     /// # Panics
@@ -197,6 +237,40 @@ impl<T: ByteViewType + ?Sized> GenericByteViewBuilder<T> {
             self.views_builder.append(u128::from_le_bytes(view_buffer));
             self.null_buffer_builder.append_non_null();
             return;
+        }
+
+        // Deduplication if:
+        // (1) deduplication is enabled.
+        // (2) len > 12
+        if let Some((mut ht, hasher)) = self.string_tracker.take() {
+            let hash_val = hasher.hash_one(v);
+            let hasher_fn = |v: &_| hasher.hash_one(v);
+
+            let entry = ht.entry(
+                hash_val,
+                |idx| {
+                    let stored_value = self.get_value(*idx);
+                    v == stored_value
+                },
+                hasher_fn,
+            );
+            match entry {
+                Entry::Occupied(occupied) => {
+                    // If the string already exists, we will directly use the view
+                    let idx = occupied.get();
+                    self.views_builder
+                        .append(self.views_builder.as_slice()[*idx]);
+                    self.null_buffer_builder.append_non_null();
+                    self.string_tracker = Some((ht, hasher));
+                    return;
+                }
+                Entry::Vacant(vacant) => {
+                    // o.w. we insert the (string hash -> view index)
+                    // the idx is current length of views_builder, as we are inserting a new view
+                    vacant.insert(self.views_builder.len());
+                }
+            }
+            self.string_tracker = Some((ht, hasher));
         }
 
         let required_cap = self.in_progress.len() + v.len();
@@ -356,6 +430,42 @@ pub fn make_view(data: &[u8], block_id: u32, offset: u32) -> u128 {
 mod tests {
     use super::*;
     use crate::Array;
+
+    #[test]
+    fn test_string_view_deduplicate() {
+        let value_1 = "long string to test string view";
+        let value_2 = "not so similar string but long";
+
+        let mut builder = StringViewBuilder::new()
+            .with_deduplicate_strings()
+            .with_block_size(value_1.len() as u32 * 2); // so that we will have multiple buffers
+
+        let values = vec![
+            Some(value_1),
+            Some(value_2),
+            Some("short"),
+            Some(value_1),
+            None,
+            Some(value_2),
+            Some(value_1),
+        ];
+        builder.extend(values.clone());
+
+        let array = builder.finish_cloned();
+        array.to_data().validate_full().unwrap();
+        assert_eq!(array.data_buffers().len(), 1); // without duplication we would need 3 buffers.
+        let actual: Vec<_> = array.iter().collect();
+        assert_eq!(actual, values);
+
+        let view0 = array.views().first().unwrap();
+        let view3 = array.views().get(3).unwrap();
+        let view6 = array.views().get(6).unwrap();
+
+        assert_eq!(view0, view3);
+        assert_eq!(view0, view6);
+
+        assert_eq!(array.views().get(1), array.views().get(5));
+    }
 
     #[test]
     fn test_string_view() {
