@@ -117,12 +117,12 @@ impl ConvertedType {
   /// a list is converted into an optional field containing a repeated field for its
   /// values
   pub const LIST: ConvertedType = ConvertedType(3);
-  /// an enum is converted into a binary field
+  /// an enum is converted into a BYTE_ARRAY field
   pub const ENUM: ConvertedType = ConvertedType(4);
   /// A decimal value.
   /// 
-  /// This may be used to annotate binary or fixed primitive types. The
-  /// underlying byte array stores the unscaled value encoded as two's
+  /// This may be used to annotate BYTE_ARRAY or FIXED_LEN_BYTE_ARRAY primitive
+  /// types. The underlying byte array stores the unscaled value encoded as two's
   /// complement using big-endian byte order (the most significant byte is the
   /// zeroth element). The value of the decimal is the value * 10^{-scale}.
   /// 
@@ -185,7 +185,7 @@ impl ConvertedType {
   pub const JSON: ConvertedType = ConvertedType(19);
   /// An embedded BSON document
   /// 
-  /// A BSON document embedded within a single BINARY column.
+  /// A BSON document embedded within a single BYTE_ARRAY column.
   pub const BSON: ConvertedType = ConvertedType(20);
   /// An interval of time
   /// 
@@ -288,9 +288,9 @@ impl From<&ConvertedType> for i32 {
 pub struct FieldRepetitionType(pub i32);
 
 impl FieldRepetitionType {
-  /// This field is required (can not be null) and each record has exactly 1 value.
+  /// This field is required (can not be null) and each row has exactly 1 value.
   pub const REQUIRED: FieldRepetitionType = FieldRepetitionType(0);
-  /// The field is optional (can be null) and each record has 0 or 1 values.
+  /// The field is optional (can be null) and each row has 0 or 1 values.
   pub const OPTIONAL: FieldRepetitionType = FieldRepetitionType(1);
   /// The field is repeated and can contain 0 or more values
   pub const REPEATED: FieldRepetitionType = FieldRepetitionType(2);
@@ -379,12 +379,15 @@ impl Encoding {
   pub const DELTA_BYTE_ARRAY: Encoding = Encoding(7);
   /// Dictionary encoding: the ids are encoded using the RLE encoding
   pub const RLE_DICTIONARY: Encoding = Encoding(8);
-  /// Encoding for floating-point data.
+  /// Encoding for fixed-width data (FLOAT, DOUBLE, INT32, INT64, FIXED_LEN_BYTE_ARRAY).
   /// K byte-streams are created where K is the size in bytes of the data type.
-  /// The individual bytes of an FP value are scattered to the corresponding stream and
+  /// The individual bytes of a value are scattered to the corresponding stream and
   /// the streams are concatenated.
   /// This itself does not reduce the size of the data but can lead to better compression
   /// afterwards.
+  /// 
+  /// Added in 2.8 for FLOAT and DOUBLE.
+  /// Support for INT32, INT64 and FIXED_LEN_BYTE_ARRAY added in 2.11.
   pub const BYTE_STREAM_SPLIT: Encoding = Encoding(9);
   pub const ENUM_VALUES: &'static [Self] = &[
     Self::PLAIN,
@@ -1260,7 +1263,7 @@ impl crate::thrift::TSerializable for NullType {
 /// To maintain forward-compatibility in v1, implementations using this logical
 /// type must also set scale and precision on the annotated SchemaElement.
 /// 
-/// Allowed for physical types: INT32, INT64, FIXED, and BINARY
+/// Allowed for physical types: INT32, INT64, FIXED_LEN_BYTE_ARRAY, and BYTE_ARRAY.
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct DecimalType {
   pub scale: i32,
@@ -1757,7 +1760,7 @@ impl crate::thrift::TSerializable for IntType {
 
 /// Embedded JSON logical type annotation
 /// 
-/// Allowed for physical types: BINARY
+/// Allowed for physical types: BYTE_ARRAY
 #[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct JsonType {
 }
@@ -1797,7 +1800,7 @@ impl crate::thrift::TSerializable for JsonType {
 
 /// Embedded BSON logical type annotation
 /// 
-/// Allowed for physical types: BINARY
+/// Allowed for physical types: BYTE_ARRAY
 #[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct BsonType {
 }
@@ -2283,7 +2286,12 @@ impl crate::thrift::TSerializable for SchemaElement {
 /// Data page header
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct DataPageHeader {
-  /// Number of values, including NULLs, in this data page. *
+  /// Number of values, including NULLs, in this data page.
+  /// 
+  /// If a OffsetIndex is present, a page must begin at a row
+  /// boundary (repetition_level = 0). Otherwise, pages may begin
+  /// within a row (repetition_level > 0).
+  /// 
   pub num_values: i32,
   /// Encoding used for this data page *
   pub encoding: Encoding,
@@ -2527,7 +2535,10 @@ pub struct DataPageHeaderV2 {
   /// Number of NULL values, in this data page.
   /// Number of non-null = num_values - num_nulls which is also the number of values in the data section *
   pub num_nulls: i32,
-  /// Number of rows in this data page. which means pages change on record boundaries (r = 0) *
+  /// Number of rows in this data page. Every page must begin at a
+  /// row boundary (repetition_level = 0): rows must **not** be
+  /// split across page boundaries when using V2 data pages.
+  /// 
   pub num_rows: i32,
   /// Encoding used for data in this page *
   pub encoding: Encoding,
@@ -3344,10 +3355,10 @@ impl crate::thrift::TSerializable for KeyValue {
 // SortingColumn
 //
 
-/// Wrapper struct to specify sort order
+/// Sort order within a RowGroup of a leaf column
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct SortingColumn {
-  /// The column index (in this row group) *
+  /// The ordinal position of the column (in this row group) *
   pub column_idx: i32,
   /// If true, indicates this column is sorted in descending order. *
   pub descending: bool,
@@ -4035,11 +4046,19 @@ pub struct ColumnChunk {
   /// metadata.  This path is relative to the current file.
   /// 
   pub file_path: Option<String>,
-  /// Byte offset in file_path to the ColumnMetaData *
+  /// Deprecated: Byte offset in file_path to the ColumnMetaData
+  /// 
+  /// Past use of this field has been inconsistent, with some implementations
+  /// using it to point to the ColumnMetaData and some using it to point to
+  /// the first page in the column chunk. In many cases, the ColumnMetaData at this
+  /// location is wrong. This field is now deprecated and should not be used.
+  /// Writers should set this field to 0 if no ColumnMetaData has been written outside
+  /// the footer.
   pub file_offset: i64,
-  /// Column metadata for this chunk. This is the same content as what is at
-  /// file_path/file_offset.  Having it here has it replicated in the file
-  /// metadata.
+  /// Column metadata for this chunk. Some writers may also replicate this at the
+  /// location pointed to by file_path/file_offset.
+  /// Note: while marked as optional, this field is in fact required by most major
+  /// Parquet implementations. As such, writers MUST populate this field.
   /// 
   pub meta_data: Option<ColumnMetaData>,
   /// File offset of ColumnChunk's OffsetIndex *
@@ -4485,8 +4504,9 @@ pub struct PageLocation {
   /// Size of the page, including header. Sum of compressed_page_size and header
   /// length
   pub compressed_page_size: i32,
-  /// Index within the RowGroup of the first row of the page; this means pages
-  /// change on record boundaries (r = 0).
+  /// Index within the RowGroup of the first row of the page. When an
+  /// OffsetIndex is present, pages must begin on row boundaries
+  /// (repetition_level = 0).
   pub first_row_index: i64,
 }
 
@@ -4563,6 +4583,11 @@ impl crate::thrift::TSerializable for PageLocation {
 // OffsetIndex
 //
 
+/// Optional offsets for each data page in a ColumnChunk.
+/// 
+/// Forms part of the page index, along with ColumnIndex.
+/// 
+/// OffsetIndex may be present even if ColumnIndex is not.
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct OffsetIndex {
   /// PageLocations, ordered by increasing PageLocation.offset. It is required
@@ -4658,8 +4683,14 @@ impl crate::thrift::TSerializable for OffsetIndex {
 // ColumnIndex
 //
 
-/// Description for ColumnIndex.
-/// Each `<array-field>`\[i\] refers to the page at OffsetIndex.page_locations\[i\]
+/// Optional statistics for each data page in a ColumnChunk.
+/// 
+/// Forms part the page index, along with OffsetIndex.
+/// 
+/// If this structure is present, OffsetIndex must also be present.
+/// 
+/// For each field in this structure, `<field>`\[i\] refers to the page at
+/// OffsetIndex.page_locations\[i\]
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct ColumnIndex {
   /// A list of Boolean values to determine the validity of the corresponding
