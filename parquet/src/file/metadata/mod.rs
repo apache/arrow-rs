@@ -966,7 +966,9 @@ pub struct ColumnIndexBuilder {
     /// Is the information in the builder valid?
     ///
     /// Set to `false` if any entry in the page doesn't have statistics for
-    /// some reason
+    /// some reason. This might happen if the page is entirely null, or
+    /// is a floating point column without any non-nan values
+    /// e.g. <https://github.com/apache/parquet-format/pull/196>
     valid: bool,
 }
 
