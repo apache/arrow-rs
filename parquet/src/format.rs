@@ -4689,7 +4689,7 @@ impl crate::thrift::TSerializable for OffsetIndex {
 /// 
 /// If this structure is present, OffsetIndex must also be present.
 /// 
-/// For each field in this structure, <field>\[i\] refers to the page at
+/// For each field in this structure, `<field>`\[i\] refers to the page at
 /// OffsetIndex.page_locations\[i\]
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct ColumnIndex {
