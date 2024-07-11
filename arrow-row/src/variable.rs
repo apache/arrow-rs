@@ -349,12 +349,11 @@ pub unsafe fn decode_string_view(
     validate_utf8: bool,
 ) -> StringViewArray {
     let decoded = decode_binary_view(rows, options);
-    return decoded.to_string_view_unchecked();
-    // if !validate_utf8 {
-    //     return decoded.to_string_view_unchecked();
-    // }
+    if !validate_utf8 {
+        return decoded.to_string_view_unchecked();
+    }
 
-    // decoded
-    //     .to_string_view()
-    //     .expect("Decoding string view encountered invalid utf8!")
+    decoded
+        .to_string_view()
+        .expect("Decoding string view encountered invalid utf8!")
 }
