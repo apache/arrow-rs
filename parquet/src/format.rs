@@ -659,7 +659,7 @@ pub struct SizeStatistics {
   /// below.
   /// 
   /// For example, if a column chunk is dictionary-encoded with dictionary
-  /// \["a", "bc", "cde"\], and a data page contains the indices \[0, 0, 1, 2\],
+  /// ["a", "bc", "cde"], and a data page contains the indices [0, 0, 1, 2],
   /// then this value for that data page should be 7 (1 + 1 + 2 + 3).
   /// 
   /// This field should only be set for types that use BYTE_ARRAY as their
