@@ -1535,6 +1535,7 @@ mod tests {
             .bytes()
             .await
             .unwrap();
+
         assert_eq!(&*read_data, data);
         assert!(fs::read_dir(root.path()).unwrap().count() > 0);
         integration.delete(&location).await.unwrap();
