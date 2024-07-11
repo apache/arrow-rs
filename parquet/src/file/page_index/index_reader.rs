@@ -46,9 +46,9 @@ pub(crate) fn acc_range(a: Option<Range<usize>>, b: Option<Range<usize>>) -> Opt
 /// Returns an empty vector if this row group does not contain a
 /// [`ColumnIndex`].
 ///
-/// See [Column Index Documentation] for more details.
+/// See [Page Index Documentation] for more details.
 ///
-/// [Column Index Documentation]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
+/// [Page Index Documentation]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
 pub fn read_columns_indexes<R: ChunkReader>(
     reader: &R,
     chunks: &[ColumnChunkMetaData],
@@ -82,9 +82,9 @@ pub fn read_columns_indexes<R: ChunkReader>(
 /// Return an empty vector if this row group does not contain an
 /// [`OffsetIndex]`.
 ///
-/// See [Column Index Documentation] for more details.
+/// See [Page Index Documentation] for more details.
 ///
-/// [Column Index Documentation]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
+/// [Page Index Documentation]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
 pub fn read_pages_locations<R: ChunkReader>(
     reader: &R,
     chunks: &[ColumnChunkMetaData],
@@ -118,9 +118,9 @@ pub fn read_pages_locations<R: ChunkReader>(
 /// Returns an empty vector if this row group does not contain an
 /// [`OffsetIndex`].
 ///
-/// See [Offset Index Documentation] for more details.
+/// See [Page Index Documentation] for more details.
 ///
-/// [Offset Index Documentation]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
+/// [Page Index Documentation]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
 pub fn read_offset_indexes<R: ChunkReader>(
     reader: &R,
     chunks: &[ColumnChunkMetaData],

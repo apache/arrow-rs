@@ -42,8 +42,15 @@ pub struct PageIndex<T> {
     /// Null values in the page
     pub null_count: Option<i64>,
     /// Repetition level histogram for the page
+    ///
+    /// `repetition_level_histogram[i]` is a count of how many values are at repetition level `i`.
+    /// For example, `repetition_level_histogram[0]` indicates how many rows the page contains.
     pub repetition_level_histogram: Option<Vec<i64>>,
     /// Definition level histogram for the page
+    ///
+    /// `definition_level_histogram[i]` is a count of how many values are at definition level `i`.
+    /// For example, `definition_level_histogram[max_definition_level-1]` indicates how many
+    /// non-null values are present in the page.
     pub definition_level_histogram: Option<Vec<i64>>,
 }
 
