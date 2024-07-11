@@ -386,7 +386,6 @@ macro_rules! get_statistics {
                     };
 
                     let Ok(x) = std::str::from_utf8(x) else {
-                        // log::debug!("Utf8 statistics is a non-UTF8 value, ignoring it.");
                         builder.append_null();
                         continue;
                     };
@@ -405,7 +404,6 @@ macro_rules! get_statistics {
                     };
 
                     let Ok(x) = std::str::from_utf8(x) else {
-                        // log::debug!("Utf8 statistics is a non-UTF8 value, ignoring it.");
                         builder.append_null();
                         continue;
                     };
@@ -425,11 +423,6 @@ macro_rules! get_statistics {
 
                     // ignore invalid values
                     if x.len().try_into() != Ok(*size){
-                        // log::debug!(
-                        //     "FixedSizeBinary({}) statistics is a binary of size {}, ignoring it.",
-                        //     size,
-                        //     x.len(),
-                        // );
                         builder.append_null();
                         continue;
                     }
@@ -838,7 +831,6 @@ macro_rules! get_data_page_statistics {
                             };
 
                             let Ok(x) = std::str::from_utf8(x.data()) else {
-                                // log::debug!("Utf8 statistics is a non-UTF8 value, ignoring it.");
                                 builder.append_null();
                                 continue;
                             };
@@ -859,7 +851,6 @@ macro_rules! get_data_page_statistics {
                             };
 
                             let Ok(x) = std::str::from_utf8(x.data()) else {
-                                // log::debug!("LargeUtf8 statistics is a non-UTF8 value, ignoring it.");
                                 builder.append_null();
                                 continue;
                             };
