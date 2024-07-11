@@ -134,6 +134,11 @@ path = "./examples/read_with_rowgroup.rs"
 name = "arrow_writer_layout"
 required-features = ["arrow"]
 
+[[test]]
+name = "arrow_reader"
+required-features = ["arrow"]
+path = "./tests/arrow_reader/mod.rs"
+
 [[bin]]
 name = "parquet-read"
 required-features = ["cli"]

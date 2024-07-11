@@ -42,7 +42,7 @@ use crate::schema::types::SchemaDescriptor;
 
 mod filter;
 mod selection;
-mod statistics;
+pub mod statistics;
 
 /// Builder for constructing parquet readers into arrow.
 ///
