@@ -183,7 +183,7 @@ pub struct ColumnCloseResult {
     pub offset_index: Option<OffsetIndex>,
 }
 
-/// Creates vector to hold level histogram data. Length will be `max_level + 1`.
+/// Creates a vector to hold level histogram data. Length will be `max_level + 1`.
 /// Because histograms are not necessary when `max_level == 0`, this will return
 /// `None` in that case.
 fn new_histogram(max_level: i16) -> Option<Vec<i64>> {
@@ -191,6 +191,17 @@ fn new_histogram(max_level: i16) -> Option<Vec<i64>> {
         Some(vec![0; max_level as usize + 1])
     } else {
         None
+    }
+}
+
+/// Sum `page_histogram` into `chunk_histogram`
+fn update_histogram(chunk_histogram: &mut Option<Vec<i64>>, page_histogram: &Option<Vec<i64>>) {
+    if page_histogram.is_some() && chunk_histogram.is_some() {
+        let chunk_hist = chunk_histogram.as_mut().unwrap();
+        let page_hist = page_histogram.as_ref().unwrap();
+        for i in 0..page_hist.len() {
+            chunk_hist[i] += page_hist[i]
+        }
     }
 }
 
@@ -204,7 +215,7 @@ struct PageMetrics {
 }
 
 impl PageMetrics {
-    pub fn new() -> Self {
+    fn new() -> Self {
         PageMetrics {
             num_buffered_values: 0,
             num_buffered_rows: 0,
@@ -215,38 +226,38 @@ impl PageMetrics {
     }
 
     /// Initialize the repetition level histogram
-    pub fn with_repetition_level_histogram(mut self, max_level: i16) -> Self {
+    fn with_repetition_level_histogram(mut self, max_level: i16) -> Self {
         self.repetition_level_histogram = new_histogram(max_level);
         self
     }
 
     /// Initialize the definition level histogram
-    pub fn with_definition_level_histogram(mut self, max_level: i16) -> Self {
+    fn with_definition_level_histogram(mut self, max_level: i16) -> Self {
         self.definition_level_histogram = new_histogram(max_level);
         self
     }
 
-    /// Resets the state of this `PageMetrics` to the initial state
-    ///
-    /// If histograms have are defined their contents will be reset to zero.
-    pub fn new_page(&mut self) {
-        self.num_buffered_values = 0;
-        self.num_buffered_rows = 0;
-        self.num_page_nulls = 0;
-        if let Some(ref mut hist) = self.repetition_level_histogram {
-            for v in hist {
-                *v = 0
-            }
-        }
-        if let Some(ref mut hist) = self.definition_level_histogram {
+    /// Sets all elements of `histogram` to 0
+    fn reset_histogram(histogram: &mut Option<Vec<i64>>) {
+        if let Some(ref mut hist) = histogram {
             for v in hist {
                 *v = 0
             }
         }
     }
 
-    /// FIXME docs!
-    pub fn update_repetition_level_histogram(&mut self, levels: &[i16]) {
+    /// Resets the state of this `PageMetrics` to the initial state.
+    /// If histograms have been initialized their contents will be reset to zero.
+    fn new_page(&mut self) {
+        self.num_buffered_values = 0;
+        self.num_buffered_rows = 0;
+        self.num_page_nulls = 0;
+        PageMetrics::reset_histogram(&mut self.repetition_level_histogram);
+        PageMetrics::reset_histogram(&mut self.definition_level_histogram);
+    }
+
+    /// Updates histogram values using provided repetition levels
+    fn update_repetition_level_histogram(&mut self, levels: &[i16]) {
         if let Some(ref mut rep_hist) = self.repetition_level_histogram {
             for &level in levels {
                 rep_hist[level as usize] += 1;
@@ -254,7 +265,8 @@ impl PageMetrics {
         }
     }
 
-    pub fn update_definition_level_histogram(&mut self, levels: &[i16]) {
+    /// Updates histogram values using provided definition levels
+    fn update_definition_level_histogram(&mut self, levels: &[i16]) {
         if let Some(ref mut def_hist) = self.definition_level_histogram {
             for &level in levels {
                 def_hist[level as usize] += 1;
@@ -282,7 +294,7 @@ struct ColumnMetrics<T> {
 }
 
 impl<T> ColumnMetrics<T> {
-    pub fn new() -> Self {
+    fn new() -> Self {
         ColumnMetrics {
             total_bytes_written: 0,
             total_rows_written: 0,
@@ -302,40 +314,32 @@ impl<T> ColumnMetrics<T> {
     }
 
     /// Initialize the repetition level histogram
-    pub fn with_repetition_level_histogram(mut self, max_level: i16) -> Self {
+    fn with_repetition_level_histogram(mut self, max_level: i16) -> Self {
         self.repetition_level_histogram = new_histogram(max_level);
         self
     }
 
     /// Initialize the definition level histogram
-    pub fn with_definition_level_histogram(mut self, max_level: i16) -> Self {
+    fn with_definition_level_histogram(mut self, max_level: i16) -> Self {
         self.definition_level_histogram = new_histogram(max_level);
         self
     }
 
-    /// FIXME docs
-    pub fn update_from_page_metrics(&mut self, page_metrics: &PageMetrics) {
-        if page_metrics.definition_level_histogram.is_some()
-            && self.definition_level_histogram.is_some()
-        {
-            let chunk_hist = self.definition_level_histogram.as_mut().unwrap();
-            let page_hist = page_metrics.definition_level_histogram.as_ref().unwrap();
-            for i in 0..page_hist.len() {
-                chunk_hist[i] += page_hist[i]
-            }
-        }
-        if page_metrics.repetition_level_histogram.is_some()
-            && self.repetition_level_histogram.is_some()
-        {
-            let chunk_hist = self.repetition_level_histogram.as_mut().unwrap();
-            let page_hist = page_metrics.repetition_level_histogram.as_ref().unwrap();
-            for i in 0..page_hist.len() {
-                chunk_hist[i] += page_hist[i]
-            }
-        }
+    /// Sum the provided PageMetrics histograms into the chunk histograms. Does nothing if
+    /// page histograms are not initialized.
+    fn update_from_page_metrics(&mut self, page_metrics: &PageMetrics) {
+        update_histogram(
+            &mut self.definition_level_histogram,
+            &page_metrics.definition_level_histogram,
+        );
+        update_histogram(
+            &mut self.repetition_level_histogram,
+            &page_metrics.repetition_level_histogram,
+        );
     }
 
-    pub fn update_variable_length_bytes(&mut self, variable_length_bytes: &Option<i64>) {
+    /// Sum the provided page variable_length_bytes into the chunk variable_length_bytes
+    fn update_variable_length_bytes(&mut self, variable_length_bytes: &Option<i64>) {
         if let Some(var_bytes) = variable_length_bytes {
             *self.variable_length_bytes.get_or_insert(0) += var_bytes;
         }
