@@ -15,9 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::collections::HashMap;
 use std::{net::SocketAddr, pin::Pin, sync::Arc, time::Duration};
 
 use arrow_array::{ArrayRef, Int64Array, RecordBatch, StringArray};
+use arrow_flight::sql::client::FlightSqlServiceClient;
+use arrow_flight::sql::EndTransaction;
 use arrow_flight::{
     decode::FlightRecordBatchStream,
     flight_service_server::{FlightService, FlightServiceServer},
@@ -45,8 +48,11 @@ use assert_cmd::Command;
 use bytes::Bytes;
 use futures::{Stream, TryStreamExt};
 use prost::Message;
+use tokio::sync::Mutex;
 use tokio::{net::TcpListener, task::JoinHandle};
+use tonic::transport::Endpoint;
 use tonic::{Request, Response, Status, Streaming};
+use uuid::Uuid;
 
 const QUERY: &str = "SELECT * FROM table;";
 
@@ -140,6 +146,7 @@ async fn test_do_put_prepared_statement(test_server: FlightSqlServiceImpl) {
 pub async fn test_do_put_prepared_statement_stateless() {
     test_do_put_prepared_statement(FlightSqlServiceImpl {
         stateless_prepared_statements: true,
+        transactions: Arc::new(Mutex::new(HashMap::new())),
     })
     .await
 }
@@ -148,8 +155,46 @@ pub async fn test_do_put_prepared_statement_stateless() {
 pub async fn test_do_put_prepared_statement_stateful() {
     test_do_put_prepared_statement(FlightSqlServiceImpl {
         stateless_prepared_statements: false,
+        transactions: Arc::new(Mutex::new(HashMap::new())),
     })
     .await
+}
+
+#[tokio::test]
+pub async fn test_begin_end_transaction() {
+    let test_server = FlightSqlServiceImpl {
+        stateless_prepared_statements: true,
+        transactions: Arc::new(Mutex::new(HashMap::new())),
+    };
+    let fixture = TestFixture::new(&test_server).await;
+    let addr = fixture.addr;
+    let channel = Endpoint::from_shared(format!("http://{}:{}", addr.ip(), addr.port()))
+        .unwrap()
+        .connect()
+        .await
+        .expect("error connecting");
+    let mut flight_sql_client = FlightSqlServiceClient::new(channel);
+
+    // begin commit
+    let transaction_id = flight_sql_client.begin_transaction().await.unwrap();
+    flight_sql_client
+        .end_transaction(transaction_id, EndTransaction::Commit)
+        .await
+        .unwrap();
+
+    // begin rollback
+    let transaction_id = flight_sql_client.begin_transaction().await.unwrap();
+    flight_sql_client
+        .end_transaction(transaction_id, EndTransaction::Rollback)
+        .await
+        .unwrap();
+
+    // unknown transaction id
+    let transaction_id = "UnknownTransactionId".to_string().into();
+    assert!(flight_sql_client
+        .end_transaction(transaction_id, EndTransaction::Commit)
+        .await
+        .is_err());
 }
 
 /// All tests must complete within this many seconds or else the test server is shutdown
@@ -161,12 +206,14 @@ pub struct FlightSqlServiceImpl {
     /// prepared statements. stateful servers will not return an updated
     /// handle after executing `DoPut(CommandPreparedStatementQuery)`
     stateless_prepared_statements: bool,
+    transactions: Arc<Mutex<HashMap<String, ()>>>,
 }
 
 impl Default for FlightSqlServiceImpl {
     fn default() -> Self {
         Self {
             stateless_prepared_statements: true,
+            transactions: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 }
@@ -318,244 +365,6 @@ impl FlightSqlService for FlightSqlServiceImpl {
         Ok(resp)
     }
 
-    async fn get_flight_info_substrait_plan(
-        &self,
-        _query: CommandStatementSubstraitPlan,
-        _request: Request<FlightDescriptor>,
-    ) -> Result<Response<FlightInfo>, Status> {
-        Err(Status::unimplemented(
-            "get_flight_info_substrait_plan not implemented",
-        ))
-    }
-
-    async fn get_flight_info_catalogs(
-        &self,
-        _query: CommandGetCatalogs,
-        _request: Request<FlightDescriptor>,
-    ) -> Result<Response<FlightInfo>, Status> {
-        Err(Status::unimplemented(
-            "get_flight_info_catalogs not implemented",
-        ))
-    }
-
-    async fn get_flight_info_schemas(
-        &self,
-        _query: CommandGetDbSchemas,
-        _request: Request<FlightDescriptor>,
-    ) -> Result<Response<FlightInfo>, Status> {
-        Err(Status::unimplemented(
-            "get_flight_info_schemas not implemented",
-        ))
-    }
-
-    async fn get_flight_info_tables(
-        &self,
-        _query: CommandGetTables,
-        _request: Request<FlightDescriptor>,
-    ) -> Result<Response<FlightInfo>, Status> {
-        Err(Status::unimplemented(
-            "get_flight_info_tables not implemented",
-        ))
-    }
-
-    async fn get_flight_info_table_types(
-        &self,
-        _query: CommandGetTableTypes,
-        _request: Request<FlightDescriptor>,
-    ) -> Result<Response<FlightInfo>, Status> {
-        Err(Status::unimplemented(
-            "get_flight_info_table_types not implemented",
-        ))
-    }
-
-    async fn get_flight_info_sql_info(
-        &self,
-        _query: CommandGetSqlInfo,
-        _request: Request<FlightDescriptor>,
-    ) -> Result<Response<FlightInfo>, Status> {
-        Err(Status::unimplemented(
-            "get_flight_info_sql_info not implemented",
-        ))
-    }
-
-    async fn get_flight_info_primary_keys(
-        &self,
-        _query: CommandGetPrimaryKeys,
-        _request: Request<FlightDescriptor>,
-    ) -> Result<Response<FlightInfo>, Status> {
-        Err(Status::unimplemented(
-            "get_flight_info_primary_keys not implemented",
-        ))
-    }
-
-    async fn get_flight_info_exported_keys(
-        &self,
-        _query: CommandGetExportedKeys,
-        _request: Request<FlightDescriptor>,
-    ) -> Result<Response<FlightInfo>, Status> {
-        Err(Status::unimplemented(
-            "get_flight_info_exported_keys not implemented",
-        ))
-    }
-
-    async fn get_flight_info_imported_keys(
-        &self,
-        _query: CommandGetImportedKeys,
-        _request: Request<FlightDescriptor>,
-    ) -> Result<Response<FlightInfo>, Status> {
-        Err(Status::unimplemented(
-            "get_flight_info_imported_keys not implemented",
-        ))
-    }
-
-    async fn get_flight_info_cross_reference(
-        &self,
-        _query: CommandGetCrossReference,
-        _request: Request<FlightDescriptor>,
-    ) -> Result<Response<FlightInfo>, Status> {
-        Err(Status::unimplemented(
-            "get_flight_info_imported_keys not implemented",
-        ))
-    }
-
-    async fn get_flight_info_xdbc_type_info(
-        &self,
-        _query: CommandGetXdbcTypeInfo,
-        _request: Request<FlightDescriptor>,
-    ) -> Result<Response<FlightInfo>, Status> {
-        Err(Status::unimplemented(
-            "get_flight_info_xdbc_type_info not implemented",
-        ))
-    }
-
-    // do_get
-    async fn do_get_statement(
-        &self,
-        _ticket: TicketStatementQuery,
-        _request: Request<Ticket>,
-    ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status> {
-        Err(Status::unimplemented("do_get_statement not implemented"))
-    }
-
-    async fn do_get_prepared_statement(
-        &self,
-        _query: CommandPreparedStatementQuery,
-        _request: Request<Ticket>,
-    ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status> {
-        Err(Status::unimplemented(
-            "do_get_prepared_statement not implemented",
-        ))
-    }
-
-    async fn do_get_catalogs(
-        &self,
-        _query: CommandGetCatalogs,
-        _request: Request<Ticket>,
-    ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status> {
-        Err(Status::unimplemented("do_get_catalogs not implemented"))
-    }
-
-    async fn do_get_schemas(
-        &self,
-        _query: CommandGetDbSchemas,
-        _request: Request<Ticket>,
-    ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status> {
-        Err(Status::unimplemented("do_get_schemas not implemented"))
-    }
-
-    async fn do_get_tables(
-        &self,
-        _query: CommandGetTables,
-        _request: Request<Ticket>,
-    ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status> {
-        Err(Status::unimplemented("do_get_tables not implemented"))
-    }
-
-    async fn do_get_table_types(
-        &self,
-        _query: CommandGetTableTypes,
-        _request: Request<Ticket>,
-    ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status> {
-        Err(Status::unimplemented("do_get_table_types not implemented"))
-    }
-
-    async fn do_get_sql_info(
-        &self,
-        _query: CommandGetSqlInfo,
-        _request: Request<Ticket>,
-    ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status> {
-        Err(Status::unimplemented("do_get_sql_info not implemented"))
-    }
-
-    async fn do_get_primary_keys(
-        &self,
-        _query: CommandGetPrimaryKeys,
-        _request: Request<Ticket>,
-    ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status> {
-        Err(Status::unimplemented("do_get_primary_keys not implemented"))
-    }
-
-    async fn do_get_exported_keys(
-        &self,
-        _query: CommandGetExportedKeys,
-        _request: Request<Ticket>,
-    ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status> {
-        Err(Status::unimplemented(
-            "do_get_exported_keys not implemented",
-        ))
-    }
-
-    async fn do_get_imported_keys(
-        &self,
-        _query: CommandGetImportedKeys,
-        _request: Request<Ticket>,
-    ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status> {
-        Err(Status::unimplemented(
-            "do_get_imported_keys not implemented",
-        ))
-    }
-
-    async fn do_get_cross_reference(
-        &self,
-        _query: CommandGetCrossReference,
-        _request: Request<Ticket>,
-    ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status> {
-        Err(Status::unimplemented(
-            "do_get_cross_reference not implemented",
-        ))
-    }
-
-    async fn do_get_xdbc_type_info(
-        &self,
-        _query: CommandGetXdbcTypeInfo,
-        _request: Request<Ticket>,
-    ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status> {
-        Err(Status::unimplemented(
-            "do_get_xdbc_type_info not implemented",
-        ))
-    }
-
-    // do_put
-    async fn do_put_statement_update(
-        &self,
-        _ticket: CommandStatementUpdate,
-        _request: Request<PeekableFlightDataStream>,
-    ) -> Result<i64, Status> {
-        Err(Status::unimplemented(
-            "do_put_statement_update not implemented",
-        ))
-    }
-
-    async fn do_put_substrait_plan(
-        &self,
-        _ticket: CommandStatementSubstraitPlan,
-        _request: Request<PeekableFlightDataStream>,
-    ) -> Result<i64, Status> {
-        Err(Status::unimplemented(
-            "do_put_substrait_plan not implemented",
-        ))
-    }
-
     async fn do_put_prepared_statement_query(
         &self,
         _query: CommandPreparedStatementQuery,
@@ -590,16 +399,6 @@ impl FlightSqlService for FlightSqlServiceImpl {
         Ok(result)
     }
 
-    async fn do_put_prepared_statement_update(
-        &self,
-        _query: CommandPreparedStatementUpdate,
-        _request: Request<PeekableFlightDataStream>,
-    ) -> Result<i64, Status> {
-        Err(Status::unimplemented(
-            "do_put_prepared_statement_update not implemented",
-        ))
-    }
-
     async fn do_action_create_prepared_statement(
         &self,
         _query: ActionCreatePreparedStatementRequest,
@@ -609,60 +408,38 @@ impl FlightSqlService for FlightSqlServiceImpl {
             .map_err(|e| Status::internal(format!("Unable to serialize schema: {e}")))
     }
 
-    async fn do_action_close_prepared_statement(
-        &self,
-        _query: ActionClosePreparedStatementRequest,
-        _request: Request<Action>,
-    ) -> Result<(), Status> {
-        unimplemented!("Implement do_action_close_prepared_statement")
-    }
-
-    async fn do_action_create_prepared_substrait_plan(
-        &self,
-        _query: ActionCreatePreparedSubstraitPlanRequest,
-        _request: Request<Action>,
-    ) -> Result<ActionCreatePreparedStatementResult, Status> {
-        unimplemented!("Implement do_action_create_prepared_substrait_plan")
-    }
-
     async fn do_action_begin_transaction(
         &self,
         _query: ActionBeginTransactionRequest,
         _request: Request<Action>,
     ) -> Result<ActionBeginTransactionResult, Status> {
-        unimplemented!("Implement do_action_begin_transaction")
+        let transaction_id = Uuid::new_v4().to_string();
+        self.transactions
+            .lock()
+            .await
+            .insert(transaction_id.clone(), ());
+        Ok(ActionBeginTransactionResult {
+            transaction_id: transaction_id.as_bytes().to_vec().into(),
+        })
     }
 
     async fn do_action_end_transaction(
         &self,
-        _query: ActionEndTransactionRequest,
+        query: ActionEndTransactionRequest,
         _request: Request<Action>,
     ) -> Result<(), Status> {
-        unimplemented!("Implement do_action_end_transaction")
-    }
-
-    async fn do_action_begin_savepoint(
-        &self,
-        _query: ActionBeginSavepointRequest,
-        _request: Request<Action>,
-    ) -> Result<ActionBeginSavepointResult, Status> {
-        unimplemented!("Implement do_action_begin_savepoint")
-    }
-
-    async fn do_action_end_savepoint(
-        &self,
-        _query: ActionEndSavepointRequest,
-        _request: Request<Action>,
-    ) -> Result<(), Status> {
-        unimplemented!("Implement do_action_end_savepoint")
-    }
-
-    async fn do_action_cancel_query(
-        &self,
-        _query: ActionCancelQueryRequest,
-        _request: Request<Action>,
-    ) -> Result<ActionCancelQueryResult, Status> {
-        unimplemented!("Implement do_action_cancel_query")
+        let transaction_id = String::from_utf8(query.transaction_id.to_vec())
+            .map_err(|_| Status::invalid_argument("Invalid transaction id"))?;
+        if self
+            .transactions
+            .lock()
+            .await
+            .remove(&transaction_id)
+            .is_none()
+        {
+            return Err(Status::invalid_argument("Transaction id not found"));
+        }
+        Ok(())
     }
 
     async fn register_sql_info(&self, _id: i32, _result: &SqlInfo) {}
