@@ -1959,7 +1959,7 @@ mod tests {
             .len(20)
             .offset(5)
             .add_buffer(b1)
-            .null_bit_buffer(Some(Buffer::from(vec![
+            .null_bit_buffer(Some(Buffer::from([
                 0b01011111, 0b10110101, 0b01100011, 0b00011110,
             ])))
             .build()
@@ -2164,7 +2164,7 @@ mod tests {
 
     #[test]
     fn test_count_nulls() {
-        let buffer = Buffer::from(vec![0b00010110, 0b10011111]);
+        let buffer = Buffer::from([0b00010110, 0b10011111]);
         let buffer = NullBuffer::new(BooleanBuffer::new(buffer, 0, 16));
         let count = count_nulls(Some(&buffer), 0, 16);
         assert_eq!(count, 7);

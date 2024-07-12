@@ -448,20 +448,20 @@ mod tests {
         // Construct key and values
         let keys_data = ArrayData::builder(DataType::Int32)
             .len(8)
-            .add_buffer(Buffer::from(&[0, 1, 2, 3, 4, 5, 6, 7].to_byte_slice()))
+            .add_buffer(Buffer::from([0, 1, 2, 3, 4, 5, 6, 7].to_byte_slice()))
             .build()
             .unwrap();
         let values_data = ArrayData::builder(DataType::UInt32)
             .len(8)
             .add_buffer(Buffer::from(
-                &[0u32, 10, 20, 30, 40, 50, 60, 70].to_byte_slice(),
+                [0u32, 10, 20, 30, 40, 50, 60, 70].to_byte_slice(),
             ))
             .build()
             .unwrap();
 
         // Construct a buffer for value offsets, for the nested array:
         //  [[0, 1, 2], [3, 4, 5], [6, 7]]
-        let entry_offsets = Buffer::from(&[0, 3, 6, 8].to_byte_slice());
+        let entry_offsets = Buffer::from([0, 3, 6, 8].to_byte_slice());
 
         let keys = Arc::new(Field::new("keys", DataType::Int32, false));
         let values = Arc::new(Field::new("values", DataType::UInt32, false));
@@ -493,13 +493,13 @@ mod tests {
         // Construct key and values
         let key_data = ArrayData::builder(DataType::Int32)
             .len(8)
-            .add_buffer(Buffer::from(&[0, 1, 2, 3, 4, 5, 6, 7].to_byte_slice()))
+            .add_buffer(Buffer::from([0, 1, 2, 3, 4, 5, 6, 7].to_byte_slice()))
             .build()
             .unwrap();
         let value_data = ArrayData::builder(DataType::UInt32)
             .len(8)
             .add_buffer(Buffer::from(
-                &[0u32, 10, 20, 0, 40, 0, 60, 70].to_byte_slice(),
+                [0u32, 10, 20, 0, 40, 0, 60, 70].to_byte_slice(),
             ))
             .null_bit_buffer(Some(Buffer::from(&[0b11010110])))
             .build()
@@ -507,7 +507,7 @@ mod tests {
 
         // Construct a buffer for value offsets, for the nested array:
         //  [[0, 1, 2], [3, 4, 5], [6, 7]]
-        let entry_offsets = Buffer::from(&[0, 3, 6, 8].to_byte_slice());
+        let entry_offsets = Buffer::from([0, 3, 6, 8].to_byte_slice());
 
         let keys_field = Arc::new(Field::new("keys", DataType::Int32, false));
         let values_field = Arc::new(Field::new("values", DataType::UInt32, true));
@@ -617,18 +617,18 @@ mod tests {
         // Construct key and values
         let keys_data = ArrayData::builder(DataType::Int32)
             .len(5)
-            .add_buffer(Buffer::from(&[3, 4, 5, 6, 7].to_byte_slice()))
+            .add_buffer(Buffer::from([3, 4, 5, 6, 7].to_byte_slice()))
             .build()
             .unwrap();
         let values_data = ArrayData::builder(DataType::UInt32)
             .len(5)
-            .add_buffer(Buffer::from(&[30u32, 40, 50, 60, 70].to_byte_slice()))
+            .add_buffer(Buffer::from([30u32, 40, 50, 60, 70].to_byte_slice()))
             .build()
             .unwrap();
 
         // Construct a buffer for value offsets, for the nested array:
         //  [[3, 4, 5], [6, 7]]
-        let entry_offsets = Buffer::from(&[0, 3, 5].to_byte_slice());
+        let entry_offsets = Buffer::from([0, 3, 5].to_byte_slice());
 
         let keys = Arc::new(Field::new("keys", DataType::Int32, false));
         let values = Arc::new(Field::new("values", DataType::UInt32, false));

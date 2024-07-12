@@ -549,7 +549,7 @@ mod tests {
         let expected_string_data = ArrayData::builder(DataType::Utf8)
             .len(4)
             .null_bit_buffer(Some(Buffer::from(&[9_u8])))
-            .add_buffer(Buffer::from(&[0, 3, 3, 3, 7].to_byte_slice()))
+            .add_buffer(Buffer::from([0, 3, 3, 3, 7].to_byte_slice()))
             .add_buffer(Buffer::from(b"joemark"))
             .build()
             .unwrap();
@@ -557,7 +557,7 @@ mod tests {
         let expected_int_data = ArrayData::builder(DataType::Int32)
             .len(4)
             .null_bit_buffer(Some(Buffer::from(&[11_u8])))
-            .add_buffer(Buffer::from(&[1, 2, 0, 4].to_byte_slice()))
+            .add_buffer(Buffer::from([1, 2, 0, 4].to_byte_slice()))
             .build()
             .unwrap();
 
