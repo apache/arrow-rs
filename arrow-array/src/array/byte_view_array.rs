@@ -325,8 +325,7 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
     /// Use with caution as this can be an expensive operation, only use it when you are sure that the view
     /// array is significantly smaller than when it is originally created, e.g., after filtering or slicing.
     pub fn gc(&self) -> Self {
-        let mut builder =
-            GenericByteViewBuilder::<T>::with_capacity(self.len()).with_deduplicate_strings();
+        let mut builder = GenericByteViewBuilder::<T>::with_capacity(self.len());
 
         for v in self.iter() {
             builder.append_option(v);

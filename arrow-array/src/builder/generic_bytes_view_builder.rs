@@ -201,7 +201,8 @@ impl<T: ByteViewType + ?Sized> GenericByteViewBuilder<T> {
 
     /// Returns the value at the given index
     /// Useful if we want to know what value has been inserted to the builder
-    fn get_value(&self, index: usize) -> &[u8] {
+    /// The index has to be smaller than `self.len()`, otherwise it will panic
+    pub fn get_value(&self, index: usize) -> &[u8] {
         let view = self.views_builder.as_slice().get(index).unwrap();
         let len = *view as u32;
         if len <= 12 {
