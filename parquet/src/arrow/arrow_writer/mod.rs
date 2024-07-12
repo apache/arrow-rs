@@ -1206,7 +1206,7 @@ mod tests {
 
         // Construct a buffer for value offsets, for the nested array:
         //  [[1], [2, 3], null, [4, 5, 6], [7, 8, 9, 10]]
-        let a_value_offsets = arrow::buffer::Buffer::from(&[0, 1, 3, 3, 6, 10].to_byte_slice());
+        let a_value_offsets = arrow::buffer::Buffer::from([0, 1, 3, 3, 6, 10].to_byte_slice());
 
         // Construct a list array from the above two
         let a_list_data = ArrayData::builder(DataType::List(Arc::new(Field::new(
@@ -1217,7 +1217,7 @@ mod tests {
         .len(5)
         .add_buffer(a_value_offsets)
         .add_child_data(a_values.into_data())
-        .null_bit_buffer(Some(Buffer::from(vec![0b00011011])))
+        .null_bit_buffer(Some(Buffer::from([0b00011011])))
         .build()
         .unwrap();
         let a = ListArray::from(a_list_data);
@@ -1246,7 +1246,7 @@ mod tests {
 
         // Construct a buffer for value offsets, for the nested array:
         //  [[1], [2, 3], [], [4, 5, 6], [7, 8, 9, 10]]
-        let a_value_offsets = arrow::buffer::Buffer::from(&[0, 1, 3, 3, 6, 10].to_byte_slice());
+        let a_value_offsets = arrow::buffer::Buffer::from([0, 1, 3, 3, 6, 10].to_byte_slice());
 
         // Construct a list array from the above two
         let a_list_data = ArrayData::builder(DataType::List(Arc::new(Field::new(
@@ -1405,7 +1405,7 @@ mod tests {
 
         // Construct a buffer for value offsets, for the nested array:
         //  [[1], [2, 3], [], [4, 5, 6], [7, 8, 9, 10]]
-        let g_value_offsets = arrow::buffer::Buffer::from(&[0, 1, 3, 3, 6, 10].to_byte_slice());
+        let g_value_offsets = arrow::buffer::Buffer::from([0, 1, 3, 3, 6, 10].to_byte_slice());
 
         // Construct a list array from the above two
         let g_list_data = ArrayData::builder(struct_field_g.data_type().clone())
@@ -1420,7 +1420,7 @@ mod tests {
             .len(5)
             .add_buffer(g_value_offsets)
             .add_child_data(g_value.to_data())
-            .null_bit_buffer(Some(Buffer::from(vec![0b00011011])))
+            .null_bit_buffer(Some(Buffer::from([0b00011011])))
             .build()
             .unwrap();
         let h = ListArray::from(h_list_data);
@@ -1525,14 +1525,14 @@ mod tests {
         let c = Int32Array::from(vec![Some(1), None, Some(3), None, None, Some(6)]);
         let b_data = ArrayDataBuilder::new(field_b.data_type().clone())
             .len(6)
-            .null_bit_buffer(Some(Buffer::from(vec![0b00100111])))
+            .null_bit_buffer(Some(Buffer::from([0b00100111])))
             .add_child_data(c.into_data())
             .build()
             .unwrap();
         let b = StructArray::from(b_data);
         let a_data = ArrayDataBuilder::new(field_a.data_type().clone())
             .len(6)
-            .null_bit_buffer(Some(Buffer::from(vec![0b00101111])))
+            .null_bit_buffer(Some(Buffer::from([0b00101111])))
             .add_child_data(b.into_data())
             .build()
             .unwrap();
@@ -1595,7 +1595,7 @@ mod tests {
         let c = Int32Array::from(vec![1, 2, 3, 4, 5, 6]);
         let b_data = ArrayDataBuilder::new(type_b)
             .len(6)
-            .null_bit_buffer(Some(Buffer::from(vec![0b00100111])))
+            .null_bit_buffer(Some(Buffer::from([0b00100111])))
             .add_child_data(c.into_data())
             .build()
             .unwrap();
@@ -2280,7 +2280,7 @@ mod tests {
 
         // Build [[], null, [null, null]]
         let a_values = NullArray::new(2);
-        let a_value_offsets = arrow::buffer::Buffer::from(&[0, 0, 0, 2].to_byte_slice());
+        let a_value_offsets = arrow::buffer::Buffer::from([0, 0, 0, 2].to_byte_slice());
         let a_list_data = ArrayData::builder(DataType::List(Arc::new(Field::new(
             "item",
             DataType::Null,
@@ -2288,7 +2288,7 @@ mod tests {
         ))))
         .len(3)
         .add_buffer(a_value_offsets)
-        .null_bit_buffer(Some(Buffer::from(vec![0b00000101])))
+        .null_bit_buffer(Some(Buffer::from([0b00000101])))
         .add_child_data(a_values.into_data())
         .build()
         .unwrap();
@@ -2310,7 +2310,7 @@ mod tests {
     #[test]
     fn list_single_column() {
         let a_values = Int32Array::from(vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
-        let a_value_offsets = arrow::buffer::Buffer::from(&[0, 1, 3, 3, 6, 10].to_byte_slice());
+        let a_value_offsets = arrow::buffer::Buffer::from([0, 1, 3, 3, 6, 10].to_byte_slice());
         let a_list_data = ArrayData::builder(DataType::List(Arc::new(Field::new(
             "item",
             DataType::Int32,
@@ -2318,7 +2318,7 @@ mod tests {
         ))))
         .len(5)
         .add_buffer(a_value_offsets)
-        .null_bit_buffer(Some(Buffer::from(vec![0b00011011])))
+        .null_bit_buffer(Some(Buffer::from([0b00011011])))
         .add_child_data(a_values.into_data())
         .build()
         .unwrap();
@@ -2334,7 +2334,7 @@ mod tests {
     #[test]
     fn large_list_single_column() {
         let a_values = Int32Array::from(vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
-        let a_value_offsets = arrow::buffer::Buffer::from(&[0i64, 1, 3, 3, 6, 10].to_byte_slice());
+        let a_value_offsets = arrow::buffer::Buffer::from([0i64, 1, 3, 3, 6, 10].to_byte_slice());
         let a_list_data = ArrayData::builder(DataType::LargeList(Arc::new(Field::new(
             "large_item",
             DataType::Int32,
@@ -2343,7 +2343,7 @@ mod tests {
         .len(5)
         .add_buffer(a_value_offsets)
         .add_child_data(a_values.into_data())
-        .null_bit_buffer(Some(Buffer::from(vec![0b00011011])))
+        .null_bit_buffer(Some(Buffer::from([0b00011011])))
         .build()
         .unwrap();
 

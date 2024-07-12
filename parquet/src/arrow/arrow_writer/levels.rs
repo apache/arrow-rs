@@ -1050,7 +1050,7 @@ mod tests {
         let a_list_data = ArrayData::builder(a_list_type.clone())
             .len(5)
             .add_buffer(a_value_offsets)
-            .null_bit_buffer(Some(Buffer::from(vec![0b00011011])))
+            .null_bit_buffer(Some(Buffer::from([0b00011011])))
             .add_child_data(a_values.to_data())
             .build()
             .unwrap();
@@ -1116,7 +1116,7 @@ mod tests {
 
         // Construct a buffer for value offsets, for the nested array:
         //  [[1], [2, 3], null, [4, 5, 6], [7, 8, 9, 10]]
-        let g_value_offsets = arrow::buffer::Buffer::from(&[0, 1, 3, 3, 6, 10].to_byte_slice());
+        let g_value_offsets = arrow::buffer::Buffer::from([0, 1, 3, 3, 6, 10].to_byte_slice());
 
         // Construct a list array from the above two
         let g_list_data = ArrayData::builder(struct_field_g.data_type().clone())
