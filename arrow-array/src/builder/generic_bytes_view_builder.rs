@@ -338,6 +338,19 @@ impl<T: ByteViewType + ?Sized> GenericByteViewBuilder<T> {
     pub fn validity_slice(&self) -> Option<&[u8]> {
         self.null_buffer_builder.as_slice()
     }
+
+    /// Return the allocated size of this builder, useful for memory accounting.
+    pub fn allocated_size(&self) -> usize {
+        let buffer_size = self.completed.iter().map(|b| b.capacity()).sum::<usize>();
+        let in_progress = self.in_progress.capacity();
+        let null = self.null_buffer_builder.allocated_size();
+        let tracker = match &self.string_tracker {
+            Some((ht, _)) => ht.capacity() * std::mem::size_of::<usize>(),
+            None => 0,
+        };
+        let views = self.views_builder.capacity() * std::mem::size_of::<u128>();
+        buffer_size + in_progress + tracker + views + null
+    }
 }
 
 impl<T: ByteViewType + ?Sized> Default for GenericByteViewBuilder<T> {

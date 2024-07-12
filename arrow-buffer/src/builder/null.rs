@@ -161,6 +161,14 @@ impl NullBufferBuilder {
     pub fn as_slice_mut(&mut self) -> Option<&mut [u8]> {
         self.bitmap_builder.as_mut().map(|b| b.as_slice_mut())
     }
+
+    /// Return the allocated size of this builder, useful for memory accounting.
+    pub fn allocated_size(&self) -> usize {
+        self.bitmap_builder
+            .as_ref()
+            .map(|b| b.capacity())
+            .unwrap_or(0)
+    }
 }
 
 impl NullBufferBuilder {
