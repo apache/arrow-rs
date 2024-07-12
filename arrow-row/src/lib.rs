@@ -948,6 +948,11 @@ impl<'a> Row<'a> {
             config: self.config.clone(),
         }
     }
+
+    /// The row's bytes, with the lifetime of the underlying data.
+    pub fn data(&self) -> &'a [u8] {
+        self.data
+    }
 }
 
 // Manually derive these as don't wish to include `fields`
