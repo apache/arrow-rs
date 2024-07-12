@@ -28,7 +28,6 @@ use crate::encodings::decoding::{Decoder, DeltaBitPackDecoder};
 use crate::errors::{ParquetError, Result};
 use crate::schema::types::ColumnDescPtr;
 use arrow_array::{builder::make_view, ArrayRef};
-use arrow_buffer::Buffer;
 use arrow_data::ByteView;
 use arrow_schema::DataType as ArrowType;
 use bytes::Bytes;
@@ -667,7 +666,7 @@ impl ByteViewArrayDecoderDelta {
             v
         };
 
-        let actual_block_id = output.append_block(Buffer::from_vec(array_buffer));
+        let actual_block_id = output.append_block(array_buffer.into());
         assert_eq!(actual_block_id, buffer_id);
         Ok(read)
     }

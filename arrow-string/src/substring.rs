@@ -732,7 +732,7 @@ mod tests {
     }
 
     fn generic_string_with_non_zero_offset<O: OffsetSizeTrait>() {
-        let values = b"hellotherearrow";
+        let values = "hellotherearrow";
         let offsets = &[
             O::zero(),
             O::from_usize(5).unwrap(),
@@ -867,7 +867,7 @@ mod tests {
         let data = ArrayData::builder(GenericStringArray::<O>::DATA_TYPE)
             .len(2)
             .add_buffer(Buffer::from_slice_ref(offsets))
-            .add_buffer(Buffer::from(values.as_bytes()))
+            .add_buffer(Buffer::from(values))
             .null_bit_buffer(Some(Buffer::from(bitmap)))
             .offset(1)
             .build()

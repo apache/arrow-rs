@@ -20,7 +20,7 @@
 //! [`StringArray`]: arrow_array::StringArray
 
 use arrow_array::{Array, GenericBinaryArray, GenericStringArray, OffsetSizeTrait};
-use arrow_buffer::{Buffer, OffsetBuffer};
+use arrow_buffer::OffsetBuffer;
 use arrow_schema::ArrowError;
 use base64::encoded_len;
 use base64::engine::Config;
@@ -50,9 +50,7 @@ pub fn b64_encode<E: Engine, O: OffsetSizeTrait>(
     assert_eq!(offset, buffer_len);
 
     // Safety: Base64 is valid UTF-8
-    unsafe {
-        GenericStringArray::new_unchecked(offsets, Buffer::from_vec(buffer), array.nulls().cloned())
-    }
+    unsafe { GenericStringArray::new_unchecked(offsets, buffer.into(), array.nulls().cloned()) }
 }
 
 /// Base64 decode each element of `array` with the provided [`Engine`]
@@ -81,7 +79,7 @@ pub fn b64_decode<E: Engine, O: OffsetSizeTrait>(
 
     Ok(GenericBinaryArray::new(
         offsets,
-        Buffer::from_vec(buffer),
+        buffer.into(),
         array.nulls().cloned(),
     ))
 }
