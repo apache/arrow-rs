@@ -214,6 +214,7 @@ impl ParquetMetaData {
             + self.row_groups.heap_size()
             + self.column_index.heap_size()
             + self.offset_index.heap_size()
+            + self.unencoded_byte_array_data_bytes.heap_size()
     }
 
     /// Override the column index
@@ -1439,10 +1440,10 @@ mod tests {
                 vec![PageLocation::new(1, 2, 3)],
                 vec![PageLocation::new(1, 2, 3)],
             ]]),
-            None,
+            Some(vec![vec![Some(vec![10, 20, 30])]]),
         );
 
-        let bigger_expected_size = 2776;
+        let bigger_expected_size = 2848;
         // more set fields means more memory usage
         assert!(bigger_expected_size > base_expected_size);
         assert_eq!(parquet_meta.memory_size(), bigger_expected_size);
