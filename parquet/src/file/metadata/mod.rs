@@ -719,7 +719,8 @@ impl ColumnChunkMetaData {
 
     /// Returns the repetition level histogram.
     ///
-    /// The returned value `vec[i]` is how many values are at repetition level `i`.
+    /// The returned value `vec[i]` is how many values are at repetition level `i`. For example,
+    /// `vec[0]` indicates how many rows the page contains.
     /// This field may not be set by older writers.
     pub fn repetition_level_histogram(&self) -> Option<&Vec<i64>> {
         self.repetition_level_histogram.as_ref()
@@ -727,7 +728,8 @@ impl ColumnChunkMetaData {
 
     /// Returns the definition level histogram.
     ///
-    /// The returned value `vec[i]` is how many values are at definition level `i`.
+    /// The returned value `vec[i]` is how many values are at definition level `i`. For example,
+    /// `vec[max_definition_level-1]` indicates how many non-null values are present in the page.
     /// This field may not be set by older writers.
     pub fn definition_level_histogram(&self) -> Option<&Vec<i64>> {
         self.definition_level_histogram.as_ref()
