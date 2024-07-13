@@ -260,6 +260,9 @@ fn decode_binary_view_inner(
     });
 
     let values_capacity: usize = rows.iter().map(|row| decoded_len(row, options)).sum();
+    // Reserve the max amount of bytes possible for this buffer.
+    // However, only strings longer than 12 bytes are copied here
+    // This means it is less memory efficient but faster to do utf8 validation 
     let mut values = MutableBuffer::new(values_capacity);
     let mut views = BufferBuilder::<u128>::new(len);
 
