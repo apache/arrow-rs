@@ -211,12 +211,22 @@ impl<R: 'static + ChunkReader> SerializedFileReader<R> {
         if options.enable_page_index {
             let mut columns_indexes = vec![];
             let mut offset_indexes = vec![];
+            let mut unenc_byte_sizes = vec![];
 
             for rg in &mut filtered_row_groups {
                 let column_index = index_reader::read_columns_indexes(&chunk_reader, rg.columns())?;
-                let offset_index = index_reader::read_pages_locations(&chunk_reader, rg.columns())?;
+                let offset_index = index_reader::read_offset_indexes(&chunk_reader, rg.columns())?;
+
+                // split offset_index into two vectors to not break API
+                let mut page_locations = vec![];
+                let mut unenc_bytes = vec![];
+                offset_index.into_iter().for_each(|index| {
+                    page_locations.push(index.page_locations);
+                    unenc_bytes.push(index.unencoded_byte_array_data_bytes);
+                });
                 columns_indexes.push(column_index);
-                offset_indexes.push(offset_index);
+                offset_indexes.push(page_locations);
+                unenc_byte_sizes.push(unenc_bytes);
             }
 
             Ok(Self {
@@ -226,6 +236,7 @@ impl<R: 'static + ChunkReader> SerializedFileReader<R> {
                     filtered_row_groups,
                     Some(columns_indexes),
                     Some(offset_indexes),
+                    Some(unenc_byte_sizes),
                 )),
                 props: Arc::new(options.props),
             })

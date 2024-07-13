@@ -1538,6 +1538,7 @@ mod tests {
             vec![row_group_meta],
             None,
             Some(vec![offset_index.clone()]),
+            None,
         );
 
         let metadata = Arc::new(metadata);

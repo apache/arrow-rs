@@ -636,7 +636,8 @@ impl<'a, W: Write + Send> SerializedRowGroupWriter<'a, W> {
             .set_total_uncompressed_size(metadata.uncompressed_size())
             .set_num_values(metadata.num_values())
             .set_data_page_offset(map_offset(src_data_offset))
-            .set_dictionary_page_offset(src_dictionary_offset.map(map_offset));
+            .set_dictionary_page_offset(src_dictionary_offset.map(map_offset))
+            .set_unencoded_byte_array_data_bytes(metadata.unencoded_byte_array_data_bytes());
 
         if let Some(statistics) = metadata.statistics() {
             builder = builder.set_statistics(statistics.clone())
@@ -804,7 +805,7 @@ mod tests {
     use crate::column::page::{Page, PageReader};
     use crate::column::reader::get_typed_column_reader;
     use crate::compression::{create_codec, Codec, CodecOptionsBuilder};
-    use crate::data_type::{BoolType, Int32Type};
+    use crate::data_type::{BoolType, ByteArrayType, Int32Type};
     use crate::file::page_index::index::Index;
     use crate::file::properties::EnabledStatistics;
     use crate::file::serialized_reader::ReadOptionsBuilder;
@@ -817,6 +818,7 @@ mod tests {
     use crate::record::{Row, RowAccessor};
     use crate::schema::parser::parse_message_type;
     use crate::schema::types::{ColumnDescriptor, ColumnPath};
+    use crate::util::test_common::rand_gen::RandGen;
 
     #[test]
     fn test_row_group_writer_error_not_all_columns_written() {
@@ -1827,5 +1829,84 @@ mod tests {
         assert!(matches!(a_idx, Index::INT32(_)), "{a_idx:?}");
         let b_idx = &column_index[0][1];
         assert!(matches!(b_idx, Index::NONE), "{b_idx:?}");
+    }
+
+    #[test]
+    fn test_byte_array_size_statistics() {
+        let message_type = "
+            message test_schema {
+                OPTIONAL BYTE_ARRAY a (UTF8);
+            }
+        ";
+        let schema = Arc::new(parse_message_type(message_type).unwrap());
+        let data = ByteArrayType::gen_vec(32, 7);
+        let def_levels = [1, 1, 1, 1, 0, 1, 0, 1, 0, 1];
+        let unenc_size: i64 = data.iter().map(|x| x.len() as i64).sum();
+        let file: File = tempfile::tempfile().unwrap();
+        let props = Arc::new(
+            WriterProperties::builder()
+                .set_statistics_enabled(EnabledStatistics::Page)
+                .build(),
+        );
+
+        let mut writer = SerializedFileWriter::new(&file, schema, props).unwrap();
+        let mut row_group_writer = writer.next_row_group().unwrap();
+
+        let mut col_writer = row_group_writer.next_column().unwrap().unwrap();
+        col_writer
+            .typed::<ByteArrayType>()
+            .write_batch(&data, Some(&def_levels), None)
+            .unwrap();
+        col_writer.close().unwrap();
+        row_group_writer.close().unwrap();
+        let file_metadata = writer.close().unwrap();
+
+        assert_eq!(file_metadata.row_groups.len(), 1);
+        assert_eq!(file_metadata.row_groups[0].columns.len(), 1);
+        assert!(file_metadata.row_groups[0].columns[0].meta_data.is_some());
+
+        assert!(file_metadata.row_groups[0].columns[0].meta_data.is_some());
+        let meta_data = file_metadata.row_groups[0].columns[0]
+            .meta_data
+            .as_ref()
+            .unwrap();
+        assert!(meta_data.size_statistics.is_some());
+        let size_stats = meta_data.size_statistics.as_ref().unwrap();
+
+        assert!(size_stats.repetition_level_histogram.is_none());
+        assert!(size_stats.definition_level_histogram.is_none());
+        assert!(size_stats.unencoded_byte_array_data_bytes.is_some());
+        assert_eq!(
+            unenc_size,
+            size_stats.unencoded_byte_array_data_bytes.unwrap()
+        );
+
+        // check that the read metadata is also correct
+        let options = ReadOptionsBuilder::new().with_page_index().build();
+        let reader = SerializedFileReader::new_with_options(file, options).unwrap();
+
+        let rfile_metadata = reader.metadata().file_metadata();
+        assert_eq!(rfile_metadata.num_rows(), file_metadata.num_rows);
+        assert_eq!(reader.num_row_groups(), 1);
+        let rowgroup = reader.get_row_group(0).unwrap();
+        assert_eq!(rowgroup.num_columns(), 1);
+        let column = rowgroup.metadata().column(0);
+        assert!(column.unencoded_byte_array_data_bytes().is_some());
+        assert_eq!(
+            unenc_size,
+            column.unencoded_byte_array_data_bytes().unwrap()
+        );
+
+        assert!(reader
+            .metadata()
+            .unencoded_byte_array_data_bytes()
+            .is_some());
+        let unenc_sizes = reader.metadata().unencoded_byte_array_data_bytes().unwrap();
+        assert_eq!(unenc_sizes.len(), 1);
+        assert_eq!(unenc_sizes[0].len(), 1);
+        assert!(unenc_sizes[0][0].is_some());
+        let page_sizes = unenc_sizes[0][0].as_ref().unwrap();
+        assert_eq!(page_sizes.len(), 1);
+        assert_eq!(page_sizes[0], unenc_size);
     }
 }

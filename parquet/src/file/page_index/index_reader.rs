@@ -22,6 +22,7 @@ use crate::data_type::Int96;
 use crate::errors::ParquetError;
 use crate::file::metadata::ColumnChunkMetaData;
 use crate::file::page_index::index::{Index, NativeIndex};
+use crate::file::page_index::offset_index::ParquetOffsetIndex;
 use crate::file::reader::ChunkReader;
 use crate::format::{ColumnIndex, OffsetIndex, PageLocation};
 use crate::thrift::{TCompactSliceInputProtocol, TSerializable};
@@ -45,9 +46,9 @@ pub(crate) fn acc_range(a: Option<Range<usize>>, b: Option<Range<usize>>) -> Opt
 /// Returns an empty vector if this row group does not contain a
 /// [`ColumnIndex`].
 ///
-/// See [Column Index Documentation] for more details.
+/// See [Page Index Documentation] for more details.
 ///
-/// [Column Index Documentation]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
+/// [Page Index Documentation]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
 pub fn read_columns_indexes<R: ChunkReader>(
     reader: &R,
     chunks: &[ColumnChunkMetaData],
@@ -81,9 +82,9 @@ pub fn read_columns_indexes<R: ChunkReader>(
 /// Return an empty vector if this row group does not contain an
 /// [`OffsetIndex]`.
 ///
-/// See [Column Index Documentation] for more details.
+/// See [Page Index Documentation] for more details.
 ///
-/// [Column Index Documentation]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
+/// [Page Index Documentation]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
 pub fn read_pages_locations<R: ChunkReader>(
     reader: &R,
     chunks: &[ColumnChunkMetaData],
@@ -107,6 +108,48 @@ pub fn read_pages_locations<R: ChunkReader>(
             None => Err(general_err!("missing offset index")),
         })
         .collect()
+}
+
+/// Reads per-column [`ParquetOffsetIndex`] for all columns of a row group by
+/// decoding [`OffsetIndex`] .
+///
+/// Returns a vector of `index[column_number]`.
+///
+/// Returns an empty vector if this row group does not contain an
+/// [`OffsetIndex`].
+///
+/// See [Page Index Documentation] for more details.
+///
+/// [Page Index Documentation]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
+pub fn read_offset_indexes<R: ChunkReader>(
+    reader: &R,
+    chunks: &[ColumnChunkMetaData],
+) -> Result<Vec<ParquetOffsetIndex>, ParquetError> {
+    let fetch = chunks
+        .iter()
+        .fold(None, |range, c| acc_range(range, c.offset_index_range()));
+
+    let fetch = match fetch {
+        Some(r) => r,
+        None => return Ok(vec![]),
+    };
+
+    let bytes = reader.get_bytes(fetch.start as _, fetch.end - fetch.start)?;
+    let get = |r: Range<usize>| &bytes[(r.start - fetch.start)..(r.end - fetch.start)];
+
+    chunks
+        .iter()
+        .map(|c| match c.offset_index_range() {
+            Some(r) => decode_full_offset_index(get(r)),
+            None => Err(general_err!("missing offset index")),
+        })
+        .collect()
+}
+
+pub(crate) fn decode_full_offset_index(data: &[u8]) -> Result<ParquetOffsetIndex, ParquetError> {
+    let mut prot = TCompactSliceInputProtocol::new(data);
+    let offset = OffsetIndex::read_from_in_protocol(&mut prot)?;
+    ParquetOffsetIndex::try_new(offset)
 }
 
 pub(crate) fn decode_offset_index(data: &[u8]) -> Result<Vec<PageLocation>, ParquetError> {
