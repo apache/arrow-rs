@@ -162,7 +162,7 @@ impl NullBufferBuilder {
         self.bitmap_builder.as_mut().map(|b| b.as_slice_mut())
     }
 
-    /// Return the allocated size of this builder, useful for memory accounting.
+    /// Return the allocated size of this builder, in bytes, useful for memory accounting.
     pub fn allocated_size(&self) -> usize {
         self.bitmap_builder
             .as_ref()
