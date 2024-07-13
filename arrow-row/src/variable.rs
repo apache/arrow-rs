@@ -263,16 +263,16 @@ fn decode_binary_view_inner(
     let mut output_buffer_cap = 0;
     let mut inline_buffer_cap = 0;
     for r in rows.iter() {
-        let l = decoded_len(r, options);
-        if l <= 12 {
-            inline_buffer_cap += l;
+        let len = decoded_len(r, options);
+        if len > 12 {
+            output_buffer_cap += len;
         } else {
-            output_buffer_cap += l;
+            inline_buffer_cap += len;
         }
     }
 
-    let mut inline_buffer = MutableBuffer::new(inline_buffer_cap);
     let mut output_buffer = MutableBuffer::new(output_buffer_cap);
+    let mut inline_buffer = MutableBuffer::new(inline_buffer_cap);
     let mut views = BufferBuilder::<u128>::new(len);
 
     for row in rows {
@@ -307,8 +307,8 @@ fn decode_binary_view_inner(
     if check_utf8 {
         // We validate the utf8 of the output buffer and the inline buffer
         // This is much faster than validating each string individually
-        std::str::from_utf8(inline_buffer.as_slice()).unwrap();
         std::str::from_utf8(output_buffer.as_slice()).unwrap();
+        std::str::from_utf8(inline_buffer.as_slice()).unwrap();
     }
 
     let builder = ArrayDataBuilder::new(DataType::BinaryView)
