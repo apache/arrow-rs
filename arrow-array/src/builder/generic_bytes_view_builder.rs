@@ -339,7 +339,7 @@ impl<T: ByteViewType + ?Sized> GenericByteViewBuilder<T> {
         self.null_buffer_builder.as_slice()
     }
 
-    /// Return the allocated size of this builder, useful for memory accounting.
+    /// Return the allocated size of this builder in bytes, useful for memory accounting.
     pub fn allocated_size(&self) -> usize {
         let buffer_size = self.completed.iter().map(|b| b.capacity()).sum::<usize>();
         let in_progress = self.in_progress.capacity();
