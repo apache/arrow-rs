@@ -274,6 +274,7 @@ impl FallbackEncoder {
             }
         };
 
+        // Capture value of variable_length_bytes and reset for next page
         let variable_length_bytes = Some(self.variable_length_bytes);
         self.variable_length_bytes = 0;
 
@@ -395,6 +396,7 @@ impl DictEncoder {
 
         self.indices.clear();
 
+        // Capture value of variable_length_bytes and reset for next page
         let variable_length_bytes = Some(self.variable_length_bytes);
         self.variable_length_bytes = 0;
 
