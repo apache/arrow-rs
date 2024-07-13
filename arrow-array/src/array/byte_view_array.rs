@@ -324,6 +324,9 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
     /// Note that it will copy the array regardless of whether the original array is compact.
     /// Use with caution as this can be an expensive operation, only use it when you are sure that the view
     /// array is significantly smaller than when it is originally created, e.g., after filtering or slicing.
+    ///
+    /// Note: this function does not attempt to canonicalize / deduplicate values. For this
+    /// feature see  [`GenericByteViewBuilder::with_deduplicate_strings`].
     pub fn gc(&self) -> Self {
         let mut builder = GenericByteViewBuilder::<T>::with_capacity(self.len());
 
