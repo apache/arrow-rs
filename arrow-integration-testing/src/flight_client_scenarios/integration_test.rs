@@ -262,7 +262,7 @@ async fn receive_batch_flight_data(
 
     while message.header_type() == ipc::MessageHeader::DictionaryBatch {
         reader::read_dictionary(
-            &Buffer::from(&data.data_body),
+            &Buffer::from(data.data_body.as_ref()),
             message
                 .header_as_dictionary_batch()
                 .expect("Error parsing dictionary"),

@@ -543,7 +543,7 @@ mod tests {
 
     #[test]
     fn test_access_concurrently() {
-        let buffer = Buffer::from(vec![1, 2, 3, 4, 5]);
+        let buffer = Buffer::from([1, 2, 3, 4, 5]);
         let buffer2 = buffer.clone();
         assert_eq!([1, 2, 3, 4, 5], buffer.as_slice());
 

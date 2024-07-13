@@ -63,7 +63,7 @@ fn test_fixed_width_overflow() {
 #[should_panic(expected = "null_bit_buffer size too small. got 1 needed 2")]
 fn test_bitmap_too_small() {
     let buffer = make_i32_buffer(9);
-    let null_bit_buffer = Buffer::from(vec![0b11111111]);
+    let null_bit_buffer = Buffer::from([0b11111111]);
 
     ArrayData::try_new(
         DataType::Int32,
