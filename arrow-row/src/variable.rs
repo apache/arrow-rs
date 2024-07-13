@@ -20,7 +20,7 @@ use arrow_array::builder::BufferBuilder;
 use arrow_array::*;
 use arrow_buffer::bit_util::ceil;
 use arrow_buffer::MutableBuffer;
-use arrow_data::{ArrayDataBuilder, ByteView};
+use arrow_data::ArrayDataBuilder;
 use arrow_schema::{DataType, SortOptions};
 use builder::make_view;
 
@@ -153,6 +153,8 @@ fn encode_blocks<const SIZE: usize>(out: &mut [u8], val: &[u8]) -> usize {
     end_offset
 }
 
+/// Decodes a single block of data
+/// The `f` function accepts a slice of the decoded data, it may be called multiple times
 pub fn decode_blocks(row: &[u8], options: SortOptions, mut f: impl FnMut(&[u8])) -> usize {
     let (non_empty_sentinel, continuation) = match options.descending {
         true => (!NON_EMPTY_SENTINEL, !BLOCK_CONTINUATION),
@@ -271,36 +273,17 @@ fn decode_binary_view_inner(
             debug_assert_eq!(start_offset, values.len());
             views.append(0);
         } else {
-            let view = make_view(
-                unsafe { values.get_unchecked(start_offset..) },
-                0,
-                start_offset as u32,
-            );
+            // Safety: we just appended the data to the end of the buffer
+            let val = unsafe { values.get_unchecked_mut(start_offset..) };
+
+            if options.descending {
+                val.iter_mut().for_each(|o| *o = !*o);
+            }
+
+            let view = make_view(val, 0, start_offset as u32);
             views.append(view);
         }
         *row = &row[offset..];
-    }
-
-    if options.descending {
-        values.as_slice_mut().iter_mut().for_each(|o| *o = !*o);
-        for view in views.as_slice_mut() {
-            let len = *view as u32;
-            if len <= 12 {
-                let mut bytes = view.to_le_bytes();
-                bytes
-                    .iter_mut()
-                    .skip(4)
-                    .take(len as usize)
-                    .for_each(|o| *o = !*o);
-                *view = u128::from_le_bytes(bytes);
-            } else {
-                let mut byte_view = ByteView::from(*view);
-                let mut prefix = byte_view.prefix.to_le_bytes();
-                prefix.iter_mut().for_each(|o| *o = !*o);
-                byte_view.prefix = u32::from_le_bytes(prefix);
-                *view = byte_view.into();
-            }
-        }
     }
 
     if check_utf8 {

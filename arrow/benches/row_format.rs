@@ -93,8 +93,8 @@ fn row_bench(c: &mut Criterion) {
     let cols = vec![Arc::new(create_string_view_array_with_len(4096, 0., 30, false)) as ArrayRef];
     do_bench(c, "4096 string view(30, 0)", cols);
 
-    let cols = vec![Arc::new(create_string_view_array_with_len(4096, 0., 100, false)) as ArrayRef];
-    do_bench(c, "4096 string view(100, 0)", cols);
+    let cols = vec![Arc::new(create_string_view_array_with_len(40960, 0., 100, false)) as ArrayRef];
+    do_bench(c, "40960 string view(100, 0)", cols);
 
     let cols = vec![Arc::new(create_string_view_array_with_len(4096, 0.5, 100, false)) as ArrayRef];
     do_bench(c, "4096 string view(100, 0.5)", cols);
