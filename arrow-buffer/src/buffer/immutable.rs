@@ -356,6 +356,14 @@ impl Buffer {
     }
 }
 
+/// Note that here we deliberately do not implement
+/// `impl<T: AsRef<[u8]>> From<T> for Buffer`
+/// As it would accept `Buffer::from(vec![...])` that would cause an unexpected copy.
+/// Instead, we ask user to be explicit when copying is occurring, e.g., `Buffer::from(vec![...].to_byte_slice())`.
+/// For zero-copy conversion, user should use `Buffer::from_vec(vec![...])`.
+///
+/// Since we removed impl for `AsRef<u8>`, we added the following three specific implementations to reduce API breakage.
+/// See https://github.com/apache/arrow-rs/issues/6033 for more discussion on this.
 impl From<&[u8]> for Buffer {
     fn from(p: &[u8]) -> Self {
         Self::from_slice_ref(p)
