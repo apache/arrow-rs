@@ -363,7 +363,7 @@ impl Buffer {
 /// For zero-copy conversion, user should use `Buffer::from_vec(vec![...])`.
 ///
 /// Since we removed impl for `AsRef<u8>`, we added the following three specific implementations to reduce API breakage.
-/// See https://github.com/apache/arrow-rs/issues/6033 for more discussion on this.
+/// See <https://github.com/apache/arrow-rs/issues/6033> for more discussion on this.
 impl From<&[u8]> for Buffer {
     fn from(p: &[u8]) -> Self {
         Self::from_slice_ref(p)
