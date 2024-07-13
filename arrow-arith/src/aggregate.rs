@@ -415,8 +415,18 @@ pub fn max_binary<T: OffsetSizeTrait>(array: &GenericBinaryArray<T>) -> Option<&
     min_max_helper::<&[u8], _, _>(array, |a, b| *a < *b)
 }
 
+/// Returns the maximum value in the binary view array, according to the natural order.
+pub fn max_binary_view(array: &BinaryViewArray) -> Option<&[u8]> {
+    min_max_helper::<&[u8], _, _>(array, |a, b| *a < *b)
+}
+
 /// Returns the minimum value in the binary array, according to the natural order.
 pub fn min_binary<T: OffsetSizeTrait>(array: &GenericBinaryArray<T>) -> Option<&[u8]> {
+    min_max_helper::<&[u8], _, _>(array, |a, b| *a > *b)
+}
+
+/// Returns the minimum value in the binary view array, according to the natural order.
+pub fn min_binary_view(array: &BinaryViewArray) -> Option<&[u8]> {
     min_max_helper::<&[u8], _, _>(array, |a, b| *a > *b)
 }
 
@@ -425,8 +435,18 @@ pub fn max_string<T: OffsetSizeTrait>(array: &GenericStringArray<T>) -> Option<&
     min_max_helper::<&str, _, _>(array, |a, b| *a < *b)
 }
 
+/// Returns the maximum value in the string view array, according to the natural order.
+pub fn max_string_view(array: &StringViewArray) -> Option<&str> {
+    min_max_helper::<&str, _, _>(array, |a, b| *a < *b)
+}
+
 /// Returns the minimum value in the string array, according to the natural order.
 pub fn min_string<T: OffsetSizeTrait>(array: &GenericStringArray<T>) -> Option<&str> {
+    min_max_helper::<&str, _, _>(array, |a, b| *a > *b)
+}
+
+/// Returns the minimum value in the string view array, according to the natural order.
+pub fn min_string_view(array: &StringViewArray) -> Option<&str> {
     min_max_helper::<&str, _, _>(array, |a, b| *a > *b)
 }
 
