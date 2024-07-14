@@ -1152,61 +1152,116 @@ mod tests {
         assert!(max(&a).unwrap().is_nan());
     }
 
-    #[test]
-    fn test_binary_min_max_with_nulls() {
-        let a = BinaryArray::from(vec![
-            Some("b".as_bytes()),
+    macro_rules! test_binary {
+        ($NAME:ident, $ARRAY:expr, $EXPECTED_MIN:expr, $EXPECTED_MAX: expr) => {
+            #[test]
+            fn $NAME() {
+                let binary = BinaryArray::from($ARRAY);
+                assert_eq!($EXPECTED_MIN, min_binary(&binary));
+                assert_eq!($EXPECTED_MAX, max_binary(&binary));
+
+                let large_binary = LargeBinaryArray::from($ARRAY);
+                assert_eq!($EXPECTED_MIN, min_binary(&large_binary));
+                assert_eq!($EXPECTED_MAX, max_binary(&large_binary));
+
+                let binary_view = BinaryViewArray::from($ARRAY);
+                assert_eq!($EXPECTED_MIN, min_binary_view(&binary_view));
+                assert_eq!($EXPECTED_MAX, max_binary_view(&binary_view));
+            }
+        };
+    }
+
+    test_binary!(
+        test_binary_min_max_with_nulls,
+        vec![
+            Some("b01234567890123".as_bytes()), // long bytes
             None,
             None,
             Some(b"a"),
             Some(b"c"),
-        ]);
-        assert_eq!(Some("a".as_bytes()), min_binary(&a));
-        assert_eq!(Some("c".as_bytes()), max_binary(&a));
+        ],
+        Some("a".as_bytes()),
+        Some("c".as_bytes())
+    );
+
+    test_binary!(
+        test_binary_min_max_no_null,
+        vec![
+            Some("b".as_bytes()),
+            Some(b"abcdefghijklmnopqrst"), // long bytes
+            Some(b"c")
+        ],
+        Some("abcdefghijklmnopqrst".as_bytes()),
+        Some("c".as_bytes())
+    );
+
+    test_binary!(test_binary_min_max_all_nulls, vec![None, None], None, None);
+
+    test_binary!(
+        test_binary_min_max_1,
+        vec![
+            None,
+            None,
+            Some("b01234567890123435".as_bytes()),
+            Some(b"a")
+        ],
+        Some("a".as_bytes()),
+        Some("b01234567890123435".as_bytes())
+    );
+
+    macro_rules! test_string {
+        ($NAME:ident, $ARRAY:expr, $EXPECTED_MIN:expr, $EXPECTED_MAX: expr) => {
+            #[test]
+            fn $NAME() {
+                let string = StringArray::from($ARRAY);
+                assert_eq!($EXPECTED_MIN, min_string(&string));
+                assert_eq!($EXPECTED_MAX, max_string(&string));
+
+                let large_string = LargeStringArray::from($ARRAY);
+                assert_eq!($EXPECTED_MIN, min_string(&large_string));
+                assert_eq!($EXPECTED_MAX, max_string(&large_string));
+
+                let string_view = StringViewArray::from($ARRAY);
+                assert_eq!($EXPECTED_MIN, min_string_view(&string_view));
+                assert_eq!($EXPECTED_MAX, max_string_view(&string_view));
+            }
+        };
     }
 
-    #[test]
-    fn test_binary_min_max_no_null() {
-        let a = BinaryArray::from(vec![Some("b".as_bytes()), Some(b"a"), Some(b"c")]);
-        assert_eq!(Some("a".as_bytes()), min_binary(&a));
-        assert_eq!(Some("c".as_bytes()), max_binary(&a));
-    }
+    test_string!(
+        test_string_min_max_with_nulls,
+        vec![Some("b012345678901234"), None, None, Some("a"), Some("c")],
+        Some("a"),
+        Some("c")
+    );
 
-    #[test]
-    fn test_binary_min_max_all_nulls() {
-        let a = BinaryArray::from(vec![None, None]);
-        assert_eq!(None, min_binary(&a));
-        assert_eq!(None, max_binary(&a));
-    }
+    test_string!(
+        test_string_min_max_no_null,
+        vec![Some("b"), Some("a"), Some("c12345678901234")],
+        Some("a"),
+        Some("c12345678901234")
+    );
 
-    #[test]
-    fn test_binary_min_max_1() {
-        let a = BinaryArray::from(vec![None, None, Some("b".as_bytes()), Some(b"a")]);
-        assert_eq!(Some("a".as_bytes()), min_binary(&a));
-        assert_eq!(Some("b".as_bytes()), max_binary(&a));
-    }
+    test_string!(
+        test_string_min_max_all_nulls,
+        Vec::<Option<&str>>::from_iter([None, None]),
+        None,
+        None
+    );
 
-    #[test]
-    fn test_string_min_max_with_nulls() {
-        let a = StringArray::from(vec![Some("b"), None, None, Some("a"), Some("c")]);
-        assert_eq!(Some("a"), min_string(&a));
-        assert_eq!(Some("c"), max_string(&a));
-    }
+    test_string!(
+        test_string_min_max_1,
+        vec![None, None, Some("b"), Some("a12345678901234")],
+        Some("a12345678901234"),
+        Some("b")
+    );
 
-    #[test]
-    fn test_string_min_max_all_nulls() {
-        let v: Vec<Option<&str>> = vec![None, None];
-        let a = StringArray::from(v);
-        assert_eq!(None, min_string(&a));
-        assert_eq!(None, max_string(&a));
-    }
-
-    #[test]
-    fn test_string_min_max_1() {
-        let a = StringArray::from(vec![None, None, Some("b"), Some("a")]);
-        assert_eq!(Some("a"), min_string(&a));
-        assert_eq!(Some("b"), max_string(&a));
-    }
+    test_string!(
+        test_string_min_max_empty,
+        Vec::<Option<&str>>::new(),
+        None,
+        None
+    );
 
     #[test]
     fn test_boolean_min_max_empty() {
