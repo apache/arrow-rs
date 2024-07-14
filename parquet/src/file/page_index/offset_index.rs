@@ -47,4 +47,6 @@ impl ParquetOffsetIndex {
     pub fn unencoded_byte_array_data_bytes(&self) -> Option<&Vec<i64>> {
         self.unencoded_byte_array_data_bytes.as_ref()
     }
+
+    // FIXME(ets): need to add a `to_offset_index` method to convert back to thrift
 }

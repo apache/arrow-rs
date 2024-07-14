@@ -41,6 +41,10 @@ pub struct PageIndex<T> {
     pub max: Option<T>,
     /// Null values in the page
     pub null_count: Option<i64>,
+
+    // FIXME(ets): histograms should be stored in NativeIndex, and these should then be
+    // slices of the histogram vector. That will make conversion back to thrift much easier.
+
     /// Repetition level histogram for the page
     ///
     /// `repetition_level_histogram[i]` is a count of how many values are at repetition level `i`.
