@@ -186,6 +186,12 @@ required-features = ["arrow", "test_common", "experimental"]
 harness = false
 
 [[bench]]
+name = "arrow_statistics"
+required-features = ["arrow"]
+harness = false
+
+
+[[bench]]
 name = "compression"
 required-features = ["experimental", "default"]
 harness = false
@@ -194,7 +200,6 @@ harness = false
 name = "encoding"
 required-features = ["experimental", "default"]
 harness = false
-
 
 [[bench]]
 name = "metadata"
