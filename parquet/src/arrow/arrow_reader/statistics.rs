@@ -1366,9 +1366,7 @@ impl<'a> StatisticsConverter<'a> {
         max_page_statistics(Some(data_type), iter)
     }
 
-    /// Extract the null counts from Data Page statistics.
-    ///
-    /// The returned Array is an [`UInt64Array`]
+    /// Returns a [`UInt64Array`] with null counts for each data page.
     ///
     /// See docs on [`Self::data_page_mins`] for details.
     pub fn data_page_null_counts<I>(
@@ -1397,7 +1395,7 @@ impl<'a> StatisticsConverter<'a> {
         null_counts_page_statistics(iter)
     }
 
-    /// Returns an [`ArrayRef`] with row counts for each row group.
+    /// Returns a [`UInt64Array`] with row counts for each data page.
     ///
     /// This function iterates over the given row group indexes and computes
     /// the row count for each page in the specified column.
