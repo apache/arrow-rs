@@ -226,7 +226,7 @@ impl<T> ColumnMetrics<T> {
     }
 
     /// Sum the provided page variable_length_bytes into the chunk variable_length_bytes
-    fn update_variable_length_bytes(&mut self, variable_length_bytes: &Option<i64>) {
+    fn update_variable_length_bytes(&mut self, variable_length_bytes: Option<i64>) {
         if let Some(var_bytes) = variable_length_bytes {
             *self.variable_length_bytes.get_or_insert(0) += var_bytes;
         }
@@ -812,7 +812,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
 
         // Update variable_length_bytes in column_metrics
         self.column_metrics
-            .update_variable_length_bytes(&values_data.variable_length_bytes);
+            .update_variable_length_bytes(values_data.variable_length_bytes);
 
         let page_statistics = page_statistics.map(Statistics::from);
 
