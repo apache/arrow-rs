@@ -1179,6 +1179,7 @@ mod tests {
             None,
             Some(b"a"),
             Some(b"c"),
+            Some(b"abcdedfg0123456"),
         ],
         Some("a".as_bytes()),
         Some("c".as_bytes())
@@ -1189,7 +1190,8 @@ mod tests {
         vec![
             Some("b".as_bytes()),
             Some(b"abcdefghijklmnopqrst"), // long bytes
-            Some(b"c")
+            Some(b"c"),
+            Some(b"b01234567890123"), // long bytes for view types
         ],
         Some("abcdefghijklmnopqrst".as_bytes()),
         Some("c".as_bytes())
@@ -1201,12 +1203,13 @@ mod tests {
         test_binary_min_max_1,
         vec![
             None,
+            Some("b01234567890123435".as_bytes()), // long bytes for view types
             None,
-            Some("b01234567890123435".as_bytes()),
+            Some(b"b0123xxxxxxxxxxx"),
             Some(b"a")
         ],
         Some("a".as_bytes()),
-        Some("b01234567890123435".as_bytes())
+        Some("b0123xxxxxxxxxxx".as_bytes())
     );
 
     macro_rules! test_string {
@@ -1230,16 +1233,28 @@ mod tests {
 
     test_string!(
         test_string_min_max_with_nulls,
-        vec![Some("b012345678901234"), None, None, Some("a"), Some("c")],
+        vec![
+            Some("b012345678901234"), // long bytes for view types
+            None,
+            None,
+            Some("a"),
+            Some("c"),
+            Some("b0123xxxxxxxxxxx")
+        ],
         Some("a"),
         Some("c")
     );
 
     test_string!(
         test_string_min_max_no_null,
-        vec![Some("b"), Some("a"), Some("c12345678901234")],
+        vec![
+            Some("b"),
+            Some("b012345678901234"), // long bytes for view types
+            Some("a"),
+            Some("b012xxxxxxxxxxxx")
+        ],
         Some("a"),
-        Some("c12345678901234")
+        Some("b012xxxxxxxxxxxx")
     );
 
     test_string!(
@@ -1251,9 +1266,15 @@ mod tests {
 
     test_string!(
         test_string_min_max_1,
-        vec![None, None, Some("b"), Some("a12345678901234")],
-        Some("a12345678901234"),
-        Some("b")
+        vec![
+            None,
+            Some("c12345678901234"), // long bytes for view types
+            None,
+            Some("b"),
+            Some("c1234xxxxxxxxxx")
+        ],
+        Some("b"),
+        Some("c1234xxxxxxxxxx")
     );
 
     test_string!(
