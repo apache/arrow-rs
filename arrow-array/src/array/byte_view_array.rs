@@ -46,7 +46,7 @@ use super::ByteArrayType;
 /// `N` elements is stored as `N` fixed length "views" and a variable number
 /// of variable length "buffers".
 ///
-/// Each view is a `u128` value  layout is different depending on the
+/// Each view is a `u128` value whose layout is different depending on the
 /// length of the string stored at that location:
 ///
 /// ```text
