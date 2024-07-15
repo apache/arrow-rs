@@ -52,7 +52,7 @@ use crate::schema::types::{
 
 /// Page level statistics for each column chunk of each row group.
 ///
-/// This structure is an memory representation of multiple [`ColumnIndex`]
+/// This structure is an in-memory representation of multiple [`ColumnIndex`]
 /// structures in a parquet file footer, as described in the Parquet [PageIndex
 /// documentation]. Each [`Index`] holds statistics about all the pages in a
 /// particular column chunk.
@@ -966,7 +966,8 @@ pub struct ColumnIndexBuilder {
     /// Is the information in the builder valid?
     ///
     /// Set to `false` if any entry in the page doesn't have statistics for
-    /// some reason. This might happen if the page is entirely null, or
+    /// some reason, so statistics for that page won't be written to the file.
+    /// This might happen if the page is entirely null, or
     /// is a floating point column without any non-nan values
     /// e.g. <https://github.com/apache/parquet-format/pull/196>
     valid: bool,
