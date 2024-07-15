@@ -67,7 +67,7 @@ where
 #[allow(non_camel_case_types)]
 /// Statistics for data pages in a column chunk.
 ///
-/// See [NativeIndex] for more information
+/// See [`NativeIndex`] for more information
 pub enum Index {
     /// Sometimes reading page index from parquet file
     /// will only return pageLocations without min_max index,
