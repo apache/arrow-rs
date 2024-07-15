@@ -42,8 +42,9 @@ pub struct PageIndex<T> {
     /// Null values in the page
     pub null_count: Option<i64>,
 
-    // FIXME(ets): histograms should be stored in NativeIndex, and these should then be
+    // NOTE: histograms could be stored in NativeIndex, and these could then be
     // slices of the histogram vector. That will make conversion back to thrift much easier.
+    // Nevermind...this would require propagating lifetimes up the metadata tree.
 
     /// Repetition level histogram for the page
     ///
