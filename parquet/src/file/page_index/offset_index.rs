@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! [`ParquetOffsetIndex`] structure holding decoded [`OffsetIndex`] information
+//! [`OffsetSizeIndex`] structure holding decoded [`OffsetIndex`] information
 
 use crate::errors::ParquetError;
 use crate::format::{OffsetIndex, PageLocation};
@@ -23,13 +23,13 @@ use crate::format::{OffsetIndex, PageLocation};
 /// [`OffsetIndex`] information for a column chunk. Contains offsets and sizes for each page
 /// in the chunk. Optionally stores fully decoded page sizes for BYTE_ARRAY columns.
 #[derive(Debug, Clone, PartialEq)]
-pub struct ParquetOffsetIndex {
+pub struct OffsetSizeIndex {
     pub page_locations: Vec<PageLocation>,
     pub unencoded_byte_array_data_bytes: Option<Vec<i64>>,
 }
 
-impl ParquetOffsetIndex {
-    /// Creates a new [`ParquetOffsetIndex`] from an [`OffsetIndex`].
+impl OffsetSizeIndex {
+    /// Creates a new [`OffsetSizeIndex`] from an [`OffsetIndex`].
     pub(crate) fn try_new(index: OffsetIndex) -> Result<Self, ParquetError> {
         Ok(Self {
             page_locations: index.page_locations,
