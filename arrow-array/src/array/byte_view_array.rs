@@ -46,7 +46,7 @@ use super::ByteArrayType;
 /// `N` elements is stored as `N` fixed length "views" and a variable number
 /// of variable length "buffers".
 ///
-/// Each view is a `u128` value  layout is different depending on the
+/// Each view is a `u128` value whose layout is different depending on the
 /// length of the string stored at that location:
 ///
 /// ```text
@@ -324,9 +324,11 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
     /// Note that it will copy the array regardless of whether the original array is compact.
     /// Use with caution as this can be an expensive operation, only use it when you are sure that the view
     /// array is significantly smaller than when it is originally created, e.g., after filtering or slicing.
+    ///
+    /// Note: this function does not attempt to canonicalize / deduplicate values. For this
+    /// feature see  [`GenericByteViewBuilder::with_deduplicate_strings`].
     pub fn gc(&self) -> Self {
-        let mut builder =
-            GenericByteViewBuilder::<T>::with_capacity(self.len()).with_deduplicate_strings();
+        let mut builder = GenericByteViewBuilder::<T>::with_capacity(self.len());
 
         for v in self.iter() {
             builder.append_option(v);

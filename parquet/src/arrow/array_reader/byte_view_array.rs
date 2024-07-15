@@ -28,6 +28,7 @@ use crate::encodings::decoding::{Decoder, DeltaBitPackDecoder};
 use crate::errors::{ParquetError, Result};
 use crate::schema::types::ColumnDescPtr;
 use arrow_array::{builder::make_view, ArrayRef};
+use arrow_buffer::Buffer;
 use arrow_data::ByteView;
 use arrow_schema::DataType as ArrowType;
 use bytes::Bytes;
@@ -71,7 +72,6 @@ struct ByteViewArrayReader {
 }
 
 impl ByteViewArrayReader {
-    #[allow(unused)]
     fn new(
         pages: Box<dyn PageIterator>,
         data_type: ArrowType,
@@ -316,7 +316,10 @@ impl ByteViewArrayDecoderPlain {
     }
 
     pub fn read(&mut self, output: &mut ViewBuffer, len: usize) -> Result<usize> {
-        let block_id = output.append_block(self.buf.clone().into());
+        // Here we convert `bytes::Bytes` into `arrow_buffer::Bytes`, which is zero copy
+        // Then we convert `arrow_buffer::Bytes` into `arrow_buffer:Buffer`, which is also zero copy
+        let buf = arrow_buffer::Buffer::from_bytes(self.buf.clone().into());
+        let block_id = output.append_block(buf);
 
         let to_read = len.min(self.max_remaining_values);
 
@@ -546,7 +549,10 @@ impl ByteViewArrayDecoderDeltaLength {
 
         let src_lengths = &self.lengths[self.length_offset..self.length_offset + to_read];
 
-        let block_id = output.append_block(self.data.clone().into());
+        // Here we convert `bytes::Bytes` into `arrow_buffer::Bytes`, which is zero copy
+        // Then we convert `arrow_buffer::Bytes` into `arrow_buffer:Buffer`, which is also zero copy
+        let bytes = arrow_buffer::Buffer::from_bytes(self.data.clone().into());
+        let block_id = output.append_block(bytes);
 
         let mut current_offset = self.data_offset;
         let initial_offset = current_offset;
@@ -661,7 +667,7 @@ impl ByteViewArrayDecoderDelta {
             v
         };
 
-        let actual_block_id = output.append_block(array_buffer.into());
+        let actual_block_id = output.append_block(Buffer::from_vec(array_buffer));
         assert_eq!(actual_block_id, buffer_id);
         Ok(read)
     }

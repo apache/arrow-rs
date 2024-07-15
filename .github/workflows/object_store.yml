@@ -198,3 +198,16 @@ jobs:
         run: cargo build --target wasm32-unknown-unknown
       - name: Build wasm32-wasi
         run: cargo build --target wasm32-wasi
+
+  windows:
+    name: cargo test LocalFileSystem (win64)
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: object_store
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+      - name: Run LocalFileSystem tests
+        run: cargo test local::tests

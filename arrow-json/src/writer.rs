@@ -927,12 +927,12 @@ mod tests {
 
         let a_values = StringArray::from(vec!["a", "a1", "b", "c", "d", "e"]);
         // list column rows: ["a", "a1"], ["b"], ["c"], ["d"], ["e"]
-        let a_value_offsets = Buffer::from(&[0, 2, 3, 4, 5, 6].to_byte_slice());
+        let a_value_offsets = Buffer::from([0, 2, 3, 4, 5, 6].to_byte_slice());
         let a_list_data = ArrayData::builder(field_c1.data_type().clone())
             .len(5)
             .add_buffer(a_value_offsets)
             .add_child_data(a_values.into_data())
-            .null_bit_buffer(Some(Buffer::from(vec![0b00011111])))
+            .null_bit_buffer(Some(Buffer::from([0b00011111])))
             .build()
             .unwrap();
         let a = ListArray::from(a_list_data);
@@ -976,17 +976,17 @@ mod tests {
         // list column rows: [[1, 2], [3]], [], [[4, 5, 6]]
         let a_values = Int32Array::from(vec![1, 2, 3, 4, 5, 6]);
 
-        let a_value_offsets = Buffer::from(&[0, 2, 3, 6].to_byte_slice());
+        let a_value_offsets = Buffer::from([0, 2, 3, 6].to_byte_slice());
         // Construct a list array from the above two
         let a_list_data = ArrayData::builder(list_inner_type.data_type().clone())
             .len(3)
             .add_buffer(a_value_offsets)
-            .null_bit_buffer(Some(Buffer::from(vec![0b00000111])))
+            .null_bit_buffer(Some(Buffer::from([0b00000111])))
             .add_child_data(a_values.into_data())
             .build()
             .unwrap();
 
-        let c1_value_offsets = Buffer::from(&[0, 2, 2, 3].to_byte_slice());
+        let c1_value_offsets = Buffer::from([0, 2, 2, 3].to_byte_slice());
         let c1_list_data = ArrayData::builder(field_c1.data_type().clone())
             .len(3)
             .add_buffer(c1_value_offsets)
@@ -1058,12 +1058,12 @@ mod tests {
         // [{"c11": 1, "c12": {"c121": "e"}}, {"c12": {"c121": "f"}}],
         // null,
         // [{"c11": 5, "c12": {"c121": "g"}}]
-        let c1_value_offsets = Buffer::from(&[0, 2, 2, 3].to_byte_slice());
+        let c1_value_offsets = Buffer::from([0, 2, 2, 3].to_byte_slice());
         let c1_list_data = ArrayData::builder(field_c1.data_type().clone())
             .len(3)
             .add_buffer(c1_value_offsets)
             .add_child_data(struct_values.into_data())
-            .null_bit_buffer(Some(Buffer::from(vec![0b00000101])))
+            .null_bit_buffer(Some(Buffer::from([0b00000101])))
             .build()
             .unwrap();
         let c1 = ListArray::from(c1_list_data);
@@ -1225,7 +1225,7 @@ mod tests {
         );
 
         // [{"foo": 10}, null, {}, {"bar": 20, "baz": 30, "qux": 40}, {"quux": 50}, {}]
-        let entry_offsets = Buffer::from(&[0, 1, 1, 1, 4, 5, 5].to_byte_slice());
+        let entry_offsets = Buffer::from([0, 1, 1, 1, 4, 5, 5].to_byte_slice());
         let valid_buffer = Buffer::from([0b00111101]);
 
         let map_data = ArrayData::builder(map_data_type.clone())
@@ -1408,7 +1408,7 @@ mod tests {
             );
 
             // [{"list":[{"int32":1,"utf8":"a"},{"int32":null,"utf8":"b"}]},{"list":null},{"list":[{int32":5,"utf8":null}]},{"list":null}]
-            let entry_offsets = Buffer::from(&[0, 2, 2, 3, 3].to_byte_slice());
+            let entry_offsets = Buffer::from([0, 2, 2, 3, 3].to_byte_slice());
             let data = ArrayData::builder(field.data_type().clone())
                 .len(4)
                 .add_buffer(entry_offsets)

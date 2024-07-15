@@ -103,8 +103,8 @@ impl CompressionCodec {
         } else if let Ok(decompressed_length) = usize::try_from(decompressed_length) {
             // decompress data using the codec
             let input_data = &input[(LENGTH_OF_PREFIX_DATA as usize)..];
-            self.decompress(input_data, decompressed_length as _)?
-                .into()
+            let v = self.decompress(input_data, decompressed_length as _)?;
+            Buffer::from_vec(v)
         } else {
             return Err(ArrowError::IpcError(format!(
                 "Invalid uncompressed length: {decompressed_length}"

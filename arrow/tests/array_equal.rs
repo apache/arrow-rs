@@ -445,7 +445,7 @@ fn test_empty_offsets_list_equal() {
     .len(0)
     .add_buffer(Buffer::from([0i32, 2, 3, 4, 6, 7, 8].to_byte_slice()))
     .add_child_data(Int32Array::from(vec![1, 2, -1, -2, 3, 4, -3, -4]).into_data())
-    .null_bit_buffer(Some(Buffer::from(vec![0b00001001])))
+    .null_bit_buffer(Some(Buffer::from([0b00001001])))
     .build()
     .unwrap()
     .into();
@@ -483,7 +483,7 @@ fn test_list_null() {
     .len(6)
     .add_buffer(Buffer::from([0i32, 2, 3, 4, 6, 7, 8].to_byte_slice()))
     .add_child_data(c_values.into_data())
-    .null_bit_buffer(Some(Buffer::from(vec![0b00001001])))
+    .null_bit_buffer(Some(Buffer::from([0b00001001])))
     .build()
     .unwrap()
     .into();
@@ -506,7 +506,7 @@ fn test_list_null() {
     .len(6)
     .add_buffer(Buffer::from([0i32, 2, 3, 4, 6, 7, 8].to_byte_slice()))
     .add_child_data(d_values.into_data())
-    .null_bit_buffer(Some(Buffer::from(vec![0b00001001])))
+    .null_bit_buffer(Some(Buffer::from([0b00001001])))
     .build()
     .unwrap()
     .into();
@@ -807,7 +807,7 @@ fn test_struct_equal_null() {
         Field::new("f1", DataType::Utf8, true),
         Field::new("f2", DataType::Int32, true),
     ])))
-    .null_bit_buffer(Some(Buffer::from(vec![0b00001011])))
+    .null_bit_buffer(Some(Buffer::from([0b00001011])))
     .len(5)
     .add_child_data(strings.to_data())
     .add_child_data(ints.to_data())
@@ -819,7 +819,7 @@ fn test_struct_equal_null() {
         Field::new("f1", DataType::Utf8, true),
         Field::new("f2", DataType::Int32, true),
     ])))
-    .null_bit_buffer(Some(Buffer::from(vec![0b00001011])))
+    .null_bit_buffer(Some(Buffer::from([0b00001011])))
     .len(5)
     .add_child_data(strings.to_data())
     .add_child_data(ints_non_null.to_data())
@@ -835,7 +835,7 @@ fn test_struct_equal_null() {
         Field::new("f1", DataType::Utf8, true),
         Field::new("f2", DataType::Int32, true),
     ])))
-    .null_bit_buffer(Some(Buffer::from(vec![0b00001011])))
+    .null_bit_buffer(Some(Buffer::from([0b00001011])))
     .len(5)
     .add_child_data(strings.to_data())
     .add_child_data(c_ints_non_null.to_data())
@@ -849,7 +849,7 @@ fn test_struct_equal_null() {
     let a = ArrayData::builder(DataType::Struct(
         vec![Field::new("f3", a.data_type().clone(), true)].into(),
     ))
-    .null_bit_buffer(Some(Buffer::from(vec![0b00011110])))
+    .null_bit_buffer(Some(Buffer::from([0b00011110])))
     .len(5)
     .add_child_data(a.to_data())
     .build()
@@ -868,7 +868,7 @@ fn test_struct_equal_null() {
         Field::new("f1", DataType::Utf8, true),
         Field::new("f2", DataType::Int32, true),
     ])))
-    .null_bit_buffer(Some(Buffer::from(vec![0b00001011])))
+    .null_bit_buffer(Some(Buffer::from([0b00001011])))
     .len(5)
     .add_child_data(strings.to_data())
     .add_child_data(ints_non_null.to_data())
@@ -878,7 +878,7 @@ fn test_struct_equal_null() {
     let b = ArrayData::builder(DataType::Struct(
         vec![Field::new("f3", b.data_type().clone(), true)].into(),
     ))
-    .null_bit_buffer(Some(Buffer::from(vec![0b00011110])))
+    .null_bit_buffer(Some(Buffer::from([0b00011110])))
     .len(5)
     .add_child_data(b)
     .build()
@@ -909,7 +909,7 @@ fn test_struct_equal_null_variable_size() {
     let a = ArrayData::builder(DataType::Struct(
         vec![Field::new("f1", DataType::Utf8, true)].into(),
     ))
-    .null_bit_buffer(Some(Buffer::from(vec![0b00001010])))
+    .null_bit_buffer(Some(Buffer::from([0b00001010])))
     .len(5)
     .add_child_data(strings1.to_data())
     .build()
@@ -919,7 +919,7 @@ fn test_struct_equal_null_variable_size() {
     let b = ArrayData::builder(DataType::Struct(
         vec![Field::new("f1", DataType::Utf8, true)].into(),
     ))
-    .null_bit_buffer(Some(Buffer::from(vec![0b00001010])))
+    .null_bit_buffer(Some(Buffer::from([0b00001010])))
     .len(5)
     .add_child_data(strings2.to_data())
     .build()
@@ -939,7 +939,7 @@ fn test_struct_equal_null_variable_size() {
     let c = ArrayData::builder(DataType::Struct(
         vec![Field::new("f1", DataType::Utf8, true)].into(),
     ))
-    .null_bit_buffer(Some(Buffer::from(vec![0b00001011])))
+    .null_bit_buffer(Some(Buffer::from([0b00001011])))
     .len(5)
     .add_child_data(strings3.to_data())
     .build()
