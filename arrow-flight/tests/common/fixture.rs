@@ -33,7 +33,7 @@ pub struct TestFixture {
     shutdown: Option<tokio::sync::oneshot::Sender<()>>,
 
     /// Address the server is listening on
-    addr: SocketAddr,
+    pub addr: SocketAddr,
 
     /// handle for the server task
     handle: Option<JoinHandle<Result<(), tonic::transport::Error>>>,

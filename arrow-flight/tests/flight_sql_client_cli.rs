@@ -15,9 +15,16 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::collections::HashMap;
-use std::{net::SocketAddr, pin::Pin, sync::Arc, time::Duration};
+mod common {
+    pub mod fixture;
+    pub mod server;
+    pub mod trailers_layer;
+}
 
+use std::collections::HashMap;
+use std::{pin::Pin, sync::Arc};
+
+use crate::common::fixture::TestFixture;
 use arrow_array::{ArrayRef, Int64Array, RecordBatch, StringArray};
 use arrow_flight::sql::client::FlightSqlServiceClient;
 use arrow_flight::sql::EndTransaction;
@@ -42,8 +49,6 @@ use bytes::Bytes;
 use futures::{Stream, TryStreamExt};
 use prost::Message;
 use tokio::sync::Mutex;
-use tokio::{net::TcpListener, task::JoinHandle};
-use tonic::transport::Endpoint;
 use tonic::{Request, Response, Status, Streaming};
 use uuid::Uuid;
 
@@ -52,7 +57,7 @@ const QUERY: &str = "SELECT * FROM table;";
 #[tokio::test]
 async fn test_simple() {
     let test_server = FlightSqlServiceImpl::default();
-    let fixture = TestFixture::new(&test_server).await;
+    let fixture = TestFixture::new(test_server.service()).await;
     let addr = fixture.addr;
 
     let stdout = tokio::task::spawn_blocking(move || {
@@ -95,7 +100,7 @@ const PREPARED_STATEMENT_HANDLE: &str = "prepared_statement_handle";
 const UPDATED_PREPARED_STATEMENT_HANDLE: &str = "updated_prepared_statement_handle";
 
 async fn test_do_put_prepared_statement(test_server: FlightSqlServiceImpl) {
-    let fixture = TestFixture::new(&test_server).await;
+    let fixture = TestFixture::new(test_server.service()).await;
     let addr = fixture.addr;
 
     let stdout = tokio::task::spawn_blocking(move || {
@@ -159,13 +164,8 @@ pub async fn test_begin_end_transaction() {
         stateless_prepared_statements: true,
         transactions: Arc::new(Mutex::new(HashMap::new())),
     };
-    let fixture = TestFixture::new(&test_server).await;
-    let addr = fixture.addr;
-    let channel = Endpoint::from_shared(format!("http://{}:{}", addr.ip(), addr.port()))
-        .unwrap()
-        .connect()
-        .await
-        .expect("error connecting");
+    let fixture = TestFixture::new(test_server.service()).await;
+    let channel = fixture.channel();
     let mut flight_sql_client = FlightSqlServiceClient::new(channel);
 
     // begin commit
@@ -189,9 +189,6 @@ pub async fn test_begin_end_transaction() {
         .await
         .is_err());
 }
-
-/// All tests must complete within this many seconds or else the test server is shutdown
-const DEFAULT_TIMEOUT_SECONDS: u64 = 30;
 
 #[derive(Clone)]
 pub struct FlightSqlServiceImpl {
@@ -436,81 +433,6 @@ impl FlightSqlService for FlightSqlServiceImpl {
     }
 
     async fn register_sql_info(&self, _id: i32, _result: &SqlInfo) {}
-}
-
-/// Creates and manages a running TestServer with a background task
-struct TestFixture {
-    /// channel to send shutdown command
-    shutdown: Option<tokio::sync::oneshot::Sender<()>>,
-
-    /// Address the server is listening on
-    addr: SocketAddr,
-
-    // handle for the server task
-    handle: Option<JoinHandle<Result<(), tonic::transport::Error>>>,
-}
-
-impl TestFixture {
-    /// create a new test fixture from the server
-    pub async fn new(test_server: &FlightSqlServiceImpl) -> Self {
-        // let OS choose a a free port
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
-
-        println!("Listening on {addr}");
-
-        // prepare the shutdown channel
-        let (tx, rx) = tokio::sync::oneshot::channel();
-
-        let server_timeout = Duration::from_secs(DEFAULT_TIMEOUT_SECONDS);
-
-        let shutdown_future = async move {
-            rx.await.ok();
-        };
-
-        let serve_future = tonic::transport::Server::builder()
-            .timeout(server_timeout)
-            .add_service(test_server.service())
-            .serve_with_incoming_shutdown(
-                tokio_stream::wrappers::TcpListenerStream::new(listener),
-                shutdown_future,
-            );
-
-        // Run the server in its own background task
-        let handle = tokio::task::spawn(serve_future);
-
-        Self {
-            shutdown: Some(tx),
-            addr,
-            handle: Some(handle),
-        }
-    }
-
-    /// Stops the test server and waits for the server to shutdown
-    pub async fn shutdown_and_wait(mut self) {
-        if let Some(shutdown) = self.shutdown.take() {
-            shutdown.send(()).expect("server quit early");
-        }
-        if let Some(handle) = self.handle.take() {
-            println!("Waiting on server to finish");
-            handle
-                .await
-                .expect("task join error (panic?)")
-                .expect("Server Error found at shutdown");
-        }
-    }
-}
-
-impl Drop for TestFixture {
-    fn drop(&mut self) {
-        if let Some(shutdown) = self.shutdown.take() {
-            shutdown.send(()).ok();
-        }
-        if self.handle.is_some() {
-            // tests should properly clean up TestFixture
-            println!("TestFixture::Drop called prior to `shutdown_and_wait`");
-        }
-    }
 }
 
 #[derive(Clone, PartialEq, ::prost::Message)]
