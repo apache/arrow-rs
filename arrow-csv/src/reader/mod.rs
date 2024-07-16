@@ -2607,7 +2607,7 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_string_view_1() {
+    fn test_parse_string_view_single_column() {
         let csv = ["foo", "something_cannot_be_inlined", "foobar"].join("\n");
         let schema = Arc::new(Schema::new(vec![Field::new(
             "c1",
@@ -2632,7 +2632,7 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_string_view_2() {
+    fn test_parse_string_view_multi_column() {
         let csv = ["foo,", ",something_cannot_be_inlined", "foobarfoobar,bar"].join("\n");
         let schema = Arc::new(Schema::new(vec![
             Field::new("c1", DataType::Utf8View, true),
