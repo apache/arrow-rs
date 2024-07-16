@@ -103,7 +103,7 @@ enum GetResultError {
         source: crate::client::header::Error,
     },
 
-    #[snafu(transparent)]
+    #[snafu(context(false))]
     InvalidRangeRequest {
         source: crate::util::InvalidGetRange,
     },
@@ -386,7 +386,7 @@ mod tests {
         let err = get_result::<TestClient>(&path, Some(get_range.clone()), resp).unwrap_err();
         assert_eq!(
             err.to_string(),
-            "Wanted range starting at 2, but object was only 2 bytes long"
+            "InvalidRangeRequest: Wanted range starting at 2, but object was only 2 bytes long"
         );
 
         let resp = make_response(
