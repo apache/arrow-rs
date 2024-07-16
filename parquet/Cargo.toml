@@ -134,6 +134,11 @@ path = "./examples/read_with_rowgroup.rs"
 name = "arrow_writer_layout"
 required-features = ["arrow"]
 
+[[test]]
+name = "arrow_reader"
+required-features = ["arrow"]
+path = "./tests/arrow_reader/mod.rs"
+
 [[bin]]
 name = "parquet-read"
 required-features = ["cli"]
@@ -181,6 +186,12 @@ required-features = ["arrow", "test_common", "experimental"]
 harness = false
 
 [[bench]]
+name = "arrow_statistics"
+required-features = ["arrow"]
+harness = false
+
+
+[[bench]]
 name = "compression"
 required-features = ["experimental", "default"]
 harness = false
@@ -189,7 +200,6 @@ harness = false
 name = "encoding"
 required-features = ["experimental", "default"]
 harness = false
-
 
 [[bench]]
 name = "metadata"
