@@ -2389,7 +2389,7 @@ mod test {
 
                 // test accessors on the converter
                 let parquet_column_index =
-                    parquet_column(parquet_schema, &arrow_schema, name).map(|(idx, _field)| idx);
+                    parquet_column(parquet_schema, arrow_schema, name).map(|(idx, _field)| idx);
                 assert_eq!(converter.parquet_column_index(), parquet_column_index);
                 assert_eq!(converter.arrow_field().name(), name);
 
