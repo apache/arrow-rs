@@ -165,7 +165,7 @@ pub async fn test_begin_end_transaction() {
         transactions: Arc::new(Mutex::new(HashMap::new())),
     };
     let fixture = TestFixture::new(test_server.service()).await;
-    let channel = fixture.channel();
+    let channel = fixture.channel().await;
     let mut flight_sql_client = FlightSqlServiceClient::new(channel);
 
     // begin commit
