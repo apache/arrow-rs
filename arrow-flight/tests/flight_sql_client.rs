@@ -22,7 +22,6 @@ mod common {
 }
 
 use crate::common::fixture::TestFixture;
-use arrow_flight::flight_service_server::FlightService;
 use arrow_flight::sql::client::FlightSqlServiceClient;
 use arrow_flight::sql::server::FlightSqlService;
 use arrow_flight::sql::{
