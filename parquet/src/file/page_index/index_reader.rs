@@ -104,7 +104,7 @@ pub fn read_pages_locations<R: ChunkReader>(
     chunks
         .iter()
         .map(|c| match c.offset_index_range() {
-            Some(r) => decode_offset_index(get(r)),
+            Some(r) => decode_page_locations(get(r)),
             None => Err(general_err!("missing offset index")),
         })
         .collect()
@@ -140,19 +140,19 @@ pub fn read_offset_indexes<R: ChunkReader>(
     chunks
         .iter()
         .map(|c| match c.offset_index_range() {
-            Some(r) => decode_full_offset_index(get(r)),
+            Some(r) => decode_offset_index(get(r)),
             None => Err(general_err!("missing offset index")),
         })
         .collect()
 }
 
-pub(crate) fn decode_full_offset_index(data: &[u8]) -> Result<OffsetSizeIndex, ParquetError> {
+pub(crate) fn decode_offset_index(data: &[u8]) -> Result<OffsetSizeIndex, ParquetError> {
     let mut prot = TCompactSliceInputProtocol::new(data);
     let offset = OffsetIndex::read_from_in_protocol(&mut prot)?;
     OffsetSizeIndex::try_new(offset)
 }
 
-pub(crate) fn decode_offset_index(data: &[u8]) -> Result<Vec<PageLocation>, ParquetError> {
+pub(crate) fn decode_page_locations(data: &[u8]) -> Result<Vec<PageLocation>, ParquetError> {
     let mut prot = TCompactSliceInputProtocol::new(data);
     let offset = OffsetIndex::read_from_in_protocol(&mut prot)?;
     Ok(offset.page_locations)
