@@ -1046,31 +1046,33 @@ where
 
 /// Extracts Parquet statistics as Arrow arrays
 ///
-/// This is used to convert Parquet statistics to Arrow arrays, with proper type
-/// conversions. This information can be used for pruning parquet files or row
-/// groups based on the statistics embedded in parquet files
+/// This is used to convert Parquet statistics to Arrow [`ArrayRef`], with
+/// proper type conversions. This information can be used for pruning Parquet
+/// files, row groups, and data pages based on the statistics embedded in
+/// Parquet metadata.
 ///
 /// # Schemas
 ///
-/// The schema of the parquet file and the arrow schema are used to convert the
-/// underlying statistics value (stored as a parquet value) into the
-/// corresponding Arrow  value. For example, Decimals are stored as binary in
-/// parquet files.
+/// The converter ues the schema of the Parquet file and the Arrow schema to
+/// convert the underlying statistics value (stored as a parquet value) into the
+/// corresponding Arrow value. For example, Decimals are stored as binary in
+/// parquet files and this structure handles mapping them to the `i128`
+/// representation used in Arrow.
 ///
-/// The parquet_schema and arrow_schema do not have to be identical (for
+/// Note: The Parquet schema and Arrow schema do not have to be identical (for
 /// example, the columns may be in different orders and one or the other schemas
 /// may have additional columns). The function [`parquet_column`] is used to
-/// match the column in the parquet file to the column in the arrow schema.
+/// match the column in the Parquet schema to the column in the Arrow schema.
 #[derive(Debug)]
 pub struct StatisticsConverter<'a> {
-    /// the index of the matched column in the parquet schema
+    /// the index of the matched column in the Parquet schema
     parquet_column_index: Option<usize>,
-    /// The field (with data type) of the column in the arrow schema
+    /// The field (with data type) of the column in the Arrow schema
     arrow_field: &'a Field,
 }
 
 impl<'a> StatisticsConverter<'a> {
-    /// Return the index of the column in the parquet schema, if any
+    /// Return the index of the column in the Parquet schema, if any
     ///
     /// Returns `None` if the column is was present in the Arrow schema, but not
     /// present in the parquet file
@@ -1078,7 +1080,7 @@ impl<'a> StatisticsConverter<'a> {
         self.parquet_column_index
     }
 
-    /// Return the arrow schema's [`Field]` of the column in the arrow schema
+    /// Return the arrow schema's [`Field]` of the column in the Arrow schema
     pub fn arrow_field(&self) -> &'a Field {
         self.arrow_field
     }
@@ -1093,7 +1095,7 @@ impl<'a> StatisticsConverter<'a> {
     /// # Example
     /// ```no_run
     /// # use arrow::datatypes::Schema;
-    /// # use arrow_array::ArrayRef;
+    /// # use arrow_array::{ArrayRef, UInt64Array};
     /// # use parquet::arrow::arrow_reader::statistics::StatisticsConverter;
     /// # use parquet::file::metadata::ParquetMetaData;
     /// # fn get_parquet_metadata() -> ParquetMetaData { unimplemented!() }
@@ -1109,7 +1111,9 @@ impl<'a> StatisticsConverter<'a> {
     /// let row_counts = converter.row_group_row_counts(metadata
     ///   .row_groups()
     ///   .iter()
-    /// );
+    /// ).unwrap();
+    /// // file had 2 row groups, with 1024 and 23 rows respectively
+    /// assert_eq!(row_counts, Some(UInt64Array::from(vec![1024, 23])));
     /// ```
     pub fn row_group_row_counts<I>(&self, metadatas: I) -> Result<Option<UInt64Array>>
     where
@@ -1199,8 +1203,9 @@ impl<'a> StatisticsConverter<'a> {
     ///
     /// # Example
     /// ```no_run
+    /// # use std::sync::Arc;
     /// # use arrow::datatypes::Schema;
-    /// # use arrow_array::ArrayRef;
+    /// # use arrow_array::{ArrayRef, Float64Array};
     /// # use parquet::arrow::arrow_reader::statistics::StatisticsConverter;
     /// # use parquet::file::metadata::ParquetMetaData;
     /// # fn get_parquet_metadata() -> ParquetMetaData { unimplemented!() }
@@ -1216,6 +1221,8 @@ impl<'a> StatisticsConverter<'a> {
     /// let min_values: ArrayRef = converter
     ///   .row_group_mins(metadata.row_groups().iter())
     ///  .unwrap();
+    /// // if "foo" is a Float64 value, the returned array will contain Float64 values
+    /// assert_eq!(min_values, Arc::new(Float64Array::from(vec![Some(1.0), Some(2.0)])) as _);
     /// ```
     pub fn row_group_mins<I>(&self, metadatas: I) -> Result<ArrayRef>
     where
