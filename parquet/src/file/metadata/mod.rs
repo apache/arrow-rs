@@ -15,7 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Parquet metadata structures
+//! Parquet metadata API
+//!
+//! Most users should use these structures to interact with Parquet metadata.
+//! The [crate::format] module contains lower level structures generated from the
+//! Parquet thrift definition.
 //!
 //! * [`ParquetMetaData`]: Top level metadata container, read from the Parquet
 //!   file footer.
