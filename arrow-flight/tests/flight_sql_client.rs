@@ -15,13 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-mod common {
-    pub mod fixture;
-    pub mod server;
-    pub mod trailers_layer;
-}
+mod common;
 
 use crate::common::fixture::TestFixture;
+use arrow_flight::flight_service_server::FlightServiceServer;
 use arrow_flight::sql::client::FlightSqlServiceClient;
 use arrow_flight::sql::server::FlightSqlService;
 use arrow_flight::sql::{
@@ -29,7 +26,6 @@ use arrow_flight::sql::{
     EndTransaction, SqlInfo,
 };
 use arrow_flight::Action;
-use futures::Stream;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -70,6 +66,15 @@ pub async fn test_begin_end_transaction() {
 #[derive(Clone)]
 pub struct FlightSqlServiceImpl {
     transactions: Arc<Mutex<HashMap<String, ()>>>,
+}
+
+impl FlightSqlServiceImpl {
+    /// Return an [`FlightServiceServer`] that can be used with a
+    /// [`Server`](tonic::transport::Server)
+    pub fn service(&self) -> FlightServiceServer<Self> {
+        // wrap up tonic goop
+        FlightServiceServer::new(self.clone())
+    }
 }
 
 #[tonic::async_trait]

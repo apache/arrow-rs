@@ -17,11 +17,8 @@
 
 //! Integration test for "mid level" Client
 
-mod common {
-    pub mod fixture;
-    pub mod server;
-    pub mod trailers_layer;
-}
+mod common;
+
 use crate::common::fixture::TestFixture;
 use arrow_array::{RecordBatch, UInt64Array};
 use arrow_flight::{

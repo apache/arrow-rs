@@ -15,11 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-mod common {
-    pub mod fixture;
-    pub mod server;
-    pub mod trailers_layer;
-}
+mod common;
 
 use std::{pin::Pin, sync::Arc};
 

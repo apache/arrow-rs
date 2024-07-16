@@ -77,6 +77,7 @@ impl TestFixture {
     }
 
     /// Return a [`Channel`] connected to the TestServer
+    #[allow(dead_code)]
     pub async fn channel(&self) -> Channel {
         let url = format!("http://{}", self.addr);
         let uri: Uri = url.parse().expect("Valid URI");
@@ -88,6 +89,7 @@ impl TestFixture {
     }
 
     /// Stops the test server and waits for the server to shutdown
+    #[allow(dead_code)]
     pub async fn shutdown_and_wait(mut self) {
         if let Some(shutdown) = self.shutdown.take() {
             shutdown.send(()).expect("server quit early");
