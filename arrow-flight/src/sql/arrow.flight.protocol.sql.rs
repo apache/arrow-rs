@@ -101,7 +101,7 @@ pub struct CommandGetSqlInfo {
 /// >
 /// The returned data should be ordered by data_type and then by type_name.
 #[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, Copy, PartialEq, ::prost::Message)]
 pub struct CommandGetXdbcTypeInfo {
     ///
     /// Specifies the data type to search for the info.
@@ -121,7 +121,7 @@ pub struct CommandGetXdbcTypeInfo {
 /// >
 /// The returned data should be ordered by catalog_name.
 #[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, Copy, PartialEq, ::prost::Message)]
 pub struct CommandGetCatalogs {}
 ///
 /// Represents a request to retrieve the list of database schemas on a Flight SQL enabled backend.
@@ -232,7 +232,7 @@ pub struct CommandGetTables {
 /// >
 /// The returned data should be ordered by table_type.
 #[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, Copy, PartialEq, ::prost::Message)]
 pub struct CommandGetTableTypes {}
 ///
 /// Represents a request to retrieve the primary keys of a table on a Flight SQL enabled backend.
@@ -511,7 +511,7 @@ pub struct ActionClosePreparedStatementRequest {
 /// Request message for the "BeginTransaction" action.
 /// Begins a transaction.
 #[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, Copy, PartialEq, ::prost::Message)]
 pub struct ActionBeginTransactionRequest {}
 ///
 /// Request message for the "BeginSavepoint" action.
@@ -802,7 +802,7 @@ pub struct CommandPreparedStatementUpdate {
 /// CommandPreparedStatementUpdate was in the request, containing
 /// results from the update.
 #[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, Copy, PartialEq, ::prost::Message)]
 pub struct DoPutUpdateResult {
     /// The number of records updated. A return value of -1 represents
     /// an unknown updated record count.
@@ -862,7 +862,7 @@ pub struct ActionCancelQueryRequest {
 /// This command is deprecated since 13.0.0. Use the "CancelFlightInfo"
 /// action with DoAction instead.
 #[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, Copy, PartialEq, ::prost::Message)]
 pub struct ActionCancelQueryResult {
     #[prost(enumeration = "action_cancel_query_result::CancelResult", tag = "1")]
     pub result: i32,
