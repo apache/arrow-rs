@@ -148,10 +148,11 @@ For example, for the `53.0.0` release, we merged several breaking API changes to
 the `53.0.0-dev` dev branch. We then merged these commits into `master` once we had successfully released `52.2.0`.
 
 The command used:
+
 ```shell
 ## TODO update this command
 git checkout master
-git pull 
+git pull
 git merge apache/53.0.0-dev
 git push -u apache
 ```
