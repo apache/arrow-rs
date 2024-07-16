@@ -654,10 +654,7 @@ impl<'a> DisplayIndex for &'a PrimitiveArray<IntervalYearMonthType> {
         let years = (interval / 12_f64).floor();
         let month = interval - (years * 12_f64);
 
-        write!(
-            f,
-            "{years} years {month} mons 0 days 0 hours 0 mins 0.00 secs",
-        )?;
+        write!(f, "{years} years {month} mons",)?;
         Ok(())
     }
 }
@@ -665,32 +662,22 @@ impl<'a> DisplayIndex for &'a PrimitiveArray<IntervalYearMonthType> {
 impl<'a> DisplayIndex for &'a PrimitiveArray<IntervalDayTimeType> {
     fn write(&self, idx: usize, f: &mut dyn Write) -> FormatResult {
         let value = self.value(idx);
+        let mut first_part = true;
 
-        let secs = value.milliseconds / 1_000;
-        let mins = secs / 60;
-        let hours = mins / 60;
+        if value.days != 0 {
+            write!(f, "{} days", value.days)?;
+            first_part = false;
+        }
 
-        let secs = secs - (mins * 60);
-        let mins = mins - (hours * 60);
+        if value.milliseconds != 0 {
+            let millis_fmt = MillisecondsFormatter {
+                milliseconds: value.milliseconds,
+                first_part,
+            };
 
-        let milliseconds = value.milliseconds % 1_000;
+            f.write_fmt(format_args!("{millis_fmt}"))?;
+        }
 
-        let secs_sign = if secs < 0 || milliseconds < 0 {
-            "-"
-        } else {
-            ""
-        };
-
-        write!(
-            f,
-            "0 years 0 mons {} days {} hours {} mins {}{}.{:03} secs",
-            value.days,
-            hours,
-            mins,
-            secs_sign,
-            secs.abs(),
-            milliseconds.abs(),
-        )?;
         Ok(())
     }
 }
@@ -698,29 +685,158 @@ impl<'a> DisplayIndex for &'a PrimitiveArray<IntervalDayTimeType> {
 impl<'a> DisplayIndex for &'a PrimitiveArray<IntervalMonthDayNanoType> {
     fn write(&self, idx: usize, f: &mut dyn Write) -> FormatResult {
         let value = self.value(idx);
+        let mut first_part = true;
 
-        let secs = value.nanoseconds / 1_000_000_000;
+        if value.months != 0 {
+            write!(f, "{} mons", value.months)?;
+            first_part = false;
+        }
+
+        if value.days != 0 {
+            if first_part {
+                write!(f, "{} days", value.days)?;
+                first_part = false;
+            } else {
+                write!(f, " {} days", value.days)?;
+            }
+        }
+
+        if value.nanoseconds != 0 {
+            let nano_fmt = NanosecondsFormatter {
+                nanoseconds: value.nanoseconds,
+                first_part,
+            };
+            f.write_fmt(format_args!("{nano_fmt}"))?;
+        }
+
+        Ok(())
+    }
+}
+
+struct NanosecondsFormatter {
+    nanoseconds: i64,
+    first_part: bool,
+}
+
+impl Display for NanosecondsFormatter {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        let mut first_part = self.first_part;
+
+        let secs = self.nanoseconds / 1_000_000_000;
         let mins = secs / 60;
         let hours = mins / 60;
 
         let secs = secs - (mins * 60);
         let mins = mins - (hours * 60);
 
-        let nanoseconds = value.nanoseconds % 1_000_000_000;
+        let nanoseconds = self.nanoseconds % 1_000_000_000;
 
-        let secs_sign = if secs < 0 || nanoseconds < 0 { "-" } else { "" };
+        if hours != 0 {
+            if first_part {
+                write!(f, "{} hours", hours)?;
+                first_part = false;
+            } else {
+                write!(f, " {} hours", hours)?;
+            }
+        }
 
-        write!(
-            f,
-            "0 years {} mons {} days {} hours {} mins {}{}.{:09} secs",
-            value.months,
-            value.days,
-            hours,
-            mins,
-            secs_sign,
-            secs.abs(),
-            nanoseconds.abs(),
-        )?;
+        if mins != 0 {
+            if first_part {
+                write!(f, "{} mins", mins)?;
+                first_part = false;
+            } else {
+                write!(f, " {} mins", mins)?;
+            }
+        }
+
+        if secs != 0 || nanoseconds != 0 {
+            let secs_sign = if secs < 0 || nanoseconds < 0 { "-" } else { "" };
+
+            if first_part {
+                write!(
+                    f,
+                    "{}{}.{:09} secs",
+                    secs_sign,
+                    secs.abs(),
+                    nanoseconds.abs()
+                )?;
+            } else {
+                write!(
+                    f,
+                    " {}{}.{:09} secs",
+                    secs_sign,
+                    secs.abs(),
+                    nanoseconds.abs()
+                )?;
+            }
+        }
+
+        Ok(())
+    }
+}
+
+struct MillisecondsFormatter {
+    milliseconds: i32,
+    first_part: bool,
+}
+
+impl Display for MillisecondsFormatter {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        let mut first_part = self.first_part;
+
+        let secs = self.milliseconds / 1_000;
+        let mins = secs / 60;
+        let hours = mins / 60;
+
+        let secs = secs - (mins * 60);
+        let mins = mins - (hours * 60);
+
+        let milliseconds = self.milliseconds % 1_000;
+
+        if hours != 0 {
+            if first_part {
+                write!(f, "{} hours", hours,)?;
+                first_part = false;
+            } else {
+                write!(f, " {} hours", hours,)?;
+            }
+        }
+
+        if mins != 0 {
+            if first_part {
+                write!(f, "{} mins", mins,)?;
+                first_part = false;
+            } else {
+                write!(f, " {} mins", mins,)?;
+            }
+        }
+
+        if secs != 0 || milliseconds != 0 {
+            let secs_sign = if secs < 0 || milliseconds < 0 {
+                "-"
+            } else {
+                ""
+            };
+
+            if first_part {
+                write!(
+                    f,
+                    "{}{}.{:03} secs",
+                    secs_sign,
+                    secs.abs(),
+                    milliseconds.abs()
+                )?;
+            } else {
+                write!(
+                    f,
+                    " {}{}.{:03} secs",
+                    secs_sign,
+                    secs.abs(),
+                    milliseconds.abs()
+                )?;
+            }
+        }
+
         Ok(())
     }
 }
