@@ -192,7 +192,8 @@ struct PageMetrics {
 }
 
 // Metrics per column writer
-struct ColumnMetrics<T> {
+#[derive(Default)]
+struct ColumnMetrics<T: Default> {
     total_bytes_written: u64,
     total_rows_written: u64,
     total_uncompressed_size: u64,
@@ -207,22 +208,9 @@ struct ColumnMetrics<T> {
     variable_length_bytes: Option<i64>,
 }
 
-impl<T> ColumnMetrics<T> {
+impl<T: Default> ColumnMetrics<T> {
     fn new() -> Self {
-        ColumnMetrics {
-            total_bytes_written: 0,
-            total_rows_written: 0,
-            total_uncompressed_size: 0,
-            total_compressed_size: 0,
-            total_num_values: 0,
-            dictionary_page_offset: None,
-            data_page_offset: None,
-            min_column_value: None,
-            max_column_value: None,
-            num_column_nulls: 0,
-            column_distinct_count: None,
-            variable_length_bytes: None,
-        }
+        Default::default()
     }
 
     /// Sum the provided page variable_length_bytes into the chunk variable_length_bytes
