@@ -417,6 +417,9 @@ impl TokenProvider for InstanceCredentialProvider {
 
     /// Fetch a token from the metadata server.
     /// Since the connection is local we need to enable http access and don't actually use the client object passed in.
+    /// Respects the `GCE_METADATA_HOST`, `GCE_METADATA_ROOT`, and `GCE_METADATA_IP`
+    /// environment variables.
+    ///  
     /// References: <https://googleapis.dev/python/google-auth/latest/reference/google.auth.environment_vars.html>
     async fn fetch_token(
         &self,
@@ -483,6 +486,9 @@ impl TokenProvider for InstanceSigningCredentialProvider {
 
     /// Fetch a token from the metadata server.
     /// Since the connection is local we need to enable http access and don't actually use the client object passed in.
+    /// Respects the `GCE_METADATA_HOST`, `GCE_METADATA_ROOT`, and `GCE_METADATA_IP`
+    /// environment variables.
+    ///  
     /// References: <https://googleapis.dev/python/google-auth/latest/reference/google.auth.environment_vars.html>
     async fn fetch_token(
         &self,
