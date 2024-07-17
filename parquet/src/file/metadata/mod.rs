@@ -54,7 +54,12 @@ use crate::schema::types::{
     Type as SchemaType,
 };
 
-/// [`Index`] for each row group of each column.
+/// Page level statistics for each column chunk of each row group.
+///
+/// This structure is an in-memory representation of multiple [`ColumnIndex`]
+/// structures in a parquet file footer, as described in the Parquet [PageIndex
+/// documentation]. Each [`Index`] holds statistics about all the pages in a
+/// particular column chunk.
 ///
 /// `column_index[row_group_number][column_number]` holds the
 /// [`Index`] corresponding to column `column_number` of row group
@@ -62,9 +67,14 @@ use crate::schema::types::{
 ///
 /// For example `column_index[2][3]` holds the [`Index`] for the forth
 /// column in the third row group of the parquet file.
+///
+/// [PageIndex documentation]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
 pub type ParquetColumnIndex = Vec<Vec<Index>>;
 
-/// [`PageLocation`] for each data page of each row group of each column.
+/// [`PageLocation`] for each data page of each row group of each column
+///
+/// This structure is the parsed representation of the [`OffsetIndex`] from the
+/// Parquet file footer, as described in the Parquet [PageIndex documentation].
 ///
 /// `offset_index[row_group_number][column_number][page_number]` holds
 /// the [`PageLocation`] corresponding to page `page_number` of column
@@ -73,6 +83,8 @@ pub type ParquetColumnIndex = Vec<Vec<Index>>;
 /// For example `offset_index[2][3][4]` holds the [`PageLocation`] for
 /// the fifth page of the forth column in the third row group of the
 /// parquet file.
+///
+/// [PageIndex documentation]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
 pub type ParquetOffsetIndex = Vec<Vec<Vec<PageLocation>>>;
 
 /// Parsed metadata for a single Parquet file
@@ -946,14 +958,22 @@ impl ColumnChunkMetaDataBuilder {
     }
 }
 
-/// Builder for column index
+/// Builder for Parquet [`ColumnIndex`], part of the Parquet [PageIndex]
+///
+/// [PageIndex]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
 pub struct ColumnIndexBuilder {
     null_pages: Vec<bool>,
     min_values: Vec<Vec<u8>>,
     max_values: Vec<Vec<u8>>,
     null_counts: Vec<i64>,
     boundary_order: BoundaryOrder,
-    // If one page can't get build index, need to ignore all index in this column
+    /// Is the information in the builder valid?
+    ///
+    /// Set to `false` if any entry in the page doesn't have statistics for
+    /// some reason, so statistics for that page won't be written to the file.
+    /// This might happen if the page is entirely null, or
+    /// is a floating point column without any non-nan values
+    /// e.g. <https://github.com/apache/parquet-format/pull/196>
     valid: bool,
 }
 
@@ -975,6 +995,7 @@ impl ColumnIndexBuilder {
         }
     }
 
+    /// Append statistics for the next page
     pub fn append(
         &mut self,
         null_page: bool,
@@ -992,15 +1013,19 @@ impl ColumnIndexBuilder {
         self.boundary_order = boundary_order;
     }
 
+    /// Mark this column index as invalid
     pub fn to_invalid(&mut self) {
         self.valid = false;
     }
 
+    /// Is the information in the builder valid?
     pub fn valid(&self) -> bool {
         self.valid
     }
 
     /// Build and get the thrift metadata of column index
+    ///
+    /// Note: callers should check [`Self::valid`] before calling this method
     pub fn build_to_thrift(self) -> ColumnIndex {
         ColumnIndex::new(
             self.null_pages,
@@ -1012,7 +1037,9 @@ impl ColumnIndexBuilder {
     }
 }
 
-/// Builder for offset index
+/// Builder for offset index, part of the Parquet [PageIndex].
+///
+/// [PageIndex]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
 pub struct OffsetIndexBuilder {
     offset_array: Vec<i64>,
     compressed_page_size_array: Vec<i32>,
