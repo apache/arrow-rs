@@ -185,6 +185,9 @@ impl ParquetMetaData {
     }
 
     /// Returns `unencoded_byte_array_data_bytes` from the offset indexes in this file, if loaded
+    /// 
+    /// This value represents the output size of the total bytes in this file, which can be useful for
+    /// allocating an appropriately sized output buffer. 
     ///
     /// Returns `None` if the parquet file does not have a `OffsetIndex` or
     /// [ArrowReaderOptions::with_page_index] was set to false.
