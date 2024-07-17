@@ -194,6 +194,7 @@ impl RetryableRequest {
     /// Set whether this request contains sensitive data
     ///
     /// This will avoid printing out the URL in error messages
+    #[allow(unused)]
     pub fn sensitive(self, sensitive: bool) -> Self {
         Self { sensitive, ..self }
     }
