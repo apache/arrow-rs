@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use arrow_buffer::NullBuffer;
 use crate::cast::*;
 
 pub(crate) fn value_to_string<O: OffsetSizeTrait>(
@@ -43,8 +44,25 @@ pub(crate) fn parse_string<P: Parser, O: OffsetSizeTrait>(
     cast_options: &CastOptions,
 ) -> Result<ArrayRef, ArrowError> {
     let string_array = array.as_string::<O>();
+    parse_string_iter::<P, _, _>(string_array.iter(), cast_options, || string_array.nulls().cloned())
+}
+
+/// Parse UTF-8 View
+pub(crate) fn parse_string_view<P: Parser>(
+    array: &dyn Array,
+    cast_options: &CastOptions,
+) -> Result<ArrayRef, ArrowError> {
+    let string_view_array = array.as_string_view();
+    parse_string_iter::<P, _, _>(string_view_array.iter(), cast_options, || string_view_array.nulls().cloned())
+}
+
+fn parse_string_iter<'a, P: Parser, I: Iterator<Item=Option<&'a str>>, F: FnOnce() -> Option<NullBuffer>>(
+    iter: I,
+    cast_options: &CastOptions,
+    nulls: F,
+) -> Result<ArrayRef, ArrowError> {
     let array = if cast_options.safe {
-        let iter = string_array.iter().map(|x| x.and_then(P::parse));
+        let iter = iter.map(|x| x.and_then(P::parse));
 
         // Benefit:
         //     20% performance improvement
@@ -52,8 +70,7 @@ pub(crate) fn parse_string<P: Parser, O: OffsetSizeTrait>(
         //     The iterator is trustedLen because it comes from an `StringArray`.
         unsafe { PrimitiveArray::<P>::from_trusted_len_iter(iter) }
     } else {
-        let v = string_array
-            .iter()
+        let v = iter
             .map(|x| match x {
                 Some(v) => P::parse(v).ok_or_else(|| {
                     ArrowError::CastError(format!(
@@ -65,7 +82,7 @@ pub(crate) fn parse_string<P: Parser, O: OffsetSizeTrait>(
                 None => Ok(P::Native::default()),
             })
             .collect::<Result<Vec<_>, ArrowError>>()?;
-        PrimitiveArray::new(v.into(), string_array.nulls().cloned())
+        PrimitiveArray::new(v.into(), nulls())
     };
 
     Ok(Arc::new(array) as ArrayRef)

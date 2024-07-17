@@ -210,7 +210,7 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
         (LargeBinary, Binary | Utf8 | LargeUtf8 | FixedSizeBinary(_) | BinaryView) => true,
         (FixedSizeBinary(_), Binary | LargeBinary) => true,
         (
-            Utf8 | LargeUtf8,
+            Utf8 | LargeUtf8 | Utf8View,
             Binary
             | LargeBinary
             | Utf8
@@ -228,7 +228,6 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
             | Interval(_),
         ) => true,
         (Utf8 | LargeUtf8, Utf8View) => true,
-        (Utf8View, Utf8 | LargeUtf8) => true,
         (BinaryView, Binary | LargeBinary) => true,
         (Utf8 | LargeUtf8, _) => to_type.is_numeric() && to_type != &Float16,
         (_, Utf8 | LargeUtf8) => from_type.is_primitive(),
@@ -1265,6 +1264,65 @@ pub fn cast_with_options(
             Interval(IntervalUnit::MonthDayNano) => {
                 cast_string_to_month_day_nano_interval::<i32>(array, cast_options)
             }
+            _ => Err(ArrowError::CastError(format!(
+                "Casting from {from_type:?} to {to_type:?} not supported",
+            ))),
+        },
+        (Utf8View, _) => match to_type {
+            UInt8 => parse_string_view::<UInt8Type>(array, cast_options),
+            UInt16 => parse_string_view::<UInt16Type>(array, cast_options),
+            UInt32 => parse_string_view::<UInt32Type>(array, cast_options),
+            UInt64 => parse_string_view::<UInt64Type>(array, cast_options),
+            Int8 => parse_string_view::<Int8Type>(array, cast_options),
+            Int16 => parse_string_view::<Int16Type>(array, cast_options),
+            Int32 => parse_string_view::<Int32Type>(array, cast_options),
+            Int64 => parse_string_view::<Int64Type>(array, cast_options),
+            Float32 => parse_string_view::<Float32Type>(array, cast_options),
+            Float64 => parse_string_view::<Float64Type>(array, cast_options),
+            Date32 => parse_string_view::<Date32Type>(array, cast_options),
+            Date64 => parse_string_view::<Date64Type>(array, cast_options),
+            // Binary => Ok(Arc::new(BinaryArray::from(
+            //     array.as_string::<i32>().clone(),
+            // ))),
+            // LargeBinary => {
+            //     let binary = BinaryArray::from(array.as_string::<i32>().clone());
+            //     cast_byte_container::<BinaryType, LargeBinaryType>(&binary)
+            // }
+            Utf8View => Ok(Arc::new(StringViewArray::from(array.as_string::<i32>()))),
+            LargeUtf8 => cast_byte_container::<Utf8Type, LargeUtf8Type>(array),
+            Time32(TimeUnit::Second) => parse_string_view::<Time32SecondType>(array, cast_options),
+            Time32(TimeUnit::Millisecond) => {
+                parse_string_view::<Time32MillisecondType>(array, cast_options)
+            }
+            Time64(TimeUnit::Microsecond) => {
+                parse_string_view::<Time64MicrosecondType>(array, cast_options)
+            }
+            Time64(TimeUnit::Nanosecond) => {
+                parse_string_view::<Time64NanosecondType>(array, cast_options)
+            }
+            // Timestamp(TimeUnit::Second, to_tz) => {
+            //     cast_string_to_timestamp::<i32, TimestampSecondType>(array, to_tz, cast_options)
+            // }
+            // Timestamp(TimeUnit::Millisecond, to_tz) => cast_string_to_timestamp::<
+            //     i32,
+            //     TimestampMillisecondType,
+            // >(array, to_tz, cast_options),
+            // Timestamp(TimeUnit::Microsecond, to_tz) => cast_string_to_timestamp::<
+            //     i32,
+            //     TimestampMicrosecondType,
+            // >(array, to_tz, cast_options),
+            // Timestamp(TimeUnit::Nanosecond, to_tz) => {
+            //     cast_string_to_timestamp::<i32, TimestampNanosecondType>(array, to_tz, cast_options)
+            // }
+            // Interval(IntervalUnit::YearMonth) => {
+            //     cast_string_to_year_month_interval::<i32>(array, cast_options)
+            // }
+            // Interval(IntervalUnit::DayTime) => {
+            //     cast_string_to_day_time_interval::<i32>(array, cast_options)
+            // }
+            // Interval(IntervalUnit::MonthDayNano) => {
+            //     cast_string_to_month_day_nano_interval::<i32>(array, cast_options)
+            // }
             _ => Err(ArrowError::CastError(format!(
                 "Casting from {from_type:?} to {to_type:?} not supported",
             ))),
