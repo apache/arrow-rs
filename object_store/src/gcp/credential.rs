@@ -51,6 +51,9 @@ pub const DEFAULT_GCS_BASE_URL: &str = "https://storage.googleapis.com";
 const DEFAULT_GCS_PLAYLOAD_STRING: &str = "UNSIGNED-PAYLOAD";
 const DEFAULT_GCS_SIGN_BLOB_HOST: &str = "storage.googleapis.com";
 
+const DEFAULT_METADATA_HOST: &str = "metadata.google.internal";
+const DEFAULT_METADATA_IP: &str = "169.254.169.254";
+
 #[derive(Debug, Snafu)]
 pub enum Error {
     #[snafu(display("Unable to open service account file from {}: {}", path.display(), source))]
@@ -414,17 +417,31 @@ impl TokenProvider for InstanceCredentialProvider {
 
     /// Fetch a token from the metadata server.
     /// Since the connection is local we need to enable http access and don't actually use the client object passed in.
+    /// Respects the `GCE_METADATA_HOST`, `GCE_METADATA_ROOT`, and `GCE_METADATA_IP`
+    /// environment variables.
+    ///  
+    /// References: <https://googleapis.dev/python/google-auth/latest/reference/google.auth.environment_vars.html>
     async fn fetch_token(
         &self,
         client: &Client,
         retry: &RetryConfig,
     ) -> crate::Result<TemporaryToken<Arc<GcpCredential>>> {
-        const METADATA_IP: &str = "169.254.169.254";
-        const METADATA_HOST: &str = "metadata";
+        let metadata_host = if let Ok(host) = env::var("GCE_METADATA_HOST") {
+            host
+        } else if let Ok(host) = env::var("GCE_METADATA_ROOT") {
+            host
+        } else {
+            DEFAULT_METADATA_HOST.to_string()
+        };
+        let metadata_ip = if let Ok(ip) = env::var("GCE_METADATA_IP") {
+            ip
+        } else {
+            DEFAULT_METADATA_IP.to_string()
+        };
 
         info!("fetching token from metadata server");
-        let response = make_metadata_request(client, METADATA_HOST, retry)
-            .or_else(|_| make_metadata_request(client, METADATA_IP, retry))
+        let response = make_metadata_request(client, &metadata_host, retry)
+            .or_else(|_| make_metadata_request(client, &metadata_ip, retry))
             .await?;
 
         let token = TemporaryToken {
@@ -469,18 +486,33 @@ impl TokenProvider for InstanceSigningCredentialProvider {
 
     /// Fetch a token from the metadata server.
     /// Since the connection is local we need to enable http access and don't actually use the client object passed in.
+    /// Respects the `GCE_METADATA_HOST`, `GCE_METADATA_ROOT`, and `GCE_METADATA_IP`
+    /// environment variables.
+    ///  
+    /// References: <https://googleapis.dev/python/google-auth/latest/reference/google.auth.environment_vars.html>
     async fn fetch_token(
         &self,
         client: &Client,
         retry: &RetryConfig,
     ) -> crate::Result<TemporaryToken<Arc<GcpSigningCredential>>> {
-        const METADATA_IP: &str = "169.254.169.254";
-        const METADATA_HOST: &str = "metadata";
+        let metadata_host = if let Ok(host) = env::var("GCE_METADATA_HOST") {
+            host
+        } else if let Ok(host) = env::var("GCE_METADATA_ROOT") {
+            host
+        } else {
+            DEFAULT_METADATA_HOST.to_string()
+        };
+
+        let metadata_ip = if let Ok(ip) = env::var("GCE_METADATA_IP") {
+            ip
+        } else {
+            DEFAULT_METADATA_IP.to_string()
+        };
 
         info!("fetching token from metadata server");
 
-        let email = make_metadata_request_for_email(client, METADATA_HOST, retry)
-            .or_else(|_| make_metadata_request_for_email(client, METADATA_IP, retry))
+        let email = make_metadata_request_for_email(client, &metadata_host, retry)
+            .or_else(|_| make_metadata_request_for_email(client, &metadata_ip, retry))
             .await?;
 
         let token = TemporaryToken {
