@@ -38,6 +38,7 @@ arrow-array = { workspace = true }
 arrow-buffer = { workspace = true }
 arrow-data = { workspace = true }
 arrow-schema = { workspace = true }
+arrow-ord = { workspace = true }
 chrono = { workspace = true }
 half = { version = "2.1", default-features = false }
 num = { version = "0.4", default-features = false, features = ["std"] }

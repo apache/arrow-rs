@@ -57,14 +57,33 @@ fn add_benchmark(c: &mut Criterion) {
     primitive_benchmark::<Int64Type>(c, "int64");
 
     {
-        let nonnull_strings = create_string_array::<i32>(BATCH_SIZE, 0.0);
-        let nullable_strings = create_string_array::<i32>(BATCH_SIZE, 0.5);
+        let nonnull_strings = create_string_array_with_len::<i32>(BATCH_SIZE, 0.0, 16);
+        let nullable_strings = create_string_array_with_len::<i32>(BATCH_SIZE, 0.5, 16);
         c.benchmark_group("string")
             .throughput(Throughput::Elements(BATCH_SIZE as u64))
             .bench_function("min nonnull", |b| b.iter(|| min_string(&nonnull_strings)))
             .bench_function("max nonnull", |b| b.iter(|| max_string(&nonnull_strings)))
             .bench_function("min nullable", |b| b.iter(|| min_string(&nullable_strings)))
             .bench_function("max nullable", |b| b.iter(|| max_string(&nullable_strings)));
+    }
+
+    {
+        let nonnull_strings = create_string_view_array_with_len(BATCH_SIZE, 0.0, 16, false);
+        let nullable_strings = create_string_view_array_with_len(BATCH_SIZE, 0.5, 16, false);
+        c.benchmark_group("string view")
+            .throughput(Throughput::Elements(BATCH_SIZE as u64))
+            .bench_function("min nonnull", |b| {
+                b.iter(|| min_string_view(&nonnull_strings))
+            })
+            .bench_function("max nonnull", |b| {
+                b.iter(|| max_string_view(&nonnull_strings))
+            })
+            .bench_function("min nullable", |b| {
+                b.iter(|| min_string_view(&nullable_strings))
+            })
+            .bench_function("max nullable", |b| {
+                b.iter(|| max_string_view(&nullable_strings))
+            });
     }
 }
 

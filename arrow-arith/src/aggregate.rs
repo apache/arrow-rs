@@ -22,9 +22,12 @@ use arrow_array::iterator::ArrayIter;
 use arrow_array::*;
 use arrow_buffer::{ArrowNativeType, NullBuffer};
 use arrow_data::bit_iterator::try_for_each_valid_idx;
+use arrow_ord::cmp::compare_byte_view_unchecked;
 use arrow_schema::*;
 use std::borrow::BorrowMut;
+use std::cmp::{self, Ordering};
 use std::ops::{BitAnd, BitOr, BitXor};
+use types::ByteViewType;
 
 /// An accumulator for primitive numeric values.
 trait NumericAccumulator<T: ArrowNativeTypeOp>: Copy + Default {
@@ -410,6 +413,41 @@ where
     }
 }
 
+/// Helper to compute min/max of [`GenericByteViewArray<T>`].
+/// The specialized min/max leverages the inlined values to compare the byte views.
+fn min_max_view_helper<T: ByteViewType>(
+    array: &GenericByteViewArray<T>,
+    swap_cond: cmp::Ordering,
+) -> Option<&T::Native> {
+    let null_count = array.null_count();
+    if null_count == array.len() {
+        None
+    } else if null_count == 0 {
+        let min_idx = (0..array.len()).reduce(|acc, item| {
+            let cmp = unsafe { compare_byte_view_unchecked(array, acc, array, item) };
+            if cmp == swap_cond {
+                item
+            } else {
+                acc
+            }
+        });
+        unsafe { min_idx.map(|idx| array.value_unchecked(idx)) }
+    } else {
+        let nulls = array.nulls().unwrap();
+
+        let min_idx = nulls.valid_indices().reduce(|acc_idx, idx| {
+            let cmp = unsafe { compare_byte_view_unchecked(array, acc_idx, array, idx) };
+            if cmp == swap_cond {
+                idx
+            } else {
+                acc_idx
+            }
+        });
+
+        unsafe { min_idx.map(|idx| array.value_unchecked(idx)) }
+    }
+}
+
 /// Returns the maximum value in the binary array, according to the natural order.
 pub fn max_binary<T: OffsetSizeTrait>(array: &GenericBinaryArray<T>) -> Option<&[u8]> {
     min_max_helper::<&[u8], _, _>(array, |a, b| *a < *b)
@@ -417,7 +455,7 @@ pub fn max_binary<T: OffsetSizeTrait>(array: &GenericBinaryArray<T>) -> Option<&
 
 /// Returns the maximum value in the binary view array, according to the natural order.
 pub fn max_binary_view(array: &BinaryViewArray) -> Option<&[u8]> {
-    min_max_helper::<&[u8], _, _>(array, |a, b| *a < *b)
+    min_max_view_helper(array, Ordering::Less)
 }
 
 /// Returns the minimum value in the binary array, according to the natural order.
@@ -427,7 +465,7 @@ pub fn min_binary<T: OffsetSizeTrait>(array: &GenericBinaryArray<T>) -> Option<&
 
 /// Returns the minimum value in the binary view array, according to the natural order.
 pub fn min_binary_view(array: &BinaryViewArray) -> Option<&[u8]> {
-    min_max_helper::<&[u8], _, _>(array, |a, b| *a > *b)
+    min_max_view_helper(array, Ordering::Greater)
 }
 
 /// Returns the maximum value in the string array, according to the natural order.
@@ -437,7 +475,7 @@ pub fn max_string<T: OffsetSizeTrait>(array: &GenericStringArray<T>) -> Option<&
 
 /// Returns the maximum value in the string view array, according to the natural order.
 pub fn max_string_view(array: &StringViewArray) -> Option<&str> {
-    min_max_helper::<&str, _, _>(array, |a, b| *a < *b)
+    min_max_view_helper(array, Ordering::Less)
 }
 
 /// Returns the minimum value in the string array, according to the natural order.
@@ -447,7 +485,7 @@ pub fn min_string<T: OffsetSizeTrait>(array: &GenericStringArray<T>) -> Option<&
 
 /// Returns the minimum value in the string view array, according to the natural order.
 pub fn min_string_view(array: &StringViewArray) -> Option<&str> {
-    min_max_helper::<&str, _, _>(array, |a, b| *a > *b)
+    min_max_view_helper(array, Ordering::Greater)
 }
 
 /// Returns the sum of values in the array.
