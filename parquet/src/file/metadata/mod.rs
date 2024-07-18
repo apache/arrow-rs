@@ -86,7 +86,7 @@ pub type ParquetOffsetIndex = Vec<Vec<Vec<PageLocation>>>;
 ///
 /// [`parquet.thrift`]: https://github.com/apache/parquet-format/blob/master/src/main/thrift/parquet.thrift
 /// [`parse_metadata`]: crate::file::footer::parse_metadata
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ParquetMetaData {
     /// File level metadata
     file_metadata: FileMetaData,
@@ -222,7 +222,7 @@ pub type FileMetaDataPtr = Arc<FileMetaData>;
 /// File level metadata for a Parquet file.
 ///
 /// Includes the version of the file, metadata, number of rows, schema, and column orders
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct FileMetaData {
     version: i32,
     num_rows: i64,
