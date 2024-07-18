@@ -67,6 +67,7 @@ use arrow_schema::*;
 use arrow_select::take::take;
 use num::cast::AsPrimitive;
 use num::{NumCast, ToPrimitive};
+use arrow_schema::DataType::{Utf8, Utf8View};
 
 /// CastOptions provides a way to override the default cast behaviors
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -1281,15 +1282,10 @@ pub fn cast_with_options(
             Float64 => parse_string_view::<Float64Type>(array, cast_options),
             Date32 => parse_string_view::<Date32Type>(array, cast_options),
             Date64 => parse_string_view::<Date64Type>(array, cast_options),
-            // Binary => Ok(Arc::new(BinaryArray::from(
-            //     array.as_string::<i32>().clone(),
-            // ))),
-            // LargeBinary => {
-            //     let binary = BinaryArray::from(array.as_string::<i32>().clone());
-            //     cast_byte_container::<BinaryType, LargeBinaryType>(&binary)
-            // }
-            Utf8View => Ok(Arc::new(StringViewArray::from(array.as_string::<i32>()))),
-            LargeUtf8 => cast_byte_container::<Utf8Type, LargeUtf8Type>(array),
+            Binary => cast_view_to_byte::<StringViewType, GenericBinaryType<i32>>(array),
+            LargeBinary => cast_view_to_byte::<StringViewType, GenericBinaryType<i64>>(array),
+            Utf8 => cast_view_to_byte::<StringViewType, GenericStringType<i32>>(array),
+            LargeUtf8 => cast_view_to_byte::<StringViewType, GenericStringType<i64>>(array),
             Time32(TimeUnit::Second) => parse_string_view::<Time32SecondType>(array, cast_options),
             Time32(TimeUnit::Millisecond) => {
                 parse_string_view::<Time32MillisecondType>(array, cast_options)
@@ -1423,8 +1419,6 @@ pub fn cast_with_options(
                 "Casting from {from_type:?} to {to_type:?} not supported",
             ))),
         },
-        (Utf8View, Utf8) => cast_view_to_byte::<StringViewType, GenericStringType<i32>>(array),
-        (Utf8View, LargeUtf8) => cast_view_to_byte::<StringViewType, GenericStringType<i64>>(array),
         (BinaryView, Binary) => cast_view_to_byte::<BinaryViewType, GenericBinaryType<i32>>(array),
         (BinaryView, LargeBinary) => {
             cast_view_to_byte::<BinaryViewType, GenericBinaryType<i64>>(array)
