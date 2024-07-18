@@ -67,7 +67,6 @@ use arrow_schema::*;
 use arrow_select::take::take;
 use num::cast::AsPrimitive;
 use num::{NumCast, ToPrimitive};
-use arrow_schema::DataType::{Utf8, Utf8View};
 
 /// CastOptions provides a way to override the default cast behaviors
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
