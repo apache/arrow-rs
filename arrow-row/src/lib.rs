@@ -132,7 +132,7 @@ use std::sync::Arc;
 use arrow_array::cast::*;
 use arrow_array::types::ArrowDictionaryKeyType;
 use arrow_array::*;
-use arrow_buffer::ArrowNativeType;
+use arrow_buffer::{ArrowNativeType, OffsetBuffer, ScalarBuffer};
 use arrow_data::ArrayDataBuilder;
 use arrow_schema::*;
 use variable::{decode_binary_view, decode_string_view};
@@ -738,6 +738,23 @@ impl RowConverter {
         }
     }
 
+    /// Create a new [Rows] instance from the given binary data.
+    pub fn from_binary(&self, array: BinaryArray) -> Rows {
+        assert_eq!(
+            array.null_count(),
+            0,
+            "can't construct Rows instance from array with nulls"
+        );
+        Rows {
+            buffer: array.values().to_vec(),
+            offsets: array.offsets().into_iter().map(|&i| i.as_usize()).collect(),
+            config: RowConfig {
+                fields: Arc::clone(&self.fields),
+                validate_utf8: true,
+            },
+        }
+    }
+
     /// Convert raw bytes into [`ArrayRef`]
     ///
     /// # Safety
@@ -867,6 +884,24 @@ impl Rows {
         std::mem::size_of::<Self>()
             + self.buffer.len()
             + self.offsets.len() * std::mem::size_of::<usize>()
+    }
+
+    /// Create a [BinaryArray] from the [Rows] data without reallocating the
+    /// underlying bytes.
+    pub fn into_binary(self) -> BinaryArray {
+        assert!(
+            self.buffer.len() <= i32::MAX as usize,
+            "rows buffer too large"
+        );
+        let offsets_scalar = ScalarBuffer::from_iter(self.offsets.into_iter().map(i32::usize_as));
+        // SAFETY: offsets buffer is nonempty, monotonically increasing, and all represent valid indexes into buffer.
+        unsafe {
+            BinaryArray::new_unchecked(
+                OffsetBuffer::new_unchecked(offsets_scalar),
+                self.buffer.into(),
+                None,
+            )
+        }
     }
 }
 
@@ -2276,7 +2311,7 @@ mod tests {
 
             let comparator = LexicographicalComparator::try_new(&sort_columns).unwrap();
 
-            let columns = options
+            let columns: Vec<SortField> = options
                 .into_iter()
                 .zip(&arrays)
                 .map(|(o, a)| SortField::new_with_options(a.data_type().clone(), o))
@@ -2304,6 +2339,24 @@ mod tests {
                 }
             }
 
+            let back = converter.convert_rows(&rows).unwrap();
+            for (actual, expected) in back.iter().zip(&arrays) {
+                actual.to_data().validate_full().unwrap();
+                dictionary_eq(actual, expected)
+            }
+
+            // Check that we can convert
+            let rows = rows.into_binary();
+            let parser = converter.parser();
+            let back = converter
+                .convert_rows(rows.iter().map(|b| parser.parse(b.expect("valid bytes"))))
+                .unwrap();
+            for (actual, expected) in back.iter().zip(&arrays) {
+                actual.to_data().validate_full().unwrap();
+                dictionary_eq(actual, expected)
+            }
+
+            let rows = converter.from_binary(rows);
             let back = converter.convert_rows(&rows).unwrap();
             for (actual, expected) in back.iter().zip(&arrays) {
                 actual.to_data().validate_full().unwrap();
