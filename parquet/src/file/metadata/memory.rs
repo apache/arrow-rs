@@ -97,6 +97,7 @@ impl HeapSize for ColumnChunkMetaData {
             + self.compression.heap_size()
             + self.statistics.heap_size()
             + self.encoding_stats.heap_size()
+            + self.unencoded_byte_array_data_bytes.heap_size()
     }
 }
 
