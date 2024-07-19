@@ -1096,7 +1096,7 @@ mod tests {
     use crate::data_type::AsBytes;
     use crate::file::metadata::ParquetMetaData;
     use crate::file::page_index::index::Index;
-    use crate::file::page_index::index_reader::read_pages_locations;
+    use crate::file::page_index::index_reader::read_offset_indexes;
     use crate::file::properties::{
         BloomFilterPosition, EnabledStatistics, ReaderProperties, WriterVersion,
     };
@@ -1669,16 +1669,16 @@ mod tests {
             "Expected a dictionary page"
         );
 
-        let page_locations = read_pages_locations(&file, column).unwrap();
+        let offset_indexes = read_offset_indexes(&file, column).unwrap();
 
-        let offset_index = page_locations[0].clone();
+        let page_locations = offset_indexes[0].page_locations.clone();
 
         // We should fallback to PLAIN encoding after the first row and our max page size is 1 bytes
         // so we expect one dictionary encoded page and then a page per row thereafter.
         assert_eq!(
-            offset_index.len(),
+            page_locations.len(),
             10,
-            "Expected 9 pages but got {offset_index:#?}"
+            "Expected 9 pages but got {page_locations:#?}"
         );
     }
 
@@ -3020,8 +3020,8 @@ mod tests {
 
         assert_eq!(index.len(), 1);
         assert_eq!(index[0].len(), 2); // 2 columns
-        assert_eq!(index[0][0].len(), 1); // 1 page
-        assert_eq!(index[0][1].len(), 1); // 1 page
+        assert_eq!(index[0][0].page_locations().len(), 1); // 1 page
+        assert_eq!(index[0][1].page_locations().len(), 1); // 1 page
     }
 
     #[test]

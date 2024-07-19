@@ -1920,15 +1920,15 @@ mod tests {
             column.unencoded_byte_array_data_bytes().unwrap()
         );
 
-        assert!(reader
-            .metadata()
-            .unencoded_byte_array_data_bytes()
-            .is_some());
-        let unenc_sizes = reader.metadata().unencoded_byte_array_data_bytes().unwrap();
-        assert_eq!(unenc_sizes.len(), 1);
-        assert_eq!(unenc_sizes[0].len(), 1);
-        assert!(unenc_sizes[0][0].is_some());
-        let page_sizes = unenc_sizes[0][0].as_ref().unwrap();
+        assert!(reader.metadata().offset_index().is_some());
+        let offset_index = reader.metadata().offset_index().unwrap();
+        assert_eq!(offset_index.len(), 1);
+        assert_eq!(offset_index[0].len(), 1);
+        assert!(offset_index[0][0].unencoded_byte_array_data_bytes.is_some());
+        let page_sizes = offset_index[0][0]
+            .unencoded_byte_array_data_bytes
+            .as_ref()
+            .unwrap();
         assert_eq!(page_sizes.len(), 1);
         assert_eq!(page_sizes[0], unenc_size);
     }

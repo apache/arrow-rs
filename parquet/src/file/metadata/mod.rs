@@ -44,6 +44,7 @@ use crate::errors::{ParquetError, Result};
 pub(crate) use crate::file::metadata::memory::HeapSize;
 use crate::file::page_encoding_stats::{self, PageEncodingStats};
 use crate::file::page_index::index::Index;
+use crate::file::page_index::offset_index::OffsetIndexMetaData;
 use crate::file::statistics::{self, Statistics};
 use crate::schema::types::{
     ColumnDescPtr, ColumnDescriptor, ColumnPath, SchemaDescPtr, SchemaDescriptor,
@@ -56,20 +57,19 @@ use crate::schema::types::{
 /// [`Index`] corresponding to column `column_number` of row group
 /// `row_group_number`.
 ///
-/// For example `column_index[2][3]` holds the [`Index`] for the forth
+/// For example `column_index[2][3]` holds the [`Index`] for the fourth
 /// column in the third row group of the parquet file.
 pub type ParquetColumnIndex = Vec<Vec<Index>>;
 
-/// [`PageLocation`] for each data page of each row group of each column.
+/// [`OffsetIndexMetaData`] for each row group of each column.
 ///
-/// `offset_index[row_group_number][column_number][page_number]` holds
-/// the [`PageLocation`] corresponding to page `page_number` of column
+/// `offset_index[row_group_number][column_number]` holds
+/// the [`OffsetIndexMetaData`] corresponding to column
 /// `column_number`of row group `row_group_number`.
 ///
-/// For example `offset_index[2][3][4]` holds the [`PageLocation`] for
-/// the fifth page of the forth column in the third row group of the
-/// parquet file.
-pub type ParquetOffsetIndex = Vec<Vec<Vec<PageLocation>>>;
+/// For example `offset_index[2][3]` holds the [`OffsetIndexMetaData`] for
+/// the fourth column in the third row group of the parquet file.
+pub type ParquetOffsetIndex = Vec<Vec<OffsetIndexMetaData>>;
 
 /// Parsed metadata for a single Parquet file
 ///
@@ -94,10 +94,8 @@ pub struct ParquetMetaData {
     row_groups: Vec<RowGroupMetaData>,
     /// Page level index for each page in each column chunk
     column_index: Option<ParquetColumnIndex>,
-    /// Offset index for all each page in each column chunk
+    /// Offset index for each page in each column chunk
     offset_index: Option<ParquetOffsetIndex>,
-    /// `unencoded_byte_array_data_bytes` from the offset index
-    unencoded_byte_array_data_bytes: Option<Vec<Vec<Option<Vec<i64>>>>>,
 }
 
 impl ParquetMetaData {
@@ -109,7 +107,6 @@ impl ParquetMetaData {
             row_groups,
             column_index: None,
             offset_index: None,
-            unencoded_byte_array_data_bytes: None,
         }
     }
 
@@ -120,14 +117,12 @@ impl ParquetMetaData {
         row_groups: Vec<RowGroupMetaData>,
         column_index: Option<ParquetColumnIndex>,
         offset_index: Option<ParquetOffsetIndex>,
-        unencoded_byte_array_data_bytes: Option<Vec<Vec<Option<Vec<i64>>>>>,
     ) -> Self {
         ParquetMetaData {
             file_metadata,
             row_groups,
             column_index,
             offset_index,
-            unencoded_byte_array_data_bytes,
         }
     }
 
@@ -184,19 +179,6 @@ impl ParquetMetaData {
         self.offset_index.as_ref()
     }
 
-    /// Returns `unencoded_byte_array_data_bytes` from the offset indexes in this file, if loaded
-    ///
-    /// This value represents the output size of the total bytes in this file, which can be useful for
-    /// allocating an appropriately sized output buffer.
-    ///
-    /// Returns `None` if the parquet file does not have a `OffsetIndex` or
-    /// [ArrowReaderOptions::with_page_index] was set to false.
-    ///
-    /// [ArrowReaderOptions::with_page_index]: https://docs.rs/parquet/latest/parquet/arrow/arrow_reader/struct.ArrowReaderOptions.html#method.with_page_index
-    pub fn unencoded_byte_array_data_bytes(&self) -> Option<&Vec<Vec<Option<Vec<i64>>>>> {
-        self.unencoded_byte_array_data_bytes.as_ref()
-    }
-
     /// Estimate of the bytes allocated to store `ParquetMetadata`
     ///
     /// # Notes:
@@ -217,7 +199,6 @@ impl ParquetMetaData {
             + self.row_groups.heap_size()
             + self.column_index.heap_size()
             + self.offset_index.heap_size()
-            + self.unencoded_byte_array_data_bytes.heap_size()
     }
 
     /// Override the column index
@@ -1364,7 +1345,7 @@ mod tests {
             column_orders,
         );
         let parquet_meta = ParquetMetaData::new(file_metadata.clone(), row_group_meta.clone());
-        let base_expected_size = 1376;
+        let base_expected_size = 1352;
         assert_eq!(parquet_meta.memory_size(), base_expected_size);
 
         let mut column_index = ColumnIndexBuilder::new();
@@ -1373,18 +1354,25 @@ mod tests {
         let native_index = NativeIndex::<bool>::try_new(column_index).unwrap();
 
         // Now, add in OffsetIndex
+        let mut offset_index = OffsetIndexBuilder::new();
+        offset_index.append_row_count(1);
+        offset_index.append_offset_and_size(2, 3);
+        offset_index.append_unencoded_byte_array_data_bytes(Some(10));
+        offset_index.append_row_count(1);
+        offset_index.append_offset_and_size(2, 3);
+        offset_index.append_unencoded_byte_array_data_bytes(Some(10));
+        let offset_index = offset_index.build_to_thrift();
+
         let parquet_meta = ParquetMetaData::new_with_page_index(
             file_metadata,
             row_group_meta,
             Some(vec![vec![Index::BOOLEAN(native_index)]]),
             Some(vec![vec![
-                vec![PageLocation::new(1, 2, 3)],
-                vec![PageLocation::new(1, 2, 3)],
+                OffsetIndexMetaData::try_new(offset_index).unwrap()
             ]]),
-            Some(vec![vec![Some(vec![10, 20, 30])]]),
         );
 
-        let bigger_expected_size = 2464;
+        let bigger_expected_size = 2400;
         // more set fields means more memory usage
         assert!(bigger_expected_size > base_expected_size);
         assert_eq!(parquet_meta.memory_size(), bigger_expected_size);
