@@ -15,8 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow_buffer::NullBuffer;
 use crate::cast::*;
+use arrow_buffer::NullBuffer;
 
 pub(crate) fn value_to_string<O: OffsetSizeTrait>(
     array: &dyn Array,
@@ -44,7 +44,9 @@ pub(crate) fn parse_string<P: Parser, O: OffsetSizeTrait>(
     cast_options: &CastOptions,
 ) -> Result<ArrayRef, ArrowError> {
     let string_array = array.as_string::<O>();
-    parse_string_iter::<P, _, _>(string_array.iter(), cast_options, || string_array.nulls().cloned())
+    parse_string_iter::<P, _, _>(string_array.iter(), cast_options, || {
+        string_array.nulls().cloned()
+    })
 }
 
 /// Parse UTF-8 View
@@ -53,10 +55,17 @@ pub(crate) fn parse_string_view<P: Parser>(
     cast_options: &CastOptions,
 ) -> Result<ArrayRef, ArrowError> {
     let string_view_array = array.as_string_view();
-    parse_string_iter::<P, _, _>(string_view_array.iter(), cast_options, || string_view_array.nulls().cloned())
+    parse_string_iter::<P, _, _>(string_view_array.iter(), cast_options, || {
+        string_view_array.nulls().cloned()
+    })
 }
 
-fn parse_string_iter<'a, P: Parser, I: Iterator<Item = Option<&'a str>>, F: FnOnce() -> Option<NullBuffer>>(
+fn parse_string_iter<
+    'a,
+    P: Parser,
+    I: Iterator<Item = Option<&'a str>>,
+    F: FnOnce() -> Option<NullBuffer>,
+>(
     iter: I,
     cast_options: &CastOptions,
     nulls: F,
@@ -122,7 +131,12 @@ pub(crate) fn cast_view_to_timestamp<T: ArrowTimestampType>(
     Ok(Arc::new(out.with_timezone_opt(to_tz.clone())))
 }
 
-fn cast_string_to_timestamp_impl<'a, I: Iterator<Item = Option<&'a str>>, T: ArrowTimestampType, Tz: TimeZone>(
+fn cast_string_to_timestamp_impl<
+    'a,
+    I: Iterator<Item = Option<&'a str>>,
+    T: ArrowTimestampType,
+    Tz: TimeZone,
+>(
     iter: I,
     tz: &Tz,
     cast_options: &CastOptions,
@@ -181,7 +195,11 @@ where
         .as_any()
         .downcast_ref::<GenericStringArray<Offset>>()
         .unwrap();
-    cast_string_to_interval_impl::<_, ArrowType, F>(string_array.iter(), cast_options, parse_function)
+    cast_string_to_interval_impl::<_, ArrowType, F>(
+        string_array.iter(),
+        cast_options,
+        parse_function,
+    )
 }
 
 pub(crate) fn cast_string_to_year_month_interval<Offset: OffsetSizeTrait>(
@@ -226,11 +244,12 @@ where
     ArrowType: ArrowPrimitiveType,
     F: Fn(&str) -> Result<ArrowType::Native, ArrowError> + Copy,
 {
-    let string_view_array = array
-        .as_any()
-        .downcast_ref::<StringViewArray>()
-        .unwrap();
-    cast_string_to_interval_impl::<_, ArrowType, F>(string_view_array.iter(), cast_options, parse_function)
+    let string_view_array = array.as_any().downcast_ref::<StringViewArray>().unwrap();
+    cast_string_to_interval_impl::<_, ArrowType, F>(
+        string_view_array.iter(),
+        cast_options,
+        parse_function,
+    )
 }
 
 pub(crate) fn cast_view_to_year_month_interval(
@@ -248,11 +267,7 @@ pub(crate) fn cast_view_to_day_time_interval(
     array: &dyn Array,
     cast_options: &CastOptions,
 ) -> Result<ArrayRef, ArrowError> {
-    cast_view_to_interval::<_, IntervalDayTimeType>(
-        array,
-        cast_options,
-        parse_interval_day_time,
-    )
+    cast_view_to_interval::<_, IntervalDayTimeType>(array, cast_options, parse_interval_day_time)
 }
 
 pub(crate) fn cast_view_to_month_day_nano_interval(
@@ -277,8 +292,7 @@ where
     F: Fn(&str) -> Result<ArrowType::Native, ArrowError> + Copy,
 {
     let interval_array = if cast_options.safe {
-        let iter = iter
-            .map(|v| v.and_then(|v| parse_function(v).ok()));
+        let iter = iter.map(|v| v.and_then(|v| parse_function(v).ok()));
 
         // Benefit:
         //     20% performance improvement

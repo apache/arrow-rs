@@ -1310,9 +1310,7 @@ pub fn cast_with_options(
             Interval(IntervalUnit::YearMonth) => {
                 cast_view_to_year_month_interval(array, cast_options)
             }
-            Interval(IntervalUnit::DayTime) => {
-                cast_view_to_day_time_interval(array, cast_options)
-            }
+            Interval(IntervalUnit::DayTime) => cast_view_to_day_time_interval(array, cast_options),
             Interval(IntervalUnit::MonthDayNano) => {
                 cast_view_to_month_day_nano_interval(array, cast_options)
             }
