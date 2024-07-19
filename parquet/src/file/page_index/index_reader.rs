@@ -22,7 +22,7 @@ use crate::data_type::Int96;
 use crate::errors::ParquetError;
 use crate::file::metadata::ColumnChunkMetaData;
 use crate::file::page_index::index::{Index, NativeIndex};
-use crate::file::page_index::offset_index::OffsetSizeIndex;
+use crate::file::page_index::offset_index::OffsetIndexMetaData;
 use crate::file::reader::ChunkReader;
 use crate::format::{ColumnIndex, OffsetIndex, PageLocation};
 use crate::thrift::{TCompactSliceInputProtocol, TSerializable};
@@ -110,10 +110,10 @@ pub fn read_pages_locations<R: ChunkReader>(
         .collect()
 }
 
-/// Reads per-column [`OffsetSizeIndex`] for all columns of a row group by
+/// Reads per-column [`OffsetIndexMetaData`] for all columns of a row group by
 /// decoding [`OffsetIndex`] .
 ///
-/// Returns a vector of `index[column_number]`.
+/// Returns a vector of `offset_index[column_number]`.
 ///
 /// Returns an empty vector if this row group does not contain an
 /// [`OffsetIndex`].
@@ -124,7 +124,7 @@ pub fn read_pages_locations<R: ChunkReader>(
 pub fn read_offset_indexes<R: ChunkReader>(
     reader: &R,
     chunks: &[ColumnChunkMetaData],
-) -> Result<Vec<OffsetSizeIndex>, ParquetError> {
+) -> Result<Vec<OffsetIndexMetaData>, ParquetError> {
     let fetch = chunks
         .iter()
         .fold(None, |range, c| acc_range(range, c.offset_index_range()));
@@ -146,10 +146,10 @@ pub fn read_offset_indexes<R: ChunkReader>(
         .collect()
 }
 
-pub(crate) fn decode_offset_index(data: &[u8]) -> Result<OffsetSizeIndex, ParquetError> {
+pub(crate) fn decode_offset_index(data: &[u8]) -> Result<OffsetIndexMetaData, ParquetError> {
     let mut prot = TCompactSliceInputProtocol::new(data);
     let offset = OffsetIndex::read_from_in_protocol(&mut prot)?;
-    OffsetSizeIndex::try_new(offset)
+    OffsetIndexMetaData::try_new(offset)
 }
 
 pub(crate) fn decode_page_locations(data: &[u8]) -> Result<Vec<PageLocation>, ParquetError> {
