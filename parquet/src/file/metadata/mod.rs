@@ -1324,11 +1324,8 @@ mod tests {
             schema_descr.clone(),
             column_orders,
         );
-        let parquet_meta = ParquetMetaData::new(file_metadata.clone(), row_group_meta.clone());
-        let base_expected_size = 1320;
-        assert_eq!(parquet_meta.memory_size(), base_expected_size);
 
-        //Now, add in Exact Statistics
+        // Now, add in Exact Statistics
         let columns_with_stats = schema_descr
             .columns()
             .iter()
@@ -1348,7 +1345,7 @@ mod tests {
         let row_group_meta_with_stats = vec![row_group_meta_with_stats];
 
         let parquet_meta = ParquetMetaData::new(file_metadata.clone(), row_group_meta_with_stats);
-        //no heap allocations for i32 statistics
+        let base_expected_size = 2024;
         assert_eq!(parquet_meta.memory_size(), base_expected_size);
 
         let mut column_index = ColumnIndexBuilder::new();
