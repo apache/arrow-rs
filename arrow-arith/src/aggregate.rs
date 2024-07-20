@@ -371,11 +371,26 @@ pub fn max_boolean(array: &BooleanArray) -> Option<bool> {
     }
 
     // Note the max bool is true (1), so short circuit as soon as we see it
-    array
-        .iter()
-        .find(|&b| b == Some(true))
-        .flatten()
-        .or(Some(false))
+    match array.nulls() {
+        None => array
+            .values()
+            .bit_chunks()
+            .iter_padded()
+            // We found a true if any bit is set
+            .map(|x| x != 0)
+            .find(|b| *b)
+            .or(Some(false)),
+        Some(nulls) => {
+            let validity_chunks = nulls.inner().bit_chunks().iter_padded();
+            let value_chunks = array.values().bit_chunks().iter_padded();
+            value_chunks
+                .zip(validity_chunks)
+                // We found a true if the value bit is 1, AND the validity bit is 1 for any bits in the chunk
+                .map(|(value_bits, validity_bits)| (value_bits & validity_bits) != 0)
+                .find(|b| *b)
+                .or(Some(false))
+        }
+    }
 }
 
 /// Helper to compute min/max of [`ArrayAccessor`].
@@ -1318,6 +1333,14 @@ mod tests {
         let a = BooleanArray::from(vec![Some(false), Some(true), None, Some(false), None]);
         assert_eq!(Some(false), min_boolean(&a));
         assert_eq!(Some(true), max_boolean(&a));
+
+        let a = BooleanArray::from(vec![Some(true), None]);
+        assert_eq!(Some(true), min_boolean(&a));
+        assert_eq!(Some(true), max_boolean(&a));
+
+        let a = BooleanArray::from(vec![Some(false), None]);
+        assert_eq!(Some(false), min_boolean(&a));
+        assert_eq!(Some(false), max_boolean(&a));
     }
 
     #[test]
