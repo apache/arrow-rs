@@ -424,6 +424,7 @@ fn min_max_view_helper<T: ByteViewType>(
         None
     } else if null_count == 0 {
         let min_idx = (0..array.len()).reduce(|acc, item| {
+            // SAFETY:  array's length is correct so item is within bounds
             let cmp = unsafe { compare_byte_view_unchecked(array, acc, array, item) };
             if cmp == swap_cond {
                 item
@@ -431,6 +432,7 @@ fn min_max_view_helper<T: ByteViewType>(
                 acc
             }
         });
+        // Safety: idx came from valid range `0..array.len()`
         unsafe { min_idx.map(|idx| array.value_unchecked(idx)) }
     } else {
         let nulls = array.nulls().unwrap();
