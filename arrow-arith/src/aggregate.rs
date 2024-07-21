@@ -22,7 +22,6 @@ use arrow_array::iterator::ArrayIter;
 use arrow_array::*;
 use arrow_buffer::{ArrowNativeType, NullBuffer};
 use arrow_data::bit_iterator::try_for_each_valid_idx;
-use arrow_ord::cmp::compare_byte_view_unchecked;
 use arrow_schema::*;
 use std::borrow::BorrowMut;
 use std::cmp::{self, Ordering};
@@ -415,6 +414,8 @@ where
 
 /// Helper to compute min/max of [`GenericByteViewArray<T>`].
 /// The specialized min/max leverages the inlined values to compare the byte views.
+/// `swap_cond` is the condition to swap current min/max with the new value.
+/// For example, `Ordering::Greater` for max and `Ordering::Less` for min.
 fn min_max_view_helper<T: ByteViewType>(
     array: &GenericByteViewArray<T>,
     swap_cond: cmp::Ordering,
@@ -423,22 +424,23 @@ fn min_max_view_helper<T: ByteViewType>(
     if null_count == array.len() {
         None
     } else if null_count == 0 {
-        let min_idx = (0..array.len()).reduce(|acc, item| {
+        let target_idx = (0..array.len()).reduce(|acc, item| {
             // SAFETY:  array's length is correct so item is within bounds
-            let cmp = unsafe { compare_byte_view_unchecked(array, acc, array, item) };
+            let cmp = unsafe { GenericByteViewArray::compare_unchecked(array, item, array, acc) };
             if cmp == swap_cond {
                 item
             } else {
                 acc
             }
         });
-        // Safety: idx came from valid range `0..array.len()`
-        unsafe { min_idx.map(|idx| array.value_unchecked(idx)) }
+        // SAFETY: idx came from valid range `0..array.len()`
+        unsafe { target_idx.map(|idx| array.value_unchecked(idx)) }
     } else {
         let nulls = array.nulls().unwrap();
 
-        let min_idx = nulls.valid_indices().reduce(|acc_idx, idx| {
-            let cmp = unsafe { compare_byte_view_unchecked(array, acc_idx, array, idx) };
+        let target_idx = nulls.valid_indices().reduce(|acc_idx, idx| {
+            let cmp =
+                unsafe { GenericByteViewArray::compare_unchecked(array, idx, array, acc_idx) };
             if cmp == swap_cond {
                 idx
             } else {
@@ -446,7 +448,8 @@ fn min_max_view_helper<T: ByteViewType>(
             }
         });
 
-        unsafe { min_idx.map(|idx| array.value_unchecked(idx)) }
+        // SAFETY: idx came from valid range `0..array.len()`
+        unsafe { target_idx.map(|idx| array.value_unchecked(idx)) }
     }
 }
 
@@ -457,7 +460,7 @@ pub fn max_binary<T: OffsetSizeTrait>(array: &GenericBinaryArray<T>) -> Option<&
 
 /// Returns the maximum value in the binary view array, according to the natural order.
 pub fn max_binary_view(array: &BinaryViewArray) -> Option<&[u8]> {
-    min_max_view_helper(array, Ordering::Less)
+    min_max_view_helper(array, Ordering::Greater)
 }
 
 /// Returns the minimum value in the binary array, according to the natural order.
@@ -467,7 +470,7 @@ pub fn min_binary<T: OffsetSizeTrait>(array: &GenericBinaryArray<T>) -> Option<&
 
 /// Returns the minimum value in the binary view array, according to the natural order.
 pub fn min_binary_view(array: &BinaryViewArray) -> Option<&[u8]> {
-    min_max_view_helper(array, Ordering::Greater)
+    min_max_view_helper(array, Ordering::Less)
 }
 
 /// Returns the maximum value in the string array, according to the natural order.
@@ -477,7 +480,7 @@ pub fn max_string<T: OffsetSizeTrait>(array: &GenericStringArray<T>) -> Option<&
 
 /// Returns the maximum value in the string view array, according to the natural order.
 pub fn max_string_view(array: &StringViewArray) -> Option<&str> {
-    min_max_view_helper(array, Ordering::Less)
+    min_max_view_helper(array, Ordering::Greater)
 }
 
 /// Returns the minimum value in the string array, according to the natural order.
@@ -487,7 +490,7 @@ pub fn min_string<T: OffsetSizeTrait>(array: &GenericStringArray<T>) -> Option<&
 
 /// Returns the minimum value in the string view array, according to the natural order.
 pub fn min_string_view(array: &StringViewArray) -> Option<&str> {
-    min_max_view_helper(array, Ordering::Greater)
+    min_max_view_helper(array, Ordering::Less)
 }
 
 /// Returns the sum of values in the array.
