@@ -763,6 +763,7 @@ where
 mod tests {
     use super::*;
     use arrow_array::types::*;
+    use builder::BooleanBuilder;
     use std::sync::Arc;
 
     #[test]
@@ -1360,6 +1361,92 @@ mod tests {
         let a = BooleanArray::from(vec![Some(true)]);
         assert_eq!(Some(true), min_boolean(&a));
         assert_eq!(Some(true), max_boolean(&a));
+    }
+
+    #[test]
+    fn test_boolean_min_max_64_true_64_false() {
+        let mut no_nulls = BooleanBuilder::new();
+        no_nulls.append_slice(&[true; 64]);
+        no_nulls.append_slice(&[false; 64]);
+        let no_nulls = no_nulls.finish();
+
+        assert_eq!(Some(false), min_boolean(&no_nulls));
+        assert_eq!(Some(true), max_boolean(&no_nulls));
+
+        let mut with_nulls = BooleanBuilder::new();
+        with_nulls.append_slice(&[true; 31]);
+        with_nulls.append_null();
+        with_nulls.append_slice(&[true; 32]);
+        with_nulls.append_slice(&[false; 1]);
+        with_nulls.append_nulls(63);
+        let with_nulls = with_nulls.finish();
+
+        assert_eq!(Some(false), min_boolean(&with_nulls));
+        assert_eq!(Some(true), max_boolean(&with_nulls));
+    }
+
+    #[test]
+    fn test_boolean_min_max_64_false_64_true() {
+        let mut no_nulls = BooleanBuilder::new();
+        no_nulls.append_slice(&[false; 64]);
+        no_nulls.append_slice(&[true; 64]);
+        let no_nulls = no_nulls.finish();
+
+        assert_eq!(Some(false), min_boolean(&no_nulls));
+        assert_eq!(Some(true), max_boolean(&no_nulls));
+
+        let mut with_nulls = BooleanBuilder::new();
+        with_nulls.append_slice(&[false; 31]);
+        with_nulls.append_null();
+        with_nulls.append_slice(&[false; 32]);
+        with_nulls.append_slice(&[true; 1]);
+        with_nulls.append_nulls(63);
+        let with_nulls = with_nulls.finish();
+
+        assert_eq!(Some(false), min_boolean(&with_nulls));
+        assert_eq!(Some(true), max_boolean(&with_nulls));
+    }
+
+    #[test]
+    fn test_boolean_min_max_96_true() {
+        let mut no_nulls = BooleanBuilder::new();
+        no_nulls.append_slice(&[true; 96]);
+        let no_nulls = no_nulls.finish();
+
+        assert_eq!(Some(true), min_boolean(&no_nulls));
+        assert_eq!(Some(true), max_boolean(&no_nulls));
+
+        let mut with_nulls = BooleanBuilder::new();
+        with_nulls.append_slice(&[true; 31]);
+        with_nulls.append_null();
+        with_nulls.append_slice(&[true; 32]);
+        with_nulls.append_slice(&[true; 31]);
+        with_nulls.append_null();
+        let with_nulls = with_nulls.finish();
+
+        assert_eq!(Some(true), min_boolean(&with_nulls));
+        assert_eq!(Some(true), max_boolean(&with_nulls));
+    }
+
+    #[test]
+    fn test_boolean_min_max_96_false() {
+        let mut no_nulls = BooleanBuilder::new();
+        no_nulls.append_slice(&[false; 96]);
+        let no_nulls = no_nulls.finish();
+
+        assert_eq!(Some(false), min_boolean(&no_nulls));
+        assert_eq!(Some(false), max_boolean(&no_nulls));
+
+        let mut with_nulls = BooleanBuilder::new();
+        with_nulls.append_slice(&[false; 31]);
+        with_nulls.append_null();
+        with_nulls.append_slice(&[false; 32]);
+        with_nulls.append_slice(&[false; 31]);
+        with_nulls.append_null();
+        let with_nulls = with_nulls.finish();
+
+        assert_eq!(Some(false), min_boolean(&with_nulls));
+        assert_eq!(Some(false), max_boolean(&with_nulls));
     }
 
     #[test]
