@@ -674,10 +674,7 @@ pub fn bool_and(array: &BooleanArray) -> Option<bool> {
 ///
 /// Returns `None` if the array is empty or only contains null values.
 pub fn bool_or(array: &BooleanArray) -> Option<bool> {
-    if array.null_count() == array.len() {
-        return None;
-    }
-    Some(array.true_count() != 0)
+    max_boolean(array)
 }
 
 /// Returns the sum of values in the primitive array.
