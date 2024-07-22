@@ -422,7 +422,7 @@ pub type BinaryViewBuilder = GenericByteViewBuilder<BinaryViewType>;
 
 /// Creates a view from a fixed length input (the compiler can generate
 /// specialized code for this)
-fn make_view_inner<const LEN: usize>(data: &[u8]) -> u128 {
+fn make_inlined_view<const LEN: usize>(data: &[u8]) -> u128 {
     let mut view_buffer = [0; 16];
     view_buffer[0..4].copy_from_slice(&(LEN as u32).to_le_bytes());
     view_buffer[4..4 + LEN].copy_from_slice(&data[..LEN]);
@@ -440,19 +440,20 @@ pub fn make_view(data: &[u8], block_id: u32, offset: u32) -> u128 {
     // Generate specialized code for each potential small string length
     // to improve performance
     match len {
-        0 => make_view_inner::<0>(data),
-        1 => make_view_inner::<1>(data),
-        2 => make_view_inner::<2>(data),
-        3 => make_view_inner::<3>(data),
-        4 => make_view_inner::<4>(data),
-        5 => make_view_inner::<5>(data),
-        6 => make_view_inner::<6>(data),
-        7 => make_view_inner::<7>(data),
-        8 => make_view_inner::<8>(data),
-        9 => make_view_inner::<9>(data),
-        10 => make_view_inner::<10>(data),
-        11 => make_view_inner::<11>(data),
-        12 => make_view_inner::<12>(data),
+        0 => make_inlined_view::<0>(data),
+        1 => make_inlined_view::<1>(data),
+        2 => make_inlined_view::<2>(data),
+        3 => make_inlined_view::<3>(data),
+        4 => make_inlined_view::<4>(data),
+        5 => make_inlined_view::<5>(data),
+        6 => make_inlined_view::<6>(data),
+        7 => make_inlined_view::<7>(data),
+        8 => make_inlined_view::<8>(data),
+        9 => make_inlined_view::<9>(data),
+        10 => make_inlined_view::<10>(data),
+        11 => make_inlined_view::<11>(data),
+        12 => make_inlined_view::<12>(data),
+        // When string is longer than 12 bytes, it can't be inlined, we create a ByteView instead.
         _ => {
             let view = ByteView {
                 length: len as u32,
