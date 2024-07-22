@@ -420,23 +420,48 @@ pub type StringViewBuilder = GenericByteViewBuilder<StringViewType>;
 /// [`GenericByteViewBuilder::append_null`] as normal.
 pub type BinaryViewBuilder = GenericByteViewBuilder<BinaryViewType>;
 
+/// Creates a view from a fixed length input (the compiler can generate
+/// specialized code for this)
+fn make_view_inner<const LEN: usize>(data: &[u8]) -> u128 {
+    let mut view_buffer = [0; 16];
+    view_buffer[0..4].copy_from_slice(&(LEN as u32).to_le_bytes());
+    view_buffer[4..4 + LEN].copy_from_slice(&data[..LEN]);
+    u128::from_le_bytes(view_buffer)
+}
+
 /// Create a view based on the given data, block id and offset
-#[inline(always)]
+/// Note that the code below is carefully examined with x86_64 assembly code: https://godbolt.org/z/685YPsd5G
+/// The goal is to avoid calling into `ptr::copy_non_interleave`, which makes function call (i.e., not inlined),
+/// which slows down things.
+#[inline(never)]
 pub fn make_view(data: &[u8], block_id: u32, offset: u32) -> u128 {
-    let len = data.len() as u32;
-    if len <= 12 {
-        let mut view_buffer = [0; 16];
-        view_buffer[0..4].copy_from_slice(&len.to_le_bytes());
-        view_buffer[4..4 + data.len()].copy_from_slice(data);
-        u128::from_le_bytes(view_buffer)
-    } else {
-        let view = ByteView {
-            length: len,
-            prefix: u32::from_le_bytes(data[0..4].try_into().unwrap()),
-            buffer_index: block_id,
-            offset,
-        };
-        view.into()
+    let len = data.len();
+
+    // Generate specialized code for each potential small string length
+    // to improve performance
+    match len {
+        0 => make_view_inner::<0>(data),
+        1 => make_view_inner::<1>(data),
+        2 => make_view_inner::<2>(data),
+        3 => make_view_inner::<3>(data),
+        4 => make_view_inner::<4>(data),
+        5 => make_view_inner::<5>(data),
+        6 => make_view_inner::<6>(data),
+        7 => make_view_inner::<7>(data),
+        8 => make_view_inner::<8>(data),
+        9 => make_view_inner::<9>(data),
+        10 => make_view_inner::<10>(data),
+        11 => make_view_inner::<11>(data),
+        12 => make_view_inner::<12>(data),
+        _ => {
+            let view = ByteView {
+                length: len as u32,
+                prefix: u32::from_le_bytes(data[0..4].try_into().unwrap()),
+                buffer_index: block_id,
+                offset,
+            };
+            view.as_u128()
+        }
     }
 }
 

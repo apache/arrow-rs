@@ -287,7 +287,7 @@ fn build_plain_encoded_byte_array_page_iterator_inner(
                 };
                 if def_level == max_def_level {
                     let string_value = if short_string {
-                        format!("{k}{i}{j}")
+                        format!("test")
                     } else {
                         format!("Test value {k}, row group: {i}, page: {j}")
                     };
