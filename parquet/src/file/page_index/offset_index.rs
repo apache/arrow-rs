@@ -47,4 +47,13 @@ impl OffsetIndexMetaData {
     pub fn unencoded_byte_array_data_bytes(&self) -> Option<&Vec<i64>> {
         self.unencoded_byte_array_data_bytes.as_ref()
     }
+
+    // TODO: remove annotation after merge
+    #[allow(dead_code)]
+    pub(crate) fn to_thrift(&self) -> OffsetIndex {
+        OffsetIndex::new(
+            self.page_locations.clone(),
+            self.unencoded_byte_array_data_bytes.clone(),
+        )
+    }
 }
