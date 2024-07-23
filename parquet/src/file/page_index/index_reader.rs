@@ -85,6 +85,7 @@ pub fn read_columns_indexes<R: ChunkReader>(
 /// See [Page Index Documentation] for more details.
 ///
 /// [Page Index Documentation]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
+#[deprecated(since = "53.0.0", note = "Use read_offset_indexes")]
 pub fn read_pages_locations<R: ChunkReader>(
     reader: &R,
     chunks: &[ColumnChunkMetaData],

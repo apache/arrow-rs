@@ -20,9 +20,7 @@ use crate::errors::{ParquetError, Result};
 use crate::file::footer::{decode_footer, decode_metadata};
 use crate::file::metadata::ParquetMetaData;
 use crate::file::page_index::index::Index;
-use crate::file::page_index::index_reader::{
-    acc_range, decode_column_index, decode_page_locations,
-};
+use crate::file::page_index::index_reader::{acc_range, decode_column_index, decode_offset_index};
 use bytes::Bytes;
 use futures::future::BoxFuture;
 use futures::FutureExt;
@@ -179,9 +177,7 @@ impl<F: MetadataFetch> MetadataLoader<F> {
                     x.columns()
                         .iter()
                         .map(|c| match c.offset_index_range() {
-                            Some(r) => {
-                                decode_page_locations(&data[r.start - offset..r.end - offset])
-                            }
+                            Some(r) => decode_offset_index(&data[r.start - offset..r.end - offset]),
                             None => Err(general_err!("missing offset index")),
                         })
                         .collect::<Result<Vec<_>>>()
