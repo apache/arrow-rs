@@ -102,7 +102,7 @@ pub type ParquetOffsetIndex = Vec<Vec<Vec<PageLocation>>>;
 ///
 /// [`parquet.thrift`]: https://github.com/apache/parquet-format/blob/master/src/main/thrift/parquet.thrift
 /// [`parse_metadata`]: crate::file::footer::parse_metadata
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ParquetMetaData {
     /// File level metadata
     file_metadata: FileMetaData,
@@ -238,7 +238,7 @@ pub type FileMetaDataPtr = Arc<FileMetaData>;
 /// File level metadata for a Parquet file.
 ///
 /// Includes the version of the file, metadata, number of rows, schema, and column orders
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct FileMetaData {
     version: i32,
     num_rows: i64,
@@ -1291,7 +1291,11 @@ mod tests {
         let columns = schema_descr
             .columns()
             .iter()
-            .map(|column_descr| ColumnChunkMetaData::builder(column_descr.clone()).build())
+            .map(|column_descr| {
+                ColumnChunkMetaData::builder(column_descr.clone())
+                    .set_statistics(Statistics::new::<i32>(None, None, None, 0, false))
+                    .build()
+            })
             .collect::<Result<Vec<_>>>()
             .unwrap();
         let row_group_meta = RowGroupMetaData::builder(schema_descr.clone())
@@ -1317,11 +1321,31 @@ mod tests {
             num_rows,
             created_by,
             key_value_metadata,
-            schema_descr,
+            schema_descr.clone(),
             column_orders,
         );
-        let parquet_meta = ParquetMetaData::new(file_metadata.clone(), row_group_meta.clone());
-        let base_expected_size = 1320;
+
+        // Now, add in Exact Statistics
+        let columns_with_stats = schema_descr
+            .columns()
+            .iter()
+            .map(|column_descr| {
+                ColumnChunkMetaData::builder(column_descr.clone())
+                    .set_statistics(Statistics::new::<i32>(Some(0), Some(100), None, 0, false))
+                    .build()
+            })
+            .collect::<Result<Vec<_>>>()
+            .unwrap();
+
+        let row_group_meta_with_stats = RowGroupMetaData::builder(schema_descr)
+            .set_num_rows(1000)
+            .set_column_metadata(columns_with_stats)
+            .build()
+            .unwrap();
+        let row_group_meta_with_stats = vec![row_group_meta_with_stats];
+
+        let parquet_meta = ParquetMetaData::new(file_metadata.clone(), row_group_meta_with_stats);
+        let base_expected_size = 2024;
         assert_eq!(parquet_meta.memory_size(), base_expected_size);
 
         let mut column_index = ColumnIndexBuilder::new();

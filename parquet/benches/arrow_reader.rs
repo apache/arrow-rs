@@ -263,9 +263,10 @@ where
     InMemoryPageIterator::new(pages)
 }
 
-fn build_plain_encoded_byte_array_page_iterator(
+fn build_plain_encoded_byte_array_page_iterator_inner(
     column_desc: ColumnDescPtr,
     null_density: f32,
+    short_string: bool,
 ) -> impl PageIterator + Clone {
     let max_def_level = column_desc.max_def_level();
     let max_rep_level = column_desc.max_rep_level();
@@ -285,7 +286,11 @@ fn build_plain_encoded_byte_array_page_iterator(
                     max_def_level
                 };
                 if def_level == max_def_level {
-                    let string_value = format!("Test value {k}, row group: {i}, page: {j}");
+                    let string_value = if short_string {
+                        format!("{k}{i}{j}")
+                    } else {
+                        format!("Test value {k}, row group: {i}, page: {j}")
+                    };
                     values.push(parquet::data_type::ByteArray::from(string_value.as_str()));
                 }
                 def_levels.push(def_level);
@@ -301,6 +306,13 @@ fn build_plain_encoded_byte_array_page_iterator(
     }
 
     InMemoryPageIterator::new(pages)
+}
+
+fn build_plain_encoded_byte_array_page_iterator(
+    column_desc: ColumnDescPtr,
+    null_density: f32,
+) -> impl PageIterator + Clone {
+    build_plain_encoded_byte_array_page_iterator_inner(column_desc, null_density, false)
 }
 
 fn build_dictionary_encoded_string_page_iterator(
@@ -1065,6 +1077,27 @@ fn add_benches(c: &mut Criterion) {
     //==============================
 
     let mut group = c.benchmark_group("arrow_array_reader/BinaryViewArray");
+
+    // binary view, plain encoded, no NULLs, short string
+    let plain_byte_array_no_null_data = build_plain_encoded_byte_array_page_iterator_inner(
+        mandatory_binary_column_desc.clone(),
+        0.0,
+        true,
+    );
+
+    // Short strings should not be slower than long strings, however, as discussed in https://github.com/apache/arrow-rs/issues/6034,
+    // the current implementation is more than 2x slower.
+    // This benchmark tracks the performance of short strings so that we can optimize it.
+    group.bench_function("plain encoded, mandatory, no NULLs, short string", |b| {
+        b.iter(|| {
+            let array_reader = create_byte_view_array_reader(
+                plain_byte_array_no_null_data.clone(),
+                mandatory_binary_column_desc.clone(),
+            );
+            count = bench_array_reader(array_reader);
+        });
+        assert_eq!(count, EXPECTED_VALUE_COUNT);
+    });
 
     // binary view, plain encoded, no NULLs
     let plain_byte_array_no_null_data =
