@@ -176,6 +176,38 @@ impl<T: ParquetValueType> NativeIndex<T> {
             boundary_order: index.boundary_order,
         })
     }
+
+    pub(crate) fn to_thrift(&self) -> ColumnIndex {
+        let min_values = self
+            .indexes
+            .iter()
+            .map(|x| x.min_bytes().map(|x| x.to_vec()))
+            .collect::<Option<Vec<_>>>()
+            .unwrap_or_else(|| vec![vec![]; self.indexes.len()]);
+
+        let max_values = self
+            .indexes
+            .iter()
+            .map(|x| x.max_bytes().map(|x| x.to_vec()))
+            .collect::<Option<Vec<_>>>()
+            .unwrap_or_else(|| vec![vec![]; self.indexes.len()]);
+
+        let null_counts = self
+            .indexes
+            .iter()
+            .map(|x| x.null_count())
+            .collect::<Option<Vec<_>>>();
+
+        ColumnIndex::new(
+            self.indexes.iter().map(|x| x.min().is_none()).collect(),
+            min_values,
+            max_values,
+            self.boundary_order,
+            null_counts,
+            None,
+            None,
+        )
+    }
 }
 
 #[cfg(test)]
