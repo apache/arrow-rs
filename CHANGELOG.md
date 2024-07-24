@@ -25,25 +25,20 @@
 
 **Implemented enhancements:**
 
-- Faster min/max for string/binary view arrays [\#6088](https://github.com/apache/arrow-rs/issues/6088)
-- Support casting to/from Utf8View [\#6076](https://github.com/apache/arrow-rs/issues/6076)
-- Min/max support for String/BinaryViewArray [\#6052](https://github.com/apache/arrow-rs/issues/6052)
-- Proposal: `parquet 53.0.0` feature branch  [\#6050](https://github.com/apache/arrow-rs/issues/6050) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
-- Improve performance of constructing `ByteView`s for small strings [\#6034](https://github.com/apache/arrow-rs/issues/6034)
-- Release object store minor `0.10.2` ~or major `0.11.0`~ \(Mid July 2024\) [\#6022](https://github.com/apache/arrow-rs/issues/6022)
-- use GCE\_METADATA\_HOST and GCE\_METADATA\_IP env vars in object\_store GCP auth [\#6014](https://github.com/apache/arrow-rs/issues/6014)
-- `cargo doc` ci failed in latest `rust version 1.81.0-nightly (cc8da78a0 2024-07-04)` [\#6008](https://github.com/apache/arrow-rs/issues/6008)
-- Fast UTF-8 validation when reading StringViewArray from Parquet [\#5995](https://github.com/apache/arrow-rs/issues/5995)
-- Cleanup Empty Directories in LocalFilesystem  [\#5976](https://github.com/apache/arrow-rs/issues/5976)
-- Optimize StringView row decoding [\#5945](https://github.com/apache/arrow-rs/issues/5945)
-- Consider implementing some sort of `deduplicate` / `intern` functionality for StringView [\#5910](https://github.com/apache/arrow-rs/issues/5910)
-- Release arrow-rs / parquet minor version `52.1.0` [\#5905](https://github.com/apache/arrow-rs/issues/5905)
+- Faster min/max for string/binary view arrays [\#6088](https://github.com/apache/arrow-rs/issues/6088) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- Support casting to/from Utf8View [\#6076](https://github.com/apache/arrow-rs/issues/6076) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- Min/max support for String/BinaryViewArray [\#6052](https://github.com/apache/arrow-rs/issues/6052) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- Improve performance of constructing `ByteView`s for small strings [\#6034](https://github.com/apache/arrow-rs/issues/6034) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- `cargo doc` ci failed in latest `rust version 1.81.0-nightly (cc8da78a0 2024-07-04)` [\#6008](https://github.com/apache/arrow-rs/issues/6008) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] [[arrow-flight](https://github.com/apache/arrow-rs/labels/arrow-flight)]
+- Fast UTF-8 validation when reading StringViewArray from Parquet [\#5995](https://github.com/apache/arrow-rs/issues/5995) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
+- Optimize StringView row decoding [\#5945](https://github.com/apache/arrow-rs/issues/5945) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- Consider implementing some sort of `deduplicate` / `intern` functionality for StringView [\#5910](https://github.com/apache/arrow-rs/issues/5910) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
 
 **Fixed bugs:**
 
-- Invoke min/max function before check min/max value exists leads to program panic [\#6091](https://github.com/apache/arrow-rs/issues/6091) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
-- BinaryViewArray doesn't roundtrip a single `Some(&[])` through parquet [\#6086](https://github.com/apache/arrow-rs/issues/6086)
-- Parquet `ColumnIndex` for null columns is written even when statistics are disabled [\#6010](https://github.com/apache/arrow-rs/issues/6010)
+- Panic in `ParquetMetadata::memory_size` if no min/max set [\#6091](https://github.com/apache/arrow-rs/issues/6091) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
+- BinaryViewArray doesn't roundtrip a single `Some(&[])` through parquet [\#6086](https://github.com/apache/arrow-rs/issues/6086) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
+- Parquet `ColumnIndex` for null columns is written even when statistics are disabled [\#6010](https://github.com/apache/arrow-rs/issues/6010) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
 
 **Documentation updates:**
 
@@ -52,7 +47,7 @@
 
 **Closed issues:**
 
-- Potential performance improvements for reading Parquet to StringViewArray/BinaryViewArray [\#5904](https://github.com/apache/arrow-rs/issues/5904) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
+- Potential performance improvements for reading Parquet to StringViewArray/BinaryViewArray [\#5904](https://github.com/apache/arrow-rs/issues/5904) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
 
 **Merged pull requests:**
 
