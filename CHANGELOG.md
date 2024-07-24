@@ -32,7 +32,11 @@
 - `cargo doc` ci failed in latest `rust version 1.81.0-nightly (cc8da78a0 2024-07-04)` [\#6008](https://github.com/apache/arrow-rs/issues/6008) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] [[arrow-flight](https://github.com/apache/arrow-rs/labels/arrow-flight)]
 - Fast UTF-8 validation when reading StringViewArray from Parquet [\#5995](https://github.com/apache/arrow-rs/issues/5995) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
 - Optimize StringView row decoding [\#5945](https://github.com/apache/arrow-rs/issues/5945) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
-- Consider implementing some sort of `deduplicate` / `intern` functionality for StringView [\#5910](https://github.com/apache/arrow-rs/issues/5910) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- Implementing `deduplicate` / `intern` functionality for StringView [\#5910](https://github.com/apache/arrow-rs/issues/5910) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- Add `FlightSqlServiceClient::new_from_inner` [\#6003](https://github.com/apache/arrow-rs/pull/6003) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] [[arrow-flight](https://github.com/apache/arrow-rs/labels/arrow-flight)] ([lewiszlw](https://github.com/lewiszlw))
+- Complete `StringViewArray` and `BinaryViewArray` parquet decoder:  [\#6004](https://github.com/apache/arrow-rs/pull/6004) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([XiangpengHao](https://github.com/XiangpengHao))
+- Add begin/end\_transaction methods in FlightSqlServiceClient [\#6026](https://github.com/apache/arrow-rs/pull/6026) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] [[arrow-flight](https://github.com/apache/arrow-rs/labels/arrow-flight)] ([lewiszlw](https://github.com/lewiszlw))
+- Read Parquet statistics as arrow `Arrays`  [\#6046](https://github.com/apache/arrow-rs/pull/6046) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([efredine](https://github.com/efredine))
 
 **Fixed bugs:**
 
