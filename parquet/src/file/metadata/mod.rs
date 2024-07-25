@@ -1073,11 +1073,16 @@ impl ColumnIndexBuilder {
         self.null_counts.push(null_count);
     }
 
+    /// Append the given page-level histograms to the [`ColumnIndex`] histograms.
+    /// Does nothing if the `ColumnIndexBuilder` is not in the `valid` state.
     pub fn append_histograms(
         &mut self,
         repetition_level_histogram: &Option<Vec<i64>>,
         definition_level_histogram: &Option<Vec<i64>>,
     ) {
+        if !self.valid {
+            return;
+        }
         if let Some(ref rep_lvl_hist) = repetition_level_histogram {
             let hist = self.repetition_level_histograms.get_or_insert(Vec::new());
             hist.reserve(rep_lvl_hist.len());

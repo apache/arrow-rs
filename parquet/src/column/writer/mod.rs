@@ -834,15 +834,13 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
             }
         }
 
-        // update histograms
-        if self.column_index_builder.valid() {
-            self.column_index_builder.append_histograms(
-                &self.page_metrics.repetition_level_histogram,
-                &self.page_metrics.definition_level_histogram,
-            );
-        }
+        // Append page histograms to the `ColumnIndex` histograms
+        self.column_index_builder.append_histograms(
+            &self.page_metrics.repetition_level_histogram,
+            &self.page_metrics.definition_level_histogram,
+        );
 
-        // update the offset index
+        // Update the offset index
         self.offset_index_builder
             .append_row_count(self.page_metrics.num_buffered_rows as i64);
 
