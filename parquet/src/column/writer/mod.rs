@@ -298,7 +298,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
                 num_page_nulls: 0,
             },
             column_metrics: ColumnMetrics::<E::T>::new(),
-            column_index_builder: ColumnIndexBuilder::new(),
+            column_index_builder,
             offset_index_builder: OffsetIndexBuilder::new(),
             encodings,
             data_page_boundary_ascending: true,
