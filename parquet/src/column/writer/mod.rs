@@ -935,15 +935,9 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         // If data page offset is not set, then no pages have been written
         let data_page_offset = self.column_metrics.data_page_offset.unwrap_or(0) as i64;
 
-        let file_offset = match dict_page_offset {
-            Some(dict_offset) => dict_offset + total_compressed_size,
-            None => data_page_offset + total_compressed_size,
-        };
-
         let mut builder = ColumnChunkMetaData::builder(self.descr.clone())
             .set_compression(self.codec)
             .set_encodings(self.encodings.iter().cloned().collect())
-            .set_file_offset(file_offset)
             .set_total_compressed_size(total_compressed_size)
             .set_total_uncompressed_size(total_uncompressed_size)
             .set_num_values(num_values)
@@ -1017,8 +1011,6 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         }
 
         let metadata = builder.build()?;
-        self.page_writer.write_metadata(&metadata)?;
-
         Ok(metadata)
     }
 

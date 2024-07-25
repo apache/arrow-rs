@@ -874,6 +874,7 @@ impl ColumnChunkMetaDataBuilder {
     }
 
     /// Sets file offset in bytes.
+    #[deprecated(since = "53.0.0", note = "No longer used nor written")]
     pub fn set_file_offset(mut self, value: i64) -> Self {
         self.0.file_offset = value;
         self
@@ -1232,7 +1233,6 @@ mod tests {
         let col_metadata = ColumnChunkMetaData::builder(column_descr.clone())
             .set_encodings(vec![Encoding::PLAIN, Encoding::RLE])
             .set_file_path("file_path".to_owned())
-            .set_file_offset(100)
             .set_num_values(1000)
             .set_compression(Compression::SNAPPY)
             .set_total_compressed_size(2000)
