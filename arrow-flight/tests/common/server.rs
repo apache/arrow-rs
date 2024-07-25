@@ -38,6 +38,7 @@ pub struct TestFlightServer {
 
 impl TestFlightServer {
     /// Create a `TestFlightServer`
+    #[allow(dead_code)]
     pub fn new() -> Self {
         Self {
             state: Arc::new(Mutex::new(State::new())),
@@ -46,18 +47,21 @@ impl TestFlightServer {
 
     /// Return an [`FlightServiceServer`] that can be used with a
     /// [`Server`](tonic::transport::Server)
+    #[allow(dead_code)]
     pub fn service(&self) -> FlightServiceServer<TestFlightServer> {
         // wrap up tonic goop
         FlightServiceServer::new(self.clone())
     }
 
     /// Specify the response returned from the next call to handshake
+    #[allow(dead_code)]
     pub fn set_handshake_response(&self, response: Result<HandshakeResponse, Status>) {
         let mut state = self.state.lock().expect("mutex not poisoned");
         state.handshake_response.replace(response);
     }
 
     /// Take and return last handshake request sent to the server,
+    #[allow(dead_code)]
     pub fn take_handshake_request(&self) -> Option<HandshakeRequest> {
         self.state
             .lock()
@@ -67,12 +71,14 @@ impl TestFlightServer {
     }
 
     /// Specify the response returned from the next call to get_flight_info
+    #[allow(dead_code)]
     pub fn set_get_flight_info_response(&self, response: Result<FlightInfo, Status>) {
         let mut state = self.state.lock().expect("mutex not poisoned");
         state.get_flight_info_response.replace(response);
     }
 
     /// Take and return last get_flight_info request sent to the server,
+    #[allow(dead_code)]
     pub fn take_get_flight_info_request(&self) -> Option<FlightDescriptor> {
         self.state
             .lock()
@@ -82,12 +88,14 @@ impl TestFlightServer {
     }
 
     /// Specify the response returned from the next call to poll_flight_info
+    #[allow(dead_code)]
     pub fn set_poll_flight_info_response(&self, response: Result<PollInfo, Status>) {
         let mut state = self.state.lock().expect("mutex not poisoned");
         state.poll_flight_info_response.replace(response);
     }
 
     /// Take and return last poll_flight_info request sent to the server,
+    #[allow(dead_code)]
     pub fn take_poll_flight_info_request(&self) -> Option<FlightDescriptor> {
         self.state
             .lock()
@@ -97,12 +105,14 @@ impl TestFlightServer {
     }
 
     /// Specify the response returned from the next call to `do_get`
+    #[allow(dead_code)]
     pub fn set_do_get_response(&self, response: Vec<Result<RecordBatch, Status>>) {
         let mut state = self.state.lock().expect("mutex not poisoned");
         state.do_get_response.replace(response);
     }
 
     /// Take and return last do_get request send to the server,
+    #[allow(dead_code)]
     pub fn take_do_get_request(&self) -> Option<Ticket> {
         self.state
             .lock()
@@ -112,12 +122,14 @@ impl TestFlightServer {
     }
 
     /// Specify the response returned from the next call to `do_put`
+    #[allow(dead_code)]
     pub fn set_do_put_response(&self, response: Vec<Result<PutResult, Status>>) {
         let mut state = self.state.lock().expect("mutex not poisoned");
         state.do_put_response.replace(response);
     }
 
     /// Take and return last do_put request sent to the server,
+    #[allow(dead_code)]
     pub fn take_do_put_request(&self) -> Option<Vec<FlightData>> {
         self.state
             .lock()
@@ -127,12 +139,14 @@ impl TestFlightServer {
     }
 
     /// Specify the response returned from the next call to `do_exchange`
+    #[allow(dead_code)]
     pub fn set_do_exchange_response(&self, response: Vec<Result<FlightData, Status>>) {
         let mut state = self.state.lock().expect("mutex not poisoned");
         state.do_exchange_response.replace(response);
     }
 
     /// Take and return last do_exchange request send to the server,
+    #[allow(dead_code)]
     pub fn take_do_exchange_request(&self) -> Option<Vec<FlightData>> {
         self.state
             .lock()
@@ -142,12 +156,14 @@ impl TestFlightServer {
     }
 
     /// Specify the response returned from the next call to `list_flights`
+    #[allow(dead_code)]
     pub fn set_list_flights_response(&self, response: Vec<Result<FlightInfo, Status>>) {
         let mut state = self.state.lock().expect("mutex not poisoned");
         state.list_flights_response.replace(response);
     }
 
     /// Take and return last list_flights request send to the server,
+    #[allow(dead_code)]
     pub fn take_list_flights_request(&self) -> Option<Criteria> {
         self.state
             .lock()
@@ -157,12 +173,14 @@ impl TestFlightServer {
     }
 
     /// Specify the response returned from the next call to `get_schema`
+    #[allow(dead_code)]
     pub fn set_get_schema_response(&self, response: Result<Schema, Status>) {
         let mut state = self.state.lock().expect("mutex not poisoned");
         state.get_schema_response.replace(response);
     }
 
     /// Take and return last get_schema request send to the server,
+    #[allow(dead_code)]
     pub fn take_get_schema_request(&self) -> Option<FlightDescriptor> {
         self.state
             .lock()
@@ -172,12 +190,14 @@ impl TestFlightServer {
     }
 
     /// Specify the response returned from the next call to `list_actions`
+    #[allow(dead_code)]
     pub fn set_list_actions_response(&self, response: Vec<Result<ActionType, Status>>) {
         let mut state = self.state.lock().expect("mutex not poisoned");
         state.list_actions_response.replace(response);
     }
 
     /// Take and return last list_actions request send to the server,
+    #[allow(dead_code)]
     pub fn take_list_actions_request(&self) -> Option<Empty> {
         self.state
             .lock()
@@ -187,12 +207,14 @@ impl TestFlightServer {
     }
 
     /// Specify the response returned from the next call to `do_action`
+    #[allow(dead_code)]
     pub fn set_do_action_response(&self, response: Vec<Result<arrow_flight::Result, Status>>) {
         let mut state = self.state.lock().expect("mutex not poisoned");
         state.do_action_response.replace(response);
     }
 
     /// Take and return last do_action request send to the server,
+    #[allow(dead_code)]
     pub fn take_do_action_request(&self) -> Option<Action> {
         self.state
             .lock()
@@ -202,6 +224,7 @@ impl TestFlightServer {
     }
 
     /// Returns the last metadata from a request received by the server
+    #[allow(dead_code)]
     pub fn take_last_request_metadata(&self) -> Option<MetadataMap> {
         self.state
             .lock()

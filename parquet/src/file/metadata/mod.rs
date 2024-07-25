@@ -15,7 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Parquet metadata structures
+//! Parquet metadata API
+//!
+//! Most users should use these structures to interact with Parquet metadata.
+//! The [crate::format] module contains lower level structures generated from the
+//! Parquet thrift definition.
 //!
 //! * [`ParquetMetaData`]: Top level metadata container, read from the Parquet
 //!   file footer.
@@ -51,7 +55,12 @@ use crate::schema::types::{
     Type as SchemaType,
 };
 
-/// [`Index`] for each row group of each column.
+/// Page level statistics for each column chunk of each row group.
+///
+/// This structure is an in-memory representation of multiple [`ColumnIndex`]
+/// structures in a parquet file footer, as described in the Parquet [PageIndex
+/// documentation]. Each [`Index`] holds statistics about all the pages in a
+/// particular column chunk.
 ///
 /// `column_index[row_group_number][column_number]` holds the
 /// [`Index`] corresponding to column `column_number` of row group
@@ -59,16 +68,20 @@ use crate::schema::types::{
 ///
 /// For example `column_index[2][3]` holds the [`Index`] for the fourth
 /// column in the third row group of the parquet file.
+///
+/// [PageIndex documentation]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
 pub type ParquetColumnIndex = Vec<Vec<Index>>;
 
-/// [`OffsetIndexMetaData`] for each row group of each column.
+/// [`OffsetIndexMetaData`] for each data page of each row group of each column
+///
+/// This structure is the parsed representation of the [`OffsetIndex`] from the
+/// Parquet file footer, as described in the Parquet [PageIndex documentation].
 ///
 /// `offset_index[row_group_number][column_number]` holds
 /// the [`OffsetIndexMetaData`] corresponding to column
 /// `column_number`of row group `row_group_number`.
 ///
-/// For example `offset_index[2][3]` holds the [`OffsetIndexMetaData`] for
-/// the fourth column in the third row group of the parquet file.
+/// [PageIndex documentation]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
 pub type ParquetOffsetIndex = Vec<Vec<OffsetIndexMetaData>>;
 
 /// Parsed metadata for a single Parquet file
@@ -86,7 +99,7 @@ pub type ParquetOffsetIndex = Vec<Vec<OffsetIndexMetaData>>;
 ///
 /// [`parquet.thrift`]: https://github.com/apache/parquet-format/blob/master/src/main/thrift/parquet.thrift
 /// [`parse_metadata`]: crate::file::footer::parse_metadata
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ParquetMetaData {
     /// File level metadata
     file_metadata: FileMetaData,
@@ -186,11 +199,11 @@ impl ParquetMetaData {
     /// 1. Includes size of self
     ///
     /// 2. Includes heap memory for sub fields such as [`FileMetaData`] and
-    /// [`RowGroupMetaData`].
+    ///    [`RowGroupMetaData`].
     ///
     /// 3. Includes memory from shared pointers (e.g. [`SchemaDescPtr`]). This
-    /// means `memory_size` will over estimate the memory size if such pointers
-    /// are shared.
+    ///    means `memory_size` will over estimate the memory size if such pointers
+    ///    are shared.
     ///
     /// 4. Does not include any allocator overheads
     pub fn memory_size(&self) -> usize {
@@ -222,7 +235,7 @@ pub type FileMetaDataPtr = Arc<FileMetaData>;
 /// File level metadata for a Parquet file.
 ///
 /// Includes the version of the file, metadata, number of rows, schema, and column orders
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct FileMetaData {
     version: i32,
     num_rows: i64,
@@ -1027,7 +1040,9 @@ impl ColumnChunkMetaDataBuilder {
     }
 }
 
-/// Builder for column index
+/// Builder for Parquet [`ColumnIndex`], part of the Parquet [PageIndex]
+///
+/// [PageIndex]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
 pub struct ColumnIndexBuilder {
     null_pages: Vec<bool>,
     min_values: Vec<Vec<u8>>,
@@ -1036,7 +1051,13 @@ pub struct ColumnIndexBuilder {
     boundary_order: BoundaryOrder,
     repetition_level_histograms: Option<Vec<i64>>,
     definition_level_histograms: Option<Vec<i64>>,
-    // If one page can't get build index, need to ignore all index in this column
+    /// Is the information in the builder valid?
+    ///
+    /// Set to `false` if any entry in the page doesn't have statistics for
+    /// some reason, so statistics for that page won't be written to the file.
+    /// This might happen if the page is entirely null, or
+    /// is a floating point column without any non-nan values
+    /// e.g. <https://github.com/apache/parquet-format/pull/196>
     valid: bool,
 }
 
@@ -1060,6 +1081,7 @@ impl ColumnIndexBuilder {
         }
     }
 
+    /// Append statistics for the next page
     pub fn append(
         &mut self,
         null_page: bool,
@@ -1099,15 +1121,19 @@ impl ColumnIndexBuilder {
         self.boundary_order = boundary_order;
     }
 
+    /// Mark this column index as invalid
     pub fn to_invalid(&mut self) {
         self.valid = false;
     }
 
+    /// Is the information in the builder valid?
     pub fn valid(&self) -> bool {
         self.valid
     }
 
     /// Build and get the thrift metadata of column index
+    ///
+    /// Note: callers should check [`Self::valid`] before calling this method
     pub fn build_to_thrift(self) -> ColumnIndex {
         ColumnIndex::new(
             self.null_pages,
@@ -1121,7 +1147,9 @@ impl ColumnIndexBuilder {
     }
 }
 
-/// Builder for offset index
+/// Builder for offset index, part of the Parquet [PageIndex].
+///
+/// [PageIndex]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
 pub struct OffsetIndexBuilder {
     offset_array: Vec<i64>,
     compressed_page_size_array: Vec<i32>,
@@ -1389,7 +1417,11 @@ mod tests {
         let columns = schema_descr
             .columns()
             .iter()
-            .map(|column_descr| ColumnChunkMetaData::builder(column_descr.clone()).build())
+            .map(|column_descr| {
+                ColumnChunkMetaData::builder(column_descr.clone())
+                    .set_statistics(Statistics::new::<i32>(None, None, None, 0, false))
+                    .build()
+            })
             .collect::<Result<Vec<_>>>()
             .unwrap();
         let row_group_meta = RowGroupMetaData::builder(schema_descr.clone())
@@ -1415,11 +1447,32 @@ mod tests {
             num_rows,
             created_by,
             key_value_metadata,
-            schema_descr,
+            schema_descr.clone(),
             column_orders,
         );
-        let parquet_meta = ParquetMetaData::new(file_metadata.clone(), row_group_meta.clone());
-        let base_expected_size = 1448;
+
+        // Now, add in Exact Statistics
+        let columns_with_stats = schema_descr
+            .columns()
+            .iter()
+            .map(|column_descr| {
+                ColumnChunkMetaData::builder(column_descr.clone())
+                    .set_statistics(Statistics::new::<i32>(Some(0), Some(100), None, 0, false))
+                    .build()
+            })
+            .collect::<Result<Vec<_>>>()
+            .unwrap();
+
+        let row_group_meta_with_stats = RowGroupMetaData::builder(schema_descr)
+            .set_num_rows(1000)
+            .set_column_metadata(columns_with_stats)
+            .build()
+            .unwrap();
+        let row_group_meta_with_stats = vec![row_group_meta_with_stats];
+
+        let parquet_meta = ParquetMetaData::new(file_metadata.clone(), row_group_meta_with_stats);
+        let base_expected_size = 2280;
+
         assert_eq!(parquet_meta.memory_size(), base_expected_size);
 
         let mut column_index = ColumnIndexBuilder::new();
