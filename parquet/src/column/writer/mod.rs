@@ -194,17 +194,6 @@ fn new_histogram(max_level: i16) -> Option<Vec<i64>> {
     }
 }
 
-/// Sum `page_histogram` into `chunk_histogram`
-fn update_histogram(chunk_histogram: &mut Option<Vec<i64>>, page_histogram: &Option<Vec<i64>>) {
-    if page_histogram.is_some() && chunk_histogram.is_some() {
-        let chunk_hist = chunk_histogram.as_mut().unwrap();
-        let page_hist = page_histogram.as_ref().unwrap();
-        for i in 0..page_hist.len() {
-            chunk_hist[i] += page_hist[i]
-        }
-    }
-}
-
 // Metrics per page
 #[derive(Default)]
 struct PageMetrics {
@@ -306,14 +295,25 @@ impl<T: Default> ColumnMetrics<T> {
         self
     }
 
+    /// Sum `page_histogram` into `chunk_histogram`
+    fn update_histogram(chunk_histogram: &mut Option<Vec<i64>>, page_histogram: &Option<Vec<i64>>) {
+        if page_histogram.is_some() && chunk_histogram.is_some() {
+            let chunk_hist = chunk_histogram.as_mut().unwrap();
+            let page_hist = page_histogram.as_ref().unwrap();
+            for i in 0..page_hist.len() {
+                chunk_hist[i] += page_hist[i]
+            }
+        }
+    }
+
     /// Sum the provided PageMetrics histograms into the chunk histograms. Does nothing if
     /// page histograms are not initialized.
     fn update_from_page_metrics(&mut self, page_metrics: &PageMetrics) {
-        update_histogram(
+        ColumnMetrics::<T>::update_histogram(
             &mut self.definition_level_histogram,
             &page_metrics.definition_level_histogram,
         );
-        update_histogram(
+        ColumnMetrics::<T>::update_histogram(
             &mut self.repetition_level_histogram,
             &page_metrics.repetition_level_histogram,
         );
