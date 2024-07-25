@@ -138,17 +138,24 @@ fn equal_range(
 }
 
 /// Logically compares two [ArrayData].
+///
 /// Two arrays are logically equal if and only if:
 /// * their data types are equal
 /// * their lengths are equal
 /// * their null counts are equal
 /// * their null bitmaps are equal
 /// * each of their items are equal
-/// two items are equal when their in-memory representation is physically equal (i.e. same bit content).
+///
+/// Two items are equal when their in-memory representation is physically equal
+/// (i.e. has the same bit content).
+///
 /// The physical comparison depend on the data type.
+///
 /// # Panics
-/// This function may panic whenever any of the [ArrayData] does not follow the Arrow specification.
-/// (e.g. wrong number of buffers, buffer `len` does not correspond to the declared `len`)
+///
+/// This function may panic whenever any of the [ArrayData] does not follow the
+/// Arrow specification. (e.g. wrong number of buffers, buffer `len` does not
+/// correspond to the declared `len`)
 pub fn equal(lhs: &ArrayData, rhs: &ArrayData) -> bool {
     utils::base_equal(lhs, rhs)
         && lhs.null_count() == rhs.null_count()
