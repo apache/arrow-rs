@@ -38,11 +38,14 @@ use futures::{ready, stream::BoxStream, Stream, StreamExt};
 /// several have already been successfully produced.
 ///
 /// # Caveats
-///   1. When [`DictionaryHandling`] is [`DictionaryHandling::Hydrate`], [`DictionaryArray`](arrow_array::array::DictionaryArray)s
-///   are converted to their underlying types prior to transport.
-///   When [`DictionaryHandling`] is [`DictionaryHandling::Resend`], Dictionary [`FlightData`] is sent with every
-///   [`RecordBatch`] that contains a [`DictionaryArray`](arrow_array::array::DictionaryArray).
-///   See <https://github.com/apache/arrow-rs/issues/3389>.
+/// 1. When [`DictionaryHandling`] is [`DictionaryHandling::Hydrate`],
+///    [`DictionaryArray`]s are converted to their underlying types prior to
+///    transport.
+///    When [`DictionaryHandling`] is [`DictionaryHandling::Resend`], Dictionary [`FlightData`] is sent with every
+///    [`RecordBatch`] that contains a [`DictionaryArray`](arrow_array::array::DictionaryArray).
+///    See <https://github.com/apache/arrow-rs/issues/3389>.
+///
+/// [`DictionaryArray`]: arrow_array::array::DictionaryArray
 ///
 /// # Example
 /// ```no_run
