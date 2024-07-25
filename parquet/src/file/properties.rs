@@ -566,8 +566,8 @@ impl WriterPropertiesBuilder {
     /// * If the bloom filter is enabled previously then it is a no-op.
     ///
     /// * If the bloom filter is not enabled, default values for ndv and fpp
-    /// value are used used. See [`set_bloom_filter_ndv`] and
-    /// [`set_bloom_filter_fpp`] to further adjust the ndv and fpp.
+    ///   value are used used. See [`set_bloom_filter_ndv`] and
+    ///   [`set_bloom_filter_fpp`] to further adjust the ndv and fpp.
     ///
     /// [`set_bloom_filter_ndv`]: Self::set_bloom_filter_ndv
     /// [`set_bloom_filter_fpp`]: Self::set_bloom_filter_fpp

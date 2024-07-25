@@ -1941,9 +1941,13 @@ impl crate::thrift::TSerializable for LogicalType {
 //
 
 /// Represents a element inside a schema definition.
-///  - if it is a group (inner node) then type is undefined and num_children is defined
-///  - if it is a primitive type (leaf) then type is defined and num_children is undefined
-/// the nodes are listed in depth first traversal order.
+///
+///  - if it is a group (inner node) then type is undefined and num_children
+///    is defined
+///  - if it is a primitive type (leaf) then type is defined and
+///    num_children is undefined
+///
+/// Note the  nodes are listed in depth first traversal order.
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct SchemaElement {
   /// Data type for this field. Not set if the current element is a non-leaf node

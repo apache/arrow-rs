@@ -568,28 +568,27 @@ fn timestamp_to_date32<T: ArrowTimestampType>(
 /// Accepts [`CastOptions`] to specify cast behavior. See also [`cast()`].
 ///
 /// # Behavior
-/// * Boolean to Utf8: `true` => '1', `false` => `0`
-/// * Utf8 to boolean: `true`, `yes`, `on`, `1` => `true`, `false`, `no`, `off`, `0` => `false`,
+/// * `Boolean` to `Utf8`: `true` => '1', `false` => `0`
+/// * `Utf8` to `Boolean`: `true`, `yes`, `on`, `1` => `true`, `false`, `no`, `off`, `0` => `false`,
 ///   short variants are accepted, other strings return null or error
-/// * Utf8 to numeric: strings that can't be parsed to numbers return null, float strings
+/// * `Utf8` to Numeric: strings that can't be parsed to numbers return null, float strings
 ///   in integer casts return null
-/// * Numeric to boolean: 0 returns `false`, any other value returns `true`
-/// * List to List: the underlying data type is cast
-/// * List to FixedSizeList: the underlying data type is cast. If safe is true and a list element
-/// has the wrong length it will be replaced with NULL, otherwise an error will be returned
-/// * Primitive to List: a list array with 1 value per slot is created
-/// * Date32 and Date64: precision lost when going to higher interval
-/// * Time32 and Time64: precision lost when going to higher interval
-/// * Timestamp and Date{32|64}: precision lost when going to higher interval
-/// * Temporal to/from backing primitive: zero-copy with data type change
-/// * Casting from `float32/float64` to `Decimal(precision, scale)` rounds to the `scale` decimals
-///   (i.e. casting `6.4999` to Decimal(10, 1) becomes `6.5`). Prior to  version `26.0.0`,
-///   casting would truncate instead (i.e. outputs `6.4` instead)
+/// * Numeric to `Boolean`: 0 returns `false`, any other value returns `true`
+/// * `List` to `List`: the underlying data type is cast
+/// * `List` to `FixedSizeList`: the underlying data type is cast. If safe is true and a list element
+///   has the wrong length it will be replaced with NULL, otherwise an error will be returned
+/// * Primitive to `List`: a list array with 1 value per slot is created
+/// * `Date32` and `Date64`: precision lost when going to higher interval
+/// * `Time32 and `Time64`: precision lost when going to higher interval
+/// * `Timestamp` and `Date{32|64}`: precision lost when going to higher interval
+/// * Temporal to/from backing Primitive: zero-copy with data type change
+/// * `Float32/Float64` to `Decimal(precision, scale)` rounds to the `scale` decimals
+///   (i.e. casting `6.4999` to `Decimal(10, 1)` becomes `6.5`).
 ///
 /// Unsupported Casts (check with `can_cast_types` before calling):
 /// * To or from `StructArray`
-/// * List to primitive
-/// * Interval and duration
+/// * `List` to `Primitive`
+/// * `Interval` and `Duration`
 ///
 /// # Timestamps and Timezones
 ///

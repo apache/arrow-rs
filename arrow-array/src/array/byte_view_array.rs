@@ -66,7 +66,7 @@ use super::ByteArrayType;
 /// * Strings with length <= 12 are stored directly in the view.
 ///
 /// * Strings with length > 12: The first four bytes are stored inline in the
-/// view and the entire string is stored in one of the buffers.
+///   view and the entire string is stored in one of the buffers.
 ///
 /// Unlike [`GenericByteArray`], there are no constraints on the offsets other
 /// than they must point into a valid buffer. However, they can be out of order,

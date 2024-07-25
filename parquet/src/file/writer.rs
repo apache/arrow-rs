@@ -449,10 +449,11 @@ impl<W: Write + Send> SerializedFileWriter<W> {
 ///
 /// All columns should be written sequentially; the main workflow is:
 /// - Request the next column using `next_column` method - this will return `None` if no
-/// more columns are available to write.
+///   more columns are available to write.
 /// - Once done writing a column, close column writer with `close`
-/// - Once all columns have been written, close row group writer with `close` method -
-/// it will return row group metadata and is no-op on already closed row group.
+/// - Once all columns have been written, close row group writer with `close`
+///   method. THe close method will return row group metadata and is no-op
+///   on already closed row group.
 pub struct SerializedRowGroupWriter<'a, W: Write> {
     descr: SchemaDescPtr,
     props: WriterPropertiesPtr,
