@@ -201,7 +201,8 @@ impl<T: ByteViewType + ?Sized> GenericByteViewBuilder<T> {
 
     /// Returns the value at the given index
     /// Useful if we want to know what value has been inserted to the builder
-    fn get_value(&self, index: usize) -> &[u8] {
+    /// The index has to be smaller than `self.len()`, otherwise it will panic
+    pub fn get_value(&self, index: usize) -> &[u8] {
         let view = self.views_builder.as_slice().get(index).unwrap();
         let len = *view as u32;
         if len <= 12 {
@@ -337,6 +338,19 @@ impl<T: ByteViewType + ?Sized> GenericByteViewBuilder<T> {
     pub fn validity_slice(&self) -> Option<&[u8]> {
         self.null_buffer_builder.as_slice()
     }
+
+    /// Return the allocated size of this builder in bytes, useful for memory accounting.
+    pub fn allocated_size(&self) -> usize {
+        let views = self.views_builder.capacity() * std::mem::size_of::<u128>();
+        let null = self.null_buffer_builder.allocated_size();
+        let buffer_size = self.completed.iter().map(|b| b.capacity()).sum::<usize>();
+        let in_progress = self.in_progress.capacity();
+        let tracker = match &self.string_tracker {
+            Some((ht, _)) => ht.capacity() * std::mem::size_of::<usize>(),
+            None => 0,
+        };
+        buffer_size + in_progress + tracker + views + null
+    }
 }
 
 impl<T: ByteViewType + ?Sized> Default for GenericByteViewBuilder<T> {
@@ -406,23 +420,49 @@ pub type StringViewBuilder = GenericByteViewBuilder<StringViewType>;
 /// [`GenericByteViewBuilder::append_null`] as normal.
 pub type BinaryViewBuilder = GenericByteViewBuilder<BinaryViewType>;
 
+/// Creates a view from a fixed length input (the compiler can generate
+/// specialized code for this)
+fn make_inlined_view<const LEN: usize>(data: &[u8]) -> u128 {
+    let mut view_buffer = [0; 16];
+    view_buffer[0..4].copy_from_slice(&(LEN as u32).to_le_bytes());
+    view_buffer[4..4 + LEN].copy_from_slice(&data[..LEN]);
+    u128::from_le_bytes(view_buffer)
+}
+
 /// Create a view based on the given data, block id and offset
-#[inline(always)]
+/// Note that the code below is carefully examined with x86_64 assembly code: <https://godbolt.org/z/685YPsd5G>
+/// The goal is to avoid calling into `ptr::copy_non_interleave`, which makes function call (i.e., not inlined),
+/// which slows down things.
+#[inline(never)]
 pub fn make_view(data: &[u8], block_id: u32, offset: u32) -> u128 {
-    let len = data.len() as u32;
-    if len <= 12 {
-        let mut view_buffer = [0; 16];
-        view_buffer[0..4].copy_from_slice(&len.to_le_bytes());
-        view_buffer[4..4 + data.len()].copy_from_slice(data);
-        u128::from_le_bytes(view_buffer)
-    } else {
-        let view = ByteView {
-            length: len,
-            prefix: u32::from_le_bytes(data[0..4].try_into().unwrap()),
-            buffer_index: block_id,
-            offset,
-        };
-        view.into()
+    let len = data.len();
+
+    // Generate specialized code for each potential small string length
+    // to improve performance
+    match len {
+        0 => make_inlined_view::<0>(data),
+        1 => make_inlined_view::<1>(data),
+        2 => make_inlined_view::<2>(data),
+        3 => make_inlined_view::<3>(data),
+        4 => make_inlined_view::<4>(data),
+        5 => make_inlined_view::<5>(data),
+        6 => make_inlined_view::<6>(data),
+        7 => make_inlined_view::<7>(data),
+        8 => make_inlined_view::<8>(data),
+        9 => make_inlined_view::<9>(data),
+        10 => make_inlined_view::<10>(data),
+        11 => make_inlined_view::<11>(data),
+        12 => make_inlined_view::<12>(data),
+        // When string is longer than 12 bytes, it can't be inlined, we create a ByteView instead.
+        _ => {
+            let view = ByteView {
+                length: len as u32,
+                prefix: u32::from_le_bytes(data[0..4].try_into().unwrap()),
+                buffer_index: block_id,
+                offset,
+            };
+            view.as_u128()
+        }
     }
 }
 

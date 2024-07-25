@@ -42,6 +42,7 @@ use crate::schema::types::SchemaDescriptor;
 
 mod filter;
 mod selection;
+pub mod statistics;
 
 /// Builder for constructing parquet readers into arrow.
 ///
@@ -352,11 +353,11 @@ impl ArrowReaderOptions {
 /// This structure allows
 ///
 /// 1. Loading metadata for a file once and then using that same metadata to
-/// construct multiple separate readers, for example, to distribute readers
-/// across multiple threads
+///    construct multiple separate readers, for example, to distribute readers
+///    across multiple threads
 ///
 /// 2. Using a cached copy of the [`ParquetMetadata`] rather than reading it
-/// from the file each time a reader is constructed.
+///    from the file each time a reader is constructed.
 ///
 /// [`ParquetMetadata`]: crate::file::metadata::ParquetMetaData
 #[derive(Debug, Clone)]
@@ -552,10 +553,10 @@ impl<T: ChunkReader + 'static> ParquetRecordBatchReaderBuilder<T> {
     /// This interface allows:
     ///
     /// 1. Loading metadata once and using it to create multiple builders with
-    /// potentially different settings or run on different threads
+    ///    potentially different settings or run on different threads
     ///
     /// 2. Using a cached copy of the metadata rather than re-reading it from the
-    /// file each time a reader is constructed.
+    ///    file each time a reader is constructed.
     ///
     /// See the docs on [`ArrowReaderMetadata`] for more details
     ///

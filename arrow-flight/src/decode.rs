@@ -225,8 +225,8 @@ impl futures::Stream for FlightRecordBatchStream {
 /// Example usecases
 ///
 /// 1. Using this low level stream it is possible to receive a steam
-/// of RecordBatches in FlightData that have different schemas by
-/// handling multiple schema messages separately.
+///    of RecordBatches in FlightData that have different schemas by
+///    handling multiple schema messages separately.
 pub struct FlightDataDecoder {
     /// Underlying data stream
     response: BoxStream<'static, Result<FlightData>>,

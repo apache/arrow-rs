@@ -36,12 +36,13 @@ pub trait DataPageBuilder {
     fn consume(self) -> Page;
 }
 
-/// A utility struct for building data pages (v1 or v2). Callers must call:
-///   - add_rep_levels()
-///   - add_def_levels()
-///   - add_values() for normal data page / add_indices() for dictionary data page
-///   - consume()
-/// in order to populate and obtain a data page.
+/// A utility struct for building data pages (v1 or v2). Callers must call the
+/// following functions in order to populate and obtain a data page:
+///
+/// - add_rep_levels()
+/// - add_def_levels()
+/// - add_values() for normal data page / add_indices() for dictionary data page
+/// - consume()
 pub struct DataPageBuilderImpl {
     encoding: Option<Encoding>,
     num_values: u32,

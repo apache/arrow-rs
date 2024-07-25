@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Low level APIs for reading raw parquet data.
+//! APIs for reading parquet data.
 //!
 //! Provides access to file and row group readers and writers, record API, metadata, etc.
 //!

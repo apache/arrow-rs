@@ -24,7 +24,9 @@ use arrow_buffer::{ArrowNativeType, NullBuffer};
 use arrow_data::bit_iterator::try_for_each_valid_idx;
 use arrow_schema::*;
 use std::borrow::BorrowMut;
+use std::cmp::{self, Ordering};
 use std::ops::{BitAnd, BitOr, BitXor};
+use types::ByteViewType;
 
 /// An accumulator for primitive numeric values.
 trait NumericAccumulator<T: ArrowNativeTypeOp>: Copy + Default {
@@ -371,11 +373,26 @@ pub fn max_boolean(array: &BooleanArray) -> Option<bool> {
     }
 
     // Note the max bool is true (1), so short circuit as soon as we see it
-    array
-        .iter()
-        .find(|&b| b == Some(true))
-        .flatten()
-        .or(Some(false))
+    match array.nulls() {
+        None => array
+            .values()
+            .bit_chunks()
+            .iter_padded()
+            // We found a true if any bit is set
+            .map(|x| x != 0)
+            .find(|b| *b)
+            .or(Some(false)),
+        Some(nulls) => {
+            let validity_chunks = nulls.inner().bit_chunks().iter_padded();
+            let value_chunks = array.values().bit_chunks().iter_padded();
+            value_chunks
+                .zip(validity_chunks)
+                // We found a true if the value bit is 1, AND the validity bit is 1 for any bits in the chunk
+                .map(|(value_bits, validity_bits)| (value_bits & validity_bits) != 0)
+                .find(|b| *b)
+                .or(Some(false))
+        }
+    }
 }
 
 /// Helper to compute min/max of [`ArrayAccessor`].
@@ -410,9 +427,55 @@ where
     }
 }
 
+/// Helper to compute min/max of [`GenericByteViewArray<T>`].
+/// The specialized min/max leverages the inlined values to compare the byte views.
+/// `swap_cond` is the condition to swap current min/max with the new value.
+/// For example, `Ordering::Greater` for max and `Ordering::Less` for min.
+fn min_max_view_helper<T: ByteViewType>(
+    array: &GenericByteViewArray<T>,
+    swap_cond: cmp::Ordering,
+) -> Option<&T::Native> {
+    let null_count = array.null_count();
+    if null_count == array.len() {
+        None
+    } else if null_count == 0 {
+        let target_idx = (0..array.len()).reduce(|acc, item| {
+            // SAFETY:  array's length is correct so item is within bounds
+            let cmp = unsafe { GenericByteViewArray::compare_unchecked(array, item, array, acc) };
+            if cmp == swap_cond {
+                item
+            } else {
+                acc
+            }
+        });
+        // SAFETY: idx came from valid range `0..array.len()`
+        unsafe { target_idx.map(|idx| array.value_unchecked(idx)) }
+    } else {
+        let nulls = array.nulls().unwrap();
+
+        let target_idx = nulls.valid_indices().reduce(|acc_idx, idx| {
+            let cmp =
+                unsafe { GenericByteViewArray::compare_unchecked(array, idx, array, acc_idx) };
+            if cmp == swap_cond {
+                idx
+            } else {
+                acc_idx
+            }
+        });
+
+        // SAFETY: idx came from valid range `0..array.len()`
+        unsafe { target_idx.map(|idx| array.value_unchecked(idx)) }
+    }
+}
+
 /// Returns the maximum value in the binary array, according to the natural order.
 pub fn max_binary<T: OffsetSizeTrait>(array: &GenericBinaryArray<T>) -> Option<&[u8]> {
     min_max_helper::<&[u8], _, _>(array, |a, b| *a < *b)
+}
+
+/// Returns the maximum value in the binary view array, according to the natural order.
+pub fn max_binary_view(array: &BinaryViewArray) -> Option<&[u8]> {
+    min_max_view_helper(array, Ordering::Greater)
 }
 
 /// Returns the minimum value in the binary array, according to the natural order.
@@ -420,14 +483,29 @@ pub fn min_binary<T: OffsetSizeTrait>(array: &GenericBinaryArray<T>) -> Option<&
     min_max_helper::<&[u8], _, _>(array, |a, b| *a > *b)
 }
 
+/// Returns the minimum value in the binary view array, according to the natural order.
+pub fn min_binary_view(array: &BinaryViewArray) -> Option<&[u8]> {
+    min_max_view_helper(array, Ordering::Less)
+}
+
 /// Returns the maximum value in the string array, according to the natural order.
 pub fn max_string<T: OffsetSizeTrait>(array: &GenericStringArray<T>) -> Option<&str> {
     min_max_helper::<&str, _, _>(array, |a, b| *a < *b)
 }
 
+/// Returns the maximum value in the string view array, according to the natural order.
+pub fn max_string_view(array: &StringViewArray) -> Option<&str> {
+    min_max_view_helper(array, Ordering::Greater)
+}
+
 /// Returns the minimum value in the string array, according to the natural order.
 pub fn min_string<T: OffsetSizeTrait>(array: &GenericStringArray<T>) -> Option<&str> {
     min_max_helper::<&str, _, _>(array, |a, b| *a > *b)
+}
+
+/// Returns the minimum value in the string view array, according to the natural order.
+pub fn min_string_view(array: &StringViewArray) -> Option<&str> {
+    min_max_view_helper(array, Ordering::Less)
 }
 
 /// Returns the sum of values in the array.
@@ -639,10 +717,7 @@ pub fn bool_and(array: &BooleanArray) -> Option<bool> {
 ///
 /// Returns `None` if the array is empty or only contains null values.
 pub fn bool_or(array: &BooleanArray) -> Option<bool> {
-    if array.null_count() == array.len() {
-        return None;
-    }
-    Some(array.true_count() != 0)
+    max_boolean(array)
 }
 
 /// Returns the sum of values in the primitive array.
@@ -728,6 +803,7 @@ where
 mod tests {
     use super::*;
     use arrow_array::types::*;
+    use builder::BooleanBuilder;
     use std::sync::Arc;
 
     #[test]
@@ -1132,61 +1208,137 @@ mod tests {
         assert!(max(&a).unwrap().is_nan());
     }
 
-    #[test]
-    fn test_binary_min_max_with_nulls() {
-        let a = BinaryArray::from(vec![
-            Some("b".as_bytes()),
+    macro_rules! test_binary {
+        ($NAME:ident, $ARRAY:expr, $EXPECTED_MIN:expr, $EXPECTED_MAX: expr) => {
+            #[test]
+            fn $NAME() {
+                let binary = BinaryArray::from($ARRAY);
+                assert_eq!($EXPECTED_MIN, min_binary(&binary));
+                assert_eq!($EXPECTED_MAX, max_binary(&binary));
+
+                let large_binary = LargeBinaryArray::from($ARRAY);
+                assert_eq!($EXPECTED_MIN, min_binary(&large_binary));
+                assert_eq!($EXPECTED_MAX, max_binary(&large_binary));
+
+                let binary_view = BinaryViewArray::from($ARRAY);
+                assert_eq!($EXPECTED_MIN, min_binary_view(&binary_view));
+                assert_eq!($EXPECTED_MAX, max_binary_view(&binary_view));
+            }
+        };
+    }
+
+    test_binary!(
+        test_binary_min_max_with_nulls,
+        vec![
+            Some("b01234567890123".as_bytes()), // long bytes
             None,
             None,
             Some(b"a"),
             Some(b"c"),
-        ]);
-        assert_eq!(Some("a".as_bytes()), min_binary(&a));
-        assert_eq!(Some("c".as_bytes()), max_binary(&a));
+            Some(b"abcdedfg0123456"),
+        ],
+        Some("a".as_bytes()),
+        Some("c".as_bytes())
+    );
+
+    test_binary!(
+        test_binary_min_max_no_null,
+        vec![
+            Some("b".as_bytes()),
+            Some(b"abcdefghijklmnopqrst"), // long bytes
+            Some(b"c"),
+            Some(b"b01234567890123"), // long bytes for view types
+        ],
+        Some("abcdefghijklmnopqrst".as_bytes()),
+        Some("c".as_bytes())
+    );
+
+    test_binary!(test_binary_min_max_all_nulls, vec![None, None], None, None);
+
+    test_binary!(
+        test_binary_min_max_1,
+        vec![
+            None,
+            Some("b01234567890123435".as_bytes()), // long bytes for view types
+            None,
+            Some(b"b0123xxxxxxxxxxx"),
+            Some(b"a")
+        ],
+        Some("a".as_bytes()),
+        Some("b0123xxxxxxxxxxx".as_bytes())
+    );
+
+    macro_rules! test_string {
+        ($NAME:ident, $ARRAY:expr, $EXPECTED_MIN:expr, $EXPECTED_MAX: expr) => {
+            #[test]
+            fn $NAME() {
+                let string = StringArray::from($ARRAY);
+                assert_eq!($EXPECTED_MIN, min_string(&string));
+                assert_eq!($EXPECTED_MAX, max_string(&string));
+
+                let large_string = LargeStringArray::from($ARRAY);
+                assert_eq!($EXPECTED_MIN, min_string(&large_string));
+                assert_eq!($EXPECTED_MAX, max_string(&large_string));
+
+                let string_view = StringViewArray::from($ARRAY);
+                assert_eq!($EXPECTED_MIN, min_string_view(&string_view));
+                assert_eq!($EXPECTED_MAX, max_string_view(&string_view));
+            }
+        };
     }
 
-    #[test]
-    fn test_binary_min_max_no_null() {
-        let a = BinaryArray::from(vec![Some("b".as_bytes()), Some(b"a"), Some(b"c")]);
-        assert_eq!(Some("a".as_bytes()), min_binary(&a));
-        assert_eq!(Some("c".as_bytes()), max_binary(&a));
-    }
+    test_string!(
+        test_string_min_max_with_nulls,
+        vec![
+            Some("b012345678901234"), // long bytes for view types
+            None,
+            None,
+            Some("a"),
+            Some("c"),
+            Some("b0123xxxxxxxxxxx")
+        ],
+        Some("a"),
+        Some("c")
+    );
 
-    #[test]
-    fn test_binary_min_max_all_nulls() {
-        let a = BinaryArray::from(vec![None, None]);
-        assert_eq!(None, min_binary(&a));
-        assert_eq!(None, max_binary(&a));
-    }
+    test_string!(
+        test_string_min_max_no_null,
+        vec![
+            Some("b"),
+            Some("b012345678901234"), // long bytes for view types
+            Some("a"),
+            Some("b012xxxxxxxxxxxx")
+        ],
+        Some("a"),
+        Some("b012xxxxxxxxxxxx")
+    );
 
-    #[test]
-    fn test_binary_min_max_1() {
-        let a = BinaryArray::from(vec![None, None, Some("b".as_bytes()), Some(b"a")]);
-        assert_eq!(Some("a".as_bytes()), min_binary(&a));
-        assert_eq!(Some("b".as_bytes()), max_binary(&a));
-    }
+    test_string!(
+        test_string_min_max_all_nulls,
+        Vec::<Option<&str>>::from_iter([None, None]),
+        None,
+        None
+    );
 
-    #[test]
-    fn test_string_min_max_with_nulls() {
-        let a = StringArray::from(vec![Some("b"), None, None, Some("a"), Some("c")]);
-        assert_eq!(Some("a"), min_string(&a));
-        assert_eq!(Some("c"), max_string(&a));
-    }
+    test_string!(
+        test_string_min_max_1,
+        vec![
+            None,
+            Some("c12345678901234"), // long bytes for view types
+            None,
+            Some("b"),
+            Some("c1234xxxxxxxxxx")
+        ],
+        Some("b"),
+        Some("c1234xxxxxxxxxx")
+    );
 
-    #[test]
-    fn test_string_min_max_all_nulls() {
-        let v: Vec<Option<&str>> = vec![None, None];
-        let a = StringArray::from(v);
-        assert_eq!(None, min_string(&a));
-        assert_eq!(None, max_string(&a));
-    }
-
-    #[test]
-    fn test_string_min_max_1() {
-        let a = StringArray::from(vec![None, None, Some("b"), Some("a")]);
-        assert_eq!(Some("a"), min_string(&a));
-        assert_eq!(Some("b"), max_string(&a));
-    }
+    test_string!(
+        test_string_min_max_empty,
+        Vec::<Option<&str>>::new(),
+        None,
+        None
+    );
 
     #[test]
     fn test_boolean_min_max_empty() {
@@ -1222,6 +1374,14 @@ mod tests {
         let a = BooleanArray::from(vec![Some(false), Some(true), None, Some(false), None]);
         assert_eq!(Some(false), min_boolean(&a));
         assert_eq!(Some(true), max_boolean(&a));
+
+        let a = BooleanArray::from(vec![Some(true), None]);
+        assert_eq!(Some(true), min_boolean(&a));
+        assert_eq!(Some(true), max_boolean(&a));
+
+        let a = BooleanArray::from(vec![Some(false), None]);
+        assert_eq!(Some(false), min_boolean(&a));
+        assert_eq!(Some(false), max_boolean(&a));
     }
 
     #[test]
@@ -1241,6 +1401,92 @@ mod tests {
         let a = BooleanArray::from(vec![Some(true)]);
         assert_eq!(Some(true), min_boolean(&a));
         assert_eq!(Some(true), max_boolean(&a));
+    }
+
+    #[test]
+    fn test_boolean_min_max_64_true_64_false() {
+        let mut no_nulls = BooleanBuilder::new();
+        no_nulls.append_slice(&[true; 64]);
+        no_nulls.append_slice(&[false; 64]);
+        let no_nulls = no_nulls.finish();
+
+        assert_eq!(Some(false), min_boolean(&no_nulls));
+        assert_eq!(Some(true), max_boolean(&no_nulls));
+
+        let mut with_nulls = BooleanBuilder::new();
+        with_nulls.append_slice(&[true; 31]);
+        with_nulls.append_null();
+        with_nulls.append_slice(&[true; 32]);
+        with_nulls.append_slice(&[false; 1]);
+        with_nulls.append_nulls(63);
+        let with_nulls = with_nulls.finish();
+
+        assert_eq!(Some(false), min_boolean(&with_nulls));
+        assert_eq!(Some(true), max_boolean(&with_nulls));
+    }
+
+    #[test]
+    fn test_boolean_min_max_64_false_64_true() {
+        let mut no_nulls = BooleanBuilder::new();
+        no_nulls.append_slice(&[false; 64]);
+        no_nulls.append_slice(&[true; 64]);
+        let no_nulls = no_nulls.finish();
+
+        assert_eq!(Some(false), min_boolean(&no_nulls));
+        assert_eq!(Some(true), max_boolean(&no_nulls));
+
+        let mut with_nulls = BooleanBuilder::new();
+        with_nulls.append_slice(&[false; 31]);
+        with_nulls.append_null();
+        with_nulls.append_slice(&[false; 32]);
+        with_nulls.append_slice(&[true; 1]);
+        with_nulls.append_nulls(63);
+        let with_nulls = with_nulls.finish();
+
+        assert_eq!(Some(false), min_boolean(&with_nulls));
+        assert_eq!(Some(true), max_boolean(&with_nulls));
+    }
+
+    #[test]
+    fn test_boolean_min_max_96_true() {
+        let mut no_nulls = BooleanBuilder::new();
+        no_nulls.append_slice(&[true; 96]);
+        let no_nulls = no_nulls.finish();
+
+        assert_eq!(Some(true), min_boolean(&no_nulls));
+        assert_eq!(Some(true), max_boolean(&no_nulls));
+
+        let mut with_nulls = BooleanBuilder::new();
+        with_nulls.append_slice(&[true; 31]);
+        with_nulls.append_null();
+        with_nulls.append_slice(&[true; 32]);
+        with_nulls.append_slice(&[true; 31]);
+        with_nulls.append_null();
+        let with_nulls = with_nulls.finish();
+
+        assert_eq!(Some(true), min_boolean(&with_nulls));
+        assert_eq!(Some(true), max_boolean(&with_nulls));
+    }
+
+    #[test]
+    fn test_boolean_min_max_96_false() {
+        let mut no_nulls = BooleanBuilder::new();
+        no_nulls.append_slice(&[false; 96]);
+        let no_nulls = no_nulls.finish();
+
+        assert_eq!(Some(false), min_boolean(&no_nulls));
+        assert_eq!(Some(false), max_boolean(&no_nulls));
+
+        let mut with_nulls = BooleanBuilder::new();
+        with_nulls.append_slice(&[false; 31]);
+        with_nulls.append_null();
+        with_nulls.append_slice(&[false; 32]);
+        with_nulls.append_slice(&[false; 31]);
+        with_nulls.append_null();
+        let with_nulls = with_nulls.finish();
+
+        assert_eq!(Some(false), min_boolean(&with_nulls));
+        assert_eq!(Some(false), max_boolean(&with_nulls));
     }
 
     #[test]
