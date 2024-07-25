@@ -50,7 +50,7 @@ use std::sync::Arc;
 /// assert_eq!(&values, &[Some(true), None, Some(false), None, Some(false)])
 /// ```
 ///
-/// # Example: From &[u8]
+/// # Example: From `&[u8]`
 ///
 /// ```
 /// # use arrow_array::{Array, BooleanArray};
@@ -63,8 +63,8 @@ use std::sync::Arc;
 /// ```
 /// convert each bit in `&[u8]` to boolean and use it to build [`BooleanArray`].
 /// using this method will make the following two points self-evident:
-/// * There is no `null` in the constructed [`BooleanArray`]
-/// * The length of the constructed [`BooleanArray`] is always a multiple of 8;
+/// * there is no `null` in the constructed [`BooleanArray`];
+/// * the length of the constructed [`BooleanArray`] is always a multiple of 8;
 ///
 /// # Example: Using Builder
 ///
