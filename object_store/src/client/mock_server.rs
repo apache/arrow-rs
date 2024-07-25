@@ -60,6 +60,8 @@ impl MockServer {
             let mut set = JoinSet::new();
 
             loop {
+                // https://github.com/apache/arrow-rs/issues/6122
+                #[allow(clippy::incompatible_msrv)]
                 let (stream, _) = tokio::select! {
                     conn = listener.accept() => conn.unwrap(),
                     _ = &mut rx => break,
