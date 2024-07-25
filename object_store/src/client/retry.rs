@@ -174,6 +174,7 @@ pub struct RetryableRequest {
     retry_timeout: Duration,
     backoff: Backoff,
 
+    sensitive: bool,
     idempotent: Option<bool>,
     payload: Option<PutPayload>,
 }
@@ -188,6 +189,14 @@ impl RetryableRequest {
             idempotent: Some(idempotent),
             ..self
         }
+    }
+
+    /// Set whether this request contains sensitive data
+    ///
+    /// This will avoid printing out the URL in error messages
+    #[allow(unused)]
+    pub fn sensitive(self, sensitive: bool) -> Self {
+        Self { sensitive, ..self }
     }
 
     /// Provide a [`PutPayload`]
@@ -205,6 +214,11 @@ impl RetryableRequest {
         let is_idempotent = self
             .idempotent
             .unwrap_or_else(|| self.request.method().is_safe());
+
+        let sanitize_err = move |e: reqwest::Error| match self.sensitive {
+            true => e.without_url(),
+            false => e,
+        };
 
         loop {
             let mut request = self
@@ -238,6 +252,7 @@ impl RetryableRequest {
                         };
                     }
                     Err(e) => {
+                        let e = sanitize_err(e);
                         let status = r.status();
                         if retries == max_retries
                             || now.elapsed() > retry_timeout
@@ -280,6 +295,8 @@ impl RetryableRequest {
                     }
                 },
                 Err(e) => {
+                    let e = sanitize_err(e);
+
                     let mut do_retry = false;
                     if e.is_connect()
                         || e.is_body()
@@ -365,6 +382,7 @@ impl RetryExt for reqwest::RequestBuilder {
             backoff: Backoff::new(&config.backoff),
             idempotent: None,
             payload: None,
+            sensitive: false,
         }
     }
 
@@ -564,6 +582,48 @@ mod tests {
             e.contains("Error after 0 retries in") && e.contains("error sending request for url"),
             "{e}"
         );
+
+        let url = format!("{}/SENSITIVE", mock.url());
+        for _ in 0..=retry.max_retries {
+            mock.push(
+                Response::builder()
+                    .status(StatusCode::BAD_GATEWAY)
+                    .body("ignored".to_string())
+                    .unwrap(),
+            );
+        }
+        let res = client.request(Method::GET, url).send_retry(&retry).await;
+        let err = res.unwrap_err().to_string();
+        assert!(err.contains("SENSITIVE"), "{err}");
+
+        let url = format!("{}/SENSITIVE", mock.url());
+        for _ in 0..=retry.max_retries {
+            mock.push(
+                Response::builder()
+                    .status(StatusCode::BAD_GATEWAY)
+                    .body("ignored".to_string())
+                    .unwrap(),
+            );
+        }
+
+        // Sensitive requests should strip URL from error
+        let req = client
+            .request(Method::GET, &url)
+            .retryable(&retry)
+            .sensitive(true);
+        let err = req.send().await.unwrap_err().to_string();
+        assert!(!err.contains("SENSITIVE"), "{err}");
+
+        for _ in 0..=retry.max_retries {
+            mock.push_fn(|_| panic!());
+        }
+
+        let req = client
+            .request(Method::GET, &url)
+            .retryable(&retry)
+            .sensitive(true);
+        let err = req.send().await.unwrap_err().to_string();
+        assert!(!err.contains("SENSITIVE"), "{err}");
 
         // Shutdown
         mock.shutdown().await
