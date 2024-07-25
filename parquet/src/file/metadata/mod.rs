@@ -202,11 +202,11 @@ impl ParquetMetaData {
     /// 1. Includes size of self
     ///
     /// 2. Includes heap memory for sub fields such as [`FileMetaData`] and
-    /// [`RowGroupMetaData`].
+    ///    [`RowGroupMetaData`].
     ///
     /// 3. Includes memory from shared pointers (e.g. [`SchemaDescPtr`]). This
-    /// means `memory_size` will over estimate the memory size if such pointers
-    /// are shared.
+    ///    means `memory_size` will over estimate the memory size if such pointers
+    ///    are shared.
     ///
     /// 4. Does not include any allocator overheads
     pub fn memory_size(&self) -> usize {
