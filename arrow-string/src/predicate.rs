@@ -83,9 +83,9 @@ impl<'a> Predicate<'a> {
             Predicate::Eq(v) => *v == haystack,
             Predicate::IEqAscii(v) => haystack.eq_ignore_ascii_case(v),
             Predicate::Contains(v) => haystack.contains(v),
-            Predicate::StartsWith(v) => haystack.starts_with(v),
+            Predicate::StartsWith(v) => starts_with(haystack, v),
             Predicate::IStartsWithAscii(v) => starts_with_ignore_ascii_case(haystack, v),
-            Predicate::EndsWith(v) => haystack.ends_with(v),
+            Predicate::EndsWith(v) => ends_with(haystack, v),
             Predicate::IEndsWithAscii(v) => ends_with_ignore_ascii_case(haystack, v),
             Predicate::Regex(v) => v.is_match(haystack),
         }
@@ -110,13 +110,13 @@ impl<'a> Predicate<'a> {
                 BooleanArray::from_unary(array, |haystack| haystack.contains(v) != negate)
             }
             Predicate::StartsWith(v) => {
-                BooleanArray::from_unary(array, |haystack| haystack.starts_with(v) != negate)
+                BooleanArray::from_unary(array, |haystack| starts_with(haystack, v) != negate)
             }
             Predicate::IStartsWithAscii(v) => BooleanArray::from_unary(array, |haystack| {
                 starts_with_ignore_ascii_case(haystack, v) != negate
             }),
             Predicate::EndsWith(v) => {
-                BooleanArray::from_unary(array, |haystack| haystack.ends_with(v) != negate)
+                BooleanArray::from_unary(array, |haystack| ends_with(haystack, v) != negate)
             }
             Predicate::IEndsWithAscii(v) => BooleanArray::from_unary(array, |haystack| {
                 ends_with_ignore_ascii_case(haystack, v) != negate
@@ -128,14 +128,52 @@ impl<'a> Predicate<'a> {
     }
 }
 
-fn starts_with_ignore_ascii_case(haystack: &str, needle: &str) -> bool {
-    let end = haystack.len().min(needle.len());
-    haystack.is_char_boundary(end) && needle.eq_ignore_ascii_case(&haystack[..end])
+#[inline]
+pub(crate) fn starts_with(haystack: &str, needle: &str) -> bool {
+    if needle.len() > haystack.len() {
+        false
+    } else {
+        std::iter::zip(haystack.as_bytes(), needle.as_bytes()).all(equals_kernel)
+    }
 }
 
-fn ends_with_ignore_ascii_case(haystack: &str, needle: &str) -> bool {
-    let start = haystack.len().saturating_sub(needle.len());
-    haystack.is_char_boundary(start) && needle.eq_ignore_ascii_case(&haystack[start..])
+#[inline]
+pub(crate) fn starts_with_ignore_ascii_case(haystack: &str, needle: &str) -> bool {
+    debug_assert!(needle.is_ascii(), "needle must be ascii");
+
+    if needle.len() > haystack.len() {
+        false
+    } else {
+        std::iter::zip(haystack.as_bytes().iter(), needle.as_bytes().iter()).all(i_equals_kernel)
+    }
+}
+
+#[inline]
+pub(crate) fn ends_with(haystack: &str, needle: &str) -> bool {
+    if needle.len() > haystack.len() {
+        false
+    } else {
+        std::iter::zip(haystack.as_bytes().iter().rev(), needle.as_bytes().iter().rev()).all(equals_kernel)
+    }
+}
+
+#[inline]
+pub(crate) fn ends_with_ignore_ascii_case(haystack: &str, needle: &str) -> bool {
+    debug_assert!(needle.is_ascii(), "needle must be ascii");
+
+    if needle.len() > haystack.len() {
+        false
+    } else {
+        std::iter::zip(haystack.as_bytes().iter().rev(), needle.as_bytes().iter().rev()).all(i_equals_kernel)
+    }
+}
+
+fn equals_kernel((n, h): (&u8, &u8)) -> bool {
+    n == h
+}
+
+fn i_equals_kernel((n, h): (&u8, &u8)) -> bool {
+    n.to_ascii_lowercase() == h.to_ascii_lowercase()
 }
 
 /// Transforms a like `pattern` to a regex compatible pattern. To achieve that, it does:
