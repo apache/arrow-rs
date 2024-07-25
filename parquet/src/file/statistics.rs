@@ -287,7 +287,17 @@ pub fn to_thrift(stats: Option<&Statistics>) -> Option<TStatistics> {
     Some(thrift_stats)
 }
 
-/// Statistics for a column chunk and data page.
+/// Strongly typed statistics for a column chunk within a row group.
+///
+/// This structure is a natively typed, in memory representation of the
+/// [`Statistics`] structure in a parquet file footer. The statistics stored in
+/// this structure can be used by query engines to skip decoding pages while
+/// reading parquet data.
+///
+/// Page level statistics are stored separately, in [NativeIndex].
+///
+/// [`Statistics`]: crate::format::Statistics
+/// [NativeIndex]: crate::file::page_index::index::NativeIndex
 #[derive(Debug, Clone, PartialEq)]
 pub enum Statistics {
     Boolean(ValueStatistics<bool>),
@@ -445,7 +455,9 @@ impl fmt::Display for Statistics {
 /// Typed implementation for [`Statistics`].
 pub type TypedStatistics<T> = ValueStatistics<<T as DataType>::T>;
 
-/// Statistics for a particular `ParquetValueType`
+/// Typed statistics for one column chunk
+///
+/// See [`Statistics`] for more details
 #[derive(Clone, Eq, PartialEq)]
 pub struct ValueStatistics<T> {
     min: Option<T>,

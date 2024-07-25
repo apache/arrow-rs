@@ -285,12 +285,12 @@ fn to_timestamp_nanos(dt: NaiveDateTime) -> Result<i64, ArrowError> {
 /// variants and converts it to nanoseconds since midnight.
 ///
 /// Examples of accepted inputs:
+///
 /// * `09:26:56.123 AM`
 /// * `23:59:59`
 /// * `6:00 pm`
-//
-/// Internally, this function uses the `chrono` library for the
-/// time parsing
+///
+/// Internally, this function uses the `chrono` library for the time parsing
 ///
 /// ## Timezone / Offset Handling
 ///

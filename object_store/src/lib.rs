@@ -39,13 +39,13 @@
 //! # Highlights
 //!
 //! 1. A high-performance async API focused on providing a consistent interface
-//! mirroring that of object stores such as [S3]
+//!    mirroring that of object stores such as [S3]
 //!
 //! 2. Production quality, leading this crate to be used in large
-//! scale production systems, such as [crates.io] and [InfluxDB IOx]
+//!    scale production systems, such as [crates.io] and [InfluxDB IOx]
 //!
 //! 3. Support for advanced functionality, including atomic, conditional reads
-//! and writes, vectored IO, bulk deletion, and more...
+//!    and writes, vectored IO, bulk deletion, and more...
 //!
 //! 4. Stable and predictable governance via the [Apache Arrow] project
 //!
@@ -98,7 +98,7 @@
 //! * Methods map directly to object store APIs, providing both efficiency and predictability
 //! * Abstracts away filesystem and operating system specific quirks, ensuring portability
 //! * Allows for functionality not native to filesystems, such as operation preconditions
-//! and atomic multipart uploads
+//!   and atomic multipart uploads
 //!
 //! This crate does provide [`BufReader`] and [`BufWriter`] adapters
 //! which provide a more filesystem-like API for working with the
