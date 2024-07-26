@@ -232,4 +232,22 @@ mod tests {
         let r = regex_like(a_eq, false).unwrap();
         assert_eq!(r.to_string(), expected);
     }
+    #[test]
+    fn test_contains() {
+        assert!(Predicate::contains("hay").evaluate("haystack"));
+        assert!(Predicate::contains("haystack").evaluate("haystack"));
+        assert!(Predicate::contains("h").evaluate("haystack"));
+        assert!(Predicate::contains("k").evaluate("haystack"));
+        assert!(Predicate::contains("stack").evaluate("haystack"));
+        assert!(Predicate::contains("sta").evaluate("haystack"));
+        assert!(Predicate::contains("stack").evaluate("hay£stack"));
+        assert!(Predicate::contains("y£s").evaluate("hay£stack"));
+        assert!(Predicate::contains("£").evaluate("hay£stack"));
+        assert!(Predicate::contains("a").evaluate("a"));
+        // not matching
+        assert!(!Predicate::contains("hy").evaluate("haystack"));
+        assert!(!Predicate::contains("stackx").evaluate("haystack"));
+        assert!(!Predicate::contains("x").evaluate("haystack"));
+        assert!(!Predicate::contains("haystack haystack").evaluate("haystack"));
+    }
 }
