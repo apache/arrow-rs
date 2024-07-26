@@ -1010,8 +1010,8 @@ impl FileReaderBuilder {
 }
 
 /// Arrow File reader
-pub struct FileReader<R: Read + Seek> {
-    /// Buffered file reader that supports reading and seeking
+pub struct FileReader<R> {
+    /// File reader that supports reading and seeking
     reader: R,
 
     /// The decoder
@@ -1032,7 +1032,7 @@ pub struct FileReader<R: Read + Seek> {
     custom_metadata: HashMap<String, String>,
 }
 
-impl<R: Read + Seek> fmt::Debug for FileReader<R> {
+impl<R> fmt::Debug for FileReader<R> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> Result<(), fmt::Error> {
         f.debug_struct("FileReader<R>")
             .field("decoder", &self.decoder)
@@ -1040,6 +1040,15 @@ impl<R: Read + Seek> fmt::Debug for FileReader<R> {
             .field("current_block", &self.current_block)
             .field("total_blocks", &self.total_blocks)
             .finish_non_exhaustive()
+    }
+}
+
+impl<R: Read + Seek> FileReader<BufReader<R>> {
+    /// Try to create a new file reader with the reader wrapped in a BufReader.
+    ///
+    /// See [`FileReader::try_new`] for an unbuffered version.
+    pub fn try_new_buffered(reader: R, projection: Option<Vec<usize>>) -> Result<Self, ArrowError> {
+        Self::try_new(BufReader::new(reader), projection)
     }
 }
 
@@ -1129,7 +1138,7 @@ impl<R: Read + Seek> RecordBatchReader for FileReader<R> {
 }
 
 /// Arrow Stream reader
-pub struct StreamReader<R: Read> {
+pub struct StreamReader<R> {
     /// Stream reader
     reader: R,
 
@@ -1150,10 +1159,10 @@ pub struct StreamReader<R: Read> {
     projection: Option<(Vec<usize>, Schema)>,
 }
 
-impl<R: Read> fmt::Debug for StreamReader<R> {
+impl<R> fmt::Debug for StreamReader<R> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> std::result::Result<(), fmt::Error> {
         f.debug_struct("StreamReader<R>")
-            .field("reader", &"BufReader<..>")
+            .field("reader", &"R")
             .field("schema", &self.schema)
             .field("dictionaries_by_id", &self.dictionaries_by_id)
             .field("finished", &self.finished)
@@ -1163,21 +1172,24 @@ impl<R: Read> fmt::Debug for StreamReader<R> {
 }
 
 impl<R: Read> StreamReader<BufReader<R>> {
-    /// Try to create a new stream reader with the reader wrapped in a BufReader
+    /// Try to create a new stream reader with the reader wrapped in a BufReader.
     ///
-    /// The first message in the stream is the schema, the reader will fail if it does not
-    /// encounter a schema.
-    /// To check if the reader is done, use `is_finished(self)`
-    pub fn try_new(reader: R, projection: Option<Vec<usize>>) -> Result<Self, ArrowError> {
-        Self::try_new_unbuffered(BufReader::new(reader), projection)
+    /// See [`StreamReader::try_new`] for an unbuffered version.
+    pub fn try_new_buffered(reader: R, projection: Option<Vec<usize>>) -> Result<Self, ArrowError> {
+        Self::try_new(BufReader::new(reader), projection)
     }
 }
 
 impl<R: Read> StreamReader<R> {
-    /// Try to create a new stream reader but do not wrap the reader in a BufReader.
+    /// Try to create a new stream reader.
     ///
-    /// Unless you need the StreamReader to be unbuffered you likely want to use `StreamReader::try_new` instead.
-    pub fn try_new_unbuffered(
+    /// The first message in the stream is the schema, the reader will fail if it does not
+    /// encounter a schema.
+    /// To check if the reader is done, use [`is_finished(self)`](StreamReader::is_finished).
+    ///
+    /// There is no internal buffering. If buffered reads are needed you likely want to use
+    /// [`StreamReader::try_new_buffered`] instead.
+    pub fn try_new(
         mut reader: R,
         projection: Option<Vec<usize>>,
     ) -> Result<StreamReader<R>, ArrowError> {
@@ -1222,6 +1234,15 @@ impl<R: Read> StreamReader<R> {
             dictionaries_by_id,
             projection,
         })
+    }
+
+    /// Deprecated, use [`StreamReader::try_new`] instead.
+    #[deprecated(since = "53.0.0", note = "use `try_new` instead")]
+    pub fn try_new_unbuffered(
+        reader: R,
+        projection: Option<Vec<usize>>,
+    ) -> Result<Self, ArrowError> {
+        Self::try_new(reader, projection)
     }
 
     /// Return the schema of the stream
