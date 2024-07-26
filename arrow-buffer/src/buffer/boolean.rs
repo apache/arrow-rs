@@ -275,12 +275,6 @@ impl From<&[bool]> for BooleanBuffer {
     }
 }
 
-impl From<&[u8]> for BooleanBuffer {
-    fn from(slice: &[u8]) -> Self {
-        BooleanBuffer::new(Buffer::from(slice), 0, slice.len() * 8)
-    }
-}
-
 impl From<Vec<bool>> for BooleanBuffer {
     fn from(value: Vec<bool>) -> Self {
         value.as_slice().into()
@@ -430,18 +424,5 @@ mod tests {
         assert_eq!(buf.len(), 3);
         assert_eq!(buf.values().len(), 1);
         assert!(buf.value(0));
-    }
-
-    #[test]
-    fn test_boolean_from_slice_u8() {
-        let v = [1_u8, 2, 3];
-        let buf = BooleanBuffer::from(&v[..]);
-        assert_eq!(buf.offset(), 0);
-        assert_eq!(buf.len(), 24);
-        assert_eq!(buf.values().len(), 3);
-        assert!(buf.value(0));
-        assert!(buf.value(9));
-        assert!(buf.value(16));
-        assert!(buf.value(17));
     }
 }
