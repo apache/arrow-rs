@@ -4531,7 +4531,7 @@ mod tests {
             ))],
             IntervalUnit::DayTime,
             format!(
-                "Compute error: Overflow happened on: {} * 100",
+                "Arithmetic overflow: Overflow happened on: {} * 100",
                 i64::MAX - 2
             )
         );
@@ -4543,7 +4543,10 @@ mod tests {
                 i64::MAX - 2
             ))],
             IntervalUnit::MonthDayNano,
-            format!("Compute error: Overflow happened on: {} * 12", i64::MAX - 2)
+            format!(
+                "Arithmetic overflow: Overflow happened on: {} * 12",
+                i64::MAX - 2
+            )
         );
     }
 
