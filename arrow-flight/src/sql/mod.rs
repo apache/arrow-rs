@@ -255,8 +255,8 @@ prost_message_ext!(
     CommandStatementQuery,
     CommandStatementSubstraitPlan,
     CommandStatementUpdate,
-    DoPutUpdateResult,
     DoPutPreparedStatementResult,
+    DoPutUpdateResult,
     TicketStatementQuery,
 );
 
