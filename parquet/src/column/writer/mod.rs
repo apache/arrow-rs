@@ -33,7 +33,7 @@ use crate::data_type::private::ParquetValueType;
 use crate::data_type::*;
 use crate::encodings::levels::LevelEncoder;
 use crate::errors::{ParquetError, Result};
-use crate::file::metadata::{ColumnIndexBuilder, OffsetIndexBuilder};
+use crate::file::metadata::{ColumnIndexBuilder, LevelHistogram, OffsetIndexBuilder};
 use crate::file::properties::EnabledStatistics;
 use crate::file::statistics::{Statistics, ValueStatistics};
 use crate::file::{
@@ -183,25 +183,14 @@ pub struct ColumnCloseResult {
     pub offset_index: Option<OffsetIndex>,
 }
 
-/// Creates a vector to hold level histogram data. Length will be `max_level + 1`.
-/// Because histograms are not necessary when `max_level == 0`, this will return
-/// `None` in that case.
-fn new_histogram(max_level: i16) -> Option<Vec<i64>> {
-    if max_level > 0 {
-        Some(vec![0; max_level as usize + 1])
-    } else {
-        None
-    }
-}
-
 // Metrics per page
 #[derive(Default)]
 struct PageMetrics {
     num_buffered_values: u32,
     num_buffered_rows: u32,
     num_page_nulls: u64,
-    repetition_level_histogram: Option<Vec<i64>>,
-    definition_level_histogram: Option<Vec<i64>>,
+    repetition_level_histogram: Option<LevelHistogram>,
+    definition_level_histogram: Option<LevelHistogram>,
 }
 
 impl PageMetrics {
@@ -211,23 +200,14 @@ impl PageMetrics {
 
     /// Initialize the repetition level histogram
     fn with_repetition_level_histogram(mut self, max_level: i16) -> Self {
-        self.repetition_level_histogram = new_histogram(max_level);
+        self.repetition_level_histogram = LevelHistogram::try_new(max_level);
         self
     }
 
     /// Initialize the definition level histogram
     fn with_definition_level_histogram(mut self, max_level: i16) -> Self {
-        self.definition_level_histogram = new_histogram(max_level);
+        self.definition_level_histogram = LevelHistogram::try_new(max_level);
         self
-    }
-
-    /// Sets all elements of `histogram` to 0
-    fn reset_histogram(histogram: &mut Option<Vec<i64>>) {
-        if let Some(ref mut hist) = histogram {
-            for v in hist {
-                *v = 0
-            }
-        }
     }
 
     /// Resets the state of this `PageMetrics` to the initial state.
@@ -236,25 +216,21 @@ impl PageMetrics {
         self.num_buffered_values = 0;
         self.num_buffered_rows = 0;
         self.num_page_nulls = 0;
-        PageMetrics::reset_histogram(&mut self.repetition_level_histogram);
-        PageMetrics::reset_histogram(&mut self.definition_level_histogram);
+        self.repetition_level_histogram.as_mut().map(LevelHistogram::reset);
+        self.definition_level_histogram.as_mut().map(LevelHistogram::reset);
     }
 
     /// Updates histogram values using provided repetition levels
     fn update_repetition_level_histogram(&mut self, levels: &[i16]) {
         if let Some(ref mut rep_hist) = self.repetition_level_histogram {
-            for &level in levels {
-                rep_hist[level as usize] += 1;
-            }
+            rep_hist.update_from_levels(levels);
         }
     }
 
     /// Updates histogram values using provided definition levels
     fn update_definition_level_histogram(&mut self, levels: &[i16]) {
         if let Some(ref mut def_hist) = self.definition_level_histogram {
-            for &level in levels {
-                def_hist[level as usize] += 1;
-            }
+            def_hist.update_from_levels(levels);
         }
     }
 }
@@ -274,8 +250,8 @@ struct ColumnMetrics<T: Default> {
     num_column_nulls: u64,
     column_distinct_count: Option<u64>,
     variable_length_bytes: Option<i64>,
-    repetition_level_histogram: Option<Vec<i64>>,
-    definition_level_histogram: Option<Vec<i64>>,
+    repetition_level_histogram: Option<LevelHistogram>,
+    definition_level_histogram: Option<LevelHistogram>,
 }
 
 impl<T: Default> ColumnMetrics<T> {
@@ -285,24 +261,23 @@ impl<T: Default> ColumnMetrics<T> {
 
     /// Initialize the repetition level histogram
     fn with_repetition_level_histogram(mut self, max_level: i16) -> Self {
-        self.repetition_level_histogram = new_histogram(max_level);
+        self.repetition_level_histogram = LevelHistogram::try_new(max_level);
         self
     }
 
     /// Initialize the definition level histogram
     fn with_definition_level_histogram(mut self, max_level: i16) -> Self {
-        self.definition_level_histogram = new_histogram(max_level);
+        self.definition_level_histogram = LevelHistogram::try_new(max_level);
         self
     }
 
     /// Sum `page_histogram` into `chunk_histogram`
-    fn update_histogram(chunk_histogram: &mut Option<Vec<i64>>, page_histogram: &Option<Vec<i64>>) {
-        if page_histogram.is_some() && chunk_histogram.is_some() {
-            let chunk_hist = chunk_histogram.as_mut().unwrap();
-            let page_hist = page_histogram.as_ref().unwrap();
-            for i in 0..page_hist.len() {
-                chunk_hist[i] += page_hist[i]
-            }
+    fn update_histogram(
+        chunk_histogram: &mut Option<LevelHistogram>,
+        page_histogram: &Option<LevelHistogram>,
+    ) {
+        if let (Some(page_hist), Some(chunk_hist)) = (page_histogram, chunk_histogram) {
+            chunk_hist.add(page_hist);
         }
     }
 

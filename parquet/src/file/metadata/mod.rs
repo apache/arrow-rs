@@ -557,8 +557,114 @@ pub struct ColumnChunkMetaData {
     column_index_offset: Option<i64>,
     column_index_length: Option<i32>,
     unencoded_byte_array_data_bytes: Option<i64>,
-    repetition_level_histogram: Option<Vec<i64>>,
-    definition_level_histogram: Option<Vec<i64>>,
+    repetition_level_histogram: Option<LevelHistogram>,
+    definition_level_histogram: Option<LevelHistogram>,
+}
+
+/// Histograms for repetition and definition levels.
+///
+/// Each histogram is a vector of length `max_level + 1`. The value at index `i` is the number of
+/// values at level `i`.
+///
+/// For example, `vec[0]` is the number of rows with level 0, `vec[1]` is the
+/// number of rows with level 1, and so on.
+///
+#[derive(Debug, Clone, PartialEq)]
+pub struct LevelHistogram {
+    inner: Vec<i64>,
+}
+
+impl LevelHistogram {
+    /// Creates a new level histogram data.
+    ///
+    /// Length will be `max_level + 1`.
+    ///
+    /// Returns `None` when `max_level == 0` (because histograms are not necessary in this case)
+    pub fn try_new(max_level: i16) -> Option<Self> {
+        if max_level > 0 {
+            Some(Self {
+                inner: vec![0; max_level as usize + 1],
+            })
+        } else {
+            None
+        }
+    }
+    /// Returns a reference to the the histogram's values.
+    pub fn values(&self) -> &[i64] {
+        &self.inner
+    }
+
+    /// Return the inner vector, consuming self
+    pub fn into_inner(self) -> Vec<i64> {
+        self.inner
+    }
+
+    /// Returns the histogram value at the given index.
+    ///
+    /// The value of `i` is the number of values with level `i`. For example,
+    /// `get(1)` returns the number of values with level 1.
+    ///
+    /// Returns `None` if the index is out of bounds.
+    pub fn get(&self, index: usize) -> Option<i64> {
+        self.inner.get(index).copied()
+    }
+
+    /// Adds the values from the other histogram to this histogram
+    ///
+    /// # Panics
+    /// If the histograms have different lengths
+    pub fn add(&mut self, other: &Self) {
+        assert_eq!(self.len(), other.len());
+        for (dst, src) in self.inner.iter_mut().zip(other.inner.iter()) {
+            *dst += src;
+        }
+    }
+
+    /// return the length of the histogram
+    pub fn len(&self) -> usize {
+        self.inner.len()
+    }
+
+    /// returns if the histogram is empty
+    pub fn is_empty(&self) -> bool {
+        self.inner.is_empty()
+    }
+
+    /// Sets the values of all histogram levels to 0.
+    pub fn reset(&mut self) {
+        for value in self.inner.iter_mut() {
+            *value = 0;
+        }
+    }
+
+    /// Updates histogram values using provided repetition levels
+    ///
+    /// # Panics
+    /// if any of the levels is greater than the length of the histogram (
+    /// the argument supplied to [`Self::try_new`])
+    pub fn update_from_levels(&mut self, levels: &[i16]) {
+        for &level in levels {
+            self.inner[level as usize] += 1;
+        }
+    }
+}
+
+impl From<Vec<i64>> for LevelHistogram {
+    fn from(inner: Vec<i64>) -> Self {
+        Self { inner }
+    }
+}
+
+impl From<LevelHistogram> for Vec<i64> {
+    fn from(value: LevelHistogram) -> Self {
+        value.into_inner()
+    }
+}
+
+impl HeapSize for LevelHistogram {
+    fn heap_size(&self) -> usize {
+        self.inner.heap_size()
+    }
 }
 
 /// Represents common operations for a column chunk.
@@ -724,7 +830,7 @@ impl ColumnChunkMetaData {
     /// The returned value `vec[i]` is how many values are at repetition level `i`. For example,
     /// `vec[0]` indicates how many rows the page contains.
     /// This field may not be set by older writers.
-    pub fn repetition_level_histogram(&self) -> Option<&Vec<i64>> {
+    pub fn repetition_level_histogram(&self) -> Option<&LevelHistogram> {
         self.repetition_level_histogram.as_ref()
     }
 
@@ -733,7 +839,7 @@ impl ColumnChunkMetaData {
     /// The returned value `vec[i]` is how many values are at definition level `i`. For example,
     /// `vec[max_definition_level-1]` indicates how many non-null values are present in the page.
     /// This field may not be set by older writers.
-    pub fn definition_level_histogram(&self) -> Option<&Vec<i64>> {
+    pub fn definition_level_histogram(&self) -> Option<&LevelHistogram> {
         self.definition_level_histogram.as_ref()
     }
 
@@ -788,6 +894,9 @@ impl ColumnChunkMetaData {
             (None, None, None)
         };
 
+        let repetition_level_histogram = repetition_level_histogram.map(LevelHistogram::from);
+        let definition_level_histogram = definition_level_histogram.map(LevelHistogram::from);
+
         let result = ColumnChunkMetaData {
             column_descr,
             encodings,
@@ -838,10 +947,20 @@ impl ColumnChunkMetaData {
             || self.repetition_level_histogram.is_some()
             || self.definition_level_histogram.is_some()
         {
+            let repetition_level_histogram = self
+                .repetition_level_histogram
+                .as_ref()
+                .map(|hist| hist.clone().into_inner());
+
+            let definition_level_histogram = self
+                .definition_level_histogram
+                .as_ref()
+                .map(|hist| hist.clone().into_inner());
+
             Some(SizeStatistics {
                 unencoded_byte_array_data_bytes: self.unencoded_byte_array_data_bytes,
-                repetition_level_histogram: self.repetition_level_histogram.clone(),
-                definition_level_histogram: self.definition_level_histogram.clone(),
+                repetition_level_histogram,
+                definition_level_histogram,
             })
         } else {
             None
@@ -1023,13 +1142,13 @@ impl ColumnChunkMetaDataBuilder {
     }
 
     /// Sets optional repetition level histogram
-    pub fn set_repetition_level_histogram(mut self, value: Option<Vec<i64>>) -> Self {
+    pub fn set_repetition_level_histogram(mut self, value: Option<LevelHistogram>) -> Self {
         self.0.repetition_level_histogram = value;
         self
     }
 
     /// Sets optional repetition level histogram
-    pub fn set_definition_level_histogram(mut self, value: Option<Vec<i64>>) -> Self {
+    pub fn set_definition_level_histogram(mut self, value: Option<LevelHistogram>) -> Self {
         self.0.definition_level_histogram = value;
         self
     }
@@ -1049,7 +1168,9 @@ pub struct ColumnIndexBuilder {
     max_values: Vec<Vec<u8>>,
     null_counts: Vec<i64>,
     boundary_order: BoundaryOrder,
+    /// contains the concatenation of the histograms of all pages
     repetition_level_histograms: Option<Vec<i64>>,
+    /// contains the concatenation of the histograms of all pages
     definition_level_histograms: Option<Vec<i64>>,
     /// Is the information in the builder valid?
     ///
@@ -1099,8 +1220,8 @@ impl ColumnIndexBuilder {
     /// Does nothing if the `ColumnIndexBuilder` is not in the `valid` state.
     pub fn append_histograms(
         &mut self,
-        repetition_level_histogram: &Option<Vec<i64>>,
-        definition_level_histogram: &Option<Vec<i64>>,
+        repetition_level_histogram: &Option<LevelHistogram>,
+        definition_level_histogram: &Option<LevelHistogram>,
     ) {
         if !self.valid {
             return;
@@ -1108,12 +1229,12 @@ impl ColumnIndexBuilder {
         if let Some(ref rep_lvl_hist) = repetition_level_histogram {
             let hist = self.repetition_level_histograms.get_or_insert(Vec::new());
             hist.reserve(rep_lvl_hist.len());
-            hist.extend(rep_lvl_hist);
+            hist.extend(rep_lvl_hist.values());
         }
         if let Some(ref def_lvl_hist) = definition_level_histogram {
             let hist = self.definition_level_histograms.get_or_insert(Vec::new());
             hist.reserve(def_lvl_hist.len());
-            hist.extend(def_lvl_hist);
+            hist.extend(def_lvl_hist.values());
         }
     }
 
@@ -1358,8 +1479,8 @@ mod tests {
             .set_column_index_offset(Some(8000))
             .set_column_index_length(Some(25))
             .set_unencoded_byte_array_data_bytes(Some(2000))
-            .set_repetition_level_histogram(Some(vec![100, 100]))
-            .set_definition_level_histogram(Some(vec![0, 200]))
+            .set_repetition_level_histogram(Some(LevelHistogram::from(vec![100, 100])))
+            .set_definition_level_histogram(Some(LevelHistogram::from(vec![0, 200])))
             .build()
             .unwrap();
 

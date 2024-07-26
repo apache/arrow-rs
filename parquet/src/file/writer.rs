@@ -1895,7 +1895,7 @@ mod tests {
         assert_eq!(file_metadata.row_groups[0].columns.len(), 1);
         assert!(file_metadata.row_groups[0].columns[0].meta_data.is_some());
 
-        let check_def_hist = |def_hist: &Vec<i64>| {
+        let check_def_hist = |def_hist: &[i64]| {
             assert_eq!(def_hist.len(), 2);
             assert_eq!(def_hist[0], 3);
             assert_eq!(def_hist[1], 7);
@@ -1931,7 +1931,7 @@ mod tests {
         assert!(column.definition_level_histogram().is_some());
         assert!(column.repetition_level_histogram().is_none());
         assert!(column.unencoded_byte_array_data_bytes().is_some());
-        check_def_hist(column.definition_level_histogram().unwrap());
+        check_def_hist(column.definition_level_histogram().unwrap().values());
         assert_eq!(
             unenc_size,
             column.unencoded_byte_array_data_bytes().unwrap()
@@ -2009,7 +2009,7 @@ mod tests {
         assert_eq!(file_metadata.row_groups[0].columns.len(), 1);
         assert!(file_metadata.row_groups[0].columns[0].meta_data.is_some());
 
-        let check_def_hist = |def_hist: &Vec<i64>| {
+        let check_def_hist = |def_hist: &[i64]| {
             assert_eq!(def_hist.len(), 4);
             assert_eq!(def_hist[0], 1);
             assert_eq!(def_hist[1], 1);
@@ -2017,7 +2017,7 @@ mod tests {
             assert_eq!(def_hist[3], 7);
         };
 
-        let check_rep_hist = |rep_hist: &Vec<i64>| {
+        let check_rep_hist = |rep_hist: &[i64]| {
             assert_eq!(rep_hist.len(), 2);
             assert_eq!(rep_hist[0], 5);
             assert_eq!(rep_hist[1], 5);
@@ -2051,8 +2051,8 @@ mod tests {
         assert!(column.definition_level_histogram().is_some());
         assert!(column.repetition_level_histogram().is_some());
         assert!(column.unencoded_byte_array_data_bytes().is_none());
-        check_def_hist(column.definition_level_histogram().unwrap());
-        check_rep_hist(column.repetition_level_histogram().unwrap());
+        check_def_hist(column.definition_level_histogram().unwrap().values());
+        check_rep_hist(column.repetition_level_histogram().unwrap().values());
 
         // check histogram in column index as well
         assert!(reader.metadata().column_index().is_some());
