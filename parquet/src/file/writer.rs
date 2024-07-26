@@ -1951,7 +1951,7 @@ mod tests {
 
         assert!(col_idx.repetition_level_histogram().is_none());
         assert!(col_idx.definition_level_histogram().is_some());
-        check_def_hist(col_idx.definition_level_histogram().unwrap());
+        check_def_hist(col_idx.definition_level_histogram().unwrap().values());
 
         assert!(reader.metadata().offset_index().is_some());
         let offset_index = reader.metadata().offset_index().unwrap();
@@ -2066,8 +2066,8 @@ mod tests {
             unreachable!()
         };
 
-        check_def_hist(col_idx.definition_level_histogram().unwrap());
-        check_rep_hist(col_idx.repetition_level_histogram().unwrap());
+        check_def_hist(col_idx.definition_level_histogram().unwrap().values());
+        check_rep_hist(col_idx.repetition_level_histogram().unwrap().values());
 
         assert!(reader.metadata().offset_index().is_some());
         let offset_index = reader.metadata().offset_index().unwrap();
