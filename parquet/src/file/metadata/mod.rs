@@ -837,7 +837,7 @@ impl ColumnChunkMetaData {
     /// Returns the definition level histogram.
     ///
     /// The returned value `vec[i]` is how many values are at definition level `i`. For example,
-    /// `vec[max_definition_level-1]` indicates how many non-null values are present in the page.
+    /// `vec[max_definition_level]` indicates how many non-null values are present in the page.
     /// This field may not be set by older writers.
     pub fn definition_level_histogram(&self) -> Option<&LevelHistogram> {
         self.definition_level_histogram.as_ref()

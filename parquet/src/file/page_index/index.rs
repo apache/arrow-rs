@@ -44,7 +44,7 @@ pub struct PageIndex<T> {
     /// Definition level histogram for the page
     ///
     /// `definition_level_histogram[i]` is a count of how many values are at definition level `i`.
-    /// For example, `definition_level_histogram[max_definition_level-1]` indicates how many
+    /// For example, `definition_level_histogram[max_definition_level]` indicates how many
     /// non-null values are present in the page.
     pub definition_level_histogram: Option<Vec<i64>>,
 }
