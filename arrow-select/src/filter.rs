@@ -764,7 +764,7 @@ fn filter_byte_view<T: ByteViewType>(
     // Replace the buffers marked as false with empty ones to preserve the mapping relationship between views and buffers.
     let new_buffers = new_buffers
         .into_iter()
-        .zip(left_buffers.into_iter())
+        .zip(left_buffers)
         .map(
             |(buffer, left)| {
                 if left {
