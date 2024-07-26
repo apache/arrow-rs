@@ -887,6 +887,10 @@ impl ColumnChunkMetaDataBuilder {
     }
 
     /// Sets file offset in bytes.
+    ///
+    /// This field was meant to provide an alternate to storing `ColumnMetadata` directly in
+    /// the `ColumnChunkMetadata`. However, most parquet readers assume the `ColumnMetadata`
+    /// is stored inline and ignore this field. 
     #[deprecated(since = "53.0.0", note = "No longer used nor written")]
     pub fn set_file_offset(mut self, value: i64) -> Self {
         self.0.file_offset = value;
