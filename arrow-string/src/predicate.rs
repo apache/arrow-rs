@@ -111,9 +111,9 @@ impl<'a> Predicate<'a> {
             Predicate::IEqAscii(v) => BooleanArray::from_unary(array, |haystack| {
                 haystack.eq_ignore_ascii_case(v) != negate
             }),
-            Predicate::Contains(finder) => {
-                BooleanArray::from_unary(array, |haystack| finder.find(haystack.as_bytes()).is_some() != negate)
-            }
+            Predicate::Contains(finder) => BooleanArray::from_unary(array, |haystack| {
+                finder.find(haystack.as_bytes()).is_some() != negate
+            }),
             Predicate::StartsWith(v) => {
                 BooleanArray::from_unary(array, |haystack| haystack.starts_with(v) != negate)
             }
