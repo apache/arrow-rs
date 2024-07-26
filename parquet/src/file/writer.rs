@@ -663,6 +663,12 @@ impl<'a, W: Write + Send> SerializedRowGroupWriter<'a, W> {
             .set_dictionary_page_offset(src_dictionary_offset.map(map_offset))
             .set_unencoded_byte_array_data_bytes(metadata.unencoded_byte_array_data_bytes());
 
+        if let Some(rep_hist) = metadata.repetition_level_histogram() {
+            builder = builder.set_repetition_level_histogram(Some(rep_hist.clone()))
+        }
+        if let Some(def_hist) = metadata.definition_level_histogram() {
+            builder = builder.set_definition_level_histogram(Some(def_hist.clone()))
+        }
         if let Some(statistics) = metadata.statistics() {
             builder = builder.set_statistics(statistics.clone())
         }
@@ -1889,6 +1895,12 @@ mod tests {
         assert_eq!(file_metadata.row_groups[0].columns.len(), 1);
         assert!(file_metadata.row_groups[0].columns[0].meta_data.is_some());
 
+        let check_def_hist = |def_hist: &[i64]| {
+            assert_eq!(def_hist.len(), 2);
+            assert_eq!(def_hist[0], 3);
+            assert_eq!(def_hist[1], 7);
+        };
+
         assert!(file_metadata.row_groups[0].columns[0].meta_data.is_some());
         let meta_data = file_metadata.row_groups[0].columns[0]
             .meta_data
@@ -1898,12 +1910,13 @@ mod tests {
         let size_stats = meta_data.size_statistics.as_ref().unwrap();
 
         assert!(size_stats.repetition_level_histogram.is_none());
-        assert!(size_stats.definition_level_histogram.is_none());
+        assert!(size_stats.definition_level_histogram.is_some());
         assert!(size_stats.unencoded_byte_array_data_bytes.is_some());
         assert_eq!(
             unenc_size,
             size_stats.unencoded_byte_array_data_bytes.unwrap()
         );
+        check_def_hist(size_stats.definition_level_histogram.as_ref().unwrap());
 
         // check that the read metadata is also correct
         let options = ReadOptionsBuilder::new().with_page_index().build();
@@ -1915,11 +1928,30 @@ mod tests {
         let rowgroup = reader.get_row_group(0).unwrap();
         assert_eq!(rowgroup.num_columns(), 1);
         let column = rowgroup.metadata().column(0);
+        assert!(column.definition_level_histogram().is_some());
+        assert!(column.repetition_level_histogram().is_none());
         assert!(column.unencoded_byte_array_data_bytes().is_some());
+        check_def_hist(column.definition_level_histogram().unwrap().values());
         assert_eq!(
             unenc_size,
             column.unencoded_byte_array_data_bytes().unwrap()
         );
+
+        // check histogram in column index as well
+        assert!(reader.metadata().column_index().is_some());
+        let column_index = reader.metadata().column_index().unwrap();
+        assert_eq!(column_index.len(), 1);
+        assert_eq!(column_index[0].len(), 1);
+        let col_idx = if let Index::BYTE_ARRAY(index) = &column_index[0][0] {
+            assert_eq!(index.indexes.len(), 1);
+            &index.indexes[0]
+        } else {
+            unreachable!()
+        };
+
+        assert!(col_idx.repetition_level_histogram().is_none());
+        assert!(col_idx.definition_level_histogram().is_some());
+        check_def_hist(col_idx.definition_level_histogram().unwrap());
 
         assert!(reader.metadata().offset_index().is_some());
         let offset_index = reader.metadata().offset_index().unwrap();
@@ -1932,5 +1964,115 @@ mod tests {
             .unwrap();
         assert_eq!(page_sizes.len(), 1);
         assert_eq!(page_sizes[0], unenc_size);
+    }
+
+    #[test]
+    fn test_size_statistics_with_repetition_and_nulls() {
+        let message_type = "
+            message test_schema {
+                OPTIONAL group i32_list (LIST) {
+                    REPEATED group list {
+                        OPTIONAL INT32 element;
+                    }
+                }
+            }
+        ";
+        // column is:
+        // row 0: [1, 2]
+        // row 1: NULL
+        // row 2: [4, NULL]
+        // row 3: []
+        // row 4: [7, 8, 9, 10]
+        let schema = Arc::new(parse_message_type(message_type).unwrap());
+        let data = [1, 2, 4, 7, 8, 9, 10];
+        let def_levels = [3, 3, 0, 3, 2, 1, 3, 3, 3, 3];
+        let rep_levels = [0, 1, 0, 0, 1, 0, 0, 1, 1, 1];
+        let file = tempfile::tempfile().unwrap();
+        let props = Arc::new(
+            WriterProperties::builder()
+                .set_statistics_enabled(EnabledStatistics::Page)
+                .build(),
+        );
+        let mut writer = SerializedFileWriter::new(&file, schema, props).unwrap();
+        let mut row_group_writer = writer.next_row_group().unwrap();
+
+        let mut col_writer = row_group_writer.next_column().unwrap().unwrap();
+        col_writer
+            .typed::<Int32Type>()
+            .write_batch(&data, Some(&def_levels), Some(&rep_levels))
+            .unwrap();
+        col_writer.close().unwrap();
+        row_group_writer.close().unwrap();
+        let file_metadata = writer.close().unwrap();
+
+        assert_eq!(file_metadata.row_groups.len(), 1);
+        assert_eq!(file_metadata.row_groups[0].columns.len(), 1);
+        assert!(file_metadata.row_groups[0].columns[0].meta_data.is_some());
+
+        let check_def_hist = |def_hist: &[i64]| {
+            assert_eq!(def_hist.len(), 4);
+            assert_eq!(def_hist[0], 1);
+            assert_eq!(def_hist[1], 1);
+            assert_eq!(def_hist[2], 1);
+            assert_eq!(def_hist[3], 7);
+        };
+
+        let check_rep_hist = |rep_hist: &[i64]| {
+            assert_eq!(rep_hist.len(), 2);
+            assert_eq!(rep_hist[0], 5);
+            assert_eq!(rep_hist[1], 5);
+        };
+
+        // check that histograms are set properly in the write and read metadata
+        // also check that unencoded_byte_array_data_bytes is not set
+        assert!(file_metadata.row_groups[0].columns[0].meta_data.is_some());
+        let meta_data = file_metadata.row_groups[0].columns[0]
+            .meta_data
+            .as_ref()
+            .unwrap();
+        assert!(meta_data.size_statistics.is_some());
+        let size_stats = meta_data.size_statistics.as_ref().unwrap();
+        assert!(size_stats.repetition_level_histogram.is_some());
+        assert!(size_stats.definition_level_histogram.is_some());
+        assert!(size_stats.unencoded_byte_array_data_bytes.is_none());
+        check_def_hist(size_stats.definition_level_histogram.as_ref().unwrap());
+        check_rep_hist(size_stats.repetition_level_histogram.as_ref().unwrap());
+
+        // check that the read metadata is also correct
+        let options = ReadOptionsBuilder::new().with_page_index().build();
+        let reader = SerializedFileReader::new_with_options(file, options).unwrap();
+
+        let rfile_metadata = reader.metadata().file_metadata();
+        assert_eq!(rfile_metadata.num_rows(), file_metadata.num_rows);
+        assert_eq!(reader.num_row_groups(), 1);
+        let rowgroup = reader.get_row_group(0).unwrap();
+        assert_eq!(rowgroup.num_columns(), 1);
+        let column = rowgroup.metadata().column(0);
+        assert!(column.definition_level_histogram().is_some());
+        assert!(column.repetition_level_histogram().is_some());
+        assert!(column.unencoded_byte_array_data_bytes().is_none());
+        check_def_hist(column.definition_level_histogram().unwrap().values());
+        check_rep_hist(column.repetition_level_histogram().unwrap().values());
+
+        // check histogram in column index as well
+        assert!(reader.metadata().column_index().is_some());
+        let column_index = reader.metadata().column_index().unwrap();
+        assert_eq!(column_index.len(), 1);
+        assert_eq!(column_index[0].len(), 1);
+        let col_idx = if let Index::INT32(index) = &column_index[0][0] {
+            assert_eq!(index.indexes.len(), 1);
+            &index.indexes[0]
+        } else {
+            unreachable!()
+        };
+
+        check_def_hist(col_idx.definition_level_histogram().unwrap());
+        check_rep_hist(col_idx.repetition_level_histogram().unwrap());
+
+        assert!(reader.metadata().offset_index().is_some());
+        let offset_index = reader.metadata().offset_index().unwrap();
+        assert_eq!(offset_index.len(), 1);
+        assert_eq!(offset_index[0].len(), 1);
+        assert!(offset_index[0][0].unencoded_byte_array_data_bytes.is_none());
     }
 }
