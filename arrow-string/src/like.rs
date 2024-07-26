@@ -273,9 +273,18 @@ fn op_binary<'a>(
     match op {
         Op::Like(neg) => binary_predicate(l, r, neg, Predicate::like),
         Op::ILike(neg) => binary_predicate(l, r, neg, |s| Predicate::ilike(s, false)),
-        Op::Contains => Ok(l.zip(r).map(|(l, r)| Some(l?.contains(r?))).collect()),
-        Op::StartsWith => Ok(l.zip(r).map(|(l, r)| Some(crate::predicate::starts_with(l?, r?))).collect()),
-        Op::EndsWith => Ok(l.zip(r).map(|(l, r)| Some(crate::predicate::ends_with(l?, r?))).collect()),
+        Op::Contains => Ok(l
+            .zip(r)
+            .map(|(l, r)| Some(Predicate::Contains(r?).evaluate(l?)))
+            .collect()),
+        Op::StartsWith => Ok(l
+            .zip(r)
+            .map(|(l, r)| Some(Predicate::StartsWith(r?).evaluate(l?)))
+            .collect()),
+        Op::EndsWith => Ok(l
+            .zip(r)
+            .map(|(l, r)| Some(Predicate::EndsWith(r?).evaluate(l?)))
+            .collect()),
     }
 }
 
