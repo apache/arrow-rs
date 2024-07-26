@@ -117,12 +117,12 @@ impl ConvertedType {
   /// a list is converted into an optional field containing a repeated field for its
   /// values
   pub const LIST: ConvertedType = ConvertedType(3);
-  /// an enum is converted into a binary field
+  /// an enum is converted into a BYTE_ARRAY field
   pub const ENUM: ConvertedType = ConvertedType(4);
   /// A decimal value.
   /// 
-  /// This may be used to annotate binary or fixed primitive types. The
-  /// underlying byte array stores the unscaled value encoded as two's
+  /// This may be used to annotate BYTE_ARRAY or FIXED_LEN_BYTE_ARRAY primitive
+  /// types. The underlying byte array stores the unscaled value encoded as two's
   /// complement using big-endian byte order (the most significant byte is the
   /// zeroth element). The value of the decimal is the value * 10^{-scale}.
   /// 
@@ -185,7 +185,7 @@ impl ConvertedType {
   pub const JSON: ConvertedType = ConvertedType(19);
   /// An embedded BSON document
   /// 
-  /// A BSON document embedded within a single BINARY column.
+  /// A BSON document embedded within a single BYTE_ARRAY column.
   pub const BSON: ConvertedType = ConvertedType(20);
   /// An interval of time
   /// 
@@ -288,9 +288,9 @@ impl From<&ConvertedType> for i32 {
 pub struct FieldRepetitionType(pub i32);
 
 impl FieldRepetitionType {
-  /// This field is required (can not be null) and each record has exactly 1 value.
+  /// This field is required (can not be null) and each row has exactly 1 value.
   pub const REQUIRED: FieldRepetitionType = FieldRepetitionType(0);
-  /// The field is optional (can be null) and each record has 0 or 1 values.
+  /// The field is optional (can be null) and each row has 0 or 1 values.
   pub const OPTIONAL: FieldRepetitionType = FieldRepetitionType(1);
   /// The field is repeated and can contain 0 or more values
   pub const REPEATED: FieldRepetitionType = FieldRepetitionType(2);
@@ -379,12 +379,15 @@ impl Encoding {
   pub const DELTA_BYTE_ARRAY: Encoding = Encoding(7);
   /// Dictionary encoding: the ids are encoded using the RLE encoding
   pub const RLE_DICTIONARY: Encoding = Encoding(8);
-  /// Encoding for floating-point data.
+  /// Encoding for fixed-width data (FLOAT, DOUBLE, INT32, INT64, FIXED_LEN_BYTE_ARRAY).
   /// K byte-streams are created where K is the size in bytes of the data type.
-  /// The individual bytes of an FP value are scattered to the corresponding stream and
+  /// The individual bytes of a value are scattered to the corresponding stream and
   /// the streams are concatenated.
   /// This itself does not reduce the size of the data but can lead to better compression
   /// afterwards.
+  /// 
+  /// Added in 2.8 for FLOAT and DOUBLE.
+  /// Support for INT32, INT64 and FIXED_LEN_BYTE_ARRAY added in 2.11.
   pub const BYTE_STREAM_SPLIT: Encoding = Encoding(9);
   pub const ENUM_VALUES: &'static [Self] = &[
     Self::PLAIN,
@@ -631,6 +634,143 @@ impl From<BoundaryOrder> for i32 {
 impl From<&BoundaryOrder> for i32 {
   fn from(e: &BoundaryOrder) -> i32 {
     e.0
+  }
+}
+
+//
+// SizeStatistics
+//
+
+/// A structure for capturing metadata for estimating the unencoded,
+/// uncompressed size of data written. This is useful for readers to estimate
+/// how much memory is needed to reconstruct data in their memory model and for
+/// fine grained filter pushdown on nested structures (the histograms contained
+/// in this structure can help determine the number of nulls at a particular
+/// nesting level and maximum length of lists).
+#[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct SizeStatistics {
+  /// The number of physical bytes stored for BYTE_ARRAY data values assuming
+  /// no encoding. This is exclusive of the bytes needed to store the length of
+  /// each byte array. In other words, this field is equivalent to the `(size
+  /// of PLAIN-ENCODING the byte array values) - (4 bytes * number of values
+  /// written)`. To determine unencoded sizes of other types readers can use
+  /// schema information multiplied by the number of non-null and null values.
+  /// The number of null/non-null values can be inferred from the histograms
+  /// below.
+  /// 
+  /// For example, if a column chunk is dictionary-encoded with dictionary
+  /// ["a", "bc", "cde"], and a data page contains the indices [0, 0, 1, 2],
+  /// then this value for that data page should be 7 (1 + 1 + 2 + 3).
+  /// 
+  /// This field should only be set for types that use BYTE_ARRAY as their
+  /// physical type.
+  pub unencoded_byte_array_data_bytes: Option<i64>,
+  /// When present, there is expected to be one element corresponding to each
+  /// repetition (i.e. size=max repetition_level+1) where each element
+  /// represents the number of times the repetition level was observed in the
+  /// data.
+  /// 
+  /// This field may be omitted if max_repetition_level is 0 without loss
+  /// of information.
+  /// 
+  pub repetition_level_histogram: Option<Vec<i64>>,
+  /// Same as repetition_level_histogram except for definition levels.
+  /// 
+  /// This field may be omitted if max_definition_level is 0 or 1 without
+  /// loss of information.
+  /// 
+  pub definition_level_histogram: Option<Vec<i64>>,
+}
+
+impl SizeStatistics {
+  pub fn new<F1, F2, F3>(unencoded_byte_array_data_bytes: F1, repetition_level_histogram: F2, definition_level_histogram: F3) -> SizeStatistics where F1: Into<Option<i64>>, F2: Into<Option<Vec<i64>>>, F3: Into<Option<Vec<i64>>> {
+    SizeStatistics {
+      unencoded_byte_array_data_bytes: unencoded_byte_array_data_bytes.into(),
+      repetition_level_histogram: repetition_level_histogram.into(),
+      definition_level_histogram: definition_level_histogram.into(),
+    }
+  }
+}
+
+impl crate::thrift::TSerializable for SizeStatistics {
+  fn read_from_in_protocol<T: TInputProtocol>(i_prot: &mut T) -> thrift::Result<SizeStatistics> {
+    i_prot.read_struct_begin()?;
+    let mut f_1: Option<i64> = None;
+    let mut f_2: Option<Vec<i64>> = None;
+    let mut f_3: Option<Vec<i64>> = None;
+    loop {
+      let field_ident = i_prot.read_field_begin()?;
+      if field_ident.field_type == TType::Stop {
+        break;
+      }
+      let field_id = field_id(&field_ident)?;
+      match field_id {
+        1 => {
+          let val = i_prot.read_i64()?;
+          f_1 = Some(val);
+        },
+        2 => {
+          let list_ident = i_prot.read_list_begin()?;
+          let mut val: Vec<i64> = Vec::with_capacity(list_ident.size as usize);
+          for _ in 0..list_ident.size {
+            let list_elem_0 = i_prot.read_i64()?;
+            val.push(list_elem_0);
+          }
+          i_prot.read_list_end()?;
+          f_2 = Some(val);
+        },
+        3 => {
+          let list_ident = i_prot.read_list_begin()?;
+          let mut val: Vec<i64> = Vec::with_capacity(list_ident.size as usize);
+          for _ in 0..list_ident.size {
+            let list_elem_1 = i_prot.read_i64()?;
+            val.push(list_elem_1);
+          }
+          i_prot.read_list_end()?;
+          f_3 = Some(val);
+        },
+        _ => {
+          i_prot.skip(field_ident.field_type)?;
+        },
+      };
+      i_prot.read_field_end()?;
+    }
+    i_prot.read_struct_end()?;
+    let ret = SizeStatistics {
+      unencoded_byte_array_data_bytes: f_1,
+      repetition_level_histogram: f_2,
+      definition_level_histogram: f_3,
+    };
+    Ok(ret)
+  }
+  fn write_to_out_protocol<T: TOutputProtocol>(&self, o_prot: &mut T) -> thrift::Result<()> {
+    let struct_ident = TStructIdentifier::new("SizeStatistics");
+    o_prot.write_struct_begin(&struct_ident)?;
+    if let Some(fld_var) = self.unencoded_byte_array_data_bytes {
+      o_prot.write_field_begin(&TFieldIdentifier::new("unencoded_byte_array_data_bytes", TType::I64, 1))?;
+      o_prot.write_i64(fld_var)?;
+      o_prot.write_field_end()?
+    }
+    if let Some(ref fld_var) = self.repetition_level_histogram {
+      o_prot.write_field_begin(&TFieldIdentifier::new("repetition_level_histogram", TType::List, 2))?;
+      o_prot.write_list_begin(&TListIdentifier::new(TType::I64, fld_var.len() as i32))?;
+      for e in fld_var {
+        o_prot.write_i64(*e)?;
+      }
+      o_prot.write_list_end()?;
+      o_prot.write_field_end()?
+    }
+    if let Some(ref fld_var) = self.definition_level_histogram {
+      o_prot.write_field_begin(&TFieldIdentifier::new("definition_level_histogram", TType::List, 3))?;
+      o_prot.write_list_begin(&TListIdentifier::new(TType::I64, fld_var.len() as i32))?;
+      for e in fld_var {
+        o_prot.write_i64(*e)?;
+      }
+      o_prot.write_list_end()?;
+      o_prot.write_field_end()?
+    }
+    o_prot.write_field_stop()?;
+    o_prot.write_struct_end()
   }
 }
 
@@ -1123,7 +1263,7 @@ impl crate::thrift::TSerializable for NullType {
 /// To maintain forward-compatibility in v1, implementations using this logical
 /// type must also set scale and precision on the annotated SchemaElement.
 /// 
-/// Allowed for physical types: INT32, INT64, FIXED, and BINARY
+/// Allowed for physical types: INT32, INT64, FIXED_LEN_BYTE_ARRAY, and BYTE_ARRAY.
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct DecimalType {
   pub scale: i32,
@@ -1620,7 +1760,7 @@ impl crate::thrift::TSerializable for IntType {
 
 /// Embedded JSON logical type annotation
 /// 
-/// Allowed for physical types: BINARY
+/// Allowed for physical types: BYTE_ARRAY
 #[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct JsonType {
 }
@@ -1660,7 +1800,7 @@ impl crate::thrift::TSerializable for JsonType {
 
 /// Embedded BSON logical type annotation
 /// 
-/// Allowed for physical types: BINARY
+/// Allowed for physical types: BYTE_ARRAY
 #[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct BsonType {
 }
@@ -2150,7 +2290,12 @@ impl crate::thrift::TSerializable for SchemaElement {
 /// Data page header
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct DataPageHeader {
-  /// Number of values, including NULLs, in this data page. *
+  /// Number of values, including NULLs, in this data page.
+  /// 
+  /// If a OffsetIndex is present, a page must begin at a row
+  /// boundary (repetition_level = 0). Otherwise, pages may begin
+  /// within a row (repetition_level > 0).
+  /// 
   pub num_values: i32,
   /// Encoding used for this data page *
   pub encoding: Encoding,
@@ -2158,7 +2303,7 @@ pub struct DataPageHeader {
   pub definition_level_encoding: Encoding,
   /// Encoding used for repetition levels *
   pub repetition_level_encoding: Encoding,
-  /// Optional statistics for the data in this page*
+  /// Optional statistics for the data in this page *
   pub statistics: Option<Statistics>,
 }
 
@@ -2394,21 +2539,24 @@ pub struct DataPageHeaderV2 {
   /// Number of NULL values, in this data page.
   /// Number of non-null = num_values - num_nulls which is also the number of values in the data section *
   pub num_nulls: i32,
-  /// Number of rows in this data page. which means pages change on record boundaries (r = 0) *
+  /// Number of rows in this data page. Every page must begin at a
+  /// row boundary (repetition_level = 0): rows must **not** be
+  /// split across page boundaries when using V2 data pages.
+  /// 
   pub num_rows: i32,
   /// Encoding used for data in this page *
   pub encoding: Encoding,
-  /// length of the definition levels
+  /// Length of the definition levels
   pub definition_levels_byte_length: i32,
-  /// length of the repetition levels
+  /// Length of the repetition levels
   pub repetition_levels_byte_length: i32,
-  /// whether the values are compressed.
+  /// Whether the values are compressed.
   /// Which means the section of the page between
   /// definition_levels_byte_length + repetition_levels_byte_length + 1 and compressed_page_size (included)
   /// is compressed with the compression_codec.
   /// If missing it is considered compressed
   pub is_compressed: Option<bool>,
-  /// optional statistics for the data in this page *
+  /// Optional statistics for the data in this page *
   pub statistics: Option<Statistics>,
 }
 
@@ -3211,10 +3359,10 @@ impl crate::thrift::TSerializable for KeyValue {
 // SortingColumn
 //
 
-/// Wrapper struct to specify sort order
+/// Sort order within a RowGroup of a leaf column
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct SortingColumn {
-  /// The column index (in this row group) *
+  /// The ordinal position of the column (in this row group) *
   pub column_idx: i32,
   /// If true, indicates this column is sorted in descending order. *
   pub descending: bool,
@@ -3421,10 +3569,15 @@ pub struct ColumnMetaData {
   /// Writers should write this field so readers can read the bloom filter
   /// in a single I/O.
   pub bloom_filter_length: Option<i32>,
+  /// Optional statistics to help estimate total memory when converted to in-memory
+  /// representations. The histograms contained in these statistics can
+  /// also be useful in some cases for more fine-grained nullability/list length
+  /// filter pushdown.
+  pub size_statistics: Option<SizeStatistics>,
 }
 
 impl ColumnMetaData {
-  pub fn new<F8, F10, F11, F12, F13, F14, F15>(type_: Type, encodings: Vec<Encoding>, path_in_schema: Vec<String>, codec: CompressionCodec, num_values: i64, total_uncompressed_size: i64, total_compressed_size: i64, key_value_metadata: F8, data_page_offset: i64, index_page_offset: F10, dictionary_page_offset: F11, statistics: F12, encoding_stats: F13, bloom_filter_offset: F14, bloom_filter_length: F15) -> ColumnMetaData where F8: Into<Option<Vec<KeyValue>>>, F10: Into<Option<i64>>, F11: Into<Option<i64>>, F12: Into<Option<Statistics>>, F13: Into<Option<Vec<PageEncodingStats>>>, F14: Into<Option<i64>>, F15: Into<Option<i32>> {
+  pub fn new<F8, F10, F11, F12, F13, F14, F15, F16>(type_: Type, encodings: Vec<Encoding>, path_in_schema: Vec<String>, codec: CompressionCodec, num_values: i64, total_uncompressed_size: i64, total_compressed_size: i64, key_value_metadata: F8, data_page_offset: i64, index_page_offset: F10, dictionary_page_offset: F11, statistics: F12, encoding_stats: F13, bloom_filter_offset: F14, bloom_filter_length: F15, size_statistics: F16) -> ColumnMetaData where F8: Into<Option<Vec<KeyValue>>>, F10: Into<Option<i64>>, F11: Into<Option<i64>>, F12: Into<Option<Statistics>>, F13: Into<Option<Vec<PageEncodingStats>>>, F14: Into<Option<i64>>, F15: Into<Option<i32>>, F16: Into<Option<SizeStatistics>> {
     ColumnMetaData {
       type_,
       encodings,
@@ -3441,6 +3594,7 @@ impl ColumnMetaData {
       encoding_stats: encoding_stats.into(),
       bloom_filter_offset: bloom_filter_offset.into(),
       bloom_filter_length: bloom_filter_length.into(),
+      size_statistics: size_statistics.into(),
     }
   }
 }
@@ -3463,6 +3617,7 @@ impl crate::thrift::TSerializable for ColumnMetaData {
     let mut f_13: Option<Vec<PageEncodingStats>> = None;
     let mut f_14: Option<i64> = None;
     let mut f_15: Option<i32> = None;
+    let mut f_16: Option<SizeStatistics> = None;
     loop {
       let field_ident = i_prot.read_field_begin()?;
       if field_ident.field_type == TType::Stop {
@@ -3478,8 +3633,8 @@ impl crate::thrift::TSerializable for ColumnMetaData {
           let list_ident = i_prot.read_list_begin()?;
           let mut val: Vec<Encoding> = Vec::with_capacity(list_ident.size as usize);
           for _ in 0..list_ident.size {
-            let list_elem_0 = Encoding::read_from_in_protocol(i_prot)?;
-            val.push(list_elem_0);
+            let list_elem_2 = Encoding::read_from_in_protocol(i_prot)?;
+            val.push(list_elem_2);
           }
           i_prot.read_list_end()?;
           f_2 = Some(val);
@@ -3488,8 +3643,8 @@ impl crate::thrift::TSerializable for ColumnMetaData {
           let list_ident = i_prot.read_list_begin()?;
           let mut val: Vec<String> = Vec::with_capacity(list_ident.size as usize);
           for _ in 0..list_ident.size {
-            let list_elem_1 = i_prot.read_string()?;
-            val.push(list_elem_1);
+            let list_elem_3 = i_prot.read_string()?;
+            val.push(list_elem_3);
           }
           i_prot.read_list_end()?;
           f_3 = Some(val);
@@ -3514,8 +3669,8 @@ impl crate::thrift::TSerializable for ColumnMetaData {
           let list_ident = i_prot.read_list_begin()?;
           let mut val: Vec<KeyValue> = Vec::with_capacity(list_ident.size as usize);
           for _ in 0..list_ident.size {
-            let list_elem_2 = KeyValue::read_from_in_protocol(i_prot)?;
-            val.push(list_elem_2);
+            let list_elem_4 = KeyValue::read_from_in_protocol(i_prot)?;
+            val.push(list_elem_4);
           }
           i_prot.read_list_end()?;
           f_8 = Some(val);
@@ -3540,8 +3695,8 @@ impl crate::thrift::TSerializable for ColumnMetaData {
           let list_ident = i_prot.read_list_begin()?;
           let mut val: Vec<PageEncodingStats> = Vec::with_capacity(list_ident.size as usize);
           for _ in 0..list_ident.size {
-            let list_elem_3 = PageEncodingStats::read_from_in_protocol(i_prot)?;
-            val.push(list_elem_3);
+            let list_elem_5 = PageEncodingStats::read_from_in_protocol(i_prot)?;
+            val.push(list_elem_5);
           }
           i_prot.read_list_end()?;
           f_13 = Some(val);
@@ -3553,6 +3708,10 @@ impl crate::thrift::TSerializable for ColumnMetaData {
         15 => {
           let val = i_prot.read_i32()?;
           f_15 = Some(val);
+        },
+        16 => {
+          let val = SizeStatistics::read_from_in_protocol(i_prot)?;
+          f_16 = Some(val);
         },
         _ => {
           i_prot.skip(field_ident.field_type)?;
@@ -3585,6 +3744,7 @@ impl crate::thrift::TSerializable for ColumnMetaData {
       encoding_stats: f_13,
       bloom_filter_offset: f_14,
       bloom_filter_length: f_15,
+      size_statistics: f_16,
     };
     Ok(ret)
   }
@@ -3666,6 +3826,11 @@ impl crate::thrift::TSerializable for ColumnMetaData {
       o_prot.write_i32(fld_var)?;
       o_prot.write_field_end()?
     }
+    if let Some(ref fld_var) = self.size_statistics {
+      o_prot.write_field_begin(&TFieldIdentifier::new("size_statistics", TType::Struct, 16))?;
+      fld_var.write_to_out_protocol(o_prot)?;
+      o_prot.write_field_end()?
+    }
     o_prot.write_field_stop()?;
     o_prot.write_struct_end()
   }
@@ -3745,8 +3910,8 @@ impl crate::thrift::TSerializable for EncryptionWithColumnKey {
           let list_ident = i_prot.read_list_begin()?;
           let mut val: Vec<String> = Vec::with_capacity(list_ident.size as usize);
           for _ in 0..list_ident.size {
-            let list_elem_4 = i_prot.read_string()?;
-            val.push(list_elem_4);
+            let list_elem_6 = i_prot.read_string()?;
+            val.push(list_elem_6);
           }
           i_prot.read_list_end()?;
           f_1 = Some(val);
@@ -3885,11 +4050,19 @@ pub struct ColumnChunk {
   /// metadata.  This path is relative to the current file.
   /// 
   pub file_path: Option<String>,
-  /// Byte offset in file_path to the ColumnMetaData *
+  /// Deprecated: Byte offset in file_path to the ColumnMetaData
+  /// 
+  /// Past use of this field has been inconsistent, with some implementations
+  /// using it to point to the ColumnMetaData and some using it to point to
+  /// the first page in the column chunk. In many cases, the ColumnMetaData at this
+  /// location is wrong. This field is now deprecated and should not be used.
+  /// Writers should set this field to 0 if no ColumnMetaData has been written outside
+  /// the footer.
   pub file_offset: i64,
-  /// Column metadata for this chunk. This is the same content as what is at
-  /// file_path/file_offset.  Having it here has it replicated in the file
-  /// metadata.
+  /// Column metadata for this chunk. Some writers may also replicate this at the
+  /// location pointed to by file_path/file_offset.
+  /// Note: while marked as optional, this field is in fact required by most major
+  /// Parquet implementations. As such, writers MUST populate this field.
   /// 
   pub meta_data: Option<ColumnMetaData>,
   /// File offset of ColumnChunk's OffsetIndex *
@@ -4111,8 +4284,8 @@ impl crate::thrift::TSerializable for RowGroup {
           let list_ident = i_prot.read_list_begin()?;
           let mut val: Vec<ColumnChunk> = Vec::with_capacity(list_ident.size as usize);
           for _ in 0..list_ident.size {
-            let list_elem_5 = ColumnChunk::read_from_in_protocol(i_prot)?;
-            val.push(list_elem_5);
+            let list_elem_7 = ColumnChunk::read_from_in_protocol(i_prot)?;
+            val.push(list_elem_7);
           }
           i_prot.read_list_end()?;
           f_1 = Some(val);
@@ -4129,8 +4302,8 @@ impl crate::thrift::TSerializable for RowGroup {
           let list_ident = i_prot.read_list_begin()?;
           let mut val: Vec<SortingColumn> = Vec::with_capacity(list_ident.size as usize);
           for _ in 0..list_ident.size {
-            let list_elem_6 = SortingColumn::read_from_in_protocol(i_prot)?;
-            val.push(list_elem_6);
+            let list_elem_8 = SortingColumn::read_from_in_protocol(i_prot)?;
+            val.push(list_elem_8);
           }
           i_prot.read_list_end()?;
           f_4 = Some(val);
@@ -4335,8 +4508,9 @@ pub struct PageLocation {
   /// Size of the page, including header. Sum of compressed_page_size and header
   /// length
   pub compressed_page_size: i32,
-  /// Index within the RowGroup of the first row of the page; this means pages
-  /// change on record boundaries (r = 0).
+  /// Index within the RowGroup of the first row of the page. When an
+  /// OffsetIndex is present, pages must begin on row boundaries
+  /// (repetition_level = 0).
   pub first_row_index: i64,
 }
 
@@ -4413,17 +4587,28 @@ impl crate::thrift::TSerializable for PageLocation {
 // OffsetIndex
 //
 
+/// Optional offsets for each data page in a ColumnChunk.
+/// 
+/// Forms part of the page index, along with ColumnIndex.
+/// 
+/// OffsetIndex may be present even if ColumnIndex is not.
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct OffsetIndex {
   /// PageLocations, ordered by increasing PageLocation.offset. It is required
   /// that page_locations\[i\].first_row_index < page_locations\[i+1\].first_row_index.
   pub page_locations: Vec<PageLocation>,
+  /// Unencoded/uncompressed size for BYTE_ARRAY types.
+  /// 
+  /// See documention for unencoded_byte_array_data_bytes in SizeStatistics for
+  /// more details on this field.
+  pub unencoded_byte_array_data_bytes: Option<Vec<i64>>,
 }
 
 impl OffsetIndex {
-  pub fn new(page_locations: Vec<PageLocation>) -> OffsetIndex {
+  pub fn new<F2>(page_locations: Vec<PageLocation>, unencoded_byte_array_data_bytes: F2) -> OffsetIndex where F2: Into<Option<Vec<i64>>> {
     OffsetIndex {
       page_locations,
+      unencoded_byte_array_data_bytes: unencoded_byte_array_data_bytes.into(),
     }
   }
 }
@@ -4432,6 +4617,7 @@ impl crate::thrift::TSerializable for OffsetIndex {
   fn read_from_in_protocol<T: TInputProtocol>(i_prot: &mut T) -> thrift::Result<OffsetIndex> {
     i_prot.read_struct_begin()?;
     let mut f_1: Option<Vec<PageLocation>> = None;
+    let mut f_2: Option<Vec<i64>> = None;
     loop {
       let field_ident = i_prot.read_field_begin()?;
       if field_ident.field_type == TType::Stop {
@@ -4443,11 +4629,21 @@ impl crate::thrift::TSerializable for OffsetIndex {
           let list_ident = i_prot.read_list_begin()?;
           let mut val: Vec<PageLocation> = Vec::with_capacity(list_ident.size as usize);
           for _ in 0..list_ident.size {
-            let list_elem_7 = PageLocation::read_from_in_protocol(i_prot)?;
-            val.push(list_elem_7);
+            let list_elem_9 = PageLocation::read_from_in_protocol(i_prot)?;
+            val.push(list_elem_9);
           }
           i_prot.read_list_end()?;
           f_1 = Some(val);
+        },
+        2 => {
+          let list_ident = i_prot.read_list_begin()?;
+          let mut val: Vec<i64> = Vec::with_capacity(list_ident.size as usize);
+          for _ in 0..list_ident.size {
+            let list_elem_10 = i_prot.read_i64()?;
+            val.push(list_elem_10);
+          }
+          i_prot.read_list_end()?;
+          f_2 = Some(val);
         },
         _ => {
           i_prot.skip(field_ident.field_type)?;
@@ -4459,6 +4655,7 @@ impl crate::thrift::TSerializable for OffsetIndex {
     verify_required_field_exists("OffsetIndex.page_locations", &f_1)?;
     let ret = OffsetIndex {
       page_locations: f_1.expect("auto-generated code should have checked for presence of required fields"),
+      unencoded_byte_array_data_bytes: f_2,
     };
     Ok(ret)
   }
@@ -4472,6 +4669,15 @@ impl crate::thrift::TSerializable for OffsetIndex {
     }
     o_prot.write_list_end()?;
     o_prot.write_field_end()?;
+    if let Some(ref fld_var) = self.unencoded_byte_array_data_bytes {
+      o_prot.write_field_begin(&TFieldIdentifier::new("unencoded_byte_array_data_bytes", TType::List, 2))?;
+      o_prot.write_list_begin(&TListIdentifier::new(TType::I64, fld_var.len() as i32))?;
+      for e in fld_var {
+        o_prot.write_i64(*e)?;
+      }
+      o_prot.write_list_end()?;
+      o_prot.write_field_end()?
+    }
     o_prot.write_field_stop()?;
     o_prot.write_struct_end()
   }
@@ -4481,8 +4687,14 @@ impl crate::thrift::TSerializable for OffsetIndex {
 // ColumnIndex
 //
 
-/// Description for ColumnIndex.
-/// Each `<array-field>`\[i\] refers to the page at OffsetIndex.page_locations\[i\]
+/// Optional statistics for each data page in a ColumnChunk.
+/// 
+/// Forms part the page index, along with OffsetIndex.
+/// 
+/// If this structure is present, OffsetIndex must also be present.
+/// 
+/// For each field in this structure, `<field>`\[i\] refers to the page at
+/// OffsetIndex.page_locations\[i\]
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct ColumnIndex {
   /// A list of Boolean values to determine the validity of the corresponding
@@ -4508,16 +4720,33 @@ pub struct ColumnIndex {
   pub boundary_order: BoundaryOrder,
   /// A list containing the number of null values for each page *
   pub null_counts: Option<Vec<i64>>,
+  /// Contains repetition level histograms for each page
+  /// concatenated together.  The repetition_level_histogram field on
+  /// SizeStatistics contains more details.
+  /// 
+  /// When present the length should always be (number of pages *
+  /// (max_repetition_level + 1)) elements.
+  /// 
+  /// Element 0 is the first element of the histogram for the first page.
+  /// Element (max_repetition_level + 1) is the first element of the histogram
+  /// for the second page.
+  /// 
+  pub repetition_level_histograms: Option<Vec<i64>>,
+  /// Same as repetition_level_histograms except for definitions levels.
+  /// 
+  pub definition_level_histograms: Option<Vec<i64>>,
 }
 
 impl ColumnIndex {
-  pub fn new<F5>(null_pages: Vec<bool>, min_values: Vec<Vec<u8>>, max_values: Vec<Vec<u8>>, boundary_order: BoundaryOrder, null_counts: F5) -> ColumnIndex where F5: Into<Option<Vec<i64>>> {
+  pub fn new<F5, F6, F7>(null_pages: Vec<bool>, min_values: Vec<Vec<u8>>, max_values: Vec<Vec<u8>>, boundary_order: BoundaryOrder, null_counts: F5, repetition_level_histograms: F6, definition_level_histograms: F7) -> ColumnIndex where F5: Into<Option<Vec<i64>>>, F6: Into<Option<Vec<i64>>>, F7: Into<Option<Vec<i64>>> {
     ColumnIndex {
       null_pages,
       min_values,
       max_values,
       boundary_order,
       null_counts: null_counts.into(),
+      repetition_level_histograms: repetition_level_histograms.into(),
+      definition_level_histograms: definition_level_histograms.into(),
     }
   }
 }
@@ -4530,6 +4759,8 @@ impl crate::thrift::TSerializable for ColumnIndex {
     let mut f_3: Option<Vec<Vec<u8>>> = None;
     let mut f_4: Option<BoundaryOrder> = None;
     let mut f_5: Option<Vec<i64>> = None;
+    let mut f_6: Option<Vec<i64>> = None;
+    let mut f_7: Option<Vec<i64>> = None;
     loop {
       let field_ident = i_prot.read_field_begin()?;
       if field_ident.field_type == TType::Stop {
@@ -4541,8 +4772,8 @@ impl crate::thrift::TSerializable for ColumnIndex {
           let list_ident = i_prot.read_list_begin()?;
           let mut val: Vec<bool> = Vec::with_capacity(list_ident.size as usize);
           for _ in 0..list_ident.size {
-            let list_elem_8 = i_prot.read_bool()?;
-            val.push(list_elem_8);
+            let list_elem_11 = i_prot.read_bool()?;
+            val.push(list_elem_11);
           }
           i_prot.read_list_end()?;
           f_1 = Some(val);
@@ -4551,8 +4782,8 @@ impl crate::thrift::TSerializable for ColumnIndex {
           let list_ident = i_prot.read_list_begin()?;
           let mut val: Vec<Vec<u8>> = Vec::with_capacity(list_ident.size as usize);
           for _ in 0..list_ident.size {
-            let list_elem_9 = i_prot.read_bytes()?;
-            val.push(list_elem_9);
+            let list_elem_12 = i_prot.read_bytes()?;
+            val.push(list_elem_12);
           }
           i_prot.read_list_end()?;
           f_2 = Some(val);
@@ -4561,8 +4792,8 @@ impl crate::thrift::TSerializable for ColumnIndex {
           let list_ident = i_prot.read_list_begin()?;
           let mut val: Vec<Vec<u8>> = Vec::with_capacity(list_ident.size as usize);
           for _ in 0..list_ident.size {
-            let list_elem_10 = i_prot.read_bytes()?;
-            val.push(list_elem_10);
+            let list_elem_13 = i_prot.read_bytes()?;
+            val.push(list_elem_13);
           }
           i_prot.read_list_end()?;
           f_3 = Some(val);
@@ -4575,11 +4806,31 @@ impl crate::thrift::TSerializable for ColumnIndex {
           let list_ident = i_prot.read_list_begin()?;
           let mut val: Vec<i64> = Vec::with_capacity(list_ident.size as usize);
           for _ in 0..list_ident.size {
-            let list_elem_11 = i_prot.read_i64()?;
-            val.push(list_elem_11);
+            let list_elem_14 = i_prot.read_i64()?;
+            val.push(list_elem_14);
           }
           i_prot.read_list_end()?;
           f_5 = Some(val);
+        },
+        6 => {
+          let list_ident = i_prot.read_list_begin()?;
+          let mut val: Vec<i64> = Vec::with_capacity(list_ident.size as usize);
+          for _ in 0..list_ident.size {
+            let list_elem_15 = i_prot.read_i64()?;
+            val.push(list_elem_15);
+          }
+          i_prot.read_list_end()?;
+          f_6 = Some(val);
+        },
+        7 => {
+          let list_ident = i_prot.read_list_begin()?;
+          let mut val: Vec<i64> = Vec::with_capacity(list_ident.size as usize);
+          for _ in 0..list_ident.size {
+            let list_elem_16 = i_prot.read_i64()?;
+            val.push(list_elem_16);
+          }
+          i_prot.read_list_end()?;
+          f_7 = Some(val);
         },
         _ => {
           i_prot.skip(field_ident.field_type)?;
@@ -4598,6 +4849,8 @@ impl crate::thrift::TSerializable for ColumnIndex {
       max_values: f_3.expect("auto-generated code should have checked for presence of required fields"),
       boundary_order: f_4.expect("auto-generated code should have checked for presence of required fields"),
       null_counts: f_5,
+      repetition_level_histograms: f_6,
+      definition_level_histograms: f_7,
     };
     Ok(ret)
   }
@@ -4630,6 +4883,24 @@ impl crate::thrift::TSerializable for ColumnIndex {
     o_prot.write_field_end()?;
     if let Some(ref fld_var) = self.null_counts {
       o_prot.write_field_begin(&TFieldIdentifier::new("null_counts", TType::List, 5))?;
+      o_prot.write_list_begin(&TListIdentifier::new(TType::I64, fld_var.len() as i32))?;
+      for e in fld_var {
+        o_prot.write_i64(*e)?;
+      }
+      o_prot.write_list_end()?;
+      o_prot.write_field_end()?
+    }
+    if let Some(ref fld_var) = self.repetition_level_histograms {
+      o_prot.write_field_begin(&TFieldIdentifier::new("repetition_level_histograms", TType::List, 6))?;
+      o_prot.write_list_begin(&TListIdentifier::new(TType::I64, fld_var.len() as i32))?;
+      for e in fld_var {
+        o_prot.write_i64(*e)?;
+      }
+      o_prot.write_list_end()?;
+      o_prot.write_field_end()?
+    }
+    if let Some(ref fld_var) = self.definition_level_histograms {
+      o_prot.write_field_begin(&TFieldIdentifier::new("definition_level_histograms", TType::List, 7))?;
       o_prot.write_list_begin(&TListIdentifier::new(TType::I64, fld_var.len() as i32))?;
       for e in fld_var {
         o_prot.write_i64(*e)?;
@@ -4996,8 +5267,8 @@ impl crate::thrift::TSerializable for FileMetaData {
           let list_ident = i_prot.read_list_begin()?;
           let mut val: Vec<SchemaElement> = Vec::with_capacity(list_ident.size as usize);
           for _ in 0..list_ident.size {
-            let list_elem_12 = SchemaElement::read_from_in_protocol(i_prot)?;
-            val.push(list_elem_12);
+            let list_elem_17 = SchemaElement::read_from_in_protocol(i_prot)?;
+            val.push(list_elem_17);
           }
           i_prot.read_list_end()?;
           f_2 = Some(val);
@@ -5010,8 +5281,8 @@ impl crate::thrift::TSerializable for FileMetaData {
           let list_ident = i_prot.read_list_begin()?;
           let mut val: Vec<RowGroup> = Vec::with_capacity(list_ident.size as usize);
           for _ in 0..list_ident.size {
-            let list_elem_13 = RowGroup::read_from_in_protocol(i_prot)?;
-            val.push(list_elem_13);
+            let list_elem_18 = RowGroup::read_from_in_protocol(i_prot)?;
+            val.push(list_elem_18);
           }
           i_prot.read_list_end()?;
           f_4 = Some(val);
@@ -5020,8 +5291,8 @@ impl crate::thrift::TSerializable for FileMetaData {
           let list_ident = i_prot.read_list_begin()?;
           let mut val: Vec<KeyValue> = Vec::with_capacity(list_ident.size as usize);
           for _ in 0..list_ident.size {
-            let list_elem_14 = KeyValue::read_from_in_protocol(i_prot)?;
-            val.push(list_elem_14);
+            let list_elem_19 = KeyValue::read_from_in_protocol(i_prot)?;
+            val.push(list_elem_19);
           }
           i_prot.read_list_end()?;
           f_5 = Some(val);
@@ -5034,8 +5305,8 @@ impl crate::thrift::TSerializable for FileMetaData {
           let list_ident = i_prot.read_list_begin()?;
           let mut val: Vec<ColumnOrder> = Vec::with_capacity(list_ident.size as usize);
           for _ in 0..list_ident.size {
-            let list_elem_15 = ColumnOrder::read_from_in_protocol(i_prot)?;
-            val.push(list_elem_15);
+            let list_elem_20 = ColumnOrder::read_from_in_protocol(i_prot)?;
+            val.push(list_elem_20);
           }
           i_prot.read_list_end()?;
           f_7 = Some(val);

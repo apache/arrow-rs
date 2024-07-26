@@ -1349,7 +1349,9 @@ impl<'a> StatisticsConverter<'a> {
         let iter = row_group_indices.into_iter().map(|rg_index| {
             let column_page_index_per_row_group_per_column =
                 &column_page_index[*rg_index][parquet_index];
-            let num_data_pages = &column_offset_index[*rg_index][parquet_index].len();
+            let num_data_pages = &column_offset_index[*rg_index][parquet_index]
+                .page_locations()
+                .len();
 
             (*num_data_pages, column_page_index_per_row_group_per_column)
         });
@@ -1378,7 +1380,9 @@ impl<'a> StatisticsConverter<'a> {
         let iter = row_group_indices.into_iter().map(|rg_index| {
             let column_page_index_per_row_group_per_column =
                 &column_page_index[*rg_index][parquet_index];
-            let num_data_pages = &column_offset_index[*rg_index][parquet_index].len();
+            let num_data_pages = &column_offset_index[*rg_index][parquet_index]
+                .page_locations()
+                .len();
 
             (*num_data_pages, column_page_index_per_row_group_per_column)
         });
@@ -1408,7 +1412,9 @@ impl<'a> StatisticsConverter<'a> {
         let iter = row_group_indices.into_iter().map(|rg_index| {
             let column_page_index_per_row_group_per_column =
                 &column_page_index[*rg_index][parquet_index];
-            let num_data_pages = &column_offset_index[*rg_index][parquet_index].len();
+            let num_data_pages = &column_offset_index[*rg_index][parquet_index]
+                .page_locations()
+                .len();
 
             (*num_data_pages, column_page_index_per_row_group_per_column)
         });
@@ -1450,7 +1456,7 @@ impl<'a> StatisticsConverter<'a> {
 
         let mut row_count_total = Vec::new();
         for rg_idx in row_group_indices {
-            let page_locations = &column_offset_index[*rg_idx][parquet_index];
+            let page_locations = &column_offset_index[*rg_idx][parquet_index].page_locations();
 
             let row_count_per_page = page_locations
                 .windows(2)

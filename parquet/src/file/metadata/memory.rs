@@ -23,6 +23,7 @@ use crate::data_type::private::ParquetValueType;
 use crate::file::metadata::{ColumnChunkMetaData, FileMetaData, KeyValue, RowGroupMetaData};
 use crate::file::page_encoding_stats::PageEncodingStats;
 use crate::file::page_index::index::{Index, NativeIndex, PageIndex};
+use crate::file::page_index::offset_index::OffsetIndexMetaData;
 use crate::file::statistics::{Statistics, ValueStatistics};
 use crate::format::{BoundaryOrder, PageLocation, SortingColumn};
 use std::sync::Arc;
@@ -97,6 +98,7 @@ impl HeapSize for ColumnChunkMetaData {
             + self.compression.heap_size()
             + self.statistics.heap_size()
             + self.encoding_stats.heap_size()
+            + self.unencoded_byte_array_data_bytes.heap_size()
     }
 }
 
@@ -140,6 +142,12 @@ impl HeapSize for Statistics {
             Statistics::ByteArray(value_statistics) => value_statistics.heap_size(),
             Statistics::FixedLenByteArray(value_statistics) => value_statistics.heap_size(),
         }
+    }
+}
+
+impl HeapSize for OffsetIndexMetaData {
+    fn heap_size(&self) -> usize {
+        self.page_locations.heap_size() + self.unencoded_byte_array_data_bytes.heap_size()
     }
 }
 

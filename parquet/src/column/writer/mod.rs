@@ -192,7 +192,8 @@ struct PageMetrics {
 }
 
 // Metrics per column writer
-struct ColumnMetrics<T> {
+#[derive(Default)]
+struct ColumnMetrics<T: Default> {
     total_bytes_written: u64,
     total_rows_written: u64,
     total_uncompressed_size: u64,
@@ -204,6 +205,20 @@ struct ColumnMetrics<T> {
     max_column_value: Option<T>,
     num_column_nulls: u64,
     column_distinct_count: Option<u64>,
+    variable_length_bytes: Option<i64>,
+}
+
+impl<T: Default> ColumnMetrics<T> {
+    fn new() -> Self {
+        Default::default()
+    }
+
+    /// Sum the provided page variable_length_bytes into the chunk variable_length_bytes
+    fn update_variable_length_bytes(&mut self, variable_length_bytes: Option<i64>) {
+        if let Some(var_bytes) = variable_length_bytes {
+            *self.variable_length_bytes.get_or_insert(0) += var_bytes;
+        }
+    }
 }
 
 /// Typed column writer for a primitive column.
@@ -282,19 +297,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
                 num_buffered_rows: 0,
                 num_page_nulls: 0,
             },
-            column_metrics: ColumnMetrics {
-                total_bytes_written: 0,
-                total_rows_written: 0,
-                total_uncompressed_size: 0,
-                total_compressed_size: 0,
-                total_num_values: 0,
-                dictionary_page_offset: None,
-                data_page_offset: None,
-                min_column_value: None,
-                max_column_value: None,
-                num_column_nulls: 0,
-                column_distinct_count: None,
-            },
+            column_metrics: ColumnMetrics::<E::T>::new(),
             column_index_builder,
             offset_index_builder: OffsetIndexBuilder::new(),
             encodings,
@@ -640,7 +643,11 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
     }
 
     /// Update the column index and offset index when adding the data page
-    fn update_column_offset_index(&mut self, page_statistics: Option<&ValueStatistics<E::T>>) {
+    fn update_column_offset_index(
+        &mut self,
+        page_statistics: Option<&ValueStatistics<E::T>>,
+        page_variable_length_bytes: Option<i64>,
+    ) {
         // update the column index
         let null_page =
             (self.page_metrics.num_buffered_rows as u64) == self.page_metrics.num_page_nulls;
@@ -714,6 +721,9 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         // update the offset index
         self.offset_index_builder
             .append_row_count(self.page_metrics.num_buffered_rows as i64);
+
+        self.offset_index_builder
+            .append_unencoded_byte_array_data_bytes(page_variable_length_bytes);
     }
 
     /// Determine if we should allow truncating min/max values for this column's statistics
@@ -789,7 +799,15 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         };
 
         // update column and offset index
-        self.update_column_offset_index(page_statistics.as_ref());
+        self.update_column_offset_index(
+            page_statistics.as_ref(),
+            values_data.variable_length_bytes,
+        );
+
+        // Update variable_length_bytes in column_metrics
+        self.column_metrics
+            .update_variable_length_bytes(values_data.variable_length_bytes);
+
         let page_statistics = page_statistics.map(Statistics::from);
 
         let compressed_page = match self.props.writer_version() {
@@ -999,7 +1017,9 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
                 stats => stats,
             };
 
-            builder = builder.set_statistics(statistics);
+            builder = builder
+                .set_statistics(statistics)
+                .set_unencoded_byte_array_data_bytes(self.column_metrics.variable_length_bytes);
         }
 
         let metadata = builder.build()?;

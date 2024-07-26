@@ -40,7 +40,7 @@ use std::sync::Arc;
 
 use crate::format::{
     BoundaryOrder, ColumnChunk, ColumnIndex, ColumnMetaData, OffsetIndex, PageLocation, RowGroup,
-    SortingColumn,
+    SizeStatistics, SortingColumn,
 };
 
 use crate::basic::{ColumnOrder, Compression, Encoding, Type};
@@ -48,6 +48,7 @@ use crate::errors::{ParquetError, Result};
 pub(crate) use crate::file::metadata::memory::HeapSize;
 use crate::file::page_encoding_stats::{self, PageEncodingStats};
 use crate::file::page_index::index::Index;
+use crate::file::page_index::offset_index::OffsetIndexMetaData;
 use crate::file::statistics::{self, Statistics};
 use crate::schema::types::{
     ColumnDescPtr, ColumnDescriptor, ColumnPath, SchemaDescPtr, SchemaDescriptor,
@@ -65,27 +66,23 @@ use crate::schema::types::{
 /// [`Index`] corresponding to column `column_number` of row group
 /// `row_group_number`.
 ///
-/// For example `column_index[2][3]` holds the [`Index`] for the forth
+/// For example `column_index[2][3]` holds the [`Index`] for the fourth
 /// column in the third row group of the parquet file.
 ///
 /// [PageIndex documentation]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
 pub type ParquetColumnIndex = Vec<Vec<Index>>;
 
-/// [`PageLocation`] for each data page of each row group of each column
+/// [`OffsetIndexMetaData`] for each data page of each row group of each column
 ///
 /// This structure is the parsed representation of the [`OffsetIndex`] from the
 /// Parquet file footer, as described in the Parquet [PageIndex documentation].
 ///
-/// `offset_index[row_group_number][column_number][page_number]` holds
-/// the [`PageLocation`] corresponding to page `page_number` of column
+/// `offset_index[row_group_number][column_number]` holds
+/// the [`OffsetIndexMetaData`] corresponding to column
 /// `column_number`of row group `row_group_number`.
 ///
-/// For example `offset_index[2][3][4]` holds the [`PageLocation`] for
-/// the fifth page of the forth column in the third row group of the
-/// parquet file.
-///
 /// [PageIndex documentation]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
-pub type ParquetOffsetIndex = Vec<Vec<Vec<PageLocation>>>;
+pub type ParquetOffsetIndex = Vec<Vec<OffsetIndexMetaData>>;
 
 /// Parsed metadata for a single Parquet file
 ///
@@ -110,7 +107,7 @@ pub struct ParquetMetaData {
     row_groups: Vec<RowGroupMetaData>,
     /// Page level index for each page in each column chunk
     column_index: Option<ParquetColumnIndex>,
-    /// Offset index for all each page in each column chunk
+    /// Offset index for each page in each column chunk
     offset_index: Option<ParquetOffsetIndex>,
 }
 
@@ -374,6 +371,11 @@ impl RowGroupMetaData {
         &self.columns
     }
 
+    /// Returns mutable slice of column chunk metadata.
+    pub fn columns_mut(&mut self) -> &mut [ColumnChunkMetaData] {
+        &mut self.columns
+    }
+
     /// Number of rows in this row group.
     pub fn num_rows(&self) -> i64 {
         self.num_rows
@@ -554,6 +556,7 @@ pub struct ColumnChunkMetaData {
     offset_index_length: Option<i32>,
     column_index_offset: Option<i64>,
     column_index_length: Option<i32>,
+    unencoded_byte_array_data_bytes: Option<i64>,
 }
 
 /// Represents common operations for a column chunk.
@@ -706,6 +709,14 @@ impl ColumnChunkMetaData {
         Some(offset..(offset + length))
     }
 
+    /// Returns the number of bytes of variable length data after decoding.
+    ///
+    /// Only set for BYTE_ARRAY columns. This field may not be set by older
+    /// writers.
+    pub fn unencoded_byte_array_data_bytes(&self) -> Option<i64> {
+        self.unencoded_byte_array_data_bytes
+    }
+
     /// Method to convert from Thrift.
     pub fn from_thrift(column_descr: ColumnDescPtr, cc: ColumnChunk) -> Result<Self> {
         if cc.meta_data.is_none() {
@@ -743,6 +754,12 @@ impl ColumnChunkMetaData {
         let offset_index_length = cc.offset_index_length;
         let column_index_offset = cc.column_index_offset;
         let column_index_length = cc.column_index_length;
+        let unencoded_byte_array_data_bytes = if let Some(size_stats) = col_metadata.size_statistics
+        {
+            size_stats.unencoded_byte_array_data_bytes
+        } else {
+            None
+        };
 
         let result = ColumnChunkMetaData {
             column_descr,
@@ -764,6 +781,7 @@ impl ColumnChunkMetaData {
             offset_index_length,
             column_index_offset,
             column_index_length,
+            unencoded_byte_array_data_bytes,
         };
         Ok(result)
     }
@@ -787,6 +805,16 @@ impl ColumnChunkMetaData {
 
     /// Method to convert to Thrift `ColumnMetaData`
     pub fn to_column_metadata_thrift(&self) -> ColumnMetaData {
+        let size_statistics = if self.unencoded_byte_array_data_bytes.is_some() {
+            Some(SizeStatistics {
+                unencoded_byte_array_data_bytes: self.unencoded_byte_array_data_bytes,
+                repetition_level_histogram: None,
+                definition_level_histogram: None,
+            })
+        } else {
+            None
+        };
+
         ColumnMetaData {
             type_: self.column_type().into(),
             encodings: self.encodings().iter().map(|&v| v.into()).collect(),
@@ -806,6 +834,7 @@ impl ColumnChunkMetaData {
                 .map(|vec| vec.iter().map(page_encoding_stats::to_thrift).collect()),
             bloom_filter_offset: self.bloom_filter_offset,
             bloom_filter_length: self.bloom_filter_length,
+            size_statistics,
         }
     }
 
@@ -841,6 +870,7 @@ impl ColumnChunkMetaDataBuilder {
             offset_index_length: None,
             column_index_offset: None,
             column_index_length: None,
+            unencoded_byte_array_data_bytes: None,
         })
     }
 
@@ -952,6 +982,12 @@ impl ColumnChunkMetaDataBuilder {
         self
     }
 
+    /// Sets optional length of variable length data in bytes.
+    pub fn set_unencoded_byte_array_data_bytes(mut self, value: Option<i64>) -> Self {
+        self.0.unencoded_byte_array_data_bytes = value;
+        self
+    }
+
     /// Builds column chunk metadata.
     pub fn build(self) -> Result<ColumnChunkMetaData> {
         Ok(self.0)
@@ -1033,6 +1069,8 @@ impl ColumnIndexBuilder {
             self.max_values,
             self.boundary_order,
             self.null_counts,
+            None,
+            None,
         )
     }
 }
@@ -1044,6 +1082,7 @@ pub struct OffsetIndexBuilder {
     offset_array: Vec<i64>,
     compressed_page_size_array: Vec<i32>,
     first_row_index_array: Vec<i64>,
+    unencoded_byte_array_data_bytes_array: Option<Vec<i64>>,
     current_first_row_index: i64,
 }
 
@@ -1059,6 +1098,7 @@ impl OffsetIndexBuilder {
             offset_array: Vec::new(),
             compressed_page_size_array: Vec::new(),
             first_row_index_array: Vec::new(),
+            unencoded_byte_array_data_bytes_array: None,
             current_first_row_index: 0,
         }
     }
@@ -1074,6 +1114,17 @@ impl OffsetIndexBuilder {
         self.compressed_page_size_array.push(compressed_page_size);
     }
 
+    pub fn append_unencoded_byte_array_data_bytes(
+        &mut self,
+        unencoded_byte_array_data_bytes: Option<i64>,
+    ) {
+        if let Some(val) = unencoded_byte_array_data_bytes {
+            self.unencoded_byte_array_data_bytes_array
+                .get_or_insert(Vec::new())
+                .push(val);
+        }
+    }
+
     /// Build and get the thrift metadata of offset index
     pub fn build_to_thrift(self) -> OffsetIndex {
         let locations = self
@@ -1083,7 +1134,7 @@ impl OffsetIndexBuilder {
             .zip(self.first_row_index_array.iter())
             .map(|((offset, size), row_index)| PageLocation::new(*offset, *size, *row_index))
             .collect::<Vec<_>>();
-        OffsetIndex::new(locations)
+        OffsetIndex::new(locations, self.unencoded_byte_array_data_bytes_array)
     }
 }
 
@@ -1234,6 +1285,7 @@ mod tests {
             .set_offset_index_length(Some(25))
             .set_column_index_offset(Some(8000))
             .set_column_index_length(Some(25))
+            .set_unencoded_byte_array_data_bytes(Some(2000))
             .build()
             .unwrap();
 
@@ -1345,7 +1397,8 @@ mod tests {
         let row_group_meta_with_stats = vec![row_group_meta_with_stats];
 
         let parquet_meta = ParquetMetaData::new(file_metadata.clone(), row_group_meta_with_stats);
-        let base_expected_size = 2024;
+        let base_expected_size = 2088;
+
         assert_eq!(parquet_meta.memory_size(), base_expected_size);
 
         let mut column_index = ColumnIndexBuilder::new();
@@ -1354,17 +1407,25 @@ mod tests {
         let native_index = NativeIndex::<bool>::try_new(column_index).unwrap();
 
         // Now, add in OffsetIndex
+        let mut offset_index = OffsetIndexBuilder::new();
+        offset_index.append_row_count(1);
+        offset_index.append_offset_and_size(2, 3);
+        offset_index.append_unencoded_byte_array_data_bytes(Some(10));
+        offset_index.append_row_count(1);
+        offset_index.append_offset_and_size(2, 3);
+        offset_index.append_unencoded_byte_array_data_bytes(Some(10));
+        let offset_index = offset_index.build_to_thrift();
+
         let parquet_meta = ParquetMetaData::new_with_page_index(
             file_metadata,
             row_group_meta,
             Some(vec![vec![Index::BOOLEAN(native_index)]]),
             Some(vec![vec![
-                vec![PageLocation::new(1, 2, 3)],
-                vec![PageLocation::new(1, 2, 3)],
+                OffsetIndexMetaData::try_new(offset_index).unwrap()
             ]]),
         );
 
-        let bigger_expected_size = 2304;
+        let bigger_expected_size = 2400;
         // more set fields means more memory usage
         assert!(bigger_expected_size > base_expected_size);
         assert_eq!(parquet_meta.memory_size(), bigger_expected_size);

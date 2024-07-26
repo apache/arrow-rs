@@ -4409,8 +4409,8 @@ mod tests {
             IntervalUnit::YearMonth,
             IntervalYearMonthArray,
             vec![
-                Some("1 years 1 mons 0 days 0 hours 0 mins 0.00 secs"),
-                Some("2 years 7 mons 0 days 0 hours 0 mins 0.00 secs"),
+                Some("1 years 1 mons"),
+                Some("2 years 7 mons"),
                 None,
                 None,
                 None,
@@ -4433,9 +4433,9 @@ mod tests {
             IntervalUnit::DayTime,
             IntervalDayTimeArray,
             vec![
-                Some("0 years 0 mons 390 days 0 hours 0 mins 0.000 secs"),
-                Some("0 years 0 mons 930 days 0 hours 0 mins 0.000 secs"),
-                Some("0 years 0 mons 30 days 0 hours 0 mins 0.000 secs"),
+                Some("390 days"),
+                Some("930 days"),
+                Some("30 days"),
                 None,
                 None,
             ]
@@ -4461,16 +4461,16 @@ mod tests {
             IntervalUnit::MonthDayNano,
             IntervalMonthDayNanoArray,
             vec![
-                Some("0 years 13 mons 1 days 0 hours 0 mins 0.000000000 secs"),
+                Some("13 mons 1 days"),
                 None,
-                Some("0 years 31 mons 35 days 0 hours 0 mins 0.001400000 secs"),
-                Some("0 years 0 mons 3 days 0 hours 0 mins 0.000000000 secs"),
-                Some("0 years 0 mons 0 days 0 hours 0 mins 8.000000000 secs"),
+                Some("31 mons 35 days 0.001400000 secs"),
+                Some("3 days"),
+                Some("8.000000000 secs"),
                 None,
-                Some("0 years 0 mons 1 days 0 hours 0 mins 29.800000000 secs"),
-                Some("0 years 3 mons 0 days 0 hours 0 mins 1.000000000 secs"),
-                Some("0 years 0 mons 0 days 0 hours 8 mins 0.000000000 secs"),
-                Some("0 years 63 mons 9 days 19 hours 9 mins 2.222000000 secs"),
+                Some("1 days 29.800000000 secs"),
+                Some("3 mons 1.000000000 secs"),
+                Some("8 mins"),
+                Some("63 mons 9 days 19 hours 9 mins 2.222000000 secs"),
                 None,
             ]
         );

@@ -28,6 +28,7 @@ use crate::column::page::{Page, PageMetadata, PageReader};
 use crate::compression::{create_codec, Codec};
 use crate::errors::{ParquetError, Result};
 use crate::file::page_index::index_reader;
+use crate::file::page_index::offset_index::OffsetIndexMetaData;
 use crate::file::{
     footer,
     metadata::*,
@@ -214,7 +215,7 @@ impl<R: 'static + ChunkReader> SerializedFileReader<R> {
 
             for rg in &mut filtered_row_groups {
                 let column_index = index_reader::read_columns_indexes(&chunk_reader, rg.columns())?;
-                let offset_index = index_reader::read_pages_locations(&chunk_reader, rg.columns())?;
+                let offset_index = index_reader::read_offset_indexes(&chunk_reader, rg.columns())?;
                 columns_indexes.push(column_index);
                 offset_indexes.push(offset_index);
             }
@@ -285,7 +286,7 @@ impl<R: 'static + ChunkReader> FileReader for SerializedFileReader<R> {
 pub struct SerializedRowGroupReader<'a, R: ChunkReader> {
     chunk_reader: Arc<R>,
     metadata: &'a RowGroupMetaData,
-    page_locations: Option<&'a [Vec<PageLocation>]>,
+    offset_index: Option<&'a [OffsetIndexMetaData]>,
     props: ReaderPropertiesPtr,
     bloom_filters: Vec<Option<Sbbf>>,
 }
@@ -295,7 +296,7 @@ impl<'a, R: ChunkReader> SerializedRowGroupReader<'a, R> {
     pub fn new(
         chunk_reader: Arc<R>,
         metadata: &'a RowGroupMetaData,
-        page_locations: Option<&'a [Vec<PageLocation>]>,
+        offset_index: Option<&'a [OffsetIndexMetaData]>,
         props: ReaderPropertiesPtr,
     ) -> Result<Self> {
         let bloom_filters = if props.read_bloom_filter() {
@@ -310,7 +311,7 @@ impl<'a, R: ChunkReader> SerializedRowGroupReader<'a, R> {
         Ok(Self {
             chunk_reader,
             metadata,
-            page_locations,
+            offset_index,
             props,
             bloom_filters,
         })
@@ -330,7 +331,7 @@ impl<'a, R: 'static + ChunkReader> RowGroupReader for SerializedRowGroupReader<'
     fn get_column_page_reader(&self, i: usize) -> Result<Box<dyn PageReader>> {
         let col = self.metadata.column(i);
 
-        let page_locations = self.page_locations.map(|x| x[i].clone());
+        let page_locations = self.offset_index.map(|x| x[i].page_locations.clone());
 
         let props = Arc::clone(&self.props);
         Ok(Box::new(SerializedPageReader::new_with_properties(
@@ -776,7 +777,7 @@ mod tests {
     use crate::data_type::private::ParquetValueType;
     use crate::data_type::{AsBytes, FixedLenByteArrayType};
     use crate::file::page_index::index::{Index, NativeIndex};
-    use crate::file::page_index::index_reader::{read_columns_indexes, read_pages_locations};
+    use crate::file::page_index::index_reader::{read_columns_indexes, read_offset_indexes};
     use crate::file::writer::SerializedFileWriter;
     use crate::record::RowAccessor;
     use crate::schema::parser::parse_message_type;
@@ -1314,7 +1315,7 @@ mod tests {
         // only one row group
         assert_eq!(offset_indexes.len(), 1);
         let offset_index = &offset_indexes[0];
-        let page_offset = &offset_index[0][0];
+        let page_offset = &offset_index[0].page_locations()[0];
 
         assert_eq!(4, page_offset.offset);
         assert_eq!(152, page_offset.compressed_page_size);
@@ -1337,8 +1338,8 @@ mod tests {
         b.reverse();
         assert_eq!(a, b);
 
-        let a = read_pages_locations(&test_file, columns).unwrap();
-        let mut b = read_pages_locations(&test_file, &reversed).unwrap();
+        let a = read_offset_indexes(&test_file, columns).unwrap();
+        let mut b = read_offset_indexes(&test_file, &reversed).unwrap();
         b.reverse();
         assert_eq!(a, b);
     }
@@ -1375,7 +1376,7 @@ mod tests {
                 get_row_group_min_max_bytes(row_group_metadata, 0),
                 BoundaryOrder::UNORDERED,
             );
-            assert_eq!(row_group_offset_indexes[0].len(), 325);
+            assert_eq!(row_group_offset_indexes[0].page_locations.len(), 325);
         } else {
             unreachable!()
         };
@@ -1383,7 +1384,7 @@ mod tests {
         assert!(&column_index[0][1].is_sorted());
         if let Index::BOOLEAN(index) = &column_index[0][1] {
             assert_eq!(index.indexes.len(), 82);
-            assert_eq!(row_group_offset_indexes[1].len(), 82);
+            assert_eq!(row_group_offset_indexes[1].page_locations.len(), 82);
         } else {
             unreachable!()
         };
@@ -1396,7 +1397,7 @@ mod tests {
                 get_row_group_min_max_bytes(row_group_metadata, 2),
                 BoundaryOrder::ASCENDING,
             );
-            assert_eq!(row_group_offset_indexes[2].len(), 325);
+            assert_eq!(row_group_offset_indexes[2].page_locations.len(), 325);
         } else {
             unreachable!()
         };
@@ -1409,7 +1410,7 @@ mod tests {
                 get_row_group_min_max_bytes(row_group_metadata, 3),
                 BoundaryOrder::ASCENDING,
             );
-            assert_eq!(row_group_offset_indexes[3].len(), 325);
+            assert_eq!(row_group_offset_indexes[3].page_locations.len(), 325);
         } else {
             unreachable!()
         };
@@ -1422,7 +1423,7 @@ mod tests {
                 get_row_group_min_max_bytes(row_group_metadata, 4),
                 BoundaryOrder::ASCENDING,
             );
-            assert_eq!(row_group_offset_indexes[4].len(), 325);
+            assert_eq!(row_group_offset_indexes[4].page_locations.len(), 325);
         } else {
             unreachable!()
         };
@@ -1435,7 +1436,7 @@ mod tests {
                 get_row_group_min_max_bytes(row_group_metadata, 5),
                 BoundaryOrder::UNORDERED,
             );
-            assert_eq!(row_group_offset_indexes[5].len(), 528);
+            assert_eq!(row_group_offset_indexes[5].page_locations.len(), 528);
         } else {
             unreachable!()
         };
@@ -1448,7 +1449,7 @@ mod tests {
                 get_row_group_min_max_bytes(row_group_metadata, 6),
                 BoundaryOrder::ASCENDING,
             );
-            assert_eq!(row_group_offset_indexes[6].len(), 325);
+            assert_eq!(row_group_offset_indexes[6].page_locations.len(), 325);
         } else {
             unreachable!()
         };
@@ -1461,7 +1462,7 @@ mod tests {
                 get_row_group_min_max_bytes(row_group_metadata, 7),
                 BoundaryOrder::UNORDERED,
             );
-            assert_eq!(row_group_offset_indexes[7].len(), 528);
+            assert_eq!(row_group_offset_indexes[7].page_locations.len(), 528);
         } else {
             unreachable!()
         };
@@ -1474,7 +1475,7 @@ mod tests {
                 get_row_group_min_max_bytes(row_group_metadata, 8),
                 BoundaryOrder::UNORDERED,
             );
-            assert_eq!(row_group_offset_indexes[8].len(), 974);
+            assert_eq!(row_group_offset_indexes[8].page_locations.len(), 974);
         } else {
             unreachable!()
         };
@@ -1487,7 +1488,7 @@ mod tests {
                 get_row_group_min_max_bytes(row_group_metadata, 9),
                 BoundaryOrder::ASCENDING,
             );
-            assert_eq!(row_group_offset_indexes[9].len(), 352);
+            assert_eq!(row_group_offset_indexes[9].page_locations.len(), 352);
         } else {
             unreachable!()
         };
@@ -1495,7 +1496,7 @@ mod tests {
         //Notice: min_max values for each page for this col not exits.
         assert!(!&column_index[0][10].is_sorted());
         if let Index::NONE = &column_index[0][10] {
-            assert_eq!(row_group_offset_indexes[10].len(), 974);
+            assert_eq!(row_group_offset_indexes[10].page_locations.len(), 974);
         } else {
             unreachable!()
         };
@@ -1508,7 +1509,7 @@ mod tests {
                 get_row_group_min_max_bytes(row_group_metadata, 11),
                 BoundaryOrder::ASCENDING,
             );
-            assert_eq!(row_group_offset_indexes[11].len(), 325);
+            assert_eq!(row_group_offset_indexes[11].page_locations.len(), 325);
         } else {
             unreachable!()
         };
@@ -1521,7 +1522,7 @@ mod tests {
                 get_row_group_min_max_bytes(row_group_metadata, 12),
                 BoundaryOrder::UNORDERED,
             );
-            assert_eq!(row_group_offset_indexes[12].len(), 325);
+            assert_eq!(row_group_offset_indexes[12].page_locations.len(), 325);
         } else {
             unreachable!()
         };

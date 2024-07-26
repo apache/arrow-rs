@@ -394,7 +394,7 @@ impl ArrowReaderMetadata {
             let offset_index = metadata
                 .row_groups()
                 .iter()
-                .map(|rg| index_reader::read_pages_locations(reader, rg.columns()))
+                .map(|rg| index_reader::read_offset_indexes(reader, rg.columns()))
                 .collect::<Result<Vec<_>>>()?;
 
             metadata.set_offset_index(Some(offset_index))
@@ -689,7 +689,7 @@ impl<T: ChunkReader + 'static> Iterator for ReaderPageIterator<T> {
         // To avoid `i[rg_idx][self.oolumn_idx`] panic, we need to filter out empty `i[rg_idx]`.
         let page_locations = offset_index
             .filter(|i| !i[rg_idx].is_empty())
-            .map(|i| i[rg_idx][self.column_idx].clone());
+            .map(|i| i[rg_idx][self.column_idx].page_locations.clone());
         let total_rows = rg.num_rows() as usize;
         let reader = self.reader.clone();
 

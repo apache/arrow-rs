@@ -986,16 +986,16 @@ mod tests {
         let table = pretty_format_batches(&[batch]).unwrap().to_string();
 
         let expected = vec![
-            "+----------------------------------------------------+",
-            "| IntervalDayTime                                    |",
-            "+----------------------------------------------------+",
-            "| 0 years 0 mons -1 days 0 hours -10 mins 0.000 secs |",
-            "| 0 years 0 mons 0 days 0 hours 0 mins -1.001 secs   |",
-            "| 0 years 0 mons 0 days 0 hours 0 mins -0.001 secs   |",
-            "| 0 years 0 mons 0 days 0 hours 0 mins 0.001 secs    |",
-            "| 0 years 0 mons 0 days 0 hours 0 mins 0.010 secs    |",
-            "| 0 years 0 mons 0 days 0 hours 0 mins 0.100 secs    |",
-            "+----------------------------------------------------+",
+            "+------------------+",
+            "| IntervalDayTime  |",
+            "+------------------+",
+            "| -1 days -10 mins |",
+            "| -1.001 secs      |",
+            "| -0.001 secs      |",
+            "| 0.001 secs       |",
+            "| 0.010 secs       |",
+            "| 0.100 secs       |",
+            "+------------------+",
         ];
 
         let actual: Vec<&str> = table.lines().collect();
@@ -1032,23 +1032,23 @@ mod tests {
         let table = pretty_format_batches(&[batch]).unwrap().to_string();
 
         let expected = vec![
-            "+-----------------------------------------------------------+",
-            "| IntervalMonthDayNano                                      |",
-            "+-----------------------------------------------------------+",
-            "| 0 years -1 mons -1 days 0 hours -10 mins 0.000000000 secs |",
-            "| 0 years 0 mons 0 days 0 hours 0 mins -1.000000001 secs    |",
-            "| 0 years 0 mons 0 days 0 hours 0 mins -0.000000001 secs    |",
-            "| 0 years 0 mons 0 days 0 hours 0 mins 0.000000001 secs     |",
-            "| 0 years 0 mons 0 days 0 hours 0 mins 0.000000010 secs     |",
-            "| 0 years 0 mons 0 days 0 hours 0 mins 0.000000100 secs     |",
-            "| 0 years 0 mons 0 days 0 hours 0 mins 0.000001000 secs     |",
-            "| 0 years 0 mons 0 days 0 hours 0 mins 0.000010000 secs     |",
-            "| 0 years 0 mons 0 days 0 hours 0 mins 0.000100000 secs     |",
-            "| 0 years 0 mons 0 days 0 hours 0 mins 0.001000000 secs     |",
-            "| 0 years 0 mons 0 days 0 hours 0 mins 0.010000000 secs     |",
-            "| 0 years 0 mons 0 days 0 hours 0 mins 0.100000000 secs     |",
-            "| 0 years 0 mons 0 days 0 hours 0 mins 1.000000000 secs     |",
-            "+-----------------------------------------------------------+",
+            "+--------------------------+",
+            "| IntervalMonthDayNano     |",
+            "+--------------------------+",
+            "| -1 mons -1 days -10 mins |",
+            "| -1.000000001 secs        |",
+            "| -0.000000001 secs        |",
+            "| 0.000000001 secs         |",
+            "| 0.000000010 secs         |",
+            "| 0.000000100 secs         |",
+            "| 0.000001000 secs         |",
+            "| 0.000010000 secs         |",
+            "| 0.000100000 secs         |",
+            "| 0.001000000 secs         |",
+            "| 0.010000000 secs         |",
+            "| 0.100000000 secs         |",
+            "| 1.000000000 secs         |",
+            "+--------------------------+",
         ];
 
         let actual: Vec<&str> = table.lines().collect();
