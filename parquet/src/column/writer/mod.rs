@@ -216,8 +216,12 @@ impl PageMetrics {
         self.num_buffered_values = 0;
         self.num_buffered_rows = 0;
         self.num_page_nulls = 0;
-        self.repetition_level_histogram.as_mut().map(LevelHistogram::reset);
-        self.definition_level_histogram.as_mut().map(LevelHistogram::reset);
+        self.repetition_level_histogram
+            .as_mut()
+            .map(LevelHistogram::reset);
+        self.definition_level_histogram
+            .as_mut()
+            .map(LevelHistogram::reset);
     }
 
     /// Updates histogram values using provided repetition levels
