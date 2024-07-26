@@ -18,12 +18,13 @@
 use arrow_array::{ArrayAccessor, BooleanArray};
 use arrow_schema::ArrowError;
 use memchr::memchr2;
+use memchr::memmem::Finder;
 use regex::{Regex, RegexBuilder};
 
 /// A string based predicate
 pub enum Predicate<'a> {
     Eq(&'a str),
-    Contains(&'a str),
+    Contains(Finder<'a>),
     StartsWith(&'a str),
     EndsWith(&'a str),
 
@@ -54,10 +55,14 @@ impl<'a> Predicate<'a> {
             && !pattern.ends_with("\\%")
             && !contains_like_pattern(&pattern[1..pattern.len() - 1])
         {
-            Ok(Self::Contains(&pattern[1..pattern.len() - 1]))
+            Ok(Self::contains(&pattern[1..pattern.len() - 1]))
         } else {
             Ok(Self::Regex(regex_like(pattern, false)?))
         }
+    }
+
+    pub fn contains(needle: &'a str) -> Self {
+        Self::Contains(Finder::new(needle.as_bytes()))
     }
 
     /// Create a predicate for the given ilike pattern
@@ -82,7 +87,7 @@ impl<'a> Predicate<'a> {
         match self {
             Predicate::Eq(v) => *v == haystack,
             Predicate::IEqAscii(v) => haystack.eq_ignore_ascii_case(v),
-            Predicate::Contains(v) => haystack.contains(v),
+            Predicate::Contains(finder) => finder.find(haystack.as_bytes()).is_some(),
             Predicate::StartsWith(v) => haystack.starts_with(v),
             Predicate::IStartsWithAscii(v) => starts_with_ignore_ascii_case(haystack, v),
             Predicate::EndsWith(v) => haystack.ends_with(v),
@@ -106,8 +111,8 @@ impl<'a> Predicate<'a> {
             Predicate::IEqAscii(v) => BooleanArray::from_unary(array, |haystack| {
                 haystack.eq_ignore_ascii_case(v) != negate
             }),
-            Predicate::Contains(v) => {
-                BooleanArray::from_unary(array, |haystack| haystack.contains(v) != negate)
+            Predicate::Contains(finder) => {
+                BooleanArray::from_unary(array, |haystack| finder.find(haystack.as_bytes()).is_some() != negate)
             }
             Predicate::StartsWith(v) => {
                 BooleanArray::from_unary(array, |haystack| haystack.starts_with(v) != negate)
