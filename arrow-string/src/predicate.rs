@@ -51,8 +51,8 @@ impl<'a> Predicate<'a> {
             Ok(Self::StartsWith(&pattern[..pattern.len() - 1]))
         } else if pattern.starts_with('%') && !contains_like_pattern(&pattern[1..]) {
             Ok(Self::EndsWith(&pattern[1..]))
-        } else if is_contains_pattern(pattern) {
-            Ok(Self::Contains(&pattern[1..pattern.len() - 1]))
+        } else if let Some(needle) = contains_pattern(pattern) {
+            Ok(Self::Contains(needle))
         } else {
             Ok(Self::Regex(regex_like(pattern, false)?))
         }
@@ -70,8 +70,8 @@ impl<'a> Predicate<'a> {
                 return Ok(Self::IStartsWithAscii(&pattern[..pattern.len() - 1]));
             } else if pattern.starts_with('%') && !contains_like_pattern(&pattern[1..]) {
                 return Ok(Self::IEndsWithAscii(&pattern[1..]));
-            } else if is_contains_pattern(pattern) {
-                return Ok(Self::IContains(&pattern[1..pattern.len() - 1]));
+            } else if let Some(needle) = contains_pattern(pattern) {
+                return Ok(Self::IContains(needle));
             }
         }
         Ok(Self::Regex(regex_like(pattern, true)?))
@@ -227,11 +227,14 @@ fn regex_like(pattern: &str, case_insensitive: bool) -> Result<Regex, ArrowError
         })
 }
 
-fn is_contains_pattern(pattern: &str) -> bool {
-    pattern.starts_with('%')
-        && pattern.ends_with('%')
-        && !pattern.ends_with("\\%")
-        && !contains_like_pattern(&pattern[1..pattern.len() - 1])
+fn contains_pattern(pattern: &str) -> Option<&str> {
+    if pattern.starts_with('%') && pattern.ends_with('%') && !pattern.ends_with("\\%") {
+        let needle = &pattern[1..pattern.len() - 1];
+        if !contains_like_pattern(needle) {
+            return Some(needle);
+        }
+    }
+    None
 }
 
 fn is_like_pattern(c: char) -> bool {
@@ -251,14 +254,6 @@ mod tests {
         let a_eq = "_%";
         let expected = "^..*$";
         let r = regex_like(a_eq, false).unwrap();
-        assert_eq!(r.to_string(), expected);
-    }
-
-    #[test]
-    fn test_foobar() {
-        let a_eq = "%spanner%";
-        let expected = "^..*$";
-        let r = regex_like(a_eq, true).unwrap();
         assert_eq!(r.to_string(), expected);
     }
 
@@ -284,5 +279,41 @@ mod tests {
         let expected = "^\\.$";
         let r = regex_like(a_eq, false).unwrap();
         assert_eq!(r.to_string(), expected);
+    }
+
+    #[test]
+    fn test_ilike_icontains() {
+        let p = Predicate::ilike("%foo%", true).unwrap();
+        assert!(matches!(p, Predicate::IContains("foo")));
+
+        let p = Predicate::ilike("%fo_o%", true).unwrap();
+        assert!(matches!(p, Predicate::Regex(_)));
+
+        let p = Predicate::ilike("%foo%", false).unwrap();
+        assert!(matches!(p, Predicate::Regex(_)));
+    }
+
+    #[test]
+    fn test_icontains() {
+        assert!(Predicate::IContains("hay").evaluate("haystack"));
+        assert!(Predicate::IContains("stack").evaluate("haystack"));
+        assert!(Predicate::IContains("sta").evaluate("haystack"));
+        assert!(Predicate::IContains("HAY").evaluate("haystack"));
+        assert!(Predicate::IContains("StAcK").evaluate("haystack"));
+        assert!(Predicate::IContains("stA").evaluate("haystack"));
+
+        assert!(Predicate::IContains("hay").evaluate("HAYSTACK"));
+        assert!(Predicate::IContains("HAY").evaluate("HAYSTACK"));
+        assert!(Predicate::IContains("HaY").evaluate("HAYSTACK"));
+        assert!(Predicate::IContains("stack").evaluate("HAYSTACK"));
+        assert!(Predicate::IContains("sta").evaluate("HAYSTACK"));
+
+        assert!(Predicate::IContains("hay").evaluate("HaYsTaCk"));
+        assert!(Predicate::IContains("stack").evaluate("HaYsTaCk"));
+        assert!(Predicate::IContains("sta").evaluate("HaYsTaCk"));
+
+        assert!(Predicate::IContains("a").evaluate("A"));
+        assert!(!Predicate::IContains("}").evaluate("]"));
+        assert!(!Predicate::IContains("stack").evaluate("haysta£ck"));
     }
 }
