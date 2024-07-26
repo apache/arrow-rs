@@ -574,7 +574,12 @@ impl ColumnChunkMetaData {
         self.file_path.as_deref()
     }
 
-    /// Byte offset in `file_path()`.
+    /// Byte offset of `ColumnMetaData` in `file_path()`.
+    ///
+    /// Note that the meaning of this field has been inconsistent between implementations
+    /// so its use has since been deprecated in the Parquet specification. Modern implementations
+    /// will set this to `0` to indicate that the `ColumnMetaData` is solely contained in the
+    /// `ColumnChunk` struct.
     pub fn file_offset(&self) -> i64 {
         self.file_offset
     }
@@ -889,9 +894,12 @@ impl ColumnChunkMetaDataBuilder {
     /// Sets file offset in bytes.
     ///
     /// This field was meant to provide an alternate to storing `ColumnMetadata` directly in
-    /// the `ColumnChunkMetadata`. However, most parquet readers assume the `ColumnMetadata`
-    /// is stored inline and ignore this field. 
-    #[deprecated(since = "53.0.0", note = "No longer used nor written")]
+    /// the `ColumnChunkMetadata`. However, most Parquet readers assume the `ColumnMetadata`
+    /// is stored inline and ignore this field.
+    #[deprecated(
+        since = "53.0.0",
+        note = "The Parquet specification requires this field to be 0"
+    )]
     pub fn set_file_offset(mut self, value: i64) -> Self {
         self.0.file_offset = value;
         self
