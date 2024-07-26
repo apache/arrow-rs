@@ -149,7 +149,9 @@ fn icontains(haystack: &str, needle: &str) -> bool {
     let mut index: usize = 0;
 
     while let Some(hay_byte) = hay_iter.next() {
-        if equals_ignore_ascii_case_kernel((needle_first, hay_byte)) && rest_match(needle_rest, hay_iter.clone()) {
+        if equals_ignore_ascii_case_kernel((needle_first, hay_byte))
+            && rest_match(needle_rest, hay_iter.clone())
+        {
             return true;
         } else {
             if index >= stop_at {
@@ -161,10 +163,7 @@ fn icontains(haystack: &str, needle: &str) -> bool {
     false
 }
 
-fn rest_match<'a>(
-    needle_rest: &[u8],
-    hay_iter: impl Iterator<Item = &'a u8>,
-) -> bool {
+fn rest_match<'a>(needle_rest: &[u8], hay_iter: impl Iterator<Item = &'a u8>) -> bool {
     std::iter::zip(needle_rest, hay_iter).all(equals_ignore_ascii_case_kernel)
 }
 
