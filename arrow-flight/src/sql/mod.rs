@@ -74,6 +74,7 @@ pub use gen::CommandGetTables;
 pub use gen::CommandGetXdbcTypeInfo;
 pub use gen::CommandPreparedStatementQuery;
 pub use gen::CommandPreparedStatementUpdate;
+pub use gen::CommandStatementIngest;
 pub use gen::CommandStatementQuery;
 pub use gen::CommandStatementSubstraitPlan;
 pub use gen::CommandStatementUpdate;
@@ -250,6 +251,7 @@ prost_message_ext!(
     CommandGetXdbcTypeInfo,
     CommandPreparedStatementQuery,
     CommandPreparedStatementUpdate,
+    CommandStatementIngest,
     CommandStatementQuery,
     CommandStatementSubstraitPlan,
     CommandStatementUpdate,
