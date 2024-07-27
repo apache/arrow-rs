@@ -620,12 +620,6 @@ impl LevelHistogram {
         }
     }
 
-    /// Appends values from the other histogram to this histogram
-    pub fn append(&mut self, other: &Self) {
-        self.inner.reserve(other.len());
-        self.inner.extend(other.values());
-    }
-
     /// return the length of the histogram
     pub fn len(&self) -> usize {
         self.inner.len()
@@ -1175,9 +1169,9 @@ pub struct ColumnIndexBuilder {
     null_counts: Vec<i64>,
     boundary_order: BoundaryOrder,
     /// contains the concatenation of the histograms of all pages
-    repetition_level_histograms: Option<LevelHistogram>,
+    repetition_level_histograms: Option<Vec<i64>>,
     /// contains the concatenation of the histograms of all pages
-    definition_level_histograms: Option<LevelHistogram>,
+    definition_level_histograms: Option<Vec<i64>>,
     /// Is the information in the builder valid?
     ///
     /// Set to `false` if any entry in the page doesn't have statistics for
@@ -1233,16 +1227,14 @@ impl ColumnIndexBuilder {
             return;
         }
         if let Some(ref rep_lvl_hist) = repetition_level_histogram {
-            let hist = self
-                .repetition_level_histograms
-                .get_or_insert(LevelHistogram::default());
-            hist.append(rep_lvl_hist);
+            let hist = self.repetition_level_histograms.get_or_insert(Vec::new());
+            hist.reserve(rep_lvl_hist.len());
+            hist.extend(rep_lvl_hist.values());
         }
         if let Some(ref def_lvl_hist) = definition_level_histogram {
-            let hist = self
-                .definition_level_histograms
-                .get_or_insert(LevelHistogram::default());
-            hist.append(def_lvl_hist);
+            let hist = self.definition_level_histograms.get_or_insert(Vec::new());
+            hist.reserve(def_lvl_hist.len());
+            hist.extend(def_lvl_hist.values());
         }
     }
 
@@ -1264,16 +1256,14 @@ impl ColumnIndexBuilder {
     ///
     /// Note: callers should check [`Self::valid`] before calling this method
     pub fn build_to_thrift(self) -> ColumnIndex {
-        let repetition_level_histograms = self.repetition_level_histograms.map(|x| x.into_inner());
-        let definition_level_histograms = self.definition_level_histograms.map(|x| x.into_inner());
         ColumnIndex::new(
             self.null_pages,
             self.min_values,
             self.max_values,
             self.boundary_order,
             self.null_counts,
-            repetition_level_histograms,
-            definition_level_histograms,
+            self.repetition_level_histograms,
+            self.definition_level_histograms,
         )
     }
 }
