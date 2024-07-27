@@ -1596,8 +1596,6 @@ mod tests {
         ensure_returns_error(&Time64NanosecondArray::from(vec![0]));
     }
 
-    // IntervalDayTimeType week, day, hour, miute, second, mili, u, nano; invalid month, year; ignores the other part
-    // IntervalMonthDayNanoType year -> nano; days don't affect months, time doesn't affect days, time doesn't affect months (and vice versa)
     #[test]
     fn test_interval_year_month_array() {
         let input: IntervalYearMonthArray = vec![0, 5, 24].into();
@@ -1618,6 +1616,8 @@ mod tests {
         assert!(date_part(&input, DatePart::Week).is_err());
     }
 
+    // IntervalDayTimeType week, day, hour, minute, second, milli, u, nano;
+    // invalid month, year; ignores the other part
     #[test]
     fn test_interval_day_time_array() {
         let input: IntervalDayTimeArray = vec![
@@ -1693,6 +1693,8 @@ mod tests {
         assert!(date_part(&input, DatePart::Year).is_err());
     }
 
+    // IntervalMonthDayNanoType year -> nano;
+    // days don't affect months, time doesn't affect days, time doesn't affect months (and vice versa)
     #[test]
     fn test_interval_month_day_nano_array() {
         let input: IntervalMonthDayNanoArray = vec![
@@ -1728,7 +1730,7 @@ mod tests {
         assert_eq!(10, actual.value(1));
         assert_eq!(35, actual.value(2));
 
-        // Times follow from nanos, but are not affected by months or dats.
+        // Times follow from nanos, but are not affected by months or days.
         let actual = date_part(&input, DatePart::Hour).unwrap();
         let actual = actual.as_primitive::<Int32Type>();
         assert_eq!(0, actual.value(0));
