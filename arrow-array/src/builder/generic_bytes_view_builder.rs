@@ -108,11 +108,21 @@ impl<T: ByteViewType + ?Sized> GenericByteViewBuilder<T> {
         }
     }
 
-    /// The block size is the size of the buffer used to store the string data.
-    /// A new buffer will be allocated when the current buffer is full.
-    /// By default the builder try to keep the buffer count low by growing the size exponentially from 8KB up to 2MB.
-    /// This method instead set a fixed value to the buffer size, useful for advanced users that want to control the memory usage and buffer count.
-    /// Check <https://github.com/apache/arrow-rs/issues/6094> for more details on the implications.
+    /// Set a fixed buffer size for variable length strings
+    ///
+    /// The block size is the size of the buffer used to store values greater
+    /// than 12 bytes. The builder allocates new buffers when the current 
+    /// buffer is full.
+    ///
+    /// By default the builder balances buffer size and buffer count by
+    /// growing buffer size exponentially from 8KB up to 2MB. The 
+    /// first buffer allocated is 8KB, then 16KB, then 32KB, etc up to 2MB. 
+    ///
+    /// If this method is used, any new buffers allocated are  
+    /// exactly this size. This can be useful for advanced users 
+    /// that want to control the memory usage and buffer count.
+    ///
+    /// See <https://github.com/apache/arrow-rs/issues/6094> for more details on the implications.
     pub fn with_block_size(self, block_size: u32) -> Self {
         debug_assert!(block_size > 0, "Block size must be greater than 0");
         Self {
