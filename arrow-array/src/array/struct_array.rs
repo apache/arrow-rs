@@ -18,7 +18,7 @@
 use crate::{make_array, new_null_array, Array, ArrayRef, RecordBatch};
 use arrow_buffer::{BooleanBuffer, Buffer, NullBuffer};
 use arrow_data::{ArrayData, ArrayDataBuilder};
-use arrow_schema::{ArrowError, DataType, Field, FieldRef, Fields, SchemaBuilder};
+use arrow_schema::{ArrowError, DataType, Field, FieldRef, Fields};
 use std::sync::Arc;
 use std::{any::Any, ops::Index};
 
@@ -326,7 +326,7 @@ impl TryFrom<Vec<(&str, ArrayRef)>> for StructArray {
 
     /// builds a StructArray from a vector of names and arrays.
     fn try_from(values: Vec<(&str, ArrayRef)>) -> Result<Self, ArrowError> {
-        let (schema, arrays): (SchemaBuilder, _) = values
+        let (fields, arrays): (Vec<_>, _) = values
             .into_iter()
             .map(|(name, array)| {
                 (
@@ -336,7 +336,7 @@ impl TryFrom<Vec<(&str, ArrayRef)>> for StructArray {
             })
             .unzip();
 
-        StructArray::try_new(schema.finish().fields, arrays, None)
+        StructArray::try_new(fields.into(), arrays, None)
     }
 }
 
@@ -397,8 +397,8 @@ impl Array for StructArray {
 
 impl From<Vec<(FieldRef, ArrayRef)>> for StructArray {
     fn from(v: Vec<(FieldRef, ArrayRef)>) -> Self {
-        let (schema, arrays): (SchemaBuilder, _) = v.into_iter().unzip();
-        StructArray::new(schema.finish().fields, arrays, None)
+        let (fields, arrays): (Vec<_>, _) = v.into_iter().unzip();
+        StructArray::new(fields.into(), arrays, None)
     }
 }
 
@@ -424,9 +424,9 @@ impl std::fmt::Debug for StructArray {
 impl From<(Vec<(FieldRef, ArrayRef)>, Buffer)> for StructArray {
     fn from(pair: (Vec<(FieldRef, ArrayRef)>, Buffer)) -> Self {
         let len = pair.0.first().map(|x| x.1.len()).unwrap_or_default();
-        let (fields, arrays): (SchemaBuilder, Vec<_>) = pair.0.into_iter().unzip();
+        let (fields, arrays): (Vec<_>, Vec<_>) = pair.0.into_iter().unzip();
         let nulls = NullBuffer::new(BooleanBuffer::new(pair.1, 0, len));
-        Self::new(fields.finish().fields, arrays, Some(nulls))
+        Self::new(fields.into(), arrays, Some(nulls))
     }
 }
 
