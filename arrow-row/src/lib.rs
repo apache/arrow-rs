@@ -835,10 +835,17 @@ impl Rows {
 
     /// Returns the row at index `row`
     pub fn row(&self, row: usize) -> Row<'_> {
-        let end = self.offsets[row + 1];
-        let start = self.offsets[row];
+        assert!(row + 1 < self.offsets.len());
+        unsafe { self.row_unchecked(row) }
+    }
+
+    /// Returns the row at index `row` without bounds checking
+    pub unsafe fn row_unchecked(&self, row: usize) -> Row<'_> {
+        let end = unsafe { self.offsets.get_unchecked(row + 1) };
+        let start = unsafe { self.offsets.get_unchecked(row) };
+        let data = unsafe { self.buffer.get_unchecked(*start..*end) };
         Row {
-            data: &self.buffer[start..end],
+            data,
             config: &self.config,
         }
     }
@@ -898,7 +905,7 @@ impl<'a> Iterator for RowsIter<'a> {
         if self.end == self.start {
             return None;
         }
-        let row = self.rows.row(self.start);
+        let row = unsafe { self.rows.row_unchecked(self.start) };
         self.start += 1;
         Some(row)
     }
