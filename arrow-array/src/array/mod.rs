@@ -437,13 +437,84 @@ impl<'a, T: Array> Array for &'a T {
 
 /// A generic trait for accessing the values of an [`Array`]
 ///
+/// This trait helps write specialized implementations of algorithms for
+/// different array types. Specialized implementations allow the compiler
+/// to optimize the code for the specific array type, which can lead to
+/// significant performance improvements.
+///
+/// # Example
+/// For example, to write three different implementations of a string length function
+/// for [`StringArray`], [`LargeStringArray`], and [`StringViewArray`], you can write
+///
+/// ```
+/// # use std::sync::Arc;
+/// # use arrow_array::{ArrayAccessor, ArrayRef, ArrowPrimitiveType, OffsetSizeTrait, PrimitiveArray};
+/// # use arrow_buffer::ArrowNativeType;
+/// # use arrow_array::cast::AsArray;
+/// # use arrow_array::iterator::ArrayIter;
+/// # use arrow_array::types::{Int32Type, Int64Type};
+/// # use arrow_schema::{ArrowError, DataType};
+/// /// This function takes a dynamically typed `ArrayRef` and calls
+/// /// calls one of three specialized implementations
+/// fn character_length(arg: ArrayRef) -> Result<ArrayRef, ArrowError> {
+///     match arg.data_type() {
+///         DataType::Utf8 => {
+///             // downcast the ArrayRef to a StringArray and call the specialized implementation
+///             let string_array = arg.as_string::<i32>();
+///             character_length_general::<Int32Type, _>(string_array)
+///         }
+///         DataType::LargeUtf8 => {
+///             character_length_general::<Int64Type, _>(arg.as_string::<i64>())
+///         }
+///         DataType::Utf8View => {
+///             character_length_general::<Int32Type, _>(arg.as_string_view())
+///         }
+///         _ => Err(ArrowError::InvalidArgumentError("Unsupported data type".to_string())),
+///     }
+/// }
+///
+/// /// A generic implementation of the character_length function
+/// /// This function uses the `ArrayAccessor` trait to access the values of the array
+/// /// so the compiler can generated specialized implementations for different array types
+/// ///
+/// /// Returns a new array with the length of each string in the input array
+/// /// * Int32Array for Utf8 and Utf8View arrays (lengths are 32-bit integers)
+/// /// * Int64Array for LargeUtf8 arrays (lengths are 64-bit integers)
+/// ///
+/// /// This is generic on the type of the primitive array (different string arrays have
+/// /// different lengths) and the type of the array accessor (different string arrays
+/// /// have different ways to access the values)
+/// fn character_length_general<'a, T: ArrowPrimitiveType, V: ArrayAccessor<Item = &'a str>>(
+///     array: V,
+/// ) -> Result<ArrayRef, ArrowError>
+/// where
+///     T::Native: OffsetSizeTrait,
+/// {
+///     let iter = ArrayIter::new(array);
+///     // Create a Int32Array / Int64Array with the length of each string
+///     let result = iter
+///         .map(|string| {
+///             string.map(|string: &str| {
+///                 T::Native::from_usize(string.chars().count())
+///                     .expect("should not fail as string.chars will always return integer")
+///             })
+///         })
+///         .collect::<PrimitiveArray<T>>();
+///
+///     /// Return the result as a new ArrayRef (dynamically typed)
+///     Ok(Arc::new(result) as ArrayRef)
+/// }
+/// ```
+///
 /// # Validity
 ///
-/// An [`ArrayAccessor`] must always return a well-defined value for an index that is
-/// within the bounds `0..Array::len`, including for null indexes where [`Array::is_null`] is true.
+/// An [`ArrayAccessor`] must always return a well-defined value for an index
+/// that is within the bounds `0..Array::len`, including for null indexes where
+/// [`Array::is_null`] is true.
 ///
-/// The value at null indexes is unspecified, and implementations must not rely on a specific
-/// value such as [`Default::default`] being returned, however, it must not be undefined
+/// The value at null indexes is unspecified, and implementations must not rely
+/// on a specific value such as [`Default::default`] being returned, however, it
+/// must not be undefined
 pub trait ArrayAccessor: Array {
     /// The Arrow type of the element being accessed.
     type Item: Send + Sync;

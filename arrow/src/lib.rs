@@ -40,8 +40,10 @@
 //! assert_eq!(array.values(), &[1, 0, 3])
 //! ```
 //!
-//! It is also possible to write generic code. For example, the following is generic over
-//! all primitively typed arrays
+//! It is also possible to write generic code for different concrete types.
+//! For example, since the following function is generic over all primitively
+//! typed arrays, when invoked the Rust compiler will generate specialized implementations
+//! with optimized code for each concrete type.
 //!
 //! ```rust
 //! # use std::iter::Sum;
@@ -60,7 +62,10 @@
 //! assert_eq!(sum(&TimestampNanosecondArray::from(vec![1, 2, 3])), 6);
 //! ```
 //!
-//! And the following is generic over all arrays with comparable values
+//! And the following uses [`ArrayAccessor`] to implement a generic function
+//! over all arrays with comparable values.
+//!
+//! [`ArrayAccessor`]: array::ArrayAccessor
 //!
 //! ```rust
 //! # use arrow::array::{ArrayAccessor, ArrayIter, Int32Array, StringArray};
@@ -81,10 +86,11 @@
 //!
 //! # Type Erasure / Trait Objects
 //!
-//! It is often the case that code wishes to handle any type of array, without necessarily knowing
-//! its concrete type. This use-case is catered for by a combination of [`Array`]
-//! and [`DataType`](datatypes::DataType), with the former providing a type-erased container for
-//! the array, and the latter identifying the concrete type of array.
+//! It is common to write code that handles any type of array, without necessarily
+//! knowing its concrete type. This is done using the [`Array`] trait and using
+//! [`DataType`] to determine the appropriate `downcast_ref`.
+//!
+//! [`DataType`]: datatypes::DataType
 //!
 //! ```rust
 //! # use arrow::array::{Array, Float32Array};
@@ -96,14 +102,18 @@
 //!
 //! fn impl_dyn(array: &dyn Array) {
 //!     match array.data_type() {
+//!         // downcast `dyn Array` to concrete `StringArray`
 //!         DataType::Utf8 => impl_string(array.as_any().downcast_ref().unwrap()),
+//!         // downcast `dyn Array` to concrete `Float32Array`
 //!         DataType::Float32 => impl_f32(array.as_any().downcast_ref().unwrap()),
 //!         _ => unimplemented!()
 //!     }
 //! }
 //! ```
 //!
-//! To facilitate downcasting, the [`AsArray`](crate::array::AsArray) extension trait can be used
+//! You can use the [`AsArray`] extension trait to facilitate downcasting:
+//!
+//! [`AsArray`]: crate::array::AsArray
 //!
 //! ```rust
 //! # use arrow::array::{Array, Float32Array, AsArray};
