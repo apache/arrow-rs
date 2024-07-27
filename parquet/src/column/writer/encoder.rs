@@ -181,6 +181,8 @@ impl<T: DataType> ColumnValueEncoder for ColumnValueEncoderImpl<T> {
         self.bloom_filter.take()
     }
 
+    // TODO(ets): this is where the actual encoder gets created
+    // descr has type_length in it, so save that somehow for flba
     fn try_new(descr: &ColumnDescPtr, props: &WriterProperties) -> Result<Self> {
         let dict_supported = props.dictionary_enabled(descr.path())
             && has_dictionary_support(T::get_physical_type(), props);

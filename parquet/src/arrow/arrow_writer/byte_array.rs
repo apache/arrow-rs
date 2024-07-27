@@ -427,6 +427,7 @@ impl ColumnValueEncoder for ByteArrayEncoder {
         self.bloom_filter.take()
     }
 
+    // TODO(ets) columnvalueencoder for byte arrays (flba too? that will be tricky)
     fn try_new(descr: &ColumnDescPtr, props: &WriterProperties) -> Result<Self>
     where
         Self: Sized,
