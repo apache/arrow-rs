@@ -30,8 +30,8 @@ use crate::types::bytes::ByteArrayNativeType;
 use crate::types::{BinaryViewType, ByteViewType, StringViewType};
 use crate::{ArrayRef, GenericByteViewArray};
 
-const STARTING_BLOCK_SIZE: u32 = 8 * 1024; // 8KB
-const MAX_BLOCK_SIZE: u32 = 2 * 1024 * 1024; // 2MB
+const STARTING_BLOCK_SIZE: u32 = 8 * 1024; // 8KiB
+const MAX_BLOCK_SIZE: u32 = 2 * 1024 * 1024; // 2MiB
 
 enum BlockSizeGrowthStrategy {
     Fixed { size: u32 },
@@ -44,6 +44,7 @@ impl BlockSizeGrowthStrategy {
             Self::Fixed { size } => *size,
             Self::Exponential { current_size } => {
                 if *current_size < MAX_BLOCK_SIZE {
+                    // we have fixed start/end block sizes, so we can't overflow
                     *current_size = current_size.saturating_mul(2);
                     *current_size
                 } else {
