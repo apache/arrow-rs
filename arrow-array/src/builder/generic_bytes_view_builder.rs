@@ -111,24 +111,31 @@ impl<T: ByteViewType + ?Sized> GenericByteViewBuilder<T> {
     /// Set a fixed buffer size for variable length strings
     ///
     /// The block size is the size of the buffer used to store values greater
-    /// than 12 bytes. The builder allocates new buffers when the current 
+    /// than 12 bytes. The builder allocates new buffers when the current
     /// buffer is full.
     ///
     /// By default the builder balances buffer size and buffer count by
-    /// growing buffer size exponentially from 8KB up to 2MB. The 
-    /// first buffer allocated is 8KB, then 16KB, then 32KB, etc up to 2MB. 
+    /// growing buffer size exponentially from 8KB up to 2MB. The
+    /// first buffer allocated is 8KB, then 16KB, then 32KB, etc up to 2MB.
     ///
     /// If this method is used, any new buffers allocated are  
-    /// exactly this size. This can be useful for advanced users 
+    /// exactly this size. This can be useful for advanced users
     /// that want to control the memory usage and buffer count.
     ///
     /// See <https://github.com/apache/arrow-rs/issues/6094> for more details on the implications.
-    pub fn with_block_size(self, block_size: u32) -> Self {
+    pub fn with_fixed_block_size(self, block_size: u32) -> Self {
         debug_assert!(block_size > 0, "Block size must be greater than 0");
         Self {
             block_size: BlockSizeGrowthStrategy::Fixed { size: block_size },
             ..self
         }
+    }
+
+    /// Override the size of buffers to allocate for holding string data
+    /// Use `with_fixed_block_size` instead.
+    #[deprecated(note = "Use `with_fixed_block_size` instead")]
+    pub fn with_block_size(self, block_size: u32) -> Self {
+        self.with_fixed_block_size(block_size)
     }
 
     /// Deduplicate strings while building the array
@@ -520,7 +527,7 @@ mod tests {
 
         let mut builder = StringViewBuilder::new()
             .with_deduplicate_strings()
-            .with_block_size(value_1.len() as u32 * 2); // so that we will have multiple buffers
+            .with_fixed_block_size(value_1.len() as u32 * 2); // so that we will have multiple buffers
 
         let values = vec![
             Some(value_1),
@@ -631,7 +638,7 @@ mod tests {
     #[test]
     fn test_string_view_with_block_size_growth() {
         let mut exp_builder = StringViewBuilder::new();
-        let mut fixed_builder = StringViewBuilder::new().with_block_size(STARTING_BLOCK_SIZE);
+        let mut fixed_builder = StringViewBuilder::new().with_fixed_block_size(STARTING_BLOCK_SIZE);
 
         let long_string = String::from_utf8(vec![b'a'; STARTING_BLOCK_SIZE as usize]).unwrap();
 
