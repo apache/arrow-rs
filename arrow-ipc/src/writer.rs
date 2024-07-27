@@ -855,12 +855,24 @@ impl<W: Write> FileWriter<BufWriter<W>> {
 
 impl<W: Write> FileWriter<W> {
     /// Try to create a new writer, with the schema written as part of the header
+    ///
+    /// Note the created writer is not buffered. See [`FileWriter::try_new_buffered`] for details.
+    ///
+    /// # Errors
+    ///
+    /// An ['Err'](Result::Err) may be returned if writing the header to the writer fails.
     pub fn try_new(writer: W, schema: &Schema) -> Result<Self, ArrowError> {
         let write_options = IpcWriteOptions::default();
         Self::try_new_with_options(writer, schema, write_options)
     }
 
     /// Try to create a new writer with IpcWriteOptions
+    ///
+    /// Note the created writer is not buffered. See [`FileWriter::try_new_buffered`] for details.
+    ///
+    /// # Errors
+    ///
+    /// An ['Err'](Result::Err) may be returned if writing the header to the writer fails.
     pub fn try_new_with_options(
         mut writer: W,
         schema: &Schema,
@@ -1049,12 +1061,23 @@ impl<W: Write> StreamWriter<BufWriter<W>> {
 }
 
 impl<W: Write> StreamWriter<W> {
-    /// Try to create a new writer, with the schema written as part of the header
+    /// Try to create a new writer, with the schema written as part of the header.
+    ///
+    /// Note that there is no internal buffering. See also [`StreamWriter::try_new_buffered`].
+    ///
+    /// # Errors
+    ///
+    /// An ['Err'](Result::Err) may be returned if writing the header to the writer fails.
     pub fn try_new(writer: W, schema: &Schema) -> Result<Self, ArrowError> {
         let write_options = IpcWriteOptions::default();
         Self::try_new_with_options(writer, schema, write_options)
     }
 
+    /// Try to create a new writer with [`IpcWriteOptions`].
+    ///
+    /// # Errors
+    ///
+    /// An ['Err'](Result::Err) may be returned if writing the header to the writer fails.
     pub fn try_new_with_options(
         mut writer: W,
         schema: &Schema,

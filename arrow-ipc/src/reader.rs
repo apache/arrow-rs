@@ -1053,9 +1053,16 @@ impl<R: Read + Seek> FileReader<BufReader<R>> {
 }
 
 impl<R: Read + Seek> FileReader<R> {
-    /// Try to create a new file reader
+    /// Try to create a new file reader.
     ///
-    /// Returns errors if the file does not meet the Arrow Format footer requirements
+    /// There is no internal buffering. If buffered reads are needed you likely want to use
+    /// [`FileReader::try_new_buffered`] instead.    
+    ///
+    /// # Errors
+    ///
+    /// An ['Err'](Result::Err) may be returned if:
+    /// - the file does not meet the Arrow Format footer requirements, or
+    /// - file endianness does not match the target endianness.
     pub fn try_new(reader: R, projection: Option<Vec<usize>>) -> Result<Self, ArrowError> {
         let builder = FileReaderBuilder {
             projection,
@@ -1183,12 +1190,15 @@ impl<R: Read> StreamReader<BufReader<R>> {
 impl<R: Read> StreamReader<R> {
     /// Try to create a new stream reader.
     ///
-    /// The first message in the stream is the schema, the reader will fail if it does not
-    /// encounter a schema.
     /// To check if the reader is done, use [`is_finished(self)`](StreamReader::is_finished).
     ///
     /// There is no internal buffering. If buffered reads are needed you likely want to use
     /// [`StreamReader::try_new_buffered`] instead.
+    ///
+    /// # Errors
+    ///
+    /// An ['Err'](Result::Err) may be returned if the reader does not encounter a schema
+    /// as the first message in the stream.
     pub fn try_new(
         mut reader: R,
         projection: Option<Vec<usize>>,
