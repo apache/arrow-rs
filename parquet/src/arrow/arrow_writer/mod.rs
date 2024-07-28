@@ -43,7 +43,7 @@ use crate::column::writer::{
 };
 use crate::data_type::{ByteArray, FixedLenByteArray};
 use crate::errors::{ParquetError, Result};
-use crate::file::metadata::{ColumnChunkMetaData, KeyValue, RowGroupMetaData};
+use crate::file::metadata::{KeyValue, RowGroupMetaData};
 use crate::file::properties::{WriterProperties, WriterPropertiesPtr};
 use crate::file::reader::{ChunkReader, Length};
 use crate::file::writer::{SerializedFileWriter, SerializedRowGroupWriter};
@@ -487,11 +487,6 @@ impl PageWriter for ArrowPageWriter {
         buf.data.push(data);
 
         Ok(spec)
-    }
-
-    fn write_metadata(&mut self, _metadata: &ColumnChunkMetaData) -> Result<()> {
-        // Skip writing metadata as won't be copied anyway
-        Ok(())
     }
 
     fn close(&mut self) -> Result<()> {

@@ -579,7 +579,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
             self.write_dictionary_page()?;
         }
         self.flush_data_pages()?;
-        let metadata = self.write_column_metadata()?;
+        let metadata = self.build_column_metadata()?;
         self.page_writer.close()?;
 
         let boundary_order = match (
@@ -1041,8 +1041,8 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         Ok(())
     }
 
-    /// Assembles and writes column chunk metadata.
-    fn write_column_metadata(&mut self) -> Result<ColumnChunkMetaData> {
+    /// Assembles column chunk metadata.
+    fn build_column_metadata(&mut self) -> Result<ColumnChunkMetaData> {
         let total_compressed_size = self.column_metrics.total_compressed_size as i64;
         let total_uncompressed_size = self.column_metrics.total_uncompressed_size as i64;
         let num_values = self.column_metrics.total_num_values as i64;
@@ -3579,10 +3579,6 @@ mod tests {
             res.offset = 0;
             res.bytes_written = page.data().len() as u64;
             Ok(res)
-        }
-
-        fn write_metadata(&mut self, _metadata: &ColumnChunkMetaData) -> Result<()> {
-            Ok(())
         }
 
         fn close(&mut self) -> Result<()> {

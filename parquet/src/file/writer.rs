@@ -677,7 +677,6 @@ impl<'a, W: Write + Send> SerializedRowGroupWriter<'a, W> {
             }
         }
 
-        SerializedPageWriter::new(self.buf).write_metadata(&metadata)?;
         let (_, on_close) = self.get_on_close();
         on_close(close)
     }
@@ -803,14 +802,6 @@ impl<'a, W: Write + Send> PageWriter for SerializedPageWriter<'a, W> {
         spec.num_values = page.num_values();
 
         Ok(spec)
-    }
-
-    fn write_metadata(&mut self, metadata: &ColumnChunkMetaData) -> Result<()> {
-        let mut protocol = TCompactOutputProtocol::new(&mut self.sink);
-        metadata
-            .to_column_metadata_thrift()
-            .write_to_out_protocol(&mut protocol)?;
-        Ok(())
     }
 
     fn close(&mut self) -> Result<()> {

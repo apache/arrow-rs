@@ -21,7 +21,7 @@ use bytes::Bytes;
 
 use crate::basic::{Encoding, PageType};
 use crate::errors::{ParquetError, Result};
-use crate::file::{metadata::ColumnChunkMetaData, statistics::Statistics};
+use crate::file::statistics::Statistics;
 use crate::format::PageHeader;
 
 /// Parquet Page definition.
@@ -349,12 +349,6 @@ pub trait PageWriter: Send {
     /// This method is called for every compressed page we write into underlying buffer,
     /// either data page or dictionary page.
     fn write_page(&mut self, page: CompressedPage) -> Result<PageWriteSpec>;
-
-    /// Writes column chunk metadata into the output stream/sink.
-    ///
-    /// This method is called once before page writer is closed, normally when writes are
-    /// finalised in column writer.
-    fn write_metadata(&mut self, metadata: &ColumnChunkMetaData) -> Result<()>;
 
     /// Closes resources and flushes underlying sink.
     /// Page writer should not be used after this method is called.
