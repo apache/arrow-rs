@@ -19,6 +19,7 @@ use arrow_array::{ArrayAccessor, BooleanArray};
 use arrow_schema::ArrowError;
 use memchr::memchr2;
 use regex::{Regex, RegexBuilder};
+use std::iter::zip;
 
 /// A string based predicate
 pub enum Predicate<'a> {
@@ -130,19 +131,23 @@ impl<'a> Predicate<'a> {
     }
 }
 
+/// This is faster than `str::starts_with` for small strings.
+/// See <https://github.com/apache/arrow-rs/issues/6107> for more details.
 fn starts_with(haystack: &str, needle: &str, byte_eq_kernel: impl Fn((&u8, &u8)) -> bool) -> bool {
     if needle.len() > haystack.len() {
         false
     } else {
-        std::iter::zip(haystack.as_bytes(), needle.as_bytes()).all(byte_eq_kernel)
+        zip(haystack.as_bytes(), needle.as_bytes()).all(byte_eq_kernel)
     }
 }
 
+/// This is faster than `str::ends_with` for small strings.
+/// See <https://github.com/apache/arrow-rs/issues/6107> for more details.
 fn ends_with(haystack: &str, needle: &str, byte_eq_kernel: impl Fn((&u8, &u8)) -> bool) -> bool {
     if needle.len() > haystack.len() {
         false
     } else {
-        std::iter::zip(
+        zip(
             haystack.as_bytes().iter().rev(),
             needle.as_bytes().iter().rev(),
         )
