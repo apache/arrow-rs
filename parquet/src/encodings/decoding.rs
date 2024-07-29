@@ -87,6 +87,9 @@ pub(crate) mod private {
             encoding: Encoding,
         ) -> Result<Box<dyn Decoder<T>>> {
             match encoding {
+                Encoding::BYTE_STREAM_SPLIT => Ok(Box::new(
+                    byte_stream_split_decoder::ByteStreamSplitDecoder::new(),
+                )),
                 Encoding::DELTA_BINARY_PACKED => Ok(Box::new(DeltaBitPackDecoder::new())),
                 _ => get_decoder_default(descr, encoding),
             }
@@ -99,6 +102,9 @@ pub(crate) mod private {
             encoding: Encoding,
         ) -> Result<Box<dyn Decoder<T>>> {
             match encoding {
+                Encoding::BYTE_STREAM_SPLIT => Ok(Box::new(
+                    byte_stream_split_decoder::ByteStreamSplitDecoder::new(),
+                )),
                 Encoding::DELTA_BINARY_PACKED => Ok(Box::new(DeltaBitPackDecoder::new())),
                 _ => get_decoder_default(descr, encoding),
             }
@@ -1798,11 +1804,43 @@ mod tests {
     }
 
     #[test]
+    fn test_byte_stream_split_multiple_i32() {
+        let data = vec![
+            vec![
+                i32::from_le_bytes([0xAA, 0xBB, 0xCC, 0xDD]),
+                i32::from_le_bytes([0x00, 0x11, 0x22, 0x33]),
+            ],
+            vec![i32::from_le_bytes([0xA3, 0xB4, 0xC5, 0xD6])],
+        ];
+        test_byte_stream_split_decode::<Int32Type>(data);
+    }
+
+    #[test]
+    fn test_byte_stream_split_i64() {
+        let data = vec![vec![
+            i64::from_le_bytes([0, 1, 2, 3, 4, 5, 6, 7]),
+            i64::from_le_bytes([8, 9, 10, 11, 12, 13, 14, 15]),
+        ]];
+        test_byte_stream_split_decode::<Int64Type>(data);
+    }
+
+    #[test]
     fn test_skip_byte_stream_split() {
         let block_data = vec![0.3, 0.4, 0.1, 4.10];
         test_skip::<FloatType>(block_data.clone(), Encoding::BYTE_STREAM_SPLIT, 2);
         test_skip::<DoubleType>(
             block_data.into_iter().map(|x| x as f64).collect(),
+            Encoding::BYTE_STREAM_SPLIT,
+            100,
+        );
+    }
+
+    #[test]
+    fn test_skip_byte_stream_split_ints() {
+        let block_data = vec![3, 4, 1, 5];
+        test_skip::<Int32Type>(block_data.clone(), Encoding::BYTE_STREAM_SPLIT, 2);
+        test_skip::<Int64Type>(
+            block_data.into_iter().map(|x| x as i64).collect(),
             Encoding::BYTE_STREAM_SPLIT,
             100,
         );

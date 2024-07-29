@@ -58,8 +58,8 @@ impl<T: DataType> Encoder<T> for ByteStreamSplitEncoder<T> {
         self.buffer
             .extend(<T as DataType>::T::slice_as_bytes(values));
         ensure_phys_ty!(
-            Type::FLOAT | Type::DOUBLE,
-            "ByteStreamSplitEncoder only supports FloatType or DoubleType"
+            Type::FLOAT | Type::DOUBLE | Type::INT32 | Type::INT64,
+            "ByteStreamSplitEncoder does not support Int96, Boolean, or ByteArray types"
         );
 
         Ok(())

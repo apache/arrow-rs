@@ -815,6 +815,7 @@ mod tests {
         Int32Type::test(Encoding::PLAIN, TEST_SET_SIZE, -1);
         Int32Type::test(Encoding::PLAIN_DICTIONARY, TEST_SET_SIZE, -1);
         Int32Type::test(Encoding::DELTA_BINARY_PACKED, TEST_SET_SIZE, -1);
+        Int32Type::test(Encoding::BYTE_STREAM_SPLIT, TEST_SET_SIZE, -1);
     }
 
     #[test]
@@ -822,6 +823,7 @@ mod tests {
         Int64Type::test(Encoding::PLAIN, TEST_SET_SIZE, -1);
         Int64Type::test(Encoding::PLAIN_DICTIONARY, TEST_SET_SIZE, -1);
         Int64Type::test(Encoding::DELTA_BINARY_PACKED, TEST_SET_SIZE, -1);
+        Int64Type::test(Encoding::BYTE_STREAM_SPLIT, TEST_SET_SIZE, -1);
     }
 
     #[test]

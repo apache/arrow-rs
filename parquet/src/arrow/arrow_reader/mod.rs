@@ -1059,6 +1059,7 @@ mod tests {
                 Encoding::PLAIN,
                 Encoding::RLE_DICTIONARY,
                 Encoding::DELTA_BINARY_PACKED,
+                Encoding::BYTE_STREAM_SPLIT,
             ],
         );
         run_single_column_reader_tests::<Int64Type, _, Int64Type>(
@@ -1070,6 +1071,7 @@ mod tests {
                 Encoding::PLAIN,
                 Encoding::RLE_DICTIONARY,
                 Encoding::DELTA_BINARY_PACKED,
+                Encoding::BYTE_STREAM_SPLIT,
             ],
         );
         run_single_column_reader_tests::<FloatType, _, FloatType>(
@@ -1612,6 +1614,8 @@ mod tests {
         assert!(col.value(2).is_nan());
     }
 
+    // TODO(ets): need to test reading byte_stream_split_extended.gzip.parquet once
+    // BSS is supported for FLBA
     #[test]
     fn test_read_float32_float64_byte_stream_split() {
         let path = format!(
