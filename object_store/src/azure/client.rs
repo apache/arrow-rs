@@ -83,7 +83,7 @@ pub(crate) enum Error {
     BulkDeleteRequest { source: crate::client::retry::Error },
 
     #[snafu(display("Error receiving bulk delete request body: {}", source))]
-    BulkDeleteRequestBody { source: reqwest::Error },
+    BulkDeleteRequestBody { source: multer::Error },
 
     #[snafu(display(
         "Bulk delete request failed due to invalid input: {} (code: {})",
@@ -312,7 +312,7 @@ fn write_headers(headers: &HeaderMap, dst: &mut Vec<u8>) {
 }
 
 /// https://docs.oasis-open.org/odata/odata/v4.0/errata02/os/complete/part1-protocol/odata-v4.0-errata02-os-part1-protocol-complete.html#_Toc406398359
-fn serialize_part_request(
+fn serialize_part_delete_request(
     dst: &mut Vec<u8>,
     boundary: &str,
     idx: usize,
@@ -345,97 +345,121 @@ fn serialize_part_request(
     extend(dst, b"\r\n");
 }
 
-fn parse_response_part(
-    remaining: &mut &[u8],
-    results: &mut [Result<Path>],
-    paths: &[Path],
-) -> Result<()> {
+fn parse_multipart_response_boundary(response: &Response) -> Result<String> {
     let invalid_response = |msg: &str| Error::InvalidBulkDeleteResponse {
         reason: msg.to_string(),
     };
 
-    // Parse part headers and retrieve part id.
-    // Documentation only mentions two possible headers for the start of a part
-    // we leave space for 8 just in case:
-    // https://learn.microsoft.com/en-us/rest/api/storageservices/blob-batch?tabs=microsoft-entra-id#response-body
-    let mut headers = [httparse::EMPTY_HEADER; 8];
-    let id = match httparse::parse_headers(remaining, &mut headers) {
-        Ok(httparse::Status::Complete((pos, headers))) => {
-            *remaining = &remaining[pos..];
-            headers
-                .iter()
-                .find(|h| h.name.to_lowercase() == "content-id")
-                .and_then(|h| std::str::from_utf8(h.value).ok())
-                .and_then(|v| v.parse::<usize>().ok())
-        }
-        _ => return Err(invalid_response("unable to parse parse headers").into()),
+    let content_type = response
+        .headers()
+        .get(CONTENT_TYPE)
+        .ok_or_else(|| invalid_response("missing Content-Type"))?;
+
+    let boundary = content_type
+        .as_ref()
+        .strip_prefix(b"multipart/mixed; boundary=")
+        .ok_or_else(|| invalid_response("invalid Content-Type value"))?
+        .to_vec();
+
+    let boundary = String::from_utf8(boundary)
+        .map_err(|_| invalid_response("invalid multipart boundary"))?;
+
+    Ok(boundary)
+}
+
+async fn parse_blob_batch_delete_response(batch_response: Response, paths: &[Path]) -> Result<Vec<Result<Path>>> {
+    let invalid_response = |msg: &str| Error::InvalidBulkDeleteResponse {
+        reason: msg.to_string(),
     };
 
-    // Parse part response headers
-    // Documentation mentions 5 headers and states that other standard HTTP headers
-    // may be provided, in order to not incurr in more complexity to support an arbitrary
-    // amount of headers we chose a conservative amount and error otherwise
-    // https://learn.microsoft.com/en-us/rest/api/storageservices/delete-blob?tabs=microsoft-entra-id#response-headers
-    let mut headers = [httparse::EMPTY_HEADER; 48];
-    let mut part_response = httparse::Response::new(&mut headers);
-    let content_length = match part_response.parse(remaining) {
-        Ok(httparse::Status::Complete(pos)) => {
-            *remaining = &remaining[pos..];
-            part_response
-                .headers
-                .iter()
-                .find(|h| h.name.to_lowercase() == "content-length")
-                .and_then(|h| std::str::from_utf8(h.value).ok())
-                .and_then(|v| v.parse::<usize>().ok())
-                .unwrap_or_default()
+    let boundary = parse_multipart_response_boundary(&batch_response)?;
+
+    let stream = batch_response.bytes_stream();
+
+    let mut multipart = multer::Multipart::new(stream, boundary);
+
+    let mut results: Vec<Result<Path>> = paths.iter().cloned().map(Ok).collect();
+
+    while let Some(mut part) = multipart
+        .next_field()
+        .await
+        .context(BulkDeleteRequestBodySnafu {})? {
+
+        let id = part.headers()
+            .get("content-id")
+            .and_then(|v| std::str::from_utf8(v.as_bytes()).ok())
+            .and_then(|v| v.parse::<usize>().ok());
+
+        let mut raw_part_response = Vec::with_capacity(2048);
+        while let Some(bytes) = part.chunk().await
+            .context(BulkDeleteRequestBodySnafu {})? {
+            raw_part_response.extend_from_slice(&bytes);
         }
-        _ => return Err(invalid_response("unable to parse response").into()),
-    };
 
-    let part_body = &remaining[..content_length];
+        // We add this extra CRLF because multer will unconditionally skip it even for requests with
+        // an empty body.
+        raw_part_response.extend_from_slice(b"\r\n");
 
-    // Set slice past part body
-    *remaining = &remaining[content_length..];
+        println!("{:?}", String::from_utf8_lossy(&raw_part_response));
+        // Parse part response headers
+        // Documentation mentions 5 headers and states that other standard HTTP headers
+        // may be provided, in order to not incurr in more complexity to support an arbitrary
+        // amount of headers we chose a conservative amount and error otherwise
+        // https://learn.microsoft.com/en-us/rest/api/storageservices/delete-blob?tabs=microsoft-entra-id#response-headers
+        let mut headers = [httparse::EMPTY_HEADER; 48];
+        let mut part_response = httparse::Response::new(&mut headers);
+        let (body, content_length) = match part_response.parse(&raw_part_response) {
+            Ok(httparse::Status::Complete(pos)) => {
+                (
+                    &raw_part_response[pos..],
+                    part_response
+                        .headers
+                        .iter()
+                        .find(|h| h.name.to_lowercase() == "content-length")
+                        .and_then(|h| std::str::from_utf8(h.value).ok())
+                        .and_then(|v| v.parse::<usize>().ok())
+                        .unwrap_or_default()
+                )
+            }
+            e => {
+                println!("{:?}", e);
+                return Err(invalid_response("unable to parse response").into())
+            },
+        };
 
-    if !part_body.is_empty() {
-        // Skips CRLF after body if non-empty
-        *remaining = remaining
-            .strip_prefix(b"\r\n")
-            .ok_or_else(|| invalid_response("missing part separator"))?;
-    }
-
-    match (id, part_response.code) {
-        (Some(_id), Some(code)) if (200..300).contains(&code) => {}
-        (Some(id), Some(404)) => {
-            results[id] = Err(crate::Error::NotFound {
-                path: paths[id].as_ref().to_string(),
-                source: Error::DeleteFailed {
+        match (id, part_response.code) {
+            (Some(_id), Some(code)) if (200..300).contains(&code) => {}
+            (Some(id), Some(404)) => {
+                results[id] = Err(crate::Error::NotFound {
                     path: paths[id].as_ref().to_string(),
-                    code: 404.to_string(),
+                    source: Error::DeleteFailed {
+                        path: paths[id].as_ref().to_string(),
+                        code: 404.to_string(),
+                        reason: part_response.reason.unwrap_or_default().to_string(),
+                    }
+                    .into(),
+                });
+            }
+            (Some(id), Some(code)) => {
+                results[id] = Err(Error::DeleteFailed {
+                    path: paths[id].as_ref().to_string(),
+                    code: code.to_string(),
                     reason: part_response.reason.unwrap_or_default().to_string(),
                 }
-                .into(),
-            });
-        }
-        (Some(id), Some(code)) => {
-            results[id] = Err(Error::DeleteFailed {
-                path: paths[id].as_ref().to_string(),
-                code: code.to_string(),
-                reason: part_response.reason.unwrap_or_default().to_string(),
+                .into());
             }
-            .into());
-        }
-        (None, Some(code)) => {
-            return Err(Error::BulkDeleteRequestInvalidInput {
-                code: code.to_string(),
-                reason: part_response.reason.unwrap_or_default().to_string(),
+            (None, Some(code)) => {
+                return Err(Error::BulkDeleteRequestInvalidInput {
+                    code: code.to_string(),
+                    reason: part_response.reason.unwrap_or_default().to_string(),
+                }
+                .into())
             }
-            .into())
+            _ => return Err(invalid_response("missing part response status code").into()),
         }
-        _ => return Err(invalid_response("missing part response status code").into()),
     }
 
-    Ok(())
+    Ok(results)
 }
 
 #[derive(Debug)]
@@ -601,7 +625,7 @@ impl AzureClient {
             // Url for part requests must be relative and without base
             let relative_url = self.config.service.make_relative(request.url()).unwrap();
 
-            serialize_part_request(&mut body_bytes, &boundary, idx, request, relative_url)
+            serialize_part_delete_request(&mut body_bytes, &boundary, idx, request, relative_url)
         }
 
         // Encode end marker
@@ -628,55 +652,7 @@ impl AzureClient {
             .await
             .context(BulkDeleteRequestSnafu {})?;
 
-        let invalid_response = |msg: &str| Error::InvalidBulkDeleteResponse {
-            reason: msg.to_string(),
-        };
-
-        let content_type = batch_response
-            .headers()
-            .get(CONTENT_TYPE)
-            .ok_or_else(|| invalid_response("missing Content-Type"))?;
-
-        let boundary = content_type
-            .as_ref()
-            .strip_prefix(b"multipart/mixed; boundary=")
-            .ok_or_else(|| invalid_response("invalid Content-Type value"))?
-            .to_vec();
-
-        let start_marker = [b"--".as_slice(), boundary.as_slice(), b"\r\n"].concat();
-
-        let end_marker = [b"--".as_slice(), boundary.as_slice(), b"--"].concat();
-
-        let response_body = batch_response
-            .bytes()
-            .await
-            .context(BulkDeleteRequestBodySnafu {})?;
-
-        let mut results: Vec<Result<Path>> = paths.iter().cloned().map(Ok).collect();
-
-        let mut remaining = response_body.as_ref();
-
-        loop {
-            // Check for part marker
-            remaining = remaining
-                .strip_prefix(start_marker.as_slice())
-                .ok_or_else(|| invalid_response("missing start marker for part"))?;
-
-            parse_response_part(&mut remaining, &mut results, &paths)?;
-
-            // Workaround for Azurite bug where it does not set content-length but still sends some
-            // body. This code skips to the next part or the end.
-            if let Some(pos) = remaining
-                .windows(start_marker.len())
-                .position(|s| s == start_marker.as_slice() || s == end_marker.as_slice())
-            {
-                remaining = &remaining[pos..];
-            }
-
-            if remaining == end_marker {
-                break;
-            }
-        }
+        let results = parse_blob_batch_delete_response(batch_response, &paths).await?;
 
         Ok(results)
     }
