@@ -21,6 +21,7 @@ use crate::basic::Type;
 use crate::data_type::private::ParquetValueType;
 use crate::data_type::{AsBytes, ByteArray, FixedLenByteArray, Int96};
 use crate::errors::ParquetError;
+use crate::file::metadata::LevelHistogram;
 use crate::format::{BoundaryOrder, ColumnIndex};
 use crate::util::bit_util::from_le_slice;
 use std::fmt::Debug;
@@ -40,13 +41,13 @@ pub struct PageIndex<T> {
     ///
     /// `repetition_level_histogram[i]` is a count of how many values are at repetition level `i`.
     /// For example, `repetition_level_histogram[0]` indicates how many rows the page contains.
-    pub repetition_level_histogram: Option<Vec<i64>>,
+    pub repetition_level_histogram: Option<LevelHistogram>,
     /// Definition level histogram for the page
     ///
     /// `definition_level_histogram[i]` is a count of how many values are at definition level `i`.
     /// For example, `definition_level_histogram[max_definition_level]` indicates how many
     /// non-null values are present in the page.
-    pub definition_level_histogram: Option<Vec<i64>>,
+    pub definition_level_histogram: Option<LevelHistogram>,
 }
 
 impl<T> PageIndex<T> {
@@ -59,10 +60,10 @@ impl<T> PageIndex<T> {
     pub fn null_count(&self) -> Option<i64> {
         self.null_count
     }
-    pub fn repetition_level_histogram(&self) -> Option<&Vec<i64>> {
+    pub fn repetition_level_histogram(&self) -> Option<&LevelHistogram> {
         self.repetition_level_histogram.as_ref()
     }
-    pub fn definition_level_histogram(&self) -> Option<&Vec<i64>> {
+    pub fn definition_level_histogram(&self) -> Option<&LevelHistogram> {
         self.definition_level_histogram.as_ref()
     }
 }
@@ -175,7 +176,7 @@ impl<T: ParquetValueType> NativeIndex<T> {
                 for i in 0..len {
                     let page_idx = i * num_levels;
                     let page_hist = hist[page_idx..page_idx + num_levels].to_vec();
-                    res.push(Some(page_hist));
+                    res.push(Some(LevelHistogram::from(page_hist)));
                 }
                 res
             } else {
@@ -183,9 +184,9 @@ impl<T: ParquetValueType> NativeIndex<T> {
             }
         };
 
-        let rep_hists: Vec<Option<Vec<i64>>> =
+        let rep_hists: Vec<Option<LevelHistogram>> =
             to_page_histograms(index.repetition_level_histograms);
-        let def_hists: Vec<Option<Vec<i64>>> =
+        let def_hists: Vec<Option<LevelHistogram>> =
             to_page_histograms(index.definition_level_histograms);
 
         let indexes = index
@@ -236,8 +237,8 @@ mod tests {
             min: Some(-123),
             max: Some(234),
             null_count: Some(0),
-            repetition_level_histogram: Some(vec![1, 2]),
-            definition_level_histogram: Some(vec![1, 2, 3]),
+            repetition_level_histogram: Some(LevelHistogram::from(vec![1, 2])),
+            definition_level_histogram: Some(LevelHistogram::from(vec![1, 2, 3])),
         };
 
         assert_eq!(page_index.min().unwrap(), &-123);
@@ -245,10 +246,13 @@ mod tests {
         assert_eq!(page_index.min_bytes().unwrap(), (-123).as_bytes());
         assert_eq!(page_index.max_bytes().unwrap(), 234.as_bytes());
         assert_eq!(page_index.null_count().unwrap(), 0);
-        assert_eq!(page_index.repetition_level_histogram(), Some(&vec![1, 2]));
         assert_eq!(
-            page_index.definition_level_histogram(),
-            Some(&vec![1, 2, 3])
+            page_index.repetition_level_histogram().unwrap().values(),
+            &vec![1, 2]
+        );
+        assert_eq!(
+            page_index.definition_level_histogram().unwrap().values(),
+            &vec![1, 2, 3]
         );
     }
 

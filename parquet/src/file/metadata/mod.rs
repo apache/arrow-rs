@@ -569,7 +569,7 @@ pub struct ColumnChunkMetaData {
 /// For example, `vec[0]` is the number of rows with level 0, `vec[1]` is the
 /// number of rows with level 1, and so on.
 ///
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
 pub struct LevelHistogram {
     inner: Vec<i64>,
 }
