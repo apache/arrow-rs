@@ -5321,7 +5321,7 @@ mod tests {
         let typed_dict = string_dict_array.downcast_dict::<StringArray>().unwrap();
 
         let string_view_array = {
-            let mut builder = StringViewBuilder::new().with_block_size(8); // multiple buffers.
+            let mut builder = StringViewBuilder::new().with_fixed_block_size(8); // multiple buffers.
             for v in typed_dict.into_iter() {
                 builder.append_option(v);
             }
@@ -5338,7 +5338,7 @@ mod tests {
         let typed_binary_dict = binary_dict_array.downcast_dict::<BinaryArray>().unwrap();
 
         let binary_view_array = {
-            let mut builder = BinaryViewBuilder::new().with_block_size(8); // multiple buffers.
+            let mut builder = BinaryViewBuilder::new().with_fixed_block_size(8); // multiple buffers.
             for v in typed_binary_dict.into_iter() {
                 builder.append_option(v);
             }
@@ -5381,7 +5381,7 @@ mod tests {
         O: OffsetSizeTrait,
     {
         let view_array = {
-            let mut builder = StringViewBuilder::new().with_block_size(8); // multiple buffers.
+            let mut builder = StringViewBuilder::new().with_fixed_block_size(8); // multiple buffers.
             for s in VIEW_TEST_DATA.iter() {
                 builder.append_option(*s);
             }
@@ -5410,7 +5410,7 @@ mod tests {
         O: OffsetSizeTrait,
     {
         let view_array = {
-            let mut builder = BinaryViewBuilder::new().with_block_size(8); // multiple buffers.
+            let mut builder = BinaryViewBuilder::new().with_fixed_block_size(8); // multiple buffers.
             for s in VIEW_TEST_DATA.iter() {
                 builder.append_option(*s);
             }
