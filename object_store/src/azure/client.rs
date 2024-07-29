@@ -413,8 +413,8 @@ async fn parse_blob_batch_delete_response(
         let mut headers = [httparse::EMPTY_HEADER; 48];
         let mut part_response = httparse::Response::new(&mut headers);
         match part_response.parse(&raw_part_response) {
-            Ok(httparse::Status::Complete(pos)) => {}
-            e => return Err(invalid_response("unable to parse response").into()),
+            Ok(httparse::Status::Complete(_)) => {}
+            _ => return Err(invalid_response("unable to parse response").into()),
         };
 
         match (id, part_response.code) {
