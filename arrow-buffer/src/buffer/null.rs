@@ -65,7 +65,7 @@ impl Eq for NullBuffer {}
 impl NullBuffer {
     /// Create a new [`NullBuffer`] computing the null count
     pub fn new(buffer: BooleanBuffer) -> Self {
-        // Expensive to calc the null count, we should lazily compute it when
+        // Expensive to calc the null count, we should lazily compute it when it is really needed
         let null_count = NullCount::Lazy(AtomicI64::new(UNINITIALIZED_NULL_COUNT));
         Self { buffer, null_count }
     }
