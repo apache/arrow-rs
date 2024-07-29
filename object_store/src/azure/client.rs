@@ -281,6 +281,7 @@ fn extend(dst: &mut Vec<u8>, data: &[u8]) {
 }
 
 // Write header names as title case. The header name is assumed to be ASCII.
+// We need it because Azure is not always treating headers as case insensitive.
 fn title_case(dst: &mut Vec<u8>, name: &[u8]) {
     dst.reserve(name.len());
 
@@ -297,6 +298,8 @@ fn title_case(dst: &mut Vec<u8>, name: &[u8]) {
 
 fn write_headers(headers: &HeaderMap, dst: &mut Vec<u8>) {
     for (name, value) in headers {
+        // We need special case handling here otherwise Azure returns 400
+        // due to `Content-Id` instead of `Content-ID`
         if name == "content-id" {
             extend(dst, b"Content-ID");
         } else {
@@ -308,6 +311,7 @@ fn write_headers(headers: &HeaderMap, dst: &mut Vec<u8>) {
     }
 }
 
+/// https://docs.oasis-open.org/odata/odata/v4.0/errata02/os/complete/part1-protocol/odata-v4.0-errata02-os-part1-protocol-complete.html#_Toc406398359
 fn serialize_part_request(
     dst: &mut Vec<u8>,
     boundary: &str,
@@ -322,8 +326,9 @@ fn serialize_part_request(
 
     // Encode part headers
     let mut part_headers = HeaderMap::new();
-    part_headers.insert(CONTENT_TYPE, "application/http".parse().unwrap());
+    part_headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/http"));
     part_headers.insert("Content-Transfer-Encoding", "binary".parse().unwrap());
+    // Azure returns 400 if we send `Content-Id` instead of `Content-ID`
     part_headers.insert("Content-ID", HeaderValue::from(idx));
     write_headers(&part_headers, dst);
     extend(dst, b"\r\n");
@@ -349,8 +354,11 @@ fn parse_response_part(
         reason: msg.to_string(),
     };
 
-    // Parse part headers and retrieve part id
-    let mut headers = [httparse::EMPTY_HEADER; 4];
+    // Parse part headers and retrieve part id.
+    // Documentation only mentions two possible headers for the start of a part
+    // we leave space for 8 just in case:
+    // https://learn.microsoft.com/en-us/rest/api/storageservices/blob-batch?tabs=microsoft-entra-id#response-body
+    let mut headers = [httparse::EMPTY_HEADER; 8];
     let id = match httparse::parse_headers(remaining, &mut headers) {
         Ok(httparse::Status::Complete((pos, headers))) => {
             *remaining = &remaining[pos..];
@@ -364,7 +372,11 @@ fn parse_response_part(
     };
 
     // Parse part response headers
-    let mut headers = [httparse::EMPTY_HEADER; 10];
+    // Documentation mentions 5 headers and states that other standard HTTP headers
+    // may be provided, in order to not incurr in more complexity to support an arbitrary
+    // amount of headers we chose a conservative amount and error otherwise
+    // https://learn.microsoft.com/en-us/rest/api/storageservices/delete-blob?tabs=microsoft-entra-id#response-headers
+    let mut headers = [httparse::EMPTY_HEADER; 48];
     let mut part_response = httparse::Response::new(&mut headers);
     let content_length = match part_response.parse(remaining) {
         Ok(httparse::Status::Complete(pos)) => {
@@ -566,9 +578,10 @@ impl AzureClient {
 
         let credential = self.get_credential().await?;
 
+        // https://www.ietf.org/rfc/rfc2046
         let boundary = format!("batch_{}", uuid::Uuid::new_v4());
 
-        let mut body_bytes = Vec::with_capacity(paths.len() * 256);
+        let mut body_bytes = Vec::with_capacity(paths.len() * 2048);
 
         for (idx, path) in paths.iter().enumerate() {
             let url = self.config.path_url(path);
@@ -578,6 +591,9 @@ impl AzureClient {
                 .client
                 .request(Method::DELETE, url)
                 .header(CONTENT_LENGTH, HeaderValue::from(0))
+                // Each subrequest must be authorized individually [1] and we use
+                // the CredentialExt for this.
+                // [1]: https://learn.microsoft.com/en-us/rest/api/storageservices/blob-batch?tabs=microsoft-entra-id#request-body
                 .with_azure_authorization(&credential, &self.config.account)
                 .build()
                 .unwrap();
