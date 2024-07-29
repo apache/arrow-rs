@@ -311,7 +311,7 @@ fn write_headers(headers: &HeaderMap, dst: &mut Vec<u8>) {
     }
 }
 
-/// https://docs.oasis-open.org/odata/odata/v4.0/errata02/os/complete/part1-protocol/odata-v4.0-errata02-os-part1-protocol-complete.html#_Toc406398359
+// https://docs.oasis-open.org/odata/odata/v4.0/errata02/os/complete/part1-protocol/odata-v4.0-errata02-os-part1-protocol-complete.html#_Toc406398359
 fn serialize_part_delete_request(
     dst: &mut Vec<u8>,
     boundary: &str,
@@ -383,28 +383,29 @@ async fn parse_blob_batch_delete_response(
 
     let mut results: Vec<Result<Path>> = paths.iter().cloned().map(Ok).collect();
 
+    let mut part_response_buffer = Vec::with_capacity(2048);
+
     while let Some(mut part) = multipart
         .next_field()
         .await
         .context(BulkDeleteRequestBodySnafu {})?
     {
-
         let id = part
             .headers()
             .get("content-id")
             .and_then(|v| std::str::from_utf8(v.as_bytes()).ok())
             .and_then(|v| v.parse::<usize>().ok());
 
-        let mut raw_part_response = Vec::with_capacity(2048);
+        part_response_buffer.clear();
+
         while let Some(bytes) = part.chunk().await.context(BulkDeleteRequestBodySnafu {})? {
-            raw_part_response.extend_from_slice(&bytes);
+            part_response_buffer.extend_from_slice(&bytes);
         }
 
         // We add this extra CRLF because multer will unconditionally skip it even for requests with
         // an empty body.
-        raw_part_response.extend_from_slice(b"\r\n");
+        part_response_buffer.extend_from_slice(b"\r\n");
 
-        println!("{:?}", String::from_utf8_lossy(&raw_part_response));
         // Parse part response headers
         // Documentation mentions 5 headers and states that other standard HTTP headers
         // may be provided, in order to not incurr in more complexity to support an arbitrary
@@ -412,7 +413,7 @@ async fn parse_blob_batch_delete_response(
         // https://learn.microsoft.com/en-us/rest/api/storageservices/delete-blob?tabs=microsoft-entra-id#response-headers
         let mut headers = [httparse::EMPTY_HEADER; 48];
         let mut part_response = httparse::Response::new(&mut headers);
-        match part_response.parse(&raw_part_response) {
+        match part_response.parse(&part_response_buffer) {
             Ok(httparse::Status::Complete(_)) => {}
             _ => return Err(invalid_response("unable to parse response").into()),
         };
