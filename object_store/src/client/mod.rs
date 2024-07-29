@@ -167,10 +167,40 @@ impl FromStr for ClientConfigKey {
     }
 }
 
+/// Represents a CA certificate provided by the user.
+#[derive(Debug, Clone)]
+pub struct UserCA(reqwest::tls::Certificate);
+
+impl UserCA {
+    /// Create a `UserCA` from a PEM encoded certificate.
+    pub fn from_pem(pem: &[u8]) -> Result<Self> {
+        Ok(Self(
+            reqwest::tls::Certificate::from_pem(pem).map_err(map_client_error)?,
+        ))
+    }
+
+    /// Create a collection of `UserCA` from a PEM encoded certificate bundle. Example byte sources may be .crt, .cer or .pem files.
+    pub fn from_pem_bundle(pem_bundle: &[u8]) -> Result<Vec<Self>> {
+        Ok(reqwest::tls::Certificate::from_pem_bundle(pem_bundle)
+            .map_err(map_client_error)?
+            .into_iter()
+            .map(Self)
+            .collect())
+    }
+
+    /// Create a `UserCA` from a binary DER encoded certificate.
+    pub fn from_der(der: &[u8]) -> Result<Self> {
+        Ok(Self(
+            reqwest::tls::Certificate::from_der(der).map_err(map_client_error)?,
+        ))
+    }
+}
+
 /// HTTP client configuration for remote object stores
 #[derive(Debug, Clone)]
 pub struct ClientOptions {
     user_agent: Option<ConfigValue<HeaderValue>>,
+    user_ca_certificates: Vec<UserCA>,
     content_type_map: HashMap<String, String>,
     default_content_type: Option<String>,
     default_headers: Option<HeaderMap>,
@@ -201,6 +231,7 @@ impl Default for ClientOptions {
         // we opt for a slightly higher default timeout of 30 seconds
         Self {
             user_agent: None,
+            user_ca_certificates: Default::default(),
             content_type_map: Default::default(),
             default_content_type: None,
             default_headers: None,
@@ -307,6 +338,12 @@ impl ClientOptions {
     /// Default is based on the version of this crate
     pub fn with_user_agent(mut self, agent: HeaderValue) -> Self {
         self.user_agent = Some(agent.into());
+        self
+    }
+
+    /// Add a user-provided CA certificate to the client
+    pub fn with_ca_cert(mut self, certificate: UserCA) -> Self {
+        self.user_ca_certificates.push(certificate);
         self
     }
 
@@ -539,6 +576,10 @@ impl ClientOptions {
             }
 
             builder = builder.proxy(proxy);
+        }
+
+        for certificate in &self.user_ca_certificates {
+            builder = builder.add_root_certificate(certificate.0.clone());
         }
 
         if let Some(timeout) = &self.timeout {
