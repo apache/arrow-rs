@@ -361,13 +361,16 @@ fn parse_multipart_response_boundary(response: &Response) -> Result<String> {
         .ok_or_else(|| invalid_response("invalid Content-Type value"))?
         .to_vec();
 
-    let boundary = String::from_utf8(boundary)
-        .map_err(|_| invalid_response("invalid multipart boundary"))?;
+    let boundary =
+        String::from_utf8(boundary).map_err(|_| invalid_response("invalid multipart boundary"))?;
 
     Ok(boundary)
 }
 
-async fn parse_blob_batch_delete_response(batch_response: Response, paths: &[Path]) -> Result<Vec<Result<Path>>> {
+async fn parse_blob_batch_delete_response(
+    batch_response: Response,
+    paths: &[Path],
+) -> Result<Vec<Result<Path>>> {
     let invalid_response = |msg: &str| Error::InvalidBulkDeleteResponse {
         reason: msg.to_string(),
     };
@@ -383,16 +386,17 @@ async fn parse_blob_batch_delete_response(batch_response: Response, paths: &[Pat
     while let Some(mut part) = multipart
         .next_field()
         .await
-        .context(BulkDeleteRequestBodySnafu {})? {
+        .context(BulkDeleteRequestBodySnafu {})?
+    {
 
-        let id = part.headers()
+        let id = part
+            .headers()
             .get("content-id")
             .and_then(|v| std::str::from_utf8(v.as_bytes()).ok())
             .and_then(|v| v.parse::<usize>().ok());
 
         let mut raw_part_response = Vec::with_capacity(2048);
-        while let Some(bytes) = part.chunk().await
-            .context(BulkDeleteRequestBodySnafu {})? {
+        while let Some(bytes) = part.chunk().await.context(BulkDeleteRequestBodySnafu {})? {
             raw_part_response.extend_from_slice(&bytes);
         }
 
@@ -408,23 +412,9 @@ async fn parse_blob_batch_delete_response(batch_response: Response, paths: &[Pat
         // https://learn.microsoft.com/en-us/rest/api/storageservices/delete-blob?tabs=microsoft-entra-id#response-headers
         let mut headers = [httparse::EMPTY_HEADER; 48];
         let mut part_response = httparse::Response::new(&mut headers);
-        let (body, content_length) = match part_response.parse(&raw_part_response) {
-            Ok(httparse::Status::Complete(pos)) => {
-                (
-                    &raw_part_response[pos..],
-                    part_response
-                        .headers
-                        .iter()
-                        .find(|h| h.name.to_lowercase() == "content-length")
-                        .and_then(|h| std::str::from_utf8(h.value).ok())
-                        .and_then(|v| v.parse::<usize>().ok())
-                        .unwrap_or_default()
-                )
-            }
-            e => {
-                println!("{:?}", e);
-                return Err(invalid_response("unable to parse response").into())
-            },
+        match part_response.parse(&raw_part_response) {
+            Ok(httparse::Status::Complete(pos)) => {}
+            e => return Err(invalid_response("unable to parse response").into()),
         };
 
         match (id, part_response.code) {
