@@ -215,11 +215,11 @@ fn add_benchmark(c: &mut Criterion) {
     });
 
     c.bench_function("like_utf8 scalar ends with", |b| {
-        b.iter(|| bench_like_utf8_scalar(&arr_string, "xxxx%"))
+        b.iter(|| bench_like_utf8_scalar(&arr_string, "%xxxx"))
     });
 
     c.bench_function("like_utf8 scalar starts with", |b| {
-        b.iter(|| bench_like_utf8_scalar(&arr_string, "%xxxx"))
+        b.iter(|| bench_like_utf8_scalar(&arr_string, "xxxx%"))
     });
 
     c.bench_function("like_utf8 scalar complex", |b| {
@@ -237,11 +237,11 @@ fn add_benchmark(c: &mut Criterion) {
     });
 
     c.bench_function("like_utf8view scalar ends with", |b| {
-        b.iter(|| bench_like_utf8view_scalar(&string_view_left, "xxxx%"))
+        b.iter(|| bench_like_utf8view_scalar(&string_view_left, "%xxxx"))
     });
 
     c.bench_function("like_utf8view scalar starts with", |b| {
-        b.iter(|| bench_like_utf8view_scalar(&string_view_left, "%xxxx"))
+        b.iter(|| bench_like_utf8view_scalar(&string_view_left, "xxxx%"))
     });
 
     c.bench_function("like_utf8view scalar complex", |b| {
@@ -259,11 +259,11 @@ fn add_benchmark(c: &mut Criterion) {
     });
 
     c.bench_function("nlike_utf8 scalar ends with", |b| {
-        b.iter(|| bench_nlike_utf8_scalar(&arr_string, "xxxx%"))
+        b.iter(|| bench_nlike_utf8_scalar(&arr_string, "%xxxx"))
     });
 
     c.bench_function("nlike_utf8 scalar starts with", |b| {
-        b.iter(|| bench_nlike_utf8_scalar(&arr_string, "%xxxx"))
+        b.iter(|| bench_nlike_utf8_scalar(&arr_string, "xxxx%"))
     });
 
     c.bench_function("nlike_utf8 scalar complex", |b| {
@@ -281,11 +281,11 @@ fn add_benchmark(c: &mut Criterion) {
     });
 
     c.bench_function("ilike_utf8 scalar ends with", |b| {
-        b.iter(|| bench_ilike_utf8_scalar(&arr_string, "xXXx%"))
+        b.iter(|| bench_ilike_utf8_scalar(&arr_string, "%xXXx"))
     });
 
     c.bench_function("ilike_utf8 scalar starts with", |b| {
-        b.iter(|| bench_ilike_utf8_scalar(&arr_string, "%XXXx"))
+        b.iter(|| bench_ilike_utf8_scalar(&arr_string, "XXXx%"))
     });
 
     c.bench_function("ilike_utf8 scalar complex", |b| {
@@ -303,11 +303,11 @@ fn add_benchmark(c: &mut Criterion) {
     });
 
     c.bench_function("nilike_utf8 scalar ends with", |b| {
-        b.iter(|| bench_nilike_utf8_scalar(&arr_string, "xXXx%"))
+        b.iter(|| bench_nilike_utf8_scalar(&arr_string, "%xXXx"))
     });
 
     c.bench_function("nilike_utf8 scalar starts with", |b| {
-        b.iter(|| bench_nilike_utf8_scalar(&arr_string, "%XXXx"))
+        b.iter(|| bench_nilike_utf8_scalar(&arr_string, "XXXx%"))
     });
 
     c.bench_function("nilike_utf8 scalar complex", |b| {
