@@ -239,7 +239,7 @@ fn op_scalar<'a, T: StringArrayType<'a>>(
     let r = match op {
         Op::Like(neg) => Predicate::like(r)?.evaluate_array(l, neg),
         Op::ILike(neg) => Predicate::ilike(r, l.is_ascii())?.evaluate_array(l, neg),
-        Op::Contains => Predicate::Contains(r).evaluate_array(l, false),
+        Op::Contains => Predicate::contains(r).evaluate_array(l, false),
         Op::StartsWith => Predicate::StartsWith(r).evaluate_array(l, false),
         Op::EndsWith => Predicate::EndsWith(r).evaluate_array(l, false),
     };
@@ -273,10 +273,14 @@ fn op_binary<'a>(
     match op {
         Op::Like(neg) => binary_predicate(l, r, neg, Predicate::like),
         Op::ILike(neg) => binary_predicate(l, r, neg, |s| Predicate::ilike(s, false)),
-        Op::Contains => Ok(l.zip(r).map(|(l, r)| Some(l?.contains(r?))).collect()),
+        Op::Contains => Ok(l.zip(r).map(|(l, r)| Some(str_contains(l?, r?))).collect()),
         Op::StartsWith => Ok(l.zip(r).map(|(l, r)| Some(l?.starts_with(r?))).collect()),
         Op::EndsWith => Ok(l.zip(r).map(|(l, r)| Some(l?.ends_with(r?))).collect()),
     }
+}
+
+fn str_contains(haystack: &str, needle: &str) -> bool {
+    memchr::memmem::find(haystack.as_bytes(), needle.as_bytes()).is_some()
 }
 
 fn binary_predicate<'a>(
