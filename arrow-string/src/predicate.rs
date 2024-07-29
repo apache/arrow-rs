@@ -140,39 +140,54 @@ fn ends_with_ignore_ascii_case(haystack: &str, needle: &str) -> bool {
 
 /// Transforms a like `pattern` to a regex compatible pattern. To achieve that, it does:
 ///
-/// 1. Replace like wildcards for regex expressions as the pattern will be evaluated using regex match: `%` => `.*` and `_` => `.`
-/// 2. Escape regex meta characters to match them and not be evaluated as regex special chars. For example: `.` => `\\.`
-/// 3. Replace escaped like wildcards removing the escape characters to be able to match it as a regex. For example: `\\%` => `%`
+/// 1. Replace `LIKE` multi-character wildcards `%` => `.*` (unless they're at the start or end of the pattern,
+///    where the regex is just truncated - e.g. `%foo%` => `foo` rather than `^.*foo.*$`)
+/// 2. Replace `LIKE` single-character wildcards `_` => `.`
+/// 3. Escape regex meta characters to match them and not be evaluated as regex special chars. e.g. `.` => `\\.`
+/// 4. Replace escaped `LIKE` wildcards removing the escape characters to be able to match it as a regex. e.g. `\\%` => `%`
 fn regex_like(pattern: &str, case_insensitive: bool) -> Result<Regex, ArrowError> {
     let mut result = String::with_capacity(pattern.len() * 2);
-    result.push('^');
     let mut chars_iter = pattern.chars().peekable();
+    match chars_iter.peek() {
+        // if the pattern starts with `%`, we avoid starting the regex with a slow but meaningless `^.*`
+        Some('%') => {
+            chars_iter.next();
+        }
+        _ => result.push('^'),
+    };
+
     while let Some(c) = chars_iter.next() {
-        if c == '\\' {
-            let next = chars_iter.peek();
-            match next {
-                Some(next) if is_like_pattern(*next) => {
-                    result.push(*next);
-                    // Skipping the next char as it is already appended
-                    chars_iter.next();
-                }
-                _ => {
-                    result.push('\\');
-                    result.push('\\');
+        match c {
+            '\\' => {
+                match chars_iter.peek() {
+                    Some(next) if is_like_pattern(*next) => {
+                        result.push(*next);
+                        // Skipping the next char as it is already appended
+                        chars_iter.next();
+                    }
+                    _ => {
+                        result.push('\\');
+                        result.push('\\');
+                    }
                 }
             }
-        } else if regex_syntax::is_meta_character(c) {
-            result.push('\\');
-            result.push(c);
-        } else if c == '%' {
-            result.push_str(".*");
-        } else if c == '_' {
-            result.push('.');
-        } else {
-            result.push(c);
+            '%' => result.push_str(".*"),
+            '_' => result.push('.'),
+            c => {
+                if regex_syntax::is_meta_character(c) {
+                    result.push('\\');
+                }
+                result.push(c);
+            }
         }
     }
-    result.push('$');
+    // instead of ending the regex with `.*$` and making it needlessly slow, we just end the regex
+    if result.ends_with(".*") {
+        result.pop();
+        result.pop();
+    } else {
+        result.push('$');
+    }
     RegexBuilder::new(&result)
         .case_insensitive(case_insensitive)
         .dot_matches_new_line(true)
@@ -197,9 +212,25 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_replace_like_wildcards() {
-        let a_eq = "_%";
-        let expected = "^..*$";
+    fn test_replace_start_end_percent() {
+        let a_eq = "%foobar%";
+        let expected = "foobar";
+        let r = regex_like(a_eq, false).unwrap();
+        assert_eq!(r.to_string(), expected);
+    }
+
+    #[test]
+    fn test_replace_middle_percent() {
+        let a_eq = "foo%bar";
+        let expected = "^foo.*bar$";
+        let r = regex_like(a_eq, false).unwrap();
+        assert_eq!(r.to_string(), expected);
+    }
+
+    #[test]
+    fn test_replace_underscore() {
+        let a_eq = "foo_bar";
+        let expected = "^foo.bar$";
         let r = regex_like(a_eq, false).unwrap();
         assert_eq!(r.to_string(), expected);
     }
