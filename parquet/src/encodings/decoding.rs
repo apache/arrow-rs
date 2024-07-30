@@ -27,6 +27,9 @@ use super::rle::RleDecoder;
 use crate::basic::*;
 use crate::data_type::private::ParquetValueType;
 use crate::data_type::*;
+use crate::encodings::decoding::byte_stream_split_decoder::{
+    ByteStreamSplitDecoder, VariableWidthByteStreamSplitDecoder,
+};
 use crate::errors::{ParquetError, Result};
 use crate::schema::types::ColumnDescPtr;
 use crate::util::bit_util::{self, BitReader};
@@ -87,9 +90,7 @@ pub(crate) mod private {
             encoding: Encoding,
         ) -> Result<Box<dyn Decoder<T>>> {
             match encoding {
-                Encoding::BYTE_STREAM_SPLIT => Ok(Box::new(
-                    byte_stream_split_decoder::ByteStreamSplitDecoder::new(),
-                )),
+                Encoding::BYTE_STREAM_SPLIT => Ok(Box::new(ByteStreamSplitDecoder::new())),
                 Encoding::DELTA_BINARY_PACKED => Ok(Box::new(DeltaBitPackDecoder::new())),
                 _ => get_decoder_default(descr, encoding),
             }
@@ -102,9 +103,7 @@ pub(crate) mod private {
             encoding: Encoding,
         ) -> Result<Box<dyn Decoder<T>>> {
             match encoding {
-                Encoding::BYTE_STREAM_SPLIT => Ok(Box::new(
-                    byte_stream_split_decoder::ByteStreamSplitDecoder::new(),
-                )),
+                Encoding::BYTE_STREAM_SPLIT => Ok(Box::new(ByteStreamSplitDecoder::new())),
                 Encoding::DELTA_BINARY_PACKED => Ok(Box::new(DeltaBitPackDecoder::new())),
                 _ => get_decoder_default(descr, encoding),
             }
@@ -117,9 +116,7 @@ pub(crate) mod private {
             encoding: Encoding,
         ) -> Result<Box<dyn Decoder<T>>> {
             match encoding {
-                Encoding::BYTE_STREAM_SPLIT => Ok(Box::new(
-                    byte_stream_split_decoder::ByteStreamSplitDecoder::new(),
-                )),
+                Encoding::BYTE_STREAM_SPLIT => Ok(Box::new(ByteStreamSplitDecoder::new())),
                 _ => get_decoder_default(descr, encoding),
             }
         }
@@ -130,9 +127,7 @@ pub(crate) mod private {
             encoding: Encoding,
         ) -> Result<Box<dyn Decoder<T>>> {
             match encoding {
-                Encoding::BYTE_STREAM_SPLIT => Ok(Box::new(
-                    byte_stream_split_decoder::ByteStreamSplitDecoder::new(),
-                )),
+                Encoding::BYTE_STREAM_SPLIT => Ok(Box::new(ByteStreamSplitDecoder::new())),
                 _ => get_decoder_default(descr, encoding),
             }
         }
@@ -160,10 +155,11 @@ pub(crate) mod private {
         ) -> Result<Box<dyn Decoder<T>>> {
             match encoding {
                 Encoding::BYTE_STREAM_SPLIT => {
-                    let mut decoder = byte_stream_split_decoder::ByteStreamSplitDecoder::new();
-                    decoder.set_type_width(descr.type_length() as usize);
-                    Ok(Box::new(decoder))
-                },
+                    let type_length = descr.type_length() as usize;
+                    Ok(Box::new(VariableWidthByteStreamSplitDecoder::new(
+                        type_length,
+                    )))
+                }
                 Encoding::DELTA_BYTE_ARRAY => Ok(Box::new(DeltaByteArrayDecoder::new())),
                 _ => get_decoder_default(descr, encoding),
             }
@@ -244,10 +240,6 @@ pub trait Decoder<T: DataType>: Send {
 
     /// Skip the specified number of values in this decoder stream.
     fn skip(&mut self, num_values: usize) -> Result<usize>;
-
-    /// Sets the width of the data in bytes. Only relevant for `FIXED_LEN_BYTE_ARRAY` data
-    /// and `BYTE_STREAM_SPLIT` decoding.
-    fn set_type_width(&mut self, _type_width: usize) {}
 }
 
 /// Gets a decoder for the column descriptor `descr` and encoding type `encoding`.

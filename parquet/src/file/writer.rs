@@ -2075,4 +2075,32 @@ mod tests {
         assert_eq!(offset_index[0].len(), 1);
         assert!(offset_index[0][0].unencoded_byte_array_data_bytes.is_none());
     }
+
+    #[test]
+    fn test_byte_stream_split_roundtrip() {
+        let path = format!(
+            "{}/byte_stream_split_extended.gzip.parquet",
+            arrow::util::test_util::parquet_test_data(),
+        );
+        let file = File::open(path).unwrap();
+        let reader = Box::new(SerializedFileReader::new(file).expect("Failed to create reader"));
+
+        // Use full schema as projected schema
+        let mut iter = reader
+            .get_row_iter(None)
+            .expect("Failed to create row iterator");
+
+        let mut start = 0;
+        let end = reader.metadata().file_metadata().num_rows();
+
+        let check_row = |row| {};
+
+        while start < end {
+            match iter.next() {
+                Some(row) => check_row(row),
+                None => break,
+            };
+            start += 1;
+        }
+    }
 }

@@ -22,7 +22,7 @@ use bytes::Bytes;
 use crate::basic::{Encoding, Type};
 use crate::data_type::private::ParquetValueType;
 use crate::data_type::{DataType, FixedLenByteArray, SliceAsBytes};
-use crate::errors::Result;
+use crate::errors::{ParquetError, Result};
 
 use super::Decoder;
 
@@ -31,7 +31,6 @@ pub struct ByteStreamSplitDecoder<T: DataType> {
     encoded_bytes: Bytes,
     total_num_values: usize,
     values_decoded: usize,
-    type_width: usize,
 }
 
 impl<T: DataType> ByteStreamSplitDecoder<T> {
@@ -41,7 +40,6 @@ impl<T: DataType> ByteStreamSplitDecoder<T> {
             encoded_bytes: Bytes::new(),
             total_num_values: 0,
             values_decoded: 0,
-            type_width: 0,
         }
     }
 }
@@ -65,6 +63,7 @@ fn join_streams_const<const TYPE_SIZE: usize>(
     }
 }
 
+// Like the above, but type_size is not known at compile time.
 fn join_streams(
     src: &[u8],
     dst: &mut [u8],
@@ -94,23 +93,99 @@ impl<T: DataType> Decoder<T> for ByteStreamSplitDecoder<T> {
         let num_values = buffer.len().min(total_remaining_values);
         let buffer = &mut buffer[..num_values];
 
-        let type_size = match T::get_physical_type() {
-            Type::FIXED_LEN_BYTE_ARRAY => self.type_width,
-            _ => T::get_type_size(),
-        };
+        // SAFETY: i/f32 and i/f64 has no constraints on their internal representation, so we can modify it as we want
+        let raw_out_bytes = unsafe { <T as DataType>::T::slice_as_bytes_mut(buffer) };
+        let type_size = T::get_type_size();
+        let stride = self.encoded_bytes.len() / type_size;
+        match type_size {
+            4 => join_streams_const::<4>(
+                &self.encoded_bytes,
+                raw_out_bytes,
+                stride,
+                self.values_decoded,
+            ),
+            8 => join_streams_const::<8>(
+                &self.encoded_bytes,
+                raw_out_bytes,
+                stride,
+                self.values_decoded,
+            ),
+            _ => {
+                return Err(general_err!(
+                    "byte stream split unsupported for data types of size {} bytes",
+                    type_size
+                ));
+            }
+        }
+        self.values_decoded += num_values;
 
-        // If this is FIXED_LEN_BYTE_ARRAY data, we can't use slice_as_bytes_mut. Instead we'll
+        Ok(num_values)
+    }
+
+    fn values_left(&self) -> usize {
+        self.total_num_values - self.values_decoded
+    }
+
+    fn encoding(&self) -> Encoding {
+        Encoding::BYTE_STREAM_SPLIT
+    }
+
+    fn skip(&mut self, num_values: usize) -> Result<usize> {
+        let to_skip = usize::min(self.values_left(), num_values);
+        self.values_decoded += to_skip;
+        Ok(to_skip)
+    }
+}
+
+pub struct VariableWidthByteStreamSplitDecoder<T: DataType> {
+    _phantom: PhantomData<T>,
+    encoded_bytes: Bytes,
+    total_num_values: usize,
+    values_decoded: usize,
+    type_width: usize,
+}
+
+impl<T: DataType> VariableWidthByteStreamSplitDecoder<T> {
+    pub(crate) fn new(type_width: usize) -> Self {
+        Self {
+            _phantom: PhantomData,
+            encoded_bytes: Bytes::new(),
+            total_num_values: 0,
+            values_decoded: 0,
+            type_width,
+        }
+    }
+
+    fn set_type_width(&mut self, type_width: usize) {
+        self.type_width = type_width
+    }
+}
+
+impl<T: DataType> Decoder<T> for VariableWidthByteStreamSplitDecoder<T> {
+    fn set_data(&mut self, data: Bytes, num_values: usize) -> Result<()> {
+        match T::get_physical_type() {
+            Type::FIXED_LEN_BYTE_ARRAY => {
+                self.encoded_bytes = data;
+                self.total_num_values = num_values;
+                self.values_decoded = 0;
+                Ok(())
+            }
+            _ => Err(general_err!(
+                "VariableWidthByteStreamSplitDecoder only supports FixedLenByteArrayType"
+            )),
+        }
+    }
+
+    fn get(&mut self, buffer: &mut [<T as DataType>::T]) -> Result<usize> {
+        let total_remaining_values = self.values_left();
+        let num_values = buffer.len().min(total_remaining_values);
+        let buffer = &mut buffer[..num_values];
+        let type_size = self.type_width;
+
+        // Since this is FIXED_LEN_BYTE_ARRAY data, we can't use slice_as_bytes_mut. Instead we'll
         // have to do some data copies.
-        let mut tmp_vec = match T::get_physical_type() {
-            Type::FIXED_LEN_BYTE_ARRAY => vec![0_u8; num_values * type_size],
-            _ => Vec::new(),
-        };
-
-        // SAFETY: f32 and f64 has no constraints on their internal representation, so we can modify it as we want
-        let raw_out_bytes = match T::get_physical_type() {
-            Type::FIXED_LEN_BYTE_ARRAY => tmp_vec.as_mut_slice(),
-            _ => unsafe { <T as DataType>::T::slice_as_bytes_mut(buffer) },
-        };
+        let mut tmp_vec = vec![0_u8; num_values * type_size];
+        let raw_out_bytes = tmp_vec.as_mut_slice();
 
         let stride = self.encoded_bytes.len() / type_size;
         match type_size {
@@ -149,13 +224,12 @@ impl<T: DataType> Decoder<T> for ByteStreamSplitDecoder<T> {
         self.values_decoded += num_values;
 
         // FIXME(ets): there's got to be a better way to do this
-        if T::get_physical_type() == Type::FIXED_LEN_BYTE_ARRAY  {
-            for i in 0..num_values {
-                if let Some(bi) = buffer[i].as_mut_any().downcast_mut::<FixedLenByteArray>() {
-                    bi.set_data(Bytes::copy_from_slice(&tmp_vec[i * type_size..(i+1) * type_size]));
-                }
+        for i in 0..num_values {
+            if let Some(bi) = buffer[i].as_mut_any().downcast_mut::<FixedLenByteArray>() {
+                bi.set_data(Bytes::copy_from_slice(&tmp_vec[i * type_size..(i+1) * type_size]));
             }
         }
+
         Ok(num_values)
     }
 
@@ -171,9 +245,5 @@ impl<T: DataType> Decoder<T> for ByteStreamSplitDecoder<T> {
         let to_skip = usize::min(self.values_left(), num_values);
         self.values_decoded += to_skip;
         Ok(to_skip)
-    }
-
-    fn set_type_width(&mut self, type_width: usize) {
-        self.type_width = type_width
     }
 }
