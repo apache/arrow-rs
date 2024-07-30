@@ -526,8 +526,8 @@ mod client;
 
 #[cfg(feature = "cloud")]
 pub use client::{
-    backoff::BackoffConfig, retry::RetryConfig, ClientConfigKey, ClientOptions, CredentialProvider,
-    StaticCredentialProvider,
+    backoff::BackoffConfig, retry::Error as ClientError, retry::RetryConfig, ClientConfigKey,
+    ClientOptions, CredentialProvider, StaticCredentialProvider,
 };
 
 #[cfg(feature = "cloud")]
