@@ -74,6 +74,10 @@ pub trait Encoder<T: DataType>: Send {
     /// Flushes the underlying byte buffer that's being processed by this encoder, and
     /// return the immutable copy of it. This will also reset the internal state.
     fn flush_buffer(&mut self) -> Result<Bytes>;
+
+    /// Sets the width of the data in bytes. Only relevant for `FIXED_LEN_BYTE_ARRAY` data
+    /// and `BYTE_STREAM_SPLIT` encoding.
+    fn set_type_width(&mut self, _type_width: usize) {}
 }
 
 /// Gets a encoder for the particular data type `T` and encoding `encoding`. Memory usage
@@ -855,10 +859,11 @@ mod tests {
     }
 
     #[test]
-    fn test_fixed_lenbyte_array() {
+    fn test_fixed_len_byte_array() {
         FixedLenByteArrayType::test(Encoding::PLAIN, TEST_SET_SIZE, 100);
         FixedLenByteArrayType::test(Encoding::PLAIN_DICTIONARY, TEST_SET_SIZE, 100);
         FixedLenByteArrayType::test(Encoding::DELTA_BYTE_ARRAY, TEST_SET_SIZE, 100);
+        FixedLenByteArrayType::test(Encoding::BYTE_STREAM_SPLIT, TEST_SET_SIZE, 100);
     }
 
     #[test]
@@ -1045,6 +1050,8 @@ mod tests {
             let mut decoder = create_test_decoder::<T>(type_length, enc);
             let mut values = <T as RandGen<T>>::gen_vec(type_length, total);
             let mut result_data = vec![T::T::default(); total];
+
+            encoder.set_type_width(type_length as usize);
 
             // Test put/get spaced.
             let num_bytes = bit_util::ceil(total as i64, 8);

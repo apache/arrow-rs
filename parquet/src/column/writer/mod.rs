@@ -96,7 +96,6 @@ pub enum Level {
 }
 
 /// Gets a specific column writer corresponding to column descriptor `descr`.
-// TODO(ets): type specific column writers created here
 pub fn get_column_writer<'a>(
     descr: ColumnDescPtr,
     props: WriterPropertiesPtr,
@@ -353,7 +352,6 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         let codec = props.compression(descr.path());
         let codec_options = CodecOptionsBuilder::default().build();
         let compressor = create_codec(codec, &codec_options).unwrap();
-        // TODO(ets): columnvalueencoder created here
         let encoder = E::try_new(&descr, props.as_ref()).unwrap();
 
         let statistics_enabled = props.statistics_enabled(descr.path());
