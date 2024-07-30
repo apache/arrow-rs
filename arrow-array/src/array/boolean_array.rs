@@ -19,7 +19,7 @@ use crate::array::print_long_array;
 use crate::builder::BooleanBuilder;
 use crate::iterator::BooleanIter;
 use crate::{Array, ArrayAccessor, ArrayRef, Scalar};
-use arrow_buffer::{bit_util, BooleanBuffer, MutableBuffer, NullBuffer};
+use arrow_buffer::{bit_util, BooleanBuffer, Buffer, MutableBuffer, NullBuffer};
 use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::DataType;
 use std::any::Any;
@@ -108,6 +108,24 @@ impl BooleanArray {
             false => BooleanBuffer::new_unset(1),
         };
         Scalar::new(Self::new(values, None))
+    }
+
+    /// Create a new [`BooleanArray`] from a [`Buffer`] specified by `offset` and `len`, the `offset` and `len` in bits
+    /// Logically convert each bit in [`Buffer`] to boolean and use it to build [`BooleanArray`].
+    /// using this method will make the following points self-evident:
+    /// * there is no `null` in the constructed [`BooleanArray`];
+    /// * without considering `buffer.into()`, this method is efficient because there is no need to perform pack and unpack operations on boolean;
+    pub fn new_from_packed(buffer: impl Into<Buffer>, offset: usize, len: usize) -> Self {
+        BooleanBuffer::new(buffer.into(), offset, len).into()
+    }
+
+    /// Create a new [`BooleanArray`] from `&[u8]`
+    /// This method uses `new_from_packed` and constructs a [`Buffer`] using `value`, and offset is set to 0 and len is set to `value.len() * 8`
+    /// using this method will make the following points self-evident:
+    /// * there is no `null` in the constructed [`BooleanArray`];
+    /// * the length of the constructed [`BooleanArray`] is always a multiple of 8;
+    pub fn new_from_u8(value: &[u8]) -> Self {
+        BooleanBuffer::new(Buffer::from(value), 0, value.len() * 8).into()
     }
 
     /// Returns the length of this array.
@@ -506,6 +524,45 @@ mod tests {
                 assert!(arr.is_valid(i));
                 assert_eq!(i == 1 || i == 3, arr.value(i), "failed at {i}")
             }
+        }
+    }
+
+    #[test]
+    fn test_boolean_array_from_packed() {
+        let v = [1_u8, 2_u8, 3_u8];
+        let arr = BooleanArray::new_from_packed(v, 0, 24);
+        assert_eq!(24, arr.len());
+        assert_eq!(0, arr.offset());
+        assert_eq!(0, arr.null_count());
+        assert!(arr.nulls.is_none());
+        for i in 0..24 {
+            assert!(!arr.is_null(i));
+            assert!(arr.is_valid(i));
+            assert_eq!(
+                i == 0 || i == 9 || i == 16 || i == 17,
+                arr.value(i),
+                "failed t {i}"
+            )
+        }
+    }
+
+    #[test]
+    fn test_boolean_array_from_slice_u8() {
+        let v: Vec<u8> = vec![1, 2, 3];
+        let slice = &v[..];
+        let arr = BooleanArray::new_from_u8(slice);
+        assert_eq!(24, arr.len());
+        assert_eq!(0, arr.offset());
+        assert_eq!(0, arr.null_count());
+        assert!(arr.nulls().is_none());
+        for i in 0..24 {
+            assert!(!arr.is_null(i));
+            assert!(arr.is_valid(i));
+            assert_eq!(
+                i == 0 || i == 9 || i == 16 || i == 17,
+                arr.value(i),
+                "failed t {i}"
+            )
         }
     }
 
