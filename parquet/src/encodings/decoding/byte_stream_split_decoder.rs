@@ -155,10 +155,6 @@ impl<T: DataType> VariableWidthByteStreamSplitDecoder<T> {
             type_width,
         }
     }
-
-    fn set_type_width(&mut self, type_width: usize) {
-        self.type_width = type_width
-    }
 }
 
 impl<T: DataType> Decoder<T> for VariableWidthByteStreamSplitDecoder<T> {
