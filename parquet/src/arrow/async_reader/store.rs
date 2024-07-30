@@ -22,11 +22,24 @@ use bytes::Bytes;
 use futures::future::BoxFuture;
 use futures::{FutureExt, TryFutureExt};
 
-use object_store::{ObjectMeta, ObjectStore};
+use object_store::GetOptions;
+use object_store::{ObjectStore, path::Path};
 
 use crate::arrow::async_reader::{AsyncFileReader, MetadataLoader};
 use crate::errors::Result;
 use crate::file::metadata::ParquetMetaData;
+
+use super::GetRange;
+
+impl From<GetRange> for object_store::GetRange {
+    fn from(range: GetRange) -> Self {
+        match range {
+            GetRange::Bounded(range) => object_store::GetRange::Bounded(range),
+            GetRange::Offset(offset) => object_store::GetRange::Offset(offset),
+            GetRange::Suffix(end_offset) => object_store::GetRange::Suffix(end_offset),
+        }
+    }
+}
 
 /// Reads Parquet files in object storage using [`ObjectStore`].
 ///
@@ -55,7 +68,7 @@ use crate::file::metadata::ParquetMetaData;
 #[derive(Clone, Debug)]
 pub struct ParquetObjectReader {
     store: Arc<dyn ObjectStore>,
-    meta: ObjectMeta,
+    location: Path,
     metadata_size_hint: Option<usize>,
     preload_column_index: bool,
     preload_offset_index: bool,
@@ -65,10 +78,10 @@ impl ParquetObjectReader {
     /// Creates a new [`ParquetObjectReader`] for the provided [`ObjectStore`] and [`ObjectMeta`]
     ///
     /// [`ObjectMeta`] can be obtained using [`ObjectStore::list`] or [`ObjectStore::head`]
-    pub fn new(store: Arc<dyn ObjectStore>, meta: ObjectMeta) -> Self {
+    pub fn new(store: Arc<dyn ObjectStore>, location: Path) -> Self {
         Self {
             store,
-            meta,
+            location,
             metadata_size_hint: None,
             preload_column_index: false,
             preload_offset_index: false,
@@ -102,11 +115,16 @@ impl ParquetObjectReader {
 }
 
 impl AsyncFileReader for ParquetObjectReader {
-    fn get_bytes(&mut self, range: Range<usize>) -> BoxFuture<'_, Result<Bytes>> {
-        self.store
-            .get_range(&self.meta.location, range)
-            .map_err(|e| e.into())
-            .boxed()
+    fn get_bytes(&mut self, range: GetRange) -> BoxFuture<'_, Result<Bytes>> {
+        async move {
+            self.store
+                .get_opts(&self.location, GetOptions {
+                    range: Some(range.into()),
+                    ..Default::default()
+                }).await?.bytes().await
+        }
+        .map_err(|e| e.into())
+        .boxed()
     }
 
     fn get_byte_ranges(&mut self, ranges: Vec<Range<usize>>) -> BoxFuture<'_, Result<Vec<Bytes>>>
@@ -115,7 +133,7 @@ impl AsyncFileReader for ParquetObjectReader {
     {
         async move {
             self.store
-                .get_ranges(&self.meta.location, &ranges)
+                .get_ranges(&self.location, &ranges)
                 .await
                 .map_err(|e| e.into())
         }
@@ -126,9 +144,10 @@ impl AsyncFileReader for ParquetObjectReader {
         Box::pin(async move {
             let preload_column_index = self.preload_column_index;
             let preload_offset_index = self.preload_offset_index;
-            let file_size = self.meta.size;
             let prefetch = self.metadata_size_hint;
-            let mut loader = MetadataLoader::load(self, file_size, prefetch).await?;
+            // TODO: distinguish between suffix-supporting object stores, and those that don't
+            // Alternatively, surface in the form of a flag on this struct.
+            let mut loader = MetadataLoader::load(self, prefetch).await?;
             loader
                 .load_page_index(preload_column_index, preload_offset_index)
                 .await?;
@@ -155,14 +174,10 @@ mod tests {
     async fn test_simple() {
         let res = parquet_test_data();
         let store = LocalFileSystem::new_with_prefix(res).unwrap();
-
-        let mut meta = store
-            .head(&Path::from("alltypes_plain.parquet"))
-            .await
-            .unwrap();
+        let mut location = Path::from("alltypes_plain.parquet");
 
         let store = Arc::new(store) as Arc<dyn ObjectStore>;
-        let object_reader = ParquetObjectReader::new(Arc::clone(&store), meta.clone());
+        let object_reader = ParquetObjectReader::new(Arc::clone(&store), location.clone());
         let builder = ParquetRecordBatchStreamBuilder::new(object_reader)
             .await
             .unwrap();
@@ -171,9 +186,9 @@ mod tests {
         assert_eq!(batches.len(), 1);
         assert_eq!(batches[0].num_rows(), 8);
 
-        meta.location = Path::from("I don't exist.parquet");
+        location = Path::from("I don't exist.parquet");
 
-        let object_reader = ParquetObjectReader::new(store, meta);
+        let object_reader = ParquetObjectReader::new(store, location);
         // Cannot use unwrap_err as ParquetRecordBatchStreamBuilder: !Debug
         match ParquetRecordBatchStreamBuilder::new(object_reader).await {
             Ok(_) => panic!("expected failure"),
