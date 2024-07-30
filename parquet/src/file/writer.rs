@@ -2093,7 +2093,17 @@ mod tests {
         let mut start = 0;
         let end = reader.metadata().file_metadata().num_rows();
 
-        let check_row = |row| {};
+        let check_row = |row: Result<Row, ParquetError>| {
+            assert!(row.is_ok());
+            let r = row.unwrap();
+            assert_eq!(r.get_float16(0).unwrap(), r.get_float16(1).unwrap());
+            assert_eq!(r.get_float(2).unwrap(), r.get_float(3).unwrap());
+            assert_eq!(r.get_double(4).unwrap(), r.get_double(5).unwrap());
+            assert_eq!(r.get_int(6).unwrap(), r.get_int(7).unwrap());
+            assert_eq!(r.get_long(8).unwrap(), r.get_long(9).unwrap());
+            assert_eq!(r.get_bytes(10).unwrap(), r.get_bytes(11).unwrap());
+            assert_eq!(r.get_decimal(12).unwrap(), r.get_decimal(13).unwrap());
+        };
 
         while start < end {
             match iter.next() {
@@ -2102,5 +2112,7 @@ mod tests {
             };
             start += 1;
         }
+
+        // TODO write file to tmp and then compare results
     }
 }
