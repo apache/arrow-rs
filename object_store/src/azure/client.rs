@@ -327,7 +327,10 @@ fn serialize_part_delete_request(
     // Encode part headers
     let mut part_headers = HeaderMap::new();
     part_headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/http"));
-    part_headers.insert("Content-Transfer-Encoding", "binary".parse().unwrap());
+    part_headers.insert(
+        "Content-Transfer-Encoding",
+        HeaderValue::from_static("binary"),
+    );
     // Azure returns 400 if we send `Content-Id` instead of `Content-ID`
     part_headers.insert("Content-ID", HeaderValue::from(idx));
     write_headers(&part_headers, dst);
