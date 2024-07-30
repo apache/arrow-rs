@@ -30,21 +30,32 @@ use tracing::info;
 /// Retry request error
 #[derive(Debug, Snafu)]
 pub enum Error {
+    /// The response sent by the cloud provider was a redirect without a
+    /// location header. This normally indicates an incorrectly configured region.
     #[snafu(display("Received redirect without LOCATION, this normally indicates an incorrectly configured region"))]
     BareRedirect,
 
+    /// The client received an error response that cannot be retried.
     #[snafu(display("Client error with status {status}: {}", body.as_deref().unwrap_or("No Body")))]
     Client {
+        /// The HTTP status code.
         status: StatusCode,
+        /// The error body.
         body: Option<String>,
     },
 
+    /// The number of retries was exhausted or the time limit was reached.
     #[snafu(display("Error after {retries} retries in {elapsed:?}, max_retries:{max_retries}, retry_timeout:{retry_timeout:?}, source:{source}"))]
     Reqwest {
+        /// The number of retries attempted.
         retries: usize,
+        /// The maximum number of retries allowed.
         max_retries: usize,
+        /// The time elapsed since the first attempt.
         elapsed: Duration,
+        /// The maximum amount of time to spend retrying.
         retry_timeout: Duration,
+        /// The error that occurred while processing a Request.
         source: reqwest::Error,
     },
 }
