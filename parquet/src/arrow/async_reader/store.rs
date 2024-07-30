@@ -23,7 +23,7 @@ use futures::future::BoxFuture;
 use futures::{FutureExt, TryFutureExt};
 
 use object_store::GetOptions;
-use object_store::{ObjectStore, path::Path};
+use object_store::{path::Path, ObjectStore};
 
 use crate::arrow::async_reader::{AsyncFileReader, MetadataLoader};
 use crate::errors::Result;
@@ -118,10 +118,16 @@ impl AsyncFileReader for ParquetObjectReader {
     fn get_bytes(&mut self, range: GetRange) -> BoxFuture<'_, Result<Bytes>> {
         async move {
             self.store
-                .get_opts(&self.location, GetOptions {
-                    range: Some(range.into()),
-                    ..Default::default()
-                }).await?.bytes().await
+                .get_opts(
+                    &self.location,
+                    GetOptions {
+                        range: Some(range.into()),
+                        ..Default::default()
+                    },
+                )
+                .await?
+                .bytes()
+                .await
         }
         .map_err(|e| e.into())
         .boxed()

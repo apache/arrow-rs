@@ -52,7 +52,6 @@ impl<F: MetadataFetch> MetadataLoader<F> {
     ///
     /// See [`fetch_parquet_metadata`] for the meaning of the individual parameters
     pub async fn load(mut fetch: F, prefetch: Option<usize>) -> Result<Self> {
-
         let suffix = fetch.fetch(GetRange::Suffix(prefetch.unwrap_or(8))).await?;
         let suffix_len = suffix.len();
 
@@ -85,7 +84,11 @@ impl<F: MetadataFetch> MetadataLoader<F> {
         })
     }
 
-    pub async fn load_absolute(mut fetch: F, file_size: usize, prefetch: Option<usize>) -> Result<Self> {
+    pub async fn load_absolute(
+        mut fetch: F,
+        file_size: usize,
+        prefetch: Option<usize>,
+    ) -> Result<Self> {
         todo!()
     }
 
@@ -222,7 +225,7 @@ where
     let fetch = MetadataFetchFn(fetch);
     let loader = match file_size {
         Some(file_size) => MetadataLoader::load_absolute(fetch, file_size, prefetch).await?,
-        None => MetadataLoader::load(fetch, prefetch).await?
+        None => MetadataLoader::load(fetch, prefetch).await?,
     };
     Ok(loader.finish())
 }
@@ -241,7 +244,9 @@ mod tests {
         let range = match range {
             GetRange::Bounded(range) => range,
             GetRange::Offset(offset) => offset..file_size,
-            GetRange::Suffix(end_offset) => (file_size.saturating_sub(end_offset.try_into().unwrap())..file_size)
+            GetRange::Suffix(end_offset) => {
+                (file_size.saturating_sub(end_offset.try_into().unwrap())..file_size)
+            }
         };
         file.seek(SeekFrom::Start(range.start as _))?;
         let len = range.end - range.start;
@@ -264,7 +269,9 @@ mod tests {
             futures::future::ready(read_range(&mut file, range))
         };
 
-        let actual = fetch_parquet_metadata(&mut fetch, None, None).await.unwrap();
+        let actual = fetch_parquet_metadata(&mut fetch, None, None)
+            .await
+            .unwrap();
         assert_eq!(actual.file_metadata().schema(), expected);
         assert_eq!(fetch_count.load(Ordering::SeqCst), 2);
 
@@ -352,7 +359,7 @@ mod tests {
         assert_eq!(fetch_count.load(Ordering::SeqCst), 1);
         let metadata = loader.finish();
         assert!(metadata.offset_index().is_some() && metadata.column_index().is_some());
-        
+
         // Prefetch more than enough
         fetch_count.store(0, Ordering::SeqCst);
         let f = MetadataFetchFn(&mut fetch);

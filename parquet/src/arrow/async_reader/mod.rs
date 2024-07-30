@@ -200,11 +200,11 @@ impl<T: AsyncRead + AsyncSeek + Unpin + Send> AsyncFileReader for T {
                 GetRange::Suffix(end_offset) => {
                     self.seek(SeekFrom::End(-(end_offset as i64))).await?;
                     Some(end_offset)
-                },
+                }
                 GetRange::Offset(offset) => {
                     self.seek(SeekFrom::Start(offset as u64)).await?;
                     None
-                },
+                }
                 GetRange::Bounded(range) => {
                     self.seek(SeekFrom::Start(range.start as u64)).await?;
                     Some(range.end - range.start)
@@ -406,7 +406,10 @@ impl<T: AsyncFileReader + Send + 'static> ParquetRecordBatchStreamBuilder<T> {
         };
 
         let buffer = match column_metadata.bloom_filter_length() {
-            Some(length) => self.input.0.get_bytes((offset..offset + length as usize).into()),
+            Some(length) => self
+                .input
+                .0
+                .get_bytes((offset..offset + length as usize).into()),
             None => self
                 .input
                 .0
@@ -441,7 +444,9 @@ impl<T: AsyncFileReader + Send + 'static> ParquetRecordBatchStreamBuilder<T> {
                 })?;
                 self.input
                     .0
-                    .get_bytes((bitset_offset as usize..bitset_offset as usize + bitset_length).into())
+                    .get_bytes(
+                        (bitset_offset as usize..bitset_offset as usize + bitset_length).into(),
+                    )
                     .await?
             }
         };
@@ -989,7 +994,9 @@ mod tests {
             let range = match range {
                 GetRange::Bounded(range) => range,
                 GetRange::Offset(offset) => offset..self.data.len(),
-                GetRange::Suffix(end_offset) => self.data.len().saturating_sub(end_offset)..self.data.len()
+                GetRange::Suffix(end_offset) => {
+                    self.data.len().saturating_sub(end_offset)..self.data.len()
+                }
             };
             futures::future::ready(Ok(self.data.slice(range))).boxed()
         }
