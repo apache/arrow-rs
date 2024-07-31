@@ -431,7 +431,7 @@ impl<OffsetSize: OffsetSizeTrait> GenericListViewArray<OffsetSize> {
     fn try_new_from_array_data(data: ArrayData) -> Result<Self, ArrowError> {
         if data.buffers().len() != 2 {
             return Err(ArrowError::InvalidArgumentError(format!(
-                "ListViewArray data should contain two buffer (value offsets & value size), had {}",
+                "ListViewArray data should contain two buffers (value offsets & value sizes), had {}",
                 data.buffers().len()
             )));
         }
