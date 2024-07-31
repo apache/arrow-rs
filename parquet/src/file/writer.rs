@@ -2055,6 +2055,7 @@ mod tests {
     }
 
     struct TestMetadata {
+        #[allow(dead_code)]
         file_size: usize,
         metadata: ParquetMetaData,
     }
