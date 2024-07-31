@@ -1225,6 +1225,7 @@ pub type Result<T, E = Error> = std::result::Result<T, E>;
 /// A specialized `Error` for object store-related errors
 #[derive(Debug, Snafu)]
 #[allow(missing_docs)]
+#[non_exhaustive]
 pub enum Error {
     #[snafu(display("Generic {} error: {}", store, source))]
     Generic {
