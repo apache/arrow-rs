@@ -15,11 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
-use std::sync::Arc;
 use arrow_buffer::{NullBuffer, ScalarBuffer};
 use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::{ArrowError, DataType, FieldRef};
+use std::any::Any;
+use std::sync::Arc;
 
 use crate::array::{make_array, print_long_array};
 use crate::iterator::GenericListViewArrayIter;
@@ -48,7 +48,6 @@ pub struct GenericListViewArray<OffsetSize: OffsetSizeTrait> {
     value_offsets: ScalarBuffer<OffsetSize>,
     value_sizes: ScalarBuffer<OffsetSize>,
 }
-
 
 impl<OffsetSize: OffsetSizeTrait> GenericListViewArray<OffsetSize> {
     /// The data type constructor of listview array.
@@ -739,7 +738,7 @@ mod tests {
 
     #[test]
     #[should_panic(
-        expected = "ListViewArray data should contain two buffer (value offsets & value size), had 1"
+        expected = "ListViewArray data should contain two buffers (value offsets & value sizes), had 1"
     )]
     #[cfg(not(feature = "force_validate"))]
     fn test_list_view_array_invalid_child_array_len() {
@@ -927,7 +926,8 @@ mod tests {
                 .add_buffer(Buffer::from_slice_ref([0, 1, 2, 3, 4, 5, 6, 7]))
                 .build_unchecked()
         };
-        let list_data_type = DataType::ListView(Arc::new(Field::new("item", DataType::Int32, false)));
+        let list_data_type =
+            DataType::ListView(Arc::new(Field::new("item", DataType::Int32, false)));
         let list_data = unsafe {
             ArrayData::builder(list_data_type)
                 .len(2)
@@ -946,8 +946,10 @@ mod tests {
             .iter()
             .map(|x| x.map(|x| x.as_primitive::<Int32Type>().values().to_vec()))
             .collect();
-        assert_eq!(values, vec![Some(vec![0,1, 2, 3,4]), Some(vec![3, 4, 5, 6,7])]);
-
+        assert_eq!(
+            values,
+            vec![Some(vec![0, 1, 2, 3, 4]), Some(vec![3, 4, 5, 6, 7])]
+        );
     }
 
     #[test]
@@ -958,7 +960,8 @@ mod tests {
                 .add_buffer(Buffer::from_slice_ref((0..50).collect::<Vec<i32>>()))
                 .build_unchecked()
         };
-        let list_data_type = DataType::ListView(Arc::new(Field::new("item", DataType::Int32, false)));
+        let list_data_type =
+            DataType::ListView(Arc::new(Field::new("item", DataType::Int32, false)));
         let list_data = unsafe {
             ArrayData::builder(list_data_type)
                 .len(3)
@@ -978,11 +981,14 @@ mod tests {
             .iter()
             .map(|x| x.map(|x| x.as_primitive::<Int32Type>().values().to_vec()))
             .collect();
-        assert_eq!(values, vec![
-            Some(vec![]),
-            Some(vec![5, 6, 7, 8, 9]),
-            Some(vec![10, 11, 12, 13, 14, 15, 16, 17, 18, 19])
-        ]);
+        assert_eq!(
+            values,
+            vec![
+                Some(vec![]),
+                Some(vec![5, 6, 7, 8, 9]),
+                Some(vec![10, 11, 12, 13, 14, 15, 16, 17, 18, 19])
+            ]
+        );
     }
 
     #[test]
@@ -993,7 +999,8 @@ mod tests {
                 .add_buffer(Buffer::from_slice_ref::<i32, &[_; 0]>(&[]))
                 .build_unchecked()
         };
-        let list_data_type = DataType::ListView(Arc::new(Field::new("item", DataType::Int32, false)));
+        let list_data_type =
+            DataType::ListView(Arc::new(Field::new("item", DataType::Int32, false)));
         let list_data = unsafe {
             ArrayData::builder(list_data_type)
                 .len(3)
@@ -1015,5 +1022,4 @@ mod tests {
             .collect();
         assert_eq!(values, vec![Some(vec![]), Some(vec![]), Some(vec![])]);
     }
-
 }
