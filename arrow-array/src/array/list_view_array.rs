@@ -33,7 +33,7 @@ pub type ListViewArray = GenericListViewArray<i32>;
 
 /// A [`GenericListViewArray`] of variable size lists, storing offsets as `i64`.
 ///
-// See [`LargeListViewArray`](crate::builder::LargeListViewBuilder) for how to construct a [`LargeListViewArray`]
+// See [`LargeListViewBuilder`](crate::builder::LargeListViewBuilder) for how to construct a [`LargeListViewArray`]
 pub type LargeListViewArray = GenericListViewArray<i64>;
 
 ///
