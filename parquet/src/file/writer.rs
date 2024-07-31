@@ -2210,7 +2210,7 @@ mod tests {
 
         let data = buf.into_inner().freeze();
 
-        let decoded_metadata = load_metadata_from_bytes(metadata.file_size, data).await;
+        let decoded_metadata = load_metadata_from_bytes(data.len(), data).await;
 
         assert_eq!(metadata.metadata, decoded_metadata);
     }
