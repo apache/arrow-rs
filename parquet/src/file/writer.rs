@@ -2195,6 +2195,31 @@ mod tests {
         metadata.finish()
     }
 
+    fn check_columns_are_equivalent(left: &ColumnChunkMetaData, right: &ColumnChunkMetaData) {
+        assert_eq!(left.column_descr(), right.column_descr());
+        assert_eq!(left.encodings(), right.encodings());
+        assert_eq!(left.num_values(), right.num_values());
+        assert_eq!(left.compressed_size(), right.compressed_size());
+        assert_eq!(left.data_page_offset(), right.data_page_offset());
+        assert_eq!(left.statistics(), right.statistics());
+        assert_eq!(left.offset_index_length(), right.offset_index_length());
+        assert_eq!(left.column_index_length(), right.column_index_length());
+    }
+
+    fn check_row_groups_are_equivalent(left: &RowGroupMetaData, right: &RowGroupMetaData) {
+        assert_eq!(left.num_rows(), right.num_rows());
+        assert_eq!(left.file_offset(), right.file_offset());
+        assert_eq!(left.total_byte_size(), right.total_byte_size());
+        assert_eq!(left.schema_descr(), right.schema_descr());
+        assert_eq!(left.num_columns(), right.num_columns());
+        left.columns()
+            .iter()
+            .zip(right.columns().iter())
+            .for_each(|(lc, rc)| {
+                check_columns_are_equivalent(lc, rc);
+            });
+    }
+
     #[tokio::test]
     #[cfg(feature = "async")]
     async fn test_encode_parquet_metadata_with_page_index() {
@@ -2212,7 +2237,32 @@ mod tests {
 
         let decoded_metadata = load_metadata_from_bytes(data.len(), data).await;
 
-        assert_eq!(metadata.metadata, decoded_metadata);
+        // Because the page index offsets will differ, compare invariant parts of the metadata
+        assert_eq!(
+            metadata.metadata.file_metadata(),
+            decoded_metadata.file_metadata()
+        );
+        assert_eq!(
+            metadata.metadata.column_index(),
+            decoded_metadata.column_index()
+        );
+        assert_eq!(
+            metadata.metadata.offset_index(),
+            decoded_metadata.offset_index()
+        );
+        assert_eq!(
+            metadata.metadata.num_row_groups(),
+            decoded_metadata.num_row_groups()
+        );
+
+        metadata
+            .metadata
+            .row_groups()
+            .iter()
+            .zip(decoded_metadata.row_groups().iter())
+            .for_each(|(left, right)| {
+                check_row_groups_are_equivalent(left, right);
+            });
     }
 
     #[test]
