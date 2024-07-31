@@ -17,7 +17,6 @@
 
 use std::any::Any;
 use std::sync::Arc;
-
 use arrow_buffer::{NullBuffer, ScalarBuffer};
 use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::{ArrowError, DataType, FieldRef};
@@ -41,6 +40,7 @@ pub type LargeListViewArray = GenericListViewArray<i64>;
 /// meaning that take / filter operations can be implemented without copying the underlying data.
 ///
 /// [Variable-size List Layout: ListView Layout]: https://arrow.apache.org/docs/format/Columnar.html#listview-layout
+#[derive(Clone)]
 pub struct GenericListViewArray<OffsetSize: OffsetSizeTrait> {
     data_type: DataType,
     nulls: Option<NullBuffer>,
@@ -49,17 +49,6 @@ pub struct GenericListViewArray<OffsetSize: OffsetSizeTrait> {
     value_sizes: ScalarBuffer<OffsetSize>,
 }
 
-impl<OffsetSize: OffsetSizeTrait> Clone for GenericListViewArray<OffsetSize> {
-    fn clone(&self) -> Self {
-        Self {
-            data_type: self.data_type.clone(),
-            nulls: self.nulls.clone(),
-            values: self.values.clone(),
-            value_offsets: self.value_offsets.clone(),
-            value_sizes: self.value_sizes.clone(),
-        }
-    }
-}
 
 impl<OffsetSize: OffsetSizeTrait> GenericListViewArray<OffsetSize> {
     /// The data type constructor of listview array.
@@ -79,7 +68,7 @@ impl<OffsetSize: OffsetSizeTrait> GenericListViewArray<OffsetSize> {
     ///
     /// * `offsets.len() != sizes.len()`
     /// * `offsets.len() != nulls.len()`
-    /// * `offsets.last() > values.len()`
+    /// * `offsets[i] > values.len()`
     /// * `!field.is_nullable() && values.is_nullable()`
     /// * `field.data_type() != values.data_type()`
     /// * `0 <= offsets[i] <= length of the child array`
@@ -108,18 +97,9 @@ impl<OffsetSize: OffsetSizeTrait> GenericListViewArray<OffsetSize> {
             )));
         }
 
-        for i in 0..offsets.len() {
-            let length = values.len();
-            let offset = offsets[i].as_usize();
-            let size = sizes[i].as_usize();
-            if offset > length {
-                return Err(ArrowError::InvalidArgumentError(format!(
-                    "Invalid offset value for {}ListViewArray, offset: {}, length: {}",
-                    OffsetSize::PREFIX,
-                    offset,
-                    length
-                )));
-            }
+        for (offset, size) in offsets.iter().zip(sizes.iter()) {
+            let offset = offset.as_usize();
+            let size = size.as_usize();
             if offset.saturating_add(size) > values.len() {
                 return Err(ArrowError::InvalidArgumentError(format!(
                     "Invalid offset and size values for {}ListViewArray, offset: {}, size: {}, values.len(): {}",
@@ -238,8 +218,8 @@ impl<OffsetSize: OffsetSizeTrait> GenericListViewArray<OffsetSize> {
     /// # Safety
     /// Caller must ensure that the index is within the array bounds
     pub unsafe fn value_unchecked(&self, i: usize) -> ArrayRef {
-        let offset = self.value_offsets()[i].as_usize();
-        let length = self.value_sizes()[i].as_usize();
+        let offset = self.value_offsets().get_unchecked(i).as_usize();
+        let length = self.value_sizes().get_unchecked(i).as_usize();
         self.values.slice(offset, length)
     }
 
@@ -262,10 +242,15 @@ impl<OffsetSize: OffsetSizeTrait> GenericListViewArray<OffsetSize> {
         &self.value_sizes
     }
 
-    /// Returns the length for value at index `i`.
+    /// Returns the size for value at index `i`.
     #[inline]
-    pub fn value_length(&self, i: usize) -> OffsetSize {
+    pub fn value_size(&self, i: usize) -> OffsetSize {
         self.value_sizes[i]
+    }
+
+    /// Returns the offset for value as index `i`.
+    pub fn value_offset(&self, i: usize) -> OffsetSize {
+        self.value_offsets[i]
     }
 
     /// constructs a new iterator
@@ -303,7 +288,7 @@ impl<'a, OffsetSize: OffsetSizeTrait> ArrayAccessor for &'a GenericListViewArray
     }
 
     unsafe fn value_unchecked(&self, index: usize) -> Self::Item {
-        GenericListViewArray::value(self, index)
+        GenericListViewArray::value_unchecked(self, index)
     }
 }
 
@@ -333,7 +318,7 @@ impl<OffsetSize: OffsetSizeTrait> Array for GenericListViewArray<OffsetSize> {
     }
 
     fn is_empty(&self) -> bool {
-        self.values.is_empty()
+        self.value_sizes.is_empty()
     }
 
     fn offset(&self) -> usize {
@@ -405,16 +390,15 @@ impl<OffsetSize: OffsetSizeTrait> From<FixedSizeListArray> for GenericListViewAr
             DataType::FixedSizeList(f, size) => (f, *size as usize),
             _ => unreachable!(),
         };
-        let mut offsets = Vec::with_capacity(size);
         let mut acc = 0_usize;
         let iter = std::iter::repeat(size).take(value.len());
         let mut sizes = Vec::with_capacity(iter.size_hint().0);
+        let mut offsets = Vec::with_capacity(iter.size_hint().0);
         for size in iter {
             offsets.push(OffsetSize::usize_as(acc));
-            acc = acc.checked_add(size).expect("usize overflow");
+            acc = acc.saturating_add(size);
             sizes.push(OffsetSize::usize_as(size));
         }
-        OffsetSize::from_usize(acc).expect("offset overflow");
         let sizes = ScalarBuffer::from(sizes);
         let offsets = ScalarBuffer::from(offsets);
         Self {
@@ -462,7 +446,6 @@ impl<OffsetSize: OffsetSizeTrait> GenericListViewArray<OffsetSize> {
         }
 
         let values = make_array(values);
-        // SAFETY:
         // ArrayData is valid, and verified type above
         let value_offsets = ScalarBuffer::new(data.buffers()[0].clone(), data.offset(), data.len());
         let value_sizes = ScalarBuffer::new(data.buffers()[1].clone(), data.offset(), data.len());
@@ -524,7 +507,7 @@ mod tests {
         assert_eq!(0, list_array.null_count());
         assert_eq!(6, list_array.value_offsets()[2]);
         assert_eq!(2, list_array.value_sizes()[2]);
-        assert_eq!(2, list_array.value_length(2));
+        assert_eq!(2, list_array.value_size(2));
         assert_eq!(0, list_array.value(0).as_primitive::<Int32Type>().value(0));
         assert_eq!(
             0,
@@ -560,7 +543,7 @@ mod tests {
         assert_eq!(0, list_array.null_count());
         assert_eq!(6, list_array.value_offsets()[2]);
         assert_eq!(2, list_array.value_sizes()[2]);
-        assert_eq!(2, list_array.value_length(2));
+        assert_eq!(2, list_array.value_size(2));
         assert_eq!(0, list_array.value(0).as_primitive::<Int32Type>().value(0));
         assert_eq!(
             0,
@@ -607,7 +590,7 @@ mod tests {
         assert_eq!(4, list_array.null_count());
         assert_eq!(2, list_array.value_offsets()[3]);
         assert_eq!(2, list_array.value_sizes()[3]);
-        assert_eq!(2, list_array.value_length(3));
+        assert_eq!(2, list_array.value_size(3));
 
         let sliced_array = list_array.slice(1, 6);
         assert_eq!(6, sliced_array.len());
@@ -628,15 +611,15 @@ mod tests {
             .unwrap();
         assert_eq!(2, sliced_list_array.value_offsets()[2]);
         assert_eq!(2, sliced_list_array.value_sizes()[2]);
-        assert_eq!(2, sliced_list_array.value_length(2));
+        assert_eq!(2, sliced_list_array.value_size(2));
 
         assert_eq!(4, sliced_list_array.value_offsets()[3]);
         assert_eq!(2, sliced_list_array.value_sizes()[3]);
-        assert_eq!(2, sliced_list_array.value_length(3));
+        assert_eq!(2, sliced_list_array.value_size(3));
 
         assert_eq!(6, sliced_list_array.value_offsets()[5]);
         assert_eq!(3, sliced_list_array.value_sizes()[5]);
-        assert_eq!(3, sliced_list_array.value_length(5));
+        assert_eq!(3, sliced_list_array.value_size(5));
     }
 
     #[test]
@@ -673,7 +656,7 @@ mod tests {
         assert_eq!(4, list_array.null_count());
         assert_eq!(2, list_array.value_offsets()[3]);
         assert_eq!(2, list_array.value_sizes()[3]);
-        assert_eq!(2, list_array.value_length(3));
+        assert_eq!(2, list_array.value_size(3));
 
         let sliced_array = list_array.slice(1, 6);
         assert_eq!(6, sliced_array.len());
@@ -693,15 +676,15 @@ mod tests {
             .downcast_ref::<LargeListViewArray>()
             .unwrap();
         assert_eq!(2, sliced_list_array.value_offsets()[2]);
-        assert_eq!(2, sliced_list_array.value_length(2));
+        assert_eq!(2, sliced_list_array.value_size(2));
         assert_eq!(2, sliced_list_array.value_sizes()[2]);
 
         assert_eq!(4, sliced_list_array.value_offsets()[3]);
-        assert_eq!(2, sliced_list_array.value_length(3));
+        assert_eq!(2, sliced_list_array.value_size(3));
         assert_eq!(2, sliced_list_array.value_sizes()[3]);
 
         assert_eq!(6, sliced_list_array.value_offsets()[5]);
-        assert_eq!(3, sliced_list_array.value_length(5));
+        assert_eq!(3, sliced_list_array.value_size(5));
         assert_eq!(2, sliced_list_array.value_sizes()[3]);
     }
 
@@ -733,7 +716,7 @@ mod tests {
     }
     #[test]
     #[should_panic(
-        expected = "ListViewArray data should contain two buffer (value offsets & value size), had 0"
+        expected = "ListViewArray data should contain two buffers (value offsets & value sizes), had 0"
     )]
     #[cfg(not(feature = "force_validate"))]
     fn test_list_view_array_invalid_buffer_len() {
@@ -780,9 +763,9 @@ mod tests {
         let values = Int32Array::from(vec![0, 1, 2, 3, 4, 5, 6, 7]);
         let list_array = ListViewArray::new(field, offsets, sizes, Arc::new(values), None);
 
-        assert_eq!(list_array.value_length(0), 0);
-        assert_eq!(list_array.value_length(1), 0);
-        assert_eq!(list_array.value_length(2), 3);
+        assert_eq!(list_array.value_size(0), 0);
+        assert_eq!(list_array.value_size(1), 0);
+        assert_eq!(list_array.value_size(2), 3);
     }
 
     #[test]
@@ -935,4 +918,102 @@ mod tests {
         let sizes = list.value_sizes();
         assert_eq!(sizes, &[3, 3, 3]);
     }
+
+    #[test]
+    fn test_list_view_array_overlap_lists() {
+        let value_data = unsafe {
+            ArrayData::builder(DataType::Int32)
+                .len(8)
+                .add_buffer(Buffer::from_slice_ref([0, 1, 2, 3, 4, 5, 6, 7]))
+                .build_unchecked()
+        };
+        let list_data_type = DataType::ListView(Arc::new(Field::new("item", DataType::Int32, false)));
+        let list_data = unsafe {
+            ArrayData::builder(list_data_type)
+                .len(2)
+                .add_buffer(Buffer::from_slice_ref([0, 3])) // offsets
+                .add_buffer(Buffer::from_slice_ref([5, 5])) // sizes
+                .add_child_data(value_data)
+                .build_unchecked()
+        };
+        let array = ListViewArray::from(list_data);
+
+        assert_eq!(array.len(), 2);
+        assert_eq!(array.value_size(0), 5);
+        assert_eq!(array.value_size(1), 5);
+
+        let values: Vec<_> = array
+            .iter()
+            .map(|x| x.map(|x| x.as_primitive::<Int32Type>().values().to_vec()))
+            .collect();
+        assert_eq!(values, vec![Some(vec![0,1, 2, 3,4]), Some(vec![3, 4, 5, 6,7])]);
+
+    }
+
+    #[test]
+    fn test_list_view_array_incomplete_offsets() {
+        let value_data = unsafe {
+            ArrayData::builder(DataType::Int32)
+                .len(50)
+                .add_buffer(Buffer::from_slice_ref((0..50).collect::<Vec<i32>>()))
+                .build_unchecked()
+        };
+        let list_data_type = DataType::ListView(Arc::new(Field::new("item", DataType::Int32, false)));
+        let list_data = unsafe {
+            ArrayData::builder(list_data_type)
+                .len(3)
+                .add_buffer(Buffer::from_slice_ref([0, 5, 10])) // offsets
+                .add_buffer(Buffer::from_slice_ref([0, 5, 10])) // sizes
+                .add_child_data(value_data)
+                .build_unchecked()
+        };
+        let array = ListViewArray::from(list_data);
+
+        assert_eq!(array.len(), 3);
+        assert_eq!(array.value_size(0), 0);
+        assert_eq!(array.value_size(1), 5);
+        assert_eq!(array.value_size(2), 10);
+
+        let values: Vec<_> = array
+            .iter()
+            .map(|x| x.map(|x| x.as_primitive::<Int32Type>().values().to_vec()))
+            .collect();
+        assert_eq!(values, vec![
+            Some(vec![]),
+            Some(vec![5, 6, 7, 8, 9]),
+            Some(vec![10, 11, 12, 13, 14, 15, 16, 17, 18, 19])
+        ]);
+    }
+
+    #[test]
+    fn test_list_view_array_empty_lists() {
+        let value_data = unsafe {
+            ArrayData::builder(DataType::Int32)
+                .len(0)
+                .add_buffer(Buffer::from_slice_ref::<i32, &[_; 0]>(&[]))
+                .build_unchecked()
+        };
+        let list_data_type = DataType::ListView(Arc::new(Field::new("item", DataType::Int32, false)));
+        let list_data = unsafe {
+            ArrayData::builder(list_data_type)
+                .len(3)
+                .add_buffer(Buffer::from_slice_ref([0, 0, 0])) // offsets
+                .add_buffer(Buffer::from_slice_ref([0, 0, 0])) // sizes
+                .add_child_data(value_data)
+                .build_unchecked()
+        };
+        let array = ListViewArray::from(list_data);
+
+        assert_eq!(array.len(), 3);
+        assert_eq!(array.value_size(0), 0);
+        assert_eq!(array.value_size(1), 0);
+        assert_eq!(array.value_size(2), 0);
+
+        let values: Vec<_> = array
+            .iter()
+            .map(|x| x.map(|x| x.as_primitive::<Int32Type>().values().to_vec()))
+            .collect();
+        assert_eq!(values, vec![Some(vec![]), Some(vec![]), Some(vec![])]);
+    }
+
 }
