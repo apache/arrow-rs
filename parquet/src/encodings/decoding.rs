@@ -1848,6 +1848,15 @@ mod tests {
     }
 
     #[test]
+    #[should_panic(expected = "Input data is not of fixed length")]
+    fn test_byte_stream_split_flba_bad_input() {
+        let mut decoder = VariableWidthByteStreamSplitDecoder::<FixedLenByteArrayType>::new(4);
+        decoder
+            .set_data(Bytes::from(vec![1, 2, 3, 4, 5]), 1)
+            .unwrap();
+    }
+
+    #[test]
     fn test_skip_byte_stream_split() {
         let block_data = vec![0.3, 0.4, 0.1, 4.10];
         test_skip::<FloatType>(block_data.clone(), Encoding::BYTE_STREAM_SPLIT, 2);

@@ -159,6 +159,11 @@ impl<T: DataType> VariableWidthByteStreamSplitDecoder<T> {
 
 impl<T: DataType> Decoder<T> for VariableWidthByteStreamSplitDecoder<T> {
     fn set_data(&mut self, data: Bytes, num_values: usize) -> Result<()> {
+        // Rough check that all data elements are the same length
+        if data.len() % self.type_width != 0 {
+            return Err(general_err!("Input data is not of fixed length"));
+        }
+
         match T::get_physical_type() {
             Type::FIXED_LEN_BYTE_ARRAY => {
                 self.encoded_bytes = data;
@@ -222,7 +227,9 @@ impl<T: DataType> Decoder<T> for VariableWidthByteStreamSplitDecoder<T> {
         // FIXME(ets): there's got to be a better way to do this
         for i in 0..num_values {
             if let Some(bi) = buffer[i].as_mut_any().downcast_mut::<FixedLenByteArray>() {
-                bi.set_data(Bytes::copy_from_slice(&tmp_vec[i * type_size..(i+1) * type_size]));
+                bi.set_data(Bytes::copy_from_slice(
+                    &tmp_vec[i * type_size..(i + 1) * type_size],
+                ));
             }
         }
 
