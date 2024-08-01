@@ -154,11 +154,9 @@ pub(crate) mod private {
             encoding: Encoding,
         ) -> Result<Box<dyn Decoder<T>>> {
             match encoding {
-                Encoding::BYTE_STREAM_SPLIT => {
-                    Ok(Box::new(VariableWidthByteStreamSplitDecoder::new(
-                        descr.type_length(),
-                    )))
-                }
+                Encoding::BYTE_STREAM_SPLIT => Ok(Box::new(
+                    VariableWidthByteStreamSplitDecoder::new(descr.type_length()),
+                )),
                 Encoding::DELTA_BYTE_ARRAY => Ok(Box::new(DeltaByteArrayDecoder::new())),
                 _ => get_decoder_default(descr, encoding),
             }
