@@ -1893,13 +1893,10 @@ mod tests {
     //   vec![vec![1, 2, 3]] invokes `put()` once and writes {1, 2, 3}
     //   vec![vec![1, 2], vec![3]] invokes `put()` twice and writes {1, 2, 3}
     fn test_encode_decode<T: DataType>(data: Vec<Vec<T::T>>, encoding: Encoding, type_width: i32) {
-        // Type length should not really matter for encode/decode test,
-        // otherwise change it based on type
         let col_descr = create_test_col_desc_ptr(type_width, T::get_physical_type());
 
         // Encode data
-        let mut encoder = get_encoder::<T>(encoding).expect("get encoder");
-        encoder.set_type_width(type_width as usize);
+        let mut encoder = get_encoder::<T>(encoding, &col_descr).expect("get encoder");
 
         for v in &data[..] {
             encoder.put(&v[..]).expect("ok to encode");
@@ -1932,7 +1929,7 @@ mod tests {
         let col_descr = create_test_col_desc_ptr(-1, T::get_physical_type());
 
         // Encode data
-        let mut encoder = get_encoder::<T>(encoding).expect("get encoder");
+        let mut encoder = get_encoder::<T>(encoding, &col_descr).expect("get encoder");
 
         encoder.put(&data).expect("ok to encode");
 

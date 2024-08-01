@@ -187,13 +187,12 @@ impl<T: DataType> ColumnValueEncoder for ColumnValueEncoderImpl<T> {
         let dict_encoder = dict_supported.then(|| DictEncoder::new(descr.clone()));
 
         // Set either main encoder or fallback encoder.
-        let mut encoder = get_encoder(
+        let encoder = get_encoder(
             props
                 .encoding(descr.path())
                 .unwrap_or_else(|| fallback_encoding(T::get_physical_type(), props)),
+            descr,
         )?;
-
-        encoder.set_type_width(descr.type_length() as usize);
 
         let statistics_enabled = props.statistics_enabled(descr.path());
 

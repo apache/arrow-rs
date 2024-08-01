@@ -24,8 +24,10 @@ use crate::data_type::private::ParquetValueType;
 use crate::data_type::*;
 use crate::encodings::rle::RleEncoder;
 use crate::errors::{ParquetError, Result};
+use crate::schema::types::ColumnDescPtr;
 use crate::util::bit_util::{num_required_bits, BitWriter};
 
+use byte_stream_split_encoder::{ByteStreamSplitEncoder, VariableWidthByteStreamSplitEncoder};
 use bytes::Bytes;
 pub use dict_encoder::DictEncoder;
 
@@ -74,15 +76,14 @@ pub trait Encoder<T: DataType>: Send {
     /// Flushes the underlying byte buffer that's being processed by this encoder, and
     /// return the immutable copy of it. This will also reset the internal state.
     fn flush_buffer(&mut self) -> Result<Bytes>;
-
-    /// Sets the width of the data in bytes. Only relevant for `FIXED_LEN_BYTE_ARRAY` data
-    /// and `BYTE_STREAM_SPLIT` encoding.
-    fn set_type_width(&mut self, _type_width: usize) {}
 }
 
 /// Gets a encoder for the particular data type `T` and encoding `encoding`. Memory usage
 /// for the encoder instance is tracked by `mem_tracker`.
-pub fn get_encoder<T: DataType>(encoding: Encoding) -> Result<Box<dyn Encoder<T>>> {
+pub fn get_encoder<T: DataType>(
+    encoding: Encoding,
+    descr: &ColumnDescPtr,
+) -> Result<Box<dyn Encoder<T>>> {
     let encoder: Box<dyn Encoder<T>> = match encoding {
         Encoding::PLAIN => Box::new(PlainEncoder::new()),
         Encoding::RLE_DICTIONARY | Encoding::PLAIN_DICTIONARY => {
@@ -94,9 +95,12 @@ pub fn get_encoder<T: DataType>(encoding: Encoding) -> Result<Box<dyn Encoder<T>
         Encoding::DELTA_BINARY_PACKED => Box::new(DeltaBitPackEncoder::new()),
         Encoding::DELTA_LENGTH_BYTE_ARRAY => Box::new(DeltaLengthByteArrayEncoder::new()),
         Encoding::DELTA_BYTE_ARRAY => Box::new(DeltaByteArrayEncoder::new()),
-        Encoding::BYTE_STREAM_SPLIT => {
-            Box::new(byte_stream_split_encoder::ByteStreamSplitEncoder::new())
-        }
+        Encoding::BYTE_STREAM_SPLIT => match T::get_physical_type() {
+            Type::FIXED_LEN_BYTE_ARRAY => Box::new(VariableWidthByteStreamSplitEncoder::new(
+                descr.type_length(),
+            )),
+            _ => Box::new(ByteStreamSplitEncoder::new()),
+        },
         e => return Err(nyi_err!("Encoding {} is not supported", e)),
     };
     Ok(encoder)
@@ -502,8 +506,7 @@ impl<T: DataType> Encoder<T> for DeltaBitPackEncoder<T> {
         self.page_header_writer.estimated_memory_size()
             + self.bit_writer.estimated_memory_size()
             + self.deltas.capacity() * std::mem::size_of::<i64>()
-        + std::mem::size_of::<Self>()
-
+            + std::mem::size_of::<Self>()
     }
 }
 
@@ -645,10 +648,7 @@ impl<T: DataType> Encoder<T> for DeltaLengthByteArrayEncoder<T> {
 
     /// return the estimated memory size of this encoder.
     fn estimated_memory_size(&self) -> usize {
-        self.len_encoder.estimated_memory_size()
-            + self.data.len()
-        + std::mem::size_of::<Self>()
-
+        self.len_encoder.estimated_memory_size() + self.data.len() + std::mem::size_of::<Self>()
     }
 }
 
@@ -758,8 +758,7 @@ impl<T: DataType> Encoder<T> for DeltaByteArrayEncoder<T> {
     fn estimated_memory_size(&self) -> usize {
         self.prefix_len_encoder.estimated_memory_size()
             + self.suffix_writer.estimated_memory_size()
-        + (self.previous.capacity() * std::mem::size_of::<u8>())
-
+            + (self.previous.capacity() * std::mem::size_of::<u8>())
     }
 }
 
@@ -771,28 +770,30 @@ mod tests {
 
     use crate::encodings::decoding::{get_decoder, Decoder, DictDecoder, PlainDecoder};
     use crate::schema::types::{ColumnDescPtr, ColumnDescriptor, ColumnPath, Type as SchemaType};
-    use crate::util::test_common::rand_gen::{random_bytes, RandGen};
     use crate::util::bit_util;
+    use crate::util::test_common::rand_gen::{random_bytes, RandGen};
 
     const TEST_SET_SIZE: usize = 1024;
 
     #[test]
     fn test_get_encoders() {
         // supported encodings
-        create_and_check_encoder::<Int32Type>(Encoding::PLAIN, None);
-        create_and_check_encoder::<Int32Type>(Encoding::DELTA_BINARY_PACKED, None);
-        create_and_check_encoder::<Int32Type>(Encoding::DELTA_LENGTH_BYTE_ARRAY, None);
-        create_and_check_encoder::<Int32Type>(Encoding::DELTA_BYTE_ARRAY, None);
-        create_and_check_encoder::<BoolType>(Encoding::RLE, None);
+        create_and_check_encoder::<Int32Type>(0, Encoding::PLAIN, None);
+        create_and_check_encoder::<Int32Type>(0, Encoding::DELTA_BINARY_PACKED, None);
+        create_and_check_encoder::<Int32Type>(0, Encoding::DELTA_LENGTH_BYTE_ARRAY, None);
+        create_and_check_encoder::<Int32Type>(0, Encoding::DELTA_BYTE_ARRAY, None);
+        create_and_check_encoder::<BoolType>(0, Encoding::RLE, None);
 
         // error when initializing
         create_and_check_encoder::<Int32Type>(
+            0,
             Encoding::RLE_DICTIONARY,
             Some(general_err!(
                 "Cannot initialize this encoding through this function"
             )),
         );
         create_and_check_encoder::<Int32Type>(
+            0,
             Encoding::PLAIN_DICTIONARY,
             Some(general_err!(
                 "Cannot initialize this encoding through this function"
@@ -802,6 +803,7 @@ mod tests {
         // unsupported
         #[allow(deprecated)]
         create_and_check_encoder::<Int32Type>(
+            0,
             Encoding::BIT_PACKED,
             Some(nyi_err!("Encoding BIT_PACKED is not supported")),
         );
@@ -912,7 +914,7 @@ mod tests {
                 Encoding::PLAIN_DICTIONARY | Encoding::RLE_DICTIONARY => {
                     Box::new(create_test_dict_encoder::<T>(type_length))
                 }
-                _ => create_test_encoder::<T>(encoding),
+                _ => create_test_encoder::<T>(type_length, encoding),
             };
             assert_eq!(encoder.estimated_data_encoded_size(), initial_size);
 
@@ -967,7 +969,7 @@ mod tests {
     #[test]
     fn test_byte_stream_split_example_f32() {
         // Test data from https://github.com/apache/parquet-format/blob/2a481fe1aad64ff770e21734533bb7ef5a057dac/Encodings.md#byte-stream-split-byte_stream_split--9
-        let mut encoder = create_test_encoder::<FloatType>(Encoding::BYTE_STREAM_SPLIT);
+        let mut encoder = create_test_encoder::<FloatType>(0, Encoding::BYTE_STREAM_SPLIT);
         let mut decoder = create_test_decoder::<FloatType>(0, Encoding::BYTE_STREAM_SPLIT);
 
         let input = vec![
@@ -996,7 +998,7 @@ mod tests {
     // See: https://github.com/sunchao/parquet-rs/issues/47
     #[test]
     fn test_issue_47() {
-        let mut encoder = create_test_encoder::<ByteArrayType>(Encoding::DELTA_BYTE_ARRAY);
+        let mut encoder = create_test_encoder::<ByteArrayType>(0, Encoding::DELTA_BYTE_ARRAY);
         let mut decoder = create_test_decoder::<ByteArrayType>(0, Encoding::DELTA_BYTE_ARRAY);
 
         let input = vec![
@@ -1046,12 +1048,10 @@ mod tests {
 
     impl<T: DataType + RandGen<T>> EncodingTester<T> for T {
         fn test_internal(enc: Encoding, total: usize, type_length: i32) -> Result<()> {
-            let mut encoder = create_test_encoder::<T>(enc);
+            let mut encoder = create_test_encoder::<T>(type_length, enc);
             let mut decoder = create_test_decoder::<T>(type_length, enc);
             let mut values = <T as RandGen<T>>::gen_vec(type_length, total);
             let mut result_data = vec![T::T::default(); total];
-
-            encoder.set_type_width(type_length as usize);
 
             // Test put/get spaced.
             let num_bytes = bit_util::ceil(total as i64, 8);
@@ -1146,8 +1146,13 @@ mod tests {
         decoder.get(output)
     }
 
-    fn create_and_check_encoder<T: DataType>(encoding: Encoding, err: Option<ParquetError>) {
-        let encoder = get_encoder::<T>(encoding);
+    fn create_and_check_encoder<T: DataType>(
+        type_length: i32,
+        encoding: Encoding,
+        err: Option<ParquetError>,
+    ) {
+        let desc = create_test_col_desc_ptr(type_length, T::get_physical_type());
+        let encoder = get_encoder::<T>(encoding, &desc);
         match err {
             Some(parquet_error) => {
                 assert_eq!(
@@ -1173,8 +1178,9 @@ mod tests {
         ))
     }
 
-    fn create_test_encoder<T: DataType>(enc: Encoding) -> Box<dyn Encoder<T>> {
-        get_encoder(enc).unwrap()
+    fn create_test_encoder<T: DataType>(type_len: i32, enc: Encoding) -> Box<dyn Encoder<T>> {
+        let desc = create_test_col_desc_ptr(type_len, T::get_physical_type());
+        get_encoder(enc, &desc).unwrap()
     }
 
     fn create_test_decoder<T: DataType>(type_len: i32, enc: Encoding) -> Box<dyn Decoder<T>> {
