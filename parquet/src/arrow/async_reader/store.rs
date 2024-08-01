@@ -70,6 +70,7 @@ pub struct ParquetObjectReader {
     store: Arc<dyn ObjectStore>,
     location: Path,
     metadata_size_hint: Option<usize>,
+    file_size: Option<usize>,
     preload_column_index: bool,
     preload_offset_index: bool,
 }
@@ -82,12 +83,20 @@ impl ParquetObjectReader {
         Self {
             store,
             location,
+            file_size: None,
             metadata_size_hint: None,
             preload_column_index: false,
             preload_offset_index: false,
         }
     }
 
+    /// Provide the size of the file, for object stores that do not support suffix ranges (e.g. Azure)
+    pub fn with_file_size(self, file_size: usize) -> Self {
+        Self {
+            file_size: Some(file_size),
+            ..self
+        }
+    }
     /// Provide a hint as to the size of the parquet file's footer,
     /// see [fetch_parquet_metadata](crate::arrow::async_reader::fetch_parquet_metadata)
     pub fn with_footer_size_hint(self, hint: usize) -> Self {
@@ -151,9 +160,10 @@ impl AsyncFileReader for ParquetObjectReader {
             let preload_column_index = self.preload_column_index;
             let preload_offset_index = self.preload_offset_index;
             let prefetch = self.metadata_size_hint;
-            // TODO: distinguish between suffix-supporting object stores, and those that don't
-            // Alternatively, surface in the form of a flag on this struct.
-            let mut loader = MetadataLoader::load(self, prefetch).await?;
+            let mut loader = match self.file_size {
+                Some(file_size) => MetadataLoader::load_absolute(self, file_size, prefetch).await,
+                None => MetadataLoader::load(self, prefetch).await,
+            }?;
             loader
                 .load_page_index(preload_column_index, preload_offset_index)
                 .await?;
@@ -184,6 +194,19 @@ mod tests {
 
         let store = Arc::new(store) as Arc<dyn ObjectStore>;
         let object_reader = ParquetObjectReader::new(Arc::clone(&store), location.clone());
+        let builder = ParquetRecordBatchStreamBuilder::new(object_reader)
+            .await
+            .unwrap();
+        let batches: Vec<_> = builder.build().unwrap().try_collect().await.unwrap();
+
+        assert_eq!(batches.len(), 1);
+        assert_eq!(batches[0].num_rows(), 8);
+
+        let meta = store.head(&location).await.unwrap();
+        let file_size = meta.size;
+
+        let object_reader = ParquetObjectReader::new(Arc::clone(&store), location.clone())
+            .with_file_size(file_size);
         let builder = ParquetRecordBatchStreamBuilder::new(object_reader)
             .await
             .unwrap();
