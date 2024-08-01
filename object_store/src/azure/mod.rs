@@ -123,6 +123,15 @@ impl ObjectStore for MicrosoftAzure {
         self.client.list(prefix)
     }
 
+    #[cfg(feature = "experimental-azure-list-offset")]
+    fn list_with_offset(
+        &self,
+        prefix: Option<&Path>,
+        offset: &Path,
+    ) -> BoxStream<'_, Result<ObjectMeta>> {
+        self.client.list_with_offset(prefix, offset)
+    }
+
     async fn list_with_delimiter(&self, prefix: Option<&Path>) -> Result<ListResult> {
         self.client.list_with_delimiter(prefix).await
     }

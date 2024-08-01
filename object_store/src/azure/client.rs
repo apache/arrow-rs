@@ -559,6 +559,19 @@ impl GetClient for AzureClient {
     }
 }
 
+#[cfg(feature = "experimental-azure-list-offset")]
+fn marker_for_offset(offset: &str, is_emulator: bool) -> String {
+    if is_emulator {
+        return offset.to_string();
+    } else {
+        let encoded_part = BASE64_STANDARD.encode(
+            &format!("{:06}!{} !000028!9999-12-31T23:59:59.9999999Z!", offset.len() + 1, offset)
+        ).replace("=", "-");
+        let length_string = format!("{}", encoded_part.len());
+        return format!("{}!{}!{}", length_string.len(), length_string, encoded_part);
+    }
+}
+
 #[async_trait]
 impl ListClient for AzureClient {
     /// Make an Azure List request <https://docs.microsoft.com/en-us/rest/api/storageservices/list-blobs>
@@ -569,6 +582,7 @@ impl ListClient for AzureClient {
         token: Option<&str>,
         offset: Option<&str>,
     ) -> Result<(ListResult, Option<String>)> {
+        #[cfg(not(feature = "experimental-azure-list-offset"))]
         assert!(offset.is_none()); // Not yet supported
 
         let credential = self.get_credential().await?;
@@ -585,6 +599,22 @@ impl ListClient for AzureClient {
         if delimiter {
             query.push(("delimiter", DELIMITER))
         }
+
+        #[cfg(feature = "experimental-azure-list-offset")]
+        let token_string = match (token, offset) {
+            (Some(token), _) => {
+                Some(token.to_string())
+            }
+            (None, Some(offset)) => {
+                Some(marker_for_offset(offset, self.config.is_emulator))
+            }
+            (None, None) => {
+                None
+            }
+        };
+
+        #[cfg(feature = "experimental-azure-list-offset")]
+        let token = token_string.as_deref();
 
         if let Some(token) = token {
             query.push(("marker", token))
@@ -966,5 +996,17 @@ mod tests {
 
         let _delegated_key_response_internal: UserDelegationKey =
             quick_xml::de::from_str(S).unwrap();
+    }
+
+    #[cfg(feature = "experimental-azure-list-offset")]
+    #[test]
+    fn test_marker_for_offset() {
+        // BlobStorage
+        let marker = marker_for_offset("file.txt", false);
+        assert_eq!(marker, "2!72!MDAwMDA5IWZpbGUudHh0ICEwMDAwMjghOTk5OS0xMi0zMVQyMzo1OTo1OS45OTk5OTk5WiE-");
+
+        // Azurite
+        let marker = marker_for_offset("file.txt", true);
+        assert_eq!(marker, "file.txt");
     }
 }
