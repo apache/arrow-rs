@@ -68,11 +68,20 @@ impl<T: DataType> Encoder<T> for ByteStreamSplitEncoder<T> {
         // FixedLenByteArray is implemented as ByteArray, so there may be gaps making
         // slice_as_bytes untenable
         match T::get_physical_type() {
-            Type::FIXED_LEN_BYTE_ARRAY => {
-                values.iter().for_each(|x| self.buffer.extend(x.as_bytes()))
-            },
-            _ => self.buffer
-                     .extend(<T as DataType>::T::slice_as_bytes(values)),
+            Type::FIXED_LEN_BYTE_ARRAY => values.iter().for_each(|x| {
+                let bytes = x.as_bytes();
+                if bytes.len() != self.type_width {
+                    panic!(
+                        "Mismatched FixedLenByteArray sizes: {} != {}",
+                        bytes.len(),
+                        self.type_width
+                    );
+                }
+                self.buffer.extend(bytes)
+            }),
+            _ => self
+                .buffer
+                .extend(<T as DataType>::T::slice_as_bytes(values)),
         }
 
         ensure_phys_ty!(

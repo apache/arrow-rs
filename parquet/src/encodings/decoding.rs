@@ -1838,6 +1838,19 @@ mod tests {
     }
 
     #[test]
+    #[should_panic(expected = "Mismatched FixedLenByteArray sizes: 4 != 5")]
+    fn test_byte_stream_split_flba_mismatch() {
+        let data = vec![
+            vec![
+                FixedLenByteArray::from(vec![0xAA, 0xAB, 0xAC, 0xAD, 0xAE]),
+                FixedLenByteArray::from(vec![0xBA, 0xBB, 0xBC, 0xBD, 0xBE]),
+            ],
+            vec![FixedLenByteArray::from(vec![0xCA, 0xCB, 0xCC, 0xCD])],
+        ];
+        test_byte_stream_split_decode::<FixedLenByteArrayType>(data, 5);
+    }
+
+    #[test]
     fn test_skip_byte_stream_split() {
         let block_data = vec![0.3, 0.4, 0.1, 4.10];
         test_skip::<FloatType>(block_data.clone(), Encoding::BYTE_STREAM_SPLIT, 2);
@@ -1879,11 +1892,7 @@ mod tests {
     // For example,
     //   vec![vec![1, 2, 3]] invokes `put()` once and writes {1, 2, 3}
     //   vec![vec![1, 2], vec![3]] invokes `put()` twice and writes {1, 2, 3}
-    fn test_encode_decode<T: DataType>(
-        data: Vec<Vec<T::T>>,
-        encoding: Encoding,
-        type_width: i32,
-    ) {
+    fn test_encode_decode<T: DataType>(data: Vec<Vec<T::T>>, encoding: Encoding, type_width: i32) {
         // Type length should not really matter for encode/decode test,
         // otherwise change it based on type
         let col_descr = create_test_col_desc_ptr(type_width, T::get_physical_type());
