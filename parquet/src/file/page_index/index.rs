@@ -247,14 +247,29 @@ impl<T: ParquetValueType> NativeIndex<T> {
             .map(|x| x.null_count())
             .collect::<Option<Vec<_>>>();
 
+        // Concatenate page histograms into a single Option<Vec>
+        let repetition_level_histograms = self
+            .indexes
+            .iter()
+            .map(|x| x.repetition_level_histogram().map(|v| v.values()))
+            .collect::<Option<Vec<&[i64]>>>()
+            .map(|hists| hists.concat());
+
+        let definition_level_histograms = self
+            .indexes
+            .iter()
+            .map(|x| x.definition_level_histogram().map(|v| v.values()))
+            .collect::<Option<Vec<&[i64]>>>()
+            .map(|hists| hists.concat());
+
         ColumnIndex::new(
             self.indexes.iter().map(|x| x.min().is_none()).collect(),
             min_values,
             max_values,
             self.boundary_order,
             null_counts,
-            None,
-            None,
+            repetition_level_histograms,
+            definition_level_histograms,
         )
     }
 }
