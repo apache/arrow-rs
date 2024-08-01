@@ -562,7 +562,7 @@ impl GetClient for AzureClient {
 #[cfg(feature = "experimental-azure-list-offset")]
 fn marker_for_offset(offset: &str, is_emulator: bool) -> String {
     if is_emulator {
-        return offset.to_string();
+        offset.to_string()
     } else {
         // Here we reconstruct an Azure marker (continuation token) from a key to be able to seek
         // into an arbitrary position in the key space.
@@ -598,11 +598,15 @@ fn marker_for_offset(offset: &str, is_emulator: bool) -> String {
         // `start_at` behavior into a `start_after` behavior as the space character is the first valid character
         // in the lexicographical order.
 
-        let encoded_part = BASE64_STANDARD.encode(
-            &format!("{:06}!{} !000028!9999-12-31T23:59:59.9999999Z!", offset.len() + 1, offset)
-        ).replace("=", "-");
+        let encoded_part = BASE64_STANDARD
+            .encode(&format!(
+                "{:06}!{} !000028!9999-12-31T23:59:59.9999999Z!",
+                offset.len() + 1,
+                offset,
+            ))
+            .replace("=", "-");
         let length_string = format!("{}", encoded_part.len());
-        return format!("{}!{}!{}", length_string.len(), length_string, encoded_part);
+        format!("{}!{}!{}", length_string.len(), length_string, encoded_part)
     }
 }
 
@@ -636,15 +640,9 @@ impl ListClient for AzureClient {
 
         #[cfg(feature = "experimental-azure-list-offset")]
         let token_string = match (token, offset) {
-            (Some(token), _) => {
-                Some(token.to_string())
-            }
-            (None, Some(offset)) => {
-                Some(marker_for_offset(offset, self.config.is_emulator))
-            }
-            (None, None) => {
-                None
-            }
+            (Some(token), _) => Some(token.to_string()),
+            (None, Some(offset)) => Some(marker_for_offset(offset, self.config.is_emulator)),
+            (None, None) => None,
         };
 
         #[cfg(feature = "experimental-azure-list-offset")]
@@ -1037,7 +1035,10 @@ mod tests {
     fn test_marker_for_offset() {
         // BlobStorage
         let marker = marker_for_offset("file.txt", false);
-        assert_eq!(marker, "2!72!MDAwMDA5IWZpbGUudHh0ICEwMDAwMjghOTk5OS0xMi0zMVQyMzo1OTo1OS45OTk5OTk5WiE-");
+        assert_eq!(
+            marker,
+            "2!72!MDAwMDA5IWZpbGUudHh0ICEwMDAwMjghOTk5OS0xMi0zMVQyMzo1OTo1OS45OTk5OTk5WiE-"
+        );
 
         // Azurite
         let marker = marker_for_offset("file.txt", true);
