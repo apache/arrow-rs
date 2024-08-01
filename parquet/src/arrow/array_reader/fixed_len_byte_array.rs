@@ -405,9 +405,9 @@ impl ColumnValueDecoder for ValueDecoder {
                 })
             }
             Decoder::ByteStreamSplit { buf, offset } => {
-                // we have n=`byte_length`` streams of length `buf.len/byte_length``
+                // we have n=`byte_length` streams of length `buf.len/byte_length`
                 // to read value i, we need the i'th byte from each of the streams
-                // so `offset`` should be the value offset, not the byte offset
+                // so `offset` should be the value offset, not the byte offset
                 let total_values = buf.len() / self.byte_length;
                 let to_read = num_values.min(total_values - *offset);
                 out.buffer.reserve(to_read * self.byte_length);
@@ -440,13 +440,17 @@ impl ColumnValueDecoder for ValueDecoder {
     }
 }
 
-// transpose values in buffer
+// `src` is an array laid out like a NxM matrix where N == `data_width` and
+// M == total_values_in_src. Each "row" of the matrix is a stream of bytes, with stream `i`
+// containing the `ith` byte for each value. Each "column" is a single value.
+// This will reassemble `num_values` values by reading columns of the matrix starting at
+// `offset`. Values will be appended to `dst`.
 fn read_byte_stream_split(
     dst: &mut Vec<u8>,
     src: &mut Bytes,
     offset: usize,
     num_values: usize,
-    data_width: usize
+    data_width: usize,
 ) {
     let stride = src.len() / data_width;
     for i in 0..num_values {
