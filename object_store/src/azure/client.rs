@@ -564,6 +564,40 @@ fn marker_for_offset(offset: &str, is_emulator: bool) -> String {
     if is_emulator {
         return offset.to_string();
     } else {
+        // Here we reconstruct an Azure marker (continuation token) from a key to be able to seek
+        // into an arbitrary position in the key space.
+        // The current format (July 2024) for the marker is as follows:
+        //
+        //   +-> unpadded length of next field
+        //   |
+        //   |  +-> unpadded length of base64 encoded field
+        //   |  |
+        //   |  |  +-> base64 encoded field with padding characters (=) repaced with -
+        //   |  |  |
+        //   2!72!MDAwMDA4IWZpbGUudHh0ITAwMDAyOCE5OTk5LTEyLTMxVDIzOjU5OjU5Ljk5OTk5OTlaIQ--
+        //    |  |               ^
+        //    terminators        |
+        //                       |
+        //                +------------+
+        //   Decoding the |base64 field| gives:
+        //                +------------+
+        //
+        //   +-> length of key field padded to 6 digits
+        //   |
+        //   |      +-> key to start listing at
+        //   |      |
+        //   |      |        +-> length of timestamp field padded to 6 digits
+        //   |      |        |
+        //   |      |        |      +-> constant max timestamp field
+        //   |      |        |      |
+        //   000008!file.txt!000028!9999-12-31T23:59:59.9999999Z!
+        //         |        |      |                            |
+        //         +----> field terminators <-------------------+
+        //
+        // When recostructing we add a space character (ASCII 0x20) to the end of the key to change the
+        // `start_at` behavior into a `start_after` behavior as the space character is the first valid character
+        // in the lexicographical order.
+
         let encoded_part = BASE64_STANDARD.encode(
             &format!("{:06}!{} !000028!9999-12-31T23:59:59.9999999Z!", offset.len() + 1, offset)
         ).replace("=", "-");
