@@ -390,8 +390,10 @@ impl TryFrom<&FFI_ArrowSchema> for DataType {
             "e" => DataType::Float16,
             "f" => DataType::Float32,
             "g" => DataType::Float64,
+            "vz" => DataType::BinaryView,
             "z" => DataType::Binary,
             "Z" => DataType::LargeBinary,
+            "vu" => DataType::Utf8View,
             "u" => DataType::Utf8,
             "U" => DataType::LargeUtf8,
             "tdD" => DataType::Date32,
@@ -810,6 +812,10 @@ mod tests {
             5,
         ));
         round_trip_type(DataType::Utf8);
+        round_trip_type(DataType::Utf8View);
+        round_trip_type(DataType::BinaryView);
+        round_trip_type(DataType::Binary);
+        round_trip_type(DataType::LargeBinary);
         round_trip_type(DataType::List(Arc::new(Field::new(
             "a",
             DataType::Int16,
