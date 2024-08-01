@@ -82,7 +82,7 @@ serde_json = { version = "1.0", features = ["std"], default-features = false }
 arrow = { workspace = true, features = ["ipc", "test_utils", "prettyprint", "json"] }
 tokio = { version = "1.0", default-features = false, features = ["macros", "rt", "io-util", "fs"] }
 rand = { version = "0.8", default-features = false, features = ["std", "std_rng"] }
-object_store = { version = "0.10.0", default-features = false, features = ["azure"] }
+object_store = { version = "0.10.0", default-features = false, features = ["azure", "aws"] }
 
 # TODO: temporary to fix parquet wasm build
 # upstream issue: https://github.com/gyscos/zstd-rs/issues/269

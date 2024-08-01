@@ -47,12 +47,24 @@ impl From<GetRange> for object_store::GetRange {
 /// # use std::io::stdout;
 /// # use std::sync::Arc;
 /// # use object_store::azure::MicrosoftAzureBuilder;
+/// # use object_store::aws::AmazonS3Builder;
 /// # use object_store::ObjectStore;
 /// # use object_store::path::Path;
 /// # use parquet::arrow::async_reader::ParquetObjectReader;
 /// # use parquet::arrow::ParquetRecordBatchStreamBuilder;
 /// # use parquet::schema::printer::print_parquet_metadata;
 /// # async fn run() {
+/// // Object Stores that support suffix ranges:
+/// // Populate configuration from environment
+/// let storage_container = Arc::new(AmazonS3Builder::from_env().build().unwrap());
+/// let location = Path::from("path/to/blob.parquet");
+///
+/// // Show Parquet metadata
+/// let reader = ParquetObjectReader::new(storage_container, location);
+/// let builder = ParquetRecordBatchStreamBuilder::new(reader).await.unwrap();
+/// print_parquet_metadata(&mut stdout(), builder.metadata());
+/// # }
+/// # async fn run_non_suffixed() {
 /// // Populate configuration from environment
 /// let storage_container = Arc::new(MicrosoftAzureBuilder::from_env().build().unwrap());
 /// let location = Path::from("path/to/blob.parquet");
@@ -60,9 +72,10 @@ impl From<GetRange> for object_store::GetRange {
 /// println!("Found Blob with {}B at {}", meta.size, meta.location);
 ///
 /// // Show Parquet metadata
-/// let reader = ParquetObjectReader::new(storage_container, meta);
+/// let reader = ParquetObjectReader::new(storage_container, location).with_file_size(meta.size);
 /// let builder = ParquetRecordBatchStreamBuilder::new(reader).await.unwrap();
 /// print_parquet_metadata(&mut stdout(), builder.metadata());
+///
 /// # }
 /// ```
 #[derive(Clone, Debug)]
@@ -76,9 +89,7 @@ pub struct ParquetObjectReader {
 }
 
 impl ParquetObjectReader {
-    /// Creates a new [`ParquetObjectReader`] for the provided [`ObjectStore`] and [`ObjectMeta`]
-    ///
-    /// [`ObjectMeta`] can be obtained using [`ObjectStore::list`] or [`ObjectStore::head`]
+    /// Creates a new [`ParquetObjectReader`] for the provided [`ObjectStore`] and [`Path`]
     pub fn new(store: Arc<dyn ObjectStore>, location: Path) -> Self {
         Self {
             store,
@@ -91,6 +102,8 @@ impl ParquetObjectReader {
     }
 
     /// Provide the size of the file, for object stores that do not support suffix ranges (e.g. Azure)
+    ///
+    /// file_size can be obtained using [`ObjectStore::list`] or [`ObjectStore::head`]
     pub fn with_file_size(self, file_size: usize) -> Self {
         Self {
             file_size: Some(file_size),

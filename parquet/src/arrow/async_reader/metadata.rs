@@ -65,7 +65,7 @@ impl<F: MetadataFetch> MetadataLoader<F> {
             let metadata_offset = length + 8;
             let meta = fetch.fetch(GetRange::Suffix(metadata_offset)).await?;
             let slice = &meta[0..length];
-            (decode_metadata(&slice)?, None)
+            (decode_metadata(slice)?, None)
         } else {
             let metadata_offset = length + 8;
             let metadata_start = suffix_len - metadata_offset;
@@ -293,9 +293,7 @@ mod tests {
         let range = match range {
             GetRange::Bounded(range) => range,
             GetRange::Offset(offset) => offset..file_size,
-            GetRange::Suffix(end_offset) => {
-                file_size.saturating_sub(end_offset.try_into().unwrap())..file_size
-            }
+            GetRange::Suffix(end_offset) => file_size.saturating_sub(end_offset)..file_size,
         };
         file.seek(SeekFrom::Start(range.start as _))?;
         let len = range.end - range.start;
