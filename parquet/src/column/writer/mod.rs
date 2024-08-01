@@ -33,7 +33,7 @@ use crate::data_type::private::ParquetValueType;
 use crate::data_type::*;
 use crate::encodings::levels::LevelEncoder;
 use crate::errors::{ParquetError, Result};
-use crate::file::metadata::{ColumnIndexBuilder, OffsetIndexBuilder};
+use crate::file::metadata::{ColumnIndexBuilder, LevelHistogram, OffsetIndexBuilder};
 use crate::file::properties::EnabledStatistics;
 use crate::file::statistics::{Statistics, ValueStatistics};
 use crate::file::{
@@ -189,6 +189,54 @@ struct PageMetrics {
     num_buffered_values: u32,
     num_buffered_rows: u32,
     num_page_nulls: u64,
+    repetition_level_histogram: Option<LevelHistogram>,
+    definition_level_histogram: Option<LevelHistogram>,
+}
+
+impl PageMetrics {
+    fn new() -> Self {
+        Default::default()
+    }
+
+    /// Initialize the repetition level histogram
+    fn with_repetition_level_histogram(mut self, max_level: i16) -> Self {
+        self.repetition_level_histogram = LevelHistogram::try_new(max_level);
+        self
+    }
+
+    /// Initialize the definition level histogram
+    fn with_definition_level_histogram(mut self, max_level: i16) -> Self {
+        self.definition_level_histogram = LevelHistogram::try_new(max_level);
+        self
+    }
+
+    /// Resets the state of this `PageMetrics` to the initial state.
+    /// If histograms have been initialized their contents will be reset to zero.
+    fn new_page(&mut self) {
+        self.num_buffered_values = 0;
+        self.num_buffered_rows = 0;
+        self.num_page_nulls = 0;
+        self.repetition_level_histogram
+            .as_mut()
+            .map(LevelHistogram::reset);
+        self.definition_level_histogram
+            .as_mut()
+            .map(LevelHistogram::reset);
+    }
+
+    /// Updates histogram values using provided repetition levels
+    fn update_repetition_level_histogram(&mut self, levels: &[i16]) {
+        if let Some(ref mut rep_hist) = self.repetition_level_histogram {
+            rep_hist.update_from_levels(levels);
+        }
+    }
+
+    /// Updates histogram values using provided definition levels
+    fn update_definition_level_histogram(&mut self, levels: &[i16]) {
+        if let Some(ref mut def_hist) = self.definition_level_histogram {
+            def_hist.update_from_levels(levels);
+        }
+    }
 }
 
 // Metrics per column writer
@@ -206,11 +254,48 @@ struct ColumnMetrics<T: Default> {
     num_column_nulls: u64,
     column_distinct_count: Option<u64>,
     variable_length_bytes: Option<i64>,
+    repetition_level_histogram: Option<LevelHistogram>,
+    definition_level_histogram: Option<LevelHistogram>,
 }
 
 impl<T: Default> ColumnMetrics<T> {
     fn new() -> Self {
         Default::default()
+    }
+
+    /// Initialize the repetition level histogram
+    fn with_repetition_level_histogram(mut self, max_level: i16) -> Self {
+        self.repetition_level_histogram = LevelHistogram::try_new(max_level);
+        self
+    }
+
+    /// Initialize the definition level histogram
+    fn with_definition_level_histogram(mut self, max_level: i16) -> Self {
+        self.definition_level_histogram = LevelHistogram::try_new(max_level);
+        self
+    }
+
+    /// Sum `page_histogram` into `chunk_histogram`
+    fn update_histogram(
+        chunk_histogram: &mut Option<LevelHistogram>,
+        page_histogram: &Option<LevelHistogram>,
+    ) {
+        if let (Some(page_hist), Some(chunk_hist)) = (page_histogram, chunk_histogram) {
+            chunk_hist.add(page_hist);
+        }
+    }
+
+    /// Sum the provided PageMetrics histograms into the chunk histograms. Does nothing if
+    /// page histograms are not initialized.
+    fn update_from_page_metrics(&mut self, page_metrics: &PageMetrics) {
+        ColumnMetrics::<T>::update_histogram(
+            &mut self.definition_level_histogram,
+            &page_metrics.definition_level_histogram,
+        );
+        ColumnMetrics::<T>::update_histogram(
+            &mut self.repetition_level_histogram,
+            &page_metrics.repetition_level_histogram,
+        );
     }
 
     /// Sum the provided page variable_length_bytes into the chunk variable_length_bytes
@@ -275,6 +360,19 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         // Used for level information
         encodings.insert(Encoding::RLE);
 
+        let mut page_metrics = PageMetrics::new();
+        let mut column_metrics = ColumnMetrics::<E::T>::new();
+
+        // Initialize level histograms if collecting page or chunk statistics
+        if statistics_enabled != EnabledStatistics::None {
+            page_metrics = page_metrics
+                .with_repetition_level_histogram(descr.max_rep_level())
+                .with_definition_level_histogram(descr.max_def_level());
+            column_metrics = column_metrics
+                .with_repetition_level_histogram(descr.max_rep_level())
+                .with_definition_level_histogram(descr.max_def_level())
+        }
+
         // Disable column_index_builder if not collecting page statistics.
         let mut column_index_builder = ColumnIndexBuilder::new();
         if statistics_enabled != EnabledStatistics::Page {
@@ -292,12 +390,8 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
             def_levels_sink: vec![],
             rep_levels_sink: vec![],
             data_pages: VecDeque::new(),
-            page_metrics: PageMetrics {
-                num_buffered_values: 0,
-                num_buffered_rows: 0,
-                num_page_nulls: 0,
-            },
-            column_metrics: ColumnMetrics::<E::T>::new(),
+            page_metrics,
+            column_metrics,
             column_index_builder,
             offset_index_builder: OffsetIndexBuilder::new(),
             encodings,
@@ -547,6 +641,9 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
                 }
             }
 
+            // Update histogram
+            self.page_metrics.update_definition_level_histogram(levels);
+
             self.def_levels_sink.extend_from_slice(levels);
             values_to_write
         } else {
@@ -574,6 +671,9 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
             for &level in levels {
                 self.page_metrics.num_buffered_rows += (level == 0) as u32
             }
+
+            // Update histogram
+            self.page_metrics.update_repetition_level_histogram(levels);
 
             self.rep_levels_sink.extend_from_slice(levels);
         } else {
@@ -718,7 +818,14 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
                 }
             }
         }
-        // update the offset index
+
+        // Append page histograms to the `ColumnIndex` histograms
+        self.column_index_builder.append_histograms(
+            &self.page_metrics.repetition_level_histogram,
+            &self.page_metrics.definition_level_histogram,
+        );
+
+        // Update the offset index
         self.offset_index_builder
             .append_row_count(self.page_metrics.num_buffered_rows as i64);
 
@@ -804,7 +911,9 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
             values_data.variable_length_bytes,
         );
 
-        // Update variable_length_bytes in column_metrics
+        // Update histograms and variable_length_bytes in column_metrics
+        self.column_metrics
+            .update_from_page_metrics(&self.page_metrics);
         self.column_metrics
             .update_variable_length_bytes(values_data.variable_length_bytes);
 
@@ -911,7 +1020,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         // Reset state.
         self.rep_levels_sink.clear();
         self.def_levels_sink.clear();
-        self.page_metrics = PageMetrics::default();
+        self.page_metrics.new_page();
 
         Ok(())
     }
@@ -1019,7 +1128,13 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
 
             builder = builder
                 .set_statistics(statistics)
-                .set_unencoded_byte_array_data_bytes(self.column_metrics.variable_length_bytes);
+                .set_unencoded_byte_array_data_bytes(self.column_metrics.variable_length_bytes)
+                .set_repetition_level_histogram(
+                    self.column_metrics.repetition_level_histogram.take(),
+                )
+                .set_definition_level_histogram(
+                    self.column_metrics.definition_level_histogram.take(),
+                );
         }
 
         let metadata = builder.build()?;
