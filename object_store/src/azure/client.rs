@@ -568,11 +568,11 @@ fn marker_for_offset(offset: &str, is_emulator: bool) -> String {
         // into an arbitrary position in the key space.
         // The current format (July 2024) for the marker is as follows:
         //
-        //   +-> unpadded length of next field
+        //   +-> current token version
         //   |
         //   |  +-> unpadded length of base64 encoded field
         //   |  |
-        //   |  |  +-> base64 encoded field with padding characters (=) repaced with -
+        //   |  |  +-> base64 encoded field with characters (/,+,=) repaced with (_,*,-)
         //   |  |  |
         //   2!72!MDAwMDA4IWZpbGUudHh0ITAwMDAyOCE5OTk5LTEyLTMxVDIzOjU5OjU5Ljk5OTk5OTlaIQ--
         //    |  |               ^
@@ -597,6 +597,9 @@ fn marker_for_offset(offset: &str, is_emulator: bool) -> String {
         // When recostructing we add a space character (ASCII 0x20) to the end of the key to change the
         // `start_at` behavior into a `start_after` behavior as the space character is the first valid character
         // in the lexicographical order.
+        //
+        // It appears that hadoop relies on this, code here:
+        // https://github.com/apache/hadoop/blob/059e996c02d64716707d8dfb905dc84bab317aef/hadoop-tools/hadoop-azure/src/main/java/org/apache/hadoop/fs/azurebfs/AzureBlobFileSystemStore.java#L1358
 
         let encoded_part = BASE64_STANDARD
             .encode(&format!(
@@ -604,9 +607,10 @@ fn marker_for_offset(offset: &str, is_emulator: bool) -> String {
                 offset.len() + 1,
                 offset,
             ))
+            .replace("/", "_")
+            .replace("+", "*")
             .replace("=", "-");
-        let length_string = format!("{}", encoded_part.len());
-        format!("{}!{}!{}", length_string.len(), length_string, encoded_part)
+        format!("2!{}!{}", encoded_part.len(), encoded_part)
     }
 }
 
