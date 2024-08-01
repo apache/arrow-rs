@@ -1792,7 +1792,7 @@ mod tests {
             ],
             vec![f32::from_le_bytes([0xA3, 0xB4, 0xC5, 0xD6])],
         ];
-        test_byte_stream_split_decode::<FloatType>(data);
+        test_byte_stream_split_decode::<FloatType>(data, -1);
     }
 
     #[test]
@@ -1801,7 +1801,7 @@ mod tests {
             f64::from_le_bytes([0, 1, 2, 3, 4, 5, 6, 7]),
             f64::from_le_bytes([8, 9, 10, 11, 12, 13, 14, 15]),
         ]];
-        test_byte_stream_split_decode::<DoubleType>(data);
+        test_byte_stream_split_decode::<DoubleType>(data, -1);
     }
 
     #[test]
@@ -1813,7 +1813,7 @@ mod tests {
             ],
             vec![i32::from_le_bytes([0xA3, 0xB4, 0xC5, 0xD6])],
         ];
-        test_byte_stream_split_decode::<Int32Type>(data);
+        test_byte_stream_split_decode::<Int32Type>(data, -1);
     }
 
     #[test]
@@ -1822,7 +1822,19 @@ mod tests {
             i64::from_le_bytes([0, 1, 2, 3, 4, 5, 6, 7]),
             i64::from_le_bytes([8, 9, 10, 11, 12, 13, 14, 15]),
         ]];
-        test_byte_stream_split_decode::<Int64Type>(data);
+        test_byte_stream_split_decode::<Int64Type>(data, -1);
+    }
+
+    #[test]
+    fn test_byte_stream_split_flba() {
+        let data = vec![
+            vec![
+                FixedLenByteArray::from(vec![0, 1, 2, 3, 4]),
+                FixedLenByteArray::from(vec![5, 6, 7, 8, 9]),
+            ],
+            vec![FixedLenByteArray::from(vec![10, 11, 12, 13, 14])],
+        ];
+        test_byte_stream_split_decode::<FixedLenByteArrayType>(data, 5);
     }
 
     #[test]
@@ -1848,32 +1860,37 @@ mod tests {
     }
 
     fn test_rle_value_decode<T: DataType>(data: Vec<Vec<T::T>>) {
-        test_encode_decode::<T>(data, Encoding::RLE);
+        test_encode_decode::<T>(data, Encoding::RLE, -1);
     }
 
     fn test_delta_bit_packed_decode<T: DataType>(data: Vec<Vec<T::T>>) {
-        test_encode_decode::<T>(data, Encoding::DELTA_BINARY_PACKED);
+        test_encode_decode::<T>(data, Encoding::DELTA_BINARY_PACKED, -1);
     }
 
-    fn test_byte_stream_split_decode<T: DataType>(data: Vec<Vec<T::T>>) {
-        test_encode_decode::<T>(data, Encoding::BYTE_STREAM_SPLIT);
+    fn test_byte_stream_split_decode<T: DataType>(data: Vec<Vec<T::T>>, type_width: i32) {
+        test_encode_decode::<T>(data, Encoding::BYTE_STREAM_SPLIT, type_width);
     }
 
     fn test_delta_byte_array_decode(data: Vec<Vec<ByteArray>>) {
-        test_encode_decode::<ByteArrayType>(data, Encoding::DELTA_BYTE_ARRAY);
+        test_encode_decode::<ByteArrayType>(data, Encoding::DELTA_BYTE_ARRAY, -1);
     }
 
     // Input data represents vector of data slices to write (test multiple `put()` calls)
     // For example,
     //   vec![vec![1, 2, 3]] invokes `put()` once and writes {1, 2, 3}
     //   vec![vec![1, 2], vec![3]] invokes `put()` twice and writes {1, 2, 3}
-    fn test_encode_decode<T: DataType>(data: Vec<Vec<T::T>>, encoding: Encoding) {
+    fn test_encode_decode<T: DataType>(
+        data: Vec<Vec<T::T>>,
+        encoding: Encoding,
+        type_width: i32,
+    ) {
         // Type length should not really matter for encode/decode test,
         // otherwise change it based on type
-        let col_descr = create_test_col_desc_ptr(-1, T::get_physical_type());
+        let col_descr = create_test_col_desc_ptr(type_width, T::get_physical_type());
 
         // Encode data
         let mut encoder = get_encoder::<T>(encoding).expect("get encoder");
+        encoder.set_type_width(type_width as usize);
 
         for v in &data[..] {
             encoder.put(&v[..]).expect("ok to encode");
