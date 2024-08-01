@@ -485,13 +485,20 @@ fn take_byte_view<T: ByteViewType, IndexType: ArrowPrimitiveType>(
     array: &GenericByteViewArray<T>,
     indices: &PrimitiveArray<IndexType>,
 ) -> Result<GenericByteViewArray<T>, ArrowError> {
+    let data_len = indices.len();
+
     let new_views = take_native(array.views(), indices);
     let new_nulls = take_nulls(array.nulls(), indices);
-    Ok(GenericByteViewArray::new(
-        new_views,
-        array.data_buffers().to_vec(),
-        new_nulls,
-    ))
+
+    let array_data = ArrayData::builder(T::DATA_TYPE)
+        .len(data_len)
+        .add_buffer(new_views.into_inner())
+        .add_buffers(array.data_buffers().to_vec())
+        .nulls(new_nulls);
+
+    let array_data = unsafe { array_data.build_unchecked() };
+
+    Ok(GenericByteViewArray::from(array_data))
 }
 
 /// `take` implementation for list arrays
