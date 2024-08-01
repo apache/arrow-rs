@@ -146,13 +146,13 @@ pub struct VariableWidthByteStreamSplitDecoder<T: DataType> {
 }
 
 impl<T: DataType> VariableWidthByteStreamSplitDecoder<T> {
-    pub(crate) fn new(type_width: usize) -> Self {
+    pub(crate) fn new(type_length: i32) -> Self {
         Self {
             _phantom: PhantomData,
             encoded_bytes: Bytes::new(),
             total_num_values: 0,
             values_decoded: 0,
-            type_width,
+            type_width: type_length as usize,
         }
     }
 }
