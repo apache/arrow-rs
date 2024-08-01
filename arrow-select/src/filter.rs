@@ -249,7 +249,7 @@ impl FilterBuilder {
 
 /// The iteration strategy used to evaluate [`FilterPredicate`]
 #[derive(Debug)]
-enum IterationStrategy {
+pub enum IterationStrategy {
     /// A lazily evaluated iterator of ranges
     SlicesIterator,
     /// A lazily evaluated iterator of indices
@@ -306,6 +306,14 @@ impl FilterPredicate {
     pub fn count(&self) -> usize {
         self.count
     }
+
+    pub fn get_filter(&self) -> &BooleanArray {
+        &self.filter
+    }
+
+    pub fn get_strategy(&self) -> &IterationStrategy {
+        &self.strategy
+    }
 }
 
 fn filter_array(values: &dyn Array, predicate: &FilterPredicate) -> Result<ArrayRef, ArrowError> {
@@ -344,6 +352,9 @@ fn filter_array(values: &dyn Array, predicate: &FilterPredicate) -> Result<Array
             }
             DataType::BinaryView => {
                 Ok(Arc::new(filter_byte_view(values.as_binary_view(), predicate)))
+            }
+            DataType::FixedSizeBinary(_) => {
+                Ok(Arc::new(filter_fixed_size_binary(values.as_fixed_size_binary(), predicate)))
             }
             DataType::RunEndEncoded(_, _) => {
                 downcast_run_array!{
@@ -707,6 +718,62 @@ fn filter_byte_view<T: ByteViewType>(
     GenericByteViewArray::from(unsafe { builder.build_unchecked() })
 }
 
+fn filter_fixed_size_binary(
+    array: &FixedSizeBinaryArray,
+    predicate: &FilterPredicate,
+) -> FixedSizeBinaryArray {
+    let values: &[u8] = array.values();
+    let value_length = array.value_length() as usize;
+    let calcualte_offset_from_index = |index: usize| index * value_length;
+    let buffer = match &predicate.strategy {
+        IterationStrategy::SlicesIterator => {
+            let mut buffer = MutableBuffer::with_capacity(predicate.count * value_length);
+            for (start, end) in SlicesIterator::new(&predicate.filter) {
+                buffer.extend_from_slice(
+                    &values[calcualte_offset_from_index(start)..calcualte_offset_from_index(end)],
+                );
+            }
+            buffer
+        }
+        IterationStrategy::Slices(slices) => {
+            let mut buffer = MutableBuffer::with_capacity(predicate.count * value_length);
+            for (start, end) in slices {
+                buffer.extend_from_slice(
+                    &values[calcualte_offset_from_index(*start)..calcualte_offset_from_index(*end)],
+                );
+            }
+            buffer
+        }
+        IterationStrategy::IndexIterator => {
+            let iter = IndexIterator::new(&predicate.filter, predicate.count).map(|x| {
+                &values[calcualte_offset_from_index(x)..calcualte_offset_from_index(x + 1)]
+            });
+
+            // SAFETY: IndexIterator is trusted length
+            unsafe { MutableBuffer::from_trusted_len_iter_slice_u8(iter, value_length) }
+        }
+        IterationStrategy::Indices(indices) => {
+            let iter = indices.iter().map(|x| {
+                &values[calcualte_offset_from_index(*x)..calcualte_offset_from_index(*x + 1)]
+            });
+
+            // SAFETY: `Vec::iter` is trusted length
+            unsafe { MutableBuffer::from_trusted_len_iter_slice_u8(iter, value_length) }
+        }
+        IterationStrategy::All | IterationStrategy::None => unreachable!(),
+    };
+    let mut builder = ArrayDataBuilder::new(array.data_type().clone())
+        .len(predicate.count)
+        .add_buffer(buffer.into());
+
+    if let Some((null_count, nulls)) = filter_null_mask(array.nulls(), predicate) {
+        builder = builder.null_count(null_count).null_bit_buffer(Some(nulls));
+    }
+
+    let data = unsafe { builder.build_unchecked() };
+    FixedSizeBinaryArray::from(data)
+}
+
 /// `filter` implementation for dictionaries
 fn filter_dict<T>(array: &DictionaryArray<T>, predicate: &FilterPredicate) -> DictionaryArray<T>
 where
@@ -983,6 +1050,25 @@ mod tests {
     #[test]
     fn test_filter_binary_view() {
         _test_filter_byte_view::<BinaryViewType>()
+    }
+
+    #[test]
+    fn test_filter_fixed_binary() {
+        let v1 = [1_u8, 2];
+        let v2 = [3_u8, 4];
+        let v3 = [5_u8, 6];
+        let v = vec![&v1, &v2, &v3];
+        let a = FixedSizeBinaryArray::from(v);
+        let b = BooleanArray::from(vec![true, false, true]);
+        let c = filter(&a, &b).unwrap();
+        let d = c
+            .as_ref()
+            .as_any()
+            .downcast_ref::<FixedSizeBinaryArray>()
+            .unwrap();
+        assert_eq!(d.len(), 2);
+        assert_eq!(d.value(0), &v1);
+        assert_eq!(d.value(1), &v3);
     }
 
     #[test]

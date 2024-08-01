@@ -280,6 +280,10 @@ name = "lexsort"
 harness = false
 required-features = ["test_utils"]
 
+[[bench]]
+name = "fixed_size_binary_filter"
+harness = false
+
 [[test]]
 name = "csv"
 required-features = ["csv", "chrono-tz"]
