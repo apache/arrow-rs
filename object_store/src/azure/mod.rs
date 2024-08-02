@@ -30,7 +30,7 @@ use crate::{
     PutMultipartOpts, PutOptions, PutPayload, PutResult, Result, UploadPart,
 };
 use async_trait::async_trait;
-use futures::stream::BoxStream;
+use futures::stream::{BoxStream, StreamExt, TryStreamExt};
 use reqwest::Method;
 use std::fmt::Debug;
 use std::sync::Arc;
@@ -117,6 +117,26 @@ impl ObjectStore for MicrosoftAzure {
 
     async fn delete(&self, location: &Path) -> Result<()> {
         self.client.delete_request(location, &()).await
+    }
+
+    fn delete_stream<'a>(
+        &'a self,
+        locations: BoxStream<'a, Result<Path>>,
+    ) -> BoxStream<'a, Result<Path>> {
+        locations
+            .try_chunks(256)
+            .map(move |locations| async {
+                // Early return the error. We ignore the paths that have already been
+                // collected into the chunk.
+                let locations = locations.map_err(|e| e.1)?;
+                self.client
+                    .bulk_delete_request(locations)
+                    .await
+                    .map(futures::stream::iter)
+            })
+            .buffered(20)
+            .try_flatten()
+            .boxed()
     }
 
     fn list(&self, prefix: Option<&Path>) -> BoxStream<'_, Result<ObjectMeta>> {
