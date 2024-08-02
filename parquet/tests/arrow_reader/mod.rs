@@ -990,7 +990,7 @@ fn create_data_batch(scenario: Scenario) -> Vec<RecordBatch> {
             // shorter and longer than that length
             vec![
                 make_utf8_view_batch(vec![Some("a"), Some("b"), Some("c"), Some("d"), None]),
-                make_utf8_view_batch(vec![Some("a"), Some("e_longerthan12")]),
+                make_utf8_view_batch(vec![Some("a"), Some("e_longerthan12"), None, None, None]),
                 make_utf8_view_batch(vec![
                     Some("e_longerthan12"),
                     Some("f_longerthan12"),
@@ -1003,7 +1003,7 @@ fn create_data_batch(scenario: Scenario) -> Vec<RecordBatch> {
         Scenario::BinaryView => {
             vec![
                 make_binary_view_batch(vec![Some(b"a"), Some(b"b"), Some(b"c"), Some(b"d"), None]),
-                make_binary_view_batch(vec![Some(b"a"), Some(b"e_longerthan12")]),
+                make_binary_view_batch(vec![Some(b"a"), Some(b"e_longerthan12"), None, None, None]),
                 make_binary_view_batch(vec![
                     Some(b"e_longerthan12"),
                     Some(b"f_longerthan12"),

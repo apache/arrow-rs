@@ -2060,23 +2060,6 @@ async fn test_utf8() {
 }
 
 // UTF8View
-// BUG:
-// when length > 12, "h_longerthan12" is chosen as minimum instead of expected "e_longerthan12", and
-// if set expected_min="h_longerthan12" to bypass, get mismatch maximum as follows:
-// assertion `left == right` failed: utf8_view: Mismatch with expected data page maximum
-//   left: StringViewArray
-// [
-//   "d",
-//   "g_longerthan12",
-//   "i_longerthan12",
-// ]
-//  right: StringViewArray
-// [
-//   "d",
-//   "e_longerthan12",
-//   "i_longerthan12",
-// ]
-#[ignore]
 #[tokio::test]
 async fn test_utf8_view() {
     let reader = TestReader {
@@ -2095,8 +2078,8 @@ async fn test_utf8_view() {
             "e_longerthan12",
             "i_longerthan12",
         ])),
-        expected_null_counts: UInt64Array::from(vec![1, 0, 0]),
-        expected_row_counts: Some(UInt64Array::from(vec![5, 2, 5])),
+        expected_null_counts: UInt64Array::from(vec![1, 3, 0]),
+        expected_row_counts: Some(UInt64Array::from(vec![5, 5, 5])),
         column_name: "utf8_view",
         check: Check::Both,
     }
@@ -2104,8 +2087,6 @@ async fn test_utf8_view() {
 }
 
 // BinaryView
-// BUG: same as utf8_view
-#[ignore]
 #[tokio::test]
 async fn test_binary_view() {
     let reader = TestReader {
@@ -2124,8 +2105,8 @@ async fn test_binary_view() {
         reader: &reader,
         expected_min: Arc::new(BinaryViewArray::from(expected_min)),
         expected_max: Arc::new(BinaryViewArray::from(expected_max)),
-        expected_null_counts: UInt64Array::from(vec![1, 0, 0]),
-        expected_row_counts: Some(UInt64Array::from(vec![5, 2, 5])),
+        expected_null_counts: UInt64Array::from(vec![1, 3, 0]),
+        expected_row_counts: Some(UInt64Array::from(vec![5, 5, 5])),
         column_name: "binary_view",
         check: Check::Both,
     }
