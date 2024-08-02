@@ -1848,7 +1848,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "Input data is not of fixed length")]
+    #[should_panic(expected = "Input data length is not a multiple of type width 4")]
     fn test_byte_stream_split_flba_bad_input() {
         let mut decoder = VariableWidthByteStreamSplitDecoder::<FixedLenByteArrayType>::new(4);
         decoder
