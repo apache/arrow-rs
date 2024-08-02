@@ -696,7 +696,7 @@ impl<'a> MutableBuffer {
         item_size: usize,
     ) -> Self {
         let (_, upper) = iterator.size_hint();
-        let upper = upper.expect("from_trusted_len_iter requires an upper limit");
+        let upper = upper.expect("from_trusted_len_iter_slice_u8 requires an upper limit");
         let len = upper * item_size;
 
         let mut buffer = MutableBuffer::new(len);
