@@ -649,13 +649,10 @@ impl<'a, W: Write + Send> SerializedRowGroupWriter<'a, W> {
             ));
         }
 
-        let file_offset = self.buf.bytes_written() as i64;
-
         let map_offset = |x| x - src_offset + write_offset as i64;
         let mut builder = ColumnChunkMetaData::builder(metadata.column_descr_ptr())
             .set_compression(metadata.compression())
             .set_encodings(metadata.encodings().clone())
-            .set_file_offset(file_offset)
             .set_total_compressed_size(metadata.compressed_size())
             .set_total_uncompressed_size(metadata.uncompressed_size())
             .set_num_values(metadata.num_values())
@@ -680,7 +677,6 @@ impl<'a, W: Write + Send> SerializedRowGroupWriter<'a, W> {
             }
         }
 
-        SerializedPageWriter::new(self.buf).write_metadata(&metadata)?;
         let (_, on_close) = self.get_on_close();
         on_close(close)
     }
@@ -806,14 +802,6 @@ impl<'a, W: Write + Send> PageWriter for SerializedPageWriter<'a, W> {
         spec.num_values = page.num_values();
 
         Ok(spec)
-    }
-
-    fn write_metadata(&mut self, metadata: &ColumnChunkMetaData) -> Result<()> {
-        let mut protocol = TCompactOutputProtocol::new(&mut self.sink);
-        metadata
-            .to_column_metadata_thrift()
-            .write_to_out_protocol(&mut protocol)?;
-        Ok(())
     }
 
     fn close(&mut self) -> Result<()> {
