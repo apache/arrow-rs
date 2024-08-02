@@ -64,7 +64,7 @@ fn join_streams_const<const TYPE_SIZE: usize>(
 }
 
 // Like the above, but type_size is not known at compile time.
-fn join_streams(
+fn join_streams_variable(
     src: &[u8],
     dst: &mut [u8],
     stride: usize,
@@ -214,7 +214,7 @@ impl<T: DataType> Decoder<T> for VariableWidthByteStreamSplitDecoder<T> {
                 stride,
                 self.values_decoded,
             ),
-            _ => join_streams(
+            _ => join_streams_variable(
                 &self.encoded_bytes,
                 raw_out_bytes,
                 stride,

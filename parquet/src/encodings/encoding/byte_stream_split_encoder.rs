@@ -53,7 +53,7 @@ fn split_streams_const<const TYPE_SIZE: usize>(src: &[u8], dst: &mut [u8]) {
 }
 
 // Like above, but type_size is not known at compile time.
-fn split_streams(src: &[u8], dst: &mut [u8], type_size: usize) {
+fn split_streams_variable(src: &[u8], dst: &mut [u8], type_size: usize) {
     let stride = src.len() / type_size;
     for i in 0..stride {
         for j in 0..type_size {
@@ -166,7 +166,7 @@ impl<T: DataType> Encoder<T> for VariableWidthByteStreamSplitEncoder<T> {
             4 => split_streams_const::<4>(&self.buffer, &mut encoded),
             8 => split_streams_const::<8>(&self.buffer, &mut encoded),
             16 => split_streams_const::<16>(&self.buffer, &mut encoded),
-            _ => split_streams(&self.buffer, &mut encoded, type_size),
+            _ => split_streams_variable(&self.buffer, &mut encoded, type_size),
         }
 
         self.buffer.clear();
