@@ -17,7 +17,6 @@
 
 use bytes::Bytes;
 use futures::future::BoxFuture;
-use futures::TryFutureExt;
 use std::sync::Arc;
 
 use crate::arrow::async_writer::AsyncFileWriter;
@@ -53,7 +52,12 @@ impl ParquetObjectWriter {
 
 impl AsyncFileWriter for ParquetObjectWriter {
     fn write(&mut self, bs: Bytes) -> BoxFuture<'_, Result<()>> {
-        Box::pin(async { self.w.put(self, bs).await })
+        Box::pin(async {
+            self.w
+                .put(bs)
+                .await
+                .map_err(|err| ParquetError::External(Box::new(err)))
+        })
     }
 
     fn complete(&mut self) -> BoxFuture<'_, Result<()>> {
@@ -68,7 +72,7 @@ impl AsyncFileWriter for ParquetObjectWriter {
 
 #[cfg(test)]
 mod tests {
-    use arrow_array::{ArrayRef, Int64Array, RecordBatch, RecordBatchReader};
+    use arrow_array::{ArrayRef, Int64Array, RecordBatch};
     use object_store::memory::InMemory;
     use std::sync::Arc;
 
