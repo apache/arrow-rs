@@ -28,7 +28,7 @@ use parquet::arrow::ArrowWriter as ParquetWriter;
 use parquet::basic::Encoding;
 use parquet::errors::Result;
 use parquet::file::properties::{BloomFilterPosition, WriterProperties};
-use sysinfo::{MemoryRefreshKind, Pid, ProcessRefreshKind, RefreshKind, System};
+use sysinfo::{MemoryRefreshKind, ProcessRefreshKind, ProcessesToUpdate, RefreshKind, System};
 
 #[derive(ValueEnum, Clone)]
 enum BloomFilterPositionArg {
@@ -61,8 +61,16 @@ fn now() -> String {
 }
 
 fn mem(system: &mut System) -> String {
-    let pid = Pid::from(std::process::id() as usize);
-    system.refresh_process_specifics(pid, ProcessRefreshKind::new().with_memory());
+    let pid = match sysinfo::get_current_pid() {
+        Ok(pid) => pid,
+        Err(e) => return format!("Can't get process PID: {e}"),
+    };
+
+    system.refresh_processes_specifics(
+        ProcessesToUpdate::Some(&[pid]),
+        ProcessRefreshKind::everything(),
+    );
+
     system
         .process(pid)
         .map(|proc| format!("{}MB", proc.memory() / 1_000_000))

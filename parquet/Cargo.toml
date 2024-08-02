@@ -67,7 +67,7 @@ hashbrown = { version = "0.14", default-features = false }
 twox-hash = { version = "1.6", default-features = false }
 paste = { version = "1.0" }
 half = { version = "2.1", default-features = false, features = ["num-traits"] }
-sysinfo = { version = "0.30.12", optional = true, default-features = false }
+sysinfo = { version = "0.31.2", optional = true, default-features = false, features = ["system"] }
 
 [dev-dependencies]
 base64 = { version = "0.22", default-features = false, features = ["std"] }
