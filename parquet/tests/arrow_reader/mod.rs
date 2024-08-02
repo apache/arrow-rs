@@ -990,26 +990,26 @@ fn create_data_batch(scenario: Scenario) -> Vec<RecordBatch> {
             // shorter and longer than that length
             vec![
                 make_utf8_view_batch(vec![Some("a"), Some("b"), Some("c"), Some("d"), None]),
-                make_utf8_view_batch(vec![Some("a"), Some("longerthan12_e")]),
+                make_utf8_view_batch(vec![Some("a"), Some("e_longerthan12")]),
                 make_utf8_view_batch(vec![
-                    Some("longerthan12_e"),
-                    Some("longerthan12_f"),
-                    Some("longerthan12_g"),
-                    Some("longerthan12_h"),
-                    Some("longerthan12_i"),
+                    Some("e_longerthan12"),
+                    Some("f_longerthan12"),
+                    Some("g_longerthan12"),
+                    Some("h_longerthan12"),
+                    Some("i_longerthan12"),
                 ]),
             ]
         }
         Scenario::BinaryView => {
             vec![
                 make_binary_view_batch(vec![Some(b"a"), Some(b"b"), Some(b"c"), Some(b"d"), None]),
-                make_binary_view_batch(vec![Some(b"a"), Some(b"longerthan12_e")]),
+                make_binary_view_batch(vec![Some(b"a"), Some(b"e_longerthan12")]),
                 make_binary_view_batch(vec![
-                    Some(b"longerthan12_e"),
-                    Some(b"longerthan12_f"),
-                    Some(b"longerthan12_g"),
-                    Some(b"longerthan12_h"),
-                    Some(b"longerthan12_i"),
+                    Some(b"e_longerthan12"),
+                    Some(b"f_longerthan12"),
+                    Some(b"g_longerthan12"),
+                    Some(b"h_longerthan12"),
+                    Some(b"i_longerthan12"),
                 ]),
             ]
         }
