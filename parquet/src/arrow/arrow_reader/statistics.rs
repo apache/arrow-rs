@@ -1008,7 +1008,23 @@ macro_rules! get_data_page_statistics {
                     }
                     Ok(Arc::new(builder.finish()))
                 },
-                _ => unimplemented!()
+                Some(DataType::Null) |
+                Some(DataType::Duration(_)) |
+                Some(DataType::Interval(_)) |
+                Some(DataType::List(_)) |
+                Some(DataType::ListView(_)) |
+                Some(DataType::FixedSizeList(_, _)) |
+                Some(DataType::LargeList(_)) |
+                Some(DataType::LargeListView(_)) |
+                Some(DataType::Struct(_)) |
+                Some(DataType::Union(_, _)) |
+                Some(DataType::Map(_, _)) |
+                Some(DataType::RunEndEncoded(_, _)) => {
+                    let len = $iterator.count();
+                    // don't know how to extract statistics, so return a null array
+                    Ok(new_null_array($data_type.unwrap(), len))
+                },
+                None => todo!()  // not sure how to handle this
             }
         }
     }
