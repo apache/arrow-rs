@@ -227,13 +227,19 @@ impl<T: DataType> Decoder<T> for VariableWidthByteStreamSplitDecoder<T> {
         }
         self.values_decoded += num_values;
 
-        // FIXME(ets): there's got to be a better way to do this
-        for i in 0..num_values {
-            if let Some(bi) = buffer[i].as_mut_any().downcast_mut::<FixedLenByteArray>() {
-                bi.set_data(Bytes::copy_from_slice(
-                    &tmp_vec[i * type_size..(i + 1) * type_size],
-                ));
-            }
+        // create a buffer from the vec so far (and leave a new Vec in its place)
+        let vec_with_data = std::mem::take(&mut tmp_vec);
+        // convert Vec to Bytes (which is a ref counted wrapper)
+        let bytes_with_data = Bytes::from(vec_with_data);
+        for (i, bi) in buffer.iter_mut().enumerate().take(num_values) {
+            // Get a view into the data, without also copying the bytes
+            let data = bytes_with_data.slice(i * type_size..(i + 1) * type_size);
+            // TODO: perhaps add a `set_from_bytes` method to `DataType` to avoid downcasting
+            let bi = bi
+                .as_mut_any()
+                .downcast_mut::<FixedLenByteArray>()
+                .expect("Decoding fixed length byte array");
+            bi.set_data(data);
         }
 
         Ok(num_values)
