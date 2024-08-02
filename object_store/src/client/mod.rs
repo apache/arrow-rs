@@ -401,7 +401,7 @@ impl ClientOptions {
     /// The timeout is applied from when the request starts connecting until the
     /// response body has finished
     ///
-    /// Default is 5 seconds
+    /// Default is 30 seconds
     pub fn with_timeout(mut self, timeout: Duration) -> Self {
         self.timeout = Some(ConfigValue::Parsed(timeout));
         self
@@ -435,7 +435,7 @@ impl ClientOptions {
     ///
     /// This is the length of time an idle connection will be kept alive
     ///
-    /// Default is 90 seconds
+    /// Default is 90 seconds enforced by reqwest
     pub fn with_pool_idle_timeout(mut self, timeout: Duration) -> Self {
         self.pool_idle_timeout = Some(ConfigValue::Parsed(timeout));
         self
@@ -443,7 +443,7 @@ impl ClientOptions {
 
     /// Set the maximum number of idle connections per host
     ///
-    /// Default is no limit
+    /// Default is no limit enforced by reqwest
     pub fn with_pool_max_idle_per_host(mut self, max: usize) -> Self {
         self.pool_max_idle_per_host = Some(max.into());
         self
@@ -451,7 +451,7 @@ impl ClientOptions {
 
     /// Sets an interval for HTTP2 Ping frames should be sent to keep a connection alive.
     ///
-    /// Default is disabled
+    /// Default is disabled enforced by reqwest
     pub fn with_http2_keep_alive_interval(mut self, interval: Duration) -> Self {
         self.http2_keep_alive_interval = Some(ConfigValue::Parsed(interval));
         self
@@ -462,7 +462,7 @@ impl ClientOptions {
     /// If the ping is not acknowledged within the timeout, the connection will be closed.
     /// Does nothing if http2_keep_alive_interval is disabled.
     ///
-    /// Default is disabled
+    /// Default is disabled enforced by reqwest
     pub fn with_http2_keep_alive_timeout(mut self, interval: Duration) -> Self {
         self.http2_keep_alive_timeout = Some(ConfigValue::Parsed(interval));
         self
@@ -473,7 +473,7 @@ impl ClientOptions {
     /// If disabled, keep-alive pings are only sent while there are open request/response
     /// streams. If enabled, pings are also sent when no streams are active
     ///
-    /// Default is disabled
+    /// Default is disabled enforced by reqwest
     pub fn with_http2_keep_alive_while_idle(mut self) -> Self {
         self.http2_keep_alive_while_idle = true.into();
         self

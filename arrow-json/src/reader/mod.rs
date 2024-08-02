@@ -289,7 +289,7 @@ impl ReaderBuilder {
 
         let decoder = make_decoder(data_type, self.coerce_primitive, self.strict_mode, nullable)?;
 
-        let num_fields = self.schema.all_fields().len();
+        let num_fields = self.schema.flattened_fields().len();
 
         Ok(Decoder {
             decoder,
@@ -1850,7 +1850,7 @@ mod tests {
         let c = ArrayDataBuilder::new(c_field.data_type().clone())
             .len(7)
             .add_child_data(d.to_data())
-            .null_bit_buffer(Some(Buffer::from(vec![0b00111011])))
+            .null_bit_buffer(Some(Buffer::from([0b00111011])))
             .build()
             .unwrap();
         let b = BooleanArray::from(vec![
@@ -1866,14 +1866,14 @@ mod tests {
             .len(7)
             .add_child_data(b.to_data())
             .add_child_data(c.clone())
-            .null_bit_buffer(Some(Buffer::from(vec![0b00111111])))
+            .null_bit_buffer(Some(Buffer::from([0b00111111])))
             .build()
             .unwrap();
         let a_list = ArrayDataBuilder::new(a_field.data_type().clone())
             .len(6)
             .add_buffer(Buffer::from_slice_ref([0i32, 2, 3, 6, 6, 6, 7]))
             .add_child_data(a)
-            .null_bit_buffer(Some(Buffer::from(vec![0b00110111])))
+            .null_bit_buffer(Some(Buffer::from([0b00110111])))
             .build()
             .unwrap();
         let expected = make_array(a_list);

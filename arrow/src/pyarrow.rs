@@ -83,11 +83,6 @@ fn to_py_err(err: ArrowError) -> PyErr {
 }
 
 pub trait FromPyArrow: Sized {
-    #[deprecated(since = "52.0.0", note = "Use from_pyarrow_bound")]
-    fn from_pyarrow(value: &PyAny) -> PyResult<Self> {
-        Self::from_pyarrow_bound(&value.as_borrowed())
-    }
-
     fn from_pyarrow_bound(value: &Bound<PyAny>) -> PyResult<Self>;
 }
 

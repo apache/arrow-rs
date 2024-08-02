@@ -101,7 +101,7 @@ pub struct CommandGetSqlInfo {
 /// >
 /// The returned data should be ordered by data_type and then by type_name.
 #[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, Copy, PartialEq, ::prost::Message)]
 pub struct CommandGetXdbcTypeInfo {
     ///
     /// Specifies the data type to search for the info.
@@ -121,7 +121,7 @@ pub struct CommandGetXdbcTypeInfo {
 /// >
 /// The returned data should be ordered by catalog_name.
 #[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, Copy, PartialEq, ::prost::Message)]
 pub struct CommandGetCatalogs {}
 ///
 /// Represents a request to retrieve the list of database schemas on a Flight SQL enabled backend.
@@ -232,7 +232,7 @@ pub struct CommandGetTables {
 /// >
 /// The returned data should be ordered by table_type.
 #[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, Copy, PartialEq, ::prost::Message)]
 pub struct CommandGetTableTypes {}
 ///
 /// Represents a request to retrieve the primary keys of a table on a Flight SQL enabled backend.
@@ -511,7 +511,7 @@ pub struct ActionClosePreparedStatementRequest {
 /// Request message for the "BeginTransaction" action.
 /// Begins a transaction.
 #[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, Copy, PartialEq, ::prost::Message)]
 pub struct ActionBeginTransactionRequest {}
 ///
 /// Request message for the "BeginSavepoint" action.
@@ -798,11 +798,159 @@ pub struct CommandPreparedStatementUpdate {
     pub prepared_statement_handle: ::prost::bytes::Bytes,
 }
 ///
-/// Returned from the RPC call DoPut when a CommandStatementUpdate
-/// CommandPreparedStatementUpdate was in the request, containing
-/// results from the update.
+/// Represents a bulk ingestion request. Used in the command member of FlightDescriptor
+/// for the the RPC call DoPut to cause the server load the contents of the stream's
+/// FlightData into the target destination.
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
+pub struct CommandStatementIngest {
+    /// The behavior for handling the table definition.
+    #[prost(message, optional, tag = "1")]
+    pub table_definition_options: ::core::option::Option<
+        command_statement_ingest::TableDefinitionOptions,
+    >,
+    /// The table to load data into.
+    #[prost(string, tag = "2")]
+    pub table: ::prost::alloc::string::String,
+    /// The db_schema of the destination table to load data into. If unset, a backend-specific default may be used.
+    #[prost(string, optional, tag = "3")]
+    pub schema: ::core::option::Option<::prost::alloc::string::String>,
+    /// The catalog of the destination table to load data into. If unset, a backend-specific default may be used.
+    #[prost(string, optional, tag = "4")]
+    pub catalog: ::core::option::Option<::prost::alloc::string::String>,
+    ///
+    /// Store ingested data in a temporary table.
+    /// The effect of setting temporary is to place the table in a backend-defined namespace, and to drop the table at the end of the session.
+    /// The namespacing may make use of a backend-specific schema and/or catalog.
+    /// The server should return an error if an explicit choice of schema or catalog is incompatible with the server's namespacing decision.
+    #[prost(bool, tag = "5")]
+    pub temporary: bool,
+    /// Perform the ingestion as part of this transaction. If specified, results should not be committed in the event of an error/cancellation.
+    #[prost(bytes = "bytes", optional, tag = "6")]
+    pub transaction_id: ::core::option::Option<::prost::bytes::Bytes>,
+    /// Backend-specific options.
+    #[prost(map = "string, string", tag = "1000")]
+    pub options: ::std::collections::HashMap<
+        ::prost::alloc::string::String,
+        ::prost::alloc::string::String,
+    >,
+}
+/// Nested message and enum types in `CommandStatementIngest`.
+pub mod command_statement_ingest {
+    /// Options for table definition behavior
+    #[allow(clippy::derive_partial_eq_without_eq)]
+    #[derive(Clone, Copy, PartialEq, ::prost::Message)]
+    pub struct TableDefinitionOptions {
+        #[prost(
+            enumeration = "table_definition_options::TableNotExistOption",
+            tag = "1"
+        )]
+        pub if_not_exist: i32,
+        #[prost(enumeration = "table_definition_options::TableExistsOption", tag = "2")]
+        pub if_exists: i32,
+    }
+    /// Nested message and enum types in `TableDefinitionOptions`.
+    pub mod table_definition_options {
+        /// The action to take if the target table does not exist
+        #[derive(
+            Clone,
+            Copy,
+            Debug,
+            PartialEq,
+            Eq,
+            Hash,
+            PartialOrd,
+            Ord,
+            ::prost::Enumeration
+        )]
+        #[repr(i32)]
+        pub enum TableNotExistOption {
+            /// Do not use. Servers should error if this is specified by a client.
+            Unspecified = 0,
+            /// Create the table if it does not exist
+            Create = 1,
+            /// Fail if the table does not exist
+            Fail = 2,
+        }
+        impl TableNotExistOption {
+            /// String value of the enum field names used in the ProtoBuf definition.
+            ///
+            /// The values are not transformed in any way and thus are considered stable
+            /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+            pub fn as_str_name(&self) -> &'static str {
+                match self {
+                    TableNotExistOption::Unspecified => {
+                        "TABLE_NOT_EXIST_OPTION_UNSPECIFIED"
+                    }
+                    TableNotExistOption::Create => "TABLE_NOT_EXIST_OPTION_CREATE",
+                    TableNotExistOption::Fail => "TABLE_NOT_EXIST_OPTION_FAIL",
+                }
+            }
+            /// Creates an enum from field names used in the ProtoBuf definition.
+            pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+                match value {
+                    "TABLE_NOT_EXIST_OPTION_UNSPECIFIED" => Some(Self::Unspecified),
+                    "TABLE_NOT_EXIST_OPTION_CREATE" => Some(Self::Create),
+                    "TABLE_NOT_EXIST_OPTION_FAIL" => Some(Self::Fail),
+                    _ => None,
+                }
+            }
+        }
+        /// The action to take if the target table already exists
+        #[derive(
+            Clone,
+            Copy,
+            Debug,
+            PartialEq,
+            Eq,
+            Hash,
+            PartialOrd,
+            Ord,
+            ::prost::Enumeration
+        )]
+        #[repr(i32)]
+        pub enum TableExistsOption {
+            /// Do not use. Servers should error if this is specified by a client.
+            Unspecified = 0,
+            /// Fail if the table already exists
+            Fail = 1,
+            /// Append to the table if it already exists
+            Append = 2,
+            /// Drop and recreate the table if it already exists
+            Replace = 3,
+        }
+        impl TableExistsOption {
+            /// String value of the enum field names used in the ProtoBuf definition.
+            ///
+            /// The values are not transformed in any way and thus are considered stable
+            /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+            pub fn as_str_name(&self) -> &'static str {
+                match self {
+                    TableExistsOption::Unspecified => "TABLE_EXISTS_OPTION_UNSPECIFIED",
+                    TableExistsOption::Fail => "TABLE_EXISTS_OPTION_FAIL",
+                    TableExistsOption::Append => "TABLE_EXISTS_OPTION_APPEND",
+                    TableExistsOption::Replace => "TABLE_EXISTS_OPTION_REPLACE",
+                }
+            }
+            /// Creates an enum from field names used in the ProtoBuf definition.
+            pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+                match value {
+                    "TABLE_EXISTS_OPTION_UNSPECIFIED" => Some(Self::Unspecified),
+                    "TABLE_EXISTS_OPTION_FAIL" => Some(Self::Fail),
+                    "TABLE_EXISTS_OPTION_APPEND" => Some(Self::Append),
+                    "TABLE_EXISTS_OPTION_REPLACE" => Some(Self::Replace),
+                    _ => None,
+                }
+            }
+        }
+    }
+}
+///
+/// Returned from the RPC call DoPut when a CommandStatementUpdate,
+/// CommandPreparedStatementUpdate, or CommandStatementIngest was
+/// in the request, containing results from the update.
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, Copy, PartialEq, ::prost::Message)]
 pub struct DoPutUpdateResult {
     /// The number of records updated. A return value of -1 represents
     /// an unknown updated record count.
@@ -862,7 +1010,7 @@ pub struct ActionCancelQueryRequest {
 /// This command is deprecated since 13.0.0. Use the "CancelFlightInfo"
 /// action with DoAction instead.
 #[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, Copy, PartialEq, ::prost::Message)]
 pub struct ActionCancelQueryResult {
     #[prost(enumeration = "action_cancel_query_result::CancelResult", tag = "1")]
     pub result: i32,
@@ -971,6 +1119,19 @@ pub enum SqlInfo {
     /// Retrieves a boolean value indicating whether the Flight SQL Server supports explicit
     /// query cancellation (the CancelQuery action).
     FlightSqlServerCancel = 9,
+    ///
+    /// Retrieves a boolean value indicating whether the Flight SQL Server supports executing
+    /// bulk ingestion.
+    FlightSqlServerBulkIngestion = 10,
+    ///
+    /// Retrieves a boolean value indicating whether transactions are supported for bulk ingestion. If not, invoking
+    /// the method commit in the context of a bulk ingestion is a noop, and the isolation level is
+    /// `arrow.flight.protocol.sql.SqlTransactionIsolationLevel.TRANSACTION_NONE`.
+    ///
+    /// Returns:
+    /// - false: if bulk ingestion transactions are unsupported;
+    /// - true: if bulk ingestion transactions are supported.
+    FlightSqlServerIngestTransactionsSupported = 11,
     ///
     /// Retrieves an int32 indicating the timeout (in milliseconds) for prepared statement handles.
     ///
@@ -1542,6 +1703,10 @@ impl SqlInfo {
             }
             SqlInfo::FlightSqlServerTransaction => "FLIGHT_SQL_SERVER_TRANSACTION",
             SqlInfo::FlightSqlServerCancel => "FLIGHT_SQL_SERVER_CANCEL",
+            SqlInfo::FlightSqlServerBulkIngestion => "FLIGHT_SQL_SERVER_BULK_INGESTION",
+            SqlInfo::FlightSqlServerIngestTransactionsSupported => {
+                "FLIGHT_SQL_SERVER_INGEST_TRANSACTIONS_SUPPORTED"
+            }
             SqlInfo::FlightSqlServerStatementTimeout => {
                 "FLIGHT_SQL_SERVER_STATEMENT_TIMEOUT"
             }
@@ -1674,6 +1839,12 @@ impl SqlInfo {
             }
             "FLIGHT_SQL_SERVER_TRANSACTION" => Some(Self::FlightSqlServerTransaction),
             "FLIGHT_SQL_SERVER_CANCEL" => Some(Self::FlightSqlServerCancel),
+            "FLIGHT_SQL_SERVER_BULK_INGESTION" => {
+                Some(Self::FlightSqlServerBulkIngestion)
+            }
+            "FLIGHT_SQL_SERVER_INGEST_TRANSACTIONS_SUPPORTED" => {
+                Some(Self::FlightSqlServerIngestTransactionsSupported)
+            }
             "FLIGHT_SQL_SERVER_STATEMENT_TIMEOUT" => {
                 Some(Self::FlightSqlServerStatementTimeout)
             }

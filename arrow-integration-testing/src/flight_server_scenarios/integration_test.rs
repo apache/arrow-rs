@@ -364,7 +364,7 @@ async fn save_uploaded_chunks(
 
                 let batch = record_batch_from_message(
                     message,
-                    &Buffer::from(data.data_body),
+                    &Buffer::from(data.data_body.as_ref()),
                     schema_ref.clone(),
                     &dictionaries_by_id,
                 )
@@ -375,7 +375,7 @@ async fn save_uploaded_chunks(
             ipc::MessageHeader::DictionaryBatch => {
                 dictionary_from_message(
                     message,
-                    &Buffer::from(data.data_body),
+                    &Buffer::from(data.data_body.as_ref()),
                     schema_ref.clone(),
                     &mut dictionaries_by_id,
                 )

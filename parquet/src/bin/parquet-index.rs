@@ -37,6 +37,7 @@
 use clap::Parser;
 use parquet::errors::{ParquetError, Result};
 use parquet::file::page_index::index::{Index, PageIndex};
+use parquet::file::page_index::offset_index::OffsetIndexMetaData;
 use parquet::file::reader::{FileReader, SerializedFileReader};
 use parquet::file::serialized_reader::ReadOptionsBuilder;
 use parquet::format::PageLocation;
@@ -93,7 +94,8 @@ impl Args {
                 ))
             })?;
 
-            let row_counts = compute_row_counts(offset_index, row_group.num_rows());
+            let row_counts =
+                compute_row_counts(offset_index.page_locations.as_slice(), row_group.num_rows());
             match &column_indices[column_idx] {
                 Index::NONE => println!("NO INDEX"),
                 Index::BOOLEAN(v) => print_index(&v.indexes, offset_index, &row_counts)?,
@@ -131,20 +133,20 @@ fn compute_row_counts(offset_index: &[PageLocation], rows: i64) -> Vec<i64> {
 /// Prints index information for a single column chunk
 fn print_index<T: std::fmt::Display>(
     column_index: &[PageIndex<T>],
-    offset_index: &[PageLocation],
+    offset_index: &OffsetIndexMetaData,
     row_counts: &[i64],
 ) -> Result<()> {
-    if column_index.len() != offset_index.len() {
+    if column_index.len() != offset_index.page_locations.len() {
         return Err(ParquetError::General(format!(
             "Index length mismatch, got {} and {}",
             column_index.len(),
-            offset_index.len()
+            offset_index.page_locations.len()
         )));
     }
 
     for (idx, ((c, o), row_count)) in column_index
         .iter()
-        .zip(offset_index)
+        .zip(offset_index.page_locations())
         .zip(row_counts)
         .enumerate()
     {

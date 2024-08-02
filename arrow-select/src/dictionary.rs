@@ -297,7 +297,7 @@ mod tests {
 
     #[test]
     fn test_merge_nulls() {
-        let buffer = Buffer::from("helloworldbingohelloworld");
+        let buffer = Buffer::from(b"helloworldbingohelloworld");
         let offsets = OffsetBuffer::from_lengths([5, 5, 5, 5, 5]);
         let nulls = NullBuffer::from(vec![true, false, true, true, true]);
         let values = StringArray::new(offsets, buffer, Some(nulls));

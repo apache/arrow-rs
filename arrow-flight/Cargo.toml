@@ -44,11 +44,11 @@ bytes = { version = "1", default-features = false }
 futures = { version = "0.3", default-features = false, features = ["alloc"] }
 once_cell = { version = "1", optional = true }
 paste = { version = "1.0" }
-prost = { version = "0.12.3", default-features = false, features = ["prost-derive"] }
+prost = { version = "0.13.1", default-features = false, features = ["prost-derive"] }
 # For Timestamp type
-prost-types = { version = "0.12.3", default-features = false }
+prost-types = { version = "0.13.1", default-features = false }
 tokio = { version = "1.0", default-features = false, features = ["macros", "rt", "rt-multi-thread"] }
-tonic = { version = "0.11.0", default-features = false, features = ["transport", "codegen", "prost"] }
+tonic = { version = "0.12.0", default-features = false, features = ["transport", "codegen", "prost"] }
 
 # CLI-related dependencies
 anyhow = { version = "1.0", optional = true }
@@ -70,12 +70,14 @@ cli = ["anyhow", "arrow-cast/prettyprint", "clap", "tracing-log", "tracing-subsc
 [dev-dependencies]
 arrow-cast = { workspace = true, features = ["prettyprint"] }
 assert_cmd = "2.0.8"
-http = "0.2.9"
-http-body = "0.4.5"
+http = "1.1.0"
+http-body = "1.0.0"
+hyper-util = "0.1"
 pin-project-lite = "0.2"
 tempfile = "3.3"
 tokio-stream = { version = "0.1", features = ["net"] }
 tower = "0.4.13"
+uuid = { version = "1.10.0", features = ["v4"] }
 
 [[example]]
 name = "flight_sql_server"
@@ -84,6 +86,11 @@ required-features = ["flight-sql-experimental", "tls"]
 [[bin]]
 name = "flight_sql_client"
 required-features = ["cli", "flight-sql-experimental", "tls"]
+
+[[test]]
+name = "flight_sql_client"
+path = "tests/flight_sql_client.rs"
+required-features = ["flight-sql-experimental", "tls"]
 
 [[test]]
 name = "flight_sql_client_cli"

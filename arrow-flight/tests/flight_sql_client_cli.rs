@@ -15,25 +15,20 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::{net::SocketAddr, pin::Pin, sync::Arc, time::Duration};
+mod common;
 
+use std::{pin::Pin, sync::Arc};
+
+use crate::common::fixture::TestFixture;
 use arrow_array::{ArrayRef, Int64Array, RecordBatch, StringArray};
 use arrow_flight::{
     decode::FlightRecordBatchStream,
     flight_service_server::{FlightService, FlightServiceServer},
     sql::{
         server::{FlightSqlService, PeekableFlightDataStream},
-        ActionBeginSavepointRequest, ActionBeginSavepointResult, ActionBeginTransactionRequest,
-        ActionBeginTransactionResult, ActionCancelQueryRequest, ActionCancelQueryResult,
-        ActionClosePreparedStatementRequest, ActionCreatePreparedStatementRequest,
-        ActionCreatePreparedStatementResult, ActionCreatePreparedSubstraitPlanRequest,
-        ActionEndSavepointRequest, ActionEndTransactionRequest, Any, CommandGetCatalogs,
-        CommandGetCrossReference, CommandGetDbSchemas, CommandGetExportedKeys,
-        CommandGetImportedKeys, CommandGetPrimaryKeys, CommandGetSqlInfo, CommandGetTableTypes,
-        CommandGetTables, CommandGetXdbcTypeInfo, CommandPreparedStatementQuery,
-        CommandPreparedStatementUpdate, CommandStatementQuery, CommandStatementSubstraitPlan,
-        CommandStatementUpdate, DoPutPreparedStatementResult, ProstMessageExt, SqlInfo,
-        TicketStatementQuery,
+        ActionCreatePreparedStatementRequest, ActionCreatePreparedStatementResult, Any,
+        CommandPreparedStatementQuery, CommandStatementQuery, DoPutPreparedStatementResult,
+        ProstMessageExt, SqlInfo,
     },
     utils::batches_to_flight_data,
     Action, FlightData, FlightDescriptor, FlightEndpoint, FlightInfo, HandshakeRequest,
@@ -45,7 +40,6 @@ use assert_cmd::Command;
 use bytes::Bytes;
 use futures::{Stream, TryStreamExt};
 use prost::Message;
-use tokio::{net::TcpListener, task::JoinHandle};
 use tonic::{Request, Response, Status, Streaming};
 
 const QUERY: &str = "SELECT * FROM table;";
@@ -53,7 +47,7 @@ const QUERY: &str = "SELECT * FROM table;";
 #[tokio::test]
 async fn test_simple() {
     let test_server = FlightSqlServiceImpl::default();
-    let fixture = TestFixture::new(&test_server).await;
+    let fixture = TestFixture::new(test_server.service()).await;
     let addr = fixture.addr;
 
     let stdout = tokio::task::spawn_blocking(move || {
@@ -96,7 +90,7 @@ const PREPARED_STATEMENT_HANDLE: &str = "prepared_statement_handle";
 const UPDATED_PREPARED_STATEMENT_HANDLE: &str = "updated_prepared_statement_handle";
 
 async fn test_do_put_prepared_statement(test_server: FlightSqlServiceImpl) {
-    let fixture = TestFixture::new(&test_server).await;
+    let fixture = TestFixture::new(test_server.service()).await;
     let addr = fixture.addr;
 
     let stdout = tokio::task::spawn_blocking(move || {
@@ -151,9 +145,6 @@ pub async fn test_do_put_prepared_statement_stateful() {
     })
     .await
 }
-
-/// All tests must complete within this many seconds or else the test server is shutdown
-const DEFAULT_TIMEOUT_SECONDS: u64 = 30;
 
 #[derive(Clone)]
 pub struct FlightSqlServiceImpl {
@@ -318,244 +309,6 @@ impl FlightSqlService for FlightSqlServiceImpl {
         Ok(resp)
     }
 
-    async fn get_flight_info_substrait_plan(
-        &self,
-        _query: CommandStatementSubstraitPlan,
-        _request: Request<FlightDescriptor>,
-    ) -> Result<Response<FlightInfo>, Status> {
-        Err(Status::unimplemented(
-            "get_flight_info_substrait_plan not implemented",
-        ))
-    }
-
-    async fn get_flight_info_catalogs(
-        &self,
-        _query: CommandGetCatalogs,
-        _request: Request<FlightDescriptor>,
-    ) -> Result<Response<FlightInfo>, Status> {
-        Err(Status::unimplemented(
-            "get_flight_info_catalogs not implemented",
-        ))
-    }
-
-    async fn get_flight_info_schemas(
-        &self,
-        _query: CommandGetDbSchemas,
-        _request: Request<FlightDescriptor>,
-    ) -> Result<Response<FlightInfo>, Status> {
-        Err(Status::unimplemented(
-            "get_flight_info_schemas not implemented",
-        ))
-    }
-
-    async fn get_flight_info_tables(
-        &self,
-        _query: CommandGetTables,
-        _request: Request<FlightDescriptor>,
-    ) -> Result<Response<FlightInfo>, Status> {
-        Err(Status::unimplemented(
-            "get_flight_info_tables not implemented",
-        ))
-    }
-
-    async fn get_flight_info_table_types(
-        &self,
-        _query: CommandGetTableTypes,
-        _request: Request<FlightDescriptor>,
-    ) -> Result<Response<FlightInfo>, Status> {
-        Err(Status::unimplemented(
-            "get_flight_info_table_types not implemented",
-        ))
-    }
-
-    async fn get_flight_info_sql_info(
-        &self,
-        _query: CommandGetSqlInfo,
-        _request: Request<FlightDescriptor>,
-    ) -> Result<Response<FlightInfo>, Status> {
-        Err(Status::unimplemented(
-            "get_flight_info_sql_info not implemented",
-        ))
-    }
-
-    async fn get_flight_info_primary_keys(
-        &self,
-        _query: CommandGetPrimaryKeys,
-        _request: Request<FlightDescriptor>,
-    ) -> Result<Response<FlightInfo>, Status> {
-        Err(Status::unimplemented(
-            "get_flight_info_primary_keys not implemented",
-        ))
-    }
-
-    async fn get_flight_info_exported_keys(
-        &self,
-        _query: CommandGetExportedKeys,
-        _request: Request<FlightDescriptor>,
-    ) -> Result<Response<FlightInfo>, Status> {
-        Err(Status::unimplemented(
-            "get_flight_info_exported_keys not implemented",
-        ))
-    }
-
-    async fn get_flight_info_imported_keys(
-        &self,
-        _query: CommandGetImportedKeys,
-        _request: Request<FlightDescriptor>,
-    ) -> Result<Response<FlightInfo>, Status> {
-        Err(Status::unimplemented(
-            "get_flight_info_imported_keys not implemented",
-        ))
-    }
-
-    async fn get_flight_info_cross_reference(
-        &self,
-        _query: CommandGetCrossReference,
-        _request: Request<FlightDescriptor>,
-    ) -> Result<Response<FlightInfo>, Status> {
-        Err(Status::unimplemented(
-            "get_flight_info_imported_keys not implemented",
-        ))
-    }
-
-    async fn get_flight_info_xdbc_type_info(
-        &self,
-        _query: CommandGetXdbcTypeInfo,
-        _request: Request<FlightDescriptor>,
-    ) -> Result<Response<FlightInfo>, Status> {
-        Err(Status::unimplemented(
-            "get_flight_info_xdbc_type_info not implemented",
-        ))
-    }
-
-    // do_get
-    async fn do_get_statement(
-        &self,
-        _ticket: TicketStatementQuery,
-        _request: Request<Ticket>,
-    ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status> {
-        Err(Status::unimplemented("do_get_statement not implemented"))
-    }
-
-    async fn do_get_prepared_statement(
-        &self,
-        _query: CommandPreparedStatementQuery,
-        _request: Request<Ticket>,
-    ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status> {
-        Err(Status::unimplemented(
-            "do_get_prepared_statement not implemented",
-        ))
-    }
-
-    async fn do_get_catalogs(
-        &self,
-        _query: CommandGetCatalogs,
-        _request: Request<Ticket>,
-    ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status> {
-        Err(Status::unimplemented("do_get_catalogs not implemented"))
-    }
-
-    async fn do_get_schemas(
-        &self,
-        _query: CommandGetDbSchemas,
-        _request: Request<Ticket>,
-    ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status> {
-        Err(Status::unimplemented("do_get_schemas not implemented"))
-    }
-
-    async fn do_get_tables(
-        &self,
-        _query: CommandGetTables,
-        _request: Request<Ticket>,
-    ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status> {
-        Err(Status::unimplemented("do_get_tables not implemented"))
-    }
-
-    async fn do_get_table_types(
-        &self,
-        _query: CommandGetTableTypes,
-        _request: Request<Ticket>,
-    ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status> {
-        Err(Status::unimplemented("do_get_table_types not implemented"))
-    }
-
-    async fn do_get_sql_info(
-        &self,
-        _query: CommandGetSqlInfo,
-        _request: Request<Ticket>,
-    ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status> {
-        Err(Status::unimplemented("do_get_sql_info not implemented"))
-    }
-
-    async fn do_get_primary_keys(
-        &self,
-        _query: CommandGetPrimaryKeys,
-        _request: Request<Ticket>,
-    ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status> {
-        Err(Status::unimplemented("do_get_primary_keys not implemented"))
-    }
-
-    async fn do_get_exported_keys(
-        &self,
-        _query: CommandGetExportedKeys,
-        _request: Request<Ticket>,
-    ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status> {
-        Err(Status::unimplemented(
-            "do_get_exported_keys not implemented",
-        ))
-    }
-
-    async fn do_get_imported_keys(
-        &self,
-        _query: CommandGetImportedKeys,
-        _request: Request<Ticket>,
-    ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status> {
-        Err(Status::unimplemented(
-            "do_get_imported_keys not implemented",
-        ))
-    }
-
-    async fn do_get_cross_reference(
-        &self,
-        _query: CommandGetCrossReference,
-        _request: Request<Ticket>,
-    ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status> {
-        Err(Status::unimplemented(
-            "do_get_cross_reference not implemented",
-        ))
-    }
-
-    async fn do_get_xdbc_type_info(
-        &self,
-        _query: CommandGetXdbcTypeInfo,
-        _request: Request<Ticket>,
-    ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status> {
-        Err(Status::unimplemented(
-            "do_get_xdbc_type_info not implemented",
-        ))
-    }
-
-    // do_put
-    async fn do_put_statement_update(
-        &self,
-        _ticket: CommandStatementUpdate,
-        _request: Request<PeekableFlightDataStream>,
-    ) -> Result<i64, Status> {
-        Err(Status::unimplemented(
-            "do_put_statement_update not implemented",
-        ))
-    }
-
-    async fn do_put_substrait_plan(
-        &self,
-        _ticket: CommandStatementSubstraitPlan,
-        _request: Request<PeekableFlightDataStream>,
-    ) -> Result<i64, Status> {
-        Err(Status::unimplemented(
-            "do_put_substrait_plan not implemented",
-        ))
-    }
-
     async fn do_put_prepared_statement_query(
         &self,
         _query: CommandPreparedStatementQuery,
@@ -568,7 +321,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
         .try_collect::<Vec<_>>()
         .await?;
 
-        for (left, right) in parameters[0].schema().all_fields().iter().zip(vec![
+        for (left, right) in parameters[0].schema().flattened_fields().iter().zip(vec![
             Field::new("$1", DataType::Utf8, false),
             Field::new("$2", DataType::Int64, true),
         ]) {
@@ -590,16 +343,6 @@ impl FlightSqlService for FlightSqlServiceImpl {
         Ok(result)
     }
 
-    async fn do_put_prepared_statement_update(
-        &self,
-        _query: CommandPreparedStatementUpdate,
-        _request: Request<PeekableFlightDataStream>,
-    ) -> Result<i64, Status> {
-        Err(Status::unimplemented(
-            "do_put_prepared_statement_update not implemented",
-        ))
-    }
-
     async fn do_action_create_prepared_statement(
         &self,
         _query: ActionCreatePreparedStatementRequest,
@@ -609,138 +352,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
             .map_err(|e| Status::internal(format!("Unable to serialize schema: {e}")))
     }
 
-    async fn do_action_close_prepared_statement(
-        &self,
-        _query: ActionClosePreparedStatementRequest,
-        _request: Request<Action>,
-    ) -> Result<(), Status> {
-        unimplemented!("Implement do_action_close_prepared_statement")
-    }
-
-    async fn do_action_create_prepared_substrait_plan(
-        &self,
-        _query: ActionCreatePreparedSubstraitPlanRequest,
-        _request: Request<Action>,
-    ) -> Result<ActionCreatePreparedStatementResult, Status> {
-        unimplemented!("Implement do_action_create_prepared_substrait_plan")
-    }
-
-    async fn do_action_begin_transaction(
-        &self,
-        _query: ActionBeginTransactionRequest,
-        _request: Request<Action>,
-    ) -> Result<ActionBeginTransactionResult, Status> {
-        unimplemented!("Implement do_action_begin_transaction")
-    }
-
-    async fn do_action_end_transaction(
-        &self,
-        _query: ActionEndTransactionRequest,
-        _request: Request<Action>,
-    ) -> Result<(), Status> {
-        unimplemented!("Implement do_action_end_transaction")
-    }
-
-    async fn do_action_begin_savepoint(
-        &self,
-        _query: ActionBeginSavepointRequest,
-        _request: Request<Action>,
-    ) -> Result<ActionBeginSavepointResult, Status> {
-        unimplemented!("Implement do_action_begin_savepoint")
-    }
-
-    async fn do_action_end_savepoint(
-        &self,
-        _query: ActionEndSavepointRequest,
-        _request: Request<Action>,
-    ) -> Result<(), Status> {
-        unimplemented!("Implement do_action_end_savepoint")
-    }
-
-    async fn do_action_cancel_query(
-        &self,
-        _query: ActionCancelQueryRequest,
-        _request: Request<Action>,
-    ) -> Result<ActionCancelQueryResult, Status> {
-        unimplemented!("Implement do_action_cancel_query")
-    }
-
     async fn register_sql_info(&self, _id: i32, _result: &SqlInfo) {}
-}
-
-/// Creates and manages a running TestServer with a background task
-struct TestFixture {
-    /// channel to send shutdown command
-    shutdown: Option<tokio::sync::oneshot::Sender<()>>,
-
-    /// Address the server is listening on
-    addr: SocketAddr,
-
-    // handle for the server task
-    handle: Option<JoinHandle<Result<(), tonic::transport::Error>>>,
-}
-
-impl TestFixture {
-    /// create a new test fixture from the server
-    pub async fn new(test_server: &FlightSqlServiceImpl) -> Self {
-        // let OS choose a a free port
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
-
-        println!("Listening on {addr}");
-
-        // prepare the shutdown channel
-        let (tx, rx) = tokio::sync::oneshot::channel();
-
-        let server_timeout = Duration::from_secs(DEFAULT_TIMEOUT_SECONDS);
-
-        let shutdown_future = async move {
-            rx.await.ok();
-        };
-
-        let serve_future = tonic::transport::Server::builder()
-            .timeout(server_timeout)
-            .add_service(test_server.service())
-            .serve_with_incoming_shutdown(
-                tokio_stream::wrappers::TcpListenerStream::new(listener),
-                shutdown_future,
-            );
-
-        // Run the server in its own background task
-        let handle = tokio::task::spawn(serve_future);
-
-        Self {
-            shutdown: Some(tx),
-            addr,
-            handle: Some(handle),
-        }
-    }
-
-    /// Stops the test server and waits for the server to shutdown
-    pub async fn shutdown_and_wait(mut self) {
-        if let Some(shutdown) = self.shutdown.take() {
-            shutdown.send(()).expect("server quit early");
-        }
-        if let Some(handle) = self.handle.take() {
-            println!("Waiting on server to finish");
-            handle
-                .await
-                .expect("task join error (panic?)")
-                .expect("Server Error found at shutdown");
-        }
-    }
-}
-
-impl Drop for TestFixture {
-    fn drop(&mut self) {
-        if let Some(shutdown) = self.shutdown.take() {
-            shutdown.send(()).ok();
-        }
-        if self.handle.is_some() {
-            // tests should properly clean up TestFixture
-            println!("TestFixture::Drop called prior to `shutdown_and_wait`");
-        }
-    }
 }
 
 #[derive(Clone, PartialEq, ::prost::Message)]

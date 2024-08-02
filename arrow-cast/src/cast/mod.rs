@@ -210,7 +210,7 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
         (LargeBinary, Binary | Utf8 | LargeUtf8 | FixedSizeBinary(_) | BinaryView) => true,
         (FixedSizeBinary(_), Binary | LargeBinary) => true,
         (
-            Utf8 | LargeUtf8,
+            Utf8 | LargeUtf8 | Utf8View,
             Binary
             | LargeBinary
             | Utf8
@@ -228,7 +228,6 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
             | Interval(_),
         ) => true,
         (Utf8 | LargeUtf8, Utf8View) => true,
-        (Utf8View, Utf8 | LargeUtf8) => true,
         (BinaryView, Binary | LargeBinary) => true,
         (Utf8 | LargeUtf8, _) => to_type.is_numeric() && to_type != &Float16,
         (_, Utf8 | LargeUtf8) => from_type.is_primitive(),
@@ -569,28 +568,27 @@ fn timestamp_to_date32<T: ArrowTimestampType>(
 /// Accepts [`CastOptions`] to specify cast behavior. See also [`cast()`].
 ///
 /// # Behavior
-/// * Boolean to Utf8: `true` => '1', `false` => `0`
-/// * Utf8 to boolean: `true`, `yes`, `on`, `1` => `true`, `false`, `no`, `off`, `0` => `false`,
+/// * `Boolean` to `Utf8`: `true` => '1', `false` => `0`
+/// * `Utf8` to `Boolean`: `true`, `yes`, `on`, `1` => `true`, `false`, `no`, `off`, `0` => `false`,
 ///   short variants are accepted, other strings return null or error
-/// * Utf8 to numeric: strings that can't be parsed to numbers return null, float strings
+/// * `Utf8` to Numeric: strings that can't be parsed to numbers return null, float strings
 ///   in integer casts return null
-/// * Numeric to boolean: 0 returns `false`, any other value returns `true`
-/// * List to List: the underlying data type is cast
-/// * List to FixedSizeList: the underlying data type is cast. If safe is true and a list element
-/// has the wrong length it will be replaced with NULL, otherwise an error will be returned
-/// * Primitive to List: a list array with 1 value per slot is created
-/// * Date32 and Date64: precision lost when going to higher interval
-/// * Time32 and Time64: precision lost when going to higher interval
-/// * Timestamp and Date{32|64}: precision lost when going to higher interval
-/// * Temporal to/from backing primitive: zero-copy with data type change
-/// * Casting from `float32/float64` to `Decimal(precision, scale)` rounds to the `scale` decimals
-///   (i.e. casting `6.4999` to Decimal(10, 1) becomes `6.5`). Prior to  version `26.0.0`,
-///   casting would truncate instead (i.e. outputs `6.4` instead)
+/// * Numeric to `Boolean`: 0 returns `false`, any other value returns `true`
+/// * `List` to `List`: the underlying data type is cast
+/// * `List` to `FixedSizeList`: the underlying data type is cast. If safe is true and a list element
+///   has the wrong length it will be replaced with NULL, otherwise an error will be returned
+/// * Primitive to `List`: a list array with 1 value per slot is created
+/// * `Date32` and `Date64`: precision lost when going to higher interval
+/// * `Time32 and `Time64`: precision lost when going to higher interval
+/// * `Timestamp` and `Date{32|64}`: precision lost when going to higher interval
+/// * Temporal to/from backing Primitive: zero-copy with data type change
+/// * `Float32/Float64` to `Decimal(precision, scale)` rounds to the `scale` decimals
+///   (i.e. casting `6.4999` to `Decimal(10, 1)` becomes `6.5`).
 ///
 /// Unsupported Casts (check with `can_cast_types` before calling):
 /// * To or from `StructArray`
-/// * List to primitive
-/// * Interval and duration
+/// * `List` to `Primitive`
+/// * `Interval` and `Duration`
 ///
 /// # Timestamps and Timezones
 ///
@@ -1269,6 +1267,56 @@ pub fn cast_with_options(
                 "Casting from {from_type:?} to {to_type:?} not supported",
             ))),
         },
+        (Utf8View, _) => match to_type {
+            UInt8 => parse_string_view::<UInt8Type>(array, cast_options),
+            UInt16 => parse_string_view::<UInt16Type>(array, cast_options),
+            UInt32 => parse_string_view::<UInt32Type>(array, cast_options),
+            UInt64 => parse_string_view::<UInt64Type>(array, cast_options),
+            Int8 => parse_string_view::<Int8Type>(array, cast_options),
+            Int16 => parse_string_view::<Int16Type>(array, cast_options),
+            Int32 => parse_string_view::<Int32Type>(array, cast_options),
+            Int64 => parse_string_view::<Int64Type>(array, cast_options),
+            Float32 => parse_string_view::<Float32Type>(array, cast_options),
+            Float64 => parse_string_view::<Float64Type>(array, cast_options),
+            Date32 => parse_string_view::<Date32Type>(array, cast_options),
+            Date64 => parse_string_view::<Date64Type>(array, cast_options),
+            Binary => cast_view_to_byte::<StringViewType, GenericBinaryType<i32>>(array),
+            LargeBinary => cast_view_to_byte::<StringViewType, GenericBinaryType<i64>>(array),
+            Utf8 => cast_view_to_byte::<StringViewType, GenericStringType<i32>>(array),
+            LargeUtf8 => cast_view_to_byte::<StringViewType, GenericStringType<i64>>(array),
+            Time32(TimeUnit::Second) => parse_string_view::<Time32SecondType>(array, cast_options),
+            Time32(TimeUnit::Millisecond) => {
+                parse_string_view::<Time32MillisecondType>(array, cast_options)
+            }
+            Time64(TimeUnit::Microsecond) => {
+                parse_string_view::<Time64MicrosecondType>(array, cast_options)
+            }
+            Time64(TimeUnit::Nanosecond) => {
+                parse_string_view::<Time64NanosecondType>(array, cast_options)
+            }
+            Timestamp(TimeUnit::Second, to_tz) => {
+                cast_view_to_timestamp::<TimestampSecondType>(array, to_tz, cast_options)
+            }
+            Timestamp(TimeUnit::Millisecond, to_tz) => {
+                cast_view_to_timestamp::<TimestampMillisecondType>(array, to_tz, cast_options)
+            }
+            Timestamp(TimeUnit::Microsecond, to_tz) => {
+                cast_view_to_timestamp::<TimestampMicrosecondType>(array, to_tz, cast_options)
+            }
+            Timestamp(TimeUnit::Nanosecond, to_tz) => {
+                cast_view_to_timestamp::<TimestampNanosecondType>(array, to_tz, cast_options)
+            }
+            Interval(IntervalUnit::YearMonth) => {
+                cast_view_to_year_month_interval(array, cast_options)
+            }
+            Interval(IntervalUnit::DayTime) => cast_view_to_day_time_interval(array, cast_options),
+            Interval(IntervalUnit::MonthDayNano) => {
+                cast_view_to_month_day_nano_interval(array, cast_options)
+            }
+            _ => Err(ArrowError::CastError(format!(
+                "Casting from {from_type:?} to {to_type:?} not supported",
+            ))),
+        },
         (LargeUtf8, _) => match to_type {
             UInt8 => parse_string::<UInt8Type, i64>(array, cast_options),
             UInt16 => parse_string::<UInt16Type, i64>(array, cast_options),
@@ -1365,8 +1413,6 @@ pub fn cast_with_options(
                 "Casting from {from_type:?} to {to_type:?} not supported",
             ))),
         },
-        (Utf8View, Utf8) => cast_view_to_byte::<StringViewType, GenericStringType<i32>>(array),
-        (Utf8View, LargeUtf8) => cast_view_to_byte::<StringViewType, GenericStringType<i64>>(array),
         (BinaryView, Binary) => cast_view_to_byte::<BinaryViewType, GenericBinaryType<i32>>(array),
         (BinaryView, LargeBinary) => {
             cast_view_to_byte::<BinaryViewType, GenericBinaryType<i64>>(array)
@@ -3960,6 +4006,11 @@ mod tests {
 
     #[test]
     fn test_cast_string_to_timestamp() {
+        let a0 = Arc::new(StringViewArray::from(vec![
+            Some("2020-09-08T12:00:00.123456789+00:00"),
+            Some("Not a valid date"),
+            None,
+        ])) as ArrayRef;
         let a1 = Arc::new(StringArray::from(vec![
             Some("2020-09-08T12:00:00.123456789+00:00"),
             Some("Not a valid date"),
@@ -3970,7 +4021,7 @@ mod tests {
             Some("Not a valid date"),
             None,
         ])) as ArrayRef;
-        for array in &[a1, a2] {
+        for array in &[a0, a1, a2] {
             for time_unit in &[
                 TimeUnit::Second,
                 TimeUnit::Millisecond,
@@ -4039,6 +4090,11 @@ mod tests {
 
     #[test]
     fn test_cast_string_to_date32() {
+        let a0 = Arc::new(StringViewArray::from(vec![
+            Some("2018-12-25"),
+            Some("Not a valid date"),
+            None,
+        ])) as ArrayRef;
         let a1 = Arc::new(StringArray::from(vec![
             Some("2018-12-25"),
             Some("Not a valid date"),
@@ -4049,7 +4105,7 @@ mod tests {
             Some("Not a valid date"),
             None,
         ])) as ArrayRef;
-        for array in &[a1, a2] {
+        for array in &[a0, a1, a2] {
             let to_type = DataType::Date32;
             let b = cast(array, &to_type).unwrap();
             let c = b.as_primitive::<Date32Type>();
@@ -4071,30 +4127,47 @@ mod tests {
 
     #[test]
     fn test_cast_string_format_yyyymmdd_to_date32() {
-        let a = Arc::new(StringArray::from(vec![
+        let a0 = Arc::new(StringViewArray::from(vec![
+            Some("2020-12-25"),
+            Some("20201117"),
+        ])) as ArrayRef;
+        let a1 = Arc::new(StringArray::from(vec![
+            Some("2020-12-25"),
+            Some("20201117"),
+        ])) as ArrayRef;
+        let a2 = Arc::new(LargeStringArray::from(vec![
             Some("2020-12-25"),
             Some("20201117"),
         ])) as ArrayRef;
 
-        let to_type = DataType::Date32;
-        let options = CastOptions {
-            safe: false,
-            format_options: FormatOptions::default(),
-        };
-        let result = cast_with_options(&a, &to_type, &options).unwrap();
-        let c = result.as_primitive::<Date32Type>();
-        assert_eq!(
-            chrono::NaiveDate::from_ymd_opt(2020, 12, 25),
-            c.value_as_date(0)
-        );
-        assert_eq!(
-            chrono::NaiveDate::from_ymd_opt(2020, 11, 17),
-            c.value_as_date(1)
-        );
+        for array in &[a0, a1, a2] {
+            let to_type = DataType::Date32;
+            let options = CastOptions {
+                safe: false,
+                format_options: FormatOptions::default(),
+            };
+            let result = cast_with_options(&array, &to_type, &options).unwrap();
+            let c = result.as_primitive::<Date32Type>();
+            assert_eq!(
+                chrono::NaiveDate::from_ymd_opt(2020, 12, 25),
+                c.value_as_date(0)
+            );
+            assert_eq!(
+                chrono::NaiveDate::from_ymd_opt(2020, 11, 17),
+                c.value_as_date(1)
+            );
+        }
     }
 
     #[test]
     fn test_cast_string_to_time32second() {
+        let a0 = Arc::new(StringViewArray::from(vec![
+            Some("08:08:35.091323414"),
+            Some("08:08:60.091323414"), // leap second
+            Some("08:08:61.091323414"), // not valid
+            Some("Not a valid time"),
+            None,
+        ])) as ArrayRef;
         let a1 = Arc::new(StringArray::from(vec![
             Some("08:08:35.091323414"),
             Some("08:08:60.091323414"), // leap second
@@ -4109,7 +4182,7 @@ mod tests {
             Some("Not a valid time"),
             None,
         ])) as ArrayRef;
-        for array in &[a1, a2] {
+        for array in &[a0, a1, a2] {
             let to_type = DataType::Time32(TimeUnit::Second);
             let b = cast(array, &to_type).unwrap();
             let c = b.as_primitive::<Time32SecondType>();
@@ -4130,6 +4203,13 @@ mod tests {
 
     #[test]
     fn test_cast_string_to_time32millisecond() {
+        let a0 = Arc::new(StringViewArray::from(vec![
+            Some("08:08:35.091323414"),
+            Some("08:08:60.091323414"), // leap second
+            Some("08:08:61.091323414"), // not valid
+            Some("Not a valid time"),
+            None,
+        ])) as ArrayRef;
         let a1 = Arc::new(StringArray::from(vec![
             Some("08:08:35.091323414"),
             Some("08:08:60.091323414"), // leap second
@@ -4144,7 +4224,7 @@ mod tests {
             Some("Not a valid time"),
             None,
         ])) as ArrayRef;
-        for array in &[a1, a2] {
+        for array in &[a0, a1, a2] {
             let to_type = DataType::Time32(TimeUnit::Millisecond);
             let b = cast(array, &to_type).unwrap();
             let c = b.as_primitive::<Time32MillisecondType>();
@@ -4165,6 +4245,11 @@ mod tests {
 
     #[test]
     fn test_cast_string_to_time64microsecond() {
+        let a0 = Arc::new(StringViewArray::from(vec![
+            Some("08:08:35.091323414"),
+            Some("Not a valid time"),
+            None,
+        ])) as ArrayRef;
         let a1 = Arc::new(StringArray::from(vec![
             Some("08:08:35.091323414"),
             Some("Not a valid time"),
@@ -4175,7 +4260,7 @@ mod tests {
             Some("Not a valid time"),
             None,
         ])) as ArrayRef;
-        for array in &[a1, a2] {
+        for array in &[a0, a1, a2] {
             let to_type = DataType::Time64(TimeUnit::Microsecond);
             let b = cast(array, &to_type).unwrap();
             let c = b.as_primitive::<Time64MicrosecondType>();
@@ -4194,6 +4279,11 @@ mod tests {
 
     #[test]
     fn test_cast_string_to_time64nanosecond() {
+        let a0 = Arc::new(StringViewArray::from(vec![
+            Some("08:08:35.091323414"),
+            Some("Not a valid time"),
+            None,
+        ])) as ArrayRef;
         let a1 = Arc::new(StringArray::from(vec![
             Some("08:08:35.091323414"),
             Some("Not a valid time"),
@@ -4204,7 +4294,7 @@ mod tests {
             Some("Not a valid time"),
             None,
         ])) as ArrayRef;
-        for array in &[a1, a2] {
+        for array in &[a0, a1, a2] {
             let to_type = DataType::Time64(TimeUnit::Nanosecond);
             let b = cast(array, &to_type).unwrap();
             let c = b.as_primitive::<Time64NanosecondType>();
@@ -4223,6 +4313,11 @@ mod tests {
 
     #[test]
     fn test_cast_string_to_date64() {
+        let a0 = Arc::new(StringViewArray::from(vec![
+            Some("2020-09-08T12:00:00"),
+            Some("Not a valid date"),
+            None,
+        ])) as ArrayRef;
         let a1 = Arc::new(StringArray::from(vec![
             Some("2020-09-08T12:00:00"),
             Some("Not a valid date"),
@@ -4233,7 +4328,7 @@ mod tests {
             Some("Not a valid date"),
             None,
         ])) as ArrayRef;
-        for array in &[a1, a2] {
+        for array in &[a0, a1, a2] {
             let to_type = DataType::Date64;
             let b = cast(array, &to_type).unwrap();
             let c = b.as_primitive::<Date64Type>();
@@ -4314,8 +4409,8 @@ mod tests {
             IntervalUnit::YearMonth,
             IntervalYearMonthArray,
             vec![
-                Some("1 years 1 mons 0 days 0 hours 0 mins 0.00 secs"),
-                Some("2 years 7 mons 0 days 0 hours 0 mins 0.00 secs"),
+                Some("1 years 1 mons"),
+                Some("2 years 7 mons"),
                 None,
                 None,
                 None,
@@ -4338,9 +4433,9 @@ mod tests {
             IntervalUnit::DayTime,
             IntervalDayTimeArray,
             vec![
-                Some("0 years 0 mons 390 days 0 hours 0 mins 0.000 secs"),
-                Some("0 years 0 mons 930 days 0 hours 0 mins 0.000 secs"),
-                Some("0 years 0 mons 30 days 0 hours 0 mins 0.000 secs"),
+                Some("390 days"),
+                Some("930 days"),
+                Some("30 days"),
                 None,
                 None,
             ]
@@ -4366,16 +4461,16 @@ mod tests {
             IntervalUnit::MonthDayNano,
             IntervalMonthDayNanoArray,
             vec![
-                Some("0 years 13 mons 1 days 0 hours 0 mins 0.000000000 secs"),
+                Some("13 mons 1 days"),
                 None,
-                Some("0 years 31 mons 35 days 0 hours 0 mins 0.001400000 secs"),
-                Some("0 years 0 mons 3 days 0 hours 0 mins 0.000000000 secs"),
-                Some("0 years 0 mons 0 days 0 hours 0 mins 8.000000000 secs"),
+                Some("31 mons 35 days 0.001400000 secs"),
+                Some("3 days"),
+                Some("8.000000000 secs"),
                 None,
-                Some("0 years 0 mons 1 days 0 hours 0 mins 29.800000000 secs"),
-                Some("0 years 3 mons 0 days 0 hours 0 mins 1.000000000 secs"),
-                Some("0 years 0 mons 0 days 0 hours 8 mins 0.000000000 secs"),
-                Some("0 years 63 mons 9 days 19 hours 9 mins 2.222000000 secs"),
+                Some("1 days 29.800000000 secs"),
+                Some("3 mons 1.000000000 secs"),
+                Some("8 mins"),
+                Some("63 mons 9 days 19 hours 9 mins 2.222000000 secs"),
                 None,
             ]
         );
@@ -4436,7 +4531,7 @@ mod tests {
             ))],
             IntervalUnit::DayTime,
             format!(
-                "Compute error: Overflow happened on: {} * 100",
+                "Arithmetic overflow: Overflow happened on: {} * 100",
                 i64::MAX - 2
             )
         );
@@ -4448,7 +4543,10 @@ mod tests {
                 i64::MAX - 2
             ))],
             IntervalUnit::MonthDayNano,
-            format!("Compute error: Overflow happened on: {} * 12", i64::MAX - 2)
+            format!(
+                "Arithmetic overflow: Overflow happened on: {} * 12",
+                i64::MAX - 2
+            )
         );
     }
 
@@ -5223,7 +5321,7 @@ mod tests {
         let typed_dict = string_dict_array.downcast_dict::<StringArray>().unwrap();
 
         let string_view_array = {
-            let mut builder = StringViewBuilder::new().with_block_size(8); // multiple buffers.
+            let mut builder = StringViewBuilder::new().with_fixed_block_size(8); // multiple buffers.
             for v in typed_dict.into_iter() {
                 builder.append_option(v);
             }
@@ -5240,7 +5338,7 @@ mod tests {
         let typed_binary_dict = binary_dict_array.downcast_dict::<BinaryArray>().unwrap();
 
         let binary_view_array = {
-            let mut builder = BinaryViewBuilder::new().with_block_size(8); // multiple buffers.
+            let mut builder = BinaryViewBuilder::new().with_fixed_block_size(8); // multiple buffers.
             for v in typed_binary_dict.into_iter() {
                 builder.append_option(v);
             }
@@ -5283,7 +5381,7 @@ mod tests {
         O: OffsetSizeTrait,
     {
         let view_array = {
-            let mut builder = StringViewBuilder::new().with_block_size(8); // multiple buffers.
+            let mut builder = StringViewBuilder::new().with_fixed_block_size(8); // multiple buffers.
             for s in VIEW_TEST_DATA.iter() {
                 builder.append_option(*s);
             }
@@ -5312,7 +5410,7 @@ mod tests {
         O: OffsetSizeTrait,
     {
         let view_array = {
-            let mut builder = BinaryViewBuilder::new().with_block_size(8); // multiple buffers.
+            let mut builder = BinaryViewBuilder::new().with_fixed_block_size(8); // multiple buffers.
             for s in VIEW_TEST_DATA.iter() {
                 builder.append_option(*s);
             }

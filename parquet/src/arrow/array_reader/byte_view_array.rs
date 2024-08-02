@@ -17,22 +17,24 @@
 
 use crate::arrow::array_reader::{read_records, skip_records, ArrayReader};
 use crate::arrow::buffer::view_buffer::ViewBuffer;
-use crate::arrow::decoder::DictIndexDecoder;
+use crate::arrow::decoder::{DeltaByteArrayDecoder, DictIndexDecoder};
 use crate::arrow::record_reader::GenericRecordReader;
 use crate::arrow::schema::parquet_to_arrow_field;
 use crate::basic::{ConvertedType, Encoding};
 use crate::column::page::PageIterator;
 use crate::column::reader::decoder::ColumnValueDecoder;
+use crate::data_type::Int32Type;
+use crate::encodings::decoding::{Decoder, DeltaBitPackDecoder};
 use crate::errors::{ParquetError, Result};
 use crate::schema::types::ColumnDescPtr;
-use arrow_array::ArrayRef;
+use arrow_array::{builder::make_view, ArrayRef};
+use arrow_buffer::Buffer;
 use arrow_data::ByteView;
 use arrow_schema::DataType as ArrowType;
 use bytes::Bytes;
 use std::any::Any;
 
 /// Returns an [`ArrayReader`] that decodes the provided byte array column to view types.
-#[allow(unused)]
 pub fn make_byte_view_array_reader(
     pages: Box<dyn PageIterator>,
     column_desc: ColumnDescPtr,
@@ -61,7 +63,6 @@ pub fn make_byte_view_array_reader(
 }
 
 /// An [`ArrayReader`] for variable length byte arrays
-#[allow(unused)]
 struct ByteViewArrayReader {
     data_type: ArrowType,
     pages: Box<dyn PageIterator>,
@@ -71,7 +72,6 @@ struct ByteViewArrayReader {
 }
 
 impl ByteViewArrayReader {
-    #[allow(unused)]
     fn new(
         pages: Box<dyn PageIterator>,
         data_type: ArrowType,
@@ -213,6 +213,8 @@ impl ColumnValueDecoder for ByteViewArrayColumnValueDecoder {
 pub enum ByteViewArrayDecoder {
     Plain(ByteViewArrayDecoderPlain),
     Dictionary(ByteViewArrayDecoderDictionary),
+    DeltaLength(ByteViewArrayDecoderDeltaLength),
+    DeltaByteArray(ByteViewArrayDecoderDelta),
 }
 
 impl ByteViewArrayDecoder {
@@ -235,9 +237,12 @@ impl ByteViewArrayDecoder {
                     data, num_levels, num_values,
                 ))
             }
-            Encoding::DELTA_LENGTH_BYTE_ARRAY | Encoding::DELTA_BYTE_ARRAY => {
-                unimplemented!("stay tuned!")
-            }
+            Encoding::DELTA_LENGTH_BYTE_ARRAY => ByteViewArrayDecoder::DeltaLength(
+                ByteViewArrayDecoderDeltaLength::new(data, validate_utf8)?,
+            ),
+            Encoding::DELTA_BYTE_ARRAY => ByteViewArrayDecoder::DeltaByteArray(
+                ByteViewArrayDecoderDelta::new(data, validate_utf8)?,
+            ),
             _ => {
                 return Err(general_err!(
                     "unsupported encoding for byte array: {}",
@@ -263,6 +268,8 @@ impl ByteViewArrayDecoder {
                     .ok_or_else(|| general_err!("dictionary required for dictionary encoding"))?;
                 d.read(out, dict, len)
             }
+            ByteViewArrayDecoder::DeltaLength(d) => d.read(out, len),
+            ByteViewArrayDecoder::DeltaByteArray(d) => d.read(out, len),
         }
     }
 
@@ -275,6 +282,8 @@ impl ByteViewArrayDecoder {
                     .ok_or_else(|| general_err!("dictionary required for dictionary encoding"))?;
                 d.skip(dict, len)
             }
+            ByteViewArrayDecoder::DeltaLength(d) => d.skip(len),
+            ByteViewArrayDecoder::DeltaByteArray(d) => d.skip(len),
         }
     }
 }
@@ -307,13 +316,18 @@ impl ByteViewArrayDecoderPlain {
     }
 
     pub fn read(&mut self, output: &mut ViewBuffer, len: usize) -> Result<usize> {
-        let block_id = output.append_block(self.buf.clone().into());
+        // Here we convert `bytes::Bytes` into `arrow_buffer::Bytes`, which is zero copy
+        // Then we convert `arrow_buffer::Bytes` into `arrow_buffer:Buffer`, which is also zero copy
+        let buf = arrow_buffer::Buffer::from_bytes(self.buf.clone().into());
+        let block_id = output.append_block(buf);
 
         let to_read = len.min(self.max_remaining_values);
 
         let buf = self.buf.as_ref();
         let mut read = 0;
         output.views.reserve(to_read);
+
+        let mut utf8_validation_begin = self.offset;
         while self.offset < self.buf.len() && read != to_read {
             if self.offset + 4 > self.buf.len() {
                 return Err(ParquetError::EOF("eof decoding byte array".into()));
@@ -332,7 +346,38 @@ impl ByteViewArrayDecoderPlain {
             }
 
             if self.validate_utf8 {
-                check_valid_utf8(unsafe { buf.get_unchecked(start_offset..end_offset) })?;
+                // It seems you are trying to understand what's going on here, take a breath and be patient.
+                // Utf-8 validation is a non-trivial task, here are some background facts:
+                // (1) Validating one 2048-byte string is much faster than validating 128 of 16-byte string.
+                //     As shown in https://github.com/apache/arrow-rs/pull/6009#issuecomment-2211174229
+                //     Potentially because the SIMD operations favor longer strings.
+                // (2) Practical strings are short, 99% of strings are smaller than 100 bytes, as shown in paper:
+                //     https://www.vldb.org/pvldb/vol17/p148-zeng.pdf, Figure 5f.
+                // (3) Parquet plain encoding makes utf-8 validation harder,
+                //     because it stores the length of each string right before the string.
+                //     This means naive utf-8 validation will be slow, because the validation need to skip the length bytes.
+                //     I.e., the validation cannot validate the buffer in one pass, but instead, validate strings chunk by chunk.
+                //
+                // Given the above observations, the goal is to do batch validation as much as possible.
+                // The key idea is that if the length is smaller than 128 (99% of the case), then the length bytes are valid utf-8, as reasoned below:
+                // If the length is smaller than 128, its 4-byte encoding are [0, 0, 0, len].
+                // Each of the byte is a valid ASCII character, so they are valid utf-8.
+                // Since they are all smaller than 128, the won't break a utf-8 code point (won't mess with later bytes).
+                //
+                // The implementation keeps a water mark `utf8_validation_begin` to track the beginning of the buffer that is not validated.
+                // If the length is smaller than 128, then we continue to next string.
+                // If the length is larger than 128, then we validate the buffer before the length bytes, and move the water mark to the beginning of next string.
+                if len < 128 {
+                    // fast path, move to next string.
+                    // the len bytes are valid utf8.
+                } else {
+                    // unfortunately, the len bytes may not be valid utf8, we need to wrap up and validate everything before it.
+                    check_valid_utf8(unsafe {
+                        buf.get_unchecked(utf8_validation_begin..self.offset)
+                    })?;
+                    // move the cursor to skip the len bytes.
+                    utf8_validation_begin = start_offset;
+                }
             }
 
             unsafe {
@@ -340,6 +385,11 @@ impl ByteViewArrayDecoderPlain {
             }
             self.offset = end_offset;
             read += 1;
+        }
+
+        // validate the last part of the buffer
+        if self.validate_utf8 {
+            check_valid_utf8(unsafe { buf.get_unchecked(utf8_validation_begin..self.offset) })?;
         }
 
         self.max_remaining_values -= to_read;
@@ -449,6 +499,184 @@ impl ByteViewArrayDecoderDictionary {
     }
 }
 
+/// Decoder from [`Encoding::DELTA_LENGTH_BYTE_ARRAY`] data to [`ViewBuffer`]
+pub struct ByteViewArrayDecoderDeltaLength {
+    lengths: Vec<i32>,
+    data: Bytes,
+    length_offset: usize,
+    data_offset: usize,
+    validate_utf8: bool,
+}
+
+impl ByteViewArrayDecoderDeltaLength {
+    fn new(data: Bytes, validate_utf8: bool) -> Result<Self> {
+        let mut len_decoder = DeltaBitPackDecoder::<Int32Type>::new();
+        len_decoder.set_data(data.clone(), 0)?;
+        let values = len_decoder.values_left();
+
+        let mut lengths = vec![0; values];
+        len_decoder.get(&mut lengths)?;
+
+        let mut total_bytes = 0;
+
+        for l in lengths.iter() {
+            if *l < 0 {
+                return Err(ParquetError::General(
+                    "negative delta length byte array length".to_string(),
+                ));
+            }
+            total_bytes += *l as usize;
+        }
+
+        if total_bytes + len_decoder.get_offset() > data.len() {
+            return Err(ParquetError::General(
+                "Insufficient delta length byte array bytes".to_string(),
+            ));
+        }
+
+        Ok(Self {
+            lengths,
+            data,
+            validate_utf8,
+            length_offset: 0,
+            data_offset: len_decoder.get_offset(),
+        })
+    }
+
+    fn read(&mut self, output: &mut ViewBuffer, len: usize) -> Result<usize> {
+        let to_read = len.min(self.lengths.len() - self.length_offset);
+        output.views.reserve(to_read);
+
+        let src_lengths = &self.lengths[self.length_offset..self.length_offset + to_read];
+
+        // Here we convert `bytes::Bytes` into `arrow_buffer::Bytes`, which is zero copy
+        // Then we convert `arrow_buffer::Bytes` into `arrow_buffer:Buffer`, which is also zero copy
+        let bytes = arrow_buffer::Buffer::from_bytes(self.data.clone().into());
+        let block_id = output.append_block(bytes);
+
+        let mut current_offset = self.data_offset;
+        let initial_offset = current_offset;
+        for length in src_lengths {
+            // # Safety
+            // The length is from the delta length decoder, so it is valid
+            // The start_offset is calculated from the lengths, so it is valid
+            // `start_offset + length` is guaranteed to be within the bounds of `data`, as checked in `new`
+            unsafe { output.append_view_unchecked(block_id, current_offset as u32, *length as u32) }
+
+            current_offset += *length as usize;
+        }
+
+        // Delta length encoding has continuous strings, we can validate utf8 in one go
+        if self.validate_utf8 {
+            check_valid_utf8(&self.data[initial_offset..current_offset])?;
+        }
+
+        self.data_offset = current_offset;
+        self.length_offset += to_read;
+
+        Ok(to_read)
+    }
+
+    fn skip(&mut self, to_skip: usize) -> Result<usize> {
+        let remain_values = self.lengths.len() - self.length_offset;
+        let to_skip = remain_values.min(to_skip);
+
+        let src_lengths = &self.lengths[self.length_offset..self.length_offset + to_skip];
+        let total_bytes: usize = src_lengths.iter().map(|x| *x as usize).sum();
+
+        self.data_offset += total_bytes;
+        self.length_offset += to_skip;
+        Ok(to_skip)
+    }
+}
+
+/// Decoder from [`Encoding::DELTA_BYTE_ARRAY`] to [`ViewBuffer`]
+pub struct ByteViewArrayDecoderDelta {
+    decoder: DeltaByteArrayDecoder,
+    validate_utf8: bool,
+}
+
+impl ByteViewArrayDecoderDelta {
+    fn new(data: Bytes, validate_utf8: bool) -> Result<Self> {
+        Ok(Self {
+            decoder: DeltaByteArrayDecoder::new(data)?,
+            validate_utf8,
+        })
+    }
+
+    // Unlike other encodings, we need to copy the data.
+    //
+    //  DeltaByteArray data is stored using shared prefixes/suffixes,
+    // which results in potentially non-contiguous
+    // strings, while Arrow encodings require contiguous strings
+    //
+    // <https://parquet.apache.org/docs/file-format/data-pages/encodings/#delta-strings-delta_byte_array--7>
+
+    fn read(&mut self, output: &mut ViewBuffer, len: usize) -> Result<usize> {
+        output.views.reserve(len.min(self.decoder.remaining()));
+
+        // array buffer only have long strings
+        let mut array_buffer: Vec<u8> = Vec::with_capacity(4096);
+
+        let buffer_id = output.buffers.len() as u32;
+
+        let read = if !self.validate_utf8 {
+            self.decoder.read(len, |bytes| {
+                let offset = array_buffer.len();
+                let view = make_view(bytes, buffer_id, offset as u32);
+                if bytes.len() > 12 {
+                    // only copy the data to buffer if the string can not be inlined.
+                    array_buffer.extend_from_slice(bytes);
+                }
+
+                // # Safety
+                // The buffer_id is the last buffer in the output buffers
+                // The offset is calculated from the buffer, so it is valid
+                unsafe {
+                    output.append_raw_view_unchecked(&view);
+                }
+                Ok(())
+            })?
+        } else {
+            // utf8 validation buffer has only short strings. These short
+            // strings are inlined into the views but we copy them into a
+            // contiguous buffer to accelerate validation.®
+            let mut utf8_validation_buffer = Vec::with_capacity(4096);
+
+            let v = self.decoder.read(len, |bytes| {
+                let offset = array_buffer.len();
+                let view = make_view(bytes, buffer_id, offset as u32);
+                if bytes.len() > 12 {
+                    // only copy the data to buffer if the string can not be inlined.
+                    array_buffer.extend_from_slice(bytes);
+                } else {
+                    utf8_validation_buffer.extend_from_slice(bytes);
+                }
+
+                // # Safety
+                // The buffer_id is the last buffer in the output buffers
+                // The offset is calculated from the buffer, so it is valid
+                // Utf-8 validation is done later
+                unsafe {
+                    output.append_raw_view_unchecked(&view);
+                }
+                Ok(())
+            })?;
+            check_valid_utf8(&array_buffer)?;
+            check_valid_utf8(&utf8_validation_buffer)?;
+            v
+        };
+
+        let actual_block_id = output.append_block(Buffer::from_vec(array_buffer));
+        assert_eq!(actual_block_id, buffer_id);
+        Ok(read)
+    }
+
+    fn skip(&mut self, to_skip: usize) -> Result<usize> {
+        self.decoder.skip(to_skip)
+    }
+}
+
 /// Check that `val` is a valid UTF-8 sequence
 pub fn check_valid_utf8(val: &[u8]) -> Result<()> {
     match std::str::from_utf8(val) {
@@ -487,13 +715,6 @@ mod tests {
             .unwrap();
 
         for (encoding, page) in pages {
-            if encoding != Encoding::PLAIN
-                && encoding != Encoding::RLE_DICTIONARY
-                && encoding != Encoding::PLAIN_DICTIONARY
-            {
-                // skip unsupported encodings for now as they are not yet implemented
-                continue;
-            }
             let mut output = ViewBuffer::default();
             decoder.set_data(encoding, page, 4, Some(4)).unwrap();
 

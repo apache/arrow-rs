@@ -134,7 +134,8 @@ impl Block {
 
     #[inline]
     fn to_ne_bytes(self) -> [u8; 32] {
-        unsafe { std::mem::transmute(self) }
+        // SAFETY: [u32; 8] and [u8; 32] have the same size and neither has invalid bit patterns.
+        unsafe { std::mem::transmute(self.0) }
     }
 
     #[inline]

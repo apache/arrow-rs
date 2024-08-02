@@ -90,7 +90,7 @@ pub fn create_month_day_nano_array_with_seed(
         .collect()
 }
 
-/// Creates an random (but fixed-seeded) array of a given size and null density
+/// Creates a random (but fixed-seeded) array of a given size and null density
 pub fn create_boolean_array(size: usize, null_density: f32, true_density: f32) -> BooleanArray
 where
     Standard: Distribution<bool>,
@@ -108,12 +108,35 @@ where
         .collect()
 }
 
-/// Creates an random (but fixed-seeded) array of a given size and null density
+/// Creates a random (but fixed-seeded) string array of a given size and null density, strings have a random length
+/// between 0 and 400 alphanumeric characters. `0..400` is chosen to cover a wide range of common string lengths,
+/// which have a dramatic impact on performance of some queries, e.g. LIKE/ILIKE/regex.
 pub fn create_string_array<Offset: OffsetSizeTrait>(
     size: usize,
     null_density: f32,
 ) -> GenericStringArray<Offset> {
-    create_string_array_with_len(size, null_density, 4)
+    create_string_array_with_max_len(size, null_density, 400)
+}
+
+/// Creates a random (but fixed-seeded) array of rand size with a given max size, null density and length
+fn create_string_array_with_max_len<Offset: OffsetSizeTrait>(
+    size: usize,
+    null_density: f32,
+    max_str_len: usize,
+) -> GenericStringArray<Offset> {
+    let rng = &mut seedable_rng();
+    (0..size)
+        .map(|_| {
+            if rng.gen::<f32>() < null_density {
+                None
+            } else {
+                let str_len = rng.gen_range(0..max_str_len);
+                let value = rng.sample_iter(&Alphanumeric).take(str_len).collect();
+                let value = String::from_utf8(value).unwrap();
+                Some(value)
+            }
+        })
+        .collect()
 }
 
 /// Creates a random (but fixed-seeded) array of a given size, null density and length

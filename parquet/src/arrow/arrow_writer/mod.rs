@@ -43,7 +43,7 @@ use crate::column::writer::{
 };
 use crate::data_type::{ByteArray, FixedLenByteArray};
 use crate::errors::{ParquetError, Result};
-use crate::file::metadata::{ColumnChunkMetaData, KeyValue, RowGroupMetaDataPtr};
+use crate::file::metadata::{ColumnChunkMetaData, KeyValue, RowGroupMetaData};
 use crate::file::properties::{WriterProperties, WriterPropertiesPtr};
 use crate::file::reader::{ChunkReader, Length};
 use crate::file::writer::{SerializedFileWriter, SerializedRowGroupWriter};
@@ -204,7 +204,7 @@ impl<W: Write + Send> ArrowWriter<W> {
     }
 
     /// Returns metadata for any flushed row groups
-    pub fn flushed_row_groups(&self) -> &[RowGroupMetaDataPtr] {
+    pub fn flushed_row_groups(&self) -> &[RowGroupMetaData] {
         self.writer.flushed_row_groups()
     }
 
@@ -1096,8 +1096,10 @@ mod tests {
     use crate::data_type::AsBytes;
     use crate::file::metadata::ParquetMetaData;
     use crate::file::page_index::index::Index;
-    use crate::file::page_index::index_reader::read_pages_locations;
-    use crate::file::properties::{EnabledStatistics, ReaderProperties, WriterVersion};
+    use crate::file::page_index::index_reader::read_offset_indexes;
+    use crate::file::properties::{
+        BloomFilterPosition, EnabledStatistics, ReaderProperties, WriterVersion,
+    };
     use crate::file::serialized_reader::ReadOptionsBuilder;
     use crate::file::{
         reader::{FileReader, SerializedFileReader},
@@ -1206,7 +1208,7 @@ mod tests {
 
         // Construct a buffer for value offsets, for the nested array:
         //  [[1], [2, 3], null, [4, 5, 6], [7, 8, 9, 10]]
-        let a_value_offsets = arrow::buffer::Buffer::from(&[0, 1, 3, 3, 6, 10].to_byte_slice());
+        let a_value_offsets = arrow::buffer::Buffer::from([0, 1, 3, 3, 6, 10].to_byte_slice());
 
         // Construct a list array from the above two
         let a_list_data = ArrayData::builder(DataType::List(Arc::new(Field::new(
@@ -1217,7 +1219,7 @@ mod tests {
         .len(5)
         .add_buffer(a_value_offsets)
         .add_child_data(a_values.into_data())
-        .null_bit_buffer(Some(Buffer::from(vec![0b00011011])))
+        .null_bit_buffer(Some(Buffer::from([0b00011011])))
         .build()
         .unwrap();
         let a = ListArray::from(a_list_data);
@@ -1246,7 +1248,7 @@ mod tests {
 
         // Construct a buffer for value offsets, for the nested array:
         //  [[1], [2, 3], [], [4, 5, 6], [7, 8, 9, 10]]
-        let a_value_offsets = arrow::buffer::Buffer::from(&[0, 1, 3, 3, 6, 10].to_byte_slice());
+        let a_value_offsets = arrow::buffer::Buffer::from([0, 1, 3, 3, 6, 10].to_byte_slice());
 
         // Construct a list array from the above two
         let a_list_data = ArrayData::builder(DataType::List(Arc::new(Field::new(
@@ -1405,7 +1407,7 @@ mod tests {
 
         // Construct a buffer for value offsets, for the nested array:
         //  [[1], [2, 3], [], [4, 5, 6], [7, 8, 9, 10]]
-        let g_value_offsets = arrow::buffer::Buffer::from(&[0, 1, 3, 3, 6, 10].to_byte_slice());
+        let g_value_offsets = arrow::buffer::Buffer::from([0, 1, 3, 3, 6, 10].to_byte_slice());
 
         // Construct a list array from the above two
         let g_list_data = ArrayData::builder(struct_field_g.data_type().clone())
@@ -1420,7 +1422,7 @@ mod tests {
             .len(5)
             .add_buffer(g_value_offsets)
             .add_child_data(g_value.to_data())
-            .null_bit_buffer(Some(Buffer::from(vec![0b00011011])))
+            .null_bit_buffer(Some(Buffer::from([0b00011011])))
             .build()
             .unwrap();
         let h = ListArray::from(h_list_data);
@@ -1525,14 +1527,14 @@ mod tests {
         let c = Int32Array::from(vec![Some(1), None, Some(3), None, None, Some(6)]);
         let b_data = ArrayDataBuilder::new(field_b.data_type().clone())
             .len(6)
-            .null_bit_buffer(Some(Buffer::from(vec![0b00100111])))
+            .null_bit_buffer(Some(Buffer::from([0b00100111])))
             .add_child_data(c.into_data())
             .build()
             .unwrap();
         let b = StructArray::from(b_data);
         let a_data = ArrayDataBuilder::new(field_a.data_type().clone())
             .len(6)
-            .null_bit_buffer(Some(Buffer::from(vec![0b00101111])))
+            .null_bit_buffer(Some(Buffer::from([0b00101111])))
             .add_child_data(b.into_data())
             .build()
             .unwrap();
@@ -1595,7 +1597,7 @@ mod tests {
         let c = Int32Array::from(vec![1, 2, 3, 4, 5, 6]);
         let b_data = ArrayDataBuilder::new(type_b)
             .len(6)
-            .null_bit_buffer(Some(Buffer::from(vec![0b00100111])))
+            .null_bit_buffer(Some(Buffer::from([0b00100111])))
             .add_child_data(c.into_data())
             .build()
             .unwrap();
@@ -1667,16 +1669,16 @@ mod tests {
             "Expected a dictionary page"
         );
 
-        let page_locations = read_pages_locations(&file, column).unwrap();
+        let offset_indexes = read_offset_indexes(&file, column).unwrap();
 
-        let offset_index = page_locations[0].clone();
+        let page_locations = offset_indexes[0].page_locations.clone();
 
         // We should fallback to PLAIN encoding after the first row and our max page size is 1 bytes
         // so we expect one dictionary encoded page and then a page per row thereafter.
         assert_eq!(
-            offset_index.len(),
+            page_locations.len(),
             10,
-            "Expected 9 pages but got {offset_index:#?}"
+            "Expected 9 pages but got {page_locations:#?}"
         );
     }
 
@@ -1745,6 +1747,7 @@ mod tests {
         values: ArrayRef,
         schema: SchemaRef,
         bloom_filter: bool,
+        bloom_filter_position: BloomFilterPosition,
     }
 
     impl RoundTripOptions {
@@ -1755,6 +1758,7 @@ mod tests {
                 values,
                 schema: Arc::new(schema),
                 bloom_filter: false,
+                bloom_filter_position: BloomFilterPosition::AfterRowGroup,
             }
         }
     }
@@ -1774,6 +1778,7 @@ mod tests {
             values,
             schema,
             bloom_filter,
+            bloom_filter_position,
         } = options;
 
         let encodings = match values.data_type() {
@@ -1814,6 +1819,7 @@ mod tests {
                             .set_dictionary_page_size_limit(dictionary_size.max(1))
                             .set_encoding(*encoding)
                             .set_bloom_filter_enabled(bloom_filter)
+                            .set_bloom_filter_position(bloom_filter_position)
                             .build();
 
                         files.push(roundtrip_opts(&expected_batch, props))
@@ -2172,6 +2178,22 @@ mod tests {
     }
 
     #[test]
+    fn i32_column_bloom_filter_at_end() {
+        let array = Arc::new(Int32Array::from_iter(0..SMALL_SIZE as i32));
+        let mut options = RoundTripOptions::new(array, false);
+        options.bloom_filter = true;
+        options.bloom_filter_position = BloomFilterPosition::End;
+
+        let files = one_column_roundtrip_with_options(options);
+        check_bloom_filter(
+            files,
+            "col".to_string(),
+            (0..SMALL_SIZE as i32).collect(),
+            (SMALL_SIZE as i32 + 1..SMALL_SIZE as i32 + 10).collect(),
+        );
+    }
+
+    #[test]
     fn i32_column_bloom_filter() {
         let array = Arc::new(Int32Array::from_iter(0..SMALL_SIZE as i32));
         let mut options = RoundTripOptions::new(array, false);
@@ -2280,7 +2302,7 @@ mod tests {
 
         // Build [[], null, [null, null]]
         let a_values = NullArray::new(2);
-        let a_value_offsets = arrow::buffer::Buffer::from(&[0, 0, 0, 2].to_byte_slice());
+        let a_value_offsets = arrow::buffer::Buffer::from([0, 0, 0, 2].to_byte_slice());
         let a_list_data = ArrayData::builder(DataType::List(Arc::new(Field::new(
             "item",
             DataType::Null,
@@ -2288,7 +2310,7 @@ mod tests {
         ))))
         .len(3)
         .add_buffer(a_value_offsets)
-        .null_bit_buffer(Some(Buffer::from(vec![0b00000101])))
+        .null_bit_buffer(Some(Buffer::from([0b00000101])))
         .add_child_data(a_values.into_data())
         .build()
         .unwrap();
@@ -2310,7 +2332,7 @@ mod tests {
     #[test]
     fn list_single_column() {
         let a_values = Int32Array::from(vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
-        let a_value_offsets = arrow::buffer::Buffer::from(&[0, 1, 3, 3, 6, 10].to_byte_slice());
+        let a_value_offsets = arrow::buffer::Buffer::from([0, 1, 3, 3, 6, 10].to_byte_slice());
         let a_list_data = ArrayData::builder(DataType::List(Arc::new(Field::new(
             "item",
             DataType::Int32,
@@ -2318,7 +2340,7 @@ mod tests {
         ))))
         .len(5)
         .add_buffer(a_value_offsets)
-        .null_bit_buffer(Some(Buffer::from(vec![0b00011011])))
+        .null_bit_buffer(Some(Buffer::from([0b00011011])))
         .add_child_data(a_values.into_data())
         .build()
         .unwrap();
@@ -2334,7 +2356,7 @@ mod tests {
     #[test]
     fn large_list_single_column() {
         let a_values = Int32Array::from(vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
-        let a_value_offsets = arrow::buffer::Buffer::from(&[0i64, 1, 3, 3, 6, 10].to_byte_slice());
+        let a_value_offsets = arrow::buffer::Buffer::from([0i64, 1, 3, 3, 6, 10].to_byte_slice());
         let a_list_data = ArrayData::builder(DataType::LargeList(Arc::new(Field::new(
             "large_item",
             DataType::Int32,
@@ -2343,7 +2365,7 @@ mod tests {
         .len(5)
         .add_buffer(a_value_offsets)
         .add_child_data(a_values.into_data())
-        .null_bit_buffer(Some(Buffer::from(vec![0b00011011])))
+        .null_bit_buffer(Some(Buffer::from([0b00011011])))
         .build()
         .unwrap();
 
@@ -2998,8 +3020,8 @@ mod tests {
 
         assert_eq!(index.len(), 1);
         assert_eq!(index[0].len(), 2); // 2 columns
-        assert_eq!(index[0][0].len(), 1); // 1 page
-        assert_eq!(index[0][1].len(), 1); // 1 page
+        assert_eq!(index[0][0].page_locations().len(), 1); // 1 page
+        assert_eq!(index[0][1].page_locations().len(), 1); // 1 page
     }
 
     #[test]

@@ -579,13 +579,13 @@ impl<'a, T: ByteViewType> ArrayOrd for &'a GenericByteViewArray<T> {
             return false;
         }
 
-        unsafe { compare_byte_view_unchecked(l.0, l.1, r.0, r.1).is_eq() }
+        unsafe { GenericByteViewArray::compare_unchecked(l.0, l.1, r.0, r.1).is_eq() }
     }
 
     fn is_lt(l: Self::Item, r: Self::Item) -> bool {
         // # Safety
         // The index is within bounds as it is checked in value()
-        unsafe { compare_byte_view_unchecked(l.0, l.1, r.0, r.1).is_lt() }
+        unsafe { GenericByteViewArray::compare_unchecked(l.0, l.1, r.0, r.1).is_lt() }
     }
 
     fn len(&self) -> usize {
@@ -626,7 +626,7 @@ pub fn compare_byte_view<T: ByteViewType>(
 ) -> std::cmp::Ordering {
     assert!(left_idx < left.len());
     assert!(right_idx < right.len());
-    unsafe { compare_byte_view_unchecked(left, left_idx, right, right_idx) }
+    unsafe { GenericByteViewArray::compare_unchecked(left, left_idx, right, right_idx) }
 }
 
 /// Comparing two [`GenericByteViewArray`] at index `left_idx` and `right_idx`
@@ -656,6 +656,7 @@ pub fn compare_byte_view<T: ByteViewType>(
 ///
 /// # Safety
 /// The left/right_idx must within range of each array
+#[deprecated(note = "Use `GenericByteViewArray::compare_unchecked` instead")]
 pub unsafe fn compare_byte_view_unchecked<T: ByteViewType>(
     left: &GenericByteViewArray<T>,
     left_idx: usize,

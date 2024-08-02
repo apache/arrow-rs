@@ -15,7 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Parquet metadata structures
+//! Parquet metadata API
+//!
+//! Most users should use these structures to interact with Parquet metadata.
+//! The [crate::format] module contains lower level structures generated from the
+//! Parquet thrift definition.
 //!
 //! * [`ParquetMetaData`]: Top level metadata container, read from the Parquet
 //!   file footer.
@@ -36,7 +40,7 @@ use std::sync::Arc;
 
 use crate::format::{
     BoundaryOrder, ColumnChunk, ColumnIndex, ColumnMetaData, OffsetIndex, PageLocation, RowGroup,
-    SortingColumn,
+    SizeStatistics, SortingColumn,
 };
 
 use crate::basic::{ColumnOrder, Compression, Encoding, Type};
@@ -44,32 +48,41 @@ use crate::errors::{ParquetError, Result};
 pub(crate) use crate::file::metadata::memory::HeapSize;
 use crate::file::page_encoding_stats::{self, PageEncodingStats};
 use crate::file::page_index::index::Index;
+use crate::file::page_index::offset_index::OffsetIndexMetaData;
 use crate::file::statistics::{self, Statistics};
 use crate::schema::types::{
     ColumnDescPtr, ColumnDescriptor, ColumnPath, SchemaDescPtr, SchemaDescriptor,
     Type as SchemaType,
 };
 
-/// [`Index`] for each row group of each column.
+/// Page level statistics for each column chunk of each row group.
+///
+/// This structure is an in-memory representation of multiple [`ColumnIndex`]
+/// structures in a parquet file footer, as described in the Parquet [PageIndex
+/// documentation]. Each [`Index`] holds statistics about all the pages in a
+/// particular column chunk.
 ///
 /// `column_index[row_group_number][column_number]` holds the
 /// [`Index`] corresponding to column `column_number` of row group
 /// `row_group_number`.
 ///
-/// For example `column_index[2][3]` holds the [`Index`] for the forth
+/// For example `column_index[2][3]` holds the [`Index`] for the fourth
 /// column in the third row group of the parquet file.
+///
+/// [PageIndex documentation]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
 pub type ParquetColumnIndex = Vec<Vec<Index>>;
 
-/// [`PageLocation`] for each data page of each row group of each column.
+/// [`OffsetIndexMetaData`] for each data page of each row group of each column
 ///
-/// `offset_index[row_group_number][column_number][page_number]` holds
-/// the [`PageLocation`] corresponding to page `page_number` of column
+/// This structure is the parsed representation of the [`OffsetIndex`] from the
+/// Parquet file footer, as described in the Parquet [PageIndex documentation].
+///
+/// `offset_index[row_group_number][column_number]` holds
+/// the [`OffsetIndexMetaData`] corresponding to column
 /// `column_number`of row group `row_group_number`.
 ///
-/// For example `offset_index[2][3][4]` holds the [`PageLocation`] for
-/// the fifth page of the forth column in the third row group of the
-/// parquet file.
-pub type ParquetOffsetIndex = Vec<Vec<Vec<PageLocation>>>;
+/// [PageIndex documentation]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
+pub type ParquetOffsetIndex = Vec<Vec<OffsetIndexMetaData>>;
 
 /// Parsed metadata for a single Parquet file
 ///
@@ -86,7 +99,7 @@ pub type ParquetOffsetIndex = Vec<Vec<Vec<PageLocation>>>;
 ///
 /// [`parquet.thrift`]: https://github.com/apache/parquet-format/blob/master/src/main/thrift/parquet.thrift
 /// [`parse_metadata`]: crate::file::footer::parse_metadata
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ParquetMetaData {
     /// File level metadata
     file_metadata: FileMetaData,
@@ -94,7 +107,7 @@ pub struct ParquetMetaData {
     row_groups: Vec<RowGroupMetaData>,
     /// Page level index for each page in each column chunk
     column_index: Option<ParquetColumnIndex>,
-    /// Offset index for all each page in each column chunk
+    /// Offset index for each page in each column chunk
     offset_index: Option<ParquetOffsetIndex>,
 }
 
@@ -186,11 +199,11 @@ impl ParquetMetaData {
     /// 1. Includes size of self
     ///
     /// 2. Includes heap memory for sub fields such as [`FileMetaData`] and
-    /// [`RowGroupMetaData`].
+    ///    [`RowGroupMetaData`].
     ///
     /// 3. Includes memory from shared pointers (e.g. [`SchemaDescPtr`]). This
-    /// means `memory_size` will over estimate the memory size if such pointers
-    /// are shared.
+    ///    means `memory_size` will over estimate the memory size if such pointers
+    ///    are shared.
     ///
     /// 4. Does not include any allocator overheads
     pub fn memory_size(&self) -> usize {
@@ -222,7 +235,7 @@ pub type FileMetaDataPtr = Arc<FileMetaData>;
 /// File level metadata for a Parquet file.
 ///
 /// Includes the version of the file, metadata, number of rows, schema, and column orders
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct FileMetaData {
     version: i32,
     num_rows: i64,
@@ -356,6 +369,11 @@ impl RowGroupMetaData {
     /// Returns slice of column chunk metadata.
     pub fn columns(&self) -> &[ColumnChunkMetaData] {
         &self.columns
+    }
+
+    /// Returns mutable slice of column chunk metadata.
+    pub fn columns_mut(&mut self) -> &mut [ColumnChunkMetaData] {
+        &mut self.columns
     }
 
     /// Number of rows in this row group.
@@ -538,6 +556,115 @@ pub struct ColumnChunkMetaData {
     offset_index_length: Option<i32>,
     column_index_offset: Option<i64>,
     column_index_length: Option<i32>,
+    unencoded_byte_array_data_bytes: Option<i64>,
+    repetition_level_histogram: Option<LevelHistogram>,
+    definition_level_histogram: Option<LevelHistogram>,
+}
+
+/// Histograms for repetition and definition levels.
+///
+/// Each histogram is a vector of length `max_level + 1`. The value at index `i` is the number of
+/// values at level `i`.
+///
+/// For example, `vec[0]` is the number of rows with level 0, `vec[1]` is the
+/// number of rows with level 1, and so on.
+///
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
+pub struct LevelHistogram {
+    inner: Vec<i64>,
+}
+
+impl LevelHistogram {
+    /// Creates a new level histogram data.
+    ///
+    /// Length will be `max_level + 1`.
+    ///
+    /// Returns `None` when `max_level == 0` (because histograms are not necessary in this case)
+    pub fn try_new(max_level: i16) -> Option<Self> {
+        if max_level > 0 {
+            Some(Self {
+                inner: vec![0; max_level as usize + 1],
+            })
+        } else {
+            None
+        }
+    }
+    /// Returns a reference to the the histogram's values.
+    pub fn values(&self) -> &[i64] {
+        &self.inner
+    }
+
+    /// Return the inner vector, consuming self
+    pub fn into_inner(self) -> Vec<i64> {
+        self.inner
+    }
+
+    /// Returns the histogram value at the given index.
+    ///
+    /// The value of `i` is the number of values with level `i`. For example,
+    /// `get(1)` returns the number of values with level 1.
+    ///
+    /// Returns `None` if the index is out of bounds.
+    pub fn get(&self, index: usize) -> Option<i64> {
+        self.inner.get(index).copied()
+    }
+
+    /// Adds the values from the other histogram to this histogram
+    ///
+    /// # Panics
+    /// If the histograms have different lengths
+    pub fn add(&mut self, other: &Self) {
+        assert_eq!(self.len(), other.len());
+        for (dst, src) in self.inner.iter_mut().zip(other.inner.iter()) {
+            *dst += src;
+        }
+    }
+
+    /// return the length of the histogram
+    pub fn len(&self) -> usize {
+        self.inner.len()
+    }
+
+    /// returns if the histogram is empty
+    pub fn is_empty(&self) -> bool {
+        self.inner.is_empty()
+    }
+
+    /// Sets the values of all histogram levels to 0.
+    pub fn reset(&mut self) {
+        for value in self.inner.iter_mut() {
+            *value = 0;
+        }
+    }
+
+    /// Updates histogram values using provided repetition levels
+    ///
+    /// # Panics
+    /// if any of the levels is greater than the length of the histogram (
+    /// the argument supplied to [`Self::try_new`])
+    pub fn update_from_levels(&mut self, levels: &[i16]) {
+        for &level in levels {
+            self.inner[level as usize] += 1;
+        }
+    }
+}
+
+impl From<Vec<i64>> for LevelHistogram {
+    fn from(inner: Vec<i64>) -> Self {
+        Self { inner }
+    }
+}
+
+impl From<LevelHistogram> for Vec<i64> {
+    fn from(value: LevelHistogram) -> Self {
+        value.into_inner()
+    }
+}
+
+impl HeapSize for LevelHistogram {
+    fn heap_size(&self) -> usize {
+        self.inner.heap_size()
+    }
 }
 
 /// Represents common operations for a column chunk.
@@ -690,6 +817,32 @@ impl ColumnChunkMetaData {
         Some(offset..(offset + length))
     }
 
+    /// Returns the number of bytes of variable length data after decoding.
+    ///
+    /// Only set for BYTE_ARRAY columns. This field may not be set by older
+    /// writers.
+    pub fn unencoded_byte_array_data_bytes(&self) -> Option<i64> {
+        self.unencoded_byte_array_data_bytes
+    }
+
+    /// Returns the repetition level histogram.
+    ///
+    /// The returned value `vec[i]` is how many values are at repetition level `i`. For example,
+    /// `vec[0]` indicates how many rows the page contains.
+    /// This field may not be set by older writers.
+    pub fn repetition_level_histogram(&self) -> Option<&LevelHistogram> {
+        self.repetition_level_histogram.as_ref()
+    }
+
+    /// Returns the definition level histogram.
+    ///
+    /// The returned value `vec[i]` is how many values are at definition level `i`. For example,
+    /// `vec[max_definition_level]` indicates how many non-null values are present in the page.
+    /// This field may not be set by older writers.
+    pub fn definition_level_histogram(&self) -> Option<&LevelHistogram> {
+        self.definition_level_histogram.as_ref()
+    }
+
     /// Method to convert from Thrift.
     pub fn from_thrift(column_descr: ColumnDescPtr, cc: ColumnChunk) -> Result<Self> {
         if cc.meta_data.is_none() {
@@ -727,6 +880,22 @@ impl ColumnChunkMetaData {
         let offset_index_length = cc.offset_index_length;
         let column_index_offset = cc.column_index_offset;
         let column_index_length = cc.column_index_length;
+        let (
+            unencoded_byte_array_data_bytes,
+            repetition_level_histogram,
+            definition_level_histogram,
+        ) = if let Some(size_stats) = col_metadata.size_statistics {
+            (
+                size_stats.unencoded_byte_array_data_bytes,
+                size_stats.repetition_level_histogram,
+                size_stats.definition_level_histogram,
+            )
+        } else {
+            (None, None, None)
+        };
+
+        let repetition_level_histogram = repetition_level_histogram.map(LevelHistogram::from);
+        let definition_level_histogram = definition_level_histogram.map(LevelHistogram::from);
 
         let result = ColumnChunkMetaData {
             column_descr,
@@ -748,6 +917,9 @@ impl ColumnChunkMetaData {
             offset_index_length,
             column_index_offset,
             column_index_length,
+            unencoded_byte_array_data_bytes,
+            repetition_level_histogram,
+            definition_level_histogram,
         };
         Ok(result)
     }
@@ -771,6 +943,29 @@ impl ColumnChunkMetaData {
 
     /// Method to convert to Thrift `ColumnMetaData`
     pub fn to_column_metadata_thrift(&self) -> ColumnMetaData {
+        let size_statistics = if self.unencoded_byte_array_data_bytes.is_some()
+            || self.repetition_level_histogram.is_some()
+            || self.definition_level_histogram.is_some()
+        {
+            let repetition_level_histogram = self
+                .repetition_level_histogram
+                .as_ref()
+                .map(|hist| hist.clone().into_inner());
+
+            let definition_level_histogram = self
+                .definition_level_histogram
+                .as_ref()
+                .map(|hist| hist.clone().into_inner());
+
+            Some(SizeStatistics {
+                unencoded_byte_array_data_bytes: self.unencoded_byte_array_data_bytes,
+                repetition_level_histogram,
+                definition_level_histogram,
+            })
+        } else {
+            None
+        };
+
         ColumnMetaData {
             type_: self.column_type().into(),
             encodings: self.encodings().iter().map(|&v| v.into()).collect(),
@@ -790,6 +985,7 @@ impl ColumnChunkMetaData {
                 .map(|vec| vec.iter().map(page_encoding_stats::to_thrift).collect()),
             bloom_filter_offset: self.bloom_filter_offset,
             bloom_filter_length: self.bloom_filter_length,
+            size_statistics,
         }
     }
 
@@ -825,6 +1021,9 @@ impl ColumnChunkMetaDataBuilder {
             offset_index_length: None,
             column_index_offset: None,
             column_index_length: None,
+            unencoded_byte_array_data_bytes: None,
+            repetition_level_histogram: None,
+            definition_level_histogram: None,
         })
     }
 
@@ -936,20 +1135,50 @@ impl ColumnChunkMetaDataBuilder {
         self
     }
 
+    /// Sets optional length of variable length data in bytes.
+    pub fn set_unencoded_byte_array_data_bytes(mut self, value: Option<i64>) -> Self {
+        self.0.unencoded_byte_array_data_bytes = value;
+        self
+    }
+
+    /// Sets optional repetition level histogram
+    pub fn set_repetition_level_histogram(mut self, value: Option<LevelHistogram>) -> Self {
+        self.0.repetition_level_histogram = value;
+        self
+    }
+
+    /// Sets optional repetition level histogram
+    pub fn set_definition_level_histogram(mut self, value: Option<LevelHistogram>) -> Self {
+        self.0.definition_level_histogram = value;
+        self
+    }
+
     /// Builds column chunk metadata.
     pub fn build(self) -> Result<ColumnChunkMetaData> {
         Ok(self.0)
     }
 }
 
-/// Builder for column index
+/// Builder for Parquet [`ColumnIndex`], part of the Parquet [PageIndex]
+///
+/// [PageIndex]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
 pub struct ColumnIndexBuilder {
     null_pages: Vec<bool>,
     min_values: Vec<Vec<u8>>,
     max_values: Vec<Vec<u8>>,
     null_counts: Vec<i64>,
     boundary_order: BoundaryOrder,
-    // If one page can't get build index, need to ignore all index in this column
+    /// contains the concatenation of the histograms of all pages
+    repetition_level_histograms: Option<Vec<i64>>,
+    /// contains the concatenation of the histograms of all pages
+    definition_level_histograms: Option<Vec<i64>>,
+    /// Is the information in the builder valid?
+    ///
+    /// Set to `false` if any entry in the page doesn't have statistics for
+    /// some reason, so statistics for that page won't be written to the file.
+    /// This might happen if the page is entirely null, or
+    /// is a floating point column without any non-nan values
+    /// e.g. <https://github.com/apache/parquet-format/pull/196>
     valid: bool,
 }
 
@@ -967,10 +1196,13 @@ impl ColumnIndexBuilder {
             max_values: Vec::new(),
             null_counts: Vec::new(),
             boundary_order: BoundaryOrder::UNORDERED,
+            repetition_level_histograms: None,
+            definition_level_histograms: None,
             valid: true,
         }
     }
 
+    /// Append statistics for the next page
     pub fn append(
         &mut self,
         null_page: bool,
@@ -984,19 +1216,45 @@ impl ColumnIndexBuilder {
         self.null_counts.push(null_count);
     }
 
+    /// Append the given page-level histograms to the [`ColumnIndex`] histograms.
+    /// Does nothing if the `ColumnIndexBuilder` is not in the `valid` state.
+    pub fn append_histograms(
+        &mut self,
+        repetition_level_histogram: &Option<LevelHistogram>,
+        definition_level_histogram: &Option<LevelHistogram>,
+    ) {
+        if !self.valid {
+            return;
+        }
+        if let Some(ref rep_lvl_hist) = repetition_level_histogram {
+            let hist = self.repetition_level_histograms.get_or_insert(Vec::new());
+            hist.reserve(rep_lvl_hist.len());
+            hist.extend(rep_lvl_hist.values());
+        }
+        if let Some(ref def_lvl_hist) = definition_level_histogram {
+            let hist = self.definition_level_histograms.get_or_insert(Vec::new());
+            hist.reserve(def_lvl_hist.len());
+            hist.extend(def_lvl_hist.values());
+        }
+    }
+
     pub fn set_boundary_order(&mut self, boundary_order: BoundaryOrder) {
         self.boundary_order = boundary_order;
     }
 
+    /// Mark this column index as invalid
     pub fn to_invalid(&mut self) {
         self.valid = false;
     }
 
+    /// Is the information in the builder valid?
     pub fn valid(&self) -> bool {
         self.valid
     }
 
     /// Build and get the thrift metadata of column index
+    ///
+    /// Note: callers should check [`Self::valid`] before calling this method
     pub fn build_to_thrift(self) -> ColumnIndex {
         ColumnIndex::new(
             self.null_pages,
@@ -1004,15 +1262,20 @@ impl ColumnIndexBuilder {
             self.max_values,
             self.boundary_order,
             self.null_counts,
+            self.repetition_level_histograms,
+            self.definition_level_histograms,
         )
     }
 }
 
-/// Builder for offset index
+/// Builder for offset index, part of the Parquet [PageIndex].
+///
+/// [PageIndex]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
 pub struct OffsetIndexBuilder {
     offset_array: Vec<i64>,
     compressed_page_size_array: Vec<i32>,
     first_row_index_array: Vec<i64>,
+    unencoded_byte_array_data_bytes_array: Option<Vec<i64>>,
     current_first_row_index: i64,
 }
 
@@ -1028,6 +1291,7 @@ impl OffsetIndexBuilder {
             offset_array: Vec::new(),
             compressed_page_size_array: Vec::new(),
             first_row_index_array: Vec::new(),
+            unencoded_byte_array_data_bytes_array: None,
             current_first_row_index: 0,
         }
     }
@@ -1043,6 +1307,17 @@ impl OffsetIndexBuilder {
         self.compressed_page_size_array.push(compressed_page_size);
     }
 
+    pub fn append_unencoded_byte_array_data_bytes(
+        &mut self,
+        unencoded_byte_array_data_bytes: Option<i64>,
+    ) {
+        if let Some(val) = unencoded_byte_array_data_bytes {
+            self.unencoded_byte_array_data_bytes_array
+                .get_or_insert(Vec::new())
+                .push(val);
+        }
+    }
+
     /// Build and get the thrift metadata of offset index
     pub fn build_to_thrift(self) -> OffsetIndex {
         let locations = self
@@ -1052,7 +1327,7 @@ impl OffsetIndexBuilder {
             .zip(self.first_row_index_array.iter())
             .map(|((offset, size), row_index)| PageLocation::new(*offset, *size, *row_index))
             .collect::<Vec<_>>();
-        OffsetIndex::new(locations)
+        OffsetIndex::new(locations, self.unencoded_byte_array_data_bytes_array)
     }
 }
 
@@ -1203,6 +1478,9 @@ mod tests {
             .set_offset_index_length(Some(25))
             .set_column_index_offset(Some(8000))
             .set_column_index_length(Some(25))
+            .set_unencoded_byte_array_data_bytes(Some(2000))
+            .set_repetition_level_histogram(Some(LevelHistogram::from(vec![100, 100])))
+            .set_definition_level_histogram(Some(LevelHistogram::from(vec![0, 200])))
             .build()
             .unwrap();
 
@@ -1260,7 +1538,11 @@ mod tests {
         let columns = schema_descr
             .columns()
             .iter()
-            .map(|column_descr| ColumnChunkMetaData::builder(column_descr.clone()).build())
+            .map(|column_descr| {
+                ColumnChunkMetaData::builder(column_descr.clone())
+                    .set_statistics(Statistics::new::<i32>(None, None, None, 0, false))
+                    .build()
+            })
             .collect::<Result<Vec<_>>>()
             .unwrap();
         let row_group_meta = RowGroupMetaData::builder(schema_descr.clone())
@@ -1286,11 +1568,32 @@ mod tests {
             num_rows,
             created_by,
             key_value_metadata,
-            schema_descr,
+            schema_descr.clone(),
             column_orders,
         );
-        let parquet_meta = ParquetMetaData::new(file_metadata.clone(), row_group_meta.clone());
-        let base_expected_size = 1320;
+
+        // Now, add in Exact Statistics
+        let columns_with_stats = schema_descr
+            .columns()
+            .iter()
+            .map(|column_descr| {
+                ColumnChunkMetaData::builder(column_descr.clone())
+                    .set_statistics(Statistics::new::<i32>(Some(0), Some(100), None, 0, false))
+                    .build()
+            })
+            .collect::<Result<Vec<_>>>()
+            .unwrap();
+
+        let row_group_meta_with_stats = RowGroupMetaData::builder(schema_descr)
+            .set_num_rows(1000)
+            .set_column_metadata(columns_with_stats)
+            .build()
+            .unwrap();
+        let row_group_meta_with_stats = vec![row_group_meta_with_stats];
+
+        let parquet_meta = ParquetMetaData::new(file_metadata.clone(), row_group_meta_with_stats);
+        let base_expected_size = 2280;
+
         assert_eq!(parquet_meta.memory_size(), base_expected_size);
 
         let mut column_index = ColumnIndexBuilder::new();
@@ -1299,17 +1602,25 @@ mod tests {
         let native_index = NativeIndex::<bool>::try_new(column_index).unwrap();
 
         // Now, add in OffsetIndex
+        let mut offset_index = OffsetIndexBuilder::new();
+        offset_index.append_row_count(1);
+        offset_index.append_offset_and_size(2, 3);
+        offset_index.append_unencoded_byte_array_data_bytes(Some(10));
+        offset_index.append_row_count(1);
+        offset_index.append_offset_and_size(2, 3);
+        offset_index.append_unencoded_byte_array_data_bytes(Some(10));
+        let offset_index = offset_index.build_to_thrift();
+
         let parquet_meta = ParquetMetaData::new_with_page_index(
             file_metadata,
             row_group_meta,
             Some(vec![vec![Index::BOOLEAN(native_index)]]),
             Some(vec![vec![
-                vec![PageLocation::new(1, 2, 3)],
-                vec![PageLocation::new(1, 2, 3)],
+                OffsetIndexMetaData::try_new(offset_index).unwrap()
             ]]),
         );
 
-        let bigger_expected_size = 2304;
+        let bigger_expected_size = 2784;
         // more set fields means more memory usage
         assert!(bigger_expected_size > base_expected_size);
         assert_eq!(parquet_meta.memory_size(), bigger_expected_size);

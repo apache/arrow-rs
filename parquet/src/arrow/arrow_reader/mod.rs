@@ -42,6 +42,7 @@ use crate::schema::types::SchemaDescriptor;
 
 mod filter;
 mod selection;
+pub mod statistics;
 
 /// Builder for constructing parquet readers into arrow.
 ///
@@ -352,11 +353,11 @@ impl ArrowReaderOptions {
 /// This structure allows
 ///
 /// 1. Loading metadata for a file once and then using that same metadata to
-/// construct multiple separate readers, for example, to distribute readers
-/// across multiple threads
+///    construct multiple separate readers, for example, to distribute readers
+///    across multiple threads
 ///
 /// 2. Using a cached copy of the [`ParquetMetadata`] rather than reading it
-/// from the file each time a reader is constructed.
+///    from the file each time a reader is constructed.
 ///
 /// [`ParquetMetadata`]: crate::file::metadata::ParquetMetaData
 #[derive(Debug, Clone)]
@@ -393,7 +394,7 @@ impl ArrowReaderMetadata {
             let offset_index = metadata
                 .row_groups()
                 .iter()
-                .map(|rg| index_reader::read_pages_locations(reader, rg.columns()))
+                .map(|rg| index_reader::read_offset_indexes(reader, rg.columns()))
                 .collect::<Result<Vec<_>>>()?;
 
             metadata.set_offset_index(Some(offset_index))
@@ -552,10 +553,10 @@ impl<T: ChunkReader + 'static> ParquetRecordBatchReaderBuilder<T> {
     /// This interface allows:
     ///
     /// 1. Loading metadata once and using it to create multiple builders with
-    /// potentially different settings or run on different threads
+    ///    potentially different settings or run on different threads
     ///
     /// 2. Using a cached copy of the metadata rather than re-reading it from the
-    /// file each time a reader is constructed.
+    ///    file each time a reader is constructed.
     ///
     /// See the docs on [`ArrowReaderMetadata`] for more details
     ///
@@ -688,7 +689,7 @@ impl<T: ChunkReader + 'static> Iterator for ReaderPageIterator<T> {
         // To avoid `i[rg_idx][self.oolumn_idx`] panic, we need to filter out empty `i[rg_idx]`.
         let page_locations = offset_index
             .filter(|i| !i[rg_idx].is_empty())
-            .map(|i| i[rg_idx][self.column_idx].clone());
+            .map(|i| i[rg_idx][self.column_idx].page_locations.clone());
         let total_rows = rg.num_rows() as usize;
         let reader = self.reader.clone();
 
@@ -2425,99 +2426,179 @@ mod tests {
 
     fn test_invalid_utf8_string_array_inner<O: OffsetSizeTrait>() {
         let cases = [
-            (
-                invalid_utf8_first_char::<O>(),
-                "Parquet argument error: Parquet error: encountered non UTF-8 data",
-            ),
-            (
-                invalid_utf8_later_char::<O>(),
-                "Parquet argument error: Parquet error: encountered non UTF-8 data: invalid utf-8 sequence of 1 bytes from index 6",
-            ),
+            invalid_utf8_first_char::<O>(),
+            invalid_utf8_first_char_long_strings::<O>(),
+            invalid_utf8_later_char::<O>(),
+            invalid_utf8_later_char_long_strings::<O>(),
+            invalid_utf8_later_char_really_long_strings::<O>(),
+            invalid_utf8_later_char_really_long_strings2::<O>(),
         ];
-        for (array, expected_error) in cases {
-            // data is not valid utf8 we can not construct a correct StringArray
-            // safely, so purposely create an invalid StringArray
-            let array = unsafe {
-                GenericStringArray::<O>::new_unchecked(
-                    array.offsets().clone(),
-                    array.values().clone(),
-                    array.nulls().cloned(),
-                )
-            };
-            let data_type = array.data_type().clone();
-            let data = write_to_parquet(Arc::new(array));
-            let err = read_from_parquet(data).unwrap_err();
-            assert_eq!(err.to_string(), expected_error, "data type: {data_type:?}")
+        for array in &cases {
+            for encoding in STRING_ENCODINGS {
+                // data is not valid utf8 we can not construct a correct StringArray
+                // safely, so purposely create an invalid StringArray
+                let array = unsafe {
+                    GenericStringArray::<O>::new_unchecked(
+                        array.offsets().clone(),
+                        array.values().clone(),
+                        array.nulls().cloned(),
+                    )
+                };
+                let data_type = array.data_type().clone();
+                let data = write_to_parquet_with_encoding(Arc::new(array), *encoding);
+                let err = read_from_parquet(data).unwrap_err();
+                let expected_err =
+                    "Parquet argument error: Parquet error: encountered non UTF-8 data";
+                assert!(
+                    err.to_string().contains(expected_err),
+                    "data type: {data_type:?}, expected: {expected_err}, got: {err}"
+                );
+            }
         }
     }
 
     #[test]
     fn test_invalid_utf8_string_view_array() {
         let cases = [
-            (
-                invalid_utf8_first_char::<i32>(),
-                "Parquet argument error: Parquet error: encountered non UTF-8 data",
-            ),
-            (
-                invalid_utf8_later_char::<i32>(),
-                "Parquet argument error: Parquet error: encountered non UTF-8 data: invalid utf-8 sequence of 1 bytes from index 6",
-            ),
+            invalid_utf8_first_char::<i32>(),
+            invalid_utf8_first_char_long_strings::<i32>(),
+            invalid_utf8_later_char::<i32>(),
+            invalid_utf8_later_char_long_strings::<i32>(),
+            invalid_utf8_later_char_really_long_strings::<i32>(),
+            invalid_utf8_later_char_really_long_strings2::<i32>(),
         ];
-        for (array, expected_error) in cases {
-            // cast not yet implemented for BinaryView
-            // https://github.com/apache/arrow-rs/issues/5508
-            // so copy directly
-            let mut builder = BinaryViewBuilder::with_capacity(100);
-            for v in array.iter() {
-                if let Some(v) = v {
-                    builder.append_value(v);
-                } else {
-                    builder.append_null();
-                }
-            }
-            let array = builder.finish();
 
-            // data is not valid utf8 we can not construct a correct StringArray
-            // safely, so purposely create an invalid StringArray
-            let array = unsafe {
-                StringViewArray::new_unchecked(
-                    array.views().clone(),
-                    array.data_buffers().to_vec(),
-                    array.nulls().cloned(),
-                )
-            };
-            let data_type = array.data_type().clone();
-            let data = write_to_parquet(Arc::new(array));
-            let err = read_from_parquet(data).unwrap_err();
-            assert_eq!(err.to_string(), expected_error, "data type: {data_type:?}")
+        for encoding in STRING_ENCODINGS {
+            for array in &cases {
+                let array = arrow_cast::cast(&array, &ArrowDataType::BinaryView).unwrap();
+                let array = array.as_binary_view();
+
+                // data is not valid utf8 we can not construct a correct StringArray
+                // safely, so purposely create an invalid StringViewArray
+                let array = unsafe {
+                    StringViewArray::new_unchecked(
+                        array.views().clone(),
+                        array.data_buffers().to_vec(),
+                        array.nulls().cloned(),
+                    )
+                };
+
+                let data_type = array.data_type().clone();
+                let data = write_to_parquet_with_encoding(Arc::new(array), *encoding);
+                let err = read_from_parquet(data).unwrap_err();
+                let expected_err =
+                    "Parquet argument error: Parquet error: encountered non UTF-8 data";
+                assert!(
+                    err.to_string().contains(expected_err),
+                    "data type: {data_type:?}, expected: {expected_err}, got: {err}"
+                );
+            }
         }
     }
 
+    /// Encodings suitable for string data
+    const STRING_ENCODINGS: &[Option<Encoding>] = &[
+        None,
+        Some(Encoding::PLAIN),
+        Some(Encoding::DELTA_LENGTH_BYTE_ARRAY),
+        Some(Encoding::DELTA_BYTE_ARRAY),
+    ];
+
+    /// Invalid Utf-8 sequence in the first character
+    /// <https://stackoverflow.com/questions/1301402/example-invalid-utf8-string>
+    const INVALID_UTF8_FIRST_CHAR: &[u8] = &[0xa0, 0xa1, 0x20, 0x20];
+
+    /// Invalid Utf=8 sequence in NOT the first character
+    /// <https://stackoverflow.com/questions/1301402/example-invalid-utf8-string>
+    const INVALID_UTF8_LATER_CHAR: &[u8] = &[0x20, 0x20, 0x20, 0xa0, 0xa1, 0x20, 0x20];
+
     /// returns a BinaryArray with invalid UTF8 data in the first character
     fn invalid_utf8_first_char<O: OffsetSizeTrait>() -> GenericBinaryArray<O> {
-        // invalid sequence in the first character
-        // https://stackoverflow.com/questions/1301402/example-invalid-utf8-string
         let valid: &[u8] = b"   ";
-        let invalid: &[u8] = &[0xa0, 0xa1, 0x20, 0x20];
+        let invalid = INVALID_UTF8_FIRST_CHAR;
         GenericBinaryArray::<O>::from_iter(vec![None, Some(valid), None, Some(invalid)])
+    }
+
+    /// Returns a BinaryArray with invalid UTF8 data in the first character of a
+    /// string larger than 12 bytes which is handled specially when reading
+    /// `ByteViewArray`s
+    fn invalid_utf8_first_char_long_strings<O: OffsetSizeTrait>() -> GenericBinaryArray<O> {
+        let valid: &[u8] = b"   ";
+        let mut invalid = vec![];
+        invalid.extend_from_slice(b"ThisStringIsCertainlyLongerThan12Bytes");
+        invalid.extend_from_slice(INVALID_UTF8_FIRST_CHAR);
+        GenericBinaryArray::<O>::from_iter(vec![None, Some(valid), None, Some(&invalid)])
     }
 
     /// returns a BinaryArray with invalid UTF8 data in a character other than
     /// the first (this is checked in a special codepath)
     fn invalid_utf8_later_char<O: OffsetSizeTrait>() -> GenericBinaryArray<O> {
-        // invalid sequence in NOT the first character
-        // https://stackoverflow.com/questions/1301402/example-invalid-utf8-string
         let valid: &[u8] = b"   ";
-        let invalid: &[u8] = &[0x20, 0x20, 0x20, 0xa0, 0xa1, 0x20, 0x20];
+        let invalid: &[u8] = INVALID_UTF8_LATER_CHAR;
         GenericBinaryArray::<O>::from_iter(vec![None, Some(valid), None, Some(invalid)])
     }
 
-    // writes the array into a single column parquet file
-    fn write_to_parquet(array: ArrayRef) -> Vec<u8> {
+    /// returns a BinaryArray with invalid UTF8 data in a character other than
+    /// the first in a string larger than 12 bytes which is handled specially
+    /// when reading `ByteViewArray`s (this is checked in a special codepath)
+    fn invalid_utf8_later_char_long_strings<O: OffsetSizeTrait>() -> GenericBinaryArray<O> {
+        let valid: &[u8] = b"   ";
+        let mut invalid = vec![];
+        invalid.extend_from_slice(b"ThisStringIsCertainlyLongerThan12Bytes");
+        invalid.extend_from_slice(INVALID_UTF8_LATER_CHAR);
+        GenericBinaryArray::<O>::from_iter(vec![None, Some(valid), None, Some(&invalid)])
+    }
+
+    /// returns a BinaryArray with invalid UTF8 data in a character other than
+    /// the first in a string larger than 128 bytes which is handled specially
+    /// when reading `ByteViewArray`s (this is checked in a special codepath)
+    fn invalid_utf8_later_char_really_long_strings<O: OffsetSizeTrait>() -> GenericBinaryArray<O> {
+        let valid: &[u8] = b"   ";
+        let mut invalid = vec![];
+        for _ in 0..10 {
+            // each instance is 38 bytes
+            invalid.extend_from_slice(b"ThisStringIsCertainlyLongerThan12Bytes");
+        }
+        invalid.extend_from_slice(INVALID_UTF8_LATER_CHAR);
+        GenericBinaryArray::<O>::from_iter(vec![None, Some(valid), None, Some(&invalid)])
+    }
+
+    /// returns a BinaryArray with small invalid UTF8 data followed by a large
+    /// invalid UTF8 data in a character other than the first in a string larger
+    fn invalid_utf8_later_char_really_long_strings2<O: OffsetSizeTrait>() -> GenericBinaryArray<O> {
+        let valid: &[u8] = b"   ";
+        let mut valid_long = vec![];
+        for _ in 0..10 {
+            // each instance is 38 bytes
+            valid_long.extend_from_slice(b"ThisStringIsCertainlyLongerThan12Bytes");
+        }
+        let invalid = INVALID_UTF8_LATER_CHAR;
+        GenericBinaryArray::<O>::from_iter(vec![
+            None,
+            Some(valid),
+            Some(invalid),
+            None,
+            Some(&valid_long),
+            Some(valid),
+        ])
+    }
+
+    /// writes the array into a single column parquet file with the specified
+    /// encoding.
+    ///
+    /// If no encoding is specified, use default (dictionary) encoding
+    fn write_to_parquet_with_encoding(array: ArrayRef, encoding: Option<Encoding>) -> Vec<u8> {
         let batch = RecordBatch::try_from_iter(vec![("c", array)]).unwrap();
         let mut data = vec![];
         let schema = batch.schema();
-        let props = None;
+        let props = encoding.map(|encoding| {
+            WriterProperties::builder()
+                // must disable dictionary encoding to actually use encoding
+                .set_dictionary_enabled(false)
+                .set_encoding(encoding)
+                .build()
+        });
+
         {
             let mut writer = ArrowWriter::try_new(&mut data, schema, props).unwrap();
             writer.write(&batch).unwrap();

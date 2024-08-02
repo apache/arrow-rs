@@ -213,7 +213,7 @@ impl<OffsetSize: OffsetSizeTrait> ArrayReader for ListArrayReader<OffsetSize> {
             return Err(general_err!("Failed to reconstruct list from level data"));
         }
 
-        let value_offsets = Buffer::from(&list_offsets.to_byte_slice());
+        let value_offsets = Buffer::from(list_offsets.to_byte_slice());
 
         let mut data_builder = ArrayData::builder(self.get_data_type().clone())
             .len(list_offsets.len() - 1)

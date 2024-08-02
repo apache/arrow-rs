@@ -18,13 +18,10 @@
 use crate::arrow::buffer::bit_util::iter_set_bits_rev;
 use crate::arrow::record_reader::buffer::ValuesBuffer;
 use crate::errors::{ParquetError, Result};
-use arrow_array::builder::GenericByteViewBuilder;
-use arrow_array::types::BinaryViewType;
 use arrow_array::{make_array, ArrayRef, OffsetSizeTrait};
 use arrow_buffer::{ArrowNativeType, Buffer};
 use arrow_data::ArrayDataBuilder;
 use arrow_schema::DataType as ArrowType;
-use std::sync::Arc;
 
 /// A buffer of variable-sized byte arrays that can be converted into
 /// a corresponding [`ArrayRef`]
@@ -128,51 +125,18 @@ impl<I: OffsetSizeTrait> OffsetBuffer<I> {
 
     /// Converts this into an [`ArrayRef`] with the provided `data_type` and `null_buffer`
     pub fn into_array(self, null_buffer: Option<Buffer>, data_type: ArrowType) -> ArrayRef {
-        match data_type {
-            ArrowType::Utf8View => {
-                let mut builder = self.build_generic_byte_view();
-                Arc::new(builder.finish().to_string_view().unwrap())
-            }
-            ArrowType::BinaryView => {
-                let mut builder = self.build_generic_byte_view();
-                Arc::new(builder.finish())
-            }
-            _ => {
-                let array_data_builder = ArrayDataBuilder::new(data_type)
-                    .len(self.len())
-                    .add_buffer(Buffer::from_vec(self.offsets))
-                    .add_buffer(Buffer::from_vec(self.values))
-                    .null_bit_buffer(null_buffer);
+        let array_data_builder = ArrayDataBuilder::new(data_type)
+            .len(self.len())
+            .add_buffer(Buffer::from_vec(self.offsets))
+            .add_buffer(Buffer::from_vec(self.values))
+            .null_bit_buffer(null_buffer);
 
-                let data = match cfg!(debug_assertions) {
-                    true => array_data_builder.build().unwrap(),
-                    false => unsafe { array_data_builder.build_unchecked() },
-                };
+        let data = match cfg!(debug_assertions) {
+            true => array_data_builder.build().unwrap(),
+            false => unsafe { array_data_builder.build_unchecked() },
+        };
 
-                make_array(data)
-            }
-        }
-    }
-
-    fn build_generic_byte_view(self) -> GenericByteViewBuilder<BinaryViewType> {
-        let mut builder = GenericByteViewBuilder::<BinaryViewType>::with_capacity(self.len());
-        let buffer = self.values.into();
-        let block = builder.append_block(buffer);
-        for window in self.offsets.windows(2) {
-            let start = window[0];
-            let end = window[1];
-            let len = (end - start).to_usize().unwrap();
-
-            if len != 0 {
-                // Safety: (1) the buffer is valid (2) the offsets are valid (3) the values in between are of ByteViewType
-                unsafe {
-                    builder.append_view_unchecked(block, start.as_usize() as u32, len as u32);
-                }
-            } else {
-                builder.append_null();
-            }
-        }
-        builder
+        make_array(data)
     }
 }
 
@@ -229,7 +193,7 @@ impl<I: OffsetSizeTrait> ValuesBuffer for OffsetBuffer<I> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow_array::{Array, LargeStringArray, StringArray, StringViewArray};
+    use arrow_array::{Array, LargeStringArray, StringArray};
 
     #[test]
     fn test_offset_buffer_empty() {
@@ -274,44 +238,6 @@ mod tests {
         buffer.try_push("test".as_bytes(), false).unwrap();
         let array = buffer.into_array(None, ArrowType::Utf8);
         let strings = array.as_any().downcast_ref::<StringArray>().unwrap();
-        assert_eq!(
-            strings.iter().map(|x| x.unwrap()).collect::<Vec<_>>(),
-            vec!["test"]
-        );
-    }
-
-    #[test]
-    fn test_string_view() {
-        let mut buffer = OffsetBuffer::<i32>::default();
-        for v in [
-            "hello",
-            "world",
-            "large payload over 12 bytes",
-            "a",
-            "b",
-            "c",
-        ] {
-            buffer.try_push(v.as_bytes(), false).unwrap()
-        }
-        let split = std::mem::take(&mut buffer);
-
-        let array = split.into_array(None, ArrowType::Utf8View);
-        let strings = array.as_any().downcast_ref::<StringViewArray>().unwrap();
-        assert_eq!(
-            strings.iter().map(|x| x.unwrap()).collect::<Vec<_>>(),
-            vec![
-                "hello",
-                "world",
-                "large payload over 12 bytes",
-                "a",
-                "b",
-                "c"
-            ]
-        );
-
-        buffer.try_push("test".as_bytes(), false).unwrap();
-        let array = buffer.into_array(None, ArrowType::Utf8View);
-        let strings = array.as_any().downcast_ref::<StringViewArray>().unwrap();
         assert_eq!(
             strings.iter().map(|x| x.unwrap()).collect::<Vec<_>>(),
             vec!["test"]

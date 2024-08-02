@@ -324,9 +324,51 @@ impl Schema {
     }
 
     /// Returns a vector with references to all fields (including nested fields)
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use arrow_schema::{DataType, Field, Fields, Schema};
+    ///
+    /// let f1 = Arc::new(Field::new("a", DataType::Boolean, false));
+    ///
+    /// let f2_inner = Arc::new(Field::new("b_inner", DataType::Int8, false));
+    /// let f2 = Arc::new(Field::new("b", DataType::List(f2_inner.clone()), false));
+    ///
+    /// let f3_inner1 = Arc::new(Field::new("c_inner1", DataType::Int8, false));
+    /// let f3_inner2 = Arc::new(Field::new("c_inner2", DataType::Int8, false));
+    /// let f3 = Arc::new(Field::new(
+    ///     "c",
+    ///     DataType::Struct(vec![f3_inner1.clone(), f3_inner2.clone()].into()),
+    ///     false
+    /// ));
+    ///
+    /// let mut schema = Schema::new(vec![
+    ///   f1.clone(), f2.clone(), f3.clone()
+    /// ]);
+    /// assert_eq!(
+    ///     schema.flattened_fields(),
+    ///     vec![
+    ///         f1.as_ref(),
+    ///         f2.as_ref(),
+    ///         f2_inner.as_ref(),
+    ///         f3.as_ref(),
+    ///         f3_inner1.as_ref(),
+    ///         f3_inner2.as_ref()
+    ///    ]
+    /// );
+    /// ```
+    #[inline]
+    pub fn flattened_fields(&self) -> Vec<&Field> {
+        self.fields.iter().flat_map(|f| f.fields()).collect()
+    }
+
+    /// Returns a vector with references to all fields (including nested fields)
+    #[deprecated(since = "52.2.0", note = "Use `flattened_fields` instead")]
     #[inline]
     pub fn all_fields(&self) -> Vec<&Field> {
-        self.fields.iter().flat_map(|f| f.fields()).collect()
+        self.flattened_fields()
     }
 
     /// Returns an immutable reference of a specific [`Field`] instance selected using an

@@ -411,7 +411,7 @@ impl IpcDataGenerator {
         write_options: &IpcWriteOptions,
     ) -> Result<(Vec<EncodedData>, EncodedData), ArrowError> {
         let schema = batch.schema();
-        let mut encoded_dictionaries = Vec::with_capacity(schema.all_fields().len());
+        let mut encoded_dictionaries = Vec::with_capacity(schema.flattened_fields().len());
 
         let mut dict_id = dictionary_tracker.dict_ids.clone().into_iter();
 
@@ -821,9 +821,9 @@ impl DictionaryTracker {
 }
 
 /// Writer for an IPC file
-pub struct FileWriter<W: Write> {
+pub struct FileWriter<W> {
     /// The object to write to
-    writer: BufWriter<W>,
+    writer: W,
     /// IPC write options
     write_options: IpcWriteOptions,
     /// A reference to the schema, used in validating record batches
@@ -844,21 +844,41 @@ pub struct FileWriter<W: Write> {
     data_gen: IpcDataGenerator,
 }
 
+impl<W: Write> FileWriter<BufWriter<W>> {
+    /// Try to create a new file writer with the writer wrapped in a BufWriter.
+    ///
+    /// See [`FileWriter::try_new`] for an unbuffered version.
+    pub fn try_new_buffered(writer: W, schema: &Schema) -> Result<Self, ArrowError> {
+        Self::try_new(BufWriter::new(writer), schema)
+    }
+}
+
 impl<W: Write> FileWriter<W> {
     /// Try to create a new writer, with the schema written as part of the header
+    ///
+    /// Note the created writer is not buffered. See [`FileWriter::try_new_buffered`] for details.
+    ///
+    /// # Errors
+    ///
+    /// An ['Err'](Result::Err) may be returned if writing the header to the writer fails.
     pub fn try_new(writer: W, schema: &Schema) -> Result<Self, ArrowError> {
         let write_options = IpcWriteOptions::default();
         Self::try_new_with_options(writer, schema, write_options)
     }
 
     /// Try to create a new writer with IpcWriteOptions
+    ///
+    /// Note the created writer is not buffered. See [`FileWriter::try_new_buffered`] for details.
+    ///
+    /// # Errors
+    ///
+    /// An ['Err'](Result::Err) may be returned if writing the header to the writer fails.
     pub fn try_new_with_options(
-        writer: W,
+        mut writer: W,
         schema: &Schema,
         write_options: IpcWriteOptions,
     ) -> Result<Self, ArrowError> {
         let data_gen = IpcDataGenerator::default();
-        let mut writer = BufWriter::new(writer);
         // write magic to header aligned on alignment boundary
         let pad_len = pad_to_alignment(write_options.alignment, super::ARROW_MAGIC.len());
         let header_size = super::ARROW_MAGIC.len() + pad_len;
@@ -972,26 +992,38 @@ impl<W: Write> FileWriter<W> {
 
     /// Gets a reference to the underlying writer.
     pub fn get_ref(&self) -> &W {
-        self.writer.get_ref()
+        &self.writer
     }
 
     /// Gets a mutable reference to the underlying writer.
     ///
     /// It is inadvisable to directly write to the underlying writer.
     pub fn get_mut(&mut self) -> &mut W {
-        self.writer.get_mut()
+        &mut self.writer
     }
 
-    /// Unwraps the BufWriter housed in FileWriter.writer, returning the underlying
-    /// writer
+    /// Flush the underlying writer.
     ///
-    /// The buffer is flushed and the FileWriter is finished before returning the
-    /// writer.
+    /// Both the BufWriter and the underlying writer are flushed.
+    pub fn flush(&mut self) -> Result<(), ArrowError> {
+        self.writer.flush()?;
+        Ok(())
+    }
+
+    /// Unwraps the the underlying writer.
+    ///
+    /// The writer is flushed and the FileWriter is finished before returning.
+    ///
+    /// # Errors
+    ///
+    /// An ['Err'](Result::Err) may be returned if an error occurs while finishing the StreamWriter
+    /// or while flushing the writer.
     pub fn into_inner(mut self) -> Result<W, ArrowError> {
         if !self.finished {
+            // `finish` flushes the writer.
             self.finish()?;
         }
-        self.writer.into_inner().map_err(ArrowError::from)
+        Ok(self.writer)
     }
 }
 
@@ -1006,9 +1038,9 @@ impl<W: Write> RecordBatchWriter for FileWriter<W> {
 }
 
 /// Writer for an IPC stream
-pub struct StreamWriter<W: Write> {
+pub struct StreamWriter<W> {
     /// The object to write to
-    writer: BufWriter<W>,
+    writer: W,
     /// IPC write options
     write_options: IpcWriteOptions,
     /// Whether the writer footer has been written, and the writer is finished
@@ -1019,20 +1051,39 @@ pub struct StreamWriter<W: Write> {
     data_gen: IpcDataGenerator,
 }
 
+impl<W: Write> StreamWriter<BufWriter<W>> {
+    /// Try to create a new stream writer with the writer wrapped in a BufWriter.
+    ///
+    /// See [`StreamWriter::try_new`] for an unbuffered version.
+    pub fn try_new_buffered(writer: W, schema: &Schema) -> Result<Self, ArrowError> {
+        Self::try_new(BufWriter::new(writer), schema)
+    }
+}
+
 impl<W: Write> StreamWriter<W> {
-    /// Try to create a new writer, with the schema written as part of the header
+    /// Try to create a new writer, with the schema written as part of the header.
+    ///
+    /// Note that there is no internal buffering. See also [`StreamWriter::try_new_buffered`].
+    ///
+    /// # Errors
+    ///
+    /// An ['Err'](Result::Err) may be returned if writing the header to the writer fails.
     pub fn try_new(writer: W, schema: &Schema) -> Result<Self, ArrowError> {
         let write_options = IpcWriteOptions::default();
         Self::try_new_with_options(writer, schema, write_options)
     }
 
+    /// Try to create a new writer with [`IpcWriteOptions`].
+    ///
+    /// # Errors
+    ///
+    /// An ['Err'](Result::Err) may be returned if writing the header to the writer fails.
     pub fn try_new_with_options(
-        writer: W,
+        mut writer: W,
         schema: &Schema,
         write_options: IpcWriteOptions,
     ) -> Result<Self, ArrowError> {
         let data_gen = IpcDataGenerator::default();
-        let mut writer = BufWriter::new(writer);
         // write the schema, set the written bytes to the schema
         let encoded_message = data_gen.schema_to_bytes(schema, &write_options);
         write_message(&mut writer, encoded_message, &write_options)?;
@@ -1087,26 +1138,32 @@ impl<W: Write> StreamWriter<W> {
 
     /// Gets a reference to the underlying writer.
     pub fn get_ref(&self) -> &W {
-        self.writer.get_ref()
+        &self.writer
     }
 
     /// Gets a mutable reference to the underlying writer.
     ///
     /// It is inadvisable to directly write to the underlying writer.
     pub fn get_mut(&mut self) -> &mut W {
-        self.writer.get_mut()
+        &mut self.writer
     }
 
-    /// Unwraps the BufWriter housed in StreamWriter.writer, returning the underlying
-    /// writer
+    /// Flush the underlying writer.
     ///
-    /// The buffer is flushed and the StreamWriter is finished before returning the
-    /// writer.
+    /// Both the BufWriter and the underlying writer are flushed.
+    pub fn flush(&mut self) -> Result<(), ArrowError> {
+        self.writer.flush()?;
+        Ok(())
+    }
+
+    /// Unwraps the the underlying writer.
+    ///
+    /// The writer is flushed and the StreamWriter is finished before returning.
     ///
     /// # Errors
     ///
-    /// An ['Err'] may be returned if an error occurs while finishing the StreamWriter
-    /// or while flushing the buffer.
+    /// An ['Err'](Result::Err) may be returned if an error occurs while finishing the StreamWriter
+    /// or while flushing the writer.
     ///
     /// # Example
     ///
@@ -1138,9 +1195,10 @@ impl<W: Write> StreamWriter<W> {
     /// ```
     pub fn into_inner(mut self) -> Result<W, ArrowError> {
         if !self.finished {
+            // `finish` flushes.
             self.finish()?;
         }
-        self.writer.into_inner().map_err(ArrowError::from)
+        Ok(self.writer)
     }
 }
 
@@ -2614,5 +2672,52 @@ mod tests {
             "Invalid argument error: Misaligned buffers[0] in array of type Decimal128(38, 10), \
              offset from expected alignment of 16 by 8"
         );
+    }
+
+    #[test]
+    fn test_flush() {
+        // We write a schema which is small enough to fit into a buffer and not get flushed,
+        // and then force the write with .flush().
+        let num_cols = 2;
+        let mut fields = Vec::new();
+        let options = IpcWriteOptions::try_new(8, false, MetadataVersion::V5).unwrap();
+        for i in 0..num_cols {
+            let field = Field::new(&format!("col_{}", i), DataType::Decimal128(38, 10), true);
+            fields.push(field);
+        }
+        let schema = Schema::new(fields);
+        let inner_stream_writer = BufWriter::with_capacity(1024, Vec::new());
+        let inner_file_writer = BufWriter::with_capacity(1024, Vec::new());
+        let mut stream_writer =
+            StreamWriter::try_new_with_options(inner_stream_writer, &schema, options.clone())
+                .unwrap();
+        let mut file_writer =
+            FileWriter::try_new_with_options(inner_file_writer, &schema, options).unwrap();
+
+        let stream_bytes_written_on_new = stream_writer.get_ref().get_ref().len();
+        let file_bytes_written_on_new = file_writer.get_ref().get_ref().len();
+        stream_writer.flush().unwrap();
+        file_writer.flush().unwrap();
+        let stream_bytes_written_on_flush = stream_writer.get_ref().get_ref().len();
+        let file_bytes_written_on_flush = file_writer.get_ref().get_ref().len();
+        let stream_out = stream_writer.into_inner().unwrap().into_inner().unwrap();
+        // Finishing a stream writes the continuation bytes in MetadataVersion::V5 (4 bytes)
+        // and then a length of 0 (4 bytes) for a total of 8 bytes.
+        // Everything before that should have been flushed in the .flush() call.
+        let expected_stream_flushed_bytes = stream_out.len() - 8;
+        // A file write is the same as the stream write except for the leading magic string
+        // ARROW1 plus padding, which is 8 bytes.
+        let expected_file_flushed_bytes = expected_stream_flushed_bytes + 8;
+
+        assert!(
+            stream_bytes_written_on_new < stream_bytes_written_on_flush,
+            "this test makes no sense if flush is not actually required"
+        );
+        assert!(
+            file_bytes_written_on_new < file_bytes_written_on_flush,
+            "this test makes no sense if flush is not actually required"
+        );
+        assert_eq!(stream_bytes_written_on_flush, expected_stream_flushed_bytes);
+        assert_eq!(file_bytes_written_on_flush, expected_file_flushed_bytes);
     }
 }

@@ -16,6 +16,7 @@
 // under the License.
 
 use crate::cast::*;
+use arrow_buffer::NullBuffer;
 
 pub(crate) fn value_to_string<O: OffsetSizeTrait>(
     array: &dyn Array,
@@ -43,8 +44,34 @@ pub(crate) fn parse_string<P: Parser, O: OffsetSizeTrait>(
     cast_options: &CastOptions,
 ) -> Result<ArrayRef, ArrowError> {
     let string_array = array.as_string::<O>();
+    parse_string_iter::<P, _, _>(string_array.iter(), cast_options, || {
+        string_array.nulls().cloned()
+    })
+}
+
+/// Parse UTF-8 View
+pub(crate) fn parse_string_view<P: Parser>(
+    array: &dyn Array,
+    cast_options: &CastOptions,
+) -> Result<ArrayRef, ArrowError> {
+    let string_view_array = array.as_string_view();
+    parse_string_iter::<P, _, _>(string_view_array.iter(), cast_options, || {
+        string_view_array.nulls().cloned()
+    })
+}
+
+fn parse_string_iter<
+    'a,
+    P: Parser,
+    I: Iterator<Item = Option<&'a str>>,
+    F: FnOnce() -> Option<NullBuffer>,
+>(
+    iter: I,
+    cast_options: &CastOptions,
+    nulls: F,
+) -> Result<ArrayRef, ArrowError> {
     let array = if cast_options.safe {
-        let iter = string_array.iter().map(|x| x.and_then(P::parse));
+        let iter = iter.map(|x| x.and_then(P::parse));
 
         // Benefit:
         //     20% performance improvement
@@ -52,8 +79,7 @@ pub(crate) fn parse_string<P: Parser, O: OffsetSizeTrait>(
         //     The iterator is trustedLen because it comes from an `StringArray`.
         unsafe { PrimitiveArray::<P>::from_trusted_len_iter(iter) }
     } else {
-        let v = string_array
-            .iter()
+        let v = iter
             .map(|x| match x {
                 Some(v) => P::parse(v).ok_or_else(|| {
                     ArrowError::CastError(format!(
@@ -65,7 +91,7 @@ pub(crate) fn parse_string<P: Parser, O: OffsetSizeTrait>(
                 None => Ok(P::Native::default()),
             })
             .collect::<Result<Vec<_>, ArrowError>>()?;
-        PrimitiveArray::new(v.into(), string_array.nulls().cloned())
+        PrimitiveArray::new(v.into(), nulls())
     };
 
     Ok(Arc::new(array) as ArrayRef)
@@ -81,20 +107,42 @@ pub(crate) fn cast_string_to_timestamp<O: OffsetSizeTrait, T: ArrowTimestampType
     let out: PrimitiveArray<T> = match to_tz {
         Some(tz) => {
             let tz: Tz = tz.as_ref().parse()?;
-            cast_string_to_timestamp_impl(array, &tz, cast_options)?
+            cast_string_to_timestamp_impl(array.iter(), &tz, cast_options)?
         }
-        None => cast_string_to_timestamp_impl(array, &Utc, cast_options)?,
+        None => cast_string_to_timestamp_impl(array.iter(), &Utc, cast_options)?,
     };
     Ok(Arc::new(out.with_timezone_opt(to_tz.clone())))
 }
 
-fn cast_string_to_timestamp_impl<O: OffsetSizeTrait, T: ArrowTimestampType, Tz: TimeZone>(
-    array: &GenericStringArray<O>,
+/// Casts string view arrays to an ArrowTimestampType (TimeStampNanosecondArray, etc.)
+pub(crate) fn cast_view_to_timestamp<T: ArrowTimestampType>(
+    array: &dyn Array,
+    to_tz: &Option<Arc<str>>,
+    cast_options: &CastOptions,
+) -> Result<ArrayRef, ArrowError> {
+    let array = array.as_string_view();
+    let out: PrimitiveArray<T> = match to_tz {
+        Some(tz) => {
+            let tz: Tz = tz.as_ref().parse()?;
+            cast_string_to_timestamp_impl(array.iter(), &tz, cast_options)?
+        }
+        None => cast_string_to_timestamp_impl(array.iter(), &Utc, cast_options)?,
+    };
+    Ok(Arc::new(out.with_timezone_opt(to_tz.clone())))
+}
+
+fn cast_string_to_timestamp_impl<
+    'a,
+    I: Iterator<Item = Option<&'a str>>,
+    T: ArrowTimestampType,
+    Tz: TimeZone,
+>(
+    iter: I,
     tz: &Tz,
     cast_options: &CastOptions,
 ) -> Result<PrimitiveArray<T>, ArrowError> {
     if cast_options.safe {
-        let iter = array.iter().map(|v| {
+        let iter = iter.map(|v| {
             v.and_then(|v| {
                 let naive = string_to_datetime(tz, v).ok()?.naive_utc();
                 T::make_value(naive)
@@ -107,8 +155,7 @@ fn cast_string_to_timestamp_impl<O: OffsetSizeTrait, T: ArrowTimestampType, Tz: 
 
         Ok(unsafe { PrimitiveArray::from_trusted_len_iter(iter) })
     } else {
-        let vec = array
-            .iter()
+        let vec = iter
             .map(|v| {
                 v.map(|v| {
                     let naive = string_to_datetime(tz, v)?.naive_utc();
@@ -122,7 +169,7 @@ fn cast_string_to_timestamp_impl<O: OffsetSizeTrait, T: ArrowTimestampType, Tz: 
                         ))
                     })
                 })
-                .transpose()
+                    .transpose()
             })
             .collect::<Result<Vec<Option<i64>>, _>>()?;
 
@@ -148,29 +195,11 @@ where
         .as_any()
         .downcast_ref::<GenericStringArray<Offset>>()
         .unwrap();
-    let interval_array = if cast_options.safe {
-        let iter = string_array
-            .iter()
-            .map(|v| v.and_then(|v| parse_function(v).ok()));
-
-        // Benefit:
-        //     20% performance improvement
-        // Soundness:
-        //     The iterator is trustedLen because it comes from an `StringArray`.
-        unsafe { PrimitiveArray::<ArrowType>::from_trusted_len_iter(iter) }
-    } else {
-        let vec = string_array
-            .iter()
-            .map(|v| v.map(parse_function).transpose())
-            .collect::<Result<Vec<_>, ArrowError>>()?;
-
-        // Benefit:
-        //     20% performance improvement
-        // Soundness:
-        //     The iterator is trustedLen because it comes from an `StringArray`.
-        unsafe { PrimitiveArray::<ArrowType>::from_trusted_len_iter(vec) }
-    };
-    Ok(Arc::new(interval_array) as ArrayRef)
+    cast_string_to_interval_impl::<_, ArrowType, F>(
+        string_array.iter(),
+        cast_options,
+        parse_function,
+    )
 }
 
 pub(crate) fn cast_string_to_year_month_interval<Offset: OffsetSizeTrait>(
@@ -204,6 +233,84 @@ pub(crate) fn cast_string_to_month_day_nano_interval<Offset: OffsetSizeTrait>(
         cast_options,
         parse_interval_month_day_nano,
     )
+}
+
+pub(crate) fn cast_view_to_interval<F, ArrowType>(
+    array: &dyn Array,
+    cast_options: &CastOptions,
+    parse_function: F,
+) -> Result<ArrayRef, ArrowError>
+where
+    ArrowType: ArrowPrimitiveType,
+    F: Fn(&str) -> Result<ArrowType::Native, ArrowError> + Copy,
+{
+    let string_view_array = array.as_any().downcast_ref::<StringViewArray>().unwrap();
+    cast_string_to_interval_impl::<_, ArrowType, F>(
+        string_view_array.iter(),
+        cast_options,
+        parse_function,
+    )
+}
+
+pub(crate) fn cast_view_to_year_month_interval(
+    array: &dyn Array,
+    cast_options: &CastOptions,
+) -> Result<ArrayRef, ArrowError> {
+    cast_view_to_interval::<_, IntervalYearMonthType>(
+        array,
+        cast_options,
+        parse_interval_year_month,
+    )
+}
+
+pub(crate) fn cast_view_to_day_time_interval(
+    array: &dyn Array,
+    cast_options: &CastOptions,
+) -> Result<ArrayRef, ArrowError> {
+    cast_view_to_interval::<_, IntervalDayTimeType>(array, cast_options, parse_interval_day_time)
+}
+
+pub(crate) fn cast_view_to_month_day_nano_interval(
+    array: &dyn Array,
+    cast_options: &CastOptions,
+) -> Result<ArrayRef, ArrowError> {
+    cast_view_to_interval::<_, IntervalMonthDayNanoType>(
+        array,
+        cast_options,
+        parse_interval_month_day_nano,
+    )
+}
+
+fn cast_string_to_interval_impl<'a, I, ArrowType, F>(
+    iter: I,
+    cast_options: &CastOptions,
+    parse_function: F,
+) -> Result<ArrayRef, ArrowError>
+where
+    I: Iterator<Item = Option<&'a str>>,
+    ArrowType: ArrowPrimitiveType,
+    F: Fn(&str) -> Result<ArrowType::Native, ArrowError> + Copy,
+{
+    let interval_array = if cast_options.safe {
+        let iter = iter.map(|v| v.and_then(|v| parse_function(v).ok()));
+
+        // Benefit:
+        //     20% performance improvement
+        // Soundness:
+        //     The iterator is trustedLen because it comes from an `StringArray`.
+        unsafe { PrimitiveArray::<ArrowType>::from_trusted_len_iter(iter) }
+    } else {
+        let vec = iter
+            .map(|v| v.map(parse_function).transpose())
+            .collect::<Result<Vec<_>, ArrowError>>()?;
+
+        // Benefit:
+        //     20% performance improvement
+        // Soundness:
+        //     The iterator is trustedLen because it comes from an `StringArray`.
+        unsafe { PrimitiveArray::<ArrowType>::from_trusted_len_iter(vec) }
+    };
+    Ok(Arc::new(interval_array) as ArrayRef)
 }
 
 /// A specified helper to cast from `GenericBinaryArray` to `GenericStringArray` when they have same

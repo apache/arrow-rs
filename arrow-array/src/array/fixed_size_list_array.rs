@@ -674,7 +674,7 @@ mod tests {
         assert_eq!(err.to_string(), "Invalid argument error: Found unmasked nulls for non-nullable FixedSizeListArray field \"item\"");
 
         // Valid as nulls in child masked by parent
-        let nulls = NullBuffer::new(BooleanBuffer::new(vec![0b0000101].into(), 0, 3));
+        let nulls = NullBuffer::new(BooleanBuffer::new(Buffer::from([0b0000101]), 0, 3));
         FixedSizeListArray::new(field, 2, values.clone(), Some(nulls));
 
         let field = Arc::new(Field::new("item", DataType::Int64, true));

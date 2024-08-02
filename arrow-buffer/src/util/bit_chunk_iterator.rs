@@ -456,7 +456,7 @@ mod tests {
         const ALLOC_SIZE: usize = 4 * 1024;
         let input = vec![0xFF_u8; ALLOC_SIZE];
 
-        let buffer: Buffer = Buffer::from(input);
+        let buffer: Buffer = Buffer::from_vec(input);
 
         let bitchunks = buffer.bit_chunks(57, ALLOC_SIZE * 8 - 57);
 

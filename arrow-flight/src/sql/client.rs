@@ -28,15 +28,19 @@ use crate::decode::FlightRecordBatchStream;
 use crate::encode::FlightDataEncoderBuilder;
 use crate::error::FlightError;
 use crate::flight_service_client::FlightServiceClient;
-use crate::sql::server::{CLOSE_PREPARED_STATEMENT, CREATE_PREPARED_STATEMENT};
+use crate::sql::gen::action_end_transaction_request::EndTransaction;
+use crate::sql::server::{
+    BEGIN_TRANSACTION, CLOSE_PREPARED_STATEMENT, CREATE_PREPARED_STATEMENT, END_TRANSACTION,
+};
 use crate::sql::{
+    ActionBeginTransactionRequest, ActionBeginTransactionResult,
     ActionClosePreparedStatementRequest, ActionCreatePreparedStatementRequest,
-    ActionCreatePreparedStatementResult, Any, CommandGetCatalogs, CommandGetCrossReference,
-    CommandGetDbSchemas, CommandGetExportedKeys, CommandGetImportedKeys, CommandGetPrimaryKeys,
-    CommandGetSqlInfo, CommandGetTableTypes, CommandGetTables, CommandGetXdbcTypeInfo,
-    CommandPreparedStatementQuery, CommandPreparedStatementUpdate, CommandStatementQuery,
-    CommandStatementUpdate, DoPutPreparedStatementResult, DoPutUpdateResult, ProstMessageExt,
-    SqlInfo,
+    ActionCreatePreparedStatementResult, ActionEndTransactionRequest, Any, CommandGetCatalogs,
+    CommandGetCrossReference, CommandGetDbSchemas, CommandGetExportedKeys, CommandGetImportedKeys,
+    CommandGetPrimaryKeys, CommandGetSqlInfo, CommandGetTableTypes, CommandGetTables,
+    CommandGetXdbcTypeInfo, CommandPreparedStatementQuery, CommandPreparedStatementUpdate,
+    CommandStatementQuery, CommandStatementUpdate, DoPutPreparedStatementResult, DoPutUpdateResult,
+    ProstMessageExt, SqlInfo,
 };
 use crate::trailers::extract_lazy_trailers;
 use crate::{
@@ -397,6 +401,54 @@ impl FlightSqlServiceClient<Channel> {
             dataset_schema,
             parameter_schema,
         ))
+    }
+
+    /// Request to begin a transaction.
+    pub async fn begin_transaction(&mut self) -> Result<Bytes, ArrowError> {
+        let cmd = ActionBeginTransactionRequest {};
+        let action = Action {
+            r#type: BEGIN_TRANSACTION.to_string(),
+            body: cmd.as_any().encode_to_vec().into(),
+        };
+        let req = self.set_request_headers(action.into_request())?;
+        let mut result = self
+            .flight_client
+            .do_action(req)
+            .await
+            .map_err(status_to_arrow_error)?
+            .into_inner();
+        let result = result
+            .message()
+            .await
+            .map_err(status_to_arrow_error)?
+            .unwrap();
+        let any = Any::decode(&*result.body).map_err(decode_error_to_arrow_error)?;
+        let begin_result: ActionBeginTransactionResult = any.unpack()?.unwrap();
+        Ok(begin_result.transaction_id)
+    }
+
+    /// Request to commit/rollback a transaction.
+    pub async fn end_transaction(
+        &mut self,
+        transaction_id: Bytes,
+        action: EndTransaction,
+    ) -> Result<(), ArrowError> {
+        let cmd = ActionEndTransactionRequest {
+            transaction_id,
+            action: action as i32,
+        };
+        let action = Action {
+            r#type: END_TRANSACTION.to_string(),
+            body: cmd.as_any().encode_to_vec().into(),
+        };
+        let req = self.set_request_headers(action.into_request())?;
+        let _ = self
+            .flight_client
+            .do_action(req)
+            .await
+            .map_err(status_to_arrow_error)?
+            .into_inner();
+        Ok(())
     }
 
     /// Explicitly shut down and clean up the client.

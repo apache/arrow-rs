@@ -94,7 +94,7 @@ pub fn flight_data_to_arrow_batch(
         })
         .map(|batch| {
             reader::read_record_batch(
-                &Buffer::from(&data.data_body),
+                &Buffer::from(data.data_body.as_ref()),
                 batch,
                 schema,
                 dictionaries_by_id,
