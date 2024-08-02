@@ -973,6 +973,41 @@ macro_rules! get_data_page_statistics {
                     }
                     Ok(Arc::new(builder.finish()))
                 },
+                Some(DataType::Utf8View) => {
+                    let mut builder = StringViewBuilder::new();
+                    let iterator = [<$stat_type_prefix ByteArrayDataPageStatsIterator>]::new($iterator);
+                    for x in iterator {
+                        for x in x.into_iter() {
+                            let Some(x) = x else {
+                                builder.append_null(); // no statistics value
+                                continue;
+                            };
+
+                            let Ok(x) = std::str::from_utf8(x.data()) else {
+                                builder.append_null();
+                                continue;
+                            };
+
+                            builder.append_value(x);
+                        }
+                    }
+                    Ok(Arc::new(builder.finish()))
+                },
+                Some(DataType::BinaryView) => {
+                    let mut builder = BinaryViewBuilder::new();
+                    let iterator = [<$stat_type_prefix ByteArrayDataPageStatsIterator>]::new($iterator);
+                    for x in iterator {
+                        for x in x.into_iter() {
+                            let Some(x) = x else {
+                                builder.append_null(); // no statistics value
+                                continue;
+                            };
+
+                            builder.append_value(x);
+                        }
+                    }
+                    Ok(Arc::new(builder.finish()))
+                },
                 _ => unimplemented!()
             }
         }
