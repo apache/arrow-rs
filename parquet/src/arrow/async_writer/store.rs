@@ -27,6 +27,47 @@ use object_store::ObjectStore;
 use tokio::io::AsyncWriteExt;
 
 /// [`ParquetObjectWriter`] for writing to parquet to [`ObjectStore`]
+///
+/// ```
+/// use arrow_array::{ArrayRef, Int64Array, RecordBatch};
+/// use object_store::memory::InMemory;
+/// use object_store::path::Path;
+/// use object_store::ObjectStore;
+/// use std::sync::Arc;
+///
+/// use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
+/// use parquet::arrow::async_writer::ParquetObjectWriter;
+/// use parquet::arrow::AsyncArrowWriter;
+///
+/// #[tokio::test]
+/// async fn test_async_writer() {
+///     let store = Arc::new(InMemory::new());
+///
+///     let col = Arc::new(Int64Array::from_iter_values([1, 2, 3])) as ArrayRef;
+///     let to_write = RecordBatch::try_from_iter([("col", col)]).unwrap();
+///
+///     let object_store_writer = ParquetObjectWriter::new(store.clone(), Path::from("test"));
+///     let mut writer =
+///         AsyncArrowWriter::try_new(object_store_writer, to_write.schema(), None).unwrap();
+///     writer.write(&to_write).await.unwrap();
+///     writer.close().await.unwrap();
+///
+///     let buffer = store
+///         .get(&Path::from("test"))
+///         .await
+///         .unwrap()
+///         .bytes()
+///         .await
+///         .unwrap();
+///     let mut reader = ParquetRecordBatchReaderBuilder::try_new(buffer)
+///         .unwrap()
+///         .build()
+///         .unwrap();
+///     let read = reader.next().unwrap().unwrap();
+///
+///     assert_eq!(to_write, read);
+/// }
+/// ```
 #[derive(Debug)]
 pub struct ParquetObjectWriter {
     w: BufWriter,
