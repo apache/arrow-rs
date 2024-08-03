@@ -29,18 +29,18 @@ use tokio::io::AsyncWriteExt;
 /// [`ParquetObjectWriter`] for writing to parquet to [`ObjectStore`]
 ///
 /// ```
-/// use arrow_array::{ArrayRef, Int64Array, RecordBatch};
-/// use object_store::memory::InMemory;
-/// use object_store::path::Path;
-/// use object_store::ObjectStore;
-/// use std::sync::Arc;
+/// # use arrow_array::{ArrayRef, Int64Array, RecordBatch};
+/// # use object_store::memory::InMemory;
+/// # use object_store::path::Path;
+/// # use object_store::ObjectStore;
+/// # use std::sync::Arc;
 ///
-/// use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
-/// use parquet::arrow::async_writer::ParquetObjectWriter;
-/// use parquet::arrow::AsyncArrowWriter;
+/// # use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
+/// # use parquet::arrow::async_writer::ParquetObjectWriter;
+/// # use parquet::arrow::AsyncArrowWriter;
 ///
-/// #[tokio::test]
-/// async fn test_async_writer() {
+/// # #[tokio::main(flavor="current_thread")]
+/// # async fn main() {
 ///     let store = Arc::new(InMemory::new());
 ///
 ///     let col = Arc::new(Int64Array::from_iter_values([1, 2, 3])) as ArrayRef;
@@ -66,7 +66,7 @@ use tokio::io::AsyncWriteExt;
 ///     let read = reader.next().unwrap().unwrap();
 ///
 ///     assert_eq!(to_write, read);
-/// }
+/// # }
 /// ```
 #[derive(Debug)]
 pub struct ParquetObjectWriter {
