@@ -26,7 +26,8 @@ use crate::file::page_index::index::{Index, PageIndex};
 use crate::file::statistics::Statistics as ParquetStatistics;
 use crate::schema::types::SchemaDescriptor;
 use arrow_array::builder::{
-    BooleanBuilder, FixedSizeBinaryBuilder, LargeStringBuilder, StringBuilder,
+    BinaryViewBuilder, BooleanBuilder, FixedSizeBinaryBuilder, LargeStringBuilder, StringBuilder,
+    StringViewBuilder,
 };
 use arrow_array::{
     new_empty_array, new_null_array, ArrayRef, BinaryArray, BooleanArray, Date32Array, Date64Array,
@@ -446,14 +447,43 @@ macro_rules! get_statistics {
             },
             DataType::Dictionary(_, value_type) => {
                 [<$stat_type_prefix:lower _ statistics>](value_type, $iterator)
+            },
+            DataType::Utf8View => {
+                let iterator = [<$stat_type_prefix ByteArrayStatsIterator>]::new($iterator);
+                let mut builder = StringViewBuilder::new();
+                for x in iterator {
+                    let Some(x) = x else {
+                        builder.append_null(); // no statistics value
+                        continue;
+                    };
+
+                    let Ok(x) = std::str::from_utf8(x) else {
+                        builder.append_null();
+                        continue;
+                    };
+
+                    builder.append_value(x);
+                }
+                Ok(Arc::new(builder.finish()))
+            },
+            DataType::BinaryView => {
+                let iterator = [<$stat_type_prefix ByteArrayStatsIterator>]::new($iterator);
+                let mut builder = BinaryViewBuilder::new();
+                for x in iterator {
+                    let Some(x) = x else {
+                        builder.append_null(); // no statistics value
+                        continue;
+                    };
+
+                    builder.append_value(x);
+                }
+                Ok(Arc::new(builder.finish()))
             }
 
             DataType::Map(_,_) |
             DataType::Duration(_) |
             DataType::Interval(_) |
             DataType::Null |
-            DataType::BinaryView |
-            DataType::Utf8View |
             DataType::List(_) |
             DataType::ListView(_) |
             DataType::FixedSizeList(_, _) |
@@ -919,7 +949,7 @@ macro_rules! get_data_page_statistics {
                         }
                     })
                 },
-               Some(DataType::FixedSizeBinary(size)) => {
+                Some(DataType::FixedSizeBinary(size)) => {
                     let mut builder = FixedSizeBinaryBuilder::new(*size);
                     let iterator = [<$stat_type_prefix FixedLenByteArrayDataPageStatsIterator>]::new($iterator);
                     for x in iterator {
@@ -943,7 +973,58 @@ macro_rules! get_data_page_statistics {
                     }
                     Ok(Arc::new(builder.finish()))
                 },
-                _ => unimplemented!()
+                Some(DataType::Utf8View) => {
+                    let mut builder = StringViewBuilder::new();
+                    let iterator = [<$stat_type_prefix ByteArrayDataPageStatsIterator>]::new($iterator);
+                    for x in iterator {
+                        for x in x.into_iter() {
+                            let Some(x) = x else {
+                                builder.append_null(); // no statistics value
+                                continue;
+                            };
+
+                            let Ok(x) = std::str::from_utf8(x.data()) else {
+                                builder.append_null();
+                                continue;
+                            };
+
+                            builder.append_value(x);
+                        }
+                    }
+                    Ok(Arc::new(builder.finish()))
+                },
+                Some(DataType::BinaryView) => {
+                    let mut builder = BinaryViewBuilder::new();
+                    let iterator = [<$stat_type_prefix ByteArrayDataPageStatsIterator>]::new($iterator);
+                    for x in iterator {
+                        for x in x.into_iter() {
+                            let Some(x) = x else {
+                                builder.append_null(); // no statistics value
+                                continue;
+                            };
+
+                            builder.append_value(x);
+                        }
+                    }
+                    Ok(Arc::new(builder.finish()))
+                },
+                Some(DataType::Null) |
+                Some(DataType::Duration(_)) |
+                Some(DataType::Interval(_)) |
+                Some(DataType::List(_)) |
+                Some(DataType::ListView(_)) |
+                Some(DataType::FixedSizeList(_, _)) |
+                Some(DataType::LargeList(_)) |
+                Some(DataType::LargeListView(_)) |
+                Some(DataType::Struct(_)) |
+                Some(DataType::Union(_, _)) |
+                Some(DataType::Map(_, _)) |
+                Some(DataType::RunEndEncoded(_, _)) => {
+                    let len = $iterator.count();
+                    // don't know how to extract statistics, so return a null array
+                    Ok(new_null_array($data_type.unwrap(), len))
+                },
+                None => unimplemented!()  // not sure how to handle this
             }
         }
     }
@@ -1499,10 +1580,10 @@ mod test {
     use arrow::datatypes::{i256, Date32Type, Date64Type};
     use arrow::util::test_util::parquet_test_data;
     use arrow_array::{
-        new_empty_array, new_null_array, Array, ArrayRef, BinaryArray, BooleanArray, Date32Array,
-        Date64Array, Decimal128Array, Decimal256Array, Float32Array, Float64Array, Int16Array,
-        Int32Array, Int64Array, Int8Array, LargeBinaryArray, RecordBatch, StringArray, StructArray,
-        TimestampNanosecondArray,
+        new_empty_array, new_null_array, Array, ArrayRef, BinaryArray, BinaryViewArray,
+        BooleanArray, Date32Array, Date64Array, Decimal128Array, Decimal256Array, Float32Array,
+        Float64Array, Int16Array, Int32Array, Int64Array, Int8Array, LargeBinaryArray, RecordBatch,
+        StringArray, StringViewArray, StructArray, TimestampNanosecondArray,
     };
     use arrow_schema::{DataType, Field, SchemaRef};
     use bytes::Bytes;
@@ -1912,6 +1993,65 @@ mod test {
             ]),
             expected_min: utf8_array([Some("A"), Some("AA"), None]),
             expected_max: utf8_array([Some("Q"), Some("ZZ"), None]),
+        }
+        .run()
+    }
+
+    #[test]
+    fn roundtrip_string_view() {
+        Test {
+            input: string_view_array([
+                // row group 1
+                Some("A"),
+                None,
+                Some("Q"),
+                // row group 2
+                Some("ZZ"),
+                Some("A_longerthan12"),
+                None,
+                // row group 3
+                Some("A_longerthan12"),
+                None,
+                None,
+            ]),
+            expected_min: string_view_array([
+                Some("A"),
+                Some("A_longerthan12"),
+                Some("A_longerthan12"),
+            ]),
+            expected_max: string_view_array([Some("Q"), Some("ZZ"), Some("A_longerthan12")]),
+        }
+        .run()
+    }
+
+    #[test]
+    fn roundtrip_binary_view() {
+        let input: Vec<Option<&[u8]>> = vec![
+            // row group 1
+            Some(b"A"),
+            None,
+            Some(b"Q"),
+            // row group 2
+            Some(b"ZZ"),
+            Some(b"A_longerthan12"),
+            None,
+            // row group 3
+            Some(b"A_longerthan12"),
+            None,
+            None,
+        ];
+
+        let expected_min: Vec<Option<&[u8]>> =
+            vec![Some(b"A"), Some(b"A_longerthan12"), Some(b"A_longerthan12")];
+        let expected_max: Vec<Option<&[u8]>> =
+            vec![Some(b"Q"), Some(b"ZZ"), Some(b"A_longerthan12")];
+
+        let array = binary_view_array(input);
+
+        Test {
+            input: array,
+            expected_min: binary_view_array(expected_min),
+            expected_max: binary_view_array(expected_max),
         }
         .run()
     }
@@ -2536,6 +2676,21 @@ mod test {
 
     fn large_binary_array<'a>(input: impl IntoIterator<Item = Option<&'a [u8]>>) -> ArrayRef {
         let array = LargeBinaryArray::from(input.into_iter().collect::<Vec<Option<&[u8]>>>());
+
+        Arc::new(array)
+    }
+
+    fn string_view_array<'a>(input: impl IntoIterator<Item = Option<&'a str>>) -> ArrayRef {
+        let array: StringViewArray = input
+            .into_iter()
+            .map(|s| s.map(|s| s.to_string()))
+            .collect();
+
+        Arc::new(array)
+    }
+
+    fn binary_view_array(input: Vec<Option<&[u8]>>) -> ArrayRef {
+        let array = BinaryViewArray::from(input.into_iter().collect::<Vec<Option<&[u8]>>>());
 
         Arc::new(array)
     }
