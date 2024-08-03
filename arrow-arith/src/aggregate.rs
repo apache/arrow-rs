@@ -353,11 +353,11 @@ pub fn min_boolean(array: &BooleanArray) -> Option<bool> {
     match array.nulls() {
         None => {
             let bit_chunks = array.values().bit_chunks();
-            for x in bit_chunks.iter() {
+            if bit_chunks.iter().any(|x| {
                 // u64::MAX has all bits set, so if the value is not that, then there is a false
-                if x != u64::MAX {
-                    return Some(false);
-                }
+                x != u64::MAX
+            }) {
+                return Some(false);
             }
             // If the remainder bits are not all set, then there is a false
             if bit_chunks.remainder_bits().count_ones() as usize != bit_chunks.remainder_len() {
@@ -370,12 +370,16 @@ pub fn min_boolean(array: &BooleanArray) -> Option<bool> {
             let validity_chunks = nulls.inner().bit_chunks();
             let value_chunks = array.values().bit_chunks();
 
-            for (value, validity) in value_chunks.iter().zip(validity_chunks.iter()) {
-                // We are looking for a false value, but because applying the validity mask
-                // can create a false for a true value (e.g. value: true, validity: false), we instead invert the value, so that we have to look for a true.
-                if (!value & validity) != 0 {
-                    return Some(false);
-                }
+            if value_chunks
+                .iter()
+                .zip(validity_chunks.iter())
+                .any(|(value, validity)| {
+                    // We are looking for a false value, but because applying the validity mask
+                    // can create a false for a true value (e.g. value: true, validity: false), we instead invert the value, so that we have to look for a true.
+                    (!value & validity) != 0
+                })
+            {
+                return Some(false);
             }
 
             // Same trick as above: Instead of looking for a false, we invert the value bits and look for a true
