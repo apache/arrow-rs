@@ -1024,7 +1024,7 @@ macro_rules! get_data_page_statistics {
                     // don't know how to extract statistics, so return a null array
                     Ok(new_null_array($data_type.unwrap(), len))
                 },
-                None => todo!()  // not sure how to handle this
+                None => unimplemented!()  // not sure how to handle this
             }
         }
     }
@@ -2007,15 +2007,19 @@ mod test {
                 Some("Q"),
                 // row group 2
                 Some("ZZ"),
-                Some("AA"),
+                Some("A_longerthan12"),
                 None,
                 // row group 3
-                None,
+                Some("A_longerthan12"),
                 None,
                 None,
             ]),
-            expected_min: string_view_array([Some("A"), Some("AA"), None]),
-            expected_max: string_view_array([Some("Q"), Some("ZZ"), None]),
+            expected_min: string_view_array([
+                Some("A"),
+                Some("A_longerthan12"),
+                Some("A_longerthan12"),
+            ]),
+            expected_max: string_view_array([Some("Q"), Some("ZZ"), Some("A_longerthan12")]),
         }
         .run()
     }
@@ -2029,16 +2033,18 @@ mod test {
             Some(b"Q"),
             // row group 2
             Some(b"ZZ"),
-            Some(b"AA"),
+            Some(b"A_longerthan12"),
             None,
             // row group 3
-            None,
+            Some(b"A_longerthan12"),
             None,
             None,
         ];
 
-        let expected_min: Vec<Option<&[u8]>> = vec![Some(b"A"), Some(b"AA"), None];
-        let expected_max: Vec<Option<&[u8]>> = vec![Some(b"Q"), Some(b"ZZ"), None];
+        let expected_min: Vec<Option<&[u8]>> =
+            vec![Some(b"A"), Some(b"A_longerthan12"), Some(b"A_longerthan12")];
+        let expected_max: Vec<Option<&[u8]>> =
+            vec![Some(b"Q"), Some(b"ZZ"), Some(b"A_longerthan12")];
 
         let array = binary_view_array(input);
 
