@@ -25,6 +25,8 @@ use object_store::buffered::BufWriter;
 use object_store::path::Path;
 use object_store::ObjectStore;
 use tokio::io::AsyncWriteExt;
+//! [`ParquetObjectWriter`] for writing to parquet to [`ObjectStore`]
+
 
 #[derive(Debug)]
 pub struct ParquetObjectWriter {
@@ -40,12 +42,12 @@ impl ParquetObjectWriter {
     }
 
     /// Construct a new ParquetObjectWriter via a existing BufWriter.
-    pub fn from_raw(w: BufWriter) -> Self {
+    pub fn from_buf_writer(w: BufWriter) -> Self {
         Self { w }
     }
 
     /// Consume the writer and return the underlying BufWriter.
-    pub fn into_raw(self) -> BufWriter {
+    pub fn into_inner(self) -> BufWriter {
         self.w
     }
 }
@@ -69,7 +71,11 @@ impl AsyncFileWriter for ParquetObjectWriter {
         })
     }
 }
-
+impl From<BufWriter> for ParquetObjectWriter {
+    fn from(w: BufWriter) -> Self {
+        Self::from_raw(w)
+    }
+}
 #[cfg(test)]
 mod tests {
     use arrow_array::{ArrayRef, Int64Array, RecordBatch};
