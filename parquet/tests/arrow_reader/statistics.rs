@@ -2204,8 +2204,8 @@ mod test {
     use super::*;
     use arrow::util::test_util::parquet_test_data;
     use arrow_array::{
-        new_empty_array, ArrayRef, BooleanArray, Decimal128Array, Float32Array,
-        Float64Array, Int16Array, Int32Array, Int64Array, Int8Array, RecordBatch, StringArray,
+        new_empty_array, ArrayRef, BooleanArray, Decimal128Array, Float32Array, Float64Array,
+        Int16Array, Int32Array, Int64Array, Int8Array, RecordBatch, StringArray,
         TimestampNanosecondArray,
     };
     use arrow_schema::{DataType, SchemaRef, TimeUnit};
