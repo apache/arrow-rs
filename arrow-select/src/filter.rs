@@ -249,7 +249,7 @@ impl FilterBuilder {
 
 /// The iteration strategy used to evaluate [`FilterPredicate`]
 #[derive(Debug)]
-pub enum IterationStrategy {
+enum IterationStrategy {
     /// A lazily evaluated iterator of ranges
     SlicesIterator,
     /// A lazily evaluated iterator of indices
@@ -305,14 +305,6 @@ impl FilterPredicate {
     /// Number of rows being selected based on this [`FilterPredicate`]
     pub fn count(&self) -> usize {
         self.count
-    }
-
-    pub fn get_filter(&self) -> &BooleanArray {
-        &self.filter
-    }
-
-    pub fn get_strategy(&self) -> &IterationStrategy {
-        &self.strategy
     }
 }
 
