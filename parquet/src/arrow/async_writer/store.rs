@@ -76,7 +76,7 @@ pub struct ParquetObjectWriter {
 impl ParquetObjectWriter {
     /// Create a new [`ParquetObjectWriter`] that writes to the specified path in the given store.
     ///
-    /// To configure the writer behavior, please build [`BufWriter`] and then use [`Self::from_raw`]
+    /// To configure the writer behavior, please build [`BufWriter`] and then use [`Self::from_buf_writer`]
     pub fn new(store: Arc<dyn ObjectStore>, path: Path) -> Self {
         Self::from_buf_writer(BufWriter::new(store, path))
     }
