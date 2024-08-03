@@ -17,8 +17,8 @@
 
 //! [`StatisticsConverter`] to convert statistics in parquet format to arrow [`ArrayRef`].
 
-/// All the corresponding tests are in `arrow-rs/parquet/tests/arrow_reader/statistics.rs` file.
-
+/// Notice that all the corresponding tests are in
+/// `arrow-rs/parquet/tests/arrow_reader/statistics.rs`.
 use crate::arrow::buffer::bit_util::sign_extend_be;
 use crate::arrow::parquet_column;
 use crate::data_type::{ByteArray, FixedLenByteArray};

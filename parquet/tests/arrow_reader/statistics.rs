@@ -2202,680 +2202,72 @@ async fn test_column_non_existent() {
 #[cfg(test)]
 mod test {
     use super::*;
-    use parquet::arrow::parquet_column;
-    use parquet::file::metadata::{ParquetMetaData, RowGroupMetaData};
-    use arrow::datatypes::{i256, Date32Type, Date64Type};
     use arrow::util::test_util::parquet_test_data;
     use arrow_array::{
-        new_empty_array, new_null_array, Array, ArrayRef, BinaryArray, BinaryViewArray,
-        BooleanArray, Date32Array, Date64Array, Decimal128Array, Decimal256Array, Float32Array,
-        Float64Array, Int16Array, Int32Array, Int64Array, Int8Array, LargeBinaryArray, RecordBatch,
-        StringArray, StringViewArray, StructArray, TimestampNanosecondArray,
+        new_empty_array, ArrayRef, BooleanArray, Decimal128Array, Float32Array,
+        Float64Array, Int16Array, Int32Array, Int64Array, Int8Array, RecordBatch, StringArray,
+        TimestampNanosecondArray,
     };
-    use arrow_schema::{DataType, Field, SchemaRef};
+    use arrow_schema::{DataType, SchemaRef, TimeUnit};
     use bytes::Bytes;
+    use parquet::arrow::parquet_column;
+    use parquet::file::metadata::{ParquetMetaData, RowGroupMetaData};
     use std::path::PathBuf;
     use std::sync::Arc;
     // TODO error cases (with parquet statistics that are mismatched in expected type)
 
     #[test]
     fn roundtrip_empty() {
-        let empty_bool_array = new_empty_array(&DataType::Boolean);
-        Test {
-            input: empty_bool_array.clone(),
-            expected_min: empty_bool_array.clone(),
-            expected_max: empty_bool_array.clone(),
-        }
-            .run()
-    }
-
-    #[test]
-    fn roundtrip_bool() {
-        Test {
-            input: bool_array([
-                // row group 1
-                Some(true),
-                None,
-                Some(true),
-                // row group 2
-                Some(true),
-                Some(false),
-                None,
-                // row group 3
-                None,
-                None,
-                None,
-            ]),
-            expected_min: bool_array([Some(true), Some(false), None]),
-            expected_max: bool_array([Some(true), Some(true), None]),
-        }
-            .run()
-    }
-
-    #[test]
-    fn roundtrip_int32() {
-        Test {
-            input: i32_array([
-                // row group 1
-                Some(1),
-                None,
-                Some(3),
-                // row group 2
-                Some(0),
-                Some(5),
-                None,
-                // row group 3
-                None,
-                None,
-                None,
-            ]),
-            expected_min: i32_array([Some(1), Some(0), None]),
-            expected_max: i32_array([Some(3), Some(5), None]),
-        }
-            .run()
-    }
-
-    #[test]
-    fn roundtrip_int64() {
-        Test {
-            input: i64_array([
-                // row group 1
-                Some(1),
-                None,
-                Some(3),
-                // row group 2
-                Some(0),
-                Some(5),
-                None,
-                // row group 3
-                None,
-                None,
-                None,
-            ]),
-            expected_min: i64_array([Some(1), Some(0), None]),
-            expected_max: i64_array(vec![Some(3), Some(5), None]),
-        }
-            .run()
-    }
-
-    #[test]
-    fn roundtrip_f32() {
-        Test {
-            input: f32_array([
-                // row group 1
-                Some(1.0),
-                None,
-                Some(3.0),
-                // row group 2
-                Some(-1.0),
-                Some(5.0),
-                None,
-                // row group 3
-                None,
-                None,
-                None,
-            ]),
-            expected_min: f32_array([Some(1.0), Some(-1.0), None]),
-            expected_max: f32_array([Some(3.0), Some(5.0), None]),
-        }
-            .run()
-    }
-
-    #[test]
-    fn roundtrip_f64() {
-        Test {
-            input: f64_array([
-                // row group 1
-                Some(1.0),
-                None,
-                Some(3.0),
-                // row group 2
-                Some(-1.0),
-                Some(5.0),
-                None,
-                // row group 3
-                None,
-                None,
-                None,
-            ]),
-            expected_min: f64_array([Some(1.0), Some(-1.0), None]),
-            expected_max: f64_array([Some(3.0), Some(5.0), None]),
-        }
-            .run()
-    }
-
-    #[test]
-    fn roundtrip_timestamp() {
-        Test {
-            input: timestamp_seconds_array(
-                [
-                    // row group 1
-                    Some(1),
-                    None,
-                    Some(3),
-                    // row group 2
-                    Some(9),
-                    Some(5),
-                    None,
-                    // row group 3
-                    None,
-                    None,
-                    None,
-                ],
-                None,
-            ),
-            expected_min: timestamp_seconds_array([Some(1), Some(5), None], None),
-            expected_max: timestamp_seconds_array([Some(3), Some(9), None], None),
-        }
-            .run();
-
-        Test {
-            input: timestamp_milliseconds_array(
-                [
-                    // row group 1
-                    Some(1),
-                    None,
-                    Some(3),
-                    // row group 2
-                    Some(9),
-                    Some(5),
-                    None,
-                    // row group 3
-                    None,
-                    None,
-                    None,
-                ],
-                None,
-            ),
-            expected_min: timestamp_milliseconds_array([Some(1), Some(5), None], None),
-            expected_max: timestamp_milliseconds_array([Some(3), Some(9), None], None),
-        }
-            .run();
-
-        Test {
-            input: timestamp_microseconds_array(
-                [
-                    // row group 1
-                    Some(1),
-                    None,
-                    Some(3),
-                    // row group 2
-                    Some(9),
-                    Some(5),
-                    None,
-                    // row group 3
-                    None,
-                    None,
-                    None,
-                ],
-                None,
-            ),
-            expected_min: timestamp_microseconds_array([Some(1), Some(5), None], None),
-            expected_max: timestamp_microseconds_array([Some(3), Some(9), None], None),
-        }
-            .run();
-
-        Test {
-            input: timestamp_nanoseconds_array(
-                [
-                    // row group 1
-                    Some(1),
-                    None,
-                    Some(3),
-                    // row group 2
-                    Some(9),
-                    Some(5),
-                    None,
-                    // row group 3
-                    None,
-                    None,
-                    None,
-                ],
-                None,
-            ),
-            expected_min: timestamp_nanoseconds_array([Some(1), Some(5), None], None),
-            expected_max: timestamp_nanoseconds_array([Some(3), Some(9), None], None),
-        }
-            .run()
-    }
-
-    #[test]
-    fn roundtrip_timestamp_timezoned() {
-        Test {
-            input: timestamp_seconds_array(
-                [
-                    // row group 1
-                    Some(1),
-                    None,
-                    Some(3),
-                    // row group 2
-                    Some(9),
-                    Some(5),
-                    None,
-                    // row group 3
-                    None,
-                    None,
-                    None,
-                ],
-                Some("UTC"),
-            ),
-            expected_min: timestamp_seconds_array([Some(1), Some(5), None], Some("UTC")),
-            expected_max: timestamp_seconds_array([Some(3), Some(9), None], Some("UTC")),
-        }
-            .run();
-
-        Test {
-            input: timestamp_milliseconds_array(
-                [
-                    // row group 1
-                    Some(1),
-                    None,
-                    Some(3),
-                    // row group 2
-                    Some(9),
-                    Some(5),
-                    None,
-                    // row group 3
-                    None,
-                    None,
-                    None,
-                ],
-                Some("UTC"),
-            ),
-            expected_min: timestamp_milliseconds_array([Some(1), Some(5), None], Some("UTC")),
-            expected_max: timestamp_milliseconds_array([Some(3), Some(9), None], Some("UTC")),
-        }
-            .run();
-
-        Test {
-            input: timestamp_microseconds_array(
-                [
-                    // row group 1
-                    Some(1),
-                    None,
-                    Some(3),
-                    // row group 2
-                    Some(9),
-                    Some(5),
-                    None,
-                    // row group 3
-                    None,
-                    None,
-                    None,
-                ],
-                Some("UTC"),
-            ),
-            expected_min: timestamp_microseconds_array([Some(1), Some(5), None], Some("UTC")),
-            expected_max: timestamp_microseconds_array([Some(3), Some(9), None], Some("UTC")),
-        }
-            .run();
-
-        Test {
-            input: timestamp_nanoseconds_array(
-                [
-                    // row group 1
-                    Some(1),
-                    None,
-                    Some(3),
-                    // row group 2
-                    Some(9),
-                    Some(5),
-                    None,
-                    // row group 3
-                    None,
-                    None,
-                    None,
-                ],
-                Some("UTC"),
-            ),
-            expected_min: timestamp_nanoseconds_array([Some(1), Some(5), None], Some("UTC")),
-            expected_max: timestamp_nanoseconds_array([Some(3), Some(9), None], Some("UTC")),
-        }
-            .run()
-    }
-
-    #[test]
-    fn roundtrip_decimal() {
-        Test {
-            input: Arc::new(
-                Decimal128Array::from(vec![
-                    // row group 1
-                    Some(100),
-                    None,
-                    Some(22000),
-                    // row group 2
-                    Some(500000),
-                    Some(330000),
-                    None,
-                    // row group 3
-                    None,
-                    None,
-                    None,
-                ])
-                    .with_precision_and_scale(9, 2)
-                    .unwrap(),
-            ),
-            expected_min: Arc::new(
-                Decimal128Array::from(vec![Some(100), Some(330000), None])
-                    .with_precision_and_scale(9, 2)
-                    .unwrap(),
-            ),
-            expected_max: Arc::new(
-                Decimal128Array::from(vec![Some(22000), Some(500000), None])
-                    .with_precision_and_scale(9, 2)
-                    .unwrap(),
-            ),
-        }
-            .run();
-
-        Test {
-            input: Arc::new(
-                Decimal256Array::from(vec![
-                    // row group 1
-                    Some(i256::from(100)),
-                    None,
-                    Some(i256::from(22000)),
-                    // row group 2
-                    Some(i256::MAX),
-                    Some(i256::MIN),
-                    None,
-                    // row group 3
-                    None,
-                    None,
-                    None,
-                ])
-                    .with_precision_and_scale(76, 76)
-                    .unwrap(),
-            ),
-            expected_min: Arc::new(
-                Decimal256Array::from(vec![Some(i256::from(100)), Some(i256::MIN), None])
-                    .with_precision_and_scale(76, 76)
-                    .unwrap(),
-            ),
-            expected_max: Arc::new(
-                Decimal256Array::from(vec![Some(i256::from(22000)), Some(i256::MAX), None])
-                    .with_precision_and_scale(76, 76)
-                    .unwrap(),
-            ),
-        }
-            .run()
-    }
-
-    #[test]
-    fn roundtrip_utf8() {
-        Test {
-            input: utf8_array([
-                // row group 1
-                Some("A"),
-                None,
-                Some("Q"),
-                // row group 2
-                Some("ZZ"),
-                Some("AA"),
-                None,
-                // row group 3
-                None,
-                None,
-                None,
-            ]),
-            expected_min: utf8_array([Some("A"), Some("AA"), None]),
-            expected_max: utf8_array([Some("Q"), Some("ZZ"), None]),
-        }
-            .run()
-    }
-
-    #[test]
-    fn roundtrip_string_view() {
-        Test {
-            input: string_view_array([
-                // row group 1
-                Some("A"),
-                None,
-                Some("Q"),
-                // row group 2
-                Some("ZZ"),
-                Some("A_longerthan12"),
-                None,
-                // row group 3
-                Some("A_longerthan12"),
-                None,
-                None,
-            ]),
-            expected_min: string_view_array([
-                Some("A"),
-                Some("A_longerthan12"),
-                Some("A_longerthan12"),
-            ]),
-            expected_max: string_view_array([Some("Q"), Some("ZZ"), Some("A_longerthan12")]),
-        }
-            .run()
-    }
-
-    #[test]
-    fn roundtrip_binary_view() {
-        let input: Vec<Option<&[u8]>> = vec![
-            // row group 1
-            Some(b"A"),
-            None,
-            Some(b"Q"),
-            // row group 2
-            Some(b"ZZ"),
-            Some(b"A_longerthan12"),
-            None,
-            // row group 3
-            Some(b"A_longerthan12"),
-            None,
-            None,
+        let all_types = vec![
+            DataType::Null,
+            DataType::Boolean,
+            DataType::Int8,
+            DataType::Int16,
+            DataType::Int32,
+            DataType::Int64,
+            DataType::UInt8,
+            DataType::UInt16,
+            DataType::UInt32,
+            DataType::UInt64,
+            DataType::Float16,
+            DataType::Float32,
+            DataType::Float64,
+            DataType::Timestamp(TimeUnit::Second, None),
+            DataType::Date32,
+            DataType::Date64,
+            // DataType::Time32(Second),
+            // DataType::Time64(Second),
+            // DataType::Duration(Second),
+            // DataType::Interval(IntervalUnit),
+            DataType::Binary,
+            DataType::FixedSizeBinary(0),
+            DataType::LargeBinary,
+            DataType::BinaryView,
+            DataType::Utf8,
+            DataType::LargeUtf8,
+            DataType::Utf8View,
+            // DataType::List(FieldRef),
+            // DataType::ListView(FieldRef),
+            // DataType::FixedSizeList(FieldRef, i32),
+            // DataType::LargeList(FieldRef),
+            // DataType::LargeListView(FieldRef),
+            // DataType::Struct(Fields),
+            // DataType::Union(UnionFields, UnionMode),
+            // DataType::Dictionary(Box<DataType>, Box<DataType>),
+            // DataType::Decimal128(u8, i8),
+            // DataType::Decimal256(u8, i8),
+            // DataType::Map(FieldRef, bool),
+            // DataType::RunEndEncoded(FieldRef, FieldRef),
         ];
-
-        let expected_min: Vec<Option<&[u8]>> =
-            vec![Some(b"A"), Some(b"A_longerthan12"), Some(b"A_longerthan12")];
-        let expected_max: Vec<Option<&[u8]>> =
-            vec![Some(b"Q"), Some(b"ZZ"), Some(b"A_longerthan12")];
-
-        let array = binary_view_array(input);
-
-        Test {
-            input: array,
-            expected_min: binary_view_array(expected_min),
-            expected_max: binary_view_array(expected_max),
-        }
-            .run()
-    }
-
-    #[test]
-    fn roundtrip_struct() {
-        let mut test = Test {
-            input: struct_array(vec![
-                // row group 1
-                (Some(true), Some(1)),
-                (None, None),
-                (Some(true), Some(3)),
-                // row group 2
-                (Some(true), Some(0)),
-                (Some(false), Some(5)),
-                (None, None),
-                // row group 3
-                (None, None),
-                (None, None),
-                (None, None),
-            ]),
-            expected_min: struct_array(vec![
-                (Some(true), Some(1)),
-                (Some(true), Some(0)),
-                (None, None),
-            ]),
-
-            expected_max: struct_array(vec![
-                (Some(true), Some(3)),
-                (Some(true), Some(0)),
-                (None, None),
-            ]),
-        };
-        // Due to https://github.com/apache/datafusion/issues/8334,
-        // statistics for struct arrays are not supported
-        test.expected_min = new_null_array(test.input.data_type(), test.expected_min.len());
-        test.expected_max = new_null_array(test.input.data_type(), test.expected_min.len());
-        test.run()
-    }
-
-    #[test]
-    fn roundtrip_binary() {
-        Test {
-            input: Arc::new(BinaryArray::from_opt_vec(vec![
-                // row group 1
-                Some(b"A"),
-                None,
-                Some(b"Q"),
-                // row group 2
-                Some(b"ZZ"),
-                Some(b"AA"),
-                None,
-                // row group 3
-                None,
-                None,
-                None,
-            ])),
-            expected_min: Arc::new(BinaryArray::from_opt_vec(vec![
-                Some(b"A"),
-                Some(b"AA"),
-                None,
-            ])),
-            expected_max: Arc::new(BinaryArray::from_opt_vec(vec![
-                Some(b"Q"),
-                Some(b"ZZ"),
-                None,
-            ])),
-        }
-            .run()
-    }
-
-    #[test]
-    fn roundtrip_date32() {
-        Test {
-            input: date32_array(vec![
-                // row group 1
-                Some("2021-01-01"),
-                None,
-                Some("2021-01-03"),
-                // row group 2
-                Some("2021-01-01"),
-                Some("2021-01-05"),
-                None,
-                // row group 3
-                None,
-                None,
-                None,
-            ]),
-            expected_min: date32_array(vec![Some("2021-01-01"), Some("2021-01-01"), None]),
-            expected_max: date32_array(vec![Some("2021-01-03"), Some("2021-01-05"), None]),
-        }
-            .run()
-    }
-
-    #[test]
-    fn roundtrip_date64() {
-        Test {
-            input: date64_array(vec![
-                // row group 1
-                Some("2021-01-01"),
-                None,
-                Some("2021-01-03"),
-                // row group 2
-                Some("2021-01-01"),
-                Some("2021-01-05"),
-                None,
-                // row group 3
-                None,
-                None,
-                None,
-            ]),
-            expected_min: date64_array(vec![Some("2021-01-01"), Some("2021-01-01"), None]),
-            expected_max: date64_array(vec![Some("2021-01-03"), Some("2021-01-05"), None]),
-        }
-            .run()
-    }
-
-    #[test]
-    fn roundtrip_large_binary_array() {
-        let input: Vec<Option<&[u8]>> = vec![
-            // row group 1
-            Some(b"A"),
-            None,
-            Some(b"Q"),
-            // row group 2
-            Some(b"ZZ"),
-            Some(b"AA"),
-            None,
-            // row group 3
-            None,
-            None,
-            None,
-        ];
-
-        let expected_min: Vec<Option<&[u8]>> = vec![Some(b"A"), Some(b"AA"), None];
-        let expected_max: Vec<Option<&[u8]>> = vec![Some(b"Q"), Some(b"ZZ"), None];
-
-        Test {
-            input: large_binary_array(input),
-            expected_min: large_binary_array(expected_min),
-            expected_max: large_binary_array(expected_max),
-        }
-            .run();
-    }
-
-    #[test]
-    fn struct_and_non_struct() {
-        // Ensures that statistics for an array that appears *after* a struct
-        // array are not wrong
-        let struct_col = struct_array(vec![
-            // row group 1
-            (Some(true), Some(1)),
-            (None, None),
-            (Some(true), Some(3)),
-        ]);
-        let int_col = i32_array([Some(100), Some(200), Some(300)]);
-        let expected_min = i32_array([Some(100)]);
-        let expected_max = i32_array(vec![Some(300)]);
-
-        // use a name that shadows a name in the struct column
-        match struct_col.data_type() {
-            DataType::Struct(fields) => {
-                assert_eq!(fields.get(1).unwrap().name(), "int_col")
+        for data_type in all_types {
+            let empty_array = new_empty_array(&data_type);
+            Test {
+                input: empty_array.clone(),
+                expected_min: empty_array.clone(),
+                expected_max: empty_array,
             }
-            _ => panic!("unexpected data type for struct column"),
-        };
-
-        let input_batch =
-            RecordBatch::try_from_iter([("struct_col", struct_col), ("int_col", int_col)]).unwrap();
-
-        let schema = input_batch.schema();
-
-        let metadata = parquet_metadata(schema.clone(), input_batch);
-        let parquet_schema = metadata.file_metadata().schema_descr();
-
-        // read the int_col statistics
-        let (idx, _) = parquet_column(parquet_schema, &schema, "int_col").unwrap();
-        assert_eq!(idx, 2);
-
-        let row_groups = metadata.row_groups();
-        let converter = StatisticsConverter::try_new("int_col", &schema, parquet_schema).unwrap();
-
-        let min = converter.row_group_mins(row_groups.iter()).unwrap();
-        assert_eq!(
-            &min,
-            &expected_min,
-            "Min. Statistics\n\n{}\n\n",
-            DisplayStats(row_groups)
-        );
-
-        let max = converter.row_group_maxes(row_groups.iter()).unwrap();
-        assert_eq!(
-            &max,
-            &expected_max,
-            "Max. Statistics\n\n{}\n\n",
-            DisplayStats(row_groups)
-        );
+            .run();
+        }
     }
 
     #[test]
@@ -3210,39 +2602,6 @@ mod test {
         Arc::new(array)
     }
 
-    fn timestamp_seconds_array(
-        input: impl IntoIterator<Item = Option<i64>>,
-        timzezone: Option<&str>,
-    ) -> ArrayRef {
-        let array: TimestampSecondArray = input.into_iter().collect();
-        match timzezone {
-            Some(tz) => Arc::new(array.with_timezone(tz)),
-            None => Arc::new(array),
-        }
-    }
-
-    fn timestamp_milliseconds_array(
-        input: impl IntoIterator<Item = Option<i64>>,
-        timzezone: Option<&str>,
-    ) -> ArrayRef {
-        let array: TimestampMillisecondArray = input.into_iter().collect();
-        match timzezone {
-            Some(tz) => Arc::new(array.with_timezone(tz)),
-            None => Arc::new(array),
-        }
-    }
-
-    fn timestamp_microseconds_array(
-        input: impl IntoIterator<Item = Option<i64>>,
-        timzezone: Option<&str>,
-    ) -> ArrayRef {
-        let array: TimestampMicrosecondArray = input.into_iter().collect();
-        match timzezone {
-            Some(tz) => Arc::new(array.with_timezone(tz)),
-            None => Arc::new(array),
-        }
-    }
-
     fn timestamp_nanoseconds_array(
         input: impl IntoIterator<Item = Option<i64>>,
         timzezone: Option<&str>,
@@ -3259,66 +2618,6 @@ mod test {
             .into_iter()
             .map(|s| s.map(|s| s.to_string()))
             .collect();
-        Arc::new(array)
-    }
-
-    // returns a struct array with columns "bool_col" and "int_col" with the specified values
-    fn struct_array(input: Vec<(Option<bool>, Option<i32>)>) -> ArrayRef {
-        let boolean: BooleanArray = input.iter().map(|(b, _i)| b).collect();
-        let int: Int32Array = input.iter().map(|(_b, i)| i).collect();
-
-        let nullable = true;
-        let struct_array = StructArray::from(vec![
-            (
-                Arc::new(Field::new("bool_col", DataType::Boolean, nullable)),
-                Arc::new(boolean) as ArrayRef,
-            ),
-            (
-                Arc::new(Field::new("int_col", DataType::Int32, nullable)),
-                Arc::new(int) as ArrayRef,
-            ),
-        ]);
-        Arc::new(struct_array)
-    }
-
-    fn date32_array<'a>(input: impl IntoIterator<Item = Option<&'a str>>) -> ArrayRef {
-        let array = Date32Array::from(
-            input
-                .into_iter()
-                .map(|s| Date32Type::parse(s.unwrap_or_default()))
-                .collect::<Vec<_>>(),
-        );
-        Arc::new(array)
-    }
-
-    fn date64_array<'a>(input: impl IntoIterator<Item = Option<&'a str>>) -> ArrayRef {
-        let array = Date64Array::from(
-            input
-                .into_iter()
-                .map(|s| Date64Type::parse(s.unwrap_or_default()))
-                .collect::<Vec<_>>(),
-        );
-        Arc::new(array)
-    }
-
-    fn large_binary_array<'a>(input: impl IntoIterator<Item = Option<&'a [u8]>>) -> ArrayRef {
-        let array = LargeBinaryArray::from(input.into_iter().collect::<Vec<Option<&[u8]>>>());
-
-        Arc::new(array)
-    }
-
-    fn string_view_array<'a>(input: impl IntoIterator<Item = Option<&'a str>>) -> ArrayRef {
-        let array: StringViewArray = input
-            .into_iter()
-            .map(|s| s.map(|s| s.to_string()))
-            .collect();
-
-        Arc::new(array)
-    }
-
-    fn binary_view_array(input: Vec<Option<&[u8]>>) -> ArrayRef {
-        let array = BinaryViewArray::from(input.into_iter().collect::<Vec<Option<&[u8]>>>());
-
         Arc::new(array)
     }
 }
