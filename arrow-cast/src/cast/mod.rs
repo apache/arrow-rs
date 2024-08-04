@@ -225,10 +225,11 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
             | Timestamp(Millisecond, _)
             | Timestamp(Microsecond, _)
             | Timestamp(Nanosecond, _)
-            | Interval(_),
+            | Interval(_)
+            | BinaryView,
         ) => true,
-        (Utf8 | LargeUtf8, Utf8View | BinaryView) => true,
-        (BinaryView, Binary | LargeBinary | Utf8 | LargeUtf8 ) => true,
+        (Utf8 | LargeUtf8, Utf8View) => true,
+        (BinaryView, Binary | LargeBinary | Utf8 | LargeUtf8 | Utf8View ) => true,
         (Utf8 | LargeUtf8, _) => to_type.is_numeric() && to_type != &Float16,
         (_, Utf8 | LargeUtf8) => from_type.is_primitive(),
 
@@ -1289,6 +1290,15 @@ pub fn cast_with_options(
             Date64 => parse_string_view::<Date64Type>(array, cast_options),
             Binary => cast_view_to_byte::<StringViewType, GenericBinaryType<i32>>(array),
             LargeBinary => cast_view_to_byte::<StringViewType, GenericBinaryType<i64>>(array),
+            BinaryView => {
+                if let Some(arr) = array.as_any().downcast_ref::<StringViewArray>() {
+                    Ok(Arc::new(arr.clone().to_binary_view()))
+                } else {
+                    Err(ArrowError::CastError(
+                        "Cannot cast StringView to BinaryView".to_string(),
+                    ))
+                }
+            }
             Utf8 => cast_view_to_byte::<StringViewType, GenericStringType<i32>>(array),
             LargeUtf8 => cast_view_to_byte::<StringViewType, GenericStringType<i64>>(array),
             Time32(TimeUnit::Second) => parse_string_view::<Time32SecondType>(array, cast_options),
@@ -1430,8 +1440,27 @@ pub fn cast_with_options(
         (BinaryView, _) => match to_type {
             Binary => cast_view_to_byte::<BinaryViewType, GenericBinaryType<i32>>(array),
             LargeBinary => cast_view_to_byte::<BinaryViewType, GenericBinaryType<i64>>(array),
-            Utf8 => cast_slice_view_to_byte::<BinaryViewType, GenericStringType<i32>>(array),
-            LargeUtf8 => cast_slice_view_to_byte::<BinaryViewType, GenericStringType<i64>>(array),
+            Utf8 => {
+                let binary_arr =
+                    cast_view_to_byte::<BinaryViewType, GenericBinaryType<i32>>(array)?;
+                cast_binary_to_string::<i32>(&binary_arr, cast_options)
+            }
+            LargeUtf8 => {
+                let binary_arr =
+                    cast_view_to_byte::<BinaryViewType, GenericBinaryType<i64>>(array)?;
+                cast_binary_to_string::<i64>(&binary_arr, cast_options)
+            }
+            Utf8View => {
+                if let Some(arr) = array.as_any().downcast_ref::<BinaryViewArray>() {
+                    arr.clone()
+                        .to_string_view()
+                        .map(|x| Arc::new(x) as ArrayRef)
+                } else {
+                    Err(ArrowError::CastError(
+                        "Cannot cast BinaryView to StringView".to_string(),
+                    ))
+                }
+            }
             _ => Err(ArrowError::CastError(format!(
                 "Casting from {from_type:?} to {to_type:?} not supported",
             ))),
@@ -2027,7 +2056,6 @@ pub fn cast_with_options(
                     })?,
             ))
         }
-
         (Date64, Timestamp(TimeUnit::Second, None)) => Ok(Arc::new(
             array
                 .as_primitive::<Date64Type>()
@@ -2430,37 +2458,6 @@ where
     let mut byte_array_builder = GenericByteBuilder::<TO>::with_capacity(len, bytes);
 
     for val in view_array.iter() {
-        byte_array_builder.append_option(val);
-    }
-
-    Ok(Arc::new(byte_array_builder.finish()))
-}
-
-/// Specialized function to cast from one `ByteViewType` array to `ByteArrayType` array.
-/// Equvilent to [`cast_view_to_byte`] but with additional constraint on the `FROM::Native` type.
-fn cast_slice_view_to_byte<FROM, TO>(array: &dyn Array) -> Result<ArrayRef, ArrowError>
-where
-    FROM: ByteViewType,
-    TO: ByteArrayType,
-    FROM::Native: AsRef<[u8]>,
-    str: AsRef<TO::Native>,
-{
-    let data = array.to_data();
-    let view_array = GenericByteViewArray::<FROM>::from(data);
-
-    let len = view_array.len();
-    let bytes = view_array
-        .views()
-        .iter()
-        .map(|v| ByteView::from(*v).length as usize)
-        .sum::<usize>();
-
-    let mut byte_array_builder = GenericByteBuilder::<TO>::with_capacity(len, bytes);
-
-    for val in view_array.iter() {
-        let val = val
-            .map(|val| std::str::from_utf8(val.as_ref()))
-            .transpose()?;
         byte_array_builder.append_option(val);
     }
 
