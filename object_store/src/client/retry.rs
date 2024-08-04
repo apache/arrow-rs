@@ -86,6 +86,12 @@ impl Error {
                 path,
                 source: Box::new(self),
             },
+            Some(StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN) => {
+                crate::Error::PermissionDernied {
+                    path,
+                    source: Box::new(self),
+                }
+            }
             _ => crate::Error::Generic {
                 store,
                 source: Box::new(self),
@@ -106,6 +112,10 @@ impl From<Error> for std::io::Error {
                 status: StatusCode::BAD_REQUEST,
                 ..
             } => Self::new(ErrorKind::InvalidInput, err),
+            Error::Client {
+                status: StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN,
+                ..
+            } => Self::new(ErrorKind::PermissionDenied, err),
             Error::Reqwest { source, .. } if source.is_timeout() => {
                 Self::new(ErrorKind::TimedOut, err)
             }
