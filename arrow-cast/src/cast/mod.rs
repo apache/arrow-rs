@@ -5303,12 +5303,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_string_to_view() {
-        _test_string_to_view::<i32>();
-        _test_string_to_view::<i64>();
-    }
-
     const VIEW_TEST_DATA: [Option<&str>; 5] = [
         Some("hello"),
         Some("repeated"),
@@ -5316,6 +5310,48 @@ mod tests {
         Some("large payload over 12 bytes"),
         Some("repeated"),
     ];
+
+    #[test]
+    fn test_between_views() {
+        _test_string_view_to_binary_view();
+        _test_binary_view_to_string_view();
+    }
+
+    fn _test_string_view_to_binary_view() {
+        let string_view_array = StringViewArray::from_iter(VIEW_TEST_DATA);
+
+        assert!(can_cast_types(
+            string_view_array.data_type(),
+            &DataType::BinaryView
+        ));
+
+        let binary_view_array = cast(&string_view_array, &DataType::BinaryView).unwrap();
+        assert_eq!(binary_view_array.data_type(), &DataType::BinaryView);
+
+        let expect_binary_view_array = BinaryViewArray::from_iter(VIEW_TEST_DATA);
+        assert_eq!(binary_view_array.as_ref(), &expect_binary_view_array);
+    }
+
+    fn _test_binary_view_to_string_view() {
+        let binary_view_array = BinaryViewArray::from_iter(VIEW_TEST_DATA);
+
+        assert!(can_cast_types(
+            binary_view_array.data_type(),
+            &DataType::Utf8View
+        ));
+
+        let string_view_array = cast(&binary_view_array, &DataType::Utf8View).unwrap();
+        assert_eq!(string_view_array.data_type(), &DataType::Utf8View);
+
+        let expect_string_view_array = StringViewArray::from_iter(VIEW_TEST_DATA);
+        assert_eq!(string_view_array.as_ref(), &expect_string_view_array);
+    }
+
+    #[test]
+    fn test_string_to_view() {
+        _test_string_to_view::<i32>();
+        _test_string_to_view::<i64>();
+    }
 
     fn _test_string_to_view<O>()
     where
