@@ -134,9 +134,7 @@ fn put_fixed<T: DataType, const TYPE_SIZE: usize>(dst: &mut [u8], values: &[T::T
                 TYPE_SIZE
             );
         }
-        for i in 0..TYPE_SIZE {
-            dst[idx + i] = bytes[i]
-        }
+        dst[idx..(TYPE_SIZE + idx)].copy_from_slice(&bytes[..TYPE_SIZE]);
         idx += TYPE_SIZE;
     });
 }
@@ -175,8 +173,8 @@ impl<T: DataType> Encoder<T> for VariableWidthByteStreamSplitEncoder<T> {
         // Get a slice of the buffer corresponding to the location of the new data
         let out_buf = &mut self.buffer[idx..idx + data_len];
 
-        // Now copy `values` into the buffer. For `type_width` <= 8 use a loop to do the copy as
-        // it is significantly faster.
+        // Now copy `values` into the buffer. For `type_width` <= 8 use a fixed size when 
+        // performing the copy as it is significantly faster.
         match self.type_width {
             2 => put_fixed::<T, 2>(out_buf, values),
             3 => put_fixed::<T, 3>(out_buf, values),
