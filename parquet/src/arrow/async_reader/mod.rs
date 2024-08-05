@@ -79,6 +79,7 @@ use std::collections::VecDeque;
 use std::fmt::Formatter;
 use std::io::SeekFrom;
 use std::ops::Range;
+use std::ops::RangeBounds;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
@@ -121,10 +122,41 @@ use crate::arrow::schema::ParquetField;
 #[cfg(feature = "object_store")]
 pub use store::*;
 
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub enum GetRange {
+    /// Request a specific range of bytes
+    ///
+    /// If the given range is zero-length or starts after the end of the object,
+    /// an error will be returned. Additionally, if the range ends after the end
+    /// of the object, the entire remainder of the object will be returned.
+    /// Otherwise, the exact requested range will be returned.
+    Bounded(Range<usize>),
+    /// Request all bytes starting from a given byte offset
+    Offset(usize),
+    /// Request up to the last n bytes
+    Suffix(usize),
+}
+
+impl<T: RangeBounds<usize>> From<T> for GetRange {
+    fn from(value: T) -> Self {
+        use std::ops::Bound::*;
+        let first = match value.start_bound() {
+            Included(i) => *i,
+            Excluded(i) => i + 1,
+            Unbounded => 0,
+        };
+        match value.end_bound() {
+            Included(i) => Self::Bounded(first..(i + 1)),
+            Excluded(i) => Self::Bounded(first..*i),
+            Unbounded => Self::Offset(first),
+        }
+    }
+}
+
 /// The asynchronous interface used by [`ParquetRecordBatchStream`] to read parquet files
 pub trait AsyncFileReader: Send {
     /// Retrieve the bytes in `range`
-    fn get_bytes(&mut self, range: Range<usize>) -> BoxFuture<'_, Result<Bytes>>;
+    fn get_bytes(&mut self, range: GetRange) -> BoxFuture<'_, Result<Bytes>>;
 
     /// Retrieve multiple byte ranges. The default implementation will call `get_bytes` sequentially
     fn get_byte_ranges(&mut self, ranges: Vec<Range<usize>>) -> BoxFuture<'_, Result<Vec<Bytes>>> {
@@ -132,7 +164,7 @@ pub trait AsyncFileReader: Send {
             let mut result = Vec::with_capacity(ranges.len());
 
             for range in ranges.into_iter() {
-                let data = self.get_bytes(range).await?;
+                let data = self.get_bytes(range.into()).await?;
                 result.push(data);
             }
 
@@ -148,7 +180,7 @@ pub trait AsyncFileReader: Send {
 }
 
 impl AsyncFileReader for Box<dyn AsyncFileReader> {
-    fn get_bytes(&mut self, range: Range<usize>) -> BoxFuture<'_, Result<Bytes>> {
+    fn get_bytes(&mut self, range: GetRange) -> BoxFuture<'_, Result<Bytes>> {
         self.as_mut().get_bytes(range)
     }
 
@@ -162,15 +194,31 @@ impl AsyncFileReader for Box<dyn AsyncFileReader> {
 }
 
 impl<T: AsyncRead + AsyncSeek + Unpin + Send> AsyncFileReader for T {
-    fn get_bytes(&mut self, range: Range<usize>) -> BoxFuture<'_, Result<Bytes>> {
+    fn get_bytes(&mut self, range: GetRange) -> BoxFuture<'_, Result<Bytes>> {
         async move {
-            self.seek(SeekFrom::Start(range.start as u64)).await?;
-
-            let to_read = range.end - range.start;
-            let mut buffer = Vec::with_capacity(to_read);
-            let read = self.take(to_read as u64).read_to_end(&mut buffer).await?;
-            if read != to_read {
-                return Err(eof_err!("expected to read {} bytes, got {}", to_read, read));
+            let to_read = match range {
+                GetRange::Suffix(end_offset) => {
+                    self.seek(SeekFrom::End(-(end_offset as i64))).await?;
+                    Some(end_offset)
+                }
+                GetRange::Offset(offset) => {
+                    self.seek(SeekFrom::Start(offset as u64)).await?;
+                    None
+                }
+                GetRange::Bounded(range) => {
+                    self.seek(SeekFrom::Start(range.start as u64)).await?;
+                    Some(range.end - range.start)
+                }
+            };
+            // TODO: figure out a better alternative for Offset ranges
+            let mut buffer = Vec::with_capacity(to_read.unwrap_or(1_024usize));
+            if let Some(to_read) = to_read {
+                let read = self.take(to_read as u64).read_to_end(&mut buffer).await?;
+                if read != to_read {
+                    return Err(eof_err!("expected to read {} bytes, got {}", to_read, read));
+                }
+            } else {
+                self.read_to_end(&mut buffer).await?;
             }
 
             Ok(buffer.into())
@@ -358,11 +406,14 @@ impl<T: AsyncFileReader + Send + 'static> ParquetRecordBatchStreamBuilder<T> {
         };
 
         let buffer = match column_metadata.bloom_filter_length() {
-            Some(length) => self.input.0.get_bytes(offset..offset + length as usize),
+            Some(length) => self
+                .input
+                .0
+                .get_bytes((offset..offset + length as usize).into()),
             None => self
                 .input
                 .0
-                .get_bytes(offset..offset + SBBF_HEADER_SIZE_ESTIMATE),
+                .get_bytes((offset..offset + SBBF_HEADER_SIZE_ESTIMATE).into()),
         }
         .await?;
 
@@ -393,7 +444,9 @@ impl<T: AsyncFileReader + Send + 'static> ParquetRecordBatchStreamBuilder<T> {
                 })?;
                 self.input
                     .0
-                    .get_bytes(bitset_offset as usize..bitset_offset as usize + bitset_length)
+                    .get_bytes(
+                        (bitset_offset as usize..bitset_offset as usize + bitset_length).into(),
+                    )
                     .await?
             }
         };
@@ -932,12 +985,19 @@ mod tests {
     struct TestReader {
         data: Bytes,
         metadata: Arc<ParquetMetaData>,
-        requests: Arc<Mutex<Vec<Range<usize>>>>,
+        requests: Arc<Mutex<Vec<GetRange>>>,
     }
 
     impl AsyncFileReader for TestReader {
-        fn get_bytes(&mut self, range: Range<usize>) -> BoxFuture<'_, Result<Bytes>> {
+        fn get_bytes(&mut self, range: GetRange) -> BoxFuture<'_, Result<Bytes>> {
             self.requests.lock().unwrap().push(range.clone());
+            let range = match range {
+                GetRange::Bounded(range) => range,
+                GetRange::Offset(offset) => offset..self.data.len(),
+                GetRange::Suffix(end_offset) => {
+                    self.data.len().saturating_sub(end_offset)..self.data.len()
+                }
+            };
             futures::future::ready(Ok(self.data.slice(range))).boxed()
         }
 
@@ -995,8 +1055,8 @@ mod tests {
         assert_eq!(
             &requests[..],
             &[
-                offset_1 as usize..(offset_1 + length_1) as usize,
-                offset_2 as usize..(offset_2 + length_2) as usize
+                GetRange::from(offset_1 as usize..(offset_1 + length_1) as usize),
+                GetRange::from(offset_2 as usize..(offset_2 + length_2) as usize)
             ]
         );
     }
@@ -1581,7 +1641,7 @@ mod tests {
 
         // Setup `RowSelection` so that we can skip every other page, selecting the last page
         let mut selectors = vec![];
-        let mut expected_page_requests: Vec<Range<usize>> = vec![];
+        let mut expected_page_requests: Vec<GetRange> = vec![];
         while let Some(page) = pages.next() {
             let num_rows = if let Some(next_page) = pages.peek() {
                 next_page.first_row_index - page.first_row_index
@@ -1595,7 +1655,7 @@ mod tests {
                 selectors.push(RowSelector::select(num_rows as usize));
                 let start = page.offset as usize;
                 let end = start + page.compressed_page_size as usize;
-                expected_page_requests.push(start..end);
+                expected_page_requests.push((start..end).into());
             }
             skip = !skip;
         }
