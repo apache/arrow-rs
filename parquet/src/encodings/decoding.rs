@@ -1822,16 +1822,30 @@ mod tests {
         test_byte_stream_split_decode::<Int64Type>(data, -1);
     }
 
-    #[test]
-    fn test_byte_stream_split_flba() {
+    fn test_byte_stream_split_flba(type_width: usize) {
         let data = vec![
             vec![
-                FixedLenByteArray::from(vec![0, 1, 2, 3, 4]),
-                FixedLenByteArray::from(vec![5, 6, 7, 8, 9]),
+                FixedLenByteArrayType::gen(type_width as i32),
+                FixedLenByteArrayType::gen(type_width as i32),
             ],
-            vec![FixedLenByteArray::from(vec![10, 11, 12, 13, 14])],
+            vec![FixedLenByteArrayType::gen(type_width as i32)],
         ];
-        test_byte_stream_split_decode::<FixedLenByteArrayType>(data, 5);
+        test_byte_stream_split_decode::<FixedLenByteArrayType>(data, type_width as i32);
+    }
+
+    #[test]
+    fn test_byte_stream_split_flba5() {
+        test_byte_stream_split_flba(5);
+    }
+
+    #[test]
+    fn test_byte_stream_split_flba16() {
+        test_byte_stream_split_flba(16);
+    }
+
+    #[test]
+    fn test_byte_stream_split_flba19() {
+        test_byte_stream_split_flba(19);
     }
 
     #[test]

@@ -23,6 +23,7 @@ use crate::errors::{ParquetError, Result};
 use super::Encoder;
 
 use bytes::{BufMut, Bytes};
+use std::cmp;
 use std::marker::PhantomData;
 
 pub struct ByteStreamSplitEncoder<T> {
@@ -54,10 +55,14 @@ fn split_streams_const<const TYPE_SIZE: usize>(src: &[u8], dst: &mut [u8]) {
 
 // Like above, but type_size is not known at compile time.
 fn split_streams_variable(src: &[u8], dst: &mut [u8], type_size: usize) {
+    const BLOCK_SIZE: usize = 4;
     let stride = src.len() / type_size;
-    for i in 0..stride {
-        for j in 0..type_size {
-            dst[i + j * stride] = src[i * type_size + j];
+    for j in (0..type_size).step_by(BLOCK_SIZE) {
+        let jrange = cmp::min(BLOCK_SIZE, type_size - j);
+        for i in 0..stride {
+            for jj in 0..jrange {
+                dst[i + (j + jj) * stride] = src[i * type_size + j + jj];
+            }
         }
     }
 }
@@ -173,7 +178,7 @@ impl<T: DataType> Encoder<T> for VariableWidthByteStreamSplitEncoder<T> {
         // Get a slice of the buffer corresponding to the location of the new data
         let out_buf = &mut self.buffer[idx..idx + data_len];
 
-        // Now copy `values` into the buffer. For `type_width` <= 8 use a fixed size when 
+        // Now copy `values` into the buffer. For `type_width` <= 8 use a fixed size when
         // performing the copy as it is significantly faster.
         match self.type_width {
             2 => put_fixed::<T, 2>(out_buf, values),
