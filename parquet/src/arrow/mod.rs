@@ -113,13 +113,13 @@ pub use self::arrow_writer::ArrowWriter;
 pub use self::async_reader::ParquetRecordBatchStreamBuilder;
 #[cfg(feature = "async")]
 pub use self::async_writer::AsyncArrowWriter;
-use crate::schema::types::SchemaDescriptor;
-use arrow_schema::{FieldRef, Schema};
-
 pub use self::schema::{
     arrow_to_parquet_schema, parquet_to_arrow_field_levels, parquet_to_arrow_schema,
     parquet_to_arrow_schema_by_columns, FieldLevels,
 };
+use crate::schema::types::SchemaDescriptor;
+use arrow_schema::DataType;
+use arrow_schema::{FieldRef, Schema};
 
 /// Schema metadata key used to store serialized Arrow IPC schema
 pub const ARROW_SCHEMA_META_KEY: &str = "ARROW:schema";
@@ -221,18 +221,33 @@ pub fn parquet_column<'a>(
     name: &str,
 ) -> Option<(usize, &'a FieldRef)> {
     let (root_idx, field) = arrow_schema.fields.find(name)?;
-    if field.data_type().is_nested() {
-        // Nested fields are not supported and require non-trivial logic
-        // to correctly walk the parquet schema accounting for the
-        // logical type rules - <https://github.com/apache/parquet-format/blob/master/LogicalTypes.md>
-        //
-        // For example a ListArray could correspond to anything from 1 to 3 levels
-        // in the parquet schema
-        return None;
+    if !field.data_type().is_nested() {
+        let parquet_idx = find_parquet_idx(parquet_schema, root_idx)?;
+        return Some((parquet_idx, field));
     }
+    // Nested field
+    match field.data_type() {
+        DataType::Struct(_) => {
+            let parquet_idx = find_parquet_idx(parquet_schema, root_idx)?;
+            Some((parquet_idx, field))
+        }
+        _ => {
+            if field.data_type().is_nested() {
+                // Nested fields are not supported and require non-trivial logic
+                // to correctly walk the parquet schema accounting for the
+                // logical type rules - <https://github.com/apache/parquet-format/blob/master/LogicalTypes.md>
+                //
+                // For example a ListArray could correspond to anything from 1 to 3 levels
+                // in the parquet schema
+                None
+            } else {
+                let parquet_idx = find_parquet_idx(parquet_schema, root_idx)?;
+                Some((parquet_idx, field))
+            }
+        }
+    }
+}
 
-    // This could be made more efficient (#TBD)
-    let parquet_idx = (0..parquet_schema.columns().len())
-        .find(|x| parquet_schema.get_column_root_idx(*x) == root_idx)?;
-    Some((parquet_idx, field))
+fn find_parquet_idx(parquet_schema: &SchemaDescriptor, root_idx: usize) -> Option<usize> {
+    (0..parquet_schema.columns().len()).find(|x| parquet_schema.get_column_root_idx(*x) == root_idx)
 }

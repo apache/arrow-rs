@@ -26,6 +26,7 @@ use arrow_array::{
     TimestampSecondArray, UInt16Array, UInt32Array, UInt64Array, UInt8Array,
 };
 use arrow_buffer::i256;
+use arrow_schema::Fields;
 use arrow_schema::{DataType, Field, Schema, TimeUnit};
 use chrono::Datelike;
 use chrono::{Duration, TimeDelta};
@@ -87,6 +88,7 @@ enum Scenario {
     Dictionary,
     PeriodsInColumnNames,
     StructArray,
+    StructArrayNested,
     UTF8,
     UTF8View,
     BinaryView,
@@ -889,6 +891,56 @@ fn create_data_batch(scenario: Scenario) -> Vec<RecordBatch> {
                 true,
             )]));
             vec![RecordBatch::try_new(schema, vec![struct_array_data]).unwrap()]
+        }
+        Scenario::StructArrayNested => {
+            let inner_boolean = Arc::new(BooleanArray::from(vec![false, true, false]));
+            let inner_int = Arc::new(Int32Array::from(vec![42, 43, 44]));
+
+            let inner_array = StructArray::from(vec![
+                (
+                    Arc::new(Field::new("b", DataType::Boolean, false)),
+                    inner_boolean as ArrayRef,
+                ),
+                (
+                    Arc::new(Field::new("c", DataType::Int32, false)),
+                    inner_int as ArrayRef,
+                ),
+            ]);
+
+            let inner_fields = Fields::from(vec![
+                Field::new("b", DataType::Boolean, false),
+                Field::new("c", DataType::Int32, false),
+            ]);
+
+            let outer_float = Arc::new(Float64Array::from(vec![5.0, 6.0, 7.0]));
+            let outer_boolean = Arc::new(BooleanArray::from(vec![true, false, true]));
+
+            let outer_struct_array = StructArray::from(vec![
+                (
+                    Arc::new(Field::new(
+                        "inner_struct",
+                        DataType::Struct(inner_fields),
+                        false,
+                    )),
+                    Arc::new(inner_array) as ArrayRef,
+                ),
+                (
+                    Arc::new(Field::new("outer_float", DataType::Float64, false)),
+                    outer_float as ArrayRef,
+                ),
+                (
+                    Arc::new(Field::new("outer_boolean", DataType::Boolean, false)),
+                    outer_boolean as ArrayRef,
+                ),
+            ]);
+
+            let schema = Arc::new(Schema::new(vec![Field::new(
+                "nested_struct",
+                outer_struct_array.data_type().clone(),
+                true,
+            )]));
+
+            vec![RecordBatch::try_new(schema, vec![Arc::new(outer_struct_array)]).unwrap()]
         }
         Scenario::Time32Second => {
             vec![

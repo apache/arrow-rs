@@ -16,7 +16,6 @@
 // under the License.
 
 //! [`StatisticsConverter`] to convert statistics in parquet format to arrow [`ArrayRef`].
-
 use crate::arrow::buffer::bit_util::sign_extend_be;
 use crate::arrow::parquet_column;
 use crate::data_type::{ByteArray, FixedLenByteArray};
@@ -29,6 +28,7 @@ use arrow_array::builder::{
     BinaryViewBuilder, BooleanBuilder, FixedSizeBinaryBuilder, LargeStringBuilder, StringBuilder,
     StringViewBuilder,
 };
+use arrow_array::StructArray;
 use arrow_array::{
     new_empty_array, new_null_array, ArrayRef, BinaryArray, BooleanArray, Date32Array, Date64Array,
     Decimal128Array, Decimal256Array, Float16Array, Float32Array, Float64Array, Int16Array,
@@ -1216,7 +1216,81 @@ impl<'a> StatisticsConverter<'a> {
         }
         Ok(Some(builder.finish()))
     }
+    pub(crate) fn get_statistics_min_max_recursive(
+        metadata: &[&RowGroupMetaData],
+        index: &mut usize,
+        is_min: bool,
+        data_type: &DataType,
+    ) -> Result<ArrayRef> {
+        match data_type.is_nested() {
+            false => {
+                let iterator = metadata.iter().map(|meta| {
+                    let stat = meta.column(*index).statistics();
+                    stat
+                });
+                let stat = if is_min {
+                    min_statistics(data_type, iterator)
+                } else {
+                    max_statistics(data_type, iterator)
+                };
+                *index += 1;
+                stat
+            }
+            true => {
+                if let DataType::Struct(fields) = data_type {
+                    let field_arrays: Vec<_> = fields
+                        .iter()
+                        .map(|field| {
+                            let array = Self::get_statistics_min_max_recursive(
+                                metadata,
+                                index,
+                                is_min,
+                                field.data_type(),
+                            )?;
+                            Ok((field.clone(), array))
+                        })
+                        .collect::<Result<Vec<_>>>()?;
+                    Ok(Arc::new(StructArray::from(field_arrays)) as ArrayRef)
+                } else {
+                    Err(arrow_err!(
+                        "unsupported nested data type for extracting statistics".to_string()
+                    ))
+                }
+            }
+        }
+    }
+    /// recursively get the corresponding statistics for all the column data, used for
+    /// DataType::Struct
+    pub(crate) fn get_null_counts_recursive(
+        metadata: &[&RowGroupMetaData],
+        index: usize,
+        data_type: &DataType,
+    ) -> Vec<u64> {
+        if let DataType::Struct(fields) = data_type {
+            let num_row_groups = metadata.len();
+            fields
+                .iter()
+                .fold(vec![0; num_row_groups], |mut acc, field| {
+                    let field_null =
+                        Self::get_null_counts_recursive(metadata, index + 1, field.data_type());
 
+                    acc.iter_mut()
+                        .zip(field_null.iter())
+                        .for_each(|(a, b)| *a += b);
+                    acc
+                })
+        } else {
+            metadata
+                .iter()
+                .map(|meta| {
+                    meta.column(index)
+                        .statistics()
+                        .map(|s| s.null_count())
+                        .unwrap_or(0)
+                })
+                .collect()
+        }
+    }
     /// Create a new `StatisticsConverter` to extract statistics for a column
     ///
     /// Note if there is no corresponding column in the parquet file, the returned
@@ -1314,13 +1388,21 @@ impl<'a> StatisticsConverter<'a> {
         let Some(parquet_index) = self.parquet_column_index else {
             return Ok(self.make_null_array(data_type, metadatas));
         };
-
-        let iter = metadatas
-            .into_iter()
-            .map(|x| x.column(parquet_index).statistics());
-        min_statistics(data_type, iter)
+        let create_iterator = |metadatas: I, parquet_index: usize| {
+            metadatas
+                .into_iter()
+                .map(move |x| x.column(parquet_index).statistics())
+        };
+        match data_type {
+            // In a Rowgroup, parquet for nested struct members,
+            // each one is also stored in the Column of RowGroupMetadata in order.
+            DataType::Struct(_) => {
+                let group_vec: Vec<&RowGroupMetaData> = metadatas.into_iter().collect();
+                Self::get_statistics_min_max_recursive(&group_vec, &mut 0, true, data_type)
+            }
+            _ => min_statistics(data_type, create_iterator(metadatas, parquet_index)),
+        }
     }
-
     /// Extract the maximum values from row group statistics in [`RowGroupMetaData`]
     ///
     /// See docs on [`Self::row_group_mins`] for details
@@ -1334,10 +1416,20 @@ impl<'a> StatisticsConverter<'a> {
             return Ok(self.make_null_array(data_type, metadatas));
         };
 
-        let iter = metadatas
-            .into_iter()
-            .map(|x| x.column(parquet_index).statistics());
-        max_statistics(data_type, iter)
+        let create_iterator = |metadatas: I, parquet_index: usize| {
+            metadatas
+                .into_iter()
+                .map(move |x| x.column(parquet_index).statistics())
+        };
+        match data_type {
+            // In a Rowgroup, parquet for nested struct members,
+            // each one is also stored in the Column of RowGroupMetadata in order.
+            DataType::Struct(_) => {
+                let group_vec: Vec<&RowGroupMetaData> = metadatas.into_iter().collect();
+                Self::get_statistics_min_max_recursive(&group_vec, &mut 0, false, data_type)
+            }
+            _ => max_statistics(data_type, create_iterator(metadatas, parquet_index)),
+        }
     }
 
     /// Extract the null counts from row group statistics in [`RowGroupMetaData`]
@@ -1347,18 +1439,32 @@ impl<'a> StatisticsConverter<'a> {
     where
         I: IntoIterator<Item = &'a RowGroupMetaData>,
     {
+        let data_type = self.arrow_field.data_type();
+
         let Some(parquet_index) = self.parquet_column_index else {
             let num_row_groups = metadatas.into_iter().count();
             return Ok(UInt64Array::from_iter(
                 std::iter::repeat(None).take(num_row_groups),
             ));
         };
+        let create_iterator = |metadatas: I, parquet_index: usize| {
+            metadatas
+                .into_iter()
+                .map(move |x| x.column(parquet_index).statistics())
+        };
 
-        let null_counts = metadatas
-            .into_iter()
-            .map(|x| x.column(parquet_index).statistics())
-            .map(|s| s.map(|s| s.null_count()));
-        Ok(UInt64Array::from_iter(null_counts))
+        match data_type {
+            DataType::Struct(_) => {
+                let group_vec: Vec<&RowGroupMetaData> = metadatas.into_iter().collect();
+                let null_counts = Self::get_null_counts_recursive(&group_vec, 0, data_type);
+                Ok(UInt64Array::from_iter(null_counts))
+            }
+            _ => {
+                let null_counts =
+                    create_iterator(metadatas, parquet_index).map(|s| s.map(|s| s.null_count()));
+                Ok(UInt64Array::from_iter(null_counts))
+            }
+        }
     }
 
     /// Extract the minimum values from Data Page statistics.
@@ -1580,10 +1686,10 @@ mod test {
     use arrow::datatypes::{i256, Date32Type, Date64Type};
     use arrow::util::test_util::parquet_test_data;
     use arrow_array::{
-        new_empty_array, new_null_array, Array, ArrayRef, BinaryArray, BinaryViewArray,
-        BooleanArray, Date32Array, Date64Array, Decimal128Array, Decimal256Array, Float32Array,
-        Float64Array, Int16Array, Int32Array, Int64Array, Int8Array, LargeBinaryArray, RecordBatch,
-        StringArray, StringViewArray, StructArray, TimestampNanosecondArray,
+        new_empty_array, Array, ArrayRef, BinaryArray, BinaryViewArray, BooleanArray, Date32Array,
+        Date64Array, Decimal128Array, Decimal256Array, Float32Array, Float64Array, Int16Array,
+        Int32Array, Int64Array, Int8Array, LargeBinaryArray, RecordBatch, StringArray,
+        StringViewArray, StructArray, TimestampNanosecondArray,
     };
     use arrow_schema::{DataType, Field, SchemaRef};
     use bytes::Bytes;
@@ -2058,7 +2164,7 @@ mod test {
 
     #[test]
     fn roundtrip_struct() {
-        let mut test = Test {
+        let test = Test {
             input: struct_array(vec![
                 // row group 1
                 (Some(true), Some(1)),
@@ -2075,20 +2181,18 @@ mod test {
             ]),
             expected_min: struct_array(vec![
                 (Some(true), Some(1)),
-                (Some(true), Some(0)),
+                (Some(false), Some(0)),
                 (None, None),
             ]),
 
             expected_max: struct_array(vec![
                 (Some(true), Some(3)),
-                (Some(true), Some(0)),
+                (Some(true), Some(5)),
                 (None, None),
             ]),
         };
         // Due to https://github.com/apache/datafusion/issues/8334,
         // statistics for struct arrays are not supported
-        test.expected_min = new_null_array(test.input.data_type(), test.expected_min.len());
-        test.expected_max = new_null_array(test.input.data_type(), test.expected_min.len());
         test.run()
     }
 
@@ -2424,7 +2528,8 @@ mod test {
             let row_groups = metadata.row_groups();
 
             for field in schema.fields() {
-                if field.data_type().is_nested() {
+                let data_type = field.data_type();
+                if field.data_type().is_nested() && !matches!(data_type, &DataType::Struct(_)) {
                     let lookup = parquet_column(parquet_schema, &schema, field.name());
                     assert_eq!(lookup, None);
                     continue;
