@@ -888,15 +888,15 @@ mod tests {
 
         test_neg_primitive::<Int32Type>(
             &[i32::MIN],
-            Err("Compute error: Overflow happened on: - -2147483648"),
+            Err("Arithmetic overflow: Overflow happened on: - -2147483648"),
         );
         test_neg_primitive::<Int64Type>(
             &[i64::MIN],
-            Err("Compute error: Overflow happened on: - -9223372036854775808"),
+            Err("Arithmetic overflow: Overflow happened on: - -9223372036854775808"),
         );
         test_neg_primitive::<DurationSecondType>(
             &[i64::MIN],
-            Err("Compute error: Overflow happened on: - -9223372036854775808"),
+            Err("Arithmetic overflow: Overflow happened on: - -9223372036854775808"),
         );
 
         let r = neg_wrapping(&Int32Array::from(vec![i32::MIN])).unwrap();
@@ -911,7 +911,7 @@ mod tests {
 
         assert_eq!(
             err,
-            "Compute error: Overflow happened on: - -9223372036854775808"
+            "Arithmetic overflow: Overflow happened on: - -9223372036854775808"
         );
 
         let a = Decimal128Array::from(vec![1, 3, -44, 2, 4])
@@ -1016,28 +1016,31 @@ mod tests {
         let a = UInt8Array::from(vec![56, 5, 3]);
         let b = UInt8Array::from(vec![200, 2, 5]);
         let err = add(&a, &b).unwrap_err().to_string();
-        assert_eq!(err, "Compute error: Overflow happened on: 56 + 200");
+        assert_eq!(err, "Arithmetic overflow: Overflow happened on: 56 + 200");
         let result = add_wrapping(&a, &b).unwrap();
         assert_eq!(result.as_ref(), &UInt8Array::from(vec![0, 7, 8]));
 
         let a = UInt8Array::from(vec![34, 5, 3]);
         let b = UInt8Array::from(vec![200, 2, 5]);
         let err = sub(&a, &b).unwrap_err().to_string();
-        assert_eq!(err, "Compute error: Overflow happened on: 34 - 200");
+        assert_eq!(err, "Arithmetic overflow: Overflow happened on: 34 - 200");
         let result = sub_wrapping(&a, &b).unwrap();
         assert_eq!(result.as_ref(), &UInt8Array::from(vec![90, 3, 254]));
 
         let a = UInt8Array::from(vec![34, 5, 3]);
         let b = UInt8Array::from(vec![200, 2, 5]);
         let err = mul(&a, &b).unwrap_err().to_string();
-        assert_eq!(err, "Compute error: Overflow happened on: 34 * 200");
+        assert_eq!(err, "Arithmetic overflow: Overflow happened on: 34 * 200");
         let result = mul_wrapping(&a, &b).unwrap();
         assert_eq!(result.as_ref(), &UInt8Array::from(vec![144, 10, 15]));
 
         let a = Int16Array::from(vec![i16::MIN]);
         let b = Int16Array::from(vec![-1]);
         let err = div(&a, &b).unwrap_err().to_string();
-        assert_eq!(err, "Compute error: Overflow happened on: -32768 / -1");
+        assert_eq!(
+            err,
+            "Arithmetic overflow: Overflow happened on: -32768 / -1"
+        );
 
         let a = Int16Array::from(vec![21]);
         let b = Int16Array::from(vec![0]);
@@ -1146,7 +1149,7 @@ mod tests {
             .with_precision_and_scale(3, -2)
             .unwrap();
         let err = add(&a, &b).unwrap_err().to_string();
-        assert_eq!(err, "Compute error: Overflow happened on: 10 ^ 39");
+        assert_eq!(err, "Arithmetic overflow: Overflow happened on: 10 ^ 39");
 
         let a = Decimal128Array::from(vec![10])
             .with_precision_and_scale(3, -1)
@@ -1154,7 +1157,7 @@ mod tests {
         let err = add(&a, &b).unwrap_err().to_string();
         assert_eq!(
             err,
-            "Compute error: Overflow happened on: 10 * 100000000000000000000000000000000000000"
+            "Arithmetic overflow: Overflow happened on: 10 * 100000000000000000000000000000000000000"
         );
 
         let b = Decimal128Array::from(vec![0])
@@ -1349,7 +1352,10 @@ mod tests {
         let a = IntervalMonthDayNanoArray::from(vec![IntervalMonthDayNano::MAX]);
         let b = IntervalMonthDayNanoArray::from(vec![IntervalMonthDayNano::ONE]);
         let err = add(&a, &b).unwrap_err().to_string();
-        assert_eq!(err, "Compute error: Overflow happened on: 2147483647 + 1");
+        assert_eq!(
+            err,
+            "Arithmetic overflow: Overflow happened on: 2147483647 + 1"
+        );
     }
 
     fn test_duration_impl<T: ArrowPrimitiveType<Native = i64>>() {
@@ -1384,7 +1390,7 @@ mod tests {
         let err = add(&a, &b).unwrap_err().to_string();
         assert_eq!(
             err,
-            "Compute error: Overflow happened on: 9223372036854775807 + 1"
+            "Arithmetic overflow: Overflow happened on: 9223372036854775807 + 1"
         );
     }
 
@@ -1511,7 +1517,7 @@ mod tests {
         let err = sub(&a, &b).unwrap_err().to_string();
         assert_eq!(
             err,
-            "Compute error: Overflow happened on: 9223372036854775807 - -1"
+            "Arithmetic overflow: Overflow happened on: 9223372036854775807 - -1"
         );
     }
 }

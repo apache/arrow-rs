@@ -154,7 +154,7 @@ macro_rules! native_type_op {
             #[inline]
             fn add_checked(self, rhs: Self) -> Result<Self, ArrowError> {
                 self.checked_add(rhs).ok_or_else(|| {
-                    ArrowError::ComputeError(format!(
+                    ArrowError::ArithmeticOverflow(format!(
                         "Overflow happened on: {:?} + {:?}",
                         self, rhs
                     ))
@@ -169,7 +169,7 @@ macro_rules! native_type_op {
             #[inline]
             fn sub_checked(self, rhs: Self) -> Result<Self, ArrowError> {
                 self.checked_sub(rhs).ok_or_else(|| {
-                    ArrowError::ComputeError(format!(
+                    ArrowError::ArithmeticOverflow(format!(
                         "Overflow happened on: {:?} - {:?}",
                         self, rhs
                     ))
@@ -184,7 +184,7 @@ macro_rules! native_type_op {
             #[inline]
             fn mul_checked(self, rhs: Self) -> Result<Self, ArrowError> {
                 self.checked_mul(rhs).ok_or_else(|| {
-                    ArrowError::ComputeError(format!(
+                    ArrowError::ArithmeticOverflow(format!(
                         "Overflow happened on: {:?} * {:?}",
                         self, rhs
                     ))
@@ -202,7 +202,7 @@ macro_rules! native_type_op {
                     Err(ArrowError::DivideByZero)
                 } else {
                     self.checked_div(rhs).ok_or_else(|| {
-                        ArrowError::ComputeError(format!(
+                        ArrowError::ArithmeticOverflow(format!(
                             "Overflow happened on: {:?} / {:?}",
                             self, rhs
                         ))
@@ -221,7 +221,7 @@ macro_rules! native_type_op {
                     Err(ArrowError::DivideByZero)
                 } else {
                     self.checked_rem(rhs).ok_or_else(|| {
-                        ArrowError::ComputeError(format!(
+                        ArrowError::ArithmeticOverflow(format!(
                             "Overflow happened on: {:?} % {:?}",
                             self, rhs
                         ))
@@ -237,14 +237,17 @@ macro_rules! native_type_op {
             #[inline]
             fn neg_checked(self) -> Result<Self, ArrowError> {
                 self.checked_neg().ok_or_else(|| {
-                    ArrowError::ComputeError(format!("Overflow happened on: - {:?}", self))
+                    ArrowError::ArithmeticOverflow(format!("Overflow happened on: - {:?}", self))
                 })
             }
 
             #[inline]
             fn pow_checked(self, exp: u32) -> Result<Self, ArrowError> {
                 self.checked_pow(exp).ok_or_else(|| {
-                    ArrowError::ComputeError(format!("Overflow happened on: {:?} ^ {exp:?}", self))
+                    ArrowError::ArithmeticOverflow(format!(
+                        "Overflow happened on: {:?} ^ {exp:?}",
+                        self
+                    ))
                 })
             }
 

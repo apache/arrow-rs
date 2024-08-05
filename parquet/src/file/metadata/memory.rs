@@ -99,6 +99,8 @@ impl HeapSize for ColumnChunkMetaData {
             + self.statistics.heap_size()
             + self.encoding_stats.heap_size()
             + self.unencoded_byte_array_data_bytes.heap_size()
+            + self.repetition_level_histogram.heap_size()
+            + self.definition_level_histogram.heap_size()
     }
 }
 

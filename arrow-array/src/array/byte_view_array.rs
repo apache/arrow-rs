@@ -757,7 +757,7 @@ mod tests {
     fn test_in_progress_recreation() {
         let array = {
             // make a builder with small block size.
-            let mut builder = StringViewBuilder::new().with_block_size(14);
+            let mut builder = StringViewBuilder::new().with_fixed_block_size(14);
             builder.append_value("large payload over 12 bytes");
             builder.append_option(Some("another large payload over 12 bytes that double than the first one, so that we can trigger the in_progress in builder re-created"));
             builder.finish()
@@ -848,7 +848,7 @@ mod tests {
         ];
 
         let array = {
-            let mut builder = StringViewBuilder::new().with_block_size(8); // create multiple buffers
+            let mut builder = StringViewBuilder::new().with_fixed_block_size(8); // create multiple buffers
             test_data.into_iter().for_each(|v| builder.append_option(v));
             builder.finish()
         };
