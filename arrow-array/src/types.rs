@@ -1040,7 +1040,7 @@ impl Date64Type {
     /// # Arguments
     ///
     /// * `i` - The Date64Type to convert
-    pub fn to_native_datetime(i: <Date64Type as ArrowPrimitiveType>::Native) -> NaiveDateTime {
+    pub fn to_naive_datetime(i: <Date64Type as ArrowPrimitiveType>::Native) -> NaiveDateTime {
         let datetime = NaiveDateTime::default();
         datetime.add(Duration::try_milliseconds(i).unwrap())
     }
@@ -1060,7 +1060,7 @@ impl Date64Type {
     /// # Arguments
     ///
     /// * `d` - The NaiveDateTime to convert
-    pub fn from_native_datetime(d: NaiveDateTime) -> <Date64Type as ArrowPrimitiveType>::Native {
+    pub fn from_naive_datetime(d: NaiveDateTime) -> <Date64Type as ArrowPrimitiveType>::Native {
         let native_datetime = NaiveDateTime::default();
         let duration = d.signed_duration_since(native_datetime);
 
@@ -1094,10 +1094,10 @@ impl Date64Type {
         delta: <IntervalDayTimeType as ArrowPrimitiveType>::Native,
     ) -> <Date64Type as ArrowPrimitiveType>::Native {
         let (days, ms) = IntervalDayTimeType::to_parts(delta);
-        let res = Date64Type::to_native_datetime(date);
+        let res = Date64Type::to_naive_datetime(date);
         let res = res.add(Duration::try_days(days as i64).unwrap());
         let res = res.add(Duration::try_milliseconds(ms as i64).unwrap());
-        Date64Type::from_native_datetime(res)
+        Date64Type::from_naive_datetime(res)
     }
 
     /// Adds the given IntervalMonthDayNanoType to an arrow Date64Type
@@ -1111,11 +1111,11 @@ impl Date64Type {
         delta: <IntervalMonthDayNanoType as ArrowPrimitiveType>::Native,
     ) -> <Date64Type as ArrowPrimitiveType>::Native {
         let (months, days, nanos) = IntervalMonthDayNanoType::to_parts(delta);
-        let res = Date64Type::to_native_datetime(date);
+        let res = Date64Type::to_naive_datetime(date);
         let res = shift_months(res, months);
         let res = res.add(Duration::try_days(days as i64).unwrap());
         let res = res.add(Duration::nanoseconds(nanos));
-        Date64Type::from_native_datetime(res)
+        Date64Type::from_naive_datetime(res)
     }
 
     /// Subtract the given IntervalYearMonthType to an arrow Date64Type

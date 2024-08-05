@@ -1424,11 +1424,7 @@ mod tests {
             x.as_primitive::<Date64Type>()
                 .values()
                 .into_iter()
-                .map(|x| {
-                    as_date::<Date64Type>((*x).try_into().ok().unwrap())
-                        .unwrap()
-                        .to_string()
-                })
+                .map(|x| as_date::<Date64Type>(*x).unwrap().to_string())
                 .collect()
         };
 
@@ -1526,11 +1522,7 @@ mod tests {
             x.as_primitive::<Date32Type>()
                 .values()
                 .into_iter()
-                .map(|x| {
-                    as_date::<Date32Type>((*x).try_into().ok().unwrap())
-                        .unwrap()
-                        .to_string()
-                })
+                .map(|x| as_date::<Date32Type>((*x).into()).unwrap().to_string())
                 .collect()
         };
 
