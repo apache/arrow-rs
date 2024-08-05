@@ -60,16 +60,14 @@ fn bench_iter(c: &mut Criterion) {
     let col = create_string_view_array_with_len(40960, 0., 100, false);
     let converter = RowConverter::new(vec![SortField::new(col.data_type().clone())]).unwrap();
     let rows = converter
-        .convert_columns(&vec![Arc::new(col) as ArrayRef])
+        .convert_columns(&[Arc::new(col) as ArrayRef])
         .unwrap();
 
-    c.bench_function(&"iterate rows", |b| {
+    c.bench_function("iterate rows", |b| {
         b.iter(|| {
-            black_box({
-                for r in rows.iter() {
-                    std::hint::black_box(r.as_ref());
-                }
-            })
+            for r in rows.iter() {
+                std::hint::black_box(r.as_ref());
+            }
         })
     });
 }
