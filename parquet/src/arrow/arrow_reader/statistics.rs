@@ -1686,10 +1686,10 @@ mod test {
     use arrow::datatypes::{i256, Date32Type, Date64Type};
     use arrow::util::test_util::parquet_test_data;
     use arrow_array::{
-        new_empty_array, new_null_array, Array, ArrayRef, BinaryArray, BinaryViewArray,
-        BooleanArray, Date32Array, Date64Array, Decimal128Array, Decimal256Array, Float32Array,
-        Float64Array, Int16Array, Int32Array, Int64Array, Int8Array, LargeBinaryArray, RecordBatch,
-        StringArray, StringViewArray, StructArray, TimestampNanosecondArray,
+        new_empty_array, Array, ArrayRef, BinaryArray, BinaryViewArray, BooleanArray, Date32Array,
+        Date64Array, Decimal128Array, Decimal256Array, Float32Array, Float64Array, Int16Array,
+        Int32Array, Int64Array, Int8Array, LargeBinaryArray, RecordBatch, StringArray,
+        StringViewArray, StructArray, TimestampNanosecondArray,
     };
     use arrow_schema::{DataType, Field, SchemaRef};
     use bytes::Bytes;
