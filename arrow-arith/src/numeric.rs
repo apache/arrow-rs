@@ -1402,16 +1402,13 @@ mod tests {
         test_duration_impl::<DurationNanosecondType>();
     }
 
-    fn test_date_impl<T: ArrowPrimitiveType, F>(f: F)
-    where
-        F: Fn(NaiveDate) -> T::Native,
-        T::Native: TryInto<i64>,
-    {
-        let a = PrimitiveArray::<T>::new(
+    #[test]
+    fn test_date64_impl() {
+        let a = PrimitiveArray::<Date64Type>::new(
             vec![
-                f(NaiveDate::from_ymd_opt(1979, 1, 30).unwrap()),
-                f(NaiveDate::from_ymd_opt(2010, 4, 3).unwrap()),
-                f(NaiveDate::from_ymd_opt(2008, 2, 29).unwrap()),
+                Date64Type::from_naive_date(NaiveDate::from_ymd_opt(1979, 1, 30).unwrap()),
+                Date64Type::from_naive_date(NaiveDate::from_ymd_opt(2010, 4, 3).unwrap()),
+                Date64Type::from_naive_date(NaiveDate::from_ymd_opt(2008, 2, 29).unwrap()),
             ]
             .into(),
             None,
@@ -1424,11 +1421,113 @@ mod tests {
         ]);
 
         let format_array = |x: &dyn Array| -> Vec<String> {
-            x.as_primitive::<T>()
+            x.as_primitive::<Date64Type>()
                 .values()
                 .into_iter()
                 .map(|x| {
-                    as_date::<T>((*x).try_into().ok().unwrap())
+                    as_date::<Date64Type>((*x).try_into().ok().unwrap())
+                        .unwrap()
+                        .to_string()
+                })
+                .collect()
+        };
+
+        let result = add(&a, &b).unwrap();
+        assert_eq!(
+            &format_array(result.as_ref()),
+            &[
+                "2013-03-30".to_string(),
+                "2013-01-03".to_string(),
+                "1996-06-29".to_string(),
+            ]
+        );
+        let result = sub(&result, &b).unwrap();
+        assert_eq!(result.as_ref(), &a);
+
+        let b = IntervalDayTimeArray::from(vec![
+            IntervalDayTimeType::make_value(34, 0),
+            IntervalDayTimeType::make_value(3, 0),
+            IntervalDayTimeType::make_value(-12, 0),
+        ]);
+
+        let result = add(&a, &b).unwrap();
+        assert_eq!(
+            &format_array(result.as_ref()),
+            &[
+                "1979-03-05".to_string(),
+                "2010-04-06".to_string(),
+                "2008-02-17".to_string(),
+            ]
+        );
+        let result = sub(&result, &b).unwrap();
+        assert_eq!(result.as_ref(), &a);
+
+        let b = IntervalMonthDayNanoArray::from(vec![
+            IntervalMonthDayNanoType::make_value(34, 2, 0),
+            IntervalMonthDayNanoType::make_value(3, -3, 0),
+            IntervalMonthDayNanoType::make_value(-12, 4, 0),
+        ]);
+
+        let result = add(&a, &b).unwrap();
+        assert_eq!(
+            &format_array(result.as_ref()),
+            &[
+                "1981-12-02".to_string(),
+                "2010-06-30".to_string(),
+                "2007-03-04".to_string(),
+            ]
+        );
+        let result = sub(&result, &b).unwrap();
+        assert_eq!(
+            &format_array(result.as_ref()),
+            &[
+                "1979-01-31".to_string(),
+                "2010-04-02".to_string(),
+                "2008-02-29".to_string(),
+            ]
+        );
+
+        let a = Date64Array::from(vec![4343, 76676, 3434]);
+        let b = Date64Array::from(vec![3, -5, 5]);
+        let result = sub(&a, &b).unwrap();
+        assert_eq!(
+            result.as_primitive::<DurationMillisecondType>().values(),
+            &[4340, 76681, 3429]
+        );
+
+        let a = Date64Array::from(vec![i64::MAX]);
+        let b = Date64Array::from(vec![-1]);
+        let err = sub(&a, &b).unwrap_err().to_string();
+        assert_eq!(
+            err,
+            "Arithmetic overflow: Overflow happened on: 9223372036854775807 - -1"
+        );
+    }
+
+    #[test]
+    fn test_date32_impl() {
+        let a = PrimitiveArray::<Date32Type>::new(
+            vec![
+                Date32Type::from_naive_date(NaiveDate::from_ymd_opt(1979, 1, 30).unwrap()),
+                Date32Type::from_naive_date(NaiveDate::from_ymd_opt(2010, 4, 3).unwrap()),
+                Date32Type::from_naive_date(NaiveDate::from_ymd_opt(2008, 2, 29).unwrap()),
+            ]
+            .into(),
+            None,
+        );
+
+        let b = IntervalYearMonthArray::from(vec![
+            IntervalYearMonthType::make_value(34, 2),
+            IntervalYearMonthType::make_value(3, -3),
+            IntervalYearMonthType::make_value(-12, 4),
+        ]);
+
+        let format_array = |x: &dyn Array| -> Vec<String> {
+            x.as_primitive::<Date32Type>()
+                .values()
+                .into_iter()
+                .map(|x| {
+                    as_date::<Date32Type>((*x).try_into().ok().unwrap())
                         .unwrap()
                         .to_string()
                 })
@@ -1489,12 +1588,6 @@ mod tests {
                 "2008-02-29".to_string(),
             ]
         );
-    }
-
-    #[test]
-    fn test_date() {
-        test_date_impl::<Date32Type, _>(Date32Type::from_naive_date);
-        test_date_impl::<Date64Type, _>(Date64Type::from_naive_date);
 
         let a = Date32Array::from(vec![i32::MIN, i32::MAX, 23, 7684]);
         let b = Date32Array::from(vec![i32::MIN, i32::MIN, -2, 45]);
@@ -1502,22 +1595,6 @@ mod tests {
         assert_eq!(
             result.as_primitive::<DurationSecondType>().values(),
             &[0, 371085174288000, 2160000, 660009600]
-        );
-
-        let a = Date64Array::from(vec![4343, 76676, 3434]);
-        let b = Date64Array::from(vec![3, -5, 5]);
-        let result = sub(&a, &b).unwrap();
-        assert_eq!(
-            result.as_primitive::<DurationMillisecondType>().values(),
-            &[4340, 76681, 3429]
-        );
-
-        let a = Date64Array::from(vec![i64::MAX]);
-        let b = Date64Array::from(vec![-1]);
-        let err = sub(&a, &b).unwrap_err().to_string();
-        assert_eq!(
-            err,
-            "Arithmetic overflow: Overflow happened on: 9223372036854775807 - -1"
         );
     }
 }

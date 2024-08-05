@@ -1035,6 +1035,16 @@ impl Date64Type {
         epoch.add(Duration::try_milliseconds(i).unwrap())
     }
 
+    /// Converts an arrow Date64Type into a chrono::NaiveDateTime
+    ///
+    /// # Arguments
+    ///
+    /// * `i` - The Date64Type to convert
+    pub fn to_native_datetime(i: <Date64Type as ArrowPrimitiveType>::Native) -> NaiveDateTime {
+        let datetime = NaiveDateTime::default();
+        datetime.add(Duration::try_milliseconds(i).unwrap())
+    }
+
     /// Converts a chrono::NaiveDate into an arrow Date64Type
     ///
     /// # Arguments
@@ -1043,6 +1053,18 @@ impl Date64Type {
     pub fn from_naive_date(d: NaiveDate) -> <Date64Type as ArrowPrimitiveType>::Native {
         let epoch = NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
         d.sub(epoch).num_milliseconds() as <Date64Type as ArrowPrimitiveType>::Native
+    }
+
+    /// Converts a chrono::NaiveDateTime into an arrow Date64Type
+    ///
+    /// # Arguments
+    ///
+    /// * `d` - The NaiveDateTime to convert
+    pub fn from_native_datetime(d: NaiveDateTime) -> <Date64Type as ArrowPrimitiveType>::Native {
+        let native_datetime = NaiveDateTime::default();
+        let duration = d.signed_duration_since(native_datetime);
+
+        duration.num_milliseconds() as <Date64Type as ArrowPrimitiveType>::Native
     }
 
     /// Adds the given IntervalYearMonthType to an arrow Date64Type
@@ -1072,10 +1094,10 @@ impl Date64Type {
         delta: <IntervalDayTimeType as ArrowPrimitiveType>::Native,
     ) -> <Date64Type as ArrowPrimitiveType>::Native {
         let (days, ms) = IntervalDayTimeType::to_parts(delta);
-        let res = Date64Type::to_naive_date(date);
+        let res = Date64Type::to_native_datetime(date);
         let res = res.add(Duration::try_days(days as i64).unwrap());
         let res = res.add(Duration::try_milliseconds(ms as i64).unwrap());
-        Date64Type::from_naive_date(res)
+        Date64Type::from_native_datetime(res)
     }
 
     /// Adds the given IntervalMonthDayNanoType to an arrow Date64Type
@@ -1089,11 +1111,11 @@ impl Date64Type {
         delta: <IntervalMonthDayNanoType as ArrowPrimitiveType>::Native,
     ) -> <Date64Type as ArrowPrimitiveType>::Native {
         let (months, days, nanos) = IntervalMonthDayNanoType::to_parts(delta);
-        let res = Date64Type::to_naive_date(date);
+        let res = Date64Type::to_native_datetime(date);
         let res = shift_months(res, months);
         let res = res.add(Duration::try_days(days as i64).unwrap());
         let res = res.add(Duration::nanoseconds(nanos));
-        Date64Type::from_naive_date(res)
+        Date64Type::from_native_datetime(res)
     }
 
     /// Subtract the given IntervalYearMonthType to an arrow Date64Type
@@ -1530,6 +1552,29 @@ impl ByteViewType for BinaryViewType {
 mod tests {
     use super::*;
     use arrow_data::{layout, BufferSpec};
+
+    #[test]
+    fn add_month_day_nano() {
+        let date_64 = Date64Type::default_value();
+        let interval = IntervalMonthDayNanoType::make_value(0, 0, 1_000_000_000 * 3600);
+
+        let result = Date64Type::add_month_day_nano(date_64, interval);
+
+        // date_64 is stored in milliseconds, so adding 1 hour should be 3600000
+        assert_eq!(result, date_64 + 3600000);
+    }
+
+    #[test]
+    fn add_day_time_type() {
+        // IntervalDayTimeType
+        let date_64 = Date64Type::default_value();
+        let interval = IntervalDayTimeType::make_value(1, 1000);
+
+        let result = Date64Type::add_day_time(date_64, interval);
+
+        // date_64 is stored in milliseconds, so adding 1 day should be 86400000 plus 1000
+        assert_eq!(result, date_64 + 86401000);
+    }
 
     #[test]
     fn month_day_nano_should_roundtrip() {
