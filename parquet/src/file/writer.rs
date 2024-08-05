@@ -826,11 +826,14 @@ impl<'a, W: Write + Send> PageWriter for SerializedPageWriter<'a, W> {
 mod tests {
     use super::*;
 
+    #[cfg(feature = "arrow")]
     use arrow_array::RecordBatchReader;
     use bytes::Bytes;
     use std::fs::File;
 
+    #[cfg(feature = "arrow")]
     use crate::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
+    #[cfg(feature = "arrow")]
     use crate::arrow::ArrowWriter;
     use crate::basic::{
         ColumnOrder, Compression, ConvertedType, Encoding, LogicalType, Repetition, SortOrder, Type,
@@ -2080,6 +2083,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "arrow")]
     fn test_byte_stream_split_extended_roundtrip() {
         let path = format!(
             "{}/byte_stream_split_extended.gzip.parquet",
@@ -2141,44 +2145,24 @@ mod tests {
         parquet_writer.close().expect("finalizing file");
 
         let reader = SerializedFileReader::new(file).expect("Failed to create reader");
+        let filemeta = reader.metadata();
 
         // Make sure byte_stream_split encoding was used
-        let filemeta = reader.metadata();
-        assert!(filemeta
-            .row_group(0)
-            .column(1)
-            .encodings()
-            .contains(&Encoding::BYTE_STREAM_SPLIT));
-        assert!(filemeta
-            .row_group(0)
-            .column(3)
-            .encodings()
-            .contains(&Encoding::BYTE_STREAM_SPLIT));
-        assert!(filemeta
-            .row_group(0)
-            .column(5)
-            .encodings()
-            .contains(&Encoding::BYTE_STREAM_SPLIT));
-        assert!(filemeta
-            .row_group(0)
-            .column(7)
-            .encodings()
-            .contains(&Encoding::BYTE_STREAM_SPLIT));
-        assert!(filemeta
-            .row_group(0)
-            .column(9)
-            .encodings()
-            .contains(&Encoding::BYTE_STREAM_SPLIT));
-        assert!(filemeta
-            .row_group(0)
-            .column(11)
-            .encodings()
-            .contains(&Encoding::BYTE_STREAM_SPLIT));
-        assert!(filemeta
-            .row_group(0)
-            .column(13)
-            .encodings()
-            .contains(&Encoding::BYTE_STREAM_SPLIT));
+        let check_encoding = |x: usize, filemeta: &ParquetMetaData| {
+            assert!(filemeta
+                .row_group(0)
+                .column(x)
+                .encodings()
+                .contains(&Encoding::BYTE_STREAM_SPLIT));
+        };
+
+        check_encoding(1, filemeta);
+        check_encoding(3, filemeta);
+        check_encoding(5, filemeta);
+        check_encoding(7, filemeta);
+        check_encoding(9, filemeta);
+        check_encoding(11, filemeta);
+        check_encoding(13, filemeta);
 
         // Read back tmpfile and make sure all values are correct
         let mut iter = reader
