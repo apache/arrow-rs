@@ -215,7 +215,7 @@ impl ProjectionMask {
 /// Lookups up the parquet column by name
 ///
 /// Returns the parquet column index and the corresponding arrow field
-pub(crate) fn parquet_column<'a>(
+pub fn parquet_column<'a>(
     parquet_schema: &SchemaDescriptor,
     arrow_schema: &'a Schema,
     name: &str,
