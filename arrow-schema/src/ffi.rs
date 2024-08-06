@@ -390,8 +390,10 @@ impl TryFrom<&FFI_ArrowSchema> for DataType {
             "e" => DataType::Float16,
             "f" => DataType::Float32,
             "g" => DataType::Float64,
+            "vz" => DataType::BinaryView,
             "z" => DataType::Binary,
             "Z" => DataType::LargeBinary,
+            "vu" => DataType::Utf8View,
             "u" => DataType::Utf8,
             "U" => DataType::LargeUtf8,
             "tdD" => DataType::Date32,
@@ -660,8 +662,10 @@ fn get_format_string(dtype: &DataType) -> Result<String, ArrowError> {
         DataType::Float16 => Ok("e".to_string()),
         DataType::Float32 => Ok("f".to_string()),
         DataType::Float64 => Ok("g".to_string()),
+        DataType::BinaryView => Ok("vz".to_string()),
         DataType::Binary => Ok("z".to_string()),
         DataType::LargeBinary => Ok("Z".to_string()),
+        DataType::Utf8View => Ok("vu".to_string()),
         DataType::Utf8 => Ok("u".to_string()),
         DataType::LargeUtf8 => Ok("U".to_string()),
         DataType::FixedSizeBinary(num_bytes) => Ok(format!("w:{num_bytes}")),
@@ -810,6 +814,10 @@ mod tests {
             5,
         ));
         round_trip_type(DataType::Utf8);
+        round_trip_type(DataType::Utf8View);
+        round_trip_type(DataType::BinaryView);
+        round_trip_type(DataType::Binary);
+        round_trip_type(DataType::LargeBinary);
         round_trip_type(DataType::List(Arc::new(Field::new(
             "a",
             DataType::Int16,

@@ -29,11 +29,11 @@ use arrow::datatypes::{
     TimestampNanosecondType, TimestampSecondType,
 };
 use arrow_array::{
-    make_array, new_null_array, Array, ArrayRef, BinaryArray, BooleanArray, Date32Array,
-    Date64Array, Decimal128Array, Decimal256Array, FixedSizeBinaryArray, Float16Array,
+    make_array, new_null_array, Array, ArrayRef, BinaryArray, BinaryViewArray, BooleanArray,
+    Date32Array, Date64Array, Decimal128Array, Decimal256Array, FixedSizeBinaryArray, Float16Array,
     Float32Array, Float64Array, Int16Array, Int32Array, Int64Array, Int8Array, LargeBinaryArray,
-    LargeStringArray, RecordBatch, StringArray, Time32MillisecondArray, Time32SecondArray,
-    Time64MicrosecondArray, Time64NanosecondArray, TimestampMicrosecondArray,
+    LargeStringArray, RecordBatch, StringArray, StringViewArray, Time32MillisecondArray,
+    Time32SecondArray, Time64MicrosecondArray, Time64NanosecondArray, TimestampMicrosecondArray,
     TimestampMillisecondArray, TimestampNanosecondArray, TimestampSecondArray, UInt16Array,
     UInt32Array, UInt64Array, UInt8Array,
 };
@@ -2057,6 +2057,60 @@ async fn test_utf8() {
         check: Check::Both,
     }
     .run();
+}
+
+// UTF8View
+#[tokio::test]
+async fn test_utf8_view() {
+    let reader = TestReader {
+        scenario: Scenario::UTF8View,
+        row_per_group: 5,
+    }
+    .build()
+    .await;
+
+    // test for utf8_view
+    Test {
+        reader: &reader,
+        expected_min: Arc::new(StringViewArray::from(vec!["a", "a", "e_longerthan12"])),
+        expected_max: Arc::new(StringViewArray::from(vec![
+            "d",
+            "e_longerthan12",
+            "i_longerthan12",
+        ])),
+        expected_null_counts: UInt64Array::from(vec![1, 3, 0]),
+        expected_row_counts: Some(UInt64Array::from(vec![5, 5, 5])),
+        column_name: "utf8_view",
+        check: Check::Both,
+    }
+    .run()
+}
+
+// BinaryView
+#[tokio::test]
+async fn test_binary_view() {
+    let reader = TestReader {
+        scenario: Scenario::BinaryView,
+        row_per_group: 5,
+    }
+    .build()
+    .await;
+
+    let expected_min: Vec<Option<&[u8]>> = vec![Some(b"a"), Some(b"a"), Some(b"e_longerthan12")];
+    let expected_max: Vec<Option<&[u8]>> =
+        vec![Some(b"d"), Some(b"e_longerthan12"), Some(b"i_longerthan12")];
+
+    // test for utf8_view
+    Test {
+        reader: &reader,
+        expected_min: Arc::new(BinaryViewArray::from(expected_min)),
+        expected_max: Arc::new(BinaryViewArray::from(expected_max)),
+        expected_null_counts: UInt64Array::from(vec![1, 3, 0]),
+        expected_row_counts: Some(UInt64Array::from(vec![5, 5, 5])),
+        column_name: "binary_view",
+        check: Check::Both,
+    }
+    .run()
 }
 
 ////// Files with missing statistics ///////

@@ -204,6 +204,49 @@ fn add_benchmark(c: &mut Criterion) {
         |b| b.iter(|| bench_built_filter(&sparse_filter, &data_array)),
     );
 
+    let mut add_benchmark_for_fsb_with_length = |value_length: usize| {
+        let data_array = create_fsb_array(size, 0.0, value_length);
+        c.bench_function(
+            format!("filter fsb with value length {value_length} (kept 1/2)").as_str(),
+            |b| b.iter(|| bench_filter(&data_array, &filter_array)),
+        );
+        c.bench_function(
+            format!(
+                "filter fsb with value length {value_length} high selectivity (kept 1023/1024)"
+            )
+            .as_str(),
+            |b| b.iter(|| bench_filter(&data_array, &dense_filter_array)),
+        );
+        c.bench_function(
+            format!("filter fsb with value length {value_length} low selectivity (kept 1/1024)")
+                .as_str(),
+            |b| b.iter(|| bench_filter(&data_array, &sparse_filter_array)),
+        );
+
+        c.bench_function(
+            format!("filter context fsb with value length {value_length} (kept 1/2)").as_str(),
+            |b| b.iter(|| bench_built_filter(&filter, &filter_array)),
+        );
+        c.bench_function(
+            format!(
+                "filter context fsb with value length {value_length} high selectivity (kept 1023/1024)"
+            )
+            .as_str(),
+            |b| b.iter(|| bench_built_filter(&filter, &dense_filter_array)),
+        );
+        c.bench_function(
+            format!(
+                "filter context fsb with value length {value_length} low selectivity (kept 1/1024)"
+            )
+            .as_str(),
+            |b| b.iter(|| bench_built_filter(&filter, &sparse_filter_array)),
+        );
+    };
+
+    add_benchmark_for_fsb_with_length(5);
+    add_benchmark_for_fsb_with_length(20);
+    add_benchmark_for_fsb_with_length(50);
+
     let data_array = create_primitive_array::<Float32Type>(size, 0.0);
 
     let field = Field::new("c1", data_array.data_type().clone(), true);
