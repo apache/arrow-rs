@@ -80,17 +80,22 @@ fn criterion_benchmark(c: &mut Criterion) {
     let mut f16s = Vec::new();
     let mut f32s = Vec::new();
     let mut f64s = Vec::new();
+    let mut d128s = Vec::new();
     for _ in 0..n {
         f16s.push(FixedLenByteArray::from(
             f16::from_f32(rng.gen::<f32>()).to_le_bytes().to_vec(),
         ));
         f32s.push(rng.gen::<f32>());
         f64s.push(rng.gen::<f64>());
+        d128s.push(FixedLenByteArray::from(
+            rng.gen::<i128>().to_be_bytes().to_vec(),
+        ));
     }
 
     bench_typed::<FloatType>(c, &f32s, Encoding::BYTE_STREAM_SPLIT, 0);
     bench_typed::<DoubleType>(c, &f64s, Encoding::BYTE_STREAM_SPLIT, 0);
     bench_typed::<FixedLenByteArrayType>(c, &f16s, Encoding::BYTE_STREAM_SPLIT, 2);
+    bench_typed::<FixedLenByteArrayType>(c, &d128s, Encoding::BYTE_STREAM_SPLIT, 16);
 }
 
 criterion_group!(benches, criterion_benchmark);
