@@ -2235,6 +2235,7 @@ mod test {
             DataType::Timestamp(TimeUnit::Second, None),
             DataType::Date32,
             DataType::Date64,
+            // Skip types that don't support statistics
             // DataType::Time32(Second),
             // DataType::Time64(Second),
             // DataType::Duration(Second),
