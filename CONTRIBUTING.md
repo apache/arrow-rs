@@ -128,13 +128,34 @@ cargo +stable fmt --all -- --check
 
 ## Breaking Changes
 
-Our [release schedule] allows breaking API changes only in major releases.
-This means that if your PR has a breaking API change, it should be marked as
-`api-change` and it will not be merged until development opens for the next
-major release. See [this ticket] for details.
+Our [release schedule] allows breaking API changes only in major releases. This
+means that if your PR has a breaking API change, it should be marked with the
+labels: `api-change` and `next-major-release` and it will not be merged to
+`master` until development opens for the next major release. See [this ticket] for
+details.
 
 [release schedule]: README.md#release-versioning-and-schedule
 [this ticket]: https://github.com/apache/arrow-rs/issues/5907
+
+## Branching
+
+As described above, we use the `main` branch as the default branch for
+development, and prefer to merge all PRs to that branch. However, as described
+above, we only merge PRs with API changes on a set schedule. Between releases,
+we may either hold PRs as draft or merge them to a `dev` branch.
+
+For example, for the `53.0.0` release, we merged several breaking API changes to
+the `53.0.0-dev` dev branch. We then merged these commits into `master` once we had successfully released `52.2.0`.
+
+The command used:
+
+```shell
+## TODO update this command
+git checkout master
+git pull
+git merge apache/53.0.0-dev
+git push -u apache
+```
 
 ## Clippy Lints
 
