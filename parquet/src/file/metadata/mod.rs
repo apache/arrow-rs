@@ -95,6 +95,7 @@
 //!                         * Same name, different struct
 //! ```
 mod memory;
+mod writer;
 
 use std::ops::Range;
 use std::sync::Arc;
@@ -115,6 +116,7 @@ use crate::schema::types::{
     ColumnDescPtr, ColumnDescriptor, ColumnPath, SchemaDescPtr, SchemaDescriptor,
     Type as SchemaType,
 };
+pub use writer::{ParquetMetadataWriter, ThriftMetadataWriter};
 
 /// Page level statistics for each column chunk of each row group.
 ///
