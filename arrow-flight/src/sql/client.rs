@@ -39,8 +39,8 @@ use crate::sql::{
     CommandGetCrossReference, CommandGetDbSchemas, CommandGetExportedKeys, CommandGetImportedKeys,
     CommandGetPrimaryKeys, CommandGetSqlInfo, CommandGetTableTypes, CommandGetTables,
     CommandGetXdbcTypeInfo, CommandPreparedStatementQuery, CommandPreparedStatementUpdate,
-    CommandStatementQuery, CommandStatementUpdate, DoPutPreparedStatementResult, DoPutUpdateResult,
-    ProstMessageExt, SqlInfo,
+    CommandStatementIngest, CommandStatementQuery, CommandStatementUpdate,
+    DoPutPreparedStatementResult, DoPutUpdateResult, ProstMessageExt, SqlInfo,
 };
 use crate::trailers::extract_lazy_trailers;
 use crate::{
@@ -53,10 +53,10 @@ use arrow_ipc::convert::fb_to_schema;
 use arrow_ipc::reader::read_record_batch;
 use arrow_ipc::{root_as_message, MessageHeader};
 use arrow_schema::{ArrowError, Schema, SchemaRef};
-use futures::{stream, TryStreamExt};
+use futures::{stream, StreamExt, TryStreamExt};
 use prost::Message;
 use tonic::transport::Channel;
-use tonic::{IntoRequest, Streaming};
+use tonic::{IntoRequest, IntoStreamingRequest, Streaming};
 
 /// A FlightSQLServiceClient is an endpoint for retrieving or storing Arrow data
 /// by FlightSQL protocol.
@@ -211,6 +211,35 @@ impl FlightSqlServiceClient<Channel> {
             }])
             .into_request(),
         )?;
+        let mut result = self
+            .flight_client
+            .do_put(req)
+            .await
+            .map_err(status_to_arrow_error)?
+            .into_inner();
+        let result = result
+            .message()
+            .await
+            .map_err(status_to_arrow_error)?
+            .unwrap();
+        let any = Any::decode(&*result.app_metadata).map_err(decode_error_to_arrow_error)?;
+        let result: DoPutUpdateResult = any.unpack()?.unwrap();
+        Ok(result.record_count)
+    }
+
+    /// Execute a bulk ingest on the server and return the number of records added
+    pub async fn execute_ingest(
+        &mut self,
+        command: CommandStatementIngest,
+        batches: Vec<RecordBatch>,
+    ) -> Result<i64, ArrowError> {
+        let descriptor = FlightDescriptor::new_cmd(command.as_any().encode_to_vec());
+        let flight_data_encoder = FlightDataEncoderBuilder::new()
+            .with_flight_descriptor(Some(descriptor))
+            .build(stream::iter(batches).map(Ok));
+        // Safe unwrap, explicitly wrapped on line above.
+        let flight_data = flight_data_encoder.map(|fd| fd.unwrap());
+        let req = self.set_request_headers(flight_data.into_streaming_request())?;
         let mut result = self
             .flight_client
             .do_put(req)
