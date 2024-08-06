@@ -117,13 +117,24 @@ pub fn create_random_array(
             size,
             primitive_null_density,
         )),
-        Timestamp(_, _) => {
-            let int64_array = Arc::new(create_primitive_array::<Int64Type>(
+        Timestamp(unit, _) => match unit {
+            TimeUnit::Second => Arc::new(create_primitive_array::<TimestampSecondType>(
                 size,
                 primitive_null_density,
-            )) as ArrayRef;
-            return crate::compute::cast(&int64_array, field.data_type());
-        }
+            )),
+            TimeUnit::Millisecond => Arc::new(create_primitive_array::<TimestampMillisecondType>(
+                size,
+                primitive_null_density,
+            )),
+            TimeUnit::Microsecond => Arc::new(create_primitive_array::<TimestampMicrosecondType>(
+                size,
+                primitive_null_density,
+            )),
+            TimeUnit::Nanosecond => Arc::new(create_primitive_array::<TimestampNanosecondType>(
+                size,
+                primitive_null_density,
+            )),
+        },
         Date32 => Arc::new(create_primitive_array::<Date32Type>(
             size,
             primitive_null_density,
