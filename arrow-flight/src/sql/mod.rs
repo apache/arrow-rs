@@ -50,6 +50,10 @@ mod gen {
 }
 
 pub use gen::action_end_transaction_request::EndTransaction;
+pub use gen::command_statement_ingest::table_definition_options::{
+    TableExistsOption, TableNotExistOption,
+};
+pub use gen::command_statement_ingest::TableDefinitionOptions;
 pub use gen::ActionBeginSavepointRequest;
 pub use gen::ActionBeginSavepointResult;
 pub use gen::ActionBeginTransactionRequest;
