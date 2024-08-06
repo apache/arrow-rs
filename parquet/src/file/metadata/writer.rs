@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::errors::Result;
 use crate::file::metadata::{KeyValue, ParquetMetaData};
 use crate::file::page_index::index::Index;
 use crate::file::writer::TrackedWrite;
@@ -27,17 +28,10 @@ use std::io::Write;
 use std::sync::Arc;
 use thrift::protocol::TCompactOutputProtocol;
 
-/// Writes `crate::file::metadata` structures to a thrift encdoded byte streams
+/// Writes `crate::file::metadata` structures to a thrift encoded byte streams
 ///
-/// This structure handles the details of writing the various parts of parquet
-/// metadata into a byte stream. It is used to write the metadata into a
-/// parquet file and can also write metadata into other locations (such as a
-/// store of bytes).
-///
-/// This is somewhat trickey because the metadata is not store as a single inline
-/// thrift struture. It can have several "out of band" structures such as the OffsetIndex
-/// and BloomFilters which are stored separately whose locations are stored as offsets
-pub struct ThriftMetadataWriter<'a, W: Write> {
+/// See [`ParquetMetaDataWriter`] for background and example.
+pub(crate) struct ThriftMetadataWriter<'a, W: Write> {
     buf: &'a mut TrackedWrite<W>,
     schema: &'a TypePtr,
     schema_descr: &'a SchemaDescPtr,
@@ -51,10 +45,7 @@ pub struct ThriftMetadataWriter<'a, W: Write> {
 
 impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
     /// Serialize all the offset index to the file
-    fn write_offset_indexes(
-        &mut self,
-        offset_indexes: &[Vec<Option<OffsetIndex>>],
-    ) -> crate::errors::Result<()> {
+    fn write_offset_indexes(&mut self, offset_indexes: &[Vec<Option<OffsetIndex>>]) -> Result<()> {
         // iter row group
         // iter each column
         // write offset index to the file
@@ -79,10 +70,7 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
     }
 
     /// Serialize all the column index to the file
-    fn write_column_indexes(
-        &mut self,
-        column_indexes: &[Vec<Option<ColumnIndex>>],
-    ) -> crate::errors::Result<()> {
+    fn write_column_indexes(&mut self, column_indexes: &[Vec<Option<ColumnIndex>>]) -> Result<()> {
         // iter row group
         // iter each column
         // write column index to the file
@@ -107,7 +95,7 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
     }
 
     /// Assembles and writes the final metadata to self.buf
-    pub fn finish(mut self) -> crate::errors::Result<crate::format::FileMetaData> {
+    pub fn finish(mut self) -> Result<crate::format::FileMetaData> {
         let num_rows = self.row_groups.iter().map(|x| x.num_rows).sum();
 
         // Write column indexes and offset indexes
@@ -196,27 +184,103 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
     }
 }
 
-pub struct ParquetMetadataWriter<'a, W: Write> {
+/// Writes [`ParquetMetaData`] to a byte stream
+///
+/// This structure handles the details of writing the various parts of Parquet
+/// metadata into a byte stream. It is used to write the metadata into a parquet
+/// file and can also write metadata into other locations (such as a store of
+/// bytes).
+///
+/// # Discussion
+///
+/// The process of writing Parquet metadata is tricky because the
+/// metadata is not store as a single inline thrift structure. It can have
+/// several "out of band" structures such as the [`OffsetIndex`] and
+/// BloomFilters stored in separate structures whose locations are stored as
+/// offsets
+///
+/// # Output Format
+///
+/// The format of the metadata is as follows:
+///
+/// 1. Optional [`ColumnIndex`] (thrift encoded)
+/// 2. Optional [`OffsetIndex`] (thrift encoded)
+/// 3. [`FileMetaData`] (thrift encoded)
+/// 4. Length of encoded `FileMetaData` (4 bytes, little endian)
+/// 5. Parquet Magic Bytes (4 bytes)
+///
+/// [`FileMetaData`]: crate::format::FileMetaData
+///
+/// ```text
+/// ┌──────────────────────┐
+/// │                      │
+/// │         ...          │
+/// │                      │
+/// │┌ ─ ─ ─ ─ ─ ─ ─ ─ ─ ┐ │
+/// │     ColumnIndex     ◀│─ ─ ─
+/// ││    (Optional)     │ │     │
+/// │ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─  │
+/// │┌ ─ ─ ─ ─ ─ ─ ─ ─ ─ ┐ │     │ FileMetadata
+/// │     OffsetIndex      │       contains embedded
+/// ││    (Optional)     │◀┼ ─   │ offsets to
+/// │ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─  │  │    ColumnIndex and
+/// │╔═══════════════════╗ │     │ OffsetIndex
+/// │║                   ║ │  │
+/// │║                   ║ ┼ ─   │
+/// │║   FileMetadata    ║ │
+/// │║                   ║ ┼ ─ ─ ┘
+/// │║                   ║ │
+/// │╚═══════════════════╝ │
+/// │┌───────────────────┐ │
+/// ││  metadata length  │ │ length of FileMetadata  (only)
+/// │└───────────────────┘ │
+/// │┌───────────────────┐ │
+/// ││      'PAR1'       │ │ Parquet Magic Bytes
+/// │└───────────────────┘ │
+/// └──────────────────────┘
+///      Output Buffer
+/// ```
+///
+/// # Example
+/// ```no_run
+/// # use parquet::file::metadata::{ParquetMetaData, ParquetMetaDataWriter};
+/// # fn get_metadata() -> ParquetMetaData { unimplemented!(); }
+/// // write parquet metadata to an in-memory buffer
+/// let mut buffer = vec![];
+/// let metadata: ParquetMetaData = get_metadata();
+/// let writer = ParquetMetaDataWriter::new(&mut buffer, &metadata);
+/// // write the metadata to the buffer
+/// writer.finish().unwrap();
+/// assert!(!buffer.is_empty());
+/// ```
+pub struct ParquetMetaDataWriter<'a, W: Write> {
     buf: TrackedWrite<W>,
-    write_page_index: bool,
     metadata: &'a ParquetMetaData,
 }
 
-impl<'a, W: Write> ParquetMetadataWriter<'a, W> {
+impl<'a, W: Write> ParquetMetaDataWriter<'a, W> {
+    /// Create a new `ParquetMetaDataWriter` to write to `buf`
+    ///
+    /// Note any embedded offsets in the metadata will be written assuming the
+    /// buffer is at the start of the buffer. If the metadata is being written
+    /// to a location other than the start of the buffer, see [`Self::new_with_tracked`]
+    ///
+    /// See example on the struct level documentation
     pub fn new(buf: W, metadata: &'a ParquetMetaData) -> Self {
-        Self {
-            buf: TrackedWrite::new(buf),
-            write_page_index: true,
-            metadata,
-        }
+        Self::new_with_tracked(TrackedWrite::new(buf), metadata)
     }
 
-    pub fn write_page_index(&mut self, write_page_index: bool) -> &mut Self {
-        self.write_page_index = write_page_index;
-        self
+    /// Create a new ParquetMetaDataWriter to write to `buf`
+    ///
+    /// This method is used when the metadata is being written to a location other
+    /// than the start of the buffer.
+    ///
+    /// See example on the struct level documentation
+    pub fn new_with_tracked(buf: TrackedWrite<W>, metadata: &'a ParquetMetaData) -> Self {
+        Self { buf, metadata }
     }
 
-    pub fn finish(&mut self) -> crate::errors::Result<()> {
+    pub fn finish(mut self) -> Result<()> {
         let file_metadata = self.metadata.file_metadata();
 
         let schema = Arc::new(file_metadata.schema().clone());
@@ -316,7 +380,7 @@ mod tests {
 
     use crate::file::footer::parse_metadata;
     use crate::file::metadata::{
-        ColumnChunkMetaData, ParquetMetaData, ParquetMetadataWriter, RowGroupMetaData,
+        ColumnChunkMetaData, ParquetMetaData, ParquetMetaDataWriter, RowGroupMetaData,
     };
     use crate::file::properties::{EnabledStatistics, WriterProperties};
     use crate::file::reader::{FileReader, SerializedFileReader};
@@ -352,7 +416,7 @@ mod tests {
 
         let mut buf = BytesMut::new().writer();
         {
-            let mut writer = ParquetMetadataWriter::new(&mut buf, &metadata.metadata);
+            let writer = ParquetMetaDataWriter::new(&mut buf, &metadata.metadata);
             writer.finish().unwrap();
         }
 
@@ -506,7 +570,7 @@ mod tests {
 
         let mut buf = BytesMut::new().writer();
         {
-            let mut writer = ParquetMetadataWriter::new(&mut buf, &metadata.metadata);
+            let writer = ParquetMetaDataWriter::new(&mut buf, &metadata.metadata);
             writer.finish().unwrap();
         }
 
