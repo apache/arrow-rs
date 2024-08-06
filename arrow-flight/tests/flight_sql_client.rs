@@ -120,6 +120,12 @@ impl FlightSqlServiceImpl {
     }
 }
 
+impl Default for FlightSqlServiceImpl {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[tonic::async_trait]
 impl FlightSqlService for FlightSqlServiceImpl {
     type FlightService = FlightSqlServiceImpl;
