@@ -24,9 +24,10 @@ use crate::data_type::DataType;
 use crate::encodings::encoding::{get_encoder, Encoder};
 use crate::encodings::levels::LevelEncoder;
 use crate::errors::Result;
-use crate::schema::types::ColumnDescPtr;
+use crate::schema::types::{ColumnDescPtr, ColumnDescriptor, ColumnPath, Type as SchemaType};
 use std::iter::Peekable;
 use std::mem;
+use std::sync::Arc;
 
 pub trait DataPageBuilder {
     fn add_rep_levels(&mut self, max_level: i16, rep_levels: &[i16]);
@@ -107,9 +108,22 @@ impl DataPageBuilder for DataPageBuilderImpl {
             self.num_values,
             values.len()
         );
+        // Create test column descriptor.
+        let desc = {
+            let ty = SchemaType::primitive_type_builder("t", T::get_physical_type())
+                .with_length(0)
+                .build()
+                .unwrap();
+            Arc::new(ColumnDescriptor::new(
+                Arc::new(ty),
+                0,
+                0,
+                ColumnPath::new(vec![]),
+            ))
+        };
         self.encoding = Some(encoding);
         let mut encoder: Box<dyn Encoder<T>> =
-            get_encoder::<T>(encoding).expect("get_encoder() should be OK");
+            get_encoder::<T>(encoding, &desc).expect("get_encoder() should be OK");
         encoder.put(values).expect("put() should be OK");
         let encoded_values = encoder
             .flush_buffer()

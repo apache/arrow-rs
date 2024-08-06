@@ -27,6 +27,9 @@ use super::rle::RleDecoder;
 use crate::basic::*;
 use crate::data_type::private::ParquetValueType;
 use crate::data_type::*;
+use crate::encodings::decoding::byte_stream_split_decoder::{
+    ByteStreamSplitDecoder, VariableWidthByteStreamSplitDecoder,
+};
 use crate::errors::{ParquetError, Result};
 use crate::schema::types::ColumnDescPtr;
 use crate::util::bit_util::{self, BitReader};
@@ -87,6 +90,7 @@ pub(crate) mod private {
             encoding: Encoding,
         ) -> Result<Box<dyn Decoder<T>>> {
             match encoding {
+                Encoding::BYTE_STREAM_SPLIT => Ok(Box::new(ByteStreamSplitDecoder::new())),
                 Encoding::DELTA_BINARY_PACKED => Ok(Box::new(DeltaBitPackDecoder::new())),
                 _ => get_decoder_default(descr, encoding),
             }
@@ -99,6 +103,7 @@ pub(crate) mod private {
             encoding: Encoding,
         ) -> Result<Box<dyn Decoder<T>>> {
             match encoding {
+                Encoding::BYTE_STREAM_SPLIT => Ok(Box::new(ByteStreamSplitDecoder::new())),
                 Encoding::DELTA_BINARY_PACKED => Ok(Box::new(DeltaBitPackDecoder::new())),
                 _ => get_decoder_default(descr, encoding),
             }
@@ -111,9 +116,7 @@ pub(crate) mod private {
             encoding: Encoding,
         ) -> Result<Box<dyn Decoder<T>>> {
             match encoding {
-                Encoding::BYTE_STREAM_SPLIT => Ok(Box::new(
-                    byte_stream_split_decoder::ByteStreamSplitDecoder::new(),
-                )),
+                Encoding::BYTE_STREAM_SPLIT => Ok(Box::new(ByteStreamSplitDecoder::new())),
                 _ => get_decoder_default(descr, encoding),
             }
         }
@@ -124,9 +127,7 @@ pub(crate) mod private {
             encoding: Encoding,
         ) -> Result<Box<dyn Decoder<T>>> {
             match encoding {
-                Encoding::BYTE_STREAM_SPLIT => Ok(Box::new(
-                    byte_stream_split_decoder::ByteStreamSplitDecoder::new(),
-                )),
+                Encoding::BYTE_STREAM_SPLIT => Ok(Box::new(ByteStreamSplitDecoder::new())),
                 _ => get_decoder_default(descr, encoding),
             }
         }
@@ -153,6 +154,9 @@ pub(crate) mod private {
             encoding: Encoding,
         ) -> Result<Box<dyn Decoder<T>>> {
             match encoding {
+                Encoding::BYTE_STREAM_SPLIT => Ok(Box::new(
+                    VariableWidthByteStreamSplitDecoder::new(descr.type_length()),
+                )),
                 Encoding::DELTA_BYTE_ARRAY => Ok(Box::new(DeltaByteArrayDecoder::new())),
                 _ => get_decoder_default(descr, encoding),
             }
@@ -1785,7 +1789,7 @@ mod tests {
             ],
             vec![f32::from_le_bytes([0xA3, 0xB4, 0xC5, 0xD6])],
         ];
-        test_byte_stream_split_decode::<FloatType>(data);
+        test_byte_stream_split_decode::<FloatType>(data, -1);
     }
 
     #[test]
@@ -1794,7 +1798,76 @@ mod tests {
             f64::from_le_bytes([0, 1, 2, 3, 4, 5, 6, 7]),
             f64::from_le_bytes([8, 9, 10, 11, 12, 13, 14, 15]),
         ]];
-        test_byte_stream_split_decode::<DoubleType>(data);
+        test_byte_stream_split_decode::<DoubleType>(data, -1);
+    }
+
+    #[test]
+    fn test_byte_stream_split_multiple_i32() {
+        let data = vec![
+            vec![
+                i32::from_le_bytes([0xAA, 0xBB, 0xCC, 0xDD]),
+                i32::from_le_bytes([0x00, 0x11, 0x22, 0x33]),
+            ],
+            vec![i32::from_le_bytes([0xA3, 0xB4, 0xC5, 0xD6])],
+        ];
+        test_byte_stream_split_decode::<Int32Type>(data, -1);
+    }
+
+    #[test]
+    fn test_byte_stream_split_i64() {
+        let data = vec![vec![
+            i64::from_le_bytes([0, 1, 2, 3, 4, 5, 6, 7]),
+            i64::from_le_bytes([8, 9, 10, 11, 12, 13, 14, 15]),
+        ]];
+        test_byte_stream_split_decode::<Int64Type>(data, -1);
+    }
+
+    fn test_byte_stream_split_flba(type_width: usize) {
+        let data = vec![
+            vec![
+                FixedLenByteArrayType::gen(type_width as i32),
+                FixedLenByteArrayType::gen(type_width as i32),
+            ],
+            vec![FixedLenByteArrayType::gen(type_width as i32)],
+        ];
+        test_byte_stream_split_decode::<FixedLenByteArrayType>(data, type_width as i32);
+    }
+
+    #[test]
+    fn test_byte_stream_split_flba5() {
+        test_byte_stream_split_flba(5);
+    }
+
+    #[test]
+    fn test_byte_stream_split_flba16() {
+        test_byte_stream_split_flba(16);
+    }
+
+    #[test]
+    fn test_byte_stream_split_flba19() {
+        test_byte_stream_split_flba(19);
+    }
+
+    #[test]
+    #[should_panic(expected = "Mismatched FixedLenByteArray sizes: 4 != 5")]
+    fn test_byte_stream_split_flba_mismatch() {
+        let data = vec![
+            vec![
+                FixedLenByteArray::from(vec![0xAA, 0xAB, 0xAC, 0xAD, 0xAE]),
+                FixedLenByteArray::from(vec![0xBA, 0xBB, 0xBC, 0xBD, 0xBE]),
+            ],
+            vec![FixedLenByteArray::from(vec![0xCA, 0xCB, 0xCC, 0xCD])],
+        ];
+        test_byte_stream_split_decode::<FixedLenByteArrayType>(data, 5);
+    }
+
+    #[test]
+    #[should_panic(expected = "Input data length is not a multiple of type width 4")]
+    fn test_byte_stream_split_flba_bad_input() {
+        let mut decoder = VariableWidthByteStreamSplitDecoder::<FixedLenByteArrayType>::new(4);
+        decoder
+            .set_data(Bytes::from(vec![1, 2, 3, 4, 5]), 1)
+            .unwrap();
     }
 
     #[test]
@@ -1808,33 +1881,42 @@ mod tests {
         );
     }
 
+    #[test]
+    fn test_skip_byte_stream_split_ints() {
+        let block_data = vec![3, 4, 1, 5];
+        test_skip::<Int32Type>(block_data.clone(), Encoding::BYTE_STREAM_SPLIT, 2);
+        test_skip::<Int64Type>(
+            block_data.into_iter().map(|x| x as i64).collect(),
+            Encoding::BYTE_STREAM_SPLIT,
+            100,
+        );
+    }
+
     fn test_rle_value_decode<T: DataType>(data: Vec<Vec<T::T>>) {
-        test_encode_decode::<T>(data, Encoding::RLE);
+        test_encode_decode::<T>(data, Encoding::RLE, -1);
     }
 
     fn test_delta_bit_packed_decode<T: DataType>(data: Vec<Vec<T::T>>) {
-        test_encode_decode::<T>(data, Encoding::DELTA_BINARY_PACKED);
+        test_encode_decode::<T>(data, Encoding::DELTA_BINARY_PACKED, -1);
     }
 
-    fn test_byte_stream_split_decode<T: DataType>(data: Vec<Vec<T::T>>) {
-        test_encode_decode::<T>(data, Encoding::BYTE_STREAM_SPLIT);
+    fn test_byte_stream_split_decode<T: DataType>(data: Vec<Vec<T::T>>, type_width: i32) {
+        test_encode_decode::<T>(data, Encoding::BYTE_STREAM_SPLIT, type_width);
     }
 
     fn test_delta_byte_array_decode(data: Vec<Vec<ByteArray>>) {
-        test_encode_decode::<ByteArrayType>(data, Encoding::DELTA_BYTE_ARRAY);
+        test_encode_decode::<ByteArrayType>(data, Encoding::DELTA_BYTE_ARRAY, -1);
     }
 
     // Input data represents vector of data slices to write (test multiple `put()` calls)
     // For example,
     //   vec![vec![1, 2, 3]] invokes `put()` once and writes {1, 2, 3}
     //   vec![vec![1, 2], vec![3]] invokes `put()` twice and writes {1, 2, 3}
-    fn test_encode_decode<T: DataType>(data: Vec<Vec<T::T>>, encoding: Encoding) {
-        // Type length should not really matter for encode/decode test,
-        // otherwise change it based on type
-        let col_descr = create_test_col_desc_ptr(-1, T::get_physical_type());
+    fn test_encode_decode<T: DataType>(data: Vec<Vec<T::T>>, encoding: Encoding, type_width: i32) {
+        let col_descr = create_test_col_desc_ptr(type_width, T::get_physical_type());
 
         // Encode data
-        let mut encoder = get_encoder::<T>(encoding).expect("get encoder");
+        let mut encoder = get_encoder::<T>(encoding, &col_descr).expect("get encoder");
 
         for v in &data[..] {
             encoder.put(&v[..]).expect("ok to encode");
@@ -1867,7 +1949,7 @@ mod tests {
         let col_descr = create_test_col_desc_ptr(-1, T::get_physical_type());
 
         // Encode data
-        let mut encoder = get_encoder::<T>(encoding).expect("get encoder");
+        let mut encoder = get_encoder::<T>(encoding, &col_descr).expect("get encoder");
 
         encoder.put(&data).expect("ok to encode");
 

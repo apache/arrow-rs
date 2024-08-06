@@ -1791,7 +1791,11 @@ mod tests {
             | DataType::UInt64
             | DataType::UInt32
             | DataType::UInt16
-            | DataType::UInt8 => vec![Encoding::PLAIN, Encoding::DELTA_BINARY_PACKED],
+            | DataType::UInt8 => vec![
+                Encoding::PLAIN,
+                Encoding::DELTA_BINARY_PACKED,
+                Encoding::BYTE_STREAM_SPLIT,
+            ],
             DataType::Float32 | DataType::Float64 => {
                 vec![Encoding::PLAIN, Encoding::BYTE_STREAM_SPLIT]
             }

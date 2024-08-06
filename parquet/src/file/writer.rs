@@ -814,9 +814,15 @@ impl<'a, W: Write + Send> PageWriter for SerializedPageWriter<'a, W> {
 mod tests {
     use super::*;
 
+    #[cfg(feature = "arrow")]
+    use arrow_array::RecordBatchReader;
     use bytes::Bytes;
     use std::fs::File;
 
+    #[cfg(feature = "arrow")]
+    use crate::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
+    #[cfg(feature = "arrow")]
+    use crate::arrow::ArrowWriter;
     use crate::basic::{
         ColumnOrder, Compression, ConvertedType, Encoding, LogicalType, Repetition, SortOrder, Type,
     };
@@ -2062,5 +2068,116 @@ mod tests {
         assert_eq!(offset_index.len(), 1);
         assert_eq!(offset_index[0].len(), 1);
         assert!(offset_index[0][0].unencoded_byte_array_data_bytes.is_none());
+    }
+
+    #[test]
+    #[cfg(feature = "arrow")]
+    fn test_byte_stream_split_extended_roundtrip() {
+        let path = format!(
+            "{}/byte_stream_split_extended.gzip.parquet",
+            arrow::util::test_util::parquet_test_data(),
+        );
+        let file = File::open(path).unwrap();
+
+        // Read in test file and rewrite to tmp
+        let parquet_reader = ParquetRecordBatchReaderBuilder::try_new(file)
+            .expect("parquet open")
+            .build()
+            .expect("parquet open");
+
+        let file = tempfile::tempfile().unwrap();
+        let props = WriterProperties::builder()
+            .set_dictionary_enabled(false)
+            .set_column_encoding(
+                ColumnPath::from("float16_byte_stream_split"),
+                Encoding::BYTE_STREAM_SPLIT,
+            )
+            .set_column_encoding(
+                ColumnPath::from("float_byte_stream_split"),
+                Encoding::BYTE_STREAM_SPLIT,
+            )
+            .set_column_encoding(
+                ColumnPath::from("double_byte_stream_split"),
+                Encoding::BYTE_STREAM_SPLIT,
+            )
+            .set_column_encoding(
+                ColumnPath::from("int32_byte_stream_split"),
+                Encoding::BYTE_STREAM_SPLIT,
+            )
+            .set_column_encoding(
+                ColumnPath::from("int64_byte_stream_split"),
+                Encoding::BYTE_STREAM_SPLIT,
+            )
+            .set_column_encoding(
+                ColumnPath::from("flba5_byte_stream_split"),
+                Encoding::BYTE_STREAM_SPLIT,
+            )
+            .set_column_encoding(
+                ColumnPath::from("decimal_byte_stream_split"),
+                Encoding::BYTE_STREAM_SPLIT,
+            )
+            .build();
+
+        let mut parquet_writer = ArrowWriter::try_new(
+            file.try_clone().expect("cannot open file"),
+            parquet_reader.schema(),
+            Some(props),
+        )
+        .expect("create arrow writer");
+
+        for maybe_batch in parquet_reader {
+            let batch = maybe_batch.expect("reading batch");
+            parquet_writer.write(&batch).expect("writing data");
+        }
+
+        parquet_writer.close().expect("finalizing file");
+
+        let reader = SerializedFileReader::new(file).expect("Failed to create reader");
+        let filemeta = reader.metadata();
+
+        // Make sure byte_stream_split encoding was used
+        let check_encoding = |x: usize, filemeta: &ParquetMetaData| {
+            assert!(filemeta
+                .row_group(0)
+                .column(x)
+                .encodings()
+                .contains(&Encoding::BYTE_STREAM_SPLIT));
+        };
+
+        check_encoding(1, filemeta);
+        check_encoding(3, filemeta);
+        check_encoding(5, filemeta);
+        check_encoding(7, filemeta);
+        check_encoding(9, filemeta);
+        check_encoding(11, filemeta);
+        check_encoding(13, filemeta);
+
+        // Read back tmpfile and make sure all values are correct
+        let mut iter = reader
+            .get_row_iter(None)
+            .expect("Failed to create row iterator");
+
+        let mut start = 0;
+        let end = reader.metadata().file_metadata().num_rows();
+
+        let check_row = |row: Result<Row, ParquetError>| {
+            assert!(row.is_ok());
+            let r = row.unwrap();
+            assert_eq!(r.get_float16(0).unwrap(), r.get_float16(1).unwrap());
+            assert_eq!(r.get_float(2).unwrap(), r.get_float(3).unwrap());
+            assert_eq!(r.get_double(4).unwrap(), r.get_double(5).unwrap());
+            assert_eq!(r.get_int(6).unwrap(), r.get_int(7).unwrap());
+            assert_eq!(r.get_long(8).unwrap(), r.get_long(9).unwrap());
+            assert_eq!(r.get_bytes(10).unwrap(), r.get_bytes(11).unwrap());
+            assert_eq!(r.get_decimal(12).unwrap(), r.get_decimal(13).unwrap());
+        };
+
+        while start < end {
+            match iter.next() {
+                Some(row) => check_row(row),
+                None => break,
+            };
+            start += 1;
+        }
     }
 }
