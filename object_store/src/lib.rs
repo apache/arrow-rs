@@ -1279,7 +1279,7 @@ pub enum Error {
         path,
         source
     ))]
-    PermissionDernied {
+    PermissionDenied {
         path: String,
         source: Box<dyn std::error::Error + Send + Sync + 'static>,
     },
