@@ -2308,10 +2308,9 @@ mod tests {
 
     #[test]
     fn test_take_union_dense_all_match_issue_6206() {
-
         let fields = UnionFields::new(vec![0], vec![Field::new("a", DataType::Int64, false)]);
         let ints = Arc::new(Int64Array::from(vec![1, 2, 3, 4, 5]));
-    
+
         let array = UnionArray::try_new(
             fields,
             ScalarBuffer::from_iter(vec![0_i8, 0, 0, 0, 0].into_iter()),
@@ -2319,10 +2318,9 @@ mod tests {
             vec![ints],
         )
         .unwrap();
-    
+
         let indicies = Int64Array::from(vec![0, 2, 4]);
         let array = take(&array, &indicies, None).unwrap();
         assert_eq!(array.len(), 3);
-
     }
 }
