@@ -191,6 +191,7 @@ impl<T: DataType> ColumnValueEncoder for ColumnValueEncoderImpl<T> {
             props
                 .encoding(descr.path())
                 .unwrap_or_else(|| fallback_encoding(T::get_physical_type(), props)),
+            descr,
         )?;
 
         let statistics_enabled = props.statistics_enabled(descr.path());

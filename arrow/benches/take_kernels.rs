@@ -149,6 +149,42 @@ fn add_benchmark(c: &mut Criterion) {
         b.iter(|| bench_take(&values, &indices))
     });
 
+    let values = create_string_view_array(512, 0.0);
+    let indices = create_random_index(512, 0.0);
+    c.bench_function("take stringview 512", |b| {
+        b.iter(|| bench_take(&values, &indices))
+    });
+
+    let values = create_string_view_array(1024, 0.0);
+    let indices = create_random_index(1024, 0.0);
+    c.bench_function("take stringview 1024", |b| {
+        b.iter(|| bench_take(&values, &indices))
+    });
+
+    let values = create_string_view_array(512, 0.0);
+    let indices = create_random_index(512, 0.5);
+    c.bench_function("take stringview null indices 512", |b| {
+        b.iter(|| bench_take(&values, &indices))
+    });
+
+    let values = create_string_view_array(1024, 0.0);
+    let indices = create_random_index(1024, 0.5);
+    c.bench_function("take stringview null indices 1024", |b| {
+        b.iter(|| bench_take(&values, &indices))
+    });
+
+    let values = create_string_view_array(1024, 0.5);
+    let indices = create_random_index(1024, 0.0);
+    c.bench_function("take stringview null values 1024", |b| {
+        b.iter(|| bench_take(&values, &indices))
+    });
+
+    let values = create_string_view_array(1024, 0.5);
+    let indices = create_random_index(1024, 0.5);
+    c.bench_function("take stringview null values null indices 1024", |b| {
+        b.iter(|| bench_take(&values, &indices))
+    });
+
     let values = create_primitive_run_array::<Int32Type, Int32Type>(1024, 512);
     let indices = create_random_index(1024, 0.0);
     c.bench_function(

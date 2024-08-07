@@ -104,6 +104,9 @@ fn add_benchmark(c: &mut Criterion) {
             .bench_function("or nonnull mixed", |b| {
                 b.iter(|| bool_or(&nonnull_bools_mixed))
             })
+            .bench_function("and nonnull mixed", |b| {
+                b.iter(|| bool_and(&nonnull_bools_mixed))
+            })
             .bench_function("min nonnull false", |b| {
                 b.iter(|| min_boolean(&nonnull_bools_all_false))
             })
@@ -112,6 +115,9 @@ fn add_benchmark(c: &mut Criterion) {
             })
             .bench_function("or nonnull false", |b| {
                 b.iter(|| bool_or(&nonnull_bools_all_false))
+            })
+            .bench_function("and nonnull false", |b| {
+                b.iter(|| bool_and(&nonnull_bools_all_false))
             })
             .bench_function("min nonnull true", |b| {
                 b.iter(|| min_boolean(&nonnull_bools_all_true))
@@ -122,6 +128,9 @@ fn add_benchmark(c: &mut Criterion) {
             .bench_function("or nonnull true", |b| {
                 b.iter(|| bool_or(&nonnull_bools_all_true))
             })
+            .bench_function("and nonnull true", |b| {
+                b.iter(|| bool_and(&nonnull_bools_all_true))
+            })
             .bench_function("min nullable mixed", |b| {
                 b.iter(|| min_boolean(&nullable_bool_mixed))
             })
@@ -130,6 +139,9 @@ fn add_benchmark(c: &mut Criterion) {
             })
             .bench_function("or nullable mixed", |b| {
                 b.iter(|| bool_or(&nullable_bool_mixed))
+            })
+            .bench_function("and nullable mixed", |b| {
+                b.iter(|| bool_and(&nullable_bool_mixed))
             })
             .bench_function("min nullable false", |b| {
                 b.iter(|| min_boolean(&nullable_bool_all_false))
@@ -140,6 +152,9 @@ fn add_benchmark(c: &mut Criterion) {
             .bench_function("or nullable false", |b| {
                 b.iter(|| bool_or(&nullable_bool_all_false))
             })
+            .bench_function("and nullable false", |b| {
+                b.iter(|| bool_and(&nullable_bool_all_false))
+            })
             .bench_function("min nullable true", |b| {
                 b.iter(|| min_boolean(&nullable_bool_all_true))
             })
@@ -148,6 +163,9 @@ fn add_benchmark(c: &mut Criterion) {
             })
             .bench_function("or nullable true", |b| {
                 b.iter(|| bool_or(&nullable_bool_all_true))
+            })
+            .bench_function("and nullable true", |b| {
+                b.iter(|| bool_and(&nullable_bool_all_true))
             });
     }
 }

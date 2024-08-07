@@ -53,9 +53,9 @@ Due to available maintainer and testing bandwidth, [`arrow`] crates ([`arrow`],
 [`arrow-flight`], etc.) are released on the same schedule with the same versions
 as the [`parquet`] and [`parquet-derive`] crates.
 
-Starting June 2024, we plan to release new major versions with potentially
-breaking API changes at most once a quarter, and release incremental minor versions in
-the intervening months. See [this ticket] for more details.
+This crate releases every month. We release new major versions (with potentially
+breaking API changes) at most once a quarter, and release incremental minor
+versions in the intervening months. See [this ticket] for more details.
 
 To keep our maintenance burden down, we do regularly scheduled releases (major
 and minor) from the `master` branch. How we handle PRs with breaking API changes
@@ -63,14 +63,14 @@ is described in the [contributing] guide.
 
 [contributing]: CONTRIBUTING.md#breaking-changes
 
-For example:
+Planned Release Schedule
 
 | Approximate Date | Version  | Notes                                   |
 | ---------------- | -------- | --------------------------------------- |
-| Jun 2024         | `52.0.0` | Major, potentially breaking API changes |
-| Jul 2024         | `52.1.0` | Minor, NO breaking API changes          |
-| Aug 2024         | `52.2.0` | Minor, NO breaking API changes          |
 | Sep 2024         | `53.0.0` | Major, potentially breaking API changes |
+| Oct 2024         | `53.1.0` | Minor, NO breaking API changes          |
+| Nov 2024         | `53.2.0` | Minor, NO breaking API changes          |
+| Dec 2024         | `54.0.0` | Major, potentially breaking API changes |
 
 [this ticket]: https://github.com/apache/arrow-rs/issues/5368
 [semantic versioning]: https://semver.org/

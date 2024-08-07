@@ -239,13 +239,13 @@ pub type Float32Array = PrimitiveArray<Float32Type>;
 /// Construction
 ///
 /// ```
-/// # use arrow_array::Float32Array;
+/// # use arrow_array::Float64Array;
 /// // Create from Vec<Option<f32>>
-/// let arr = Float32Array::from(vec![Some(1.0), None, Some(2.0)]);
+/// let arr = Float64Array::from(vec![Some(1.0), None, Some(2.0)]);
 /// // Create from Vec<f32>
-/// let arr = Float32Array::from(vec![1.0, 2.0, 3.0]);
+/// let arr = Float64Array::from(vec![1.0, 2.0, 3.0]);
 /// // Create iter/collect
-/// let arr: Float32Array = std::iter::repeat(42.0).take(10).collect();
+/// let arr: Float64Array = std::iter::repeat(42.0).take(10).collect();
 /// ```
 ///
 /// See [`PrimitiveArray`] for more information and examples

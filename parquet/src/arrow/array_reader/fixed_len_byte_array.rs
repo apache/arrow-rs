@@ -341,6 +341,10 @@ impl ColumnValueDecoder for ValueDecoder {
             Encoding::DELTA_BYTE_ARRAY => Decoder::Delta {
                 decoder: DeltaByteArrayDecoder::new(data)?,
             },
+            Encoding::BYTE_STREAM_SPLIT => Decoder::ByteStreamSplit {
+                buf: data,
+                offset: 0,
+            },
             _ => {
                 return Err(general_err!(
                     "unsupported encoding for fixed length byte array: {}",
@@ -400,6 +404,20 @@ impl ColumnValueDecoder for ValueDecoder {
                     Ok(())
                 })
             }
+            Decoder::ByteStreamSplit { buf, offset } => {
+                // we have n=`byte_length` streams of length `buf.len/byte_length`
+                // to read value i, we need the i'th byte from each of the streams
+                // so `offset` should be the value offset, not the byte offset
+                let total_values = buf.len() / self.byte_length;
+                let to_read = num_values.min(total_values - *offset);
+                out.buffer.reserve(to_read * self.byte_length);
+
+                // now read the n streams and reassemble values into the output buffer
+                read_byte_stream_split(&mut out.buffer, buf, *offset, to_read, self.byte_length);
+
+                *offset += to_read;
+                Ok(to_read)
+            }
         }
     }
 
@@ -412,6 +430,32 @@ impl ColumnValueDecoder for ValueDecoder {
             }
             Decoder::Dict { decoder } => decoder.skip(num_values),
             Decoder::Delta { decoder } => decoder.skip(num_values),
+            Decoder::ByteStreamSplit { offset, buf } => {
+                let total_values = buf.len() / self.byte_length;
+                let to_read = num_values.min(total_values - *offset);
+                *offset += to_read;
+                Ok(to_read)
+            }
+        }
+    }
+}
+
+// `src` is an array laid out like a NxM matrix where N == `data_width` and
+// M == total_values_in_src. Each "row" of the matrix is a stream of bytes, with stream `i`
+// containing the `ith` byte for each value. Each "column" is a single value.
+// This will reassemble `num_values` values by reading columns of the matrix starting at
+// `offset`. Values will be appended to `dst`.
+fn read_byte_stream_split(
+    dst: &mut Vec<u8>,
+    src: &mut Bytes,
+    offset: usize,
+    num_values: usize,
+    data_width: usize,
+) {
+    let stride = src.len() / data_width;
+    for i in 0..num_values {
+        for j in 0..data_width {
+            dst.push(src[offset + j * stride + i]);
         }
     }
 }
@@ -420,6 +464,7 @@ enum Decoder {
     Plain { buf: Bytes, offset: usize },
     Dict { decoder: DictIndexDecoder },
     Delta { decoder: DeltaByteArrayDecoder },
+    ByteStreamSplit { buf: Bytes, offset: usize },
 }
 
 #[cfg(test)]

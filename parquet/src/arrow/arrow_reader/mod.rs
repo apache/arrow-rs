@@ -1059,6 +1059,7 @@ mod tests {
                 Encoding::PLAIN,
                 Encoding::RLE_DICTIONARY,
                 Encoding::DELTA_BINARY_PACKED,
+                Encoding::BYTE_STREAM_SPLIT,
             ],
         );
         run_single_column_reader_tests::<Int64Type, _, Int64Type>(
@@ -1070,6 +1071,7 @@ mod tests {
                 Encoding::PLAIN,
                 Encoding::RLE_DICTIONARY,
                 Encoding::DELTA_BINARY_PACKED,
+                Encoding::BYTE_STREAM_SPLIT,
             ],
         );
         run_single_column_reader_tests::<FloatType, _, FloatType>(
@@ -1639,6 +1641,86 @@ mod tests {
             }
         }
         assert_eq!(row_count, 300);
+    }
+
+    #[test]
+    fn test_read_extended_byte_stream_split() {
+        let path = format!(
+            "{}/byte_stream_split_extended.gzip.parquet",
+            arrow::util::test_util::parquet_test_data(),
+        );
+        let file = File::open(path).unwrap();
+        let record_reader = ParquetRecordBatchReader::try_new(file, 128).unwrap();
+
+        let mut row_count = 0;
+        for batch in record_reader {
+            let batch = batch.unwrap();
+            row_count += batch.num_rows();
+
+            // 0,1 are f16
+            let f16_col = batch.column(0).as_primitive::<Float16Type>();
+            let f16_bss = batch.column(1).as_primitive::<Float16Type>();
+            assert_eq!(f16_col.len(), f16_bss.len());
+            f16_col
+                .iter()
+                .zip(f16_bss.iter())
+                .for_each(|(l, r)| assert_eq!(l.unwrap(), r.unwrap()));
+
+            // 2,3 are f32
+            let f32_col = batch.column(2).as_primitive::<Float32Type>();
+            let f32_bss = batch.column(3).as_primitive::<Float32Type>();
+            assert_eq!(f32_col.len(), f32_bss.len());
+            f32_col
+                .iter()
+                .zip(f32_bss.iter())
+                .for_each(|(l, r)| assert_eq!(l.unwrap(), r.unwrap()));
+
+            // 4,5 are f64
+            let f64_col = batch.column(4).as_primitive::<Float64Type>();
+            let f64_bss = batch.column(5).as_primitive::<Float64Type>();
+            assert_eq!(f64_col.len(), f64_bss.len());
+            f64_col
+                .iter()
+                .zip(f64_bss.iter())
+                .for_each(|(l, r)| assert_eq!(l.unwrap(), r.unwrap()));
+
+            // 6,7 are i32
+            let i32_col = batch.column(6).as_primitive::<types::Int32Type>();
+            let i32_bss = batch.column(7).as_primitive::<types::Int32Type>();
+            assert_eq!(i32_col.len(), i32_bss.len());
+            i32_col
+                .iter()
+                .zip(i32_bss.iter())
+                .for_each(|(l, r)| assert_eq!(l.unwrap(), r.unwrap()));
+
+            // 8,9 are i64
+            let i64_col = batch.column(8).as_primitive::<types::Int64Type>();
+            let i64_bss = batch.column(9).as_primitive::<types::Int64Type>();
+            assert_eq!(i64_col.len(), i64_bss.len());
+            i64_col
+                .iter()
+                .zip(i64_bss.iter())
+                .for_each(|(l, r)| assert_eq!(l.unwrap(), r.unwrap()));
+
+            // 10,11 are FLBA(5)
+            let flba_col = batch.column(10).as_fixed_size_binary();
+            let flba_bss = batch.column(11).as_fixed_size_binary();
+            assert_eq!(flba_col.len(), flba_bss.len());
+            flba_col
+                .iter()
+                .zip(flba_bss.iter())
+                .for_each(|(l, r)| assert_eq!(l.unwrap(), r.unwrap()));
+
+            // 12,13 are FLBA(4) (decimal(7,3))
+            let dec_col = batch.column(12).as_primitive::<Decimal128Type>();
+            let dec_bss = batch.column(13).as_primitive::<Decimal128Type>();
+            assert_eq!(dec_col.len(), dec_bss.len());
+            dec_col
+                .iter()
+                .zip(dec_bss.iter())
+                .for_each(|(l, r)| assert_eq!(l.unwrap(), r.unwrap()));
+        }
+        assert_eq!(row_count, 200);
     }
 
     #[test]
