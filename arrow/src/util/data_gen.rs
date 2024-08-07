@@ -463,7 +463,7 @@ impl RandomTemporalValue for Time32SecondType {
     /// Range of values representing the elapsed time since midnight in seconds. The
     /// range is from 0 to 24 hours.
     fn value_range() -> impl SampleRange<Self::Native> {
-        0..60 * 60 * 24 - 1
+        0..60 * 60 * 24
     }
 }
 
@@ -471,7 +471,7 @@ impl RandomTemporalValue for Time32MillisecondType {
     /// Range of values representing the elapsed time since midnight in milliseconds. The
     /// range is from 0 to 24 hours.
     fn value_range() -> impl SampleRange<Self::Native> {
-        0..1_000 * 60 * 60 * 24 - 1
+        0..1_000 * 60 * 60 * 24
     }
 }
 
@@ -479,7 +479,7 @@ impl RandomTemporalValue for Time64MicrosecondType {
     /// Range of values representing the elapsed time since midnight in microseconds. The
     /// range is from 0 to 24 hours.
     fn value_range() -> impl SampleRange<Self::Native> {
-        0..1_000 * 1_000 * 60 * 60 * 24 - 1
+        0..1_000 * 1_000 * 60 * 60 * 24
     }
 }
 
@@ -487,7 +487,7 @@ impl RandomTemporalValue for Time64NanosecondType {
     /// Range of values representing the elapsed time since midnight in nanoseconds. The
     /// range is from 0 to 24 hours.
     fn value_range() -> impl SampleRange<Self::Native> {
-        0..1_000 * 1_000 * 1_000 * 60 * 60 * 24 - 1
+        0..1_000 * 1_000 * 1_000 * 60 * 60 * 24
     }
 }
 
