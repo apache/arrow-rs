@@ -188,35 +188,52 @@ pub(crate) fn cast_to_dictionary<K: ArrowDictionaryKeyType>(
         Decimal256(_, _) => {
             pack_numeric_to_dictionary::<K, Decimal256Type>(array, dict_value_type, cast_options)
         }
-        Float16 => pack_numeric_to_dictionary::<K, Float16Type>(array, dict_value_type, cast_options),
-        Float32 => pack_numeric_to_dictionary::<K, Float32Type>(array, dict_value_type, cast_options),
-        Float64 => pack_numeric_to_dictionary::<K, Float64Type>(array, dict_value_type, cast_options),
+        Float16 => {
+            pack_numeric_to_dictionary::<K, Float16Type>(array, dict_value_type, cast_options)
+        }
+        Float32 => {
+            pack_numeric_to_dictionary::<K, Float32Type>(array, dict_value_type, cast_options)
+        }
+        Float64 => {
+            pack_numeric_to_dictionary::<K, Float64Type>(array, dict_value_type, cast_options)
+        }
         Date32 => pack_numeric_to_dictionary::<K, Date32Type>(array, dict_value_type, cast_options),
         Date64 => pack_numeric_to_dictionary::<K, Date64Type>(array, dict_value_type, cast_options),
         Time32(TimeUnit::Second) => {
             pack_numeric_to_dictionary::<K, Time32SecondType>(array, dict_value_type, cast_options)
         }
-        Time32(TimeUnit::Millisecond) => {
-            pack_numeric_to_dictionary::<K, Time32MillisecondType>(array, dict_value_type, cast_options)
-        }
-        Time64(TimeUnit::Microsecond) => {
-            pack_numeric_to_dictionary::<K, Time64MicrosecondType>(array, dict_value_type, cast_options)
-        }
-        Time64(TimeUnit::Nanosecond) => {
-            pack_numeric_to_dictionary::<K, Time64NanosecondType>(array, dict_value_type, cast_options)
-        }
-        Timestamp(TimeUnit::Second, _) => {
-            pack_numeric_to_dictionary::<K, TimestampSecondType>(array, dict_value_type, cast_options)
-        }
-        Timestamp(TimeUnit::Millisecond, _) => {
-            pack_numeric_to_dictionary::<K, TimestampMillisecondType>(array, dict_value_type, cast_options)
-        }
-        Timestamp(TimeUnit::Microsecond, _) => {
-            pack_numeric_to_dictionary::<K, TimestampMicrosecondType>(array, dict_value_type, cast_options)
-        }
-        Timestamp(TimeUnit::Nanosecond, _) => {
-            pack_numeric_to_dictionary::<K, TimestampNanosecondType>(array, dict_value_type, cast_options)
-        }
+        Time32(TimeUnit::Millisecond) => pack_numeric_to_dictionary::<K, Time32MillisecondType>(
+            array,
+            dict_value_type,
+            cast_options,
+        ),
+        Time64(TimeUnit::Microsecond) => pack_numeric_to_dictionary::<K, Time64MicrosecondType>(
+            array,
+            dict_value_type,
+            cast_options,
+        ),
+        Time64(TimeUnit::Nanosecond) => pack_numeric_to_dictionary::<K, Time64NanosecondType>(
+            array,
+            dict_value_type,
+            cast_options,
+        ),
+        Timestamp(TimeUnit::Second, _) => pack_numeric_to_dictionary::<K, TimestampSecondType>(
+            array,
+            dict_value_type,
+            cast_options,
+        ),
+        Timestamp(TimeUnit::Millisecond, _) => pack_numeric_to_dictionary::<
+            K,
+            TimestampMillisecondType,
+        >(array, dict_value_type, cast_options),
+        Timestamp(TimeUnit::Microsecond, _) => pack_numeric_to_dictionary::<
+            K,
+            TimestampMicrosecondType,
+        >(array, dict_value_type, cast_options),
+        Timestamp(TimeUnit::Nanosecond, _) => pack_numeric_to_dictionary::<
+            K,
+            TimestampNanosecondType,
+        >(array, dict_value_type, cast_options),
         Utf8 => {
             // If the input is a view type, we can avoid casting (thus copying) the data
             if array.data_type() == &DataType::Utf8View {

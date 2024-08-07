@@ -6711,8 +6711,10 @@ mod tests {
     #[test]
     fn test_cast_timestamp_array_to_dict() {
         use DataType::*;
-        
-        let array = Arc::new(TimestampSecondArray::from(vec![Some(1000), None, Some(2000)]).with_timezone_utc()) as ArrayRef;
+
+        let array = Arc::new(
+            TimestampSecondArray::from(vec![Some(1000), None, Some(2000)]).with_timezone_utc(),
+        ) as ArrayRef;
 
         let expected = vec!["1970-01-01T00:16:40", "null", "1970-01-01T00:33:20"];
 
