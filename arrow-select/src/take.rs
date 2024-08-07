@@ -2313,7 +2313,7 @@ mod tests {
 
         let array = UnionArray::try_new(
             fields,
-            ScalarBuffer::from_iter(vec![0_i8, 0, 0, 0, 0].into_iter()),
+            ScalarBuffer::from(vec![0_i8, 0, 0, 0, 0]),
             Some(ScalarBuffer::from_iter(0_i32..5)),
             vec![ints],
         )
