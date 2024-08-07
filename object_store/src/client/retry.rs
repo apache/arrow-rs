@@ -86,12 +86,13 @@ impl Error {
                 path,
                 source: Box::new(self),
             },
-            Some(StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN) => {
-                crate::Error::PermissionDernied {
-                    path,
-                    source: Box::new(self),
-                }
-            }
+            Some(StatusCode::FORBIDDEN) => crate::Error::PermissionDenied {
+                path,
+                source: Box::new(self),
+            },
+            Some(StatusCode::UNAUTHORIZED) => crate::Error::Unauthenticated {
+                source: Box::new(self),
+            },
             _ => crate::Error::Generic {
                 store,
                 source: Box::new(self),

@@ -1284,6 +1284,11 @@ pub enum Error {
         source: Box<dyn std::error::Error + Send + Sync + 'static>,
     },
 
+    #[snafu(display("The operation lacked valid authentication credentials: {}", source))]
+    Unauthenticated {
+        source: Box<dyn std::error::Error + Send + Sync + 'static>,
+    },
+
     #[snafu(display("Configuration key: '{}' is not valid for store '{}'.", key, store))]
     UnknownConfigurationKey { store: &'static str, key: String },
 }
