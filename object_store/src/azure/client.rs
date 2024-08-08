@@ -559,6 +559,61 @@ impl GetClient for AzureClient {
     }
 }
 
+#[cfg(feature = "experimental-azure-list-offset")]
+fn marker_for_offset(offset: &str, is_emulator: bool) -> String {
+    if is_emulator {
+        offset.to_string()
+    } else {
+        // Here we reconstruct an Azure marker (continuation token) from a key to be able to seek
+        // into an arbitrary position in the key space.
+        // The current format (July 2024) for the marker is as follows:
+        //
+        //   +-> current token version
+        //   |
+        //   |  +-> unpadded length of base64 encoded field
+        //   |  |
+        //   |  |  +-> base64 encoded field with characters (/,+,=) repaced with (_,*,-)
+        //   |  |  |
+        //   2!72!MDAwMDA4IWZpbGUudHh0ITAwMDAyOCE5OTk5LTEyLTMxVDIzOjU5OjU5Ljk5OTk5OTlaIQ--
+        //    |  |               ^
+        //    terminators        |
+        //                       |
+        //                +------------+
+        //   Decoding the |base64 field| gives:
+        //                +------------+
+        //
+        //   +-> length of key field padded to 6 digits
+        //   |
+        //   |      +-> key to start listing at
+        //   |      |
+        //   |      |        +-> length of timestamp field padded to 6 digits
+        //   |      |        |
+        //   |      |        |      +-> constant max timestamp field
+        //   |      |        |      |
+        //   000008!file.txt!000028!9999-12-31T23:59:59.9999999Z!
+        //         |        |      |                            |
+        //         +----> field terminators <-------------------+
+        //
+        // When recostructing we add a space character (ASCII 0x20) to the end of the key to change the
+        // `start_at` behavior into a `start_after` behavior as the space character is the first valid character
+        // in the lexicographical order.
+        //
+        // It appears that hadoop relies on this, code here:
+        // https://github.com/apache/hadoop/blob/059e996c02d64716707d8dfb905dc84bab317aef/hadoop-tools/hadoop-azure/src/main/java/org/apache/hadoop/fs/azurebfs/AzureBlobFileSystemStore.java#L1358
+
+        let encoded_part = BASE64_STANDARD
+            .encode(&format!(
+                "{:06}!{} !000028!9999-12-31T23:59:59.9999999Z!",
+                offset.len() + 1,
+                offset,
+            ))
+            .replace("/", "_")
+            .replace("+", "*")
+            .replace("=", "-");
+        format!("2!{}!{}", encoded_part.len(), encoded_part)
+    }
+}
+
 #[async_trait]
 impl ListClient for AzureClient {
     /// Make an Azure List request <https://docs.microsoft.com/en-us/rest/api/storageservices/list-blobs>
@@ -569,6 +624,7 @@ impl ListClient for AzureClient {
         token: Option<&str>,
         offset: Option<&str>,
     ) -> Result<(ListResult, Option<String>)> {
+        #[cfg(not(feature = "experimental-azure-list-offset"))]
         assert!(offset.is_none()); // Not yet supported
 
         let credential = self.get_credential().await?;
@@ -585,6 +641,16 @@ impl ListClient for AzureClient {
         if delimiter {
             query.push(("delimiter", DELIMITER))
         }
+
+        #[cfg(feature = "experimental-azure-list-offset")]
+        let token_string = match (token, offset) {
+            (Some(token), _) => Some(token.to_string()),
+            (None, Some(offset)) => Some(marker_for_offset(offset, self.config.is_emulator)),
+            (None, None) => None,
+        };
+
+        #[cfg(feature = "experimental-azure-list-offset")]
+        let token = token_string.as_deref();
 
         if let Some(token) = token {
             query.push(("marker", token))
@@ -966,5 +1032,20 @@ mod tests {
 
         let _delegated_key_response_internal: UserDelegationKey =
             quick_xml::de::from_str(S).unwrap();
+    }
+
+    #[cfg(feature = "experimental-azure-list-offset")]
+    #[test]
+    fn test_marker_for_offset() {
+        // BlobStorage
+        let marker = marker_for_offset("file.txt", false);
+        assert_eq!(
+            marker,
+            "2!72!MDAwMDA5IWZpbGUudHh0ICEwMDAwMjghOTk5OS0xMi0zMVQyMzo1OTo1OS45OTk5OTk5WiE-"
+        );
+
+        // Azurite
+        let marker = marker_for_offset("file.txt", true);
+        assert_eq!(marker, "file.txt");
     }
 }
