@@ -56,7 +56,7 @@ force_validate = []
 
 [dev-dependencies]
 rand = { version = "0.8", default-features = false, features = ["std", "std_rng"] }
-criterion = { version = "0.5", default-features = false }
+criterion = { package = "codspeed-criterion-compat", version = "2.6.0" , default-features = false }
 
 [build-dependencies]
 
