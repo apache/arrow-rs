@@ -162,6 +162,26 @@ where
     take(cast_dict_values.as_ref(), dict_array.keys(), None)
 }
 
+/// Pack a data type into a dictionary array passing the values through a primitive array
+pub(crate) fn pack_array_to_dictionary_via_primitive<K: ArrowDictionaryKeyType>(
+    array: &dyn Array,
+    primitive_type: DataType,
+    dict_value_type: &DataType,
+    cast_options: &CastOptions,
+) -> Result<ArrayRef, ArrowError> {
+    let primitive = cast_with_options(array, &primitive_type, cast_options)?;
+    let dict = cast_with_options(
+        primitive.as_ref(),
+        &DataType::Dictionary(Box::new(K::DATA_TYPE), Box::new(primitive_type)),
+        cast_options,
+    )?;
+    cast_with_options(
+        dict.as_ref(),
+        &DataType::Dictionary(Box::new(K::DATA_TYPE), Box::new(dict_value_type.clone())),
+        cast_options,
+    )
+}
+
 /// Attempts to encode an array into an `ArrayDictionary` with index
 /// type K and value (dictionary) type value_type
 ///
@@ -197,43 +217,36 @@ pub(crate) fn cast_to_dictionary<K: ArrowDictionaryKeyType>(
         Float64 => {
             pack_numeric_to_dictionary::<K, Float64Type>(array, dict_value_type, cast_options)
         }
-        Date32 => pack_numeric_to_dictionary::<K, Date32Type>(array, dict_value_type, cast_options),
-        Date64 => pack_numeric_to_dictionary::<K, Date64Type>(array, dict_value_type, cast_options),
-        Time32(TimeUnit::Second) => {
-            pack_numeric_to_dictionary::<K, Time32SecondType>(array, dict_value_type, cast_options)
-        }
-        Time32(TimeUnit::Millisecond) => pack_numeric_to_dictionary::<K, Time32MillisecondType>(
+        Date32 => pack_array_to_dictionary_via_primitive::<K>(
             array,
+            DataType::Int32,
             dict_value_type,
             cast_options,
         ),
-        Time64(TimeUnit::Microsecond) => pack_numeric_to_dictionary::<K, Time64MicrosecondType>(
+        Date64 => pack_array_to_dictionary_via_primitive::<K>(
             array,
+            DataType::Int64,
             dict_value_type,
             cast_options,
         ),
-        Time64(TimeUnit::Nanosecond) => pack_numeric_to_dictionary::<K, Time64NanosecondType>(
+        Time32(_) => pack_array_to_dictionary_via_primitive::<K>(
             array,
+            DataType::Int32,
             dict_value_type,
             cast_options,
         ),
-        Timestamp(TimeUnit::Second, _) => pack_numeric_to_dictionary::<K, TimestampSecondType>(
+        Time64(_) => pack_array_to_dictionary_via_primitive::<K>(
             array,
+            DataType::Int64,
             dict_value_type,
             cast_options,
         ),
-        Timestamp(TimeUnit::Millisecond, _) => pack_numeric_to_dictionary::<
-            K,
-            TimestampMillisecondType,
-        >(array, dict_value_type, cast_options),
-        Timestamp(TimeUnit::Microsecond, _) => pack_numeric_to_dictionary::<
-            K,
-            TimestampMicrosecondType,
-        >(array, dict_value_type, cast_options),
-        Timestamp(TimeUnit::Nanosecond, _) => pack_numeric_to_dictionary::<
-            K,
-            TimestampNanosecondType,
-        >(array, dict_value_type, cast_options),
+        Timestamp(_, _) => pack_array_to_dictionary_via_primitive::<K>(
+            array,
+            DataType::Int64,
+            dict_value_type,
+            cast_options,
+        ),
         Utf8 => {
             // If the input is a view type, we can avoid casting (thus copying) the data
             if array.data_type() == &DataType::Utf8View {
