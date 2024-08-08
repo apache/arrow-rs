@@ -741,16 +741,22 @@ fn filter_fixed_size_binary(
                 &values[calculate_offset_from_index(x)..calculate_offset_from_index(x + 1)]
             });
 
-            // SAFETY: IndexIterator is trusted length
-            unsafe { MutableBuffer::from_trusted_len_iter_slice_u8(iter, value_length) }
+            let mut buffer = MutableBuffer::new(predicate.count * value_length);
+
+            iter.for_each(|item| buffer.extend_from_slice(item));
+
+            buffer
         }
         IterationStrategy::Indices(indices) => {
             let iter = indices.iter().map(|x| {
                 &values[calculate_offset_from_index(*x)..calculate_offset_from_index(*x + 1)]
             });
 
-            // SAFETY: `Vec::iter` is trusted length
-            unsafe { MutableBuffer::from_trusted_len_iter_slice_u8(iter, value_length) }
+            let mut buffer = MutableBuffer::new(predicate.count * value_length);
+
+            iter.for_each(|item| buffer.extend_from_slice(item));
+
+            buffer
         }
         IterationStrategy::All | IterationStrategy::None => unreachable!(),
     };

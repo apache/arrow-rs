@@ -668,56 +668,6 @@ impl MutableBuffer {
     }
 }
 
-impl<'a> MutableBuffer {
-    /// Creates a [`MutableBuffer`] from an `&[u8]` [`Iterator`] with a trusted (upper) length.
-    /// Prefer this to `collect` whenever possible, as it is faster.
-    /// # Panic
-    /// This method will panic if `&[u8].len()` != `item_size`.
-    /// # Example
-    /// ```
-    /// # use arrow_buffer::MutableBuffer;
-    /// # use arrow_buffer::ToByteSlice;
-    /// let iter = vec![[1_u8, 2].to_byte_slice(), [3_u8, 4].to_byte_slice()].into_iter();
-    /// let buf = unsafe {
-    ///     MutableBuffer::from_trusted_len_iter_slice_u8(iter, 2)
-    /// };
-    /// assert_eq!(4, buf.len());
-    /// ```
-    /// # Safety
-    /// This method assumes that the iterator's size is correct and is undefined behavior
-    /// to use it on an iterator that reports an incorrect length.
-    // This implementation is required for two reasons:
-    // 1. there is no trait `TrustedLen` in stable rust and therefore
-    //    we can't specialize `extend` for `TrustedLen` like `Vec` does.
-    // 2. `from_trusted_len_iter_slice_u8` is faster.
-    #[inline]
-    pub unsafe fn from_trusted_len_iter_slice_u8<I: Iterator<Item = &'a [u8]>>(
-        iterator: I,
-        item_size: usize,
-    ) -> Self {
-        let (_, upper) = iterator.size_hint();
-        let upper = upper.expect("from_trusted_len_iter_slice_u8 requires an upper limit");
-        let len = upper * item_size;
-
-        let mut buffer = MutableBuffer::new(len);
-
-        let mut dst = buffer.data.as_ptr();
-        for item in iterator {
-            assert!(item.len() == item_size);
-            let src = item.as_ptr();
-            std::ptr::copy_nonoverlapping(src, dst, item_size);
-            dst = dst.add(item_size);
-        }
-        assert_eq!(
-            dst.offset_from(buffer.data.as_ptr()) as usize,
-            len,
-            "Trusted iterator length was not accurately reported"
-        );
-        buffer.len = len;
-        buffer
-    }
-}
-
 impl Default for MutableBuffer {
     fn default() -> Self {
         Self::with_capacity(0)
@@ -949,14 +899,6 @@ mod tests {
         let buf = unsafe { MutableBuffer::from_trusted_len_iter(iter) };
         assert_eq!(8, buf.len());
         assert_eq!(&[1u8, 0, 0, 0, 2, 0, 0, 0], buf.as_slice());
-    }
-
-    #[test]
-    fn test_from_trusted_len_iter_slice_u8() {
-        let iter = vec![[1_u8, 2].to_byte_slice(), [3_u8, 4].to_byte_slice()].into_iter();
-        let buf = unsafe { MutableBuffer::from_trusted_len_iter_slice_u8(iter, 2) };
-        assert_eq!(4, buf.len());
-        assert_eq!(&[1_u8, 2, 3, 4], buf.as_slice());
     }
 
     #[test]
