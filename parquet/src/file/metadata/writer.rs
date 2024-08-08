@@ -44,7 +44,11 @@ pub(crate) struct ThriftMetadataWriter<'a, W: Write> {
 }
 
 impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
-    /// Serialize all the offset index to the file
+    /// Serialize all the offset indexes to `self.buf`,
+    ///
+    /// Note: also updates the `ColumnChunk::offset_index_offset` and
+    /// `ColumnChunk::offset_index_length`]s to reflect the position and length
+    /// of the serialized offset indexes.
     fn write_offset_indexes(&mut self, offset_indexes: &[Vec<Option<OffsetIndex>>]) -> Result<()> {
         // iter row group
         // iter each column
@@ -69,7 +73,11 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
         Ok(())
     }
 
-    /// Serialize all the column index to the file
+    /// Serialize all the column indexes to the `self.buf`
+    ///
+    /// Note: also updates the `ColumnChunk::column_index_offset` and
+    /// `ColumnChunk::column_index_length` to reflect the position and length
+    /// of the serialized column indexes.
     fn write_column_indexes(&mut self, column_indexes: &[Vec<Option<ColumnIndex>>]) -> Result<()> {
         // iter row group
         // iter each column
