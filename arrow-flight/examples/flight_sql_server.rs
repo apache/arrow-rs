@@ -46,9 +46,9 @@ use arrow_flight::sql::{
     ActionEndTransactionRequest, Any, CommandGetCatalogs, CommandGetCrossReference,
     CommandGetDbSchemas, CommandGetExportedKeys, CommandGetImportedKeys, CommandGetPrimaryKeys,
     CommandGetSqlInfo, CommandGetTableTypes, CommandGetTables, CommandGetXdbcTypeInfo,
-    CommandPreparedStatementQuery, CommandPreparedStatementUpdate, CommandStatementQuery,
-    CommandStatementSubstraitPlan, CommandStatementUpdate, Nullable, ProstMessageExt, Searchable,
-    SqlInfo, TicketStatementQuery, XdbcDataType,
+    CommandPreparedStatementQuery, CommandPreparedStatementUpdate, CommandStatementIngest,
+    CommandStatementQuery, CommandStatementSubstraitPlan, CommandStatementUpdate, Nullable,
+    ProstMessageExt, Searchable, SqlInfo, TicketStatementQuery, XdbcDataType,
 };
 use arrow_flight::utils::batches_to_flight_data;
 use arrow_flight::{
@@ -610,6 +610,14 @@ impl FlightSqlService for FlightSqlServiceImpl {
     async fn do_put_statement_update(
         &self,
         _ticket: CommandStatementUpdate,
+        _request: Request<PeekableFlightDataStream>,
+    ) -> Result<i64, Status> {
+        Ok(FAKE_UPDATE_RESULT)
+    }
+
+    async fn do_put_statement_ingest(
+        &self,
+        _ticket: CommandStatementIngest,
         _request: Request<PeekableFlightDataStream>,
     ) -> Result<i64, Status> {
         Ok(FAKE_UPDATE_RESULT)
