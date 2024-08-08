@@ -1069,9 +1069,11 @@ impl FromStr for IntervalUnit {
     }
 }
 
-
 impl IntervalUnit {
-    fn from_str_or_config(s: Option<&str>, config: &IntervalParseConfig) -> Result<Self, ArrowError> {
+    fn from_str_or_config(
+        s: Option<&str>,
+        config: &IntervalParseConfig,
+    ) -> Result<Self, ArrowError> {
         match s {
             Some(s) => s.parse(),
             None => Ok(config.default_unit),
@@ -1396,7 +1398,7 @@ fn parse_interval_components(
 ) -> Result<Vec<(IntervalAmount, IntervalUnit)>, ArrowError> {
     let raw_pairs = split_interval_components(value);
 
-    // parse amounts
+    // parse amounts and units
     let Ok(pairs): Result<Vec<(IntervalAmount, IntervalUnit)>, ArrowError> = raw_pairs
         .iter()
         .map(|(a, u)| Ok((a.parse()?, IntervalUnit::from_str_or_config(*u, config)?)))
@@ -1415,7 +1417,9 @@ fn parse_interval_components(
     for (unit, (_, raw_unit)) in units.iter().zip(raw_pairs) {
         if observed_interval_types & (*unit as u16) != 0 {
             return Err(ArrowError::ParseError(format!(
-                "Invalid input syntax for type interval: {value:?}. Repeated type '{}'", raw_unit.unwrap_or_default()
+                "Invalid input syntax for type interval: {:?}. Repeated type '{}'",
+                value,
+                raw_unit.unwrap_or_default(),
             )));
         }
 
