@@ -173,6 +173,7 @@ impl ArrayReader for StructArrayReader {
                 array_data_builder.null_bit_buffer(Some(bitmap_builder.into()));
         }
 
+        // SAFETY: FIXME: document why this call is safe.
         let array_data = unsafe { array_data_builder.build_unchecked() };
         Ok(Arc::new(StructArray::from(array_data)))
     }
