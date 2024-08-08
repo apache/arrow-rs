@@ -91,6 +91,7 @@ impl Error {
                 source: Box::new(self),
             },
             Some(StatusCode::UNAUTHORIZED) => crate::Error::Unauthenticated {
+                path,
                 source: Box::new(self),
             },
             _ => crate::Error::Generic {

@@ -1284,8 +1284,13 @@ pub enum Error {
         source: Box<dyn std::error::Error + Send + Sync + 'static>,
     },
 
-    #[snafu(display("The operation lacked valid authentication credentials: {}", source))]
+    #[snafu(display(
+        "The operation lacked valid authentication credentials for path {}: {}",
+        path,
+        source
+    ))]
     Unauthenticated {
+        path: String,
         source: Box<dyn std::error::Error + Send + Sync + 'static>,
     },
 
