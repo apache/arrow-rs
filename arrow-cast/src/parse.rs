@@ -1047,7 +1047,7 @@ impl FromStr for IntervalUnit {
     fn from_str(s: &str) -> Result<Self, ArrowError> {
         match s.to_lowercase().as_str() {
             "c" | "cent" | "cents" | "century" | "centuries" => Ok(Self::Century),
-            "dec" | "decade" | "decades" => Ok(Self::Decade),
+            "dec" | "decs" | "decade" | "decades" => Ok(Self::Decade),
             "y" | "yr" | "yrs" | "year" | "years" => Ok(Self::Year),
             "mon" | "mons" | "month" | "months" => Ok(Self::Month),
             "w" | "week" | "weeks" => Ok(Self::Week),
@@ -1073,7 +1073,7 @@ impl FromStr for IntervalUnit {
 impl IntervalUnit {
     fn from_str_or_config(s: Option<&str>, config: &IntervalParseConfig) -> Result<Self, ArrowError> {
         match s {
-            Some(s) => s.parse::<Self>(),
+            Some(s) => s.parse(),
             None => Ok(config.default_unit),
         }
     }
@@ -1399,7 +1399,7 @@ fn parse_interval_components(
     // parse amounts
     let Ok(pairs): Result<Vec<(IntervalAmount, IntervalUnit)>, ArrowError> = raw_pairs
         .iter()
-        .map(|(a, u)| Ok(((*a).parse()?, IntervalUnit::from_str_or_config(*u, config)?)))
+        .map(|(a, u)| Ok((a.parse()?, IntervalUnit::from_str_or_config(*u, config)?)))
         .collect()
     else {
         return Err(ArrowError::ParseError(format!(
