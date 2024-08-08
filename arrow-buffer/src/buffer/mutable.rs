@@ -672,7 +672,7 @@ impl<'a> MutableBuffer {
     /// Creates a [`MutableBuffer`] from an `&[u8]` [`Iterator`] with a trusted (upper) length.
     /// Prefer this to `collect` whenever possible, as it is faster.
     /// # Panic
-    /// This method will panic if `&u8.len()` != `item_size`.
+    /// This method will panic if `&[u8].len()` != `item_size`.
     /// # Example
     /// ```
     /// # use arrow_buffer::MutableBuffer;

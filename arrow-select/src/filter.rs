@@ -716,13 +716,13 @@ fn filter_fixed_size_binary(
 ) -> FixedSizeBinaryArray {
     let values: &[u8] = array.values();
     let value_length = array.value_length() as usize;
-    let calcualte_offset_from_index = |index: usize| index * value_length;
+    let calculate_offset_from_index = |index: usize| index * value_length;
     let buffer = match &predicate.strategy {
         IterationStrategy::SlicesIterator => {
             let mut buffer = MutableBuffer::with_capacity(predicate.count * value_length);
             for (start, end) in SlicesIterator::new(&predicate.filter) {
                 buffer.extend_from_slice(
-                    &values[calcualte_offset_from_index(start)..calcualte_offset_from_index(end)],
+                    &values[calculate_offset_from_index(start)..calculate_offset_from_index(end)],
                 );
             }
             buffer
@@ -731,14 +731,14 @@ fn filter_fixed_size_binary(
             let mut buffer = MutableBuffer::with_capacity(predicate.count * value_length);
             for (start, end) in slices {
                 buffer.extend_from_slice(
-                    &values[calcualte_offset_from_index(*start)..calcualte_offset_from_index(*end)],
+                    &values[calculate_offset_from_index(*start)..calculate_offset_from_index(*end)],
                 );
             }
             buffer
         }
         IterationStrategy::IndexIterator => {
             let iter = IndexIterator::new(&predicate.filter, predicate.count).map(|x| {
-                &values[calcualte_offset_from_index(x)..calcualte_offset_from_index(x + 1)]
+                &values[calculate_offset_from_index(x)..calculate_offset_from_index(x + 1)]
             });
 
             // SAFETY: IndexIterator is trusted length
@@ -746,7 +746,7 @@ fn filter_fixed_size_binary(
         }
         IterationStrategy::Indices(indices) => {
             let iter = indices.iter().map(|x| {
-                &values[calcualte_offset_from_index(*x)..calcualte_offset_from_index(*x + 1)]
+                &values[calculate_offset_from_index(*x)..calculate_offset_from_index(*x + 1)]
             });
 
             // SAFETY: `Vec::iter` is trusted length
@@ -1061,6 +1061,59 @@ mod tests {
         assert_eq!(d.len(), 2);
         assert_eq!(d.value(0), &v1);
         assert_eq!(d.value(1), &v3);
+        let c2 = FilterBuilder::new(&b)
+            .optimize()
+            .build()
+            .filter(&a)
+            .unwrap();
+        let d2 = c2
+            .as_ref()
+            .as_any()
+            .downcast_ref::<FixedSizeBinaryArray>()
+            .unwrap();
+        assert_eq!(d, d2);
+
+        let b = BooleanArray::from(vec![false, false, false]);
+        let c = filter(&a, &b).unwrap();
+        let d = c
+            .as_ref()
+            .as_any()
+            .downcast_ref::<FixedSizeBinaryArray>()
+            .unwrap();
+        assert_eq!(d.len(), 0);
+
+        let b = BooleanArray::from(vec![true, true, true]);
+        let c = filter(&a, &b).unwrap();
+        let d = c
+            .as_ref()
+            .as_any()
+            .downcast_ref::<FixedSizeBinaryArray>()
+            .unwrap();
+        assert_eq!(d.len(), 3);
+        assert_eq!(d.value(0), &v1);
+        assert_eq!(d.value(1), &v2);
+        assert_eq!(d.value(2), &v3);
+
+        let b = BooleanArray::from(vec![false, false, true]);
+        let c = filter(&a, &b).unwrap();
+        let d = c
+            .as_ref()
+            .as_any()
+            .downcast_ref::<FixedSizeBinaryArray>()
+            .unwrap();
+        assert_eq!(d.len(), 1);
+        assert_eq!(d.value(0), &v3);
+        let c2 = FilterBuilder::new(&b)
+            .optimize()
+            .build()
+            .filter(&a)
+            .unwrap();
+        let d2 = c2
+            .as_ref()
+            .as_any()
+            .downcast_ref::<FixedSizeBinaryArray>()
+            .unwrap();
+        assert_eq!(d, d2);
     }
 
     #[test]
