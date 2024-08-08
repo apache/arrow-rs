@@ -225,10 +225,11 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
             | Timestamp(Millisecond, _)
             | Timestamp(Microsecond, _)
             | Timestamp(Nanosecond, _)
-            | Interval(_),
+            | Interval(_)
+            | BinaryView,
         ) => true,
         (Utf8 | LargeUtf8, Utf8View) => true,
-        (BinaryView, Binary | LargeBinary) => true,
+        (BinaryView, Binary | LargeBinary | Utf8 | LargeUtf8 | Utf8View ) => true,
         (Utf8 | LargeUtf8, _) => to_type.is_numeric() && to_type != &Float16,
         (_, Utf8 | LargeUtf8) => from_type.is_primitive(),
 
@@ -1229,6 +1230,9 @@ pub fn cast_with_options(
                 cast_byte_container::<BinaryType, LargeBinaryType>(&binary)
             }
             Utf8View => Ok(Arc::new(StringViewArray::from(array.as_string::<i32>()))),
+            BinaryView => Ok(Arc::new(
+                StringViewArray::from(array.as_string::<i32>()).to_binary_view(),
+            )),
             LargeUtf8 => cast_byte_container::<Utf8Type, LargeUtf8Type>(array),
             Time32(TimeUnit::Second) => parse_string::<Time32SecondType, i32>(array, cast_options),
             Time32(TimeUnit::Millisecond) => {
@@ -1282,6 +1286,7 @@ pub fn cast_with_options(
             Date64 => parse_string_view::<Date64Type>(array, cast_options),
             Binary => cast_view_to_byte::<StringViewType, GenericBinaryType<i32>>(array),
             LargeBinary => cast_view_to_byte::<StringViewType, GenericBinaryType<i64>>(array),
+            BinaryView => Ok(Arc::new(array.as_string_view().clone().to_binary_view())),
             Utf8 => cast_view_to_byte::<StringViewType, GenericStringType<i32>>(array),
             LargeUtf8 => cast_view_to_byte::<StringViewType, GenericStringType<i64>>(array),
             Time32(TimeUnit::Second) => parse_string_view::<Time32SecondType>(array, cast_options),
@@ -1339,6 +1344,13 @@ pub fn cast_with_options(
                 array.as_string::<i64>().clone(),
             ))),
             Utf8View => Ok(Arc::new(StringViewArray::from(array.as_string::<i64>()))),
+            BinaryView => Ok(Arc::new(BinaryViewArray::from(
+                array
+                    .as_string::<i64>()
+                    .into_iter()
+                    .map(|x| x.map(|x| x.as_bytes()))
+                    .collect::<Vec<_>>(),
+            ))),
             Time32(TimeUnit::Second) => parse_string::<Time32SecondType, i64>(array, cast_options),
             Time32(TimeUnit::Millisecond) => {
                 parse_string::<Time32MillisecondType, i64>(array, cast_options)
@@ -1417,6 +1429,20 @@ pub fn cast_with_options(
         (BinaryView, LargeBinary) => {
             cast_view_to_byte::<BinaryViewType, GenericBinaryType<i64>>(array)
         }
+        (BinaryView, Utf8) => {
+            let binary_arr = cast_view_to_byte::<BinaryViewType, GenericBinaryType<i32>>(array)?;
+            cast_binary_to_string::<i32>(&binary_arr, cast_options)
+        }
+        (BinaryView, LargeUtf8) => {
+            let binary_arr = cast_view_to_byte::<BinaryViewType, GenericBinaryType<i64>>(array)?;
+            cast_binary_to_string::<i64>(&binary_arr, cast_options)
+        }
+        (BinaryView, Utf8View) => {
+            Ok(Arc::new(array.as_binary_view().clone().to_string_view()?) as ArrayRef)
+        }
+        (BinaryView, _) => Err(ArrowError::CastError(format!(
+            "Casting from {from_type:?} to {to_type:?} not supported",
+        ))),
         (from_type, LargeUtf8) if from_type.is_primitive() => {
             value_to_string::<i64>(array, cast_options)
         }
@@ -2008,7 +2034,6 @@ pub fn cast_with_options(
                     })?,
             ))
         }
-
         (Date64, Timestamp(TimeUnit::Second, None)) => Ok(Arc::new(
             array
                 .as_primitive::<Date64Type>()
@@ -5256,12 +5281,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_string_to_view() {
-        _test_string_to_view::<i32>();
-        _test_string_to_view::<i64>();
-    }
-
     const VIEW_TEST_DATA: [Option<&str>; 5] = [
         Some("hello"),
         Some("repeated"),
@@ -5269,6 +5288,44 @@ mod tests {
         Some("large payload over 12 bytes"),
         Some("repeated"),
     ];
+
+    #[test]
+    fn test_string_view_to_binary_view() {
+        let string_view_array = StringViewArray::from_iter(VIEW_TEST_DATA);
+
+        assert!(can_cast_types(
+            string_view_array.data_type(),
+            &DataType::BinaryView
+        ));
+
+        let binary_view_array = cast(&string_view_array, &DataType::BinaryView).unwrap();
+        assert_eq!(binary_view_array.data_type(), &DataType::BinaryView);
+
+        let expect_binary_view_array = BinaryViewArray::from_iter(VIEW_TEST_DATA);
+        assert_eq!(binary_view_array.as_ref(), &expect_binary_view_array);
+    }
+
+    #[test]
+    fn test_binary_view_to_string_view() {
+        let binary_view_array = BinaryViewArray::from_iter(VIEW_TEST_DATA);
+
+        assert!(can_cast_types(
+            binary_view_array.data_type(),
+            &DataType::Utf8View
+        ));
+
+        let string_view_array = cast(&binary_view_array, &DataType::Utf8View).unwrap();
+        assert_eq!(string_view_array.data_type(), &DataType::Utf8View);
+
+        let expect_string_view_array = StringViewArray::from_iter(VIEW_TEST_DATA);
+        assert_eq!(string_view_array.as_ref(), &expect_string_view_array);
+    }
+
+    #[test]
+    fn test_string_to_view() {
+        _test_string_to_view::<i32>();
+        _test_string_to_view::<i64>();
+    }
 
     fn _test_string_to_view<O>()
     where
@@ -5281,11 +5338,22 @@ mod tests {
             &DataType::Utf8View
         ));
 
+        assert!(can_cast_types(
+            string_array.data_type(),
+            &DataType::BinaryView
+        ));
+
         let string_view_array = cast(&string_array, &DataType::Utf8View).unwrap();
         assert_eq!(string_view_array.data_type(), &DataType::Utf8View);
 
+        let binary_view_array = cast(&string_array, &DataType::BinaryView).unwrap();
+        assert_eq!(binary_view_array.data_type(), &DataType::BinaryView);
+
         let expect_string_view_array = StringViewArray::from_iter(VIEW_TEST_DATA);
         assert_eq!(string_view_array.as_ref(), &expect_string_view_array);
+
+        let expect_binary_view_array = BinaryViewArray::from_iter(VIEW_TEST_DATA);
+        assert_eq!(binary_view_array.as_ref(), &expect_binary_view_array);
     }
 
     #[test]
@@ -5380,7 +5448,7 @@ mod tests {
     where
         O: OffsetSizeTrait,
     {
-        let view_array = {
+        let string_view_array = {
             let mut builder = StringViewBuilder::new().with_fixed_block_size(8); // multiple buffers.
             for s in VIEW_TEST_DATA.iter() {
                 builder.append_option(*s);
@@ -5388,15 +5456,21 @@ mod tests {
             builder.finish()
         };
 
+        let binary_view_array = BinaryViewArray::from_iter(VIEW_TEST_DATA);
+
         let expected_string_array = GenericStringArray::<O>::from_iter(VIEW_TEST_DATA);
         let expected_type = expected_string_array.data_type();
 
-        assert!(can_cast_types(view_array.data_type(), expected_type));
+        assert!(can_cast_types(string_view_array.data_type(), expected_type));
+        assert!(can_cast_types(binary_view_array.data_type(), expected_type));
 
-        let string_array = cast(&view_array, expected_type).unwrap();
-        assert_eq!(string_array.data_type(), expected_type);
+        let string_view_casted_array = cast(&string_view_array, expected_type).unwrap();
+        assert_eq!(string_view_casted_array.data_type(), expected_type);
+        assert_eq!(string_view_casted_array.as_ref(), &expected_string_array);
 
-        assert_eq!(string_array.as_ref(), &expected_string_array);
+        let binary_view_casted_array = cast(&binary_view_array, expected_type).unwrap();
+        assert_eq!(binary_view_casted_array.data_type(), expected_type);
+        assert_eq!(binary_view_casted_array.as_ref(), &expected_string_array);
     }
 
     #[test]

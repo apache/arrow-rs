@@ -188,7 +188,7 @@ impl Type {
     }
 
     /// Returns `true` if this type is repeated or optional.
-    /// If this type doesn't have repetition defined, we still treat it as optional.
+    /// If this type doesn't have repetition defined, we treat it as required.
     pub fn is_optional(&self) -> bool {
         self.get_basic_info().has_repetition()
             && self.get_basic_info().repetition() != Repetition::REQUIRED
@@ -1932,6 +1932,7 @@ mod tests {
         let f1 = Type::group_type_builder("f").build().unwrap();
         let f2 = Type::group_type_builder("f").build().unwrap();
         assert!(f1.check_contains(&f2));
+        assert!(!f1.is_optional());
 
         // OK: fields match
         let f1 = test_new_group_type(

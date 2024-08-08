@@ -2195,3 +2195,430 @@ async fn test_column_non_existent() {
     }
     .run_with_schema(&schema);
 }
+
+/// The following tests were initially in `arrow-rs/parquet/src/arrow/arrow_reader/statistics.rs`.
+/// Part of them was moved here to avoid confusion and duplication,
+/// including edge conditions and data file validations for only `row_group` statistics.
+#[cfg(test)]
+mod test {
+    use super::*;
+    use arrow::util::test_util::parquet_test_data;
+    use arrow_array::{
+        new_empty_array, ArrayRef, BooleanArray, Decimal128Array, Float32Array, Float64Array,
+        Int16Array, Int32Array, Int64Array, Int8Array, RecordBatch, StringArray,
+        TimestampNanosecondArray,
+    };
+    use arrow_schema::{DataType, SchemaRef, TimeUnit};
+    use bytes::Bytes;
+    use parquet::arrow::parquet_column;
+    use parquet::file::metadata::{ParquetMetaData, RowGroupMetaData};
+    use std::path::PathBuf;
+    use std::sync::Arc;
+    // TODO error cases (with parquet statistics that are mismatched in expected type)
+
+    #[test]
+    fn roundtrip_empty() {
+        let all_types = vec![
+            DataType::Null,
+            DataType::Boolean,
+            DataType::Int8,
+            DataType::Int16,
+            DataType::Int32,
+            DataType::Int64,
+            DataType::UInt8,
+            DataType::UInt16,
+            DataType::UInt32,
+            DataType::UInt64,
+            DataType::Float16,
+            DataType::Float32,
+            DataType::Float64,
+            DataType::Timestamp(TimeUnit::Second, None),
+            DataType::Date32,
+            DataType::Date64,
+            // Skip types that don't support statistics
+            // DataType::Time32(Second),
+            // DataType::Time64(Second),
+            // DataType::Duration(Second),
+            // DataType::Interval(IntervalUnit),
+            DataType::Binary,
+            DataType::FixedSizeBinary(0),
+            DataType::LargeBinary,
+            DataType::BinaryView,
+            DataType::Utf8,
+            DataType::LargeUtf8,
+            DataType::Utf8View,
+            // DataType::List(FieldRef),
+            // DataType::ListView(FieldRef),
+            // DataType::FixedSizeList(FieldRef, i32),
+            // DataType::LargeList(FieldRef),
+            // DataType::LargeListView(FieldRef),
+            // DataType::Struct(Fields),
+            // DataType::Union(UnionFields, UnionMode),
+            // DataType::Dictionary(Box<DataType>, Box<DataType>),
+            // DataType::Decimal128(u8, i8),
+            // DataType::Decimal256(u8, i8),
+            // DataType::Map(FieldRef, bool),
+            // DataType::RunEndEncoded(FieldRef, FieldRef),
+        ];
+        for data_type in all_types {
+            let empty_array = new_empty_array(&data_type);
+            Test {
+                input: empty_array.clone(),
+                expected_min: empty_array.clone(),
+                expected_max: empty_array,
+            }
+            .run();
+        }
+    }
+
+    #[test]
+    fn nan_in_stats() {
+        // /parquet-testing/data/nan_in_stats.parquet
+        // row_groups: 1
+        // "x": Double({min: Some(1.0), max: Some(NaN), distinct_count: None, null_count: 0, min_max_deprecated: false, min_max_backwards_compatible: false})
+
+        TestFile::new("nan_in_stats.parquet")
+            .with_column(ExpectedColumn {
+                name: "x",
+                expected_min: Arc::new(Float64Array::from(vec![Some(1.0)])),
+                expected_max: Arc::new(Float64Array::from(vec![Some(f64::NAN)])),
+            })
+            .run();
+    }
+
+    #[test]
+    fn alltypes_plain() {
+        // /parquet-testing/data/datapage_v1-snappy-compressed-checksum.parquet
+        // row_groups: 1
+        // (has no statistics)
+        TestFile::new("alltypes_plain.parquet")
+            // No column statistics should be read as NULL, but with the right type
+            .with_column(ExpectedColumn {
+                name: "id",
+                expected_min: i32_array([None]),
+                expected_max: i32_array([None]),
+            })
+            .with_column(ExpectedColumn {
+                name: "bool_col",
+                expected_min: bool_array([None]),
+                expected_max: bool_array([None]),
+            })
+            .run();
+    }
+
+    #[test]
+    fn alltypes_tiny_pages() {
+        // /parquet-testing/data/alltypes_tiny_pages.parquet
+        // row_groups: 1
+        // "id": Int32({min: Some(0), max: Some(7299), distinct_count: None, null_count: 0, min_max_deprecated: false, min_max_backwards_compatible: false})
+        // "bool_col": Boolean({min: Some(false), max: Some(true), distinct_count: None, null_count: 0, min_max_deprecated: false, min_max_backwards_compatible: false})
+        // "tinyint_col": Int32({min: Some(0), max: Some(9), distinct_count: None, null_count: 0, min_max_deprecated: false, min_max_backwards_compatible: false})
+        // "smallint_col": Int32({min: Some(0), max: Some(9), distinct_count: None, null_count: 0, min_max_deprecated: false, min_max_backwards_compatible: false})
+        // "int_col": Int32({min: Some(0), max: Some(9), distinct_count: None, null_count: 0, min_max_deprecated: false, min_max_backwards_compatible: false})
+        // "bigint_col": Int64({min: Some(0), max: Some(90), distinct_count: None, null_count: 0, min_max_deprecated: false, min_max_backwards_compatible: false})
+        // "float_col": Float({min: Some(0.0), max: Some(9.9), distinct_count: None, null_count: 0, min_max_deprecated: false, min_max_backwards_compatible: false})
+        // "double_col": Double({min: Some(0.0), max: Some(90.89999999999999), distinct_count: None, null_count: 0, min_max_deprecated: false, min_max_backwards_compatible: false})
+        // "date_string_col": ByteArray({min: Some(ByteArray { data: "01/01/09" }), max: Some(ByteArray { data: "12/31/10" }), distinct_count: None, null_count: 0, min_max_deprecated: false, min_max_backwards_compatible: false})
+        // "string_col": ByteArray({min: Some(ByteArray { data: "0" }), max: Some(ByteArray { data: "9" }), distinct_count: None, null_count: 0, min_max_deprecated: false, min_max_backwards_compatible: false})
+        // "timestamp_col": Int96({min: None, max: None, distinct_count: None, null_count: 0, min_max_deprecated: true, min_max_backwards_compatible: true})
+        // "year": Int32({min: Some(2009), max: Some(2010), distinct_count: None, null_count: 0, min_max_deprecated: false, min_max_backwards_compatible: false})
+        // "month": Int32({min: Some(1), max: Some(12), distinct_count: None, null_count: 0, min_max_deprecated: false, min_max_backwards_compatible: false})
+        TestFile::new("alltypes_tiny_pages.parquet")
+            .with_column(ExpectedColumn {
+                name: "id",
+                expected_min: i32_array([Some(0)]),
+                expected_max: i32_array([Some(7299)]),
+            })
+            .with_column(ExpectedColumn {
+                name: "bool_col",
+                expected_min: bool_array([Some(false)]),
+                expected_max: bool_array([Some(true)]),
+            })
+            .with_column(ExpectedColumn {
+                name: "tinyint_col",
+                expected_min: i8_array([Some(0)]),
+                expected_max: i8_array([Some(9)]),
+            })
+            .with_column(ExpectedColumn {
+                name: "smallint_col",
+                expected_min: i16_array([Some(0)]),
+                expected_max: i16_array([Some(9)]),
+            })
+            .with_column(ExpectedColumn {
+                name: "int_col",
+                expected_min: i32_array([Some(0)]),
+                expected_max: i32_array([Some(9)]),
+            })
+            .with_column(ExpectedColumn {
+                name: "bigint_col",
+                expected_min: i64_array([Some(0)]),
+                expected_max: i64_array([Some(90)]),
+            })
+            .with_column(ExpectedColumn {
+                name: "float_col",
+                expected_min: f32_array([Some(0.0)]),
+                expected_max: f32_array([Some(9.9)]),
+            })
+            .with_column(ExpectedColumn {
+                name: "double_col",
+                expected_min: f64_array([Some(0.0)]),
+                expected_max: f64_array([Some(90.89999999999999)]),
+            })
+            .with_column(ExpectedColumn {
+                name: "date_string_col",
+                expected_min: utf8_array([Some("01/01/09")]),
+                expected_max: utf8_array([Some("12/31/10")]),
+            })
+            .with_column(ExpectedColumn {
+                name: "string_col",
+                expected_min: utf8_array([Some("0")]),
+                expected_max: utf8_array([Some("9")]),
+            })
+            // File has no min/max for timestamp_col
+            .with_column(ExpectedColumn {
+                name: "timestamp_col",
+                expected_min: timestamp_nanoseconds_array([None], None),
+                expected_max: timestamp_nanoseconds_array([None], None),
+            })
+            .with_column(ExpectedColumn {
+                name: "year",
+                expected_min: i32_array([Some(2009)]),
+                expected_max: i32_array([Some(2010)]),
+            })
+            .with_column(ExpectedColumn {
+                name: "month",
+                expected_min: i32_array([Some(1)]),
+                expected_max: i32_array([Some(12)]),
+            })
+            .run();
+    }
+
+    #[test]
+    fn fixed_length_decimal_legacy() {
+        // /parquet-testing/data/fixed_length_decimal_legacy.parquet
+        // row_groups: 1
+        // "value": FixedLenByteArray({min: Some(FixedLenByteArray(ByteArray { data: Some(ByteBufferPtr { data: b"\0\0\0\0\0\xc8" }) })), max: Some(FixedLenByteArray(ByteArray { data: "\0\0\0\0\t`" })), distinct_count: None, null_count: 0, min_max_deprecated: true, min_max_backwards_compatible: true})
+
+        TestFile::new("fixed_length_decimal_legacy.parquet")
+            .with_column(ExpectedColumn {
+                name: "value",
+                expected_min: Arc::new(
+                    Decimal128Array::from(vec![Some(200)])
+                        .with_precision_and_scale(13, 2)
+                        .unwrap(),
+                ),
+                expected_max: Arc::new(
+                    Decimal128Array::from(vec![Some(2400)])
+                        .with_precision_and_scale(13, 2)
+                        .unwrap(),
+                ),
+            })
+            .run();
+    }
+
+    const ROWS_PER_ROW_GROUP: usize = 3;
+
+    /// Writes the input batch into a parquet file, with every every three rows as
+    /// their own row group, and compares the min/maxes to the expected values
+    struct Test {
+        input: ArrayRef,
+        expected_min: ArrayRef,
+        expected_max: ArrayRef,
+    }
+
+    impl Test {
+        fn run(self) {
+            let Self {
+                input,
+                expected_min,
+                expected_max,
+            } = self;
+
+            let input_batch = RecordBatch::try_from_iter([("c1", input)]).unwrap();
+
+            let schema = input_batch.schema();
+
+            let metadata = parquet_metadata(schema.clone(), input_batch);
+            let parquet_schema = metadata.file_metadata().schema_descr();
+
+            let row_groups = metadata.row_groups();
+
+            for field in schema.fields() {
+                if field.data_type().is_nested() {
+                    let lookup = parquet_column(parquet_schema, &schema, field.name());
+                    assert_eq!(lookup, None);
+                    continue;
+                }
+
+                let converter =
+                    StatisticsConverter::try_new(field.name(), &schema, parquet_schema).unwrap();
+
+                assert_eq!(converter.arrow_field(), field.as_ref());
+
+                let mins = converter.row_group_mins(row_groups.iter()).unwrap();
+                assert_eq!(
+                    &mins,
+                    &expected_min,
+                    "Min. Statistics\n\n{}\n\n",
+                    DisplayStats(row_groups)
+                );
+
+                let maxes = converter.row_group_maxes(row_groups.iter()).unwrap();
+                assert_eq!(
+                    &maxes,
+                    &expected_max,
+                    "Max. Statistics\n\n{}\n\n",
+                    DisplayStats(row_groups)
+                );
+            }
+        }
+    }
+
+    /// Write the specified batches out as parquet and return the metadata
+    fn parquet_metadata(schema: SchemaRef, batch: RecordBatch) -> Arc<ParquetMetaData> {
+        let props = WriterProperties::builder()
+            .set_statistics_enabled(EnabledStatistics::Chunk)
+            .set_max_row_group_size(ROWS_PER_ROW_GROUP)
+            .build();
+
+        let mut buffer = Vec::new();
+        let mut writer = ArrowWriter::try_new(&mut buffer, schema, Some(props)).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+
+        let reader = ArrowReaderBuilder::try_new(Bytes::from(buffer)).unwrap();
+        reader.metadata().clone()
+    }
+
+    /// Formats the statistics nicely for display
+    struct DisplayStats<'a>(&'a [RowGroupMetaData]);
+    impl<'a> std::fmt::Display for DisplayStats<'a> {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            let row_groups = self.0;
+            writeln!(f, "  row_groups: {}", row_groups.len())?;
+            for rg in row_groups {
+                for col in rg.columns() {
+                    if let Some(statistics) = col.statistics() {
+                        writeln!(f, "   {}: {:?}", col.column_path(), statistics)?;
+                    }
+                }
+            }
+            Ok(())
+        }
+    }
+
+    struct ExpectedColumn {
+        name: &'static str,
+        expected_min: ArrayRef,
+        expected_max: ArrayRef,
+    }
+
+    /// Reads statistics out of the specified, and compares them to the expected values
+    struct TestFile {
+        file_name: &'static str,
+        expected_columns: Vec<ExpectedColumn>,
+    }
+
+    impl TestFile {
+        fn new(file_name: &'static str) -> Self {
+            Self {
+                file_name,
+                expected_columns: Vec::new(),
+            }
+        }
+
+        fn with_column(mut self, column: ExpectedColumn) -> Self {
+            self.expected_columns.push(column);
+            self
+        }
+
+        /// Reads the specified parquet file and validates that the expected min/max
+        /// values for the specified columns are as expected.
+        fn run(self) {
+            let path = PathBuf::from(parquet_test_data()).join(self.file_name);
+            let file = File::open(path).unwrap();
+            let reader = ArrowReaderBuilder::try_new(file).unwrap();
+            let arrow_schema = reader.schema();
+            let metadata = reader.metadata();
+            let row_groups = metadata.row_groups();
+            let parquet_schema = metadata.file_metadata().schema_descr();
+
+            for expected_column in self.expected_columns {
+                let ExpectedColumn {
+                    name,
+                    expected_min,
+                    expected_max,
+                } = expected_column;
+
+                let converter =
+                    StatisticsConverter::try_new(name, arrow_schema, parquet_schema).unwrap();
+
+                // test accessors on the converter
+                let parquet_column_index =
+                    parquet_column(parquet_schema, arrow_schema, name).map(|(idx, _field)| idx);
+                assert_eq!(converter.parquet_column_index(), parquet_column_index);
+                assert_eq!(converter.arrow_field().name(), name);
+
+                let actual_min = converter.row_group_mins(row_groups.iter()).unwrap();
+                assert_eq!(&expected_min, &actual_min, "column {name}");
+
+                let actual_max = converter.row_group_maxes(row_groups.iter()).unwrap();
+                assert_eq!(&expected_max, &actual_max, "column {name}");
+            }
+        }
+    }
+
+    fn bool_array(input: impl IntoIterator<Item = Option<bool>>) -> ArrayRef {
+        let array: BooleanArray = input.into_iter().collect();
+        Arc::new(array)
+    }
+
+    fn i8_array(input: impl IntoIterator<Item = Option<i8>>) -> ArrayRef {
+        let array: Int8Array = input.into_iter().collect();
+        Arc::new(array)
+    }
+
+    fn i16_array(input: impl IntoIterator<Item = Option<i16>>) -> ArrayRef {
+        let array: Int16Array = input.into_iter().collect();
+        Arc::new(array)
+    }
+
+    fn i32_array(input: impl IntoIterator<Item = Option<i32>>) -> ArrayRef {
+        let array: Int32Array = input.into_iter().collect();
+        Arc::new(array)
+    }
+
+    fn i64_array(input: impl IntoIterator<Item = Option<i64>>) -> ArrayRef {
+        let array: Int64Array = input.into_iter().collect();
+        Arc::new(array)
+    }
+
+    fn f32_array(input: impl IntoIterator<Item = Option<f32>>) -> ArrayRef {
+        let array: Float32Array = input.into_iter().collect();
+        Arc::new(array)
+    }
+
+    fn f64_array(input: impl IntoIterator<Item = Option<f64>>) -> ArrayRef {
+        let array: Float64Array = input.into_iter().collect();
+        Arc::new(array)
+    }
+
+    fn timestamp_nanoseconds_array(
+        input: impl IntoIterator<Item = Option<i64>>,
+        timzezone: Option<&str>,
+    ) -> ArrayRef {
+        let array: TimestampNanosecondArray = input.into_iter().collect();
+        match timzezone {
+            Some(tz) => Arc::new(array.with_timezone(tz)),
+            None => Arc::new(array),
+        }
+    }
+
+    fn utf8_array<'a>(input: impl IntoIterator<Item = Option<&'a str>>) -> ArrayRef {
+        let array: StringArray = input
+            .into_iter()
+            .map(|s| s.map(|s| s.to_string()))
+            .collect();
+        Arc::new(array)
+    }
+}

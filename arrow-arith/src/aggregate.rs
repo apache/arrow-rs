@@ -350,11 +350,46 @@ pub fn min_boolean(array: &BooleanArray) -> Option<bool> {
     }
 
     // Note the min bool is false (0), so short circuit as soon as we see it
-    array
-        .iter()
-        .find(|&b| b == Some(false))
-        .flatten()
-        .or(Some(true))
+    match array.nulls() {
+        None => {
+            let bit_chunks = array.values().bit_chunks();
+            if bit_chunks.iter().any(|x| {
+                // u64::MAX has all bits set, so if the value is not that, then there is a false
+                x != u64::MAX
+            }) {
+                return Some(false);
+            }
+            // If the remainder bits are not all set, then there is a false
+            if bit_chunks.remainder_bits().count_ones() as usize != bit_chunks.remainder_len() {
+                Some(false)
+            } else {
+                Some(true)
+            }
+        }
+        Some(nulls) => {
+            let validity_chunks = nulls.inner().bit_chunks();
+            let value_chunks = array.values().bit_chunks();
+
+            if value_chunks
+                .iter()
+                .zip(validity_chunks.iter())
+                .any(|(value, validity)| {
+                    // We are looking for a false value, but because applying the validity mask
+                    // can create a false for a true value (e.g. value: true, validity: false), we instead invert the value, so that we have to look for a true.
+                    (!value & validity) != 0
+                })
+            {
+                return Some(false);
+            }
+
+            // Same trick as above: Instead of looking for a false, we invert the value bits and look for a true
+            if (!value_chunks.remainder_bits() & validity_chunks.remainder_bits()) != 0 {
+                Some(false)
+            } else {
+                Some(true)
+            }
+        }
+    }
 }
 
 /// Returns the maximum value in the boolean array
@@ -707,10 +742,7 @@ bit_operation!(
 ///
 /// Returns `None` if the array is empty or only contains null values.
 pub fn bool_and(array: &BooleanArray) -> Option<bool> {
-    if array.null_count() == array.len() {
-        return None;
-    }
-    Some(array.false_count() == 0)
+    min_boolean(array)
 }
 
 /// Returns true if any non-null input value is true, otherwise false.
@@ -1380,6 +1412,14 @@ mod tests {
         assert_eq!(Some(true), max_boolean(&a));
 
         let a = BooleanArray::from(vec![Some(false), None]);
+        assert_eq!(Some(false), min_boolean(&a));
+        assert_eq!(Some(false), max_boolean(&a));
+
+        let a = BooleanArray::from(vec![Some(true)]);
+        assert_eq!(Some(true), min_boolean(&a));
+        assert_eq!(Some(true), max_boolean(&a));
+
+        let a = BooleanArray::from(vec![Some(false)]);
         assert_eq!(Some(false), min_boolean(&a));
         assert_eq!(Some(false), max_boolean(&a));
     }
