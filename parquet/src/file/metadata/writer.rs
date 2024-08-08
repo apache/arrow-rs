@@ -47,7 +47,7 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
     /// Serialize all the offset indexes to `self.buf`,
     ///
     /// Note: also updates the `ColumnChunk::offset_index_offset` and
-    /// `ColumnChunk::offset_index_length`]s to reflect the position and length
+    /// `ColumnChunk::offset_index_length` to reflect the position and length
     /// of the serialized offset indexes.
     fn write_offset_indexes(&mut self, offset_indexes: &[Vec<Option<OffsetIndex>>]) -> Result<()> {
         // iter row group
