@@ -994,7 +994,7 @@ pub fn parse_interval_day_time(
     Ok(IntervalDayTimeType::make_value(days, millis))
 }
 
-pub fn parse_interval_month_day_nano_opt(
+pub fn parse_interval_month_day_nano_config(
     value: &str,
     default_unit: IntervalUnit,
 ) -> Result<<IntervalMonthDayNanoType as ArrowPrimitiveType>::Native, ArrowError> {
@@ -1009,7 +1009,7 @@ pub fn parse_interval_month_day_nano_opt(
 pub fn parse_interval_month_day_nano(
     value: &str,
 ) -> Result<<IntervalMonthDayNanoType as ArrowPrimitiveType>::Native, ArrowError> {
-    parse_interval_month_day_nano_opt(value, IntervalUnit::Month)
+    parse_interval_month_day_nano_config(value, IntervalUnit::Month)
 }
 
 const NANOS_PER_MILLIS: i64 = 1_000_000;
