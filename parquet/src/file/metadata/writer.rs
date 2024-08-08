@@ -207,6 +207,11 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
 /// BloomFilters stored in separate structures whose locations are stored as
 /// offsets from the beginning of the file.
 ///
+/// Note: this writer does not directly write BloomFilters. In order to write
+/// BloomFilters, write the bloom filters into the buffer before creating the
+/// metadata writer. Then set the corresponding `bloom_filter_offset` and
+/// `bloom_filter_length` on [`ColumnChunkMetaData`] passed to this writer.
+///
 /// # Output Format
 ///
 /// The format of the metadata is as follows:
@@ -218,6 +223,7 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
 /// 5. Parquet Magic Bytes (4 bytes)
 ///
 /// [`FileMetaData`]: crate::format::FileMetaData
+/// [`ColumnChunkMetaData`]: crate::file::metadata::ColumnChunkMetaData
 ///
 /// ```text
 /// ┌──────────────────────┐
