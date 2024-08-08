@@ -579,7 +579,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
             self.write_dictionary_page()?;
         }
         self.flush_data_pages()?;
-        let metadata = self.write_column_metadata()?;
+        let metadata = self.build_column_metadata()?;
         self.page_writer.close()?;
 
         let boundary_order = match (
@@ -1041,8 +1041,8 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         Ok(())
     }
 
-    /// Assembles and writes column chunk metadata.
-    fn write_column_metadata(&mut self) -> Result<ColumnChunkMetaData> {
+    /// Assembles column chunk metadata.
+    fn build_column_metadata(&mut self) -> Result<ColumnChunkMetaData> {
         let total_compressed_size = self.column_metrics.total_compressed_size as i64;
         let total_uncompressed_size = self.column_metrics.total_uncompressed_size as i64;
         let num_values = self.column_metrics.total_num_values as i64;
@@ -1050,15 +1050,9 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         // If data page offset is not set, then no pages have been written
         let data_page_offset = self.column_metrics.data_page_offset.unwrap_or(0) as i64;
 
-        let file_offset = match dict_page_offset {
-            Some(dict_offset) => dict_offset + total_compressed_size,
-            None => data_page_offset + total_compressed_size,
-        };
-
         let mut builder = ColumnChunkMetaData::builder(self.descr.clone())
             .set_compression(self.codec)
             .set_encodings(self.encodings.iter().cloned().collect())
-            .set_file_offset(file_offset)
             .set_total_compressed_size(total_compressed_size)
             .set_total_uncompressed_size(total_uncompressed_size)
             .set_num_values(num_values)
@@ -1138,8 +1132,6 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         }
 
         let metadata = builder.build()?;
-        self.page_writer.write_metadata(&metadata)?;
-
         Ok(metadata)
     }
 
@@ -3587,10 +3579,6 @@ mod tests {
             res.offset = 0;
             res.bytes_written = page.data().len() as u64;
             Ok(res)
-        }
-
-        fn write_metadata(&mut self, _metadata: &ColumnChunkMetaData) -> Result<()> {
-            Ok(())
         }
 
         fn close(&mut self) -> Result<()> {

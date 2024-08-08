@@ -17,13 +17,13 @@
 
 use arrow_array::types::{Int32Type, Int8Type};
 use arrow_array::{
-    Array, ArrayRef, BinaryArray, BooleanArray, Date32Array, Date64Array, Decimal128Array,
-    Decimal256Array, DictionaryArray, FixedSizeBinaryArray, Float16Array, Float32Array,
-    Float64Array, Int16Array, Int32Array, Int64Array, Int8Array, LargeBinaryArray,
-    LargeStringArray, RecordBatch, StringArray, StructArray, Time32MillisecondArray,
-    Time32SecondArray, Time64MicrosecondArray, Time64NanosecondArray, TimestampMicrosecondArray,
-    TimestampMillisecondArray, TimestampNanosecondArray, TimestampSecondArray, UInt16Array,
-    UInt32Array, UInt64Array, UInt8Array,
+    Array, ArrayRef, BinaryArray, BinaryViewArray, BooleanArray, Date32Array, Date64Array,
+    Decimal128Array, Decimal256Array, DictionaryArray, FixedSizeBinaryArray, Float16Array,
+    Float32Array, Float64Array, Int16Array, Int32Array, Int64Array, Int8Array, LargeBinaryArray,
+    LargeStringArray, RecordBatch, StringArray, StringViewArray, StructArray,
+    Time32MillisecondArray, Time32SecondArray, Time64MicrosecondArray, Time64NanosecondArray,
+    TimestampMicrosecondArray, TimestampMillisecondArray, TimestampNanosecondArray,
+    TimestampSecondArray, UInt16Array, UInt32Array, UInt64Array, UInt8Array,
 };
 use arrow_buffer::i256;
 use arrow_schema::{DataType, Field, Schema, TimeUnit};
@@ -88,6 +88,8 @@ enum Scenario {
     PeriodsInColumnNames,
     StructArray,
     UTF8,
+    UTF8View,
+    BinaryView,
 }
 
 fn make_boolean_batch(v: Vec<Option<bool>>) -> RecordBatch {
@@ -589,6 +591,16 @@ fn make_utf8_batch(value: Vec<Option<&str>>) -> RecordBatch {
     .unwrap()
 }
 
+fn make_utf8_view_batch(value: Vec<Option<&str>>) -> RecordBatch {
+    let utf8_view = StringViewArray::from(value);
+    RecordBatch::try_from_iter(vec![("utf8_view", Arc::new(utf8_view) as _)]).unwrap()
+}
+
+fn make_binary_view_batch(value: Vec<Option<&[u8]>>) -> RecordBatch {
+    let binary_view = BinaryViewArray::from(value);
+    RecordBatch::try_from_iter(vec![("binary_view", Arc::new(binary_view) as _)]).unwrap()
+}
+
 fn make_dict_batch() -> RecordBatch {
     let values = [
         Some("abc"),
@@ -970,6 +982,35 @@ fn create_data_batch(scenario: Scenario) -> Vec<RecordBatch> {
             vec![
                 make_utf8_batch(vec![Some("a"), Some("b"), Some("c"), Some("d"), None]),
                 make_utf8_batch(vec![Some("e"), Some("f"), Some("g"), Some("h"), Some("i")]),
+            ]
+        }
+        Scenario::UTF8View => {
+            // Make utf8_view batch including string length <12 and >12 bytes
+            // as the internal representation of StringView is differed for strings
+            // shorter and longer than that length
+            vec![
+                make_utf8_view_batch(vec![Some("a"), Some("b"), Some("c"), Some("d"), None]),
+                make_utf8_view_batch(vec![Some("a"), Some("e_longerthan12"), None, None, None]),
+                make_utf8_view_batch(vec![
+                    Some("e_longerthan12"),
+                    Some("f_longerthan12"),
+                    Some("g_longerthan12"),
+                    Some("h_longerthan12"),
+                    Some("i_longerthan12"),
+                ]),
+            ]
+        }
+        Scenario::BinaryView => {
+            vec![
+                make_binary_view_batch(vec![Some(b"a"), Some(b"b"), Some(b"c"), Some(b"d"), None]),
+                make_binary_view_batch(vec![Some(b"a"), Some(b"e_longerthan12"), None, None, None]),
+                make_binary_view_batch(vec![
+                    Some(b"e_longerthan12"),
+                    Some(b"f_longerthan12"),
+                    Some(b"g_longerthan12"),
+                    Some(b"h_longerthan12"),
+                    Some(b"i_longerthan12"),
+                ]),
             ]
         }
     }

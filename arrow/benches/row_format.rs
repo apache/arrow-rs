@@ -56,6 +56,22 @@ fn do_bench(c: &mut Criterion, name: &str, cols: Vec<ArrayRef>) {
     });
 }
 
+fn bench_iter(c: &mut Criterion) {
+    let col = create_string_view_array_with_len(40960, 0., 100, false);
+    let converter = RowConverter::new(vec![SortField::new(col.data_type().clone())]).unwrap();
+    let rows = converter
+        .convert_columns(&[Arc::new(col) as ArrayRef])
+        .unwrap();
+
+    c.bench_function("iterate rows", |b| {
+        b.iter(|| {
+            for r in rows.iter() {
+                std::hint::black_box(r.as_ref());
+            }
+        })
+    });
+}
+
 fn row_bench(c: &mut Criterion) {
     let cols = vec![Arc::new(create_primitive_array::<UInt64Type>(4096, 0.)) as ArrayRef];
     do_bench(c, "4096 u64(0)", cols);
@@ -145,6 +161,8 @@ fn row_bench(c: &mut Criterion) {
         Arc::new(create_primitive_array::<Int64Type>(4096, 0.)) as ArrayRef,
     ];
     do_bench(c, "4096 4096 string_dictionary(20, 0.5), string_dictionary(30, 0), string_dictionary(100, 0), i64(0)", cols);
+
+    bench_iter(c);
 }
 
 criterion_group!(benches, row_bench);
