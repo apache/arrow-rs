@@ -51,7 +51,7 @@ impl From<Error> for crate::Error {
 pub async fn resolve_bucket_region(bucket: &str, client_options: &ClientOptions) -> Result<String> {
     use reqwest::StatusCode;
 
-    let endpoint = format!("https://{}.s3.amazonaws.com", bucket);
+    let endpoint = format!("https://s3.amazonaws.com/{}/", bucket);
 
     let client = client_options.client()?;
 
