@@ -1230,13 +1230,9 @@ pub fn cast_with_options(
                 cast_byte_container::<BinaryType, LargeBinaryType>(&binary)
             }
             Utf8View => Ok(Arc::new(StringViewArray::from(array.as_string::<i32>()))),
-            BinaryView => Ok(Arc::new(BinaryViewArray::from(
-                array
-                    .as_string::<i32>()
-                    .into_iter()
-                    .map(|x| x.map(|x| x.as_bytes()))
-                    .collect::<Vec<_>>(),
-            ))),
+            BinaryView => Ok(Arc::new(
+                StringViewArray::from(array.as_string::<i32>()).to_binary_view(),
+            )),
             LargeUtf8 => cast_byte_container::<Utf8Type, LargeUtf8Type>(array),
             Time32(TimeUnit::Second) => parse_string::<Time32SecondType, i32>(array, cast_options),
             Time32(TimeUnit::Millisecond) => {
@@ -1290,15 +1286,7 @@ pub fn cast_with_options(
             Date64 => parse_string_view::<Date64Type>(array, cast_options),
             Binary => cast_view_to_byte::<StringViewType, GenericBinaryType<i32>>(array),
             LargeBinary => cast_view_to_byte::<StringViewType, GenericBinaryType<i64>>(array),
-            BinaryView => {
-                if let Some(arr) = array.as_any().downcast_ref::<StringViewArray>() {
-                    Ok(Arc::new(arr.clone().to_binary_view()))
-                } else {
-                    Err(ArrowError::CastError(
-                        "Cannot cast StringView to BinaryView".to_string(),
-                    ))
-                }
-            }
+            BinaryView => Ok(Arc::new(array.as_string_view().clone().to_binary_view())),
             Utf8 => cast_view_to_byte::<StringViewType, GenericStringType<i32>>(array),
             LargeUtf8 => cast_view_to_byte::<StringViewType, GenericStringType<i64>>(array),
             Time32(TimeUnit::Second) => parse_string_view::<Time32SecondType>(array, cast_options),
@@ -1437,34 +1425,24 @@ pub fn cast_with_options(
                 "Casting from {from_type:?} to {to_type:?} not supported",
             ))),
         },
-        (BinaryView, _) => match to_type {
-            Binary => cast_view_to_byte::<BinaryViewType, GenericBinaryType<i32>>(array),
-            LargeBinary => cast_view_to_byte::<BinaryViewType, GenericBinaryType<i64>>(array),
-            Utf8 => {
-                let binary_arr =
-                    cast_view_to_byte::<BinaryViewType, GenericBinaryType<i32>>(array)?;
-                cast_binary_to_string::<i32>(&binary_arr, cast_options)
-            }
-            LargeUtf8 => {
-                let binary_arr =
-                    cast_view_to_byte::<BinaryViewType, GenericBinaryType<i64>>(array)?;
-                cast_binary_to_string::<i64>(&binary_arr, cast_options)
-            }
-            Utf8View => {
-                if let Some(arr) = array.as_any().downcast_ref::<BinaryViewArray>() {
-                    arr.clone()
-                        .to_string_view()
-                        .map(|x| Arc::new(x) as ArrayRef)
-                } else {
-                    Err(ArrowError::CastError(
-                        "Cannot cast BinaryView to StringView".to_string(),
-                    ))
-                }
-            }
-            _ => Err(ArrowError::CastError(format!(
-                "Casting from {from_type:?} to {to_type:?} not supported",
-            ))),
-        },
+        (BinaryView, Binary) => cast_view_to_byte::<BinaryViewType, GenericBinaryType<i32>>(array),
+        (BinaryView, LargeBinary) => {
+            cast_view_to_byte::<BinaryViewType, GenericBinaryType<i64>>(array)
+        }
+        (BinaryView, Utf8) => {
+            let binary_arr = cast_view_to_byte::<BinaryViewType, GenericBinaryType<i32>>(array)?;
+            cast_binary_to_string::<i32>(&binary_arr, cast_options)
+        }
+        (BinaryView, LargeUtf8) => {
+            let binary_arr = cast_view_to_byte::<BinaryViewType, GenericBinaryType<i64>>(array)?;
+            cast_binary_to_string::<i64>(&binary_arr, cast_options)
+        }
+        (BinaryView, Utf8View) => {
+            Ok(Arc::new(array.as_binary_view().clone().to_string_view()?) as ArrayRef)
+        }
+        (BinaryView, _) => Err(ArrowError::CastError(format!(
+            "Casting from {from_type:?} to {to_type:?} not supported",
+        ))),
         (from_type, LargeUtf8) if from_type.is_primitive() => {
             value_to_string::<i64>(array, cast_options)
         }
@@ -5312,12 +5290,7 @@ mod tests {
     ];
 
     #[test]
-    fn test_between_views() {
-        _test_string_view_to_binary_view();
-        _test_binary_view_to_string_view();
-    }
-
-    fn _test_string_view_to_binary_view() {
+    fn test_string_view_to_binary_view() {
         let string_view_array = StringViewArray::from_iter(VIEW_TEST_DATA);
 
         assert!(can_cast_types(
@@ -5332,7 +5305,8 @@ mod tests {
         assert_eq!(binary_view_array.as_ref(), &expect_binary_view_array);
     }
 
-    fn _test_binary_view_to_string_view() {
+    #[test]
+    fn test_binary_view_to_string_view() {
         let binary_view_array = BinaryViewArray::from_iter(VIEW_TEST_DATA);
 
         assert!(can_cast_types(
