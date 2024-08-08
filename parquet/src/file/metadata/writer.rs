@@ -28,7 +28,7 @@ use std::io::Write;
 use std::sync::Arc;
 use thrift::protocol::TCompactOutputProtocol;
 
-/// Writes `crate::file::metadata` structures to a thrift encoded byte streams
+/// Writes `crate::file::metadata` structures to a thrift encoded byte stream
 ///
 /// See [`ParquetMetaDataWriter`] for background and example.
 pub(crate) struct ThriftMetadataWriter<'a, W: Write> {
@@ -194,10 +194,10 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
 /// # Discussion
 ///
 /// The process of writing Parquet metadata is tricky because the
-/// metadata is not store as a single inline thrift structure. It can have
+/// metadata is not stored as a single inline thrift structure. It can have
 /// several "out of band" structures such as the [`OffsetIndex`] and
 /// BloomFilters stored in separate structures whose locations are stored as
-/// offsets
+/// offsets from the beginning of the file.
 ///
 /// # Output Format
 ///
@@ -262,7 +262,7 @@ impl<'a, W: Write> ParquetMetaDataWriter<'a, W> {
     /// Create a new `ParquetMetaDataWriter` to write to `buf`
     ///
     /// Note any embedded offsets in the metadata will be written assuming the
-    /// buffer is at the start of the buffer. If the metadata is being written
+    /// metadata is at the start of the buffer. If the metadata is being written
     /// to a location other than the start of the buffer, see [`Self::new_with_tracked`]
     ///
     /// See example on the struct level documentation
