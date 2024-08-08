@@ -6769,6 +6769,36 @@ mod tests {
     }
 
     #[test]
+    fn test_cast_time_array_to_dict() {
+        use DataType::*;
+
+        let array = Arc::new(Date32Array::from(vec![Some(1000), None, Some(2000)])) as ArrayRef;
+
+        let expected = vec!["1972-09-27", "null", "1975-06-24"];
+
+        let cast_type = Dictionary(Box::new(UInt8), Box::new(Date32));
+        let cast_array = cast(&array, &cast_type).expect("cast failed");
+        assert_eq!(cast_array.data_type(), &cast_type);
+        assert_eq!(array_to_strings(&cast_array), expected);
+    }
+
+    #[test]
+    fn test_cast_timestamp_array_to_dict() {
+        use DataType::*;
+
+        let array = Arc::new(
+            TimestampSecondArray::from(vec![Some(1000), None, Some(2000)]).with_timezone_utc(),
+        ) as ArrayRef;
+
+        let expected = vec!["1970-01-01T00:16:40", "null", "1970-01-01T00:33:20"];
+
+        let cast_type = Dictionary(Box::new(UInt8), Box::new(Timestamp(TimeUnit::Second, None)));
+        let cast_array = cast(&array, &cast_type).expect("cast failed");
+        assert_eq!(cast_array.data_type(), &cast_type);
+        assert_eq!(array_to_strings(&cast_array), expected);
+    }
+
+    #[test]
     fn test_cast_string_array_to_dict() {
         use DataType::*;
 
