@@ -754,6 +754,82 @@ impl DataType {
     }
 }
 
+/// Canonical extension types.
+///
+/// The Arrow columnar format allows defining extension types so as to extend
+/// standard Arrow data types with custom semantics. Often these semantics will
+/// be specific to a system or application. However, it is beneficial to share
+/// the definitions of well-known extension types so as to improve
+/// interoperability between different systems integrating Arrow columnar data.
+///
+/// <https://arrow.apache.org/docs/format/CanonicalExtensions.html>
+#[non_exhaustive]
+#[derive(Debug, Clone)]
+pub enum ExtensionType {
+    /// Extension name: `arrow.uuid`.
+    ///
+    /// The storage type of the extension is `FixedSizeBinary` with a length of
+    /// 16 bytes.
+    ///
+    /// Note:
+    /// A specific UUID version is not required or guaranteed. This extension
+    /// represents UUIDs as FixedSizeBinary(16) with big-endian notation and
+    /// does not interpret the bytes in any way.
+    Uuid,
+}
+
+impl fmt::Display for ExtensionType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.name())
+    }
+}
+
+impl ExtensionType {
+    /// The metadata key for the string name identifying the custom data type.
+    pub const NAME_KEY: &'static str = "ARROW:extension:name";
+
+    /// The metadata key for a serialized representation of the ExtensionType
+    /// necessary to reconstruct the custom type.
+    pub const METADATA_KEY: &'static str = "ARROW:extension:metadata";
+
+    /// Returns the name of this extension type.
+    pub fn name(&self) -> &'static str {
+        match self {
+            ExtensionType::Uuid => "arrow.uuid",
+        }
+    }
+
+    /// Returns the metadata of this extension type.
+    pub fn metadata(&self) -> Option<String> {
+        match self {
+            ExtensionType::Uuid => None,
+        }
+    }
+
+    /// Returns `true` iff the given [`DataType`] can be used as storage type
+    /// for this extension type.
+    pub(crate) fn supports_storage_type(&self, data_type: &DataType) -> bool {
+        match self {
+            ExtensionType::Uuid => matches!(data_type, DataType::FixedSizeBinary(16)),
+        }
+    }
+
+    /// Extract an [`ExtensionType`] from the given [`Field`].
+    ///
+    /// This function returns `None` if the extension type is not supported or
+    /// recognized.
+    pub(crate) fn try_from_field(field: &Field) -> Option<Self> {
+        let metadata = field.metadata().get(ExtensionType::METADATA_KEY);
+        field
+            .metadata()
+            .get(ExtensionType::NAME_KEY)
+            .and_then(|name| match name.as_str() {
+                "arrow.uuid" if metadata.is_none() => Some(ExtensionType::Uuid),
+                _ => None,
+            })
+    }
+}
+
 /// The maximum precision for [DataType::Decimal128] values
 pub const DECIMAL128_MAX_PRECISION: u8 = 38;
 

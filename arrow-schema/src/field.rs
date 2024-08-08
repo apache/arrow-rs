@@ -23,7 +23,7 @@ use std::sync::Arc;
 
 use crate::datatype::DataType;
 use crate::schema::SchemaBuilder;
-use crate::{Fields, UnionFields, UnionMode};
+use crate::{ExtensionType, Fields, UnionFields, UnionMode};
 
 /// A reference counted [`Field`]
 pub type FieldRef = Arc<Field>;
@@ -335,6 +335,37 @@ impl Field {
     pub fn with_data_type(mut self, data_type: DataType) -> Self {
         self.data_type = data_type;
         self
+    }
+
+    /// Returns the canonical [`ExtensionType`] of this [`Field`], if set.
+    pub fn extension_type(&self) -> Option<ExtensionType> {
+        ExtensionType::try_from_field(self)
+    }
+
+    /// Updates the metadata of this [`Field`] with the [`ExtensionType::name`]
+    /// and [`ExtensionType::metadata`] of the given [`ExtensionType`].
+    ///
+    /// # Panics
+    ///
+    /// This function panics when the datatype of this field is not a valid
+    /// storage type for the given extension type.
+    pub fn with_extension_type(mut self, extension_type: ExtensionType) -> Self {
+        if extension_type.supports_storage_type(&self.data_type) {
+            self.metadata.insert(
+                ExtensionType::NAME_KEY.to_owned(),
+                extension_type.name().to_owned(),
+            );
+            if let Some(metadata) = extension_type.metadata() {
+                self.metadata
+                    .insert(ExtensionType::METADATA_KEY.to_owned(), metadata);
+            }
+            self
+        } else {
+            panic!(
+                "{extension_type} does not support {} as storage type",
+                self.data_type
+            );
+        }
     }
 
     /// Indicates whether this [`Field`] supports null values.
