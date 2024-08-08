@@ -742,9 +742,7 @@ fn filter_fixed_size_binary(
             });
 
             let mut buffer = MutableBuffer::new(predicate.count * value_length);
-
             iter.for_each(|item| buffer.extend_from_slice(item));
-
             buffer
         }
         IterationStrategy::Indices(indices) => {
@@ -753,9 +751,7 @@ fn filter_fixed_size_binary(
             });
 
             let mut buffer = MutableBuffer::new(predicate.count * value_length);
-
             iter.for_each(|item| buffer.extend_from_slice(item));
-
             buffer
         }
         IterationStrategy::All | IterationStrategy::None => unreachable!(),
