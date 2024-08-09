@@ -38,6 +38,7 @@ features = ["prettyprint"]
 
 [features]
 prettyprint = ["comfy-table"]
+force_validate = []
 
 [dependencies]
 arrow-array = { workspace = true }

@@ -21,6 +21,29 @@
 
 # Changelog
 
+## [object_store_0.10.1](https://github.com/apache/arrow-rs/tree/object_store_0.10.1) (2024-05-10)
+
+[Full Changelog](https://github.com/apache/arrow-rs/compare/object_store_0.10.0...object_store_0.10.1)
+
+**Implemented enhancements:**
+
+- Allow specifying PUT options when using `BufWriter` [\#5692](https://github.com/apache/arrow-rs/issues/5692) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)]
+- Add more attributes to `object_store::Attribute` [\#5689](https://github.com/apache/arrow-rs/issues/5689) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)]
+- feat object\_store: moving tests from src/ to a tests/ folder and enabling access to test functions for enabling a shared integration test suite [\#5685](https://github.com/apache/arrow-rs/issues/5685) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)]
+- Release Object Store 0.10.0 [\#5647](https://github.com/apache/arrow-rs/issues/5647) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)]
+
+**Fixed bugs:**
+
+- Using WriteMultipart::put results in 0 bytes being written [\#5743](https://github.com/apache/arrow-rs/issues/5743) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)]
+
+**Merged pull requests:**
+
+- Fix PutPayloadMut::push not updating content\_length \(\#5743\) [\#5744](https://github.com/apache/arrow-rs/pull/5744) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)] ([tustvold](https://github.com/tustvold))
+- Export object\_store integration tests [\#5709](https://github.com/apache/arrow-rs/pull/5709) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)] ([tustvold](https://github.com/tustvold))
+- Add `BufWriter::with_attributes` and `::with_tags` in `object_store` [\#5693](https://github.com/apache/arrow-rs/pull/5693) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)] ([netthier](https://github.com/netthier))
+- Add more attributes to `object_store::Attribute` [\#5690](https://github.com/apache/arrow-rs/pull/5690) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)] ([netthier](https://github.com/netthier))
+
+
 ## [object_store_0.10.0](https://github.com/apache/arrow-rs/tree/object_store_0.10.0) (2024-04-17)
 
 [Full Changelog](https://github.com/apache/arrow-rs/compare/object_store_0.9.1...object_store_0.10.0)

@@ -132,7 +132,7 @@ use std::sync::Arc;
 use arrow_array::cast::*;
 use arrow_array::types::ArrowDictionaryKeyType;
 use arrow_array::*;
-use arrow_buffer::{ArrowNativeType, OffsetBuffer, ScalarBuffer};
+use arrow_buffer::{ArrowNativeType, Buffer, OffsetBuffer, ScalarBuffer};
 use arrow_data::ArrayDataBuilder;
 use arrow_schema::*;
 use variable::{decode_binary_view, decode_string_view};
@@ -871,10 +871,20 @@ impl Rows {
 
     /// Returns the row at index `row`
     pub fn row(&self, row: usize) -> Row<'_> {
-        let end = self.offsets[row + 1];
-        let start = self.offsets[row];
+        assert!(row + 1 < self.offsets.len());
+        unsafe { self.row_unchecked(row) }
+    }
+
+    /// Returns the row at `index` without bounds checking
+    ///
+    /// # Safety
+    /// Caller must ensure that `index` is less than the number of offsets (#rows + 1)
+    pub unsafe fn row_unchecked(&self, index: usize) -> Row<'_> {
+        let end = unsafe { self.offsets.get_unchecked(index + 1) };
+        let start = unsafe { self.offsets.get_unchecked(index) };
+        let data = unsafe { self.buffer.get_unchecked(*start..*end) };
         Row {
-            data: &self.buffer[start..end],
+            data,
             config: &self.config,
         }
     }
@@ -942,7 +952,7 @@ impl Rows {
         let array = unsafe {
             BinaryArray::new_unchecked(
                 OffsetBuffer::new_unchecked(offsets_scalar),
-                self.buffer.into(),
+                Buffer::from_vec(self.buffer),
                 None,
             )
         };
@@ -978,7 +988,9 @@ impl<'a> Iterator for RowsIter<'a> {
         if self.end == self.start {
             return None;
         }
-        let row = self.rows.row(self.start);
+
+        // SAFETY: We have checked that `start` is less than `end`
+        let row = unsafe { self.rows.row_unchecked(self.start) };
         self.start += 1;
         Some(row)
     }
@@ -1000,7 +1012,8 @@ impl<'a> DoubleEndedIterator for RowsIter<'a> {
         if self.end == self.start {
             return None;
         }
-        let row = self.rows.row(self.end);
+        // Safety: We have checked that `start` is less than `end`
+        let row = unsafe { self.rows.row_unchecked(self.end) };
         self.end -= 1;
         Some(row)
     }

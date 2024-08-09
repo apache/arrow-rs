@@ -610,6 +610,7 @@ async fn web_identity(
         ])
         .retryable(retry_config)
         .idempotent(true)
+        .sensitive(true)
         .send()
         .await?
         .bytes()

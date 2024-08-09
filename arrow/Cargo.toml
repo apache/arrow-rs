@@ -54,7 +54,9 @@ arrow-select = { workspace = true }
 arrow-string = { workspace = true }
 
 rand = { version = "0.8", default-features = false, features = ["std", "std_rng"], optional = true }
-pyo3 = { version = "0.21.1", default-features = false, optional = true }
+pyo3 = { version = "0.22.2", default-features = false, optional = true }
+
+chrono = { workspace = true, optional = true }
 
 [package.metadata.docs.rs]
 features = ["prettyprint", "ipc_compression", "ffi", "pyarrow"]
@@ -70,12 +72,12 @@ prettyprint = ["arrow-cast/prettyprint"]
 # not the core arrow code itself. Be aware that `rand` must be kept as
 # an optional dependency for supporting compile to wasm32-unknown-unknown
 # target without assuming an environment containing JavaScript.
-test_utils = ["rand"]
+test_utils = ["rand", "dep:chrono"]
 pyarrow = ["pyo3", "ffi"]
 # force_validate runs full data validation for all arrays that are created
 # this is not enabled by default as it is too computationally expensive
 # but is run as part of our CI checks
-force_validate = ["arrow-data/force_validate"]
+force_validate = ["arrow-array/force_validate", "arrow-data/force_validate"]
 # Enable ffi support
 ffi = ["arrow-schema/ffi", "arrow-data/ffi", "arrow-array/ffi"]
 chrono-tz = ["arrow-array/chrono-tz"]

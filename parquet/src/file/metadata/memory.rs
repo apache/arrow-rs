@@ -23,6 +23,7 @@ use crate::data_type::private::ParquetValueType;
 use crate::file::metadata::{ColumnChunkMetaData, FileMetaData, KeyValue, RowGroupMetaData};
 use crate::file::page_encoding_stats::PageEncodingStats;
 use crate::file::page_index::index::{Index, NativeIndex, PageIndex};
+use crate::file::page_index::offset_index::OffsetIndexMetaData;
 use crate::file::statistics::{Statistics, ValueStatistics};
 use crate::format::{BoundaryOrder, PageLocation, SortingColumn};
 use std::sync::Arc;
@@ -97,6 +98,9 @@ impl HeapSize for ColumnChunkMetaData {
             + self.compression.heap_size()
             + self.statistics.heap_size()
             + self.encoding_stats.heap_size()
+            + self.unencoded_byte_array_data_bytes.heap_size()
+            + self.repetition_level_histogram.heap_size()
+            + self.definition_level_histogram.heap_size()
     }
 }
 
@@ -143,6 +147,12 @@ impl HeapSize for Statistics {
     }
 }
 
+impl HeapSize for OffsetIndexMetaData {
+    fn heap_size(&self) -> usize {
+        self.page_locations.heap_size() + self.unencoded_byte_array_data_bytes.heap_size()
+    }
+}
+
 impl HeapSize for Index {
     fn heap_size(&self) -> usize {
         match self {
@@ -173,7 +183,14 @@ impl<T: ParquetValueType> HeapSize for PageIndex<T> {
 
 impl<T: ParquetValueType> HeapSize for ValueStatistics<T> {
     fn heap_size(&self) -> usize {
-        self.min().heap_size() + self.max().heap_size()
+        if self.has_min_max_set() {
+            return self.min().heap_size() + self.max().heap_size();
+        } else if self.min_is_exact() {
+            return self.min().heap_size();
+        } else if self.max_is_exact() {
+            return self.max().heap_size();
+        }
+        0
     }
 }
 impl HeapSize for bool {

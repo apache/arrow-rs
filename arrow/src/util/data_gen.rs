@@ -19,6 +19,7 @@
 
 use std::sync::Arc;
 
+use rand::distributions::uniform::SampleRange;
 use rand::{distributions::uniform::SampleUniform, Rng};
 
 use crate::array::*;
@@ -117,30 +118,39 @@ pub fn create_random_array(
             size,
             primitive_null_density,
         )),
-        Timestamp(_, _) => {
-            let int64_array = Arc::new(create_primitive_array::<Int64Type>(
-                size,
-                primitive_null_density,
-            )) as ArrayRef;
-            return crate::compute::cast(&int64_array, field.data_type());
+        Timestamp(unit, _) => {
+            match unit {
+                TimeUnit::Second => Arc::new(create_random_temporal_array::<TimestampSecondType>(
+                    size,
+                    primitive_null_density,
+                )),
+                TimeUnit::Millisecond => Arc::new(create_random_temporal_array::<
+                    TimestampMillisecondType,
+                >(size, primitive_null_density)),
+                TimeUnit::Microsecond => Arc::new(create_random_temporal_array::<
+                    TimestampMicrosecondType,
+                >(size, primitive_null_density)),
+                TimeUnit::Nanosecond => Arc::new(create_random_temporal_array::<
+                    TimestampNanosecondType,
+                >(size, primitive_null_density)),
+            }
         }
-        Date32 => Arc::new(create_primitive_array::<Date32Type>(
+        Date32 => Arc::new(create_random_temporal_array::<Date32Type>(
             size,
             primitive_null_density,
         )),
-        Date64 => Arc::new(create_primitive_array::<Date64Type>(
+        Date64 => Arc::new(create_random_temporal_array::<Date64Type>(
             size,
             primitive_null_density,
         )),
         Time32(unit) => match unit {
-            TimeUnit::Second => Arc::new(create_primitive_array::<Time32SecondType>(
+            TimeUnit::Second => Arc::new(create_random_temporal_array::<Time32SecondType>(
                 size,
                 primitive_null_density,
             )) as ArrayRef,
-            TimeUnit::Millisecond => Arc::new(create_primitive_array::<Time32MillisecondType>(
-                size,
-                primitive_null_density,
-            )),
+            TimeUnit::Millisecond => Arc::new(
+                create_random_temporal_array::<Time32MillisecondType>(size, primitive_null_density),
+            ),
             _ => {
                 return Err(ArrowError::InvalidArgumentError(format!(
                     "Unsupported unit {unit:?} for Time32"
@@ -148,11 +158,10 @@ pub fn create_random_array(
             }
         },
         Time64(unit) => match unit {
-            TimeUnit::Microsecond => Arc::new(create_primitive_array::<Time64MicrosecondType>(
-                size,
-                primitive_null_density,
-            )) as ArrayRef,
-            TimeUnit::Nanosecond => Arc::new(create_primitive_array::<Time64NanosecondType>(
+            TimeUnit::Microsecond => Arc::new(
+                create_random_temporal_array::<Time64MicrosecondType>(size, primitive_null_density),
+            ) as ArrayRef,
+            TimeUnit::Nanosecond => Arc::new(create_random_temporal_array::<Time64NanosecondType>(
                 size,
                 primitive_null_density,
             )),
@@ -380,6 +389,124 @@ fn create_random_null_buffer(size: usize, null_density: f32) -> Buffer {
         })
     };
     mut_buf.into()
+}
+
+/// Useful for testing. The range of values are not likely to be representative of the
+/// actual bounds.
+pub trait RandomTemporalValue: ArrowTemporalType {
+    fn value_range() -> impl SampleRange<Self::Native>;
+
+    fn gen_range<R: Rng>(rng: &mut R) -> Self::Native
+    where
+        Self::Native: SampleUniform,
+    {
+        rng.gen_range(Self::value_range())
+    }
+
+    fn random<R: Rng>(rng: &mut R) -> Self::Native
+    where
+        Self::Native: SampleUniform,
+    {
+        Self::gen_range(rng)
+    }
+}
+
+impl RandomTemporalValue for TimestampSecondType {
+    /// Range of values for a timestamp in seconds. The range begins at the start
+    /// of the unix epoch and continues for 100 years.
+    fn value_range() -> impl SampleRange<Self::Native> {
+        0..60 * 60 * 24 * 365 * 100
+    }
+}
+
+impl RandomTemporalValue for TimestampMillisecondType {
+    /// Range of values for a timestamp in milliseconds. The range begins at the start
+    /// of the unix epoch and continues for 100 years.
+    fn value_range() -> impl SampleRange<Self::Native> {
+        0..1_000 * 60 * 60 * 24 * 365 * 100
+    }
+}
+
+impl RandomTemporalValue for TimestampMicrosecondType {
+    /// Range of values for a timestamp in microseconds. The range begins at the start
+    /// of the unix epoch and continues for 100 years.
+    fn value_range() -> impl SampleRange<Self::Native> {
+        0..1_000 * 1_000 * 60 * 60 * 24 * 365 * 100
+    }
+}
+
+impl RandomTemporalValue for TimestampNanosecondType {
+    /// Range of values for a timestamp in nanoseconds. The range begins at the start
+    /// of the unix epoch and continues for 100 years.
+    fn value_range() -> impl SampleRange<Self::Native> {
+        0..1_000 * 1_000 * 1_000 * 60 * 60 * 24 * 365 * 100
+    }
+}
+
+impl RandomTemporalValue for Date32Type {
+    /// Range of values representing the elapsed time since UNIX epoch in days. The
+    /// range begins at the start of the unix epoch and continues for 100 years.
+    fn value_range() -> impl SampleRange<Self::Native> {
+        0..365 * 100
+    }
+}
+
+impl RandomTemporalValue for Date64Type {
+    /// Range of values  representing the elapsed time since UNIX epoch in milliseconds.
+    /// The range begins at the start of the unix epoch and continues for 100 years.
+    fn value_range() -> impl SampleRange<Self::Native> {
+        0..1_000 * 60 * 60 * 24 * 365 * 100
+    }
+}
+
+impl RandomTemporalValue for Time32SecondType {
+    /// Range of values representing the elapsed time since midnight in seconds. The
+    /// range is from 0 to 24 hours.
+    fn value_range() -> impl SampleRange<Self::Native> {
+        0..60 * 60 * 24
+    }
+}
+
+impl RandomTemporalValue for Time32MillisecondType {
+    /// Range of values representing the elapsed time since midnight in milliseconds. The
+    /// range is from 0 to 24 hours.
+    fn value_range() -> impl SampleRange<Self::Native> {
+        0..1_000 * 60 * 60 * 24
+    }
+}
+
+impl RandomTemporalValue for Time64MicrosecondType {
+    /// Range of values representing the elapsed time since midnight in microseconds. The
+    /// range is from 0 to 24 hours.
+    fn value_range() -> impl SampleRange<Self::Native> {
+        0..1_000 * 1_000 * 60 * 60 * 24
+    }
+}
+
+impl RandomTemporalValue for Time64NanosecondType {
+    /// Range of values representing the elapsed time since midnight in nanoseconds. The
+    /// range is from 0 to 24 hours.
+    fn value_range() -> impl SampleRange<Self::Native> {
+        0..1_000 * 1_000 * 1_000 * 60 * 60 * 24
+    }
+}
+
+fn create_random_temporal_array<T>(size: usize, null_density: f32) -> PrimitiveArray<T>
+where
+    T: RandomTemporalValue,
+    <T as ArrowPrimitiveType>::Native: SampleUniform,
+{
+    let mut rng = seedable_rng();
+
+    (0..size)
+        .map(|_| {
+            if rng.gen::<f32>() < null_density {
+                None
+            } else {
+                Some(T::random(&mut rng))
+            }
+        })
+        .collect()
 }
 
 #[cfg(test)]

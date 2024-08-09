@@ -19,6 +19,7 @@
 //! using row group writers and column writers respectively.
 
 use crate::bloom_filter::Sbbf;
+use crate::file::page_index::index::Index;
 use crate::format as parquet;
 use crate::format::{ColumnIndex, OffsetIndex, RowGroup};
 use crate::thrift::TSerializable;
@@ -34,8 +35,9 @@ use crate::column::{
 };
 use crate::data_type::DataType;
 use crate::errors::{ParquetError, Result};
+use crate::file::properties::{BloomFilterPosition, WriterPropertiesPtr};
 use crate::file::reader::ChunkReader;
-use crate::file::{metadata::*, properties::WriterPropertiesPtr, PARQUET_MAGIC};
+use crate::file::{metadata::*, PARQUET_MAGIC};
 use crate::schema::types::{self, ColumnDescPtr, SchemaDescPtr, SchemaDescriptor, TypePtr};
 
 /// A wrapper around a [`Write`] that keeps track of the number
@@ -115,9 +117,10 @@ pub type OnCloseColumnChunk<'a> = Box<dyn FnOnce(ColumnCloseResult) -> Result<()
 /// - the row group metadata
 /// - the column index for each column chunk
 /// - the offset index for each column chunk
-pub type OnCloseRowGroup<'a> = Box<
+pub type OnCloseRowGroup<'a, W> = Box<
     dyn FnOnce(
-            RowGroupMetaDataPtr,
+            &'a mut TrackedWrite<W>,
+            RowGroupMetaData,
             Vec<Option<Sbbf>>,
             Vec<Option<ColumnIndex>>,
             Vec<Option<OffsetIndex>>,
@@ -143,7 +146,7 @@ pub struct SerializedFileWriter<W: Write> {
     schema: TypePtr,
     descr: SchemaDescPtr,
     props: WriterPropertiesPtr,
-    row_groups: Vec<RowGroupMetaDataPtr>,
+    row_groups: Vec<RowGroupMetaData>,
     bloom_filters: Vec<Vec<Option<Sbbf>>>,
     column_indexes: Vec<Vec<Option<ColumnIndex>>>,
     offset_indexes: Vec<Vec<Option<OffsetIndex>>>,
@@ -197,18 +200,29 @@ impl<W: Write + Send> SerializedFileWriter<W> {
 
         self.row_group_index += 1;
 
+        let bloom_filter_position = self.properties().bloom_filter_position();
         let row_groups = &mut self.row_groups;
         let row_bloom_filters = &mut self.bloom_filters;
         let row_column_indexes = &mut self.column_indexes;
         let row_offset_indexes = &mut self.offset_indexes;
-        let on_close =
-            |metadata, row_group_bloom_filter, row_group_column_index, row_group_offset_index| {
-                row_groups.push(metadata);
-                row_bloom_filters.push(row_group_bloom_filter);
-                row_column_indexes.push(row_group_column_index);
-                row_offset_indexes.push(row_group_offset_index);
-                Ok(())
+        let on_close = move |buf,
+                             mut metadata,
+                             row_group_bloom_filter,
+                             row_group_column_index,
+                             row_group_offset_index| {
+            row_bloom_filters.push(row_group_bloom_filter);
+            row_column_indexes.push(row_group_column_index);
+            row_offset_indexes.push(row_group_offset_index);
+            // write bloom filters out immediately after the row group if requested
+            match bloom_filter_position {
+                BloomFilterPosition::AfterRowGroup => {
+                    write_bloom_filters(buf, row_bloom_filters, &mut metadata)?
+                }
+                BloomFilterPosition::End => (),
             };
+            row_groups.push(metadata);
+            Ok(())
+        };
 
         let row_group_writer = SerializedRowGroupWriter::new(
             self.descr.clone(),
@@ -221,7 +235,7 @@ impl<W: Write + Send> SerializedFileWriter<W> {
     }
 
     /// Returns metadata for any flushed row groups
-    pub fn flushed_row_groups(&self) -> &[RowGroupMetaDataPtr] {
+    pub fn flushed_row_groups(&self) -> &[RowGroupMetaData] {
         &self.row_groups
     }
 
@@ -248,100 +262,14 @@ impl<W: Write + Send> SerializedFileWriter<W> {
         Ok(())
     }
 
-    /// Serialize all the offset index to the file
-    fn write_offset_indexes(&mut self, row_groups: &mut [RowGroup]) -> Result<()> {
-        // iter row group
-        // iter each column
-        // write offset index to the file
-        for (row_group_idx, row_group) in row_groups.iter_mut().enumerate() {
-            for (column_idx, column_metadata) in row_group.columns.iter_mut().enumerate() {
-                match &self.offset_indexes[row_group_idx][column_idx] {
-                    Some(offset_index) => {
-                        let start_offset = self.buf.bytes_written();
-                        let mut protocol = TCompactOutputProtocol::new(&mut self.buf);
-                        offset_index.write_to_out_protocol(&mut protocol)?;
-                        let end_offset = self.buf.bytes_written();
-                        // set offset and index for offset index
-                        column_metadata.offset_index_offset = Some(start_offset as i64);
-                        column_metadata.offset_index_length =
-                            Some((end_offset - start_offset) as i32);
-                    }
-                    None => {}
-                }
-            }
-        }
-        Ok(())
-    }
-
-    /// Serialize all the bloom filter to the file
-    fn write_bloom_filters(&mut self, row_groups: &mut [RowGroup]) -> Result<()> {
-        // iter row group
-        // iter each column
-        // write bloom filter to the file
-        for (row_group_idx, row_group) in row_groups.iter_mut().enumerate() {
-            for (column_idx, column_chunk) in row_group.columns.iter_mut().enumerate() {
-                match &self.bloom_filters[row_group_idx][column_idx] {
-                    Some(bloom_filter) => {
-                        let start_offset = self.buf.bytes_written();
-                        bloom_filter.write(&mut self.buf)?;
-                        let end_offset = self.buf.bytes_written();
-                        // set offset and index for bloom filter
-                        let column_chunk_meta = column_chunk
-                            .meta_data
-                            .as_mut()
-                            .expect("can't have bloom filter without column metadata");
-                        column_chunk_meta.bloom_filter_offset = Some(start_offset as i64);
-                        column_chunk_meta.bloom_filter_length =
-                            Some((end_offset - start_offset) as i32);
-                    }
-                    None => {}
-                }
-            }
-        }
-        Ok(())
-    }
-
-    /// Serialize all the column index to the file
-    fn write_column_indexes(&mut self, row_groups: &mut [RowGroup]) -> Result<()> {
-        // iter row group
-        // iter each column
-        // write column index to the file
-        for (row_group_idx, row_group) in row_groups.iter_mut().enumerate() {
-            for (column_idx, column_metadata) in row_group.columns.iter_mut().enumerate() {
-                match &self.column_indexes[row_group_idx][column_idx] {
-                    Some(column_index) => {
-                        let start_offset = self.buf.bytes_written();
-                        let mut protocol = TCompactOutputProtocol::new(&mut self.buf);
-                        column_index.write_to_out_protocol(&mut protocol)?;
-                        let end_offset = self.buf.bytes_written();
-                        // set offset and index for offset index
-                        column_metadata.column_index_offset = Some(start_offset as i64);
-                        column_metadata.column_index_length =
-                            Some((end_offset - start_offset) as i32);
-                    }
-                    None => {}
-                }
-            }
-        }
-        Ok(())
-    }
-
     /// Assembles and writes metadata at the end of the file.
     fn write_metadata(&mut self) -> Result<parquet::FileMetaData> {
         self.finished = true;
-        let num_rows = self.row_groups.iter().map(|x| x.num_rows()).sum();
 
-        let mut row_groups = self
-            .row_groups
-            .as_slice()
-            .iter()
-            .map(|v| v.to_thrift())
-            .collect::<Vec<_>>();
-
-        self.write_bloom_filters(&mut row_groups)?;
-        // Write column indexes and offset indexes
-        self.write_column_indexes(&mut row_groups)?;
-        self.write_offset_indexes(&mut row_groups)?;
+        // write out any remaining bloom filters after all row groups
+        for row_group in &mut self.row_groups {
+            write_bloom_filters(&mut self.buf, &mut self.bloom_filters, row_group)?;
+        }
 
         let key_value_metadata = match self.props.key_value_metadata() {
             Some(kv) => Some(kv.iter().chain(&self.kv_metadatas).cloned().collect()),
@@ -349,45 +277,26 @@ impl<W: Write + Send> SerializedFileWriter<W> {
             None => Some(self.kv_metadatas.clone()),
         };
 
-        // We only include ColumnOrder for leaf nodes.
-        // Currently only supported ColumnOrder is TypeDefinedOrder so we set this
-        // for all leaf nodes.
-        // Even if the column has an undefined sort order, such as INTERVAL, this
-        // is still technically the defined TYPEORDER so it should still be set.
-        let column_orders = (0..self.schema_descr().num_columns())
-            .map(|_| parquet::ColumnOrder::TYPEORDER(parquet::TypeDefinedOrder {}))
-            .collect();
-        // This field is optional, perhaps in cases where no min/max fields are set
-        // in any Statistics or ColumnIndex object in the whole file.
-        // But for simplicity we always set this field.
-        let column_orders = Some(column_orders);
+        let row_groups = self
+            .row_groups
+            .iter()
+            .map(|v| v.to_thrift())
+            .collect::<Vec<_>>();
 
-        let file_metadata = parquet::FileMetaData {
-            num_rows,
+        let mut encoder = ThriftMetadataWriter::new(
+            &mut self.buf,
+            &self.schema,
+            &self.descr,
             row_groups,
-            key_value_metadata,
-            version: self.props.writer_version().as_num(),
-            schema: types::to_thrift(self.schema.as_ref())?,
-            created_by: Some(self.props.created_by().to_owned()),
-            column_orders,
-            encryption_algorithm: None,
-            footer_signing_key_metadata: None,
-        };
-
-        // Write file metadata
-        let start_pos = self.buf.bytes_written();
-        {
-            let mut protocol = TCompactOutputProtocol::new(&mut self.buf);
-            file_metadata.write_to_out_protocol(&mut protocol)?;
+            Some(self.props.created_by().to_string()),
+            self.props.writer_version().as_num(),
+        );
+        if let Some(key_value_metadata) = key_value_metadata {
+            encoder = encoder.with_key_value_metadata(key_value_metadata)
         }
-        let end_pos = self.buf.bytes_written();
-
-        // Write footer
-        let metadata_len = (end_pos - start_pos) as u32;
-
-        self.buf.write_all(&metadata_len.to_le_bytes())?;
-        self.buf.write_all(&PARQUET_MAGIC)?;
-        Ok(file_metadata)
+        encoder = encoder.with_column_indexes(&self.column_indexes);
+        encoder = encoder.with_offset_indexes(&self.offset_indexes);
+        encoder.finish()
     }
 
     #[inline]
@@ -443,16 +352,51 @@ impl<W: Write + Send> SerializedFileWriter<W> {
     }
 }
 
+/// Serialize all the bloom filters of the given row group to the given buffer,
+/// and returns the updated row group metadata.
+fn write_bloom_filters<W: Write + Send>(
+    buf: &mut TrackedWrite<W>,
+    bloom_filters: &mut [Vec<Option<Sbbf>>],
+    row_group: &mut RowGroupMetaData,
+) -> Result<()> {
+    // iter row group
+    // iter each column
+    // write bloom filter to the file
+
+    let row_group_idx: u16 = row_group
+        .ordinal()
+        .expect("Missing row group ordinal")
+        .try_into()
+        .expect("Negative row group ordinal");
+    let row_group_idx = row_group_idx as usize;
+    for (column_idx, column_chunk) in row_group.columns_mut().iter_mut().enumerate() {
+        if let Some(bloom_filter) = bloom_filters[row_group_idx][column_idx].take() {
+            let start_offset = buf.bytes_written();
+            bloom_filter.write(&mut *buf)?;
+            let end_offset = buf.bytes_written();
+            // set offset and index for bloom filter
+            *column_chunk = column_chunk
+                .clone()
+                .into_builder()
+                .set_bloom_filter_offset(Some(start_offset as i64))
+                .set_bloom_filter_length(Some((end_offset - start_offset) as i32))
+                .build()?;
+        }
+    }
+    Ok(())
+}
+
 /// Parquet row group writer API.
 /// Provides methods to access column writers in an iterator-like fashion, order is
 /// guaranteed to match the order of schema leaves (column descriptors).
 ///
 /// All columns should be written sequentially; the main workflow is:
 /// - Request the next column using `next_column` method - this will return `None` if no
-/// more columns are available to write.
+///   more columns are available to write.
 /// - Once done writing a column, close column writer with `close`
-/// - Once all columns have been written, close row group writer with `close` method -
-/// it will return row group metadata and is no-op on already closed row group.
+/// - Once all columns have been written, close row group writer with `close`
+///   method. THe close method will return row group metadata and is no-op
+///   on already closed row group.
 pub struct SerializedRowGroupWriter<'a, W: Write> {
     descr: SchemaDescPtr,
     props: WriterPropertiesPtr,
@@ -468,7 +412,7 @@ pub struct SerializedRowGroupWriter<'a, W: Write> {
     offset_indexes: Vec<Option<OffsetIndex>>,
     row_group_index: i16,
     file_offset: i64,
-    on_close: Option<OnCloseRowGroup<'a>>,
+    on_close: Option<OnCloseRowGroup<'a, W>>,
 }
 
 impl<'a, W: Write + Send> SerializedRowGroupWriter<'a, W> {
@@ -485,7 +429,7 @@ impl<'a, W: Write + Send> SerializedRowGroupWriter<'a, W> {
         properties: WriterPropertiesPtr,
         buf: &'a mut TrackedWrite<W>,
         row_group_index: i16,
-        on_close: Option<OnCloseRowGroup<'a>>,
+        on_close: Option<OnCloseRowGroup<'a, W>>,
     ) -> Self {
         let num_columns = schema_descr.num_columns();
         let file_offset = buf.bytes_written() as i64;
@@ -625,19 +569,23 @@ impl<'a, W: Write + Send> SerializedRowGroupWriter<'a, W> {
             ));
         }
 
-        let file_offset = self.buf.bytes_written() as i64;
-
         let map_offset = |x| x - src_offset + write_offset as i64;
         let mut builder = ColumnChunkMetaData::builder(metadata.column_descr_ptr())
             .set_compression(metadata.compression())
             .set_encodings(metadata.encodings().clone())
-            .set_file_offset(file_offset)
             .set_total_compressed_size(metadata.compressed_size())
             .set_total_uncompressed_size(metadata.uncompressed_size())
             .set_num_values(metadata.num_values())
             .set_data_page_offset(map_offset(src_data_offset))
-            .set_dictionary_page_offset(src_dictionary_offset.map(map_offset));
+            .set_dictionary_page_offset(src_dictionary_offset.map(map_offset))
+            .set_unencoded_byte_array_data_bytes(metadata.unencoded_byte_array_data_bytes());
 
+        if let Some(rep_hist) = metadata.repetition_level_histogram() {
+            builder = builder.set_repetition_level_histogram(Some(rep_hist.clone()))
+        }
+        if let Some(def_hist) = metadata.definition_level_histogram() {
+            builder = builder.set_definition_level_histogram(Some(def_hist.clone()))
+        }
         if let Some(statistics) = metadata.statistics() {
             builder = builder.set_statistics(statistics.clone())
         }
@@ -649,7 +597,6 @@ impl<'a, W: Write + Send> SerializedRowGroupWriter<'a, W> {
             }
         }
 
-        SerializedPageWriter::new(self.buf).write_metadata(&metadata)?;
         let (_, on_close) = self.get_on_close();
         on_close(close)
     }
@@ -669,12 +616,12 @@ impl<'a, W: Write + Send> SerializedRowGroupWriter<'a, W> {
                 .set_file_offset(self.file_offset)
                 .build()?;
 
-            let metadata = Arc::new(row_group_metadata);
-            self.row_group_metadata = Some(metadata.clone());
+            self.row_group_metadata = Some(Arc::new(row_group_metadata.clone()));
 
             if let Some(on_close) = self.on_close.take() {
                 on_close(
-                    metadata,
+                    self.buf,
+                    row_group_metadata,
                     self.bloom_filters,
                     self.column_indexes,
                     self.offset_indexes,
@@ -777,17 +724,284 @@ impl<'a, W: Write + Send> PageWriter for SerializedPageWriter<'a, W> {
         Ok(spec)
     }
 
-    fn write_metadata(&mut self, metadata: &ColumnChunkMetaData) -> Result<()> {
-        let mut protocol = TCompactOutputProtocol::new(&mut self.sink);
-        metadata
-            .to_column_metadata_thrift()
-            .write_to_out_protocol(&mut protocol)?;
-        Ok(())
-    }
-
     fn close(&mut self) -> Result<()> {
         self.sink.flush()?;
         Ok(())
+    }
+}
+
+/// Writes `crate::file::metadata` structures to a thrift encdoded byte streams
+///
+/// This structure handles the details of writing the various parts of parquet
+/// metadata into a byte stream. It is used to write the metadata into a
+/// parquet file and can also write metadata into other locations (such as a
+/// store of bytes).
+///
+/// This is somewhat trickey because the metadata is not store as a single inline
+/// thrift struture. It can have several "out of band" structures such as the OffsetIndex
+/// and BloomFilters which are stored separately whose locations are stored as offsets
+struct ThriftMetadataWriter<'a, W: Write> {
+    buf: &'a mut TrackedWrite<W>,
+    schema: &'a TypePtr,
+    schema_descr: &'a SchemaDescPtr,
+    row_groups: Vec<RowGroup>,
+    column_indexes: Option<&'a [Vec<Option<ColumnIndex>>]>,
+    offset_indexes: Option<&'a [Vec<Option<OffsetIndex>>]>,
+    key_value_metadata: Option<Vec<KeyValue>>,
+    created_by: Option<String>,
+    writer_version: i32,
+}
+
+impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
+    /// Serialize all the offset index to the file
+    fn write_offset_indexes(&mut self, offset_indexes: &[Vec<Option<OffsetIndex>>]) -> Result<()> {
+        // iter row group
+        // iter each column
+        // write offset index to the file
+        for (row_group_idx, row_group) in self.row_groups.iter_mut().enumerate() {
+            for (column_idx, column_metadata) in row_group.columns.iter_mut().enumerate() {
+                match &offset_indexes[row_group_idx][column_idx] {
+                    Some(offset_index) => {
+                        let start_offset = self.buf.bytes_written();
+                        let mut protocol = TCompactOutputProtocol::new(&mut self.buf);
+                        offset_index.write_to_out_protocol(&mut protocol)?;
+                        let end_offset = self.buf.bytes_written();
+                        // set offset and index for offset index
+                        column_metadata.offset_index_offset = Some(start_offset as i64);
+                        column_metadata.offset_index_length =
+                            Some((end_offset - start_offset) as i32);
+                    }
+                    None => {}
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Serialize all the column index to the file
+    fn write_column_indexes(&mut self, column_indexes: &[Vec<Option<ColumnIndex>>]) -> Result<()> {
+        // iter row group
+        // iter each column
+        // write column index to the file
+        for (row_group_idx, row_group) in self.row_groups.iter_mut().enumerate() {
+            for (column_idx, column_metadata) in row_group.columns.iter_mut().enumerate() {
+                match &column_indexes[row_group_idx][column_idx] {
+                    Some(column_index) => {
+                        let start_offset = self.buf.bytes_written();
+                        let mut protocol = TCompactOutputProtocol::new(&mut self.buf);
+                        column_index.write_to_out_protocol(&mut protocol)?;
+                        let end_offset = self.buf.bytes_written();
+                        // set offset and index for offset index
+                        column_metadata.column_index_offset = Some(start_offset as i64);
+                        column_metadata.column_index_length =
+                            Some((end_offset - start_offset) as i32);
+                    }
+                    None => {}
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Assembles and writes the final metadata to self.buf
+    pub fn finish(mut self) -> Result<parquet::FileMetaData> {
+        let num_rows = self.row_groups.iter().map(|x| x.num_rows).sum();
+
+        // Write column indexes and offset indexes
+        if let Some(column_indexes) = self.column_indexes {
+            self.write_column_indexes(column_indexes)?;
+        }
+        if let Some(offset_indexes) = self.offset_indexes {
+            self.write_offset_indexes(offset_indexes)?;
+        }
+
+        // We only include ColumnOrder for leaf nodes.
+        // Currently only supported ColumnOrder is TypeDefinedOrder so we set this
+        // for all leaf nodes.
+        // Even if the column has an undefined sort order, such as INTERVAL, this
+        // is still technically the defined TYPEORDER so it should still be set.
+        let column_orders = (0..self.schema_descr.num_columns())
+            .map(|_| parquet::ColumnOrder::TYPEORDER(parquet::TypeDefinedOrder {}))
+            .collect();
+        // This field is optional, perhaps in cases where no min/max fields are set
+        // in any Statistics or ColumnIndex object in the whole file.
+        // But for simplicity we always set this field.
+        let column_orders = Some(column_orders);
+
+        let file_metadata = parquet::FileMetaData {
+            num_rows,
+            row_groups: self.row_groups,
+            key_value_metadata: self.key_value_metadata.clone(),
+            version: self.writer_version,
+            schema: types::to_thrift(self.schema.as_ref())?,
+            created_by: self.created_by.clone(),
+            column_orders,
+            encryption_algorithm: None,
+            footer_signing_key_metadata: None,
+        };
+
+        // Write file metadata
+        let start_pos = self.buf.bytes_written();
+        {
+            let mut protocol = TCompactOutputProtocol::new(&mut self.buf);
+            file_metadata.write_to_out_protocol(&mut protocol)?;
+        }
+        let end_pos = self.buf.bytes_written();
+
+        // Write footer
+        let metadata_len = (end_pos - start_pos) as u32;
+
+        self.buf.write_all(&metadata_len.to_le_bytes())?;
+        self.buf.write_all(&PARQUET_MAGIC)?;
+        Ok(file_metadata)
+    }
+
+    pub(self) fn new(
+        buf: &'a mut TrackedWrite<W>,
+        schema: &'a TypePtr,
+        schema_descr: &'a SchemaDescPtr,
+        row_groups: Vec<RowGroup>,
+        created_by: Option<String>,
+        writer_version: i32,
+    ) -> Self {
+        Self {
+            buf,
+            schema,
+            schema_descr,
+            row_groups,
+            column_indexes: None,
+            offset_indexes: None,
+            key_value_metadata: None,
+            created_by,
+            writer_version,
+        }
+    }
+
+    pub fn with_column_indexes(mut self, column_indexes: &'a [Vec<Option<ColumnIndex>>]) -> Self {
+        self.column_indexes = Some(column_indexes);
+        self
+    }
+
+    pub fn with_offset_indexes(mut self, offset_indexes: &'a [Vec<Option<OffsetIndex>>]) -> Self {
+        self.offset_indexes = Some(offset_indexes);
+        self
+    }
+
+    pub fn with_key_value_metadata(mut self, key_value_metadata: Vec<KeyValue>) -> Self {
+        self.key_value_metadata = Some(key_value_metadata);
+        self
+    }
+}
+
+pub struct ParquetMetadataWriter<'a, W: Write> {
+    buf: TrackedWrite<W>,
+    write_page_index: bool,
+    metadata: &'a ParquetMetaData,
+}
+
+impl<'a, W: Write> ParquetMetadataWriter<'a, W> {
+    pub fn new(buf: W, metadata: &'a ParquetMetaData) -> Self {
+        Self {
+            buf: TrackedWrite::new(buf),
+            write_page_index: true,
+            metadata,
+        }
+    }
+
+    pub fn write_page_index(&mut self, write_page_index: bool) -> &mut Self {
+        self.write_page_index = write_page_index;
+        self
+    }
+
+    pub fn finish(&mut self) -> Result<()> {
+        let file_metadata = self.metadata.file_metadata();
+
+        let schema = Arc::new(file_metadata.schema().clone());
+        let schema_descr = Arc::new(SchemaDescriptor::new(schema.clone()));
+        let created_by = file_metadata.created_by().map(str::to_string);
+
+        let row_groups = self
+            .metadata
+            .row_groups()
+            .iter()
+            .map(|rg| rg.to_thrift())
+            .collect::<Vec<_>>();
+
+        let key_value_metadata = file_metadata.key_value_metadata().cloned();
+
+        let column_indexes = self.convert_column_indexes();
+        let offset_indexes = self.convert_offset_index();
+
+        let mut encoder = ThriftMetadataWriter::new(
+            &mut self.buf,
+            &schema,
+            &schema_descr,
+            row_groups,
+            created_by,
+            file_metadata.version(),
+        );
+        encoder = encoder.with_column_indexes(&column_indexes);
+        encoder = encoder.with_offset_indexes(&offset_indexes);
+        if let Some(key_value_metadata) = key_value_metadata {
+            encoder = encoder.with_key_value_metadata(key_value_metadata);
+        }
+        encoder.finish()?;
+
+        Ok(())
+    }
+
+    fn convert_column_indexes(&self) -> Vec<Vec<Option<ColumnIndex>>> {
+        if let Some(row_group_column_indexes) = self.metadata.column_index() {
+            (0..self.metadata.row_groups().len())
+                .map(|rg_idx| {
+                    let column_indexes = &row_group_column_indexes[rg_idx];
+                    column_indexes
+                        .iter()
+                        .map(|column_index| match column_index {
+                            Index::NONE => None,
+                            Index::BOOLEAN(column_index) => Some(column_index.to_thrift()),
+                            Index::BYTE_ARRAY(column_index) => Some(column_index.to_thrift()),
+                            Index::DOUBLE(column_index) => Some(column_index.to_thrift()),
+                            Index::FIXED_LEN_BYTE_ARRAY(column_index) => {
+                                Some(column_index.to_thrift())
+                            }
+                            Index::FLOAT(column_index) => Some(column_index.to_thrift()),
+                            Index::INT32(column_index) => Some(column_index.to_thrift()),
+                            Index::INT64(column_index) => Some(column_index.to_thrift()),
+                            Index::INT96(column_index) => Some(column_index.to_thrift()),
+                        })
+                        .collect()
+                })
+                .collect()
+        } else {
+            // make a None for each row group, for each column
+            self.metadata
+                .row_groups()
+                .iter()
+                .map(|rg| std::iter::repeat(None).take(rg.columns().len()).collect())
+                .collect()
+        }
+    }
+
+    fn convert_offset_index(&self) -> Vec<Vec<Option<OffsetIndex>>> {
+        if let Some(row_group_offset_indexes) = self.metadata.offset_index() {
+            (0..self.metadata.row_groups().len())
+                .map(|rg_idx| {
+                    let offset_indexes = &row_group_offset_indexes[rg_idx];
+                    offset_indexes
+                        .iter()
+                        .map(|offset_index| Some(offset_index.to_thrift()))
+                        .collect()
+                })
+                .collect()
+        } else {
+            // make a None for each row group, for each column
+            self.metadata
+                .row_groups()
+                .iter()
+                .map(|rg| std::iter::repeat(None).take(rg.columns().len()).collect())
+                .collect()
+        }
     }
 }
 
@@ -795,16 +1009,22 @@ impl<'a, W: Write + Send> PageWriter for SerializedPageWriter<'a, W> {
 mod tests {
     use super::*;
 
+    #[cfg(feature = "arrow")]
+    use arrow_array::RecordBatchReader;
     use bytes::Bytes;
     use std::fs::File;
 
+    #[cfg(feature = "arrow")]
+    use crate::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
+    #[cfg(feature = "arrow")]
+    use crate::arrow::ArrowWriter;
     use crate::basic::{
         ColumnOrder, Compression, ConvertedType, Encoding, LogicalType, Repetition, SortOrder, Type,
     };
     use crate::column::page::{Page, PageReader};
     use crate::column::reader::get_typed_column_reader;
     use crate::compression::{create_codec, Codec, CodecOptionsBuilder};
-    use crate::data_type::{BoolType, Int32Type};
+    use crate::data_type::{BoolType, ByteArrayType, Int32Type};
     use crate::file::page_index::index::Index;
     use crate::file::properties::EnabledStatistics;
     use crate::file::serialized_reader::ReadOptionsBuilder;
@@ -817,6 +1037,7 @@ mod tests {
     use crate::record::{Row, RowAccessor};
     use crate::schema::parser::parse_message_type;
     use crate::schema::types::{ColumnDescriptor, ColumnPath};
+    use crate::util::test_common::rand_gen::RandGen;
 
     #[test]
     fn test_row_group_writer_error_not_all_columns_written() {
@@ -1446,7 +1667,7 @@ mod tests {
             assert_eq!(flushed.len(), idx + 1);
             assert_eq!(Some(idx as i16), last_group.ordinal());
             assert_eq!(Some(row_group_file_offset as i64), last_group.file_offset());
-            assert_eq!(flushed[idx].as_ref(), last_group.as_ref());
+            assert_eq!(&flushed[idx], last_group.as_ref());
         }
         let file_metadata = file_writer.close().unwrap();
 
@@ -1827,5 +2048,564 @@ mod tests {
         assert!(matches!(a_idx, Index::INT32(_)), "{a_idx:?}");
         let b_idx = &column_index[0][1];
         assert!(matches!(b_idx, Index::NONE), "{b_idx:?}");
+    }
+
+    #[test]
+    fn test_byte_array_size_statistics() {
+        let message_type = "
+            message test_schema {
+                OPTIONAL BYTE_ARRAY a (UTF8);
+            }
+        ";
+        let schema = Arc::new(parse_message_type(message_type).unwrap());
+        let data = ByteArrayType::gen_vec(32, 7);
+        let def_levels = [1, 1, 1, 1, 0, 1, 0, 1, 0, 1];
+        let unenc_size: i64 = data.iter().map(|x| x.len() as i64).sum();
+        let file: File = tempfile::tempfile().unwrap();
+        let props = Arc::new(
+            WriterProperties::builder()
+                .set_statistics_enabled(EnabledStatistics::Page)
+                .build(),
+        );
+
+        let mut writer = SerializedFileWriter::new(&file, schema, props).unwrap();
+        let mut row_group_writer = writer.next_row_group().unwrap();
+
+        let mut col_writer = row_group_writer.next_column().unwrap().unwrap();
+        col_writer
+            .typed::<ByteArrayType>()
+            .write_batch(&data, Some(&def_levels), None)
+            .unwrap();
+        col_writer.close().unwrap();
+        row_group_writer.close().unwrap();
+        let file_metadata = writer.close().unwrap();
+
+        assert_eq!(file_metadata.row_groups.len(), 1);
+        assert_eq!(file_metadata.row_groups[0].columns.len(), 1);
+        assert!(file_metadata.row_groups[0].columns[0].meta_data.is_some());
+
+        let check_def_hist = |def_hist: &[i64]| {
+            assert_eq!(def_hist.len(), 2);
+            assert_eq!(def_hist[0], 3);
+            assert_eq!(def_hist[1], 7);
+        };
+
+        assert!(file_metadata.row_groups[0].columns[0].meta_data.is_some());
+        let meta_data = file_metadata.row_groups[0].columns[0]
+            .meta_data
+            .as_ref()
+            .unwrap();
+        assert!(meta_data.size_statistics.is_some());
+        let size_stats = meta_data.size_statistics.as_ref().unwrap();
+
+        assert!(size_stats.repetition_level_histogram.is_none());
+        assert!(size_stats.definition_level_histogram.is_some());
+        assert!(size_stats.unencoded_byte_array_data_bytes.is_some());
+        assert_eq!(
+            unenc_size,
+            size_stats.unencoded_byte_array_data_bytes.unwrap()
+        );
+        check_def_hist(size_stats.definition_level_histogram.as_ref().unwrap());
+
+        // check that the read metadata is also correct
+        let options = ReadOptionsBuilder::new().with_page_index().build();
+        let reader = SerializedFileReader::new_with_options(file, options).unwrap();
+
+        let rfile_metadata = reader.metadata().file_metadata();
+        assert_eq!(rfile_metadata.num_rows(), file_metadata.num_rows);
+        assert_eq!(reader.num_row_groups(), 1);
+        let rowgroup = reader.get_row_group(0).unwrap();
+        assert_eq!(rowgroup.num_columns(), 1);
+        let column = rowgroup.metadata().column(0);
+        assert!(column.definition_level_histogram().is_some());
+        assert!(column.repetition_level_histogram().is_none());
+        assert!(column.unencoded_byte_array_data_bytes().is_some());
+        check_def_hist(column.definition_level_histogram().unwrap().values());
+        assert_eq!(
+            unenc_size,
+            column.unencoded_byte_array_data_bytes().unwrap()
+        );
+
+        // check histogram in column index as well
+        assert!(reader.metadata().column_index().is_some());
+        let column_index = reader.metadata().column_index().unwrap();
+        assert_eq!(column_index.len(), 1);
+        assert_eq!(column_index[0].len(), 1);
+        let col_idx = if let Index::BYTE_ARRAY(index) = &column_index[0][0] {
+            assert_eq!(index.indexes.len(), 1);
+            &index.indexes[0]
+        } else {
+            unreachable!()
+        };
+
+        assert!(col_idx.repetition_level_histogram().is_none());
+        assert!(col_idx.definition_level_histogram().is_some());
+        check_def_hist(col_idx.definition_level_histogram().unwrap().values());
+
+        assert!(reader.metadata().offset_index().is_some());
+        let offset_index = reader.metadata().offset_index().unwrap();
+        assert_eq!(offset_index.len(), 1);
+        assert_eq!(offset_index[0].len(), 1);
+        assert!(offset_index[0][0].unencoded_byte_array_data_bytes.is_some());
+        let page_sizes = offset_index[0][0]
+            .unencoded_byte_array_data_bytes
+            .as_ref()
+            .unwrap();
+        assert_eq!(page_sizes.len(), 1);
+        assert_eq!(page_sizes[0], unenc_size);
+    }
+
+    #[test]
+    fn test_size_statistics_with_repetition_and_nulls() {
+        let message_type = "
+            message test_schema {
+                OPTIONAL group i32_list (LIST) {
+                    REPEATED group list {
+                        OPTIONAL INT32 element;
+                    }
+                }
+            }
+        ";
+        // column is:
+        // row 0: [1, 2]
+        // row 1: NULL
+        // row 2: [4, NULL]
+        // row 3: []
+        // row 4: [7, 8, 9, 10]
+        let schema = Arc::new(parse_message_type(message_type).unwrap());
+        let data = [1, 2, 4, 7, 8, 9, 10];
+        let def_levels = [3, 3, 0, 3, 2, 1, 3, 3, 3, 3];
+        let rep_levels = [0, 1, 0, 0, 1, 0, 0, 1, 1, 1];
+        let file = tempfile::tempfile().unwrap();
+        let props = Arc::new(
+            WriterProperties::builder()
+                .set_statistics_enabled(EnabledStatistics::Page)
+                .build(),
+        );
+        let mut writer = SerializedFileWriter::new(&file, schema, props).unwrap();
+        let mut row_group_writer = writer.next_row_group().unwrap();
+
+        let mut col_writer = row_group_writer.next_column().unwrap().unwrap();
+        col_writer
+            .typed::<Int32Type>()
+            .write_batch(&data, Some(&def_levels), Some(&rep_levels))
+            .unwrap();
+        col_writer.close().unwrap();
+        row_group_writer.close().unwrap();
+        let file_metadata = writer.close().unwrap();
+
+        assert_eq!(file_metadata.row_groups.len(), 1);
+        assert_eq!(file_metadata.row_groups[0].columns.len(), 1);
+        assert!(file_metadata.row_groups[0].columns[0].meta_data.is_some());
+
+        let check_def_hist = |def_hist: &[i64]| {
+            assert_eq!(def_hist.len(), 4);
+            assert_eq!(def_hist[0], 1);
+            assert_eq!(def_hist[1], 1);
+            assert_eq!(def_hist[2], 1);
+            assert_eq!(def_hist[3], 7);
+        };
+
+        let check_rep_hist = |rep_hist: &[i64]| {
+            assert_eq!(rep_hist.len(), 2);
+            assert_eq!(rep_hist[0], 5);
+            assert_eq!(rep_hist[1], 5);
+        };
+
+        // check that histograms are set properly in the write and read metadata
+        // also check that unencoded_byte_array_data_bytes is not set
+        assert!(file_metadata.row_groups[0].columns[0].meta_data.is_some());
+        let meta_data = file_metadata.row_groups[0].columns[0]
+            .meta_data
+            .as_ref()
+            .unwrap();
+        assert!(meta_data.size_statistics.is_some());
+        let size_stats = meta_data.size_statistics.as_ref().unwrap();
+        assert!(size_stats.repetition_level_histogram.is_some());
+        assert!(size_stats.definition_level_histogram.is_some());
+        assert!(size_stats.unencoded_byte_array_data_bytes.is_none());
+        check_def_hist(size_stats.definition_level_histogram.as_ref().unwrap());
+        check_rep_hist(size_stats.repetition_level_histogram.as_ref().unwrap());
+
+        // check that the read metadata is also correct
+        let options = ReadOptionsBuilder::new().with_page_index().build();
+        let reader = SerializedFileReader::new_with_options(file, options).unwrap();
+
+        let rfile_metadata = reader.metadata().file_metadata();
+        assert_eq!(rfile_metadata.num_rows(), file_metadata.num_rows);
+        assert_eq!(reader.num_row_groups(), 1);
+        let rowgroup = reader.get_row_group(0).unwrap();
+        assert_eq!(rowgroup.num_columns(), 1);
+        let column = rowgroup.metadata().column(0);
+        assert!(column.definition_level_histogram().is_some());
+        assert!(column.repetition_level_histogram().is_some());
+        assert!(column.unencoded_byte_array_data_bytes().is_none());
+        check_def_hist(column.definition_level_histogram().unwrap().values());
+        check_rep_hist(column.repetition_level_histogram().unwrap().values());
+
+        // check histogram in column index as well
+        assert!(reader.metadata().column_index().is_some());
+        let column_index = reader.metadata().column_index().unwrap();
+        assert_eq!(column_index.len(), 1);
+        assert_eq!(column_index[0].len(), 1);
+        let col_idx = if let Index::INT32(index) = &column_index[0][0] {
+            assert_eq!(index.indexes.len(), 1);
+            &index.indexes[0]
+        } else {
+            unreachable!()
+        };
+
+        check_def_hist(col_idx.definition_level_histogram().unwrap().values());
+        check_rep_hist(col_idx.repetition_level_histogram().unwrap().values());
+
+        assert!(reader.metadata().offset_index().is_some());
+        let offset_index = reader.metadata().offset_index().unwrap();
+        assert_eq!(offset_index.len(), 1);
+        assert_eq!(offset_index[0].len(), 1);
+        assert!(offset_index[0][0].unencoded_byte_array_data_bytes.is_none());
+    }
+
+    #[cfg(feature = "async")]
+    mod async_tests {
+        use std::sync::Arc;
+
+        use crate::file::footer::parse_metadata;
+        use crate::file::properties::{EnabledStatistics, WriterProperties};
+        use crate::file::reader::{FileReader, SerializedFileReader};
+        use crate::file::writer::ParquetMetadataWriter;
+        use crate::{
+            arrow::ArrowWriter,
+            file::{page_index::index::Index, serialized_reader::ReadOptionsBuilder},
+        };
+        use arrow_array::{ArrayRef, Int32Array, RecordBatch};
+        use arrow_schema::{DataType as ArrowDataType, Field, Schema};
+        use bytes::{BufMut, Bytes, BytesMut};
+
+        use super::{ColumnChunkMetaData, ParquetMetaData, RowGroupMetaData};
+
+        struct TestMetadata {
+            #[allow(dead_code)]
+            file_size: usize,
+            metadata: ParquetMetaData,
+        }
+
+        fn has_page_index(metadata: &ParquetMetaData) -> bool {
+            match metadata.column_index() {
+                Some(column_index) => column_index
+                    .iter()
+                    .any(|rg_idx| rg_idx.iter().all(|col_idx| !matches!(col_idx, Index::NONE))),
+                None => false,
+            }
+        }
+
+        #[test]
+        fn test_roundtrip_parquet_metadata_without_page_index() {
+            // We currently don't have an ad-hoc ParquetMetadata loader that can load page indexes so
+            // we at least test round trip without them
+            let metadata = get_test_metadata(false, false);
+            assert!(!has_page_index(&metadata.metadata));
+
+            let mut buf = BytesMut::new().writer();
+            {
+                let mut writer = ParquetMetadataWriter::new(&mut buf, &metadata.metadata);
+                writer.finish().unwrap();
+            }
+
+            let data = buf.into_inner().freeze();
+
+            let decoded_metadata = parse_metadata(&data).unwrap();
+            assert!(!has_page_index(&metadata.metadata));
+
+            assert_eq!(metadata.metadata, decoded_metadata);
+        }
+
+        fn get_test_metadata(write_page_index: bool, read_page_index: bool) -> TestMetadata {
+            let mut buf = BytesMut::new().writer();
+            let schema: Arc<Schema> = Arc::new(Schema::new(vec![Field::new(
+                "a",
+                ArrowDataType::Int32,
+                true,
+            )]));
+
+            let a: ArrayRef = Arc::new(Int32Array::from(vec![Some(1), None, Some(2)]));
+
+            let batch = RecordBatch::try_from_iter(vec![("a", a)]).unwrap();
+
+            let writer_props = match write_page_index {
+                true => WriterProperties::builder()
+                    .set_statistics_enabled(EnabledStatistics::Page)
+                    .build(),
+                false => WriterProperties::builder()
+                    .set_statistics_enabled(EnabledStatistics::Chunk)
+                    .build(),
+            };
+
+            let mut writer = ArrowWriter::try_new(&mut buf, schema, Some(writer_props)).unwrap();
+            writer.write(&batch).unwrap();
+            writer.close().unwrap();
+
+            let data = buf.into_inner().freeze();
+
+            let reader_opts = match read_page_index {
+                true => ReadOptionsBuilder::new().with_page_index().build(),
+                false => ReadOptionsBuilder::new().build(),
+            };
+            let reader = SerializedFileReader::new_with_options(data.clone(), reader_opts).unwrap();
+            let metadata = reader.metadata().clone();
+            TestMetadata {
+                file_size: data.len(),
+                metadata,
+            }
+        }
+
+        /// Temporary function so we can test loading metadata with page indexes
+        /// while we haven't fully figured out how to load it cleanly
+        async fn load_metadata_from_bytes(file_size: usize, data: Bytes) -> ParquetMetaData {
+            use crate::arrow::async_reader::{MetadataFetch, MetadataLoader};
+            use crate::errors::Result as ParquetResult;
+            use bytes::Bytes;
+            use futures::future::BoxFuture;
+            use futures::FutureExt;
+            use std::ops::Range;
+
+            /// Adapt a `Bytes` to a `MetadataFetch` implementation.
+            struct AsyncBytes {
+                data: Bytes,
+            }
+
+            impl AsyncBytes {
+                fn new(data: Bytes) -> Self {
+                    Self { data }
+                }
+            }
+
+            impl MetadataFetch for AsyncBytes {
+                fn fetch(&mut self, range: Range<usize>) -> BoxFuture<'_, ParquetResult<Bytes>> {
+                    async move { Ok(self.data.slice(range.start..range.end)) }.boxed()
+                }
+            }
+
+            /// A `MetadataFetch` implementation that reads from a subset of the full data
+            /// while accepting ranges that address the full data.
+            struct MaskedBytes {
+                inner: Box<dyn MetadataFetch + Send>,
+                inner_range: Range<usize>,
+            }
+
+            impl MaskedBytes {
+                fn new(inner: Box<dyn MetadataFetch + Send>, inner_range: Range<usize>) -> Self {
+                    Self { inner, inner_range }
+                }
+            }
+
+            impl MetadataFetch for &mut MaskedBytes {
+                fn fetch(&mut self, range: Range<usize>) -> BoxFuture<'_, ParquetResult<Bytes>> {
+                    let inner_range = self.inner_range.clone();
+                    println!("inner_range: {:?}", inner_range);
+                    println!("range: {:?}", range);
+                    assert!(inner_range.start <= range.start && inner_range.end >= range.end);
+                    let range =
+                        range.start - self.inner_range.start..range.end - self.inner_range.start;
+                    self.inner.fetch(range)
+                }
+            }
+
+            let metadata_length = data.len();
+            let mut reader = MaskedBytes::new(
+                Box::new(AsyncBytes::new(data)),
+                file_size - metadata_length..file_size,
+            );
+            let metadata = MetadataLoader::load(&mut reader, file_size, None)
+                .await
+                .unwrap();
+            let loaded_metadata = metadata.finish();
+            let mut metadata = MetadataLoader::new(&mut reader, loaded_metadata);
+            metadata.load_page_index(true, true).await.unwrap();
+            metadata.finish()
+        }
+
+        fn check_columns_are_equivalent(left: &ColumnChunkMetaData, right: &ColumnChunkMetaData) {
+            assert_eq!(left.column_descr(), right.column_descr());
+            assert_eq!(left.encodings(), right.encodings());
+            assert_eq!(left.num_values(), right.num_values());
+            assert_eq!(left.compressed_size(), right.compressed_size());
+            assert_eq!(left.data_page_offset(), right.data_page_offset());
+            assert_eq!(left.statistics(), right.statistics());
+            assert_eq!(left.offset_index_length(), right.offset_index_length());
+            assert_eq!(left.column_index_length(), right.column_index_length());
+            assert_eq!(
+                left.unencoded_byte_array_data_bytes(),
+                right.unencoded_byte_array_data_bytes()
+            );
+        }
+
+        fn check_row_groups_are_equivalent(left: &RowGroupMetaData, right: &RowGroupMetaData) {
+            assert_eq!(left.num_rows(), right.num_rows());
+            assert_eq!(left.file_offset(), right.file_offset());
+            assert_eq!(left.total_byte_size(), right.total_byte_size());
+            assert_eq!(left.schema_descr(), right.schema_descr());
+            assert_eq!(left.num_columns(), right.num_columns());
+            left.columns()
+                .iter()
+                .zip(right.columns().iter())
+                .for_each(|(lc, rc)| {
+                    check_columns_are_equivalent(lc, rc);
+                });
+        }
+
+        #[tokio::test]
+        async fn test_encode_parquet_metadata_with_page_index() {
+            // Create a ParquetMetadata with page index information
+            let metadata = get_test_metadata(true, true);
+            assert!(has_page_index(&metadata.metadata));
+
+            let mut buf = BytesMut::new().writer();
+            {
+                let mut writer = ParquetMetadataWriter::new(&mut buf, &metadata.metadata);
+                writer.finish().unwrap();
+            }
+
+            let data = buf.into_inner().freeze();
+
+            let decoded_metadata = load_metadata_from_bytes(data.len(), data).await;
+
+            // Because the page index offsets will differ, compare invariant parts of the metadata
+            assert_eq!(
+                metadata.metadata.file_metadata(),
+                decoded_metadata.file_metadata()
+            );
+            assert_eq!(
+                metadata.metadata.column_index(),
+                decoded_metadata.column_index()
+            );
+            assert_eq!(
+                metadata.metadata.offset_index(),
+                decoded_metadata.offset_index()
+            );
+            assert_eq!(
+                metadata.metadata.num_row_groups(),
+                decoded_metadata.num_row_groups()
+            );
+
+            metadata
+                .metadata
+                .row_groups()
+                .iter()
+                .zip(decoded_metadata.row_groups().iter())
+                .for_each(|(left, right)| {
+                    check_row_groups_are_equivalent(left, right);
+                });
+        }
+    }
+
+    #[test]
+    #[cfg(feature = "arrow")]
+    fn test_byte_stream_split_extended_roundtrip() {
+        let path = format!(
+            "{}/byte_stream_split_extended.gzip.parquet",
+            arrow::util::test_util::parquet_test_data(),
+        );
+        let file = File::open(path).unwrap();
+
+        // Read in test file and rewrite to tmp
+        let parquet_reader = ParquetRecordBatchReaderBuilder::try_new(file)
+            .expect("parquet open")
+            .build()
+            .expect("parquet open");
+
+        let file = tempfile::tempfile().unwrap();
+        let props = WriterProperties::builder()
+            .set_dictionary_enabled(false)
+            .set_column_encoding(
+                ColumnPath::from("float16_byte_stream_split"),
+                Encoding::BYTE_STREAM_SPLIT,
+            )
+            .set_column_encoding(
+                ColumnPath::from("float_byte_stream_split"),
+                Encoding::BYTE_STREAM_SPLIT,
+            )
+            .set_column_encoding(
+                ColumnPath::from("double_byte_stream_split"),
+                Encoding::BYTE_STREAM_SPLIT,
+            )
+            .set_column_encoding(
+                ColumnPath::from("int32_byte_stream_split"),
+                Encoding::BYTE_STREAM_SPLIT,
+            )
+            .set_column_encoding(
+                ColumnPath::from("int64_byte_stream_split"),
+                Encoding::BYTE_STREAM_SPLIT,
+            )
+            .set_column_encoding(
+                ColumnPath::from("flba5_byte_stream_split"),
+                Encoding::BYTE_STREAM_SPLIT,
+            )
+            .set_column_encoding(
+                ColumnPath::from("decimal_byte_stream_split"),
+                Encoding::BYTE_STREAM_SPLIT,
+            )
+            .build();
+
+        let mut parquet_writer = ArrowWriter::try_new(
+            file.try_clone().expect("cannot open file"),
+            parquet_reader.schema(),
+            Some(props),
+        )
+        .expect("create arrow writer");
+
+        for maybe_batch in parquet_reader {
+            let batch = maybe_batch.expect("reading batch");
+            parquet_writer.write(&batch).expect("writing data");
+        }
+
+        parquet_writer.close().expect("finalizing file");
+
+        let reader = SerializedFileReader::new(file).expect("Failed to create reader");
+        let filemeta = reader.metadata();
+
+        // Make sure byte_stream_split encoding was used
+        let check_encoding = |x: usize, filemeta: &ParquetMetaData| {
+            assert!(filemeta
+                .row_group(0)
+                .column(x)
+                .encodings()
+                .contains(&Encoding::BYTE_STREAM_SPLIT));
+        };
+
+        check_encoding(1, filemeta);
+        check_encoding(3, filemeta);
+        check_encoding(5, filemeta);
+        check_encoding(7, filemeta);
+        check_encoding(9, filemeta);
+        check_encoding(11, filemeta);
+        check_encoding(13, filemeta);
+
+        // Read back tmpfile and make sure all values are correct
+        let mut iter = reader
+            .get_row_iter(None)
+            .expect("Failed to create row iterator");
+
+        let mut start = 0;
+        let end = reader.metadata().file_metadata().num_rows();
+
+        let check_row = |row: Result<Row, ParquetError>| {
+            assert!(row.is_ok());
+            let r = row.unwrap();
+            assert_eq!(r.get_float16(0).unwrap(), r.get_float16(1).unwrap());
+            assert_eq!(r.get_float(2).unwrap(), r.get_float(3).unwrap());
+            assert_eq!(r.get_double(4).unwrap(), r.get_double(5).unwrap());
+            assert_eq!(r.get_int(6).unwrap(), r.get_int(7).unwrap());
+            assert_eq!(r.get_long(8).unwrap(), r.get_long(9).unwrap());
+            assert_eq!(r.get_bytes(10).unwrap(), r.get_bytes(11).unwrap());
+            assert_eq!(r.get_decimal(12).unwrap(), r.get_decimal(13).unwrap());
+        };
+
+        while start < end {
+            match iter.next() {
+                Some(row) => check_row(row),
+                None => break,
+            };
+            start += 1;
+        }
     }
 }

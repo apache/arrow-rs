@@ -22,6 +22,7 @@
 //! read the documentation there before using this API.
 //!
 //! Here is an example for using [`AsyncArrowWriter`]:
+//!
 //! ```
 //! # #[tokio::main(flavor="current_thread")]
 //! # async fn main() {
@@ -49,12 +50,19 @@
 //! assert_eq!(to_write, read);
 //! # }
 //! ```
+//!
+//! [`object_store`] provides it's native implementation of [`AsyncFileWriter`] by [`ParquetObjectWriter`].
+
+#[cfg(feature = "object_store")]
+mod store;
+#[cfg(feature = "object_store")]
+pub use store::*;
 
 use crate::{
     arrow::arrow_writer::ArrowWriterOptions,
     arrow::ArrowWriter,
     errors::{ParquetError, Result},
-    file::{metadata::RowGroupMetaDataPtr, properties::WriterProperties},
+    file::{metadata::RowGroupMetaData, properties::WriterProperties},
     format::{FileMetaData, KeyValue},
 };
 use arrow_array::RecordBatch;
@@ -65,7 +73,7 @@ use futures::FutureExt;
 use std::mem;
 use tokio::io::{AsyncWrite, AsyncWriteExt};
 
-/// The asynchronous interface used by [`AsyncArrowWriter`] to write parquet files
+/// The asynchronous interface used by [`AsyncArrowWriter`] to write parquet files.
 pub trait AsyncFileWriter: Send {
     /// Write the provided bytes to the underlying writer
     ///
@@ -172,7 +180,7 @@ impl<W: AsyncFileWriter> AsyncArrowWriter<W> {
     }
 
     /// Returns metadata for any flushed row groups
-    pub fn flushed_row_groups(&self) -> &[RowGroupMetaDataPtr] {
+    pub fn flushed_row_groups(&self) -> &[RowGroupMetaData] {
         self.sync_writer.flushed_row_groups()
     }
 

@@ -122,7 +122,7 @@ pub fn multiply_fixed_point_checked(
         let mut mul = a.wrapping_mul(b);
         mul = divide_and_round::<Decimal256Type>(mul, divisor);
         mul.to_i128().ok_or_else(|| {
-            ArrowError::ComputeError(format!("Overflow happened on: {:?} * {:?}", a, b))
+            ArrowError::ArithmeticOverflow(format!("Overflow happened on: {:?} * {:?}", a, b))
         })
     })
     .and_then(|a| a.with_precision_and_scale(precision, required_scale))
@@ -323,7 +323,7 @@ mod tests {
 
         // `multiply` overflows on this case.
         let err = mul(&a, &b).unwrap_err();
-        assert_eq!(err.to_string(), "Compute error: Overflow happened on: 123456789000000000000000000 * 10000000000000000000");
+        assert_eq!(err.to_string(), "Arithmetic overflow: Overflow happened on: 123456789000000000000000000 * 10000000000000000000");
 
         // Avoid overflow by reducing the scale.
         let result = multiply_fixed_point(&a, &b, 28).unwrap();

@@ -114,6 +114,7 @@ pub use self::async_reader::ParquetRecordBatchStreamBuilder;
 #[cfg(feature = "async")]
 pub use self::async_writer::AsyncArrowWriter;
 use crate::schema::types::SchemaDescriptor;
+use arrow_schema::{FieldRef, Schema};
 
 pub use self::schema::{
     arrow_to_parquet_schema, parquet_to_arrow_field_levels, parquet_to_arrow_schema,
@@ -209,4 +210,29 @@ impl ProjectionMask {
     pub fn leaf_included(&self, leaf_idx: usize) -> bool {
         self.mask.as_ref().map(|m| m[leaf_idx]).unwrap_or(true)
     }
+}
+
+/// Lookups up the parquet column by name
+///
+/// Returns the parquet column index and the corresponding arrow field
+pub fn parquet_column<'a>(
+    parquet_schema: &SchemaDescriptor,
+    arrow_schema: &'a Schema,
+    name: &str,
+) -> Option<(usize, &'a FieldRef)> {
+    let (root_idx, field) = arrow_schema.fields.find(name)?;
+    if field.data_type().is_nested() {
+        // Nested fields are not supported and require non-trivial logic
+        // to correctly walk the parquet schema accounting for the
+        // logical type rules - <https://github.com/apache/parquet-format/blob/master/LogicalTypes.md>
+        //
+        // For example a ListArray could correspond to anything from 1 to 3 levels
+        // in the parquet schema
+        return None;
+    }
+
+    // This could be made more efficient (#TBD)
+    let parquet_idx = (0..parquet_schema.columns().len())
+        .find(|x| parquet_schema.get_column_root_idx(*x) == root_idx)?;
+    Some((parquet_idx, field))
 }

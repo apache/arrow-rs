@@ -34,11 +34,11 @@ use std::sync::Arc;
 /// # Arguments
 ///
 /// * `start` - The start index of all substrings.
-/// If `start >= 0`, then count from the start of the string,
-/// otherwise count from the end of the string.
+///   If `start >= 0`, then count from the start of the string,
+///   otherwise count from the end of the string.
 ///
 /// * `length`(option) - The length of all substrings.
-/// If `length` is [None], then the substring is from `start` to the end of the string.
+///   If `length` is [None], then the substring is from `start` to the end of the string.
 ///
 /// Attention: Both `start` and `length` are counted by byte, not by char.
 ///
@@ -53,10 +53,13 @@ use std::sync::Arc;
 /// ```
 ///
 /// # Error
-/// - The function errors when the passed array is not a [`GenericStringArray`], [`GenericBinaryArray`], [`FixedSizeBinaryArray`]
-///   or [`DictionaryArray`] with supported array type as its value type.
-/// - The function errors if the offset of a substring in the input array is at invalid char boundary (only for \[Large\]String array).
-/// It is recommended to use [`substring_by_char`] if the input array may contain non-ASCII chars.
+/// - The function errors when the passed array is not a [`GenericStringArray`],
+///   [`GenericBinaryArray`], [`FixedSizeBinaryArray`] or [`DictionaryArray`]
+///   with supported array type as its value type.
+/// - The function errors if the offset of a substring in the input array is
+///   at invalid char boundary (only for \[Large\]String array).
+///   It is recommended to use [`substring_by_char`] if the input array may
+///   contain non-ASCII chars.
 ///
 /// ## Example of trying to get an invalid utf-8 format substring
 /// ```
@@ -155,22 +158,25 @@ pub fn substring(
     }
 }
 
+/// Substrings based on character index
+///
 /// # Arguments
 /// * `array` - The input string array
 ///
 /// * `start` - The start index of all substrings.
-/// If `start >= 0`, then count from the start of the string,
-/// otherwise count from the end of the string.
+///   If `start >= 0`, then count from the start of the string,
+///   otherwise count from the end of the string.
 ///
 /// * `length`(option) - The length of all substrings.
-/// If `length` is `None`, then the substring is from `start` to the end of the string.
+///   If `length` is `None`, then the substring is from `start` to the end of the string.
 ///
 /// Attention: Both `start` and `length` are counted by char.
 ///
 /// # Performance
-/// This function is slower than [substring].
-/// Theoretically, the time complexity is `O(n)` where `n` is the length of the value buffer.
-/// It is recommended to use [substring] if the input array only contains ASCII chars.
+///
+/// This function is slower than [substring]. Theoretically, the time complexity
+/// is `O(n)` where `n` is the length of the value buffer. It is recommended to
+/// use [substring] if the input array only contains ASCII chars.
 ///
 /// # Basic usage
 /// ```
@@ -396,7 +402,7 @@ mod tests {
     /// A helper macro to test the substring functions.
     /// # Arguments
     /// * `cases` - The test cases which is a vector of `(input, start, len, result)`.
-    /// Please look at [`gen_test_cases`] to find how to generate it.
+    ///   Please look at [`gen_test_cases`] to find how to generate it.
     /// * `array_ty` - The array type.
     /// * `substring_fn` - Either [`substring`] or [`substring_by_char`].
     macro_rules! do_test {

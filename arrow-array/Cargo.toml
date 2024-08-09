@@ -52,6 +52,7 @@ hashbrown = { version = "0.14.2", default-features = false }
 
 [features]
 ffi = ["arrow-schema/ffi", "arrow-data/ffi"]
+force_validate = []
 
 [dev-dependencies]
 rand = { version = "0.8", default-features = false, features = ["std", "std_rng"] }

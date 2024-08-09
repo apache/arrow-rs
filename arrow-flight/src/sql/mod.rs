@@ -49,6 +49,7 @@ mod gen {
     include!("arrow.flight.protocol.sql.rs");
 }
 
+pub use gen::action_end_transaction_request::EndTransaction;
 pub use gen::ActionBeginSavepointRequest;
 pub use gen::ActionBeginSavepointResult;
 pub use gen::ActionBeginTransactionRequest;

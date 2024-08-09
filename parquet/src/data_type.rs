@@ -644,6 +644,13 @@ pub(crate) mod private {
             (std::mem::size_of::<Self>(), 1)
         }
 
+        /// Return the number of variable length bytes in a given slice of data
+        ///
+        /// Returns the sum of lengths for BYTE_ARRAY data, and None for all other data types
+        fn variable_length_bytes(_: &[Self]) -> Option<i64> {
+            None
+        }
+
         /// Return the value as i64 if possible
         ///
         /// This is essentially the same as `std::convert::TryInto<i64>` but can't be
@@ -954,6 +961,10 @@ pub(crate) mod private {
             decoder.num_values -= num_values;
 
             Ok(num_values)
+        }
+
+        fn variable_length_bytes(values: &[Self]) -> Option<i64> {
+            Some(values.iter().map(|x| x.len() as i64).sum())
         }
 
         fn skip(decoder: &mut PlainDecoderDetails, num_values: usize) -> Result<usize> {

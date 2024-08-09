@@ -42,6 +42,7 @@ use crate::schema::types::SchemaDescriptor;
 
 mod filter;
 mod selection;
+pub mod statistics;
 
 /// Builder for constructing parquet readers into arrow.
 ///
@@ -352,11 +353,11 @@ impl ArrowReaderOptions {
 /// This structure allows
 ///
 /// 1. Loading metadata for a file once and then using that same metadata to
-/// construct multiple separate readers, for example, to distribute readers
-/// across multiple threads
+///    construct multiple separate readers, for example, to distribute readers
+///    across multiple threads
 ///
 /// 2. Using a cached copy of the [`ParquetMetadata`] rather than reading it
-/// from the file each time a reader is constructed.
+///    from the file each time a reader is constructed.
 ///
 /// [`ParquetMetadata`]: crate::file::metadata::ParquetMetaData
 #[derive(Debug, Clone)]
@@ -393,7 +394,7 @@ impl ArrowReaderMetadata {
             let offset_index = metadata
                 .row_groups()
                 .iter()
-                .map(|rg| index_reader::read_pages_locations(reader, rg.columns()))
+                .map(|rg| index_reader::read_offset_indexes(reader, rg.columns()))
                 .collect::<Result<Vec<_>>>()?;
 
             metadata.set_offset_index(Some(offset_index))
@@ -552,10 +553,10 @@ impl<T: ChunkReader + 'static> ParquetRecordBatchReaderBuilder<T> {
     /// This interface allows:
     ///
     /// 1. Loading metadata once and using it to create multiple builders with
-    /// potentially different settings or run on different threads
+    ///    potentially different settings or run on different threads
     ///
     /// 2. Using a cached copy of the metadata rather than re-reading it from the
-    /// file each time a reader is constructed.
+    ///    file each time a reader is constructed.
     ///
     /// See the docs on [`ArrowReaderMetadata`] for more details
     ///
@@ -688,7 +689,7 @@ impl<T: ChunkReader + 'static> Iterator for ReaderPageIterator<T> {
         // To avoid `i[rg_idx][self.oolumn_idx`] panic, we need to filter out empty `i[rg_idx]`.
         let page_locations = offset_index
             .filter(|i| !i[rg_idx].is_empty())
-            .map(|i| i[rg_idx][self.column_idx].clone());
+            .map(|i| i[rg_idx][self.column_idx].page_locations.clone());
         let total_rows = rg.num_rows() as usize;
         let reader = self.reader.clone();
 
@@ -1058,6 +1059,7 @@ mod tests {
                 Encoding::PLAIN,
                 Encoding::RLE_DICTIONARY,
                 Encoding::DELTA_BINARY_PACKED,
+                Encoding::BYTE_STREAM_SPLIT,
             ],
         );
         run_single_column_reader_tests::<Int64Type, _, Int64Type>(
@@ -1069,6 +1071,7 @@ mod tests {
                 Encoding::PLAIN,
                 Encoding::RLE_DICTIONARY,
                 Encoding::DELTA_BINARY_PACKED,
+                Encoding::BYTE_STREAM_SPLIT,
             ],
         );
         run_single_column_reader_tests::<FloatType, _, FloatType>(
@@ -1638,6 +1641,86 @@ mod tests {
             }
         }
         assert_eq!(row_count, 300);
+    }
+
+    #[test]
+    fn test_read_extended_byte_stream_split() {
+        let path = format!(
+            "{}/byte_stream_split_extended.gzip.parquet",
+            arrow::util::test_util::parquet_test_data(),
+        );
+        let file = File::open(path).unwrap();
+        let record_reader = ParquetRecordBatchReader::try_new(file, 128).unwrap();
+
+        let mut row_count = 0;
+        for batch in record_reader {
+            let batch = batch.unwrap();
+            row_count += batch.num_rows();
+
+            // 0,1 are f16
+            let f16_col = batch.column(0).as_primitive::<Float16Type>();
+            let f16_bss = batch.column(1).as_primitive::<Float16Type>();
+            assert_eq!(f16_col.len(), f16_bss.len());
+            f16_col
+                .iter()
+                .zip(f16_bss.iter())
+                .for_each(|(l, r)| assert_eq!(l.unwrap(), r.unwrap()));
+
+            // 2,3 are f32
+            let f32_col = batch.column(2).as_primitive::<Float32Type>();
+            let f32_bss = batch.column(3).as_primitive::<Float32Type>();
+            assert_eq!(f32_col.len(), f32_bss.len());
+            f32_col
+                .iter()
+                .zip(f32_bss.iter())
+                .for_each(|(l, r)| assert_eq!(l.unwrap(), r.unwrap()));
+
+            // 4,5 are f64
+            let f64_col = batch.column(4).as_primitive::<Float64Type>();
+            let f64_bss = batch.column(5).as_primitive::<Float64Type>();
+            assert_eq!(f64_col.len(), f64_bss.len());
+            f64_col
+                .iter()
+                .zip(f64_bss.iter())
+                .for_each(|(l, r)| assert_eq!(l.unwrap(), r.unwrap()));
+
+            // 6,7 are i32
+            let i32_col = batch.column(6).as_primitive::<types::Int32Type>();
+            let i32_bss = batch.column(7).as_primitive::<types::Int32Type>();
+            assert_eq!(i32_col.len(), i32_bss.len());
+            i32_col
+                .iter()
+                .zip(i32_bss.iter())
+                .for_each(|(l, r)| assert_eq!(l.unwrap(), r.unwrap()));
+
+            // 8,9 are i64
+            let i64_col = batch.column(8).as_primitive::<types::Int64Type>();
+            let i64_bss = batch.column(9).as_primitive::<types::Int64Type>();
+            assert_eq!(i64_col.len(), i64_bss.len());
+            i64_col
+                .iter()
+                .zip(i64_bss.iter())
+                .for_each(|(l, r)| assert_eq!(l.unwrap(), r.unwrap()));
+
+            // 10,11 are FLBA(5)
+            let flba_col = batch.column(10).as_fixed_size_binary();
+            let flba_bss = batch.column(11).as_fixed_size_binary();
+            assert_eq!(flba_col.len(), flba_bss.len());
+            flba_col
+                .iter()
+                .zip(flba_bss.iter())
+                .for_each(|(l, r)| assert_eq!(l.unwrap(), r.unwrap()));
+
+            // 12,13 are FLBA(4) (decimal(7,3))
+            let dec_col = batch.column(12).as_primitive::<Decimal128Type>();
+            let dec_bss = batch.column(13).as_primitive::<Decimal128Type>();
+            assert_eq!(dec_col.len(), dec_bss.len());
+            dec_col
+                .iter()
+                .zip(dec_bss.iter())
+                .for_each(|(l, r)| assert_eq!(l.unwrap(), r.unwrap()));
+        }
+        assert_eq!(row_count, 200);
     }
 
     #[test]

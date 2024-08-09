@@ -63,7 +63,7 @@ macro_rules! dict_helper {
 ///   values array 1
 /// ```
 ///
-/// For selecting values by index from a single array see [`crate::interleave`]
+/// For selecting values by index from a single array see [`crate::take`]
 pub fn interleave(
     values: &[&dyn Array],
     indices: &[(usize, usize)],

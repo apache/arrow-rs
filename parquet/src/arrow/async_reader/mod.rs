@@ -106,9 +106,10 @@ use crate::column::page::{PageIterator, PageReader};
 use crate::errors::{ParquetError, Result};
 use crate::file::footer::{decode_footer, decode_metadata};
 use crate::file::metadata::{ParquetMetaData, RowGroupMetaData};
+use crate::file::page_index::offset_index::OffsetIndexMetaData;
 use crate::file::reader::{ChunkReader, Length, SerializedPageReader};
 use crate::file::FOOTER_SIZE;
-use crate::format::{BloomFilterAlgorithm, BloomFilterCompression, BloomFilterHash, PageLocation};
+use crate::format::{BloomFilterAlgorithm, BloomFilterCompression, BloomFilterHash};
 
 mod metadata;
 pub use metadata::*;
@@ -489,7 +490,7 @@ where
         // TODO: calling build_array multiple times is wasteful
 
         let meta = self.metadata.row_group(row_group_idx);
-        let page_locations = self
+        let offset_index = self
             .metadata
             .offset_index()
             .map(|x| x[row_group_idx].as_slice());
@@ -499,7 +500,7 @@ where
             // schema: meta.schema_descr_ptr(),
             row_count: meta.num_rows() as usize,
             column_chunks: vec![None; meta.columns().len()],
-            page_locations,
+            offset_index,
         };
 
         if let Some(filter) = self.filter.as_mut() {
@@ -703,7 +704,7 @@ where
 /// An in-memory collection of column chunks
 struct InMemoryRowGroup<'a> {
     metadata: &'a RowGroupMetaData,
-    page_locations: Option<&'a [Vec<PageLocation>]>,
+    offset_index: Option<&'a [OffsetIndexMetaData]>,
     column_chunks: Vec<Option<Arc<ColumnChunkData>>>,
     row_count: usize,
 }
@@ -716,7 +717,7 @@ impl<'a> InMemoryRowGroup<'a> {
         projection: &ProjectionMask,
         selection: Option<&RowSelection>,
     ) -> Result<()> {
-        if let Some((selection, page_locations)) = selection.zip(self.page_locations) {
+        if let Some((selection, offset_index)) = selection.zip(self.offset_index) {
             // If we have a `RowSelection` and an `OffsetIndex` then only fetch pages required for the
             // `RowSelection`
             let mut page_start_offsets: Vec<Vec<usize>> = vec![];
@@ -734,14 +735,14 @@ impl<'a> InMemoryRowGroup<'a> {
                     // then we need to also fetch a dictionary page.
                     let mut ranges = vec![];
                     let (start, _len) = chunk_meta.byte_range();
-                    match page_locations[idx].first() {
+                    match offset_index[idx].page_locations.first() {
                         Some(first) if first.offset as u64 != start => {
                             ranges.push(start as usize..first.offset as usize);
                         }
                         _ => (),
                     }
 
-                    ranges.extend(selection.scan_ranges(&page_locations[idx]));
+                    ranges.extend(selection.scan_ranges(&offset_index[idx].page_locations));
                     page_start_offsets.push(ranges.iter().map(|range| range.start).collect());
 
                     ranges
@@ -812,7 +813,9 @@ impl<'a> RowGroups for InMemoryRowGroup<'a> {
                 "Invalid column index {i}, column was not fetched"
             ))),
             Some(data) => {
-                let page_locations = self.page_locations.map(|index| index[i].clone());
+                let page_locations = self
+                    .offset_index
+                    .map(|index| index[i].page_locations.clone());
                 let page_reader: Box<dyn PageReader> = Box::new(SerializedPageReader::new(
                     data.clone(),
                     self.metadata.column(i),
@@ -1529,7 +1532,7 @@ mod tests {
         let metadata = parse_metadata(&data).unwrap();
 
         let offset_index =
-            index_reader::read_pages_locations(&data, metadata.row_group(0).columns())
+            index_reader::read_offset_indexes(&data, metadata.row_group(0).columns())
                 .expect("reading offset index");
 
         let row_group_meta = metadata.row_group(0).clone();
@@ -1574,7 +1577,7 @@ mod tests {
         };
 
         let mut skip = true;
-        let mut pages = offset_index[0].iter().peekable();
+        let mut pages = offset_index[0].page_locations.iter().peekable();
 
         // Setup `RowSelection` so that we can skip every other page, selecting the last page
         let mut selectors = vec![];

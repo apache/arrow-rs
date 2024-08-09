@@ -46,7 +46,7 @@ use super::ByteArrayType;
 /// `N` elements is stored as `N` fixed length "views" and a variable number
 /// of variable length "buffers".
 ///
-/// Each view is a `u128` value  layout is different depending on the
+/// Each view is a `u128` value whose layout is different depending on the
 /// length of the string stored at that location:
 ///
 /// ```text
@@ -66,7 +66,7 @@ use super::ByteArrayType;
 /// * Strings with length <= 12 are stored directly in the view.
 ///
 /// * Strings with length > 12: The first four bytes are stored inline in the
-/// view and the entire string is stored in one of the buffers.
+///   view and the entire string is stored in one of the buffers.
 ///
 /// Unlike [`GenericByteArray`], there are no constraints on the offsets other
 /// than they must point into a valid buffer. However, they can be out of order,
@@ -324,15 +324,77 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
     /// Note that it will copy the array regardless of whether the original array is compact.
     /// Use with caution as this can be an expensive operation, only use it when you are sure that the view
     /// array is significantly smaller than when it is originally created, e.g., after filtering or slicing.
+    ///
+    /// Note: this function does not attempt to canonicalize / deduplicate values. For this
+    /// feature see  [`GenericByteViewBuilder::with_deduplicate_strings`].
     pub fn gc(&self) -> Self {
-        let mut builder =
-            GenericByteViewBuilder::<T>::with_capacity(self.len()).with_deduplicate_strings();
+        let mut builder = GenericByteViewBuilder::<T>::with_capacity(self.len());
 
         for v in self.iter() {
             builder.append_option(v);
         }
 
         builder.finish()
+    }
+
+    /// Comparing two [`GenericByteViewArray`] at index `left_idx` and `right_idx`
+    ///
+    /// Comparing two ByteView types are non-trivial.
+    /// It takes a bit of patience to understand why we don't just compare two &[u8] directly.
+    ///
+    /// ByteView types give us the following two advantages, and we need to be careful not to lose them:
+    /// (1) For string/byte smaller than 12 bytes, the entire data is inlined in the view.
+    ///     Meaning that reading one array element requires only one memory access
+    ///     (two memory access required for StringArray, one for offset buffer, the other for value buffer).
+    ///
+    /// (2) For string/byte larger than 12 bytes, we can still be faster than (for certain operations) StringArray/ByteArray,
+    ///     thanks to the inlined 4 bytes.
+    ///     Consider equality check:
+    ///     If the first four bytes of the two strings are different, we can return false immediately (with just one memory access).
+    ///
+    /// If we directly compare two &[u8], we materialize the entire string (i.e., make multiple memory accesses), which might be unnecessary.
+    /// - Most of the time (eq, ord), we only need to look at the first 4 bytes to know the answer,
+    ///   e.g., if the inlined 4 bytes are different, we can directly return unequal without looking at the full string.
+    ///
+    /// # Order check flow
+    /// (1) if both string are smaller than 12 bytes, we can directly compare the data inlined to the view.
+    /// (2) if any of the string is larger than 12 bytes, we need to compare the full string.
+    ///     (2.1) if the inlined 4 bytes are different, we can return the result immediately.
+    ///     (2.2) o.w., we need to compare the full string.
+    ///
+    /// # Safety
+    /// The left/right_idx must within range of each array
+    pub unsafe fn compare_unchecked(
+        left: &GenericByteViewArray<T>,
+        left_idx: usize,
+        right: &GenericByteViewArray<T>,
+        right_idx: usize,
+    ) -> std::cmp::Ordering {
+        let l_view = left.views().get_unchecked(left_idx);
+        let l_len = *l_view as u32;
+
+        let r_view = right.views().get_unchecked(right_idx);
+        let r_len = *r_view as u32;
+
+        if l_len <= 12 && r_len <= 12 {
+            let l_data = unsafe { GenericByteViewArray::<T>::inline_value(l_view, l_len as usize) };
+            let r_data = unsafe { GenericByteViewArray::<T>::inline_value(r_view, r_len as usize) };
+            return l_data.cmp(r_data);
+        }
+
+        // one of the string is larger than 12 bytes,
+        // we then try to compare the inlined data first
+        let l_inlined_data = unsafe { GenericByteViewArray::<T>::inline_value(l_view, 4) };
+        let r_inlined_data = unsafe { GenericByteViewArray::<T>::inline_value(r_view, 4) };
+        if r_inlined_data != l_inlined_data {
+            return l_inlined_data.cmp(r_inlined_data);
+        }
+
+        // unfortunately, we need to compare the full data
+        let l_full_data: &[u8] = unsafe { left.value_unchecked(left_idx).as_ref() };
+        let r_full_data: &[u8] = unsafe { right.value_unchecked(right_idx).as_ref() };
+
+        l_full_data.cmp(r_full_data)
     }
 }
 
@@ -695,7 +757,7 @@ mod tests {
     fn test_in_progress_recreation() {
         let array = {
             // make a builder with small block size.
-            let mut builder = StringViewBuilder::new().with_block_size(14);
+            let mut builder = StringViewBuilder::new().with_fixed_block_size(14);
             builder.append_value("large payload over 12 bytes");
             builder.append_option(Some("another large payload over 12 bytes that double than the first one, so that we can trigger the in_progress in builder re-created"));
             builder.finish()
@@ -786,7 +848,7 @@ mod tests {
         ];
 
         let array = {
-            let mut builder = StringViewBuilder::new().with_block_size(8); // create multiple buffers
+            let mut builder = StringViewBuilder::new().with_fixed_block_size(8); // create multiple buffers
             test_data.into_iter().for_each(|v| builder.append_option(v));
             builder.finish()
         };
