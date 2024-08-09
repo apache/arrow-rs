@@ -1397,7 +1397,7 @@ mod tests {
                 encoding: Encoding::DELTA_BINARY_PACKED,
                 def_level_encoding: Encoding::RLE,
                 rep_level_encoding: Encoding::RLE,
-                statistics: Some(Statistics::int32(Some(1), Some(3), None, 7, true)),
+                statistics: Some(Statistics::int32(Some(1), Some(3), None, Some(7), true)),
             },
             Page::DataPageV2 {
                 buf: Bytes::from(vec![4; 128]),
@@ -1408,7 +1408,7 @@ mod tests {
                 def_levels_byte_len: 24,
                 rep_levels_byte_len: 32,
                 is_compressed: false,
-                statistics: Some(Statistics::int32(Some(1), Some(3), None, 7, true)),
+                statistics: Some(Statistics::int32(Some(1), Some(3), None, Some(7), true)),
             },
         ];
 
@@ -1431,7 +1431,7 @@ mod tests {
                 encoding: Encoding::DELTA_BINARY_PACKED,
                 def_level_encoding: Encoding::RLE,
                 rep_level_encoding: Encoding::RLE,
-                statistics: Some(Statistics::int32(Some(1), Some(3), None, 7, true)),
+                statistics: Some(Statistics::int32(Some(1), Some(3), None, Some(7), true)),
             },
             Page::DataPageV2 {
                 buf: Bytes::from(vec![4; 128]),

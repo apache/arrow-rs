@@ -1387,7 +1387,7 @@ impl<'a> StatisticsConverter<'a> {
         let null_counts = metadatas
             .into_iter()
             .map(|x| x.column(parquet_index).statistics())
-            .map(|s| s.map(|s| s.null_count()));
+            .map(|s| s.and_then(|s| s.null_count()));
         Ok(UInt64Array::from_iter(null_counts))
     }
 

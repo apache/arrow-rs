@@ -1613,7 +1613,7 @@ mod tests {
             .iter()
             .map(|column_descr| {
                 ColumnChunkMetaData::builder(column_descr.clone())
-                    .set_statistics(Statistics::new::<i32>(None, None, None, 0, false))
+                    .set_statistics(Statistics::new::<i32>(None, None, None, None, false))
                     .build()
             })
             .collect::<Result<Vec<_>>>()
@@ -1651,7 +1651,13 @@ mod tests {
             .iter()
             .map(|column_descr| {
                 ColumnChunkMetaData::builder(column_descr.clone())
-                    .set_statistics(Statistics::new::<i32>(Some(0), Some(100), None, 0, false))
+                    .set_statistics(Statistics::new::<i32>(
+                        Some(0),
+                        Some(100),
+                        None,
+                        None,
+                        false,
+                    ))
                     .build()
             })
             .collect::<Result<Vec<_>>>()

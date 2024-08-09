@@ -2620,7 +2620,7 @@ mod tests {
             assert_eq!(row_group.num_columns(), 1);
             let column = row_group.column(0);
             let stats = column.statistics().unwrap();
-            assert_eq!(stats.null_count(), 2);
+            assert_eq!(stats.null_count(), Some(2));
         }
     }
 
