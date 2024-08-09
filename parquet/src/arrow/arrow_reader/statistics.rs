@@ -137,18 +137,18 @@ make_stats_iterator!(
 );
 make_stats_iterator!(
     MaxBooleanStatsIterator,
-    max,
+    max_unchecked,
     ParquetStatistics::Boolean,
     bool
 );
 make_stats_iterator!(MinInt32StatsIterator, min_unchecked, ParquetStatistics::Int32, i32);
-make_stats_iterator!(MaxInt32StatsIterator, max, ParquetStatistics::Int32, i32);
+make_stats_iterator!(MaxInt32StatsIterator, max_unchecked, ParquetStatistics::Int32, i32);
 make_stats_iterator!(MinInt64StatsIterator, min_unchecked, ParquetStatistics::Int64, i64);
-make_stats_iterator!(MaxInt64StatsIterator, max, ParquetStatistics::Int64, i64);
+make_stats_iterator!(MaxInt64StatsIterator, max_unchecked, ParquetStatistics::Int64, i64);
 make_stats_iterator!(MinFloatStatsIterator, min_unchecked, ParquetStatistics::Float, f32);
-make_stats_iterator!(MaxFloatStatsIterator, max, ParquetStatistics::Float, f32);
+make_stats_iterator!(MaxFloatStatsIterator, max_unchecked, ParquetStatistics::Float, f32);
 make_stats_iterator!(MinDoubleStatsIterator, min_unchecked, ParquetStatistics::Double, f64);
-make_stats_iterator!(MaxDoubleStatsIterator, max, ParquetStatistics::Double, f64);
+make_stats_iterator!(MaxDoubleStatsIterator, max_unchecked, ParquetStatistics::Double, f64);
 make_stats_iterator!(
     MinByteArrayStatsIterator,
     min_bytes,
@@ -251,7 +251,7 @@ make_decimal_stats_iterator!(
 );
 make_decimal_stats_iterator!(
     MaxDecimal128StatsIterator,
-    max,
+    max_unchecked,
     max_bytes,
     i128,
     from_bytes_to_i128
@@ -265,7 +265,7 @@ make_decimal_stats_iterator!(
 );
 make_decimal_stats_iterator!(
     MaxDecimal256StatsIterator,
-    max,
+    max_unchecked,
     max_bytes,
     i256,
     from_bytes_to_i256

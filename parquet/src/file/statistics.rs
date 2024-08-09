@@ -34,7 +34,7 @@
 //! match stats {
 //!     Statistics::Int32(ref typed) => {
 //!         assert_eq!(typed.min(), Some(&1));
-//!         assert_eq!(*typed.max(), 10);
+//!         assert_eq!(typed.max(), Some(&10));
 //!     }
 //!     _ => {}
 //! }
@@ -551,8 +551,13 @@ impl<T: ParquetValueType> ValueStatistics<T> {
     ///
     /// Panics if max value is not set, e.g. all values are `null`.
     /// Use `has_min_max_set` method to check that.
-    pub fn max(&self) -> &T {
+    pub(crate) fn max_unchecked(&self) -> &T {
         self.max.as_ref().unwrap()
+    }
+
+    /// Returns max value of the statistics.
+    pub fn max(&self) -> Option<&T> {
+        self.max.as_ref()
     }
 
     /// Returns min value as bytes of the statistics.
@@ -568,7 +573,7 @@ impl<T: ParquetValueType> ValueStatistics<T> {
     /// Panics if max value is not set, use `has_min_max_set` method to check
     /// if values are set.
     pub fn max_bytes(&self) -> &[u8] {
-        self.max().as_bytes()
+        self.max_unchecked().as_bytes()
     }
 
     /// Whether or not min and max values are set.
