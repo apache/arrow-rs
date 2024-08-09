@@ -17,7 +17,7 @@
 
 use criterion::*;
 use half::f16;
-use parquet::basic::Encoding;
+use parquet::basic::{Encoding, Type as ParquetType};
 use parquet::data_type::{
     DataType, DoubleType, FixedLenByteArray, FixedLenByteArrayType, FloatType,
 };
@@ -35,7 +35,10 @@ fn bench_typed<T: DataType>(
 ) {
     let name = format!(
         "dtype={}, encoding={:?}",
-        std::any::type_name::<T::T>(),
+        match T::get_physical_type() {
+            ParquetType::FIXED_LEN_BYTE_ARRAY => format!("FixedLenByteArray({type_length})"),
+            _ => std::any::type_name::<T::T>().to_string(),
+        },
         encoding
     );
     let column_desc_ptr = ColumnDescPtr::new(ColumnDescriptor::new(
