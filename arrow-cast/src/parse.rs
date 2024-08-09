@@ -1018,6 +1018,7 @@ const NANOS_PER_HOUR: i64 = 60 * NANOS_PER_MINUTE;
 #[cfg(test)]
 const NANOS_PER_DAY: i64 = 24 * NANOS_PER_HOUR;
 
+#[derive(Debug, Clone)]
 pub struct IntervalParseConfig {
     /// The default unit to use if none is specified
     /// e.g. `INTERVAL 1` represents `INTERVAL 1 SECOND` when default_unit = IntervalType::Second
