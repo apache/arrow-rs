@@ -754,7 +754,7 @@ impl RowConverter {
     ///
     /// // We can convert rows into binary format and back in batch.
     /// let values: Vec<OwnedRow> = rows.iter().map(|r| r.owned()).collect();
-    /// let binary = rows.into_binary();
+    /// let binary = rows.try_into_binary().expect("small");
     /// let converted = converter.from_binary(binary.clone());
     /// assert!(converted.iter().eq(values.iter().map(|r| r.row())));
     /// ```
@@ -923,26 +923,30 @@ impl Rows {
     ///
     /// // We can convert rows into binary format and back.
     /// let values: Vec<OwnedRow> = rows.iter().map(|r| r.owned()).collect();
-    /// let binary = rows.into_binary();
+    /// let binary = rows.try_into_binary().expect("small");
     /// let parser = converter.parser();
     /// let parsed: Vec<OwnedRow> =
     ///   binary.iter().flatten().map(|b| parser.parse(b).owned()).collect();
     /// assert_eq!(values, parsed);
     /// ```
-    pub fn into_binary(self) -> BinaryArray {
-        assert!(
-            self.buffer.len() <= i32::MAX as usize,
-            "rows buffer too large"
-        );
+    pub fn try_into_binary(self) -> Result<BinaryArray, ArrowError> {
+        if self.buffer.len() > i32::MAX as usize {
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "{}-byte rows buffer too long to convert into a i32-indexed BinaryArray",
+                self.buffer.len()
+            )));
+        }
+        // We've checked that the buffer length fits in an i32; so all offsets into that buffer should fit as well.
         let offsets_scalar = ScalarBuffer::from_iter(self.offsets.into_iter().map(i32::usize_as));
         // SAFETY: offsets buffer is nonempty, monotonically increasing, and all represent valid indexes into buffer.
-        unsafe {
+        let array = unsafe {
             BinaryArray::new_unchecked(
                 OffsetBuffer::new_unchecked(offsets_scalar),
                 self.buffer.into(),
                 None,
             )
-        }
+        };
+        Ok(array)
     }
 }
 
@@ -2387,7 +2391,7 @@ mod tests {
             }
 
             // Check that we can convert
-            let rows = rows.into_binary();
+            let rows = rows.try_into_binary().expect("reasonable size");
             let parser = converter.parser();
             let back = converter
                 .convert_rows(rows.iter().map(|b| parser.parse(b.expect("valid bytes"))))
