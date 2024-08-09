@@ -118,6 +118,12 @@ zstd = ["dep:zstd", "zstd-sys"]
 # Display memory in example/write_parquet.rs
 sysinfo = ["dep:sysinfo"]
 
+
+[[example]]
+name = "external_metadata"
+required-features = ["arrow", "async"]
+path = "./examples/external_metadata.rs"
+
 [[example]]
 name = "read_parquet"
 required-features = ["arrow"]

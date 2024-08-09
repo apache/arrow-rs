@@ -50,10 +50,9 @@
 //! [`decode_metadata`]: crate::file::footer::decode_metadata
 //!
 //! Writing:
-//! * Write `ParquetMetaData` to bytes in memory: Not yet supported (see [#6002])
+//! * Write `ParquetMetaData` to bytes in memory: [`ParquetMetaDataWriter`]
 //! * Writes `ParquetMetaData` to an async target: Not yet supported
 //!
-//! [#6002]: https://github.com/apache/arrow-rs/issues/6002
 //!
 //! # Metadata Encodings and Structures
 //!
@@ -95,6 +94,7 @@
 //!                         * Same name, different struct
 //! ```
 mod memory;
+mod writer;
 
 use std::ops::Range;
 use std::sync::Arc;
@@ -115,6 +115,8 @@ use crate::schema::types::{
     ColumnDescPtr, ColumnDescriptor, ColumnPath, SchemaDescPtr, SchemaDescriptor,
     Type as SchemaType,
 };
+pub use writer::ParquetMetaDataWriter;
+pub(crate) use writer::ThriftMetadataWriter;
 
 /// Page level statistics for each column chunk of each row group.
 ///
