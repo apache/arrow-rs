@@ -1245,7 +1245,7 @@ pub fn cast_with_options(
                             cast_with_options(array, f.data_type(), cast_options)
                         } else {
                             // create empty ArrayRef's for other fields
-                            Ok(new_empty_array(&f.data_type()))
+                            Ok(new_empty_array(f.data_type()))
                         }
                     })
                     .collect::<Result<Vec<_>, ArrowError>>()?;
@@ -1259,7 +1259,7 @@ pub fn cast_with_options(
                             cast_with_options(array, f.data_type(), cast_options)
                         } else {
                             // create empty ArrayRef's for other fields
-                            Ok(new_null_array(&f.data_type(), array.len()))
+                            Ok(new_null_array(f.data_type(), array.len()))
                         }
                     })
                     .collect::<Result<Vec<_>, ArrowError>>()?;
@@ -9747,7 +9747,6 @@ mod tests {
         assert_eq!(as_int_vec::<Int32Type>(&as_union.value(0)), vec![Some(1)]);
         assert_eq!(as_int_vec::<Int32Type>(&as_union.value(1)), vec![Some(2)]);
         assert_eq!(as_int_vec::<Int32Type>(&as_union.value(2)), vec![Some(3)]);
-
 
         let strings = StringArray::from_iter_values(vec!["a", "b", "c"].into_iter());
 
