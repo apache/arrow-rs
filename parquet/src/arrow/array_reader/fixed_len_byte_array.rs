@@ -33,7 +33,7 @@ use arrow_array::{
 use arrow_buffer::{i256, Buffer, IntervalDayTime};
 use arrow_data::ArrayDataBuilder;
 use arrow_schema::{DataType as ArrowType, IntervalUnit};
-use bytes::{BufMut, Bytes};
+use bytes::Bytes;
 use half::f16;
 use std::any::Any;
 use std::sync::Arc;
