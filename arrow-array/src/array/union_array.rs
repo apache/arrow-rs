@@ -241,6 +241,27 @@ impl UnionArray {
         boxed.as_ref().expect("invalid type id")
     }
 
+    /// Get a member of the union as an array, this is equivalent to [`self::child`] for sparse unions.
+    ///
+    /// # Panics
+    /// Panics if `type_id` is not present in the union.
+    pub fn member_array(&self, type_id: i8) -> &ArrayRef {
+        let child = self.child(type_id);
+        match &self.offsets {
+            Some(_offsets) => {
+                todo!("I'm not sure what to do here");
+                // offsets.iter().zip(self.type_ids.iter()).map(|(offset, id)| {
+                //     if id == &type_id {
+                //         child.value(*offset as usize)
+                //     } else {
+                //         None
+                //     }
+                // })
+            }
+            None => child,
+        }
+    }
+
     /// Returns the `type_id` for the array slot at `index`.
     ///
     /// # Panics
@@ -296,7 +317,7 @@ impl UnionArray {
     }
 
     /// Returns whether the `UnionArray` is dense (or sparse if `false`).
-    fn is_dense(&self) -> bool {
+    pub fn is_dense(&self) -> bool {
         match self.data_type() {
             DataType::Union(_, mode) => mode == &UnionMode::Dense,
             _ => unreachable!("Union array's data type is not a union!"),

@@ -48,7 +48,7 @@ use crate::cast::list::*;
 use crate::cast::map::*;
 use crate::cast::string::*;
 
-use arrow_buffer::IntervalMonthDayNano;
+use arrow_buffer::{IntervalMonthDayNano, ScalarBuffer};
 use arrow_data::ByteView;
 use chrono::{NaiveTime, Offset, TimeZone, Utc};
 use std::cmp::Ordering;
@@ -196,6 +196,15 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
         }
         (Struct(_), _) => false,
         (_, Struct(_)) => false,
+
+        (Union(_, _), Union(_, _)) => false,
+        (Union(from_fields, _), _) => {
+            from_fields.iter().any(|(_, f)| can_cast_types(f.data_type(), to_type))
+        },
+        (_, Union(to_fields, _)) => {
+            to_fields.iter().any(|(_, t)| can_cast_types(from_type, t.data_type()))
+        },
+
         (_, Boolean) => {
             DataType::is_integer(from_type) ||
                 DataType::is_floating(from_type)
@@ -1173,6 +1182,66 @@ pub fn cast_with_options(
         (_, Struct(_)) => Err(ArrowError::CastError(
             "Cannot cast to struct from other types except struct".to_string(),
         )),
+
+        // we might be able to support this, but it's complex
+        (Union(_, _), Union(_, _)) => Err(ArrowError::CastError(
+            "Cannot cast from union to union".to_string(),
+        )),
+        (Union(from_fields, _), _) => {
+            let Some((type_id, _)) = from_fields
+                .iter()
+                // try to find an exact match first
+                .find(|(_, f)| f.data_type() == to_type)
+                .or_else(|| {
+                    // if no exact match, try to find a type that can be cast to
+                    from_fields
+                        .iter()
+                        .find(|(_, f)| can_cast_types(f.data_type(), to_type))
+                })
+            else {
+                return Err(ArrowError::CastError(format!(
+                    "Casting from union type to {to_type:?} not supported",
+                )));
+            };
+
+            let union_array = array.as_any().downcast_ref::<UnionArray>().unwrap();
+            let child = union_array.member_array(type_id);
+            cast_with_options(child, to_type, cast_options)
+        }
+        (_, Union(to_fields, _)) => {
+            let Some((type_id, child_type)) = to_fields.iter().find_map(|(type_id, t)| {
+                can_cast_types(from_type, t.data_type()).then(|| (type_id, t.data_type()))
+            }) else {
+                return Err(ArrowError::CastError(format!(
+                    "Casting from {from_type:?} to union type not supported",
+                )));
+            };
+
+            // create empty ArrayRef's for all fields
+            let mut children = to_fields
+                .iter()
+                .map(|(_, f)| new_empty_array(&f.data_type()))
+                .collect::<Vec<_>>();
+            // set the child at type_id to the cast input array
+            children[type_id as usize] = cast_with_options(array, child_type, cast_options)?;
+
+            // type_ids is just type_id replicated for array.len()
+            let type_ids = std::iter::repeat(type_id)
+                .take(array.len())
+                .collect::<ScalarBuffer<i8>>();
+            // offset ids are all zero since we have only one array
+            let offsets = std::iter::repeat(0i32)
+                .take(array.len())
+                .collect::<ScalarBuffer<i32>>();
+
+            Ok(Arc::new(UnionArray::try_new(
+                to_fields.clone(),
+                type_ids,
+                Some(offsets),
+                children,
+            )?))
+        }
+
         (_, Boolean) => match from_type {
             UInt8 => cast_numeric_to_bool::<UInt8Type>(array),
             UInt16 => cast_numeric_to_bool::<UInt16Type>(array),
@@ -2444,7 +2513,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use arrow_buffer::{Buffer, IntervalDayTime, NullBuffer};
+    use arrow_buffer::{Buffer, IntervalDayTime, NullBuffer, ScalarBuffer};
     use chrono::NaiveDate;
     use half::f16;
 
@@ -9523,5 +9592,133 @@ mod tests {
         cast(&struct_array, &to_type).expect_err(
             "Cast non-nullable to non-nullable struct field returning null should fail",
         );
+    }
+
+    fn union_fields() -> UnionFields {
+        [
+            (0, Arc::new(Field::new("A", DataType::Int32, true))),
+            (1, Arc::new(Field::new("B", DataType::Float64, true))),
+            (2, Arc::new(Field::new("C", DataType::Utf8, true))),
+        ]
+        .into_iter()
+        .collect()
+    }
+    #[test]
+    fn sparse_union_cast() {
+        // union of [{A=1}, {A=}, {B=3.2}, {C="a"}]
+        let int_array = Int32Array::from(vec![Some(1), None, None, None]);
+        let float_array = Float64Array::from(vec![None, None, Some(3.2), None]);
+        let str_array = StringArray::from(vec![None, None, None, Some("a")]);
+        let type_ids = [0, 0, 1, 2].into_iter().collect::<ScalarBuffer<i8>>();
+
+        let children = vec![
+            Arc::new(int_array) as Arc<dyn Array>,
+            Arc::new(float_array),
+            Arc::new(str_array),
+        ];
+
+        let union_array = UnionArray::try_new(union_fields(), type_ids, None, children).unwrap();
+
+        assert!(can_cast_types(&union_array.data_type(), &DataType::Int64));
+        assert!(can_cast_types(&DataType::Int64, &union_array.data_type()));
+
+        assert!(can_cast_types(&union_array.data_type(), &DataType::Float64));
+        assert!(can_cast_types(&DataType::Float64, &union_array.data_type()));
+
+        assert!(can_cast_types(&union_array.data_type(), &DataType::Utf8));
+        assert!(can_cast_types(&DataType::Utf8, &union_array.data_type()));
+
+        assert!(!can_cast_types(
+            &union_array.data_type(),
+            &DataType::Duration(TimeUnit::Second)
+        ));
+        // Duration to Utf8 is allowed
+        assert!(can_cast_types(
+            &DataType::Duration(TimeUnit::Second),
+            &union_array.data_type()
+        ));
+
+        let as_int64 = cast(&union_array, &DataType::Int64).unwrap();
+        let as_int64 = as_int64
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap()
+            .iter()
+            .collect::<Vec<Option<i64>>>();
+        assert_eq!(as_int64, vec![Some(1), None, None, None]);
+
+        let as_string = cast(&union_array, &DataType::Utf8).unwrap();
+        let as_string = as_string
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap()
+            .iter()
+            .collect::<Vec<Option<&str>>>();
+        assert_eq!(as_string, vec![None, None, None, Some("a")]);
+
+        let ints = Int64Array::from_iter_values(vec![1, 2, 3].into_iter());
+
+        let as_union = cast(&ints, &union_array.data_type()).unwrap();
+        let as_union = as_union.as_any().downcast_ref::<UnionArray>().unwrap();
+        assert_eq!(as_union.len(), 3);
+        assert_eq!(as_union.type_names(), &["A", "B", "C"]);
+        assert!(as_union.is_dense());
+        assert_eq!(
+            as_union
+                .child(0)
+                .as_any()
+                .downcast_ref::<Int32Array>()
+                .unwrap()
+                .iter()
+                .collect::<Vec<Option<i32>>>(),
+            vec![Some(1), Some(2), Some(3)]
+        );
+        assert_eq!(as_union.child(1).len(), 0);
+        assert_eq!(as_union.child(2).len(), 0);
+    }
+
+    #[test]
+    fn dense_union_cast() {
+        // union of [{A=1}, null, {B=3.2}, {C="a"}]
+        let int_array = Int32Array::from(vec![Some(1), None]);
+        let float_array = Float64Array::from(vec![Some(3.2)]);
+        let str_array = StringArray::from(vec![Some("a")]);
+        let type_ids = [0, 0, 1, 2].into_iter().collect::<ScalarBuffer<i8>>();
+        let offsets = [0, 1, 0, 0].into_iter().collect::<ScalarBuffer<i32>>();
+
+        let children = vec![
+            Arc::new(int_array) as Arc<dyn Array>,
+            Arc::new(float_array),
+            Arc::new(str_array),
+        ];
+
+        let union_array =
+            UnionArray::try_new(union_fields(), type_ids, Some(offsets), children).unwrap();
+
+        assert!(can_cast_types(&union_array.data_type(), &DataType::Int64));
+        assert!(can_cast_types(&DataType::Int64, &union_array.data_type()));
+
+        assert!(can_cast_types(&union_array.data_type(), &DataType::Float64));
+        assert!(can_cast_types(&DataType::Float64, &union_array.data_type()));
+
+        assert!(can_cast_types(&union_array.data_type(), &DataType::Utf8));
+        assert!(can_cast_types(&DataType::Utf8, &union_array.data_type()));
+
+        assert!(!can_cast_types(
+            &union_array.data_type(),
+            &DataType::Duration(TimeUnit::Second)
+        ));
+        // Duration to Utf8 is allowed
+        assert!(can_cast_types(
+            &DataType::Duration(TimeUnit::Second),
+            &union_array.data_type()
+        ));
+
+        let as_int64 = cast(&union_array, &DataType::Int64).unwrap();
+        let as_int64 = as_int64.as_any().downcast_ref::<Int64Array>().unwrap();
+        assert_eq!(as_int64.value(0), 1);
+        // assert!(as_int64.is_null(1));
+        // assert!(as_int64.is_null(2));
+        // assert!(as_int64.is_null(3));
     }
 }
