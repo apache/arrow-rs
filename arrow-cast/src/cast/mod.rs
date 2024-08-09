@@ -1208,38 +1208,68 @@ pub fn cast_with_options(
             };
 
             let union_array = array.as_any().downcast_ref::<UnionArray>().unwrap();
-            let child = union_child_array(union_array, type_id)?;
+            let child = union_field_array(union_array, type_id)?;
             cast_with_options(child.as_ref(), to_type, cast_options)
         }
-        (_, Union(to_fields, _)) => {
-            let Some((type_id, child_type)) = to_fields.iter().find_map(|(type_id, t)| {
-                can_cast_types(from_type, t.data_type()).then(|| (type_id, t.data_type()))
-            }) else {
+        (_, Union(to_fields, mode)) => {
+            let from_type = array.data_type();
+            let Some((type_id, _)) = to_fields
+                .iter()
+                // try to find an exact match first
+                .find(|(_, f)| f.data_type() == from_type)
+                .or_else(|| {
+                    // if no exact match, try to find a type that can be cast to
+                    to_fields
+                        .iter()
+                        .find(|(_, f)| can_cast_types(from_type, f.data_type()))
+                })
+            else {
                 return Err(ArrowError::CastError(format!(
                     "Casting from {from_type:?} to union type not supported",
                 )));
             };
-
-            // create empty ArrayRef's for all fields
-            let mut children = to_fields
-                .iter()
-                .map(|(_, f)| new_empty_array(&f.data_type()))
-                .collect::<Vec<_>>();
-            // set the child at type_id to the cast input array
-            children[type_id as usize] = cast_with_options(array, child_type, cast_options)?;
-
             // type_ids is just type_id replicated for array.len()
             let type_ids = std::iter::repeat(type_id)
                 .take(array.len())
                 .collect::<ScalarBuffer<i8>>();
-            // offset ids are just `0..array.len()`
-            let offsets = (0i32..(array.len() as i32)).collect::<ScalarBuffer<i32>>();
 
-            // NOTE the union we created here is always dense to avoid the overhead of creating the empty arrays
+            let (offsets, children) = if mode == &UnionMode::Dense {
+                // offset ids are just `0..array.len()`
+                let offsets = (0i32..(array.len() as i32)).collect::<ScalarBuffer<i32>>();
+
+                let children = to_fields
+                    .iter()
+                    .map(|(t, f)| {
+                        if t == type_id {
+                            // for the field with matching type_id, we cast the input data
+                            cast_with_options(array, f.data_type(), cast_options)
+                        } else {
+                            // create empty ArrayRef's for other fields
+                            Ok(new_empty_array(&f.data_type()))
+                        }
+                    })
+                    .collect::<Result<Vec<_>, ArrowError>>()?;
+                (Some(offsets), children)
+            } else {
+                let children = to_fields
+                    .iter()
+                    .map(|(t, f)| {
+                        if t == type_id {
+                            // for the field with matching type_id, we cast the input data
+                            cast_with_options(array, f.data_type(), cast_options)
+                        } else {
+                            // create empty ArrayRef's for other fields
+                            Ok(new_null_array(&f.data_type(), array.len()))
+                        }
+                    })
+                    .collect::<Result<Vec<_>, ArrowError>>()?;
+                (None, children)
+            };
+
             Ok(Arc::new(UnionArray::try_new(
                 to_fields.clone(),
                 type_ids,
-                Some(offsets),
+                offsets,
                 children,
             )?))
         }
@@ -2513,15 +2543,12 @@ where
     Ok(Arc::new(byte_array_builder.finish()))
 }
 
-/// Get a member of the union as an array, this is equivalent to [`UnionArray::child`] for sparse unions,
+/// Get a field of the union as an array, this is equivalent to [`UnionArray::child`] for sparse unions,
 /// but builds an array of the right length for dense unions.
 ///
 /// # Panics
 /// Panics if `type_id` is not present in the union.
-pub fn union_child_array(
-    union_array: &UnionArray,
-    type_id: i8,
-) -> Result<Cow<ArrayRef>, ArrowError> {
+fn union_field_array(union_array: &UnionArray, type_id: i8) -> Result<Cow<ArrayRef>, ArrowError> {
     let child = union_array.child(type_id);
     match union_array.offsets() {
         Some(offsets) => {
@@ -9636,6 +9663,25 @@ mod tests {
         .into_iter()
         .collect()
     }
+
+    fn as_int_vec<T: ArrowPrimitiveType>(array: &ArrayRef) -> Vec<Option<T::Native>> {
+        array
+            .as_any()
+            .downcast_ref::<PrimitiveArray<T>>()
+            .unwrap()
+            .iter()
+            .collect()
+    }
+
+    fn as_str_vec(array: &ArrayRef) -> Vec<Option<&str>> {
+        array
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap()
+            .iter()
+            .collect()
+    }
+
     #[test]
     fn sparse_union_cast() {
         // union of [{A=1}, {A=}, {B=3.2}, {C="a"}]
@@ -9671,52 +9717,49 @@ mod tests {
             &union_array.data_type()
         ));
 
-        let as_int64 = cast(&union_array, &DataType::Int64).unwrap();
-        let as_int64 = as_int64
-            .as_any()
-            .downcast_ref::<Int64Array>()
-            .unwrap()
-            .iter()
-            .collect::<Vec<Option<i64>>>();
+        let cast_array = cast(&union_array, &DataType::Int64).unwrap();
+        let as_int64 = as_int_vec::<Int64Type>(&cast_array);
         assert_eq!(as_int64, vec![Some(1), None, None, None]);
 
-        let as_string = cast(&union_array, &DataType::Utf8).unwrap();
-        let as_string = as_string
-            .as_any()
-            .downcast_ref::<StringArray>()
-            .unwrap()
-            .iter()
-            .collect::<Vec<Option<&str>>>();
+        let cast_array = cast(&union_array, &DataType::Utf8).unwrap();
+        let as_string = as_str_vec(&cast_array);
         assert_eq!(as_string, vec![None, None, None, Some("a")]);
+    }
 
+    #[test]
+    fn int_to_sparse_union_cast() {
         let ints = Int64Array::from_iter_values(vec![1, 2, 3].into_iter());
+        let dt = DataType::Union(union_fields(), UnionMode::Sparse);
 
-        let as_union = cast(&ints, &union_array.data_type()).unwrap();
+        let as_union = cast(&ints, &dt).unwrap();
         let as_union = as_union.as_any().downcast_ref::<UnionArray>().unwrap();
         assert_eq!(as_union.len(), 3);
         assert_eq!(as_union.type_names(), &["A", "B", "C"]);
-        assert!(as_union.is_dense());
+        assert!(!as_union.is_dense());
+
         assert_eq!(
-            as_union
-                .child(0)
-                .as_any()
-                .downcast_ref::<Int32Array>()
-                .unwrap()
-                .iter()
-                .collect::<Vec<Option<i32>>>(),
+            as_int_vec::<Int32Type>(as_union.child(0)),
             vec![Some(1), Some(2), Some(3)]
         );
-        assert_eq!(as_union.child(1).len(), 0);
-        assert_eq!(as_union.child(2).len(), 0);
-    }
+        assert_eq!(as_union.child(1).len(), 3);
+        assert_eq!(as_union.child(2).len(), 3);
 
-    fn as_int_vec<T: ArrowPrimitiveType>(array: &ArrayRef) -> Vec<Option<T::Native>> {
-        array
-            .as_any()
-            .downcast_ref::<PrimitiveArray<T>>()
-            .unwrap()
-            .iter()
-            .collect()
+        assert_eq!(as_int_vec::<Int32Type>(&as_union.value(0)), vec![Some(1)]);
+        assert_eq!(as_int_vec::<Int32Type>(&as_union.value(1)), vec![Some(2)]);
+        assert_eq!(as_int_vec::<Int32Type>(&as_union.value(2)), vec![Some(3)]);
+
+
+        let strings = StringArray::from_iter_values(vec!["a", "b", "c"].into_iter());
+
+        let cast_array = cast(&strings, &dt).unwrap();
+        let as_union = cast_array.as_any().downcast_ref::<UnionArray>().unwrap();
+        assert_eq!(as_union.len(), 3);
+        assert_eq!(as_union.type_names(), &["A", "B", "C"]);
+        assert!(!as_union.is_dense());
+
+        assert_eq!(as_str_vec(&as_union.value(0)), vec![Some("a")]);
+        assert_eq!(as_str_vec(&as_union.value(1)), vec![Some("b")]);
+        assert_eq!(as_str_vec(&as_union.value(2)), vec![Some("c")]);
     }
 
     #[test]
@@ -9761,18 +9804,17 @@ mod tests {
         assert_eq!(as_int64, vec![Some(1), None, None, None]);
 
         let cast_array = cast(&union_array, &DataType::Utf8).unwrap();
-        let as_string = cast_array
-            .as_any()
-            .downcast_ref::<StringArray>()
-            .unwrap()
-            .iter()
-            .collect::<Vec<Option<&str>>>();
+        let as_string = as_str_vec(&cast_array);
         assert_eq!(as_string, vec![None, None, None, Some("a")]);
+    }
 
+    #[test]
+    fn int_to_dense_union_cast() {
         let ints = Int64Array::from_iter_values(vec![1, 2, 3].into_iter());
+        let dt = DataType::Union(union_fields(), UnionMode::Dense);
 
-        let as_union = cast(&ints, &union_array.data_type()).unwrap();
-        let as_union = as_union.as_any().downcast_ref::<UnionArray>().unwrap();
+        let cast_array = cast(&ints, &dt).unwrap();
+        let as_union = cast_array.as_any().downcast_ref::<UnionArray>().unwrap();
         assert_eq!(as_union.len(), 3);
         assert_eq!(as_union.type_names(), &["A", "B", "C"]);
         assert!(as_union.is_dense());
@@ -9787,5 +9829,17 @@ mod tests {
         assert_eq!(as_int_vec::<Int32Type>(&as_union.value(0)), vec![Some(1)]);
         assert_eq!(as_int_vec::<Int32Type>(&as_union.value(1)), vec![Some(2)]);
         assert_eq!(as_int_vec::<Int32Type>(&as_union.value(2)), vec![Some(3)]);
+
+        let strings = StringArray::from_iter_values(vec!["a", "b", "c"].into_iter());
+
+        let cast_array = cast(&strings, &dt).unwrap();
+        let as_union = cast_array.as_any().downcast_ref::<UnionArray>().unwrap();
+        assert_eq!(as_union.len(), 3);
+        assert_eq!(as_union.type_names(), &["A", "B", "C"]);
+        assert!(as_union.is_dense());
+
+        assert_eq!(as_str_vec(&as_union.value(0)), vec![Some("a")]);
+        assert_eq!(as_str_vec(&as_union.value(1)), vec![Some("b")]);
+        assert_eq!(as_str_vec(&as_union.value(2)), vec![Some("c")]);
     }
 }
