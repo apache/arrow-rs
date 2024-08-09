@@ -769,7 +769,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
                 }
                 Some(stat) => {
                     // Check if min/max are still ascending/descending across pages
-                    let new_min = stat.min();
+                    let new_min = stat.min_unchecked();
                     let new_max = stat.max();
                     if let Some((last_min, last_max)) = &self.last_non_null_data_page_min_max {
                         if self.data_page_boundary_ascending {
@@ -1845,7 +1845,7 @@ mod tests {
             assert_eq!(stats.null_count(), 0);
             assert_eq!(stats.distinct_count(), None);
             if let Statistics::Int32(stats) = stats {
-                assert_eq!(stats.min(), &1);
+                assert_eq!(stats.min_unchecked(), &1);
                 assert_eq!(stats.max(), &4);
             } else {
                 panic!("expecting Statistics::Int32");
@@ -1889,7 +1889,7 @@ mod tests {
             assert!(stats.has_min_max_set());
             if let Statistics::ByteArray(stats) = stats {
                 assert_eq!(
-                    stats.min(),
+                    stats.min_unchecked(),
                     &ByteArray::from(vec![
                         255u8, 255u8, 255u8, 255u8, 255u8, 255u8, 255u8, 255u8, 179u8, 172u8, 19u8,
                         35u8, 231u8, 90u8, 0u8, 0u8,
@@ -1925,7 +1925,7 @@ mod tests {
         if let Some(stats) = metadata.statistics() {
             assert!(stats.has_min_max_set());
             if let Statistics::Int32(stats) = stats {
-                assert_eq!(stats.min(), &0,);
+                assert_eq!(stats.min_unchecked(), &0,);
                 assert_eq!(stats.max(), &5,);
             } else {
                 panic!("expecting Statistics::Int32");
@@ -1974,7 +1974,7 @@ mod tests {
             assert_eq!(stats.null_count(), 0);
             assert_eq!(stats.distinct_count().unwrap_or(0), 55);
             if let Statistics::Int32(stats) = stats {
-                assert_eq!(stats.min(), &-17);
+                assert_eq!(stats.min_unchecked(), &-17);
                 assert_eq!(stats.max(), &9000);
             } else {
                 panic!("expecting Statistics::Int32");
@@ -2222,7 +2222,7 @@ mod tests {
         // with the deprecated `min` and `max` statistics
         assert!(!stats.is_min_max_backwards_compatible());
         if let Statistics::Boolean(stats) = stats {
-            assert_eq!(stats.min(), &false);
+            assert_eq!(stats.min_unchecked(), &false);
             assert_eq!(stats.max(), &true);
         } else {
             panic!("expecting Statistics::Boolean, got {stats:?}");
@@ -2235,7 +2235,7 @@ mod tests {
         assert!(stats.has_min_max_set());
         assert!(stats.is_min_max_backwards_compatible());
         if let Statistics::Int32(stats) = stats {
-            assert_eq!(stats.min(), &-2);
+            assert_eq!(stats.min_unchecked(), &-2);
             assert_eq!(stats.max(), &3);
         } else {
             panic!("expecting Statistics::Int32, got {stats:?}");
@@ -2248,7 +2248,7 @@ mod tests {
         assert!(stats.has_min_max_set());
         assert!(stats.is_min_max_backwards_compatible());
         if let Statistics::Int64(stats) = stats {
-            assert_eq!(stats.min(), &-2);
+            assert_eq!(stats.min_unchecked(), &-2);
             assert_eq!(stats.max(), &3);
         } else {
             panic!("expecting Statistics::Int64, got {stats:?}");
@@ -2270,7 +2270,7 @@ mod tests {
         assert!(stats.has_min_max_set());
         assert!(!stats.is_min_max_backwards_compatible());
         if let Statistics::Int96(stats) = stats {
-            assert_eq!(stats.min(), &Int96::from(vec![0, 20, 30]));
+            assert_eq!(stats.min_unchecked(), &Int96::from(vec![0, 20, 30]));
             assert_eq!(stats.max(), &Int96::from(vec![3, 20, 10]));
         } else {
             panic!("expecting Statistics::Int96, got {stats:?}");
@@ -2283,7 +2283,7 @@ mod tests {
         assert!(stats.has_min_max_set());
         assert!(stats.is_min_max_backwards_compatible());
         if let Statistics::Float(stats) = stats {
-            assert_eq!(stats.min(), &-2.0);
+            assert_eq!(stats.min_unchecked(), &-2.0);
             assert_eq!(stats.max(), &3.0);
         } else {
             panic!("expecting Statistics::Float, got {stats:?}");
@@ -2296,7 +2296,7 @@ mod tests {
         assert!(stats.has_min_max_set());
         assert!(stats.is_min_max_backwards_compatible());
         if let Statistics::Double(stats) = stats {
-            assert_eq!(stats.min(), &-2.0);
+            assert_eq!(stats.min_unchecked(), &-2.0);
             assert_eq!(stats.max(), &3.0);
         } else {
             panic!("expecting Statistics::Double, got {stats:?}");
@@ -2314,7 +2314,7 @@ mod tests {
         assert!(!stats.is_min_max_backwards_compatible());
         assert!(stats.has_min_max_set());
         if let Statistics::ByteArray(stats) = stats {
-            assert_eq!(stats.min(), &ByteArray::from("aaw"));
+            assert_eq!(stats.min_unchecked(), &ByteArray::from("aaw"));
             assert_eq!(stats.max(), &ByteArray::from("zz"));
         } else {
             panic!("expecting Statistics::ByteArray, got {stats:?}");
@@ -2333,7 +2333,7 @@ mod tests {
         assert!(!stats.is_min_max_backwards_compatible());
         if let Statistics::FixedLenByteArray(stats) = stats {
             let expected_min: FixedLenByteArray = ByteArray::from("aaw  ").into();
-            assert_eq!(stats.min(), &expected_min);
+            assert_eq!(stats.min_unchecked(), &expected_min);
             let expected_max: FixedLenByteArray = ByteArray::from("zz   ").into();
             assert_eq!(stats.max(), &expected_max);
         } else {
@@ -2356,7 +2356,7 @@ mod tests {
         let stats = float16_statistics_roundtrip(&input);
         assert!(stats.has_min_max_set());
         assert!(stats.is_min_max_backwards_compatible());
-        assert_eq!(stats.min(), &ByteArray::from(-f16::from_f32(2.0)));
+        assert_eq!(stats.min_unchecked(), &ByteArray::from(-f16::from_f32(2.0)));
         assert_eq!(stats.max(), &ByteArray::from(f16::from_f32(3.0)));
     }
 
@@ -2370,7 +2370,7 @@ mod tests {
         let stats = float16_statistics_roundtrip(&input);
         assert!(stats.has_min_max_set());
         assert!(stats.is_min_max_backwards_compatible());
-        assert_eq!(stats.min(), &ByteArray::from(f16::ONE));
+        assert_eq!(stats.min_unchecked(), &ByteArray::from(f16::ONE));
         assert_eq!(stats.max(), &ByteArray::from(f16::ONE + f16::ONE));
     }
 
@@ -2384,7 +2384,7 @@ mod tests {
         let stats = float16_statistics_roundtrip(&input);
         assert!(stats.has_min_max_set());
         assert!(stats.is_min_max_backwards_compatible());
-        assert_eq!(stats.min(), &ByteArray::from(f16::ONE));
+        assert_eq!(stats.min_unchecked(), &ByteArray::from(f16::ONE));
         assert_eq!(stats.max(), &ByteArray::from(f16::ONE + f16::ONE));
     }
 
@@ -2398,7 +2398,7 @@ mod tests {
         let stats = float16_statistics_roundtrip(&input);
         assert!(stats.has_min_max_set());
         assert!(stats.is_min_max_backwards_compatible());
-        assert_eq!(stats.min(), &ByteArray::from(f16::ONE));
+        assert_eq!(stats.min_unchecked(), &ByteArray::from(f16::ONE));
         assert_eq!(stats.max(), &ByteArray::from(f16::ONE + f16::ONE));
     }
 
@@ -2424,7 +2424,7 @@ mod tests {
         let stats = float16_statistics_roundtrip(&input);
         assert!(stats.has_min_max_set());
         assert!(stats.is_min_max_backwards_compatible());
-        assert_eq!(stats.min(), &ByteArray::from(f16::NEG_ZERO));
+        assert_eq!(stats.min_unchecked(), &ByteArray::from(f16::NEG_ZERO));
         assert_eq!(stats.max(), &ByteArray::from(f16::ZERO));
     }
 
@@ -2438,7 +2438,7 @@ mod tests {
         let stats = float16_statistics_roundtrip(&input);
         assert!(stats.has_min_max_set());
         assert!(stats.is_min_max_backwards_compatible());
-        assert_eq!(stats.min(), &ByteArray::from(f16::NEG_ZERO));
+        assert_eq!(stats.min_unchecked(), &ByteArray::from(f16::NEG_ZERO));
         assert_eq!(stats.max(), &ByteArray::from(f16::ZERO));
     }
 
@@ -2452,7 +2452,7 @@ mod tests {
         let stats = float16_statistics_roundtrip(&input);
         assert!(stats.has_min_max_set());
         assert!(stats.is_min_max_backwards_compatible());
-        assert_eq!(stats.min(), &ByteArray::from(f16::NEG_ZERO));
+        assert_eq!(stats.min_unchecked(), &ByteArray::from(f16::NEG_ZERO));
         assert_eq!(stats.max(), &ByteArray::from(f16::PI));
     }
 
@@ -2466,7 +2466,7 @@ mod tests {
         let stats = float16_statistics_roundtrip(&input);
         assert!(stats.has_min_max_set());
         assert!(stats.is_min_max_backwards_compatible());
-        assert_eq!(stats.min(), &ByteArray::from(-f16::PI));
+        assert_eq!(stats.min_unchecked(), &ByteArray::from(-f16::PI));
         assert_eq!(stats.max(), &ByteArray::from(f16::ZERO));
     }
 
@@ -2476,7 +2476,7 @@ mod tests {
         assert!(stats.has_min_max_set());
         assert!(stats.is_min_max_backwards_compatible());
         if let Statistics::Float(stats) = stats {
-            assert_eq!(stats.min(), &1.0);
+            assert_eq!(stats.min_unchecked(), &1.0);
             assert_eq!(stats.max(), &2.0);
         } else {
             panic!("expecting Statistics::Float");
@@ -2489,7 +2489,7 @@ mod tests {
         assert!(stats.has_min_max_set());
         assert!(stats.is_min_max_backwards_compatible());
         if let Statistics::Float(stats) = stats {
-            assert_eq!(stats.min(), &1.0);
+            assert_eq!(stats.min_unchecked(), &1.0);
             assert_eq!(stats.max(), &2.0);
         } else {
             panic!("expecting Statistics::Float");
@@ -2510,8 +2510,8 @@ mod tests {
         assert!(stats.has_min_max_set());
         assert!(stats.is_min_max_backwards_compatible());
         if let Statistics::Float(stats) = stats {
-            assert_eq!(stats.min(), &-0.0);
-            assert!(stats.min().is_sign_negative());
+            assert_eq!(stats.min_unchecked(), &-0.0);
+            assert!(stats.min_unchecked().is_sign_negative());
             assert_eq!(stats.max(), &0.0);
             assert!(stats.max().is_sign_positive());
         } else {
@@ -2525,8 +2525,8 @@ mod tests {
         assert!(stats.has_min_max_set());
         assert!(stats.is_min_max_backwards_compatible());
         if let Statistics::Float(stats) = stats {
-            assert_eq!(stats.min(), &-0.0);
-            assert!(stats.min().is_sign_negative());
+            assert_eq!(stats.min_unchecked(), &-0.0);
+            assert!(stats.min_unchecked().is_sign_negative());
             assert_eq!(stats.max(), &0.0);
             assert!(stats.max().is_sign_positive());
         } else {
@@ -2540,8 +2540,8 @@ mod tests {
         assert!(stats.has_min_max_set());
         assert!(stats.is_min_max_backwards_compatible());
         if let Statistics::Float(stats) = stats {
-            assert_eq!(stats.min(), &-0.0);
-            assert!(stats.min().is_sign_negative());
+            assert_eq!(stats.min_unchecked(), &-0.0);
+            assert!(stats.min_unchecked().is_sign_negative());
             assert_eq!(stats.max(), &2.0);
         } else {
             panic!("expecting Statistics::Float");
@@ -2554,7 +2554,7 @@ mod tests {
         assert!(stats.has_min_max_set());
         assert!(stats.is_min_max_backwards_compatible());
         if let Statistics::Float(stats) = stats {
-            assert_eq!(stats.min(), &-2.0);
+            assert_eq!(stats.min_unchecked(), &-2.0);
             assert_eq!(stats.max(), &0.0);
             assert!(stats.max().is_sign_positive());
         } else {
@@ -2568,7 +2568,7 @@ mod tests {
         assert!(stats.has_min_max_set());
         assert!(stats.is_min_max_backwards_compatible());
         if let Statistics::Double(stats) = stats {
-            assert_eq!(stats.min(), &1.0);
+            assert_eq!(stats.min_unchecked(), &1.0);
             assert_eq!(stats.max(), &2.0);
         } else {
             panic!("expecting Statistics::Double");
@@ -2581,7 +2581,7 @@ mod tests {
         assert!(stats.has_min_max_set());
         assert!(stats.is_min_max_backwards_compatible());
         if let Statistics::Double(stats) = stats {
-            assert_eq!(stats.min(), &1.0);
+            assert_eq!(stats.min_unchecked(), &1.0);
             assert_eq!(stats.max(), &2.0);
         } else {
             panic!("expecting Statistics::Double");
@@ -2602,8 +2602,8 @@ mod tests {
         assert!(stats.has_min_max_set());
         assert!(stats.is_min_max_backwards_compatible());
         if let Statistics::Double(stats) = stats {
-            assert_eq!(stats.min(), &-0.0);
-            assert!(stats.min().is_sign_negative());
+            assert_eq!(stats.min_unchecked(), &-0.0);
+            assert!(stats.min_unchecked().is_sign_negative());
             assert_eq!(stats.max(), &0.0);
             assert!(stats.max().is_sign_positive());
         } else {
@@ -2617,8 +2617,8 @@ mod tests {
         assert!(stats.has_min_max_set());
         assert!(stats.is_min_max_backwards_compatible());
         if let Statistics::Double(stats) = stats {
-            assert_eq!(stats.min(), &-0.0);
-            assert!(stats.min().is_sign_negative());
+            assert_eq!(stats.min_unchecked(), &-0.0);
+            assert!(stats.min_unchecked().is_sign_negative());
             assert_eq!(stats.max(), &0.0);
             assert!(stats.max().is_sign_positive());
         } else {
@@ -2632,8 +2632,8 @@ mod tests {
         assert!(stats.has_min_max_set());
         assert!(stats.is_min_max_backwards_compatible());
         if let Statistics::Double(stats) = stats {
-            assert_eq!(stats.min(), &-0.0);
-            assert!(stats.min().is_sign_negative());
+            assert_eq!(stats.min_unchecked(), &-0.0);
+            assert!(stats.min_unchecked().is_sign_negative());
             assert_eq!(stats.max(), &2.0);
         } else {
             panic!("expecting Statistics::Double");
@@ -2646,7 +2646,7 @@ mod tests {
         assert!(stats.has_min_max_set());
         assert!(stats.is_min_max_backwards_compatible());
         if let Statistics::Double(stats) = stats {
-            assert_eq!(stats.min(), &-2.0);
+            assert_eq!(stats.min_unchecked(), &-2.0);
             assert_eq!(stats.max(), &0.0);
             assert!(stats.max().is_sign_positive());
         } else {
@@ -2955,7 +2955,7 @@ mod tests {
         assert_eq!(stats.null_count(), 0);
         assert_eq!(stats.distinct_count(), None);
         if let Statistics::ByteArray(_stats) = stats {
-            let min_value = _stats.min();
+            let min_value = _stats.min_unchecked();
             let max_value = _stats.max();
 
             assert!(!_stats.min_is_exact());
@@ -3008,7 +3008,7 @@ mod tests {
         assert_eq!(stats.null_count(), 0);
         assert_eq!(stats.distinct_count(), None);
         if let Statistics::FixedLenByteArray(_stats) = stats {
-            let min_value = _stats.min();
+            let min_value = _stats.min_unchecked();
             let max_value = _stats.max();
 
             assert!(!_stats.min_is_exact());

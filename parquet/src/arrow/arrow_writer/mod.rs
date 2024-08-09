@@ -2543,7 +2543,7 @@ mod tests {
                 let stats = column.statistics().unwrap();
                 assert!(stats.has_min_max_set());
                 if let Statistics::Int32(stats) = stats {
-                    assert_eq!(*stats.min() as u32, *src_slice.iter().min().unwrap());
+                    assert_eq!(*stats.min_unchecked() as u32, *src_slice.iter().min().unwrap());
                     assert_eq!(*stats.max() as u32, *src_slice.iter().max().unwrap());
                 } else {
                     panic!("Statistics::Int32 missing")
@@ -2584,7 +2584,7 @@ mod tests {
                 let stats = column.statistics().unwrap();
                 assert!(stats.has_min_max_set());
                 if let Statistics::Int64(stats) = stats {
-                    assert_eq!(*stats.min() as u64, *src_slice.iter().min().unwrap());
+                    assert_eq!(*stats.min_unchecked() as u64, *src_slice.iter().min().unwrap());
                     assert_eq!(*stats.max() as u64, *src_slice.iter().max().unwrap());
                 } else {
                     panic!("Statistics::Int64 missing")
@@ -3069,7 +3069,7 @@ mod tests {
 
         // Column chunk of column "a" should have chunk level statistics
         if let Statistics::ByteArray(byte_array_stats) = a_col.statistics().unwrap() {
-            let min = byte_array_stats.min();
+            let min = byte_array_stats.min_unchecked();
             let max = byte_array_stats.max();
 
             assert_eq!(min.as_bytes(), &[b'a']);
@@ -3141,7 +3141,7 @@ mod tests {
 
         // Column chunk of column "a" should have chunk level statistics
         if let Statistics::ByteArray(byte_array_stats) = a_col.statistics().unwrap() {
-            let min = byte_array_stats.min();
+            let min = byte_array_stats.min_unchecked();
             let max = byte_array_stats.max();
 
             assert_eq!(min.as_bytes(), &[b'a']);
