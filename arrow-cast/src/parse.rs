@@ -1031,7 +1031,6 @@ impl IntervalParseConfig {
     }
 }
 
-
 #[rustfmt::skip]
 #[derive(Debug, Clone, Copy)]
 #[repr(u16)]
@@ -2734,7 +2733,11 @@ mod tests {
 
     #[test]
     fn test_parse_interval_month_day_nano_config() {
-        let interval = parse_interval_month_day_nano_config("1", IntervalParseConfig::new(IntervalUnit::Second)).unwrap();
+        let interval = parse_interval_month_day_nano_config(
+            "1",
+            IntervalParseConfig::new(IntervalUnit::Second),
+        )
+        .unwrap();
         assert_eq!(interval.months, 0);
         assert_eq!(interval.days, 0);
         assert_eq!(interval.nanoseconds, NANOS_PER_SECOND);
