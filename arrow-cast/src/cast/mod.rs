@@ -42,11 +42,13 @@ mod dictionary;
 mod list;
 mod map;
 mod string;
+
 use crate::cast::decimal::*;
 use crate::cast::dictionary::*;
 use crate::cast::list::*;
 use crate::cast::map::*;
 use crate::cast::string::*;
+use std::borrow::Cow;
 
 use arrow_buffer::{IntervalMonthDayNano, ScalarBuffer};
 use arrow_data::ByteView;
@@ -64,6 +66,7 @@ use arrow_buffer::{i256, ArrowNativeType, OffsetBuffer};
 use arrow_data::transform::MutableArrayData;
 use arrow_data::ArrayData;
 use arrow_schema::*;
+use arrow_select::concat::concat;
 use arrow_select::take::take;
 use num::cast::AsPrimitive;
 use num::{NumCast, ToPrimitive};
@@ -1205,8 +1208,8 @@ pub fn cast_with_options(
             };
 
             let union_array = array.as_any().downcast_ref::<UnionArray>().unwrap();
-            let child = union_array.member_array(type_id);
-            cast_with_options(child, to_type, cast_options)
+            let child = union_child_array(union_array, type_id)?;
+            cast_with_options(child.as_ref(), to_type, cast_options)
         }
         (_, Union(to_fields, _)) => {
             let Some((type_id, child_type)) = to_fields.iter().find_map(|(type_id, t)| {
@@ -1229,11 +1232,10 @@ pub fn cast_with_options(
             let type_ids = std::iter::repeat(type_id)
                 .take(array.len())
                 .collect::<ScalarBuffer<i8>>();
-            // offset ids are all zero since we have only one array
-            let offsets = std::iter::repeat(0i32)
-                .take(array.len())
-                .collect::<ScalarBuffer<i32>>();
+            // offset ids are just `0..array.len()`
+            let offsets = (0i32..(array.len() as i32)).collect::<ScalarBuffer<i32>>();
 
+            // NOTE the union we created here is always dense to avoid the overhead of creating the empty arrays
             Ok(Arc::new(UnionArray::try_new(
                 to_fields.clone(),
                 type_ids,
@@ -2509,6 +2511,37 @@ where
     }
 
     Ok(Arc::new(byte_array_builder.finish()))
+}
+
+/// Get a member of the union as an array, this is equivalent to [`UnionArray::child`] for sparse unions,
+/// but builds an array of the right length for dense unions.
+///
+/// # Panics
+/// Panics if `type_id` is not present in the union.
+pub fn union_child_array(
+    union_array: &UnionArray,
+    type_id: i8,
+) -> Result<Cow<ArrayRef>, ArrowError> {
+    let child = union_array.child(type_id);
+    match union_array.offsets() {
+        Some(offsets) => {
+            let data_type = child.data_type();
+            let sub_arrays: Vec<ArrayRef> = offsets
+                .iter()
+                .zip(union_array.type_ids().iter())
+                .map(|(offset, id)| {
+                    if id == &type_id {
+                        child.slice(*offset as usize, 1)
+                    } else {
+                        new_null_array(data_type, 1)
+                    }
+                })
+                .collect();
+            let sub_arrays: Vec<&dyn Array> = sub_arrays.iter().map(|a| a.as_ref()).collect();
+            concat(&sub_arrays).map(Cow::Owned)
+        }
+        None => Ok(Cow::Borrowed(child)),
+    }
 }
 
 #[cfg(test)]
@@ -9677,6 +9710,15 @@ mod tests {
         assert_eq!(as_union.child(2).len(), 0);
     }
 
+    fn as_int_vec<T: ArrowPrimitiveType>(array: &ArrayRef) -> Vec<Option<T::Native>> {
+        array
+            .as_any()
+            .downcast_ref::<PrimitiveArray<T>>()
+            .unwrap()
+            .iter()
+            .collect()
+    }
+
     #[test]
     fn dense_union_cast() {
         // union of [{A=1}, null, {B=3.2}, {C="a"}]
@@ -9714,11 +9756,36 @@ mod tests {
             &union_array.data_type()
         ));
 
-        let as_int64 = cast(&union_array, &DataType::Int64).unwrap();
-        let as_int64 = as_int64.as_any().downcast_ref::<Int64Array>().unwrap();
-        assert_eq!(as_int64.value(0), 1);
-        // assert!(as_int64.is_null(1));
-        // assert!(as_int64.is_null(2));
-        // assert!(as_int64.is_null(3));
+        let cast_array = cast(&union_array, &DataType::Int64).unwrap();
+        let as_int64 = as_int_vec::<Int64Type>(&cast_array);
+        assert_eq!(as_int64, vec![Some(1), None, None, None]);
+
+        let cast_array = cast(&union_array, &DataType::Utf8).unwrap();
+        let as_string = cast_array
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap()
+            .iter()
+            .collect::<Vec<Option<&str>>>();
+        assert_eq!(as_string, vec![None, None, None, Some("a")]);
+
+        let ints = Int64Array::from_iter_values(vec![1, 2, 3].into_iter());
+
+        let as_union = cast(&ints, &union_array.data_type()).unwrap();
+        let as_union = as_union.as_any().downcast_ref::<UnionArray>().unwrap();
+        assert_eq!(as_union.len(), 3);
+        assert_eq!(as_union.type_names(), &["A", "B", "C"]);
+        assert!(as_union.is_dense());
+
+        assert_eq!(
+            as_int_vec::<Int32Type>(as_union.child(0)),
+            vec![Some(1), Some(2), Some(3)]
+        );
+        assert_eq!(as_union.child(1).len(), 0);
+        assert_eq!(as_union.child(2).len(), 0);
+
+        assert_eq!(as_int_vec::<Int32Type>(&as_union.value(0)), vec![Some(1)]);
+        assert_eq!(as_int_vec::<Int32Type>(&as_union.value(1)), vec![Some(2)]);
+        assert_eq!(as_int_vec::<Int32Type>(&as_union.value(2)), vec![Some(3)]);
     }
 }
