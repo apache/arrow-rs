@@ -996,9 +996,8 @@ pub fn parse_interval_day_time(
 
 pub fn parse_interval_month_day_nano_config(
     value: &str,
-    default_unit: IntervalUnit,
+    config: IntervalParseConfig,
 ) -> Result<<IntervalMonthDayNanoType as ArrowPrimitiveType>::Native, ArrowError> {
-    let config = IntervalParseConfig::new(default_unit);
     let interval = Interval::parse(value, &config)?;
 
     let (months, days, nanos) = interval.to_month_day_nanos();
@@ -1009,7 +1008,7 @@ pub fn parse_interval_month_day_nano_config(
 pub fn parse_interval_month_day_nano(
     value: &str,
 ) -> Result<<IntervalMonthDayNanoType as ArrowPrimitiveType>::Native, ArrowError> {
-    parse_interval_month_day_nano_config(value, IntervalUnit::Month)
+    parse_interval_month_day_nano_config(value, IntervalParseConfig::new(IntervalUnit::Month))
 }
 
 const NANOS_PER_MILLIS: i64 = 1_000_000;
@@ -1018,6 +1017,19 @@ const NANOS_PER_MINUTE: i64 = 60 * NANOS_PER_SECOND;
 const NANOS_PER_HOUR: i64 = 60 * NANOS_PER_MINUTE;
 #[cfg(test)]
 const NANOS_PER_DAY: i64 = 24 * NANOS_PER_HOUR;
+
+pub struct IntervalParseConfig {
+    /// The default unit to use if none is specified
+    /// e.g. `INTERVAL 1` represents `INTERVAL 1 SECOND` when default_unit = IntervalType::Second
+    default_unit: IntervalUnit,
+}
+
+impl IntervalParseConfig {
+    pub fn new(default_unit: IntervalUnit) -> Self {
+        Self { default_unit }
+    }
+}
+
 
 #[rustfmt::skip]
 #[derive(Debug, Clone, Copy)]
@@ -1376,18 +1388,6 @@ impl Interval {
         };
 
         Ok(result)
-    }
-}
-
-struct IntervalParseConfig {
-    /// The default unit to use if none is specified
-    /// e.g. `INTERVAL 1` represents `INTERVAL 1 SECOND` when default_unit = IntervalType::Second
-    default_unit: IntervalUnit,
-}
-
-impl IntervalParseConfig {
-    fn new(default_unit: IntervalUnit) -> Self {
-        Self { default_unit }
     }
 }
 
@@ -2274,7 +2274,7 @@ mod tests {
             Interval::parse("1us", &config).unwrap()
         );
         assert_eq!(
-            Interval::new(0, 0, 1_000_000_000),
+            Interval::new(0, 0, NANOS_PER_SECOND),
             Interval::parse("1s", &config).unwrap()
         );
         assert_eq!(
@@ -2729,5 +2729,13 @@ mod tests {
         assert_eq!(Float64Type::parse("+"), None);
         assert_eq!(TimestampNanosecondType::parse(""), None);
         assert_eq!(Date32Type::parse(""), None);
+    }
+
+    #[test]
+    fn test_parse_interval_month_day_nano_config() {
+        let interval = parse_interval_month_day_nano_config("1", IntervalParseConfig::new(IntervalUnit::Second)).unwrap();
+        assert_eq!(interval.months, 0);
+        assert_eq!(interval.days, 0);
+        assert_eq!(interval.nanoseconds, NANOS_PER_SECOND);
     }
 }
