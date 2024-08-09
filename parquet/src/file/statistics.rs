@@ -26,7 +26,6 @@
 //!
 //! let stats = Statistics::int32(Some(1), Some(10), None, 3, true);
 //! assert_eq!(stats.null_count(), 3);
-//! assert!(stats.has_min_max_set());
 //! assert!(stats.is_min_max_deprecated());
 //! assert!(stats.min_is_exact());
 //! assert!(stats.max_is_exact());
@@ -396,7 +395,7 @@ impl Statistics {
 
     /// Returns `true` if min value and max value are set.
     /// Normally both min/max values will be set to `Some(value)` or `None`.
-    pub fn has_min_max_set(&self) -> bool {
+    pub(crate) fn has_min_max_set(&self) -> bool {
         statistics_enum_func![self, has_min_max_set]
     }
 
@@ -578,7 +577,7 @@ impl<T: ParquetValueType> ValueStatistics<T> {
 
     /// Whether or not min and max values are set.
     /// Normally both min/max values will be set to `Some(value)` or `None`.
-    pub fn has_min_max_set(&self) -> bool {
+    pub(crate) fn has_min_max_set(&self) -> bool {
         self.min.is_some() && self.max.is_some()
     }
 
