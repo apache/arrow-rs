@@ -739,6 +739,25 @@ impl RowConverter {
     }
 
     /// Create a new [Rows] instance from the given binary data.
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use std::collections::HashSet;
+    /// # use arrow_array::cast::AsArray;
+    /// # use arrow_array::StringArray;
+    /// # use arrow_row::{OwnedRow, Row, RowConverter, RowParser, SortField};
+    /// # use arrow_schema::DataType;
+    /// #
+    /// let converter = RowConverter::new(vec![SortField::new(DataType::Utf8)]).unwrap();
+    /// let array = StringArray::from(vec!["hello", "world", "a", "a", "hello"]);
+    /// let rows = converter.convert_columns(&[Arc::new(array)]).unwrap();
+    ///
+    /// // We can convert rows into binary format and back in batch.
+    /// let values: Vec<OwnedRow> = rows.iter().map(|r| r.owned()).collect();
+    /// let binary = rows.into_binary();
+    /// let converted = converter.from_binary(binary.clone());
+    /// assert!(converted.iter().eq(values.iter().map(|r| r.row())));
+    /// ```
     pub fn from_binary(&self, array: BinaryArray) -> Rows {
         assert_eq!(
             array.null_count(),
@@ -888,6 +907,28 @@ impl Rows {
 
     /// Create a [BinaryArray] from the [Rows] data without reallocating the
     /// underlying bytes.
+    ///
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use std::collections::HashSet;
+    /// # use arrow_array::cast::AsArray;
+    /// # use arrow_array::StringArray;
+    /// # use arrow_row::{OwnedRow, Row, RowConverter, RowParser, SortField};
+    /// # use arrow_schema::DataType;
+    /// #
+    /// let converter = RowConverter::new(vec![SortField::new(DataType::Utf8)]).unwrap();
+    /// let array = StringArray::from(vec!["hello", "world", "a", "a", "hello"]);
+    /// let rows = converter.convert_columns(&[Arc::new(array)]).unwrap();
+    ///
+    /// // We can convert rows into binary format and back.
+    /// let values: Vec<OwnedRow> = rows.iter().map(|r| r.owned()).collect();
+    /// let binary = rows.into_binary();
+    /// let parser = converter.parser();
+    /// let parsed: Vec<OwnedRow> =
+    ///   binary.iter().flatten().map(|b| parser.parse(b).owned()).collect();
+    /// assert_eq!(values, parsed);
+    /// ```
     pub fn into_binary(self) -> BinaryArray {
         assert!(
             self.buffer.len() <= i32::MAX as usize,
