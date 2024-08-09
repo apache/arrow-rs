@@ -193,7 +193,7 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
                     // cast kernel will return error.
                     can_cast_types(f1.data_type(), f2.data_type())
                 })
-		}
+        }
         (Struct(_), _) => false,
         (_, Struct(_)) => false,
         (_, Boolean) => {
