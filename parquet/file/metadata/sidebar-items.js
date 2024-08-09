@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"mod":["memory"],"struct":["ColumnChunkMetaData","ColumnChunkMetaDataBuilder","ColumnIndexBuilder","FileMetaData","LevelHistogram","OffsetIndexBuilder","ParquetMetaData","RowGroupMetaData","RowGroupMetaDataBuilder"],"type":["FileMetaDataPtr","KeyValue","ParquetColumnIndex","ParquetOffsetIndex","RowGroupMetaDataPtr"]};

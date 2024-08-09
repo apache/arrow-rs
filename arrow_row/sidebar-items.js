@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["Codec","Encoder"],"fn":["decode_column","encode_column","encode_dictionary_values","null_sentinel","row_lengths"],"macro":["decode_primitive_helper"],"mod":["fixed","list","variable"],"struct":["OwnedRow","Row","RowConfig","RowConverter","RowParser","Rows","RowsIter","SortField"]};

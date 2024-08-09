@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["write_bloom_filters"],"struct":["ParquetMetadataWriter","SerializedColumnWriter","SerializedFileWriter","SerializedPageWriter","SerializedRowGroupWriter","ThriftMetadataWriter","TrackedWrite"],"type":["OnCloseColumnChunk","OnCloseRowGroup"]};

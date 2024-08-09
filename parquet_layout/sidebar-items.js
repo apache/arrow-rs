@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["compression","do_layout","encoding","main","read_page_header"],"struct":["Args","ColumnChunk","Page","ParquetFile","RowGroup"]};
