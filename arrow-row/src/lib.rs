@@ -747,7 +747,7 @@ impl RowConverter {
         );
         Rows {
             buffer: array.values().to_vec(),
-            offsets: array.offsets().into_iter().map(|&i| i.as_usize()).collect(),
+            offsets: array.offsets().iter().map(|&i| i.as_usize()).collect(),
             config: RowConfig {
                 fields: Arc::clone(&self.fields),
                 validate_utf8: true,
