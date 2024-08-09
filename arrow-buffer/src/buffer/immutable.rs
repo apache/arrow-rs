@@ -99,6 +99,12 @@ impl Buffer {
         buffer.into()
     }
 
+    /// Initializes a empty [Buffer].
+    pub fn new_empty() -> Self {
+        let empty_slice: &[u8] = &[];
+        Self::from_slice_ref(empty_slice)
+    }
+
     /// Creates a buffer from an existing aligned memory region (must already be byte-aligned), this
     /// `Buffer` will free this piece of memory when dropped.
     ///
