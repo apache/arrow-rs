@@ -141,14 +141,54 @@ make_stats_iterator!(
     ParquetStatistics::Boolean,
     bool
 );
-make_stats_iterator!(MinInt32StatsIterator, min_unchecked, ParquetStatistics::Int32, i32);
-make_stats_iterator!(MaxInt32StatsIterator, max_unchecked, ParquetStatistics::Int32, i32);
-make_stats_iterator!(MinInt64StatsIterator, min_unchecked, ParquetStatistics::Int64, i64);
-make_stats_iterator!(MaxInt64StatsIterator, max_unchecked, ParquetStatistics::Int64, i64);
-make_stats_iterator!(MinFloatStatsIterator, min_unchecked, ParquetStatistics::Float, f32);
-make_stats_iterator!(MaxFloatStatsIterator, max_unchecked, ParquetStatistics::Float, f32);
-make_stats_iterator!(MinDoubleStatsIterator, min_unchecked, ParquetStatistics::Double, f64);
-make_stats_iterator!(MaxDoubleStatsIterator, max_unchecked, ParquetStatistics::Double, f64);
+make_stats_iterator!(
+    MinInt32StatsIterator,
+    min_unchecked,
+    ParquetStatistics::Int32,
+    i32
+);
+make_stats_iterator!(
+    MaxInt32StatsIterator,
+    max_unchecked,
+    ParquetStatistics::Int32,
+    i32
+);
+make_stats_iterator!(
+    MinInt64StatsIterator,
+    min_unchecked,
+    ParquetStatistics::Int64,
+    i64
+);
+make_stats_iterator!(
+    MaxInt64StatsIterator,
+    max_unchecked,
+    ParquetStatistics::Int64,
+    i64
+);
+make_stats_iterator!(
+    MinFloatStatsIterator,
+    min_unchecked,
+    ParquetStatistics::Float,
+    f32
+);
+make_stats_iterator!(
+    MaxFloatStatsIterator,
+    max_unchecked,
+    ParquetStatistics::Float,
+    f32
+);
+make_stats_iterator!(
+    MinDoubleStatsIterator,
+    min_unchecked,
+    ParquetStatistics::Double,
+    f64
+);
+make_stats_iterator!(
+    MaxDoubleStatsIterator,
+    max_unchecked,
+    ParquetStatistics::Double,
+    f64
+);
 make_stats_iterator!(
     MinByteArrayStatsIterator,
     min_bytes,
