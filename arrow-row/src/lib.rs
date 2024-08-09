@@ -1911,6 +1911,69 @@ mod tests {
     }
 
     #[test]
+    #[should_panic(expected = "Encountered non UTF-8 data")]
+    fn test_invalid_utf8_array() {
+        let converter = RowConverter::new(vec![SortField::new(DataType::Binary)]).unwrap();
+        let array = Arc::new(BinaryArray::from_iter_values([&[0xFF]])) as _;
+        let rows = converter.convert_columns(&[array]).unwrap();
+        let binary_rows = rows.try_into_binary().expect("known-small rows");
+
+        let converter = RowConverter::new(vec![SortField::new(DataType::Utf8)]).unwrap();
+        let parsed = converter.from_binary(binary_rows);
+
+        converter.convert_rows(parsed.iter()).unwrap();
+    }
+
+
+    #[test]
+    #[should_panic(expected = "index out of bounds")]
+    fn test_invalid_empty() {
+        let binary_row: &[u8] = &[];
+
+        let converter = RowConverter::new(vec![SortField::new(DataType::Utf8)]).unwrap();
+        let parser = converter.parser();
+        let utf8_row = parser.parse(binary_row.as_ref());
+
+        converter.convert_rows(std::iter::once(utf8_row)).unwrap();
+    }
+
+    #[test]
+    #[should_panic(expected = "index out of bounds")]
+    fn test_invalid_empty_array() {
+        let row: &[u8] = &[];
+        let binary_rows = BinaryArray::from(vec![row]);
+
+        let converter = RowConverter::new(vec![SortField::new(DataType::Utf8)]).unwrap();
+        let parsed = converter.from_binary(binary_rows);
+
+        converter.convert_rows(parsed.iter()).unwrap();
+    }
+
+    #[test]
+    #[should_panic(expected = "index out of bounds")]
+    fn test_invalid_truncated() {
+        let binary_row: &[u8] = &[0x02];
+
+        let converter = RowConverter::new(vec![SortField::new(DataType::Utf8)]).unwrap();
+        let parser = converter.parser();
+        let utf8_row = parser.parse(binary_row.as_ref());
+
+        converter.convert_rows(std::iter::once(utf8_row)).unwrap();
+    }
+
+    #[test]
+    #[should_panic(expected = "index out of bounds")]
+    fn test_invalid_truncated_array() {
+        let row: &[u8] = &[0x02];
+        let binary_rows = BinaryArray::from(vec![row]);
+
+        let converter = RowConverter::new(vec![SortField::new(DataType::Utf8)]).unwrap();
+        let parsed = converter.from_binary(binary_rows);
+
+        converter.convert_rows(parsed.iter()).unwrap();
+    }
+
+    #[test]
     #[should_panic(expected = "rows were not produced by this RowConverter")]
     fn test_different_converter() {
         let values = Arc::new(Int32Array::from_iter([Some(1), Some(-1)]));
