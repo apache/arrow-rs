@@ -4254,7 +4254,7 @@ mod tests {
             ),
         ]);
 
-        assert_eq!(can_sort_to_indices(struct_array.data_type()), false);
+        assert!(!can_sort_to_indices(struct_array.data_type()));
         assert!(sort_to_indices(&struct_array, None, None).is_err());
 
         let sort_columns = vec![SortColumn {
