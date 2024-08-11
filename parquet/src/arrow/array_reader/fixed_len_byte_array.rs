@@ -456,8 +456,9 @@ fn read_byte_stream_split(
     dst.resize(idx + num_values * data_width, 0u8);
     let dst_slc = &mut dst[idx..idx + num_values * data_width];
     for j in 0..data_width {
+        let src_slc = &src[offset + j * stride..offset + j * stride + num_values];
         for i in 0..num_values {
-            dst_slc[i * data_width + j] = src[offset + j * stride + i];
+            dst_slc[i * data_width + j] = src_slc[i];
         }
     }
 }
