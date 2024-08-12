@@ -4255,7 +4255,11 @@ mod tests {
         ]);
 
         assert!(!can_sort_to_indices(struct_array.data_type()));
-        assert!(sort_to_indices(&struct_array, None, None).is_err());
+        assert!(sort_to_indices(&struct_array, None, None)
+            .err()
+            .unwrap()
+            .to_string()
+            .contains("Sort not supported for data type"));
 
         let sort_columns = vec![SortColumn {
             values: Arc::new(struct_array.clone()) as ArrayRef,
