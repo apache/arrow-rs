@@ -427,7 +427,7 @@ fn arrow_to_parquet_type(field: &Field) -> Result<Type> {
         }
         DataType::Time32(unit) => Type::primitive_type_builder(name, PhysicalType::INT32)
             .with_logical_type(Some(LogicalType::Time {
-                is_adjusted_to_u_t_c: false,
+                is_adjusted_to_u_t_c: field.metadata().contains_key("adjusted_to_utc"),
                 unit: match unit {
                     TimeUnit::Millisecond => ParquetTimeUnit::MILLIS(Default::default()),
                     u => unreachable!("Invalid unit for Time32: {:?}", u),
@@ -438,7 +438,7 @@ fn arrow_to_parquet_type(field: &Field) -> Result<Type> {
             .build(),
         DataType::Time64(unit) => Type::primitive_type_builder(name, PhysicalType::INT64)
             .with_logical_type(Some(LogicalType::Time {
-                is_adjusted_to_u_t_c: false,
+                is_adjusted_to_u_t_c: field.metadata().contains_key("adjusted_to_utc"),
                 unit: match unit {
                     TimeUnit::Microsecond => ParquetTimeUnit::MICROS(Default::default()),
                     TimeUnit::Nanosecond => ParquetTimeUnit::NANOS(Default::default()),
