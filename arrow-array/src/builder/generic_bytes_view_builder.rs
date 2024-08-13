@@ -60,6 +60,8 @@ impl BlockSizeGrowthStrategy {
 /// A [`GenericByteViewArray`] consists of a list of data blocks containing string data,
 /// and a list of views into those buffers.
 ///
+/// See examples on [`StringViewBuilder`] and [`BinaryViewBuilder`]
+///
 /// This builder can be used in two ways
 ///
 /// # Append Values
