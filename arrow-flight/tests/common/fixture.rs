@@ -41,6 +41,7 @@ pub struct TestFixture {
 
 impl TestFixture {
     /// create a new test fixture from the server
+    #[allow(dead_code)]
     pub async fn new<T: FlightService>(test_server: FlightServiceServer<T>) -> Self {
         // let OS choose a free port
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
