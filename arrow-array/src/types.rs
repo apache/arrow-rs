@@ -193,7 +193,7 @@ make_type!(
     DataType::Date64,
     "64-bit date type: the elapsed time since UNIX epoch in milliseconds (64 bits). \
     Values must be divisible by `86_400_000`. \
-    See [DataType::Date64] for more details."
+    See [`DataType::Date64`] for more details."
 );
 make_type!(
     Time32SecondType,
