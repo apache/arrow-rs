@@ -713,6 +713,20 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
         }
     }
 
+    /// Creates a PrimitiveArray based on an iterator of values with provided nulls
+    pub fn from_iter_values_with_nulls<I: IntoIterator<Item = T::Native>>(
+        iter: I,
+        nulls: Option<NullBuffer>,
+    ) -> Self {
+        let val_buf: Buffer = iter.into_iter().collect();
+        let len = val_buf.len() / std::mem::size_of::<T::Native>();
+        Self {
+            data_type: T::DATA_TYPE,
+            values: ScalarBuffer::new(val_buf, 0, len),
+            nulls,
+        }
+    }
+
     /// Creates a PrimitiveArray based on a constant value with `count` elements
     pub fn from_value(value: T::Native, count: usize) -> Self {
         unsafe {
