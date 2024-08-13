@@ -240,7 +240,7 @@ where
                     let (mut records_read, levels_read) =
                         reader.read_rep_levels(out, remaining_records, remaining_levels)?;
 
-                    if levels_read == 0 {
+                    if records_read == 0 && levels_read == 0 {
                         // The fact that we're still looping implies there must be some levels to read.
                         return Err(general_err!(
                             "Insufficient repetition levels read from column"
