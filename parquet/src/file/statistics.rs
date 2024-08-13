@@ -378,7 +378,7 @@ impl Statistics {
         statistics_enum_func![self, distinct_count]
     }
 
-    /// Returns number of null values for the column.
+    /// Returns number of null values for the column, if known.
     /// Note that this includes all nulls when column is part of the complex type.
     pub fn null_count(&self) -> Option<u64> {
         statistics_enum_func![self, null_count]
@@ -532,7 +532,7 @@ impl<T: ParquetValueType> ValueStatistics<T> {
         self.min.as_ref().unwrap()
     }
 
-    /// Returns min value of the statistics.
+    /// Returns min value of the statistics, if known.
     pub fn min(&self) -> Option<&T> {
         self.min.as_ref()
     }
