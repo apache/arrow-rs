@@ -545,7 +545,7 @@ impl<T: ParquetValueType> ValueStatistics<T> {
         self.max.as_ref().unwrap()
     }
 
-    /// Returns max value of the statistics.
+    /// Returns max value of the statistics, if known.
     pub fn max(&self) -> Option<&T> {
         self.max.as_ref()
     }
