@@ -410,7 +410,6 @@ impl ColumnValueDecoder for ValueDecoder {
                 // so `offset` should be the value offset, not the byte offset
                 let total_values = buf.len() / self.byte_length;
                 let to_read = num_values.min(total_values - *offset);
-                out.buffer.reserve(to_read * self.byte_length);
 
                 // now read the n streams and reassemble values into the output buffer
                 read_byte_stream_split(&mut out.buffer, buf, *offset, to_read, self.byte_length);
@@ -453,9 +452,13 @@ fn read_byte_stream_split(
     data_width: usize,
 ) {
     let stride = src.len() / data_width;
-    for i in 0..num_values {
-        for j in 0..data_width {
-            dst.push(src[offset + j * stride + i]);
+    let idx = dst.len();
+    dst.resize(idx + num_values * data_width, 0u8);
+    let dst_slc = &mut dst[idx..idx + num_values * data_width];
+    for j in 0..data_width {
+        let src_slc = &src[offset + j * stride..offset + j * stride + num_values];
+        for i in 0..num_values {
+            dst_slc[i * data_width + j] = src_slc[i];
         }
     }
 }
