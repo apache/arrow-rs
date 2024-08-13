@@ -168,18 +168,38 @@ impl FromStr for ClientConfigKey {
 }
 
 /// Represents a CA certificate provided by the user.
+///
+/// This is used to configure the client to trust a specific certificate. See
+/// [Self::from_pem] for an example
 #[derive(Debug, Clone)]
-pub struct UserCA(reqwest::tls::Certificate);
+pub struct Certificate(reqwest::tls::Certificate);
 
-impl UserCA {
-    /// Create a `UserCA` from a PEM encoded certificate.
+impl Certificate {
+    /// Create a `Certificate` from a PEM encoded certificate.
+    ///
+    /// # Example from a PEM file
+    ///
+    /// ```no_run
+    /// # use object_store::Certificate;
+    /// # use std::fs::File;
+    /// # use std::io::Read;
+    /// let mut buf = Vec::new();
+    /// File::open("my_cert.pem").unwrap()
+    ///   .read_to_end(&mut buf).unwrap();
+    /// let cert = Certificate::from_pem(&buf).unwrap();
+    ///
+    /// ```
     pub fn from_pem(pem: &[u8]) -> Result<Self> {
         Ok(Self(
             reqwest::tls::Certificate::from_pem(pem).map_err(map_client_error)?,
         ))
     }
 
-    /// Create a collection of `UserCA` from a PEM encoded certificate bundle. Example byte sources may be .crt, .cer or .pem files.
+    /// Create a collection of `Certificate` from a PEM encoded certificate
+    /// bundle.
+    ///
+    /// Files that contain such collections have extensions such as `.crt`,
+    /// `.cer` and `.pem` files.
     pub fn from_pem_bundle(pem_bundle: &[u8]) -> Result<Vec<Self>> {
         Ok(reqwest::tls::Certificate::from_pem_bundle(pem_bundle)
             .map_err(map_client_error)?
@@ -188,7 +208,7 @@ impl UserCA {
             .collect())
     }
 
-    /// Create a `UserCA` from a binary DER encoded certificate.
+    /// Create a `Certificate` from a binary DER encoded certificate.
     pub fn from_der(der: &[u8]) -> Result<Self> {
         Ok(Self(
             reqwest::tls::Certificate::from_der(der).map_err(map_client_error)?,
@@ -200,7 +220,7 @@ impl UserCA {
 #[derive(Debug, Clone)]
 pub struct ClientOptions {
     user_agent: Option<ConfigValue<HeaderValue>>,
-    user_ca_certificates: Vec<UserCA>,
+    root_certificates: Vec<Certificate>,
     content_type_map: HashMap<String, String>,
     default_content_type: Option<String>,
     default_headers: Option<HeaderMap>,
@@ -231,7 +251,7 @@ impl Default for ClientOptions {
         // we opt for a slightly higher default timeout of 30 seconds
         Self {
             user_agent: None,
-            user_ca_certificates: Default::default(),
+            root_certificates: Default::default(),
             content_type_map: Default::default(),
             default_content_type: None,
             default_headers: None,
@@ -341,9 +361,12 @@ impl ClientOptions {
         self
     }
 
-    /// Add a user-provided CA certificate to the client
-    pub fn with_ca_cert(mut self, certificate: UserCA) -> Self {
-        self.user_ca_certificates.push(certificate);
+    /// Add a custom root certificate.
+    ///
+    /// This can be used to connect to a server that has a self-signed
+    /// certificate for example.
+    pub fn with_root_certificate(mut self, certificate: Certificate) -> Self {
+        self.root_certificates.push(certificate);
         self
     }
 
@@ -578,7 +601,7 @@ impl ClientOptions {
             builder = builder.proxy(proxy);
         }
 
-        for certificate in &self.user_ca_certificates {
+        for certificate in &self.root_certificates {
             builder = builder.add_root_certificate(certificate.0.clone());
         }
 
