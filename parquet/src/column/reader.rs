@@ -241,7 +241,7 @@ where
                         reader.read_rep_levels(out, remaining_records, remaining_levels)?;
 
                     if levels_read == 0 {
-                        // Tha fact that we're still looping implies there must be some levels to read.
+                        // The fact that we're still looping implies there must be some levels to read.
                         return Err(general_err!(
                             "Insufficient repetition levels read from column"
                         ));
