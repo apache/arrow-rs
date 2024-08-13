@@ -797,12 +797,12 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
                             null_page,
                             self.truncate_min_value(
                                 self.props.column_index_truncate_length(),
-                                stat.min_bytes(),
+                                stat.min_bytes_opt().unwrap(),
                             )
                             .0,
                             self.truncate_max_value(
                                 self.props.column_index_truncate_length(),
-                                stat.max_bytes(),
+                                stat.max_bytes_opt().unwrap(),
                             )
                             .0,
                             self.page_metrics.num_page_nulls as i64,
@@ -810,8 +810,8 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
                     } else {
                         self.column_index_builder.append(
                             null_page,
-                            stat.min_bytes().to_vec(),
-                            stat.max_bytes().to_vec(),
+                            stat.min_bytes_opt().unwrap().to_vec(),
+                            stat.max_bytes_opt().unwrap().to_vec(),
                             self.page_metrics.num_page_nulls as i64,
                         );
                     }
@@ -1076,11 +1076,11 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
                 Statistics::ByteArray(stats) if stats.has_min_max_set() => {
                     let (min, did_truncate_min) = self.truncate_min_value(
                         self.props.statistics_truncate_length(),
-                        stats.min_bytes(),
+                        stats.min_bytes_opt().unwrap(),
                     );
                     let (max, did_truncate_max) = self.truncate_max_value(
                         self.props.statistics_truncate_length(),
-                        stats.max_bytes(),
+                        stats.max_bytes_opt().unwrap(),
                     );
                     Statistics::ByteArray(
                         ValueStatistics::new(
@@ -1099,11 +1099,11 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
                 {
                     let (min, did_truncate_min) = self.truncate_min_value(
                         self.props.statistics_truncate_length(),
-                        stats.min_bytes(),
+                        stats.min_bytes_opt().unwrap(),
                     );
                     let (max, did_truncate_max) = self.truncate_max_value(
                         self.props.statistics_truncate_length(),
-                        stats.max_bytes(),
+                        stats.max_bytes_opt().unwrap(),
                     );
                     Statistics::FixedLenByteArray(
                         ValueStatistics::new(
@@ -2000,8 +2000,8 @@ mod tests {
         let r = writer.close().unwrap();
 
         let stats = r.metadata.statistics().unwrap();
-        assert_eq!(stats.min_bytes(), 1_i32.to_le_bytes());
-        assert_eq!(stats.max_bytes(), 7_i32.to_le_bytes());
+        assert_eq!(stats.min_bytes_opt().unwrap(), 1_i32.to_le_bytes());
+        assert_eq!(stats.max_bytes_opt().unwrap(), 7_i32.to_le_bytes());
         assert_eq!(stats.null_count(), Some(0)); // TODO: None or 0?
         assert!(stats.distinct_count().is_none());
 
@@ -2026,8 +2026,14 @@ mod tests {
         assert_eq!(pages[1].page_type(), PageType::DATA_PAGE);
 
         let page_statistics = pages[1].statistics().unwrap();
-        assert_eq!(page_statistics.min_bytes(), 1_i32.to_le_bytes());
-        assert_eq!(page_statistics.max_bytes(), 7_i32.to_le_bytes());
+        assert_eq!(
+            page_statistics.min_bytes_opt().unwrap(),
+            1_i32.to_le_bytes()
+        );
+        assert_eq!(
+            page_statistics.max_bytes_opt().unwrap(),
+            7_i32.to_le_bytes()
+        );
         assert_eq!(page_statistics.null_count(), Some(0)); // TODO: None or 0?
         assert!(page_statistics.distinct_count().is_none());
     }
@@ -2727,8 +2733,14 @@ mod tests {
                 // first page is [1,2,3,4]
                 // second page is [-5,2,4,8]
                 // note that we don't increment here, as this is a non BinaryArray type.
-                assert_eq!(stats.min_bytes(), column_index.min_values[1].as_slice());
-                assert_eq!(stats.max_bytes(), column_index.max_values.get(1).unwrap());
+                assert_eq!(
+                    stats.min_bytes_opt(),
+                    Some(column_index.min_values[1].as_slice())
+                );
+                assert_eq!(
+                    stats.max_bytes_opt(),
+                    column_index.max_values.get(1).map(Vec::as_slice)
+                );
             } else {
                 panic!("expecting Statistics::Int32");
             }
@@ -2783,8 +2795,14 @@ mod tests {
                 let column_index_max_value = &column_index.max_values[0];
 
                 // Column index stats are truncated, while the column chunk's aren't.
-                assert_ne!(stats.min_bytes(), column_index_min_value.as_slice());
-                assert_ne!(stats.max_bytes(), column_index_max_value.as_slice());
+                assert_ne!(
+                    stats.min_bytes_opt(),
+                    Some(column_index_min_value.as_slice())
+                );
+                assert_ne!(
+                    stats.max_bytes_opt(),
+                    Some(column_index_max_value.as_slice())
+                );
 
                 assert_eq!(
                     column_index_min_value.len(),
@@ -2855,8 +2873,8 @@ mod tests {
                 assert_eq!("B".as_bytes(), column_index_min_value.as_slice());
                 assert_eq!("C".as_bytes(), column_index_max_value.as_slice());
 
-                assert_ne!(column_index_min_value, stats.min_bytes());
-                assert_ne!(column_index_max_value, stats.max_bytes());
+                assert_ne!(column_index_min_value, stats.min_bytes_opt().unwrap());
+                assert_ne!(column_index_max_value, stats.max_bytes_opt().unwrap());
             } else {
                 panic!("expecting Statistics::FixedLenByteArray");
             }
@@ -2892,8 +2910,8 @@ mod tests {
         let stats = r.metadata.statistics().unwrap();
         assert!(stats.has_min_max_set());
         if let Statistics::FixedLenByteArray(stats) = stats {
-            let stats_min_bytes = stats.min_bytes();
-            let stats_max_bytes = stats.max_bytes();
+            let stats_min_bytes = stats.min_bytes_opt().unwrap();
+            let stats_max_bytes = stats.max_bytes_opt().unwrap();
             assert_eq!(expected_value, stats_min_bytes);
             assert_eq!(expected_value, stats_max_bytes);
         } else {
@@ -2932,8 +2950,8 @@ mod tests {
         let stats = r.metadata.statistics().unwrap();
         assert!(stats.has_min_max_set());
         if let Statistics::FixedLenByteArray(stats) = stats {
-            let stats_min_bytes = stats.min_bytes();
-            let stats_max_bytes = stats.max_bytes();
+            let stats_min_bytes = stats.min_bytes_opt().unwrap();
+            let stats_max_bytes = stats.max_bytes_opt().unwrap();
             assert_eq!(expected_value, stats_min_bytes);
             assert_eq!(expected_value, stats_max_bytes);
         } else {

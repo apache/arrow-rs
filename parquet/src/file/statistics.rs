@@ -256,8 +256,8 @@ pub fn to_thrift(stats: Option<&Statistics>) -> Option<TStatistics> {
     // Get min/max if set.
     let (min, max, min_exact, max_exact) = if stats.has_min_max_set() {
         (
-            Some(stats.min_bytes().to_vec()),
-            Some(stats.max_bytes().to_vec()),
+            Some(stats.min_bytes_opt().unwrap().to_vec()),
+            Some(stats.max_bytes_opt().unwrap().to_vec()),
             Some(stats.min_is_exact()),
             Some(stats.max_is_exact()),
         )
@@ -400,16 +400,26 @@ impl Statistics {
         statistics_enum_func![self, max_is_exact]
     }
 
+    /// Returns slice of bytes that represent min value, if min value is known.
+    pub fn min_bytes_opt(&self) -> Option<&[u8]> {
+        statistics_enum_func![self, min_bytes_opt]
+    }
+
     /// Returns slice of bytes that represent min value.
     /// Panics if min value is not set.
     pub fn min_bytes(&self) -> &[u8] {
-        statistics_enum_func![self, min_bytes]
+        self.min_bytes_opt().unwrap()
+    }
+
+    /// Returns slice of bytes that represent max value, if max value is known.
+    pub fn max_bytes_opt(&self) -> Option<&[u8]> {
+        statistics_enum_func![self, max_bytes_opt]
     }
 
     /// Returns slice of bytes that represent max value.
     /// Panics if max value is not set.
     pub fn max_bytes(&self) -> &[u8] {
-        statistics_enum_func![self, max_bytes]
+        self.max_bytes_opt().unwrap()
     }
 
     /// Returns physical type associated with statistics.
@@ -550,20 +560,31 @@ impl<T: ParquetValueType> ValueStatistics<T> {
         self.max.as_ref()
     }
 
+    /// Returns min value as bytes of the statistics, if min value is known.
+    pub fn min_bytes_opt(&self) -> Option<&[u8]> {
+        self.min_opt().map(AsBytes::as_bytes)
+    }
+
     /// Returns min value as bytes of the statistics.
     ///
     /// Panics if min value is not set, use `has_min_max_set` method to check
     /// if values are set.
     pub fn min_bytes(&self) -> &[u8] {
-        self.min().as_bytes()
+        self.min_bytes_opt().unwrap()
+    }
+
+    /// Returns max value as bytes of the statistics, if max value is known.
+    pub fn max_bytes_opt(&self) -> Option<&[u8]> {
+        self.max_opt().map(AsBytes::as_bytes)
     }
 
     /// Returns max value as bytes of the statistics.
     ///
     /// Panics if max value is not set, use `has_min_max_set` method to check
     /// if values are set.
+    // TODO: deprecate
     pub fn max_bytes(&self) -> &[u8] {
-        self.max().as_bytes()
+        self.max_bytes_opt().unwrap()
     }
 
     /// Whether or not min and max values are set.
@@ -669,8 +690,8 @@ mod tests {
     fn test_statistics_min_max_bytes() {
         let stats = Statistics::int32(Some(-123), Some(234), None, Some(1), false);
         assert!(stats.has_min_max_set());
-        assert_eq!(stats.min_bytes(), (-123).as_bytes());
-        assert_eq!(stats.max_bytes(), 234.as_bytes());
+        assert_eq!(stats.min_bytes_opt(), Some((-123).as_bytes()));
+        assert_eq!(stats.max_bytes_opt(), Some(234.as_bytes()));
 
         let stats = Statistics::byte_array(
             Some(ByteArray::from(vec![1, 2, 3])),
@@ -680,8 +701,8 @@ mod tests {
             true,
         );
         assert!(stats.has_min_max_set());
-        assert_eq!(stats.min_bytes(), &[1, 2, 3]);
-        assert_eq!(stats.max_bytes(), &[3, 4, 5]);
+        assert_eq!(stats.min_bytes_opt().unwrap(), &[1, 2, 3]);
+        assert_eq!(stats.max_bytes_opt().unwrap(), &[3, 4, 5]);
     }
 
     #[test]
