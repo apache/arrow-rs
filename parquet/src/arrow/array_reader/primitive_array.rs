@@ -242,7 +242,7 @@ where
                                 Some(i) => i as i128,
                                 None => i128::default(),
                             });
-                            Decimal128Array::from_iter_values_with_nulls(decimal, nulls)
+                        Decimal128Array::from_iter_values_with_nulls(decimal, nulls)
                     }
                     _ => {
                         return Err(arrow_err!(
