@@ -165,7 +165,7 @@ impl ArrayReader for FixedLenByteArrayReader {
         // TODO: An improvement might be to do this conversion on read
         let array: ArrayRef = match &self.data_type {
             ArrowType::Decimal128(p, s) => {
-                let nulls = binary.nulls().map(|nb| nb.clone());
+                let nulls = binary.nulls().cloned();
                 let decimal = binary.iter().map(|o| match o {
                     Some(b) => i128::from_be_bytes(sign_extend_be(b)),
                     None => i128::default(),
@@ -175,7 +175,7 @@ impl ArrayReader for FixedLenByteArrayReader {
                 Arc::new(decimal)
             }
             ArrowType::Decimal256(p, s) => {
-                let nulls = binary.nulls().map(|nb| nb.clone());
+                let nulls = binary.nulls().cloned();
                 let decimal = binary.iter().map(|o| match o {
                     Some(b) => i256::from_be_bytes(sign_extend_be(b)),
                     None => i256::default(),
@@ -185,7 +185,7 @@ impl ArrayReader for FixedLenByteArrayReader {
                 Arc::new(decimal)
             }
             ArrowType::Interval(unit) => {
-                let nulls = binary.nulls().map(|nb| nb.clone());
+                let nulls = binary.nulls().cloned();
                 // An interval is stored as 3x 32-bit unsigned integers storing months, days,
                 // and milliseconds
                 match unit {
@@ -216,7 +216,7 @@ impl ArrayReader for FixedLenByteArrayReader {
                 }
             }
             ArrowType::Float16 => {
-                let nulls = binary.nulls().map(|nb| nb.clone());
+                let nulls = binary.nulls().cloned();
                 let f16s = binary.iter().map(|o| match o {
                     Some(b) => f16::from_le_bytes(b[..2].try_into().unwrap()),
                     None => f16::default(),
