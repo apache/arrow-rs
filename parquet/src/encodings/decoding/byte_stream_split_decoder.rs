@@ -21,7 +21,7 @@ use bytes::Bytes;
 
 use crate::basic::{Encoding, Type};
 use crate::data_type::private::ParquetValueType;
-use crate::data_type::{DataType, FixedLenByteArray, SliceAsBytes};
+use crate::data_type::{DataType, SliceAsBytes};
 use crate::errors::{ParquetError, Result};
 
 use super::Decoder;
@@ -234,12 +234,7 @@ impl<T: DataType> Decoder<T> for VariableWidthByteStreamSplitDecoder<T> {
         for (i, bi) in buffer.iter_mut().enumerate().take(num_values) {
             // Get a view into the data, without also copying the bytes
             let data = bytes_with_data.slice(i * type_size..(i + 1) * type_size);
-            // TODO: perhaps add a `set_from_bytes` method to `DataType` to avoid downcasting
-            let bi = bi
-                .as_mut_any()
-                .downcast_mut::<FixedLenByteArray>()
-                .expect("Decoding fixed length byte array");
-            bi.set_data(data);
+            bi.set_from_bytes(data);
         }
 
         Ok(num_values)
