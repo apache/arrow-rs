@@ -1,0 +1,2 @@
+Apache Arrow Object Store
+Copyright 2020-2024 The Apache Software Foundation
