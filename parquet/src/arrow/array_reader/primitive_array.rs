@@ -256,22 +256,33 @@ where
                 Arc::new(array) as ArrayRef
             }
             ArrowType::Decimal256(p, s) => {
+                let nulls = array.nulls().cloned();
                 let array = match array.data_type() {
-                    ArrowType::Int32 => array
-                        .as_any()
-                        .downcast_ref::<Int32Array>()
-                        .unwrap()
-                        .iter()
-                        .map(|v| v.map(|v| i256::from_i128(v as i128)))
-                        .collect::<Decimal256Array>(),
+                    ArrowType::Int32 => {
+                        let decimal = array
+                            .as_any()
+                            .downcast_ref::<Int32Array>()
+                            .unwrap()
+                            .iter()
+                            .map(|v| match v {
+                                Some(i) => i256::from_i128(i as i128),
+                                None => i256::default(),
+                            });
+                        Decimal256Array::from_iter_values_with_nulls(decimal, nulls)
+                    }
 
-                    ArrowType::Int64 => array
-                        .as_any()
-                        .downcast_ref::<Int64Array>()
-                        .unwrap()
-                        .iter()
-                        .map(|v| v.map(|v| i256::from_i128(v as i128)))
-                        .collect::<Decimal256Array>(),
+                    ArrowType::Int64 => {
+                        let decimal = array
+                            .as_any()
+                            .downcast_ref::<Int64Array>()
+                            .unwrap()
+                            .iter()
+                            .map(|v| match v {
+                                Some(i) => i256::from_i128(i as i128),
+                                None => i256::default(),
+                            });
+                        Decimal256Array::from_iter_values_with_nulls(decimal, nulls)
+                    }
                     _ => {
                         return Err(arrow_err!(
                             "Cannot convert {:?} to decimal",
