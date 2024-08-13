@@ -674,6 +674,13 @@ pub(crate) mod private {
 
         /// Return the value as an mutable Any to allow for downcasts without transmutation
         fn as_mut_any(&mut self) -> &mut dyn std::any::Any;
+
+        /// Sets the value of this object from the provided [`Bytes`]
+        ///
+        /// Only implemented for `ByteArray` and `FixedLenByteArray`. Will panic for other types.
+        fn set_from_bytes(&mut self, _data: Bytes) {
+            unimplemented!();
+        }
     }
 
     impl ParquetValueType for bool {
@@ -953,9 +960,7 @@ pub(crate) mod private {
                     return Err(eof_err!("Not enough bytes to decode"));
                 }
 
-                let val: &mut Self = val_array.as_mut_any().downcast_mut().unwrap();
-
-                val.set_data(data.slice(decoder.start..decoder.start + len));
+                val_array.set_data(data.slice(decoder.start..decoder.start + len));
                 decoder.start += len;
             }
             decoder.num_values -= num_values;
@@ -997,6 +1002,11 @@ pub(crate) mod private {
         #[inline]
         fn as_mut_any(&mut self) -> &mut dyn std::any::Any {
             self
+        }
+
+        #[inline]
+        fn set_from_bytes(&mut self, data: Bytes) {
+            self.set_data(data);
         }
     }
 
@@ -1092,6 +1102,11 @@ pub(crate) mod private {
         #[inline]
         fn as_mut_any(&mut self) -> &mut dyn std::any::Any {
             self
+        }
+
+        #[inline]
+        fn set_from_bytes(&mut self, data: Bytes) {
+            self.set_data(data);
         }
     }
 
