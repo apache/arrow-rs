@@ -217,6 +217,8 @@ where
                 arrow_cast::cast(&a, target_type)?
             }
             ArrowType::Decimal128(p, s) => {
+                // We can simply reuse the null buffer from `array` rather than recomputing it
+                // (as was the case when we simply used `collect` to produce the new array).
                 let nulls = array.nulls().cloned();
                 let array = match array.data_type() {
                     ArrowType::Int32 => {
@@ -242,7 +244,7 @@ where
                                 Some(i) => i as i128,
                                 None => i128::default(),
                             });
-                            Decimal128Array::from_iter_values_with_nulls(decimal, nulls)
+                        Decimal128Array::from_iter_values_with_nulls(decimal, nulls)
                     }
                     _ => {
                         return Err(arrow_err!(
@@ -256,6 +258,8 @@ where
                 Arc::new(array) as ArrayRef
             }
             ArrowType::Decimal256(p, s) => {
+                // We can simply reuse the null buffer from `array` rather than recomputing it
+                // (as was the case when we simply used `collect` to produce the new array).
                 let nulls = array.nulls().cloned();
                 let array = match array.data_type() {
                     ArrowType::Int32 => {

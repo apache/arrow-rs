@@ -165,6 +165,9 @@ impl ArrayReader for FixedLenByteArrayReader {
         // TODO: An improvement might be to do this conversion on read
         let array: ArrayRef = match &self.data_type {
             ArrowType::Decimal128(p, s) => {
+                // We can simply reuse the null buffer from `binary` rather than recomputing it
+                // (as was the case when we simply used `collect` to produce the new array).
+                // The same applies to the transformations below.
                 let nulls = binary.nulls().cloned();
                 let decimal = binary.iter().map(|o| match o {
                     Some(b) => i128::from_be_bytes(sign_extend_be(b)),
