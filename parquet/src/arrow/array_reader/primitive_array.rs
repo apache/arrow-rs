@@ -217,22 +217,33 @@ where
                 arrow_cast::cast(&a, target_type)?
             }
             ArrowType::Decimal128(p, s) => {
+                let nulls = array.nulls().cloned();
                 let array = match array.data_type() {
-                    ArrowType::Int32 => array
-                        .as_any()
-                        .downcast_ref::<Int32Array>()
-                        .unwrap()
-                        .iter()
-                        .map(|v| v.map(|v| v as i128))
-                        .collect::<Decimal128Array>(),
+                    ArrowType::Int32 => {
+                        let decimal = array
+                            .as_any()
+                            .downcast_ref::<Int32Array>()
+                            .unwrap()
+                            .iter()
+                            .map(|v| match v {
+                                Some(i) => i as i128,
+                                None => i128::default(),
+                            });
+                        Decimal128Array::from_iter_values_with_nulls(decimal, nulls)
+                    }
 
-                    ArrowType::Int64 => array
-                        .as_any()
-                        .downcast_ref::<Int64Array>()
-                        .unwrap()
-                        .iter()
-                        .map(|v| v.map(|v| v as i128))
-                        .collect::<Decimal128Array>(),
+                    ArrowType::Int64 => {
+                        let decimal = array
+                            .as_any()
+                            .downcast_ref::<Int64Array>()
+                            .unwrap()
+                            .iter()
+                            .map(|v| match v {
+                                Some(i) => i as i128,
+                                None => i128::default(),
+                            });
+                            Decimal128Array::from_iter_values_with_nulls(decimal, nulls)
+                    }
                     _ => {
                         return Err(arrow_err!(
                             "Cannot convert {:?} to decimal",
