@@ -31,6 +31,7 @@
 
 **Merged pull requests:**
 
+- Add LICENSE and NOTICE files to object_store  [\#6234](https://github.com/apache/arrow-rs/pull/6234) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)] ([alamb](https://github.com/alamb))
 - feat\(object\_store\):  add `PermissionDenied` variant to top-level error [\#6194](https://github.com/apache/arrow-rs/pull/6194) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)] ([kyle-mccarthy](https://github.com/kyle-mccarthy))
 - Update object store MSRV to `1.64` [\#6123](https://github.com/apache/arrow-rs/pull/6123) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)] ([alamb](https://github.com/alamb))
 - Fix clippy in object\_store crate [\#6120](https://github.com/apache/arrow-rs/pull/6120) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)] ([alamb](https://github.com/alamb))
