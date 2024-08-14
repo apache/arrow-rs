@@ -76,7 +76,7 @@ hyper-util = "0.1"
 pin-project-lite = "0.2"
 tempfile = "3.3"
 tokio-stream = { version = "0.1", features = ["net"] }
-tower = "0.4.13"
+tower = "0.5.0"
 uuid = { version = "1.10.0", features = ["v4"] }
 
 [[example]]
