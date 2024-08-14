@@ -728,7 +728,6 @@ mod tests {
     #[test]
     fn test_statistics_min_max_bytes() {
         let stats = Statistics::int32(Some(-123), Some(234), None, Some(1), false);
-        assert!(stats._internal_has_min_max_set());
         assert_eq!(stats.min_bytes_opt(), Some((-123).as_bytes()));
         assert_eq!(stats.max_bytes_opt(), Some(234.as_bytes()));
 
@@ -739,7 +738,6 @@ mod tests {
             Some(1),
             true,
         );
-        assert!(stats._internal_has_min_max_set());
         assert_eq!(stats.min_bytes_opt().unwrap(), &[1, 2, 3]);
         assert_eq!(stats.max_bytes_opt().unwrap(), &[3, 4, 5]);
     }

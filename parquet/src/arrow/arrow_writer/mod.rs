@@ -2541,7 +2541,6 @@ mod tests {
                 row_offset += column.num_values() as usize;
 
                 let stats = column.statistics().unwrap();
-                assert!(stats._internal_has_min_max_set());
                 if let Statistics::Int32(stats) = stats {
                     assert_eq!(
                         *stats.min_opt().unwrap() as u32,
@@ -2588,7 +2587,6 @@ mod tests {
                 row_offset += column.num_values() as usize;
 
                 let stats = column.statistics().unwrap();
-                assert!(stats._internal_has_min_max_set());
                 if let Statistics::Int64(stats) = stats {
                     assert_eq!(
                         *stats.min_opt().unwrap() as u64,
