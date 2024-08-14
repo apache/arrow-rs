@@ -25,7 +25,7 @@
 //! use parquet::file::statistics::Statistics;
 //!
 //! let stats = Statistics::int32(Some(1), Some(10), None, Some(3), true);
-//! assert_eq!(stats.null_count(), Some(3));
+//! assert_eq!(stats.null_count_opt(), Some(3));
 //! assert!(stats.is_min_max_deprecated());
 //! assert!(stats.min_is_exact());
 //! assert!(stats.max_is_exact());
@@ -245,7 +245,7 @@ pub fn to_thrift(stats: Option<&Statistics>) -> Option<TStatistics> {
     let mut thrift_stats = TStatistics {
         max: None,
         min: None,
-        null_count: stats.null_count().map(|value| value as i64),
+        null_count: stats.null_count_opt().map(|value| value as i64),
         distinct_count: stats.distinct_count().map(|value| value as i64),
         max_value: None,
         min_value: None,
@@ -373,10 +373,25 @@ impl Statistics {
         statistics_enum_func![self, distinct_count]
     }
 
+    /// Returns number of null values for the column.
+    /// Note that this includes all nulls when column is part of the complex type.
+    #[deprecated(since = "53.0.0", note = "Use `null_count_opt` method instead")]
+    pub fn null_count(&self) -> u64 {
+        // 0 to remain consistent behavior prior to `null_count_opt`
+        self.null_count_opt().unwrap_or(0)
+    }
+
+    /// Returns `true` if statistics collected any null values, `false` otherwise.
+    #[deprecated(since = "53.0.0", note = "Use `null_count_opt` method instead")]
+    #[allow(deprecated)]
+    pub fn has_nulls(&self) -> bool {
+        self.null_count() > 0
+    }
+
     /// Returns number of null values for the column, if known.
     /// Note that this includes all nulls when column is part of the complex type.
-    pub fn null_count(&self) -> Option<u64> {
-        statistics_enum_func![self, null_count]
+    pub fn null_count_opt(&self) -> Option<u64> {
+        statistics_enum_func![self, null_count_opt]
     }
 
     /// Whether or not min and max values are set.
@@ -625,8 +640,16 @@ impl<T: ParquetValueType> ValueStatistics<T> {
         self.distinct_count
     }
 
+    /// Returns number of null values for the column.
+    /// Note that this includes all nulls when column is part of the complex type.
+    #[deprecated(since = "53.0.0", note = "Use `null_count_opt` method instead")]
+    pub fn null_count(&self) -> u64 {
+        // 0 to remain consistent behavior prior to `null_count_opt`
+        self.null_count_opt().unwrap_or(0)
+    }
+
     /// Returns null count.
-    pub fn null_count(&self) -> Option<u64> {
+    pub fn null_count_opt(&self) -> Option<u64> {
         self.null_count
     }
 

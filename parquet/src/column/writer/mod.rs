@@ -1087,7 +1087,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
                             Some(min.into()),
                             Some(max.into()),
                             stats.distinct_count(),
-                            stats.null_count(),
+                            stats.null_count_opt(),
                             backwards_compatible_min_max,
                         )
                         .with_max_is_exact(!did_truncate_max)
@@ -1110,7 +1110,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
                             Some(min.into()),
                             Some(max.into()),
                             stats.distinct_count(),
-                            stats.null_count(),
+                            stats.null_count_opt(),
                             backwards_compatible_min_max,
                         )
                         .with_max_is_exact(!did_truncate_max)
@@ -1842,7 +1842,7 @@ mod tests {
         assert_eq!(metadata.dictionary_page_offset(), Some(0));
         if let Some(stats) = metadata.statistics() {
             assert!(stats._internal_has_min_max_set());
-            assert_eq!(stats.null_count(), Some(0));
+            assert_eq!(stats.null_count_opt(), Some(0));
             assert_eq!(stats.distinct_count(), None);
             if let Statistics::Int32(stats) = stats {
                 assert_eq!(stats.min_opt().unwrap(), &1);
@@ -1971,7 +1971,7 @@ mod tests {
         assert_eq!(metadata.dictionary_page_offset(), Some(0));
         if let Some(stats) = metadata.statistics() {
             assert!(stats._internal_has_min_max_set());
-            assert_eq!(stats.null_count(), Some(0));
+            assert_eq!(stats.null_count_opt(), Some(0));
             assert_eq!(stats.distinct_count().unwrap_or(0), 55);
             if let Statistics::Int32(stats) = stats {
                 assert_eq!(stats.min_opt().unwrap(), &-17);
@@ -2002,7 +2002,7 @@ mod tests {
         let stats = r.metadata.statistics().unwrap();
         assert_eq!(stats.min_bytes_opt().unwrap(), 1_i32.to_le_bytes());
         assert_eq!(stats.max_bytes_opt().unwrap(), 7_i32.to_le_bytes());
-        assert_eq!(stats.null_count(), Some(0));
+        assert_eq!(stats.null_count_opt(), Some(0));
         assert!(stats.distinct_count().is_none());
 
         drop(write);
@@ -2034,7 +2034,7 @@ mod tests {
             page_statistics.max_bytes_opt().unwrap(),
             7_i32.to_le_bytes()
         );
-        assert_eq!(page_statistics.null_count(), Some(0));
+        assert_eq!(page_statistics.null_count_opt(), Some(0));
         assert!(page_statistics.distinct_count().is_none());
     }
 
@@ -2727,7 +2727,7 @@ mod tests {
 
         if let Some(stats) = r.metadata.statistics() {
             assert!(stats._internal_has_min_max_set());
-            assert_eq!(stats.null_count(), Some(0));
+            assert_eq!(stats.null_count_opt(), Some(0));
             assert_eq!(stats.distinct_count(), None);
             if let Statistics::Int32(stats) = stats {
                 // first page is [1,2,3,4]
@@ -2788,7 +2788,7 @@ mod tests {
 
         if let Some(stats) = r.metadata.statistics() {
             assert!(stats._internal_has_min_max_set());
-            assert_eq!(stats.null_count(), Some(0));
+            assert_eq!(stats.null_count_opt(), Some(0));
             assert_eq!(stats.distinct_count(), None);
             if let Statistics::FixedLenByteArray(stats) = stats {
                 let column_index_min_value = &column_index.min_values[0];
@@ -2861,7 +2861,7 @@ mod tests {
 
         if let Some(stats) = r.metadata.statistics() {
             assert!(stats._internal_has_min_max_set());
-            assert_eq!(stats.null_count(), Some(0));
+            assert_eq!(stats.null_count_opt(), Some(0));
             assert_eq!(stats.distinct_count(), None);
             if let Statistics::FixedLenByteArray(_stats) = stats {
                 let column_index_min_value = &column_index.min_values[0];
@@ -2985,7 +2985,7 @@ mod tests {
 
         let stats = r.metadata.statistics().expect("statistics");
         assert!(stats._internal_has_min_max_set());
-        assert_eq!(stats.null_count(), Some(0));
+        assert_eq!(stats.null_count_opt(), Some(0));
         assert_eq!(stats.distinct_count(), None);
         if let Statistics::ByteArray(_stats) = stats {
             let min_value = _stats.min_opt().unwrap();
@@ -3038,7 +3038,7 @@ mod tests {
 
         let stats = r.metadata.statistics().expect("statistics");
         assert!(stats._internal_has_min_max_set());
-        assert_eq!(stats.null_count(), Some(0));
+        assert_eq!(stats.null_count_opt(), Some(0));
         assert_eq!(stats.distinct_count(), None);
         if let Statistics::FixedLenByteArray(_stats) = stats {
             let min_value = _stats.min_opt().unwrap();
