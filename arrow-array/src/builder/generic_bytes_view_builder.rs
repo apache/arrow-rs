@@ -60,12 +60,14 @@ impl BlockSizeGrowthStrategy {
 /// A [`GenericByteViewArray`] consists of a list of data blocks containing string data,
 /// and a list of views into those buffers.
 ///
+/// See examples on [`StringViewBuilder`] and [`BinaryViewBuilder`]
+///
 /// This builder can be used in two ways
 ///
 /// # Append Values
 ///
 /// To avoid bump allocating, this builder allocates data in fixed size blocks, configurable
-/// using [`GenericByteViewBuilder::with_block_size`]. [`GenericByteViewBuilder::append_value`]
+/// using [`GenericByteViewBuilder::with_fixed_block_size`]. [`GenericByteViewBuilder::append_value`]
 /// writes values larger than 12 bytes to the current in-progress block, with values smaller
 /// than 12 bytes inlined into the views. If a value is appended that will not fit in the
 /// in-progress block, it will be closed, and a new block of sufficient size allocated
@@ -462,12 +464,43 @@ impl<T: ByteViewType + ?Sized, V: AsRef<T::Native>> Extend<Option<V>>
 ///
 /// Values can be appended using [`GenericByteViewBuilder::append_value`], and nulls with
 /// [`GenericByteViewBuilder::append_null`] as normal.
+///
+/// # Example
+/// ```
+/// # use arrow_array::builder::StringViewBuilder;
+/// # use arrow_array::StringViewArray;
+/// let mut builder = StringViewBuilder::new();
+/// builder.append_value("hello");
+/// builder.append_null();
+/// builder.append_value("world");
+/// let array = builder.finish();
+///
+/// let expected = vec![Some("hello"), None, Some("world")];
+/// let actual: Vec<_> = array.iter().collect();
+/// assert_eq!(expected, actual);
+/// ```
 pub type StringViewBuilder = GenericByteViewBuilder<StringViewType>;
 
 ///  Array builder for [`BinaryViewArray`][crate::BinaryViewArray]
 ///
 /// Values can be appended using [`GenericByteViewBuilder::append_value`], and nulls with
 /// [`GenericByteViewBuilder::append_null`] as normal.
+///
+/// # Example
+/// ```
+/// # use arrow_array::builder::BinaryViewBuilder;
+/// use arrow_array::BinaryViewArray;
+/// let mut builder = BinaryViewBuilder::new();
+/// builder.append_value("hello");
+/// builder.append_null();
+/// builder.append_value("world");
+/// let array = builder.finish();
+///
+/// let expected: Vec<Option<&[u8]>> = vec![Some(b"hello"), None, Some(b"world")];
+/// let actual: Vec<_> = array.iter().collect();
+/// assert_eq!(expected, actual);
+/// ```
+///
 pub type BinaryViewBuilder = GenericByteViewBuilder<BinaryViewType>;
 
 /// Creates a view from a fixed length input (the compiler can generate
