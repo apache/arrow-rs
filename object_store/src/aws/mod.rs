@@ -60,7 +60,7 @@ mod dynamo;
 mod precondition;
 mod resolve;
 
-pub use builder::{AmazonS3Builder, AmazonS3ConfigKey, S3EncryptionHeaders};
+pub use builder::{AmazonS3Builder, AmazonS3ConfigKey};
 pub use checksum::Checksum;
 pub use dynamo::DynamoCommit;
 pub use precondition::{S3ConditionalPut, S3CopyIfNotExists};

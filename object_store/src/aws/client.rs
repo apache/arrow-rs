@@ -181,7 +181,7 @@ pub struct S3Config {
     pub checksum: Option<Checksum>,
     pub copy_if_not_exists: Option<S3CopyIfNotExists>,
     pub conditional_put: Option<S3ConditionalPut>,
-    pub encryption_headers: S3EncryptionHeaders,
+    pub(super) encryption_headers: S3EncryptionHeaders,
 }
 
 impl S3Config {
@@ -527,7 +527,7 @@ impl S3Client {
         if let Some(customer_algorithm) = self
             .config
             .encryption_headers
-            .header_map()
+            .0
             .get("x-amz-server-side-encryption-customer-algorithm")
         {
             copy_source_encryption_headers.insert(
@@ -538,7 +538,7 @@ impl S3Client {
         if let Some(customer_key) = self
             .config
             .encryption_headers
-            .header_map()
+            .0
             .get("x-amz-server-side-encryption-customer-key")
         {
             copy_source_encryption_headers.insert(
@@ -549,7 +549,7 @@ impl S3Client {
         if let Some(customer_key_md5) = self
             .config
             .encryption_headers
-            .header_map()
+            .0
             .get("x-amz-server-side-encryption-customer-key-MD5")
         {
             copy_source_encryption_headers.insert(
@@ -607,7 +607,7 @@ impl S3Client {
         if self
             .config
             .encryption_headers
-            .header_map()
+            .0
             .contains_key("x-amz-server-side-encryption-customer-algorithm")
         {
             // If SSE-C is used, we must include the encryption headers in every upload request.

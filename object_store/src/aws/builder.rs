@@ -33,7 +33,6 @@ use md5::{Digest, Md5};
 use reqwest::header::{HeaderMap, HeaderValue};
 use serde::{Deserialize, Serialize};
 use snafu::{OptionExt, ResultExt, Snafu};
-use std::error;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -1095,7 +1094,7 @@ impl std::fmt::Display for S3EncryptionType {
 /// Whether these headers are sent depends on both the kind of encryption set
 /// and the kind of request being made.
 #[derive(Default, Clone, Debug)]
-pub struct S3EncryptionHeaders(HeaderMap);
+pub(super) struct S3EncryptionHeaders(pub HeaderMap);
 
 impl S3EncryptionHeaders {
     fn try_new(
@@ -1178,10 +1177,6 @@ impl S3EncryptionHeaders {
             }
         }
         Ok(Self(headers))
-    }
-
-    pub fn header_map(&self) -> &HeaderMap {
-        &self.0
     }
 }
 
