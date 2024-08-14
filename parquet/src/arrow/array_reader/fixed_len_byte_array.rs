@@ -27,7 +27,7 @@ use crate::column::reader::decoder::ColumnValueDecoder;
 use crate::errors::{ParquetError, Result};
 use crate::schema::types::ColumnDescPtr;
 use arrow_array::{
-    ArrayRef, Decimal128Array, Decimal256Array, FixedSizeBinaryArray, Float16Array,
+    Array, ArrayRef, Decimal128Array, Decimal256Array, FixedSizeBinaryArray, Float16Array,
     IntervalDayTimeArray, IntervalYearMonthArray,
 };
 use arrow_buffer::{i256, Buffer, IntervalDayTime};
@@ -165,57 +165,68 @@ impl ArrayReader for FixedLenByteArrayReader {
         // TODO: An improvement might be to do this conversion on read
         let array: ArrayRef = match &self.data_type {
             ArrowType::Decimal128(p, s) => {
-                let decimal = binary
-                    .iter()
-                    .map(|opt| Some(i128::from_be_bytes(sign_extend_be(opt?))))
-                    .collect::<Decimal128Array>()
+                // We can simply reuse the null buffer from `binary` rather than recomputing it
+                // (as was the case when we simply used `collect` to produce the new array).
+                // The same applies to the transformations below.
+                let nulls = binary.nulls().cloned();
+                let decimal = binary.iter().map(|o| match o {
+                    Some(b) => i128::from_be_bytes(sign_extend_be(b)),
+                    None => i128::default(),
+                });
+                let decimal = Decimal128Array::from_iter_values_with_nulls(decimal, nulls)
                     .with_precision_and_scale(*p, *s)?;
-
                 Arc::new(decimal)
             }
             ArrowType::Decimal256(p, s) => {
-                let decimal = binary
-                    .iter()
-                    .map(|opt| Some(i256::from_be_bytes(sign_extend_be(opt?))))
-                    .collect::<Decimal256Array>()
+                let nulls = binary.nulls().cloned();
+                let decimal = binary.iter().map(|o| match o {
+                    Some(b) => i256::from_be_bytes(sign_extend_be(b)),
+                    None => i256::default(),
+                });
+                let decimal = Decimal256Array::from_iter_values_with_nulls(decimal, nulls)
                     .with_precision_and_scale(*p, *s)?;
-
                 Arc::new(decimal)
             }
             ArrowType::Interval(unit) => {
+                let nulls = binary.nulls().cloned();
                 // An interval is stored as 3x 32-bit unsigned integers storing months, days,
                 // and milliseconds
                 match unit {
-                    IntervalUnit::YearMonth => Arc::new(
-                        binary
-                            .iter()
-                            .map(|o| o.map(|b| i32::from_le_bytes(b[0..4].try_into().unwrap())))
-                            .collect::<IntervalYearMonthArray>(),
-                    ) as ArrayRef,
-                    IntervalUnit::DayTime => Arc::new(
-                        binary
-                            .iter()
-                            .map(|o| {
-                                o.map(|b| {
-                                    IntervalDayTime::new(
-                                        i32::from_le_bytes(b[4..8].try_into().unwrap()),
-                                        i32::from_le_bytes(b[8..12].try_into().unwrap()),
-                                    )
-                                })
-                            })
-                            .collect::<IntervalDayTimeArray>(),
-                    ) as ArrayRef,
+                    IntervalUnit::YearMonth => {
+                        let iter = binary.iter().map(|o| match o {
+                            Some(b) => i32::from_le_bytes(b[0..4].try_into().unwrap()),
+                            None => i32::default(),
+                        });
+                        let interval =
+                            IntervalYearMonthArray::from_iter_values_with_nulls(iter, nulls);
+                        Arc::new(interval) as ArrayRef
+                    }
+                    IntervalUnit::DayTime => {
+                        let iter = binary.iter().map(|o| match o {
+                            Some(b) => IntervalDayTime::new(
+                                i32::from_le_bytes(b[4..8].try_into().unwrap()),
+                                i32::from_le_bytes(b[8..12].try_into().unwrap()),
+                            ),
+                            None => IntervalDayTime::default(),
+                        });
+                        let interval =
+                            IntervalDayTimeArray::from_iter_values_with_nulls(iter, nulls);
+                        Arc::new(interval) as ArrayRef
+                    }
                     IntervalUnit::MonthDayNano => {
                         return Err(nyi_err!("MonthDayNano intervals not supported"));
                     }
                 }
             }
-            ArrowType::Float16 => Arc::new(
-                binary
-                    .iter()
-                    .map(|o| o.map(|b| f16::from_le_bytes(b[..2].try_into().unwrap())))
-                    .collect::<Float16Array>(),
-            ) as ArrayRef,
+            ArrowType::Float16 => {
+                let nulls = binary.nulls().cloned();
+                let f16s = binary.iter().map(|o| match o {
+                    Some(b) => f16::from_le_bytes(b[..2].try_into().unwrap()),
+                    None => f16::default(),
+                });
+                let f16s = Float16Array::from_iter_values_with_nulls(f16s, nulls);
+                Arc::new(f16s) as ArrayRef
+            }
             _ => Arc::new(binary) as ArrayRef,
         };
 
