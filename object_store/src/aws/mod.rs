@@ -412,8 +412,8 @@ mod tests {
     use crate::client::get::GetClient;
     use crate::integration::*;
     use crate::tests::*;
-    use hyper::HeaderMap;
     use crate::ClientOptions;
+    use hyper::HeaderMap;
 
     const NON_EXISTENT_NAME: &str = "nonexistentname";
 
@@ -664,7 +664,8 @@ mod tests {
             );
 
             assert_eq!(
-                headers.get("x-amz-server-side-encryption-customer-key-MD5")
+                headers
+                    .get("x-amz-server-side-encryption-customer-key-MD5")
                     .expect("object is not encrypted with SSE-C"),
                 expected_md5
             );
