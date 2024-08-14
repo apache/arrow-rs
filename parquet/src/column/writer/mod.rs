@@ -769,8 +769,8 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
                 }
                 Some(stat) => {
                     // Check if min/max are still ascending/descending across pages
-                    let new_min = stat.min();
-                    let new_max = stat.max();
+                    let new_min = stat.min_opt().unwrap();
+                    let new_max = stat.max_opt().unwrap();
                     if let Some((last_min, last_max)) = &self.last_non_null_data_page_min_max {
                         if self.data_page_boundary_ascending {
                             // If last min/max are greater than new min/max then not ascending anymore

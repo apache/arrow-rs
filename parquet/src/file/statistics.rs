@@ -254,17 +254,12 @@ pub fn to_thrift(stats: Option<&Statistics>) -> Option<TStatistics> {
     };
 
     // Get min/max if set.
-    let (min, max, min_exact, max_exact) = if stats.has_min_max_set() {
-        (
-            Some(stats.min_bytes_opt().unwrap().to_vec()),
-            Some(stats.max_bytes_opt().unwrap().to_vec()),
-            Some(stats.min_is_exact()),
-            Some(stats.max_is_exact()),
-        )
-    } else {
-        (None, None, None, None)
-    };
-
+    let (min, max, min_exact, max_exact) = (
+        stats.min_bytes_opt().map(|x| x.to_vec()),
+        stats.max_bytes_opt().map(|x| x.to_vec()),
+        Some(stats.min_is_exact()),
+        Some(stats.max_is_exact()),
+    );
     if stats.is_min_max_backwards_compatible() {
         // Copy to deprecated min, max values for compatibility with older readers
         thrift_stats.min.clone_from(&min);
@@ -386,7 +381,7 @@ impl Statistics {
 
     /// Returns `true` if min value and max value are set.
     /// Normally both min/max values will be set to `Some(value)` or `None`.
-    pub(crate) fn has_min_max_set(&self) -> bool {
+    pub fn has_min_max_set(&self) -> bool {
         statistics_enum_func![self, has_min_max_set]
     }
 
@@ -407,6 +402,7 @@ impl Statistics {
 
     /// Returns slice of bytes that represent min value.
     /// Panics if min value is not set.
+    #[deprecated(since = "53.0.0", note = "Use `max_bytes_opt` instead")]
     pub fn min_bytes(&self) -> &[u8] {
         self.min_bytes_opt().unwrap()
     }
@@ -418,6 +414,7 @@ impl Statistics {
 
     /// Returns slice of bytes that represent max value.
     /// Panics if max value is not set.
+    #[deprecated(since = "53.0.0", note = "Use `max_bytes_opt` instead")]
     pub fn max_bytes(&self) -> &[u8] {
         self.max_bytes_opt().unwrap()
     }
@@ -538,6 +535,7 @@ impl<T: ParquetValueType> ValueStatistics<T> {
     ///
     /// Panics if min value is not set, e.g. all values are `null`.
     /// Use `has_min_max_set` method to check that.
+    #[deprecated(since = "53.0.0", note = "Use `min_opt` instead")]
     pub fn min(&self) -> &T {
         self.min.as_ref().unwrap()
     }
@@ -551,6 +549,7 @@ impl<T: ParquetValueType> ValueStatistics<T> {
     ///
     /// Panics if max value is not set, e.g. all values are `null`.
     /// Use `has_min_max_set` method to check that.
+    #[deprecated(since = "53.0.0", note = "Use `max_opt` instead")]
     pub fn max(&self) -> &T {
         self.max.as_ref().unwrap()
     }
@@ -569,6 +568,7 @@ impl<T: ParquetValueType> ValueStatistics<T> {
     ///
     /// Panics if min value is not set, use `has_min_max_set` method to check
     /// if values are set.
+    #[deprecated(since = "53.0.0", note = "Use `min_bytes_opt` instead")]
     pub fn min_bytes(&self) -> &[u8] {
         self.min_bytes_opt().unwrap()
     }
@@ -582,14 +582,14 @@ impl<T: ParquetValueType> ValueStatistics<T> {
     ///
     /// Panics if max value is not set, use `has_min_max_set` method to check
     /// if values are set.
-    // TODO: deprecate
+    #[deprecated(since = "53.0.0", note = "Use `max_bytes_opt` instead")]
     pub fn max_bytes(&self) -> &[u8] {
         self.max_bytes_opt().unwrap()
     }
 
     /// Whether or not min and max values are set.
     /// Normally both min/max values will be set to `Some(value)` or `None`.
-    pub(crate) fn has_min_max_set(&self) -> bool {
+    pub fn has_min_max_set(&self) -> bool {
         self.min.is_some() && self.max.is_some()
     }
 
