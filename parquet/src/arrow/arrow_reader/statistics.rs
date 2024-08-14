@@ -258,23 +258,18 @@ macro_rules! make_decimal_stats_iterator {
             fn next(&mut self) -> Option<Self::Item> {
                 let next = self.iter.next();
                 next.map(|x| {
-                    x.and_then(|stats| {
-                        if !stats.has_min_max_set() {
-                            return None;
+                    x.and_then(|stats| match stats {
+                        ParquetStatistics::Int32(s) => {
+                            s.$func().map(|x| $stat_value_type::from(*x))
                         }
-                        match stats {
-                            ParquetStatistics::Int32(s) => {
-                                s.$func().map(|x| $stat_value_type::from(*x))
-                            }
-                            ParquetStatistics::Int64(s) => {
-                                s.$func().map(|x| $stat_value_type::from(*x))
-                            }
-                            ParquetStatistics::ByteArray(s) => s.$bytes_func().map($convert_func),
-                            ParquetStatistics::FixedLenByteArray(s) => {
-                                s.$bytes_func().map($convert_func)
-                            }
-                            _ => None,
+                        ParquetStatistics::Int64(s) => {
+                            s.$func().map(|x| $stat_value_type::from(*x))
                         }
+                        ParquetStatistics::ByteArray(s) => s.$bytes_func().map($convert_func),
+                        ParquetStatistics::FixedLenByteArray(s) => {
+                            s.$bytes_func().map($convert_func)
+                        }
+                        _ => None,
                     })
                 })
             }
