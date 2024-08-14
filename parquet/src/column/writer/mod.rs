@@ -1073,7 +1073,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
             .into();
 
             let statistics = match statistics {
-                Statistics::ByteArray(stats) if stats.has_min_max_set() => {
+                Statistics::ByteArray(stats) if stats._internal_has_min_max_set() => {
                     let (min, did_truncate_min) = self.truncate_min_value(
                         self.props.statistics_truncate_length(),
                         stats.min_bytes_opt().unwrap(),
@@ -1095,7 +1095,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
                     )
                 }
                 Statistics::FixedLenByteArray(stats)
-                    if (stats.has_min_max_set() && self.can_truncate_value()) =>
+                    if (stats._internal_has_min_max_set() && self.can_truncate_value()) =>
                 {
                     let (min, did_truncate_min) = self.truncate_min_value(
                         self.props.statistics_truncate_length(),
@@ -1841,7 +1841,7 @@ mod tests {
         assert_eq!(metadata.data_page_offset(), 0);
         assert_eq!(metadata.dictionary_page_offset(), Some(0));
         if let Some(stats) = metadata.statistics() {
-            assert!(stats.has_min_max_set());
+            assert!(stats._internal_has_min_max_set());
             assert_eq!(stats.null_count(), Some(0));
             assert_eq!(stats.distinct_count(), None);
             if let Statistics::Int32(stats) = stats {
@@ -1886,7 +1886,7 @@ mod tests {
             .unwrap();
         let metadata = writer.close().unwrap().metadata;
         if let Some(stats) = metadata.statistics() {
-            assert!(stats.has_min_max_set());
+            assert!(stats._internal_has_min_max_set());
             if let Statistics::ByteArray(stats) = stats {
                 assert_eq!(
                     stats.min_opt().unwrap(),
@@ -1923,7 +1923,7 @@ mod tests {
         writer.write_batch(&[0, 1, 2, 3, 4, 5], None, None).unwrap();
         let metadata = writer.close().unwrap().metadata;
         if let Some(stats) = metadata.statistics() {
-            assert!(stats.has_min_max_set());
+            assert!(stats._internal_has_min_max_set());
             if let Statistics::Int32(stats) = stats {
                 assert_eq!(stats.min_opt().unwrap(), &0,);
                 assert_eq!(stats.max_opt().unwrap(), &5,);
@@ -1970,7 +1970,7 @@ mod tests {
         assert_eq!(metadata.data_page_offset(), 0);
         assert_eq!(metadata.dictionary_page_offset(), Some(0));
         if let Some(stats) = metadata.statistics() {
-            assert!(stats.has_min_max_set());
+            assert!(stats._internal_has_min_max_set());
             assert_eq!(stats.null_count(), Some(0));
             assert_eq!(stats.distinct_count().unwrap_or(0), 55);
             if let Statistics::Int32(stats) = stats {
@@ -2223,7 +2223,7 @@ mod tests {
     #[test]
     fn test_bool_statistics() {
         let stats = statistics_roundtrip::<BoolType>(&[true, false, false, true]);
-        assert!(stats.has_min_max_set());
+        assert!(stats._internal_has_min_max_set());
         // Booleans have an unsigned sort order and so are not compatible
         // with the deprecated `min` and `max` statistics
         assert!(!stats.is_min_max_backwards_compatible());
@@ -2238,7 +2238,7 @@ mod tests {
     #[test]
     fn test_int32_statistics() {
         let stats = statistics_roundtrip::<Int32Type>(&[-1, 3, -2, 2]);
-        assert!(stats.has_min_max_set());
+        assert!(stats._internal_has_min_max_set());
         assert!(stats.is_min_max_backwards_compatible());
         if let Statistics::Int32(stats) = stats {
             assert_eq!(stats.min_opt().unwrap(), &-2);
@@ -2251,7 +2251,7 @@ mod tests {
     #[test]
     fn test_int64_statistics() {
         let stats = statistics_roundtrip::<Int64Type>(&[-1, 3, -2, 2]);
-        assert!(stats.has_min_max_set());
+        assert!(stats._internal_has_min_max_set());
         assert!(stats.is_min_max_backwards_compatible());
         if let Statistics::Int64(stats) = stats {
             assert_eq!(stats.min_opt().unwrap(), &-2);
@@ -2273,7 +2273,7 @@ mod tests {
         .collect::<Vec<Int96>>();
 
         let stats = statistics_roundtrip::<Int96Type>(&input);
-        assert!(stats.has_min_max_set());
+        assert!(stats._internal_has_min_max_set());
         assert!(!stats.is_min_max_backwards_compatible());
         if let Statistics::Int96(stats) = stats {
             assert_eq!(stats.min_opt().unwrap(), &Int96::from(vec![0, 20, 30]));
@@ -2286,7 +2286,7 @@ mod tests {
     #[test]
     fn test_float_statistics() {
         let stats = statistics_roundtrip::<FloatType>(&[-1.0, 3.0, -2.0, 2.0]);
-        assert!(stats.has_min_max_set());
+        assert!(stats._internal_has_min_max_set());
         assert!(stats.is_min_max_backwards_compatible());
         if let Statistics::Float(stats) = stats {
             assert_eq!(stats.min_opt().unwrap(), &-2.0);
@@ -2299,7 +2299,7 @@ mod tests {
     #[test]
     fn test_double_statistics() {
         let stats = statistics_roundtrip::<DoubleType>(&[-1.0, 3.0, -2.0, 2.0]);
-        assert!(stats.has_min_max_set());
+        assert!(stats._internal_has_min_max_set());
         assert!(stats.is_min_max_backwards_compatible());
         if let Statistics::Double(stats) = stats {
             assert_eq!(stats.min_opt().unwrap(), &-2.0);
@@ -2318,7 +2318,7 @@ mod tests {
 
         let stats = statistics_roundtrip::<ByteArrayType>(&input);
         assert!(!stats.is_min_max_backwards_compatible());
-        assert!(stats.has_min_max_set());
+        assert!(stats._internal_has_min_max_set());
         if let Statistics::ByteArray(stats) = stats {
             assert_eq!(stats.min_opt().unwrap(), &ByteArray::from("aaw"));
             assert_eq!(stats.max_opt().unwrap(), &ByteArray::from("zz"));
@@ -2335,7 +2335,7 @@ mod tests {
             .collect::<Vec<_>>();
 
         let stats = statistics_roundtrip::<FixedLenByteArrayType>(&input);
-        assert!(stats.has_min_max_set());
+        assert!(stats._internal_has_min_max_set());
         assert!(!stats.is_min_max_backwards_compatible());
         if let Statistics::FixedLenByteArray(stats) = stats {
             let expected_min: FixedLenByteArray = ByteArray::from("aaw  ").into();
@@ -2360,7 +2360,7 @@ mod tests {
         .collect::<Vec<_>>();
 
         let stats = float16_statistics_roundtrip(&input);
-        assert!(stats.has_min_max_set());
+        assert!(stats._internal_has_min_max_set());
         assert!(stats.is_min_max_backwards_compatible());
         assert_eq!(
             stats.min_opt().unwrap(),
@@ -2380,7 +2380,7 @@ mod tests {
             .collect::<Vec<_>>();
 
         let stats = float16_statistics_roundtrip(&input);
-        assert!(stats.has_min_max_set());
+        assert!(stats._internal_has_min_max_set());
         assert!(stats.is_min_max_backwards_compatible());
         assert_eq!(stats.min_opt().unwrap(), &ByteArray::from(f16::ONE));
         assert_eq!(
@@ -2397,7 +2397,7 @@ mod tests {
             .collect::<Vec<_>>();
 
         let stats = float16_statistics_roundtrip(&input);
-        assert!(stats.has_min_max_set());
+        assert!(stats._internal_has_min_max_set());
         assert!(stats.is_min_max_backwards_compatible());
         assert_eq!(stats.min_opt().unwrap(), &ByteArray::from(f16::ONE));
         assert_eq!(
@@ -2414,7 +2414,7 @@ mod tests {
             .collect::<Vec<_>>();
 
         let stats = float16_statistics_roundtrip(&input);
-        assert!(stats.has_min_max_set());
+        assert!(stats._internal_has_min_max_set());
         assert!(stats.is_min_max_backwards_compatible());
         assert_eq!(stats.min_opt().unwrap(), &ByteArray::from(f16::ONE));
         assert_eq!(
@@ -2431,7 +2431,7 @@ mod tests {
             .collect::<Vec<_>>();
 
         let stats = float16_statistics_roundtrip(&input);
-        assert!(!stats.has_min_max_set());
+        assert!(!stats._internal_has_min_max_set());
         assert!(stats.is_min_max_backwards_compatible());
     }
 
@@ -2443,7 +2443,7 @@ mod tests {
             .collect::<Vec<_>>();
 
         let stats = float16_statistics_roundtrip(&input);
-        assert!(stats.has_min_max_set());
+        assert!(stats._internal_has_min_max_set());
         assert!(stats.is_min_max_backwards_compatible());
         assert_eq!(stats.min_opt().unwrap(), &ByteArray::from(f16::NEG_ZERO));
         assert_eq!(stats.max_opt().unwrap(), &ByteArray::from(f16::ZERO));
@@ -2457,7 +2457,7 @@ mod tests {
             .collect::<Vec<_>>();
 
         let stats = float16_statistics_roundtrip(&input);
-        assert!(stats.has_min_max_set());
+        assert!(stats._internal_has_min_max_set());
         assert!(stats.is_min_max_backwards_compatible());
         assert_eq!(stats.min_opt().unwrap(), &ByteArray::from(f16::NEG_ZERO));
         assert_eq!(stats.max_opt().unwrap(), &ByteArray::from(f16::ZERO));
@@ -2471,7 +2471,7 @@ mod tests {
             .collect::<Vec<_>>();
 
         let stats = float16_statistics_roundtrip(&input);
-        assert!(stats.has_min_max_set());
+        assert!(stats._internal_has_min_max_set());
         assert!(stats.is_min_max_backwards_compatible());
         assert_eq!(stats.min_opt().unwrap(), &ByteArray::from(f16::NEG_ZERO));
         assert_eq!(stats.max_opt().unwrap(), &ByteArray::from(f16::PI));
@@ -2485,7 +2485,7 @@ mod tests {
             .collect::<Vec<_>>();
 
         let stats = float16_statistics_roundtrip(&input);
-        assert!(stats.has_min_max_set());
+        assert!(stats._internal_has_min_max_set());
         assert!(stats.is_min_max_backwards_compatible());
         assert_eq!(stats.min_opt().unwrap(), &ByteArray::from(-f16::PI));
         assert_eq!(stats.max_opt().unwrap(), &ByteArray::from(f16::ZERO));
@@ -2494,7 +2494,7 @@ mod tests {
     #[test]
     fn test_float_statistics_nan_middle() {
         let stats = statistics_roundtrip::<FloatType>(&[1.0, f32::NAN, 2.0]);
-        assert!(stats.has_min_max_set());
+        assert!(stats._internal_has_min_max_set());
         assert!(stats.is_min_max_backwards_compatible());
         if let Statistics::Float(stats) = stats {
             assert_eq!(stats.min_opt().unwrap(), &1.0);
@@ -2507,7 +2507,7 @@ mod tests {
     #[test]
     fn test_float_statistics_nan_start() {
         let stats = statistics_roundtrip::<FloatType>(&[f32::NAN, 1.0, 2.0]);
-        assert!(stats.has_min_max_set());
+        assert!(stats._internal_has_min_max_set());
         assert!(stats.is_min_max_backwards_compatible());
         if let Statistics::Float(stats) = stats {
             assert_eq!(stats.min_opt().unwrap(), &1.0);
@@ -2520,7 +2520,7 @@ mod tests {
     #[test]
     fn test_float_statistics_nan_only() {
         let stats = statistics_roundtrip::<FloatType>(&[f32::NAN, f32::NAN]);
-        assert!(!stats.has_min_max_set());
+        assert!(!stats._internal_has_min_max_set());
         assert!(stats.is_min_max_backwards_compatible());
         assert!(matches!(stats, Statistics::Float(_)));
     }
@@ -2528,7 +2528,7 @@ mod tests {
     #[test]
     fn test_float_statistics_zero_only() {
         let stats = statistics_roundtrip::<FloatType>(&[0.0]);
-        assert!(stats.has_min_max_set());
+        assert!(stats._internal_has_min_max_set());
         assert!(stats.is_min_max_backwards_compatible());
         if let Statistics::Float(stats) = stats {
             assert_eq!(stats.min_opt().unwrap(), &-0.0);
@@ -2543,7 +2543,7 @@ mod tests {
     #[test]
     fn test_float_statistics_neg_zero_only() {
         let stats = statistics_roundtrip::<FloatType>(&[-0.0]);
-        assert!(stats.has_min_max_set());
+        assert!(stats._internal_has_min_max_set());
         assert!(stats.is_min_max_backwards_compatible());
         if let Statistics::Float(stats) = stats {
             assert_eq!(stats.min_opt().unwrap(), &-0.0);
@@ -2558,7 +2558,7 @@ mod tests {
     #[test]
     fn test_float_statistics_zero_min() {
         let stats = statistics_roundtrip::<FloatType>(&[0.0, 1.0, f32::NAN, 2.0]);
-        assert!(stats.has_min_max_set());
+        assert!(stats._internal_has_min_max_set());
         assert!(stats.is_min_max_backwards_compatible());
         if let Statistics::Float(stats) = stats {
             assert_eq!(stats.min_opt().unwrap(), &-0.0);
@@ -2572,7 +2572,7 @@ mod tests {
     #[test]
     fn test_float_statistics_neg_zero_max() {
         let stats = statistics_roundtrip::<FloatType>(&[-0.0, -1.0, f32::NAN, -2.0]);
-        assert!(stats.has_min_max_set());
+        assert!(stats._internal_has_min_max_set());
         assert!(stats.is_min_max_backwards_compatible());
         if let Statistics::Float(stats) = stats {
             assert_eq!(stats.min_opt().unwrap(), &-2.0);
@@ -2586,7 +2586,7 @@ mod tests {
     #[test]
     fn test_double_statistics_nan_middle() {
         let stats = statistics_roundtrip::<DoubleType>(&[1.0, f64::NAN, 2.0]);
-        assert!(stats.has_min_max_set());
+        assert!(stats._internal_has_min_max_set());
         assert!(stats.is_min_max_backwards_compatible());
         if let Statistics::Double(stats) = stats {
             assert_eq!(stats.min_opt().unwrap(), &1.0);
@@ -2599,7 +2599,7 @@ mod tests {
     #[test]
     fn test_double_statistics_nan_start() {
         let stats = statistics_roundtrip::<DoubleType>(&[f64::NAN, 1.0, 2.0]);
-        assert!(stats.has_min_max_set());
+        assert!(stats._internal_has_min_max_set());
         assert!(stats.is_min_max_backwards_compatible());
         if let Statistics::Double(stats) = stats {
             assert_eq!(stats.min_opt().unwrap(), &1.0);
@@ -2612,7 +2612,7 @@ mod tests {
     #[test]
     fn test_double_statistics_nan_only() {
         let stats = statistics_roundtrip::<DoubleType>(&[f64::NAN, f64::NAN]);
-        assert!(!stats.has_min_max_set());
+        assert!(!stats._internal_has_min_max_set());
         assert!(matches!(stats, Statistics::Double(_)));
         assert!(stats.is_min_max_backwards_compatible());
     }
@@ -2620,7 +2620,7 @@ mod tests {
     #[test]
     fn test_double_statistics_zero_only() {
         let stats = statistics_roundtrip::<DoubleType>(&[0.0]);
-        assert!(stats.has_min_max_set());
+        assert!(stats._internal_has_min_max_set());
         assert!(stats.is_min_max_backwards_compatible());
         if let Statistics::Double(stats) = stats {
             assert_eq!(stats.min_opt().unwrap(), &-0.0);
@@ -2635,7 +2635,7 @@ mod tests {
     #[test]
     fn test_double_statistics_neg_zero_only() {
         let stats = statistics_roundtrip::<DoubleType>(&[-0.0]);
-        assert!(stats.has_min_max_set());
+        assert!(stats._internal_has_min_max_set());
         assert!(stats.is_min_max_backwards_compatible());
         if let Statistics::Double(stats) = stats {
             assert_eq!(stats.min_opt().unwrap(), &-0.0);
@@ -2650,7 +2650,7 @@ mod tests {
     #[test]
     fn test_double_statistics_zero_min() {
         let stats = statistics_roundtrip::<DoubleType>(&[0.0, 1.0, f64::NAN, 2.0]);
-        assert!(stats.has_min_max_set());
+        assert!(stats._internal_has_min_max_set());
         assert!(stats.is_min_max_backwards_compatible());
         if let Statistics::Double(stats) = stats {
             assert_eq!(stats.min_opt().unwrap(), &-0.0);
@@ -2664,7 +2664,7 @@ mod tests {
     #[test]
     fn test_double_statistics_neg_zero_max() {
         let stats = statistics_roundtrip::<DoubleType>(&[-0.0, -1.0, f64::NAN, -2.0]);
-        assert!(stats.has_min_max_set());
+        assert!(stats._internal_has_min_max_set());
         assert!(stats.is_min_max_backwards_compatible());
         if let Statistics::Double(stats) = stats {
             assert_eq!(stats.min_opt().unwrap(), &-2.0);
@@ -2726,7 +2726,7 @@ mod tests {
         }
 
         if let Some(stats) = r.metadata.statistics() {
-            assert!(stats.has_min_max_set());
+            assert!(stats._internal_has_min_max_set());
             assert_eq!(stats.null_count(), Some(0));
             assert_eq!(stats.distinct_count(), None);
             if let Statistics::Int32(stats) = stats {
@@ -2787,7 +2787,7 @@ mod tests {
         assert_eq!(0, column_index.null_counts.as_ref().unwrap()[0]);
 
         if let Some(stats) = r.metadata.statistics() {
-            assert!(stats.has_min_max_set());
+            assert!(stats._internal_has_min_max_set());
             assert_eq!(stats.null_count(), Some(0));
             assert_eq!(stats.distinct_count(), None);
             if let Statistics::FixedLenByteArray(stats) = stats {
@@ -2860,7 +2860,7 @@ mod tests {
         assert_eq!(0, column_index.null_counts.as_ref().unwrap()[0]);
 
         if let Some(stats) = r.metadata.statistics() {
-            assert!(stats.has_min_max_set());
+            assert!(stats._internal_has_min_max_set());
             assert_eq!(stats.null_count(), Some(0));
             assert_eq!(stats.distinct_count(), None);
             if let Statistics::FixedLenByteArray(_stats) = stats {
@@ -2908,7 +2908,7 @@ mod tests {
 
         // ensure bytes weren't truncated for statistics
         let stats = r.metadata.statistics().unwrap();
-        assert!(stats.has_min_max_set());
+        assert!(stats._internal_has_min_max_set());
         if let Statistics::FixedLenByteArray(stats) = stats {
             let stats_min_bytes = stats.min_bytes_opt().unwrap();
             let stats_max_bytes = stats.max_bytes_opt().unwrap();
@@ -2948,7 +2948,7 @@ mod tests {
 
         // ensure bytes weren't truncated for statistics
         let stats = r.metadata.statistics().unwrap();
-        assert!(stats.has_min_max_set());
+        assert!(stats._internal_has_min_max_set());
         if let Statistics::FixedLenByteArray(stats) = stats {
             let stats_min_bytes = stats.min_bytes_opt().unwrap();
             let stats_max_bytes = stats.max_bytes_opt().unwrap();
@@ -2984,7 +2984,7 @@ mod tests {
         assert_eq!(1, r.rows_written);
 
         let stats = r.metadata.statistics().expect("statistics");
-        assert!(stats.has_min_max_set());
+        assert!(stats._internal_has_min_max_set());
         assert_eq!(stats.null_count(), Some(0));
         assert_eq!(stats.distinct_count(), None);
         if let Statistics::ByteArray(_stats) = stats {
@@ -3037,7 +3037,7 @@ mod tests {
         assert_eq!(1, r.rows_written);
 
         let stats = r.metadata.statistics().expect("statistics");
-        assert!(stats.has_min_max_set());
+        assert!(stats._internal_has_min_max_set());
         assert_eq!(stats.null_count(), Some(0));
         assert_eq!(stats.distinct_count(), None);
         if let Statistics::FixedLenByteArray(_stats) = stats {
@@ -3359,7 +3359,7 @@ mod tests {
         } else {
             panic!("metadata missing statistics");
         };
-        assert!(!stats.has_min_max_set());
+        assert!(!stats._internal_has_min_max_set());
     }
 
     fn write_multiple_pages<T: DataType>(

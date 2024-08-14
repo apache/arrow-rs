@@ -379,10 +379,20 @@ impl Statistics {
         statistics_enum_func![self, null_count]
     }
 
+    /// Whether or not min and max values are set.
+    /// Normally both min/max values will be set to `Some(value)` or `None`.
+    #[deprecated(
+        since = "53.0.0",
+        note = "Use `min_bytes_opt` and `max_bytes_opt` methods instead"
+    )]
+    pub fn has_min_max_set(&self) -> bool {
+        self._internal_has_min_max_set()
+    }
+
     /// Returns `true` if min value and max value are set.
     /// Normally both min/max values will be set to `Some(value)` or `None`.
-    pub fn has_min_max_set(&self) -> bool {
-        statistics_enum_func![self, has_min_max_set]
+    pub(crate) fn _internal_has_min_max_set(&self) -> bool {
+        statistics_enum_func![self, _internal_has_min_max_set]
     }
 
     /// Returns `true` if the min value is set, and is an exact min value.
@@ -589,7 +599,14 @@ impl<T: ParquetValueType> ValueStatistics<T> {
 
     /// Whether or not min and max values are set.
     /// Normally both min/max values will be set to `Some(value)` or `None`.
+    #[deprecated(since = "53.0.0", note = "Use `min_opt` and `max_opt` methods instead")]
     pub fn has_min_max_set(&self) -> bool {
+        self._internal_has_min_max_set()
+    }
+
+    /// Whether or not min and max values are set.
+    /// Normally both min/max values will be set to `Some(value)` or `None`.
+    pub(crate) fn _internal_has_min_max_set(&self) -> bool {
         self.min.is_some() && self.max.is_some()
     }
 
@@ -688,7 +705,7 @@ mod tests {
     #[test]
     fn test_statistics_min_max_bytes() {
         let stats = Statistics::int32(Some(-123), Some(234), None, Some(1), false);
-        assert!(stats.has_min_max_set());
+        assert!(stats._internal_has_min_max_set());
         assert_eq!(stats.min_bytes_opt(), Some((-123).as_bytes()));
         assert_eq!(stats.max_bytes_opt(), Some(234.as_bytes()));
 
@@ -699,7 +716,7 @@ mod tests {
             Some(1),
             true,
         );
-        assert!(stats.has_min_max_set());
+        assert!(stats._internal_has_min_max_set());
         assert_eq!(stats.min_bytes_opt().unwrap(), &[1, 2, 3]);
         assert_eq!(stats.max_bytes_opt().unwrap(), &[3, 4, 5]);
     }
