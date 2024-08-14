@@ -468,9 +468,9 @@ impl FixedSizeBinaryArray {
     }
 
     /// Applies a unary infallible function to a fixed-size binary array, producing a
-    /// new array of potentially different type.
+    /// new primitive array.
     ///
-    /// This is the fastest way to perform an operation on a primitive array
+    /// This is the fastest way to perform an operation on a fixed-size binary array
     /// when the benefits of a vectorized operation outweigh the cost of
     /// branching nulls and non-nulls.
     ///
