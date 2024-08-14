@@ -142,7 +142,7 @@ Run the tests. The real test is `test_s3_ssec_encryption_with_minio()`
 
 ```shell
 export TEST_S3_SSEC_ENCRYPTION=1
-cargo test --features aws --package object_store --lib aws::tests::test_s3_ssec_encryption_with_minio -- --exact
+cargo test --features aws --package object_store --lib aws::tests::test_s3_ssec_encryption_with_minio -- --exact --nocapture
 ```
 
 
