@@ -1842,7 +1842,7 @@ mod tests {
         assert_eq!(metadata.dictionary_page_offset(), Some(0));
         if let Some(stats) = metadata.statistics() {
             assert!(stats.has_min_max_set());
-            assert_eq!(stats.null_count(), Some(0)); // TODO: None or 0?
+            assert_eq!(stats.null_count(), Some(0));
             assert_eq!(stats.distinct_count(), None);
             if let Statistics::Int32(stats) = stats {
                 assert_eq!(stats.min_opt().unwrap(), &1);
@@ -1971,7 +1971,7 @@ mod tests {
         assert_eq!(metadata.dictionary_page_offset(), Some(0));
         if let Some(stats) = metadata.statistics() {
             assert!(stats.has_min_max_set());
-            assert_eq!(stats.null_count(), Some(0)); // TODO: None or 0?
+            assert_eq!(stats.null_count(), Some(0));
             assert_eq!(stats.distinct_count().unwrap_or(0), 55);
             if let Statistics::Int32(stats) = stats {
                 assert_eq!(stats.min_opt().unwrap(), &-17);
@@ -2002,7 +2002,7 @@ mod tests {
         let stats = r.metadata.statistics().unwrap();
         assert_eq!(stats.min_bytes_opt().unwrap(), 1_i32.to_le_bytes());
         assert_eq!(stats.max_bytes_opt().unwrap(), 7_i32.to_le_bytes());
-        assert_eq!(stats.null_count(), Some(0)); // TODO: None or 0?
+        assert_eq!(stats.null_count(), Some(0));
         assert!(stats.distinct_count().is_none());
 
         drop(write);
@@ -2034,7 +2034,7 @@ mod tests {
             page_statistics.max_bytes_opt().unwrap(),
             7_i32.to_le_bytes()
         );
-        assert_eq!(page_statistics.null_count(), Some(0)); // TODO: None or 0?
+        assert_eq!(page_statistics.null_count(), Some(0));
         assert!(page_statistics.distinct_count().is_none());
     }
 

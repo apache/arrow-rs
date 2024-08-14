@@ -622,7 +622,6 @@ impl<T: ParquetValueType> ValueStatistics<T> {
     /// using signed comparison. This resulted in an undefined ordering for unsigned
     /// quantities, such as booleans and unsigned integers.
     ///
-    // TODO: I don't see `min_value` or `max_value` in this struct. Should these be something else?
     /// These fields were therefore deprecated in favour of `min_value` and `max_value`,
     /// which have a type-defined sort order.
     ///
