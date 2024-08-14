@@ -15,11 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::array::primitive_array::PrimitiveArray;
 use crate::array::print_long_array;
 use crate::iterator::FixedSizeBinaryIter;
+use crate::types::ArrowPrimitiveType;
 use crate::{Array, ArrayAccessor, ArrayRef, FixedSizeListArray, Scalar};
 use arrow_buffer::buffer::NullBuffer;
-use arrow_buffer::{bit_util, ArrowNativeType, BooleanBuffer, Buffer, MutableBuffer};
+use arrow_buffer::{bit_util, ArrowNativeType, BooleanBuffer, Buffer, MutableBuffer, ScalarBuffer};
 use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::{ArrowError, DataType};
 use std::any::Any;
@@ -463,6 +465,42 @@ impl FixedSizeBinaryArray {
     /// constructs a new iterator
     pub fn iter(&self) -> FixedSizeBinaryIter<'_> {
         FixedSizeBinaryIter::new(self)
+    }
+
+    /// Applies a unary infallible function to a fixed-size binary array, producing a
+    /// new array of potentially different type.
+    ///
+    /// This is the fastest way to perform an operation on a primitive array
+    /// when the benefits of a vectorized operation outweigh the cost of
+    /// branching nulls and non-nulls.
+    ///
+    /// # Null Handling
+    ///
+    /// Applies the function for all values, including those on null slots. This
+    /// will often allow the compiler to generate faster vectorized code, but
+    /// requires that the operation must be infallible (not error/panic) for any
+    /// value of the corresponding type or this function may panic.
+    pub fn unary<F, O>(&self, op: F) -> PrimitiveArray<O>
+    where
+        O: ArrowPrimitiveType,
+        F: Fn(&[u8]) -> O::Native,
+    {
+        let num_vals = self.len();
+        let length = self.value_length as usize;
+        let src = self.value_data.as_slice();
+        let mut dst = vec![O::Native::default(); num_vals];
+
+        // Performance note: not using src.chunks() as that was considerably slower than
+        // calculating slices of src directly.
+        for (i, dsti) in dst.iter_mut().enumerate().take(num_vals) {
+            let idx = length * i;
+            *dsti = op(&src[idx..idx + length])
+        }
+
+        PrimitiveArray::new(
+            ScalarBuffer::new(Buffer::from_vec(dst), 0, num_vals),
+            self.nulls().cloned(),
+        )
     }
 }
 
