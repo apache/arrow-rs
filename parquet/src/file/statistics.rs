@@ -401,12 +401,6 @@ impl Statistics {
         note = "Use `min_bytes_opt` and `max_bytes_opt` methods instead"
     )]
     pub fn has_min_max_set(&self) -> bool {
-        self._internal_has_min_max_set()
-    }
-
-    /// Returns `true` if min value and max value are set.
-    /// Normally both min/max values will be set to `Some(value)` or `None`.
-    pub(crate) fn _internal_has_min_max_set(&self) -> bool {
         statistics_enum_func![self, _internal_has_min_max_set]
     }
 

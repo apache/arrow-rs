@@ -2415,7 +2415,8 @@ mod tests {
             .collect::<Vec<_>>();
 
         let stats = float16_statistics_roundtrip(&input);
-        assert!(!stats._internal_has_min_max_set());
+        assert!(stats.min_bytes_opt().is_none());
+        assert!(stats.max_bytes_opt().is_none());
         assert!(stats.is_min_max_backwards_compatible());
     }
 
@@ -2498,7 +2499,8 @@ mod tests {
     #[test]
     fn test_float_statistics_nan_only() {
         let stats = statistics_roundtrip::<FloatType>(&[f32::NAN, f32::NAN]);
-        assert!(!stats._internal_has_min_max_set());
+        assert!(stats.min_bytes_opt().is_none());
+        assert!(stats.max_bytes_opt().is_none());
         assert!(stats.is_min_max_backwards_compatible());
         assert!(matches!(stats, Statistics::Float(_)));
     }
@@ -2584,7 +2586,8 @@ mod tests {
     #[test]
     fn test_double_statistics_nan_only() {
         let stats = statistics_roundtrip::<DoubleType>(&[f64::NAN, f64::NAN]);
-        assert!(!stats._internal_has_min_max_set());
+        assert!(stats.min_bytes_opt().is_none());
+        assert!(stats.max_bytes_opt().is_none());
         assert!(matches!(stats, Statistics::Double(_)));
         assert!(stats.is_min_max_backwards_compatible());
     }
@@ -3320,7 +3323,8 @@ mod tests {
         } else {
             panic!("metadata missing statistics");
         };
-        assert!(!stats._internal_has_min_max_set());
+        assert!(stats.min_bytes_opt().is_none());
+        assert!(stats.max_bytes_opt().is_none());
     }
 
     fn write_multiple_pages<T: DataType>(
