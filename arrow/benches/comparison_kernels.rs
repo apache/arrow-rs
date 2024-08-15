@@ -244,6 +244,10 @@ fn add_benchmark(c: &mut Criterion) {
         b.iter(|| bench_like_utf8view_scalar(&string_view_left, "xxxx%"))
     });
 
+    c.bench_function("like_utf8view scalar starts with more than 4 bytes", |b| {
+        b.iter(|| bench_like_utf8view_scalar(&string_view_left, "xxxxxx%"))
+    });
+
     c.bench_function("like_utf8view scalar complex", |b| {
         b.iter(|| bench_like_utf8view_scalar(&string_view_left, "%xx_xx%xxx"))
     });
