@@ -86,12 +86,8 @@ fn test_parquet_1481() {
 #[should_panic(expected = "assertion failed: self.current_value.is_some()")]
 fn test_arrow_gh_41321() {
     let err = read_file("ARROW-GH-41321.parquet").unwrap_err();
-    assert_eq!(
-        err.to_string(),
-        "TBD (currently panics)"
-    );
+    assert_eq!(err.to_string(), "TBD (currently panics)");
 }
-
 
 #[test]
 fn test_arrow_rs_gh_6229_dict_header() {
@@ -102,17 +98,14 @@ fn test_arrow_rs_gh_6229_dict_header() {
     );
 }
 
-/* INFINITE LOOP
-https://github.com/apache/arrow-rs/issues/6229
 #[test]
 fn test_arrow_rs_gh_6229_dict_levels() {
     let err = read_file("ARROW-RS-GH-6229-LEVELS.parquet").unwrap_err();
     assert_eq!(
         err.to_string(),
-        "External: Parquet argument error: EOF: eof decoding byte array"
+        "External: Parquet argument error: Parquet error: Insufficient repetition levels read from column"
     );
 }
- */
 
 /// Reads the file and tries to return the total row count
 /// Returns an error if the file is invalid
