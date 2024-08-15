@@ -101,6 +101,54 @@ export AWS_SERVER_SIDE_ENCRYPTION=aws:kms:dsse
 cargo test --features aws
 ```
 
+#### SSE-C Encryption tests
+
+Unfortunately, localstack does not support SSE-C encryption (https://github.com/localstack/localstack/issues/11356).
+
+We will use [MinIO](https://min.io/docs/minio/container/operations/server-side-encryption.html) to test SSE-C encryption.
+
+First, create a self-signed certificate to enable HTTPS for MinIO, as SSE-C requires HTTPS.
+
+```shell
+mkdir ~/certs
+cd ~/certs
+openssl genpkey -algorithm RSA -out private.key
+openssl req -new -key private.key -out request.csr -subj "/C=US/ST=State/L=City/O=Organization/OU=Unit/CN=example.com/emailAddress=email@example.com"
+openssl x509 -req -days 365 -in request.csr -signkey private.key -out public.crt
+rm request.csr
+```
+
+Second, start MinIO with the self-signed certificate.
+
+```shell
+docker run -d \
+  -p 9000:9000 \
+  --name minio \
+  -v ${HOME}/certs:/root/.minio/certs \
+  -e "MINIO_ROOT_USER=minio" \
+  -e "MINIO_ROOT_PASSWORD=minio123" \
+  minio/minio server /data
+```
+
+Create a test bucket.
+
+```shell
+export AWS_BUCKET_NAME=test-bucket
+export AWS_ACCESS_KEY_ID=minio
+export AWS_SECRET_ACCESS_KEY=minio123
+export AWS_ENDPOINT=https://localhost:9000
+aws s3 mb s3://test-bucket --endpoint-url=https://localhost:9000 --no-verify-ssl
+```
+
+Run the tests. The real test is `test_s3_ssec_encryption_with_minio()`
+
+```shell
+export TEST_S3_SSEC_ENCRYPTION=1
+cargo test --features aws --package object_store --lib aws::tests::test_s3_ssec_encryption_with_minio -- --exact --nocapture
+```
+
+
+
 ### Azure
 
 To test the Azure integration
