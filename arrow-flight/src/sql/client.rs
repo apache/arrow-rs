@@ -24,7 +24,6 @@ use std::collections::HashMap;
 use std::str::FromStr;
 use tonic::metadata::AsciiMetadataKey;
 
-use crate::client::FallibleRequestStream;
 use crate::decode::FlightRecordBatchStream;
 use crate::encode::FlightDataEncoderBuilder;
 use crate::error::FlightError;
@@ -43,6 +42,7 @@ use crate::sql::{
     CommandStatementIngest, CommandStatementQuery, CommandStatementUpdate,
     DoPutPreparedStatementResult, DoPutUpdateResult, ProstMessageExt, SqlInfo,
 };
+use crate::streams::FallibleRequestStream;
 use crate::trailers::extract_lazy_trailers;
 use crate::{
     Action, FlightData, FlightDescriptor, FlightInfo, HandshakeRequest, HandshakeResponse,
