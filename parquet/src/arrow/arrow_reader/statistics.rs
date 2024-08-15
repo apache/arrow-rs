@@ -1179,6 +1179,8 @@ pub struct StatisticsConverter<'a> {
     parquet_column_index: Option<usize>,
     /// The field (with data type) of the column in the Arrow schema
     arrow_field: &'a Field,
+    /// treat missing null_counts as 0 nulls
+    missing_null_counts_as_zero: bool,
 }
 
 impl<'a> StatisticsConverter<'a> {
@@ -1193,6 +1195,23 @@ impl<'a> StatisticsConverter<'a> {
     /// Return the arrow schema's [`Field]` of the column in the Arrow schema
     pub fn arrow_field(&self) -> &'a Field {
         self.arrow_field
+    }
+
+    /// Set the statistics converter to treat missing null counts as missing
+    ///
+    /// By default, the converter will treat missing null counts as though
+    /// the null count is known to be `0`.
+    ///
+    /// Note that due to <https://github.com/apache/arrow-rs/pull/6257>, prior
+    /// to version 53.0.0, parquet files written by parquet-rs did not store
+    /// null counts even when it was known there were zero nulls and the reader
+    /// would return 0 for the null counts.
+    ///
+    /// Both parquet-java and parquet-cpp store null counts as 0 when there are
+    /// no nulls, and don't write unknown values to the null count field.
+    pub fn with_missing_null_counts_as_zero(mut self, missing_null_counts_as_zero: bool) -> Self {
+        self.missing_null_counts_as_zero = missing_null_counts_as_zero;
+        self
     }
 
     /// Returns a [`UInt64Array`] with row counts for each row group
@@ -1288,6 +1307,7 @@ impl<'a> StatisticsConverter<'a> {
         Ok(Self {
             parquet_column_index: parquet_index,
             arrow_field,
+            missing_null_counts_as_zero: true,
         })
     }
 
@@ -1386,7 +1406,15 @@ impl<'a> StatisticsConverter<'a> {
         let null_counts = metadatas
             .into_iter()
             .map(|x| x.column(parquet_index).statistics())
-            .map(|s| s.and_then(|s| s.null_count_opt()));
+            .map(|s| {
+                s.and_then(|s| {
+                    if self.missing_null_counts_as_zero {
+                        Some(s.null_count_opt().unwrap_or(0))
+                    } else {
+                        s.null_count_opt()
+                    }
+                })
+            });
         Ok(UInt64Array::from_iter(null_counts))
     }
 
@@ -1597,3 +1625,5 @@ impl<'a> StatisticsConverter<'a> {
         new_null_array(data_type, num_row_groups)
     }
 }
+
+// See tests in parquet/tests/arrow_reader/statistics.rs
