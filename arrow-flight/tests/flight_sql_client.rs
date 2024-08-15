@@ -22,6 +22,7 @@ use crate::common::utils::make_primitive_batch;
 
 use arrow_array::RecordBatch;
 use arrow_flight::decode::FlightRecordBatchStream;
+use arrow_flight::error::FlightError;
 use arrow_flight::flight_service_server::FlightServiceServer;
 use arrow_flight::sql::client::FlightSqlServiceClient;
 use arrow_flight::sql::server::{FlightSqlService, PeekableFlightDataStream};
@@ -73,18 +74,7 @@ pub async fn test_execute_ingest() {
     let fixture = TestFixture::new(test_server.service()).await;
     let channel = fixture.channel().await;
     let mut flight_sql_client = FlightSqlServiceClient::new(channel);
-    let cmd = CommandStatementIngest {
-        table_definition_options: Some(TableDefinitionOptions {
-            if_not_exist: TableNotExistOption::Create.into(),
-            if_exists: TableExistsOption::Fail.into(),
-        }),
-        table: String::from("test"),
-        schema: None,
-        catalog: None,
-        temporary: true,
-        transaction_id: None,
-        options: HashMap::default(),
-    };
+    let cmd = make_ingest_command();
     let expected_rows = 10;
     let batches = vec![
         make_primitive_batch(5),
@@ -99,6 +89,46 @@ pub async fn test_execute_ingest() {
     // make sure the batches made it through to the server
     let ingested_batches = test_server.ingested_batches.lock().await.clone();
     assert_eq!(ingested_batches, batches);
+}
+
+#[tokio::test]
+pub async fn test_execute_ingest_error() {
+    let test_server = FlightSqlServiceImpl::new();
+    let fixture = TestFixture::new(test_server.service()).await;
+    let channel = fixture.channel().await;
+    let mut flight_sql_client = FlightSqlServiceClient::new(channel);
+    let cmd = make_ingest_command();
+    // send an error from the client
+    let batches = vec![
+        Ok(make_primitive_batch(5)),
+        Err(FlightError::NotYetImplemented(
+            "Client error message".to_string(),
+        )),
+    ];
+    // make sure the client returns the error from the client
+    let err = flight_sql_client
+        .execute_ingest(cmd, futures::stream::iter(batches))
+        .await
+        .unwrap_err();
+    assert_eq!(
+        err.to_string(),
+        "External error: Not yet implemented: Client error message"
+    );
+}
+
+fn make_ingest_command() -> CommandStatementIngest {
+    CommandStatementIngest {
+        table_definition_options: Some(TableDefinitionOptions {
+            if_not_exist: TableNotExistOption::Create.into(),
+            if_exists: TableExistsOption::Fail.into(),
+        }),
+        table: String::from("test"),
+        schema: None,
+        catalog: None,
+        temporary: true,
+        transaction_id: None,
+        options: HashMap::default(),
+    }
 }
 
 #[derive(Clone)]

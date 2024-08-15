@@ -679,7 +679,7 @@ impl FlightClient {
 /// it encounters an error it uses the oneshot sender to
 /// notify the error and stop any further streaming. See `do_put` or
 /// `do_exchange` for it's uses.
-struct FallibleRequestStream<T, E> {
+pub(crate) struct FallibleRequestStream<T, E> {
     /// sender to notify error
     sender: Option<Sender<E>>,
     /// fallible stream
@@ -687,7 +687,7 @@ struct FallibleRequestStream<T, E> {
 }
 
 impl<T, E> FallibleRequestStream<T, E> {
-    fn new(
+    pub(crate) fn new(
         sender: Sender<E>,
         fallible_stream: Pin<Box<dyn Stream<Item = std::result::Result<T, E>> + Send + 'static>>,
     ) -> Self {

@@ -24,6 +24,7 @@ use std::collections::HashMap;
 use std::str::FromStr;
 use tonic::metadata::AsciiMetadataKey;
 
+use crate::client::FallibleRequestStream;
 use crate::decode::FlightRecordBatchStream;
 use crate::encode::FlightDataEncoderBuilder;
 use crate::error::FlightError;
@@ -53,7 +54,7 @@ use arrow_ipc::convert::fb_to_schema;
 use arrow_ipc::reader::read_record_batch;
 use arrow_ipc::{root_as_message, MessageHeader};
 use arrow_schema::{ArrowError, Schema, SchemaRef};
-use futures::{stream, Stream, StreamExt, TryStreamExt};
+use futures::{stream, Stream, TryStreamExt};
 use prost::Message;
 use tonic::transport::Channel;
 use tonic::{IntoRequest, IntoStreamingRequest, Streaming};
@@ -236,12 +237,18 @@ impl FlightSqlServiceClient<Channel> {
     where
         S: Stream<Item = crate::error::Result<RecordBatch>> + Send + 'static,
     {
+        let (sender, receiver) = futures::channel::oneshot::channel();
+
         let descriptor = FlightDescriptor::new_cmd(command.as_any().encode_to_vec());
-        let flight_data_encoder = FlightDataEncoderBuilder::new()
+        let flight_data = FlightDataEncoderBuilder::new()
             .with_flight_descriptor(Some(descriptor))
             .build(stream);
-        // Safe unwrap, explicitly wrapped on line above.
-        let flight_data = flight_data_encoder.map(|fd| fd.unwrap());
+
+        // Intercept client errors and send them to the one shot channel above
+        let flight_data = Box::pin(flight_data);
+        let flight_data: FallibleRequestStream<FlightData, FlightError> =
+            FallibleRequestStream::new(sender, flight_data);
+
         let req = self.set_request_headers(flight_data.into_streaming_request())?;
         let mut result = self
             .flight_client
@@ -249,6 +256,14 @@ impl FlightSqlServiceClient<Channel> {
             .await
             .map_err(status_to_arrow_error)?
             .into_inner();
+
+        // check if the there were any errors in the input stream provided note
+        // if receiver.await fails, it means the sender was dropped and there is
+        // no message to return.
+        if let Ok(msg) = receiver.await {
+            return Err(ArrowError::ExternalError(Box::new(msg)));
+        }
+
         let result = result
             .message()
             .await
