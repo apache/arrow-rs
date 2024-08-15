@@ -25,6 +25,7 @@ use std::path::PathBuf;
 
 static KNOWN_FILES: &[&str] = &[
     "PARQUET-1481.parquet",
+    "ARROW-GH-41317.parquet",
     "ARROW-GH-41321.parquet",
     "ARROW-RS-GH-6229-DICTHEADER.parquet",
     "ARROW-RS-GH-6229-LEVELS.parquet",
@@ -58,6 +59,7 @@ fn test_invalid_files() {
             .to_str()
             .unwrap()
             .to_string();
+
         // If you see this error, please add a test for the new file following the model below
         assert!(
             known_files.contains(file_name.as_str()),
@@ -87,6 +89,15 @@ fn test_parquet_1481() {
 fn test_arrow_gh_41321() {
     let err = read_file("ARROW-GH-41321.parquet").unwrap_err();
     assert_eq!(err.to_string(), "TBD (currently panics)");
+}
+
+#[test]
+fn test_arrow_gh_41317() {
+    let err = read_file("ARROW-GH-41317.parquet").unwrap_err();
+    assert_eq!(
+        err.to_string(),
+        "External: Parquet argument error: External: bad data"
+    );
 }
 
 #[test]
