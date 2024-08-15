@@ -116,7 +116,7 @@ macro_rules! make_stats_iterator {
                 let next = self.iter.next();
                 next.map(|x| {
                     x.and_then(|stats| match stats {
-                        $parquet_statistics_type(s) if stats.has_min_max_set() => Some(s.$func()),
+                        $parquet_statistics_type(s) => s.$func(),
                         _ => None,
                     })
                 })
@@ -131,45 +131,85 @@ macro_rules! make_stats_iterator {
 
 make_stats_iterator!(
     MinBooleanStatsIterator,
-    min,
+    min_opt,
     ParquetStatistics::Boolean,
     bool
 );
 make_stats_iterator!(
     MaxBooleanStatsIterator,
-    max,
+    max_opt,
     ParquetStatistics::Boolean,
     bool
 );
-make_stats_iterator!(MinInt32StatsIterator, min, ParquetStatistics::Int32, i32);
-make_stats_iterator!(MaxInt32StatsIterator, max, ParquetStatistics::Int32, i32);
-make_stats_iterator!(MinInt64StatsIterator, min, ParquetStatistics::Int64, i64);
-make_stats_iterator!(MaxInt64StatsIterator, max, ParquetStatistics::Int64, i64);
-make_stats_iterator!(MinFloatStatsIterator, min, ParquetStatistics::Float, f32);
-make_stats_iterator!(MaxFloatStatsIterator, max, ParquetStatistics::Float, f32);
-make_stats_iterator!(MinDoubleStatsIterator, min, ParquetStatistics::Double, f64);
-make_stats_iterator!(MaxDoubleStatsIterator, max, ParquetStatistics::Double, f64);
+make_stats_iterator!(
+    MinInt32StatsIterator,
+    min_opt,
+    ParquetStatistics::Int32,
+    i32
+);
+make_stats_iterator!(
+    MaxInt32StatsIterator,
+    max_opt,
+    ParquetStatistics::Int32,
+    i32
+);
+make_stats_iterator!(
+    MinInt64StatsIterator,
+    min_opt,
+    ParquetStatistics::Int64,
+    i64
+);
+make_stats_iterator!(
+    MaxInt64StatsIterator,
+    max_opt,
+    ParquetStatistics::Int64,
+    i64
+);
+make_stats_iterator!(
+    MinFloatStatsIterator,
+    min_opt,
+    ParquetStatistics::Float,
+    f32
+);
+make_stats_iterator!(
+    MaxFloatStatsIterator,
+    max_opt,
+    ParquetStatistics::Float,
+    f32
+);
+make_stats_iterator!(
+    MinDoubleStatsIterator,
+    min_opt,
+    ParquetStatistics::Double,
+    f64
+);
+make_stats_iterator!(
+    MaxDoubleStatsIterator,
+    max_opt,
+    ParquetStatistics::Double,
+    f64
+);
 make_stats_iterator!(
     MinByteArrayStatsIterator,
-    min_bytes,
+    min_bytes_opt,
     ParquetStatistics::ByteArray,
     [u8]
 );
 make_stats_iterator!(
     MaxByteArrayStatsIterator,
-    max_bytes,
+    max_bytes_opt,
     ParquetStatistics::ByteArray,
     [u8]
 );
 make_stats_iterator!(
     MinFixedLenByteArrayStatsIterator,
-    min_bytes,
+    min_bytes_opt,
     ParquetStatistics::FixedLenByteArray,
     [u8]
 );
 make_stats_iterator!(
     MaxFixedLenByteArrayStatsIterator,
-    max_bytes,
+    max_bytes_opt,
     ParquetStatistics::FixedLenByteArray,
     [u8]
 );
@@ -218,19 +258,18 @@ macro_rules! make_decimal_stats_iterator {
             fn next(&mut self) -> Option<Self::Item> {
                 let next = self.iter.next();
                 next.map(|x| {
-                    x.and_then(|stats| {
-                        if !stats.has_min_max_set() {
-                            return None;
+                    x.and_then(|stats| match stats {
+                        ParquetStatistics::Int32(s) => {
+                            s.$func().map(|x| $stat_value_type::from(*x))
                         }
-                        match stats {
-                            ParquetStatistics::Int32(s) => Some($stat_value_type::from(*s.$func())),
-                            ParquetStatistics::Int64(s) => Some($stat_value_type::from(*s.$func())),
-                            ParquetStatistics::ByteArray(s) => Some($convert_func(s.$bytes_func())),
-                            ParquetStatistics::FixedLenByteArray(s) => {
-                                Some($convert_func(s.$bytes_func()))
-                            }
-                            _ => None,
+                        ParquetStatistics::Int64(s) => {
+                            s.$func().map(|x| $stat_value_type::from(*x))
                         }
+                        ParquetStatistics::ByteArray(s) => s.$bytes_func().map($convert_func),
+                        ParquetStatistics::FixedLenByteArray(s) => {
+                            s.$bytes_func().map($convert_func)
+                        }
+                        _ => None,
                     })
                 })
             }
@@ -244,29 +283,29 @@ macro_rules! make_decimal_stats_iterator {
 
 make_decimal_stats_iterator!(
     MinDecimal128StatsIterator,
-    min,
-    min_bytes,
+    min_opt,
+    min_bytes_opt,
     i128,
     from_bytes_to_i128
 );
 make_decimal_stats_iterator!(
     MaxDecimal128StatsIterator,
-    max,
-    max_bytes,
+    max_opt,
+    max_bytes_opt,
     i128,
     from_bytes_to_i128
 );
 make_decimal_stats_iterator!(
     MinDecimal256StatsIterator,
-    min,
-    min_bytes,
+    min_opt,
+    min_bytes_opt,
     i256,
     from_bytes_to_i256
 );
 make_decimal_stats_iterator!(
     MaxDecimal256StatsIterator,
-    max,
-    max_bytes,
+    max_opt,
+    max_bytes_opt,
     i256,
     from_bytes_to_i256
 );
@@ -1347,7 +1386,7 @@ impl<'a> StatisticsConverter<'a> {
         let null_counts = metadatas
             .into_iter()
             .map(|x| x.column(parquet_index).statistics())
-            .map(|s| s.map(|s| s.null_count()));
+            .map(|s| s.and_then(|s| s.null_count_opt()));
         Ok(UInt64Array::from_iter(null_counts))
     }
 
