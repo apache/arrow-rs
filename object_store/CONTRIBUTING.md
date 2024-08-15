@@ -133,8 +133,10 @@ docker run -d \
 Create a test bucket.
 
 ```shell
+export AWS_BUCKET_NAME=test-bucket
 export AWS_ACCESS_KEY_ID=minio
 export AWS_SECRET_ACCESS_KEY=minio123
+export AWS_ENDPOINT=https://localhost:9000
 aws s3 mb s3://test-bucket --endpoint-url=https://localhost:9000 --no-verify-ssl
 ```
 
