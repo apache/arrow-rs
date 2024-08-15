@@ -828,12 +828,10 @@ impl AmazonS3Builder {
     }
 
     /// Use SSE-C for server side encryption.
+    /// Must pass the *base64-encoded* 256-bit customer encryption key.
     pub fn with_ssec_encryption(mut self, customer_key_base64: impl Into<String>) -> Self {
         self.encryption_type = Some(ConfigValue::Parsed(S3EncryptionType::SseC));
-        if let Some(customer_key_64) = customer_key_base64.into().into() {
-            self.encryption_customer_key_base64 =
-                Some(BASE64_STANDARD.encode(customer_key_64.clone()));
-        }
+        self.encryption_customer_key_base64 = customer_key_base64.into().into();
         self
     }
 

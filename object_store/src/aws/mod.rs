@@ -413,6 +413,8 @@ mod tests {
     use crate::integration::*;
     use crate::tests::*;
     use crate::ClientOptions;
+    use base64::prelude::BASE64_STANDARD;
+    use base64::Engine;
     use hyper::HeaderMap;
 
     const NON_EXISTENT_NAME: &str = "nonexistentname";
@@ -620,7 +622,7 @@ mod tests {
         let expected_md5 = "JMwgiexXqwuPqIPjYFmIZQ==";
 
         let store = AmazonS3Builder::from_env()
-            .with_ssec_encryption(customer_key)
+            .with_ssec_encryption(BASE64_STANDARD.encode(customer_key))
             .with_client_options(ClientOptions::default().with_allow_invalid_certificates(true))
             .build()
             .unwrap();
