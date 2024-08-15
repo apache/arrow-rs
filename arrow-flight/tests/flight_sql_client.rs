@@ -31,7 +31,7 @@ use arrow_flight::sql::{
     TableNotExistOption,
 };
 use arrow_flight::Action;
-use futures::TryStreamExt;
+use futures::{StreamExt, TryStreamExt};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -40,9 +40,7 @@ use uuid::Uuid;
 
 #[tokio::test]
 pub async fn test_begin_end_transaction() {
-    let test_server = FlightSqlServiceImpl {
-        transactions: Arc::new(Mutex::new(HashMap::new())),
-    };
+    let test_server = FlightSqlServiceImpl::new();
     let fixture = TestFixture::new(test_server.service()).await;
     let channel = fixture.channel().await;
     let mut flight_sql_client = FlightSqlServiceClient::new(channel);
@@ -94,21 +92,26 @@ pub async fn test_execute_ingest() {
         make_primitive_batch(2),
     ];
     let actual_rows = flight_sql_client
-        .execute_ingest(cmd, batches)
+        .execute_ingest(cmd, futures::stream::iter(batches.clone()).map(Ok))
         .await
         .expect("ingest should succeed");
     assert_eq!(actual_rows, expected_rows);
+    // make sure the batches made it through to the server
+    let ingested_batches = test_server.ingested_batches.lock().await.clone();
+    assert_eq!(ingested_batches, batches);
 }
 
 #[derive(Clone)]
 pub struct FlightSqlServiceImpl {
     transactions: Arc<Mutex<HashMap<String, ()>>>,
+    ingested_batches: Arc<Mutex<Vec<RecordBatch>>>,
 }
 
 impl FlightSqlServiceImpl {
     pub fn new() -> Self {
         Self {
             transactions: Arc::new(Mutex::new(HashMap::new())),
+            ingested_batches: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
@@ -177,6 +180,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
         .try_collect()
         .await?;
         let affected_rows = batches.iter().map(|batch| batch.num_rows() as i64).sum();
+        *self.ingested_batches.lock().await.as_mut() = batches;
         Ok(affected_rows)
     }
 }

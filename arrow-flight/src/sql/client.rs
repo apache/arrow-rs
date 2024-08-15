@@ -53,7 +53,7 @@ use arrow_ipc::convert::fb_to_schema;
 use arrow_ipc::reader::read_record_batch;
 use arrow_ipc::{root_as_message, MessageHeader};
 use arrow_schema::{ArrowError, Schema, SchemaRef};
-use futures::{stream, StreamExt, TryStreamExt};
+use futures::{stream, Stream, StreamExt, TryStreamExt};
 use prost::Message;
 use tonic::transport::Channel;
 use tonic::{IntoRequest, IntoStreamingRequest, Streaming};
@@ -228,15 +228,18 @@ impl FlightSqlServiceClient<Channel> {
     }
 
     /// Execute a bulk ingest on the server and return the number of records added
-    pub async fn execute_ingest(
+    pub async fn execute_ingest<S>(
         &mut self,
         command: CommandStatementIngest,
-        batches: Vec<RecordBatch>,
-    ) -> Result<i64, ArrowError> {
+        stream: S,
+    ) -> Result<i64, ArrowError>
+    where
+        S: Stream<Item = crate::error::Result<RecordBatch>> + Send + 'static,
+    {
         let descriptor = FlightDescriptor::new_cmd(command.as_any().encode_to_vec());
         let flight_data_encoder = FlightDataEncoderBuilder::new()
             .with_flight_descriptor(Some(descriptor))
-            .build(stream::iter(batches).map(Ok));
+            .build(stream);
         // Safe unwrap, explicitly wrapped on line above.
         let flight_data = flight_data_encoder.map(|fd| fd.unwrap());
         let req = self.set_request_headers(flight_data.into_streaming_request())?;
