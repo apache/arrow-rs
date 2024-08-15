@@ -24,6 +24,7 @@ use std::collections::HashMap;
 use std::str::FromStr;
 use tonic::metadata::AsciiMetadataKey;
 
+use crate::client::FallibleRequestStream;
 use crate::decode::FlightRecordBatchStream;
 use crate::encode::FlightDataEncoderBuilder;
 use crate::error::FlightError;
@@ -39,8 +40,8 @@ use crate::sql::{
     CommandGetCrossReference, CommandGetDbSchemas, CommandGetExportedKeys, CommandGetImportedKeys,
     CommandGetPrimaryKeys, CommandGetSqlInfo, CommandGetTableTypes, CommandGetTables,
     CommandGetXdbcTypeInfo, CommandPreparedStatementQuery, CommandPreparedStatementUpdate,
-    CommandStatementQuery, CommandStatementUpdate, DoPutPreparedStatementResult, DoPutUpdateResult,
-    ProstMessageExt, SqlInfo,
+    CommandStatementIngest, CommandStatementQuery, CommandStatementUpdate,
+    DoPutPreparedStatementResult, DoPutUpdateResult, ProstMessageExt, SqlInfo,
 };
 use crate::trailers::extract_lazy_trailers;
 use crate::{
@@ -53,10 +54,10 @@ use arrow_ipc::convert::fb_to_schema;
 use arrow_ipc::reader::read_record_batch;
 use arrow_ipc::{root_as_message, MessageHeader};
 use arrow_schema::{ArrowError, Schema, SchemaRef};
-use futures::{stream, TryStreamExt};
+use futures::{stream, Stream, TryStreamExt};
 use prost::Message;
 use tonic::transport::Channel;
-use tonic::{IntoRequest, Streaming};
+use tonic::{IntoRequest, IntoStreamingRequest, Streaming};
 
 /// A FlightSQLServiceClient is an endpoint for retrieving or storing Arrow data
 /// by FlightSQL protocol.
@@ -217,6 +218,52 @@ impl FlightSqlServiceClient<Channel> {
             .await
             .map_err(status_to_arrow_error)?
             .into_inner();
+        let result = result
+            .message()
+            .await
+            .map_err(status_to_arrow_error)?
+            .unwrap();
+        let any = Any::decode(&*result.app_metadata).map_err(decode_error_to_arrow_error)?;
+        let result: DoPutUpdateResult = any.unpack()?.unwrap();
+        Ok(result.record_count)
+    }
+
+    /// Execute a bulk ingest on the server and return the number of records added
+    pub async fn execute_ingest<S>(
+        &mut self,
+        command: CommandStatementIngest,
+        stream: S,
+    ) -> Result<i64, ArrowError>
+    where
+        S: Stream<Item = crate::error::Result<RecordBatch>> + Send + 'static,
+    {
+        let (sender, receiver) = futures::channel::oneshot::channel();
+
+        let descriptor = FlightDescriptor::new_cmd(command.as_any().encode_to_vec());
+        let flight_data = FlightDataEncoderBuilder::new()
+            .with_flight_descriptor(Some(descriptor))
+            .build(stream);
+
+        // Intercept client errors and send them to the one shot channel above
+        let flight_data = Box::pin(flight_data);
+        let flight_data: FallibleRequestStream<FlightData, FlightError> =
+            FallibleRequestStream::new(sender, flight_data);
+
+        let req = self.set_request_headers(flight_data.into_streaming_request())?;
+        let mut result = self
+            .flight_client
+            .do_put(req)
+            .await
+            .map_err(status_to_arrow_error)?
+            .into_inner();
+
+        // check if the there were any errors in the input stream provided note
+        // if receiver.await fails, it means the sender was dropped and there is
+        // no message to return.
+        if let Ok(msg) = receiver.await {
+            return Err(ArrowError::ExternalError(Box::new(msg)));
+        }
+
         let result = result
             .message()
             .await

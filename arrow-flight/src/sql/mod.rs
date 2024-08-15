@@ -50,6 +50,10 @@ mod gen {
 }
 
 pub use gen::action_end_transaction_request::EndTransaction;
+pub use gen::command_statement_ingest::table_definition_options::{
+    TableExistsOption, TableNotExistOption,
+};
+pub use gen::command_statement_ingest::TableDefinitionOptions;
 pub use gen::ActionBeginSavepointRequest;
 pub use gen::ActionBeginSavepointResult;
 pub use gen::ActionBeginTransactionRequest;
@@ -74,6 +78,7 @@ pub use gen::CommandGetTables;
 pub use gen::CommandGetXdbcTypeInfo;
 pub use gen::CommandPreparedStatementQuery;
 pub use gen::CommandPreparedStatementUpdate;
+pub use gen::CommandStatementIngest;
 pub use gen::CommandStatementQuery;
 pub use gen::CommandStatementSubstraitPlan;
 pub use gen::CommandStatementUpdate;
@@ -250,11 +255,12 @@ prost_message_ext!(
     CommandGetXdbcTypeInfo,
     CommandPreparedStatementQuery,
     CommandPreparedStatementUpdate,
+    CommandStatementIngest,
     CommandStatementQuery,
     CommandStatementSubstraitPlan,
     CommandStatementUpdate,
-    DoPutUpdateResult,
     DoPutPreparedStatementResult,
+    DoPutUpdateResult,
     TicketStatementQuery,
 );
 
