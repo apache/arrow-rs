@@ -20,6 +20,7 @@ use arrow::datatypes::DataType;
 use arrow_schema::Field;
 use criterion::measurement::WallTime;
 use criterion::{criterion_group, criterion_main, BenchmarkGroup, Criterion};
+use half::f16;
 use num::FromPrimitive;
 use num_bigint::BigInt;
 use parquet::arrow::array_reader::{
@@ -65,6 +66,8 @@ fn build_test_schema() -> SchemaDescPtr {
             }
             REQUIRED BYTE_ARRAY mandatory_binary_leaf;
             OPTIONAL BYTE_ARRAY optional_binary_leaf;
+            REQUIRED FIXED_LEN_BYTE_ARRAY (2) mandatory_f16_leaf (Float16);
+            OPTIONAL FIXED_LEN_BYTE_ARRAY (2) optional_f16_leaf (Float16);
         }
         ";
     parse_message_type(message_type)
@@ -82,6 +85,64 @@ const EXPECTED_VALUE_COUNT: usize = NUM_ROW_GROUPS * PAGES_PER_GROUP * VALUES_PE
 
 pub fn seedable_rng() -> StdRng {
     StdRng::seed_from_u64(42)
+}
+
+// support byte array for float16
+fn build_encoded_f16_bytes_page_iterator<T>(
+    column_desc: ColumnDescPtr,
+    null_density: f32,
+    encoding: Encoding,
+    min: f32,
+    max: f32,
+) -> impl PageIterator + Clone
+where
+    T: parquet::data_type::DataType,
+    T::T: From<Vec<u8>>,
+{
+    let max_def_level = column_desc.max_def_level();
+    let max_rep_level = column_desc.max_rep_level();
+    let rep_levels = vec![0; VALUES_PER_PAGE];
+    let mut rng = seedable_rng();
+    let mut pages: Vec<Vec<parquet::column::page::Page>> = Vec::new();
+    for _i in 0..NUM_ROW_GROUPS {
+        let mut column_chunk_pages = Vec::new();
+        for _j in 0..PAGES_PER_GROUP {
+            // generate page
+            let mut values = Vec::with_capacity(VALUES_PER_PAGE);
+            let mut def_levels = Vec::with_capacity(VALUES_PER_PAGE);
+            for _k in 0..VALUES_PER_PAGE {
+                let def_level = if rng.gen::<f32>() < null_density {
+                    max_def_level - 1
+                } else {
+                    max_def_level
+                };
+                if def_level == max_def_level {
+                    // create the Float16 value
+                    let value = f16::from_f32(rng.gen_range(min..max));
+                    // Float16 in parquet is stored little-endian
+                    let bytes = match column_desc.physical_type() {
+                        Type::FIXED_LEN_BYTE_ARRAY => {
+                            // Float16 annotates FIXED_LEN_BYTE_ARRAY(2)
+                            assert_eq!(column_desc.type_length(), 2);
+                            value.to_le_bytes().to_vec()
+                        }
+                        _ => unimplemented!(),
+                    };
+                    let value = T::T::from(bytes);
+                    values.push(value);
+                }
+                def_levels.push(def_level);
+            }
+            let mut page_builder =
+                DataPageBuilderImpl::new(column_desc.clone(), values.len() as u32, true);
+            page_builder.add_rep_levels(max_rep_level, &rep_levels);
+            page_builder.add_def_levels(max_def_level, &def_levels);
+            page_builder.add_values::<T>(encoding, &values);
+            column_chunk_pages.push(page_builder.consume());
+        }
+        pages.push(column_chunk_pages);
+    }
+    InMemoryPageIterator::new(pages)
 }
 
 // support byte array for decimal
@@ -494,6 +555,19 @@ fn create_primitive_array_reader(
     }
 }
 
+fn create_f16_by_bytes_reader(
+    page_iterator: impl PageIterator + 'static,
+    column_desc: ColumnDescPtr,
+) -> Box<dyn ArrayReader> {
+    let physical_type = column_desc.physical_type();
+    match physical_type {
+        Type::FIXED_LEN_BYTE_ARRAY => {
+            make_fixed_len_byte_array_reader(Box::new(page_iterator), column_desc, None).unwrap()
+        }
+        _ => unimplemented!(),
+    }
+}
+
 fn create_decimal_by_bytes_reader(
     page_iterator: impl PageIterator + 'static,
     column_desc: ColumnDescPtr,
@@ -607,6 +681,131 @@ fn bench_byte_decimal<T>(
         max,
     );
     group.bench_function("plain encoded, optional, half NULLs", |b| {
+        b.iter(|| {
+            let array_reader =
+                create_decimal_by_bytes_reader(data.clone(), optional_column_desc.clone());
+            count = bench_array_reader(array_reader);
+        });
+        assert_eq!(count, EXPECTED_VALUE_COUNT);
+    });
+}
+
+fn bench_byte_stream_split_f16<T>(
+    group: &mut BenchmarkGroup<WallTime>,
+    mandatory_column_desc: &ColumnDescPtr,
+    optional_column_desc: &ColumnDescPtr,
+    min: f32,
+    max: f32,
+) where
+    T: parquet::data_type::DataType,
+    T::T: From<Vec<u8>>,
+{
+    let mut count: usize = 0;
+
+    // byte_stream_split encoded, no NULLs
+    let data = build_encoded_f16_bytes_page_iterator::<T>(
+        mandatory_column_desc.clone(),
+        0.0,
+        Encoding::BYTE_STREAM_SPLIT,
+        min,
+        max,
+    );
+    group.bench_function("byte_stream_split encoded, mandatory, no NULLs", |b| {
+        b.iter(|| {
+            let array_reader =
+                create_f16_by_bytes_reader(data.clone(), mandatory_column_desc.clone());
+            count = bench_array_reader(array_reader);
+        });
+        assert_eq!(count, EXPECTED_VALUE_COUNT);
+    });
+
+    let data = build_encoded_f16_bytes_page_iterator::<T>(
+        optional_column_desc.clone(),
+        0.0,
+        Encoding::BYTE_STREAM_SPLIT,
+        min,
+        max,
+    );
+    group.bench_function("byte_stream_split encoded, optional, no NULLs", |b| {
+        b.iter(|| {
+            let array_reader =
+                create_f16_by_bytes_reader(data.clone(), optional_column_desc.clone());
+            count = bench_array_reader(array_reader);
+        });
+        assert_eq!(count, EXPECTED_VALUE_COUNT);
+    });
+
+    let data = build_encoded_f16_bytes_page_iterator::<T>(
+        optional_column_desc.clone(),
+        0.5,
+        Encoding::BYTE_STREAM_SPLIT,
+        min,
+        max,
+    );
+    group.bench_function("byte_stream_split encoded, optional, half NULLs", |b| {
+        b.iter(|| {
+            let array_reader =
+                create_f16_by_bytes_reader(data.clone(), optional_column_desc.clone());
+            count = bench_array_reader(array_reader);
+        });
+        assert_eq!(count, EXPECTED_VALUE_COUNT);
+    });
+}
+
+fn bench_byte_stream_split_decimal<T>(
+    group: &mut BenchmarkGroup<WallTime>,
+    mandatory_column_desc: &ColumnDescPtr,
+    optional_column_desc: &ColumnDescPtr,
+    min: i128,
+    max: i128,
+) where
+    T: parquet::data_type::DataType,
+    T::T: From<Vec<u8>>,
+{
+    let mut count: usize = 0;
+
+    // byte_stream_split encoded, no NULLs
+    let data = build_encoded_decimal_bytes_page_iterator::<T>(
+        mandatory_column_desc.clone(),
+        0.0,
+        Encoding::BYTE_STREAM_SPLIT,
+        min,
+        max,
+    );
+    group.bench_function("byte_stream_split encoded, mandatory, no NULLs", |b| {
+        b.iter(|| {
+            let array_reader =
+                create_decimal_by_bytes_reader(data.clone(), mandatory_column_desc.clone());
+            count = bench_array_reader(array_reader);
+        });
+        assert_eq!(count, EXPECTED_VALUE_COUNT);
+    });
+
+    let data = build_encoded_decimal_bytes_page_iterator::<T>(
+        optional_column_desc.clone(),
+        0.0,
+        Encoding::BYTE_STREAM_SPLIT,
+        min,
+        max,
+    );
+    group.bench_function("byte_stream_split encoded, optional, no NULLs", |b| {
+        b.iter(|| {
+            let array_reader =
+                create_decimal_by_bytes_reader(data.clone(), optional_column_desc.clone());
+            count = bench_array_reader(array_reader);
+        });
+        assert_eq!(count, EXPECTED_VALUE_COUNT);
+    });
+
+    // half null
+    let data = build_encoded_decimal_bytes_page_iterator::<T>(
+        optional_column_desc.clone(),
+        0.5,
+        Encoding::BYTE_STREAM_SPLIT,
+        min,
+        max,
+    );
+    group.bench_function("byte_stream_split encoded, optional, half NULLs", |b| {
         b.iter(|| {
             let array_reader =
                 create_decimal_by_bytes_reader(data.clone(), optional_column_desc.clone());
@@ -795,6 +994,35 @@ fn bench_primitive<T>(
         });
         assert_eq!(count, EXPECTED_VALUE_COUNT);
     });
+}
+
+fn byte_stream_split_benches(c: &mut Criterion) {
+    let schema = build_test_schema();
+
+    let mut group = c.benchmark_group("arrow_array_reader/BYTE_STREAM_SPLIT/Decimal128Array");
+    let mandatory_decimal4_leaf_desc = schema.column(12);
+    let optional_decimal4_leaf_desc = schema.column(13);
+    bench_byte_stream_split_decimal::<FixedLenByteArrayType>(
+        &mut group,
+        &mandatory_decimal4_leaf_desc,
+        &optional_decimal4_leaf_desc,
+        // precision is 16: the max is 9999999999999999
+        9999999999999000,
+        9999999999999999,
+    );
+    group.finish();
+
+    let mut group = c.benchmark_group("arrow_array_reader/BYTE_STREAM_SPLIT/Float16Array");
+    let mandatory_f16_leaf_desc = schema.column(17);
+    let optional_f16_leaf_desc = schema.column(18);
+    bench_byte_stream_split_f16::<FixedLenByteArrayType>(
+        &mut group,
+        &mandatory_f16_leaf_desc,
+        &optional_f16_leaf_desc,
+        -1.0,
+        1.0,
+    );
+    group.finish();
 }
 
 fn decimal_benches(c: &mut Criterion) {
@@ -1334,5 +1562,10 @@ fn add_benches(c: &mut Criterion) {
     });
 }
 
-criterion_group!(benches, add_benches, decimal_benches,);
+criterion_group!(
+    benches,
+    add_benches,
+    decimal_benches,
+    byte_stream_split_benches,
+);
 criterion_main!(benches);

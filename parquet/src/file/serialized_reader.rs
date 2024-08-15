@@ -1544,7 +1544,10 @@ mod tests {
 
     fn get_row_group_min_max_bytes(r: &RowGroupMetaData, col_num: usize) -> (&[u8], &[u8]) {
         let statistics = r.column(col_num).statistics().unwrap();
-        (statistics.min_bytes(), statistics.max_bytes())
+        (
+            statistics.min_bytes_opt().unwrap_or_default(),
+            statistics.max_bytes_opt().unwrap_or_default(),
+        )
     }
 
     #[test]

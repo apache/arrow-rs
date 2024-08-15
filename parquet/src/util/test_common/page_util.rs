@@ -51,13 +51,14 @@ pub struct DataPageBuilderImpl {
     rep_levels_byte_len: u32,
     def_levels_byte_len: u32,
     datapage_v2: bool,
+    type_width: i32,
 }
 
 impl DataPageBuilderImpl {
     // `num_values` is the number of non-null values to put in the data page.
     // `datapage_v2` flag is used to indicate if the generated data page should use V2
     // format or not.
-    pub fn new(_desc: ColumnDescPtr, num_values: u32, datapage_v2: bool) -> Self {
+    pub fn new(desc: ColumnDescPtr, num_values: u32, datapage_v2: bool) -> Self {
         DataPageBuilderImpl {
             encoding: None,
             num_values,
@@ -65,6 +66,7 @@ impl DataPageBuilderImpl {
             rep_levels_byte_len: 0,
             def_levels_byte_len: 0,
             datapage_v2,
+            type_width: desc.type_length(),
         }
     }
 
@@ -111,7 +113,7 @@ impl DataPageBuilder for DataPageBuilderImpl {
         // Create test column descriptor.
         let desc = {
             let ty = SchemaType::primitive_type_builder("t", T::get_physical_type())
-                .with_length(0)
+                .with_length(self.type_width)
                 .build()
                 .unwrap();
             Arc::new(ColumnDescriptor::new(

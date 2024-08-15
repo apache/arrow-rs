@@ -638,10 +638,10 @@ sed do eiusmod tempor,-556132.25,1,,2019-04-18T02:45:55.555,23:46:03,foo
         file.read_to_end(&mut buffer).unwrap();
 
         assert_eq!(
-			"c1,c2,c3,c4,c6\n\"Lorem ipsum \ndolor sit amet\",123.564532,3,true,00:20:34\n\"consectetur $\"adipiscing$\" elit\",,2,false,06:51:20\nsed do eiusmod tempor,-556132.25,1,,23:46:03\n"
-			.to_string(),
-			String::from_utf8(buffer).unwrap()
-		);
+            "c1,c2,c3,c4,c6\n\"Lorem ipsum \ndolor sit amet\",123.564532,3,true,00:20:34\n\"consectetur $\"adipiscing$\" elit\",,2,false,06:51:20\nsed do eiusmod tempor,-556132.25,1,,23:46:03\n"
+            .to_string(),
+            String::from_utf8(buffer).unwrap()
+        );
     }
 
     #[test]

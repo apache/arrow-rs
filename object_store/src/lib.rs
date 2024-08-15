@@ -1274,6 +1274,26 @@ pub enum Error {
     #[snafu(display("Operation not yet implemented."))]
     NotImplemented,
 
+    #[snafu(display(
+        "The operation lacked the necessary privileges to complete for path {}: {}",
+        path,
+        source
+    ))]
+    PermissionDenied {
+        path: String,
+        source: Box<dyn std::error::Error + Send + Sync + 'static>,
+    },
+
+    #[snafu(display(
+        "The operation lacked valid authentication credentials for path {}: {}",
+        path,
+        source
+    ))]
+    Unauthenticated {
+        path: String,
+        source: Box<dyn std::error::Error + Send + Sync + 'static>,
+    },
+
     #[snafu(display("Configuration key: '{}' is not valid for store '{}'.", key, store))]
     UnknownConfigurationKey { store: &'static str, key: String },
 }

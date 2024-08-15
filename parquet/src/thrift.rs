@@ -17,6 +17,7 @@
 
 //! Custom thrift definitions
 
+pub use thrift::protocol::TCompactOutputProtocol;
 use thrift::protocol::{
     TFieldIdentifier, TInputProtocol, TListIdentifier, TMapIdentifier, TMessageIdentifier,
     TOutputProtocol, TSetIdentifier, TStructIdentifier, TType,

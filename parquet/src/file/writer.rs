@@ -20,7 +20,7 @@
 
 use crate::bloom_filter::Sbbf;
 use crate::format as parquet;
-use crate::format::{ColumnIndex, OffsetIndex, RowGroup};
+use crate::format::{ColumnIndex, OffsetIndex};
 use crate::thrift::TSerializable;
 use std::fmt::Debug;
 use std::io::{BufWriter, IoSlice, Read};
@@ -37,7 +37,7 @@ use crate::errors::{ParquetError, Result};
 use crate::file::properties::{BloomFilterPosition, WriterPropertiesPtr};
 use crate::file::reader::ChunkReader;
 use crate::file::{metadata::*, PARQUET_MAGIC};
-use crate::schema::types::{self, ColumnDescPtr, SchemaDescPtr, SchemaDescriptor, TypePtr};
+use crate::schema::types::{ColumnDescPtr, SchemaDescPtr, SchemaDescriptor, TypePtr};
 
 /// A wrapper around a [`Write`] that keeps track of the number
 /// of bytes that have been written. The given [`Write`] is wrapped
@@ -261,76 +261,14 @@ impl<W: Write + Send> SerializedFileWriter<W> {
         Ok(())
     }
 
-    /// Serialize all the offset index to the file
-    fn write_offset_indexes(&mut self, row_groups: &mut [RowGroup]) -> Result<()> {
-        // iter row group
-        // iter each column
-        // write offset index to the file
-        for (row_group_idx, row_group) in row_groups.iter_mut().enumerate() {
-            for (column_idx, column_metadata) in row_group.columns.iter_mut().enumerate() {
-                match &self.offset_indexes[row_group_idx][column_idx] {
-                    Some(offset_index) => {
-                        let start_offset = self.buf.bytes_written();
-                        let mut protocol = TCompactOutputProtocol::new(&mut self.buf);
-                        offset_index.write_to_out_protocol(&mut protocol)?;
-                        let end_offset = self.buf.bytes_written();
-                        // set offset and index for offset index
-                        column_metadata.offset_index_offset = Some(start_offset as i64);
-                        column_metadata.offset_index_length =
-                            Some((end_offset - start_offset) as i32);
-                    }
-                    None => {}
-                }
-            }
-        }
-        Ok(())
-    }
-
-    /// Serialize all the column index to the file
-    fn write_column_indexes(&mut self, row_groups: &mut [RowGroup]) -> Result<()> {
-        // iter row group
-        // iter each column
-        // write column index to the file
-        for (row_group_idx, row_group) in row_groups.iter_mut().enumerate() {
-            for (column_idx, column_metadata) in row_group.columns.iter_mut().enumerate() {
-                match &self.column_indexes[row_group_idx][column_idx] {
-                    Some(column_index) => {
-                        let start_offset = self.buf.bytes_written();
-                        let mut protocol = TCompactOutputProtocol::new(&mut self.buf);
-                        column_index.write_to_out_protocol(&mut protocol)?;
-                        let end_offset = self.buf.bytes_written();
-                        // set offset and index for offset index
-                        column_metadata.column_index_offset = Some(start_offset as i64);
-                        column_metadata.column_index_length =
-                            Some((end_offset - start_offset) as i32);
-                    }
-                    None => {}
-                }
-            }
-        }
-        Ok(())
-    }
-
     /// Assembles and writes metadata at the end of the file.
     fn write_metadata(&mut self) -> Result<parquet::FileMetaData> {
         self.finished = true;
-        let num_rows = self.row_groups.iter().map(|x| x.num_rows()).sum();
 
         // write out any remaining bloom filters after all row groups
         for row_group in &mut self.row_groups {
             write_bloom_filters(&mut self.buf, &mut self.bloom_filters, row_group)?;
         }
-
-        let mut row_groups = self
-            .row_groups
-            .as_slice()
-            .iter()
-            .map(|v| v.to_thrift())
-            .collect::<Vec<_>>();
-
-        // Write column indexes and offset indexes
-        self.write_column_indexes(&mut row_groups)?;
-        self.write_offset_indexes(&mut row_groups)?;
 
         let key_value_metadata = match self.props.key_value_metadata() {
             Some(kv) => Some(kv.iter().chain(&self.kv_metadatas).cloned().collect()),
@@ -338,45 +276,26 @@ impl<W: Write + Send> SerializedFileWriter<W> {
             None => Some(self.kv_metadatas.clone()),
         };
 
-        // We only include ColumnOrder for leaf nodes.
-        // Currently only supported ColumnOrder is TypeDefinedOrder so we set this
-        // for all leaf nodes.
-        // Even if the column has an undefined sort order, such as INTERVAL, this
-        // is still technically the defined TYPEORDER so it should still be set.
-        let column_orders = (0..self.schema_descr().num_columns())
-            .map(|_| parquet::ColumnOrder::TYPEORDER(parquet::TypeDefinedOrder {}))
-            .collect();
-        // This field is optional, perhaps in cases where no min/max fields are set
-        // in any Statistics or ColumnIndex object in the whole file.
-        // But for simplicity we always set this field.
-        let column_orders = Some(column_orders);
+        let row_groups = self
+            .row_groups
+            .iter()
+            .map(|v| v.to_thrift())
+            .collect::<Vec<_>>();
 
-        let file_metadata = parquet::FileMetaData {
-            num_rows,
+        let mut encoder = ThriftMetadataWriter::new(
+            &mut self.buf,
+            &self.schema,
+            &self.descr,
             row_groups,
-            key_value_metadata,
-            version: self.props.writer_version().as_num(),
-            schema: types::to_thrift(self.schema.as_ref())?,
-            created_by: Some(self.props.created_by().to_owned()),
-            column_orders,
-            encryption_algorithm: None,
-            footer_signing_key_metadata: None,
-        };
-
-        // Write file metadata
-        let start_pos = self.buf.bytes_written();
-        {
-            let mut protocol = TCompactOutputProtocol::new(&mut self.buf);
-            file_metadata.write_to_out_protocol(&mut protocol)?;
+            Some(self.props.created_by().to_string()),
+            self.props.writer_version().as_num(),
+        );
+        if let Some(key_value_metadata) = key_value_metadata {
+            encoder = encoder.with_key_value_metadata(key_value_metadata)
         }
-        let end_pos = self.buf.bytes_written();
-
-        // Write footer
-        let metadata_len = (end_pos - start_pos) as u32;
-
-        self.buf.write_all(&metadata_len.to_le_bytes())?;
-        self.buf.write_all(&PARQUET_MAGIC)?;
-        Ok(file_metadata)
+        encoder = encoder.with_column_indexes(&self.column_indexes);
+        encoder = encoder.with_offset_indexes(&self.offset_indexes);
+        encoder.finish()
     }
 
     #[inline]
@@ -841,6 +760,7 @@ mod tests {
     use crate::format::SortingColumn;
     use crate::record::{Row, RowAccessor};
     use crate::schema::parser::parse_message_type;
+    use crate::schema::types;
     use crate::schema::types::{ColumnDescriptor, ColumnPath};
     use crate::util::test_common::rand_gen::RandGen;
 
@@ -1202,7 +1122,7 @@ mod tests {
                 encoding: Encoding::DELTA_BINARY_PACKED,
                 def_level_encoding: Encoding::RLE,
                 rep_level_encoding: Encoding::RLE,
-                statistics: Some(Statistics::int32(Some(1), Some(3), None, 7, true)),
+                statistics: Some(Statistics::int32(Some(1), Some(3), None, Some(7), true)),
             },
             Page::DataPageV2 {
                 buf: Bytes::from(vec![4; 128]),
@@ -1213,7 +1133,7 @@ mod tests {
                 def_levels_byte_len: 24,
                 rep_levels_byte_len: 32,
                 is_compressed: false,
-                statistics: Some(Statistics::int32(Some(1), Some(3), None, 7, true)),
+                statistics: Some(Statistics::int32(Some(1), Some(3), None, Some(7), true)),
             },
         ];
 
@@ -1236,7 +1156,7 @@ mod tests {
                 encoding: Encoding::DELTA_BINARY_PACKED,
                 def_level_encoding: Encoding::RLE,
                 rep_level_encoding: Encoding::RLE,
-                statistics: Some(Statistics::int32(Some(1), Some(3), None, 7, true)),
+                statistics: Some(Statistics::int32(Some(1), Some(3), None, Some(7), true)),
             },
             Page::DataPageV2 {
                 buf: Bytes::from(vec![4; 128]),

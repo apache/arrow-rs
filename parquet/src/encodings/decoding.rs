@@ -901,11 +901,7 @@ impl<T: DataType> Decoder<T> for DeltaLengthByteArrayDecoder<T> {
 
                 for item in buffer.iter_mut().take(num_values) {
                     let len = self.lengths[self.current_idx] as usize;
-
-                    item.as_mut_any()
-                        .downcast_mut::<ByteArray>()
-                        .unwrap()
-                        .set_data(data.slice(self.offset..self.offset + len));
+                    item.set_from_bytes(data.slice(self.offset..self.offset + len));
 
                     self.offset += len;
                     self.current_idx += 1;
@@ -1029,7 +1025,7 @@ impl<T: DataType> Decoder<T> for DeltaByteArrayDecoder<T> {
 
     fn get(&mut self, buffer: &mut [T::T]) -> Result<usize> {
         match T::get_physical_type() {
-            ty @ Type::BYTE_ARRAY | ty @ Type::FIXED_LEN_BYTE_ARRAY => {
+            Type::BYTE_ARRAY | Type::FIXED_LEN_BYTE_ARRAY => {
                 let num_values = cmp::min(buffer.len(), self.num_values);
                 let mut v: [ByteArray; 1] = [ByteArray::new(); 1];
                 for item in buffer.iter_mut().take(num_values) {
@@ -1051,20 +1047,7 @@ impl<T: DataType> Decoder<T> for DeltaByteArrayDecoder<T> {
                     result.extend_from_slice(suffix);
 
                     let data = Bytes::from(result.clone());
-
-                    match ty {
-                        Type::BYTE_ARRAY => item
-                            .as_mut_any()
-                            .downcast_mut::<ByteArray>()
-                            .unwrap()
-                            .set_data(data),
-                        Type::FIXED_LEN_BYTE_ARRAY => item
-                            .as_mut_any()
-                            .downcast_mut::<FixedLenByteArray>()
-                            .unwrap()
-                            .set_data(data),
-                        _ => unreachable!(),
-                    };
+                    item.set_from_bytes(data);
 
                     self.previous_value = result;
                     self.current_idx += 1;

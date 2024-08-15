@@ -294,13 +294,14 @@ pub enum Encoding {
     /// The ids are encoded using the RLE encoding.
     RLE_DICTIONARY,
 
-    /// Encoding for floating-point data.
+    /// Encoding for fixed-width data.
     ///
     /// K byte-streams are created where K is the size in bytes of the data type.
-    /// The individual bytes of an FP value are scattered to the corresponding stream and
+    /// The individual bytes of a value are scattered to the corresponding stream and
     /// the streams are concatenated.
     /// This itself does not reduce the size of the data but can lead to better compression
-    /// afterwards.
+    /// afterwards. Note that the use of this encoding with FIXED_LEN_BYTE_ARRAY(N) data may
+    /// perform poorly for large values of N.
     BYTE_STREAM_SPLIT,
 }
 
