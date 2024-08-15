@@ -34,13 +34,25 @@ use super::ByteArrayType;
 
 /// [Variable-size Binary View Layout]: An array of variable length bytes view arrays.
 ///
-/// Different than [`crate::GenericByteArray`] as it stores both an offset and length
-/// meaning that take / filter operations can be implemented without copying the underlying data.
+/// [Variable-size Binary View Layout]: https://arrow.apache.org/docs/format/Columnar.html#variable-size-binary-view-layout
+///
+/// This is different from [`GenericByteArray`] as it stores both an offset and
+/// length meaning that take / filter operations can be implemented without
+/// copying the underlying data. In addition, it stores an inlined prefix which
+/// can be used to speed up comparisons.
+///
+/// # See Also
 ///
 /// See [`StringViewArray`] for storing utf8 encoded string data and
 /// [`BinaryViewArray`] for storing bytes.
 ///
-/// [Variable-size Binary View Layout]: https://arrow.apache.org/docs/format/Columnar.html#variable-size-binary-view-layout
+/// # Notes
+///
+/// Comparing two `GenericByteViewArray` using PartialEq compares by structure,
+/// not by value. as there are many different buffer layouts to represent the
+/// same data (e.g. different offsets, different buffer sizes, etc).
+///
+/// # Layout
 ///
 /// A `GenericByteViewArray` stores variable length byte strings. An array of
 /// `N` elements is stored as `N` fixed length "views" and a variable number
@@ -95,7 +107,6 @@ use super::ByteArrayType;
 ///                                                                   buffer 0 │...│
 ///                                                                            └───┘
 /// ```
-/// [`GenericByteArray`]: crate::array::GenericByteArray
 pub struct GenericByteViewArray<T: ByteViewType + ?Sized> {
     data_type: DataType,
     views: ScalarBuffer<u128>,
@@ -113,6 +124,16 @@ impl<T: ByteViewType + ?Sized> Clone for GenericByteViewArray<T> {
             nulls: self.nulls.clone(),
             phantom: Default::default(),
         }
+    }
+}
+
+// PartialEq
+impl<T: ByteViewType + ?Sized> PartialEq for GenericByteViewArray<T> {
+    fn eq(&self, other: &Self) -> bool {
+        other.data_type.eq(&self.data_type)
+            && other.views.eq(&self.views)
+            && other.buffers.eq(&self.buffers)
+            && other.nulls.eq(&self.nulls)
     }
 }
 
@@ -869,5 +890,30 @@ mod tests {
         check_gc(&array.slice(2, 1));
         check_gc(&array.slice(2, 2));
         check_gc(&array.slice(3, 1));
+    }
+
+    #[test]
+    fn test_eq() {
+        let test_data = [
+            Some("longer than 12 bytes"),
+            None,
+            Some("short"),
+            Some("again, this is longer than 12 bytes"),
+        ];
+
+        let array1 = {
+            let mut builder = StringViewBuilder::new().with_fixed_block_size(8);
+            test_data.into_iter().for_each(|v| builder.append_option(v));
+            builder.finish()
+        };
+        let array2 = {
+            // create a new array with the same data but different layout
+            let mut builder = StringViewBuilder::new().with_fixed_block_size(100);
+            test_data.into_iter().for_each(|v| builder.append_option(v));
+            builder.finish()
+        };
+        assert_eq!(array1, array1.clone());
+        assert_eq!(array2, array2.clone());
+        assert_ne!(array1, array2);
     }
 }

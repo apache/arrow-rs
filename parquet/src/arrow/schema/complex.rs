@@ -38,10 +38,11 @@ fn get_repetition(t: &Type) -> Repetition {
 #[derive(Debug, Clone)]
 pub struct ParquetField {
     /// The level which represents an insertion into the current list
-    /// i.e. guaranteed to be > 0 for a list type
+    /// i.e. guaranteed to be > 0 for an element of list type
     pub rep_level: i16,
     /// The level at which this field is fully defined,
-    /// i.e. guaranteed to be > 0 for a nullable type
+    /// i.e. guaranteed to be > 0 for a nullable type or child of a 
+    /// nullable type
     pub def_level: i16,
     /// Whether this field is nullable
     pub nullable: bool,

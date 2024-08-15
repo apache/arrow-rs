@@ -896,7 +896,7 @@ mod tests {
     #[test]
     fn test_from_trusted_len_iter() {
         let iter = vec![1u32, 2].into_iter();
-        let buf = unsafe { Buffer::from_trusted_len_iter(iter) };
+        let buf = unsafe { MutableBuffer::from_trusted_len_iter(iter) };
         assert_eq!(8, buf.len());
         assert_eq!(&[1u8, 0, 0, 0, 2, 0, 0, 0], buf.as_slice());
     }
