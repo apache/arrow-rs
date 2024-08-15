@@ -619,12 +619,8 @@ mod tests {
         let customer_key = "1234567890abcdef1234567890abcdef";
         let expected_md5 = "JMwgiexXqwuPqIPjYFmIZQ==";
 
-        let store = AmazonS3Builder::new()
-            .with_bucket_name("test-bucket")
-            .with_access_key_id("minio")
-            .with_secret_access_key("minio123")
+        let store = AmazonS3Builder::from_env()
             .with_ssec_encryption(customer_key)
-            .with_endpoint("https://localhost:9000")
             .with_client_options(ClientOptions::default().with_allow_invalid_certificates(true))
             .build()
             .unwrap();
