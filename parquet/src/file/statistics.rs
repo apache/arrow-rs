@@ -126,6 +126,8 @@ pub fn from_thrift(
     Ok(match thrift_stats {
         Some(stats) => {
             // Number of nulls recorded, when it is not available, we just mark it as 0.
+            // TODO this should be `None` if there is no information about NULLS.
+            // see https://github.com/apache/arrow-rs/pull/6216/files
             let null_count = stats.null_count.unwrap_or(0);
 
             if null_count < 0 {
@@ -242,10 +244,19 @@ pub fn from_thrift(
 pub fn to_thrift(stats: Option<&Statistics>) -> Option<TStatistics> {
     let stats = stats?;
 
+    // record null counts if greater than zero.
+    //
+    // TODO: This should be Some(0) if there are no nulls.
+    // see https://github.com/apache/arrow-rs/pull/6216/files
+    let null_count = stats
+        .null_count_opt()
+        .map(|value| value as i64)
+        .filter(|&x| x > 0);
+
     let mut thrift_stats = TStatistics {
         max: None,
         min: None,
-        null_count: stats.null_count_opt().map(|value| value as i64),
+        null_count,
         distinct_count: stats.distinct_count().map(|value| value as i64),
         max_value: None,
         min_value: None,
@@ -375,6 +386,8 @@ impl Statistics {
 
     /// Returns number of null values for the column.
     /// Note that this includes all nulls when column is part of the complex type.
+    ///
+    /// Note this API returns 0 if the null count is not available.
     #[deprecated(since = "53.0.0", note = "Use `null_count_opt` method instead")]
     pub fn null_count(&self) -> u64 {
         // 0 to remain consistent behavior prior to `null_count_opt`
@@ -390,6 +403,10 @@ impl Statistics {
 
     /// Returns number of null values for the column, if known.
     /// Note that this includes all nulls when column is part of the complex type.
+    ///
+    /// Note this API returns Some(0) even if the null count was not present
+    /// in the statistics.
+    /// See <https://github.com/apache/arrow-rs/pull/6216/files>
     pub fn null_count_opt(&self) -> Option<u64> {
         statistics_enum_func![self, null_count_opt]
     }
