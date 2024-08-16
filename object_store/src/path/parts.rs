@@ -19,15 +19,14 @@ use percent_encoding::{percent_encode, AsciiSet, CONTROLS};
 use std::borrow::Cow;
 
 use crate::path::DELIMITER_BYTE;
-use snafu::Snafu;
 
 /// Error returned by [`PathPart::parse`]
-#[derive(Debug, Snafu)]
-#[snafu(display(
+#[derive(Debug, thiserror::Error)]
+#[error(
     "Encountered illegal character sequence \"{}\" whilst parsing path segment \"{}\"",
     illegal,
     segment
-))]
+)]
 #[allow(missing_copy_implementations)]
 pub struct InvalidPart {
     segment: String,
