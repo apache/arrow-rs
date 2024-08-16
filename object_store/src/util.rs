@@ -24,7 +24,6 @@ use std::{
 use super::Result;
 use bytes::Bytes;
 use futures::{stream::StreamExt, Stream, TryStreamExt};
-use snafu::Snafu;
 
 #[cfg(any(feature = "azure", feature = "http"))]
 pub(crate) static RFC1123_FMT: &str = "%a, %d %h %Y %T GMT";
@@ -204,14 +203,12 @@ pub enum GetRange {
     Suffix(usize),
 }
 
-#[derive(Debug, Snafu)]
+#[derive(Debug, thiserror::Error)]
 pub(crate) enum InvalidGetRange {
-    #[snafu(display(
-        "Wanted range starting at {requested}, but object was only {length} bytes long"
-    ))]
+    #[error("Wanted range starting at {requested}, but object was only {length} bytes long")]
     StartTooLarge { requested: usize, length: usize },
 
-    #[snafu(display("Range started at {start} and ended at {end}"))]
+    #[error("Range started at {start} and ended at {end}")]
     Inconsistent { start: usize, end: usize },
 }
 
