@@ -32,7 +32,6 @@ use itertools::Itertools;
 use md5::{Digest, Md5};
 use reqwest::header::{HeaderMap, HeaderValue};
 use serde::{Deserialize, Serialize};
-use snafu::{OptionExt, ResultExt, Snafu};
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -43,46 +42,46 @@ use url::Url;
 static DEFAULT_METADATA_ENDPOINT: &str = "http://169.254.169.254";
 
 /// A specialized `Error` for object store-related errors
-#[derive(Debug, Snafu)]
+#[derive(Debug, thiserror::Error)]
 enum Error {
-    #[snafu(display("Missing bucket name"))]
+    #[error("Missing bucket name")]
     MissingBucketName,
 
-    #[snafu(display("Missing AccessKeyId"))]
+    #[error("Missing AccessKeyId")]
     MissingAccessKeyId,
 
-    #[snafu(display("Missing SecretAccessKey"))]
+    #[error("Missing SecretAccessKey")]
     MissingSecretAccessKey,
 
-    #[snafu(display("Unable parse source url. Url: {}, Error: {}", url, source))]
+    #[error("Unable parse source url. Url: {}, Error: {}", url, source)]
     UnableToParseUrl {
         source: url::ParseError,
         url: String,
     },
 
-    #[snafu(display(
+    #[error(
         "Unknown url scheme cannot be parsed into storage location: {}",
         scheme
-    ))]
+    )]
     UnknownUrlScheme { scheme: String },
 
-    #[snafu(display("URL did not match any known pattern for scheme: {}", url))]
+    #[error("URL did not match any known pattern for scheme: {}", url)]
     UrlNotRecognised { url: String },
 
-    #[snafu(display("Configuration key: '{}' is not known.", key))]
+    #[error("Configuration key: '{}' is not known.", key)]
     UnknownConfigurationKey { key: String },
 
-    #[snafu(display("Invalid Zone suffix for bucket '{bucket}'"))]
+    #[error("Invalid Zone suffix for bucket '{bucket}'")]
     ZoneSuffix { bucket: String },
 
-    #[snafu(display("Invalid encryption type: {}. Valid values are \"AES256\", \"sse:kms\", \"sse:kms:dsse\" and \"sse-c\".", passed))]
+    #[error("Invalid encryption type: {}. Valid values are \"AES256\", \"sse:kms\", \"sse:kms:dsse\" and \"sse-c\".", passed)]
     InvalidEncryptionType { passed: String },
 
-    #[snafu(display(
+    #[error(
         "Invalid encryption header values. Header: {}, source: {}",
         header,
         source
-    ))]
+    )]
     InvalidEncryptionHeader {
         header: &'static str,
         source: Box<dyn std::error::Error + Send + Sync + 'static>,
@@ -603,8 +602,15 @@ impl AmazonS3Builder {
     /// This is a separate member function to allow fallible computation to
     /// be deferred until [`Self::build`] which in turn allows deriving [`Clone`]
     fn parse_url(&mut self, url: &str) -> Result<()> {
-        let parsed = Url::parse(url).context(UnableToParseUrlSnafu { url })?;
-        let host = parsed.host_str().context(UrlNotRecognisedSnafu { url })?;
+        let parsed = Url::parse(url).map_err(|source| {
+            let url = url.into();
+            Error::UnableToParseUrl { url, source }
+        })?;
+
+        let host = parsed
+            .host_str()
+            .ok_or_else(|| Error::UrlNotRecognised { url: url.into() })?;
+
         match parsed.scheme() {
             "s3" | "s3a" => self.bucket_name = Some(host.to_string()),
             "https" => match host.splitn(4, '.').collect_tuple() {
@@ -630,9 +636,12 @@ impl AmazonS3Builder {
                         self.bucket_name = Some(bucket.into());
                     }
                 }
-                _ => return Err(UrlNotRecognisedSnafu { url }.build().into()),
+                _ => return Err(Error::UrlNotRecognised { url: url.into() }.into()),
             },
-            scheme => return Err(UnknownUrlSchemeSnafu { scheme }.build().into()),
+            scheme => {
+                let scheme = scheme.into();
+                return Err(Error::UnknownUrlScheme { scheme }.into());
+            }
         };
         Ok(())
     }
@@ -875,7 +884,7 @@ impl AmazonS3Builder {
             self.parse_url(&url)?;
         }
 
-        let bucket = self.bucket_name.context(MissingBucketNameSnafu)?;
+        let bucket = self.bucket_name.ok_or(Error::MissingBucketName)?;
         let region = self.region.unwrap_or_else(|| "us-east-1".to_string());
         let checksum = self.checksum_algorithm.map(|x| x.get()).transpose()?;
         let copy_if_not_exists = self.copy_if_not_exists.map(|x| x.get()).transpose()?;
@@ -957,7 +966,10 @@ impl AmazonS3Builder {
 
         let (session_provider, zonal_endpoint) = match self.s3_express.get()? {
             true => {
-                let zone = parse_bucket_az(&bucket).context(ZoneSuffixSnafu { bucket: &bucket })?;
+                let zone = parse_bucket_az(&bucket).ok_or_else(|| {
+                    let bucket = bucket.clone();
+                    Error::ZoneSuffix { bucket }
+                })?;
 
                 // https://docs.aws.amazon.com/AmazonS3/latest/userguide/s3-express-Regions-and-Zones.html
                 let endpoint = format!("https://{bucket}.s3express-{zone}.{region}.amazonaws.com");
