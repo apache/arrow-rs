@@ -20,16 +20,18 @@ use crate::local::LocalFileSystem;
 use crate::memory::InMemory;
 use crate::path::Path;
 use crate::ObjectStore;
-use snafu::Snafu;
 use url::Url;
 
-#[derive(Debug, Snafu)]
+#[derive(Debug, thiserror::Error)]
 pub enum Error {
-    #[snafu(display("Unable to recognise URL \"{}\"", url))]
+    #[error("Unable to recognise URL \"{}\"", url)]
     Unrecognised { url: Url },
 
-    #[snafu(context(false))]
-    Path { source: crate::path::Error },
+    #[error(transparent)]
+    Path {
+        #[from]
+        source: crate::path::Error,
+    },
 }
 
 impl From<Error> for super::Error {
