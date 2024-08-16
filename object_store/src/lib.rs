@@ -566,7 +566,6 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use futures::{stream::BoxStream, StreamExt, TryStreamExt};
-use snafu::Snafu;
 use std::fmt::{Debug, Formatter};
 #[cfg(all(feature = "fs", not(target_arch = "wasm32")))]
 use std::io::{Read, Seek, SeekFrom};
@@ -1229,11 +1228,11 @@ pub struct PutResult {
 pub type Result<T, E = Error> = std::result::Result<T, E>;
 
 /// A specialized `Error` for object store-related errors
-#[derive(Debug, Snafu)]
+#[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum Error {
     /// A fallback error type when no variant matches
-    #[snafu(display("Generic {} error: {}", store, source))]
+    #[error("Generic {} error: {}", store, source)]
     Generic {
         /// The store this error originated from
         store: &'static str,
@@ -1242,7 +1241,7 @@ pub enum Error {
     },
 
     /// Error when the object is not found at given location
-    #[snafu(display("Object at location {} not found: {}", path, source))]
+    #[error("Object at location {} not found: {}", path, source)]
     NotFound {
         /// The path to file
         path: String,
@@ -1251,31 +1250,30 @@ pub enum Error {
     },
 
     /// Error for invalid path
-    #[snafu(
-        display("Encountered object with invalid path: {}", source),
-        context(false)
-    )]
+    #[error("Encountered object with invalid path: {}", source)]
     InvalidPath {
         /// The wrapped error
+        #[from]
         source: path::Error,
     },
 
     /// Error when `tokio::spawn` failed
-    #[snafu(display("Error joining spawned task: {}", source), context(false))]
+    #[error("Error joining spawned task: {}", source)]
     JoinError {
         /// The wrapped error
+        #[from]
         source: tokio::task::JoinError,
     },
 
     /// Error when the attempted operation is not supported
-    #[snafu(display("Operation not supported: {}", source))]
+    #[error("Operation not supported: {}", source)]
     NotSupported {
         /// The wrapped error
         source: Box<dyn std::error::Error + Send + Sync + 'static>,
     },
 
     /// Error when the object already exists
-    #[snafu(display("Object at location {} already exists: {}", path, source))]
+    #[error("Object at location {} already exists: {}", path, source)]
     AlreadyExists {
         /// The path to the
         path: String,
@@ -1284,7 +1282,7 @@ pub enum Error {
     },
 
     /// Error when the required conditions failed for the operation
-    #[snafu(display("Request precondition failure for path {}: {}", path, source))]
+    #[error("Request precondition failure for path {}: {}", path, source)]
     Precondition {
         /// The path to the file
         path: String,
@@ -1293,7 +1291,7 @@ pub enum Error {
     },
 
     /// Error when the object at the location isn't modified
-    #[snafu(display("Object at location {} not modified: {}", path, source))]
+    #[error("Object at location {} not modified: {}", path, source)]
     NotModified {
         /// The path to the file
         path: String,
@@ -1302,16 +1300,16 @@ pub enum Error {
     },
 
     /// Error when an operation is not implemented
-    #[snafu(display("Operation not yet implemented."))]
+    #[error("Operation not yet implemented.")]
     NotImplemented,
 
     /// Error when the used credentials don't have enough permission
     /// to perform the requested operation
-    #[snafu(display(
+    #[error(
         "The operation lacked the necessary privileges to complete for path {}: {}",
         path,
         source
-    ))]
+    )]
     PermissionDenied {
         /// The path to the file
         path: String,
@@ -1320,11 +1318,11 @@ pub enum Error {
     },
 
     /// Error when the used credentials lack valid authentication
-    #[snafu(display(
+    #[error(
         "The operation lacked valid authentication credentials for path {}: {}",
         path,
         source
-    ))]
+    )]
     Unauthenticated {
         /// The path to the file
         path: String,
@@ -1333,7 +1331,7 @@ pub enum Error {
     },
 
     /// Error when a configuration key is invalid for the store used
-    #[snafu(display("Configuration key: '{}' is not valid for store '{}'.", key, store))]
+    #[error("Configuration key: '{}' is not valid for store '{}'.", key, store)]
     UnknownConfigurationKey {
         /// The object store used
         store: &'static str,
