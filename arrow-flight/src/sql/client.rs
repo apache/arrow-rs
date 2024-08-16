@@ -111,8 +111,8 @@ impl FlightSqlServiceClient<Channel> {
     }
 
     /// Share the bearer token with potentially different `DoGet` clients
-    pub fn token(&self) -> &Option<String> {
-        &self.token
+    pub fn token(&self) -> Option<&String> {
+        self.token.as_ref()
     }
 
     /// Set header value.
