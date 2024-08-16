@@ -25,7 +25,6 @@ use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use futures::{stream::BoxStream, StreamExt};
 use parking_lot::RwLock;
-use snafu::{OptionExt, ResultExt, Snafu};
 
 use crate::multipart::{MultipartStore, PartId};
 use crate::util::InvalidGetRange;
@@ -37,24 +36,24 @@ use crate::{
 use crate::{GetOptions, PutPayload};
 
 /// A specialized `Error` for in-memory object store-related errors
-#[derive(Debug, Snafu)]
+#[derive(Debug, thiserror::Error)]
 enum Error {
-    #[snafu(display("No data in memory found. Location: {path}"))]
+    #[error("No data in memory found. Location: {path}")]
     NoDataInMemory { path: String },
 
-    #[snafu(display("Invalid range: {source}"))]
+    #[error("Invalid range: {source}")]
     Range { source: InvalidGetRange },
 
-    #[snafu(display("Object already exists at that location: {path}"))]
+    #[error("Object already exists at that location: {path}")]
     AlreadyExists { path: String },
 
-    #[snafu(display("ETag required for conditional update"))]
+    #[error("ETag required for conditional update")]
     MissingETag,
 
-    #[snafu(display("MultipartUpload not found: {id}"))]
+    #[error("MultipartUpload not found: {id}")]
     UploadNotFound { id: String },
 
-    #[snafu(display("Missing part at index: {part}"))]
+    #[error("Missing part at index: {part}")]
     MissingPart { part: usize },
 }
 
@@ -158,7 +157,7 @@ impl Storage {
             }),
             Some(e) => {
                 let existing = e.e_tag.to_string();
-                let expected = v.e_tag.context(MissingETagSnafu)?;
+                let expected = v.e_tag.ok_or(Error::MissingETag)?;
                 if existing == expected {
                     *e = entry;
                     Ok(())
@@ -177,7 +176,7 @@ impl Storage {
             .parse()
             .ok()
             .and_then(|x| self.uploads.get_mut(&x))
-            .context(UploadNotFoundSnafu { id })?;
+            .ok_or_else(|| Error::UploadNotFound { id: id.into() })?;
         Ok(parts)
     }
 
@@ -186,7 +185,7 @@ impl Storage {
             .parse()
             .ok()
             .and_then(|x| self.uploads.remove(&x))
-            .context(UploadNotFoundSnafu { id })?;
+            .ok_or_else(|| Error::UploadNotFound { id: id.into() })?;
         Ok(parts)
     }
 }
@@ -250,7 +249,9 @@ impl ObjectStore for InMemory {
 
         let (range, data) = match options.range {
             Some(range) => {
-                let r = range.as_range(entry.data.len()).context(RangeSnafu)?;
+                let r = range
+                    .as_range(entry.data.len())
+                    .map_err(|source| Error::Range { source })?;
                 (r.clone(), entry.data.slice(r))
             }
             None => (0..entry.data.len(), entry.data),
@@ -272,7 +273,7 @@ impl ObjectStore for InMemory {
             .map(|range| {
                 let r = GetRange::Bounded(range.clone())
                     .as_range(entry.data.len())
-                    .context(RangeSnafu)?;
+                    .map_err(|source| Error::Range { source })?;
 
                 Ok(entry.data.slice(r))
             })
@@ -435,7 +436,7 @@ impl MultipartStore for InMemory {
 
         let mut cap = 0;
         for (part, x) in upload.parts.iter().enumerate() {
-            cap += x.as_ref().context(MissingPartSnafu { part })?.len();
+            cap += x.as_ref().ok_or(Error::MissingPart { part })?.len();
         }
         let mut buf = Vec::with_capacity(cap);
         for x in &upload.parts {
@@ -474,7 +475,7 @@ impl InMemory {
             .map
             .get(location)
             .cloned()
-            .context(NoDataInMemorySnafu {
+            .ok_or_else(|| Error::NoDataInMemory {
                 path: location.to_string(),
             })?;
 
