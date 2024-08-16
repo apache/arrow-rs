@@ -39,6 +39,7 @@ itertools = "0.13.0"
 parking_lot = { version = "0.12" }
 percent-encoding = "2.1"
 snafu = { version = "0.8", default-features = false, features = ["std", "rust_1_61"] }
+thiserror = "1.0"
 tracing = { version = "0.1" }
 url = "2.2"
 walkdir = "2"
