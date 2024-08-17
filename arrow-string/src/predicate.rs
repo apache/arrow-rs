@@ -155,11 +155,14 @@ impl<'a> Predicate<'a> {
                     let null_buffer = string_view_array.logical_nulls();
                     let boolean_buffer =
                         BooleanBuffer::collect_bool(string_view_array.len(), |i| {
-                            zip(
-                                unsafe { string_view_array.prefix_bytes_unchecked(needle_len, i) },
-                                needle_bytes,
-                            )
-                            .all(equals_kernel)
+                            let prefix_bytes =
+                                unsafe { string_view_array.prefix_bytes_unchecked(needle_len, i) };
+
+                            if prefix_bytes.len() != needle_len {
+                                return negate;
+                            }
+
+                            zip(prefix_bytes, needle_bytes).all(equals_kernel) != negate
                         });
 
                     BooleanArray::new(boolean_buffer, null_buffer)
@@ -176,11 +179,15 @@ impl<'a> Predicate<'a> {
                     let null_buffer = string_view_array.logical_nulls();
                     let boolean_buffer =
                         BooleanBuffer::collect_bool(string_view_array.len(), |i| {
-                            zip(
-                                unsafe { string_view_array.prefix_bytes_unchecked(needle_len, i) },
-                                needle_bytes,
-                            )
-                            .all(equals_ignore_ascii_case_kernel)
+                            let prefix_bytes =
+                                unsafe { string_view_array.prefix_bytes_unchecked(needle_len, i) };
+
+                            if prefix_bytes.len() != needle_len {
+                                return negate;
+                            }
+
+                            zip(prefix_bytes, needle_bytes).all(equals_ignore_ascii_case_kernel)
+                                != negate
                         });
 
                     BooleanArray::new(boolean_buffer, null_buffer)
@@ -197,13 +204,15 @@ impl<'a> Predicate<'a> {
                     let null_buffer = string_view_array.logical_nulls();
                     let boolean_buffer =
                         BooleanBuffer::collect_bool(string_view_array.len(), |i| {
-                            zip(
-                                unsafe { string_view_array.prefix_bytes_unchecked(needle_len, i) }
-                                    .iter()
-                                    .rev(),
-                                needle_bytes.iter().rev(),
-                            )
-                            .all(equals_kernel)
+                            let haystack_bytes = unsafe { string_view_array.bytes_unchecked(i) };
+
+                            if haystack_bytes.len() < needle_len {
+                                return negate;
+                            }
+
+                            zip(haystack_bytes.iter().rev(), needle_bytes.iter().rev())
+                                .all(equals_kernel)
+                                != negate
                         });
 
                     BooleanArray::new(boolean_buffer, null_buffer)
@@ -220,13 +229,15 @@ impl<'a> Predicate<'a> {
                     let null_buffer = string_view_array.logical_nulls();
                     let boolean_buffer =
                         BooleanBuffer::collect_bool(string_view_array.len(), |i| {
-                            zip(
-                                unsafe { string_view_array.prefix_bytes_unchecked(needle_len, i) }
-                                    .iter()
-                                    .rev(),
-                                needle_bytes.iter().rev(),
-                            )
-                            .all(equals_ignore_ascii_case_kernel)
+                            let haystack_bytes = unsafe { string_view_array.bytes_unchecked(i) };
+
+                            if haystack_bytes.len() < needle_len {
+                                return negate;
+                            }
+
+                            zip(haystack_bytes.iter().rev(), needle_bytes.iter().rev())
+                                .all(equals_ignore_ascii_case_kernel)
+                                != negate
                         });
 
                     BooleanArray::new(boolean_buffer, null_buffer)
