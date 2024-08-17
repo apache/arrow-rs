@@ -86,8 +86,8 @@ struct AnOptionalRecord {
 }
 
 // This struct removes several fields from the "APartiallyCompleteRecord",
-// and it sorts the field in another order.
-// we can load this struct into APartiallyCompleteRecord
+// and it shuffles the fields.
+// we should still be able to load it from APartiallyCompleteRecord
 #[derive(PartialEq, ParquetRecordReader, Debug)]
 struct APrunedRecord {
     pub bool: bool,
@@ -295,7 +295,7 @@ mod tests {
     }
 
     #[test]
-    fn test_parquet_derive_read_pruned_and_reordered_columns() {
+    fn test_parquet_derive_read_pruned_and_shuffled_columns() {
         let file = get_temp_file("test_parquet_derive_read_pruned", &[]);
         let drs = vec![APartiallyCompleteRecord {
             bool: true,
@@ -330,9 +330,16 @@ mod tests {
         let mut row_group = reader.get_row_group(0).unwrap();
         out.read_from_row_group(&mut *row_group, 1).unwrap();
 
+        assert_eq!(drs[0].bool, out[0].bool);
+        assert_eq!(drs[0].string, out[0].string);
+        assert_eq!(drs[0].byte_vec, out[0].byte_vec);
+        assert_eq!(drs[0].float, out[0].float);
+        assert!(drs[0].double.is_nan());
+        assert!(out[0].double.is_nan());
         assert_eq!(drs[0].i16, out[0].i16);
         assert_eq!(drs[0].i32, out[0].i32);
         assert_eq!(drs[0].u64, out[0].u64);
+        assert_eq!(drs[0].isize, out[0].isize);
     }
 
     /// Returns file handle for a temp file in 'target' directory with a provided content
