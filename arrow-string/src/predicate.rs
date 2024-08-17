@@ -15,7 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow_array::{ArrayAccessor, BooleanArray};
+use arrow_array::{Array, ArrayAccessor, BooleanArray, StringViewArray};
+use arrow_buffer::BooleanBuffer;
 use arrow_schema::ArrowError;
 use memchr::memchr2;
 use memchr::memmem::Finder;
@@ -111,24 +112,130 @@ impl<'a> Predicate<'a> {
             Predicate::Eq(v) => BooleanArray::from_unary(array, |haystack| {
                 (haystack.len() == v.len() && haystack == *v) != negate
             }),
-            Predicate::IEqAscii(v) => BooleanArray::from_unary(array, |haystack| {
-                haystack.eq_ignore_ascii_case(v) != negate
-            }),
-            Predicate::Contains(finder) => BooleanArray::from_unary(array, |haystack| {
-                finder.find(haystack.as_bytes()).is_some() != negate
-            }),
-            Predicate::StartsWith(v) => BooleanArray::from_unary(array, |haystack| {
-                starts_with(haystack, v, equals_kernel) != negate
-            }),
-            Predicate::IStartsWithAscii(v) => BooleanArray::from_unary(array, |haystack| {
-                starts_with(haystack, v, equals_ignore_ascii_case_kernel) != negate
-            }),
-            Predicate::EndsWith(v) => BooleanArray::from_unary(array, |haystack| {
-                ends_with(haystack, v, equals_kernel) != negate
-            }),
-            Predicate::IEndsWithAscii(v) => BooleanArray::from_unary(array, |haystack| {
-                ends_with(haystack, v, equals_ignore_ascii_case_kernel) != negate
-            }),
+            Predicate::IEqAscii(v) => {
+                if let Some(string_view_array) = array.as_any().downcast_ref::<StringViewArray>() {
+                    let neddle_bytes = v.as_bytes();
+                    let null_buffer = string_view_array.logical_nulls();
+                    let boolean_buffer =
+                        BooleanBuffer::collect_bool(string_view_array.len(), |i| {
+                            unsafe { string_view_array.bytes_unchecked(i) }
+                                .eq_ignore_ascii_case(neddle_bytes)
+                                != negate
+                        });
+
+                    BooleanArray::new(boolean_buffer, null_buffer)
+                } else {
+                    BooleanArray::from_unary(array, |haystack| {
+                        haystack.eq_ignore_ascii_case(v) != negate
+                    })
+                }
+            }
+            Predicate::Contains(finder) => {
+                if let Some(string_view_array) = array.as_any().downcast_ref::<StringViewArray>() {
+                    let null_buffer = string_view_array.logical_nulls();
+                    let boolean_buffer =
+                        BooleanBuffer::collect_bool(string_view_array.len(), |i| {
+                            finder
+                                .find(unsafe { string_view_array.bytes_unchecked(i) })
+                                .is_some()
+                                != negate
+                        });
+
+                    BooleanArray::new(boolean_buffer, null_buffer)
+                } else {
+                    BooleanArray::from_unary(array, |haystack| {
+                        finder.find(haystack.as_bytes()).is_some() != negate
+                    })
+                }
+            }
+            Predicate::StartsWith(v) => {
+                if let Some(string_view_array) = array.as_any().downcast_ref::<StringViewArray>() {
+                    let needle_bytes = v.as_bytes();
+                    let needle_len = needle_bytes.len();
+                    let null_buffer = string_view_array.logical_nulls();
+                    let boolean_buffer =
+                        BooleanBuffer::collect_bool(string_view_array.len(), |i| {
+                            zip(
+                                unsafe { string_view_array.prefix_bytes_unchecked(needle_len, i) },
+                                needle_bytes,
+                            )
+                            .all(equals_kernel)
+                        });
+
+                    BooleanArray::new(boolean_buffer, null_buffer)
+                } else {
+                    BooleanArray::from_unary(array, |haystack| {
+                        starts_with(haystack, v, equals_kernel) != negate
+                    })
+                }
+            }
+            Predicate::IStartsWithAscii(v) => {
+                if let Some(string_view_array) = array.as_any().downcast_ref::<StringViewArray>() {
+                    let needle_bytes = v.as_bytes();
+                    let needle_len = needle_bytes.len();
+                    let null_buffer = string_view_array.logical_nulls();
+                    let boolean_buffer =
+                        BooleanBuffer::collect_bool(string_view_array.len(), |i| {
+                            zip(
+                                unsafe { string_view_array.prefix_bytes_unchecked(needle_len, i) },
+                                needle_bytes,
+                            )
+                            .all(equals_ignore_ascii_case_kernel)
+                        });
+
+                    BooleanArray::new(boolean_buffer, null_buffer)
+                } else {
+                    BooleanArray::from_unary(array, |haystack| {
+                        starts_with(haystack, v, equals_ignore_ascii_case_kernel) != negate
+                    })
+                }
+            }
+            Predicate::EndsWith(v) => {
+                if let Some(string_view_array) = array.as_any().downcast_ref::<StringViewArray>() {
+                    let needle_bytes = v.as_bytes();
+                    let needle_len = needle_bytes.len();
+                    let null_buffer = string_view_array.logical_nulls();
+                    let boolean_buffer =
+                        BooleanBuffer::collect_bool(string_view_array.len(), |i| {
+                            zip(
+                                unsafe { string_view_array.prefix_bytes_unchecked(needle_len, i) }
+                                    .iter()
+                                    .rev(),
+                                needle_bytes.iter().rev(),
+                            )
+                            .all(equals_kernel)
+                        });
+
+                    BooleanArray::new(boolean_buffer, null_buffer)
+                } else {
+                    BooleanArray::from_unary(array, |haystack| {
+                        ends_with(haystack, v, equals_kernel) != negate
+                    })
+                }
+            }
+            Predicate::IEndsWithAscii(v) => {
+                if let Some(string_view_array) = array.as_any().downcast_ref::<StringViewArray>() {
+                    let needle_bytes = v.as_bytes();
+                    let needle_len = needle_bytes.len();
+                    let null_buffer = string_view_array.logical_nulls();
+                    let boolean_buffer =
+                        BooleanBuffer::collect_bool(string_view_array.len(), |i| {
+                            zip(
+                                unsafe { string_view_array.prefix_bytes_unchecked(needle_len, i) }
+                                    .iter()
+                                    .rev(),
+                                needle_bytes.iter().rev(),
+                            )
+                            .all(equals_ignore_ascii_case_kernel)
+                        });
+
+                    BooleanArray::new(boolean_buffer, null_buffer)
+                } else {
+                    BooleanArray::from_unary(array, |haystack| {
+                        ends_with(haystack, v, equals_ignore_ascii_case_kernel) != negate
+                    })
+                }
+            }
             Predicate::Regex(v) => {
                 BooleanArray::from_unary(array, |haystack| v.is_match(haystack) != negate)
             }
