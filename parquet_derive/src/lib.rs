@@ -189,7 +189,6 @@ pub fn parquet_record_reader(input: proc_macro::TokenStream) -> proc_macro::Toke
     let field_names: Vec<_> = fields.iter().map(|f| f.ident.clone()).collect();
     let reader_snippets: Vec<proc_macro2::TokenStream> =
         field_infos.iter().map(|x| x.reader_snippet()).collect();
-    let i: Vec<_> = (0..reader_snippets.len()).collect();
 
     let derived_for = input.ident;
     let generics = input.generics;
@@ -206,6 +205,13 @@ pub fn parquet_record_reader(input: proc_macro::TokenStream) -> proc_macro::Toke
 
         let mut row_group_reader = row_group_reader;
 
+        // build map to index
+        let mut name_to_index = std::collections::HashMap::new();
+        for (idx, col) in row_group_reader.metadata().schema_descr().columns().iter().enumerate() {
+            // println!("col {} name {:?}", idx, col.name());
+            name_to_index.insert(col.name().to_string(), idx);
+        }
+
         for _ in 0..num_records {
           self.push(#derived_for {
             #(
@@ -218,7 +224,9 @@ pub fn parquet_record_reader(input: proc_macro::TokenStream) -> proc_macro::Toke
 
         #(
           {
-              if let Ok(mut column_reader) = row_group_reader.get_column_reader(#i) {
+              let idx = name_to_index.get(stringify!(#field_names)).unwrap_or_else(
+                  || panic!("column name '{}' is not found in parquet file!", stringify!(#field_names)));
+              if let Ok(mut column_reader) = row_group_reader.get_column_reader(idx.clone()) {
                   #reader_snippets
               } else {
                   return Err(::parquet::errors::ParquetError::General("Failed to get next column".into()))
