@@ -111,6 +111,11 @@ impl FlightSqlServiceClient<Channel> {
         self.token = None;
     }
 
+    /// Share the bearer token with potentially different `DoGet` clients
+    pub fn token(&self) -> Option<&String> {
+        self.token.as_ref()
+    }
+
     /// Set header value.
     pub fn set_header(&mut self, key: impl Into<String>, value: impl Into<String>) {
         let key: String = key.into();
