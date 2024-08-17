@@ -261,18 +261,22 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
         unsafe { self.value_unchecked(i) }
     }
 
-    /// Returns the inline view data at index `i`
+    /// Returns the inline view data at index `i`.
+    /// If the length of the view is less than `prefix_len`, it will return the length of the view.
+    /// # Safety
+    /// Caller is responsible for ensuring that the index is within the bounds of the array and
+    /// handles the returned slice correctly. Note the returned slice may be shorter than `prefix_len`.
     pub unsafe fn prefix_bytes_unchecked(&self, prefix_len: usize, idx: usize) -> &[u8] {
         let v = self.views.get_unchecked(idx);
         let len = (*v as u32) as usize;
 
         if prefix_len <= 4 || (prefix_len <= 12 && len <= 12) {
-            Self::inline_value(v, prefix_len)
+            Self::inline_value(v, prefix_len.min(len))
         } else {
             let view = ByteView::from(*v);
             let data = self.buffers.get_unchecked(view.buffer_index as usize);
             let offset = view.offset as usize;
-            data.get_unchecked(offset..offset + prefix_len)
+            data.get_unchecked(offset..offset + prefix_len.min(len))
         }
     }
 
@@ -294,6 +298,8 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
     }
 
     /// Returns the bytes at index `i`
+    /// # Safety
+    /// Caller is responsible for ensuring that the index is within the bounds of the array
     pub unsafe fn bytes_unchecked(&self, idx: usize) -> &[u8] {
         let v = self.views.get_unchecked(idx);
         let len = *v as u32;
