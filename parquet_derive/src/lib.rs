@@ -205,10 +205,9 @@ pub fn parquet_record_reader(input: proc_macro::TokenStream) -> proc_macro::Toke
 
         let mut row_group_reader = row_group_reader;
 
-        // build map to index
+        // key: parquet file column name, value: column index
         let mut name_to_index = std::collections::HashMap::new();
         for (idx, col) in row_group_reader.metadata().schema_descr().columns().iter().enumerate() {
-            // println!("col {} name {:?}", idx, col.name());
             name_to_index.insert(col.name().to_string(), idx);
         }
 

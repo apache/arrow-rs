@@ -87,7 +87,7 @@ struct AnOptionalRecord {
 
 // This struct removes several fields from the "APartiallyCompleteRecord",
 // and it shuffles the fields.
-// we should still be able to load it from APartiallyCompleteRecord
+// we should still be able to load it from APartiallyCompleteRecord parquet file
 #[derive(PartialEq, ParquetRecordReader, Debug)]
 struct APrunedRecord {
     pub bool: bool,
