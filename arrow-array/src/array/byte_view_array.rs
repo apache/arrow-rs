@@ -24,6 +24,7 @@ use crate::{Array, ArrayAccessor, ArrayRef, GenericByteArray, OffsetSizeTrait, S
 use arrow_buffer::{ArrowNativeType, Buffer, NullBuffer, ScalarBuffer};
 use arrow_data::{ArrayData, ArrayDataBuilder, ByteView};
 use arrow_schema::{ArrowError, DataType};
+use core::str;
 use num::ToPrimitive;
 use std::any::Any;
 use std::fmt::Debug;
@@ -261,25 +262,6 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
         unsafe { self.value_unchecked(i) }
     }
 
-    /// Returns the inline view data at index `i`.
-    /// If the length of the view is less than `prefix_len`, it will return the length of the view.
-    /// # Safety
-    /// Caller is responsible for ensuring that the index is within the bounds of the array and
-    /// handles the returned slice correctly. Note the returned slice may be shorter than `prefix_len`.
-    pub unsafe fn prefix_bytes_unchecked(&self, prefix_len: usize, idx: usize) -> &[u8] {
-        let v = self.views.get_unchecked(idx);
-        let len = (*v as u32) as usize;
-
-        if prefix_len <= 4 || (prefix_len <= 12 && len <= 12) {
-            Self::inline_value(v, prefix_len.min(len))
-        } else {
-            let view = ByteView::from(*v);
-            let data = self.buffers.get_unchecked(view.buffer_index as usize);
-            let offset = view.offset as usize;
-            data.get_unchecked(offset..offset + prefix_len.min(len))
-        }
-    }
-
     /// Returns the element at index `i`
     /// # Safety
     /// Caller is responsible for ensuring that the index is within the bounds of the array
@@ -327,6 +309,21 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
     /// constructs a new iterator
     pub fn iter(&self) -> ArrayIter<&Self> {
         ArrayIter::new(self)
+    }
+
+    /// Returns an iterator over the bytes of this array.
+    pub fn bytes_iter(&self) -> impl Iterator<Item = &[u8]> {
+        self.views.iter().map(move |v| {
+            let len = *v as u32;
+            if len <= 12 {
+                unsafe { Self::inline_value(v, len as usize) }
+            } else {
+                let view = ByteView::from(*v);
+                let data = &self.buffers[view.buffer_index as usize];
+                let offset = view.offset as usize;
+                unsafe { data.get_unchecked(offset..offset + len as usize) }
+            }
+        })
     }
 
     /// Returns a zero-copy slice of this array with the indicated offset and length.
@@ -700,6 +697,58 @@ impl StringViewArray {
         self.iter().all(|v| match v {
             Some(v) => v.is_ascii(),
             None => true,
+        })
+    }
+
+    /// Returns an iterator over the prefix bytes of this array with respect to the prefix length.
+    /// If the prefix length is larger than the string length, it will return the empty string.
+    pub fn prefix_iter(&self, prefix_len: usize) -> impl Iterator<Item = &str> {
+        self.views().into_iter().map(move |v| {
+            let len = (*v as u32) as usize;
+
+            if len < prefix_len {
+                return "";
+            }
+
+            let b = if prefix_len <= 4 || len <= 12 {
+                unsafe { StringViewArray::inline_value(v, prefix_len) }
+            } else {
+                let view = ByteView::from(*v);
+                let data = unsafe {
+                    self.data_buffers()
+                        .get_unchecked(view.buffer_index as usize)
+                };
+                let offset = view.offset as usize;
+                unsafe { data.get_unchecked(offset..offset + prefix_len) }
+            };
+
+            unsafe { str::from_utf8_unchecked(b) }
+        })
+    }
+
+    /// Returns an iterator over the suffix bytes of this array with respect to the suffix length.
+    /// If the suffix length is larger than the string length, it will return the empty string.
+    pub fn suffix_iter(&self, suffix_len: usize) -> impl Iterator<Item = &str> {
+        self.views().into_iter().map(move |v| {
+            let len = (*v as u32) as usize;
+
+            if len < suffix_len {
+                return "";
+            }
+
+            let b = if len <= 12 {
+                unsafe { &StringViewArray::inline_value(v, len)[len - suffix_len..] }
+            } else {
+                let view = ByteView::from(*v);
+                let data = unsafe {
+                    self.data_buffers()
+                        .get_unchecked(view.buffer_index as usize)
+                };
+                let offset = view.offset as usize;
+                unsafe { data.get_unchecked(offset + len - suffix_len..offset + len) }
+            };
+
+            unsafe { str::from_utf8_unchecked(b) }
         })
     }
 }
