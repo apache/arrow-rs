@@ -225,7 +225,7 @@ pub fn parquet_record_reader(input: proc_macro::TokenStream) -> proc_macro::Toke
           {
               let idx = name_to_index.get(stringify!(#field_names)).unwrap_or_else(
                   || panic!("column name '{}' is not found in parquet file!", stringify!(#field_names)));
-              if let Ok(mut column_reader) = row_group_reader.get_column_reader(idx.clone()) {
+              if let Ok(mut column_reader) = row_group_reader.get_column_reader(*idx) {
                   #reader_snippets
               } else {
                   return Err(::parquet::errors::ParquetError::General("Failed to get next column".into()))
