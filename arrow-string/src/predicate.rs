@@ -163,7 +163,7 @@ impl<'a> Predicate<'a> {
                     BooleanArray::from(
                         string_view_array
                             .suffix_iter(v.len())
-                            .map(|haystack| ends_with(haystack, v, equals_kernel) != negate)
+                            .map(|haystack| starts_with(haystack, v, equals_kernel) != negate)
                             .collect::<Vec<_>>(),
                     )
                 } else {
@@ -178,7 +178,7 @@ impl<'a> Predicate<'a> {
                         string_view_array
                             .suffix_iter(v.len())
                             .map(|haystack| {
-                                ends_with(haystack, v, equals_ignore_ascii_case_kernel) != negate
+                                starts_with(haystack, v, equals_ignore_ascii_case_kernel) != negate
                             })
                             .collect::<Vec<_>>(),
                     )
