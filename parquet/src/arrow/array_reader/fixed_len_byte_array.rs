@@ -166,12 +166,12 @@ impl ArrayReader for FixedLenByteArrayReader {
         let array: ArrayRef = match &self.data_type {
             ArrowType::Decimal128(p, s) => {
                 let f = |b: &[u8]| i128::from_be_bytes(sign_extend_be(b));
-                Arc::new((binary.unary(&f) as Decimal128Array).with_precision_and_scale(*p, *s)?)
+                Arc::new(Decimal128Array::from_unary(&binary, f).with_precision_and_scale(*p, *s)?)
                     as ArrayRef
             }
             ArrowType::Decimal256(p, s) => {
                 let f = |b: &[u8]| i256::from_be_bytes(sign_extend_be(b));
-                Arc::new((binary.unary(&f) as Decimal256Array).with_precision_and_scale(*p, *s)?)
+                Arc::new(Decimal256Array::from_unary(&binary, f).with_precision_and_scale(*p, *s)?)
                     as ArrayRef
             }
             ArrowType::Interval(unit) => {
@@ -180,7 +180,7 @@ impl ArrayReader for FixedLenByteArrayReader {
                 match unit {
                     IntervalUnit::YearMonth => {
                         let f = |b: &[u8]| i32::from_le_bytes(b[0..4].try_into().unwrap());
-                        Arc::new(binary.unary(&f) as IntervalYearMonthArray) as ArrayRef
+                        Arc::new(IntervalYearMonthArray::from_unary(&binary, f)) as ArrayRef
                     }
                     IntervalUnit::DayTime => {
                         let f = |b: &[u8]| {
@@ -189,7 +189,7 @@ impl ArrayReader for FixedLenByteArrayReader {
                                 i32::from_le_bytes(b[8..12].try_into().unwrap()),
                             )
                         };
-                        Arc::new(binary.unary(&f) as IntervalDayTimeArray) as ArrayRef
+                        Arc::new(IntervalDayTimeArray::from_unary(&binary, f)) as ArrayRef
                     }
                     IntervalUnit::MonthDayNano => {
                         return Err(nyi_err!("MonthDayNano intervals not supported"));
@@ -197,8 +197,8 @@ impl ArrayReader for FixedLenByteArrayReader {
                 }
             }
             ArrowType::Float16 => {
-                let f = |b: &[u8]| f16::from_le_bytes(b.try_into().unwrap());
-                Arc::new(binary.unary(&f) as Float16Array) as ArrayRef
+                let f = |b: &[u8]| f16::from_le_bytes(b[..2].try_into().unwrap());
+                Arc::new(Float16Array::from_unary(&binary, f)) as ArrayRef
             }
             _ => Arc::new(binary) as ArrayRef,
         };

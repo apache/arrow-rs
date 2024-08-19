@@ -1016,6 +1016,32 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
         PrimitiveArray::new(values, Some(nulls))
     }
 
+    /// Applies a unary infallible function to each value in an array, producing a
+    /// new primitive array.
+    ///
+    /// # Null Handling
+    ///
+    /// Applies the function for all values, including those on null slots. This
+    /// will often allow the compiler to generate faster vectorized code, but
+    /// requires that the operation must be infallible (not error/panic) for any
+    /// value of the corresponding type or this function may panic.
+    pub fn from_unary<U: ArrayAccessor, F>(left: U, mut op: F) -> Self
+    where
+        F: FnMut(U::Item) -> T::Native,
+    {
+        let nulls = left.logical_nulls();
+        let mut values: Vec<T::Native> = vec![T::Native::default(); left.len()];
+
+        for (i, val) in values.iter_mut().enumerate().take(left.len()) {
+            // SAFETY: i in range 0..len
+            unsafe {
+                *val = op(left.value_unchecked(i));
+            }
+        }
+        let values = ScalarBuffer::from(values);
+        Self::new(values, nulls)
+    }
+
     /// Returns a `PrimitiveBuilder` for this array, suitable for mutating values
     /// in place.
     ///
