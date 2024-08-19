@@ -923,4 +923,13 @@ mod tests {
             assert_eq!(field.metadata(), &metadata);
         }
     }
+
+    #[test]
+    fn test_import_field_with_null_name() {
+        let dtype = DataType::Int16;
+        let c_schema = FFI_ArrowSchema::try_from(&dtype).unwrap();
+        assert!(c_schema.name().is_none());
+        let field = Field::try_from(&c_schema).unwrap();
+        assert_eq!(field.name(), "");
+    }
 }
