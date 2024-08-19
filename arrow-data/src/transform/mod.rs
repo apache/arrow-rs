@@ -97,40 +97,78 @@ fn build_extend_null_bits(array: &ArrayData, use_nulls: bool) -> ExtendNullBits 
     }
 }
 
-/// Struct to efficiently and interactively create an [ArrayData] from an existing [ArrayData] by
+/// Efficiently create an [ArrayData] from one or more existing [ArrayData]s by
 /// copying chunks.
 ///
-/// The main use case of this struct is to perform unary operations to arrays of arbitrary types,
-/// such as `filter` and `take`.
+/// The main use case of this struct is to perform unary operations to arrays of
+/// arbitrary types, such as `filter` and `take`.
+///
+/// # Example
+/// ```
+/// use arrow_buffer::Buffer;
+/// use arrow_data::ArrayData;
+/// use arrow_data::transform::MutableArrayData;
+/// use arrow_schema::DataType;
+/// fn i32_array(values: &[i32]) -> ArrayData {
+///   ArrayData::try_new(DataType::Int32, 5, None, 0, vec![Buffer::from_slice_ref(values)], vec![]).unwrap()
+/// }
+/// let arr1  = i32_array(&[1, 2, 3, 4, 5]);
+/// let arr2  = i32_array(&[6, 7, 8, 9, 10]);
+/// // Create a mutable array for copying values from arr1 and arr2, with a capacity for 6 elements
+/// let capacity = 3 * size_of::<i32>();
+/// let mut mutable = MutableArrayData::new(vec![&arr1, &arr2], false, 10);
+/// // Copy the first 3 elements from arr1
+/// mutable.extend(0, 0, 3);
+/// // Copy the last 3 elements from arr2
+/// mutable.extend(1, 2, 4);
+/// // Complete the MutableArrayData into a new ArrayData
+/// let frozen = mutable.freeze();
+/// assert_eq!(frozen, i32_array(&[1, 2, 3, 8, 9, 10]));
+/// ```
 pub struct MutableArrayData<'a> {
+    /// Input arrays: the data being read FROM.
+    ///
+    /// Note this is "dead code" because all actual references to the arrays are
+    /// stored in closures for extending values and nulls.
     #[allow(dead_code)]
     arrays: Vec<&'a ArrayData>,
-    /// The attributes in [_MutableArrayData] cannot be in [MutableArrayData] due to
-    /// mutability invariants (interior mutability):
-    /// [MutableArrayData] contains a function that can only mutate [_MutableArrayData], not
-    /// [MutableArrayData] itself
+
+    /// In progress output array: The data being written TO
+    ///
+    /// Note these fields are in a separate struct, [_MutableArrayData], as they
+    /// cannot be in [MutableArrayData] itself due to mutability invariants (interior
+    /// mutability): [MutableArrayData] contains a function that can only mutate
+    /// [_MutableArrayData], not [MutableArrayData] itself
     data: _MutableArrayData<'a>,
 
-    /// the child data of the `Array` in Dictionary arrays.
-    /// This is not stored in `MutableArrayData` because these values constant and only needed
-    /// at the end, when freezing [_MutableArrayData].
+    /// The child data of the `Array` in Dictionary arrays.
+    ///
+    /// This is not stored in `_MutableArrayData` because these values are
+    /// constant and only needed at the end, when freezing [_MutableArrayData].
     dictionary: Option<ArrayData>,
 
-    /// Variadic data buffers referenced by views
-    /// This is not stored in `MutableArrayData` because these values constant  and only needed
-    /// at the end, when freezing [_MutableArrayData]
+    /// Variadic data buffers referenced by views.
+    ///
+    /// Note this this is not stored in `_MutableArrayData` because these values
+    /// are constant and only needed at the end, when freezing
+    /// [_MutableArrayData]
     variadic_data_buffers: Vec<Buffer>,
 
-    /// function used to extend values from arrays. This function's lifetime is bound to the array
-    /// because it reads values from it.
+    /// function used to extend output array with values from input arrays.
+    ///
+    /// This function's lifetime is bound to the input arrays because it reads
+    /// values from them.
     extend_values: Vec<Extend<'a>>,
 
-    /// function used to extend nulls from arrays. This function's lifetime is bound to the array
-    /// because it reads nulls from it.
+    /// function used to extend the output array with nulls from input arrays.
+    ///
+    /// This function's lifetime is bound to the input arrays because it reads
+    /// nulls from it.
     extend_null_bits: Vec<ExtendNullBits<'a>>,
 
-    /// function used to extend nulls.
-    /// this is independent of the arrays and therefore has no lifetime.
+    /// function used to extend the output array with null elements.
+    ///
+    /// This function is independent of the arrays and therefore has no lifetime.
     extend_nulls: ExtendNulls,
 }
 
@@ -307,47 +345,63 @@ fn preallocate_offset_and_binary_buffer<Offset: ArrowNativeType + Integer>(
     ]
 }
 
-/// Define capacities of child data or data buffers.
+/// Define capacities to pre-allocate for child data or data buffers.
 #[derive(Debug, Clone)]
 pub enum Capacities {
     /// Binary, Utf8 and LargeUtf8 data types
-    /// Define
+    ///
+    /// Defines
     /// * the capacity of the array offsets
     /// * the capacity of the binary/ str buffer
     Binary(usize, Option<usize>),
     /// List and LargeList data types
-    /// Define
+    ///
+    /// Defines
     /// * the capacity of the array offsets
     /// * the capacity of the child data
     List(usize, Option<Box<Capacities>>),
     /// Struct type
+    ///
+    /// Defines
     /// * the capacity of the array
     /// * the capacities of the fields
     Struct(usize, Option<Vec<Capacities>>),
     /// Dictionary type
+    ///
+    /// Defines
     /// * the capacity of the array/keys
     /// * the capacity of the values
     Dictionary(usize, Option<Box<Capacities>>),
     /// Don't preallocate inner buffers and rely on array growth strategy
     Array(usize),
 }
+
 impl<'a> MutableArrayData<'a> {
-    /// returns a new [MutableArrayData] with capacity to `capacity` slots and specialized to create an
-    /// [ArrayData] from multiple `arrays`.
+    /// Returns a new [MutableArrayData] with capacity to `capacity` slots and
+    /// specialized to create an [ArrayData] from multiple `arrays`.
     ///
-    /// `use_nulls` is a flag used to optimize insertions. It should be `false` if the only source of nulls
-    /// are the arrays themselves and `true` if the user plans to call [MutableArrayData::extend_nulls].
-    /// In other words, if `use_nulls` is `false`, calling [MutableArrayData::extend_nulls] should not be used.
+    /// # Arguments
+    /// * `arrays` - the source arrays to copy from
+    /// * `use_nulls` - a flag used to optimize insertions
+    ///   - `false` if the only source of nulls are the arrays themselves
+    ///   - `true` if the user plans to call [MutableArrayData::extend_nulls].
+    /// * capacity - the preallocated capacity of the output array, in bytes
+    ///
+    /// Thus, if `use_nulls` is `false`, calling
+    /// [MutableArrayData::extend_nulls] should not be used.
     pub fn new(arrays: Vec<&'a ArrayData>, use_nulls: bool, capacity: usize) -> Self {
         Self::with_capacities(arrays, use_nulls, Capacities::Array(capacity))
     }
 
-    /// Similar to [MutableArrayData::new], but lets users define the preallocated capacities of the array.
-    /// See also [MutableArrayData::new] for more information on the arguments.
+    /// Similar to [MutableArrayData::new], but lets users define the
+    /// preallocated capacities of the array with more granularity.
     ///
-    /// # Panic
-    /// This function panics if the given `capacities` don't match the data type of `arrays`. Or when
-    /// a [Capacities] variant is not yet supported.
+    /// See [MutableArrayData::new] for more information on the arguments.
+    ///
+    /// # Panics
+    ///
+    /// This function panics if the given `capacities` don't match the data type
+    /// of `arrays`. Or when a [Capacities] variant is not yet supported.
     pub fn with_capacities(
         arrays: Vec<&'a ArrayData>,
         use_nulls: bool,
@@ -646,7 +700,7 @@ impl<'a> MutableArrayData<'a> {
         }
     }
 
-    /// Extends this array with a chunk of its source arrays
+    /// Extends the in progress array with a region of the input arrays
     ///
     /// # Arguments
     /// * `index` - the index of array that you what to copy values from
@@ -664,12 +718,11 @@ impl<'a> MutableArrayData<'a> {
         self.data.len += len;
     }
 
-    /// Extends this [MutableArrayData] with null elements, disregarding the bound arrays
+    /// Extends the in progress array with null elements, ignoring the input arrays.
     ///
     /// # Panics
     ///
     /// Panics if [`MutableArrayData`] not created with `use_nulls` or nullable source arrays
-    ///
     pub fn extend_nulls(&mut self, len: usize) {
         self.data.len += len;
         let bit_len = bit_util::ceil(self.data.len, 8);
@@ -697,12 +750,13 @@ impl<'a> MutableArrayData<'a> {
         self.data.null_count
     }
 
-    /// Creates a [ArrayData] from the pushed regions up to this point, consuming `self`.
+    /// Creates a [ArrayData] from the in progress array, consuming `self`.
     pub fn freeze(self) -> ArrayData {
         unsafe { self.into_builder().build_unchecked() }
     }
 
-    /// Creates a [ArrayDataBuilder] from the pushed regions up to this point, consuming `self`.
+    /// Consume self and returns the in progress array as [`ArrayDataBuilder`].
+    ///
     /// This is useful for extending the default behavior of MutableArrayData.
     pub fn into_builder(self) -> ArrayDataBuilder {
         let data = self.data;
