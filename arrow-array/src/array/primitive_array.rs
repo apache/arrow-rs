@@ -1030,16 +1030,14 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
         F: FnMut(U::Item) -> T::Native,
     {
         let nulls = left.logical_nulls();
-        let mut values: Vec<T::Native> = vec![T::Native::default(); left.len()];
+        let buffer = unsafe {
+            // SAFETY: i in range 0..left.len()
+            let iter = (0..left.len()).map(|i| op(left.value_unchecked(i)));
+            // SAFETY: upper bound is trusted because `iter` is over a range
+            Buffer::from_trusted_len_iter(iter)
+        };
 
-        for (i, val) in values.iter_mut().enumerate().take(left.len()) {
-            // SAFETY: i in range 0..len
-            unsafe {
-                *val = op(left.value_unchecked(i));
-            }
-        }
-        let values = ScalarBuffer::from(values);
-        Self::new(values, nulls)
+        PrimitiveArray::new(buffer.into(), nulls)
     }
 
     /// Returns a `PrimitiveBuilder` for this array, suitable for mutating values
