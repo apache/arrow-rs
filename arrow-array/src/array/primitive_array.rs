@@ -1023,8 +1023,7 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
     ///
     /// See [`Self::unary`] for more information on null handling.
     ///
-    /// # Example: create an [`Int16Array`] from a [`FixedSizeBinaryArray`]
-    ///
+    /// # Example: create an [`Int16Array`] from an [`ArrayAccessor`] with item type `&[u8]`
     /// ```
     /// use arrow_array::{Array, FixedSizeBinaryArray, Int16Array};
     /// let input_arg = vec![ vec![1, 0], vec![2, 0], vec![3, 0] ];
