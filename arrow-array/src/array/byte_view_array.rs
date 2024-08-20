@@ -265,10 +265,12 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
         unsafe { self.value_unchecked(i) }
     }
 
-    /// Returns the element at index `i`
+    /// Returns the element at index `i` without bounds checking
     ///
     /// # Safety
-    /// Caller is responsible for ensuring that the index is within the bounds of the array
+    ///
+    /// Caller is responsible for ensuring that the index is within the bounds
+    /// of the array
     pub unsafe fn value_unchecked(&self, idx: usize) -> &T::Native {
         let v = self.views.get_unchecked(idx);
         let len = *v as u32;
@@ -283,7 +285,7 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
         T::Native::from_bytes_unchecked(b)
     }
 
-    /// Returns the inline value of the view.
+    /// Returns the first `len` bytes the inline value of the view.
     ///
     /// # Safety
     /// - The `view` must be a valid element from `Self::views()` that adheres to the view layout.
