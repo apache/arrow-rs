@@ -1021,10 +1021,17 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
     ///
     /// # Null Handling
     ///
-    /// Applies the function for all values, including those on null slots. This
-    /// will often allow the compiler to generate faster vectorized code, but
-    /// requires that the operation must be infallible (not error/panic) for any
-    /// value of the corresponding type or this function may panic.
+    /// See [`Self::unary`] for more information on null handling.
+    ///
+    /// # Example: create an [`Int16Array`] from a [`FixedSizeBinaryArray`]
+    ///
+    /// ```
+    /// use arrow_array::{Array, FixedSizeBinaryArray, Int16Array};
+    /// let input_arg = vec![ vec![1, 0], vec![2, 0], vec![3, 0] ];
+    /// let arr = FixedSizeBinaryArray::try_from_iter(input_arg.into_iter()).unwrap();
+    /// let c = Int16Array::from_unary(&arr, |x| i16::from_le_bytes(x[..2].try_into().unwrap()));
+    /// assert_eq!(c, Int16Array::from(vec![Some(1i16), Some(2i16), Some(3i16)]));
+    /// ```
     pub fn from_unary<U: ArrayAccessor, F>(left: U, mut op: F) -> Self
     where
         F: FnMut(U::Item) -> T::Native,
