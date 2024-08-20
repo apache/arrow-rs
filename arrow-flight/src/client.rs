@@ -15,8 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::{pin::Pin, task::Poll};
-
 use crate::{
     decode::FlightRecordBatchStream,
     flight_service_client::FlightServiceClient,
@@ -28,16 +26,15 @@ use crate::{
 use arrow_schema::Schema;
 use bytes::Bytes;
 use futures::{
-    channel::oneshot::{Receiver, Sender},
     future::ready,
-    ready,
     stream::{self, BoxStream},
-    FutureExt, Stream, StreamExt, TryStreamExt,
+    Stream, StreamExt, TryStreamExt,
 };
 use prost::Message;
 use tonic::{metadata::MetadataMap, transport::Channel};
 
 use crate::error::{FlightError, Result};
+use crate::streams::{FallibleRequestStream, FallibleTonicResponseStream};
 
 /// A "Mid level" [Apache Arrow Flight](https://arrow.apache.org/docs/format/Flight.html) client.
 ///
@@ -672,105 +669,5 @@ impl FlightClient {
         let mut request = tonic::Request::new(t);
         *request.metadata_mut() = self.metadata.clone();
         request
-    }
-}
-
-/// Wrapper around fallible stream such that when
-/// it encounters an error it uses the oneshot sender to
-/// notify the error and stop any further streaming. See `do_put` or
-/// `do_exchange` for it's uses.
-pub(crate) struct FallibleRequestStream<T, E> {
-    /// sender to notify error
-    sender: Option<Sender<E>>,
-    /// fallible stream
-    fallible_stream: Pin<Box<dyn Stream<Item = std::result::Result<T, E>> + Send + 'static>>,
-}
-
-impl<T, E> FallibleRequestStream<T, E> {
-    pub(crate) fn new(
-        sender: Sender<E>,
-        fallible_stream: Pin<Box<dyn Stream<Item = std::result::Result<T, E>> + Send + 'static>>,
-    ) -> Self {
-        Self {
-            sender: Some(sender),
-            fallible_stream,
-        }
-    }
-}
-
-impl<T, E> Stream for FallibleRequestStream<T, E> {
-    type Item = T;
-
-    fn poll_next(
-        self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Option<Self::Item>> {
-        let pinned = self.get_mut();
-        let mut request_streams = pinned.fallible_stream.as_mut();
-        match ready!(request_streams.poll_next_unpin(cx)) {
-            Some(Ok(data)) => Poll::Ready(Some(data)),
-            Some(Err(e)) => {
-                // in theory this should only ever be called once
-                // as this stream should not be polled again after returning
-                // None, however we still check for None to be safe
-                if let Some(sender) = pinned.sender.take() {
-                    // an error means the other end of the channel is not around
-                    // to receive the error, so ignore it
-                    let _ = sender.send(e);
-                }
-                Poll::Ready(None)
-            }
-            None => Poll::Ready(None),
-        }
-    }
-}
-
-/// Wrapper for a tonic response stream that can produce a tonic
-/// error. This is tied to a oneshot receiver which can be notified
-/// of other errors. When it receives an error through receiver
-/// end, it prioritises that error to be sent back. See `do_put` or
-/// `do_exchange` for it's uses
-struct FallibleTonicResponseStream<T> {
-    /// Receiver for FlightError
-    receiver: Receiver<FlightError>,
-    /// Tonic response stream
-    response_stream:
-        Pin<Box<dyn Stream<Item = std::result::Result<T, tonic::Status>> + Send + 'static>>,
-}
-
-impl<T> FallibleTonicResponseStream<T> {
-    fn new(
-        receiver: Receiver<FlightError>,
-        response_stream: Pin<
-            Box<dyn Stream<Item = std::result::Result<T, tonic::Status>> + Send + 'static>,
-        >,
-    ) -> Self {
-        Self {
-            receiver,
-            response_stream,
-        }
-    }
-}
-
-impl<T> Stream for FallibleTonicResponseStream<T> {
-    type Item = Result<T>;
-
-    fn poll_next(
-        self: Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> Poll<Option<Self::Item>> {
-        let pinned = self.get_mut();
-        let receiver = &mut pinned.receiver;
-        // Prioritise sending the error that's been notified over
-        // polling the response_stream
-        if let Poll::Ready(Ok(err)) = receiver.poll_unpin(cx) {
-            return Poll::Ready(Some(Err(err)));
-        };
-
-        match ready!(pinned.response_stream.poll_next_unpin(cx)) {
-            Some(Ok(res)) => Poll::Ready(Some(Ok(res))),
-            Some(Err(status)) => Poll::Ready(Some(Err(FlightError::Tonic(status)))),
-            None => Poll::Ready(None),
-        }
     }
 }
