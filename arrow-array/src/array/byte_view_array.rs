@@ -311,7 +311,7 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
     }
 
     /// Returns an iterator over the prefix bytes of this array with respect to the prefix length.
-    /// If the prefix length is larger than the string length, it will return the empty string.
+    /// If the prefix length is larger than the string length, it will return the empty slice.
     pub fn prefix_bytes_iter(&self, prefix_len: usize) -> impl Iterator<Item = &[u8]> {
         self.views().into_iter().map(move |v| {
             let len = (*v as u32) as usize;
@@ -335,7 +335,7 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
     }
 
     /// Returns an iterator over the suffix bytes of this array with respect to the suffix length.
-    /// If the suffix length is larger than the string length, it will return the empty string.
+    /// If the suffix length is larger than the string length, it will return the empty slice.
     pub fn suffix_bytes_iter(&self, suffix_len: usize) -> impl Iterator<Item = &[u8]> {
         self.views().into_iter().map(move |v| {
             let len = (*v as u32) as usize;
