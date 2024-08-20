@@ -130,7 +130,11 @@ fn print_column_chunk_metadata(out: &mut dyn io::Write, cc_metadata: &ColumnChun
     writeln!(out, "file path: {file_path_str}");
     writeln!(out, "file offset: {}", cc_metadata.file_offset());
     writeln!(out, "num of values: {}", cc_metadata.num_values());
-    writeln!(out, "compression: {}", cc_metadata.compression());
+    writeln!(
+        out,
+        "compression: {}",
+        cc_metadata.compression().codec_to_string()
+    );
     writeln!(
         out,
         "total compressed size (in bytes): {}",
