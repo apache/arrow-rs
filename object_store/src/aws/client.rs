@@ -705,7 +705,14 @@ impl GetClient for S3Client {
         };
 
         let mut builder = self.client.request(method, url);
-        builder = builder.headers(self.config.encryption_headers.clone().into());
+        if self
+            .config
+            .encryption_headers
+            .0
+            .contains_key("x-amz-server-side-encryption-customer-algorithm")
+        {
+            builder = builder.headers(self.config.encryption_headers.clone().into());
+        }
 
         if let Some(v) = &options.version {
             builder = builder.query(&[("versionId", v)])
