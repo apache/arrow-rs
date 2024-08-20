@@ -132,8 +132,10 @@ impl<'a> Predicate<'a> {
                 if let Some(string_view_array) = array.as_any().downcast_ref::<StringViewArray>() {
                     BooleanArray::from(
                         string_view_array
-                            .prefix_iter(v.len())
-                            .map(|haystack| starts_with(haystack, v, equals_kernel) != negate)
+                            .prefix_bytes_iter(v.len())
+                            .map(|haystack| {
+                                starts_with_bytes(haystack, v.as_bytes(), equals_kernel) != negate
+                            })
                             .collect::<Vec<_>>(),
                     )
                 } else {
@@ -146,9 +148,13 @@ impl<'a> Predicate<'a> {
                 if let Some(string_view_array) = array.as_any().downcast_ref::<StringViewArray>() {
                     BooleanArray::from(
                         string_view_array
-                            .prefix_iter(v.len())
+                            .prefix_bytes_iter(v.len())
                             .map(|haystack| {
-                                starts_with(haystack, v, equals_ignore_ascii_case_kernel) != negate
+                                starts_with_bytes(
+                                    haystack,
+                                    v.as_bytes(),
+                                    equals_ignore_ascii_case_kernel,
+                                ) != negate
                             })
                             .collect::<Vec<_>>(),
                     )
@@ -162,8 +168,10 @@ impl<'a> Predicate<'a> {
                 if let Some(string_view_array) = array.as_any().downcast_ref::<StringViewArray>() {
                     BooleanArray::from(
                         string_view_array
-                            .suffix_iter(v.len())
-                            .map(|haystack| starts_with(haystack, v, equals_kernel) != negate)
+                            .suffix_bytes_iter(v.len())
+                            .map(|haystack| {
+                                starts_with_bytes(haystack, v.as_bytes(), equals_kernel) != negate
+                            })
                             .collect::<Vec<_>>(),
                     )
                 } else {
@@ -176,9 +184,13 @@ impl<'a> Predicate<'a> {
                 if let Some(string_view_array) = array.as_any().downcast_ref::<StringViewArray>() {
                     BooleanArray::from(
                         string_view_array
-                            .suffix_iter(v.len())
+                            .suffix_bytes_iter(v.len())
                             .map(|haystack| {
-                                starts_with(haystack, v, equals_ignore_ascii_case_kernel) != negate
+                                starts_with_bytes(
+                                    haystack,
+                                    v.as_bytes(),
+                                    equals_ignore_ascii_case_kernel,
+                                ) != negate
                             })
                             .collect::<Vec<_>>(),
                     )
@@ -195,14 +207,22 @@ impl<'a> Predicate<'a> {
     }
 }
 
-/// This is faster than `str::starts_with` for small strings.
-/// See <https://github.com/apache/arrow-rs/issues/6107> for more details.
-fn starts_with(haystack: &str, needle: &str, byte_eq_kernel: impl Fn((&u8, &u8)) -> bool) -> bool {
+fn starts_with_bytes(
+    haystack: &[u8],
+    needle: &[u8],
+    byte_eq_kernel: impl Fn((&u8, &u8)) -> bool,
+) -> bool {
     if needle.len() > haystack.len() {
         false
     } else {
-        zip(haystack.as_bytes(), needle.as_bytes()).all(byte_eq_kernel)
+        zip(haystack, needle).all(byte_eq_kernel)
     }
+}
+
+/// This is faster than `str::starts_with` for small strings.
+/// See <https://github.com/apache/arrow-rs/issues/6107> for more details.
+fn starts_with(haystack: &str, needle: &str, byte_eq_kernel: impl Fn((&u8, &u8)) -> bool) -> bool {
+    starts_with_bytes(haystack.as_bytes(), needle.as_bytes(), byte_eq_kernel)
 }
 
 /// This is faster than `str::ends_with` for small strings.
