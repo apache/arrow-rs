@@ -78,11 +78,19 @@ impl<T, E> Stream for FallibleRequestStream<T, E> {
     }
 }
 
-/// Wrapper for a tonic response stream that can produce a tonic
-/// error. This is tied to a oneshot receiver which can be notified
-/// of other errors. When it receives an error through receiver
-/// end, it prioritises that error to be sent back. See `do_put` or
-/// `do_exchange` for it's uses
+/// Wrapper for a tonic response stream that maps errors to `FlightError` and
+/// returns errors from a oneshot channel into the stream.
+///
+/// The user of this stream can inject an error into the response stream using
+/// the one shot receiver. This is used to propagate errors in
+/// [`FlightClient::do_put`] and [`FlightClient::do_exchange`] from the client
+/// provided input stream to the response stream.
+///
+/// # Error Priority
+/// Error from the receiver are prioritised over the response stream.
+///
+/// [`FlightClient::do_put`]: crate::FlightClient::do_put
+/// [`FlightClient::do_exchange`]: crate::FlightClient::do_exchange
 pub(crate) struct FallibleTonicResponseStream<T> {
     /// Receiver for FlightError
     receiver: Receiver<FlightError>,
