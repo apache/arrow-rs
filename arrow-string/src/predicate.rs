@@ -134,7 +134,7 @@ impl<'a> Predicate<'a> {
                         string_view_array
                             .prefix_bytes_iter(v.len())
                             .map(|haystack| {
-                                starts_with_bytes(haystack, v.as_bytes(), equals_kernel) != negate
+                                equals_bytes(haystack, v.as_bytes(), equals_kernel) != negate
                             })
                             .collect::<Vec<_>>(),
                     )
@@ -150,7 +150,7 @@ impl<'a> Predicate<'a> {
                         string_view_array
                             .prefix_bytes_iter(v.len())
                             .map(|haystack| {
-                                starts_with_bytes(
+                                equals_bytes(
                                     haystack,
                                     v.as_bytes(),
                                     equals_ignore_ascii_case_kernel,
@@ -170,7 +170,7 @@ impl<'a> Predicate<'a> {
                         string_view_array
                             .suffix_bytes_iter(v.len())
                             .map(|haystack| {
-                                starts_with_bytes(haystack, v.as_bytes(), equals_kernel) != negate
+                                equals_bytes(haystack, v.as_bytes(), equals_kernel) != negate
                             })
                             .collect::<Vec<_>>(),
                     )
@@ -186,7 +186,7 @@ impl<'a> Predicate<'a> {
                         string_view_array
                             .suffix_bytes_iter(v.len())
                             .map(|haystack| {
-                                starts_with_bytes(
+                                equals_bytes(
                                     haystack,
                                     v.as_bytes(),
                                     equals_ignore_ascii_case_kernel,
@@ -207,24 +207,19 @@ impl<'a> Predicate<'a> {
     }
 }
 
-fn starts_with_bytes(
-    haystack: &[u8],
-    needle: &[u8],
-    byte_eq_kernel: impl Fn((&u8, &u8)) -> bool,
-) -> bool {
-    if needle.len() > haystack.len() {
-        false
-    } else {
-        zip(haystack, needle).all(byte_eq_kernel)
-    }
+fn equals_bytes(lhs: &[u8], rhs: &[u8], byte_eq_kernel: impl Fn((&u8, &u8)) -> bool) -> bool {
+    lhs.len() == rhs.len() && zip(lhs, rhs).all(byte_eq_kernel)
 }
 
 /// This is faster than `str::starts_with` for small strings.
 /// See <https://github.com/apache/arrow-rs/issues/6107> for more details.
 fn starts_with(haystack: &str, needle: &str, byte_eq_kernel: impl Fn((&u8, &u8)) -> bool) -> bool {
-    starts_with_bytes(haystack.as_bytes(), needle.as_bytes(), byte_eq_kernel)
+    if needle.len() > haystack.len() {
+        false
+    } else {
+        zip(haystack.as_bytes(), needle.as_bytes()).all(byte_eq_kernel)
+    }
 }
-
 /// This is faster than `str::ends_with` for small strings.
 /// See <https://github.com/apache/arrow-rs/issues/6107> for more details.
 fn ends_with(haystack: &str, needle: &str, byte_eq_kernel: impl Fn((&u8, &u8)) -> bool) -> bool {
