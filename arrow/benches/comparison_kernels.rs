@@ -167,7 +167,6 @@ fn add_benchmark(c: &mut Criterion) {
     let string_right = StringArray::from_iter(array_gen);
     let string_view_right = StringViewArray::from_iter(string_right.iter());
 
-    let string_view_scalar = StringViewArray::new_scalar("xxxx");
     let string_scalar = StringArray::new_scalar("xxxx");
     c.bench_function("eq scalar StringArray", |b| {
         b.iter(|| eq(&string_scalar, &string_left).unwrap())
@@ -193,7 +192,19 @@ fn add_benchmark(c: &mut Criterion) {
         })
     });
 
-    c.bench_function("eq scalar StringViewArray", |b| {
+    // StringViewArray has special handling for strings with length <= 12 and length <= 4
+    let string_view_scalar = StringViewArray::new_scalar("xxxx");
+    c.bench_function("eq scalar StringViewArray 4 bytes", |b| {
+        b.iter(|| eq(&string_view_scalar, &string_view_left).unwrap())
+    });
+
+    let string_view_scalar = StringViewArray::new_scalar("xxxxxx");
+    c.bench_function("eq scalar StringViewArray 6 bytes", |b| {
+        b.iter(|| eq(&string_view_scalar, &string_view_left).unwrap())
+    });
+
+    let string_view_scalar = StringViewArray::new_scalar("xxxxxxxxxxxxx");
+    c.bench_function("eq scalar StringViewArray 13 bytes", |b| {
         b.iter(|| eq(&string_view_scalar, &string_view_left).unwrap())
     });
 
