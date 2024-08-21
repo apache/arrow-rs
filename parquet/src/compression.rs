@@ -196,27 +196,13 @@ pub fn create_codec(codec: CodecType, _options: &CodecOptions) -> Result<Option<
     }
 }
 
-/// Resize the `buf` to a new len `n`.
-///
-/// Replacing `resize` on the `buf` with `reserve` and `set_len` can skip the initialization
-/// cost for a good performance.
-/// And the `set_len` here is safe because the element of the vector is byte whose destruction
-/// does nothing.
-fn resize_without_init(buf: &mut Vec<u8>, n: usize) {
-    if n > buf.capacity() {
-        buf.reserve(n - buf.len());
-    }
-    unsafe { buf.set_len(n) };
-}
-
 #[cfg(any(feature = "snap", test))]
 mod snappy_codec {
     use snap::raw::{decompress_len, max_compress_len, Decoder, Encoder};
 
     use crate::compression::Codec;
     use crate::errors::Result;
-
-    use super::resize_without_init;
+    use crate::util::vec_util;
 
     /// Codec for Snappy compression format.
     pub struct SnappyCodec {
@@ -246,7 +232,7 @@ mod snappy_codec {
                 None => decompress_len(input_buf)?,
             };
             let offset = output_buf.len();
-            resize_without_init(output_buf, offset + len);
+            vec_util::resize_without_init(output_buf, offset + len);
 
             self.decoder
                 .decompress(input_buf, &mut output_buf[offset..])
@@ -256,7 +242,7 @@ mod snappy_codec {
         fn compress(&mut self, input_buf: &[u8], output_buf: &mut Vec<u8>) -> Result<()> {
             let output_buf_len = output_buf.len();
             let required_len = max_compress_len(input_buf.len());
-            resize_without_init(output_buf, required_len);
+            vec_util::resize_without_init(output_buf, output_buf_len + required_len);
             let n = self
                 .encoder
                 .compress(input_buf, &mut output_buf[output_buf_len..])?;
@@ -265,6 +251,7 @@ mod snappy_codec {
         }
     }
 }
+
 #[cfg(any(feature = "snap", test))]
 pub use snappy_codec::*;
 
@@ -570,8 +557,7 @@ mod lz4_raw_codec {
     use crate::compression::Codec;
     use crate::errors::ParquetError;
     use crate::errors::Result;
-
-    use super::resize_without_init;
+    use crate::util::vec_util;
 
     /// Codec for LZ4 Raw compression algorithm.
     pub struct LZ4RawCodec {}
@@ -599,7 +585,7 @@ mod lz4_raw_codec {
                     ))
                 }
             };
-            resize_without_init(output_buf, offset + required_len);
+            vec_util::resize_without_init(output_buf, offset + required_len);
             match lz4_flex::block::decompress_into(input_buf, &mut output_buf[offset..]) {
                 Ok(n) => {
                     if n != required_len {
@@ -616,7 +602,7 @@ mod lz4_raw_codec {
         fn compress(&mut self, input_buf: &[u8], output_buf: &mut Vec<u8>) -> Result<()> {
             let offset = output_buf.len();
             let required_len = lz4_flex::block::get_maximum_output_size(input_buf.len());
-            resize_without_init(output_buf, offset + required_len);
+            vec_util::resize_without_init(output_buf, offset + required_len);
             match lz4_flex::block::compress_into(input_buf, &mut output_buf[offset..]) {
                 Ok(n) => {
                     output_buf.truncate(offset + n);
@@ -636,9 +622,8 @@ mod lz4_hadoop_codec {
     use crate::compression::lz4_raw_codec::LZ4RawCodec;
     use crate::compression::Codec;
     use crate::errors::{ParquetError, Result};
+    use crate::util::vec_util;
     use std::io;
-
-    use super::resize_without_init;
 
     /// Size of u32 type.
     const SIZE_U32: usize = std::mem::size_of::<u32>();
@@ -750,7 +735,7 @@ mod lz4_hadoop_codec {
                     ))
                 }
             };
-            resize_without_init(output_buf, output_len + required_len);
+            vec_util::resize_without_init(output_buf, output_len + required_len);
             match try_decompress_hadoop(input_buf, &mut output_buf[output_len..]) {
                 Ok(n) => {
                     if n != required_len {
@@ -781,7 +766,7 @@ mod lz4_hadoop_codec {
         fn compress(&mut self, input_buf: &[u8], output_buf: &mut Vec<u8>) -> Result<()> {
             // Allocate memory to store the LZ4_HADOOP prefix.
             let offset = output_buf.len();
-            resize_without_init(output_buf, offset + PREFIX_LEN);
+            vec_util::resize_without_init(output_buf, offset + PREFIX_LEN);
 
             // Append LZ4_RAW compressed bytes after prefix.
             LZ4RawCodec::new().compress(input_buf, output_buf)?;
@@ -921,32 +906,5 @@ mod tests {
     #[test]
     fn test_codec_lz4_raw() {
         test_codec_with_size(CodecType::LZ4_RAW);
-    }
-
-    fn resize_and_check(source: Vec<u8>, new_len: usize) {
-        let mut new = source.clone();
-        resize_without_init(&mut new, new_len);
-
-        assert_eq!(new.len(), new_len);
-        if new.len() > source.len() {
-            assert_eq!(&new[..source.len()], &source[..]);
-        } else {
-            assert_eq!(&new[..], &source[..new.len()]);
-        }
-    }
-
-    #[test]
-    fn test_resize_without_init() {
-        let cases = [
-            (vec![1, 2, 3], 10),
-            (vec![1, 2, 3], 3),
-            (vec![1, 2, 3, 4, 5], 3),
-            (vec![], 10),
-            (vec![], 0),
-        ];
-
-        for (vector, resize_len) in cases {
-            resize_and_check(vector, resize_len);
-        }
     }
 }
