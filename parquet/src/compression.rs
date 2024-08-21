@@ -198,8 +198,10 @@ pub fn create_codec(codec: CodecType, _options: &CodecOptions) -> Result<Option<
 
 /// Resize the `buf` to a new len `n`.
 ///
-/// Replace resizing on the buffer with reserve and set_len for a good performance (no initialization).
-/// And the `set_len` here is safe for the element of the vector is byte whose destruction does nothing.
+/// Replacing `resize` on the `buf` with `reserve` and `set_len` can skip the initialization
+/// cost for a good performance.
+/// And the `set_len` here is safe because the element of the vector is byte whose destruction
+/// does nothing.
 fn resize_without_init(buf: &mut Vec<u8>, n: usize) {
     if n > buf.capacity() {
         buf.reserve(n - buf.len());
