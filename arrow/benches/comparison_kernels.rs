@@ -237,19 +237,28 @@ fn add_benchmark(c: &mut Criterion) {
         b.iter(|| bench_like_utf8view_scalar(&string_view_left, "%xxxx%"))
     });
 
-    c.bench_function("like_utf8view scalar ends with", |b| {
+    // StringView has special handling for strings with length <= 12 and length <= 4
+    c.bench_function("like_utf8view scalar ends with 4 bytes", |b| {
         b.iter(|| bench_like_utf8view_scalar(&string_view_left, "%xxxx"))
     });
 
-    c.bench_function("like_utf8view scalar starts with less than 4 bytes", |b| {
+    c.bench_function("like_utf8view scalar ends with 6 bytes", |b| {
+        b.iter(|| bench_like_utf8view_scalar(&string_view_left, "%xxxxxx"))
+    });
+
+    c.bench_function("like_utf8view scalar ends with 13 bytes", |b| {
+        b.iter(|| bench_like_utf8view_scalar(&string_view_left, "%xxxxxxxxxxxxx"))
+    });
+
+    c.bench_function("like_utf8view scalar starts with 4 bytes", |b| {
         b.iter(|| bench_like_utf8view_scalar(&string_view_left, "xxxx%"))
     });
 
-    c.bench_function("like_utf8view scalar starts with more than 4 bytes", |b| {
+    c.bench_function("like_utf8view scalar starts with 6 bytes", |b| {
         b.iter(|| bench_like_utf8view_scalar(&string_view_left, "xxxxxx%"))
     });
 
-    c.bench_function("like_utf8view scalar starts with more than 12 bytes", |b| {
+    c.bench_function("like_utf8view scalar starts with 13 bytes", |b| {
         b.iter(|| bench_like_utf8view_scalar(&string_view_left, "xxxxxxxxxxxxx%"))
     });
 
