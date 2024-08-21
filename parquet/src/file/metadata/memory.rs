@@ -183,14 +183,8 @@ impl<T: ParquetValueType> HeapSize for PageIndex<T> {
 
 impl<T: ParquetValueType> HeapSize for ValueStatistics<T> {
     fn heap_size(&self) -> usize {
-        if self.has_min_max_set() {
-            return self.min().heap_size() + self.max().heap_size();
-        } else if self.min_is_exact() {
-            return self.min().heap_size();
-        } else if self.max_is_exact() {
-            return self.max().heap_size();
-        }
-        0
+        self.min_opt().map(T::heap_size).unwrap_or(0)
+            + self.max_opt().map(T::heap_size).unwrap_or(0)
     }
 }
 impl HeapSize for bool {

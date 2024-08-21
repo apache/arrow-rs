@@ -261,12 +261,17 @@ impl FFI_ArrowSchema {
     }
 
     /// returns the name of this schema.
-    pub fn name(&self) -> &str {
-        assert!(!self.name.is_null());
-        // safe because the lifetime of `self.name` equals `self`
-        unsafe { CStr::from_ptr(self.name) }
-            .to_str()
-            .expect("The external API has a non-utf8 as name")
+    pub fn name(&self) -> Option<&str> {
+        if self.name.is_null() {
+            None
+        } else {
+            // safe because the lifetime of `self.name` equals `self`
+            Some(
+                unsafe { CStr::from_ptr(self.name) }
+                    .to_str()
+                    .expect("The external API has a non-utf8 as name"),
+            )
+        }
     }
 
     pub fn flags(&self) -> Option<Flags> {
@@ -582,7 +587,7 @@ impl TryFrom<&FFI_ArrowSchema> for Field {
 
     fn try_from(c_schema: &FFI_ArrowSchema) -> Result<Self, ArrowError> {
         let dtype = DataType::try_from(c_schema)?;
-        let mut field = Field::new(c_schema.name(), dtype, c_schema.nullable());
+        let mut field = Field::new(c_schema.name().unwrap_or(""), dtype, c_schema.nullable());
         field.set_metadata(c_schema.metadata()?);
         Ok(field)
     }
@@ -917,5 +922,14 @@ mod tests {
             let field = Field::try_from(&schema).unwrap();
             assert_eq!(field.metadata(), &metadata);
         }
+    }
+
+    #[test]
+    fn test_import_field_with_null_name() {
+        let dtype = DataType::Int16;
+        let c_schema = FFI_ArrowSchema::try_from(&dtype).unwrap();
+        assert!(c_schema.name().is_none());
+        let field = Field::try_from(&c_schema).unwrap();
+        assert_eq!(field.name(), "");
     }
 }

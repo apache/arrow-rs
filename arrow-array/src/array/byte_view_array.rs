@@ -52,7 +52,7 @@ use super::ByteArrayType;
 /// not by value. as there are many different buffer layouts to represent the
 /// same data (e.g. different offsets, different buffer sizes, etc).
 ///
-/// # Layout
+/// # Layout: "views" and buffers
 ///
 /// A `GenericByteViewArray` stores variable length byte strings. An array of
 /// `N` elements is stored as `N` fixed length "views" and a variable number
@@ -75,10 +75,12 @@ use super::ByteArrayType;
 ///                          0    31       63      95    127
 /// ```
 ///
-/// * Strings with length <= 12 are stored directly in the view.
+/// * Strings with length <= 12 are stored directly in the view. See
+///   [`Self::inline_value`] to access the inlined prefix from a short view.
 ///
 /// * Strings with length > 12: The first four bytes are stored inline in the
-///   view and the entire string is stored in one of the buffers.
+///   view and the entire string is stored in one of the buffers. See [`ByteView`]
+///   to access the fields of the these views.
 ///
 /// Unlike [`GenericByteArray`], there are no constraints on the offsets other
 /// than they must point into a valid buffer. However, they can be out of order,
@@ -88,6 +90,8 @@ use super::ByteArrayType;
 /// "CrumpleFacedFish" are both longer than 12 bytes and thus are stored in a
 /// separate buffer while the string "LavaMonster" is stored inlined in the
 /// view. In this case, the same bytes for "Fish" are used to store both strings.
+///
+/// [`ByteView`]: arrow_data::ByteView
 ///
 /// ```text
 ///                                                                            ┌───┐
@@ -261,9 +265,12 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
         unsafe { self.value_unchecked(i) }
     }
 
-    /// Returns the element at index `i`
+    /// Returns the element at index `i` without bounds checking
+    ///
     /// # Safety
-    /// Caller is responsible for ensuring that the index is within the bounds of the array
+    ///
+    /// Caller is responsible for ensuring that the index is within the bounds
+    /// of the array
     pub unsafe fn value_unchecked(&self, idx: usize) -> &T::Native {
         let v = self.views.get_unchecked(idx);
         let len = *v as u32;
@@ -278,7 +285,7 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
         T::Native::from_bytes_unchecked(b)
     }
 
-    /// Returns the inline value of the view.
+    /// Returns the first `len` bytes the inline value of the view.
     ///
     /// # Safety
     /// - The `view` must be a valid element from `Self::views()` that adheres to the view layout.
@@ -289,7 +296,7 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
         std::slice::from_raw_parts((view as *const u128 as *const u8).wrapping_add(4), len)
     }
 
-    /// constructs a new iterator
+    /// Constructs a new iterator for iterating over the values of this array
     pub fn iter(&self) -> ArrayIter<&Self> {
         ArrayIter::new(self)
     }
@@ -358,7 +365,7 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
         builder.finish()
     }
 
-    /// Comparing two [`GenericByteViewArray`] at index `left_idx` and `right_idx`
+    /// Compare two [`GenericByteViewArray`] at index `left_idx` and `right_idx`
     ///
     /// Comparing two ByteView types are non-trivial.
     /// It takes a bit of patience to understand why we don't just compare two &[u8] directly.

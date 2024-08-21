@@ -32,9 +32,9 @@ use super::{
     CommandGetCrossReference, CommandGetDbSchemas, CommandGetExportedKeys, CommandGetImportedKeys,
     CommandGetPrimaryKeys, CommandGetSqlInfo, CommandGetTableTypes, CommandGetTables,
     CommandGetXdbcTypeInfo, CommandPreparedStatementQuery, CommandPreparedStatementUpdate,
-    CommandStatementQuery, CommandStatementSubstraitPlan, CommandStatementUpdate,
-    DoPutPreparedStatementResult, DoPutUpdateResult, ProstMessageExt, SqlInfo,
-    TicketStatementQuery,
+    CommandStatementIngest, CommandStatementQuery, CommandStatementSubstraitPlan,
+    CommandStatementUpdate, DoPutPreparedStatementResult, DoPutUpdateResult, ProstMessageExt,
+    SqlInfo, TicketStatementQuery,
 };
 use crate::{
     flight_service_server::FlightService, gen::PollInfo, Action, ActionType, Criteria, Empty,
@@ -397,6 +397,17 @@ pub trait FlightSqlService: Sync + Send + Sized + 'static {
         ))
     }
 
+    /// Execute a bulk ingestion.
+    async fn do_put_statement_ingest(
+        &self,
+        _ticket: CommandStatementIngest,
+        _request: Request<PeekableFlightDataStream>,
+    ) -> Result<i64, Status> {
+        Err(Status::unimplemented(
+            "do_put_statement_ingest has no default implementation",
+        ))
+    }
+
     /// Bind parameters to given prepared statement.
     ///
     /// Returns an opaque handle that the client should pass
@@ -707,6 +718,14 @@ where
         match Command::try_from(message).map_err(arrow_error_to_status)? {
             Command::CommandStatementUpdate(command) => {
                 let record_count = self.do_put_statement_update(command, request).await?;
+                let result = DoPutUpdateResult { record_count };
+                let output = futures::stream::iter(vec![Ok(PutResult {
+                    app_metadata: result.as_any().encode_to_vec().into(),
+                })]);
+                Ok(Response::new(Box::pin(output)))
+            }
+            Command::CommandStatementIngest(command) => {
+                let record_count = self.do_put_statement_ingest(command, request).await?;
                 let result = DoPutUpdateResult { record_count };
                 let output = futures::stream::iter(vec![Ok(PutResult {
                     app_metadata: result.as_any().encode_to_vec().into(),

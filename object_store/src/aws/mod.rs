@@ -60,7 +60,7 @@ mod dynamo;
 mod precondition;
 mod resolve;
 
-pub use builder::{AmazonS3Builder, AmazonS3ConfigKey, S3EncryptionHeaders};
+pub use builder::{AmazonS3Builder, AmazonS3ConfigKey};
 pub use checksum::Checksum;
 pub use dynamo::DynamoCommit;
 pub use precondition::{S3ConditionalPut, S3CopyIfNotExists};
@@ -412,6 +412,9 @@ mod tests {
     use crate::client::get::GetClient;
     use crate::integration::*;
     use crate::tests::*;
+    use crate::ClientOptions;
+    use base64::prelude::BASE64_STANDARD;
+    use base64::Engine;
     use hyper::HeaderMap;
 
     const NON_EXISTENT_NAME: &str = "nonexistentname";
@@ -600,6 +603,69 @@ mod tests {
                     .get("x-amz-server-side-encryption")
                     .expect("object is not encrypted"),
                 expected_encryption
+            );
+
+            store.delete(location).await.unwrap();
+        }
+    }
+
+    /// See CONTRIBUTING.md for the MinIO setup for this test.
+    #[tokio::test]
+    async fn test_s3_ssec_encryption_with_minio() {
+        if std::env::var("TEST_S3_SSEC_ENCRYPTION").is_err() {
+            eprintln!("Skipping S3 SSE-C encryption test");
+            return;
+        }
+        eprintln!("Running S3 SSE-C encryption test");
+
+        let customer_key = "1234567890abcdef1234567890abcdef";
+        let expected_md5 = "JMwgiexXqwuPqIPjYFmIZQ==";
+
+        let store = AmazonS3Builder::from_env()
+            .with_ssec_encryption(BASE64_STANDARD.encode(customer_key))
+            .with_client_options(ClientOptions::default().with_allow_invalid_certificates(true))
+            .build()
+            .unwrap();
+
+        let data = PutPayload::from(vec![3u8; 1024]);
+
+        let locations = [
+            Path::from("test-encryption-1"),
+            Path::from("test-encryption-2"),
+            Path::from("test-encryption-3"),
+        ];
+
+        // Test put with sse-c.
+        store.put(&locations[0], data.clone()).await.unwrap();
+
+        // Test copy with sse-c.
+        store.copy(&locations[0], &locations[1]).await.unwrap();
+
+        // Test multipart upload with sse-c.
+        let mut upload = store.put_multipart(&locations[2]).await.unwrap();
+        upload.put_part(data.clone()).await.unwrap();
+        upload.complete().await.unwrap();
+
+        // Test get with sse-c.
+        for location in &locations {
+            let res = store
+                .client
+                .get_request(location, GetOptions::default())
+                .await
+                .unwrap();
+            let headers = res.headers();
+            assert_eq!(
+                headers
+                    .get("x-amz-server-side-encryption-customer-algorithm")
+                    .expect("object is not encrypted with SSE-C"),
+                "AES256"
+            );
+
+            assert_eq!(
+                headers
+                    .get("x-amz-server-side-encryption-customer-key-MD5")
+                    .expect("object is not encrypted with SSE-C"),
+                expected_md5
             );
 
             store.delete(location).await.unwrap();
