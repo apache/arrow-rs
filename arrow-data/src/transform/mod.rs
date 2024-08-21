@@ -115,7 +115,7 @@ fn build_extend_null_bits(array: &ArrayData, use_nulls: bool) -> ExtendNullBits 
 /// let arr1  = i32_array(&[1, 2, 3, 4, 5]);
 /// let arr2  = i32_array(&[6, 7, 8, 9, 10]);
 /// // Create a mutable array for copying values from arr1 and arr2, with a capacity for 6 elements
-/// let capacity = 3 * size_of::<i32>();
+/// let capacity = 3 * std::mem::size_of::<i32>();
 /// let mut mutable = MutableArrayData::new(vec![&arr1, &arr2], false, 10);
 /// // Copy the first 3 elements from arr1
 /// mutable.extend(0, 0, 3);
