@@ -163,6 +163,9 @@ impl ArrayReader for FixedLenByteArrayReader {
         let binary = FixedSizeBinaryArray::from(unsafe { array_data.build_unchecked() });
 
         // TODO: An improvement might be to do this conversion on read
+        // Note the conversions below apply to all elements regardless of null slots as the
+        // conversion lambdas are all infallible. This improves performance by avoiding a branch in
+        // the inner loop (see docs for `PrimitiveArray::from_unary`).
         let array: ArrayRef = match &self.data_type {
             ArrowType::Decimal128(p, s) => {
                 let f = |b: &[u8]| i128::from_be_bytes(sign_extend_be(b));

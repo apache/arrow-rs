@@ -120,6 +120,9 @@ impl<I: OffsetSizeTrait> ArrayReader for ByteArrayReader<I> {
         self.record_reader.reset();
 
         let array: ArrayRef = match self.data_type {
+            // Apply conversion to all elements regardless of null slots as the conversions
+            // are infallible. This improves performance by avoiding a branch in the inner
+            // loop (see docs for `PrimitiveArray::from_unary`).
             ArrowType::Decimal128(p, s) => {
                 let array = buffer.into_array(null_buffer, ArrowType::Binary);
                 let binary = array.as_any().downcast_ref::<BinaryArray>().unwrap();

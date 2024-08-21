@@ -217,6 +217,9 @@ where
                 arrow_cast::cast(&a, target_type)?
             }
             ArrowType::Decimal128(p, s) => {
+                // Apply conversion to all elements regardless of null slots as the conversion
+                // to `i128` is infallible. This improves performance by avoiding a branch in
+                // the inner loop (see docs for `PrimitiveArray::unary`).
                 let array = match array.data_type() {
                     ArrowType::Int32 => array
                         .as_any()
@@ -242,6 +245,7 @@ where
                 Arc::new(array) as ArrayRef
             }
             ArrowType::Decimal256(p, s) => {
+                // See above comment. Conversion to `i256` is likewise infallible.
                 let array = match array.data_type() {
                     ArrowType::Int32 => array
                         .as_any()
