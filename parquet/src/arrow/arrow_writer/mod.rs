@@ -180,11 +180,11 @@ impl<W: Write + Send> ArrowWriter<W> {
         arrow_schema: SchemaRef,
         options: ArrowWriterOptions,
     ) -> Result<Self> {
-        let schema = match options.schema_root {
-            Some(s) => arrow_to_parquet_schema_with_root(&arrow_schema, &s)?,
-            None => arrow_to_parquet_schema(&arrow_schema)?,
-        };
         let mut props = options.properties;
+        let schema = match options.schema_root {
+            Some(s) => arrow_to_parquet_schema_with_root(&arrow_schema, &s, props.coerce_types())?,
+            None => arrow_to_parquet_schema(&arrow_schema, props.coerce_types())?,
+        };
         if !options.skip_arrow_metadata {
             // add serialized arrow schema
             add_encoded_arrow_schema_to_metadata(&arrow_schema, &mut props);
@@ -549,8 +549,8 @@ impl ArrowColumnChunk {
 /// ]));
 ///
 /// // Compute the parquet schema
-/// let parquet_schema = arrow_to_parquet_schema(schema.as_ref()).unwrap();
 /// let props = Arc::new(WriterProperties::default());
+/// let parquet_schema = arrow_to_parquet_schema(schema.as_ref(), props.coerce_types()).unwrap();
 ///
 /// // Create writers for each of the leaf columns
 /// let col_writers = get_column_writers(&parquet_schema, &props, &schema).unwrap();
@@ -858,6 +858,12 @@ fn write_leaf(writer: &mut ColumnWriter<'_>, levels: &ArrayLevels) -> Result<usi
         }
         ColumnWriter::Int64ColumnWriter(ref mut typed) => {
             match column.data_type() {
+                ArrowDataType::Date64 => {
+                    let array = arrow_cast::cast(column, &ArrowDataType::Int64)?;
+
+                    let array = array.as_primitive::<Int64Type>();
+                    write_primitive(typed, array.values(), levels)
+                }
                 ArrowDataType::Int64 => {
                     let array = column.as_primitive::<Int64Type>();
                     write_primitive(typed, array.values(), levels)

@@ -229,16 +229,16 @@ pub(crate) fn add_encoded_arrow_schema_to_metadata(schema: &Schema, props: &mut 
 ///
 /// The name of the root schema element defaults to `"arrow_schema"`, this can be
 /// overridden with [`arrow_to_parquet_schema_with_root`]
-pub fn arrow_to_parquet_schema(schema: &Schema) -> Result<SchemaDescriptor> {
-    arrow_to_parquet_schema_with_root(schema, "arrow_schema")
+pub fn arrow_to_parquet_schema(schema: &Schema, coerce_types: bool) -> Result<SchemaDescriptor> {
+    arrow_to_parquet_schema_with_root(schema, "arrow_schema", coerce_types)
 }
 
 /// Convert arrow schema to parquet schema specifying the name of the root schema element
-pub fn arrow_to_parquet_schema_with_root(schema: &Schema, root: &str) -> Result<SchemaDescriptor> {
+pub fn arrow_to_parquet_schema_with_root(schema: &Schema, root: &str, coerce_types: bool) -> Result<SchemaDescriptor> {
     let fields = schema
         .fields()
         .iter()
-        .map(|field| arrow_to_parquet_type(field).map(Arc::new))
+        .map(|field| arrow_to_parquet_type(field, coerce_types).map(Arc::new))
         .collect::<Result<_>>()?;
     let group = Type::group_type_builder(root).with_fields(fields).build()?;
     Ok(SchemaDescriptor::new(Arc::new(group)))
@@ -298,7 +298,7 @@ pub fn decimal_length_from_precision(precision: u8) -> usize {
 }
 
 /// Convert an arrow field to a parquet `Type`
-fn arrow_to_parquet_type(field: &Field) -> Result<Type> {
+fn arrow_to_parquet_type(field: &Field, coerce_types: bool) -> Result<Type> {
     let name = field.name().as_str();
     let repetition = if field.is_nullable() {
         Repetition::OPTIONAL
@@ -415,12 +415,17 @@ fn arrow_to_parquet_type(field: &Field) -> Result<Type> {
             .with_repetition(repetition)
             .with_id(id)
             .build(),
-        // date64 is cast to date32 (#1666)
-        DataType::Date64 => Type::primitive_type_builder(name, PhysicalType::INT32)
-            .with_logical_type(Some(LogicalType::Date))
-            .with_repetition(repetition)
-            .with_id(id)
-            .build(),
+        DataType::Date64 => {
+            let physical_type = match coerce_types {
+                true => PhysicalType::INT32,
+                false => PhysicalType::INT64,
+            };
+            Type::primitive_type_builder(name, physical_type)
+                .with_logical_type(Some(LogicalType::Date))
+                .with_repetition(repetition)
+                .with_id(id)
+                .build()
+        },
         DataType::Time32(TimeUnit::Second) => {
             // Cannot represent seconds in LogicalType
             Type::primitive_type_builder(name, PhysicalType::INT32)
@@ -518,7 +523,7 @@ fn arrow_to_parquet_type(field: &Field) -> Result<Type> {
             Type::group_type_builder(name)
                 .with_fields(vec![Arc::new(
                     Type::group_type_builder("list")
-                        .with_fields(vec![Arc::new(arrow_to_parquet_type(f)?)])
+                        .with_fields(vec![Arc::new(arrow_to_parquet_type(f, coerce_types)?)])
                         .with_repetition(Repetition::REPEATED)
                         .build()?,
                 )])
@@ -537,7 +542,7 @@ fn arrow_to_parquet_type(field: &Field) -> Result<Type> {
             // recursively convert children to types/nodes
             let fields = fields
                 .iter()
-                .map(|f| arrow_to_parquet_type(f).map(Arc::new))
+                .map(|f| arrow_to_parquet_type(f, coerce_types).map(Arc::new))
                 .collect::<Result<_>>()?;
             Type::group_type_builder(name)
                 .with_fields(fields)
@@ -551,8 +556,8 @@ fn arrow_to_parquet_type(field: &Field) -> Result<Type> {
                     .with_fields(vec![Arc::new(
                         Type::group_type_builder(field.name())
                             .with_fields(vec![
-                                Arc::new(arrow_to_parquet_type(&struct_fields[0])?),
-                                Arc::new(arrow_to_parquet_type(&struct_fields[1])?),
+                                Arc::new(arrow_to_parquet_type(&struct_fields[0], coerce_types)?),
+                                Arc::new(arrow_to_parquet_type(&struct_fields[1], coerce_types)?),
                             ])
                             .with_repetition(Repetition::REPEATED)
                             .build()?,
@@ -571,7 +576,7 @@ fn arrow_to_parquet_type(field: &Field) -> Result<Type> {
         DataType::Dictionary(_, ref value) => {
             // Dictionary encoding not handled at the schema level
             let dict_field = field.clone().with_data_type(value.as_ref().clone());
-            arrow_to_parquet_type(&dict_field)
+            arrow_to_parquet_type(&dict_field, coerce_types)
         }
         DataType::RunEndEncoded(_, _) => Err(arrow_err!(
             "Converting RunEndEncodedType to parquet not supported",
@@ -1325,7 +1330,8 @@ mod tests {
             OPTIONAL FIXED_LEN_BYTE_ARRAY (2) float16 (FLOAT16);
             OPTIONAL BINARY  string (UTF8);
             REPEATED BOOLEAN bools;
-            OPTIONAL INT32   date       (DATE);
+            OPTIONAL INT32   date32       (DATE);
+            OPTIONAL INT64   date64       (DATE);
             OPTIONAL INT32   time_milli (TIME_MILLIS);
             OPTIONAL INT64   time_micro (TIME_MICROS);
             OPTIONAL INT64   time_nano (TIME(NANOS,false));
@@ -1366,7 +1372,8 @@ mod tests {
                 Field::new("bools", DataType::Boolean, false),
                 false,
             ),
-            Field::new("date", DataType::Date32, true),
+            Field::new("date32", DataType::Date32, true),
+            Field::new("date64", DataType::Date64, true),
             Field::new("time_milli", DataType::Time32(TimeUnit::Millisecond), true),
             Field::new("time_micro", DataType::Time64(TimeUnit::Microsecond), true),
             Field::new("time_nano", DataType::Time64(TimeUnit::Nanosecond), true),
@@ -1431,7 +1438,8 @@ mod tests {
                     REQUIRED BOOLEAN element;
                 }
             }
-            OPTIONAL INT32   date       (DATE);
+            OPTIONAL INT32   date32       (DATE);
+            OPTIONAL INT64   date64       (DATE);
             OPTIONAL INT32   time_milli (TIME(MILLIS,false));
             OPTIONAL INT32   time_milli_utc (TIME(MILLIS,true));
             OPTIONAL INT64   time_micro (TIME_MICROS);
@@ -1484,7 +1492,8 @@ mod tests {
                 Field::new("element", DataType::Boolean, false),
                 false,
             ),
-            Field::new("date", DataType::Date32, true),
+            Field::new("date32", DataType::Date32, true),
+            Field::new("date64", DataType::Date64, true),
             Field::new("time_milli", DataType::Time32(TimeUnit::Millisecond), true),
             Field::new(
                 "time_milli_utc",
@@ -1557,7 +1566,7 @@ mod tests {
             Field::new("decimal256", DataType::Decimal256(39, 2), false),
         ];
         let arrow_schema = Schema::new(arrow_fields);
-        let converted_arrow_schema = arrow_to_parquet_schema(&arrow_schema).unwrap();
+        let converted_arrow_schema = arrow_to_parquet_schema(&arrow_schema, false).unwrap();
 
         assert_eq!(
             parquet_schema.columns().len(),
@@ -1594,7 +1603,7 @@ mod tests {
             false,
         )];
         let arrow_schema = Schema::new(arrow_fields);
-        let converted_arrow_schema = arrow_to_parquet_schema(&arrow_schema);
+        let converted_arrow_schema = arrow_to_parquet_schema(&arrow_schema, true);
 
         assert!(converted_arrow_schema.is_err());
         converted_arrow_schema.unwrap();
@@ -1868,7 +1877,7 @@ mod tests {
         // don't pass metadata so field ids are read from Parquet and not from serialized Arrow schema
         let arrow_schema = crate::arrow::parquet_to_arrow_schema(&schema_descriptor, None)?;
 
-        let parq_schema_descr = crate::arrow::arrow_to_parquet_schema(&arrow_schema)?;
+        let parq_schema_descr = crate::arrow::arrow_to_parquet_schema(&arrow_schema, true)?;
         let parq_fields = parq_schema_descr.root_schema().get_fields();
         assert_eq!(parq_fields.len(), 2);
         assert_eq!(parq_fields[0].get_basic_info().id(), 1);

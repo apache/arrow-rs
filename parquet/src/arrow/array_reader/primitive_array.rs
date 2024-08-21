@@ -208,14 +208,8 @@ where
         // As there is not always a 1:1 mapping between Arrow and Parquet, there
         // are datatypes which we must convert explicitly.
         // These are:
-        // - date64: we should cast int32 to date32, then date32 to date64.
-        // - decimal: cast in32 to decimal, int64 to decimal
+        // - decimal: cast int32 to decimal, int64 to decimal
         let array = match target_type {
-            ArrowType::Date64 => {
-                // this is cheap as it internally reinterprets the data
-                let a = arrow_cast::cast(&array, &ArrowType::Date32)?;
-                arrow_cast::cast(&a, target_type)?
-            }
             ArrowType::Decimal128(p, s) => {
                 // Apply conversion to all elements regardless of null slots as the conversion
                 // to `i128` is infallible. This improves performance by avoiding a branch in
@@ -305,9 +299,9 @@ mod tests {
     use crate::util::test_common::rand_gen::make_pages;
     use crate::util::InMemoryPageIterator;
     use arrow::datatypes::ArrowPrimitiveType;
-    use arrow_array::{Array, PrimitiveArray};
+    use arrow_array::{Array, Date32Array, Date64Array, PrimitiveArray};
 
-    use arrow::datatypes::DataType::Decimal128;
+    use arrow::datatypes::DataType::{Date32, Date64, Decimal128};
     use rand::distributions::uniform::SampleUniform;
     use std::collections::VecDeque;
 
@@ -546,6 +540,14 @@ mod tests {
             i32
         );
         test_primitive_array_reader_one_type!(
+            crate::data_type::Int64Type,
+            PhysicalType::INT64,
+            "DATE",
+            arrow::datatypes::Date64Type,
+            arrow::datatypes::Int64Type,
+            i64
+        );
+        test_primitive_array_reader_one_type!(
             crate::data_type::Int32Type,
             PhysicalType::INT32,
             "TIME_MILLIS",
@@ -781,6 +783,106 @@ mod tests {
                 .with_precision_and_scale(34, 0)
                 .unwrap();
             assert_ne!(array, &data_decimal_array)
+        }
+    }
+    
+    #[test]
+    fn test_primitive_array_reader_date32_type() {
+        // parquet `INT32` to date
+        let message_type = "
+            message test_schema {
+                REQUIRED INT32 date1 (DATE);
+        }
+        ";
+        let schema = parse_message_type(message_type)
+            .map(|t| Arc::new(SchemaDescriptor::new(Arc::new(t))))
+            .unwrap();
+        let column_desc = schema.column(0);
+
+        // create the array reader
+        {
+            let mut data = Vec::new();
+            let mut page_lists = Vec::new();
+            make_column_chunks::<Int32Type>(
+                column_desc.clone(),
+                Encoding::PLAIN,
+                100,
+                -99999999,
+                99999999,
+                &mut Vec::new(),
+                &mut Vec::new(),
+                &mut data,
+                &mut page_lists,
+                true,
+                2,
+            );
+            let page_iterator = InMemoryPageIterator::new(page_lists);
+
+            let mut array_reader =
+                PrimitiveArrayReader::<Int32Type>::new(Box::new(page_iterator), column_desc, None)
+                    .unwrap();
+
+            // read data from the reader
+            // the data type is date
+            let array = array_reader.next_batch(50).unwrap();
+            assert_eq!(array.data_type(), &Date32);
+            let array = array.as_any().downcast_ref::<Date32Array>().unwrap();
+            let data_date_array = data[0..50]
+                .iter()
+                .copied()
+                .map(Some)
+                .collect::<Date32Array>();
+            assert_eq!(array, &data_date_array);
+        }
+    }
+
+    #[test]
+    fn test_primitive_array_reader_date64_type() {
+        // parquet `INT64` to date
+        let message_type = "
+            message test_schema {
+                REQUIRED INT64 date1 (DATE);
+        }
+        ";
+        let schema = parse_message_type(message_type)
+            .map(|t| Arc::new(SchemaDescriptor::new(Arc::new(t))))
+            .unwrap();
+        let column_desc = schema.column(0);
+
+        // create the array reader
+        {
+            let mut data = Vec::new();
+            let mut page_lists = Vec::new();
+            make_column_chunks::<Int64Type>(
+                column_desc.clone(),
+                Encoding::PLAIN,
+                100,
+                -999999999999999999,
+                999999999999999999,
+                &mut Vec::new(),
+                &mut Vec::new(),
+                &mut data,
+                &mut page_lists,
+                true,
+                2,
+            );
+            let page_iterator = InMemoryPageIterator::new(page_lists);
+
+            let mut array_reader =
+                PrimitiveArrayReader::<Int64Type>::new(Box::new(page_iterator), column_desc, None)
+                    .unwrap();
+
+            // read data from the reader
+            // the data type is date
+            let array = array_reader.next_batch(50).unwrap();
+            assert_eq!(array.data_type(), &Date64);
+            let array = array.as_any().downcast_ref::<Date64Array>().unwrap();
+            let data_date_array = data[0..50]
+                .iter()
+                .copied()
+                .map(Some)
+                .collect::<Date64Array>();
+            assert_eq!(array, &data_date_array);
         }
     }
 }

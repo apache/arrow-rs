@@ -371,8 +371,7 @@ macro_rules! get_statistics {
                 [<$stat_type_prefix Int32StatsIterator>]::new($iterator).map(|x| x.copied()),
             ))),
             DataType::Date64 => Ok(Arc::new(Date64Array::from_iter(
-                [<$stat_type_prefix Int32StatsIterator>]::new($iterator)
-                    .map(|x| x.map(|x| i64::from(*x) * 24 * 60 * 60 * 1000)),
+                [<$stat_type_prefix Int64StatsIterator>]::new($iterator).map(|x| x.copied()),
             ))),
             DataType::Timestamp(unit, timezone) =>{
                 let iter = [<$stat_type_prefix Int64StatsIterator>]::new($iterator).map(|x| x.copied());
@@ -941,19 +940,7 @@ macro_rules! get_data_page_statistics {
                     })
                 },
                 DataType::Date32 => Ok(Arc::new(Date32Array::from_iter([<$stat_type_prefix Int32DataPageStatsIterator>]::new($iterator).flatten()))),
-                DataType::Date64 => Ok(
-                    Arc::new(
-                        Date64Array::from_iter([<$stat_type_prefix Int32DataPageStatsIterator>]::new($iterator)
-                            .map(|x| {
-                                x.into_iter()
-                                .map(|x| {
-                                    x.and_then(|x| i64::try_from(x).ok())
-                                })
-                                .map(|x| x.map(|x| x * 24 * 60 * 60 * 1000))
-                            }).flatten()
-                        )
-                    )
-                ),
+                DataType::Date64 => Ok(Arc::new(Date64Array::from_iter([<$stat_type_prefix Int64DataPageStatsIterator>]::new($iterator).flatten()))),
                 DataType::Decimal128(precision, scale) => Ok(Arc::new(
                     Decimal128Array::from_iter([<$stat_type_prefix Decimal128DataPageStatsIterator>]::new($iterator).flatten()).with_precision_and_scale(*precision, *scale)?)),
                 DataType::Decimal256(precision, scale) => Ok(Arc::new(

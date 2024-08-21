@@ -201,6 +201,7 @@ fn from_int64(info: &BasicTypeInfo, scale: i32, precision: i32) -> Result<DataTy
             true => Ok(DataType::Int64),
             false => Ok(DataType::UInt64),
         },
+        (Some(LogicalType::Date), _) => Ok(DataType::Date64),
         (Some(LogicalType::Time { unit, .. }), _) => match unit {
             ParquetTimeUnit::MILLIS(_) => {
                 Err(arrow_err!("Cannot create INT64 from MILLIS time unit",))
@@ -228,6 +229,7 @@ fn from_int64(info: &BasicTypeInfo, scale: i32, precision: i32) -> Result<DataTy
         )),
         (None, ConvertedType::INT_64) => Ok(DataType::Int64),
         (None, ConvertedType::UINT_64) => Ok(DataType::UInt64),
+        (None, ConvertedType::DATE) => Ok(DataType::Date64),
         (None, ConvertedType::TIME_MICROS) => Ok(DataType::Time64(TimeUnit::Microsecond)),
         (None, ConvertedType::TIMESTAMP_MILLIS) => Ok(DataType::Timestamp(
             TimeUnit::Millisecond,
