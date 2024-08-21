@@ -232,7 +232,7 @@ mod snappy_codec {
                 None => decompress_len(input_buf)?,
             };
             let offset = output_buf.len();
-            vec_util::resize_without_init(output_buf, offset + len);
+            vec_util::resize_buffer_without_init(output_buf, offset + len);
 
             self.decoder
                 .decompress(input_buf, &mut output_buf[offset..])
@@ -242,7 +242,7 @@ mod snappy_codec {
         fn compress(&mut self, input_buf: &[u8], output_buf: &mut Vec<u8>) -> Result<()> {
             let output_buf_len = output_buf.len();
             let required_len = max_compress_len(input_buf.len());
-            vec_util::resize_without_init(output_buf, output_buf_len + required_len);
+            vec_util::resize_buffer_without_init(output_buf, output_buf_len + required_len);
             let n = self
                 .encoder
                 .compress(input_buf, &mut output_buf[output_buf_len..])?;
@@ -585,7 +585,7 @@ mod lz4_raw_codec {
                     ))
                 }
             };
-            vec_util::resize_without_init(output_buf, offset + required_len);
+            vec_util::resize_buffer_without_init(output_buf, offset + required_len);
             match lz4_flex::block::decompress_into(input_buf, &mut output_buf[offset..]) {
                 Ok(n) => {
                     if n != required_len {
@@ -602,7 +602,7 @@ mod lz4_raw_codec {
         fn compress(&mut self, input_buf: &[u8], output_buf: &mut Vec<u8>) -> Result<()> {
             let offset = output_buf.len();
             let required_len = lz4_flex::block::get_maximum_output_size(input_buf.len());
-            vec_util::resize_without_init(output_buf, offset + required_len);
+            vec_util::resize_buffer_without_init(output_buf, offset + required_len);
             match lz4_flex::block::compress_into(input_buf, &mut output_buf[offset..]) {
                 Ok(n) => {
                     output_buf.truncate(offset + n);
@@ -735,7 +735,7 @@ mod lz4_hadoop_codec {
                     ))
                 }
             };
-            vec_util::resize_without_init(output_buf, output_len + required_len);
+            vec_util::resize_buffer_without_init(output_buf, output_len + required_len);
             match try_decompress_hadoop(input_buf, &mut output_buf[output_len..]) {
                 Ok(n) => {
                     if n != required_len {
@@ -766,7 +766,7 @@ mod lz4_hadoop_codec {
         fn compress(&mut self, input_buf: &[u8], output_buf: &mut Vec<u8>) -> Result<()> {
             // Allocate memory to store the LZ4_HADOOP prefix.
             let offset = output_buf.len();
-            vec_util::resize_without_init(output_buf, offset + PREFIX_LEN);
+            vec_util::resize_buffer_without_init(output_buf, offset + PREFIX_LEN);
 
             // Append LZ4_RAW compressed bytes after prefix.
             LZ4RawCodec::new().compress(input_buf, output_buf)?;
