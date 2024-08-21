@@ -167,9 +167,10 @@ fn add_benchmark(c: &mut Criterion) {
     let string_right = StringArray::from_iter(array_gen);
     let string_view_right = StringViewArray::from_iter(string_right.iter());
 
-    let scalar = StringArray::new_scalar("xxxx");
+    let string_view_scalar = StringViewArray::new_scalar("xxxx");
+    let string_scalar = StringArray::new_scalar("xxxx");
     c.bench_function("eq scalar StringArray", |b| {
-        b.iter(|| eq(&scalar, &string_left).unwrap())
+        b.iter(|| eq(&string_scalar, &string_left).unwrap())
     });
 
     c.bench_function("lt scalar StringViewArray", |b| {
@@ -193,7 +194,7 @@ fn add_benchmark(c: &mut Criterion) {
     });
 
     c.bench_function("eq scalar StringViewArray", |b| {
-        b.iter(|| eq(&scalar, &string_view_left).unwrap())
+        b.iter(|| eq(&string_view_scalar, &string_view_left).unwrap())
     });
 
     c.bench_function("eq StringArray StringArray", |b| {
@@ -240,8 +241,16 @@ fn add_benchmark(c: &mut Criterion) {
         b.iter(|| bench_like_utf8view_scalar(&string_view_left, "%xxxx"))
     });
 
-    c.bench_function("like_utf8view scalar starts with", |b| {
+    c.bench_function("like_utf8view scalar starts with less than 4 bytes", |b| {
         b.iter(|| bench_like_utf8view_scalar(&string_view_left, "xxxx%"))
+    });
+
+    c.bench_function("like_utf8view scalar starts with more than 4 bytes", |b| {
+        b.iter(|| bench_like_utf8view_scalar(&string_view_left, "xxxxxx%"))
+    });
+
+    c.bench_function("like_utf8view scalar starts with more than 12 bytes", |b| {
+        b.iter(|| bench_like_utf8view_scalar(&string_view_left, "xxxxxxxxxxxxx%"))
     });
 
     c.bench_function("like_utf8view scalar complex", |b| {
