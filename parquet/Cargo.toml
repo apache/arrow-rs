@@ -118,7 +118,7 @@ zstd = ["dep:zstd", "zstd-sys"]
 # Display memory in example/write_parquet.rs
 sysinfo = ["dep:sysinfo"]
 # Verify 32-bit CRC checksum when decoding parquet pages
-crc = ["crc32fast"]
+crc = ["dep:crc32fast"]
 
 [[example]]
 name = "read_parquet"
