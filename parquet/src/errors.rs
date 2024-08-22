@@ -61,7 +61,9 @@ impl std::fmt::Display for ParquetError {
             ParquetError::IndexOutOfBound(index, ref bound) => {
                 write!(fmt, "Index {index} out of bound: {bound}")
             }
-            ParquetError::Crc32Mismatch => write!(fmt, "Parquet Page crc32 mismatch"),
+            ParquetError::Crc32Mismatch => {
+                write!(fmt, "Page CRC checksum mismatch")
+            }
             ParquetError::External(e) => write!(fmt, "External: {e}"),
         }
     }
