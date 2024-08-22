@@ -15,19 +15,28 @@
 // specific language governing permissions and limitations
 // under the License.
 
-/// Resize the `buf` to a new len `n` without initialization.
+/// Resize the `buf` to a new len `n` with fast initialization.
 ///
-/// Replacing `resize` on the `buf` with `reserve` and `set_len` can skip the initialization
-/// cost for a good performance.
-/// And the `set_len` here is safe because the element of the vector is byte whose destruction
-/// does nothing.
-// TODO: remove this clippy allow lint if it is used by a module without feature gate.
-#[allow(dead_code)]
-pub fn resize_buffer_without_init(buf: &mut Vec<u8>, n: usize) {
-    if n > buf.capacity() {
-        buf.reserve(n - buf.len());
+/// Replacing `resize` on the `buf` with `reserve` + `ptr::write_bytes` + `set_len` can finish
+/// the initialization work much faster.
+pub fn fast_resize(buf: &mut Vec<u8>, new_len: usize) {
+    let old_len = buf.len();
+    if new_len <= old_len {
+        buf.truncate(new_len);
+        return;
     }
-    unsafe { buf.set_len(n) };
+
+    // The safety of `Vec::set_len` requires that `new_len < buf.capacity()`.
+    if new_len > buf.capacity() {
+        buf.reserve(new_len - old_len);
+    }
+
+    // The safety of `Vec::set_len` requires that the `buf[old_len..new_len]` must be initialized.
+    unsafe {
+        let buf_ptr = buf.as_mut_ptr().add(old_len);
+        buf_ptr.write_bytes(0, new_len - old_len);
+        buf.set_len(new_len);
+    };
 }
 
 #[cfg(test)]
@@ -36,7 +45,7 @@ mod tests {
 
     fn resize_and_check(source: Vec<u8>, new_len: usize) {
         let mut new = source.clone();
-        resize_buffer_without_init(&mut new, new_len);
+        fast_resize(&mut new, new_len);
 
         assert_eq!(new.len(), new_len);
         if new.len() > source.len() {

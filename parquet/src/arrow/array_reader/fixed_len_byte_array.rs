@@ -26,6 +26,7 @@ use crate::column::page::PageIterator;
 use crate::column::reader::decoder::ColumnValueDecoder;
 use crate::errors::{ParquetError, Result};
 use crate::schema::types::ColumnDescPtr;
+use crate::util::vec_util;
 use arrow_array::{
     Array, ArrayRef, Decimal128Array, Decimal256Array, FixedSizeBinaryArray, Float16Array,
     IntervalDayTimeArray, IntervalYearMonthArray,
@@ -268,8 +269,7 @@ impl ValuesBuffer for FixedLenByteArrayBuffer {
         let byte_length = self.byte_length.unwrap_or_default();
 
         assert_eq!(self.buffer.len(), (read_offset + values_read) * byte_length);
-        self.buffer
-            .resize((read_offset + levels_read) * byte_length, 0);
+        vec_util::fast_resize(&mut self.buffer, (read_offset + levels_read) * byte_length);
 
         let values_range = read_offset..read_offset + values_read;
         for (value_pos, level_pos) in values_range.rev().zip(iter_set_bits_rev(valid_mask)) {
@@ -464,8 +464,9 @@ fn read_byte_stream_split(
 ) {
     let stride = src.len() / data_width;
     let idx = dst.len();
-    dst.resize(idx + num_values * data_width, 0u8);
-    let dst_slc = &mut dst[idx..idx + num_values * data_width];
+    let new_len = idx + num_values * data_width;
+    vec_util::fast_resize(dst, new_len);
+    let dst_slc = &mut dst[idx..new_len];
     for j in 0..data_width {
         let src_slc = &src[offset + j * stride..offset + j * stride + num_values];
         for i in 0..num_values {
