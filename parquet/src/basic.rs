@@ -358,6 +358,14 @@ pub enum Compression {
     LZ4_RAW,
 }
 
+impl Compression {
+    /// Returns the codec type of this compression setting as a string, without the compression
+    /// level.
+    pub(crate) fn codec_to_string(self) -> String {
+        format!("{:?}", self).split('(').next().unwrap().to_owned()
+    }
+}
+
 fn split_compression_string(str_setting: &str) -> Result<(&str, Option<u32>), ParquetError> {
     let split_setting = str_setting.split_once('(');
 
@@ -1912,6 +1920,15 @@ mod tests {
         assert_eq!(
             parquet::Encoding::DELTA_BYTE_ARRAY,
             Encoding::DELTA_BYTE_ARRAY.into()
+        );
+    }
+
+    #[test]
+    fn test_compression_codec_to_string() {
+        assert_eq!(Compression::UNCOMPRESSED.codec_to_string(), "UNCOMPRESSED");
+        assert_eq!(
+            Compression::ZSTD(ZstdLevel::default()).codec_to_string(),
+            "ZSTD"
         );
     }
 
