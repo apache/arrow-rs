@@ -16,23 +16,27 @@
 # under the License.
 
 [package]
-name = "parquet"
-version = { workspace = true }
-license = { workspace = true }
-description = "Apache Parquet implementation in Rust"
-homepage = { workspace = true }
-repository = { workspace = true }
 authors = { workspace = true }
-keywords = ["arrow", "parquet", "hadoop"]
-readme = "README.md"
+description = "Apache Parquet implementation in Rust"
 edition = { workspace = true }
+homepage = { workspace = true }
+keywords = ["arrow", "parquet", "hadoop"]
+license = { workspace = true }
+name = "parquet"
+readme = "README.md"
+repository = { workspace = true }
 rust-version = "1.70.0"
+version = { workspace = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-ahash = { version = "0.8", default-features = false, features = ["compile-time-rng"] }
+ahash = { version = "0.8", default-features = false, features = [
+    "compile-time-rng",
+] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-ahash = { version = "0.8", default-features = false, features = ["runtime-rng"] }
+ahash = { version = "0.8", default-features = false, features = [
+    "runtime-rng",
+] }
 
 [dependencies]
 arrow-array = { workspace = true, optional = true }
@@ -40,49 +44,98 @@ arrow-buffer = { workspace = true, optional = true }
 arrow-cast = { workspace = true, optional = true }
 arrow-csv = { workspace = true, optional = true }
 arrow-data = { workspace = true, optional = true }
+arrow-ipc = { workspace = true, optional = true }
 arrow-schema = { workspace = true, optional = true }
 arrow-select = { workspace = true, optional = true }
-arrow-ipc = { workspace = true, optional = true }
 # Intentionally not a path dependency as object_store is released separately
 object_store = { version = "0.11.0", default-features = false, optional = true }
 
+base64 = { version = "0.22", default-features = false, features = [
+    "std",
+], optional = true }
+brotli = { version = "6.0", default-features = false, features = [
+    "std",
+], optional = true }
 bytes = { version = "1.1", default-features = false, features = ["std"] }
-thrift = { version = "0.17", default-features = false }
-snap = { version = "1.0", default-features = false, optional = true }
-brotli = { version = "6.0", default-features = false, features = ["std"], optional = true }
-flate2 = { version = "1.0", default-features = false, features = ["rust_backend"], optional = true }
-lz4_flex = { version = "0.11", default-features = false, features = ["std", "frame"], optional = true }
-zstd = { version = "0.13", optional = true, default-features = false }
 chrono = { workspace = true }
+clap = { version = "4.1", default-features = false, features = [
+    "std",
+    "derive",
+    "env",
+    "help",
+    "error-context",
+    "usage",
+], optional = true }
+crc32fast = { version = "1.4", optional = true, default-features = false }
+flate2 = { version = "1.0", default-features = false, features = [
+    "rust_backend",
+], optional = true }
+futures = { version = "0.3", default-features = false, features = [
+    "std",
+], optional = true }
+half = { version = "2.1", default-features = false, features = ["num-traits"] }
+hashbrown = { version = "0.14", default-features = false }
+lz4_flex = { version = "0.11", default-features = false, features = [
+    "std",
+    "frame",
+], optional = true }
 num = { version = "0.4", default-features = false }
 num-bigint = { version = "0.4", default-features = false }
-base64 = { version = "0.22", default-features = false, features = ["std", ], optional = true }
-clap = { version = "4.1", default-features = false, features = ["std", "derive", "env", "help", "error-context", "usage"], optional = true }
-serde = { version = "1.0", default-features = false, features = ["derive"], optional = true }
-serde_json = { version = "1.0", default-features = false, features = ["std"], optional = true }
-seq-macro = { version = "0.3", default-features = false }
-futures = { version = "0.3", default-features = false, features = ["std"], optional = true }
-tokio = { version = "1.0", optional = true, default-features = false, features = ["macros", "rt", "io-util"] }
-hashbrown = { version = "0.14", default-features = false }
-twox-hash = { version = "1.6", default-features = false }
 paste = { version = "1.0" }
-half = { version = "2.1", default-features = false, features = ["num-traits"] }
-sysinfo = { version = "0.31.2", optional = true, default-features = false, features = ["system"] }
+seq-macro = { version = "0.3", default-features = false }
+serde = { version = "1.0", default-features = false, features = [
+    "derive",
+], optional = true }
+serde_json = { version = "1.0", default-features = false, features = [
+    "std",
+], optional = true }
+snap = { version = "1.0", default-features = false, optional = true }
+sysinfo = { version = "0.31.2", optional = true, default-features = false, features = [
+    "system",
+] }
+thrift = { version = "0.17", default-features = false }
+tokio = { version = "1.0", optional = true, default-features = false, features = [
+    "macros",
+    "rt",
+    "io-util",
+] }
+twox-hash = { version = "1.6", default-features = false }
+zstd = { version = "0.13", optional = true, default-features = false }
 
 [dev-dependencies]
+arrow = { workspace = true, features = [
+    "ipc",
+    "test_utils",
+    "prettyprint",
+    "json",
+] }
 base64 = { version = "0.22", default-features = false, features = ["std"] }
+brotli = { version = "6.0", default-features = false, features = ["std"] }
 criterion = { version = "0.5", default-features = false }
+flate2 = { version = "1.0", default-features = false, features = [
+    "rust_backend",
+] }
+lz4_flex = { version = "0.11", default-features = false, features = [
+    "std",
+    "frame",
+] }
+object_store = { version = "0.11.0", default-features = false, features = [
+    "azure",
+] }
+rand = { version = "0.8", default-features = false, features = [
+    "std",
+    "std_rng",
+] }
+serde_json = { version = "1.0", features = ["std"], default-features = false }
 snap = { version = "1.0", default-features = false }
 tempfile = { version = "3.0", default-features = false }
-brotli = { version = "6.0", default-features = false, features = ["std"] }
-flate2 = { version = "1.0", default-features = false, features = ["rust_backend"] }
-lz4_flex = { version = "0.11", default-features = false, features = ["std", "frame"] }
+tokio = { version = "1.0", default-features = false, features = [
+    "macros",
+    "rt",
+    "io-util",
+    "fs",
+] }
 zstd = { version = "0.13", default-features = false }
-serde_json = { version = "1.0", features = ["std"], default-features = false }
-arrow = { workspace = true, features = ["ipc", "test_utils", "prettyprint", "json"] }
-tokio = { version = "1.0", default-features = false, features = ["macros", "rt", "io-util", "fs"] }
-rand = { version = "0.8", default-features = false, features = ["std", "std_rng"] }
-object_store = { version = "0.11.0", default-features = false, features = ["azure"] }
 
 # TODO: temporary to fix parquet wasm build
 # upstream issue: https://github.com/gyscos/zstd-rs/issues/269
@@ -100,7 +153,16 @@ default = ["arrow", "snap", "brotli", "flate2", "lz4", "zstd", "base64"]
 # Enable lz4
 lz4 = ["lz4_flex"]
 # Enable arrow reader/writer APIs
-arrow = ["base64", "arrow-array", "arrow-buffer", "arrow-cast", "arrow-data", "arrow-schema", "arrow-select", "arrow-ipc"]
+arrow = [
+    "base64",
+    "arrow-array",
+    "arrow-buffer",
+    "arrow-cast",
+    "arrow-data",
+    "arrow-schema",
+    "arrow-select",
+    "arrow-ipc",
+]
 # Enable CLI tools
 cli = ["json", "base64", "clap", "arrow-csv", "serde"]
 # Enable JSON APIs
@@ -117,26 +179,28 @@ object_store = ["dep:object_store", "async"]
 zstd = ["dep:zstd", "zstd-sys"]
 # Display memory in example/write_parquet.rs
 sysinfo = ["dep:sysinfo"]
+# Verify 32-bit CRC checksum when decoding parquet pages
+crc = ["crc32fast"]
 
 [[example]]
 name = "read_parquet"
-required-features = ["arrow"]
 path = "./examples/read_parquet.rs"
+required-features = ["arrow"]
 
 [[example]]
 name = "write_parquet"
-required-features = ["cli", "sysinfo"]
 path = "./examples/write_parquet.rs"
+required-features = ["cli", "sysinfo"]
 
 [[example]]
 name = "async_read_parquet"
-required-features = ["arrow", "async"]
 path = "./examples/async_read_parquet.rs"
+required-features = ["arrow", "async"]
 
 [[example]]
 name = "read_with_rowgroup"
-required-features = ["arrow", "async"]
 path = "./examples/read_with_rowgroup.rs"
+required-features = ["arrow", "async"]
 
 [[test]]
 name = "arrow_writer_layout"
@@ -144,8 +208,8 @@ required-features = ["arrow"]
 
 [[test]]
 name = "arrow_reader"
-required-features = ["arrow"]
 path = "./tests/arrow_reader/mod.rs"
+required-features = ["arrow"]
 
 [[bin]]
 name = "parquet-read"
@@ -184,34 +248,33 @@ name = "parquet-index"
 required-features = ["cli"]
 
 [[bench]]
+harness = false
 name = "arrow_writer"
 required-features = ["arrow"]
-harness = false
 
 [[bench]]
+harness = false
 name = "arrow_reader"
 required-features = ["arrow", "test_common", "experimental"]
-harness = false
 
 [[bench]]
+harness = false
 name = "arrow_statistics"
 required-features = ["arrow"]
-harness = false
-
 
 [[bench]]
+harness = false
 name = "compression"
 required-features = ["experimental", "default"]
-harness = false
 
 [[bench]]
+harness = false
 name = "encoding"
 required-features = ["experimental", "default"]
-harness = false
 
 [[bench]]
-name = "metadata"
 harness = false
+name = "metadata"
 
 [lib]
 bench = false
