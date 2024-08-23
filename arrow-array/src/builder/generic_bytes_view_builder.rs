@@ -205,6 +205,19 @@ impl<T: ByteViewType + ?Sized> GenericByteViewBuilder<T> {
         self.null_buffer_builder.append_non_null();
     }
 
+    /// Append the given `u128` as a view
+    ///
+    /// # Safety
+    /// (1) The block of the given view must have been added
+    /// (2) The range `offset...offset+length` of the given view
+    /// must be within the bounds of the block
+    /// (3) The data in the block must be valid type `T`
+    /// (4) The view must be not null
+    pub unsafe fn append_view_u128_unchecked(&mut self, view: u128) {
+        self.views_builder.append(view);
+        self.null_buffer_builder.append_non_null();
+    }
+
     /// Try to append a view of the given `block`, `offset` and `length`
     ///
     /// See [`Self::append_block`]
