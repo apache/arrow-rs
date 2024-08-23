@@ -17,6 +17,8 @@
 
 //! Utils for working with packed bit masks
 
+use crate::bit_util::ceil;
+
 /// Sets all bits on `write_data` in the range `[offset_write..offset_write+len]` to be equal to the
 /// bits in `data` in the range `[offset_read..offset_read+len]`
 /// returns the number of `0` bits `data[offset_read..offset_read+len]`
@@ -83,7 +85,7 @@ fn set_upto_64bits(
         }
     } else {
         let len = std::cmp::min(len, 64 - std::cmp::max(read_shift, write_shift));
-        let bytes = (len + read_shift).div_ceil(8);
+        let bytes = ceil(len + read_shift, 8);
         let chunk = read_bytes_to_u64(data, read_byte, bytes);
         let mask = u64::MAX >> (64 - len);
         let chunk = (chunk >> read_shift) & mask;
@@ -100,11 +102,10 @@ fn set_upto_64bits(
                 let ptr = write_data.as_ptr() as *mut u8;
                 let chunk = chunk << write_shift;
                 let null_count = len - chunk.count_ones() as usize;
-                let bytes = (len + write_shift).div_ceil(8);
-                let c = chunk.to_le_bytes();
-                for i in 0..bytes {
+                let bytes = ceil(len + write_shift, 8);
+                for (i, c) in chunk.to_le_bytes().iter().enumerate().take(bytes) {
                     unsafe {
-                        *ptr.add(write_byte + i) |= c[i];
+                        *ptr.add(write_byte + i) |= c;
                     }
                 }
                 (null_count, len)
