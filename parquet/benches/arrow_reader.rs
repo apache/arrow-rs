@@ -780,14 +780,17 @@ fn bench_f16<T>(
         min,
         max,
     );
-    group.bench_function(encoding.to_string().to_lowercase() + " encoded, mandatory, no NULLs", |b| {
-        b.iter(|| {
-            let array_reader =
-                create_f16_by_bytes_reader(data.clone(), mandatory_column_desc.clone());
-            count = bench_array_reader(array_reader);
-        });
-        assert_eq!(count, EXPECTED_VALUE_COUNT);
-    });
+    group.bench_function(
+        encoding.to_string().to_lowercase() + " encoded, mandatory, no NULLs",
+        |b| {
+            b.iter(|| {
+                let array_reader =
+                    create_f16_by_bytes_reader(data.clone(), mandatory_column_desc.clone());
+                count = bench_array_reader(array_reader);
+            });
+            assert_eq!(count, EXPECTED_VALUE_COUNT);
+        },
+    );
 
     let data = build_encoded_f16_bytes_page_iterator::<T>(
         optional_column_desc.clone(),
@@ -796,14 +799,17 @@ fn bench_f16<T>(
         min,
         max,
     );
-    group.bench_function(encoding.to_string().to_lowercase() + " encoded, optional, no NULLs", |b| {
-        b.iter(|| {
-            let array_reader =
-                create_f16_by_bytes_reader(data.clone(), optional_column_desc.clone());
-            count = bench_array_reader(array_reader);
-        });
-        assert_eq!(count, EXPECTED_VALUE_COUNT);
-    });
+    group.bench_function(
+        encoding.to_string().to_lowercase() + " encoded, optional, no NULLs",
+        |b| {
+            b.iter(|| {
+                let array_reader =
+                    create_f16_by_bytes_reader(data.clone(), optional_column_desc.clone());
+                count = bench_array_reader(array_reader);
+            });
+            assert_eq!(count, EXPECTED_VALUE_COUNT);
+        },
+    );
 
     let data = build_encoded_f16_bytes_page_iterator::<T>(
         optional_column_desc.clone(),
@@ -812,14 +818,17 @@ fn bench_f16<T>(
         min,
         max,
     );
-    group.bench_function(encoding.to_string().to_lowercase() + " encoded, optional, half NULLs", |b| {
-        b.iter(|| {
-            let array_reader =
-                create_f16_by_bytes_reader(data.clone(), optional_column_desc.clone());
-            count = bench_array_reader(array_reader);
-        });
-        assert_eq!(count, EXPECTED_VALUE_COUNT);
-    });
+    group.bench_function(
+        encoding.to_string().to_lowercase() + " encoded, optional, half NULLs",
+        |b| {
+            b.iter(|| {
+                let array_reader =
+                    create_f16_by_bytes_reader(data.clone(), optional_column_desc.clone());
+                count = bench_array_reader(array_reader);
+            });
+            assert_eq!(count, EXPECTED_VALUE_COUNT);
+        },
+    );
 }
 
 fn bench_flba<const BYTE_LENGTH: usize>(
@@ -1764,10 +1773,5 @@ fn add_benches(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(
-    benches,
-    add_benches,
-    decimal_benches,
-    float16_benches,
-);
+criterion_group!(benches, add_benches, decimal_benches, float16_benches,);
 criterion_main!(benches);
