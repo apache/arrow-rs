@@ -61,25 +61,19 @@ fn set_upto_64bits(
     let write_shift = offset_write % 8;
 
     if len >= 64 {
+        // SAFETY: chunk gets masked when necessary, so it is safe
         let chunk = unsafe { read_bytes_to_u64(data, read_byte, 8) };
         if read_shift == 0 {
             if write_shift == 0 {
                 let len = 64;
                 let null_count = chunk.count_zeros() as usize;
-                unsafe {
-                    let ptr = write_data.as_mut_ptr().add(write_byte) as *mut u64;
-                    ptr.write_unaligned(chunk);
-                }
+                write_u64_bytes(write_data, write_byte, chunk);
                 (null_count, len)
             } else {
                 let len = 64 - write_shift;
                 let chunk = chunk << write_shift;
                 let null_count = len - chunk.count_ones() as usize;
-                unsafe {
-                    let ptr = write_data.as_mut_ptr().add(write_byte);
-                    let chunk = chunk | (*ptr) as u64;
-                    (ptr as *mut u64).write_unaligned(chunk);
-                }
+                or_write_u64_bytes(write_data, write_byte, chunk);
                 (null_count, len)
             }
         } else {
@@ -87,50 +81,36 @@ fn set_upto_64bits(
                 let len = 64 - 8; // 56 bits so that write_shift == 0 for the next iteration
                 let chunk = (chunk >> read_shift) | 0x00FFFFFFFFFFFFFF; // 56 bits mask
                 let null_count = len - chunk.count_ones() as usize;
-                unsafe {
-                    let ptr = write_data.as_mut_ptr().add(write_byte) as *mut u64;
-                    ptr.write_unaligned(chunk);
-                }
+                write_u64_bytes(write_data, write_byte, chunk);
                 (null_count, len)
             } else {
                 let len = 64 - std::cmp::max(read_shift, write_shift);
                 let chunk = (chunk >> read_shift) << write_shift;
                 let null_count = len - chunk.count_ones() as usize;
-                unsafe {
-                    let ptr = write_data.as_mut_ptr().add(write_byte);
-                    let chunk = chunk | (*ptr) as u64;
-                    (ptr as *mut u64).write_unaligned(chunk);
-                }
+                or_write_u64_bytes(write_data, write_byte, chunk);
                 (null_count, len)
             }
         }
     } else if len == 1 {
         let c = (unsafe { *data.as_ptr().add(read_byte) } >> read_shift) & 1;
-        if c == 0 {
-            (1, 1)
-        } else {
-            let ptr = write_data.as_mut_ptr();
-            unsafe { *ptr.add(write_byte) |= 1 << write_shift };
-            (0, 1)
-        }
+        let ptr = write_data.as_mut_ptr();
+        unsafe { *ptr.add(write_byte) |= c << write_shift };
+        ((c ^ 1) as usize, 1)
     } else {
         let len = std::cmp::min(len, 64 - std::cmp::max(read_shift, write_shift));
         let bytes = ceil(len + read_shift, 8);
+        // SAFETY: chunk gets masked, so it is safe
         let chunk = unsafe { read_bytes_to_u64(data, read_byte, bytes) };
         let mask = u64::MAX >> (64 - len);
         let chunk = (chunk >> read_shift) & mask;
-        if chunk == 0 {
-            (len, len)
-        } else {
-            let chunk = chunk << write_shift;
-            let null_count = len - chunk.count_ones() as usize;
-            let bytes = ceil(len + write_shift, 8);
-            let ptr = unsafe { write_data.as_mut_ptr().add(write_byte) };
-            for (i, c) in chunk.to_le_bytes().iter().enumerate().take(bytes) {
-                unsafe { *ptr.add(i) |= c };
-            }
-            (null_count, len)
+        let chunk = chunk << write_shift;
+        let null_count = len - chunk.count_ones() as usize;
+        let bytes = ceil(len + write_shift, 8);
+        let ptr = unsafe { write_data.as_mut_ptr().add(write_byte) };
+        for (i, c) in chunk.to_le_bytes().iter().enumerate().take(bytes) {
+            unsafe { *ptr.add(i) |= c };
         }
+        (null_count, len)
     }
 }
 
@@ -145,6 +125,25 @@ unsafe fn read_bytes_to_u64(data: &[u8], offset: usize, count: usize) -> u64 {
     unsafe {
         std::ptr::copy_nonoverlapping(src, tmp.as_mut_ptr() as *mut u8, count);
         tmp.assume_init()
+    }
+}
+
+#[inline]
+fn write_u64_bytes(data: &mut [u8], offset: usize, chunk: u64) {
+    // SAFETY: the caller must ensure `data` has `offset..(offset + 8)` range
+    unsafe {
+        let ptr = data.as_mut_ptr().add(offset) as *mut u64;
+        ptr.write_unaligned(chunk);
+    }
+}
+
+#[inline]
+fn or_write_u64_bytes(data: &mut [u8], offset: usize, chunk: u64) {
+    // SAFETY: the caller must ensure `data` has `offset..(offset + 8)` range
+    unsafe {
+        let ptr = data.as_mut_ptr().add(offset);
+        let chunk = chunk | (*ptr) as u64;
+        (ptr as *mut u64).write_unaligned(chunk);
     }
 }
 
