@@ -68,6 +68,14 @@ fn build_test_schema() -> SchemaDescPtr {
             OPTIONAL BYTE_ARRAY optional_binary_leaf;
             REQUIRED FIXED_LEN_BYTE_ARRAY (2) mandatory_f16_leaf (Float16);
             OPTIONAL FIXED_LEN_BYTE_ARRAY (2) optional_f16_leaf (Float16);
+            REQUIRED FIXED_LEN_BYTE_ARRAY (2) mandatory_flba2_leaf;
+            OPTIONAL FIXED_LEN_BYTE_ARRAY (2) optional_flba2_leaf;
+            REQUIRED FIXED_LEN_BYTE_ARRAY (4) mandatory_flba4_leaf;
+            OPTIONAL FIXED_LEN_BYTE_ARRAY (4) optional_flba4_leaf;
+            REQUIRED FIXED_LEN_BYTE_ARRAY (8) mandatory_flba8_leaf;
+            OPTIONAL FIXED_LEN_BYTE_ARRAY (8) optional_flba8_leaf;
+            REQUIRED FIXED_LEN_BYTE_ARRAY (16) mandatory_flba16_leaf;
+            OPTIONAL FIXED_LEN_BYTE_ARRAY (16) optional_flba16_leaf;
         }
         ";
     parse_message_type(message_type)
@@ -202,6 +210,50 @@ where
             page_builder.add_rep_levels(max_rep_level, &rep_levels);
             page_builder.add_def_levels(max_def_level, &def_levels);
             page_builder.add_values::<T>(encoding, &values);
+            column_chunk_pages.push(page_builder.consume());
+        }
+        pages.push(column_chunk_pages);
+    }
+    InMemoryPageIterator::new(pages)
+}
+
+// support for fixed_len_byte_arrays
+fn build_encoded_flba_bytes_page_iterator<const BYTE_LENGTH: usize>(
+    column_desc: ColumnDescPtr,
+    null_density: f32,
+    encoding: Encoding,
+) -> impl PageIterator + Clone {
+    let max_def_level = column_desc.max_def_level();
+    let max_rep_level = column_desc.max_rep_level();
+    let rep_levels = vec![0; VALUES_PER_PAGE];
+    let mut rng = seedable_rng();
+    let mut pages: Vec<Vec<parquet::column::page::Page>> = Vec::new();
+    for _i in 0..NUM_ROW_GROUPS {
+        let mut column_chunk_pages = Vec::new();
+        for _j in 0..PAGES_PER_GROUP {
+            // generate page
+            let mut values = Vec::with_capacity(VALUES_PER_PAGE);
+            let mut def_levels = Vec::with_capacity(VALUES_PER_PAGE);
+            for _k in 0..VALUES_PER_PAGE {
+                let def_level = if rng.gen::<f32>() < null_density {
+                    max_def_level - 1
+                } else {
+                    max_def_level
+                };
+                if def_level == max_def_level {
+                    // create the FLBA(BYTE_LENGTH) value
+                    let value = (0..BYTE_LENGTH).map(|_| rng.gen()).collect::<Vec<u8>>();
+                    let value =
+                        <FixedLenByteArrayType as parquet::data_type::DataType>::T::from(value);
+                    values.push(value);
+                }
+                def_levels.push(def_level);
+            }
+            let mut page_builder =
+                DataPageBuilderImpl::new(column_desc.clone(), values.len() as u32, true);
+            page_builder.add_rep_levels(max_rep_level, &rep_levels);
+            page_builder.add_def_levels(max_def_level, &def_levels);
+            page_builder.add_values::<FixedLenByteArrayType>(encoding, &values);
             column_chunk_pages.push(page_builder.consume());
         }
         pages.push(column_chunk_pages);
@@ -752,6 +804,68 @@ fn bench_byte_stream_split_f16<T>(
     });
 }
 
+fn bench_flba<const BYTE_LENGTH: usize>(
+    group: &mut BenchmarkGroup<WallTime>,
+    mandatory_column_desc: &ColumnDescPtr,
+    optional_column_desc: &ColumnDescPtr,
+    encoding: Encoding,
+) {
+    let mut count: usize = 0;
+
+    encoding.to_string();
+    // byte_stream_split encoded, no NULLs
+    let data = build_encoded_flba_bytes_page_iterator::<BYTE_LENGTH>(
+        mandatory_column_desc.clone(),
+        0.0,
+        encoding,
+    );
+    group.bench_function(
+        encoding.to_string().to_lowercase() + " encoded, mandatory, no NULLs",
+        |b| {
+            b.iter(|| {
+                let array_reader =
+                    create_f16_by_bytes_reader(data.clone(), mandatory_column_desc.clone());
+                count = bench_array_reader(array_reader);
+            });
+            assert_eq!(count, EXPECTED_VALUE_COUNT);
+        },
+    );
+
+    let data = build_encoded_flba_bytes_page_iterator::<BYTE_LENGTH>(
+        optional_column_desc.clone(),
+        0.0,
+        Encoding::BYTE_STREAM_SPLIT,
+    );
+    group.bench_function(
+        encoding.to_string().to_lowercase() + " encoded, optional, no NULLs",
+        |b| {
+            b.iter(|| {
+                let array_reader =
+                    create_f16_by_bytes_reader(data.clone(), optional_column_desc.clone());
+                count = bench_array_reader(array_reader);
+            });
+            assert_eq!(count, EXPECTED_VALUE_COUNT);
+        },
+    );
+
+    let data = build_encoded_flba_bytes_page_iterator::<BYTE_LENGTH>(
+        optional_column_desc.clone(),
+        0.5,
+        Encoding::BYTE_STREAM_SPLIT,
+    );
+    group.bench_function(
+        encoding.to_string().to_lowercase() + " encoded, optional, half NULLs",
+        |b| {
+            b.iter(|| {
+                let array_reader =
+                    create_f16_by_bytes_reader(data.clone(), optional_column_desc.clone());
+                count = bench_array_reader(array_reader);
+            });
+            assert_eq!(count, EXPECTED_VALUE_COUNT);
+        },
+    );
+}
+
 fn bench_byte_stream_split_decimal<T>(
     group: &mut BenchmarkGroup<WallTime>,
     mandatory_column_desc: &ColumnDescPtr,
@@ -1021,6 +1135,50 @@ fn byte_stream_split_benches(c: &mut Criterion) {
         &optional_f16_leaf_desc,
         -1.0,
         1.0,
+    );
+    group.finish();
+
+    let mut group = c.benchmark_group("arrow_array_reader/BYTE_STREAM_SPLIT/FixedLenByteArray(2)");
+    let mandatory_flba2_leaf_desc = schema.column(19);
+    let optional_flba2_leaf_desc = schema.column(20);
+    bench_flba::<2>(
+        &mut group,
+        &mandatory_flba2_leaf_desc,
+        &optional_flba2_leaf_desc,
+        Encoding::BYTE_STREAM_SPLIT,
+    );
+    group.finish();
+
+    let mut group = c.benchmark_group("arrow_array_reader/BYTE_STREAM_SPLIT/FixedLenByteArray(4)");
+    let mandatory_flba4_leaf_desc = schema.column(21);
+    let optional_flba4_leaf_desc = schema.column(22);
+    bench_flba::<4>(
+        &mut group,
+        &mandatory_flba4_leaf_desc,
+        &optional_flba4_leaf_desc,
+        Encoding::BYTE_STREAM_SPLIT,
+    );
+    group.finish();
+
+    let mut group = c.benchmark_group("arrow_array_reader/BYTE_STREAM_SPLIT/FixedLenByteArray(8)");
+    let mandatory_flba8_leaf_desc = schema.column(23);
+    let optional_flba8_leaf_desc = schema.column(24);
+    bench_flba::<8>(
+        &mut group,
+        &mandatory_flba8_leaf_desc,
+        &optional_flba8_leaf_desc,
+        Encoding::BYTE_STREAM_SPLIT,
+    );
+    group.finish();
+
+    let mut group = c.benchmark_group("arrow_array_reader/BYTE_STREAM_SPLIT/FixedLenByteArray(16)");
+    let mandatory_flba16_leaf_desc = schema.column(25);
+    let optional_flba16_leaf_desc = schema.column(26);
+    bench_flba::<16>(
+        &mut group,
+        &mandatory_flba16_leaf_desc,
+        &optional_flba16_leaf_desc,
+        Encoding::BYTE_STREAM_SPLIT,
     );
     group.finish();
 }
@@ -1560,6 +1718,55 @@ fn add_benches(c: &mut Criterion) {
         });
         assert_eq!(count, EXPECTED_VALUE_COUNT);
     });
+
+    group.finish();
+
+    // fixed_len_byte_array benchmarks
+    //==============================
+
+    let mut group = c.benchmark_group("arrow_array_reader/FixedLenByteArray(2)");
+    let mandatory_flba2_leaf_desc = schema.column(19);
+    let optional_flba2_leaf_desc = schema.column(20);
+    bench_flba::<2>(
+        &mut group,
+        &mandatory_flba2_leaf_desc,
+        &optional_flba2_leaf_desc,
+        Encoding::PLAIN,
+    );
+    group.finish();
+
+    let mut group = c.benchmark_group("arrow_array_reader/FixedLenByteArray(4)");
+    let mandatory_flba4_leaf_desc = schema.column(21);
+    let optional_flba4_leaf_desc = schema.column(22);
+    bench_flba::<4>(
+        &mut group,
+        &mandatory_flba4_leaf_desc,
+        &optional_flba4_leaf_desc,
+        Encoding::PLAIN,
+    );
+    group.finish();
+
+    let mut group = c.benchmark_group("arrow_array_reader/FixedLenByteArray(8)");
+    let mandatory_flba8_leaf_desc = schema.column(23);
+    let optional_flba8_leaf_desc = schema.column(24);
+    bench_flba::<8>(
+        &mut group,
+        &mandatory_flba8_leaf_desc,
+        &optional_flba8_leaf_desc,
+        Encoding::PLAIN,
+    );
+    group.finish();
+
+    let mut group = c.benchmark_group("arrow_array_reader/FixedLenByteArray(16)");
+    let mandatory_flba16_leaf_desc = schema.column(25);
+    let optional_flba16_leaf_desc = schema.column(26);
+    bench_flba::<16>(
+        &mut group,
+        &mandatory_flba16_leaf_desc,
+        &optional_flba16_leaf_desc,
+        Encoding::PLAIN,
+    );
+    group.finish();
 }
 
 criterion_group!(

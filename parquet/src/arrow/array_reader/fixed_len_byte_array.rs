@@ -256,9 +256,16 @@ impl ValuesBuffer for FixedLenByteArrayBuffer {
 
             let level_pos_bytes = level_pos * byte_length;
             let value_pos_bytes = value_pos * byte_length;
-
-            for i in 0..byte_length {
-                self.buffer[level_pos_bytes + i] = self.buffer[value_pos_bytes + i]
+            // testing shows up to byte_length == 4 prefers the loop, 8 and up prefers copy_within
+            if byte_length > 4 {
+                self.buffer.copy_within(
+                    value_pos_bytes..value_pos_bytes + byte_length,
+                    level_pos_bytes,
+                );
+            } else {
+                for i in 0..byte_length {
+                    self.buffer[level_pos_bytes + i] = self.buffer[value_pos_bytes + i]
+                }
             }
         }
     }
