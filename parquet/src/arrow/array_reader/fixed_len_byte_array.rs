@@ -248,31 +248,37 @@ impl ValuesBuffer for FixedLenByteArrayBuffer {
             .resize((read_offset + levels_read) * byte_length, 0);
 
         let values_range = read_offset..read_offset + values_read;
-        for (value_pos, level_pos) in values_range.rev().zip(iter_set_bits_rev(valid_mask)) {
-            debug_assert!(level_pos >= value_pos);
-            if level_pos <= value_pos {
-                break;
-            }
 
-            let level_pos_bytes = level_pos * byte_length;
-            let value_pos_bytes = value_pos * byte_length;
+        // Move the bytes from value_pos to level_pos. For values of `byte_length` <= 4,
+        // the simple loop is preferred as the compiler can eliminate the loop via unrolling.
+        // For `byte_length > 4`, we instead copy from non-overlapping slices. This allows
+        // the loop to be vectorized, yielding much better performance.
+        if byte_length > 4 {
+            for (value_pos, level_pos) in values_range.rev().zip(iter_set_bits_rev(valid_mask)) {
+                debug_assert!(level_pos >= value_pos);
+                if level_pos <= value_pos {
+                    break;
+                }
 
-            // Move the bytes from value_pos to level_pos. For values of `byte_length` <= 4,
-            // the simple loop is preferred as the compiler can eliminate the loop via unrolling. 
-            // For `byte_length > 4`, we instead copy from non-overlapping slices. This allows 
-            // the loop to be vectorized, yielding much better performance.
-            if byte_length > 4 {
+                let level_pos_bytes = level_pos * byte_length;
+                let value_pos_bytes = value_pos * byte_length;
+
                 let split = self.buffer.split_at_mut(level_pos_bytes);
                 let dst = &mut split.1[..byte_length];
                 let src = &split.0[value_pos_bytes..value_pos_bytes + byte_length];
                 for i in 0..byte_length {
                     dst[i] = src[i]
                 }
-                //self.buffer.copy_within(
-                //    value_pos_bytes..value_pos_bytes + byte_length,
-                //    level_pos_bytes,
-                //);
-            } else {
+            }
+        } else {
+            for (value_pos, level_pos) in values_range.rev().zip(iter_set_bits_rev(valid_mask)) {
+                debug_assert!(level_pos >= value_pos);
+                if level_pos <= value_pos {
+                    break;
+                }
+
+                let level_pos_bytes = level_pos * byte_length;
+                let value_pos_bytes = value_pos * byte_length;
                 for i in 0..byte_length {
                     self.buffer[level_pos_bytes + i] = self.buffer[value_pos_bytes + i]
                 }
