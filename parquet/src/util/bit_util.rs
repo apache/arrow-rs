@@ -85,7 +85,14 @@ unsafe impl FromBytes for Int96 {
     type Buffer = [u8; 12];
 
     fn try_from_le_slice(b: &[u8]) -> Result<Self> {
-        Ok(Self::from_le_bytes(array_from_slice(b)?))
+        let bs: [u8; 12] = array_from_slice(b)?;
+        let mut i = Int96::new();
+        i.set_data(
+            u32::try_from_le_slice(&bs[0..4])?,
+            u32::try_from_le_slice(&bs[4..8])?,
+            u32::try_from_le_slice(&bs[8..12])?,
+        );
+        Ok(i)
     }
 
     fn from_le_bytes(bs: Self::Buffer) -> Self {
