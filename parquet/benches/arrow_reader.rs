@@ -759,10 +759,11 @@ fn bench_byte_decimal<T>(
     );
 }
 
-fn bench_byte_stream_split_f16<T>(
+fn bench_f16<T>(
     group: &mut BenchmarkGroup<WallTime>,
     mandatory_column_desc: &ColumnDescPtr,
     optional_column_desc: &ColumnDescPtr,
+    encoding: Encoding,
     min: f32,
     max: f32,
 ) where
@@ -775,11 +776,11 @@ fn bench_byte_stream_split_f16<T>(
     let data = build_encoded_f16_bytes_page_iterator::<T>(
         mandatory_column_desc.clone(),
         0.0,
-        Encoding::BYTE_STREAM_SPLIT,
+        encoding,
         min,
         max,
     );
-    group.bench_function("byte_stream_split encoded, mandatory, no NULLs", |b| {
+    group.bench_function(encoding.to_string().to_lowercase() + " encoded, mandatory, no NULLs", |b| {
         b.iter(|| {
             let array_reader =
                 create_f16_by_bytes_reader(data.clone(), mandatory_column_desc.clone());
@@ -791,11 +792,11 @@ fn bench_byte_stream_split_f16<T>(
     let data = build_encoded_f16_bytes_page_iterator::<T>(
         optional_column_desc.clone(),
         0.0,
-        Encoding::BYTE_STREAM_SPLIT,
+        encoding,
         min,
         max,
     );
-    group.bench_function("byte_stream_split encoded, optional, no NULLs", |b| {
+    group.bench_function(encoding.to_string().to_lowercase() + " encoded, optional, no NULLs", |b| {
         b.iter(|| {
             let array_reader =
                 create_f16_by_bytes_reader(data.clone(), optional_column_desc.clone());
@@ -807,11 +808,11 @@ fn bench_byte_stream_split_f16<T>(
     let data = build_encoded_f16_bytes_page_iterator::<T>(
         optional_column_desc.clone(),
         0.5,
-        Encoding::BYTE_STREAM_SPLIT,
+        encoding,
         min,
         max,
     );
-    group.bench_function("byte_stream_split encoded, optional, half NULLs", |b| {
+    group.bench_function(encoding.to_string().to_lowercase() + " encoded, optional, half NULLs", |b| {
         b.iter(|| {
             let array_reader =
                 create_f16_by_bytes_reader(data.clone(), optional_column_desc.clone());
@@ -1134,16 +1135,30 @@ fn bench_primitive<T>(
     });
 }
 
-fn byte_stream_split_benches(c: &mut Criterion) {
+fn float16_benches(c: &mut Criterion) {
     let schema = build_test_schema();
 
-    let mut group = c.benchmark_group("arrow_array_reader/BYTE_STREAM_SPLIT/Float16Array");
+    let mut group = c.benchmark_group("arrow_array_reader/Float16Array");
     let mandatory_f16_leaf_desc = schema.column(17);
     let optional_f16_leaf_desc = schema.column(18);
-    bench_byte_stream_split_f16::<FixedLenByteArrayType>(
+    bench_f16::<FixedLenByteArrayType>(
         &mut group,
         &mandatory_f16_leaf_desc,
         &optional_f16_leaf_desc,
+        Encoding::PLAIN,
+        -1.0,
+        1.0,
+    );
+    group.finish();
+
+    let mut group = c.benchmark_group("arrow_array_reader/Float16Array");
+    let mandatory_f16_leaf_desc = schema.column(17);
+    let optional_f16_leaf_desc = schema.column(18);
+    bench_f16::<FixedLenByteArrayType>(
+        &mut group,
+        &mandatory_f16_leaf_desc,
+        &optional_f16_leaf_desc,
+        Encoding::BYTE_STREAM_SPLIT,
         -1.0,
         1.0,
     );
@@ -1753,6 +1768,6 @@ criterion_group!(
     benches,
     add_benches,
     decimal_benches,
-    byte_stream_split_benches,
+    float16_benches,
 );
 criterion_main!(benches);
