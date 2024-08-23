@@ -191,7 +191,7 @@ impl<T: ParquetValueType> NativeIndex<T> {
         let indexes = index
             .min_values
             .iter()
-            .zip(index.max_values.into_iter())
+            .zip(index.max_values.iter())
             .zip(index.null_pages.into_iter())
             .zip(null_counts.into_iter())
             .zip(rep_hists.into_iter())
@@ -205,8 +205,8 @@ impl<T: ParquetValueType> NativeIndex<T> {
                         (None, None)
                     } else {
                         (
-                            Some(T::try_from_le_slice(&min)?),
-                            Some(T::try_from_le_slice(&max)?),
+                            Some(T::try_from_le_slice(min)?),
+                            Some(T::try_from_le_slice(max)?),
                         )
                     };
                     Ok(PageIndex {
