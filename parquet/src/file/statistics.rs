@@ -257,7 +257,7 @@ pub fn to_thrift(stats: Option<&Statistics>) -> Option<TStatistics> {
         max: None,
         min: None,
         null_count,
-        distinct_count: stats.distinct_count().map(|value| value as i64),
+        distinct_count: stats.distinct_count_opt().map(|value| value as i64),
         max_value: None,
         min_value: None,
         is_max_value_exact: None,
@@ -380,7 +380,14 @@ impl Statistics {
 
     /// Returns optional value of number of distinct values occurring.
     /// When it is `None`, the value should be ignored.
+    #[deprecated(since = "53.0.0", note = "Use `distinct_count_opt` method instead")]
     pub fn distinct_count(&self) -> Option<u64> {
+        self.distinct_count_opt()
+    }
+
+    /// Returns optional value of number of distinct values occurring.
+    /// When it is `None`, the value should be ignored.
+    pub fn distinct_count_opt(&self) -> Option<u64> {
         statistics_enum_func![self, distinct_count]
     }
 
