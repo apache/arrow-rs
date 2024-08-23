@@ -62,7 +62,7 @@ fn set_upto_64bits(
 
     if len >= 64 {
         let len = 64 - std::cmp::max(read_shift, write_shift);
-        let chunk = read_bytes_to_u64(data, read_byte, 8);
+        let chunk = unsafe { read_bytes_to_u64(data, read_byte, 8) };
         let chunk = chunk >> read_shift;
         if chunk == 0 {
             (len, len)
@@ -86,16 +86,14 @@ fn set_upto_64bits(
     } else {
         let len = std::cmp::min(len, 64 - std::cmp::max(read_shift, write_shift));
         let bytes = ceil(len + read_shift, 8);
-        let chunk = read_bytes_to_u64(data, read_byte, bytes);
+        let chunk = unsafe { read_bytes_to_u64(data, read_byte, bytes) };
         let mask = u64::MAX >> (64 - len);
         let chunk = (chunk >> read_shift) & mask;
         if chunk == 0 {
             (len, len)
         } else if len == 1 {
             let ptr = write_data.as_ptr() as *mut u8;
-            unsafe {
-                *ptr.add(write_byte) |= 1 << write_shift;
-            }
+            unsafe { *ptr.add(write_byte) |= 1 << write_shift };
             (0, 1)
         } else {
             let ptr = write_data.as_ptr() as *mut u8;
@@ -103,23 +101,22 @@ fn set_upto_64bits(
             let null_count = len - chunk.count_ones() as usize;
             let bytes = ceil(len + write_shift, 8);
             for (i, c) in chunk.to_le_bytes().iter().enumerate().take(bytes) {
-                unsafe {
-                    *ptr.add(write_byte + i) |= c;
-                }
+                unsafe { *ptr.add(write_byte + i) |= c };
             }
             (null_count, len)
         }
     }
 }
 
+/// # Safety
+/// The caller must ensure all arguments are within the valid range.
+/// The caller must be aware `8 - count` bytes in the returned value might be uninitialized.
 #[inline]
-fn read_bytes_to_u64(data: &[u8], i: usize, bytes: usize) -> u64 {
+unsafe fn read_bytes_to_u64(data: &[u8], offset: usize, count: usize) -> u64 {
     let mut tmp = std::mem::MaybeUninit::<u64>::uninit();
-    unsafe {
-        let src = data.as_ptr().add(i);
-        std::ptr::copy_nonoverlapping(src, tmp.as_mut_ptr() as *mut u8, bytes);
-        tmp.assume_init()
-    }
+    let src = data.as_ptr().add(offset);
+    std::ptr::copy_nonoverlapping(src, tmp.as_mut_ptr() as *mut u8, count);
+    tmp.assume_init()
 }
 
 #[cfg(test)]
