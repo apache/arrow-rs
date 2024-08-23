@@ -66,22 +66,38 @@ fn set_upto_64bits(
         let chunk = chunk >> read_shift;
         if chunk == 0 {
             (len, len)
+        } else if write_shift == 0 {
+            let null_count = len - chunk.count_ones() as usize;
+            unsafe {
+                let ptr = write_data.as_ptr().add(write_byte) as *mut u64;
+                ptr.write_unaligned(chunk);
+            }
+            (null_count, len)
         } else {
             let chunk = chunk << write_shift;
             let null_count = len - chunk.count_ones() as usize;
             let c = chunk.to_le_bytes();
-            let ptr = write_data.as_ptr() as *mut u8;
             unsafe {
-                *ptr.add(write_byte) |= c[0];
-                *ptr.add(write_byte + 1) = c[1];
-                *ptr.add(write_byte + 2) = c[2];
-                *ptr.add(write_byte + 3) = c[3];
-                *ptr.add(write_byte + 4) = c[4];
-                *ptr.add(write_byte + 5) = c[5];
-                *ptr.add(write_byte + 6) = c[6];
-                *ptr.add(write_byte + 7) |= c[7];
+                let ptr = write_data.as_mut_ptr().add(write_byte);
+                *ptr |= c[0];
+                *ptr.add(1) = c[1];
+                *ptr.add(2) = c[2];
+                *ptr.add(3) = c[3];
+                *ptr.add(4) = c[4];
+                *ptr.add(5) = c[5];
+                *ptr.add(6) = c[6];
+                *ptr.add(7) |= c[7];
             }
             (null_count, len)
+        }
+    } else if len == 1 {
+        let c = unsafe { *data.as_ptr().add(read_byte) } & 1;
+        if c == 0 {
+            (1, 1)
+        } else {
+            let ptr = write_data.as_mut_ptr();
+            unsafe { *ptr.add(write_byte) |= 1 << write_shift };
+            (0, 1)
         }
     } else {
         let len = std::cmp::min(len, 64 - std::cmp::max(read_shift, write_shift));
@@ -91,17 +107,13 @@ fn set_upto_64bits(
         let chunk = (chunk >> read_shift) & mask;
         if chunk == 0 {
             (len, len)
-        } else if len == 1 {
-            let ptr = write_data.as_ptr() as *mut u8;
-            unsafe { *ptr.add(write_byte) |= 1 << write_shift };
-            (0, 1)
         } else {
-            let ptr = write_data.as_ptr() as *mut u8;
             let chunk = chunk << write_shift;
             let null_count = len - chunk.count_ones() as usize;
             let bytes = ceil(len + write_shift, 8);
+            let ptr = unsafe { write_data.as_mut_ptr().add(write_byte) };
             for (i, c) in chunk.to_le_bytes().iter().enumerate().take(bytes) {
-                unsafe { *ptr.add(write_byte + i) |= c };
+                unsafe { *ptr.add(i) |= c };
             }
             (null_count, len)
         }
@@ -115,8 +127,10 @@ fn set_upto_64bits(
 unsafe fn read_bytes_to_u64(data: &[u8], offset: usize, count: usize) -> u64 {
     let mut tmp = std::mem::MaybeUninit::<u64>::uninit();
     let src = data.as_ptr().add(offset);
-    std::ptr::copy_nonoverlapping(src, tmp.as_mut_ptr() as *mut u8, count);
-    tmp.assume_init()
+    unsafe {
+        std::ptr::copy_nonoverlapping(src, tmp.as_mut_ptr() as *mut u8, count);
+        tmp.assume_init()
+    }
 }
 
 #[cfg(test)]
