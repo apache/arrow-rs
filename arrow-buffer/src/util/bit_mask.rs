@@ -69,7 +69,7 @@ fn set_upto_64bits(
         } else if write_shift == 0 {
             let null_count = len - chunk.count_ones() as usize;
             unsafe {
-                let ptr = write_data.as_ptr().add(write_byte) as *mut u64;
+                let ptr = write_data.as_mut_ptr().add(write_byte) as *mut u64;
                 ptr.write_unaligned(chunk);
             }
             (null_count, len)
@@ -91,7 +91,7 @@ fn set_upto_64bits(
             (null_count, len)
         }
     } else if len == 1 {
-        let c = unsafe { *data.as_ptr().add(read_byte) } & 1;
+        let c = (unsafe { *data.as_ptr().add(read_byte) } >> read_shift) & 1;
         if c == 0 {
             (1, 1)
         } else {
