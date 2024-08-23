@@ -636,6 +636,13 @@ fn create_decimal_by_bytes_reader(
     }
 }
 
+fn create_fixed_len_byte_array_reader(
+    page_iterator: impl PageIterator + 'static,
+    column_desc: ColumnDescPtr,
+) -> Box<dyn ArrayReader> {
+    make_fixed_len_byte_array_reader(Box::new(page_iterator), column_desc, None).unwrap()
+}
+
 fn create_byte_array_reader(
     page_iterator: impl PageIterator + 'static,
     column_desc: ColumnDescPtr,
@@ -682,6 +689,7 @@ fn bench_byte_decimal<T>(
     group: &mut BenchmarkGroup<WallTime>,
     mandatory_column_desc: &ColumnDescPtr,
     optional_column_desc: &ColumnDescPtr,
+    encoding: Encoding,
     min: i128,
     max: i128,
 ) where
@@ -691,55 +699,64 @@ fn bench_byte_decimal<T>(
     // all are plain encoding
     let mut count: usize = 0;
 
-    // plain encoded, no NULLs
+    // no NULLs
     let data = build_encoded_decimal_bytes_page_iterator::<T>(
         mandatory_column_desc.clone(),
         0.0,
-        Encoding::PLAIN,
+        encoding,
         min,
         max,
     );
-    group.bench_function("plain encoded, mandatory, no NULLs", |b| {
-        b.iter(|| {
-            let array_reader =
-                create_decimal_by_bytes_reader(data.clone(), mandatory_column_desc.clone());
-            count = bench_array_reader(array_reader);
-        });
-        assert_eq!(count, EXPECTED_VALUE_COUNT);
-    });
+    group.bench_function(
+        encoding.to_string().to_lowercase() + " encoded, mandatory, no NULLs",
+        |b| {
+            b.iter(|| {
+                let array_reader =
+                    create_decimal_by_bytes_reader(data.clone(), mandatory_column_desc.clone());
+                count = bench_array_reader(array_reader);
+            });
+            assert_eq!(count, EXPECTED_VALUE_COUNT);
+        },
+    );
 
     let data = build_encoded_decimal_bytes_page_iterator::<T>(
         optional_column_desc.clone(),
         0.0,
-        Encoding::PLAIN,
+        encoding,
         min,
         max,
     );
-    group.bench_function("plain encoded, optional, no NULLs", |b| {
-        b.iter(|| {
-            let array_reader =
-                create_decimal_by_bytes_reader(data.clone(), optional_column_desc.clone());
-            count = bench_array_reader(array_reader);
-        });
-        assert_eq!(count, EXPECTED_VALUE_COUNT);
-    });
+    group.bench_function(
+        encoding.to_string().to_lowercase() + " encoded, optional, no NULLs",
+        |b| {
+            b.iter(|| {
+                let array_reader =
+                    create_decimal_by_bytes_reader(data.clone(), optional_column_desc.clone());
+                count = bench_array_reader(array_reader);
+            });
+            assert_eq!(count, EXPECTED_VALUE_COUNT);
+        },
+    );
 
     // half null
     let data = build_encoded_decimal_bytes_page_iterator::<T>(
         optional_column_desc.clone(),
         0.5,
-        Encoding::PLAIN,
+        encoding,
         min,
         max,
     );
-    group.bench_function("plain encoded, optional, half NULLs", |b| {
-        b.iter(|| {
-            let array_reader =
-                create_decimal_by_bytes_reader(data.clone(), optional_column_desc.clone());
-            count = bench_array_reader(array_reader);
-        });
-        assert_eq!(count, EXPECTED_VALUE_COUNT);
-    });
+    group.bench_function(
+        encoding.to_string().to_lowercase() + " encoded, optional, half NULLs",
+        |b| {
+            b.iter(|| {
+                let array_reader =
+                    create_decimal_by_bytes_reader(data.clone(), optional_column_desc.clone());
+                count = bench_array_reader(array_reader);
+            });
+            assert_eq!(count, EXPECTED_VALUE_COUNT);
+        },
+    );
 }
 
 fn bench_byte_stream_split_f16<T>(
@@ -813,7 +830,7 @@ fn bench_flba<const BYTE_LENGTH: usize>(
     let mut count: usize = 0;
 
     encoding.to_string();
-    // byte_stream_split encoded, no NULLs
+    // no NULLs
     let data = build_encoded_flba_bytes_page_iterator::<BYTE_LENGTH>(
         mandatory_column_desc.clone(),
         0.0,
@@ -824,7 +841,7 @@ fn bench_flba<const BYTE_LENGTH: usize>(
         |b| {
             b.iter(|| {
                 let array_reader =
-                    create_f16_by_bytes_reader(data.clone(), mandatory_column_desc.clone());
+                    create_fixed_len_byte_array_reader(data.clone(), mandatory_column_desc.clone());
                 count = bench_array_reader(array_reader);
             });
             assert_eq!(count, EXPECTED_VALUE_COUNT);
@@ -834,31 +851,32 @@ fn bench_flba<const BYTE_LENGTH: usize>(
     let data = build_encoded_flba_bytes_page_iterator::<BYTE_LENGTH>(
         optional_column_desc.clone(),
         0.0,
-        Encoding::BYTE_STREAM_SPLIT,
+        encoding,
     );
     group.bench_function(
         encoding.to_string().to_lowercase() + " encoded, optional, no NULLs",
         |b| {
             b.iter(|| {
                 let array_reader =
-                    create_f16_by_bytes_reader(data.clone(), optional_column_desc.clone());
+                    create_fixed_len_byte_array_reader(data.clone(), optional_column_desc.clone());
                 count = bench_array_reader(array_reader);
             });
             assert_eq!(count, EXPECTED_VALUE_COUNT);
         },
     );
 
+    // half null
     let data = build_encoded_flba_bytes_page_iterator::<BYTE_LENGTH>(
         optional_column_desc.clone(),
         0.5,
-        Encoding::BYTE_STREAM_SPLIT,
+        encoding,
     );
     group.bench_function(
         encoding.to_string().to_lowercase() + " encoded, optional, half NULLs",
         |b| {
             b.iter(|| {
                 let array_reader =
-                    create_f16_by_bytes_reader(data.clone(), optional_column_desc.clone());
+                    create_fixed_len_byte_array_reader(data.clone(), optional_column_desc.clone());
                 count = bench_array_reader(array_reader);
             });
             assert_eq!(count, EXPECTED_VALUE_COUNT);
@@ -866,67 +884,23 @@ fn bench_flba<const BYTE_LENGTH: usize>(
     );
 }
 
-fn bench_byte_stream_split_decimal<T>(
+fn bench_fixed_len_byte_array<const BYTE_LENGTH: usize>(
     group: &mut BenchmarkGroup<WallTime>,
     mandatory_column_desc: &ColumnDescPtr,
     optional_column_desc: &ColumnDescPtr,
-    min: i128,
-    max: i128,
-) where
-    T: parquet::data_type::DataType,
-    T::T: From<Vec<u8>>,
-{
-    let mut count: usize = 0;
-
-    // byte_stream_split encoded, no NULLs
-    let data = build_encoded_decimal_bytes_page_iterator::<T>(
-        mandatory_column_desc.clone(),
-        0.0,
-        Encoding::BYTE_STREAM_SPLIT,
-        min,
-        max,
+) {
+    bench_flba::<BYTE_LENGTH>(
+        group,
+        mandatory_column_desc,
+        optional_column_desc,
+        Encoding::PLAIN,
     );
-    group.bench_function("byte_stream_split encoded, mandatory, no NULLs", |b| {
-        b.iter(|| {
-            let array_reader =
-                create_decimal_by_bytes_reader(data.clone(), mandatory_column_desc.clone());
-            count = bench_array_reader(array_reader);
-        });
-        assert_eq!(count, EXPECTED_VALUE_COUNT);
-    });
-
-    let data = build_encoded_decimal_bytes_page_iterator::<T>(
-        optional_column_desc.clone(),
-        0.0,
+    bench_flba::<BYTE_LENGTH>(
+        group,
+        mandatory_column_desc,
+        optional_column_desc,
         Encoding::BYTE_STREAM_SPLIT,
-        min,
-        max,
     );
-    group.bench_function("byte_stream_split encoded, optional, no NULLs", |b| {
-        b.iter(|| {
-            let array_reader =
-                create_decimal_by_bytes_reader(data.clone(), optional_column_desc.clone());
-            count = bench_array_reader(array_reader);
-        });
-        assert_eq!(count, EXPECTED_VALUE_COUNT);
-    });
-
-    // half null
-    let data = build_encoded_decimal_bytes_page_iterator::<T>(
-        optional_column_desc.clone(),
-        0.5,
-        Encoding::BYTE_STREAM_SPLIT,
-        min,
-        max,
-    );
-    group.bench_function("byte_stream_split encoded, optional, half NULLs", |b| {
-        b.iter(|| {
-            let array_reader =
-                create_decimal_by_bytes_reader(data.clone(), optional_column_desc.clone());
-            count = bench_array_reader(array_reader);
-        });
-        assert_eq!(count, EXPECTED_VALUE_COUNT);
-    });
 }
 
 fn bench_primitive<T>(
@@ -1108,23 +1082,60 @@ fn bench_primitive<T>(
         });
         assert_eq!(count, EXPECTED_VALUE_COUNT);
     });
+
+    // byte_stream_split encoded, no NULLs
+    let data = build_encoded_primitive_page_iterator::<T>(
+        mandatory_column_desc.clone(),
+        0.0,
+        Encoding::BYTE_STREAM_SPLIT,
+        min,
+        max,
+    );
+    group.bench_function("byte_stream_split encoded, mandatory, no NULLs", |b| {
+        b.iter(|| {
+            let array_reader =
+                create_primitive_array_reader(data.clone(), mandatory_column_desc.clone());
+            count = bench_array_reader(array_reader);
+        });
+        assert_eq!(count, EXPECTED_VALUE_COUNT);
+    });
+
+    let data = build_encoded_primitive_page_iterator::<T>(
+        optional_column_desc.clone(),
+        0.0,
+        Encoding::BYTE_STREAM_SPLIT,
+        min,
+        max,
+    );
+    group.bench_function("byte_stream_split encoded, optional, no NULLs", |b| {
+        b.iter(|| {
+            let array_reader =
+                create_primitive_array_reader(data.clone(), optional_column_desc.clone());
+            count = bench_array_reader(array_reader);
+        });
+        assert_eq!(count, EXPECTED_VALUE_COUNT);
+    });
+
+    // plain encoded, half NULLs
+    let data = build_encoded_primitive_page_iterator::<T>(
+        optional_column_desc.clone(),
+        0.5,
+        Encoding::BYTE_STREAM_SPLIT,
+        min,
+        max,
+    );
+    group.bench_function("byte_stream_split encoded, optional, half NULLs", |b| {
+        b.iter(|| {
+            let array_reader =
+                create_primitive_array_reader(data.clone(), optional_column_desc.clone());
+            count = bench_array_reader(array_reader);
+        });
+        assert_eq!(count, EXPECTED_VALUE_COUNT);
+    });
 }
 
 fn byte_stream_split_benches(c: &mut Criterion) {
     let schema = build_test_schema();
-
-    let mut group = c.benchmark_group("arrow_array_reader/BYTE_STREAM_SPLIT/Decimal128Array");
-    let mandatory_decimal4_leaf_desc = schema.column(12);
-    let optional_decimal4_leaf_desc = schema.column(13);
-    bench_byte_stream_split_decimal::<FixedLenByteArrayType>(
-        &mut group,
-        &mandatory_decimal4_leaf_desc,
-        &optional_decimal4_leaf_desc,
-        // precision is 16: the max is 9999999999999999
-        9999999999999000,
-        9999999999999999,
-    );
-    group.finish();
 
     let mut group = c.benchmark_group("arrow_array_reader/BYTE_STREAM_SPLIT/Float16Array");
     let mandatory_f16_leaf_desc = schema.column(17);
@@ -1135,50 +1146,6 @@ fn byte_stream_split_benches(c: &mut Criterion) {
         &optional_f16_leaf_desc,
         -1.0,
         1.0,
-    );
-    group.finish();
-
-    let mut group = c.benchmark_group("arrow_array_reader/BYTE_STREAM_SPLIT/FixedLenByteArray(2)");
-    let mandatory_flba2_leaf_desc = schema.column(19);
-    let optional_flba2_leaf_desc = schema.column(20);
-    bench_flba::<2>(
-        &mut group,
-        &mandatory_flba2_leaf_desc,
-        &optional_flba2_leaf_desc,
-        Encoding::BYTE_STREAM_SPLIT,
-    );
-    group.finish();
-
-    let mut group = c.benchmark_group("arrow_array_reader/BYTE_STREAM_SPLIT/FixedLenByteArray(4)");
-    let mandatory_flba4_leaf_desc = schema.column(21);
-    let optional_flba4_leaf_desc = schema.column(22);
-    bench_flba::<4>(
-        &mut group,
-        &mandatory_flba4_leaf_desc,
-        &optional_flba4_leaf_desc,
-        Encoding::BYTE_STREAM_SPLIT,
-    );
-    group.finish();
-
-    let mut group = c.benchmark_group("arrow_array_reader/BYTE_STREAM_SPLIT/FixedLenByteArray(8)");
-    let mandatory_flba8_leaf_desc = schema.column(23);
-    let optional_flba8_leaf_desc = schema.column(24);
-    bench_flba::<8>(
-        &mut group,
-        &mandatory_flba8_leaf_desc,
-        &optional_flba8_leaf_desc,
-        Encoding::BYTE_STREAM_SPLIT,
-    );
-    group.finish();
-
-    let mut group = c.benchmark_group("arrow_array_reader/BYTE_STREAM_SPLIT/FixedLenByteArray(16)");
-    let mandatory_flba16_leaf_desc = schema.column(25);
-    let optional_flba16_leaf_desc = schema.column(26);
-    bench_flba::<16>(
-        &mut group,
-        &mandatory_flba16_leaf_desc,
-        &optional_flba16_leaf_desc,
-        Encoding::BYTE_STREAM_SPLIT,
     );
     group.finish();
 }
@@ -1221,6 +1188,22 @@ fn decimal_benches(c: &mut Criterion) {
         &mut group,
         &mandatory_decimal3_leaf_desc,
         &optional_decimal3_leaf_desc,
+        Encoding::PLAIN,
+        // precision is 16: the max is 9999999999999999
+        9999999999999000,
+        9999999999999999,
+    );
+    group.finish();
+
+    // parquet FIXED_LEN_BYTE_ARRAY, logical type decimal(16,2)
+    let mut group = c.benchmark_group("arrow_array_reader/FIXED_LENGTH_BYTE_ARRAY/Decimal128Array");
+    let mandatory_decimal4_leaf_desc = schema.column(12);
+    let optional_decimal4_leaf_desc = schema.column(13);
+    bench_byte_decimal::<FixedLenByteArrayType>(
+        &mut group,
+        &mandatory_decimal4_leaf_desc,
+        &optional_decimal4_leaf_desc,
+        Encoding::PLAIN,
         // precision is 16: the max is 9999999999999999
         9999999999999000,
         9999999999999999,
@@ -1234,6 +1217,7 @@ fn decimal_benches(c: &mut Criterion) {
         &mut group,
         &mandatory_decimal4_leaf_desc,
         &optional_decimal4_leaf_desc,
+        Encoding::BYTE_STREAM_SPLIT,
         // precision is 16: the max is 9999999999999999
         9999999999999000,
         9999999999999999,
@@ -1727,44 +1711,40 @@ fn add_benches(c: &mut Criterion) {
     let mut group = c.benchmark_group("arrow_array_reader/FixedLenByteArray(2)");
     let mandatory_flba2_leaf_desc = schema.column(19);
     let optional_flba2_leaf_desc = schema.column(20);
-    bench_flba::<2>(
+    bench_fixed_len_byte_array::<2>(
         &mut group,
         &mandatory_flba2_leaf_desc,
         &optional_flba2_leaf_desc,
-        Encoding::PLAIN,
     );
     group.finish();
 
     let mut group = c.benchmark_group("arrow_array_reader/FixedLenByteArray(4)");
     let mandatory_flba4_leaf_desc = schema.column(21);
     let optional_flba4_leaf_desc = schema.column(22);
-    bench_flba::<4>(
+    bench_fixed_len_byte_array::<4>(
         &mut group,
         &mandatory_flba4_leaf_desc,
         &optional_flba4_leaf_desc,
-        Encoding::PLAIN,
     );
     group.finish();
 
     let mut group = c.benchmark_group("arrow_array_reader/FixedLenByteArray(8)");
     let mandatory_flba8_leaf_desc = schema.column(23);
     let optional_flba8_leaf_desc = schema.column(24);
-    bench_flba::<8>(
+    bench_fixed_len_byte_array::<8>(
         &mut group,
         &mandatory_flba8_leaf_desc,
         &optional_flba8_leaf_desc,
-        Encoding::PLAIN,
     );
     group.finish();
 
     let mut group = c.benchmark_group("arrow_array_reader/FixedLenByteArray(16)");
     let mandatory_flba16_leaf_desc = schema.column(25);
     let optional_flba16_leaf_desc = schema.column(26);
-    bench_flba::<16>(
+    bench_fixed_len_byte_array::<16>(
         &mut group,
         &mandatory_flba16_leaf_desc,
         &optional_flba16_leaf_desc,
-        Encoding::PLAIN,
     );
     group.finish();
 }
