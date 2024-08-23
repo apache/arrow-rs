@@ -204,11 +204,9 @@ impl<T: ParquetValueType> NativeIndex<T> {
                     let (min, max) = if is_null {
                         (None, None)
                     } else {
-                        let min = min.as_slice();
-                        let max = max.as_slice();
                         (
-                            Some(T::try_from_le_slice(min)?),
-                            Some(T::try_from_le_slice(max)?),
+                            Some(T::try_from_le_slice(&min)?),
+                            Some(T::try_from_le_slice(&max)?),
                         )
                     };
                     Ok(PageIndex {
