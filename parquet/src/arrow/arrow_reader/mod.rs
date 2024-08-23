@@ -954,7 +954,9 @@ mod tests {
     use arrow_array::*;
     use arrow_buffer::{i256, ArrowNativeType, Buffer, IntervalDayTime};
     use arrow_data::ArrayDataBuilder;
-    use arrow_schema::{ArrowError, DataType as ArrowDataType, Field, Fields, Schema, SchemaRef, TimeUnit};
+    use arrow_schema::{
+        ArrowError, DataType as ArrowDataType, Field, Fields, Schema, SchemaRef, TimeUnit,
+    };
     use arrow_select::concat::concat_batches;
 
     use crate::arrow::arrow_reader::{
@@ -1227,10 +1229,24 @@ mod tests {
     #[test]
     fn test_time_utc_roundtrip() -> Result<()> {
         let schema = Arc::new(Schema::new(vec![
-            Field::new("time_millis", ArrowDataType::Time32(TimeUnit::Millisecond), true)
-                .with_metadata(HashMap::from_iter(vec![("adjusted_to_utc".to_string(), "".to_string())])),
-            Field::new("time_micros", ArrowDataType::Time64(TimeUnit::Microsecond), true)
-                .with_metadata(HashMap::from_iter(vec![("adjusted_to_utc".to_string(), "".to_string())])),
+            Field::new(
+                "time_millis",
+                ArrowDataType::Time32(TimeUnit::Millisecond),
+                true,
+            )
+            .with_metadata(HashMap::from_iter(vec![(
+                "adjusted_to_utc".to_string(),
+                "".to_string(),
+            )])),
+            Field::new(
+                "time_micros",
+                ArrowDataType::Time64(TimeUnit::Microsecond),
+                true,
+            )
+            .with_metadata(HashMap::from_iter(vec![(
+                "adjusted_to_utc".to_string(),
+                "".to_string(),
+            )])),
         ]));
 
         let mut buf = Vec::with_capacity(1024);
