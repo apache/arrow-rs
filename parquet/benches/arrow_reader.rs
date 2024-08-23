@@ -1138,7 +1138,7 @@ fn bench_primitive<T>(
 fn float16_benches(c: &mut Criterion) {
     let schema = build_test_schema();
 
-    let mut group = c.benchmark_group("arrow_array_reader/Float16Array");
+    let mut group = c.benchmark_group("arrow_array_reader/FIXED_LEN_BYTE_ARRAY/Float16Array");
     let mandatory_f16_leaf_desc = schema.column(17);
     let optional_f16_leaf_desc = schema.column(18);
     bench_f16::<FixedLenByteArrayType>(
@@ -1151,7 +1151,7 @@ fn float16_benches(c: &mut Criterion) {
     );
     group.finish();
 
-    let mut group = c.benchmark_group("arrow_array_reader/Float16Array");
+    let mut group = c.benchmark_group("arrow_array_reader/FIXED_LEN_BYTE_ARRAY/Float16Array");
     let mandatory_f16_leaf_desc = schema.column(17);
     let optional_f16_leaf_desc = schema.column(18);
     bench_f16::<FixedLenByteArrayType>(
@@ -1211,7 +1211,7 @@ fn decimal_benches(c: &mut Criterion) {
     group.finish();
 
     // parquet FIXED_LEN_BYTE_ARRAY, logical type decimal(16,2)
-    let mut group = c.benchmark_group("arrow_array_reader/FIXED_LENGTH_BYTE_ARRAY/Decimal128Array");
+    let mut group = c.benchmark_group("arrow_array_reader/FIXED_LEN_BYTE_ARRAY/Decimal128Array");
     let mandatory_decimal4_leaf_desc = schema.column(12);
     let optional_decimal4_leaf_desc = schema.column(13);
     bench_byte_decimal::<FixedLenByteArrayType>(
@@ -1225,7 +1225,7 @@ fn decimal_benches(c: &mut Criterion) {
     );
     group.finish();
 
-    let mut group = c.benchmark_group("arrow_array_reader/FIXED_LENGTH_BYTE_ARRAY/Decimal128Array");
+    let mut group = c.benchmark_group("arrow_array_reader/FIXED_LEN_BYTE_ARRAY/Decimal128Array");
     let mandatory_decimal4_leaf_desc = schema.column(12);
     let optional_decimal4_leaf_desc = schema.column(13);
     bench_byte_decimal::<FixedLenByteArrayType>(
