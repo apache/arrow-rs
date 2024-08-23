@@ -256,7 +256,11 @@ impl ValuesBuffer for FixedLenByteArrayBuffer {
 
             let level_pos_bytes = level_pos * byte_length;
             let value_pos_bytes = value_pos * byte_length;
-            // testing shows up to byte_length == 4 prefers the loop, 8 and up prefers copy_within
+
+            // Move the bytes from value_pos to level_pos. For values of `byte_length` <= 4,
+            // the simple loop is preferred as the compiler can eliminate the loop via unrolling. 
+            // For `byte_length > 4`, we instead copy from non-overlapping slices. This allows 
+            // the loop to be vectorized, yielding much better performance.
             if byte_length > 4 {
                 let split = self.buffer.split_at_mut(level_pos_bytes);
                 let dst = &mut split.1[..byte_length];
