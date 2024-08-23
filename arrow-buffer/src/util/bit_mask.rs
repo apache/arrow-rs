@@ -61,42 +61,48 @@ fn set_upto_64bits(
     let write_shift = offset_write % 8;
 
     if len >= 64 {
-        let len = 64 - std::cmp::max(read_shift, write_shift);
         let chunk = unsafe { read_bytes_to_u64(data, read_byte, 8) };
-        let chunk = chunk >> read_shift;
-        if chunk == 0 {
-            (len, len)
-        } else if write_shift == 0 {
-            let null_count = len - chunk.count_ones() as usize;
-            unsafe {
-                let ptr = write_data.as_mut_ptr().add(write_byte) as *mut u64;
-                ptr.write_unaligned(chunk);
-            }
-            (null_count, len)
-        } else if write_shift > read_shift {
-            let len = 64 - read_shift;
-            let null_count = len - chunk.count_ones() as usize;
-            unsafe {
+        if read_shift == 0 {
+            if write_shift == 0 {
+                let len = 64;
+                let null_count = chunk.count_zeros() as usize;
+                unsafe {
+                    let ptr = write_data.as_mut_ptr().add(write_byte) as *mut u64;
+                    ptr.write_unaligned(chunk);
+                }
+                (null_count, len)
+            } else {
+                let len = 64 - write_shift;
                 let chunk = chunk << write_shift;
-                let ptr = write_data.as_mut_ptr().add(write_byte);
-                let chunk = chunk | (*ptr) as u64;
-                (ptr as *mut u64).write_unaligned(chunk);
+                let null_count = len - chunk.count_ones() as usize;
+                unsafe {
+                    let ptr = write_data.as_mut_ptr().add(write_byte);
+                    let chunk = chunk | (*ptr) as u64;
+                    (ptr as *mut u64).write_unaligned(chunk);
+                }
+                (null_count, len)
             }
-            unsafe {
-                let chunk = chunk >> (64 - write_shift);
-                let ptr = write_data.as_mut_ptr().add(write_byte + 8);
-                *ptr |= chunk as u8;
-            }
-            (null_count, len)
         } else {
-            let chunk = chunk << write_shift;
-            let null_count = len - chunk.count_ones() as usize;
-            unsafe {
-                let ptr = write_data.as_mut_ptr().add(write_byte);
-                let chunk = chunk | (*ptr) as u64;
-                (ptr as *mut u64).write_unaligned(chunk);
+            if write_shift == 0 {
+                let len = 64 - 8; // 56 bits so that write_shift == 0 for the next iteration
+                let chunk = (chunk >> read_shift) | 0x00FFFFFFFFFFFFFF; // 56 bits mask
+                let null_count = len - chunk.count_ones() as usize;
+                unsafe {
+                    let ptr = write_data.as_mut_ptr().add(write_byte) as *mut u64;
+                    ptr.write_unaligned(chunk);
+                }
+                (null_count, len)
+            } else {
+                let len = 64 - std::cmp::max(read_shift, write_shift);
+                let chunk = (chunk >> read_shift) << write_shift;
+                let null_count = len - chunk.count_ones() as usize;
+                unsafe {
+                    let ptr = write_data.as_mut_ptr().add(write_byte);
+                    let chunk = chunk | (*ptr) as u64;
+                    (ptr as *mut u64).write_unaligned(chunk);
+                }
+                (null_count, len)
             }
-            (null_count, len)
         }
     } else if len == 1 {
         let c = (unsafe { *data.as_ptr().add(read_byte) } >> read_shift) & 1;
