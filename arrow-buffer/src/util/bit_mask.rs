@@ -91,25 +91,23 @@ fn set_upto_64bits(
         let chunk = (chunk >> read_shift) & mask;
         if chunk == 0 {
             (len, len)
-        } else {
-            if len == 1 {
-                let ptr = write_data.as_ptr() as *mut u8;
-                unsafe {
-                    *ptr.add(write_byte) |= 1 << write_shift;
-                }
-                (0, 1)
-            } else {
-                let ptr = write_data.as_ptr() as *mut u8;
-                let chunk = chunk << write_shift;
-                let null_count = len - chunk.count_ones() as usize;
-                let bytes = ceil(len + write_shift, 8);
-                for (i, c) in chunk.to_le_bytes().iter().enumerate().take(bytes) {
-                    unsafe {
-                        *ptr.add(write_byte + i) |= c;
-                    }
-                }
-                (null_count, len)
+        } else if len == 1 {
+            let ptr = write_data.as_ptr() as *mut u8;
+            unsafe {
+                *ptr.add(write_byte) |= 1 << write_shift;
             }
+            (0, 1)
+        } else {
+            let ptr = write_data.as_ptr() as *mut u8;
+            let chunk = chunk << write_shift;
+            let null_count = len - chunk.count_ones() as usize;
+            let bytes = ceil(len + write_shift, 8);
+            for (i, c) in chunk.to_le_bytes().iter().enumerate().take(bytes) {
+                unsafe {
+                    *ptr.add(write_byte + i) |= c;
+                }
+            }
+            (null_count, len)
         }
     }
 }
