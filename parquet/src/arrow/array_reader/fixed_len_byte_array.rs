@@ -258,6 +258,9 @@ fn move_values<F>(
 }
 
 impl ValuesBuffer for FixedLenByteArrayBuffer {
+    // Silence clippy warning. `copy_from_slice` is slower than allowing the compiler to vectorize
+    // `dst[i] = src[i]` below.
+    #[allow(clippy::manual_memcpy)]
     fn pad_nulls(
         &mut self,
         read_offset: usize,
