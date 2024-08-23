@@ -258,9 +258,6 @@ fn move_values<F>(
 }
 
 impl ValuesBuffer for FixedLenByteArrayBuffer {
-    // Silence clippy warning. `copy_from_slice` is slower than allowing the compiler to vectorize
-    // `dst[i] = src[i]` below.
-    #[allow(clippy::manual_memcpy)]
     fn pad_nulls(
         &mut self,
         read_offset: usize,
@@ -285,9 +282,7 @@ impl ValuesBuffer for FixedLenByteArrayBuffer {
                 let split = buffer.split_at_mut(level_pos_bytes);
                 let dst = &mut split.1[..byte_length];
                 let src = &split.0[value_pos_bytes..value_pos_bytes + byte_length];
-                for i in 0..byte_length {
-                    dst[i] = src[i]
-                }
+                dst.copy_from_slice(src);
             };
             move_values(&mut self.buffer, byte_length, values_range, valid_mask, op);
         } else {
