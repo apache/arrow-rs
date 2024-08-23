@@ -781,7 +781,6 @@ mod tests {
     use crate::file::writer::SerializedFileWriter;
     use crate::record::RowAccessor;
     use crate::schema::parser::parse_message_type;
-    use crate::util::bit_util::from_le_slice;
     use crate::util::test_common::file_util::{get_test_file, get_test_path};
 
     use super::*;
@@ -1537,8 +1536,8 @@ mod tests {
         assert_eq!(row_group_index.indexes.len(), page_size);
         assert_eq!(row_group_index.boundary_order, boundary_order);
         row_group_index.indexes.iter().all(|x| {
-            x.min.as_ref().unwrap() >= &from_le_slice::<T>(min_max.0)
-                && x.max.as_ref().unwrap() <= &from_le_slice::<T>(min_max.1)
+            x.min.as_ref().unwrap() >= &T::try_from_le_slice(min_max.0).unwrap()
+                && x.max.as_ref().unwrap() <= &T::try_from_le_slice(min_max.1).unwrap()
         });
     }
 

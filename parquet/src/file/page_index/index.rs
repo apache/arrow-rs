@@ -23,7 +23,6 @@ use crate::data_type::{AsBytes, ByteArray, FixedLenByteArray, Int96};
 use crate::errors::ParquetError;
 use crate::file::metadata::LevelHistogram;
 use crate::format::{BoundaryOrder, ColumnIndex};
-use crate::util::bit_util::from_le_slice;
 use std::fmt::Debug;
 
 /// Typed statistics for one data page
@@ -207,7 +206,7 @@ impl<T: ParquetValueType> NativeIndex<T> {
                     } else {
                         let min = min.as_slice();
                         let max = max.as_slice();
-                        (Some(from_le_slice::<T>(min)), Some(from_le_slice::<T>(max)))
+                        (Some(T::try_from_le_slice(min)?), Some(T::try_from_le_slice(max)?))
                     };
                     Ok(PageIndex {
                         min,
