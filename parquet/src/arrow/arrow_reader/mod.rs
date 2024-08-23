@@ -932,7 +932,7 @@ pub(crate) fn evaluate_predicate(
 #[cfg(test)]
 mod tests {
     use std::cmp::min;
-    use std::collections::VecDeque;
+    use std::collections::{HashMap, VecDeque};
     use std::fmt::Formatter;
     use std::fs::File;
     use std::io::Seek;
@@ -949,11 +949,14 @@ mod tests {
     use arrow_array::cast::AsArray;
     use arrow_array::types::{
         Decimal128Type, Decimal256Type, DecimalType, Float16Type, Float32Type, Float64Type,
+        Time32MillisecondType, Time64MicrosecondType,
     };
     use arrow_array::*;
     use arrow_buffer::{i256, ArrowNativeType, Buffer, IntervalDayTime};
     use arrow_data::ArrayDataBuilder;
-    use arrow_schema::{ArrowError, DataType as ArrowDataType, Field, Fields, Schema, SchemaRef};
+    use arrow_schema::{
+        ArrowError, DataType as ArrowDataType, Field, Fields, Schema, SchemaRef, TimeUnit,
+    };
     use arrow_select::concat::concat_batches;
 
     use crate::arrow::arrow_reader::{
@@ -1219,6 +1222,68 @@ mod tests {
         // Ensure can be downcast to the correct type
         ret.column(0).as_primitive::<Float16Type>();
         ret.column(1).as_primitive::<Float16Type>();
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_time_utc_roundtrip() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new(
+                "time_millis",
+                ArrowDataType::Time32(TimeUnit::Millisecond),
+                true,
+            )
+            .with_metadata(HashMap::from_iter(vec![(
+                "adjusted_to_utc".to_string(),
+                "".to_string(),
+            )])),
+            Field::new(
+                "time_micros",
+                ArrowDataType::Time64(TimeUnit::Microsecond),
+                true,
+            )
+            .with_metadata(HashMap::from_iter(vec![(
+                "adjusted_to_utc".to_string(),
+                "".to_string(),
+            )])),
+        ]));
+
+        let mut buf = Vec::with_capacity(1024);
+        let mut writer = ArrowWriter::try_new(&mut buf, schema.clone(), None)?;
+
+        let original = RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(Time32MillisecondArray::from(vec![
+                    Some(-1),
+                    Some(0),
+                    Some(86_399_000),
+                    Some(86_400_000),
+                    Some(86_401_000),
+                    None,
+                ])),
+                Arc::new(Time64MicrosecondArray::from(vec![
+                    Some(-1),
+                    Some(0),
+                    Some(86_399 * 1_000_000),
+                    Some(86_400 * 1_000_000),
+                    Some(86_401 * 1_000_000),
+                    None,
+                ])),
+            ],
+        )?;
+
+        writer.write(&original)?;
+        writer.close()?;
+
+        let mut reader = ParquetRecordBatchReader::try_new(Bytes::from(buf), 1024)?;
+        let ret = reader.next().unwrap()?;
+        assert_eq!(ret, original);
+
+        // Ensure can be downcast to the correct type
+        ret.column(0).as_primitive::<Time32MillisecondType>();
+        ret.column(1).as_primitive::<Time64MicrosecondType>();
 
         Ok(())
     }
