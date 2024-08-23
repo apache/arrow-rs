@@ -76,17 +76,10 @@ fn set_upto_64bits(
         } else {
             let chunk = chunk << write_shift;
             let null_count = len - chunk.count_ones() as usize;
-            let c = chunk.to_le_bytes();
             unsafe {
                 let ptr = write_data.as_mut_ptr().add(write_byte);
-                *ptr |= c[0];
-                *ptr.add(1) = c[1];
-                *ptr.add(2) = c[2];
-                *ptr.add(3) = c[3];
-                *ptr.add(4) = c[4];
-                *ptr.add(5) = c[5];
-                *ptr.add(6) = c[6];
-                *ptr.add(7) |= c[7];
+                let chunk = chunk | (*ptr) as u64;
+                (ptr as *mut u64).write_unaligned(chunk);
             }
             (null_count, len)
         }
@@ -122,11 +115,12 @@ fn set_upto_64bits(
 
 /// # Safety
 /// The caller must ensure all arguments are within the valid range.
-/// The caller must be aware `8 - count` bytes in the returned value might be uninitialized.
+/// The caller must be aware `8 - count` bytes in the returned value are uninitialized.
 #[inline]
 unsafe fn read_bytes_to_u64(data: &[u8], offset: usize, count: usize) -> u64 {
     let mut tmp = std::mem::MaybeUninit::<u64>::uninit();
     let src = data.as_ptr().add(offset);
+    // SAFETY: the caller must not use the uninitialized `8 - count` bytes in the returned value.
     unsafe {
         std::ptr::copy_nonoverlapping(src, tmp.as_mut_ptr() as *mut u8, count);
         tmp.assume_init()
