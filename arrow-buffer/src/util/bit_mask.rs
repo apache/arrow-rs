@@ -131,7 +131,7 @@ unsafe fn read_bytes_to_u64(data: &[u8], offset: usize, count: usize) -> u64 {
 unsafe fn read_bytes_to_u64(data: &[u8], offset: usize, count: usize) -> u64 {
     let mut arr = [0u8; 8];
     arr[offset..(offset + count)].copy_from_slice(&data[offset..(offset + count)]);
-    u64::from_le_bytes(arr)
+    u64::from_be_bytes(arr)
 }
 
 #[inline]
