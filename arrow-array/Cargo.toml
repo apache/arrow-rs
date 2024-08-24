@@ -71,3 +71,7 @@ harness = false
 [[bench]]
 name = "fixed_size_list_array"
 harness = false
+
+[[bench]]
+name = "union_array"
+harness = false

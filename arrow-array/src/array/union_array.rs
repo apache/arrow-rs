@@ -14,10 +14,11 @@
 // KIND, either express or implied.  See the License for the
 // specific language governing permissions and limitations
 // under the License.
+#![warn(clippy::enum_clike_unportable_variant)]
 
 use crate::{make_array, Array, ArrayRef};
 use arrow_buffer::buffer::NullBuffer;
-use arrow_buffer::ScalarBuffer;
+use arrow_buffer::{BooleanBuffer, ScalarBuffer};
 use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::{ArrowError, DataType, UnionFields, UnionMode};
 /// Contains the `UnionArray` type.
@@ -479,6 +480,164 @@ impl Array for UnionArray {
         None
     }
 
+    fn logical_nulls(&self) -> Option<NullBuffer> {
+        let DataType::Union(fields, _) = &self.data_type else {
+            unreachable!()
+        };
+
+        if fields.iter().all(|(_, field)| !field.is_nullable()) {
+            return None;
+        }
+
+        if fields.len() <= 1 {
+            return self
+                .fields
+                .iter()
+                .flatten()
+                .map(Array::logical_nulls)
+                .next()
+                .flatten();
+        }
+
+        let children_logical_nulls = self
+            .fields
+            .iter()
+            .map(|child| child.as_ref().and_then(Array::logical_nulls))
+            .collect::<Vec<_>>();
+
+        if children_logical_nulls
+            .iter()
+            .flatten()
+            .all(|child| child.null_count() == 0)
+        {
+            return None;
+        }
+
+        if children_logical_nulls
+            .iter()
+            .flatten()
+            .all(|child| child.null_count() == child.len())
+        {
+            if let Some(exactly_sized) = children_logical_nulls
+                .iter()
+                .flatten()
+                .find(|nulls| nulls.len() == self.len())
+            {
+                return Some(exactly_sized.clone());
+            }
+
+            if let Some(bigger) = children_logical_nulls
+                .iter()
+                .flatten()
+                .find(|nulls| nulls.len() > self.len())
+            {
+                return Some(bigger.slice(0, self.len()));
+            }
+
+            return Some(NullBuffer::new_null(self.len()));
+        }
+
+        #[derive(Copy, Clone)]
+        #[repr(usize)]
+        enum Mask {
+            Zero = 0,
+            // false positive, see https://github.com/rust-lang/rust-clippy/issues/8043
+            #[allow(clippy::enum_clike_unportable_variant)]
+            Max = usize::MAX,
+        }
+
+        let one_valid = NullBuffer::new_valid(1);
+
+        let children_logical_nulls: [(&NullBuffer, Mask); u8::MAX as usize + 1] =
+            std::array::from_fn(|i| {
+                // Unsafe code below depend on it:
+                // To remove one branch from the loop, if the current type_id is not utilized, or logical_nulls is None,
+                // we return a null buffer of len 1 and a index_mask of 0, or usize::MAX otherwise.
+                // We then access the null buffer with index & index_mask, which always return 0 for the 1-len buffer, or the index unchanged otherwise
+                match children_logical_nulls.get(i) {
+                    Some(Some(logical_nulls)) => (logical_nulls, Mask::Max),
+                    _ => (&one_valid, Mask::Zero),
+                }
+            });
+
+        match &self.offsets {
+            Some(offsets) => {
+                assert_eq!(self.type_ids.len(), offsets.len());
+
+                let buffer = BooleanBuffer::collect_bool(self.type_ids.len(), |i| unsafe {
+                    // SAFETY: BooleanBuffer::collect_bool calls us 0..self.type_ids.len()
+                    let type_id = *self.type_ids.get_unchecked(i);
+                    // SAFETY: We asserted that offsets len and self.type_ids len are equal
+                    let offset = *offsets.get_unchecked(i);
+
+                    let (nulls, offset_mask) = &children_logical_nulls[type_id as u8 as usize];
+
+                    // SAFETY:
+                    // If offset_mask is Max
+                    // 1. Offset validity is checked at union creation
+                    // 2. Null buffer len relative to it's owner is checked at array creation
+                    // If offset_mask is Zero, the null buffer has len 1
+                    nulls
+                        .inner()
+                        .value_unchecked(offset as usize & *offset_mask as usize)
+                });
+
+                Some(buffer.into())
+            }
+            None => {
+                let mut with_nulls = children_logical_nulls
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, (nulls, _))| nulls.null_count() > 0);
+
+                match (with_nulls.next(), with_nulls.next()) {
+                    (Some((single_with_nulls_type_id, (nulls, _))), None) => {
+                        let selected_is_not_null =
+                            BooleanBuffer::collect_bool(self.type_ids().len(), |i| unsafe {
+                                *self.type_ids.get_unchecked(i) != single_with_nulls_type_id as i8
+                            });
+
+                        let buffer = &selected_is_not_null | nulls.inner();
+
+                        Some(buffer.into())
+                    }
+                    (Some(left), Some(right)) if fields.len() == 2 => {
+                        let left_selected =
+                            BooleanBuffer::collect_bool(self.type_ids().len(), |i| unsafe {
+                                *self.type_ids.get_unchecked(i) == left.0 as i8
+                            });
+
+                        let right_selected = !&left_selected;
+
+                        let buffer = &(&left_selected & left.1 .0.inner())
+                            | &(&right_selected & right.1 .0.inner());
+
+                        Some(buffer.into())
+                    }
+                    _ => {
+                        let buffer =
+                            BooleanBuffer::collect_bool(self.type_ids.len(), |index| unsafe {
+                                // SAFETY: BooleanBuffer::collect_bool calls us 0..self.type_ids.len()
+                                let type_id = *self.type_ids.get_unchecked(index);
+
+                                let (nulls, index_mask) =
+                                    &children_logical_nulls[type_id as u8 as usize];
+
+                                // SAFETY:
+                                // If index_mask is Max
+                                // 1. On sparse union, every child len match it's parent, this is checked at union creation
+                                // 2. Null buffer len relative to it's owner is checked at array creation
+                                // If offset_mask is Zero, the null buffer has len 1
+                                nulls.inner().value_unchecked(index & *index_mask as usize)
+                            });
+
+                        Some(buffer.into())
+                    }
+                }
+            }
+        }
+    }
+
     /// Union types always return non null as there is no validity buffer.
     /// To check validity correctly you must check the underlying vector.
     fn is_null(&self, _index: usize) -> bool {
@@ -571,8 +730,8 @@ mod tests {
     use crate::builder::UnionBuilder;
     use crate::cast::AsArray;
     use crate::types::{Float32Type, Float64Type, Int32Type, Int64Type};
-    use crate::RecordBatch;
     use crate::{Float64Array, Int32Array, Int64Array, StringArray};
+    use crate::{Int8Array, RecordBatch};
     use arrow_buffer::Buffer;
     use arrow_schema::{Field, Schema};
 
@@ -1412,5 +1571,203 @@ mod tests {
             err.to_string(),
             "Invalid argument error: Union fields length must match child arrays length"
         );
+    }
+
+    #[test]
+    fn test_logical_nulls_fast_paths() {
+        // fields.len() <= 1
+        let array = UnionArray::try_new(UnionFields::empty(), vec![].into(), None, vec![]).unwrap();
+
+        assert_eq!(array.logical_nulls(), None);
+
+        let fields = UnionFields::new(
+            [1, 3],
+            [
+                Field::new("a", DataType::Int8, false), // non nullable
+                Field::new("b", DataType::Int8, false), // non nullable
+            ],
+        );
+        let array = UnionArray::try_new(
+            fields,
+            vec![1].into(),
+            None,
+            vec![
+                Arc::new(Int8Array::from_value(5, 1)),
+                Arc::new(Int8Array::from_value(5, 1)),
+            ],
+        )
+        .unwrap();
+
+        assert_eq!(array.logical_nulls(), None);
+
+        let nullable_fields = UnionFields::new(
+            [1, 3],
+            [
+                Field::new("a", DataType::Int8, true), // nullable but without nulls
+                Field::new("b", DataType::Int8, true), // nullable but without nulls
+            ],
+        );
+        let array = UnionArray::try_new(
+            nullable_fields.clone(),
+            vec![1, 1].into(),
+            None,
+            vec![
+                Arc::new(Int8Array::from_value(-5, 2)), // nullable but without nulls
+                Arc::new(Int8Array::from_value(-5, 2)), // nullable but without nulls
+            ],
+        )
+        .unwrap();
+
+        assert_eq!(array.logical_nulls(), None);
+
+        let array = UnionArray::try_new(
+            nullable_fields.clone(),
+            vec![1, 1].into(),
+            None,
+            vec![
+                // every children is completly null
+                Arc::new(Int8Array::new_null(2)), // all null, same len as it's parent
+                Arc::new(Int8Array::new_null(2)), // all null, same len as it's parent
+            ],
+        )
+        .unwrap();
+
+        assert_eq!(array.logical_nulls(), Some(NullBuffer::new_null(2)));
+
+        let array = UnionArray::try_new(
+            nullable_fields.clone(),
+            vec![1, 1].into(),
+            Some(vec![0, 1].into()),
+            vec![
+                // every children is completly null
+                Arc::new(Int8Array::new_null(3)), // bigger that parent
+                Arc::new(Int8Array::new_null(3)), // bigger that parent
+            ],
+        )
+        .unwrap();
+
+        assert_eq!(array.logical_nulls(), Some(NullBuffer::new_null(2)));
+
+        let array = UnionArray::try_new(
+            nullable_fields.clone(),
+            vec![1, 3].into(),
+            None,
+            vec![
+                // none all null
+                Arc::new(Int8Array::from_iter([None, Some(-5)])),
+                Arc::new(Int8Array::from_iter([Some(-5), None])),
+            ],
+        )
+        .unwrap();
+
+        assert_eq!(array.logical_nulls(), Some(NullBuffer::new_null(2)));
+    }
+
+    #[test]
+    fn test_dense_union_logical_nulls() {
+        // union of [{A=1}, {A=2}, {B=3.2}, {B=}, {C="a"}, {C=}]
+        let int_array = Int32Array::from(vec![1, 2]); // 0 nulls
+        let float_array = Float64Array::from(vec![Some(3.2), None]);
+        let str_array = StringArray::from(vec![Some("a"), None]);
+        let type_ids = [1, 1, 3, 3, 4, 4].into_iter().collect::<ScalarBuffer<i8>>();
+        let offsets = [0, 1, 0, 1, 0, 1]
+            .into_iter()
+            .collect::<ScalarBuffer<i32>>();
+
+        let children = vec![
+            Arc::new(int_array) as Arc<dyn Array>,
+            Arc::new(float_array),
+            Arc::new(str_array),
+        ];
+
+        let array = UnionArray::try_new(union_fields(), type_ids, Some(offsets), children).unwrap();
+
+        let result = array.logical_nulls();
+
+        let expected = NullBuffer::from(vec![true, true, true, false, true, false]);
+        assert_eq!(Some(expected), result);
+    }
+
+    #[test]
+    fn test_sparse_union_logical_nulls_only_one_with_nulls() {
+        // union of [{A=2}, {A=2}, {B=3.2}, {B=}, {C="a"}, {C=}]
+        let int_array = Int32Array::from_value(2, 6); // without nulls
+        let float_array = Float64Array::from_value(3.2, 6); // without nulls
+        let str_array = StringArray::from(vec![None, None, None, None, Some("a"), None]);
+        let type_ids = [1, 1, 3, 3, 4, 4].into_iter().collect::<ScalarBuffer<i8>>();
+
+        let children = vec![
+            Arc::new(int_array) as Arc<dyn Array>,
+            Arc::new(float_array),
+            Arc::new(str_array),
+        ];
+
+        let array = UnionArray::try_new(union_fields(), type_ids, None, children).unwrap();
+
+        let result = array.logical_nulls();
+
+        let expected = NullBuffer::from(vec![true, true, true, true, true, false]);
+        assert_eq!(Some(expected), result);
+    }
+
+    #[test]
+    fn test_sparse_union_logical_nulls_only_two_fields_both_with_nulls() {
+        // union of [{A=}, {A=}, {A=3.2}, {B=}, {B="a"}, {B=}]
+        let float_array = Float64Array::from(vec![None, None, Some(3.2), None, None, None]);
+        let str_array = StringArray::from(vec![None, None, None, None, Some("a"), None]);
+        let type_ids = [1, 1, 1, 3, 3, 3].into_iter().collect::<ScalarBuffer<i8>>();
+
+        let children = vec![Arc::new(float_array) as Arc<dyn Array>, Arc::new(str_array)];
+
+        let array = UnionArray::try_new(
+            UnionFields::new(
+                [1, 3],
+                [
+                    Field::new("A", DataType::Int32, true),
+                    Field::new("B", DataType::Float64, true),
+                ],
+            ),
+            type_ids,
+            None,
+            children,
+        )
+        .unwrap();
+
+        let result = array.logical_nulls();
+
+        let expected = NullBuffer::from(vec![false, false, true, false, true, false]);
+        assert_eq!(Some(expected), result);
+    }
+
+    #[test]
+    fn test_sparse_union_logical_nulls_many_mixed() {
+        // union of [{A=2}, {A=2}, {B=3.2}, {B=}, {C="a"}, {C=}]
+        let int_array = Int32Array::from_value(2, 6); // 0 nulls
+        let float_array = Float64Array::from(vec![None, None, Some(3.2), None, None, None]);
+        let str_array = StringArray::from(vec![None, None, None, None, Some("a"), None]);
+        let type_ids = [1, 1, 3, 3, 4, 4].into_iter().collect::<ScalarBuffer<i8>>();
+
+        let children = vec![
+            Arc::new(int_array) as Arc<dyn Array>,
+            Arc::new(float_array),
+            Arc::new(str_array),
+        ];
+
+        let array = UnionArray::try_new(union_fields(), type_ids, None, children).unwrap();
+
+        let result = array.logical_nulls();
+
+        let expected = NullBuffer::from(vec![true, true, true, false, true, false]);
+        assert_eq!(Some(expected), result);
+    }
+
+    fn union_fields() -> UnionFields {
+        [
+            (1, Arc::new(Field::new("A", DataType::Int32, true))),
+            (3, Arc::new(Field::new("B", DataType::Float64, true))),
+            (4, Arc::new(Field::new("C", DataType::Utf8, true))),
+        ]
+        .into_iter()
+        .collect()
     }
 }
