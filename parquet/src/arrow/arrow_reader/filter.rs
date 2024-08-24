@@ -74,7 +74,7 @@ where
 ///
 /// [`RowFilter`] applies predicates in order, after decoding only the columns
 /// required. As predicates eliminate rows, fewer rows from subsequent columns
-/// may be required, thus enabling IO and decode.
+/// may be required, thus potentially reducing IO and decode.
 ///
 /// A `RowFilter` consists of a list of [`ArrowPredicate`]s. Only the rows for which
 /// all the predicates evaluate to `true` will be returned.
