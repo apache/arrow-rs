@@ -14,7 +14,7 @@
 // KIND, either express or implied.  See the License for the
 // specific language governing permissions and limitations
 // under the License.
-#![warn(clippy::enum_clike_unportable_variant)]
+#![allow(clippy::enum_clike_unportable_variant)]
 
 use crate::{make_array, Array, ArrayRef};
 use arrow_buffer::buffer::NullBuffer;
