@@ -98,6 +98,7 @@ fn set_upto_64bits(
         let len = std::cmp::min(len, 64 - std::cmp::max(read_shift, write_shift));
         let bytes = ceil(len + read_shift, 8);
         // SAFETY: chunk gets masked, so it is safe
+        #[cfg(not(miri))]
         let chunk = unsafe { read_bytes_to_u64(data, read_byte, bytes) };
         let mask = u64::MAX >> (64 - len);
         let chunk = (chunk >> read_shift) & mask;
@@ -122,7 +123,6 @@ unsafe fn read_bytes_to_u64(data: &[u8], offset: usize, count: usize) -> u64 {
     // SAFETY: the caller must not use the uninitialized `8 - count` bytes in the returned value.
     unsafe {
         std::ptr::copy_nonoverlapping(src, tmp.as_mut_ptr() as *mut u8, count);
-        #[cfg(not(miri))]
         tmp.assume_init()
     }
 }
