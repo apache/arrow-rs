@@ -18,9 +18,7 @@
 //! Tests that reading invalid parquet files returns an error
 
 use arrow::util::test_util::parquet_test_data;
-use bytes::Bytes;
 use parquet::arrow::arrow_reader::ArrowReaderBuilder;
-use parquet::arrow::async_reader::MetadataLoader;
 use parquet::errors::ParquetError;
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -137,8 +135,12 @@ fn read_file(name: &str) -> Result<usize, ParquetError> {
     Ok(num_rows)
 }
 
+#[cfg(feature = "async")]
 #[tokio::test]
 async fn bad_metadata_err() {
+    use bytes::Bytes;
+    use parquet::arrow::async_reader::MetadataLoader;
+
     let metadata_buffer = Bytes::from_static(include_bytes!("bad_raw_metadata.bin"));
 
     let metadata_length = metadata_buffer.len();
