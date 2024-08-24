@@ -18,7 +18,9 @@
 //! Tests that reading invalid parquet files returns an error
 
 use arrow::util::test_util::parquet_test_data;
+use bytes::Bytes;
 use parquet::arrow::arrow_reader::ArrowReaderBuilder;
+use parquet::arrow::async_reader::MetadataLoader;
 use parquet::errors::ParquetError;
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -133,4 +135,30 @@ fn read_file(name: &str) -> Result<usize, ParquetError> {
         num_rows += batch.num_rows();
     }
     Ok(num_rows)
+}
+
+#[tokio::test]
+async fn bad_metadata_err() {
+    let metadata_buffer = Bytes::from_static(include_bytes!("bad_raw_metadata.bin"));
+
+    let metadata_length = metadata_buffer.len();
+
+    let mut reader = std::io::Cursor::new(&metadata_buffer);
+    let mut loader = MetadataLoader::load(&mut reader, metadata_length, None)
+        .await
+        .unwrap();
+    loader.load_page_index(false, false).await.unwrap();
+    loader.finish();
+
+    // same again but getting `column_index` and `offset_index`
+    let mut reader = std::io::Cursor::new(&metadata_buffer);
+    let mut loader = MetadataLoader::load(&mut reader, metadata_length, None)
+        .await
+        .unwrap();
+    let err = loader.load_page_index(true, true).await.unwrap_err();
+
+    assert_eq!(
+        err.to_string(),
+        "Parquet error: error converting value, expected 4 bytes got 0"
+    );
 }
