@@ -129,13 +129,8 @@ unsafe fn read_bytes_to_u64(data: &[u8], offset: usize, count: usize) -> u64 {
 
 #[cfg(miri)]
 unsafe fn read_bytes_to_u64(data: &[u8], offset: usize, count: usize) -> u64 {
-    let mut tmp = std::mem::MaybeUninit::<u64>::uninit();
     let src = data.as_ptr().add(offset);
-    // SAFETY: the caller must not use the uninitialized `8 - count` bytes in the returned value.
-    unsafe {
-        std::ptr::copy_nonoverlapping(src, tmp.as_mut_ptr() as *mut u8, count);
-        tmp.assume_init_read()
-    }
+    u64::from_le_bytes(src.to_le_bytes())
 }
 
 #[inline]
