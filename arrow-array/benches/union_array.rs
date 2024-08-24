@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::{iter::repeat_n, sync::Arc};
+use std::{iter::repeat, sync::Arc};
 
 use arrow_array::{Array, ArrayRef, Int32Array, UnionArray};
 use arrow_schema::{DataType, Field, UnionFields};
@@ -24,7 +24,7 @@ use criterion::*;
 fn criterion_benchmark(c: &mut Criterion) {
     let child = Arc::new(Int32Array::new(
         (0..4096).collect(),
-        Some(repeat_n([true, false], 2048).flatten().collect()),
+        Some(repeat([true, false]).flatten().take(4096).collect()),
     )) as ArrayRef;
 
     for i in 1..5 {
@@ -38,7 +38,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                 fields,
                 (0..i).cycle().take(4096).collect(),
                 None,
-                repeat_n(child.clone(), i as usize).collect(),
+                repeat(child.clone()).take(i as usize).collect(),
             )
             .unwrap();
 
@@ -57,7 +57,7 @@ fn criterion_benchmark(c: &mut Criterion) {
 
         let array = UnionArray::try_new(
             fields,
-            repeat_n([1, 3], 2048).flatten().collect(),
+            repeat([1, 3]).flatten().take(4096).collect(),
             None,
             vec![child.clone(), Arc::new(Int32Array::from_value(-5, 4096))],
         )
