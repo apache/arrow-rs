@@ -341,7 +341,10 @@ impl MutableBuffer {
     }
 
     #[inline]
-    pub(super) fn into_buffer(self) -> Buffer {
+    pub(super) fn into_buffer(mut self) -> Buffer {
+        // Don't leak our extra capacity into the final buffer.
+        self.shrink_to_fit();
+
         let bytes = unsafe { Bytes::new(self.data, self.len, Deallocation::Standard(self.layout)) };
         std::mem::forget(self);
         Buffer::from_bytes(bytes)
