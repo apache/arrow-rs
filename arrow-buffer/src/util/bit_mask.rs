@@ -32,7 +32,6 @@ pub fn set_bits(
     let mut null_count = 0;
 
     let mut acc = 0;
-    #[cfg(not(miri))]
     while len > acc {
         let (n, l) = set_upto_64bits(
             write_data,
@@ -117,6 +116,7 @@ fn set_upto_64bits(
 /// The caller must ensure all arguments are within the valid range.
 /// The caller must be aware `8 - count` bytes in the returned value are uninitialized.
 #[inline]
+#[cfg(not(miri))]
 unsafe fn read_bytes_to_u64(data: &[u8], offset: usize, count: usize) -> u64 {
     let mut tmp = std::mem::MaybeUninit::<u64>::uninit();
     let src = data.as_ptr().add(offset);
@@ -124,6 +124,17 @@ unsafe fn read_bytes_to_u64(data: &[u8], offset: usize, count: usize) -> u64 {
     unsafe {
         std::ptr::copy_nonoverlapping(src, tmp.as_mut_ptr() as *mut u8, count);
         tmp.assume_init()
+    }
+}
+
+#[cfg(miri)]
+unsafe fn read_bytes_to_u64(data: &[u8], offset: usize, count: usize) -> u64 {
+    let mut tmp = std::mem::MaybeUninit::<u64>::uninit();
+    let src = data.as_ptr().add(offset);
+    // SAFETY: the caller must not use the uninitialized `8 - count` bytes in the returned value.
+    unsafe {
+        std::ptr::copy_nonoverlapping(src, tmp.as_mut_ptr() as *mut u8, count);
+        tmp.assume_init_read()
     }
 }
 
