@@ -1767,6 +1767,8 @@ mod tests {
                     false, // fails to roundtrip keys_sorted
                     false,
                 ),
+                Field::new("42", DataType::Interval(IntervalUnit::MonthDayNano), false),
+                Field::new("43", DataType::Interval(IntervalUnit::MonthDayNano), true),
             ],
             meta(&[("Key", "Value")]),
         );

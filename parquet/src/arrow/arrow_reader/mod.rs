@@ -949,13 +949,15 @@ mod tests {
     use arrow_array::cast::AsArray;
     use arrow_array::types::{
         Decimal128Type, Decimal256Type, DecimalType, Float16Type, Float32Type, Float64Type,
-        Time32MillisecondType, Time64MicrosecondType,
+        IntervalMonthDayNano, IntervalMonthDayNanoType, Time32MillisecondType,
+        Time64MicrosecondType,
     };
     use arrow_array::*;
     use arrow_buffer::{i256, ArrowNativeType, Buffer, IntervalDayTime};
     use arrow_data::ArrayDataBuilder;
     use arrow_schema::{
-        ArrowError, DataType as ArrowDataType, Field, Fields, Schema, SchemaRef, TimeUnit,
+        ArrowError, DataType as ArrowDataType, Field, Fields, IntervalUnit, Schema, SchemaRef,
+        TimeUnit,
     };
     use arrow_select::concat::concat_batches;
 
@@ -1284,6 +1286,41 @@ mod tests {
         // Ensure can be downcast to the correct type
         ret.column(0).as_primitive::<Time32MillisecondType>();
         ret.column(1).as_primitive::<Time64MicrosecondType>();
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_interval_month_day_nano_roundtrip() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "interval_nano",
+            ArrowDataType::Interval(IntervalUnit::MonthDayNano),
+            true,
+        )]));
+
+        let mut buf = Vec::with_capacity(1024);
+        let mut writer = ArrowWriter::try_new(&mut buf, schema.clone(), None)?;
+
+        let original = RecordBatch::try_new(
+            schema,
+            vec![Arc::new(IntervalMonthDayNanoArray::from(vec![
+                Some(IntervalMonthDayNano::new(0, 1, 5_000_000)),
+                Some(IntervalMonthDayNano::new(0, 3, i32::MAX as i64)),
+                Some(IntervalMonthDayNano::new(3, -2, 4_000)),
+                None,
+            ]))],
+        )?;
+
+        writer.write(&original)?;
+        writer.close()?;
+
+        let mut reader = ParquetRecordBatchReader::try_new(Bytes::from(buf), 1024)?;
+        let ret = reader.next().unwrap()?;
+
+        assert_eq!(ret, original);
+
+        // Ensure can be downcast to the correct type
+        ret.column(0).as_primitive::<IntervalMonthDayNanoType>();
 
         Ok(())
     }

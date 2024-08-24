@@ -921,12 +921,12 @@ fn write_leaf(writer: &mut ColumnWriter<'_>, levels: &ArrayLevels) -> Result<usi
                             .unwrap();
                         get_interval_dt_array_slice(array, indices)
                     }
-                    _ => {
-                        return Err(ParquetError::NYI(
-                            format!(
-                                "Attempting to write an Arrow interval type {interval_unit:?} to parquet that is not yet implemented"
-                            )
-                        ));
+                    IntervalUnit::MonthDayNano => {
+                        let array = column
+                            .as_any()
+                            .downcast_ref::<arrow_array::IntervalMonthDayNanoArray>()
+                            .unwrap();
+                        get_interval_mdn_array_slice(array, indices)?
                     }
                 },
                 ArrowDataType::FixedSizeBinary(_) => {
@@ -1017,6 +1017,33 @@ fn get_interval_dt_array_slice(
         values.push(FixedLenByteArray::from(ByteArray::from(out.to_vec())));
     }
     values
+}
+
+/// Returns 12-byte values representing 3 values of months, days and milliseconds (4-bytes each).
+/// An Arrow MonthDayNano interval stores months, days and nanoseconds. These are 16 bytes in total,
+/// but we return error when the nanoseconds value is greater than i32::MAX. Otherwise, we can
+/// safely truncate the nanoseconds value to 4 bytes.
+fn get_interval_mdn_array_slice(
+    array: &arrow_array::IntervalMonthDayNanoArray,
+    indices: &[usize],
+) -> Result<Vec<FixedLenByteArray>> {
+    let mut values = Vec::with_capacity(indices.len());
+    for i in indices {
+        let mut out = [0; 12];
+        let value = array.value(*i);
+
+        if value.nanoseconds > i32::MAX as i64 {
+            return Err(ParquetError::ArrowError(
+                "IntervalMonthDayNano value cannot be written to parquet since it will lose precision.".to_string(),
+            ));
+        }
+
+        out[0..4].copy_from_slice(&value.months.to_le_bytes());
+        out[4..8].copy_from_slice(&value.days.to_le_bytes());
+        out[8..12].copy_from_slice(&(value.nanoseconds as i32).to_le_bytes());
+        values.push(FixedLenByteArray::from(ByteArray::from(out.to_vec())));
+    }
+    Ok(values)
 }
 
 fn get_decimal_128_array_slice(
@@ -2145,11 +2172,11 @@ mod tests {
 
     #[test]
     #[should_panic(
-        expected = "Attempting to write an Arrow interval type MonthDayNano to parquet that is not yet implemented"
+        expected = "IntervalMonthDayNano value cannot be written to parquet since it will lose precision."
     )]
     fn interval_month_day_nano_single_column() {
         required_and_optional::<IntervalMonthDayNanoArray, _>(vec![
-            IntervalMonthDayNano::new(0, 1, 5),
+            IntervalMonthDayNano::new(0, 1, i32::MAX as i64 + 1),
             IntervalMonthDayNano::new(0, 3, 2),
             IntervalMonthDayNano::new(3, -2, -5),
             IntervalMonthDayNano::new(-200, 4, -1),

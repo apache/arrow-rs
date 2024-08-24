@@ -27,10 +27,9 @@ use crate::column::reader::decoder::ColumnValueDecoder;
 use crate::errors::{ParquetError, Result};
 use crate::schema::types::ColumnDescPtr;
 use arrow_array::{
-    ArrayRef, Decimal128Array, Decimal256Array, FixedSizeBinaryArray, Float16Array,
-    IntervalDayTimeArray, IntervalYearMonthArray,
+    ArrayRef, Decimal128Array, Decimal256Array, FixedSizeBinaryArray, Float16Array, IntervalDayTimeArray, IntervalMonthDayNanoArray, IntervalYearMonthArray
 };
-use arrow_buffer::{i256, Buffer, IntervalDayTime};
+use arrow_buffer::{i256, Buffer, IntervalDayTime, IntervalMonthDayNano};
 use arrow_data::ArrayDataBuilder;
 use arrow_schema::{DataType as ArrowType, IntervalUnit};
 use bytes::Bytes;
@@ -195,7 +194,14 @@ impl ArrayReader for FixedLenByteArrayReader {
                         Arc::new(IntervalDayTimeArray::from_unary(&binary, f)) as ArrayRef
                     }
                     IntervalUnit::MonthDayNano => {
-                        return Err(nyi_err!("MonthDayNano intervals not supported"));
+                        let f = |b: &[u8]| {
+                            IntervalMonthDayNano::new(
+                                i32::from_le_bytes(b[0..4].try_into().unwrap()),
+                                i32::from_le_bytes(b[4..8].try_into().unwrap()),
+                                i32::from_le_bytes(b[8..12].try_into().unwrap()) as i64,
+                            )
+                        };
+                        Arc::new(IntervalMonthDayNanoArray::from_unary(&binary, f)) as ArrayRef
                     }
                 }
             }
