@@ -17,7 +17,6 @@
 
 //! Utils for working with packed bit masks
 
-#![cfg(not(miri))]
 use crate::bit_util::ceil;
 
 /// Sets all bits on `write_data` in the range `[offset_write..offset_write+len]` to be equal to the
@@ -33,6 +32,7 @@ pub fn set_bits(
     let mut null_count = 0;
 
     let mut acc = 0;
+    #[cfg(not(miri))]
     while len > acc {
         let (n, l) = set_upto_64bits(
             write_data,
