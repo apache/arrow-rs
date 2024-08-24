@@ -17,6 +17,7 @@
 
 //! Utils for working with packed bit masks
 
+#![cfg(not(miri))]
 use crate::bit_util::ceil;
 
 /// Sets all bits on `write_data` in the range `[offset_write..offset_write+len]` to be equal to the
@@ -122,11 +123,7 @@ unsafe fn read_bytes_to_u64(data: &[u8], offset: usize, count: usize) -> u64 {
     // SAFETY: the caller must not use the uninitialized `8 - count` bytes in the returned value.
     unsafe {
         std::ptr::copy_nonoverlapping(src, tmp.as_mut_ptr() as *mut u8, count);
-        let mut res = 0;
-        #[cfg(not(miri))]
-        res = tmp.assume_init();
-        #[cfg(miri)]
-        res
+        tmp.assume_init()
     }
 }
 
