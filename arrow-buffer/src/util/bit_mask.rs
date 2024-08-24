@@ -116,6 +116,7 @@ fn set_upto_64bits(
 /// The caller must ensure all arguments are within the valid range.
 /// The caller must be aware `8 - count` bytes in the returned value are uninitialized.
 #[inline]
+#[cfg(not(miri))]
 unsafe fn read_bytes_to_u64(data: &[u8], offset: usize, count: usize) -> u64 {
     let mut tmp = std::mem::MaybeUninit::<u64>::uninit();
     let src = data.as_ptr().add(offset);
