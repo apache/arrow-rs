@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow_array::{ArrayAccessor, BooleanArray};
+use arrow_array::{ArrayAccessor, BooleanArray, StringViewArray};
 use arrow_schema::ArrowError;
 use memchr::memchr2;
 use memchr::memmem::Finder;
@@ -114,26 +114,101 @@ impl<'a> Predicate<'a> {
             Predicate::IEqAscii(v) => BooleanArray::from_unary(array, |haystack| {
                 haystack.eq_ignore_ascii_case(v) != negate
             }),
-            Predicate::Contains(finder) => BooleanArray::from_unary(array, |haystack| {
-                finder.find(haystack.as_bytes()).is_some() != negate
-            }),
-            Predicate::StartsWith(v) => BooleanArray::from_unary(array, |haystack| {
-                starts_with(haystack, v, equals_kernel) != negate
-            }),
-            Predicate::IStartsWithAscii(v) => BooleanArray::from_unary(array, |haystack| {
-                starts_with(haystack, v, equals_ignore_ascii_case_kernel) != negate
-            }),
-            Predicate::EndsWith(v) => BooleanArray::from_unary(array, |haystack| {
-                ends_with(haystack, v, equals_kernel) != negate
-            }),
-            Predicate::IEndsWithAscii(v) => BooleanArray::from_unary(array, |haystack| {
-                ends_with(haystack, v, equals_ignore_ascii_case_kernel) != negate
-            }),
+            Predicate::Contains(finder) => {
+                if let Some(string_view_array) = array.as_any().downcast_ref::<StringViewArray>() {
+                    BooleanArray::from(
+                        string_view_array
+                            .bytes_iter()
+                            .map(|haystack| finder.find(haystack).is_some() != negate)
+                            .collect::<Vec<_>>(),
+                    )
+                } else {
+                    BooleanArray::from_unary(array, |haystack| {
+                        finder.find(haystack.as_bytes()).is_some() != negate
+                    })
+                }
+            }
+            Predicate::StartsWith(v) => {
+                if let Some(string_view_array) = array.as_any().downcast_ref::<StringViewArray>() {
+                    BooleanArray::from(
+                        string_view_array
+                            .prefix_bytes_iter(v.len())
+                            .map(|haystack| {
+                                equals_bytes(haystack, v.as_bytes(), equals_kernel) != negate
+                            })
+                            .collect::<Vec<_>>(),
+                    )
+                } else {
+                    BooleanArray::from_unary(array, |haystack| {
+                        starts_with(haystack, v, equals_kernel) != negate
+                    })
+                }
+            }
+            Predicate::IStartsWithAscii(v) => {
+                if let Some(string_view_array) = array.as_any().downcast_ref::<StringViewArray>() {
+                    BooleanArray::from(
+                        string_view_array
+                            .prefix_bytes_iter(v.len())
+                            .map(|haystack| {
+                                equals_bytes(
+                                    haystack,
+                                    v.as_bytes(),
+                                    equals_ignore_ascii_case_kernel,
+                                ) != negate
+                            })
+                            .collect::<Vec<_>>(),
+                    )
+                } else {
+                    BooleanArray::from_unary(array, |haystack| {
+                        starts_with(haystack, v, equals_ignore_ascii_case_kernel) != negate
+                    })
+                }
+            }
+            Predicate::EndsWith(v) => {
+                if let Some(string_view_array) = array.as_any().downcast_ref::<StringViewArray>() {
+                    BooleanArray::from(
+                        string_view_array
+                            .suffix_bytes_iter(v.len())
+                            .map(|haystack| {
+                                equals_bytes(haystack, v.as_bytes(), equals_kernel) != negate
+                            })
+                            .collect::<Vec<_>>(),
+                    )
+                } else {
+                    BooleanArray::from_unary(array, |haystack| {
+                        ends_with(haystack, v, equals_kernel) != negate
+                    })
+                }
+            }
+            Predicate::IEndsWithAscii(v) => {
+                if let Some(string_view_array) = array.as_any().downcast_ref::<StringViewArray>() {
+                    BooleanArray::from(
+                        string_view_array
+                            .suffix_bytes_iter(v.len())
+                            .map(|haystack| {
+                                equals_bytes(
+                                    haystack,
+                                    v.as_bytes(),
+                                    equals_ignore_ascii_case_kernel,
+                                ) != negate
+                            })
+                            .collect::<Vec<_>>(),
+                    )
+                } else {
+                    BooleanArray::from_unary(array, |haystack| {
+                        ends_with(haystack, v, equals_ignore_ascii_case_kernel) != negate
+                    })
+                }
+            }
             Predicate::Regex(v) => {
                 BooleanArray::from_unary(array, |haystack| v.is_match(haystack) != negate)
             }
         }
     }
+}
+
+fn equals_bytes(lhs: &[u8], rhs: &[u8], byte_eq_kernel: impl Fn((&u8, &u8)) -> bool) -> bool {
+    lhs.len() == rhs.len() && zip(lhs, rhs).all(byte_eq_kernel)
 }
 
 /// This is faster than `str::starts_with` for small strings.
@@ -145,7 +220,6 @@ fn starts_with(haystack: &str, needle: &str, byte_eq_kernel: impl Fn((&u8, &u8))
         zip(haystack.as_bytes(), needle.as_bytes()).all(byte_eq_kernel)
     }
 }
-
 /// This is faster than `str::ends_with` for small strings.
 /// See <https://github.com/apache/arrow-rs/issues/6107> for more details.
 fn ends_with(haystack: &str, needle: &str, byte_eq_kernel: impl Fn((&u8, &u8)) -> bool) -> bool {

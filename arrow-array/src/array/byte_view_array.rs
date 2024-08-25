@@ -24,6 +24,7 @@ use crate::{Array, ArrayAccessor, ArrayRef, GenericByteArray, OffsetSizeTrait, S
 use arrow_buffer::{ArrowNativeType, Buffer, NullBuffer, ScalarBuffer};
 use arrow_data::{ArrayData, ArrayDataBuilder, ByteView};
 use arrow_schema::{ArrowError, DataType};
+use core::str;
 use num::ToPrimitive;
 use std::any::Any;
 use std::fmt::Debug;
@@ -299,6 +300,69 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
     /// Constructs a new iterator for iterating over the values of this array
     pub fn iter(&self) -> ArrayIter<&Self> {
         ArrayIter::new(self)
+    }
+
+    /// Returns an iterator over the bytes of this array.
+    pub fn bytes_iter(&self) -> impl Iterator<Item = &[u8]> {
+        self.views.iter().map(move |v| {
+            let len = *v as u32;
+            if len <= 12 {
+                unsafe { Self::inline_value(v, len as usize) }
+            } else {
+                let view = ByteView::from(*v);
+                let data = &self.buffers[view.buffer_index as usize];
+                let offset = view.offset as usize;
+                unsafe { data.get_unchecked(offset..offset + len as usize) }
+            }
+        })
+    }
+
+    /// Returns an iterator over the prefix bytes of this array with respect to the prefix length.
+    /// If the prefix length is larger than the string length, it will return the empty slice.
+    pub fn prefix_bytes_iter(&self, prefix_len: usize) -> impl Iterator<Item = &[u8]> {
+        self.views().into_iter().map(move |v| {
+            let len = (*v as u32) as usize;
+
+            if len < prefix_len {
+                return &[] as &[u8];
+            }
+
+            if prefix_len <= 4 || len <= 12 {
+                unsafe { StringViewArray::inline_value(v, prefix_len) }
+            } else {
+                let view = ByteView::from(*v);
+                let data = unsafe {
+                    self.data_buffers()
+                        .get_unchecked(view.buffer_index as usize)
+                };
+                let offset = view.offset as usize;
+                unsafe { data.get_unchecked(offset..offset + prefix_len) }
+            }
+        })
+    }
+
+    /// Returns an iterator over the suffix bytes of this array with respect to the suffix length.
+    /// If the suffix length is larger than the string length, it will return the empty slice.
+    pub fn suffix_bytes_iter(&self, suffix_len: usize) -> impl Iterator<Item = &[u8]> {
+        self.views().into_iter().map(move |v| {
+            let len = (*v as u32) as usize;
+
+            if len < suffix_len {
+                return &[] as &[u8];
+            }
+
+            if len <= 12 {
+                unsafe { &StringViewArray::inline_value(v, len)[len - suffix_len..] }
+            } else {
+                let view = ByteView::from(*v);
+                let data = unsafe {
+                    self.data_buffers()
+                        .get_unchecked(view.buffer_index as usize)
+                };
+                let offset = view.offset as usize;
+                unsafe { data.get_unchecked(offset + len - suffix_len..offset + len) }
+            }
+        })
     }
 
     /// Returns a zero-copy slice of this array with the indicated offset and length.
