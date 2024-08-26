@@ -43,7 +43,6 @@ pub enum ParquetError {
     /// Returned when reading into arrow or writing from arrow.
     ArrowError(String),
     IndexOutOfBound(usize, usize),
-    Crc32Mismatch,
     /// An external error variant
     External(Box<dyn Error + Send + Sync>),
 }
@@ -60,9 +59,6 @@ impl std::fmt::Display for ParquetError {
             ParquetError::ArrowError(message) => write!(fmt, "Arrow: {message}"),
             ParquetError::IndexOutOfBound(index, ref bound) => {
                 write!(fmt, "Index {index} out of bound: {bound}")
-            }
-            ParquetError::Crc32Mismatch => {
-                write!(fmt, "Page CRC checksum mismatch")
             }
             ParquetError::External(e) => write!(fmt, "External: {e}"),
         }

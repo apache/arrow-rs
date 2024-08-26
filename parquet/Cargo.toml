@@ -68,6 +68,7 @@ twox-hash = { version = "1.6", default-features = false }
 paste = { version = "1.0" }
 half = { version = "2.1", default-features = false, features = ["num-traits"] }
 sysinfo = { version = "0.31.2", optional = true, default-features = false, features = ["system"] }
+crc32fast = { version = "1.4.2", optional = true, default-features = false }
 
 [dev-dependencies]
 base64 = { version = "0.22", default-features = false, features = ["std"] }
@@ -96,7 +97,7 @@ zstd-sys = { version = ">=2.0.0, <2.0.14", default-features = false }
 all-features = true
 
 [features]
-default = ["arrow", "snap", "brotli", "flate2", "lz4", "zstd", "base64", "crc"]
+default = ["arrow", "snap", "brotli", "flate2", "lz4", "zstd", "base64"]
 # Enable lz4
 lz4 = ["lz4_flex"]
 # Enable arrow reader/writer APIs
