@@ -325,17 +325,14 @@ mod tests {
     #[test]
     fn test_invalid_column_index() {
         let column_index = ColumnIndex {
-            null_pages: vec![
-                true,
-                false
-            ],
+            null_pages: vec![true, false],
             min_values: vec![
                 vec![],
-                vec![],  // this shouldn't be empty as null_pages[1] is false
+                vec![], // this shouldn't be empty as null_pages[1] is false
             ],
             max_values: vec![
                 vec![],
-                vec![],  // this shouldn't be empty as null_pages[1] is false
+                vec![], // this shouldn't be empty as null_pages[1] is false
             ],
             null_counts: None,
             repetition_level_histograms: None,
@@ -344,6 +341,9 @@ mod tests {
         };
 
         let err = NativeIndex::<i32>::try_new(column_index).unwrap_err();
-        assert_eq!(err.to_string(), "Parquet error: error converting value, expected 4 bytes got 0");
+        assert_eq!(
+            err.to_string(),
+            "Parquet error: error converting value, expected 4 bytes got 0"
+        );
     }
 }
