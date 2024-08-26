@@ -150,14 +150,9 @@ async fn bad_metadata_err() {
         .await
         .unwrap();
     loader.load_page_index(false, false).await.unwrap();
-    loader.finish();
+    loader.load_page_index(false, true).await.unwrap();
 
-    // same again but getting `column_index` and `offset_index`
-    let mut reader = std::io::Cursor::new(&metadata_buffer);
-    let mut loader = MetadataLoader::load(&mut reader, metadata_length, None)
-        .await
-        .unwrap();
-    let err = loader.load_page_index(true, true).await.unwrap_err();
+    let err = loader.load_page_index(true, false).await.unwrap_err();
 
     assert_eq!(
         err.to_string(),
