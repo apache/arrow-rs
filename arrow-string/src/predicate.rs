@@ -134,7 +134,11 @@ impl<'a> Predicate<'a> {
                         string_view_array
                             .prefix_bytes_iter(v.len())
                             .map(|haystack| {
-                                equals_bytes(haystack, v.as_bytes(), equals_kernel) != negate
+                                equals_bytes(
+                                    haystack.unwrap_or_default(),
+                                    v.as_bytes(),
+                                    equals_kernel,
+                                ) != negate
                             })
                             .collect::<Vec<_>>(),
                     )
@@ -151,7 +155,7 @@ impl<'a> Predicate<'a> {
                             .prefix_bytes_iter(v.len())
                             .map(|haystack| {
                                 equals_bytes(
-                                    haystack,
+                                    haystack.unwrap_or_default(),
                                     v.as_bytes(),
                                     equals_ignore_ascii_case_kernel,
                                 ) != negate
@@ -170,7 +174,11 @@ impl<'a> Predicate<'a> {
                         string_view_array
                             .suffix_bytes_iter(v.len())
                             .map(|haystack| {
-                                equals_bytes(haystack, v.as_bytes(), equals_kernel) != negate
+                                equals_bytes(
+                                    haystack.unwrap_or_default(),
+                                    v.as_bytes(),
+                                    equals_kernel,
+                                ) != negate
                             })
                             .collect::<Vec<_>>(),
                     )
@@ -187,7 +195,7 @@ impl<'a> Predicate<'a> {
                             .suffix_bytes_iter(v.len())
                             .map(|haystack| {
                                 equals_bytes(
-                                    haystack,
+                                    haystack.unwrap_or_default(),
                                     v.as_bytes(),
                                     equals_ignore_ascii_case_kernel,
                                 ) != negate
