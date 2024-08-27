@@ -22,8 +22,8 @@ use bytes::Bytes;
 use futures::future::BoxFuture;
 use futures::{FutureExt, TryFutureExt};
 
-use object_store::{GetOptions, ObjectMeta};
 use object_store::{path::Path, ObjectStore};
+use object_store::{GetOptions, ObjectMeta};
 
 use crate::arrow::async_reader::{AsyncFileReader, MetadataLoader};
 use crate::errors::Result;
@@ -217,7 +217,8 @@ mod tests {
         let mut location = Path::from("alltypes_plain.parquet");
 
         let store = Arc::new(store) as Arc<dyn ObjectStore>;
-        let object_reader = ParquetObjectReader::new_without_size(Arc::clone(&store), location.clone());
+        let object_reader =
+            ParquetObjectReader::new_without_size(Arc::clone(&store), location.clone());
         let builder = ParquetRecordBatchStreamBuilder::new(object_reader)
             .await
             .unwrap();

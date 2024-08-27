@@ -84,11 +84,7 @@ impl<F: MetadataFetch> MetadataLoader<F> {
         })
     }
 
-    pub async fn load(
-        mut fetch: F,
-        file_size: usize,
-        prefetch: Option<usize>,
-    ) -> Result<Self> {
+    pub async fn load(mut fetch: F, file_size: usize, prefetch: Option<usize>) -> Result<Self> {
         if file_size < 8 {
             return Err(ParquetError::EOF(format!(
                 "file size of {file_size} is less than footer"
@@ -387,7 +383,9 @@ mod tests {
         // Prefetch just footer exactly
         fetch_count.store(0, Ordering::SeqCst);
         let f = MetadataFetchFn(&mut fetch);
-        let mut loader = MetadataLoader::load_without_size(f, Some(1729)).await.unwrap();
+        let mut loader = MetadataLoader::load_without_size(f, Some(1729))
+            .await
+            .unwrap();
         assert_eq!(fetch_count.load(Ordering::SeqCst), 1);
         loader.load_page_index(true, true).await.unwrap();
         assert_eq!(fetch_count.load(Ordering::SeqCst), 2);
@@ -397,7 +395,9 @@ mod tests {
         // Prefetch more than footer but not enough
         fetch_count.store(0, Ordering::SeqCst);
         let f = MetadataFetchFn(&mut fetch);
-        let mut loader = MetadataLoader::load_without_size(f, Some(130649)).await.unwrap();
+        let mut loader = MetadataLoader::load_without_size(f, Some(130649))
+            .await
+            .unwrap();
         assert_eq!(fetch_count.load(Ordering::SeqCst), 1);
         loader.load_page_index(true, true).await.unwrap();
         assert_eq!(fetch_count.load(Ordering::SeqCst), 2);
@@ -407,7 +407,9 @@ mod tests {
         // Prefetch exactly enough
         fetch_count.store(0, Ordering::SeqCst);
         let f = MetadataFetchFn(&mut fetch);
-        let mut loader = MetadataLoader::load_without_size(f, Some(130650)).await.unwrap();
+        let mut loader = MetadataLoader::load_without_size(f, Some(130650))
+            .await
+            .unwrap();
         assert_eq!(fetch_count.load(Ordering::SeqCst), 1);
         loader.load_page_index(true, true).await.unwrap();
         assert_eq!(fetch_count.load(Ordering::SeqCst), 1);
@@ -417,7 +419,9 @@ mod tests {
         // Prefetch more than enough
         fetch_count.store(0, Ordering::SeqCst);
         let f = MetadataFetchFn(&mut fetch);
-        let mut loader = MetadataLoader::load_without_size(f, Some(131651)).await.unwrap();
+        let mut loader = MetadataLoader::load_without_size(f, Some(131651))
+            .await
+            .unwrap();
         assert_eq!(fetch_count.load(Ordering::SeqCst), 1);
         loader.load_page_index(true, true).await.unwrap();
         assert_eq!(fetch_count.load(Ordering::SeqCst), 1);
@@ -437,9 +441,7 @@ mod tests {
         // Prefetch just footer exactly
         fetch_count.store(0, Ordering::SeqCst);
         let f = MetadataFetchFn(&mut fetch);
-        let mut loader = MetadataLoader::load(f, len, Some(1729))
-            .await
-            .unwrap();
+        let mut loader = MetadataLoader::load(f, len, Some(1729)).await.unwrap();
         assert_eq!(fetch_count.load(Ordering::SeqCst), 1);
         loader.load_page_index(true, true).await.unwrap();
         assert_eq!(fetch_count.load(Ordering::SeqCst), 2);
@@ -449,9 +451,7 @@ mod tests {
         // Prefetch more than footer but not enough
         fetch_count.store(0, Ordering::SeqCst);
         let f = MetadataFetchFn(&mut fetch);
-        let mut loader = MetadataLoader::load(f, len, Some(130649))
-            .await
-            .unwrap();
+        let mut loader = MetadataLoader::load(f, len, Some(130649)).await.unwrap();
         assert_eq!(fetch_count.load(Ordering::SeqCst), 1);
         loader.load_page_index(true, true).await.unwrap();
         assert_eq!(fetch_count.load(Ordering::SeqCst), 2);
@@ -461,9 +461,7 @@ mod tests {
         // Prefetch exactly enough
         fetch_count.store(0, Ordering::SeqCst);
         let f = MetadataFetchFn(&mut fetch);
-        let mut loader = MetadataLoader::load(f, len, Some(130650))
-            .await
-            .unwrap();
+        let mut loader = MetadataLoader::load(f, len, Some(130650)).await.unwrap();
         assert_eq!(fetch_count.load(Ordering::SeqCst), 1);
         loader.load_page_index(true, true).await.unwrap();
         assert_eq!(fetch_count.load(Ordering::SeqCst), 1);
@@ -473,9 +471,7 @@ mod tests {
         // Prefetch more than enough
         fetch_count.store(0, Ordering::SeqCst);
         let f = MetadataFetchFn(&mut fetch);
-        let mut loader = MetadataLoader::load(f, len, Some(131651))
-            .await
-            .unwrap();
+        let mut loader = MetadataLoader::load(f, len, Some(131651)).await.unwrap();
         assert_eq!(fetch_count.load(Ordering::SeqCst), 1);
         loader.load_page_index(true, true).await.unwrap();
         assert_eq!(fetch_count.load(Ordering::SeqCst), 1);
