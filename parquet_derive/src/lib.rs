@@ -223,8 +223,13 @@ pub fn parquet_record_reader(input: proc_macro::TokenStream) -> proc_macro::Toke
 
         #(
           {
-              let idx = name_to_index.get(stringify!(#field_names)).unwrap_or_else(
-                  || panic!("column name '{}' is not found in parquet file!", stringify!(#field_names)));
+              let idx: &usize = match name_to_index.get(stringify!(#field_names)) {
+                Some(col_idx) => col_idx,
+                None => {
+                  let error_msg = format!("column name '{}' is not found in parquet file!", stringify!(#field_names));
+                  return Err(::parquet::errors::ParquetError::General(error_msg));
+                }
+              };
               if let Ok(mut column_reader) = row_group_reader.get_column_reader(*idx) {
                   #reader_snippets
               } else {
