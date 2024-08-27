@@ -22,7 +22,7 @@ use bytes::Bytes;
 use futures::future::BoxFuture;
 use futures::{FutureExt, TryFutureExt};
 
-use object_store::GetOptions;
+use object_store::{GetOptions, ObjectMeta};
 use object_store::{path::Path, ObjectStore};
 
 use crate::arrow::async_reader::{AsyncFileReader, MetadataLoader};
@@ -90,7 +90,18 @@ pub struct ParquetObjectReader {
 
 impl ParquetObjectReader {
     /// Creates a new [`ParquetObjectReader`] for the provided [`ObjectStore`] and [`Path`]
-    pub fn new(store: Arc<dyn ObjectStore>, location: Path) -> Self {
+    pub fn new(store: Arc<dyn ObjectStore>, meta: ObjectMeta) -> Self {
+        Self {
+            store,
+            location: meta.location,
+            file_size: Some(meta.size),
+            metadata_size_hint: None,
+            preload_column_index: false,
+            preload_offset_index: false,
+        }
+    }
+
+    pub fn new_without_size(store: Arc<dyn ObjectStore>, location: Path) -> Self {
         Self {
             store,
             location,
@@ -174,8 +185,8 @@ impl AsyncFileReader for ParquetObjectReader {
             let preload_offset_index = self.preload_offset_index;
             let prefetch = self.metadata_size_hint;
             let mut loader = match self.file_size {
-                Some(file_size) => MetadataLoader::load_absolute(self, file_size, prefetch).await,
-                None => MetadataLoader::load(self, prefetch).await,
+                Some(file_size) => MetadataLoader::load(self, file_size, prefetch).await,
+                None => MetadataLoader::load_without_size(self, prefetch).await,
             }?;
             loader
                 .load_page_index(preload_column_index, preload_offset_index)
@@ -206,7 +217,7 @@ mod tests {
         let mut location = Path::from("alltypes_plain.parquet");
 
         let store = Arc::new(store) as Arc<dyn ObjectStore>;
-        let object_reader = ParquetObjectReader::new(Arc::clone(&store), location.clone());
+        let object_reader = ParquetObjectReader::new_without_size(Arc::clone(&store), location.clone());
         let builder = ParquetRecordBatchStreamBuilder::new(object_reader)
             .await
             .unwrap();
@@ -216,10 +227,8 @@ mod tests {
         assert_eq!(batches[0].num_rows(), 8);
 
         let meta = store.head(&location).await.unwrap();
-        let file_size = meta.size;
 
-        let object_reader = ParquetObjectReader::new(Arc::clone(&store), location.clone())
-            .with_file_size(file_size);
+        let object_reader = ParquetObjectReader::new(Arc::clone(&store), meta);
         let builder = ParquetRecordBatchStreamBuilder::new(object_reader)
             .await
             .unwrap();
@@ -230,7 +239,7 @@ mod tests {
 
         location = Path::from("I don't exist.parquet");
 
-        let object_reader = ParquetObjectReader::new(store, location);
+        let object_reader = ParquetObjectReader::new_without_size(store, location);
         // Cannot use unwrap_err as ParquetRecordBatchStreamBuilder: !Debug
         match ParquetRecordBatchStreamBuilder::new(object_reader).await {
             Ok(_) => panic!("expected failure"),
