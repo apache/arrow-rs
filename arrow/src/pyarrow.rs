@@ -333,11 +333,13 @@ impl<T: ToPyArrow> ToPyArrow for Vec<T> {
 
 impl FromPyArrow for RecordBatch {
     fn from_pyarrow_bound(value: &Bound<PyAny>) -> PyResult<Self> {
+        // Technically `num_rows` is an attribute on `pyarrow.RecordBatch`
+        // If other python classes can use the PyCapsule interface and do not have this attribute,
+        // then this will have no effect.
         let row_count = value
             .getattr("num_rows")
             .ok()
             .and_then(|x| x.extract().ok());
-        println!("USING row_count: {:?}", row_count);
         let options = RecordBatchOptions::default().with_row_count(row_count);
 
         // Newer versions of PyArrow as well as other libraries with Arrow data implement this
