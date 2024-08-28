@@ -184,7 +184,7 @@ pub fn filter_record_batch(
     let mut filter_builder = FilterBuilder::new(predicate);
     if record_batch.num_columns() > 1 {
         // Only optimize if filtering more than one column
-        // Otherwise, the   overhead of optimization can be more than the benefit
+        // Otherwise, the overhead of optimization can be more than the benefit
         filter_builder = filter_builder.optimize();
     }
     let filter = filter_builder.build();
