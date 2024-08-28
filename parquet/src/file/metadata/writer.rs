@@ -390,7 +390,6 @@ impl<'a, W: Write> ParquetMetaDataWriter<'a, W> {
 #[cfg(feature = "arrow")]
 #[cfg(feature = "async")]
 mod tests {
-    use std::i32;
     use std::sync::Arc;
 
     use crate::file::footer::parse_metadata;
