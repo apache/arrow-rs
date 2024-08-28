@@ -59,7 +59,7 @@ use std::convert::{From, TryFrom};
 use std::ptr::{addr_of, addr_of_mut};
 use std::sync::Arc;
 
-use arrow_array::{RecordBatchIterator, RecordBatchReader, StructArray};
+use arrow_array::{RecordBatchIterator, RecordBatchOptions, RecordBatchReader, StructArray};
 use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::ffi::Py_uintptr_t;
 use pyo3::import_exception;
@@ -333,6 +333,13 @@ impl<T: ToPyArrow> ToPyArrow for Vec<T> {
 
 impl FromPyArrow for RecordBatch {
     fn from_pyarrow_bound(value: &Bound<PyAny>) -> PyResult<Self> {
+        let row_count = value
+            .getattr("num_rows")
+            .ok()
+            .and_then(|x| x.extract().ok());
+        println!("USING row_count: {:?}", row_count);
+        let options = RecordBatchOptions::default().with_row_count(row_count);
+
         // Newer versions of PyArrow as well as other libraries with Arrow data implement this
         // method, so prefer it over _export_to_c.
         // See https://arrow.apache.org/docs/format/CDataInterface/PyCapsuleInterface.html
@@ -371,7 +378,7 @@ impl FromPyArrow for RecordBatch {
                 0,
                 "Cannot convert nullable StructArray to RecordBatch, see StructArray documentation"
             );
-            return RecordBatch::try_new(schema, columns).map_err(to_py_err);
+            return RecordBatch::try_new_with_options(schema, columns, &options).map_err(to_py_err);
         }
 
         validate_class("RecordBatch", value)?;
@@ -386,7 +393,8 @@ impl FromPyArrow for RecordBatch {
             .map(|a| Ok(make_array(ArrayData::from_pyarrow_bound(&a)?)))
             .collect::<PyResult<_>>()?;
 
-        let batch = RecordBatch::try_new(schema, arrays).map_err(to_py_err)?;
+        let batch =
+            RecordBatch::try_new_with_options(schema, arrays, &options).map_err(to_py_err)?;
         Ok(batch)
     }
 }
