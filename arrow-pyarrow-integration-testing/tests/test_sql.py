@@ -482,26 +482,18 @@ def test_empty_recordbatch_with_row_count():
     The result of a `count` on a dataset is a RecordBatch with no columns but with `num_rows` set
     """
 
-    # If you know how to create an empty RecordBatch with a specific number of rows, please share
     # Create an empty schema with no fields
-    schema = pa.schema([])
+    batch = pa.RecordBatch.from_pydict({"a": [1, 2, 3, 4]}).select([])
+    num_rows = 4
+    assert batch.num_rows == num_rows
+    assert batch.num_columns == 0
 
-    # Create an empty RecordBatch with 0 columns
-    record_batch = pa.RecordBatch.from_arrays([], schema=schema)
-
-    # Set the desired number of rows by creating a table and slicing
-    num_rows = 5  # Replace with your desired number of rows
-    empty_table = pa.Table.from_batches([record_batch]).slice(0, num_rows)
-
-    # Get the first batch from the table which will have the desired number of rows
-    batch = empty_table.to_batches()[0]
-    
     b = rust.round_trip_record_batch(batch)
     assert b == batch
     assert b.schema == batch.schema
     assert b.schema.metadata == batch.schema.metadata
 
-    assert b.num_rows == num_rows
+    assert b.num_rows == batch.num_rows
     
     del b
 
