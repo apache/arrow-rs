@@ -302,7 +302,7 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
         ArrayIter::new(self)
     }
 
-    /// Returns an iterator over the bytes of this array.
+    /// Returns an iterator over the bytes of this array, including null values
     pub fn bytes_iter(&self) -> impl Iterator<Item = &[u8]> {
         self.views.iter().map(move |v| {
             let len = *v as u32;
@@ -317,8 +317,11 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
         })
     }
 
-    /// Returns an iterator over the prefix bytes of this array with respect to the prefix length.
-    /// If the prefix length is larger than the string length, it will return the empty slice.
+    /// Returns an iterator over the first `prefix_len` bytes of each array
+    /// element, including null values.
+    ///
+    /// If `prefix_len` is larger than the element's length, the iterator will
+    /// return an empty slice (`&[]`).
     pub fn prefix_bytes_iter(&self, prefix_len: usize) -> impl Iterator<Item = &[u8]> {
         self.views().into_iter().map(move |v| {
             let len = (*v as u32) as usize;
@@ -341,8 +344,14 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
         })
     }
 
-    /// Returns an iterator over the suffix bytes of this array with respect to the suffix length.
-    /// If the suffix length is larger than the string length, it will return the empty slice.
+    /// Returns an iterator over the last `suffix_len` bytes of each array
+    /// element, including null values.
+    ///
+    /// Note that for [`StringViewArray`] the last bytes may start in the middle
+    /// of a UTF-8 codepoint, and thus may not be a valid `&str`.
+    ///
+    /// If `suffix_len` is larger than the element's length, the iterator will
+    /// return an empty slice (`&[]`).
     pub fn suffix_bytes_iter(&self, suffix_len: usize) -> impl Iterator<Item = &[u8]> {
         self.views().into_iter().map(move |v| {
             let len = (*v as u32) as usize;
