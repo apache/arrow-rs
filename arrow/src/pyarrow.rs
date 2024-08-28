@@ -333,15 +333,6 @@ impl<T: ToPyArrow> ToPyArrow for Vec<T> {
 
 impl FromPyArrow for RecordBatch {
     fn from_pyarrow_bound(value: &Bound<PyAny>) -> PyResult<Self> {
-        // Technically `num_rows` is an attribute on `pyarrow.RecordBatch`
-        // If other python classes can use the PyCapsule interface and do not have this attribute,
-        // then this will have no effect.
-        let row_count = value
-            .getattr("num_rows")
-            .ok()
-            .and_then(|x| x.extract().ok());
-        let options = RecordBatchOptions::default().with_row_count(row_count);
-
         // Newer versions of PyArrow as well as other libraries with Arrow data implement this
         // method, so prefer it over _export_to_c.
         // See https://arrow.apache.org/docs/format/CDataInterface/PyCapsuleInterface.html
@@ -370,6 +361,7 @@ impl FromPyArrow for RecordBatch {
                     "Expected Struct type from __arrow_c_array.",
                 ));
             }
+            let options = RecordBatchOptions::default().with_row_count(Some(array_data.len()));
             let array = StructArray::from(array_data);
             // StructArray does not embed metadata from schema. We need to override
             // the output schema with the schema from the capsule.
@@ -394,6 +386,12 @@ impl FromPyArrow for RecordBatch {
             .iter()
             .map(|a| Ok(make_array(ArrayData::from_pyarrow_bound(&a)?)))
             .collect::<PyResult<_>>()?;
+
+        let row_count = value
+            .getattr("num_rows")
+            .ok()
+            .and_then(|x| x.extract().ok());
+        let options = RecordBatchOptions::default().with_row_count(row_count);
 
         let batch =
             RecordBatch::try_new_with_options(schema, arrays, &options).map_err(to_py_err)?;
