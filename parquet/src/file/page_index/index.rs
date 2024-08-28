@@ -227,16 +227,17 @@ impl<T: ParquetValueType> NativeIndex<T> {
     }
 
     pub(crate) fn to_thrift(&self) -> ColumnIndex {
-        let mut min_values = vec![vec![]; self.indexes.len()];
-        let mut max_values = vec![vec![]; self.indexes.len()];
-        for (i, index) in self.indexes.iter().enumerate() {
-            if let Some(min) = index.min_bytes() {
-                min_values[i].extend_from_slice(min);
-            }
-            if let Some(max) = index.max_bytes() {
-                max_values[i].extend_from_slice(max);
-            }
-        }
+        let min_values = self
+            .indexes
+            .iter()
+            .map(|x| x.min_bytes().unwrap_or(&[]).to_vec())
+            .collect::<Vec<_>>();
+
+        let max_values = self
+            .indexes
+            .iter()
+            .map(|x| x.max_bytes().unwrap_or(&[]).to_vec())
+            .collect::<Vec<_>>();
 
         let null_counts = self
             .indexes
