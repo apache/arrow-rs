@@ -2669,6 +2669,26 @@ mod tests {
     }
 
     #[test]
+    fn test_column_index_with_null_pages() {
+        let page_writer = get_test_page_writer();
+        let props = Default::default();
+        let mut writer = get_test_column_writer::<Int32Type>(page_writer, 1, 0, props);
+        writer.write_batch(&[], Some(&[0, 0, 0, 0]), None).unwrap();
+
+        let r = writer.close().unwrap();
+        assert!(r.column_index.is_some());
+        let col_idx = r.column_index.unwrap();
+        assert!(col_idx.null_pages[0]);
+        assert_eq!(col_idx.min_values[0].len(), 0);
+        assert_eq!(col_idx.max_values[0].len(), 0);
+        assert!(col_idx.null_counts.is_some());
+        assert_eq!(col_idx.null_counts.as_ref().unwrap()[0], 4);
+        assert!(col_idx.repetition_level_histograms.is_none());
+        assert!(col_idx.definition_level_histograms.is_some());
+        assert_eq!(col_idx.definition_level_histograms.unwrap(), &[4, 0]);
+    }
+
+    #[test]
     fn test_column_offset_index_metadata() {
         // write data
         // and check the offset index and column index
