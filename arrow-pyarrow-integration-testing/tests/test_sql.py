@@ -501,6 +501,8 @@ def test_empty_recordbatch_with_row_count():
     assert b.schema == batch.schema
     assert b.schema.metadata == batch.schema.metadata
 
+    assert b.num_rows == num_rows
+    
     del b
 
 def test_record_batch_reader():
