@@ -70,7 +70,7 @@ struct APartiallyCompleteRecord {
 // If these fields are guaranteed to be valid
 // we can load this struct into APartiallyCompleteRecord
 #[derive(PartialEq, ParquetRecordWriter, Debug)]
-struct AnOptionalRecord {
+struct APartiallyOptionalRecord {
     pub bool: bool,
     pub string: String,
     pub i16: Option<i16>,
@@ -256,7 +256,7 @@ mod tests {
     #[test]
     fn test_parquet_derive_read_optional_but_valid_column() {
         let file = get_temp_file("test_parquet_derive_read_optional", &[]);
-        let drs = vec![AnOptionalRecord {
+        let drs = vec![APartiallyOptionalRecord {
             bool: true,
             string: "a string".into(),
             i16: Some(-45),
