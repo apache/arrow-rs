@@ -185,7 +185,7 @@ impl FromStr for GoogleConfigKey {
             "google_service_account_key" | "service_account_key" => Ok(Self::ServiceAccountKey),
             "google_bucket" | "google_bucket_name" | "bucket" | "bucket_name" => Ok(Self::Bucket),
             "google_application_credentials" => Ok(Self::ApplicationCredentials),
-            _ => match s.parse() {
+            _ => match s.strip_prefix("google_").unwrap_or(s).parse() {
                 Ok(key) => Ok(Self::Client(key)),
                 Err(_) => Err(Error::UnknownConfigurationKey { key: s.into() }.into()),
             },
@@ -671,4 +671,16 @@ mod tests {
             google_bucket_name
         );
     }
+
+
+    #[test]
+    fn gcp_test_client_opts() {
+        let key = "GOOGLE_PROXY_URL";
+        if let Ok(config_key) = key.to_ascii_lowercase().parse() {
+            assert_eq!(GoogleConfigKey::Client(ClientConfigKey::ProxyUrl), config_key);
+        } else {
+            panic!("{} not propagated as ClientConfigKey", key);
+        }
+    }
+
 }

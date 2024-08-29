@@ -408,7 +408,7 @@ impl FromStr for AzureConfigKey {
             "azure_disable_tagging" | "disable_tagging" => Ok(Self::DisableTagging),
             // Backwards compatibility
             "azure_allow_http" => Ok(Self::Client(ClientConfigKey::AllowHttp)),
-            _ => match s.parse() {
+            _ => match s.strip_prefix("azure_").unwrap_or(s).parse() {
                 Ok(key) => Ok(Self::Client(key)),
                 Err(_) => Err(Error::UnknownConfigurationKey { key: s.into() }.into()),
             },
@@ -1102,5 +1102,15 @@ mod tests {
         ];
         let pairs = split_sas(raw_sas).unwrap();
         assert_eq!(expected, pairs);
+    }
+
+    #[test]
+    fn azure_test_client_opts() {
+        let key = "AZURE_PROXY_URL";
+        if let Ok(config_key) = key.to_ascii_lowercase().parse() {
+            assert_eq!(AzureConfigKey::Client(ClientConfigKey::ProxyUrl), config_key);
+        } else {
+            panic!("{} not propagated as ClientConfigKey", key);
+        }
     }
 }
