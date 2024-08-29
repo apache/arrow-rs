@@ -169,6 +169,8 @@ pub fn filter(values: &dyn Array, predicate: &BooleanArray) -> Result<ArrayRef, 
     let mut filter_builder = FilterBuilder::new(predicate);
 
     if multiple_arrays(values.data_type()) {
+        // Only optimize if filtering more than one array
+        // Otherwise, the overhead of optimization can be more than the benefit
         filter_builder = filter_builder.optimize();
     }
 
