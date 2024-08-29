@@ -111,8 +111,6 @@ impl MutableBuffer {
             0 => dangling_ptr(),
             _ => {
                 // Safety: Verified size != 0
-                // let raw_ptr = unsafe { Self::alloc(Global, layout) };
-                // NonNull::new(raw_ptr).unwrap_or_else(|| handle_alloc_error(layout))
                 unsafe { Self::alloc(&Global, layout) }
             }
         };
@@ -501,6 +499,45 @@ impl MutableBuffer {
     }
 }
 
+#[cfg(feature = "allocator_api")]
+impl<A: Allocator> MutableBuffer<A> {
+    /// Allocate a new [MutableBuffer] with initial capacity to be at least `capacity`
+    /// in the given allocator.
+    ///
+    /// See [`MutableBuffer::with_capacity_in`].
+    #[inline]
+    pub fn new_in(allocator: A, capacity: usize) -> Self {
+        Self::with_capacity_in(allocator, capacity)
+    }
+
+    /// Allocate a new [MutableBuffer] with initial capacity to be at least `capacity`.
+    /// in the given allocator
+    ///
+    /// # Panics
+    ///
+    /// If `capacity`, when rounded up to the nearest multiple of [`ALIGNMENT`], is greater
+    /// then `isize::MAX`, then this function will panic.
+    #[inline]
+    pub fn with_capacity_in(allocator: A, capacity: usize) -> Self {
+        let capacity = bit_util::round_upto_multiple_of_64(capacity);
+        let layout = Layout::from_size_align(capacity, ALIGNMENT)
+            .expect("failed to create layout for MutableBuffer");
+        let data = match layout.size() {
+            0 => dangling_ptr(),
+            _ => {
+                // Safety: Verified size != 0
+                unsafe { Self::alloc(&allocator, layout) }
+            }
+        };
+        Self {
+            data,
+            len: 0,
+            layout,
+            allocator,
+        }
+    }
+}
+
 /// `allocator_api` related internal methods
 impl<A: Allocator> MutableBuffer<A> {
     #[inline]
@@ -585,7 +622,7 @@ impl<A: Allocator> MutableBuffer<A> {
                 0 => unsafe { Self::alloc(&self.allocator, new_layout) },
                 // Safety: verified new layout is valid and not empty
                 _ => unsafe {
-                    let new_data = std::alloc::realloc(self.as_mut_ptr(), self.layout, capacity);
+                    let new_data = std::alloc::realloc(self.data.as_ptr(), self.layout, capacity);
                     NonNull::new(new_data).unwrap_or_else(|| handle_alloc_error(new_layout))
                 },
             };
@@ -629,13 +666,18 @@ impl<T: ArrowNativeType> From<Vec<T>> for MutableBuffer {
         // Vec guaranteed to have a valid layout matching that of `Layout::array`
         // This is based on `RawVec::current_memory`
         let layout = unsafe { Layout::array::<T>(value.capacity()).unwrap_unchecked() };
-        mem::forget(value);
-        Self {
+        let zelf = Self {
             data,
             len,
             layout,
+            #[cfg(not(feature = "allocator_api"))]
             allocator: Global,
-        }
+            #[cfg(feature = "allocator_api")]
+            allocator: *value.allocator(),
+        };
+
+        mem::forget(value);
+        zelf
     }
 }
 
