@@ -244,67 +244,6 @@ impl MutableBuffer {
         }
     }
 
-    #[cold]
-    fn reallocate(&mut self, capacity: usize) {
-        let new_layout = Layout::from_size_align(capacity, self.layout.align()).unwrap();
-
-        // shrink to zero
-        if new_layout.size() == 0 {
-            if self.layout.size() != 0 {
-                // Safety: data was allocated with layout
-                unsafe { Self::dealloc(&self.allocator, self.data, self.layout) };
-                self.layout = new_layout
-            }
-            return;
-        }
-
-        #[cfg(feature = "allocator_api")]
-        match new_layout.size().cmp(&self.layout.size()) {
-            std::cmp::Ordering::Equal => {
-                // no action needed
-                return;
-            }
-            std::cmp::Ordering::Less => {
-                // shrink to new capacity
-                let new_data = unsafe {
-                    self.allocator
-                        .shrink(self.data, self.layout, new_layout)
-                        .unwrap_or_else(|_| handle_alloc_error(new_layout))
-                        .cast()
-                };
-                self.layout = new_layout;
-                self.data = new_data;
-                return;
-            }
-            std::cmp::Ordering::Greater => {
-                // grow to new capacity
-                let new_data = unsafe {
-                    self.allocator
-                        .grow(self.data, self.layout, new_layout)
-                        .unwrap_or_else(|_| handle_alloc_error(new_layout))
-                        .cast()
-                };
-                self.layout = new_layout;
-                self.data = new_data;
-            }
-        }
-
-        #[cfg(not(feature = "allocator_api"))]
-        {
-            self.data = match self.layout.size() {
-                // Safety: new_layout is not empty
-                0 => unsafe { Self::alloc(&self.allocator, new_layout) },
-                // Safety: verified new layout is valid and not empty
-                _ => unsafe {
-                    let new_data = std::alloc::realloc(self.as_mut_ptr(), self.layout, capacity);
-                    NonNull::new(new_data).unwrap_or_else(|| handle_alloc_error(new_layout))
-                },
-            };
-            // self.data = NonNull::new(data).unwrap_or_else(|| handle_alloc_error(new_layout));
-            self.layout = new_layout;
-        }
-    }
-
     /// Truncates this buffer to `len` bytes
     ///
     /// If `len` is greater than the buffer's current length, this has no effect
@@ -591,6 +530,67 @@ impl<A: Allocator> MutableBuffer<A> {
         #[cfg(not(feature = "allocator_api"))]
         {
             std::alloc::dealloc(ptr.as_ptr(), layout)
+        }
+    }
+
+    #[cold]
+    fn reallocate(&mut self, capacity: usize) {
+        let new_layout = Layout::from_size_align(capacity, self.layout.align()).unwrap();
+
+        // shrink to zero
+        if new_layout.size() == 0 {
+            if self.layout.size() != 0 {
+                // Safety: data was allocated with layout
+                unsafe { Self::dealloc(&self.allocator, self.data, self.layout) };
+                self.layout = new_layout
+            }
+            return;
+        }
+
+        #[cfg(feature = "allocator_api")]
+        match new_layout.size().cmp(&self.layout.size()) {
+            std::cmp::Ordering::Equal => {
+                // no action needed
+                return;
+            }
+            std::cmp::Ordering::Less => {
+                // shrink to new capacity
+                let new_data = unsafe {
+                    self.allocator
+                        .shrink(self.data, self.layout, new_layout)
+                        .unwrap_or_else(|_| handle_alloc_error(new_layout))
+                        .cast()
+                };
+                self.layout = new_layout;
+                self.data = new_data;
+                return;
+            }
+            std::cmp::Ordering::Greater => {
+                // grow to new capacity
+                let new_data = unsafe {
+                    self.allocator
+                        .grow(self.data, self.layout, new_layout)
+                        .unwrap_or_else(|_| handle_alloc_error(new_layout))
+                        .cast()
+                };
+                self.layout = new_layout;
+                self.data = new_data;
+            }
+        }
+
+        #[cfg(not(feature = "allocator_api"))]
+        {
+            self.data = match self.layout.size() {
+                // Safety: new_layout is not empty
+                0 => unsafe { Self::alloc(&self.allocator, new_layout) },
+                // Safety: verified new layout is valid and not empty
+                _ => unsafe {
+                    let new_data = std::alloc::realloc(self.as_mut_ptr(), self.layout, capacity);
+                    NonNull::new(new_data).unwrap_or_else(|| handle_alloc_error(new_layout))
+                },
+            };
+            // self.data = NonNull::new(data).unwrap_or_else(|| handle_alloc_error(new_layout));
+            self.layout = new_layout;
         }
     }
 }
