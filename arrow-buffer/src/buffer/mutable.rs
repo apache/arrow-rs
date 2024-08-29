@@ -15,6 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
+#[cfg(feature = "allocator_api")]
+use std::alloc::{Allocator, Global};
+
 use std::alloc::{handle_alloc_error, Layout};
 use std::mem;
 use std::ptr::NonNull;
@@ -27,6 +30,23 @@ use crate::{
 };
 
 use super::Buffer;
+
+#[cfg(not(feature = "allocator_api"))]
+pub trait Allocator: private::Sealed {}
+
+#[cfg(not(feature = "allocator_api"))]
+impl Allocator for Global {}
+
+#[cfg(not(feature = "allocator_api"))]
+#[derive(Debug)]
+pub struct Global;
+
+#[cfg(not(feature = "allocator_api"))]
+mod private {
+    pub trait Sealed {}
+
+    impl Sealed for super::Global {}
+}
 
 /// A [`MutableBuffer`] is Arrow's interface to build a [`Buffer`] out of items or slices of items.
 ///
@@ -51,12 +71,20 @@ use super::Buffer;
 /// assert_eq!(buffer.as_slice(), &[0u8, 1, 0, 0, 1, 0, 0, 0])
 /// ```
 #[derive(Debug)]
-pub struct MutableBuffer {
+pub struct MutableBuffer<
+    #[cfg(feature = "allocator_api")] A: Allocator = Global,
+    #[cfg(not(feature = "allocator_api"))] A: Allocator = Global,
+> {
     // dangling iff capacity = 0
     data: NonNull<u8>,
     // invariant: len <= capacity
     len: usize,
     layout: Layout,
+    #[cfg(feature = "allocator_api")]
+    allocator: A,
+    #[cfg(not(feature = "allocator_api"))]
+    #[doc = "Placeholder for allocator API"]
+    allocator: A,
 }
 
 impl MutableBuffer {
@@ -83,14 +111,16 @@ impl MutableBuffer {
             0 => dangling_ptr(),
             _ => {
                 // Safety: Verified size != 0
-                let raw_ptr = unsafe { std::alloc::alloc(layout) };
-                NonNull::new(raw_ptr).unwrap_or_else(|| handle_alloc_error(layout))
+                // let raw_ptr = unsafe { Self::alloc(Global, layout) };
+                // NonNull::new(raw_ptr).unwrap_or_else(|| handle_alloc_error(layout))
+                unsafe { Self::alloc(&Global, layout) }
             }
         };
         Self {
             data,
             len: 0,
             layout,
+            allocator: Global,
         }
     }
 
@@ -115,7 +145,12 @@ impl MutableBuffer {
                 NonNull::new(raw_ptr).unwrap_or_else(|| handle_alloc_error(layout))
             }
         };
-        Self { data, len, layout }
+        Self {
+            data,
+            len,
+            layout,
+            allocator: Global,
+        }
     }
 
     /// Create a [`MutableBuffer`] from the provided [`Vec`] without copying
@@ -136,7 +171,12 @@ impl MutableBuffer {
         let data = bytes.ptr();
         mem::forget(bytes);
 
-        Ok(Self { data, len, layout })
+        Ok(Self {
+            data,
+            len,
+            layout,
+            allocator: Global,
+        })
     }
 
     /// creates a new [MutableBuffer] with capacity and length capable of holding `len` bits.
@@ -207,23 +247,62 @@ impl MutableBuffer {
     #[cold]
     fn reallocate(&mut self, capacity: usize) {
         let new_layout = Layout::from_size_align(capacity, self.layout.align()).unwrap();
+
+        // shrink to zero
         if new_layout.size() == 0 {
             if self.layout.size() != 0 {
                 // Safety: data was allocated with layout
-                unsafe { std::alloc::dealloc(self.as_mut_ptr(), self.layout) };
+                unsafe { Self::dealloc(&self.allocator, self.data, self.layout) };
                 self.layout = new_layout
             }
             return;
         }
 
-        let data = match self.layout.size() {
-            // Safety: new_layout is not empty
-            0 => unsafe { std::alloc::alloc(new_layout) },
-            // Safety: verified new layout is valid and not empty
-            _ => unsafe { std::alloc::realloc(self.as_mut_ptr(), self.layout, capacity) },
-        };
-        self.data = NonNull::new(data).unwrap_or_else(|| handle_alloc_error(new_layout));
-        self.layout = new_layout;
+        #[cfg(feature = "allocator_api")]
+        match new_layout.size().cmp(&self.layout.size()) {
+            std::cmp::Ordering::Equal => {
+                // no action needed
+                return;
+            }
+            std::cmp::Ordering::Less => {
+                // shrink to new capacity
+                let new_data = unsafe {
+                    self.allocator
+                        .shrink(self.data, self.layout, new_layout)
+                        .unwrap_or_else(|_| handle_alloc_error(new_layout))
+                        .cast()
+                };
+                self.layout = new_layout;
+                self.data = new_data;
+                return;
+            }
+            std::cmp::Ordering::Greater => {
+                // grow to new capacity
+                let new_data = unsafe {
+                    self.allocator
+                        .grow(self.data, self.layout, new_layout)
+                        .unwrap_or_else(|_| handle_alloc_error(new_layout))
+                        .cast()
+                };
+                self.layout = new_layout;
+                self.data = new_data;
+            }
+        }
+
+        #[cfg(not(feature = "allocator_api"))]
+        {
+            self.data = match self.layout.size() {
+                // Safety: new_layout is not empty
+                0 => unsafe { Self::alloc(&self.allocator, new_layout) },
+                // Safety: verified new layout is valid and not empty
+                _ => unsafe {
+                    let new_data = std::alloc::realloc(self.as_mut_ptr(), self.layout, capacity);
+                    NonNull::new(new_data).unwrap_or_else(|| handle_alloc_error(new_layout))
+                },
+            };
+            // self.data = NonNull::new(data).unwrap_or_else(|| handle_alloc_error(new_layout));
+            self.layout = new_layout;
+        }
     }
 
     /// Truncates this buffer to `len` bytes
@@ -483,6 +562,39 @@ impl MutableBuffer {
     }
 }
 
+/// `allocator_api` related internal methods
+impl<A: Allocator> MutableBuffer<A> {
+    #[inline]
+    unsafe fn alloc(_alloc: &A, layout: Layout) -> NonNull<u8> {
+        #[cfg(feature = "allocator_api")]
+        {
+            _alloc
+                .allocate(layout)
+                .unwrap_or_else(|_| handle_alloc_error(layout))
+                .cast()
+        }
+
+        #[cfg(not(feature = "allocator_api"))]
+        {
+            let data = std::alloc::alloc(layout);
+            NonNull::new(data).unwrap_or_else(|| handle_alloc_error(layout))
+        }
+    }
+
+    #[inline]
+    unsafe fn dealloc(_alloc: &A, ptr: NonNull<u8>, layout: Layout) {
+        #[cfg(feature = "allocator_api")]
+        {
+            _alloc.deallocate(ptr, layout)
+        }
+
+        #[cfg(not(feature = "allocator_api"))]
+        {
+            std::alloc::dealloc(ptr.as_ptr(), layout)
+        }
+    }
+}
+
 #[inline]
 fn dangling_ptr() -> NonNull<u8> {
     // SAFETY: ALIGNMENT is a non-zero usize which is then casted
@@ -518,7 +630,12 @@ impl<T: ArrowNativeType> From<Vec<T>> for MutableBuffer {
         // This is based on `RawVec::current_memory`
         let layout = unsafe { Layout::array::<T>(value.capacity()).unwrap_unchecked() };
         mem::forget(value);
-        Self { data, len, layout }
+        Self {
+            data,
+            len,
+            layout,
+            allocator: Global,
+        }
     }
 }
 
@@ -688,11 +805,11 @@ impl std::ops::DerefMut for MutableBuffer {
     }
 }
 
-impl Drop for MutableBuffer {
+impl<A: Allocator> Drop for MutableBuffer<A> {
     fn drop(&mut self) {
         if self.layout.size() != 0 {
             // Safety: data was allocated with standard allocator with given layout
-            unsafe { std::alloc::dealloc(self.data.as_ptr() as _, self.layout) };
+            unsafe { Self::dealloc(&self.allocator, self.data, self.layout) };
         }
     }
 }
