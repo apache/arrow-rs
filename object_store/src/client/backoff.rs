@@ -18,7 +18,7 @@
 use rand::prelude::*;
 use std::time::Duration;
 
-/// Backoff with decorrelated jitter algorithm
+/// Exponential backoff with decorrelated jitter algorithm
 ///
 /// The first backoff will always be `init_backoff`.
 ///
