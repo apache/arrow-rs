@@ -479,7 +479,9 @@ def test_tensor_array():
 
 def test_empty_recordbatch_with_row_count():
     """
-    The result of a `count` on a dataset is a RecordBatch with no columns but with `num_rows` set
+    A pyarrow.RecordBatch with no columns but with `num_rows` set.
+
+    `datafusion-python` gets this as the result of a `count(*)` query.  
     """
 
     # Create an empty schema with no fields
