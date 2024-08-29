@@ -168,16 +168,6 @@ pub fn prep_null_mask_filter(filter: &BooleanArray) -> BooleanArray {
 pub fn filter(values: &dyn Array, predicate: &BooleanArray) -> Result<ArrayRef, ArrowError> {
     let mut filter_builder = FilterBuilder::new(predicate);
 
-    fn multiple_arrays(data_type: &DataType) -> bool {
-        match data_type {
-            DataType::Struct(fields) => {
-                fields.len() > 1 || fields.len() == 1 && multiple_arrays(fields[0].data_type())
-            }
-            DataType::Union(fields, UnionMode::Sparse) => !fields.is_empty(),
-            _ => false,
-        }
-    }
-
     if multiple_arrays(values.data_type()) {
         filter_builder = filter_builder.optimize();
     }
@@ -185,6 +175,16 @@ pub fn filter(values: &dyn Array, predicate: &BooleanArray) -> Result<ArrayRef, 
     let predicate = filter_builder.build();
 
     filter_array(values, &predicate)
+}
+
+fn multiple_arrays(data_type: &DataType) -> bool {
+    match data_type {
+        DataType::Struct(fields) => {
+            fields.len() > 1 || fields.len() == 1 && multiple_arrays(fields[0].data_type())
+        }
+        DataType::Union(fields, UnionMode::Sparse) => !fields.is_empty(),
+        _ => false,
+    }
 }
 
 /// Returns a new [RecordBatch] with arrays containing only values matching the filter.
