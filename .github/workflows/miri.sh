@@ -12,7 +12,7 @@ cargo miri setup
 cargo clean
 
 echo "Starting Arrow MIRI run..."
-cargo miri test -p arrow-buffer
+cargo miri test -p arrow-buffer --features allocator_api
 cargo miri test -p arrow-data --features ffi
 cargo miri test -p arrow-schema --features ffi
 cargo miri test -p arrow-ord

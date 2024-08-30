@@ -61,8 +61,8 @@ jobs:
           submodules: true
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
-      - name: Test arrow-buffer with all features
-        run: cargo test -p arrow-buffer --all-features
+      - name: Test arrow-buffer
+        run: cargo test -p arrow-buffer
       - name: Test arrow-data with all features
         run: cargo test -p arrow-data --all-features
       - name: Test arrow-schema with all features
