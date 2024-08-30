@@ -1460,7 +1460,10 @@ mod tests {
     fn aws_test_client_opts() {
         let key = "AWS_PROXY_URL";
         if let Ok(config_key) = key.to_ascii_lowercase().parse() {
-            assert_eq!(AmazonS3ConfigKey::Client(ClientConfigKey::ProxyUrl), config_key);
+            assert_eq!(
+                AmazonS3ConfigKey::Client(ClientConfigKey::ProxyUrl),
+                config_key
+            );
         } else {
             panic!("{} not propagated as ClientConfigKey", key);
         }

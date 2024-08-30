@@ -1108,7 +1108,10 @@ mod tests {
     fn azure_test_client_opts() {
         let key = "AZURE_PROXY_URL";
         if let Ok(config_key) = key.to_ascii_lowercase().parse() {
-            assert_eq!(AzureConfigKey::Client(ClientConfigKey::ProxyUrl), config_key);
+            assert_eq!(
+                AzureConfigKey::Client(ClientConfigKey::ProxyUrl),
+                config_key
+            );
         } else {
             panic!("{} not propagated as ClientConfigKey", key);
         }
