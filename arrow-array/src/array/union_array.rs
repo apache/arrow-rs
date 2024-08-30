@@ -727,9 +727,9 @@ impl Array for UnionArray {
                 // masking is only efficient up to a certain point
                 // when all fields contains nulls, one field mask can be cheaply calculated
                 // by negating the others, so it's threshold is higher
-                if with_nulls.len() <= 12 && with_nulls.len() == fields.len() {
+                if with_nulls.len() <= 10 && with_nulls.len() == fields.len() {
                     self.mask_sparse_all_nulls(&with_nulls)
-                } else if with_nulls.len() <= 11 {
+                } else if with_nulls.len() <= 9 {
                     self.mask_sparse_mixed_nulls(&with_nulls)
                 } else {
                     self.gather_nulls(&with_nulls)
