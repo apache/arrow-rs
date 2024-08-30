@@ -32,6 +32,8 @@ use crate::{
 use super::Buffer;
 
 #[cfg(not(feature = "allocator_api"))]
+#[doc = "Placeholder trait for std::alloc::Allocator. To appoint a real allocator,"]
+#[doc = "please enable `allocator_api` feature with nightly toolchain"]
 pub trait Allocator: private::Sealed {}
 
 #[cfg(not(feature = "allocator_api"))]
@@ -541,10 +543,10 @@ impl<A: Allocator> MutableBuffer<A> {
 /// `allocator_api` related internal methods
 impl<A: Allocator> MutableBuffer<A> {
     #[inline]
-    unsafe fn alloc(_alloc: &A, layout: Layout) -> NonNull<u8> {
+    unsafe fn alloc(alloc: &A, layout: Layout) -> NonNull<u8> {
         #[cfg(feature = "allocator_api")]
         {
-            _alloc
+            alloc
                 .allocate(layout)
                 .unwrap_or_else(|_| handle_alloc_error(layout))
                 .cast()
@@ -552,20 +554,22 @@ impl<A: Allocator> MutableBuffer<A> {
 
         #[cfg(not(feature = "allocator_api"))]
         {
+            let _ = alloc;
             let data = std::alloc::alloc(layout);
             NonNull::new(data).unwrap_or_else(|| handle_alloc_error(layout))
         }
     }
 
     #[inline]
-    unsafe fn dealloc(_alloc: &A, ptr: NonNull<u8>, layout: Layout) {
+    unsafe fn dealloc(alloc: &A, ptr: NonNull<u8>, layout: Layout) {
         #[cfg(feature = "allocator_api")]
         {
-            _alloc.deallocate(ptr, layout)
+            alloc.deallocate(ptr, layout)
         }
 
         #[cfg(not(feature = "allocator_api"))]
         {
+            let _ = alloc;
             std::alloc::dealloc(ptr.as_ptr(), layout)
         }
     }
@@ -588,7 +592,6 @@ impl<A: Allocator> MutableBuffer<A> {
         match new_layout.size().cmp(&self.layout.size()) {
             std::cmp::Ordering::Equal => {
                 // no action needed
-                return;
             }
             std::cmp::Ordering::Less => {
                 // shrink to new capacity
@@ -600,7 +603,6 @@ impl<A: Allocator> MutableBuffer<A> {
                 };
                 self.layout = new_layout;
                 self.data = new_data;
-                return;
             }
             std::cmp::Ordering::Greater => {
                 // grow to new capacity
@@ -626,7 +628,6 @@ impl<A: Allocator> MutableBuffer<A> {
                     NonNull::new(new_data).unwrap_or_else(|| handle_alloc_error(new_layout))
                 },
             };
-            // self.data = NonNull::new(data).unwrap_or_else(|| handle_alloc_error(new_layout));
             self.layout = new_layout;
         }
     }
