@@ -20,7 +20,6 @@ use std::{cmp, mem::size_of};
 use bytes::Bytes;
 
 use crate::errors::{ParquetError, Result};
-use crate::util::bit_util::from_le_slice;
 use crate::util::bit_util::{self, BitReader, BitWriter, FromBytes};
 
 /// Rle/Bit-Packing Hybrid Encoding
@@ -356,13 +355,13 @@ impl RleDecoder {
         }
 
         let value = if self.rle_left > 0 {
-            let rle_value = from_le_slice(
+            let rle_value = T::try_from_le_slice(
                 &self
                     .current_value
                     .as_mut()
                     .expect("current_value should be Some")
                     .to_ne_bytes(),
-            );
+            )?;
             self.rle_left -= 1;
             rle_value
         } else {
@@ -388,9 +387,9 @@ impl RleDecoder {
                 let num_values =
                     cmp::min(buffer.len() - values_read, self.rle_left as usize);
                 for i in 0..num_values {
-                    let repeated_value = from_le_slice(
+                    let repeated_value = T::try_from_le_slice(
                         &self.current_value.as_mut().unwrap().to_ne_bytes(),
-                    );
+                    )?;
                     buffer[values_read + i] = repeated_value;
                 }
                 self.rle_left -= num_values as u32;

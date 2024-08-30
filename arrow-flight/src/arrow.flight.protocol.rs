@@ -464,8 +464,8 @@ pub mod flight_service_client {
     where
         T: tonic::client::GrpcService<tonic::body::BoxBody>,
         T::Error: Into<StdError>,
-        T::ResponseBody: Body<Data = Bytes> + Send + 'static,
-        <T::ResponseBody as Body>::Error: Into<StdError> + Send,
+        T::ResponseBody: Body<Data = Bytes> + std::marker::Send + 'static,
+        <T::ResponseBody as Body>::Error: Into<StdError> + std::marker::Send,
     {
         pub fn new(inner: T) -> Self {
             let inner = tonic::client::Grpc::new(inner);
@@ -490,7 +490,7 @@ pub mod flight_service_client {
             >,
             <T as tonic::codegen::Service<
                 http::Request<tonic::body::BoxBody>,
-            >>::Error: Into<StdError> + Send + Sync,
+            >>::Error: Into<StdError> + std::marker::Send + std::marker::Sync,
         {
             FlightServiceClient::new(InterceptedService::new(inner, interceptor))
         }
@@ -876,12 +876,12 @@ pub mod flight_service_server {
     use tonic::codegen::*;
     /// Generated trait containing gRPC methods that should be implemented for use with FlightServiceServer.
     #[async_trait]
-    pub trait FlightService: Send + Sync + 'static {
+    pub trait FlightService: std::marker::Send + std::marker::Sync + 'static {
         /// Server streaming response type for the Handshake method.
         type HandshakeStream: tonic::codegen::tokio_stream::Stream<
                 Item = std::result::Result<super::HandshakeResponse, tonic::Status>,
             >
-            + Send
+            + std::marker::Send
             + 'static;
         ///
         /// Handshake between client and server. Depending on the server, the
@@ -896,7 +896,7 @@ pub mod flight_service_server {
         type ListFlightsStream: tonic::codegen::tokio_stream::Stream<
                 Item = std::result::Result<super::FlightInfo, tonic::Status>,
             >
-            + Send
+            + std::marker::Send
             + 'static;
         ///
         /// Get a list of available streams given a particular criteria. Most flight
@@ -967,7 +967,7 @@ pub mod flight_service_server {
         type DoGetStream: tonic::codegen::tokio_stream::Stream<
                 Item = std::result::Result<super::FlightData, tonic::Status>,
             >
-            + Send
+            + std::marker::Send
             + 'static;
         ///
         /// Retrieve a single stream associated with a particular descriptor
@@ -982,7 +982,7 @@ pub mod flight_service_server {
         type DoPutStream: tonic::codegen::tokio_stream::Stream<
                 Item = std::result::Result<super::PutResult, tonic::Status>,
             >
-            + Send
+            + std::marker::Send
             + 'static;
         ///
         /// Push a stream to the flight service associated with a particular
@@ -999,7 +999,7 @@ pub mod flight_service_server {
         type DoExchangeStream: tonic::codegen::tokio_stream::Stream<
                 Item = std::result::Result<super::FlightData, tonic::Status>,
             >
-            + Send
+            + std::marker::Send
             + 'static;
         ///
         /// Open a bidirectional data channel for a given descriptor. This
@@ -1015,7 +1015,7 @@ pub mod flight_service_server {
         type DoActionStream: tonic::codegen::tokio_stream::Stream<
                 Item = std::result::Result<super::Result, tonic::Status>,
             >
-            + Send
+            + std::marker::Send
             + 'static;
         ///
         /// Flight services can support an arbitrary number of simple actions in
@@ -1032,7 +1032,7 @@ pub mod flight_service_server {
         type ListActionsStream: tonic::codegen::tokio_stream::Stream<
                 Item = std::result::Result<super::ActionType, tonic::Status>,
             >
-            + Send
+            + std::marker::Send
             + 'static;
         ///
         /// A flight service exposes all of the available action types that it has
@@ -1052,14 +1052,14 @@ pub mod flight_service_server {
     /// accessed using the Arrow Flight Protocol. Additionally, a flight service
     /// can expose a set of actions that are available.
     #[derive(Debug)]
-    pub struct FlightServiceServer<T: FlightService> {
+    pub struct FlightServiceServer<T> {
         inner: Arc<T>,
         accept_compression_encodings: EnabledCompressionEncodings,
         send_compression_encodings: EnabledCompressionEncodings,
         max_decoding_message_size: Option<usize>,
         max_encoding_message_size: Option<usize>,
     }
-    impl<T: FlightService> FlightServiceServer<T> {
+    impl<T> FlightServiceServer<T> {
         pub fn new(inner: T) -> Self {
             Self::from_arc(Arc::new(inner))
         }
@@ -1113,8 +1113,8 @@ pub mod flight_service_server {
     impl<T, B> tonic::codegen::Service<http::Request<B>> for FlightServiceServer<T>
     where
         T: FlightService,
-        B: Body + Send + 'static,
-        B::Error: Into<StdError> + Send + 'static,
+        B: Body + std::marker::Send + 'static,
+        B::Error: Into<StdError> + std::marker::Send + 'static,
     {
         type Response = http::Response<tonic::body::BoxBody>;
         type Error = std::convert::Infallible;
@@ -1605,7 +1605,7 @@ pub mod flight_service_server {
             }
         }
     }
-    impl<T: FlightService> Clone for FlightServiceServer<T> {
+    impl<T> Clone for FlightServiceServer<T> {
         fn clone(&self) -> Self {
             let inner = self.inner.clone();
             Self {
@@ -1617,7 +1617,9 @@ pub mod flight_service_server {
             }
         }
     }
-    impl<T: FlightService> tonic::server::NamedService for FlightServiceServer<T> {
-        const NAME: &'static str = "arrow.flight.protocol.FlightService";
+    /// Generated gRPC service name
+    pub const SERVICE_NAME: &str = "arrow.flight.protocol.FlightService";
+    impl<T> tonic::server::NamedService for FlightServiceServer<T> {
+        const NAME: &'static str = SERVICE_NAME;
     }
 }
