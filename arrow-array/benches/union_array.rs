@@ -50,30 +50,8 @@ fn array_without_nulls() -> ArrayRef {
 }
 
 fn criterion_benchmark(c: &mut Criterion) {
-    for with_nulls in 1..15 {
-        c.bench_function(
-            &format!("union logical nulls 4096 {with_nulls} children with nulls"),
-            |b| {
-                let fields = UnionFields::new(
-                    0..with_nulls,
-                    (0..with_nulls).map(|i| Field::new(format!("f{i}"), DataType::Int32, true)),
-                );
-
-                let array = UnionArray::try_new(
-                    fields,
-                    (0..with_nulls).cycle().take(4096).collect(),
-                    None,
-                    repeat(array_with_nulls())
-                        .take(with_nulls as usize)
-                        .collect(),
-                )
-                .unwrap();
-
-                b.iter(|| black_box(array.logical_nulls()))
-            },
-        );
-
-        for without_nulls in [1, 10] {
+    for with_nulls in 1..12 {
+        for without_nulls in [0, 1, 10] {
             c.bench_function(
                 &format!("union logical nulls 4096 {with_nulls} children with nulls, {without_nulls} without nulls"),
                 |b| {
@@ -81,7 +59,7 @@ fn criterion_benchmark(c: &mut Criterion) {
 
                     let fields = UnionFields::new(
                         type_ids.clone(),
-                        (0..with_nulls+without_nulls).map(|i| Field::new(format!("f{i}"), DataType::Int32, true)),
+                        type_ids.clone().map(|i| Field::new(format!("f{i}"), DataType::Int32, true)),
                     );
 
                     let array = UnionArray::try_new(
