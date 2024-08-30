@@ -205,6 +205,7 @@ pub trait Array: std::fmt::Debug + Send + Sync {
     /// * [`DictionaryArray`] where [`DictionaryArray::values`] contains nulls
     /// * [`RunArray`] where [`RunArray::values`] contains nulls
     /// * [`NullArray`] where all indices are nulls
+    /// * [`UnionArray`] where the selected values contains nulls
     ///
     /// In these cases a logical [`NullBuffer`] will be computed, encoding the
     /// logical nullability of these arrays, beyond what is encoded in

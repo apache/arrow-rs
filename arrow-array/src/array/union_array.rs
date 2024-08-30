@@ -17,8 +17,9 @@
 #![allow(clippy::enum_clike_unportable_variant)]
 
 use crate::{make_array, Array, ArrayRef};
+use arrow_buffer::bit_chunk_iterator::{BitChunkIterator, BitChunks};
 use arrow_buffer::buffer::NullBuffer;
-use arrow_buffer::{BooleanBuffer, ScalarBuffer};
+use arrow_buffer::{BooleanBuffer, MutableBuffer, ScalarBuffer};
 use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::{ArrowError, DataType, UnionFields, UnionMode};
 /// Contains the `UnionArray` type.
@@ -185,12 +186,21 @@ impl UnionArray {
             ));
         }
 
-        // There must be an offset value for every type id value.
         if let Some(offsets) = &offsets {
+            // There must be an offset value for every type id value.
             if offsets.len() != type_ids.len() {
                 return Err(ArrowError::InvalidArgumentError(
                     "Type Ids and Offsets lengths must match".to_string(),
                 ));
+            }
+        } else {
+            // Sparse union child arrays must be equal in length to the length of the union
+            for child in &children {
+                if child.len() != type_ids.len() {
+                    return Err(ArrowError::InvalidArgumentError(
+                        "Sparse union child arrays must be equal in length to the length of the union".to_string(),
+                    ));
+                }
             }
         }
 
@@ -381,6 +391,191 @@ impl UnionArray {
             _ => unreachable!(),
         }
     }
+
+    /// Computes the logical nulls for a sparse union when all fields contains nulls
+    fn mask_sparse_all_nulls(&self, with_nulls: &[(i8, NullBuffer)]) -> BooleanBuffer {
+        let bit_chunks = bit_chunks(with_nulls);
+        let mut nulls_masks_iters = nulls_masks_iters(&bit_chunks);
+
+        let chunks_exact = self.type_ids.chunks_exact(64);
+        let remainder = chunks_exact.remainder();
+
+        // This iterates over chunks of 64 type_ids, computes it's null mask, collecting them in a BooleanBuffer
+        // Example for a union with 3 fields, a, b & c, all containing nulls:
+        // let [a_nulls, b_nulls, c_nulls] = nulls;
+        // We can skip the first field: it's selection mask is the negation of all others selection mask
+        // let [is_b, is_c] = selection_masks;
+        // let is_a = !(is_b | is_c)
+        // let union_chunk_nulls = (is_a & a_nulls) | (is_b & b_nulls) | (is_c & c_nulls)
+        let chunks = chunks_exact.map(|chunk| {
+            let chunk = <&[i8; 64]>::try_from(chunk).unwrap();
+
+            let (is_not_first, union_nulls) = nulls_masks_iters[1..] // skip first
+                .iter_mut()
+                .map(|(field_type_id, field_nulls_iter)| {
+                    let field_nulls = field_nulls_iter.next().unwrap();
+                    let is_field = selection_mask(chunk, *field_type_id);
+
+                    (is_field, field_nulls)
+                })
+                .fold(
+                    (0_u64, 0_u64),
+                    |(is_not_first, union_nulls), (is_field, field_nulls)| {
+                        (
+                            is_not_first | is_field,
+                            union_nulls | (is_field & field_nulls),
+                        )
+                    },
+                );
+
+            let is_first = !is_not_first;
+            let first_nulls = nulls_masks_iters[0].1.next().unwrap();
+
+            (is_first & first_nulls) | union_nulls
+        });
+
+        let mut buffer = unsafe { MutableBuffer::from_trusted_len_iter(chunks) };
+
+        if !remainder.is_empty() {
+            let remainder_mask =
+                bit_chunks
+                    .iter()
+                    .fold(0_u64, |union_nulls, (field_type_id, field_bit_chunks)| {
+                        let field_nulls = field_bit_chunks.remainder_bits();
+                        // The same logic as above, except that since this runs at most once,
+                        // it doesn't make difference to speed-up the first selection mask
+                        let is_field = selection_mask(remainder, *field_type_id);
+
+                        union_nulls | (is_field & field_nulls)
+                    });
+
+            buffer.push(remainder_mask);
+        }
+
+        BooleanBuffer::new(buffer.into(), 0, self.type_ids.len())
+    }
+
+    /// Computes the logical nulls for a sparse union when one or more fields contains nulls and one or more don't.
+    fn mask_sparse_mixed_nulls(&self, with_nulls: &[(i8, NullBuffer)]) -> BooleanBuffer {
+        let bit_chunks = bit_chunks(with_nulls);
+        let mut nulls_masks_iters = nulls_masks_iters(&bit_chunks);
+
+        let chunks_exact = self.type_ids.chunks_exact(64);
+        let remainder = chunks_exact.remainder();
+
+        // This iterates over chunks of 64 type_ids, computes it's null mask, collecting them in a BooleanBuffer
+        // Example for a union with 5 fields, a, b & c with nulls, c & d without nulls:
+        // let [a_nulls, b_nulls, c_nulls] = nulls;
+        // let [is_a, is_b, is_c] = masks;
+        // let is_c_or_d = !(is_a | is_b)
+        // let union_chunk_nulls = is_c_or_d | (is_b & b_nulls) | (is_c & c_nulls)
+        let chunks = chunks_exact.map(|chunk| {
+            let chunk = <&[i8; 64]>::try_from(chunk).unwrap();
+
+            let (any_nullable_is_selected, union_nulls) = nulls_masks_iters
+                .iter_mut()
+                .map(|(field_type_id, field_nulls_iter)| {
+                    let field_nulls = field_nulls_iter.next().unwrap();
+                    let is_field = selection_mask(chunk, *field_type_id);
+
+                    (is_field, field_nulls)
+                })
+                .fold(
+                    (0_u64, 0_u64),
+                    |(any_nullable_is_selected, union_nulls), (is_field, field_nulls)| {
+                        (
+                            any_nullable_is_selected | is_field,
+                            union_nulls | (is_field & field_nulls),
+                        )
+                    },
+                );
+
+            !any_nullable_is_selected | union_nulls
+        });
+
+        let mut buffer = unsafe { MutableBuffer::from_trusted_len_iter(chunks) };
+
+        if !remainder.is_empty() {
+            let (any_nullable_is_selected, union_nulls) = bit_chunks
+                .iter()
+                .map(|(type_id, bit_chunks)| {
+                    let field_nulls = bit_chunks.remainder_bits();
+                    let is_field = selection_mask(remainder, *type_id);
+
+                    (is_field, field_nulls)
+                })
+                .fold(
+                    (0_u64, 0_u64),
+                    |(any_nullable_is_selected, union_nulls), (is_field, field_nulls)| {
+                        (
+                            any_nullable_is_selected | is_field,
+                            union_nulls | (is_field & field_nulls),
+                        )
+                    },
+                );
+
+            let remainder_mask = !any_nullable_is_selected | union_nulls;
+
+            buffer.push(remainder_mask);
+        }
+
+        BooleanBuffer::new(buffer.into(), 0, self.type_ids.len())
+    }
+
+    /// Computes the logical nulls for a sparse or dense union, by gathering individual bits from the null buffer of the selected field
+    fn gather_nulls(&self, with_nulls: &[(i8, NullBuffer)]) -> BooleanBuffer {
+        let one_valid = NullBuffer::new_valid(1);
+
+        // Unsafe code below depend on it:
+        // To remove one branch from the loop, if the a type_id is not utilized, or it's logical_nulls is None/all set,
+        // we use a null buffer of len 1 and a index_mask of 0, or the true null buffer and usize::MAX otherwise.
+        // We then unconditionally access the null buffer with index & index_mask,
+        // which always return 0 for the 1-len buffer, or the true index unchanged otherwise
+        let mut logical_nulls_array = [(&one_valid, Mask::Zero); 256];
+
+        for (type_id, nulls) in with_nulls {
+            logical_nulls_array[*type_id as u8 as usize] = (nulls, Mask::Max);
+        }
+
+        match &self.offsets {
+            Some(offsets) => {
+                assert_eq!(self.type_ids.len(), offsets.len());
+
+                BooleanBuffer::collect_bool(self.type_ids.len(), |i| unsafe {
+                    // SAFETY: BooleanBuffer::collect_bool calls us 0..self.type_ids.len()
+                    let type_id = *self.type_ids.get_unchecked(i);
+                    // SAFETY: We asserted that offsets len and self.type_ids len are equal
+                    let offset = *offsets.get_unchecked(i);
+
+                    let (nulls, offset_mask) = &logical_nulls_array[type_id as u8 as usize];
+
+                    // SAFETY:
+                    // If offset_mask is Max
+                    // 1. Offset validity is checked at union creation
+                    // 2. If the null buffer len equals it's array len is checked at array creation
+                    // If offset_mask is Zero, the null buffer len is 1
+                    nulls
+                        .inner()
+                        .value_unchecked(offset as usize & *offset_mask as usize)
+                })
+            }
+            None => {
+                BooleanBuffer::collect_bool(self.type_ids.len(), |index| unsafe {
+                    // SAFETY: BooleanBuffer::collect_bool calls us 0..self.type_ids.len()
+                    let type_id = *self.type_ids.get_unchecked(index);
+
+                    let (nulls, index_mask) = &logical_nulls_array[type_id as u8 as usize];
+
+                    // SAFETY:
+                    // If index_mask is Max
+                    // 1. On sparse union, every child len match it's parent, this is checked at union creation
+                    // 2. If the null buffer len equals it's array len is checked at array creation
+                    // If index_mask is Zero, the null buffer len is 1
+                    nulls.inner().value_unchecked(index & *index_mask as usize)
+                })
+            }
+        }
+    }
 }
 
 impl From<ArrayData> for UnionArray {
@@ -485,10 +680,6 @@ impl Array for UnionArray {
             unreachable!()
         };
 
-        if fields.iter().all(|(_, field)| !field.is_nullable()) {
-            return None;
-        }
-
         if fields.len() <= 1 {
             return self
                 .fields
@@ -499,37 +690,30 @@ impl Array for UnionArray {
                 .flatten();
         }
 
-        let children_logical_nulls = self
-            .fields
+        let with_nulls = fields
             .iter()
-            .map(|child| child.as_ref().and_then(Array::logical_nulls))
+            .filter_map(|(type_id, _)| Some((type_id, self.child(type_id).logical_nulls()?)))
+            .filter(|(_, nulls)| nulls.null_count() > 0)
             .collect::<Vec<_>>();
 
-        if children_logical_nulls
-            .iter()
-            .flatten()
-            .all(|child| child.null_count() == 0)
-        {
+        if with_nulls.is_empty() {
             return None;
         }
 
-        if children_logical_nulls
+        if with_nulls
             .iter()
-            .flatten()
-            .all(|child| child.null_count() == child.len())
+            .all(|(_, nulls)| nulls.null_count() == nulls.len())
         {
-            if let Some(exactly_sized) = children_logical_nulls
+            if let Some((_, exactly_sized)) = with_nulls
                 .iter()
-                .flatten()
-                .find(|nulls| nulls.len() == self.len())
+                .find(|(_, nulls)| nulls.len() == self.len())
             {
                 return Some(exactly_sized.clone());
             }
 
-            if let Some(bigger) = children_logical_nulls
+            if let Some((_, bigger)) = with_nulls
                 .iter()
-                .flatten()
-                .find(|nulls| nulls.len() > self.len())
+                .find(|(_, nulls)| nulls.len() > self.len())
             {
                 return Some(bigger.slice(0, self.len()));
             }
@@ -537,121 +721,45 @@ impl Array for UnionArray {
             return Some(NullBuffer::new_null(self.len()));
         }
 
-        #[derive(Copy, Clone)]
-        #[repr(usize)]
-        enum Mask {
-            Zero = 0,
-            // false positive, see https://github.com/rust-lang/rust-clippy/issues/8043
-            #[allow(clippy::enum_clike_unportable_variant)]
-            Max = usize::MAX,
-        }
-
-        let one_valid = NullBuffer::new_valid(1);
-
-        let children_logical_nulls: [(&NullBuffer, Mask); u8::MAX as usize + 1] =
-            std::array::from_fn(|i| {
-                // Unsafe code below depend on it:
-                // To remove one branch from the loop, if the current type_id is not utilized, or logical_nulls is None,
-                // we return a null buffer of len 1 and a index_mask of 0, or usize::MAX otherwise.
-                // We then access the null buffer with index & index_mask, which always return 0 for the 1-len buffer, or the index unchanged otherwise
-                match children_logical_nulls.get(i) {
-                    Some(Some(logical_nulls)) => (logical_nulls, Mask::Max),
-                    _ => (&one_valid, Mask::Zero),
-                }
-            });
-
-        match &self.offsets {
-            Some(offsets) => {
-                assert_eq!(self.type_ids.len(), offsets.len());
-
-                let buffer = BooleanBuffer::collect_bool(self.type_ids.len(), |i| unsafe {
-                    // SAFETY: BooleanBuffer::collect_bool calls us 0..self.type_ids.len()
-                    let type_id = *self.type_ids.get_unchecked(i);
-                    // SAFETY: We asserted that offsets len and self.type_ids len are equal
-                    let offset = *offsets.get_unchecked(i);
-
-                    let (nulls, offset_mask) = &children_logical_nulls[type_id as u8 as usize];
-
-                    // SAFETY:
-                    // If offset_mask is Max
-                    // 1. Offset validity is checked at union creation
-                    // 2. Null buffer len relative to it's owner is checked at array creation
-                    // If offset_mask is Zero, the null buffer has len 1
-                    nulls
-                        .inner()
-                        .value_unchecked(offset as usize & *offset_mask as usize)
-                });
-
-                Some(buffer.into())
-            }
+        let buffer = match &self.offsets {
+            Some(_) => self.gather_nulls(&with_nulls),
             None => {
-                let mut with_nulls = children_logical_nulls
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, (nulls, _))| nulls.null_count() > 0);
-
-                match (with_nulls.next(), with_nulls.next()) {
-                    (Some((single_with_nulls_type_id, (nulls, _))), None) => {
-                        let selected_is_not_null =
-                            BooleanBuffer::collect_bool(self.type_ids().len(), |i| unsafe {
-                                *self.type_ids.get_unchecked(i) != single_with_nulls_type_id as i8
-                            });
-
-                        let buffer = &selected_is_not_null | nulls.inner();
-
-                        Some(buffer.into())
-                    }
-                    (Some(left), Some(right)) if fields.len() == 2 => {
-                        let left_selected =
-                            BooleanBuffer::collect_bool(self.type_ids().len(), |i| unsafe {
-                                *self.type_ids.get_unchecked(i) == left.0 as i8
-                            });
-
-                        let right_selected = !&left_selected;
-
-                        let buffer = &(&left_selected & left.1 .0.inner())
-                            | &(&right_selected & right.1 .0.inner());
-
-                        Some(buffer.into())
-                    }
-                    _ => {
-                        let buffer =
-                            BooleanBuffer::collect_bool(self.type_ids.len(), |index| unsafe {
-                                // SAFETY: BooleanBuffer::collect_bool calls us 0..self.type_ids.len()
-                                let type_id = *self.type_ids.get_unchecked(index);
-
-                                let (nulls, index_mask) =
-                                    &children_logical_nulls[type_id as u8 as usize];
-
-                                // SAFETY:
-                                // If index_mask is Max
-                                // 1. On sparse union, every child len match it's parent, this is checked at union creation
-                                // 2. Null buffer len relative to it's owner is checked at array creation
-                                // If offset_mask is Zero, the null buffer has len 1
-                                nulls.inner().value_unchecked(index & *index_mask as usize)
-                            });
-
-                        Some(buffer.into())
-                    }
+                // masking is only efficient up to a certain point
+                // when all fields contains nulls, one field mask can be cheaply calculated
+                // by negating the others, so it's threshold is higher
+                if with_nulls.len() <= 12 && with_nulls.len() == fields.len() {
+                    self.mask_sparse_all_nulls(&with_nulls)
+                } else if with_nulls.len() <= 11 {
+                    self.mask_sparse_mixed_nulls(&with_nulls)
+                } else {
+                    self.gather_nulls(&with_nulls)
                 }
             }
+        };
+
+        let null_buffer = NullBuffer::from(buffer);
+
+        if null_buffer.null_count() > 0 {
+            Some(null_buffer)
+        } else {
+            None
         }
     }
 
     /// Union types always return non null as there is no validity buffer.
-    /// To check validity correctly you must check the underlying vector.
+    /// To check validity correctly you must check the logical nulls.
     fn is_null(&self, _index: usize) -> bool {
         false
     }
 
     /// Union types always return non null as there is no validity buffer.
-    /// To check validity correctly you must check the underlying vector.
+    /// To check validity correctly you must check the logical nulls.
     fn is_valid(&self, _index: usize) -> bool {
         true
     }
 
     /// Union types always return 0 null count as there is no validity buffer.
-    /// To get null count correctly you must check the underlying vector.
+    /// To get null count correctly you must check the logical nulls.
     fn null_count(&self) -> usize {
         0
     }
@@ -719,6 +827,39 @@ impl std::fmt::Debug for UnionArray {
         }
         writeln!(f, "]")
     }
+}
+
+#[derive(Copy, Clone)]
+#[repr(usize)]
+enum Mask {
+    Zero = 0,
+    // false positive, see https://github.com/rust-lang/rust-clippy/issues/8043
+    #[allow(clippy::enum_clike_unportable_variant)]
+    Max = usize::MAX,
+}
+
+fn bit_chunks(with_nulls: &'_ [(i8, NullBuffer)]) -> Vec<(i8, BitChunks<'_>)> {
+    with_nulls
+        .iter()
+        .map(|(type_id, nulls)| (*type_id, nulls.inner().bit_chunks()))
+        .collect()
+}
+
+fn nulls_masks_iters<'a>(with_nulls: &'a [(i8, BitChunks<'a>)]) -> Vec<(i8, BitChunkIterator<'a>)> {
+    with_nulls
+        .iter()
+        .map(|(type_id, bit_chunks)| (*type_id, bit_chunks.iter()))
+        .collect()
+}
+
+fn selection_mask(chunk: &[i8], type_id: i8) -> u64 {
+    chunk
+        .iter()
+        .copied()
+        .enumerate()
+        .fold(0, |packed, (bit_idx, v)| {
+            packed | ((v == type_id) as u64) << bit_idx
+        })
 }
 
 #[cfg(test)]
@@ -1522,7 +1663,12 @@ mod tests {
         ];
 
         let type_ids = vec![3, 3, 2].into();
-        UnionArray::try_new(fields.clone(), type_ids, None, children.clone()).unwrap();
+        let err =
+            UnionArray::try_new(fields.clone(), type_ids, None, children.clone()).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Invalid argument error: Sparse union child arrays must be equal in length to the length of the union"
+        );
 
         let type_ids = vec![1, 2].into();
         let err =
@@ -1708,6 +1854,42 @@ mod tests {
 
         let expected = NullBuffer::from(vec![true, true, true, true, true, false]);
         assert_eq!(Some(expected), result);
+
+        //like above, but repeated to genereate two exact bitmasks and a non empty remainder
+        let len = 2 * 64 + 32;
+
+        let int_array = Int32Array::from_value(2, len); // without nulls
+        let float_array = Float64Array::from_value(3.2, len); // without nulls
+        let str_array = StringArray::from_iter(
+            [None, None, None, None, Some("a"), None]
+                .into_iter()
+                .cycle()
+                .take(len),
+        );
+        let type_ids = [1, 1, 3, 3, 4, 4]
+            .into_iter()
+            .cycle()
+            .take(len)
+            .collect::<ScalarBuffer<i8>>();
+
+        let children = vec![
+            Arc::new(int_array) as Arc<dyn Array>,
+            Arc::new(float_array),
+            Arc::new(str_array),
+        ];
+
+        let array = UnionArray::try_new(union_fields(), type_ids, None, children).unwrap();
+
+        let result = array.logical_nulls();
+
+        let expected = NullBuffer::from_iter(
+            [true, true, true, true, true, false]
+                .into_iter()
+                .cycle()
+                .take(len),
+        );
+        assert_eq!(array.len(), len);
+        assert_eq!(Some(expected), result);
     }
 
     #[test]
@@ -1719,23 +1901,47 @@ mod tests {
 
         let children = vec![Arc::new(float_array) as Arc<dyn Array>, Arc::new(str_array)];
 
+        let fields = UnionFields::new(
+            [1, 3],
+            [
+                Field::new("A", DataType::Int32, true),
+                Field::new("B", DataType::Float64, true),
+            ],
+        );
+
+        let array = UnionArray::try_new(fields.clone(), type_ids, None, children).unwrap();
+
+        let result = array.logical_nulls();
+
+        let expected = NullBuffer::from(vec![false, false, true, false, true, false]);
+        assert_eq!(Some(expected), result);
+
+        //like above, but repeated to genereate two exact bitmasks and a non empty remainder
+        let len = 2 * 64 + 32;
+
+        let float_array =
+            Float64Array::from_iter([None, None, Some(3.2)].into_iter().cycle().take(len));
+        let str_array =
+            StringArray::from_iter([None, Some("a"), None].into_iter().cycle().take(len));
+        let type_ids = ScalarBuffer::from_iter([1, 1, 1, 3, 3, 3].into_iter().cycle().take(len));
+
         let array = UnionArray::try_new(
-            UnionFields::new(
-                [1, 3],
-                [
-                    Field::new("A", DataType::Int32, true),
-                    Field::new("B", DataType::Float64, true),
-                ],
-            ),
+            fields,
             type_ids,
             None,
-            children,
+            vec![Arc::new(float_array), Arc::new(str_array)],
         )
         .unwrap();
 
         let result = array.logical_nulls();
 
-        let expected = NullBuffer::from(vec![false, false, true, false, true, false]);
+        let expected = NullBuffer::from_iter(
+            [false, false, true, false, true, false]
+                .into_iter()
+                .cycle()
+                .take(len),
+        );
+        assert_eq!(array.len(), len);
         assert_eq!(Some(expected), result);
     }
 
@@ -1758,6 +1964,33 @@ mod tests {
         let result = array.logical_nulls();
 
         let expected = NullBuffer::from(vec![true, true, true, false, true, false]);
+        assert_eq!(Some(expected), result);
+
+        //like above, but repeated to genereate two exact bitmasks and a non empty remainder
+        let len = 2 * 64 + 32;
+
+        let int_array = Int32Array::from_value(2, len);
+        let float_array = Float64Array::from_iter([None, Some(3.2)].into_iter().cycle().take(len));
+        let str_array = StringArray::from_iter([None, Some("a")].into_iter().cycle().take(len));
+        let type_ids = ScalarBuffer::from_iter([1, 1, 3, 3, 4, 4].into_iter().cycle().take(len));
+
+        let children = vec![
+            Arc::new(int_array) as Arc<dyn Array>,
+            Arc::new(float_array),
+            Arc::new(str_array),
+        ];
+
+        let array = UnionArray::try_new(union_fields(), type_ids, None, children).unwrap();
+
+        let result = array.logical_nulls();
+
+        let expected = NullBuffer::from_iter(
+            [true, true, false, true, false, true]
+                .into_iter()
+                .cycle()
+                .take(len),
+        );
+        assert_eq!(array.len(), len);
         assert_eq!(Some(expected), result);
     }
 
