@@ -185,7 +185,7 @@ pub trait Array: std::fmt::Debug + Send + Sync {
     ///
     /// The physical representation is efficient, but is sometimes non intuitive
     /// for certain array types such as those with nullable child arrays like
-    /// [`DictionaryArray::values`] or [`RunArray::values`], or without a
+    /// [`DictionaryArray::values`], [`RunArray::values`] or [`UnionArray`], or without a
     /// null buffer, such as [`NullArray`].
     ///
     /// To determine if each element of such an array is "logically" null,
@@ -218,7 +218,7 @@ pub trait Array: std::fmt::Debug + Send + Sync {
     ///
     /// Note: For performance reasons, this method returns nullability solely as determined by the
     /// null buffer. This difference can lead to surprising results, for example, [`NullArray::is_null`] always
-    /// returns `false` as the array lacks a null buffer. Similarly [`DictionaryArray`] and [`RunArray`] may
+    /// returns `false` as the array lacks a null buffer. Similarly [`DictionaryArray`], [`RunArray`] and [`UnionArray`] may
     /// encode nullability in their children. See [`Self::logical_nulls`] for more information.
     ///
     /// # Example:
@@ -284,6 +284,8 @@ pub trait Array: std::fmt::Debug + Send + Sync {
     /// are present. For example a [`DictionaryArray`] with nullable values will still return true,
     /// even if the nulls present in [`DictionaryArray::values`] are not referenced by any key,
     /// and therefore would not appear in [`Array::logical_nulls`].
+    /// Similary, a [`UnionArray`] with any nullable child will always return true, even if all
+    /// selected values are valid, and therefore would not appear in [`Array::logical_nulls`].
     fn is_nullable(&self) -> bool {
         self.null_count() != 0
     }

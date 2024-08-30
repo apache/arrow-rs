@@ -434,6 +434,8 @@ impl UnionArray {
             (is_first & first_nulls) | union_nulls
         });
 
+        // SAFETY:
+        // chunks is a ChunksExact iterator, which implements TrustedLen, and correctly reports its length
         let mut buffer = unsafe { MutableBuffer::from_trusted_len_iter(chunks) };
 
         if !remainder.is_empty() {
@@ -493,6 +495,8 @@ impl UnionArray {
             !any_nullable_is_selected | union_nulls
         });
 
+        // SAFETY:
+        // chunks is a ChunksExact iterator, which implements TrustedLen, and correctly reports its length
         let mut buffer = unsafe { MutableBuffer::from_trusted_len_iter(chunks) };
 
         if !remainder.is_empty() {
