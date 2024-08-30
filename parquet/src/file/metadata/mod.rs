@@ -94,6 +94,7 @@
 //!                         * Same name, different struct
 //! ```
 mod memory;
+pub(crate) mod reader;
 mod writer;
 
 use std::ops::Range;
@@ -115,6 +116,8 @@ use crate::schema::types::{
     ColumnDescPtr, ColumnDescriptor, ColumnPath, SchemaDescPtr, SchemaDescriptor,
     Type as SchemaType,
 };
+pub use reader::parquet_metadata_from_file;
+pub use reader::ParquetMetaDataReader;
 pub use writer::ParquetMetaDataWriter;
 pub(crate) use writer::ThriftMetadataWriter;
 
@@ -278,13 +281,11 @@ impl ParquetMetaData {
     }
 
     /// Override the column index
-    #[cfg(feature = "arrow")]
     pub(crate) fn set_column_index(&mut self, index: Option<ParquetColumnIndex>) {
         self.column_index = index;
     }
 
     /// Override the offset index
-    #[cfg(feature = "arrow")]
     pub(crate) fn set_offset_index(&mut self, index: Option<ParquetOffsetIndex>) {
         self.offset_index = index;
     }
