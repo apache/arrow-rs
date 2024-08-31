@@ -134,3 +134,28 @@ fn read_file(name: &str) -> Result<usize, ParquetError> {
     }
     Ok(num_rows)
 }
+
+#[cfg(feature = "async")]
+#[tokio::test]
+async fn bad_metadata_err() {
+    use bytes::Bytes;
+    use parquet::arrow::async_reader::MetadataLoader;
+
+    let metadata_buffer = Bytes::from_static(include_bytes!("bad_raw_metadata.bin"));
+
+    let metadata_length = metadata_buffer.len();
+
+    let mut reader = std::io::Cursor::new(&metadata_buffer);
+    let mut loader = MetadataLoader::load(&mut reader, metadata_length, None)
+        .await
+        .unwrap();
+    loader.load_page_index(false, false).await.unwrap();
+    loader.load_page_index(false, true).await.unwrap();
+
+    let err = loader.load_page_index(true, false).await.unwrap_err();
+
+    assert_eq!(
+        err.to_string(),
+        "Parquet error: error converting value, expected 4 bytes got 0"
+    );
+}
