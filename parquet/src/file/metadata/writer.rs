@@ -592,8 +592,8 @@ mod tests {
         assert_eq!(left.compressed_size(), right.compressed_size());
         assert_eq!(left.data_page_offset(), right.data_page_offset());
         assert_eq!(left.statistics(), right.statistics());
-        // assert_eq!(left.offset_index_length(), right.offset_index_length());
-        // assert_eq!(left.column_index_length(), right.column_index_length());
+        assert_eq!(left.offset_index_length(), right.offset_index_length());
+        assert_eq!(left.column_index_length(), right.column_index_length());
         assert_eq!(
             left.unencoded_byte_array_data_bytes(),
             right.unencoded_byte_array_data_bytes()
