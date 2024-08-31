@@ -41,7 +41,7 @@ pub struct ParquetField {
     /// i.e. guaranteed to be > 0 for an element of list type
     pub rep_level: i16,
     /// The level at which this field is fully defined,
-    /// i.e. guaranteed to be > 0 for a nullable type or child of a 
+    /// i.e. guaranteed to be > 0 for a nullable type or child of a
     /// nullable type
     pub def_level: i16,
     /// Whether this field is nullable
@@ -64,11 +64,7 @@ impl ParquetField {
             rep_level: self.rep_level,
             def_level: self.def_level,
             nullable: false,
-            arrow_type: DataType::List(Arc::new(Field::new(
-                name,
-                self.arrow_type.clone(),
-                false,
-            ))),
+            arrow_type: DataType::List(Arc::new(Field::new(name, self.arrow_type.clone(), false))),
             field_type: ParquetFieldType::Group {
                 children: vec![self],
             },
@@ -289,7 +285,7 @@ impl Visitor {
 
         match map_key.get_basic_info().repetition() {
             Repetition::REPEATED => {
-            return Err(arrow_err!("Map keys cannot be repeated"));
+                return Err(arrow_err!("Map keys cannot be repeated"));
             }
             Repetition::REQUIRED | Repetition::OPTIONAL => {
                 // Relaxed check for having repetition REQUIRED as there exists
@@ -317,10 +313,7 @@ impl Visitor {
                     (Some(field), Some(&*fields[0]), Some(&*fields[1]), *sorted)
                 }
                 d => {
-                    return Err(arrow_err!(
-                        "Map data type should contain struct got {}",
-                        d
-                    ));
+                    return Err(arrow_err!("Map data type should contain struct got {}", d));
                 }
             },
             Some(d) => {
@@ -416,9 +409,7 @@ impl Visitor {
         let (def_level, nullable) = match list_type.get_basic_info().repetition() {
             Repetition::REQUIRED => (context.def_level, false),
             Repetition::OPTIONAL => (context.def_level + 1, true),
-            Repetition::REPEATED => {
-                return Err(arrow_err!("List type cannot be repeated"))
-            }
+            Repetition::REPEATED => return Err(arrow_err!("List type cannot be repeated")),
         };
 
         let arrow_field = match &context.data_type {
@@ -542,11 +533,7 @@ impl Visitor {
 ///
 /// The resulting [`Field`] will have the type dictated by `field`, a name
 /// dictated by the `parquet_type`, and any metadata from `arrow_hint`
-fn convert_field(
-    parquet_type: &Type,
-    field: &ParquetField,
-    arrow_hint: Option<&Field>,
-) -> Field {
+fn convert_field(parquet_type: &Type, field: &ParquetField, arrow_hint: Option<&Field>) -> Field {
     let name = parquet_type.name();
     let data_type = field.arrow_type.clone();
     let nullable = field.nullable;
@@ -568,11 +555,14 @@ fn convert_field(
             let basic_info = parquet_type.get_basic_info();
             if basic_info.has_id() {
                 let mut meta = HashMap::with_capacity(1);
-                meta.insert(PARQUET_FIELD_ID_META_KEY.to_string(), basic_info.id().to_string());
+                meta.insert(
+                    PARQUET_FIELD_ID_META_KEY.to_string(),
+                    basic_info.id().to_string(),
+                );
                 ret.set_metadata(meta);
             }
             ret
-        },
+        }
     }
 }
 

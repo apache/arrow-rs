@@ -19,8 +19,7 @@ use std::{fs, path::PathBuf, str::FromStr};
 
 /// Returns path to the test parquet file in 'data' directory
 pub fn get_test_path(file_name: &str) -> PathBuf {
-    let mut pathbuf =
-        PathBuf::from_str(&arrow::util::test_util::parquet_test_data()).unwrap();
+    let mut pathbuf = PathBuf::from_str(&arrow::util::test_util::parquet_test_data()).unwrap();
     pathbuf.push(file_name);
     pathbuf
 }

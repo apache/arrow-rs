@@ -1027,7 +1027,10 @@ mod tests {
             .collect();
 
         // Generic values used to check against actual values read from `get_batch`.
-        let expected_values: Vec<T> = values.iter().map(|v| T::try_from_le_slice(v.as_bytes()).unwrap()).collect();
+        let expected_values: Vec<T> = values
+            .iter()
+            .map(|v| T::try_from_le_slice(v.as_bytes()).unwrap())
+            .collect();
 
         (0..total).for_each(|i| writer.put_value(values[i], num_bits));
 
