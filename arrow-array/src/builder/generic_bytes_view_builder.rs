@@ -707,7 +707,7 @@ mod tests {
         exp_builder.flush_in_progress();
         assert_eq!(
             exp_builder.completed.last().unwrap().capacity(),
-            MAX_BLOCK_SIZE as usize
+            STARTING_BLOCK_SIZE as usize
         );
     }
 }

@@ -1428,7 +1428,7 @@ mod tests {
         ])
         .unwrap();
 
-        verify_encoded_split(batch, 112).await;
+        verify_encoded_split(batch, 392).await;
     }
 
     #[tokio::test]

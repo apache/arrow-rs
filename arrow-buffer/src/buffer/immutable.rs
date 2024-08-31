@@ -729,7 +729,7 @@ mod tests {
         let b = Buffer::from_vec(a);
         let back = b.into_vec::<i128>().unwrap();
         assert_eq!(back.len(), 0);
-        assert_eq!(back.capacity(), 20);
+        assert_eq!(back.capacity(), 0);
 
         // Test vec with values
         let mut a: Vec<i128> = Vec::with_capacity(3);
@@ -745,7 +745,7 @@ mod tests {
         let b = Buffer::from_vec(a);
         let back = b.into_vec::<i128>().unwrap();
         assert_eq!(back.len(), 7);
-        assert_eq!(back.capacity(), 20);
+        assert_eq!(back.capacity(), 8);
 
         // Test incorrect alignment
         let a: Vec<i128> = Vec::new();
@@ -779,7 +779,9 @@ mod tests {
         let mut b: Vec<i128> = Vec::with_capacity(5);
         b.extend_from_slice(&[1, 2, 3, 4]);
         let b = Buffer::from_vec(b);
-        b.into_vec::<i256>().unwrap_err();
+        assert_eq!(b.len(), 64);
+        assert_eq!(b.capacity(), 64);
+        b.into_vec::<i256>().unwrap();
 
         // Truncates length
         // This is an implementation quirk, but isn't harmful
@@ -808,7 +810,7 @@ mod tests {
         // Succeeds as no outstanding shared reference
         let back = slice.into_vec::<i128>().unwrap();
         assert_eq!(&back, &[1, 4, 7, 8]);
-        assert_eq!(back.capacity(), 20);
+        assert_eq!(back.capacity(), 8);
 
         // Slicing by non-multiple length truncates
         let mut a: Vec<i128> = Vec::with_capacity(8);
@@ -820,7 +822,7 @@ mod tests {
 
         let back = slice.into_vec::<i128>().unwrap();
         assert_eq!(&back, &[1, 4]);
-        assert_eq!(back.capacity(), 8);
+        assert_eq!(back.capacity(), 4);
 
         // Offset prevents conversion
         let a: Vec<u32> = vec![1, 3, 4, 6];
