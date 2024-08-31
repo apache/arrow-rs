@@ -18,7 +18,12 @@
 use rand::prelude::*;
 use std::time::Duration;
 
-/// Exponential backoff with jitter
+/// Exponential backoff with decorrelated jitter algorithm
+///
+/// The first backoff will always be `init_backoff`.
+///
+/// Subsequent backoffs will pick a random value between `init_backoff` and
+/// `base * previous` where `previous` is the duration of the previous backoff
 ///
 /// See <https://aws.amazon.com/blogs/architecture/exponential-backoff-and-jitter/>
 #[allow(missing_copy_implementations)]
@@ -28,7 +33,7 @@ pub struct BackoffConfig {
     pub init_backoff: Duration,
     /// The maximum backoff duration
     pub max_backoff: Duration,
-    /// The base of the exponential to use
+    /// The multiplier to use for the next backoff duration
     pub base: f64,
 }
 
