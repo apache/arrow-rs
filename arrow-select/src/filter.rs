@@ -153,7 +153,10 @@ pub fn prep_null_mask_filter(filter: &BooleanArray) -> BooleanArray {
     BooleanArray::new(mask, None)
 }
 
-/// Filters an [Array], returning elements matching the filter (i.e. where the values are true).
+/// Returns a filtered `values` [Array] where the corresponding elements of
+/// `predicate` are `true`.
+///
+/// See also [`FilterBuilder`] for more control over the filtering process.
 ///
 /// # Example
 /// ```rust
@@ -189,7 +192,10 @@ fn multiple_arrays(data_type: &DataType) -> bool {
     }
 }
 
-/// Returns a new [RecordBatch] with arrays containing only values matching the filter.
+/// Returns a filtered [RecordBatch] where the corresponding elements of
+/// `predicate` are true.
+///
+/// This is the equivalent of calling [filter] on each column of the [RecordBatch].
 pub fn filter_record_batch(
     record_batch: &RecordBatch,
     predicate: &BooleanArray,
@@ -197,6 +203,7 @@ pub fn filter_record_batch(
     let mut filter_builder = FilterBuilder::new(predicate);
     if record_batch.num_columns() > 1 {
         // Only optimize if filtering more than one column
+        // Otherwise, the overhead of optimization can be more than the benefit
         filter_builder = filter_builder.optimize();
     }
     let filter = filter_builder.build();
