@@ -55,12 +55,12 @@ The `parquet` crate provides the following features which may be enabled in your
 - `async` - support `async` APIs for reading parquet
 - `json` - support for reading / writing `json` data to / from parquet
 - `brotli` (default) - support for parquet using `brotli` compression
-- `crc` - verifies checksums when reading data pages
 - `flate2` (default) - support for parquet using `gzip` compression
 - `lz4` (default) - support for parquet using `lz4` compression
 - `zstd` (default) - support for parquet using `zstd` compression
 - `snap` (default) - support for parquet using `snappy` compression
 - `cli` - parquet [CLI tools](https://github.com/apache/arrow-rs/tree/master/parquet/src/bin)
+- `crc` - verifies checksums when reading data pages
 - `experimental` - Experimental APIs which may change, even between minor releases
 
 ## Parquet Feature Status
