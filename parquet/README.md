@@ -55,6 +55,7 @@ The `parquet` crate provides the following features which may be enabled in your
 - `async` - support `async` APIs for reading parquet
 - `json` - support for reading / writing `json` data to / from parquet
 - `brotli` (default) - support for parquet using `brotli` compression
+- `crc` - verifies checksums when reading data pages
 - `flate2` (default) - support for parquet using `gzip` compression
 - `lz4` (default) - support for parquet using `lz4` compression
 - `zstd` (default) - support for parquet using `zstd` compression
@@ -82,4 +83,4 @@ The `parquet` crate provides the following features which may be enabled in your
 
 ## License
 
-Licensed under the Apache License, Version 2.0: http://www.apache.org/licenses/LICENSE-2.0.
+Licensed under the Apache License, Version 2.0: <http://www.apache.org/licenses/LICENSE-2.0>.
