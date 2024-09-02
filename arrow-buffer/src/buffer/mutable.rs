@@ -72,6 +72,13 @@ mod private {
 /// let buffer: Buffer = buffer.into();
 /// assert_eq!(buffer.as_slice(), &[0u8, 1, 0, 0, 1, 0, 0, 0])
 /// ```
+///
+/// # Customize [`Allocator`]
+///
+/// To customize the allocator for the buffer, enable the `allocator_api` feature and use either
+/// methods like [`MutableBuffer::new_in`] or [`MutableBuffer::with_capacity_in`], or inherit the
+/// allocator from a type like [`Vec`] using [`MutableBuffer::from`]. A example can be found in
+/// the [allocator_api example](https://github.com/apache/arrow-rs/tree/master/arrow/examples).
 #[derive(Debug)]
 pub struct MutableBuffer<
     #[cfg(feature = "allocator_api")] A: Allocator = Global,
