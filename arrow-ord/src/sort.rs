@@ -403,7 +403,7 @@ fn sort_fixed_size_list(
 }
 
 #[inline(never)]
-fn sort_impl<T: ?Sized + Copy>(
+fn sort_impl<T: Copy>(
     options: SortOptions,
     valids: &mut [(u32, T)],
     nulls: &[u32],
