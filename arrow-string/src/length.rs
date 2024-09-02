@@ -77,7 +77,10 @@ pub fn length(array: &dyn Array) -> Result<ArrayRef, ArrowError> {
         DataType::Utf8View => {
             let list = array.as_string_view();
             let v = list.views().iter().map(|v| *v as i32).collect::<Vec<_>>();
-            Ok(Arc::new(PrimitiveArray::<Int32Type>::new(v.into(), list.nulls().cloned())))
+            Ok(Arc::new(PrimitiveArray::<Int32Type>::new(
+                v.into(),
+                list.nulls().cloned(),
+            )))
         }
         DataType::Binary => {
             let list = array.as_binary::<i32>();
@@ -152,7 +155,13 @@ mod tests {
 
     fn length_cases_string() -> Vec<(Vec<&'static str>, usize, Vec<i32>)> {
         // a large array
-        let values = ["one", "on", "o", "", "this is a longer string to test string array with"];
+        let values = [
+            "one",
+            "on",
+            "o",
+            "",
+            "this is a longer string to test string array with",
+        ];
         let values = values.into_iter().cycle().take(4096).collect();
         let expected = [3, 2, 1, 0, 49].into_iter().cycle().take(4096).collect();
 
