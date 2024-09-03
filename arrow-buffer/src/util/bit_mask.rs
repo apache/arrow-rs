@@ -33,7 +33,7 @@ pub fn set_bits(
 
     let mut acc = 0;
     while len > acc {
-        let (n, l) = set_upto_64bits(
+        let (n, len_set) = set_upto_64bits(
             write_data,
             data,
             offset_write + acc,
@@ -41,7 +41,7 @@ pub fn set_bits(
             len - acc,
         );
         null_count += n;
-        acc += l;
+        acc += len_set;
     }
 
     null_count
@@ -64,19 +64,19 @@ fn set_upto_64bits(
         // SAFETY: chunk gets masked when necessary, so it is safe
         let chunk = unsafe { read_bytes_to_u64(data, read_byte, 8) };
         if read_shift == 0 {
-            if write_shift == 0 {
+            if write_shift == 0 { // no shifting necessary
                 let len = 64;
                 let null_count = chunk.count_zeros() as usize;
                 write_u64_bytes(write_data, write_byte, chunk);
                 (null_count, len)
-            } else {
+            } else { // only write shifting necessary
                 let len = 64 - write_shift;
                 let chunk = chunk << write_shift;
                 let null_count = len - chunk.count_ones() as usize;
                 or_write_u64_bytes(write_data, write_byte, chunk);
                 (null_count, len)
             }
-        } else if write_shift == 0 {
+        } else if write_shift == 0 { // only read shifting necessary
             let len = 64 - 8; // 56 bits so that write_shift == 0 for the next iteration
             let chunk = (chunk >> read_shift) & 0x00FFFFFFFFFFFFFF; // 56 bits mask
             let null_count = len - chunk.count_ones() as usize;
@@ -118,6 +118,7 @@ fn set_upto_64bits(
 #[inline]
 #[cfg(not(miri))]
 unsafe fn read_bytes_to_u64(data: &[u8], offset: usize, count: usize) -> u64 {
+    debug_assert!(count <= 8);
     let mut tmp = std::mem::MaybeUninit::<u64>::uninit();
     let src = data.as_ptr().add(offset);
     // SAFETY: the caller must not use the uninitialized `8 - count` bytes in the returned value.
