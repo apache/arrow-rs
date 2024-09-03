@@ -64,19 +64,22 @@ fn set_upto_64bits(
         // SAFETY: chunk gets masked when necessary, so it is safe
         let chunk = unsafe { read_bytes_to_u64(data, read_byte, 8) };
         if read_shift == 0 {
-            if write_shift == 0 { // no shifting necessary
+            if write_shift == 0 {
+                // no shifting necessary
                 let len = 64;
                 let null_count = chunk.count_zeros() as usize;
                 write_u64_bytes(write_data, write_byte, chunk);
                 (null_count, len)
-            } else { // only write shifting necessary
+            } else {
+                // only write shifting necessary
                 let len = 64 - write_shift;
                 let chunk = chunk << write_shift;
                 let null_count = len - chunk.count_ones() as usize;
                 or_write_u64_bytes(write_data, write_byte, chunk);
                 (null_count, len)
             }
-        } else if write_shift == 0 { // only read shifting necessary
+        } else if write_shift == 0 {
+            // only read shifting necessary
             let len = 64 - 8; // 56 bits so that write_shift == 0 for the next iteration
             let chunk = (chunk >> read_shift) & 0x00FFFFFFFFFFFFFF; // 56 bits mask
             let null_count = len - chunk.count_ones() as usize;
@@ -277,5 +280,42 @@ mod tests {
 
         assert_eq!(destination, expected_data);
         assert_eq!(result, expected_null_count);
+    }
+
+    #[test]
+    fn test_set_upto_64bits() {
+        // len >= 64
+        let write_data: &mut [u8] = &mut [
+            0b00000000, 0b00000000, 0b00000000, 0b00000000, 0b00000000, 0b00000000, 0b00000000,
+            0b00000000,
+        ];
+        let data: &[u8] = &[
+            0b00000001, 0b00000001, 0b00000001, 0b00000001, 0b00000001, 0b00000001, 0b00000001,
+            0b00000001,
+        ];
+        let offset_write = 1;
+        let offset_read = 0;
+        let len = 64;
+        let (n, len_set) = set_upto_64bits(write_data, data, offset_write, offset_read, len);
+        assert_eq!(n, 55);
+        assert_eq!(len_set, 63);
+        assert_eq!(
+            write_data,
+            &[
+                0b00000010, 0b00000010, 0b00000010, 0b00000010, 0b00000010, 0b00000010, 0b00000010,
+                0b00000010
+            ]
+        );
+
+        // len = 1
+        let write_data: &mut [u8] = &mut [0b00000000];
+        let data: &[u8] = &[0b00000001];
+        let offset_write = 1;
+        let offset_read = 0;
+        let len = 1;
+        let (n, len_set) = set_upto_64bits(write_data, data, offset_write, offset_read, len);
+        assert_eq!(n, 0);
+        assert_eq!(len_set, 1);
+        assert_eq!(write_data, &[0b00000010]);
     }
 }
