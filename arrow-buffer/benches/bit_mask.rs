@@ -21,8 +21,8 @@ use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criteri
 fn criterion_benchmark(c: &mut Criterion) {
     let mut group = c.benchmark_group("bit_mask");
 
-    for offset_write in (0..8).step_by(5) {
-        for offset_read in (0..8).step_by(5) {
+    for offset_write in [0, 5] {
+        for offset_read in [0, 5] {
             for len in [1, 17, 65] {
                 for datum in [0u8, 0xADu8] {
                     let x = (offset_write, offset_read, len, datum);
