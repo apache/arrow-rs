@@ -3082,8 +3082,8 @@ mod tests {
             let min = byte_array_stats.min_opt().unwrap();
             let max = byte_array_stats.max_opt().unwrap();
 
-            assert_eq!(min.as_bytes(), &[b'a']);
-            assert_eq!(max.as_bytes(), &[b'd']);
+            assert_eq!(min.as_bytes(), b"a");
+            assert_eq!(max.as_bytes(), b"d");
         } else {
             panic!("expecting Statistics::ByteArray");
         }
@@ -3154,8 +3154,8 @@ mod tests {
             let min = byte_array_stats.min_opt().unwrap();
             let max = byte_array_stats.max_opt().unwrap();
 
-            assert_eq!(min.as_bytes(), &[b'a']);
-            assert_eq!(max.as_bytes(), &[b'd']);
+            assert_eq!(min.as_bytes(), b"a");
+            assert_eq!(max.as_bytes(), b"d");
         } else {
             panic!("expecting Statistics::ByteArray");
         }
