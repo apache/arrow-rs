@@ -100,12 +100,10 @@ fn set_upto_64bits(
     } else {
         let len = std::cmp::min(len, 64 - std::cmp::max(read_shift, write_shift));
         let bytes = ceil(len + read_shift, 8);
-        let mask = u64::MAX >> (64 - len);
         // SAFETY: chunk gets masked, so it is safe
-        let chunk = unsafe {
-            let chunk = read_bytes_to_u64(data, read_byte, bytes);
-            (chunk >> read_shift) & mask
-        };
+        let chunk = unsafe { read_bytes_to_u64(data, read_byte, bytes) };
+        let mask = u64::MAX >> (64 - len);
+        let chunk = (chunk >> read_shift) & mask;
         let chunk = chunk << write_shift;
         let null_count = len - chunk.count_ones() as usize;
         let bytes = ceil(len + write_shift, 8);
@@ -121,6 +119,7 @@ fn set_upto_64bits(
 /// The caller must ensure all arguments are within the valid range.
 /// The caller must be aware `8 - count` bytes in the returned value are uninitialized.
 #[inline]
+#[cfg(not(miri))]
 unsafe fn read_bytes_to_u64(data: &[u8], offset: usize, count: usize) -> u64 {
     debug_assert!(count <= 8);
     let mut tmp = std::mem::MaybeUninit::<u64>::uninit();
@@ -130,6 +129,13 @@ unsafe fn read_bytes_to_u64(data: &[u8], offset: usize, count: usize) -> u64 {
         std::ptr::copy_nonoverlapping(src, tmp.as_mut_ptr() as *mut u8, count);
         tmp.assume_init()
     }
+}
+
+#[cfg(miri)]
+unsafe fn read_bytes_to_u64(data: &[u8], offset: usize, count: usize) -> u64 {
+    let mut arr = [0u8; 8];
+    arr[0..count].copy_from_slice(&data[offset..(offset + count)]);
+    u64::from_le_bytes(arr)
 }
 
 #[inline]
