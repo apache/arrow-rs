@@ -20,7 +20,10 @@ use std::{sync::Arc, time::Duration};
 use anyhow::{bail, Context, Result};
 use arrow_array::{ArrayRef, Datum, RecordBatch, StringArray};
 use arrow_cast::{cast_with_options, pretty::pretty_format_batches, CastOptions};
-use arrow_flight::{sql::client::FlightSqlServiceClient, FlightInfo};
+use arrow_flight::{
+    sql::{client::FlightSqlServiceClient, CommandGetDbSchemas, CommandGetTables},
+    FlightInfo,
+};
 use arrow_schema::Schema;
 use clap::{Parser, Subcommand};
 use futures::TryStreamExt;
@@ -111,6 +114,51 @@ struct Args {
 /// Different available commands.
 #[derive(Debug, Subcommand)]
 enum Command {
+    /// Get catalogs.
+    Catalogs,
+    /// Get db schemas for a catalog.
+    DbSchemas {
+        /// Name of a catalog.
+        ///
+        /// Required.
+        catalog: String,
+        /// Specifies a filter pattern for schemas to search for.
+        /// When no schema_filter is provided, the pattern will not be used to narrow the search.
+        /// In the pattern string, two special characters can be used to denote matching rules:
+        ///     - "%" means to match any substring with 0 or more characters.
+        ///     - "_" means to match any one character.
+        #[clap(short, long)]
+        db_schema_filter: Option<String>,
+    },
+    /// Get tables for a catalog.
+    Tables {
+        /// Name of a catalog.
+        ///
+        /// Required.
+        catalog: String,
+        /// Specifies a filter pattern for schemas to search for.
+        /// When no schema_filter is provided, the pattern will not be used to narrow the search.
+        /// In the pattern string, two special characters can be used to denote matching rules:
+        ///     - "%" means to match any substring with 0 or more characters.
+        ///     - "_" means to match any one character.
+        #[clap(short, long)]
+        db_schema_filter: Option<String>,
+        /// Specifies a filter pattern for tables to search for.
+        /// When no table_filter is provided, all tables matching other filters are searched.
+        /// In the pattern string, two special characters can be used to denote matching rules:
+        ///     - "%" means to match any substring with 0 or more characters.
+        ///     - "_" means to match any one character.
+        #[clap(short, long)]
+        table_filter: Option<String>,
+        /// Specifies a filter of table types which must match.
+        /// The table types depend on vendor/implementation. It is usually used to separate tables from views or system tables.
+        /// TABLE, VIEW, and SYSTEM TABLE are commonly supported.
+        #[clap(long)]
+        table_types: Vec<String>,
+    },
+    /// Get table types.
+    TableTypes,
+
     /// Execute given statement.
     StatementQuery {
         /// SQL query.
@@ -150,6 +198,36 @@ async fn main() -> Result<()> {
         .context("setup client")?;
 
     let flight_info = match args.cmd {
+        Command::Catalogs => client.get_catalogs().await.context("get catalogs")?,
+        Command::DbSchemas {
+            catalog,
+            db_schema_filter,
+        } => client
+            .get_db_schemas(CommandGetDbSchemas {
+                catalog: Some(catalog),
+                db_schema_filter_pattern: db_schema_filter,
+            })
+            .await
+            .context("get db schemas")?,
+        Command::Tables {
+            catalog,
+            db_schema_filter,
+            table_filter,
+            table_types,
+        } => client
+            .get_tables(CommandGetTables {
+                catalog: Some(catalog),
+                db_schema_filter_pattern: db_schema_filter,
+                table_name_filter_pattern: table_filter,
+                table_types,
+                // Schema is returned as ipc encoded bytes.
+                // We do not support returning the schema as there is no trivial mechanism
+                // to display the information to the user.
+                include_schema: false,
+            })
+            .await
+            .context("get tables")?,
+        Command::TableTypes => client.get_table_types().await.context("get table types")?,
         Command::StatementQuery { query } => client
             .execute(query, None)
             .await
