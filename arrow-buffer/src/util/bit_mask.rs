@@ -120,11 +120,11 @@ fn set_upto_64bits(
 #[inline]
 unsafe fn read_bytes_to_u64(data: &[u8], offset: usize, count: usize) -> u64 {
     debug_assert!(count <= 8);
-    let tmp = 0u64;
+    let mut tmp = std::mem::MaybeUninit::<u64>::new(0);
     let src = data.as_ptr().add(offset);
     unsafe {
-        std::ptr::copy_nonoverlapping(src, &tmp as *const u64 as *mut u8, count);
-        tmp
+        std::ptr::copy_nonoverlapping(src, tmp.as_mut_ptr() as *mut u8, count);
+        tmp.assume_init()
     }
 }
 
