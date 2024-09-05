@@ -32,6 +32,7 @@ use arrow_schema::{ArrowError, DataType};
 use chrono::{DateTime, Duration, NaiveDate, NaiveDateTime, NaiveTime};
 use half::f16;
 use std::any::Any;
+use std::mem::MaybeUninit;
 use std::sync::Arc;
 
 /// A [`PrimitiveArray`] of `i8`
@@ -826,15 +827,42 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
         O: ArrowPrimitiveType,
         F: Fn(T::Native) -> O::Native,
     {
-        let nulls = self.nulls().cloned();
-        let values = self.values().iter().map(|v| op(*v));
+        const CHUNK_SIZE: usize = 1024;
+
+        let mut output: Vec<MaybeUninit<O::Native>> = Vec::with_capacity(self.len());
+        unsafe { output.set_len(self.len()) }
+
+        let chunks = self.values().as_ref().chunks_exact(CHUNK_SIZE).enumerate();
+
+        for (chunk_idx, chunk) in chunks {
+            let range = (chunk_idx * CHUNK_SIZE)..((chunk_idx + 1) * CHUNK_SIZE);
+            let values: [T::Native; CHUNK_SIZE] = chunk.try_into().unwrap();
+            let mut output_slice: [MaybeUninit<O::Native>; CHUNK_SIZE] =
+                output[range].try_into().unwrap();
+
+            for idx in 0..CHUNK_SIZE {
+                unsafe { *output_slice.get_unchecked_mut(idx) = MaybeUninit::new(op(values[idx])) };
+            }
+        }
+        let reminder_len = self.len() % CHUNK_SIZE;
+
+        for i in (self.len() - reminder_len)..self.len() {
+            unsafe {
+                let v = self.value_unchecked(i);
+                *output.get_unchecked_mut(i) = MaybeUninit::new(op(v));
+            }
+        }
+        let output =
+            unsafe { std::mem::transmute::<Vec<MaybeUninit<O::Native>>, Vec<O::Native>>(output) };
+
         // JUSTIFICATION
         //  Benefit
         //      ~60% speedup
         //  Soundness
         //      `values` is an iterator with a known size because arrays are sized.
-        let buffer = unsafe { Buffer::from_trusted_len_iter(values) };
-        PrimitiveArray::new(buffer.into(), nulls)
+        // let buffer = unsafe { Buffer::from_trusted_len_iter(values) };
+
+        PrimitiveArray::new(Buffer::from_vec(output).into(), self.nulls().cloned())
     }
 
     /// Applies a unary and infallible function to the array in place if possible.
