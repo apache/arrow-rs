@@ -100,15 +100,10 @@ fn set_upto_64bits(
     } else {
         let len = std::cmp::min(len, 64 - std::cmp::max(read_shift, write_shift));
         let bytes = ceil(len + read_shift, 8);
-        let mask = u64::MAX >> (64 - len);
         // SAFETY: chunk gets masked, so it is safe
-        let chunk = unsafe {
-            let mut tmp = std::mem::MaybeUninit::<u64>::uninit();
-            let src = data.as_ptr().add(read_byte);
-            std::ptr::copy_nonoverlapping(src, tmp.as_mut_ptr() as *mut u8, bytes);
-            let chunk = tmp.assume_init();
-            (chunk >> read_shift) & mask
-        };
+        let chunk = unsafe { read_bytes_to_u64(data, read_byte, bytes) };
+        let mask = u64::MAX >> (64 - len);
+        let chunk = (chunk >> read_shift) & mask;
         let chunk = chunk << write_shift;
         let null_count = len - chunk.count_ones() as usize;
         let bytes = ceil(len + write_shift, 8);
@@ -122,16 +117,14 @@ fn set_upto_64bits(
 
 /// # Safety
 /// The caller must ensure all arguments are within the valid range.
-/// The caller must be aware `8 - count` bytes in the returned value are uninitialized.
 #[inline]
 unsafe fn read_bytes_to_u64(data: &[u8], offset: usize, count: usize) -> u64 {
     debug_assert!(count <= 8);
-    let mut tmp = std::mem::MaybeUninit::<u64>::uninit();
+    let tmp = 0u64;
     let src = data.as_ptr().add(offset);
-    // SAFETY: the caller must not use the uninitialized `8 - count` bytes in the returned value.
     unsafe {
-        std::ptr::copy_nonoverlapping(src, tmp.as_mut_ptr() as *mut u8, count);
-        tmp.assume_init()
+        std::ptr::copy_nonoverlapping(src, &tmp as *const u64 as *mut u8, count);
+        tmp
     }
 }
 
