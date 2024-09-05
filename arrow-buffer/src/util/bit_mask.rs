@@ -100,15 +100,15 @@ fn set_upto_64bits(
     } else {
         let len = std::cmp::min(len, 64 - std::cmp::max(read_shift, write_shift));
         let bytes = ceil(len + read_shift, 8);
+        let mask = u64::MAX >> (64 - len);
         // SAFETY: chunk gets masked, so it is safe
         let chunk = unsafe {
             let mut tmp = std::mem::MaybeUninit::<u64>::uninit();
             let src = data.as_ptr().add(read_byte);
             std::ptr::copy_nonoverlapping(src, tmp.as_mut_ptr() as *mut u8, bytes);
-            tmp.assume_init()
+            let chunk = tmp.assume_init();
+            (chunk >> read_shift) & mask
         };
-        let mask = u64::MAX >> (64 - len);
-        let chunk = (chunk >> read_shift) & mask;
         let chunk = chunk << write_shift;
         let null_count = len - chunk.count_ones() as usize;
         let bytes = ceil(len + write_shift, 8);
