@@ -61,8 +61,7 @@ fn set_upto_64bits(
     let write_shift = offset_write % 8;
 
     if len >= 64 {
-        // SAFETY: chunk gets masked when necessary, so it is safe
-        let chunk = unsafe { read_bytes_to_u64(data, read_byte, 8) };
+        let chunk = unsafe { (data.as_ptr().add(read_byte) as *const u64).read_unaligned() };
         if read_shift == 0 {
             if write_shift == 0 {
                 // no shifting necessary
@@ -100,7 +99,6 @@ fn set_upto_64bits(
     } else {
         let len = std::cmp::min(len, 64 - std::cmp::max(read_shift, write_shift));
         let bytes = ceil(len + read_shift, 8);
-        // SAFETY: chunk gets masked, so it is safe
         let chunk = unsafe { read_bytes_to_u64(data, read_byte, bytes) };
         let mask = u64::MAX >> (64 - len);
         let chunk = (chunk >> read_shift) & mask;
