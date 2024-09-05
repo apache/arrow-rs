@@ -55,18 +55,14 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
         // write offset index to the file
         for (row_group_idx, row_group) in self.row_groups.iter_mut().enumerate() {
             for (column_idx, column_metadata) in row_group.columns.iter_mut().enumerate() {
-                match &offset_indexes[row_group_idx][column_idx] {
-                    Some(offset_index) => {
-                        let start_offset = self.buf.bytes_written();
-                        let mut protocol = TCompactOutputProtocol::new(&mut self.buf);
-                        offset_index.write_to_out_protocol(&mut protocol)?;
-                        let end_offset = self.buf.bytes_written();
-                        // set offset and index for offset index
-                        column_metadata.offset_index_offset = Some(start_offset as i64);
-                        column_metadata.offset_index_length =
-                            Some((end_offset - start_offset) as i32);
-                    }
-                    None => {}
+                if let Some(offset_index) = &offset_indexes[row_group_idx][column_idx] {
+                    let start_offset = self.buf.bytes_written();
+                    let mut protocol = TCompactOutputProtocol::new(&mut self.buf);
+                    offset_index.write_to_out_protocol(&mut protocol)?;
+                    let end_offset = self.buf.bytes_written();
+                    // set offset and index for offset index
+                    column_metadata.offset_index_offset = Some(start_offset as i64);
+                    column_metadata.offset_index_length = Some((end_offset - start_offset) as i32);
                 }
             }
         }
@@ -84,18 +80,14 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
         // write column index to the file
         for (row_group_idx, row_group) in self.row_groups.iter_mut().enumerate() {
             for (column_idx, column_metadata) in row_group.columns.iter_mut().enumerate() {
-                match &column_indexes[row_group_idx][column_idx] {
-                    Some(column_index) => {
-                        let start_offset = self.buf.bytes_written();
-                        let mut protocol = TCompactOutputProtocol::new(&mut self.buf);
-                        column_index.write_to_out_protocol(&mut protocol)?;
-                        let end_offset = self.buf.bytes_written();
-                        // set offset and index for offset index
-                        column_metadata.column_index_offset = Some(start_offset as i64);
-                        column_metadata.column_index_length =
-                            Some((end_offset - start_offset) as i32);
-                    }
-                    None => {}
+                if let Some(column_index) = &column_indexes[row_group_idx][column_idx] {
+                    let start_offset = self.buf.bytes_written();
+                    let mut protocol = TCompactOutputProtocol::new(&mut self.buf);
+                    column_index.write_to_out_protocol(&mut protocol)?;
+                    let end_offset = self.buf.bytes_written();
+                    // set offset and index for offset index
+                    column_metadata.column_index_offset = Some(start_offset as i64);
+                    column_metadata.column_index_length = Some((end_offset - start_offset) as i32);
                 }
             }
         }
@@ -524,7 +516,6 @@ mod tests {
     async fn load_metadata_from_bytes(file_size: usize, data: Bytes) -> ParquetMetaData {
         use crate::arrow::async_reader::{MetadataFetch, MetadataLoader};
         use crate::errors::Result as ParquetResult;
-        use bytes::Bytes;
         use futures::future::BoxFuture;
         use futures::FutureExt;
         use std::ops::Range;

@@ -389,14 +389,13 @@ impl UnionFields {
         let mut set = 0_u128;
         type_ids
             .into_iter()
-            .map(|idx| {
+            .inspect(|&idx| {
                 let mask = 1_u128 << idx;
                 if (set & mask) != 0 {
                     panic!("duplicate type id: {}", idx);
                 } else {
                     set |= mask;
                 }
-                idx
             })
             .zip(fields)
             .collect()
