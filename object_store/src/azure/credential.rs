@@ -130,6 +130,18 @@ pub enum AzureCredential {
     BearerToken(String),
 }
 
+impl AzureCredential {
+    /// Determines if the credential requires the request be treated as sensitive
+    pub fn sensitive_request(&self) -> bool {
+        match self {
+            Self::AccessKey(_) => false,
+            Self::BearerToken(_) => false,
+            // SAS tokens are sent as query parameters in the url
+            Self::SASToken(_) => true,
+        }
+    }
+}
+
 /// A list of known Azure authority hosts
 pub mod authority_hosts {
     /// China-based Azure Authority Host
