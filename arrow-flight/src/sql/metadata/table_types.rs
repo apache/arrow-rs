@@ -36,6 +36,7 @@ use super::lexsort_to_indices;
 /// Builds rows like this:
 ///
 /// * table_type: utf8,
+#[derive(Default)]
 pub struct GetTableTypesBuilder {
     // array builder for table types
     table_type: StringBuilder,
