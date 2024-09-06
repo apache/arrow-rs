@@ -20,7 +20,7 @@
 use crate::bit_mask::set_bits;
 use crate::{layout, ArrayData};
 use arrow_buffer::buffer::NullBuffer;
-use arrow_buffer::{Buffer, MutableBuffer};
+use arrow_buffer::{Buffer, MutableBuffer, ScalarBuffer};
 use arrow_schema::DataType;
 use std::ffi::c_void;
 
@@ -121,7 +121,7 @@ impl FFI_ArrowArray {
     pub fn new(data: &ArrayData) -> Self {
         let data_layout = layout(data.data_type());
 
-        let buffers = if data_layout.can_contain_null_mask {
+        let mut buffers = if data_layout.can_contain_null_mask {
             // * insert the null buffer at the start
             // * make all others `Option<Buffer>`.
             std::iter::once(align_nulls(data.offset(), data.nulls()))
@@ -132,7 +132,7 @@ impl FFI_ArrowArray {
         };
 
         // `n_buffers` is the number of buffers by the spec.
-        let n_buffers = {
+        let mut n_buffers = {
             data_layout.buffers.len() + {
                 // If the layout has a null buffer by Arrow spec.
                 // Note that even the array doesn't have a null buffer because it has
@@ -152,6 +152,25 @@ impl FFI_ArrowArray {
                 None => None,
             })
             .collect::<Box<[_]>>();
+
+        let need_variadic_buffer_sizes = match data.data_type() {
+            DataType::Utf8View | DataType::BinaryView => true,
+            _ => false,
+        };
+
+        if need_variadic_buffer_sizes {
+            n_buffers += 1;
+
+            // Skip null and views buffers.
+            let variadic_buffer_sizes: Vec<i64> = data
+                .buffers()
+                .iter()
+                .skip(2)
+                .map(|buf| buf.len() as _)
+                .collect();
+
+            buffers.push(Some(ScalarBuffer::from(variadic_buffer_sizes).into_inner()));
+        }
 
         let empty = vec![];
         let (child_data, dictionary) = match data.data_type() {

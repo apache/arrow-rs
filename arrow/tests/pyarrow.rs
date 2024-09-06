@@ -18,6 +18,7 @@
 use arrow::array::{ArrayRef, Int32Array, StringArray};
 use arrow::pyarrow::{FromPyArrow, ToPyArrow};
 use arrow::record_batch::RecordBatch;
+use arrow_array::StringViewArray;
 use pyo3::Python;
 use std::sync::Arc;
 
@@ -27,7 +28,8 @@ fn test_to_pyarrow() {
 
     let a: ArrayRef = Arc::new(Int32Array::from(vec![1, 2]));
     let b: ArrayRef = Arc::new(StringArray::from(vec!["a", "b"]));
-    let input = RecordBatch::try_from_iter(vec![("a", a), ("b", b)]).unwrap();
+    let c: ArrayRef = Arc::new(StringViewArray::from(vec!["a", "b"]));
+    let input = RecordBatch::try_from_iter(vec![("a", a), ("b", b), ("c", c)]).unwrap();
     println!("input: {:?}", input);
 
     let res = Python::with_gil(|py| {
