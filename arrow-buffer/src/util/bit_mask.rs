@@ -134,6 +134,9 @@ unsafe fn write_u64_bytes(data: &mut [u8], offset: usize, chunk: u64) {
     ptr.write_unaligned(chunk);
 }
 
+/// Similar to `write_u64_bytes`, but this method ORs the offset addressed `data` and `chunk`
+/// instead of overwriting
+///
 /// # Safety
 /// The caller must ensure `data` has `offset..(offset + 8)` range
 #[inline]
