@@ -92,10 +92,10 @@ fn set_upto_64bits(
             (null_count, len)
         }
     } else if len == 1 {
-        let c = (unsafe { *data.as_ptr().add(read_byte) } >> read_shift) & 1;
+        let byte_chunk = (unsafe { data.get_unchecked(read_byte) } >> read_shift) & 1;
         let ptr = write_data.as_mut_ptr();
-        unsafe { *ptr.add(write_byte) |= c << write_shift };
-        ((c ^ 1) as usize, 1)
+        unsafe { *ptr.add(write_byte) |= byte_chunk << write_shift };
+        ((byte_chunk ^ 1) as usize, 1)
     } else {
         let len = std::cmp::min(len, 64 - std::cmp::max(read_shift, write_shift));
         let bytes = ceil(len + read_shift, 8);
