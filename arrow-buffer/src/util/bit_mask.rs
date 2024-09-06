@@ -64,15 +64,14 @@ fn set_upto_64bits(
 
     if len >= 64 {
         let chunk = unsafe { (data.as_ptr().add(read_byte) as *const u64).read_unaligned() };
-        match (read_byte, write_byte) {
-            (0, 0) => {
+        if read_shift == 0 {
+            if write_shift == 0 {
                 // no shifting necessary
                 let len = 64;
                 let null_count = chunk.count_zeros() as usize;
                 unsafe { write_u64_bytes(write_data, write_byte, chunk) };
                 (null_count, len)
-            }
-            (0, _) => {
+            } else {
                 // only write shifting necessary
                 let len = 64 - write_shift;
                 let chunk = chunk << write_shift;
@@ -80,21 +79,19 @@ fn set_upto_64bits(
                 unsafe { or_write_u64_bytes(write_data, write_byte, chunk) };
                 (null_count, len)
             }
-            (_, 0) => {
-                // only read shifting necessary
-                let len = 64 - 8; // 56 bits so the next set_upto_64bits call gets write_shift == 0
-                let chunk = (chunk >> read_shift) & 0x00FFFFFFFFFFFFFF; // 56 bits mask
-                let null_count = len - chunk.count_ones() as usize;
-                unsafe { write_u64_bytes(write_data, write_byte, chunk) };
-                (null_count, len)
-            }
-            (_, _) => {
-                let len = 64 - std::cmp::max(read_shift, write_shift);
-                let chunk = (chunk >> read_shift) << write_shift;
-                let null_count = len - chunk.count_ones() as usize;
-                unsafe { or_write_u64_bytes(write_data, write_byte, chunk) };
-                (null_count, len)
-            }
+        } else if write_shift == 0 {
+            // only read shifting necessary
+            let len = 64 - 8; // 56 bits so the next set_upto_64bits call will see write_shift == 0
+            let chunk = (chunk >> read_shift) & 0x00FFFFFFFFFFFFFF; // 56 bits mask
+            let null_count = len - chunk.count_ones() as usize;
+            unsafe { write_u64_bytes(write_data, write_byte, chunk) };
+            (null_count, len)
+        } else {
+            let len = 64 - std::cmp::max(read_shift, write_shift);
+            let chunk = (chunk >> read_shift) << write_shift;
+            let null_count = len - chunk.count_ones() as usize;
+            unsafe { or_write_u64_bytes(write_data, write_byte, chunk) };
+            (null_count, len)
         }
     } else if len == 1 {
         let byte_chunk = (unsafe { data.get_unchecked(read_byte) } >> read_shift) & 1;
