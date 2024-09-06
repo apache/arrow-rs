@@ -832,14 +832,13 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
 
         let mut output: Vec<MaybeUninit<O::Native>> = vec![MaybeUninit::uninit(); self.len()];
         let values_chunks = self.values().as_ref().chunks_exact(CHUNK_SIZE);
+        let output_chunks = output.as_mut_slice().chunks_exact(CHUNK_SIZE);
 
-        for (chunk_idx, chunk) in values_chunks.enumerate() {
-            let range = (chunk_idx * CHUNK_SIZE)..((chunk_idx + 1) * CHUNK_SIZE);
-            let values: [T::Native; CHUNK_SIZE] = chunk.try_into().unwrap();
-            let mut output_slice: [MaybeUninit<O::Native>; CHUNK_SIZE] =
-                output[range].try_into().unwrap();
+        for (output, values) in output_chunks.zip(values_chunks) {
+            let values: [T::Native; CHUNK_SIZE] = values.try_into().unwrap();
+            let mut output: [MaybeUninit<O::Native>; CHUNK_SIZE] = output.try_into().unwrap();
 
-            for (o, v) in output_slice.iter_mut().zip(values.iter()) {
+            for (o, v) in output.iter_mut().zip(values.iter()) {
                 *o = MaybeUninit::new(op(*v));
             }
         }
@@ -855,7 +854,7 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
         }
 
         //  Soundness
-        //      We filled the output array with initialized values up to `self.len()` AND `MaybeUninit<T>` has a transparent layout over `T`
+        //    We filled the output array with initialized values up to `self.len()` AND `MaybeUninit<T>` has a transparent layout over `T`
         let output = output
             .into_iter()
             .map(|o| unsafe { o.assume_init() })

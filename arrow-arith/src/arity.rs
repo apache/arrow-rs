@@ -25,6 +25,7 @@ use arrow_buffer::ArrowNativeType;
 use arrow_buffer::{Buffer, MutableBuffer};
 use arrow_data::ArrayData;
 use arrow_schema::ArrowError;
+use std::mem::MaybeUninit;
 use std::sync::Arc;
 
 /// See [`PrimitiveArray::unary`]
@@ -205,6 +206,9 @@ where
     O: ArrowPrimitiveType,
     F: Fn(A::Native, B::Native) -> O::Native,
 {
+    // This is an arbitrary value
+    const CHUNK_SIZE: usize = 1024;
+
     if a.len() != b.len() {
         return Err(ArrowError::ComputeError(
             "Cannot perform binary operation on arrays of different length".to_string(),
@@ -216,15 +220,39 @@ where
     }
 
     let nulls = NullBuffer::union(a.logical_nulls().as_ref(), b.logical_nulls().as_ref());
+    let mut output: Vec<MaybeUninit<O::Native>> = vec![MaybeUninit::uninit(); a.len()];
+    let a_chunks = a.values().as_ref().chunks_exact(CHUNK_SIZE);
+    let b_chunks = b.values().as_ref().chunks_exact(CHUNK_SIZE);
+    let output_chunks = output.as_mut_slice().chunks_exact(CHUNK_SIZE);
 
-    let values = a.values().iter().zip(b.values()).map(|(l, r)| op(*l, *r));
-    // JUSTIFICATION
-    //  Benefit
-    //      ~60% speedup
+    for (output, (a_chunk, b_chunk)) in output_chunks.zip(a_chunks.zip(b_chunks)) {
+        let a_values: [A::Native; CHUNK_SIZE] = a_chunk.try_into().unwrap();
+        let b_values: [B::Native; CHUNK_SIZE] = b_chunk.try_into().unwrap();
+        let mut output: [MaybeUninit<O::Native>; CHUNK_SIZE] = output.try_into().unwrap();
+
+        for (o, (a, b)) in output.iter_mut().zip(a_values.iter().zip(b_values.iter())) {
+            *o = MaybeUninit::new(op(*a, *b));
+        }
+    }
+
+    let reminder_len = a.len() % CHUNK_SIZE;
+    let reminder_range = (a.len() - reminder_len)..a.len();
+
+    for (o, (a, b)) in output[reminder_range.clone()].iter_mut().zip(
+        a.values()[reminder_range.clone()]
+            .iter()
+            .zip(b.values()[reminder_range].iter()),
+    ) {
+        *o = MaybeUninit::new(op(*a, *b));
+    }
+
     //  Soundness
-    //      `values` is an iterator with a known size from a PrimitiveArray
-    let buffer = unsafe { Buffer::from_trusted_len_iter(values) };
-    Ok(PrimitiveArray::new(buffer.into(), nulls))
+    //    We filled the output array with initialized values up to `self.len()` AND `MaybeUninit<T>` has a transparent layout over `T`
+    let output = output
+        .into_iter()
+        .map(|o| unsafe { o.assume_init() })
+        .collect::<Vec<_>>();
+    Ok(PrimitiveArray::new(Buffer::from_vec(output).into(), nulls))
 }
 
 /// Applies a binary and infallible function to values in two arrays, replacing
