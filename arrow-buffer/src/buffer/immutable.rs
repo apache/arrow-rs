@@ -382,6 +382,12 @@ impl<const N: usize> From<&[u8; N]> for Buffer {
     }
 }
 
+impl<T: ArrowNativeType> From<Vec<T>> for Buffer {
+    fn from(value: Vec<T>) -> Self {
+        Self::from_vec(value)
+    }
+}
+
 /// Creating a `Buffer` instance by storing the boolean values into the buffer
 impl FromIterator<bool> for Buffer {
     fn from_iter<I>(iter: I) -> Self
