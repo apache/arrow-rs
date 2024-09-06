@@ -848,19 +848,22 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
             let mut output_slice: [MaybeUninit<O::Native>; CHUNK_SIZE] =
                 output[range].try_into().unwrap();
 
-            for idx in 0..CHUNK_SIZE {
-                unsafe { *output_slice.get_unchecked_mut(idx) = MaybeUninit::new(op(values[idx])) };
+            for (o, v) in output_slice.iter_mut().zip(values.iter()) {
+                *o = MaybeUninit::new(op(*v));
             }
         }
-        let reminder_len = self.len() % CHUNK_SIZE;
-        for i in (self.len() - reminder_len)..self.len() {
-            unsafe {
-                let v = self.value_unchecked(i);
-                *output.get_unchecked_mut(i) = MaybeUninit::new(op(v));
-            }
-        }
-        let output = unsafe { transmute::<Vec<MaybeUninit<O::Native>>, Vec<O::Native>>(output) };
 
+        let reminder_len = self.len() % CHUNK_SIZE;
+        let reminder_range = (self.len() - reminder_len)..self.len();
+
+        for (o, v) in output[reminder_range.clone()]
+            .iter_mut()
+            .zip(&self.values()[reminder_range])
+        {
+            *o = MaybeUninit::new(op(*v));
+        }
+
+        let output = unsafe { transmute::<Vec<MaybeUninit<O::Native>>, Vec<O::Native>>(output) };
         PrimitiveArray::new(Buffer::from_vec(output).into(), self.nulls().cloned())
     }
 
