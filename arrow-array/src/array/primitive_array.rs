@@ -32,7 +32,7 @@ use arrow_schema::{ArrowError, DataType};
 use chrono::{DateTime, Duration, NaiveDate, NaiveDateTime, NaiveTime};
 use half::f16;
 use std::any::Any;
-use std::mem::{transmute, MaybeUninit};
+use std::mem::MaybeUninit;
 use std::sync::Arc;
 
 /// A [`PrimitiveArray`] of `i8`
@@ -827,22 +827,13 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
         O: ArrowPrimitiveType,
         F: Fn(T::Native) -> O::Native,
     {
-        // JUSTIFICATION
-        //  Benefit
-        //      Over 90% speedup over the previous approach
-        //  Soundness
-        //      All slices are of the same length, we map `self` into a `vec` of the same length.
-        //      The transmute at the bottom of the function is much faster than `MaybeUninit:assume_init`,
-        //          and is safe as `MaybeUninit<T>` has a transparent layout over `T`
-
+        // This is an arbitrary value
         const CHUNK_SIZE: usize = 1024;
 
-        let mut output: Vec<MaybeUninit<O::Native>> = Vec::with_capacity(self.len());
-        unsafe { output.set_len(self.len()) }
+        let mut output: Vec<MaybeUninit<O::Native>> = vec![MaybeUninit::uninit(); self.len()];
+        let values_chunks = self.values().as_ref().chunks_exact(CHUNK_SIZE);
 
-        let chunks = self.values().as_ref().chunks_exact(CHUNK_SIZE).enumerate();
-
-        for (chunk_idx, chunk) in chunks {
+        for (chunk_idx, chunk) in values_chunks.enumerate() {
             let range = (chunk_idx * CHUNK_SIZE)..((chunk_idx + 1) * CHUNK_SIZE);
             let values: [T::Native; CHUNK_SIZE] = chunk.try_into().unwrap();
             let mut output_slice: [MaybeUninit<O::Native>; CHUNK_SIZE] =
@@ -863,7 +854,12 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
             *o = MaybeUninit::new(op(*v));
         }
 
-        let output = unsafe { transmute::<Vec<MaybeUninit<O::Native>>, Vec<O::Native>>(output) };
+        //  Soundness
+        //      We filled the output array with initialized values up to `self.len()` AND `MaybeUninit<T>` has a transparent layout over `T`
+        let output = output
+            .into_iter()
+            .map(|o| unsafe { o.assume_init() })
+            .collect::<Vec<_>>();
         PrimitiveArray::new(Buffer::from_vec(output).into(), self.nulls().cloned())
     }
 
