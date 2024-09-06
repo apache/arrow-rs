@@ -194,13 +194,11 @@ fn bit_width(data_type: &DataType, i: usize, num_buffers: usize) -> Result<usize
             )))
         }
         // Variable-sized views: have 3 or more buffers.
-        // Buffer 1 is u128 views
-        // Buffers 2...N-1 are u8
-        // Buffer N is i64
-        (DataType::Utf8View, 1) | (DataType::BinaryView,1) => {
-            u128::BITS as _
-        }
-        (DataType::Utf8View, i) | (DataType::BinaryView, i) if i < num_buffers - 1  =>{
+        // Buffer 1 are the u128 views
+        // Buffers 2...N-1 are u8 byte buffers
+        // Buffer N is i64 lengths buffer
+        (DataType::Utf8View, 1) | (DataType::BinaryView,1) => u128::BITS as _,
+        (DataType::Utf8View, i) | (DataType::BinaryView, i) if i < num_buffers - 1  => {
             u8::BITS as _
         }
         (DataType::Utf8View, i) | (DataType::BinaryView, i) if i == num_buffers - 1 => {
@@ -466,21 +464,23 @@ impl<'a> ImportedArrowArray<'a> {
                 (unsafe { *offset_buffer.add(len / size_of::<i64>() - 1) }) as usize
             }
             // View types: these have variadic buffers.
-            // Buffer 1 is the views buffer, which is the same as the length of the array.
+            // Buffer 1 is the views buffer, which stores 1 u128 per length of the array.
             // Buffers 2..N-1 are the buffers holding the byte data. Their lengths are variable.
             // Buffer N is of length (N - 2) and stores i64 containing the lengths of buffers 2..N-1
-            (DataType::Utf8View, 1) | (DataType::BinaryView, 1) => length,
+            (DataType::Utf8View, 1) | (DataType::BinaryView, 1) => {
+                std::mem::size_of::<u128>() * length
+            }
             (DataType::Utf8View, i) | (DataType::BinaryView, i) if i < num_buffers - 1 => {
                 // Read the length of buffer N out of the last buffer.
                 // first buffer is the null buffer => add(1)
                 // we assume that pointer is aligned for `i32`, as Utf8 uses `i32` offsets.
                 #[allow(clippy::cast_ptr_alignment)]
                 let variadic_buffer_lengths = self.array.buffer(num_buffers - 1) as *const i64;
-                // get last offset
                 (unsafe { *variadic_buffer_lengths.add(i - 2) }) as usize
             }
             (DataType::Utf8View, i) | (DataType::BinaryView, i) if i == num_buffers - 1 => {
-                // Length is equal to number of buffers.
+                // Length is equal to number of data_buffers, which is number of total buffers
+                // less the validity and views bufs.
                 num_buffers - 2
             }
             // buffer len of primitive types

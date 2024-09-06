@@ -141,6 +141,24 @@ impl FFI_ArrowArray {
             }
         } as i64;
 
+        let need_variadic_buffer_sizes = match data.data_type() {
+            DataType::Utf8View | DataType::BinaryView => true,
+            _ => false,
+        };
+
+        if need_variadic_buffer_sizes {
+            // Skip null and views buffers.
+            let variadic_buffer_sizes: Vec<i64> = data
+                .buffers()
+                .iter()
+                .skip(2)
+                .map(|buf| buf.len() as _)
+                .collect();
+
+            buffers.push(Some(ScalarBuffer::from(variadic_buffer_sizes).into_inner()));
+            n_buffers += 1;
+        }
+
         let buffers_ptr = buffers
             .iter()
             .flat_map(|maybe_buffer| match maybe_buffer {
@@ -152,25 +170,6 @@ impl FFI_ArrowArray {
                 None => None,
             })
             .collect::<Box<[_]>>();
-
-        let need_variadic_buffer_sizes = match data.data_type() {
-            DataType::Utf8View | DataType::BinaryView => true,
-            _ => false,
-        };
-
-        if need_variadic_buffer_sizes {
-            n_buffers += 1;
-
-            // Skip null and views buffers.
-            let variadic_buffer_sizes: Vec<i64> = data
-                .buffers()
-                .iter()
-                .skip(2)
-                .map(|buf| buf.len() as _)
-                .collect();
-
-            buffers.push(Some(ScalarBuffer::from(variadic_buffer_sizes).into_inner()));
-        }
 
         let empty = vec![];
         let (child_data, dictionary) = match data.data_type() {
