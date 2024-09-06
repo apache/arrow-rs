@@ -126,7 +126,7 @@ impl LineDelimiter {
     fn finish(&mut self) -> Result<bool> {
         if !self.remainder.is_empty() {
             ensure!(!self.is_quote, UnterminatedStringSnafu);
-            ensure!(!self.is_quote, TrailingEscapeSnafu);
+            ensure!(!self.is_escape, TrailingEscapeSnafu);
 
             self.complete
                 .push_back(Bytes::from(std::mem::take(&mut self.remainder)))
