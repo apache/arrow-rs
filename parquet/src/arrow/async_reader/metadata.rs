@@ -71,7 +71,10 @@ impl<F: MetadataFetch> MetadataLoader<F> {
         let suffix_len = suffix.len();
 
         let mut footer = [0; 8];
-        footer.copy_from_slice(&suffix[suffix_len - 8..suffix_len]);
+        let Some(footer_start) = suffix_len.checked_sub(8) else {
+            return Err(ParquetError::General("Invalid Parquet file. Corrupt footer".to_string()));
+        };
+        footer.copy_from_slice(&suffix[footer_start..]);
 
         let length = decode_footer(&footer)?;
 
