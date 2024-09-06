@@ -67,14 +67,14 @@ fn set_upto_64bits(
                 // no shifting necessary
                 let len = 64;
                 let null_count = chunk.count_zeros() as usize;
-                write_u64_bytes(write_data, write_byte, chunk);
+                unsafe { write_u64_bytes(write_data, write_byte, chunk) };
                 (null_count, len)
             } else {
                 // only write shifting necessary
                 let len = 64 - write_shift;
                 let chunk = chunk << write_shift;
                 let null_count = len - chunk.count_ones() as usize;
-                or_write_u64_bytes(write_data, write_byte, chunk);
+                unsafe { or_write_u64_bytes(write_data, write_byte, chunk) };
                 (null_count, len)
             }
         } else if write_shift == 0 {
@@ -82,13 +82,13 @@ fn set_upto_64bits(
             let len = 64 - 8; // 56 bits so that write_shift == 0 for the next iteration
             let chunk = (chunk >> read_shift) & 0x00FFFFFFFFFFFFFF; // 56 bits mask
             let null_count = len - chunk.count_ones() as usize;
-            write_u64_bytes(write_data, write_byte, chunk);
+            unsafe { write_u64_bytes(write_data, write_byte, chunk) };
             (null_count, len)
         } else {
             let len = 64 - std::cmp::max(read_shift, write_shift);
             let chunk = (chunk >> read_shift) << write_shift;
             let null_count = len - chunk.count_ones() as usize;
-            or_write_u64_bytes(write_data, write_byte, chunk);
+            unsafe { or_write_u64_bytes(write_data, write_byte, chunk) };
             (null_count, len)
         }
     } else if len == 1 {
@@ -126,23 +126,21 @@ unsafe fn read_bytes_to_u64(data: &[u8], offset: usize, count: usize) -> u64 {
     }
 }
 
+/// # Safety
+/// The caller must ensure `data` has `offset..(offset + 8)` range
 #[inline]
-fn write_u64_bytes(data: &mut [u8], offset: usize, chunk: u64) {
-    // SAFETY: the caller must ensure `data` has `offset..(offset + 8)` range
-    unsafe {
-        let ptr = data.as_mut_ptr().add(offset) as *mut u64;
-        ptr.write_unaligned(chunk);
-    }
+unsafe fn write_u64_bytes(data: &mut [u8], offset: usize, chunk: u64) {
+    let ptr = data.as_mut_ptr().add(offset) as *mut u64;
+    ptr.write_unaligned(chunk);
 }
 
+/// # Safety
+/// The caller must ensure `data` has `offset..(offset + 8)` range
 #[inline]
-fn or_write_u64_bytes(data: &mut [u8], offset: usize, chunk: u64) {
-    // SAFETY: the caller must ensure `data` has `offset..(offset + 8)` range
-    unsafe {
-        let ptr = data.as_mut_ptr().add(offset);
-        let chunk = chunk | (*ptr) as u64;
-        (ptr as *mut u64).write_unaligned(chunk);
-    }
+unsafe fn or_write_u64_bytes(data: &mut [u8], offset: usize, chunk: u64) {
+    let ptr = data.as_mut_ptr().add(offset);
+    let chunk = chunk | (*ptr) as u64;
+    (ptr as *mut u64).write_unaligned(chunk);
 }
 
 #[cfg(test)]
