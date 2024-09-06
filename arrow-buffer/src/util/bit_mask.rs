@@ -79,7 +79,7 @@ fn set_upto_64bits(
             }
         } else if write_shift == 0 {
             // only read shifting necessary
-            let len = 64 - 8; // 56 bits so that write_shift == 0 for the next iteration
+            let len = 64 - 8; // 56 bits so the next set_upto_64bits call will see write_shift == 0
             let chunk = (chunk >> read_shift) & 0x00FFFFFFFFFFFFFF; // 56 bits mask
             let null_count = len - chunk.count_ones() as usize;
             unsafe { write_u64_bytes(write_data, write_byte, chunk) };
