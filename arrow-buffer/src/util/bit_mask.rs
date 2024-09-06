@@ -55,8 +55,8 @@ fn set_upto_64bits(
     offset_read: usize,
     len: usize,
 ) -> (usize, usize) {
-    debug_assert!(offset_read * 8 + len <= data.len() * 8);
-    debug_assert!(offset_write * 8 + len <= write_data.len() * 8);
+    debug_assert!(offset_read + len <= data.len() * 8);
+    debug_assert!(offset_write + len <= write_data.len() * 8);
     let read_byte = offset_read / 8;
     let read_shift = offset_read % 8;
     let write_byte = offset_write / 8;
