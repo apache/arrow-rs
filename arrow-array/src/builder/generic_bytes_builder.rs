@@ -98,7 +98,7 @@ impl<T: ByteArrayType> GenericByteBuilder<T> {
     /// `T::Offset::MAX` bytes.
     ///
     /// For example, this can happen with [`StringArray`] or [`BinaryArray`]
-    /// where the total length of all values exceeds 2GB, for example
+    /// where the total length of all values exceeds 2GB
     ///
     /// [`StringArray`]: crate::StringArray
     /// [`BinaryArray`]: crate::BinaryArray
