@@ -19,7 +19,6 @@
 ///               int32_to_int32_list_map: map<key: int32, value: list<$data$: int32>>
 /// >
 /// where there is one row per requested piece of metadata information.
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CommandGetSqlInfo {
     ///
@@ -100,7 +99,6 @@ pub struct CommandGetSqlInfo {
 ///                               is only relevant to be used by ODBC).
 /// >
 /// The returned data should be ordered by data_type and then by type_name.
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, Copy, PartialEq, ::prost::Message)]
 pub struct CommandGetXdbcTypeInfo {
     ///
@@ -120,7 +118,6 @@ pub struct CommandGetXdbcTypeInfo {
 ///   catalog_name: utf8 not null
 /// >
 /// The returned data should be ordered by catalog_name.
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, Copy, PartialEq, ::prost::Message)]
 pub struct CommandGetCatalogs {}
 ///
@@ -136,7 +133,6 @@ pub struct CommandGetCatalogs {}
 ///   db_schema_name: utf8 not null
 /// >
 /// The returned data should be ordered by catalog_name, then db_schema_name.
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CommandGetDbSchemas {
     ///
@@ -181,7 +177,6 @@ pub struct CommandGetDbSchemas {
 ///   - ARROW:FLIGHT:SQL:IS_READ_ONLY      - "1" indicates if the column is read only, "0" otherwise.
 ///   - ARROW:FLIGHT:SQL:IS_SEARCHABLE     - "1" indicates if the column is searchable via WHERE clause, "0" otherwise.
 /// The returned data should be ordered by catalog_name, db_schema_name, table_name, then table_type, followed by table_schema if requested.
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CommandGetTables {
     ///
@@ -231,7 +226,6 @@ pub struct CommandGetTables {
 ///   table_type: utf8 not null
 /// >
 /// The returned data should be ordered by table_type.
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, Copy, PartialEq, ::prost::Message)]
 pub struct CommandGetTableTypes {}
 ///
@@ -250,7 +244,6 @@ pub struct CommandGetTableTypes {}
 ///   key_sequence: int32 not null
 /// >
 /// The returned data should be ordered by catalog_name, db_schema_name, table_name, key_name, then key_sequence.
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CommandGetPrimaryKeys {
     ///
@@ -294,7 +287,6 @@ pub struct CommandGetPrimaryKeys {
 /// >
 /// The returned data should be ordered by fk_catalog_name, fk_db_schema_name, fk_table_name, fk_key_name, then key_sequence.
 /// update_rule and delete_rule returns a byte that is equivalent to actions declared on UpdateDeleteRules enum.
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CommandGetExportedKeys {
     ///
@@ -342,7 +334,6 @@ pub struct CommandGetExportedKeys {
 ///     - 2 = SET NULL
 ///     - 3 = NO ACTION
 ///     - 4 = SET DEFAULT
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CommandGetImportedKeys {
     ///
@@ -392,7 +383,6 @@ pub struct CommandGetImportedKeys {
 ///     - 2 = SET NULL
 ///     - 3 = NO ACTION
 ///     - 4 = SET DEFAULT
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CommandGetCrossReference {
     /// *
@@ -430,7 +420,6 @@ pub struct CommandGetCrossReference {
 }
 ///
 /// Request message for the "CreatePreparedStatement" action on a Flight SQL enabled backend.
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ActionCreatePreparedStatementRequest {
     /// The valid SQL string to create a prepared statement for.
@@ -443,7 +432,6 @@ pub struct ActionCreatePreparedStatementRequest {
 }
 ///
 /// An embedded message describing a Substrait plan to execute.
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct SubstraitPlan {
     /// The serialized substrait.Plan to create a prepared statement for.
@@ -460,7 +448,6 @@ pub struct SubstraitPlan {
 }
 ///
 /// Request message for the "CreatePreparedSubstraitPlan" action on a Flight SQL enabled backend.
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ActionCreatePreparedSubstraitPlanRequest {
     /// The serialized substrait.Plan to create a prepared statement for.
@@ -479,7 +466,6 @@ pub struct ActionCreatePreparedSubstraitPlanRequest {
 /// - Automatically, by a server timeout.
 ///
 /// The result should be wrapped in a google.protobuf.Any message.
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ActionCreatePreparedStatementResult {
     /// Opaque handle for the prepared statement on the server.
@@ -500,7 +486,6 @@ pub struct ActionCreatePreparedStatementResult {
 ///
 /// Request message for the "ClosePreparedStatement" action on a Flight SQL enabled backend.
 /// Closes server resources associated with the prepared statement handle.
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ActionClosePreparedStatementRequest {
     /// Opaque handle for the prepared statement on the server.
@@ -510,7 +495,6 @@ pub struct ActionClosePreparedStatementRequest {
 ///
 /// Request message for the "BeginTransaction" action.
 /// Begins a transaction.
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, Copy, PartialEq, ::prost::Message)]
 pub struct ActionBeginTransactionRequest {}
 ///
@@ -519,7 +503,6 @@ pub struct ActionBeginTransactionRequest {}
 ///
 /// Only supported if FLIGHT_SQL_TRANSACTION is
 /// FLIGHT_SQL_TRANSACTION_SUPPORT_SAVEPOINT.
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ActionBeginSavepointRequest {
     /// The transaction to which a savepoint belongs.
@@ -537,7 +520,6 @@ pub struct ActionBeginSavepointRequest {
 /// automatically rolled back.
 ///
 /// The result should be wrapped in a google.protobuf.Any message.
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ActionBeginTransactionResult {
     /// Opaque handle for the transaction on the server.
@@ -552,7 +534,6 @@ pub struct ActionBeginTransactionResult {
 /// out, then the savepoint is also invalidated.
 ///
 /// The result should be wrapped in a google.protobuf.Any message.
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ActionBeginSavepointResult {
     /// Opaque handle for the savepoint on the server.
@@ -566,7 +547,6 @@ pub struct ActionBeginSavepointResult {
 ///
 /// If the action completes successfully, the transaction handle is
 /// invalidated, as are all associated savepoints.
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ActionEndTransactionRequest {
     /// Opaque handle for the transaction on the server.
@@ -629,7 +609,6 @@ pub mod action_end_transaction_request {
 /// Releasing a savepoint invalidates that savepoint.  Rolling back to
 /// a savepoint does not invalidate the savepoint, but invalidates all
 /// savepoints created after the current savepoint.
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ActionEndSavepointRequest {
     /// Opaque handle for the savepoint on the server.
@@ -699,7 +678,6 @@ pub mod action_end_savepoint_request {
 ///     - ARROW:FLIGHT:SQL:IS_READ_ONLY      - "1" indicates if the column is read only, "0" otherwise.
 ///     - ARROW:FLIGHT:SQL:IS_SEARCHABLE     - "1" indicates if the column is searchable via WHERE clause, "0" otherwise.
 ///   - GetFlightInfo: execute the query.
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CommandStatementQuery {
     /// The SQL syntax.
@@ -726,7 +704,6 @@ pub struct CommandStatementQuery {
 ///     - ARROW:FLIGHT:SQL:IS_SEARCHABLE     - "1" indicates if the column is searchable via WHERE clause, "0" otherwise.
 ///   - GetFlightInfo: execute the query.
 ///   - DoPut: execute the query.
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CommandStatementSubstraitPlan {
     /// A serialized substrait.Plan
@@ -739,7 +716,6 @@ pub struct CommandStatementSubstraitPlan {
 /// *
 /// Represents a ticket resulting from GetFlightInfo with a CommandStatementQuery.
 /// This should be used only once and treated as an opaque value, that is, clients should not attempt to parse this.
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct TicketStatementQuery {
     /// Unique identifier for the instance of the statement to execute.
@@ -766,7 +742,6 @@ pub struct TicketStatementQuery {
 ///     for the parameters when determining the schema.
 ///   - DoPut: bind parameter values. All of the bound parameter sets will be executed as a single atomic execution.
 ///   - GetFlightInfo: execute the prepared statement instance.
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CommandPreparedStatementQuery {
     /// Opaque handle for the prepared statement on the server.
@@ -776,7 +751,6 @@ pub struct CommandPreparedStatementQuery {
 ///
 /// Represents a SQL update query. Used in the command member of FlightDescriptor
 /// for the RPC call DoPut to cause the server to execute the included SQL update.
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CommandStatementUpdate {
     /// The SQL syntax.
@@ -790,7 +764,6 @@ pub struct CommandStatementUpdate {
 /// Represents a SQL update query. Used in the command member of FlightDescriptor
 /// for the RPC call DoPut to cause the server to execute the included
 /// prepared statement handle as an update.
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CommandPreparedStatementUpdate {
     /// Opaque handle for the prepared statement on the server.
@@ -801,7 +774,6 @@ pub struct CommandPreparedStatementUpdate {
 /// Represents a bulk ingestion request. Used in the command member of FlightDescriptor
 /// for the the RPC call DoPut to cause the server load the contents of the stream's
 /// FlightData into the target destination.
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CommandStatementIngest {
     /// The behavior for handling the table definition.
@@ -838,7 +810,6 @@ pub struct CommandStatementIngest {
 /// Nested message and enum types in `CommandStatementIngest`.
 pub mod command_statement_ingest {
     /// Options for table definition behavior
-    #[allow(clippy::derive_partial_eq_without_eq)]
     #[derive(Clone, Copy, PartialEq, ::prost::Message)]
     pub struct TableDefinitionOptions {
         #[prost(
@@ -949,7 +920,6 @@ pub mod command_statement_ingest {
 /// Returned from the RPC call DoPut when a CommandStatementUpdate,
 /// CommandPreparedStatementUpdate, or CommandStatementIngest was
 /// in the request, containing results from the update.
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, Copy, PartialEq, ::prost::Message)]
 pub struct DoPutUpdateResult {
     /// The number of records updated. A return value of -1 represents
@@ -962,7 +932,6 @@ pub struct DoPutUpdateResult {
 /// *Note on legacy behavior*: previous versions of the protocol did not return any result for
 /// this command, and that behavior should still be supported by clients. In that case, the client
 /// can continue as though the fields in this message were not provided or set to sensible default values.
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct DoPutPreparedStatementResult {
     /// Represents a (potentially updated) opaque handle for the prepared statement on the server.
@@ -992,7 +961,6 @@ pub struct DoPutPreparedStatementResult {
 ///
 /// This command is deprecated since 13.0.0. Use the "CancelFlightInfo"
 /// action with DoAction instead.
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ActionCancelQueryRequest {
     /// The result of the GetFlightInfo RPC that initiated the query.
@@ -1009,7 +977,6 @@ pub struct ActionCancelQueryRequest {
 ///
 /// This command is deprecated since 13.0.0. Use the "CancelFlightInfo"
 /// action with DoAction instead.
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, Copy, PartialEq, ::prost::Message)]
 pub struct ActionCancelQueryResult {
     #[prost(enumeration = "action_cancel_query_result::CancelResult", tag = "1")]
