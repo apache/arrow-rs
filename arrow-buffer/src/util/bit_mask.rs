@@ -290,7 +290,8 @@ mod tests {
         let offset_write = 1;
         let offset_read = 0;
         let len = 64;
-        let (n, len_set) = set_upto_64bits(write_data, data, offset_write, offset_read, len);
+        let (n, len_set) =
+            unsafe { set_upto_64bits(write_data, data, offset_write, offset_read, len) };
         assert_eq!(n, 55);
         assert_eq!(len_set, 63);
         assert_eq!(
@@ -307,7 +308,8 @@ mod tests {
         let offset_write = 1;
         let offset_read = 0;
         let len = 1;
-        let (n, len_set) = set_upto_64bits(write_data, data, offset_write, offset_read, len);
+        let (n, len_set) =
+            unsafe { set_upto_64bits(write_data, data, offset_write, offset_read, len) };
         assert_eq!(n, 0);
         assert_eq!(len_set, 1);
         assert_eq!(write_data, &[0b00000010]);
