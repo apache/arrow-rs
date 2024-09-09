@@ -29,17 +29,23 @@ pub fn set_bits(
     offset_read: usize,
     len: usize,
 ) -> usize {
+    assert!(offset_write + len <= write_data.len() * 8);
+    assert!(offset_read + len <= data.len() * 8);
     let mut null_count = 0;
-
     let mut acc = 0;
     while len > acc {
-        let (n, len_set) = set_upto_64bits(
-            write_data,
-            data,
-            offset_write + acc,
-            offset_read + acc,
-            len - acc,
-        );
+        // SAFETY: the arguments to `set_upto_64bits` are within the valid range because
+        // (offset_write + acc) + (len - acc) == offset_write + len <= write_data.len() * 8
+        // (offset_read + acc) + (len - acc) == offset_read + len <= data.len() * 8
+        let (n, len_set) = unsafe {
+            set_upto_64bits(
+                write_data,
+                data,
+                offset_write + acc,
+                offset_read + acc,
+                len - acc,
+            )
+        };
         null_count += n;
         acc += len_set;
     }
@@ -47,16 +53,16 @@ pub fn set_bits(
     null_count
 }
 
+/// # Safety
+/// The caller must ensure all arguments are within the valid range.
 #[inline]
-fn set_upto_64bits(
+unsafe fn set_upto_64bits(
     write_data: &mut [u8],
     data: &[u8],
     offset_write: usize,
     offset_read: usize,
     len: usize,
 ) -> (usize, usize) {
-    debug_assert!(offset_read + len <= data.len() * 8);
-    debug_assert!(offset_write + len <= write_data.len() * 8);
     let read_byte = offset_read / 8;
     let read_shift = offset_read % 8;
     let write_byte = offset_write / 8;
