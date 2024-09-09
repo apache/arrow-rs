@@ -28,7 +28,8 @@ fn test_to_pyarrow() {
 
     let a: ArrayRef = Arc::new(Int32Array::from(vec![1, 2]));
     let b: ArrayRef = Arc::new(StringArray::from(vec!["a", "b"]));
-    let c: ArrayRef = Arc::new(StringViewArray::from(vec!["a", "b"]));
+    // The "very long string" will not be inlined, and force the creation of a data buffer.
+    let c: ArrayRef = Arc::new(StringViewArray::from(vec!["short", "a very long string"]));
     let input = RecordBatch::try_from_iter(vec![("a", a), ("b", b), ("c", c)]).unwrap();
     println!("input: {:?}", input);
 

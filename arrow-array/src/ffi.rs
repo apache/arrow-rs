@@ -139,7 +139,7 @@ pub unsafe fn export_array_into_raw(
 
 // returns the number of bits that buffer `i` (in the C data interface) is expected to have.
 // This is set by the Arrow specification
-fn bit_width(data_type: &DataType, i: usize, num_buffers: usize) -> Result<usize> {
+fn bit_width(data_type: &DataType, i: usize) -> Result<usize> {
     if let Some(primitive) = data_type.primitive_width() {
         return match i {
             0 => Err(ArrowError::CDataInterface(format!(
@@ -161,7 +161,7 @@ fn bit_width(data_type: &DataType, i: usize, num_buffers: usize) -> Result<usize
         }
         (DataType::FixedSizeBinary(num_bytes), 1) => *num_bytes as usize * u8::BITS as usize,
         (DataType::FixedSizeList(f, num_elems), 1) => {
-            let child_bit_width = bit_width(f.data_type(), 1, num_buffers)?;
+            let child_bit_width = bit_width(f.data_type(), 1)?;
             child_bit_width * (*num_elems as usize)
         },
         (DataType::FixedSizeBinary(_), _) | (DataType::FixedSizeList(_, _), _) => {
@@ -196,13 +196,9 @@ fn bit_width(data_type: &DataType, i: usize, num_buffers: usize) -> Result<usize
         // Variable-sized views: have 3 or more buffers.
         // Buffer 1 are the u128 views
         // Buffers 2...N-1 are u8 byte buffers
-        // Buffer N is i64 lengths buffer
         (DataType::Utf8View, 1) | (DataType::BinaryView,1) => u128::BITS as _,
-        (DataType::Utf8View, i) | (DataType::BinaryView, i) if i < num_buffers - 1  => {
+        (DataType::Utf8View, _) | (DataType::BinaryView, _) => {
             u8::BITS as _
-        }
-        (DataType::Utf8View, i) | (DataType::BinaryView, i) if i == num_buffers - 1 => {
-            i64::BITS as _
         }
         // type ids. UnionArray doesn't have null bitmap so buffer index begins with 0.
         (DataType::Union(_, _), 0) => i8::BITS as _,
@@ -311,7 +307,7 @@ impl<'a> ImportedArrowArray<'a> {
         };
 
         let data_layout = layout(&self.data_type);
-        let buffers = self.buffers(data_layout.can_contain_null_mask)?;
+        let buffers = self.buffers(data_layout.can_contain_null_mask, data_layout.variadic)?;
 
         let null_bit_buffer = if data_layout.can_contain_null_mask {
             self.null_bit_buffer()
@@ -384,13 +380,30 @@ impl<'a> ImportedArrowArray<'a> {
 
     /// returns all buffers, as organized by Rust (i.e. null buffer is skipped if it's present
     /// in the spec of the type)
-    fn buffers(&self, can_contain_null_mask: bool) -> Result<Vec<Buffer>> {
+    fn buffers(&self, can_contain_null_mask: bool, variadic: bool) -> Result<Vec<Buffer>> {
         // + 1: skip null buffer
         let buffer_begin = can_contain_null_mask as usize;
-        (buffer_begin..self.array.num_buffers())
-            .map(|index| {
-                let len = self.buffer_len(index, self.array.num_buffers(), &self.data_type)?;
+        let buffer_end = self.array.num_buffers() - usize::from(variadic);
 
+        let variadic_buffer_lens = if variadic {
+            // Each views array has 1 (optional) null buffer, 1 views buffer, 1 lengths buffer.
+            // Rest are variadic.
+            let num_variadic_buffers =
+                self.array.num_buffers() - (2 + usize::from(can_contain_null_mask));
+            if num_variadic_buffers == 0 {
+                &[]
+            } else {
+                let lengths = self.array.buffer(self.array.num_buffers() - 1);
+                // SAFETY: is lengths is non-null, then it must be valid for up to num_variadic_buffers.
+                unsafe { std::slice::from_raw_parts(lengths.cast::<i64>(), num_variadic_buffers) }
+            }
+        } else {
+            &[]
+        };
+
+        (buffer_begin..buffer_end)
+            .map(|index| {
+                let len = self.buffer_len(index, variadic_buffer_lens, &self.data_type)?;
                 match unsafe { create_buffer(self.owner.clone(), self.array, index, len) } {
                     Some(buf) => Ok(buf),
                     None if len == 0 => {
@@ -410,7 +423,12 @@ impl<'a> ImportedArrowArray<'a> {
     /// Rust implementation uses fixed-sized buffers, which require knowledge of their `len`.
     /// for variable-sized buffers, such as the second buffer of a stringArray, we need
     /// to fetch offset buffer's len to build the second buffer.
-    fn buffer_len(&self, i: usize, num_buffers: usize, dt: &DataType) -> Result<usize> {
+    fn buffer_len(
+        &self,
+        i: usize,
+        variadic_buffer_lengths: &[i64],
+        dt: &DataType,
+    ) -> Result<usize> {
         // Special handling for dictionary type as we only care about the key type in the case.
         let data_type = match dt {
             DataType::Dictionary(key_data_type, _) => key_data_type.as_ref(),
@@ -431,7 +449,7 @@ impl<'a> ImportedArrowArray<'a> {
             | (DataType::LargeList(_), 1)
             | (DataType::Map(_, _), 1) => {
                 // the len of the offset buffer (buffer 1) equals length + 1
-                let bits = bit_width(data_type, i, num_buffers)?;
+                let bits = bit_width(data_type, i)?;
                 debug_assert_eq!(bits % 8, 0);
                 (length + 1) * (bits / 8)
             }
@@ -441,7 +459,7 @@ impl<'a> ImportedArrowArray<'a> {
                 }
 
                 // the len of the data buffer (buffer 2) equals the last value of the offset buffer (buffer 1)
-                let len = self.buffer_len(1, num_buffers, dt)?;
+                let len = self.buffer_len(1, variadic_buffer_lengths, dt)?;
                 // first buffer is the null buffer => add(1)
                 // we assume that pointer is aligned for `i32`, as Utf8 uses `i32` offsets.
                 #[allow(clippy::cast_ptr_alignment)]
@@ -455,7 +473,7 @@ impl<'a> ImportedArrowArray<'a> {
                 }
 
                 // the len of the data buffer (buffer 2) equals the last value of the offset buffer (buffer 1)
-                let len = self.buffer_len(1, num_buffers, dt)?;
+                let len = self.buffer_len(1, variadic_buffer_lengths, dt)?;
                 // first buffer is the null buffer => add(1)
                 // we assume that pointer is aligned for `i64`, as Large uses `i64` offsets.
                 #[allow(clippy::cast_ptr_alignment)]
@@ -470,22 +488,12 @@ impl<'a> ImportedArrowArray<'a> {
             (DataType::Utf8View, 1) | (DataType::BinaryView, 1) => {
                 std::mem::size_of::<u128>() * length
             }
-            (DataType::Utf8View, i) | (DataType::BinaryView, i) if i < num_buffers - 1 => {
-                // Read the length of buffer N out of the last buffer.
-                // first buffer is the null buffer => add(1)
-                // we assume that pointer is aligned for `i32`, as Utf8 uses `i32` offsets.
-                #[allow(clippy::cast_ptr_alignment)]
-                let variadic_buffer_lengths = self.array.buffer(num_buffers - 1) as *const i64;
-                (unsafe { *variadic_buffer_lengths.add(i - 2) }) as usize
-            }
-            (DataType::Utf8View, i) | (DataType::BinaryView, i) if i == num_buffers - 1 => {
-                // Length is equal to number of data_buffers, which is number of total buffers
-                // less the validity and views bufs.
-                num_buffers - 2
+            (DataType::Utf8View, i) | (DataType::BinaryView, i) => {
+                variadic_buffer_lengths[i - 2] as usize
             }
             // buffer len of primitive types
             _ => {
-                let bits = bit_width(data_type, i, num_buffers)?;
+                let bits = bit_width(data_type, i)?;
                 bit_util::ceil(length * bits, 8)
             }
         })
@@ -1484,10 +1492,8 @@ mod tests_from_ffi {
             owner: &array,
         };
 
-        let offset_buf_len =
-            imported_array.buffer_len(1, array.num_buffers(), &imported_array.data_type)?;
-        let data_buf_len =
-            imported_array.buffer_len(2, array.num_buffers(), &imported_array.data_type)?;
+        let offset_buf_len = imported_array.buffer_len(1, &[], &imported_array.data_type)?;
+        let data_buf_len = imported_array.buffer_len(2, &[], &imported_array.data_type)?;
 
         assert_eq!(offset_buf_len, 4);
         assert_eq!(data_buf_len, 0);

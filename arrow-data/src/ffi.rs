@@ -141,28 +141,22 @@ impl FFI_ArrowArray {
             }
         } as i64;
 
-        let need_variadic_buffer_sizes = match data.data_type() {
-            DataType::Utf8View | DataType::BinaryView => true,
-            _ => false,
-        };
+        if data_layout.variadic {
+            // Save the lengths of all variadic buffers into a new buffer.
+            // The first buffer is `views`, and the rest are variadic.
+            let mut data_buffers_lengths = Vec::new();
+            for buffer in data.buffers().iter().skip(1) {
+                data_buffers_lengths.push(buffer.len() as i64);
+                n_buffers += 1;
+            }
 
-        if need_variadic_buffer_sizes {
-            // Skip null and views buffers.
-            let variadic_buffer_sizes: Vec<i64> = data
-                .buffers()
-                .iter()
-                .skip(2)
-                .map(|buf| buf.len() as _)
-                .collect();
-
-            buffers.push(Some(ScalarBuffer::from(variadic_buffer_sizes).into_inner()));
+            buffers.push(Some(ScalarBuffer::from(data_buffers_lengths).into_inner()));
             n_buffers += 1;
         }
 
         let buffers_ptr = buffers
             .iter()
             .flat_map(|maybe_buffer| match maybe_buffer {
-                // note that `raw_data` takes into account the buffer's offset
                 Some(b) => Some(b.as_ptr() as *const c_void),
                 // This is for null buffer. We only put a null pointer for
                 // null buffer if by spec it can contain null mask.
