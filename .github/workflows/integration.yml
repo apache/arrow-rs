@@ -118,7 +118,7 @@ jobs:
     strategy:
       matrix:
         rust: [stable]
-        # PyArrow 13 was the last version prior to introduction to Arrow PyCapsules
+        # PyArrow 15 was the first version to introduce StringView/BinaryView support
         pyarrow: ["15", "16", "17"]
     steps:
       - uses: actions/checkout@v4
