@@ -48,7 +48,7 @@ fn bit_length_impl<P: ArrowPrimitiveType>(
 /// For list array, length is the number of elements in each list.
 /// For string array and binary array, length is the number of bytes of each value.
 ///
-/// * this only accepts ListArray/LargeListArray, StringArray/LargeStringArray, BinaryArray/LargeBinaryArray, and FixedSizeListArray,
+/// * this only accepts ListArray/LargeListArray, StringArray/LargeStringArray/StringViewArray, BinaryArray/LargeBinaryArray, and FixedSizeListArray,
 ///   or DictionaryArray with above Arrays as values
 /// * length of null is null.
 pub fn length(array: &dyn Array) -> Result<ArrayRef, ArrowError> {
@@ -73,6 +73,14 @@ pub fn length(array: &dyn Array) -> Result<ArrayRef, ArrowError> {
         DataType::LargeUtf8 => {
             let list = array.as_string::<i64>();
             Ok(length_impl::<Int64Type>(list.offsets(), list.nulls()))
+        }
+        DataType::Utf8View => {
+            let list = array.as_string_view();
+            let v = list.views().iter().map(|v| *v as i32).collect::<Vec<_>>();
+            Ok(Arc::new(PrimitiveArray::<Int32Type>::new(
+                v.into(),
+                list.nulls().cloned(),
+            )))
         }
         DataType::Binary => {
             let list = array.as_binary::<i32>();
@@ -147,9 +155,15 @@ mod tests {
 
     fn length_cases_string() -> Vec<(Vec<&'static str>, usize, Vec<i32>)> {
         // a large array
-        let values = ["one", "on", "o", ""];
+        let values = [
+            "one",
+            "on",
+            "o",
+            "",
+            "this is a longer string to test string array with",
+        ];
         let values = values.into_iter().cycle().take(4096).collect();
-        let expected = [3, 2, 1, 0].into_iter().cycle().take(4096).collect();
+        let expected = [3, 2, 1, 0, 49].into_iter().cycle().take(4096).collect();
 
         vec![
             (vec!["hello", " ", "world"], 3, vec![5, 1, 5]),
@@ -206,6 +220,21 @@ mod tests {
                 let result = result.as_any().downcast_ref::<Int64Array>().unwrap();
                 expected.iter().enumerate().for_each(|(i, value)| {
                     assert_eq!(*value as i64, result.value(i));
+                });
+            })
+    }
+
+    #[test]
+    fn length_test_string_view() {
+        length_cases_string()
+            .into_iter()
+            .for_each(|(input, len, expected)| {
+                let array = StringViewArray::from(input);
+                let result = length(&array).unwrap();
+                assert_eq!(len, result.len());
+                let result = result.as_any().downcast_ref::<Int32Array>().unwrap();
+                expected.iter().enumerate().for_each(|(i, value)| {
+                    assert_eq!(*value, result.value(i));
                 });
             })
     }
