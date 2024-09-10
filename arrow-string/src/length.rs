@@ -93,6 +93,14 @@ pub fn length(array: &dyn Array) -> Result<ArrayRef, ArrowError> {
         DataType::FixedSizeBinary(len) | DataType::FixedSizeList(_, len) => Ok(Arc::new(
             Int32Array::new(vec![*len; array.len()].into(), array.nulls().cloned()),
         )),
+        DataType::BinaryView => {
+            let list = array.as_binary_view();
+            let v = list.views().iter().map(|v| *v as i32).collect::<Vec<_>>();
+            Ok(Arc::new(PrimitiveArray::<Int32Type>::new(
+                v.into(),
+                list.nulls().cloned(),
+            )))
+        }
         other => Err(ArrowError::ComputeError(format!(
             "length not supported for {other:?}"
         ))),
@@ -251,6 +259,23 @@ mod tests {
         let value: Vec<&[u8]> = vec![b"zero", &[0xff, 0xf8], b"two"];
         let result: Vec<i64> = vec![4, 2, 3];
         length_binary_helper!(i64, Int64Array, length, value, result)
+    }
+
+    #[test]
+    fn length_test_binary_view() {
+        let value: Vec<&[u8]> = vec![
+            b"zero",
+            &[0xff, 0xf8],
+            b"two",
+            b"this is a longer string to test binary array with",
+        ];
+        let expected: Vec<i32> = vec![4, 2, 3, 49];
+
+        let array = BinaryViewArray::from(value);
+        let result = length(&array).unwrap();
+        let result = result.as_any().downcast_ref::<Int32Array>().unwrap();
+        let expected: Int32Array = expected.into();
+        assert_eq!(&expected, result);
     }
 
     #[test]
