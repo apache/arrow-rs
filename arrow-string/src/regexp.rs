@@ -18,6 +18,7 @@
 //! Defines kernel to extract substrings based on a regular
 //! expression of a \[Large\]StringArray
 
+use crate::like::StringArrayType;
 use arrow_array::builder::{BooleanBufferBuilder, GenericStringBuilder, ListBuilder};
 use arrow_array::cast::AsArray;
 use arrow_array::*;
@@ -28,23 +29,31 @@ use regex::Regex;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-/// Perform SQL `array ~ regex_array` operation on [`StringArray`] / [`LargeStringArray`].
+/// Perform SQL `array ~ regex_array` operation on
+/// [`StringArray`] / [`LargeStringArray`] / [`StringViewArray`].
+///
 /// If `regex_array` element has an empty value, the corresponding result value is always true.
 ///
-/// `flags_array` are optional [`StringArray`] / [`LargeStringArray`] flag, which allow
-/// special search modes, such as case insensitive and multi-line mode.
+/// `flags_array` are optional [`StringArray`] / [`LargeStringArray`] / [`StringViewArray`] flag,
+/// which allow special search modes, such as case-insensitive and multi-line mode.
 /// See the documentation [here](https://docs.rs/regex/1.5.4/regex/#grouping-and-flags)
 /// for more information.
-pub fn regexp_is_match_utf8<OffsetSize: OffsetSizeTrait>(
-    array: &GenericStringArray<OffsetSize>,
-    regex_array: &GenericStringArray<OffsetSize>,
-    flags_array: Option<&GenericStringArray<OffsetSize>>,
-) -> Result<BooleanArray, ArrowError> {
+pub fn regexp_is_match_utf8<'a, S1, S2, S3>(
+    array: &'a S1,
+    regex_array: &'a S2,
+    flags_array: Option<&'a S3>,
+) -> Result<BooleanArray, ArrowError>
+where
+    &'a S1: StringArrayType<'a>,
+    &'a S2: StringArrayType<'a>,
+    &'a S3: StringArrayType<'a>,
+{
     if array.len() != regex_array.len() {
         return Err(ArrowError::ComputeError(
             "Cannot perform comparison operation on arrays of different length".to_string(),
         ));
     }
+
     let nulls = NullBuffer::union(array.nulls(), regex_array.nulls());
 
     let mut patterns: HashMap<String, Regex> = HashMap::new();
@@ -107,18 +116,22 @@ pub fn regexp_is_match_utf8<OffsetSize: OffsetSizeTrait>(
             .nulls(nulls)
             .build_unchecked()
     };
+
     Ok(BooleanArray::from(data))
 }
 
-/// Perform SQL `array ~ regex_array` operation on [`StringArray`] /
-/// [`LargeStringArray`] and a scalar.
+/// Perform SQL `array ~ regex_array` operation on
+/// [`StringArray`] / [`LargeStringArray`] / [`StringViewArray`] and a scalar.
 ///
 /// See the documentation on [`regexp_is_match_utf8`] for more details.
-pub fn regexp_is_match_utf8_scalar<OffsetSize: OffsetSizeTrait>(
-    array: &GenericStringArray<OffsetSize>,
+pub fn regexp_is_match_utf8_scalar<'a, S>(
+    array: &'a S,
     regex: &str,
     flag: Option<&str>,
-) -> Result<BooleanArray, ArrowError> {
+) -> Result<BooleanArray, ArrowError>
+where
+    &'a S: StringArrayType<'a>,
+{
     let null_bit_buffer = array.nulls().map(|x| x.inner().sliced());
     let mut result = BooleanBufferBuilder::new(array.len());
 
@@ -517,8 +530,8 @@ mod tests {
         ($test_name:ident, $left:expr, $right:expr, $op:expr, $expected:expr) => {
             #[test]
             fn $test_name() {
-                let left = StringArray::from($left);
-                let right = StringArray::from($right);
+                let left = $left;
+                let right = $right;
                 let res = $op(&left, &right, None).unwrap();
                 let expected = $expected;
                 assert_eq!(expected.len(), res.len());
@@ -531,9 +544,9 @@ mod tests {
         ($test_name:ident, $left:expr, $right:expr, $flag:expr, $op:expr, $expected:expr) => {
             #[test]
             fn $test_name() {
-                let left = StringArray::from($left);
-                let right = StringArray::from($right);
-                let flag = Some(StringArray::from($flag));
+                let left = $left;
+                let right = $right;
+                let flag = Some($flag);
                 let res = $op(&left, &right, flag.as_ref()).unwrap();
                 let expected = $expected;
                 assert_eq!(expected.len(), res.len());
@@ -549,7 +562,7 @@ mod tests {
         ($test_name:ident, $left:expr, $right:expr, $op:expr, $expected:expr) => {
             #[test]
             fn $test_name() {
-                let left = StringArray::from($left);
+                let left = $left;
                 let res = $op(&left, $right, None).unwrap();
                 let expected = $expected;
                 assert_eq!(expected.len(), res.len());
@@ -569,7 +582,7 @@ mod tests {
         ($test_name:ident, $left:expr, $right:expr, $flag:expr, $op:expr, $expected:expr) => {
             #[test]
             fn $test_name() {
-                let left = StringArray::from($left);
+                let left = $left;
                 let flag = Some($flag);
                 let res = $op(&left, $right, flag).unwrap();
                 let expected = $expected;
@@ -591,40 +604,103 @@ mod tests {
 
     test_flag_utf8!(
         test_utf8_array_regexp_is_match,
-        vec!["arrow", "arrow", "arrow", "arrow", "arrow", "arrow"],
-        vec!["^ar", "^AR", "ow$", "OW$", "foo", ""],
-        regexp_is_match_utf8,
+        StringArray::from(vec!["arrow", "arrow", "arrow", "arrow", "arrow", "arrow"]),
+        StringArray::from(vec!["^ar", "^AR", "ow$", "OW$", "foo", ""]),
+        regexp_is_match_utf8::<
+            GenericStringArray<i32>,
+            GenericStringArray<i32>,
+            GenericStringArray<i32>,
+        >,
         [true, false, true, false, false, true]
     );
     test_flag_utf8!(
+        test_utf8_array_regexp_is_match_2,
+        StringViewArray::from(vec!["arrow", "arrow", "arrow", "arrow", "arrow", "arrow"]),
+        StringViewArray::from(vec!["^ar", "^AR", "ow$", "OW$", "foo", ""]),
+        regexp_is_match_utf8::<StringViewArray, StringViewArray, StringViewArray>,
+        [true, false, true, false, false, true]
+    );
+    test_flag_utf8!(
+        test_utf8_array_regexp_is_match_3,
+        StringViewArray::from(vec!["arrow", "arrow", "arrow", "arrow", "arrow", "arrow"]),
+        StringArray::from(vec!["^ar", "^AR", "ow$", "OW$", "foo", ""]),
+        regexp_is_match_utf8::<StringViewArray, GenericStringArray<i32>, GenericStringArray<i32>>,
+        [true, false, true, false, false, true]
+    );
+
+    test_flag_utf8!(
         test_utf8_array_regexp_is_match_insensitive,
-        vec!["arrow", "arrow", "arrow", "arrow", "arrow", "arrow"],
-        vec!["^ar", "^AR", "ow$", "OW$", "foo", ""],
-        vec!["i"; 6],
-        regexp_is_match_utf8,
+        StringArray::from(vec!["arrow", "arrow", "arrow", "arrow", "arrow", "arrow"]),
+        StringArray::from(vec!["^ar", "^AR", "ow$", "OW$", "foo", ""]),
+        StringArray::from(vec!["i"; 6]),
+        regexp_is_match_utf8::<
+            GenericStringArray<i32>,
+            GenericStringArray<i32>,
+            GenericStringArray<i32>,
+        >,
+        [true, true, true, true, false, true]
+    );
+    test_flag_utf8!(
+        test_utf8_array_regexp_is_match_insensitive_2,
+        StringViewArray::from(vec!["arrow", "arrow", "arrow", "arrow", "arrow", "arrow"]),
+        StringViewArray::from(vec!["^ar", "^AR", "ow$", "OW$", "foo", ""]),
+        StringArray::from(vec!["i"; 6]),
+        regexp_is_match_utf8::<StringViewArray, StringViewArray, GenericStringArray<i32>>,
+        [true, true, true, true, false, true]
+    );
+    test_flag_utf8!(
+        test_utf8_array_regexp_is_match_insensitive_3,
+        LargeStringArray::from(vec!["arrow", "arrow", "arrow", "arrow", "arrow", "arrow"]),
+        StringViewArray::from(vec!["^ar", "^AR", "ow$", "OW$", "foo", ""]),
+        StringArray::from(vec!["i"; 6]),
+        regexp_is_match_utf8::<GenericStringArray<i64>, StringViewArray, GenericStringArray<i32>>,
         [true, true, true, true, false, true]
     );
 
     test_flag_utf8_scalar!(
         test_utf8_array_regexp_is_match_scalar,
-        vec!["arrow", "ARROW", "parquet", "PARQUET"],
+        StringArray::from(vec!["arrow", "ARROW", "parquet", "PARQUET"]),
         "^ar",
-        regexp_is_match_utf8_scalar,
+        regexp_is_match_utf8_scalar::<GenericStringArray<i32>>,
         [true, false, false, false]
     );
     test_flag_utf8_scalar!(
+        test_utf8_array_regexp_is_match_scalar_2,
+        StringViewArray::from(vec!["arrow", "ARROW", "parquet", "PARQUET"]),
+        "^ar",
+        regexp_is_match_utf8_scalar::<StringViewArray>,
+        [true, false, false, false]
+    );
+
+    test_flag_utf8_scalar!(
         test_utf8_array_regexp_is_match_empty_scalar,
-        vec!["arrow", "ARROW", "parquet", "PARQUET"],
+        StringArray::from(vec!["arrow", "ARROW", "parquet", "PARQUET"]),
         "",
-        regexp_is_match_utf8_scalar,
+        regexp_is_match_utf8_scalar::<GenericStringArray<i32>>,
         [true, true, true, true]
     );
     test_flag_utf8_scalar!(
+        test_utf8_array_regexp_is_match_empty_scalar_2,
+        StringViewArray::from(vec!["arrow", "ARROW", "parquet", "PARQUET"]),
+        "",
+        regexp_is_match_utf8_scalar::<StringViewArray>,
+        [true, true, true, true]
+    );
+
+    test_flag_utf8_scalar!(
         test_utf8_array_regexp_is_match_insensitive_scalar,
-        vec!["arrow", "ARROW", "parquet", "PARQUET"],
+        StringArray::from(vec!["arrow", "ARROW", "parquet", "PARQUET"]),
         "^ar",
         "i",
-        regexp_is_match_utf8_scalar,
+        regexp_is_match_utf8_scalar::<GenericStringArray<i32>>,
+        [true, true, false, false]
+    );
+    test_flag_utf8_scalar!(
+        test_utf8_array_regexp_is_match_insensitive_scalar_2,
+        StringViewArray::from(vec!["arrow", "ARROW", "parquet", "PARQUET"]),
+        "^ar",
+        "i",
+        regexp_is_match_utf8_scalar::<StringViewArray>,
         [true, true, false, false]
     );
 }

@@ -155,7 +155,7 @@ fn like_op(op: Op, lhs: &dyn Datum, rhs: &dyn Datum) -> Result<BooleanArray, Arr
 ///
 /// This trait helps to abstract over the different types of string arrays
 /// so that we don't need to duplicate the implementation for each type.
-trait StringArrayType<'a>: ArrayAccessor<Item = &'a str> + Sized {
+pub trait StringArrayType<'a>: ArrayAccessor<Item = &'a str> + Sized {
     fn is_ascii(&self) -> bool;
     fn iter(&self) -> ArrayIter<Self>;
 }
