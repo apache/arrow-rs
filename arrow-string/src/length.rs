@@ -263,8 +263,13 @@ mod tests {
 
     #[test]
     fn length_test_binary_view() {
-        let value: Vec<&[u8]> = vec![b"zero", &[0xff, 0xf8], b"two"];
-        let expected: Vec<i32> = vec![4, 2, 3];
+        let value: Vec<&[u8]> = vec![
+            b"zero",
+            &[0xff, 0xf8],
+            b"two",
+            b"this is a longer string to test binary array with",
+        ];
+        let expected: Vec<i32> = vec![4, 2, 3, 49];
 
         let array = BinaryViewArray::from(value);
         let result = length(&array).unwrap();
