@@ -101,21 +101,20 @@ unsafe fn set_upto_64bits(
         }
     } else if len == 1 {
         let byte_chunk = (unsafe { data.get_unchecked(read_byte) } >> read_shift) & 1;
-        let ptr = write_data.as_mut_ptr();
-        unsafe { *ptr.add(write_byte) |= byte_chunk << write_shift };
+        unsafe { *write_data.get_unchecked_mut(write_byte) |= byte_chunk << write_shift };
         ((byte_chunk ^ 1) as usize, 1)
     } else {
         let len = std::cmp::min(len, 64 - std::cmp::max(read_shift, write_shift));
         let bytes = ceil(len + read_shift, 8);
+        // SAFETY: the args of `read_bytes_to_u64` are valid as read_byte + bytes <= data.len()
         let chunk = unsafe { read_bytes_to_u64(data, read_byte, bytes) };
         let mask = u64::MAX >> (64 - len);
-        let chunk = (chunk >> read_shift) & mask;
-        let chunk = chunk << write_shift;
+        let chunk = (chunk >> read_shift) & mask; // masking to read `len` bits only
+        let chunk = chunk << write_shift; // shifting back to align with `write_data`
         let null_count = len - chunk.count_ones() as usize;
         let bytes = ceil(len + write_shift, 8);
-        let ptr = unsafe { write_data.as_mut_ptr().add(write_byte) };
         for (i, c) in chunk.to_le_bytes().iter().enumerate().take(bytes) {
-            unsafe { *ptr.add(i) |= c };
+            unsafe { *write_data.get_unchecked_mut(write_byte + i) |= c };
         }
         (null_count, len)
     }
