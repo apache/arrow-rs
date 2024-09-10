@@ -148,7 +148,6 @@ impl<T: DataType> DictEncoder<T> {
     fn bit_width(&self) -> u8 {
         num_required_bits(self.num_entries().saturating_sub(1) as u64)
     }
-
 }
 
 impl<T: DataType> Encoder<T> for DictEncoder<T> {

@@ -199,13 +199,9 @@ impl RleEncoder {
     /// internal writer.
     #[inline]
     pub fn flush(&mut self) {
-        if self.bit_packed_count > 0
-            || self.repeat_count > 0
-            || self.num_buffered_values > 0
-        {
+        if self.bit_packed_count > 0 || self.repeat_count > 0 || self.num_buffered_values > 0 {
             let all_repeat = self.bit_packed_count == 0
-                && (self.repeat_count == self.num_buffered_values
-                    || self.num_buffered_values == 0);
+                && (self.repeat_count == self.num_buffered_values || self.num_buffered_values == 0);
             if self.repeat_count > 0 && all_repeat {
                 self.flush_rle_run();
             } else {
@@ -250,11 +246,8 @@ impl RleEncoder {
             // Write the indicator byte to the reserved position in `bit_writer`
             let num_groups = self.bit_packed_count / 8;
             let indicator_byte = ((num_groups << 1) | 1) as u8;
-            self.bit_writer.put_aligned_offset(
-                indicator_byte,
-                1,
-                self.indicator_byte_pos as usize,
-            );
+            self.bit_writer
+                .put_aligned_offset(indicator_byte, 1, self.indicator_byte_pos as usize);
             self.indicator_byte_pos = -1;
             self.bit_packed_count = 0;
         }
@@ -288,9 +281,7 @@ impl RleEncoder {
 
     /// return the estimated memory size of this encoder.
     pub(crate) fn estimated_memory_size(&self) -> usize {
-        self.bit_writer.estimated_memory_size()
-        + std::mem::size_of::<Self>()
-
+        self.bit_writer.estimated_memory_size() + std::mem::size_of::<Self>()
     }
 }
 
@@ -384,12 +375,10 @@ impl RleDecoder {
         let mut values_read = 0;
         while values_read < buffer.len() {
             if self.rle_left > 0 {
-                let num_values =
-                    cmp::min(buffer.len() - values_read, self.rle_left as usize);
+                let num_values = cmp::min(buffer.len() - values_read, self.rle_left as usize);
                 for i in 0..num_values {
-                    let repeated_value = T::try_from_le_slice(
-                        &self.current_value.as_mut().unwrap().to_ne_bytes(),
-                    )?;
+                    let repeated_value =
+                        T::try_from_le_slice(&self.current_value.as_mut().unwrap().to_ne_bytes())?;
                     buffer[values_read + i] = repeated_value;
                 }
                 self.rle_left -= num_values as u32;
@@ -397,8 +386,7 @@ impl RleDecoder {
             } else if self.bit_packed_left > 0 {
                 let mut num_values =
                     cmp::min(buffer.len() - values_read, self.bit_packed_left as usize);
-                let bit_reader =
-                    self.bit_reader.as_mut().expect("bit_reader should be set");
+                let bit_reader = self.bit_reader.as_mut().expect("bit_reader should be set");
 
                 num_values = bit_reader.get_batch::<T>(
                     &mut buffer[values_read..values_read + num_values],
@@ -424,15 +412,13 @@ impl RleDecoder {
         let mut values_skipped = 0;
         while values_skipped < num_values {
             if self.rle_left > 0 {
-                let num_values =
-                    cmp::min(num_values - values_skipped, self.rle_left as usize);
+                let num_values = cmp::min(num_values - values_skipped, self.rle_left as usize);
                 self.rle_left -= num_values as u32;
                 values_skipped += num_values;
             } else if self.bit_packed_left > 0 {
                 let mut num_values =
                     cmp::min(num_values - values_skipped, self.bit_packed_left as usize);
-                let bit_reader =
-                    self.bit_reader.as_mut().expect("bit_reader should be set");
+                let bit_reader = self.bit_reader.as_mut().expect("bit_reader should be set");
 
                 num_values = bit_reader.skip(num_values, self.bit_width as usize);
                 if num_values == 0 {
@@ -467,8 +453,7 @@ impl RleDecoder {
             let index_buf = self.index_buf.get_or_insert_with(|| Box::new([0; 1024]));
 
             if self.rle_left > 0 {
-                let num_values =
-                    cmp::min(max_values - values_read, self.rle_left as usize);
+                let num_values = cmp::min(max_values - values_read, self.rle_left as usize);
                 let dict_idx = self.current_value.unwrap() as usize;
                 for i in 0..num_values {
                     buffer[values_read + i].clone_from(&dict[dict_idx]);
@@ -476,8 +461,7 @@ impl RleDecoder {
                 self.rle_left -= num_values as u32;
                 values_read += num_values;
             } else if self.bit_packed_left > 0 {
-                let bit_reader =
-                    self.bit_reader.as_mut().expect("bit_reader should be set");
+                let bit_reader = self.bit_reader.as_mut().expect("bit_reader should be set");
 
                 loop {
                     let to_read = index_buf
@@ -489,10 +473,8 @@ impl RleDecoder {
                         break;
                     }
 
-                    let num_values = bit_reader.get_batch::<i32>(
-                        &mut index_buf[..to_read],
-                        self.bit_width as usize,
-                    );
+                    let num_values = bit_reader
+                        .get_batch::<i32>(&mut index_buf[..to_read], self.bit_width as usize);
                     if num_values == 0 {
                         // Handle writers which truncate the final block
                         self.bit_packed_left = 0;
@@ -708,14 +690,10 @@ mod tests {
         decoder.set_data(data.into());
         let mut buffer = vec![""; 12];
         let expected = vec![
-            "ddd", "eee", "fff", "ddd", "eee", "fff", "ddd", "eee", "fff", "eee", "fff",
-            "fff",
+            "ddd", "eee", "fff", "ddd", "eee", "fff", "ddd", "eee", "fff", "eee", "fff", "fff",
         ];
-        let result = decoder.get_batch_with_dict::<&str>(
-            dict.as_slice(),
-            buffer.as_mut_slice(),
-            12,
-        );
+        let result =
+            decoder.get_batch_with_dict::<&str>(dict.as_slice(), buffer.as_mut_slice(), 12);
         assert!(result.is_ok());
         assert_eq!(buffer, expected);
     }
@@ -1042,8 +1020,7 @@ mod tests {
         for _ in 0..niters {
             values.clear();
             let rng = thread_rng();
-            let seed_vec: Vec<u8> =
-                rng.sample_iter::<u8, _>(&Standard).take(seed_len).collect();
+            let seed_vec: Vec<u8> = rng.sample_iter::<u8, _>(&Standard).take(seed_len).collect();
             let mut seed = [0u8; 32];
             seed.copy_from_slice(&seed_vec[0..seed_len]);
             let mut gen = rand::rngs::StdRng::from_seed(seed);

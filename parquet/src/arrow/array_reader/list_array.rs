@@ -125,8 +125,7 @@ impl<OffsetSize: OffsetSizeTrait> ArrayReader for ListArrayReader<OffsetSize> {
         // lists, and for consistency we do the same for nulls.
 
         // The output offsets for the computed ListArray
-        let mut list_offsets: Vec<OffsetSize> =
-            Vec::with_capacity(next_batch_array.len() + 1);
+        let mut list_offsets: Vec<OffsetSize> = Vec::with_capacity(next_batch_array.len() + 1);
 
         // The validity mask of the computed ListArray if nullable
         let mut validity = self
@@ -270,9 +269,7 @@ mod tests {
         GenericListArray::<OffsetSize>::DATA_TYPE_CONSTRUCTOR(field)
     }
 
-    fn downcast<OffsetSize: OffsetSizeTrait>(
-        array: &ArrayRef,
-    ) -> &'_ GenericListArray<OffsetSize> {
+    fn downcast<OffsetSize: OffsetSizeTrait>(array: &ArrayRef) -> &'_ GenericListArray<OffsetSize> {
         array
             .as_any()
             .downcast_ref::<GenericListArray<OffsetSize>>()
@@ -383,18 +380,12 @@ mod tests {
             Some(vec![0, 3, 2, 2, 2, 1, 1, 1, 1, 3, 3, 2, 3, 3, 2, 0, 0, 0]),
         );
 
-        let l3 = ListArrayReader::<OffsetSize>::new(
-            Box::new(item_array_reader),
-            l3_type,
-            5,
-            3,
-            true,
-        );
+        let l3 =
+            ListArrayReader::<OffsetSize>::new(Box::new(item_array_reader), l3_type, 5, 3, true);
 
         let l2 = ListArrayReader::<OffsetSize>::new(Box::new(l3), l2_type, 3, 2, false);
 
-        let mut l1 =
-            ListArrayReader::<OffsetSize>::new(Box::new(l2), l1_type, 2, 1, true);
+        let mut l1 = ListArrayReader::<OffsetSize>::new(Box::new(l2), l1_type, 2, 1, true);
 
         let expected_1 = expected.slice(0, 2);
         let expected_2 = expected.slice(2, 2);
@@ -560,8 +551,7 @@ mod tests {
         .unwrap();
         writer.close().unwrap();
 
-        let file_reader: Arc<dyn FileReader> =
-            Arc::new(SerializedFileReader::new(file).unwrap());
+        let file_reader: Arc<dyn FileReader> = Arc::new(SerializedFileReader::new(file).unwrap());
 
         let file_metadata = file_reader.metadata().file_metadata();
         let schema = file_metadata.schema_descr();
@@ -573,8 +563,7 @@ mod tests {
         )
         .unwrap();
 
-        let mut array_reader =
-            build_array_reader(fields.as_ref(), &mask, &file_reader).unwrap();
+        let mut array_reader = build_array_reader(fields.as_ref(), &mask, &file_reader).unwrap();
 
         let batch = array_reader.next_batch(100).unwrap();
         assert_eq!(batch.data_type(), array_reader.get_data_type());
@@ -584,9 +573,7 @@ mod tests {
                 "table_info",
                 ArrowType::List(Arc::new(Field::new(
                     "table_info",
-                    ArrowType::Struct(
-                        vec![Field::new("name", ArrowType::Binary, false)].into()
-                    ),
+                    ArrowType::Struct(vec![Field::new("name", ArrowType::Binary, false)].into()),
                     false
                 ))),
                 false
