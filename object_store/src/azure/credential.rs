@@ -25,13 +25,14 @@ use async_trait::async_trait;
 use base64::prelude::BASE64_STANDARD;
 use base64::Engine;
 use chrono::{DateTime, SecondsFormat, Utc};
+use jsonwebtoken::{decode, Algorithm, DecodingKey, TokenData, Validation};
 use reqwest::header::{
     HeaderMap, HeaderName, HeaderValue, ACCEPT, AUTHORIZATION, CONTENT_ENCODING, CONTENT_LANGUAGE,
     CONTENT_LENGTH, CONTENT_TYPE, DATE, IF_MATCH, IF_MODIFIED_SINCE, IF_NONE_MATCH,
     IF_UNMODIFIED_SINCE, RANGE,
 };
 use reqwest::{Client, Method, Request, RequestBuilder};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use snafu::{ResultExt, Snafu};
 use std::borrow::Cow;
 use std::collections::HashMap;
@@ -931,6 +932,94 @@ impl AzureCliCredential {
                 }),
             },
         }
+    }
+}
+
+/// Encapsulates the logic to perform an OAuth token challenge for Fabric
+#[derive(Debug)]
+pub struct FabricTokenOAuthProvider {
+    fabric_token_service_url: String,
+    fabric_workload_host: String,
+    fabric_session_token: String,
+    fabric_cluster_identifier: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct Claims {
+    exp: usize,
+}
+
+impl FabricTokenOAuthProvider {
+    /// Create a new [`FabricTokenOAuthProvider`] for an azure backed store
+    pub fn new(
+        fabric_token_service_url: impl Into<String>,
+        fabric_workload_host: impl Into<String>,
+        fabric_session_token: impl Into<String>,
+        fabric_cluster_identifier: impl Into<String>,
+    ) -> Self {
+        Self {
+            fabric_token_service_url: fabric_token_service_url.into(),
+            fabric_workload_host: fabric_workload_host.into(),
+            fabric_session_token: fabric_session_token.into(),
+            fabric_cluster_identifier: fabric_cluster_identifier.into(),
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl TokenProvider for FabricTokenOAuthProvider {
+    type Credential = AzureCredential;
+
+    /// Fetch a token
+    async fn fetch_token(
+        &self,
+        client: &Client,
+        retry: &RetryConfig,
+    ) -> crate::Result<TemporaryToken<Arc<AzureCredential>>> {
+        let query_items = vec![("resource", AZURE_STORAGE_RESOURCE)];
+        let access_token: String = client
+            .request(Method::GET, &self.fabric_token_service_url)
+            .header("Content-Type", "application/json;charset=utf-8")
+            .header("x-ms-partner-token", self.fabric_session_token.as_str())
+            .header(
+                "x-ms-cluster-identifier",
+                self.fabric_cluster_identifier.as_str(),
+            )
+            .header(
+                "x-ms-workload-resource-moniker",
+                self.fabric_cluster_identifier.as_str(),
+            )
+            .header("x-ms-proxy-host", self.fabric_workload_host.as_str())
+            .query(&query_items)
+            .retryable(retry)
+            .idempotent(true)
+            .send()
+            .await
+            .context(TokenRequestSnafu)?
+            .text()
+            .await
+            .context(TokenResponseBodySnafu)?;
+
+        let mut validation: Validation = Validation::new(Algorithm::HS256);
+        validation.insecure_disable_signature_validation();
+        let token_data: Result<TokenData<Claims>, _> =
+            decode::<Claims>(&access_token, &DecodingKey::from_secret(&[]), &validation);
+        let exp = match token_data {
+            Ok(data) => data.claims.exp as u64,
+            Err(_) => {
+                let current_time = SystemTime::now()
+                    .duration_since(SystemTime::UNIX_EPOCH)
+                    .unwrap()
+                    .as_secs();
+                (current_time + 3600) as u64
+            }
+        };
+        print!("exp: {}", exp);
+
+        Ok(TemporaryToken {
+            token: Arc::new(AzureCredential::BearerToken(access_token)),
+            expiry: Some(Instant::now() + Duration::from_secs(exp)),
+        })
     }
 }
 
