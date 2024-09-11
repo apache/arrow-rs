@@ -1271,10 +1271,14 @@ mod tests_from_ffi {
     use super::{ImportedArrowArray, Result};
     use crate::builder::GenericByteViewBuilder;
     use crate::types::{BinaryViewType, ByteViewType, Int32Type, StringViewType};
-    use crate::{array::{
-        Array, BooleanArray, DictionaryArray, FixedSizeBinaryArray, FixedSizeListArray,
-        Int32Array, Int64Array, StringArray, StructArray, UInt32Array, UInt64Array,
-    }, ffi::{from_ffi, FFI_ArrowArray, FFI_ArrowSchema}, make_array, ArrayRef, GenericByteViewArray, ListArray};
+    use crate::{
+        array::{
+            Array, BooleanArray, DictionaryArray, FixedSizeBinaryArray, FixedSizeListArray,
+            Int32Array, Int64Array, StringArray, StructArray, UInt32Array, UInt64Array,
+        },
+        ffi::{from_ffi, FFI_ArrowArray, FFI_ArrowSchema},
+        make_array, ArrayRef, GenericByteViewArray, ListArray,
+    };
 
     fn test_round_trip(expected: &ArrayData) -> Result<()> {
         // here we export the array
@@ -1507,7 +1511,9 @@ mod tests_from_ffi {
         StringArray::from(array)
     }
 
-    fn roundtrip_byte_view_array<T: ByteViewType>(array: GenericByteViewArray<T>) -> GenericByteViewArray<T> {
+    fn roundtrip_byte_view_array<T: ByteViewType>(
+        array: GenericByteViewArray<T>,
+    ) -> GenericByteViewArray<T> {
         let data = array.into_data();
 
         let array = FFI_ArrowArray::new(&data);
@@ -1631,7 +1637,10 @@ mod tests_from_ffi {
 
                     let copied = extend_array(&imported);
                     assert_eq!(
-                        copied.as_any().downcast_ref::<GenericByteViewArray<T>>().unwrap(),
+                        copied
+                            .as_any()
+                            .downcast_ref::<GenericByteViewArray<T>>()
+                            .unwrap(),
                         &imported
                     );
                 }};
@@ -1654,22 +1663,24 @@ mod tests_from_ffi {
             let mixed_one_variadic = {
                 let mut builder = GenericByteViewBuilder::<T>::new();
                 builder.append_value(T::Native::from_str("inlined"));
-                let block_id = builder.append_block(Buffer::from("non-inlined-string-buffer".as_bytes()));
+                let block_id =
+                    builder.append_block(Buffer::from("non-inlined-string-buffer".as_bytes()));
                 builder.try_append_view(block_id, 0, 25).unwrap();
                 builder.finish()
             };
             assert_eq!(mixed_one_variadic.data_buffers().len(), 1);
             run_test_case!(mixed_one_variadic);
 
-
             // inlined + non-inlined, 2 variadic buffers.
             let mixed_two_variadic = {
                 let mut builder = GenericByteViewBuilder::<T>::new();
                 builder.append_value(T::Native::from_str("inlined"));
-                let block_id = builder.append_block(Buffer::from("non-inlined-string-buffer".as_bytes()));
+                let block_id =
+                    builder.append_block(Buffer::from("non-inlined-string-buffer".as_bytes()));
                 builder.try_append_view(block_id, 0, 25).unwrap();
 
-                let block_id = builder.append_block(Buffer::from("another-non-inlined-string-buffer".as_bytes()));
+                let block_id = builder
+                    .append_block(Buffer::from("another-non-inlined-string-buffer".as_bytes()));
                 builder.try_append_view(block_id, 0, 33).unwrap();
                 builder.finish()
             };
