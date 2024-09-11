@@ -361,7 +361,6 @@
 //! [Apache Parquet]: https://parquet.apache.org/
 //! [DataFusion]: https://github.com/apache/arrow-datafusion
 //! [issue tracker]: https://github.com/apache/arrow-rs/issues
-//!
 
 #![deny(clippy::redundant_clone)]
 #![warn(missing_debug_implementations)]
@@ -369,6 +368,9 @@
 pub use arrow_array::{downcast_dictionary_array, downcast_primitive_array};
 
 pub use arrow_buffer::{alloc, buffer};
+
+/// Arrow crate version
+pub const ARROW_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 pub mod array;
 pub mod compute;
