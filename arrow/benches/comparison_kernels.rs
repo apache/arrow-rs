@@ -17,17 +17,18 @@
 
 #[macro_use]
 extern crate criterion;
-use arrow::util::test_util::seedable_rng;
-use criterion::Criterion;
-
 extern crate arrow;
+
+use std::time::Duration;
 
 use arrow::compute::kernels::cmp::*;
 use arrow::util::bench_util::*;
+use arrow::util::test_util::seedable_rng;
 use arrow::{array::*, datatypes::Float32Type, datatypes::Int32Type};
 use arrow_buffer::IntervalMonthDayNano;
 use arrow_string::like::*;
 use arrow_string::regexp::regexp_is_match_utf8_scalar;
+use criterion::{Criterion, SamplingMode};
 use rand::rngs::StdRng;
 use rand::Rng;
 
@@ -51,6 +52,15 @@ fn bench_ilike_utf8_scalar(arr_a: &StringArray, value_b: &str) {
 
 fn bench_nilike_utf8_scalar(arr_a: &StringArray, value_b: &str) {
     nilike(arr_a, &StringArray::new_scalar(value_b)).unwrap();
+}
+
+fn bench_regexp_is_match_utf8view_scalar(arr_a: &StringViewArray, value_b: &str) {
+    regexp_is_match_utf8_scalar(
+        criterion::black_box(arr_a),
+        criterion::black_box(value_b),
+        None,
+    )
+    .unwrap();
 }
 
 fn bench_regexp_is_match_utf8_scalar(arr_a: &StringArray, value_b: &str) {
@@ -78,6 +88,7 @@ fn add_benchmark(c: &mut Criterion) {
     let arr_month_day_nano_b = create_month_day_nano_array_with_seed(SIZE, 0.0, 43);
 
     let arr_string = create_string_array::<i32>(SIZE, 0.0);
+    let arr_string_view = create_string_view_array(SIZE, 0.0);
 
     let scalar = Float32Array::from(vec![1.0]);
 
@@ -343,13 +354,52 @@ fn add_benchmark(c: &mut Criterion) {
         b.iter(|| bench_nilike_utf8_scalar(&arr_string, "%xx_xX%xXX"))
     });
 
-    c.bench_function("regexp_matches_utf8 scalar starts with", |b| {
+    // StringArray: regexp_matches_utf8 scalar benchmarks
+    let mut group =
+        c.benchmark_group("StringArray: regexp_matches_utf8 scalar benchmarks".to_string());
+    group.sampling_mode(SamplingMode::Flat);
+    group.sample_size(60);
+    group.measurement_time(Duration::from_secs(8));
+
+    group.bench_function("regexp_matches_utf8 scalar starts with", |b| {
         b.iter(|| bench_regexp_is_match_utf8_scalar(&arr_string, "^xx"))
     });
 
-    c.bench_function("regexp_matches_utf8 scalar ends with", |b| {
+    group.bench_function("regexp_matches_utf8 scalar contains", |b| {
+        b.iter(|| bench_regexp_is_match_utf8_scalar(&arr_string, ".*xx.*"))
+    });
+
+    group.bench_function("regexp_matches_utf8 scalar ends with", |b| {
         b.iter(|| bench_regexp_is_match_utf8_scalar(&arr_string, "xx$"))
     });
+
+    group.bench_function("regexp_matches_utf8 scalar complex", |b| {
+        b.iter(|| bench_regexp_is_match_utf8_scalar(&arr_string, ".*x{2}.xX.*xXX"))
+    });
+
+    group.finish();
+
+    // StringViewArray: regexp_matches_utf8view scalar benchmarks
+    group =
+        c.benchmark_group("StringViewArray: regexp_matches_utf8view scalar benchmarks".to_string());
+
+    group.bench_function("regexp_matches_utf8view scalar starts with", |b| {
+        b.iter(|| bench_regexp_is_match_utf8view_scalar(&arr_string_view, "^xx"))
+    });
+
+    group.bench_function("regexp_matches_utf8view scalar contains", |b| {
+        b.iter(|| bench_regexp_is_match_utf8view_scalar(&arr_string_view, ".*xx.*"))
+    });
+
+    group.bench_function("regexp_matches_utf8view scalar ends with", |b| {
+        b.iter(|| bench_regexp_is_match_utf8view_scalar(&arr_string_view, "xx$"))
+    });
+
+    group.bench_function("regexp_matches_utf8view scalar complex", |b| {
+        b.iter(|| bench_regexp_is_match_utf8view_scalar(&arr_string_view, ".*x{2}.xX.*xXX"))
+    });
+
+    group.finish();
 
     // DictionaryArray benchmarks
 
