@@ -78,6 +78,11 @@ pub struct ParquetMetaDataReader {
     prefetch_hint: Option<usize>,
 }
 
+// TODO(ets): still need a way to read everything from a byte array
+// that is large enough to hold page index and footer, but not the
+// entire file. would need to know the range of the file the bytes
+// represent so offsets can be mapped when reading page indexes.
+
 impl ParquetMetaDataReader {
     /// Create a new [`ParquetMetaDataReader`]
     pub fn new() -> Self {
