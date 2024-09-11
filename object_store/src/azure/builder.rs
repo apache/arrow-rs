@@ -916,6 +916,30 @@ impl MicrosoftAzureBuilder {
 
             let credential = if let Some(credential) = self.credentials {
                 credential
+            } else if let (
+                Some(fabric_token_service_url),
+                Some(fabric_workload_host),
+                Some(fabric_session_token),
+                Some(fabric_cluster_identifier),
+            ) = (
+                &self.fabric_token_service_url,
+                &self.fabric_workload_host,
+                &self.fabric_session_token,
+                &self.fabric_cluster_identifier,
+            ) {
+                // This case should precede the bearer token case because it is more specific and will utilize the bearer token.
+                let fabric_credential = FabricTokenOAuthProvider::new(
+                    fabric_token_service_url,
+                    fabric_workload_host,
+                    fabric_session_token,
+                    fabric_cluster_identifier,
+                    self.bearer_token.clone(),
+                );
+                Arc::new(TokenCredentialProvider::new(
+                    fabric_credential,
+                    self.client_options.client()?,
+                    self.retry_config.clone(),
+                )) as _
             } else if let Some(bearer_token) = self.bearer_token {
                 static_creds(AzureCredential::BearerToken(bearer_token))
             } else if let Some(access_key) = self.access_key {
@@ -955,28 +979,6 @@ impl MicrosoftAzureBuilder {
                 static_creds(AzureCredential::SASToken(split_sas(&sas)?))
             } else if self.use_azure_cli.get()? {
                 Arc::new(AzureCliCredential::new()) as _
-            } else if let (
-                Some(fabric_token_service_url),
-                Some(fabric_workload_host),
-                Some(fabric_session_token),
-                Some(fabric_cluster_identifier),
-            ) = (
-                &self.fabric_token_service_url,
-                &self.fabric_workload_host,
-                &self.fabric_session_token,
-                &self.fabric_cluster_identifier,
-            ) {
-                let fabric_credential = FabricTokenOAuthProvider::new(
-                    fabric_token_service_url,
-                    fabric_workload_host,
-                    fabric_session_token,
-                    fabric_cluster_identifier,
-                );
-                Arc::new(TokenCredentialProvider::new(
-                    fabric_credential,
-                    self.client_options.client()?,
-                    self.retry_config.clone(),
-                )) as _
             } else {
                 let msi_credential = ImdsManagedIdentityProvider::new(
                     self.client_id,
