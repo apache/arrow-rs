@@ -768,8 +768,9 @@ impl Array for UnionArray {
     }
 
     fn logical_nulls(&self) -> Option<NullBuffer> {
-        let DataType::Union(fields, _) = &self.data_type else {
-            unreachable!()
+        let fields = match self.data_type() {
+            DataType::Union(fields, _) => fields,
+            _ => unreachable!(),
         };
 
         if fields.len() <= 1 {
