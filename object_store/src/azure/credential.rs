@@ -1018,15 +1018,10 @@ impl TokenProvider for FabricTokenOAuthProvider {
                         token: Arc::new(AzureCredential::BearerToken(storage_access_token.clone())),
                         expiry: Some(Instant::now() + Duration::from_secs(exp_in)),
                     });
-                } else {
-                    println!("access token is expired");
                 }
-            } else {
-                println!("access token is invalid");
             }
         }
 
-        println!("requesting new token");
         let query_items = vec![("resource", AZURE_STORAGE_RESOURCE)];
         let access_token: String = client
             .request(Method::GET, &self.fabric_token_service_url)
@@ -1043,11 +1038,8 @@ impl TokenProvider for FabricTokenOAuthProvider {
             .text()
             .await
             .context(TokenResponseBodySnafu)?;
-
         let exp_in = Self::validate_and_get_expiry(&access_token)
             .map_or(3600, |expiry| expiry - get_current_timestamp());
-        println!("exp_in: {}", exp_in);
-
         Ok(TemporaryToken {
             token: Arc::new(AzureCredential::BearerToken(access_token)),
             expiry: Some(Instant::now() + Duration::from_secs(exp_in)),
