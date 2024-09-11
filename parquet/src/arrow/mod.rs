@@ -156,7 +156,7 @@ pub const PARQUET_FIELD_ID_META_KEY: &str = "PARQUET:field_id";
 /// For non-nested schemas, i.e. those containing only primitive columns, the root
 /// and leaves are the same
 ///
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProjectionMask {
     /// If present a leaf column should be included if the value at
     /// the corresponding index is true

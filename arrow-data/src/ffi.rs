@@ -324,6 +324,6 @@ mod tests {
 
         assert_eq!(0, private_data.buffers_ptr.len());
 
-        Box::into_raw(private_data);
+        let _ = Box::into_raw(private_data);
     }
 }

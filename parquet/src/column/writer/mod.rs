@@ -756,8 +756,8 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         if null_page && self.column_index_builder.valid() {
             self.column_index_builder.append(
                 null_page,
-                vec![0; 1],
-                vec![0; 1],
+                vec![],
+                vec![],
                 self.page_metrics.num_page_nulls as i64,
             );
         } else if self.column_index_builder.valid() {
@@ -2666,6 +2666,32 @@ mod tests {
             &[0u8,],
             &[255u8, 35u8, 0u8, 0u8,],
         ),);
+    }
+
+    #[test]
+    fn test_column_index_with_null_pages() {
+        // write a single page of all nulls
+        let page_writer = get_test_page_writer();
+        let props = Default::default();
+        let mut writer = get_test_column_writer::<Int32Type>(page_writer, 1, 0, props);
+        writer.write_batch(&[], Some(&[0, 0, 0, 0]), None).unwrap();
+
+        let r = writer.close().unwrap();
+        assert!(r.column_index.is_some());
+        let col_idx = r.column_index.unwrap();
+        // null_pages should be true for page 0
+        assert!(col_idx.null_pages[0]);
+        // min and max should be empty byte arrays
+        assert_eq!(col_idx.min_values[0].len(), 0);
+        assert_eq!(col_idx.max_values[0].len(), 0);
+        // null_counts should be defined and be 4 for page 0
+        assert!(col_idx.null_counts.is_some());
+        assert_eq!(col_idx.null_counts.as_ref().unwrap()[0], 4);
+        // there is no repetition so rep histogram should be absent
+        assert!(col_idx.repetition_level_histograms.is_none());
+        // definition_level_histogram should be present and should be 0:4, 1:0
+        assert!(col_idx.definition_level_histograms.is_some());
+        assert_eq!(col_idx.definition_level_histograms.unwrap(), &[4, 0]);
     }
 
     #[test]

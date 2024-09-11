@@ -184,21 +184,19 @@ mod tests {
         map_builder.append(true).expect("adding map entry");
 
         // Create record batch
-        let batch =
-            RecordBatch::try_new(Arc::new(schema), vec![Arc::new(map_builder.finish())])
-                .expect("create record batch");
+        let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(map_builder.finish())])
+            .expect("create record batch");
 
         // Write record batch to file
         let mut buffer = Vec::with_capacity(1024);
-        let mut writer = ArrowWriter::try_new(&mut buffer, batch.schema(), None)
-            .expect("creat file writer");
+        let mut writer =
+            ArrowWriter::try_new(&mut buffer, batch.schema(), None).expect("creat file writer");
         writer.write(&batch).expect("writing file");
         writer.close().expect("close writer");
 
         // Read file
         let reader = Bytes::from(buffer);
-        let record_batch_reader =
-            ParquetRecordBatchReader::try_new(reader, 1024).unwrap();
+        let record_batch_reader = ParquetRecordBatchReader::try_new(reader, 1024).unwrap();
         for maybe_record_batch in record_batch_reader {
             let record_batch = maybe_record_batch.expect("Getting current batch");
             let col = record_batch.column(0);

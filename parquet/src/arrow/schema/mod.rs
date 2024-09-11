@@ -1483,11 +1483,25 @@ mod tests {
             ),
             Field::new("date", DataType::Date32, true),
             Field::new("time_milli", DataType::Time32(TimeUnit::Millisecond), true),
-            Field::new("time_milli_utc", DataType::Time32(TimeUnit::Millisecond), true)
-                .with_metadata(HashMap::from_iter(vec![("adjusted_to_utc".to_string(), "".to_string())])),
+            Field::new(
+                "time_milli_utc",
+                DataType::Time32(TimeUnit::Millisecond),
+                true,
+            )
+            .with_metadata(HashMap::from_iter(vec![(
+                "adjusted_to_utc".to_string(),
+                "".to_string(),
+            )])),
             Field::new("time_micro", DataType::Time64(TimeUnit::Microsecond), true),
-            Field::new("time_micro_utc", DataType::Time64(TimeUnit::Microsecond), true)
-                .with_metadata(HashMap::from_iter(vec![("adjusted_to_utc".to_string(), "".to_string())])),
+            Field::new(
+                "time_micro_utc",
+                DataType::Time64(TimeUnit::Microsecond),
+                true,
+            )
+            .with_metadata(HashMap::from_iter(vec![(
+                "adjusted_to_utc".to_string(),
+                "".to_string(),
+            )])),
             Field::new(
                 "ts_milli",
                 DataType::Timestamp(TimeUnit::Millisecond, None),
