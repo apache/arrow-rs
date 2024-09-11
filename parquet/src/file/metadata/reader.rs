@@ -140,6 +140,11 @@ impl ParquetMetaDataReader {
             return Ok(());
         }
 
+        // TODO(ets): what is the correct behavior for missing page indexes? MetadataLoader would
+        // leave them as `None`, while the parser in `index_reader::read_columns_indexes` returns a
+        // vector of empty vectors.
+        // I think it's best to leave them as `None`.
+
         // Get bounds needed for page indexes (if any are present in the file).
         let range = self.range_for_page_index();
         let range = match range {

@@ -59,6 +59,7 @@ pub fn read_columns_indexes<R: ChunkReader>(
 
     let fetch = match fetch {
         Some(r) => r,
+        // TODO(ets): should this return `Option<Vec<Index>>` to match MetadataLoader?
         None => return Ok(vec![Index::NONE; chunks.len()]),
     };
 
@@ -132,6 +133,7 @@ pub fn read_offset_indexes<R: ChunkReader>(
 
     let fetch = match fetch {
         Some(r) => r,
+        // TODO(ets): should this return `Option<Vec<OffsetIndexMetaData>>` to match MetadataLoader?
         None => return Ok(vec![]),
     };
 
