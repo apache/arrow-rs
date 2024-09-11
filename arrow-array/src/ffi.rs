@@ -1268,17 +1268,13 @@ mod tests_from_ffi {
     use arrow_data::ArrayData;
     use arrow_schema::{DataType, Field};
 
-    use crate::types::Int32Type;
-    use crate::{
-        array::{
-            Array, BooleanArray, DictionaryArray, FixedSizeBinaryArray, FixedSizeListArray,
-            Int32Array, Int64Array, StringArray, StructArray, UInt32Array, UInt64Array,
-        },
-        ffi::{from_ffi, FFI_ArrowArray, FFI_ArrowSchema},
-        make_array, ArrayRef, ListArray,
-    };
-
     use super::{ImportedArrowArray, Result};
+    use crate::builder::GenericByteViewBuilder;
+    use crate::types::{BinaryViewType, ByteViewType, Int32Type, StringViewType};
+    use crate::{array::{
+        Array, BooleanArray, DictionaryArray, FixedSizeBinaryArray, FixedSizeListArray,
+        Int32Array, Int64Array, StringArray, StructArray, UInt32Array, UInt64Array,
+    }, ffi::{from_ffi, FFI_ArrowArray, FFI_ArrowSchema}, make_array, ArrayRef, GenericByteViewArray, ListArray};
 
     fn test_round_trip(expected: &ArrayData) -> Result<()> {
         // here we export the array
@@ -1511,6 +1507,16 @@ mod tests_from_ffi {
         StringArray::from(array)
     }
 
+    fn roundtrip_byte_view_array<T: ByteViewType>(array: GenericByteViewArray<T>) -> GenericByteViewArray<T> {
+        let data = array.into_data();
+
+        let array = FFI_ArrowArray::new(&data);
+        let schema = FFI_ArrowSchema::try_from(data.data_type()).unwrap();
+
+        let array = unsafe { from_ffi(array, &schema) }.unwrap();
+        GenericByteViewArray::<T>::from(array)
+    }
+
     fn extend_array(array: &dyn Array) -> ArrayRef {
         let len = array.len();
         let data = array.to_data();
@@ -1589,5 +1595,89 @@ mod tests_from_ffi {
             copied.as_any().downcast_ref::<ListArray>().unwrap(),
             &imported
         );
+    }
+
+    /// Helper trait to allow us to use easily strings as either BinaryViewType::Native or
+    /// StringViewType::Native scalars.
+    trait NativeFromStr {
+        fn from_str(value: &str) -> &Self;
+    }
+
+    impl NativeFromStr for str {
+        fn from_str(value: &str) -> &Self {
+            value
+        }
+    }
+
+    impl NativeFromStr for [u8] {
+        fn from_str(value: &str) -> &Self {
+            value.as_bytes()
+        }
+    }
+
+    #[test]
+    fn test_round_trip_byte_view() {
+        fn test_case<T>()
+        where
+            T: ByteViewType,
+            T::Native: NativeFromStr,
+        {
+            macro_rules! run_test_case {
+                ($array:expr) => {{
+                    // round-trip through C  Data Interface
+                    let len = $array.len();
+                    let imported = roundtrip_byte_view_array($array);
+                    assert_eq!(imported.len(), len);
+
+                    let copied = extend_array(&imported);
+                    assert_eq!(
+                        copied.as_any().downcast_ref::<GenericByteViewArray<T>>().unwrap(),
+                        &imported
+                    );
+                }};
+            }
+
+            // Empty test case.
+            let empty = GenericByteViewBuilder::<T>::new().finish();
+            run_test_case!(empty);
+
+            // All inlined strings test case.
+            let mut all_inlined = GenericByteViewBuilder::<T>::new();
+            all_inlined.append_value(T::Native::from_str("inlined1"));
+            all_inlined.append_value(T::Native::from_str("inlined2"));
+            all_inlined.append_value(T::Native::from_str("inlined3"));
+            let all_inlined = all_inlined.finish();
+            assert_eq!(all_inlined.data_buffers().len(), 0);
+            run_test_case!(all_inlined);
+
+            // some inlined + non-inlined, 1 variadic buffer.
+            let mixed_one_variadic = {
+                let mut builder = GenericByteViewBuilder::<T>::new();
+                builder.append_value(T::Native::from_str("inlined"));
+                let block_id = builder.append_block(Buffer::from("non-inlined-string-buffer".as_bytes()));
+                builder.try_append_view(block_id, 0, 25).unwrap();
+                builder.finish()
+            };
+            assert_eq!(mixed_one_variadic.data_buffers().len(), 1);
+            run_test_case!(mixed_one_variadic);
+
+
+            // inlined + non-inlined, 2 variadic buffers.
+            let mixed_two_variadic = {
+                let mut builder = GenericByteViewBuilder::<T>::new();
+                builder.append_value(T::Native::from_str("inlined"));
+                let block_id = builder.append_block(Buffer::from("non-inlined-string-buffer".as_bytes()));
+                builder.try_append_view(block_id, 0, 25).unwrap();
+
+                let block_id = builder.append_block(Buffer::from("another-non-inlined-string-buffer".as_bytes()));
+                builder.try_append_view(block_id, 0, 33).unwrap();
+                builder.finish()
+            };
+            assert_eq!(mixed_two_variadic.data_buffers().len(), 2);
+            run_test_case!(mixed_two_variadic);
+        }
+
+        test_case::<StringViewType>();
+        test_case::<BinaryViewType>();
     }
 }
