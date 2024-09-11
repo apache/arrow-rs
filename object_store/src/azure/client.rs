@@ -226,11 +226,16 @@ impl<'a> PutRequest<'a> {
 
     async fn send(self) -> Result<Response> {
         let credential = self.config.get_credential().await?;
+        let sensitive = credential
+            .as_deref()
+            .map(|c| c.sensitive_request())
+            .unwrap_or_default();
         let response = self
             .builder
             .header(CONTENT_LENGTH, self.payload.content_length())
             .with_azure_authorization(&credential, &self.config.account)
             .retryable(&self.config.retry_config)
+            .sensitive(sensitive)
             .idempotent(self.idempotent)
             .payload(Some(self.payload))
             .send()
@@ -356,12 +361,18 @@ impl AzureClient {
         let credential = self.get_credential().await?;
         let url = self.config.path_url(path);
 
+        let sensitive = credential
+            .as_deref()
+            .map(|c| c.sensitive_request())
+            .unwrap_or_default();
         self.client
             .request(Method::DELETE, url)
             .query(query)
             .header(&DELETE_SNAPSHOTS, "include")
             .with_azure_authorization(&credential, &self.config.account)
-            .send_retry(&self.config.retry_config)
+            .retryable(&self.config.retry_config)
+            .sensitive(sensitive)
+            .send()
             .await
             .context(DeleteRequestSnafu {
                 path: path.as_ref(),
@@ -392,9 +403,14 @@ impl AzureClient {
             builder = builder.header(IF_NONE_MATCH, "*");
         }
 
+        let sensitive = credential
+            .as_deref()
+            .map(|c| c.sensitive_request())
+            .unwrap_or_default();
         builder
             .with_azure_authorization(&credential, &self.config.account)
             .retryable(&self.config.retry_config)
+            .sensitive(sensitive)
             .idempotent(overwrite)
             .send()
             .await
@@ -423,6 +439,10 @@ impl AzureClient {
         ));
         body.push_str("</KeyInfo>");
 
+        let sensitive = credential
+            .as_deref()
+            .map(|c| c.sensitive_request())
+            .unwrap_or_default();
         let response = self
             .client
             .request(Method::POST, url)
@@ -430,6 +450,7 @@ impl AzureClient {
             .query(&[("restype", "service"), ("comp", "userdelegationkey")])
             .with_azure_authorization(&credential, &self.config.account)
             .retryable(&self.config.retry_config)
+            .sensitive(sensitive)
             .idempotent(true)
             .send()
             .await
@@ -482,12 +503,18 @@ impl AzureClient {
     pub async fn get_blob_tagging(&self, path: &Path) -> Result<Response> {
         let credential = self.get_credential().await?;
         let url = self.config.path_url(path);
+        let sensitive = credential
+            .as_deref()
+            .map(|c| c.sensitive_request())
+            .unwrap_or_default();
         let response = self
             .client
             .request(Method::GET, url)
             .query(&[("comp", "tags")])
             .with_azure_authorization(&credential, &self.config.account)
-            .send_retry(&self.config.retry_config)
+            .retryable(&self.config.retry_config)
+            .sensitive(sensitive)
+            .send()
             .await
             .context(GetRequestSnafu {
                 path: path.as_ref(),
@@ -536,10 +563,16 @@ impl GetClient for AzureClient {
             builder = builder.query(&[("versionid", v)])
         }
 
+        let sensitive = credential
+            .as_deref()
+            .map(|c| c.sensitive_request())
+            .unwrap_or_default();
         let response = builder
             .with_get_options(options)
             .with_azure_authorization(&credential, &self.config.account)
-            .send_retry(&self.config.retry_config)
+            .retryable(&self.config.retry_config)
+            .sensitive(sensitive)
+            .send()
             .await
             .context(GetRequestSnafu {
                 path: path.as_ref(),
@@ -590,12 +623,18 @@ impl ListClient for AzureClient {
             query.push(("marker", token))
         }
 
+        let sensitive = credential
+            .as_deref()
+            .map(|c| c.sensitive_request())
+            .unwrap_or_default();
         let response = self
             .client
             .request(Method::GET, url)
             .query(&query)
             .with_azure_authorization(&credential, &self.config.account)
-            .send_retry(&self.config.retry_config)
+            .retryable(&self.config.retry_config)
+            .sensitive(sensitive)
+            .send()
             .await
             .context(ListRequestSnafu)?
             .bytes()

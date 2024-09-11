@@ -157,6 +157,8 @@ impl FromStr for ClientConfigKey {
             "pool_idle_timeout" => Ok(Self::PoolIdleTimeout),
             "pool_max_idle_per_host" => Ok(Self::PoolMaxIdlePerHost),
             "proxy_url" => Ok(Self::ProxyUrl),
+            "proxy_ca_certificate" => Ok(Self::ProxyCaCertificate),
+            "proxy_excludes" => Ok(Self::ProxyExcludes),
             "timeout" => Ok(Self::Timeout),
             "user_agent" => Ok(Self::UserAgent),
             _ => Err(super::Error::UnknownConfigurationKey {

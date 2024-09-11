@@ -23,10 +23,12 @@ use crate::common::fixture::TestFixture;
 use arrow_array::{ArrayRef, Int64Array, RecordBatch, StringArray};
 use arrow_flight::{
     decode::FlightRecordBatchStream,
+    encode::FlightDataEncoderBuilder,
     flight_service_server::{FlightService, FlightServiceServer},
     sql::{
         server::{FlightSqlService, PeekableFlightDataStream},
         ActionCreatePreparedStatementRequest, ActionCreatePreparedStatementResult, Any,
+        CommandGetCatalogs, CommandGetDbSchemas, CommandGetTableTypes, CommandGetTables,
         CommandPreparedStatementQuery, CommandStatementQuery, DoPutPreparedStatementResult,
         ProstMessageExt, SqlInfo,
     },
@@ -82,6 +84,205 @@ async fn test_simple() {
         \n| lovely       |           |\
         \n| FlightSQL!   | 1337      |\
         \n+--------------+-----------+",
+    );
+}
+
+#[tokio::test]
+async fn test_get_catalogs() {
+    let test_server = FlightSqlServiceImpl::default();
+    let fixture = TestFixture::new(test_server.service()).await;
+    let addr = fixture.addr;
+
+    let stdout = tokio::task::spawn_blocking(move || {
+        Command::cargo_bin("flight_sql_client")
+            .unwrap()
+            .env_clear()
+            .env("RUST_BACKTRACE", "1")
+            .env("RUST_LOG", "warn")
+            .arg("--host")
+            .arg(addr.ip().to_string())
+            .arg("--port")
+            .arg(addr.port().to_string())
+            .arg("catalogs")
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone()
+    })
+    .await
+    .unwrap();
+
+    fixture.shutdown_and_wait().await;
+
+    assert_eq!(
+        std::str::from_utf8(&stdout).unwrap().trim(),
+        "+--------------+\
+        \n| catalog_name |\
+        \n+--------------+\
+        \n| catalog_a    |\
+        \n| catalog_b    |\
+        \n+--------------+",
+    );
+}
+
+#[tokio::test]
+async fn test_get_db_schemas() {
+    let test_server = FlightSqlServiceImpl::default();
+    let fixture = TestFixture::new(test_server.service()).await;
+    let addr = fixture.addr;
+
+    let stdout = tokio::task::spawn_blocking(move || {
+        Command::cargo_bin("flight_sql_client")
+            .unwrap()
+            .env_clear()
+            .env("RUST_BACKTRACE", "1")
+            .env("RUST_LOG", "warn")
+            .arg("--host")
+            .arg(addr.ip().to_string())
+            .arg("--port")
+            .arg(addr.port().to_string())
+            .arg("db-schemas")
+            .arg("catalog_a")
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone()
+    })
+    .await
+    .unwrap();
+
+    fixture.shutdown_and_wait().await;
+
+    assert_eq!(
+        std::str::from_utf8(&stdout).unwrap().trim(),
+        "+--------------+----------------+\
+        \n| catalog_name | db_schema_name |\
+        \n+--------------+----------------+\
+        \n| catalog_a    | schema_1       |\
+        \n| catalog_a    | schema_2       |\
+        \n+--------------+----------------+",
+    );
+}
+
+#[tokio::test]
+async fn test_get_tables() {
+    let test_server = FlightSqlServiceImpl::default();
+    let fixture = TestFixture::new(test_server.service()).await;
+    let addr = fixture.addr;
+
+    let stdout = tokio::task::spawn_blocking(move || {
+        Command::cargo_bin("flight_sql_client")
+            .unwrap()
+            .env_clear()
+            .env("RUST_BACKTRACE", "1")
+            .env("RUST_LOG", "warn")
+            .arg("--host")
+            .arg(addr.ip().to_string())
+            .arg("--port")
+            .arg(addr.port().to_string())
+            .arg("tables")
+            .arg("catalog_a")
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone()
+    })
+    .await
+    .unwrap();
+
+    fixture.shutdown_and_wait().await;
+
+    assert_eq!(
+        std::str::from_utf8(&stdout).unwrap().trim(),
+        "+--------------+----------------+------------+------------+\
+        \n| catalog_name | db_schema_name | table_name | table_type |\
+        \n+--------------+----------------+------------+------------+\
+        \n| catalog_a    | schema_1       | table_1    | TABLE      |\
+        \n| catalog_a    | schema_2       | table_2    | VIEW       |\
+        \n+--------------+----------------+------------+------------+",
+    );
+}
+#[tokio::test]
+async fn test_get_tables_db_filter() {
+    let test_server = FlightSqlServiceImpl::default();
+    let fixture = TestFixture::new(test_server.service()).await;
+    let addr = fixture.addr;
+
+    let stdout = tokio::task::spawn_blocking(move || {
+        Command::cargo_bin("flight_sql_client")
+            .unwrap()
+            .env_clear()
+            .env("RUST_BACKTRACE", "1")
+            .env("RUST_LOG", "warn")
+            .arg("--host")
+            .arg(addr.ip().to_string())
+            .arg("--port")
+            .arg(addr.port().to_string())
+            .arg("tables")
+            .arg("catalog_a")
+            .arg("--db-schema-filter")
+            .arg("schema_2")
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone()
+    })
+    .await
+    .unwrap();
+
+    fixture.shutdown_and_wait().await;
+
+    assert_eq!(
+        std::str::from_utf8(&stdout).unwrap().trim(),
+        "+--------------+----------------+------------+------------+\
+        \n| catalog_name | db_schema_name | table_name | table_type |\
+        \n+--------------+----------------+------------+------------+\
+        \n| catalog_a    | schema_2       | table_2    | VIEW       |\
+        \n+--------------+----------------+------------+------------+",
+    );
+}
+
+#[tokio::test]
+async fn test_get_tables_types() {
+    let test_server = FlightSqlServiceImpl::default();
+    let fixture = TestFixture::new(test_server.service()).await;
+    let addr = fixture.addr;
+
+    let stdout = tokio::task::spawn_blocking(move || {
+        Command::cargo_bin("flight_sql_client")
+            .unwrap()
+            .env_clear()
+            .env("RUST_BACKTRACE", "1")
+            .env("RUST_LOG", "warn")
+            .arg("--host")
+            .arg(addr.ip().to_string())
+            .arg("--port")
+            .arg(addr.port().to_string())
+            .arg("table-types")
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone()
+    })
+    .await
+    .unwrap();
+
+    fixture.shutdown_and_wait().await;
+
+    assert_eq!(
+        std::str::from_utf8(&stdout).unwrap().trim(),
+        "+--------------+\
+        \n| table_type   |\
+        \n+--------------+\
+        \n| SYSTEM_TABLE |\
+        \n| TABLE        |\
+        \n| VIEW         |\
+        \n+--------------+",
     );
 }
 
@@ -278,6 +479,84 @@ impl FlightSqlService for FlightSqlServiceImpl {
         Ok(resp)
     }
 
+    async fn get_flight_info_catalogs(
+        &self,
+        query: CommandGetCatalogs,
+        request: Request<FlightDescriptor>,
+    ) -> Result<Response<FlightInfo>, Status> {
+        let flight_descriptor = request.into_inner();
+        let ticket = Ticket {
+            ticket: query.as_any().encode_to_vec().into(),
+        };
+        let endpoint = FlightEndpoint::new().with_ticket(ticket);
+
+        let flight_info = FlightInfo::new()
+            .try_with_schema(&query.into_builder().schema())
+            .unwrap()
+            .with_endpoint(endpoint)
+            .with_descriptor(flight_descriptor);
+
+        Ok(Response::new(flight_info))
+    }
+    async fn get_flight_info_schemas(
+        &self,
+        query: CommandGetDbSchemas,
+        request: Request<FlightDescriptor>,
+    ) -> Result<Response<FlightInfo>, Status> {
+        let flight_descriptor = request.into_inner();
+        let ticket = Ticket {
+            ticket: query.as_any().encode_to_vec().into(),
+        };
+        let endpoint = FlightEndpoint::new().with_ticket(ticket);
+
+        let flight_info = FlightInfo::new()
+            .try_with_schema(&query.into_builder().schema())
+            .unwrap()
+            .with_endpoint(endpoint)
+            .with_descriptor(flight_descriptor);
+
+        Ok(Response::new(flight_info))
+    }
+
+    async fn get_flight_info_tables(
+        &self,
+        query: CommandGetTables,
+        request: Request<FlightDescriptor>,
+    ) -> Result<Response<FlightInfo>, Status> {
+        let flight_descriptor = request.into_inner();
+        let ticket = Ticket {
+            ticket: query.as_any().encode_to_vec().into(),
+        };
+        let endpoint = FlightEndpoint::new().with_ticket(ticket);
+
+        let flight_info = FlightInfo::new()
+            .try_with_schema(&query.into_builder().schema())
+            .unwrap()
+            .with_endpoint(endpoint)
+            .with_descriptor(flight_descriptor);
+
+        Ok(Response::new(flight_info))
+    }
+
+    async fn get_flight_info_table_types(
+        &self,
+        query: CommandGetTableTypes,
+        request: Request<FlightDescriptor>,
+    ) -> Result<Response<FlightInfo>, Status> {
+        let flight_descriptor = request.into_inner();
+        let ticket = Ticket {
+            ticket: query.as_any().encode_to_vec().into(),
+        };
+        let endpoint = FlightEndpoint::new().with_ticket(ticket);
+
+        let flight_info = FlightInfo::new()
+            .try_with_schema(&query.into_builder().schema())
+            .unwrap()
+            .with_endpoint(endpoint)
+            .with_descriptor(flight_descriptor);
+
+        Ok(Response::new(flight_info))
+    }
     async fn get_flight_info_statement(
         &self,
         query: CommandStatementQuery,
@@ -307,6 +586,109 @@ impl FlightSqlService for FlightSqlServiceImpl {
         }
         let resp = Response::new(self.fake_flight_info().unwrap());
         Ok(resp)
+    }
+
+    async fn do_get_catalogs(
+        &self,
+        query: CommandGetCatalogs,
+        _request: Request<Ticket>,
+    ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status> {
+        let mut builder = query.into_builder();
+        for catalog_name in ["catalog_a", "catalog_b"] {
+            builder.append(catalog_name);
+        }
+        let schema = builder.schema();
+        let batch = builder.build();
+        let stream = FlightDataEncoderBuilder::new()
+            .with_schema(schema)
+            .build(futures::stream::once(async { batch }))
+            .map_err(Status::from);
+        Ok(Response::new(Box::pin(stream)))
+    }
+
+    async fn do_get_schemas(
+        &self,
+        query: CommandGetDbSchemas,
+        _request: Request<Ticket>,
+    ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status> {
+        let mut builder = query.into_builder();
+        for (catalog_name, schema_name) in [
+            ("catalog_a", "schema_1"),
+            ("catalog_a", "schema_2"),
+            ("catalog_b", "schema_3"),
+        ] {
+            builder.append(catalog_name, schema_name);
+        }
+
+        let schema = builder.schema();
+        let batch = builder.build();
+        let stream = FlightDataEncoderBuilder::new()
+            .with_schema(schema)
+            .build(futures::stream::once(async { batch }))
+            .map_err(Status::from);
+        Ok(Response::new(Box::pin(stream)))
+    }
+
+    async fn do_get_tables(
+        &self,
+        query: CommandGetTables,
+        _request: Request<Ticket>,
+    ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status> {
+        let mut builder = query.into_builder();
+        for (catalog_name, schema_name, table_name, table_type, schema) in [
+            (
+                "catalog_a",
+                "schema_1",
+                "table_1",
+                "TABLE",
+                Arc::new(Schema::empty()),
+            ),
+            (
+                "catalog_a",
+                "schema_2",
+                "table_2",
+                "VIEW",
+                Arc::new(Schema::empty()),
+            ),
+            (
+                "catalog_b",
+                "schema_3",
+                "table_3",
+                "TABLE",
+                Arc::new(Schema::empty()),
+            ),
+        ] {
+            builder
+                .append(catalog_name, schema_name, table_name, table_type, &schema)
+                .unwrap();
+        }
+
+        let schema = builder.schema();
+        let batch = builder.build();
+        let stream = FlightDataEncoderBuilder::new()
+            .with_schema(schema)
+            .build(futures::stream::once(async { batch }))
+            .map_err(Status::from);
+        Ok(Response::new(Box::pin(stream)))
+    }
+
+    async fn do_get_table_types(
+        &self,
+        query: CommandGetTableTypes,
+        _request: Request<Ticket>,
+    ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status> {
+        let mut builder = query.into_builder();
+        for table_type in ["TABLE", "VIEW", "SYSTEM_TABLE"] {
+            builder.append(table_type);
+        }
+
+        let schema = builder.schema();
+        let batch = builder.build();
+        let stream = FlightDataEncoderBuilder::new()
+            .with_schema(schema)
+            .build(futures::stream::once(async { batch }))
+            .map_err(Status::from);
+        Ok(Response::new(Box::pin(stream)))
     }
 
     async fn do_put_prepared_statement_query(

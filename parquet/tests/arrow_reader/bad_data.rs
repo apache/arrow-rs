@@ -27,6 +27,7 @@ static KNOWN_FILES: &[&str] = &[
     "PARQUET-1481.parquet",
     "ARROW-GH-41317.parquet",
     "ARROW-GH-41321.parquet",
+    "ARROW-GH-43605.parquet",
     "ARROW-RS-GH-6229-DICTHEADER.parquet",
     "ARROW-RS-GH-6229-LEVELS.parquet",
     "README.md",
