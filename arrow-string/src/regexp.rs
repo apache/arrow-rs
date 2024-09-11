@@ -642,11 +642,27 @@ mod tests {
     );
     test_flag_utf8!(
         test_utf8_array_regexp_is_match_insensitive_2,
-        StringViewArray::from(vec!["arrow", "arrow", "arrow", "arrow", "arrow", "arrow"]),
-        StringViewArray::from(vec!["^ar", "^AR", "ow$", "OW$", "foo", ""]),
-        StringArray::from(vec!["i"; 6]),
-        regexp_is_match_utf8::<StringViewArray, StringViewArray, GenericStringArray<i32>>,
-        [true, true, true, true, false, true]
+        StringViewArray::from(vec![
+            "Official Rust implementation of Apache Arrow",
+            "apache/arrow-rs",
+            "apache/arrow-rs",
+            "parquet",
+            "parquet",
+            "row",
+            "row",
+        ]),
+        StringViewArray::from(vec![
+            ".*rust implement.*",
+            "^ap",
+            "^AP",
+            "et$",
+            "ET$",
+            "foo",
+            ""
+        ]),
+        StringViewArray::from(vec!["i"; 7]),
+        regexp_is_match_utf8::<StringViewArray, StringViewArray, StringViewArray>,
+        [true, true, true, true, true, false, true]
     );
     test_flag_utf8!(
         test_utf8_array_regexp_is_match_insensitive_3,
@@ -666,8 +682,13 @@ mod tests {
     );
     test_flag_utf8_scalar!(
         test_utf8_array_regexp_is_match_scalar_2,
-        StringViewArray::from(vec!["arrow", "ARROW", "parquet", "PARQUET"]),
-        "^ar",
+        StringViewArray::from(vec![
+            "apache/arrow-rs",
+            "APACHE/ARROW-RS",
+            "parquet",
+            "PARQUET",
+        ]),
+        "^ap",
         regexp_is_match_utf8_scalar::<StringViewArray>,
         [true, false, false, false]
     );
@@ -681,7 +702,12 @@ mod tests {
     );
     test_flag_utf8_scalar!(
         test_utf8_array_regexp_is_match_empty_scalar_2,
-        StringViewArray::from(vec!["arrow", "ARROW", "parquet", "PARQUET"]),
+        StringViewArray::from(vec![
+            "apache/arrow-rs",
+            "APACHE/ARROW-RS",
+            "parquet",
+            "PARQUET",
+        ]),
         "",
         regexp_is_match_utf8_scalar::<StringViewArray>,
         [true, true, true, true]
@@ -697,8 +723,13 @@ mod tests {
     );
     test_flag_utf8_scalar!(
         test_utf8_array_regexp_is_match_insensitive_scalar_2,
-        StringViewArray::from(vec!["arrow", "ARROW", "parquet", "PARQUET"]),
-        "^ar",
+        StringViewArray::from(vec![
+            "apache/arrow-rs",
+            "APACHE/ARROW-RS",
+            "parquet",
+            "PARQUET",
+        ]),
+        "^ap",
         "i",
         regexp_is_match_utf8_scalar::<StringViewArray>,
         [true, true, false, false]
