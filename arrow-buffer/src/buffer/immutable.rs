@@ -203,7 +203,9 @@ impl Buffer {
     pub fn advance(&mut self, offset: usize) {
         assert!(
             offset <= self.length,
-            "the offset of the new Buffer cannot exceed the existing length"
+            "the offset of the new Buffer cannot exceed the existing length: offset={} length={}",
+            offset,
+            self.length
         );
         self.length -= offset;
         // Safety:
@@ -221,7 +223,8 @@ impl Buffer {
     pub fn slice_with_length(&self, offset: usize, length: usize) -> Self {
         assert!(
             offset.saturating_add(length) <= self.length,
-            "the offset of the new Buffer cannot exceed the existing length"
+            "the offset of the new Buffer cannot exceed the existing length: slice offset={offset} length={length} selflen={}",
+            self.length
         );
         // Safety:
         // offset + length <= self.length
