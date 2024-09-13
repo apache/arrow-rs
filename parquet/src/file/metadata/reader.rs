@@ -73,7 +73,7 @@ pub fn parquet_metadata_from_file<R: ChunkReader>(
         .with_column_indexes(column_index)
         .with_offset_indexes(offset_index);
     reader.try_parse(file)?;
-    Ok(reader.finish()?)
+    reader.finish()
 }
 
 pub struct ParquetMetaDataReader {
@@ -87,6 +87,12 @@ pub struct ParquetMetaDataReader {
 // that is large enough to hold page index and footer, but not the
 // entire file. would need to know the range of the file the bytes
 // represent so offsets can be mapped when reading page indexes.
+
+impl Default for ParquetMetaDataReader {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl ParquetMetaDataReader {
     /// Create a new [`ParquetMetaDataReader`]
@@ -294,9 +300,7 @@ impl ParquetMetaDataReader {
 
     fn range_for_page_index(&self) -> Option<Range<usize>> {
         // sanity check
-        if self.metadata.is_none() {
-            return None;
-        }
+        self.metadata.as_ref()?;
 
         // Get bounds needed for page indexes (if any are present in the file).
         let mut range = None;

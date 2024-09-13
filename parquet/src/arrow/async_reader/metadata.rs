@@ -241,7 +241,7 @@ where
     // TODO(ets): should add option to read page index to this function
     let mut reader = ParquetMetaDataReader::new().with_prefetch_hint(prefetch);
     reader.try_load(fetch, file_size).await?;
-    Ok(reader.finish()?)
+    reader.finish()
 }
 
 #[cfg(test)]
