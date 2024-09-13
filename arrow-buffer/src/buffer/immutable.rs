@@ -16,6 +16,7 @@
 // under the License.
 
 use std::alloc::Layout;
+use std::cmp::Ordering;
 use std::fmt::Debug;
 use std::ptr::NonNull;
 use std::sync::Arc;
@@ -54,6 +55,12 @@ impl PartialEq for Buffer {
 }
 
 impl Eq for Buffer {}
+
+impl PartialOrd for Buffer {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        self.as_slice().partial_cmp(other.as_slice())
+    }
+}
 
 unsafe impl Send for Buffer where Bytes: Send {}
 unsafe impl Sync for Buffer where Bytes: Sync {}

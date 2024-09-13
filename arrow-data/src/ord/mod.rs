@@ -15,22 +15,21 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Low-level array data abstractions for [Apache Arrow Rust](https://docs.rs/arrow)
-//!
-//! For a higher-level, strongly-typed interface see [arrow_array](https://docs.rs/arrow_array)
+//! Module containing functionality to compute array order.
+//! This module uses [ArrayData] and does not
+//! depend on dynamic casting of `Array`.
 
-mod data;
-pub use data::*;
+use crate::ArrayData;
+use std::cmp::Ordering;
 
-mod equal;
-mod ord;
-pub mod transform;
+mod utils;
 
-pub use arrow_buffer::{bit_iterator, bit_mask};
-pub mod decimal;
-
-#[cfg(feature = "ffi")]
-pub mod ffi;
-
-mod byte_view;
-pub use byte_view::*;
+/// Orders two [ArrayData].
+///
+/// If the [ArrayData]'s [DataType] fields are both [DataType::Map], orders by the [FieldRef]'s
+/// partial_cmp.
+///
+/// Otherwise, ordering is determined by the partial_cmp result of the [DataType] fields.
+pub fn ord(lhs: &ArrayData, rhs: &ArrayData) -> Option<Ordering> {
+    utils::partial_ord(lhs, rhs)
+}

@@ -24,6 +24,7 @@ use arrow_buffer::{ArrowNativeType, NullBuffer, OffsetBuffer, ScalarBuffer};
 use arrow_data::ArrayData;
 use arrow_schema::{DataType, IntervalUnit, TimeUnit};
 use std::any::Any;
+use std::cmp::Ordering;
 use std::sync::Arc;
 
 pub use binary_array::*;
@@ -533,6 +534,12 @@ pub trait ArrayAccessor: Array {
 impl PartialEq for dyn Array + '_ {
     fn eq(&self, other: &Self) -> bool {
         self.to_data().eq(&other.to_data())
+    }
+}
+
+impl PartialOrd for dyn Array + '_ {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        self.to_data().partial_cmp(&other.to_data())
     }
 }
 

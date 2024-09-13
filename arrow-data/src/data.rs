@@ -24,11 +24,12 @@ use arrow_buffer::{
     bit_util, i256, ArrowNativeType, Buffer, IntervalDayTime, IntervalMonthDayNano, MutableBuffer,
 };
 use arrow_schema::{ArrowError, DataType, UnionMode};
+use std::cmp::Ordering;
 use std::mem;
 use std::ops::Range;
 use std::sync::Arc;
 
-use crate::{equal, validate_binary_view, validate_string_view};
+use crate::{equal, ord, validate_binary_view, validate_string_view};
 
 /// A collection of [`Buffer`]
 #[doc(hidden)]
@@ -1766,6 +1767,12 @@ impl PartialEq for ArrayData {
     }
 }
 
+impl PartialOrd for ArrayData {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        ord::ord(self, other)
+    }
+}
+
 /// Builder for `ArrayData` type
 #[derive(Debug)]
 pub struct ArrayDataBuilder {
@@ -2126,6 +2133,46 @@ mod tests {
         let string_data_slice = string_data.slice(1, 2);
         assert!(string_data_slice.ptr_eq(&string_data_slice));
         assert!(!string_data_slice.ptr_eq(&string_data))
+    }
+
+    #[test]
+    fn test_partial_ord() {
+        let int_data = ArrayData::builder(DataType::Int32)
+            .len(1)
+            .add_buffer(make_i32_buffer(1))
+            .build()
+            .unwrap();
+
+        let float_data = ArrayData::builder(DataType::Float32)
+            .len(1)
+            .add_buffer(make_f32_buffer(1))
+            .build()
+            .unwrap();
+        assert_eq!(int_data.partial_cmp(&float_data), Some(Ordering::Less));
+
+        #[allow(clippy::redundant_clone)]
+        let int_data_clone = int_data.clone();
+        assert_eq!(int_data.partial_cmp(&int_data_clone), Some(Ordering::Equal));
+
+        let data_buffer = Buffer::from_slice_ref("abcdef".as_bytes());
+        let offsets_buffer = Buffer::from_slice_ref([0_i32, 2_i32, 2_i32, 5_i32]);
+        let string_data = ArrayData::try_new(
+            DataType::Utf8,
+            3,
+            Some(Buffer::from_iter(vec![true, false, true])),
+            0,
+            vec![offsets_buffer, data_buffer],
+            vec![],
+        )
+        .unwrap();
+
+        assert_eq!(float_data.partial_cmp(&string_data), Some(Ordering::Less));
+
+        let string_data_slice = string_data.slice(1, 2);
+        assert_eq!(
+            string_data_slice.partial_cmp(&string_data_slice),
+            Some(Ordering::Equal)
+        );
     }
 
     #[test]

@@ -26,7 +26,7 @@ use crate::{Buffer, MutableBuffer};
 /// that it is null.
 ///
 /// [Arrow specification]: https://arrow.apache.org/docs/format/Columnar.html#validity-bitmaps
-#[derive(Debug, Clone, Eq, PartialEq)]
+#[derive(Debug, Clone, Eq, PartialEq, PartialOrd)]
 pub struct NullBuffer {
     buffer: BooleanBuffer,
     null_count: usize,

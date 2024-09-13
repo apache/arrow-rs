@@ -25,7 +25,7 @@ use crate::{
 use std::ops::{BitAnd, BitOr, BitXor, Not};
 
 /// A slice-able [`Buffer`] containing bit-packed booleans
-#[derive(Debug, Clone, Eq)]
+#[derive(Debug, Clone, Eq, PartialOrd)]
 pub struct BooleanBuffer {
     buffer: Buffer,
     offset: usize,
