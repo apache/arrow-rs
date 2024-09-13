@@ -288,11 +288,11 @@ mod tests {
         let write_data: &mut [u8] = &mut [0; 9];
         let data: &[u8] = &[
             0b00000001, 0b00000001, 0b00000001, 0b00000001, 0b00000001, 0b00000001, 0b00000001,
-            0b00000001,
+            0b00000001, 0b00000001,
         ];
         let offset_write = 1;
         let offset_read = 0;
-        let len = 64;
+        let len = 65;
         let (n, len_set) =
             unsafe { set_upto_64bits(write_data, data, offset_write, offset_read, len) };
         assert_eq!(n, 55);
