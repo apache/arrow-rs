@@ -16,11 +16,12 @@
 // under the License.
 
 use crate::arrow::async_reader::AsyncFileReader;
-use crate::errors::{ParquetError, Result};
+//use crate::errors::{ParquetError, Result};
+use crate::errors::Result;
 use crate::file::metadata::{ParquetMetaData, ParquetMetaDataReader};
-use crate::file::page_index::index::Index;
-use crate::file::page_index::index_reader::{acc_range, decode_column_index, decode_offset_index};
-use crate::file::FOOTER_SIZE;
+//use crate::file::page_index::index::Index;
+//use crate::file::page_index::index_reader::{acc_range, decode_column_index, decode_offset_index};
+//use crate::file::FOOTER_SIZE;
 use bytes::Bytes;
 use futures::future::BoxFuture;
 use futures::FutureExt;
@@ -38,6 +39,8 @@ impl<'a, T: AsyncFileReader> MetadataFetch for &'a mut T {
     }
 }
 
+/* TODO(ets): commenting this out for now to root out places it's still used. This will be
+   added back once ParquetMetaDataReader is complete, but will be deprecated instead.
 /// An asynchronous interface to load [`ParquetMetaData`] from an async source
 pub struct MetadataLoader<F> {
     /// Function that fetches byte ranges asynchronously
@@ -195,6 +198,7 @@ impl<F: MetadataFetch> MetadataLoader<F> {
         self.metadata
     }
 }
+*/
 
 struct MetadataFetchFn<F>(F);
 
