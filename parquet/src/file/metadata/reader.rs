@@ -69,7 +69,6 @@ pub fn parquet_metadata_from_file<R: ChunkReader>(
     column_index: bool,
     offset_index: bool,
 ) -> Result<ParquetMetaData> {
-    println!("pmff {column_index} {offset_index}");
     let mut reader = ParquetMetaDataReader::new()
         .with_column_indexes(column_index)
         .with_offset_indexes(offset_index);
