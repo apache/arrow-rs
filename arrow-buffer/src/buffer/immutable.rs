@@ -26,7 +26,7 @@ use crate::BufferBuilder;
 use crate::{bytes::Bytes, native::ArrowNativeType};
 
 use super::ops::bitwise_unary_op_helper;
-use super::MutableBuffer;
+use super::{MutableBuffer, ScalarBuffer};
 
 /// Buffer represents a contiguous memory region that can be shared with other buffers and across
 /// thread boundaries.
@@ -388,6 +388,12 @@ impl<const N: usize> From<&[u8; N]> for Buffer {
 impl<T: ArrowNativeType> From<Vec<T>> for Buffer {
     fn from(value: Vec<T>) -> Self {
         Self::from_vec(value)
+    }
+}
+
+impl<T: ArrowNativeType> From<ScalarBuffer<T>> for Buffer {
+    fn from(value: ScalarBuffer<T>) -> Self {
+        value.into_inner()
     }
 }
 
