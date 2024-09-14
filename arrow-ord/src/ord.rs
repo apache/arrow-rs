@@ -324,7 +324,7 @@ pub fn build_compare(left: &dyn Array, right: &dyn Array) -> Result<DynComparato
 ///
 /// ```
 /// # use arrow_array::{Array, BooleanArray};
-/// # use arrow_buffer::NullBuffer;
+/// # use arrow_buffer::{NullBuffer, BooleanBuffer};
 /// # use arrow_ord::cmp;
 /// # use arrow_ord::ord::make_comparator;
 /// # use arrow_schema::{ArrowError, SortOptions};
@@ -335,7 +335,7 @@ pub fn build_compare(left: &dyn Array, right: &dyn Array) -> Result<DynComparato
 ///
 ///     let cmp = make_comparator(a, b, SortOptions::default())?;
 ///     let len = a.len().min(b.len());
-///     let values = (0..len).map(|i| cmp(i, i).is_eq()).collect();
+///     let values = BooleanBuffer::collect_bool(len, |i| cmp(i, i).is_eq());
 ///     let nulls = NullBuffer::union(a.nulls(), b.nulls());
 ///     Ok(BooleanArray::new(values, nulls))
 /// }
