@@ -313,7 +313,7 @@ where
         ))));
     }
 
-    let nulls = NullBuffer::union(a.logical_nulls().as_ref(), b.logical_nulls().as_ref());
+    let nulls = create_union_null_buffer(a.logical_nulls().as_ref(), b.logical_nulls().as_ref());
 
     let mut builder = a.into_builder()?;
 
@@ -413,7 +413,8 @@ where
         try_binary_no_nulls_mut(len, a, b, op)
     } else {
         let nulls =
-            NullBuffer::union(a.logical_nulls().as_ref(), b.logical_nulls().as_ref()).unwrap();
+            create_union_null_buffer(a.logical_nulls().as_ref(), b.logical_nulls().as_ref())
+                .unwrap();
 
         let mut builder = a.into_builder()?;
 
@@ -432,6 +433,22 @@ where
         let array_builder = builder.finish().into_data().into_builder();
         let array_data = unsafe { array_builder.nulls(Some(nulls)).build_unchecked() };
         Ok(Ok(PrimitiveArray::<T>::from(array_data)))
+    }
+}
+
+/// Computes the union of the nulls in two optional [`NullBuffer`] which
+/// is not shared with the input buffers.
+///
+/// The union of the nulls is the same as `NullBuffer::union(lhs, rhs)` but
+/// it does not increase the reference count of the null buffer.
+fn create_union_null_buffer(
+    lhs: Option<&NullBuffer>,
+    rhs: Option<&NullBuffer>,
+) -> Option<NullBuffer> {
+    match (lhs, rhs) {
+        (Some(lhs), Some(rhs)) => Some(NullBuffer::new(lhs.inner() & rhs.inner())),
+        (Some(n), None) | (None, Some(n)) => Some(NullBuffer::new(n.inner() & n.inner())),
+        (None, None) => None,
     }
 }
 
@@ -558,6 +575,24 @@ mod tests {
     }
 
     #[test]
+    fn test_binary_mut_null_buffer() {
+        let a = Int32Array::from(vec![Some(3), Some(4), Some(5), Some(6), None]);
+
+        let b = Int32Array::from(vec![Some(10), Some(11), Some(12), Some(13), Some(14)]);
+
+        let r1 = binary_mut(a, &b, |a, b| a + b).unwrap();
+
+        let a = Int32Array::from(vec![Some(3), Some(4), Some(5), Some(6), None]);
+        let b = Int32Array::new(
+            vec![10, 11, 12, 13, 14].into(),
+            Some(vec![true, true, true, true, true].into()),
+        );
+
+        let r2 = binary_mut(a, &b, |a, b| a + b).unwrap();
+        assert_eq!(r1.unwrap(), r2.unwrap());
+    }
+
+    #[test]
     fn test_try_binary_mut() {
         let a = Int32Array::from(vec![15, 14, 9, 8, 1]);
         let b = Int32Array::from(vec![Some(1), None, Some(3), None, Some(5)]);
@@ -585,6 +620,24 @@ mod tests {
         })
         .unwrap()
         .expect_err("should got error");
+    }
+
+    #[test]
+    fn test_try_binary_mut_null_buffer() {
+        let a = Int32Array::from(vec![Some(3), Some(4), Some(5), Some(6), None]);
+
+        let b = Int32Array::from(vec![Some(10), Some(11), Some(12), Some(13), Some(14)]);
+
+        let r1 = try_binary_mut(a, &b, |a, b| Ok(a + b)).unwrap();
+
+        let a = Int32Array::from(vec![Some(3), Some(4), Some(5), Some(6), None]);
+        let b = Int32Array::new(
+            vec![10, 11, 12, 13, 14].into(),
+            Some(vec![true, true, true, true, true].into()),
+        );
+
+        let r2 = try_binary_mut(a, &b, |a, b| Ok(a + b)).unwrap();
+        assert_eq!(r1.unwrap(), r2.unwrap());
     }
 
     #[test]
