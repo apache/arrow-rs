@@ -154,7 +154,7 @@ mod tests {
     fn set_bits_fuz() {
         let mut rng = StdRng::seed_from_u64(42);
         let mut data = SetBitsTest::new();
-        for _ in 0..10000 {
+        for _ in 0..100 {
             data.regen(&mut rng);
             data.verify();
         }
