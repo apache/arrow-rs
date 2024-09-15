@@ -375,6 +375,7 @@ impl Field {
             | DataType::FixedSizeList(field, _)
             | DataType::Map(field, _) => field.fields(),
             DataType::Dictionary(_, value_field) => Field::_fields(value_field.as_ref()),
+            DataType::RunEndEncoded(_, field) => field.fields(),
             _ => vec![],
         }
     }
