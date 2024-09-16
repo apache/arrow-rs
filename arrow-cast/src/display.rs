@@ -421,8 +421,6 @@ macro_rules! primitive_display {
             fn write(&self, idx: usize, f: &mut dyn Write) -> FormatResult {
                 let value = self.value(idx);
                 let mut buffer = [0u8; <$t as ArrowPrimitiveType>::Native::FORMATTED_SIZE];
-                // SAFETY:
-                // buffer is T::FORMATTED_SIZE
                 let b = lexical_core::write(value, &mut buffer);
                 // Lexical core produces valid UTF-8
                 let s = unsafe { std::str::from_utf8_unchecked(b) };
