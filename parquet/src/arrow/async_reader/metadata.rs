@@ -21,6 +21,7 @@ use crate::file::footer::{decode_footer, decode_metadata};
 use crate::file::metadata::ParquetMetaData;
 use crate::file::page_index::index::Index;
 use crate::file::page_index::index_reader::{acc_range, decode_column_index, decode_offset_index};
+use crate::file::FOOTER_SIZE;
 use bytes::Bytes;
 use futures::future::BoxFuture;
 use futures::FutureExt;
@@ -47,8 +48,6 @@ pub struct MetadataLoader<F> {
     /// The offset and bytes of remaining unparsed data
     remainder: Option<(usize, Bytes)>,
 }
-
-const FOOTER_SIZE: usize = 8;
 
 impl<F: MetadataFetch> MetadataLoader<F> {
     /// Create a new [`MetadataLoader`] by reading the footer information
