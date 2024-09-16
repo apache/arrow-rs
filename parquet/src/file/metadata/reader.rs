@@ -62,8 +62,8 @@ use crate::arrow::async_reader::AsyncFileReader;
 /// metadata.
 ///
 /// # See Also
-/// [`decode_metadata`] for decoding the metadata from the bytes.
-/// [`decode_footer`] for decoding the metadata length from the footer.
+/// [`ParquetMetaDataReader::decode_metadata`] for decoding the metadata from the bytes.
+/// [`ParquetMetaDataReader::decode_footer`] for decoding the metadata length from the footer.
 pub fn parquet_metadata_from_file<R: ChunkReader>(
     file: &R,
     column_index: bool,
