@@ -128,6 +128,8 @@ impl ParquetMetaDataReader {
         self
     }
 
+    // TODO(ets): should be > FOOTER_SIZE and <= file_size (if known). If file_size is
+    // not known, then setting this too large may cause an error on read.
     pub fn with_prefetch_hint(mut self, val: Option<usize>) -> Self {
         self.prefetch_hint = val;
         self
@@ -250,6 +252,7 @@ impl ParquetMetaDataReader {
         Ok(())
     }
 
+    // TODO(ets): should these go in `index_reader.rs`?
     fn parse_column_index(&mut self, bytes: &Bytes, start_offset: usize) -> Result<()> {
         let metadata = self.metadata.as_mut().unwrap();
         if self.column_index {
@@ -370,15 +373,9 @@ impl ParquetMetaDataReader {
             return Err(eof_err!("file size of {} is less than footer", file_size));
         }
 
-        // Sanity check on prefetch size...don't try to fetch more than `file_size`.
-        let prefetch = if prefetch > file_size {
-            file_size
-        } else {
-            prefetch
-        };
-
         // If a size hint is provided, read more than the minimum size
         // to try and avoid a second fetch.
+        // Note: prefetch > file_size is ok since we're using saturating_sub.
         let footer_start = file_size.saturating_sub(prefetch);
 
         let suffix = fetch.fetch(footer_start..file_size).await?;
@@ -436,6 +433,8 @@ impl ParquetMetaDataReader {
             }
         };
 
+        // FIXME: this will error out if fetch_size is larger than file_size...but we don't
+        // know file_size. SHould make note of that in docs.
         fetch.seek(SeekFrom::End(-fetch_size)).await?;
         let mut suffix = Vec::with_capacity(fetch_size as usize);
         let suffix_len = fetch.read_buf(&mut suffix).await?;
