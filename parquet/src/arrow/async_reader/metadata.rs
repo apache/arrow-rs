@@ -65,6 +65,8 @@ impl<F: MetadataFetch> MetadataLoader<F> {
         // If a size hint is provided, read more than the minimum size
         // to try and avoid a second fetch.
         let footer_start = if let Some(size_hint) = prefetch {
+            // check for hint smaller than footer
+            let size_hint = std::cmp::max(size_hint, FOOTER_SIZE);
             file_size.saturating_sub(size_hint)
         } else {
             file_size - FOOTER_SIZE
@@ -74,7 +76,7 @@ impl<F: MetadataFetch> MetadataLoader<F> {
         let suffix_len = suffix.len();
 
         let mut footer = [0; FOOTER_SIZE];
-        footer.copy_from_slice(&suffix[suffix_len - 8..suffix_len]);
+        footer.copy_from_slice(&suffix[suffix_len - FOOTER_SIZE..suffix_len]);
 
         let length = ParquetMetaDataReader::decode_footer(&footer)?;
 
@@ -276,6 +278,14 @@ mod tests {
         };
 
         let actual = fetch_parquet_metadata(&mut fetch, len, None).await.unwrap();
+        assert_eq!(actual.file_metadata().schema(), expected);
+        assert_eq!(fetch_count.load(Ordering::SeqCst), 2);
+
+        // Metadata hint too small - below footer size
+        fetch_count.store(0, Ordering::SeqCst);
+        let actual = fetch_parquet_metadata(&mut fetch, len, Some(7))
+            .await
+            .unwrap();
         assert_eq!(actual.file_metadata().schema(), expected);
         assert_eq!(fetch_count.load(Ordering::SeqCst), 2);
 
