@@ -40,30 +40,15 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncSeek, AsyncSeekExt};
 #[cfg(feature = "async")]
 use crate::arrow::async_reader::AsyncFileReader;
 
-/// Reads the [`ParquetMetaData``] from the footer of the parquet file.
+/// Reads the [`ParquetMetaData`] from the footer of a Parquet file.
 ///
-/// # Layout of Parquet file
-/// ```text
-/// +---------------------------+-----+---+
-/// |      Rest of file         |  B  | A |
-/// +---------------------------+-----+---+
-/// ```
-/// where
-/// * `A`: parquet footer which stores the length of the metadata.
-/// * `B`: parquet metadata.
+/// This function is a wrapper around [`ParquetMetaDataReader`]. The input, which must implement
+/// [`ChunkReader`], may be a [`std::fs::File`] or [`Bytes`]. In the latter case, the passed in
+/// buffer must contain the contents of the entire file if any of the Parquet [Page Index]
+/// structures are to be populated (controlled via the `column_index` and `offset_index`
+/// arguments).
 ///
-/// # I/O
-///
-/// This method first reads the last 8 bytes of the file via
-/// [`ChunkReader::get_read`] to get the the parquet footer which contains the
-/// metadata length.
-///
-/// It then issues a second `get_read` to read the encoded metadata
-/// metadata.
-///
-/// # See Also
-/// [`ParquetMetaDataReader::decode_metadata`] for decoding the metadata from the bytes.
-/// [`ParquetMetaDataReader::decode_footer`] for decoding the metadata length from the footer.
+/// [Page Index]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
 pub fn parquet_metadata_from_file<R: ChunkReader>(
     file: &R,
     column_index: bool,
@@ -76,6 +61,24 @@ pub fn parquet_metadata_from_file<R: ChunkReader>(
     reader.finish()
 }
 
+/// Reads the [`ParquetMetaData`] from a byte stream.
+///
+/// See [`crate::file::metadata::ParquetMetaDataWriter#output-format`] for a description of
+/// the Parquet metadata.
+///
+/// # Example
+/// ```no_run
+/// # use parquet::file::metadata::{ParquetMetaData, ParquetMetaDataReader};
+/// # fn open_parquet_file(path: &str) -> std::fs::File { unimplemented!(); }
+/// // read parquet metadata including page indexes
+/// let file = open_parquet_file("some_path.parquet")
+/// let reader = ParquetMetaDataReader::new()
+///     .with_page_indexes(true);
+/// reader.try_parse(file).unwrap();
+/// let metadata = reader.finish.unwrap();
+/// assert!(metadata.column_index.is_some());
+/// assert!(metadata.offset_index.is_some());
+/// ```
 pub struct ParquetMetaDataReader {
     metadata: Option<ParquetMetaData>,
     column_index: bool,
@@ -100,6 +103,8 @@ impl ParquetMetaDataReader {
         }
     }
 
+    /// Create a new [`ParquetMetaDataReader`] populated with a [`ParquetMetaData`] struct
+    /// obtained via other means. Primarily intended for use with [`Self::load_page_index()`].
     pub fn new_with_metadata(metadata: ParquetMetaData) -> Self {
         Self {
             metadata: Some(metadata),
@@ -109,27 +114,54 @@ impl ParquetMetaDataReader {
         }
     }
 
+    /// Enable or disable reading the page index structures described in
+    /// "[Parquet page index]: Layout to Support Page Skipping". Equivalent to:
+    /// ```no_run
+    /// self.with_column_indexes(val).with_offset_indexes(val)
+    /// ```
+    ///
+    /// [Parquet page index]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
     pub fn with_page_indexes(self, val: bool) -> Self {
         self.with_column_indexes(val).with_offset_indexes(val)
     }
 
+    /// Enable or disable reading the Parquet [ColumnIndex] structure.
+    ///
+    /// [ColumnIndex]:  https://github.com/apache/parquet-format/blob/master/PageIndex.md
     pub fn with_column_indexes(mut self, val: bool) -> Self {
         self.column_index = val;
         self
     }
 
+    /// Enable or disable reading the Parquet [OffsetIndex] structure.
+    ///
+    /// [OffsetIndex]:  https://github.com/apache/parquet-format/blob/master/PageIndex.md
     pub fn with_offset_indexes(mut self, val: bool) -> Self {
         self.offset_index = val;
         self
     }
 
-    // TODO(ets): should be > FOOTER_SIZE and <= file_size (if known). If file_size is
-    // not known, then setting this too large may cause an error on read.
-    pub fn with_prefetch_hint(mut self, val: Option<usize>) -> Self {
-        self.prefetch_hint = val;
+    /// Provide a hint as to the number of bytes needed to fully parse the [`ParquetMetaData`].
+    /// Only used for the asynchronous [`Self::try_load()`] and [`Self::try_load_from_tail()`]
+    /// methods.
+    ///
+    /// By default, the reader will first fetch the last 8 bytes of the input file to obtain the
+    /// size of the footer metadata. A second fetch will be performed to obtain the needed bytes.
+    /// After parsing the footer metadata, a third fetch will be performed to obtain the bytes
+    /// needed to decode the page index structures, if they have been requested. To avoid
+    /// unnecessary fetches, `prefetch` can be set to an estimate of the number of bytes needed
+    /// to fully decode the [`ParquetMetaData`], which can reduce the number of fetch requests and
+    /// reduce latency. Setting `prefetch` too small will not trigger an error, but will result
+    /// in extra fetches being performed.
+    ///
+    /// One caveat is that when using [`Self::try_load_from_tail()`], setting `prefetch` to a
+    /// value larger than the file size will result in an error.
+    pub fn with_prefetch_hint(mut self, prefetch: Option<usize>) -> Self {
+        self.prefetch_hint = prefetch;
         self
     }
 
+    /// Return the parsed [`ParquetMetaData`] struct.
     pub fn finish(&mut self) -> Result<ParquetMetaData> {
         if self.metadata.is_none() {
             return Err(general_err!("could not parse parquet metadata"));
@@ -137,15 +169,16 @@ impl ParquetMetaDataReader {
         Ok(self.metadata.take().unwrap())
     }
 
-    /// Attempts to parse the footer (and optionally page indexes) given a [`ChunkReader`]. If the
-    /// `ChunkReader` is [`Bytes`] based, then the buffer should contain the entire file. Since all
-    /// bytes needed should be available, this will either succeed or return an error.
+    /// Attempts to parse the footer metadata (and optionally page indexes) given a [`ChunkReader`].
+    /// If `reader` is [`Bytes`] based, then the buffer must contain sufficient bytes to complete
+    /// the request. If page indexes are desired, the buffer must contain the entire file, or
+    /// [`Self::try_parse_range()`] should be used.
     pub fn try_parse<R: ChunkReader>(&mut self, reader: &R) -> Result<()> {
         self.try_parse_range(reader, 0..reader.len() as usize)
     }
 
-    /// Same as [`Self::try_parse`], but only `file_range` bytes of the original file are available.
-    /// Will return an error if bytes are insufficient.
+    /// Same as [`Self::try_parse()`], but only `file_range` bytes of the original file are
+    /// available.
     pub fn try_parse_range<R: ChunkReader>(
         &mut self,
         reader: &R,
@@ -187,7 +220,8 @@ impl ParquetMetaDataReader {
         Ok(())
     }
 
-    /// like [Self::try_parse] but async
+    /// Attempts to (asynchronously) parse the footer metadata (and optionally page indexes)
+    /// given a [`MetadataFetch`]. The file size must be known to use this function.
     #[cfg(feature = "async")]
     pub async fn try_load<F: MetadataFetch>(
         &mut self,
@@ -207,6 +241,10 @@ impl ParquetMetaDataReader {
         self.load_page_index(fetch, remainder).await
     }
 
+    /// Attempts to (asynchronously) parse the footer metadata (and optionally page indexes)
+    /// given a [`AsyncFileReader`]. The file size need not be known, but this will perform at
+    /// least two fetches, regardless of the value of `prefetch_hint`, if the page indexes are
+    /// requested.
     #[cfg(feature = "async")]
     pub async fn try_load_from_tail<R: AsyncFileReader + AsyncRead + AsyncSeek + Unpin + Send>(
         &mut self,
@@ -223,7 +261,8 @@ impl ParquetMetaDataReader {
         self.load_page_index(&mut fetch, None).await
     }
 
-    // assuming the file metadata has been loaded already, just fetch the page indexes
+    /// Asynchronously fetch the page index structures when a [`ParquetMetaData`] has already
+    /// been obtained. See [`Self::new_with_metadata()`].
     #[cfg(feature = "async")]
     pub async fn load_page_index<F: MetadataFetch>(
         &mut self,
@@ -437,8 +476,7 @@ impl ParquetMetaDataReader {
             }
         };
 
-        // FIXME: this will error out if fetch_size is larger than file_size...but we don't
-        // know file_size. SHould make note of that in docs.
+        // This will error out if fetch_size is larger than file_size as noted in the docs
         fetch.seek(SeekFrom::End(-fetch_size)).await?;
         let mut suffix = Vec::with_capacity(fetch_size as usize);
         let suffix_len = fetch.read_buf(&mut suffix).await?;
