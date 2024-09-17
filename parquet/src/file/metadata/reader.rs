@@ -83,11 +83,6 @@ pub struct ParquetMetaDataReader {
     prefetch_hint: Option<usize>,
 }
 
-// TODO(ets): still need a way to read everything from a byte array
-// that is large enough to hold page index and footer, but not the
-// entire file. would need to know the range of the file the bytes
-// represent so offsets can be mapped when reading page indexes.
-
 impl Default for ParquetMetaDataReader {
     fn default() -> Self {
         Self::new()
@@ -146,6 +141,16 @@ impl ParquetMetaDataReader {
     /// `ChunkReader` is [`Bytes`] based, then the buffer should contain the entire file. Since all
     /// bytes needed should be available, this will either succeed or return an error.
     pub fn try_parse<R: ChunkReader>(&mut self, reader: &R) -> Result<()> {
+        self.try_parse_range(reader, 0..reader.len() as usize)
+    }
+
+    /// Same as [`Self::try_parse`], but only `file_range` bytes of the original file are available.
+    /// Will return an error if bytes are insufficient.
+    pub fn try_parse_range<R: ChunkReader>(
+        &mut self,
+        reader: &R,
+        file_range: Range<usize>,
+    ) -> Result<()> {
         self.metadata = Some(Self::parse_metadata(reader)?);
 
         // we can return if page indexes aren't requested
@@ -165,16 +170,15 @@ impl ParquetMetaDataReader {
             None => return Ok(()),
         };
 
-        let bytes_needed = range.end - range.start;
-        if bytes_needed > reader.len() as usize {
-            return Err(eof_err!(
-                "Invalid Parquet file. Reported page index length of {} bytes, but file is only {} bytes",
-                bytes_needed,
-                reader.len()
-            ));
+        // Check to see if needed range is within `file_range`. Checking `range.end` seems
+        // redundant, but it guards against `range_for_page_index()` returning garbage.
+        // TODO(ets): should probably add a new error type...IOOB is a little tortured
+        if !(file_range.contains(&range.start) && file_range.contains(&range.end)) {
+            return Err(ParquetError::IndexOutOfBound(range.start, range.end));
         }
 
-        let bytes = reader.get_bytes(range.start as u64, bytes_needed)?;
+        let bytes_needed = range.end - range.start;
+        let bytes = reader.get_bytes((range.start - file_range.start) as u64, bytes_needed)?;
         let offset = range.start;
 
         self.parse_column_index(&bytes, offset)?;
@@ -571,8 +575,10 @@ mod tests {
 
     use crate::basic::SortOrder;
     use crate::basic::Type;
+    use crate::file::reader::Length;
     use crate::format::TypeDefinedOrder;
     use crate::schema::types::Type as SchemaType;
+    use crate::util::test_common::file_util::get_test_file;
 
     #[test]
     fn test_parse_metadata_size_smaller_than_footer() {
@@ -654,5 +660,62 @@ mod tests {
         let t_column_orders = Some(vec![TColumnOrder::TYPEORDER(TypeDefinedOrder::new())]);
 
         ParquetMetaDataReader::parse_column_orders(t_column_orders, &schema_descr);
+    }
+
+    #[test]
+    fn test_simple() {
+        let file = get_test_file("alltypes_tiny_pages.parquet");
+        let len = file.len() as usize;
+
+        let mut reader = ParquetMetaDataReader::new().with_page_indexes(true);
+
+        // read entire file
+        let bytes = file.get_bytes(0, len).unwrap();
+        reader.try_parse(&bytes).unwrap();
+        let metadata = reader.finish().unwrap();
+        assert!(metadata.column_index.is_some());
+        assert!(metadata.offset_index.is_some());
+
+        // read more than enough of file
+        let range = 320000..len;
+        let bytes = file
+            .get_bytes(range.start as u64, range.end - range.start)
+            .unwrap();
+        reader.try_parse_range(&bytes, range).unwrap();
+        let metadata = reader.finish().unwrap();
+        assert!(metadata.column_index.is_some());
+        assert!(metadata.offset_index.is_some());
+
+        // exactly enough
+        let range = 323583..len;
+        let bytes = file
+            .get_bytes(range.start as u64, range.end - range.start)
+            .unwrap();
+        reader.try_parse_range(&bytes, range).unwrap();
+        let metadata = reader.finish().unwrap();
+        assert!(metadata.column_index.is_some());
+        assert!(metadata.offset_index.is_some());
+
+        // not enough for page index
+        let range = 323584..len;
+        let bytes = file
+            .get_bytes(range.start as u64, range.end - range.start)
+            .unwrap();
+        let err = reader.try_parse_range(&bytes, range).unwrap_err();
+        match err {
+            ParquetError::IndexOutOfBound(323583, 452504) => (),
+            _ => panic!("unexpected error"),
+        }
+
+        // not enough for file metadata
+        let range = 452505..len;
+        let bytes = file
+            .get_bytes(range.start as u64, range.end - range.start)
+            .unwrap();
+        let err = reader.try_parse_range(&bytes, range).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Parquet error: Invalid Parquet file. Reported metadata length of 1721 + 8 byte footer, but file is only 1728 bytes"
+        );
     }
 }
