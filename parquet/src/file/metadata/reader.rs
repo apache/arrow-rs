@@ -177,6 +177,7 @@ impl ParquetMetaDataReader {
 
     /// Same as [`Self::try_parse()`], but only `file_range` bytes of the original file are
     /// available.
+    // TODO(ets): should this also use IndexOutOfBound when range doesn't include the whole footer?
     pub fn try_parse_range<R: ChunkReader>(
         &mut self,
         reader: &R,
@@ -737,10 +738,22 @@ mod tests {
         let bytes = file
             .get_bytes(range.start as u64, range.end - range.start)
             .unwrap();
-        let err = reader.try_parse_range(&bytes, range).unwrap_err();
-        match err {
-            ParquetError::IndexOutOfBound(323583, 452504) => (),
-            _ => panic!("unexpected error"),
+        match reader.try_parse_range(&bytes, range) {
+            Ok(_) => (),
+            Err(err) => match err {
+                // expected error, try again with provided bounds
+                ParquetError::IndexOutOfBound(start, _) => {
+                    let range = start..len;
+                    let bytes = file
+                        .get_bytes(range.start as u64, range.end - range.start)
+                        .unwrap();
+                    reader.try_parse_range(&bytes, range).unwrap();
+                    let metadata = reader.finish().unwrap();
+                    assert!(metadata.column_index.is_some());
+                    assert!(metadata.offset_index.is_some());
+                }
+                _ => panic!("unexpected error"),
+            },
         }
 
         // not enough for file metadata
