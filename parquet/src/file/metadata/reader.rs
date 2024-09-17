@@ -71,13 +71,13 @@ pub fn parquet_metadata_from_file<R: ChunkReader>(
 /// # use parquet::file::metadata::{ParquetMetaData, ParquetMetaDataReader};
 /// # fn open_parquet_file(path: &str) -> std::fs::File { unimplemented!(); }
 /// // read parquet metadata including page indexes
-/// let file = open_parquet_file("some_path.parquet")
-/// let reader = ParquetMetaDataReader::new()
+/// let file = open_parquet_file("some_path.parquet");
+/// let mut reader = ParquetMetaDataReader::new()
 ///     .with_page_indexes(true);
-/// reader.try_parse(file).unwrap();
-/// let metadata = reader.finish.unwrap();
-/// assert!(metadata.column_index.is_some());
-/// assert!(metadata.offset_index.is_some());
+/// reader.try_parse(&file).unwrap();
+/// let metadata = reader.finish().unwrap();
+/// assert!(metadata.column_index().is_some());
+/// assert!(metadata.offset_index().is_some());
 /// ```
 pub struct ParquetMetaDataReader {
     metadata: Option<ParquetMetaData>,
@@ -116,9 +116,7 @@ impl ParquetMetaDataReader {
 
     /// Enable or disable reading the page index structures described in
     /// "[Parquet page index]: Layout to Support Page Skipping". Equivalent to:
-    /// ```no_run
-    /// self.with_column_indexes(val).with_offset_indexes(val)
-    /// ```
+    /// `self.with_column_indexes(val).with_offset_indexes(val)`
     ///
     /// [Parquet page index]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
     pub fn with_page_indexes(self, val: bool) -> Self {
