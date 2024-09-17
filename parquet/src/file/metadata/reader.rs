@@ -441,7 +441,7 @@ impl ParquetMetaDataReader {
 
         // Input source may be smaller than `prefetch` bytes, so just check that it's
         // at least enough to read the Parquet footer.
-        if suffix_len < prefetch {
+        if suffix_len < FOOTER_SIZE {
             return Err(eof_err!(
                 "footer requires {} bytes, but could only read {}",
                 FOOTER_SIZE,
