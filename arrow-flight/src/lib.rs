@@ -120,6 +120,7 @@ pub mod utils;
 
 #[cfg(feature = "flight-sql-experimental")]
 pub mod sql;
+mod streams;
 
 use flight_descriptor::DescriptorType;
 

@@ -989,6 +989,27 @@ mod tests {
         vec![false, true, true, false, false, false, false, true, true, true, true]
     );
 
+    // 😈 is four bytes long.
+    test_utf8_scalar!(
+        test_uff8_array_like_multibyte,
+        vec![
+            "sdlkdfFooßsdfs",
+            "sdlkdfFooSSdggs",
+            "sdlkdfFoosssdsd",
+            "FooS",
+            "Foos",
+            "ﬀooSS",
+            "ﬀooß",
+            "😃sadlksffofsSsh😈klF",
+            "😱slgffoesSsh😈klF",
+            "FFKoSS",
+            "longer than 12 bytes FFKoSS",
+        ],
+        "%Ssh😈klF",
+        like,
+        vec![false, false, false, false, false, false, false, true, true, false, false]
+    );
+
     test_utf8_scalar!(
         test_utf8_array_ilike_scalar_one,
         vec![

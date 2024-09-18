@@ -1298,11 +1298,8 @@ mod tests {
 
     #[test]
     fn test_byte_array_from() {
-        assert_eq!(
-            ByteArray::from(vec![b'A', b'B', b'C']).data(),
-            &[b'A', b'B', b'C']
-        );
-        assert_eq!(ByteArray::from("ABC").data(), &[b'A', b'B', b'C']);
+        assert_eq!(ByteArray::from(b"ABC".to_vec()).data(), b"ABC");
+        assert_eq!(ByteArray::from("ABC").data(), b"ABC");
         assert_eq!(
             ByteArray::from(Bytes::from(vec![1u8, 2u8, 3u8, 4u8, 5u8])).data(),
             &[1u8, 2u8, 3u8, 4u8, 5u8]

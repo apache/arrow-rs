@@ -568,13 +568,9 @@ macro_rules! make_data_page_stats_iterator {
                 let next = self.iter.next();
                 match next {
                     Some((len, index)) => match index {
-                        $index_type(native_index) => Some(
-                            native_index
-                                .indexes
-                                .iter()
-                                .map(|x| $func(x))
-                                .collect::<Vec<_>>(),
-                        ),
+                        $index_type(native_index) => {
+                            Some(native_index.indexes.iter().map($func).collect::<Vec<_>>())
+                        }
                         // No matching `Index` found;
                         // thus no statistics that can be extracted.
                         // We return vec![None; len] to effectively

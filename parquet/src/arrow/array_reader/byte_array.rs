@@ -120,26 +120,31 @@ impl<I: OffsetSizeTrait> ArrayReader for ByteArrayReader<I> {
         self.record_reader.reset();
 
         let array: ArrayRef = match self.data_type {
+            // Apply conversion to all elements regardless of null slots as the conversions
+            // are infallible. This improves performance by avoiding a branch in the inner
+            // loop (see docs for `PrimitiveArray::from_unary`).
             ArrowType::Decimal128(p, s) => {
                 let array = buffer.into_array(null_buffer, ArrowType::Binary);
                 let binary = array.as_any().downcast_ref::<BinaryArray>().unwrap();
-                let decimal = binary
-                    .iter()
-                    .map(|opt| Some(i128::from_be_bytes(sign_extend_be(opt?))))
-                    .collect::<Decimal128Array>()
-                    .with_precision_and_scale(p, s)?;
-
+                // Null slots will have 0 length, so we need to check for that in the lambda
+                // or sign_extend_be will panic.
+                let decimal = Decimal128Array::from_unary(binary, |x| match x.len() {
+                    0 => i128::default(),
+                    _ => i128::from_be_bytes(sign_extend_be(x)),
+                })
+                .with_precision_and_scale(p, s)?;
                 Arc::new(decimal)
             }
             ArrowType::Decimal256(p, s) => {
                 let array = buffer.into_array(null_buffer, ArrowType::Binary);
                 let binary = array.as_any().downcast_ref::<BinaryArray>().unwrap();
-                let decimal = binary
-                    .iter()
-                    .map(|opt| Some(i256::from_be_bytes(sign_extend_be(opt?))))
-                    .collect::<Decimal256Array>()
-                    .with_precision_and_scale(p, s)?;
-
+                // Null slots will have 0 length, so we need to check for that in the lambda
+                // or sign_extend_be will panic.
+                let decimal = Decimal256Array::from_unary(binary, |x| match x.len() {
+                    0 => i256::default(),
+                    _ => i256::from_be_bytes(sign_extend_be(x)),
+                })
+                .with_precision_and_scale(p, s)?;
                 Arc::new(decimal)
             }
             _ => buffer.into_array(null_buffer, self.data_type.clone()),

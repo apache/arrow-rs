@@ -23,7 +23,6 @@ use crate::data_type::{AsBytes, ByteArray, FixedLenByteArray, Int96};
 use crate::errors::ParquetError;
 use crate::file::metadata::LevelHistogram;
 use crate::format::{BoundaryOrder, ColumnIndex};
-use crate::util::bit_util::from_le_slice;
 use std::fmt::Debug;
 
 /// Typed statistics for one data page
@@ -192,7 +191,7 @@ impl<T: ParquetValueType> NativeIndex<T> {
         let indexes = index
             .min_values
             .iter()
-            .zip(index.max_values.into_iter())
+            .zip(index.max_values.iter())
             .zip(index.null_pages.into_iter())
             .zip(null_counts.into_iter())
             .zip(rep_hists.into_iter())
@@ -205,9 +204,10 @@ impl<T: ParquetValueType> NativeIndex<T> {
                     let (min, max) = if is_null {
                         (None, None)
                     } else {
-                        let min = min.as_slice();
-                        let max = max.as_slice();
-                        (Some(from_le_slice::<T>(min)), Some(from_le_slice::<T>(max)))
+                        (
+                            Some(T::try_from_le_slice(min)?),
+                            Some(T::try_from_le_slice(max)?),
+                        )
                     };
                     Ok(PageIndex {
                         min,
@@ -230,16 +230,14 @@ impl<T: ParquetValueType> NativeIndex<T> {
         let min_values = self
             .indexes
             .iter()
-            .map(|x| x.min_bytes().map(|x| x.to_vec()))
-            .collect::<Option<Vec<_>>>()
-            .unwrap_or_else(|| vec![vec![]; self.indexes.len()]);
+            .map(|x| x.min_bytes().unwrap_or(&[]).to_vec())
+            .collect::<Vec<_>>();
 
         let max_values = self
             .indexes
             .iter()
-            .map(|x| x.max_bytes().map(|x| x.to_vec()))
-            .collect::<Option<Vec<_>>>()
-            .unwrap_or_else(|| vec![vec![]; self.indexes.len()]);
+            .map(|x| x.max_bytes().unwrap_or(&[]).to_vec())
+            .collect::<Vec<_>>();
 
         let null_counts = self
             .indexes
@@ -320,5 +318,30 @@ mod tests {
         assert_eq!(page_index.null_count(), None);
         assert_eq!(page_index.repetition_level_histogram(), None);
         assert_eq!(page_index.definition_level_histogram(), None);
+    }
+
+    #[test]
+    fn test_invalid_column_index() {
+        let column_index = ColumnIndex {
+            null_pages: vec![true, false],
+            min_values: vec![
+                vec![],
+                vec![], // this shouldn't be empty as null_pages[1] is false
+            ],
+            max_values: vec![
+                vec![],
+                vec![], // this shouldn't be empty as null_pages[1] is false
+            ],
+            null_counts: None,
+            repetition_level_histograms: None,
+            definition_level_histograms: None,
+            boundary_order: BoundaryOrder::UNORDERED,
+        };
+
+        let err = NativeIndex::<i32>::try_new(column_index).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Parquet error: error converting value, expected 4 bytes got 0"
+        );
     }
 }

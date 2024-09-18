@@ -1016,6 +1016,36 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
         PrimitiveArray::new(values, Some(nulls))
     }
 
+    /// Applies a unary infallible function to each value in an array, producing a
+    /// new primitive array.
+    ///
+    /// # Null Handling
+    ///
+    /// See [`Self::unary`] for more information on null handling.
+    ///
+    /// # Example: create an [`Int16Array`] from an [`ArrayAccessor`] with item type `&[u8]`
+    /// ```
+    /// use arrow_array::{Array, FixedSizeBinaryArray, Int16Array};
+    /// let input_arg = vec![ vec![1, 0], vec![2, 0], vec![3, 0] ];
+    /// let arr = FixedSizeBinaryArray::try_from_iter(input_arg.into_iter()).unwrap();
+    /// let c = Int16Array::from_unary(&arr, |x| i16::from_le_bytes(x[..2].try_into().unwrap()));
+    /// assert_eq!(c, Int16Array::from(vec![Some(1i16), Some(2i16), Some(3i16)]));
+    /// ```
+    pub fn from_unary<U: ArrayAccessor, F>(left: U, mut op: F) -> Self
+    where
+        F: FnMut(U::Item) -> T::Native,
+    {
+        let nulls = left.logical_nulls();
+        let buffer = unsafe {
+            // SAFETY: i in range 0..left.len()
+            let iter = (0..left.len()).map(|i| op(left.value_unchecked(i)));
+            // SAFETY: upper bound is trusted because `iter` is over a range
+            Buffer::from_trusted_len_iter(iter)
+        };
+
+        PrimitiveArray::new(buffer.into(), nulls)
+    }
+
     /// Returns a `PrimitiveBuilder` for this array, suitable for mutating values
     /// in place.
     ///

@@ -19,11 +19,7 @@
 
 use std::{collections::HashMap, sync::Arc};
 
-use arrow_array::types::Int32Type;
-use arrow_array::{
-    ArrayRef, BinaryViewArray, DictionaryArray, Float64Array, RecordBatch, StringViewArray,
-    UInt8Array,
-};
+use arrow_array::{ArrayRef, RecordBatch};
 use arrow_cast::pretty::pretty_format_batches;
 use arrow_flight::flight_descriptor::DescriptorType;
 use arrow_flight::FlightDescriptor;
@@ -35,6 +31,9 @@ use arrow_flight::{
 use arrow_schema::{DataType, Field, Fields, Schema, SchemaRef};
 use bytes::Bytes;
 use futures::{StreamExt, TryStreamExt};
+
+mod common;
+use common::utils::{make_dictionary_batch, make_primitive_batch, make_view_batches};
 
 #[tokio::test]
 async fn test_empty() {
@@ -413,95 +412,6 @@ async fn test_mismatched_schema_message() {
         "Error decoding ipc RecordBatch: Invalid argument error",
     )
     .await;
-}
-
-/// Make a primitive batch for testing
-///
-/// Example:
-/// i: 0, 1, None, 3, 4
-/// f: 5.0, 4.0, None, 2.0, 1.0
-fn make_primitive_batch(num_rows: usize) -> RecordBatch {
-    let i: UInt8Array = (0..num_rows)
-        .map(|i| {
-            if i == num_rows / 2 {
-                None
-            } else {
-                Some(i.try_into().unwrap())
-            }
-        })
-        .collect();
-
-    let f: Float64Array = (0..num_rows)
-        .map(|i| {
-            if i == num_rows / 2 {
-                None
-            } else {
-                Some((num_rows - i) as f64)
-            }
-        })
-        .collect();
-
-    RecordBatch::try_from_iter(vec![("i", Arc::new(i) as ArrayRef), ("f", Arc::new(f))]).unwrap()
-}
-
-/// Make a dictionary batch for testing
-///
-/// Example:
-/// a: value0, value1, value2, None, value1, value2
-fn make_dictionary_batch(num_rows: usize) -> RecordBatch {
-    let values: Vec<_> = (0..num_rows)
-        .map(|i| {
-            if i == num_rows / 2 {
-                None
-            } else {
-                // repeat some values for low cardinality
-                let v = i / 3;
-                Some(format!("value{v}"))
-            }
-        })
-        .collect();
-
-    let a: DictionaryArray<Int32Type> = values
-        .iter()
-        .map(|s| s.as_ref().map(|s| s.as_str()))
-        .collect();
-
-    RecordBatch::try_from_iter(vec![("a", Arc::new(a) as ArrayRef)]).unwrap()
-}
-
-fn make_view_batches(num_rows: usize) -> RecordBatch {
-    const LONG_TEST_STRING: &str =
-        "This is a long string to make sure binary view array handles it";
-    let schema = Schema::new(vec![
-        Field::new("field1", DataType::BinaryView, true),
-        Field::new("field2", DataType::Utf8View, true),
-    ]);
-
-    let string_view_values: Vec<Option<&str>> = (0..num_rows)
-        .map(|i| match i % 3 {
-            0 => None,
-            1 => Some("foo"),
-            2 => Some(LONG_TEST_STRING),
-            _ => unreachable!(),
-        })
-        .collect();
-
-    let bin_view_values: Vec<Option<&[u8]>> = (0..num_rows)
-        .map(|i| match i % 3 {
-            0 => None,
-            1 => Some("bar".as_bytes()),
-            2 => Some(LONG_TEST_STRING.as_bytes()),
-            _ => unreachable!(),
-        })
-        .collect();
-
-    let binary_array = BinaryViewArray::from_iter(bin_view_values);
-    let utf8_array = StringViewArray::from_iter(string_view_values);
-    RecordBatch::try_new(
-        Arc::new(schema.clone()),
-        vec![Arc::new(binary_array), Arc::new(utf8_array)],
-    )
-    .unwrap()
 }
 
 /// Encodes input as a FlightData stream, and then decodes it using

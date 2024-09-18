@@ -294,105 +294,102 @@ impl<'a> PrimitiveTypeBuilder<'a> {
             ));
         }
 
-        match &self.logical_type {
-            Some(logical_type) => {
-                // If a converted type is populated, check that it is consistent with
-                // its logical type
-                if self.converted_type != ConvertedType::NONE {
-                    if ConvertedType::from(self.logical_type.clone()) != self.converted_type {
-                        return Err(general_err!(
-                            "Logical type {:?} is incompatible with converted type {} for field '{}'",
-                            logical_type,
-                            self.converted_type,
-                            self.name
-                        ));
-                    }
-                } else {
-                    // Populate the converted type for backwards compatibility
-                    basic_info.converted_type = self.logical_type.clone().into();
+        if let Some(logical_type) = &self.logical_type {
+            // If a converted type is populated, check that it is consistent with
+            // its logical type
+            if self.converted_type != ConvertedType::NONE {
+                if ConvertedType::from(self.logical_type.clone()) != self.converted_type {
+                    return Err(general_err!(
+                        "Logical type {:?} is incompatible with converted type {} for field '{}'",
+                        logical_type,
+                        self.converted_type,
+                        self.name
+                    ));
                 }
-                // Check that logical type and physical type are compatible
-                match (logical_type, self.physical_type) {
-                    (LogicalType::Map, _) | (LogicalType::List, _) => {
+            } else {
+                // Populate the converted type for backwards compatibility
+                basic_info.converted_type = self.logical_type.clone().into();
+            }
+            // Check that logical type and physical type are compatible
+            match (logical_type, self.physical_type) {
+                (LogicalType::Map, _) | (LogicalType::List, _) => {
+                    return Err(general_err!(
+                        "{:?} cannot be applied to a primitive type for field '{}'",
+                        logical_type,
+                        self.name
+                    ));
+                }
+                (LogicalType::Enum, PhysicalType::BYTE_ARRAY) => {}
+                (LogicalType::Decimal { scale, precision }, _) => {
+                    // Check that scale and precision are consistent with legacy values
+                    if *scale != self.scale {
                         return Err(general_err!(
-                            "{:?} cannot be applied to a primitive type for field '{}'",
-                            logical_type,
+                            "DECIMAL logical type scale {} must match self.scale {} for field '{}'",
+                            scale,
+                            self.scale,
                             self.name
                         ));
                     }
-                    (LogicalType::Enum, PhysicalType::BYTE_ARRAY) => {}
-                    (LogicalType::Decimal { scale, precision }, _) => {
-                        // Check that scale and precision are consistent with legacy values
-                        if *scale != self.scale {
-                            return Err(general_err!(
-                                "DECIMAL logical type scale {} must match self.scale {} for field '{}'",
-                                scale,
-                                self.scale,
-                                self.name
-                            ));
-                        }
-                        if *precision != self.precision {
-                            return Err(general_err!(
-                                "DECIMAL logical type precision {} must match self.precision {} for field '{}'",
-                                precision,
-                                self.precision,
-                                self.name
-                            ));
-                        }
-                        self.check_decimal_precision_scale()?;
-                    }
-                    (LogicalType::Date, PhysicalType::INT32) => {}
-                    (
-                        LogicalType::Time {
-                            unit: TimeUnit::MILLIS(_),
-                            ..
-                        },
-                        PhysicalType::INT32,
-                    ) => {}
-                    (LogicalType::Time { unit, .. }, PhysicalType::INT64) => {
-                        if *unit == TimeUnit::MILLIS(Default::default()) {
-                            return Err(general_err!(
-                                "Cannot use millisecond unit on INT64 type for field '{}'",
-                                self.name
-                            ));
-                        }
-                    }
-                    (LogicalType::Timestamp { .. }, PhysicalType::INT64) => {}
-                    (LogicalType::Integer { bit_width, .. }, PhysicalType::INT32)
-                        if *bit_width <= 32 => {}
-                    (LogicalType::Integer { bit_width, .. }, PhysicalType::INT64)
-                        if *bit_width == 64 => {}
-                    // Null type
-                    (LogicalType::Unknown, PhysicalType::INT32) => {}
-                    (LogicalType::String, PhysicalType::BYTE_ARRAY) => {}
-                    (LogicalType::Json, PhysicalType::BYTE_ARRAY) => {}
-                    (LogicalType::Bson, PhysicalType::BYTE_ARRAY) => {}
-                    (LogicalType::Uuid, PhysicalType::FIXED_LEN_BYTE_ARRAY) if self.length == 16 => {}
-                    (LogicalType::Uuid, PhysicalType::FIXED_LEN_BYTE_ARRAY) => {
+                    if *precision != self.precision {
                         return Err(general_err!(
-                            "UUID cannot annotate field '{}' because it is not a FIXED_LEN_BYTE_ARRAY(16) field",
+                            "DECIMAL logical type precision {} must match self.precision {} for field '{}'",
+                            precision,
+                            self.precision,
                             self.name
-                        ))
+                        ));
                     }
-                    (LogicalType::Float16, PhysicalType::FIXED_LEN_BYTE_ARRAY)
-                        if self.length == 2 => {}
-                    (LogicalType::Float16, PhysicalType::FIXED_LEN_BYTE_ARRAY) => {
+                    self.check_decimal_precision_scale()?;
+                }
+                (LogicalType::Date, PhysicalType::INT32) => {}
+                (
+                    LogicalType::Time {
+                        unit: TimeUnit::MILLIS(_),
+                        ..
+                    },
+                    PhysicalType::INT32,
+                ) => {}
+                (LogicalType::Time { unit, .. }, PhysicalType::INT64) => {
+                    if *unit == TimeUnit::MILLIS(Default::default()) {
                         return Err(general_err!(
-                            "FLOAT16 cannot annotate field '{}' because it is not a FIXED_LEN_BYTE_ARRAY(2) field",
+                            "Cannot use millisecond unit on INT64 type for field '{}'",
                             self.name
-                        ))
+                        ));
                     }
-                    (a, b) => {
-                        return Err(general_err!(
-                            "Cannot annotate {:?} from {} for field '{}'",
-                            a,
-                            b,
-                            self.name
-                        ))
-                    }
+                }
+                (LogicalType::Timestamp { .. }, PhysicalType::INT64) => {}
+                (LogicalType::Integer { bit_width, .. }, PhysicalType::INT32)
+                    if *bit_width <= 32 => {}
+                (LogicalType::Integer { bit_width, .. }, PhysicalType::INT64)
+                    if *bit_width == 64 => {}
+                // Null type
+                (LogicalType::Unknown, PhysicalType::INT32) => {}
+                (LogicalType::String, PhysicalType::BYTE_ARRAY) => {}
+                (LogicalType::Json, PhysicalType::BYTE_ARRAY) => {}
+                (LogicalType::Bson, PhysicalType::BYTE_ARRAY) => {}
+                (LogicalType::Uuid, PhysicalType::FIXED_LEN_BYTE_ARRAY) if self.length == 16 => {}
+                (LogicalType::Uuid, PhysicalType::FIXED_LEN_BYTE_ARRAY) => {
+                    return Err(general_err!(
+                        "UUID cannot annotate field '{}' because it is not a FIXED_LEN_BYTE_ARRAY(16) field",
+                        self.name
+                    ))
+                }
+                (LogicalType::Float16, PhysicalType::FIXED_LEN_BYTE_ARRAY)
+                    if self.length == 2 => {}
+                (LogicalType::Float16, PhysicalType::FIXED_LEN_BYTE_ARRAY) => {
+                    return Err(general_err!(
+                        "FLOAT16 cannot annotate field '{}' because it is not a FIXED_LEN_BYTE_ARRAY(2) field",
+                        self.name
+                    ))
+                }
+                (a, b) => {
+                    return Err(general_err!(
+                        "Cannot annotate {:?} from {} for field '{}'",
+                        a,
+                        b,
+                        self.name
+                    ))
                 }
             }
-            None => {}
         }
 
         match self.converted_type {

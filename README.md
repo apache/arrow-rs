@@ -92,12 +92,15 @@ There are several related crates in different repositories
 | [`datafusion`]           | In-memory query engine with SQL support     | [(README)][datafusion-readme]           |
 | [`ballista`]             | Distributed query execution                 | [(README)][ballista-readme]             |
 | [`object_store_opendal`] | Use [`opendal`] as [`object_store`] backend | [(README)][object_store_opendal-readme] |
+| [`parquet_opendal`]      | Use [`opendal`] for [`parquet`] Arrow IO    | [(README)][parquet_opendal-readme]      |
 
 [`datafusion`]: https://crates.io/crates/datafusion
 [`ballista`]: https://crates.io/crates/ballista
 [`object_store_opendal`]: https://crates.io/crates/object_store_opendal
 [`opendal`]: https://crates.io/crates/opendal
 [object_store_opendal-readme]: https://github.com/apache/opendal/blob/main/integrations/object_store/README.md
+[`parquet_opendal`]: https://crates.io/crates/parquet_opendal
+[parquet_opendal-readme]: https://github.com/apache/opendal/blob/main/integrations/parquet/README.md
 
 Collectively, these crates support a wider array of functionality for analytic computations in Rust.
 

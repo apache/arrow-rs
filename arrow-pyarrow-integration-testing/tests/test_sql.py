@@ -476,6 +476,29 @@ def test_tensor_array():
 
     del b
 
+
+def test_empty_recordbatch_with_row_count():
+    """
+    A pyarrow.RecordBatch with no columns but with `num_rows` set.
+
+    `datafusion-python` gets this as the result of a `count(*)` query.  
+    """
+
+    # Create an empty schema with no fields
+    batch = pa.RecordBatch.from_pydict({"a": [1, 2, 3, 4]}).select([])
+    num_rows = 4
+    assert batch.num_rows == num_rows
+    assert batch.num_columns == 0
+
+    b = rust.round_trip_record_batch(batch)
+    assert b == batch
+    assert b.schema == batch.schema
+    assert b.schema.metadata == batch.schema.metadata
+
+    assert b.num_rows == batch.num_rows
+    
+    del b
+
 def test_record_batch_reader():
     """
     Python -> Rust -> Python

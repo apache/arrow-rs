@@ -59,7 +59,7 @@ use std::convert::{From, TryFrom};
 use std::ptr::{addr_of, addr_of_mut};
 use std::sync::Arc;
 
-use arrow_array::{RecordBatchIterator, RecordBatchReader, StructArray};
+use arrow_array::{RecordBatchIterator, RecordBatchOptions, RecordBatchReader, StructArray};
 use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::ffi::Py_uintptr_t;
 use pyo3::import_exception;
@@ -354,13 +354,14 @@ impl FromPyArrow for RecordBatch {
             validate_pycapsule(array_capsule, "arrow_array")?;
 
             let schema_ptr = unsafe { schema_capsule.reference::<FFI_ArrowSchema>() };
-            let ffi_array = unsafe { FFI_ArrowArray::from_raw(array_capsule.pointer() as _) };
+            let ffi_array = unsafe { FFI_ArrowArray::from_raw(array_capsule.pointer().cast()) };
             let array_data = unsafe { ffi::from_ffi(ffi_array, schema_ptr) }.map_err(to_py_err)?;
             if !matches!(array_data.data_type(), DataType::Struct(_)) {
                 return Err(PyTypeError::new_err(
                     "Expected Struct type from __arrow_c_array.",
                 ));
             }
+            let options = RecordBatchOptions::default().with_row_count(Some(array_data.len()));
             let array = StructArray::from(array_data);
             // StructArray does not embed metadata from schema. We need to override
             // the output schema with the schema from the capsule.
@@ -371,7 +372,7 @@ impl FromPyArrow for RecordBatch {
                 0,
                 "Cannot convert nullable StructArray to RecordBatch, see StructArray documentation"
             );
-            return RecordBatch::try_new(schema, columns).map_err(to_py_err);
+            return RecordBatch::try_new_with_options(schema, columns, &options).map_err(to_py_err);
         }
 
         validate_class("RecordBatch", value)?;
@@ -386,7 +387,14 @@ impl FromPyArrow for RecordBatch {
             .map(|a| Ok(make_array(ArrayData::from_pyarrow_bound(&a)?)))
             .collect::<PyResult<_>>()?;
 
-        let batch = RecordBatch::try_new(schema, arrays).map_err(to_py_err)?;
+        let row_count = value
+            .getattr("num_rows")
+            .ok()
+            .and_then(|x| x.extract().ok());
+        let options = RecordBatchOptions::default().with_row_count(row_count);
+
+        let batch =
+            RecordBatch::try_new_with_options(schema, arrays, &options).map_err(to_py_err)?;
         Ok(batch)
     }
 }

@@ -15,26 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Statically typed implementations of Arrow Arrays
-//!
-//! **See [arrow_array] for examples and usage instructions**
+//! Print the arrow version and exit
 
-// --------------------- Array & ArrayData ---------------------
-pub use arrow_array::builder::*;
-pub use arrow_array::cast::*;
-pub use arrow_array::iterator::*;
-pub use arrow_array::*;
-pub use arrow_data::{
-    layout, ArrayData, ArrayDataBuilder, ArrayDataRef, BufferSpec, ByteView, DataTypeLayout,
-};
+use arrow::ARROW_VERSION;
 
-pub use arrow_data::transform::{Capacities, MutableArrayData};
-
-#[cfg(feature = "ffi")]
-#[allow(deprecated)]
-pub use arrow_array::ffi::export_array_into_raw;
-
-// --------------------- Array's values comparison ---------------------
-
-#[allow(deprecated)]
-pub use arrow_ord::ord::{build_compare, make_comparator, DynComparator};
+fn main() {
+    println!("arrow version: {ARROW_VERSION}");
+}

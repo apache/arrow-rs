@@ -203,22 +203,34 @@ pub enum DataType {
     /// A signed 64-bit date representing the elapsed time since UNIX epoch (1970-01-01)
     /// in milliseconds.
     ///
-    /// According to the specification (see [Schema.fbs]), this should be treated as the number of
-    /// days, in milliseconds, since the UNIX epoch. Therefore, values must be evenly divisible by
-    /// `86_400_000` (the number of milliseconds in a standard day).
+    /// # Valid Ranges
     ///
-    /// The reason for this is for compatibility with other language's native libraries,
-    /// such as Java, which historically lacked a dedicated date type
-    /// and only supported timestamps.
+    /// According to the Arrow specification ([Schema.fbs]), values of Date64
+    /// are treated as the number of *days*, in milliseconds, since the UNIX
+    /// epoch. Therefore, values of this type  must be evenly divisible by
+    /// `86_400_000`, the number of milliseconds in a standard day.
     ///
-    /// Practically, validation that values of this type are evenly divisible by `86_400_000` is not enforced
-    /// by this library for performance and usability reasons. Date64 values will be treated similarly to the
-    /// `Timestamp(TimeUnit::Millisecond, None)` type, in that its values will be printed showing the time of
-    /// day if the value does not represent an exact day, and arithmetic can be done at the millisecond
-    /// granularity to change the time represented.
+    /// It is not valid to store milliseconds that do not represent an exact
+    /// day. The reason for this restriction is compatibility with other
+    /// language's native libraries (specifically Java), which historically
+    /// lacked a dedicated date type and only supported timestamps.
     ///
-    /// Users should prefer using Date32 to cleanly represent the number of days, or one of the Timestamp
-    /// variants to include time as part of the representation, depending on their use case.
+    /// # Validation
+    ///
+    /// This library does not validate or enforce that Date64 values are evenly
+    /// divisible by `86_400_000`  for performance and usability reasons. Date64
+    /// values are treated similarly to `Timestamp(TimeUnit::Millisecond,
+    /// None)`: values will be displayed with a time of day if the value does
+    /// not represent an exact day, and arithmetic will be done at the
+    /// millisecond granularity.
+    ///
+    /// # Recommendation
+    ///
+    /// Users should prefer [`DataType::Date32`] to cleanly represent the number
+    /// of days, or one of the Timestamp variants to include time as part of the
+    /// representation, depending on their use case.
+    ///
+    /// # Further Reading
     ///
     /// For more details, see [#5288](https://github.com/apache/arrow-rs/issues/5288).
     ///
@@ -249,9 +261,7 @@ pub enum DataType {
     /// A single LargeBinary array can store up to [`i64::MAX`] bytes
     /// of binary data in total.
     LargeBinary,
-    /// (NOT YET FULLY SUPPORTED) Opaque binary data of variable length.
-    ///
-    /// Note this data type is not yet fully supported. Using it with arrow APIs may result in `panic`s.
+    /// Opaque binary data of variable length.
     ///
     /// Logically the same as [`Self::Binary`], but the internal representation uses a view
     /// struct that contains the string length and either the string's entire data
@@ -268,9 +278,7 @@ pub enum DataType {
     /// A single LargeUtf8 array can store up to [`i64::MAX`] bytes
     /// of string data in total.
     LargeUtf8,
-    /// (NOT YET FULLY SUPPORTED)  A variable-length string in Unicode with UTF-8 encoding
-    ///
-    /// Note this data type is not yet fully supported. Using it with arrow APIs may result in `panic`s.
+    /// A variable-length string in Unicode with UTF-8 encoding
     ///
     /// Logically the same as [`Self::Utf8`], but the internal representation uses a view
     /// struct that contains the string length and either the string's entire data
