@@ -354,7 +354,7 @@ impl FromPyArrow for RecordBatch {
             validate_pycapsule(array_capsule, "arrow_array")?;
 
             let schema_ptr = unsafe { schema_capsule.reference::<FFI_ArrowSchema>() };
-            let ffi_array = unsafe { FFI_ArrowArray::from_raw(array_capsule.pointer() as _) };
+            let ffi_array = unsafe { FFI_ArrowArray::from_raw(array_capsule.pointer().cast()) };
             let array_data = unsafe { ffi::from_ffi(ffi_array, schema_ptr) }.map_err(to_py_err)?;
             if !matches!(array_data.data_type(), DataType::Struct(_)) {
                 return Err(PyTypeError::new_err(
