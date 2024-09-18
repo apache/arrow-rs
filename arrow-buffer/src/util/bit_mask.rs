@@ -20,8 +20,10 @@
 use crate::bit_chunk_iterator::BitChunks;
 use crate::bit_util::{ceil, get_bit, set_bit};
 
-/// Sets all bits on `write_data` in the range `[offset_write..offset_write+len]` to be equal to the
-/// bits in `data` in the range `[offset_read..offset_read+len]`
+/// Util function to set bits in a slice of bytes.
+///
+/// This will sets all bits on `write_data` in the range `[offset_write..offset_write+len]`
+/// to be equal to the bits in `data` in the range `[offset_read..offset_read+len]`
 /// returns the number of `0` bits `data[offset_read..offset_read+len]`
 pub fn set_bits(
     write_data: &mut [u8],

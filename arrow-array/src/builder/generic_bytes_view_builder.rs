@@ -512,7 +512,8 @@ fn make_inlined_view<const LEN: usize>(data: &[u8]) -> u128 {
     u128::from_le_bytes(view_buffer)
 }
 
-/// Create a view based on the given data, block id and offset
+/// Create a view based on the given data, block id and offset.
+///
 /// Note that the code below is carefully examined with x86_64 assembly code: <https://godbolt.org/z/685YPsd5G>
 /// The goal is to avoid calling into `ptr::copy_non_interleave`, which makes function call (i.e., not inlined),
 /// which slows down things.

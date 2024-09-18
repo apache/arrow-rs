@@ -329,8 +329,10 @@ where
     Ok(Ok(PrimitiveArray::<T>::from(array_data)))
 }
 
-/// Applies the provided fallible binary operation across `a` and `b`, returning any error,
-/// and collecting the results into a [`PrimitiveArray`]. If any index is null in either `a`
+/// Applies the provided fallible binary operation across `a` and `b`.
+///
+/// This will returning any error encountered, or collecting the results into
+/// a [`PrimitiveArray`]. If any index is null in either `a`
 /// or `b`, the corresponding index in the result will also be null
 ///
 /// Like [`try_unary`] the function is only evaluated for non-null indices
@@ -381,12 +383,15 @@ where
 }
 
 /// Applies the provided fallible binary operation across `a` and `b` by mutating the mutable
-/// [`PrimitiveArray`] `a` with the results, returning any error. If any index is null in
-/// either `a` or `b`, the corresponding index in the result will also be null
+/// [`PrimitiveArray`] `a` with the results.
 ///
-/// Like [`try_unary`] the function is only evaluated for non-null indices
+/// Returning any error encountered, or collecting the results into a [`PrimitiveArray`] as return
+/// value. If any index is null in either `a` or `b`, the corresponding index in the result will
+/// also be null.
 ///
-/// See [`binary_mut`] for errors and buffer reuse information
+/// Like [`try_unary`] the function is only evaluated for non-null indices.
+///
+/// See [`binary_mut`] for errors and buffer reuse information.
 pub fn try_binary_mut<T, F>(
     a: PrimitiveArray<T>,
     b: &PrimitiveArray<T>,

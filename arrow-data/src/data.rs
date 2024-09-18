@@ -161,9 +161,11 @@ pub(crate) fn new_buffers(data_type: &DataType, capacity: usize) -> [MutableBuff
     }
 }
 
-/// A generic representation of Arrow array data which encapsulates common attributes and
-/// operations for Arrow array. Specific operations for different arrays types (e.g.,
-/// primitive, list, struct) are implemented in `Array`.
+/// A generic representation of Arrow array data which encapsulates common attributes
+/// and operations for Arrow array.
+///
+/// Specific operations for different arrays types (e.g., primitive, list, struct)
+/// are implemented in `Array`.
 ///
 /// # Memory Layout
 ///

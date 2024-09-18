@@ -18,6 +18,7 @@
 use crate::{BooleanBufferBuilder, MutableBuffer, NullBuffer};
 
 /// Builder for creating the null bit buffer.
+///
 /// This builder only materializes the buffer when we append `false`.
 /// If you only append `true`s to the builder, what you get will be
 /// `None` when calling [`finish`](#method.finish).

@@ -45,6 +45,7 @@ fn bit_length_impl<P: ArrowPrimitiveType>(
 }
 
 /// Returns an array of Int32/Int64 denoting the length of each value in the array.
+///
 /// For list array, length is the number of elements in each list.
 /// For string array and binary array, length is the number of bytes of each value.
 ///

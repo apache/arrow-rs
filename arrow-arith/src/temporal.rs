@@ -666,6 +666,7 @@ impl<T: Datelike> ChronoDateExt for T {
 
 /// Parse the given string into a string representing fixed-offset that is correct as of the given
 /// UTC NaiveDateTime.
+///
 /// Note that the offset is function of time and can vary depending on whether daylight savings is
 /// in effect or not. e.g. Australia/Sydney is +10:00 or +11:00 depending on DST.
 #[deprecated(note = "Use arrow_array::timezone::Tz instead")]
