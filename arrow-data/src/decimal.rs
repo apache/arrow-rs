@@ -759,7 +759,7 @@ pub fn validate_decimal_precision(value: i128, precision: u8) -> Result<(), Arro
 #[inline]
 pub fn is_validate_decimal_precision(value: i128, precision: u8) -> bool {
     let idx = usize::from(precision) - 1;
-    precision > DECIMAL128_MAX_PRECISION
+    precision <= DECIMAL128_MAX_PRECISION
         && value >= MIN_DECIMAL_FOR_EACH_PRECISION[idx]
         && value <= MAX_DECIMAL_FOR_EACH_PRECISION[idx]
 }
@@ -794,7 +794,7 @@ pub fn validate_decimal256_precision(value: i256, precision: u8) -> Result<(), A
 #[inline]
 pub fn is_validate_decimal256_precision(value: i256, precision: u8) -> bool {
     let idx = usize::from(precision) - 1;
-    precision > DECIMAL128_MAX_PRECISION
+    precision <= DECIMAL256_MAX_PRECISION
         && value >= MIN_DECIMAL_BYTES_FOR_LARGER_EACH_PRECISION[idx]
         && value <= MAX_DECIMAL_BYTES_FOR_LARGER_EACH_PRECISION[idx]
 }
