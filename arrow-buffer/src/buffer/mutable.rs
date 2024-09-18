@@ -80,10 +80,7 @@ mod private {
 /// allocator from a type like [`Vec`] using [`MutableBuffer::from`]. A example can be found in
 /// the [allocator_api example](https://github.com/apache/arrow-rs/tree/master/arrow/examples).
 #[derive(Debug)]
-pub struct MutableBuffer<
-    #[cfg(feature = "allocator_api")] A: Allocator = Global,
-    #[cfg(not(feature = "allocator_api"))] A: Allocator = Global,
-> {
+pub struct MutableBuffer<A: Allocator = Global> {
     // dangling iff capacity = 0
     data: NonNull<u8>,
     // invariant: len <= capacity
@@ -96,7 +93,8 @@ pub struct MutableBuffer<
     allocator: A,
 }
 
-impl MutableBuffer {
+/// Constructors under default allocator
+impl MutableBuffer<Global> {
     /// Allocate a new [MutableBuffer] with initial capacity to be at least `capacity`.
     ///
     /// See [`MutableBuffer::with_capacity`].
@@ -193,6 +191,45 @@ impl MutableBuffer {
         MutableBuffer::from_len_zeroed(num_bytes)
     }
 
+    /// Invokes `f` with values `0..len` collecting the boolean results into a new `MutableBuffer`
+    ///
+    /// This is similar to `from_trusted_len_iter_bool`, however, can be significantly faster
+    /// as it eliminates the conditional `Iterator::next`
+    #[inline]
+    pub fn collect_bool<F: FnMut(usize) -> bool>(len: usize, mut f: F) -> Self {
+        let mut buffer = Self::new(bit_util::ceil(len, 64) * 8);
+
+        let chunks = len / 64;
+        let remainder = len % 64;
+        for chunk in 0..chunks {
+            let mut packed = 0;
+            for bit_idx in 0..64 {
+                let i = bit_idx + chunk * 64;
+                packed |= (f(i) as u64) << bit_idx;
+            }
+
+            // SAFETY: Already allocated sufficient capacity
+            unsafe { buffer.push_unchecked(packed) }
+        }
+
+        if remainder != 0 {
+            let mut packed = 0;
+            for bit_idx in 0..remainder {
+                let i = bit_idx + chunks * 64;
+                packed |= (f(i) as u64) << bit_idx;
+            }
+
+            // SAFETY: Already allocated sufficient capacity
+            unsafe { buffer.push_unchecked(packed) }
+        }
+
+        buffer.truncate(bit_util::ceil(len, 8));
+        buffer
+    }
+}
+
+/// General methods
+impl<A: Allocator> MutableBuffer<A> {
     /// Set the bits in the range of `[0, end)` to 0 (if `val` is false), or 1 (if `val`
     /// is true). Also extend the length of this buffer to be `end`.
     ///
@@ -334,12 +371,12 @@ impl MutableBuffer {
 
     /// Returns the data stored in this buffer as a slice.
     pub fn as_slice(&self) -> &[u8] {
-        self
+        unsafe { std::slice::from_raw_parts(self.data.as_ptr(), self.len) }
     }
 
     /// Returns the data stored in this buffer as a mutable slice.
     pub fn as_slice_mut(&mut self) -> &mut [u8] {
-        self
+        unsafe { std::slice::from_raw_parts_mut(self.data.as_ptr(), self.len) }
     }
 
     /// Returns a raw pointer to this buffer's internal memory
@@ -470,53 +507,18 @@ impl MutableBuffer {
         assert!(len <= self.capacity());
         self.len = len;
     }
-
-    /// Invokes `f` with values `0..len` collecting the boolean results into a new `MutableBuffer`
-    ///
-    /// This is similar to `from_trusted_len_iter_bool`, however, can be significantly faster
-    /// as it eliminates the conditional `Iterator::next`
-    #[inline]
-    pub fn collect_bool<F: FnMut(usize) -> bool>(len: usize, mut f: F) -> Self {
-        let mut buffer = Self::new(bit_util::ceil(len, 64) * 8);
-
-        let chunks = len / 64;
-        let remainder = len % 64;
-        for chunk in 0..chunks {
-            let mut packed = 0;
-            for bit_idx in 0..64 {
-                let i = bit_idx + chunk * 64;
-                packed |= (f(i) as u64) << bit_idx;
-            }
-
-            // SAFETY: Already allocated sufficient capacity
-            unsafe { buffer.push_unchecked(packed) }
-        }
-
-        if remainder != 0 {
-            let mut packed = 0;
-            for bit_idx in 0..remainder {
-                let i = bit_idx + chunks * 64;
-                packed |= (f(i) as u64) << bit_idx;
-            }
-
-            // SAFETY: Already allocated sufficient capacity
-            unsafe { buffer.push_unchecked(packed) }
-        }
-
-        buffer.truncate(bit_util::ceil(len, 8));
-        buffer
-    }
 }
 
 #[cfg(feature = "allocator_api")]
+/// Constructors for custom allocator
 impl<A: Allocator> MutableBuffer<A> {
     /// Allocate a new [MutableBuffer] with initial capacity to be at least `capacity`
     /// in the given allocator.
     ///
     /// See [`MutableBuffer::with_capacity_in`].
     #[inline]
-    pub fn new_in(allocator: A, capacity: usize) -> Self {
-        Self::with_capacity_in(allocator, capacity)
+    pub fn new_in(capacity: usize, allocator: A) -> Self {
+        Self::with_capacity_in(capacity, allocator)
     }
 
     /// Allocate a new [MutableBuffer] with initial capacity to be at least `capacity`.
@@ -527,7 +529,7 @@ impl<A: Allocator> MutableBuffer<A> {
     /// If `capacity`, when rounded up to the nearest multiple of [`ALIGNMENT`], is greater
     /// then `isize::MAX`, then this function will panic.
     #[inline]
-    pub fn with_capacity_in(allocator: A, capacity: usize) -> Self {
+    pub fn with_capacity_in(capacity: usize, allocator: A) -> Self {
         let capacity = bit_util::round_upto_multiple_of_64(capacity);
         let layout = Layout::from_size_align(capacity, ALIGNMENT)
             .expect("failed to create layout for MutableBuffer");
@@ -664,6 +666,7 @@ impl<A: ArrowNativeType> Extend<A> for MutableBuffer {
     }
 }
 
+#[cfg(not(feature = "allocator_api"))]
 impl<T: ArrowNativeType> From<Vec<T>> for MutableBuffer {
     fn from(value: Vec<T>) -> Self {
         // Safety
@@ -678,10 +681,34 @@ impl<T: ArrowNativeType> From<Vec<T>> for MutableBuffer {
             data,
             len,
             layout,
-            #[cfg(not(feature = "allocator_api"))]
             allocator: Global,
-            #[cfg(feature = "allocator_api")]
-            allocator: *value.allocator(),
+        };
+
+        mem::forget(value);
+        zelf
+    }
+}
+
+#[cfg(feature = "allocator_api")]
+impl<T, A> From<Vec<T, A>> for MutableBuffer<A>
+where
+    T: ArrowNativeType,
+    A: Allocator + Clone,
+{
+    fn from(value: Vec<T, A>) -> Self {
+        // Safety
+        // Vec::as_ptr guaranteed to not be null and ArrowNativeType are trivially transmutable
+        let data = unsafe { NonNull::new_unchecked(value.as_ptr() as _) };
+        let len = value.len() * mem::size_of::<T>();
+        // Safety
+        // Vec guaranteed to have a valid layout matching that of `Layout::array`
+        // This is based on `RawVec::current_memory`
+        let layout = unsafe { Layout::array::<T>(value.capacity()).unwrap_unchecked() };
+        let zelf = Self {
+            data,
+            len,
+            layout,
+            allocator: value.allocator().clone(),
         };
 
         mem::forget(value);
