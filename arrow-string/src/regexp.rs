@@ -44,77 +44,13 @@ pub fn regexp_is_match_utf8<OffsetSize: OffsetSizeTrait>(
     regex_array: &GenericStringArray<OffsetSize>,
     flags_array: Option<&GenericStringArray<OffsetSize>>,
 ) -> Result<BooleanArray, ArrowError> {
-    if array.len() != regex_array.len() {
-        return Err(ArrowError::ComputeError(
-            "Cannot perform comparison operation on arrays of different length".to_string(),
-        ));
-    }
-    let nulls = NullBuffer::union(array.nulls(), regex_array.nulls());
-
-    let mut patterns: HashMap<String, Regex> = HashMap::new();
-    let mut result = BooleanBufferBuilder::new(array.len());
-
-    let complete_pattern = match flags_array {
-        Some(flags) => Box::new(
-            regex_array
-                .iter()
-                .zip(flags.iter())
-                .map(|(pattern, flags)| {
-                    pattern.map(|pattern| match flags {
-                        Some(flag) => format!("(?{flag}){pattern}"),
-                        None => pattern.to_string(),
-                    })
-                }),
-        ) as Box<dyn Iterator<Item = Option<String>>>,
-        None => Box::new(
-            regex_array
-                .iter()
-                .map(|pattern| pattern.map(|pattern| pattern.to_string())),
-        ),
-    };
-
-    array
-        .iter()
-        .zip(complete_pattern)
-        .map(|(value, pattern)| {
-            match (value, pattern) {
-                // Required for Postgres compatibility:
-                // SELECT 'foobarbequebaz' ~ ''); = true
-                (Some(_), Some(pattern)) if pattern == *"" => {
-                    result.append(true);
-                }
-                (Some(value), Some(pattern)) => {
-                    let existing_pattern = patterns.get(&pattern);
-                    let re = match existing_pattern {
-                        Some(re) => re,
-                        None => {
-                            let re = Regex::new(pattern.as_str()).map_err(|e| {
-                                ArrowError::ComputeError(format!(
-                                    "Regular expression did not compile: {e:?}"
-                                ))
-                            })?;
-                            patterns.entry(pattern).or_insert(re)
-                        }
-                    };
-                    result.append(re.is_match(value));
-                }
-                _ => result.append(false),
-            }
-            Ok(())
-        })
-        .collect::<Result<Vec<()>, ArrowError>>()?;
-
-    let data = unsafe {
-        ArrayDataBuilder::new(DataType::Boolean)
-            .len(array.len())
-            .buffers(vec![result.into()])
-            .nulls(nulls)
-            .build_unchecked()
-    };
-    Ok(BooleanArray::from(data))
+    regexp_is_match(array, regex_array, flags_array)
 }
 
-/// Perform SQL `array ~ regex_array` operation on
+/// Return BooleanArray indicating which strings in an array match an array of
+/// regular expressions.
+///
+/// This is equivalent to the SQL `array ~ regex_array`, supporting
 /// [`StringArray`] / [`LargeStringArray`] / [`StringViewArray`].
 ///
 /// If `regex_array` element has an empty value, the corresponding result value is always true.
@@ -123,6 +59,27 @@ pub fn regexp_is_match_utf8<OffsetSize: OffsetSizeTrait>(
 /// which allow special search modes, such as case-insensitive and multi-line mode.
 /// See the documentation [here](https://docs.rs/regex/1.5.4/regex/#grouping-and-flags)
 /// for more information.
+///
+/// # See Also
+/// * [`regexp_is_match_scalar`] for matching a single regular expression against an array of strings
+/// * [`regexp_match`] for extracting groups from a string array based on a regular expression
+///
+/// # Example
+/// ```
+/// # use arrow_array::{StringArray, BooleanArray};
+/// # use arrow_string::regexp::regexp_is_match;
+/// // First array is the array of strings to match
+/// let array = StringArray::from(vec!["Foo", "Bar", "FooBar", "Baz"]);
+/// // Second array is the array of regular expressions to match against
+/// let regex_array = StringArray::from(vec!["^Foo", "^Foo", "Bar$", "Baz"]);
+/// // Third array is the array of flags to use for each regular expression, if desired
+/// // (the type must be provided to satisfy type inference for the third parameter)
+/// let flags_array: Option<&StringArray> = None;
+/// // The result is a BooleanArray indicating when each string in `array`
+/// // matches the corresponding regular expression in `regex_array`
+/// let result = regexp_is_match(&array, &regex_array, flags_array).unwrap();
+/// assert_eq!(result, BooleanArray::from(vec![true, false, true, true]));
+/// ```
 pub fn regexp_is_match<'a, S1, S2, S3>(
     array: &'a S1,
     regex_array: &'a S2,
@@ -215,45 +172,33 @@ pub fn regexp_is_match_utf8_scalar<OffsetSize: OffsetSizeTrait>(
     regex: &str,
     flag: Option<&str>,
 ) -> Result<BooleanArray, ArrowError> {
-    let null_bit_buffer = array.nulls().map(|x| x.inner().sliced());
-    let mut result = BooleanBufferBuilder::new(array.len());
-
-    let pattern = match flag {
-        Some(flag) => format!("(?{flag}){regex}"),
-        None => regex.to_string(),
-    };
-
-    if pattern.is_empty() {
-        result.append_n(array.len(), true);
-    } else {
-        let re = Regex::new(pattern.as_str()).map_err(|e| {
-            ArrowError::ComputeError(format!("Regular expression did not compile: {e:?}"))
-        })?;
-        for i in 0..array.len() {
-            let value = array.value(i);
-            result.append(re.is_match(value));
-        }
-    }
-
-    let buffer = result.into();
-    let data = unsafe {
-        ArrayData::new_unchecked(
-            DataType::Boolean,
-            array.len(),
-            None,
-            null_bit_buffer,
-            0,
-            vec![buffer],
-            vec![],
-        )
-    };
-    Ok(BooleanArray::from(data))
+    regexp_is_match_scalar(array, regex, flag)
 }
 
-/// Perform SQL `array ~ regex_array` operation on
+/// Return BooleanArray indicating which strings in an array match a single regular expression.
+///
+/// This is equivalent to the SQL `array ~ regex_array`, supporting
 /// [`StringArray`] / [`LargeStringArray`] / [`StringViewArray`] and a scalar.
 ///
-/// See the documentation on [`regexp_is_match`] for more details.
+/// See the documentation on [`regexp_is_match`] for more details on arguments
+///
+/// # See Also
+/// * [`regexp_is_match`] for matching an array of regular expression against an array of strings
+/// * [`regexp_match`] for extracting groups from a string array based on a regular expression
+///
+/// # Example
+/// ```
+/// # use arrow_array::{StringArray, BooleanArray};
+/// # use arrow_string::regexp::regexp_is_match_scalar;
+/// // array of strings to match
+/// let array = StringArray::from(vec!["Foo", "Bar", "FooBar", "Baz"]);
+/// let regexp = "^Foo"; // regular expression to match against
+/// let flags: Option<&str> = None;  // flags can control the matching behavior
+/// // The result is a BooleanArray indicating when each string in `array`
+/// // matches the regular expression `regexp`
+/// let result = regexp_is_match_scalar(&array, regexp, None).unwrap();
+/// assert_eq!(result, BooleanArray::from(vec![true, false, true, false]));
+/// ```
 pub fn regexp_is_match_scalar<'a, S>(
     array: &'a S,
     regex: &str,
@@ -447,6 +392,9 @@ fn regexp_scalar_match<OffsetSize: OffsetSizeTrait>(
 ///
 /// The flags parameter is an optional text string containing zero or more single-letter flags
 /// that change the function's behavior.
+///
+/// # See Also
+/// * [`regexp_is_match`] for matching (rather than extracting) a regular expression against an array of strings
 ///
 /// [regexp_match]: https://www.postgresql.org/docs/current/functions-matching.html#FUNCTIONS-POSIX-REGEXP
 pub fn regexp_match(
@@ -738,7 +686,7 @@ mod tests {
         test_array_regexp_is_match_utf8,
         StringArray::from(vec!["arrow", "arrow", "arrow", "arrow", "arrow", "arrow"]),
         StringArray::from(vec!["^ar", "^AR", "ow$", "OW$", "foo", ""]),
-        regexp_is_match_utf8,
+        regexp_is_match::<StringArray, StringArray, StringArray>,
         [true, false, true, false, false, true]
     );
     test_flag_utf8!(
@@ -746,7 +694,7 @@ mod tests {
         StringArray::from(vec!["arrow", "arrow", "arrow", "arrow", "arrow", "arrow"]),
         StringArray::from(vec!["^ar", "^AR", "ow$", "OW$", "foo", ""]),
         StringArray::from(vec!["i"; 6]),
-        regexp_is_match_utf8,
+        regexp_is_match,
         [true, true, true, true, false, true]
     );
 
@@ -754,14 +702,14 @@ mod tests {
         test_array_regexp_is_match_utf8_scalar,
         StringArray::from(vec!["arrow", "ARROW", "parquet", "PARQUET"]),
         "^ar",
-        regexp_is_match_utf8_scalar,
+        regexp_is_match_scalar,
         [true, false, false, false]
     );
     test_flag_utf8_scalar!(
         test_array_regexp_is_match_utf8_scalar_empty,
         StringArray::from(vec!["arrow", "ARROW", "parquet", "PARQUET"]),
         "",
-        regexp_is_match_utf8_scalar,
+        regexp_is_match_scalar,
         [true, true, true, true]
     );
     test_flag_utf8_scalar!(
@@ -769,7 +717,7 @@ mod tests {
         StringArray::from(vec!["arrow", "ARROW", "parquet", "PARQUET"]),
         "^ar",
         "i",
-        regexp_is_match_utf8_scalar,
+        regexp_is_match_scalar,
         [true, true, false, false]
     );
 
