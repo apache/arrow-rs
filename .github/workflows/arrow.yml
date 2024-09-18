@@ -214,5 +214,3 @@ jobs:
         run: rustup component add clippy
       - name: Clippy arrow-buffer with all features
         run: cargo clippy -p arrow-buffer --all-features --all-targets -- -D warnings
-      - name: Clippy arrow-buffer with all features
-        run: cargo clippy -p arrow --all-features --all-targets -- -D warnings
