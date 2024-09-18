@@ -192,8 +192,27 @@ jobs:
       - name: Clippy arrow-row with all features
         run: cargo clippy -p arrow-row --all-targets --all-features -- -D warnings
       - name: Clippy arrow with all features
-        run: cargo clippy -p arrow --all-features --all-targets -- -D warnings
+        # `allocator_api` is ignored as it requires nightly toolchain
+        run: cargo clippy -p arrow -F csv -F json -F ipc -F ipc_compression -F prettyprint -F chrono-tz -F ffi -F pyarrow --all-targets -- -D warnings
       - name: Clippy arrow-integration-test with all features
         run: cargo clippy -p arrow-integration-test --all-targets --all-features -- -D warnings
       - name: Clippy arrow-integration-testing with all features
         run: cargo clippy -p arrow-integration-testing --all-targets --all-features -- -D warnings
+
+  clippy-nightly:
+    name: Clippy
+    runs-on: ubuntu-latest
+    container:
+      image: amd64/rust
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Rust toolchain
+        uses: ./.github/actions/setup-builder
+        with:
+          rust-version: nightly
+      - name: Setup Clippy
+        run: rustup component add clippy
+      - name: Clippy arrow-buffer with all features
+        run: cargo clippy -p arrow-buffer --all-features --all-targets -- -D warnings
+      - name: Clippy arrow-buffer with all features
+        run: cargo clippy -p arrow --all-features --all-targets -- -D warnings
