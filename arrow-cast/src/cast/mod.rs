@@ -315,41 +315,29 @@ where
     <T as ArrowPrimitiveType>::Native: AsPrimitive<M>,
     M: ArrowNativeTypeOp,
 {
-    let scale_factor = base.pow_checked(scale.unsigned_abs() as u32).map_err(|_| {
-        ArrowError::CastError(format!(
-            "Cannot cast to {:?}({}, {}). The scale causes overflow.",
-            D::PREFIX,
-            precision,
-            scale,
-        ))
-    })?;
+    let scale_factor = base
+        .pow_checked(if scale < 0 { 0 } else { scale } as u32)
+        .map_err(|_| {
+            ArrowError::CastError(format!(
+                "Cannot cast to {:?}({}, {}). The scale causes overflow.",
+                D::PREFIX,
+                precision,
+                scale,
+            ))
+        })?;
 
-    let array = if scale < 0 {
-        match cast_options.safe {
-            true => array.unary_opt::<_, D>(|v| {
-                v.as_().div_checked(scale_factor).ok().and_then(|v| {
-                    (D::validate_decimal_precision(v, precision).is_ok()).then_some(v)
-                })
-            }),
-            false => array.try_unary::<_, D, _>(|v| {
-                v.as_()
-                    .div_checked(scale_factor)
-                    .and_then(|v| D::validate_decimal_precision(v, precision).map(|_| v))
-            })?,
-        }
-    } else {
-        match cast_options.safe {
-            true => array.unary_opt::<_, D>(|v| {
-                v.as_().mul_checked(scale_factor).ok().and_then(|v| {
-                    (D::validate_decimal_precision(v, precision).is_ok()).then_some(v)
-                })
-            }),
-            false => array.try_unary::<_, D, _>(|v| {
-                v.as_()
-                    .mul_checked(scale_factor)
-                    .and_then(|v| D::validate_decimal_precision(v, precision).map(|_| v))
-            })?,
-        }
+    let array = match cast_options.safe {
+        true => array.unary_opt::<_, D>(|v| {
+            v.as_()
+                .mul_checked(scale_factor)
+                .ok()
+                .and_then(|v| (D::validate_decimal_precision(v, precision).is_ok()).then_some(v))
+        }),
+        false => array.try_unary::<_, D, _>(|v| {
+            v.as_()
+                .mul_checked(scale_factor)
+                .and_then(|v| D::validate_decimal_precision(v, precision).map(|_| v))
+        })?,
     };
 
     Ok(Arc::new(array.with_precision_and_scale(precision, scale)?))
@@ -8121,9 +8109,9 @@ mod tests {
         let casted_array = cast(&array, &decimal_type).unwrap();
         let decimal_arr = casted_array.as_primitive::<Decimal128Type>();
 
-        assert_eq!("1123450", decimal_arr.value_as_string(0));
-        assert_eq!("2123450", decimal_arr.value_as_string(1));
-        assert_eq!("3123450", decimal_arr.value_as_string(2));
+        assert_eq!("11234560", decimal_arr.value_as_string(0));
+        assert_eq!("21234560", decimal_arr.value_as_string(1));
+        assert_eq!("31234560", decimal_arr.value_as_string(2));
 
         let array = Arc::new(Float32Array::from(vec![
             Some(1123.456),
