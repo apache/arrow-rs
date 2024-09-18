@@ -160,7 +160,7 @@ unsafe fn or_write_u64_bytes(data: &mut [u8], offset: usize, chunk: u64) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::bit_util::unset_bit;
+    use crate::bit_util::{get_bit, set_bit, unset_bit};
     use rand::prelude::StdRng;
     use rand::{Fill, Rng, SeedableRng};
     use std::fmt::Display;
