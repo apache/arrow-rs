@@ -738,21 +738,30 @@ pub fn validate_decimal_precision(value: i128, precision: u8) -> Result<(), Arro
             "Max precision of a Decimal128 is {DECIMAL128_MAX_PRECISION}, but got {precision}",
         )));
     }
-
-    let max = MAX_DECIMAL_FOR_EACH_PRECISION[usize::from(precision) - 1];
-    let min = MIN_DECIMAL_FOR_EACH_PRECISION[usize::from(precision) - 1];
-
-    if value > max {
+    let idx = usize::from(precision) - 1;
+    if value > MAX_DECIMAL_FOR_EACH_PRECISION[idx] {
         Err(ArrowError::InvalidArgumentError(format!(
-            "{value} is too large to store in a Decimal128 of precision {precision}. Max is {max}"
+            "{value} is too large to store in a Decimal128 of precision {precision}. Max is {}",
+            MAX_DECIMAL_FOR_EACH_PRECISION[idx]
         )))
-    } else if value < min {
+    } else if value < MIN_DECIMAL_FOR_EACH_PRECISION[idx] {
         Err(ArrowError::InvalidArgumentError(format!(
-            "{value} is too small to store in a Decimal128 of precision {precision}. Min is {min}"
+            "{value} is too small to store in a Decimal128 of precision {precision}. Min is {}",
+            MIN_DECIMAL_FOR_EACH_PRECISION[idx]
         )))
     } else {
         Ok(())
     }
+}
+
+/// Determines whether the specified `i128` value can be properly
+/// interpreted as a Decimal number with precision `precision`
+#[inline]
+pub fn is_validate_decimal_precision(value: i128, precision: u8) -> bool {
+    let idx = usize::from(precision) - 1;
+    precision > DECIMAL128_MAX_PRECISION
+        && value >= MIN_DECIMAL_FOR_EACH_PRECISION[idx]
+        && value <= MAX_DECIMAL_FOR_EACH_PRECISION[idx]
 }
 
 /// Validates that the specified `i256` of value can be properly
@@ -764,18 +773,28 @@ pub fn validate_decimal256_precision(value: i256, precision: u8) -> Result<(), A
             "Max precision of a Decimal256 is {DECIMAL256_MAX_PRECISION}, but got {precision}",
         )));
     }
-    let max = MAX_DECIMAL_BYTES_FOR_LARGER_EACH_PRECISION[usize::from(precision) - 1];
-    let min = MIN_DECIMAL_BYTES_FOR_LARGER_EACH_PRECISION[usize::from(precision) - 1];
-
-    if value > max {
+    let idx = usize::from(precision) - 1;
+    if value > MAX_DECIMAL_BYTES_FOR_LARGER_EACH_PRECISION[idx] {
         Err(ArrowError::InvalidArgumentError(format!(
-            "{value:?} is too large to store in a Decimal256 of precision {precision}. Max is {max:?}"
+            "{value:?} is too large to store in a Decimal256 of precision {precision}. Max is {:?}",
+            MAX_DECIMAL_BYTES_FOR_LARGER_EACH_PRECISION[idx]
         )))
-    } else if value < min {
+    } else if value < MIN_DECIMAL_BYTES_FOR_LARGER_EACH_PRECISION[idx] {
         Err(ArrowError::InvalidArgumentError(format!(
-            "{value:?} is too small to store in a Decimal256 of precision {precision}. Min is {min:?}"
+            "{value:?} is too small to store in a Decimal256 of precision {precision}. Min is {:?}",
+            MIN_DECIMAL_BYTES_FOR_LARGER_EACH_PRECISION[idx]
         )))
     } else {
         Ok(())
     }
+}
+
+/// Determines whether the specified `i256` value can be properly
+/// interpreted as a Decimal number with precision `precision`
+#[inline]
+pub fn is_validate_decimal256_precision(value: i256, precision: u8) -> bool {
+    let idx = usize::from(precision) - 1;
+    precision > DECIMAL128_MAX_PRECISION
+        && value >= MIN_DECIMAL_BYTES_FOR_LARGER_EACH_PRECISION[idx]
+        && value <= MAX_DECIMAL_BYTES_FOR_LARGER_EACH_PRECISION[idx]
 }
