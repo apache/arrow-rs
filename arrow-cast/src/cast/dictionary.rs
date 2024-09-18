@@ -202,37 +202,41 @@ pub(crate) fn cast_to_dictionary<K: ArrowDictionaryKeyType>(
         UInt16 => pack_numeric_to_dictionary::<K, UInt16Type>(array, dict_value_type, cast_options),
         UInt32 => pack_numeric_to_dictionary::<K, UInt32Type>(array, dict_value_type, cast_options),
         UInt64 => pack_numeric_to_dictionary::<K, UInt64Type>(array, dict_value_type, cast_options),
-        Decimal128(_, _) => {
-            // pack_numeric_to_dictionary loses the precision and scale so we have to perform a
-            // second cast
-            let decimal_dict_max_precision_scale = pack_numeric_to_dictionary::<K, Decimal128Type>(
+        Decimal128(p, s) => {
+            let dict = pack_numeric_to_dictionary::<K, Decimal128Type>(
                 array,
                 dict_value_type,
                 cast_options,
             )?;
-            let expected_type =
-                Dictionary(Box::new(K::DATA_TYPE), Box::new(dict_value_type.clone()));
-            cast_with_options(
-                &decimal_dict_max_precision_scale,
-                &expected_type,
-                cast_options,
-            )
+            let dict = dict
+                .as_dictionary::<K>()
+                .downcast_dict::<Decimal128Array>()
+                .unwrap();
+            let value = dict.values().clone();
+            // Set correct precision/scale
+            let value = value.with_precision_and_scale(p, s)?;
+            Ok(Arc::new(DictionaryArray::<K>::try_new(
+                dict.keys().clone(),
+                Arc::new(value),
+            )?))
         }
-        Decimal256(_, _) => {
-            // pack_numeric_to_dictionary loses the precision and scale so we have to perform a
-            // second cast
-            let decimal_dict_max_precision_scale = pack_numeric_to_dictionary::<K, Decimal256Type>(
+        Decimal256(p, s) => {
+            let dict = pack_numeric_to_dictionary::<K, Decimal256Type>(
                 array,
                 dict_value_type,
                 cast_options,
             )?;
-            let expected_type =
-                Dictionary(Box::new(K::DATA_TYPE), Box::new(dict_value_type.clone()));
-            cast_with_options(
-                &decimal_dict_max_precision_scale,
-                &expected_type,
-                cast_options,
-            )
+            let dict = dict
+                .as_dictionary::<K>()
+                .downcast_dict::<Decimal256Array>()
+                .unwrap();
+            let value = dict.values().clone();
+            // Set correct precision/scale
+            let value = value.with_precision_and_scale(p, s)?;
+            Ok(Arc::new(DictionaryArray::<K>::try_new(
+                dict.keys().clone(),
+                Arc::new(value),
+            )?))
         }
         Float16 => {
             pack_numeric_to_dictionary::<K, Float16Type>(array, dict_value_type, cast_options)
