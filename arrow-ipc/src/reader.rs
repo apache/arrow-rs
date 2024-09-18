@@ -31,7 +31,7 @@ use std::io::{BufReader, Read, Seek, SeekFrom};
 use std::sync::Arc;
 
 use arrow_array::*;
-use arrow_buffer::{ArrowNativeType, BooleanBuffer, Buffer, MutableBuffer, ScalarBuffer};
+use arrow_buffer::{ArrowNativeType, BooleanBuffer, Buffer, MutableBuffer, NullBuffer, ScalarBuffer};
 use arrow_data::ArrayData;
 use arrow_schema::*;
 
@@ -149,7 +149,7 @@ fn create_array(
             // still work
             for struct_field in struct_fields {
                 let child = create_array(reader, struct_field, variadic_counts, require_alignment)?;
-                struct_arrays.push((struct_field.clone(), child));
+                struct_arrays.push(child);
             }
             let null_count = struct_node.null_count() as usize;
             let struct_array = if struct_arrays.is_empty() {
@@ -162,9 +162,11 @@ fn create_array(
                 )
             } else if null_count > 0 {
                 // create struct array from fields, arrays and null data
-                StructArray::from((struct_arrays, null_buffer))
+                let len = struct_node.length() as usize;
+                let nulls = BooleanBuffer::new(null_buffer, 0, len).into();
+                StructArray::try_new(struct_fields.clone(), struct_arrays, Some(nulls))?
             } else {
-                StructArray::from(struct_arrays)
+                StructArray::try_new(struct_fields.clone(), struct_arrays, None)?
             };
             Ok(Arc::new(struct_array))
         }
