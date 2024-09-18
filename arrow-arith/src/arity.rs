@@ -313,8 +313,6 @@ where
         ))));
     }
 
-    let nulls = create_union_null_buffer(a.logical_nulls().as_ref(), b.logical_nulls().as_ref());
-
     let mut builder = a.into_builder()?;
 
     builder
@@ -323,7 +321,12 @@ where
         .zip(b.values())
         .for_each(|(l, r)| *l = op(*l, *r));
 
-    let array_builder = builder.finish().into_data().into_builder().nulls(nulls);
+    let array = builder.finish();
+
+    // The builder has the null buffer from `a`, it is not changed.
+    let nulls = NullBuffer::union(array.logical_nulls().as_ref(), b.logical_nulls().as_ref());
+
+    let array_builder = array.into_data().into_builder().nulls(nulls);
 
     let array_data = unsafe { array_builder.build_unchecked() };
     Ok(Ok(PrimitiveArray::<T>::from(array_data)))
