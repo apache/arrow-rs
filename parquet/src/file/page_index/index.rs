@@ -230,16 +230,14 @@ impl<T: ParquetValueType> NativeIndex<T> {
         let min_values = self
             .indexes
             .iter()
-            .map(|x| x.min_bytes().map(|x| x.to_vec()))
-            .collect::<Option<Vec<_>>>()
-            .unwrap_or_else(|| vec![vec![]; self.indexes.len()]);
+            .map(|x| x.min_bytes().unwrap_or(&[]).to_vec())
+            .collect::<Vec<_>>();
 
         let max_values = self
             .indexes
             .iter()
-            .map(|x| x.max_bytes().map(|x| x.to_vec()))
-            .collect::<Option<Vec<_>>>()
-            .unwrap_or_else(|| vec![vec![]; self.indexes.len()]);
+            .map(|x| x.max_bytes().unwrap_or(&[]).to_vec())
+            .collect::<Vec<_>>();
 
         let null_counts = self
             .indexes

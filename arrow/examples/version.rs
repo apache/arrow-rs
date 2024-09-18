@@ -15,23 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::{fs, path::PathBuf, str::FromStr};
+//! Print the arrow version and exit
 
-/// Returns path to the test parquet file in 'data' directory
-pub fn get_test_path(file_name: &str) -> PathBuf {
-    let mut pathbuf = PathBuf::from_str(&arrow::util::test_util::parquet_test_data()).unwrap();
-    pathbuf.push(file_name);
-    pathbuf
-}
+use arrow::ARROW_VERSION;
 
-/// Returns file handle for a test parquet file from 'data' directory
-pub fn get_test_file(file_name: &str) -> fs::File {
-    let path = get_test_path(file_name);
-    fs::File::open(path.as_path()).unwrap_or_else(|err| {
-        panic!(
-            "Test file {} could not be opened, did you do `git submodule update`?: {}",
-            path.display(),
-            err
-        )
-    })
+fn main() {
+    println!("arrow version: {ARROW_VERSION}");
 }

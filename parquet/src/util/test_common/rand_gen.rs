@@ -173,8 +173,7 @@ pub fn make_pages<T: DataType>(
 
         // Generate the current page
 
-        let mut pb =
-            DataPageBuilderImpl::new(desc.clone(), num_values_cur_page as u32, use_v2);
+        let mut pb = DataPageBuilderImpl::new(desc.clone(), num_values_cur_page as u32, use_v2);
         if max_rep_level > 0 {
             pb.add_rep_levels(max_rep_level, &rep_levels[level_range.clone()]);
         }

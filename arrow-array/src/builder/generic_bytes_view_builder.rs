@@ -368,6 +368,9 @@ impl<T: ByteViewType + ?Sized> GenericByteViewBuilder<T> {
         let len = self.views_builder.len();
         let views = ScalarBuffer::new(self.views_builder.finish(), 0, len);
         let nulls = self.null_buffer_builder.finish();
+        if let Some((ref mut ht, _)) = self.string_tracker.as_mut() {
+            ht.clear();
+        }
         // SAFETY: valid by construction
         unsafe { GenericByteViewArray::new_unchecked(views, completed, nulls) }
     }
@@ -588,6 +591,20 @@ mod tests {
         assert_eq!(view0, view6);
 
         assert_eq!(array.views().get(1), array.views().get(5));
+    }
+
+    #[test]
+    fn test_string_view_deduplicate_after_finish() {
+        let mut builder = StringViewBuilder::new().with_deduplicate_strings();
+
+        let value_1 = "long string to test string view";
+        let value_2 = "not so similar string but long";
+        builder.append_value(value_1);
+        let _array = builder.finish();
+        builder.append_value(value_2);
+        let _array = builder.finish();
+        builder.append_value(value_1);
+        let _array = builder.finish();
     }
 
     #[test]

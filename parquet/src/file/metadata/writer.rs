@@ -55,18 +55,14 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
         // write offset index to the file
         for (row_group_idx, row_group) in self.row_groups.iter_mut().enumerate() {
             for (column_idx, column_metadata) in row_group.columns.iter_mut().enumerate() {
-                match &offset_indexes[row_group_idx][column_idx] {
-                    Some(offset_index) => {
-                        let start_offset = self.buf.bytes_written();
-                        let mut protocol = TCompactOutputProtocol::new(&mut self.buf);
-                        offset_index.write_to_out_protocol(&mut protocol)?;
-                        let end_offset = self.buf.bytes_written();
-                        // set offset and index for offset index
-                        column_metadata.offset_index_offset = Some(start_offset as i64);
-                        column_metadata.offset_index_length =
-                            Some((end_offset - start_offset) as i32);
-                    }
-                    None => {}
+                if let Some(offset_index) = &offset_indexes[row_group_idx][column_idx] {
+                    let start_offset = self.buf.bytes_written();
+                    let mut protocol = TCompactOutputProtocol::new(&mut self.buf);
+                    offset_index.write_to_out_protocol(&mut protocol)?;
+                    let end_offset = self.buf.bytes_written();
+                    // set offset and index for offset index
+                    column_metadata.offset_index_offset = Some(start_offset as i64);
+                    column_metadata.offset_index_length = Some((end_offset - start_offset) as i32);
                 }
             }
         }
@@ -84,18 +80,14 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
         // write column index to the file
         for (row_group_idx, row_group) in self.row_groups.iter_mut().enumerate() {
             for (column_idx, column_metadata) in row_group.columns.iter_mut().enumerate() {
-                match &column_indexes[row_group_idx][column_idx] {
-                    Some(column_index) => {
-                        let start_offset = self.buf.bytes_written();
-                        let mut protocol = TCompactOutputProtocol::new(&mut self.buf);
-                        column_index.write_to_out_protocol(&mut protocol)?;
-                        let end_offset = self.buf.bytes_written();
-                        // set offset and index for offset index
-                        column_metadata.column_index_offset = Some(start_offset as i64);
-                        column_metadata.column_index_length =
-                            Some((end_offset - start_offset) as i32);
-                    }
-                    None => {}
+                if let Some(column_index) = &column_indexes[row_group_idx][column_idx] {
+                    let start_offset = self.buf.bytes_written();
+                    let mut protocol = TCompactOutputProtocol::new(&mut self.buf);
+                    column_index.write_to_out_protocol(&mut protocol)?;
+                    let end_offset = self.buf.bytes_written();
+                    // set offset and index for offset index
+                    column_metadata.column_index_offset = Some(start_offset as i64);
+                    column_metadata.column_index_length = Some((end_offset - start_offset) as i32);
                 }
             }
         }
@@ -450,18 +442,56 @@ mod tests {
             true,
         )]));
 
-        let a: ArrayRef = Arc::new(Int32Array::from(vec![Some(1), None, Some(2)]));
+        // build row groups / pages that exercise different combinations of nulls and values
+        // note that below we set the row group and page sizes to 4 and 2 respectively
+        // so that these "groupings" make sense
+        let a: ArrayRef = Arc::new(Int32Array::from(vec![
+            // a row group that has all values
+            Some(i32::MIN),
+            Some(-1),
+            Some(1),
+            Some(i32::MAX),
+            // a row group with a page of all nulls and a page of all values
+            None,
+            None,
+            Some(2),
+            Some(3),
+            // a row group that has all null pages
+            None,
+            None,
+            None,
+            None,
+            // a row group having 1 page with all values and 1 page with some nulls
+            Some(4),
+            Some(5),
+            None,
+            Some(6),
+            // a row group having 1 page with all nulls and 1 page with some nulls
+            None,
+            None,
+            Some(7),
+            None,
+            // a row group having all pages with some nulls
+            None,
+            Some(8),
+            Some(9),
+            None,
+        ]));
 
         let batch = RecordBatch::try_from_iter(vec![("a", a)]).unwrap();
 
-        let writer_props = match write_page_index {
-            true => WriterProperties::builder()
-                .set_statistics_enabled(EnabledStatistics::Page)
-                .build(),
-            false => WriterProperties::builder()
-                .set_statistics_enabled(EnabledStatistics::Chunk)
-                .build(),
+        let writer_props_builder = match write_page_index {
+            true => WriterProperties::builder().set_statistics_enabled(EnabledStatistics::Page),
+            false => WriterProperties::builder().set_statistics_enabled(EnabledStatistics::Chunk),
         };
+
+        // tune the size or pages to the data above
+        // to make sure we exercise code paths where all items in a page are null, etc.
+        let writer_props = writer_props_builder
+            .set_max_row_group_size(4)
+            .set_data_page_row_count_limit(2)
+            .set_write_batch_size(2)
+            .build();
 
         let mut writer = ArrowWriter::try_new(&mut buf, schema, Some(writer_props)).unwrap();
         writer.write(&batch).unwrap();
@@ -486,7 +516,6 @@ mod tests {
     async fn load_metadata_from_bytes(file_size: usize, data: Bytes) -> ParquetMetaData {
         use crate::arrow::async_reader::{MetadataFetch, MetadataLoader};
         use crate::errors::Result as ParquetResult;
-        use bytes::Bytes;
         use futures::future::BoxFuture;
         use futures::FutureExt;
         use std::ops::Range;
@@ -609,6 +638,29 @@ mod tests {
             metadata.metadata.num_row_groups(),
             decoded_metadata.num_row_groups()
         );
+
+        // check that the mins and maxes are what we expect for each page
+        // also indirectly checking that the pages were written out as we expected them to be laid out
+        // (if they're not, or something gets refactored in the future that breaks that assumption,
+        // this test may have to drop down to a lower level and create metadata directly instead of relying on
+        // writing an entire file)
+        let column_indexes = metadata.metadata.column_index().unwrap();
+        assert_eq!(column_indexes.len(), 6);
+        // make sure each row group has 2 pages by checking the first column
+        // page counts for each column for each row group, should all be the same and there should be
+        // 12 pages in total across 6 row groups / 1 column
+        let mut page_counts = vec![];
+        for row_group in column_indexes {
+            for column in row_group {
+                match column {
+                    Index::INT32(column_index) => {
+                        page_counts.push(column_index.indexes.len());
+                    }
+                    _ => panic!("unexpected column index type"),
+                }
+            }
+        }
+        assert_eq!(page_counts, vec![2; 6]);
 
         metadata
             .metadata

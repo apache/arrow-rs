@@ -43,7 +43,7 @@ chrono = { workspace = true }
 csv = { version = "1.1", default-features = false }
 csv-core = { version = "0.1" }
 lazy_static = { version = "1.4", default-features = false }
-lexical-core = { version = "^0.8", default-features = false }
+lexical-core = { version = "1.0", default-features = false }
 regex = { version = "1.7.0", default-features = false, features = ["std", "unicode", "perf"] }
 
 [dev-dependencies]

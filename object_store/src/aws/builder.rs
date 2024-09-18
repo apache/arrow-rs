@@ -402,7 +402,7 @@ impl FromStr for AmazonS3ConfigKey {
             "aws_sse_customer_key_base64" => Ok(Self::Encryption(
                 S3EncryptionConfigKey::CustomerEncryptionKey,
             )),
-            _ => match s.parse() {
+            _ => match s.strip_prefix("aws_").unwrap_or(s).parse() {
                 Ok(key) => Ok(Self::Client(key)),
                 Err(_) => Err(Error::UnknownConfigurationKey { key: s.into() }.into()),
             },
@@ -1453,6 +1453,19 @@ mod tests {
 
         for (bucket, expected) in cases {
             assert_eq!(parse_bucket_az(bucket), expected)
+        }
+    }
+
+    #[test]
+    fn aws_test_client_opts() {
+        let key = "AWS_PROXY_URL";
+        if let Ok(config_key) = key.to_ascii_lowercase().parse() {
+            assert_eq!(
+                AmazonS3ConfigKey::Client(ClientConfigKey::ProxyUrl),
+                config_key
+            );
+        } else {
+            panic!("{} not propagated as ClientConfigKey", key);
         }
     }
 }
