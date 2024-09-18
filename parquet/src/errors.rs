@@ -18,6 +18,7 @@
 //! Common Parquet errors and macros.
 
 use std::error::Error;
+use std::ops::Range;
 use std::{cell, io, result, str};
 
 #[cfg(feature = "arrow")]
@@ -45,6 +46,10 @@ pub enum ParquetError {
     IndexOutOfBound(usize, usize),
     /// An external error variant
     External(Box<dyn Error + Send + Sync>),
+    /// Returned when a function needs more data to complete properly.
+    NeedMoreData(usize),
+    /// Returned when a function needs a larger range of data to complete properly.
+    NeedLargerRange(Range<usize>),
 }
 
 impl std::fmt::Display for ParquetError {
@@ -61,6 +66,8 @@ impl std::fmt::Display for ParquetError {
                 write!(fmt, "Index {index} out of bound: {bound}")
             }
             ParquetError::External(e) => write!(fmt, "External: {e}"),
+            ParquetError::NeedMoreData(needed) => write!(fmt, "NeedMoreData: {needed}"),
+            ParquetError::NeedLargerRange(range) => write!(fmt, "NeedLargerRange: {:?}", range),
         }
     }
 }
