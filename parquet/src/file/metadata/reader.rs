@@ -37,9 +37,6 @@ use crate::arrow::async_reader::MetadataFetch;
 #[cfg(feature = "async")]
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncSeek, AsyncSeekExt};
 
-#[cfg(feature = "async")]
-use crate::arrow::async_reader::AsyncFileReader;
-
 /// Reads the [`ParquetMetaData`] from the footer of a Parquet file.
 ///
 /// This function is a wrapper around [`ParquetMetaDataReader`]. The input, which must implement
@@ -79,6 +76,7 @@ pub fn parquet_metadata_from_file<R: ChunkReader>(
 /// assert!(metadata.column_index().is_some());
 /// assert!(metadata.offset_index().is_some());
 /// ```
+#[derive(Default)]
 pub struct ParquetMetaDataReader {
     metadata: Option<ParquetMetaData>,
     column_index: bool,
@@ -86,21 +84,10 @@ pub struct ParquetMetaDataReader {
     prefetch_hint: Option<usize>,
 }
 
-impl Default for ParquetMetaDataReader {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl ParquetMetaDataReader {
     /// Create a new [`ParquetMetaDataReader`]
     pub fn new() -> Self {
-        Self {
-            metadata: None,
-            column_index: false,
-            offset_index: false,
-            prefetch_hint: None,
-        }
+        Default::default()
     }
 
     /// Create a new [`ParquetMetaDataReader`] populated with a [`ParquetMetaData`] struct
@@ -108,9 +95,7 @@ impl ParquetMetaDataReader {
     pub fn new_with_metadata(metadata: ParquetMetaData) -> Self {
         Self {
             metadata: Some(metadata),
-            column_index: false,
-            offset_index: false,
-            prefetch_hint: None,
+            ..Default::default()
         }
     }
 
@@ -161,10 +146,9 @@ impl ParquetMetaDataReader {
 
     /// Return the parsed [`ParquetMetaData`] struct.
     pub fn finish(&mut self) -> Result<ParquetMetaData> {
-        if self.metadata.is_none() {
-            return Err(general_err!("could not parse parquet metadata"));
-        }
-        Ok(self.metadata.take().unwrap())
+        self.metadata
+            .take()
+            .ok_or_else(|| general_err!("could not parse parquet metadata"))
     }
 
     /// Attempts to parse the footer metadata (and optionally page indexes) given a [`ChunkReader`].
@@ -196,10 +180,8 @@ impl ParquetMetaDataReader {
         // I think it's best to leave them as `None`.
 
         // Get bounds needed for page indexes (if any are present in the file).
-        let range = self.range_for_page_index();
-        let range = match range {
-            Some(range) => range,
-            None => return Ok(()),
+        let Some(range) = self.range_for_page_index() else {
+            return Ok(());
         };
 
         // Check to see if needed range is within `file_range`. Checking `range.end` seems
@@ -240,12 +222,11 @@ impl ParquetMetaDataReader {
         self.load_page_index(fetch, remainder).await
     }
 
-    /// Attempts to (asynchronously) parse the footer metadata (and optionally page indexes)
-    /// given a [`AsyncFileReader`]. The file size need not be known, but this will perform at
-    /// least two fetches, regardless of the value of `prefetch_hint`, if the page indexes are
-    /// requested.
+    /// Attempts to (asynchronously) parse the footer metadata (and optionally page indexes).
+    /// The file size need not be known, but this will perform at least two fetches, regardless
+    /// of the value of `prefetch_hint`, if the page indexes are requested.
     #[cfg(feature = "async")]
-    pub async fn try_load_from_tail<R: AsyncFileReader + AsyncRead + AsyncSeek + Unpin + Send>(
+    pub async fn try_load_from_tail<R: AsyncRead + AsyncSeek + Unpin + Send>(
         &mut self,
         mut fetch: R,
     ) -> Result<()> {
@@ -460,7 +441,7 @@ impl ParquetMetaDataReader {
     }
 
     #[cfg(feature = "async")]
-    async fn load_metadata_from_tail<R: AsyncFileReader + AsyncRead + AsyncSeek + Unpin>(
+    async fn load_metadata_from_tail<R: AsyncRead + AsyncSeek + Unpin + Send>(
         fetch: &mut R,
         prefetch: usize,
     ) -> Result<ParquetMetaData> {
