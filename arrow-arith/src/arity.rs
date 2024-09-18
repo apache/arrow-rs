@@ -640,6 +640,7 @@ mod tests {
             Some(vec![true, true, true, true, true].into()),
         );
 
+        // unwrap here means that no copying occured
         let r2 = try_binary_mut(a, &b, |a, b| Ok(a + b)).unwrap();
         assert_eq!(r1.unwrap(), r2.unwrap());
     }
