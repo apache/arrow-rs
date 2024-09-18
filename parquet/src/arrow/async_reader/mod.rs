@@ -107,6 +107,7 @@ use crate::errors::{ParquetError, Result};
 use crate::file::metadata::{ParquetMetaData, ParquetMetaDataReader, RowGroupMetaData};
 use crate::file::page_index::offset_index::OffsetIndexMetaData;
 use crate::file::reader::{ChunkReader, Length, SerializedPageReader};
+use crate::file::FOOTER_SIZE;
 use crate::format::{BloomFilterAlgorithm, BloomFilterCompression, BloomFilterHash};
 
 mod metadata;
@@ -177,10 +178,21 @@ impl<T: AsyncRead + AsyncSeek + Unpin + Send> AsyncFileReader for T {
     }
 
     fn get_metadata(&mut self) -> BoxFuture<'_, Result<Arc<ParquetMetaData>>> {
+        const FOOTER_SIZE_I64: i64 = FOOTER_SIZE as i64;
         async move {
-            let mut reader = ParquetMetaDataReader::new();
-            reader.try_load_from_tail(self).await?;
-            Ok(Arc::new(reader.finish()?))
+            self.seek(SeekFrom::End(-FOOTER_SIZE_I64)).await?;
+
+            let mut buf = [0_u8; FOOTER_SIZE];
+            self.read_exact(&mut buf).await?;
+
+            let metadata_len = ParquetMetaDataReader::decode_footer(&buf)?;
+            self.seek(SeekFrom::End(-FOOTER_SIZE_I64 - metadata_len as i64))
+                .await?;
+
+            let mut buf = Vec::with_capacity(metadata_len);
+            self.take(metadata_len as _).read_to_end(&mut buf).await?;
+
+            Ok(Arc::new(ParquetMetaDataReader::decode_metadata(&buf)?))
         }
         .boxed()
     }

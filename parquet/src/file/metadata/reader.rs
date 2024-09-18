@@ -34,9 +34,6 @@ use crate::thrift::{TCompactSliceInputProtocol, TSerializable};
 #[cfg(feature = "async")]
 use crate::arrow::async_reader::MetadataFetch;
 
-#[cfg(feature = "async")]
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncSeek, AsyncSeekExt};
-
 /// Reads the [`ParquetMetaData`] from the footer of a Parquet file.
 ///
 /// This function is a wrapper around [`ParquetMetaDataReader`]. The input, which must implement
@@ -125,8 +122,7 @@ impl ParquetMetaDataReader {
     }
 
     /// Provide a hint as to the number of bytes needed to fully parse the [`ParquetMetaData`].
-    /// Only used for the asynchronous [`Self::try_load()`] and [`Self::try_load_from_tail()`]
-    /// methods.
+    /// Only used for the asynchronous [`Self::try_load()`] method.
     ///
     /// By default, the reader will first fetch the last 8 bytes of the input file to obtain the
     /// size of the footer metadata. A second fetch will be performed to obtain the needed bytes.
@@ -136,9 +132,6 @@ impl ParquetMetaDataReader {
     /// to fully decode the [`ParquetMetaData`], which can reduce the number of fetch requests and
     /// reduce latency. Setting `prefetch` too small will not trigger an error, but will result
     /// in extra fetches being performed.
-    ///
-    /// One caveat is that when using [`Self::try_load_from_tail()`], setting `prefetch` to a
-    /// value larger than the file size will result in an error.
     pub fn with_prefetch_hint(mut self, prefetch: Option<usize>) -> Self {
         self.prefetch_hint = prefetch;
         self
@@ -220,25 +213,6 @@ impl ParquetMetaDataReader {
         }
 
         self.load_page_index(fetch, remainder).await
-    }
-
-    /// Attempts to (asynchronously) parse the footer metadata (and optionally page indexes).
-    /// The file size need not be known, but this will perform at least two fetches, regardless
-    /// of the value of `prefetch_hint`, if the page indexes are requested.
-    #[cfg(feature = "async")]
-    pub async fn try_load_from_tail<R: AsyncRead + AsyncSeek + Unpin + Send>(
-        &mut self,
-        mut fetch: R,
-    ) -> Result<()> {
-        self.metadata =
-            Some(Self::load_metadata_from_tail(&mut fetch, self.get_prefetch_size()).await?);
-
-        // we can return if page indexes aren't requested
-        if !self.column_index && !self.offset_index {
-            return Ok(());
-        }
-
-        self.load_page_index(&mut fetch, None).await
     }
 
     /// Asynchronously fetch the page index structures when a [`ParquetMetaData`] has already
@@ -437,64 +411,6 @@ impl ParquetMetaDataReader {
                 Self::decode_metadata(slice)?,
                 Some((footer_start, suffix.slice(..metadata_start))),
             ))
-        }
-    }
-
-    #[cfg(feature = "async")]
-    async fn load_metadata_from_tail<R: AsyncRead + AsyncSeek + Unpin + Send>(
-        fetch: &mut R,
-        prefetch: usize,
-    ) -> Result<ParquetMetaData> {
-        use std::io::SeekFrom;
-
-        // If a size hint is provided, read more than the minimum size
-        // to try and avoid a second fetch.
-        let fetch_size: i64 = match prefetch.try_into() {
-            Ok(val) => val,
-            _ => {
-                return Err(general_err!("cannot fit {} in i64", prefetch));
-            }
-        };
-
-        // This will error out if fetch_size is larger than file_size as noted in the docs
-        fetch.seek(SeekFrom::End(-fetch_size)).await?;
-        let mut suffix = Vec::with_capacity(fetch_size as usize);
-        let suffix_len = fetch.read_buf(&mut suffix).await?;
-
-        // Input source may be smaller than `prefetch` bytes, so just check that it's
-        // at least enough to read the Parquet footer.
-        if suffix_len < FOOTER_SIZE {
-            return Err(eof_err!(
-                "footer requires {} bytes, but could only read {}",
-                FOOTER_SIZE,
-                suffix_len
-            ));
-        }
-
-        let mut footer = [0; FOOTER_SIZE];
-        footer.copy_from_slice(&suffix[suffix_len - FOOTER_SIZE..suffix_len]);
-
-        let length = Self::decode_footer(&footer)?;
-
-        // Did not fetch the entire file metadata in the initial read, need to make a second request
-        if length > suffix_len - FOOTER_SIZE {
-            fetch
-                .seek(SeekFrom::End(-((length + FOOTER_SIZE) as i64)))
-                .await?;
-            let mut suffix = Vec::with_capacity(length);
-            let read = fetch.read_buf(&mut suffix).await?;
-            if read < length {
-                return Err(eof_err!(
-                    "metadata requires {} bytes, but could only read {}",
-                    length,
-                    read
-                ));
-            }
-            Ok(Self::decode_metadata(&suffix)?)
-        } else {
-            let metadata_start = suffix_len - length - FOOTER_SIZE;
-            let slice = &suffix[metadata_start..suffix_len - FOOTER_SIZE];
-            Ok(Self::decode_metadata(slice)?)
         }
     }
 
