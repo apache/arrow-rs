@@ -31,7 +31,9 @@ use std::io::{BufReader, Read, Seek, SeekFrom};
 use std::sync::Arc;
 
 use arrow_array::*;
-use arrow_buffer::{ArrowNativeType, BooleanBuffer, Buffer, MutableBuffer, NullBuffer, ScalarBuffer};
+use arrow_buffer::{
+    ArrowNativeType, BooleanBuffer, Buffer, MutableBuffer, ScalarBuffer,
+};
 use arrow_data::ArrayData;
 use arrow_schema::*;
 
