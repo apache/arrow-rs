@@ -140,8 +140,6 @@ impl ParquetMetaDataReader {
     /// let metadata = ParquetMetaDataReader::new()
     ///     .with_page_indexes(true)
     ///     .parse(&file).unwrap();
-    /// assert!(metadata.column_index().is_some());
-    /// assert!(metadata.offset_index().is_some());
     /// ```
     pub fn parse<R: ChunkReader>(mut self, reader: &R) -> Result<ParquetMetaData> {
         self.try_parse(reader)?;
@@ -214,7 +212,10 @@ impl ParquetMetaDataReader {
     }
 
     /// Attempts to (asynchronously) parse the footer metadata (and optionally page indexes)
-    /// given a [`MetadataFetch`]. The file size must be known to use this function.
+    /// given a [`MetadataFetch`].
+    ///
+    /// See [`Self::with_prefetch_hint`] for a discussion of how to reduce the number of fetches
+    /// performed by this function.
     #[cfg(feature = "async")]
     pub async fn try_load<F: MetadataFetch>(
         &mut self,
