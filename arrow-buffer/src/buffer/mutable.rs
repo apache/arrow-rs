@@ -41,6 +41,8 @@ impl Allocator for Global {}
 
 #[cfg(not(feature = "allocator_api"))]
 #[derive(Debug)]
+/// A placeholder for [`Global`](std::alloc::Global) as it's not available
+/// without `allocator_api` feature enabled.
 pub struct Global;
 
 #[cfg(not(feature = "allocator_api"))]
@@ -93,7 +95,7 @@ pub struct MutableBuffer<A: Allocator = Global> {
     allocator: A,
 }
 
-/// Constructors when using the default allocator [`Global`](std::alloc::Global)
+/// Constructors when using the default allocator [`Global`]
 impl MutableBuffer<Global> {
     /// Allocate a new [MutableBuffer] with initial capacity to be at least `capacity`.
     ///
@@ -233,19 +235,19 @@ impl MutableBuffer<Global> {
     )]
     /// Freezes this buffer and return an immutable version of it.
     ///
-    /// This method is only available under the default [`Global`](std::alloc::Global)
+    /// This method is only available under the default [`Global`]
     /// for now. Support for custom allocators will be added in a future release.
-    /// Related ticket: https://github.com/apache/arrow-rs/issues/3960
+    /// Related ticket: <https://github.com/apache/arrow-rs/issues/3960>
     pub fn freeze(self) -> Buffer {
         self.into_buffer()
     }
 
+    #[inline]
     /// Freezes this buffer and return an immutable version of it.
     ///
-    /// This method is only available under the default [`Global`](std::alloc::Global)
+    /// This method is only available under the default [`Global`]
     /// for now. Support for custom allocators will be added in a future release.
-    /// Related ticket: https://github.com/apache/arrow-rs/issues/3960
-    #[inline]
+    /// Related ticket: <https://github.com/apache/arrow-rs/issues/3960>
     pub(super) fn into_buffer(self) -> Buffer {
         let bytes = unsafe { Bytes::new(self.data, self.len, Deallocation::Standard(self.layout)) };
         std::mem::forget(self);
