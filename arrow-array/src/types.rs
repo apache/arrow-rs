@@ -50,7 +50,7 @@ impl BooleanType {
     pub const DATA_TYPE: DataType = DataType::Boolean;
 }
 
-/// Trait for [primitive values]
+/// Trait for [primitive values].
 ///
 /// This trait bridges the dynamic-typed nature of Arrow
 /// (via [`DataType`]) with the static-typed nature of rust types
