@@ -25,8 +25,8 @@ fn criterion_benchmark(c: &mut Criterion) {
     let mut builder_256 = Decimal256Builder::with_capacity(len);
     for i in 0..len {
         if i % 10 == 0 {
-            builder_128.append_value(i128::max_value());
-            builder_256.append_value(i256::from_i128(i128::max_value()));
+            builder_128.append_value(i128::MAX);
+            builder_256.append_value(i256::from_i128(i128::MAX));
         } else {
             builder_128.append_value(i as i128);
             builder_256.append_value(i256::from_i128(i as i128));
@@ -36,13 +36,13 @@ fn criterion_benchmark(c: &mut Criterion) {
     let array_256 = builder_256.finish();
 
     c.bench_function("validate_decimal_precision_128", |b| {
-        b.iter(|| black_box(array_128.validate_decimal_precision(8).unwrap_or(())));
+        b.iter(|| black_box(array_128.validate_decimal_precision(8)));
     });
     c.bench_function("null_if_overflow_precision_128", |b| {
         b.iter(|| black_box(array_128.null_if_overflow_precision(8)));
     });
     c.bench_function("validate_decimal_precision_256", |b| {
-        b.iter(|| black_box(array_256.validate_decimal_precision(8).unwrap_or(())));
+        b.iter(|| black_box(array_256.validate_decimal_precision(8)));
     });
     c.bench_function("null_if_overflow_precision_256", |b| {
         b.iter(|| black_box(array_256.null_if_overflow_precision(8)));
