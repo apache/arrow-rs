@@ -2651,6 +2651,38 @@ mod tests {
     }
 
     #[test]
+    fn test_cast_decimal128_to_decimal128_dict() {
+        let p = 20;
+        let s = 3;
+        let input_type = DataType::Decimal128(p, s);
+        let output_type = DataType::Dictionary(
+            Box::new(DataType::Int32),
+            Box::new(DataType::Decimal128(p, s)),
+        );
+        assert!(can_cast_types(&input_type, &output_type));
+        let array = vec![Some(1123456), Some(2123456), Some(3123456), None];
+        let array = create_decimal_array(array, p, s).unwrap();
+        let cast_array = cast_with_options(&array, &output_type, &CastOptions::default()).unwrap();
+        assert_eq!(cast_array.data_type(), &output_type);
+    }
+
+    #[test]
+    fn test_cast_decimal256_to_decimal256_dict() {
+        let p = 20;
+        let s = 3;
+        let input_type = DataType::Decimal256(p, s);
+        let output_type = DataType::Dictionary(
+            Box::new(DataType::Int32),
+            Box::new(DataType::Decimal256(p, s)),
+        );
+        assert!(can_cast_types(&input_type, &output_type));
+        let array = vec![Some(1123456), Some(2123456), Some(3123456), None];
+        let array = create_decimal_array(array, p, s).unwrap();
+        let cast_array = cast_with_options(&array, &output_type, &CastOptions::default()).unwrap();
+        assert_eq!(cast_array.data_type(), &output_type);
+    }
+
+    #[test]
     fn test_cast_decimal128_to_decimal128_overflow() {
         let input_type = DataType::Decimal128(38, 3);
         let output_type = DataType::Decimal128(38, 38);
