@@ -275,6 +275,7 @@ fn get_error_code(err: &ArrowError) -> i32 {
 }
 
 /// A `RecordBatchReader` which imports Arrays from `FFI_ArrowArrayStream`.
+///
 /// Struct used to fetch `RecordBatch` from the C Stream Interface.
 /// Its main responsibility is to expose `RecordBatchReader` functionality
 /// that requires [FFI_ArrowArrayStream].

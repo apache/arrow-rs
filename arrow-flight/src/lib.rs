@@ -50,8 +50,7 @@ use std::{fmt, ops::Deref};
 
 type ArrowResult<T> = std::result::Result<T, ArrowError>;
 
-#[allow(clippy::derive_partial_eq_without_eq)]
-
+#[allow(clippy::all)]
 mod gen {
     include!("arrow.flight.protocol.rs");
 }

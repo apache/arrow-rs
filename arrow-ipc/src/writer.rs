@@ -710,7 +710,9 @@ fn into_zero_offset_run_array<R: RunEndIndexType>(
 }
 
 /// Keeps track of dictionaries that have been written, to avoid emitting the same dictionary
-/// multiple times. Can optionally error if an update to an existing dictionary is attempted, which
+/// multiple times.
+///
+/// Can optionally error if an update to an existing dictionary is attempted, which
 /// isn't allowed in the `FileWriter`.
 pub struct DictionaryTracker {
     written: HashMap<i64, ArrayData>,
