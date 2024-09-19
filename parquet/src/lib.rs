@@ -116,8 +116,8 @@ pub mod basic;
 ///
 /// [parquet.thrift]: https://github.com/apache/parquet-format/blob/master/src/main/thrift/parquet.thrift
 // see parquet/CONTRIBUTING.md for instructions on regenerating
-#[allow(clippy::derivable_impls, clippy::match_single_binding)]
-// Don't try and format auto generated code
+// Don't try clippy and format auto generated code
+#[allow(clippy::all)]
 #[rustfmt::skip]
 pub mod format;
 

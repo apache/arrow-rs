@@ -39,6 +39,7 @@ pub use crate::format::{
 // Mirrors `parquet::Type`
 
 /// Types supported by Parquet.
+///
 /// These physical types are intended to be used in combination with the encodings to
 /// control the on disk storage format.
 /// For example INT16 is not included as a type since a good encoding of INT32
@@ -60,6 +61,7 @@ pub enum Type {
 // Mirrors `parquet::ConvertedType`
 
 /// Common types (converted types) used by frameworks when using Parquet.
+///
 /// This helps map between types in those frameworks to the base types in Parquet.
 /// This is only metadata and not needed to read or write the data.
 ///

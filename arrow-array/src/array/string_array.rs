@@ -42,7 +42,7 @@ impl<OffsetSize: OffsetSizeTrait> GenericStringArray<OffsetSize> {
     pub fn take_iter<'a>(
         &'a self,
         indexes: impl Iterator<Item = Option<usize>> + 'a,
-    ) -> impl Iterator<Item = Option<&str>> + 'a {
+    ) -> impl Iterator<Item = Option<&'a str>> {
         indexes.map(|opt_index| opt_index.map(|index| self.value(index)))
     }
 
@@ -53,7 +53,7 @@ impl<OffsetSize: OffsetSizeTrait> GenericStringArray<OffsetSize> {
     pub unsafe fn take_iter_unchecked<'a>(
         &'a self,
         indexes: impl Iterator<Item = Option<usize>> + 'a,
-    ) -> impl Iterator<Item = Option<&str>> + 'a {
+    ) -> impl Iterator<Item = Option<&'a str>> {
         indexes.map(|opt_index| opt_index.map(|index| self.value_unchecked(index)))
     }
 

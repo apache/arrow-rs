@@ -108,7 +108,9 @@ where
         .collect()
 }
 
-/// Creates a random (but fixed-seeded) string array of a given size and null density, strings have a random length
+/// Creates a random (but fixed-seeded) string array of a given size and null density.
+///
+/// Strings have a random length
 /// between 0 and 400 alphanumeric characters. `0..400` is chosen to cover a wide range of common string lengths,
 /// which have a dramatic impact on performance of some queries, e.g. LIKE/ILIKE/regex.
 pub fn create_string_array<Offset: OffsetSizeTrait>(
