@@ -331,7 +331,7 @@ where
 
 /// Applies the provided fallible binary operation across `a` and `b`.
 ///
-/// This will returning any error encountered, or collecting the results into
+/// This will return any error encountered, or collect the results into
 /// a [`PrimitiveArray`]. If any index is null in either `a`
 /// or `b`, the corresponding index in the result will also be null
 ///
@@ -385,7 +385,7 @@ where
 /// Applies the provided fallible binary operation across `a` and `b` by mutating the mutable
 /// [`PrimitiveArray`] `a` with the results.
 ///
-/// Returning any error encountered, or collecting the results into a [`PrimitiveArray`] as return
+/// Returns any error encountered, or collects the results into a [`PrimitiveArray`] as return
 /// value. If any index is null in either `a` or `b`, the corresponding index in the result will
 /// also be null.
 ///

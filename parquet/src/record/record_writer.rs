@@ -20,7 +20,7 @@ use crate::schema::types::TypePtr;
 use super::super::errors::ParquetError;
 use super::super::file::writer::SerializedRowGroupWriter;
 
-/// Trait descriping how to write a record (the implementator) to a row group writer.
+/// Trait describing how to write a record (the implementator) to a row group writer.
 ///
 /// [`parquet_derive`] crate provides a derive macro [`ParquetRecordWriter`] for this trait
 /// for unnested structs.
