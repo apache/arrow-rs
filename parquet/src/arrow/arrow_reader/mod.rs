@@ -34,8 +34,7 @@ use crate::arrow::schema::{parquet_to_arrow_schema_and_fields, ParquetField};
 use crate::arrow::{parquet_to_arrow_field_levels, FieldLevels, ProjectionMask};
 use crate::column::page::{PageIterator, PageReader};
 use crate::errors::{ParquetError, Result};
-use crate::file::metadata::reader::parquet_metadata_from_file;
-use crate::file::metadata::ParquetMetaData;
+use crate::file::metadata::{ParquetMetaData, ParquetMetaDataReader};
 use crate::file::reader::{ChunkReader, SerializedPageReader};
 use crate::schema::types::SchemaDescriptor;
 
@@ -381,7 +380,9 @@ impl ArrowReaderMetadata {
     /// `Self::metadata` is missing the page index, this function will attempt
     /// to load the page index by making an object store request.
     pub fn load<T: ChunkReader>(reader: &T, options: ArrowReaderOptions) -> Result<Self> {
-        let metadata = parquet_metadata_from_file(reader, options.page_index, options.page_index)?;
+        let metadata = ParquetMetaDataReader::new()
+            .with_page_indexes(options.page_index)
+            .parse(reader)?;
         Self::try_new(Arc::new(metadata), options)
     }
 

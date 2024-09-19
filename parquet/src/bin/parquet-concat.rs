@@ -39,6 +39,7 @@
 use clap::Parser;
 use parquet::column::writer::ColumnCloseResult;
 use parquet::errors::{ParquetError, Result};
+use parquet::file::metadata::ParquetMetaDataReader;
 use parquet::file::properties::WriterProperties;
 use parquet::file::writer::SerializedFileWriter;
 use std::fs::File;
@@ -70,8 +71,7 @@ impl Args {
             .iter()
             .map(|x| {
                 let reader = File::open(x)?;
-                let metadata =
-                    parquet::file::metadata::parquet_metadata_from_file(&reader, false, false)?;
+                let metadata = ParquetMetaDataReader::new().parse(&reader)?;
                 Ok((reader, metadata))
             })
             .collect::<Result<Vec<_>>>()?;

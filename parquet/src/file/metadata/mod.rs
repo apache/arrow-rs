@@ -116,7 +116,6 @@ use crate::schema::types::{
     ColumnDescPtr, ColumnDescriptor, ColumnPath, SchemaDescPtr, SchemaDescriptor,
     Type as SchemaType,
 };
-pub use reader::parquet_metadata_from_file;
 pub use reader::ParquetMetaDataReader;
 pub use writer::ParquetMetaDataWriter;
 pub(crate) use writer::ThriftMetadataWriter;

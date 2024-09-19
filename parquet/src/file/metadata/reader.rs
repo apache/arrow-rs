@@ -34,27 +34,6 @@ use crate::thrift::{TCompactSliceInputProtocol, TSerializable};
 #[cfg(feature = "async")]
 use crate::arrow::async_reader::MetadataFetch;
 
-/// Reads the [`ParquetMetaData`] from the footer of a Parquet file.
-///
-/// This function is a wrapper around [`ParquetMetaDataReader`]. The input, which must implement
-/// [`ChunkReader`], may be a [`std::fs::File`] or [`Bytes`]. In the latter case, the passed in
-/// buffer must contain the contents of the entire file if any of the Parquet [Page Index]
-/// structures are to be populated (controlled via the `column_index` and `offset_index`
-/// arguments).
-///
-/// [Page Index]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
-pub fn parquet_metadata_from_file<R: ChunkReader>(
-    file: &R,
-    column_index: bool,
-    offset_index: bool,
-) -> Result<ParquetMetaData> {
-    let mut reader = ParquetMetaDataReader::new()
-        .with_column_indexes(column_index)
-        .with_offset_indexes(offset_index);
-    reader.try_parse(file)?;
-    reader.finish()
-}
-
 /// Reads the [`ParquetMetaData`] from a byte stream.
 ///
 /// See [`crate::file::metadata::ParquetMetaDataWriter#output-format`] for a description of
@@ -144,10 +123,35 @@ impl ParquetMetaDataReader {
             .ok_or_else(|| general_err!("could not parse parquet metadata"))
     }
 
+    /// Given a [`ChunkReader`], parse and return the [`ParquetMetaData`] in a single pass.
+    ///
+    /// If `reader` is [`Bytes`] based, then the buffer must contain sufficient bytes to complete
+    /// the request, and must include the Parquet footer. If page indexes are desired, the buffer
+    /// must contain the entire file, or [`Self::try_parse_range()`] should be used.
+    ///
+    /// This call will consume `self`.
+    ///
+    /// Example
+    /// ```no_run
+    /// # use parquet::file::metadata::{ParquetMetaData, ParquetMetaDataReader};
+    /// # fn open_parquet_file(path: &str) -> std::fs::File { unimplemented!(); }
+    /// // read parquet metadata including page indexes
+    /// let file = open_parquet_file("some_path.parquet");
+    /// let metadata = ParquetMetaDataReader::new()
+    ///     .with_page_indexes(true)
+    ///     .parse(&file).unwrap();
+    /// assert!(metadata.column_index().is_some());
+    /// assert!(metadata.offset_index().is_some());
+    /// ```
+    pub fn parse<R: ChunkReader>(mut self, reader: &R) -> Result<ParquetMetaData> {
+        self.try_parse(reader)?;
+        self.finish()
+    }
+
     /// Attempts to parse the footer metadata (and optionally page indexes) given a [`ChunkReader`].
     /// If `reader` is [`Bytes`] based, then the buffer must contain sufficient bytes to complete
-    /// the request. If page indexes are desired, the buffer must contain the entire file, or
-    /// [`Self::try_parse_range()`] should be used.
+    /// the request, and must include the Parquet footer. If page indexes are desired, the buffer
+    /// must contain the entire file, or [`Self::try_parse_range()`] should be used.
     pub fn try_parse<R: ChunkReader>(&mut self, reader: &R) -> Result<()> {
         self.try_parse_range(reader, 0..reader.len() as usize)
     }

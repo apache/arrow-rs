@@ -908,7 +908,6 @@ mod tests {
     };
     use crate::arrow::schema::parquet_to_arrow_schema_and_fields;
     use crate::arrow::ArrowWriter;
-    use crate::file::metadata::reader::parquet_metadata_from_file;
     use crate::file::page_index::index_reader;
     use crate::file::properties::WriterProperties;
     use arrow::compute::kernels::cmp::eq;
@@ -945,13 +944,17 @@ mod tests {
         }
     }
 
+    fn get_parquet_metadata(data: &Bytes) -> ParquetMetaData {
+        ParquetMetaDataReader::new().parse(data).unwrap()
+    }
+
     #[tokio::test]
     async fn test_async_reader() {
         let testdata = arrow::util::test_util::parquet_test_data();
         let path = format!("{testdata}/alltypes_plain.parquet");
         let data = Bytes::from(std::fs::read(path).unwrap());
 
-        let metadata = parquet_metadata_from_file(&data, false, false).unwrap();
+        let metadata = get_parquet_metadata(&data);
         let metadata = Arc::new(metadata);
 
         assert_eq!(metadata.num_row_groups(), 1);
@@ -1006,7 +1009,7 @@ mod tests {
         let path = format!("{testdata}/alltypes_tiny_pages_plain.parquet");
         let data = Bytes::from(std::fs::read(path).unwrap());
 
-        let metadata = parquet_metadata_from_file(&data, false, false).unwrap();
+        let metadata = get_parquet_metadata(&data);
         let metadata = Arc::new(metadata);
 
         assert_eq!(metadata.num_row_groups(), 1);
@@ -1072,7 +1075,7 @@ mod tests {
         let path = format!("{testdata}/alltypes_tiny_pages_plain.parquet");
         let data = Bytes::from(std::fs::read(path).unwrap());
 
-        let metadata = parquet_metadata_from_file(&data, false, false).unwrap();
+        let metadata = get_parquet_metadata(&data);
         let metadata = Arc::new(metadata);
 
         assert_eq!(metadata.num_row_groups(), 1);
@@ -1116,7 +1119,7 @@ mod tests {
         let path = format!("{testdata}/alltypes_tiny_pages_plain.parquet");
         let data = Bytes::from(std::fs::read(path).unwrap());
 
-        let metadata = parquet_metadata_from_file(&data, false, false).unwrap();
+        let metadata = get_parquet_metadata(&data);
         let metadata = Arc::new(metadata);
 
         assert_eq!(metadata.num_row_groups(), 1);
@@ -1172,7 +1175,7 @@ mod tests {
         let path = format!("{testdata}/alltypes_tiny_pages_plain.parquet");
         let data = Bytes::from(std::fs::read(path).unwrap());
 
-        let metadata = parquet_metadata_from_file(&data, false, false).unwrap();
+        let metadata = get_parquet_metadata(&data);
         let metadata = Arc::new(metadata);
 
         assert_eq!(metadata.num_row_groups(), 1);
@@ -1237,7 +1240,7 @@ mod tests {
         let path = format!("{testdata}/alltypes_tiny_pages_plain.parquet");
         let data = Bytes::from(std::fs::read(path).unwrap());
 
-        let metadata = parquet_metadata_from_file(&data, false, false).unwrap();
+        let metadata = get_parquet_metadata(&data);
         let metadata = Arc::new(metadata);
 
         assert_eq!(metadata.num_row_groups(), 1);
@@ -1316,7 +1319,7 @@ mod tests {
         writer.close().unwrap();
 
         let data: Bytes = buf.into();
-        let metadata = parquet_metadata_from_file(&data, false, false).unwrap();
+        let metadata = get_parquet_metadata(&data);
         let parquet_schema = metadata.file_metadata().schema_descr_ptr();
 
         let test = TestReader {
@@ -1390,7 +1393,7 @@ mod tests {
         writer.close().unwrap();
 
         let data: Bytes = buf.into();
-        let metadata = parquet_metadata_from_file(&data, false, false).unwrap();
+        let metadata = get_parquet_metadata(&data);
 
         assert_eq!(metadata.num_row_groups(), 2);
 
@@ -1478,7 +1481,7 @@ mod tests {
         let path = format!("{testdata}/alltypes_tiny_pages_plain.parquet");
         let data = Bytes::from(std::fs::read(path).unwrap());
 
-        let metadata = parquet_metadata_from_file(&data, false, false).unwrap();
+        let metadata = get_parquet_metadata(&data);
         let parquet_schema = metadata.file_metadata().schema_descr_ptr();
         let metadata = Arc::new(metadata);
 
@@ -1528,7 +1531,7 @@ mod tests {
         let path = format!("{testdata}/alltypes_tiny_pages.parquet");
         let data = Bytes::from(std::fs::read(path).unwrap());
 
-        let metadata = parquet_metadata_from_file(&data, false, false).unwrap();
+        let metadata = get_parquet_metadata(&data);
 
         let offset_index =
             index_reader::read_offset_indexes(&data, metadata.row_group(0).columns())
@@ -1618,7 +1621,7 @@ mod tests {
         let path = format!("{testdata}/alltypes_plain.parquet");
         let data = Bytes::from(std::fs::read(path).unwrap());
 
-        let metadata = parquet_metadata_from_file(&data, false, false).unwrap();
+        let metadata = get_parquet_metadata(&data);
         let file_rows = metadata.file_metadata().num_rows() as usize;
         let metadata = Arc::new(metadata);
 
@@ -1763,7 +1766,7 @@ mod tests {
         let testdata = arrow::util::test_util::parquet_test_data();
         let path = format!("{testdata}/data_index_bloom_encoding_stats.parquet");
         let data = Bytes::from(std::fs::read(path).unwrap());
-        let metadata = parquet_metadata_from_file(&data, false, false).unwrap();
+        let metadata = get_parquet_metadata(&data);
         let metadata = Arc::new(metadata);
         let async_reader = TestReader {
             data: data.clone(),
@@ -1792,7 +1795,7 @@ mod tests {
     }
 
     async fn test_get_row_group_column_bloom_filter(data: Bytes, with_length: bool) {
-        let metadata = parquet_metadata_from_file(&data, false, false).unwrap();
+        let metadata = get_parquet_metadata(&data);
         let metadata = Arc::new(metadata);
 
         assert_eq!(metadata.num_row_groups(), 1);
@@ -1932,7 +1935,7 @@ mod tests {
         writer.close().unwrap();
 
         let data: Bytes = buf.into();
-        let metadata = parquet_metadata_from_file(&data, false, false).unwrap();
+        let metadata = get_parquet_metadata(&data);
         let parquet_schema = metadata.file_metadata().schema_descr_ptr();
 
         let test = TestReader {

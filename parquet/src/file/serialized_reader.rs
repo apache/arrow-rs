@@ -179,7 +179,7 @@ impl<R: 'static + ChunkReader> SerializedFileReader<R> {
     /// Creates file reader from a Parquet file.
     /// Returns error if Parquet file does not exist or is corrupt.
     pub fn new(chunk_reader: R) -> Result<Self> {
-        let metadata = reader::parquet_metadata_from_file(&chunk_reader, false, false)?;
+        let metadata = ParquetMetaDataReader::new().parse(&chunk_reader)?;
         let props = Arc::new(ReaderProperties::builder().build());
         Ok(Self {
             chunk_reader: Arc::new(chunk_reader),
@@ -191,7 +191,7 @@ impl<R: 'static + ChunkReader> SerializedFileReader<R> {
     /// Creates file reader from a Parquet file with read options.
     /// Returns error if Parquet file does not exist or is corrupt.
     pub fn new_with_options(chunk_reader: R, options: ReadOptions) -> Result<Self> {
-        let metadata = reader::parquet_metadata_from_file(&chunk_reader, false, false)?;
+        let metadata = ParquetMetaDataReader::new().parse(&chunk_reader)?;
         let mut predicates = options.predicates;
         let row_groups = metadata.row_groups().to_vec();
         let mut filtered_row_groups = Vec::<RowGroupMetaData>::new();
