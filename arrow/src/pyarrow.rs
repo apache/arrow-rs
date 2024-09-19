@@ -18,6 +18,7 @@
 //! Pass Arrow objects from and to PyArrow, using Arrow's
 //! [C Data Interface](https://arrow.apache.org/docs/format/CDataInterface.html)
 //! and [pyo3](https://docs.rs/pyo3/latest/pyo3/).
+//!
 //! For underlying implementation, see the [ffi] module.
 //!
 //! One can use these to write Python functions that take and return PyArrow
@@ -472,8 +473,10 @@ impl IntoPyArrow for ArrowArrayStreamReader {
     }
 }
 
-/// A newtype wrapper. When wrapped around a type `T: FromPyArrow`, it
-/// implements `FromPyObject` for the PyArrow objects. When wrapped around a
+/// A newtype wrapper for types implement [`FromPyArrow`] or [`IntoPyArrow`].
+///
+/// When wrapped around a type `T: FromPyArrow`, it
+/// implements [`FromPyObject`] for the PyArrow objects. When wrapped around a
 /// `T: IntoPyArrow`, it implements `IntoPy<PyObject>` for the wrapped type.
 #[derive(Debug)]
 pub struct PyArrowType<T>(pub T);
