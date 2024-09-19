@@ -93,7 +93,7 @@ pub struct MutableBuffer<A: Allocator = Global> {
     allocator: A,
 }
 
-/// Constructors under default allocator
+/// Constructors when using the default allocator [`Global`](std::alloc::Global)
 impl MutableBuffer<Global> {
     /// Allocate a new [MutableBuffer] with initial capacity to be at least `capacity`.
     ///
@@ -225,6 +225,31 @@ impl MutableBuffer<Global> {
 
         buffer.truncate(bit_util::ceil(len, 8));
         buffer
+    }
+
+    #[deprecated(
+        since = "2.0.0",
+        note = "This method is deprecated in favour of `into` from the trait `Into`."
+    )]
+    /// Freezes this buffer and return an immutable version of it.
+    ///
+    /// This method is only available under the default [`Global`](std::alloc::Global)
+    /// for now. Support for custom allocators will be added in a future release.
+    /// Related ticket: https://github.com/apache/arrow-rs/issues/3960
+    pub fn freeze(self) -> Buffer {
+        self.into_buffer()
+    }
+
+    /// Freezes this buffer and return an immutable version of it.
+    ///
+    /// This method is only available under the default [`Global`](std::alloc::Global)
+    /// for now. Support for custom allocators will be added in a future release.
+    /// Related ticket: https://github.com/apache/arrow-rs/issues/3960
+    #[inline]
+    pub(super) fn into_buffer(self) -> Buffer {
+        let bytes = unsafe { Bytes::new(self.data, self.len, Deallocation::Standard(self.layout)) };
+        std::mem::forget(self);
+        Buffer::from_bytes(bytes)
     }
 }
 
@@ -391,22 +416,6 @@ impl<A: Allocator> MutableBuffer<A> {
     #[inline]
     pub fn as_mut_ptr(&mut self) -> *mut u8 {
         self.data.as_ptr()
-    }
-
-    #[deprecated(
-        since = "2.0.0",
-        note = "This method is deprecated in favour of `into` from the trait `Into`."
-    )]
-    /// Freezes this buffer and return an immutable version of it.
-    pub fn freeze(self) -> Buffer {
-        self.into_buffer()
-    }
-
-    #[inline]
-    pub(super) fn into_buffer(self) -> Buffer {
-        let bytes = unsafe { Bytes::new(self.data, self.len, Deallocation::Standard(self.layout)) };
-        std::mem::forget(self);
-        Buffer::from_bytes(bytes)
     }
 
     /// View this buffer as a mutable slice of a specific type.
