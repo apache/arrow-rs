@@ -473,7 +473,7 @@ impl IntoPyArrow for ArrowArrayStreamReader {
     }
 }
 
-/// A newtype wrapper for types implement [`FromPyArrow`] or [`IntoPyArrow`].
+/// A newtype wrapper for types implementing [`FromPyArrow`] or [`IntoPyArrow`].
 ///
 /// When wrapped around a type `T: FromPyArrow`, it
 /// implements [`FromPyObject`] for the PyArrow objects. When wrapped around a
