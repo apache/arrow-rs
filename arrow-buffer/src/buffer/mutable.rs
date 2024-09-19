@@ -1230,4 +1230,32 @@ mod tests {
         let max_capacity = isize::MAX as usize - (isize::MAX as usize % ALIGNMENT);
         let _ = MutableBuffer::with_capacity(max_capacity + 1);
     }
+
+    #[test]
+    #[cfg(feature = "allocator_api")]
+    fn mutable_buffer_with_custom_allocator() {
+        struct MyAllocator;
+
+        unsafe impl Allocator for MyAllocator {
+            fn allocate(
+                &self,
+                layout: std::alloc::Layout,
+            ) -> Result<std::ptr::NonNull<[u8]>, std::alloc::AllocError> {
+                Global.allocate(layout)
+            }
+
+            unsafe fn deallocate(&self, ptr: std::ptr::NonNull<u8>, layout: std::alloc::Layout) {
+                Global.deallocate(ptr, layout)
+            }
+        }
+
+        let mut buffer = MutableBuffer::new_in(100, MyAllocator);
+        buffer.extend_from_slice(b"hello");
+        assert_eq!(5, buffer.len());
+        assert_eq!(b"hello", buffer.as_slice());
+
+        buffer.reserve(200);
+        buffer.shrink_to_fit();
+        buffer.clear();
+    }
 }
