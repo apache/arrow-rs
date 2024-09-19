@@ -799,7 +799,7 @@ pub fn validate_decimal256_precision(value: i256, precision: u8) -> Result<(), A
 }
 
 /// Determines whether the specified `i256` value can be properly
-/// interpreted as a Decimal number with precision `precision`
+/// interpreted as a Decimal256 number with precision `precision`
 #[inline]
 pub fn is_validate_decimal256_precision(value: i256, precision: u8) -> bool {
     precision <= DECIMAL256_MAX_PRECISION
