@@ -187,10 +187,11 @@ impl ParquetMetaDataReader {
             Err(ParquetError::NeedMoreData(needed)) => {
                 // If reader is the same length as `file_size` then presumably there is no more to
                 // read, so return an EOF error.
-                if file_size == reader.len() as usize {
+                if file_size == reader.len() as usize || needed > file_size {
                     return Err(eof_err!(
-                        "Parquet file too small. Size is {} but need {needed}",
-                        reader.len()
+                        "Parquet file too small. Size is {} but need {}",
+                        file_size,
+                        needed
                     ));
                 } else {
                     // Ask for a larger buffer
@@ -221,15 +222,13 @@ impl ParquetMetaDataReader {
 
         // Check to see if needed range is within `file_range`. Checking `range.end` seems
         // redundant, but it guards against `range_for_page_index()` returning garbage.
-        let file_range = file_size - reader.len() as usize..file_size;
+        let file_range = file_size.saturating_sub(reader.len() as usize)..file_size;
         if !(file_range.contains(&range.start) && file_range.contains(&range.end)) {
-            // If file_range.start == 0, then file_size == reader.len(), so like above there's
-            // nothing to do but return EOF.
-            if file_range.start == 0 {
+            // Requested range starts beyond EOF
+            if range.end > file_size {
                 return Err(eof_err!(
-                    "Parquet file too small. Size is {} but need {}",
-                    reader.len(),
-                    range.end - range.start
+                    "Parquet file too small. Range {:?} is beyond file bounds {file_size}",
+                    range
                 ));
             } else {
                 // Ask for a larger buffer
@@ -687,6 +686,14 @@ mod tests {
             _ => panic!("unexpected error"),
         };
 
+        // not enough for page index but lie about file size
+        let bytes = bytes_for_range(323584..len);
+        let reader_result = reader.try_parse_sized(&bytes, len - 323584).unwrap_err();
+        assert_eq!(
+            reader_result.to_string(),
+            "EOF: Parquet file too small. Range 323583..452504 is beyond file bounds 130649"
+        );
+
         // not enough for file metadata
         let mut reader = ParquetMetaDataReader::new();
         let bytes = bytes_for_range(452505..len);
@@ -714,6 +721,14 @@ mod tests {
         assert_eq!(
             reader_result.to_string(),
             "Parquet error: Invalid Parquet file. Corrupt footer"
+        );
+
+        // lie about file size
+        let bytes = bytes_for_range(452510..len);
+        let reader_result = reader.try_parse_sized(&bytes, len - 452505).unwrap_err();
+        assert_eq!(
+            reader_result.to_string(),
+            "EOF: Parquet file too small. Size is 1728 but need 1729"
         );
     }
 }
