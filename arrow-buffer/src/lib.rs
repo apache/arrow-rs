@@ -19,6 +19,7 @@
 
 // used by [`buffer::mutable::dangling_ptr`]
 #![cfg_attr(miri, feature(strict_provenance))]
+#![cfg_attr(feature = "allocator_api", feature(allocator_api))]
 
 pub mod alloc;
 pub mod buffer;

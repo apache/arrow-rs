@@ -33,6 +33,9 @@ name = "arrow_buffer"
 path = "src/lib.rs"
 bench = false
 
+[features]
+allocator_api = []
+
 [dependencies]
 bytes = { version = "1.4" }
 num = { version = "0.4", default-features = false, features = ["std"] }

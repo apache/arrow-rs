@@ -81,6 +81,7 @@ force_validate = ["arrow-array/force_validate", "arrow-data/force_validate"]
 # Enable ffi support
 ffi = ["arrow-schema/ffi", "arrow-data/ffi", "arrow-array/ffi"]
 chrono-tz = ["arrow-array/chrono-tz"]
+allocator_api = ["arrow-buffer/allocator_api"]
 
 [dev-dependencies]
 chrono = { workspace = true }
@@ -106,6 +107,10 @@ path = "./examples/read_csv.rs"
 name = "read_csv_infer_schema"
 required-features = ["prettyprint", "csv"]
 path = "./examples/read_csv_infer_schema.rs"
+
+[[example]]
+name = "allocator_api"
+path = "./examples/allocator_api.rs"
 
 [[bench]]
 name = "aggregate_kernels"

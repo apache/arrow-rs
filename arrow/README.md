@@ -61,6 +61,7 @@ The `arrow` crate provides the following features which may be enabled in your `
 - `chrono-tz` - support of parsing timezone using [chrono-tz](https://docs.rs/chrono-tz/0.6.0/chrono_tz/)
 - `ffi` - bindings for the Arrow C [C Data Interface](https://arrow.apache.org/docs/format/CDataInterface.html)
 - `pyarrow` - bindings for pyo3 to call arrow-rs from python
+- `allocator_api` - support for customizing memory [`Allocator`](https://doc.rust-lang.org/std/alloc/trait.Allocator.html) for underlying Array [`MutableBuffer`](https://docs.rs/arrow/latest/arrow/buffer/struct.MutableBuffer.html). This feature requires a nightly rust toolchain.
 
 ## Arrow Feature Status
 
