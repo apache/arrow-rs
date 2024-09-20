@@ -133,6 +133,7 @@ for f in `ls *.rs`; do
         # Now prefix the file with the static contents
         echo -e "${PREFIX}" "${SCHEMA_IMPORT}" | cat - $f > temp && mv temp $f
     elif [[ $f == "Message.rs" ]]; then
+        sed --in-place='' 's/List<Int16>/\`List<Int16>\`/g' $f
         echo -e "${PREFIX}" "${SCHEMA_IMPORT}" "${SPARSE_TENSOR_IMPORT}" "${TENSOR_IMPORT}" | cat - $f > temp && mv temp $f
     elif [[ $f == "SparseTensor.rs" ]]; then
         echo -e "${PREFIX}" "${SCHEMA_IMPORT}" "${TENSOR_IMPORT}" | cat - $f > temp && mv temp $f
