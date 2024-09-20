@@ -159,6 +159,7 @@ impl NullBufferBuilder {
         }
     }
 
+    /// Return a mutable reference to the inner bitmap slice.
     pub fn as_slice_mut(&mut self) -> Option<&mut [u8]> {
         self.bitmap_builder.as_mut().map(|b| b.as_slice_mut())
     }
@@ -173,14 +174,12 @@ impl NullBufferBuilder {
 }
 
 impl NullBufferBuilder {
+    /// Return the number of bits in the buffer.
     pub fn len(&self) -> usize {
-        if let Some(b) = &self.bitmap_builder {
-            b.len()
-        } else {
-            self.len
-        }
+        self.bitmap_builder.as_ref().map_or(self.len, |b| b.len())
     }
 
+    /// Check if the builder is empty.
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }

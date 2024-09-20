@@ -432,8 +432,12 @@ fn string_to_time(s: &str) -> Option<NaiveTime> {
 /// assert_eq!(ts, 1609459200123456789);
 /// ```
 pub trait Parser: ArrowPrimitiveType {
+    /// Parse a string to the native type
     fn parse(string: &str) -> Option<Self::Native>;
 
+    /// Parse a string to the native type with a format string
+    ///
+    /// When not implemented, the format string is unused, and this method is equivalent to [parse](#tymethod.parse)
     fn parse_formatted(string: &str, _format: &str) -> Option<Self::Native> {
         Self::parse(string)
     }
@@ -966,6 +970,7 @@ pub fn parse_decimal<T: DecimalType>(
     })
 }
 
+/// Parse human-readable interval string to Arrow [IntervalYearMonthType]
 pub fn parse_interval_year_month(
     value: &str,
 ) -> Result<<IntervalYearMonthType as ArrowPrimitiveType>::Native, ArrowError> {
@@ -981,6 +986,7 @@ pub fn parse_interval_year_month(
     Ok(IntervalYearMonthType::make_value(0, months))
 }
 
+/// Parse human-readable interval string to Arrow [IntervalDayTimeType]
 pub fn parse_interval_day_time(
     value: &str,
 ) -> Result<<IntervalDayTimeType as ArrowPrimitiveType>::Native, ArrowError> {
@@ -994,6 +1000,7 @@ pub fn parse_interval_day_time(
     Ok(IntervalDayTimeType::make_value(days, millis))
 }
 
+/// Parse human-readable interval string to Arrow [IntervalMonthDayNanoType]
 pub fn parse_interval_month_day_nano_config(
     value: &str,
     config: IntervalParseConfig,
@@ -1005,6 +1012,7 @@ pub fn parse_interval_month_day_nano_config(
     Ok(IntervalMonthDayNanoType::make_value(months, days, nanos))
 }
 
+/// Parse human-readable interval string to Arrow [IntervalMonthDayNanoType]
 pub fn parse_interval_month_day_nano(
     value: &str,
 ) -> Result<<IntervalMonthDayNanoType as ArrowPrimitiveType>::Native, ArrowError> {
@@ -1018,14 +1026,18 @@ const NANOS_PER_HOUR: i64 = 60 * NANOS_PER_MINUTE;
 #[cfg(test)]
 const NANOS_PER_DAY: i64 = 24 * NANOS_PER_HOUR;
 
+/// Config to parse interval strings
+///
+/// Currently stores the `default_unit` to use if the string doesn't have one specified
 #[derive(Debug, Clone)]
 pub struct IntervalParseConfig {
     /// The default unit to use if none is specified
-    /// e.g. `INTERVAL 1` represents `INTERVAL 1 SECOND` when default_unit = IntervalType::Second
+    /// e.g. `INTERVAL 1` represents `INTERVAL 1 SECOND` when default_unit = [IntervalUnit::Second]
     default_unit: IntervalUnit,
 }
 
 impl IntervalParseConfig {
+    /// Create a new [IntervalParseConfig] with the given default unit
     pub fn new(default_unit: IntervalUnit) -> Self {
         Self { default_unit }
     }
@@ -1034,18 +1046,32 @@ impl IntervalParseConfig {
 #[rustfmt::skip]
 #[derive(Debug, Clone, Copy)]
 #[repr(u16)]
+/// Represents the units of an interval, with each variant
+/// corresponding to a bit in the interval's bitfield representation
 pub enum IntervalUnit {
+    /// A Century
     Century     = 0b_0000_0000_0001,
+    /// A Decade
     Decade      = 0b_0000_0000_0010,
+    /// A Year
     Year        = 0b_0000_0000_0100,
+    /// A Month
     Month       = 0b_0000_0000_1000,
+    /// A Week
     Week        = 0b_0000_0001_0000,
+    /// A Day
     Day         = 0b_0000_0010_0000,
+    /// An Hour
     Hour        = 0b_0000_0100_0000,
+    /// A Minute
     Minute      = 0b_0000_1000_0000,
+    /// A Second
     Second      = 0b_0001_0000_0000,
+    /// A Millisecond
     Millisecond = 0b_0010_0000_0000,
+    /// A Microsecond
     Microsecond = 0b_0100_0000_0000,
+    /// A Nanosecond
     Nanosecond  = 0b_1000_0000_0000,
 }
 
@@ -1093,6 +1119,7 @@ impl IntervalUnit {
     }
 }
 
+/// A tuple representing (months, days, nanoseconds) in an interval
 pub type MonthDayNano = (i32, i32, i64);
 
 /// Chosen based on the number of decimal digits in 1 week in nanoseconds

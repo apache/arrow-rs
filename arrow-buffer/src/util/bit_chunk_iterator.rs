@@ -131,26 +131,32 @@ impl<'a> UnalignedBitChunk<'a> {
         }
     }
 
+    /// Returns the number of leading padding bits
     pub fn lead_padding(&self) -> usize {
         self.lead_padding
     }
 
+    /// Returns the number of trailing padding bits
     pub fn trailing_padding(&self) -> usize {
         self.trailing_padding
     }
 
+    /// Returns the prefix, if any
     pub fn prefix(&self) -> Option<u64> {
         self.prefix
     }
 
+    /// Returns the suffix, if any
     pub fn suffix(&self) -> Option<u64> {
         self.suffix
     }
 
+    /// Returns reference to the chunks
     pub fn chunks(&self) -> &'a [u64] {
         self.chunks
     }
 
+    /// Returns an iterator over the chunks
     pub fn iter(&self) -> UnalignedBitChunkIterator<'a> {
         self.prefix
             .into_iter()
@@ -164,6 +170,7 @@ impl<'a> UnalignedBitChunk<'a> {
     }
 }
 
+/// Iterator over an [`UnalignedBitChunk`]
 pub type UnalignedBitChunkIterator<'a> = std::iter::Chain<
     std::iter::Chain<std::option::IntoIter<u64>, std::iter::Cloned<std::slice::Iter<'a, u64>>>,
     std::option::IntoIter<u64>,
@@ -212,6 +219,7 @@ pub struct BitChunks<'a> {
 }
 
 impl<'a> BitChunks<'a> {
+    /// Create a new [`BitChunks`] from a byte array, and an offset and length in bits
     pub fn new(buffer: &'a [u8], offset: usize, len: usize) -> Self {
         assert!(ceil(offset + len, 8) <= buffer.len() * 8);
 
@@ -232,6 +240,7 @@ impl<'a> BitChunks<'a> {
     }
 }
 
+/// Iterator over chunks of 64 bits represented as an u64
 #[derive(Debug)]
 pub struct BitChunkIterator<'a> {
     buffer: &'a [u8],

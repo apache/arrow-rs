@@ -77,23 +77,30 @@ use crate::ffi_stream::{ArrowArrayStreamReader, FFI_ArrowArrayStream};
 use crate::record_batch::RecordBatch;
 
 import_exception!(pyarrow, ArrowException);
+/// Represents an exception raised by PyArrow.
 pub type PyArrowException = ArrowException;
 
 fn to_py_err(err: ArrowError) -> PyErr {
     PyArrowException::new_err(err.to_string())
 }
 
+/// Trait for converting Python objects to arrow-rs types.
 pub trait FromPyArrow: Sized {
+    /// Convert a Python object to an arrow-rs type.
+    ///
+    /// Takes a GIL-bound value from Python and returns a result with the arrow-rs type.
     fn from_pyarrow_bound(value: &Bound<PyAny>) -> PyResult<Self>;
 }
 
 /// Create a new PyArrow object from a arrow-rs type.
 pub trait ToPyArrow {
+    /// Convert the implemented type into a Python object without consuming it.
     fn to_pyarrow(&self, py: Python) -> PyResult<PyObject>;
 }
 
 /// Convert an arrow-rs type into a PyArrow object.
 pub trait IntoPyArrow {
+    /// Convert the implemented type into a Python object while consuming it.
     fn into_pyarrow(self, py: Python) -> PyResult<PyObject>;
 }
 
