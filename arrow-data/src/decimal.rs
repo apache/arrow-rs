@@ -650,10 +650,98 @@ pub(crate) const MIN_DECIMAL_BYTES_FOR_LARGER_EACH_PRECISION: [i256; 77] = [
 ];
 
 /// `MAX_DECIMAL_FOR_EACH_PRECISION[p]` holds the maximum `i128` value that can
+/// be stored in [arrow_schema::DataType::Decimal128] value of precision `p`
+#[allow(dead_code)] // no longer used but is part of our public API
+pub const MAX_DECIMAL_FOR_EACH_PRECISION: [i128; 38] = [
+    9,
+    99,
+    999,
+    9999,
+    99999,
+    999999,
+    9999999,
+    99999999,
+    999999999,
+    9999999999,
+    99999999999,
+    999999999999,
+    9999999999999,
+    99999999999999,
+    999999999999999,
+    9999999999999999,
+    99999999999999999,
+    999999999999999999,
+    9999999999999999999,
+    99999999999999999999,
+    999999999999999999999,
+    9999999999999999999999,
+    99999999999999999999999,
+    999999999999999999999999,
+    9999999999999999999999999,
+    99999999999999999999999999,
+    999999999999999999999999999,
+    9999999999999999999999999999,
+    99999999999999999999999999999,
+    999999999999999999999999999999,
+    9999999999999999999999999999999,
+    99999999999999999999999999999999,
+    999999999999999999999999999999999,
+    9999999999999999999999999999999999,
+    99999999999999999999999999999999999,
+    999999999999999999999999999999999999,
+    9999999999999999999999999999999999999,
+    99999999999999999999999999999999999999,
+];
+
+/// `MIN_DECIMAL_FOR_EACH_PRECISION[p]` holds the minimum `i128` value that can
+/// be stored in a [arrow_schema::DataType::Decimal128] value of precision `p`
+#[allow(dead_code)] // no longer used but is part of our public API
+pub const MIN_DECIMAL_FOR_EACH_PRECISION: [i128; 38] = [
+    -9,
+    -99,
+    -999,
+    -9999,
+    -99999,
+    -999999,
+    -9999999,
+    -99999999,
+    -999999999,
+    -9999999999,
+    -99999999999,
+    -999999999999,
+    -9999999999999,
+    -99999999999999,
+    -999999999999999,
+    -9999999999999999,
+    -99999999999999999,
+    -999999999999999999,
+    -9999999999999999999,
+    -99999999999999999999,
+    -999999999999999999999,
+    -9999999999999999999999,
+    -99999999999999999999999,
+    -999999999999999999999999,
+    -9999999999999999999999999,
+    -99999999999999999999999999,
+    -999999999999999999999999999,
+    -9999999999999999999999999999,
+    -99999999999999999999999999999,
+    -999999999999999999999999999999,
+    -9999999999999999999999999999999,
+    -99999999999999999999999999999999,
+    -999999999999999999999999999999999,
+    -9999999999999999999999999999999999,
+    -99999999999999999999999999999999999,
+    -999999999999999999999999999999999999,
+    -9999999999999999999999999999999999999,
+    -99999999999999999999999999999999999999,
+];
+
+/// `MAX_DECIMAL_FOR_EACH_PRECISION[p]` holds the maximum `i128` value that can
 /// be stored in [arrow_schema::DataType::Decimal128] value of precision `p`.
 /// The first element is unused and is inserted so that we can look up using
 /// precision as the index without the need to subtract 1 first.
-pub(crate) const MAX_DECIMAL_FOR_EACH_PRECISION: [i128; 39] = [
+pub(crate) const MAX_DECIMAL_FOR_EACH_PRECISION_ONE_BASED: [i128; 39] = [
     0, // unused first element
     9,
     99,
@@ -699,7 +787,7 @@ pub(crate) const MAX_DECIMAL_FOR_EACH_PRECISION: [i128; 39] = [
 /// be stored in a [arrow_schema::DataType::Decimal128] value of precision `p`.
 /// The first element is unused and is inserted so that we can look up using
 /// precision as the index without the need to subtract 1 first.
-pub(crate) const MIN_DECIMAL_FOR_EACH_PRECISION: [i128; 39] = [
+pub(crate) const MIN_DECIMAL_FOR_EACH_PRECISION_ONE_BASED: [i128; 39] = [
     0, // unused first element
     -9,
     -99,
@@ -750,15 +838,15 @@ pub fn validate_decimal_precision(value: i128, precision: u8) -> Result<(), Arro
             "Max precision of a Decimal128 is {DECIMAL128_MAX_PRECISION}, but got {precision}",
         )));
     }
-    if value > MAX_DECIMAL_FOR_EACH_PRECISION[precision as usize] {
+    if value > MAX_DECIMAL_FOR_EACH_PRECISION_ONE_BASED[precision as usize] {
         Err(ArrowError::InvalidArgumentError(format!(
             "{value} is too large to store in a Decimal128 of precision {precision}. Max is {}",
-            MAX_DECIMAL_FOR_EACH_PRECISION[precision as usize]
+            MAX_DECIMAL_FOR_EACH_PRECISION_ONE_BASED[precision as usize]
         )))
-    } else if value < MIN_DECIMAL_FOR_EACH_PRECISION[precision as usize] {
+    } else if value < MIN_DECIMAL_FOR_EACH_PRECISION_ONE_BASED[precision as usize] {
         Err(ArrowError::InvalidArgumentError(format!(
             "{value} is too small to store in a Decimal128 of precision {precision}. Min is {}",
-            MIN_DECIMAL_FOR_EACH_PRECISION[precision as usize]
+            MIN_DECIMAL_FOR_EACH_PRECISION_ONE_BASED[precision as usize]
         )))
     } else {
         Ok(())
@@ -770,8 +858,8 @@ pub fn validate_decimal_precision(value: i128, precision: u8) -> Result<(), Arro
 #[inline]
 pub fn is_validate_decimal_precision(value: i128, precision: u8) -> bool {
     precision <= DECIMAL128_MAX_PRECISION
-        && value >= MIN_DECIMAL_FOR_EACH_PRECISION[precision as usize]
-        && value <= MAX_DECIMAL_FOR_EACH_PRECISION[precision as usize]
+        && value >= MIN_DECIMAL_FOR_EACH_PRECISION_ONE_BASED[precision as usize]
+        && value <= MAX_DECIMAL_FOR_EACH_PRECISION_ONE_BASED[precision as usize]
 }
 
 /// Validates that the specified `i256` of value can be properly
