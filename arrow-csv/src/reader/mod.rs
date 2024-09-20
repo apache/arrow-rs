@@ -236,31 +236,39 @@ pub struct Format {
 }
 
 impl Format {
+    /// Specify whether the CSV file has a header, defaults to `true`
+    ///
+    /// When `true`, the first row of the CSV file is treated as a header row
     pub fn with_header(mut self, has_header: bool) -> Self {
         self.header = has_header;
         self
     }
 
+    /// Specify a custom delimiter character, defaults to comma `','`
     pub fn with_delimiter(mut self, delimiter: u8) -> Self {
         self.delimiter = Some(delimiter);
         self
     }
 
+    /// Specify an escape character
     pub fn with_escape(mut self, escape: u8) -> Self {
         self.escape = Some(escape);
         self
     }
 
+    /// Specify a custom quote character, defaults to double quote `'"'`
     pub fn with_quote(mut self, quote: u8) -> Self {
         self.quote = Some(quote);
         self
     }
 
+    /// Specify a custom terminator character, defaults to CRLF
     pub fn with_terminator(mut self, terminator: u8) -> Self {
         self.terminator = Some(terminator);
         self
     }
 
+    /// Specify a comment character, lines starting with this character will be ignored
     pub fn with_comment(mut self, comment: u8) -> Self {
         self.comment = Some(comment);
         self
@@ -1100,7 +1108,7 @@ impl ReaderBuilder {
         self
     }
 
-    /// Overrides the [`Format`] of this [`ReaderBuilder]
+    /// Overrides the [Format] of this [ReaderBuilder]
     pub fn with_format(mut self, format: Format) -> Self {
         self.format = format;
         self
@@ -1112,21 +1120,25 @@ impl ReaderBuilder {
         self
     }
 
+    /// Set the given character as the CSV file's escape character
     pub fn with_escape(mut self, escape: u8) -> Self {
         self.format.escape = Some(escape);
         self
     }
 
+    /// Set the given character as the CSV file's quote character, by default it is double quote
     pub fn with_quote(mut self, quote: u8) -> Self {
         self.format.quote = Some(quote);
         self
     }
 
+    /// Provide a custom terminator character, defaults to CRLF
     pub fn with_terminator(mut self, terminator: u8) -> Self {
         self.format.terminator = Some(terminator);
         self
     }
 
+    /// Provide a comment character, lines starting with this character will be ignored
     pub fn with_comment(mut self, comment: u8) -> Self {
         self.format.comment = Some(comment);
         self

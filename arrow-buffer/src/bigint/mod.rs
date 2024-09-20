@@ -216,6 +216,7 @@ impl i256 {
         }
     }
 
+    /// Create an integer value from its 128-bit counterpart.
     pub const fn from_i128(v: i128) -> Self {
         Self::from_parts(v as u128, v >> 127)
     }
