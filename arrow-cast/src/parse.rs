@@ -432,10 +432,10 @@ fn string_to_time(s: &str) -> Option<NaiveTime> {
 /// assert_eq!(ts, 1609459200123456789);
 /// ```
 pub trait Parser: ArrowPrimitiveType {
-    /// Method to parse a string to the native type
+    /// Parse a string to the native type
     fn parse(string: &str) -> Option<Self::Native>;
 
-    /// Method to parse a string to the native type with a format string
+    /// Parse a string to the native type with a format string
     ///
     /// When not implemented, the format string is unused, and this method is equivalent to [parse](#tymethod.parse)
     fn parse_formatted(string: &str, _format: &str) -> Option<Self::Native> {

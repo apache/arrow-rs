@@ -250,7 +250,7 @@ impl Format {
         self
     }
 
-    /// Specify an escape character
+    /// Specify an escape character, defaults to `None`
     pub fn with_escape(mut self, escape: u8) -> Self {
         self.escape = Some(escape);
         self
@@ -268,7 +268,9 @@ impl Format {
         self
     }
 
-    /// Specify a comment character, lines starting with this character will be ignored
+    /// Specify a comment character, defaults to `None`
+    ///
+    /// Lines starting with this character will be ignored
     pub fn with_comment(mut self, comment: u8) -> Self {
         self.comment = Some(comment);
         self

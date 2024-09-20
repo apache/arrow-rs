@@ -84,11 +84,9 @@ fn to_py_err(err: ArrowError) -> PyErr {
     PyArrowException::new_err(err.to_string())
 }
 
-/// Trait for converting PyArrow objects to arrow-rs types, opposite of [ToPyArrow] or [IntoPyArrow].
-///
-/// This is an easy way to keep track of the types that have been implemented.
+/// Trait for converting Python objects to arrow-rs types.
 pub trait FromPyArrow: Sized {
-    /// Convert a PyArrow object to an arrow-rs type.
+    /// Convert a Python object to an arrow-rs type.
     ///
     /// Takes a GIL-bound value from Python and returns a result with the arrow-rs type.
     fn from_pyarrow_bound(value: &Bound<PyAny>) -> PyResult<Self>;

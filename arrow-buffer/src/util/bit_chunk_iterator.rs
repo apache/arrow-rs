@@ -219,7 +219,7 @@ pub struct BitChunks<'a> {
 }
 
 impl<'a> BitChunks<'a> {
-    /// Create a new [`BitChunks`] from a byte array, and and an offset and length in bits
+    /// Create a new [`BitChunks`] from a byte array, and an offset and length in bits
     pub fn new(buffer: &'a [u8], offset: usize, len: usize) -> Self {
         assert!(ceil(offset + len, 8) <= buffer.len() * 8);
 
