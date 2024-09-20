@@ -246,6 +246,22 @@ impl ParquetMetaDataReader {
         Ok(())
     }
 
+    /// Given a [`MetadataFetch`], parse and return the [`ParquetMetaData`] in a single pass.
+    ///
+    /// This call will consume `self`.
+    ///
+    /// See [`Self::with_prefetch_hint`] for a discussion of how to reduce the number of fetches
+    /// performed by this function.
+    #[cfg(feature = "async")]
+    pub async fn load<F: MetadataFetch>(
+        mut self,
+        fetch: F,
+        file_size: usize,
+    ) -> Result<ParquetMetaData> {
+        self.try_load(fetch, file_size).await?;
+        self.finish()
+    }
+
     /// Attempts to (asynchronously) parse the footer metadata (and optionally page indexes)
     /// given a [`MetadataFetch`].
     ///
@@ -554,6 +570,12 @@ impl ParquetMetaDataReader {
 mod tests {
     use super::*;
     use bytes::Bytes;
+    use futures::future::BoxFuture;
+    use futures::FutureExt;
+    use std::fs::File;
+    use std::future::Future;
+    use std::io::{Read, Seek, SeekFrom};
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     use crate::basic::SortOrder;
     use crate::basic::Type;
@@ -730,5 +752,157 @@ mod tests {
             reader_result.to_string(),
             "EOF: Parquet file too small. Size is 1728 but need 1729"
         );
+    }
+
+    struct MetadataFetchFn<F>(F);
+
+    impl<F, Fut> MetadataFetch for MetadataFetchFn<F>
+    where
+        F: FnMut(Range<usize>) -> Fut + Send,
+        Fut: Future<Output = Result<Bytes>> + Send,
+    {
+        fn fetch(&mut self, range: Range<usize>) -> BoxFuture<'_, Result<Bytes>> {
+            async move { self.0(range).await }.boxed()
+        }
+    }
+
+    fn read_range(file: &mut File, range: Range<usize>) -> Result<Bytes> {
+        file.seek(SeekFrom::Start(range.start as _))?;
+        let len = range.end - range.start;
+        let mut buf = Vec::with_capacity(len);
+        file.take(len as _).read_to_end(&mut buf)?;
+        Ok(buf.into())
+    }
+
+    #[tokio::test]
+    async fn test_simple() {
+        let mut file = get_test_file("nulls.snappy.parquet");
+        let len = file.len() as usize;
+
+        let expected = ParquetMetaDataReader::new().parse(&file).unwrap();
+        let expected = expected.file_metadata().schema();
+        let fetch_count = AtomicUsize::new(0);
+
+        let mut fetch = |range| {
+            fetch_count.fetch_add(1, Ordering::SeqCst);
+            futures::future::ready(read_range(&mut file, range))
+        };
+
+        let input = MetadataFetchFn(&mut fetch);
+        let actual = ParquetMetaDataReader::new().load(input, len).await.unwrap();
+        assert_eq!(actual.file_metadata().schema(), expected);
+        assert_eq!(fetch_count.load(Ordering::SeqCst), 2);
+
+        // Metadata hint too small - below footer size
+        fetch_count.store(0, Ordering::SeqCst);
+        let input = MetadataFetchFn(&mut fetch);
+        let actual = ParquetMetaDataReader::new()
+            .with_prefetch_hint(Some(7))
+            .load(input, len)
+            .await
+            .unwrap();
+        assert_eq!(actual.file_metadata().schema(), expected);
+        assert_eq!(fetch_count.load(Ordering::SeqCst), 2);
+
+        // Metadata hint too small
+        fetch_count.store(0, Ordering::SeqCst);
+        let input = MetadataFetchFn(&mut fetch);
+        let actual = ParquetMetaDataReader::new()
+            .with_prefetch_hint(Some(10))
+            .load(input, len)
+            .await
+            .unwrap();
+        assert_eq!(actual.file_metadata().schema(), expected);
+        assert_eq!(fetch_count.load(Ordering::SeqCst), 2);
+
+        // Metadata hint too large
+        fetch_count.store(0, Ordering::SeqCst);
+        let input = MetadataFetchFn(&mut fetch);
+        let actual = ParquetMetaDataReader::new()
+            .with_prefetch_hint(Some(500))
+            .load(input, len)
+            .await
+            .unwrap();
+        assert_eq!(actual.file_metadata().schema(), expected);
+        assert_eq!(fetch_count.load(Ordering::SeqCst), 1);
+
+        // Metadata hint exactly correct
+        fetch_count.store(0, Ordering::SeqCst);
+        let input = MetadataFetchFn(&mut fetch);
+        let actual = ParquetMetaDataReader::new()
+            .with_prefetch_hint(Some(428))
+            .load(input, len)
+            .await
+            .unwrap();
+        assert_eq!(actual.file_metadata().schema(), expected);
+        assert_eq!(fetch_count.load(Ordering::SeqCst), 1);
+
+        let input = MetadataFetchFn(&mut fetch);
+        let err = ParquetMetaDataReader::new()
+            .load(input, 4)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert_eq!(err, "EOF: file size of 4 is less than footer");
+
+        let input = MetadataFetchFn(&mut fetch);
+        let err = ParquetMetaDataReader::new()
+            .load(input, 20)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert_eq!(err, "Parquet error: Invalid Parquet file. Corrupt footer");
+    }
+
+    #[tokio::test]
+    async fn test_page_index() {
+        let mut file = get_test_file("alltypes_tiny_pages.parquet");
+        let len = file.len() as usize;
+        let fetch_count = AtomicUsize::new(0);
+        let mut fetch = |range| {
+            fetch_count.fetch_add(1, Ordering::SeqCst);
+            futures::future::ready(read_range(&mut file, range))
+        };
+
+        let f = MetadataFetchFn(&mut fetch);
+        let mut loader = ParquetMetaDataReader::new().with_page_indexes(true);
+        loader.try_load(f, len).await.unwrap();
+        assert_eq!(fetch_count.load(Ordering::SeqCst), 3);
+        let metadata = loader.finish().unwrap();
+        assert!(metadata.offset_index().is_some() && metadata.column_index().is_some());
+
+        // Prefetch just footer exactly
+        fetch_count.store(0, Ordering::SeqCst);
+        let f = MetadataFetchFn(&mut fetch);
+        let mut loader = ParquetMetaDataReader::new()
+            .with_page_indexes(true)
+            .with_prefetch_hint(Some(1729));
+        loader.try_load(f, len).await.unwrap();
+        assert_eq!(fetch_count.load(Ordering::SeqCst), 2);
+        let metadata = loader.finish().unwrap();
+        assert!(metadata.offset_index().is_some() && metadata.column_index().is_some());
+
+        // Prefetch more than footer but not enough
+        fetch_count.store(0, Ordering::SeqCst);
+        let f = MetadataFetchFn(&mut fetch);
+        let mut loader = ParquetMetaDataReader::new()
+            .with_page_indexes(true)
+            .with_prefetch_hint(Some(130649));
+        loader.try_load(f, len).await.unwrap();
+        assert_eq!(fetch_count.load(Ordering::SeqCst), 2);
+        let metadata = loader.finish().unwrap();
+        assert!(metadata.offset_index().is_some() && metadata.column_index().is_some());
+
+        // Prefetch exactly enough
+        fetch_count.store(0, Ordering::SeqCst);
+        let f = MetadataFetchFn(&mut fetch);
+        let metadata = ParquetMetaDataReader::new()
+            .with_page_indexes(true)
+            .with_prefetch_hint(Some(130650))
+            .load(f, len)
+            .await
+            .unwrap();
+        assert_eq!(fetch_count.load(Ordering::SeqCst), 1);
+        assert!(metadata.offset_index().is_some() && metadata.column_index().is_some());
     }
 }
