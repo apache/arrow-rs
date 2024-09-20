@@ -118,7 +118,7 @@ impl ParquetMetaDataReader {
 
     /// Indicates whether a [`ParquetMetaData`] is present.
     pub fn has_metadata(&self) -> bool {
-        return self.metadata.is_some();
+        self.metadata.is_some()
     }
 
     /// Return the parsed [`ParquetMetaData`] struct, leaving `None` in its place.
