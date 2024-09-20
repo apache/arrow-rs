@@ -649,7 +649,7 @@ pub(crate) const MIN_DECIMAL_BYTES_FOR_LARGER_EACH_PRECISION: [i256; 77] = [
     ]),
 ];
 
-/// `MAX_DECIMAL_FOR_EACH_PRECISION[p]` holds the maximum `i128` value that can
+/// `MAX_DECIMAL_FOR_EACH_PRECISION[p-1]` holds the maximum `i128` value that can
 /// be stored in [arrow_schema::DataType::Decimal128] value of precision `p`
 #[allow(dead_code)] // no longer used but is part of our public API
 pub const MAX_DECIMAL_FOR_EACH_PRECISION: [i128; 38] = [
@@ -693,7 +693,7 @@ pub const MAX_DECIMAL_FOR_EACH_PRECISION: [i128; 38] = [
     99999999999999999999999999999999999999,
 ];
 
-/// `MIN_DECIMAL_FOR_EACH_PRECISION[p]` holds the minimum `i128` value that can
+/// `MIN_DECIMAL_FOR_EACH_PRECISION[p-1]` holds the minimum `i128` value that can
 /// be stored in a [arrow_schema::DataType::Decimal128] value of precision `p`
 #[allow(dead_code)] // no longer used but is part of our public API
 pub const MIN_DECIMAL_FOR_EACH_PRECISION: [i128; 38] = [
@@ -737,7 +737,7 @@ pub const MIN_DECIMAL_FOR_EACH_PRECISION: [i128; 38] = [
     -99999999999999999999999999999999999999,
 ];
 
-/// `MAX_DECIMAL_FOR_EACH_PRECISION[p]` holds the maximum `i128` value that can
+/// `MAX_DECIMAL_FOR_EACH_PRECISION_ONE_BASED[p]` holds the maximum `i128` value that can
 /// be stored in [arrow_schema::DataType::Decimal128] value of precision `p`.
 /// The first element is unused and is inserted so that we can look up using
 /// precision as the index without the need to subtract 1 first.
