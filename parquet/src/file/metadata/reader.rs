@@ -570,7 +570,9 @@ impl ParquetMetaDataReader {
 mod tests {
     use super::*;
     use bytes::Bytes;
+    #[cfg(feature = "async")]
     use futures::future::BoxFuture;
+    #[cfg(feature = "async")]
     use futures::FutureExt;
     use std::fs::File;
     use std::future::Future;
@@ -754,8 +756,10 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "async")]
     struct MetadataFetchFn<F>(F);
 
+    #[cfg(feature = "async")]
     impl<F, Fut> MetadataFetch for MetadataFetchFn<F>
     where
         F: FnMut(Range<usize>) -> Fut + Send,
@@ -774,6 +778,7 @@ mod tests {
         Ok(buf.into())
     }
 
+    #[cfg(feature = "async")]
     #[tokio::test]
     async fn test_simple() {
         let mut file = get_test_file("nulls.snappy.parquet");
@@ -854,6 +859,7 @@ mod tests {
         assert_eq!(err, "Parquet error: Invalid Parquet file. Corrupt footer");
     }
 
+    #[cfg(feature = "async")]
     #[tokio::test]
     async fn test_page_index() {
         let mut file = get_test_file("alltypes_tiny_pages.parquet");
