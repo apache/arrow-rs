@@ -50,6 +50,8 @@ where
         .collect()
 }
 
+/// Creates a [`PrimitiveArray`] of a given `size` and `null_density`
+/// filling it with random numbers generated using the provided `seed`.
 pub fn create_primitive_array_with_seed<T>(
     size: usize,
     null_density: f32,
@@ -72,6 +74,8 @@ where
         .collect()
 }
 
+/// Creates a [`PrimitiveArray`] of a given `size` and `null_density`
+/// filling it with random [`IntervalMonthDayNano`] generated using the provided `seed`.
 pub fn create_month_day_nano_array_with_seed(
     size: usize,
     null_density: f32,
