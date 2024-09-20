@@ -162,7 +162,7 @@ use super::ByteArrayType;
 pub struct GenericByteViewArray<T: ByteViewType + ?Sized> {
     data_type: DataType,
     views: ScalarBuffer<u128>,
-    buffers: Vec<Buffer>,
+    buffers: Arc<[Buffer]>,
     phantom: PhantomData<T>,
     nulls: Option<NullBuffer>,
 }
@@ -216,7 +216,7 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
         Ok(Self {
             data_type: T::DATA_TYPE,
             views,
-            buffers,
+            buffers: buffers.into(),
             nulls,
             phantom: Default::default(),
         })
@@ -229,7 +229,7 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
     /// Safe if [`Self::try_new`] would not error
     pub unsafe fn new_unchecked(
         views: ScalarBuffer<u128>,
-        buffers: Vec<Buffer>,
+        buffers: impl Into<Arc<[Buffer]>>,
         nulls: Option<NullBuffer>,
     ) -> Self {
         if cfg!(feature = "force_validate") {
@@ -240,7 +240,7 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
             data_type: T::DATA_TYPE,
             phantom: Default::default(),
             views,
-            buffers,
+            buffers: buffers.into(),
             nulls,
         }
     }
@@ -250,7 +250,7 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
         Self {
             data_type: T::DATA_TYPE,
             views: vec![0; len].into(),
-            buffers: vec![],
+            buffers: vec![].into(),
             nulls: Some(NullBuffer::new_null(len)),
             phantom: Default::default(),
         }
@@ -276,7 +276,7 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
     }
 
     /// Deconstruct this array into its constituent parts
-    pub fn into_parts(self) -> (ScalarBuffer<u128>, Vec<Buffer>, Option<NullBuffer>) {
+    pub fn into_parts(self) -> (ScalarBuffer<u128>, Arc<[Buffer]>, Option<NullBuffer>) {
         (self.views, self.buffers, self.nulls)
     }
 
@@ -670,7 +670,7 @@ impl<T: ByteViewType + ?Sized> From<ArrayData> for GenericByteViewArray<T> {
         Self {
             data_type: T::DATA_TYPE,
             views,
-            buffers,
+            buffers: buffers.into(),
             nulls: value.nulls().cloned(),
             phantom: Default::default(),
         }
@@ -734,12 +734,20 @@ where
 }
 
 impl<T: ByteViewType + ?Sized> From<GenericByteViewArray<T>> for ArrayData {
-    fn from(mut array: GenericByteViewArray<T>) -> Self {
+    fn from(array: GenericByteViewArray<T>) -> Self {
         let len = array.len();
-        array.buffers.insert(0, array.views.into_inner());
+        let new_buffers = {
+            let mut buffers = Vec::with_capacity(array.buffers.len() + 1);
+            buffers.push(array.views.into_inner());
+            for buffer in array.buffers.iter() {
+                buffers.push(buffer.clone());
+            }
+            buffers
+        };
+
         let builder = ArrayDataBuilder::new(T::DATA_TYPE)
             .len(len)
-            .buffers(array.buffers)
+            .buffers(new_buffers)
             .nulls(array.nulls);
 
         unsafe { builder.build_unchecked() }
