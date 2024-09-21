@@ -396,9 +396,7 @@ pub(crate) fn decode_page(
     if let Some(expected_crc) = page_header.crc {
         let crc = crc32fast::hash(&buffer);
         if crc != expected_crc as u32 {
-            return Err(ParquetError::General(
-                "Page CRC checksum mismatch".to_string(),
-            ));
+            return Err(general_err!("Page CRC checksum mismatch"));
         }
     }
 
