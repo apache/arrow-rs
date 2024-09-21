@@ -509,7 +509,7 @@ Lorem ipsum dolor sit amet,123.564532,3,true,,00:20:34,cupcakes
 consectetur adipiscing elit,,2,false,2019-04-18T10:54:47.378,06:51:20,cupcakes
 sed do eiusmod tempor,-556132.25,1,,2019-04-18T02:45:55.555,23:46:03,foo
 "#;
-        assert_eq!(expected.to_string(), str::from_utf8(&buffer).unwrap());
+        assert_eq!(expected, str::from_utf8(&buffer).unwrap());
     }
 
     #[test]
