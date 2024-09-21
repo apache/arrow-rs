@@ -125,6 +125,7 @@
 //! [compared]: PartialOrd
 //! [compare]: PartialOrd
 
+#![warn(missing_docs)]
 use std::cmp::Ordering;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;

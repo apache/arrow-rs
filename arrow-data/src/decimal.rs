@@ -15,6 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! Defines maximum and minimum values for `decimal256` and `decimal128` types for varying precisions.
+//!
+//! Also provides functions to validate if a given decimal value is within the valid range of the decimal type.
+
 use arrow_buffer::i256;
 use arrow_schema::ArrowError;
 

@@ -15,6 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! This crate provides a procedural macro to derive
+//! implementations of a RecordWriter and RecordReader
+
+#![warn(missing_docs)]
 #![recursion_limit = "128"]
 
 extern crate proc_macro;
