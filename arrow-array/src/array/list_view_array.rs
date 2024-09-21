@@ -19,6 +19,7 @@ use arrow_buffer::{NullBuffer, ScalarBuffer};
 use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::{ArrowError, DataType, FieldRef};
 use std::any::Any;
+use std::ops::Add;
 use std::sync::Arc;
 
 use crate::array::{make_array, print_long_array};
@@ -99,10 +100,19 @@ impl<OffsetSize: OffsetSizeTrait> GenericListViewArray<OffsetSize> {
         for (offset, size) in offsets.iter().zip(sizes.iter()) {
             let offset = offset.as_usize();
             let size = size.as_usize();
-            if offset.saturating_add(size) > values.len() {
+            if offset.checked_add(size).ok_or_else(|| {
+                ArrowError::InvalidArgumentError(format!(
+                    "Overflow in offset + size for {}ListViewArray",
+                    OffsetSize::PREFIX
+                ))
+            })? > values.len()
+            {
                 return Err(ArrowError::InvalidArgumentError(format!(
-                    "Invalid offset and size values for {}ListViewArray, offset: {}, size: {}, values.len(): {}",
-                    OffsetSize::PREFIX, offset, size, values.len()
+                    "Offset + size for {}ListViewArray must be within the bounds of the child array, got offset: {}, size: {}, child array length: {}",
+                    OffsetSize::PREFIX,
+                    offset,
+                    size,
+                    values.len()
                 )));
             }
         }
@@ -393,9 +403,11 @@ impl<OffsetSize: OffsetSizeTrait> From<FixedSizeListArray> for GenericListViewAr
         let iter = std::iter::repeat(size).take(value.len());
         let mut sizes = Vec::with_capacity(iter.size_hint().0);
         let mut offsets = Vec::with_capacity(iter.size_hint().0);
+        //check if the size is usize
+
         for size in iter {
             offsets.push(OffsetSize::usize_as(acc));
-            acc = acc.saturating_add(size);
+            acc = acc.add(size);
             sizes.push(OffsetSize::usize_as(size));
         }
         let sizes = ScalarBuffer::from(sizes);
