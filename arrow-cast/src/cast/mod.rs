@@ -327,9 +327,10 @@ where
     let array = if scale < 0 {
         match cast_options.safe {
             true => array.unary_opt::<_, D>(|v| {
-                v.as_().div_checked(scale_factor).ok().and_then(|v| {
-                    (D::validate_decimal_precision(v, precision).is_ok()).then_some(v)
-                })
+                v.as_()
+                    .div_checked(scale_factor)
+                    .ok()
+                    .and_then(|v| (D::is_valid_decimal_precision(v, precision)).then_some(v))
             }),
             false => array.try_unary::<_, D, _>(|v| {
                 v.as_()
@@ -340,9 +341,10 @@ where
     } else {
         match cast_options.safe {
             true => array.unary_opt::<_, D>(|v| {
-                v.as_().mul_checked(scale_factor).ok().and_then(|v| {
-                    (D::validate_decimal_precision(v, precision).is_ok()).then_some(v)
-                })
+                v.as_()
+                    .mul_checked(scale_factor)
+                    .ok()
+                    .and_then(|v| (D::is_valid_decimal_precision(v, precision)).then_some(v))
             }),
             false => array.try_unary::<_, D, _>(|v| {
                 v.as_()

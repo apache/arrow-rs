@@ -336,11 +336,7 @@ where
     if cast_options.safe {
         let iter = from.iter().map(|v| {
             v.and_then(|v| parse_string_to_decimal_native::<T>(v, scale as usize).ok())
-                .and_then(|v| {
-                    T::validate_decimal_precision(v, precision)
-                        .is_ok()
-                        .then_some(v)
-                })
+                .and_then(|v| T::is_valid_decimal_precision(v, precision).then_some(v))
         });
         // Benefit:
         //     20% performance improvement
@@ -430,7 +426,7 @@ where
                 (mul * v.as_())
                     .round()
                     .to_i128()
-                    .filter(|v| Decimal128Type::validate_decimal_precision(*v, precision).is_ok())
+                    .filter(|v| Decimal128Type::is_valid_decimal_precision(*v, precision))
             })
             .with_precision_and_scale(precision, scale)
             .map(|a| Arc::new(a) as ArrayRef)
@@ -473,7 +469,7 @@ where
         array
             .unary_opt::<_, Decimal256Type>(|v| {
                 i256::from_f64((v.as_() * mul).round())
-                    .filter(|v| Decimal256Type::validate_decimal_precision(*v, precision).is_ok())
+                    .filter(|v| Decimal256Type::is_valid_decimal_precision(*v, precision))
             })
             .with_precision_and_scale(precision, scale)
             .map(|a| Arc::new(a) as ArrayRef)
