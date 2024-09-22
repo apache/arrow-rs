@@ -624,7 +624,7 @@ impl DataType {
         }
     }
 
-    /// Returns the bit width of this type if it is a primitive type
+    /// Returns the byte width of this type if it is a primitive type
     ///
     /// Returns `None` if not a primitive type
     #[inline]
