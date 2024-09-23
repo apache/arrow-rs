@@ -43,7 +43,8 @@
 //! Reading:
 //! * Read from bytes to `ParquetMetaData`: [`decode_footer`]
 //!   and [`decode_metadata`]
-//! * Read from an `async` source to `ParquetMetadata`: [`MetadataLoader`]
+//! * Read from an `async` source to `ParquetMetaData`: [`MetadataLoader`]
+//! * Read from bytes or from an async source to `ParquetMetaData`: [`ParquetMetaDataReader`]
 //!
 //! [`MetadataLoader`]: https://docs.rs/parquet/latest/parquet/arrow/async_reader/struct.MetadataLoader.html
 //! [`decode_footer`]: crate::file::footer::decode_footer
