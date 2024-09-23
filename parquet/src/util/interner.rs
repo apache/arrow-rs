@@ -35,7 +35,7 @@ pub trait Storage {
 
     /// Return an estimate of the memory used in this storage, in bytes
     #[allow(dead_code)] // not used in parquet_derive, so is dead there
-   fn estimated_memory_size(&self) -> usize;
+    fn estimated_memory_size(&self) -> usize;
 }
 
 /// A generic value interner supporting various different [`Storage`]

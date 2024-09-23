@@ -710,7 +710,9 @@ fn into_zero_offset_run_array<R: RunEndIndexType>(
 }
 
 /// Keeps track of dictionaries that have been written, to avoid emitting the same dictionary
-/// multiple times. Can optionally error if an update to an existing dictionary is attempted, which
+/// multiple times.
+///
+/// Can optionally error if an update to an existing dictionary is attempted, which
 /// isn't allowed in the `FileWriter`.
 pub struct DictionaryTracker {
     written: HashMap<i64, ArrayData>,
@@ -2572,7 +2574,7 @@ mod tests {
             let mut fields = Vec::new();
             let mut arrays = Vec::new();
             for i in 0..num_cols {
-                let field = Field::new(&format!("col_{}", i), DataType::Decimal128(38, 10), true);
+                let field = Field::new(format!("col_{}", i), DataType::Decimal128(38, 10), true);
                 let array = Decimal128Array::from(vec![num_cols as i128; num_rows]);
                 fields.push(field);
                 arrays.push(Arc::new(array) as Arc<dyn Array>);
@@ -2627,7 +2629,7 @@ mod tests {
         let mut fields = Vec::new();
         let mut arrays = Vec::new();
         for i in 0..num_cols {
-            let field = Field::new(&format!("col_{}", i), DataType::Decimal128(38, 10), true);
+            let field = Field::new(format!("col_{}", i), DataType::Decimal128(38, 10), true);
             let array = Decimal128Array::from(vec![num_cols as i128; num_rows]);
             fields.push(field);
             arrays.push(Arc::new(array) as Arc<dyn Array>);
@@ -2682,7 +2684,7 @@ mod tests {
         let mut fields = Vec::new();
         let options = IpcWriteOptions::try_new(8, false, MetadataVersion::V5).unwrap();
         for i in 0..num_cols {
-            let field = Field::new(&format!("col_{}", i), DataType::Decimal128(38, 10), true);
+            let field = Field::new(format!("col_{}", i), DataType::Decimal128(38, 10), true);
             fields.push(field);
         }
         let schema = Schema::new(fields);

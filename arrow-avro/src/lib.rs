@@ -20,6 +20,7 @@
 //! [Apache Arrow]: https://arrow.apache.org
 //! [Apache Avro]: https://avro.apache.org/
 
+#![warn(missing_docs)]
 #![allow(unused)] // Temporary
 
 pub mod reader;

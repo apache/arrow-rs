@@ -16,6 +16,8 @@
 // under the License.
 
 //! Functions for converting from one data type to another in [Apache Arrow](https://docs.rs/arrow)
+
+#![warn(missing_docs)]
 pub mod cast;
 pub use cast::*;
 pub mod display;

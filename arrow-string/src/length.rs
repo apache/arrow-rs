@@ -45,10 +45,11 @@ fn bit_length_impl<P: ArrowPrimitiveType>(
 }
 
 /// Returns an array of Int32/Int64 denoting the length of each value in the array.
+///
 /// For list array, length is the number of elements in each list.
 /// For string array and binary array, length is the number of bytes of each value.
 ///
-/// * this only accepts ListArray/LargeListArray, StringArray/LargeStringArray, BinaryArray/LargeBinaryArray, and FixedSizeListArray,
+/// * this only accepts ListArray/LargeListArray, StringArray/LargeStringArray/StringViewArray, BinaryArray/LargeBinaryArray, and FixedSizeListArray,
 ///   or DictionaryArray with above Arrays as values
 /// * length of null is null.
 pub fn length(array: &dyn Array) -> Result<ArrayRef, ArrowError> {
@@ -74,6 +75,14 @@ pub fn length(array: &dyn Array) -> Result<ArrayRef, ArrowError> {
             let list = array.as_string::<i64>();
             Ok(length_impl::<Int64Type>(list.offsets(), list.nulls()))
         }
+        DataType::Utf8View => {
+            let list = array.as_string_view();
+            let v = list.views().iter().map(|v| *v as i32).collect::<Vec<_>>();
+            Ok(Arc::new(PrimitiveArray::<Int32Type>::new(
+                v.into(),
+                list.nulls().cloned(),
+            )))
+        }
         DataType::Binary => {
             let list = array.as_binary::<i32>();
             Ok(length_impl::<Int32Type>(list.offsets(), list.nulls()))
@@ -85,6 +94,14 @@ pub fn length(array: &dyn Array) -> Result<ArrayRef, ArrowError> {
         DataType::FixedSizeBinary(len) | DataType::FixedSizeList(_, len) => Ok(Arc::new(
             Int32Array::new(vec![*len; array.len()].into(), array.nulls().cloned()),
         )),
+        DataType::BinaryView => {
+            let list = array.as_binary_view();
+            let v = list.views().iter().map(|v| *v as i32).collect::<Vec<_>>();
+            Ok(Arc::new(PrimitiveArray::<Int32Type>::new(
+                v.into(),
+                list.nulls().cloned(),
+            )))
+        }
         other => Err(ArrowError::ComputeError(format!(
             "length not supported for {other:?}"
         ))),
@@ -147,9 +164,15 @@ mod tests {
 
     fn length_cases_string() -> Vec<(Vec<&'static str>, usize, Vec<i32>)> {
         // a large array
-        let values = ["one", "on", "o", ""];
+        let values = [
+            "one",
+            "on",
+            "o",
+            "",
+            "this is a longer string to test string array with",
+        ];
         let values = values.into_iter().cycle().take(4096).collect();
-        let expected = [3, 2, 1, 0].into_iter().cycle().take(4096).collect();
+        let expected = [3, 2, 1, 0, 49].into_iter().cycle().take(4096).collect();
 
         vec![
             (vec!["hello", " ", "world"], 3, vec![5, 1, 5]),
@@ -211,6 +234,21 @@ mod tests {
     }
 
     #[test]
+    fn length_test_string_view() {
+        length_cases_string()
+            .into_iter()
+            .for_each(|(input, len, expected)| {
+                let array = StringViewArray::from(input);
+                let result = length(&array).unwrap();
+                assert_eq!(len, result.len());
+                let result = result.as_any().downcast_ref::<Int32Array>().unwrap();
+                expected.iter().enumerate().for_each(|(i, value)| {
+                    assert_eq!(*value, result.value(i));
+                });
+            })
+    }
+
+    #[test]
     fn length_test_binary() {
         let value: Vec<&[u8]> = vec![b"zero", b"one", &[0xff, 0xf8]];
         let result: Vec<i32> = vec![4, 3, 2];
@@ -222,6 +260,23 @@ mod tests {
         let value: Vec<&[u8]> = vec![b"zero", &[0xff, 0xf8], b"two"];
         let result: Vec<i64> = vec![4, 2, 3];
         length_binary_helper!(i64, Int64Array, length, value, result)
+    }
+
+    #[test]
+    fn length_test_binary_view() {
+        let value: Vec<&[u8]> = vec![
+            b"zero",
+            &[0xff, 0xf8],
+            b"two",
+            b"this is a longer string to test binary array with",
+        ];
+        let expected: Vec<i32> = vec![4, 2, 3, 49];
+
+        let array = BinaryViewArray::from(value);
+        let result = length(&array).unwrap();
+        let result = result.as_any().downcast_ref::<Int32Array>().unwrap();
+        let expected: Int32Array = expected.into();
+        assert_eq!(&expected, result);
     }
 
     #[test]

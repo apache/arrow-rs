@@ -24,12 +24,6 @@ use crate::errors::{ParquetError, Result};
 use crate::util::bit_pack::{unpack16, unpack32, unpack64, unpack8};
 
 #[inline]
-pub fn from_le_slice<T: FromBytes>(bs: &[u8]) -> T {
-    // TODO: propagate the error (#3577)
-    T::try_from_le_slice(bs).unwrap()
-}
-
-#[inline]
 fn array_from_slice<const N: usize>(bs: &[u8]) -> Result<[u8; N]> {
     // Need to slice as may be called with zero-padded values
     match bs.get(..N) {
@@ -91,15 +85,22 @@ unsafe impl FromBytes for Int96 {
     type Buffer = [u8; 12];
 
     fn try_from_le_slice(b: &[u8]) -> Result<Self> {
-        Ok(Self::from_le_bytes(array_from_slice(b)?))
+        let bs: [u8; 12] = array_from_slice(b)?;
+        let mut i = Int96::new();
+        i.set_data(
+            u32::try_from_le_slice(&bs[0..4])?,
+            u32::try_from_le_slice(&bs[4..8])?,
+            u32::try_from_le_slice(&bs[8..12])?,
+        );
+        Ok(i)
     }
 
     fn from_le_bytes(bs: Self::Buffer) -> Self {
         let mut i = Int96::new();
         i.set_data(
-            from_le_slice(&bs[0..4]),
-            from_le_slice(&bs[4..8]),
-            from_le_slice(&bs[8..12]),
+            u32::try_from_le_slice(&bs[0..4]).unwrap(),
+            u32::try_from_le_slice(&bs[4..8]).unwrap(),
+            u32::try_from_le_slice(&bs[8..12]).unwrap(),
         );
         i
     }
@@ -438,7 +439,7 @@ impl BitReader {
         }
 
         // TODO: better to avoid copying here
-        Some(from_le_slice(v.as_bytes()))
+        T::try_from_le_slice(v.as_bytes()).ok()
     }
 
     /// Read multiple values from their packed representation where each element is represented
@@ -1026,7 +1027,10 @@ mod tests {
             .collect();
 
         // Generic values used to check against actual values read from `get_batch`.
-        let expected_values: Vec<T> = values.iter().map(|v| from_le_slice(v.as_bytes())).collect();
+        let expected_values: Vec<T> = values
+            .iter()
+            .map(|v| T::try_from_le_slice(v.as_bytes()).unwrap())
+            .collect();
 
         (0..total).for_each(|i| writer.put_value(values[i], num_bits));
 

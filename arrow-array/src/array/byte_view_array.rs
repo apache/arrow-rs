@@ -24,6 +24,7 @@ use crate::{Array, ArrayAccessor, ArrayRef, GenericByteArray, OffsetSizeTrait, S
 use arrow_buffer::{ArrowNativeType, Buffer, NullBuffer, ScalarBuffer};
 use arrow_data::{ArrayData, ArrayDataBuilder, ByteView};
 use arrow_schema::{ArrowError, DataType};
+use core::str;
 use num::ToPrimitive;
 use std::any::Any;
 use std::fmt::Debug;
@@ -52,7 +53,7 @@ use super::ByteArrayType;
 /// not by value. as there are many different buffer layouts to represent the
 /// same data (e.g. different offsets, different buffer sizes, etc).
 ///
-/// # Layout
+/// # Layout: "views" and buffers
 ///
 /// A `GenericByteViewArray` stores variable length byte strings. An array of
 /// `N` elements is stored as `N` fixed length "views" and a variable number
@@ -75,10 +76,12 @@ use super::ByteArrayType;
 ///                          0    31       63      95    127
 /// ```
 ///
-/// * Strings with length <= 12 are stored directly in the view.
+/// * Strings with length <= 12 are stored directly in the view. See
+///   [`Self::inline_value`] to access the inlined prefix from a short view.
 ///
 /// * Strings with length > 12: The first four bytes are stored inline in the
-///   view and the entire string is stored in one of the buffers.
+///   view and the entire string is stored in one of the buffers. See [`ByteView`]
+///   to access the fields of the these views.
 ///
 /// Unlike [`GenericByteArray`], there are no constraints on the offsets other
 /// than they must point into a valid buffer. However, they can be out of order,
@@ -88,6 +91,8 @@ use super::ByteArrayType;
 /// "CrumpleFacedFish" are both longer than 12 bytes and thus are stored in a
 /// separate buffer while the string "LavaMonster" is stored inlined in the
 /// view. In this case, the same bytes for "Fish" are used to store both strings.
+///
+/// [`ByteView`]: arrow_data::ByteView
 ///
 /// ```text
 ///                                                                            ┌───┐
@@ -261,9 +266,12 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
         unsafe { self.value_unchecked(i) }
     }
 
-    /// Returns the element at index `i`
+    /// Returns the element at index `i` without bounds checking
+    ///
     /// # Safety
-    /// Caller is responsible for ensuring that the index is within the bounds of the array
+    ///
+    /// Caller is responsible for ensuring that the index is within the bounds
+    /// of the array
     pub unsafe fn value_unchecked(&self, idx: usize) -> &T::Native {
         let v = self.views.get_unchecked(idx);
         let len = *v as u32;
@@ -278,7 +286,7 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
         T::Native::from_bytes_unchecked(b)
     }
 
-    /// Returns the inline value of the view.
+    /// Returns the first `len` bytes the inline value of the view.
     ///
     /// # Safety
     /// - The `view` must be a valid element from `Self::views()` that adheres to the view layout.
@@ -289,9 +297,81 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
         std::slice::from_raw_parts((view as *const u128 as *const u8).wrapping_add(4), len)
     }
 
-    /// constructs a new iterator
+    /// Constructs a new iterator for iterating over the values of this array
     pub fn iter(&self) -> ArrayIter<&Self> {
         ArrayIter::new(self)
+    }
+
+    /// Returns an iterator over the bytes of this array, including null values
+    pub fn bytes_iter(&self) -> impl Iterator<Item = &[u8]> {
+        self.views.iter().map(move |v| {
+            let len = *v as u32;
+            if len <= 12 {
+                unsafe { Self::inline_value(v, len as usize) }
+            } else {
+                let view = ByteView::from(*v);
+                let data = &self.buffers[view.buffer_index as usize];
+                let offset = view.offset as usize;
+                unsafe { data.get_unchecked(offset..offset + len as usize) }
+            }
+        })
+    }
+
+    /// Returns an iterator over the first `prefix_len` bytes of each array
+    /// element, including null values.
+    ///
+    /// If `prefix_len` is larger than the element's length, the iterator will
+    /// return an empty slice (`&[]`).
+    pub fn prefix_bytes_iter(&self, prefix_len: usize) -> impl Iterator<Item = &[u8]> {
+        self.views().into_iter().map(move |v| {
+            let len = (*v as u32) as usize;
+
+            if len < prefix_len {
+                return &[] as &[u8];
+            }
+
+            if prefix_len <= 4 || len <= 12 {
+                unsafe { StringViewArray::inline_value(v, prefix_len) }
+            } else {
+                let view = ByteView::from(*v);
+                let data = unsafe {
+                    self.data_buffers()
+                        .get_unchecked(view.buffer_index as usize)
+                };
+                let offset = view.offset as usize;
+                unsafe { data.get_unchecked(offset..offset + prefix_len) }
+            }
+        })
+    }
+
+    /// Returns an iterator over the last `suffix_len` bytes of each array
+    /// element, including null values.
+    ///
+    /// Note that for [`StringViewArray`] the last bytes may start in the middle
+    /// of a UTF-8 codepoint, and thus may not be a valid `&str`.
+    ///
+    /// If `suffix_len` is larger than the element's length, the iterator will
+    /// return an empty slice (`&[]`).
+    pub fn suffix_bytes_iter(&self, suffix_len: usize) -> impl Iterator<Item = &[u8]> {
+        self.views().into_iter().map(move |v| {
+            let len = (*v as u32) as usize;
+
+            if len < suffix_len {
+                return &[] as &[u8];
+            }
+
+            if len <= 12 {
+                unsafe { &StringViewArray::inline_value(v, len)[len - suffix_len..] }
+            } else {
+                let view = ByteView::from(*v);
+                let data = unsafe {
+                    self.data_buffers()
+                        .get_unchecked(view.buffer_index as usize)
+                };
+                let offset = view.offset as usize;
+                unsafe { data.get_unchecked(offset + len - suffix_len..offset + len) }
+            }
+        })
     }
 
     /// Returns a zero-copy slice of this array with the indicated offset and length.
@@ -358,7 +438,7 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
         builder.finish()
     }
 
-    /// Comparing two [`GenericByteViewArray`] at index `left_idx` and `right_idx`
+    /// Compare two [`GenericByteViewArray`] at index `left_idx` and `right_idx`
     ///
     /// Comparing two ByteView types are non-trivial.
     /// It takes a bit of patience to understand why we don't just compare two &[u8] directly.

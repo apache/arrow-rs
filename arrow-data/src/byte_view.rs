@@ -18,6 +18,13 @@
 use arrow_buffer::Buffer;
 use arrow_schema::ArrowError;
 
+/// Helper to access views of [`GenericByteViewArray`] (`StringViewArray` and
+/// `BinaryViewArray`) where the length is greater than 12 bytes.
+///
+/// See the documentation on [`GenericByteViewArray`] for more information on
+/// the layout of the views.
+///
+/// [`GenericByteViewArray`]: https://docs.rs/arrow/latest/arrow/array/struct.GenericByteViewArray.html
 #[derive(Debug, Copy, Clone, Default)]
 #[repr(C)]
 pub struct ByteView {

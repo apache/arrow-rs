@@ -47,7 +47,7 @@ use crate::basic::Type;
 use crate::data_type::private::ParquetValueType;
 use crate::data_type::*;
 use crate::errors::{ParquetError, Result};
-use crate::util::bit_util::from_le_slice;
+use crate::util::bit_util::FromBytes;
 
 pub(crate) mod private {
     use super::*;
@@ -186,14 +186,18 @@ pub fn from_thrift(
                     // INT96 statistics may not be correct, because comparison is signed
                     // byte-wise, not actual timestamps. It is recommended to ignore
                     // min/max statistics for INT96 columns.
-                    let min = min.map(|data| {
+                    let min = if let Some(data) = min {
                         assert_eq!(data.len(), 12);
-                        from_le_slice::<Int96>(&data)
-                    });
-                    let max = max.map(|data| {
+                        Some(Int96::try_from_le_slice(&data)?)
+                    } else {
+                        None
+                    };
+                    let max = if let Some(data) = max {
                         assert_eq!(data.len(), 12);
-                        from_le_slice::<Int96>(&data)
-                    });
+                        Some(Int96::try_from_le_slice(&data)?)
+                    } else {
+                        None
+                    };
                     Statistics::int96(min, max, distinct_count, null_count, old_format)
                 }
                 Type::FLOAT => Statistics::float(
@@ -257,7 +261,7 @@ pub fn to_thrift(stats: Option<&Statistics>) -> Option<TStatistics> {
         max: None,
         min: None,
         null_count,
-        distinct_count: stats.distinct_count().map(|value| value as i64),
+        distinct_count: stats.distinct_count_opt().map(|value| value as i64),
         max_value: None,
         min_value: None,
         is_max_value_exact: None,
@@ -380,7 +384,14 @@ impl Statistics {
 
     /// Returns optional value of number of distinct values occurring.
     /// When it is `None`, the value should be ignored.
+    #[deprecated(since = "53.0.0", note = "Use `distinct_count_opt` method instead")]
     pub fn distinct_count(&self) -> Option<u64> {
+        self.distinct_count_opt()
+    }
+
+    /// Returns optional value of number of distinct values occurring.
+    /// When it is `None`, the value should be ignored.
+    pub fn distinct_count_opt(&self) -> Option<u64> {
         statistics_enum_func![self, distinct_count]
     }
 

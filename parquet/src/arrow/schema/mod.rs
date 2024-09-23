@@ -427,7 +427,7 @@ fn arrow_to_parquet_type(field: &Field) -> Result<Type> {
         }
         DataType::Time32(unit) => Type::primitive_type_builder(name, PhysicalType::INT32)
             .with_logical_type(Some(LogicalType::Time {
-                is_adjusted_to_u_t_c: false,
+                is_adjusted_to_u_t_c: field.metadata().contains_key("adjusted_to_utc"),
                 unit: match unit {
                     TimeUnit::Millisecond => ParquetTimeUnit::MILLIS(Default::default()),
                     u => unreachable!("Invalid unit for Time32: {:?}", u),
@@ -438,7 +438,7 @@ fn arrow_to_parquet_type(field: &Field) -> Result<Type> {
             .build(),
         DataType::Time64(unit) => Type::primitive_type_builder(name, PhysicalType::INT64)
             .with_logical_type(Some(LogicalType::Time {
-                is_adjusted_to_u_t_c: false,
+                is_adjusted_to_u_t_c: field.metadata().contains_key("adjusted_to_utc"),
                 unit: match unit {
                     TimeUnit::Microsecond => ParquetTimeUnit::MICROS(Default::default()),
                     TimeUnit::Nanosecond => ParquetTimeUnit::NANOS(Default::default()),
@@ -1430,7 +1430,9 @@ mod tests {
             }
             OPTIONAL INT32   date       (DATE);
             OPTIONAL INT32   time_milli (TIME(MILLIS,false));
+            OPTIONAL INT32   time_milli_utc (TIME(MILLIS,true));
             OPTIONAL INT64   time_micro (TIME_MICROS);
+            OPTIONAL INT64   time_micro_utc (TIME(MICROS, true));
             OPTIONAL INT64   ts_milli (TIMESTAMP_MILLIS);
             REQUIRED INT64   ts_micro (TIMESTAMP(MICROS,false));
             REQUIRED INT64   ts_seconds;
@@ -1481,7 +1483,25 @@ mod tests {
             ),
             Field::new("date", DataType::Date32, true),
             Field::new("time_milli", DataType::Time32(TimeUnit::Millisecond), true),
+            Field::new(
+                "time_milli_utc",
+                DataType::Time32(TimeUnit::Millisecond),
+                true,
+            )
+            .with_metadata(HashMap::from_iter(vec![(
+                "adjusted_to_utc".to_string(),
+                "".to_string(),
+            )])),
             Field::new("time_micro", DataType::Time64(TimeUnit::Microsecond), true),
+            Field::new(
+                "time_micro_utc",
+                DataType::Time64(TimeUnit::Microsecond),
+                true,
+            )
+            .with_metadata(HashMap::from_iter(vec![(
+                "adjusted_to_utc".to_string(),
+                "".to_string(),
+            )])),
             Field::new(
                 "ts_milli",
                 DataType::Timestamp(TimeUnit::Millisecond, None),

@@ -526,8 +526,8 @@ mod client;
 
 #[cfg(feature = "cloud")]
 pub use client::{
-    backoff::BackoffConfig, retry::RetryConfig, ClientConfigKey, ClientOptions, CredentialProvider,
-    StaticCredentialProvider,
+    backoff::BackoffConfig, retry::RetryConfig, Certificate, ClientConfigKey, ClientOptions,
+    CredentialProvider, StaticCredentialProvider,
 };
 
 #[cfg(feature = "cloud")]
@@ -911,7 +911,7 @@ pub struct ObjectMeta {
 }
 
 /// Options for a get request, such as range
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct GetOptions {
     /// Request will succeed if the `ObjectMeta::e_tag` matches
     /// otherwise returning [`Error::Precondition`]
