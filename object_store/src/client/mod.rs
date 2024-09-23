@@ -94,6 +94,8 @@ pub enum ClientConfigKey {
     Http2KeepAliveTimeout,
     /// Enable HTTP2 keep alive pings for idle connections
     Http2KeepAliveWhileIdle,
+    /// Sets the maximum frame size to use for HTTP2.
+    Http2MaxFrameSize,
     /// Only use http2 connections
     Http2Only,
     /// The pool max idle timeout
@@ -129,6 +131,7 @@ impl AsRef<str> for ClientConfigKey {
             Self::Http2KeepAliveInterval => "http2_keep_alive_interval",
             Self::Http2KeepAliveTimeout => "http2_keep_alive_timeout",
             Self::Http2KeepAliveWhileIdle => "http2_keep_alive_while_idle",
+            Self::Http2MaxFrameSize => "http2_max_frame_size",
             Self::PoolIdleTimeout => "pool_idle_timeout",
             Self::PoolMaxIdlePerHost => "pool_max_idle_per_host",
             Self::ProxyUrl => "proxy_url",
@@ -154,6 +157,7 @@ impl FromStr for ClientConfigKey {
             "http2_keep_alive_interval" => Ok(Self::Http2KeepAliveInterval),
             "http2_keep_alive_timeout" => Ok(Self::Http2KeepAliveTimeout),
             "http2_keep_alive_while_idle" => Ok(Self::Http2KeepAliveWhileIdle),
+            "http2_max_frame_size" => Ok(Self::Http2MaxFrameSize),
             "pool_idle_timeout" => Ok(Self::PoolIdleTimeout),
             "pool_max_idle_per_host" => Ok(Self::PoolMaxIdlePerHost),
             "proxy_url" => Ok(Self::ProxyUrl),
@@ -238,6 +242,7 @@ pub struct ClientOptions {
     http2_keep_alive_interval: Option<ConfigValue<Duration>>,
     http2_keep_alive_timeout: Option<ConfigValue<Duration>>,
     http2_keep_alive_while_idle: ConfigValue<bool>,
+    http2_max_frame_size: Option<ConfigValue<u32>>,
     http1_only: ConfigValue<bool>,
     http2_only: ConfigValue<bool>,
 }
@@ -269,6 +274,7 @@ impl Default for ClientOptions {
             http2_keep_alive_interval: None,
             http2_keep_alive_timeout: None,
             http2_keep_alive_while_idle: Default::default(),
+            http2_max_frame_size: None,
             // HTTP2 is known to be significantly slower than HTTP1, so we default
             // to HTTP1 for now.
             // https://github.com/apache/arrow-rs/issues/5194
@@ -304,6 +310,9 @@ impl ClientOptions {
             ClientConfigKey::Http2KeepAliveWhileIdle => {
                 self.http2_keep_alive_while_idle.parse(value)
             }
+            ClientConfigKey::Http2MaxFrameSize => {
+                self.http2_max_frame_size = Some(ConfigValue::Deferred(value.into()))
+            }
             ClientConfigKey::PoolIdleTimeout => {
                 self.pool_idle_timeout = Some(ConfigValue::Deferred(value.into()))
             }
@@ -337,6 +346,9 @@ impl ClientOptions {
             }
             ClientConfigKey::Http2KeepAliveWhileIdle => {
                 Some(self.http2_keep_alive_while_idle.to_string())
+            }
+            ClientConfigKey::Http2MaxFrameSize => {
+                self.http2_max_frame_size.as_ref().map(|v| v.to_string())
             }
             ClientConfigKey::Http2Only => Some(self.http2_only.to_string()),
             ClientConfigKey::PoolIdleTimeout => self.pool_idle_timeout.as_ref().map(fmt_duration),
@@ -541,6 +553,14 @@ impl ClientOptions {
         self
     }
 
+    /// Sets the maximum frame size to use for HTTP2.
+    ///
+    /// Default is currently 16,384 but may change internally to optimize for common uses.
+    pub fn with_http2_max_frame_size(mut self, sz: u32) -> Self {
+        self.http2_max_frame_size = Some(ConfigValue::Parsed(sz));
+        self
+    }
+
     /// Get the mime type for the file in `path` to be uploaded
     ///
     /// Gets the file extension from `path`, and returns the
@@ -633,6 +653,10 @@ impl ClientOptions {
 
         if self.http2_keep_alive_while_idle.get()? {
             builder = builder.http2_keep_alive_while_idle(true)
+        }
+
+        if let Some(sz) = &self.http2_max_frame_size {
+            builder = builder.http2_max_frame_size(Some(sz.get()?))
         }
 
         if self.http1_only.get()? {
@@ -799,6 +823,7 @@ mod tests {
         let http2_keep_alive_interval = "90 seconds".to_string();
         let http2_keep_alive_timeout = "91 seconds".to_string();
         let http2_keep_alive_while_idle = "92 seconds".to_string();
+        let http2_max_frame_size = "1337".to_string();
         let pool_idle_timeout = "93 seconds".to_string();
         let pool_max_idle_per_host = "94".to_string();
         let proxy_url = "https://fake_proxy_url".to_string();
@@ -824,6 +849,7 @@ mod tests {
                 "http2_keep_alive_while_idle",
                 http2_keep_alive_while_idle.clone(),
             ),
+            ("http2_max_frame_size", http2_max_frame_size.clone()),
             ("pool_idle_timeout", pool_idle_timeout.clone()),
             ("pool_max_idle_per_host", pool_max_idle_per_host.clone()),
             ("proxy_url", proxy_url.clone()),
@@ -890,6 +916,12 @@ mod tests {
                 .get_config_value(&ClientConfigKey::Http2KeepAliveWhileIdle)
                 .unwrap(),
             http2_keep_alive_while_idle
+        );
+        assert_eq!(
+            builder
+                .get_config_value(&ClientConfigKey::Http2MaxFrameSize)
+                .unwrap(),
+            http2_max_frame_size
         );
 
         assert_eq!(
