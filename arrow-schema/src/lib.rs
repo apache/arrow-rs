@@ -49,7 +49,7 @@ pub mod ffi;
 /// };
 /// // Default is ASC NULLs First
 /// assert_eq!(options, SortOptions::default());
-/// assert_eq!(options.to_string(), "ASC");
+/// assert_eq!(options.to_string(), "ASC NULLS FIRST");
 ///
 /// // Configure using builder APIs
 /// let options = SortOptions::default()
@@ -81,7 +81,7 @@ impl Display for SortOptions {
             write!(f, "ASC")?;
         }
         if self.nulls_first {
-            // purposely don't display default NULLs value
+            write!(f, " NULLS FIRST")?;
         } else {
             write!(f, " NULLS LAST")?;
         }
