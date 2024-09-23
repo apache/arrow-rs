@@ -395,72 +395,51 @@ impl UnionArray {
 
     /// Computes the logical nulls for a sparse union, optimized for when there's a lot of fields without nulls
     fn mask_sparse_skip_without_nulls(&self, nulls: Vec<(i8, NullBuffer)>) -> BooleanBuffer {
-        let bit_chunks = nulls_to_bit_chunks(&nulls);
-        let mut nulls_masks_iter = bit_chunks_to_iterators(&bit_chunks);
-
-        let chunks_exact = self.type_ids.chunks_exact(64);
-        let remainder = chunks_exact.remainder();
-
-        // Example for a union with 5 fields, a, b & c with nulls, d & e without nulls:
+        // Example logic for a union with 5 fields, a, b & c with nulls, d & e without nulls:
         // let [a_nulls, b_nulls, c_nulls] = nulls;
         // let [is_a, is_b, is_c] = masks;
         // let is_d_or_e = !(is_a | is_b)
         // let union_chunk_nulls = is_d_or_e | (is_b & b_nulls) | (is_c & c_nulls)
-        let chunks = chunks_exact.map(|chunk| {
-            let chunk = <&[i8; 64]>::try_from(chunk).unwrap();
+        let fold = |(any_nullable_selected, union_nulls), (is_field, field_nulls)| {
+            (
+                any_nullable_selected | is_field,
+                union_nulls | (is_field & field_nulls),
+            )
+        };
 
-            let (any_nullable_selected, union_nulls) = nulls_masks_iter
-                .iter_mut()
-                .map(|(field_type_id, field_nulls)| {
-                    let field_nulls = field_nulls.next().unwrap();
-                    let is_field = selection_mask(chunk, *field_type_id);
+        self.mask_sparse_helper(
+            nulls,
+            |chunk, nulls_masks_iters| {
+                let (any_nullable_selected, union_nulls) = nulls_masks_iters
+                    .iter_mut()
+                    .map(|(field_type_id, field_nulls)| {
+                        let field_nulls = field_nulls.next().unwrap();
+                        let is_field = selection_mask(chunk, *field_type_id);
 
-                    (is_field, field_nulls)
-                })
-                .fold(
-                    (0, 0),
-                    |(any_nullable_selected, union_nulls), (is_field, field_nulls)| {
-                        (
-                            any_nullable_selected | is_field,
-                            union_nulls | (is_field & field_nulls),
-                        )
-                    },
-                );
+                        (is_field, field_nulls)
+                    })
+                    .fold((0, 0), fold);
 
-            !any_nullable_selected | union_nulls
-        });
+                !any_nullable_selected | union_nulls
+            },
+            |remainder, bit_chunks| {
+                let (any_nullable_selected, union_nulls) = bit_chunks
+                    .iter()
+                    .map(|(field_type_id, field_bit_chunks)| {
+                        let field_nulls = field_bit_chunks.remainder_bits();
+                        let is_field = selection_mask(remainder, *field_type_id);
 
-        // SAFETY:
-        // chunks is a ChunksExact iterator, which implements TrustedLen, and correctly reports its length
-        let mut buffer = unsafe { MutableBuffer::from_trusted_len_iter(chunks) };
+                        (is_field, field_nulls)
+                    })
+                    .fold((0, 0), fold);
 
-        if !remainder.is_empty() {
-            let (any_nullable_selected, union_nulls) = bit_chunks
-                .iter()
-                .map(|(field_type_id, field_bit_chunks)| {
-                    let field_nulls = field_bit_chunks.remainder_bits();
-                    let is_field = selection_mask(remainder, *field_type_id);
-
-                    (is_field, field_nulls)
-                })
-                .fold(
-                    (0, 0),
-                    |(any_nullable_selected, union_nulls), (is_field, field_nulls)| {
-                        (
-                            any_nullable_selected | is_field,
-                            union_nulls | (is_field & field_nulls),
-                        )
-                    },
-                );
-
-            buffer.push(!any_nullable_selected | union_nulls);
-        }
-
-        BooleanBuffer::new(buffer.into(), 0, self.type_ids.len())
+                !any_nullable_selected | union_nulls
+            },
+        )
     }
 
     /// Computes the logical nulls for a sparse union, optimized for when there's a lot of fields fully null
-    fn mask_sparse_skip_fully_null(&self, nulls: Vec<(i8, NullBuffer)>) -> BooleanBuffer {
+    fn mask_sparse_skip_fully_null(&self, mut nulls: Vec<(i8, NullBuffer)>) -> BooleanBuffer {
         let fields = match self.data_type() {
             DataType::Union(fields, _) => fields,
             _ => unreachable!("Union array's data type is not a union!"),
@@ -474,122 +453,80 @@ impl UnionArray {
             .copied()
             .collect::<Vec<_>>();
 
-        let nulls = nulls
-            .into_iter()
-            .filter(|(_, nulls)| nulls.null_count() < nulls.len())
-            .collect::<Vec<_>>();
+        nulls.retain(|(_, nulls)| nulls.null_count() < nulls.len());
 
-        let bit_chunks = nulls_to_bit_chunks(&nulls);
-        let mut nulls_masks_iter = bit_chunks_to_iterators(&bit_chunks);
-
-        let chunks_exact = self.type_ids.chunks_exact(64);
-        let remainder = chunks_exact.remainder();
-
-        // Example for a union with 5 fields, a, b & c with nulls, d & e without nulls, and f fully_null:
+        // Example logic for a union with 6 fields, a, b & c with nulls, d & e without nulls, and f fully_null:
         // let [a_nulls, b_nulls, c_nulls] = nulls;
         // let [is_a, is_b, is_c, is_d, is_e] = masks;
         // let union_chunk_nulls = is_d | is_e | (is_a & a_nulls) | (is_b & b_nulls) | (is_c & c_nulls)
-        let chunks = chunks_exact.map(|chunk| {
-            let chunk = <&[i8; 64]>::try_from(chunk).unwrap();
+        self.mask_sparse_helper(
+            nulls,
+            |chunk, nulls_masks_iters| {
+                let union_nulls = nulls_masks_iters.iter_mut().fold(
+                    0,
+                    |union_nulls, (field_type_id, nulls_iter)| {
+                        let field_nulls = nulls_iter.next().unwrap();
 
-            let union_nulls = nulls_masks_iter
-                .iter_mut()
-                .map(|(field_type_id, nulls_iter)| {
-                    let field_nulls = nulls_iter.next().unwrap();
-                    if field_nulls != 0 {
-                        (selection_mask(chunk, *field_type_id), field_nulls)
-                    } else {
-                        (0, 0)
-                    }
-                })
-                .fold(0, |union_nulls, (is_field, field_nulls)| {
-                    union_nulls | (is_field & field_nulls)
-                });
+                        if field_nulls == 0 {
+                            union_nulls
+                        } else {
+                            let is_field = selection_mask(chunk, *field_type_id);
 
-            let without_nulls_selected =
-                without_nulls_ids
-                    .iter()
-                    .fold(0, |fully_valid_selected, field_type_id| {
-                        fully_valid_selected | selection_mask(chunk, *field_type_id)
-                    });
+                            union_nulls | (is_field & field_nulls)
+                        }
+                    },
+                );
 
-            without_nulls_selected | union_nulls
-        });
+                union_nulls | without_nulls_selected(chunk, &without_nulls_ids)
+            },
+            |remainder, bit_chunks| {
+                let union_nulls =
+                    bit_chunks
+                        .iter()
+                        .fold(0, |union_nulls, (field_type_id, field_bit_chunks)| {
+                            let is_field = selection_mask(remainder, *field_type_id);
+                            let field_nulls = field_bit_chunks.remainder_bits();
 
-        // SAFETY:
-        // chunks is a ChunksExact iterator, which implements TrustedLen, and correctly reports its length
-        let mut buffer = unsafe { MutableBuffer::from_trusted_len_iter(chunks) };
+                            union_nulls | is_field & field_nulls
+                        });
 
-        if !remainder.is_empty() {
-            let union_nulls =
-                bit_chunks
-                    .iter()
-                    .fold(0, |union_nulls, (field_type_id, field_bit_chunks)| {
-                        union_nulls
-                            | (selection_mask(remainder, *field_type_id)
-                                & field_bit_chunks.remainder_bits())
-                    });
-
-            let without_nulls_selected =
-                without_nulls_ids
-                    .iter()
-                    .fold(0, |fully_valid_selected, field_type_id| {
-                        fully_valid_selected | selection_mask(remainder, *field_type_id)
-                    });
-
-            buffer.push(without_nulls_selected | union_nulls);
-        }
-
-        BooleanBuffer::new(buffer.into(), 0, self.type_ids.len())
+                union_nulls | without_nulls_selected(remainder, &without_nulls_ids)
+            },
+        )
     }
 
     /// Computes the logical nulls for a sparse union, optimized for when all fields contains nulls
     fn mask_sparse_all_with_nulls_skip_one(&self, nulls: Vec<(i8, NullBuffer)>) -> BooleanBuffer {
-        let bit_chunks = nulls_to_bit_chunks(&nulls);
-        let mut nulls_masks_iter = bit_chunks_to_iterators(&bit_chunks);
-
-        let chunks_exact = self.type_ids.chunks_exact(64);
-        let remainder = chunks_exact.remainder();
-
-        // Example for a union with 3 fields, a, b & c, all containing nulls:
+        // Example logic for a union with 3 fields, a, b & c, all containing nulls:
         // let [a_nulls, b_nulls, c_nulls] = nulls;
         // We can skip the first field: it's selection mask is the negation of all others selection mask
         // let [is_b, is_c] = selection_masks;
         // let is_a = !(is_b | is_c)
         // let union_chunk_nulls = (is_a & a_nulls) | (is_b & b_nulls) | (is_c & c_nulls)
-        let chunks = chunks_exact.map(|chunk| {
-            let chunk = <&[i8; 64]>::try_from(chunk).unwrap();
+        self.mask_sparse_helper(
+            nulls,
+            |chunk, nulls_masks_iters| {
+                let (is_not_first, union_nulls) = nulls_masks_iters[1..] // skip first
+                    .iter_mut()
+                    .fold(
+                        (0, 0),
+                        |(is_not_first, union_nulls), (field_type_id, nulls_iter)| {
+                            let field_nulls = nulls_iter.next().unwrap();
+                            let is_field = selection_mask(chunk, *field_type_id);
 
-            let (is_not_first, union_nulls) = nulls_masks_iter[1..] // skip first
-                .iter_mut()
-                .map(|(field_type_id, nulls_iter)| {
-                    let field_nulls = nulls_iter.next().unwrap();
-                    let is_field = selection_mask(chunk, *field_type_id);
+                            (
+                                is_not_first | is_field,
+                                union_nulls | (is_field & field_nulls),
+                            )
+                        },
+                    );
 
-                    (is_field, field_nulls)
-                })
-                .fold(
-                    (0, 0),
-                    |(is_not_first, union_nulls), (is_field, field_nulls)| {
-                        (
-                            is_not_first | is_field,
-                            union_nulls | (is_field & field_nulls),
-                        )
-                    },
-                );
+                let is_first = !is_not_first;
+                let first_nulls = nulls_masks_iters[0].1.next().unwrap();
 
-            let is_first = !is_not_first;
-            let first_nulls = nulls_masks_iter[0].1.next().unwrap();
-
-            (is_first & first_nulls) | union_nulls
-        });
-
-        // SAFETY:
-        // chunks is a ChunksExact iterator, which implements TrustedLen, and correctly reports its length
-        let mut buffer = unsafe { MutableBuffer::from_trusted_len_iter(chunks) };
-
-        if !remainder.is_empty() {
-            let remainder_mask =
+                (is_first & first_nulls) | union_nulls
+            },
+            |remainder, bit_chunks| {
                 bit_chunks
                     .iter()
                     .fold(0, |union_nulls, (field_type_id, field_bit_chunks)| {
@@ -599,9 +536,44 @@ impl UnionArray {
                         let is_field = selection_mask(remainder, *field_type_id);
 
                         union_nulls | (is_field & field_nulls)
-                    });
+                    })
+            },
+        )
+    }
 
-            buffer.push(remainder_mask);
+    /// Maps `nulls` to `BitChunk's` and then to `BitChunkIterator's`, then divides `self.type_ids` into exact chunks of 64 values,
+    /// calling `mask_chunk` for every exact chunk, and `mask_remainder` for the remainder, if any, collecting the result in a `BooleanBuffer`
+    fn mask_sparse_helper(
+        &self,
+        nulls: Vec<(i8, NullBuffer)>,
+        mut mask_chunk: impl FnMut(&[i8; 64], &mut [(i8, BitChunkIterator)]) -> u64,
+        mask_remainder: impl FnOnce(&[i8], &[(i8, BitChunks)]) -> u64,
+    ) -> BooleanBuffer {
+        let bit_chunks = nulls
+            .iter()
+            .map(|(type_id, nulls)| (*type_id, nulls.inner().bit_chunks()))
+            .collect::<Vec<_>>();
+
+        let mut nulls_masks_iter = bit_chunks
+            .iter()
+            .map(|(type_id, bit_chunks)| (*type_id, bit_chunks.iter()))
+            .collect::<Vec<_>>();
+
+        let chunks_exact = self.type_ids.chunks_exact(64);
+        let remainder = chunks_exact.remainder();
+
+        let chunks = chunks_exact.map(|chunk| {
+            let chunk_array = <&[i8; 64]>::try_from(chunk).unwrap();
+
+            mask_chunk(chunk_array, &mut nulls_masks_iter)
+        });
+
+        // SAFETY:
+        // chunks is a ChunksExact iterator, which implements TrustedLen, and correctly reports its length
+        let mut buffer = unsafe { MutableBuffer::from_trusted_len_iter(chunks) };
+
+        if !remainder.is_empty() {
+            buffer.push(mask_remainder(remainder, &bit_chunks));
         }
 
         BooleanBuffer::new(buffer.into(), 0, self.type_ids.len())
@@ -988,20 +960,12 @@ fn selection_mask(chunk: &[i8], type_id: i8) -> u64 {
         })
 }
 
-fn nulls_to_bit_chunks(nulls: &[(i8, NullBuffer)]) -> Vec<(i8, BitChunks)> {
-    nulls
+fn without_nulls_selected(chunk: &[i8], without_nulls_ids: &[i8]) -> u64 {
+    without_nulls_ids
         .iter()
-        .map(|(type_id, nulls)| (*type_id, nulls.inner().bit_chunks()))
-        .collect()
-}
-
-fn bit_chunks_to_iterators<'a>(
-    bit_chunks: &'a [(i8, BitChunks)],
-) -> Vec<(i8, BitChunkIterator<'a>)> {
-    bit_chunks
-        .iter()
-        .map(|(type_id, bit_chunks)| (*type_id, bit_chunks.iter()))
-        .collect()
+        .fold(0, |fully_valid_selected, field_type_id| {
+            fully_valid_selected | selection_mask(chunk, *field_type_id)
+        })
 }
 
 #[cfg(test)]
