@@ -144,9 +144,9 @@ impl ParquetMetaDataReader {
     /// let file = open_parquet_file("some_path.parquet");
     /// let metadata = ParquetMetaDataReader::new()
     ///     .with_page_indexes(true)
-    ///     .parse(&file).unwrap();
+    ///     .parse_and_finish(&file).unwrap();
     /// ```
-    pub fn parse<R: ChunkReader>(mut self, reader: &R) -> Result<ParquetMetaData> {
+    pub fn parse_and_finish<R: ChunkReader>(mut self, reader: &R) -> Result<ParquetMetaData> {
         self.try_parse(reader)?;
         self.finish()
     }
@@ -293,7 +293,7 @@ impl ParquetMetaDataReader {
     /// See [`Self::with_prefetch_hint`] for a discussion of how to reduce the number of fetches
     /// performed by this function.
     #[cfg(feature = "async")]
-    pub async fn load<F: MetadataFetch>(
+    pub async fn load_and_finish<F: MetadataFetch>(
         mut self,
         fetch: F,
         file_size: usize,
@@ -834,7 +834,9 @@ mod tests {
         let mut file = get_test_file("nulls.snappy.parquet");
         let len = file.len() as usize;
 
-        let expected = ParquetMetaDataReader::new().parse(&file).unwrap();
+        let expected = ParquetMetaDataReader::new()
+            .parse_and_finish(&file)
+            .unwrap();
         let expected = expected.file_metadata().schema();
         let fetch_count = AtomicUsize::new(0);
 
@@ -844,7 +846,10 @@ mod tests {
         };
 
         let input = MetadataFetchFn(&mut fetch);
-        let actual = ParquetMetaDataReader::new().load(input, len).await.unwrap();
+        let actual = ParquetMetaDataReader::new()
+            .load_and_finish(input, len)
+            .await
+            .unwrap();
         assert_eq!(actual.file_metadata().schema(), expected);
         assert_eq!(fetch_count.load(Ordering::SeqCst), 2);
 
@@ -853,7 +858,7 @@ mod tests {
         let input = MetadataFetchFn(&mut fetch);
         let actual = ParquetMetaDataReader::new()
             .with_prefetch_hint(Some(7))
-            .load(input, len)
+            .load_and_finish(input, len)
             .await
             .unwrap();
         assert_eq!(actual.file_metadata().schema(), expected);
@@ -864,7 +869,7 @@ mod tests {
         let input = MetadataFetchFn(&mut fetch);
         let actual = ParquetMetaDataReader::new()
             .with_prefetch_hint(Some(10))
-            .load(input, len)
+            .load_and_finish(input, len)
             .await
             .unwrap();
         assert_eq!(actual.file_metadata().schema(), expected);
@@ -875,7 +880,7 @@ mod tests {
         let input = MetadataFetchFn(&mut fetch);
         let actual = ParquetMetaDataReader::new()
             .with_prefetch_hint(Some(500))
-            .load(input, len)
+            .load_and_finish(input, len)
             .await
             .unwrap();
         assert_eq!(actual.file_metadata().schema(), expected);
@@ -886,7 +891,7 @@ mod tests {
         let input = MetadataFetchFn(&mut fetch);
         let actual = ParquetMetaDataReader::new()
             .with_prefetch_hint(Some(428))
-            .load(input, len)
+            .load_and_finish(input, len)
             .await
             .unwrap();
         assert_eq!(actual.file_metadata().schema(), expected);
@@ -894,7 +899,7 @@ mod tests {
 
         let input = MetadataFetchFn(&mut fetch);
         let err = ParquetMetaDataReader::new()
-            .load(input, 4)
+            .load_and_finish(input, 4)
             .await
             .unwrap_err()
             .to_string();
@@ -902,7 +907,7 @@ mod tests {
 
         let input = MetadataFetchFn(&mut fetch);
         let err = ParquetMetaDataReader::new()
-            .load(input, 20)
+            .load_and_finish(input, 20)
             .await
             .unwrap_err()
             .to_string();
@@ -955,7 +960,7 @@ mod tests {
         let metadata = ParquetMetaDataReader::new()
             .with_page_indexes(true)
             .with_prefetch_hint(Some(130650))
-            .load(f, len)
+            .load_and_finish(f, len)
             .await
             .unwrap();
         assert_eq!(fetch_count.load(Ordering::SeqCst), 1);
