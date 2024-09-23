@@ -9394,7 +9394,7 @@ mod tests {
             Some(vec![Some(0), None, Some(2)]),
         ]);
         let a = cast_with_options(&array, &DataType::Utf8, &options).unwrap();
-        let r: Vec<_> = a.as_string::<i32>().iter().map(|x| x.unwrap()).collect();
+        let r: Vec<_> = a.as_string::<i32>().iter().flatten().collect();
         assert_eq!(r, &["[0, 1, 2]", "[0, null, 2]"]);
     }
     #[test]

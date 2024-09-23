@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+#![warn(missing_docs)]
 //! Arrow selection kernels
 
 pub mod concat;

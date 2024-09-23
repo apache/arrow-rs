@@ -15,6 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! Low-level array data abstractions.
+//!
+//! Provides utilities for creating, manipulating, and converting Arrow arrays
+//! made of primitive types, strings, and nested types.
+
 use super::{data::new_buffers, ArrayData, ArrayDataBuilder, ByteView};
 use crate::bit_mask::set_bits;
 use arrow_buffer::buffer::{BooleanBuffer, NullBuffer};

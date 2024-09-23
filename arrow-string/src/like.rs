@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! Provide SQL's LIKE operators for Arrow's string arrays
+
 use crate::predicate::Predicate;
 use arrow_array::cast::AsArray;
 use arrow_array::*;

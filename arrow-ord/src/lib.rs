@@ -43,6 +43,7 @@
 //! ```
 //!
 
+#![warn(missing_docs)]
 pub mod cmp;
 #[doc(hidden)]
 pub mod comparison;
