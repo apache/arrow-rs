@@ -26,7 +26,7 @@ use crate::BufferBuilder;
 use crate::{bytes::Bytes, native::ArrowNativeType};
 
 use super::ops::bitwise_unary_op_helper;
-use super::MutableBuffer;
+use super::{MutableBuffer, ScalarBuffer};
 
 /// Buffer represents a contiguous memory region that can be shared with other buffers and across
 /// thread boundaries.
@@ -203,7 +203,9 @@ impl Buffer {
     pub fn advance(&mut self, offset: usize) {
         assert!(
             offset <= self.length,
-            "the offset of the new Buffer cannot exceed the existing length"
+            "the offset of the new Buffer cannot exceed the existing length: offset={} length={}",
+            offset,
+            self.length
         );
         self.length -= offset;
         // Safety:
@@ -221,7 +223,8 @@ impl Buffer {
     pub fn slice_with_length(&self, offset: usize, length: usize) -> Self {
         assert!(
             offset.saturating_add(length) <= self.length,
-            "the offset of the new Buffer cannot exceed the existing length"
+            "the offset of the new Buffer cannot exceed the existing length: slice offset={offset} length={length} selflen={}",
+            self.length
         );
         // Safety:
         // offset + length <= self.length
@@ -385,6 +388,12 @@ impl<const N: usize> From<&[u8; N]> for Buffer {
 impl<T: ArrowNativeType> From<Vec<T>> for Buffer {
     fn from(value: Vec<T>) -> Self {
         Self::from_vec(value)
+    }
+}
+
+impl<T: ArrowNativeType> From<ScalarBuffer<T>> for Buffer {
+    fn from(value: ScalarBuffer<T>) -> Self {
+        value.into_inner()
     }
 }
 

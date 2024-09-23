@@ -17,6 +17,8 @@
 
 //! Transfer data between the Arrow memory format and CSV (comma-separated values).
 
+#![warn(missing_docs)]
+
 pub mod reader;
 pub mod writer;
 

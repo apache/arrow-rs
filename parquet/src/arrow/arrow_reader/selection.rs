@@ -436,6 +436,11 @@ impl RowSelection {
     pub fn row_count(&self) -> usize {
         self.iter().filter(|s| !s.skip).map(|s| s.row_count).sum()
     }
+
+    /// Returns the number of de-selected rows
+    pub fn skipped_row_count(&self) -> usize {
+        self.iter().filter(|s| s.skip).map(|s| s.row_count).sum()
+    }
 }
 
 impl From<Vec<RowSelector>> for RowSelection {
@@ -1344,5 +1349,33 @@ mod tests {
                 &RowSelector::skip(10),
             ]
         );
+    }
+
+    #[test]
+    fn test_row_count() {
+        let selection = RowSelection::from(vec![
+            RowSelector::skip(34),
+            RowSelector::select(12),
+            RowSelector::skip(3),
+            RowSelector::select(35),
+        ]);
+
+        assert_eq!(selection.row_count(), 12 + 35);
+        assert_eq!(selection.skipped_row_count(), 34 + 3);
+
+        let selection = RowSelection::from(vec![RowSelector::select(12), RowSelector::select(35)]);
+
+        assert_eq!(selection.row_count(), 12 + 35);
+        assert_eq!(selection.skipped_row_count(), 0);
+
+        let selection = RowSelection::from(vec![RowSelector::skip(34), RowSelector::skip(3)]);
+
+        assert_eq!(selection.row_count(), 0);
+        assert_eq!(selection.skipped_row_count(), 34 + 3);
+
+        let selection = RowSelection::from(vec![]);
+
+        assert_eq!(selection.row_count(), 0);
+        assert_eq!(selection.skipped_row_count(), 0);
     }
 }

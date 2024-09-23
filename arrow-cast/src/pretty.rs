@@ -54,7 +54,8 @@ pub fn pretty_format_columns(
     pretty_format_columns_with_options(col_name, results, &options)
 }
 
-pub fn pretty_format_columns_with_options(
+/// Utility function to create a visual representation of columns with options
+fn pretty_format_columns_with_options(
     col_name: &str,
     results: &[ArrayRef],
     options: &FormatOptions,

@@ -45,7 +45,7 @@ num = { version = "0.4", default-features = false, features = ["std"] }
 serde = { version = "1.0", default-features = false }
 serde_json = { version = "1.0", default-features = false, features = ["std"] }
 chrono = { workspace = true }
-lexical-core = { version = "0.8", default-features = false }
+lexical-core = { version = "1.0", default-features = false}
 
 [dev-dependencies]
 tempfile = "3.3"

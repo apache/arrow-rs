@@ -83,17 +83,18 @@ const ENOSYS: i32 = 78;
 /// This was created by bindgen
 #[repr(C)]
 #[derive(Debug)]
-#[allow(missing_docs)]
+#[allow(non_camel_case_types)]
 pub struct FFI_ArrowArrayStream {
-    pub get_schema: Option<
-        unsafe extern "C" fn(arg1: *mut FFI_ArrowArrayStream, out: *mut FFI_ArrowSchema) -> c_int,
-    >,
-    pub get_next: Option<
-        unsafe extern "C" fn(arg1: *mut FFI_ArrowArrayStream, out: *mut FFI_ArrowArray) -> c_int,
-    >,
-    pub get_last_error:
-        Option<unsafe extern "C" fn(arg1: *mut FFI_ArrowArrayStream) -> *const c_char>,
-    pub release: Option<unsafe extern "C" fn(arg1: *mut FFI_ArrowArrayStream)>,
+    /// C function to get schema from the stream
+    pub get_schema:
+        Option<unsafe extern "C" fn(arg1: *mut Self, out: *mut FFI_ArrowSchema) -> c_int>,
+    /// C function to get next array from the stream
+    pub get_next: Option<unsafe extern "C" fn(arg1: *mut Self, out: *mut FFI_ArrowArray) -> c_int>,
+    /// C function to get the error from last operation on the stream
+    pub get_last_error: Option<unsafe extern "C" fn(arg1: *mut Self) -> *const c_char>,
+    /// C function to release the stream
+    pub release: Option<unsafe extern "C" fn(arg1: *mut Self)>,
+    /// Private data used by the stream
     pub private_data: *mut c_void,
 }
 
@@ -275,6 +276,7 @@ fn get_error_code(err: &ArrowError) -> i32 {
 }
 
 /// A `RecordBatchReader` which imports Arrays from `FFI_ArrowArrayStream`.
+///
 /// Struct used to fetch `RecordBatch` from the C Stream Interface.
 /// Its main responsibility is to expose `RecordBatchReader` functionality
 /// that requires [FFI_ArrowArrayStream].
