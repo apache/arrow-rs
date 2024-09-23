@@ -136,7 +136,7 @@ impl ParquetMetaDataReader {
     ///
     /// This call will consume `self`.
     ///
-    /// Example
+    /// # Example
     /// ```no_run
     /// # use parquet::file::metadata::ParquetMetaDataReader;
     /// # fn open_parquet_file(path: &str) -> std::fs::File { unimplemented!(); }
@@ -166,7 +166,14 @@ impl ParquetMetaDataReader {
     ///
     /// Using this function also allows for retrying with a larger buffer.
     ///
-    /// Example
+    /// # Errors
+    ///
+    /// This function will return [`ParquetError::IndexOutOfBound`] in the event `reader` does not
+    /// provide enough data to fully parse the metadata (see example below).
+    ///
+    /// Other errors returned include [`ParquetError::General`] and [`ParquetError::EOF`].
+    ///
+    /// # Example
     /// ```no_run
     /// # use parquet::file::metadata::ParquetMetaDataReader;
     /// # use parquet::errors::ParquetError;
