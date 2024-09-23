@@ -395,13 +395,6 @@ impl IpcDataGenerator {
     ) -> Result<(), ArrowError> {
         match column.data_type() {
             DataType::Dictionary(_key_type, _value_type) => {
-                let dict_id = dict_id_seq
-                    .next()
-                    .or_else(|| field.dict_id())
-                    .ok_or_else(|| {
-                        ArrowError::IpcError(format!("no dict id for field {}", field.name()))
-                    })?;
-
                 let dict_data = column.to_data();
                 let dict_values = &dict_data.child_data()[0];
 
@@ -414,6 +407,16 @@ impl IpcDataGenerator {
                     write_options,
                     dict_id_seq,
                 )?;
+
+                // It's importnat to only take the dict_id at this point, because the dict ID
+                // sequence is assigned depth-first, so we need to first encode children and have
+                // them take their assigned dict IDs before we take the dict ID for this field.
+                let dict_id = dict_id_seq
+                    .next()
+                    .or_else(|| field.dict_id())
+                    .ok_or_else(|| {
+                        ArrowError::IpcError(format!("no dict id for field {}", field.name()))
+                    })?;
 
                 let emit = dictionary_tracker.insert(dict_id, column)?;
 
