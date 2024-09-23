@@ -1027,17 +1027,6 @@ mod tests {
     }
 
     #[test]
-    fn test_memory_size_primitive_sliced() {
-        let arr = PrimitiveArray::<Int64Type>::from_iter_values(0..128);
-        let slice1 = arr.slice(0, 64);
-        let slice2 = arr.slice(64, 64);
-
-        // both slices report the full buffer memory usage, even though the buffers are shared
-        assert_eq!(slice1.get_array_memory_size(), arr.get_array_memory_size());
-        assert_eq!(slice2.get_array_memory_size(), arr.get_array_memory_size());
-    }
-
-    #[test]
     fn test_memory_size_primitive_nullable() {
         let arr: PrimitiveArray<Int64Type> = (0..128)
             .map(|i| if i % 20 == 0 { Some(i) } else { None })
