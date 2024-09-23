@@ -116,7 +116,7 @@ impl ParquetMetaDataReader {
         self
     }
 
-    /// Indicates whether this reader has a [`ParquetMetaData`] internally. 
+    /// Indicates whether this reader has a [`ParquetMetaData`] internally.
     pub fn has_metadata(&self) -> bool {
         self.metadata.is_some()
     }
@@ -152,7 +152,7 @@ impl ParquetMetaDataReader {
     }
 
     /// Attempts to parse the footer metadata (and optionally page indexes) given a [`ChunkReader`].
-    /// 
+    ///
     /// If `reader` is [`Bytes`] based, then the buffer must contain sufficient bytes to complete
     /// the request, and must include the Parquet footer. If page indexes are desired, the buffer
     /// must contain the entire file, or [`Self::try_parse_sized()`] should be used.
@@ -235,7 +235,9 @@ impl ParquetMetaDataReader {
         file_size: usize,
     ) -> Result<()> {
         if self.metadata.is_none() {
-            return Err(general_err!("Tried to read page indexes without ParquetMetaData metadata"));
+            return Err(general_err!(
+                "Tried to read page indexes without ParquetMetaData metadata"
+            ));
         }
 
         // TODO(ets): what is the correct behavior for missing page indexes? MetadataLoader would
