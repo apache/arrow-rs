@@ -61,12 +61,16 @@ pub use struct_array::StructArrayReader;
 
 /// Array reader reads parquet data into arrow array.
 pub trait ArrayReader: Send {
+    // TODO: this function is never used, and the trait is not public. Perhaps this should be
+    // removed.
+    #[allow(dead_code)]
     fn as_any(&self) -> &dyn Any;
 
     /// Returns the arrow type of this array reader.
     fn get_data_type(&self) -> &ArrowType;
 
     /// Reads at most `batch_size` records into an arrow array and return it.
+    #[cfg(any(feature = "experimental", test))]
     fn next_batch(&mut self, batch_size: usize) -> Result<ArrayRef> {
         self.read_records(batch_size)?;
         self.consume_batch()

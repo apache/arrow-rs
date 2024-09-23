@@ -22,7 +22,7 @@ use crate::client::{CredentialProvider, TokenProvider};
 use crate::util::hmac_sha256;
 use crate::RetryConfig;
 use async_trait::async_trait;
-use base64::prelude::BASE64_STANDARD;
+use base64::prelude::{BASE64_STANDARD, BASE64_URL_SAFE_NO_PAD};
 use base64::Engine;
 use chrono::{DateTime, SecondsFormat, Utc};
 use reqwest::header::{
@@ -51,10 +51,15 @@ pub(crate) static BLOB_TYPE: HeaderName = HeaderName::from_static("x-ms-blob-typ
 pub(crate) static DELETE_SNAPSHOTS: HeaderName = HeaderName::from_static("x-ms-delete-snapshots");
 pub(crate) static COPY_SOURCE: HeaderName = HeaderName::from_static("x-ms-copy-source");
 static CONTENT_MD5: HeaderName = HeaderName::from_static("content-md5");
+static PARTNER_TOKEN: HeaderName = HeaderName::from_static("x-ms-partner-token");
+static CLUSTER_IDENTIFIER: HeaderName = HeaderName::from_static("x-ms-cluster-identifier");
+static WORKLOAD_RESOURCE: HeaderName = HeaderName::from_static("x-ms-workload-resource-moniker");
+static PROXY_HOST: HeaderName = HeaderName::from_static("x-ms-proxy-host");
 pub(crate) const RFC1123_FMT: &str = "%a, %d %h %Y %T GMT";
 const CONTENT_TYPE_JSON: &str = "application/json";
 const MSI_SECRET_ENV_KEY: &str = "IDENTITY_HEADER";
 const MSI_API_VERSION: &str = "2019-08-01";
+const TOKEN_MIN_TTL: u64 = 300;
 
 /// OIDC scope used when interacting with OAuth2 APIs
 ///
@@ -931,6 +936,113 @@ impl AzureCliCredential {
                 }),
             },
         }
+    }
+}
+
+/// Encapsulates the logic to perform an OAuth token challenge for Fabric
+#[derive(Debug)]
+pub struct FabricTokenOAuthProvider {
+    fabric_token_service_url: String,
+    fabric_workload_host: String,
+    fabric_session_token: String,
+    fabric_cluster_identifier: String,
+    storage_access_token: Option<String>,
+    token_expiry: Option<u64>,
+}
+
+#[derive(Debug, Deserialize)]
+struct Claims {
+    exp: u64,
+}
+
+impl FabricTokenOAuthProvider {
+    /// Create a new [`FabricTokenOAuthProvider`] for an azure backed store
+    pub fn new(
+        fabric_token_service_url: impl Into<String>,
+        fabric_workload_host: impl Into<String>,
+        fabric_session_token: impl Into<String>,
+        fabric_cluster_identifier: impl Into<String>,
+        storage_access_token: Option<String>,
+    ) -> Self {
+        let (storage_access_token, token_expiry) = match storage_access_token {
+            Some(token) => match Self::validate_and_get_expiry(&token) {
+                Some(expiry) if expiry > Self::get_current_timestamp() + TOKEN_MIN_TTL => {
+                    (Some(token), Some(expiry))
+                }
+                _ => (None, None),
+            },
+            None => (None, None),
+        };
+
+        Self {
+            fabric_token_service_url: fabric_token_service_url.into(),
+            fabric_workload_host: fabric_workload_host.into(),
+            fabric_session_token: fabric_session_token.into(),
+            fabric_cluster_identifier: fabric_cluster_identifier.into(),
+            storage_access_token,
+            token_expiry,
+        }
+    }
+
+    fn validate_and_get_expiry(token: &str) -> Option<u64> {
+        let payload = token.split('.').nth(1)?;
+        let decoded_bytes = BASE64_URL_SAFE_NO_PAD.decode(payload).ok()?;
+        let decoded_str = str::from_utf8(&decoded_bytes).ok()?;
+        let claims: Claims = serde_json::from_str(decoded_str).ok()?;
+        Some(claims.exp)
+    }
+
+    fn get_current_timestamp() -> u64 {
+        SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs())
+    }
+}
+
+#[async_trait::async_trait]
+impl TokenProvider for FabricTokenOAuthProvider {
+    type Credential = AzureCredential;
+
+    /// Fetch a token
+    async fn fetch_token(
+        &self,
+        client: &Client,
+        retry: &RetryConfig,
+    ) -> crate::Result<TemporaryToken<Arc<AzureCredential>>> {
+        if let Some(storage_access_token) = &self.storage_access_token {
+            if let Some(expiry) = self.token_expiry {
+                let exp_in = expiry - Self::get_current_timestamp();
+                if exp_in > TOKEN_MIN_TTL {
+                    return Ok(TemporaryToken {
+                        token: Arc::new(AzureCredential::BearerToken(storage_access_token.clone())),
+                        expiry: Some(Instant::now() + Duration::from_secs(exp_in)),
+                    });
+                }
+            }
+        }
+
+        let query_items = vec![("resource", AZURE_STORAGE_RESOURCE)];
+        let access_token: String = client
+            .request(Method::GET, &self.fabric_token_service_url)
+            .header(&PARTNER_TOKEN, self.fabric_session_token.as_str())
+            .header(&CLUSTER_IDENTIFIER, self.fabric_cluster_identifier.as_str())
+            .header(&WORKLOAD_RESOURCE, self.fabric_cluster_identifier.as_str())
+            .header(&PROXY_HOST, self.fabric_workload_host.as_str())
+            .query(&query_items)
+            .retryable(retry)
+            .idempotent(true)
+            .send()
+            .await
+            .context(TokenRequestSnafu)?
+            .text()
+            .await
+            .context(TokenResponseBodySnafu)?;
+        let exp_in = Self::validate_and_get_expiry(&access_token)
+            .map_or(3600, |expiry| expiry - Self::get_current_timestamp());
+        Ok(TemporaryToken {
+            token: Arc::new(AzureCredential::BearerToken(access_token)),
+            expiry: Some(Instant::now() + Duration::from_secs(exp_in)),
+        })
     }
 }
 
