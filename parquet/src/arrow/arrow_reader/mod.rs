@@ -3480,7 +3480,6 @@ mod tests {
                 ArrowReaderOptions::new().with_page_index(true),
             )
             .unwrap();
-
             // Although `Vec<Vec<PageLoacation>>` of each row group is empty,
             // we should read the file successfully.
             // FIXME: this test will fail when metadata parsing returns `None` for missing page
