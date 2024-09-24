@@ -44,6 +44,7 @@ pub mod ffi;
 /// # Example creation
 /// ```
 /// # use arrow_schema::SortOptions;
+/// // configure using explicit initialization
 /// let options = SortOptions {
 ///   descending: false,
 ///   nulls_first: true,
@@ -55,8 +56,14 @@ pub mod ffi;
 /// // Configure using builder APIs
 /// let options = SortOptions::default()
 ///  .desc()
-///  .with_nulls_first(true);
+///  .nulls_first();
 /// assert_eq!(options.to_string(), "DESC NULLS FIRST");
+///
+/// // configure using explicit field values
+/// let options = SortOptions::default()
+///  .with_descending(false)
+///  .with_nulls_first(false);
+/// assert_eq!(options.to_string(), "ASC NULLS LAST");
 /// ```
 ///
 /// # Example operations
@@ -100,14 +107,34 @@ impl SortOptions {
     }
 
     /// Set this sort options to sort in descending order
+    ///
+    /// See [Self::with_descending] to explicitly set the underlying field
     pub fn desc(mut self) -> Self {
         self.descending = true;
         self
     }
 
     /// Set this sort options to sort in ascending order
+    ///
+    /// See [Self::with_descending] to explicitly set the underlying field
     pub fn asc(mut self) -> Self {
         self.descending = false;
+        self
+    }
+
+    /// Set this sort options to sort nulls first
+    ///
+    /// See [Self::with_nulls_first] to explicitly set the underlying field
+    pub fn nulls_first(mut self) -> Self {
+        self.nulls_first = true;
+        self
+    }
+
+    /// Set this sort options to sort nulls last
+    ///
+    /// See [Self::with_nulls_first] to explicitly set the underlying field
+    pub fn nulls_last(mut self) -> Self {
+        self.nulls_first = false;
         self
     }
 
