@@ -161,10 +161,9 @@ pub type ParquetOffsetIndex = Vec<Vec<OffsetIndexMetaData>>;
 /// * [`ParquetColumnIndex`] and [`ParquetOffsetIndex`]: Optional "Page Index" structures (see [`Self::column_index`] and [`Self::offset_index`])
 ///
 /// This structure is read by the various readers in this crate or can be read
-/// directly from a file using the [`parse_metadata`] function.
+/// directly from a file using the [`ParquetMetaDataReader`] struct.
 ///
 /// [`parquet.thrift`]: https://github.com/apache/parquet-format/blob/master/src/main/thrift/parquet.thrift
-/// [`parse_metadata`]: crate::file::footer::parse_metadata
 #[derive(Debug, Clone, PartialEq)]
 pub struct ParquetMetaData {
     /// File level metadata
