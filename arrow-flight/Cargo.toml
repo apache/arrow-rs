@@ -20,7 +20,7 @@ name = "arrow-flight"
 description = "Apache Arrow Flight"
 version = { workspace = true }
 edition = { workspace = true }
-rust-version = "1.70.0"
+rust-version = "1.71.1"
 authors = { workspace = true }
 homepage = { workspace = true }
 repository = { workspace = true }

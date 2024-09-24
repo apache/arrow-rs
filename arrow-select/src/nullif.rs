@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! Implements the `nullif` function for Arrow arrays.
+
 use arrow_array::{make_array, Array, ArrayRef, BooleanArray};
 use arrow_buffer::buffer::{bitwise_bin_op_helper, bitwise_unary_op_helper};
 use arrow_buffer::{BooleanBuffer, NullBuffer};

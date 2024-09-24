@@ -56,6 +56,7 @@ const FILTER_SLICES_SELECTIVITY_THRESHOLD: f64 = 0.8;
 pub struct SlicesIterator<'a>(BitSliceIterator<'a>);
 
 impl<'a> SlicesIterator<'a> {
+    /// Creates a new iterator from a [BooleanArray]
     pub fn new(filter: &'a BooleanArray) -> Self {
         Self(filter.values().set_slices())
     }
