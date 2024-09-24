@@ -261,9 +261,7 @@ pub enum DataType {
     /// A single LargeBinary array can store up to [`i64::MAX`] bytes
     /// of binary data in total.
     LargeBinary,
-    /// (NOT YET FULLY SUPPORTED) Opaque binary data of variable length.
-    ///
-    /// Note this data type is not yet fully supported. Using it with arrow APIs may result in `panic`s.
+    /// Opaque binary data of variable length.
     ///
     /// Logically the same as [`Self::Binary`], but the internal representation uses a view
     /// struct that contains the string length and either the string's entire data
@@ -280,9 +278,7 @@ pub enum DataType {
     /// A single LargeUtf8 array can store up to [`i64::MAX`] bytes
     /// of string data in total.
     LargeUtf8,
-    /// (NOT YET FULLY SUPPORTED)  A variable-length string in Unicode with UTF-8 encoding
-    ///
-    /// Note this data type is not yet fully supported. Using it with arrow APIs may result in `panic`s.
+    /// A variable-length string in Unicode with UTF-8 encoding
     ///
     /// Logically the same as [`Self::Utf8`], but the internal representation uses a view
     /// struct that contains the string length and either the string's entire data
@@ -424,11 +420,13 @@ pub enum IntervalUnit {
     MonthDayNano,
 }
 
-// Sparse or Dense union layouts
+/// Sparse or Dense union layouts
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Copy)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum UnionMode {
+    /// Sparse union layout
     Sparse,
+    /// Dense union layout
     Dense,
 }
 
@@ -624,7 +622,7 @@ impl DataType {
         }
     }
 
-    /// Returns the bit width of this type if it is a primitive type
+    /// Returns the byte width of this type if it is a primitive type
     ///
     /// Returns `None` if not a primitive type
     #[inline]

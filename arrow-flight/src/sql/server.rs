@@ -979,6 +979,7 @@ fn arrow_error_to_status(err: arrow_schema::ArrowError) -> Status {
 
 /// A wrapper around [`Streaming<FlightData>`] that allows "peeking" at the
 /// message at the front of the stream without consuming it.
+///
 /// This is needed because sometimes the first message in the stream will contain
 /// a [`FlightDescriptor`] in addition to potentially any data, and the dispatch logic
 /// must inspect this information.

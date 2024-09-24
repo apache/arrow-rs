@@ -40,6 +40,7 @@ pub struct ByteView {
 
 impl ByteView {
     #[inline(always)]
+    /// Convert `ByteView` to `u128` by concatenating the fields
     pub fn as_u128(self) -> u128 {
         (self.length as u128)
             | ((self.prefix as u128) << 32)

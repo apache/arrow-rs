@@ -63,27 +63,24 @@
 //! }
 //! ```
 
+use core::str;
 use std::fmt::Formatter;
 use std::io::{Error, ErrorKind, Result, Write};
 
-#[derive(Debug)]
+/// A writer that allows writing to a `String`
+/// like an `std::io::Write` object.
+#[derive(Debug, Default)]
 pub struct StringWriter {
     data: String,
 }
 
 impl StringWriter {
+    /// Create a new `StringWriter`
     pub fn new() -> Self {
-        StringWriter {
-            data: String::new(),
-        }
+        Self::default()
     }
 }
 
-impl Default for StringWriter {
-    fn default() -> Self {
-        Self::new()
-    }
-}
 impl std::fmt::Display for StringWriter {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.data)
@@ -92,13 +89,13 @@ impl std::fmt::Display for StringWriter {
 
 impl Write for StringWriter {
     fn write(&mut self, buf: &[u8]) -> Result<usize> {
-        let string = match String::from_utf8(buf.to_vec()) {
+        let string = match str::from_utf8(buf) {
             Ok(x) => x,
             Err(e) => {
                 return Err(Error::new(ErrorKind::InvalidData, e));
             }
         };
-        self.data.push_str(&string);
+        self.data.push_str(string);
         Ok(string.len())
     }
 

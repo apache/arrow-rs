@@ -42,8 +42,9 @@ use arrow_schema::*;
 const FILTER_SLICES_SELECTIVITY_THRESHOLD: f64 = 0.8;
 
 /// An iterator of `(usize, usize)` each representing an interval
-/// `[start, end)` whose slots of a bitmap [Buffer] are true. Each
-/// interval corresponds to a contiguous region of memory to be
+/// `[start, end)` whose slots of a bitmap [Buffer] are true.
+///
+/// Each interval corresponds to a contiguous region of memory to be
 /// "taken" from an array to be filtered.
 ///
 /// ## Notes:
@@ -55,6 +56,7 @@ const FILTER_SLICES_SELECTIVITY_THRESHOLD: f64 = 0.8;
 pub struct SlicesIterator<'a>(BitSliceIterator<'a>);
 
 impl<'a> SlicesIterator<'a> {
+    /// Creates a new iterator from a [BooleanArray]
     pub fn new(filter: &'a BooleanArray) -> Self {
         Self(filter.values().set_slices())
     }
@@ -117,6 +119,7 @@ fn filter_count(filter: &BooleanArray) -> usize {
 pub type Filter<'a> = Box<dyn Fn(&ArrayData) -> ArrayData + 'a>;
 
 /// Returns a prepared function optimized to filter multiple arrays.
+///
 /// Creating this function requires time, but using it is faster than [filter] when the
 /// same filter needs to be applied to multiple arrays (e.g. a multi-column `RecordBatch`).
 /// WARNING: the nulls of `filter` are ignored and the value on its slot is considered.

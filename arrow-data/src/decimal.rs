@@ -15,6 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! Defines maximum and minimum values for `decimal256` and `decimal128` types for varying precisions.
+//!
+//! Also provides functions to validate if a given decimal value is within the valid range of the decimal type.
+
 use arrow_buffer::i256;
 use arrow_schema::ArrowError;
 
@@ -23,10 +27,13 @@ pub use arrow_schema::{
     DECIMAL_DEFAULT_SCALE,
 };
 
-// MAX decimal256 value of little-endian format for each precision.
-// Each element is the max value of signed 256-bit integer for the specified precision which
-// is encoded to the 32-byte width format of little-endian.
-pub(crate) const MAX_DECIMAL_BYTES_FOR_LARGER_EACH_PRECISION: [i256; 76] = [
+/// MAX decimal256 value of little-endian format for each precision.
+/// Each element is the max value of signed 256-bit integer for the specified precision which
+/// is encoded to the 32-byte width format of little-endian.
+/// The first element is unused and is inserted so that we can look up using
+/// precision as the index without the need to subtract 1 first.
+pub(crate) const MAX_DECIMAL_BYTES_FOR_LARGER_EACH_PRECISION: [i256; 77] = [
+    i256::from_i128(0_i128), // unused first element
     i256::from_le_bytes([
         9, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0,
@@ -333,10 +340,13 @@ pub(crate) const MAX_DECIMAL_BYTES_FOR_LARGER_EACH_PRECISION: [i256; 76] = [
     ]),
 ];
 
-// MIN decimal256 value of little-endian format for each precision.
-// Each element is the min value of signed 256-bit integer for the specified precision which
-// is encoded to the 76-byte width format of little-endian.
-pub(crate) const MIN_DECIMAL_BYTES_FOR_LARGER_EACH_PRECISION: [i256; 76] = [
+/// MIN decimal256 value of little-endian format for each precision.
+/// Each element is the min value of signed 256-bit integer for the specified precision which
+/// is encoded to the 76-byte width format of little-endian.
+/// The first element is unused and is inserted so that we can look up using
+/// precision as the index without the need to subtract 1 first.
+pub(crate) const MIN_DECIMAL_BYTES_FOR_LARGER_EACH_PRECISION: [i256; 77] = [
+    i256::from_i128(0_i128), // unused first element
     i256::from_le_bytes([
         247, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
         255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
@@ -643,8 +653,9 @@ pub(crate) const MIN_DECIMAL_BYTES_FOR_LARGER_EACH_PRECISION: [i256; 76] = [
     ]),
 ];
 
-/// `MAX_DECIMAL_FOR_EACH_PRECISION[p]` holds the maximum `i128` value that can
+/// `MAX_DECIMAL_FOR_EACH_PRECISION[p-1]` holds the maximum `i128` value that can
 /// be stored in [arrow_schema::DataType::Decimal128] value of precision `p`
+#[allow(dead_code)] // no longer used but is part of our public API
 pub const MAX_DECIMAL_FOR_EACH_PRECISION: [i128; 38] = [
     9,
     99,
@@ -686,9 +697,102 @@ pub const MAX_DECIMAL_FOR_EACH_PRECISION: [i128; 38] = [
     99999999999999999999999999999999999999,
 ];
 
-/// `MIN_DECIMAL_FOR_EACH_PRECISION[p]` holds the minimum `i128` value that can
+/// `MIN_DECIMAL_FOR_EACH_PRECISION[p-1]` holds the minimum `i128` value that can
 /// be stored in a [arrow_schema::DataType::Decimal128] value of precision `p`
+#[allow(dead_code)] // no longer used but is part of our public API
 pub const MIN_DECIMAL_FOR_EACH_PRECISION: [i128; 38] = [
+    -9,
+    -99,
+    -999,
+    -9999,
+    -99999,
+    -999999,
+    -9999999,
+    -99999999,
+    -999999999,
+    -9999999999,
+    -99999999999,
+    -999999999999,
+    -9999999999999,
+    -99999999999999,
+    -999999999999999,
+    -9999999999999999,
+    -99999999999999999,
+    -999999999999999999,
+    -9999999999999999999,
+    -99999999999999999999,
+    -999999999999999999999,
+    -9999999999999999999999,
+    -99999999999999999999999,
+    -999999999999999999999999,
+    -9999999999999999999999999,
+    -99999999999999999999999999,
+    -999999999999999999999999999,
+    -9999999999999999999999999999,
+    -99999999999999999999999999999,
+    -999999999999999999999999999999,
+    -9999999999999999999999999999999,
+    -99999999999999999999999999999999,
+    -999999999999999999999999999999999,
+    -9999999999999999999999999999999999,
+    -99999999999999999999999999999999999,
+    -999999999999999999999999999999999999,
+    -9999999999999999999999999999999999999,
+    -99999999999999999999999999999999999999,
+];
+
+/// `MAX_DECIMAL_FOR_EACH_PRECISION_ONE_BASED[p]` holds the maximum `i128` value that can
+/// be stored in [arrow_schema::DataType::Decimal128] value of precision `p`.
+/// The first element is unused and is inserted so that we can look up using
+/// precision as the index without the need to subtract 1 first.
+pub(crate) const MAX_DECIMAL_FOR_EACH_PRECISION_ONE_BASED: [i128; 39] = [
+    0, // unused first element
+    9,
+    99,
+    999,
+    9999,
+    99999,
+    999999,
+    9999999,
+    99999999,
+    999999999,
+    9999999999,
+    99999999999,
+    999999999999,
+    9999999999999,
+    99999999999999,
+    999999999999999,
+    9999999999999999,
+    99999999999999999,
+    999999999999999999,
+    9999999999999999999,
+    99999999999999999999,
+    999999999999999999999,
+    9999999999999999999999,
+    99999999999999999999999,
+    999999999999999999999999,
+    9999999999999999999999999,
+    99999999999999999999999999,
+    999999999999999999999999999,
+    9999999999999999999999999999,
+    99999999999999999999999999999,
+    999999999999999999999999999999,
+    9999999999999999999999999999999,
+    99999999999999999999999999999999,
+    999999999999999999999999999999999,
+    9999999999999999999999999999999999,
+    99999999999999999999999999999999999,
+    999999999999999999999999999999999999,
+    9999999999999999999999999999999999999,
+    99999999999999999999999999999999999999,
+];
+
+/// `MIN_DECIMAL_FOR_EACH_PRECISION[p]` holds the minimum `i128` value that can
+/// be stored in a [arrow_schema::DataType::Decimal128] value of precision `p`.
+/// The first element is unused and is inserted so that we can look up using
+/// precision as the index without the need to subtract 1 first.
+pub(crate) const MIN_DECIMAL_FOR_EACH_PRECISION_ONE_BASED: [i128; 39] = [
+    0, // unused first element
     -9,
     -99,
     -999,
@@ -738,21 +842,28 @@ pub fn validate_decimal_precision(value: i128, precision: u8) -> Result<(), Arro
             "Max precision of a Decimal128 is {DECIMAL128_MAX_PRECISION}, but got {precision}",
         )));
     }
-
-    let max = MAX_DECIMAL_FOR_EACH_PRECISION[usize::from(precision) - 1];
-    let min = MIN_DECIMAL_FOR_EACH_PRECISION[usize::from(precision) - 1];
-
-    if value > max {
+    if value > MAX_DECIMAL_FOR_EACH_PRECISION_ONE_BASED[precision as usize] {
         Err(ArrowError::InvalidArgumentError(format!(
-            "{value} is too large to store in a Decimal128 of precision {precision}. Max is {max}"
+            "{value} is too large to store in a Decimal128 of precision {precision}. Max is {}",
+            MAX_DECIMAL_FOR_EACH_PRECISION_ONE_BASED[precision as usize]
         )))
-    } else if value < min {
+    } else if value < MIN_DECIMAL_FOR_EACH_PRECISION_ONE_BASED[precision as usize] {
         Err(ArrowError::InvalidArgumentError(format!(
-            "{value} is too small to store in a Decimal128 of precision {precision}. Min is {min}"
+            "{value} is too small to store in a Decimal128 of precision {precision}. Min is {}",
+            MIN_DECIMAL_FOR_EACH_PRECISION_ONE_BASED[precision as usize]
         )))
     } else {
         Ok(())
     }
+}
+
+/// Determines whether the specified `i128` value can be properly
+/// interpreted as a Decimal number with precision `precision`
+#[inline]
+pub fn is_validate_decimal_precision(value: i128, precision: u8) -> bool {
+    precision <= DECIMAL128_MAX_PRECISION
+        && value >= MIN_DECIMAL_FOR_EACH_PRECISION_ONE_BASED[precision as usize]
+        && value <= MAX_DECIMAL_FOR_EACH_PRECISION_ONE_BASED[precision as usize]
 }
 
 /// Validates that the specified `i256` of value can be properly
@@ -764,18 +875,26 @@ pub fn validate_decimal256_precision(value: i256, precision: u8) -> Result<(), A
             "Max precision of a Decimal256 is {DECIMAL256_MAX_PRECISION}, but got {precision}",
         )));
     }
-    let max = MAX_DECIMAL_BYTES_FOR_LARGER_EACH_PRECISION[usize::from(precision) - 1];
-    let min = MIN_DECIMAL_BYTES_FOR_LARGER_EACH_PRECISION[usize::from(precision) - 1];
-
-    if value > max {
+    if value > MAX_DECIMAL_BYTES_FOR_LARGER_EACH_PRECISION[precision as usize] {
         Err(ArrowError::InvalidArgumentError(format!(
-            "{value:?} is too large to store in a Decimal256 of precision {precision}. Max is {max:?}"
+            "{value:?} is too large to store in a Decimal256 of precision {precision}. Max is {:?}",
+            MAX_DECIMAL_BYTES_FOR_LARGER_EACH_PRECISION[precision as usize]
         )))
-    } else if value < min {
+    } else if value < MIN_DECIMAL_BYTES_FOR_LARGER_EACH_PRECISION[precision as usize] {
         Err(ArrowError::InvalidArgumentError(format!(
-            "{value:?} is too small to store in a Decimal256 of precision {precision}. Min is {min:?}"
+            "{value:?} is too small to store in a Decimal256 of precision {precision}. Min is {:?}",
+            MIN_DECIMAL_BYTES_FOR_LARGER_EACH_PRECISION[precision as usize]
         )))
     } else {
         Ok(())
     }
+}
+
+/// Determines whether the specified `i256` value can be properly
+/// interpreted as a Decimal256 number with precision `precision`
+#[inline]
+pub fn is_validate_decimal256_precision(value: i256, precision: u8) -> bool {
+    precision <= DECIMAL256_MAX_PRECISION
+        && value >= MIN_DECIMAL_BYTES_FOR_LARGER_EACH_PRECISION[precision as usize]
+        && value <= MAX_DECIMAL_BYTES_FOR_LARGER_EACH_PRECISION[precision as usize]
 }

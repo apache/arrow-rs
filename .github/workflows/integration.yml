@@ -48,7 +48,6 @@ on:
       - arrow/**
 
 jobs:
-
   integration:
     name: Archery test With other arrows
     runs-on: ubuntu-latest
@@ -65,6 +64,7 @@ jobs:
       ARROW_INTEGRATION_GO: ON
       ARROW_INTEGRATION_JAVA: ON
       ARROW_INTEGRATION_JS: ON
+      ARCHERY_INTEGRATION_TARGET_IMPLEMENTATIONS: "rust"
       ARCHERY_INTEGRATION_WITH_NANOARROW: "1"
       # https://github.com/apache/arrow/pull/38403/files#r1371281630
       ARCHERY_INTEGRATION_WITH_RUST: "1"
@@ -118,9 +118,9 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        rust: [ stable ]
-        # PyArrow 13 was the last version prior to introduction to Arrow PyCapsules
-        pyarrow: [ "13", "14" ]
+        rust: [stable]
+        # PyArrow 15 was the first version to introduce StringView/BinaryView support
+        pyarrow: ["15", "16", "17"]
     steps:
       - uses: actions/checkout@v4
         with:

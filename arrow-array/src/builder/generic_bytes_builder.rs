@@ -537,7 +537,7 @@ mod tests {
         write!(builder, "buz").unwrap();
         builder.append_value("");
         let a = builder.finish();
-        let r: Vec<_> = a.iter().map(|x| x.unwrap()).collect();
+        let r: Vec<_> = a.iter().flatten().collect();
         assert_eq!(r, &["foo", "bar\n", "fizbuz"])
     }
 }

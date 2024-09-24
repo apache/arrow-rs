@@ -15,20 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Utility functions for working with Arrow data
-pub use arrow_buffer::{bit_chunk_iterator, bit_util};
+//! Print the arrow version and exit
 
-pub use arrow_data::bit_iterator;
-pub use arrow_data::bit_mask;
+use arrow::ARROW_VERSION;
 
-#[cfg(feature = "test_utils")]
-pub mod bench_util;
-#[cfg(feature = "test_utils")]
-pub mod data_gen;
-#[cfg(feature = "prettyprint")]
-pub use arrow_cast::pretty;
-pub mod string_writer;
-#[cfg(any(test, feature = "test_utils"))]
-pub mod test_util;
-
-pub use arrow_cast::display;
+fn main() {
+    println!("arrow version: {ARROW_VERSION}");
+}

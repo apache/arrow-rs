@@ -18,6 +18,7 @@
 //! This library demonstrates a minimal usage of Rust's C data interface to pass
 //! arrays from and to Python.
 
+#![warn(missing_docs)]
 use std::sync::Arc;
 
 use arrow::array::new_empty_array;

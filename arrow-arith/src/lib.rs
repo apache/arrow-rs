@@ -17,6 +17,7 @@
 
 //! Arrow arithmetic and aggregation kernels
 
+#![warn(missing_docs)]
 pub mod aggregate;
 #[doc(hidden)] // Kernels to be removed in a future release
 pub mod arithmetic;
