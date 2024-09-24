@@ -43,7 +43,8 @@
 //! Reading:
 //! * Read from bytes to `ParquetMetaData`: [`decode_footer`]
 //!   and [`decode_metadata`]
-//! * Read from an `async` source to `ParquetMetadata`: [`MetadataLoader`]
+//! * Read from an `async` source to `ParquetMetaData`: [`MetadataLoader`]
+//! * Read from bytes or from an async source to `ParquetMetaData`: [`ParquetMetaDataReader`]
 //!
 //! [`MetadataLoader`]: https://docs.rs/parquet/latest/parquet/arrow/async_reader/struct.MetadataLoader.html
 //! [`decode_footer`]: crate::file::footer::decode_footer
@@ -94,6 +95,7 @@
 //!                         * Same name, different struct
 //! ```
 mod memory;
+pub(crate) mod reader;
 mod writer;
 
 use std::ops::Range;
@@ -115,6 +117,7 @@ use crate::schema::types::{
     ColumnDescPtr, ColumnDescriptor, ColumnPath, SchemaDescPtr, SchemaDescriptor,
     Type as SchemaType,
 };
+pub use reader::ParquetMetaDataReader;
 pub use writer::ParquetMetaDataWriter;
 pub(crate) use writer::ThriftMetadataWriter;
 
@@ -278,13 +281,11 @@ impl ParquetMetaData {
     }
 
     /// Override the column index
-    #[cfg(feature = "arrow")]
     pub(crate) fn set_column_index(&mut self, index: Option<ParquetColumnIndex>) {
         self.column_index = index;
     }
 
     /// Override the offset index
-    #[cfg(feature = "arrow")]
     pub(crate) fn set_offset_index(&mut self, index: Option<ParquetOffsetIndex>) {
         self.offset_index = index;
     }
