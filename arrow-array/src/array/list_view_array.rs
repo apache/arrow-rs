@@ -403,7 +403,6 @@ impl<OffsetSize: OffsetSizeTrait> From<FixedSizeListArray> for GenericListViewAr
         let iter = std::iter::repeat(size).take(value.len());
         let mut sizes = Vec::with_capacity(iter.size_hint().0);
         let mut offsets = Vec::with_capacity(iter.size_hint().0);
-        //check if the size is usize
 
         for size in iter {
             offsets.push(OffsetSize::usize_as(acc));
