@@ -17,8 +17,7 @@
 
 use crate::arrow::async_reader::AsyncFileReader;
 use crate::errors::{ParquetError, Result};
-use crate::file::footer::{decode_footer, decode_metadata};
-use crate::file::metadata::ParquetMetaData;
+use crate::file::metadata::{ParquetMetaData, ParquetMetaDataReader};
 use crate::file::page_index::index::Index;
 use crate::file::page_index::index_reader::{acc_range, decode_column_index, decode_offset_index};
 use crate::file::FOOTER_SIZE;
@@ -76,7 +75,7 @@ impl<F: MetadataFetch> MetadataLoader<F> {
         let mut footer = [0; FOOTER_SIZE];
         footer.copy_from_slice(&suffix[suffix_len - FOOTER_SIZE..suffix_len]);
 
-        let length = decode_footer(&footer)?;
+        let length = ParquetMetaDataReader::decode_footer(&footer)?;
 
         if file_size < length + FOOTER_SIZE {
             return Err(ParquetError::EOF(format!(
@@ -90,13 +89,13 @@ impl<F: MetadataFetch> MetadataLoader<F> {
         let (metadata, remainder) = if length > suffix_len - FOOTER_SIZE {
             let metadata_start = file_size - length - FOOTER_SIZE;
             let meta = fetch.fetch(metadata_start..file_size - FOOTER_SIZE).await?;
-            (decode_metadata(&meta)?, None)
+            (ParquetMetaDataReader::decode_metadata(&meta)?, None)
         } else {
             let metadata_start = file_size - length - FOOTER_SIZE - footer_start;
 
             let slice = &suffix[metadata_start..suffix_len - FOOTER_SIZE];
             (
-                decode_metadata(slice)?,
+                ParquetMetaDataReader::decode_metadata(slice)?,
                 Some((footer_start, suffix.slice(..metadata_start))),
             )
         };
