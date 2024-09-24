@@ -122,19 +122,9 @@ impl<'a> IpcSchemaEncoder<'a> {
 }
 
 /// Serialize a schema in IPC format
-#[deprecated(
-    since = "54.0.0",
-    note = "Use `IpcSchemaConverter` instead. This function will be removed in the next release."
-)]
+#[deprecated(since = "54.0.0", note = "Use `IpcSchemaConverter`.")]
 pub fn schema_to_fb(schema: &Schema) -> FlatBufferBuilder<'_> {
-    let mut fbb = FlatBufferBuilder::new();
-
-    #[allow(deprecated)]
-    let root = schema_to_fb_offset(&mut fbb, schema);
-
-    fbb.finish(root, None);
-
-    fbb
+    IpcSchemaEncoder::new().schema_to_fb(schema)
 }
 
 pub fn metadata_to_fb<'a>(
@@ -156,30 +146,12 @@ pub fn metadata_to_fb<'a>(
     fbb.create_vector(&custom_metadata)
 }
 
-#[deprecated(
-    since = "54.0.0",
-    note = "Use `IpcSchemaConverter` instead. This function will be removed in the next release."
-)]
+#[deprecated(since = "54.0.0", note = "Use `IpcSchemaConverter`.")]
 pub fn schema_to_fb_offset<'a>(
     fbb: &mut FlatBufferBuilder<'a>,
     schema: &Schema,
 ) -> WIPOffset<crate::Schema<'a>> {
-    let fields = schema
-        .fields()
-        .iter()
-        .map(|field| build_field(fbb, &mut None, field))
-        .collect::<Vec<_>>();
-    let fb_field_list = fbb.create_vector(&fields);
-
-    let fb_metadata_list =
-        (!schema.metadata().is_empty()).then(|| metadata_to_fb(fbb, schema.metadata()));
-
-    let mut builder = crate::SchemaBuilder::new(fbb);
-    builder.add_fields(fb_field_list);
-    if let Some(fb_metadata_list) = fb_metadata_list {
-        builder.add_custom_metadata(fb_metadata_list);
-    }
-    builder.finish()
+    IpcSchemaEncoder::new().schema_to_fb_offset(fbb, schema)
 }
 
 /// Convert an IPC Field to Arrow Field
