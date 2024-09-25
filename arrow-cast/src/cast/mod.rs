@@ -2106,6 +2106,31 @@ pub fn cast_with_options(
             cast_with_options(&array, to_type, cast_options)
         }
 
+        (Duration(from_unit), Duration(to_unit)) => {
+            let array = cast_with_options(array, &Int64, cast_options)?;
+            let time_array = array.as_primitive::<Int64Type>();
+            let from_size = time_unit_multiple(from_unit);
+            let to_size = time_unit_multiple(to_unit);
+            // we either divide or multiply, depending on size of each unit
+            // units are never the same when the types are the same
+            let converted = match from_size.cmp(&to_size) {
+                Ordering::Greater => {
+                    let divisor = from_size / to_size;
+                    time_array.unary::<_, Int64Type>(|o| o / divisor)
+                }
+                Ordering::Equal => time_array.clone(),
+                Ordering::Less => {
+                    let mul = to_size / from_size;
+                    if cast_options.safe {
+                        time_array.unary_opt::<_, Int64Type>(|o| o.checked_mul(mul))
+                    } else {
+                        time_array.try_unary::<_, Int64Type, _>(|o| o.mul_checked(mul))?
+                    }
+                }
+            };
+            Ok(make_duration_array(&converted, *to_unit))
+        }
+
         (Duration(TimeUnit::Second), Interval(IntervalUnit::MonthDayNano)) => {
             cast_duration_to_interval::<DurationSecondType>(array, cast_options)
         }
