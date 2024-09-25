@@ -5306,18 +5306,16 @@ mod tests {
             let to_size = time_unit_multiple(&to_unit);
 
             let (v1_before, v2_before) = (8640003005, 1696002001);
-            let (v1_after, v2_after) = if from_size > to_size {
+            let (v1_after, v2_after) = if from_size >= to_size {
                 (
                     v1_before / (from_size / to_size),
                     v2_before / (from_size / to_size),
                 )
-            } else if from_size < to_size {
+            } else {
                 (
                     v1_before * (to_size / from_size),
                     v2_before * (to_size / from_size),
                 )
-            } else {
-                (v1_before, v2_before)
             };
 
             let array =
