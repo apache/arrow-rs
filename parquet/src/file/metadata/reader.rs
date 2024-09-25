@@ -419,7 +419,7 @@ impl ParquetMetaDataReader {
     }
 
     /// Set the column_index and offset_indexes to empty `Vec` for backwards compatibility
-    /// 
+    ///
     /// See <https://github.com/apache/arrow-rs/pull/6451>  for details
     fn empty_page_indexes(&mut self) {
         let metadata = self.metadata.as_mut().unwrap();
