@@ -5287,6 +5287,23 @@ mod tests {
     }
 
     #[test]
+    fn test_cast_between_durations() {
+        let array =
+            DurationMillisecondArray::from(vec![Some(864000003005), Some(1545696002001), None]);
+        let b = cast(&array, &DataType::Duration(TimeUnit::Second)).unwrap();
+        let c = b.as_primitive::<DurationSecondType>();
+        assert_eq!(864000003, c.value(0));
+        assert_eq!(1545696002, c.value(1));
+        assert!(c.is_null(2));
+
+        let b = cast(&array, &DataType::Duration(TimeUnit::Nanosecond)).unwrap();
+        let c = b.as_primitive::<DurationNanosecondType>();
+        assert_eq!(864000003005000000, c.value(0));
+        assert_eq!(1545696002001000000, c.value(1));
+        assert!(c.is_null(2));
+    }
+
+    #[test]
     fn test_cast_to_strings() {
         let a = Int32Array::from(vec![1, 2, 3]);
         let out = cast(&a, &DataType::Utf8).unwrap();
