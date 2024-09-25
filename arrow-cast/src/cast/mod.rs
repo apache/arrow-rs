@@ -5287,20 +5287,105 @@ mod tests {
     }
 
     #[test]
-    fn test_cast_between_durations() {
-        let array =
-            DurationMillisecondArray::from(vec![Some(864000003005), Some(1545696002001), None]);
-        let b = cast(&array, &DataType::Duration(TimeUnit::Second)).unwrap();
-        let c = b.as_primitive::<DurationSecondType>();
-        assert_eq!(864000003, c.value(0));
-        assert_eq!(1545696002, c.value(1));
-        assert!(c.is_null(2));
+    fn test_cast_between_durations_and_numerics() {
+        fn test_cast_between_durations<FromType, ToType>()
+        where
+            FromType: ArrowPrimitiveType<Native = i64>,
+            ToType: ArrowPrimitiveType<Native = i64>,
+            PrimitiveArray<FromType>: From<Vec<Option<i64>>>,
+        {
+            let from_unit = match FromType::DATA_TYPE {
+                DataType::Duration(unit) => unit,
+                _ => panic!("Expected a duration type"),
+            };
+            let to_unit = match ToType::DATA_TYPE {
+                DataType::Duration(unit) => unit,
+                _ => panic!("Expected a duration type"),
+            };
+            let from_size = time_unit_multiple(&from_unit);
+            let to_size = time_unit_multiple(&to_unit);
 
+            let (v1_before, v2_before) = (8640003005, 1696002001);
+            let (v1_after, v2_after) = if from_size > to_size {
+                (
+                    v1_before / (from_size / to_size),
+                    v2_before / (from_size / to_size),
+                )
+            } else if from_size < to_size {
+                (
+                    v1_before * (to_size / from_size),
+                    v2_before * (to_size / from_size),
+                )
+            } else {
+                (v1_before, v2_before)
+            };
+
+            let array =
+                PrimitiveArray::<FromType>::from(vec![Some(v1_before), Some(v2_before), None]);
+            let b = cast(&array, &ToType::DATA_TYPE).unwrap();
+            let c = b.as_primitive::<ToType>();
+            assert_eq!(v1_after, c.value(0));
+            assert_eq!(v2_after, c.value(1));
+            assert!(c.is_null(2));
+        }
+
+        // between each individual duration type
+        test_cast_between_durations::<DurationSecondType, DurationMillisecondType>();
+        test_cast_between_durations::<DurationSecondType, DurationMicrosecondType>();
+        test_cast_between_durations::<DurationSecondType, DurationNanosecondType>();
+        test_cast_between_durations::<DurationMillisecondType, DurationSecondType>();
+        test_cast_between_durations::<DurationMillisecondType, DurationMicrosecondType>();
+        test_cast_between_durations::<DurationMillisecondType, DurationNanosecondType>();
+        test_cast_between_durations::<DurationMicrosecondType, DurationSecondType>();
+        test_cast_between_durations::<DurationMicrosecondType, DurationMillisecondType>();
+        test_cast_between_durations::<DurationMicrosecondType, DurationNanosecondType>();
+        test_cast_between_durations::<DurationNanosecondType, DurationSecondType>();
+        test_cast_between_durations::<DurationNanosecondType, DurationMillisecondType>();
+        test_cast_between_durations::<DurationNanosecondType, DurationMicrosecondType>();
+
+        // cast failed
+        let array = DurationSecondArray::from(vec![
+            Some(i64::MAX),
+            Some(8640203410378005),
+            Some(10241096),
+            None,
+        ]);
         let b = cast(&array, &DataType::Duration(TimeUnit::Nanosecond)).unwrap();
         let c = b.as_primitive::<DurationNanosecondType>();
-        assert_eq!(864000003005000000, c.value(0));
-        assert_eq!(1545696002001000000, c.value(1));
-        assert!(c.is_null(2));
+        assert!(c.is_null(0));
+        assert!(c.is_null(1));
+        assert_eq!(10241096000000000, c.value(2));
+        assert!(c.is_null(3));
+
+        // durations to numerics
+        let array = DurationSecondArray::from(vec![
+            Some(i64::MAX),
+            Some(8640203410378005),
+            Some(10241096),
+            None,
+        ]);
+        let b = cast(&array, &DataType::Int64).unwrap();
+        let c = b.as_primitive::<Int64Type>();
+        assert_eq!(i64::MAX, c.value(0));
+        assert_eq!(8640203410378005, c.value(1));
+        assert_eq!(10241096, c.value(2));
+        assert!(c.is_null(3));
+
+        let b = cast(&array, &DataType::Int32).unwrap();
+        let c = b.as_primitive::<Int32Type>();
+        assert_eq!(0, c.value(0));
+        assert_eq!(0, c.value(1));
+        assert_eq!(10241096, c.value(2));
+        assert!(c.is_null(3));
+
+        // numerics to durations
+        let array = Int32Array::from(vec![Some(i32::MAX), Some(802034103), Some(10241096), None]);
+        let b = cast(&array, &DataType::Duration(TimeUnit::Second)).unwrap();
+        let c = b.as_any().downcast_ref::<DurationSecondArray>().unwrap();
+        assert_eq!(i32::MAX as i64, c.value(0));
+        assert_eq!(802034103, c.value(1));
+        assert_eq!(10241096, c.value(2));
+        assert!(c.is_null(3));
     }
 
     #[test]
