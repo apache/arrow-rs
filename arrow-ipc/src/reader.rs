@@ -2283,4 +2283,59 @@ mod tests {
         let err = reader.next().unwrap().unwrap_err();
         assert!(matches!(err, ArrowError::InvalidArgumentError(_)));
     }
+
+    #[test]
+    fn test_same_dict_id_without_preserve() {
+        let batch = RecordBatch::try_new(
+            Arc::new(Schema::new(
+                ["a", "b"]
+                    .iter()
+                    .map(|name| {
+                        Field::new_dict(
+                            name.to_string(),
+                            DataType::Dictionary(
+                                Box::new(DataType::Int32),
+                                Box::new(DataType::Utf8),
+                            ),
+                            true,
+                            0,
+                            false,
+                        )
+                    })
+                    .collect::<Vec<Field>>(),
+            )),
+            vec![
+                Arc::new(
+                    vec![Some("c"), Some("d")]
+                        .into_iter()
+                        .collect::<DictionaryArray<Int32Type>>(),
+                ) as ArrayRef,
+                Arc::new(
+                    vec![Some("e"), Some("f")]
+                        .into_iter()
+                        .collect::<DictionaryArray<Int32Type>>(),
+                ) as ArrayRef,
+            ],
+        )
+        .expect("Failed to create RecordBatch");
+
+        // serialize the record batch as an IPC stream
+        let mut buf = vec![];
+        {
+            let mut writer = crate::writer::StreamWriter::try_new_with_options(
+                &mut buf,
+                batch.schema().as_ref(),
+                crate::writer::IpcWriteOptions::default().with_preserve_dict_id(false),
+            )
+            .expect("Failed to create StreamWriter");
+            writer.write(&batch).expect("Failed to write RecordBatch");
+            writer.finish().expect("Failed to finish StreamWriter");
+        }
+
+        StreamReader::try_new(std::io::Cursor::new(buf), None)
+            .expect("Failed to create StreamReader")
+            .for_each(|decoded_batch| {
+                assert_eq!(decoded_batch.expect("Failed to read RecordBatch"), batch);
+            });
+    }
 }
