@@ -31,17 +31,62 @@ use crate::writer::DictionaryTracker;
 use crate::{size_prefixed_root_as_message, KeyValue, Message, CONTINUATION_MARKER};
 use DataType::*;
 
-pub struct IpcSchemaConverter<'a> {
-    dictionary_tracker: &'a mut DictionaryTracker,
+/// Low level Arrow [Schema] to IPC bytes converter
+///
+/// See also [`fb_to_schema`] for the reverse operation
+///
+/// # Example
+/// ```
+/// # use arrow_ipc::convert::{fb_to_schema, IpcSchemaEncoder};
+/// # use arrow_ipc::root_as_schema;
+/// # use arrow_ipc::writer::DictionaryTracker;
+/// # use arrow_schema::{DataType, Field, Schema};
+/// // given an arrow schema to serialize
+/// let schema = Schema::new(vec![
+///    Field::new("a", DataType::Int32, false),
+/// ]);
+///
+/// // Use a dictionary tracker to track dictionary id if needed
+///  let mut dictionary_tracker = DictionaryTracker::new(true);
+/// // create a FlatBuffersBuilder that contains the encoded bytes
+///  let fb = IpcSchemaEncoder::new()
+///    .with_dictionary_tracker(&mut dictionary_tracker)
+///    .schema_to_fb(&schema);
+///
+/// // the bytes are in `fb.finished_data()`
+/// let ipc_bytes = fb.finished_data();
+///
+///  // convert the IPC bytes back to an Arrow schema
+///  let ipc_schema = root_as_schema(ipc_bytes).unwrap();
+///  let schema2 = fb_to_schema(ipc_schema);
+/// assert_eq!(schema, schema2);
+/// ```
+#[derive(Debug)]
+pub struct IpcSchemaEncoder<'a> {
+    dictionary_tracker: Option<&'a mut DictionaryTracker>,
 }
 
-impl IpcSchemaConverter<'_> {
-    pub fn new(dictionary_tracker: &mut DictionaryTracker) -> IpcSchemaConverter<'_> {
-        IpcSchemaConverter { dictionary_tracker }
+impl<'a> IpcSchemaEncoder<'a> {
+    /// Create a new schema encoder
+    pub fn new() -> IpcSchemaEncoder<'a> {
+        IpcSchemaEncoder {
+            dictionary_tracker: None,
+        }
     }
 
-    /// Serialize a schema in IPC format
-    pub fn schema_to_fb<'a>(&mut self, schema: &'a Schema) -> FlatBufferBuilder<'a> {
+    /// Specify a dictionary tracker to use
+    pub fn with_dictionary_tracker(
+        mut self,
+        dictionary_tracker: &'a mut DictionaryTracker,
+    ) -> Self {
+        self.dictionary_tracker = Some(dictionary_tracker);
+        self
+    }
+
+    /// Serialize a schema in IPC format, returning a completed [`FlatBufferBuilder`]
+    ///
+    /// Note: Call [`FlatBufferBuilder::finished_data`] to get the serialized bytes
+    pub fn schema_to_fb<'b>(&mut self, schema: &Schema) -> FlatBufferBuilder<'b> {
         let mut fbb = FlatBufferBuilder::new();
 
         let root = self.schema_to_fb_offset(&mut fbb, schema);
@@ -51,15 +96,16 @@ impl IpcSchemaConverter<'_> {
         fbb
     }
 
-    pub fn schema_to_fb_offset<'a>(
+    /// Serialize a schema to an in progress [`FlatBufferBuilder`], returning the in progress offset.
+    pub fn schema_to_fb_offset<'b>(
         &mut self,
-        fbb: &mut FlatBufferBuilder<'a>,
+        fbb: &mut FlatBufferBuilder<'b>,
         schema: &Schema,
-    ) -> WIPOffset<crate::Schema<'a>> {
+    ) -> WIPOffset<crate::Schema<'b>> {
         let fields = schema
             .fields()
             .iter()
-            .map(|field| build_field(fbb, &mut Some(self.dictionary_tracker), field))
+            .map(|field| build_field(fbb, &mut self.dictionary_tracker, field))
             .collect::<Vec<_>>();
         let fb_field_list = fbb.create_vector(&fields);
 
@@ -76,19 +122,9 @@ impl IpcSchemaConverter<'_> {
 }
 
 /// Serialize a schema in IPC format
-#[deprecated(
-    since = "54.0.0",
-    note = "Use `IpcSchemaConverter` instead. This function will be removed in the next release."
-)]
+#[deprecated(since = "54.0.0", note = "Use `IpcSchemaConverter`.")]
 pub fn schema_to_fb(schema: &Schema) -> FlatBufferBuilder<'_> {
-    let mut fbb = FlatBufferBuilder::new();
-
-    #[allow(deprecated)]
-    let root = schema_to_fb_offset(&mut fbb, schema);
-
-    fbb.finish(root, None);
-
-    fbb
+    IpcSchemaEncoder::new().schema_to_fb(schema)
 }
 
 pub fn metadata_to_fb<'a>(
@@ -110,30 +146,12 @@ pub fn metadata_to_fb<'a>(
     fbb.create_vector(&custom_metadata)
 }
 
-#[deprecated(
-    since = "54.0.0",
-    note = "Use `IpcSchemaConverter` instead. This function will be removed in the next release."
-)]
+#[deprecated(since = "54.0.0", note = "Use `IpcSchemaConverter`.")]
 pub fn schema_to_fb_offset<'a>(
     fbb: &mut FlatBufferBuilder<'a>,
     schema: &Schema,
 ) -> WIPOffset<crate::Schema<'a>> {
-    let fields = schema
-        .fields()
-        .iter()
-        .map(|field| build_field(fbb, &mut None, field))
-        .collect::<Vec<_>>();
-    let fb_field_list = fbb.create_vector(&fields);
-
-    let fb_metadata_list =
-        (!schema.metadata().is_empty()).then(|| metadata_to_fb(fbb, schema.metadata()));
-
-    let mut builder = crate::SchemaBuilder::new(fbb);
-    builder.add_fields(fb_field_list);
-    if let Some(fb_metadata_list) = fb_metadata_list {
-        builder.add_custom_metadata(fb_metadata_list);
-    }
-    builder.finish()
+    IpcSchemaEncoder::new().schema_to_fb_offset(fbb, schema)
 }
 
 /// Convert an IPC Field to Arrow Field
@@ -168,7 +186,7 @@ impl<'a> From<crate::Field<'a>> for Field {
     }
 }
 
-/// Deserialize a Schema table from flat buffer format to Schema data type
+/// Deserialize an ipc [1crate::Schema`] from flat buffers to an arrow [Schema].
 pub fn fb_to_schema(fb: crate::Schema) -> Schema {
     let mut fields: Vec<Field> = vec![];
     let c_fields = fb.fields().unwrap();
@@ -1134,8 +1152,9 @@ mod tests {
         );
 
         let mut dictionary_tracker = DictionaryTracker::new(true);
-        let mut converter = IpcSchemaConverter::new(&mut dictionary_tracker);
-        let fb = converter.schema_to_fb(&schema);
+        let fb = IpcSchemaEncoder::new()
+            .with_dictionary_tracker(&mut dictionary_tracker)
+            .schema_to_fb(&schema);
 
         // read back fields
         let ipc = crate::root_as_schema(fb.finished_data()).unwrap();
