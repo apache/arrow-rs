@@ -66,6 +66,12 @@ pub struct IpcSchemaEncoder<'a> {
     dictionary_tracker: Option<&'a mut DictionaryTracker>,
 }
 
+impl<'a> Default for IpcSchemaEncoder<'a> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<'a> IpcSchemaEncoder<'a> {
     /// Create a new schema encoder
     pub fn new() -> IpcSchemaEncoder<'a> {
@@ -186,7 +192,7 @@ impl<'a> From<crate::Field<'a>> for Field {
     }
 }
 
-/// Deserialize an ipc [1crate::Schema`] from flat buffers to an arrow [Schema].
+/// Deserialize an ipc [crate::Schema`] from flat buffers to an arrow [Schema].
 pub fn fb_to_schema(fb: crate::Schema) -> Schema {
     let mut fields: Vec<Field> = vec![];
     let c_fields = fb.fields().unwrap();
