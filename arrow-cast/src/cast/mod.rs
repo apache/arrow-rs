@@ -271,8 +271,8 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
             | Time64(Microsecond)
             | Time64(Nanosecond),
         ) => true,
-        (Int64, Duration(_)) => true,
-        (Duration(_), Int64) => true,
+        (_, Duration(_)) if from_type.is_numeric() => true,
+        (Duration(_), _) if to_type.is_numeric() => true,
         (Duration(_), Duration(_)) => true,
         (Interval(from_type), Int64) => {
             match from_type {
@@ -516,6 +516,15 @@ fn make_timestamp_array(
                 .reinterpret_cast::<TimestampNanosecondType>()
                 .with_timezone_opt(tz),
         ),
+    }
+}
+
+fn make_duration_array(array: &PrimitiveArray<Int64Type>, unit: TimeUnit) -> ArrayRef {
+    match unit {
+        TimeUnit::Second => Arc::new(array.reinterpret_cast::<DurationSecondType>()),
+        TimeUnit::Millisecond => Arc::new(array.reinterpret_cast::<DurationMillisecondType>()),
+        TimeUnit::Microsecond => Arc::new(array.reinterpret_cast::<DurationMicrosecondType>()),
+        TimeUnit::Nanosecond => Arc::new(array.reinterpret_cast::<DurationNanosecondType>()),
     }
 }
 
@@ -2075,31 +2084,28 @@ pub fn cast_with_options(
                 .as_primitive::<Date32Type>()
                 .unary::<_, TimestampNanosecondType>(|x| (x as i64) * NANOSECONDS_IN_DAY),
         )),
-        (Int64, Duration(TimeUnit::Second)) => {
-            cast_reinterpret_arrays::<Int64Type, DurationSecondType>(array)
+
+        (_, Duration(unit)) if from_type.is_numeric() => {
+            let array = cast_with_options(array, &Int64, cast_options)?;
+            Ok(make_duration_array(array.as_primitive(), *unit))
         }
-        (Int64, Duration(TimeUnit::Millisecond)) => {
-            cast_reinterpret_arrays::<Int64Type, DurationMillisecondType>(array)
+        (Duration(TimeUnit::Second), _) if to_type.is_numeric() => {
+            let array = cast_reinterpret_arrays::<DurationSecondType, Int64Type>(array)?;
+            cast_with_options(&array, to_type, cast_options)
         }
-        (Int64, Duration(TimeUnit::Microsecond)) => {
-            cast_reinterpret_arrays::<Int64Type, DurationMicrosecondType>(array)
+        (Duration(TimeUnit::Millisecond), _) if to_type.is_numeric() => {
+            let array = cast_reinterpret_arrays::<DurationMillisecondType, Int64Type>(array)?;
+            cast_with_options(&array, to_type, cast_options)
         }
-        (Int64, Duration(TimeUnit::Nanosecond)) => {
-            cast_reinterpret_arrays::<Int64Type, DurationNanosecondType>(array)
+        (Duration(TimeUnit::Microsecond), _) if to_type.is_numeric() => {
+            let array = cast_reinterpret_arrays::<DurationMicrosecondType, Int64Type>(array)?;
+            cast_with_options(&array, to_type, cast_options)
+        }
+        (Duration(TimeUnit::Nanosecond), _) if to_type.is_numeric() => {
+            let array = cast_reinterpret_arrays::<DurationNanosecondType, Int64Type>(array)?;
+            cast_with_options(&array, to_type, cast_options)
         }
 
-        (Duration(TimeUnit::Second), Int64) => {
-            cast_reinterpret_arrays::<DurationSecondType, Int64Type>(array)
-        }
-        (Duration(TimeUnit::Millisecond), Int64) => {
-            cast_reinterpret_arrays::<DurationMillisecondType, Int64Type>(array)
-        }
-        (Duration(TimeUnit::Microsecond), Int64) => {
-            cast_reinterpret_arrays::<DurationMicrosecondType, Int64Type>(array)
-        }
-        (Duration(TimeUnit::Nanosecond), Int64) => {
-            cast_reinterpret_arrays::<DurationNanosecondType, Int64Type>(array)
-        }
         (Duration(TimeUnit::Second), Interval(IntervalUnit::MonthDayNano)) => {
             cast_duration_to_interval::<DurationSecondType>(array, cast_options)
         }
