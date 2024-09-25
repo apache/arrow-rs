@@ -23,6 +23,8 @@ use std::panic::RefUnwindSafe;
 use std::sync::Arc;
 
 mod alignment;
+#[cfg(feature = "allocator_api")]
+pub mod allocator;
 
 pub use alignment::ALIGNMENT;
 

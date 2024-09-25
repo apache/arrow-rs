@@ -21,7 +21,10 @@ use std::alloc::{Allocator, Global};
 use std::alloc::{handle_alloc_error, Layout};
 use std::mem;
 use std::ptr::NonNull;
+use std::sync::Arc;
 
+#[cfg(feature = "allocator_api")]
+use crate::alloc::allocator::AllocatorDeallocation;
 use crate::alloc::{Deallocation, ALIGNMENT};
 use crate::{
     bytes::Bytes,
@@ -227,31 +230,6 @@ impl MutableBuffer<Global> {
 
         buffer.truncate(bit_util::ceil(len, 8));
         buffer
-    }
-
-    #[deprecated(
-        since = "2.0.0",
-        note = "This method is deprecated in favour of `into` from the trait `Into`."
-    )]
-    /// Freezes this buffer and return an immutable version of it.
-    ///
-    /// This method is only available under the default [`Global`]
-    /// for now. Support for custom allocators will be added in a future release.
-    /// Related ticket: <https://github.com/apache/arrow-rs/issues/3960>
-    pub fn freeze(self) -> Buffer {
-        self.into_buffer()
-    }
-
-    #[inline]
-    /// Freezes this buffer and return an immutable version of it.
-    ///
-    /// This method is only available under the default [`Global`]
-    /// for now. Support for custom allocators will be added in a future release.
-    /// Related ticket: <https://github.com/apache/arrow-rs/issues/3960>
-    pub(super) fn into_buffer(self) -> Buffer {
-        let bytes = unsafe { Bytes::new(self.data, self.len, Deallocation::Standard(self.layout)) };
-        std::mem::forget(self);
-        Buffer::from_bytes(bytes)
     }
 }
 
@@ -517,6 +495,51 @@ impl<A: Allocator> MutableBuffer<A> {
     pub unsafe fn set_len(&mut self, len: usize) {
         assert!(len <= self.capacity());
         self.len = len;
+    }
+}
+
+impl<
+        A: Allocator
+            + Clone
+            + std::panic::UnwindSafe
+            + std::panic::RefUnwindSafe
+            + Send
+            + Sync
+            + 'static,
+    > MutableBuffer<A>
+{
+    #[deprecated(
+        since = "2.0.0",
+        note = "This method is deprecated in favour of `into` from the trait `Into`."
+    )]
+    /// Freezes this buffer and return an immutable version of it.
+    pub fn freeze(self) -> Buffer {
+        self.into_buffer()
+    }
+
+    #[inline]
+    /// Freezes this buffer and return an immutable version of it.
+    pub(super) fn into_buffer(self) -> Buffer {
+        #[cfg(not(feature = "allocator_api"))]
+        let bytes = unsafe { Bytes::new(self.data, self.len, Deallocation::Standard(self.layout)) };
+        #[cfg(feature = "allocator_api")]
+        let bytes = unsafe {
+            Bytes::new(
+                self.data,
+                self.len,
+                Deallocation::Custom(
+                    Arc::new(AllocatorDeallocation::new(
+                        self.data,
+                        self.layout,
+                        self.allocator.clone(),
+                    )),
+                    self.layout.size(),
+                ),
+            )
+        };
+
+        std::mem::forget(self);
+        Buffer::from_bytes(bytes)
     }
 }
 
@@ -1234,6 +1257,7 @@ mod tests {
     #[test]
     #[cfg(feature = "allocator_api")]
     fn mutable_buffer_with_custom_allocator() {
+        #[derive(Clone)]
         struct MyAllocator;
 
         unsafe impl Allocator for MyAllocator {
@@ -1257,5 +1281,9 @@ mod tests {
         buffer.reserve(200);
         buffer.shrink_to_fit();
         buffer.clear();
+
+        let mut buffer = MutableBuffer::new_in(100, MyAllocator);
+        buffer.extend_from_slice(b"hello!!");
+        let _ = buffer.into_buffer();
     }
 }
