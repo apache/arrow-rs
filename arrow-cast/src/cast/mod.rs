@@ -273,6 +273,7 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
         ) => true,
         (Int64, Duration(_)) => true,
         (Duration(_), Int64) => true,
+        (Duration(_), Duration(_)) => true,
         (Interval(from_type), Int64) => {
             match from_type {
                 YearMonth => true,
