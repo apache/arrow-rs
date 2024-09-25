@@ -251,8 +251,8 @@ impl ParquetMetaDataReader {
         // FIXME: there are differing implementations in the case where page indexes are missing
         // from the file. `MetadataLoader` will leave them as `None`, while the parser in
         // `index_reader::read_columns_indexes` returns a vector of empty vectors.
-        // It is best for this function to replicate the latter behavior for now, but in the future
-        // the two paths to retrieve metadata should be made consistent. Note that this is only
+        // It is best for this function to replicate the latter behavior for now, but in a future
+        // breaking release, the two paths to retrieve metadata should be made consistent. Note that this is only
         // an issue if the user requested page indexes, so there is no need to provide empty
         // vectors in `try_parse_sized()`.
         // https://github.com/apache/arrow-rs/issues/6447
@@ -418,6 +418,9 @@ impl ParquetMetaDataReader {
         Ok(())
     }
 
+    /// Set the column_index and offset_indexes to empty `Vec` for backwards compatibility
+    /// 
+    /// See <https://github.com/apache/arrow-rs/pull/6451>  for details
     fn empty_page_indexes(&mut self) {
         let metadata = self.metadata.as_mut().unwrap();
         let num_row_groups = metadata.num_row_groups();
