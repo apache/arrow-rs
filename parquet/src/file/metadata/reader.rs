@@ -642,10 +642,13 @@ mod tests {
     use futures::future::BoxFuture;
     #[cfg(feature = "async")]
     use futures::FutureExt;
+    #[cfg(feature = "async")]
     use std::fs::File;
     #[cfg(feature = "async")]
     use std::future::Future;
+    #[cfg(feature = "async")]
     use std::io::{Read, Seek, SeekFrom};
+    #[cfg(feature = "async")]
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use crate::basic::SortOrder;
