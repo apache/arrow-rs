@@ -163,59 +163,46 @@ impl ArrayReader for FixedLenByteArrayReader {
         let binary = FixedSizeBinaryArray::from(unsafe { array_data.build_unchecked() });
 
         // TODO: An improvement might be to do this conversion on read
+        // Note the conversions below apply to all elements regardless of null slots as the
+        // conversion lambdas are all infallible. This improves performance by avoiding a branch in
+        // the inner loop (see docs for `PrimitiveArray::from_unary`).
         let array: ArrayRef = match &self.data_type {
             ArrowType::Decimal128(p, s) => {
-                let decimal = binary
-                    .iter()
-                    .map(|opt| Some(i128::from_be_bytes(sign_extend_be(opt?))))
-                    .collect::<Decimal128Array>()
-                    .with_precision_and_scale(*p, *s)?;
-
-                Arc::new(decimal)
+                let f = |b: &[u8]| i128::from_be_bytes(sign_extend_be(b));
+                Arc::new(Decimal128Array::from_unary(&binary, f).with_precision_and_scale(*p, *s)?)
+                    as ArrayRef
             }
             ArrowType::Decimal256(p, s) => {
-                let decimal = binary
-                    .iter()
-                    .map(|opt| Some(i256::from_be_bytes(sign_extend_be(opt?))))
-                    .collect::<Decimal256Array>()
-                    .with_precision_and_scale(*p, *s)?;
-
-                Arc::new(decimal)
+                let f = |b: &[u8]| i256::from_be_bytes(sign_extend_be(b));
+                Arc::new(Decimal256Array::from_unary(&binary, f).with_precision_and_scale(*p, *s)?)
+                    as ArrayRef
             }
             ArrowType::Interval(unit) => {
                 // An interval is stored as 3x 32-bit unsigned integers storing months, days,
                 // and milliseconds
                 match unit {
-                    IntervalUnit::YearMonth => Arc::new(
-                        binary
-                            .iter()
-                            .map(|o| o.map(|b| i32::from_le_bytes(b[0..4].try_into().unwrap())))
-                            .collect::<IntervalYearMonthArray>(),
-                    ) as ArrayRef,
-                    IntervalUnit::DayTime => Arc::new(
-                        binary
-                            .iter()
-                            .map(|o| {
-                                o.map(|b| {
-                                    IntervalDayTime::new(
-                                        i32::from_le_bytes(b[4..8].try_into().unwrap()),
-                                        i32::from_le_bytes(b[8..12].try_into().unwrap()),
-                                    )
-                                })
-                            })
-                            .collect::<IntervalDayTimeArray>(),
-                    ) as ArrayRef,
+                    IntervalUnit::YearMonth => {
+                        let f = |b: &[u8]| i32::from_le_bytes(b[0..4].try_into().unwrap());
+                        Arc::new(IntervalYearMonthArray::from_unary(&binary, f)) as ArrayRef
+                    }
+                    IntervalUnit::DayTime => {
+                        let f = |b: &[u8]| {
+                            IntervalDayTime::new(
+                                i32::from_le_bytes(b[4..8].try_into().unwrap()),
+                                i32::from_le_bytes(b[8..12].try_into().unwrap()),
+                            )
+                        };
+                        Arc::new(IntervalDayTimeArray::from_unary(&binary, f)) as ArrayRef
+                    }
                     IntervalUnit::MonthDayNano => {
                         return Err(nyi_err!("MonthDayNano intervals not supported"));
                     }
                 }
             }
-            ArrowType::Float16 => Arc::new(
-                binary
-                    .iter()
-                    .map(|o| o.map(|b| f16::from_le_bytes(b[..2].try_into().unwrap())))
-                    .collect::<Float16Array>(),
-            ) as ArrayRef,
+            ArrowType::Float16 => {
+                let f = |b: &[u8]| f16::from_le_bytes(b[..2].try_into().unwrap());
+                Arc::new(Float16Array::from_unary(&binary, f)) as ArrayRef
+            }
             _ => Arc::new(binary) as ArrayRef,
         };
 
@@ -341,6 +328,10 @@ impl ColumnValueDecoder for ValueDecoder {
             Encoding::DELTA_BYTE_ARRAY => Decoder::Delta {
                 decoder: DeltaByteArrayDecoder::new(data)?,
             },
+            Encoding::BYTE_STREAM_SPLIT => Decoder::ByteStreamSplit {
+                buf: data,
+                offset: 0,
+            },
             _ => {
                 return Err(general_err!(
                     "unsupported encoding for fixed length byte array: {}",
@@ -400,6 +391,19 @@ impl ColumnValueDecoder for ValueDecoder {
                     Ok(())
                 })
             }
+            Decoder::ByteStreamSplit { buf, offset } => {
+                // we have n=`byte_length` streams of length `buf.len/byte_length`
+                // to read value i, we need the i'th byte from each of the streams
+                // so `offset` should be the value offset, not the byte offset
+                let total_values = buf.len() / self.byte_length;
+                let to_read = num_values.min(total_values - *offset);
+
+                // now read the n streams and reassemble values into the output buffer
+                read_byte_stream_split(&mut out.buffer, buf, *offset, to_read, self.byte_length);
+
+                *offset += to_read;
+                Ok(to_read)
+            }
         }
     }
 
@@ -412,6 +416,36 @@ impl ColumnValueDecoder for ValueDecoder {
             }
             Decoder::Dict { decoder } => decoder.skip(num_values),
             Decoder::Delta { decoder } => decoder.skip(num_values),
+            Decoder::ByteStreamSplit { offset, buf } => {
+                let total_values = buf.len() / self.byte_length;
+                let to_read = num_values.min(total_values - *offset);
+                *offset += to_read;
+                Ok(to_read)
+            }
+        }
+    }
+}
+
+// `src` is an array laid out like a NxM matrix where N == `data_width` and
+// M == total_values_in_src. Each "row" of the matrix is a stream of bytes, with stream `i`
+// containing the `ith` byte for each value. Each "column" is a single value.
+// This will reassemble `num_values` values by reading columns of the matrix starting at
+// `offset`. Values will be appended to `dst`.
+fn read_byte_stream_split(
+    dst: &mut Vec<u8>,
+    src: &mut Bytes,
+    offset: usize,
+    num_values: usize,
+    data_width: usize,
+) {
+    let stride = src.len() / data_width;
+    let idx = dst.len();
+    dst.resize(idx + num_values * data_width, 0u8);
+    let dst_slc = &mut dst[idx..idx + num_values * data_width];
+    for j in 0..data_width {
+        let src_slc = &src[offset + j * stride..offset + j * stride + num_values];
+        for i in 0..num_values {
+            dst_slc[i * data_width + j] = src_slc[i];
         }
     }
 }
@@ -420,6 +454,7 @@ enum Decoder {
     Plain { buf: Bytes, offset: usize },
     Dict { decoder: DictIndexDecoder },
     Delta { decoder: DeltaByteArrayDecoder },
+    ByteStreamSplit { buf: Bytes, offset: usize },
 }
 
 #[cfg(test)]
@@ -429,8 +464,8 @@ mod tests {
     use crate::arrow::ArrowWriter;
     use arrow::datatypes::Field;
     use arrow::error::Result as ArrowResult;
-    use arrow_array::RecordBatch;
     use arrow_array::{Array, ListArray};
+    use arrow_array::{Decimal256Array, RecordBatch};
     use bytes::Bytes;
     use std::sync::Arc;
 

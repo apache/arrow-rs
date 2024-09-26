@@ -35,4 +35,5 @@ pub use self::kernels::regexp::*;
 pub use self::kernels::sort::*;
 pub use self::kernels::take::*;
 pub use self::kernels::temporal::*;
+pub use self::kernels::union_extract::*;
 pub use self::kernels::window::*;

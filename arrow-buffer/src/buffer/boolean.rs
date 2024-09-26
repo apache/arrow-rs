@@ -21,6 +21,7 @@ use crate::{
     bit_util, buffer_bin_and, buffer_bin_or, buffer_bin_xor, buffer_unary_not,
     BooleanBufferBuilder, Buffer, MutableBuffer,
 };
+
 use std::ops::{BitAnd, BitOr, BitXor, Not};
 
 /// A slice-able [`Buffer`] containing bit-packed booleans
@@ -413,5 +414,15 @@ mod tests {
 
         let expected = BooleanBuffer::new(Buffer::from(&[255, 254, 254, 255, 255]), offset, len);
         assert_eq!(!boolean_buf, expected);
+    }
+
+    #[test]
+    fn test_boolean_from_slice_bool() {
+        let v = [true, false, false];
+        let buf = BooleanBuffer::from(&v[..]);
+        assert_eq!(buf.offset(), 0);
+        assert_eq!(buf.len(), 3);
+        assert_eq!(buf.values().len(), 1);
+        assert!(buf.value(0));
     }
 }

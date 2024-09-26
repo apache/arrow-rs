@@ -238,11 +238,11 @@ enum BufWriterState {
     /// Buffer up to capacity bytes
     Buffer(Path, PutPayloadMut),
     /// [`ObjectStore::put_multipart`]
-    Prepare(BoxFuture<'static, std::io::Result<WriteMultipart>>),
+    Prepare(BoxFuture<'static, crate::Result<WriteMultipart>>),
     /// Write to a multipart upload
     Write(Option<WriteMultipart>),
     /// [`ObjectStore::put`]
-    Flush(BoxFuture<'static, std::io::Result<()>>),
+    Flush(BoxFuture<'static, crate::Result<()>>),
 }
 
 impl BufWriter {
@@ -286,6 +286,58 @@ impl BufWriter {
         Self {
             tags: Some(tags),
             ..self
+        }
+    }
+
+    /// Write data to the writer in [`Bytes`].
+    ///
+    /// Unlike [`AsyncWrite::poll_write`], `put` can write data without extra copying.
+    ///
+    /// This API is recommended while the data source generates [`Bytes`].
+    pub async fn put(&mut self, bytes: Bytes) -> crate::Result<()> {
+        loop {
+            return match &mut self.state {
+                BufWriterState::Write(Some(write)) => {
+                    write.wait_for_capacity(self.max_concurrency).await?;
+                    write.put(bytes);
+                    Ok(())
+                }
+                BufWriterState::Write(None) | BufWriterState::Flush(_) => {
+                    panic!("Already shut down")
+                }
+                // NOTE
+                //
+                // This case should never happen in practice, but rust async API does
+                // make it possible for users to call `put` before `poll_write` returns `Ready`.
+                //
+                // We allow such usage by `await` the future and continue the loop.
+                BufWriterState::Prepare(f) => {
+                    self.state = BufWriterState::Write(f.await?.into());
+                    continue;
+                }
+                BufWriterState::Buffer(path, b) => {
+                    if b.content_length().saturating_add(bytes.len()) < self.capacity {
+                        b.push(bytes);
+                        Ok(())
+                    } else {
+                        let buffer = std::mem::take(b);
+                        let path = std::mem::take(path);
+                        let opts = PutMultipartOpts {
+                            attributes: self.attributes.take().unwrap_or_default(),
+                            tags: self.tags.take().unwrap_or_default(),
+                        };
+                        let upload = self.store.put_multipart_opts(&path, opts).await?;
+                        let mut chunked =
+                            WriteMultipart::new_with_chunk_size(upload, self.capacity);
+                        for chunk in buffer.freeze() {
+                            chunked.put(chunk);
+                        }
+                        chunked.put(bytes);
+                        self.state = BufWriterState::Write(Some(chunked));
+                        Ok(())
+                    }
+                }
+            };
         }
     }
 
@@ -384,9 +436,14 @@ impl AsyncWrite for BufWriter {
                         Ok(())
                     }));
                 }
-                BufWriterState::Flush(f) => return f.poll_unpin(cx),
+                BufWriterState::Flush(f) => return f.poll_unpin(cx).map_err(std::io::Error::from),
                 BufWriterState::Write(x) => {
-                    let upload = x.take().unwrap();
+                    let upload = x.take().ok_or_else(|| {
+                        std::io::Error::new(
+                            ErrorKind::InvalidInput,
+                            "Cannot shutdown a writer that has already been shut down",
+                        )
+                    })?;
                     self.state = BufWriterState::Flush(
                         async move {
                             upload.finish().await?;
@@ -416,6 +473,7 @@ mod tests {
     use crate::memory::InMemory;
     use crate::path::Path;
     use crate::{Attribute, GetOptions};
+    use itertools::Itertools;
     use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 
     #[tokio::test]
@@ -546,5 +604,59 @@ mod tests {
             .unwrap();
         assert_eq!(response.meta.size, 40);
         assert_eq!(response.attributes, attributes);
+    }
+
+    #[tokio::test]
+    async fn test_buf_writer_with_put() {
+        let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+        let path = Path::from("file.txt");
+
+        // Test put
+        let mut writer = BufWriter::with_capacity(Arc::clone(&store), path.clone(), 30);
+        writer
+            .put(Bytes::from((0..20).collect_vec()))
+            .await
+            .unwrap();
+        writer
+            .put(Bytes::from((20..25).collect_vec()))
+            .await
+            .unwrap();
+        writer.shutdown().await.unwrap();
+        let response = store
+            .get_opts(
+                &path,
+                GetOptions {
+                    head: true,
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.meta.size, 25);
+        assert_eq!(response.bytes().await.unwrap(), (0..25).collect_vec());
+
+        // Test multipart
+        let mut writer = BufWriter::with_capacity(Arc::clone(&store), path.clone(), 30);
+        writer
+            .put(Bytes::from((0..20).collect_vec()))
+            .await
+            .unwrap();
+        writer
+            .put(Bytes::from((20..40).collect_vec()))
+            .await
+            .unwrap();
+        writer.shutdown().await.unwrap();
+        let response = store
+            .get_opts(
+                &path,
+                GetOptions {
+                    head: true,
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.meta.size, 40);
+        assert_eq!(response.bytes().await.unwrap(), (0..40).collect_vec());
     }
 }

@@ -289,7 +289,7 @@ impl ReaderBuilder {
 
         let decoder = make_decoder(data_type, self.coerce_primitive, self.strict_mode, nullable)?;
 
-        let num_fields = self.schema.all_fields().len();
+        let num_fields = self.schema.flattened_fields().len();
 
         Ok(Decoder {
             decoder,
@@ -1007,7 +1007,7 @@ mod tests {
         let map_values = map.values().as_list::<i32>();
         assert_eq!(map.value_offsets(), &[0, 1, 3, 5]);
 
-        let k: Vec<_> = map_keys.iter().map(|x| x.unwrap()).collect();
+        let k: Vec<_> = map_keys.iter().flatten().collect();
         assert_eq!(&k, &["a", "a", "b", "c", "a"]);
 
         let list_values = map_values.values().as_string::<i32>();
@@ -1850,7 +1850,7 @@ mod tests {
         let c = ArrayDataBuilder::new(c_field.data_type().clone())
             .len(7)
             .add_child_data(d.to_data())
-            .null_bit_buffer(Some(Buffer::from(vec![0b00111011])))
+            .null_bit_buffer(Some(Buffer::from([0b00111011])))
             .build()
             .unwrap();
         let b = BooleanArray::from(vec![
@@ -1866,14 +1866,14 @@ mod tests {
             .len(7)
             .add_child_data(b.to_data())
             .add_child_data(c.clone())
-            .null_bit_buffer(Some(Buffer::from(vec![0b00111111])))
+            .null_bit_buffer(Some(Buffer::from([0b00111111])))
             .build()
             .unwrap();
         let a_list = ArrayDataBuilder::new(a_field.data_type().clone())
             .len(6)
             .add_buffer(Buffer::from_slice_ref([0i32, 2, 3, 6, 6, 6, 7]))
             .add_child_data(a)
-            .null_bit_buffer(Some(Buffer::from(vec![0b00110111])))
+            .null_bit_buffer(Some(Buffer::from([0b00110111])))
             .build()
             .unwrap();
         let expected = make_array(a_list);
@@ -2282,8 +2282,8 @@ mod tests {
     fn test_coercing_primitive_into_string_decoder() {
         let buf = &format!(
             r#"[{{"a": 1, "b": "A", "c": "T"}}, {{"a": 2, "b": "BB", "c": "F"}}, {{"a": {}, "b": 123, "c": false}}, {{"a": {}, "b": 789, "c": true}}]"#,
-            (std::i32::MAX as i64 + 10),
-            std::i64::MAX - 10
+            (i32::MAX as i64 + 10),
+            i64::MAX - 10
         );
         let schema = Schema::new(vec![
             Field::new("a", DataType::Float64, true),
@@ -2306,8 +2306,8 @@ mod tests {
                     Arc::new(Float64Array::from(vec![
                         1.0,
                         2.0,
-                        (std::i32::MAX as i64 + 10) as f64,
-                        (std::i64::MAX - 10) as f64
+                        (i32::MAX as i64 + 10) as f64,
+                        (i64::MAX - 10) as f64
                     ])),
                     Arc::new(StringArray::from(vec!["A", "BB", "123", "789"])),
                     Arc::new(StringArray::from(vec!["T", "F", "false", "true"])),

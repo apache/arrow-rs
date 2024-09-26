@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! Utility functions for working with Arrow data
 pub use arrow_buffer::{bit_chunk_iterator, bit_util};
 
 pub use arrow_data::bit_iterator;

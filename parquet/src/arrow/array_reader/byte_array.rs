@@ -74,36 +74,6 @@ pub fn make_byte_array_reader(
     }
 }
 
-/// Returns an [`ArrayReader`] that decodes the provided byte array column to view types.
-pub fn make_byte_view_array_reader(
-    pages: Box<dyn PageIterator>,
-    column_desc: ColumnDescPtr,
-    arrow_type: Option<ArrowType>,
-) -> Result<Box<dyn ArrayReader>> {
-    // Check if Arrow type is specified, else create it from Parquet type
-    let data_type = match arrow_type {
-        Some(t) => t,
-        None => match parquet_to_arrow_field(column_desc.as_ref())?.data_type() {
-            ArrowType::Utf8 | ArrowType::Utf8View => ArrowType::Utf8View,
-            _ => ArrowType::BinaryView,
-        },
-    };
-
-    match data_type {
-        ArrowType::BinaryView | ArrowType::Utf8View => {
-            let reader = GenericRecordReader::new(column_desc);
-            Ok(Box::new(ByteArrayReader::<i32>::new(
-                pages, data_type, reader,
-            )))
-        }
-
-        _ => Err(general_err!(
-            "invalid data type for byte array reader read to view type - {}",
-            data_type
-        )),
-    }
-}
-
 /// An [`ArrayReader`] for variable length byte arrays
 struct ByteArrayReader<I: OffsetSizeTrait> {
     data_type: ArrowType,
@@ -150,26 +120,31 @@ impl<I: OffsetSizeTrait> ArrayReader for ByteArrayReader<I> {
         self.record_reader.reset();
 
         let array: ArrayRef = match self.data_type {
+            // Apply conversion to all elements regardless of null slots as the conversions
+            // are infallible. This improves performance by avoiding a branch in the inner
+            // loop (see docs for `PrimitiveArray::from_unary`).
             ArrowType::Decimal128(p, s) => {
                 let array = buffer.into_array(null_buffer, ArrowType::Binary);
                 let binary = array.as_any().downcast_ref::<BinaryArray>().unwrap();
-                let decimal = binary
-                    .iter()
-                    .map(|opt| Some(i128::from_be_bytes(sign_extend_be(opt?))))
-                    .collect::<Decimal128Array>()
-                    .with_precision_and_scale(p, s)?;
-
+                // Null slots will have 0 length, so we need to check for that in the lambda
+                // or sign_extend_be will panic.
+                let decimal = Decimal128Array::from_unary(binary, |x| match x.len() {
+                    0 => i128::default(),
+                    _ => i128::from_be_bytes(sign_extend_be(x)),
+                })
+                .with_precision_and_scale(p, s)?;
                 Arc::new(decimal)
             }
             ArrowType::Decimal256(p, s) => {
                 let array = buffer.into_array(null_buffer, ArrowType::Binary);
                 let binary = array.as_any().downcast_ref::<BinaryArray>().unwrap();
-                let decimal = binary
-                    .iter()
-                    .map(|opt| Some(i256::from_be_bytes(sign_extend_be(opt?))))
-                    .collect::<Decimal256Array>()
-                    .with_precision_and_scale(p, s)?;
-
+                // Null slots will have 0 length, so we need to check for that in the lambda
+                // or sign_extend_be will panic.
+                let decimal = Decimal256Array::from_unary(binary, |x| match x.len() {
+                    0 => i256::default(),
+                    _ => i256::from_be_bytes(sign_extend_be(x)),
+                })
+                .with_precision_and_scale(p, s)?;
                 Arc::new(decimal)
             }
             _ => buffer.into_array(null_buffer, self.data_type.clone()),
@@ -472,6 +447,23 @@ impl ByteArrayDecoderDeltaLength {
         let mut lengths = vec![0; values];
         len_decoder.get(&mut lengths)?;
 
+        let mut total_bytes = 0;
+
+        for l in lengths.iter() {
+            if *l < 0 {
+                return Err(ParquetError::General(
+                    "negative delta length byte array length".to_string(),
+                ));
+            }
+            total_bytes += *l as usize;
+        }
+
+        if total_bytes + len_decoder.get_offset() > data.len() {
+            return Err(ParquetError::General(
+                "Insufficient delta length byte array bytes".to_string(),
+            ));
+        }
+
         Ok(Self {
             lengths,
             data,
@@ -496,23 +488,17 @@ impl ByteArrayDecoderDeltaLength {
         let total_bytes: usize = src_lengths.iter().map(|x| *x as usize).sum();
         output.values.reserve(total_bytes);
 
-        if self.data_offset + total_bytes > self.data.len() {
-            return Err(ParquetError::EOF(
-                "Insufficient delta length byte array bytes".to_string(),
-            ));
-        }
-
-        let mut start_offset = self.data_offset;
+        let mut current_offset = self.data_offset;
         for length in src_lengths {
-            let end_offset = start_offset + *length as usize;
+            let end_offset = current_offset + *length as usize;
             output.try_push(
-                &self.data.as_ref()[start_offset..end_offset],
+                &self.data.as_ref()[current_offset..end_offset],
                 self.validate_utf8,
             )?;
-            start_offset = end_offset;
+            current_offset = end_offset;
         }
 
-        self.data_offset = start_offset;
+        self.data_offset = current_offset;
         self.length_offset += to_read;
 
         if self.validate_utf8 {
@@ -618,7 +604,7 @@ mod tests {
     use super::*;
     use crate::arrow::array_reader::test_util::{byte_array_all_encodings, utf8_column};
     use crate::arrow::record_reader::buffer::ValuesBuffer;
-    use arrow_array::{Array, StringArray, StringViewArray};
+    use arrow_array::{Array, StringArray};
     use arrow_buffer::Buffer;
 
     #[test]
@@ -677,64 +663,6 @@ mod tests {
     }
 
     #[test]
-    fn test_byte_array_string_view_decoder() {
-        let (pages, encoded_dictionary) =
-            byte_array_all_encodings(vec!["hello", "world", "large payload over 12 bytes", "b"]);
-
-        let column_desc = utf8_column();
-        let mut decoder = ByteArrayColumnValueDecoder::new(&column_desc);
-
-        decoder
-            .set_dict(encoded_dictionary, 4, Encoding::RLE_DICTIONARY, false)
-            .unwrap();
-
-        for (encoding, page) in pages {
-            let mut output = OffsetBuffer::<i32>::default();
-            decoder.set_data(encoding, page, 4, Some(4)).unwrap();
-
-            assert_eq!(decoder.read(&mut output, 1).unwrap(), 1);
-
-            assert_eq!(output.values.as_slice(), "hello".as_bytes());
-            assert_eq!(output.offsets.as_slice(), &[0, 5]);
-
-            assert_eq!(decoder.read(&mut output, 1).unwrap(), 1);
-            assert_eq!(output.values.as_slice(), "helloworld".as_bytes());
-            assert_eq!(output.offsets.as_slice(), &[0, 5, 10]);
-
-            assert_eq!(decoder.read(&mut output, 2).unwrap(), 2);
-            assert_eq!(
-                output.values.as_slice(),
-                "helloworldlarge payload over 12 bytesb".as_bytes()
-            );
-            assert_eq!(output.offsets.as_slice(), &[0, 5, 10, 37, 38]);
-
-            assert_eq!(decoder.read(&mut output, 4).unwrap(), 0);
-
-            let valid = [false, false, true, true, false, true, true, false, false];
-            let valid_buffer = Buffer::from_iter(valid.iter().cloned());
-
-            output.pad_nulls(0, 4, valid.len(), valid_buffer.as_slice());
-            let array = output.into_array(Some(valid_buffer), ArrowType::Utf8View);
-            let strings = array.as_any().downcast_ref::<StringViewArray>().unwrap();
-
-            assert_eq!(
-                strings.iter().collect::<Vec<_>>(),
-                vec![
-                    None,
-                    None,
-                    Some("hello"),
-                    Some("world"),
-                    None,
-                    Some("large payload over 12 bytes"),
-                    Some("b"),
-                    None,
-                    None,
-                ]
-            );
-        }
-    }
-
-    #[test]
     fn test_byte_array_decoder_skip() {
         let (pages, encoded_dictionary) =
             byte_array_all_encodings(vec!["hello", "world", "a", "b"]);
@@ -774,60 +702,6 @@ mod tests {
             assert_eq!(
                 strings.iter().collect::<Vec<_>>(),
                 vec![None, None, Some("hello"), Some("b"), None, None,]
-            );
-        }
-    }
-
-    #[test]
-    fn test_byte_array_string_view_decoder_skip() {
-        let (pages, encoded_dictionary) =
-            byte_array_all_encodings(vec!["hello", "world", "a", "large payload over 12 bytes"]);
-
-        let column_desc = utf8_column();
-        let mut decoder = ByteArrayColumnValueDecoder::new(&column_desc);
-
-        decoder
-            .set_dict(encoded_dictionary, 4, Encoding::RLE_DICTIONARY, false)
-            .unwrap();
-
-        for (encoding, page) in pages {
-            let mut output = OffsetBuffer::<i32>::default();
-            decoder.set_data(encoding, page, 4, Some(4)).unwrap();
-
-            assert_eq!(decoder.read(&mut output, 1).unwrap(), 1);
-
-            assert_eq!(output.values.as_slice(), "hello".as_bytes());
-            assert_eq!(output.offsets.as_slice(), &[0, 5]);
-
-            assert_eq!(decoder.skip_values(1).unwrap(), 1);
-            assert_eq!(decoder.skip_values(1).unwrap(), 1);
-
-            assert_eq!(decoder.read(&mut output, 1).unwrap(), 1);
-            assert_eq!(
-                output.values.as_slice(),
-                "hellolarge payload over 12 bytes".as_bytes()
-            );
-            assert_eq!(output.offsets.as_slice(), &[0, 5, 32]);
-
-            assert_eq!(decoder.read(&mut output, 4).unwrap(), 0);
-
-            let valid = [false, false, true, true, false, false];
-            let valid_buffer = Buffer::from_iter(valid.iter().cloned());
-
-            output.pad_nulls(0, 2, valid.len(), valid_buffer.as_slice());
-            let array = output.into_array(Some(valid_buffer), ArrowType::Utf8View);
-            let strings = array.as_any().downcast_ref::<StringViewArray>().unwrap();
-
-            assert_eq!(
-                strings.iter().collect::<Vec<_>>(),
-                vec![
-                    None,
-                    None,
-                    Some("hello"),
-                    Some("large payload over 12 bytes"),
-                    None,
-                    None,
-                ]
             );
         }
     }

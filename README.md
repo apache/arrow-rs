@@ -53,18 +53,24 @@ Due to available maintainer and testing bandwidth, [`arrow`] crates ([`arrow`],
 [`arrow-flight`], etc.) are released on the same schedule with the same versions
 as the [`parquet`] and [`parquet-derive`] crates.
 
-Starting June 2024, we plan to release new major versions with potentially
-breaking API changes at most once a quarter, and release incremental minor versions in
-the intervening months. See [this ticket] for more details.
+This crate releases every month. We release new major versions (with potentially
+breaking API changes) at most once a quarter, and release incremental minor
+versions in the intervening months. See [this ticket] for more details.
 
-For example:
+To keep our maintenance burden down, we do regularly scheduled releases (major
+and minor) from the `master` branch. How we handle PRs with breaking API changes
+is described in the [contributing] guide.
+
+[contributing]: CONTRIBUTING.md#breaking-changes
+
+Planned Release Schedule
 
 | Approximate Date | Version  | Notes                                   |
 | ---------------- | -------- | --------------------------------------- |
-| Jun 2024         | `52.0.0` | Major, potentially breaking API changes |
-| Jul 2024         | `52.1.0` | Minor, NO breaking API changes          |
-| Aug 2024         | `52.2.0` | Minor, NO breaking API changes          |
 | Sep 2024         | `53.0.0` | Major, potentially breaking API changes |
+| Oct 2024         | `53.1.0` | Minor, NO breaking API changes          |
+| Nov 2024         | `53.2.0` | Minor, NO breaking API changes          |
+| Dec 2024         | `54.0.0` | Major, potentially breaking API changes |
 
 [this ticket]: https://github.com/apache/arrow-rs/issues/5368
 [semantic versioning]: https://semver.org/
@@ -79,15 +85,22 @@ versions approximately every 2 months.
 
 ## Related Projects
 
-There are two related crates in different repositories
+There are several related crates in different repositories
 
-| Crate          | Description                             | Documentation                 |
-| -------------- | --------------------------------------- | ----------------------------- |
-| [`datafusion`] | In-memory query engine with SQL support | [(README)][datafusion-readme] |
-| [`ballista`]   | Distributed query execution             | [(README)][ballista-readme]   |
+| Crate                    | Description                                 | Documentation                           |
+| ------------------------ | ------------------------------------------- | --------------------------------------- |
+| [`datafusion`]           | In-memory query engine with SQL support     | [(README)][datafusion-readme]           |
+| [`ballista`]             | Distributed query execution                 | [(README)][ballista-readme]             |
+| [`object_store_opendal`] | Use [`opendal`] as [`object_store`] backend | [(README)][object_store_opendal-readme] |
+| [`parquet_opendal`]      | Use [`opendal`] for [`parquet`] Arrow IO    | [(README)][parquet_opendal-readme]      |
 
 [`datafusion`]: https://crates.io/crates/datafusion
 [`ballista`]: https://crates.io/crates/ballista
+[`object_store_opendal`]: https://crates.io/crates/object_store_opendal
+[`opendal`]: https://crates.io/crates/opendal
+[object_store_opendal-readme]: https://github.com/apache/opendal/blob/main/integrations/object_store/README.md
+[`parquet_opendal`]: https://crates.io/crates/parquet_opendal
+[parquet_opendal-readme]: https://github.com/apache/opendal/blob/main/integrations/parquet/README.md
 
 Collectively, these crates support a wider array of functionality for analytic computations in Rust.
 

@@ -17,10 +17,9 @@
 
 //! Integration test for "mid level" Client
 
-mod common {
-    pub mod server;
-    pub mod trailers_layer;
-}
+mod common;
+
+use crate::common::fixture::TestFixture;
 use arrow_array::{RecordBatch, UInt64Array};
 use arrow_flight::{
     decode::FlightRecordBatchStream, encode::FlightDataEncoderBuilder, error::FlightError, Action,
@@ -30,18 +29,12 @@ use arrow_flight::{
 };
 use arrow_schema::{DataType, Field, Schema};
 use bytes::Bytes;
-use common::{server::TestFlightServer, trailers_layer::TrailersLayer};
+use common::server::TestFlightServer;
 use futures::{Future, StreamExt, TryStreamExt};
 use prost::Message;
-use tokio::{net::TcpListener, task::JoinHandle};
-use tonic::{
-    transport::{Channel, Uri},
-    Status,
-};
+use tonic::Status;
 
-use std::{net::SocketAddr, sync::Arc, time::Duration};
-
-const DEFAULT_TIMEOUT_SECONDS: u64 = 30;
+use std::sync::Arc;
 
 #[tokio::test]
 async fn test_handshake() {
@@ -1123,7 +1116,7 @@ where
     Fut: Future<Output = ()>,
 {
     let test_server = TestFlightServer::new();
-    let fixture = TestFixture::new(&test_server).await;
+    let fixture = TestFixture::new(test_server.service()).await;
     let client = FlightClient::new(fixture.channel().await);
 
     // run the test function
@@ -1155,91 +1148,4 @@ fn expect_status(error: FlightError, expected: Status) {
         expected.details(),
         "Got {status:?} want {expected:?}"
     );
-}
-
-/// Creates and manages a running TestServer with a background task
-struct TestFixture {
-    /// channel to send shutdown command
-    shutdown: Option<tokio::sync::oneshot::Sender<()>>,
-
-    /// Address the server is listening on
-    addr: SocketAddr,
-
-    // handle for the server task
-    handle: Option<JoinHandle<Result<(), tonic::transport::Error>>>,
-}
-
-impl TestFixture {
-    /// create a new test fixture from the server
-    pub async fn new(test_server: &TestFlightServer) -> Self {
-        // let OS choose a a free port
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
-
-        println!("Listening on {addr}");
-
-        // prepare the shutdown channel
-        let (tx, rx) = tokio::sync::oneshot::channel();
-
-        let server_timeout = Duration::from_secs(DEFAULT_TIMEOUT_SECONDS);
-
-        let shutdown_future = async move {
-            rx.await.ok();
-        };
-
-        let serve_future = tonic::transport::Server::builder()
-            .timeout(server_timeout)
-            .layer(TrailersLayer)
-            .add_service(test_server.service())
-            .serve_with_incoming_shutdown(
-                tokio_stream::wrappers::TcpListenerStream::new(listener),
-                shutdown_future,
-            );
-
-        // Run the server in its own background task
-        let handle = tokio::task::spawn(serve_future);
-
-        Self {
-            shutdown: Some(tx),
-            addr,
-            handle: Some(handle),
-        }
-    }
-
-    /// Return a [`Channel`] connected to the TestServer
-    pub async fn channel(&self) -> Channel {
-        let url = format!("http://{}", self.addr);
-        let uri: Uri = url.parse().expect("Valid URI");
-        Channel::builder(uri)
-            .timeout(Duration::from_secs(DEFAULT_TIMEOUT_SECONDS))
-            .connect()
-            .await
-            .expect("error connecting to server")
-    }
-
-    /// Stops the test server and waits for the server to shutdown
-    pub async fn shutdown_and_wait(mut self) {
-        if let Some(shutdown) = self.shutdown.take() {
-            shutdown.send(()).expect("server quit early");
-        }
-        if let Some(handle) = self.handle.take() {
-            println!("Waiting on server to finish");
-            handle
-                .await
-                .expect("task join error (panic?)")
-                .expect("Server Error found at shutdown");
-        }
-    }
-}
-
-impl Drop for TestFixture {
-    fn drop(&mut self) {
-        if let Some(shutdown) = self.shutdown.take() {
-            shutdown.send(()).ok();
-        }
-        if self.handle.is_some() {
-            // tests should properly clean up TestFixture
-            println!("TestFixture::Drop called prior to `shutdown_and_wait`");
-        }
-    }
 }

@@ -15,10 +15,14 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Functions for printing array values, as strings, for debugging
-//! purposes. See the `pretty` crate for additional functions for
+//! Functions for printing array values as human-readable strings.
+//!
+//! This is often used for debugging or logging purposes.
+//!
+//! See the [`pretty`] crate for additional functions for
 //! record batch pretty printing.
-
+//!
+//! [`pretty`]: crate::pretty
 use std::fmt::{Display, Formatter, Write};
 use std::ops::Range;
 
@@ -77,6 +81,7 @@ impl<'a> Default for FormatOptions<'a> {
 }
 
 impl<'a> FormatOptions<'a> {
+    /// Creates a new set of format options
     pub const fn new() -> Self {
         Self {
             safe: true,
@@ -417,9 +422,7 @@ macro_rules! primitive_display {
             fn write(&self, idx: usize, f: &mut dyn Write) -> FormatResult {
                 let value = self.value(idx);
                 let mut buffer = [0u8; <$t as ArrowPrimitiveType>::Native::FORMATTED_SIZE];
-                // SAFETY:
-                // buffer is T::FORMATTED_SIZE
-                let b = unsafe { lexical_core::write_unchecked(value, &mut buffer) };
+                let b = lexical_core::write(value, &mut buffer);
                 // Lexical core produces valid UTF-8
                 let s = unsafe { std::str::from_utf8_unchecked(b) };
                 f.write_str(s)?;
@@ -650,10 +653,7 @@ impl<'a> DisplayIndex for &'a PrimitiveArray<IntervalYearMonthType> {
         let years = (interval / 12_f64).floor();
         let month = interval - (years * 12_f64);
 
-        write!(
-            f,
-            "{years} years {month} mons 0 days 0 hours 0 mins 0.00 secs",
-        )?;
+        write!(f, "{years} years {month} mons",)?;
         Ok(())
     }
 }
@@ -661,32 +661,22 @@ impl<'a> DisplayIndex for &'a PrimitiveArray<IntervalYearMonthType> {
 impl<'a> DisplayIndex for &'a PrimitiveArray<IntervalDayTimeType> {
     fn write(&self, idx: usize, f: &mut dyn Write) -> FormatResult {
         let value = self.value(idx);
+        let mut prefix = "";
 
-        let secs = value.milliseconds / 1_000;
-        let mins = secs / 60;
-        let hours = mins / 60;
+        if value.days != 0 {
+            write!(f, "{prefix}{} days", value.days)?;
+            prefix = " ";
+        }
 
-        let secs = secs - (mins * 60);
-        let mins = mins - (hours * 60);
+        if value.milliseconds != 0 {
+            let millis_fmt = MillisecondsFormatter {
+                milliseconds: value.milliseconds,
+                prefix,
+            };
 
-        let milliseconds = value.milliseconds % 1_000;
+            f.write_fmt(format_args!("{millis_fmt}"))?;
+        }
 
-        let secs_sign = if secs < 0 || milliseconds < 0 {
-            "-"
-        } else {
-            ""
-        };
-
-        write!(
-            f,
-            "0 years 0 mons {} days {} hours {} mins {}{}.{:03} secs",
-            value.days,
-            hours,
-            mins,
-            secs_sign,
-            secs.abs(),
-            milliseconds.abs(),
-        )?;
         Ok(())
     }
 }
@@ -694,29 +684,117 @@ impl<'a> DisplayIndex for &'a PrimitiveArray<IntervalDayTimeType> {
 impl<'a> DisplayIndex for &'a PrimitiveArray<IntervalMonthDayNanoType> {
     fn write(&self, idx: usize, f: &mut dyn Write) -> FormatResult {
         let value = self.value(idx);
+        let mut prefix = "";
 
-        let secs = value.nanoseconds / 1_000_000_000;
+        if value.months != 0 {
+            write!(f, "{prefix}{} mons", value.months)?;
+            prefix = " ";
+        }
+
+        if value.days != 0 {
+            write!(f, "{prefix}{} days", value.days)?;
+            prefix = " ";
+        }
+
+        if value.nanoseconds != 0 {
+            let nano_fmt = NanosecondsFormatter {
+                nanoseconds: value.nanoseconds,
+                prefix,
+            };
+            f.write_fmt(format_args!("{nano_fmt}"))?;
+        }
+
+        Ok(())
+    }
+}
+
+struct NanosecondsFormatter<'a> {
+    nanoseconds: i64,
+    prefix: &'a str,
+}
+
+impl<'a> Display for NanosecondsFormatter<'a> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        let mut prefix = self.prefix;
+
+        let secs = self.nanoseconds / 1_000_000_000;
         let mins = secs / 60;
         let hours = mins / 60;
 
         let secs = secs - (mins * 60);
         let mins = mins - (hours * 60);
 
-        let nanoseconds = value.nanoseconds % 1_000_000_000;
+        let nanoseconds = self.nanoseconds % 1_000_000_000;
 
-        let secs_sign = if secs < 0 || nanoseconds < 0 { "-" } else { "" };
+        if hours != 0 {
+            write!(f, "{prefix}{} hours", hours)?;
+            prefix = " ";
+        }
 
-        write!(
-            f,
-            "0 years {} mons {} days {} hours {} mins {}{}.{:09} secs",
-            value.months,
-            value.days,
-            hours,
-            mins,
-            secs_sign,
-            secs.abs(),
-            nanoseconds.abs(),
-        )?;
+        if mins != 0 {
+            write!(f, "{prefix}{} mins", mins)?;
+            prefix = " ";
+        }
+
+        if secs != 0 || nanoseconds != 0 {
+            let secs_sign = if secs < 0 || nanoseconds < 0 { "-" } else { "" };
+            write!(
+                f,
+                "{prefix}{}{}.{:09} secs",
+                secs_sign,
+                secs.abs(),
+                nanoseconds.abs()
+            )?;
+        }
+
+        Ok(())
+    }
+}
+
+struct MillisecondsFormatter<'a> {
+    milliseconds: i32,
+    prefix: &'a str,
+}
+
+impl<'a> Display for MillisecondsFormatter<'a> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        let mut prefix = self.prefix;
+
+        let secs = self.milliseconds / 1_000;
+        let mins = secs / 60;
+        let hours = mins / 60;
+
+        let secs = secs - (mins * 60);
+        let mins = mins - (hours * 60);
+
+        let milliseconds = self.milliseconds % 1_000;
+
+        if hours != 0 {
+            write!(f, "{prefix}{} hours", hours,)?;
+            prefix = " ";
+        }
+
+        if mins != 0 {
+            write!(f, "{prefix}{} mins", mins,)?;
+            prefix = " ";
+        }
+
+        if secs != 0 || milliseconds != 0 {
+            let secs_sign = if secs < 0 || milliseconds < 0 {
+                "-"
+            } else {
+                ""
+            };
+
+            write!(
+                f,
+                "{prefix}{}{}.{:03} secs",
+                secs_sign,
+                secs.abs(),
+                milliseconds.abs()
+            )?;
+        }
+
         Ok(())
     }
 }

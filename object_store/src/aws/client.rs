@@ -61,6 +61,7 @@ use std::sync::Arc;
 
 const VERSION_HEADER: &str = "x-amz-version-id";
 const SHA256_CHECKSUM: &str = "x-amz-checksum-sha256";
+const USER_DEFINED_METADATA_HEADER_PREFIX: &str = "x-amz-meta-";
 
 /// A specialized `Error` for object store-related errors
 #[derive(Debug, Snafu)]
@@ -180,7 +181,7 @@ pub struct S3Config {
     pub checksum: Option<Checksum>,
     pub copy_if_not_exists: Option<S3CopyIfNotExists>,
     pub conditional_put: Option<S3ConditionalPut>,
-    pub encryption_headers: S3EncryptionHeaders,
+    pub(super) encryption_headers: S3EncryptionHeaders,
 }
 
 impl S3Config {
@@ -326,6 +327,10 @@ impl<'a> Request<'a> {
                     has_content_type = true;
                     builder.header(CONTENT_TYPE, v.as_ref())
                 }
+                Attribute::Metadata(k_suffix) => builder.header(
+                    &format!("{}{}", USER_DEFINED_METADATA_HEADER_PREFIX, k_suffix),
+                    v.as_ref(),
+                ),
             };
         }
 
@@ -517,10 +522,47 @@ impl S3Client {
     /// Make an S3 Copy request <https://docs.aws.amazon.com/AmazonS3/latest/API/API_CopyObject.html>
     pub fn copy_request<'a>(&'a self, from: &Path, to: &'a Path) -> Request<'a> {
         let source = format!("{}/{}", self.config.bucket, encode_path(from));
+
+        let mut copy_source_encryption_headers = HeaderMap::new();
+        if let Some(customer_algorithm) = self
+            .config
+            .encryption_headers
+            .0
+            .get("x-amz-server-side-encryption-customer-algorithm")
+        {
+            copy_source_encryption_headers.insert(
+                "x-amz-copy-source-server-side-encryption-customer-algorithm",
+                customer_algorithm.clone(),
+            );
+        }
+        if let Some(customer_key) = self
+            .config
+            .encryption_headers
+            .0
+            .get("x-amz-server-side-encryption-customer-key")
+        {
+            copy_source_encryption_headers.insert(
+                "x-amz-copy-source-server-side-encryption-customer-key",
+                customer_key.clone(),
+            );
+        }
+        if let Some(customer_key_md5) = self
+            .config
+            .encryption_headers
+            .0
+            .get("x-amz-server-side-encryption-customer-key-MD5")
+        {
+            copy_source_encryption_headers.insert(
+                "x-amz-copy-source-server-side-encryption-customer-key-MD5",
+                customer_key_md5.clone(),
+            );
+        }
+
         self.request(Method::PUT, to)
             .idempotent(true)
             .header(&COPY_SOURCE_HEADER, &source)
             .headers(self.config.encryption_headers.clone().into())
+            .headers(copy_source_encryption_headers)
             .with_session_creds(false)
     }
 
@@ -557,13 +599,21 @@ impl S3Client {
     ) -> Result<PartId> {
         let part = (part_idx + 1).to_string();
 
-        let response = self
+        let mut request = self
             .request(Method::PUT, path)
             .with_payload(data)
             .query(&[("partNumber", &part), ("uploadId", upload_id)])
-            .idempotent(true)
-            .send()
-            .await?;
+            .idempotent(true);
+        if self
+            .config
+            .encryption_headers
+            .0
+            .contains_key("x-amz-server-side-encryption-customer-algorithm")
+        {
+            // If SSE-C is used, we must include the encryption headers in every upload request.
+            request = request.with_encryption_headers();
+        }
+        let response = request.send().await?;
 
         let content_id = get_etag(response.headers()).context(MetadataSnafu)?;
         Ok(PartId { content_id })
@@ -642,6 +692,7 @@ impl GetClient for S3Client {
         etag_required: false,
         last_modified_required: false,
         version_header: Some(VERSION_HEADER),
+        user_defined_metadata_prefix: Some(USER_DEFINED_METADATA_HEADER_PREFIX),
     };
 
     /// Make an S3 GET request <https://docs.aws.amazon.com/AmazonS3/latest/API/API_GetObject.html>
@@ -654,6 +705,14 @@ impl GetClient for S3Client {
         };
 
         let mut builder = self.client.request(method, url);
+        if self
+            .config
+            .encryption_headers
+            .0
+            .contains_key("x-amz-server-side-encryption-customer-algorithm")
+        {
+            builder = builder.headers(self.config.encryption_headers.clone().into());
+        }
 
         if let Some(v) = &options.version {
             builder = builder.query(&[("versionId", v)])

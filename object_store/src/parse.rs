@@ -24,7 +24,7 @@ use snafu::Snafu;
 use url::Url;
 
 #[derive(Debug, Snafu)]
-enum Error {
+pub enum Error {
     #[snafu(display("Unable to recognise URL \"{}\"", url))]
     Unrecognised { url: Url },
 
@@ -41,9 +41,27 @@ impl From<Error> for super::Error {
     }
 }
 
-/// Recognises various URL formats, identifying the relevant [`ObjectStore`]
-#[derive(Debug, Eq, PartialEq)]
-enum ObjectStoreScheme {
+/// Recognizes various URL formats, identifying the relevant [`ObjectStore`]
+///
+/// See [`ObjectStoreScheme::parse`] for more details
+///
+/// # Supported formats:
+/// - `file:///path/to/my/file` -> [`LocalFileSystem`]
+/// - `memory:///` -> [`InMemory`]
+/// - `s3://bucket/path` -> [`AmazonS3`](crate::aws::AmazonS3) (also supports `s3a`)
+/// - `gs://bucket/path` -> [`GoogleCloudStorage`](crate::gcp::GoogleCloudStorage)
+/// - `az://account/container/path` -> [`MicrosoftAzure`](crate::azure::MicrosoftAzure) (also supports `adl`, `azure`, `abfs`, `abfss`)
+/// - `http://mydomain/path` -> [`HttpStore`](crate::http::HttpStore)
+/// - `https://mydomain/path` -> [`HttpStore`](crate::http::HttpStore)
+///
+/// There are also special cases for AWS and Azure for `https://{host?}/path` paths:
+/// - `dfs.core.windows.net`, `blob.core.windows.net`, `dfs.fabric.microsoft.com`, `blob.fabric.microsoft.com` -> [`MicrosoftAzure`](crate::azure::MicrosoftAzure)
+/// - `amazonaws.com` -> [`AmazonS3`](crate::aws::AmazonS3)
+/// - `r2.cloudflarestorage.com` -> [`AmazonS3`](crate::aws::AmazonS3)
+///
+#[non_exhaustive] // permit new variants
+#[derive(Debug, Eq, PartialEq, Clone)]
+pub enum ObjectStoreScheme {
     /// Url corresponding to [`LocalFileSystem`]
     Local,
     /// Url corresponding to [`InMemory`]
@@ -62,7 +80,27 @@ impl ObjectStoreScheme {
     /// Create an [`ObjectStoreScheme`] from the provided [`Url`]
     ///
     /// Returns the [`ObjectStoreScheme`] and the remaining [`Path`]
-    fn parse(url: &Url) -> Result<(Self, Path), Error> {
+    ///
+    /// # Example
+    /// ```
+    /// # use url::Url;
+    /// # use object_store::ObjectStoreScheme;
+    /// let url: Url = "file:///path/to/my/file".parse().unwrap();
+    /// let (scheme, path) = ObjectStoreScheme::parse(&url).unwrap();
+    /// assert_eq!(scheme, ObjectStoreScheme::Local);
+    /// assert_eq!(path.as_ref(), "path/to/my/file");
+    ///
+    /// let url: Url = "https://blob.core.windows.net/path/to/my/file".parse().unwrap();
+    /// let (scheme, path) = ObjectStoreScheme::parse(&url).unwrap();
+    /// assert_eq!(scheme, ObjectStoreScheme::MicrosoftAzure);
+    /// assert_eq!(path.as_ref(), "path/to/my/file");
+    ///
+    /// let url: Url = "https://example.com/path/to/my/file".parse().unwrap();
+    /// let (scheme, path) = ObjectStoreScheme::parse(&url).unwrap();
+    /// assert_eq!(scheme, ObjectStoreScheme::Http);
+    /// assert_eq!(path.as_ref(), "path/to/my/file");
+    /// ```
+    pub fn parse(url: &Url) -> Result<(Self, Path), Error> {
         let strip_bucket = || Some(url.path().strip_prefix('/')?.split_once('/')?.1);
 
         let (scheme, path) = match (url.scheme(), url.host_str()) {

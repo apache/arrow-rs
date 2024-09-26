@@ -125,6 +125,7 @@
 //! [compared]: PartialOrd
 //! [compare]: PartialOrd
 
+#![warn(missing_docs)]
 use std::cmp::Ordering;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
@@ -135,6 +136,7 @@ use arrow_array::*;
 use arrow_buffer::ArrowNativeType;
 use arrow_data::ArrayDataBuilder;
 use arrow_schema::*;
+use variable::{decode_binary_view, decode_string_view};
 
 use crate::fixed::{decode_bool, decode_fixed_size_binary, decode_primitive};
 use crate::variable::{decode_binary, decode_string};
@@ -834,10 +836,20 @@ impl Rows {
 
     /// Returns the row at index `row`
     pub fn row(&self, row: usize) -> Row<'_> {
-        let end = self.offsets[row + 1];
-        let start = self.offsets[row];
+        assert!(row + 1 < self.offsets.len());
+        unsafe { self.row_unchecked(row) }
+    }
+
+    /// Returns the row at `index` without bounds checking
+    ///
+    /// # Safety
+    /// Caller must ensure that `index` is less than the number of offsets (#rows + 1)
+    pub unsafe fn row_unchecked(&self, index: usize) -> Row<'_> {
+        let end = unsafe { self.offsets.get_unchecked(index + 1) };
+        let start = unsafe { self.offsets.get_unchecked(index) };
+        let data = unsafe { self.buffer.get_unchecked(*start..*end) };
         Row {
-            data: &self.buffer[start..end],
+            data,
             config: &self.config,
         }
     }
@@ -897,7 +909,9 @@ impl<'a> Iterator for RowsIter<'a> {
         if self.end == self.start {
             return None;
         }
-        let row = self.rows.row(self.start);
+
+        // SAFETY: We have checked that `start` is less than `end`
+        let row = unsafe { self.rows.row_unchecked(self.start) };
         self.start += 1;
         Some(row)
     }
@@ -919,7 +933,8 @@ impl<'a> DoubleEndedIterator for RowsIter<'a> {
         if self.end == self.start {
             return None;
         }
-        let row = self.rows.row(self.end);
+        // Safety: We have checked that `start` is less than `end`
+        let row = unsafe { self.rows.row_unchecked(self.end) };
         self.end -= 1;
         Some(row)
     }
@@ -1079,6 +1094,9 @@ fn row_lengths(cols: &[ArrayRef], encoders: &[Encoder]) -> Vec<usize> {
                         .iter()
                         .zip(lengths.iter_mut())
                         .for_each(|(slice, length)| *length += variable::encoded_len(slice)),
+                    DataType::BinaryView => array.as_binary_view().iter().zip(lengths.iter_mut()).for_each(|(slice, length)| {
+                            *length += variable::encoded_len(slice)
+                        }),
                     DataType::Utf8 => array.as_string::<i32>()
                         .iter()
                         .zip(lengths.iter_mut())
@@ -1091,11 +1109,14 @@ fn row_lengths(cols: &[ArrayRef], encoders: &[Encoder]) -> Vec<usize> {
                         .for_each(|(slice, length)| {
                             *length += variable::encoded_len(slice.map(|x| x.as_bytes()))
                         }),
+                    DataType::Utf8View => array.as_string_view().iter().zip(lengths.iter_mut()).for_each(|(slice, length)| {
+                        *length += variable::encoded_len(slice.map(|x| x.as_bytes()))
+                    }),
                     DataType::FixedSizeBinary(len) => {
                         let len = len.to_usize().unwrap();
                         lengths.iter_mut().for_each(|x| *x += 1 + len)
                     }
-                    _ => unreachable!(),
+                    _ => unimplemented!("unsupported data type: {}", array.data_type()),
                 }
             }
             Encoder::Dictionary(values, null) => {
@@ -1146,11 +1167,26 @@ fn encode_column(
     match encoder {
         Encoder::Stateless => {
             downcast_primitive_array! {
-                column => fixed::encode(data, offsets, column, opts),
+                column => {
+                    if let Some(nulls) = column.nulls().filter(|n| n.null_count() > 0){
+                        fixed::encode(data, offsets, column.values(), nulls, opts)
+                    } else {
+                        fixed::encode_not_null(data, offsets, column.values(), opts)
+                    }
+                }
                 DataType::Null => {}
-                DataType::Boolean => fixed::encode(data, offsets, column.as_boolean(), opts),
+                DataType::Boolean => {
+                    if let Some(nulls) = column.nulls().filter(|n| n.null_count() > 0){
+                        fixed::encode_boolean(data, offsets, column.as_boolean().values(), nulls, opts)
+                    } else {
+                        fixed::encode_boolean_not_null(data, offsets, column.as_boolean().values(), opts)
+                    }
+                }
                 DataType::Binary => {
                     variable::encode(data, offsets, as_generic_binary_array::<i32>(column).iter(), opts)
+                }
+                DataType::BinaryView => {
+                    variable::encode(data, offsets, column.as_binary_view().iter(), opts)
                 }
                 DataType::LargeBinary => {
                     variable::encode(data, offsets, as_generic_binary_array::<i64>(column).iter(), opts)
@@ -1167,11 +1203,16 @@ fn encode_column(
                         .map(|x| x.map(|x| x.as_bytes())),
                     opts,
                 ),
+                DataType::Utf8View => variable::encode(
+                    data, offsets,
+                    column.as_string_view().iter().map(|x| x.map(|x| x.as_bytes())),
+                    opts,
+                ),
                 DataType::FixedSizeBinary(_) => {
                     let array = column.as_any().downcast_ref().unwrap();
                     fixed::encode_fixed_size_binary(data, offsets, array, opts)
                 }
-                _ => unreachable!(),
+                _ => unimplemented!("unsupported data type: {}", column.data_type()),
             }
         }
         Encoder::Dictionary(values, nulls) => {
@@ -1255,11 +1296,12 @@ unsafe fn decode_column(
                 DataType::Boolean => Arc::new(decode_bool(rows, options)),
                 DataType::Binary => Arc::new(decode_binary::<i32>(rows, options)),
                 DataType::LargeBinary => Arc::new(decode_binary::<i64>(rows, options)),
+                DataType::BinaryView => Arc::new(decode_binary_view(rows, options)),
                 DataType::FixedSizeBinary(size) => Arc::new(decode_fixed_size_binary(rows, size, options)),
                 DataType::Utf8 => Arc::new(decode_string::<i32>(rows, options, validate_utf8)),
                 DataType::LargeUtf8 => Arc::new(decode_string::<i64>(rows, options, validate_utf8)),
-                DataType::Dictionary(_, _) => todo!(),
-                _ => unreachable!()
+                DataType::Utf8View => Arc::new(decode_string_view(rows, options, validate_utf8)),
+                _ => return Err(ArrowError::NotYetImplemented(format!("unsupported data type: {}", data_type)))
             }
         }
         Codec::Dictionary(converter, _) => {
@@ -1450,10 +1492,7 @@ mod tests {
 
         let converter = RowConverter::new(vec![SortField::new_with_options(
             DataType::Boolean,
-            SortOptions {
-                descending: true,
-                nulls_first: false,
-            },
+            SortOptions::default().desc().with_nulls_first(false),
         )])
         .unwrap();
 
@@ -1571,10 +1610,7 @@ mod tests {
 
         let converter = RowConverter::new(vec![SortField::new_with_options(
             DataType::Binary,
-            SortOptions {
-                descending: true,
-                nulls_first: false,
-            },
+            SortOptions::default().desc().with_nulls_first(false),
         )])
         .unwrap();
         let rows = converter.convert_columns(&[Arc::clone(&col)]).unwrap();
@@ -1653,10 +1689,7 @@ mod tests {
 
         let converter = RowConverter::new(vec![SortField::new_with_options(
             a.data_type().clone(),
-            SortOptions {
-                descending: true,
-                nulls_first: false,
-            },
+            SortOptions::default().desc().with_nulls_first(false),
         )])
         .unwrap();
 
@@ -1671,10 +1704,7 @@ mod tests {
 
         let converter = RowConverter::new(vec![SortField::new_with_options(
             a.data_type().clone(),
-            SortOptions {
-                descending: true,
-                nulls_first: true,
-            },
+            SortOptions::default().desc().with_nulls_first(true),
         )])
         .unwrap();
 
@@ -1847,10 +1877,7 @@ mod tests {
         back[0].to_data().validate_full().unwrap();
         assert_eq!(&back[0], &list);
 
-        let options = SortOptions {
-            descending: false,
-            nulls_first: false,
-        };
+        let options = SortOptions::default().asc().with_nulls_first(false);
         let field = SortField::new_with_options(d.clone(), options);
         let converter = RowConverter::new(vec![field]).unwrap();
         let rows = converter.convert_columns(&[Arc::clone(&list)]).unwrap();
@@ -1867,10 +1894,7 @@ mod tests {
         back[0].to_data().validate_full().unwrap();
         assert_eq!(&back[0], &list);
 
-        let options = SortOptions {
-            descending: true,
-            nulls_first: false,
-        };
+        let options = SortOptions::default().desc().with_nulls_first(false);
         let field = SortField::new_with_options(d.clone(), options);
         let converter = RowConverter::new(vec![field]).unwrap();
         let rows = converter.convert_columns(&[Arc::clone(&list)]).unwrap();
@@ -1887,10 +1911,7 @@ mod tests {
         back[0].to_data().validate_full().unwrap();
         assert_eq!(&back[0], &list);
 
-        let options = SortOptions {
-            descending: true,
-            nulls_first: true,
-        };
+        let options = SortOptions::default().desc().with_nulls_first(true);
         let field = SortField::new_with_options(d, options);
         let converter = RowConverter::new(vec![field]).unwrap();
         let rows = converter.convert_columns(&[Arc::clone(&list)]).unwrap();
@@ -1950,10 +1971,7 @@ mod tests {
         //   null
         //   [[1, 2]]
         // ]
-        let options = SortOptions {
-            descending: false,
-            nulls_first: true,
-        };
+        let options = SortOptions::default().asc().with_nulls_first(true);
         let field = SortField::new_with_options(d.clone(), options);
         let converter = RowConverter::new(vec![field]).unwrap();
         let rows = converter.convert_columns(&[Arc::clone(&list)]).unwrap();
@@ -1969,10 +1987,7 @@ mod tests {
         back[0].to_data().validate_full().unwrap();
         assert_eq!(&back[0], &list);
 
-        let options = SortOptions {
-            descending: true,
-            nulls_first: true,
-        };
+        let options = SortOptions::default().desc().with_nulls_first(true);
         let field = SortField::new_with_options(d.clone(), options);
         let converter = RowConverter::new(vec![field]).unwrap();
         let rows = converter.convert_columns(&[Arc::clone(&list)]).unwrap();
@@ -1988,10 +2003,7 @@ mod tests {
         back[0].to_data().validate_full().unwrap();
         assert_eq!(&back[0], &list);
 
-        let options = SortOptions {
-            descending: true,
-            nulls_first: false,
-        };
+        let options = SortOptions::default().desc().with_nulls_first(false);
         let field = SortField::new_with_options(d, options);
         let converter = RowConverter::new(vec![field]).unwrap();
         let rows = converter.convert_columns(&[Arc::clone(&list)]).unwrap();
@@ -2042,6 +2054,32 @@ mod tests {
                     let len = rng.gen_range(0..100);
                     let bytes = (0..len).map(|_| rng.gen_range(0..128)).collect();
                     String::from_utf8(bytes).unwrap()
+                })
+            })
+            .collect()
+    }
+
+    fn generate_string_view(len: usize, valid_percent: f64) -> StringViewArray {
+        let mut rng = thread_rng();
+        (0..len)
+            .map(|_| {
+                rng.gen_bool(valid_percent).then(|| {
+                    let len = rng.gen_range(0..100);
+                    let bytes = (0..len).map(|_| rng.gen_range(0..128)).collect();
+                    String::from_utf8(bytes).unwrap()
+                })
+            })
+            .collect()
+    }
+
+    fn generate_byte_view(len: usize, valid_percent: f64) -> BinaryViewArray {
+        let mut rng = thread_rng();
+        (0..len)
+            .map(|_| {
+                rng.gen_bool(valid_percent).then(|| {
+                    let len = rng.gen_range(0..100);
+                    let bytes: Vec<_> = (0..len).map(|_| rng.gen_range(0..128)).collect();
+                    bytes
                 })
             })
             .collect()
@@ -2127,7 +2165,7 @@ mod tests {
 
     fn generate_column(len: usize) -> ArrayRef {
         let mut rng = thread_rng();
-        match rng.gen_range(0..14) {
+        match rng.gen_range(0..16) {
             0 => Arc::new(generate_primitive_array::<Int32Type>(len, 0.8)),
             1 => Arc::new(generate_primitive_array::<UInt32Type>(len, 0.8)),
             2 => Arc::new(generate_primitive_array::<Int64Type>(len, 0.8)),
@@ -2161,6 +2199,8 @@ mod tests {
             13 => Arc::new(generate_list(len, 0.8, |values_len| {
                 Arc::new(generate_struct(values_len, 0.8))
             })),
+            14 => Arc::new(generate_string_view(len, 0.8)),
+            15 => Arc::new(generate_byte_view(len, 0.8)),
             _ => unreachable!(),
         }
     }

@@ -17,9 +17,9 @@
 
 use arrow::array::{
     Array, ArrayRef, BooleanArray, Decimal128Array, DictionaryArray, FixedSizeBinaryArray,
-    Int16Array, Int32Array, Int64Array, Int64Builder, ListArray, ListBuilder, MapBuilder,
-    NullArray, StringArray, StringBuilder, StringDictionaryBuilder, StructArray, UInt8Array,
-    UnionArray,
+    FixedSizeListBuilder, Int16Array, Int32Array, Int64Array, Int64Builder, ListArray, ListBuilder,
+    MapBuilder, NullArray, StringArray, StringBuilder, StringDictionaryBuilder, StructArray,
+    UInt16Array, UInt16Builder, UInt8Array, UnionArray,
 };
 use arrow::datatypes::Int16Type;
 use arrow_array::StringViewArray;
@@ -1074,43 +1074,42 @@ fn test_mixed_types() {
     MutableArrayData::new(vec![&a, &b], false, 4);
 }
 
-/*
-// this is an old test used on a meanwhile removed dead code
-// that is still useful when `MutableArrayData` supports fixed-size lists.
 #[test]
-fn test_fixed_size_list_append() -> Result<()> {
-    let int_builder = UInt16Builder::new(64);
+fn test_fixed_size_list_append() {
+    let int_builder = UInt16Builder::with_capacity(64);
     let mut builder = FixedSizeListBuilder::<UInt16Builder>::new(int_builder, 2);
-    builder.values().append_slice(&[1, 2])?;
-    builder.append(true)?;
-    builder.values().append_slice(&[3, 4])?;
-    builder.append(false)?;
-    builder.values().append_slice(&[5, 6])?;
-    builder.append(true)?;
+    builder.values().append_slice(&[1, 2]);
+    builder.append(true);
+    builder.values().append_slice(&[3, 4]);
+    builder.append(false);
+    builder.values().append_slice(&[5, 6]);
+    builder.append(true);
+    let a = builder.finish().into_data();
 
-    let a_builder = UInt16Builder::new(64);
+    let a_builder = UInt16Builder::with_capacity(64);
     let mut a_builder = FixedSizeListBuilder::<UInt16Builder>::new(a_builder, 2);
-    a_builder.values().append_slice(&[7, 8])?;
-    a_builder.append(true)?;
-    a_builder.values().append_slice(&[9, 10])?;
-    a_builder.append(true)?;
-    a_builder.values().append_slice(&[11, 12])?;
-    a_builder.append(false)?;
-    a_builder.values().append_slice(&[13, 14])?;
-    a_builder.append(true)?;
-    a_builder.values().append_null()?;
-    a_builder.values().append_null()?;
-    a_builder.append(true)?;
-    let a = a_builder.finish();
+    a_builder.values().append_slice(&[7, 8]);
+    a_builder.append(true);
+    a_builder.values().append_slice(&[9, 10]);
+    a_builder.append(true);
+    a_builder.values().append_slice(&[11, 12]);
+    a_builder.append(false);
+    a_builder.values().append_slice(&[13, 14]);
+    a_builder.append(true);
+    a_builder.values().append_null();
+    a_builder.values().append_null();
+    a_builder.append(true);
+    let b = a_builder.finish().into_data();
+
+    let mut mutable = MutableArrayData::new(vec![&a, &b], false, 10);
+    mutable.extend(0, 0, a.len());
+    mutable.extend(1, 0, b.len());
 
     // append array
-    builder.append_data(&[
-        a.data(),
-        a.slice(1, 3).data(),
-        a.slice(2, 1).data(),
-        a.slice(5, 0).data(),
-    ])?;
-    let finished = builder.finish();
+    mutable.extend(1, 1, 4);
+    mutable.extend(1, 2, 3);
+
+    let finished = mutable.freeze();
 
     let expected_int_array = UInt16Array::from(vec![
         Some(1),
@@ -1141,23 +1140,14 @@ fn test_fixed_size_list_append() -> Result<()> {
         Some(11),
         Some(12),
     ]);
-    let expected_list_data = ArrayData::new(
-        DataType::FixedSizeList(
-            Arc::new(Field::new("item", DataType::UInt16, true)),
-            2,
-        ),
+    let expected_fixed_size_list_data = ArrayData::try_new(
+        DataType::FixedSizeList(Arc::new(Field::new("item", DataType::UInt16, true)), 2),
         12,
-        None,
-        None,
+        Some(Buffer::from(&[0b11011101, 0b101])),
         0,
         vec![],
-        vec![expected_int_array.data()],
-    );
-    let expected_list =
-        FixedSizeListArray::from(Arc::new(expected_list_data) as ArrayData);
-    assert_eq!(&expected_list.values(), &finished.values());
-    assert_eq!(expected_list.len(), finished.len());
-
-    Ok(())
+        vec![expected_int_array.to_data()],
+    )
+    .unwrap();
+    assert_eq!(finished, expected_fixed_size_list_data);
 }
-*/

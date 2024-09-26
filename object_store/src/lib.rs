@@ -39,13 +39,13 @@
 //! # Highlights
 //!
 //! 1. A high-performance async API focused on providing a consistent interface
-//! mirroring that of object stores such as [S3]
+//!    mirroring that of object stores such as [S3]
 //!
 //! 2. Production quality, leading this crate to be used in large
-//! scale production systems, such as [crates.io] and [InfluxDB IOx]
+//!    scale production systems, such as [crates.io] and [InfluxDB IOx]
 //!
 //! 3. Support for advanced functionality, including atomic, conditional reads
-//! and writes, vectored IO, bulk deletion, and more...
+//!    and writes, vectored IO, bulk deletion, and more...
 //!
 //! 4. Stable and predictable governance via the [Apache Arrow] project
 //!
@@ -98,7 +98,7 @@
 //! * Methods map directly to object store APIs, providing both efficiency and predictability
 //! * Abstracts away filesystem and operating system specific quirks, ensuring portability
 //! * Allows for functionality not native to filesystems, such as operation preconditions
-//! and atomic multipart uploads
+//!   and atomic multipart uploads
 //!
 //! This crate does provide [`BufReader`] and [`BufWriter`] adapters
 //! which provide a more filesystem-like API for working with the
@@ -526,8 +526,8 @@ mod client;
 
 #[cfg(feature = "cloud")]
 pub use client::{
-    backoff::BackoffConfig, retry::RetryConfig, ClientConfigKey, ClientOptions, CredentialProvider,
-    StaticCredentialProvider,
+    backoff::BackoffConfig, retry::RetryConfig, Certificate, ClientConfigKey, ClientOptions,
+    CredentialProvider, StaticCredentialProvider,
 };
 
 #[cfg(feature = "cloud")]
@@ -550,7 +550,7 @@ pub mod integration;
 
 pub use attributes::*;
 
-pub use parse::{parse_url, parse_url_opts};
+pub use parse::{parse_url, parse_url_opts, ObjectStoreScheme};
 pub use payload::*;
 pub use upload::*;
 pub use util::{coalesce_ranges, collect_bytes, GetRange, OBJECT_STORE_COALESCE_DEFAULT};
@@ -911,7 +911,7 @@ pub struct ObjectMeta {
 }
 
 /// Options for a get request, such as range
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct GetOptions {
     /// Request will succeed if the `ObjectMeta::e_tag` matches
     /// otherwise returning [`Error::Precondition`]
@@ -1225,6 +1225,7 @@ pub type Result<T, E = Error> = std::result::Result<T, E>;
 /// A specialized `Error` for object store-related errors
 #[derive(Debug, Snafu)]
 #[allow(missing_docs)]
+#[non_exhaustive]
 pub enum Error {
     #[snafu(display("Generic {} error: {}", store, source))]
     Generic {
@@ -1272,6 +1273,26 @@ pub enum Error {
 
     #[snafu(display("Operation not yet implemented."))]
     NotImplemented,
+
+    #[snafu(display(
+        "The operation lacked the necessary privileges to complete for path {}: {}",
+        path,
+        source
+    ))]
+    PermissionDenied {
+        path: String,
+        source: Box<dyn std::error::Error + Send + Sync + 'static>,
+    },
+
+    #[snafu(display(
+        "The operation lacked valid authentication credentials for path {}: {}",
+        path,
+        source
+    ))]
+    Unauthenticated {
+        path: String,
+        source: Box<dyn std::error::Error + Send + Sync + 'static>,
+    },
 
     #[snafu(display("Configuration key: '{}' is not valid for store '{}'.", key, store))]
     UnknownConfigurationKey { store: &'static str, key: String },

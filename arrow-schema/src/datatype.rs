@@ -16,19 +16,69 @@
 // under the License.
 
 use std::fmt;
+use std::str::FromStr;
 use std::sync::Arc;
 
-use crate::{Field, FieldRef, Fields, UnionFields};
+use crate::{ArrowError, Field, FieldRef, Fields, UnionFields};
 
-/// The set of datatypes that are supported by this implementation of Apache Arrow.
+/// Datatypes supported by this implementation of Apache Arrow.
 ///
-/// The Arrow specification on data types includes some more types.
-/// See also [`Schema.fbs`](https://github.com/apache/arrow/blob/main/format/Schema.fbs)
-/// for Arrow's specification.
+/// The variants of this enum include primitive fixed size types as well as
+/// parametric or nested types. See [`Schema.fbs`] for Arrow's specification.
 ///
-/// The variants of this enum include primitive fixed size types as well as parametric or
-/// nested types.
-/// Currently the Rust implementation supports the following nested types:
+/// # Examples
+///
+/// Primitive types
+/// ```
+/// # use arrow_schema::DataType;
+/// // create a new 32-bit signed integer
+/// let data_type = DataType::Int32;
+/// ```
+///
+/// Nested Types
+/// ```
+/// # use arrow_schema::{DataType, Field};
+/// # use std::sync::Arc;
+/// // create a new list of 32-bit signed integers directly
+/// let list_data_type = DataType::List(Arc::new(Field::new("item", DataType::Int32, true)));
+/// // Create the same list type with constructor
+/// let list_data_type2 = DataType::new_list(DataType::Int32, true);
+/// assert_eq!(list_data_type, list_data_type2);
+/// ```
+///
+/// Dictionary Types
+/// ```
+/// # use arrow_schema::{DataType};
+/// // String Dictionary (key type Int32 and value type Utf8)
+/// let data_type = DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8));
+/// ```
+///
+/// Timestamp Types
+/// ```
+/// # use arrow_schema::{DataType, TimeUnit};
+/// // timestamp with millisecond precision without timezone specified
+/// let data_type = DataType::Timestamp(TimeUnit::Millisecond, None);
+/// // timestamp with nanosecond precision in UTC timezone
+/// let data_type = DataType::Timestamp(TimeUnit::Nanosecond, Some("UTC".into()));
+///```
+///
+/// # Display and FromStr
+///
+/// The `Display` and `FromStr` implementations for `DataType` are
+/// human-readable, parseable, and reversible.
+///
+/// ```
+/// # use arrow_schema::DataType;
+/// let data_type = DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8));
+/// let data_type_string = data_type.to_string();
+/// assert_eq!(data_type_string, "Dictionary(Int32, Utf8)");
+/// // display can be parsed back into the original type
+/// let parsed_data_type: DataType = data_type.to_string().parse().unwrap();
+/// assert_eq!(data_type, parsed_data_type);
+/// ```
+///
+/// # Nested Support
+/// Currently, the Rust implementation supports the following nested types:
 ///  - `List<T>`
 ///  - `LargeList<T>`
 ///  - `FixedSizeList<T>`
@@ -38,7 +88,10 @@ use crate::{Field, FieldRef, Fields, UnionFields};
 ///
 /// Nested types can themselves be nested within other arrays.
 /// For more information on these types please see
-/// [the physical memory layout of Apache Arrow](https://arrow.apache.org/docs/format/Columnar.html#physical-memory-layout).
+/// [the physical memory layout of Apache Arrow]
+///
+/// [`Schema.fbs`]: https://github.com/apache/arrow/blob/main/format/Schema.fbs
+/// [the physical memory layout of Apache Arrow]: https://arrow.apache.org/docs/format/Columnar.html#physical-memory-layout
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum DataType {
@@ -150,22 +203,34 @@ pub enum DataType {
     /// A signed 64-bit date representing the elapsed time since UNIX epoch (1970-01-01)
     /// in milliseconds.
     ///
-    /// According to the specification (see [Schema.fbs]), this should be treated as the number of
-    /// days, in milliseconds, since the UNIX epoch. Therefore, values must be evenly divisible by
-    /// `86_400_000` (the number of milliseconds in a standard day).
+    /// # Valid Ranges
     ///
-    /// The reason for this is for compatibility with other language's native libraries,
-    /// such as Java, which historically lacked a dedicated date type
-    /// and only supported timestamps.
+    /// According to the Arrow specification ([Schema.fbs]), values of Date64
+    /// are treated as the number of *days*, in milliseconds, since the UNIX
+    /// epoch. Therefore, values of this type  must be evenly divisible by
+    /// `86_400_000`, the number of milliseconds in a standard day.
     ///
-    /// Practically, validation that values of this type are evenly divisible by `86_400_000` is not enforced
-    /// by this library for performance and usability reasons. Date64 values will be treated similarly to the
-    /// `Timestamp(TimeUnit::Millisecond, None)` type, in that its values will be printed showing the time of
-    /// day if the value does not represent an exact day, and arithmetic can be done at the millisecond
-    /// granularity to change the time represented.
+    /// It is not valid to store milliseconds that do not represent an exact
+    /// day. The reason for this restriction is compatibility with other
+    /// language's native libraries (specifically Java), which historically
+    /// lacked a dedicated date type and only supported timestamps.
     ///
-    /// Users should prefer using Date32 to cleanly represent the number of days, or one of the Timestamp
-    /// variants to include time as part of the representation, depending on their use case.
+    /// # Validation
+    ///
+    /// This library does not validate or enforce that Date64 values are evenly
+    /// divisible by `86_400_000`  for performance and usability reasons. Date64
+    /// values are treated similarly to `Timestamp(TimeUnit::Millisecond,
+    /// None)`: values will be displayed with a time of day if the value does
+    /// not represent an exact day, and arithmetic will be done at the
+    /// millisecond granularity.
+    ///
+    /// # Recommendation
+    ///
+    /// Users should prefer [`DataType::Date32`] to cleanly represent the number
+    /// of days, or one of the Timestamp variants to include time as part of the
+    /// representation, depending on their use case.
+    ///
+    /// # Further Reading
     ///
     /// For more details, see [#5288](https://github.com/apache/arrow-rs/issues/5288).
     ///
@@ -196,9 +261,7 @@ pub enum DataType {
     /// A single LargeBinary array can store up to [`i64::MAX`] bytes
     /// of binary data in total.
     LargeBinary,
-    /// (NOT YET FULLY SUPPORTED) Opaque binary data of variable length.
-    ///
-    /// Note this data type is not yet fully supported. Using it with arrow APIs may result in `panic`s.
+    /// Opaque binary data of variable length.
     ///
     /// Logically the same as [`Self::Binary`], but the internal representation uses a view
     /// struct that contains the string length and either the string's entire data
@@ -215,9 +278,7 @@ pub enum DataType {
     /// A single LargeUtf8 array can store up to [`i64::MAX`] bytes
     /// of string data in total.
     LargeUtf8,
-    /// (NOT YET FULLY SUPPORTED)  A variable-length string in Unicode with UTF-8 encoding
-    ///
-    /// Note this data type is not yet fully supported. Using it with arrow APIs may result in `panic`s.
+    /// A variable-length string in Unicode with UTF-8 encoding
     ///
     /// Logically the same as [`Self::Utf8`], but the internal representation uses a view
     /// struct that contains the string length and either the string's entire data
@@ -327,7 +388,7 @@ pub enum DataType {
 }
 
 /// An absolute length of time in seconds, milliseconds, microseconds or nanoseconds.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum TimeUnit {
     /// Time in seconds.
@@ -341,7 +402,7 @@ pub enum TimeUnit {
 }
 
 /// YEAR_MONTH, DAY_TIME, MONTH_DAY_NANO interval in SQL style.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum IntervalUnit {
     /// Indicates the number of elapsed whole months, stored as 4-byte integers.
@@ -359,17 +420,48 @@ pub enum IntervalUnit {
     MonthDayNano,
 }
 
-// Sparse or Dense union layouts
+/// Sparse or Dense union layouts
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Copy)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum UnionMode {
+    /// Sparse union layout
     Sparse,
+    /// Dense union layout
     Dense,
 }
 
 impl fmt::Display for DataType {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{self:?}")
+    }
+}
+
+/// Parses `str` into a `DataType`.
+///
+/// This is the reverse of [`DataType`]'s `Display`
+/// impl, and maintains the invariant that
+/// `DataType::try_from(&data_type.to_string()).unwrap() == data_type`
+///
+/// # Example
+/// ```
+/// use arrow_schema::DataType;
+///
+/// let data_type: DataType = "Int32".parse().unwrap();
+/// assert_eq!(data_type, DataType::Int32);
+/// ```
+impl FromStr for DataType {
+    type Err = ArrowError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        crate::datatype_parse::parse_data_type(s)
+    }
+}
+
+impl TryFrom<&str> for DataType {
+    type Error = ArrowError;
+
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        value.parse()
     }
 }
 
@@ -530,7 +622,7 @@ impl DataType {
         }
     }
 
-    /// Returns the bit width of this type if it is a primitive type
+    /// Returns the byte width of this type if it is a primitive type
     ///
     /// Returns `None` if not a primitive type
     #[inline]
@@ -1277,5 +1369,17 @@ mod tests {
             ),
             UnionMode::Dense,
         );
+    }
+
+    #[test]
+    fn test_try_from_str() {
+        let data_type: DataType = "Int32".try_into().unwrap();
+        assert_eq!(data_type, DataType::Int32);
+    }
+
+    #[test]
+    fn test_from_str() {
+        let data_type: DataType = "UInt64".parse().unwrap();
+        assert_eq!(data_type, DataType::UInt64);
     }
 }

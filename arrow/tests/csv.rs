@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use core::str;
 use std::sync::Arc;
 
 use arrow_array::*;
@@ -54,6 +55,6 @@ fn test_export_csv_timestamps() {
     let left = "c1,c2
 2019-04-18T20:54:47.378+10:00,2019-04-18T10:54:47.378
 2021-10-30T17:59:07+11:00,2021-10-30T06:59:07\n";
-    let right = String::from_utf8(sw).unwrap();
+    let right = str::from_utf8(&sw).unwrap();
     assert_eq!(left, right);
 }

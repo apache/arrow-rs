@@ -32,6 +32,7 @@ use crate::file::reader::{FilePageIterator, FileReader};
 mod builder;
 mod byte_array;
 mod byte_array_dictionary;
+mod byte_view_array;
 mod empty_array;
 mod fixed_len_byte_array;
 mod fixed_size_list_array;
@@ -46,8 +47,9 @@ mod test_util;
 
 pub use builder::build_array_reader;
 pub use byte_array::make_byte_array_reader;
-pub use byte_array::make_byte_view_array_reader;
 pub use byte_array_dictionary::make_byte_array_dictionary_reader;
+#[allow(unused_imports)] // Only used for benchmarks
+pub use byte_view_array::make_byte_view_array_reader;
 #[allow(unused_imports)] // Only used for benchmarks
 pub use fixed_len_byte_array::make_fixed_len_byte_array_reader;
 pub use fixed_size_list_array::FixedSizeListArrayReader;
@@ -59,12 +61,16 @@ pub use struct_array::StructArrayReader;
 
 /// Array reader reads parquet data into arrow array.
 pub trait ArrayReader: Send {
+    // TODO: this function is never used, and the trait is not public. Perhaps this should be
+    // removed.
+    #[allow(dead_code)]
     fn as_any(&self) -> &dyn Any;
 
     /// Returns the arrow type of this array reader.
     fn get_data_type(&self) -> &ArrowType;
 
     /// Reads at most `batch_size` records into an arrow array and return it.
+    #[cfg(any(feature = "experimental", test))]
     fn next_batch(&mut self, batch_size: usize) -> Result<ArrayRef> {
         self.read_records(batch_size)?;
         self.consume_batch()

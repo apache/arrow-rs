@@ -33,7 +33,7 @@ use crate::data_type::private::ParquetValueType;
 use crate::data_type::*;
 use crate::encodings::levels::LevelEncoder;
 use crate::errors::{ParquetError, Result};
-use crate::file::metadata::{ColumnIndexBuilder, OffsetIndexBuilder};
+use crate::file::metadata::{ColumnIndexBuilder, LevelHistogram, OffsetIndexBuilder};
 use crate::file::properties::EnabledStatistics;
 use crate::file::statistics::{Statistics, ValueStatistics};
 use crate::file::{
@@ -72,7 +72,13 @@ pub enum ColumnWriter<'a> {
 }
 
 impl<'a> ColumnWriter<'a> {
-    /// Returns the estimated total bytes for this column writer
+    /// Returns the estimated total memory usage
+    #[cfg(feature = "arrow")]
+    pub(crate) fn memory_size(&self) -> usize {
+        downcast_writer!(self, typed, typed.memory_size())
+    }
+
+    /// Returns the estimated total encoded bytes for this column writer
     #[cfg(feature = "arrow")]
     pub(crate) fn get_estimated_total_bytes(&self) -> u64 {
         downcast_writer!(self, typed, typed.get_estimated_total_bytes())
@@ -183,10 +189,59 @@ struct PageMetrics {
     num_buffered_values: u32,
     num_buffered_rows: u32,
     num_page_nulls: u64,
+    repetition_level_histogram: Option<LevelHistogram>,
+    definition_level_histogram: Option<LevelHistogram>,
+}
+
+impl PageMetrics {
+    fn new() -> Self {
+        Default::default()
+    }
+
+    /// Initialize the repetition level histogram
+    fn with_repetition_level_histogram(mut self, max_level: i16) -> Self {
+        self.repetition_level_histogram = LevelHistogram::try_new(max_level);
+        self
+    }
+
+    /// Initialize the definition level histogram
+    fn with_definition_level_histogram(mut self, max_level: i16) -> Self {
+        self.definition_level_histogram = LevelHistogram::try_new(max_level);
+        self
+    }
+
+    /// Resets the state of this `PageMetrics` to the initial state.
+    /// If histograms have been initialized their contents will be reset to zero.
+    fn new_page(&mut self) {
+        self.num_buffered_values = 0;
+        self.num_buffered_rows = 0;
+        self.num_page_nulls = 0;
+        self.repetition_level_histogram
+            .as_mut()
+            .map(LevelHistogram::reset);
+        self.definition_level_histogram
+            .as_mut()
+            .map(LevelHistogram::reset);
+    }
+
+    /// Updates histogram values using provided repetition levels
+    fn update_repetition_level_histogram(&mut self, levels: &[i16]) {
+        if let Some(ref mut rep_hist) = self.repetition_level_histogram {
+            rep_hist.update_from_levels(levels);
+        }
+    }
+
+    /// Updates histogram values using provided definition levels
+    fn update_definition_level_histogram(&mut self, levels: &[i16]) {
+        if let Some(ref mut def_hist) = self.definition_level_histogram {
+            def_hist.update_from_levels(levels);
+        }
+    }
 }
 
 // Metrics per column writer
-struct ColumnMetrics<T> {
+#[derive(Default)]
+struct ColumnMetrics<T: Default> {
     total_bytes_written: u64,
     total_rows_written: u64,
     total_uncompressed_size: u64,
@@ -198,6 +253,57 @@ struct ColumnMetrics<T> {
     max_column_value: Option<T>,
     num_column_nulls: u64,
     column_distinct_count: Option<u64>,
+    variable_length_bytes: Option<i64>,
+    repetition_level_histogram: Option<LevelHistogram>,
+    definition_level_histogram: Option<LevelHistogram>,
+}
+
+impl<T: Default> ColumnMetrics<T> {
+    fn new() -> Self {
+        Default::default()
+    }
+
+    /// Initialize the repetition level histogram
+    fn with_repetition_level_histogram(mut self, max_level: i16) -> Self {
+        self.repetition_level_histogram = LevelHistogram::try_new(max_level);
+        self
+    }
+
+    /// Initialize the definition level histogram
+    fn with_definition_level_histogram(mut self, max_level: i16) -> Self {
+        self.definition_level_histogram = LevelHistogram::try_new(max_level);
+        self
+    }
+
+    /// Sum `page_histogram` into `chunk_histogram`
+    fn update_histogram(
+        chunk_histogram: &mut Option<LevelHistogram>,
+        page_histogram: &Option<LevelHistogram>,
+    ) {
+        if let (Some(page_hist), Some(chunk_hist)) = (page_histogram, chunk_histogram) {
+            chunk_hist.add(page_hist);
+        }
+    }
+
+    /// Sum the provided PageMetrics histograms into the chunk histograms. Does nothing if
+    /// page histograms are not initialized.
+    fn update_from_page_metrics(&mut self, page_metrics: &PageMetrics) {
+        ColumnMetrics::<T>::update_histogram(
+            &mut self.definition_level_histogram,
+            &page_metrics.definition_level_histogram,
+        );
+        ColumnMetrics::<T>::update_histogram(
+            &mut self.repetition_level_histogram,
+            &page_metrics.repetition_level_histogram,
+        );
+    }
+
+    /// Sum the provided page variable_length_bytes into the chunk variable_length_bytes
+    fn update_variable_length_bytes(&mut self, variable_length_bytes: Option<i64>) {
+        if let Some(var_bytes) = variable_length_bytes {
+            *self.variable_length_bytes.get_or_insert(0) += var_bytes;
+        }
+    }
 }
 
 /// Typed column writer for a primitive column.
@@ -254,6 +360,25 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         // Used for level information
         encodings.insert(Encoding::RLE);
 
+        let mut page_metrics = PageMetrics::new();
+        let mut column_metrics = ColumnMetrics::<E::T>::new();
+
+        // Initialize level histograms if collecting page or chunk statistics
+        if statistics_enabled != EnabledStatistics::None {
+            page_metrics = page_metrics
+                .with_repetition_level_histogram(descr.max_rep_level())
+                .with_definition_level_histogram(descr.max_def_level());
+            column_metrics = column_metrics
+                .with_repetition_level_histogram(descr.max_rep_level())
+                .with_definition_level_histogram(descr.max_def_level())
+        }
+
+        // Disable column_index_builder if not collecting page statistics.
+        let mut column_index_builder = ColumnIndexBuilder::new();
+        if statistics_enabled != EnabledStatistics::Page {
+            column_index_builder.to_invalid()
+        }
+
         Self {
             descr,
             props,
@@ -265,25 +390,9 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
             def_levels_sink: vec![],
             rep_levels_sink: vec![],
             data_pages: VecDeque::new(),
-            page_metrics: PageMetrics {
-                num_buffered_values: 0,
-                num_buffered_rows: 0,
-                num_page_nulls: 0,
-            },
-            column_metrics: ColumnMetrics {
-                total_bytes_written: 0,
-                total_rows_written: 0,
-                total_uncompressed_size: 0,
-                total_compressed_size: 0,
-                total_num_values: 0,
-                dictionary_page_offset: None,
-                data_page_offset: None,
-                min_column_value: None,
-                max_column_value: None,
-                num_column_nulls: 0,
-                column_distinct_count: None,
-            },
-            column_index_builder: ColumnIndexBuilder::new(),
+            page_metrics,
+            column_metrics,
+            column_index_builder,
             offset_index_builder: OffsetIndexBuilder::new(),
             encodings,
             data_page_boundary_ascending: true,
@@ -419,6 +528,15 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         )
     }
 
+    /// Returns the estimated total memory usage.
+    ///
+    /// Unlike [`Self::get_estimated_total_bytes`] this is an estimate
+    /// of the current memory usage and not the final anticipated encoded size.
+    #[cfg(feature = "arrow")]
+    pub(crate) fn memory_size(&self) -> usize {
+        self.column_metrics.total_bytes_written as usize + self.encoder.estimated_memory_size()
+    }
+
     /// Returns total number of bytes written by this column writer so far.
     /// This value is also returned when column writer is closed.
     ///
@@ -428,10 +546,11 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         self.column_metrics.total_bytes_written
     }
 
-    /// Returns the estimated total bytes for this column writer
+    /// Returns the estimated total encoded bytes for this column writer.
     ///
     /// Unlike [`Self::get_total_bytes_written`] this includes an estimate
-    /// of any data that has not yet been flushed to a page
+    /// of any data that has not yet been flushed to a page, based on it's
+    /// anticipated encoded size.
     #[cfg(feature = "arrow")]
     pub(crate) fn get_estimated_total_bytes(&self) -> u64 {
         self.column_metrics.total_bytes_written
@@ -460,7 +579,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
             self.write_dictionary_page()?;
         }
         self.flush_data_pages()?;
-        let metadata = self.write_column_metadata()?;
+        let metadata = self.build_column_metadata()?;
         self.page_writer.close()?;
 
         let boundary_order = match (
@@ -522,6 +641,9 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
                 }
             }
 
+            // Update histogram
+            self.page_metrics.update_definition_level_histogram(levels);
+
             self.def_levels_sink.extend_from_slice(levels);
             values_to_write
         } else {
@@ -549,6 +671,9 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
             for &level in levels {
                 self.page_metrics.num_buffered_rows += (level == 0) as u32
             }
+
+            // Update histogram
+            self.page_metrics.update_repetition_level_histogram(levels);
 
             self.rep_levels_sink.extend_from_slice(levels);
         } else {
@@ -618,7 +743,11 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
     }
 
     /// Update the column index and offset index when adding the data page
-    fn update_column_offset_index(&mut self, page_statistics: Option<&ValueStatistics<E::T>>) {
+    fn update_column_offset_index(
+        &mut self,
+        page_statistics: Option<&ValueStatistics<E::T>>,
+        page_variable_length_bytes: Option<i64>,
+    ) {
         // update the column index
         let null_page =
             (self.page_metrics.num_buffered_rows as u64) == self.page_metrics.num_page_nulls;
@@ -627,8 +756,8 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         if null_page && self.column_index_builder.valid() {
             self.column_index_builder.append(
                 null_page,
-                vec![0; 1],
-                vec![0; 1],
+                vec![],
+                vec![],
                 self.page_metrics.num_page_nulls as i64,
             );
         } else if self.column_index_builder.valid() {
@@ -640,8 +769,8 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
                 }
                 Some(stat) => {
                     // Check if min/max are still ascending/descending across pages
-                    let new_min = stat.min();
-                    let new_max = stat.max();
+                    let new_min = stat.min_opt().unwrap();
+                    let new_max = stat.max_opt().unwrap();
                     if let Some((last_min, last_max)) = &self.last_non_null_data_page_min_max {
                         if self.data_page_boundary_ascending {
                             // If last min/max are greater than new min/max then not ascending anymore
@@ -668,12 +797,12 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
                             null_page,
                             self.truncate_min_value(
                                 self.props.column_index_truncate_length(),
-                                stat.min_bytes(),
+                                stat.min_bytes_opt().unwrap(),
                             )
                             .0,
                             self.truncate_max_value(
                                 self.props.column_index_truncate_length(),
-                                stat.max_bytes(),
+                                stat.max_bytes_opt().unwrap(),
                             )
                             .0,
                             self.page_metrics.num_page_nulls as i64,
@@ -681,17 +810,27 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
                     } else {
                         self.column_index_builder.append(
                             null_page,
-                            stat.min_bytes().to_vec(),
-                            stat.max_bytes().to_vec(),
+                            stat.min_bytes_opt().unwrap().to_vec(),
+                            stat.max_bytes_opt().unwrap().to_vec(),
                             self.page_metrics.num_page_nulls as i64,
                         );
                     }
                 }
             }
         }
-        // update the offset index
+
+        // Append page histograms to the `ColumnIndex` histograms
+        self.column_index_builder.append_histograms(
+            &self.page_metrics.repetition_level_histogram,
+            &self.page_metrics.definition_level_histogram,
+        );
+
+        // Update the offset index
         self.offset_index_builder
             .append_row_count(self.page_metrics.num_buffered_rows as i64);
+
+        self.offset_index_builder
+            .append_unencoded_byte_array_data_bytes(page_variable_length_bytes);
     }
 
     /// Determine if we should allow truncating min/max values for this column's statistics
@@ -758,7 +897,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
                         Some(min),
                         Some(max),
                         None,
-                        self.page_metrics.num_page_nulls,
+                        Some(self.page_metrics.num_page_nulls),
                         false,
                     ),
                 )
@@ -767,7 +906,17 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         };
 
         // update column and offset index
-        self.update_column_offset_index(page_statistics.as_ref());
+        self.update_column_offset_index(
+            page_statistics.as_ref(),
+            values_data.variable_length_bytes,
+        );
+
+        // Update histograms and variable_length_bytes in column_metrics
+        self.column_metrics
+            .update_from_page_metrics(&self.page_metrics);
+        self.column_metrics
+            .update_variable_length_bytes(values_data.variable_length_bytes);
+
         let page_statistics = page_statistics.map(Statistics::from);
 
         let compressed_page = match self.props.writer_version() {
@@ -871,7 +1020,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         // Reset state.
         self.rep_levels_sink.clear();
         self.def_levels_sink.clear();
-        self.page_metrics = PageMetrics::default();
+        self.page_metrics.new_page();
 
         Ok(())
     }
@@ -892,8 +1041,8 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         Ok(())
     }
 
-    /// Assembles and writes column chunk metadata.
-    fn write_column_metadata(&mut self) -> Result<ColumnChunkMetaData> {
+    /// Assembles column chunk metadata.
+    fn build_column_metadata(&mut self) -> Result<ColumnChunkMetaData> {
         let total_compressed_size = self.column_metrics.total_compressed_size as i64;
         let total_uncompressed_size = self.column_metrics.total_uncompressed_size as i64;
         let num_values = self.column_metrics.total_num_values as i64;
@@ -901,15 +1050,9 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         // If data page offset is not set, then no pages have been written
         let data_page_offset = self.column_metrics.data_page_offset.unwrap_or(0) as i64;
 
-        let file_offset = match dict_page_offset {
-            Some(dict_offset) => dict_offset + total_compressed_size,
-            None => data_page_offset + total_compressed_size,
-        };
-
         let mut builder = ColumnChunkMetaData::builder(self.descr.clone())
             .set_compression(self.codec)
             .set_encodings(self.encodings.iter().cloned().collect())
-            .set_file_offset(file_offset)
             .set_total_compressed_size(total_compressed_size)
             .set_total_uncompressed_size(total_uncompressed_size)
             .set_num_values(num_values)
@@ -923,28 +1066,28 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
                 self.column_metrics.min_column_value.clone(),
                 self.column_metrics.max_column_value.clone(),
                 self.column_metrics.column_distinct_count,
-                self.column_metrics.num_column_nulls,
+                Some(self.column_metrics.num_column_nulls),
                 false,
             )
             .with_backwards_compatible_min_max(backwards_compatible_min_max)
             .into();
 
             let statistics = match statistics {
-                Statistics::ByteArray(stats) if stats.has_min_max_set() => {
+                Statistics::ByteArray(stats) if stats._internal_has_min_max_set() => {
                     let (min, did_truncate_min) = self.truncate_min_value(
                         self.props.statistics_truncate_length(),
-                        stats.min_bytes(),
+                        stats.min_bytes_opt().unwrap(),
                     );
                     let (max, did_truncate_max) = self.truncate_max_value(
                         self.props.statistics_truncate_length(),
-                        stats.max_bytes(),
+                        stats.max_bytes_opt().unwrap(),
                     );
                     Statistics::ByteArray(
                         ValueStatistics::new(
                             Some(min.into()),
                             Some(max.into()),
                             stats.distinct_count(),
-                            stats.null_count(),
+                            stats.null_count_opt(),
                             backwards_compatible_min_max,
                         )
                         .with_max_is_exact(!did_truncate_max)
@@ -952,22 +1095,22 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
                     )
                 }
                 Statistics::FixedLenByteArray(stats)
-                    if (stats.has_min_max_set() && self.can_truncate_value()) =>
+                    if (stats._internal_has_min_max_set() && self.can_truncate_value()) =>
                 {
                     let (min, did_truncate_min) = self.truncate_min_value(
                         self.props.statistics_truncate_length(),
-                        stats.min_bytes(),
+                        stats.min_bytes_opt().unwrap(),
                     );
                     let (max, did_truncate_max) = self.truncate_max_value(
                         self.props.statistics_truncate_length(),
-                        stats.max_bytes(),
+                        stats.max_bytes_opt().unwrap(),
                     );
                     Statistics::FixedLenByteArray(
                         ValueStatistics::new(
                             Some(min.into()),
                             Some(max.into()),
                             stats.distinct_count(),
-                            stats.null_count(),
+                            stats.null_count_opt(),
                             backwards_compatible_min_max,
                         )
                         .with_max_is_exact(!did_truncate_max)
@@ -977,12 +1120,18 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
                 stats => stats,
             };
 
-            builder = builder.set_statistics(statistics);
+            builder = builder
+                .set_statistics(statistics)
+                .set_unencoded_byte_array_data_bytes(self.column_metrics.variable_length_bytes)
+                .set_repetition_level_histogram(
+                    self.column_metrics.repetition_level_histogram.take(),
+                )
+                .set_definition_level_histogram(
+                    self.column_metrics.definition_level_histogram.take(),
+                );
         }
 
         let metadata = builder.build()?;
-        self.page_writer.write_metadata(&metadata)?;
-
         Ok(metadata)
     }
 
@@ -1692,12 +1841,11 @@ mod tests {
         assert_eq!(metadata.data_page_offset(), 0);
         assert_eq!(metadata.dictionary_page_offset(), Some(0));
         if let Some(stats) = metadata.statistics() {
-            assert!(stats.has_min_max_set());
-            assert_eq!(stats.null_count(), 0);
-            assert_eq!(stats.distinct_count(), None);
+            assert_eq!(stats.null_count_opt(), Some(0));
+            assert_eq!(stats.distinct_count_opt(), None);
             if let Statistics::Int32(stats) = stats {
-                assert_eq!(stats.min(), &1);
-                assert_eq!(stats.max(), &4);
+                assert_eq!(stats.min_opt().unwrap(), &1);
+                assert_eq!(stats.max_opt().unwrap(), &4);
             } else {
                 panic!("expecting Statistics::Int32");
             }
@@ -1737,17 +1885,16 @@ mod tests {
             .unwrap();
         let metadata = writer.close().unwrap().metadata;
         if let Some(stats) = metadata.statistics() {
-            assert!(stats.has_min_max_set());
             if let Statistics::ByteArray(stats) = stats {
                 assert_eq!(
-                    stats.min(),
+                    stats.min_opt().unwrap(),
                     &ByteArray::from(vec![
                         255u8, 255u8, 255u8, 255u8, 255u8, 255u8, 255u8, 255u8, 179u8, 172u8, 19u8,
                         35u8, 231u8, 90u8, 0u8, 0u8,
                     ])
                 );
                 assert_eq!(
-                    stats.max(),
+                    stats.max_opt().unwrap(),
                     &ByteArray::from(vec![
                         0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 41u8, 162u8, 36u8, 26u8, 246u8,
                         44u8, 0u8, 0u8,
@@ -1774,10 +1921,9 @@ mod tests {
         writer.write_batch(&[0, 1, 2, 3, 4, 5], None, None).unwrap();
         let metadata = writer.close().unwrap().metadata;
         if let Some(stats) = metadata.statistics() {
-            assert!(stats.has_min_max_set());
             if let Statistics::Int32(stats) = stats {
-                assert_eq!(stats.min(), &0,);
-                assert_eq!(stats.max(), &5,);
+                assert_eq!(stats.min_opt().unwrap(), &0,);
+                assert_eq!(stats.max_opt().unwrap(), &5,);
             } else {
                 panic!("expecting Statistics::Int32");
             }
@@ -1821,12 +1967,11 @@ mod tests {
         assert_eq!(metadata.data_page_offset(), 0);
         assert_eq!(metadata.dictionary_page_offset(), Some(0));
         if let Some(stats) = metadata.statistics() {
-            assert!(stats.has_min_max_set());
-            assert_eq!(stats.null_count(), 0);
-            assert_eq!(stats.distinct_count().unwrap_or(0), 55);
+            assert_eq!(stats.null_count_opt(), Some(0));
+            assert_eq!(stats.distinct_count_opt().unwrap_or(0), 55);
             if let Statistics::Int32(stats) = stats {
-                assert_eq!(stats.min(), &-17);
-                assert_eq!(stats.max(), &9000);
+                assert_eq!(stats.min_opt().unwrap(), &-17);
+                assert_eq!(stats.max_opt().unwrap(), &9000);
             } else {
                 panic!("expecting Statistics::Int32");
             }
@@ -1851,10 +1996,10 @@ mod tests {
         let r = writer.close().unwrap();
 
         let stats = r.metadata.statistics().unwrap();
-        assert_eq!(stats.min_bytes(), 1_i32.to_le_bytes());
-        assert_eq!(stats.max_bytes(), 7_i32.to_le_bytes());
-        assert_eq!(stats.null_count(), 0);
-        assert!(stats.distinct_count().is_none());
+        assert_eq!(stats.min_bytes_opt().unwrap(), 1_i32.to_le_bytes());
+        assert_eq!(stats.max_bytes_opt().unwrap(), 7_i32.to_le_bytes());
+        assert_eq!(stats.null_count_opt(), Some(0));
+        assert!(stats.distinct_count_opt().is_none());
 
         drop(write);
 
@@ -1877,10 +2022,16 @@ mod tests {
         assert_eq!(pages[1].page_type(), PageType::DATA_PAGE);
 
         let page_statistics = pages[1].statistics().unwrap();
-        assert_eq!(page_statistics.min_bytes(), 1_i32.to_le_bytes());
-        assert_eq!(page_statistics.max_bytes(), 7_i32.to_le_bytes());
-        assert_eq!(page_statistics.null_count(), 0);
-        assert!(page_statistics.distinct_count().is_none());
+        assert_eq!(
+            page_statistics.min_bytes_opt().unwrap(),
+            1_i32.to_le_bytes()
+        );
+        assert_eq!(
+            page_statistics.max_bytes_opt().unwrap(),
+            7_i32.to_le_bytes()
+        );
+        assert_eq!(page_statistics.null_count_opt(), Some(0));
+        assert!(page_statistics.distinct_count_opt().is_none());
     }
 
     #[test]
@@ -2068,13 +2219,12 @@ mod tests {
     #[test]
     fn test_bool_statistics() {
         let stats = statistics_roundtrip::<BoolType>(&[true, false, false, true]);
-        assert!(stats.has_min_max_set());
         // Booleans have an unsigned sort order and so are not compatible
         // with the deprecated `min` and `max` statistics
         assert!(!stats.is_min_max_backwards_compatible());
         if let Statistics::Boolean(stats) = stats {
-            assert_eq!(stats.min(), &false);
-            assert_eq!(stats.max(), &true);
+            assert_eq!(stats.min_opt().unwrap(), &false);
+            assert_eq!(stats.max_opt().unwrap(), &true);
         } else {
             panic!("expecting Statistics::Boolean, got {stats:?}");
         }
@@ -2083,11 +2233,10 @@ mod tests {
     #[test]
     fn test_int32_statistics() {
         let stats = statistics_roundtrip::<Int32Type>(&[-1, 3, -2, 2]);
-        assert!(stats.has_min_max_set());
         assert!(stats.is_min_max_backwards_compatible());
         if let Statistics::Int32(stats) = stats {
-            assert_eq!(stats.min(), &-2);
-            assert_eq!(stats.max(), &3);
+            assert_eq!(stats.min_opt().unwrap(), &-2);
+            assert_eq!(stats.max_opt().unwrap(), &3);
         } else {
             panic!("expecting Statistics::Int32, got {stats:?}");
         }
@@ -2096,11 +2245,10 @@ mod tests {
     #[test]
     fn test_int64_statistics() {
         let stats = statistics_roundtrip::<Int64Type>(&[-1, 3, -2, 2]);
-        assert!(stats.has_min_max_set());
         assert!(stats.is_min_max_backwards_compatible());
         if let Statistics::Int64(stats) = stats {
-            assert_eq!(stats.min(), &-2);
-            assert_eq!(stats.max(), &3);
+            assert_eq!(stats.min_opt().unwrap(), &-2);
+            assert_eq!(stats.max_opt().unwrap(), &3);
         } else {
             panic!("expecting Statistics::Int64, got {stats:?}");
         }
@@ -2118,11 +2266,10 @@ mod tests {
         .collect::<Vec<Int96>>();
 
         let stats = statistics_roundtrip::<Int96Type>(&input);
-        assert!(stats.has_min_max_set());
         assert!(!stats.is_min_max_backwards_compatible());
         if let Statistics::Int96(stats) = stats {
-            assert_eq!(stats.min(), &Int96::from(vec![0, 20, 30]));
-            assert_eq!(stats.max(), &Int96::from(vec![3, 20, 10]));
+            assert_eq!(stats.min_opt().unwrap(), &Int96::from(vec![0, 20, 30]));
+            assert_eq!(stats.max_opt().unwrap(), &Int96::from(vec![3, 20, 10]));
         } else {
             panic!("expecting Statistics::Int96, got {stats:?}");
         }
@@ -2131,11 +2278,10 @@ mod tests {
     #[test]
     fn test_float_statistics() {
         let stats = statistics_roundtrip::<FloatType>(&[-1.0, 3.0, -2.0, 2.0]);
-        assert!(stats.has_min_max_set());
         assert!(stats.is_min_max_backwards_compatible());
         if let Statistics::Float(stats) = stats {
-            assert_eq!(stats.min(), &-2.0);
-            assert_eq!(stats.max(), &3.0);
+            assert_eq!(stats.min_opt().unwrap(), &-2.0);
+            assert_eq!(stats.max_opt().unwrap(), &3.0);
         } else {
             panic!("expecting Statistics::Float, got {stats:?}");
         }
@@ -2144,11 +2290,10 @@ mod tests {
     #[test]
     fn test_double_statistics() {
         let stats = statistics_roundtrip::<DoubleType>(&[-1.0, 3.0, -2.0, 2.0]);
-        assert!(stats.has_min_max_set());
         assert!(stats.is_min_max_backwards_compatible());
         if let Statistics::Double(stats) = stats {
-            assert_eq!(stats.min(), &-2.0);
-            assert_eq!(stats.max(), &3.0);
+            assert_eq!(stats.min_opt().unwrap(), &-2.0);
+            assert_eq!(stats.max_opt().unwrap(), &3.0);
         } else {
             panic!("expecting Statistics::Double, got {stats:?}");
         }
@@ -2163,10 +2308,9 @@ mod tests {
 
         let stats = statistics_roundtrip::<ByteArrayType>(&input);
         assert!(!stats.is_min_max_backwards_compatible());
-        assert!(stats.has_min_max_set());
         if let Statistics::ByteArray(stats) = stats {
-            assert_eq!(stats.min(), &ByteArray::from("aaw"));
-            assert_eq!(stats.max(), &ByteArray::from("zz"));
+            assert_eq!(stats.min_opt().unwrap(), &ByteArray::from("aaw"));
+            assert_eq!(stats.max_opt().unwrap(), &ByteArray::from("zz"));
         } else {
             panic!("expecting Statistics::ByteArray, got {stats:?}");
         }
@@ -2180,13 +2324,12 @@ mod tests {
             .collect::<Vec<_>>();
 
         let stats = statistics_roundtrip::<FixedLenByteArrayType>(&input);
-        assert!(stats.has_min_max_set());
         assert!(!stats.is_min_max_backwards_compatible());
         if let Statistics::FixedLenByteArray(stats) = stats {
             let expected_min: FixedLenByteArray = ByteArray::from("aaw  ").into();
-            assert_eq!(stats.min(), &expected_min);
+            assert_eq!(stats.min_opt().unwrap(), &expected_min);
             let expected_max: FixedLenByteArray = ByteArray::from("zz   ").into();
-            assert_eq!(stats.max(), &expected_max);
+            assert_eq!(stats.max_opt().unwrap(), &expected_max);
         } else {
             panic!("expecting Statistics::FixedLenByteArray, got {stats:?}");
         }
@@ -2205,10 +2348,15 @@ mod tests {
         .collect::<Vec<_>>();
 
         let stats = float16_statistics_roundtrip(&input);
-        assert!(stats.has_min_max_set());
         assert!(stats.is_min_max_backwards_compatible());
-        assert_eq!(stats.min(), &ByteArray::from(-f16::from_f32(2.0)));
-        assert_eq!(stats.max(), &ByteArray::from(f16::from_f32(3.0)));
+        assert_eq!(
+            stats.min_opt().unwrap(),
+            &ByteArray::from(-f16::from_f32(2.0))
+        );
+        assert_eq!(
+            stats.max_opt().unwrap(),
+            &ByteArray::from(f16::from_f32(3.0))
+        );
     }
 
     #[test]
@@ -2219,10 +2367,12 @@ mod tests {
             .collect::<Vec<_>>();
 
         let stats = float16_statistics_roundtrip(&input);
-        assert!(stats.has_min_max_set());
         assert!(stats.is_min_max_backwards_compatible());
-        assert_eq!(stats.min(), &ByteArray::from(f16::ONE));
-        assert_eq!(stats.max(), &ByteArray::from(f16::ONE + f16::ONE));
+        assert_eq!(stats.min_opt().unwrap(), &ByteArray::from(f16::ONE));
+        assert_eq!(
+            stats.max_opt().unwrap(),
+            &ByteArray::from(f16::ONE + f16::ONE)
+        );
     }
 
     #[test]
@@ -2233,10 +2383,12 @@ mod tests {
             .collect::<Vec<_>>();
 
         let stats = float16_statistics_roundtrip(&input);
-        assert!(stats.has_min_max_set());
         assert!(stats.is_min_max_backwards_compatible());
-        assert_eq!(stats.min(), &ByteArray::from(f16::ONE));
-        assert_eq!(stats.max(), &ByteArray::from(f16::ONE + f16::ONE));
+        assert_eq!(stats.min_opt().unwrap(), &ByteArray::from(f16::ONE));
+        assert_eq!(
+            stats.max_opt().unwrap(),
+            &ByteArray::from(f16::ONE + f16::ONE)
+        );
     }
 
     #[test]
@@ -2247,10 +2399,12 @@ mod tests {
             .collect::<Vec<_>>();
 
         let stats = float16_statistics_roundtrip(&input);
-        assert!(stats.has_min_max_set());
         assert!(stats.is_min_max_backwards_compatible());
-        assert_eq!(stats.min(), &ByteArray::from(f16::ONE));
-        assert_eq!(stats.max(), &ByteArray::from(f16::ONE + f16::ONE));
+        assert_eq!(stats.min_opt().unwrap(), &ByteArray::from(f16::ONE));
+        assert_eq!(
+            stats.max_opt().unwrap(),
+            &ByteArray::from(f16::ONE + f16::ONE)
+        );
     }
 
     #[test]
@@ -2261,7 +2415,8 @@ mod tests {
             .collect::<Vec<_>>();
 
         let stats = float16_statistics_roundtrip(&input);
-        assert!(!stats.has_min_max_set());
+        assert!(stats.min_bytes_opt().is_none());
+        assert!(stats.max_bytes_opt().is_none());
         assert!(stats.is_min_max_backwards_compatible());
     }
 
@@ -2273,10 +2428,9 @@ mod tests {
             .collect::<Vec<_>>();
 
         let stats = float16_statistics_roundtrip(&input);
-        assert!(stats.has_min_max_set());
         assert!(stats.is_min_max_backwards_compatible());
-        assert_eq!(stats.min(), &ByteArray::from(f16::NEG_ZERO));
-        assert_eq!(stats.max(), &ByteArray::from(f16::ZERO));
+        assert_eq!(stats.min_opt().unwrap(), &ByteArray::from(f16::NEG_ZERO));
+        assert_eq!(stats.max_opt().unwrap(), &ByteArray::from(f16::ZERO));
     }
 
     #[test]
@@ -2287,10 +2441,9 @@ mod tests {
             .collect::<Vec<_>>();
 
         let stats = float16_statistics_roundtrip(&input);
-        assert!(stats.has_min_max_set());
         assert!(stats.is_min_max_backwards_compatible());
-        assert_eq!(stats.min(), &ByteArray::from(f16::NEG_ZERO));
-        assert_eq!(stats.max(), &ByteArray::from(f16::ZERO));
+        assert_eq!(stats.min_opt().unwrap(), &ByteArray::from(f16::NEG_ZERO));
+        assert_eq!(stats.max_opt().unwrap(), &ByteArray::from(f16::ZERO));
     }
 
     #[test]
@@ -2301,10 +2454,9 @@ mod tests {
             .collect::<Vec<_>>();
 
         let stats = float16_statistics_roundtrip(&input);
-        assert!(stats.has_min_max_set());
         assert!(stats.is_min_max_backwards_compatible());
-        assert_eq!(stats.min(), &ByteArray::from(f16::NEG_ZERO));
-        assert_eq!(stats.max(), &ByteArray::from(f16::PI));
+        assert_eq!(stats.min_opt().unwrap(), &ByteArray::from(f16::NEG_ZERO));
+        assert_eq!(stats.max_opt().unwrap(), &ByteArray::from(f16::PI));
     }
 
     #[test]
@@ -2315,20 +2467,18 @@ mod tests {
             .collect::<Vec<_>>();
 
         let stats = float16_statistics_roundtrip(&input);
-        assert!(stats.has_min_max_set());
         assert!(stats.is_min_max_backwards_compatible());
-        assert_eq!(stats.min(), &ByteArray::from(-f16::PI));
-        assert_eq!(stats.max(), &ByteArray::from(f16::ZERO));
+        assert_eq!(stats.min_opt().unwrap(), &ByteArray::from(-f16::PI));
+        assert_eq!(stats.max_opt().unwrap(), &ByteArray::from(f16::ZERO));
     }
 
     #[test]
     fn test_float_statistics_nan_middle() {
         let stats = statistics_roundtrip::<FloatType>(&[1.0, f32::NAN, 2.0]);
-        assert!(stats.has_min_max_set());
         assert!(stats.is_min_max_backwards_compatible());
         if let Statistics::Float(stats) = stats {
-            assert_eq!(stats.min(), &1.0);
-            assert_eq!(stats.max(), &2.0);
+            assert_eq!(stats.min_opt().unwrap(), &1.0);
+            assert_eq!(stats.max_opt().unwrap(), &2.0);
         } else {
             panic!("expecting Statistics::Float");
         }
@@ -2337,11 +2487,10 @@ mod tests {
     #[test]
     fn test_float_statistics_nan_start() {
         let stats = statistics_roundtrip::<FloatType>(&[f32::NAN, 1.0, 2.0]);
-        assert!(stats.has_min_max_set());
         assert!(stats.is_min_max_backwards_compatible());
         if let Statistics::Float(stats) = stats {
-            assert_eq!(stats.min(), &1.0);
-            assert_eq!(stats.max(), &2.0);
+            assert_eq!(stats.min_opt().unwrap(), &1.0);
+            assert_eq!(stats.max_opt().unwrap(), &2.0);
         } else {
             panic!("expecting Statistics::Float");
         }
@@ -2350,7 +2499,8 @@ mod tests {
     #[test]
     fn test_float_statistics_nan_only() {
         let stats = statistics_roundtrip::<FloatType>(&[f32::NAN, f32::NAN]);
-        assert!(!stats.has_min_max_set());
+        assert!(stats.min_bytes_opt().is_none());
+        assert!(stats.max_bytes_opt().is_none());
         assert!(stats.is_min_max_backwards_compatible());
         assert!(matches!(stats, Statistics::Float(_)));
     }
@@ -2358,13 +2508,12 @@ mod tests {
     #[test]
     fn test_float_statistics_zero_only() {
         let stats = statistics_roundtrip::<FloatType>(&[0.0]);
-        assert!(stats.has_min_max_set());
         assert!(stats.is_min_max_backwards_compatible());
         if let Statistics::Float(stats) = stats {
-            assert_eq!(stats.min(), &-0.0);
-            assert!(stats.min().is_sign_negative());
-            assert_eq!(stats.max(), &0.0);
-            assert!(stats.max().is_sign_positive());
+            assert_eq!(stats.min_opt().unwrap(), &-0.0);
+            assert!(stats.min_opt().unwrap().is_sign_negative());
+            assert_eq!(stats.max_opt().unwrap(), &0.0);
+            assert!(stats.max_opt().unwrap().is_sign_positive());
         } else {
             panic!("expecting Statistics::Float");
         }
@@ -2373,13 +2522,12 @@ mod tests {
     #[test]
     fn test_float_statistics_neg_zero_only() {
         let stats = statistics_roundtrip::<FloatType>(&[-0.0]);
-        assert!(stats.has_min_max_set());
         assert!(stats.is_min_max_backwards_compatible());
         if let Statistics::Float(stats) = stats {
-            assert_eq!(stats.min(), &-0.0);
-            assert!(stats.min().is_sign_negative());
-            assert_eq!(stats.max(), &0.0);
-            assert!(stats.max().is_sign_positive());
+            assert_eq!(stats.min_opt().unwrap(), &-0.0);
+            assert!(stats.min_opt().unwrap().is_sign_negative());
+            assert_eq!(stats.max_opt().unwrap(), &0.0);
+            assert!(stats.max_opt().unwrap().is_sign_positive());
         } else {
             panic!("expecting Statistics::Float");
         }
@@ -2388,12 +2536,11 @@ mod tests {
     #[test]
     fn test_float_statistics_zero_min() {
         let stats = statistics_roundtrip::<FloatType>(&[0.0, 1.0, f32::NAN, 2.0]);
-        assert!(stats.has_min_max_set());
         assert!(stats.is_min_max_backwards_compatible());
         if let Statistics::Float(stats) = stats {
-            assert_eq!(stats.min(), &-0.0);
-            assert!(stats.min().is_sign_negative());
-            assert_eq!(stats.max(), &2.0);
+            assert_eq!(stats.min_opt().unwrap(), &-0.0);
+            assert!(stats.min_opt().unwrap().is_sign_negative());
+            assert_eq!(stats.max_opt().unwrap(), &2.0);
         } else {
             panic!("expecting Statistics::Float");
         }
@@ -2402,12 +2549,11 @@ mod tests {
     #[test]
     fn test_float_statistics_neg_zero_max() {
         let stats = statistics_roundtrip::<FloatType>(&[-0.0, -1.0, f32::NAN, -2.0]);
-        assert!(stats.has_min_max_set());
         assert!(stats.is_min_max_backwards_compatible());
         if let Statistics::Float(stats) = stats {
-            assert_eq!(stats.min(), &-2.0);
-            assert_eq!(stats.max(), &0.0);
-            assert!(stats.max().is_sign_positive());
+            assert_eq!(stats.min_opt().unwrap(), &-2.0);
+            assert_eq!(stats.max_opt().unwrap(), &0.0);
+            assert!(stats.max_opt().unwrap().is_sign_positive());
         } else {
             panic!("expecting Statistics::Float");
         }
@@ -2416,11 +2562,10 @@ mod tests {
     #[test]
     fn test_double_statistics_nan_middle() {
         let stats = statistics_roundtrip::<DoubleType>(&[1.0, f64::NAN, 2.0]);
-        assert!(stats.has_min_max_set());
         assert!(stats.is_min_max_backwards_compatible());
         if let Statistics::Double(stats) = stats {
-            assert_eq!(stats.min(), &1.0);
-            assert_eq!(stats.max(), &2.0);
+            assert_eq!(stats.min_opt().unwrap(), &1.0);
+            assert_eq!(stats.max_opt().unwrap(), &2.0);
         } else {
             panic!("expecting Statistics::Double");
         }
@@ -2429,11 +2574,10 @@ mod tests {
     #[test]
     fn test_double_statistics_nan_start() {
         let stats = statistics_roundtrip::<DoubleType>(&[f64::NAN, 1.0, 2.0]);
-        assert!(stats.has_min_max_set());
         assert!(stats.is_min_max_backwards_compatible());
         if let Statistics::Double(stats) = stats {
-            assert_eq!(stats.min(), &1.0);
-            assert_eq!(stats.max(), &2.0);
+            assert_eq!(stats.min_opt().unwrap(), &1.0);
+            assert_eq!(stats.max_opt().unwrap(), &2.0);
         } else {
             panic!("expecting Statistics::Double");
         }
@@ -2442,7 +2586,8 @@ mod tests {
     #[test]
     fn test_double_statistics_nan_only() {
         let stats = statistics_roundtrip::<DoubleType>(&[f64::NAN, f64::NAN]);
-        assert!(!stats.has_min_max_set());
+        assert!(stats.min_bytes_opt().is_none());
+        assert!(stats.max_bytes_opt().is_none());
         assert!(matches!(stats, Statistics::Double(_)));
         assert!(stats.is_min_max_backwards_compatible());
     }
@@ -2450,13 +2595,12 @@ mod tests {
     #[test]
     fn test_double_statistics_zero_only() {
         let stats = statistics_roundtrip::<DoubleType>(&[0.0]);
-        assert!(stats.has_min_max_set());
         assert!(stats.is_min_max_backwards_compatible());
         if let Statistics::Double(stats) = stats {
-            assert_eq!(stats.min(), &-0.0);
-            assert!(stats.min().is_sign_negative());
-            assert_eq!(stats.max(), &0.0);
-            assert!(stats.max().is_sign_positive());
+            assert_eq!(stats.min_opt().unwrap(), &-0.0);
+            assert!(stats.min_opt().unwrap().is_sign_negative());
+            assert_eq!(stats.max_opt().unwrap(), &0.0);
+            assert!(stats.max_opt().unwrap().is_sign_positive());
         } else {
             panic!("expecting Statistics::Double");
         }
@@ -2465,13 +2609,12 @@ mod tests {
     #[test]
     fn test_double_statistics_neg_zero_only() {
         let stats = statistics_roundtrip::<DoubleType>(&[-0.0]);
-        assert!(stats.has_min_max_set());
         assert!(stats.is_min_max_backwards_compatible());
         if let Statistics::Double(stats) = stats {
-            assert_eq!(stats.min(), &-0.0);
-            assert!(stats.min().is_sign_negative());
-            assert_eq!(stats.max(), &0.0);
-            assert!(stats.max().is_sign_positive());
+            assert_eq!(stats.min_opt().unwrap(), &-0.0);
+            assert!(stats.min_opt().unwrap().is_sign_negative());
+            assert_eq!(stats.max_opt().unwrap(), &0.0);
+            assert!(stats.max_opt().unwrap().is_sign_positive());
         } else {
             panic!("expecting Statistics::Double");
         }
@@ -2480,12 +2623,11 @@ mod tests {
     #[test]
     fn test_double_statistics_zero_min() {
         let stats = statistics_roundtrip::<DoubleType>(&[0.0, 1.0, f64::NAN, 2.0]);
-        assert!(stats.has_min_max_set());
         assert!(stats.is_min_max_backwards_compatible());
         if let Statistics::Double(stats) = stats {
-            assert_eq!(stats.min(), &-0.0);
-            assert!(stats.min().is_sign_negative());
-            assert_eq!(stats.max(), &2.0);
+            assert_eq!(stats.min_opt().unwrap(), &-0.0);
+            assert!(stats.min_opt().unwrap().is_sign_negative());
+            assert_eq!(stats.max_opt().unwrap(), &2.0);
         } else {
             panic!("expecting Statistics::Double");
         }
@@ -2494,12 +2636,11 @@ mod tests {
     #[test]
     fn test_double_statistics_neg_zero_max() {
         let stats = statistics_roundtrip::<DoubleType>(&[-0.0, -1.0, f64::NAN, -2.0]);
-        assert!(stats.has_min_max_set());
         assert!(stats.is_min_max_backwards_compatible());
         if let Statistics::Double(stats) = stats {
-            assert_eq!(stats.min(), &-2.0);
-            assert_eq!(stats.max(), &0.0);
-            assert!(stats.max().is_sign_positive());
+            assert_eq!(stats.min_opt().unwrap(), &-2.0);
+            assert_eq!(stats.max_opt().unwrap(), &0.0);
+            assert!(stats.max_opt().unwrap().is_sign_positive());
         } else {
             panic!("expecting Statistics::Double");
         }
@@ -2525,6 +2666,32 @@ mod tests {
             &[0u8,],
             &[255u8, 35u8, 0u8, 0u8,],
         ),);
+    }
+
+    #[test]
+    fn test_column_index_with_null_pages() {
+        // write a single page of all nulls
+        let page_writer = get_test_page_writer();
+        let props = Default::default();
+        let mut writer = get_test_column_writer::<Int32Type>(page_writer, 1, 0, props);
+        writer.write_batch(&[], Some(&[0, 0, 0, 0]), None).unwrap();
+
+        let r = writer.close().unwrap();
+        assert!(r.column_index.is_some());
+        let col_idx = r.column_index.unwrap();
+        // null_pages should be true for page 0
+        assert!(col_idx.null_pages[0]);
+        // min and max should be empty byte arrays
+        assert_eq!(col_idx.min_values[0].len(), 0);
+        assert_eq!(col_idx.max_values[0].len(), 0);
+        // null_counts should be defined and be 4 for page 0
+        assert!(col_idx.null_counts.is_some());
+        assert_eq!(col_idx.null_counts.as_ref().unwrap()[0], 4);
+        // there is no repetition so rep histogram should be absent
+        assert!(col_idx.repetition_level_histograms.is_none());
+        // definition_level_histogram should be present and should be 0:4, 1:0
+        assert!(col_idx.definition_level_histograms.is_some());
+        assert_eq!(col_idx.definition_level_histograms.unwrap(), &[4, 0]);
     }
 
     #[test]
@@ -2556,15 +2723,20 @@ mod tests {
         }
 
         if let Some(stats) = r.metadata.statistics() {
-            assert!(stats.has_min_max_set());
-            assert_eq!(stats.null_count(), 0);
-            assert_eq!(stats.distinct_count(), None);
+            assert_eq!(stats.null_count_opt(), Some(0));
+            assert_eq!(stats.distinct_count_opt(), None);
             if let Statistics::Int32(stats) = stats {
                 // first page is [1,2,3,4]
                 // second page is [-5,2,4,8]
                 // note that we don't increment here, as this is a non BinaryArray type.
-                assert_eq!(stats.min_bytes(), column_index.min_values[1].as_slice());
-                assert_eq!(stats.max_bytes(), column_index.max_values.get(1).unwrap());
+                assert_eq!(
+                    stats.min_bytes_opt(),
+                    Some(column_index.min_values[1].as_slice())
+                );
+                assert_eq!(
+                    stats.max_bytes_opt(),
+                    column_index.max_values.get(1).map(Vec::as_slice)
+                );
             } else {
                 panic!("expecting Statistics::Int32");
             }
@@ -2611,16 +2783,21 @@ mod tests {
         assert_eq!(0, column_index.null_counts.as_ref().unwrap()[0]);
 
         if let Some(stats) = r.metadata.statistics() {
-            assert!(stats.has_min_max_set());
-            assert_eq!(stats.null_count(), 0);
-            assert_eq!(stats.distinct_count(), None);
+            assert_eq!(stats.null_count_opt(), Some(0));
+            assert_eq!(stats.distinct_count_opt(), None);
             if let Statistics::FixedLenByteArray(stats) = stats {
                 let column_index_min_value = &column_index.min_values[0];
                 let column_index_max_value = &column_index.max_values[0];
 
                 // Column index stats are truncated, while the column chunk's aren't.
-                assert_ne!(stats.min_bytes(), column_index_min_value.as_slice());
-                assert_ne!(stats.max_bytes(), column_index_max_value.as_slice());
+                assert_ne!(
+                    stats.min_bytes_opt(),
+                    Some(column_index_min_value.as_slice())
+                );
+                assert_ne!(
+                    stats.max_bytes_opt(),
+                    Some(column_index_max_value.as_slice())
+                );
 
                 assert_eq!(
                     column_index_min_value.len(),
@@ -2678,9 +2855,8 @@ mod tests {
         assert_eq!(0, column_index.null_counts.as_ref().unwrap()[0]);
 
         if let Some(stats) = r.metadata.statistics() {
-            assert!(stats.has_min_max_set());
-            assert_eq!(stats.null_count(), 0);
-            assert_eq!(stats.distinct_count(), None);
+            assert_eq!(stats.null_count_opt(), Some(0));
+            assert_eq!(stats.distinct_count_opt(), None);
             if let Statistics::FixedLenByteArray(_stats) = stats {
                 let column_index_min_value = &column_index.min_values[0];
                 let column_index_max_value = &column_index.max_values[0];
@@ -2691,8 +2867,8 @@ mod tests {
                 assert_eq!("B".as_bytes(), column_index_min_value.as_slice());
                 assert_eq!("C".as_bytes(), column_index_max_value.as_slice());
 
-                assert_ne!(column_index_min_value, stats.min_bytes());
-                assert_ne!(column_index_max_value, stats.max_bytes());
+                assert_ne!(column_index_min_value, stats.min_bytes_opt().unwrap());
+                assert_ne!(column_index_max_value, stats.max_bytes_opt().unwrap());
             } else {
                 panic!("expecting Statistics::FixedLenByteArray");
             }
@@ -2726,10 +2902,9 @@ mod tests {
 
         // ensure bytes weren't truncated for statistics
         let stats = r.metadata.statistics().unwrap();
-        assert!(stats.has_min_max_set());
         if let Statistics::FixedLenByteArray(stats) = stats {
-            let stats_min_bytes = stats.min_bytes();
-            let stats_max_bytes = stats.max_bytes();
+            let stats_min_bytes = stats.min_bytes_opt().unwrap();
+            let stats_max_bytes = stats.max_bytes_opt().unwrap();
             assert_eq!(expected_value, stats_min_bytes);
             assert_eq!(expected_value, stats_max_bytes);
         } else {
@@ -2766,10 +2941,9 @@ mod tests {
 
         // ensure bytes weren't truncated for statistics
         let stats = r.metadata.statistics().unwrap();
-        assert!(stats.has_min_max_set());
         if let Statistics::FixedLenByteArray(stats) = stats {
-            let stats_min_bytes = stats.min_bytes();
-            let stats_max_bytes = stats.max_bytes();
+            let stats_min_bytes = stats.min_bytes_opt().unwrap();
+            let stats_max_bytes = stats.max_bytes_opt().unwrap();
             assert_eq!(expected_value, stats_min_bytes);
             assert_eq!(expected_value, stats_max_bytes);
         } else {
@@ -2802,12 +2976,11 @@ mod tests {
         assert_eq!(1, r.rows_written);
 
         let stats = r.metadata.statistics().expect("statistics");
-        assert!(stats.has_min_max_set());
-        assert_eq!(stats.null_count(), 0);
-        assert_eq!(stats.distinct_count(), None);
+        assert_eq!(stats.null_count_opt(), Some(0));
+        assert_eq!(stats.distinct_count_opt(), None);
         if let Statistics::ByteArray(_stats) = stats {
-            let min_value = _stats.min();
-            let max_value = _stats.max();
+            let min_value = _stats.min_opt().unwrap();
+            let max_value = _stats.max_opt().unwrap();
 
             assert!(!_stats.min_is_exact());
             assert!(!_stats.max_is_exact());
@@ -2855,12 +3028,11 @@ mod tests {
         assert_eq!(1, r.rows_written);
 
         let stats = r.metadata.statistics().expect("statistics");
-        assert!(stats.has_min_max_set());
-        assert_eq!(stats.null_count(), 0);
-        assert_eq!(stats.distinct_count(), None);
+        assert_eq!(stats.null_count_opt(), Some(0));
+        assert_eq!(stats.distinct_count_opt(), None);
         if let Statistics::FixedLenByteArray(_stats) = stats {
-            let min_value = _stats.min();
-            let max_value = _stats.max();
+            let min_value = _stats.min_opt().unwrap();
+            let max_value = _stats.max_opt().unwrap();
 
             assert!(!_stats.min_is_exact());
             assert!(!_stats.max_is_exact());
@@ -3002,6 +3174,30 @@ mod tests {
 
         let incremented = increment(vec![0xFF, 0xFF, 0xFF]);
         assert!(incremented.is_none())
+    }
+
+    #[test]
+    fn test_no_column_index_when_stats_disabled() {
+        // https://github.com/apache/arrow-rs/issues/6010
+        // Test that column index is not created/written for all-nulls column when page
+        // statistics are disabled.
+        let descr = Arc::new(get_test_column_descr::<Int32Type>(1, 0));
+        let props = Arc::new(
+            WriterProperties::builder()
+                .set_statistics_enabled(EnabledStatistics::None)
+                .build(),
+        );
+        let column_writer = get_column_writer(descr, props, get_test_page_writer());
+        let mut writer = get_typed_column_writer::<Int32Type>(column_writer);
+
+        let data = Vec::new();
+        let def_levels = vec![0; 10];
+        writer.write_batch(&data, Some(&def_levels), None).unwrap();
+        writer.flush_data_pages().unwrap();
+
+        let column_close_result = writer.close().unwrap();
+        assert!(column_close_result.offset_index.is_some());
+        assert!(column_close_result.column_index.is_none());
     }
 
     #[test]
@@ -3153,7 +3349,8 @@ mod tests {
         } else {
             panic!("metadata missing statistics");
         };
-        assert!(!stats.has_min_max_set());
+        assert!(stats.min_bytes_opt().is_none());
+        assert!(stats.max_bytes_opt().is_none());
     }
 
     fn write_multiple_pages<T: DataType>(
@@ -3406,10 +3603,6 @@ mod tests {
             res.offset = 0;
             res.bytes_written = page.data().len() as u64;
             Ok(res)
-        }
-
-        fn write_metadata(&mut self, _metadata: &ColumnChunkMetaData) -> Result<()> {
-            Ok(())
         }
 
         fn close(&mut self) -> Result<()> {

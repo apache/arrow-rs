@@ -33,6 +33,7 @@
 mod catalogs;
 mod db_schemas;
 mod sql_info;
+mod table_types;
 mod tables;
 mod xdbc_info;
 

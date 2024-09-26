@@ -24,10 +24,10 @@
 //!
 
 use arrow_array::cast::AsArray;
-use arrow_array::types::ByteArrayType;
+use arrow_array::types::{ByteArrayType, ByteViewType};
 use arrow_array::{
     downcast_primitive_array, AnyDictionaryArray, Array, ArrowNativeTypeOp, BooleanArray, Datum,
-    FixedSizeBinaryArray, GenericByteArray,
+    FixedSizeBinaryArray, GenericByteArray, GenericByteViewArray,
 };
 use arrow_buffer::bit_util::ceil;
 use arrow_buffer::{BooleanBuffer, MutableBuffer, NullBuffer};
@@ -70,9 +70,11 @@ impl std::fmt::Display for Op {
 /// For floating values like f32 and f64, this comparison produces an ordering in accordance to
 /// the totalOrder predicate as defined in the IEEE 754 (2008 revision) floating point standard.
 /// Note that totalOrder treats positive and negative zeros as different. If it is necessary
-/// to treat them as equal, please normalize zeros before calling this kernel.
+/// to treat them as equal, please normalize zeros before calling this kernel. See
+/// [`f32::total_cmp`] and [`f64::total_cmp`].
 ///
-/// Please refer to [`f32::total_cmp`] and [`f64::total_cmp`]
+/// Nested types, such as lists, are not supported as the null semantics are not well-defined.
+/// For comparisons involving nested types see [`crate::ord::make_comparator`]
 pub fn eq(lhs: &dyn Datum, rhs: &dyn Datum) -> Result<BooleanArray, ArrowError> {
     compare_op(Op::Equal, lhs, rhs)
 }
@@ -85,9 +87,11 @@ pub fn eq(lhs: &dyn Datum, rhs: &dyn Datum) -> Result<BooleanArray, ArrowError> 
 /// For floating values like f32 and f64, this comparison produces an ordering in accordance to
 /// the totalOrder predicate as defined in the IEEE 754 (2008 revision) floating point standard.
 /// Note that totalOrder treats positive and negative zeros as different. If it is necessary
-/// to treat them as equal, please normalize zeros before calling this kernel.
+/// to treat them as equal, please normalize zeros before calling this kernel. See
+/// [`f32::total_cmp`] and [`f64::total_cmp`].
 ///
-/// Please refer to [`f32::total_cmp`] and [`f64::total_cmp`]
+/// Nested types, such as lists, are not supported as the null semantics are not well-defined.
+/// For comparisons involving nested types see [`crate::ord::make_comparator`]
 pub fn neq(lhs: &dyn Datum, rhs: &dyn Datum) -> Result<BooleanArray, ArrowError> {
     compare_op(Op::NotEqual, lhs, rhs)
 }
@@ -100,9 +104,11 @@ pub fn neq(lhs: &dyn Datum, rhs: &dyn Datum) -> Result<BooleanArray, ArrowError>
 /// For floating values like f32 and f64, this comparison produces an ordering in accordance to
 /// the totalOrder predicate as defined in the IEEE 754 (2008 revision) floating point standard.
 /// Note that totalOrder treats positive and negative zeros as different. If it is necessary
-/// to treat them as equal, please normalize zeros before calling this kernel.
+/// to treat them as equal, please normalize zeros before calling this kernel. See
+/// [`f32::total_cmp`] and [`f64::total_cmp`].
 ///
-/// Please refer to [`f32::total_cmp`] and [`f64::total_cmp`]
+/// Nested types, such as lists, are not supported as the null semantics are not well-defined.
+/// For comparisons involving nested types see [`crate::ord::make_comparator`]
 pub fn lt(lhs: &dyn Datum, rhs: &dyn Datum) -> Result<BooleanArray, ArrowError> {
     compare_op(Op::Less, lhs, rhs)
 }
@@ -115,9 +121,11 @@ pub fn lt(lhs: &dyn Datum, rhs: &dyn Datum) -> Result<BooleanArray, ArrowError> 
 /// For floating values like f32 and f64, this comparison produces an ordering in accordance to
 /// the totalOrder predicate as defined in the IEEE 754 (2008 revision) floating point standard.
 /// Note that totalOrder treats positive and negative zeros as different. If it is necessary
-/// to treat them as equal, please normalize zeros before calling this kernel.
+/// to treat them as equal, please normalize zeros before calling this kernel. See
+/// [`f32::total_cmp`] and [`f64::total_cmp`].
 ///
-/// Please refer to [`f32::total_cmp`] and [`f64::total_cmp`]
+/// Nested types, such as lists, are not supported as the null semantics are not well-defined.
+/// For comparisons involving nested types see [`crate::ord::make_comparator`]
 pub fn lt_eq(lhs: &dyn Datum, rhs: &dyn Datum) -> Result<BooleanArray, ArrowError> {
     compare_op(Op::LessEqual, lhs, rhs)
 }
@@ -130,9 +138,11 @@ pub fn lt_eq(lhs: &dyn Datum, rhs: &dyn Datum) -> Result<BooleanArray, ArrowErro
 /// For floating values like f32 and f64, this comparison produces an ordering in accordance to
 /// the totalOrder predicate as defined in the IEEE 754 (2008 revision) floating point standard.
 /// Note that totalOrder treats positive and negative zeros as different. If it is necessary
-/// to treat them as equal, please normalize zeros before calling this kernel.
+/// to treat them as equal, please normalize zeros before calling this kernel. See
+/// [`f32::total_cmp`] and [`f64::total_cmp`].
 ///
-/// Please refer to [`f32::total_cmp`] and [`f64::total_cmp`]
+/// Nested types, such as lists, are not supported as the null semantics are not well-defined.
+/// For comparisons involving nested types see [`crate::ord::make_comparator`]
 pub fn gt(lhs: &dyn Datum, rhs: &dyn Datum) -> Result<BooleanArray, ArrowError> {
     compare_op(Op::Greater, lhs, rhs)
 }
@@ -145,9 +155,11 @@ pub fn gt(lhs: &dyn Datum, rhs: &dyn Datum) -> Result<BooleanArray, ArrowError> 
 /// For floating values like f32 and f64, this comparison produces an ordering in accordance to
 /// the totalOrder predicate as defined in the IEEE 754 (2008 revision) floating point standard.
 /// Note that totalOrder treats positive and negative zeros as different. If it is necessary
-/// to treat them as equal, please normalize zeros before calling this kernel.
+/// to treat them as equal, please normalize zeros before calling this kernel. See
+/// [`f32::total_cmp`] and [`f64::total_cmp`].
 ///
-/// Please refer to [`f32::total_cmp`] and [`f64::total_cmp`]
+/// Nested types, such as lists, are not supported as the null semantics are not well-defined.
+/// For comparisons involving nested types see [`crate::ord::make_comparator`]
 pub fn gt_eq(lhs: &dyn Datum, rhs: &dyn Datum) -> Result<BooleanArray, ArrowError> {
     compare_op(Op::GreaterEqual, lhs, rhs)
 }
@@ -161,9 +173,11 @@ pub fn gt_eq(lhs: &dyn Datum, rhs: &dyn Datum) -> Result<BooleanArray, ArrowErro
 /// For floating values like f32 and f64, this comparison produces an ordering in accordance to
 /// the totalOrder predicate as defined in the IEEE 754 (2008 revision) floating point standard.
 /// Note that totalOrder treats positive and negative zeros as different. If it is necessary
-/// to treat them as equal, please normalize zeros before calling this kernel.
+/// to treat them as equal, please normalize zeros before calling this kernel. See
+/// [`f32::total_cmp`] and [`f64::total_cmp`].
 ///
-/// Please refer to [`f32::total_cmp`] and [`f64::total_cmp`]
+/// Nested types, such as lists, are not supported as the null semantics are not well-defined.
+/// For comparisons involving nested types see [`crate::ord::make_comparator`]
 pub fn distinct(lhs: &dyn Datum, rhs: &dyn Datum) -> Result<BooleanArray, ArrowError> {
     compare_op(Op::Distinct, lhs, rhs)
 }
@@ -177,9 +191,11 @@ pub fn distinct(lhs: &dyn Datum, rhs: &dyn Datum) -> Result<BooleanArray, ArrowE
 /// For floating values like f32 and f64, this comparison produces an ordering in accordance to
 /// the totalOrder predicate as defined in the IEEE 754 (2008 revision) floating point standard.
 /// Note that totalOrder treats positive and negative zeros as different. If it is necessary
-/// to treat them as equal, please normalize zeros before calling this kernel.
+/// to treat them as equal, please normalize zeros before calling this kernel. See
+/// [`f32::total_cmp`] and [`f64::total_cmp`].
 ///
-/// Please refer to [`f32::total_cmp`] and [`f64::total_cmp`]
+/// Nested types, such as lists, are not supported as the null semantics are not well-defined.
+/// For comparisons involving nested types see [`crate::ord::make_comparator`]
 pub fn not_distinct(lhs: &dyn Datum, rhs: &dyn Datum) -> Result<BooleanArray, ArrowError> {
     compare_op(Op::NotDistinct, lhs, rhs)
 }
@@ -216,7 +232,11 @@ fn compare_op(op: Op, lhs: &dyn Datum, rhs: &dyn Datum) -> Result<BooleanArray, 
     let r = r_v.map(|x| x.values().as_ref()).unwrap_or(r);
     let r_t = r.data_type();
 
-    if l_t != r_t || l_t.is_nested() {
+    if r_t.is_nested() || l_t.is_nested() {
+        return Err(ArrowError::InvalidArgumentError(format!(
+            "Nested comparison: {l_t} {op} {r_t} (hint: use make_comparator instead)"
+        )));
+    } else if l_t != r_t {
         return Err(ArrowError::InvalidArgumentError(format!(
             "Invalid comparison operation: {l_t} {op} {r_t}"
         )));
@@ -228,8 +248,10 @@ fn compare_op(op: Op, lhs: &dyn Datum, rhs: &dyn Datum) -> Result<BooleanArray, 
             (l, r) => apply(op, l.values().as_ref(), l_s, l_v, r.values().as_ref(), r_s, r_v),
             (Boolean, Boolean) => apply(op, l.as_boolean(), l_s, l_v, r.as_boolean(), r_s, r_v),
             (Utf8, Utf8) => apply(op, l.as_string::<i32>(), l_s, l_v, r.as_string::<i32>(), r_s, r_v),
+            (Utf8View, Utf8View) => apply(op, l.as_string_view(), l_s, l_v, r.as_string_view(), r_s, r_v),
             (LargeUtf8, LargeUtf8) => apply(op, l.as_string::<i64>(), l_s, l_v, r.as_string::<i64>(), r_s, r_v),
             (Binary, Binary) => apply(op, l.as_binary::<i32>(), l_s, l_v, r.as_binary::<i32>(), r_s, r_v),
+            (BinaryView, BinaryView) => apply(op, l.as_binary_view(), l_s, l_v, r.as_binary_view(), r_s, r_v),
             (LargeBinary, LargeBinary) => apply(op, l.as_binary::<i64>(), l_s, l_v, r.as_binary::<i64>(), r_s, r_v),
             (FixedSizeBinary(_), FixedSizeBinary(_)) => apply(op, l.as_fixed_size_binary(), l_s, l_v, r.as_fixed_size_binary(), r_s, r_v),
             (Null, Null) => None,
@@ -459,7 +481,7 @@ fn apply_op_vectored<T: ArrayOrd>(
 }
 
 trait ArrayOrd {
-    type Item: Copy + Default;
+    type Item: Copy;
 
     fn len(&self) -> usize;
 
@@ -538,6 +560,43 @@ impl<'a, T: ByteArrayType> ArrayOrd for &'a GenericByteArray<T> {
     }
 }
 
+impl<'a, T: ByteViewType> ArrayOrd for &'a GenericByteViewArray<T> {
+    /// This is the item type for the GenericByteViewArray::compare
+    /// Item.0 is the array, Item.1 is the index
+    type Item = (&'a GenericByteViewArray<T>, usize);
+
+    fn is_eq(l: Self::Item, r: Self::Item) -> bool {
+        // # Safety
+        // The index is within bounds as it is checked in value()
+        let l_view = unsafe { l.0.views().get_unchecked(l.1) };
+        let l_len = *l_view as u32;
+
+        let r_view = unsafe { r.0.views().get_unchecked(r.1) };
+        let r_len = *r_view as u32;
+        // This is a fast path for equality check.
+        // We don't need to look at the actual bytes to determine if they are equal.
+        if l_len != r_len {
+            return false;
+        }
+
+        unsafe { GenericByteViewArray::compare_unchecked(l.0, l.1, r.0, r.1).is_eq() }
+    }
+
+    fn is_lt(l: Self::Item, r: Self::Item) -> bool {
+        // # Safety
+        // The index is within bounds as it is checked in value()
+        unsafe { GenericByteViewArray::compare_unchecked(l.0, l.1, r.0, r.1).is_lt() }
+    }
+
+    fn len(&self) -> usize {
+        Array::len(self)
+    }
+
+    unsafe fn value_unchecked(&self, idx: usize) -> Self::Item {
+        (self, idx)
+    }
+}
+
 impl<'a> ArrayOrd for &'a FixedSizeBinaryArray {
     type Item = &'a [u8];
 
@@ -556,6 +615,79 @@ impl<'a> ArrayOrd for &'a FixedSizeBinaryArray {
     fn is_lt(l: Self::Item, r: Self::Item) -> bool {
         l < r
     }
+}
+
+/// Compares two [`GenericByteViewArray`] at index `left_idx` and `right_idx`
+pub fn compare_byte_view<T: ByteViewType>(
+    left: &GenericByteViewArray<T>,
+    left_idx: usize,
+    right: &GenericByteViewArray<T>,
+    right_idx: usize,
+) -> std::cmp::Ordering {
+    assert!(left_idx < left.len());
+    assert!(right_idx < right.len());
+    unsafe { GenericByteViewArray::compare_unchecked(left, left_idx, right, right_idx) }
+}
+
+/// Comparing two [`GenericByteViewArray`] at index `left_idx` and `right_idx`
+///
+/// Comparing two ByteView types are non-trivial.
+/// It takes a bit of patience to understand why we don't just compare two &[u8] directly.
+///
+/// ByteView types give us the following two advantages, and we need to be careful not to lose them:
+/// (1) For string/byte smaller than 12 bytes, the entire data is inlined in the view.
+///     Meaning that reading one array element requires only one memory access
+///     (two memory access required for StringArray, one for offset buffer, the other for value buffer).
+///
+/// (2) For string/byte larger than 12 bytes, we can still be faster than (for certain operations) StringArray/ByteArray,
+///     thanks to the inlined 4 bytes.
+///     Consider equality check:
+///     If the first four bytes of the two strings are different, we can return false immediately (with just one memory access).
+///
+/// If we directly compare two &[u8], we materialize the entire string (i.e., make multiple memory accesses), which might be unnecessary.
+/// - Most of the time (eq, ord), we only need to look at the first 4 bytes to know the answer,
+///   e.g., if the inlined 4 bytes are different, we can directly return unequal without looking at the full string.
+///
+/// # Order check flow
+/// (1) if both string are smaller than 12 bytes, we can directly compare the data inlined to the view.
+/// (2) if any of the string is larger than 12 bytes, we need to compare the full string.
+///     (2.1) if the inlined 4 bytes are different, we can return the result immediately.
+///     (2.2) o.w., we need to compare the full string.
+///
+/// # Safety
+/// The left/right_idx must within range of each array
+#[deprecated(note = "Use `GenericByteViewArray::compare_unchecked` instead")]
+pub unsafe fn compare_byte_view_unchecked<T: ByteViewType>(
+    left: &GenericByteViewArray<T>,
+    left_idx: usize,
+    right: &GenericByteViewArray<T>,
+    right_idx: usize,
+) -> std::cmp::Ordering {
+    let l_view = left.views().get_unchecked(left_idx);
+    let l_len = *l_view as u32;
+
+    let r_view = right.views().get_unchecked(right_idx);
+    let r_len = *r_view as u32;
+
+    if l_len <= 12 && r_len <= 12 {
+        let l_data = unsafe { GenericByteViewArray::<T>::inline_value(l_view, l_len as usize) };
+        let r_data = unsafe { GenericByteViewArray::<T>::inline_value(r_view, r_len as usize) };
+        return l_data.cmp(r_data);
+    }
+
+    // one of the string is larger than 12 bytes,
+    // we then try to compare the inlined data first
+    let l_inlined_data = unsafe { GenericByteViewArray::<T>::inline_value(l_view, 4) };
+    let r_inlined_data = unsafe { GenericByteViewArray::<T>::inline_value(r_view, 4) };
+    if r_inlined_data != l_inlined_data {
+        return l_inlined_data.cmp(r_inlined_data);
+    }
+
+    // unfortunately, we need to compare the full data
+    let l_full_data: &[u8] = unsafe { left.value_unchecked(left_idx).as_ref() };
+    let r_full_data: &[u8] = unsafe { right.value_unchecked(right_idx).as_ref() };
+
+    l_full_data.cmp(r_full_data)
 }
 
 #[cfg(test)]

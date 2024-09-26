@@ -63,6 +63,7 @@ pub struct DataPageValues<T> {
     pub encoding: Encoding,
     pub min_value: Option<T>,
     pub max_value: Option<T>,
+    pub variable_length_bytes: Option<i64>,
 }
 
 /// A generic encoder of [`ColumnValues`] to data and dictionary pages used by
@@ -93,10 +94,17 @@ pub trait ColumnValueEncoder {
     /// Returns true if this encoder has a dictionary page
     fn has_dictionary(&self) -> bool;
 
-    /// Returns an estimate of the dictionary page size in bytes, or `None` if no dictionary
+    /// Returns the estimated total memory usage of the encoder
+    ///
+    fn estimated_memory_size(&self) -> usize;
+
+    /// Returns an estimate of the encoded size of dictionary page size in bytes, or `None` if no dictionary
     fn estimated_dict_page_size(&self) -> Option<usize>;
 
-    /// Returns an estimate of the data page size in bytes
+    /// Returns an estimate of the encoded data page size in bytes
+    ///
+    /// This should include:
+    /// <already_written_encoded_byte_size> + <estimated_encoded_size_of_unflushed_bytes>
     fn estimated_data_page_size(&self) -> usize;
 
     /// Flush the dictionary page for this column chunk if any. Any subsequent calls to
@@ -124,6 +132,7 @@ pub struct ColumnValueEncoderImpl<T: DataType> {
     min_value: Option<T::T>,
     max_value: Option<T::T>,
     bloom_filter: Option<Sbbf>,
+    variable_length_bytes: Option<i64>,
 }
 
 impl<T: DataType> ColumnValueEncoderImpl<T> {
@@ -142,6 +151,10 @@ impl<T: DataType> ColumnValueEncoderImpl<T> {
             if let Some((min, max)) = self.min_max(slice, None) {
                 update_min(&self.descr, &min, &mut self.min_value);
                 update_max(&self.descr, &max, &mut self.max_value);
+            }
+
+            if let Some(var_bytes) = T::T::variable_length_bytes(slice) {
+                *self.variable_length_bytes.get_or_insert(0) += var_bytes;
             }
         }
 
@@ -178,6 +191,7 @@ impl<T: DataType> ColumnValueEncoder for ColumnValueEncoderImpl<T> {
             props
                 .encoding(descr.path())
                 .unwrap_or_else(|| fallback_encoding(T::get_physical_type(), props)),
+            descr,
         )?;
 
         let statistics_enabled = props.statistics_enabled(descr.path());
@@ -196,6 +210,7 @@ impl<T: DataType> ColumnValueEncoder for ColumnValueEncoderImpl<T> {
             bloom_filter,
             min_value: None,
             max_value: None,
+            variable_length_bytes: None,
         })
     }
 
@@ -225,6 +240,24 @@ impl<T: DataType> ColumnValueEncoder for ColumnValueEncoderImpl<T> {
 
     fn has_dictionary(&self) -> bool {
         self.dict_encoder.is_some()
+    }
+
+    fn estimated_memory_size(&self) -> usize {
+        let encoder_size = self.encoder.estimated_memory_size();
+
+        let dict_encoder_size = self
+            .dict_encoder
+            .as_ref()
+            .map(|encoder| encoder.estimated_memory_size())
+            .unwrap_or_default();
+
+        let bloom_filter_size = self
+            .bloom_filter
+            .as_ref()
+            .map(|bf| bf.estimated_memory_size())
+            .unwrap_or_default();
+
+        encoder_size + dict_encoder_size + bloom_filter_size
     }
 
     fn estimated_dict_page_size(&self) -> Option<usize> {
@@ -271,6 +304,7 @@ impl<T: DataType> ColumnValueEncoder for ColumnValueEncoderImpl<T> {
             num_values: std::mem::take(&mut self.num_values),
             min_value: self.min_value.take(),
             max_value: self.max_value.take(),
+            variable_length_bytes: self.variable_length_bytes.take(),
         })
     }
 }

@@ -24,9 +24,9 @@ use arrow_buffer::{
     bit_util, i256, ArrowNativeType, Buffer, IntervalDayTime, IntervalMonthDayNano, MutableBuffer,
 };
 use arrow_schema::{ArrowError, DataType, UnionMode};
+use std::mem;
 use std::ops::Range;
 use std::sync::Arc;
-use std::{mem, usize};
 
 use crate::{equal, validate_binary_view, validate_string_view};
 
@@ -161,9 +161,11 @@ pub(crate) fn new_buffers(data_type: &DataType, capacity: usize) -> [MutableBuff
     }
 }
 
-/// A generic representation of Arrow array data which encapsulates common attributes and
-/// operations for Arrow array. Specific operations for different arrays types (e.g.,
-/// primitive, list, struct) are implemented in `Array`.
+/// A generic representation of Arrow array data which encapsulates common attributes
+/// and operations for Arrow array.
+///
+/// Specific operations for different arrays types (e.g., primitive, list, struct)
+/// are implemented in `Array`.
 ///
 /// # Memory Layout
 ///
@@ -229,6 +231,7 @@ pub struct ArrayData {
     nulls: Option<NullBuffer>,
 }
 
+/// A thread-safe, shared reference to the Arrow array data.
 pub type ArrayDataRef = Arc<ArrayData>;
 
 impl ArrayData {
@@ -573,6 +576,7 @@ impl ArrayData {
                 DataType::Binary | DataType::Utf8 => {
                     (vec![zeroed((len + 1) * 4), zeroed(0)], vec![], true)
                 }
+                DataType::BinaryView | DataType::Utf8View => (vec![zeroed(len * 16)], vec![], true),
                 DataType::LargeBinary | DataType::LargeUtf8 => {
                     (vec![zeroed((len + 1) * 8), zeroed(0)], vec![], true)
                 }
@@ -1178,8 +1182,10 @@ impl ArrayData {
     ///
     /// Does not (yet) check
     /// 1. Union type_ids are valid see [#85](https://github.com/apache/arrow-rs/issues/85)
-    /// Validates the the null count is correct and that any
-    /// nullability requirements of its children are correct
+    /// 2. the the null count is correct and that any
+    /// 3. nullability requirements of its children are correct
+    ///
+    /// [#85]: https://github.com/apache/arrow-rs/issues/85
     pub fn validate_nulls(&self) -> Result<(), ArrowError> {
         if let Some(nulls) = &self.nulls {
             let actual = nulls.len() - nulls.inner().count_set_bits();
@@ -1742,7 +1748,12 @@ pub enum BufferSpec {
     /// for array slicing and interoperability with `Vec`, which cannot be over-aligned.
     ///
     /// Note that these alignment requirements will vary between architectures
-    FixedWidth { byte_width: usize, alignment: usize },
+    FixedWidth {
+        /// The width of each element in bytes
+        byte_width: usize,
+        /// The alignment required by Rust for an array of the corresponding primitive
+        alignment: usize,
+    },
     /// Variable width, such as string data for utf8 data
     VariableWidth,
     /// Buffer holds a bitmap.
@@ -1778,6 +1789,7 @@ pub struct ArrayDataBuilder {
 
 impl ArrayDataBuilder {
     #[inline]
+    /// Creates a new array data builder
     pub const fn new(data_type: DataType) -> Self {
         Self {
             data_type,
@@ -1791,17 +1803,20 @@ impl ArrayDataBuilder {
         }
     }
 
+    /// Creates a new array data builder from an existing one, changing the data type
     pub fn data_type(self, data_type: DataType) -> Self {
         Self { data_type, ..self }
     }
 
     #[inline]
     #[allow(clippy::len_without_is_empty)]
+    /// Sets the length of the [ArrayData]
     pub const fn len(mut self, n: usize) -> Self {
         self.len = n;
         self
     }
 
+    /// Sets the null buffer of the [ArrayData]
     pub fn nulls(mut self, nulls: Option<NullBuffer>) -> Self {
         self.nulls = nulls;
         self.null_count = None;
@@ -1809,43 +1824,51 @@ impl ArrayDataBuilder {
         self
     }
 
+    /// Sets the null count of the [ArrayData]
     pub fn null_count(mut self, null_count: usize) -> Self {
         self.null_count = Some(null_count);
         self
     }
 
+    /// Sets the `null_bit_buffer` of the [ArrayData]
     pub fn null_bit_buffer(mut self, buf: Option<Buffer>) -> Self {
         self.nulls = None;
         self.null_bit_buffer = buf;
         self
     }
 
+    /// Sets the offset of the [ArrayData]
     #[inline]
     pub const fn offset(mut self, n: usize) -> Self {
         self.offset = n;
         self
     }
 
+    /// Sets the buffers of the [ArrayData]
     pub fn buffers(mut self, v: Vec<Buffer>) -> Self {
         self.buffers = v;
         self
     }
 
+    /// Adds a single buffer to the [ArrayData]'s buffers
     pub fn add_buffer(mut self, b: Buffer) -> Self {
         self.buffers.push(b);
         self
     }
 
-    pub fn add_buffers(mut self, bs: Vec<Buffer>) -> Self {
+    /// Adds multiple buffers to the [ArrayData]'s buffers
+    pub fn add_buffers<I: IntoIterator<Item = Buffer>>(mut self, bs: I) -> Self {
         self.buffers.extend(bs);
         self
     }
 
+    /// Sets the child data of the [ArrayData]
     pub fn child_data(mut self, v: Vec<ArrayData>) -> Self {
         self.child_data = v;
         self
     }
 
+    /// Adds a single child data to the [ArrayData]'s child data
     pub fn add_child_data(mut self, r: ArrayData) -> Self {
         self.child_data.push(r);
         self
@@ -1868,14 +1891,17 @@ impl ArrayDataBuilder {
 
     /// Same as [`Self::build_unchecked`] but ignoring `force_validate` feature flag
     unsafe fn build_impl(self) -> ArrayData {
-        let nulls = self.nulls.or_else(|| {
-            let buffer = self.null_bit_buffer?;
-            let buffer = BooleanBuffer::new(buffer, self.offset, self.len);
-            Some(match self.null_count {
-                Some(n) => NullBuffer::new_unchecked(buffer, n),
-                None => NullBuffer::new(buffer),
+        let nulls = self
+            .nulls
+            .or_else(|| {
+                let buffer = self.null_bit_buffer?;
+                let buffer = BooleanBuffer::new(buffer, self.offset, self.len);
+                Some(match self.null_count {
+                    Some(n) => NullBuffer::new_unchecked(buffer, n),
+                    None => NullBuffer::new(buffer),
+                })
             })
-        });
+            .filter(|b| b.null_count() != 0);
 
         ArrayData {
             data_type: self.data_type,
@@ -1883,7 +1909,7 @@ impl ArrayDataBuilder {
             offset: self.offset,
             buffers: self.buffers,
             child_data: self.child_data,
-            nulls: nulls.filter(|b| b.null_count() != 0),
+            nulls,
         }
     }
 
@@ -1958,7 +1984,7 @@ mod tests {
             .len(20)
             .offset(5)
             .add_buffer(b1)
-            .null_bit_buffer(Some(Buffer::from(vec![
+            .null_bit_buffer(Some(Buffer::from([
                 0b01011111, 0b10110101, 0b01100011, 0b00011110,
             ])))
             .build()
@@ -2163,7 +2189,7 @@ mod tests {
 
     #[test]
     fn test_count_nulls() {
-        let buffer = Buffer::from(vec![0b00010110, 0b10011111]);
+        let buffer = Buffer::from([0b00010110, 0b10011111]);
         let buffer = NullBuffer::new(BooleanBuffer::new(buffer, 0, 16));
         let count = count_nulls(Some(&buffer), 0, 16);
         assert_eq!(count, 7);
@@ -2208,5 +2234,21 @@ mod tests {
 
         data.align_buffers();
         data.validate_full().unwrap();
+    }
+
+    #[test]
+    fn test_null_view_types() {
+        let array_len = 32;
+        let array = ArrayData::new_null(&DataType::BinaryView, array_len);
+        assert_eq!(array.len(), array_len);
+        for i in 0..array.len() {
+            assert!(array.is_null(i));
+        }
+
+        let array = ArrayData::new_null(&DataType::Utf8View, array_len);
+        assert_eq!(array.len(), array_len);
+        for i in 0..array.len() {
+            assert!(array.is_null(i));
+        }
     }
 }

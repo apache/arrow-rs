@@ -19,7 +19,7 @@ use std::sync::Arc;
 
 use arrow_schema::{DataType, Fields, SchemaBuilder};
 
-use crate::arrow::array_reader::byte_array::make_byte_view_array_reader;
+use crate::arrow::array_reader::byte_view_array::make_byte_view_array_reader;
 use crate::arrow::array_reader::empty_array::make_empty_array_reader;
 use crate::arrow::array_reader::fixed_len_byte_array::make_fixed_len_byte_array_reader;
 use crate::arrow::array_reader::{

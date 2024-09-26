@@ -31,7 +31,7 @@ use std::io::{BufReader, Read, Seek, SeekFrom};
 use std::sync::Arc;
 
 use arrow_array::*;
-use arrow_buffer::{ArrowNativeType, Buffer, MutableBuffer, ScalarBuffer};
+use arrow_buffer::{ArrowNativeType, BooleanBuffer, Buffer, MutableBuffer, ScalarBuffer};
 use arrow_data::ArrayData;
 use arrow_schema::*;
 
@@ -149,14 +149,24 @@ fn create_array(
             // still work
             for struct_field in struct_fields {
                 let child = create_array(reader, struct_field, variadic_counts, require_alignment)?;
-                struct_arrays.push((struct_field.clone(), child));
+                struct_arrays.push(child);
             }
             let null_count = struct_node.null_count() as usize;
-            let struct_array = if null_count > 0 {
+            let struct_array = if struct_arrays.is_empty() {
+                // `StructArray::from` can't infer the correct row count
+                // if we have zero fields
+                let len = struct_node.length() as usize;
+                StructArray::new_empty_fields(
+                    len,
+                    (null_count > 0).then(|| BooleanBuffer::new(null_buffer, 0, len).into()),
+                )
+            } else if null_count > 0 {
                 // create struct array from fields, arrays and null data
-                StructArray::from((struct_arrays, null_buffer))
+                let len = struct_node.length() as usize;
+                let nulls = BooleanBuffer::new(null_buffer, 0, len).into();
+                StructArray::try_new(struct_fields.clone(), struct_arrays, Some(nulls))?
             } else {
-                StructArray::from(struct_arrays)
+                StructArray::try_new(struct_fields.clone(), struct_arrays, None)?
             };
             Ok(Arc::new(struct_array))
         }
@@ -609,7 +619,7 @@ fn read_dictionary_impl(
     let id = batch.id();
     let fields_using_this_dictionary = schema.fields_with_dict_id(id);
     let first_field = fields_using_this_dictionary.first().ok_or_else(|| {
-        ArrowError::InvalidArgumentError("dictionary id not found in schema".to_string())
+        ArrowError::InvalidArgumentError(format!("dictionary id {id} not found in schema"))
     })?;
 
     // As the dictionary batch does not contain the type of the
@@ -635,7 +645,7 @@ fn read_dictionary_impl(
         _ => None,
     }
     .ok_or_else(|| {
-        ArrowError::InvalidArgumentError("dictionary id not found in schema".to_string())
+        ArrowError::InvalidArgumentError(format!("dictionary id {id} not found in schema"))
     })?;
 
     // We don't currently record the isOrdered field. This could be general
@@ -1002,8 +1012,8 @@ impl FileReaderBuilder {
 }
 
 /// Arrow File reader
-pub struct FileReader<R: Read + Seek> {
-    /// Buffered file reader that supports reading and seeking
+pub struct FileReader<R> {
+    /// File reader that supports reading and seeking
     reader: R,
 
     /// The decoder
@@ -1024,7 +1034,7 @@ pub struct FileReader<R: Read + Seek> {
     custom_metadata: HashMap<String, String>,
 }
 
-impl<R: Read + Seek> fmt::Debug for FileReader<R> {
+impl<R> fmt::Debug for FileReader<R> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> Result<(), fmt::Error> {
         f.debug_struct("FileReader<R>")
             .field("decoder", &self.decoder)
@@ -1035,10 +1045,26 @@ impl<R: Read + Seek> fmt::Debug for FileReader<R> {
     }
 }
 
-impl<R: Read + Seek> FileReader<R> {
-    /// Try to create a new file reader
+impl<R: Read + Seek> FileReader<BufReader<R>> {
+    /// Try to create a new file reader with the reader wrapped in a BufReader.
     ///
-    /// Returns errors if the file does not meet the Arrow Format footer requirements
+    /// See [`FileReader::try_new`] for an unbuffered version.
+    pub fn try_new_buffered(reader: R, projection: Option<Vec<usize>>) -> Result<Self, ArrowError> {
+        Self::try_new(BufReader::new(reader), projection)
+    }
+}
+
+impl<R: Read + Seek> FileReader<R> {
+    /// Try to create a new file reader.
+    ///
+    /// There is no internal buffering. If buffered reads are needed you likely want to use
+    /// [`FileReader::try_new_buffered`] instead.    
+    ///
+    /// # Errors
+    ///
+    /// An ['Err'](Result::Err) may be returned if:
+    /// - the file does not meet the Arrow Format footer requirements, or
+    /// - file endianness does not match the target endianness.
     pub fn try_new(reader: R, projection: Option<Vec<usize>>) -> Result<Self, ArrowError> {
         let builder = FileReaderBuilder {
             projection,
@@ -1121,7 +1147,7 @@ impl<R: Read + Seek> RecordBatchReader for FileReader<R> {
 }
 
 /// Arrow Stream reader
-pub struct StreamReader<R: Read> {
+pub struct StreamReader<R> {
     /// Stream reader
     reader: R,
 
@@ -1142,10 +1168,10 @@ pub struct StreamReader<R: Read> {
     projection: Option<(Vec<usize>, Schema)>,
 }
 
-impl<R: Read> fmt::Debug for StreamReader<R> {
+impl<R> fmt::Debug for StreamReader<R> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> std::result::Result<(), fmt::Error> {
         f.debug_struct("StreamReader<R>")
-            .field("reader", &"BufReader<..>")
+            .field("reader", &"R")
             .field("schema", &self.schema)
             .field("dictionaries_by_id", &self.dictionaries_by_id)
             .field("finished", &self.finished)
@@ -1155,21 +1181,27 @@ impl<R: Read> fmt::Debug for StreamReader<R> {
 }
 
 impl<R: Read> StreamReader<BufReader<R>> {
-    /// Try to create a new stream reader with the reader wrapped in a BufReader
+    /// Try to create a new stream reader with the reader wrapped in a BufReader.
     ///
-    /// The first message in the stream is the schema, the reader will fail if it does not
-    /// encounter a schema.
-    /// To check if the reader is done, use `is_finished(self)`
-    pub fn try_new(reader: R, projection: Option<Vec<usize>>) -> Result<Self, ArrowError> {
-        Self::try_new_unbuffered(BufReader::new(reader), projection)
+    /// See [`StreamReader::try_new`] for an unbuffered version.
+    pub fn try_new_buffered(reader: R, projection: Option<Vec<usize>>) -> Result<Self, ArrowError> {
+        Self::try_new(BufReader::new(reader), projection)
     }
 }
 
 impl<R: Read> StreamReader<R> {
-    /// Try to create a new stream reader but do not wrap the reader in a BufReader.
+    /// Try to create a new stream reader.
     ///
-    /// Unless you need the StreamReader to be unbuffered you likely want to use `StreamReader::try_new` instead.
-    pub fn try_new_unbuffered(
+    /// To check if the reader is done, use [`is_finished(self)`](StreamReader::is_finished).
+    ///
+    /// There is no internal buffering. If buffered reads are needed you likely want to use
+    /// [`StreamReader::try_new_buffered`] instead.
+    ///
+    /// # Errors
+    ///
+    /// An ['Err'](Result::Err) may be returned if the reader does not encounter a schema
+    /// as the first message in the stream.
+    pub fn try_new(
         mut reader: R,
         projection: Option<Vec<usize>>,
     ) -> Result<StreamReader<R>, ArrowError> {
@@ -1214,6 +1246,15 @@ impl<R: Read> StreamReader<R> {
             dictionaries_by_id,
             projection,
         })
+    }
+
+    /// Deprecated, use [`StreamReader::try_new`] instead.
+    #[deprecated(since = "53.0.0", note = "use `try_new` instead")]
+    pub fn try_new_unbuffered(
+        reader: R,
+        projection: Option<Vec<usize>>,
+    ) -> Result<Self, ArrowError> {
+        Self::try_new(reader, projection)
     }
 
     /// Return the schema of the stream
@@ -1361,6 +1402,7 @@ mod tests {
     use crate::root_as_message;
     use arrow_array::builder::{PrimitiveRunBuilder, UnionBuilder};
     use arrow_array::types::*;
+    use arrow_buffer::NullBuffer;
     use arrow_data::ArrayDataBuilder;
 
     fn create_test_projection_schema() -> Schema {
@@ -1700,6 +1742,18 @@ mod tests {
     }
 
     #[test]
+    fn test_roundtrip_struct_empty_fields() {
+        let nulls = NullBuffer::from(&[true, true, false][..]);
+        let rb = RecordBatch::try_from_iter([(
+            "",
+            Arc::new(StructArray::new_empty_fields(nulls.len(), Some(nulls))) as _,
+        )])
+        .unwrap();
+        let rb2 = roundtrip_ipc(&rb);
+        assert_eq!(rb, rb2);
+    }
+
+    #[test]
     fn test_roundtrip_stream_run_array_sliced() {
         let run_array_1: Int32RunArray = vec!["a", "a", "a", "b", "b", "c", "c", "c"]
             .into_iter()
@@ -1791,7 +1845,7 @@ mod tests {
             "values",
             DataType::Dictionary(Box::new(DataType::Int8), Box::new(DataType::Utf8)),
             true,
-            1,
+            2,
             false,
         ));
         let entry_struct = StructArray::from(vec![
@@ -2061,7 +2115,7 @@ mod tests {
         .unwrap();
 
         let gen = IpcDataGenerator {};
-        let mut dict_tracker = DictionaryTracker::new(false);
+        let mut dict_tracker = DictionaryTracker::new_with_preserve_dict_id(false, true);
         let (_, encoded) = gen
             .encoded_batch(&batch, &mut dict_tracker, &Default::default())
             .unwrap();
@@ -2098,7 +2152,7 @@ mod tests {
         .unwrap();
 
         let gen = IpcDataGenerator {};
-        let mut dict_tracker = DictionaryTracker::new(false);
+        let mut dict_tracker = DictionaryTracker::new_with_preserve_dict_id(false, true);
         let (_, encoded) = gen
             .encoded_batch(&batch, &mut dict_tracker, &Default::default())
             .unwrap();
@@ -2182,5 +2236,106 @@ mod tests {
         let roundtrip_batch = reader.next().unwrap().unwrap();
 
         assert_eq!(batch, roundtrip_batch);
+    }
+
+    #[test]
+    fn test_invalid_struct_array_ipc_read_errors() {
+        let a_field = Field::new("a", DataType::Int32, false);
+        let b_field = Field::new("b", DataType::Int32, false);
+
+        let schema = Arc::new(Schema::new(vec![Field::new_struct(
+            "s",
+            vec![a_field.clone(), b_field.clone()],
+            false,
+        )]));
+
+        let a_array_data = ArrayData::builder(a_field.data_type().clone())
+            .len(4)
+            .add_buffer(Buffer::from_slice_ref([1, 2, 3, 4]))
+            .build()
+            .unwrap();
+        let b_array_data = ArrayData::builder(b_field.data_type().clone())
+            .len(3)
+            .add_buffer(Buffer::from_slice_ref([5, 6, 7]))
+            .build()
+            .unwrap();
+
+        let struct_data_type = schema.field(0).data_type();
+
+        let invalid_struct_arr = unsafe {
+            make_array(
+                ArrayData::builder(struct_data_type.clone())
+                    .len(4)
+                    .add_child_data(a_array_data)
+                    .add_child_data(b_array_data)
+                    .build_unchecked(),
+            )
+        };
+
+        let batch = RecordBatch::try_new(schema.clone(), vec![invalid_struct_arr]).unwrap();
+
+        let mut buf = Vec::new();
+        let mut writer = crate::writer::FileWriter::try_new(&mut buf, schema.as_ref()).unwrap();
+        writer.write(&batch).unwrap();
+        writer.finish().unwrap();
+
+        let mut reader = FileReader::try_new(std::io::Cursor::new(buf), None).unwrap();
+        let err = reader.next().unwrap().unwrap_err();
+        assert!(matches!(err, ArrowError::InvalidArgumentError(_)));
+    }
+
+    #[test]
+    fn test_same_dict_id_without_preserve() {
+        let batch = RecordBatch::try_new(
+            Arc::new(Schema::new(
+                ["a", "b"]
+                    .iter()
+                    .map(|name| {
+                        Field::new_dict(
+                            name.to_string(),
+                            DataType::Dictionary(
+                                Box::new(DataType::Int32),
+                                Box::new(DataType::Utf8),
+                            ),
+                            true,
+                            0,
+                            false,
+                        )
+                    })
+                    .collect::<Vec<Field>>(),
+            )),
+            vec![
+                Arc::new(
+                    vec![Some("c"), Some("d")]
+                        .into_iter()
+                        .collect::<DictionaryArray<Int32Type>>(),
+                ) as ArrayRef,
+                Arc::new(
+                    vec![Some("e"), Some("f")]
+                        .into_iter()
+                        .collect::<DictionaryArray<Int32Type>>(),
+                ) as ArrayRef,
+            ],
+        )
+        .expect("Failed to create RecordBatch");
+
+        // serialize the record batch as an IPC stream
+        let mut buf = vec![];
+        {
+            let mut writer = crate::writer::StreamWriter::try_new_with_options(
+                &mut buf,
+                batch.schema().as_ref(),
+                crate::writer::IpcWriteOptions::default().with_preserve_dict_id(false),
+            )
+            .expect("Failed to create StreamWriter");
+            writer.write(&batch).expect("Failed to write RecordBatch");
+            writer.finish().expect("Failed to finish StreamWriter");
+        }
+
+        StreamReader::try_new(std::io::Cursor::new(buf), None)
+            .expect("Failed to create StreamReader")
+            .for_each(|decoded_batch| {
+                assert_eq!(decoded_batch.expect("Failed to read RecordBatch"), batch);
+            });
     }
 }

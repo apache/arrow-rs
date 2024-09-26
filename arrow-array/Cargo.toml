@@ -45,13 +45,14 @@ arrow-buffer = { workspace = true }
 arrow-schema = { workspace = true }
 arrow-data = { workspace = true }
 chrono = { workspace = true }
-chrono-tz = { version = "0.9", optional = true }
+chrono-tz = { version = "0.10", optional = true }
 num = { version = "0.4.1", default-features = false, features = ["std"] }
 half = { version = "2.1", default-features = false, features = ["num-traits"] }
-hashbrown = { version = "0.14", default-features = false }
+hashbrown = { version = "0.14.2", default-features = false }
 
 [features]
 ffi = ["arrow-schema/ffi", "arrow-data/ffi"]
+force_validate = []
 
 [dev-dependencies]
 rand = { version = "0.8", default-features = false, features = ["std", "std_rng"] }
@@ -61,4 +62,16 @@ criterion = { version = "0.5", default-features = false }
 
 [[bench]]
 name = "occupancy"
+harness = false
+
+[[bench]]
+name = "gc_view_types"
+harness = false
+
+[[bench]]
+name = "fixed_size_list_array"
+harness = false
+
+[[bench]]
+name = "decimal_overflow"
 harness = false

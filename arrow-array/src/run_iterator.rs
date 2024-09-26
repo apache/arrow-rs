@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Idiomatic iterator for [`RunArray`](crate::Array)
+//! Idiomatic iterator for [`RunArray`](crate::RunArray)
 
 use crate::{array::ArrayAccessor, types::RunEndIndexType, Array, TypedRunArray};
 use arrow_buffer::ArrowNativeType;

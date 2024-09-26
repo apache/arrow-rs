@@ -44,7 +44,7 @@ arrow-schema = { workspace = true, optional = true }
 arrow-select = { workspace = true, optional = true }
 arrow-ipc = { workspace = true, optional = true }
 # Intentionally not a path dependency as object_store is released separately
-object_store = { version = "0.10.0", default-features = false, optional = true }
+object_store = { version = "0.11.0", default-features = false, optional = true }
 
 bytes = { version = "1.1", default-features = false, features = ["std"] }
 thrift = { version = "0.17", default-features = false }
@@ -52,10 +52,7 @@ snap = { version = "1.0", default-features = false, optional = true }
 brotli = { version = "6.0", default-features = false, features = ["std"], optional = true }
 flate2 = { version = "1.0", default-features = false, features = ["rust_backend"], optional = true }
 lz4_flex = { version = "0.11", default-features = false, features = ["std", "frame"], optional = true }
-zstd = { version = "0.13.0", optional = true, default-features = false }
-# TODO: temporary to fix parquet wasm build
-# upstream issue: https://github.com/gyscos/zstd-rs/issues/269
-zstd-sys = { version = "=2.0.9", optional = true, default-features = false }
+zstd = { version = "0.13", optional = true, default-features = false }
 chrono = { workspace = true }
 num = { version = "0.4", default-features = false }
 num-bigint = { version = "0.4", default-features = false }
@@ -70,6 +67,7 @@ hashbrown = { version = "0.14", default-features = false }
 twox-hash = { version = "1.6", default-features = false }
 paste = { version = "1.0" }
 half = { version = "2.1", default-features = false, features = ["num-traits"] }
+sysinfo = { version = "0.31.2", optional = true, default-features = false, features = ["system"] }
 
 [dev-dependencies]
 base64 = { version = "0.22", default-features = false, features = ["std"] }
@@ -80,14 +78,19 @@ brotli = { version = "6.0", default-features = false, features = ["std"] }
 flate2 = { version = "1.0", default-features = false, features = ["rust_backend"] }
 lz4_flex = { version = "0.11", default-features = false, features = ["std", "frame"] }
 zstd = { version = "0.13", default-features = false }
-# TODO: temporary to fix parquet wasm build
-# upstream issue: https://github.com/gyscos/zstd-rs/issues/269
-zstd-sys = { version = "=2.0.9", default-features = false }
 serde_json = { version = "1.0", features = ["std"], default-features = false }
 arrow = { workspace = true, features = ["ipc", "test_utils", "prettyprint", "json"] }
 tokio = { version = "1.0", default-features = false, features = ["macros", "rt", "io-util", "fs"] }
 rand = { version = "0.8", default-features = false, features = ["std", "std_rng"] }
-object_store = { version = "0.10.0", default-features = false, features = ["azure"] }
+object_store = { version = "0.11.0", default-features = false, features = ["azure"] }
+
+# TODO: temporary to fix parquet wasm build
+# upstream issue: https://github.com/gyscos/zstd-rs/issues/269
+[target.'cfg(target_family = "wasm")'.dependencies]
+zstd-sys = { version = ">=2.0.0, <2.0.14", optional = true, default-features = false }
+
+[target.'cfg(target_family = "wasm")'.dev-dependencies]
+zstd-sys = { version = ">=2.0.0, <2.0.14", default-features = false }
 
 [package.metadata.docs.rs]
 all-features = true
@@ -112,11 +115,18 @@ async = ["futures", "tokio"]
 object_store = ["dep:object_store", "async"]
 # Group Zstd dependencies
 zstd = ["dep:zstd", "zstd-sys"]
+# Display memory in example/write_parquet.rs
+sysinfo = ["dep:sysinfo"]
 
 [[example]]
 name = "read_parquet"
 required-features = ["arrow"]
 path = "./examples/read_parquet.rs"
+
+[[example]]
+name = "write_parquet"
+required-features = ["cli", "sysinfo"]
+path = "./examples/write_parquet.rs"
 
 [[example]]
 name = "async_read_parquet"
@@ -131,6 +141,11 @@ path = "./examples/read_with_rowgroup.rs"
 [[test]]
 name = "arrow_writer_layout"
 required-features = ["arrow"]
+
+[[test]]
+name = "arrow_reader"
+required-features = ["arrow"]
+path = "./tests/arrow_reader/mod.rs"
 
 [[bin]]
 name = "parquet-read"
@@ -179,6 +194,12 @@ required-features = ["arrow", "test_common", "experimental"]
 harness = false
 
 [[bench]]
+name = "arrow_statistics"
+required-features = ["arrow"]
+harness = false
+
+
+[[bench]]
 name = "compression"
 required-features = ["experimental", "default"]
 harness = false
@@ -187,7 +208,6 @@ harness = false
 name = "encoding"
 required-features = ["experimental", "default"]
 harness = false
-
 
 [[bench]]
 name = "metadata"

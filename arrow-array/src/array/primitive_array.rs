@@ -239,13 +239,13 @@ pub type Float32Array = PrimitiveArray<Float32Type>;
 /// Construction
 ///
 /// ```
-/// # use arrow_array::Float32Array;
+/// # use arrow_array::Float64Array;
 /// // Create from Vec<Option<f32>>
-/// let arr = Float32Array::from(vec![Some(1.0), None, Some(2.0)]);
+/// let arr = Float64Array::from(vec![Some(1.0), None, Some(2.0)]);
 /// // Create from Vec<f32>
-/// let arr = Float32Array::from(vec![1.0, 2.0, 3.0]);
+/// let arr = Float64Array::from(vec![1.0, 2.0, 3.0]);
 /// // Create iter/collect
-/// let arr: Float32Array = std::iter::repeat(42.0).take(10).collect();
+/// let arr: Float64Array = std::iter::repeat(42.0).take(10).collect();
 /// ```
 ///
 /// See [`PrimitiveArray`] for more information and examples
@@ -351,19 +351,51 @@ pub type Time64MicrosecondArray = PrimitiveArray<Time64MicrosecondType>;
 /// hold values such as `00:02:00.123456789`
 pub type Time64NanosecondArray = PrimitiveArray<Time64NanosecondType>;
 
-/// A [`PrimitiveArray`] of “calendar” intervals in months
+/// A [`PrimitiveArray`] of “calendar” intervals in whole months
 ///
 /// See [`IntervalYearMonthType`] for details on representation and caveats.
+///
+/// # Example
+/// ```
+/// # use arrow_array::IntervalYearMonthArray;
+/// let array = IntervalYearMonthArray::from(vec![
+///   2,  // 2 months
+///   25, // 2 years and 1 month
+///   -1  // -1 months
+/// ]);
+/// ```
 pub type IntervalYearMonthArray = PrimitiveArray<IntervalYearMonthType>;
 
 /// A [`PrimitiveArray`] of “calendar” intervals in days and milliseconds
 ///
-/// See [`IntervalDayTimeType`] for details on representation and caveats.
+/// See [`IntervalDayTime`] for details on representation and caveats.
+///
+/// # Example
+/// ```
+/// # use arrow_array::IntervalDayTimeArray;
+/// use arrow_array::types::IntervalDayTime;
+/// let array = IntervalDayTimeArray::from(vec![
+///   IntervalDayTime::new(1, 1000),                 // 1 day, 1000 milliseconds
+///   IntervalDayTime::new(33, 0),                  // 33 days, 0 milliseconds
+///   IntervalDayTime::new(0, 12 * 60 * 60 * 1000), // 0 days, 12 hours
+/// ]);
+/// ```
 pub type IntervalDayTimeArray = PrimitiveArray<IntervalDayTimeType>;
 
 /// A [`PrimitiveArray`] of “calendar” intervals in  months, days, and nanoseconds.
 ///
-/// See [`IntervalMonthDayNanoType`] for details on representation and caveats.
+/// See [`IntervalMonthDayNano`] for details on representation and caveats.
+///
+/// # Example
+/// ```
+/// # use arrow_array::IntervalMonthDayNanoArray;
+/// use arrow_array::types::IntervalMonthDayNano;
+/// let array = IntervalMonthDayNanoArray::from(vec![
+///   IntervalMonthDayNano::new(1, 2, 1000),             // 1 month, 2 days, 1 nanosecond
+///   IntervalMonthDayNano::new(12, 1, 0),               // 12 months, 1 days, 0 nanoseconds
+///   IntervalMonthDayNano::new(0, 0, 12 * 1000 * 1000), // 0 days, 12 milliseconds
+/// ]);
+/// ```
 pub type IntervalMonthDayNanoArray = PrimitiveArray<IntervalMonthDayNanoType>;
 
 /// A [`PrimitiveArray`] of elapsed durations in seconds
@@ -419,7 +451,7 @@ pub type Decimal256Array = PrimitiveArray<Decimal256Type>;
 
 pub use crate::types::ArrowPrimitiveType;
 
-/// An array of [primitive values](https://arrow.apache.org/docs/format/Columnar.html#fixed-size-primitive-layout)
+/// An array of primitive values, of type [`ArrowPrimitiveType`]
 ///
 /// # Example: From a Vec
 ///
@@ -479,6 +511,19 @@ pub use crate::types::ArrowPrimitiveType;
 /// // Note: values for null indexes are arbitrary
 /// assert_eq!(array.values(), &[1, 0, 2]);
 /// assert!(array.is_null(1));
+/// ```
+///
+/// # Example: Get a `PrimitiveArray` from an [`ArrayRef`]
+/// ```
+/// # use std::sync::Arc;
+/// # use arrow_array::{Array, cast::AsArray, ArrayRef, Float32Array, PrimitiveArray};
+/// # use arrow_array::types::{Float32Type};
+/// # use arrow_schema::DataType;
+/// # let array: ArrayRef =  Arc::new(Float32Array::from(vec![1.2, 2.3]));
+/// // will panic if the array is not a Float32Array
+/// assert_eq!(&DataType::Float32, array.data_type());
+/// let f32_array: Float32Array  = array.as_primitive().clone();
+/// assert_eq!(f32_array, Float32Array::from(vec![1.2, 2.3]));
 /// ```
 pub struct PrimitiveArray<T: ArrowPrimitiveType> {
     data_type: DataType,
@@ -668,6 +713,20 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
         }
     }
 
+    /// Creates a PrimitiveArray based on an iterator of values with provided nulls
+    pub fn from_iter_values_with_nulls<I: IntoIterator<Item = T::Native>>(
+        iter: I,
+        nulls: Option<NullBuffer>,
+    ) -> Self {
+        let val_buf: Buffer = iter.into_iter().collect();
+        let len = val_buf.len() / std::mem::size_of::<T::Native>();
+        Self {
+            data_type: T::DATA_TYPE,
+            values: ScalarBuffer::new(val_buf, 0, len),
+            nulls,
+        }
+    }
+
     /// Creates a PrimitiveArray based on a constant value with `count` elements
     pub fn from_value(value: T::Native, count: usize) -> Self {
         unsafe {
@@ -732,22 +791,34 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
         PrimitiveArray::from(unsafe { d.build_unchecked() })
     }
 
-    /// Applies an unary and infallible function to a primitive array.
-    /// This is the fastest way to perform an operation on a primitive array when
-    /// the benefits of a vectorized operation outweigh the cost of branching nulls and non-nulls.
+    /// Applies a unary infallible function to a primitive array, producing a
+    /// new array of potentially different type.
     ///
-    /// # Implementation
+    /// This is the fastest way to perform an operation on a primitive array
+    /// when the benefits of a vectorized operation outweigh the cost of
+    /// branching nulls and non-nulls.
     ///
-    /// This will apply the function for all values, including those on null slots.
-    /// This implies that the operation must be infallible for any value of the corresponding type
-    /// or this function may panic.
+    /// See also
+    /// * [`Self::unary_mut`] for in place modification.
+    /// * [`Self::try_unary`] for fallible operations.
+    /// * [`arrow::compute::binary`] for binary operations
+    ///
+    /// [`arrow::compute::binary`]: https://docs.rs/arrow/latest/arrow/compute/fn.binary.html
+    /// # Null Handling
+    ///
+    /// Applies the function for all values, including those on null slots. This
+    /// will often allow the compiler to generate faster vectorized code, but
+    /// requires that the operation must be infallible (not error/panic) for any
+    /// value of the corresponding type or this function may panic.
+    ///
     /// # Example
     /// ```rust
-    /// # use arrow_array::{Int32Array, types::Int32Type};
+    /// # use arrow_array::{Int32Array, Float32Array, types::Int32Type};
     /// # fn main() {
     /// let array = Int32Array::from(vec![Some(5), Some(7), None]);
-    /// let c = array.unary(|x| x * 2 + 1);
-    /// assert_eq!(c, Int32Array::from(vec![Some(11), Some(15), None]));
+    /// // Create a new array with the value of applying sqrt
+    /// let c = array.unary(|x| f32::sqrt(x as f32));
+    /// assert_eq!(c, Float32Array::from(vec![Some(2.236068), Some(2.6457512), None]));
     /// # }
     /// ```
     pub fn unary<F, O>(&self, op: F) -> PrimitiveArray<O>
@@ -766,24 +837,50 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
         PrimitiveArray::new(buffer.into(), nulls)
     }
 
-    /// Applies an unary and infallible function to a mutable primitive array.
-    /// Mutable primitive array means that the buffer is not shared with other arrays.
-    /// As a result, this mutates the buffer directly without allocating new buffer.
+    /// Applies a unary and infallible function to the array in place if possible.
     ///
-    /// # Implementation
+    /// # Buffer Reuse
     ///
-    /// This will apply the function for all values, including those on null slots.
-    /// This implies that the operation must be infallible for any value of the corresponding type
-    /// or this function may panic.
+    /// If the underlying buffers are not shared with other arrays,  mutates the
+    /// underlying buffer in place, without allocating.
+    ///
+    /// If the underlying buffer is shared, returns Err(self)
+    ///
+    /// # Null Handling
+    ///
+    /// See [`Self::unary`] for more information on null handling.
+    ///
     /// # Example
+    ///
     /// ```rust
     /// # use arrow_array::{Int32Array, types::Int32Type};
-    /// # fn main() {
     /// let array = Int32Array::from(vec![Some(5), Some(7), None]);
+    /// // Apply x*2+1 to the data in place, no allocations
     /// let c = array.unary_mut(|x| x * 2 + 1).unwrap();
     /// assert_eq!(c, Int32Array::from(vec![Some(11), Some(15), None]));
-    /// # }
     /// ```
+    ///
+    /// # Example: modify [`ArrayRef`] in place, if not shared
+    ///
+    /// It is also possible to modify an [`ArrayRef`] if there are no other
+    /// references to the underlying buffer.
+    ///
+    /// ```rust
+    /// # use std::sync::Arc;
+    /// # use arrow_array::{Array, cast::AsArray, ArrayRef, Int32Array, PrimitiveArray, types::Int32Type};
+    /// # let array: ArrayRef = Arc::new(Int32Array::from(vec![Some(5), Some(7), None]));
+    /// // Convert to Int32Array (panic's if array.data_type is not Int32)
+    /// let a = array.as_primitive::<Int32Type>().clone();
+    /// // Try to apply x*2+1 to the data in place, fails because array is still shared
+    /// a.unary_mut(|x| x * 2 + 1).unwrap_err();
+    /// // Try again, this time dropping the last remaining reference
+    /// let a = array.as_primitive::<Int32Type>().clone();
+    /// drop(array);
+    /// // Now we can apply the operation in place
+    /// let c = a.unary_mut(|x| x * 2 + 1).unwrap();
+    /// assert_eq!(c, Int32Array::from(vec![Some(11), Some(15), None]));
+    /// ```
+
     pub fn unary_mut<F>(self, op: F) -> Result<PrimitiveArray<T>, PrimitiveArray<T>>
     where
         F: Fn(T::Native) -> T::Native,
@@ -796,11 +893,12 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
         Ok(builder.finish())
     }
 
-    /// Applies a unary and fallible function to all valid values in a primitive array
+    /// Applies a unary fallible function to all valid values in a primitive
+    /// array, producing a new array of potentially different type.
     ///
-    /// This is unlike [`Self::unary`] which will apply an infallible function to all rows
-    /// regardless of validity, in many cases this will be significantly faster and should
-    /// be preferred if `op` is infallible.
+    /// Applies `op` to only rows that are valid, which is often significantly
+    /// slower than [`Self::unary`], which should be preferred if `op` is
+    /// fallible.
     ///
     /// Note: LLVM is currently unable to effectively vectorize fallible operations
     pub fn try_unary<F, O, E>(&self, op: F) -> Result<PrimitiveArray<O>, E>
@@ -829,13 +927,16 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
         Ok(PrimitiveArray::new(values, nulls))
     }
 
-    /// Applies an unary and fallible function to all valid values in a mutable primitive array.
-    /// Mutable primitive array means that the buffer is not shared with other arrays.
-    /// As a result, this mutates the buffer directly without allocating new buffer.
+    /// Applies a unary fallible function to all valid values in a mutable
+    /// primitive array.
     ///
-    /// This is unlike [`Self::unary_mut`] which will apply an infallible function to all rows
-    /// regardless of validity, in many cases this will be significantly faster and should
-    /// be preferred if `op` is infallible.
+    /// # Null Handling
+    ///
+    /// See [`Self::try_unary`] for more information on null handling.
+    ///
+    /// # Buffer Reuse
+    ///
+    /// See [`Self::unary_mut`] for more information on buffer reuse.
     ///
     /// This returns an `Err` when the input array is shared buffer with other
     /// array. In the case, returned `Err` wraps input array. If the function
@@ -870,9 +971,9 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
 
     /// Applies a unary and nullable function to all valid values in a primitive array
     ///
-    /// This is unlike [`Self::unary`] which will apply an infallible function to all rows
-    /// regardless of validity, in many cases this will be significantly faster and should
-    /// be preferred if `op` is infallible.
+    /// Applies `op` to only rows that are valid, which is often significantly
+    /// slower than [`Self::unary`], which should be preferred if `op` is
+    /// fallible.
     ///
     /// Note: LLVM is currently unable to effectively vectorize fallible operations
     pub fn unary_opt<F, O>(&self, op: F) -> PrimitiveArray<O>
@@ -915,8 +1016,46 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
         PrimitiveArray::new(values, Some(nulls))
     }
 
-    /// Returns `PrimitiveBuilder` of this primitive array for mutating its values if the underlying
-    /// data buffer is not shared by others.
+    /// Applies a unary infallible function to each value in an array, producing a
+    /// new primitive array.
+    ///
+    /// # Null Handling
+    ///
+    /// See [`Self::unary`] for more information on null handling.
+    ///
+    /// # Example: create an [`Int16Array`] from an [`ArrayAccessor`] with item type `&[u8]`
+    /// ```
+    /// use arrow_array::{Array, FixedSizeBinaryArray, Int16Array};
+    /// let input_arg = vec![ vec![1, 0], vec![2, 0], vec![3, 0] ];
+    /// let arr = FixedSizeBinaryArray::try_from_iter(input_arg.into_iter()).unwrap();
+    /// let c = Int16Array::from_unary(&arr, |x| i16::from_le_bytes(x[..2].try_into().unwrap()));
+    /// assert_eq!(c, Int16Array::from(vec![Some(1i16), Some(2i16), Some(3i16)]));
+    /// ```
+    pub fn from_unary<U: ArrayAccessor, F>(left: U, mut op: F) -> Self
+    where
+        F: FnMut(U::Item) -> T::Native,
+    {
+        let nulls = left.logical_nulls();
+        let buffer = unsafe {
+            // SAFETY: i in range 0..left.len()
+            let iter = (0..left.len()).map(|i| op(left.value_unchecked(i)));
+            // SAFETY: upper bound is trusted because `iter` is over a range
+            Buffer::from_trusted_len_iter(iter)
+        };
+
+        PrimitiveArray::new(buffer.into(), nulls)
+    }
+
+    /// Returns a `PrimitiveBuilder` for this array, suitable for mutating values
+    /// in place.
+    ///
+    /// # Buffer Reuse
+    ///
+    /// If the underlying data buffer has no other outstanding references, the
+    /// buffer is used without copying.
+    ///
+    /// If the underlying data buffer does have outstanding references, returns
+    /// `Err(self)`
     pub fn into_builder(self) -> Result<PrimitiveBuilder<T>, Self> {
         let len = self.len();
         let data = self.into_data();
@@ -1431,9 +1570,7 @@ impl<T: DecimalType + ArrowPrimitiveType> PrimitiveArray<T> {
     /// Validates the Decimal Array, if the value of slot is overflow for the specified precision, and
     /// will be casted to Null
     pub fn null_if_overflow_precision(&self, precision: u8) -> Self {
-        self.unary_opt::<_, T>(|v| {
-            (T::validate_decimal_precision(v, precision).is_ok()).then_some(v)
-        })
+        self.unary_opt::<_, T>(|v| T::is_valid_decimal_precision(v, precision).then_some(v))
     }
 
     /// Returns [`Self::value`] formatted as a string

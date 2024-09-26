@@ -632,21 +632,11 @@ mod tests {
         assert_eq!(0, list_array.null_count());
         assert_eq!(6, list_array.value_offsets()[2]);
         assert_eq!(2, list_array.value_length(2));
-        assert_eq!(
-            0,
-            list_array
-                .value(0)
-                .as_any()
-                .downcast_ref::<Int32Array>()
-                .unwrap()
-                .value(0)
-        );
+        assert_eq!(0, list_array.value(0).as_primitive::<Int32Type>().value(0));
         assert_eq!(
             0,
             unsafe { list_array.value_unchecked(0) }
-                .as_any()
-                .downcast_ref::<Int32Array>()
-                .unwrap()
+                .as_primitive::<Int32Type>()
                 .value(0)
         );
         for i in 0..3 {
@@ -672,21 +662,11 @@ mod tests {
         assert_eq!(0, list_array.null_count());
         assert_eq!(6, list_array.value_offsets()[1]);
         assert_eq!(2, list_array.value_length(1));
-        assert_eq!(
-            3,
-            list_array
-                .value(0)
-                .as_any()
-                .downcast_ref::<Int32Array>()
-                .unwrap()
-                .value(0)
-        );
+        assert_eq!(3, list_array.value(0).as_primitive::<Int32Type>().value(0));
         assert_eq!(
             3,
             unsafe { list_array.value_unchecked(0) }
-                .as_any()
-                .downcast_ref::<Int32Array>()
-                .unwrap()
+                .as_primitive::<Int32Type>()
                 .value(0)
         );
     }
@@ -721,21 +701,11 @@ mod tests {
         assert_eq!(0, list_array.null_count());
         assert_eq!(6, list_array.value_offsets()[2]);
         assert_eq!(2, list_array.value_length(2));
-        assert_eq!(
-            0,
-            list_array
-                .value(0)
-                .as_any()
-                .downcast_ref::<Int32Array>()
-                .unwrap()
-                .value(0)
-        );
+        assert_eq!(0, list_array.value(0).as_primitive::<Int32Type>().value(0));
         assert_eq!(
             0,
             unsafe { list_array.value_unchecked(0) }
-                .as_any()
-                .downcast_ref::<Int32Array>()
-                .unwrap()
+                .as_primitive::<Int32Type>()
                 .value(0)
         );
         for i in 0..3 {
@@ -761,21 +731,11 @@ mod tests {
         assert_eq!(0, list_array.null_count());
         assert_eq!(6, list_array.value_offsets()[1]);
         assert_eq!(2, list_array.value_length(1));
-        assert_eq!(
-            3,
-            list_array
-                .value(0)
-                .as_any()
-                .downcast_ref::<Int32Array>()
-                .unwrap()
-                .value(0)
-        );
+        assert_eq!(3, list_array.value(0).as_primitive::<Int32Type>().value(0));
         assert_eq!(
             3,
             unsafe { list_array.value_unchecked(0) }
-                .as_any()
-                .downcast_ref::<Int32Array>()
-                .unwrap()
+                .as_primitive::<Int32Type>()
                 .value(0)
         );
     }

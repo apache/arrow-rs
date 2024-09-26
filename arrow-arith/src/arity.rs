@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Defines kernels suitable to perform operations to primitive arrays.
+//! Kernels for operating on [`PrimitiveArray`]s
 
 use arrow_array::builder::BufferBuilder;
 use arrow_array::types::ArrowDictionaryKeyType;
@@ -162,18 +162,38 @@ where
     }
 }
 
+/// Allies a binary infallable function to two [`PrimitiveArray`]s,
+/// producing a new [`PrimitiveArray`]
+///
+/// # Details
+///
 /// Given two arrays of length `len`, calls `op(a[i], b[i])` for `i` in `0..len`, collecting
-/// the results in a [`PrimitiveArray`]. If any index is null in either `a` or `b`, the
+/// the results in a [`PrimitiveArray`].
+///
+/// If any index is null in either `a` or `b`, the
 /// corresponding index in the result will also be null
 ///
-/// Like [`unary`] the provided function is evaluated for every index, ignoring validity. This
-/// is beneficial when the cost of the operation is low compared to the cost of branching, and
-/// especially when the operation can be vectorised, however, requires `op` to be infallible
-/// for all possible values of its inputs
+/// Like [`unary`], the `op` is evaluated for every element in the two arrays,
+/// including those elements which are NULL. This is beneficial as the cost of
+/// the operation is low compared to the cost of branching, and especially when
+/// the operation can be vectorised, however, requires `op` to be infallible for
+/// all possible values of its inputs
 ///
-/// # Error
+/// # Errors
 ///
-/// This function gives error if the arrays have different lengths
+/// * if the arrays have different lengths.
+///
+/// # Example
+/// ```
+/// # use arrow_arith::arity::binary;
+/// # use arrow_array::{Float32Array, Int32Array};
+/// # use arrow_array::types::Int32Type;
+/// let a = Float32Array::from(vec![Some(5.1f32), None, Some(6.8), Some(7.2)]);
+/// let b = Int32Array::from(vec![1, 2, 4, 9]);
+/// // compute int(a) + b for each element
+/// let c = binary(&a, &b, |a, b| a as i32 + b).unwrap();
+/// assert_eq!(c, Int32Array::from(vec![Some(6), None, Some(10), Some(16)]));
+/// ```
 pub fn binary<A, B, F, O>(
     a: &PrimitiveArray<A>,
     b: &PrimitiveArray<B>,
@@ -207,31 +227,79 @@ where
     Ok(PrimitiveArray::new(buffer.into(), nulls))
 }
 
-/// Given two arrays of length `len`, calls `op(a[i], b[i])` for `i` in `0..len`, mutating
-/// the mutable [`PrimitiveArray`] `a`. If any index is null in either `a` or `b`, the
-/// corresponding index in the result will also be null.
+/// Applies a binary and infallible function to values in two arrays, replacing
+/// the values in the first array in place.
 ///
-/// Mutable primitive array means that the buffer is not shared with other arrays.
-/// As a result, this mutates the buffer directly without allocating new buffer.
+/// # Details
+///
+/// Given two arrays of length `len`, calls `op(a[i], b[i])` for `i` in
+/// `0..len`, modifying the [`PrimitiveArray`] `a` in place, if possible.
+///
+/// If any index is null in either `a` or `b`, the corresponding index in the
+/// result will also be null.
+///
+/// # Buffer Reuse
+///
+/// If the underlying buffers in `a` are not shared with other arrays,  mutates
+/// the underlying buffer in place, without allocating.
+///
+/// If the underlying buffer in `a` are shared, returns Err(self)
 ///
 /// Like [`unary`] the provided function is evaluated for every index, ignoring validity. This
 /// is beneficial when the cost of the operation is low compared to the cost of branching, and
 /// especially when the operation can be vectorised, however, requires `op` to be infallible
 /// for all possible values of its inputs
 ///
-/// # Error
+/// # Errors
 ///
-/// This function gives error if the arrays have different lengths.
-/// This function gives error of original [`PrimitiveArray`] `a` if it is not a mutable
-/// primitive array.
-pub fn binary_mut<T, F>(
+/// * If the arrays have different lengths
+/// * If the array is not mutable (see "Buffer Reuse")
+///
+/// # See Also
+///
+/// * Documentation on [`PrimitiveArray::unary_mut`] for operating on [`ArrayRef`].
+///
+/// # Example
+/// ```
+/// # use arrow_arith::arity::binary_mut;
+/// # use arrow_array::{Float32Array, Int32Array};
+/// # use arrow_array::types::Int32Type;
+/// // compute a + b for each element
+/// let a = Float32Array::from(vec![Some(5.1f32), None, Some(6.8)]);
+/// let b = Int32Array::from(vec![Some(1), None, Some(2)]);
+/// // compute a + b, updating the value in a in place if possible
+/// let a = binary_mut(a, &b, |a, b| a + b as f32).unwrap().unwrap();
+/// // a is updated in place
+/// assert_eq!(a, Float32Array::from(vec![Some(6.1), None, Some(8.8)]));
+/// ```
+///
+/// # Example with shared buffers
+/// ```
+/// # use arrow_arith::arity::binary_mut;
+/// # use arrow_array::Float32Array;
+/// # use arrow_array::types::Int32Type;
+/// let a = Float32Array::from(vec![Some(5.1f32), None, Some(6.8)]);
+/// let b = Float32Array::from(vec![Some(1.0f32), None, Some(2.0)]);
+/// // a_clone shares the buffer with a
+/// let a_cloned = a.clone();
+/// // try to update a in place, but it is shared. Returns Err(a)
+/// let a = binary_mut(a, &b, |a, b| a + b).unwrap_err();
+/// assert_eq!(a_cloned, a);
+/// // drop shared reference
+/// drop(a_cloned);
+/// // now a is not shared, so we can update it in place
+/// let a = binary_mut(a, &b, |a, b| a + b).unwrap().unwrap();
+/// assert_eq!(a, Float32Array::from(vec![Some(6.1), None, Some(8.8)]));
+/// ```
+pub fn binary_mut<T, U, F>(
     a: PrimitiveArray<T>,
-    b: &PrimitiveArray<T>,
+    b: &PrimitiveArray<U>,
     op: F,
 ) -> Result<Result<PrimitiveArray<T>, ArrowError>, PrimitiveArray<T>>
 where
     T: ArrowPrimitiveType,
-    F: Fn(T::Native, T::Native) -> T::Native,
+    U: ArrowPrimitiveType,
+    F: Fn(T::Native, U::Native) -> T::Native,
 {
     if a.len() != b.len() {
         return Ok(Err(ArrowError::ComputeError(
@@ -245,8 +313,6 @@ where
         ))));
     }
 
-    let nulls = NullBuffer::union(a.logical_nulls().as_ref(), b.logical_nulls().as_ref());
-
     let mut builder = a.into_builder()?;
 
     builder
@@ -255,14 +321,21 @@ where
         .zip(b.values())
         .for_each(|(l, r)| *l = op(*l, *r));
 
-    let array_builder = builder.finish().into_data().into_builder().nulls(nulls);
+    let array = builder.finish();
+
+    // The builder has the null buffer from `a`, it is not changed.
+    let nulls = NullBuffer::union(array.logical_nulls().as_ref(), b.logical_nulls().as_ref());
+
+    let array_builder = array.into_data().into_builder().nulls(nulls);
 
     let array_data = unsafe { array_builder.build_unchecked() };
     Ok(Ok(PrimitiveArray::<T>::from(array_data)))
 }
 
-/// Applies the provided fallible binary operation across `a` and `b`, returning any error,
-/// and collecting the results into a [`PrimitiveArray`]. If any index is null in either `a`
+/// Applies the provided fallible binary operation across `a` and `b`.
+///
+/// This will return any error encountered, or collect the results into
+/// a [`PrimitiveArray`]. If any index is null in either `a`
 /// or `b`, the corresponding index in the result will also be null
 ///
 /// Like [`try_unary`] the function is only evaluated for non-null indices
@@ -313,20 +386,15 @@ where
 }
 
 /// Applies the provided fallible binary operation across `a` and `b` by mutating the mutable
-/// [`PrimitiveArray`] `a` with the results, returning any error. If any index is null in
-/// either `a` or `b`, the corresponding index in the result will also be null
+/// [`PrimitiveArray`] `a` with the results.
 ///
-/// Like [`try_unary`] the function is only evaluated for non-null indices
+/// Returns any error encountered, or collects the results into a [`PrimitiveArray`] as return
+/// value. If any index is null in either `a` or `b`, the corresponding index in the result will
+/// also be null.
 ///
-/// Mutable primitive array means that the buffer is not shared with other arrays.
-/// As a result, this mutates the buffer directly without allocating new buffer.
+/// Like [`try_unary`] the function is only evaluated for non-null indices.
 ///
-/// # Error
-///
-/// Return an error if the arrays have different lengths or
-/// the operation is under erroneous.
-/// This function gives error of original [`PrimitiveArray`] `a` if it is not a mutable
-/// primitive array.
+/// See [`binary_mut`] for errors and buffer reuse information.
 pub fn try_binary_mut<T, F>(
     a: PrimitiveArray<T>,
     b: &PrimitiveArray<T>,
@@ -353,7 +421,8 @@ where
         try_binary_no_nulls_mut(len, a, b, op)
     } else {
         let nulls =
-            NullBuffer::union(a.logical_nulls().as_ref(), b.logical_nulls().as_ref()).unwrap();
+            create_union_null_buffer(a.logical_nulls().as_ref(), b.logical_nulls().as_ref())
+                .unwrap();
 
         let mut builder = a.into_builder()?;
 
@@ -372,6 +441,22 @@ where
         let array_builder = builder.finish().into_data().into_builder();
         let array_data = unsafe { array_builder.nulls(Some(nulls)).build_unchecked() };
         Ok(Ok(PrimitiveArray::<T>::from(array_data)))
+    }
+}
+
+/// Computes the union of the nulls in two optional [`NullBuffer`] which
+/// is not shared with the input buffers.
+///
+/// The union of the nulls is the same as `NullBuffer::union(lhs, rhs)` but
+/// it does not increase the reference count of the null buffer.
+fn create_union_null_buffer(
+    lhs: Option<&NullBuffer>,
+    rhs: Option<&NullBuffer>,
+) -> Option<NullBuffer> {
+    match (lhs, rhs) {
+        (Some(lhs), Some(rhs)) => Some(NullBuffer::new(lhs.inner() & rhs.inner())),
+        (Some(n), None) | (None, Some(n)) => Some(NullBuffer::new(n.inner() & n.inner())),
+        (None, None) => None,
     }
 }
 
@@ -498,6 +583,25 @@ mod tests {
     }
 
     #[test]
+    fn test_binary_mut_null_buffer() {
+        let a = Int32Array::from(vec![Some(3), Some(4), Some(5), Some(6), None]);
+
+        let b = Int32Array::from(vec![Some(10), Some(11), Some(12), Some(13), Some(14)]);
+
+        let r1 = binary_mut(a, &b, |a, b| a + b).unwrap();
+
+        let a = Int32Array::from(vec![Some(3), Some(4), Some(5), Some(6), None]);
+        let b = Int32Array::new(
+            vec![10, 11, 12, 13, 14].into(),
+            Some(vec![true, true, true, true, true].into()),
+        );
+
+        // unwrap here means that no copying occured
+        let r2 = binary_mut(a, &b, |a, b| a + b).unwrap();
+        assert_eq!(r1.unwrap(), r2.unwrap());
+    }
+
+    #[test]
     fn test_try_binary_mut() {
         let a = Int32Array::from(vec![15, 14, 9, 8, 1]);
         let b = Int32Array::from(vec![Some(1), None, Some(3), None, Some(5)]);
@@ -525,6 +629,25 @@ mod tests {
         })
         .unwrap()
         .expect_err("should got error");
+    }
+
+    #[test]
+    fn test_try_binary_mut_null_buffer() {
+        let a = Int32Array::from(vec![Some(3), Some(4), Some(5), Some(6), None]);
+
+        let b = Int32Array::from(vec![Some(10), Some(11), Some(12), Some(13), Some(14)]);
+
+        let r1 = try_binary_mut(a, &b, |a, b| Ok(a + b)).unwrap();
+
+        let a = Int32Array::from(vec![Some(3), Some(4), Some(5), Some(6), None]);
+        let b = Int32Array::new(
+            vec![10, 11, 12, 13, 14].into(),
+            Some(vec![true, true, true, true, true].into()),
+        );
+
+        // unwrap here means that no copying occured
+        let r2 = try_binary_mut(a, &b, |a, b| Ok(a + b)).unwrap();
+        assert_eq!(r1.unwrap(), r2.unwrap());
     }
 
     #[test]

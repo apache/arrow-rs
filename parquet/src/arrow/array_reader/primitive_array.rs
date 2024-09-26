@@ -217,22 +217,22 @@ where
                 arrow_cast::cast(&a, target_type)?
             }
             ArrowType::Decimal128(p, s) => {
+                // Apply conversion to all elements regardless of null slots as the conversion
+                // to `i128` is infallible. This improves performance by avoiding a branch in
+                // the inner loop (see docs for `PrimitiveArray::unary`).
                 let array = match array.data_type() {
                     ArrowType::Int32 => array
                         .as_any()
                         .downcast_ref::<Int32Array>()
                         .unwrap()
-                        .iter()
-                        .map(|v| v.map(|v| v as i128))
-                        .collect::<Decimal128Array>(),
-
+                        .unary(|i| i as i128)
+                        as Decimal128Array,
                     ArrowType::Int64 => array
                         .as_any()
                         .downcast_ref::<Int64Array>()
                         .unwrap()
-                        .iter()
-                        .map(|v| v.map(|v| v as i128))
-                        .collect::<Decimal128Array>(),
+                        .unary(|i| i as i128)
+                        as Decimal128Array,
                     _ => {
                         return Err(arrow_err!(
                             "Cannot convert {:?} to decimal",
@@ -245,22 +245,20 @@ where
                 Arc::new(array) as ArrayRef
             }
             ArrowType::Decimal256(p, s) => {
+                // See above comment. Conversion to `i256` is likewise infallible.
                 let array = match array.data_type() {
                     ArrowType::Int32 => array
                         .as_any()
                         .downcast_ref::<Int32Array>()
                         .unwrap()
-                        .iter()
-                        .map(|v| v.map(|v| i256::from_i128(v as i128)))
-                        .collect::<Decimal256Array>(),
-
+                        .unary(|i| i256::from_i128(i as i128))
+                        as Decimal256Array,
                     ArrowType::Int64 => array
                         .as_any()
                         .downcast_ref::<Int64Array>()
                         .unwrap()
-                        .iter()
-                        .map(|v| v.map(|v| i256::from_i128(v as i128)))
-                        .collect::<Decimal256Array>(),
+                        .unary(|i| i256::from_i128(i as i128))
+                        as Decimal256Array,
                     _ => {
                         return Err(arrow_err!(
                             "Cannot convert {:?} to decimal",

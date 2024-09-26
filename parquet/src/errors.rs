@@ -112,6 +112,13 @@ impl From<ArrowError> for ParquetError {
     }
 }
 
+#[cfg(feature = "object_store")]
+impl From<object_store::Error> for ParquetError {
+    fn from(e: object_store::Error) -> ParquetError {
+        ParquetError::External(Box::new(e))
+    }
+}
+
 /// A specialized `Result` for Parquet errors.
 pub type Result<T, E = ParquetError> = result::Result<T, E>;
 

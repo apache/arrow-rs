@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! Provides `rank` function to assign a rank to each value in an array
+
 use arrow_array::cast::AsArray;
 use arrow_array::types::*;
 use arrow_array::{downcast_primitive_array, Array, ArrowNativeTypeOp, GenericByteArray};

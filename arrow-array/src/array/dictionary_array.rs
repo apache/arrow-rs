@@ -1025,13 +1025,13 @@ mod tests {
         let value_data = ArrayData::builder(DataType::Int8)
             .len(8)
             .add_buffer(Buffer::from(
-                &[10_i8, 11, 12, 13, 14, 15, 16, 17].to_byte_slice(),
+                [10_i8, 11, 12, 13, 14, 15, 16, 17].to_byte_slice(),
             ))
             .build()
             .unwrap();
 
         // Construct a buffer for value offsets, for the nested array:
-        let keys = Buffer::from(&[2_i16, 3, 4].to_byte_slice());
+        let keys = Buffer::from([2_i16, 3, 4].to_byte_slice());
 
         // Construct a dictionary array from the above two
         let key_type = DataType::Int16;

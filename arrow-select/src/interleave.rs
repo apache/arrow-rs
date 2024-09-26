@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! Interleave elements from multiple arrays
+
 use crate::dictionary::{merge_dictionary_values, should_merge_dictionary_values};
 use arrow_array::builder::{BooleanBufferBuilder, BufferBuilder, PrimitiveBuilder};
 use arrow_array::cast::AsArray;
@@ -63,7 +65,7 @@ macro_rules! dict_helper {
 ///   values array 1
 /// ```
 ///
-/// For selecting values by index from a single array see [`crate::interleave`]
+/// For selecting values by index from a single array see [`crate::take`]
 pub fn interleave(
     values: &[&dyn Array],
     indices: &[(usize, usize)],

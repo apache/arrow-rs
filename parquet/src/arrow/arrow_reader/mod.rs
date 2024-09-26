@@ -25,24 +25,22 @@ use arrow_array::Array;
 use arrow_array::{RecordBatch, RecordBatchReader};
 use arrow_schema::{ArrowError, DataType as ArrowType, Schema, SchemaRef};
 use arrow_select::filter::prep_null_mask_filter;
+pub use filter::{ArrowPredicate, ArrowPredicateFn, RowFilter};
+pub use selection::{RowSelection, RowSelector};
 
+pub use crate::arrow::array_reader::RowGroups;
 use crate::arrow::array_reader::{build_array_reader, ArrayReader};
 use crate::arrow::schema::{parquet_to_arrow_schema_and_fields, ParquetField};
-use crate::arrow::{FieldLevels, ProjectionMask};
+use crate::arrow::{parquet_to_arrow_field_levels, FieldLevels, ProjectionMask};
+use crate::column::page::{PageIterator, PageReader};
 use crate::errors::{ParquetError, Result};
-use crate::file::metadata::ParquetMetaData;
+use crate::file::metadata::{ParquetMetaData, ParquetMetaDataReader};
 use crate::file::reader::{ChunkReader, SerializedPageReader};
 use crate::schema::types::SchemaDescriptor;
 
 mod filter;
 mod selection;
-
-pub use crate::arrow::array_reader::RowGroups;
-use crate::column::page::{PageIterator, PageReader};
-use crate::file::footer;
-use crate::file::page_index::index_reader;
-pub use filter::{ArrowPredicate, ArrowPredicateFn, RowFilter};
-pub use selection::{RowSelection, RowSelector};
+pub mod statistics;
 
 /// Builder for constructing parquet readers into arrow.
 ///
@@ -117,6 +115,8 @@ impl<T> ArrowReaderBuilder<T> {
     }
 
     /// Only read data from the provided row group indexes
+    ///
+    /// This is also called row group filtering
     pub fn with_row_groups(self, row_groups: Vec<usize>) -> Self {
         Self {
             row_groups: Some(row_groups),
@@ -135,14 +135,60 @@ impl<T> ArrowReaderBuilder<T> {
     /// Provide a [`RowSelection`] to filter out rows, and avoid fetching their
     /// data into memory.
     ///
-    /// Row group filtering is applied prior to this, and therefore rows from skipped
-    /// row groups should not be included in the [`RowSelection`]
+    /// This feature is used to restrict which rows are decoded within row
+    /// groups, skipping ranges of rows that are not needed. Such selections
+    /// could be determined by evaluating predicates against the parquet page
+    /// [`Index`] or some other external information available to a query
+    /// engine.
     ///
-    /// An example use case of this would be applying a selection determined by
-    /// evaluating predicates against the [`Index`]
+    /// # Notes
     ///
-    /// It is recommended to enable reading the page index if using this functionality, to allow
-    /// more efficient skipping over data pages. See [`ArrowReaderOptions::with_page_index`]
+    /// Row group filtering (see [`Self::with_row_groups`]) is applied prior to
+    /// applying the row selection, and therefore rows from skipped row groups
+    /// should not be included in the [`RowSelection`] (see example below)
+    ///
+    /// It is recommended to enable writing the page index if using this
+    /// functionality, to allow more efficient skipping over data pages. See
+    /// [`ArrowReaderOptions::with_page_index`].
+    ///
+    /// # Example
+    ///
+    /// Given a parquet file with 4 row groups, and a row group filter of `[0,
+    /// 2, 3]`, in order to scan rows 50-100 in row group 2 and rows 200-300 in
+    /// row group 3:
+    ///
+    /// ```text
+    ///   Row Group 0, 1000 rows (selected)
+    ///   Row Group 1, 1000 rows (skipped)
+    ///   Row Group 2, 1000 rows (selected, but want to only scan rows 50-100)
+    ///   Row Group 3, 1000 rows (selected, but want to only scan rows 200-300)
+    /// ```
+    ///
+    /// You could pass the following [`RowSelection`]:
+    ///
+    /// ```text
+    ///  Select 1000    (scan all rows in row group 0)
+    ///  Skip 50        (skip the first 50 rows in row group 2)
+    ///  Select 50      (scan rows 50-100 in row group 2)
+    ///  Skip 900       (skip the remaining rows in row group 2)
+    ///  Skip 200       (skip the first 200 rows in row group 3)
+    ///  Select 100     (scan rows 200-300 in row group 3)
+    ///  Skip 700       (skip the remaining rows in row group 3)
+    /// ```
+    /// Note there is no entry for the (entirely) skipped row group 1.
+    ///
+    /// Note you can represent the same selection with fewer entries. Instead of
+    ///
+    /// ```text
+    ///  Skip 900       (skip the remaining rows in row group 2)
+    ///  Skip 200       (skip the first 200 rows in row group 3)
+    /// ```
+    ///
+    /// you could use
+    ///
+    /// ```text
+    /// Skip 1100      (skip the remaining 900 rows in row group 2 and the first 200 rows in row group 3)
+    /// ```
     ///
     /// [`Index`]: crate::file::page_index::index::Index
     pub fn with_row_selection(self, selection: RowSelection) -> Self {
@@ -200,7 +246,11 @@ impl<T> ArrowReaderBuilder<T> {
 /// is then read from the file, including projection and filter pushdown
 #[derive(Debug, Clone, Default)]
 pub struct ArrowReaderOptions {
+    /// Should the reader strip any user defined metadata from the Arrow schema
     skip_arrow_metadata: bool,
+    /// If provided used as the schema for the file, otherwise the schema is read from the file
+    supplied_schema: Option<SchemaRef>,
+    /// If true, attempt to read `OffsetIndex` and `ColumnIndex`
     pub(crate) page_index: bool,
 }
 
@@ -210,12 +260,12 @@ impl ArrowReaderOptions {
         Self::default()
     }
 
+    /// Skip decoding the embedded arrow metadata (defaults to `false`)
+    ///
     /// Parquet files generated by some writers may contain embedded arrow
-    /// schema and metadata. This may not be correct or compatible with your system.
-    ///
-    /// For example:[ARROW-16184](https://issues.apache.org/jira/browse/ARROW-16184)
-    ///
-    /// Set `skip_arrow_metadata` to true, to skip decoding this
+    /// schema and metadata.
+    /// This may not be correct or compatible with your system,
+    /// for example: [ARROW-16184](https://issues.apache.org/jira/browse/ARROW-16184)
     pub fn with_skip_arrow_metadata(self, skip_arrow_metadata: bool) -> Self {
         Self {
             skip_arrow_metadata,
@@ -223,70 +273,197 @@ impl ArrowReaderOptions {
         }
     }
 
-    /// Set this true to enable decoding of the [PageIndex] if present. This can be used
-    /// to push down predicates to the parquet scan, potentially eliminating unnecessary IO
+    /// Provide a schema to use when reading the parquet file. If provided it
+    /// takes precedence over the schema inferred from the file or the schema defined
+    /// in the file's metadata. If the schema is not compatible with the file's
+    /// schema an error will be returned when constructing the builder.
     ///
-    /// [PageIndex]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
+    /// This option is only required if you want to cast columns to a different type.
+    /// For example, if you wanted to cast from an Int64 in the Parquet file to a Timestamp
+    /// in the Arrow schema.
+    ///
+    /// The supplied schema must have the same number of columns as the parquet schema and
+    /// the column names need to be the same.
+    ///
+    /// # Example
+    /// ```
+    /// use std::io::Bytes;
+    /// use std::sync::Arc;
+    /// use tempfile::tempfile;
+    /// use arrow_array::{ArrayRef, Int32Array, RecordBatch};
+    /// use arrow_schema::{DataType, Field, Schema, TimeUnit};
+    /// use parquet::arrow::arrow_reader::{ArrowReaderOptions, ParquetRecordBatchReaderBuilder};
+    /// use parquet::arrow::ArrowWriter;
+    ///
+    /// // Write data - schema is inferred from the data to be Int32
+    /// let file = tempfile().unwrap();
+    /// let batch = RecordBatch::try_from_iter(vec![
+    ///     ("col_1", Arc::new(Int32Array::from(vec![1, 2, 3])) as ArrayRef),
+    /// ]).unwrap();
+    /// let mut writer = ArrowWriter::try_new(file.try_clone().unwrap(), batch.schema(), None).unwrap();
+    /// writer.write(&batch).unwrap();
+    /// writer.close().unwrap();
+    ///
+    /// // Read the file back.
+    /// // Supply a schema that interprets the Int32 column as a Timestamp.
+    /// let supplied_schema = Arc::new(Schema::new(vec![
+    ///     Field::new("col_1", DataType::Timestamp(TimeUnit::Nanosecond, None), false)
+    /// ]));
+    /// let options = ArrowReaderOptions::new().with_schema(supplied_schema.clone());
+    /// let mut builder = ParquetRecordBatchReaderBuilder::try_new_with_options(
+    ///     file.try_clone().unwrap(),
+    ///     options
+    /// ).expect("Error if the schema is not compatible with the parquet file schema.");
+    ///
+    /// // Create the reader and read the data using the supplied schema.
+    /// let mut reader = builder.build().unwrap();
+    /// let _batch = reader.next().unwrap().unwrap();   
+    /// ```
+    pub fn with_schema(self, schema: SchemaRef) -> Self {
+        Self {
+            supplied_schema: Some(schema),
+            skip_arrow_metadata: true,
+            ..self
+        }
+    }
+
+    /// Enable reading [`PageIndex`], if present (defaults to `false`)
+    ///
+    /// The `PageIndex` can be used to push down predicates to the parquet scan,
+    /// potentially eliminating unnecessary IO, by some query engines.
+    ///
+    /// If this is enabled, [`ParquetMetaData::column_index`] and
+    /// [`ParquetMetaData::offset_index`] will be populated if the corresponding
+    /// information is present in the file.
+    ///
+    /// [`PageIndex`]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
+    /// [`ParquetMetaData::column_index`]: crate::file::metadata::ParquetMetaData::column_index
+    /// [`ParquetMetaData::offset_index`]: crate::file::metadata::ParquetMetaData::offset_index
     pub fn with_page_index(self, page_index: bool) -> Self {
         Self { page_index, ..self }
     }
 }
 
-/// The cheaply clone-able metadata necessary to construct a [`ArrowReaderBuilder`]
+/// The metadata necessary to construct a [`ArrowReaderBuilder`]
 ///
-/// This allows loading the metadata for a file once and then using this to construct
-/// multiple separate readers, for example, to distribute readers across multiple threads
+/// Note this structure is cheaply clone-able as it consists of several arcs.
+///
+/// This structure allows
+///
+/// 1. Loading metadata for a file once and then using that same metadata to
+///    construct multiple separate readers, for example, to distribute readers
+///    across multiple threads
+///
+/// 2. Using a cached copy of the [`ParquetMetadata`] rather than reading it
+///    from the file each time a reader is constructed.
+///
+/// [`ParquetMetadata`]: crate::file::metadata::ParquetMetaData
 #[derive(Debug, Clone)]
 pub struct ArrowReaderMetadata {
+    /// The Parquet Metadata, if known aprior
     pub(crate) metadata: Arc<ParquetMetaData>,
-
+    /// The Arrow Schema
     pub(crate) schema: SchemaRef,
 
     pub(crate) fields: Option<Arc<ParquetField>>,
 }
 
 impl ArrowReaderMetadata {
-    /// Loads [`ArrowReaderMetadata`] from the provided [`ChunkReader`]
+    /// Loads [`ArrowReaderMetadata`] from the provided [`ChunkReader`], if necessary
     ///
-    /// See [`ParquetRecordBatchReaderBuilder::new_with_metadata`] for how this can be used
+    /// See [`ParquetRecordBatchReaderBuilder::new_with_metadata`] for an
+    /// example of how this can be used
+    ///
+    /// # Notes
+    ///
+    /// If `options` has [`ArrowReaderOptions::with_page_index`] true, but
+    /// `Self::metadata` is missing the page index, this function will attempt
+    /// to load the page index by making an object store request.
     pub fn load<T: ChunkReader>(reader: &T, options: ArrowReaderOptions) -> Result<Self> {
-        let mut metadata = footer::parse_metadata(reader)?;
-        if options.page_index {
-            let column_index = metadata
-                .row_groups()
-                .iter()
-                .map(|rg| index_reader::read_columns_indexes(reader, rg.columns()))
-                .collect::<Result<Vec<_>>>()?;
-            metadata.set_column_index(Some(column_index));
-
-            let offset_index = metadata
-                .row_groups()
-                .iter()
-                .map(|rg| index_reader::read_pages_locations(reader, rg.columns()))
-                .collect::<Result<Vec<_>>>()?;
-
-            metadata.set_offset_index(Some(offset_index))
-        }
+        let metadata = ParquetMetaDataReader::new()
+            .with_page_indexes(options.page_index)
+            .parse_and_finish(reader)?;
         Self::try_new(Arc::new(metadata), options)
     }
 
+    /// Create a new [`ArrowReaderMetadata`]
+    ///
+    /// # Notes
+    ///
+    /// This function does not attempt to load the PageIndex if not present in the metadata.
+    /// See [`Self::load`] for more details.
     pub fn try_new(metadata: Arc<ParquetMetaData>, options: ArrowReaderOptions) -> Result<Self> {
-        let kv_metadata = match options.skip_arrow_metadata {
-            true => None,
-            false => metadata.file_metadata().key_value_metadata(),
-        };
+        match options.supplied_schema {
+            Some(supplied_schema) => Self::with_supplied_schema(metadata, supplied_schema.clone()),
+            None => {
+                let kv_metadata = match options.skip_arrow_metadata {
+                    true => None,
+                    false => metadata.file_metadata().key_value_metadata(),
+                };
 
-        let (schema, fields) = parquet_to_arrow_schema_and_fields(
-            metadata.file_metadata().schema_descr(),
+                let (schema, fields) = parquet_to_arrow_schema_and_fields(
+                    metadata.file_metadata().schema_descr(),
+                    ProjectionMask::all(),
+                    kv_metadata,
+                )?;
+
+                Ok(Self {
+                    metadata,
+                    schema: Arc::new(schema),
+                    fields: fields.map(Arc::new),
+                })
+            }
+        }
+    }
+
+    fn with_supplied_schema(
+        metadata: Arc<ParquetMetaData>,
+        supplied_schema: SchemaRef,
+    ) -> Result<Self> {
+        let parquet_schema = metadata.file_metadata().schema_descr();
+        let field_levels = parquet_to_arrow_field_levels(
+            parquet_schema,
             ProjectionMask::all(),
-            kv_metadata,
+            Some(supplied_schema.fields()),
         )?;
+        let fields = field_levels.fields;
+        let inferred_len = fields.len();
+        let supplied_len = supplied_schema.fields().len();
+        // Ensure the supplied schema has the same number of columns as the parquet schema.
+        // parquet_to_arrow_field_levels is expected to throw an error if the schemas have
+        // different lengths, but we check here to be safe.
+        if inferred_len != supplied_len {
+            Err(arrow_err!(format!(
+                "incompatible arrow schema, expected {} columns received {}",
+                inferred_len, supplied_len
+            )))
+        } else {
+            let diff_fields: Vec<_> = supplied_schema
+                .fields()
+                .iter()
+                .zip(fields.iter())
+                .filter_map(|(field1, field2)| {
+                    if field1 != field2 {
+                        Some(field1.name().clone())
+                    } else {
+                        None
+                    }
+                })
+                .collect();
 
-        Ok(Self {
-            metadata,
-            schema: Arc::new(schema),
-            fields: fields.map(Arc::new),
-        })
+            if !diff_fields.is_empty() {
+                Err(ParquetError::ArrowError(format!(
+                    "incompatible arrow schema, the following fields could not be cast: [{}]",
+                    diff_fields.join(", ")
+                )))
+            } else {
+                Ok(Self {
+                    metadata,
+                    schema: supplied_schema,
+                    fields: field_levels.levels.map(Arc::new),
+                })
+            }
+        }
     }
 
     /// Returns a reference to the [`ParquetMetaData`] for this parquet file
@@ -357,9 +534,17 @@ impl<T: ChunkReader + 'static> ParquetRecordBatchReaderBuilder<T> {
 
     /// Create a [`ParquetRecordBatchReaderBuilder`] from the provided [`ArrowReaderMetadata`]
     ///
-    /// This allows loading metadata once and using it to create multiple builders with
-    /// potentially different settings
+    /// This interface allows:
     ///
+    /// 1. Loading metadata once and using it to create multiple builders with
+    ///    potentially different settings or run on different threads
+    ///
+    /// 2. Using a cached copy of the metadata rather than re-reading it from the
+    ///    file each time a reader is constructed.
+    ///
+    /// See the docs on [`ArrowReaderMetadata`] for more details
+    ///
+    /// # Example
     /// ```
     /// # use std::fs::metadata;
     /// # use std::sync::Arc;
@@ -488,7 +673,7 @@ impl<T: ChunkReader + 'static> Iterator for ReaderPageIterator<T> {
         // To avoid `i[rg_idx][self.oolumn_idx`] panic, we need to filter out empty `i[rg_idx]`.
         let page_locations = offset_index
             .filter(|i| !i[rg_idx].is_empty())
-            .map(|i| i[rg_idx][self.column_idx].clone());
+            .map(|i| i[rg_idx][self.column_idx].page_locations.clone());
         let total_rows = rg.num_rows() as usize;
         let reader = self.reader.clone();
 
@@ -731,7 +916,7 @@ pub(crate) fn evaluate_predicate(
 #[cfg(test)]
 mod tests {
     use std::cmp::min;
-    use std::collections::VecDeque;
+    use std::collections::{HashMap, VecDeque};
     use std::fmt::Formatter;
     use std::fs::File;
     use std::io::Seek;
@@ -748,11 +933,14 @@ mod tests {
     use arrow_array::cast::AsArray;
     use arrow_array::types::{
         Decimal128Type, Decimal256Type, DecimalType, Float16Type, Float32Type, Float64Type,
+        Time32MillisecondType, Time64MicrosecondType,
     };
     use arrow_array::*;
     use arrow_buffer::{i256, ArrowNativeType, Buffer, IntervalDayTime};
     use arrow_data::ArrayDataBuilder;
-    use arrow_schema::{ArrowError, DataType as ArrowDataType, Field, Fields, Schema};
+    use arrow_schema::{
+        ArrowError, DataType as ArrowDataType, Field, Fields, Schema, SchemaRef, TimeUnit,
+    };
     use arrow_select::concat::concat_batches;
 
     use crate::arrow::arrow_reader::{
@@ -858,6 +1046,7 @@ mod tests {
                 Encoding::PLAIN,
                 Encoding::RLE_DICTIONARY,
                 Encoding::DELTA_BINARY_PACKED,
+                Encoding::BYTE_STREAM_SPLIT,
             ],
         );
         run_single_column_reader_tests::<Int64Type, _, Int64Type>(
@@ -869,6 +1058,7 @@ mod tests {
                 Encoding::PLAIN,
                 Encoding::RLE_DICTIONARY,
                 Encoding::DELTA_BINARY_PACKED,
+                Encoding::BYTE_STREAM_SPLIT,
             ],
         );
         run_single_column_reader_tests::<FloatType, _, FloatType>(
@@ -1016,6 +1206,68 @@ mod tests {
         // Ensure can be downcast to the correct type
         ret.column(0).as_primitive::<Float16Type>();
         ret.column(1).as_primitive::<Float16Type>();
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_time_utc_roundtrip() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new(
+                "time_millis",
+                ArrowDataType::Time32(TimeUnit::Millisecond),
+                true,
+            )
+            .with_metadata(HashMap::from_iter(vec![(
+                "adjusted_to_utc".to_string(),
+                "".to_string(),
+            )])),
+            Field::new(
+                "time_micros",
+                ArrowDataType::Time64(TimeUnit::Microsecond),
+                true,
+            )
+            .with_metadata(HashMap::from_iter(vec![(
+                "adjusted_to_utc".to_string(),
+                "".to_string(),
+            )])),
+        ]));
+
+        let mut buf = Vec::with_capacity(1024);
+        let mut writer = ArrowWriter::try_new(&mut buf, schema.clone(), None)?;
+
+        let original = RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(Time32MillisecondArray::from(vec![
+                    Some(-1),
+                    Some(0),
+                    Some(86_399_000),
+                    Some(86_400_000),
+                    Some(86_401_000),
+                    None,
+                ])),
+                Arc::new(Time64MicrosecondArray::from(vec![
+                    Some(-1),
+                    Some(0),
+                    Some(86_399 * 1_000_000),
+                    Some(86_400 * 1_000_000),
+                    Some(86_401 * 1_000_000),
+                    None,
+                ])),
+            ],
+        )?;
+
+        writer.write(&original)?;
+        writer.close()?;
+
+        let mut reader = ParquetRecordBatchReader::try_new(Bytes::from(buf), 1024)?;
+        let ret = reader.next().unwrap()?;
+        assert_eq!(ret, original);
+
+        // Ensure can be downcast to the correct type
+        ret.column(0).as_primitive::<Time32MillisecondType>();
+        ret.column(1).as_primitive::<Time64MicrosecondType>();
 
         Ok(())
     }
@@ -1438,6 +1690,86 @@ mod tests {
             }
         }
         assert_eq!(row_count, 300);
+    }
+
+    #[test]
+    fn test_read_extended_byte_stream_split() {
+        let path = format!(
+            "{}/byte_stream_split_extended.gzip.parquet",
+            arrow::util::test_util::parquet_test_data(),
+        );
+        let file = File::open(path).unwrap();
+        let record_reader = ParquetRecordBatchReader::try_new(file, 128).unwrap();
+
+        let mut row_count = 0;
+        for batch in record_reader {
+            let batch = batch.unwrap();
+            row_count += batch.num_rows();
+
+            // 0,1 are f16
+            let f16_col = batch.column(0).as_primitive::<Float16Type>();
+            let f16_bss = batch.column(1).as_primitive::<Float16Type>();
+            assert_eq!(f16_col.len(), f16_bss.len());
+            f16_col
+                .iter()
+                .zip(f16_bss.iter())
+                .for_each(|(l, r)| assert_eq!(l.unwrap(), r.unwrap()));
+
+            // 2,3 are f32
+            let f32_col = batch.column(2).as_primitive::<Float32Type>();
+            let f32_bss = batch.column(3).as_primitive::<Float32Type>();
+            assert_eq!(f32_col.len(), f32_bss.len());
+            f32_col
+                .iter()
+                .zip(f32_bss.iter())
+                .for_each(|(l, r)| assert_eq!(l.unwrap(), r.unwrap()));
+
+            // 4,5 are f64
+            let f64_col = batch.column(4).as_primitive::<Float64Type>();
+            let f64_bss = batch.column(5).as_primitive::<Float64Type>();
+            assert_eq!(f64_col.len(), f64_bss.len());
+            f64_col
+                .iter()
+                .zip(f64_bss.iter())
+                .for_each(|(l, r)| assert_eq!(l.unwrap(), r.unwrap()));
+
+            // 6,7 are i32
+            let i32_col = batch.column(6).as_primitive::<types::Int32Type>();
+            let i32_bss = batch.column(7).as_primitive::<types::Int32Type>();
+            assert_eq!(i32_col.len(), i32_bss.len());
+            i32_col
+                .iter()
+                .zip(i32_bss.iter())
+                .for_each(|(l, r)| assert_eq!(l.unwrap(), r.unwrap()));
+
+            // 8,9 are i64
+            let i64_col = batch.column(8).as_primitive::<types::Int64Type>();
+            let i64_bss = batch.column(9).as_primitive::<types::Int64Type>();
+            assert_eq!(i64_col.len(), i64_bss.len());
+            i64_col
+                .iter()
+                .zip(i64_bss.iter())
+                .for_each(|(l, r)| assert_eq!(l.unwrap(), r.unwrap()));
+
+            // 10,11 are FLBA(5)
+            let flba_col = batch.column(10).as_fixed_size_binary();
+            let flba_bss = batch.column(11).as_fixed_size_binary();
+            assert_eq!(flba_col.len(), flba_bss.len());
+            flba_col
+                .iter()
+                .zip(flba_bss.iter())
+                .for_each(|(l, r)| assert_eq!(l.unwrap(), r.unwrap()));
+
+            // 12,13 are FLBA(4) (decimal(7,3))
+            let dec_col = batch.column(12).as_primitive::<Decimal128Type>();
+            let dec_bss = batch.column(13).as_primitive::<Decimal128Type>();
+            assert_eq!(dec_col.len(), dec_bss.len());
+            dec_col
+                .iter()
+                .zip(dec_bss.iter())
+                .for_each(|(l, r)| assert_eq!(l.unwrap(), r.unwrap()));
+        }
+        assert_eq!(row_count, 200);
     }
 
     #[test]
@@ -2217,105 +2549,187 @@ mod tests {
     fn test_invalid_utf8_string_array() {
         test_invalid_utf8_string_array_inner::<i32>();
     }
+
     #[test]
     fn test_invalid_utf8_large_string_array() {
         test_invalid_utf8_string_array_inner::<i64>();
     }
+
     fn test_invalid_utf8_string_array_inner<O: OffsetSizeTrait>() {
         let cases = [
-            (
-                invalid_utf8_first_char::<O>(),
-                "Parquet argument error: Parquet error: encountered non UTF-8 data",
-            ),
-            (
-                invalid_utf8_later_char::<O>(),
-                "Parquet argument error: Parquet error: encountered non UTF-8 data: invalid utf-8 sequence of 1 bytes from index 6",
-            ),
+            invalid_utf8_first_char::<O>(),
+            invalid_utf8_first_char_long_strings::<O>(),
+            invalid_utf8_later_char::<O>(),
+            invalid_utf8_later_char_long_strings::<O>(),
+            invalid_utf8_later_char_really_long_strings::<O>(),
+            invalid_utf8_later_char_really_long_strings2::<O>(),
         ];
-        for (array, expected_error) in cases {
-            // data is not valid utf8 we can not construct a correct StringArray
-            // safely, so purposely create an invalid StringArray
-            let array = unsafe {
-                GenericStringArray::<O>::new_unchecked(
-                    array.offsets().clone(),
-                    array.values().clone(),
-                    array.nulls().cloned(),
-                )
-            };
-            let data_type = array.data_type().clone();
-            let data = write_to_parquet(Arc::new(array));
-            let err = read_from_parquet(data).unwrap_err();
-            assert_eq!(err.to_string(), expected_error, "data type: {data_type:?}")
+        for array in &cases {
+            for encoding in STRING_ENCODINGS {
+                // data is not valid utf8 we can not construct a correct StringArray
+                // safely, so purposely create an invalid StringArray
+                let array = unsafe {
+                    GenericStringArray::<O>::new_unchecked(
+                        array.offsets().clone(),
+                        array.values().clone(),
+                        array.nulls().cloned(),
+                    )
+                };
+                let data_type = array.data_type().clone();
+                let data = write_to_parquet_with_encoding(Arc::new(array), *encoding);
+                let err = read_from_parquet(data).unwrap_err();
+                let expected_err =
+                    "Parquet argument error: Parquet error: encountered non UTF-8 data";
+                assert!(
+                    err.to_string().contains(expected_err),
+                    "data type: {data_type:?}, expected: {expected_err}, got: {err}"
+                );
+            }
         }
     }
 
     #[test]
     fn test_invalid_utf8_string_view_array() {
         let cases = [
-            (
-                invalid_utf8_first_char::<i32>(),
-                "Parquet argument error: Parquet error: encountered non UTF-8 data",
-            ),
-            (
-                invalid_utf8_later_char::<i32>(),
-                "Parquet argument error: Parquet error: encountered non UTF-8 data: invalid utf-8 sequence of 1 bytes from index 6",
-            ),
+            invalid_utf8_first_char::<i32>(),
+            invalid_utf8_first_char_long_strings::<i32>(),
+            invalid_utf8_later_char::<i32>(),
+            invalid_utf8_later_char_long_strings::<i32>(),
+            invalid_utf8_later_char_really_long_strings::<i32>(),
+            invalid_utf8_later_char_really_long_strings2::<i32>(),
         ];
-        for (array, expected_error) in cases {
-            // cast not yet implemented for BinaryView
-            // https://github.com/apache/arrow-rs/issues/5508
-            // so copy directly
-            let mut builder = BinaryViewBuilder::with_capacity(100);
-            for v in array.iter() {
-                if let Some(v) = v {
-                    builder.append_value(v);
-                } else {
-                    builder.append_null();
-                }
-            }
-            let array = builder.finish();
 
-            // data is not valid utf8 we can not construct a correct StringArray
-            // safely, so purposely create an invalid StringArray
-            let array = unsafe {
-                StringViewArray::new_unchecked(
-                    array.views().clone(),
-                    array.data_buffers().to_vec(),
-                    array.nulls().cloned(),
-                )
-            };
-            let data_type = array.data_type().clone();
-            let data = write_to_parquet(Arc::new(array));
-            let err = read_from_parquet(data).unwrap_err();
-            assert_eq!(err.to_string(), expected_error, "data type: {data_type:?}")
+        for encoding in STRING_ENCODINGS {
+            for array in &cases {
+                let array = arrow_cast::cast(&array, &ArrowDataType::BinaryView).unwrap();
+                let array = array.as_binary_view();
+
+                // data is not valid utf8 we can not construct a correct StringArray
+                // safely, so purposely create an invalid StringViewArray
+                let array = unsafe {
+                    StringViewArray::new_unchecked(
+                        array.views().clone(),
+                        array.data_buffers().to_vec(),
+                        array.nulls().cloned(),
+                    )
+                };
+
+                let data_type = array.data_type().clone();
+                let data = write_to_parquet_with_encoding(Arc::new(array), *encoding);
+                let err = read_from_parquet(data).unwrap_err();
+                let expected_err =
+                    "Parquet argument error: Parquet error: encountered non UTF-8 data";
+                assert!(
+                    err.to_string().contains(expected_err),
+                    "data type: {data_type:?}, expected: {expected_err}, got: {err}"
+                );
+            }
         }
     }
 
+    /// Encodings suitable for string data
+    const STRING_ENCODINGS: &[Option<Encoding>] = &[
+        None,
+        Some(Encoding::PLAIN),
+        Some(Encoding::DELTA_LENGTH_BYTE_ARRAY),
+        Some(Encoding::DELTA_BYTE_ARRAY),
+    ];
+
+    /// Invalid Utf-8 sequence in the first character
+    /// <https://stackoverflow.com/questions/1301402/example-invalid-utf8-string>
+    const INVALID_UTF8_FIRST_CHAR: &[u8] = &[0xa0, 0xa1, 0x20, 0x20];
+
+    /// Invalid Utf=8 sequence in NOT the first character
+    /// <https://stackoverflow.com/questions/1301402/example-invalid-utf8-string>
+    const INVALID_UTF8_LATER_CHAR: &[u8] = &[0x20, 0x20, 0x20, 0xa0, 0xa1, 0x20, 0x20];
+
     /// returns a BinaryArray with invalid UTF8 data in the first character
     fn invalid_utf8_first_char<O: OffsetSizeTrait>() -> GenericBinaryArray<O> {
-        // invalid sequence in the first character
-        // https://stackoverflow.com/questions/1301402/example-invalid-utf8-string
         let valid: &[u8] = b"   ";
-        let invalid: &[u8] = &[0xa0, 0xa1, 0x20, 0x20];
+        let invalid = INVALID_UTF8_FIRST_CHAR;
         GenericBinaryArray::<O>::from_iter(vec![None, Some(valid), None, Some(invalid)])
+    }
+
+    /// Returns a BinaryArray with invalid UTF8 data in the first character of a
+    /// string larger than 12 bytes which is handled specially when reading
+    /// `ByteViewArray`s
+    fn invalid_utf8_first_char_long_strings<O: OffsetSizeTrait>() -> GenericBinaryArray<O> {
+        let valid: &[u8] = b"   ";
+        let mut invalid = vec![];
+        invalid.extend_from_slice(b"ThisStringIsCertainlyLongerThan12Bytes");
+        invalid.extend_from_slice(INVALID_UTF8_FIRST_CHAR);
+        GenericBinaryArray::<O>::from_iter(vec![None, Some(valid), None, Some(&invalid)])
     }
 
     /// returns a BinaryArray with invalid UTF8 data in a character other than
     /// the first (this is checked in a special codepath)
     fn invalid_utf8_later_char<O: OffsetSizeTrait>() -> GenericBinaryArray<O> {
-        // invalid sequence in NOT the first character
-        // https://stackoverflow.com/questions/1301402/example-invalid-utf8-string
         let valid: &[u8] = b"   ";
-        let invalid: &[u8] = &[0x20, 0x20, 0x20, 0xa0, 0xa1, 0x20, 0x20];
+        let invalid: &[u8] = INVALID_UTF8_LATER_CHAR;
         GenericBinaryArray::<O>::from_iter(vec![None, Some(valid), None, Some(invalid)])
     }
 
-    // writes the array into a single column parquet file
-    fn write_to_parquet(array: ArrayRef) -> Vec<u8> {
+    /// returns a BinaryArray with invalid UTF8 data in a character other than
+    /// the first in a string larger than 12 bytes which is handled specially
+    /// when reading `ByteViewArray`s (this is checked in a special codepath)
+    fn invalid_utf8_later_char_long_strings<O: OffsetSizeTrait>() -> GenericBinaryArray<O> {
+        let valid: &[u8] = b"   ";
+        let mut invalid = vec![];
+        invalid.extend_from_slice(b"ThisStringIsCertainlyLongerThan12Bytes");
+        invalid.extend_from_slice(INVALID_UTF8_LATER_CHAR);
+        GenericBinaryArray::<O>::from_iter(vec![None, Some(valid), None, Some(&invalid)])
+    }
+
+    /// returns a BinaryArray with invalid UTF8 data in a character other than
+    /// the first in a string larger than 128 bytes which is handled specially
+    /// when reading `ByteViewArray`s (this is checked in a special codepath)
+    fn invalid_utf8_later_char_really_long_strings<O: OffsetSizeTrait>() -> GenericBinaryArray<O> {
+        let valid: &[u8] = b"   ";
+        let mut invalid = vec![];
+        for _ in 0..10 {
+            // each instance is 38 bytes
+            invalid.extend_from_slice(b"ThisStringIsCertainlyLongerThan12Bytes");
+        }
+        invalid.extend_from_slice(INVALID_UTF8_LATER_CHAR);
+        GenericBinaryArray::<O>::from_iter(vec![None, Some(valid), None, Some(&invalid)])
+    }
+
+    /// returns a BinaryArray with small invalid UTF8 data followed by a large
+    /// invalid UTF8 data in a character other than the first in a string larger
+    fn invalid_utf8_later_char_really_long_strings2<O: OffsetSizeTrait>() -> GenericBinaryArray<O> {
+        let valid: &[u8] = b"   ";
+        let mut valid_long = vec![];
+        for _ in 0..10 {
+            // each instance is 38 bytes
+            valid_long.extend_from_slice(b"ThisStringIsCertainlyLongerThan12Bytes");
+        }
+        let invalid = INVALID_UTF8_LATER_CHAR;
+        GenericBinaryArray::<O>::from_iter(vec![
+            None,
+            Some(valid),
+            Some(invalid),
+            None,
+            Some(&valid_long),
+            Some(valid),
+        ])
+    }
+
+    /// writes the array into a single column parquet file with the specified
+    /// encoding.
+    ///
+    /// If no encoding is specified, use default (dictionary) encoding
+    fn write_to_parquet_with_encoding(array: ArrayRef, encoding: Option<Encoding>) -> Vec<u8> {
         let batch = RecordBatch::try_from_iter(vec![("c", array)]).unwrap();
         let mut data = vec![];
         let schema = batch.schema();
-        let props = None;
+        let props = encoding.map(|encoding| {
+            WriterProperties::builder()
+                // must disable dictionary encoding to actually use encoding
+                .set_dictionary_enabled(false)
+                .set_encoding(encoding)
+                .build()
+        });
+
         {
             let mut writer = ArrowWriter::try_new(&mut data, schema, props).unwrap();
             writer.write(&batch).unwrap();
@@ -2528,6 +2942,275 @@ mod tests {
             .build()
             .unwrap();
         assert_eq!(reader.schema(), schema_without_metadata);
+    }
+
+    fn write_parquet_from_iter<I, F>(value: I) -> File
+    where
+        I: IntoIterator<Item = (F, ArrayRef)>,
+        F: AsRef<str>,
+    {
+        let batch = RecordBatch::try_from_iter(value).unwrap();
+        let file = tempfile().unwrap();
+        let mut writer =
+            ArrowWriter::try_new(file.try_clone().unwrap(), batch.schema().clone(), None).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+        file
+    }
+
+    fn run_schema_test_with_error<I, F>(value: I, schema: SchemaRef, expected_error: &str)
+    where
+        I: IntoIterator<Item = (F, ArrayRef)>,
+        F: AsRef<str>,
+    {
+        let file = write_parquet_from_iter(value);
+        let options_with_schema = ArrowReaderOptions::new().with_schema(schema.clone());
+        let builder = ParquetRecordBatchReaderBuilder::try_new_with_options(
+            file.try_clone().unwrap(),
+            options_with_schema,
+        );
+        assert_eq!(builder.err().unwrap().to_string(), expected_error);
+    }
+
+    #[test]
+    fn test_schema_too_few_columns() {
+        run_schema_test_with_error(
+            vec![
+                ("int64", Arc::new(Int64Array::from(vec![0])) as ArrayRef),
+                ("int32", Arc::new(Int32Array::from(vec![0])) as ArrayRef),
+            ],
+            Arc::new(Schema::new(vec![Field::new(
+                "int64",
+                ArrowDataType::Int64,
+                false,
+            )])),
+            "Arrow: incompatible arrow schema, expected 2 struct fields got 1",
+        );
+    }
+
+    #[test]
+    fn test_schema_too_many_columns() {
+        run_schema_test_with_error(
+            vec![("int64", Arc::new(Int64Array::from(vec![0])) as ArrayRef)],
+            Arc::new(Schema::new(vec![
+                Field::new("int64", ArrowDataType::Int64, false),
+                Field::new("int32", ArrowDataType::Int32, false),
+            ])),
+            "Arrow: incompatible arrow schema, expected 1 struct fields got 2",
+        );
+    }
+
+    #[test]
+    fn test_schema_mismatched_column_names() {
+        run_schema_test_with_error(
+            vec![("int64", Arc::new(Int64Array::from(vec![0])) as ArrayRef)],
+            Arc::new(Schema::new(vec![Field::new(
+                "other",
+                ArrowDataType::Int64,
+                false,
+            )])),
+            "Arrow: incompatible arrow schema, expected field named int64 got other",
+        );
+    }
+
+    #[test]
+    fn test_schema_incompatible_columns() {
+        run_schema_test_with_error(
+            vec![
+                (
+                    "col1_invalid",
+                    Arc::new(Int64Array::from(vec![0])) as ArrayRef,
+                ),
+                (
+                    "col2_valid",
+                    Arc::new(Int32Array::from(vec![0])) as ArrayRef,
+                ),
+                (
+                    "col3_invalid",
+                    Arc::new(Date64Array::from(vec![0])) as ArrayRef,
+                ),
+            ],
+            Arc::new(Schema::new(vec![
+                Field::new("col1_invalid", ArrowDataType::Int32, false),
+                Field::new("col2_valid", ArrowDataType::Int32, false),
+                Field::new("col3_invalid", ArrowDataType::Int32, false),
+            ])),
+            "Arrow: incompatible arrow schema, the following fields could not be cast: [col1_invalid, col3_invalid]",
+        );
+    }
+
+    #[test]
+    fn test_one_incompatible_nested_column() {
+        let nested_fields = Fields::from(vec![
+            Field::new("nested1_valid", ArrowDataType::Utf8, false),
+            Field::new("nested1_invalid", ArrowDataType::Int64, false),
+        ]);
+        let nested = StructArray::try_new(
+            nested_fields,
+            vec![
+                Arc::new(StringArray::from(vec!["a"])) as ArrayRef,
+                Arc::new(Int64Array::from(vec![0])) as ArrayRef,
+            ],
+            None,
+        )
+        .expect("struct array");
+        let supplied_nested_fields = Fields::from(vec![
+            Field::new("nested1_valid", ArrowDataType::Utf8, false),
+            Field::new("nested1_invalid", ArrowDataType::Int32, false),
+        ]);
+        run_schema_test_with_error(
+            vec![
+                ("col1", Arc::new(Int64Array::from(vec![0])) as ArrayRef),
+                ("col2", Arc::new(Int32Array::from(vec![0])) as ArrayRef),
+                ("nested", Arc::new(nested) as ArrayRef),
+            ],
+            Arc::new(Schema::new(vec![
+                Field::new("col1", ArrowDataType::Int64, false),
+                Field::new("col2", ArrowDataType::Int32, false),
+                Field::new(
+                    "nested",
+                    ArrowDataType::Struct(supplied_nested_fields),
+                    false,
+                ),
+            ])),
+            "Arrow: incompatible arrow schema, the following fields could not be cast: [nested]",
+        );
+    }
+
+    #[test]
+    fn test_with_schema() {
+        let nested_fields = Fields::from(vec![
+            Field::new("utf8_to_dict", ArrowDataType::Utf8, false),
+            Field::new("int64_to_ts_nano", ArrowDataType::Int64, false),
+        ]);
+
+        let nested_arrays: Vec<ArrayRef> = vec![
+            Arc::new(StringArray::from(vec!["a", "a", "a", "b"])) as ArrayRef,
+            Arc::new(Int64Array::from(vec![1, 2, 3, 4])) as ArrayRef,
+        ];
+
+        let nested = StructArray::try_new(nested_fields, nested_arrays, None).unwrap();
+
+        let file = write_parquet_from_iter(vec![
+            (
+                "int32_to_ts_second",
+                Arc::new(Int32Array::from(vec![0, 1, 2, 3])) as ArrayRef,
+            ),
+            (
+                "date32_to_date64",
+                Arc::new(Date32Array::from(vec![0, 1, 2, 3])) as ArrayRef,
+            ),
+            ("nested", Arc::new(nested) as ArrayRef),
+        ]);
+
+        let supplied_nested_fields = Fields::from(vec![
+            Field::new(
+                "utf8_to_dict",
+                ArrowDataType::Dictionary(
+                    Box::new(ArrowDataType::Int32),
+                    Box::new(ArrowDataType::Utf8),
+                ),
+                false,
+            ),
+            Field::new(
+                "int64_to_ts_nano",
+                ArrowDataType::Timestamp(
+                    arrow::datatypes::TimeUnit::Nanosecond,
+                    Some("+10:00".into()),
+                ),
+                false,
+            ),
+        ]);
+
+        let supplied_schema = Arc::new(Schema::new(vec![
+            Field::new(
+                "int32_to_ts_second",
+                ArrowDataType::Timestamp(arrow::datatypes::TimeUnit::Second, Some("+01:00".into())),
+                false,
+            ),
+            Field::new("date32_to_date64", ArrowDataType::Date64, false),
+            Field::new(
+                "nested",
+                ArrowDataType::Struct(supplied_nested_fields),
+                false,
+            ),
+        ]));
+
+        let options = ArrowReaderOptions::new().with_schema(supplied_schema.clone());
+        let mut arrow_reader = ParquetRecordBatchReaderBuilder::try_new_with_options(
+            file.try_clone().unwrap(),
+            options,
+        )
+        .expect("reader builder with schema")
+        .build()
+        .expect("reader with schema");
+
+        assert_eq!(arrow_reader.schema(), supplied_schema);
+        let batch = arrow_reader.next().unwrap().unwrap();
+        assert_eq!(batch.num_columns(), 3);
+        assert_eq!(batch.num_rows(), 4);
+        assert_eq!(
+            batch
+                .column(0)
+                .as_any()
+                .downcast_ref::<TimestampSecondArray>()
+                .expect("downcast to timestamp second")
+                .value_as_datetime_with_tz(0, "+01:00".parse().unwrap())
+                .map(|v| v.to_string())
+                .expect("value as datetime"),
+            "1970-01-01 01:00:00 +01:00"
+        );
+        assert_eq!(
+            batch
+                .column(1)
+                .as_any()
+                .downcast_ref::<Date64Array>()
+                .expect("downcast to date64")
+                .value_as_date(0)
+                .map(|v| v.to_string())
+                .expect("value as date"),
+            "1970-01-01"
+        );
+
+        let nested = batch
+            .column(2)
+            .as_any()
+            .downcast_ref::<StructArray>()
+            .expect("downcast to struct");
+
+        let nested_dict = nested
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int32DictionaryArray>()
+            .expect("downcast to dictionary");
+
+        assert_eq!(
+            nested_dict
+                .values()
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .expect("downcast to string")
+                .iter()
+                .collect::<Vec<_>>(),
+            vec![Some("a"), Some("b")]
+        );
+
+        assert_eq!(
+            nested_dict.keys().iter().collect::<Vec<_>>(),
+            vec![Some(0), Some(0), Some(0), Some(1)]
+        );
+
+        assert_eq!(
+            nested
+                .column(1)
+                .as_any()
+                .downcast_ref::<TimestampNanosecondArray>()
+                .expect("downcast to timestamp nanosecond")
+                .value_as_datetime_with_tz(0, "+10:00".parse().unwrap())
+                .map(|v| v.to_string())
+                .expect("value as datetime"),
+            "1970-01-01 10:00:00.000000001 +10:00"
+        );
     }
 
     #[test]
@@ -2799,6 +3482,8 @@ mod tests {
             .unwrap();
             // Although `Vec<Vec<PageLoacation>>` of each row group is empty,
             // we should read the file successfully.
+            // FIXME: this test will fail when metadata parsing returns `None` for missing page
+            // indexes. https://github.com/apache/arrow-rs/issues/6447
             assert!(builder.metadata().offset_index().unwrap()[0].is_empty());
             let reader = builder.build().unwrap();
             let batches = reader.collect::<Result<Vec<_>, _>>().unwrap();

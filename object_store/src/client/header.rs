@@ -31,6 +31,7 @@ pub struct HeaderConfig {
     ///
     /// Defaults to `true`
     pub etag_required: bool,
+
     /// Whether to require a Last-Modified header when extracting [`ObjectMeta`] from headers.
     ///
     /// Defaults to `true`
@@ -38,6 +39,9 @@ pub struct HeaderConfig {
 
     /// The version header name if any
     pub version_header: Option<&'static str>,
+
+    /// The user defined metadata prefix if any
+    pub user_defined_metadata_prefix: Option<&'static str>,
 }
 
 #[derive(Debug, Snafu)]

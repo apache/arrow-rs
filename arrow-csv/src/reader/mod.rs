@@ -236,31 +236,41 @@ pub struct Format {
 }
 
 impl Format {
+    /// Specify whether the CSV file has a header, defaults to `true`
+    ///
+    /// When `true`, the first row of the CSV file is treated as a header row
     pub fn with_header(mut self, has_header: bool) -> Self {
         self.header = has_header;
         self
     }
 
+    /// Specify a custom delimiter character, defaults to comma `','`
     pub fn with_delimiter(mut self, delimiter: u8) -> Self {
         self.delimiter = Some(delimiter);
         self
     }
 
+    /// Specify an escape character, defaults to `None`
     pub fn with_escape(mut self, escape: u8) -> Self {
         self.escape = Some(escape);
         self
     }
 
+    /// Specify a custom quote character, defaults to double quote `'"'`
     pub fn with_quote(mut self, quote: u8) -> Self {
         self.quote = Some(quote);
         self
     }
 
+    /// Specify a custom terminator character, defaults to CRLF
     pub fn with_terminator(mut self, terminator: u8) -> Self {
         self.terminator = Some(terminator);
         self
     }
 
+    /// Specify a comment character, defaults to `None`
+    ///
+    /// Lines starting with this character will be ignored
     pub fn with_comment(mut self, comment: u8) -> Self {
         self.comment = Some(comment);
         self
@@ -795,6 +805,14 @@ fn parse(
                         })
                         .collect::<StringArray>(),
                 ) as ArrayRef),
+                DataType::Utf8View => Ok(Arc::new(
+                    rows.iter()
+                        .map(|row| {
+                            let s = row.get(i);
+                            (!null_regex.is_null(s)).then_some(s)
+                        })
+                        .collect::<StringViewArray>(),
+                ) as ArrayRef),
                 DataType::Dictionary(key_type, value_type)
                     if value_type.as_ref() == &DataType::Utf8 =>
                 {
@@ -1092,7 +1110,7 @@ impl ReaderBuilder {
         self
     }
 
-    /// Overrides the [`Format`] of this [`ReaderBuilder]
+    /// Overrides the [Format] of this [ReaderBuilder]
     pub fn with_format(mut self, format: Format) -> Self {
         self.format = format;
         self
@@ -1104,21 +1122,25 @@ impl ReaderBuilder {
         self
     }
 
+    /// Set the given character as the CSV file's escape character
     pub fn with_escape(mut self, escape: u8) -> Self {
         self.format.escape = Some(escape);
         self
     }
 
+    /// Set the given character as the CSV file's quote character, by default it is double quote
     pub fn with_quote(mut self, quote: u8) -> Self {
         self.format.quote = Some(quote);
         self
     }
 
+    /// Provide a custom terminator character, defaults to CRLF
     pub fn with_terminator(mut self, terminator: u8) -> Self {
         self.format.terminator = Some(terminator);
         self
     }
 
+    /// Provide a comment character, lines starting with this character will be ignored
     pub fn with_comment(mut self, comment: u8) -> Self {
         self.format.comment = Some(comment);
         self
@@ -2380,17 +2402,27 @@ mod tests {
     }
 
     fn err_test(csv: &[u8], expected: &str) {
-        let schema = Arc::new(Schema::new(vec![
+        fn err_test_with_schema(csv: &[u8], expected: &str, schema: Arc<Schema>) {
+            let buffer = std::io::BufReader::with_capacity(2, Cursor::new(csv));
+            let b = ReaderBuilder::new(schema)
+                .with_batch_size(2)
+                .build_buffered(buffer)
+                .unwrap();
+            let err = b.collect::<Result<Vec<_>, _>>().unwrap_err().to_string();
+            assert_eq!(err, expected)
+        }
+
+        let schema_utf8 = Arc::new(Schema::new(vec![
             Field::new("text1", DataType::Utf8, true),
             Field::new("text2", DataType::Utf8, true),
         ]));
-        let buffer = std::io::BufReader::with_capacity(2, Cursor::new(csv));
-        let b = ReaderBuilder::new(schema)
-            .with_batch_size(2)
-            .build_buffered(buffer)
-            .unwrap();
-        let err = b.collect::<Result<Vec<_>, _>>().unwrap_err().to_string();
-        assert_eq!(err, expected)
+        err_test_with_schema(csv, expected, schema_utf8);
+
+        let schema_utf8view = Arc::new(Schema::new(vec![
+            Field::new("text1", DataType::Utf8View, true),
+            Field::new("text2", DataType::Utf8View, true),
+        ]));
+        err_test_with_schema(csv, expected, schema_utf8view);
     }
 
     #[test]
@@ -2586,5 +2618,65 @@ mod tests {
                 .values(),
             &vec![2, 22]
         );
+    }
+
+    #[test]
+    fn test_parse_string_view_single_column() {
+        let csv = ["foo", "something_cannot_be_inlined", "foobar"].join("\n");
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "c1",
+            DataType::Utf8View,
+            true,
+        )]));
+
+        let mut decoder = ReaderBuilder::new(schema).build_decoder();
+
+        let decoded = decoder.decode(csv.as_bytes()).unwrap();
+        assert_eq!(decoded, csv.len());
+        decoder.decode(&[]).unwrap();
+
+        let batch = decoder.flush().unwrap().unwrap();
+        assert_eq!(batch.num_columns(), 1);
+        assert_eq!(batch.num_rows(), 3);
+        let col = batch.column(0).as_string_view();
+        assert_eq!(col.data_type(), &DataType::Utf8View);
+        assert_eq!(col.value(0), "foo");
+        assert_eq!(col.value(1), "something_cannot_be_inlined");
+        assert_eq!(col.value(2), "foobar");
+    }
+
+    #[test]
+    fn test_parse_string_view_multi_column() {
+        let csv = ["foo,", ",something_cannot_be_inlined", "foobarfoobar,bar"].join("\n");
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("c1", DataType::Utf8View, true),
+            Field::new("c2", DataType::Utf8View, true),
+        ]));
+
+        let mut decoder = ReaderBuilder::new(schema).build_decoder();
+
+        let decoded = decoder.decode(csv.as_bytes()).unwrap();
+        assert_eq!(decoded, csv.len());
+        decoder.decode(&[]).unwrap();
+
+        let batch = decoder.flush().unwrap().unwrap();
+        assert_eq!(batch.num_columns(), 2);
+        assert_eq!(batch.num_rows(), 3);
+        let c1 = batch.column(0).as_string_view();
+        let c2 = batch.column(1).as_string_view();
+        assert_eq!(c1.data_type(), &DataType::Utf8View);
+        assert_eq!(c2.data_type(), &DataType::Utf8View);
+
+        assert!(!c1.is_null(0));
+        assert!(c1.is_null(1));
+        assert!(!c1.is_null(2));
+        assert_eq!(c1.value(0), "foo");
+        assert_eq!(c1.value(2), "foobarfoobar");
+
+        assert!(c2.is_null(0));
+        assert!(!c2.is_null(1));
+        assert!(!c2.is_null(2));
+        assert_eq!(c2.value(1), "something_cannot_be_inlined");
+        assert_eq!(c2.value(2), "bar");
     }
 }

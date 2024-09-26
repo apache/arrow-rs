@@ -80,36 +80,67 @@ pub struct Tensor<'a, T: ArrowPrimitiveType> {
     _marker: PhantomData<T>,
 }
 
+/// [Tensor] of type [BooleanType]
 pub type BooleanTensor<'a> = Tensor<'a, BooleanType>;
+/// [Tensor] of type [Int8Type]
 pub type Date32Tensor<'a> = Tensor<'a, Date32Type>;
+/// [Tensor] of type [Int16Type]
 pub type Date64Tensor<'a> = Tensor<'a, Date64Type>;
+/// [Tensor] of type [Decimal128Type]
 pub type Decimal128Tensor<'a> = Tensor<'a, Decimal128Type>;
+/// [Tensor] of type [Decimal256Type]
 pub type Decimal256Tensor<'a> = Tensor<'a, Decimal256Type>;
+/// [Tensor] of type [DurationMicrosecondType]
 pub type DurationMicrosecondTensor<'a> = Tensor<'a, DurationMicrosecondType>;
+/// [Tensor] of type [DurationMillisecondType]
 pub type DurationMillisecondTensor<'a> = Tensor<'a, DurationMillisecondType>;
+/// [Tensor] of type [DurationNanosecondType]
 pub type DurationNanosecondTensor<'a> = Tensor<'a, DurationNanosecondType>;
+/// [Tensor] of type [DurationSecondType]
 pub type DurationSecondTensor<'a> = Tensor<'a, DurationSecondType>;
+/// [Tensor] of type [Float16Type]
 pub type Float16Tensor<'a> = Tensor<'a, Float16Type>;
+/// [Tensor] of type [Float32Type]
 pub type Float32Tensor<'a> = Tensor<'a, Float32Type>;
+/// [Tensor] of type [Float64Type]
 pub type Float64Tensor<'a> = Tensor<'a, Float64Type>;
+/// [Tensor] of type [Int8Type]
 pub type Int8Tensor<'a> = Tensor<'a, Int8Type>;
+/// [Tensor] of type [Int16Type]
 pub type Int16Tensor<'a> = Tensor<'a, Int16Type>;
+/// [Tensor] of type [Int32Type]
 pub type Int32Tensor<'a> = Tensor<'a, Int32Type>;
+/// [Tensor] of type [Int64Type]
 pub type Int64Tensor<'a> = Tensor<'a, Int64Type>;
+/// [Tensor] of type [IntervalDayTimeType]
 pub type IntervalDayTimeTensor<'a> = Tensor<'a, IntervalDayTimeType>;
+/// [Tensor] of type [IntervalMonthDayNanoType]
 pub type IntervalMonthDayNanoTensor<'a> = Tensor<'a, IntervalMonthDayNanoType>;
+/// [Tensor] of type [IntervalYearMonthType]
 pub type IntervalYearMonthTensor<'a> = Tensor<'a, IntervalYearMonthType>;
+/// [Tensor] of type [Time32MillisecondType]
 pub type Time32MillisecondTensor<'a> = Tensor<'a, Time32MillisecondType>;
+/// [Tensor] of type [Time32SecondType]
 pub type Time32SecondTensor<'a> = Tensor<'a, Time32SecondType>;
+/// [Tensor] of type [Time64MicrosecondType]
 pub type Time64MicrosecondTensor<'a> = Tensor<'a, Time64MicrosecondType>;
+/// [Tensor] of type [Time64NanosecondType]
 pub type Time64NanosecondTensor<'a> = Tensor<'a, Time64NanosecondType>;
+/// [Tensor] of type [TimestampMicrosecondType]
 pub type TimestampMicrosecondTensor<'a> = Tensor<'a, TimestampMicrosecondType>;
+/// [Tensor] of type [TimestampMillisecondType]
 pub type TimestampMillisecondTensor<'a> = Tensor<'a, TimestampMillisecondType>;
+/// [Tensor] of type [TimestampNanosecondType]
 pub type TimestampNanosecondTensor<'a> = Tensor<'a, TimestampNanosecondType>;
+/// [Tensor] of type [TimestampSecondType]
 pub type TimestampSecondTensor<'a> = Tensor<'a, TimestampSecondType>;
+/// [Tensor] of type [UInt8Type]
 pub type UInt8Tensor<'a> = Tensor<'a, UInt8Type>;
+/// [Tensor] of type [UInt16Type]
 pub type UInt16Tensor<'a> = Tensor<'a, UInt16Type>;
+/// [Tensor] of type [UInt32Type]
 pub type UInt32Tensor<'a> = Tensor<'a, UInt32Type>;
+/// [Tensor] of type [UInt64Type]
 pub type UInt64Tensor<'a> = Tensor<'a, UInt64Type>;
 
 impl<'a, T: ArrowPrimitiveType> Tensor<'a, T> {

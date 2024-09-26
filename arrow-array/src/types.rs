@@ -23,8 +23,11 @@ use crate::delta::{
 use crate::temporal_conversions::as_datetime_with_timezone;
 use crate::timezone::Tz;
 use crate::{ArrowNativeTypeOp, OffsetSizeTrait};
-use arrow_buffer::{i256, Buffer, IntervalDayTime, IntervalMonthDayNano, OffsetBuffer};
-use arrow_data::decimal::{validate_decimal256_precision, validate_decimal_precision};
+use arrow_buffer::{i256, Buffer, OffsetBuffer};
+use arrow_data::decimal::{
+    is_validate_decimal256_precision, is_validate_decimal_precision, validate_decimal256_precision,
+    validate_decimal_precision,
+};
 use arrow_data::{validate_binary_view, validate_string_view};
 use arrow_schema::{
     ArrowError, DataType, IntervalUnit, TimeUnit, DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE,
@@ -35,6 +38,9 @@ use half::f16;
 use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::ops::{Add, Sub};
+
+// re-export types so that they can be used without importing arrow_buffer explicitly
+pub use arrow_buffer::{IntervalDayTime, IntervalMonthDayNano};
 
 // BooleanType is special: its bit-width is not the size of the primitive type, and its `index`
 // operation assumes bit-packing.
@@ -47,9 +53,13 @@ impl BooleanType {
     pub const DATA_TYPE: DataType = DataType::Boolean;
 }
 
-/// Trait bridging the dynamic-typed nature of Arrow (via [`DataType`]) with the
-/// static-typed nature of rust types ([`ArrowNativeType`]) for all types that implement [`ArrowNativeType`].
+/// Trait for [primitive values].
 ///
+/// This trait bridges the dynamic-typed nature of Arrow
+/// (via [`DataType`]) with the static-typed nature of rust types
+/// ([`ArrowNativeType`]) for all types that implement [`ArrowNativeType`].
+///
+/// [primitive values]: https://arrow.apache.org/docs/format/Columnar.html#fixed-size-primitive-layout
 /// [`ArrowNativeType`]: arrow_buffer::ArrowNativeType
 pub trait ArrowPrimitiveType: primitive::PrimitiveTypeSealed + 'static {
     /// Corresponding Rust native type for the primitive type.
@@ -96,228 +106,165 @@ make_type!(
     Int16Type,
     i16,
     DataType::Int16,
-    "A signed 16-bit integer type."
+    "Signed 16-bit integer type."
 );
 make_type!(
     Int32Type,
     i32,
     DataType::Int32,
-    "A signed 32-bit integer type."
+    "Signed 32-bit integer type."
 );
 make_type!(
     Int64Type,
     i64,
     DataType::Int64,
-    "A signed 64-bit integer type."
+    "Signed 64-bit integer type."
 );
 make_type!(
     UInt8Type,
     u8,
     DataType::UInt8,
-    "An unsigned 8-bit integer type."
+    "Unsigned 8-bit integer type."
 );
 make_type!(
     UInt16Type,
     u16,
     DataType::UInt16,
-    "An unsigned 16-bit integer type."
+    "Unsigned 16-bit integer type."
 );
 make_type!(
     UInt32Type,
     u32,
     DataType::UInt32,
-    "An unsigned 32-bit integer type."
+    "Unsigned 32-bit integer type."
 );
 make_type!(
     UInt64Type,
     u64,
     DataType::UInt64,
-    "An unsigned 64-bit integer type."
+    "Unsigned 64-bit integer type."
 );
 make_type!(
     Float16Type,
     f16,
     DataType::Float16,
-    "A 16-bit floating point number type."
+    "16-bit floating point number type."
 );
 make_type!(
     Float32Type,
     f32,
     DataType::Float32,
-    "A 32-bit floating point number type."
+    "32-bit floating point number type."
 );
 make_type!(
     Float64Type,
     f64,
     DataType::Float64,
-    "A 64-bit floating point number type."
+    "64-bit floating point number type."
 );
 make_type!(
     TimestampSecondType,
     i64,
     DataType::Timestamp(TimeUnit::Second, None),
-    "A timestamp second type with an optional timezone."
+    "Timestamp second type with an optional timezone."
 );
 make_type!(
     TimestampMillisecondType,
     i64,
     DataType::Timestamp(TimeUnit::Millisecond, None),
-    "A timestamp millisecond type with an optional timezone."
+    "Timestamp millisecond type with an optional timezone."
 );
 make_type!(
     TimestampMicrosecondType,
     i64,
     DataType::Timestamp(TimeUnit::Microsecond, None),
-    "A timestamp microsecond type with an optional timezone."
+    "Timestamp microsecond type with an optional timezone."
 );
 make_type!(
     TimestampNanosecondType,
     i64,
     DataType::Timestamp(TimeUnit::Nanosecond, None),
-    "A timestamp nanosecond type with an optional timezone."
+    "Timestamp nanosecond type with an optional timezone."
 );
 make_type!(
     Date32Type,
     i32,
     DataType::Date32,
-    "A 32-bit date type representing the elapsed time since UNIX epoch in days(32 bits)."
+    "32-bit date type: the elapsed time since UNIX epoch in days (32 bits)."
 );
 make_type!(
     Date64Type,
     i64,
     DataType::Date64,
-    "A 64-bit date type representing the elapsed time since UNIX epoch in milliseconds(64 bits)."
+    "64-bit date type: the elapsed time since UNIX epoch in milliseconds (64 bits). \
+    Values must be divisible by `86_400_000`. \
+    See [`DataType::Date64`] for more details."
 );
 make_type!(
     Time32SecondType,
     i32,
     DataType::Time32(TimeUnit::Second),
-    "A 32-bit time type representing the elapsed time since midnight in seconds."
+    "32-bit time type: the elapsed time since midnight in seconds."
 );
 make_type!(
     Time32MillisecondType,
     i32,
     DataType::Time32(TimeUnit::Millisecond),
-    "A 32-bit time type representing the elapsed time since midnight in milliseconds."
+    "32-bit time type: the elapsed time since midnight in milliseconds."
 );
 make_type!(
     Time64MicrosecondType,
     i64,
     DataType::Time64(TimeUnit::Microsecond),
-    "A 64-bit time type representing the elapsed time since midnight in microseconds."
+    "64-bit time type: the elapsed time since midnight in microseconds."
 );
 make_type!(
     Time64NanosecondType,
     i64,
     DataType::Time64(TimeUnit::Nanosecond),
-    "A 64-bit time type representing the elapsed time since midnight in nanoseconds."
+    "64-bit time type: the elapsed time since midnight in nanoseconds."
 );
 make_type!(
     IntervalYearMonthType,
     i32,
     DataType::Interval(IntervalUnit::YearMonth),
-    "A “calendar” interval stored as the number of whole months."
+    "32-bit “calendar” interval type: the number of whole months."
 );
 make_type!(
     IntervalDayTimeType,
     IntervalDayTime,
     DataType::Interval(IntervalUnit::DayTime),
-    r#"A “calendar” interval type in days and milliseconds.
-
-## Representation
-This type is stored as a single 64 bit integer, interpreted as two i32 fields:
-1. the number of elapsed days
-2. The number of milliseconds (no leap seconds),
-
-```text
- ┌──────────────┬──────────────┐
- │     Days     │ Milliseconds │
- │  (32 bits)   │  (32 bits)   │
- └──────────────┴──────────────┘
- 0              31            63 bit offset
-```
-Please see the [Arrow Spec](https://github.com/apache/arrow/blob/081b4022fe6f659d8765efc82b3f4787c5039e3c/format/Schema.fbs#L406-L408) for more details
-
-## Note on Comparing and Ordering for Calendar Types
-
-Values of `IntervalDayTimeType` are compared using their binary representation,
-which can lead to surprising results. Please see the description of ordering on
-[`IntervalMonthDayNanoType`] for more details
-"#
+    "“Calendar” interval type: days and milliseconds. See [`IntervalDayTime`] for more details."
 );
 make_type!(
     IntervalMonthDayNanoType,
     IntervalMonthDayNano,
     DataType::Interval(IntervalUnit::MonthDayNano),
-    r#"A “calendar” interval type in months, days, and nanoseconds.
-
-## Representation
-This type is stored as a single 128 bit integer,
-interpreted as three different signed integral fields:
-
-1. The number of months (32 bits)
-2. The number days (32 bits)
-2. The number of nanoseconds (64 bits).
-
-Nanoseconds does not allow for leap seconds.
-Each field is independent (e.g. there is no constraint that the quantity of
-nanoseconds represents less than a day's worth of time).
-
-```text
-┌───────────────┬─────────────┬─────────────────────────────┐
-│     Months    │     Days    │            Nanos            │
-│   (32 bits)   │  (32 bits)  │          (64 bits)          │
-└───────────────┴─────────────┴─────────────────────────────┘
-  0            32             64                           128 bit offset
-```
-Please see the [Arrow Spec](https://github.com/apache/arrow/blob/081b4022fe6f659d8765efc82b3f4787c5039e3c/format/Schema.fbs#L409-L415) for more details
-
-## Note on Comparing and Ordering for Calendar Types
-Values of `IntervalMonthDayNanoType` are compared using their binary representation,
-which can lead to surprising results.
-
-Spans of time measured in calendar units are not fixed in absolute size (e.g.
-number of seconds) which makes defining comparisons and ordering non trivial.
-For example `1 month` is 28 days for February but `1 month` is 31 days
-in December.
-
-This makes the seemingly simple operation of comparing two intervals
-complicated in practice. For example is `1 month` more or less than `30 days`? The
-answer depends on what month you are talking about.
-
-This crate defines comparisons for calendar types using their binary
-representation which is fast and efficient, but leads
-to potentially surprising results.
-
-For example a
-`IntervalMonthDayNano` of `1 month` will compare as **greater** than a
-`IntervalMonthDayNano` of `100 days` because the binary representation of `1 month`
-is larger than the binary representation of 100 days.
-"#
+    r"“Calendar” interval type: months, days, and nanoseconds. See [`IntervalMonthDayNano`] for more details."
 );
 make_type!(
     DurationSecondType,
     i64,
     DataType::Duration(TimeUnit::Second),
-    "An elapsed time type in seconds."
+    "Elapsed time type: seconds."
 );
 make_type!(
     DurationMillisecondType,
     i64,
     DataType::Duration(TimeUnit::Millisecond),
-    "An elapsed time type in milliseconds."
+    "Elapsed time type: milliseconds."
 );
 make_type!(
     DurationMicrosecondType,
     i64,
     DataType::Duration(TimeUnit::Microsecond),
-    "An elapsed time type in microseconds."
+    "Elapsed time type: microseconds."
 );
 make_type!(
     DurationNanosecondType,
     i64,
     DataType::Duration(TimeUnit::Nanosecond),
-    "An elapsed time type in nanoseconds."
+    "Elapsed time type: nanoseconds."
 );
 
 /// A subtype of primitive type that represents legal dictionary keys.
@@ -1250,6 +1197,9 @@ pub trait DecimalType:
 
     /// Validates that `value` contains no more than `precision` decimal digits
     fn validate_decimal_precision(value: Self::Native, precision: u8) -> Result<(), ArrowError>;
+
+    /// Determines whether `value` contains no more than `precision` decimal digits
+    fn is_valid_decimal_precision(value: Self::Native, precision: u8) -> bool;
 }
 
 /// Validate that `precision` and `scale` are valid for `T`
@@ -1312,6 +1262,10 @@ impl DecimalType for Decimal128Type {
     fn validate_decimal_precision(num: i128, precision: u8) -> Result<(), ArrowError> {
         validate_decimal_precision(num, precision)
     }
+
+    fn is_valid_decimal_precision(value: Self::Native, precision: u8) -> bool {
+        is_validate_decimal_precision(value, precision)
+    }
 }
 
 impl ArrowPrimitiveType for Decimal128Type {
@@ -1341,6 +1295,10 @@ impl DecimalType for Decimal256Type {
 
     fn validate_decimal_precision(num: i256, precision: u8) -> Result<(), ArrowError> {
         validate_decimal256_precision(num, precision)
+    }
+
+    fn is_valid_decimal_precision(value: Self::Native, precision: u8) -> bool {
+        is_validate_decimal256_precision(value, precision)
     }
 }
 

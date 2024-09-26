@@ -119,7 +119,8 @@ impl FlightService for FlightServiceImpl {
             .enumerate()
             .flat_map(|(counter, batch)| {
                 let data_gen = writer::IpcDataGenerator::default();
-                let mut dictionary_tracker = writer::DictionaryTracker::new(false);
+                let mut dictionary_tracker =
+                    writer::DictionaryTracker::new_with_preserve_dict_id(false, true);
 
                 let (encoded_dictionaries, encoded_batch) = data_gen
                     .encoded_batch(batch, &mut dictionary_tracker, &options)
@@ -363,7 +364,7 @@ async fn save_uploaded_chunks(
 
                 let batch = record_batch_from_message(
                     message,
-                    &Buffer::from(data.data_body),
+                    &Buffer::from(data.data_body.as_ref()),
                     schema_ref.clone(),
                     &dictionaries_by_id,
                 )
@@ -374,7 +375,7 @@ async fn save_uploaded_chunks(
             ipc::MessageHeader::DictionaryBatch => {
                 dictionary_from_message(
                     message,
-                    &Buffer::from(data.data_body),
+                    &Buffer::from(data.data_body.as_ref()),
                     schema_ref.clone(),
                     &mut dictionaries_by_id,
                 )

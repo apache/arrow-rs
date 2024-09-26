@@ -37,6 +37,7 @@ pub use parts::{InvalidPart, PathPart};
 /// Error returned by [`Path::parse`]
 #[derive(Debug, Snafu)]
 #[allow(missing_docs)]
+#[non_exhaustive]
 pub enum Error {
     #[snafu(display("Path \"{}\" contained empty path segment", path))]
     EmptySegment { path: String },

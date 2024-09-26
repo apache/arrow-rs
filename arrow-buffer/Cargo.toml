@@ -45,6 +45,10 @@ rand = { version = "0.8", default-features = false, features = ["std", "std_rng"
 [build-dependencies]
 
 [[bench]]
+name = "bit_mask"
+harness = false
+
+[[bench]]
 name = "i256"
 harness = false
 

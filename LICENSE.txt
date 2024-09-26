@@ -200,13 +200,3 @@
    WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
    See the License for the specific language governing permissions and
    limitations under the License.
-
-
-This project includes code from Apache Aurora.
-
-* dev/release/{release,changelog,release-candidate} are based on the scripts from
-  Apache Aurora
-
-Copyright: 2016 The Apache Software Foundation.
-Home page: https://aurora.apache.org/
-License: http://www.apache.org/licenses/LICENSE-2.0

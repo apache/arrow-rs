@@ -95,3 +95,5 @@ jobs:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           publish_dir: website/build
           publish_branch: asf-site
+          # Avoid accumulating history of in progress API jobs: https://github.com/apache/arrow-rs/issues/5908
+          force_orphan: true

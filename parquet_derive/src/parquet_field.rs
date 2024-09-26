@@ -239,7 +239,8 @@ impl Field {
     /// because this parsing logic is not sophisticated enough for definition
     /// levels beyond 2.
     ///
-    /// `Option` types and references not supported
+    /// `Option` types and references not supported, but the column itself can be nullable
+    /// (i.e., def_level==1), as long as the values are all valid.
     pub fn reader_snippet(&self) -> proc_macro2::TokenStream {
         let ident = &self.ident;
         let column_reader = self.ty.column_reader();
@@ -248,7 +249,13 @@ impl Field {
         let write_batch_expr = quote! {
             let mut vals = Vec::new();
             if let #column_reader(mut typed) = column_reader {
-                typed.read_records(num_records, None, None, &mut vals)?;
+                let mut definition_levels = Vec::new();
+                let (total_num, valid_num, decoded_num) = typed.read_records(
+                    num_records, Some(&mut definition_levels), None, &mut vals)?;
+                if valid_num != decoded_num {
+                    panic!("Support only valid records, found {} null records in column type {}",
+                        decoded_num - valid_num, stringify!{#ident});
+                }
             } else {
                 panic!("Schema and struct disagree on type for {}", stringify!{#ident});
             }
@@ -876,15 +883,21 @@ mod test {
             snippet,
             (quote! {
                  {
-                     let mut vals = Vec::new();
-                     if let ColumnReader::Int64ColumnReader(mut typed) = column_reader {
-                         typed.read_records(num_records, None, None, &mut vals)?;
-                     } else {
-                         panic!("Schema and struct disagree on type for {}", stringify!{ counter });
-                     }
-                     for (i, r) in &mut records[..num_records].iter_mut().enumerate() {
-                         r.counter = vals[i] as usize;
-                     }
+                    let mut vals = Vec::new();
+                    if let ColumnReader::Int64ColumnReader(mut typed) = column_reader {
+                        let mut definition_levels = Vec::new();
+                        let (total_num, valid_num, decoded_num) = typed.read_records(
+                            num_records, Some(&mut definition_levels), None, &mut vals)?;
+                        if valid_num != decoded_num {
+                            panic!("Support only valid records, found {} null records in column type {}",
+                                decoded_num - valid_num, stringify!{counter});
+                        }
+                    } else {
+                        panic!("Schema and struct disagree on type for {}", stringify!{counter});
+                    }
+                    for (i, r) in &mut records[..num_records].iter_mut().enumerate() {
+                        r.counter = vals[i] as usize;
+                    }
                  }
             })
             .to_string()
@@ -1291,7 +1304,13 @@ mod test {
             {
                 let mut vals = Vec::new();
                 if let ColumnReader::Int64ColumnReader(mut typed) = column_reader {
-                    typed.read_records(num_records, None, None, &mut vals)?;
+                    let mut definition_levels = Vec::new();
+                    let (total_num, valid_num, decoded_num) = typed.read_records(
+                        num_records, Some(&mut definition_levels), None, &mut vals)?;
+                    if valid_num != decoded_num {
+                        panic!("Support only valid records, found {} null records in column type {}",
+                            decoded_num - valid_num, stringify!{henceforth});
+                    }
                 } else {
                     panic!("Schema and struct disagree on type for {}", stringify!{ henceforth });
                 }
@@ -1359,7 +1378,13 @@ mod test {
             {
                 let mut vals = Vec::new();
                 if let ColumnReader::Int32ColumnReader(mut typed) = column_reader {
-                    typed.read_records(num_records, None, None, &mut vals)?;
+                    let mut definition_levels = Vec::new();
+                    let (total_num, valid_num, decoded_num) = typed.read_records(
+                        num_records, Some(&mut definition_levels), None, &mut vals)?;
+                    if valid_num != decoded_num {
+                        panic!("Support only valid records, found {} null records in column type {}",
+                            decoded_num - valid_num, stringify!{henceforth});
+                    }
                 } else {
                     panic!("Schema and struct disagree on type for {}", stringify!{ henceforth });
                 }
@@ -1427,7 +1452,13 @@ mod test {
             {
                 let mut vals = Vec::new();
                 if let ColumnReader::FixedLenByteArrayColumnReader(mut typed) = column_reader {
-                    typed.read_records(num_records, None, None, &mut vals)?;
+                    let mut definition_levels = Vec::new();
+                    let (total_num, valid_num, decoded_num) = typed.read_records(
+                        num_records, Some(&mut definition_levels), None, &mut vals)?;
+                    if valid_num != decoded_num {
+                        panic!("Support only valid records, found {} null records in column type {}",
+                            decoded_num - valid_num, stringify!{unique_id});
+                    }
                 } else {
                     panic!("Schema and struct disagree on type for {}", stringify!{ unique_id });
                 }

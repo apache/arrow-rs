@@ -123,7 +123,7 @@ async fn send_batch(
     options: &writer::IpcWriteOptions,
 ) -> Result {
     let data_gen = writer::IpcDataGenerator::default();
-    let mut dictionary_tracker = writer::DictionaryTracker::new(false);
+    let mut dictionary_tracker = writer::DictionaryTracker::new_with_preserve_dict_id(false, true);
 
     let (encoded_dictionaries, encoded_batch) = data_gen
         .encoded_batch(batch, &mut dictionary_tracker, options)
@@ -262,7 +262,7 @@ async fn receive_batch_flight_data(
 
     while message.header_type() == ipc::MessageHeader::DictionaryBatch {
         reader::read_dictionary(
-            &Buffer::from(&data.data_body),
+            &Buffer::from(data.data_body.as_ref()),
             message
                 .header_as_dictionary_batch()
                 .expect("Error parsing dictionary"),

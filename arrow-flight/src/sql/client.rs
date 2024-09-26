@@ -28,16 +28,21 @@ use crate::decode::FlightRecordBatchStream;
 use crate::encode::FlightDataEncoderBuilder;
 use crate::error::FlightError;
 use crate::flight_service_client::FlightServiceClient;
-use crate::sql::server::{CLOSE_PREPARED_STATEMENT, CREATE_PREPARED_STATEMENT};
-use crate::sql::{
-    ActionClosePreparedStatementRequest, ActionCreatePreparedStatementRequest,
-    ActionCreatePreparedStatementResult, Any, CommandGetCatalogs, CommandGetCrossReference,
-    CommandGetDbSchemas, CommandGetExportedKeys, CommandGetImportedKeys, CommandGetPrimaryKeys,
-    CommandGetSqlInfo, CommandGetTableTypes, CommandGetTables, CommandGetXdbcTypeInfo,
-    CommandPreparedStatementQuery, CommandPreparedStatementUpdate, CommandStatementQuery,
-    CommandStatementUpdate, DoPutPreparedStatementResult, DoPutUpdateResult, ProstMessageExt,
-    SqlInfo,
+use crate::sql::gen::action_end_transaction_request::EndTransaction;
+use crate::sql::server::{
+    BEGIN_TRANSACTION, CLOSE_PREPARED_STATEMENT, CREATE_PREPARED_STATEMENT, END_TRANSACTION,
 };
+use crate::sql::{
+    ActionBeginTransactionRequest, ActionBeginTransactionResult,
+    ActionClosePreparedStatementRequest, ActionCreatePreparedStatementRequest,
+    ActionCreatePreparedStatementResult, ActionEndTransactionRequest, Any, CommandGetCatalogs,
+    CommandGetCrossReference, CommandGetDbSchemas, CommandGetExportedKeys, CommandGetImportedKeys,
+    CommandGetPrimaryKeys, CommandGetSqlInfo, CommandGetTableTypes, CommandGetTables,
+    CommandGetXdbcTypeInfo, CommandPreparedStatementQuery, CommandPreparedStatementUpdate,
+    CommandStatementIngest, CommandStatementQuery, CommandStatementUpdate,
+    DoPutPreparedStatementResult, DoPutUpdateResult, ProstMessageExt, SqlInfo,
+};
+use crate::streams::FallibleRequestStream;
 use crate::trailers::extract_lazy_trailers;
 use crate::{
     Action, FlightData, FlightDescriptor, FlightInfo, HandshakeRequest, HandshakeResponse,
@@ -49,10 +54,10 @@ use arrow_ipc::convert::fb_to_schema;
 use arrow_ipc::reader::read_record_batch;
 use arrow_ipc::{root_as_message, MessageHeader};
 use arrow_schema::{ArrowError, Schema, SchemaRef};
-use futures::{stream, TryStreamExt};
+use futures::{stream, Stream, TryStreamExt};
 use prost::Message;
 use tonic::transport::Channel;
-use tonic::{IntoRequest, Streaming};
+use tonic::{IntoRequest, IntoStreamingRequest, Streaming};
 
 /// A FlightSQLServiceClient is an endpoint for retrieving or storing Arrow data
 /// by FlightSQL protocol.
@@ -69,10 +74,14 @@ pub struct FlightSqlServiceClient<T> {
 impl FlightSqlServiceClient<Channel> {
     /// Creates a new FlightSql client that connects to a server over an arbitrary tonic `Channel`
     pub fn new(channel: Channel) -> Self {
-        let flight_client = FlightServiceClient::new(channel);
-        FlightSqlServiceClient {
+        Self::new_from_inner(FlightServiceClient::new(channel))
+    }
+
+    /// Creates a new higher level client with the provided lower level client
+    pub fn new_from_inner(inner: FlightServiceClient<Channel>) -> Self {
+        Self {
             token: None,
-            flight_client,
+            flight_client: inner,
             headers: HashMap::default(),
         }
     }
@@ -100,6 +109,11 @@ impl FlightSqlServiceClient<Channel> {
     /// Clear the auth token.
     pub fn clear_token(&mut self) {
         self.token = None;
+    }
+
+    /// Share the bearer token with potentially different `DoGet` clients
+    pub fn token(&self) -> Option<&String> {
+        self.token.as_ref()
     }
 
     /// Set header value.
@@ -209,6 +223,52 @@ impl FlightSqlServiceClient<Channel> {
             .await
             .map_err(status_to_arrow_error)?
             .into_inner();
+        let result = result
+            .message()
+            .await
+            .map_err(status_to_arrow_error)?
+            .unwrap();
+        let any = Any::decode(&*result.app_metadata).map_err(decode_error_to_arrow_error)?;
+        let result: DoPutUpdateResult = any.unpack()?.unwrap();
+        Ok(result.record_count)
+    }
+
+    /// Execute a bulk ingest on the server and return the number of records added
+    pub async fn execute_ingest<S>(
+        &mut self,
+        command: CommandStatementIngest,
+        stream: S,
+    ) -> Result<i64, ArrowError>
+    where
+        S: Stream<Item = crate::error::Result<RecordBatch>> + Send + 'static,
+    {
+        let (sender, receiver) = futures::channel::oneshot::channel();
+
+        let descriptor = FlightDescriptor::new_cmd(command.as_any().encode_to_vec());
+        let flight_data = FlightDataEncoderBuilder::new()
+            .with_flight_descriptor(Some(descriptor))
+            .build(stream);
+
+        // Intercept client errors and send them to the one shot channel above
+        let flight_data = Box::pin(flight_data);
+        let flight_data: FallibleRequestStream<FlightData, FlightError> =
+            FallibleRequestStream::new(sender, flight_data);
+
+        let req = self.set_request_headers(flight_data.into_streaming_request())?;
+        let mut result = self
+            .flight_client
+            .do_put(req)
+            .await
+            .map_err(status_to_arrow_error)?
+            .into_inner();
+
+        // check if the there were any errors in the input stream provided note
+        // if receiver.await fails, it means the sender was dropped and there is
+        // no message to return.
+        if let Ok(msg) = receiver.await {
+            return Err(ArrowError::ExternalError(Box::new(msg)));
+        }
+
         let result = result
             .message()
             .await
@@ -395,6 +455,54 @@ impl FlightSqlServiceClient<Channel> {
         ))
     }
 
+    /// Request to begin a transaction.
+    pub async fn begin_transaction(&mut self) -> Result<Bytes, ArrowError> {
+        let cmd = ActionBeginTransactionRequest {};
+        let action = Action {
+            r#type: BEGIN_TRANSACTION.to_string(),
+            body: cmd.as_any().encode_to_vec().into(),
+        };
+        let req = self.set_request_headers(action.into_request())?;
+        let mut result = self
+            .flight_client
+            .do_action(req)
+            .await
+            .map_err(status_to_arrow_error)?
+            .into_inner();
+        let result = result
+            .message()
+            .await
+            .map_err(status_to_arrow_error)?
+            .unwrap();
+        let any = Any::decode(&*result.body).map_err(decode_error_to_arrow_error)?;
+        let begin_result: ActionBeginTransactionResult = any.unpack()?.unwrap();
+        Ok(begin_result.transaction_id)
+    }
+
+    /// Request to commit/rollback a transaction.
+    pub async fn end_transaction(
+        &mut self,
+        transaction_id: Bytes,
+        action: EndTransaction,
+    ) -> Result<(), ArrowError> {
+        let cmd = ActionEndTransactionRequest {
+            transaction_id,
+            action: action as i32,
+        };
+        let action = Action {
+            r#type: END_TRANSACTION.to_string(),
+            body: cmd.as_any().encode_to_vec().into(),
+        };
+        let req = self.set_request_headers(action.into_request())?;
+        let _ = self
+            .flight_client
+            .do_action(req)
+            .await
+            .map_err(status_to_arrow_error)?
+            .into_inner();
+        Ok(())
+    }
+
     /// Explicitly shut down and clean up the client.
     pub async fn close(&mut self) -> Result<(), ArrowError> {
         // TODO: consume self instead of &mut self to explicitly prevent reuse?
@@ -552,10 +660,9 @@ impl PreparedStatement<Channel> {
         &self,
         put_result: &PutResult,
     ) -> Result<Option<Bytes>, ArrowError> {
-        let any = Any::decode(&*put_result.app_metadata).map_err(decode_error_to_arrow_error)?;
-        Ok(any
-            .unpack::<DoPutPreparedStatementResult>()?
-            .and_then(|result| result.prepared_statement_handle))
+        let result: DoPutPreparedStatementResult =
+            Message::decode(&*put_result.app_metadata).map_err(decode_error_to_arrow_error)?;
+        Ok(result.prepared_statement_handle)
     }
 
     /// Close the prepared statement, so that this PreparedStatement can not used

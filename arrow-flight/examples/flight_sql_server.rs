@@ -46,9 +46,9 @@ use arrow_flight::sql::{
     ActionEndTransactionRequest, Any, CommandGetCatalogs, CommandGetCrossReference,
     CommandGetDbSchemas, CommandGetExportedKeys, CommandGetImportedKeys, CommandGetPrimaryKeys,
     CommandGetSqlInfo, CommandGetTableTypes, CommandGetTables, CommandGetXdbcTypeInfo,
-    CommandPreparedStatementQuery, CommandPreparedStatementUpdate, CommandStatementQuery,
-    CommandStatementSubstraitPlan, CommandStatementUpdate, Nullable, ProstMessageExt, Searchable,
-    SqlInfo, TicketStatementQuery, XdbcDataType,
+    CommandPreparedStatementQuery, CommandPreparedStatementUpdate, CommandStatementIngest,
+    CommandStatementQuery, CommandStatementSubstraitPlan, CommandStatementUpdate, Nullable,
+    ProstMessageExt, Searchable, SqlInfo, TicketStatementQuery, XdbcDataType,
 };
 use arrow_flight::utils::batches_to_flight_data;
 use arrow_flight::{
@@ -615,6 +615,14 @@ impl FlightSqlService for FlightSqlServiceImpl {
         Ok(FAKE_UPDATE_RESULT)
     }
 
+    async fn do_put_statement_ingest(
+        &self,
+        _ticket: CommandStatementIngest,
+        _request: Request<PeekableFlightDataStream>,
+    ) -> Result<i64, Status> {
+        Ok(FAKE_UPDATE_RESULT)
+    }
+
     async fn do_put_substrait_plan(
         &self,
         _ticket: CommandStatementSubstraitPlan,
@@ -783,7 +791,8 @@ impl ProstMessageExt for FetchResults {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use futures::TryStreamExt;
+    use futures::{TryFutureExt, TryStreamExt};
+    use hyper_util::rt::TokioIo;
     use std::fs;
     use std::future::Future;
     use std::net::SocketAddr;
@@ -843,7 +852,8 @@ mod tests {
             .serve_with_incoming(stream);
 
         let request_future = async {
-            let connector = service_fn(move |_| UnixStream::connect(path.clone()));
+            let connector =
+                service_fn(move |_| UnixStream::connect(path.clone()).map_ok(TokioIo::new));
             let channel = Endpoint::try_from("http://example.com")
                 .unwrap()
                 .connect_with_connector(connector)

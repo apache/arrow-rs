@@ -15,17 +15,19 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Functions for Base64 encoding/decoding
+//! Functions for converting data in [`GenericBinaryArray`] such as [`StringArray`] to/from base64 encoded strings
+//!
+//! [`StringArray`]: arrow_array::StringArray
 
 use arrow_array::{Array, GenericBinaryArray, GenericStringArray, OffsetSizeTrait};
-use arrow_buffer::OffsetBuffer;
+use arrow_buffer::{Buffer, OffsetBuffer};
 use arrow_schema::ArrowError;
 use base64::encoded_len;
 use base64::engine::Config;
 
 pub use base64::prelude::*;
 
-/// Bas64 encode each element of `array` with the provided `engine`
+/// Bas64 encode each element of `array` with the provided [`Engine`]
 pub fn b64_encode<E: Engine, O: OffsetSizeTrait>(
     engine: &E,
     array: &GenericBinaryArray<O>,
@@ -48,10 +50,12 @@ pub fn b64_encode<E: Engine, O: OffsetSizeTrait>(
     assert_eq!(offset, buffer_len);
 
     // Safety: Base64 is valid UTF-8
-    unsafe { GenericStringArray::new_unchecked(offsets, buffer.into(), array.nulls().cloned()) }
+    unsafe {
+        GenericStringArray::new_unchecked(offsets, Buffer::from_vec(buffer), array.nulls().cloned())
+    }
 }
 
-/// Base64 decode each element of `array` with the provided `engine`
+/// Base64 decode each element of `array` with the provided [`Engine`]
 pub fn b64_decode<E: Engine, O: OffsetSizeTrait>(
     engine: &E,
     array: &GenericBinaryArray<O>,
@@ -77,7 +81,7 @@ pub fn b64_decode<E: Engine, O: OffsetSizeTrait>(
 
     Ok(GenericBinaryArray::new(
         offsets,
-        buffer.into(),
+        Buffer::from_vec(buffer),
         array.nulls().cloned(),
     ))
 }

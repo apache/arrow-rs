@@ -19,11 +19,60 @@ use crate::arith::derive_arith;
 use std::ops::Neg;
 
 /// Value of an IntervalMonthDayNano array
+///
+///  ## Representation
+///
+/// This type is stored as a single 128 bit integer, interpreted as three
+/// different signed integral fields:
+///
+/// 1. The number of months (32 bits)
+/// 2. The number days (32 bits)
+/// 2. The number of nanoseconds (64 bits).
+///
+/// Nanoseconds does not allow for leap seconds.
+///
+/// Each field is independent (e.g. there is no constraint that the quantity of
+/// nanoseconds represents less than a day's worth of time).
+///
+/// ```text
+/// ┌───────────────┬─────────────┬─────────────────────────────┐
+/// │     Months    │     Days    │            Nanos            │
+/// │   (32 bits)   │  (32 bits)  │          (64 bits)          │
+/// └───────────────┴─────────────┴─────────────────────────────┘
+/// 0            32             64                           128 bit offset
+/// ```
+/// Please see the [Arrow Spec](https://github.com/apache/arrow/blob/081b4022fe6f659d8765efc82b3f4787c5039e3c/format/Schema.fbs#L409-L415) for more details
+///
+///## Note on Comparing and Ordering for Calendar Types
+///
+/// Values of `IntervalMonthDayNano` are compared using their binary
+/// representation, which can lead to surprising results.
+///
+/// Spans of time measured in calendar units are not fixed in absolute size (e.g.
+/// number of seconds) which makes defining comparisons and ordering non trivial.
+/// For example `1 month` is 28 days for February but `1 month` is 31 days
+/// in December.
+///
+/// This makes the seemingly simple operation of comparing two intervals
+/// complicated in practice. For example is `1 month` more or less than `30
+/// days`? The answer depends on what month you are talking about.
+///
+/// This crate defines comparisons for calendar types using their binary
+/// representation which is fast and efficient, but leads
+/// to potentially surprising results.
+///
+/// For example a
+/// `IntervalMonthDayNano` of `1 month` will compare as **greater** than a
+/// `IntervalMonthDayNano` of `100 days` because the binary representation of `1 month`
+/// is larger than the binary representation of 100 days.
 #[derive(Debug, Default, Copy, Clone, Eq, PartialEq, Hash, Ord, PartialOrd)]
 #[repr(C)]
 pub struct IntervalMonthDayNano {
+    /// Number of months
     pub months: i32,
+    /// Number of days
     pub days: i32,
+    /// Number of nanoseconds
     pub nanoseconds: i64,
 }
 
@@ -225,17 +274,83 @@ impl Neg for IntervalMonthDayNano {
     }
 }
 
-derive_arith!(IntervalMonthDayNano, Add, add, wrapping_add, checked_add);
-derive_arith!(IntervalMonthDayNano, Sub, sub, wrapping_sub, checked_sub);
-derive_arith!(IntervalMonthDayNano, Mul, mul, wrapping_mul, checked_mul);
-derive_arith!(IntervalMonthDayNano, Div, div, wrapping_div, checked_div);
-derive_arith!(IntervalMonthDayNano, Rem, rem, wrapping_rem, checked_rem);
+derive_arith!(
+    IntervalMonthDayNano,
+    Add,
+    AddAssign,
+    add,
+    add_assign,
+    wrapping_add,
+    checked_add
+);
+derive_arith!(
+    IntervalMonthDayNano,
+    Sub,
+    SubAssign,
+    sub,
+    sub_assign,
+    wrapping_sub,
+    checked_sub
+);
+derive_arith!(
+    IntervalMonthDayNano,
+    Mul,
+    MulAssign,
+    mul,
+    mul_assign,
+    wrapping_mul,
+    checked_mul
+);
+derive_arith!(
+    IntervalMonthDayNano,
+    Div,
+    DivAssign,
+    div,
+    div_assign,
+    wrapping_div,
+    checked_div
+);
+derive_arith!(
+    IntervalMonthDayNano,
+    Rem,
+    RemAssign,
+    rem,
+    rem_assign,
+    wrapping_rem,
+    checked_rem
+);
 
 /// Value of an IntervalDayTime array
+///
+/// ## Representation
+///
+/// This type is stored as a single 64 bit integer, interpreted as two i32
+/// fields:
+///
+/// 1. the number of elapsed days
+/// 2. The number of milliseconds (no leap seconds),
+///
+/// ```text
+/// ┌──────────────┬──────────────┐
+/// │     Days     │ Milliseconds │
+/// │  (32 bits)   │  (32 bits)   │
+/// └──────────────┴──────────────┘
+/// 0              31            63 bit offset
+/// ```
+///
+/// Please see the [Arrow Spec](https://github.com/apache/arrow/blob/081b4022fe6f659d8765efc82b3f4787c5039e3c/format/Schema.fbs#L406-L408) for more details
+///
+/// ## Note on Comparing and Ordering for Calendar Types
+///
+/// Values of `IntervalDayTime` are compared using their binary representation,
+/// which can lead to surprising results. Please see the description of ordering on
+/// [`IntervalMonthDayNano`] for more details
 #[derive(Debug, Default, Copy, Clone, Eq, PartialEq, Hash, Ord, PartialOrd)]
 #[repr(C)]
 pub struct IntervalDayTime {
+    /// Number of days
     pub days: i32,
+    /// Number of milliseconds
     pub milliseconds: i32,
 }
 
@@ -417,8 +532,48 @@ impl Neg for IntervalDayTime {
     }
 }
 
-derive_arith!(IntervalDayTime, Add, add, wrapping_add, checked_add);
-derive_arith!(IntervalDayTime, Sub, sub, wrapping_sub, checked_sub);
-derive_arith!(IntervalDayTime, Mul, mul, wrapping_mul, checked_mul);
-derive_arith!(IntervalDayTime, Div, div, wrapping_div, checked_div);
-derive_arith!(IntervalDayTime, Rem, rem, wrapping_rem, checked_rem);
+derive_arith!(
+    IntervalDayTime,
+    Add,
+    AddAssign,
+    add,
+    add_assign,
+    wrapping_add,
+    checked_add
+);
+derive_arith!(
+    IntervalDayTime,
+    Sub,
+    SubAssign,
+    sub,
+    sub_assign,
+    wrapping_sub,
+    checked_sub
+);
+derive_arith!(
+    IntervalDayTime,
+    Mul,
+    MulAssign,
+    mul,
+    mul_assign,
+    wrapping_mul,
+    checked_mul
+);
+derive_arith!(
+    IntervalDayTime,
+    Div,
+    DivAssign,
+    div,
+    div_assign,
+    wrapping_div,
+    checked_div
+);
+derive_arith!(
+    IntervalDayTime,
+    Rem,
+    RemAssign,
+    rem,
+    rem_assign,
+    wrapping_rem,
+    checked_rem
+);

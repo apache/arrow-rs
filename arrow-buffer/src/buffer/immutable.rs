@@ -26,7 +26,7 @@ use crate::BufferBuilder;
 use crate::{bytes::Bytes, native::ArrowNativeType};
 
 use super::ops::bitwise_unary_op_helper;
-use super::MutableBuffer;
+use super::{MutableBuffer, ScalarBuffer};
 
 /// Buffer represents a contiguous memory region that can be shared with other buffers and across
 /// thread boundaries.
@@ -69,6 +69,19 @@ impl Buffer {
             ptr,
             length,
         }
+    }
+
+    /// Returns the offset, in bytes, of `Self::ptr` to `Self::data`
+    ///
+    /// self.ptr and self.data can be different after slicing or advancing the buffer.
+    pub fn ptr_offset(&self) -> usize {
+        // Safety: `ptr` is always in bounds of `data`.
+        unsafe { self.ptr.offset_from(self.data.ptr().as_ptr()) as usize }
+    }
+
+    /// Returns the pointer to the start of the buffer without the offset.
+    pub fn data_ptr(&self) -> NonNull<u8> {
+        self.data.ptr()
     }
 
     /// Create a [`Buffer`] from the provided [`Vec`] without copying
@@ -190,7 +203,9 @@ impl Buffer {
     pub fn advance(&mut self, offset: usize) {
         assert!(
             offset <= self.length,
-            "the offset of the new Buffer cannot exceed the existing length"
+            "the offset of the new Buffer cannot exceed the existing length: offset={} length={}",
+            offset,
+            self.length
         );
         self.length -= offset;
         // Safety:
@@ -208,7 +223,8 @@ impl Buffer {
     pub fn slice_with_length(&self, offset: usize, length: usize) -> Self {
         assert!(
             offset.saturating_add(length) <= self.length,
-            "the offset of the new Buffer cannot exceed the existing length"
+            "the offset of the new Buffer cannot exceed the existing length: slice offset={offset} length={length} selflen={}",
+            self.length
         );
         // Safety:
         // offset + length <= self.length
@@ -343,16 +359,41 @@ impl Buffer {
     }
 }
 
-/// Creating a `Buffer` instance by copying the memory from a `AsRef<[u8]>` into a newly
-/// allocated memory region.
-impl<T: AsRef<[u8]>> From<T> for Buffer {
-    fn from(p: T) -> Self {
-        // allocate aligned memory buffer
-        let slice = p.as_ref();
-        let len = slice.len();
-        let mut buffer = MutableBuffer::new(len);
-        buffer.extend_from_slice(slice);
-        buffer.into()
+/// Note that here we deliberately do not implement
+/// `impl<T: AsRef<[u8]>> From<T> for Buffer`
+/// As it would accept `Buffer::from(vec![...])` that would cause an unexpected copy.
+/// Instead, we ask user to be explicit when copying is occurring, e.g., `Buffer::from(vec![...].to_byte_slice())`.
+/// For zero-copy conversion, user should use `Buffer::from_vec(vec![...])`.
+///
+/// Since we removed impl for `AsRef<u8>`, we added the following three specific implementations to reduce API breakage.
+/// See <https://github.com/apache/arrow-rs/issues/6033> for more discussion on this.
+impl From<&[u8]> for Buffer {
+    fn from(p: &[u8]) -> Self {
+        Self::from_slice_ref(p)
+    }
+}
+
+impl<const N: usize> From<[u8; N]> for Buffer {
+    fn from(p: [u8; N]) -> Self {
+        Self::from_slice_ref(p)
+    }
+}
+
+impl<const N: usize> From<&[u8; N]> for Buffer {
+    fn from(p: &[u8; N]) -> Self {
+        Self::from_slice_ref(p)
+    }
+}
+
+impl<T: ArrowNativeType> From<Vec<T>> for Buffer {
+    fn from(value: Vec<T>) -> Self {
+        Self::from_vec(value)
+    }
+}
+
+impl<T: ArrowNativeType> From<ScalarBuffer<T>> for Buffer {
+    fn from(value: ScalarBuffer<T>) -> Self {
+        value.into_inner()
     }
 }
 
@@ -530,7 +571,7 @@ mod tests {
 
     #[test]
     fn test_access_concurrently() {
-        let buffer = Buffer::from(vec![1, 2, 3, 4, 5]);
+        let buffer = Buffer::from([1, 2, 3, 4, 5]);
         let buffer2 = buffer.clone();
         assert_eq!([1, 2, 3, 4, 5], buffer.as_slice());
 

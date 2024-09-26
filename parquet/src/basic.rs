@@ -39,6 +39,7 @@ pub use crate::format::{
 // Mirrors `parquet::Type`
 
 /// Types supported by Parquet.
+///
 /// These physical types are intended to be used in combination with the encodings to
 /// control the on disk storage format.
 /// For example INT16 is not included as a type since a good encoding of INT32
@@ -60,6 +61,7 @@ pub enum Type {
 // Mirrors `parquet::ConvertedType`
 
 /// Common types (converted types) used by frameworks when using Parquet.
+///
 /// This helps map between types in those frameworks to the base types in Parquet.
 /// This is only metadata and not needed to read or write the data.
 ///
@@ -294,13 +296,14 @@ pub enum Encoding {
     /// The ids are encoded using the RLE encoding.
     RLE_DICTIONARY,
 
-    /// Encoding for floating-point data.
+    /// Encoding for fixed-width data.
     ///
     /// K byte-streams are created where K is the size in bytes of the data type.
-    /// The individual bytes of an FP value are scattered to the corresponding stream and
+    /// The individual bytes of a value are scattered to the corresponding stream and
     /// the streams are concatenated.
     /// This itself does not reduce the size of the data but can lead to better compression
-    /// afterwards.
+    /// afterwards. Note that the use of this encoding with FIXED_LEN_BYTE_ARRAY(N) data may
+    /// perform poorly for large values of N.
     BYTE_STREAM_SPLIT,
 }
 
@@ -355,6 +358,14 @@ pub enum Compression {
     LZ4,
     ZSTD(ZstdLevel),
     LZ4_RAW,
+}
+
+impl Compression {
+    /// Returns the codec type of this compression setting as a string, without the compression
+    /// level.
+    pub(crate) fn codec_to_string(self) -> String {
+        format!("{:?}", self).split('(').next().unwrap().to_owned()
+    }
 }
 
 fn split_compression_string(str_setting: &str) -> Result<(&str, Option<u32>), ParquetError> {
@@ -1911,6 +1922,15 @@ mod tests {
         assert_eq!(
             parquet::Encoding::DELTA_BYTE_ARRAY,
             Encoding::DELTA_BYTE_ARRAY.into()
+        );
+    }
+
+    #[test]
+    fn test_compression_codec_to_string() {
+        assert_eq!(Compression::UNCOMPRESSED.codec_to_string(), "UNCOMPRESSED");
+        assert_eq!(
+            Compression::ZSTD(ZstdLevel::default()).codec_to_string(),
+            "ZSTD"
         );
     }
 

@@ -89,12 +89,15 @@ fn assert_layout(file_reader: &Bytes, meta: &ParquetMetaData, layout: &Layout) {
 
         for (column_index, column_layout) in offset_index.iter().zip(&row_group_layout.columns) {
             assert_eq!(
-                column_index.len(),
+                column_index.page_locations.len(),
                 column_layout.pages.len(),
                 "index page count mismatch"
             );
-            for (idx, (page, page_layout)) in
-                column_index.iter().zip(&column_layout.pages).enumerate()
+            for (idx, (page, page_layout)) in column_index
+                .page_locations
+                .iter()
+                .zip(&column_layout.pages)
+                .enumerate()
             {
                 assert_eq!(
                     page.compressed_page_size as usize,
@@ -102,6 +105,7 @@ fn assert_layout(file_reader: &Bytes, meta: &ParquetMetaData, layout: &Layout) {
                     "index page {idx} size mismatch"
                 );
                 let next_first_row_index = column_index
+                    .page_locations
                     .get(idx + 1)
                     .map(|x| x.first_row_index)
                     .unwrap_or_else(|| row_group.num_rows());

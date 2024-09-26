@@ -240,6 +240,8 @@ impl From<Error> for super::Error {
 #[derive(Debug)]
 pub struct LocalFileSystem {
     config: Arc<Config>,
+    // if you want to delete empty directories when deleting files
+    automatic_cleanup: bool,
 }
 
 #[derive(Debug)]
@@ -266,6 +268,7 @@ impl LocalFileSystem {
             config: Arc::new(Config {
                 root: Url::parse("file:///").unwrap(),
             }),
+            automatic_cleanup: false,
         }
     }
 
@@ -282,6 +285,7 @@ impl LocalFileSystem {
             config: Arc::new(Config {
                 root: absolute_path_to_url(path)?,
             }),
+            automatic_cleanup: false,
         })
     }
 
@@ -293,7 +297,28 @@ impl LocalFileSystem {
                 path: location.as_ref()
             }
         );
-        self.config.prefix_to_filesystem(location)
+        let path = self.config.prefix_to_filesystem(location)?;
+
+        #[cfg(target_os = "windows")]
+        let path = {
+            let path = path.to_string_lossy();
+
+            // Assume the first char is the drive letter and the next is a colon.
+            let mut out = String::new();
+            let drive = &path[..2]; // The drive letter and colon (e.g., "C:")
+            let filepath = &path[2..].replace(':', "%3A"); // Replace subsequent colons
+            out.push_str(drive);
+            out.push_str(filepath);
+            PathBuf::from(out)
+        };
+
+        Ok(path)
+    }
+
+    /// Enable automatic cleanup of empty directories when deleting files
+    pub fn with_automatic_cleanup(mut self, automatic_cleanup: bool) -> Self {
+        self.automatic_cleanup = automatic_cleanup;
+        self
     }
 }
 
@@ -465,13 +490,36 @@ impl ObjectStore for LocalFileSystem {
     }
 
     async fn delete(&self, location: &Path) -> Result<()> {
+        let config = Arc::clone(&self.config);
         let path = self.path_to_filesystem(location)?;
-        maybe_spawn_blocking(move || match std::fs::remove_file(&path) {
-            Ok(_) => Ok(()),
-            Err(e) => Err(match e.kind() {
-                ErrorKind::NotFound => Error::NotFound { path, source: e }.into(),
-                _ => Error::UnableToDeleteFile { path, source: e }.into(),
-            }),
+        let automactic_cleanup = self.automatic_cleanup;
+        maybe_spawn_blocking(move || {
+            if let Err(e) = std::fs::remove_file(&path) {
+                Err(match e.kind() {
+                    ErrorKind::NotFound => Error::NotFound { path, source: e }.into(),
+                    _ => Error::UnableToDeleteFile { path, source: e }.into(),
+                })
+            } else if automactic_cleanup {
+                let root = &config.root;
+                let root = root
+                    .to_file_path()
+                    .map_err(|_| Error::InvalidUrl { url: root.clone() })?;
+
+                // here we will try to traverse up and delete an empty dir if possible until we reach the root or get an error
+                let mut parent = path.parent();
+
+                while let Some(loc) = parent {
+                    if loc != root && std::fs::remove_dir(loc).is_ok() {
+                        parent = loc.parent();
+                    } else {
+                        break;
+                    }
+                }
+
+                Ok(())
+            } else {
+                Ok(())
+            }
         })
         .await
     }
@@ -724,7 +772,7 @@ struct LocalUpload {
 #[derive(Debug)]
 struct UploadState {
     dest: PathBuf,
-    file: Mutex<Option<File>>,
+    file: Mutex<File>,
 }
 
 impl LocalUpload {
@@ -732,7 +780,7 @@ impl LocalUpload {
         Self {
             state: Arc::new(UploadState {
                 dest,
-                file: Mutex::new(Some(file)),
+                file: Mutex::new(file),
             }),
             src: Some(src),
             offset: 0,
@@ -748,8 +796,7 @@ impl MultipartUpload for LocalUpload {
 
         let s = Arc::clone(&self.state);
         maybe_spawn_blocking(move || {
-            let mut f = s.file.lock();
-            let file = f.as_mut().context(AbortedSnafu)?;
+            let mut file = s.file.lock();
             file.seek(SeekFrom::Start(offset))
                 .context(SeekSnafu { path: &s.dest })?;
 
@@ -767,9 +814,9 @@ impl MultipartUpload for LocalUpload {
         let s = Arc::clone(&self.state);
         maybe_spawn_blocking(move || {
             // Ensure no inflight writes
-            let f = s.file.lock().take().context(AbortedSnafu)?;
+            let file = s.file.lock();
             std::fs::rename(&src, &s.dest).context(UnableToRenameFileSnafu)?;
-            let metadata = f.metadata().map_err(|e| Error::Metadata {
+            let metadata = file.metadata().map_err(|e| Error::Metadata {
                 source: e.into(),
                 path: src.to_string_lossy().to_string(),
             })?;
@@ -1011,6 +1058,8 @@ fn convert_walkdir_result(
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+
     use futures::TryStreamExt;
     use tempfile::{NamedTempFile, TempDir};
 
@@ -1019,6 +1068,7 @@ mod tests {
     use super::*;
 
     #[tokio::test]
+    #[cfg(target_family = "unix")]
     async fn file_test() {
         let root = TempDir::new().unwrap();
         let integration = LocalFileSystem::new_with_prefix(root.path()).unwrap();
@@ -1035,6 +1085,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(target_family = "unix")]
     fn test_non_tokio() {
         let root = TempDir::new().unwrap();
         let integration = LocalFileSystem::new_with_prefix(root.path()).unwrap();
@@ -1445,6 +1496,56 @@ mod tests {
         let mut list = flatten_list_stream(&integration, None).await.unwrap();
         list.sort_unstable();
         assert_eq!(list, vec![c, a]);
+    }
+
+    #[tokio::test]
+    #[cfg(target_os = "windows")]
+    async fn filesystem_filename_with_colon() {
+        let root = TempDir::new().unwrap();
+        let integration = LocalFileSystem::new_with_prefix(root.path()).unwrap();
+        let path = Path::parse("file%3Aname.parquet").unwrap();
+        let location = Path::parse("file:name.parquet").unwrap();
+
+        integration.put(&location, "test".into()).await.unwrap();
+        let list = flatten_list_stream(&integration, None).await.unwrap();
+        assert_eq!(list, vec![path.clone()]);
+
+        let result = integration
+            .get(&location)
+            .await
+            .unwrap()
+            .bytes()
+            .await
+            .unwrap();
+        assert_eq!(result, Bytes::from("test"));
+    }
+
+    #[tokio::test]
+    async fn delete_dirs_automatically() {
+        let root = TempDir::new().unwrap();
+        let integration = LocalFileSystem::new_with_prefix(root.path())
+            .unwrap()
+            .with_automatic_cleanup(true);
+        let location = Path::from("nested/file/test_file");
+        let data = Bytes::from("arbitrary data");
+
+        integration
+            .put(&location, data.clone().into())
+            .await
+            .unwrap();
+
+        let read_data = integration
+            .get(&location)
+            .await
+            .unwrap()
+            .bytes()
+            .await
+            .unwrap();
+
+        assert_eq!(&*read_data, data);
+        assert!(fs::read_dir(root.path()).unwrap().count() > 0);
+        integration.delete(&location).await.unwrap();
+        assert!(fs::read_dir(root.path()).unwrap().count() == 0);
     }
 }
 
