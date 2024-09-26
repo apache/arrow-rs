@@ -672,6 +672,76 @@ impl DataType {
     }
 }
 
+/// The metadata key for the string name identifying the custom data type.
+pub const EXTENSION_TYPE_NAME_KEY: &str = "ARROW:extension:name";
+
+/// The metadata key for a serialized representation of the ExtensionType
+/// necessary to reconstruct the custom type.
+pub const EXTENSION_TYPE_METADATA_KEY: &str = "ARROW:extension:metadata";
+
+/// Extension types.
+///
+/// <https://arrow.apache.org/docs/format/Columnar.html#extension-types>
+pub trait ExtensionType: Sized {
+    /// The name of this extension type.
+    const NAME: &'static str;
+
+    /// The supported storage types of this extension type.
+    fn storage_types(&self) -> &[DataType];
+
+    /// The metadata type of this extension type.
+    type Metadata;
+
+    /// Returns a reference to the metadata of this extension type, or `None`
+    /// if this extension type has no metadata.
+    fn metadata(&self) -> Option<&Self::Metadata>;
+
+    /// Returns the serialized representation of the metadata of this extension
+    /// type, or `None` if this extension type has no metadata.
+    fn into_serialized_metadata(&self) -> Option<String>;
+
+    /// Deserialize this extension type from the serialized representation of the
+    /// metadata of this extension. An extension type that has no metadata should
+    /// expect `None` for for the serialized metadata.
+    fn from_serialized_metadata(serialized_metadata: Option<&str>) -> Option<Self>;
+}
+
+pub(crate) trait ExtensionTypeExt: ExtensionType {
+    /// Returns `true` if the given data type is supported by this extension
+    /// type.
+    fn supports(&self, data_type: &DataType) -> bool {
+        self.storage_types().contains(data_type)
+    }
+
+    /// Try to extract this extension type from the given [`Field`].
+    ///
+    /// This function returns `None` if extension type
+    /// - information is missing
+    /// - name does not match
+    /// - metadata deserialization failed
+    /// - does not support the data type of this field
+    fn try_from_field(field: &Field) -> Option<Self> {
+        field
+            .metadata()
+            .get(EXTENSION_TYPE_NAME_KEY)
+            .and_then(|name| {
+                (name == <Self as ExtensionType>::NAME)
+                    .then(|| {
+                        Self::from_serialized_metadata(
+                            field
+                                .metadata()
+                                .get(EXTENSION_TYPE_METADATA_KEY)
+                                .map(String::as_str),
+                        )
+                    })
+                    .flatten()
+            })
+            .filter(|extension_type| extension_type.supports(field.data_type()))
+    }
+}
+
+impl<T> ExtensionTypeExt for T where T: ExtensionType {}
+
 /// Canonical extension types.
 ///
 /// The Arrow columnar format allows defining extension types so as to extend
@@ -679,11 +749,90 @@ impl DataType {
 /// be specific to a system or application. However, it is beneficial to share
 /// the definitions of well-known extension types so as to improve
 /// interoperability between different systems integrating Arrow columnar data.
-///
-/// <https://arrow.apache.org/docs/format/CanonicalExtensions.html>
-#[non_exhaustive]
-#[derive(Debug, Clone)]
-pub enum ExtensionType {
+pub mod canonical_extension_types {
+    use serde_json::{Map, Value};
+
+    use super::{DataType, ExtensionType};
+
+    /// Canonical extension types.
+    #[non_exhaustive]
+    #[derive(Debug, Clone, PartialEq)]
+    pub enum CanonicalExtensionTypes {
+        /// The extension type for 'JSON'.
+        Json(Json),
+        /// The extension type for `UUID`.
+        Uuid(Uuid),
+    }
+
+    impl From<Json> for CanonicalExtensionTypes {
+        fn from(value: Json) -> Self {
+            CanonicalExtensionTypes::Json(value)
+        }
+    }
+
+    impl From<Uuid> for CanonicalExtensionTypes {
+        fn from(value: Uuid) -> Self {
+            CanonicalExtensionTypes::Uuid(value)
+        }
+    }
+
+    /// The extension type for `JSON`.
+    ///
+    /// Extension name: `arrow.json`.
+    ///
+    /// The storage type of this extension is `String` or `LargeString` or
+    /// `StringView`. Only UTF-8 encoded JSON as specified in [rfc8259](https://datatracker.ietf.org/doc/html/rfc8259)
+    /// is supported.
+    ///
+    /// This type does not have any parameters.
+    ///
+    /// Metadata is either an empty string or a JSON string with an empty
+    /// object. In the future, additional fields may be added, but they are not
+    /// required to interpret the array.
+    ///
+    /// <https://arrow.apache.org/docs/format/CanonicalExtensions.html#json>
+    #[derive(Debug, Clone, PartialEq)]
+    pub struct Json(Value);
+
+    impl Default for Json {
+        fn default() -> Self {
+            Self(Value::String("".to_owned()))
+        }
+    }
+
+    impl ExtensionType for Json {
+        const NAME: &'static str = "arrow.json";
+
+        type Metadata = Value;
+
+        fn storage_types(&self) -> &[DataType] {
+            &[DataType::Utf8, DataType::LargeUtf8, DataType::Utf8View]
+        }
+
+        fn metadata(&self) -> Option<&Self::Metadata> {
+            Some(&self.0)
+        }
+
+        fn into_serialized_metadata(&self) -> Option<String> {
+            Some(self.0.to_string())
+        }
+
+        fn from_serialized_metadata(serialized_metadata: Option<&str>) -> Option<Self> {
+            serialized_metadata.and_then(|metadata| match metadata {
+                // Empty string
+                r#""""# => Some(Default::default()),
+                // Empty object
+                value => value
+                    .parse::<Value>()
+                    .ok()
+                    .filter(|value| value.as_object().is_some_and(Map::is_empty))
+                    .map(Self),
+            })
+        }
+    }
+
+    /// The extension type for `UUID`.
+    ///
     /// Extension name: `arrow.uuid`.
     ///
     /// The storage type of the extension is `FixedSizeBinary` with a length of
@@ -691,60 +840,128 @@ pub enum ExtensionType {
     ///
     /// Note:
     /// A specific UUID version is not required or guaranteed. This extension
-    /// represents UUIDs as FixedSizeBinary(16) with big-endian notation and
+    /// represents UUIDs as `FixedSizeBinary(16)` with big-endian notation and
     /// does not interpret the bytes in any way.
-    Uuid,
-}
-
-impl fmt::Display for ExtensionType {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.name())
-    }
-}
-
-impl ExtensionType {
-    /// The metadata key for the string name identifying the custom data type.
-    pub const NAME_KEY: &'static str = "ARROW:extension:name";
-
-    /// The metadata key for a serialized representation of the ExtensionType
-    /// necessary to reconstruct the custom type.
-    pub const METADATA_KEY: &'static str = "ARROW:extension:metadata";
-
-    /// Returns the name of this extension type.
-    pub fn name(&self) -> &'static str {
-        match self {
-            ExtensionType::Uuid => "arrow.uuid",
-        }
-    }
-
-    /// Returns the metadata of this extension type.
-    pub fn metadata(&self) -> Option<String> {
-        match self {
-            ExtensionType::Uuid => None,
-        }
-    }
-
-    /// Returns `true` iff the given [`DataType`] can be used as storage type
-    /// for this extension type.
-    pub(crate) fn supports_storage_type(&self, data_type: &DataType) -> bool {
-        match self {
-            ExtensionType::Uuid => matches!(data_type, DataType::FixedSizeBinary(16)),
-        }
-    }
-
-    /// Extract an [`ExtensionType`] from the given [`Field`].
     ///
-    /// This function returns `None` if the extension type is not supported or
-    /// recognized.
-    pub(crate) fn try_from_field(field: &Field) -> Option<Self> {
-        let metadata = field.metadata().get(ExtensionType::METADATA_KEY);
-        field
-            .metadata()
-            .get(ExtensionType::NAME_KEY)
-            .and_then(|name| match name.as_str() {
-                "arrow.uuid" if metadata.is_none() => Some(ExtensionType::Uuid),
-                _ => None,
-            })
+    /// <https://arrow.apache.org/docs/format/CanonicalExtensions.html#uuid>
+    #[derive(Debug, Default, Clone, Copy, PartialEq)]
+    pub struct Uuid;
+
+    impl ExtensionType for Uuid {
+        const NAME: &'static str = "arrow.uuid";
+
+        type Metadata = ();
+
+        fn storage_types(&self) -> &[DataType] {
+            &[DataType::FixedSizeBinary(16)]
+        }
+
+        fn metadata(&self) -> Option<&Self::Metadata> {
+            None
+        }
+
+        fn into_serialized_metadata(&self) -> Option<String> {
+            None
+        }
+
+        fn from_serialized_metadata(serialized_metadata: Option<&str>) -> Option<Self> {
+            serialized_metadata.is_none().then_some(Self)
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use std::collections::HashMap;
+
+        use serde_json::Map;
+
+        use crate::{ArrowError, Field, EXTENSION_TYPE_METADATA_KEY, EXTENSION_TYPE_NAME_KEY};
+
+        use super::*;
+
+        #[test]
+        fn json() -> Result<(), ArrowError> {
+            let mut field = Field::new("", DataType::Utf8, false);
+            field.try_with_extension_type(Json::default())?;
+            assert_eq!(
+                field.metadata().get(EXTENSION_TYPE_METADATA_KEY),
+                Some(&r#""""#.to_owned())
+            );
+            assert!(field.extension_type::<Json>().is_some());
+
+            let mut field = Field::new("", DataType::LargeUtf8, false);
+            field.try_with_extension_type(Json(serde_json::Value::Object(Map::default())))?;
+            assert_eq!(
+                field.metadata().get(EXTENSION_TYPE_METADATA_KEY),
+                Some(&"{}".to_owned())
+            );
+            assert!(field.extension_type::<Json>().is_some());
+
+            let mut field = Field::new("", DataType::Utf8View, false);
+            field.try_with_extension_type(Json::default())?;
+            assert!(field.extension_type::<Json>().is_some());
+            assert_eq!(
+                field.canonical_extension_type(),
+                Some(CanonicalExtensionTypes::Json(Json::default()))
+            );
+            Ok(())
+        }
+
+        #[test]
+        #[should_panic(expected = "expected Utf8 or LargeUtf8 or Utf8View, found Boolean")]
+        fn json_bad_type() {
+            Field::new("", DataType::Boolean, false).with_extension_type(Json::default());
+        }
+
+        #[test]
+        fn json_bad_metadata() {
+            let field = Field::new("", DataType::Utf8, false).with_metadata(HashMap::from_iter([
+                (EXTENSION_TYPE_NAME_KEY.to_owned(), Json::NAME.to_owned()),
+                (EXTENSION_TYPE_METADATA_KEY.to_owned(), "1234".to_owned()),
+            ]));
+            // This returns `None` now because this metadata is invalid.
+            assert!(field.extension_type::<Json>().is_none());
+        }
+
+        #[test]
+        fn json_missing_metadata() {
+            let field = Field::new("", DataType::LargeUtf8, false).with_metadata(
+                HashMap::from_iter([(EXTENSION_TYPE_NAME_KEY.to_owned(), Json::NAME.to_owned())]),
+            );
+            // This returns `None` now because the metadata is missing.
+            assert!(field.extension_type::<Json>().is_none());
+        }
+
+        #[test]
+        fn uuid() -> Result<(), ArrowError> {
+            let mut field = Field::new("", DataType::FixedSizeBinary(16), false);
+            field.try_with_extension_type(Uuid)?;
+            assert!(field.extension_type::<Uuid>().is_some());
+            assert_eq!(
+                field.canonical_extension_type(),
+                Some(CanonicalExtensionTypes::Uuid(Uuid))
+            );
+            Ok(())
+        }
+
+        #[test]
+        #[should_panic(expected = "expected FixedSizeBinary(16), found FixedSizeBinary(8)")]
+        fn uuid_bad_type() {
+            Field::new("", DataType::FixedSizeBinary(8), false).with_extension_type(Uuid);
+        }
+
+        #[test]
+        fn uuid_with_metadata() {
+            // Add metadata that's not expected for uuid.
+            let field = Field::new("", DataType::FixedSizeBinary(16), false)
+                .with_metadata(HashMap::from_iter([(
+                    EXTENSION_TYPE_METADATA_KEY.to_owned(),
+                    "".to_owned(),
+                )]))
+                .with_extension_type(Uuid);
+            // This returns `None` now because `Uuid` expects no metadata.
+            assert!(field.extension_type::<Uuid>().is_none());
+        }
     }
 }
 

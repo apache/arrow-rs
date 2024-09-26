@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::canonical_extension_types::{CanonicalExtensionTypes, Json, Uuid};
 use crate::error::ArrowError;
 use std::cmp::Ordering;
 use std::collections::HashMap;
@@ -23,7 +24,10 @@ use std::sync::Arc;
 
 use crate::datatype::DataType;
 use crate::schema::SchemaBuilder;
-use crate::{ExtensionType, Fields, UnionFields, UnionMode};
+use crate::{
+    ExtensionType, ExtensionTypeExt, Fields, UnionFields, UnionMode, EXTENSION_TYPE_METADATA_KEY,
+    EXTENSION_TYPE_NAME_KEY,
+};
 
 /// A reference counted [`Field`]
 pub type FieldRef = Arc<Field>;
@@ -337,35 +341,61 @@ impl Field {
         self
     }
 
-    /// Returns the canonical [`ExtensionType`] of this [`Field`], if set.
-    pub fn extension_type(&self) -> Option<ExtensionType> {
-        ExtensionType::try_from_field(self)
+    /// Returns the given [`ExtensionType`] of this [`Field`], if set.
+    /// Returns `None` if this field does not have this extension type.
+    pub fn extension_type<E: ExtensionType>(&self) -> Option<E> {
+        E::try_from_field(self)
     }
 
-    /// Updates the metadata of this [`Field`] with the [`ExtensionType::name`]
+    /// Returns the [`CanonicalExtensionTypes`] of this [`Field`], if set.
+    pub fn canonical_extension_type(&self) -> Option<CanonicalExtensionTypes> {
+        Json::try_from_field(self)
+            .map(Into::into)
+            .or(Uuid::try_from_field(self).map(Into::into))
+    }
+
+    /// Updates the metadata of this [`Field`] with the [`ExtensionType::NAME`]
+    /// and [`ExtensionType::metadata`] of the given [`ExtensionType`].
+    ///
+    /// # Error
+    ///
+    /// This functions returns an error if the datatype of this field does not
+    /// match the storage type of the given extension type.
+    pub fn try_with_extension_type<E: ExtensionType>(
+        &mut self,
+        extension_type: E,
+    ) -> Result<(), ArrowError> {
+        if extension_type.supports(&self.data_type) {
+            // Insert the name
+            self.metadata
+                .insert(EXTENSION_TYPE_NAME_KEY.to_owned(), E::NAME.to_owned());
+            // Insert the metadata, if any
+            if let Some(metadata) = extension_type.into_serialized_metadata() {
+                self.metadata
+                    .insert(EXTENSION_TYPE_METADATA_KEY.to_owned(), metadata);
+            }
+            Ok(())
+        } else {
+            Err(ArrowError::InvalidArgumentError(format!(
+                "storage type of extension type {} does not match field data type, expected {}, found {}",
+                <E as ExtensionType>::NAME,
+                extension_type.storage_types().iter().map(ToString::to_string).collect::<Vec<_>>().join(" or "),
+                self.data_type
+            )))
+        }
+    }
+
+    /// Updates the metadata of this [`Field`] with the [`ExtensionType::NAME`]
     /// and [`ExtensionType::metadata`] of the given [`ExtensionType`].
     ///
     /// # Panics
     ///
-    /// This function panics when the datatype of this field is not a valid
-    /// storage type for the given extension type.
-    pub fn with_extension_type(mut self, extension_type: ExtensionType) -> Self {
-        if extension_type.supports_storage_type(&self.data_type) {
-            self.metadata.insert(
-                ExtensionType::NAME_KEY.to_owned(),
-                extension_type.name().to_owned(),
-            );
-            if let Some(metadata) = extension_type.metadata() {
-                self.metadata
-                    .insert(ExtensionType::METADATA_KEY.to_owned(), metadata);
-            }
-            self
-        } else {
-            panic!(
-                "{extension_type} does not support {} as storage type",
-                self.data_type
-            );
-        }
+    /// This functions panics if the datatype of this field does match the
+    /// storage type of the given extension type.
+    pub fn with_extension_type<E: ExtensionType>(mut self, extension_type: E) -> Self {
+        self.try_with_extension_type(extension_type)
+            .unwrap_or_else(|e| panic!("{e}"));
+        self
     }
 
     /// Indicates whether this [`Field`] supports null values.
