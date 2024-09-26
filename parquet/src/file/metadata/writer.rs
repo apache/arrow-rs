@@ -384,9 +384,9 @@ impl<'a, W: Write> ParquetMetaDataWriter<'a, W> {
 mod tests {
     use std::sync::Arc;
 
-    use crate::file::footer::parse_metadata;
     use crate::file::metadata::{
-        ColumnChunkMetaData, ParquetMetaData, ParquetMetaDataWriter, RowGroupMetaData,
+        ColumnChunkMetaData, ParquetMetaData, ParquetMetaDataReader, ParquetMetaDataWriter,
+        RowGroupMetaData,
     };
     use crate::file::properties::{EnabledStatistics, WriterProperties};
     use crate::file::reader::{FileReader, SerializedFileReader};
@@ -428,7 +428,9 @@ mod tests {
 
         let data = buf.into_inner().freeze();
 
-        let decoded_metadata = parse_metadata(&data).unwrap();
+        let decoded_metadata = ParquetMetaDataReader::new()
+            .parse_and_finish(&data)
+            .unwrap();
         assert!(!has_page_index(&metadata.metadata));
 
         assert_eq!(metadata.metadata, decoded_metadata);
