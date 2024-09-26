@@ -370,7 +370,7 @@ impl Field {
             self.metadata
                 .insert(EXTENSION_TYPE_NAME_KEY.to_owned(), E::NAME.to_owned());
             // Insert the metadata, if any
-            if let Some(metadata) = extension_type.into_serialized_metadata() {
+            if let Some(metadata) = extension_type.serialized_metadata() {
                 self.metadata
                     .insert(EXTENSION_TYPE_METADATA_KEY.to_owned(), metadata);
             }

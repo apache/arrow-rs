@@ -790,7 +790,7 @@ pub trait ExtensionType: Sized {
 
     /// Returns the serialized representation of the metadata of this extension
     /// type, or `None` if this extension type has no metadata.
-    fn into_serialized_metadata(&self) -> Option<String>;
+    fn serialized_metadata(&self) -> Option<String>;
 
     /// Deserialize this extension type from the serialized representation of the
     /// metadata of this extension. An extension type that has no metadata should
@@ -842,7 +842,7 @@ impl<T> ExtensionTypeExt for T where T: ExtensionType {}
 /// the definitions of well-known extension types so as to improve
 /// interoperability between different systems integrating Arrow columnar data.
 pub mod canonical_extension_types {
-    use serde_json::{Map, Value};
+    use serde_json::Value;
 
     use super::{DataType, ExtensionType};
 
@@ -905,7 +905,7 @@ pub mod canonical_extension_types {
             Some(&self.0)
         }
 
-        fn into_serialized_metadata(&self) -> Option<String> {
+        fn serialized_metadata(&self) -> Option<String> {
             Some(self.0.to_string())
         }
 
@@ -917,7 +917,7 @@ pub mod canonical_extension_types {
                 value => value
                     .parse::<Value>()
                     .ok()
-                    .filter(|value| value.as_object().is_some_and(Map::is_empty))
+                    .filter(|value| matches!(value.as_object(), Some(map) if map.is_empty()))
                     .map(Self),
             })
         }
@@ -952,7 +952,7 @@ pub mod canonical_extension_types {
             None
         }
 
-        fn into_serialized_metadata(&self) -> Option<String> {
+        fn serialized_metadata(&self) -> Option<String> {
             None
         }
 
