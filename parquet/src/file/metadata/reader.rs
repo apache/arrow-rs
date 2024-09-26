@@ -201,6 +201,7 @@ impl ParquetMetaDataReader {
             // need for more data. This is not it's intended use. The plan is to add a NeedMoreData
             // value to the enum, but this would be a breaking change. This will be done as
             // 54.0.0 draws nearer.
+            // https://github.com/apache/arrow-rs/issues/6447
             Err(ParquetError::IndexOutOfBound(needed, _)) => {
                 // If reader is the same length as `file_size` then presumably there is no more to
                 // read, so return an EOF error.
@@ -247,13 +248,18 @@ impl ParquetMetaDataReader {
             ));
         }
 
-        // TODO(ets): what is the correct behavior for missing page indexes? MetadataLoader would
-        // leave them as `None`, while the parser in `index_reader::read_columns_indexes` returns a
-        // vector of empty vectors.
-        // I think it's best to leave them as `None`.
+        // FIXME: there are differing implementations in the case where page indexes are missing
+        // from the file. `MetadataLoader` will leave them as `None`, while the parser in
+        // `index_reader::read_columns_indexes` returns a vector of empty vectors.
+        // It is best for this function to replicate the latter behavior for now, but in a future
+        // breaking release, the two paths to retrieve metadata should be made consistent. Note that this is only
+        // an issue if the user requested page indexes, so there is no need to provide empty
+        // vectors in `try_parse_sized()`.
+        // https://github.com/apache/arrow-rs/issues/6447
 
         // Get bounds needed for page indexes (if any are present in the file).
         let Some(range) = self.range_for_page_index() else {
+            self.empty_page_indexes();
             return Ok(());
         };
 
@@ -410,6 +416,20 @@ impl ParquetMetaDataReader {
             metadata.set_offset_index(Some(index));
         }
         Ok(())
+    }
+
+    /// Set the column_index and offset_indexes to empty `Vec` for backwards compatibility
+    ///
+    /// See <https://github.com/apache/arrow-rs/pull/6451>  for details
+    fn empty_page_indexes(&mut self) {
+        let metadata = self.metadata.as_mut().unwrap();
+        let num_row_groups = metadata.num_row_groups();
+        if self.column_index {
+            metadata.set_column_index(Some(vec![vec![]; num_row_groups]));
+        }
+        if self.offset_index {
+            metadata.set_offset_index(Some(vec![vec![]; num_row_groups]));
+        }
     }
 
     fn range_for_page_index(&self) -> Option<Range<usize>> {
