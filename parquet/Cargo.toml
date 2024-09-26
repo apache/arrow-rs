@@ -121,6 +121,12 @@ sysinfo = ["dep:sysinfo"]
 # Verify 32-bit CRC checksum when decoding parquet pages
 crc = ["dep:crc32fast"]
 
+
+[[example]]
+name = "external_metadata"
+required-features = ["arrow", "async"]
+path = "./examples/external_metadata.rs"
+
 [[example]]
 name = "read_parquet"
 required-features = ["arrow"]
