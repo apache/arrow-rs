@@ -329,13 +329,18 @@ impl ParquetMetaDataReader {
             return Ok(());
         }
 
-        self.load_page_index(fetch, remainder).await
+        self.load_page_index_with_remainder(fetch, remainder).await
     }
 
     /// Asynchronously fetch the page index structures when a [`ParquetMetaData`] has already
     /// been obtained. See [`Self::new_with_metadata()`].
     #[cfg(feature = "async")]
-    pub async fn load_page_index<F: MetadataFetch>(
+    pub async fn load_page_index<F: MetadataFetch>(&mut self, fetch: F) -> Result<()> {
+        self.load_page_index_with_remainder(fetch, None).await
+    }
+
+    #[cfg(feature = "async")]
+    async fn load_page_index_with_remainder<F: MetadataFetch>(
         &mut self,
         mut fetch: F,
         remainder: Option<(usize, Bytes)>,
