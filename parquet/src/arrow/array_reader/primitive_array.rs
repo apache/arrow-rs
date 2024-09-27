@@ -783,7 +783,7 @@ mod tests {
             assert_ne!(array, &data_decimal_array)
         }
     }
-    
+
     #[test]
     fn test_primitive_array_reader_date32_type() {
         // parquet `INT32` to date
