@@ -552,7 +552,7 @@ mod tests {
             }
         }
 
-        impl MetadataFetch for &mut MaskedBytes {
+        impl<'a> MetadataFetch for &'a mut MaskedBytes {
             fn fetch(&mut self, range: Range<usize>) -> BoxFuture<'_, ParquetResult<Bytes>> {
                 let inner_range = self.inner_range.clone();
                 println!("inner_range: {:?}", inner_range);
