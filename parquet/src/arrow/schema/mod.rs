@@ -234,7 +234,11 @@ pub fn arrow_to_parquet_schema(schema: &Schema, coerce_types: bool) -> Result<Sc
 }
 
 /// Convert arrow schema to parquet schema specifying the name of the root schema element
-pub fn arrow_to_parquet_schema_with_root(schema: &Schema, root: &str, coerce_types: bool) -> Result<SchemaDescriptor> {
+pub fn arrow_to_parquet_schema_with_root(
+    schema: &Schema,
+    root: &str,
+    coerce_types: bool,
+) -> Result<SchemaDescriptor> {
     let fields = schema
         .fields()
         .iter()
