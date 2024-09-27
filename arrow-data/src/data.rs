@@ -693,14 +693,20 @@ impl ArrayData {
     ///
     /// This can be useful for when interacting with data sent over IPC or FFI, that may
     /// not meet the minimum alignment requirements
+    ///
+    /// This also aligns buffers of children data
     pub fn align_buffers(&mut self) {
         let layout = layout(&self.data_type);
         for (buffer, spec) in self.buffers.iter_mut().zip(&layout.buffers) {
             if let BufferSpec::FixedWidth { alignment, .. } = spec {
                 if buffer.as_ptr().align_offset(*alignment) != 0 {
-                    *buffer = Buffer::from_slice_ref(buffer.as_ref())
+                    *buffer = Buffer::from_slice_ref(buffer.as_ref());
                 }
             }
+        }
+        // align children data recursively
+        for data in self.child_data.iter_mut() {
+            data.align_buffers()
         }
     }
 
@@ -1961,7 +1967,7 @@ impl From<ArrayData> for ArrayDataBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow_schema::Field;
+    use arrow_schema::{Field, Fields};
 
     // See arrow/tests/array_data_validation.rs for test of array validation
 
@@ -2224,7 +2230,46 @@ mod tests {
         };
         data.validate_full().unwrap();
 
+        // break alignment in data
         data.buffers[0] = sliced;
+        let err = data.validate().unwrap_err();
+
+        assert_eq!(
+            err.to_string(),
+            "Invalid argument error: Misaligned buffers[0] in array of type Int32, offset from expected alignment of 4 by 1"
+        );
+
+        data.align_buffers();
+        data.validate_full().unwrap();
+    }
+
+    #[test]
+    fn test_alignment_struct() {
+        let buffer = Buffer::from_vec(vec![1_i32, 2_i32, 3_i32]);
+        let sliced = buffer.slice(1);
+
+        let child_data = ArrayData {
+            data_type: DataType::Int32,
+            len: 0,
+            offset: 0,
+            buffers: vec![buffer],
+            child_data: vec![],
+            nulls: None,
+        };
+
+        let schema = DataType::Struct(Fields::from(vec![Field::new("a", DataType::Int32, false)]));
+        let mut data = ArrayData {
+            data_type: schema,
+            len: 0,
+            offset: 0,
+            buffers: vec![],
+            child_data: vec![child_data],
+            nulls: None,
+        };
+        data.validate_full().unwrap();
+
+        // break alignment in child data
+        data.child_data[0].buffers[0] = sliced;
         let err = data.validate().unwrap_err();
 
         assert_eq!(
