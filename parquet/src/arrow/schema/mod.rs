@@ -416,15 +416,18 @@ fn arrow_to_parquet_type(field: &Field, coerce_types: bool) -> Result<Type> {
             .with_id(id)
             .build(),
         DataType::Date64 => {
-            let physical_type = match coerce_types {
-                true => PhysicalType::INT32,
-                false => PhysicalType::INT64,
-            };
-            Type::primitive_type_builder(name, physical_type)
-                .with_logical_type(Some(LogicalType::Date))
-                .with_repetition(repetition)
-                .with_id(id)
-                .build()
+            if coerce_types {
+                Type::primitive_type_builder(name, PhysicalType::INT32)
+                    .with_logical_type(Some(LogicalType::Date))
+                    .with_repetition(repetition)
+                    .with_id(id)
+                    .build()
+            } else {
+                Type::primitive_type_builder(name, PhysicalType::INT64)
+                    .with_repetition(repetition)
+                    .with_id(id)
+                    .build()
+            }
         },
         DataType::Time32(TimeUnit::Second) => {
             // Cannot represent seconds in LogicalType
@@ -1331,7 +1334,6 @@ mod tests {
             OPTIONAL BINARY  string (UTF8);
             REPEATED BOOLEAN bools;
             OPTIONAL INT32   date32       (DATE);
-            OPTIONAL INT64   date64       (DATE);
             OPTIONAL INT32   time_milli (TIME_MILLIS);
             OPTIONAL INT64   time_micro (TIME_MICROS);
             OPTIONAL INT64   time_nano (TIME(NANOS,false));
@@ -1373,7 +1375,6 @@ mod tests {
                 false,
             ),
             Field::new("date32", DataType::Date32, true),
-            Field::new("date64", DataType::Date64, true),
             Field::new("time_milli", DataType::Time32(TimeUnit::Millisecond), true),
             Field::new("time_micro", DataType::Time64(TimeUnit::Microsecond), true),
             Field::new("time_nano", DataType::Time64(TimeUnit::Nanosecond), true),
@@ -1439,7 +1440,6 @@ mod tests {
                 }
             }
             OPTIONAL INT32   date32       (DATE);
-            OPTIONAL INT64   date64       (DATE);
             OPTIONAL INT32   time_milli (TIME(MILLIS,false));
             OPTIONAL INT32   time_milli_utc (TIME(MILLIS,true));
             OPTIONAL INT64   time_micro (TIME_MICROS);
@@ -1493,7 +1493,6 @@ mod tests {
                 false,
             ),
             Field::new("date32", DataType::Date32, true),
-            Field::new("date64", DataType::Date64, true),
             Field::new("time_milli", DataType::Time32(TimeUnit::Millisecond), true),
             Field::new(
                 "time_milli_utc",

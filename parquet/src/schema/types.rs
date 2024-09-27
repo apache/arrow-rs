@@ -414,18 +414,8 @@ impl<'a> PrimitiveTypeBuilder<'a> {
             ConvertedType::DECIMAL => {
                 self.check_decimal_precision_scale()?;
             }
-            ConvertedType::DATE => {
-                if !(self.physical_type == PhysicalType::INT32
-                    || self.physical_type == PhysicalType::INT64)
-                {
-                    return Err(general_err!(
-                        "{} cannot annotate field '{}' because it is not a INT32 or a INT64 field",
-                        self.converted_type,
-                        self.name
-                    ));
-                }
-            }
-            ConvertedType::TIME_MILLIS
+            ConvertedType::DATE
+            | ConvertedType::TIME_MILLIS
             | ConvertedType::UINT_8
             | ConvertedType::UINT_16
             | ConvertedType::UINT_32
