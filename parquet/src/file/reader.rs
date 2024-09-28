@@ -45,23 +45,39 @@ pub trait Length {
     fn len(&self) -> u64;
 }
 
-/// The ChunkReader trait generates readers of chunks of a source.
+/// Generates [`Read`]ers to read chunks of a Parquet data source.
 ///
-/// For more information see [`File::try_clone`]
+/// The Parquet reader uses [`ChunkReader`] to access Parquet data, potentially
+/// decoding in parallel from from the same data source. The returned readers
+/// follow the model of [`File::try_clone`] where mutations of one reader affect
+/// all readers.
+///
+/// Implementations are provided for
+/// * [`File`] for reading from local file system
+/// * [`Bytes`] for reading from an in-memory buffer
+///
+/// User provided implementations can implement more sophisticated behaviors
+/// such as on-demand buffering or scan sharing.
 pub trait ChunkReader: Length + Send + Sync {
+    /// The concrete type of the Reader
     type T: Read;
 
-    /// Get a [`Read`] starting at the provided file offset
+    /// Get a [`Read`] instance starting at the provided file offset
     ///
-    /// Subsequent or concurrent calls to [`Self::get_read`] or [`Self::get_bytes`] may
-    /// side-effect on previously returned [`Self::T`]. Care should be taken to avoid this
+    /// Note that subsequent or concurrent calls to [`Self::get_read`] or
+    /// [`Self::get_bytes`] may cause side-effect on previously returned
+    /// [`Self::T`]. Callers of `get_read` should take care to avoid race
+    /// conditions.
     ///
     /// See [`File::try_clone`] for more information
     fn get_read(&self, start: u64) -> Result<Self::T>;
 
-    /// Get a range as bytes
+    /// Get a range of data in memory as [`Bytes`]
     ///
-    /// Concurrent calls to [`Self::get_bytes`] may result in interleaved output
+    /// Note that subsequent or concurrent calls to [`Self::get_read`] or
+    /// [`Self::get_bytes`] may cause side-effect on previously returned
+    /// [`Self::T`]. Callers of `get_bytes` should take care to avoid race
+    /// conditions.
     ///
     /// See [`File::try_clone`] for more information
     fn get_bytes(&self, start: u64, length: usize) -> Result<Bytes>;
