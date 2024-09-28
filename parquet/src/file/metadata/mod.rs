@@ -343,7 +343,7 @@ impl ParquetMetaDataBuilder {
         Self(ParquetMetaData::new(file_meta_data, vec![]))
     }
 
-    /// Create a new builder from an exising ParquetMetaData
+    /// Create a new builder from an existing ParquetMetaData
     pub fn new_from_metadata(metadata: ParquetMetaData) -> Self {
         Self(metadata)
     }
@@ -385,6 +385,11 @@ impl ParquetMetaDataBuilder {
         std::mem::take(&mut self.0.column_index)
     }
 
+    /// Return a reference to the current column index, if any
+    pub fn column_index(&self) -> Option<&ParquetColumnIndex> {
+        self.0.column_index.as_ref()
+    }
+
     /// Sets the offset index
     pub fn set_offset_index(mut self, offset_index: Option<ParquetOffsetIndex>) -> Self {
         self.0.offset_index = offset_index;
@@ -394,6 +399,11 @@ impl ParquetMetaDataBuilder {
     /// Returns the current offset index from the builder, replacing it with `None`
     pub fn take_offset_index(&mut self) -> Option<ParquetOffsetIndex> {
         std::mem::take(&mut self.0.offset_index)
+    }
+
+    /// Return a reference to the current offset index, if any
+    pub fn offset_index(&self) -> Option<&ParquetOffsetIndex> {
+        self.0.offset_index.as_ref()
     }
 
     /// Creates a new ParquetMetaData from the builder
