@@ -193,18 +193,18 @@ impl ParquetMetaData {
 
     /// Creates Parquet metadata from file metadata, a list of row
     /// group metadata, and the column index structures.
+    #[deprecated(note = "Use ParquetMetaDataBuilder")]
     pub fn new_with_page_index(
         file_metadata: FileMetaData,
         row_groups: Vec<RowGroupMetaData>,
         column_index: Option<ParquetColumnIndex>,
         offset_index: Option<ParquetOffsetIndex>,
     ) -> Self {
-        ParquetMetaData {
-            file_metadata,
-            row_groups,
-            column_index,
-            offset_index,
-        }
+        ParquetMetaDataBuilder::new(file_metadata)
+            .set_row_groups(row_groups)
+            .set_column_index(column_index)
+            .set_offset_index(offset_index)
+            .build()
     }
 
     /// Convert this ParquetMetaData into a [`ParquetMetaDataBuilder`]
