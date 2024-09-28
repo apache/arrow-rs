@@ -37,25 +37,27 @@
 use crate::{
     ArrowError, DataType, Field, FieldRef, IntervalUnit, Schema, TimeUnit, UnionFields, UnionMode,
 };
+use bitflags::bitflags;
 use std::sync::Arc;
 use std::{
     collections::HashMap,
     ffi::{c_char, c_void, CStr, CString},
 };
 
-#[allow(clippy::assign_op_pattern)]
-/// Workaround <https://github.com/bitflags/bitflags/issues/356>
-mod flags {
-    use bitflags::bitflags;
-    bitflags! {
-        pub struct Flags: i64 {
-            const DICTIONARY_ORDERED = 0b00000001;
-            const NULLABLE = 0b00000010;
-            const MAP_KEYS_SORTED = 0b00000100;
-        }
+bitflags! {
+    /// Flags for [`FFI_ArrowSchema`]
+    ///
+    /// Old Workaround at <https://github.com/bitflags/bitflags/issues/356>
+    /// is no longer required as `bitflags` [fixed the issue](https://github.com/bitflags/bitflags/pull/355).
+    pub struct Flags: i64 {
+        /// Indicates that the dictionary is ordered
+        const DICTIONARY_ORDERED = 0b00000001;
+        /// Indicates that the field is nullable
+        const NULLABLE = 0b00000010;
+        /// Indicates that the map keys are sorted
+        const MAP_KEYS_SORTED = 0b00000100;
     }
 }
-pub use flags::*;
 
 /// ABI-compatible struct for `ArrowSchema` from C Data Interface
 /// See <https://arrow.apache.org/docs/format/CDataInterface.html#structure-definitions>
@@ -70,10 +72,12 @@ pub use flags::*;
 ///
 #[repr(C)]
 #[derive(Debug)]
+#[allow(non_camel_case_types)]
 pub struct FFI_ArrowSchema {
     format: *const c_char,
     name: *const c_char,
     metadata: *const c_char,
+    /// Refer to [Arrow Flags](https://arrow.apache.org/docs/format/CDataInterface.html#c.ArrowSchema.flags)
     flags: i64,
     n_children: i64,
     children: *mut *mut FFI_ArrowSchema,
@@ -155,16 +159,19 @@ impl FFI_ArrowSchema {
         Ok(this)
     }
 
+    /// Set the name of the schema
     pub fn with_name(mut self, name: &str) -> Result<Self, ArrowError> {
         self.name = CString::new(name).unwrap().into_raw();
         Ok(self)
     }
 
+    /// Set the flags of the schema
     pub fn with_flags(mut self, flags: Flags) -> Result<Self, ArrowError> {
         self.flags = flags.bits();
         Ok(self)
     }
 
+    /// Add metadata to the schema
     pub fn with_metadata<I, S>(mut self, metadata: I) -> Result<Self, ArrowError>
     where
         I: IntoIterator<Item = (S, S)>,
@@ -237,6 +244,7 @@ impl FFI_ArrowSchema {
         std::ptr::replace(schema, Self::empty())
     }
 
+    /// Create an empty [`FFI_ArrowSchema`]
     pub fn empty() -> Self {
         Self {
             format: std::ptr::null_mut(),
@@ -251,7 +259,7 @@ impl FFI_ArrowSchema {
         }
     }
 
-    /// returns the format of this schema.
+    /// Returns the format of this schema.
     pub fn format(&self) -> &str {
         assert!(!self.format.is_null());
         // safe because the lifetime of `self.format` equals `self`
@@ -260,7 +268,7 @@ impl FFI_ArrowSchema {
             .expect("The external API has a non-utf8 as format")
     }
 
-    /// returns the name of this schema.
+    /// Returns the name of this schema.
     pub fn name(&self) -> Option<&str> {
         if self.name.is_null() {
             None
@@ -274,35 +282,55 @@ impl FFI_ArrowSchema {
         }
     }
 
+    /// Returns the flags of this schema.
     pub fn flags(&self) -> Option<Flags> {
         Flags::from_bits(self.flags)
     }
 
+    /// Returns the child of this schema at `index`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `index` is greater than or equal to the number of children.
+    ///
+    /// This is to make sure that the unsafe acces to raw pointer is sound.
     pub fn child(&self, index: usize) -> &Self {
         assert!(index < self.n_children as usize);
         unsafe { self.children.add(index).as_ref().unwrap().as_ref().unwrap() }
     }
 
+    /// Returns an iterator to the schema's children.
     pub fn children(&self) -> impl Iterator<Item = &Self> {
         (0..self.n_children as usize).map(move |i| self.child(i))
     }
 
+    /// Returns if the field is semantically nullable,
+    /// regardless of whether it actually has null values.
     pub fn nullable(&self) -> bool {
         (self.flags / 2) & 1 == 1
     }
 
+    /// Returns the reference to the underlying dictionary of the schema.
+    /// Check [ArrowSchema.dictionary](https://arrow.apache.org/docs/format/CDataInterface.html#c.ArrowSchema.dictionary).
+    ///
+    /// This must be `Some` if the schema represents a dictionary-encoded type, `None` otherwise.
     pub fn dictionary(&self) -> Option<&Self> {
         unsafe { self.dictionary.as_ref() }
     }
 
+    /// For map types, returns whether the keys within each map value are sorted.
+    ///
+    /// Refer to [Arrow Flags](https://arrow.apache.org/docs/format/CDataInterface.html#c.ArrowSchema.flags)
     pub fn map_keys_sorted(&self) -> bool {
         self.flags & 0b00000100 != 0
     }
 
+    /// For dictionary-encoded types, returns whether the ordering of dictionary indices is semantically meaningful.
     pub fn dictionary_ordered(&self) -> bool {
         self.flags & 0b00000001 != 0
     }
 
+    /// Returns the metadata in the schema as `Key-Value` pairs
     pub fn metadata(&self) -> Result<HashMap<String, String>, ArrowError> {
         if self.metadata.is_null() {
             Ok(HashMap::new())

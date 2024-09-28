@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! Provide SQL's LIKE operators for Arrow's string arrays
+
 use crate::predicate::Predicate;
 use arrow_array::cast::AsArray;
 use arrow_array::*;
@@ -155,8 +157,10 @@ fn like_op(op: Op, lhs: &dyn Datum, rhs: &dyn Datum) -> Result<BooleanArray, Arr
 ///
 /// This trait helps to abstract over the different types of string arrays
 /// so that we don't need to duplicate the implementation for each type.
-trait StringArrayType<'a>: ArrayAccessor<Item = &'a str> + Sized {
+pub trait StringArrayType<'a>: ArrayAccessor<Item = &'a str> + Sized {
+    /// Returns true if all data within this string array is ASCII
     fn is_ascii(&self) -> bool;
+    /// Constructs a new iterator
     fn iter(&self) -> ArrayIter<Self>;
 }
 
@@ -987,6 +991,27 @@ mod tests {
         "%FF__SS%",
         ilike,
         vec![false, true, true, false, false, false, false, true, true, true, true]
+    );
+
+    // 😈 is four bytes long.
+    test_utf8_scalar!(
+        test_uff8_array_like_multibyte,
+        vec![
+            "sdlkdfFooßsdfs",
+            "sdlkdfFooSSdggs",
+            "sdlkdfFoosssdsd",
+            "FooS",
+            "Foos",
+            "ﬀooSS",
+            "ﬀooß",
+            "😃sadlksffofsSsh😈klF",
+            "😱slgffoesSsh😈klF",
+            "FFKoSS",
+            "longer than 12 bytes FFKoSS",
+        ],
+        "%Ssh😈klF",
+        like,
+        vec![false, false, false, false, false, false, false, true, true, false, false]
     );
 
     test_utf8_scalar!(

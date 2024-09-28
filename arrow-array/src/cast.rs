@@ -815,6 +815,14 @@ pub trait AsArray: private::Sealed {
         self.as_struct_opt().expect("struct array")
     }
 
+    /// Downcast this to a [`UnionArray`] returning `None` if not possible
+    fn as_union_opt(&self) -> Option<&UnionArray>;
+
+    /// Downcast this to a [`UnionArray`] panicking if not possible
+    fn as_union(&self) -> &UnionArray {
+        self.as_union_opt().expect("union array")
+    }
+
     /// Downcast this to a [`GenericListArray`] returning `None` if not possible
     fn as_list_opt<O: OffsetSizeTrait>(&self) -> Option<&GenericListArray<O>>;
 
@@ -888,6 +896,10 @@ impl AsArray for dyn Array + '_ {
         self.as_any().downcast_ref()
     }
 
+    fn as_union_opt(&self) -> Option<&UnionArray> {
+        self.as_any().downcast_ref()
+    }
+
     fn as_list_opt<O: OffsetSizeTrait>(&self) -> Option<&GenericListArray<O>> {
         self.as_any().downcast_ref()
     }
@@ -937,6 +949,10 @@ impl AsArray for ArrayRef {
 
     fn as_struct_opt(&self) -> Option<&StructArray> {
         self.as_ref().as_struct_opt()
+    }
+
+    fn as_union_opt(&self) -> Option<&UnionArray> {
+        self.as_any().downcast_ref()
     }
 
     fn as_list_opt<O: OffsetSizeTrait>(&self) -> Option<&GenericListArray<O>> {

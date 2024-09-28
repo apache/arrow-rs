@@ -100,6 +100,13 @@ jobs:
         run: rustup component add rustfmt
       - name: Format arrow
         run: cargo fmt --all -- --check
+      - name: Format parquet
+        # Many modules in parquet are skipped, so check parquet separately. If this check fails, run:
+        #   cargo fmt -p parquet -- --config skip_children=true `find ./parquet -name "*.rs" \! -name format.rs`
+        # from the top level arrow-rs directory and check in the result.
+        # https://github.com/apache/arrow-rs/issues/6179
+        working-directory: parquet
+        run: cargo fmt -p parquet -- --check --config skip_children=true `find . -name "*.rs" \! -name format.rs`
       - name: Format object_store
         working-directory: object_store
         run: cargo fmt --all -- --check

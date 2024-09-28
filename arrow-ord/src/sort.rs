@@ -403,7 +403,7 @@ fn sort_fixed_size_list(
 }
 
 #[inline(never)]
-fn sort_impl<T: ?Sized + Copy>(
+fn sort_impl<T: Copy>(
     options: SortOptions,
     valids: &mut [(u32, T)],
     nulls: &[u32],
@@ -635,7 +635,9 @@ where
 /// One column to be used in lexicographical sort
 #[derive(Clone, Debug)]
 pub struct SortColumn {
+    /// The column to sort
     pub values: ArrayRef,
+    /// Sort options for this column
     pub options: Option<SortOptions>,
 }
 

@@ -271,8 +271,9 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
             | Time64(Microsecond)
             | Time64(Nanosecond),
         ) => true,
-        (Int64, Duration(_)) => true,
-        (Duration(_), Int64) => true,
+        (_, Duration(_)) if from_type.is_numeric() => true,
+        (Duration(_), _) if to_type.is_numeric() => true,
+        (Duration(_), Duration(_)) => true,
         (Interval(from_type), Int64) => {
             match from_type {
                 YearMonth => true,
@@ -327,9 +328,10 @@ where
     let array = if scale < 0 {
         match cast_options.safe {
             true => array.unary_opt::<_, D>(|v| {
-                v.as_().div_checked(scale_factor).ok().and_then(|v| {
-                    (D::validate_decimal_precision(v, precision).is_ok()).then_some(v)
-                })
+                v.as_()
+                    .div_checked(scale_factor)
+                    .ok()
+                    .and_then(|v| (D::is_valid_decimal_precision(v, precision)).then_some(v))
             }),
             false => array.try_unary::<_, D, _>(|v| {
                 v.as_()
@@ -340,9 +342,10 @@ where
     } else {
         match cast_options.safe {
             true => array.unary_opt::<_, D>(|v| {
-                v.as_().mul_checked(scale_factor).ok().and_then(|v| {
-                    (D::validate_decimal_precision(v, precision).is_ok()).then_some(v)
-                })
+                v.as_()
+                    .mul_checked(scale_factor)
+                    .ok()
+                    .and_then(|v| (D::is_valid_decimal_precision(v, precision)).then_some(v))
             }),
             false => array.try_unary::<_, D, _>(|v| {
                 v.as_()
@@ -513,6 +516,15 @@ fn make_timestamp_array(
                 .reinterpret_cast::<TimestampNanosecondType>()
                 .with_timezone_opt(tz),
         ),
+    }
+}
+
+fn make_duration_array(array: &PrimitiveArray<Int64Type>, unit: TimeUnit) -> ArrayRef {
+    match unit {
+        TimeUnit::Second => Arc::new(array.reinterpret_cast::<DurationSecondType>()),
+        TimeUnit::Millisecond => Arc::new(array.reinterpret_cast::<DurationMillisecondType>()),
+        TimeUnit::Microsecond => Arc::new(array.reinterpret_cast::<DurationMicrosecondType>()),
+        TimeUnit::Nanosecond => Arc::new(array.reinterpret_cast::<DurationNanosecondType>()),
     }
 }
 
@@ -2072,31 +2084,53 @@ pub fn cast_with_options(
                 .as_primitive::<Date32Type>()
                 .unary::<_, TimestampNanosecondType>(|x| (x as i64) * NANOSECONDS_IN_DAY),
         )),
-        (Int64, Duration(TimeUnit::Second)) => {
-            cast_reinterpret_arrays::<Int64Type, DurationSecondType>(array)
+
+        (_, Duration(unit)) if from_type.is_numeric() => {
+            let array = cast_with_options(array, &Int64, cast_options)?;
+            Ok(make_duration_array(array.as_primitive(), *unit))
         }
-        (Int64, Duration(TimeUnit::Millisecond)) => {
-            cast_reinterpret_arrays::<Int64Type, DurationMillisecondType>(array)
+        (Duration(TimeUnit::Second), _) if to_type.is_numeric() => {
+            let array = cast_reinterpret_arrays::<DurationSecondType, Int64Type>(array)?;
+            cast_with_options(&array, to_type, cast_options)
         }
-        (Int64, Duration(TimeUnit::Microsecond)) => {
-            cast_reinterpret_arrays::<Int64Type, DurationMicrosecondType>(array)
+        (Duration(TimeUnit::Millisecond), _) if to_type.is_numeric() => {
+            let array = cast_reinterpret_arrays::<DurationMillisecondType, Int64Type>(array)?;
+            cast_with_options(&array, to_type, cast_options)
         }
-        (Int64, Duration(TimeUnit::Nanosecond)) => {
-            cast_reinterpret_arrays::<Int64Type, DurationNanosecondType>(array)
+        (Duration(TimeUnit::Microsecond), _) if to_type.is_numeric() => {
+            let array = cast_reinterpret_arrays::<DurationMicrosecondType, Int64Type>(array)?;
+            cast_with_options(&array, to_type, cast_options)
+        }
+        (Duration(TimeUnit::Nanosecond), _) if to_type.is_numeric() => {
+            let array = cast_reinterpret_arrays::<DurationNanosecondType, Int64Type>(array)?;
+            cast_with_options(&array, to_type, cast_options)
         }
 
-        (Duration(TimeUnit::Second), Int64) => {
-            cast_reinterpret_arrays::<DurationSecondType, Int64Type>(array)
+        (Duration(from_unit), Duration(to_unit)) => {
+            let array = cast_with_options(array, &Int64, cast_options)?;
+            let time_array = array.as_primitive::<Int64Type>();
+            let from_size = time_unit_multiple(from_unit);
+            let to_size = time_unit_multiple(to_unit);
+            // we either divide or multiply, depending on size of each unit
+            // units are never the same when the types are the same
+            let converted = match from_size.cmp(&to_size) {
+                Ordering::Greater => {
+                    let divisor = from_size / to_size;
+                    time_array.unary::<_, Int64Type>(|o| o / divisor)
+                }
+                Ordering::Equal => time_array.clone(),
+                Ordering::Less => {
+                    let mul = to_size / from_size;
+                    if cast_options.safe {
+                        time_array.unary_opt::<_, Int64Type>(|o| o.checked_mul(mul))
+                    } else {
+                        time_array.try_unary::<_, Int64Type, _>(|o| o.mul_checked(mul))?
+                    }
+                }
+            };
+            Ok(make_duration_array(&converted, *to_unit))
         }
-        (Duration(TimeUnit::Millisecond), Int64) => {
-            cast_reinterpret_arrays::<DurationMillisecondType, Int64Type>(array)
-        }
-        (Duration(TimeUnit::Microsecond), Int64) => {
-            cast_reinterpret_arrays::<DurationMicrosecondType, Int64Type>(array)
-        }
-        (Duration(TimeUnit::Nanosecond), Int64) => {
-            cast_reinterpret_arrays::<DurationNanosecondType, Int64Type>(array)
-        }
+
         (Duration(TimeUnit::Second), Interval(IntervalUnit::MonthDayNano)) => {
             cast_duration_to_interval::<DurationSecondType>(array, cast_options)
         }
@@ -2648,6 +2682,38 @@ mod tests {
         let err = array.validate_decimal_precision(2);
         assert_eq!("Invalid argument error: 12345600 is too large to store in a Decimal128 of precision 2. Max is 99",
                    err.unwrap_err().to_string());
+    }
+
+    #[test]
+    fn test_cast_decimal128_to_decimal128_dict() {
+        let p = 20;
+        let s = 3;
+        let input_type = DataType::Decimal128(p, s);
+        let output_type = DataType::Dictionary(
+            Box::new(DataType::Int32),
+            Box::new(DataType::Decimal128(p, s)),
+        );
+        assert!(can_cast_types(&input_type, &output_type));
+        let array = vec![Some(1123456), Some(2123456), Some(3123456), None];
+        let array = create_decimal_array(array, p, s).unwrap();
+        let cast_array = cast_with_options(&array, &output_type, &CastOptions::default()).unwrap();
+        assert_eq!(cast_array.data_type(), &output_type);
+    }
+
+    #[test]
+    fn test_cast_decimal256_to_decimal256_dict() {
+        let p = 20;
+        let s = 3;
+        let input_type = DataType::Decimal256(p, s);
+        let output_type = DataType::Dictionary(
+            Box::new(DataType::Int32),
+            Box::new(DataType::Decimal256(p, s)),
+        );
+        assert!(can_cast_types(&input_type, &output_type));
+        let array = vec![Some(1123456), Some(2123456), Some(3123456), None];
+        let array = create_decimal_array(array, p, s).unwrap();
+        let cast_array = cast_with_options(&array, &output_type, &CastOptions::default()).unwrap();
+        assert_eq!(cast_array.data_type(), &output_type);
     }
 
     #[test]
@@ -5218,6 +5284,106 @@ mod tests {
             let result = result.as_primitive::<Int64Type>();
             assert_eq!(base.as_slice(), result.values());
         }
+    }
+
+    #[test]
+    fn test_cast_between_durations_and_numerics() {
+        fn test_cast_between_durations<FromType, ToType>()
+        where
+            FromType: ArrowPrimitiveType<Native = i64>,
+            ToType: ArrowPrimitiveType<Native = i64>,
+            PrimitiveArray<FromType>: From<Vec<Option<i64>>>,
+        {
+            let from_unit = match FromType::DATA_TYPE {
+                DataType::Duration(unit) => unit,
+                _ => panic!("Expected a duration type"),
+            };
+            let to_unit = match ToType::DATA_TYPE {
+                DataType::Duration(unit) => unit,
+                _ => panic!("Expected a duration type"),
+            };
+            let from_size = time_unit_multiple(&from_unit);
+            let to_size = time_unit_multiple(&to_unit);
+
+            let (v1_before, v2_before) = (8640003005, 1696002001);
+            let (v1_after, v2_after) = if from_size >= to_size {
+                (
+                    v1_before / (from_size / to_size),
+                    v2_before / (from_size / to_size),
+                )
+            } else {
+                (
+                    v1_before * (to_size / from_size),
+                    v2_before * (to_size / from_size),
+                )
+            };
+
+            let array =
+                PrimitiveArray::<FromType>::from(vec![Some(v1_before), Some(v2_before), None]);
+            let b = cast(&array, &ToType::DATA_TYPE).unwrap();
+            let c = b.as_primitive::<ToType>();
+            assert_eq!(v1_after, c.value(0));
+            assert_eq!(v2_after, c.value(1));
+            assert!(c.is_null(2));
+        }
+
+        // between each individual duration type
+        test_cast_between_durations::<DurationSecondType, DurationMillisecondType>();
+        test_cast_between_durations::<DurationSecondType, DurationMicrosecondType>();
+        test_cast_between_durations::<DurationSecondType, DurationNanosecondType>();
+        test_cast_between_durations::<DurationMillisecondType, DurationSecondType>();
+        test_cast_between_durations::<DurationMillisecondType, DurationMicrosecondType>();
+        test_cast_between_durations::<DurationMillisecondType, DurationNanosecondType>();
+        test_cast_between_durations::<DurationMicrosecondType, DurationSecondType>();
+        test_cast_between_durations::<DurationMicrosecondType, DurationMillisecondType>();
+        test_cast_between_durations::<DurationMicrosecondType, DurationNanosecondType>();
+        test_cast_between_durations::<DurationNanosecondType, DurationSecondType>();
+        test_cast_between_durations::<DurationNanosecondType, DurationMillisecondType>();
+        test_cast_between_durations::<DurationNanosecondType, DurationMicrosecondType>();
+
+        // cast failed
+        let array = DurationSecondArray::from(vec![
+            Some(i64::MAX),
+            Some(8640203410378005),
+            Some(10241096),
+            None,
+        ]);
+        let b = cast(&array, &DataType::Duration(TimeUnit::Nanosecond)).unwrap();
+        let c = b.as_primitive::<DurationNanosecondType>();
+        assert!(c.is_null(0));
+        assert!(c.is_null(1));
+        assert_eq!(10241096000000000, c.value(2));
+        assert!(c.is_null(3));
+
+        // durations to numerics
+        let array = DurationSecondArray::from(vec![
+            Some(i64::MAX),
+            Some(8640203410378005),
+            Some(10241096),
+            None,
+        ]);
+        let b = cast(&array, &DataType::Int64).unwrap();
+        let c = b.as_primitive::<Int64Type>();
+        assert_eq!(i64::MAX, c.value(0));
+        assert_eq!(8640203410378005, c.value(1));
+        assert_eq!(10241096, c.value(2));
+        assert!(c.is_null(3));
+
+        let b = cast(&array, &DataType::Int32).unwrap();
+        let c = b.as_primitive::<Int32Type>();
+        assert_eq!(0, c.value(0));
+        assert_eq!(0, c.value(1));
+        assert_eq!(10241096, c.value(2));
+        assert!(c.is_null(3));
+
+        // numerics to durations
+        let array = Int32Array::from(vec![Some(i32::MAX), Some(802034103), Some(10241096), None]);
+        let b = cast(&array, &DataType::Duration(TimeUnit::Second)).unwrap();
+        let c = b.as_any().downcast_ref::<DurationSecondArray>().unwrap();
+        assert_eq!(i32::MAX as i64, c.value(0));
+        assert_eq!(802034103, c.value(1));
+        assert_eq!(10241096, c.value(2));
+        assert!(c.is_null(3));
     }
 
     #[test]
@@ -9360,7 +9526,7 @@ mod tests {
             Some(vec![Some(0), None, Some(2)]),
         ]);
         let a = cast_with_options(&array, &DataType::Utf8, &options).unwrap();
-        let r: Vec<_> = a.as_string::<i32>().iter().map(|x| x.unwrap()).collect();
+        let r: Vec<_> = a.as_string::<i32>().iter().flatten().collect();
         assert_eq!(r, &["[0, 1, 2]", "[0, null, 2]"]);
     }
     #[test]

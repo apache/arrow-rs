@@ -1007,7 +1007,7 @@ mod tests {
         let map_values = map.values().as_list::<i32>();
         assert_eq!(map.value_offsets(), &[0, 1, 3, 5]);
 
-        let k: Vec<_> = map_keys.iter().map(|x| x.unwrap()).collect();
+        let k: Vec<_> = map_keys.iter().flatten().collect();
         assert_eq!(&k, &["a", "a", "b", "c", "a"]);
 
         let list_values = map_values.values().as_string::<i32>();

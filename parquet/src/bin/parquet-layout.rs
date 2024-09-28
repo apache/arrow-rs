@@ -37,6 +37,7 @@ use std::fs::File;
 use std::io::Read;
 
 use clap::Parser;
+use parquet::file::metadata::ParquetMetaDataReader;
 use serde::Serialize;
 use thrift::protocol::TCompactInputProtocol;
 
@@ -79,7 +80,7 @@ struct Page {
 }
 
 fn do_layout<C: ChunkReader>(reader: &C) -> Result<ParquetFile> {
-    let metadata = parquet::file::footer::parse_metadata(reader)?;
+    let metadata = ParquetMetaDataReader::new().parse_and_finish(reader)?;
     let schema = metadata.file_metadata().schema_descr();
 
     let row_groups = (0..metadata.num_row_groups())

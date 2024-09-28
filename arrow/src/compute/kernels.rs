@@ -21,12 +21,15 @@ pub use arrow_arith::{aggregate, arithmetic, arity, bitwise, boolean, numeric, t
 pub use arrow_cast::cast;
 pub use arrow_cast::parse as cast_utils;
 pub use arrow_ord::{cmp, partition, rank, sort};
-pub use arrow_select::{concat, filter, interleave, nullif, take, window, zip};
+pub use arrow_select::{concat, filter, interleave, nullif, take, union_extract, window, zip};
 pub use arrow_string::{concat_elements, length, regexp, substring};
 
 /// Comparison kernels for `Array`s.
 pub mod comparison {
     pub use arrow_ord::comparison::*;
     pub use arrow_string::like::*;
+    // continue to export deprecated methods until they are removed
+    pub use arrow_string::regexp::{regexp_is_match, regexp_is_match_scalar};
+    #[allow(deprecated)]
     pub use arrow_string::regexp::{regexp_is_match_utf8, regexp_is_match_utf8_scalar};
 }

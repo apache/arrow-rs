@@ -50,6 +50,8 @@ where
         .collect()
 }
 
+/// Creates a [`PrimitiveArray`] of a given `size` and `null_density`
+/// filling it with random numbers generated using the provided `seed`.
 pub fn create_primitive_array_with_seed<T>(
     size: usize,
     null_density: f32,
@@ -72,6 +74,8 @@ where
         .collect()
 }
 
+/// Creates a [`PrimitiveArray`] of a given `size` and `null_density`
+/// filling it with random [`IntervalMonthDayNano`] generated using the provided `seed`.
 pub fn create_month_day_nano_array_with_seed(
     size: usize,
     null_density: f32,
@@ -108,7 +112,9 @@ where
         .collect()
 }
 
-/// Creates a random (but fixed-seeded) string array of a given size and null density, strings have a random length
+/// Creates a random (but fixed-seeded) string array of a given size and null density.
+///
+/// Strings have a random length
 /// between 0 and 400 alphanumeric characters. `0..400` is chosen to cover a wide range of common string lengths,
 /// which have a dramatic impact on performance of some queries, e.g. LIKE/ILIKE/regex.
 pub fn create_string_array<Offset: OffsetSizeTrait>(
