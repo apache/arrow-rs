@@ -94,8 +94,8 @@ pub fn take(
     }
 }
 
-/// For each [ArrayRef] in the [Vec<ArrayRef>], take elements by index and create a new
-/// [Vec<ArrayRef>] from those indices.
+/// For each [ArrayRef] in the [`Vec<ArrayRef>`], take elements by index and create a new
+/// [`Vec<ArrayRef>`] from those indices.
 ///
 /// ```text
 /// ┌────────┬────────┐
