@@ -213,16 +213,6 @@ where
     }
 }
 
-impl<'a, F, Fut> MetadataFetch for &'a mut MetadataFetchFn<F>
-where
-    F: FnMut(Range<usize>) -> Fut + Send,
-    Fut: Future<Output = Result<Bytes>> + Send,
-{
-    fn fetch(&mut self, range: Range<usize>) -> BoxFuture<'_, Result<Bytes>> {
-        async move { self.0(range).await }.boxed()
-    }
-}
-
 /// Fetches parquet metadata
 ///
 /// Parameters:
@@ -249,10 +239,10 @@ where
     F: FnMut(Range<usize>) -> Fut + Send,
     Fut: Future<Output = Result<Bytes>> + Send,
 {
-    let mut fetch = MetadataFetchFn(fetch);
+    let fetch = MetadataFetchFn(fetch);
     ParquetMetaDataReader::new()
         .with_prefetch_hint(prefetch)
-        .load_and_finish(&mut fetch, file_size)
+        .load_and_finish(fetch, file_size)
         .await
 }
 

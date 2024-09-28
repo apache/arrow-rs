@@ -299,14 +299,11 @@ impl ParquetMetaDataReader {
     /// See [`Self::with_prefetch_hint`] for a discussion of how to reduce the number of fetches
     /// performed by this function.
     #[cfg(feature = "async")]
-    pub async fn load_and_finish<F>(
+    pub async fn load_and_finish<F: MetadataFetch>(
         mut self,
-        fetch: &mut F,
+        fetch: F,
         file_size: usize,
-    ) -> Result<ParquetMetaData>
-    where
-        for<'a> &'a mut F: MetadataFetch,
-    {
+    ) -> Result<ParquetMetaData> {
         self.try_load(fetch, file_size).await?;
         self.finish()
     }
@@ -317,12 +314,13 @@ impl ParquetMetaDataReader {
     /// See [`Self::with_prefetch_hint`] for a discussion of how to reduce the number of fetches
     /// performed by this function.
     #[cfg(feature = "async")]
-    pub async fn try_load<F>(&mut self, fetch: &mut F, file_size: usize) -> Result<()>
-    where
-        for<'a> &'a mut F: MetadataFetch,
-    {
+    pub async fn try_load<F: MetadataFetch>(
+        &mut self,
+        mut fetch: F,
+        file_size: usize,
+    ) -> Result<()> {
         let (metadata, remainder) =
-            Self::load_metadata(fetch, file_size, self.get_prefetch_size()).await?;
+            Self::load_metadata(&mut fetch, file_size, self.get_prefetch_size()).await?;
 
         self.metadata = Some(metadata);
 
@@ -337,22 +335,16 @@ impl ParquetMetaDataReader {
     /// Asynchronously fetch the page index structures when a [`ParquetMetaData`] has already
     /// been obtained. See [`Self::new_with_metadata()`].
     #[cfg(feature = "async")]
-    pub async fn load_page_index<F>(&mut self, fetch: &mut F) -> Result<()>
-    where
-        for<'a> &'a mut F: MetadataFetch,
-    {
+    pub async fn load_page_index<F: MetadataFetch>(&mut self, fetch: F) -> Result<()> {
         self.load_page_index_with_remainder(fetch, None).await
     }
 
     #[cfg(feature = "async")]
-    async fn load_page_index_with_remainder<F>(
+    async fn load_page_index_with_remainder<F: MetadataFetch>(
         &mut self,
-        mut fetch: &mut F,
+        mut fetch: F,
         remainder: Option<(usize, Bytes)>,
-    ) -> Result<()>
-    where
-        for<'a> &'a mut F: MetadataFetch,
-    {
+    ) -> Result<()> {
         if self.metadata.is_none() {
             return Err(general_err!("Footer metadata is not present"));
         }
@@ -507,14 +499,11 @@ impl ParquetMetaDataReader {
     }
 
     #[cfg(feature = "async")]
-    async fn load_metadata<F>(
-        mut fetch: &mut F,
+    async fn load_metadata<F: MetadataFetch>(
+        fetch: &mut F,
         file_size: usize,
         prefetch: usize,
-    ) -> Result<(ParquetMetaData, Option<(usize, Bytes)>)>
-    where
-        for<'a> &'a mut F: MetadataFetch,
-    {
+    ) -> Result<(ParquetMetaData, Option<(usize, Bytes)>)> {
         if file_size < FOOTER_SIZE {
             return Err(eof_err!("file size of {} is less than footer", file_size));
         }
