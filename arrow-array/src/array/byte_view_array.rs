@@ -44,8 +44,11 @@ use super::ByteArrayType;
 ///
 /// # See Also
 ///
-/// See [`StringViewArray`] for storing utf8 encoded string data and
-/// [`BinaryViewArray`] for storing bytes.
+/// * [`StringViewArray`] for storing utf8 encoded string data
+/// * [`BinaryViewArray`] for storing bytes
+/// * [`ByteView`] to interpret `u128`s layout of the views.
+///
+/// [`ByteView`]: arrow_data::ByteView
 ///
 /// # Notes
 ///
