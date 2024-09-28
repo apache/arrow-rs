@@ -36,6 +36,8 @@ use std::sync::Arc;
 use tempfile::NamedTempFile;
 
 mod bad_data;
+#[cfg(feature = "crc")]
+mod checksum;
 mod statistics;
 
 // returns a struct array with columns "int32_col", "float32_col" and "float64_col" with the specified values

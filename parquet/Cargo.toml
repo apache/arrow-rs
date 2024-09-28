@@ -68,6 +68,7 @@ twox-hash = { version = "1.6", default-features = false }
 paste = { version = "1.0" }
 half = { version = "2.1", default-features = false, features = ["num-traits"] }
 sysinfo = { version = "0.31.2", optional = true, default-features = false, features = ["system"] }
+crc32fast = { version = "1.4.2", optional = true, default-features = false }
 
 [dev-dependencies]
 base64 = { version = "0.22", default-features = false, features = ["std"] }
@@ -117,6 +118,8 @@ object_store = ["dep:object_store", "async"]
 zstd = ["dep:zstd", "zstd-sys"]
 # Display memory in example/write_parquet.rs
 sysinfo = ["dep:sysinfo"]
+# Verify 32-bit CRC checksum when decoding parquet pages
+crc = ["dep:crc32fast"]
 
 [[example]]
 name = "read_parquet"

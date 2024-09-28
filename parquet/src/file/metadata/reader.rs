@@ -638,15 +638,6 @@ impl ParquetMetaDataReader {
 mod tests {
     use super::*;
     use bytes::Bytes;
-    #[cfg(feature = "async")]
-    use futures::future::BoxFuture;
-    #[cfg(feature = "async")]
-    use futures::FutureExt;
-    use std::fs::File;
-    #[cfg(feature = "async")]
-    use std::future::Future;
-    use std::io::{Read, Seek, SeekFrom};
-    use std::sync::atomic::{AtomicUsize, Ordering};
 
     use crate::basic::SortOrder;
     use crate::basic::Type;
@@ -824,11 +815,27 @@ mod tests {
             "EOF: Parquet file too small. Size is 1728 but need 1729"
         );
     }
+}
 
-    #[cfg(feature = "async")]
+#[cfg(feature = "async")]
+#[cfg(test)]
+mod async_tests {
+    use super::*;
+    use bytes::Bytes;
+    use futures::future::BoxFuture;
+    use futures::FutureExt;
+    use std::fs::File;
+    use std::future::Future;
+    use std::io::{Read, Seek, SeekFrom};
+    use std::ops::Range;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use crate::arrow::async_reader::MetadataFetch;
+    use crate::file::reader::Length;
+    use crate::util::test_common::file_util::get_test_file;
+
     struct MetadataFetchFn<F>(F);
 
-    #[cfg(feature = "async")]
     impl<F, Fut> MetadataFetch for MetadataFetchFn<F>
     where
         F: FnMut(Range<usize>) -> Fut + Send,
@@ -839,7 +846,6 @@ mod tests {
         }
     }
 
-    #[cfg(feature = "async")]
     fn read_range(file: &mut File, range: Range<usize>) -> Result<Bytes> {
         file.seek(SeekFrom::Start(range.start as _))?;
         let len = range.end - range.start;
@@ -848,7 +854,6 @@ mod tests {
         Ok(buf.into())
     }
 
-    #[cfg(feature = "async")]
     #[tokio::test]
     async fn test_simple() {
         let mut file = get_test_file("nulls.snappy.parquet");
@@ -934,7 +939,6 @@ mod tests {
         assert_eq!(err, "Parquet error: Invalid Parquet file. Corrupt footer");
     }
 
-    #[cfg(feature = "async")]
     #[tokio::test]
     async fn test_page_index() {
         let mut file = get_test_file("alltypes_tiny_pages.parquet");
