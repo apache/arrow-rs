@@ -875,12 +875,9 @@ mod tests {
     #[should_panic(expected = "Invalid buffer index at 0: got index 3 but only has 1 buffers")]
     fn new_with_invalid_view_data() {
         let v = "large payload over 12 bytes";
-        let view = ByteView {
-            length: 13,
-            prefix: u32::from_le_bytes(v.as_bytes()[0..4].try_into().unwrap()),
-            buffer_index: 3,
-            offset: 1,
-        };
+        let view = ByteView::new(13, &v.as_bytes()[0..4])
+            .with_buffer_index(3)
+            .with_offset(1);
         let views = ScalarBuffer::from(vec![view.into()]);
         let buffers = vec![Buffer::from_slice_ref(v)];
         StringViewArray::new(views, buffers, None);
@@ -892,12 +889,7 @@ mod tests {
     )]
     fn new_with_invalid_utf8_data() {
         let v: Vec<u8> = vec![0xf0, 0x80, 0x80, 0x80];
-        let view = ByteView {
-            length: v.len() as u32,
-            prefix: u32::from_le_bytes(v[0..4].try_into().unwrap()),
-            buffer_index: 0,
-            offset: 0,
-        };
+        let view = ByteView::new(v.len() as u32, &v);
         let views = ScalarBuffer::from(vec![view.into()]);
         let buffers = vec![Buffer::from_slice_ref(v)];
         StringViewArray::new(views, buffers, None);
