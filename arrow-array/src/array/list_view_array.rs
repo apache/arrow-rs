@@ -440,8 +440,9 @@ impl<OffsetSize: OffsetSizeTrait> GenericListViewArray<OffsetSize> {
         if let Some(child_data_type) = Self::get_type(data.data_type()) {
             if values.data_type() != child_data_type {
                 return Err(ArrowError::InvalidArgumentError(format!(
-                    "[Large]ListViewArray's child datatype {:?} does not \
+                    "{}ListViewArray's child datatype {:?} does not \
                              correspond to the List's datatype {:?}",
+                    OffsetSize::PREFIX,
                     values.data_type(),
                     child_data_type
                 )));
