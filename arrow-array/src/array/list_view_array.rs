@@ -260,7 +260,7 @@ impl<OffsetSize: OffsetSizeTrait> GenericListViewArray<OffsetSize> {
         self.value_offsets[i]
     }
 
-    /// constructs a new iterator
+    /// Constructs a new iterator
     pub fn iter<'a>(&'a self) -> GenericListViewArrayIter<'a, OffsetSize> {
         GenericListViewArrayIter::<'a, OffsetSize>::new(self)
     }
