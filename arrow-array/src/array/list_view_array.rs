@@ -257,7 +257,7 @@ impl<OffsetSize: OffsetSizeTrait> GenericListViewArray<OffsetSize> {
         self.value_sizes[i]
     }
 
-    /// Returns the offset for value as index `i`.
+    /// Returns the offset for value at index `i`.
     pub fn value_offset(&self, i: usize) -> OffsetSize {
         self.value_offsets[i]
     }
