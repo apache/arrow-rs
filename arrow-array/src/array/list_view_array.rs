@@ -28,7 +28,7 @@ use crate::{new_empty_array, Array, ArrayAccessor, ArrayRef, FixedSizeListArray,
 
 /// A [`GenericListViewArray`] of variable size lists, storing offsets as `i32`.
 ///
-// See [`ListViewBuilder`](crate::builder::ListViewBuilder) for how to construct a [`ListViewArray`]
+/// See [`ListViewBuilder`](crate::builder::ListViewBuilder) for how to construct a [`ListViewArray`]
 pub type ListViewArray = GenericListViewArray<i32>;
 
 /// A [`GenericListViewArray`] of variable size lists, storing offsets as `i64`.
