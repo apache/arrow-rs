@@ -449,7 +449,9 @@ impl<OffsetSize: OffsetSizeTrait> GenericListViewArray<OffsetSize> {
             }
         } else {
             return Err(ArrowError::InvalidArgumentError(format!(
-                "[Large]ListViewArray's datatype must be [Large]ListViewArray(). It is {:?}",
+                "{}ListViewArray's datatype must be {}ListViewArray(). It is {:?}",
+                OffsetSize::PREFIX,
+                OffsetSize::PREFIX,
                 data.data_type()
             )));
         }
