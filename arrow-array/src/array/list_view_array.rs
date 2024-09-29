@@ -261,8 +261,8 @@ impl<OffsetSize: OffsetSizeTrait> GenericListViewArray<OffsetSize> {
     }
 
     /// Constructs a new iterator
-    pub fn iter<'a>(&'a self) -> GenericListViewArrayIter<'a, OffsetSize> {
-        GenericListViewArrayIter::<'a, OffsetSize>::new(self)
+    pub fn iter(&self) -> GenericListViewArrayIter<'_, OffsetSize> {
+        GenericListViewArrayIter::<'_, OffsetSize>::new(self)
     }
 
     #[inline]
