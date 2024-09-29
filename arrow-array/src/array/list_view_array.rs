@@ -108,10 +108,8 @@ impl<OffsetSize: OffsetSizeTrait> GenericListViewArray<OffsetSize> {
             })? > values.len()
             {
                 return Err(ArrowError::InvalidArgumentError(format!(
-                    "Offset + size for {}ListViewArray must be within the bounds of the child array, got offset: {}, size: {}, child array length: {}",
+                    "Offset + size for {}ListViewArray must be within the bounds of the child array, got offset: {offset}, size: {size}, child array length: {}",
                     OffsetSize::PREFIX,
-                    offset,
-                    size,
                     values.len()
                 )));
             }
