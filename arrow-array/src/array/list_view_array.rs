@@ -92,8 +92,8 @@ impl<OffsetSize: OffsetSizeTrait> GenericListViewArray<OffsetSize> {
         }
         if len != sizes.len() {
             return Err(ArrowError::InvalidArgumentError(format!(
-                "Length of offsets buffer and sizes buffer must be equal for {}ListViewArray, got {} and {}",
-                OffsetSize::PREFIX, len, sizes.len()
+                "Length of offsets buffer and sizes buffer must be equal for {}ListViewArray, got {len} and {}",
+                OffsetSize::PREFIX, sizes.len()
             )));
         }
 
