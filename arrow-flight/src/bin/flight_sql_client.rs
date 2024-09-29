@@ -26,6 +26,7 @@ use arrow_flight::{
 };
 use arrow_schema::Schema;
 use clap::{Parser, Subcommand};
+use core::str;
 use futures::TryStreamExt;
 use tonic::{
     metadata::MetadataMap,
@@ -421,7 +422,7 @@ fn log_metadata(map: &MetadataMap, what: &'static str) {
                     "{}: {}={}",
                     what,
                     k.as_str(),
-                    String::from_utf8_lossy(v.as_ref()),
+                    str::from_utf8(v.as_ref()).unwrap(),
                 );
             }
         }

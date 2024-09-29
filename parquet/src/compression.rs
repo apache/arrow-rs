@@ -298,6 +298,30 @@ mod gzip_codec {
 pub use gzip_codec::*;
 
 /// Represents a valid gzip compression level.
+///
+/// #### WARNING:
+/// Level 10 compression can offer smallest file size,
+/// but Parquet files created with it will not be readable
+/// by other "standard" paquet readers.
+///
+/// Do **NOT** use level 10 if you need other software to
+/// be able to read the files. Read below for details.
+///
+/// ### IMPORTANT:
+/// There's often confusion about the compression levels in `flate2` vs `arrow`
+/// as highlighted in issue [#1011](https://github.com/apache/arrow-rs/issues/6282).
+///
+/// `flate2` supports two compression backends: `miniz_oxide` and `zlib`.
+///
+/// - `zlib` supports levels from 0 to 9.
+/// - `miniz_oxide` supports levels from 0 to 10.
+///
+/// `arrow` uses `flate` with `rust_backend` feature,
+/// which provides `miniz_oxide` as the backend.
+/// Therefore 0-10 levels are supported.
+///
+/// `flate2` documents this behavior properly with
+/// [this commit](https://github.com/rust-lang/flate2-rs/pull/430).
 #[derive(Debug, Eq, PartialEq, Hash, Clone, Copy)]
 pub struct GzipLevel(u32);
 

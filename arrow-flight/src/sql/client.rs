@@ -695,9 +695,11 @@ fn flight_error_to_arrow_error(err: FlightError) -> ArrowError {
     }
 }
 
-// A polymorphic structure to natively represent different types of data contained in `FlightData`
+/// A polymorphic structure to natively represent different types of data contained in `FlightData`
 pub enum ArrowFlightData {
+    /// A record batch
     RecordBatch(RecordBatch),
+    /// A schema
     Schema(Schema),
 }
 

@@ -388,11 +388,14 @@ struct FlightStreamState {
 /// FlightData and the decoded payload (Schema, RecordBatch), if any
 #[derive(Debug)]
 pub struct DecodedFlightData {
+    /// The original FlightData message
     pub inner: FlightData,
+    /// The decoded payload
     pub payload: DecodedPayload,
 }
 
 impl DecodedFlightData {
+    /// Create a new DecodedFlightData with no payload
     pub fn new_none(inner: FlightData) -> Self {
         Self {
             inner,
@@ -400,6 +403,7 @@ impl DecodedFlightData {
         }
     }
 
+    /// Create a new DecodedFlightData with a [`Schema`] payload
     pub fn new_schema(inner: FlightData, schema: SchemaRef) -> Self {
         Self {
             inner,
@@ -407,6 +411,7 @@ impl DecodedFlightData {
         }
     }
 
+    /// Create a new [`DecodedFlightData`] with a [`RecordBatch`] payload
     pub fn new_record_batch(inner: FlightData, batch: RecordBatch) -> Self {
         Self {
             inner,
@@ -414,7 +419,7 @@ impl DecodedFlightData {
         }
     }
 
-    /// return the metadata field of the inner flight data
+    /// Return the metadata field of the inner flight data
     pub fn app_metadata(&self) -> Bytes {
         self.inner.app_metadata.clone()
     }
