@@ -231,6 +231,8 @@ impl<OffsetSize: OffsetSizeTrait> GenericListViewArray<OffsetSize> {
     }
 
     /// Returns ith value of this list view array.
+    /// # Panics
+    /// Panics if the index is out of bounds
     pub fn value(&self, i: usize) -> ArrayRef {
         let offset = self.value_offsets()[i].as_usize();
         let length = self.value_sizes()[i].as_usize();
