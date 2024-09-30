@@ -284,8 +284,6 @@ pub trait Array: std::fmt::Debug + Send + Sync {
     /// are present. For example a [`DictionaryArray`] with nullable values will still return true,
     /// even if the nulls present in [`DictionaryArray::values`] are not referenced by any key,
     /// and therefore would not appear in [`Array::logical_nulls`].
-    /// Similary, a [`UnionArray`] with any nullable child will always return true, even if all
-    /// selected values are valid, and therefore would not appear in [`Array::logical_nulls`].
     fn is_nullable(&self) -> bool {
         self.null_count() != 0
     }

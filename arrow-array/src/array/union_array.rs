@@ -400,40 +400,47 @@ impl UnionArray {
         // let [is_a, is_b, is_c] = masks;
         // let is_d_or_e = !(is_a | is_b)
         // let union_chunk_nulls = is_d_or_e | (is_b & b_nulls) | (is_c & c_nulls)
-        let fold = |(any_nullable_selected, union_nulls), (is_field, field_nulls)| {
+        let fold = |(with_nulls_selected, union_nulls), (is_field, field_nulls)| {
             (
-                any_nullable_selected | is_field,
+                with_nulls_selected | is_field,
                 union_nulls | (is_field & field_nulls),
             )
         };
 
         self.mask_sparse_helper(
             nulls,
-            |chunk, nulls_masks_iters| {
-                let (any_nullable_selected, union_nulls) = nulls_masks_iters
+            |type_ids_chunk_array, nulls_masks_iters| {
+                let (with_nulls_selected, union_nulls) = nulls_masks_iters
                     .iter_mut()
                     .map(|(field_type_id, field_nulls)| {
                         let field_nulls = field_nulls.next().unwrap();
-                        let is_field = selection_mask(chunk, *field_type_id);
+                        let is_field = selection_mask(type_ids_chunk_array, *field_type_id);
 
                         (is_field, field_nulls)
                     })
                     .fold((0, 0), fold);
 
-                !any_nullable_selected | union_nulls
+                // In the example above, this is the is_d_or_e = !(is_a | is_b) part
+                let without_nulls_selected = !with_nulls_selected;
+
+                // if a field without nulls is selected, the value is always true(set bit)
+                // otherwise, the true/set bits have been computed above
+                without_nulls_selected | union_nulls
             },
-            |remainder, bit_chunks| {
-                let (any_nullable_selected, union_nulls) = bit_chunks
+            |type_ids_remainder, bit_chunks| {
+                let (with_nulls_selected, union_nulls) = bit_chunks
                     .iter()
                     .map(|(field_type_id, field_bit_chunks)| {
                         let field_nulls = field_bit_chunks.remainder_bits();
-                        let is_field = selection_mask(remainder, *field_type_id);
+                        let is_field = selection_mask(type_ids_remainder, *field_type_id);
 
                         (is_field, field_nulls)
                     })
                     .fold((0, 0), fold);
 
-                !any_nullable_selected | union_nulls
+                let without_nulls_selected = !with_nulls_selected;
+
+                without_nulls_selected | union_nulls
             },
         )
     }
@@ -461,7 +468,7 @@ impl UnionArray {
         // let union_chunk_nulls = is_d | is_e | (is_a & a_nulls) | (is_b & b_nulls) | (is_c & c_nulls)
         self.mask_sparse_helper(
             nulls,
-            |chunk, nulls_masks_iters| {
+            |type_ids_chunk_array, nulls_masks_iters| {
                 let union_nulls = nulls_masks_iters.iter_mut().fold(
                     0,
                     |union_nulls, (field_type_id, nulls_iter)| {
@@ -470,27 +477,33 @@ impl UnionArray {
                         if field_nulls == 0 {
                             union_nulls
                         } else {
-                            let is_field = selection_mask(chunk, *field_type_id);
+                            let is_field = selection_mask(type_ids_chunk_array, *field_type_id);
 
                             union_nulls | (is_field & field_nulls)
                         }
                     },
                 );
 
-                union_nulls | without_nulls_selected(chunk, &without_nulls_ids)
+                // Given the example above, this is the is_d_or_e = (is_d | is_e) part
+                let without_nulls_selected =
+                    without_nulls_selected(type_ids_chunk_array, &without_nulls_ids);
+
+                // if a field without nulls is selected, the value is always true(set bit)
+                // otherwise, the true/set bits have been computed above
+                union_nulls | without_nulls_selected
             },
-            |remainder, bit_chunks| {
+            |type_ids_remainder, bit_chunks| {
                 let union_nulls =
                     bit_chunks
                         .iter()
                         .fold(0, |union_nulls, (field_type_id, field_bit_chunks)| {
-                            let is_field = selection_mask(remainder, *field_type_id);
+                            let is_field = selection_mask(type_ids_remainder, *field_type_id);
                             let field_nulls = field_bit_chunks.remainder_bits();
 
                             union_nulls | is_field & field_nulls
                         });
 
-                union_nulls | without_nulls_selected(remainder, &without_nulls_ids)
+                union_nulls | without_nulls_selected(type_ids_remainder, &without_nulls_ids)
             },
         )
     }
@@ -505,14 +518,14 @@ impl UnionArray {
         // let union_chunk_nulls = (is_a & a_nulls) | (is_b & b_nulls) | (is_c & c_nulls)
         self.mask_sparse_helper(
             nulls,
-            |chunk, nulls_masks_iters| {
+            |type_ids_chunk_array, nulls_masks_iters| {
                 let (is_not_first, union_nulls) = nulls_masks_iters[1..] // skip first
                     .iter_mut()
                     .fold(
                         (0, 0),
                         |(is_not_first, union_nulls), (field_type_id, nulls_iter)| {
                             let field_nulls = nulls_iter.next().unwrap();
-                            let is_field = selection_mask(chunk, *field_type_id);
+                            let is_field = selection_mask(type_ids_chunk_array, *field_type_id);
 
                             (
                                 is_not_first | is_field,
@@ -526,14 +539,14 @@ impl UnionArray {
 
                 (is_first & first_nulls) | union_nulls
             },
-            |remainder, bit_chunks| {
+            |type_ids_remainder, bit_chunks| {
                 bit_chunks
                     .iter()
                     .fold(0, |union_nulls, (field_type_id, field_bit_chunks)| {
                         let field_nulls = field_bit_chunks.remainder_bits();
                         // The same logic as above, except that since this runs at most once,
                         // it doesn't make difference to speed-up the first selection mask
-                        let is_field = selection_mask(remainder, *field_type_id);
+                        let is_field = selection_mask(type_ids_remainder, *field_type_id);
 
                         union_nulls | (is_field & field_nulls)
                     })
@@ -562,10 +575,10 @@ impl UnionArray {
         let chunks_exact = self.type_ids.chunks_exact(64);
         let remainder = chunks_exact.remainder();
 
-        let chunks = chunks_exact.map(|chunk| {
-            let chunk_array = <&[i8; 64]>::try_from(chunk).unwrap();
+        let chunks = chunks_exact.map(|type_ids_chunk| {
+            let type_ids_chunk_array = <&[i8; 64]>::try_from(type_ids_chunk).unwrap();
 
-            mask_chunk(chunk_array, &mut nulls_masks_iter)
+            mask_chunk(type_ids_chunk_array, &mut nulls_masks_iter)
         });
 
         // SAFETY:
@@ -791,38 +804,41 @@ impl Array for UnionArray {
         let boolean_buffer = match &self.offsets {
             Some(_) => self.gather_nulls(logical_nulls),
             None => {
-                enum SparseStrategy {
-                    Gather,
-                    AllNullsSkipOne,
-                    MixedSkipWithoutNulls,
-                    MixedSkipFullyNull,
-                }
-
-                // This is the threshold where masking becomes slower than gather
-                // TODO: test on avx512f(feature is still unstable)
+                // Choose the fastest way to compute the logical nulls
+                // Gather computes one null per iteration, while the others work on 64 nulls chunks,
+                // but must also compute selection masks, which is expensive,
+                // so it's cost is the number of selection masks computed per chunk
+                // Since computing the selection mask gets auto-vectorized, it's performance depends on which simd feature is enabled
+                // For gather, the cost is the threshold where masking becomes slower than gather, which is determined with benchmarks
+                // TODO: bench on avx512f(feature is still unstable)
                 let gather_relative_cost = if cfg!(target_feature = "avx2") {
                     10
                 } else if cfg!(target_feature = "sse4.1") {
                     3
-                } else {
+                } else if cfg!(target_arch = "x86") || cfg!(target_arch = "x86_64") {
+                    // x86 baseline includes sse2
                     2
+                } else {
+                    // TODO: bench on non x86
+                    // Always use gather on non benchmarked archs because even though it may slower on some cases,
+                    // it's performance depends only on the union length, without being affected by the number of fields
+                    0
                 };
 
-                // For masking strategies, the cost is the number of selection masks computed per chunk of 64 type ids
                 let strategies = [
                     (SparseStrategy::Gather, gather_relative_cost, true),
                     (
-                        SparseStrategy::AllNullsSkipOne,
+                        SparseStrategy::MaskAllFieldsWithNullsSkipOne,
                         fields.len() - 1,
                         fields.len() == logical_nulls.len(),
                     ),
                     (
-                        SparseStrategy::MixedSkipWithoutNulls,
+                        SparseStrategy::MaskSkipWithoutNulls,
                         logical_nulls.len(),
                         true,
                     ),
                     (
-                        SparseStrategy::MixedSkipFullyNull,
+                        SparseStrategy::MaskSkipFullyNull,
                         fields.len() - fully_null_count,
                         true,
                     ),
@@ -836,13 +852,13 @@ impl Array for UnionArray {
 
                 match strategy {
                     SparseStrategy::Gather => self.gather_nulls(logical_nulls),
-                    SparseStrategy::AllNullsSkipOne => {
+                    SparseStrategy::MaskAllFieldsWithNullsSkipOne => {
                         self.mask_sparse_all_with_nulls_skip_one(logical_nulls)
                     }
-                    SparseStrategy::MixedSkipWithoutNulls => {
+                    SparseStrategy::MaskSkipWithoutNulls => {
                         self.mask_sparse_skip_without_nulls(logical_nulls)
                     }
-                    SparseStrategy::MixedSkipFullyNull => {
+                    SparseStrategy::MaskSkipFullyNull => {
                         self.mask_sparse_skip_fully_null(logical_nulls)
                     }
                 }
@@ -858,22 +874,8 @@ impl Array for UnionArray {
         }
     }
 
-    /// Union types always return non null as there is no validity buffer.
-    /// To check validity correctly you must check the logical nulls.
-    fn is_null(&self, _index: usize) -> bool {
-        false
-    }
-
-    /// Union types always return non null as there is no validity buffer.
-    /// To check validity correctly you must check the logical nulls.
-    fn is_valid(&self, _index: usize) -> bool {
+    fn is_nullable(&self) -> bool {
         true
-    }
-
-    /// Union types always return 0 null count as there is no validity buffer.
-    /// To get null count correctly you must check the logical nulls.
-    fn null_count(&self) -> usize {
-        0
     }
 
     fn get_buffer_memory_size(&self) -> usize {
@@ -941,6 +943,21 @@ impl std::fmt::Debug for UnionArray {
     }
 }
 
+/// How to compute the logical nulls of a sparse union. All strategies return the same result.
+/// Those starting with Mask perform bitwise masking for each chunk of 64 values, including
+/// computing expensive selection masks of fields: which fields masks must be computed is the
+/// difference between them
+enum SparseStrategy {
+    /// Gather individual bits from the null buffer of the selected field
+    Gather,
+    /// All fields contains nulls, so we can skip the selection mask computation of one field by negating the others
+    MaskAllFieldsWithNullsSkipOne,
+    /// Skip the selection mask computation of the fields without nulls
+    MaskSkipWithoutNulls,
+    /// Skip the selection mask computation of the fully nulls fields
+    MaskSkipFullyNull,
+}
+
 #[derive(Copy, Clone)]
 #[repr(usize)]
 enum Mask {
@@ -950,8 +967,8 @@ enum Mask {
     Max = usize::MAX,
 }
 
-fn selection_mask(chunk: &[i8], type_id: i8) -> u64 {
-    chunk
+fn selection_mask(type_ids_chunk: &[i8], type_id: i8) -> u64 {
+    type_ids_chunk
         .iter()
         .copied()
         .enumerate()
@@ -960,11 +977,12 @@ fn selection_mask(chunk: &[i8], type_id: i8) -> u64 {
         })
 }
 
-fn without_nulls_selected(chunk: &[i8], without_nulls_ids: &[i8]) -> u64 {
+/// Returns a bitmask where bits indicate if any id from `without_nulls_ids` exist in `type_ids_chunk`.
+fn without_nulls_selected(type_ids_chunk: &[i8], without_nulls_ids: &[i8]) -> u64 {
     without_nulls_ids
         .iter()
         .fold(0, |fully_valid_selected, field_type_id| {
-            fully_valid_selected | selection_mask(chunk, *field_type_id)
+            fully_valid_selected | selection_mask(type_ids_chunk, *field_type_id)
         })
 }
 
@@ -1899,20 +1917,6 @@ mod tests {
         .unwrap();
 
         assert_eq!(array.logical_nulls(), Some(NullBuffer::new_null(2)));
-
-        let array = UnionArray::try_new(
-            nullable_fields.clone(),
-            vec![1, 3].into(),
-            None,
-            vec![
-                // none all null
-                Arc::new(Int8Array::from_iter([None, Some(-5)])),
-                Arc::new(Int8Array::from_iter([Some(-5), None])),
-            ],
-        )
-        .unwrap();
-
-        assert_eq!(array.logical_nulls(), Some(NullBuffer::new_null(2)));
     }
 
     #[test]
@@ -1942,55 +1946,47 @@ mod tests {
 
     #[test]
     fn test_sparse_union_logical_nulls_mask_all_nulls_skip_one() {
-        // union of [{A=}, {A=}, {B=3.2}, {B=}, {C="a"}, {C=}]
-        let int_array = Int32Array::new_null(6);
-        let float_array = Float64Array::from(vec![None, None, Some(3.2), None, None, None]);
-        let str_array = StringArray::from(vec![None, None, None, None, None, Some("a")]);
-        let type_ids = [1, 1, 3, 3, 4, 4].into_iter().collect::<ScalarBuffer<i8>>();
+        // If we used union_fields() (3 fields with nulls), the choosen strategy would be Gather on x86 without any specified target feature e.g CI runtime
+        let fields: UnionFields = [
+            (1, Arc::new(Field::new("A", DataType::Int32, true))),
+            (3, Arc::new(Field::new("B", DataType::Float64, true))),
+        ]
+        .into_iter()
+        .collect();
 
-        let children = vec![
-            Arc::new(int_array) as Arc<dyn Array>,
-            Arc::new(float_array),
-            Arc::new(str_array),
-        ];
+        // union of [{A=}, {A=}, {B=3.2}, {B=}]
+        let int_array = Int32Array::new_null(4);
+        let float_array = Float64Array::from(vec![None, None, Some(3.2), None]);
+        let type_ids = [1, 1, 3, 3].into_iter().collect::<ScalarBuffer<i8>>();
 
-        let array = UnionArray::try_new(union_fields(), type_ids, None, children).unwrap();
+        let children = vec![Arc::new(int_array) as Arc<dyn Array>, Arc::new(float_array)];
+
+        let array = UnionArray::try_new(fields.clone(), type_ids, None, children).unwrap();
 
         let result = array.logical_nulls();
 
-        let expected = NullBuffer::from(vec![false, false, true, false, false, true]);
+        let expected = NullBuffer::from(vec![false, false, true, false]);
         assert_eq!(Some(expected), result);
 
         //like above, but repeated to genereate two exact bitmasks and a non empty remainder
         let len = 2 * 64 + 32;
 
         let int_array = Int32Array::new_null(len);
-        let float_array =
-            Float64Array::from_iter([None, None, Some(3.2)].into_iter().cycle().take(len));
-        let str_array =
-            StringArray::from_iter([None, Some("a"), None].into_iter().cycle().take(len));
-        let type_ids = ScalarBuffer::from_iter([1, 1, 3, 3, 4, 4].into_iter().cycle().take(len));
+        let float_array = Float64Array::from_iter([Some(3.2), None].into_iter().cycle().take(len));
+        let type_ids = ScalarBuffer::from_iter([1, 1, 3, 3].into_iter().cycle().take(len));
 
         let array = UnionArray::try_new(
-            union_fields(),
+            fields,
             type_ids,
             None,
-            vec![
-                Arc::new(int_array),
-                Arc::new(float_array),
-                Arc::new(str_array),
-            ],
+            vec![Arc::new(int_array), Arc::new(float_array)],
         )
         .unwrap();
 
         let result = array.logical_nulls();
 
-        let expected = NullBuffer::from_iter(
-            [false, false, true, false, true, false]
-                .into_iter()
-                .cycle()
-                .take(len),
-        );
+        let expected =
+            NullBuffer::from_iter([false, false, true, false].into_iter().cycle().take(len));
         assert_eq!(array.len(), len);
         assert_eq!(Some(expected), result);
     }
@@ -1999,7 +1995,7 @@ mod tests {
     fn test_sparse_union_logical_mask_mixed_nulls_skip_fully_valid() {
         // union of [{A=2}, {A=2}, {B=3.2}, {B=}, {C=}, {C=}]
         let int_array = Int32Array::from_value(2, 6);
-        let float_array = Float64Array::from(vec![None, None, Some(3.2), None, None, None]);
+        let float_array = Float64Array::from_value(4.2, 6);
         let str_array = StringArray::new_null(6);
         let type_ids = [1, 1, 3, 3, 4, 4].into_iter().collect::<ScalarBuffer<i8>>();
 
@@ -2013,14 +2009,14 @@ mod tests {
 
         let result = array.logical_nulls();
 
-        let expected = NullBuffer::from(vec![true, true, true, false, false, false]);
+        let expected = NullBuffer::from(vec![true, true, true, true, false, false]);
         assert_eq!(Some(expected), result);
 
         //like above, but repeated to genereate two exact bitmasks and a non empty remainder
         let len = 2 * 64 + 32;
 
         let int_array = Int32Array::from_value(2, len);
-        let float_array = Float64Array::from_iter([None, Some(3.2)].into_iter().cycle().take(len));
+        let float_array = Float64Array::from_value(4.2, len);
         let str_array = StringArray::from_iter([None, Some("a")].into_iter().cycle().take(len));
         let type_ids = ScalarBuffer::from_iter([1, 1, 3, 3, 4, 4].into_iter().cycle().take(len));
 
@@ -2035,7 +2031,7 @@ mod tests {
         let result = array.logical_nulls();
 
         let expected = NullBuffer::from_iter(
-            [true, true, false, true, false, true]
+            [true, true, true, true, false, true]
                 .into_iter()
                 .cycle()
                 .take(len),
