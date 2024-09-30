@@ -185,6 +185,7 @@ pub type SchemaRef = Arc<Schema>;
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Schema {
+    /// A sequence of fields that describe the schema.
     pub fields: Fields,
     /// A map of key-value pairs containing additional meta data.
     pub metadata: HashMap<String, String>,

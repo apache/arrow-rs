@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! Provides utility functions for concatenation of elements in arrays.
 use std::sync::Arc;
 
 use arrow_array::builder::BufferBuilder;
@@ -167,6 +168,11 @@ pub fn concat_elements_utf8_many<Offset: OffsetSizeTrait>(
     Ok(unsafe { builder.build_unchecked() }.into())
 }
 
+/// Returns the elementwise concatenation of [`Array`]s.
+///
+/// # Errors
+///
+/// This function errors if the arrays are of different types.
 pub fn concat_elements_dyn(left: &dyn Array, right: &dyn Array) -> Result<ArrayRef, ArrowError> {
     if left.data_type() != right.data_type() {
         return Err(ArrowError::ComputeError(format!(

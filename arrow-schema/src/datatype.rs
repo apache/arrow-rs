@@ -420,11 +420,13 @@ pub enum IntervalUnit {
     MonthDayNano,
 }
 
-// Sparse or Dense union layouts
+/// Sparse or Dense union layouts
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Copy)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum UnionMode {
+    /// Sparse union layout
     Sparse,
+    /// Dense union layout
     Dense,
 }
 
@@ -620,7 +622,7 @@ impl DataType {
         }
     }
 
-    /// Returns the bit width of this type if it is a primitive type
+    /// Returns the byte width of this type if it is a primitive type
     ///
     /// Returns `None` if not a primitive type
     #[inline]

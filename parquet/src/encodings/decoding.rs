@@ -273,6 +273,7 @@ pub struct PlainDecoderDetails {
 }
 
 /// Plain decoding that supports all types.
+///
 /// Values are encoded back to back. For native types, data is encoded as little endian.
 /// Floating point types are encoded in IEEE.
 /// See [`PlainEncoder`](crate::encoding::PlainEncoder) for more information.
@@ -333,6 +334,7 @@ impl<T: DataType> Decoder<T> for PlainDecoder<T> {
 // RLE_DICTIONARY/PLAIN_DICTIONARY Decoding
 
 /// Dictionary decoder.
+///
 /// The dictionary encoding builds a dictionary of values encountered in a given column.
 /// The dictionary is be stored in a dictionary page per column chunk.
 /// See [`DictEncoder`](crate::encoding::DictEncoder) for more information.
@@ -824,6 +826,7 @@ where
 // DELTA_LENGTH_BYTE_ARRAY Decoding
 
 /// Delta length byte array decoder.
+///
 /// Only applied to byte arrays to separate the length values and the data, the lengths
 /// are encoded using DELTA_BINARY_PACKED encoding.
 /// See [`DeltaLengthByteArrayEncoder`](crate::encoding::DeltaLengthByteArrayEncoder)
@@ -952,6 +955,7 @@ impl<T: DataType> Decoder<T> for DeltaLengthByteArrayDecoder<T> {
 // DELTA_BYTE_ARRAY Decoding
 
 /// Delta byte array decoder.
+///
 /// Prefix lengths are encoded using `DELTA_BINARY_PACKED` encoding, Suffixes are stored
 /// using `DELTA_LENGTH_BYTE_ARRAY` encoding.
 /// See [`DeltaByteArrayEncoder`](crate::encoding::DeltaByteArrayEncoder) for more

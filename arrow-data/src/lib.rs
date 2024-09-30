@@ -19,6 +19,7 @@
 //!
 //! For a higher-level, strongly-typed interface see [arrow_array](https://docs.rs/arrow_array)
 
+#![warn(missing_docs)]
 mod data;
 pub use data::*;
 

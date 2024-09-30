@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! Module contains bitwise operations on arrays
+
 use crate::arity::{binary, unary};
 use arrow_array::*;
 use arrow_buffer::ArrowNativeType;

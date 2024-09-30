@@ -19,13 +19,13 @@ use std::ops::Deref;
 
 use crate::{ArrowNativeType, OffsetBuffer};
 
+/// Builder of [`OffsetBuffer`]
 #[derive(Debug)]
 pub struct OffsetBufferBuilder<O: ArrowNativeType> {
     offsets: Vec<O>,
     last_offset: usize,
 }
 
-/// Builder of [`OffsetBuffer`]
 impl<O: ArrowNativeType> OffsetBufferBuilder<O> {
     /// Create a new builder with space for `capacity + 1` offsets
     pub fn new(capacity: usize) -> Self {

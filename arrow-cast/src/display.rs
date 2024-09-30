@@ -81,6 +81,7 @@ impl<'a> Default for FormatOptions<'a> {
 }
 
 impl<'a> FormatOptions<'a> {
+    /// Creates a new set of format options
     pub const fn new() -> Self {
         Self {
             safe: true,

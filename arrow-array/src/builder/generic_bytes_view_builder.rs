@@ -515,7 +515,8 @@ fn make_inlined_view<const LEN: usize>(data: &[u8]) -> u128 {
     u128::from_le_bytes(view_buffer)
 }
 
-/// Create a view based on the given data, block id and offset
+/// Create a view based on the given data, block id and offset.
+///
 /// Note that the code below is carefully examined with x86_64 assembly code: <https://godbolt.org/z/685YPsd5G>
 /// The goal is to avoid calling into `ptr::copy_non_interleave`, which makes function call (i.e., not inlined),
 /// which slows down things.
@@ -554,6 +555,8 @@ pub fn make_view(data: &[u8], block_id: u32, offset: u32) -> u128 {
 
 #[cfg(test)]
 mod tests {
+    use core::str;
+
     use super::*;
     use crate::Array;
 
@@ -641,7 +644,7 @@ mod tests {
         let array = v.finish_cloned();
         array.to_data().validate_full().unwrap();
         assert_eq!(array.data_buffers().len(), 5);
-        let actual: Vec<_> = array.iter().map(Option::unwrap).collect();
+        let actual: Vec<_> = array.iter().flatten().collect();
         assert_eq!(
             actual,
             &[
@@ -691,13 +694,13 @@ mod tests {
         let mut exp_builder = StringViewBuilder::new();
         let mut fixed_builder = StringViewBuilder::new().with_fixed_block_size(STARTING_BLOCK_SIZE);
 
-        let long_string = String::from_utf8(vec![b'a'; STARTING_BLOCK_SIZE as usize]).unwrap();
+        let long_string = str::from_utf8(&[b'a'; STARTING_BLOCK_SIZE as usize]).unwrap();
 
         for i in 0..9 {
             // 8k, 16k, 32k, 64k, 128k, 256k, 512k, 1M, 2M
             for _ in 0..(2_u32.pow(i)) {
-                exp_builder.append_value(&long_string);
-                fixed_builder.append_value(&long_string);
+                exp_builder.append_value(long_string);
+                fixed_builder.append_value(long_string);
             }
             exp_builder.flush_in_progress();
             fixed_builder.flush_in_progress();
@@ -720,7 +723,7 @@ mod tests {
         }
 
         // Add one more value, and the buffer stop growing.
-        exp_builder.append_value(&long_string);
+        exp_builder.append_value(long_string);
         exp_builder.flush_in_progress();
         assert_eq!(
             exp_builder.completed.last().unwrap().capacity(),
