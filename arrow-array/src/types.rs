@@ -24,7 +24,10 @@ use crate::temporal_conversions::as_datetime_with_timezone;
 use crate::timezone::Tz;
 use crate::{ArrowNativeTypeOp, OffsetSizeTrait};
 use arrow_buffer::{i256, Buffer, OffsetBuffer};
-use arrow_data::decimal::{validate_decimal256_precision, validate_decimal_precision};
+use arrow_data::decimal::{
+    is_validate_decimal256_precision, is_validate_decimal_precision, validate_decimal256_precision,
+    validate_decimal_precision,
+};
 use arrow_data::{validate_binary_view, validate_string_view};
 use arrow_schema::{
     ArrowError, DataType, IntervalUnit, TimeUnit, DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE,
@@ -50,7 +53,9 @@ impl BooleanType {
     pub const DATA_TYPE: DataType = DataType::Boolean;
 }
 
-/// Trait for [primitive values], bridging the dynamic-typed nature of Arrow
+/// Trait for [primitive values].
+///
+/// This trait bridges the dynamic-typed nature of Arrow
 /// (via [`DataType`]) with the static-typed nature of rust types
 /// ([`ArrowNativeType`]) for all types that implement [`ArrowNativeType`].
 ///
@@ -1192,6 +1197,9 @@ pub trait DecimalType:
 
     /// Validates that `value` contains no more than `precision` decimal digits
     fn validate_decimal_precision(value: Self::Native, precision: u8) -> Result<(), ArrowError>;
+
+    /// Determines whether `value` contains no more than `precision` decimal digits
+    fn is_valid_decimal_precision(value: Self::Native, precision: u8) -> bool;
 }
 
 /// Validate that `precision` and `scale` are valid for `T`
@@ -1254,6 +1262,10 @@ impl DecimalType for Decimal128Type {
     fn validate_decimal_precision(num: i128, precision: u8) -> Result<(), ArrowError> {
         validate_decimal_precision(num, precision)
     }
+
+    fn is_valid_decimal_precision(value: Self::Native, precision: u8) -> bool {
+        is_validate_decimal_precision(value, precision)
+    }
 }
 
 impl ArrowPrimitiveType for Decimal128Type {
@@ -1283,6 +1295,10 @@ impl DecimalType for Decimal256Type {
 
     fn validate_decimal_precision(num: i256, precision: u8) -> Result<(), ArrowError> {
         validate_decimal256_precision(num, precision)
+    }
+
+    fn is_valid_decimal_precision(value: Self::Native, precision: u8) -> bool {
+        is_validate_decimal256_precision(value, precision)
     }
 }
 

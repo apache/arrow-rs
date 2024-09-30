@@ -394,8 +394,10 @@ fn create_random_null_buffer(size: usize, null_density: f32) -> Buffer {
 /// Useful for testing. The range of values are not likely to be representative of the
 /// actual bounds.
 pub trait RandomTemporalValue: ArrowTemporalType {
+    /// Returns the range of values for `impl`'d type
     fn value_range() -> impl SampleRange<Self::Native>;
 
+    /// Generate a random value within the range of the type
     fn gen_range<R: Rng>(rng: &mut R) -> Self::Native
     where
         Self::Native: SampleUniform,
@@ -403,6 +405,7 @@ pub trait RandomTemporalValue: ArrowTemporalType {
         rng.gen_range(Self::value_range())
     }
 
+    /// Generate a random value of the type
     fn random<R: Rng>(rng: &mut R) -> Self::Native
     where
         Self::Native: SampleUniform,

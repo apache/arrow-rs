@@ -18,7 +18,8 @@
 use super::super::errors::ParquetError;
 use super::super::file::reader::RowGroupReader;
 
-/// read up to `max_records` records from `row_group_reader` into `self`
+/// Read up to `max_records` records from `row_group_reader` into `self`.
+///
 /// The type parameter `T` is used to work around the rust orphan rule
 /// when implementing on types such as `Vec<T>`.
 pub trait RecordReader<T> {

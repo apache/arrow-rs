@@ -20,7 +20,7 @@
 use crate::bit_mask::set_bits;
 use crate::{layout, ArrayData};
 use arrow_buffer::buffer::NullBuffer;
-use arrow_buffer::{Buffer, MutableBuffer};
+use arrow_buffer::{Buffer, MutableBuffer, ScalarBuffer};
 use arrow_schema::DataType;
 use std::ffi::c_void;
 
@@ -121,7 +121,7 @@ impl FFI_ArrowArray {
     pub fn new(data: &ArrayData) -> Self {
         let data_layout = layout(data.data_type());
 
-        let buffers = if data_layout.can_contain_null_mask {
+        let mut buffers = if data_layout.can_contain_null_mask {
             // * insert the null buffer at the start
             // * make all others `Option<Buffer>`.
             std::iter::once(align_nulls(data.offset(), data.nulls()))
@@ -132,7 +132,7 @@ impl FFI_ArrowArray {
         };
 
         // `n_buffers` is the number of buffers by the spec.
-        let n_buffers = {
+        let mut n_buffers = {
             data_layout.buffers.len() + {
                 // If the layout has a null buffer by Arrow spec.
                 // Note that even the array doesn't have a null buffer because it has
@@ -141,10 +141,22 @@ impl FFI_ArrowArray {
             }
         } as i64;
 
+        if data_layout.variadic {
+            // Save the lengths of all variadic buffers into a new buffer.
+            // The first buffer is `views`, and the rest are variadic.
+            let mut data_buffers_lengths = Vec::new();
+            for buffer in data.buffers().iter().skip(1) {
+                data_buffers_lengths.push(buffer.len() as i64);
+                n_buffers += 1;
+            }
+
+            buffers.push(Some(ScalarBuffer::from(data_buffers_lengths).into_inner()));
+            n_buffers += 1;
+        }
+
         let buffers_ptr = buffers
             .iter()
             .flat_map(|maybe_buffer| match maybe_buffer {
-                // note that `raw_data` takes into account the buffer's offset
                 Some(b) => Some(b.as_ptr() as *const c_void),
                 // This is for null buffer. We only put a null pointer for
                 // null buffer if by spec it can contain null mask.

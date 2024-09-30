@@ -666,6 +666,7 @@ impl<T: Datelike> ChronoDateExt for T {
 
 /// Parse the given string into a string representing fixed-offset that is correct as of the given
 /// UTC NaiveDateTime.
+///
 /// Note that the offset is function of time and can vary depending on whether daylight savings is
 /// in effect or not. e.g. Australia/Sydney is +10:00 or +11:00 depending on DST.
 #[deprecated(note = "Use arrow_array::timezone::Tz instead")]
@@ -811,6 +812,7 @@ where
 }
 
 /// Extracts the day of a given temporal array as an array of integers.
+///
 /// If the given array isn't temporal primitive or dictionary array,
 /// an `Err` will be returned.
 #[deprecated(since = "51.0.0", note = "Use `date_part` instead")]
@@ -828,7 +830,8 @@ where
     date_part_primitive(array, DatePart::Day)
 }
 
-/// Extracts the day of year of a given temporal array as an array of integers
+/// Extracts the day of year of a given temporal array as an array of integers.
+///
 /// The day of year that ranges from 1 to 366.
 /// If the given array isn't temporal primitive or dictionary array,
 /// an `Err` will be returned.
@@ -837,7 +840,8 @@ pub fn doy_dyn(array: &dyn Array) -> Result<ArrayRef, ArrowError> {
     date_part(array, DatePart::DayOfYear)
 }
 
-/// Extracts the day of year of a given temporal primitive array as an array of integers
+/// Extracts the day of year of a given temporal primitive array as an array of integers.
+///
 /// The day of year that ranges from 1 to 366
 #[deprecated(since = "51.0.0", note = "Use `date_part` instead")]
 pub fn doy<T>(array: &PrimitiveArray<T>) -> Result<Int32Array, ArrowError>

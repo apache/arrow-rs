@@ -68,8 +68,11 @@ use std::ops::Neg;
 #[derive(Debug, Default, Copy, Clone, Eq, PartialEq, Hash, Ord, PartialOrd)]
 #[repr(C)]
 pub struct IntervalMonthDayNano {
+    /// Number of months
     pub months: i32,
+    /// Number of days
     pub days: i32,
+    /// Number of nanoseconds
     pub nanoseconds: i64,
 }
 
@@ -345,7 +348,9 @@ derive_arith!(
 #[derive(Debug, Default, Copy, Clone, Eq, PartialEq, Hash, Ord, PartialOrd)]
 #[repr(C)]
 pub struct IntervalDayTime {
+    /// Number of days
     pub days: i32,
+    /// Number of milliseconds
     pub milliseconds: i32,
 }
 
