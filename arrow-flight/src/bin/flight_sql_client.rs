@@ -422,7 +422,7 @@ fn log_metadata(map: &MetadataMap, what: &'static str) {
                     "{}: {}={}",
                     what,
                     k.as_str(),
-                    str::from_utf8(v.as_ref()).unwrap(),
+                    String::from_utf8_lossy(v.as_ref()),
                 );
             }
         }

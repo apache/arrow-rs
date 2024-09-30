@@ -299,6 +299,11 @@ pub use gzip_codec::*;
 
 /// Represents a valid gzip compression level.
 ///
+/// Defaults to 6.
+///
+/// * 0: least compression
+/// * 9: most compression (that other software can read)
+/// * 10: most compression (incompatible with other software, see below)
 /// #### WARNING:
 /// Level 10 compression can offer smallest file size,
 /// but Parquet files created with it will not be readable
