@@ -390,6 +390,15 @@ pub(crate) fn decode_page(
     physical_type: Type,
     decompressor: Option<&mut Box<dyn Codec>>,
 ) -> Result<Page> {
+    // Verify the 32-bit CRC checksum of the page
+    #[cfg(feature = "crc")]
+    if let Some(expected_crc) = page_header.crc {
+        let crc = crc32fast::hash(&buffer);
+        if crc != expected_crc as u32 {
+            return Err(general_err!("Page CRC checksum mismatch"));
+        }
+    }
+
     // When processing data page v2, depending on enabled compression for the
     // page, we should account for uncompressed data ('offset') of
     // repetition and definition levels.
