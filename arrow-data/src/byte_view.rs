@@ -82,6 +82,7 @@ impl ByteView {
     ///
     /// # Panics
     /// If the prefix is not exactly 4 bytes
+    #[inline]
     pub fn new(length: u32, prefix: &[u8]) -> Self {
         Self {
             length,
