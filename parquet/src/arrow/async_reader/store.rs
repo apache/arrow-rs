@@ -24,9 +24,9 @@ use futures::{FutureExt, TryFutureExt};
 
 use object_store::{ObjectMeta, ObjectStore};
 
-use crate::arrow::async_reader::{AsyncFileReader, MetadataLoader};
+use crate::arrow::async_reader::AsyncFileReader;
 use crate::errors::Result;
-use crate::file::metadata::ParquetMetaData;
+use crate::file::metadata::{ParquetMetaData, ParquetMetaDataReader};
 
 /// Reads Parquet files in object storage using [`ObjectStore`].
 ///
@@ -124,15 +124,14 @@ impl AsyncFileReader for ParquetObjectReader {
 
     fn get_metadata(&mut self) -> BoxFuture<'_, Result<Arc<ParquetMetaData>>> {
         Box::pin(async move {
-            let preload_column_index = self.preload_column_index;
-            let preload_offset_index = self.preload_offset_index;
             let file_size = self.meta.size;
-            let prefetch = self.metadata_size_hint;
-            let mut loader = MetadataLoader::load(self, file_size, prefetch).await?;
-            loader
-                .load_page_index(preload_column_index, preload_offset_index)
+            let metadata = ParquetMetaDataReader::new()
+                .with_column_indexes(self.preload_column_index)
+                .with_offset_indexes(self.preload_offset_index)
+                .with_prefetch_hint(self.metadata_size_hint)
+                .load_and_finish(self, file_size)
                 .await?;
-            Ok(Arc::new(loader.finish()))
+            Ok(Arc::new(metadata))
         })
     }
 }
