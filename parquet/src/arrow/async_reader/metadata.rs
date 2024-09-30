@@ -52,6 +52,7 @@ impl<F: MetadataFetch> MetadataLoader<F> {
     /// Create a new [`MetadataLoader`] by reading the footer information
     ///
     /// See [`fetch_parquet_metadata`] for the meaning of the individual parameters
+    #[deprecated(since = "53.1.0", note = "Use ParquetMetaDataReader")]
     pub async fn load(mut fetch: F, file_size: usize, prefetch: Option<usize>) -> Result<Self> {
         if file_size < FOOTER_SIZE {
             return Err(ParquetError::EOF(format!(
@@ -108,6 +109,7 @@ impl<F: MetadataFetch> MetadataLoader<F> {
     }
 
     /// Create a new [`MetadataLoader`] from an existing [`ParquetMetaData`]
+    #[deprecated(since = "53.1.0", note = "Use ParquetMetaDataReader")]
     pub fn new(fetch: F, metadata: ParquetMetaData) -> Self {
         Self {
             fetch,
@@ -120,6 +122,7 @@ impl<F: MetadataFetch> MetadataLoader<F> {
     ///
     /// * `column_index`: if true will load column index
     /// * `offset_index`: if true will load offset index
+    #[deprecated(since = "53.1.0", note = "Use ParquetMetaDataReader")]
     pub async fn load_page_index(&mut self, column_index: bool, offset_index: bool) -> Result<()> {
         if !column_index && !offset_index {
             return Ok(());
@@ -226,6 +229,7 @@ where
 /// in the first request, instead of 8, and only issue further requests
 /// if additional bytes are needed. Providing a `prefetch` hint can therefore
 /// significantly reduce the number of `fetch` requests, and consequently latency
+#[deprecated(since = "53.1.0", note = "Use ParquetMetaDataReader")]
 pub async fn fetch_parquet_metadata<F, Fut>(
     fetch: F,
     file_size: usize,
@@ -236,10 +240,14 @@ where
     Fut: Future<Output = Result<Bytes>> + Send,
 {
     let fetch = MetadataFetchFn(fetch);
-    let loader = MetadataLoader::load(fetch, file_size, prefetch).await?;
-    Ok(loader.finish())
+    ParquetMetaDataReader::new()
+        .with_prefetch_hint(prefetch)
+        .load_and_finish(fetch, file_size)
+        .await
 }
 
+// these tests are all replicated in parquet::file::metadata::reader
+#[allow(deprecated)]
 #[cfg(test)]
 mod tests {
     use super::*;

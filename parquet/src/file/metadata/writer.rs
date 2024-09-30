@@ -516,7 +516,7 @@ mod tests {
     /// Temporary function so we can test loading metadata with page indexes
     /// while we haven't fully figured out how to load it cleanly
     async fn load_metadata_from_bytes(file_size: usize, data: Bytes) -> ParquetMetaData {
-        use crate::arrow::async_reader::{MetadataFetch, MetadataLoader};
+        use crate::arrow::async_reader::MetadataFetch;
         use crate::errors::Result as ParquetResult;
         use futures::future::BoxFuture;
         use futures::FutureExt;
@@ -569,13 +569,11 @@ mod tests {
             Box::new(AsyncBytes::new(data)),
             file_size - metadata_length..file_size,
         );
-        let metadata = MetadataLoader::load(&mut reader, file_size, None)
+        ParquetMetaDataReader::new()
+            .with_page_indexes(true)
+            .load_and_finish(&mut reader, file_size)
             .await
-            .unwrap();
-        let loaded_metadata = metadata.finish();
-        let mut metadata = MetadataLoader::new(&mut reader, loaded_metadata);
-        metadata.load_page_index(true, true).await.unwrap();
-        metadata.finish()
+            .unwrap()
     }
 
     fn check_columns_are_equivalent(left: &ColumnChunkMetaData, right: &ColumnChunkMetaData) {
