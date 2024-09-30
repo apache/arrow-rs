@@ -93,12 +93,14 @@ impl ByteView {
     }
 
     /// Set the [`Self::buffer_index`] field
+    #[inline]
     pub fn with_buffer_index(mut self, buffer_index: u32) -> Self {
         self.buffer_index = buffer_index;
         self
     }
 
     /// Set the [`Self::offset`] field
+    #[inline]
     pub fn with_offset(mut self, offset: u32) -> Self {
         self.offset = offset;
         self
