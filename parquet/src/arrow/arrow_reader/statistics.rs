@@ -1159,7 +1159,7 @@ where
 ///
 /// # Schemas
 ///
-/// The converter ues the schema of the Parquet file and the Arrow schema to
+/// The converter uses the schema of the Parquet file and the Arrow schema to
 /// convert the underlying statistics value (stored as a parquet value) into the
 /// corresponding Arrow value. For example, Decimals are stored as binary in
 /// parquet files and this structure handles mapping them to the `i128`
@@ -1198,10 +1198,10 @@ impl<'a> StatisticsConverter<'a> {
     /// By default, the converter will treat missing null counts as though
     /// the null count is known to be `0`.
     ///
-    /// Note that due to <https://github.com/apache/arrow-rs/pull/6257>, prior
-    /// to version 53.0.0, parquet files written by parquet-rs did not store
-    /// null counts even when it was known there were zero nulls and the reader
-    /// would return 0 for the null counts.
+    /// Note that parquet files written by parquet-rs currently do not store
+    /// null counts even when it is known there are zero nulls, and the reader
+    /// will return 0 for the null counts in that instance. This behavior may
+    /// change in a future release.
     ///
     /// Both parquet-java and parquet-cpp store null counts as 0 when there are
     /// no nulls, and don't write unknown values to the null count field.
