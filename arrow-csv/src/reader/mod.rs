@@ -215,7 +215,12 @@ impl InferredDataType {
         self.packed |= if string.starts_with('"') {
             1 << 8 // Utf8
         } else if let Some(m) = REGEX_SET.matches(string).into_iter().next() {
-            1 << m
+            if m == 1 && string.len() >= 19 && string.parse::<i64>().is_err() {
+                // if overflow i64, fallback to f64
+                1 << 2
+            } else {
+                1 << m
+            }
         } else {
             1 << 8 // Utf8
         }
