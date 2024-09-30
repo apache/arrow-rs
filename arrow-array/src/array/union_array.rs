@@ -398,8 +398,8 @@ impl UnionArray {
         // Example logic for a union with 5 fields, a, b & c with nulls, d & e without nulls:
         // let [a_nulls, b_nulls, c_nulls] = nulls;
         // let [is_a, is_b, is_c] = masks;
-        // let is_d_or_e = !(is_a | is_b)
-        // let union_chunk_nulls = is_d_or_e | (is_b & b_nulls) | (is_c & c_nulls)
+        // let is_d_or_e = !(is_a | is_b | is_c)
+        // let union_chunk_nulls = is_d_or_e  | (is_a & a_nulls) | (is_b & b_nulls) | (is_c & c_nulls)
         let fold = |(with_nulls_selected, union_nulls), (is_field, field_nulls)| {
             (
                 with_nulls_selected | is_field,
