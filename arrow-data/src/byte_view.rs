@@ -84,7 +84,7 @@ impl ByteView {
     /// If the prefix is not exactly 4 bytes
     #[inline]
     pub fn new(length: u32, prefix: &[u8]) -> Self {
-            debug_assert!(length > 12);
+        debug_assert!(length > 12);
         Self {
             length,
             prefix: u32::from_le_bytes(prefix.try_into().unwrap()),
