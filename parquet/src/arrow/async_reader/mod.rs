@@ -1556,13 +1556,16 @@ mod tests {
             index_reader::read_offset_indexes(&data, metadata.row_group(0).columns())
                 .expect("reading offset index");
 
-        let row_group_meta = metadata.row_group(0).clone();
-        let metadata = ParquetMetaData::new_with_page_index(
-            metadata.file_metadata().clone(),
-            vec![row_group_meta],
-            None,
-            Some(vec![offset_index.clone()]),
-        );
+        let mut metadata_builder = metadata.into_builder();
+        let mut row_groups = metadata_builder.take_row_groups();
+        row_groups.truncate(1);
+        let row_group_meta = row_groups.pop().unwrap();
+
+        let metadata = metadata_builder
+            .add_row_group(row_group_meta)
+            .set_column_index(None)
+            .set_offset_index(Some(vec![offset_index.clone()]))
+            .build();
 
         let metadata = Arc::new(metadata);
 
