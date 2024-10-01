@@ -60,7 +60,6 @@ static TAGS_HEADER: HeaderName = HeaderName::from_static("x-ms-tags");
 
 /// A specialized `Error` for object store-related errors
 #[derive(Debug, Snafu)]
-#[allow(missing_docs)]
 pub(crate) enum Error {
     #[snafu(display("Error performing get request {}: {}", path, source))]
     GetRequest {

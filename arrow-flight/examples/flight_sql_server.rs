@@ -19,6 +19,7 @@ use arrow_flight::sql::server::PeekableFlightDataStream;
 use arrow_flight::sql::DoPutPreparedStatementResult;
 use base64::prelude::BASE64_STANDARD;
 use base64::Engine;
+use core::str;
 use futures::{stream, Stream, TryStreamExt};
 use once_cell::sync::Lazy;
 use prost::Message;
@@ -168,7 +169,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
         let bytes = BASE64_STANDARD
             .decode(base64)
             .map_err(|e| status!("authorization not decodable", e))?;
-        let str = String::from_utf8(bytes).map_err(|e| status!("authorization not parsable", e))?;
+        let str = str::from_utf8(&bytes).map_err(|e| status!("authorization not parsable", e))?;
         let parts: Vec<_> = str.split(':').collect();
         let (user, pass) = match parts.as_slice() {
             [user, pass] => (user, pass),

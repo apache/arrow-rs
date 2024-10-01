@@ -26,6 +26,7 @@ use arrow_flight::{
 };
 use arrow_schema::Schema;
 use clap::{Parser, Subcommand};
+use core::str;
 use futures::TryStreamExt;
 use tonic::{
     metadata::MetadataMap,

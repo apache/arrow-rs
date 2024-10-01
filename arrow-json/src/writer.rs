@@ -397,6 +397,7 @@ where
 
 #[cfg(test)]
 mod tests {
+    use core::str;
     use std::fs::{read_to_string, File};
     use std::io::{BufReader, Seek};
     use std::sync::Arc;
@@ -1111,7 +1112,7 @@ mod tests {
             }
         }
 
-        let result = String::from_utf8(buf).unwrap();
+        let result = str::from_utf8(&buf).unwrap();
         let expected = read_to_string(test_file).unwrap();
         for (r, e) in result.lines().zip(expected.lines()) {
             let mut expected_json = serde_json::from_str::<Value>(e).unwrap();
@@ -1150,7 +1151,7 @@ mod tests {
     fn json_writer_empty() {
         let mut writer = ArrayWriter::new(vec![] as Vec<u8>);
         writer.finish().unwrap();
-        assert_eq!(String::from_utf8(writer.into_inner()).unwrap(), "");
+        assert_eq!(str::from_utf8(&writer.into_inner()).unwrap(), "");
     }
 
     #[test]
@@ -1279,7 +1280,7 @@ mod tests {
             writer.write(&batch).unwrap();
         }
 
-        let result = String::from_utf8(buf).unwrap();
+        let result = str::from_utf8(&buf).unwrap();
         let expected = read_to_string(test_file).unwrap();
         for (r, e) in result.lines().zip(expected.lines()) {
             let mut expected_json = serde_json::from_str::<Value>(e).unwrap();
@@ -1321,7 +1322,7 @@ mod tests {
             writer.write_batches(&batches).unwrap();
         }
 
-        let result = String::from_utf8(buf).unwrap();
+        let result = str::from_utf8(&buf).unwrap();
         let expected = read_to_string(test_file).unwrap();
         // result is eq to 2 same batches
         let expected = format!("{expected}\n{expected}");

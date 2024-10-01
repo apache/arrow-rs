@@ -46,7 +46,6 @@ const MSI_ENDPOINT_ENV_KEY: &str = "IDENTITY_ENDPOINT";
 
 /// A specialized `Error` for Azure builder-related errors
 #[derive(Debug, Snafu)]
-#[allow(missing_docs)]
 enum Error {
     #[snafu(display("Unable parse source url. Url: {}, Error: {}", url, source))]
     UnableToParseUrl {
