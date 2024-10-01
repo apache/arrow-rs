@@ -125,35 +125,22 @@ pub fn from_thrift(
 ) -> Result<Option<Statistics>> {
     Ok(match thrift_stats {
         Some(stats) => {
-            // transform null count to u64
-            let null_count = stats
-                .null_count
-                .map(|null_count| {
-                    if null_count < 0 {
-                        return Err(ParquetError::General(format!(
-                            "Statistics null count is negative {}",
-                            null_count
-                        )));
-                    }
-                    Ok(null_count as u64)
-                })
-                .transpose()?;
+            // Number of nulls recorded, when it is not available, we just mark it as 0.
+            // TODO this should be `None` if there is no information about NULLS.
+            // see https://github.com/apache/arrow-rs/pull/6216/files
+            let null_count = stats.null_count.unwrap_or(0);
 
+            if null_count < 0 {
+                return Err(ParquetError::General(format!(
+                    "Statistics null count is negative {}",
+                    null_count
+                )));
+            }
+
+            // Generic null count.
+            let null_count = Some(null_count as u64);
             // Generic distinct count (count of distinct values occurring)
-            let distinct_count = stats
-                .distinct_count
-                .map(|distinct_count| {
-                    if distinct_count < 0 {
-                        return Err(ParquetError::General(format!(
-                            "Statistics distinct count is negative {}",
-                            distinct_count
-                        )));
-                    }
-
-                    Ok(distinct_count as u64)
-                })
-                .transpose()?;
-
+            let distinct_count = stats.distinct_count.map(|value| value as u64);
             // Whether or not statistics use deprecated min/max fields.
             let old_format = stats.min_value.is_none() && stats.max_value.is_none();
             // Generic min value as bytes.
@@ -429,20 +416,9 @@ impl Statistics {
     /// Returns number of null values for the column, if known.
     /// Note that this includes all nulls when column is part of the complex type.
     ///
-    /// Note: Versions of this library prior to `53.0.0` returned 0 if the null count was
-    /// not available. This method returns `None` in that case.
-    ///
-    /// Also, versions of this library prior to `53.0.0` did not store the null count in the
-    /// statistics if the null count was `0`.
-    ///
-    /// To preserve the prior behavior and read null counts properly from older files
-    /// you should default to zero:
-    ///
-    /// ```no_run
-    /// # use parquet::file::statistics::Statistics;
-    /// # let statistics: Statistics = todo!();
-    /// let null_count = statistics.null_count_opt().unwrap_or(0);
-    /// ```
+    /// Note this API returns Some(0) even if the null count was not present
+    /// in the statistics.
+    /// See <https://github.com/apache/arrow-rs/pull/6216/files>
     pub fn null_count_opt(&self) -> Option<u64> {
         statistics_enum_func![self, null_count_opt]
     }
@@ -1106,19 +1082,6 @@ mod tests {
     }
 
     #[test]
-    fn test_count_decoding_distinct_invalid() {
-        let tstatistics = TStatistics {
-            distinct_count: Some(-42),
-            ..Default::default()
-        };
-        let err = from_thrift(Type::BOOLEAN, Some(tstatistics)).unwrap_err();
-        assert_eq!(
-            err.to_string(),
-            "Parquet error: Statistics distinct count is negative -42"
-        );
-    }
-
-    #[test]
     fn test_count_decoding_null_invalid() {
         let tstatistics = TStatistics {
             null_count: Some(-42),
@@ -1147,7 +1110,21 @@ mod tests {
         let round_tripped = from_thrift(Type::BOOLEAN, Some(thrift_stats))
             .unwrap()
             .unwrap();
-        assert_eq!(round_tripped, statistics);
+        // TODO: remove branch when we no longer support assuming null_count==None in the thrift
+        // means null_count = Some(0)
+        if null_count.is_none() {
+            assert_ne!(round_tripped, statistics);
+            assert!(round_tripped.null_count_opt().is_some());
+            assert_eq!(round_tripped.null_count_opt(), Some(0));
+            assert_eq!(round_tripped.min_bytes_opt(), statistics.min_bytes_opt());
+            assert_eq!(round_tripped.max_bytes_opt(), statistics.max_bytes_opt());
+            assert_eq!(
+                round_tripped.distinct_count_opt(),
+                statistics.distinct_count_opt()
+            );
+        } else {
+            assert_eq!(round_tripped, statistics);
+        }
     }
 
     fn make_bool_stats(distinct_count: Option<u64>, null_count: Option<u64>) -> Statistics {
