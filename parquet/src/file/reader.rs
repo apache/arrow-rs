@@ -49,37 +49,34 @@ pub trait Length {
 ///
 /// The Parquet reader uses [`ChunkReader`] to access Parquet data, allowing
 /// multiple decoders to read concurrently from different locations in the same file.
-/// The returned readers follow the model of [`File::try_clone`] where mutations of 
-/// one reader affect all readers.
 ///
-/// Implementations are provided for
+/// The trait provides:
+/// * random access (via [`Self::get_bytes`])
+/// * sequential (via [`Self::get_read`])
+///
+/// # Provided Implementations
 /// * [`File`] for reading from local file system
 /// * [`Bytes`] for reading from an in-memory buffer
 ///
 /// User provided implementations can implement more sophisticated behaviors
 /// such as on-demand buffering or scan sharing.
 pub trait ChunkReader: Length + Send + Sync {
-    /// The concrete type of the Reader
+    /// The concrete type of readers returned by this trait
     type T: Read;
 
     /// Get a [`Read`] instance starting at the provided file offset
     ///
-    /// Note that subsequent or concurrent calls to [`Self::get_read`] or
-    /// [`Self::get_bytes`] may cause side-effect on previously returned
-    /// [`Self::T`]. Callers of `get_read` should take care to avoid race
-    /// conditions.
-    ///
-    /// See [`File::try_clone`] for more information
+    /// Returned readers follow the model of [`File::try_clone`] where mutations
+    /// of one reader affect all readers. Thus subsequent or concurrent calls to
+    /// [`Self::get_read`] or [`Self::get_bytes`] may cause side-effects on
+    /// previously returned readers. Callers of `get_read` should take care
+    /// to avoid race conditions.
     fn get_read(&self, start: u64) -> Result<Self::T>;
 
     /// Get a range of data in memory as [`Bytes`]
     ///
-    /// Note that subsequent or concurrent calls to [`Self::get_read`] or
-    /// [`Self::get_bytes`] may cause side-effect on previously returned
-    /// [`Self::T`]. Callers of `get_bytes` should take care to avoid race
-    /// conditions.
-    ///
-    /// See [`File::try_clone`] for more information
+    /// Similarly to [`Self::get_read`], this method may have side-effects on
+    /// previously returned readers.
     fn get_bytes(&self, start: u64, length: usize) -> Result<Bytes>;
 }
 
