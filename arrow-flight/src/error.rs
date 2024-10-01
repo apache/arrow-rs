@@ -37,6 +37,7 @@ pub enum FlightError {
 }
 
 impl FlightError {
+    /// Generate a new `FlightError::ProtocolError` variant.
     pub fn protocol(message: impl Into<String>) -> Self {
         Self::ProtocolError(message.into())
     }
@@ -98,6 +99,7 @@ impl From<FlightError> for tonic::Status {
     }
 }
 
+/// Result type for the Apache Arrow Flight crate
 pub type Result<T> = std::result::Result<T, FlightError>;
 
 #[cfg(test)]

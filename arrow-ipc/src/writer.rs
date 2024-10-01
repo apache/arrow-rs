@@ -60,7 +60,7 @@ pub struct IpcWriteOptions {
     /// Compression, if desired. Will result in a runtime error
     /// if the corresponding feature is not enabled
     batch_compression_type: Option<crate::CompressionType>,
-    /// Flag indicating whether the writer should preserver the dictionary IDs defined in the
+    /// Flag indicating whether the writer should preserve the dictionary IDs defined in the
     /// schema or generate unique dictionary IDs internally during encoding.
     ///
     /// Defaults to `true`
@@ -135,6 +135,8 @@ impl IpcWriteOptions {
         }
     }
 
+    /// Return whether the writer is configured to preserve the dictionary IDs
+    /// defined in the schema
     pub fn preserve_dict_id(&self) -> bool {
         self.preserve_dict_id
     }
@@ -200,6 +202,11 @@ impl Default for IpcWriteOptions {
 pub struct IpcDataGenerator {}
 
 impl IpcDataGenerator {
+    /// Converts a schema to an IPC message along with `dictionary_tracker`
+    /// and returns it encoded inside [EncodedData] as a flatbuffer
+    ///
+    /// Preferred method over [IpcDataGenerator::schema_to_bytes] since it's
+    /// deprecated since Arrow v54.0.0
     pub fn schema_to_bytes_with_dictionary_tracker(
         &self,
         schema: &Schema,
@@ -234,6 +241,7 @@ impl IpcDataGenerator {
         since = "54.0.0",
         note = "Use `schema_to_bytes_with_dictionary_tracker` instead. This function signature of `schema_to_bytes_with_dictionary_tracker` in the next release."
     )]
+    /// Converts a schema to an IPC message and returns it encoded inside [EncodedData] as a flatbuffer
     pub fn schema_to_bytes(&self, schema: &Schema, write_options: &IpcWriteOptions) -> EncodedData {
         let mut fbb = FlatBufferBuilder::new();
         let schema = {
@@ -951,6 +959,7 @@ impl<W: Write> FileWriter<W> {
         })
     }
 
+    /// Adds a key-value pair to the [FileWriter]'s custom metadata
     pub fn write_metadata(&mut self, key: impl Into<String>, value: impl Into<String>) {
         self.custom_metadata.insert(key.into(), value.into());
     }

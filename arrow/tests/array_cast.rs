@@ -179,7 +179,7 @@ fn test_can_cast_types() {
 
 /// Create instances of arrays with varying types for cast tests
 fn get_arrays_of_all_types() -> Vec<ArrayRef> {
-    let tz_name = String::from("+08:00");
+    let tz_name = "+08:00";
     let binary_data: Vec<&[u8]> = vec![b"foo", b"bar"];
     vec![
         Arc::new(BinaryArray::from(binary_data.clone())),
@@ -238,9 +238,9 @@ fn get_arrays_of_all_types() -> Vec<ArrayRef> {
         Arc::new(TimestampMillisecondArray::from(vec![1000, 2000])),
         Arc::new(TimestampMicrosecondArray::from(vec![1000, 2000])),
         Arc::new(TimestampNanosecondArray::from(vec![1000, 2000])),
-        Arc::new(TimestampSecondArray::from(vec![1000, 2000]).with_timezone(tz_name.clone())),
-        Arc::new(TimestampMillisecondArray::from(vec![1000, 2000]).with_timezone(tz_name.clone())),
-        Arc::new(TimestampMicrosecondArray::from(vec![1000, 2000]).with_timezone(tz_name.clone())),
+        Arc::new(TimestampSecondArray::from(vec![1000, 2000]).with_timezone(tz_name)),
+        Arc::new(TimestampMillisecondArray::from(vec![1000, 2000]).with_timezone(tz_name)),
+        Arc::new(TimestampMicrosecondArray::from(vec![1000, 2000]).with_timezone(tz_name)),
         Arc::new(TimestampNanosecondArray::from(vec![1000, 2000]).with_timezone(tz_name)),
         Arc::new(Date32Array::from(vec![1000, 2000])),
         Arc::new(Date64Array::from(vec![1000, 2000])),

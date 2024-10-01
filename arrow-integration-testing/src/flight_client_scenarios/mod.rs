@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! Collection of utilities for testing the Flight client.
+
 pub mod auth_basic_proto;
 pub mod integration_test;
 pub mod middleware;

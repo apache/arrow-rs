@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! Basic auth test for the Flight server.
+
 use std::pin::Pin;
 use std::sync::Arc;
 
@@ -35,6 +37,7 @@ use prost::Message;
 
 use crate::{AUTH_PASSWORD, AUTH_USERNAME};
 
+/// Run a scenario that tests basic auth.
 pub async fn scenario_setup(port: u16) -> Result {
     let service = AuthBasicProtoScenarioImpl {
         username: AUTH_USERNAME.into(),
@@ -52,6 +55,7 @@ pub async fn scenario_setup(port: u16) -> Result {
     Ok(())
 }
 
+/// Scenario for testing basic auth.
 #[derive(Clone)]
 pub struct AuthBasicProtoScenarioImpl {
     username: Arc<str>,

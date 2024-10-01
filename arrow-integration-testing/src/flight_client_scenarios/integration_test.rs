@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! Integration tests for the Flight client.
+
 use crate::open_json_file;
 use std::collections::HashMap;
 
@@ -40,6 +42,7 @@ type Result<T = (), E = Error> = std::result::Result<T, E>;
 
 type Client = FlightServiceClient<tonic::transport::Channel>;
 
+/// Run a scenario that uploads data to a Flight server and then downloads it back
 pub async fn run_scenario(host: &str, port: u16, path: &str) -> Result {
     let url = format!("http://{host}:{port}");
 

@@ -44,7 +44,6 @@ static DEFAULT_METADATA_ENDPOINT: &str = "http://169.254.169.254";
 
 /// A specialized `Error` for object store-related errors
 #[derive(Debug, Snafu)]
-#[allow(missing_docs)]
 enum Error {
     #[snafu(display("Missing bucket name"))]
     MissingBucketName,
