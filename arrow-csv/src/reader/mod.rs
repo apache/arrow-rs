@@ -216,8 +216,8 @@ impl InferredDataType {
             1 << 8 // Utf8
         } else if let Some(m) = REGEX_SET.matches(string).into_iter().next() {
             if m == 1 && string.len() >= 19 && string.parse::<i64>().is_err() {
-                // if overflow i64, fallback to f64
-                1 << 2
+                // if overflow i64, fallback to utf8
+                1 << 8
             } else {
                 1 << m
             }
@@ -1824,6 +1824,8 @@ mod tests {
             infer_field_schema("2021-12-19T13:12:30.123456789"),
             DataType::Timestamp(TimeUnit::Nanosecond, None)
         );
+        assert_eq!(infer_field_schema("–9223372036854775809"), DataType::Utf8);
+        assert_eq!(infer_field_schema("9223372036854775808"), DataType::Utf8);
     }
 
     #[test]
