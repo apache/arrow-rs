@@ -47,10 +47,10 @@ pub trait Length {
 
 /// Generates [`Read`]ers to read chunks of a Parquet data source.
 ///
-/// The Parquet reader uses [`ChunkReader`] to access Parquet data, potentially
-/// decoding in parallel from from the same data source. The returned readers
-/// follow the model of [`File::try_clone`] where mutations of one reader affect
-/// all readers.
+/// The Parquet reader uses [`ChunkReader`] to access Parquet data, allowing
+/// multiple decoders to read concurrently from different locations in the same file.
+/// The returned readers follow the model of [`File::try_clone`] where mutations of 
+/// one reader affect all readers.
 ///
 /// Implementations are provided for
 /// * [`File`] for reading from local file system
