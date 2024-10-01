@@ -888,8 +888,12 @@ mod tests {
         expected = "Encountered non-UTF-8 data at index 0: invalid utf-8 sequence of 1 bytes from index 0"
     )]
     fn new_with_invalid_utf8_data() {
-        let v: Vec<u8> = vec![0xf0, 0x80, 0x80, 0x80];
-        let view = ByteView::new(v.len() as u32, &v);
+        let v: Vec<u8> = vec![
+            // invalid UTF8
+            0xf0, 0x80, 0x80, 0x80, // more bytes to make it larger than 12
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        ];
+        let view = ByteView::new(v.len() as u32, &v[0..4]);
         let views = ScalarBuffer::from(vec![view.into()]);
         let buffers = vec![Buffer::from_slice_ref(v)];
         StringViewArray::new(views, buffers, None);
