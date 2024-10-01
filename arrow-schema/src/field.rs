@@ -375,6 +375,7 @@ impl Field {
             | DataType::FixedSizeList(field, _)
             | DataType::Map(field, _) => field.fields(),
             DataType::Dictionary(_, value_field) => Field::_fields(value_field.as_ref()),
+            DataType::RunEndEncoded(_, field) => field.fields(),
             _ => vec![],
         }
     }
@@ -609,14 +610,14 @@ mod test {
     #[test]
     fn test_new_with_string() {
         // Fields should allow owned Strings to support reuse
-        let s = String::from("c1");
+        let s = "c1";
         Field::new(s, DataType::Int64, false);
     }
 
     #[test]
     fn test_new_dict_with_string() {
         // Fields should allow owned Strings to support reuse
-        let s = String::from("c1");
+        let s = "c1";
         Field::new_dict(s, DataType::Int64, false, 4, false);
     }
 

@@ -161,9 +161,9 @@ pub mod flight_descriptor {
         /// (if the ProtoBuf definition does not change) and safe for programmatic use.
         pub fn as_str_name(&self) -> &'static str {
             match self {
-                DescriptorType::Unknown => "UNKNOWN",
-                DescriptorType::Path => "PATH",
-                DescriptorType::Cmd => "CMD",
+                Self::Unknown => "UNKNOWN",
+                Self::Path => "PATH",
+                Self::Cmd => "CMD",
             }
         }
         /// Creates an enum from field names used in the ProtoBuf definition.
@@ -398,10 +398,10 @@ impl CancelStatus {
     /// (if the ProtoBuf definition does not change) and safe for programmatic use.
     pub fn as_str_name(&self) -> &'static str {
         match self {
-            CancelStatus::Unspecified => "CANCEL_STATUS_UNSPECIFIED",
-            CancelStatus::Cancelled => "CANCEL_STATUS_CANCELLED",
-            CancelStatus::Cancelling => "CANCEL_STATUS_CANCELLING",
-            CancelStatus::NotCancellable => "CANCEL_STATUS_NOT_CANCELLABLE",
+            Self::Unspecified => "CANCEL_STATUS_UNSPECIFIED",
+            Self::Cancelled => "CANCEL_STATUS_CANCELLED",
+            Self::Cancelling => "CANCEL_STATUS_CANCELLING",
+            Self::NotCancellable => "CANCEL_STATUS_NOT_CANCELLABLE",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -417,7 +417,13 @@ impl CancelStatus {
 }
 /// Generated client implementations.
 pub mod flight_service_client {
-    #![allow(unused_variables, dead_code, missing_docs, clippy::let_unit_value)]
+    #![allow(
+        unused_variables,
+        dead_code,
+        missing_docs,
+        clippy::wildcard_imports,
+        clippy::let_unit_value,
+    )]
     use tonic::codegen::*;
     use tonic::codegen::http::Uri;
     ///
@@ -521,8 +527,7 @@ pub mod flight_service_client {
                 .ready()
                 .await
                 .map_err(|e| {
-                    tonic::Status::new(
-                        tonic::Code::Unknown,
+                    tonic::Status::unknown(
                         format!("Service was not ready: {}", e.into()),
                     )
                 })?;
@@ -555,8 +560,7 @@ pub mod flight_service_client {
                 .ready()
                 .await
                 .map_err(|e| {
-                    tonic::Status::new(
-                        tonic::Code::Unknown,
+                    tonic::Status::unknown(
                         format!("Service was not ready: {}", e.into()),
                     )
                 })?;
@@ -590,8 +594,7 @@ pub mod flight_service_client {
                 .ready()
                 .await
                 .map_err(|e| {
-                    tonic::Status::new(
-                        tonic::Code::Unknown,
+                    tonic::Status::unknown(
                         format!("Service was not ready: {}", e.into()),
                     )
                 })?;
@@ -640,8 +643,7 @@ pub mod flight_service_client {
                 .ready()
                 .await
                 .map_err(|e| {
-                    tonic::Status::new(
-                        tonic::Code::Unknown,
+                    tonic::Status::unknown(
                         format!("Service was not ready: {}", e.into()),
                     )
                 })?;
@@ -672,8 +674,7 @@ pub mod flight_service_client {
                 .ready()
                 .await
                 .map_err(|e| {
-                    tonic::Status::new(
-                        tonic::Code::Unknown,
+                    tonic::Status::unknown(
                         format!("Service was not ready: {}", e.into()),
                     )
                 })?;
@@ -704,8 +705,7 @@ pub mod flight_service_client {
                 .ready()
                 .await
                 .map_err(|e| {
-                    tonic::Status::new(
-                        tonic::Code::Unknown,
+                    tonic::Status::unknown(
                         format!("Service was not ready: {}", e.into()),
                     )
                 })?;
@@ -736,8 +736,7 @@ pub mod flight_service_client {
                 .ready()
                 .await
                 .map_err(|e| {
-                    tonic::Status::new(
-                        tonic::Code::Unknown,
+                    tonic::Status::unknown(
                         format!("Service was not ready: {}", e.into()),
                     )
                 })?;
@@ -767,8 +766,7 @@ pub mod flight_service_client {
                 .ready()
                 .await
                 .map_err(|e| {
-                    tonic::Status::new(
-                        tonic::Code::Unknown,
+                    tonic::Status::unknown(
                         format!("Service was not ready: {}", e.into()),
                     )
                 })?;
@@ -801,8 +799,7 @@ pub mod flight_service_client {
                 .ready()
                 .await
                 .map_err(|e| {
-                    tonic::Status::new(
-                        tonic::Code::Unknown,
+                    tonic::Status::unknown(
                         format!("Service was not ready: {}", e.into()),
                     )
                 })?;
@@ -832,8 +829,7 @@ pub mod flight_service_client {
                 .ready()
                 .await
                 .map_err(|e| {
-                    tonic::Status::new(
-                        tonic::Code::Unknown,
+                    tonic::Status::unknown(
                         format!("Service was not ready: {}", e.into()),
                     )
                 })?;
@@ -852,7 +848,13 @@ pub mod flight_service_client {
 }
 /// Generated server implementations.
 pub mod flight_service_server {
-    #![allow(unused_variables, dead_code, missing_docs, clippy::let_unit_value)]
+    #![allow(
+        unused_variables,
+        dead_code,
+        missing_docs,
+        clippy::wildcard_imports,
+        clippy::let_unit_value,
+    )]
     use tonic::codegen::*;
     /// Generated trait containing gRPC methods that should be implemented for use with FlightServiceServer.
     #[async_trait]
@@ -1569,17 +1571,19 @@ pub mod flight_service_server {
                 }
                 _ => {
                     Box::pin(async move {
-                        Ok(
-                            http::Response::builder()
-                                .status(200)
-                                .header("grpc-status", tonic::Code::Unimplemented as i32)
-                                .header(
-                                    http::header::CONTENT_TYPE,
-                                    tonic::metadata::GRPC_CONTENT_TYPE,
-                                )
-                                .body(empty_body())
-                                .unwrap(),
-                        )
+                        let mut response = http::Response::new(empty_body());
+                        let headers = response.headers_mut();
+                        headers
+                            .insert(
+                                tonic::Status::GRPC_STATUS,
+                                (tonic::Code::Unimplemented as i32).into(),
+                            );
+                        headers
+                            .insert(
+                                http::header::CONTENT_TYPE,
+                                tonic::metadata::GRPC_CONTENT_TYPE,
+                            );
+                        Ok(response)
                     })
                 }
             }

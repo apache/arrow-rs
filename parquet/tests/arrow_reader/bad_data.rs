@@ -140,20 +140,23 @@ fn read_file(name: &str) -> Result<usize, ParquetError> {
 #[tokio::test]
 async fn bad_metadata_err() {
     use bytes::Bytes;
-    use parquet::arrow::async_reader::MetadataLoader;
+    use parquet::file::metadata::ParquetMetaDataReader;
 
     let metadata_buffer = Bytes::from_static(include_bytes!("bad_raw_metadata.bin"));
 
     let metadata_length = metadata_buffer.len();
 
     let mut reader = std::io::Cursor::new(&metadata_buffer);
-    let mut loader = MetadataLoader::load(&mut reader, metadata_length, None)
-        .await
-        .unwrap();
-    loader.load_page_index(false, false).await.unwrap();
-    loader.load_page_index(false, true).await.unwrap();
+    let mut loader = ParquetMetaDataReader::new();
+    loader.try_load(&mut reader, metadata_length).await.unwrap();
+    loader = loader.with_page_indexes(false);
+    loader.load_page_index(&mut reader).await.unwrap();
 
-    let err = loader.load_page_index(true, false).await.unwrap_err();
+    loader = loader.with_offset_indexes(true);
+    loader.load_page_index(&mut reader).await.unwrap();
+
+    loader = loader.with_column_indexes(true);
+    let err = loader.load_page_index(&mut reader).await.unwrap_err();
 
     assert_eq!(
         err.to_string(),

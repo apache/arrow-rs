@@ -364,6 +364,7 @@
 
 #![deny(clippy::redundant_clone)]
 #![warn(missing_debug_implementations)]
+#![warn(missing_docs)]
 #![allow(rustdoc::invalid_html_tags)]
 pub use arrow_array::{downcast_dictionary_array, downcast_primitive_array};
 
@@ -389,6 +390,7 @@ pub use arrow_json as json;
 #[cfg(feature = "pyarrow")]
 pub mod pyarrow;
 
+/// Contains the `RecordBatch` type and associated traits
 pub mod record_batch {
     pub use arrow_array::{
         RecordBatch, RecordBatchIterator, RecordBatchOptions, RecordBatchReader, RecordBatchWriter,

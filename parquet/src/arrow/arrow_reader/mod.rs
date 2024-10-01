@@ -34,9 +34,7 @@ use crate::arrow::schema::{parquet_to_arrow_schema_and_fields, ParquetField};
 use crate::arrow::{parquet_to_arrow_field_levels, FieldLevels, ProjectionMask};
 use crate::column::page::{PageIterator, PageReader};
 use crate::errors::{ParquetError, Result};
-use crate::file::footer;
-use crate::file::metadata::ParquetMetaData;
-use crate::file::page_index::index_reader;
+use crate::file::metadata::{ParquetMetaData, ParquetMetaDataReader};
 use crate::file::reader::{ChunkReader, SerializedPageReader};
 use crate::schema::types::SchemaDescriptor;
 
@@ -382,23 +380,9 @@ impl ArrowReaderMetadata {
     /// `Self::metadata` is missing the page index, this function will attempt
     /// to load the page index by making an object store request.
     pub fn load<T: ChunkReader>(reader: &T, options: ArrowReaderOptions) -> Result<Self> {
-        let mut metadata = footer::parse_metadata(reader)?;
-        if options.page_index {
-            let column_index = metadata
-                .row_groups()
-                .iter()
-                .map(|rg| index_reader::read_columns_indexes(reader, rg.columns()))
-                .collect::<Result<Vec<_>>>()?;
-            metadata.set_column_index(Some(column_index));
-
-            let offset_index = metadata
-                .row_groups()
-                .iter()
-                .map(|rg| index_reader::read_offset_indexes(reader, rg.columns()))
-                .collect::<Result<Vec<_>>>()?;
-
-            metadata.set_offset_index(Some(offset_index))
-        }
+        let metadata = ParquetMetaDataReader::new()
+            .with_page_indexes(options.page_index)
+            .parse_and_finish(reader)?;
         Self::try_new(Arc::new(metadata), options)
     }
 
@@ -3498,6 +3482,8 @@ mod tests {
             .unwrap();
             // Although `Vec<Vec<PageLoacation>>` of each row group is empty,
             // we should read the file successfully.
+            // FIXME: this test will fail when metadata parsing returns `None` for missing page
+            // indexes. https://github.com/apache/arrow-rs/issues/6447
             assert!(builder.metadata().offset_index().unwrap()[0].is_empty());
             let reader = builder.build().unwrap();
             let batches = reader.collect::<Result<Vec<_>, _>>().unwrap();

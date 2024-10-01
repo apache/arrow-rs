@@ -96,7 +96,6 @@ impl ContentRange {
 
 /// A specialized `Error` for get-related errors
 #[derive(Debug, Snafu)]
-#[allow(missing_docs)]
 enum GetResultError {
     #[snafu(context(false))]
     Header {

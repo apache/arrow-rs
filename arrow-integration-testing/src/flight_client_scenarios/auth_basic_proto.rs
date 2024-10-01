@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! Scenario for testing basic auth.
+
 use crate::{AUTH_PASSWORD, AUTH_USERNAME};
 
 use arrow_flight::{flight_service_client::FlightServiceClient, BasicAuth, HandshakeRequest};
@@ -27,6 +29,7 @@ type Result<T = (), E = Error> = std::result::Result<T, E>;
 
 type Client = FlightServiceClient<tonic::transport::Channel>;
 
+/// Run a scenario that tests basic auth.
 pub async fn run_scenario(host: &str, port: u16) -> Result {
     let url = format!("http://{host}:{port}");
     let mut client = FlightServiceClient::connect(url).await?;

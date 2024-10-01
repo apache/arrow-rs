@@ -77,7 +77,7 @@ use crate::client::parts::Parts;
 pub use credential::{AwsAuthorizer, AwsCredential};
 
 /// Interface for [Amazon S3](https://aws.amazon.com/s3/).
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct AmazonS3 {
     client: Arc<S3Client>,
 }

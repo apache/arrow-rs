@@ -144,6 +144,7 @@ impl Default for FlightDataEncoderBuilder {
 }
 
 impl FlightDataEncoderBuilder {
+    /// Create a new [`FlightDataEncoderBuilder`].
     pub fn new() -> Self {
         Self::default()
     }
@@ -1403,7 +1404,7 @@ mod tests {
         let input_rows = batch.num_rows();
 
         let split = split_batch_for_grpc_response(batch.clone(), max_flight_data_size_bytes);
-        let sizes: Vec<_> = split.iter().map(|batch| batch.num_rows()).collect();
+        let sizes: Vec<_> = split.iter().map(RecordBatch::num_rows).collect();
         let output_rows: usize = sizes.iter().sum();
 
         assert_eq!(sizes, expected_sizes, "mismatch for {batch:?}");

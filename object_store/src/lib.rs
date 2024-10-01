@@ -1224,78 +1224,116 @@ pub type Result<T, E = Error> = std::result::Result<T, E>;
 
 /// A specialized `Error` for object store-related errors
 #[derive(Debug, Snafu)]
-#[allow(missing_docs)]
 #[non_exhaustive]
 pub enum Error {
+    /// A fallback error type when no variant matches
     #[snafu(display("Generic {} error: {}", store, source))]
     Generic {
+        /// The store this error originated from
         store: &'static str,
+        /// The wrapped error
         source: Box<dyn std::error::Error + Send + Sync + 'static>,
     },
 
+    /// Error when the object is not found at given location
     #[snafu(display("Object at location {} not found: {}", path, source))]
     NotFound {
+        /// The path to file
         path: String,
+        /// The wrapped error
         source: Box<dyn std::error::Error + Send + Sync + 'static>,
     },
 
+    /// Error for invalid path
     #[snafu(
         display("Encountered object with invalid path: {}", source),
         context(false)
     )]
-    InvalidPath { source: path::Error },
+    InvalidPath {
+        /// The wrapped error
+        source: path::Error,
+    },
 
+    /// Error when `tokio::spawn` failed
     #[snafu(display("Error joining spawned task: {}", source), context(false))]
-    JoinError { source: tokio::task::JoinError },
+    JoinError {
+        /// The wrapped error
+        source: tokio::task::JoinError,
+    },
 
+    /// Error when the attempted operation is not supported
     #[snafu(display("Operation not supported: {}", source))]
     NotSupported {
+        /// The wrapped error
         source: Box<dyn std::error::Error + Send + Sync + 'static>,
     },
 
+    /// Error when the object already exists
     #[snafu(display("Object at location {} already exists: {}", path, source))]
     AlreadyExists {
+        /// The path to the
         path: String,
+        /// The wrapped error
         source: Box<dyn std::error::Error + Send + Sync + 'static>,
     },
 
+    /// Error when the required conditions failed for the operation
     #[snafu(display("Request precondition failure for path {}: {}", path, source))]
     Precondition {
+        /// The path to the file
         path: String,
+        /// The wrapped error
         source: Box<dyn std::error::Error + Send + Sync + 'static>,
     },
 
+    /// Error when the object at the location isn't modified
     #[snafu(display("Object at location {} not modified: {}", path, source))]
     NotModified {
+        /// The path to the file
         path: String,
+        /// The wrapped error
         source: Box<dyn std::error::Error + Send + Sync + 'static>,
     },
 
+    /// Error when an operation is not implemented
     #[snafu(display("Operation not yet implemented."))]
     NotImplemented,
 
+    /// Error when the used credentials don't have enough permission
+    /// to perform the requested operation
     #[snafu(display(
         "The operation lacked the necessary privileges to complete for path {}: {}",
         path,
         source
     ))]
     PermissionDenied {
+        /// The path to the file
         path: String,
+        /// The wrapped error
         source: Box<dyn std::error::Error + Send + Sync + 'static>,
     },
 
+    /// Error when the used credentials lack valid authentication
     #[snafu(display(
         "The operation lacked valid authentication credentials for path {}: {}",
         path,
         source
     ))]
     Unauthenticated {
+        /// The path to the file
         path: String,
+        /// The wrapped error
         source: Box<dyn std::error::Error + Send + Sync + 'static>,
     },
 
+    /// Error when a configuration key is invalid for the store used
     #[snafu(display("Configuration key: '{}' is not valid for store '{}'.", key, store))]
-    UnknownConfigurationKey { store: &'static str, key: String },
+    UnknownConfigurationKey {
+        /// The object store used
+        store: &'static str,
+        /// The configuration key used
+        key: String,
+    },
 }
 
 impl From<Error> for std::io::Error {

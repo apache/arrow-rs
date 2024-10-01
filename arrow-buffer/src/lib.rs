@@ -19,6 +19,7 @@
 
 // used by [`buffer::mutable::dangling_ptr`]
 #![cfg_attr(miri, feature(strict_provenance))]
+#![warn(missing_docs)]
 
 pub mod alloc;
 pub mod buffer;

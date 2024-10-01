@@ -38,7 +38,6 @@ use crate::{GetOptions, PutPayload};
 
 /// A specialized `Error` for in-memory object store-related errors
 #[derive(Debug, Snafu)]
-#[allow(missing_docs)]
 enum Error {
     #[snafu(display("No data in memory found. Location: {path}"))]
     NoDataInMemory { path: String },

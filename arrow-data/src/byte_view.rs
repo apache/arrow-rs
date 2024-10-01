@@ -21,8 +21,40 @@ use arrow_schema::ArrowError;
 /// Helper to access views of [`GenericByteViewArray`] (`StringViewArray` and
 /// `BinaryViewArray`) where the length is greater than 12 bytes.
 ///
-/// See the documentation on [`GenericByteViewArray`] for more information on
-/// the layout of the views.
+/// See Also:
+/// * [`GenericByteViewArray`] for more information on the layout of the views.
+/// * [`validate_binary_view`] and [`validate_string_view`] to validate
+///
+/// # Example: Create a new u128 view
+///
+/// ```rust
+/// # use arrow_data::ByteView;;
+/// // Create a view for a string of length 20
+/// // first four bytes are "Rust"
+/// // stored in buffer 3
+/// // at offset 42
+/// let prefix = "Rust";
+/// let view = ByteView::new(20, prefix.as_bytes())
+///   .with_buffer_index(3)
+///   .with_offset(42);
+///
+/// // create the final u128
+/// let v = view.as_u128();
+/// assert_eq!(v, 0x2a000000037473755200000014);
+/// ```
+///
+/// # Example: decode a `u128` into its constituent fields
+/// ```rust
+/// # use arrow_data::ByteView;
+/// // Convert a u128 to a ByteView
+/// // See validate_{string,binary}_view functions to validate
+/// let v = ByteView::from(0x2a000000037473755200000014);
+///
+/// assert_eq!(v.length, 20);
+/// assert_eq!(v.prefix, 0x74737552);
+/// assert_eq!(v.buffer_index, 3);
+/// assert_eq!(v.offset, 42);
+/// ```
 ///
 /// [`GenericByteViewArray`]: https://docs.rs/arrow/latest/arrow/array/struct.GenericByteViewArray.html
 #[derive(Debug, Copy, Clone, Default)]
@@ -39,7 +71,44 @@ pub struct ByteView {
 }
 
 impl ByteView {
+    /// Construct a [`ByteView`] for data `length` of bytes with the specified prefix.
+    ///
+    /// See example on [`ByteView`] docs
+    ///
+    /// Notes:
+    /// * the length should always be greater than 12 (Data less than 12
+    ///   bytes is stored as an inline view)
+    /// * buffer and offset are set to `0`
+    ///
+    /// # Panics
+    /// If the prefix is not exactly 4 bytes
+    #[inline]
+    pub fn new(length: u32, prefix: &[u8]) -> Self {
+        debug_assert!(length > 12);
+        Self {
+            length,
+            prefix: u32::from_le_bytes(prefix.try_into().unwrap()),
+            buffer_index: 0,
+            offset: 0,
+        }
+    }
+
+    /// Set the [`Self::buffer_index`] field
+    #[inline]
+    pub fn with_buffer_index(mut self, buffer_index: u32) -> Self {
+        self.buffer_index = buffer_index;
+        self
+    }
+
+    /// Set the [`Self::offset`] field
+    #[inline]
+    pub fn with_offset(mut self, offset: u32) -> Self {
+        self.offset = offset;
+        self
+    }
+
     #[inline(always)]
+    /// Convert `ByteView` to `u128` by concatenating the fields
     pub fn as_u128(self) -> u128 {
         (self.length as u128)
             | ((self.prefix as u128) << 32)

@@ -37,6 +37,7 @@ use arrow_data::{layout, ArrayData, ArrayDataBuilder, BufferSpec};
 use arrow_schema::*;
 
 use crate::compression::CompressionCodec;
+use crate::convert::IpcSchemaEncoder;
 use crate::CONTINUATION_MARKER;
 
 /// IPC write options used to control the behaviour of the [`IpcDataGenerator`]
@@ -59,7 +60,7 @@ pub struct IpcWriteOptions {
     /// Compression, if desired. Will result in a runtime error
     /// if the corresponding feature is not enabled
     batch_compression_type: Option<crate::CompressionType>,
-    /// Flag indicating whether the writer should preserver the dictionary IDs defined in the
+    /// Flag indicating whether the writer should preserve the dictionary IDs defined in the
     /// schema or generate unique dictionary IDs internally during encoding.
     ///
     /// Defaults to `true`
@@ -134,6 +135,8 @@ impl IpcWriteOptions {
         }
     }
 
+    /// Return whether the writer is configured to preserve the dictionary IDs
+    /// defined in the schema
     pub fn preserve_dict_id(&self) -> bool {
         self.preserve_dict_id
     }
@@ -199,9 +202,51 @@ impl Default for IpcWriteOptions {
 pub struct IpcDataGenerator {}
 
 impl IpcDataGenerator {
+    /// Converts a schema to an IPC message along with `dictionary_tracker`
+    /// and returns it encoded inside [EncodedData] as a flatbuffer
+    ///
+    /// Preferred method over [IpcDataGenerator::schema_to_bytes] since it's
+    /// deprecated since Arrow v54.0.0
+    pub fn schema_to_bytes_with_dictionary_tracker(
+        &self,
+        schema: &Schema,
+        dictionary_tracker: &mut DictionaryTracker,
+        write_options: &IpcWriteOptions,
+    ) -> EncodedData {
+        let mut fbb = FlatBufferBuilder::new();
+        let schema = {
+            let fb = IpcSchemaEncoder::new()
+                .with_dictionary_tracker(dictionary_tracker)
+                .schema_to_fb_offset(&mut fbb, schema);
+            fb.as_union_value()
+        };
+
+        let mut message = crate::MessageBuilder::new(&mut fbb);
+        message.add_version(write_options.metadata_version);
+        message.add_header_type(crate::MessageHeader::Schema);
+        message.add_bodyLength(0);
+        message.add_header(schema);
+        // TODO: custom metadata
+        let data = message.finish();
+        fbb.finish(data, None);
+
+        let data = fbb.finished_data();
+        EncodedData {
+            ipc_message: data.to_vec(),
+            arrow_data: vec![],
+        }
+    }
+
+    #[deprecated(
+        since = "54.0.0",
+        note = "Use `schema_to_bytes_with_dictionary_tracker` instead. This function signature of `schema_to_bytes_with_dictionary_tracker` in the next release."
+    )]
+    /// Converts a schema to an IPC message and returns it encoded inside [EncodedData] as a flatbuffer
     pub fn schema_to_bytes(&self, schema: &Schema, write_options: &IpcWriteOptions) -> EncodedData {
         let mut fbb = FlatBufferBuilder::new();
         let schema = {
+            #[allow(deprecated)]
+            // This will be replaced with the IpcSchemaConverter in the next release.
             let fb = crate::convert::schema_to_fb_offset(&mut fbb, schema);
             fb.as_union_value()
         };
@@ -359,13 +404,6 @@ impl IpcDataGenerator {
     ) -> Result<(), ArrowError> {
         match column.data_type() {
             DataType::Dictionary(_key_type, _value_type) => {
-                let dict_id = dict_id_seq
-                    .next()
-                    .or_else(|| field.dict_id())
-                    .ok_or_else(|| {
-                        ArrowError::IpcError(format!("no dict id for field {}", field.name()))
-                    })?;
-
                 let dict_data = column.to_data();
                 let dict_values = &dict_data.child_data()[0];
 
@@ -378,6 +416,16 @@ impl IpcDataGenerator {
                     write_options,
                     dict_id_seq,
                 )?;
+
+                // It's importnat to only take the dict_id at this point, because the dict ID
+                // sequence is assigned depth-first, so we need to first encode children and have
+                // them take their assigned dict IDs before we take the dict ID for this field.
+                let dict_id = dict_id_seq
+                    .next()
+                    .or_else(|| field.dict_id())
+                    .ok_or_else(|| {
+                        ArrowError::IpcError(format!("no dict id for field {}", field.name()))
+                    })?;
 
                 let emit = dictionary_tracker.insert(dict_id, column)?;
 
@@ -710,8 +758,11 @@ fn into_zero_offset_run_array<R: RunEndIndexType>(
 }
 
 /// Keeps track of dictionaries that have been written, to avoid emitting the same dictionary
-/// multiple times. Can optionally error if an update to an existing dictionary is attempted, which
+/// multiple times.
+///
+/// Can optionally error if an update to an existing dictionary is attempted, which
 /// isn't allowed in the `FileWriter`.
+#[derive(Debug)]
 pub struct DictionaryTracker {
     written: HashMap<i64, ArrayData>,
     dict_ids: Vec<i64>,
@@ -885,9 +936,15 @@ impl<W: Write> FileWriter<W> {
         writer.write_all(&super::ARROW_MAGIC)?;
         writer.write_all(&PADDING[..pad_len])?;
         // write the schema, set the written bytes to the schema + header
-        let encoded_message = data_gen.schema_to_bytes(schema, &write_options);
-        let (meta, data) = write_message(&mut writer, encoded_message, &write_options)?;
         let preserve_dict_id = write_options.preserve_dict_id;
+        let mut dictionary_tracker =
+            DictionaryTracker::new_with_preserve_dict_id(true, preserve_dict_id);
+        let encoded_message = data_gen.schema_to_bytes_with_dictionary_tracker(
+            schema,
+            &mut dictionary_tracker,
+            &write_options,
+        );
+        let (meta, data) = write_message(&mut writer, encoded_message, &write_options)?;
         Ok(Self {
             writer,
             write_options,
@@ -896,15 +953,13 @@ impl<W: Write> FileWriter<W> {
             dictionary_blocks: vec![],
             record_blocks: vec![],
             finished: false,
-            dictionary_tracker: DictionaryTracker::new_with_preserve_dict_id(
-                true,
-                preserve_dict_id,
-            ),
+            dictionary_tracker,
             custom_metadata: HashMap::new(),
             data_gen,
         })
     }
 
+    /// Adds a key-value pair to the [FileWriter]'s custom metadata
     pub fn write_metadata(&mut self, key: impl Into<String>, value: impl Into<String>) {
         self.custom_metadata.insert(key.into(), value.into());
     }
@@ -958,7 +1013,9 @@ impl<W: Write> FileWriter<W> {
         let mut fbb = FlatBufferBuilder::new();
         let dictionaries = fbb.create_vector(&self.dictionary_blocks);
         let record_batches = fbb.create_vector(&self.record_blocks);
-        let schema = crate::convert::schema_to_fb_offset(&mut fbb, &self.schema);
+        let schema = IpcSchemaEncoder::new()
+            .with_dictionary_tracker(&mut self.dictionary_tracker)
+            .schema_to_fb_offset(&mut fbb, &self.schema);
         let fb_custom_metadata = (!self.custom_metadata.is_empty())
             .then(|| crate::convert::metadata_to_fb(&mut fbb, &self.custom_metadata));
 
@@ -1084,18 +1141,22 @@ impl<W: Write> StreamWriter<W> {
         write_options: IpcWriteOptions,
     ) -> Result<Self, ArrowError> {
         let data_gen = IpcDataGenerator::default();
-        // write the schema, set the written bytes to the schema
-        let encoded_message = data_gen.schema_to_bytes(schema, &write_options);
-        write_message(&mut writer, encoded_message, &write_options)?;
         let preserve_dict_id = write_options.preserve_dict_id;
+        let mut dictionary_tracker =
+            DictionaryTracker::new_with_preserve_dict_id(false, preserve_dict_id);
+
+        // write the schema, set the written bytes to the schema
+        let encoded_message = data_gen.schema_to_bytes_with_dictionary_tracker(
+            schema,
+            &mut dictionary_tracker,
+            &write_options,
+        );
+        write_message(&mut writer, encoded_message, &write_options)?;
         Ok(Self {
             writer,
             write_options,
             finished: false,
-            dictionary_tracker: DictionaryTracker::new_with_preserve_dict_id(
-                false,
-                preserve_dict_id,
-            ),
+            dictionary_tracker,
             data_gen,
         })
     }

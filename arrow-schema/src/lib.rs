@@ -15,10 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
+#![warn(missing_docs)]
 //! Arrow logical types
 
 mod datatype;
+
 pub use datatype::*;
+use std::fmt::Display;
 mod datatype_parse;
 mod error;
 pub use error::*;
@@ -34,12 +37,118 @@ use std::ops;
 pub mod ffi;
 
 /// Options that define the sort order of a given column
+///
+/// The default sorts equivalently to of `ASC NULLS FIRST` in SQL (i.e.
+/// ascending order with nulls sorting before any other values).
+///
+/// # Example creation
+/// ```
+/// # use arrow_schema::SortOptions;
+/// // configure using explicit initialization
+/// let options = SortOptions {
+///   descending: false,
+///   nulls_first: true,
+/// };
+/// // Default is ASC NULLs First
+/// assert_eq!(options, SortOptions::default());
+/// assert_eq!(options.to_string(), "ASC NULLS FIRST");
+///
+/// // Configure using builder APIs
+/// let options = SortOptions::default()
+///  .desc()
+///  .nulls_first();
+/// assert_eq!(options.to_string(), "DESC NULLS FIRST");
+///
+/// // configure using explicit field values
+/// let options = SortOptions::default()
+///  .with_descending(false)
+///  .with_nulls_first(false);
+/// assert_eq!(options.to_string(), "ASC NULLS LAST");
+/// ```
+///
+/// # Example operations
+/// It is also possible to negate the sort options using the `!` operator.
+/// ```
+/// use arrow_schema::SortOptions;
+/// let options = !SortOptions::default();
+/// assert_eq!(options.to_string(), "DESC NULLS LAST");
+/// ```
 #[derive(Clone, Hash, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
 pub struct SortOptions {
     /// Whether to sort in descending order
     pub descending: bool,
     /// Whether to sort nulls first
     pub nulls_first: bool,
+}
+
+impl Display for SortOptions {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        if self.descending {
+            write!(f, "DESC")?;
+        } else {
+            write!(f, "ASC")?;
+        }
+        if self.nulls_first {
+            write!(f, " NULLS FIRST")?;
+        } else {
+            write!(f, " NULLS LAST")?;
+        }
+        Ok(())
+    }
+}
+
+impl SortOptions {
+    /// Create a new `SortOptions` struct
+    pub fn new(descending: bool, nulls_first: bool) -> Self {
+        Self {
+            descending,
+            nulls_first,
+        }
+    }
+
+    /// Set this sort options to sort in descending order
+    ///
+    /// See [Self::with_descending] to explicitly set the underlying field
+    pub fn desc(mut self) -> Self {
+        self.descending = true;
+        self
+    }
+
+    /// Set this sort options to sort in ascending order
+    ///
+    /// See [Self::with_descending] to explicitly set the underlying field
+    pub fn asc(mut self) -> Self {
+        self.descending = false;
+        self
+    }
+
+    /// Set this sort options to sort nulls first
+    ///
+    /// See [Self::with_nulls_first] to explicitly set the underlying field
+    pub fn nulls_first(mut self) -> Self {
+        self.nulls_first = true;
+        self
+    }
+
+    /// Set this sort options to sort nulls last
+    ///
+    /// See [Self::with_nulls_first] to explicitly set the underlying field
+    pub fn nulls_last(mut self) -> Self {
+        self.nulls_first = false;
+        self
+    }
+
+    /// Set this sort options to sort descending if argument is true
+    pub fn with_descending(mut self, descending: bool) -> Self {
+        self.descending = descending;
+        self
+    }
+
+    /// Set this sort options to sort nulls first if argument is true
+    pub fn with_nulls_first(mut self, nulls_first: bool) -> Self {
+        self.nulls_first = nulls_first;
+        self
+    }
 }
 
 impl Default for SortOptions {

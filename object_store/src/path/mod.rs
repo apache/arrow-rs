@@ -36,32 +36,57 @@ pub use parts::{InvalidPart, PathPart};
 
 /// Error returned by [`Path::parse`]
 #[derive(Debug, Snafu)]
-#[allow(missing_docs)]
 #[non_exhaustive]
 pub enum Error {
+    /// Error when there's an empty segment between two slashes `/` in the path
     #[snafu(display("Path \"{}\" contained empty path segment", path))]
-    EmptySegment { path: String },
+    EmptySegment {
+        /// The source path
+        path: String,
+    },
 
+    /// Error when an invalid segment is encountered in the given path
     #[snafu(display("Error parsing Path \"{}\": {}", path, source))]
-    BadSegment { path: String, source: InvalidPart },
+    BadSegment {
+        /// The source path
+        path: String,
+        /// The part containing the error
+        source: InvalidPart,
+    },
 
+    /// Error when path cannot be canonicalized
     #[snafu(display("Failed to canonicalize path \"{}\": {}", path.display(), source))]
     Canonicalize {
+        /// The source path
         path: std::path::PathBuf,
+        /// The underlying error
         source: std::io::Error,
     },
 
+    /// Error when the path is not a valid URL
     #[snafu(display("Unable to convert path \"{}\" to URL", path.display()))]
-    InvalidPath { path: std::path::PathBuf },
+    InvalidPath {
+        /// The source path
+        path: std::path::PathBuf,
+    },
 
+    /// Error when a path contains non-unicode characters
     #[snafu(display("Path \"{}\" contained non-unicode characters: {}", path, source))]
     NonUnicode {
+        /// The source path
         path: String,
+        /// The underlying `UTF8Error`
         source: std::str::Utf8Error,
     },
 
+    /// Error when the a path doesn't start with given prefix
     #[snafu(display("Path {} does not start with prefix {}", path, prefix))]
-    PrefixMismatch { path: String, prefix: String },
+    PrefixMismatch {
+        /// The source path
+        path: String,
+        /// The mismatched prefix
+        prefix: String,
+    },
 }
 
 /// A parsed path representation that can be safely written to object storage

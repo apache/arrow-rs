@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+#![warn(missing_docs)]
 //! Arrow selection kernels
 
 pub mod concat;
@@ -23,5 +24,6 @@ pub mod filter;
 pub mod interleave;
 pub mod nullif;
 pub mod take;
+pub mod union_extract;
 pub mod window;
 pub mod zip;

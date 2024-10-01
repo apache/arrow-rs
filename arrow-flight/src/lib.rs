@@ -37,6 +37,7 @@
 //!
 //! [Flight SQL]: https://arrow.apache.org/docs/format/FlightSql.html
 #![allow(rustdoc::invalid_html_tags)]
+#![warn(missing_docs)]
 
 use arrow_ipc::{convert, writer, writer::EncodedData, writer::IpcWriteOptions};
 use arrow_schema::{ArrowError, Schema};
@@ -50,9 +51,10 @@ use std::{fmt, ops::Deref};
 
 type ArrowResult<T> = std::result::Result<T, ArrowError>;
 
-#[allow(clippy::derive_partial_eq_without_eq)]
-
+#[allow(clippy::all)]
 mod gen {
+    // Since this file is auto-generated, we suppress all warnings
+    #![allow(missing_docs)]
     include!("arrow.flight.protocol.rs");
 }
 
@@ -126,6 +128,7 @@ use flight_descriptor::DescriptorType;
 
 /// SchemaAsIpc represents a pairing of a `Schema` with IpcWriteOptions
 pub struct SchemaAsIpc<'a> {
+    /// Data type representing a schema and its IPC write options
     pub pair: (&'a Schema, &'a IpcWriteOptions),
 }
 
@@ -138,7 +141,9 @@ pub struct IpcMessage(pub Bytes);
 
 fn flight_schema_as_encoded_data(arrow_schema: &Schema, options: &IpcWriteOptions) -> EncodedData {
     let data_gen = writer::IpcDataGenerator::default();
-    data_gen.schema_to_bytes(arrow_schema, options)
+    let mut dict_tracker =
+        writer::DictionaryTracker::new_with_preserve_dict_id(false, options.preserve_dict_id());
+    data_gen.schema_to_bytes_with_dictionary_tracker(arrow_schema, &mut dict_tracker, options)
 }
 
 fn flight_schema_as_flatbuffer(schema: &Schema, options: &IpcWriteOptions) -> IpcMessage {
@@ -683,6 +688,7 @@ impl PollInfo {
 }
 
 impl<'a> SchemaAsIpc<'a> {
+    /// Create a new `SchemaAsIpc` from a `Schema` and `IpcWriteOptions`
     pub fn new(schema: &'a Schema, options: &'a IpcWriteOptions) -> Self {
         SchemaAsIpc {
             pair: (schema, options),
