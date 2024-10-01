@@ -212,6 +212,8 @@ impl ArrowReaderMetadata {
         input: &mut T,
         options: ArrowReaderOptions,
     ) -> Result<Self> {
+        // TODO: this is all rather awkward. It would be nice if AsyncFileReader::get_metadata
+        // took an argument to fetch the page indexes.
         let mut metadata = input.get_metadata().await?;
 
         if options.page_index
@@ -219,9 +221,9 @@ impl ArrowReaderMetadata {
             && metadata.offset_index().is_none()
         {
             let m = Arc::try_unwrap(metadata).unwrap_or_else(|e| e.as_ref().clone());
-            let mut loader = MetadataLoader::new(input, m);
-            loader.load_page_index(true, true).await?;
-            metadata = Arc::new(loader.finish())
+            let mut reader = ParquetMetaDataReader::new_with_metadata(m).with_page_indexes(true);
+            reader.load_page_index(input).await?;
+            metadata = Arc::new(reader.finish()?)
         }
         Self::try_new(metadata, options)
     }

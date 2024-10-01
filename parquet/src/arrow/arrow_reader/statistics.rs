@@ -1159,7 +1159,7 @@ where
 ///
 /// # Schemas
 ///
-/// The converter ues the schema of the Parquet file and the Arrow schema to
+/// The converter uses the schema of the Parquet file and the Arrow schema to
 /// convert the underlying statistics value (stored as a parquet value) into the
 /// corresponding Arrow value. For example, Decimals are stored as binary in
 /// parquet files and this structure handles mapping them to the `i128`
@@ -1175,6 +1175,8 @@ pub struct StatisticsConverter<'a> {
     parquet_column_index: Option<usize>,
     /// The field (with data type) of the column in the Arrow schema
     arrow_field: &'a Field,
+    /// treat missing null_counts as 0 nulls
+    missing_null_counts_as_zero: bool,
 }
 
 impl<'a> StatisticsConverter<'a> {
@@ -1189,6 +1191,23 @@ impl<'a> StatisticsConverter<'a> {
     /// Return the arrow schema's [`Field]` of the column in the Arrow schema
     pub fn arrow_field(&self) -> &'a Field {
         self.arrow_field
+    }
+
+    /// Set the statistics converter to treat missing null counts as missing
+    ///
+    /// By default, the converter will treat missing null counts as though
+    /// the null count is known to be `0`.
+    ///
+    /// Note that parquet files written by parquet-rs currently do not store
+    /// null counts even when it is known there are zero nulls, and the reader
+    /// will return 0 for the null counts in that instance. This behavior may
+    /// change in a future release.
+    ///
+    /// Both parquet-java and parquet-cpp store null counts as 0 when there are
+    /// no nulls, and don't write unknown values to the null count field.
+    pub fn with_missing_null_counts_as_zero(mut self, missing_null_counts_as_zero: bool) -> Self {
+        self.missing_null_counts_as_zero = missing_null_counts_as_zero;
+        self
     }
 
     /// Returns a [`UInt64Array`] with row counts for each row group
@@ -1284,6 +1303,7 @@ impl<'a> StatisticsConverter<'a> {
         Ok(Self {
             parquet_column_index: parquet_index,
             arrow_field,
+            missing_null_counts_as_zero: true,
         })
     }
 
@@ -1382,7 +1402,15 @@ impl<'a> StatisticsConverter<'a> {
         let null_counts = metadatas
             .into_iter()
             .map(|x| x.column(parquet_index).statistics())
-            .map(|s| s.and_then(|s| s.null_count_opt()));
+            .map(|s| {
+                s.and_then(|s| {
+                    if self.missing_null_counts_as_zero {
+                        Some(s.null_count_opt().unwrap_or(0))
+                    } else {
+                        s.null_count_opt()
+                    }
+                })
+            });
         Ok(UInt64Array::from_iter(null_counts))
     }
 
@@ -1593,3 +1621,5 @@ impl<'a> StatisticsConverter<'a> {
         new_null_array(data_type, num_row_groups)
     }
 }
+
+// See tests in parquet/tests/arrow_reader/statistics.rs

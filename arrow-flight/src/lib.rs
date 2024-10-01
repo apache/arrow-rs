@@ -37,6 +37,7 @@
 //!
 //! [Flight SQL]: https://arrow.apache.org/docs/format/FlightSql.html
 #![allow(rustdoc::invalid_html_tags)]
+#![warn(missing_docs)]
 
 use arrow_ipc::{convert, writer, writer::EncodedData, writer::IpcWriteOptions};
 use arrow_schema::{ArrowError, Schema};
@@ -52,6 +53,8 @@ type ArrowResult<T> = std::result::Result<T, ArrowError>;
 
 #[allow(clippy::all)]
 mod gen {
+    // Since this file is auto-generated, we suppress all warnings
+    #![allow(missing_docs)]
     include!("arrow.flight.protocol.rs");
 }
 
@@ -125,6 +128,7 @@ use flight_descriptor::DescriptorType;
 
 /// SchemaAsIpc represents a pairing of a `Schema` with IpcWriteOptions
 pub struct SchemaAsIpc<'a> {
+    /// Data type representing a schema and its IPC write options
     pub pair: (&'a Schema, &'a IpcWriteOptions),
 }
 
@@ -684,6 +688,7 @@ impl PollInfo {
 }
 
 impl<'a> SchemaAsIpc<'a> {
+    /// Create a new `SchemaAsIpc` from a `Schema` and `IpcWriteOptions`
     pub fn new(schema: &'a Schema, options: &'a IpcWriteOptions) -> Self {
         SchemaAsIpc {
             pair: (schema, options),

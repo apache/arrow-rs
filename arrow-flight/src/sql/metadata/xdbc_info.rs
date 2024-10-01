@@ -41,24 +41,43 @@ use crate::sql::{CommandGetXdbcTypeInfo, Nullable, Searchable, XdbcDataType, Xdb
 /// Data structure representing type information for xdbc types.
 #[derive(Debug, Clone, Default)]
 pub struct XdbcTypeInfo {
+    /// The name of the type
     pub type_name: String,
+    /// The data type of the type
     pub data_type: XdbcDataType,
+    /// The column size of the type
     pub column_size: Option<i32>,
+    /// The prefix of the type
     pub literal_prefix: Option<String>,
+    /// The suffix of the type
     pub literal_suffix: Option<String>,
+    /// The create parameters of the type
     pub create_params: Option<Vec<String>>,
+    /// The nullability of the type
     pub nullable: Nullable,
+    /// Whether the type is case sensitive
     pub case_sensitive: bool,
+    /// Whether the type is searchable
     pub searchable: Searchable,
+    /// Whether the type is unsigned
     pub unsigned_attribute: Option<bool>,
+    /// Whether the type has fixed precision and scale
     pub fixed_prec_scale: bool,
+    /// Whether the type is auto-incrementing
     pub auto_increment: Option<bool>,
+    /// The local type name of the type
     pub local_type_name: Option<String>,
+    /// The minimum scale of the type
     pub minimum_scale: Option<i32>,
+    /// The maximum scale of the type
     pub maximum_scale: Option<i32>,
+    /// The SQL data type of the type
     pub sql_data_type: XdbcDataType,
+    /// The optional datetime subcode of the type
     pub datetime_subcode: Option<XdbcDatetimeSubcode>,
+    /// The number precision radix of the type
     pub num_prec_radix: Option<i32>,
+    /// The interval precision of the type
     pub interval_precision: Option<i32>,
 }
 
@@ -90,16 +109,6 @@ impl XdbcTypeInfoData {
     /// from [`CommandGetXdbcTypeInfo`]
     pub fn schema(&self) -> SchemaRef {
         self.batch.schema()
-    }
-}
-
-pub struct XdbcTypeInfoDataBuilder {
-    infos: Vec<XdbcTypeInfo>,
-}
-
-impl Default for XdbcTypeInfoDataBuilder {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
@@ -138,6 +147,16 @@ impl Default for XdbcTypeInfoDataBuilder {
 /// // to access the underlying record batch
 /// let batch = info_list.record_batch(None);
 /// ```
+pub struct XdbcTypeInfoDataBuilder {
+    infos: Vec<XdbcTypeInfo>,
+}
+
+impl Default for XdbcTypeInfoDataBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl XdbcTypeInfoDataBuilder {
     /// Create a new instance of [`XdbcTypeInfoDataBuilder`].
     pub fn new() -> Self {

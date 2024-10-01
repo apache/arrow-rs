@@ -22,6 +22,7 @@ use std::default::Default;
 use std::fs::File;
 use std::sync::Arc;
 
+use super::make_test_file_rg;
 use super::{struct_array, Scenario};
 use arrow::compute::kernels::cast_utils::Parser;
 use arrow::datatypes::{
@@ -37,16 +38,17 @@ use arrow_array::{
     TimestampMillisecondArray, TimestampNanosecondArray, TimestampSecondArray, UInt16Array,
     UInt32Array, UInt64Array, UInt8Array,
 };
-use arrow_schema::{DataType, Field, Schema, TimeUnit};
+use arrow_schema::{DataType, Field, Schema, SchemaRef, TimeUnit};
 use half::f16;
 use parquet::arrow::arrow_reader::statistics::StatisticsConverter;
 use parquet::arrow::arrow_reader::{
     ArrowReaderBuilder, ArrowReaderOptions, ParquetRecordBatchReaderBuilder,
 };
 use parquet::arrow::ArrowWriter;
+use parquet::file::metadata::{ColumnChunkMetaData, RowGroupMetaData};
 use parquet::file::properties::{EnabledStatistics, WriterProperties};
-
-use super::make_test_file_rg;
+use parquet::file::statistics::{Statistics, ValueStatistics};
+use parquet::schema::types::{SchemaDescPtr, SchemaDescriptor};
 
 #[derive(Debug, Default, Clone)]
 struct Int64Case {
@@ -2137,6 +2139,65 @@ async fn test_missing_statistics() {
         check: Check::Both,
     }
     .run();
+}
+
+#[test]
+fn missing_null_counts_as_zero() {
+    let min = None;
+    let max = None;
+    let distinct_count = None;
+    let null_count = None; // NB: no null count
+    let is_min_max_deprecated = false;
+    let stats = Statistics::Boolean(ValueStatistics::new(
+        min,
+        max,
+        distinct_count,
+        null_count,
+        is_min_max_deprecated,
+    ));
+    let (arrow_schema, parquet_schema) = bool_arrow_and_parquet_schema();
+
+    let column_chunk = ColumnChunkMetaData::builder(parquet_schema.column(0))
+        .set_statistics(stats)
+        .build()
+        .unwrap();
+    let metadata = RowGroupMetaData::builder(parquet_schema.clone())
+        .set_column_metadata(vec![column_chunk])
+        .build()
+        .unwrap();
+
+    let converter = StatisticsConverter::try_new("b", &arrow_schema, &parquet_schema).unwrap();
+
+    // by default null count should be 0
+    assert_eq!(
+        converter.row_group_null_counts([&metadata]).unwrap(),
+        UInt64Array::from_iter(vec![Some(0)])
+    );
+
+    // if we disable missing null counts as zero flag null count will be None
+    let converter = converter.with_missing_null_counts_as_zero(false);
+    assert_eq!(
+        converter.row_group_null_counts([&metadata]).unwrap(),
+        UInt64Array::from_iter(vec![None])
+    );
+}
+
+/// return an Arrow schema and corresponding Parquet SchemaDescriptor for
+/// a schema with a single boolean column "b"
+fn bool_arrow_and_parquet_schema() -> (SchemaRef, SchemaDescPtr) {
+    let arrow_schema = Arc::new(Schema::new(vec![Field::new("b", DataType::Boolean, true)]));
+    use parquet::schema::types::Type as ParquetType;
+    let parquet_schema = ParquetType::group_type_builder("schema")
+        .with_fields(vec![Arc::new(
+            ParquetType::primitive_type_builder("a", parquet::basic::Type::INT32)
+                .build()
+                .unwrap(),
+        )])
+        .build()
+        .unwrap();
+
+    let parquet_schema = Arc::new(SchemaDescriptor::new(Arc::new(parquet_schema)));
+    (arrow_schema, parquet_schema)
 }
 
 /////// NEGATIVE TESTS ///////
