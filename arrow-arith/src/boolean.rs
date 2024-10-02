@@ -352,6 +352,9 @@ pub fn is_not_null(input: &dyn Array) -> Result<BooleanArray, ArrowError> {
 
 #[cfg(test)]
 mod tests {
+    use arrow_buffer::ScalarBuffer;
+    use arrow_schema::{DataType, Field, UnionFields};
+
     use super::*;
     use std::sync::Arc;
 
@@ -910,5 +913,62 @@ mod tests {
 
         assert_eq!(expected, res);
         assert!(res.nulls().is_none());
+    }
+
+    #[test]
+    fn test_dense_union_is_null() {
+        // union of [{A=1}, {A=}, {B=3.2}, {B=}, {C="a"}, {C=}]
+        let int_array = Int32Array::from(vec![Some(1), None]);
+        let float_array = Float64Array::from(vec![Some(3.2), None]);
+        let str_array = StringArray::from(vec![Some("a"), None]);
+        let type_ids = [0, 0, 1, 1, 2, 2].into_iter().collect::<ScalarBuffer<i8>>();
+        let offsets = [0, 1, 0, 1, 0, 1]
+            .into_iter()
+            .collect::<ScalarBuffer<i32>>();
+
+        let children = vec![
+            Arc::new(int_array) as Arc<dyn Array>,
+            Arc::new(float_array),
+            Arc::new(str_array),
+        ];
+
+        let array = UnionArray::try_new(union_fields(), type_ids, Some(offsets), children).unwrap();
+
+        let result = is_null(&array).unwrap();
+
+        let expected = &BooleanArray::from(vec![false, true, false, true, false, true]);
+        assert_eq!(expected, &result);
+    }
+
+    #[test]
+    fn test_sparse_union_is_null() {
+        // union of [{A=1}, {A=}, {B=3.2}, {B=}, {C="a"}, {C=}]
+        let int_array = Int32Array::from(vec![Some(1), None, None, None, None, None]);
+        let float_array = Float64Array::from(vec![None, None, Some(3.2), None, None, None]);
+        let str_array = StringArray::from(vec![None, None, None, None, Some("a"), None]);
+        let type_ids = [0, 0, 1, 1, 2, 2].into_iter().collect::<ScalarBuffer<i8>>();
+
+        let children = vec![
+            Arc::new(int_array) as Arc<dyn Array>,
+            Arc::new(float_array),
+            Arc::new(str_array),
+        ];
+
+        let array = UnionArray::try_new(union_fields(), type_ids, None, children).unwrap();
+
+        let result = is_null(&array).unwrap();
+
+        let expected = &BooleanArray::from(vec![false, true, false, true, false, true]);
+        assert_eq!(expected, &result);
+    }
+
+    fn union_fields() -> UnionFields {
+        [
+            (0, Arc::new(Field::new("A", DataType::Int32, true))),
+            (1, Arc::new(Field::new("B", DataType::Float64, true))),
+            (2, Arc::new(Field::new("C", DataType::Utf8, true))),
+        ]
+        .into_iter()
+        .collect()
     }
 }

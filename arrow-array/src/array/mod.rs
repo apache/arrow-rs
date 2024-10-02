@@ -189,7 +189,7 @@ pub trait Array: std::fmt::Debug + Send + Sync {
     ///
     /// The physical representation is efficient, but is sometimes non intuitive
     /// for certain array types such as those with nullable child arrays like
-    /// [`DictionaryArray::values`] or [`RunArray::values`], or without a
+    /// [`DictionaryArray::values`], [`RunArray::values`] or [`UnionArray`], or without a
     /// null buffer, such as [`NullArray`].
     ///
     /// To determine if each element of such an array is "logically" null,
@@ -209,6 +209,7 @@ pub trait Array: std::fmt::Debug + Send + Sync {
     /// * [`DictionaryArray`] where [`DictionaryArray::values`] contains nulls
     /// * [`RunArray`] where [`RunArray::values`] contains nulls
     /// * [`NullArray`] where all indices are nulls
+    /// * [`UnionArray`] where the selected values contains nulls
     ///
     /// In these cases a logical [`NullBuffer`] will be computed, encoding the
     /// logical nullability of these arrays, beyond what is encoded in
@@ -221,7 +222,7 @@ pub trait Array: std::fmt::Debug + Send + Sync {
     ///
     /// Note: For performance reasons, this method returns nullability solely as determined by the
     /// null buffer. This difference can lead to surprising results, for example, [`NullArray::is_null`] always
-    /// returns `false` as the array lacks a null buffer. Similarly [`DictionaryArray`] and [`RunArray`] may
+    /// returns `false` as the array lacks a null buffer. Similarly [`DictionaryArray`], [`RunArray`] and [`UnionArray`] may
     /// encode nullability in their children. See [`Self::logical_nulls`] for more information.
     ///
     /// # Example:
