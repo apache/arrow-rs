@@ -1829,6 +1829,9 @@ mod tests {
         writer.close().unwrap();
 
         let json_str = str::from_utf8(&json).unwrap();
-        assert_eq!(json_str, r#"[{"my_dict":"a"},{"my_dict":null},{"my_dict":null}]"#)
+        assert_eq!(
+            json_str,
+            r#"[{"my_dict":"a"},{"my_dict":null},{"my_dict":null}]"#
+        )
     }
 }
