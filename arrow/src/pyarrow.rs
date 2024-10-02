@@ -370,6 +370,10 @@ impl FromPyArrow for RecordBatch {
                 ));
             }
             let options = RecordBatchOptions::default().with_row_count(Some(array_data.len()));
+            // Ensure data is aligned (by potentially copying the buffers).
+            // This is needed because some python code (for example the 
+            // python flight client) produces unaligned buffers
+            // See https://github.com/apache/arrow/issues/43552 for details
             array_data.align_buffers();
             let array = StructArray::from(array_data);
             // StructArray does not embed metadata from schema. We need to override
