@@ -30,42 +30,39 @@
 
 **Implemented enhancements:**
 
-- Make it easier to find / work with `ByteView` [\#6478](https://github.com/apache/arrow-rs/issues/6478)
+- Make it easier to find / work with `ByteView` [\#6478](https://github.com/apache/arrow-rs/issues/6478) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
 - Update lexical-core version due to soundness issues with current version [\#6468](https://github.com/apache/arrow-rs/issues/6468)
 - builder style API for manipulating `ParquetMetaData` [\#6465](https://github.com/apache/arrow-rs/issues/6465) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
-- `ArrayData.align_buffers` should support `Struct` data type / child data [\#6461](https://github.com/apache/arrow-rs/issues/6461)
-- Add a method to return the number of skipped rows in a `RowSelection` [\#6428](https://github.com/apache/arrow-rs/issues/6428)
+- `ArrayData.align_buffers` should support `Struct` data type / child data [\#6461](https://github.com/apache/arrow-rs/issues/6461) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- Add a method to return the number of skipped rows in a `RowSelection` [\#6428](https://github.com/apache/arrow-rs/issues/6428) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
 - Columnar json writer for arrow-json [\#6411](https://github.com/apache/arrow-rs/issues/6411)
 - Reduce integration test matrix [\#6406](https://github.com/apache/arrow-rs/issues/6406)
-- Bump lexical-core to 1.0 [\#6397](https://github.com/apache/arrow-rs/issues/6397)
-- Add union\_extract kernel [\#6386](https://github.com/apache/arrow-rs/issues/6386)
+- Bump lexical-core to 1.0 [\#6397](https://github.com/apache/arrow-rs/issues/6397) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- Add union\_extract kernel [\#6386](https://github.com/apache/arrow-rs/issues/6386) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
 - implement `regexp_is_match_utf8` and `regexp_is_match_utf8_scalar` for `StringViewArray` [\#6370](https://github.com/apache/arrow-rs/issues/6370) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
-- Add support for BinaryView in arrow\_string::length [\#6358](https://github.com/apache/arrow-rs/issues/6358)
+- Add support for BinaryView in arrow\_string::length [\#6358](https://github.com/apache/arrow-rs/issues/6358) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
 - Add `as_union` to `AsArray` [\#6351](https://github.com/apache/arrow-rs/issues/6351)
 - Ability to append non contiguous strings to `StringBuilder` [\#6347](https://github.com/apache/arrow-rs/issues/6347) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
-- There is no way to pass object store client options as environment variables [\#6333](https://github.com/apache/arrow-rs/issues/6333)
-- Add Catalog DB Schema subcommands to `flight_sql_client` [\#6331](https://github.com/apache/arrow-rs/issues/6331)
-- Add support for Utf8View in arrow\_string::length [\#6305](https://github.com/apache/arrow-rs/issues/6305)
-- Reading FIXED\_LEN\_BYTE\_ARRAY columns with nulls is inefficient [\#6296](https://github.com/apache/arrow-rs/issues/6296)
-- Verify 32-bit CRC checksum when decoding parquet pages [\#6289](https://github.com/apache/arrow-rs/issues/6289)
+- Add Catalog DB Schema subcommands to `flight_sql_client` [\#6331](https://github.com/apache/arrow-rs/issues/6331) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] [[arrow-flight](https://github.com/apache/arrow-rs/labels/arrow-flight)]
+- Add support for Utf8View in arrow\_string::length [\#6305](https://github.com/apache/arrow-rs/issues/6305) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- Reading FIXED\_LEN\_BYTE\_ARRAY columns with nulls is inefficient [\#6296](https://github.com/apache/arrow-rs/issues/6296) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
+- Verify 32-bit CRC checksum when decoding parquet pages [\#6289](https://github.com/apache/arrow-rs/issues/6289) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
 
 **Fixed bugs:**
 
-- BitIterator panics when retrieving length [\#6480](https://github.com/apache/arrow-rs/issues/6480)
-- Flight data retrieved via Python client \(wrapping C++\) cannot be used by Rust Arrow [\#6471](https://github.com/apache/arrow-rs/issues/6471)
-- \[object-store\] Requested tokio version is too old - does not compile [\#6458](https://github.com/apache/arrow-rs/issues/6458)
-- CI integration test failing: Archery test With other arrows [\#6448](https://github.com/apache/arrow-rs/issues/6448)
-- IPC not respecting not preserving dict ID [\#6443](https://github.com/apache/arrow-rs/issues/6443)
-- Failing CI: Prost requires Rust 1.71.1 [\#6436](https://github.com/apache/arrow-rs/issues/6436)
-- Invalid struct arrays in IPC data causes panic during read [\#6416](https://github.com/apache/arrow-rs/issues/6416)
-- REE Dicts cannot be encoded/decoded with streaming IPC [\#6398](https://github.com/apache/arrow-rs/issues/6398)
+- BitIterator panics when retrieving length [\#6480](https://github.com/apache/arrow-rs/issues/6480) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- Flight data retrieved via Python client \(wrapping C++\) cannot be used by Rust Arrow [\#6471](https://github.com/apache/arrow-rs/issues/6471) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- CI integration test failing: Archery test With other arrows [\#6448](https://github.com/apache/arrow-rs/issues/6448) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] [[arrow-flight](https://github.com/apache/arrow-rs/labels/arrow-flight)]
+- IPC not respecting not preserving dict ID [\#6443](https://github.com/apache/arrow-rs/issues/6443) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] [[arrow-flight](https://github.com/apache/arrow-rs/labels/arrow-flight)]
+- Failing CI: Prost requires Rust 1.71.1 [\#6436](https://github.com/apache/arrow-rs/issues/6436) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] [[arrow-flight](https://github.com/apache/arrow-rs/labels/arrow-flight)]
+- Invalid struct arrays in IPC data causes panic during read [\#6416](https://github.com/apache/arrow-rs/issues/6416) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- REE Dicts cannot be encoded/decoded with streaming IPC [\#6398](https://github.com/apache/arrow-rs/issues/6398) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
 - Reading json `map` with non-nullable value schema doesn't error if values are actually null [\#6391](https://github.com/apache/arrow-rs/issues/6391)
-- StringViewBuilder with deduplication does not clear observed values [\#6384](https://github.com/apache/arrow-rs/issues/6384)
-- Cast from Decimal\(p, s\) to dictionary-encoded Decimal\(p, s\) loses precision and scale [\#6381](https://github.com/apache/arrow-rs/issues/6381)
+- StringViewBuilder with deduplication does not clear observed values [\#6384](https://github.com/apache/arrow-rs/issues/6384) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- Cast from Decimal\(p, s\) to dictionary-encoded Decimal\(p, s\) loses precision and scale [\#6381](https://github.com/apache/arrow-rs/issues/6381) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
 - LocalFileSystem `list` operation returns objects in wrong order [\#6375](https://github.com/apache/arrow-rs/issues/6375)
-- `compute::binary_mut` returns `Err(PrimitiveArray<T>)` only with certain arrays [\#6374](https://github.com/apache/arrow-rs/issues/6374)
-- Exporting Binary/Utf8View from arrow-rs to pyarrow fails [\#6366](https://github.com/apache/arrow-rs/issues/6366)
-- Azure SAS tokens are visible when retry errors are logged via object\_store [\#6322](https://github.com/apache/arrow-rs/issues/6322)
+- `compute::binary_mut` returns `Err(PrimitiveArray<T>)` only with certain arrays [\#6374](https://github.com/apache/arrow-rs/issues/6374) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- Exporting Binary/Utf8View from arrow-rs to pyarrow fails [\#6366](https://github.com/apache/arrow-rs/issues/6366) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
 - warning: methods `as_any` and `next_batch` are never used in `parquet` crate [\#6143](https://github.com/apache/arrow-rs/issues/6143) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
 
 **Documentation updates:**
@@ -75,7 +72,7 @@
 
 **Closed issues:**
 
-- Primitive `binary`/`unary` are not as fast as they could be [\#6364](https://github.com/apache/arrow-rs/issues/6364)
+- Primitive `binary`/`unary` are not as fast as they could be [\#6364](https://github.com/apache/arrow-rs/issues/6364) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
 - Different numeric type may be able to compare [\#6357](https://github.com/apache/arrow-rs/issues/6357)
 
 **Merged pull requests:**
