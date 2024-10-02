@@ -183,6 +183,7 @@ impl ByteArray {
         )
     }
 
+    /// Try to convert the byte array to a utf8 slice
     pub fn as_utf8(&self) -> Result<&str> {
         self.data
             .as_ref()
@@ -349,20 +350,29 @@ impl From<FixedLenByteArray> for ByteArray {
 pub enum Decimal {
     /// Decimal backed by `i32`.
     Int32 {
+        /// The underlying value
         value: [u8; 4],
+        /// The total number of digits in the number
         precision: i32,
+        /// The number of digits to the right of the decimal point
         scale: i32,
     },
     /// Decimal backed by `i64`.
     Int64 {
+        /// The underlying value
         value: [u8; 8],
+        /// The total number of digits in the number
         precision: i32,
+        /// The number of digits to the right of the decimal point
         scale: i32,
     },
     /// Decimal backed by byte array.
     Bytes {
+        /// The underlying value
         value: ByteArray,
+        /// The total number of digits in the number
         precision: i32,
+        /// The number of digits to the right of the decimal point
         scale: i32,
     },
 }
@@ -1120,6 +1130,7 @@ pub(crate) mod private {
 /// Contains the Parquet physical type information as well as the Rust primitive type
 /// presentation.
 pub trait DataType: 'static + Send {
+    /// The physical type of the Parquet data type.
     type T: private::ParquetValueType;
 
     /// Returns Parquet physical type.
@@ -1130,20 +1141,24 @@ pub trait DataType: 'static + Send {
     /// Returns size in bytes for Rust representation of the physical type.
     fn get_type_size() -> usize;
 
+    /// Returns the underlying [`ColumnReaderImpl`] for the given [`ColumnReader`].
     fn get_column_reader(column_writer: ColumnReader) -> Option<ColumnReaderImpl<Self>>
     where
         Self: Sized;
 
+    /// Returns the underlying [`ColumnWriterImpl`] for the given [`ColumnWriter`].
     fn get_column_writer(column_writer: ColumnWriter<'_>) -> Option<ColumnWriterImpl<'_, Self>>
     where
         Self: Sized;
 
+    /// Returns a reference to the underlying [`ColumnWriterImpl`] for the given [`ColumnWriter`].
     fn get_column_writer_ref<'a, 'b: 'a>(
         column_writer: &'b ColumnWriter<'a>,
     ) -> Option<&'b ColumnWriterImpl<'a, Self>>
     where
         Self: Sized;
 
+    /// Returns a mutable reference to the underlying [`ColumnWriterImpl`] for the given
     fn get_column_writer_mut<'a, 'b: 'a>(
         column_writer: &'a mut ColumnWriter<'b>,
     ) -> Option<&'a mut ColumnWriterImpl<'b, Self>>
@@ -1152,12 +1167,18 @@ pub trait DataType: 'static + Send {
 }
 
 // Workaround bug in specialization
+#[deprecated(
+    since = "54.0.0",
+    note = "Seems like a stray and nobody knows what's it for. Will be removed in 55.0.0"
+)]
+#[allow(missing_docs)]
 pub trait SliceAsBytesDataType: DataType
 where
     Self::T: SliceAsBytes,
 {
 }
 
+#[allow(deprecated)]
 impl<T> SliceAsBytesDataType for T
 where
     T: DataType,
@@ -1167,6 +1188,7 @@ where
 
 macro_rules! make_type {
     ($name:ident, $reader_ident: ident, $writer_ident: ident, $native_ty:ty, $size:expr) => {
+        #[doc = concat!("Parquet physical type: ", stringify!($name))]
         #[derive(Clone)]
         pub struct $name {}
 

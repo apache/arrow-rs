@@ -45,15 +45,24 @@ pub type ColumnDescPtr = Arc<ColumnDescriptor>;
 /// repetition is `None`.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Type {
+    /// Represents a primitive leaf field.
     PrimitiveType {
+        /// Basic information about the type.
         basic_info: BasicTypeInfo,
+        /// Physical type of this primitive type.
         physical_type: PhysicalType,
+        /// Length of this type.
         type_length: i32,
+        /// Scale of this type.
         scale: i32,
+        /// Precision of this type.
         precision: i32,
     },
+    /// Represents a group of fields (similar to struct).
     GroupType {
+        /// Basic information about the type.
         basic_info: BasicTypeInfo,
+        /// Fields of this group type.
         fields: Vec<TypePtr>,
     },
 }
@@ -745,6 +754,7 @@ impl ColumnPath {
         self.parts.append(&mut tail);
     }
 
+    /// Returns a slice of path components.
     pub fn parts(&self) -> &[String] {
         &self.parts
     }
@@ -1033,6 +1043,7 @@ impl SchemaDescriptor {
         self.schema.as_ref()
     }
 
+    /// Returns schema as [`TypePtr`] for cheap cloning.
     pub fn root_schema_ptr(&self) -> TypePtr {
         self.schema.clone()
     }

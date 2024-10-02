@@ -322,6 +322,7 @@ impl<W: Write + Send> SerializedFileWriter<W> {
         }
     }
 
+    /// Add a [`KeyValue`] to the file writer's metadata
     pub fn append_key_value_metadata(&mut self, kv_metadata: KeyValue) {
         self.kv_metadatas.push(kv_metadata);
     }

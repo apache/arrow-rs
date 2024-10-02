@@ -286,6 +286,7 @@ impl<'a, W: Write> ParquetMetaDataWriter<'a, W> {
         Self { buf, metadata }
     }
 
+    /// Write the metadata to the buffer
     pub fn finish(mut self) -> Result<()> {
         let file_metadata = self.metadata.file_metadata();
 

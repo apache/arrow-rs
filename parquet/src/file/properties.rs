@@ -64,7 +64,9 @@ pub const DEFAULT_STATISTICS_TRUNCATE_LENGTH: Option<usize> = None;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[allow(non_camel_case_types)]
 pub enum WriterVersion {
+    /// Parquet format version 1.0
     PARQUET_1_0,
+    /// Parquet format version 2.0
     PARQUET_2_0,
 }
 

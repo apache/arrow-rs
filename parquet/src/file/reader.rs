@@ -61,7 +61,7 @@ pub trait Length {
 /// User provided implementations can implement more sophisticated behaviors
 /// such as on-demand buffering or scan sharing.
 pub trait ChunkReader: Length + Send + Sync {
-    /// The concrete type of readers returned by this trait
+    /// The concrete type of reader returned by this trait
     type T: Read;
 
     /// Get a [`Read`] instance starting at the provided file offset
