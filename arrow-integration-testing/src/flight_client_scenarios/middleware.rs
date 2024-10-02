@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! Scenario for testing middleware.
+
 use arrow_flight::{
     flight_descriptor::DescriptorType, flight_service_client::FlightServiceClient, FlightDescriptor,
 };
@@ -24,6 +26,7 @@ use tonic::{Request, Status};
 type Error = Box<dyn std::error::Error + Send + Sync + 'static>;
 type Result<T = (), E = Error> = std::result::Result<T, E>;
 
+/// Run a scenario that tests middleware.
 pub async fn run_scenario(host: &str, port: u16) -> Result {
     let url = format!("http://{host}:{port}");
     let conn = tonic::transport::Endpoint::new(url)?.connect().await?;

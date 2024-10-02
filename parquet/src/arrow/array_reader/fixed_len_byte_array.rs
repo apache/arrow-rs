@@ -36,6 +36,7 @@ use arrow_schema::{DataType as ArrowType, IntervalUnit};
 use bytes::Bytes;
 use half::f16;
 use std::any::Any;
+use std::ops::Range;
 use std::sync::Arc;
 
 /// Returns an [`ArrayReader`] that decodes the provided fixed length byte array column
@@ -233,6 +234,29 @@ struct FixedLenByteArrayBuffer {
     byte_length: Option<usize>,
 }
 
+#[inline]
+fn move_values<F>(
+    buffer: &mut Vec<u8>,
+    byte_length: usize,
+    values_range: Range<usize>,
+    valid_mask: &[u8],
+    mut op: F,
+) where
+    F: FnMut(&mut Vec<u8>, usize, usize, usize),
+{
+    for (value_pos, level_pos) in values_range.rev().zip(iter_set_bits_rev(valid_mask)) {
+        debug_assert!(level_pos >= value_pos);
+        if level_pos <= value_pos {
+            break;
+        }
+
+        let level_pos_bytes = level_pos * byte_length;
+        let value_pos_bytes = value_pos * byte_length;
+
+        op(buffer, level_pos_bytes, value_pos_bytes, byte_length)
+    }
+}
+
 impl ValuesBuffer for FixedLenByteArrayBuffer {
     fn pad_nulls(
         &mut self,
@@ -248,18 +272,26 @@ impl ValuesBuffer for FixedLenByteArrayBuffer {
             .resize((read_offset + levels_read) * byte_length, 0);
 
         let values_range = read_offset..read_offset + values_read;
-        for (value_pos, level_pos) in values_range.rev().zip(iter_set_bits_rev(valid_mask)) {
-            debug_assert!(level_pos >= value_pos);
-            if level_pos <= value_pos {
-                break;
-            }
-
-            let level_pos_bytes = level_pos * byte_length;
-            let value_pos_bytes = value_pos * byte_length;
-
-            for i in 0..byte_length {
-                self.buffer[level_pos_bytes + i] = self.buffer[value_pos_bytes + i]
-            }
+        // Move the bytes from value_pos to level_pos. For values of `byte_length` <= 4,
+        // the simple loop is preferred as the compiler can eliminate the loop via unrolling.
+        // For `byte_length > 4`, we instead copy from non-overlapping slices. This allows
+        // the loop to be vectorized, yielding much better performance.
+        const VEC_CUTOFF: usize = 4;
+        if byte_length > VEC_CUTOFF {
+            let op = |buffer: &mut Vec<u8>, level_pos_bytes, value_pos_bytes, byte_length| {
+                let split = buffer.split_at_mut(level_pos_bytes);
+                let dst = &mut split.1[..byte_length];
+                let src = &split.0[value_pos_bytes..value_pos_bytes + byte_length];
+                dst.copy_from_slice(src);
+            };
+            move_values(&mut self.buffer, byte_length, values_range, valid_mask, op);
+        } else {
+            let op = |buffer: &mut Vec<u8>, level_pos_bytes, value_pos_bytes, byte_length| {
+                for i in 0..byte_length {
+                    buffer[level_pos_bytes + i] = buffer[value_pos_bytes + i]
+                }
+            };
+            move_values(&mut self.buffer, byte_length, values_range, valid_mask, op);
         }
     }
 }

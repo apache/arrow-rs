@@ -65,7 +65,6 @@ const USER_DEFINED_METADATA_HEADER_PREFIX: &str = "x-amz-meta-";
 
 /// A specialized `Error` for object store-related errors
 #[derive(Debug, Snafu)]
-#[allow(missing_docs)]
 pub(crate) enum Error {
     #[snafu(display("Error performing DeleteObjects request: {}", source))]
     DeleteObjectsRequest { source: crate::client::retry::Error },

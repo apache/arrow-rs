@@ -133,6 +133,7 @@ pub fn schema_to_fb(schema: &Schema) -> FlatBufferBuilder<'_> {
     IpcSchemaEncoder::new().schema_to_fb(schema)
 }
 
+/// Push a key-value metadata into a FlatBufferBuilder and return [WIPOffset]
 pub fn metadata_to_fb<'a>(
     fbb: &mut FlatBufferBuilder<'a>,
     metadata: &HashMap<String, String>,
@@ -152,7 +153,7 @@ pub fn metadata_to_fb<'a>(
     fbb.create_vector(&custom_metadata)
 }
 
-#[deprecated(since = "54.0.0", note = "Use `IpcSchemaConverter`.")]
+/// Adds a [Schema] to a flatbuffer and returns the offset
 pub fn schema_to_fb_offset<'a>(
     fbb: &mut FlatBufferBuilder<'a>,
     schema: &Schema,

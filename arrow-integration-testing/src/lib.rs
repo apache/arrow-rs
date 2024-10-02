@@ -17,6 +17,7 @@
 
 //! Common code used in the integration test binaries
 
+#![warn(missing_docs)]
 use serde_json::Value;
 
 use arrow::array::{Array, StructArray};
@@ -42,7 +43,9 @@ pub const AUTH_PASSWORD: &str = "flight";
 pub mod flight_client_scenarios;
 pub mod flight_server_scenarios;
 
+/// An Arrow file in JSON format
 pub struct ArrowFile {
+    /// The schema of the file
     pub schema: Schema,
     // we can evolve this into a concrete Arrow type
     // this is temporarily not being read from
@@ -51,12 +54,14 @@ pub struct ArrowFile {
 }
 
 impl ArrowFile {
+    /// Read a single [RecordBatch] from the file
     pub fn read_batch(&self, batch_num: usize) -> Result<RecordBatch> {
         let b = self.arrow_json["batches"].get(batch_num).unwrap();
         let json_batch: ArrowJsonBatch = serde_json::from_value(b.clone()).unwrap();
         record_batch_from_json(&self.schema, json_batch, Some(&self.dictionaries))
     }
 
+    /// Read all [RecordBatch]es from the file
     pub fn read_batches(&self) -> Result<Vec<RecordBatch>> {
         self.arrow_json["batches"]
             .as_array()
@@ -70,7 +75,7 @@ impl ArrowFile {
     }
 }
 
-// Canonicalize the names of map fields in a schema
+/// Canonicalize the names of map fields in a schema
 pub fn canonicalize_schema(schema: &Schema) -> Schema {
     let fields = schema
         .fields()
@@ -107,6 +112,7 @@ pub fn canonicalize_schema(schema: &Schema) -> Schema {
     Schema::new(fields).with_metadata(schema.metadata().clone())
 }
 
+/// Read an Arrow file in JSON format
 pub fn open_json_file(json_name: &str) -> Result<ArrowFile> {
     let json_file = File::open(json_name)?;
     let reader = BufReader::new(json_file);
@@ -157,10 +163,7 @@ pub fn read_gzip_json(version: &str, path: &str) -> ArrowJson {
     arrow_json
 }
 
-//
-// C Data Integration entrypoints
-//
-
+/// C Data Integration entrypoint to export the schema from a JSON file
 fn cdata_integration_export_schema_from_json(
     c_json_name: *const i8,
     out: *mut FFI_ArrowSchema,
@@ -173,6 +176,7 @@ fn cdata_integration_export_schema_from_json(
     Ok(())
 }
 
+/// C Data Integration entrypoint to export a batch from a JSON file
 fn cdata_integration_export_batch_from_json(
     c_json_name: *const i8,
     batch_num: c_int,
@@ -263,6 +267,7 @@ pub unsafe extern "C" fn arrow_rs_free_error(c_error: *mut i8) {
     }
 }
 
+/// A C-ABI for exporting an Arrow schema from a JSON file
 #[no_mangle]
 pub extern "C" fn arrow_rs_cdata_integration_export_schema_from_json(
     c_json_name: *const i8,
@@ -272,6 +277,7 @@ pub extern "C" fn arrow_rs_cdata_integration_export_schema_from_json(
     result_to_c_error(&r)
 }
 
+/// A C-ABI to compare an Arrow schema against a JSON file
 #[no_mangle]
 pub extern "C" fn arrow_rs_cdata_integration_import_schema_and_compare_to_json(
     c_json_name: *const i8,
@@ -281,6 +287,7 @@ pub extern "C" fn arrow_rs_cdata_integration_import_schema_and_compare_to_json(
     result_to_c_error(&r)
 }
 
+/// A C-ABI for exporting a RecordBatch from a JSON file
 #[no_mangle]
 pub extern "C" fn arrow_rs_cdata_integration_export_batch_from_json(
     c_json_name: *const i8,
@@ -291,6 +298,7 @@ pub extern "C" fn arrow_rs_cdata_integration_export_batch_from_json(
     result_to_c_error(&r)
 }
 
+/// A C-ABI to compare a RecordBatch against a JSON file
 #[no_mangle]
 pub extern "C" fn arrow_rs_cdata_integration_import_batch_and_compare_to_json(
     c_json_name: *const i8,

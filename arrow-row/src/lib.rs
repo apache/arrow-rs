@@ -1492,10 +1492,7 @@ mod tests {
 
         let converter = RowConverter::new(vec![SortField::new_with_options(
             DataType::Boolean,
-            SortOptions {
-                descending: true,
-                nulls_first: false,
-            },
+            SortOptions::default().desc().with_nulls_first(false),
         )])
         .unwrap();
 
@@ -1613,10 +1610,7 @@ mod tests {
 
         let converter = RowConverter::new(vec![SortField::new_with_options(
             DataType::Binary,
-            SortOptions {
-                descending: true,
-                nulls_first: false,
-            },
+            SortOptions::default().desc().with_nulls_first(false),
         )])
         .unwrap();
         let rows = converter.convert_columns(&[Arc::clone(&col)]).unwrap();
@@ -1695,10 +1689,7 @@ mod tests {
 
         let converter = RowConverter::new(vec![SortField::new_with_options(
             a.data_type().clone(),
-            SortOptions {
-                descending: true,
-                nulls_first: false,
-            },
+            SortOptions::default().desc().with_nulls_first(false),
         )])
         .unwrap();
 
@@ -1713,10 +1704,7 @@ mod tests {
 
         let converter = RowConverter::new(vec![SortField::new_with_options(
             a.data_type().clone(),
-            SortOptions {
-                descending: true,
-                nulls_first: true,
-            },
+            SortOptions::default().desc().with_nulls_first(true),
         )])
         .unwrap();
 
@@ -1889,10 +1877,7 @@ mod tests {
         back[0].to_data().validate_full().unwrap();
         assert_eq!(&back[0], &list);
 
-        let options = SortOptions {
-            descending: false,
-            nulls_first: false,
-        };
+        let options = SortOptions::default().asc().with_nulls_first(false);
         let field = SortField::new_with_options(d.clone(), options);
         let converter = RowConverter::new(vec![field]).unwrap();
         let rows = converter.convert_columns(&[Arc::clone(&list)]).unwrap();
@@ -1909,10 +1894,7 @@ mod tests {
         back[0].to_data().validate_full().unwrap();
         assert_eq!(&back[0], &list);
 
-        let options = SortOptions {
-            descending: true,
-            nulls_first: false,
-        };
+        let options = SortOptions::default().desc().with_nulls_first(false);
         let field = SortField::new_with_options(d.clone(), options);
         let converter = RowConverter::new(vec![field]).unwrap();
         let rows = converter.convert_columns(&[Arc::clone(&list)]).unwrap();
@@ -1929,10 +1911,7 @@ mod tests {
         back[0].to_data().validate_full().unwrap();
         assert_eq!(&back[0], &list);
 
-        let options = SortOptions {
-            descending: true,
-            nulls_first: true,
-        };
+        let options = SortOptions::default().desc().with_nulls_first(true);
         let field = SortField::new_with_options(d, options);
         let converter = RowConverter::new(vec![field]).unwrap();
         let rows = converter.convert_columns(&[Arc::clone(&list)]).unwrap();
@@ -1992,10 +1971,7 @@ mod tests {
         //   null
         //   [[1, 2]]
         // ]
-        let options = SortOptions {
-            descending: false,
-            nulls_first: true,
-        };
+        let options = SortOptions::default().asc().with_nulls_first(true);
         let field = SortField::new_with_options(d.clone(), options);
         let converter = RowConverter::new(vec![field]).unwrap();
         let rows = converter.convert_columns(&[Arc::clone(&list)]).unwrap();
@@ -2011,10 +1987,7 @@ mod tests {
         back[0].to_data().validate_full().unwrap();
         assert_eq!(&back[0], &list);
 
-        let options = SortOptions {
-            descending: true,
-            nulls_first: true,
-        };
+        let options = SortOptions::default().desc().with_nulls_first(true);
         let field = SortField::new_with_options(d.clone(), options);
         let converter = RowConverter::new(vec![field]).unwrap();
         let rows = converter.convert_columns(&[Arc::clone(&list)]).unwrap();
@@ -2030,10 +2003,7 @@ mod tests {
         back[0].to_data().validate_full().unwrap();
         assert_eq!(&back[0], &list);
 
-        let options = SortOptions {
-            descending: true,
-            nulls_first: false,
-        };
+        let options = SortOptions::default().desc().with_nulls_first(false);
         let field = SortField::new_with_options(d, options);
         let converter = RowConverter::new(vec![field]).unwrap();
         let rows = converter.convert_columns(&[Arc::clone(&list)]).unwrap();

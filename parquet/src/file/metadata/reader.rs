@@ -201,6 +201,7 @@ impl ParquetMetaDataReader {
             // need for more data. This is not it's intended use. The plan is to add a NeedMoreData
             // value to the enum, but this would be a breaking change. This will be done as
             // 54.0.0 draws nearer.
+            // https://github.com/apache/arrow-rs/issues/6447
             Err(ParquetError::IndexOutOfBound(needed, _)) => {
                 // If reader is the same length as `file_size` then presumably there is no more to
                 // read, so return an EOF error.
@@ -247,13 +248,18 @@ impl ParquetMetaDataReader {
             ));
         }
 
-        // TODO(ets): what is the correct behavior for missing page indexes? MetadataLoader would
-        // leave them as `None`, while the parser in `index_reader::read_columns_indexes` returns a
-        // vector of empty vectors.
-        // I think it's best to leave them as `None`.
+        // FIXME: there are differing implementations in the case where page indexes are missing
+        // from the file. `MetadataLoader` will leave them as `None`, while the parser in
+        // `index_reader::read_columns_indexes` returns a vector of empty vectors.
+        // It is best for this function to replicate the latter behavior for now, but in a future
+        // breaking release, the two paths to retrieve metadata should be made consistent. Note that this is only
+        // an issue if the user requested page indexes, so there is no need to provide empty
+        // vectors in `try_parse_sized()`.
+        // https://github.com/apache/arrow-rs/issues/6447
 
         // Get bounds needed for page indexes (if any are present in the file).
         let Some(range) = self.range_for_page_index() else {
+            self.empty_page_indexes();
             return Ok(());
         };
 
@@ -323,13 +329,18 @@ impl ParquetMetaDataReader {
             return Ok(());
         }
 
-        self.load_page_index(fetch, remainder).await
+        self.load_page_index_with_remainder(fetch, remainder).await
     }
 
     /// Asynchronously fetch the page index structures when a [`ParquetMetaData`] has already
     /// been obtained. See [`Self::new_with_metadata()`].
     #[cfg(feature = "async")]
-    pub async fn load_page_index<F: MetadataFetch>(
+    pub async fn load_page_index<F: MetadataFetch>(&mut self, fetch: F) -> Result<()> {
+        self.load_page_index_with_remainder(fetch, None).await
+    }
+
+    #[cfg(feature = "async")]
+    async fn load_page_index_with_remainder<F: MetadataFetch>(
         &mut self,
         mut fetch: F,
         remainder: Option<(usize, Bytes)>,
@@ -410,6 +421,20 @@ impl ParquetMetaDataReader {
             metadata.set_offset_index(Some(index));
         }
         Ok(())
+    }
+
+    /// Set the column_index and offset_indexes to empty `Vec` for backwards compatibility
+    ///
+    /// See <https://github.com/apache/arrow-rs/pull/6451>  for details
+    fn empty_page_indexes(&mut self) {
+        let metadata = self.metadata.as_mut().unwrap();
+        let num_row_groups = metadata.num_row_groups();
+        if self.column_index {
+            metadata.set_column_index(Some(vec![vec![]; num_row_groups]));
+        }
+        if self.offset_index {
+            metadata.set_offset_index(Some(vec![vec![]; num_row_groups]));
+        }
     }
 
     fn range_for_page_index(&self) -> Option<Range<usize>> {
@@ -618,15 +643,6 @@ impl ParquetMetaDataReader {
 mod tests {
     use super::*;
     use bytes::Bytes;
-    #[cfg(feature = "async")]
-    use futures::future::BoxFuture;
-    #[cfg(feature = "async")]
-    use futures::FutureExt;
-    use std::fs::File;
-    #[cfg(feature = "async")]
-    use std::future::Future;
-    use std::io::{Read, Seek, SeekFrom};
-    use std::sync::atomic::{AtomicUsize, Ordering};
 
     use crate::basic::SortOrder;
     use crate::basic::Type;
@@ -804,11 +820,27 @@ mod tests {
             "EOF: Parquet file too small. Size is 1728 but need 1729"
         );
     }
+}
 
-    #[cfg(feature = "async")]
+#[cfg(feature = "async")]
+#[cfg(test)]
+mod async_tests {
+    use super::*;
+    use bytes::Bytes;
+    use futures::future::BoxFuture;
+    use futures::FutureExt;
+    use std::fs::File;
+    use std::future::Future;
+    use std::io::{Read, Seek, SeekFrom};
+    use std::ops::Range;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use crate::arrow::async_reader::MetadataFetch;
+    use crate::file::reader::Length;
+    use crate::util::test_common::file_util::get_test_file;
+
     struct MetadataFetchFn<F>(F);
 
-    #[cfg(feature = "async")]
     impl<F, Fut> MetadataFetch for MetadataFetchFn<F>
     where
         F: FnMut(Range<usize>) -> Fut + Send,
@@ -819,7 +851,6 @@ mod tests {
         }
     }
 
-    #[cfg(feature = "async")]
     fn read_range(file: &mut File, range: Range<usize>) -> Result<Bytes> {
         file.seek(SeekFrom::Start(range.start as _))?;
         let len = range.end - range.start;
@@ -828,7 +859,6 @@ mod tests {
         Ok(buf.into())
     }
 
-    #[cfg(feature = "async")]
     #[tokio::test]
     async fn test_simple() {
         let mut file = get_test_file("nulls.snappy.parquet");
@@ -914,7 +944,6 @@ mod tests {
         assert_eq!(err, "Parquet error: Invalid Parquet file. Corrupt footer");
     }
 
-    #[cfg(feature = "async")]
     #[tokio::test]
     async fn test_page_index() {
         let mut file = get_test_file("alltypes_tiny_pages.parquet");

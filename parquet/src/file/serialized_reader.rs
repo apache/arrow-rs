@@ -30,7 +30,6 @@ use crate::errors::{ParquetError, Result};
 use crate::file::page_index::index_reader;
 use crate::file::page_index::offset_index::OffsetIndexMetaData;
 use crate::file::{
-    footer,
     metadata::*,
     properties::{ReaderProperties, ReaderPropertiesPtr},
     reader::*,
@@ -180,7 +179,7 @@ impl<R: 'static + ChunkReader> SerializedFileReader<R> {
     /// Creates file reader from a Parquet file.
     /// Returns error if Parquet file does not exist or is corrupt.
     pub fn new(chunk_reader: R) -> Result<Self> {
-        let metadata = footer::parse_metadata(&chunk_reader)?;
+        let metadata = ParquetMetaDataReader::new().parse_and_finish(&chunk_reader)?;
         let props = Arc::new(ReaderProperties::builder().build());
         Ok(Self {
             chunk_reader: Arc::new(chunk_reader),
@@ -192,11 +191,13 @@ impl<R: 'static + ChunkReader> SerializedFileReader<R> {
     /// Creates file reader from a Parquet file with read options.
     /// Returns error if Parquet file does not exist or is corrupt.
     pub fn new_with_options(chunk_reader: R, options: ReadOptions) -> Result<Self> {
-        let metadata = footer::parse_metadata(&chunk_reader)?;
+        let mut metadata_builder = ParquetMetaDataReader::new()
+            .parse_and_finish(&chunk_reader)?
+            .into_builder();
         let mut predicates = options.predicates;
-        let row_groups = metadata.row_groups().to_vec();
-        let mut filtered_row_groups = Vec::<RowGroupMetaData>::new();
-        for (i, rg_meta) in row_groups.into_iter().enumerate() {
+
+        // Filter row groups based on the predicates
+        for (i, rg_meta) in metadata_builder.take_row_groups().into_iter().enumerate() {
             let mut keep = true;
             for predicate in &mut predicates {
                 if !predicate(&rg_meta, i) {
@@ -205,7 +206,7 @@ impl<R: 'static + ChunkReader> SerializedFileReader<R> {
                 }
             }
             if keep {
-                filtered_row_groups.push(rg_meta);
+                metadata_builder = metadata_builder.add_row_group(rg_meta);
             }
         }
 
@@ -213,33 +214,22 @@ impl<R: 'static + ChunkReader> SerializedFileReader<R> {
             let mut columns_indexes = vec![];
             let mut offset_indexes = vec![];
 
-            for rg in &mut filtered_row_groups {
+            for rg in metadata_builder.row_groups().iter() {
                 let column_index = index_reader::read_columns_indexes(&chunk_reader, rg.columns())?;
                 let offset_index = index_reader::read_offset_indexes(&chunk_reader, rg.columns())?;
                 columns_indexes.push(column_index);
                 offset_indexes.push(offset_index);
             }
-
-            Ok(Self {
-                chunk_reader: Arc::new(chunk_reader),
-                metadata: Arc::new(ParquetMetaData::new_with_page_index(
-                    metadata.file_metadata().clone(),
-                    filtered_row_groups,
-                    Some(columns_indexes),
-                    Some(offset_indexes),
-                )),
-                props: Arc::new(options.props),
-            })
-        } else {
-            Ok(Self {
-                chunk_reader: Arc::new(chunk_reader),
-                metadata: Arc::new(ParquetMetaData::new(
-                    metadata.file_metadata().clone(),
-                    filtered_row_groups,
-                )),
-                props: Arc::new(options.props),
-            })
+            metadata_builder = metadata_builder
+                .set_column_index(Some(columns_indexes))
+                .set_offset_index(Some(offset_indexes));
         }
+
+        Ok(Self {
+            chunk_reader: Arc::new(chunk_reader),
+            metadata: Arc::new(metadata_builder.build()),
+            props: Arc::new(options.props),
+        })
     }
 }
 
@@ -391,6 +381,15 @@ pub(crate) fn decode_page(
     physical_type: Type,
     decompressor: Option<&mut Box<dyn Codec>>,
 ) -> Result<Page> {
+    // Verify the 32-bit CRC checksum of the page
+    #[cfg(feature = "crc")]
+    if let Some(expected_crc) = page_header.crc {
+        let crc = crc32fast::hash(&buffer);
+        if crc != expected_crc as u32 {
+            return Err(general_err!("Page CRC checksum mismatch"));
+        }
+    }
+
     // When processing data page v2, depending on enabled compression for the
     // page, we should account for uncompressed data ('offset') of
     // repetition and definition levels.

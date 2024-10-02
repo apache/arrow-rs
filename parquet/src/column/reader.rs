@@ -34,13 +34,21 @@ pub(crate) mod decoder;
 
 /// Column reader for a Parquet type.
 pub enum ColumnReader {
+    /// Column reader for boolean type
     BoolColumnReader(ColumnReaderImpl<BoolType>),
+    /// Column reader for int32 type
     Int32ColumnReader(ColumnReaderImpl<Int32Type>),
+    /// Column reader for int64 type
     Int64ColumnReader(ColumnReaderImpl<Int64Type>),
+    /// Column reader for int96 type
     Int96ColumnReader(ColumnReaderImpl<Int96Type>),
+    /// Column reader for float type
     FloatColumnReader(ColumnReaderImpl<FloatType>),
+    /// Column reader for double type
     DoubleColumnReader(ColumnReaderImpl<DoubleType>),
+    /// Column reader for byte array type
     ByteArrayColumnReader(ColumnReaderImpl<ByteArrayType>),
+    /// Column reader for fixed length byte array type
     FixedLenByteArrayColumnReader(ColumnReaderImpl<FixedLenByteArrayType>),
 }
 

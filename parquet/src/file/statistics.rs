@@ -81,9 +81,10 @@ pub(crate) mod private {
     gen_make_statistics!(FixedLenByteArray, FixedLenByteArray);
 }
 
-// Macro to generate methods create Statistics.
+/// Macro to generate methods to create Statistics.
 macro_rules! statistics_new_func {
     ($func:ident, $vtype:ty, $stat:ident) => {
+        #[doc = concat!("Creates new statistics for `", stringify!($stat), "` column type.")]
         pub fn $func(
             min: $vtype,
             max: $vtype,
@@ -244,24 +245,25 @@ pub fn from_thrift(
     })
 }
 
-// Convert Statistics into Thrift definition.
+/// Convert Statistics into Thrift definition.
 pub fn to_thrift(stats: Option<&Statistics>) -> Option<TStatistics> {
     let stats = stats?;
 
-    // record null counts if greater than zero.
-    //
-    // TODO: This should be Some(0) if there are no nulls.
-    // see https://github.com/apache/arrow-rs/pull/6216/files
+    // record null count if it can fit in i64
     let null_count = stats
         .null_count_opt()
-        .map(|value| value as i64)
-        .filter(|&x| x > 0);
+        .and_then(|value| i64::try_from(value).ok());
+
+    // record distinct count if it can fit in i64
+    let distinct_count = stats
+        .distinct_count_opt()
+        .and_then(|value| i64::try_from(value).ok());
 
     let mut thrift_stats = TStatistics {
         max: None,
         min: None,
         null_count,
-        distinct_count: stats.distinct_count_opt().map(|value| value as i64),
+        distinct_count,
         max_value: None,
         min_value: None,
         is_max_value_exact: None,
@@ -305,13 +307,21 @@ pub fn to_thrift(stats: Option<&Statistics>) -> Option<TStatistics> {
 /// [NativeIndex]: crate::file::page_index::index::NativeIndex
 #[derive(Debug, Clone, PartialEq)]
 pub enum Statistics {
+    /// Statistics for Boolean column
     Boolean(ValueStatistics<bool>),
+    /// Statistics for Int32 column
     Int32(ValueStatistics<i32>),
+    /// Statistics for Int64 column
     Int64(ValueStatistics<i64>),
+    /// Statistics for Int96 column
     Int96(ValueStatistics<Int96>),
+    /// Statistics for Float column
     Float(ValueStatistics<f32>),
+    /// Statistics for Double column
     Double(ValueStatistics<f64>),
+    /// Statistics for ByteArray column
     ByteArray(ValueStatistics<ByteArray>),
+    /// Statistics for FixedLenByteArray column
     FixedLenByteArray(ValueStatistics<FixedLenByteArray>),
 }
 
@@ -322,6 +332,7 @@ impl<T: ParquetValueType> From<ValueStatistics<T>> for Statistics {
 }
 
 impl Statistics {
+    /// Creates new statistics for a column type
     pub fn new<T: ParquetValueType>(
         min: Option<T>,
         max: Option<T>,
@@ -1051,5 +1062,93 @@ mod tests {
             Some(7),
             true,
         ));
+    }
+
+    #[test]
+    fn test_count_encoding() {
+        statistics_count_test(None, None);
+        statistics_count_test(Some(0), Some(0));
+        statistics_count_test(Some(100), Some(2000));
+        statistics_count_test(Some(1), None);
+        statistics_count_test(None, Some(1));
+    }
+
+    #[test]
+    fn test_count_encoding_distinct_too_large() {
+        // statistics are stored using i64, so test trying to store larger values
+        let statistics = make_bool_stats(Some(u64::MAX), Some(100));
+        let thrift_stats = to_thrift(Some(&statistics)).unwrap();
+        assert_eq!(thrift_stats.distinct_count, None); // can't store u64 max --> null
+        assert_eq!(thrift_stats.null_count, Some(100));
+    }
+
+    #[test]
+    fn test_count_encoding_null_too_large() {
+        // statistics are stored using i64, so test trying to store larger values
+        let statistics = make_bool_stats(Some(100), Some(u64::MAX));
+        let thrift_stats = to_thrift(Some(&statistics)).unwrap();
+        assert_eq!(thrift_stats.distinct_count, Some(100));
+        assert_eq!(thrift_stats.null_count, None); // can' store u64 max --> null
+    }
+
+    #[test]
+    fn test_count_decoding_null_invalid() {
+        let tstatistics = TStatistics {
+            null_count: Some(-42),
+            ..Default::default()
+        };
+        let err = from_thrift(Type::BOOLEAN, Some(tstatistics)).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Parquet error: Statistics null count is negative -42"
+        );
+    }
+
+    /// Writes statistics to thrift and reads them back and ensures:
+    /// - The statistics are the same
+    /// - The statistics written to thrift are the same as the original statistics
+    fn statistics_count_test(distinct_count: Option<u64>, null_count: Option<u64>) {
+        let statistics = make_bool_stats(distinct_count, null_count);
+
+        let thrift_stats = to_thrift(Some(&statistics)).unwrap();
+        assert_eq!(thrift_stats.null_count.map(|c| c as u64), null_count);
+        assert_eq!(
+            thrift_stats.distinct_count.map(|c| c as u64),
+            distinct_count
+        );
+
+        let round_tripped = from_thrift(Type::BOOLEAN, Some(thrift_stats))
+            .unwrap()
+            .unwrap();
+        // TODO: remove branch when we no longer support assuming null_count==None in the thrift
+        // means null_count = Some(0)
+        if null_count.is_none() {
+            assert_ne!(round_tripped, statistics);
+            assert!(round_tripped.null_count_opt().is_some());
+            assert_eq!(round_tripped.null_count_opt(), Some(0));
+            assert_eq!(round_tripped.min_bytes_opt(), statistics.min_bytes_opt());
+            assert_eq!(round_tripped.max_bytes_opt(), statistics.max_bytes_opt());
+            assert_eq!(
+                round_tripped.distinct_count_opt(),
+                statistics.distinct_count_opt()
+            );
+        } else {
+            assert_eq!(round_tripped, statistics);
+        }
+    }
+
+    fn make_bool_stats(distinct_count: Option<u64>, null_count: Option<u64>) -> Statistics {
+        let min = Some(true);
+        let max = Some(false);
+        let is_min_max_deprecated = false;
+
+        // test is about the counts, so we aren't really testing the min/max values
+        Statistics::Boolean(ValueStatistics::new(
+            min,
+            max,
+            distinct_count,
+            null_count,
+            is_min_max_deprecated,
+        ))
     }
 }

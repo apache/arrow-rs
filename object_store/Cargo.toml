@@ -53,7 +53,7 @@ rand = { version = "0.8", default-features = false, features = ["std", "std_rng"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-native-roots", "http2"], optional = true }
 ring = { version = "0.17", default-features = false, features = ["std"], optional = true }
 rustls-pemfile = { version = "2.0", default-features = false, features = ["std"], optional = true }
-tokio = { version = "1.25.0", features = ["sync", "macros", "rt", "time", "io-util"] }
+tokio = { version = "1.29.0", features = ["sync", "macros", "rt", "time", "io-util"] }
 md-5 = { version = "0.10.6", default-features = false, optional = true }
 
 [target.'cfg(target_family="unix")'.dev-dependencies]

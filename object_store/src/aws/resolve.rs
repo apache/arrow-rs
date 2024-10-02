@@ -21,7 +21,6 @@ use snafu::{ensure, OptionExt, ResultExt, Snafu};
 
 /// A specialized `Error` for object store-related errors
 #[derive(Debug, Snafu)]
-#[allow(missing_docs)]
 enum Error {
     #[snafu(display("Bucket '{}' not found", bucket))]
     BucketNotFound { bucket: String },

@@ -331,7 +331,7 @@ impl SqlInfoUnionBuilder {
 ///
 /// Servers constuct - usually static - [`SqlInfoData`] via the [`SqlInfoDataBuilder`],
 /// and build responses using [`CommandGetSqlInfo::into_builder`]
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct SqlInfoDataBuilder {
     /// Use BTreeMap to ensure the values are sorted by value as
     /// to make output consistent
@@ -341,17 +341,10 @@ pub struct SqlInfoDataBuilder {
     infos: BTreeMap<u32, SqlInfoValue>,
 }
 
-impl Default for SqlInfoDataBuilder {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl SqlInfoDataBuilder {
+    /// Create a new SQL info builder
     pub fn new() -> Self {
-        Self {
-            infos: BTreeMap::new(),
-        }
+        Self::default()
     }
 
     /// register the specific sql metadata item

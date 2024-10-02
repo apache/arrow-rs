@@ -60,6 +60,7 @@ The `parquet` crate provides the following features which may be enabled in your
 - `zstd` (default) - support for parquet using `zstd` compression
 - `snap` (default) - support for parquet using `snappy` compression
 - `cli` - parquet [CLI tools](https://github.com/apache/arrow-rs/tree/master/parquet/src/bin)
+- `crc` - enables functionality to automatically verify checksums of each page (if present) when decoding
 - `experimental` - Experimental APIs which may change, even between minor releases
 
 ## Parquet Feature Status
@@ -82,4 +83,4 @@ The `parquet` crate provides the following features which may be enabled in your
 
 ## License
 
-Licensed under the Apache License, Version 2.0: http://www.apache.org/licenses/LICENSE-2.0.
+Licensed under the Apache License, Version 2.0: <http://www.apache.org/licenses/LICENSE-2.0>.

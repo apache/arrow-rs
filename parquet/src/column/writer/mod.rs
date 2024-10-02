@@ -61,13 +61,21 @@ macro_rules! downcast_writer {
 
 /// Column writer for a Parquet type.
 pub enum ColumnWriter<'a> {
+    /// Column writer for boolean type
     BoolColumnWriter(ColumnWriterImpl<'a, BoolType>),
+    /// Column writer for int32 type
     Int32ColumnWriter(ColumnWriterImpl<'a, Int32Type>),
+    /// Column writer for int64 type
     Int64ColumnWriter(ColumnWriterImpl<'a, Int64Type>),
+    /// Column writer for int96 (timestamp) type
     Int96ColumnWriter(ColumnWriterImpl<'a, Int96Type>),
+    /// Column writer for float type
     FloatColumnWriter(ColumnWriterImpl<'a, FloatType>),
+    /// Column writer for double type
     DoubleColumnWriter(ColumnWriterImpl<'a, DoubleType>),
+    /// Column writer for byte array type
     ByteArrayColumnWriter(ColumnWriterImpl<'a, ByteArrayType>),
+    /// Column writer for fixed length byte array type
     FixedLenByteArrayColumnWriter(ColumnWriterImpl<'a, FixedLenByteArrayType>),
 }
 
@@ -90,6 +98,11 @@ impl<'a> ColumnWriter<'a> {
     }
 }
 
+#[deprecated(
+    since = "54.0.0",
+    note = "Seems like a stray and nobody knows what's it for. Will be removed in the next release."
+)]
+#[allow(missing_docs)]
 pub enum Level {
     Page,
     Column,
@@ -309,6 +322,7 @@ impl<T: Default> ColumnMetrics<T> {
 /// Typed column writer for a primitive column.
 pub type ColumnWriterImpl<'a, T> = GenericColumnWriter<'a, ColumnValueEncoderImpl<T>>;
 
+/// Generic column writer for a primitive column.
 pub struct GenericColumnWriter<'a, E: ColumnValueEncoder> {
     // Column writer properties
     descr: ColumnDescPtr,
@@ -344,6 +358,7 @@ pub struct GenericColumnWriter<'a, E: ColumnValueEncoder> {
 }
 
 impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
+    /// Returns a new instance of [`GenericColumnWriter`].
     pub fn new(
         descr: ColumnDescPtr,
         props: WriterPropertiesPtr,

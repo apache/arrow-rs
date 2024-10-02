@@ -24,7 +24,10 @@ use crate::format::{OffsetIndex, PageLocation};
 /// in the chunk. Optionally stores fully decoded page sizes for BYTE_ARRAY columns.
 #[derive(Debug, Clone, PartialEq)]
 pub struct OffsetIndexMetaData {
+    /// Vector of [`PageLocation`] objects, one per page in the chunk.
     pub page_locations: Vec<PageLocation>,
+    /// Optional vector of unencoded page sizes, one per page in the chunk.
+    /// Only defined for BYTE_ARRAY columns.
     pub unencoded_byte_array_data_bytes: Option<Vec<i64>>,
 }
 
