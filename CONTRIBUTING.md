@@ -164,7 +164,7 @@ Note that currently the above will not check all source files in the parquet cra
 parquet files run the following from the top-level `arrow-rs` directory:
 
 ```bash
-cargo fmt -p parquet -- --check --config skip_children=true `find . -name "*.rs" \! -name format.rs`
+cargo fmt -p parquet -- --check --config skip_children=true `find ./parquet -name "*.rs" \! -name format.rs`
 ```
 
 ## Breaking Changes
