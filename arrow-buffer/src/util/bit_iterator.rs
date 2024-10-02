@@ -66,6 +66,11 @@ impl<'a> Iterator for BitIterator<'a> {
         self.current_offset += 1;
         Some(v)
     }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let remaining_bits = self.end_offset - self.current_offset;
+        (remaining_bits, Some(remaining_bits))
+    }
 }
 
 impl<'a> ExactSizeIterator for BitIterator<'a> {}
@@ -262,6 +267,30 @@ pub fn try_for_each_valid_idx<E, F: FnMut(usize) -> Result<(), E>>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_bit_iterator_size_hint() {
+        let mut b = BitIterator::new(&[0b00000011], 0, 2);
+        assert_eq!(
+            b.size_hint(),
+            (2, Some(2)),
+            "Expected size_hint to be (2, Some(2))"
+        );
+
+        b.next();
+        assert_eq!(
+            b.size_hint(),
+            (1, Some(1)),
+            "Expected size_hint to be (1, Some(1)) after one bit consumed"
+        );
+
+        b.next();
+        assert_eq!(
+            b.size_hint(),
+            (0, Some(0)),
+            "Expected size_hint to be (0, Some(0)) after all bits consumed"
+        );
+    }
 
     #[test]
     fn test_bit_iterator() {
