@@ -1806,4 +1806,29 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn test_writer_null_dict() {
+        let keys = Int32Array::from_iter(vec![Some(0), None, Some(1)]);
+        let values = Arc::new(StringArray::from_iter(vec![Some("a"), None]));
+        let dict = DictionaryArray::new(keys, values);
+
+        let schema = SchemaRef::new(Schema::new(vec![Field::new(
+            "my_dict",
+            DataType::Dictionary(DataType::Int32.into(), DataType::Utf8.into()),
+            true,
+        )]));
+
+        let array = Arc::new(dict) as ArrayRef;
+        let batch = RecordBatch::try_new(schema, vec![array]).unwrap();
+
+        let mut json = Vec::new();
+        let write_builder = WriterBuilder::new().with_explicit_nulls(true);
+        let mut writer = write_builder.build::<_, JsonArray>(&mut json);
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+
+        let json_str = str::from_utf8(&json).unwrap();
+        assert_eq!(json_str, r#"[{"my_dict":"a"},{"my_dict":null},{"my_dict":null}]"#)
+    }
 }

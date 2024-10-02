@@ -409,7 +409,7 @@ impl<'a, K: ArrowDictionaryKeyType> DictionaryEncoder<'a, K> {
         array: &'a DictionaryArray<K>,
         options: &EncoderOptions,
     ) -> Result<Self, ArrowError> {
-        let encoder = make_encoder(array.values().as_ref(), options)?;
+        let (encoder, _) = make_encoder_impl(array.values().as_ref(), options)?;
 
         Ok(Self {
             keys: array.keys().values().clone(),
