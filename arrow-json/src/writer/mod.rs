@@ -111,8 +111,7 @@ use std::{fmt::Debug, io::Write};
 use arrow_array::*;
 use arrow_schema::*;
 
-use crate::writer::encoder::EncoderOptions;
-use encoder::make_encoder;
+use encoder::{make_encoder, EncoderOptions};
 
 /// This trait defines how to format a sequence of JSON objects to a
 /// byte stream.
