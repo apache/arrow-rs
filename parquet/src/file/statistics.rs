@@ -81,9 +81,10 @@ pub(crate) mod private {
     gen_make_statistics!(FixedLenByteArray, FixedLenByteArray);
 }
 
-// Macro to generate methods create Statistics.
+/// Macro to generate methods to create Statistics.
 macro_rules! statistics_new_func {
     ($func:ident, $vtype:ty, $stat:ident) => {
+        #[doc = concat!("Creates new statistics for `", stringify!($stat), "` column type.")]
         pub fn $func(
             min: $vtype,
             max: $vtype,
@@ -244,7 +245,7 @@ pub fn from_thrift(
     })
 }
 
-// Convert Statistics into Thrift definition.
+/// Convert Statistics into Thrift definition.
 pub fn to_thrift(stats: Option<&Statistics>) -> Option<TStatistics> {
     let stats = stats?;
 
@@ -306,13 +307,21 @@ pub fn to_thrift(stats: Option<&Statistics>) -> Option<TStatistics> {
 /// [NativeIndex]: crate::file::page_index::index::NativeIndex
 #[derive(Debug, Clone, PartialEq)]
 pub enum Statistics {
+    /// Statistics for Boolean column
     Boolean(ValueStatistics<bool>),
+    /// Statistics for Int32 column
     Int32(ValueStatistics<i32>),
+    /// Statistics for Int64 column
     Int64(ValueStatistics<i64>),
+    /// Statistics for Int96 column
     Int96(ValueStatistics<Int96>),
+    /// Statistics for Float column
     Float(ValueStatistics<f32>),
+    /// Statistics for Double column
     Double(ValueStatistics<f64>),
+    /// Statistics for ByteArray column
     ByteArray(ValueStatistics<ByteArray>),
+    /// Statistics for FixedLenByteArray column
     FixedLenByteArray(ValueStatistics<FixedLenByteArray>),
 }
 
@@ -323,6 +332,7 @@ impl<T: ParquetValueType> From<ValueStatistics<T>> for Statistics {
 }
 
 impl Statistics {
+    /// Creates new statistics for a column type
     pub fn new<T: ParquetValueType>(
         min: Option<T>,
         max: Option<T>,

@@ -419,6 +419,7 @@ impl From<ParquetMetaData> for ParquetMetaDataBuilder {
     }
 }
 
+/// A key-value pair for [`FileMetaData`].
 pub type KeyValue = crate::format::KeyValue;
 
 /// Reference counted pointer for [`FileMetaData`].
@@ -722,6 +723,7 @@ impl RowGroupMetaDataBuilder {
         self
     }
 
+    /// Sets file offset for this row group.
     pub fn set_file_offset(mut self, value: i64) -> Self {
         self.0.file_offset = Some(value);
         self
@@ -1409,6 +1411,7 @@ impl Default for ColumnIndexBuilder {
 }
 
 impl ColumnIndexBuilder {
+    /// Creates a new column index builder.
     pub fn new() -> Self {
         ColumnIndexBuilder {
             null_pages: Vec::new(),
@@ -1458,6 +1461,7 @@ impl ColumnIndexBuilder {
         }
     }
 
+    /// Set the boundary order of the column index
     pub fn set_boundary_order(&mut self, boundary_order: BoundaryOrder) {
         self.boundary_order = boundary_order;
     }
@@ -1506,6 +1510,7 @@ impl Default for OffsetIndexBuilder {
 }
 
 impl OffsetIndexBuilder {
+    /// Creates a new offset index builder.
     pub fn new() -> Self {
         OffsetIndexBuilder {
             offset_array: Vec::new(),
@@ -1516,17 +1521,20 @@ impl OffsetIndexBuilder {
         }
     }
 
+    /// Append the row count of the next page.
     pub fn append_row_count(&mut self, row_count: i64) {
         let current_page_row_index = self.current_first_row_index;
         self.first_row_index_array.push(current_page_row_index);
         self.current_first_row_index += row_count;
     }
 
+    /// Append the offset and size of the next page.
     pub fn append_offset_and_size(&mut self, offset: i64, compressed_page_size: i32) {
         self.offset_array.push(offset);
         self.compressed_page_size_array.push(compressed_page_size);
     }
 
+    /// Append the unencoded byte array data bytes of the next page.
     pub fn append_unencoded_byte_array_data_bytes(
         &mut self,
         unencoded_byte_array_data_bytes: Option<i64>,

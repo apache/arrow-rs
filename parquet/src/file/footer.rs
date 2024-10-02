@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! Module for working with Parquet file footers.
+
 use crate::errors::Result;
 use crate::file::{metadata::*, reader::ChunkReader, FOOTER_SIZE};
 

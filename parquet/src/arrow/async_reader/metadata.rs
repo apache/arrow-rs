@@ -29,6 +29,7 @@ use std::ops::Range;
 
 /// A data source that can be used with [`MetadataLoader`] to load [`ParquetMetaData`]
 pub trait MetadataFetch {
+    /// Fetches a range of bytes asynchronously
     fn fetch(&mut self, range: Range<usize>) -> BoxFuture<'_, Result<Bytes>>;
 }
 
