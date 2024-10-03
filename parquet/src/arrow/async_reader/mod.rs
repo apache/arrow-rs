@@ -128,7 +128,7 @@ pub use store::*;
 ///    and [`AsyncSeek`], for example [`tokio::fs::File`].
 ///
 /// 2. [`ParquetObjectReader`], available when the `object_store` crate feature
-///    is activated, implements this interface for [`ObjectStore`].
+///    is enabled, implements this interface for [`ObjectStore`].
 ///
 /// [`ObjectStore`]: object_store::ObjectStore
 ///
