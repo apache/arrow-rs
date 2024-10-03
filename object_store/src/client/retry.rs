@@ -19,9 +19,10 @@
 
 use crate::client::backoff::{Backoff, BackoffConfig};
 use crate::PutPayload;
+use encoding_rs::{Encoding, UTF_8};
 use futures::future::BoxFuture;
 use reqwest::header::LOCATION;
-use reqwest::{Client, Request, Response, StatusCode};
+use reqwest::{Client, Method, Request, Response, StatusCode};
 use snafu::Error as SnafuError;
 use snafu::Snafu;
 use std::time::{Duration, Instant};
@@ -32,6 +33,12 @@ use tracing::info;
 pub enum Error {
     #[snafu(display("Received redirect without LOCATION, this normally indicates an incorrectly configured region"))]
     BareRedirect,
+
+    #[snafu(display("Server error, body contains Error, with status {status}: {}", body.as_deref().unwrap_or("No Body")))]
+    Server {
+        status: StatusCode,
+        body: Option<String>,
+    },
 
     #[snafu(display("Client error with status {status}: {}", body.as_deref().unwrap_or("No Body")))]
     Client {
@@ -54,6 +61,7 @@ impl Error {
     pub fn status(&self) -> Option<StatusCode> {
         match self {
             Self::BareRedirect => None,
+            Self::Server { status, .. } => Some(*status),
             Self::Client { status, .. } => Some(*status),
             Self::Reqwest { source, .. } => source.status(),
         }
@@ -63,6 +71,7 @@ impl Error {
     pub fn body(&self) -> Option<&str> {
         match self {
             Self::Client { body, .. } => body.as_deref(),
+            Self::Server { body, .. } => body.as_deref(),
             Self::BareRedirect => None,
             Self::Reqwest { .. } => None,
         }
@@ -242,9 +251,63 @@ impl RetryableRequest {
                 *request.body_mut() = Some(payload.body());
             }
 
+            let is_put_or_post =
+                request.method() != Method::PUT && request.method() != Method::POST;
+
             match self.client.execute(request).await {
                 Ok(r) => match r.error_for_status_ref() {
-                    Ok(_) if r.status().is_success() => return Ok(r),
+                    Ok(_) if r.status().is_success() => {
+                        // Response body might contain an Error despite the status saying 200 for some PUT and POST requests.
+                        // More info here: https://repost.aws/knowledge-center/s3-resolve-200-internalerror
+                        if is_put_or_post {
+                            return Ok(r);
+                        }
+
+                        let status = r.status();
+                        let headers = r.headers().clone();
+
+                        let encoding = Encoding::for_label(b"utf-8").unwrap_or(UTF_8);
+                        let full_bytes = r.bytes().await.unwrap();
+
+                        let (text, _, _) = encoding.decode(&full_bytes);
+                        let response_body = text.into_owned();
+
+                        match response_body.contains("Error") {
+                            false => {
+                                // Clone response
+                                let mut success_response = hyper::Response::new(full_bytes);
+                                *success_response.status_mut() = status;
+
+                                let mut hyper_headers = hyper::HeaderMap::new();
+                                for (header_name, header_value) in headers {
+                                    hyper_headers.insert(header_name.unwrap(), header_value);
+                                }
+
+                                *success_response.headers_mut() = hyper_headers;
+
+                                return Ok(reqwest::Response::from(success_response));
+                            }
+                            true => {
+                                if retries == max_retries || now.elapsed() > retry_timeout {
+                                    return Err(Error::Server {
+                                        body: Some(response_body),
+                                        status,
+                                    });
+                                }
+
+                                let sleep = backoff.next();
+                                retries += 1;
+                                info!(
+                                    "Encountered a response status of {} but body contains Error, backing off for {} seconds, retry {} of {}",
+                                    status,
+                                    sleep.as_secs_f32(),
+                                    retries,
+                                    max_retries,
+                                );
+                                tokio::time::sleep(sleep).await;
+                            }
+                        }
+                    }
                     Ok(r) if r.status() == StatusCode::NOT_MODIFIED => {
                         return Err(Error::Client {
                             body: None,
