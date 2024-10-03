@@ -56,7 +56,6 @@ use reqwest::{Client as ReqwestClient, Method, RequestBuilder, Response};
 use ring::digest;
 use ring::digest::Context;
 use serde::{Deserialize, Serialize};
-use snafu::{ResultExt, Snafu};
 use std::sync::Arc;
 
 const VERSION_HEADER: &str = "x-amz-version-id";
@@ -64,53 +63,53 @@ const SHA256_CHECKSUM: &str = "x-amz-checksum-sha256";
 const USER_DEFINED_METADATA_HEADER_PREFIX: &str = "x-amz-meta-";
 
 /// A specialized `Error` for object store-related errors
-#[derive(Debug, Snafu)]
+#[derive(Debug, thiserror::Error)]
 pub(crate) enum Error {
-    #[snafu(display("Error performing DeleteObjects request: {}", source))]
+    #[error("Error performing DeleteObjects request: {}", source)]
     DeleteObjectsRequest { source: crate::client::retry::Error },
 
-    #[snafu(display(
+    #[error(
         "DeleteObjects request failed for key {}: {} (code: {})",
         path,
         message,
         code
-    ))]
+    )]
     DeleteFailed {
         path: String,
         code: String,
         message: String,
     },
 
-    #[snafu(display("Error getting DeleteObjects response body: {}", source))]
+    #[error("Error getting DeleteObjects response body: {}", source)]
     DeleteObjectsResponse { source: reqwest::Error },
 
-    #[snafu(display("Got invalid DeleteObjects response: {}", source))]
+    #[error("Got invalid DeleteObjects response: {}", source)]
     InvalidDeleteObjectsResponse {
         source: Box<dyn std::error::Error + Send + Sync + 'static>,
     },
 
-    #[snafu(display("Error performing list request: {}", source))]
+    #[error("Error performing list request: {}", source)]
     ListRequest { source: crate::client::retry::Error },
 
-    #[snafu(display("Error getting list response body: {}", source))]
+    #[error("Error getting list response body: {}", source)]
     ListResponseBody { source: reqwest::Error },
 
-    #[snafu(display("Error getting create multipart response body: {}", source))]
+    #[error("Error getting create multipart response body: {}", source)]
     CreateMultipartResponseBody { source: reqwest::Error },
 
-    #[snafu(display("Error performing complete multipart request: {}", source))]
+    #[error("Error performing complete multipart request: {}", source)]
     CompleteMultipartRequest { source: crate::client::retry::Error },
 
-    #[snafu(display("Error getting complete multipart response body: {}", source))]
+    #[error("Error getting complete multipart response body: {}", source)]
     CompleteMultipartResponseBody { source: reqwest::Error },
 
-    #[snafu(display("Got invalid list response: {}", source))]
+    #[error("Got invalid list response: {}", source)]
     InvalidListResponse { source: quick_xml::de::DeError },
 
-    #[snafu(display("Got invalid multipart response: {}", source))]
+    #[error("Got invalid multipart response: {}", source)]
     InvalidMultipartResponse { source: quick_xml::de::DeError },
 
-    #[snafu(display("Unable to extract metadata from headers: {}", source))]
+    #[error("Unable to extract metadata from headers: {}", source)]
     Metadata {
         source: crate::client::header::Error,
     },
@@ -238,10 +237,15 @@ impl<'a> SessionCredential<'a> {
     }
 }
 
-#[derive(Debug, Snafu)]
+#[derive(Debug, thiserror::Error)]
 pub enum RequestError {
-    #[snafu(context(false))]
-    Generic { source: crate::Error },
+    #[error(transparent)]
+    Generic {
+        #[from]
+        source: crate::Error,
+    },
+
+    #[error("Retry")]
     Retry {
         source: crate::client::retry::Error,
         path: String,
@@ -382,12 +386,16 @@ impl<'a> Request<'a> {
             .payload(self.payload)
             .send()
             .await
-            .context(RetrySnafu { path })
+            .map_err(|source| {
+                let path = path.into();
+                RequestError::Retry { source, path }
+            })
     }
 
     pub async fn do_put(self) -> Result<PutResult> {
         let response = self.send().await?;
-        Ok(get_put_result(response.headers(), VERSION_HEADER).context(MetadataSnafu)?)
+        Ok(get_put_result(response.headers(), VERSION_HEADER)
+            .map_err(|source| Error::Metadata { source })?)
     }
 }
 
@@ -489,10 +497,10 @@ impl S3Client {
             .with_aws_sigv4(credential.authorizer(), Some(digest.as_ref()))
             .send_retry(&self.config.retry_config)
             .await
-            .context(DeleteObjectsRequestSnafu {})?
+            .map_err(|source| Error::DeleteObjectsRequest { source })?
             .bytes()
             .await
-            .context(DeleteObjectsResponseSnafu {})?;
+            .map_err(|source| Error::DeleteObjectsResponse { source })?;
 
         let response: BatchDeleteResponse =
             quick_xml::de::from_reader(response.reader()).map_err(|err| {
@@ -581,10 +589,10 @@ impl S3Client {
             .await?
             .bytes()
             .await
-            .context(CreateMultipartResponseBodySnafu)?;
+            .map_err(|source| Error::CreateMultipartResponseBody { source })?;
 
-        let response: InitiateMultipartUploadResult =
-            quick_xml::de::from_reader(response.reader()).context(InvalidMultipartResponseSnafu)?;
+        let response: InitiateMultipartUploadResult = quick_xml::de::from_reader(response.reader())
+            .map_err(|source| Error::InvalidMultipartResponse { source })?;
 
         Ok(response.upload_id)
     }
@@ -614,7 +622,9 @@ impl S3Client {
         }
         let response = request.send().await?;
 
-        let content_id = get_etag(response.headers()).context(MetadataSnafu)?;
+        let content_id =
+            get_etag(response.headers()).map_err(|source| Error::Metadata { source })?;
+
         Ok(PartId { content_id })
     }
 
@@ -650,17 +660,18 @@ impl S3Client {
             .idempotent(true)
             .send()
             .await
-            .context(CompleteMultipartRequestSnafu)?;
+            .map_err(|source| Error::CompleteMultipartRequest { source })?;
 
-        let version = get_version(response.headers(), VERSION_HEADER).context(MetadataSnafu)?;
+        let version = get_version(response.headers(), VERSION_HEADER)
+            .map_err(|source| Error::Metadata { source })?;
 
         let data = response
             .bytes()
             .await
-            .context(CompleteMultipartResponseBodySnafu)?;
+            .map_err(|source| Error::CompleteMultipartResponseBody { source })?;
 
-        let response: CompleteMultipartUploadResult =
-            quick_xml::de::from_reader(data.reader()).context(InvalidMultipartResponseSnafu)?;
+        let response: CompleteMultipartUploadResult = quick_xml::de::from_reader(data.reader())
+            .map_err(|source| Error::InvalidMultipartResponse { source })?;
 
         Ok(PutResult {
             e_tag: Some(response.e_tag),
@@ -768,13 +779,14 @@ impl ListClient for S3Client {
             .with_aws_sigv4(credential.authorizer(), None)
             .send_retry(&self.config.retry_config)
             .await
-            .context(ListRequestSnafu)?
+            .map_err(|source| Error::ListRequest { source })?
             .bytes()
             .await
-            .context(ListResponseBodySnafu)?;
+            .map_err(|source| Error::ListResponseBody { source })?;
 
-        let mut response: ListResponse =
-            quick_xml::de::from_reader(response.reader()).context(InvalidListResponseSnafu)?;
+        let mut response: ListResponse = quick_xml::de::from_reader(response.reader())
+            .map_err(|source| Error::InvalidListResponse { source })?;
+
         let token = response.next_continuation_token.take();
 
         Ok((response.try_into()?, token))
