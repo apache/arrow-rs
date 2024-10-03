@@ -670,7 +670,9 @@ mod tests {
     #[test]
     fn test_parse_metadata_size_smaller_than_footer() {
         let test_file = tempfile::tempfile().unwrap();
-        let err = ParquetMetaDataReader::new().parse_metadata(&test_file).unwrap_err();
+        let err = ParquetMetaDataReader::new()
+            .parse_metadata(&test_file)
+            .unwrap_err();
         assert!(matches!(err, ParquetError::IndexOutOfBound(8, _)));
     }
 
@@ -687,7 +689,9 @@ mod tests {
     #[test]
     fn test_parse_metadata_invalid_start() {
         let test_file = Bytes::from(vec![255, 0, 0, 0, b'P', b'A', b'R', b'1']);
-        let err = ParquetMetaDataReader::new().parse_metadata(&test_file).unwrap_err();
+        let err = ParquetMetaDataReader::new()
+            .parse_metadata(&test_file)
+            .unwrap_err();
         assert!(matches!(err, ParquetError::IndexOutOfBound(263, _)));
     }
 
