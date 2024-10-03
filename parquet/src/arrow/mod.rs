@@ -236,3 +236,63 @@ pub fn parquet_column<'a>(
         .find(|x| parquet_schema.get_column_root_idx(*x) == root_idx)?;
     Some((parquet_idx, field))
 }
+
+#[cfg(test)]
+mod test {
+    use crate::arrow::ArrowWriter;
+    use crate::file::metadata::{ParquetMetaData, ParquetMetaDataReader, ParquetMetaDataWriter};
+    use crate::file::properties::{EnabledStatistics, WriterProperties};
+    use arrow_array::{ArrayRef, Int32Array, RecordBatch};
+    use bytes::Bytes;
+    use std::sync::Arc;
+
+    #[test]
+    // Reproducer for https://github.com/apache/arrow-rs/issues/6464
+    fn test_metadata_read_write_partial_offset() {
+        let parquet_bytes = create_parquet_file();
+
+        // read the metadata from the file WITHOUT the page index structures
+        let original_metadata = ParquetMetaDataReader::new()
+            .parse_and_finish(&parquet_bytes)
+            .unwrap();
+
+        // this should error because the page indexes are not present, but have offsets specified
+        let metadata_bytes = metadata_to_bytes(&original_metadata);
+        let err = ParquetMetaDataReader::new()
+            .with_page_indexes(true) // there are no page indexes in the metadata
+            .parse_and_finish(&metadata_bytes)
+            .err()
+            .unwrap();
+        assert_eq!(
+            err.to_string(),
+            "EOF: Parquet file too small. Page index range 82..115 overlaps with file metadata 0..341"
+        );
+    }
+
+    /// Write a parquet filed into an in memory buffer
+    fn create_parquet_file() -> Bytes {
+        let mut buf = vec![];
+        let data = vec![100, 200, 201, 300, 102, 33];
+        let array: ArrayRef = Arc::new(Int32Array::from(data));
+        let batch = RecordBatch::try_from_iter(vec![("id", array)]).unwrap();
+        let props = WriterProperties::builder()
+            .set_statistics_enabled(EnabledStatistics::Page)
+            .build();
+
+        let mut writer = ArrowWriter::try_new(&mut buf, batch.schema(), Some(props)).unwrap();
+        writer.write(&batch).unwrap();
+        writer.finish().unwrap();
+        drop(writer);
+
+        Bytes::from(buf)
+    }
+
+    /// Serializes `ParquetMetaData` into a memory buffer, using `ParquetMetadataWriter
+    fn metadata_to_bytes(metadata: &ParquetMetaData) -> Bytes {
+        let mut buf = vec![];
+        ParquetMetaDataWriter::new(&mut buf, metadata)
+            .finish()
+            .unwrap();
+        Bytes::from(buf)
+    }
+}

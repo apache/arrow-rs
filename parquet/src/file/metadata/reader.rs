@@ -58,6 +58,8 @@ pub struct ParquetMetaDataReader {
     column_index: bool,
     offset_index: bool,
     prefetch_hint: Option<usize>,
+    // size of the serialized thrift metadata plus the 8 byte footer
+    metadata_size: Option<usize>,
 }
 
 impl ParquetMetaDataReader {
@@ -195,7 +197,7 @@ impl ParquetMetaDataReader {
     /// let metadata = reader.finish().unwrap();
     /// ```
     pub fn try_parse_sized<R: ChunkReader>(&mut self, reader: &R, file_size: usize) -> Result<()> {
-        self.metadata = match Self::parse_metadata(reader) {
+        self.metadata = match self.parse_metadata(reader) {
             Ok(metadata) => Some(metadata),
             // FIXME: throughout this module ParquetError::IndexOutOfBound is used to indicate the
             // need for more data. This is not it's intended use. The plan is to add a NeedMoreData
@@ -278,6 +280,19 @@ impl ParquetMetaDataReader {
                 return Err(ParquetError::IndexOutOfBound(
                     file_size - range.start,
                     file_size,
+                ));
+            }
+        }
+
+        // Perform extra sanity check to make sure `range` and the footer metadata don't
+        // overlap.
+        if let Some(metadata_size) = self.metadata_size {
+            let metadata_range = file_size.saturating_sub(metadata_size)..file_size;
+            if metadata_range.contains(&range.end) {
+                return Err(eof_err!(
+                    "Parquet file too small. Page index range {:?} overlaps with file metadata {:?}",
+                    range,
+                    metadata_range
                 ));
             }
         }
@@ -456,7 +471,7 @@ impl ParquetMetaDataReader {
     }
 
     // one-shot parse of footer
-    fn parse_metadata<R: ChunkReader>(chunk_reader: &R) -> Result<ParquetMetaData> {
+    fn parse_metadata<R: ChunkReader>(&mut self, chunk_reader: &R) -> Result<ParquetMetaData> {
         // check file is large enough to hold footer
         let file_size = chunk_reader.len();
         if file_size < (FOOTER_SIZE as u64) {
@@ -473,6 +488,7 @@ impl ParquetMetaDataReader {
 
         let metadata_len = Self::decode_footer(&footer)?;
         let footer_metadata_len = FOOTER_SIZE + metadata_len;
+        self.metadata_size = Some(footer_metadata_len);
 
         if footer_metadata_len > file_size as usize {
             return Err(ParquetError::IndexOutOfBound(
@@ -654,14 +670,14 @@ mod tests {
     #[test]
     fn test_parse_metadata_size_smaller_than_footer() {
         let test_file = tempfile::tempfile().unwrap();
-        let err = ParquetMetaDataReader::parse_metadata(&test_file).unwrap_err();
+        let err = ParquetMetaDataReader::new().parse_metadata(&test_file).unwrap_err();
         assert!(matches!(err, ParquetError::IndexOutOfBound(8, _)));
     }
 
     #[test]
     fn test_parse_metadata_corrupt_footer() {
         let data = Bytes::from(vec![1, 2, 3, 4, 5, 6, 7, 8]);
-        let reader_result = ParquetMetaDataReader::parse_metadata(&data);
+        let reader_result = ParquetMetaDataReader::new().parse_metadata(&data);
         assert_eq!(
             reader_result.unwrap_err().to_string(),
             "Parquet error: Invalid Parquet file. Corrupt footer"
@@ -671,7 +687,7 @@ mod tests {
     #[test]
     fn test_parse_metadata_invalid_start() {
         let test_file = Bytes::from(vec![255, 0, 0, 0, b'P', b'A', b'R', b'1']);
-        let err = ParquetMetaDataReader::parse_metadata(&test_file).unwrap_err();
+        let err = ParquetMetaDataReader::new().parse_metadata(&test_file).unwrap_err();
         assert!(matches!(err, ParquetError::IndexOutOfBound(263, _)));
     }
 
