@@ -288,7 +288,7 @@ impl ParquetMetaDataReader {
         // overlap.
         if let Some(metadata_size) = self.metadata_size {
             let metadata_range = file_size.saturating_sub(metadata_size)..file_size;
-            if metadata_range.contains(&range.end) {
+            if range.end > metadata_range.start {
                 return Err(eof_err!(
                     "Parquet file too small. Page index range {:?} overlaps with file metadata {:?}",
                     range,
