@@ -58,7 +58,8 @@ pub struct ParquetMetaDataReader {
     column_index: bool,
     offset_index: bool,
     prefetch_hint: Option<usize>,
-    // size of the serialized thrift metadata plus the 8 byte footer
+    // Size of the serialized thrift metadata plus the 8 byte footer. Only set if
+    // `self.parse_metadata` is called.
     metadata_size: Option<usize>,
 }
 
@@ -470,7 +471,8 @@ impl ParquetMetaDataReader {
         range
     }
 
-    // one-shot parse of footer
+    // One-shot parse of footer.
+    // Side effect: this will set `self.metadata_size`
     fn parse_metadata<R: ChunkReader>(&mut self, chunk_reader: &R) -> Result<ParquetMetaData> {
         // check file is large enough to hold footer
         let file_size = chunk_reader.len();
