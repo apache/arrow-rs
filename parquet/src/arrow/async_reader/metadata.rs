@@ -29,7 +29,7 @@ use std::ops::Range;
 
 /// A data source that can be used with [`MetadataLoader`] to load [`ParquetMetaData`]
 ///
-/// Note that implementation is are provided for [`AsyncFileReader`].
+/// Note that implementation is provided for [`AsyncFileReader`].
 ///
 /// # Example `MetadataFetch` for a custom async data source
 ///
