@@ -186,6 +186,10 @@ impl Default for RetryConfig {
     }
 }
 
+fn body_contains_error(response_body: &str) -> bool {
+    response_body.contains("InternalError") || response_body.contains("SlowDown")
+}
+
 pub(crate) struct RetryableRequest {
     client: Client,
     request: Request,
@@ -262,7 +266,9 @@ impl RetryableRequest {
             match self.client.execute(request).await {
                 Ok(r) => match r.error_for_status_ref() {
                     Ok(_) if r.status().is_success() => {
-                        // Response body might contain an Error despite the status saying 200 for some PUT and POST requests.
+                        // For certain S3 requests, 200 response may contain `InternalError` or
+                        // `SlowDown` in the message. These responses should be handled similarly
+                        // to r5xx errors.
                         // More info here: https://repost.aws/knowledge-center/s3-resolve-200-internalerror
                         if !self.retry_error_body {
                             return Ok(r);
@@ -282,14 +288,15 @@ impl RetryableRequest {
                         let response_body = String::from_utf8_lossy(&bytes);
                         info!("Checking for error in response_body: {}", response_body);
 
-                        if !response_body.contains("Error") {
-                            // Clone response
+                        if !body_contains_error(&response_body) {
+                            // Success response and no error, clone and return response
                             let mut success_response = hyper::Response::new(bytes);
                             *success_response.status_mut() = status;
                             *success_response.headers_mut() = headers;
 
                             return Ok(reqwest::Response::from(success_response));
                         } else {
+                            // Retry as if this was a 5xx response
                             if retries == max_retries || now.elapsed() > retry_timeout {
                                 return Err(Error::Server {
                                     body: Some(response_body.into_owned()),
@@ -472,12 +479,26 @@ impl RetryExt for reqwest::RequestBuilder {
 #[cfg(test)]
 mod tests {
     use crate::client::mock_server::MockServer;
-    use crate::client::retry::{Error, RetryExt};
+    use crate::client::retry::{body_contains_error, Error, RetryExt};
     use crate::RetryConfig;
     use hyper::header::LOCATION;
     use hyper::Response;
     use reqwest::{Client, Method, StatusCode};
     use std::time::Duration;
+
+    #[test]
+    fn test_body_contains_error() {
+        // Example error message provided by https://repost.aws/knowledge-center/s3-resolve-200-internalerror
+        let error_response = "AmazonS3Exception: We encountered an internal error. Please try again. (Service: Amazon S3; Status Code: 200; Error Code: InternalError; Request ID: 0EXAMPLE9AAEB265)";
+        assert!(body_contains_error(error_response));
+
+        let error_response_2 = "<?xml version=\"1.0\" encoding=\"UTF-8\"?><Error><Code>SlowDown</Code><Message>Please reduce your request rate.</Message><RequestId>123</RequestId><HostId>456</HostId></Error>";
+        assert!(body_contains_error(error_response_2));
+
+        // Example success response from https://docs.aws.amazon.com/AmazonS3/latest/API/API_CopyObject.html
+        let success_response = "<CopyObjectResult><LastModified>2009-10-12T17:50:30.000Z</LastModified><ETag>\"9b2cf535f27731c974343645a3985328\"</ETag></CopyObjectResult>";
+        assert!(!body_contains_error(success_response));
+    }
 
     #[tokio::test]
     async fn test_retry() {
@@ -701,6 +722,39 @@ mod tests {
             .sensitive(true);
         let err = req.send().await.unwrap_err().to_string();
         assert!(!err.contains("SENSITIVE"), "{err}");
+
+        // Success response with error in body is retried
+        mock.push(
+            Response::builder()
+                .status(StatusCode::OK)
+                .body("InternalError".to_string())
+                .unwrap(),
+        );
+        let req = client
+            .request(Method::PUT, &url)
+            .retryable(&retry)
+            .idempotent(true)
+            .retry_error_body(true);
+        let r = req.send().await.unwrap();
+        assert_eq!(r.status(), StatusCode::OK);
+        // Response with InternalError should have been retried
+        assert!(!r.text().await.unwrap().contains("InternalError"));
+
+        // Should not retry success response with no error in body
+        mock.push(
+            Response::builder()
+                .status(StatusCode::OK)
+                .body("success".to_string())
+                .unwrap(),
+        );
+        let req = client
+            .request(Method::PUT, &url)
+            .retryable(&retry)
+            .idempotent(true)
+            .retry_error_body(true);
+        let r = req.send().await.unwrap();
+        assert_eq!(r.status(), StatusCode::OK);
+        assert!(r.text().await.unwrap().contains("success"));
 
         // Shutdown
         mock.shutdown().await
