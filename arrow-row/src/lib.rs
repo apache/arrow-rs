@@ -754,10 +754,16 @@ impl RowConverter {
     ///
     /// // We can convert rows into binary format and back in batch.
     /// let values: Vec<OwnedRow> = rows.iter().map(|r| r.owned()).collect();
-    /// let binary = rows.try_into_binary().expect("small");
+    /// let binary = rows.try_into_binary().expect("known-small array");
     /// let converted = converter.from_binary(binary.clone());
     /// assert!(converted.iter().eq(values.iter().map(|r| r.row())));
     /// ```
+    ///
+    /// # Panics
+    ///
+    /// This function expects the passed [BinaryArray] to contain valid row data as produced by this
+    /// [RowConverter]. It will panic if any rows are null. Operations on the returned [Rows] may
+    /// panic if the data is malformed.
     pub fn from_binary(&self, array: BinaryArray) -> Rows {
         assert_eq!(
             array.null_count(),
@@ -933,12 +939,17 @@ impl Rows {
     ///
     /// // We can convert rows into binary format and back.
     /// let values: Vec<OwnedRow> = rows.iter().map(|r| r.owned()).collect();
-    /// let binary = rows.try_into_binary().expect("small");
+    /// let binary = rows.try_into_binary().expect("known-small array");
     /// let parser = converter.parser();
     /// let parsed: Vec<OwnedRow> =
     ///   binary.iter().flatten().map(|b| parser.parse(b).owned()).collect();
     /// assert_eq!(values, parsed);
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// This function will return an error if there is more data than can be stored in
+    /// a [BinaryArray] -- i.e. if the total data size is more than 2GiB.
     pub fn try_into_binary(self) -> Result<BinaryArray, ArrowError> {
         if self.buffer.len() > i32::MAX as usize {
             return Err(ArrowError::InvalidArgumentError(format!(
@@ -1936,7 +1947,6 @@ mod tests {
 
         converter.convert_rows(parsed.iter()).unwrap();
     }
-
 
     #[test]
     #[should_panic(expected = "index out of bounds")]
