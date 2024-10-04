@@ -247,6 +247,29 @@ mod test {
     use std::sync::Arc;
 
     #[test]
+    // Reproducer for https://github.com/apache/arrow-rs/issues/6464
+    fn test_metadata_read_write_partial_offset() {
+        let parquet_bytes = create_parquet_file();
+
+        // read the metadata from the file WITHOUT the page index structures
+        let original_metadata = ParquetMetaDataReader::new()
+            .parse_and_finish(&parquet_bytes)
+            .unwrap();
+
+        // this should error because the page indexes are not present, but have offsets specified
+        let metadata_bytes = metadata_to_bytes(&original_metadata);
+        let err = ParquetMetaDataReader::new()
+            .with_page_indexes(true) // there are no page indexes in the metadata
+            .parse_and_finish(&metadata_bytes)
+            .err()
+            .unwrap();
+        assert_eq!(
+            err.to_string(),
+            "EOF: Parquet file too small. Page index range 82..115 overlaps with file metadata 0..341"
+        );
+    }
+
+    #[test]
     fn test_metadata_read_write_roundtrip() {
         let parquet_bytes = create_parquet_file();
 
