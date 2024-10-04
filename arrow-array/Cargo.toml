@@ -75,3 +75,7 @@ harness = false
 [[bench]]
 name = "decimal_overflow"
 harness = false
+
+[[bench]]
+name = "union_array"
+harness = false

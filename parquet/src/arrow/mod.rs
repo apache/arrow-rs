@@ -298,63 +298,6 @@ mod test {
         assert_eq!(original_metadata, roundtrip_metadata);
     }
 
-    #[test]
-    // Reproducer for https://github.com/apache/arrow-rs/issues/6464 (this should eventually pass)
-    #[should_panic(expected = "missing required field ColumnIndex.null_pages")]
-    fn test_metadata_read_write_partial_offset() {
-        let parquet_bytes = create_parquet_file();
-
-        // read the metadata from the file WITHOUT the page index structures
-        let original_metadata = ParquetMetaDataReader::new()
-            .parse_and_finish(&parquet_bytes)
-            .unwrap();
-
-        // read metadata back from the serialized bytes requesting to read the offsets
-        let metadata_bytes = metadata_to_bytes(&original_metadata);
-        let roundtrip_metadata = ParquetMetaDataReader::new()
-            .with_page_indexes(true) // there are no page indexes in the metadata
-            .parse_and_finish(&metadata_bytes)
-            .unwrap();
-
-        // Need to normalize the metadata first to remove offsets in data
-        let original_metadata = normalize_locations(original_metadata);
-        let roundtrip_metadata = normalize_locations(roundtrip_metadata);
-        assert_eq!(
-            format!("{original_metadata:#?}"),
-            format!("{roundtrip_metadata:#?}")
-        );
-        assert_eq!(original_metadata, roundtrip_metadata);
-    }
-
-    // TODO: test reading parquet bytes from serialized metadata
-
-    /// Write a parquet filed into an in memory buffer
-    fn create_parquet_file() -> Bytes {
-        let mut buf = vec![];
-        let data = vec![100, 200, 201, 300, 102, 33];
-        let array: ArrayRef = Arc::new(Int32Array::from(data));
-        let batch = RecordBatch::try_from_iter(vec![("id", array)]).unwrap();
-        let props = WriterProperties::builder()
-            .set_statistics_enabled(EnabledStatistics::Page)
-            .build();
-
-        let mut writer = ArrowWriter::try_new(&mut buf, batch.schema(), Some(props)).unwrap();
-        writer.write(&batch).unwrap();
-        writer.finish().unwrap();
-        drop(writer);
-
-        Bytes::from(buf)
-    }
-
-    /// Serializes `ParquetMetaData` into a memory buffer, using `ParquetMetadataWriter`
-    fn metadata_to_bytes(metadata: &ParquetMetaData) -> Bytes {
-        let mut buf = vec![];
-        ParquetMetaDataWriter::new(&mut buf, metadata)
-            .finish()
-            .unwrap();
-        Bytes::from(buf)
-    }
-
     /// Sets the page index offset locations in the metadata to `None`
     ///
     /// This is because the offsets are used to find the relative location of the index
@@ -377,5 +320,32 @@ mod test {
             metadata_builder = metadata_builder.add_row_group(rg);
         }
         metadata_builder.build()
+    }
+
+    /// Write a parquet filed into an in memory buffer
+    fn create_parquet_file() -> Bytes {
+        let mut buf = vec![];
+        let data = vec![100, 200, 201, 300, 102, 33];
+        let array: ArrayRef = Arc::new(Int32Array::from(data));
+        let batch = RecordBatch::try_from_iter(vec![("id", array)]).unwrap();
+        let props = WriterProperties::builder()
+            .set_statistics_enabled(EnabledStatistics::Page)
+            .build();
+
+        let mut writer = ArrowWriter::try_new(&mut buf, batch.schema(), Some(props)).unwrap();
+        writer.write(&batch).unwrap();
+        writer.finish().unwrap();
+        drop(writer);
+
+        Bytes::from(buf)
+    }
+
+    /// Serializes `ParquetMetaData` into a memory buffer, using `ParquetMetadataWriter
+    fn metadata_to_bytes(metadata: &ParquetMetaData) -> Bytes {
+        let mut buf = vec![];
+        ParquetMetaDataWriter::new(&mut buf, metadata)
+            .finish()
+            .unwrap();
+        Bytes::from(buf)
     }
 }
