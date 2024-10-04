@@ -274,7 +274,7 @@ mod test {
     fn test_metadata_read_write_roundtrip_page_index() {
         let parquet_bytes = create_parquet_file();
 
-        // read the metadata from the file including the page index  structures
+        // read the metadata from the file including the page index structures
         // (which are stored elsewhere in the footer)
         let original_metadata = ParquetMetaDataReader::new()
             .with_page_indexes(true)
@@ -346,7 +346,7 @@ mod test {
         Bytes::from(buf)
     }
 
-    /// Serializes `ParquetMetaData` into a memory buffer, using `ParquetMetadataWriter
+    /// Serializes `ParquetMetaData` into a memory buffer, using `ParquetMetadataWriter`
     fn metadata_to_bytes(metadata: &ParquetMetaData) -> Bytes {
         let mut buf = vec![];
         ParquetMetaDataWriter::new(&mut buf, metadata)
@@ -355,7 +355,7 @@ mod test {
         Bytes::from(buf)
     }
 
-    /// Sets the page index offset locations in the metadata None
+    /// Sets the page index offset locations in the metadata to `None`
     ///
     /// This is because the offsets are used to find the relative location of the index
     /// structures, and thus differ depending on how the structures are stored.
