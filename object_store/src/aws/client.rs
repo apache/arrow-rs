@@ -266,6 +266,7 @@ pub(crate) struct Request<'a> {
     payload: Option<PutPayload>,
     use_session_creds: bool,
     idempotent: bool,
+    retry_error_body: bool,
 }
 
 impl<'a> Request<'a> {
@@ -290,6 +291,13 @@ impl<'a> Request<'a> {
 
     pub(crate) fn idempotent(self, idempotent: bool) -> Self {
         Self { idempotent, ..self }
+    }
+
+    pub(crate) fn retry_error_body(self, retry_error_body: bool) -> Self {
+        Self {
+            retry_error_body,
+            ..self
+        }
     }
 
     pub(crate) fn with_encryption_headers(self) -> Self {
@@ -379,6 +387,7 @@ impl<'a> Request<'a> {
             .with_aws_sigv4(credential.authorizer(), sha)
             .retryable(&self.config.retry_config)
             .idempotent(self.idempotent)
+            .retry_error_body(self.retry_error_body)
             .payload(self.payload)
             .send()
             .await
@@ -413,6 +422,7 @@ impl S3Client {
             config: &self.config,
             use_session_creds: true,
             idempotent: false,
+            retry_error_body: false,
         }
     }
 
@@ -559,6 +569,7 @@ impl S3Client {
 
         self.request(Method::PUT, to)
             .idempotent(true)
+            .retry_error_body(true)
             .header(&COPY_SOURCE_HEADER, &source)
             .headers(self.config.encryption_headers.clone().into())
             .headers(copy_source_encryption_headers)
@@ -648,6 +659,7 @@ impl S3Client {
             .with_aws_sigv4(credential.authorizer(), None)
             .retryable(&self.config.retry_config)
             .idempotent(true)
+            .retry_error_body(true)
             .send()
             .await
             .context(CompleteMultipartRequestSnafu)?;
