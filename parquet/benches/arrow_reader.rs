@@ -1008,6 +1008,23 @@ fn bench_primitive<T>(
         assert_eq!(count, EXPECTED_VALUE_COUNT);
     });
 
+    // binary packed, half NULLs
+    let data = build_encoded_primitive_page_iterator::<T>(
+        optional_column_desc.clone(),
+        0.5,
+        Encoding::DELTA_BINARY_PACKED,
+        min,
+        max,
+    );
+    group.bench_function("binary packed, optional, half NULLs", |b| {
+        b.iter(|| {
+            let array_reader =
+                create_primitive_array_reader(data.clone(), optional_column_desc.clone());
+            count = bench_array_reader(array_reader);
+        });
+        assert_eq!(count, EXPECTED_VALUE_COUNT);
+    });
+
     // binary packed skip , no NULLs
     let data = build_encoded_primitive_page_iterator::<T>(
         mandatory_column_desc.clone(),
@@ -1041,7 +1058,7 @@ fn bench_primitive<T>(
         assert_eq!(count, EXPECTED_VALUE_COUNT);
     });
 
-    // binary packed, half NULLs
+    // binary packed skip, half NULLs
     let data = build_encoded_primitive_page_iterator::<T>(
         optional_column_desc.clone(),
         0.5,
@@ -1049,11 +1066,11 @@ fn bench_primitive<T>(
         min,
         max,
     );
-    group.bench_function("binary packed, optional, half NULLs", |b| {
+    group.bench_function("binary packed skip, optional, half NULLs", |b| {
         b.iter(|| {
             let array_reader =
                 create_primitive_array_reader(data.clone(), optional_column_desc.clone());
-            count = bench_array_reader(array_reader);
+            count = bench_array_reader_skip(array_reader);
         });
         assert_eq!(count, EXPECTED_VALUE_COUNT);
     });
