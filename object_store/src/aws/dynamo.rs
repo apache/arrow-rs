@@ -508,11 +508,11 @@ impl<'a> From<&'a str> for AttributeValue<'a> {
 mod number {
     use serde::{Deserialize, Deserializer, Serializer};
 
-    pub fn serialize<S: Serializer>(v: &u64, s: S) -> Result<S::Ok, S::Error> {
+    pub(crate) fn serialize<S: Serializer>(v: &u64, s: S) -> Result<S::Ok, S::Error> {
         s.serialize_str(&v.to_string())
     }
 
-    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<u64, D::Error> {
+    pub(crate) fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<u64, D::Error> {
         let v: &str = Deserialize::deserialize(d)?;
         v.parse().map_err(serde::de::Error::custom)
     }
@@ -541,7 +541,7 @@ mod tests {
     /// An integration test for DynamoDB
     ///
     /// This is a function called by s3_test to avoid test concurrency issues
-    pub async fn integration_test(integration: &AmazonS3, d: &DynamoCommit) {
+    pub(crate) async fn integration_test(integration: &AmazonS3, d: &DynamoCommit) {
         let client = integration.client.as_ref();
 
         let src = Path::from("dynamo_path_src");

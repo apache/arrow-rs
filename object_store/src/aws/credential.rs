@@ -314,7 +314,7 @@ impl<'a> AwsAuthorizer<'a> {
     }
 }
 
-pub trait CredentialExt {
+pub(crate) trait CredentialExt {
     /// Sign a request <https://docs.aws.amazon.com/general/latest/gr/sigv4_signing.html>
     fn with_aws_sigv4(
         self,
@@ -423,7 +423,7 @@ fn canonicalize_headers(header_map: &HeaderMap) -> (String, String) {
 ///
 /// <https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/configuring-instance-metadata-service.html>
 #[derive(Debug)]
-pub struct InstanceCredentialProvider {
+pub(crate) struct InstanceCredentialProvider {
     pub imdsv1_fallback: bool,
     pub metadata_endpoint: String,
 }
@@ -450,7 +450,7 @@ impl TokenProvider for InstanceCredentialProvider {
 ///
 /// <https://docs.aws.amazon.com/eks/latest/userguide/iam-roles-for-service-accounts-technical-overview.html>
 #[derive(Debug)]
-pub struct WebIdentityProvider {
+pub(crate) struct WebIdentityProvider {
     pub token_path: String,
     pub role_arn: String,
     pub session_name: String,
@@ -633,7 +633,7 @@ async fn web_identity(
 ///
 /// <https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task-iam-roles.html>
 #[derive(Debug)]
-pub struct TaskCredentialProvider {
+pub(crate) struct TaskCredentialProvider {
     pub url: String,
     pub retry: RetryConfig,
     pub client: Client,
@@ -675,7 +675,7 @@ async fn task_credential(
 ///
 /// <https://docs.aws.amazon.com/AmazonS3/latest/API/API_CreateSession.html>
 #[derive(Debug)]
-pub struct SessionProvider {
+pub(crate) struct SessionProvider {
     pub endpoint: String,
     pub region: String,
     pub credentials: AwsCredentialProvider,

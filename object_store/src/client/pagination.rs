@@ -35,7 +35,7 @@ use std::future::Future;
 /// finish, otherwise it will continue to call `op(state, token)` with the values returned by the
 /// previous call to `op`, until a continuation token of `None` is returned
 ///
-pub fn stream_paginated<F, Fut, S, T>(state: S, op: F) -> impl Stream<Item = Result<T>>
+pub(crate) fn stream_paginated<F, Fut, S, T>(state: S, op: F) -> impl Stream<Item = Result<T>>
 where
     F: Fn(S, Option<String>) -> Fut + Copy,
     Fut: Future<Output = Result<(T, S, Option<String>)>>,
