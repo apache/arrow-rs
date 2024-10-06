@@ -26,7 +26,7 @@ use std::collections::BTreeSet;
 
 /// A client that can perform paginated list requests
 #[async_trait]
-pub trait ListClient: Send + Sync + 'static {
+pub(crate) trait ListClient: Send + Sync + 'static {
     async fn list_request(
         &self,
         prefix: Option<&str>,
@@ -38,7 +38,7 @@ pub trait ListClient: Send + Sync + 'static {
 
 /// Extension trait for [`ListClient`] that adds common listing functionality
 #[async_trait]
-pub trait ListClientExt {
+pub(crate) trait ListClientExt {
     fn list_paginated(
         &self,
         prefix: Option<&Path>,
