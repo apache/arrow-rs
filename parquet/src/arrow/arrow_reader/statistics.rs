@@ -793,7 +793,7 @@ get_decimal_page_stats_iterator!(
 );
 
 macro_rules! get_data_page_statistics {
-    ($stat_type_prefix: ident, $data_type: ident, $iterator: ident) => {
+    ($stat_type_prefix: ident, $data_type: ident, $iterator: ident, $physical_type: ident) => {
         paste! {
             match $data_type {
                 DataType::Boolean => {
@@ -932,7 +932,7 @@ macro_rules! get_data_page_statistics {
                     Ok(Arc::new(builder.finish()))
                 },
                 DataType::Dictionary(_, value_type) => {
-                    [<$stat_type_prefix:lower _ page_statistics>](value_type, $iterator)
+                    [<$stat_type_prefix:lower _ page_statistics>](value_type, $iterator, $physical_type)
                 },
                 DataType::Timestamp(unit, timezone) => {
                     let iter = [<$stat_type_prefix Int64DataPageStatsIterator>]::new($iterator).flatten();
@@ -944,7 +944,20 @@ macro_rules! get_data_page_statistics {
                     })
                 },
                 DataType::Date32 => Ok(Arc::new(Date32Array::from_iter([<$stat_type_prefix Int32DataPageStatsIterator>]::new($iterator).flatten()))),
-                DataType::Date64 => Ok(Arc::new(Date64Array::from_iter([<$stat_type_prefix Int64DataPageStatsIterator>]::new($iterator).flatten()))),
+                DataType::Date64 if $physical_type == Some(PhysicalType::INT32)=> Ok(
+                    Arc::new(
+                        Date64Array::from_iter([<$stat_type_prefix Int32DataPageStatsIterator>]::new($iterator)
+                            .map(|x| {
+                                x.into_iter()
+                                .map(|x| {
+                                    x.and_then(|x| i64::try_from(x).ok())
+                                })
+                                .map(|x| x.map(|x| x * 24 * 60 * 60 * 1000))
+                            }).flatten()
+                        )
+                    )
+                ),
+                DataType::Date64 if $physical_type == Some(PhysicalType::INT64) => Ok(Arc::new(Date64Array::from_iter([<$stat_type_prefix Int64DataPageStatsIterator>]::new($iterator).flatten()))),
                 DataType::Decimal128(precision, scale) => Ok(Arc::new(
                     Decimal128Array::from_iter([<$stat_type_prefix Decimal128DataPageStatsIterator>]::new($iterator).flatten()).with_precision_and_scale(*precision, *scale)?)),
                 DataType::Decimal256(precision, scale) => Ok(Arc::new(
@@ -1031,6 +1044,7 @@ macro_rules! get_data_page_statistics {
                     }
                     Ok(Arc::new(builder.finish()))
                 },
+                DataType::Date64 |  // required to cover $physical_type match guard
                 DataType::Null |
                 DataType::Duration(_) |
                 DataType::Interval(_) |
@@ -1076,20 +1090,28 @@ fn max_statistics<'a, I: Iterator<Item = Option<&'a ParquetStatistics>>>(
 
 /// Extracts the min statistics from an iterator
 /// of parquet page [`Index`]'es to an [`ArrayRef`]
-pub(crate) fn min_page_statistics<'a, I>(data_type: &DataType, iterator: I) -> Result<ArrayRef>
+pub(crate) fn min_page_statistics<'a, I>(
+    data_type: &DataType,
+    iterator: I,
+    physical_type: Option<PhysicalType>,
+) -> Result<ArrayRef>
 where
     I: Iterator<Item = (usize, &'a Index)>,
 {
-    get_data_page_statistics!(Min, data_type, iterator)
+    get_data_page_statistics!(Min, data_type, iterator, physical_type)
 }
 
 /// Extracts the max statistics from an iterator
 /// of parquet page [`Index`]'es to an [`ArrayRef`]
-pub(crate) fn max_page_statistics<'a, I>(data_type: &DataType, iterator: I) -> Result<ArrayRef>
+pub(crate) fn max_page_statistics<'a, I>(
+    data_type: &DataType,
+    iterator: I,
+    physical_type: Option<PhysicalType>,
+) -> Result<ArrayRef>
 where
     I: Iterator<Item = (usize, &'a Index)>,
 {
-    get_data_page_statistics!(Max, data_type, iterator)
+    get_data_page_statistics!(Max, data_type, iterator, physical_type)
 }
 
 /// Extracts the null count statistics from an iterator
@@ -1486,7 +1508,7 @@ impl<'a> StatisticsConverter<'a> {
             (*num_data_pages, column_page_index_per_row_group_per_column)
         });
 
-        min_page_statistics(data_type, iter)
+        min_page_statistics(data_type, iter, self.physical_type)
     }
 
     /// Extract the maximum values from Data Page statistics.
@@ -1517,7 +1539,7 @@ impl<'a> StatisticsConverter<'a> {
             (*num_data_pages, column_page_index_per_row_group_per_column)
         });
 
-        max_page_statistics(data_type, iter)
+        max_page_statistics(data_type, iter, self.physical_type)
     }
 
     /// Returns a [`UInt64Array`] with null counts for each data page.
