@@ -40,7 +40,7 @@ enum Error {
     #[snafu(display("Request error: {}", source))]
     Request { source: retry::Error },
 
-    #[snafu(display("Request error: {}", source))]
+    #[snafu(display("Request error: {:?}", source))]
     Reqwest { source: reqwest::Error },
 
     #[snafu(display("Range request not supported by {}", href))]

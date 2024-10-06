@@ -82,7 +82,7 @@ pub(crate) enum Error {
         message: String,
     },
 
-    #[snafu(display("Error getting DeleteObjects response body: {}", source))]
+    #[snafu(display("Error getting DeleteObjects response body: {:?}", source))]
     DeleteObjectsResponse { source: reqwest::Error },
 
     #[snafu(display("Got invalid DeleteObjects response: {}", source))]
@@ -93,16 +93,16 @@ pub(crate) enum Error {
     #[snafu(display("Error performing list request: {}", source))]
     ListRequest { source: crate::client::retry::Error },
 
-    #[snafu(display("Error getting list response body: {}", source))]
+    #[snafu(display("Error getting list response body: {:?}", source))]
     ListResponseBody { source: reqwest::Error },
 
-    #[snafu(display("Error getting create multipart response body: {}", source))]
+    #[snafu(display("Error getting create multipart response body: {:?}", source))]
     CreateMultipartResponseBody { source: reqwest::Error },
 
     #[snafu(display("Error performing complete multipart request: {}", source))]
     CompleteMultipartRequest { source: crate::client::retry::Error },
 
-    #[snafu(display("Error getting complete multipart response body: {}", source))]
+    #[snafu(display("Error getting complete multipart response body: {:?}", source))]
     CompleteMultipartResponseBody { source: reqwest::Error },
 
     #[snafu(display("Got invalid list response: {}", source))]

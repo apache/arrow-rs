@@ -58,7 +58,7 @@ enum Error {
     #[snafu(display("Error performing list request: {}", source))]
     ListRequest { source: crate::client::retry::Error },
 
-    #[snafu(display("Error getting list response body: {}", source))]
+    #[snafu(display("Error getting list response body: {:?}", source))]
     ListResponseBody { source: reqwest::Error },
 
     #[snafu(display("Got invalid list response: {}", source))]
@@ -76,7 +76,7 @@ enum Error {
         path: String,
     },
 
-    #[snafu(display("Error getting put response body: {}", source))]
+    #[snafu(display("Error getting put response body: {:?}", source))]
     PutResponseBody { source: reqwest::Error },
 
     #[snafu(display("Got invalid put response: {}", source))]
@@ -93,7 +93,7 @@ enum Error {
     #[snafu(display("Error performing complete multipart request: {}", source))]
     CompleteMultipartRequest { source: crate::client::retry::Error },
 
-    #[snafu(display("Error getting complete multipart response body: {}", source))]
+    #[snafu(display("Error getting complete multipart response body: {:?}", source))]
     CompleteMultipartResponseBody { source: reqwest::Error },
 
     #[snafu(display("Got invalid multipart response: {}", source))]
@@ -102,7 +102,7 @@ enum Error {
     #[snafu(display("Error signing blob: {}", source))]
     SignBlobRequest { source: crate::client::retry::Error },
 
-    #[snafu(display("Got invalid signing blob response: {}", source))]
+    #[snafu(display("Got invalid signing blob response: {:?}", source))]
     InvalidSignBlobResponse { source: reqwest::Error },
 
     #[snafu(display("Got invalid signing blob signature: {}", source))]

@@ -39,7 +39,7 @@ pub enum Error {
         body: Option<String>,
     },
 
-    #[snafu(display("Error after {retries} retries in {elapsed:?}, max_retries:{max_retries}, retry_timeout:{retry_timeout:?}, source:{source}"))]
+    #[snafu(display("Error after {retries} retries in {elapsed:?}, max_retries:{max_retries}, retry_timeout:{retry_timeout:?}, source:{source:?}"))]
     Reqwest {
         retries: usize,
         max_retries: usize,
