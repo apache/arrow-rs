@@ -287,9 +287,9 @@ impl WriterProperties {
     /// Returns `coerce_types` boolean
     ///
     /// Some Arrow types do not have a corresponding Parquet logical type.
-    /// Affected Arrow data types include `Date64`, `Timestamp` and `Interval`. 
+    /// Affected Arrow data types include `Date64`, `Timestamp` and `Interval`.
     /// Writers have the option to coerce these into native Parquet types. Type
-    /// coercion allows for meaningful representations that do not require 
+    /// coercion allows for meaningful representations that do not require
     /// downstream readers to consider the embedded Arrow schema. However, type
     /// coercion also prevents the data from being round-tripped. This method
     /// returns `true` if type coercion enabled.
