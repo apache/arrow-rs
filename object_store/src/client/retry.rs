@@ -129,7 +129,7 @@ impl From<Error> for std::io::Error {
     }
 }
 
-pub type Result<T, E = Error> = std::result::Result<T, E>;
+pub(crate) type Result<T, E = Error> = std::result::Result<T, E>;
 
 /// The configuration for how to respond to request errors
 ///
@@ -178,7 +178,7 @@ impl Default for RetryConfig {
     }
 }
 
-pub struct RetryableRequest {
+pub(crate) struct RetryableRequest {
     client: Client,
     request: Request,
 
@@ -196,7 +196,7 @@ impl RetryableRequest {
     ///
     /// An idempotent request will be retried on timeout even if the request
     /// method is not [safe](https://datatracker.ietf.org/doc/html/rfc7231#section-4.2.1)
-    pub fn idempotent(self, idempotent: bool) -> Self {
+    pub(crate) fn idempotent(self, idempotent: bool) -> Self {
         Self {
             idempotent: Some(idempotent),
             ..self
@@ -207,16 +207,16 @@ impl RetryableRequest {
     ///
     /// This will avoid printing out the URL in error messages
     #[allow(unused)]
-    pub fn sensitive(self, sensitive: bool) -> Self {
+    pub(crate) fn sensitive(self, sensitive: bool) -> Self {
         Self { sensitive, ..self }
     }
 
     /// Provide a [`PutPayload`]
-    pub fn payload(self, payload: Option<PutPayload>) -> Self {
+    pub(crate) fn payload(self, payload: Option<PutPayload>) -> Self {
         Self { payload, ..self }
     }
 
-    pub async fn send(self) -> Result<Response> {
+    pub(crate) async fn send(self) -> Result<Response> {
         let max_retries = self.max_retries;
         let retry_timeout = self.retry_timeout;
         let mut retries = 0;
@@ -369,7 +369,7 @@ impl RetryableRequest {
     }
 }
 
-pub trait RetryExt {
+pub(crate) trait RetryExt {
     /// Return a [`RetryableRequest`]
     fn retryable(self, config: &RetryConfig) -> RetryableRequest;
 

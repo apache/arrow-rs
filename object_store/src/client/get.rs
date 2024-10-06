@@ -33,7 +33,7 @@ use snafu::{ensure, OptionExt, ResultExt, Snafu};
 
 /// A client that can perform a get request
 #[async_trait]
-pub trait GetClient: Send + Sync + 'static {
+pub(crate) trait GetClient: Send + Sync + 'static {
     const STORE: &'static str;
 
     /// Configure the [`HeaderConfig`] for this client
@@ -44,7 +44,7 @@ pub trait GetClient: Send + Sync + 'static {
 
 /// Extension trait for [`GetClient`] that adds common retrieval functionality
 #[async_trait]
-pub trait GetClientExt {
+pub(crate) trait GetClientExt {
     async fn get_opts(&self, location: &Path, options: GetOptions) -> Result<GetResult>;
 }
 

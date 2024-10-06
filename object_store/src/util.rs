@@ -27,11 +27,11 @@ use futures::{stream::StreamExt, Stream, TryStreamExt};
 use snafu::Snafu;
 
 #[cfg(any(feature = "azure", feature = "http"))]
-pub static RFC1123_FMT: &str = "%a, %d %h %Y %T GMT";
+pub(crate) static RFC1123_FMT: &str = "%a, %d %h %Y %T GMT";
 
 // deserialize dates according to rfc1123
 #[cfg(any(feature = "azure", feature = "http"))]
-pub fn deserialize_rfc1123<'de, D>(
+pub(crate) fn deserialize_rfc1123<'de, D>(
     deserializer: D,
 ) -> Result<chrono::DateTime<chrono::Utc>, D::Error>
 where
@@ -77,7 +77,7 @@ where
 
 #[cfg(not(target_arch = "wasm32"))]
 /// Takes a function and spawns it to a tokio blocking pool if available
-pub async fn maybe_spawn_blocking<F, T>(f: F) -> Result<T>
+pub(crate) async fn maybe_spawn_blocking<F, T>(f: F) -> Result<T>
 where
     F: FnOnce() -> Result<T> + Send + 'static,
     T: Send + 'static,
@@ -93,7 +93,7 @@ where
 pub const OBJECT_STORE_COALESCE_DEFAULT: usize = 1024 * 1024;
 
 /// Up to this number of range requests will be performed in parallel by [`coalesce_ranges`]
-pub const OBJECT_STORE_COALESCE_PARALLEL: usize = 10;
+pub(crate) const OBJECT_STORE_COALESCE_PARALLEL: usize = 10;
 
 /// Takes a function `fetch` that can fetch a range of bytes and uses this to
 /// fetch the provided byte `ranges`

@@ -23,7 +23,8 @@
     clippy::explicit_iter_loop,
     clippy::future_not_send,
     clippy::use_self,
-    clippy::clone_on_ref_ptr
+    clippy::clone_on_ref_ptr,
+    unreachable_pub
 )]
 
 //! # object_store
@@ -1373,7 +1374,7 @@ mod tests {
     }
 
     #[cfg(any(feature = "azure", feature = "aws"))]
-    pub async fn signing<T>(integration: &T)
+    pub(crate) async fn signing<T>(integration: &T)
     where
         T: ObjectStore + signer::Signer,
     {
@@ -1396,7 +1397,7 @@ mod tests {
     }
 
     #[cfg(any(feature = "aws", feature = "azure"))]
-    pub async fn tagging<F, Fut>(storage: Arc<dyn ObjectStore>, validate: bool, get_tags: F)
+    pub(crate) async fn tagging<F, Fut>(storage: Arc<dyn ObjectStore>, validate: bool, get_tags: F)
     where
         F: Fn(Path) -> Fut + Send + Sync,
         Fut: std::future::Future<Output = Result<reqwest::Response>> + Send,

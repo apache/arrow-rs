@@ -39,11 +39,18 @@ use crate::arrow::async_reader::MetadataFetch;
 /// See [`crate::file::metadata::ParquetMetaDataWriter#output-format`] for a description of
 /// the Parquet metadata.
 ///
+/// Parquet metadata is not necessarily contiguous in the files: part is stored
+/// in the footer (the last bytes of the file), but other portions (such as the
+/// PageIndex) can be stored elsewhere.
+///
+/// This reader handles reading the footer as well as the non contiguous parts
+/// of the metadata such as the page indexes; excluding Bloom Filters.
+///
 /// # Example
 /// ```no_run
 /// # use parquet::file::metadata::ParquetMetaDataReader;
 /// # fn open_parquet_file(path: &str) -> std::fs::File { unimplemented!(); }
-/// // read parquet metadata including page indexes
+/// // read parquet metadata including page indexes from a file
 /// let file = open_parquet_file("some_path.parquet");
 /// let mut reader = ParquetMetaDataReader::new()
 ///     .with_page_indexes(true);

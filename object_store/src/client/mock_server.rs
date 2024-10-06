@@ -32,11 +32,11 @@ use tokio::net::TcpListener;
 use tokio::sync::oneshot;
 use tokio::task::{JoinHandle, JoinSet};
 
-pub type ResponseFn =
+pub(crate) type ResponseFn =
     Box<dyn FnOnce(Request<Incoming>) -> BoxFuture<'static, Response<String>> + Send>;
 
 /// A mock server
-pub struct MockServer {
+pub(crate) struct MockServer {
     responses: Arc<Mutex<VecDeque<ResponseFn>>>,
     shutdown: oneshot::Sender<()>,
     handle: JoinHandle<()>,
@@ -44,7 +44,7 @@ pub struct MockServer {
 }
 
 impl MockServer {
-    pub async fn new() -> Self {
+    pub(crate) async fn new() -> Self {
         let responses: Arc<Mutex<VecDeque<ResponseFn>>> =
             Arc::new(Mutex::new(VecDeque::with_capacity(10)));
 
@@ -97,17 +97,17 @@ impl MockServer {
     }
 
     /// The url of the mock server
-    pub fn url(&self) -> &str {
+    pub(crate) fn url(&self) -> &str {
         &self.url
     }
 
     /// Add a response
-    pub fn push(&self, response: Response<String>) {
+    pub(crate) fn push(&self, response: Response<String>) {
         self.push_fn(|_| response)
     }
 
     /// Add a response function
-    pub fn push_fn<F>(&self, f: F)
+    pub(crate) fn push_fn<F>(&self, f: F)
     where
         F: FnOnce(Request<Incoming>) -> Response<String> + Send + 'static,
     {
@@ -115,7 +115,7 @@ impl MockServer {
         self.responses.lock().push_back(f)
     }
 
-    pub fn push_async_fn<F, Fut>(&self, f: F)
+    pub(crate) fn push_async_fn<F, Fut>(&self, f: F)
     where
         F: FnOnce(Request<Incoming>) -> Fut + Send + 'static,
         Fut: Future<Output = Response<String>> + Send + 'static,
@@ -124,7 +124,7 @@ impl MockServer {
     }
 
     /// Shutdown the mock server
-    pub async fn shutdown(self) {
+    pub(crate) async fn shutdown(self) {
         let _ = self.shutdown.send(());
         self.handle.await.unwrap()
     }
