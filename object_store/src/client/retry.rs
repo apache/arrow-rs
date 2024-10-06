@@ -312,6 +312,7 @@ impl RetryableRequest {
                     let mut do_retry = false;
                     if e.is_connect()
                         || e.is_body()
+                        || e.is_decode()
                         || (e.is_request() && !e.is_timeout())
                         || (is_idempotent && e.is_timeout())
                     {
