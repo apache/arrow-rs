@@ -400,6 +400,7 @@ impl<'a> PrimitiveTypeBuilder<'a> {
                 }
             }
         }
+
         match self.converted_type {
             ConvertedType::NONE => {}
             ConvertedType::UTF8 | ConvertedType::BSON | ConvertedType::JSON => {
@@ -451,7 +452,6 @@ impl<'a> PrimitiveTypeBuilder<'a> {
                     ));
                 }
             }
-
             ConvertedType::ENUM => {
                 if self.physical_type != PhysicalType::BYTE_ARRAY {
                     return Err(general_err!(
