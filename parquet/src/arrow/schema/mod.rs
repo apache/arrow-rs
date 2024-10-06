@@ -1337,7 +1337,7 @@ mod tests {
             OPTIONAL FIXED_LEN_BYTE_ARRAY (2) float16 (FLOAT16);
             OPTIONAL BINARY  string (UTF8);
             REPEATED BOOLEAN bools;
-            OPTIONAL INT32   date32       (DATE);
+            OPTIONAL INT32   date       (DATE);
             OPTIONAL INT32   time_milli (TIME_MILLIS);
             OPTIONAL INT64   time_micro (TIME_MICROS);
             OPTIONAL INT64   time_nano (TIME(NANOS,false));
@@ -1378,7 +1378,7 @@ mod tests {
                 Field::new("bools", DataType::Boolean, false),
                 false,
             ),
-            Field::new("date32", DataType::Date32, true),
+            Field::new("date", DataType::Date32, true),
             Field::new("time_milli", DataType::Time32(TimeUnit::Millisecond), true),
             Field::new("time_micro", DataType::Time64(TimeUnit::Microsecond), true),
             Field::new("time_nano", DataType::Time64(TimeUnit::Nanosecond), true),
@@ -1443,7 +1443,7 @@ mod tests {
                     REQUIRED BOOLEAN element;
                 }
             }
-            OPTIONAL INT32   date32       (DATE);
+            OPTIONAL INT32   date       (DATE);
             OPTIONAL INT32   time_milli (TIME(MILLIS,false));
             OPTIONAL INT32   time_milli_utc (TIME(MILLIS,true));
             OPTIONAL INT64   time_micro (TIME_MICROS);
@@ -1496,7 +1496,7 @@ mod tests {
                 Field::new("element", DataType::Boolean, false),
                 false,
             ),
-            Field::new("date32", DataType::Date32, true),
+            Field::new("date", DataType::Date32, true),
             Field::new("time_milli", DataType::Time32(TimeUnit::Millisecond), true),
             Field::new(
                 "time_milli_utc",
