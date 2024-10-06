@@ -44,7 +44,7 @@ use crate::arrow::async_reader::MetadataFetch;
 /// PageIndex) can be stored elsewhere.
 ///
 /// This reader handles reading the footer as well as the non contiguous parts
-/// of the metadata such as the page indexes.
+/// of the metadata such as the page indexes; excluding Bloom Filters.
 ///
 /// # Example
 /// ```no_run
