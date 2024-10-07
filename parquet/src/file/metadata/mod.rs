@@ -1205,15 +1205,34 @@ impl ColumnChunkMetaData {
 
     /// Converts this [`ColumnChunkMetaData`] into a [`ColumnChunkMetaDataBuilder`]
     pub fn into_builder(self) -> ColumnChunkMetaDataBuilder {
-        ColumnChunkMetaDataBuilder(self)
+        ColumnChunkMetaDataBuilder::from(self)
     }
 }
 
-/// Builder for column chunk metadata.
+/// Builder for [`ColumnChunkMetaData`]
+///
+/// This builder is used to create a new column chunk metadata or modify an
+/// existing one.
+///
+/// # Example
+/// ```no_run
+/// # use parquet::file::metadata::{ColumnChunkMetaData, ColumnChunkMetaDataBuilder};
+/// # fn get_column_chunk_metadata() -> ColumnChunkMetaData { unimplemented!(); }
+/// let column_chunk_metadata = get_column_chunk_metadata();
+/// // create a new builder from existing column chunk metadata
+/// let builder = ColumnChunkMetaDataBuilder::from(column_chunk_metadata);
+/// // clear the statistics:
+/// let column_chunk_metadata: ColumnChunkMetaData = builder
+///   .clear_statistics()
+///   .build()
+///   .unwrap();
+/// ```
 pub struct ColumnChunkMetaDataBuilder(ColumnChunkMetaData);
 
 impl ColumnChunkMetaDataBuilder {
     /// Creates new column chunk metadata builder.
+    ///
+    /// See also [`ColumnChunkMetaData::builder`]
     fn new(column_descr: ColumnDescPtr) -> Self {
         Self(ColumnChunkMetaData {
             column_descr,
@@ -1297,7 +1316,7 @@ impl ColumnChunkMetaDataBuilder {
         self
     }
 
-    /// Sets optional dictionary page ofset in bytes.
+    /// Sets optional dictionary page offset in bytes.
     pub fn set_dictionary_page_offset(mut self, value: Option<i64>) -> Self {
         self.0.dictionary_page_offset = value;
         self
@@ -1315,9 +1334,21 @@ impl ColumnChunkMetaDataBuilder {
         self
     }
 
+    /// Clears the statistics for this column chunk.
+    pub fn clear_statistics(mut self) -> Self {
+        self.0.statistics = None;
+        self
+    }
+
     /// Sets page encoding stats for this column chunk.
     pub fn set_page_encoding_stats(mut self, value: Vec<PageEncodingStats>) -> Self {
         self.0.encoding_stats = Some(value);
+        self
+    }
+
+    /// Clears the page encoding stats for this column chunk.
+    pub fn clear_page_encoding_stats(mut self) -> Self {
+        self.0.encoding_stats = None;
         self
     }
 
@@ -1489,6 +1520,12 @@ impl ColumnIndexBuilder {
             self.repetition_level_histograms,
             self.definition_level_histograms,
         )
+    }
+}
+
+impl From<ColumnChunkMetaData> for ColumnChunkMetaDataBuilder {
+    fn from(value: ColumnChunkMetaData) -> Self {
+        ColumnChunkMetaDataBuilder(value)
     }
 }
 
