@@ -66,8 +66,10 @@ fn mem(system: &mut System) -> String {
         Err(e) => return format!("Can't get process PID: {e}"),
     };
 
+    let remove_dead_processes = true;
     system.refresh_processes_specifics(
         ProcessesToUpdate::Some(&[pid]),
+        remove_dead_processes,
         ProcessRefreshKind::everything(),
     );
 
