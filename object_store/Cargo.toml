@@ -33,7 +33,6 @@ all-features = true
 async-trait = "0.1.53"
 bytes = "1.0"
 chrono = { version = "0.4.34", default-features = false, features = ["clock"] }
-encoding_rs = "0.8"
 futures = "0.3"
 humantime = "2.1"
 itertools = "0.13.0"
