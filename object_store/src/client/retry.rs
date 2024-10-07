@@ -230,6 +230,7 @@ impl RetryableRequest {
         Self { payload, ..self }
     }
 
+    #[allow(unused)]
     pub(crate) fn retry_error_body(self, retry_error_body: bool) -> Self {
         Self {
             retry_error_body,
