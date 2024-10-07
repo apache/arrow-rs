@@ -71,6 +71,9 @@ sysinfo = { version = "0.31.2", optional = true, default-features = false, featu
 crc32fast = { version = "1.4.2", optional = true, default-features = false }
 
 [dev-dependencies]
+# Enable additional validations when running tests
+arrow-array = { workspace = true, features = ["force_validate"] }
+arrow-data = { workspace = true, features = ["force_validate"] }
 base64 = { version = "0.22", default-features = false, features = ["std"] }
 criterion = { version = "0.5", default-features = false }
 snap = { version = "1.0", default-features = false }
