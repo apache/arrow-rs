@@ -345,6 +345,67 @@
 //! orchestrates the primitives exported by this crate into an embeddable query engine, with
 //! SQL and DataFrame frontends, and heavily influences this crate's roadmap.
 //!
+//! The Rust implementation does not provide the ChunkedArray abstraction implemented by the Python
+//! and C++ Arrow implementations. The recommended alternative is to use one of the following:
+//! - `Vec<ArrayRef>` a simple, eager version of a `ChunkedArray`
+//! - `impl Iterator<Item=ArrayRef>` a lazy version of a `ChunkedArray`
+//! - `impl Stream<Item=ArrayRef>` a lazy async version of a `ChunkedArray`
+//!
+//! Similar patterns can be applied at the `RecordBatch` level. For example, [DataFusion] makes
+//! extensive use of [RecordBatchStream].
+//!
+//! This approach integrates well into the Rust ecosystem, simplifies the implementation and
+//! encourages the use of performant lazy and async patterns.
+//!
+//! Aside from providing a slightly less convenient API, one other downside is the lack of support
+//! for processing compute kernels across chunked arrays. But this use case is well-supported by
+//! [DataFusion].
+//!
+//! The iterator API makes it ergonomic to work with these patterns:
+//! ```rust
+//! use arrow::array::{as_string_array, ArrayRef, AsArray, Float32Array, StringArray};
+//! use arrow::record_batch::RecordBatch;
+//! use std::sync::Arc;
+//! use arrow::datatypes::Float32Type;
+//!
+//! let batches = [
+//!    RecordBatch::try_from_iter(vec![
+//!         ("label", Arc::new(StringArray::from(vec!["A", "B", "C"])) as ArrayRef),
+//!         ("value", Arc::new(Float32Array::from(vec![0.1, 0.2, 0.3])) as ArrayRef),
+//!     ]).unwrap(),
+//!    RecordBatch::try_from_iter(vec![
+//!         ("label", Arc::new(StringArray::from(vec!["D", "E"])) as ArrayRef),
+//!         ("value", Arc::new(Float32Array::from(vec![0.4, 0.5])) as ArrayRef),
+//!    ]).unwrap(),
+//! ];
+//!
+//! // chunked_array_by_index is an array of two Vec<ArrayRef> where each Vec<ArrayRef> is a column
+//! let mut chunked_array_by_index = [Vec::new(), Vec::new()];
+//! for batch in &batches {
+//!     for (i, array) in batch.columns().iter().enumerate() {
+//!         chunked_array_by_index[i].push(array.clone());
+//!     }
+//! }
+//!
+//! // downcast and iterate over the values - column 0 is the labels and column 1 is the values
+//! let labels: Vec<&str> = chunked_array_by_index[0]
+//!    .iter()
+//!     .flat_map(|x|as_string_array(x).iter()) // flatten and downcast to StringArray
+//!     .flatten()                              // flatten the Option<String> to String
+//!     .collect();
+//!
+//! let values: Vec<f32> = chunked_array_by_index[1]
+//!     .iter()
+//!     .flat_map(|x|x.as_primitive::<Float32Type>().iter())
+//!     .flatten()                              
+//!     .collect();
+//!
+//! assert_eq!(labels, ["A", "B", "C", "D", "E"]);
+//! assert_eq!(values, [0.1, 0.2, 0.3, 0.4, 0.5]);
+//!
+//!```
+//! See the [chunked_arrays example] for an example using a struct of typed chunks.
+//!
 //! [`arrow`]: https://github.com/apache/arrow-rs
 //! [`array`]: mod@array
 //! [`Array`]: array::Array
@@ -361,6 +422,8 @@
 //! [Apache Parquet]: https://parquet.apache.org/
 //! [DataFusion]: https://github.com/apache/arrow-datafusion
 //! [issue tracker]: https://github.com/apache/arrow-rs/issues
+//! [RecordBatchStream]: https://docs.rs/datafusion/latest/datafusion/execution/trait.RecordBatchStream.html
+//! [chunked_arrays example]: ../examples/chunked_arrays.rs
 
 #![deny(clippy::redundant_clone)]
 #![warn(missing_debug_implementations)]
