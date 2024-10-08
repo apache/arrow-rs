@@ -404,7 +404,7 @@
 //! assert_eq!(values, [0.1, 0.2, 0.3, 0.4, 0.5]);
 //!
 //!```
-//! See the [chunked_arrays example] for an example using a struct of typed chunks.
+//! See `examples/chunked_arrays.rs` for an example with a struct of typed arrays.
 //!
 //! [`arrow`]: https://github.com/apache/arrow-rs
 //! [`array`]: mod@array
@@ -423,7 +423,6 @@
 //! [DataFusion]: https://github.com/apache/arrow-datafusion
 //! [issue tracker]: https://github.com/apache/arrow-rs/issues
 //! [RecordBatchStream]: https://docs.rs/datafusion/latest/datafusion/execution/trait.RecordBatchStream.html
-//! [chunked_arrays example]: ../examples/chunked_arrays.rs
 
 #![deny(clippy::redundant_clone)]
 #![warn(missing_debug_implementations)]
