@@ -291,7 +291,7 @@ impl WriterProperties {
     /// Writers have the option to coerce these into native Parquet types. Type
     /// coercion allows for meaningful representations that do not require
     /// downstream readers to consider the embedded Arrow schema. However, type
-    /// coercion also prevents the data from being round-tripped. This method
+    /// coercion also prevents the data from being losslessly round-tripped. This method
     /// returns `true` if type coercion enabled.
     pub fn coerce_types(&self) -> bool {
         self.coerce_types
