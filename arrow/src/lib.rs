@@ -379,7 +379,7 @@
 //!    ]).unwrap(),
 //! ];
 //!
-//! // chunked_array_by_index is an array of two Vec<ArrayRef> where each Vec<ArrayRef> is a column
+//! // chunked_array_by_index is an array of two Vec<ArrayRef>
 //! let mut chunked_array_by_index = [Vec::new(), Vec::new()];
 //! for batch in &batches {
 //!     for (i, array) in batch.columns().iter().enumerate() {
