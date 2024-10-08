@@ -20,7 +20,6 @@
 # Examples
 
 - [`builders.rs`](builders.rs): Using the Builder API
-- [`chunked_arrays.rs`](chunked_arrays.rs): Using Vec<ArrayRef> to represent chunked arrays
 - [`collect.rs`](collect.rs): Using the `FromIter` API
 - [`dynamic_types.rs`](dynamic_types.rs): Dealing with mixed types dynamically at runtime
 - [`read_csv.rs`](read_csv.rs): Reading CSV files with explicit schema, pretty printing Arrays
