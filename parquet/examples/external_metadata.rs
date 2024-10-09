@@ -160,8 +160,7 @@ fn write_metadata_to_local_file(metadata: ParquetMetaData, file: impl AsRef<Path
 fn read_metadata_from_local_file(file: impl AsRef<Path>) -> ParquetMetaData {
     let file = File::open(file).unwrap();
     ParquetMetaDataReader::new()
-        .with_column_indexes(true)
-        .with_offset_indexes(true)
+        .with_page_indexes(true)
         .parse_and_finish(&file)
         .unwrap()
 }

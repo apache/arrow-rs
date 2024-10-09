@@ -36,7 +36,7 @@
 //!
 //! # APIs for working with Parquet Metadata
 //!
-//! The Parquet readers and writers in this crate will handle reading and writing
+//! The Parquet readers and writers in this crate handle reading and writing
 //! metadata into parquet files. To work with metadata directly,
 //! the following APIs are available:
 //!
