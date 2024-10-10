@@ -204,7 +204,7 @@ impl<T: ArrowPrimitiveType> PrimitiveBuilder<T> {
 
     /// Appends a value of type `T` into the builder `n` times
     #[inline]
-    pub fn append_value_repeated(&mut self, v: T::Native, n: usize) {
+    pub fn append_value_n(&mut self, v: T::Native, n: usize) {
         self.null_buffer_builder.append_n_non_nulls(n);
         self.values_builder.append_n(n, v);
     }

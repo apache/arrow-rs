@@ -243,7 +243,7 @@ where
         count: usize,
     ) -> Result<K::Native, ArrowError> {
         let key = self.get_or_insert_key(value)?;
-        self.keys_builder.append_value_repeated(key, count);
+        self.keys_builder.append_value_n(key, count);
         Ok(key)
     }
 
