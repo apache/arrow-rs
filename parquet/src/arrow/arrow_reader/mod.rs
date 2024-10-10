@@ -3130,9 +3130,7 @@ mod tests {
         assert_eq!(
             batch
                 .column(0)
-                .as_any()
-                .downcast_ref::<StringArray>()
-                .expect("downcast to string")
+                .as_string::<i32>()
                 .iter()
                 .collect::<Vec<_>>(),
             vec![Some("one"), Some("two"), Some("three")]
@@ -3141,22 +3139,14 @@ mod tests {
         assert_eq!(
             batch
                 .column(1)
-                .as_any()
-                .downcast_ref::<LargeStringArray>()
-                .expect("downcast to large string")
+                .as_string::<i64>()
                 .iter()
                 .collect::<Vec<_>>(),
             vec![Some("one"), Some("two"), Some("three")]
         );
 
         assert_eq!(
-            batch
-                .column(2)
-                .as_any()
-                .downcast_ref::<StringViewArray>()
-                .expect("downcast to string view")
-                .iter()
-                .collect::<Vec<_>>(),
+            batch.column(2).as_string_view().iter().collect::<Vec<_>>(),
             vec![Some("one"), Some("two"), Some("three")]
         );
     }
@@ -3186,8 +3176,7 @@ mod tests {
         .expect("reader builder with schema")
         .build()
         .expect("reader with schema");
-
-        arrow_reader.next();
+        arrow_reader.next().unwrap().unwrap_err();
     }
 
     #[test]
