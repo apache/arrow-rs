@@ -219,8 +219,6 @@ where
 
         let key = K::Native::from_usize(idx).ok_or(ArrowError::DictionaryKeyOverflowError)?;
 
-        self.keys_builder.append_value(key);
-
         Ok(key)
     }
 
