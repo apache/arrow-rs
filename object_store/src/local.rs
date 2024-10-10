@@ -109,6 +109,12 @@ pub(crate) enum Error {
         actual: usize,
     },
 
+    #[snafu(display("Request precondition failure for path {}", path))]
+    Precondition {
+        /// The path to the file
+        path: String,
+    },
+
     #[snafu(display("Requested range was invalid"))]
     InvalidRange {
         source: InvalidGetRange,
@@ -166,6 +172,10 @@ impl From<Error> for super::Error {
             },
             Error::AlreadyExists { path, source } => Self::AlreadyExists {
                 path,
+                source: source.into(),
+            },
+            Error::Precondition { ref path } => Self::Precondition {
+                path: path.clone(),
                 source: source.into(),
             },
             _ => Self::Generic {
@@ -366,10 +376,6 @@ impl ObjectStore for LocalFileSystem {
         payload: PutPayload,
         opts: PutOptions,
     ) -> Result<PutResult> {
-        if matches!(opts.mode, PutMode::Update(_)) {
-            return Err(crate::Error::NotImplemented);
-        }
-
         if !opts.attributes.is_empty() {
             return Err(crate::Error::NotImplemented);
         }
@@ -383,7 +389,7 @@ impl ObjectStore for LocalFileSystem {
                 Ok(_) => {
                     let metadata = file.metadata().map_err(|e| Error::Metadata {
                         source: e.into(),
-                        path: path.to_string_lossy().to_string(),
+                        path: path.to_str().unwrap().to_string(),
                     })?;
                     e_tag = Some(get_etag(&metadata));
                     match opts.mode {
@@ -409,7 +415,23 @@ impl ObjectStore for LocalFileSystem {
                                 _ => Some(Error::UnableToRenameFile { source }),
                             },
                         },
-                        PutMode::Update(_) => unreachable!(),
+                        PutMode::Update(uv) => {
+                            let metadata = path.metadata().map_err(|e| Error::Metadata {
+                                source: e.into(),
+                                path: path.to_str().unwrap().to_string(),
+                            })?;
+                            let witness = get_etag(&metadata);
+                            if uv.e_tag == Some(witness) {
+                                match std::fs::rename(&staging_path, &path) {
+                                    Ok(_) => None,
+                                    Err(source) => Some(Error::UnableToRenameFile { source }),
+                                }
+                            } else {
+                                Some(Error::Precondition {
+                                    path: path.to_str().unwrap().to_string(),
+                                })
+                            }
+                        }
                     }
                 }
                 Err(source) => Some(Error::UnableToCopyDataToFile { source }),
@@ -1592,7 +1614,7 @@ mod unix_test {
     use tempfile::TempDir;
 
     use crate::local::LocalFileSystem;
-    use crate::{ObjectStore, Path};
+    use crate::{ObjectStore, Path, PutMode, PutOptions, UpdateVersion};
 
     #[tokio::test]
     async fn test_fifo() {
@@ -1611,5 +1633,77 @@ mod unix_test {
         integration.get(&location).await.unwrap();
 
         spawned.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn create_fails_when_exists() {
+        let root = TempDir::new().unwrap();
+        let integration = LocalFileSystem::new_with_prefix(root.path()).unwrap();
+        integration
+            .put_opts(
+                &Path::from("pointer"),
+                b"1".to_vec().into(),
+                PutMode::Create.into(),
+            )
+            .await
+            .unwrap();
+        assert!(integration
+            .put_opts(
+                &Path::from("pointer"),
+                b"1".to_vec().into(),
+                PutMode::Create.into(),
+            )
+            .await
+            .is_err());
+    }
+
+    #[tokio::test]
+    async fn compare_and_swap_success() {
+        let root = TempDir::new().unwrap();
+        let integration = LocalFileSystem::new_with_prefix(root.path()).unwrap();
+        integration
+            .put_opts(
+                &Path::from("pointer"),
+                b"1".to_vec().into(),
+                PutMode::Create.into(),
+            )
+            .await
+            .unwrap();
+        let res = integration.get(&Path::from("pointer")).await.unwrap();
+        let uv = UpdateVersion {
+            e_tag: res.meta.e_tag.clone(),
+            version: res.meta.version.clone(),
+        };
+        let put_opts: PutOptions = PutMode::Update(uv).into();
+        integration
+            .put_opts(&Path::from("pointer"), b"2".to_vec().into(), put_opts)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn compare_and_swap_failure() {
+        let root = TempDir::new().unwrap();
+        let integration = LocalFileSystem::new_with_prefix(root.path()).unwrap();
+        integration
+            .put_opts(
+                &Path::from("pointer"),
+                b"1".to_vec().into(),
+                PutMode::Create.into(),
+            )
+            .await
+            .unwrap();
+        let res = integration.get(&Path::from("pointer")).await.unwrap();
+        let uv = UpdateVersion {
+            e_tag: Some("Definitely Not The ETAG".to_string()),
+            version: res.meta.version.clone(),
+        };
+        let put_opts: PutOptions = PutMode::Update(uv).into();
+        assert!(matches!(
+            integration
+                .put_opts(&Path::from("pointer"), b"2".to_vec().into(), put_opts)
+                .await,
+            Err(crate::Error::Precondition { .. })
+        ));
     }
 }
