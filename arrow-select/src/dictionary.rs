@@ -315,7 +315,7 @@ mod tests {
         assert_eq!(merged.values.as_ref(), &expected);
         assert_eq!(merged.key_mappings.len(), 2);
         assert_eq!(&merged.key_mappings[0], &[0, 0, 0, 1, 0]);
-        assert_eq!(&merged.key_mappings[1], &[]);
+        assert_eq!(&merged.key_mappings[1], &[] as &[i32; 0]);
     }
 
     #[test]
