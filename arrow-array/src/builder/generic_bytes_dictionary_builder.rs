@@ -20,8 +20,7 @@ use crate::types::{ArrowDictionaryKeyType, ByteArrayType, GenericBinaryType, Gen
 use crate::{Array, ArrayRef, DictionaryArray, GenericByteArray};
 use arrow_buffer::ArrowNativeType;
 use arrow_schema::{ArrowError, DataType};
-use hashbrown::hash_map::RawEntryMut;
-use hashbrown::HashMap;
+use hashbrown::HashTable;
 use std::any::Any;
 use std::sync::Arc;
 
@@ -37,12 +36,7 @@ where
     T: ByteArrayType,
 {
     state: ahash::RandomState,
-    /// Used to provide a lookup from string value to key type
-    ///
-    /// Note: usize's hash implementation is not used, instead the raw entry
-    /// API is used to store keys w.r.t the hash of the strings themselves
-    ///
-    dedup: HashMap<usize, (), ()>,
+    dedup: HashTable<usize>,
 
     keys_builder: PrimitiveBuilder<K>,
     values_builder: GenericByteBuilder<T>,
@@ -69,7 +63,7 @@ where
         let values_builder = GenericByteBuilder::<T>::new();
         Self {
             state: Default::default(),
-            dedup: HashMap::with_capacity_and_hasher(keys_builder.capacity(), ()),
+            dedup: HashTable::with_capacity(keys_builder.capacity()),
             keys_builder,
             values_builder,
         }
@@ -123,7 +117,7 @@ where
         let state = ahash::RandomState::default();
         let dict_len = dictionary_values.len();
 
-        let mut dedup = HashMap::with_capacity_and_hasher(dict_len, ());
+        let mut dedup = HashTable::with_capacity(dict_len);
 
         let values_len = dictionary_values.value_data().len();
         let mut values_builder = GenericByteBuilder::<T>::with_capacity(dict_len, values_len);
@@ -137,15 +131,13 @@ where
                     let value_bytes: &[u8] = value.as_ref();
                     let hash = state.hash_one(value_bytes);
 
-                    let entry = dedup.raw_entry_mut().from_hash(hash, |idx: &usize| {
-                        value_bytes == get_bytes(&values_builder, *idx)
-                    });
-
-                    if let RawEntryMut::Vacant(v) = entry {
-                        v.insert_with_hasher(hash, idx, (), |idx| {
-                            state.hash_one(get_bytes(&values_builder, *idx))
-                        });
-                    }
+                    dedup
+                        .entry(
+                            hash,
+                            |idx: &usize| value_bytes == get_bytes(&values_builder, *idx),
+                            |idx: &usize| state.hash_one(get_bytes(&values_builder, *idx)),
+                        )
+                        .or_insert(idx);
 
                     values_builder.append_value(value);
                 }
@@ -216,24 +208,21 @@ where
         let storage = &mut self.values_builder;
         let hash = state.hash_one(value_bytes);
 
-        let entry = self
+        let idx = *self
             .dedup
-            .raw_entry_mut()
-            .from_hash(hash, |idx| value_bytes == get_bytes(storage, *idx));
-
-        let key = match entry {
-            RawEntryMut::Occupied(entry) => K::Native::usize_as(*entry.into_key()),
-            RawEntryMut::Vacant(entry) => {
+            .entry(
+                hash,
+                |idx| value_bytes == get_bytes(storage, *idx),
+                |idx| state.hash_one(get_bytes(storage, *idx)),
+            )
+            .or_insert_with(|| {
                 let idx = storage.len();
                 storage.append_value(value);
+                idx
+            })
+            .get();
 
-                entry.insert_with_hasher(hash, idx, (), |idx| {
-                    state.hash_one(get_bytes(storage, *idx))
-                });
-
-                K::Native::from_usize(idx).ok_or(ArrowError::DictionaryKeyOverflowError)?
-            }
-        };
+        let key = K::Native::from_usize(idx).ok_or(ArrowError::DictionaryKeyOverflowError)?;
         self.keys_builder.append_value(key);
 
         Ok(key)
