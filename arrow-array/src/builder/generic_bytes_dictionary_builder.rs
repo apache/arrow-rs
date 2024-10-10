@@ -195,12 +195,7 @@ where
     K: ArrowDictionaryKeyType,
     T: ByteArrayType,
 {
-    /// Append a value to the array. Return an existing index
-    /// if already present in the values array or a new index if the
-    /// value is appended to the values array.
-    ///
-    /// Returns an error if the new index would overflow the key type.
-    pub fn append(&mut self, value: impl AsRef<T::Native>) -> Result<K::Native, ArrowError> {
+    fn get_or_insert_key(&mut self, value: impl AsRef<T::Native>) -> Result<K::Native, ArrowError> {
         let value_native: &T::Native = value.as_ref();
         let value_bytes: &[u8] = value_native.as_ref();
 
@@ -223,8 +218,32 @@ where
             .get();
 
         let key = K::Native::from_usize(idx).ok_or(ArrowError::DictionaryKeyOverflowError)?;
-        self.keys_builder.append_value(key);
 
+        Ok(key)
+    }
+
+    /// Append a value to the array. Return an existing index
+    /// if already present in the values array or a new index if the
+    /// value is appended to the values array.
+    ///
+    /// Returns an error if the new index would overflow the key type.
+    pub fn append(&mut self, value: impl AsRef<T::Native>) -> Result<K::Native, ArrowError> {
+        let key = self.get_or_insert_key(value)?;
+        self.keys_builder.append_value(key);
+        Ok(key)
+    }
+
+    /// Append a value multiple times to the array.
+    /// This is the same as `append` but allows to append the same value multiple times without doing multiple lookups.
+    ///
+    /// Returns an error if the new index would overflow the key type.
+    pub fn append_n(
+        &mut self,
+        value: impl AsRef<T::Native>,
+        count: usize,
+    ) -> Result<K::Native, ArrowError> {
+        let key = self.get_or_insert_key(value)?;
+        self.keys_builder.append_value_n(key, count);
         Ok(key)
     }
 
@@ -235,6 +254,17 @@ where
     /// Panics if the resulting length of the dictionary values array would exceed `T::Native::MAX`
     pub fn append_value(&mut self, value: impl AsRef<T::Native>) {
         self.append(value).expect("dictionary key overflow");
+    }
+
+    /// Infallibly append a value to this builder repeatedly `count` times.
+    /// This is the same as `append_value` but allows to append the same value multiple times without doing multiple lookups.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the resulting length of the dictionary values array would exceed `T::Native::MAX`
+    pub fn append_values(&mut self, value: impl AsRef<T::Native>, count: usize) {
+        self.append_n(value, count)
+            .expect("dictionary key overflow");
     }
 
     /// Appends a null slot into the builder
@@ -253,6 +283,19 @@ where
         match value {
             None => self.append_null(),
             Some(v) => self.append_value(v),
+        };
+    }
+
+    /// Append an `Option` value into the builder repeatedly `count` times.
+    /// This is the same as `append_option` but allows to append the same value multiple times without doing multiple lookups.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the resulting length of the dictionary values array would exceed `T::Native::MAX`
+    pub fn append_options(&mut self, value: Option<impl AsRef<T::Native>>, count: usize) {
+        match value {
+            None => self.keys_builder.append_nulls(count),
+            Some(v) => self.append_values(v, count),
         };
     }
 
@@ -331,8 +374,7 @@ fn get_bytes<T: ByteArrayType>(values: &GenericByteBuilder<T>, idx: usize) -> &[
 /// // The builder builds the dictionary value by value
 /// builder.append("abc").unwrap();
 /// builder.append_null();
-/// builder.append("def").unwrap();
-/// builder.append("def").unwrap();
+/// builder.append_n("def", 2).unwrap();  // appends "def" twice with a single lookup
 /// builder.append("abc").unwrap();
 /// let array = builder.finish();
 ///
