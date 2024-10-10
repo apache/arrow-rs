@@ -174,9 +174,6 @@
 //!
 //! This approach integrates well into the Rust ecosystem, simplifies the implementation and
 //! encourages the use of performant lazy and async patterns.
-//!
-//! The iterator API makes it ergonomic to work with these patterns and since most kernels accept
-//! `&dyn Array` many use-cases do not even require downcasting.
 //! ```rust
 //! use std::sync::Arc;
 //! use arrow_array::{ArrayRef, Float32Array, RecordBatch, StringArray};
