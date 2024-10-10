@@ -273,7 +273,7 @@ where
         self.keys_builder.append_null()
     }
 
-    /// Infalibly append `n` null slots into the builder
+    /// Infallibly append `n` null slots into the builder
     #[inline]
     pub fn append_nulls(&mut self, n: usize) {
         self.keys_builder.append_nulls(n)
