@@ -77,6 +77,7 @@ where
 {
     data_type: ArrowType,
     pages: Box<dyn PageIterator>,
+    nullable: bool,
     def_levels_buffer: Option<Vec<i16>>,
     rep_levels_buffer: Option<Vec<i16>>,
     record_reader: RecordReader<T>,
@@ -94,6 +95,8 @@ where
         column_desc: ColumnDescPtr,
         arrow_type: Option<ArrowType>,
     ) -> Result<Self> {
+        let nullable = column_desc.self_type().is_optional();
+
         // Check if Arrow type is specified, else create it from Parquet type
         let data_type = match arrow_type {
             Some(t) => t,
@@ -107,6 +110,7 @@ where
         Ok(Self {
             data_type,
             pages,
+            nullable,
             def_levels_buffer: None,
             rep_levels_buffer: None,
             record_reader,
@@ -174,10 +178,17 @@ where
 
         let record_data = self.record_reader.consume_record_data().into_buffer();
 
-        let array_data = ArrayDataBuilder::new(arrow_data_type)
+        let mut array_data = ArrayDataBuilder::new(arrow_data_type)
             .len(self.record_reader.num_values())
-            .add_buffer(record_data)
-            .null_bit_buffer(self.record_reader.consume_bitmap_buffer());
+            .add_buffer(record_data);
+
+        let null_buffer = self.record_reader.consume_bitmap_buffer();
+        if self.nullable {
+            // If this column is not nullable, storing the null mask is at best unnecessary
+            // and - if the direct parent is non-nullable - can result in unmasked nulls that
+            // cause validation errors downstream.
+            array_data = array_data.null_bit_buffer(null_buffer);
+        }
 
         let array_data = unsafe { array_data.build_unchecked() };
         let array: ArrayRef = match T::get_physical_type() {
