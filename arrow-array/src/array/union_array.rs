@@ -875,7 +875,10 @@ impl Array for UnionArray {
     }
 
     fn is_nullable(&self) -> bool {
-        true
+        self.fields
+            .iter()
+            .flatten()
+            .any(|field| field.is_nullable())
     }
 
     fn get_buffer_memory_size(&self) -> usize {
