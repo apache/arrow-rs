@@ -271,6 +271,12 @@ where
         self.keys_builder.append_null()
     }
 
+    /// Append `n` null slots into the builder
+    #[inline]
+    pub fn append_nulls(&mut self, n: usize) {
+        self.keys_builder.append_nulls(n)
+    }
+
     /// Append an `Option` value into the builder
     ///
     /// # Panics
