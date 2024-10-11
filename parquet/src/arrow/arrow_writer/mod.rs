@@ -1616,18 +1616,36 @@ mod tests {
 
     #[test]
     fn arrow_writer_2_level_struct_mixed_null_2() {
-        // tests writing <struct<struct<primitive>>, where the primitive column is non-null
+        // tests writing <struct<struct<primitive>>, where the primitive columns are non-null.
         let field_c = Field::new("c", DataType::Int32, false);
-        let field_b = Field::new("b", DataType::Struct(vec![field_c].into()), false);
+        let field_d = Field::new("d", DataType::FixedSizeBinary(4), false);
+        let field_e = Field::new(
+            "e",
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+            false,
+        );
+
+        let field_b = Field::new(
+            "b",
+            DataType::Struct(vec![field_c, field_d, field_e].into()),
+            false,
+        );
         let type_a = DataType::Struct(vec![field_b.clone()].into());
         let field_a = Field::new("a", type_a, true);
         let schema = Schema::new(vec![field_a.clone()]);
 
         // create data
         let c = Int32Array::from_iter_values(0..6);
+        let d = FixedSizeBinaryArray::try_from_iter(
+            ["aaaa", "bbbb", "cccc", "dddd", "eeee", "ffff"].into_iter(),
+        )
+        .expect("four byte values");
+        let e = Int32DictionaryArray::from_iter(["one", "two", "three", "four", "five", "one"]);
         let b_data = ArrayDataBuilder::new(field_b.data_type().clone())
             .len(6)
             .add_child_data(c.into_data())
+            .add_child_data(d.into_data())
+            .add_child_data(e.into_data())
             .build()
             .unwrap();
         let b = StructArray::from(b_data);
