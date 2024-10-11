@@ -127,7 +127,7 @@ unsafe fn set_upto_64bits(
 }
 
 /// # Safety
-/// The caller must ensure all arguments are within the valid range.
+/// The caller must ensure `data` has `offset..(offset + 8)` range
 #[inline]
 unsafe fn read_bytes_to_u64(data: &[u8], offset: usize, count: usize) -> u64 {
     debug_assert!(count <= 8);
