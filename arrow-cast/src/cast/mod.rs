@@ -8483,7 +8483,8 @@ mod tests {
         assert!(decimal_arr.is_null(27));
         assert_eq!("0.00", decimal_arr.value_as_string(28));
         assert_eq!("0.00", decimal_arr.value_as_string(29));
-        assert_eq!(decimal_arr.len(), 30);
+        assert_eq!("12345.00", decimal_arr.value_as_string(30));
+        assert_eq!(decimal_arr.len(), 31);
 
         // Decimal256
         let output_type = DataType::Decimal256(76, 3);
@@ -8522,7 +8523,8 @@ mod tests {
         assert!(decimal_arr.is_null(27));
         assert_eq!("0.000", decimal_arr.value_as_string(28));
         assert_eq!("0.000", decimal_arr.value_as_string(29));
-        assert_eq!(decimal_arr.len(), 30);
+        assert_eq!("12345.000", decimal_arr.value_as_string(30));
+        assert_eq!(decimal_arr.len(), 31);
     }
 
     #[test]
@@ -8558,6 +8560,7 @@ mod tests {
             Some("--1.23499999"),
             Some("0"),
             Some("000.000"),
+            Some("0000000000000000012345.000"),
         ]);
         let array = Arc::new(str_array) as ArrayRef;
 
@@ -8570,6 +8573,7 @@ mod tests {
             (Some("0"), Some("0")),
             (Some("000.000"), Some("0")),
             (Some("12345"), Some("12345")),
+            (Some("000000000000000000000000000012345"), Some("12345")),
             (Some("-123"), Some("-123")),
             (Some("+123"), Some("123")),
         ];
@@ -8613,6 +8617,7 @@ mod tests {
             Some("--1.23499999"),
             Some("0"),
             Some("000.000"),
+            Some("0000000000000000012345.000"),
         ]);
         let array = Arc::new(str_array) as ArrayRef;
 
@@ -8625,6 +8630,7 @@ mod tests {
             (Some("0"), Some("0")),
             (Some("000.000"), Some("0")),
             (Some("12345"), Some("12345")),
+            (Some("000000000000000000000000000012345"), Some("12345")),
             (Some("-123"), Some("-123")),
             (Some("+123"), Some("123")),
         ];
