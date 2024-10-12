@@ -31,6 +31,8 @@ pub struct GenericListViewBuilder<OffsetSize: OffsetSizeTrait, T: ArrayBuilder> 
     null_buffer_builder: NullBufferBuilder,
     values_builder: T,
     field: Option<FieldRef>,
+    current_offset: OffsetSize,
+    current_size: OffsetSize,
 }
 
 impl<O: OffsetSizeTrait, T: ArrayBuilder + Default> Default for GenericListViewBuilder<O, T> {
@@ -93,10 +95,12 @@ impl<OffsetSize: OffsetSizeTrait, T: ArrayBuilder> GenericListViewBuilder<Offset
             values_builder,
             sizes_builder,
             field: None,
+            current_offset: OffsetSize::zero(),
+            current_size: OffsetSize::zero(),
         }
     }
 
-    /// Override the field passed to [`GenericListViewArray::new`]
+    /// 覆盖传递给 [`GenericListViewArray::new`] 的字段
     ///
     /// By default a nullable field is created with the name `item`
     ///
@@ -133,13 +137,16 @@ where
     ///
     /// Panics if the length of [`Self::values`] exceeds `OffsetSize::MAX`
     #[inline]
-    pub fn append(&mut self, is_valid: bool, size: usize) {
+    pub fn append(&mut self, is_valid: bool) {
         self.offsets_builder
-            .append(OffsetSize::from_usize(self.values_builder.len() - size).unwrap());
+            .append(self.current_offset);
+         let size = self.values_builder.len() - self.current_offset.to_usize().unwrap();
         self.sizes_builder
-            .append(OffsetSize::from_usize(self.values_builder.len()).unwrap());
+            .append(OffsetSize::from_usize(size).unwrap());
         self.null_buffer_builder.append(is_valid);
+        self.current_offset = self.current_offset + OffsetSize::from_usize(size).unwrap();
     }
+    
 
     /// Append value into this [`GenericListViewBuilder`]
     #[inline]
@@ -182,14 +189,14 @@ where
     pub fn finish(&mut self) -> GenericListViewArray<OffsetSize> {
         let values = self.values_builder.finish();
         let nulls = self.null_buffer_builder.finish();
-
         let offsets = self.offsets_builder.finish();
+
         // Safety: Safe by construction
         let offsets = ScalarBuffer::from(offsets);
-
         let sizes = self.sizes_builder.finish();
         let sizes = ScalarBuffer::from(sizes);
-
+        dbg!(&offsets);
+        dbg!(&sizes);
         let field = match &self.field {
             Some(f) => f.clone(),
             None => Arc::new(Field::new("item", values.data_type().clone(), true)),
@@ -236,10 +243,9 @@ where
                 Some(elements) => {
                     let origin_size = self.values_builder.len();
                     self.values_builder.extend(elements);
-                    let size = self.values_builder.len() - origin_size;
-                    self.append(true, size);
+                    self.append(true);
                 }
-                None => self.append(false, 0),
+                None => self.append(false),
             }
         }
     }
@@ -262,14 +268,14 @@ mod tests {
         builder.values().append_value(0);
         builder.values().append_value(1);
         builder.values().append_value(2);
-        builder.append(true, 3);
+        builder.append(true);
         builder.values().append_value(3);
         builder.values().append_value(4);
         builder.values().append_value(5);
-        builder.append(true, 3);
+        builder.append(true);
         builder.values().append_value(6);
         builder.values().append_value(7);
-        builder.append(true, 2);
+        builder.append(true);
         let list_array = builder.finish();
 
         let list_values = list_array.values().as_primitive::<Int32Type>();
@@ -305,15 +311,15 @@ mod tests {
         builder.values().append_value(0);
         builder.values().append_value(1);
         builder.values().append_value(2);
-        builder.append(true, 3);
-        builder.append(false, 0);
+        builder.append(true);
+        builder.append(false);
         builder.values().append_value(3);
         builder.values().append_null();
         builder.values().append_value(5);
-        builder.append(true, 3);
+        builder.append(true);
         builder.values().append_value(6);
         builder.values().append_value(7);
-        builder.append(true, 2);
+        builder.append(true);
 
         let list_array = builder.finish();
 
@@ -340,16 +346,16 @@ mod tests {
         let mut builder = ListViewBuilder::new(values_builder);
 
         builder.values().append_slice(&[1, 2, 3]);
-        builder.append(true, 1);
+        builder.append(true);
         builder.values().append_slice(&[4, 5, 6]);
-        builder.append(true, 1);
+        builder.append(true);
 
         let mut arr = builder.finish();
         assert_eq!(2, arr.len());
         assert!(builder.is_empty());
 
         builder.values().append_slice(&[7, 8, 9]);
-        builder.append(true, 1);
+        builder.append(true);
         arr = builder.finish();
         assert_eq!(1, arr.len());
         assert!(builder.is_empty());
@@ -361,16 +367,16 @@ mod tests {
         let mut builder = ListViewBuilder::new(values_builder);
 
         builder.values().append_slice(&[1, 2, 3]);
-        builder.append(true, 1);
+        builder.append(true);
         builder.values().append_slice(&[4, 5, 6]);
-        builder.append(true, 1);
+        builder.append(true);
 
         let mut arr = builder.finish_cloned();
         assert_eq!(2, arr.len());
         assert!(!builder.is_empty());
 
         builder.values().append_slice(&[7, 8, 9]);
-        builder.append(true, 1);
+        builder.append(true);
         arr = builder.finish();
         assert_eq!(3, arr.len());
         assert!(builder.is_empty());
@@ -385,27 +391,27 @@ mod tests {
         //  [[[1, 2], [3, 4]], [[5, 6, 7], null, [8]], null, [[9, 10]]]
         builder.values().values().append_value(1);
         builder.values().values().append_value(2);
-        builder.values().append(true, 2);
+        builder.values().append(true);
         builder.values().values().append_value(3);
         builder.values().values().append_value(4);
-        builder.values().append(true, 2);
-        builder.append(true, 2);
+        builder.values().append(true);
+        builder.append(true);
 
         builder.values().values().append_value(5);
         builder.values().values().append_value(6);
         builder.values().values().append_value(7);
-        builder.values().append(true, 3);
-        builder.values().append(false, 0);
+        builder.values().append(true);
+        builder.values().append(false);
         builder.values().values().append_value(8);
-        builder.values().append(true, 1);
-        builder.append(true, 3);
+        builder.values().append(true);
+        builder.append(true);
 
-        builder.append(false, 0);
+        builder.append(false);
 
         builder.values().values().append_value(9);
         builder.values().values().append_value(10);
-        builder.values().append(true, 2);
-        builder.append(true, 1);
+        builder.values().append(true);
+        builder.append(true);
 
         let l1 = builder.finish();
 
@@ -460,7 +466,7 @@ mod tests {
             .downcast_mut::<Int32Builder>()
             .expect("should be an Int32Builder")
             .append_slice(&[1, 2, 3]);
-        builder.append(true, 1);
+        builder.append(true);
 
         builder
             .values()
@@ -468,7 +474,7 @@ mod tests {
             .downcast_mut::<Int32Builder>()
             .expect("should be an Int32Builder")
             .append_slice(&[4, 5, 6]);
-        builder.append(true, 1);
+        builder.append(true);
 
         let arr = builder.finish();
         assert_eq!(2, arr.len());
@@ -531,7 +537,7 @@ mod tests {
             .as_any_mut()
             .downcast_mut::<GenericListViewBuilder<O, Box<dyn ArrayBuilder>>>()
             .expect("should be an (Large)ListViewBuilder")
-            .append(true, 2);
+            .append(true);
         builder
             .values()
             .as_any_mut()
@@ -557,8 +563,8 @@ mod tests {
             .as_any_mut()
             .downcast_mut::<GenericListViewBuilder<O, Box<dyn ArrayBuilder>>>()
             .expect("should be an (Large)ListViewBuilder")
-            .append(true, 2);
-        builder.append(true, 2);
+            .append(true);
+        builder.append(true);
 
         builder
             .values()
@@ -595,13 +601,13 @@ mod tests {
             .as_any_mut()
             .downcast_mut::<GenericListViewBuilder<O, Box<dyn ArrayBuilder>>>()
             .expect("should be an (Large)ListViewBuilder")
-            .append(true, 3);
+            .append(true);
         builder
             .values()
             .as_any_mut()
             .downcast_mut::<GenericListViewBuilder<O, Box<dyn ArrayBuilder>>>()
             .expect("should be an (Large)ListViewBuilder")
-            .append(false, 0);
+            .append(false);
         builder
             .values()
             .as_any_mut()
@@ -617,10 +623,10 @@ mod tests {
             .as_any_mut()
             .downcast_mut::<GenericListViewBuilder<O, Box<dyn ArrayBuilder>>>()
             .expect("should be an (Large)ListViewBuilder")
-            .append(true, 1);
-        builder.append(true, 3);
+            .append(true);
+        builder.append(true);
 
-        builder.append(false, 0);
+        builder.append(false);
 
         builder
             .values()
@@ -647,8 +653,8 @@ mod tests {
             .as_any_mut()
             .downcast_mut::<GenericListViewBuilder<O, Box<dyn ArrayBuilder>>>()
             .expect("should be an (Large)ListViewBuilder")
-            .append(true, 2);
-        builder.append(true, 1);
+            .append(true);
+        builder.append(true);
 
         let l1 = builder.finish();
         assert_eq!(4, l1.len());
