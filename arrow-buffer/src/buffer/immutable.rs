@@ -164,7 +164,7 @@ impl Buffer {
     /// For externally owned buffers, this returns zero
     #[inline]
     pub fn capacity(&self) -> usize {
-        self.data.capacity()
+        self.length + self.data.capacity() - self.data.len()
     }
 
     /// Returns whether the buffer is empty.
