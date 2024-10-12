@@ -162,6 +162,10 @@ impl<K: ArrowNativeType + Ord, V: OffsetSizeTrait> DictionaryBuffer<K, V> {
 
                 let data = match cfg!(debug_assertions) {
                     true => builder.build().unwrap(),
+                    // SAFETY: FIXME: this is unsound. data_type is passed by the caller without
+                    // any validation, which might result in creating invalid arrays, and this is a
+                    // safe function which cannot have preconditions. Similar considerations apply
+                    // to null_buffer.
                     false => unsafe { builder.build_unchecked() },
                 };
 

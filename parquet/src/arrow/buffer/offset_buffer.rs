@@ -133,6 +133,10 @@ impl<I: OffsetSizeTrait> OffsetBuffer<I> {
 
         let data = match cfg!(debug_assertions) {
             true => array_data_builder.build().unwrap(),
+            // SAFETY: FIXME: this is unsound. data_type is passed by the caller without
+            // any validation, which might result in creating invalid arrays, and this is a
+            // safe function which cannot have preconditions. Similar considerations apply
+            // to null_buffer.
             false => unsafe { array_data_builder.build_unchecked() },
         };
 
