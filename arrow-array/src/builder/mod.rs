@@ -180,6 +180,8 @@ mod generic_byte_run_builder;
 pub use generic_byte_run_builder::*;
 mod generic_bytes_view_builder;
 pub use generic_bytes_view_builder::*;
+mod generic_list_view_builder;
+pub use generic_list_view_builder::*;
 mod union_builder;
 
 pub use union_builder::*;
@@ -303,6 +305,12 @@ pub type ListBuilder<T> = GenericListBuilder<i32, T>;
 
 /// Builder for [`LargeListArray`](crate::array::LargeListArray)
 pub type LargeListBuilder<T> = GenericListBuilder<i64, T>;
+
+/// Builder for [`ListViewArray`](crate::array::ListViewArray)
+pub type ListViewBuilder<T> = GenericListViewBuilder<i32, T>;
+
+/// Builder for [`LargeListViewArray`](crate::array::LargeListViewArray)
+pub type LargeListViewBuilder<T> = GenericListViewBuilder<i64, T>;
 
 /// Builder for [`BinaryArray`](crate::array::BinaryArray)
 ///
