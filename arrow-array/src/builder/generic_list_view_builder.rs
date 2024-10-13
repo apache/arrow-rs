@@ -41,8 +41,6 @@ impl<O: OffsetSizeTrait, T: ArrayBuilder + Default> Default for GenericListViewB
 
 impl<OffsetSize: OffsetSizeTrait, T: ArrayBuilder> ArrayBuilder
     for GenericListViewBuilder<OffsetSize, T>
-where
-    T: 'static,
 {
     /// Returns the builder as a non-mutable `Any` reference.
     fn as_any(&self) -> &dyn Any {
