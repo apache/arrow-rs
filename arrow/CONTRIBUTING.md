@@ -109,6 +109,36 @@ specific JIRA issues and reference them in these code comments. For example:
 //      This is not sound because .... see https://issues.apache.org/jira/browse/ARROW-nnnnn
 ```
 
+### Usage if SIMD / Auto vectorization
+
+This create does not use SIMD intrinsics (e.g. [`std::simd`] directly, but
+instead relies on LLVM's auto-vectorization.
+
+SIMD intrinsics are difficult to maintain and can be difficult to reason about.
+The auto-vectorizer in LLVM is quite good and often produces better code than
+hand-written manual uses of SIMD. In fact, this crate used to to have a fair
+amount of manual SIMD, and over time we've removed it as the auto-vectorized
+code was faster.
+
+[`std::simd`]: https://doc.rust-lang.org/std/simd/index.html
+
+LLVM is relatively good at vectorizing vertical operations provided:
+
+1. No conditionals within the loop body
+2. Not too much inlining , as the vectorizer gives up if the code is too complex
+3. No bitwise horizontal reductions or masking
+4. You've enabled SIMD instructions in the target ISA (e.g. `target-cpu` `RUSTFLAGS` flag)
+
+The last point is especially important as the default `target-cpu` doesn't
+support many SIMD instructions. See the Performance Tips section at the
+end of <https://crates.io/crates/arrow>
+
+To ensure your code is fully vectorized, we recommend getting familiar with
+tools like <https://rust.godbolt.org/> (again being sure to set `RUSTFLAGS`) and
+only once you've exhausted that avenue think of reaching for manual SIMD.
+Generally the hard part is getting the algorithm structured in such a way that
+it can be vectorized, regardless of what goes and generates those instructions.
+
 # Releases and publishing to crates.io
 
 Please see the [release](../dev/release/README.md) for details on how to create arrow releases
