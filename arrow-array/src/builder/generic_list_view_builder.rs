@@ -133,8 +133,12 @@ where
     #[inline]
     pub fn append(&mut self, is_valid: bool) {
         self.offsets_builder.append(self.current_offset);
-        self.sizes_builder
-            .append(OffsetSize::from_usize(self.values_builder.len() - self.current_offset.to_usize().unwrap()).unwrap());
+        self.sizes_builder.append(
+            OffsetSize::from_usize(
+                self.values_builder.len() - self.current_offset.to_usize().unwrap(),
+            )
+            .unwrap(),
+        );
         self.null_buffer_builder.append(is_valid);
         self.current_offset = OffsetSize::from_usize(self.values_builder.len()).unwrap();
     }
@@ -154,8 +158,7 @@ where
     /// See [`Self::append_value`] for an example use.
     #[inline]
     pub fn append_null(&mut self) {
-        self.offsets_builder
-            .append(self.current_offset);
+        self.offsets_builder.append(self.current_offset);
         self.sizes_builder
             .append(OffsetSize::from_usize(0).unwrap());
         self.null_buffer_builder.append_null();
