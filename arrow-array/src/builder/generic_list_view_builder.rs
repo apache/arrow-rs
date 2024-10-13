@@ -23,7 +23,6 @@ use std::any::Any;
 use std::sync::Arc;
 
 /// Builder for [`GenericListViewArray`]
-///
 #[derive(Debug)]
 pub struct GenericListViewBuilder<OffsetSize: OffsetSizeTrait, T: ArrayBuilder> {
     offsets_builder: BufferBuilder<OffsetSize>,
@@ -32,7 +31,6 @@ pub struct GenericListViewBuilder<OffsetSize: OffsetSizeTrait, T: ArrayBuilder> 
     values_builder: T,
     field: Option<FieldRef>,
     current_offset: OffsetSize,
-    current_size: OffsetSize,
 }
 
 impl<O: OffsetSizeTrait, T: ArrayBuilder + Default> Default for GenericListViewBuilder<O, T> {
@@ -96,11 +94,9 @@ impl<OffsetSize: OffsetSizeTrait, T: ArrayBuilder> GenericListViewBuilder<Offset
             sizes_builder,
             field: None,
             current_offset: OffsetSize::zero(),
-            current_size: OffsetSize::zero(),
         }
     }
 
-    /// 覆盖传递给 [`GenericListViewArray::new`] 的字段
     ///
     /// By default a nullable field is created with the name `item`
     ///
@@ -138,15 +134,12 @@ where
     /// Panics if the length of [`Self::values`] exceeds `OffsetSize::MAX`
     #[inline]
     pub fn append(&mut self, is_valid: bool) {
-        self.offsets_builder
-            .append(self.current_offset);
-         let size = self.values_builder.len() - self.current_offset.to_usize().unwrap();
+        self.offsets_builder.append(self.current_offset);
         self.sizes_builder
-            .append(OffsetSize::from_usize(size).unwrap());
+            .append(OffsetSize::from_usize(self.values_builder.len() - self.current_offset.to_usize().unwrap()).unwrap());
         self.null_buffer_builder.append(is_valid);
-        self.current_offset = self.current_offset + OffsetSize::from_usize(size).unwrap();
+        self.current_offset = OffsetSize::from_usize(self.values_builder.len()).unwrap();
     }
-    
 
     /// Append value into this [`GenericListViewBuilder`]
     #[inline]
@@ -164,7 +157,7 @@ where
     #[inline]
     pub fn append_null(&mut self) {
         self.offsets_builder
-            .append(OffsetSize::from_usize(self.values_builder.len()).unwrap());
+            .append(self.current_offset);
         self.sizes_builder
             .append(OffsetSize::from_usize(0).unwrap());
         self.null_buffer_builder.append_null();
@@ -190,13 +183,12 @@ where
         let values = self.values_builder.finish();
         let nulls = self.null_buffer_builder.finish();
         let offsets = self.offsets_builder.finish();
+        self.current_offset = OffsetSize::zero();
 
         // Safety: Safe by construction
         let offsets = ScalarBuffer::from(offsets);
         let sizes = self.sizes_builder.finish();
         let sizes = ScalarBuffer::from(sizes);
-        dbg!(&offsets);
-        dbg!(&sizes);
         let field = match &self.field {
             Some(f) => f.clone(),
             None => Arc::new(Field::new("item", values.data_type().clone(), true)),
@@ -241,7 +233,6 @@ where
         for v in iter {
             match v {
                 Some(elements) => {
-                    let origin_size = self.values_builder.len();
                     self.values_builder.extend(elements);
                     self.append(true);
                 }
