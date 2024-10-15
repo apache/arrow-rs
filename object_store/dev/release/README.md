@@ -54,46 +54,38 @@ labels associated with them.
 
 Now prepare a PR to update `CHANGELOG.md` and versions on `master` to reflect the planned release.
 
-For `object_store` this process is done in the `object_store` directory. See [#6227] for an example
+Note  this process is done in the `object_store` directory. See [#6227] for an example
 
 [#6227]: https://github.com/apache/arrow-rs/pull/6227
 
 ```bash
+# NOTE: Run commands in object_store sub directory (not main repo checkout)
+# cd object_store
+
 git checkout master
 git pull
 git checkout -b <RELEASE_BRANCH>
 
 # Update versions. Make sure to run it before the next step since we do not want CHANGELOG-old.md affected.
-sed -i '' -e 's/14.0.0/39.0.0/g' `find . -name 'Cargo.toml' -or -name '*.md' | grep -v CHANGELOG.md`
+sed -i '' -e 's/0.11.0/0.11.1/g' `find . -name 'Cargo.toml' -or -name '*.md' | grep -v CHANGELOG`
 git commit -a -m 'Update version'
 
 # ensure your github token is available
-export ARROW_GITHUB_API_TOKEN=<TOKEN>
-
-# Copy the contents of CHANGELOG.md to the top of CHANGELOG-old.md
+export CHANGELOG_GITHUB_TOKEN=<TOKEN>
 
 # manually edit ./dev/release/update_change_log.sh to reflect the release version
 # create the changelog
 ./dev/release/update_change_log.sh
 
-# run automated script to copy labels to issues based on referenced PRs
-# (NOTE 1:  this must be done by a committer / other who has
-# write access to the repository)
-#
-# NOTE 2: this must be done after creating the initial CHANGELOG file
-python dev/release/label_issues.py
+# review change log / and edit associated issues and labels if needed, rerun update_change_log.sh
 
-# review change log / edit issues and labels if needed, rerun
+# Commit changes
 git commit -a -m 'Create changelog'
 
-
-# Manually edit ./dev/release/update_change_log.sh to reflect the release version
-# Create the changelog
-CHANGELOG_GITHUB_TOKEN=<TOKEN> ./dev/release/update_change_log.sh
-# Review change log / edit issues and labels if needed, rerun
-git commit -a -m 'Create changelog'
-
+# push changes to fork and create a PR to master
 git push
+```
+
 ```
 
 Note that when reviewing the change log, rather than editing the
