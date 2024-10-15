@@ -25,13 +25,14 @@ This file documents the release process for the "Rust Arrow Crates": `arrow`, `a
 
 ### The Rust Arrow Crates
 
-The Rust Arrow Crates are interconnected (e.g. `parquet` has an optional dependency on `arrow`) so we increment and release all of them together. 
+The Rust Arrow Crates are interconnected (e.g. `parquet` has an optional dependency on `arrow`) so we increment and release all of them together.
 
 If any code has been merged to master that has a breaking API change, as defined
-in [Rust RFC 1105] he major version number is incremented (e.g. `9.0.2` to `10.0.2`). 
+in [Rust RFC 1105] he major version number is incremented (e.g. `9.0.2` to `10.0.2`).
 Otherwise the new minor version incremented (e.g. `9.0.2` to `9.1.0`).
 
-[Rust RFC 1105]: https://github.com/rust-lang/rfcs/blob/master/text/1105-api-evolution.md
+[rust rfc 1105]: https://github.com/rust-lang/rfcs/blob/master/text/1105-api-evolution.md
+
 # Release Mechanics
 
 ## Process Overview
