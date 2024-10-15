@@ -86,8 +86,6 @@ git commit -a -m 'Create changelog'
 git push
 ```
 
-```
-
 Note that when reviewing the change log, rather than editing the
 `CHANGELOG.md`, it is preferred to update the issues and their labels
 (e.g. add `invalid` label to exclude them from release notes)
