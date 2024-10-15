@@ -70,6 +70,8 @@ git commit -a -m 'Update version'
 # ensure your github token is available
 export ARROW_GITHUB_API_TOKEN=<TOKEN>
 
+# Copy the contents of CHANGELOG.md to the top of CHANGELOG-old.md
+
 # manually edit ./dev/release/update_change_log.sh to reflect the release version
 # create the changelog
 ./dev/release/update_change_log.sh
