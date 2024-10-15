@@ -17,7 +17,7 @@
 
 [package]
 name = "object_store"
-version = "0.11.0"
+version = "0.11.1"
 edition = "2021"
 license = "MIT/Apache-2.0"
 readme = "README.md"
