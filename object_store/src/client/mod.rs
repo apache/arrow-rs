@@ -501,7 +501,7 @@ impl ClientOptions {
     ///
     /// See [`Self::with_connect_timeout`]
     pub fn with_connect_timeout_disabled(mut self) -> Self {
-        self.timeout = None;
+        self.connect_timeout = None;
         self
     }
 
