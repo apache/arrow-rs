@@ -92,9 +92,6 @@ CHANGELOG_GITHUB_TOKEN=<TOKEN> ./dev/release/update_change_log.sh
 git commit -a -m 'Create changelog'
 
 git push
-
-# File the release PR
-export BRANCH=<RELEASE_BRANCH> && export GITHUB_USERNAME=<USERNAME> && export GITHUB_TOKEN=<TOKEN> && ./file_release_pr.sh
 ```
 
 Note that when reviewing the change log, rather than editing the
