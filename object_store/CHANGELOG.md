@@ -29,7 +29,6 @@
 - Better Document Backoff Algorithm [\#6324](https://github.com/apache/arrow-rs/issues/6324) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)]
 - Add direction to `list_with_offset` [\#6274](https://github.com/apache/arrow-rs/issues/6274) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)]
 - Support server-side encryption with customer-provided keys \(SSE-C\) [\#6229](https://github.com/apache/arrow-rs/issues/6229) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)]
-- Release object store `0.11.0` \(breaking API\) around Aug 15 2024 [\#6121](https://github.com/apache/arrow-rs/issues/6121) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)]
 
 **Fixed bugs:**
 
