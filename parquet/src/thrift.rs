@@ -96,7 +96,7 @@ impl<'a> TCompactSliceInputProtocol<'a> {
     }
 }
 
-impl<'a> TInputProtocol for TCompactSliceInputProtocol<'a> {
+impl TInputProtocol for TCompactSliceInputProtocol<'_> {
     fn read_message_begin(&mut self) -> thrift::Result<TMessageIdentifier> {
         unimplemented!()
     }

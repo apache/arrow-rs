@@ -64,7 +64,7 @@ pub struct Attributes<'a> {
     pub additional: HashMap<&'a str, serde_json::Value>,
 }
 
-impl<'a> Attributes<'a> {
+impl Attributes<'_> {
     /// Returns the field metadata for this [`Attributes`]
     pub(crate) fn field_metadata(&self) -> HashMap<String, String> {
         self.additional

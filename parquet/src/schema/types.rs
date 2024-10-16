@@ -772,7 +772,7 @@ impl From<Vec<String>> for ColumnPath {
     }
 }
 
-impl<'a> From<&'a str> for ColumnPath {
+impl From<&str> for ColumnPath {
     fn from(single_path: &str) -> Self {
         let s = String::from(single_path);
         ColumnPath::from(s)

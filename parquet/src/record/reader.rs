@@ -592,7 +592,7 @@ enum Either<'a> {
     Right(Box<dyn FileReader>),
 }
 
-impl<'a> Either<'a> {
+impl Either<'_> {
     fn reader(&self) -> &dyn FileReader {
         match *self {
             Either::Left(r) => r,
@@ -732,7 +732,7 @@ impl<'a> RowIter<'a> {
     }
 }
 
-impl<'a> Iterator for RowIter<'a> {
+impl Iterator for RowIter<'_> {
     type Item = Result<Row>;
 
     fn next(&mut self) -> Option<Result<Row>> {

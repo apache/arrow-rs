@@ -275,7 +275,7 @@ mod tests {
 
     /// prints a byte slice as a binary string like "01010101 10101010"
     struct BinaryFormatter<'a>(&'a [u8]);
-    impl<'a> Display for BinaryFormatter<'a> {
+    impl Display for BinaryFormatter<'_> {
         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
             for byte in self.0 {
                 write!(f, "{:08b} ", byte)?;
