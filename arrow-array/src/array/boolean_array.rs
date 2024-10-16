@@ -329,7 +329,7 @@ impl Array for BooleanArray {
     }
 }
 
-impl<'a> ArrayAccessor for &'a BooleanArray {
+impl ArrayAccessor for &BooleanArray {
     type Item = bool;
 
     fn value(&self, index: usize) -> Self::Item {

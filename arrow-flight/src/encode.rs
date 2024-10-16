@@ -1597,11 +1597,7 @@ mod tests {
             while let Some(data) = stream.next().await.transpose().unwrap() {
                 let actual_data_size = flight_data_size(&data);
 
-                let actual_overage = if actual_data_size > max_flight_data_size {
-                    actual_data_size - max_flight_data_size
-                } else {
-                    0
-                };
+                let actual_overage = actual_data_size.saturating_sub(max_flight_data_size);
 
                 assert!(
                     actual_overage <= allowed_overage,

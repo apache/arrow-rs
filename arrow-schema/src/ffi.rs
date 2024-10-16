@@ -336,7 +336,7 @@ impl FFI_ArrowSchema {
             Ok(HashMap::new())
         } else {
             let mut pos = 0;
-            let buffer: *const u8 = self.metadata as *const u8;
+            let buffer: *const u8 = self.metadata;
 
             fn next_four_bytes(buffer: *const u8, pos: &mut isize) -> [u8; 4] {
                 let out = unsafe {

@@ -303,7 +303,7 @@ fn print_logical_and_converted(
 }
 
 #[allow(unused_must_use)]
-impl<'a> Printer<'a> {
+impl Printer<'_> {
     pub fn print(&mut self, tp: &Type) {
         self.print_indent();
         match *tp {
