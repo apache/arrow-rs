@@ -128,7 +128,7 @@ discovering the auto-vectorized code was faster.
 LLVM is relatively good at vectorizing vertical operations provided:
 
 1. No conditionals within the loop body (e.g no checking for nulls on each row)
-2. Not too much `#[inline]` (as the vectorizer gives up if the code is too complex)
+2. Not too much inlining (judicious use of #[inline] and #[inline(never)]) as the vectorizer gives up if the code is too complex
 3. No [horizontal reductions] or data dependencies
 4. Suitable SIMD instructions available in the target ISA (e.g. `target-cpu` `RUSTFLAGS` flag)
 
