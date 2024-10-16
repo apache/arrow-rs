@@ -111,7 +111,7 @@ specific JIRA issues and reference them in these code comments. For example:
 
 ### Usage if SIMD / Auto vectorization
 
-This create does not use SIMD intrinsics (e.g. [`std::simd`] directly, but
+This crate does not use SIMD intrinsics (e.g. [`std::simd`] directly, but
 instead relies on LLVM's auto-vectorization.
 
 SIMD intrinsics are difficult to maintain and can be difficult to reason about.
@@ -133,11 +133,11 @@ The last point is especially important as the default `target-cpu` doesn't
 support many SIMD instructions. See the Performance Tips section at the
 end of <https://crates.io/crates/arrow>
 
-To ensure your code is fully vectorized, we recommend getting familiar with
+To ensure your code is fully vectorized, we recommend becoming familiar with
 tools like <https://rust.godbolt.org/> (again being sure to set `RUSTFLAGS`) and
 only once you've exhausted that avenue think of reaching for manual SIMD.
 Generally the hard part is getting the algorithm structured in such a way that
-it can be vectorized, regardless of what goes and generates those instructions.
+it can be vectorized, regardless of what generates those instructions.
 
 # Releases and publishing to crates.io
 
