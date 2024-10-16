@@ -112,32 +112,38 @@ specific JIRA issues and reference them in these code comments. For example:
 ### Usage if SIMD / Auto vectorization
 
 This crate does not use SIMD intrinsics (e.g. [`std::simd`] directly, but
-instead relies on LLVM's auto-vectorization.
+instead relies on the Rust compiler's auto-vectorization capabilities (which are
+built on LLVM).
 
 SIMD intrinsics are difficult to maintain and can be difficult to reason about.
-The auto-vectorizer in LLVM is quite good and often produces better code than
-hand-written manual uses of SIMD. In fact, this crate used to to have a fair
-amount of manual SIMD, and over time we've removed it as the auto-vectorized
-code was faster.
+The auto-vectorizer in LLVM is quite good and often produces faster code than
+using hand-written SIMD intrinsics. In fact, this crate used to contain several
+kenels that used hand-written SIMD instructions, which were removed after
+discovering the auto-vectorized code was faster.
 
 [`std::simd`]: https://doc.rust-lang.org/std/simd/index.html
 
+#### Tips for auto-vectorization
+
 LLVM is relatively good at vectorizing vertical operations provided:
 
-1. No conditionals within the loop body
-2. Not too much inlining , as the vectorizer gives up if the code is too complex
-3. No bitwise horizontal reductions or masking
-4. You've enabled SIMD instructions in the target ISA (e.g. `target-cpu` `RUSTFLAGS` flag)
+1. No conditionals within the loop body (e.g no checking for nulls on each row)
+2. Not too much inlining, as the vectorizer gives up if the code is too complex
+3. No [horizontal reductions] or data dependencies
+4. Suitable SIMD instructions available in the target ISA (e.g. `target-cpu` `RUSTFLAGS` flag)
+
+[horizontal reductions]: https://rust-lang.github.io/packed_simd/perf-guide/vert-hor-ops.html
 
 The last point is especially important as the default `target-cpu` doesn't
 support many SIMD instructions. See the Performance Tips section at the
 end of <https://crates.io/crates/arrow>
 
-To ensure your code is fully vectorized, we recommend becoming familiar with
-tools like <https://rust.godbolt.org/> (again being sure to set `RUSTFLAGS`) and
-only once you've exhausted that avenue think of reaching for manual SIMD.
-Generally the hard part is getting the algorithm structured in such a way that
-it can be vectorized, regardless of what generates those instructions.
+To ensure your code is fully vectorized, we recommend using tools like
+<https://rust.godbolt.org/> (again being sure `RUSTFLAGS` is set appropriately)
+to analyze the resulting code, and only once you've exhausted auto vectorization
+think of reaching for manual SIMD. Generally the hard part of vectorizing code
+is structuring the algorithm in such a way that it can be vectorized, regardless
+of what generates those instructions.
 
 # Releases and publishing to crates.io
 
