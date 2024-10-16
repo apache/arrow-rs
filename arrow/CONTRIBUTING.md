@@ -109,26 +109,26 @@ specific JIRA issues and reference them in these code comments. For example:
 //      This is not sound because .... see https://issues.apache.org/jira/browse/ARROW-nnnnn
 ```
 
-### Usage if SIMD / Auto vectorization
+### Usage if SIMD / auto vectorization
 
-This crate does not use SIMD intrinsics (e.g. [`std::simd`] directly, but
-instead relies on the Rust compiler's auto-vectorization capabilities (which are
-built on LLVM).
+This crate does not use SIMD intrinsics (e.g. [`std::simd`]) directly, but
+instead relies on the Rust compiler's auto-vectorization capabilities, which are
+built on LLVM.
 
 SIMD intrinsics are difficult to maintain and can be difficult to reason about.
-The auto-vectorizer in LLVM is quite good and often produces faster code than
-using hand-written SIMD intrinsics. In fact, this crate used to contain several
-kenels that used hand-written SIMD instructions, which were removed after
+The auto-vectorizer in LLVM is quite good and often produces kernels that are
+faster than using hand-written SIMD intrinsics. This crate used to contain
+several kernels with hand-written SIMD instructions, which were removed after
 discovering the auto-vectorized code was faster.
 
 [`std::simd`]: https://doc.rust-lang.org/std/simd/index.html
 
-#### Tips for auto-vectorization
+#### Tips for auto vectorization
 
 LLVM is relatively good at vectorizing vertical operations provided:
 
 1. No conditionals within the loop body (e.g no checking for nulls on each row)
-2. Not too much inlining, as the vectorizer gives up if the code is too complex
+2. Not too much inlining (as the vectorizer gives up if the code is too complex)
 3. No [horizontal reductions] or data dependencies
 4. Suitable SIMD instructions available in the target ISA (e.g. `target-cpu` `RUSTFLAGS` flag)
 
