@@ -21,29 +21,24 @@
 
 ## Overview
 
-This file documents the release process for:
-
-1. The "Rust Arrow Crates": `arrow`, `arrow-flight`, `parquet`, and `parquet-derive`.
-2. The `object_store` crate.
+This file documents the release process for the "Rust Arrow Crates": `arrow`, `arrow-flight`, `parquet`, and `parquet-derive`.
 
 ### The Rust Arrow Crates
 
-The Rust Arrow Crates are interconnected (e.g. `parquet` has an optional dependency on `arrow`) so we increment and release all of them together. We try to release a new version of "Rust Arrow Crates" every two weeks. This cadence balances getting new features into the community without overwhelming downstream projects with too frequent changes or overly burdening maintainers.
+The Rust Arrow Crates are interconnected (e.g. `parquet` has an optional dependency on `arrow`) so we increment and release all of them together.
 
-If any code has been merged to master that has a breaking API change, as defined in [Rust RFC 1105](https://github.com/rust-lang/rfcs/blob/master/text/1105-api-evolution.md), the major version number incremented changed (e.g. `9.0.2` to `9.0.2`). Otherwise the new minor version incremented (e.g. `9.0.2` to `7.1.0`).
+If any code has been merged to master that has a breaking API change, as defined
+in [Rust RFC 1105] he major version number is incremented (e.g. `9.0.2` to `10.0.2`).
+Otherwise the new minor version incremented (e.g. `9.0.2` to `9.1.0`).
 
-### `object_store` crate
-
-At the time of writing, we release a new version of `object_store` on demand rather than on a regular schedule.
-
-As we are still in an early phase, we use the 0.x version scheme. If any code has been merged to master that has a breaking API change, as defined in [Rust RFC 1105](https://github.com/rust-lang/rfcs/blob/master/text/1105-api-evolution.md), the minor version number incremented changed (e.g. `0.3.0` to `0.4.0`). Otherwise the patch version is incremented (e.g. `0.3.0` to `0.3.1`).
+[rust rfc 1105]: https://github.com/rust-lang/rfcs/blob/master/text/1105-api-evolution.md
 
 # Release Mechanics
 
 ## Process Overview
 
 As part of the Apache governance model, official releases consist of
-signed source tarballs approved by the PMC.
+signed source tarballs approved by the Arrow PMC.
 
 We then use the code in the approved source tarball to release to
 crates.io, the Rust ecosystem's package manager.
@@ -60,9 +55,7 @@ labels associated with them.
 
 Now prepare a PR to update `CHANGELOG.md` and versions on `master` to reflect the planned release.
 
-For the Rust Arrow crates, do this in the root of this repository. For example [#2323](https://github.com/apache/arrow-rs/pull/2323)
-
-For `object_store` the same process is done in the `object_store` directory. Examples TBD
+Do this in the root of this repository. For example [#2323](https://github.com/apache/arrow-rs/pull/2323)
 
 ```bash
 git checkout master
@@ -90,7 +83,6 @@ python dev/release/label_issues.py
 # review change log / edit issues and labels if needed, rerun
 git commit -a -m 'Create changelog'
 
-
 # Manually edit ./dev/release/update_change_log.sh to reflect the release version
 # Create the changelog
 CHANGELOG_GITHUB_TOKEN=<TOKEN> ./dev/release/update_change_log.sh
@@ -98,9 +90,6 @@ CHANGELOG_GITHUB_TOKEN=<TOKEN> ./dev/release/update_change_log.sh
 git commit -a -m 'Create changelog'
 
 git push
-
-# File the release PR
-export BRANCH=<RELEASE_BRANCH> && export GITHUB_USERNAME=<USERNAME> && export GITHUB_TOKEN=<TOKEN> && ./file_release_pr.sh
 ```
 
 Note that when reviewing the change log, rather than editing the
@@ -120,9 +109,7 @@ distribution servers.
 
 While the official release artifact is a signed tarball, we also tag the commit it was created for convenience and code archaeology.
 
-For a Rust Arrow Crates release, use a string such as `4.0.1` as the `<version>`.
-
-For `object_store` releases, use a string such as `object_store_0.4.0` as the `<version>`.
+Use a string such as `43.0.0` as the `<version>`.
 
 Create and push the tag thusly:
 
@@ -145,12 +132,6 @@ Rust Arrow Crates:
 
 ```shell
 ./dev/release/create-tarball.sh 4.1.0 2
-```
-
-`object_store`:
-
-```shell
-./object_store/dev/release/create-tarball.sh 4.1.0 2
 ```
 
 The `create-tarball.sh` script
@@ -198,7 +179,7 @@ For the release to become "official" it needs at least three Apache Arrow PMC me
 
 ## Verifying release candidates
 
-The `dev/release/verify-release-candidate.sh` or `object_store/dev/release/verify-release-candidate.sh` are scripts in this repository that can assist in the verification process. Run it like:
+The `dev/release/verify-release-candidate.sh` script in this repository can assist in the verification process. Run it like:
 
 ```
 ./dev/release/verify-release-candidate.sh 4.1.0 2
@@ -218,19 +199,13 @@ Rust Arrow Crates:
 ./dev/release/release-tarball.sh 4.1.0 2
 ```
 
-`object_store`
-
-```shell
-./object_store/dev/release/release-tarball.sh 4.1.0 2
-```
-
 Congratulations! The release is now official!
 
 ### Publish on Crates.io
 
-Only approved releases of the tarball should be published to
-crates.io, in order to conform to Apache Software Foundation
-governance standards.
+It is important that only approved releases of the tarball should be published
+to crates.io, in order to conform to Apache Software Foundation governance
+standards.
 
 An Arrow committer can publish this crate after an official project release has
 been made to crates.io using the following instructions.
@@ -268,10 +243,4 @@ Rust Arrow Crates:
 (cd parquet && cargo publish)
 (cd parquet_derive && cargo publish)
 (cd arrow-integration-test && cargo publish)
-```
-
-`object_store`
-
-```shell
-cargo publish
 ```

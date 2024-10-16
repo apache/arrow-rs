@@ -51,7 +51,7 @@ impl Default for BackoffConfig {
 ///
 /// Consecutive calls to [`Backoff::next`] will return the next backoff interval
 ///
-pub struct Backoff {
+pub(crate) struct Backoff {
     init_backoff: f64,
     next_backoff_secs: f64,
     max_backoff_secs: f64,
@@ -72,14 +72,14 @@ impl std::fmt::Debug for Backoff {
 
 impl Backoff {
     /// Create a new [`Backoff`] from the provided [`BackoffConfig`]
-    pub fn new(config: &BackoffConfig) -> Self {
+    pub(crate) fn new(config: &BackoffConfig) -> Self {
         Self::new_with_rng(config, None)
     }
 
     /// Creates a new `Backoff` with the optional `rng`
     ///
     /// Used [`rand::thread_rng()`] if no rng provided
-    pub fn new_with_rng(
+    pub(crate) fn new_with_rng(
         config: &BackoffConfig,
         rng: Option<Box<dyn RngCore + Sync + Send>>,
     ) -> Self {
@@ -94,7 +94,7 @@ impl Backoff {
     }
 
     /// Returns the next backoff duration to wait for
-    pub fn next(&mut self) -> Duration {
+    pub(crate) fn next(&mut self) -> Duration {
         let range = self.init_backoff..(self.next_backoff_secs * self.base);
 
         let rand_backoff = match self.rng.as_mut() {

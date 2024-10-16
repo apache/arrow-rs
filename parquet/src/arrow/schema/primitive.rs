@@ -57,6 +57,11 @@ fn apply_hint(parquet: DataType, hint: DataType) -> DataType {
         (DataType::Utf8, DataType::LargeUtf8) => hint,
         (DataType::Binary, DataType::LargeBinary) => hint,
 
+        // Read as Utf8
+        (DataType::Binary, DataType::Utf8) => hint,
+        (DataType::Binary, DataType::LargeUtf8) => hint,
+        (DataType::Binary, DataType::Utf8View) => hint,
+
         // Determine view type
         (DataType::Utf8, DataType::Utf8View) => hint,
         (DataType::Binary, DataType::BinaryView) => hint,

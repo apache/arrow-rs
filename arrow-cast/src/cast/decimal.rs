@@ -250,7 +250,7 @@ where
         }
     };
 
-    let integers = first_part.trim_start_matches('0');
+    let integers = first_part;
     let decimals = if parts.len() == 2 { parts[1] } else { "" };
 
     if !integers.is_empty() && !integers.as_bytes()[0].is_ascii_digit() {
@@ -566,4 +566,49 @@ where
     let array = array.as_primitive::<D>();
     let array = array.unary::<_, T>(op);
     Ok(Arc::new(array))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_string_to_decimal_native() -> Result<(), ArrowError> {
+        assert_eq!(
+            parse_string_to_decimal_native::<Decimal128Type>("0", 0)?,
+            0_i128
+        );
+        assert_eq!(
+            parse_string_to_decimal_native::<Decimal128Type>("0", 5)?,
+            0_i128
+        );
+
+        assert_eq!(
+            parse_string_to_decimal_native::<Decimal128Type>("123", 0)?,
+            123_i128
+        );
+        assert_eq!(
+            parse_string_to_decimal_native::<Decimal128Type>("123", 5)?,
+            12300000_i128
+        );
+
+        assert_eq!(
+            parse_string_to_decimal_native::<Decimal128Type>("123.45", 0)?,
+            123_i128
+        );
+        assert_eq!(
+            parse_string_to_decimal_native::<Decimal128Type>("123.45", 5)?,
+            12345000_i128
+        );
+
+        assert_eq!(
+            parse_string_to_decimal_native::<Decimal128Type>("123.4567891", 0)?,
+            123_i128
+        );
+        assert_eq!(
+            parse_string_to_decimal_native::<Decimal128Type>("123.4567891", 5)?,
+            12345679_i128
+        );
+        Ok(())
+    }
 }

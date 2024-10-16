@@ -21,7 +21,6 @@ use crate::{Array, ArrayRef, ArrowPrimitiveType, DictionaryArray};
 use arrow_buffer::{ArrowNativeType, ToByteSlice};
 use arrow_schema::{ArrowError, DataType};
 use std::any::Any;
-use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -210,23 +209,38 @@ where
     K: ArrowDictionaryKeyType,
     V: ArrowPrimitiveType,
 {
+    #[inline]
+    fn get_or_insert_key(&mut self, value: V::Native) -> Result<K::Native, ArrowError> {
+        match self.map.get(&Value(value)) {
+            Some(&key) => {
+                Ok(K::Native::from_usize(key).ok_or(ArrowError::DictionaryKeyOverflowError)?)
+            }
+            None => {
+                let key = self.values_builder.len();
+                self.values_builder.append_value(value);
+                self.map.insert(Value(value), key);
+                Ok(K::Native::from_usize(key).ok_or(ArrowError::DictionaryKeyOverflowError)?)
+            }
+        }
+    }
+
     /// Append a primitive value to the array. Return an existing index
     /// if already present in the values array or a new index if the
     /// value is appended to the values array.
     #[inline]
     pub fn append(&mut self, value: V::Native) -> Result<K::Native, ArrowError> {
-        let key = match self.map.entry(Value(value)) {
-            Entry::Vacant(vacant) => {
-                // Append new value.
-                let key = self.values_builder.len();
-                self.values_builder.append_value(value);
-                vacant.insert(key);
-                K::Native::from_usize(key).ok_or(ArrowError::DictionaryKeyOverflowError)?
-            }
-            Entry::Occupied(o) => K::Native::usize_as(*o.get()),
-        };
-
+        let key = self.get_or_insert_key(value)?;
         self.keys_builder.append_value(key);
+        Ok(key)
+    }
+
+    /// Append a value multiple times to the array.
+    /// This is the same as `append` but allows to append the same value multiple times without doing multiple lookups.
+    ///
+    /// Returns an error if the new index would overflow the key type.
+    pub fn append_n(&mut self, value: V::Native, count: usize) -> Result<K::Native, ArrowError> {
+        let key = self.get_or_insert_key(value)?;
+        self.keys_builder.append_value_n(key, count);
         Ok(key)
     }
 
@@ -240,10 +254,27 @@ where
         self.append(value).expect("dictionary key overflow");
     }
 
+    /// Infallibly append a value to this builder repeatedly `count` times.
+    /// This is the same as `append_value` but allows to append the same value multiple times without doing multiple lookups.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the resulting length of the dictionary values array would exceed `T::Native::MAX`
+    pub fn append_values(&mut self, value: V::Native, count: usize) {
+        self.append_n(value, count)
+            .expect("dictionary key overflow");
+    }
+
     /// Appends a null slot into the builder
     #[inline]
     pub fn append_null(&mut self) {
         self.keys_builder.append_null()
+    }
+
+    /// Append `n` null slots into the builder
+    #[inline]
+    pub fn append_nulls(&mut self, n: usize) {
+        self.keys_builder.append_nulls(n)
     }
 
     /// Append an `Option` value into the builder
@@ -256,6 +287,19 @@ where
         match value {
             None => self.append_null(),
             Some(v) => self.append_value(v),
+        };
+    }
+
+    /// Append an `Option` value into the builder repeatedly `count` times.
+    /// This is the same as `append_option` but allows to append the same value multiple times without doing multiple lookups.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the resulting length of the dictionary values array would exceed `T::Native::MAX`
+    pub fn append_options(&mut self, value: Option<V::Native>, count: usize) {
+        match value {
+            None => self.keys_builder.append_nulls(count),
+            Some(v) => self.append_values(v, count),
         };
     }
 

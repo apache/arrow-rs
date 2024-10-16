@@ -26,7 +26,7 @@ use snafu::{OptionExt, ResultExt, Snafu};
 
 #[derive(Debug, Copy, Clone)]
 /// Configuration for header extraction
-pub struct HeaderConfig {
+pub(crate) struct HeaderConfig {
     /// Whether to require an ETag header when extracting [`ObjectMeta`] from headers.
     ///
     /// Defaults to `true`
@@ -45,7 +45,7 @@ pub struct HeaderConfig {
 }
 
 #[derive(Debug, Snafu)]
-pub enum Error {
+pub(crate) enum Error {
     #[snafu(display("ETag Header missing from response"))]
     MissingEtag,
 
@@ -73,7 +73,10 @@ pub enum Error {
 
 /// Extracts a PutResult from the provided [`HeaderMap`]
 #[cfg(any(feature = "aws", feature = "gcp", feature = "azure"))]
-pub fn get_put_result(headers: &HeaderMap, version: &str) -> Result<crate::PutResult, Error> {
+pub(crate) fn get_put_result(
+    headers: &HeaderMap,
+    version: &str,
+) -> Result<crate::PutResult, Error> {
     let e_tag = Some(get_etag(headers)?);
     let version = get_version(headers, version)?;
     Ok(crate::PutResult { e_tag, version })
@@ -81,7 +84,7 @@ pub fn get_put_result(headers: &HeaderMap, version: &str) -> Result<crate::PutRe
 
 /// Extracts a optional version from the provided [`HeaderMap`]
 #[cfg(any(feature = "aws", feature = "gcp", feature = "azure"))]
-pub fn get_version(headers: &HeaderMap, version: &str) -> Result<Option<String>, Error> {
+pub(crate) fn get_version(headers: &HeaderMap, version: &str) -> Result<Option<String>, Error> {
     Ok(match headers.get(version) {
         Some(x) => Some(x.to_str().context(BadHeaderSnafu)?.to_string()),
         None => None,
@@ -89,13 +92,13 @@ pub fn get_version(headers: &HeaderMap, version: &str) -> Result<Option<String>,
 }
 
 /// Extracts an etag from the provided [`HeaderMap`]
-pub fn get_etag(headers: &HeaderMap) -> Result<String, Error> {
+pub(crate) fn get_etag(headers: &HeaderMap) -> Result<String, Error> {
     let e_tag = headers.get(ETAG).ok_or(Error::MissingEtag)?;
     Ok(e_tag.to_str().context(BadHeaderSnafu)?.to_string())
 }
 
 /// Extracts [`ObjectMeta`] from the provided [`HeaderMap`]
-pub fn header_meta(
+pub(crate) fn header_meta(
     location: &Path,
     headers: &HeaderMap,
     cfg: HeaderConfig,

@@ -95,7 +95,7 @@ pub enum Error {
     SASforSASNotSupported,
 }
 
-pub type Result<T, E = Error> = std::result::Result<T, E>;
+pub(crate) type Result<T, E = Error> = std::result::Result<T, E>;
 
 impl From<Error> for crate::Error {
     fn from(value: Error) -> Self {
@@ -168,7 +168,7 @@ pub(crate) struct AzureSigner {
 }
 
 impl AzureSigner {
-    pub fn new(
+    pub(crate) fn new(
         signing_key: AzureAccessKey,
         account: String,
         start: DateTime<Utc>,
@@ -184,7 +184,7 @@ impl AzureSigner {
         }
     }
 
-    pub fn sign(&self, method: &Method, url: &mut Url) -> Result<()> {
+    pub(crate) fn sign(&self, method: &Method, url: &mut Url) -> Result<()> {
         let (str_to_sign, query_pairs) = match &self.delegation_key {
             Some(delegation_key) => string_to_sign_user_delegation_sas(
                 url,
@@ -584,7 +584,7 @@ struct OAuthTokenResponse {
 ///
 /// <https://learn.microsoft.com/en-us/azure/active-directory/develop/v2-oauth2-client-creds-grant-flow#first-case-access-token-request-with-a-shared-secret>
 #[derive(Debug)]
-pub struct ClientSecretOAuthProvider {
+pub(crate) struct ClientSecretOAuthProvider {
     token_url: String,
     client_id: String,
     client_secret: String,
@@ -592,7 +592,7 @@ pub struct ClientSecretOAuthProvider {
 
 impl ClientSecretOAuthProvider {
     /// Create a new [`ClientSecretOAuthProvider`] for an azure backed store
-    pub fn new(
+    pub(crate) fn new(
         client_id: String,
         client_secret: String,
         tenant_id: impl AsRef<str>,
@@ -676,7 +676,7 @@ struct ImdsTokenResponse {
 /// This authentication type works in Azure VMs, App Service and Azure Functions applications, as well as the Azure Cloud Shell
 /// <https://learn.microsoft.com/en-gb/azure/active-directory/managed-identities-azure-resources/how-to-use-vm-token#get-a-token-using-http>
 #[derive(Debug)]
-pub struct ImdsManagedIdentityProvider {
+pub(crate) struct ImdsManagedIdentityProvider {
     msi_endpoint: String,
     client_id: Option<String>,
     object_id: Option<String>,
@@ -685,7 +685,7 @@ pub struct ImdsManagedIdentityProvider {
 
 impl ImdsManagedIdentityProvider {
     /// Create a new [`ImdsManagedIdentityProvider`] for an azure backed store
-    pub fn new(
+    pub(crate) fn new(
         client_id: Option<String>,
         object_id: Option<String>,
         msi_res_id: Option<String>,
@@ -760,7 +760,7 @@ impl TokenProvider for ImdsManagedIdentityProvider {
 ///
 /// <https://learn.microsoft.com/en-us/azure/active-directory/develop/workload-identity-federation>
 #[derive(Debug)]
-pub struct WorkloadIdentityOAuthProvider {
+pub(crate) struct WorkloadIdentityOAuthProvider {
     token_url: String,
     client_id: String,
     federated_token_file: String,
@@ -768,7 +768,7 @@ pub struct WorkloadIdentityOAuthProvider {
 
 impl WorkloadIdentityOAuthProvider {
     /// Create a new [`WorkloadIdentityOAuthProvider`] for an azure backed store
-    pub fn new(
+    pub(crate) fn new(
         client_id: impl Into<String>,
         federated_token_file: impl Into<String>,
         tenant_id: impl AsRef<str>,
@@ -836,7 +836,7 @@ mod az_cli_date_format {
     use chrono::{DateTime, TimeZone};
     use serde::{self, Deserialize, Deserializer};
 
-    pub fn deserialize<'de, D>(deserializer: D) -> Result<DateTime<chrono::Local>, D::Error>
+    pub(crate) fn deserialize<'de, D>(deserializer: D) -> Result<DateTime<chrono::Local>, D::Error>
     where
         D: Deserializer<'de>,
     {
@@ -863,12 +863,12 @@ struct AzureCliTokenResponse {
 }
 
 #[derive(Default, Debug)]
-pub struct AzureCliCredential {
+pub(crate) struct AzureCliCredential {
     cache: TokenCache<Arc<AzureCredential>>,
 }
 
 impl AzureCliCredential {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self::default()
     }
 
@@ -941,7 +941,7 @@ impl AzureCliCredential {
 
 /// Encapsulates the logic to perform an OAuth token challenge for Fabric
 #[derive(Debug)]
-pub struct FabricTokenOAuthProvider {
+pub(crate) struct FabricTokenOAuthProvider {
     fabric_token_service_url: String,
     fabric_workload_host: String,
     fabric_session_token: String,
@@ -957,7 +957,7 @@ struct Claims {
 
 impl FabricTokenOAuthProvider {
     /// Create a new [`FabricTokenOAuthProvider`] for an azure backed store
-    pub fn new(
+    pub(crate) fn new(
         fabric_token_service_url: impl Into<String>,
         fabric_workload_host: impl Into<String>,
         fabric_session_token: impl Into<String>,

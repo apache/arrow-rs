@@ -255,13 +255,13 @@ pub(crate) struct AzureClient {
 
 impl AzureClient {
     /// create a new instance of [AzureClient]
-    pub fn new(config: AzureConfig) -> Result<Self> {
+    pub(crate) fn new(config: AzureConfig) -> Result<Self> {
         let client = config.client_options.client()?;
         Ok(Self { config, client })
     }
 
     /// Returns the config
-    pub fn config(&self) -> &AzureConfig {
+    pub(crate) fn config(&self) -> &AzureConfig {
         &self.config
     }
 
@@ -283,7 +283,7 @@ impl AzureClient {
     }
 
     /// Make an Azure PUT request <https://docs.microsoft.com/en-us/rest/api/storageservices/put-blob>
-    pub async fn put_blob(
+    pub(crate) async fn put_blob(
         &self,
         path: &Path,
         payload: PutPayload,
@@ -308,7 +308,7 @@ impl AzureClient {
     }
 
     /// PUT a block <https://learn.microsoft.com/en-us/rest/api/storageservices/put-block>
-    pub async fn put_block(
+    pub(crate) async fn put_block(
         &self,
         path: &Path,
         part_idx: usize,
@@ -327,7 +327,7 @@ impl AzureClient {
     }
 
     /// PUT a block list <https://learn.microsoft.com/en-us/rest/api/storageservices/put-block-list>
-    pub async fn put_block_list(
+    pub(crate) async fn put_block_list(
         &self,
         path: &Path,
         parts: Vec<PartId>,
@@ -352,7 +352,7 @@ impl AzureClient {
     }
 
     /// Make an Azure Delete request <https://docs.microsoft.com/en-us/rest/api/storageservices/delete-blob>
-    pub async fn delete_request<T: Serialize + ?Sized + Sync>(
+    pub(crate) async fn delete_request<T: Serialize + ?Sized + Sync>(
         &self,
         path: &Path,
         query: &T,
@@ -381,7 +381,7 @@ impl AzureClient {
     }
 
     /// Make an Azure Copy request <https://docs.microsoft.com/en-us/rest/api/storageservices/copy-blob>
-    pub async fn copy_request(&self, from: &Path, to: &Path, overwrite: bool) -> Result<()> {
+    pub(crate) async fn copy_request(&self, from: &Path, to: &Path, overwrite: bool) -> Result<()> {
         let credential = self.get_credential().await?;
         let url = self.config.path_url(to);
         let mut source = self.config.path_url(from);
@@ -468,7 +468,7 @@ impl AzureClient {
     ///
     /// Depending on the type of credential, this will either use the account key or a user delegation key.
     /// Since delegation keys are acquired ad-hoc, the signer aloows for signing multiple urls with the same key.
-    pub async fn signer(&self, expires_in: Duration) -> Result<AzureSigner> {
+    pub(crate) async fn signer(&self, expires_in: Duration) -> Result<AzureSigner> {
         let credential = self.get_credential().await?;
         let signed_start = chrono::Utc::now();
         let signed_expiry = signed_start + expires_in;
@@ -499,7 +499,7 @@ impl AzureClient {
     }
 
     #[cfg(test)]
-    pub async fn get_blob_tagging(&self, path: &Path) -> Result<Response> {
+    pub(crate) async fn get_blob_tagging(&self, path: &Path) -> Result<Response> {
         let credential = self.get_credential().await?;
         let url = self.config.path_url(path);
         let sensitive = credential
@@ -757,7 +757,7 @@ struct BlobProperties {
 pub(crate) struct BlockId(Bytes);
 
 impl BlockId {
-    pub fn new(block_id: impl Into<Bytes>) -> Self {
+    pub(crate) fn new(block_id: impl Into<Bytes>) -> Self {
         Self(block_id.into())
     }
 }
@@ -783,7 +783,7 @@ pub(crate) struct BlockList {
 }
 
 impl BlockList {
-    pub fn to_xml(&self) -> String {
+    pub(crate) fn to_xml(&self) -> String {
         let mut s = String::new();
         s.push_str("<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<BlockList>\n");
         for block_id in &self.blocks {

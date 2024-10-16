@@ -33,6 +33,12 @@ pub enum Error {
     #[snafu(display("Received redirect without LOCATION, this normally indicates an incorrectly configured region"))]
     BareRedirect,
 
+    #[snafu(display("Server error, body contains Error, with status {status}: {}", body.as_deref().unwrap_or("No Body")))]
+    Server {
+        status: StatusCode,
+        body: Option<String>,
+    },
+
     #[snafu(display("Client error with status {status}: {}", body.as_deref().unwrap_or("No Body")))]
     Client {
         status: StatusCode,
@@ -54,6 +60,7 @@ impl Error {
     pub fn status(&self) -> Option<StatusCode> {
         match self {
             Self::BareRedirect => None,
+            Self::Server { status, .. } => Some(*status),
             Self::Client { status, .. } => Some(*status),
             Self::Reqwest { source, .. } => source.status(),
         }
@@ -63,6 +70,7 @@ impl Error {
     pub fn body(&self) -> Option<&str> {
         match self {
             Self::Client { body, .. } => body.as_deref(),
+            Self::Server { body, .. } => body.as_deref(),
             Self::BareRedirect => None,
             Self::Reqwest { .. } => None,
         }
@@ -129,7 +137,7 @@ impl From<Error> for std::io::Error {
     }
 }
 
-pub type Result<T, E = Error> = std::result::Result<T, E>;
+pub(crate) type Result<T, E = Error> = std::result::Result<T, E>;
 
 /// The configuration for how to respond to request errors
 ///
@@ -178,7 +186,11 @@ impl Default for RetryConfig {
     }
 }
 
-pub struct RetryableRequest {
+fn body_contains_error(response_body: &str) -> bool {
+    response_body.contains("InternalError") || response_body.contains("SlowDown")
+}
+
+pub(crate) struct RetryableRequest {
     client: Client,
     request: Request,
 
@@ -189,6 +201,8 @@ pub struct RetryableRequest {
     sensitive: bool,
     idempotent: Option<bool>,
     payload: Option<PutPayload>,
+
+    retry_error_body: bool,
 }
 
 impl RetryableRequest {
@@ -196,7 +210,7 @@ impl RetryableRequest {
     ///
     /// An idempotent request will be retried on timeout even if the request
     /// method is not [safe](https://datatracker.ietf.org/doc/html/rfc7231#section-4.2.1)
-    pub fn idempotent(self, idempotent: bool) -> Self {
+    pub(crate) fn idempotent(self, idempotent: bool) -> Self {
         Self {
             idempotent: Some(idempotent),
             ..self
@@ -207,16 +221,24 @@ impl RetryableRequest {
     ///
     /// This will avoid printing out the URL in error messages
     #[allow(unused)]
-    pub fn sensitive(self, sensitive: bool) -> Self {
+    pub(crate) fn sensitive(self, sensitive: bool) -> Self {
         Self { sensitive, ..self }
     }
 
     /// Provide a [`PutPayload`]
-    pub fn payload(self, payload: Option<PutPayload>) -> Self {
+    pub(crate) fn payload(self, payload: Option<PutPayload>) -> Self {
         Self { payload, ..self }
     }
 
-    pub async fn send(self) -> Result<Response> {
+    #[allow(unused)]
+    pub(crate) fn retry_error_body(self, retry_error_body: bool) -> Self {
+        Self {
+            retry_error_body,
+            ..self
+        }
+    }
+
+    pub(crate) async fn send(self) -> Result<Response> {
         let max_retries = self.max_retries;
         let retry_timeout = self.retry_timeout;
         let mut retries = 0;
@@ -244,7 +266,57 @@ impl RetryableRequest {
 
             match self.client.execute(request).await {
                 Ok(r) => match r.error_for_status_ref() {
-                    Ok(_) if r.status().is_success() => return Ok(r),
+                    Ok(_) if r.status().is_success() => {
+                        // For certain S3 requests, 200 response may contain `InternalError` or
+                        // `SlowDown` in the message. These responses should be handled similarly
+                        // to r5xx errors.
+                        // More info here: https://repost.aws/knowledge-center/s3-resolve-200-internalerror
+                        if !self.retry_error_body {
+                            return Ok(r);
+                        }
+
+                        let status = r.status();
+                        let headers = r.headers().clone();
+
+                        let bytes = r.bytes().await.map_err(|e| Error::Reqwest {
+                            retries,
+                            max_retries,
+                            elapsed: now.elapsed(),
+                            retry_timeout,
+                            source: e,
+                        })?;
+
+                        let response_body = String::from_utf8_lossy(&bytes);
+                        info!("Checking for error in response_body: {}", response_body);
+
+                        if !body_contains_error(&response_body) {
+                            // Success response and no error, clone and return response
+                            let mut success_response = hyper::Response::new(bytes);
+                            *success_response.status_mut() = status;
+                            *success_response.headers_mut() = headers;
+
+                            return Ok(reqwest::Response::from(success_response));
+                        } else {
+                            // Retry as if this was a 5xx response
+                            if retries == max_retries || now.elapsed() > retry_timeout {
+                                return Err(Error::Server {
+                                    body: Some(response_body.into_owned()),
+                                    status,
+                                });
+                            }
+
+                            let sleep = backoff.next();
+                            retries += 1;
+                            info!(
+                                "Encountered a response status of {} but body contains Error, backing off for {} seconds, retry {} of {}",
+                                status,
+                                sleep.as_secs_f32(),
+                                retries,
+                                max_retries,
+                            );
+                            tokio::time::sleep(sleep).await;
+                        }
+                    }
                     Ok(r) if r.status() == StatusCode::NOT_MODIFIED => {
                         return Err(Error::Client {
                             body: None,
@@ -369,7 +441,7 @@ impl RetryableRequest {
     }
 }
 
-pub trait RetryExt {
+pub(crate) trait RetryExt {
     /// Return a [`RetryableRequest`]
     fn retryable(self, config: &RetryConfig) -> RetryableRequest;
 
@@ -395,6 +467,7 @@ impl RetryExt for reqwest::RequestBuilder {
             idempotent: None,
             payload: None,
             sensitive: false,
+            retry_error_body: false,
         }
     }
 
@@ -407,12 +480,26 @@ impl RetryExt for reqwest::RequestBuilder {
 #[cfg(test)]
 mod tests {
     use crate::client::mock_server::MockServer;
-    use crate::client::retry::{Error, RetryExt};
+    use crate::client::retry::{body_contains_error, Error, RetryExt};
     use crate::RetryConfig;
     use hyper::header::LOCATION;
     use hyper::Response;
     use reqwest::{Client, Method, StatusCode};
     use std::time::Duration;
+
+    #[test]
+    fn test_body_contains_error() {
+        // Example error message provided by https://repost.aws/knowledge-center/s3-resolve-200-internalerror
+        let error_response = "AmazonS3Exception: We encountered an internal error. Please try again. (Service: Amazon S3; Status Code: 200; Error Code: InternalError; Request ID: 0EXAMPLE9AAEB265)";
+        assert!(body_contains_error(error_response));
+
+        let error_response_2 = "<?xml version=\"1.0\" encoding=\"UTF-8\"?><Error><Code>SlowDown</Code><Message>Please reduce your request rate.</Message><RequestId>123</RequestId><HostId>456</HostId></Error>";
+        assert!(body_contains_error(error_response_2));
+
+        // Example success response from https://docs.aws.amazon.com/AmazonS3/latest/API/API_CopyObject.html
+        let success_response = "<CopyObjectResult><LastModified>2009-10-12T17:50:30.000Z</LastModified><ETag>\"9b2cf535f27731c974343645a3985328\"</ETag></CopyObjectResult>";
+        assert!(!body_contains_error(success_response));
+    }
 
     #[tokio::test]
     async fn test_retry() {
@@ -636,6 +723,39 @@ mod tests {
             .sensitive(true);
         let err = req.send().await.unwrap_err().to_string();
         assert!(!err.contains("SENSITIVE"), "{err}");
+
+        // Success response with error in body is retried
+        mock.push(
+            Response::builder()
+                .status(StatusCode::OK)
+                .body("InternalError".to_string())
+                .unwrap(),
+        );
+        let req = client
+            .request(Method::PUT, &url)
+            .retryable(&retry)
+            .idempotent(true)
+            .retry_error_body(true);
+        let r = req.send().await.unwrap();
+        assert_eq!(r.status(), StatusCode::OK);
+        // Response with InternalError should have been retried
+        assert!(!r.text().await.unwrap().contains("InternalError"));
+
+        // Should not retry success response with no error in body
+        mock.push(
+            Response::builder()
+                .status(StatusCode::OK)
+                .body("success".to_string())
+                .unwrap(),
+        );
+        let req = client
+            .request(Method::PUT, &url)
+            .retryable(&retry)
+            .idempotent(true)
+            .retry_error_body(true);
+        let r = req.send().await.unwrap();
+        assert_eq!(r.status(), StatusCode::OK);
+        assert!(r.text().await.unwrap().contains("success"));
 
         // Shutdown
         mock.shutdown().await

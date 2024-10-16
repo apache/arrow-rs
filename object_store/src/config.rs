@@ -27,7 +27,7 @@ use crate::{Error, Result};
 ///
 /// This allows builders to defer fallibility to build
 #[derive(Debug, Clone)]
-pub enum ConfigValue<T> {
+pub(crate) enum ConfigValue<T> {
     Parsed(T),
     Deferred(String),
 }
@@ -48,11 +48,11 @@ impl<T> From<T> for ConfigValue<T> {
 }
 
 impl<T: Parse + Clone> ConfigValue<T> {
-    pub fn parse(&mut self, v: impl Into<String>) {
+    pub(crate) fn parse(&mut self, v: impl Into<String>) {
         *self = Self::Deferred(v.into())
     }
 
-    pub fn get(&self) -> Result<T> {
+    pub(crate) fn get(&self) -> Result<T> {
         match self {
             Self::Parsed(v) => Ok(v.clone()),
             Self::Deferred(v) => T::parse(v),
@@ -67,7 +67,7 @@ impl<T: Default> Default for ConfigValue<T> {
 }
 
 /// A value that can be stored in [`ConfigValue`]
-pub trait Parse: Sized {
+pub(crate) trait Parse: Sized {
     fn parse(v: &str) -> Result<Self>;
 }
 

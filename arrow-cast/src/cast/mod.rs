@@ -8481,6 +8481,10 @@ mod tests {
         assert!(decimal_arr.is_null(25));
         assert!(decimal_arr.is_null(26));
         assert!(decimal_arr.is_null(27));
+        assert_eq!("0.00", decimal_arr.value_as_string(28));
+        assert_eq!("0.00", decimal_arr.value_as_string(29));
+        assert_eq!("12345.00", decimal_arr.value_as_string(30));
+        assert_eq!(decimal_arr.len(), 31);
 
         // Decimal256
         let output_type = DataType::Decimal256(76, 3);
@@ -8517,6 +8521,10 @@ mod tests {
         assert!(decimal_arr.is_null(25));
         assert!(decimal_arr.is_null(26));
         assert!(decimal_arr.is_null(27));
+        assert_eq!("0.000", decimal_arr.value_as_string(28));
+        assert_eq!("0.000", decimal_arr.value_as_string(29));
+        assert_eq!("12345.000", decimal_arr.value_as_string(30));
+        assert_eq!(decimal_arr.len(), 31);
     }
 
     #[test]
@@ -8550,10 +8558,30 @@ mod tests {
             Some("1.-23499999"),
             Some("-1.-23499999"),
             Some("--1.23499999"),
+            Some("0"),
+            Some("000.000"),
+            Some("0000000000000000012345.000"),
         ]);
         let array = Arc::new(str_array) as ArrayRef;
 
         test_cast_string_to_decimal(array);
+
+        let test_cases = [
+            (None, None),
+            // (Some(""), None),
+            // (Some("   "), None),
+            (Some("0"), Some("0")),
+            (Some("000.000"), Some("0")),
+            (Some("12345"), Some("12345")),
+            (Some("000000000000000000000000000012345"), Some("12345")),
+            (Some("-123"), Some("-123")),
+            (Some("+123"), Some("123")),
+        ];
+        let inputs = test_cases.iter().map(|entry| entry.0).collect::<Vec<_>>();
+        let expected = test_cases.iter().map(|entry| entry.1).collect::<Vec<_>>();
+
+        let array = Arc::new(StringArray::from(inputs)) as ArrayRef;
+        test_cast_string_to_decimal_scale_zero(array, &expected);
     }
 
     #[test]
@@ -8587,10 +8615,67 @@ mod tests {
             Some("1.-23499999"),
             Some("-1.-23499999"),
             Some("--1.23499999"),
+            Some("0"),
+            Some("000.000"),
+            Some("0000000000000000012345.000"),
         ]);
         let array = Arc::new(str_array) as ArrayRef;
 
         test_cast_string_to_decimal(array);
+
+        let test_cases = [
+            (None, None),
+            (Some(""), None),
+            (Some("   "), None),
+            (Some("0"), Some("0")),
+            (Some("000.000"), Some("0")),
+            (Some("12345"), Some("12345")),
+            (Some("000000000000000000000000000012345"), Some("12345")),
+            (Some("-123"), Some("-123")),
+            (Some("+123"), Some("123")),
+        ];
+        let inputs = test_cases.iter().map(|entry| entry.0).collect::<Vec<_>>();
+        let expected = test_cases.iter().map(|entry| entry.1).collect::<Vec<_>>();
+
+        let array = Arc::new(LargeStringArray::from(inputs)) as ArrayRef;
+        test_cast_string_to_decimal_scale_zero(array, &expected);
+    }
+
+    fn test_cast_string_to_decimal_scale_zero(
+        array: ArrayRef,
+        expected_as_string: &[Option<&str>],
+    ) {
+        // Decimal128
+        let output_type = DataType::Decimal128(38, 0);
+        assert!(can_cast_types(array.data_type(), &output_type));
+        let casted_array = cast(&array, &output_type).unwrap();
+        let decimal_arr = casted_array.as_primitive::<Decimal128Type>();
+        assert_decimal_array_contents(decimal_arr, expected_as_string);
+
+        // Decimal256
+        let output_type = DataType::Decimal256(76, 0);
+        assert!(can_cast_types(array.data_type(), &output_type));
+        let casted_array = cast(&array, &output_type).unwrap();
+        let decimal_arr = casted_array.as_primitive::<Decimal256Type>();
+        assert_decimal_array_contents(decimal_arr, expected_as_string);
+    }
+
+    fn assert_decimal_array_contents<T>(
+        array: &PrimitiveArray<T>,
+        expected_as_string: &[Option<&str>],
+    ) where
+        T: DecimalType + ArrowPrimitiveType,
+    {
+        assert_eq!(array.len(), expected_as_string.len());
+        for (i, expected) in expected_as_string.iter().enumerate() {
+            let actual = if array.is_null(i) {
+                None
+            } else {
+                Some(array.value_as_string(i))
+            };
+            let actual = actual.as_ref().map(|s| s.as_ref());
+            assert_eq!(*expected, actual, "Expected at position {}", i);
+        }
     }
 
     #[test]
