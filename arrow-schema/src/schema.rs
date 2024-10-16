@@ -25,6 +25,32 @@ use crate::field::Field;
 use crate::{FieldRef, Fields};
 
 /// A builder to facilitate building a [`Schema`] from iteratively from [`FieldRef`]
+///
+/// # Example
+/// Create an entirely new Schema
+/// ```
+/// # use arrow_schema::*;
+/// let schema = Schema::builder()
+///   .with_field(Field::new("c1", DataType::Int64, false))
+///   .with_field(Field::new("c2", DataType::Utf8, false))
+///   .build();
+/// ```
+/// Create a new schema with a subset of fields from an existing schema
+/// ```
+/// # use arrow_schema::*;
+/// let schema = Schema::new(vec![
+///   Field::new("c1", DataType::Int64, false),
+///   Field::new("c2", DataType::Utf8, false),
+///  ]);
+///
+/// // Create a new schema with the same metdata, but only the second field
+/// let projected_schema = SchemaBuilder::from(&schema)
+///   .clear_fields()
+///   .with_field(schema.field(1).clone())
+///   .build();
+///
+/// assert_eq!(projected_schema, Schema::new(vec![Field::new("c2", DataType::Utf8, false)]));
+/// ```
 #[derive(Debug, Default)]
 pub struct SchemaBuilder {
     fields: Vec<FieldRef>,
@@ -43,6 +69,18 @@ impl SchemaBuilder {
             fields: Vec::with_capacity(capacity),
             metadata: Default::default(),
         }
+    }
+
+    /// Clears any fields currently in this builder.
+    pub fn clear_fields(mut self) -> Self {
+        self.fields.clear();
+        self
+    }
+
+    /// Appends a new field to this [`SchemaBuilder`] and returns self
+    pub fn with_field(mut self, field: impl Into<FieldRef>) -> Self {
+        self.push(field);
+        self
     }
 
     /// Appends a [`FieldRef`] to this [`SchemaBuilder`] without checking for collision
@@ -87,7 +125,7 @@ impl SchemaBuilder {
         &mut self.metadata
     }
 
-    /// Reverse the fileds
+    /// Reverse the fields in this builder
     pub fn reverse(&mut self) {
         self.fields.reverse();
     }
@@ -119,6 +157,13 @@ impl SchemaBuilder {
             fields: self.fields.into(),
             metadata: self.metadata,
         }
+    }
+
+    /// consume the builder and return the final [`Schema`]
+    ///
+    /// (synonym for [`Self::finish`]
+    pub fn build(self) -> Schema {
+        self.finish()
     }
 }
 
@@ -182,6 +227,8 @@ pub type SchemaRef = Arc<Schema>;
 ///
 /// Note that this information is only part of the meta-data and not part of the physical
 /// memory layout.
+///
+/// See also [`SchemaBuilder`] for creating a schema.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Schema {
@@ -238,6 +285,11 @@ impl Schema {
             fields: fields.into(),
             metadata,
         }
+    }
+
+    /// Return a [`SchemaBuilder`]
+    pub fn builder() -> SchemaBuilder {
+        SchemaBuilder::new()
     }
 
     /// Sets the metadata of this `Schema` to be `metadata` and returns self
