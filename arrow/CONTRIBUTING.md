@@ -109,7 +109,7 @@ specific JIRA issues and reference them in these code comments. For example:
 //      This is not sound because .... see https://issues.apache.org/jira/browse/ARROW-nnnnn
 ```
 
-### Usage if SIMD / auto vectorization
+### Usage of SIMD / auto vectorization
 
 This crate does not use SIMD intrinsics (e.g. [`std::simd`]) directly, but
 instead relies on the Rust compiler's auto-vectorization capabilities, which are
