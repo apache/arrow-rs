@@ -265,6 +265,8 @@ impl Schema {
     /// Creates a new [`Schema`] from a sequence of [`Field`] values
     /// and adds additional metadata in form of key value pairs.
     ///
+    /// See also [`SchemaBuilder`]
+    ///
     /// # Example
     ///
     /// ```
