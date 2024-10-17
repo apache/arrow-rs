@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["ARROW_SCHEMA_META_KEY","PARQUET_FIELD_ID_META_KEY"],"fn":["arrow_to_parquet_schema","parquet_column","parquet_to_arrow_field_levels","parquet_to_arrow_schema","parquet_to_arrow_schema_by_columns"],"mod":["arrow_reader","arrow_writer","async_reader","async_writer","buffer","decoder","record_reader"],"struct":["FieldLevels","ProjectionMask"]};
