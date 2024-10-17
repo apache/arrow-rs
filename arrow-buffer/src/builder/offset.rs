@@ -70,8 +70,11 @@ impl<O: ArrowNativeType> OffsetBufferBuilder<O> {
     ///
     /// Panics if offsets overflow `O`
     pub fn finish_cloned(&self) -> OffsetBuffer<O> {
-        O::from_usize(self.last_offset).expect("overflow");
-        unsafe { OffsetBuffer::new_unchecked(self.offsets.clone().into()) }
+        let cloned = Self {
+            offsets: self.offsets.clone(),
+            last_offset: self.last_offset,
+        };
+        cloned.finish()
     }
 }
 
