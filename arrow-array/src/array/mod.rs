@@ -374,7 +374,7 @@ impl Array for ArrayRef {
     }
 }
 
-impl<'a, T: Array> Array for &'a T {
+impl<T: Array> Array for &T {
     fn as_any(&self) -> &dyn Any {
         T::as_any(self)
     }

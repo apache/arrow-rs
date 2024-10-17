@@ -194,14 +194,14 @@ fn aggregate_nullable_chunk<T: ArrowNativeTypeOp, A: NumericAccumulator<T>, cons
 }
 
 fn aggregate_nonnull_simple<T: ArrowNativeTypeOp, A: NumericAccumulator<T>>(values: &[T]) -> T {
-    return values
+    values
         .iter()
         .copied()
         .fold(A::default(), |mut a, b| {
             a.accumulate(b);
             a
         })
-        .finish();
+        .finish()
 }
 
 #[inline(never)]

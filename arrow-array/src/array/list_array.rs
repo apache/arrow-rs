@@ -512,7 +512,7 @@ impl<OffsetSize: OffsetSizeTrait> Array for GenericListArray<OffsetSize> {
     }
 }
 
-impl<'a, OffsetSize: OffsetSizeTrait> ArrayAccessor for &'a GenericListArray<OffsetSize> {
+impl<OffsetSize: OffsetSizeTrait> ArrayAccessor for &GenericListArray<OffsetSize> {
     type Item = ArrayRef;
 
     fn value(&self, index: usize) -> Self::Item {

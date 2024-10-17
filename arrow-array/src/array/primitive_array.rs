@@ -880,7 +880,6 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
     /// let c = a.unary_mut(|x| x * 2 + 1).unwrap();
     /// assert_eq!(c, Int32Array::from(vec![Some(11), Some(15), None]));
     /// ```
-
     pub fn unary_mut<F>(self, op: F) -> Result<PrimitiveArray<T>, PrimitiveArray<T>>
     where
         F: Fn(T::Native) -> T::Native,
@@ -1174,7 +1173,7 @@ impl<T: ArrowPrimitiveType> Array for PrimitiveArray<T> {
     }
 }
 
-impl<'a, T: ArrowPrimitiveType> ArrayAccessor for &'a PrimitiveArray<T> {
+impl<T: ArrowPrimitiveType> ArrayAccessor for &PrimitiveArray<T> {
     type Item = T::Native;
 
     fn value(&self, index: usize) -> Self::Item {

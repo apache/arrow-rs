@@ -198,7 +198,6 @@ impl Default for IpcWriteOptions {
 /// ```
 ///
 /// [Arrow IPC Format]: https://arrow.apache.org/docs/format/Columnar.html#serialization-and-interprocess-communication-ipc
-
 pub struct IpcDataGenerator {}
 
 impl IpcDataGenerator {

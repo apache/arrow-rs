@@ -500,7 +500,7 @@ trait ArrayOrd {
     fn is_lt(l: Self::Item, r: Self::Item) -> bool;
 }
 
-impl<'a> ArrayOrd for &'a BooleanArray {
+impl ArrayOrd for &BooleanArray {
     type Item = bool;
 
     fn len(&self) -> usize {
