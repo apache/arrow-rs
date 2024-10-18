@@ -2067,6 +2067,31 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn non_empty_ofset_index_doesnt_panic_in_read_row_group() {
+        use tokio::fs::File;
+        use tempfile::TempDir;
+        let testdata = arrow::util::test_util::parquet_test_data();
+        let path = format!("{testdata}/alltypes_tiny_pages.parquet");
+        let mut file = File::open(&path).await.unwrap();
+        let file_size = file.metadata().await.unwrap().len();
+        let metadata = ParquetMetaDataReader::new()
+            .with_page_indexes(true)
+            .load_and_finish(&mut file, file_size as usize)
+            .await
+            .unwrap();
+
+        let options = ArrowReaderOptions::new().with_page_index(true);
+        let arrow_reader_metadata = ArrowReaderMetadata::try_new(metadata.into(), options).unwrap();
+        let reader =
+            ParquetRecordBatchStreamBuilder::new_with_metadata(file, arrow_reader_metadata)
+                .build()
+                .unwrap();
+
+        let result = reader.try_collect::<Vec<_>>().await.unwrap();
+        assert_eq!(result.len(), 8);
+    }
+
+    #[tokio::test]
     async fn empty_offset_index_doesnt_panic_in_column_chunks() {
         use tokio::fs::File;
         use tempfile::TempDir;
