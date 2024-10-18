@@ -82,7 +82,6 @@ use crate::format::{
 };
 use crate::thrift::{TCompactSliceInputProtocol, TSerializable};
 use bytes::Bytes;
-use std::hash::Hasher;
 use std::io::Write;
 use std::sync::Arc;
 use thrift::protocol::{TCompactOutputProtocol, TOutputProtocol};
@@ -397,9 +396,7 @@ const SEED: u64 = 0;
 
 #[inline]
 fn hash_as_bytes<A: AsBytes + ?Sized>(value: &A) -> u64 {
-    let mut hasher = XxHash64::with_seed(SEED);
-    hasher.write(value.as_bytes());
-    hasher.finish()
+    XxHash64::oneshot(SEED, value.as_bytes())
 }
 
 #[cfg(test)]
