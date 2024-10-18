@@ -1,0 +1,165 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="The central type in Apache Arrow are arrays, which are a known-length sequence of values all having the same type. This crate provides concrete implementations of each type, as well as an `Array` trait that can be used for type-erasure."><title>arrow_array - Rust</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-46f98efaafac5295.ttf.woff2,FiraSans-Regular-018c141bf0843ffd.woff2,FiraSans-Medium-8f9a781e4970d388.woff2,SourceCodePro-Regular-562dcc5011b6de7d.ttf.woff2,SourceCodePro-Semibold-d899c5a5c4aeb14a.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2" crossorigin href="../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../static.files/normalize-76eba96aa4d2e634.css"><link rel="stylesheet" href="../static.files/rustdoc-b0742ba02757f159.css"><meta name="rustdoc-vars" data-root-path="../" data-static-root-path="../static.files/" data-current-crate="arrow_array" data-themes="" data-resource-suffix="" data-rustdoc-version="1.84.0-nightly (3ed6e3cc6 2024-10-17)" data-channel="nightly" data-search-js="search-e056c65ede92db13.js" data-settings-js="settings-805db61a62df4bd2.js" ><script src="../static.files/storage-1d39b6787ed640ff.js"></script><script defer src="../crates.js"></script><script defer src="../static.files/main-f070b9041d14864c.js"></script><noscript><link rel="stylesheet" href="../static.files/noscript-0111fcff984fae8f.css"></noscript><link rel="alternate icon" type="image/png" href="../static.files/favicon-32x32-422f7d1d52889060.png"><link rel="icon" type="image/svg+xml" href="../static.files/favicon-2c020d218678b618.svg"></head><body class="rustdoc mod crate"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="mobile-topbar"><button class="sidebar-menu-toggle" title="show sidebar"></button></nav><nav class="sidebar"><div class="sidebar-crate"><h2><a href="../arrow_array/index.html">arrow_<wbr>array</a><span class="version">53.1.0</span></h2></div><div class="sidebar-elems"><ul class="block"><li><a id="all-types" href="all.html">All Items</a></li></ul><section id="rustdoc-toc"><h3><a href="#">Sections</a></h3><ul class="block top-toc"><li><a href="#building-an-array" title="Building an Array">Building an Array</a></li><li><a href="#low-level-api" title="Low-level API">Low-level API</a></li><li><a href="#zero-copy-slicing" title="Zero-Copy Slicing">Zero-Copy Slicing</a></li><li><a href="#downcasting-an-array" title="Downcasting an Array">Downcasting an Array</a></li><li><a href="#alternatives-to-chunkedarray-support" title="Alternatives to ChunkedArray Support">Alternatives to ChunkedArray Support</a></li></ul><h3><a href="#modules">Crate Items</a></h3><ul class="block"><li><a href="#modules" title="Modules">Modules</a></li><li><a href="#macros" title="Macros">Macros</a></li><li><a href="#structs" title="Structs">Structs</a></li><li><a href="#traits" title="Traits">Traits</a></li></ul></section><div id="rustdoc-modnav"></div></div></nav><div class="sidebar-resizer"></div><main><div class="width-limiter"><rustdoc-search></rustdoc-search><section id="main-content" class="content"><div class="main-heading"><h1>Crate <span>arrow_array</span><button id="copy-path" title="Copy item path to clipboard">Copy item path</button></h1><rustdoc-toolbar></rustdoc-toolbar><span class="sub-heading"><a class="src" href="../src/arrow_array/lib.rs.html#18-290">source</a> </span></div><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><p>The central type in Apache Arrow are arrays, which are a known-length sequence of values
+all having the same type. This crate provides concrete implementations of each type, as
+well as an <a href="array/trait.Array.html" title="trait arrow_array::array::Array"><code>Array</code></a> trait that can be used for type-erasure.</p>
+<h2 id="building-an-array"><a class="doc-anchor" href="#building-an-array">§</a>Building an Array</h2>
+<p>Most <a href="array/trait.Array.html" title="trait arrow_array::array::Array"><code>Array</code></a> implementations can be constructed directly from iterators or <a href="https://doc.rust-lang.org/nightly/alloc/vec/struct.Vec.html" title="struct alloc::vec::Vec"><code>Vec</code></a></p>
+
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code>Int32Array::from(<span class="macro">vec!</span>[<span class="number">1</span>, <span class="number">2</span>]);
+Int32Array::from(<span class="macro">vec!</span>[<span class="prelude-val">Some</span>(<span class="number">1</span>), <span class="prelude-val">None</span>]);
+Int32Array::from_iter([<span class="number">1</span>, <span class="number">2</span>, <span class="number">3</span>, <span class="number">4</span>]);
+Int32Array::from_iter([<span class="prelude-val">Some</span>(<span class="number">1</span>), <span class="prelude-val">Some</span>(<span class="number">2</span>), <span class="prelude-val">None</span>, <span class="prelude-val">Some</span>(<span class="number">4</span>)]);
+
+StringArray::from(<span class="macro">vec!</span>[<span class="string">"foo"</span>, <span class="string">"bar"</span>]);
+StringArray::from(<span class="macro">vec!</span>[<span class="prelude-val">Some</span>(<span class="string">"foo"</span>), <span class="prelude-val">None</span>]);
+StringArray::from_iter([<span class="prelude-val">Some</span>(<span class="string">"foo"</span>), <span class="prelude-val">None</span>]);
+StringArray::from_iter_values([<span class="string">"foo"</span>, <span class="string">"bar"</span>]);
+
+ListArray::from_iter_primitive::&lt;Int32Type, <span class="kw">_</span>, <span class="kw">_</span>&gt;([
+    <span class="prelude-val">Some</span>(<span class="macro">vec!</span>[<span class="prelude-val">Some</span>(<span class="number">1</span>), <span class="prelude-val">None</span>, <span class="prelude-val">Some</span>(<span class="number">3</span>)]),
+    <span class="prelude-val">None</span>,
+    <span class="prelude-val">Some</span>(<span class="macro">vec!</span>[])
+]);</code></pre></div>
+<p>Additionally <a href="builder/trait.ArrayBuilder.html" title="trait arrow_array::builder::ArrayBuilder"><code>ArrayBuilder</code></a> implementations can be
+used to construct arrays with a push-based interface</p>
+
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="comment">// Create a new builder with a capacity of 100
+</span><span class="kw">let </span><span class="kw-2">mut </span>builder = Int16Array::builder(<span class="number">100</span>);
+
+<span class="comment">// Append a single primitive value
+</span>builder.append_value(<span class="number">1</span>);
+<span class="comment">// Append a null value
+</span>builder.append_null();
+<span class="comment">// Append a slice of primitive values
+</span>builder.append_slice(<span class="kw-2">&amp;</span>[<span class="number">2</span>, <span class="number">3</span>, <span class="number">4</span>]);
+
+<span class="comment">// Build the array
+</span><span class="kw">let </span>array = builder.finish();
+
+<span class="macro">assert_eq!</span>(<span class="number">5</span>, array.len());
+<span class="macro">assert_eq!</span>(<span class="number">2</span>, array.value(<span class="number">2</span>));
+<span class="macro">assert_eq!</span>(<span class="kw-2">&amp;</span>array.values()[<span class="number">3</span>..<span class="number">5</span>], <span class="kw-2">&amp;</span>[<span class="number">3</span>, <span class="number">4</span>])</code></pre></div>
+<h2 id="low-level-api"><a class="doc-anchor" href="#low-level-api">§</a>Low-level API</h2>
+<p>Internally, arrays consist of one or more shared memory regions backed by a <a href="arrow_buffer::Buffer"><code>Buffer</code></a>,
+the number and meaning of which depend on the array’s data type, as documented in
+the <a href="https://arrow.apache.org/docs/format/Columnar.html">Arrow specification</a>.</p>
+<p>For example, the type <a href="array/primitive_array/type.Int16Array.html" title="type arrow_array::array::primitive_array::Int16Array"><code>Int16Array</code></a> represents an array of 16-bit integers and consists of:</p>
+<ul>
+<li>An optional <a href="arrow_buffer::NullBuffer"><code>NullBuffer</code></a> identifying any null values</li>
+<li>A contiguous <a href="arrow_buffer::ScalarBuffer"><code>ScalarBuffer&lt;i16&gt;</code></a> of values</li>
+</ul>
+<p>Similarly, the type <a href="array/string_array/type.StringArray.html" title="type arrow_array::array::string_array::StringArray"><code>StringArray</code></a> represents an array of UTF-8 strings and consists of:</p>
+<ul>
+<li>An optional <a href="arrow_buffer::NullBuffer"><code>NullBuffer</code></a> identifying any null values</li>
+<li>An offsets <a href="arrow_buffer::OffsetBuffer"><code>OffsetBuffer&lt;i32&gt;</code></a> identifying valid UTF-8 sequences within the values buffer</li>
+<li>A values <a href="arrow_buffer::Buffer"><code>Buffer</code></a> of UTF-8 encoded string data</li>
+</ul>
+<p>Array constructors such as <a href="array/primitive_array/struct.PrimitiveArray.html#method.try_new" title="associated function arrow_array::array::primitive_array::PrimitiveArray::try_new"><code>PrimitiveArray::try_new</code></a> provide the ability to cheaply
+construct an array from these parts, with functions such as <a href="array/primitive_array/struct.PrimitiveArray.html#method.into_parts" title="method arrow_array::array::primitive_array::PrimitiveArray::into_parts"><code>PrimitiveArray::into_parts</code></a>
+providing the reverse operation.</p>
+
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="comment">// Create a Int32Array from Vec without copying
+</span><span class="kw">let </span>array = Int32Array::new(<span class="macro">vec!</span>[<span class="number">1</span>, <span class="number">2</span>, <span class="number">3</span>].into(), <span class="prelude-val">None</span>);
+<span class="macro">assert_eq!</span>(array.values(), <span class="kw-2">&amp;</span>[<span class="number">1</span>, <span class="number">2</span>, <span class="number">3</span>]);
+<span class="macro">assert_eq!</span>(array.null_count(), <span class="number">0</span>);
+
+<span class="comment">// Create a StringArray from parts
+</span><span class="kw">let </span>offsets = OffsetBuffer::new(<span class="macro">vec!</span>[<span class="number">0</span>, <span class="number">5</span>, <span class="number">10</span>].into());
+<span class="kw">let </span>array = StringArray::new(offsets, <span class="string">b"helloworld"</span>.into(), <span class="prelude-val">None</span>);
+<span class="kw">let </span>values: Vec&lt;<span class="kw">_</span>&gt; = array.iter().map(|x| x.unwrap()).collect();
+<span class="macro">assert_eq!</span>(values, <span class="kw-2">&amp;</span>[<span class="string">"hello"</span>, <span class="string">"world"</span>]);</code></pre></div>
+<p>As <a href="arrow_buffer::Buffer"><code>Buffer</code></a>, and its derivatives, can be created from <a href="https://doc.rust-lang.org/nightly/alloc/vec/struct.Vec.html" title="struct alloc::vec::Vec"><code>Vec</code></a> without copying, this provides
+an efficient way to not only interoperate with other Rust code, but also implement kernels
+optimised for the arrow data layout - e.g. by handling buffers instead of values.</p>
+<h2 id="zero-copy-slicing"><a class="doc-anchor" href="#zero-copy-slicing">§</a>Zero-Copy Slicing</h2>
+<p>Given an <a href="array/trait.Array.html" title="trait arrow_array::array::Array"><code>Array</code></a> of arbitrary length, it is possible to create an owned slice of this
+data. Internally this just increments some ref-counts, and so is incredibly cheap</p>
+
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">let </span>array = Int32Array::from_iter([<span class="number">1</span>, <span class="number">2</span>, <span class="number">3</span>]);
+
+<span class="comment">// Slice with offset 1 and length 2
+</span><span class="kw">let </span>sliced = array.slice(<span class="number">1</span>, <span class="number">2</span>);
+<span class="macro">assert_eq!</span>(sliced.values(), <span class="kw-2">&amp;</span>[<span class="number">2</span>, <span class="number">3</span>]);</code></pre></div>
+<h2 id="downcasting-an-array"><a class="doc-anchor" href="#downcasting-an-array">§</a>Downcasting an Array</h2>
+<p>Arrays are often passed around as a dynamically typed <a href="array/trait.Array.html" title="trait arrow_array::array::Array"><code>&amp;dyn Array</code></a> or <a href="array/type.ArrayRef.html" title="type arrow_array::array::ArrayRef"><code>ArrayRef</code></a>.
+For example, <a href="record_batch/struct.RecordBatch.html" title="struct arrow_array::record_batch::RecordBatch"><code>RecordBatch</code></a> stores columns as <a href="array/type.ArrayRef.html" title="type arrow_array::array::ArrayRef"><code>ArrayRef</code></a>.</p>
+<p>Whilst these arrays can be passed directly to the <a href="https://docs.rs/arrow/latest/arrow/compute/index.html"><code>compute</code></a>, <a href="https://docs.rs/arrow/latest/arrow/csv/index.html"><code>csv</code></a>, <a href="https://docs.rs/arrow/latest/arrow/json/index.html"><code>json</code></a>, etc… APIs,
+it is often the case that you wish to interact with the concrete arrays directly.</p>
+<p>This requires downcasting to the concrete type of the array:</p>
+
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code>
+<span class="comment">// Safely downcast an `Array` to an `Int32Array` and compute the sum
+// using native i32 values
+</span><span class="kw">fn </span>sum_int32(array: <span class="kw-2">&amp;</span><span class="kw">dyn </span>Array) -&gt; i32 {
+    <span class="kw">let </span>integers: <span class="kw-2">&amp;</span>Int32Array = array.as_any().downcast_ref().unwrap();
+    integers.iter().map(|val| val.unwrap_or_default()).sum()
+}
+
+<span class="comment">// Safely downcasts the array to a `Float32Array` and returns a &amp;[f32] view of the data
+// Note: the values for positions corresponding to nulls will be arbitrary (but still valid f32)
+</span><span class="kw">fn </span>as_f32_slice(array: <span class="kw-2">&amp;</span><span class="kw">dyn </span>Array) -&gt; <span class="kw-2">&amp;</span>[f32] {
+    array.as_any().downcast_ref::&lt;Float32Array&gt;().unwrap().values()
+}</code></pre></div>
+<p>The <a href="cast/trait.AsArray.html" title="trait arrow_array::cast::AsArray"><code>cast::AsArray</code></a> extension trait can make this more ergonomic</p>
+
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code>
+<span class="kw">fn </span>as_f32_slice(array: <span class="kw-2">&amp;</span><span class="kw">dyn </span>Array) -&gt; <span class="kw-2">&amp;</span>[f32] {
+    array.as_primitive::&lt;Float32Type&gt;().values()
+}</code></pre></div>
+<h2 id="alternatives-to-chunkedarray-support"><a class="doc-anchor" href="#alternatives-to-chunkedarray-support">§</a>Alternatives to ChunkedArray Support</h2>
+<p>The Rust implementation does not provide the ChunkedArray abstraction implemented by the Python
+and C++ Arrow implementations. The recommended alternative is to use one of the following:</p>
+<ul>
+<li><code>Vec&lt;ArrayRef&gt;</code> a simple, eager version of a <code>ChunkedArray</code></li>
+<li><code>impl Iterator&lt;Item=ArrayRef&gt;</code> a lazy version of a <code>ChunkedArray</code></li>
+<li><code>impl Stream&lt;Item=ArrayRef&gt;</code> a lazy async version of a <code>ChunkedArray</code></li>
+</ul>
+<p>Similar patterns can be applied at the <code>RecordBatch</code> level. For example, <a href="https://github.com/apache/arrow-datafusion">DataFusion</a> makes
+extensive use of <a href="https://docs.rs/datafusion/latest/datafusion/execution/trait.RecordBatchStream.html">RecordBatchStream</a>.</p>
+<p>This approach integrates well into the Rust ecosystem, simplifies the implementation and
+encourages the use of performant lazy and async patterns.</p>
+
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">use </span>std::sync::Arc;
+<span class="kw">use </span>arrow_array::{ArrayRef, Float32Array, RecordBatch, StringArray};
+<span class="kw">use </span>arrow_array::cast::AsArray;
+<span class="kw">use </span>arrow_array::types::Float32Type;
+<span class="kw">use </span>arrow_schema::DataType;
+
+<span class="kw">let </span>batches = [
+   RecordBatch::try_from_iter(<span class="macro">vec!</span>[
+        (<span class="string">"label"</span>, Arc::new(StringArray::from(<span class="macro">vec!</span>[<span class="string">"A"</span>, <span class="string">"B"</span>, <span class="string">"C"</span>])) <span class="kw">as </span>ArrayRef),
+        (<span class="string">"value"</span>, Arc::new(Float32Array::from(<span class="macro">vec!</span>[<span class="number">0.1</span>, <span class="number">0.2</span>, <span class="number">0.3</span>])) <span class="kw">as </span>ArrayRef),
+    ]).unwrap(),
+   RecordBatch::try_from_iter(<span class="macro">vec!</span>[
+        (<span class="string">"label"</span>, Arc::new(StringArray::from(<span class="macro">vec!</span>[<span class="string">"D"</span>, <span class="string">"E"</span>])) <span class="kw">as </span>ArrayRef),
+        (<span class="string">"value"</span>, Arc::new(Float32Array::from(<span class="macro">vec!</span>[<span class="number">0.4</span>, <span class="number">0.5</span>])) <span class="kw">as </span>ArrayRef),
+   ]).unwrap(),
+];
+
+<span class="kw">let </span>labels: Vec&lt;<span class="kw-2">&amp;</span>str&gt; = batches
+   .iter()
+   .flat_map(|batch| batch.column(<span class="number">0</span>).as_string::&lt;i32&gt;())
+   .map(Option::unwrap)
+   .collect();
+
+<span class="kw">let </span>values: Vec&lt;f32&gt; = batches
+   .iter()
+   .flat_map(|batch| batch.column(<span class="number">1</span>).as_primitive::&lt;Float32Type&gt;().values())
+   .copied()
+   .collect();
+
+<span class="macro">assert_eq!</span>(labels, [<span class="string">"A"</span>, <span class="string">"B"</span>, <span class="string">"C"</span>, <span class="string">"D"</span>, <span class="string">"E"</span>]);
+<span class="macro">assert_eq!</span>(values, [<span class="number">0.1</span>, <span class="number">0.2</span>, <span class="number">0.3</span>, <span class="number">0.4</span>, <span class="number">0.5</span>]);</code></pre></div>
+</div></details><h2 id="reexports" class="section-header">Re-exports<a href="#reexports" class="anchor">§</a></h2><ul class="item-table"><li><div class="item-name"><code>pub use <a class="mod" href="array/index.html" title="mod arrow_array::array">array</a>::*;</code></div></li></ul><h2 id="modules" class="section-header">Modules<a href="#modules" class="anchor">§</a></h2><ul class="item-table"><li><div class="item-name"><a class="mod" href="arithmetic/index.html" title="mod arrow_array::arithmetic">arithmetic</a><span title="Restricted Visibility">&nbsp;🔒</span> </div></li><li><div class="item-name"><a class="mod" href="array/index.html" title="mod arrow_array::array">array</a></div><div class="desc docblock-short">The concrete array definitions</div></li><li><div class="item-name"><a class="mod" href="builder/index.html" title="mod arrow_array::builder">builder</a></div><div class="desc docblock-short">Defines push-based APIs for constructing arrays</div></li><li><div class="item-name"><a class="mod" href="cast/index.html" title="mod arrow_array::cast">cast</a></div><div class="desc docblock-short">Defines helper functions for downcasting <a href="array/trait.Array.html" title="trait arrow_array::array::Array"><code>dyn Array</code></a> to concrete types</div></li><li><div class="item-name"><a class="mod" href="delta/index.html" title="mod arrow_array::delta">delta</a><span title="Restricted Visibility">&nbsp;🔒</span> </div><div class="desc docblock-short">Contains utility functions for shifting Date objects.</div></li><li><div class="item-name"><a class="mod" href="ffi/index.html" title="mod arrow_array::ffi">ffi</a></div><div class="desc docblock-short">Contains declarations to bind to the <a href="https://arrow.apache.org/docs/format/CDataInterface.html">C Data Interface</a>.</div></li><li><div class="item-name"><a class="mod" href="ffi_stream/index.html" title="mod arrow_array::ffi_stream">ffi_<wbr>stream</a></div><div class="desc docblock-short">Contains declarations to bind to the <a href="https://arrow.apache.org/docs/format/CStreamInterface.html">C Stream Interface</a>.</div></li><li><div class="item-name"><a class="mod" href="iterator/index.html" title="mod arrow_array::iterator">iterator</a></div><div class="desc docblock-short">Idiomatic iterators for <a href="array/trait.Array.html" title="trait arrow_array::array::Array"><code>Array</code></a></div></li><li><div class="item-name"><a class="mod" href="numeric/index.html" title="mod arrow_array::numeric">numeric</a><span title="Restricted Visibility">&nbsp;🔒</span> </div></li><li><div class="item-name"><a class="mod" href="record_batch/index.html" title="mod arrow_array::record_batch">record_<wbr>batch</a><span title="Restricted Visibility">&nbsp;🔒</span> </div><div class="desc docblock-short">A two-dimensional batch of column-oriented data with a defined
+<a href="arrow_schema::Schema">schema</a>.</div></li><li><div class="item-name"><a class="mod" href="run_iterator/index.html" title="mod arrow_array::run_iterator">run_<wbr>iterator</a></div><div class="desc docblock-short">Idiomatic iterator for <a href="array/run_array/struct.RunArray.html" title="struct arrow_array::array::run_array::RunArray"><code>RunArray</code></a></div></li><li><div class="item-name"><a class="mod" href="scalar/index.html" title="mod arrow_array::scalar">scalar</a><span title="Restricted Visibility">&nbsp;🔒</span> </div></li><li><div class="item-name"><a class="mod" href="temporal_conversions/index.html" title="mod arrow_array::temporal_conversions">temporal_<wbr>conversions</a></div><div class="desc docblock-short">Conversion methods for dates and times.</div></li><li><div class="item-name"><a class="mod" href="timezone/index.html" title="mod arrow_array::timezone">timezone</a></div><div class="desc docblock-short">Timezone for timestamp arrays</div></li><li><div class="item-name"><a class="mod" href="trusted_len/index.html" title="mod arrow_array::trusted_len">trusted_<wbr>len</a><span title="Restricted Visibility">&nbsp;🔒</span> </div></li><li><div class="item-name"><a class="mod" href="types/index.html" title="mod arrow_array::types">types</a></div><div class="desc docblock-short">Zero-sized types used to parameterize generic array implementations</div></li></ul><h2 id="macros" class="section-header">Macros<a href="#macros" class="anchor">§</a></h2><ul class="item-table"><li><div class="item-name"><a class="macro" href="macro.downcast_dictionary_array.html" title="macro arrow_array::downcast_dictionary_array">downcast_<wbr>dictionary_<wbr>array</a></div><div class="desc docblock-short">Downcast an <a href="array/trait.Array.html" title="trait arrow_array::array::Array"><code>Array</code></a> to a <a href="array/dictionary_array/struct.DictionaryArray.html" title="struct arrow_array::array::dictionary_array::DictionaryArray"><code>DictionaryArray</code></a> based on its <a href="arrow_schema::DataType"><code>DataType</code></a>, accepts
+a number of subsequent patterns to match the data type</div></li><li><div class="item-name"><a class="macro" href="macro.downcast_integer.html" title="macro arrow_array::downcast_integer">downcast_<wbr>integer</a></div><div class="desc docblock-short">Given one or more expressions evaluating to an integer <a href="arrow_schema::DataType"><code>DataType</code></a> invokes the provided macro
+<code>m</code> with the corresponding integer <a href="types/trait.ArrowPrimitiveType.html" title="trait arrow_array::types::ArrowPrimitiveType"><code>ArrowPrimitiveType</code></a>, followed by any additional arguments</div></li><li><div class="item-name"><a class="macro" href="macro.downcast_primitive.html" title="macro arrow_array::downcast_primitive">downcast_<wbr>primitive</a></div><div class="desc docblock-short">Given one or more expressions evaluating to primitive <a href="arrow_schema::DataType"><code>DataType</code></a> invokes the provided macro
+<code>m</code> with the corresponding <a href="types/trait.ArrowPrimitiveType.html" title="trait arrow_array::types::ArrowPrimitiveType"><code>ArrowPrimitiveType</code></a>, followed by any additional arguments</div></li><li><div class="item-name"><a class="macro" href="macro.downcast_primitive_array.html" title="macro arrow_array::downcast_primitive_array">downcast_<wbr>primitive_<wbr>array</a></div><div class="desc docblock-short">Downcast an <a href="array/trait.Array.html" title="trait arrow_array::array::Array"><code>Array</code></a> to a <a href="array/primitive_array/struct.PrimitiveArray.html" title="struct arrow_array::array::primitive_array::PrimitiveArray"><code>PrimitiveArray</code></a> based on its <a href="arrow_schema::DataType"><code>DataType</code></a>
+accepts a number of subsequent patterns to match the data type</div></li><li><div class="item-name"><a class="macro" href="macro.downcast_run_array.html" title="macro arrow_array::downcast_run_array">downcast_<wbr>run_<wbr>array</a></div><div class="desc docblock-short">Downcast an <a href="array/trait.Array.html" title="trait arrow_array::array::Array"><code>Array</code></a> to a <a href="array/run_array/struct.RunArray.html" title="struct arrow_array::array::run_array::RunArray"><code>RunArray</code></a> based on its <a href="arrow_schema::DataType"><code>DataType</code></a>, accepts
+a number of subsequent patterns to match the data type</div></li><li><div class="item-name"><a class="macro" href="macro.downcast_run_end_index.html" title="macro arrow_array::downcast_run_end_index">downcast_<wbr>run_<wbr>end_<wbr>index</a></div><div class="desc docblock-short">Given one or more expressions evaluating to an integer <a href="arrow_schema::DataType"><code>DataType</code></a> invokes the provided macro
+<code>m</code> with the corresponding integer <a href="types/trait.RunEndIndexType.html" title="trait arrow_array::types::RunEndIndexType"><code>RunEndIndexType</code></a>, followed by any additional arguments</div></li><li><div class="item-name"><a class="macro" href="macro.downcast_temporal.html" title="macro arrow_array::downcast_temporal">downcast_<wbr>temporal</a></div><div class="desc docblock-short">Given one or more expressions evaluating to primitive <a href="arrow_schema::DataType"><code>DataType</code></a> invokes the provided macro
+<code>m</code> with the corresponding <a href="types/trait.ArrowPrimitiveType.html" title="trait arrow_array::types::ArrowPrimitiveType"><code>ArrowPrimitiveType</code></a>, followed by any additional arguments</div></li><li><div class="item-name"><a class="macro" href="macro.downcast_temporal_array.html" title="macro arrow_array::downcast_temporal_array">downcast_<wbr>temporal_<wbr>array</a></div><div class="desc docblock-short">Downcast an <a href="array/trait.Array.html" title="trait arrow_array::array::Array"><code>Array</code></a> to a temporal <a href="array/primitive_array/struct.PrimitiveArray.html" title="struct arrow_array::array::primitive_array::PrimitiveArray"><code>PrimitiveArray</code></a> based on its <a href="arrow_schema::DataType"><code>DataType</code></a>
+accepts a number of subsequent patterns to match the data type</div></li></ul><h2 id="structs" class="section-header">Structs<a href="#structs" class="anchor">§</a></h2><ul class="item-table"><li><div class="item-name"><a class="struct" href="struct.RecordBatch.html" title="struct arrow_array::RecordBatch">Record<wbr>Batch</a></div><div class="desc docblock-short">A two-dimensional batch of column-oriented data with a defined
+<a href="arrow_schema::Schema">schema</a>.</div></li><li><div class="item-name"><a class="struct" href="struct.RecordBatchIterator.html" title="struct arrow_array::RecordBatchIterator">Record<wbr>Batch<wbr>Iterator</a></div><div class="desc docblock-short">Generic implementation of <a href="record_batch/trait.RecordBatchReader.html" title="trait arrow_array::record_batch::RecordBatchReader">RecordBatchReader</a> that wraps an iterator.</div></li><li><div class="item-name"><a class="struct" href="struct.RecordBatchOptions.html" title="struct arrow_array::RecordBatchOptions">Record<wbr>Batch<wbr>Options</a></div><div class="desc docblock-short">Options that control the behaviour used when creating a <a href="record_batch/struct.RecordBatch.html" title="struct arrow_array::record_batch::RecordBatch"><code>RecordBatch</code></a>.</div></li><li><div class="item-name"><a class="struct" href="struct.Scalar.html" title="struct arrow_array::Scalar">Scalar</a></div><div class="desc docblock-short">A wrapper around a single value <a href="array/trait.Array.html" title="trait arrow_array::array::Array"><code>Array</code></a> that implements
+<a href="scalar/trait.Datum.html" title="trait arrow_array::scalar::Datum"><code>Datum</code></a> and indicates <a href="https://docs.rs/arrow/latest/arrow/compute/index.html">compute</a> kernels should treat this array
+as a scalar value (a single value).</div></li></ul><h2 id="traits" class="section-header">Traits<a href="#traits" class="anchor">§</a></h2><ul class="item-table"><li><div class="item-name"><a class="trait" href="trait.ArrowNativeTypeOp.html" title="trait arrow_array::ArrowNativeTypeOp">Arrow<wbr>Native<wbr>Type<wbr>Op</a></div><div class="desc docblock-short">Trait for [<code>ArrowNativeType</code>] that adds checked and unchecked arithmetic operations,
+and totally ordered comparison operations</div></li><li><div class="item-name"><a class="trait" href="trait.ArrowNumericType.html" title="trait arrow_array::ArrowNumericType">Arrow<wbr>Numeric<wbr>Type</a></div><div class="desc docblock-short">A subtype of primitive type that represents numeric values.</div></li><li><div class="item-name"><a class="trait" href="trait.Datum.html" title="trait arrow_array::Datum">Datum</a></div><div class="desc docblock-short">A possibly <a href="scalar/struct.Scalar.html" title="struct arrow_array::scalar::Scalar"><code>Scalar</code></a> <a href="array/trait.Array.html" title="trait arrow_array::array::Array"><code>Array</code></a></div></li><li><div class="item-name"><a class="trait" href="trait.RecordBatchReader.html" title="trait arrow_array::RecordBatchReader">Record<wbr>Batch<wbr>Reader</a></div><div class="desc docblock-short">Trait for types that can read <code>RecordBatch</code>’s.</div></li><li><div class="item-name"><a class="trait" href="trait.RecordBatchWriter.html" title="trait arrow_array::RecordBatchWriter">Record<wbr>Batch<wbr>Writer</a></div><div class="desc docblock-short">Trait for types that can write <code>RecordBatch</code>’s.</div></li></ul></section></div></main></body></html>
