@@ -408,7 +408,6 @@ macro_rules! downcast_primitive_array {
 ///     .downcast_ref::<Int32Array>()
 ///     .unwrap();
 /// ```
-
 pub fn as_primitive_array<T>(arr: &dyn Array) -> &PrimitiveArray<T>
 where
     T: ArrowPrimitiveType,

@@ -336,6 +336,11 @@ impl FFI_ArrowSchema {
             Ok(HashMap::new())
         } else {
             let mut pos = 0;
+
+            // On some platforms, c_char = u8, and on some, c_char = i8. Where c_char = u8, clippy
+            // wants to complain that we're casting to the same type, but if we remove the cast,
+            // this will fail to compile on the other platforms. So we must allow it.
+            #[allow(clippy::unnecessary_cast)]
             let buffer: *const u8 = self.metadata as *const u8;
 
             fn next_four_bytes(buffer: *const u8, pos: &mut isize) -> [u8; 4] {

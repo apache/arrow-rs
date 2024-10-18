@@ -77,7 +77,7 @@ pub struct CastOptions<'a> {
     pub format_options: FormatOptions<'a>,
 }
 
-impl<'a> Default for CastOptions<'a> {
+impl Default for CastOptions<'_> {
     fn default() -> Self {
         Self {
             safe: true,

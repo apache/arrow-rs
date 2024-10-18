@@ -636,7 +636,7 @@ impl BitReader {
     /// `T` needs to be a little-endian native type. The value is assumed to be byte
     /// aligned so the bit reader will be advanced to the start of the next byte before
     /// reading the value.
-
+    ///
     /// Returns `Some` if there's enough bytes left to form a value of `T`.
     /// Otherwise `None`.
     pub fn get_aligned<T: FromBytes>(&mut self, num_bytes: usize) -> Option<T> {

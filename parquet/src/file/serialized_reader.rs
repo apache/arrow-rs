@@ -50,7 +50,7 @@ impl TryFrom<File> for SerializedFileReader<File> {
     }
 }
 
-impl<'a> TryFrom<&'a Path> for SerializedFileReader<File> {
+impl TryFrom<&Path> for SerializedFileReader<File> {
     type Error = ParquetError;
 
     fn try_from(path: &Path) -> Result<Self> {
@@ -67,7 +67,7 @@ impl TryFrom<String> for SerializedFileReader<File> {
     }
 }
 
-impl<'a> TryFrom<&'a str> for SerializedFileReader<File> {
+impl TryFrom<&str> for SerializedFileReader<File> {
     type Error = ParquetError;
 
     fn try_from(path: &str) -> Result<Self> {
@@ -302,7 +302,7 @@ impl<'a, R: ChunkReader> SerializedRowGroupReader<'a, R> {
     }
 }
 
-impl<'a, R: 'static + ChunkReader> RowGroupReader for SerializedRowGroupReader<'a, R> {
+impl<R: 'static + ChunkReader> RowGroupReader for SerializedRowGroupReader<'_, R> {
     fn metadata(&self) -> &RowGroupMetaData {
         self.metadata
     }
