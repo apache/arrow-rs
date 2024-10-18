@@ -2043,7 +2043,6 @@ mod tests {
     #[tokio::test]
     async fn empty_ofset_index_doesnt_panic_in_read_row_group() {
         use tokio::fs::File;
-        use tempfile::TempDir;
         let testdata = arrow::util::test_util::parquet_test_data();
         let path = format!("{testdata}/alltypes_plain.parquet");
         let mut file = File::open(&path).await.unwrap();
@@ -2069,7 +2068,6 @@ mod tests {
     #[tokio::test]
     async fn non_empty_ofset_index_doesnt_panic_in_read_row_group() {
         use tokio::fs::File;
-        use tempfile::TempDir;
         let testdata = arrow::util::test_util::parquet_test_data();
         let path = format!("{testdata}/alltypes_tiny_pages.parquet");
         let mut file = File::open(&path).await.unwrap();
@@ -2124,7 +2122,6 @@ mod tests {
             .unwrap();
 
         let tempdir = TempDir::new().unwrap();
-        let testdata = arrow::util::test_util::parquet_test_data();
         let metadata_path = tempdir.path().join("thrift_metadata.dat");
         write_metadata_to_local_file(metadata, &metadata_path);
         let metadata = read_metadata_from_local_file(&metadata_path);
