@@ -127,16 +127,16 @@ unsafe fn set_upto_64bits(
 }
 
 /// # Safety
-/// The caller must ensure all arguments are within the valid range.
+/// The caller must ensure `data` has `offset..(offset + 8)` range, and `count <= 8`.
 #[inline]
 unsafe fn read_bytes_to_u64(data: &[u8], offset: usize, count: usize) -> u64 {
     debug_assert!(count <= 8);
-    let mut tmp = std::mem::MaybeUninit::<u64>::new(0);
+    let mut tmp: u64 = 0;
     let src = data.as_ptr().add(offset);
     unsafe {
-        std::ptr::copy_nonoverlapping(src, tmp.as_mut_ptr() as *mut u8, count);
-        tmp.assume_init()
+        std::ptr::copy_nonoverlapping(src, &mut tmp as *mut _ as *mut u8, count);
     }
+    tmp
 }
 
 /// # Safety
