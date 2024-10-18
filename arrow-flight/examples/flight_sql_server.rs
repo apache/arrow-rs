@@ -797,6 +797,7 @@ mod tests {
     use std::fs;
     use std::future::Future;
     use std::net::SocketAddr;
+    use std::path::PathBuf;
     use std::time::Duration;
     use tempfile::NamedTempFile;
     use tokio::net::{TcpListener, UnixListener, UnixStream};
@@ -901,13 +902,15 @@ mod tests {
         F: FnOnce(FlightSqlServiceClient<Channel>) -> C,
         C: Future<Output = ()>,
     {
-        let cert = std::fs::read_to_string("examples/data/server.pem").unwrap();
-        let key = std::fs::read_to_string("examples/data/server.key").unwrap();
-        let client_ca = std::fs::read_to_string("examples/data/client_ca.pem").unwrap();
+        let cert_dir = PathBuf::from("examples/data");
+
+        let cert = std::fs::read_to_string(cert_dir.join("server.pem")).unwrap();
+        let key = std::fs::read_to_string(cert_dir.join("server.key")).unwrap();
+        let ca_root = std::fs::read_to_string(cert_dir.join("ca_root.pem")).unwrap();
 
         let tls_config = ServerTlsConfig::new()
             .identity(Identity::from_pem(&cert, &key))
-            .client_ca_root(Certificate::from_pem(&client_ca));
+            .client_ca_root(Certificate::from_pem(&ca_root));
 
         let (incoming, addr) = bind_tcp().await;
         let uri = format!("https://{}:{}", addr.ip(), addr.port());
@@ -920,14 +923,13 @@ mod tests {
             .add_service(svc)
             .serve_with_incoming(incoming);
 
-        let request_future = async {
-            let cert = std::fs::read_to_string("examples/data/client1.pem").unwrap();
-            let key = std::fs::read_to_string("examples/data/client1.key").unwrap();
-            let server_ca = std::fs::read_to_string("examples/data/ca.pem").unwrap();
+        let request_future = async move {
+            let cert = std::fs::read_to_string(cert_dir.join("client.pem")).unwrap();
+            let key = std::fs::read_to_string(cert_dir.join("client.key")).unwrap();
 
             let tls_config = ClientTlsConfig::new()
                 .domain_name("localhost")
-                .ca_certificate(Certificate::from_pem(&server_ca))
+                .ca_certificate(Certificate::from_pem(&ca_root))
                 .identity(Identity::from_pem(cert, key));
 
             let endpoint = endpoint(uri).unwrap().tls_config(tls_config).unwrap();
