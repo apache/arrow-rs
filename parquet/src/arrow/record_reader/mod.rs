@@ -172,7 +172,8 @@ where
         std::mem::take(&mut self.values)
     }
 
-    /// Returns currently stored null bitmap data.
+    /// Returns currently stored null bitmap data for nullable columns.
+    /// For non-nullable columns, the bitmap is discarded.
     /// The side effect is similar to `consume_def_levels`.
     pub fn consume_bitmap_buffer(&mut self) -> Option<Buffer> {
         self.consume_bitmap()
@@ -186,11 +187,23 @@ where
         self.num_records = 0;
     }
 
-    /// Returns bitmap data.
+    /// Returns bitmap data for nullable columns.
+    /// For non-nullable columns, the bitmap is discarded.
     pub fn consume_bitmap(&mut self) -> Option<Buffer> {
-        self.def_levels
+        let mask = self
+            .def_levels
             .as_mut()
-            .map(|levels| levels.consume_bitmask())
+            .map(|levels| levels.consume_bitmask());
+
+        // While we always consume the bitmask here, we only want to return
+        // the bitmask for nullable arrays. (Marking nulls on a non-nullable
+        // array may fail validations, even if those nulls are masked off at
+        // a higher level.)
+        if self.column_desc.self_type().is_optional() {
+            mask
+        } else {
+            None
+        }
     }
 
     /// Try to read one batch of data returning the number of records read
