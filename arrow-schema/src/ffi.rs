@@ -709,8 +709,12 @@ fn get_format_string(dtype: &DataType) -> Result<Cow<'static, str>, ArrowError> 
         DataType::LargeUtf8 => Ok("U".into()),
         DataType::FixedSizeBinary(num_bytes) => Ok(Cow::Owned(format!("w:{num_bytes}"))),
         DataType::FixedSizeList(_, num_elems) => Ok(Cow::Owned(format!("+w:{num_elems}"))),
-        DataType::Decimal32(precision, scale) => Ok(Cow::Owned(format!("d:{precision},{scale},32"))),
-        DataType::Decimal64(precision, scale) => Ok(Cow::Owned(format!("d:{precision},{scale},64"))),
+        DataType::Decimal32(precision, scale) => {
+            Ok(Cow::Owned(format!("d:{precision},{scale},32")))
+        }
+        DataType::Decimal64(precision, scale) => {
+            Ok(Cow::Owned(format!("d:{precision},{scale},64")))
+        }
         DataType::Decimal128(precision, scale) => Ok(Cow::Owned(format!("d:{precision},{scale}"))),
         DataType::Decimal256(precision, scale) => {
             Ok(Cow::Owned(format!("d:{precision},{scale},256")))

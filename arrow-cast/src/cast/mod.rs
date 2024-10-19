@@ -181,9 +181,10 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
             UInt8 | UInt16 | UInt32 | UInt64) |
         // decimal to signed numeric
         (Decimal32(_, _) | Decimal64(_, _) | Decimal128(_, _) | Decimal256(_, _),
-            Null | Int8 | Int16 | Int32 | Int64 | Float32 | Float64) => true,
+            Null | Int8 | Int16 | Int32 | Int64 | Float32 | Float64) |
         // decimal to string
-        (Decimal32(_, _) | Decimal64(_, _) | Decimal128(_, _) | Decimal256(_, _), Utf8View | Utf8 | LargeUtf8) => true,
+        (Decimal32(_, _) | Decimal64(_, _) | Decimal128(_, _) | Decimal256(_, _),
+            Utf8View | Utf8 | LargeUtf8) |
         // string to decimal
         (Utf8View | Utf8 | LargeUtf8, Decimal32(_, _) | Decimal64(_, _) | Decimal128(_, _) | Decimal256(_, _)) => true,
         (Struct(from_fields), Struct(to_fields)) => {
