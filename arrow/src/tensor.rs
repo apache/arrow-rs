@@ -86,6 +86,10 @@ pub type BooleanTensor<'a> = Tensor<'a, BooleanType>;
 pub type Date32Tensor<'a> = Tensor<'a, Date32Type>;
 /// [Tensor] of type [Int16Type]
 pub type Date64Tensor<'a> = Tensor<'a, Date64Type>;
+/// [Tensor] of type [Decimal32Type]
+pub type Decimal32Tensor<'a> = Tensor<'a, Decimal32Type>;
+/// [Tensor] of type [Decimal64Type]
+pub type Decimal64Tensor<'a> = Tensor<'a, Decimal64Type>;
 /// [Tensor] of type [Decimal128Type]
 pub type Decimal128Tensor<'a> = Tensor<'a, Decimal128Type>;
 /// [Tensor] of type [Decimal256Type]

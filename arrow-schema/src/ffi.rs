@@ -504,9 +504,6 @@ impl TryFrom<&FFI_ArrowSchema> for DataType {
                                 DataType::Decimal128(parsed_precision, parsed_scale)
                             },
                             [precision, scale, bits] => {
-                                if *bits != "128" && *bits != "256" {
-                                    return Err(ArrowError::CDataInterface("Only 128/256 bit wide decimal is supported in the Rust implementation".to_string()));
-                                }
                                 let parsed_precision = precision.parse::<u8>().map_err(|_| {
                                     ArrowError::CDataInterface(
                                         "The decimal type requires an integer precision".to_string(),
@@ -517,10 +514,13 @@ impl TryFrom<&FFI_ArrowSchema> for DataType {
                                         "The decimal type requires an integer scale".to_string(),
                                     )
                                 })?;
-                                if *bits == "128" {
-                                    DataType::Decimal128(parsed_precision, parsed_scale)
-                                } else {
-                                    DataType::Decimal256(parsed_precision, parsed_scale)
+                                let parsed_bits = bits.parse::<u16>().unwrap_or(0);
+                                match parsed_bits {
+                                    32 => DataType::Decimal32(parsed_precision, parsed_scale),
+                                    64 => DataType::Decimal64(parsed_precision, parsed_scale),
+                                    128 => DataType::Decimal128(parsed_precision, parsed_scale),
+                                    256 => DataType::Decimal256(parsed_precision, parsed_scale),
+                                    _ => return Err(ArrowError::CDataInterface("Only 32/64/128/256 bit wide decimals are supported in the Rust implementation".to_string())),
                                 }
                             }
                             _ => {
@@ -703,6 +703,8 @@ fn get_format_string(dtype: &DataType) -> Result<String, ArrowError> {
         DataType::LargeUtf8 => Ok("U".to_string()),
         DataType::FixedSizeBinary(num_bytes) => Ok(format!("w:{num_bytes}")),
         DataType::FixedSizeList(_, num_elems) => Ok(format!("+w:{num_elems}")),
+        DataType::Decimal32(precision, scale) => Ok(format!("d:{precision},{scale},32")),
+        DataType::Decimal64(precision, scale) => Ok(format!("d:{precision},{scale},64")),
         DataType::Decimal128(precision, scale) => Ok(format!("d:{precision},{scale}")),
         DataType::Decimal256(precision, scale) => Ok(format!("d:{precision},{scale},256")),
         DataType::Date32 => Ok("tdD".to_string()),

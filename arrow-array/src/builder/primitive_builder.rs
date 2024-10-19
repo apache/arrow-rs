@@ -87,6 +87,10 @@ pub type DurationMicrosecondBuilder = PrimitiveBuilder<DurationMicrosecondType>;
 /// An elapsed time in nanoseconds array builder.
 pub type DurationNanosecondBuilder = PrimitiveBuilder<DurationNanosecondType>;
 
+/// A decimal 32 array builder
+pub type Decimal32Builder = PrimitiveBuilder<Decimal32Type>;
+/// A decimal 64 array builder
+pub type Decimal64Builder = PrimitiveBuilder<Decimal64Type>;
 /// A decimal 128 array builder
 pub type Decimal128Builder = PrimitiveBuilder<Decimal128Type>;
 /// A decimal 256 array builder
@@ -175,7 +179,8 @@ impl<T: ArrowPrimitiveType> PrimitiveBuilder<T> {
     /// data type of the generated array.
     ///
     /// This method allows overriding the data type, to allow specifying timezones
-    /// for [`DataType::Timestamp`] or precision and scale for [`DataType::Decimal128`] and [`DataType::Decimal256`]
+    /// for [`DataType::Timestamp`] or precision and scale for [`DataType::Decimal32`],
+    /// [`DataType::Decimal64`], [`DataType::Decimal128`] and [`DataType::Decimal256`]
     ///
     /// # Panics
     ///

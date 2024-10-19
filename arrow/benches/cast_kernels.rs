@@ -82,6 +82,36 @@ fn build_utf8_date_time_array(size: usize, with_nulls: bool) -> ArrayRef {
     Arc::new(builder.finish())
 }
 
+fn build_decimal32_array(size: usize, precision: u8, scale: i8) -> ArrayRef {
+    let mut rng = seedable_rng();
+    let mut builder = Decimal32Builder::with_capacity(size);
+
+    for _ in 0..size {
+        builder.append_value(rng.gen_range::<i32, _>(0..10000000));
+    }
+    Arc::new(
+        builder
+            .finish()
+            .with_precision_and_scale(precision, scale)
+            .unwrap(),
+    )
+}
+
+fn build_decimal64_array(size: usize, precision: u8, scale: i8) -> ArrayRef {
+    let mut rng = seedable_rng();
+    let mut builder = Decimal64Builder::with_capacity(size);
+
+    for _ in 0..size {
+        builder.append_value(rng.gen_range::<i64, _>(0..1000000000));
+    }
+    Arc::new(
+        builder
+            .finish()
+            .with_precision_and_scale(precision, scale)
+            .unwrap(),
+    )
+}
+
 fn build_decimal128_array(size: usize, precision: u8, scale: i8) -> ArrayRef {
     let mut rng = seedable_rng();
     let mut builder = Decimal128Builder::with_capacity(size);
@@ -158,6 +188,8 @@ fn add_benchmark(c: &mut Criterion) {
     let utf8_date_array = build_utf8_date_array(512, true);
     let utf8_date_time_array = build_utf8_date_time_array(512, true);
 
+    let decimal32_array = build_decimal32_array(512, 9, 3);
+    let decimal64_array = build_decimal64_array(512, 10, 3);
     let decimal128_array = build_decimal128_array(512, 10, 3);
     let decimal256_array = build_decimal256_array(512, 50, 3);
     let string_array = build_string_array(512);
@@ -246,6 +278,8 @@ fn add_benchmark(c: &mut Criterion) {
     c.bench_function("cast utf8 to date64 512", |b| {
         b.iter(|| cast_array(&utf8_date_time_array, DataType::Date64))
     });
+
+// TODO: decimal32, decimal64
 
     c.bench_function("cast decimal128 to decimal128 512", |b| {
         b.iter(|| cast_array(&decimal128_array, DataType::Decimal128(30, 5)))

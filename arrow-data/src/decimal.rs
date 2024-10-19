@@ -23,8 +23,9 @@ use arrow_buffer::i256;
 use arrow_schema::ArrowError;
 
 pub use arrow_schema::{
+    DECIMAL32_MAX_PRECISION, DECIMAL32_MAX_SCALE, DECIMAL64_MAX_PRECISION, DECIMAL64_MAX_SCALE,
     DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE, DECIMAL256_MAX_PRECISION, DECIMAL256_MAX_SCALE,
-    DECIMAL_DEFAULT_SCALE,
+    DECIMAL32_DEFAULT_SCALE, DECIMAL64_DEFAULT_SCALE, DECIMAL_DEFAULT_SCALE,
 };
 
 /// MAX decimal256 value of little-endian format for each precision.
@@ -833,8 +834,160 @@ pub(crate) const MIN_DECIMAL_FOR_EACH_PRECISION_ONE_BASED: [i128; 39] = [
     -99999999999999999999999999999999999999,
 ];
 
-/// Validates that the specified `i128` value can be properly
+/// `MAX_DECIMAL64_FOR_EACH_PRECISION_ONE_BASED[p]` holds the maximum `i64` value that can
+/// be stored in [arrow_schema::DataType::Decimal64] value of precision `p`.
+/// The first element is unused and is inserted so that we can look up using
+/// precision as the index without the need to subtract 1 first.
+pub(crate) const MAX_DECIMAL64_FOR_EACH_PRECISION_ONE_BASED: [i64; 19] = [
+    0, // unused first element
+    9,
+    99,
+    999,
+    9999,
+    99999,
+    999999,
+    9999999,
+    99999999,
+    999999999,
+    9999999999,
+    99999999999,
+    999999999999,
+    9999999999999,
+    99999999999999,
+    999999999999999,
+    9999999999999999,
+    99999999999999999,
+    999999999999999999,
+];
+
+/// `MIN_DECIMAL64_FOR_EACH_PRECISION[p]` holds the minimum `i64` value that can
+/// be stored in a [arrow_schema::DataType::Decimal64] value of precision `p`.
+/// The first element is unused and is inserted so that we can look up using
+/// precision as the index without the need to subtract 1 first.
+pub(crate) const MIN_DECIMAL64_FOR_EACH_PRECISION_ONE_BASED: [i64; 19] = [
+    0, // unused first element
+    -9,
+    -99,
+    -999,
+    -9999,
+    -99999,
+    -999999,
+    -9999999,
+    -99999999,
+    -999999999,
+    -9999999999,
+    -99999999999,
+    -999999999999,
+    -9999999999999,
+    -99999999999999,
+    -999999999999999,
+    -9999999999999999,
+    -99999999999999999,
+    -999999999999999999,
+];
+
+/// `MAX_DECIMAL32_FOR_EACH_PRECISION_ONE_BASED[p]` holds the maximum `i32` value that can
+/// be stored in [arrow_schema::DataType::Decimal32] value of precision `p`.
+/// The first element is unused and is inserted so that we can look up using
+/// precision as the index without the need to subtract 1 first.
+pub(crate) const MAX_DECIMAL32_FOR_EACH_PRECISION_ONE_BASED: [i32; 10] = [
+    0, // unused first element
+    9,
+    99,
+    999,
+    9999,
+    99999,
+    999999,
+    9999999,
+    99999999,
+    999999999,
+];
+
+/// `MIN_DECIMAL32_FOR_EACH_PRECISION[p]` holds the minimum `i32` value that can
+/// be stored in a [arrow_schema::DataType::Decimal32] value of precision `p`.
+/// The first element is unused and is inserted so that we can look up using
+/// precision as the index without the need to subtract 1 first.
+pub(crate) const MIN_DECIMAL32_FOR_EACH_PRECISION_ONE_BASED: [i32; 10] = [
+    0, // unused first element
+    -9,
+    -99,
+    -999,
+    -9999,
+    -99999,
+    -999999,
+    -9999999,
+    -99999999,
+    -999999999,
+];
+
+/// Validates that the specified `i32` value can be properly
 /// interpreted as a Decimal number with precision `precision`
+#[inline]
+pub fn validate_decimal32_precision(value: i32, precision: u8) -> Result<(), ArrowError> {
+    if precision > DECIMAL32_MAX_PRECISION {
+        return Err(ArrowError::InvalidArgumentError(format!(
+            "Max precision of a Decimal32 is {DECIMAL32_MAX_PRECISION}, but got {precision}",
+        )));
+    }
+    if value > MAX_DECIMAL32_FOR_EACH_PRECISION_ONE_BASED[precision as usize] {
+        Err(ArrowError::InvalidArgumentError(format!(
+            "{value} is too large to store in a Decimal32 of precision {precision}. Max is {}",
+            MAX_DECIMAL32_FOR_EACH_PRECISION_ONE_BASED[precision as usize]
+        )))
+    } else if value < MIN_DECIMAL32_FOR_EACH_PRECISION_ONE_BASED[precision as usize] {
+        Err(ArrowError::InvalidArgumentError(format!(
+            "{value} is too small to store in a Decimal32 of precision {precision}. Min is {}",
+            MIN_DECIMAL32_FOR_EACH_PRECISION_ONE_BASED[precision as usize]
+        )))
+    } else {
+        Ok(())
+    }
+}
+
+/// Determines whether the specified `i32` value can be properly
+/// interpreted as a Decimal number with precision `precision`
+#[inline]
+pub fn is_validate_decimal32_precision(value: i32, precision: u8) -> bool {
+    precision <= DECIMAL32_MAX_PRECISION
+        && value >= MIN_DECIMAL32_FOR_EACH_PRECISION_ONE_BASED[precision as usize]
+        && value <= MAX_DECIMAL32_FOR_EACH_PRECISION_ONE_BASED[precision as usize]
+}
+
+/// Validates that the specified `i64` value can be properly
+/// interpreted as a Decimal64 number with precision `precision`
+#[inline]
+pub fn validate_decimal64_precision(value: i64, precision: u8) -> Result<(), ArrowError> {
+    if precision > DECIMAL64_MAX_PRECISION {
+        return Err(ArrowError::InvalidArgumentError(format!(
+            "Max precision of a Decimal64 is {DECIMAL64_MAX_PRECISION}, but got {precision}",
+        )));
+    }
+    if value > MAX_DECIMAL64_FOR_EACH_PRECISION_ONE_BASED[precision as usize] {
+        Err(ArrowError::InvalidArgumentError(format!(
+            "{value} is too large to store in a Decimal64 of precision {precision}. Max is {}",
+            MAX_DECIMAL64_FOR_EACH_PRECISION_ONE_BASED[precision as usize]
+        )))
+    } else if value < MIN_DECIMAL64_FOR_EACH_PRECISION_ONE_BASED[precision as usize] {
+        Err(ArrowError::InvalidArgumentError(format!(
+            "{value} is too small to store in a Decimal64 of precision {precision}. Min is {}",
+            MIN_DECIMAL64_FOR_EACH_PRECISION_ONE_BASED[precision as usize]
+        )))
+    } else {
+        Ok(())
+    }
+}
+
+/// Determines whether the specified `i64` value can be properly
+/// interpreted as a Decimal64 number with precision `precision`
+#[inline]
+pub fn is_validate_decimal64_precision(value: i64, precision: u8) -> bool {
+    precision <= DECIMAL64_MAX_PRECISION
+        && value >= MIN_DECIMAL64_FOR_EACH_PRECISION_ONE_BASED[precision as usize]
+        && value <= MAX_DECIMAL64_FOR_EACH_PRECISION_ONE_BASED[precision as usize]
+}
+
+/// Validates that the specified `i128` value can be properly
+/// interpreted as a Decimal128 number with precision `precision`
 #[inline]
 pub fn validate_decimal_precision(value: i128, precision: u8) -> Result<(), ArrowError> {
     if precision > DECIMAL128_MAX_PRECISION {
@@ -858,7 +1011,7 @@ pub fn validate_decimal_precision(value: i128, precision: u8) -> Result<(), Arro
 }
 
 /// Determines whether the specified `i128` value can be properly
-/// interpreted as a Decimal number with precision `precision`
+/// interpreted as a Decimal128 number with precision `precision`
 #[inline]
 pub fn is_validate_decimal_precision(value: i128, precision: u8) -> bool {
     precision <= DECIMAL128_MAX_PRECISION

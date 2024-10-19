@@ -107,6 +107,42 @@ fn bench_string(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_decimal32(c: &mut Criterion) {
+    c.bench_function("bench_decimal32_builder", |b| {
+        b.iter(|| {
+            let mut rng = rand::thread_rng();
+            let mut decimal_builder = Decimal32Builder::with_capacity(BATCH_SIZE);
+            for _ in 0..BATCH_SIZE {
+                decimal_builder.append_value(rng.gen_range::<i32, _>(0..999999999));
+            }
+            black_box(
+                decimal_builder
+                    .finish()
+                    .with_precision_and_scale(9, 0)
+                    .unwrap(),
+            );
+        })
+    });
+}
+
+fn bench_decimal64(c: &mut Criterion) {
+    c.bench_function("bench_decimal64_builder", |b| {
+        b.iter(|| {
+            let mut rng = rand::thread_rng();
+            let mut decimal_builder = Decimal64Builder::with_capacity(BATCH_SIZE);
+            for _ in 0..BATCH_SIZE {
+                decimal_builder.append_value(rng.gen_range::<i64, _>(0..9999999999));
+            }
+            black_box(
+                decimal_builder
+                    .finish()
+                    .with_precision_and_scale(18, 0)
+                    .unwrap(),
+            );
+        })
+    });
+}
+
 fn bench_decimal128(c: &mut Criterion) {
     c.bench_function("bench_decimal128_builder", |b| {
         b.iter(|| {
@@ -126,7 +162,7 @@ fn bench_decimal128(c: &mut Criterion) {
 }
 
 fn bench_decimal256(c: &mut Criterion) {
-    c.bench_function("bench_decimal128_builder", |b| {
+    c.bench_function("bench_decimal256_builder", |b| {
         b.iter(|| {
             let mut rng = rand::thread_rng();
             let mut decimal_builder = Decimal256Builder::with_capacity(BATCH_SIZE);
@@ -150,6 +186,8 @@ criterion_group!(
     bench_primitive_nulls,
     bench_bool,
     bench_string,
+    bench_decimal32,
+    bench_decimal64,
     bench_decimal128,
     bench_decimal256,
 );
