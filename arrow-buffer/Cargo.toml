@@ -28,10 +28,16 @@ include = { workspace = true }
 edition = { workspace = true }
 rust-version = { workspace = true }
 
+[package.metadata.docs.rs]
+features = ["pool"]
+
 [lib]
 name = "arrow_buffer"
 path = "src/lib.rs"
 bench = false
+
+[features]
+pool = []
 
 [dependencies]
 bytes = { version = "1.4" }

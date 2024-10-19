@@ -44,6 +44,9 @@ pub struct Bytes {
 
     /// how to deallocate this region
     deallocation: Deallocation,
+
+    #[cfg(feature = "pool")]
+    reservation: std::sync::Mutex<Option<Box<dyn crate::MemoryReservation>>>,
 }
 
 impl Bytes {
@@ -65,6 +68,8 @@ impl Bytes {
             ptr,
             len,
             deallocation,
+            #[cfg(feature = "pool")]
+            reservation: std::sync::Mutex::new(None),
         }
     }
 
@@ -94,6 +99,12 @@ impl Bytes {
             // its underlying capacity might be larger
             Deallocation::Custom(_, size) => size,
         }
+    }
+
+    /// Register this [`Bytes`] with the provided [`MemoryPool`]
+    #[cfg(feature = "pool")]
+    pub fn claim(&self, pool: &dyn crate::MemoryPool) {
+        *self.reservation.lock().unwrap() = Some(pool.register(self.capacity()));
     }
 
     #[inline]
@@ -152,6 +163,8 @@ impl From<bytes::Bytes> for Bytes {
             len,
             ptr: NonNull::new(value.as_ptr() as _).unwrap(),
             deallocation: Deallocation::Custom(std::sync::Arc::new(value), len),
+            #[cfg(feature = "pool")]
+            reservation: std::sync::Mutex::new(None),
         }
     }
 }
