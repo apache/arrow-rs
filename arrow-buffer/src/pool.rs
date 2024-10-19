@@ -3,15 +3,17 @@ use std::sync::Arc;
 
 /// A [`MemoryPool`] can be used to track memory usage by [`Buffer`](crate::Buffer)
 pub trait MemoryPool {
+    /// Return a memory reservation of `size` bytes
     fn register(&self, size: usize) -> Box<dyn MemoryReservation>;
 }
 
 /// A memory reservation within a [`MemoryPool`] that is freed on drop
 pub trait MemoryReservation {
+    /// Resize this reservation to `new` bytes
     fn resize(&mut self, new: usize);
 }
 
-/// A simple [`MemoryPool`] that tracks memory usage
+/// A simple [`MemoryPool`] that reports the total memory usage
 #[derive(Debug, Default)]
 pub struct TrackingMemoryPool(Arc<AtomicUsize>);
 

@@ -358,7 +358,7 @@ impl Buffer {
         self.ptr == other.ptr && self.length == other.length
     }
 
-    /// Register this [`Buffer`] with the provided [`MemoryPool`]
+    /// Register this [`Buffer`] with the provided [`MemoryPool`], replacing any prior assignment
     #[cfg(feature = "pool")]
     pub fn claim(&self, pool: &dyn crate::MemoryPool) {
         self.data.claim(pool)

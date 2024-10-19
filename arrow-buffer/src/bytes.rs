@@ -101,7 +101,7 @@ impl Bytes {
         }
     }
 
-    /// Register this [`Bytes`] with the provided [`MemoryPool`]
+    /// Register this [`Bytes`] with the provided [`MemoryPool`], replacing any prior assignment
     #[cfg(feature = "pool")]
     pub fn claim(&self, pool: &dyn crate::MemoryPool) {
         *self.reservation.lock().unwrap() = Some(pool.register(self.capacity()));
