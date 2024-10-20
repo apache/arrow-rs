@@ -252,11 +252,14 @@ pub fn make_builder(datatype: &DataType, capacity: usize) -> Box<dyn ArrayBuilde
         DataType::LargeList(field) => {
             let builder = make_builder(field.data_type(), capacity);
             Box::new(LargeListBuilder::with_capacity(builder, capacity).with_field(field.clone()))
-        },
+        }
         DataType::FixedSizeList(field, size) => {
             let builder = make_builder(field.data_type(), capacity);
-            Box::new(FixedSizeListBuilder::with_capacity(builder, *size, capacity).with_field(field.clone()))
-        },
+            Box::new(
+                FixedSizeListBuilder::with_capacity(builder, *size, capacity)
+                    .with_field(field.clone()),
+            )
+        }
         DataType::Map(field, _) => match field.data_type() {
             DataType::Struct(fields) => {
                 let map_field_names = MapFieldNames {
