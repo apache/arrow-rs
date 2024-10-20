@@ -80,13 +80,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_private_bucket() {
-        let bucket = "bloxbender";
+        let bucket = "public-datasets";
 
         let region = resolve_bucket_region(bucket, &ClientOptions::new())
             .await
             .unwrap();
 
-        let expected = "us-west-2".to_string();
+        let expected = "eu-west-1".to_string();
 
         assert_eq!(region, expected);
     }
