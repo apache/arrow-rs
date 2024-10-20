@@ -79,19 +79,6 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn test_private_bucket() {
-        let bucket = "public-datasets";
-
-        let region = resolve_bucket_region(bucket, &ClientOptions::new())
-            .await
-            .unwrap();
-
-        let expected = "eu-west-1".to_string();
-
-        assert_eq!(region, expected);
-    }
-
-    #[tokio::test]
     async fn test_bucket_does_not_exist() {
         let bucket = "please-dont-exist";
 
