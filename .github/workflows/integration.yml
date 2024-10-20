@@ -60,7 +60,8 @@ jobs:
       ARROW_RUST_EXE_PATH: /build/rust/debug
       BUILD_DOCS_CPP: OFF
       ARROW_INTEGRATION_CPP: ON
-      ARROW_INTEGRATION_CSHARP: ON
+      # Disable C# integration tests due to https://github.com/apache/arrow-rs/issues/6577
+      ARROW_INTEGRATION_CSHARP: OFF
       ARROW_INTEGRATION_GO: ON
       ARROW_INTEGRATION_JAVA: ON
       ARROW_INTEGRATION_JS: ON
