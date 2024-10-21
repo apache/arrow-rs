@@ -134,6 +134,11 @@ fn make_encoder_impl<'a>(
             };
             (Box::new(encoder) as _, array.nulls().cloned())
         }
+        DataType::Decimal128(_, _) | DataType::Decimal256(_, _) => {
+            let options = FormatOptions::new().with_display_error(true);
+            let formatter = ArrayFormatter::try_new(array, &options)?;
+            (Box::new(RawArrayFormatter(formatter)) as _, array.nulls().cloned())
+        }
         d => match d.is_temporal() {
             true => {
                 // Note: the implementation of Encoder for ArrayFormatter assumes it does not produce
@@ -431,6 +436,15 @@ impl<'a> Encoder for ArrayFormatter<'a> {
         // Note: We are making an assumption that the formatter does not produce characters that require escaping
         let _ = write!(out, "{}", self.value(idx));
         out.push(b'"')
+    }
+}
+
+/// A newtype wrapper around [`ArrayFormatter`] that skips surrounding the value with `"`
+struct RawArrayFormatter<'a>(ArrayFormatter<'a>);
+
+impl<'a> Encoder for RawArrayFormatter<'a> {
+    fn encode(&mut self, idx: usize, out: &mut Vec<u8>) {
+        let _ = write!(out, "{}", self.0.value(idx));
     }
 }
 
