@@ -16,6 +16,7 @@
 // under the License.
 
 use crate::builder::*;
+use crate::types::Int32Type;
 use crate::StructArray;
 use arrow_buffer::NullBufferBuilder;
 use arrow_schema::{DataType, Fields, IntervalUnit, SchemaBuilder, TimeUnit};
@@ -160,11 +161,14 @@ impl ArrayBuilder for StructBuilder {
     }
 }
 
-/// Returns a builder with capacity `capacity` that corresponds to the datatype `DataType`
-/// This function is useful to construct arrays from an arbitrary vectors with known/expected
-/// schema.
+/// Returns a builder with capacity for `capacity` elements of datatype
+/// `DataType`.
 ///
-/// See comments on StructBuilder on how to retreive collection builders built by make_builder.
+/// This function is useful to construct arrays from an arbitrary vectors with
+/// known/expected schema.
+///
+/// See comments on [StructBuilder] for retrieving collection builders built by
+/// make_builder.
 pub fn make_builder(datatype: &DataType, capacity: usize) -> Box<dyn ArrayBuilder> {
     use crate::builder::*;
     match datatype {
@@ -287,6 +291,31 @@ pub fn make_builder(datatype: &DataType, capacity: usize) -> Box<dyn ArrayBuilde
             t => panic!("The field of Map data type {t:?} should has a child Struct field"),
         },
         DataType::Struct(fields) => Box::new(StructBuilder::from_fields(fields.clone(), capacity)),
+        DataType::Dictionary(key_type, value_type) if **key_type == DataType::Int32 => {
+            match &**value_type {
+                DataType::Utf8 => {
+                    let dict_builder: StringDictionaryBuilder<Int32Type> =
+                        StringDictionaryBuilder::with_capacity(capacity, 256, 1024);
+                    Box::new(dict_builder)
+                }
+                DataType::LargeUtf8 => {
+                    let dict_builder: LargeStringDictionaryBuilder<Int32Type> =
+                        LargeStringDictionaryBuilder::with_capacity(capacity, 256, 1024);
+                    Box::new(dict_builder)
+                }
+                DataType::Binary => {
+                    let dict_builder: BinaryDictionaryBuilder<Int32Type> =
+                        BinaryDictionaryBuilder::with_capacity(capacity, 256, 1024);
+                    Box::new(dict_builder)
+                }
+                DataType::LargeBinary => {
+                    let dict_builder: LargeBinaryDictionaryBuilder<Int32Type> =
+                        LargeBinaryDictionaryBuilder::with_capacity(capacity, 256, 1024);
+                    Box::new(dict_builder)
+                }
+                t => panic!("Unsupported dictionary value type {t:?} is not currently supported"),
+            }
+        }
         t => panic!("Data type {t:?} is not currently supported"),
     }
 }
@@ -662,16 +691,52 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "Data type Dictionary(Int32, Utf8) is not currently supported")]
+    fn test_struct_array_builder_from_dictionary_type() {
+        let dict_field = Field::new(
+            "f1",
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+            false,
+        );
+        let fields = vec![dict_field.clone()];
+        let expected_dtype = DataType::Struct(fields.into());
+        let cloned_dict_field = dict_field.clone();
+        let expected_child_dtype = dict_field.data_type();
+        let mut struct_builder = StructBuilder::from_fields(vec![cloned_dict_field], 5);
+        struct_builder
+            .field_builder::<StringDictionaryBuilder<Int32Type>>(0)
+            .expect("Builder should be StringDictionaryBuilder")
+            .append_value("dict string");
+        struct_builder.append(true);
+        let array = struct_builder.finish();
+
+        assert_eq!(array.data_type(), &expected_dtype);
+        assert_eq!(array.column(0).data_type(), expected_child_dtype);
+        assert_eq!(array.column(0).len(), 1);
+    }
+
+    #[test]
+    #[should_panic(expected = "Data type Dictionary(Int16, Utf8) is not currently supported")]
     fn test_struct_array_builder_from_schema_unsupported_type() {
         let fields = vec![
             Field::new("f1", DataType::Int16, false),
             Field::new(
                 "f2",
-                DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+                DataType::Dictionary(Box::new(DataType::Int16), Box::new(DataType::Utf8)),
                 false,
             ),
         ];
+
+        let _ = StructBuilder::from_fields(fields, 5);
+    }
+
+    #[test]
+    #[should_panic(expected = "Unsupported dictionary value type Int32 is not currently supported")]
+    fn test_struct_array_builder_from_dict_with_unsupported_value_type() {
+        let fields = vec![Field::new(
+            "f1",
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Int32)),
+            false,
+        )];
 
         let _ = StructBuilder::from_fields(fields, 5);
     }
