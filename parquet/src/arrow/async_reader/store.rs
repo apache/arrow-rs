@@ -15,19 +15,16 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::ops::Range;
-use std::sync::Arc;
+use std::{ops::Range, sync::Arc};
 
 use bytes::Bytes;
-use futures::future::BoxFuture;
-use futures::{FutureExt, TryFutureExt};
-use object_store::path::Path;
-use object_store::{ObjectMeta, ObjectStore};
+use futures::{future::BoxFuture, FutureExt, TryFutureExt};
+use object_store::{path::Path, ObjectMeta, ObjectStore};
 use tokio::runtime::Handle;
 
 use crate::arrow::async_reader::AsyncFileReader;
 use crate::errors::{ParquetError, Result};
-use crate::file::metadata::{ParquetMetaDataReader, ParquetMetaData};
+use crate::file::metadata::{ParquetMetaData, ParquetMetaDataReader};
 
 /// Reads Parquet files in object storage using [`ObjectStore`].
 ///
@@ -118,41 +115,46 @@ impl ParquetObjectReader {
         }
     }
 
-    fn spawn<F, O>(&self, f: F) -> BoxFuture<'_, Result<O>>
+    fn spawn<F, O, E>(&self, f: F) -> BoxFuture<'_, Result<O>>
     where
-        F: for<'a> FnOnce(&'a Arc<dyn ObjectStore>, &'a Path) -> BoxFuture<'a, Result<O>>
+        F: for<'a> FnOnce(&'a Arc<dyn ObjectStore>, &'a Path) -> BoxFuture<'a, Result<O, E>>
             + Send
             + 'static,
         O: Send + 'static,
+        E: Into<ParquetError> + Send + 'static,
     {
         match &self.runtime {
             Some(handle) => {
                 let path = self.meta.location.clone();
                 let store = Arc::clone(&self.store);
-                let fut = handle.spawn(async move { f(&store, &path).await });
-                fut.unwrap_or_else(|e| match e.try_into_panic() {
-                    Ok(p) => std::panic::resume_unwind(p),
-                    Err(e) => Err(ParquetError::External(Box::new(e))),
-                })
-                .boxed()
+                handle
+                    .spawn(async move { f(&store, &path).await })
+                    .map_ok_or_else(
+                        |e| match e.try_into_panic() {
+                            Err(e) => Err(ParquetError::External(Box::new(e))),
+                            Ok(p) => std::panic::resume_unwind(p),
+                        },
+                        |res| res.map_err(|e| e.into()),
+                    )
+                    .boxed()
             }
-            None => f(&self.store, &self.meta.location),
+            None => f(&self.store, &self.meta.location)
+                .map_err(|e| e.into())
+                .boxed(),
         }
     }
 }
 
 impl AsyncFileReader for ParquetObjectReader {
     fn get_bytes(&mut self, range: Range<usize>) -> BoxFuture<'_, Result<Bytes>> {
-        self.spawn(|store, path| store.get_range(path, range).map_err(|e| e.into()).boxed())
+        self.spawn(|store, path| store.get_range(path, range))
     }
 
     fn get_byte_ranges(&mut self, ranges: Vec<Range<usize>>) -> BoxFuture<'_, Result<Vec<Bytes>>>
     where
         Self: Send,
     {
-        self.spawn(move |store, path| {
-            async move { store.get_ranges(path, &ranges).await.map_err(|e| e.into()) }.boxed()
-        })
+        self.spawn(|store, path| async move { store.get_ranges(path, &ranges).await }.boxed())
     }
 
     fn get_metadata(&mut self) -> BoxFuture<'_, Result<Arc<ParquetMetaData>>> {
@@ -178,23 +180,28 @@ mod tests {
     use arrow::util::test_util::parquet_test_data;
     use object_store::local::LocalFileSystem;
     use object_store::path::Path;
-    use object_store::ObjectStore;
+    use object_store::{ObjectMeta, ObjectStore};
 
     use crate::arrow::async_reader::ParquetObjectReader;
     use crate::arrow::ParquetRecordBatchStreamBuilder;
 
-    #[tokio::test]
-    async fn test_simple() {
+    async fn get_meta_store() -> (ObjectMeta, Arc<dyn ObjectStore>) {
         let res = parquet_test_data();
         let store = LocalFileSystem::new_with_prefix(res).unwrap();
 
-        let mut meta = store
+        let meta = store
             .head(&Path::from("alltypes_plain.parquet"))
             .await
             .unwrap();
 
-        let store = Arc::new(store) as Arc<dyn ObjectStore>;
-        let object_reader = ParquetObjectReader::new(Arc::clone(&store), meta.clone());
+        (meta, Arc::new(store) as Arc<dyn ObjectStore>)
+    }
+
+    #[tokio::test]
+    async fn test_simple() {
+        let (meta, store) = get_meta_store().await;
+        let object_reader = ParquetObjectReader::new(store, meta);
+
         let builder = ParquetRecordBatchStreamBuilder::new(object_reader)
             .await
             .unwrap();
@@ -202,7 +209,11 @@ mod tests {
 
         assert_eq!(batches.len(), 1);
         assert_eq!(batches[0].num_rows(), 8);
+    }
 
+    #[tokio::test]
+    async fn test_not_found() {
+        let (mut meta, store) = get_meta_store().await;
         meta.location = Path::from("I don't exist.parquet");
 
         let object_reader = ParquetObjectReader::new(store, meta);
@@ -213,10 +224,39 @@ mod tests {
                 let err = e.to_string();
                 assert!(
                     err.contains("not found: No such file or directory (os error 2)"),
-                    "{}",
-                    err
+                    "{err}",
                 );
             }
         }
+    }
+
+    #[tokio::test]
+    // We need to mark this with the `target_has_atomic` because the spawned_tasks_count() fn is
+    // only available for that cfg
+    #[cfg(all(target_has_atomic = "64", tokio_unstable))]
+    async fn test_runtime_is_used() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+
+        let (meta, store) = get_meta_store().await;
+
+        let reader = ParquetObjectReader::new(store, meta).with_runtime(rt.handle().clone());
+
+        let builder = ParquetRecordBatchStreamBuilder::new(reader).await.unwrap();
+        let batches: Vec<_> = builder.build().unwrap().try_collect().await.unwrap();
+
+        // Just copied these assert_eqs from the `test_timple` above
+        assert_eq!(batches.len(), 1);
+        assert_eq!(batches[0].num_rows(), 8);
+
+        // According to tokio documentation for the `spawned_tasks_count` method, this number
+        // starts at 0 when the runtime is created. So this check should actually verify what we
+        // want.
+        assert!(rt.metrics().spawned_tasks_count() > 0);
+
+        // Runtimes have to be dropped in blocking contexts, so we need to move this one to a new
+        // blocking thread to drop it.
+        tokio::runtime::Handle::current().spawn_blocking(move || drop(rt));
     }
 }

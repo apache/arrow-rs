@@ -28,6 +28,10 @@ readme = "README.md"
 edition = { workspace = true }
 rust-version = "1.70.0"
 
+# we need this for the arrow::async_reader::test_runtime_is_used test
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(tokio_unstable)"] }
+
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 ahash = { version = "0.8", default-features = false, features = ["compile-time-rng"] }
 
