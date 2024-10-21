@@ -15,31 +15,31 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! Rle/Bit-Packing Hybrid Encoding
+//! The grammar for this encoding looks like the following (copied verbatim
+//! from <https://github.com/Parquet/parquet-format/blob/master/Encodings.md>):
+//!
+//! rle-bit-packed-hybrid: `<length>` `<encoded-data>`
+//! length := length of the `<encoded-data>` in bytes stored as 4 bytes little endian
+//! encoded-data := `<run>`*
+//! run := `<bit-packed-run>` | `<rle-run>`
+//! bit-packed-run := `<bit-packed-header>` `<bit-packed-values>`
+//! bit-packed-header := varint-encode(`<bit-pack-count>` << 1 | 1)
+//! we always bit-pack a multiple of 8 values at a time, so we only store the number of
+//! values / 8
+//! bit-pack-count := (number of values in this run) / 8
+//! bit-packed-values := *see 1 below*
+//! rle-run := `<rle-header>` `<repeated-value>`
+//! rle-header := varint-encode( (number of times repeated) << 1)
+//! repeated-value := value that is repeated, using a fixed-width of
+//! round-up-to-next-byte(bit-width)
+
 use std::{cmp, mem::size_of};
 
 use bytes::Bytes;
 
 use crate::errors::{ParquetError, Result};
 use crate::util::bit_util::{self, BitReader, BitWriter, FromBytes};
-
-/// Rle/Bit-Packing Hybrid Encoding
-/// The grammar for this encoding looks like the following (copied verbatim
-/// from <https://github.com/Parquet/parquet-format/blob/master/Encodings.md>):
-///
-/// rle-bit-packed-hybrid: `<length>` `<encoded-data>`
-/// length := length of the `<encoded-data>` in bytes stored as 4 bytes little endian
-/// encoded-data := `<run>`*
-/// run := `<bit-packed-run>` | `<rle-run>`
-/// bit-packed-run := `<bit-packed-header>` `<bit-packed-values>`
-/// bit-packed-header := varint-encode(`<bit-pack-count>` << 1 | 1)
-/// we always bit-pack a multiple of 8 values at a time, so we only store the number of
-/// values / 8
-/// bit-pack-count := (number of values in this run) / 8
-/// bit-packed-values := *see 1 below*
-/// rle-run := `<rle-header>` `<repeated-value>`
-/// rle-header := varint-encode( (number of times repeated) << 1)
-/// repeated-value := value that is repeated, using a fixed-width of
-/// round-up-to-next-byte(bit-width)
 
 /// Maximum groups of 8 values per bit-packed run. Current value is 64.
 const MAX_GROUPS_PER_BIT_PACKED_RUN: usize = 1 << 6;

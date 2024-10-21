@@ -875,7 +875,10 @@ impl Array for UnionArray {
     }
 
     fn is_nullable(&self) -> bool {
-        true
+        self.fields
+            .iter()
+            .flatten()
+            .any(|field| field.is_nullable())
     }
 
     fn get_buffer_memory_size(&self) -> usize {
@@ -2137,5 +2140,44 @@ mod tests {
         ]
         .into_iter()
         .collect()
+    }
+
+    #[test]
+    fn test_is_nullable() {
+        assert!(!create_union_array(false, false).is_nullable());
+        assert!(create_union_array(true, false).is_nullable());
+        assert!(create_union_array(false, true).is_nullable());
+        assert!(create_union_array(true, true).is_nullable());
+    }
+
+    /// Create a union array with a float and integer field
+    ///
+    /// If the `int_nullable` is true, the integer field will have nulls
+    /// If the `float_nullable` is true, the float field will have nulls
+    ///
+    /// Note the `Field` definitions are always declared to be nullable
+    fn create_union_array(int_nullable: bool, float_nullable: bool) -> UnionArray {
+        let int_array = if int_nullable {
+            Int32Array::from(vec![Some(1), None, Some(3)])
+        } else {
+            Int32Array::from(vec![1, 2, 3])
+        };
+        let float_array = if float_nullable {
+            Float64Array::from(vec![Some(3.2), None, Some(4.2)])
+        } else {
+            Float64Array::from(vec![3.2, 4.2, 5.2])
+        };
+        let type_ids = [0, 1, 0].into_iter().collect::<ScalarBuffer<i8>>();
+        let offsets = [0, 0, 0].into_iter().collect::<ScalarBuffer<i32>>();
+        let union_fields = [
+            (0, Arc::new(Field::new("A", DataType::Int32, true))),
+            (1, Arc::new(Field::new("B", DataType::Float64, true))),
+        ]
+        .into_iter()
+        .collect::<UnionFields>();
+
+        let children = vec![Arc::new(int_array) as Arc<dyn Array>, Arc::new(float_array)];
+
+        UnionArray::try_new(union_fields, type_ids, Some(offsets), children).unwrap()
     }
 }

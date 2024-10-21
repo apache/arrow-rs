@@ -218,7 +218,7 @@ struct Test<'a> {
     check: Check,
 }
 
-impl<'a> Test<'a> {
+impl Test<'_> {
     fn run(self) {
         let converter = StatisticsConverter::try_new(
             self.column_name,
@@ -2553,7 +2553,7 @@ mod test {
 
     /// Formats the statistics nicely for display
     struct DisplayStats<'a>(&'a [RowGroupMetaData]);
-    impl<'a> std::fmt::Display for DisplayStats<'a> {
+    impl std::fmt::Display for DisplayStats<'_> {
         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
             let row_groups = self.0;
             writeln!(f, "  row_groups: {}", row_groups.len())?;

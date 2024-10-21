@@ -1013,13 +1013,13 @@ impl<'a> Iterator for RowsIter<'a> {
     }
 }
 
-impl<'a> ExactSizeIterator for RowsIter<'a> {
+impl ExactSizeIterator for RowsIter<'_> {
     fn len(&self) -> usize {
         self.end - self.start
     }
 }
 
-impl<'a> DoubleEndedIterator for RowsIter<'a> {
+impl DoubleEndedIterator for RowsIter<'_> {
     fn next_back(&mut self) -> Option<Self::Item> {
         if self.end == self.start {
             return None;
@@ -1062,37 +1062,37 @@ impl<'a> Row<'a> {
 
 // Manually derive these as don't wish to include `fields`
 
-impl<'a> PartialEq for Row<'a> {
+impl PartialEq for Row<'_> {
     #[inline]
     fn eq(&self, other: &Self) -> bool {
         self.data.eq(other.data)
     }
 }
 
-impl<'a> Eq for Row<'a> {}
+impl Eq for Row<'_> {}
 
-impl<'a> PartialOrd for Row<'a> {
+impl PartialOrd for Row<'_> {
     #[inline]
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
     }
 }
 
-impl<'a> Ord for Row<'a> {
+impl Ord for Row<'_> {
     #[inline]
     fn cmp(&self, other: &Self) -> Ordering {
         self.data.cmp(other.data)
     }
 }
 
-impl<'a> Hash for Row<'a> {
+impl Hash for Row<'_> {
     #[inline]
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.data.hash(state)
     }
 }
 
-impl<'a> AsRef<[u8]> for Row<'a> {
+impl AsRef<[u8]> for Row<'_> {
     #[inline]
     fn as_ref(&self) -> &[u8] {
         self.data
