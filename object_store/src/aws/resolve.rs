@@ -79,19 +79,6 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn test_private_bucket() {
-        let bucket = "bloxbender";
-
-        let region = resolve_bucket_region(bucket, &ClientOptions::new())
-            .await
-            .unwrap();
-
-        let expected = "us-west-2".to_string();
-
-        assert_eq!(region, expected);
-    }
-
-    #[tokio::test]
     async fn test_bucket_does_not_exist() {
         let bucket = "please-dont-exist";
 

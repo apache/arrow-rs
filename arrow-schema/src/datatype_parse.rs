@@ -490,7 +490,7 @@ impl<'a> Tokenizer<'a> {
     }
 }
 
-impl<'a> Iterator for Tokenizer<'a> {
+impl Iterator for Tokenizer<'_> {
     type Item = ArrowResult<Token>;
 
     fn next(&mut self) -> Option<Self::Item> {

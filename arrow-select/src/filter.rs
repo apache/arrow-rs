@@ -62,7 +62,7 @@ impl<'a> SlicesIterator<'a> {
     }
 }
 
-impl<'a> Iterator for SlicesIterator<'a> {
+impl Iterator for SlicesIterator<'_> {
     type Item = (usize, usize);
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -87,7 +87,7 @@ impl<'a> IndexIterator<'a> {
     }
 }
 
-impl<'a> Iterator for IndexIterator<'a> {
+impl Iterator for IndexIterator<'_> {
     type Item = usize;
 
     fn next(&mut self) -> Option<Self::Item> {
