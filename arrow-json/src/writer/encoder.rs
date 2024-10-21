@@ -134,15 +134,10 @@ fn make_encoder_impl<'a>(
             };
             (Box::new(encoder) as _, array.nulls().cloned())
         }
-        DataType::Decimal128(_, _) => {
-            let array = array.as_any().downcast_ref::<Decimal128Array>()
-                .ok_or_else(|| ArrowError::InvalidArgumentError("Expected Decimal128Array".to_string()))?;
-            (Box::new(Decimal128Encoder::new(array)) as _, array.nulls().cloned())
-        }
-        DataType::Decimal256(_, _) => {
-            let array = array.as_any().downcast_ref::<Decimal256Array>()
-                .ok_or_else(|| ArrowError::InvalidArgumentError("Expected Decimal256Array".to_string()))?;
-            (Box::new(Decimal256Encoder::new(array)) as _, array.nulls().cloned())
+        DataType::Decimal128(_, _) | DataType::Decimal256(_, _) => {
+            let options = FormatOptions::new().with_display_error(true);
+            let formatter = ArrayFormatter::try_new(array, &options)?;
+            (Box::new(RawArrayFormatter(formatter)) as _, array.nulls().cloned())
         }
         d => match d.is_temporal() {
             true => {
@@ -444,6 +439,15 @@ impl<'a> Encoder for ArrayFormatter<'a> {
     }
 }
 
+/// A newtype wrapper around [`ArrayFormatter`] that skips surrounding the value with `"`
+struct RawArrayFormatter<'a>(ArrayFormatter<'a>);
+
+impl<'a> Encoder for RawArrayFormatter<'a> {
+    fn encode(&mut self, idx: usize, out: &mut Vec<u8>) {
+        let _ = write!(out, "{}", self.0.value(idx));
+    }
+}
+
 struct NullEncoder;
 
 impl Encoder for NullEncoder {
@@ -553,39 +557,5 @@ where
             write!(out, "{byte:02x}").unwrap();
         }
         out.push(b'"');
-    }
-}
-
-struct Decimal128Encoder<'a> {
-    array: &'a Decimal128Array,
-}
-
-impl<'a> Decimal128Encoder<'a> {
-    fn new(array: &'a Decimal128Array) -> Self {
-        Self { array }
-    }
-}
-
-impl<'a> Encoder for Decimal128Encoder<'a> {
-    fn encode(&mut self, idx: usize, out: &mut Vec<u8>) {
-        let formatted = self.array.value_as_string(idx);
-        out.extend_from_slice(formatted.as_bytes());
-    }
-}
-
-struct Decimal256Encoder<'a> {
-    array: &'a Decimal256Array,
-}
-
-impl<'a> Decimal256Encoder<'a> {
-    fn new(array: &'a Decimal256Array) -> Self {
-        Self { array }
-    }
-}
-
-impl<'a> Encoder for Decimal256Encoder<'a> {
-    fn encode(&mut self, idx: usize, out: &mut Vec<u8>) {
-        let formatted = self.array.value_as_string(idx);
-        out.extend_from_slice(formatted.as_bytes());
     }
 }
