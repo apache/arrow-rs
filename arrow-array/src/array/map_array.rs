@@ -399,7 +399,7 @@ impl Array for MapArray {
     }
 }
 
-impl<'a> ArrayAccessor for &'a MapArray {
+impl ArrayAccessor for &MapArray {
     type Item = StructArray;
 
     fn value(&self, index: usize) -> Self::Item {

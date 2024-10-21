@@ -506,7 +506,7 @@ macro_rules! map_list_primitive_accessor {
     };
 }
 
-impl<'a> ListAccessor for MapList<'a> {
+impl ListAccessor for MapList<'_> {
     map_list_primitive_accessor!(get_bool, Bool, bool);
 
     map_list_primitive_accessor!(get_byte, Byte, i8);

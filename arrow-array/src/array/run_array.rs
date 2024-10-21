@@ -44,23 +44,22 @@ use crate::{
 /// ```text
 /// ┌ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─┐
 ///   ┌─────────────────┐  ┌─────────┐       ┌─────────────────┐
-/// │ │        A        │  │    2    │ │     │        A        │     
+/// │ │        A        │  │    2    │ │     │        A        │
 ///   ├─────────────────┤  ├─────────┤       ├─────────────────┤
 /// │ │        D        │  │    3    │ │     │        A        │    run length of 'A' = runs_ends[0] - 0 = 2
 ///   ├─────────────────┤  ├─────────┤       ├─────────────────┤
 /// │ │        B        │  │    6    │ │     │        D        │    run length of 'D' = run_ends[1] - run_ends[0] = 1
 ///   └─────────────────┘  └─────────┘       ├─────────────────┤
-/// │        values          run_ends  │     │        B        │     
+/// │        values          run_ends  │     │        B        │
 ///                                          ├─────────────────┤
-/// └ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─┘     │        B        │     
+/// └ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─┘     │        B        │
 ///                                          ├─────────────────┤
 ///                RunArray                  │        B        │    run length of 'B' = run_ends[2] - run_ends[1] = 3
 ///               length = 3                 └─────────────────┘
-///  
+///
 ///                                             Logical array
 ///                                                Contents
 /// ```
-
 pub struct RunArray<R: RunEndIndexType> {
     data_type: DataType,
     run_ends: RunEndBuffer<R::Native>,
@@ -525,15 +524,15 @@ pub struct TypedRunArray<'a, R: RunEndIndexType, V> {
 }
 
 // Manually implement `Clone` to avoid `V: Clone` type constraint
-impl<'a, R: RunEndIndexType, V> Clone for TypedRunArray<'a, R, V> {
+impl<R: RunEndIndexType, V> Clone for TypedRunArray<'_, R, V> {
     fn clone(&self) -> Self {
         *self
     }
 }
 
-impl<'a, R: RunEndIndexType, V> Copy for TypedRunArray<'a, R, V> {}
+impl<R: RunEndIndexType, V> Copy for TypedRunArray<'_, R, V> {}
 
-impl<'a, R: RunEndIndexType, V> std::fmt::Debug for TypedRunArray<'a, R, V> {
+impl<R: RunEndIndexType, V> std::fmt::Debug for TypedRunArray<'_, R, V> {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         writeln!(f, "TypedRunArray({:?})", self.run_array)
     }
@@ -556,7 +555,7 @@ impl<'a, R: RunEndIndexType, V> TypedRunArray<'a, R, V> {
     }
 }
 
-impl<'a, R: RunEndIndexType, V: Sync> Array for TypedRunArray<'a, R, V> {
+impl<R: RunEndIndexType, V: Sync> Array for TypedRunArray<'_, R, V> {
     fn as_any(&self) -> &dyn Any {
         self.run_array
     }

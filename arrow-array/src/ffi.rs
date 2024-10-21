@@ -297,7 +297,7 @@ struct ImportedArrowArray<'a> {
     owner: &'a Arc<FFI_ArrowArray>,
 }
 
-impl<'a> ImportedArrowArray<'a> {
+impl ImportedArrowArray<'_> {
     fn consume(self) -> Result<ArrayData> {
         let len = self.array.len();
         let offset = self.array.offset();

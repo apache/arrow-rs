@@ -79,7 +79,7 @@ pub enum ColumnWriter<'a> {
     FixedLenByteArrayColumnWriter(ColumnWriterImpl<'a, FixedLenByteArrayType>),
 }
 
-impl<'a> ColumnWriter<'a> {
+impl ColumnWriter<'_> {
     /// Returns the estimated total memory usage
     #[cfg(feature = "arrow")]
     pub(crate) fn memory_size(&self) -> usize {
