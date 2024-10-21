@@ -599,8 +599,16 @@ impl<T: ByteViewType + ?Sized> From<ArrayData> for GenericByteViewArray<T> {
     }
 }
 
-/// Convert a [`GenericByteArray`] to a [`GenericByteViewArray`] but in a smart way:
-/// If the offsets are all less than u32::MAX, then we directly build the view array on top of existing buffer.
+/// Efficiently convert a [`GenericByteArray`] to a [`GenericByteViewArray`]
+///
+/// For example this method can convert a [`StringArray`] to a
+/// [`StringViewArray`].
+///
+/// If the offsets are all less than u32::MAX, the new [`GenericByteViewArray`]
+/// is built without copying the underlying string data (views are created
+/// directly into the existing buffer)
+///
+/// [`StringArray`]: crate::StringArray
 impl<FROM, V> From<&GenericByteArray<FROM>> for GenericByteViewArray<V>
 where
     FROM: ByteArrayType,
@@ -616,6 +624,7 @@ where
         };
 
         if can_reuse_buffer {
+            // build views directly pointing to the existing buffer
             let len = byte_array.len();
             let mut views_builder = GenericByteViewBuilder::<V>::with_capacity(len);
             let str_values_buf = byte_array.values().clone();
@@ -638,7 +647,9 @@ where
             assert_eq!(views_builder.len(), len);
             views_builder.finish()
         } else {
-            // TODO: the first u32::MAX can still be reused
+            // Otherwise, create a new buffer for large strings
+            // TODO: the original buffer could still be used
+            // by making multiple slices of u32::MAX length
             GenericByteViewArray::<V>::from_iter(byte_array.iter())
         }
     }
