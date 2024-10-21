@@ -647,9 +647,9 @@ where
             assert_eq!(views_builder.len(), len);
             views_builder.finish()
         } else {
-            // otherwise, create a new buffer for large strings
+            // Otherwise, create a new buffer for large strings
             // TODO: the original buffer could still be used
-            // until the offset reaches `u32::max`.
+            // by making multiple slices of u32::MAX length
             GenericByteViewArray::<V>::from_iter(byte_array.iter())
         }
     }
