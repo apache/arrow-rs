@@ -66,7 +66,7 @@ pub struct IpcSchemaEncoder<'a> {
     dictionary_tracker: Option<&'a mut DictionaryTracker>,
 }
 
-impl<'a> Default for IpcSchemaEncoder<'a> {
+impl Default for IpcSchemaEncoder<'_> {
     fn default() -> Self {
         Self::new()
     }
@@ -162,7 +162,7 @@ pub fn schema_to_fb_offset<'a>(
 }
 
 /// Convert an IPC Field to Arrow Field
-impl<'a> From<crate::Field<'a>> for Field {
+impl From<crate::Field<'_>> for Field {
     fn from(field: crate::Field) -> Field {
         let arrow_field = if let Some(dictionary) = field.dictionary() {
             Field::new_dict(

@@ -715,7 +715,7 @@ impl<'a, W: Write> SerializedPageWriter<'a, W> {
     }
 }
 
-impl<'a, W: Write + Send> PageWriter for SerializedPageWriter<'a, W> {
+impl<W: Write + Send> PageWriter for SerializedPageWriter<'_, W> {
     fn write_page(&mut self, page: CompressedPage) -> Result<PageWriteSpec> {
         let page_type = page.page_type();
         let start_pos = self.sink.bytes_written() as u64;
