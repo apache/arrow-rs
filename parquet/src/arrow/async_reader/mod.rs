@@ -2093,11 +2093,14 @@ mod tests {
 
     #[tokio::test]
     async fn empty_offset_index_doesnt_panic_in_column_chunks() {
-        use tokio::fs::File;
         use tempfile::TempDir;
-        fn write_metadata_to_local_file(metadata: ParquetMetaData, file: impl AsRef<std::path::Path>) {
-            use std::fs::File;
+        use tokio::fs::File;
+        fn write_metadata_to_local_file(
+            metadata: ParquetMetaData,
+            file: impl AsRef<std::path::Path>,
+        ) {
             use crate::file::metadata::ParquetMetaDataWriter;
+            use std::fs::File;
             let file = File::create(file).unwrap();
             ParquetMetaDataWriter::new(file, &metadata)
                 .finish()
@@ -2139,7 +2142,4 @@ mod tests {
         let result = reader.try_collect::<Vec<_>>().await.unwrap();
         assert_eq!(result.len(), 1);
     }
-
-
 }
-
