@@ -1419,10 +1419,7 @@ pub fn cast_with_options(
             BinaryView => Ok(Arc::new(BinaryViewArray::from(array.as_binary::<i64>()))),
             Utf8View => {
                 let array = cast_binary_to_string::<i64>(array, cast_options)?;
-                Ok(Arc::new(StringViewArray::from(
-                    cast_byte_container::<LargeUtf8Type, Utf8Type>(array.as_ref())?
-                        .as_string::<i32>(),
-                )))
+                Ok(Arc::new(StringViewArray::from(array.as_string::<i64>())))
             }
             _ => Err(ArrowError::CastError(format!(
                 "Casting from {from_type:?} to {to_type:?} not supported",
