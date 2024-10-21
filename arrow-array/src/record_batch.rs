@@ -469,7 +469,8 @@ impl RecordBatch {
     }
 
     /// Returns the total number of bytes of memory occupied physically by this batch.
-    /// Note that this does not always correspond to the exact memory usage of an
+    ///
+    /// Note that this does not always correspond to the exact memory usage of a
     /// `RecordBatch` (might overestimate), since multiple columns can share the same
     /// buffers or slices thereof, the memory used by the shared buffers might be
     /// counted multiple times.
