@@ -161,11 +161,14 @@ impl ArrayBuilder for StructBuilder {
     }
 }
 
-/// Returns a builder with capacity `capacity` that corresponds to the datatype `DataType`
-/// This function is useful to construct arrays from an arbitrary vectors with known/expected
-/// schema.
+/// Returns a builder with capacity for `capacity` elements of datatype
+/// `DataType`.
 ///
-/// See comments on StructBuilder on how to retreive collection builders built by make_builder.
+/// This function is useful to construct arrays from an arbitrary vectors with
+/// known/expected schema.
+///
+/// See comments on [StructBuilder] for retrieving collection builders built by
+/// make_builder.
 pub fn make_builder(datatype: &DataType, capacity: usize) -> Box<dyn ArrayBuilder> {
     use crate::builder::*;
     match datatype {
@@ -280,22 +283,22 @@ pub fn make_builder(datatype: &DataType, capacity: usize) -> Box<dyn ArrayBuilde
             match &**value_type {
                 DataType::Utf8 => {
                     let dict_builder: StringDictionaryBuilder<Int32Type> =
-                        StringDictionaryBuilder::with_capacity(capacity, 32, 1024);
+                        StringDictionaryBuilder::with_capacity(capacity, 256, 1024);
                     Box::new(dict_builder)
                 }
                 DataType::LargeUtf8 => {
                     let dict_builder: LargeStringDictionaryBuilder<Int32Type> =
-                        LargeStringDictionaryBuilder::with_capacity(capacity, 32, 1024);
+                        LargeStringDictionaryBuilder::with_capacity(capacity, 256, 1024);
                     Box::new(dict_builder)
                 }
                 DataType::Binary => {
                     let dict_builder: BinaryDictionaryBuilder<Int32Type> =
-                        BinaryDictionaryBuilder::with_capacity(capacity, 32, 1024);
+                        BinaryDictionaryBuilder::with_capacity(capacity, 256, 1024);
                     Box::new(dict_builder)
                 }
                 DataType::LargeBinary => {
                     let dict_builder: LargeBinaryDictionaryBuilder<Int32Type> =
-                        LargeBinaryDictionaryBuilder::with_capacity(capacity, 32, 1024);
+                        LargeBinaryDictionaryBuilder::with_capacity(capacity, 256, 1024);
                     Box::new(dict_builder)
                 }
                 t => panic!("Unsupported dictionary value type {t:?} is not currently supported"),
