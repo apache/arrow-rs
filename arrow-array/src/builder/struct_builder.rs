@@ -253,6 +253,18 @@ pub fn make_builder(datatype: &DataType, capacity: usize) -> Box<dyn ArrayBuilde
             let builder = make_builder(field.data_type(), capacity);
             Box::new(LargeListBuilder::with_capacity(builder, capacity).with_field(field.clone()))
         }
+        DataType::FixedSizeList(field, size) => {
+            let size = *size;
+            let values_builder_capacity = {
+                let size: usize = size.try_into().unwrap();
+                capacity * size
+            };
+            let builder = make_builder(field.data_type(), values_builder_capacity);
+            Box::new(
+                FixedSizeListBuilder::with_capacity(builder, size, capacity)
+                    .with_field(field.clone()),
+            )
+        }
         DataType::Map(field, _) => match field.data_type() {
             DataType::Struct(fields) => {
                 let map_field_names = MapFieldNames {
@@ -518,6 +530,28 @@ mod tests {
 
         assert_eq!(5, arr.len());
         assert_eq!(0, builder.len());
+    }
+
+    #[test]
+    fn test_build_fixed_size_list() {
+        const LIST_LENGTH: i32 = 4;
+        let fixed_size_list_dtype =
+            DataType::new_fixed_size_list(DataType::Int32, LIST_LENGTH, false);
+        let mut builder = make_builder(&fixed_size_list_dtype, 10);
+        let builder = builder
+            .as_any_mut()
+            .downcast_mut::<FixedSizeListBuilder<Box<dyn ArrayBuilder>>>();
+        match builder {
+            Some(builder) => {
+                assert_eq!(builder.value_length(), LIST_LENGTH);
+                assert!(builder
+                    .values()
+                    .as_any_mut()
+                    .downcast_mut::<Int32Builder>()
+                    .is_some());
+            }
+            None => panic!("expected FixedSizeListBuilder, got a different builder type"),
+        }
     }
 
     #[test]
