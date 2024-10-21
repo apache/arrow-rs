@@ -605,7 +605,7 @@ impl<T: ByteViewType + ?Sized> From<ArrayData> for GenericByteViewArray<T> {
 /// [`StringViewArray`].
 ///
 /// If the offsets are all less than u32::MAX, the new [`GenericByteViewArray`]
-/// is build without copying the underlying string data (views are created
+/// is built without copying the underlying string data (views are created
 /// directly into the existing buffer)
 ///
 /// [`StringArray`]: crate::StringArray
