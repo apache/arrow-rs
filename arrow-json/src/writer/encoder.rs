@@ -67,7 +67,6 @@ fn make_encoder_impl<'a>(
         DataType::Float16 => primitive_helper!(Float16Type),
         DataType::Float32 => primitive_helper!(Float32Type),
         DataType::Float64 => primitive_helper!(Float64Type),
-        DataType::Decimal128(_, _) => primitive_helper!(Decimal128Type),
         DataType::Boolean => {
             let array = array.as_boolean();
             (Box::new(BooleanEncoder(array)), array.nulls().cloned())
@@ -134,6 +133,11 @@ fn make_encoder_impl<'a>(
                 explicit_nulls: options.explicit_nulls,
             };
             (Box::new(encoder) as _, array.nulls().cloned())
+        }
+        DataType::Decimal128(_, _) => {
+            let array = array.as_any().downcast_ref::<Decimal128Array>()
+                .ok_or_else(|| ArrowError::InvalidArgumentError("Expected Decimal128Array".to_string()))?;
+            (Box::new(Decimal128Encoder::new(array)) as _, array.nulls().cloned())
         }
         DataType::Decimal256(_, _) => {
             let array = array.as_any().downcast_ref::<Decimal256Array>()
@@ -236,7 +240,7 @@ macro_rules! integer_encode {
         )*
     };
 }
-integer_encode!(i8, i16, i32, i64, i128, u8, u16, u32, u64);
+integer_encode!(i8, i16, i32, i64, u8, u16, u32, u64);
 
 macro_rules! float_encode {
     ($($t:ty),*) => {
@@ -549,6 +553,23 @@ where
             write!(out, "{byte:02x}").unwrap();
         }
         out.push(b'"');
+    }
+}
+
+struct Decimal128Encoder<'a> {
+    array: &'a Decimal128Array,
+}
+
+impl<'a> Decimal128Encoder<'a> {
+    fn new(array: &'a Decimal128Array) -> Self {
+        Self { array }
+    }
+}
+
+impl<'a> Encoder for Decimal128Encoder<'a> {
+    fn encode(&mut self, idx: usize, out: &mut Vec<u8>) {
+        let formatted = self.array.value_as_string(idx);
+        out.extend_from_slice(formatted.as_bytes());
     }
 }
 
