@@ -778,6 +778,7 @@ mod tests {
 
         assert_eq!(array.len(), 20);
         assert_eq!(array.null_count(), 0);
+        assert_eq!(array.logical_null_count(), 0);
 
         assert_eq!(
             "RunArray {run_ends: [20], values: PrimitiveArray<UInt32>\n[\n  1,\n]}\n",
@@ -799,6 +800,7 @@ mod tests {
 
         assert_eq!(array.len(), 4);
         assert_eq!(array.null_count(), 0);
+        assert_eq!(array.logical_null_count(), 1);
 
         let array: RunArray<Int16Type> = test.into_iter().collect();
         assert_eq!(
@@ -814,6 +816,7 @@ mod tests {
 
         assert_eq!(array.len(), 4);
         assert_eq!(array.null_count(), 0);
+        assert_eq!(array.logical_null_count(), 0);
 
         let run_ends = array.run_ends();
         assert_eq!(&[1, 2, 3, 4], run_ends.values());
@@ -826,6 +829,7 @@ mod tests {
 
         assert_eq!(array.len(), 6);
         assert_eq!(array.null_count(), 0);
+        assert_eq!(array.logical_null_count(), 3);
 
         let run_ends = array.run_ends();
         assert_eq!(&[1, 2, 3, 5, 6], run_ends.values());
@@ -842,6 +846,7 @@ mod tests {
 
         assert_eq!(array.len(), 3);
         assert_eq!(array.null_count(), 0);
+        assert_eq!(array.logical_null_count(), 3);
 
         let run_ends = array.run_ends();
         assert_eq!(3, run_ends.len());
@@ -862,6 +867,7 @@ mod tests {
         assert_eq!(array.values().data_type(), &DataType::Utf8);
 
         assert_eq!(array.null_count(), 0);
+        assert_eq!(array.logical_null_count(), 1);
         assert_eq!(array.len(), 4);
         assert_eq!(array.values().null_count(), 1);
 

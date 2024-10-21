@@ -653,6 +653,7 @@ mod tests {
 
             assert_eq!(array.len(), 8);
             assert_eq!(array.null_count(), 8);
+            assert_eq!(array.logical_null_count(), 8);
         }
 
         for (encoding, page) in pages {
@@ -667,6 +668,7 @@ mod tests {
 
             assert_eq!(array.len(), 8);
             assert_eq!(array.null_count(), 8);
+            assert_eq!(array.logical_null_count(), 8);
         }
     }
 }
