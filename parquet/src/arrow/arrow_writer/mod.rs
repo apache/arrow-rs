@@ -1667,6 +1667,33 @@ mod tests {
     }
 
     #[test]
+    fn test_empty_dict() {
+        let struct_fields = Fields::from(vec![Field::new(
+            "dict",
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+            false,
+        )]);
+
+        let schema = Schema::new(vec![Field::new_struct(
+            "struct",
+            struct_fields.clone(),
+            true,
+        )]);
+        let dictionary = Arc::new(DictionaryArray::new(
+            Int32Array::new_null(5),
+            Arc::new(StringArray::new_null(0)),
+        ));
+
+        let s = StructArray::new(
+            struct_fields,
+            vec![dictionary],
+            Some(NullBuffer::new_null(5)),
+        );
+
+        let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(s)]).unwrap();
+        roundtrip(batch, None);
+    }
+    #[test]
     fn arrow_writer_page_size() {
         let schema = Arc::new(Schema::new(vec![Field::new("col", DataType::Utf8, false)]));
 
