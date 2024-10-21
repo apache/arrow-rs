@@ -2041,7 +2041,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn empty_ofset_index_doesnt_panic_in_read_row_group() {
+    async fn empty_offset_index_doesnt_panic_in_read_row_group() {
         use tokio::fs::File;
         let testdata = arrow::util::test_util::parquet_test_data();
         let path = format!("{testdata}/alltypes_plain.parquet");
