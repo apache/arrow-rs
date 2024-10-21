@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["binary_capacity","concat","concat_batches","concat_dictionaries","concat_fallback","fixed_size_list_capacity","get_capacity"],"macro":["dict_helper"]};

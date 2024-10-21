@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["arrow_error_to_status","decode_error_to_status"],"static":["BEGIN_SAVEPOINT","BEGIN_TRANSACTION","CANCEL_QUERY","CLOSE_PREPARED_STATEMENT","CREATE_PREPARED_STATEMENT","CREATE_PREPARED_SUBSTRAIT_PLAN","END_SAVEPOINT","END_TRANSACTION"],"struct":["PeekableFlightDataStream"],"trait":["FlightSqlService"]};

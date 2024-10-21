@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["align_nulls","release_array"],"struct":["ArrayPrivateData","FFI_ArrowArray"]};

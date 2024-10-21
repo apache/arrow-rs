@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"macro":["experimental"],"mod":["arrow","basic","bloom_filter","column","data_type","errors","file","format","record","schema","thrift"]};

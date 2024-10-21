@@ -1,0 +1,9 @@
+(function() {
+    var implementors = Object.fromEntries([["arrow_buffer",[["impl <a class=\"trait\" href=\"https://doc.rust-lang.org/nightly/core/error/trait.Error.html\" title=\"trait core::error::Error\">Error</a> for <a class=\"struct\" href=\"arrow_buffer/bigint/struct.ParseI256Error.html\" title=\"struct arrow_buffer::bigint::ParseI256Error\">ParseI256Error</a>"]]],["arrow_flight",[["impl <a class=\"trait\" href=\"https://doc.rust-lang.org/nightly/core/error/trait.Error.html\" title=\"trait core::error::Error\">Error</a> for <a class=\"enum\" href=\"arrow_flight/error/enum.FlightError.html\" title=\"enum arrow_flight::error::FlightError\">FlightError</a>"]]],["arrow_json",[["impl <a class=\"trait\" href=\"https://doc.rust-lang.org/nightly/core/error/trait.Error.html\" title=\"trait core::error::Error\">Error</a> for <a class=\"struct\" href=\"arrow_json/reader/serializer/struct.SerializerError.html\" title=\"struct arrow_json::reader::serializer::SerializerError\">SerializerError</a>"]]],["arrow_schema",[["impl <a class=\"trait\" href=\"https://doc.rust-lang.org/nightly/core/error/trait.Error.html\" title=\"trait core::error::Error\">Error</a> for <a class=\"enum\" href=\"arrow_schema/error/enum.ArrowError.html\" title=\"enum arrow_schema::error::ArrowError\">ArrowError</a>"]]],["parquet",[["impl <a class=\"trait\" href=\"https://doc.rust-lang.org/nightly/core/error/trait.Error.html\" title=\"trait core::error::Error\">Error</a> for <a class=\"enum\" href=\"parquet/errors/enum.ParquetError.html\" title=\"enum parquet::errors::ParquetError\">ParquetError</a>"]]]]);
+    if (window.register_implementors) {
+        window.register_implementors(implementors);
+    } else {
+        window.pending_implementors = implementors;
+    }
+})()
+//{"start":57,"fragment_lengths":[315,299,336,296,289]}
