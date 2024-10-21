@@ -506,6 +506,7 @@ where
         let offset_index = self
             .metadata
             .offset_index()
+            // filter out empty offset indexes (old versions specified Some(vec![]) when no present)
             .filter(|index| !index.is_empty())
             .map(|x| x[row_group_idx].as_slice());
 
@@ -829,6 +830,7 @@ impl RowGroups for InMemoryRowGroup<'_> {
             Some(data) => {
                 let page_locations = self
                     .offset_index
+                    // filter out empty offset indexes (old versions specified Some(vec![]) when no present)
                     .filter(|index| !index.is_empty())
                     .map(|index| index[i].page_locations.clone());
                 let page_reader: Box<dyn PageReader> = Box::new(SerializedPageReader::new(
@@ -2066,7 +2068,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn non_empty_ofset_index_doesnt_panic_in_read_row_group() {
+    async fn non_empty_offset_index_doesnt_panic_in_read_row_group() {
         use tokio::fs::File;
         let testdata = arrow::util::test_util::parquet_test_data();
         let path = format!("{testdata}/alltypes_tiny_pages.parquet");
