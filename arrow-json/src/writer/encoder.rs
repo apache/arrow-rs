@@ -17,8 +17,6 @@
 
 use arrow_array::cast::AsArray;
 use arrow_array::types::*;
-use arrow_array::Decimal128Array;
-use arrow_array::Decimal256Array;
 use arrow_array::*;
 use arrow_buffer::{ArrowNativeType, NullBuffer, OffsetBuffer, ScalarBuffer};
 use arrow_cast::display::{ArrayFormatter, FormatOptions};
