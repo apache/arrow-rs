@@ -552,7 +552,6 @@ pub trait FlightSqlService: Sync + Send + Sized + 'static {
     }
 
     /// do_exchange
-
     /// Implementors may override to handle additional calls to do_exchange()
     async fn do_exchange_fallback(
         &self,
