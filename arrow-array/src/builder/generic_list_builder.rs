@@ -545,10 +545,12 @@ mod tests {
         let array = builder.finish();
         assert_eq!(array.value_offsets(), [0, 4, 4, 6, 6]);
         assert_eq!(array.null_count(), 1);
+        assert_eq!(array.logical_null_count(), 1);
         assert!(array.is_null(3));
         let elements = array.values().as_primitive::<Int32Type>();
         assert_eq!(elements.values(), &[1, 2, 7, 0, 4, 5]);
         assert_eq!(elements.null_count(), 1);
+        assert_eq!(elements.logical_null_count(), 1);
         assert!(elements.is_null(3));
     }
 

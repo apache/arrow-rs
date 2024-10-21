@@ -551,6 +551,7 @@ mod tests {
         assert_eq!(batch.num_columns(), schema_ref.fields().len());
         for array in batch.columns() {
             assert_eq!(array.null_count(), 0);
+            assert_eq!(array.logical_null_count(), 0);
         }
         // Test that the list's child values are non-null
         let b_array = batch.column(1);
@@ -710,6 +711,7 @@ mod tests {
         assert_eq!(array.len(), 100);
         // Map field is not null
         assert_eq!(array.null_count(), 0);
+        assert_eq!(array.logical_null_count(), 0);
         // Maps have multiple values like a list, so internal arrays are longer
         assert!(array.as_map().keys().len() > array.len());
         assert!(array.as_map().values().len() > array.len());

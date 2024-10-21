@@ -1311,6 +1311,7 @@ mod tests {
         assert_eq!(array.values().data_type(), &DataType::Utf8);
 
         assert_eq!(array.null_count(), 1);
+        assert_eq!(array.logical_null_count(), 1);
 
         assert!(array.keys().is_valid(0));
         assert!(array.keys().is_valid(1));
