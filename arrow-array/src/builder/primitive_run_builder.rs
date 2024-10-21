@@ -277,6 +277,7 @@ mod tests {
         let array = builder.finish();
 
         assert_eq!(array.null_count(), 0);
+        assert_eq!(array.logical_null_count(), 1);
         assert_eq!(array.len(), 6);
 
         assert_eq!(array.run_ends().values(), &[3, 4, 6]);
@@ -302,6 +303,7 @@ mod tests {
 
         assert_eq!(array.len(), 11);
         assert_eq!(array.null_count(), 0);
+        assert_eq!(array.logical_null_count(), 0);
         assert_eq!(array.run_ends().values(), &[1, 3, 5, 9, 10, 11]);
         assert_eq!(
             array.values().as_primitive::<Int16Type>().values(),

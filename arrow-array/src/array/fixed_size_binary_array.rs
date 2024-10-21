@@ -858,6 +858,7 @@ mod tests {
         let array = FixedSizeBinaryArray::from(values);
         assert_eq!(array.len(), 4);
         assert_eq!(array.null_count(), 0);
+        assert_eq!(array.logical_null_count(), 0);
         assert_eq!(array.value(0), b"one");
         assert_eq!(array.value(1), b"two");
         assert_eq!(array.value(2), b"six");

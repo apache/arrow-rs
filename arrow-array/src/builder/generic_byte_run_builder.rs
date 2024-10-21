@@ -403,6 +403,7 @@ mod tests {
 
         assert_eq!(array.len(), 11);
         assert_eq!(array.null_count(), 0);
+        assert_eq!(array.logical_null_count(), 2);
 
         assert_eq!(array.run_ends().values(), &[3, 5, 7, 11]);
 
@@ -448,6 +449,7 @@ mod tests {
 
         assert_eq!(array.len(), 5);
         assert_eq!(array.null_count(), 0);
+        assert_eq!(array.logical_null_count(), 1);
 
         assert_eq!(array.run_ends().values(), &[1, 2, 4, 5]);
 
@@ -469,6 +471,7 @@ mod tests {
 
         assert_eq!(array.len(), 8);
         assert_eq!(array.null_count(), 0);
+        assert_eq!(array.logical_null_count(), 1);
 
         assert_eq!(array.run_ends().values(), &[1, 2, 4, 7, 8]);
 
