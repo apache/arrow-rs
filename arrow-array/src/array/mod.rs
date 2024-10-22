@@ -303,8 +303,12 @@ pub trait Array: std::fmt::Debug + Send + Sync {
 
     /// Returns `false` if the array is guaranteed to not contain any logical nulls
     ///
-    /// In general this will be equivalent to `Array::logical_null_count() != 0` but may differ in the
-    /// presence of logical nullability, see [`Array::logical_nulls`].
+    /// This is generally equivalent to `Array::logical_null_count() != 0` unless determining
+    /// the logical nulls is expensive, in which case this method can return true even for an
+    /// array without nulls.
+    ///
+    /// This is also generally equivalent to `Array::null_count() != 0` but may differ in the
+    /// presence of logical nullability, see [`Array::logical_null_count`] and [`Array::null_count`].
     ///
     /// Implementations will return `true` unless they can cheaply prove no logical nulls
     /// are present. For example a [`DictionaryArray`] with nullable values will still return true,
