@@ -367,10 +367,15 @@ where
     /// all record batches have been produced. (e.g. producing the final `']'` if writing
     /// arrays.
     pub fn finish(&mut self) -> Result<(), ArrowError> {
-        if self.started && !self.finished {
+        if !self.started {
+            self.format.start_stream(&mut self.writer)?;
+            self.started = true;
+        }
+        if !self.finished {
             self.format.end_stream(&mut self.writer)?;
             self.finished = true;
         }
+
         Ok(())
     }
 
@@ -1147,10 +1152,43 @@ mod tests {
     }
 
     #[test]
-    fn json_writer_empty() {
-        let mut writer = ArrayWriter::new(vec![] as Vec<u8>);
+    fn json_line_writer_empty() {
+        let mut writer = LineDelimitedWriter::new(vec![] as Vec<u8>);
         writer.finish().unwrap();
         assert_eq!(str::from_utf8(&writer.into_inner()).unwrap(), "");
+    }
+
+    #[test]
+    fn json_array_writer_empty() {
+        let mut writer = ArrayWriter::new(vec![] as Vec<u8>);
+        writer.finish().unwrap();
+        assert_eq!(str::from_utf8(&writer.into_inner()).unwrap(), "[]");
+    }
+
+    #[test]
+    fn json_line_writer_empty_batch() {
+        let mut writer = LineDelimitedWriter::new(vec![] as Vec<u8>);
+
+        let array = Int32Array::from(Vec::<i32>::new());
+        let schema = Schema::new(vec![Field::new("c", DataType::Int32, true)]);
+        let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(array)]).unwrap();
+
+        writer.write(&batch).unwrap();
+        writer.finish().unwrap();
+        assert_eq!(str::from_utf8(&writer.into_inner()).unwrap(), "");
+    }
+
+    #[test]
+    fn json_array_writer_empty_batch() {
+        let mut writer = ArrayWriter::new(vec![] as Vec<u8>);
+
+        let array = Int32Array::from(Vec::<i32>::new());
+        let schema = Schema::new(vec![Field::new("c", DataType::Int32, true)]);
+        let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(array)]).unwrap();
+
+        writer.write(&batch).unwrap();
+        writer.finish().unwrap();
+        assert_eq!(str::from_utf8(&writer.into_inner()).unwrap(), "[]");
     }
 
     #[test]
