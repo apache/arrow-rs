@@ -490,14 +490,21 @@ fn take_bytes<T: ByteArrayType, IndexType: ArrowPrimitiveType>(
         }));
         nulls = Some(null_buf.into());
     } else if array.null_count() == 0 {
+        let num_bytes = bit_util::ceil(data_len, 8);
+
+        let mut null_buf = MutableBuffer::new(num_bytes).with_bitset(num_bytes, true);
+        let null_slice = null_buf.as_slice_mut();
+
         offsets.extend(indices.values().iter().enumerate().map(|(i, index)| {
             if indices.is_valid(i) {
                 let s: &[u8] = array.value(index.as_usize()).as_ref();
                 values.extend_from_slice(s);
+            } else {
+                bit_util::unset_bit(null_slice, i);
             }
             T::Offset::usize_as(values.len())
         }));
-        nulls = indices.nulls().map(|b| b.inner().sliced());
+        nulls = Some(null_buf.into());
     } else {
         let num_bytes = bit_util::ceil(data_len, 8);
 
@@ -2381,5 +2388,30 @@ mod tests {
         let indicies = Int64Array::from(vec![0, 2, 4]);
         let array = take(&array, &indicies, None).unwrap();
         assert_eq!(array.len(), 3);
+    }
+
+    #[test]
+    fn test_take_bytes_null_indices_modified() {
+        let indices = Int32Array::new(
+            vec![0, 0, 0, 0].into(),
+            Some(NullBuffer::from_iter(vec![false, true, true, true])),
+        );
+        let values = StringArray::from(vec![Some("foo")]);
+        let r = take(&values, &indices, None).unwrap();
+
+        // Modify indices null buffer
+        let (_, _, nulls) = indices.into_parts();
+        assert!(nulls.is_some());
+        let null_buffer = nulls.unwrap();
+        let binding = null_buffer.into_inner().into_inner();
+        let null_slice = binding.data_ptr();
+        for i in 0..4 {
+            unsafe {
+                bit_util::unset_bit_raw(null_slice.as_ptr(), i);
+            }
+        }
+
+        let values = r.as_string::<i32>().iter().collect::<Vec<_>>();
+        assert_eq!(&values, &[None, Some("foo"), Some("foo"), Some("foo")])
     }
 }
