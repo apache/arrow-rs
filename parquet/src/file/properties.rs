@@ -57,6 +57,8 @@ pub const DEFAULT_BLOOM_FILTER_FPP: f64 = 0.05;
 pub const DEFAULT_BLOOM_FILTER_NDV: u64 = 1_000_000_u64;
 /// Default values for [`WriterProperties::statistics_truncate_length`]
 pub const DEFAULT_STATISTICS_TRUNCATE_LENGTH: Option<usize> = None;
+/// Default values for [`WriterProperties::coerce_types`]
+pub const DEFAULT_COERCE_TYPES: bool = false;
 
 /// Parquet writer version.
 ///
@@ -163,6 +165,7 @@ pub struct WriterProperties {
     sorting_columns: Option<Vec<SortingColumn>>,
     column_index_truncate_length: Option<usize>,
     statistics_truncate_length: Option<usize>,
+    coerce_types: bool,
 }
 
 impl Default for WriterProperties {
@@ -281,6 +284,19 @@ impl WriterProperties {
         self.statistics_truncate_length
     }
 
+    /// Returns `coerce_types` boolean
+    ///
+    /// Some Arrow types do not have a corresponding Parquet logical type.
+    /// Affected Arrow data types include `Date64`, `Timestamp` and `Interval`.
+    /// Writers have the option to coerce these into native Parquet types. Type
+    /// coercion allows for meaningful representations that do not require
+    /// downstream readers to consider the embedded Arrow schema. However, type
+    /// coercion also prevents the data from being losslessly round-tripped. This method
+    /// returns `true` if type coercion enabled.
+    pub fn coerce_types(&self) -> bool {
+        self.coerce_types
+    }
+
     /// Returns encoding for a data page, when dictionary encoding is enabled.
     /// This is not configurable.
     #[inline]
@@ -377,6 +393,7 @@ pub struct WriterPropertiesBuilder {
     sorting_columns: Option<Vec<SortingColumn>>,
     column_index_truncate_length: Option<usize>,
     statistics_truncate_length: Option<usize>,
+    coerce_types: bool,
 }
 
 impl WriterPropertiesBuilder {
@@ -397,6 +414,7 @@ impl WriterPropertiesBuilder {
             sorting_columns: None,
             column_index_truncate_length: DEFAULT_COLUMN_INDEX_TRUNCATE_LENGTH,
             statistics_truncate_length: DEFAULT_STATISTICS_TRUNCATE_LENGTH,
+            coerce_types: DEFAULT_COERCE_TYPES,
         }
     }
 
@@ -417,6 +435,7 @@ impl WriterPropertiesBuilder {
             sorting_columns: self.sorting_columns,
             column_index_truncate_length: self.column_index_truncate_length,
             statistics_truncate_length: self.statistics_truncate_length,
+            coerce_types: self.coerce_types,
         }
     }
 
@@ -765,6 +784,13 @@ impl WriterPropertiesBuilder {
         }
 
         self.statistics_truncate_length = max_length;
+        self
+    }
+
+    /// Sets flag to enable/disable type coercion.
+    /// Takes precedence over globally defined settings.
+    pub fn set_coerce_types(mut self, coerce_types: bool) -> Self {
+        self.coerce_types = coerce_types;
         self
     }
 }
