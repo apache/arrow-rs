@@ -119,7 +119,7 @@ impl ObjectStore for MicrosoftAzure {
         self.client.delete_request(location, &()).await
     }
 
-    fn list(&self, prefix: Option<&Path>) -> BoxStream<'_, Result<ObjectMeta>> {
+    fn list(&self, prefix: Option<&Path>) -> BoxStream<'static, Result<ObjectMeta>> {
         self.client.list(prefix)
     }
 

@@ -45,7 +45,7 @@ use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 ///
 #[derive(Debug)]
 pub struct LimitStore<T: ObjectStore> {
-    inner: T,
+    inner: Arc<T>,
     max_requests: usize,
     semaphore: Arc<Semaphore>,
 }
@@ -56,7 +56,7 @@ impl<T: ObjectStore> LimitStore<T> {
     /// `max_requests`
     pub fn new(inner: T, max_requests: usize) -> Self {
         Self {
-            inner,
+            inner: Arc::new(inner),
             max_requests,
             semaphore: Arc::new(Semaphore::new(max_requests)),
         }
@@ -144,12 +144,13 @@ impl<T: ObjectStore> ObjectStore for LimitStore<T> {
         self.inner.delete_stream(locations)
     }
 
-    fn list(&self, prefix: Option<&Path>) -> BoxStream<'_, Result<ObjectMeta>> {
+    fn list(&self, prefix: Option<&Path>) -> BoxStream<'static, Result<ObjectMeta>> {
         let prefix = prefix.cloned();
+        let inner = Arc::clone(&self.inner);
         let fut = Arc::clone(&self.semaphore)
             .acquire_owned()
             .map(move |permit| {
-                let s = self.inner.list(prefix.as_ref());
+                let s = inner.list(prefix.as_ref());
                 PermitWrapper::new(s, permit.unwrap())
             });
         fut.into_stream().flatten().boxed()
@@ -159,13 +160,14 @@ impl<T: ObjectStore> ObjectStore for LimitStore<T> {
         &self,
         prefix: Option<&Path>,
         offset: &Path,
-    ) -> BoxStream<'_, Result<ObjectMeta>> {
+    ) -> BoxStream<'static, Result<ObjectMeta>> {
         let prefix = prefix.cloned();
         let offset = offset.clone();
+        let inner = Arc::clone(&self.inner);
         let fut = Arc::clone(&self.semaphore)
             .acquire_owned()
             .map(move |permit| {
-                let s = self.inner.list_with_offset(prefix.as_ref(), &offset);
+                let s = inner.list_with_offset(prefix.as_ref(), &offset);
                 PermitWrapper::new(s, permit.unwrap())
             });
         fut.into_stream().flatten().boxed()
