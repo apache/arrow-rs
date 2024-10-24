@@ -225,6 +225,7 @@ harness = false
 [[bench]]
 name = "row_selector"
 harness = false
+required-features = ["arrow"]
 
 [lib]
 bench = false
