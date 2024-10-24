@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["find_boundaries","lexicographical_partition_ranges","partition"],"struct":["Partitions"]};
