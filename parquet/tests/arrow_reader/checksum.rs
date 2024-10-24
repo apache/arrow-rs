@@ -26,10 +26,10 @@ use parquet::arrow::arrow_reader::ArrowReaderBuilder;
 fn test_datapage_v1_corrupt_checksum() {
     let errors = read_file_batch_errors("datapage_v1-corrupt-checksum.parquet");
     assert_eq!(errors, [
-        Err("Parquet argument error: Parquet error: Page CRC checksum mismatch".to_string()), 
+        Err("Parquet argument error: Parquet error: Page CRC checksum mismatch".to_string()),
         Ok(()),
         Ok(()),
-        Err("Parquet argument error: Parquet error: Page CRC checksum mismatch".to_string()), 
+        Err("Parquet argument error: Parquet error: Page CRC checksum mismatch".to_string()),
         Err("Parquet argument error: Parquet error: Not all children array length are the same!".to_string())
     ]);
 }
@@ -41,6 +41,7 @@ fn test_datapage_v1_uncompressed_checksum() {
 }
 
 #[test]
+#[cfg(feature = "snap")]
 fn test_datapage_v1_snappy_compressed_checksum() {
     let errors = read_file_batch_errors("datapage_v1-snappy-compressed-checksum.parquet");
     assert_eq!(errors, [Ok(()), Ok(()), Ok(()), Ok(()), Ok(())]);
@@ -52,6 +53,7 @@ fn test_plain_dict_uncompressed_checksum() {
     assert_eq!(errors, [Ok(())]);
 }
 #[test]
+#[cfg(feature = "snap")]
 fn test_rle_dict_snappy_checksum() {
     let errors = read_file_batch_errors("rle-dict-snappy-checksum.parquet");
     assert_eq!(errors, [Ok(())]);

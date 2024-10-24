@@ -111,6 +111,7 @@ fn test_arrow_rs_gh_6229_dict_header() {
 }
 
 #[test]
+#[cfg(feature = "snap")]
 fn test_arrow_rs_gh_6229_dict_levels() {
     let err = read_file("ARROW-RS-GH-6229-LEVELS.parquet").unwrap_err();
     assert_eq!(
