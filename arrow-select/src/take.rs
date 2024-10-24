@@ -433,15 +433,14 @@ fn take_bits<I: ArrowPrimitiveType>(
                 bit_util::set_bit(output_slice, idx);
             }
         }),
-        None => indices.values().iter().enumerate().for_each(|(i, index)| {
-            if values.value(index.as_usize()) {
-                bit_util::set_bit(output_slice, i);
-            }
-        }),
+        None => {
+            return BooleanBuffer::collect_bool(len, |idx: usize| {
+                values.value(unsafe { indices.value_unchecked(idx).as_usize() })
+            });
+        }
     }
     BooleanBuffer::new(output_buffer.into(), 0, indices.len())
 }
-
 /// `take` implementation for boolean arrays
 fn take_boolean<IndexType: ArrowPrimitiveType>(
     values: &BooleanArray,
@@ -460,10 +459,10 @@ fn take_bytes<T: ByteArrayType, IndexType: ArrowPrimitiveType>(
     let data_len = indices.len();
 
     let bytes_offset = (data_len + 1) * std::mem::size_of::<T::Offset>();
-    let mut offsets = MutableBuffer::new(bytes_offset);
+    let mut offsets = Vec::with_capacity(bytes_offset);
     offsets.push(T::Offset::default());
 
-    let mut values = MutableBuffer::new(0);
+    let mut values = Vec::new();
 
     let nulls;
     if array.null_count() == 0 && indices.null_count() == 0 {
@@ -474,21 +473,15 @@ fn take_bytes<T: ByteArrayType, IndexType: ArrowPrimitiveType>(
         }));
         nulls = None
     } else if indices.null_count() == 0 {
-        let num_bytes = bit_util::ceil(data_len, 8);
-
-        let mut null_buf = MutableBuffer::new(num_bytes).with_bitset(num_bytes, true);
-        let null_slice = null_buf.as_slice_mut();
-        offsets.extend(indices.values().iter().enumerate().map(|(i, index)| {
+        offsets.extend(indices.values().iter().map(|index| {
             let index = index.as_usize();
             if array.is_valid(index) {
                 let s: &[u8] = array.value(index).as_ref();
                 values.extend_from_slice(s.as_ref());
-            } else {
-                bit_util::unset_bit(null_slice, i);
             }
             T::Offset::usize_as(values.len())
         }));
-        nulls = Some(null_buf.into());
+        nulls = Some(take_bits(array.nulls().unwrap().inner(), indices).into_inner());
     } else if array.null_count() == 0 {
         offsets.extend(indices.values().iter().enumerate().map(|(i, index)| {
             if indices.is_valid(i) {
