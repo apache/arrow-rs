@@ -444,6 +444,7 @@ fn take_bits<I: ArrowPrimitiveType>(
         }
     }
 }
+
 /// `take` implementation for boolean arrays
 fn take_boolean<IndexType: ArrowPrimitiveType>(
     values: &BooleanArray,
