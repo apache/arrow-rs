@@ -331,15 +331,6 @@ impl MutableBuffer {
         self.data.as_ptr()
     }
 
-    #[deprecated(
-        since = "2.0.0",
-        note = "This method is deprecated in favour of `into` from the trait `Into`."
-    )]
-    /// Freezes this buffer and return an immutable version of it.
-    pub fn freeze(self) -> Buffer {
-        self.into_buffer()
-    }
-
     #[inline]
     pub(super) fn into_buffer(self) -> Buffer {
         let bytes = unsafe { Bytes::new(self.data, self.len, Deallocation::Standard(self.layout)) };
