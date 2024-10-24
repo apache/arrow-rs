@@ -206,8 +206,8 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
             DataType::is_integer(to_type) || DataType::is_floating(to_type) || to_type == &Utf8 || to_type == &LargeUtf8
         }
 
-        (Binary, LargeBinary | Utf8 | LargeUtf8 | FixedSizeBinary(_) | BinaryView) => true,
-        (LargeBinary, Binary | Utf8 | LargeUtf8 | FixedSizeBinary(_) | BinaryView) => true,
+        (Binary, LargeBinary | Utf8 | LargeUtf8 | FixedSizeBinary(_) | BinaryView | Utf8View ) => true,
+        (LargeBinary, Binary | Utf8 | LargeUtf8 | FixedSizeBinary(_) | BinaryView | Utf8View ) => true,
         (FixedSizeBinary(_), Binary | LargeBinary) => true,
         (
             Utf8 | LargeUtf8 | Utf8View,
@@ -1411,6 +1411,9 @@ pub fn cast_with_options(
                 cast_binary_to_fixed_size_binary::<i32>(array, *size, cast_options)
             }
             BinaryView => Ok(Arc::new(BinaryViewArray::from(array.as_binary::<i32>()))),
+            Utf8View => Ok(Arc::new(StringViewArray::from(
+                cast_binary_to_string::<i32>(array, cast_options)?.as_string::<i32>(),
+            ))),
             _ => Err(ArrowError::CastError(format!(
                 "Casting from {from_type:?} to {to_type:?} not supported",
             ))),
@@ -1426,6 +1429,10 @@ pub fn cast_with_options(
                 cast_binary_to_fixed_size_binary::<i64>(array, *size, cast_options)
             }
             BinaryView => Ok(Arc::new(BinaryViewArray::from(array.as_binary::<i64>()))),
+            Utf8View => {
+                let array = cast_binary_to_string::<i64>(array, cast_options)?;
+                Ok(Arc::new(StringViewArray::from(array.as_string::<i64>())))
+            }
             _ => Err(ArrowError::CastError(format!(
                 "Casting from {from_type:?} to {to_type:?} not supported",
             ))),
@@ -5536,11 +5543,22 @@ mod tests {
 
         assert!(can_cast_types(
             binary_array.data_type(),
+            &DataType::Utf8View
+        ));
+
+        assert!(can_cast_types(
+            binary_array.data_type(),
             &DataType::BinaryView
         ));
 
+        let string_view_array = cast(&binary_array, &DataType::Utf8View).unwrap();
+        assert_eq!(string_view_array.data_type(), &DataType::Utf8View);
+
         let binary_view_array = cast(&binary_array, &DataType::BinaryView).unwrap();
         assert_eq!(binary_view_array.data_type(), &DataType::BinaryView);
+
+        let expect_string_view_array = StringViewArray::from_iter(VIEW_TEST_DATA);
+        assert_eq!(string_view_array.as_ref(), &expect_string_view_array);
 
         let expect_binary_view_array = BinaryViewArray::from_iter(VIEW_TEST_DATA);
         assert_eq!(binary_view_array.as_ref(), &expect_binary_view_array);
