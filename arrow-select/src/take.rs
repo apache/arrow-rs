@@ -428,13 +428,13 @@ fn take_bits<I: ArrowPrimitiveType>(
     match indices.nulls().filter(|n| n.null_count() > 0) {
         Some(nulls) => {
             let mut output_buffer = MutableBuffer::new_null(len);
-            let output_slice: &mut [u8] = output_buffer.as_slice_mut();
+            let output_slice = output_buffer.as_slice_mut();
             nulls.valid_indices().for_each(|idx| {
                 if values.value(indices.value(idx).as_usize()) {
                     bit_util::set_bit(output_slice, idx);
                 }
             });
-            BooleanBuffer::new(output_buffer.into(), 0, indices.len())
+            BooleanBuffer::new(output_buffer.into(), 0, len)
         }
         None => {
             BooleanBuffer::collect_bool(len, |idx: usize| {
