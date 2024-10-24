@@ -23,7 +23,7 @@ use arrow_data::ArrayData;
 
 #[doc(hidden)]
 pub mod __private {
-    pub use arrow_schema::{TimeUnit, DataType, IntervalUnit};
+    pub use arrow_schema::{DataType, IntervalUnit, TimeUnit};
 }
 
 /// Repeats the provided pattern based on the number of comma separated identifiers
