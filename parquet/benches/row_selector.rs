@@ -74,6 +74,15 @@ fn criterion_benchmark(c: &mut Criterion) {
             criterion::black_box(selection);
         })
     });
+
+    c.bench_function("and_then", |b| {
+        let selected = row_selection_a.row_count();
+        let sub_selection = generate_random_row_selection(selected, selection_ratio);
+        b.iter(|| {
+            let result = row_selection_a.and_then(&sub_selection);
+            criterion::black_box(result);
+        })
+    });
 }
 
 criterion_group!(benches, criterion_benchmark);
