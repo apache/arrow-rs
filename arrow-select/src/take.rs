@@ -461,10 +461,11 @@ fn take_bytes<T: ByteArrayType, IndexType: ArrowPrimitiveType>(
 ) -> Result<GenericByteArray<T>, ArrowError> {
     let data_len = indices.len();
 
-    let mut offsets = Vec::with_capacity(data_len + 1);
+    let bytes_offset = (data_len + 1) * std::mem::size_of::<T::Offset>();
+    let mut offsets = MutableBuffer::new(bytes_offset);
     offsets.push(T::Offset::default());
 
-    let mut values = Vec::new();
+    let mut values = MutableBuffer::new(0);
 
     let nulls;
     if array.null_count() == 0 && indices.null_count() == 0 {
