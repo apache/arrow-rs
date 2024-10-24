@@ -473,15 +473,23 @@ fn take_bytes<T: ByteArrayType, IndexType: ArrowPrimitiveType>(
         }));
         nulls = None
     } else if indices.null_count() == 0 {
-        offsets.extend(indices.values().iter().map(|index| {
-            let index = index.as_usize();
-            if array.is_valid(index) {
-                let s: &[u8] = array.value(index).as_ref();
-                values.extend_from_slice(s.as_ref());
-            }
-            T::Offset::usize_as(values.len())
-        }));
-        nulls = Some(take_bits(array.nulls().unwrap().inner(), indices).into_inner());
+        let nulls_buf = take_bits(array.nulls().unwrap().inner(), indices);
+
+        offsets.extend(
+            indices
+                .values()
+                .iter()
+                .zip(nulls_buf.iter())
+                .map(|(index, valid)| {
+                    let index = index.as_usize();
+                    if valid {
+                        let s: &[u8] = array.value(index).as_ref();
+                        values.extend_from_slice(s.as_ref());
+                    }
+                    T::Offset::usize_as(values.len())
+                }),
+        );
+        nulls = Some(nulls_buf.into_inner());
     } else if array.null_count() == 0 {
         offsets.extend(indices.values().iter().enumerate().map(|(i, index)| {
             if indices.is_valid(i) {
