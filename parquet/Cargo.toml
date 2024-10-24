@@ -222,5 +222,9 @@ harness = false
 name = "metadata"
 harness = false
 
+[[bench]]
+name = "row_selector"
+harness = false
+
 [lib]
 bench = false
