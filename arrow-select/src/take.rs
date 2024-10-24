@@ -475,21 +475,23 @@ fn take_bytes<T: ByteArrayType, IndexType: ArrowPrimitiveType>(
         }));
         nulls = None
     } else if indices.null_count() == 0 {
-        let num_bytes = bit_util::ceil(data_len, 8);
+        let nulls_buf = take_bits(array.nulls().unwrap().inner(), indices);
 
-        let mut null_buf = MutableBuffer::new(num_bytes).with_bitset(num_bytes, true);
-        let null_slice = null_buf.as_slice_mut();
-        offsets.extend(indices.values().iter().enumerate().map(|(i, index)| {
-            let index = index.as_usize();
-            if array.is_valid(index) {
-                let s: &[u8] = array.value(index).as_ref();
-                values.extend_from_slice(s.as_ref());
-            } else {
-                bit_util::unset_bit(null_slice, i);
-            }
-            T::Offset::usize_as(values.len())
-        }));
-        nulls = Some(null_buf.into());
+        offsets.extend(
+            indices
+                .values()
+                .iter()
+                .zip(nulls_buf.iter())
+                .map(|(index, valid)| {
+                    let index = index.as_usize();
+                    if valid {
+                        let s: &[u8] = array.value(index).as_ref();
+                        values.extend_from_slice(s.as_ref());
+                    }
+                    T::Offset::usize_as(values.len())
+                }),
+        );
+        nulls = Some(nulls_buf.into_inner());
     } else if array.null_count() == 0 {
         offsets.extend(indices.values().iter().enumerate().map(|(i, index)| {
             if indices.is_valid(i) {
