@@ -20,8 +20,7 @@ use crate::types::{ArrowDictionaryKeyType, ByteArrayType, GenericBinaryType, Gen
 use crate::{Array, ArrayRef, DictionaryArray, GenericByteArray};
 use arrow_buffer::ArrowNativeType;
 use arrow_schema::{ArrowError, DataType};
-use hashbrown::hash_map::RawEntryMut;
-use hashbrown::HashMap;
+use hashbrown::HashTable;
 use std::any::Any;
 use std::sync::Arc;
 
@@ -37,12 +36,7 @@ where
     T: ByteArrayType,
 {
     state: ahash::RandomState,
-    /// Used to provide a lookup from string value to key type
-    ///
-    /// Note: usize's hash implementation is not used, instead the raw entry
-    /// API is used to store keys w.r.t the hash of the strings themselves
-    ///
-    dedup: HashMap<usize, (), ()>,
+    dedup: HashTable<usize>,
 
     keys_builder: PrimitiveBuilder<K>,
     values_builder: GenericByteBuilder<T>,
@@ -69,7 +63,7 @@ where
         let values_builder = GenericByteBuilder::<T>::new();
         Self {
             state: Default::default(),
-            dedup: HashMap::with_capacity_and_hasher(keys_builder.capacity(), ()),
+            dedup: HashTable::with_capacity(keys_builder.capacity()),
             keys_builder,
             values_builder,
         }
@@ -123,7 +117,7 @@ where
         let state = ahash::RandomState::default();
         let dict_len = dictionary_values.len();
 
-        let mut dedup = HashMap::with_capacity_and_hasher(dict_len, ());
+        let mut dedup = HashTable::with_capacity(dict_len);
 
         let values_len = dictionary_values.value_data().len();
         let mut values_builder = GenericByteBuilder::<T>::with_capacity(dict_len, values_len);
@@ -137,15 +131,13 @@ where
                     let value_bytes: &[u8] = value.as_ref();
                     let hash = state.hash_one(value_bytes);
 
-                    let entry = dedup.raw_entry_mut().from_hash(hash, |idx: &usize| {
-                        value_bytes == get_bytes(&values_builder, *idx)
-                    });
-
-                    if let RawEntryMut::Vacant(v) = entry {
-                        v.insert_with_hasher(hash, idx, (), |idx| {
-                            state.hash_one(get_bytes(&values_builder, *idx))
-                        });
-                    }
+                    dedup
+                        .entry(
+                            hash,
+                            |idx: &usize| value_bytes == get_bytes(&values_builder, *idx),
+                            |idx: &usize| state.hash_one(get_bytes(&values_builder, *idx)),
+                        )
+                        .or_insert(idx);
 
                     values_builder.append_value(value);
                 }
@@ -203,12 +195,7 @@ where
     K: ArrowDictionaryKeyType,
     T: ByteArrayType,
 {
-    /// Append a value to the array. Return an existing index
-    /// if already present in the values array or a new index if the
-    /// value is appended to the values array.
-    ///
-    /// Returns an error if the new index would overflow the key type.
-    pub fn append(&mut self, value: impl AsRef<T::Native>) -> Result<K::Native, ArrowError> {
+    fn get_or_insert_key(&mut self, value: impl AsRef<T::Native>) -> Result<K::Native, ArrowError> {
         let value_native: &T::Native = value.as_ref();
         let value_bytes: &[u8] = value_native.as_ref();
 
@@ -216,26 +203,47 @@ where
         let storage = &mut self.values_builder;
         let hash = state.hash_one(value_bytes);
 
-        let entry = self
+        let idx = *self
             .dedup
-            .raw_entry_mut()
-            .from_hash(hash, |idx| value_bytes == get_bytes(storage, *idx));
-
-        let key = match entry {
-            RawEntryMut::Occupied(entry) => K::Native::usize_as(*entry.into_key()),
-            RawEntryMut::Vacant(entry) => {
+            .entry(
+                hash,
+                |idx| value_bytes == get_bytes(storage, *idx),
+                |idx| state.hash_one(get_bytes(storage, *idx)),
+            )
+            .or_insert_with(|| {
                 let idx = storage.len();
                 storage.append_value(value);
+                idx
+            })
+            .get();
 
-                entry.insert_with_hasher(hash, idx, (), |idx| {
-                    state.hash_one(get_bytes(storage, *idx))
-                });
+        let key = K::Native::from_usize(idx).ok_or(ArrowError::DictionaryKeyOverflowError)?;
 
-                K::Native::from_usize(idx).ok_or(ArrowError::DictionaryKeyOverflowError)?
-            }
-        };
+        Ok(key)
+    }
+
+    /// Append a value to the array. Return an existing index
+    /// if already present in the values array or a new index if the
+    /// value is appended to the values array.
+    ///
+    /// Returns an error if the new index would overflow the key type.
+    pub fn append(&mut self, value: impl AsRef<T::Native>) -> Result<K::Native, ArrowError> {
+        let key = self.get_or_insert_key(value)?;
         self.keys_builder.append_value(key);
+        Ok(key)
+    }
 
+    /// Append a value multiple times to the array.
+    /// This is the same as `append` but allows to append the same value multiple times without doing multiple lookups.
+    ///
+    /// Returns an error if the new index would overflow the key type.
+    pub fn append_n(
+        &mut self,
+        value: impl AsRef<T::Native>,
+        count: usize,
+    ) -> Result<K::Native, ArrowError> {
+        let key = self.get_or_insert_key(value)?;
+        self.keys_builder.append_value_n(key, count);
         Ok(key)
     }
 
@@ -248,10 +256,27 @@ where
         self.append(value).expect("dictionary key overflow");
     }
 
+    /// Infallibly append a value to this builder repeatedly `count` times.
+    /// This is the same as `append_value` but allows to append the same value multiple times without doing multiple lookups.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the resulting length of the dictionary values array would exceed `T::Native::MAX`
+    pub fn append_values(&mut self, value: impl AsRef<T::Native>, count: usize) {
+        self.append_n(value, count)
+            .expect("dictionary key overflow");
+    }
+
     /// Appends a null slot into the builder
     #[inline]
     pub fn append_null(&mut self) {
         self.keys_builder.append_null()
+    }
+
+    /// Infallibly append `n` null slots into the builder
+    #[inline]
+    pub fn append_nulls(&mut self, n: usize) {
+        self.keys_builder.append_nulls(n)
     }
 
     /// Append an `Option` value into the builder
@@ -264,6 +289,19 @@ where
         match value {
             None => self.append_null(),
             Some(v) => self.append_value(v),
+        };
+    }
+
+    /// Append an `Option` value into the builder repeatedly `count` times.
+    /// This is the same as `append_option` but allows to append the same value multiple times without doing multiple lookups.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the resulting length of the dictionary values array would exceed `T::Native::MAX`
+    pub fn append_options(&mut self, value: Option<impl AsRef<T::Native>>, count: usize) {
+        match value {
+            None => self.keys_builder.append_nulls(count),
+            Some(v) => self.append_values(v, count),
         };
     }
 
@@ -342,8 +380,7 @@ fn get_bytes<T: ByteArrayType>(values: &GenericByteBuilder<T>, idx: usize) -> &[
 /// // The builder builds the dictionary value by value
 /// builder.append("abc").unwrap();
 /// builder.append_null();
-/// builder.append("def").unwrap();
-/// builder.append("def").unwrap();
+/// builder.append_n("def", 2).unwrap();  // appends "def" twice with a single lookup
 /// builder.append("abc").unwrap();
 /// let array = builder.finish();
 ///

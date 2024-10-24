@@ -77,7 +77,7 @@ pub struct CastOptions<'a> {
     pub format_options: FormatOptions<'a>,
 }
 
-impl<'a> Default for CastOptions<'a> {
+impl Default for CastOptions<'_> {
     fn default() -> Self {
         Self {
             safe: true,
@@ -206,8 +206,8 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
             DataType::is_integer(to_type) || DataType::is_floating(to_type) || to_type == &Utf8 || to_type == &LargeUtf8
         }
 
-        (Binary, LargeBinary | Utf8 | LargeUtf8 | FixedSizeBinary(_) | BinaryView) => true,
-        (LargeBinary, Binary | Utf8 | LargeUtf8 | FixedSizeBinary(_) | BinaryView) => true,
+        (Binary, LargeBinary | Utf8 | LargeUtf8 | FixedSizeBinary(_) | BinaryView | Utf8View ) => true,
+        (LargeBinary, Binary | Utf8 | LargeUtf8 | FixedSizeBinary(_) | BinaryView | Utf8View ) => true,
         (FixedSizeBinary(_), Binary | LargeBinary) => true,
         (
             Utf8 | LargeUtf8 | Utf8View,
@@ -1411,6 +1411,9 @@ pub fn cast_with_options(
                 cast_binary_to_fixed_size_binary::<i32>(array, *size, cast_options)
             }
             BinaryView => Ok(Arc::new(BinaryViewArray::from(array.as_binary::<i32>()))),
+            Utf8View => Ok(Arc::new(StringViewArray::from(
+                cast_binary_to_string::<i32>(array, cast_options)?.as_string::<i32>(),
+            ))),
             _ => Err(ArrowError::CastError(format!(
                 "Casting from {from_type:?} to {to_type:?} not supported",
             ))),
@@ -1426,6 +1429,10 @@ pub fn cast_with_options(
                 cast_binary_to_fixed_size_binary::<i64>(array, *size, cast_options)
             }
             BinaryView => Ok(Arc::new(BinaryViewArray::from(array.as_binary::<i64>()))),
+            Utf8View => {
+                let array = cast_binary_to_string::<i64>(array, cast_options)?;
+                Ok(Arc::new(StringViewArray::from(array.as_string::<i64>())))
+            }
             _ => Err(ArrowError::CastError(format!(
                 "Casting from {from_type:?} to {to_type:?} not supported",
             ))),
@@ -5536,11 +5543,22 @@ mod tests {
 
         assert!(can_cast_types(
             binary_array.data_type(),
+            &DataType::Utf8View
+        ));
+
+        assert!(can_cast_types(
+            binary_array.data_type(),
             &DataType::BinaryView
         ));
 
+        let string_view_array = cast(&binary_array, &DataType::Utf8View).unwrap();
+        assert_eq!(string_view_array.data_type(), &DataType::Utf8View);
+
         let binary_view_array = cast(&binary_array, &DataType::BinaryView).unwrap();
         assert_eq!(binary_view_array.data_type(), &DataType::BinaryView);
+
+        let expect_string_view_array = StringViewArray::from_iter(VIEW_TEST_DATA);
+        assert_eq!(string_view_array.as_ref(), &expect_string_view_array);
 
         let expect_binary_view_array = BinaryViewArray::from_iter(VIEW_TEST_DATA);
         assert_eq!(binary_view_array.as_ref(), &expect_binary_view_array);
@@ -8481,6 +8499,10 @@ mod tests {
         assert!(decimal_arr.is_null(25));
         assert!(decimal_arr.is_null(26));
         assert!(decimal_arr.is_null(27));
+        assert_eq!("0.00", decimal_arr.value_as_string(28));
+        assert_eq!("0.00", decimal_arr.value_as_string(29));
+        assert_eq!("12345.00", decimal_arr.value_as_string(30));
+        assert_eq!(decimal_arr.len(), 31);
 
         // Decimal256
         let output_type = DataType::Decimal256(76, 3);
@@ -8517,6 +8539,10 @@ mod tests {
         assert!(decimal_arr.is_null(25));
         assert!(decimal_arr.is_null(26));
         assert!(decimal_arr.is_null(27));
+        assert_eq!("0.000", decimal_arr.value_as_string(28));
+        assert_eq!("0.000", decimal_arr.value_as_string(29));
+        assert_eq!("12345.000", decimal_arr.value_as_string(30));
+        assert_eq!(decimal_arr.len(), 31);
     }
 
     #[test]
@@ -8550,10 +8576,30 @@ mod tests {
             Some("1.-23499999"),
             Some("-1.-23499999"),
             Some("--1.23499999"),
+            Some("0"),
+            Some("000.000"),
+            Some("0000000000000000012345.000"),
         ]);
         let array = Arc::new(str_array) as ArrayRef;
 
         test_cast_string_to_decimal(array);
+
+        let test_cases = [
+            (None, None),
+            // (Some(""), None),
+            // (Some("   "), None),
+            (Some("0"), Some("0")),
+            (Some("000.000"), Some("0")),
+            (Some("12345"), Some("12345")),
+            (Some("000000000000000000000000000012345"), Some("12345")),
+            (Some("-123"), Some("-123")),
+            (Some("+123"), Some("123")),
+        ];
+        let inputs = test_cases.iter().map(|entry| entry.0).collect::<Vec<_>>();
+        let expected = test_cases.iter().map(|entry| entry.1).collect::<Vec<_>>();
+
+        let array = Arc::new(StringArray::from(inputs)) as ArrayRef;
+        test_cast_string_to_decimal_scale_zero(array, &expected);
     }
 
     #[test]
@@ -8587,10 +8633,67 @@ mod tests {
             Some("1.-23499999"),
             Some("-1.-23499999"),
             Some("--1.23499999"),
+            Some("0"),
+            Some("000.000"),
+            Some("0000000000000000012345.000"),
         ]);
         let array = Arc::new(str_array) as ArrayRef;
 
         test_cast_string_to_decimal(array);
+
+        let test_cases = [
+            (None, None),
+            (Some(""), None),
+            (Some("   "), None),
+            (Some("0"), Some("0")),
+            (Some("000.000"), Some("0")),
+            (Some("12345"), Some("12345")),
+            (Some("000000000000000000000000000012345"), Some("12345")),
+            (Some("-123"), Some("-123")),
+            (Some("+123"), Some("123")),
+        ];
+        let inputs = test_cases.iter().map(|entry| entry.0).collect::<Vec<_>>();
+        let expected = test_cases.iter().map(|entry| entry.1).collect::<Vec<_>>();
+
+        let array = Arc::new(LargeStringArray::from(inputs)) as ArrayRef;
+        test_cast_string_to_decimal_scale_zero(array, &expected);
+    }
+
+    fn test_cast_string_to_decimal_scale_zero(
+        array: ArrayRef,
+        expected_as_string: &[Option<&str>],
+    ) {
+        // Decimal128
+        let output_type = DataType::Decimal128(38, 0);
+        assert!(can_cast_types(array.data_type(), &output_type));
+        let casted_array = cast(&array, &output_type).unwrap();
+        let decimal_arr = casted_array.as_primitive::<Decimal128Type>();
+        assert_decimal_array_contents(decimal_arr, expected_as_string);
+
+        // Decimal256
+        let output_type = DataType::Decimal256(76, 0);
+        assert!(can_cast_types(array.data_type(), &output_type));
+        let casted_array = cast(&array, &output_type).unwrap();
+        let decimal_arr = casted_array.as_primitive::<Decimal256Type>();
+        assert_decimal_array_contents(decimal_arr, expected_as_string);
+    }
+
+    fn assert_decimal_array_contents<T>(
+        array: &PrimitiveArray<T>,
+        expected_as_string: &[Option<&str>],
+    ) where
+        T: DecimalType + ArrowPrimitiveType,
+    {
+        assert_eq!(array.len(), expected_as_string.len());
+        for (i, expected) in expected_as_string.iter().enumerate() {
+            let actual = if array.is_null(i) {
+                None
+            } else {
+                Some(array.value_as_string(i))
+            };
+            let actual = actual.as_ref().map(|s| s.as_ref());
+            assert_eq!(*expected, actual, "Expected at position {}", i);
+        }
     }
 
     #[test]

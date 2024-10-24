@@ -31,7 +31,7 @@ Add this to your Cargo.toml:
 
 ```toml
 [dependencies]
-arrow-flight = "51.0.0"
+arrow-flight = "53.2.0"
 ```
 
 Apache Arrow Flight is a gRPC based protocol for exchanging Arrow data between processes. See the blog post [Introducing Apache Arrow Flight: A Framework for Fast Data Transport](https://arrow.apache.org/blog/2019/10/13/introducing-arrow-flight/) for more information.
@@ -45,6 +45,8 @@ that demonstrate how to build a Flight server implemented with [tonic](https://d
 
 - `flight-sql-experimental`: Enables experimental support for
   [Apache Arrow FlightSQL], a protocol for interacting with SQL databases.
+
+- `tls`: Enables `tls` on `tonic`
 
 ## CLI
 

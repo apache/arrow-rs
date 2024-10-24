@@ -121,6 +121,18 @@ use crate::arrow::schema::ParquetField;
 pub use store::*;
 
 /// The asynchronous interface used by [`ParquetRecordBatchStream`] to read parquet files
+///
+/// Notes:
+///
+/// 1. There is a default implementation for types that implement [`AsyncRead`]
+///    and [`AsyncSeek`], for example [`tokio::fs::File`].
+///
+/// 2. [`ParquetObjectReader`], available when the `object_store` crate feature
+///    is enabled, implements this interface for [`ObjectStore`].
+///
+/// [`ObjectStore`]: object_store::ObjectStore
+///
+/// [`tokio::fs::File`]: https://docs.rs/tokio/latest/tokio/fs/struct.File.html
 pub trait AsyncFileReader: Send {
     /// Retrieve the bytes in `range`
     fn get_bytes(&mut self, range: Range<usize>) -> BoxFuture<'_, Result<Bytes>>;
@@ -803,7 +815,7 @@ impl<'a> InMemoryRowGroup<'a> {
     }
 }
 
-impl<'a> RowGroups for InMemoryRowGroup<'a> {
+impl RowGroups for InMemoryRowGroup<'_> {
     fn num_rows(&self) -> usize {
         self.row_count
     }

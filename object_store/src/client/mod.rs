@@ -17,31 +17,31 @@
 
 //! Generic utilities reqwest based ObjectStore implementations
 
-pub mod backoff;
+pub(crate) mod backoff;
 
 #[cfg(test)]
-pub mod mock_server;
+pub(crate) mod mock_server;
 
-pub mod retry;
-
-#[cfg(any(feature = "aws", feature = "gcp", feature = "azure"))]
-pub mod pagination;
-
-pub mod get;
+pub(crate) mod retry;
 
 #[cfg(any(feature = "aws", feature = "gcp", feature = "azure"))]
-pub mod list;
+pub(crate) mod pagination;
+
+pub(crate) mod get;
 
 #[cfg(any(feature = "aws", feature = "gcp", feature = "azure"))]
-pub mod token;
+pub(crate) mod list;
 
-pub mod header;
+#[cfg(any(feature = "aws", feature = "gcp", feature = "azure"))]
+pub(crate) mod token;
+
+pub(crate) mod header;
 
 #[cfg(any(feature = "aws", feature = "gcp"))]
-pub mod s3;
+pub(crate) mod s3;
 
 #[cfg(any(feature = "aws", feature = "gcp", feature = "azure"))]
-pub mod parts;
+pub(crate) mod parts;
 
 use async_trait::async_trait;
 use std::collections::HashMap;
@@ -501,7 +501,7 @@ impl ClientOptions {
     ///
     /// See [`Self::with_connect_timeout`]
     pub fn with_connect_timeout_disabled(mut self) -> Self {
-        self.timeout = None;
+        self.connect_timeout = None;
         self
     }
 
@@ -678,7 +678,7 @@ impl ClientOptions {
     }
 }
 
-pub trait GetOptionsExt {
+pub(crate) trait GetOptionsExt {
     fn with_get_options(self, options: GetOptions) -> Self;
 }
 
@@ -756,7 +756,7 @@ mod cloud {
 
     /// A [`CredentialProvider`] that uses [`Client`] to fetch temporary tokens
     #[derive(Debug)]
-    pub struct TokenCredentialProvider<T: TokenProvider> {
+    pub(crate) struct TokenCredentialProvider<T: TokenProvider> {
         inner: T,
         client: Client,
         retry: RetryConfig,
@@ -764,7 +764,7 @@ mod cloud {
     }
 
     impl<T: TokenProvider> TokenCredentialProvider<T> {
-        pub fn new(inner: T, client: Client, retry: RetryConfig) -> Self {
+        pub(crate) fn new(inner: T, client: Client, retry: RetryConfig) -> Self {
             Self {
                 inner,
                 client,
@@ -775,7 +775,7 @@ mod cloud {
 
         /// Override the minimum remaining TTL for a cached token to be used
         #[cfg(feature = "aws")]
-        pub fn with_min_ttl(mut self, min_ttl: Duration) -> Self {
+        pub(crate) fn with_min_ttl(mut self, min_ttl: Duration) -> Self {
             self.cache = self.cache.with_min_ttl(min_ttl);
             self
         }
@@ -793,7 +793,7 @@ mod cloud {
     }
 
     #[async_trait]
-    pub trait TokenProvider: std::fmt::Debug + Send + Sync {
+    pub(crate) trait TokenProvider: std::fmt::Debug + Send + Sync {
         type Credential: std::fmt::Debug + Send + Sync;
 
         async fn fetch_token(
@@ -805,7 +805,7 @@ mod cloud {
 }
 
 #[cfg(any(feature = "aws", feature = "azure", feature = "gcp"))]
-pub use cloud::*;
+pub(crate) use cloud::*;
 
 #[cfg(test)]
 mod tests {

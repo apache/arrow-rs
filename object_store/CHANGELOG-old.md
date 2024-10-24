@@ -19,6 +19,23 @@
 
 # Historical Changelog
 
+## [object_store_0.11.0](https://github.com/apache/arrow-rs/tree/object_store_0.11.0) (2024-08-12)
+
+[Full Changelog](https://github.com/apache/arrow-rs/compare/object_store_0.10.2...object_store_0.11.0)
+
+**Breaking changes:**
+
+- Make object\_store errors non-exhaustive [\#6165](https://github.com/apache/arrow-rs/pull/6165) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)] ([tustvold](https://github.com/tustvold))
+- Update snafu to `0.8.0` in object\_store \(\#5930\) [\#6070](https://github.com/apache/arrow-rs/pull/6070) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)] ([alamb](https://github.com/alamb))
+
+
+**Merged pull requests:**
+
+- Add LICENSE and NOTICE files to object_store  [\#6234](https://github.com/apache/arrow-rs/pull/6234) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)] ([alamb](https://github.com/alamb))
+- feat\(object\_store\):  add `PermissionDenied` variant to top-level error [\#6194](https://github.com/apache/arrow-rs/pull/6194) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)] ([kyle-mccarthy](https://github.com/kyle-mccarthy))
+- Update object store MSRV to `1.64` [\#6123](https://github.com/apache/arrow-rs/pull/6123) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)] ([alamb](https://github.com/alamb))
+- Fix clippy in object\_store crate [\#6120](https://github.com/apache/arrow-rs/pull/6120) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)] ([alamb](https://github.com/alamb))
+
 ## [object_store_0.10.2](https://github.com/apache/arrow-rs/tree/object_store_0.10.2) (2024-07-17)
 
 [Full Changelog](https://github.com/apache/arrow-rs/compare/object_store_0.10.1...object_store_0.10.2)

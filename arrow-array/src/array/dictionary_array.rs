@@ -799,15 +799,15 @@ pub struct TypedDictionaryArray<'a, K: ArrowDictionaryKeyType, V> {
 }
 
 // Manually implement `Clone` to avoid `V: Clone` type constraint
-impl<'a, K: ArrowDictionaryKeyType, V> Clone for TypedDictionaryArray<'a, K, V> {
+impl<K: ArrowDictionaryKeyType, V> Clone for TypedDictionaryArray<'_, K, V> {
     fn clone(&self) -> Self {
         *self
     }
 }
 
-impl<'a, K: ArrowDictionaryKeyType, V> Copy for TypedDictionaryArray<'a, K, V> {}
+impl<K: ArrowDictionaryKeyType, V> Copy for TypedDictionaryArray<'_, K, V> {}
 
-impl<'a, K: ArrowDictionaryKeyType, V> std::fmt::Debug for TypedDictionaryArray<'a, K, V> {
+impl<K: ArrowDictionaryKeyType, V> std::fmt::Debug for TypedDictionaryArray<'_, K, V> {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         writeln!(f, "TypedDictionaryArray({:?})", self.dictionary)
     }
@@ -825,7 +825,7 @@ impl<'a, K: ArrowDictionaryKeyType, V> TypedDictionaryArray<'a, K, V> {
     }
 }
 
-impl<'a, K: ArrowDictionaryKeyType, V: Sync> Array for TypedDictionaryArray<'a, K, V> {
+impl<K: ArrowDictionaryKeyType, V: Sync> Array for TypedDictionaryArray<'_, K, V> {
     fn as_any(&self) -> &dyn Any {
         self.dictionary
     }
@@ -879,7 +879,7 @@ impl<'a, K: ArrowDictionaryKeyType, V: Sync> Array for TypedDictionaryArray<'a, 
     }
 }
 
-impl<'a, K, V> IntoIterator for TypedDictionaryArray<'a, K, V>
+impl<K, V> IntoIterator for TypedDictionaryArray<'_, K, V>
 where
     K: ArrowDictionaryKeyType,
     Self: ArrayAccessor,
@@ -1073,6 +1073,74 @@ mod tests {
     }
 
     #[test]
+    fn test_dictionary_builder_append_many() {
+        let mut builder = PrimitiveDictionaryBuilder::<UInt8Type, UInt32Type>::new();
+
+        builder.append(1).unwrap();
+        builder.append_n(2, 2).unwrap();
+        builder.append_options(None, 2);
+        builder.append_options(Some(3), 3);
+
+        let array = builder.finish();
+
+        let values = array
+            .values()
+            .as_primitive::<UInt32Type>()
+            .iter()
+            .map(Option::unwrap)
+            .collect::<Vec<_>>();
+        assert_eq!(values, &[1, 2, 3]);
+        let keys = array.keys().iter().collect::<Vec<_>>();
+        assert_eq!(
+            keys,
+            &[
+                Some(0),
+                Some(1),
+                Some(1),
+                None,
+                None,
+                Some(2),
+                Some(2),
+                Some(2)
+            ]
+        );
+    }
+
+    #[test]
+    fn test_string_dictionary_builder_append_many() {
+        let mut builder = StringDictionaryBuilder::<Int8Type>::new();
+
+        builder.append("a").unwrap();
+        builder.append_n("b", 2).unwrap();
+        builder.append_options(None::<&str>, 2);
+        builder.append_options(Some("c"), 3);
+
+        let array = builder.finish();
+
+        let values = array
+            .values()
+            .as_string::<i32>()
+            .iter()
+            .map(Option::unwrap)
+            .collect::<Vec<_>>();
+        assert_eq!(values, &["a", "b", "c"]);
+        let keys = array.keys().iter().collect::<Vec<_>>();
+        assert_eq!(
+            keys,
+            &[
+                Some(0),
+                Some(1),
+                Some(1),
+                None,
+                None,
+                Some(2),
+                Some(2),
+                Some(2)
+            ]
+        );
+    }
+
+    #[test]
     fn test_dictionary_array_fmt_debug() {
         let mut builder = PrimitiveDictionaryBuilder::<UInt8Type, UInt32Type>::with_capacity(3, 2);
         builder.append(12345678).unwrap();
@@ -1243,6 +1311,7 @@ mod tests {
         assert_eq!(array.values().data_type(), &DataType::Utf8);
 
         assert_eq!(array.null_count(), 1);
+        assert_eq!(array.logical_null_count(), 1);
 
         assert!(array.keys().is_valid(0));
         assert!(array.keys().is_valid(1));

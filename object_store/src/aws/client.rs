@@ -165,7 +165,7 @@ impl From<DeleteError> for Error {
 }
 
 #[derive(Debug)]
-pub struct S3Config {
+pub(crate) struct S3Config {
     pub region: String,
     pub endpoint: Option<String>,
     pub bucket: String,
@@ -266,15 +266,16 @@ pub(crate) struct Request<'a> {
     payload: Option<PutPayload>,
     use_session_creds: bool,
     idempotent: bool,
+    retry_error_body: bool,
 }
 
 impl<'a> Request<'a> {
-    pub fn query<T: Serialize + ?Sized + Sync>(self, query: &T) -> Self {
+    pub(crate) fn query<T: Serialize + ?Sized + Sync>(self, query: &T) -> Self {
         let builder = self.builder.query(query);
         Self { builder, ..self }
     }
 
-    pub fn header<K>(self, k: K, v: &str) -> Self
+    pub(crate) fn header<K>(self, k: K, v: &str) -> Self
     where
         HeaderName: TryFrom<K>,
         <HeaderName as TryFrom<K>>::Error: Into<http::Error>,
@@ -283,29 +284,36 @@ impl<'a> Request<'a> {
         Self { builder, ..self }
     }
 
-    pub fn headers(self, headers: HeaderMap) -> Self {
+    pub(crate) fn headers(self, headers: HeaderMap) -> Self {
         let builder = self.builder.headers(headers);
         Self { builder, ..self }
     }
 
-    pub fn idempotent(self, idempotent: bool) -> Self {
+    pub(crate) fn idempotent(self, idempotent: bool) -> Self {
         Self { idempotent, ..self }
     }
 
-    pub fn with_encryption_headers(self) -> Self {
+    pub(crate) fn retry_error_body(self, retry_error_body: bool) -> Self {
+        Self {
+            retry_error_body,
+            ..self
+        }
+    }
+
+    pub(crate) fn with_encryption_headers(self) -> Self {
         let headers = self.config.encryption_headers.clone().into();
         let builder = self.builder.headers(headers);
         Self { builder, ..self }
     }
 
-    pub fn with_session_creds(self, use_session_creds: bool) -> Self {
+    pub(crate) fn with_session_creds(self, use_session_creds: bool) -> Self {
         Self {
             use_session_creds,
             ..self
         }
     }
 
-    pub fn with_tags(mut self, tags: TagSet) -> Self {
+    pub(crate) fn with_tags(mut self, tags: TagSet) -> Self {
         let tags = tags.encoded();
         if !tags.is_empty() && !self.config.disable_tagging {
             self.builder = self.builder.header(&TAGS_HEADER, tags);
@@ -313,7 +321,7 @@ impl<'a> Request<'a> {
         self
     }
 
-    pub fn with_attributes(self, attributes: Attributes) -> Self {
+    pub(crate) fn with_attributes(self, attributes: Attributes) -> Self {
         let mut has_content_type = false;
         let mut builder = self.builder;
         for (k, v) in &attributes {
@@ -341,7 +349,7 @@ impl<'a> Request<'a> {
         Self { builder, ..self }
     }
 
-    pub fn with_payload(mut self, payload: PutPayload) -> Self {
+    pub(crate) fn with_payload(mut self, payload: PutPayload) -> Self {
         if !self.config.skip_signature || self.config.checksum.is_some() {
             let mut sha256 = Context::new(&digest::SHA256);
             payload.iter().for_each(|x| sha256.update(x));
@@ -362,7 +370,7 @@ impl<'a> Request<'a> {
         self
     }
 
-    pub async fn send(self) -> Result<Response, RequestError> {
+    pub(crate) async fn send(self) -> Result<Response, RequestError> {
         let credential = match self.use_session_creds {
             true => self.config.get_session_credential().await?,
             false => SessionCredential {
@@ -379,13 +387,14 @@ impl<'a> Request<'a> {
             .with_aws_sigv4(credential.authorizer(), sha)
             .retryable(&self.config.retry_config)
             .idempotent(self.idempotent)
+            .retry_error_body(self.retry_error_body)
             .payload(self.payload)
             .send()
             .await
             .context(RetrySnafu { path })
     }
 
-    pub async fn do_put(self) -> Result<PutResult> {
+    pub(crate) async fn do_put(self) -> Result<PutResult> {
         let response = self.send().await?;
         Ok(get_put_result(response.headers(), VERSION_HEADER).context(MetadataSnafu)?)
     }
@@ -398,12 +407,12 @@ pub(crate) struct S3Client {
 }
 
 impl S3Client {
-    pub fn new(config: S3Config) -> Result<Self> {
+    pub(crate) fn new(config: S3Config) -> Result<Self> {
         let client = config.client_options.client()?;
         Ok(Self { config, client })
     }
 
-    pub fn request<'a>(&'a self, method: Method, path: &'a Path) -> Request<'a> {
+    pub(crate) fn request<'a>(&'a self, method: Method, path: &'a Path) -> Request<'a> {
         let url = self.config.path_url(path);
         Request {
             path,
@@ -413,6 +422,7 @@ impl S3Client {
             config: &self.config,
             use_session_creds: true,
             idempotent: false,
+            retry_error_body: false,
         }
     }
 
@@ -423,7 +433,7 @@ impl S3Client {
     /// there was an error for a certain path, the error will be returned in the
     /// vector. If there was an issue with making the overall request, an error
     /// will be returned at the top level.
-    pub async fn bulk_delete_request(&self, paths: Vec<Path>) -> Result<Vec<Result<Path>>> {
+    pub(crate) async fn bulk_delete_request(&self, paths: Vec<Path>) -> Result<Vec<Result<Path>>> {
         if paths.is_empty() {
             return Ok(Vec::new());
         }
@@ -519,7 +529,7 @@ impl S3Client {
     }
 
     /// Make an S3 Copy request <https://docs.aws.amazon.com/AmazonS3/latest/API/API_CopyObject.html>
-    pub fn copy_request<'a>(&'a self, from: &Path, to: &'a Path) -> Request<'a> {
+    pub(crate) fn copy_request<'a>(&'a self, from: &Path, to: &'a Path) -> Request<'a> {
         let source = format!("{}/{}", self.config.bucket, encode_path(from));
 
         let mut copy_source_encryption_headers = HeaderMap::new();
@@ -559,13 +569,14 @@ impl S3Client {
 
         self.request(Method::PUT, to)
             .idempotent(true)
+            .retry_error_body(true)
             .header(&COPY_SOURCE_HEADER, &source)
             .headers(self.config.encryption_headers.clone().into())
             .headers(copy_source_encryption_headers)
             .with_session_creds(false)
     }
 
-    pub async fn create_multipart(
+    pub(crate) async fn create_multipart(
         &self,
         location: &Path,
         opts: PutMultipartOpts,
@@ -589,7 +600,7 @@ impl S3Client {
         Ok(response.upload_id)
     }
 
-    pub async fn put_part(
+    pub(crate) async fn put_part(
         &self,
         path: &Path,
         upload_id: &MultipartId,
@@ -618,7 +629,7 @@ impl S3Client {
         Ok(PartId { content_id })
     }
 
-    pub async fn complete_multipart(
+    pub(crate) async fn complete_multipart(
         &self,
         location: &Path,
         upload_id: &str,
@@ -648,6 +659,7 @@ impl S3Client {
             .with_aws_sigv4(credential.authorizer(), None)
             .retryable(&self.config.retry_config)
             .idempotent(true)
+            .retry_error_body(true)
             .send()
             .await
             .context(CompleteMultipartRequestSnafu)?;
@@ -669,7 +681,7 @@ impl S3Client {
     }
 
     #[cfg(test)]
-    pub async fn get_object_tagging(&self, path: &Path) -> Result<Response> {
+    pub(crate) async fn get_object_tagging(&self, path: &Path) -> Result<Response> {
         let credential = self.config.get_session_credential().await?;
         let url = format!("{}?tagging", self.config.path_url(path));
         let response = self

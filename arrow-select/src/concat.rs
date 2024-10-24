@@ -849,5 +849,6 @@ mod tests {
         let dict_b = DictionaryArray::new(keys, Arc::new(values));
         let array = concat(&[&dict_a, &dict_b]).unwrap();
         assert_eq!(array.null_count(), 10);
+        assert_eq!(array.logical_null_count(), 10);
     }
 }
