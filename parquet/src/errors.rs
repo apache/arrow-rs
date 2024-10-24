@@ -107,6 +107,13 @@ impl From<str::Utf8Error> for ParquetError {
     }
 }
 
+#[cfg(test)]
+impl From<std::convert::Infallible> for ParquetError {
+    fn from(value: std::convert::Infallible) -> Self {
+        match value {}
+    }
+}
+
 #[cfg(feature = "arrow")]
 impl From<ArrowError> for ParquetError {
     fn from(e: ArrowError) -> ParquetError {

@@ -239,7 +239,7 @@ fn equals_kernel((n, h): (&u8, &u8)) -> bool {
 }
 
 fn equals_ignore_ascii_case_kernel((n, h): (&u8, &u8)) -> bool {
-    n.to_ascii_lowercase() == h.to_ascii_lowercase()
+    n.eq_ignore_ascii_case(h)
 }
 
 /// Transforms a like `pattern` to a regex compatible pattern. To achieve that, it does:
