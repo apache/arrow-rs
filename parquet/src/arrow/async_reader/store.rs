@@ -173,11 +173,18 @@ impl AsyncFileReader for ParquetObjectReader {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
+    use std::{
+        convert::Infallible,
+        sync::{
+            atomic::{AtomicUsize, Ordering},
+            Arc,
+        },
+    };
 
     use futures::TryStreamExt;
 
     use arrow::util::test_util::parquet_test_data;
+    use futures::FutureExt;
     use object_store::local::LocalFileSystem;
     use object_store::path::Path;
     use object_store::{ObjectMeta, ObjectStore};
@@ -233,13 +240,23 @@ mod tests {
     #[tokio::test]
     // We need to mark this with the `target_has_atomic` because the spawned_tasks_count() fn is
     // only available for that cfg
-    #[cfg(all(target_has_atomic = "64", tokio_unstable))]
     async fn test_runtime_is_used() {
-        let rt = tokio::runtime::Builder::new_current_thread()
+        let num_actions = Arc::new(AtomicUsize::new(0));
+
+        let (a1, a2) = (num_actions.clone(), num_actions.clone());
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .on_thread_park(move || {
+                a1.fetch_add(1, Ordering::Relaxed);
+            })
+            .on_thread_unpark(move || {
+                a2.fetch_add(1, Ordering::Relaxed);
+            })
             .build()
             .unwrap();
 
         let (meta, store) = get_meta_store().await;
+
+        let initial_actions = num_actions.load(Ordering::Relaxed);
 
         let reader = ParquetObjectReader::new(store, meta).with_runtime(rt.handle().clone());
 
@@ -250,13 +267,33 @@ mod tests {
         assert_eq!(batches.len(), 1);
         assert_eq!(batches[0].num_rows(), 8);
 
-        // According to tokio documentation for the `spawned_tasks_count` method, this number
-        // starts at 0 when the runtime is created. So this check should actually verify what we
-        // want.
-        assert!(rt.metrics().spawned_tasks_count() > 0);
+        assert!(num_actions.load(Ordering::Relaxed) - initial_actions > 0);
 
         // Runtimes have to be dropped in blocking contexts, so we need to move this one to a new
         // blocking thread to drop it.
+        tokio::runtime::Handle::current().spawn_blocking(move || drop(rt));
+    }
+
+    #[tokio::test]
+    async fn test_runtime_thread_id_different() {
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .build()
+            .unwrap();
+
+        let (meta, store) = get_meta_store().await;
+
+        let reader = ParquetObjectReader::new(store, meta).with_runtime(rt.handle().clone());
+
+        let current_id = std::thread::current().id();
+
+        let other_id = reader
+            .spawn(|_, _| async move { Ok::<_, Infallible>(std::thread::current().id()) }.boxed())
+            .await
+            .unwrap();
+
+        assert_ne!(current_id, other_id);
+
         tokio::runtime::Handle::current().spawn_blocking(move || drop(rt));
     }
 }

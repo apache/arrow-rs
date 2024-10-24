@@ -1,4 +1,0 @@
-# The tokio_unstable flag is needed for the parquet::arrow::async_reader::test_runtime_is_used
-# test, as it relies on checking the amount of tasks that have run on a runtime
-[test]
-rustflags = ["--cfg", "tokio_unstable"]
