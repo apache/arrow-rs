@@ -851,8 +851,7 @@ mod tests {
     }
 }
 
-#[cfg(all(feature = "async", feature = "arrow"))]
-#[cfg(test)]
+#[cfg(all(feature = "async", feature = "arrow", test))]
 mod async_tests {
     use super::*;
     use bytes::Bytes;
