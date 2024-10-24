@@ -434,12 +434,13 @@ fn take_bits<I: ArrowPrimitiveType>(
                     bit_util::set_bit(output_slice, idx);
                 }
             });
-            return BooleanBuffer::new(output_buffer.into(), 0, indices.len());
+            BooleanBuffer::new(output_buffer.into(), 0, indices.len())
         }
         None => {
-            return BooleanBuffer::collect_bool(len, |idx: usize| {
+            BooleanBuffer::collect_bool(len, |idx: usize| {
+                // SAFETY: idx<indices.len()
                 values.value(unsafe { indices.value_unchecked(idx).as_usize() })
-            });
+            })
         }
     }
 }
