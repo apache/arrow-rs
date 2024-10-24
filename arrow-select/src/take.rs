@@ -477,7 +477,7 @@ fn take_bytes<T: ByteArrayType, IndexType: ArrowPrimitiveType>(
     } else if indices.null_count() == 0 {
         let num_bytes = bit_util::ceil(data_len, 8);
 
-        let mut null_buf = MutableBuffer::new_null(num_bytes).with_bitset(num_bytes, true);
+        let mut null_buf = MutableBuffer::new(num_bytes).with_bitset(num_bytes, true);
         let null_slice = null_buf.as_slice_mut();
         offsets.extend(indices.values().iter().enumerate().map(|(i, index)| {
             let index = index.as_usize();
