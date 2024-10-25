@@ -29,7 +29,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // protoc in Ubuntu builder needs this option
         .protoc_arg("--experimental_allow_proto3_optional")
         .out_dir("src")
-        .compile_protos_with_config(prost_config(), &[proto_path], &[proto_dir])?;
+        .compile_with_config(prost_config(), &[proto_path], &[proto_dir])?;
 
     // read file contents to string
     let mut file = OpenOptions::new()
@@ -52,7 +52,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // protoc in Ubuntu builder needs this option
         .protoc_arg("--experimental_allow_proto3_optional")
         .out_dir("src/sql")
-        .compile_protos_with_config(prost_config(), &[proto_path], &[proto_dir])?;
+        .compile_with_config(prost_config(), &[proto_path], &[proto_dir])?;
 
     // read file contents to string
     let mut file = OpenOptions::new()

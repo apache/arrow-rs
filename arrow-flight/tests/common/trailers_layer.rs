@@ -21,7 +21,7 @@ use std::task::{Context, Poll};
 
 use futures::ready;
 use http::{HeaderValue, Request, Response};
-use http_body::{Frame, SizeHint};
+use http_body::SizeHint;
 use pin_project_lite::pin_project;
 use tower::{Layer, Service};
 
@@ -99,19 +99,31 @@ impl<B: http_body::Body> http_body::Body for WrappedBody<B> {
     type Data = B::Data;
     type Error = B::Error;
 
-    fn poll_frame(
-        self: Pin<&mut Self>,
+    fn poll_data(
+        mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
-    ) -> Poll<Option<Result<Frame<Self::Data>, Self::Error>>> {
-        let mut result = ready!(self.project().inner.poll_frame(cx));
+    ) -> Poll<Option<Result<Self::Data, Self::Error>>> {
+        self.as_mut().project().inner.poll_data(cx)
+    }
 
-        if let Some(Ok(frame)) = &mut result {
-            if let Some(trailers) = frame.trailers_mut() {
-                trailers.insert("test-trailer", HeaderValue::from_static("trailer_val"));
+    fn poll_trailers(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<Result<Option<http::header::HeaderMap>, Self::Error>> {
+        let result: Result<Option<http::header::HeaderMap>, Self::Error> =
+            ready!(self.as_mut().project().inner.poll_trailers(cx));
+
+        let mut trailers = http::header::HeaderMap::new();
+        trailers.insert("test-trailer", HeaderValue::from_static("trailer_val"));
+
+        match result {
+            Ok(Some(mut existing)) => {
+                existing.extend(trailers.iter().map(|(k, v)| (k.clone(), v.clone())));
+                Poll::Ready(Ok(Some(existing)))
             }
+            Ok(None) => Poll::Ready(Ok(Some(trailers))),
+            Err(e) => Poll::Ready(Err(e)),
         }
-
-        Poll::Ready(result)
     }
 
     fn is_end_stream(&self) -> bool {

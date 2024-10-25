@@ -792,8 +792,7 @@ impl ProstMessageExt for FetchResults {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use futures::{TryFutureExt, TryStreamExt};
-    use hyper_util::rt::TokioIo;
+    use futures::TryStreamExt;
     use std::fs;
     use std::future::Future;
     use std::net::SocketAddr;
@@ -854,8 +853,7 @@ mod tests {
             .serve_with_incoming(stream);
 
         let request_future = async {
-            let connector =
-                service_fn(move |_| UnixStream::connect(path.clone()).map_ok(TokioIo::new));
+            let connector = service_fn(move |_| UnixStream::connect(path.clone()));
             let channel = Endpoint::try_from("http://example.com")
                 .unwrap()
                 .connect_with_connector(connector)
