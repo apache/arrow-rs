@@ -47,6 +47,8 @@ pub enum ParquetError {
     IndexOutOfBound(usize, usize),
     /// An external error variant
     External(Box<dyn Error + Send + Sync>),
+    /// Returned when a function needs more data to complete properly.
+    NeedMoreData(usize),
 }
 
 impl std::fmt::Display for ParquetError {
@@ -63,6 +65,7 @@ impl std::fmt::Display for ParquetError {
                 write!(fmt, "Index {index} out of bound: {bound}")
             }
             ParquetError::External(e) => write!(fmt, "External: {e}"),
+            ParquetError::NeedMoreData(needed) => write!(fmt, "NeedMoreData: {needed}"),
         }
     }
 }
