@@ -1152,6 +1152,10 @@ impl<'b> flatbuffers::Push for Buffer {
         let src = ::core::slice::from_raw_parts(self as *const Buffer as *const u8, Self::size());
         dst.copy_from_slice(src);
     }
+    #[inline]
+    fn alignment() -> flatbuffers::PushAlignment {
+        flatbuffers::PushAlignment::new(8)
+    }
 }
 
 impl<'a> flatbuffers::Verifiable for Buffer {
