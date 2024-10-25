@@ -1498,3 +1498,15 @@ pub fn finish_size_prefixed_message_buffer<'a, 'b, A: flatbuffers::Allocator + '
 ) {
     fbb.finish_size_prefixed(root, None);
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use flatbuffers::Push;
+
+    #[test]
+    fn struct_alignment() {
+        // https://github.com/google/flatbuffers/pull/8398
+        assert_eq!(FieldNode::alignment(), PushAlignment::new(8));
+    }
+}
