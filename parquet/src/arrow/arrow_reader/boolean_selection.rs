@@ -60,11 +60,6 @@ impl BooleanRowSelection {
         BooleanRowSelection { selector: buffer }
     }
 
-    /// Returns the number of rows in this [`BooleanRowSelection`].
-    pub fn len(&self) -> usize {
-        self.selector.len()
-    }
-
     /// Returns the number of rows selected by this [`BooleanRowSelection`].
     pub fn row_count(&self) -> usize {
         self.selector.count_set_bits()
@@ -141,14 +136,14 @@ impl BooleanRowSelection {
         // Ensure that 'other' has exactly as many set bits as 'self'
         debug_assert_eq!(
             self.row_count(),
-            other.len(),
+            other.selector.len(),
             "The 'other' selection must have exactly as many set bits as 'self'."
         );
 
-        if self.len() == other.len() {
+        if self.selector.len() == other.selector.len() {
             // fast path if the two selections are the same length
             // common if this is the first predicate
-            debug_assert_eq!(self.row_count(), self.len());
+            debug_assert_eq!(self.row_count(), self.selector.len());
             return self.intersection(other);
         }
 
