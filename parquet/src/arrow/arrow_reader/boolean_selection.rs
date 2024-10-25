@@ -134,7 +134,7 @@ impl BooleanRowSelection {
 
     /// Combines this [`BooleanRowSelection`] with another using logical AND on the selected bits.
     ///
-    /// Unlike [`intersection`], the `other` [`BooleanRowSelection`] must have exactly as many set bits as `self`.
+    /// Unlike intersection, the `other` [`BooleanRowSelection`] must have exactly as many set bits as `self`.
     /// This method will keep only the bits in `self` that are also set in `other`
     /// at the positions corresponding to `self`'s set bits.
     pub fn and_then(&self, other: &Self) -> Self {
