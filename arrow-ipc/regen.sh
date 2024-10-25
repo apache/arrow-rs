@@ -144,6 +144,26 @@ for f in `ls *.rs`; do
     fi
 done
 
+# Since $FLATC might be unpatched, add assertions that we have correct struct alignment
+function add_struct_alignment_test {
+>>"$1" cat <<'HEREDOC'
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use flatbuffers::Push;
+
+    #[test]
+    fn struct_alignment() {
+        // https://github.com/google/flatbuffers/pull/8398
+        assert_eq!($2::alignment(), PushAlignment::new(8));
+    }
+}
+HEREDOC
+}
+add_struct_alignment_test Schema.rs Buffer
+add_struct_alignment_test Message.rs FieldNode
+add_struct_alignment_test File.rs Block
+
 # Return back to base directory
 popd
 cargo +stable fmt -- src/gen/*

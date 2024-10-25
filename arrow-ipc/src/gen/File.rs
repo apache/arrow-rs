@@ -494,3 +494,15 @@ pub fn finish_size_prefixed_footer_buffer<'a, 'b, A: flatbuffers::Allocator + 'a
 ) {
     fbb.finish_size_prefixed(root, None);
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use flatbuffers::Push;
+
+    #[test]
+    fn struct_alignment() {
+        // https://github.com/google/flatbuffers/pull/8398
+        assert_eq!(Block::alignment(), PushAlignment::new(8));
+    }
+}
