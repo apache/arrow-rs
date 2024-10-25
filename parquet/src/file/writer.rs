@@ -1900,10 +1900,10 @@ mod tests {
     #[test]
     fn test_too_many_rowgroups() {
         let message_type = "
-        message test_schema {
-            REQUIRED BYTE_ARRAY a (UTF8);
-        }
-    ";
+            message test_schema {
+                REQUIRED BYTE_ARRAY a (UTF8);
+            }
+        ";
         let schema = Arc::new(parse_message_type(message_type).unwrap());
         let file: File = tempfile::tempfile().unwrap();
         let props = Arc::new(
@@ -1914,10 +1914,11 @@ mod tests {
         );
         let mut writer = SerializedFileWriter::new(&file, schema, props).unwrap();
 
-        // create 32k empty rowgroups
+        // Create 32k empty rowgroups. Should error when i == 32768.
         for i in 0..0x8001 {
             match writer.next_row_group() {
                 Ok(mut row_group_writer) => {
+                    assert_ne!(i, 0x8000);
                     let col_writer = row_group_writer.next_column().unwrap().unwrap();
                     col_writer.close().unwrap();
                     row_group_writer.close().unwrap();
