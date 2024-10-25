@@ -20,14 +20,6 @@
 use std::collections::VecDeque;
 use std::sync::Arc;
 
-use arrow_array::cast::AsArray;
-use arrow_array::Array;
-use arrow_array::{RecordBatch, RecordBatchReader};
-use arrow_schema::{ArrowError, DataType as ArrowType, Schema, SchemaRef};
-use arrow_select::filter::prep_null_mask_filter;
-pub use filter::{ArrowPredicate, ArrowPredicateFn, RowFilter};
-pub use selection::{RowSelection, RowSelector};
-
 pub use crate::arrow::array_reader::RowGroups;
 use crate::arrow::array_reader::{build_array_reader, ArrayReader};
 use crate::arrow::schema::{parquet_to_arrow_schema_and_fields, ParquetField};
@@ -37,6 +29,13 @@ use crate::errors::{ParquetError, Result};
 use crate::file::metadata::{ParquetMetaData, ParquetMetaDataReader};
 use crate::file::reader::{ChunkReader, SerializedPageReader};
 use crate::schema::types::SchemaDescriptor;
+use arrow_array::{cast::AsArray, Array, RecordBatch, RecordBatchReader};
+use arrow_schema::{ArrowError, DataType as ArrowType, Schema, SchemaRef};
+use arrow_select::filter::prep_null_mask_filter;
+#[cfg(feature = "experimental")]
+pub use boolean_selection::BooleanRowSelection;
+pub use filter::{ArrowPredicate, ArrowPredicateFn, RowFilter};
+pub use selection::{RowSelection, RowSelector};
 
 #[cfg(feature = "experimental")]
 mod boolean_selection;

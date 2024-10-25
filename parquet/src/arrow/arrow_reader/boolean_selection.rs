@@ -152,9 +152,9 @@ impl BooleanRowSelection {
             return self.intersection(other);
         }
 
-        let mut buffer = MutableBuffer::from_len_zeroed(self.len());
-        buffer.copy_from_slice(self.selector.values());
-        let mut builder = BooleanBufferBuilder::new_from_buffer(buffer, self.len());
+        let mut buffer = MutableBuffer::from_len_zeroed(self.selector.inner().len());
+        buffer.copy_from_slice(self.selector.inner().as_slice());
+        let mut builder = BooleanBufferBuilder::new_from_buffer(buffer, self.selector.len());
 
         // Create iterators for 'self' and 'other' bits
         let mut other_bits = other.selector.iter();
