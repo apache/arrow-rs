@@ -1223,8 +1223,8 @@ mod tests {
         let reader = SerializedFileReader::new_with_options(test_file, read_options)?;
         let metadata = reader.metadata();
         assert_eq!(metadata.num_row_groups(), 0);
-        assert_eq!(metadata.column_index().unwrap().len(), 0);
-        assert_eq!(metadata.offset_index().unwrap().len(), 0);
+        assert!(metadata.column_index().is_none());
+        assert!(metadata.offset_index().is_none());
 
         // false, true predicate
         let test_file = get_test_file("alltypes_tiny_pages.parquet");
@@ -1236,8 +1236,8 @@ mod tests {
         let reader = SerializedFileReader::new_with_options(test_file, read_options)?;
         let metadata = reader.metadata();
         assert_eq!(metadata.num_row_groups(), 0);
-        assert_eq!(metadata.column_index().unwrap().len(), 0);
-        assert_eq!(metadata.offset_index().unwrap().len(), 0);
+        assert!(metadata.column_index().is_none());
+        assert!(metadata.offset_index().is_none());
 
         // false, false predicate
         let test_file = get_test_file("alltypes_tiny_pages.parquet");
@@ -1249,8 +1249,8 @@ mod tests {
         let reader = SerializedFileReader::new_with_options(test_file, read_options)?;
         let metadata = reader.metadata();
         assert_eq!(metadata.num_row_groups(), 0);
-        assert_eq!(metadata.column_index().unwrap().len(), 0);
-        assert_eq!(metadata.offset_index().unwrap().len(), 0);
+        assert!(metadata.column_index().is_none());
+        assert!(metadata.offset_index().is_none());
         Ok(())
     }
 

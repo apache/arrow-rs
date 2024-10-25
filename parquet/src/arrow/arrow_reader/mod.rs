@@ -3584,9 +3584,7 @@ mod tests {
             .unwrap();
             // Although `Vec<Vec<PageLoacation>>` of each row group is empty,
             // we should read the file successfully.
-            // FIXME: this test will fail when metadata parsing returns `None` for missing page
-            // indexes. https://github.com/apache/arrow-rs/issues/6447
-            assert!(builder.metadata().offset_index().unwrap()[0].is_empty());
+            assert!(builder.metadata().offset_index().is_none());
             let reader = builder.build().unwrap();
             let batches = reader.collect::<Result<Vec<_>, _>>().unwrap();
             assert_eq!(batches.len(), 1);

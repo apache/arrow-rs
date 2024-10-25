@@ -923,7 +923,6 @@ mod tests {
     use crate::arrow::schema::parquet_to_arrow_schema_and_fields;
     use crate::arrow::ArrowWriter;
     use crate::file::metadata::ParquetMetaDataReader;
-    use crate::file::page_index::index_reader;
     use crate::file::properties::WriterProperties;
     use arrow::compute::kernels::cmp::eq;
     use arrow::error::Result as ArrowResult;
@@ -1561,12 +1560,11 @@ mod tests {
         let data = Bytes::from(std::fs::read(path).unwrap());
 
         let metadata = ParquetMetaDataReader::new()
+            .with_page_indexes(true)
             .parse_and_finish(&data)
             .unwrap();
 
-        let offset_index =
-            index_reader::read_offset_indexes(&data, metadata.row_group(0).columns())
-                .expect("reading offset index");
+        let offset_index = metadata.offset_index().expect("reading offset index")[0].clone();
 
         let mut metadata_builder = metadata.into_builder();
         let mut row_groups = metadata_builder.take_row_groups();
