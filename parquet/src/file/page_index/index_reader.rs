@@ -43,8 +43,7 @@ pub(crate) fn acc_range(a: Option<Range<usize>>, b: Option<Range<usize>>) -> Opt
 ///
 /// Returns a vector of `index[column_number]`.
 ///
-/// Returns an empty vector if this row group does not contain a
-/// [`ColumnIndex`].
+/// Returns `None` if this row group does not contain a [`ColumnIndex`].
 ///
 /// See [Page Index Documentation] for more details.
 ///
@@ -119,8 +118,7 @@ pub fn read_pages_locations<R: ChunkReader>(
 ///
 /// Returns a vector of `offset_index[column_number]`.
 ///
-/// Returns an empty vector if this row group does not contain an
-/// [`OffsetIndex`].
+/// Returns `None` if this row group does not contain an [`OffsetIndex`].
 ///
 /// See [Page Index Documentation] for more details.
 ///
