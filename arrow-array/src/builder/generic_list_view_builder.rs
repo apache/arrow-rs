@@ -687,6 +687,7 @@ mod tests {
     #[should_panic(
         expected = "Non-nullable field of ListViewArray \\\"item\\\" cannot contain nulls"
     )]
+    // If a non-nullable type is declared but a null value is used, it will be intercepted by the null check.
     fn test_checks_nullability() {
         let field = Arc::new(Field::new("item", DataType::Int32, false));
         let mut builder = ListViewBuilder::new(Int32Builder::new()).with_field(field.clone());
@@ -696,6 +697,7 @@ mod tests {
 
     #[test]
     #[should_panic(expected = "ListViewArray expected data type Int64 got Int32")]
+    // If the declared type does not match the actual appended type, it will be intercepted by type checking in the finish function.
     fn test_checks_data_type() {
         let field = Arc::new(Field::new("item", DataType::Int64, false));
         let mut builder = ListViewBuilder::new(Int32Builder::new()).with_field(field.clone());
