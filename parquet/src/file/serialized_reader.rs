@@ -1340,13 +1340,15 @@ mod tests {
         let columns = metadata.row_group(0).columns();
         let reversed: Vec<_> = columns.iter().cloned().rev().collect();
 
-        let a = read_columns_indexes(&test_file, columns).unwrap();
-        let mut b = read_columns_indexes(&test_file, &reversed).unwrap();
+        let a = read_columns_indexes(&test_file, columns).unwrap().unwrap();
+        let mut b = read_columns_indexes(&test_file, &reversed)
+            .unwrap()
+            .unwrap();
         b.reverse();
         assert_eq!(a, b);
 
-        let a = read_offset_indexes(&test_file, columns).unwrap();
-        let mut b = read_offset_indexes(&test_file, &reversed).unwrap();
+        let a = read_offset_indexes(&test_file, columns).unwrap().unwrap();
+        let mut b = read_offset_indexes(&test_file, &reversed).unwrap().unwrap();
         b.reverse();
         assert_eq!(a, b);
     }

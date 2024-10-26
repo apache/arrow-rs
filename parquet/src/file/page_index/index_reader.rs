@@ -52,26 +52,29 @@ pub(crate) fn acc_range(a: Option<Range<usize>>, b: Option<Range<usize>>) -> Opt
 pub fn read_columns_indexes<R: ChunkReader>(
     reader: &R,
     chunks: &[ColumnChunkMetaData],
-) -> Result<Vec<Index>, ParquetError> {
+) -> Result<Option<Vec<Index>>, ParquetError> {
     let fetch = chunks
         .iter()
         .fold(None, |range, c| acc_range(range, c.column_index_range()));
 
     let fetch = match fetch {
         Some(r) => r,
-        None => return Ok(vec![Index::NONE; chunks.len()]),
+        None => return Ok(None),
     };
 
     let bytes = reader.get_bytes(fetch.start as _, fetch.end - fetch.start)?;
     let get = |r: Range<usize>| &bytes[(r.start - fetch.start)..(r.end - fetch.start)];
 
-    chunks
-        .iter()
-        .map(|c| match c.column_index_range() {
-            Some(r) => decode_column_index(get(r), c.column_type()),
-            None => Ok(Index::NONE),
-        })
-        .collect()
+    Some(
+        chunks
+            .iter()
+            .map(|c| match c.column_index_range() {
+                Some(r) => decode_column_index(get(r), c.column_type()),
+                None => Ok(Index::NONE),
+            })
+            .collect(),
+    )
+    .transpose()
 }
 
 /// Reads [`OffsetIndex`],  per-page [`PageLocation`] for all columns of a row
@@ -125,26 +128,29 @@ pub fn read_pages_locations<R: ChunkReader>(
 pub fn read_offset_indexes<R: ChunkReader>(
     reader: &R,
     chunks: &[ColumnChunkMetaData],
-) -> Result<Vec<OffsetIndexMetaData>, ParquetError> {
+) -> Result<Option<Vec<OffsetIndexMetaData>>, ParquetError> {
     let fetch = chunks
         .iter()
         .fold(None, |range, c| acc_range(range, c.offset_index_range()));
 
     let fetch = match fetch {
         Some(r) => r,
-        None => return Ok(vec![]),
+        None => return Ok(None),
     };
 
     let bytes = reader.get_bytes(fetch.start as _, fetch.end - fetch.start)?;
     let get = |r: Range<usize>| &bytes[(r.start - fetch.start)..(r.end - fetch.start)];
 
-    chunks
-        .iter()
-        .map(|c| match c.offset_index_range() {
-            Some(r) => decode_offset_index(get(r)),
-            None => Err(general_err!("missing offset index")),
-        })
-        .collect()
+    Some(
+        chunks
+            .iter()
+            .map(|c| match c.offset_index_range() {
+                Some(r) => decode_offset_index(get(r)),
+                None => Err(general_err!("missing offset index")),
+            })
+            .collect(),
+    )
+    .transpose()
 }
 
 pub(crate) fn decode_offset_index(data: &[u8]) -> Result<OffsetIndexMetaData, ParquetError> {
