@@ -53,8 +53,8 @@ use num::{One, Zero};
 /// Note that the semantics of this kernel ("take" elements) is reflected on the output
 /// values. The corresponding elements in the output array are the elements in the input
 /// array at the indices specified in the indices array. This kernel, similar to other
-/// kernels in this crate, does not guarantee the physical memory layout of the output.
-/// It could possibly be a slice of the input array, or a copy of the input array.
+/// kernels in this crate, does not guarantee that it creates new buffers or takes/reuses
+/// existing buffers from the input arrays.
 ///
 /// # Errors
 /// This function errors whenever:
