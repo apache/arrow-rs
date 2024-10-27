@@ -72,6 +72,8 @@ pub struct ArrowReaderBuilder<T> {
     pub(crate) limit: Option<usize>,
 
     pub(crate) offset: Option<usize>,
+
+    pub(crate) prefetch: bool,
 }
 
 impl<T> ArrowReaderBuilder<T> {
@@ -88,6 +90,7 @@ impl<T> ArrowReaderBuilder<T> {
             selection: None,
             limit: None,
             offset: None,
+            prefetch: false,
         }
     }
 
