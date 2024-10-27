@@ -50,6 +50,12 @@ use num::{One, Zero};
 ///
 /// For selecting values by index from multiple arrays see [`crate::interleave`]
 ///
+/// Note that the semantics of this kernel ("take" elements) is reflected on the output
+/// values. The corresponding elements in the output array are the elements in the input
+/// array at the indices specified in the indices array. This kernel, similar to other
+/// kernels in this crate, does not guarantee the physical memory layout of the output.
+/// It could possibly be a slice of the input array, or a copy of the input array.
+///
 /// # Errors
 /// This function errors whenever:
 /// * An index cannot be casted to `usize` (typically 32 bit architectures)
