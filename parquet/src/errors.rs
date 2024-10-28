@@ -27,6 +27,7 @@ use arrow_schema::ArrowError;
 // Note: we don't implement PartialEq as the semantics for the
 // external variant are not well defined (#4469)
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum ParquetError {
     /// General Parquet error.
     /// Returned when code violates normal workflow of working with Parquet files.
