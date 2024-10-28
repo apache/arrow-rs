@@ -48,7 +48,8 @@ pub enum ParquetError {
     IndexOutOfBound(usize, usize),
     /// An external error variant
     External(Box<dyn Error + Send + Sync>),
-    /// Returned when a function needs more data to complete properly.
+    /// Returned when a function needs more data to complete properly. The `usize` field indicates
+    /// the total number of bytes required, not the number of additional bytes.
     NeedMoreData(usize),
 }
 

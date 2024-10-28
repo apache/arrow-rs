@@ -179,7 +179,9 @@ impl ParquetMetaDataReader {
     /// # Errors
     ///
     /// This function will return [`ParquetError::NeedMoreData`] in the event `reader` does not
-    /// provide enough data to fully parse the metadata (see example below).
+    /// provide enough data to fully parse the metadata (see example below). The returned error
+    /// will be populated with a `usize` field indicating the number of bytes required from the
+    /// tail of the file to completely parse the requested metadata.
     ///
     /// Other errors returned include [`ParquetError::General`] and [`ParquetError::EOF`].
     ///
@@ -192,15 +194,51 @@ impl ParquetMetaDataReader {
     /// # fn open_parquet_file(path: &str) -> std::fs::File { unimplemented!(); }
     /// let file = open_parquet_file("some_path.parquet");
     /// let len = file.len() as usize;
-    /// let bytes = get_bytes(&file, 1000..len);
+    /// // Speculatively read 1 kilobyte from the end of the file
+    /// let bytes = get_bytes(&file, len - 1024..len);
     /// let mut reader = ParquetMetaDataReader::new().with_page_indexes(true);
     /// match reader.try_parse_sized(&bytes, len) {
     ///     Ok(_) => (),
     ///     Err(ParquetError::NeedMoreData(needed)) => {
+    ///         // Read the needed number of bytes from the end of the file
     ///         let bytes = get_bytes(&file, len - needed..len);
     ///         reader.try_parse_sized(&bytes, len).unwrap();
     ///     }
     ///     _ => panic!("unexpected error")
+    /// }
+    /// let metadata = reader.finish().unwrap();
+    /// ```
+    ///
+    /// Note that it is possible for the file metadata to be completely read, but there are
+    /// insufficient bytes available to read the page indexes. [`Self::has_metadata()`] can be used
+    /// to test for this. In the event the file metadata is present, re-parsing of the file
+    /// metadata can be skipped by using [`Self::read_page_indexes_sized()`], as shown below.
+    /// ```no_run
+    /// # use parquet::file::metadata::ParquetMetaDataReader;
+    /// # use parquet::errors::ParquetError;
+    /// # use crate::parquet::file::reader::Length;
+    /// # fn get_bytes(file: &std::fs::File, range: std::ops::Range<usize>) -> bytes::Bytes { unimplemented!(); }
+    /// # fn open_parquet_file(path: &str) -> std::fs::File { unimplemented!(); }
+    /// let file = open_parquet_file("some_path.parquet");
+    /// let len = file.len() as usize;
+    /// // Speculatively read 1 kilobyte from the end of the file
+    /// let mut bytes = get_bytes(&file, len - 1024..len);
+    /// let mut reader = ParquetMetaDataReader::new().with_page_indexes(true);
+    /// // Loop until `bytes` is large enough
+    /// loop {
+    ///     match reader.try_parse_sized(&bytes, len) {
+    ///         Ok(_) => break,
+    ///         Err(ParquetError::NeedMoreData(needed)) => {
+    ///             // Read the needed number of bytes from the end of the file
+    ///             bytes = get_bytes(&file, len - needed..len);
+    ///             // If file metadata was read only read page indexes, otherwise continue loop
+    ///             if reader.has_metadata() {
+    ///                 reader.read_page_indexes_sized(&bytes, len);
+    ///                 break;
+    ///             }
+    ///         }
+    ///         _ => panic!("unexpected error")
+    ///     }
     /// }
     /// let metadata = reader.finish().unwrap();
     /// ```
@@ -241,7 +279,8 @@ impl ParquetMetaDataReader {
     /// Read the page index structures when a [`ParquetMetaData`] has already been obtained.
     /// This variant is used when `reader` cannot access the entire Parquet file (e.g. it is
     /// a [`Bytes`] struct containing the tail of the file).
-    /// See [`Self::new_with_metadata()`] and [`Self::has_metadata()`].
+    /// See [`Self::new_with_metadata()`] and [`Self::has_metadata()`]. Like
+    /// [`Self::try_parse_sized()`] this function may return [`ParquetError::NeedMoreData`].
     pub fn read_page_indexes_sized<R: ChunkReader>(
         &mut self,
         reader: &R,
