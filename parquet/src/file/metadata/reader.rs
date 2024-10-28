@@ -829,6 +829,26 @@ mod tests {
             _ => panic!("unexpected error"),
         };
 
+        // not enough for file metadata, but keep trying until page indexes are read
+        let mut reader = ParquetMetaDataReader::new().with_page_indexes(true);
+        let mut bytes = bytes_for_range(452505..len);
+        loop {
+            match reader.try_parse_sized(&bytes, len) {
+                Ok(_) => break,
+                Err(ParquetError::NeedMoreData(needed)) => {
+                    bytes = bytes_for_range(len - needed..len);
+                    if reader.has_metadata() {
+                        reader.read_page_indexes_sized(&bytes, len).unwrap();
+                        break;
+                    }
+                }
+                _ => panic!("unexpected error"),
+            }
+        }
+        let metadata = reader.finish().unwrap();
+        assert!(metadata.column_index.is_some());
+        assert!(metadata.offset_index.is_some());
+
         // not enough for page index but lie about file size
         let bytes = bytes_for_range(323584..len);
         let reader_result = reader.try_parse_sized(&bytes, len - 323584).unwrap_err();
