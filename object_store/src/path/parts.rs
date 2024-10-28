@@ -22,7 +22,7 @@ use crate::path::DELIMITER_BYTE;
 use snafu::Snafu;
 
 /// Error returned by [`PathPart::parse`]
-#[derive(Debug, Snafu)]
+#[derive(Debug, Clone, Snafu)]
 #[snafu(display(
     "Encountered illegal character sequence \"{}\" whilst parsing path segment \"{}\"",
     illegal,
