@@ -75,7 +75,7 @@ where
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(feature = "fs", not(target_arch = "wasm32")))]
 /// Takes a function and spawns it to a tokio blocking pool if available
 pub(crate) async fn maybe_spawn_blocking<F, T>(f: F) -> Result<T>
 where
