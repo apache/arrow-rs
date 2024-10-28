@@ -38,7 +38,7 @@ arrow-array = { workspace = true }
 arrow-buffer = { workspace = true }
 arrow-data = { workspace = true }
 arrow-schema = { workspace = true }
-flatbuffers = { default-features = false, git = "https://github.com/bkietz/flatbuffers.git", branch = "push-alignment-for-structs" }
+flatbuffers = { default-features = false, git = "https://github.com/google/flatbuffers.git", rev = "49061f8c7c99363eeea25c5e4337ebb499928467" }
 lz4_flex = { version = "0.11", default-features = false, features = ["std", "frame"], optional = true }
 zstd = { version = "0.13.0", default-features = false, optional = true }
 
