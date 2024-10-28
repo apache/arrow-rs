@@ -50,11 +50,9 @@ use num::{One, Zero};
 ///
 /// For selecting values by index from multiple arrays see [`crate::interleave`]
 ///
-/// Note that the semantics of this kernel ("take" elements) is reflected on the output
-/// values. The corresponding elements in the output array are the elements in the input
-/// array at the indices specified in the indices array. This kernel, similar to other
-/// kernels in this crate, does not guarantee that it creates new buffers or takes/reuses
-/// existing buffers from the input arrays.
+/// Note that this kernel, similar to other kernels in this crate,
+/// will avoid allocating where not necessary. Consequently
+/// the returned array may share buffers with the inputs
 ///
 /// # Errors
 /// This function errors whenever:
