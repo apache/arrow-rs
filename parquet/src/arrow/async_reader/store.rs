@@ -274,6 +274,7 @@ mod tests {
         tokio::runtime::Handle::current().spawn_blocking(move || drop(rt));
     }
 
+    /// Unit test that `ParquetObjectReader::spawn`spawns on the provided runtime
     #[tokio::test]
     async fn test_runtime_thread_id_different() {
         let rt = tokio::runtime::Builder::new_multi_thread()
