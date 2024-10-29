@@ -143,12 +143,7 @@ impl TreeBuilder {
                 if curr_def_level != 1 || curr_rep_level != 1 {
                     return Err(ParquetError::General(format!("Top level REPEATED primitve field {} should have definition and repetition levels of 1", field.name())));
                 }
-                Reader::RepeatedReader(
-                    field,
-                    0,
-                    0,
-                    Box::new(reader),
-                )
+                Reader::RepeatedReader(field, 0, 0, Box::new(reader))
             } else {
                 reader
             }
