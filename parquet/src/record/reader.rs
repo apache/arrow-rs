@@ -138,7 +138,20 @@ impl TreeBuilder {
                 .column_descr_ptr();
             let col_reader = row_group_reader.get_column_reader(orig_index)?;
             let column = TripletIter::new(col_descr, col_reader, self.batch_size);
-            Reader::PrimitiveReader(field, Box::new(column))
+            let reader = Reader::PrimitiveReader(field.clone(), Box::new(column));
+            if repetition == Repetition::REPEATED && path.len() == 1 {
+                if curr_def_level != 1 || curr_rep_level != 1 {
+                    return Err(ParquetError::General(format!("Top level REPEATED primitve field {} should have definition and repetition levels of 1", field.name())));
+                }
+                Reader::RepeatedReader(
+                    field,
+                    0,
+                    0,
+                    Box::new(reader),
+                )
+            } else {
+                reader
+            }
         } else {
             match field.get_basic_info().converted_type() {
                 // List types
