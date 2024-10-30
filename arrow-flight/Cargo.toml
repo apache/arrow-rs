@@ -65,7 +65,7 @@ flight-sql-experimental = ["arrow-arith", "arrow-data", "arrow-ord", "arrow-row"
 tls = ["tonic/tls"]
 
 # Enable CLI tools
-cli = ["anyhow", "arrow-cast/prettyprint", "clap", "tracing-log", "tracing-subscriber", "tonic/tls-webpki-roots"]
+cli = ["anyhow", "arrow-array/chrono-tz", "arrow-cast/prettyprint", "clap", "tracing-log", "tracing-subscriber", "tonic/tls-webpki-roots"]
 
 [dev-dependencies]
 arrow-cast = { workspace = true, features = ["prettyprint"] }

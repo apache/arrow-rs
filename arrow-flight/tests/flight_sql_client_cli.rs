@@ -20,7 +20,7 @@ mod common;
 use std::{pin::Pin, sync::Arc};
 
 use crate::common::fixture::TestFixture;
-use arrow_array::{ArrayRef, Int64Array, RecordBatch, StringArray};
+use arrow_array::{ArrayRef, Int64Array, RecordBatch, StringArray, TimestampNanosecondArray};
 use arrow_flight::{
     decode::FlightRecordBatchStream,
     encode::FlightDataEncoderBuilder,
@@ -37,7 +37,7 @@ use arrow_flight::{
     HandshakeResponse, IpcMessage, SchemaAsIpc, Ticket,
 };
 use arrow_ipc::writer::IpcWriteOptions;
-use arrow_schema::{ArrowError, DataType, Field, Schema};
+use arrow_schema::{ArrowError, DataType, Field, Schema, TimeUnit};
 use assert_cmd::Command;
 use bytes::Bytes;
 use futures::{Stream, TryStreamExt};
@@ -77,13 +77,13 @@ async fn test_simple() {
 
     assert_eq!(
         std::str::from_utf8(&stdout).unwrap().trim(),
-        "+--------------+-----------+\
-        \n| field_string | field_int |\
-        \n+--------------+-----------+\
-        \n| Hello        | 42        |\
-        \n| lovely       |           |\
-        \n| FlightSQL!   | 1337      |\
-        \n+--------------+-----------+",
+        "+--------------+-----------+---------------------------+-----------------------------+\
+        \n| field_string | field_int | field_timestamp_nano_notz | field_timestamp_nano_berlin |\
+        \n+--------------+-----------+---------------------------+-----------------------------+\
+        \n| Hello        | 42        |                           |                             |\
+        \n| lovely       |           | 1970-01-01T00:00:00       | 1970-01-01T01:00:00+01:00   |\
+        \n| FlightSQL!   | 1337      | 2024-10-30T11:36:57       | 2024-10-30T12:36:57+01:00   |\
+        \n+--------------+-----------+---------------------------+-----------------------------+",
     );
 }
 
@@ -321,13 +321,13 @@ async fn test_do_put_prepared_statement(test_server: FlightSqlServiceImpl) {
 
     assert_eq!(
         std::str::from_utf8(&stdout).unwrap().trim(),
-        "+--------------+-----------+\
-        \n| field_string | field_int |\
-        \n+--------------+-----------+\
-        \n| Hello        | 42        |\
-        \n| lovely       |           |\
-        \n| FlightSQL!   | 1337      |\
-        \n+--------------+-----------+",
+        "+--------------+-----------+---------------------------+-----------------------------+\
+        \n| field_string | field_int | field_timestamp_nano_notz | field_timestamp_nano_berlin |\
+        \n+--------------+-----------+---------------------------+-----------------------------+\
+        \n| Hello        | 42        |                           |                             |\
+        \n| lovely       |           | 1970-01-01T00:00:00       | 1970-01-01T01:00:00+01:00   |\
+        \n| FlightSQL!   | 1337      | 2024-10-30T11:36:57       | 2024-10-30T12:36:57+01:00   |\
+        \n+--------------+-----------+---------------------------+-----------------------------+",
     );
 }
 
@@ -371,28 +371,46 @@ impl FlightSqlServiceImpl {
         FlightServiceServer::new(self.clone())
     }
 
-    fn fake_result() -> Result<RecordBatch, ArrowError> {
-        let schema = Schema::new(vec![
+    fn schema() -> Schema {
+        Schema::new(vec![
             Field::new("field_string", DataType::Utf8, false),
             Field::new("field_int", DataType::Int64, true),
-        ]);
+            Field::new(
+                "field_timestamp_nano_notz",
+                DataType::Timestamp(TimeUnit::Nanosecond, None),
+                true,
+            ),
+            Field::new(
+                "field_timestamp_nano_berlin",
+                DataType::Timestamp(TimeUnit::Nanosecond, Some(Arc::from("Europe/Berlin"))),
+                true,
+            ),
+        ])
+    }
+
+    fn fake_result() -> Result<RecordBatch, ArrowError> {
+        let schema = Self::schema();
 
         let string_array = StringArray::from(vec!["Hello", "lovely", "FlightSQL!"]);
         let int_array = Int64Array::from(vec![Some(42), None, Some(1337)]);
+        let timestamp_array =
+            TimestampNanosecondArray::from(vec![None, Some(0), Some(1730288217000000000)]);
+        let timestamp_ts_array = timestamp_array
+            .clone()
+            .with_timezone(Arc::from("Europe/Berlin"));
 
         let cols = vec![
             Arc::new(string_array) as ArrayRef,
             Arc::new(int_array) as ArrayRef,
+            Arc::new(timestamp_array) as ArrayRef,
+            Arc::new(timestamp_ts_array) as ArrayRef,
         ];
         RecordBatch::try_new(Arc::new(schema), cols)
     }
 
     fn create_fake_prepared_stmt() -> Result<ActionCreatePreparedStatementResult, ArrowError> {
         let handle = PREPARED_STATEMENT_HANDLE.to_string();
-        let schema = Schema::new(vec![
-            Field::new("field_string", DataType::Utf8, false),
-            Field::new("field_int", DataType::Int64, true),
-        ]);
+        let schema = Self::schema();
 
         let parameter_schema = Schema::new(vec![
             Field::new("$1", DataType::Utf8, false),
