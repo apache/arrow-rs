@@ -288,7 +288,7 @@ impl<T: ByteArrayType, V: AsRef<T::Native>> Extend<Option<V>> for GenericByteBui
 /// ```
 pub type GenericStringBuilder<O> = GenericByteBuilder<GenericStringType<O>>;
 
-impl<O: OffsetSizeTrait> core::fmt::Write for GenericStringBuilder<O> {
+impl<O: OffsetSizeTrait> std::fmt::Write for GenericStringBuilder<O> {
     fn write_str(&mut self, s: &str) -> std::fmt::Result {
         self.value_builder.append_slice(s.as_bytes());
         Ok(())
@@ -358,8 +358,8 @@ mod tests {
     use super::*;
     use crate::array::Array;
     use crate::GenericStringArray;
-    use std::fmt::Write as FmtWrite;
-    use std::io::Write as IoWrite;
+    use std::fmt::Write as _;
+    use std::io::Write as _;
 
     fn _test_generic_binary_builder<O: OffsetSizeTrait>() {
         let mut builder = GenericBinaryBuilder::<O>::new();
