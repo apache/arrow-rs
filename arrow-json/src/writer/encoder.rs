@@ -80,6 +80,10 @@ fn make_encoder_impl<'a>(
             let array = array.as_string::<i64>();
             (Box::new(StringEncoder(array)) as _, array.nulls().cloned())
         }
+        DataType::Utf8View => {
+            let array = array.as_string_view();
+            (Box::new(StringViewEncoder(array)) as _, array.nulls().cloned())
+        }
         DataType::List(_) => {
             let array = array.as_list::<i32>();
             (Box::new(ListEncoder::try_new(array, options)?) as _, array.nulls().cloned())
@@ -311,6 +315,14 @@ impl<'a> Encoder for BooleanEncoder<'a> {
 struct StringEncoder<'a, O: OffsetSizeTrait>(&'a GenericStringArray<O>);
 
 impl<'a, O: OffsetSizeTrait> Encoder for StringEncoder<'a, O> {
+    fn encode(&mut self, idx: usize, out: &mut Vec<u8>) {
+        encode_string(self.0.value(idx), out);
+    }
+}
+
+struct StringViewEncoder<'a>(&'a StringViewArray);
+
+impl Encoder for StringViewEncoder<'_> {
     fn encode(&mut self, idx: usize, out: &mut Vec<u8>) {
         encode_string(self.0.value(idx), out);
     }
