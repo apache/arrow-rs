@@ -22,7 +22,6 @@ use arrow_buffer::NullBufferBuilder;
 use arrow_buffer::{ArrowNativeType, Buffer, MutableBuffer};
 use arrow_data::ArrayDataBuilder;
 use std::any::Any;
-use std::fmt::Write;
 use std::sync::Arc;
 
 /// Builder for [`GenericByteArray`]
@@ -289,7 +288,7 @@ impl<T: ByteArrayType, V: AsRef<T::Native>> Extend<Option<V>> for GenericByteBui
 /// ```
 pub type GenericStringBuilder<O> = GenericByteBuilder<GenericStringType<O>>;
 
-impl<O: OffsetSizeTrait> Write for GenericStringBuilder<O> {
+impl<O: OffsetSizeTrait> core::fmt::Write for GenericStringBuilder<O> {
     fn write_str(&mut self, s: &str) -> std::fmt::Result {
         self.value_builder.append_slice(s.as_bytes());
         Ok(())
@@ -321,18 +320,19 @@ impl<O: OffsetSizeTrait> Write for GenericStringBuilder<O> {
 /// # Example incrementally writing bytes with `write_bytes`
 ///
 /// ```
+/// # use std::io::Write;
 /// # use arrow_array::builder::GenericBinaryBuilder;
 /// let mut builder = GenericBinaryBuilder::<i32>::new();
 ///
 /// // Write data in multiple `write_bytes` calls
-/// builder.write_bytes(b"foo");
-/// builder.write_bytes(b"bar");
+/// write!(builder, "foo").unwrap();
+/// write!(builder, "bar").unwrap();
 /// // The next call to append_value finishes the current string
 /// // including all previously written strings.
 /// builder.append_value("baz");
 ///
 /// // Write second value with a single write call
-/// builder.write_bytes(b"v2");
+/// write!(builder, "v2").unwrap();
 /// // finish the value by calling append_value with an empty string
 /// builder.append_value("");
 ///
@@ -342,10 +342,14 @@ impl<O: OffsetSizeTrait> Write for GenericStringBuilder<O> {
 /// ```
 pub type GenericBinaryBuilder<O> = GenericByteBuilder<GenericBinaryType<O>>;
 
-impl<O: OffsetSizeTrait> GenericBinaryBuilder<O> {
-    /// Writes a bytes slice into this builder.
-    pub fn write_bytes(&mut self, bs: &[u8]) {
+impl<O: OffsetSizeTrait> std::io::Write for GenericBinaryBuilder<O> {
+    fn write(&mut self, bs: &[u8]) -> std::io::Result<usize> {
         self.value_builder.append_slice(bs);
+        Ok(bs.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
     }
 }
 
