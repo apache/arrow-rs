@@ -356,10 +356,10 @@ impl<O: OffsetSizeTrait> std::io::Write for GenericBinaryBuilder<O> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fmt::Write as FmtWrite;
-    use std::io::Write as IoWrite;
     use crate::array::Array;
     use crate::GenericStringArray;
+    use std::fmt::Write as FmtWrite;
+    use std::io::Write as IoWrite;
 
     fn _test_generic_binary_builder<O: OffsetSizeTrait>() {
         let mut builder = GenericBinaryBuilder::<O>::new();
@@ -588,6 +588,9 @@ mod tests {
         builder.append_value("");
         let a = builder.finish();
         let r: Vec<_> = a.iter().flatten().collect();
-        assert_eq!(r, &["foo".as_bytes(), "bar\n".as_bytes(), "fizbuz".as_bytes()])
+        assert_eq!(
+            r,
+            &["foo".as_bytes(), "bar\n".as_bytes(), "fizbuz".as_bytes()]
+        )
     }
 }
