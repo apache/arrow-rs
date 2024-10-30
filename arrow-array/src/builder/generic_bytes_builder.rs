@@ -337,8 +337,8 @@ impl<O: OffsetSizeTrait> core::fmt::Write for GenericStringBuilder<O> {
 /// builder.append_value("");
 ///
 /// let array = builder.finish();
-/// assert_eq!(array.value(0), b"foobarbaz");
-/// assert_eq!(array.value(1), b"v2");
+/// assert_eq!(array.value(0), "foobarbaz".as_bytes());
+/// assert_eq!(array.value(1), "v2".as_bytes());
 /// ```
 pub type GenericBinaryBuilder<O> = GenericByteBuilder<GenericBinaryType<O>>;
 
@@ -356,6 +356,8 @@ impl<O: OffsetSizeTrait> std::io::Write for GenericBinaryBuilder<O> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fmt::Write as FmtWrite;
+    use std::io::Write as IoWrite;
     use crate::array::Array;
     use crate::GenericStringArray;
 
@@ -560,7 +562,7 @@ mod tests {
     }
 
     #[test]
-    fn test_write() {
+    fn test_write_str() {
         let mut builder = GenericStringBuilder::<i32>::new();
         write!(builder, "foo").unwrap();
         builder.append_value("");
@@ -572,5 +574,20 @@ mod tests {
         let a = builder.finish();
         let r: Vec<_> = a.iter().flatten().collect();
         assert_eq!(r, &["foo", "bar\n", "fizbuz"])
+    }
+
+    #[test]
+    fn test_write_bytes() {
+        let mut builder = GenericBinaryBuilder::<i32>::new();
+        write!(builder, "foo").unwrap();
+        builder.append_value("");
+        writeln!(builder, "bar").unwrap();
+        builder.append_value("");
+        write!(builder, "fiz").unwrap();
+        write!(builder, "buz").unwrap();
+        builder.append_value("");
+        let a = builder.finish();
+        let r: Vec<_> = a.iter().flatten().collect();
+        assert_eq!(r, &["foo".as_bytes(), "bar\n".as_bytes(), "fizbuz".as_bytes()])
     }
 }
