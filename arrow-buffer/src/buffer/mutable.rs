@@ -387,10 +387,6 @@ impl MutableBuffer {
     /// ```
     #[inline]
     pub fn extend_from_slice<T: ArrowNativeType>(&mut self, items: &[T]) {
-        if items.is_empty() {
-            return;
-        }
-
         let additional = mem::size_of_val(items);
         self.reserve(additional);
         unsafe {
