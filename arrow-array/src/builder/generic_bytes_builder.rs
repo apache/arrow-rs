@@ -287,7 +287,6 @@ impl<T: ByteArrayType, V: AsRef<T::Native>> Extend<Option<V>> for GenericByteBui
 /// assert_eq!(array.value(0), "foobarbaz");
 /// assert_eq!(array.value(1), "v2");
 /// ```
-///
 pub type GenericStringBuilder<O> = GenericByteBuilder<GenericStringType<O>>;
 
 impl<O: OffsetSizeTrait> Write for GenericStringBuilder<O> {
@@ -318,7 +317,37 @@ impl<O: OffsetSizeTrait> Write for GenericStringBuilder<O> {
 /// assert_eq!(array.value(0), b"foo");
 /// assert_eq!(array.value(1), b"\x00\x01\x02");
 /// ```
+///
+/// # Example incrementally writing bytes with `write_bytes`
+///
+/// ```
+/// # use arrow_array::builder::GenericBinaryBuilder;
+/// let mut builder = GenericBinaryBuilder::<i32>::new();
+///
+/// // Write data in multiple `write_bytes` calls
+/// builder.write_bytes(b"foo");
+/// builder.write_bytes(b"bar");
+/// // The next call to append_value finishes the current string
+/// // including all previously written strings.
+/// builder.append_value("baz");
+///
+/// // Write second value with a single write call
+/// builder.write_bytes(b"v2");
+/// // finish the value by calling append_value with an empty string
+/// builder.append_value("");
+///
+/// let array = builder.finish();
+/// assert_eq!(array.value(0), b"foobarbaz");
+/// assert_eq!(array.value(1), b"v2");
+/// ```
 pub type GenericBinaryBuilder<O> = GenericByteBuilder<GenericBinaryType<O>>;
+
+impl<O: OffsetSizeTrait> GenericBinaryBuilder<O> {
+    /// Writes a bytes slice into this builder.
+    pub fn write_bytes(&mut self, bs: &[u8]) {
+        self.value_builder.append_slice(bs);
+    }
+}
 
 #[cfg(test)]
 mod tests {
