@@ -780,7 +780,7 @@ where
                             let old_state = std::mem::replace(&mut self.state, StreamState::Init);
                             if let StreamState::Prefetch(_, f) = old_state {
                                 self.state = StreamState::Reading(f);
-                                return Poll::Pending
+                                continue
                             } else {
                                 unreachable!()
                             }
