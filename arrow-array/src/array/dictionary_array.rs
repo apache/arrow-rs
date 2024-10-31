@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::array::replace_nulls;
 use crate::builder::{PrimitiveDictionaryBuilder, StringDictionaryBuilder};
 use crate::cast::AsArray;
 use crate::iterator::ArrayIter;
@@ -728,6 +729,10 @@ impl<T: ArrowDictionaryKeyType> Array for DictionaryArray<T> {
         self.keys.nulls()
     }
 
+    fn with_nulls(self, nulls: Option<NullBuffer>) -> ArrayRef {
+        replace_nulls(self.to_data(), nulls)
+    }
+
     fn logical_nulls(&self) -> Option<NullBuffer> {
         match self.values.nulls() {
             None => self.nulls().cloned(),
@@ -860,6 +865,10 @@ impl<K: ArrowDictionaryKeyType, V: Sync> Array for TypedDictionaryArray<'_, K, V
 
     fn nulls(&self) -> Option<&NullBuffer> {
         self.dictionary.nulls()
+    }
+
+    fn with_nulls(self, nulls: Option<NullBuffer>) -> ArrayRef {
+        replace_nulls(self.to_data(), nulls)
     }
 
     fn logical_nulls(&self) -> Option<NullBuffer> {

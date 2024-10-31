@@ -22,7 +22,7 @@ use std::any::Any;
 use std::ops::Add;
 use std::sync::Arc;
 
-use crate::array::{make_array, print_long_array};
+use crate::array::{make_array, print_long_array, replace_nulls};
 use crate::iterator::GenericListViewArrayIter;
 use crate::{new_empty_array, Array, ArrayAccessor, ArrayRef, FixedSizeListArray, OffsetSizeTrait};
 
@@ -332,6 +332,10 @@ impl<OffsetSize: OffsetSizeTrait> Array for GenericListViewArray<OffsetSize> {
 
     fn nulls(&self) -> Option<&NullBuffer> {
         self.nulls.as_ref()
+    }
+
+    fn with_nulls(self, nulls: Option<NullBuffer>) -> ArrayRef {
+        replace_nulls(self.to_data(), nulls)
     }
 
     fn get_buffer_memory_size(&self) -> usize {

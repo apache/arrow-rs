@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::array::print_long_array;
+use crate::array::{print_long_array, replace_nulls};
 use crate::builder::{FixedSizeListBuilder, PrimitiveBuilder};
 use crate::iterator::FixedSizeListIter;
 use crate::{make_array, Array, ArrayAccessor, ArrayRef, ArrowPrimitiveType};
@@ -407,6 +407,10 @@ impl Array for FixedSizeListArray {
 
     fn nulls(&self) -> Option<&NullBuffer> {
         self.nulls.as_ref()
+    }
+
+    fn with_nulls(self, nulls: Option<NullBuffer>) -> ArrayRef {
+        replace_nulls(self.to_data(), nulls)
     }
 
     fn get_buffer_memory_size(&self) -> usize {

@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::array::print_long_array;
+use crate::array::{print_long_array, replace_nulls};
 use crate::builder::{BooleanBufferBuilder, BufferBuilder, PrimitiveBuilder};
 use crate::iterator::PrimitiveIter;
 use crate::temporal_conversions::{
@@ -1158,6 +1158,10 @@ impl<T: ArrowPrimitiveType> Array for PrimitiveArray<T> {
 
     fn nulls(&self) -> Option<&NullBuffer> {
         self.nulls.as_ref()
+    }
+
+    fn with_nulls(self, nulls: Option<NullBuffer>) -> ArrayRef {
+        replace_nulls(self.to_data(), nulls)
     }
 
     fn logical_null_count(&self) -> usize {

@@ -103,6 +103,8 @@ pub trait Array: std::fmt::Debug + Send + Sync {
     fn as_any(&self) -> &dyn Any;
 
     /// Returns the underlying data of this array
+    ///
+    /// See [`Self::into_data`] for a version that consumes self
     fn to_data(&self) -> ArrayData;
 
     /// Returns the underlying data of this array
@@ -195,6 +197,28 @@ pub trait Array: std::fmt::Debug + Send + Sync {
     /// To determine if each element of such an array is "logically" null,
     /// use the slower [`Array::logical_nulls`] to obtain a computed mask.
     fn nulls(&self) -> Option<&NullBuffer>;
+
+    /// Replaces the nulls of this array.
+    ///
+    /// # Panics
+    /// Panics if the length of the null buffer is not equal to the length of the array.
+    ///
+    /// # Example:
+    /// ```
+    /// # use arrow_array::{Array, Int32Array};
+    /// # use arrow_array::cast::AsArray;
+    /// # use arrow_buffer::NullBuffer;
+    /// // Create an array with values [1, null, 3, 4, 5]
+    /// let array = Int32Array::from(vec![Some(1), None, Some(3), Some(4), Some(5)]);
+    /// // Set the first, third, and fifth elements to null, others to valid
+    /// let nulls = Some(NullBuffer::from(vec![false, true, false, true, false]));
+    /// let array_with_nulls = array.with_nulls(nulls);
+    /// assert_eq!(
+    ///   array_with_nulls.as_primitive(),
+    ///   &Int32Array::from(vec![None, Some(0), None, Some(4), None]),
+    /// );
+    /// ```
+    fn with_nulls(self, nulls: Option<NullBuffer>) -> ArrayRef;
 
     /// Returns a potentially computed [`NullBuffer`] that represents the logical
     /// null values of this array, if any.
@@ -372,6 +396,10 @@ impl Array for ArrayRef {
         self.as_ref().nulls()
     }
 
+    fn with_nulls(self, nulls: Option<NullBuffer>) -> ArrayRef {
+        replace_nulls(self.to_data(), nulls)
+    }
+
     fn logical_nulls(&self) -> Option<NullBuffer> {
         self.as_ref().logical_nulls()
     }
@@ -440,6 +468,10 @@ impl<T: Array> Array for &T {
 
     fn nulls(&self) -> Option<&NullBuffer> {
         T::nulls(self)
+    }
+
+    fn with_nulls(self, nulls: Option<NullBuffer>) -> ArrayRef {
+        replace_nulls(self.to_data(), nulls)
     }
 
     fn logical_nulls(&self) -> Option<NullBuffer> {
@@ -841,6 +873,30 @@ where
         }
     }
     Ok(())
+}
+
+/// Helper function to replace the nulls in an array with a new null buffer
+///
+/// See [`Array::with_nulls`] for more information
+pub(crate) fn replace_nulls(array_data: ArrayData, nulls: Option<NullBuffer>) -> ArrayRef {
+    let Some(nulls) = nulls else {
+        return make_array(array_data);
+    };
+
+    if nulls.len() != array_data.len() {
+        panic!(
+            "Null buffer length must be equal to the array length. \
+                Expected: {}, got: {}",
+            array_data.len(),
+            nulls.len()
+        );
+    }
+
+    let data = array_data.into_builder().nulls(Some(nulls));
+
+    // SAFETY:
+    // Checked that the null buffer has the same length as the array
+    make_array(unsafe { data.build_unchecked() })
 }
 
 #[cfg(test)]

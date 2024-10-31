@@ -22,6 +22,7 @@ use arrow_buffer::{ArrowNativeType, BooleanBufferBuilder, NullBuffer, RunEndBuff
 use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::{ArrowError, DataType, Field};
 
+use crate::array::replace_nulls;
 use crate::{
     builder::StringRunBuilder,
     make_array,
@@ -338,6 +339,10 @@ impl<T: RunEndIndexType> Array for RunArray<T> {
         None
     }
 
+    fn with_nulls(self, nulls: Option<NullBuffer>) -> ArrayRef {
+        replace_nulls(self.to_data(), nulls)
+    }
+
     fn logical_nulls(&self) -> Option<NullBuffer> {
         let len = self.len();
         let nulls = self.values.logical_nulls()?;
@@ -590,6 +595,10 @@ impl<R: RunEndIndexType, V: Sync> Array for TypedRunArray<'_, R, V> {
 
     fn nulls(&self) -> Option<&NullBuffer> {
         self.run_array.nulls()
+    }
+
+    fn with_nulls(self, nulls: Option<NullBuffer>) -> ArrayRef {
+        replace_nulls(self.to_data(), nulls)
     }
 
     fn logical_nulls(&self) -> Option<NullBuffer> {

@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::array::{get_offsets, make_array, print_long_array};
+use crate::array::{get_offsets, make_array, print_long_array, replace_nulls};
 use crate::builder::{GenericListBuilder, PrimitiveBuilder};
 use crate::{
     iterator::GenericListArrayIter, new_empty_array, Array, ArrayAccessor, ArrayRef,
@@ -491,6 +491,10 @@ impl<OffsetSize: OffsetSizeTrait> Array for GenericListArray<OffsetSize> {
 
     fn nulls(&self) -> Option<&NullBuffer> {
         self.nulls.as_ref()
+    }
+
+    fn with_nulls(self, nulls: Option<NullBuffer>) -> ArrayRef {
+        replace_nulls(self.to_data(), nulls)
     }
 
     fn get_buffer_memory_size(&self) -> usize {

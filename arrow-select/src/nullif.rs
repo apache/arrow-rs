@@ -27,17 +27,16 @@ use arrow_schema::{ArrowError, DataType};
 ///
 /// Typically used to implement NULLIF.
 pub fn nullif(left: &dyn Array, right: &BooleanArray) -> Result<ArrayRef, ArrowError> {
-    let left_data = left.to_data();
-
-    if left_data.len() != right.len() {
+    if left.len() != right.len() {
         return Err(ArrowError::ComputeError(
             "Cannot perform comparison operation on arrays of different length".to_string(),
         ));
     }
-    let len = left_data.len();
+    let len = left.len();
 
-    if len == 0 || left_data.data_type() == &DataType::Null {
-        return Ok(make_array(left_data));
+    let left = make_array(left.to_data());
+    if len == 0 || left.data_type() == &DataType::Null {
+        return Ok(left);
     }
 
     // left=0 (null)   right=null       output bitmap=null
@@ -57,7 +56,7 @@ pub fn nullif(left: &dyn Array, right: &BooleanArray) -> Result<ArrayRef, ArrowE
 
     // Compute left null bitmap & !right
 
-    let (combined, null_count) = match left_data.nulls() {
+    let (combined, null_count) = match left.nulls() {
         Some(left) => {
             let mut valid_count = 0;
             let b = bitwise_bin_op_helper(
@@ -89,11 +88,8 @@ pub fn nullif(left: &dyn Array, right: &BooleanArray) -> Result<ArrayRef, ArrowE
     // Safety:
     // Counted nulls whilst computing
     let nulls = unsafe { NullBuffer::new_unchecked(combined, null_count) };
-    let data = left_data.into_builder().nulls(Some(nulls));
 
-    // SAFETY:
-    // Only altered null mask
-    Ok(make_array(unsafe { data.build_unchecked() }))
+    Ok(left.with_nulls(Some(nulls)))
 }
 
 #[cfg(test)]

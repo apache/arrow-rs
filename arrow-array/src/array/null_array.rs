@@ -17,6 +17,7 @@
 
 //! Contains the `NullArray` type.
 
+use crate::array::replace_nulls;
 use crate::builder::NullBuilder;
 use crate::{Array, ArrayRef};
 use arrow_buffer::buffer::NullBuffer;
@@ -111,6 +112,10 @@ impl Array for NullArray {
 
     fn nulls(&self) -> Option<&NullBuffer> {
         None
+    }
+
+    fn with_nulls(self, nulls: Option<NullBuffer>) -> ArrayRef {
+        replace_nulls(self.to_data(), nulls)
     }
 
     fn logical_nulls(&self) -> Option<NullBuffer> {

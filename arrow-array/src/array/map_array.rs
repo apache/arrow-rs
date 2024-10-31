@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::array::{get_offsets, print_long_array};
+use crate::array::{get_offsets, print_long_array, replace_nulls};
 use crate::iterator::MapArrayIter;
 use crate::{make_array, Array, ArrayAccessor, ArrayRef, ListArray, StringArray, StructArray};
 use arrow_buffer::{ArrowNativeType, Buffer, NullBuffer, OffsetBuffer, ToByteSlice};
@@ -378,6 +378,10 @@ impl Array for MapArray {
 
     fn nulls(&self) -> Option<&NullBuffer> {
         self.nulls.as_ref()
+    }
+
+    fn with_nulls(self, nulls: Option<NullBuffer>) -> ArrayRef {
+        replace_nulls(self.to_data(), nulls)
     }
 
     fn get_buffer_memory_size(&self) -> usize {

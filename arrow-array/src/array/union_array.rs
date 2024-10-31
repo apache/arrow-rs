@@ -16,6 +16,7 @@
 // under the License.
 #![allow(clippy::enum_clike_unportable_variant)]
 
+use crate::array::replace_nulls;
 use crate::{make_array, Array, ArrayRef};
 use arrow_buffer::bit_chunk_iterator::{BitChunkIterator, BitChunks};
 use arrow_buffer::buffer::NullBuffer;
@@ -750,6 +751,10 @@ impl Array for UnionArray {
 
     fn nulls(&self) -> Option<&NullBuffer> {
         None
+    }
+
+    fn with_nulls(self, nulls: Option<NullBuffer>) -> ArrayRef {
+        replace_nulls(self.to_data(), nulls)
     }
 
     fn logical_nulls(&self) -> Option<NullBuffer> {
