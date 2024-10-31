@@ -408,7 +408,7 @@ impl std::fmt::Debug for StructArray {
         writeln!(f, "-- validity: ")?;
         writeln!(f, "[")?;
         for i in 0..self.len() {
-            write!(f, "  {},\n", self.is_valid(i))?;
+            writeln!(f, "  {},", if self.is_valid(i) { "valid" } else { "null" })?;
         }
         writeln!(f, "]\n[")?;
         for (child_index, name) in self.column_names().iter().enumerate() {
