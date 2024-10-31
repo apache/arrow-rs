@@ -1700,6 +1700,7 @@ mod tests {
 
     #[test]
     fn test_tree_reader_handle_primitive_repeated_fields_with_no_annotation() {
+        // In this test the REPEATED fields are primitives
         let rows = test_file_reader_rows("repeated_primitive_no_list.parquet", None).unwrap();
         let expected_rows = vec![
             row![
