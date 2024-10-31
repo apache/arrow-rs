@@ -404,7 +404,13 @@ impl From<Vec<(FieldRef, ArrayRef)>> for StructArray {
 
 impl std::fmt::Debug for StructArray {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(f, "StructArray\n[\n")?;
+        writeln!(f, "StructArray")?;
+        writeln!(f, "-- validity: ")?;
+        writeln!(f, "[")?;
+        for i in 0..self.len() {
+            write!(f, "  {},\n", self.is_valid(i))?;
+        }
+        writeln!(f, "]\n[")?;
         for (child_index, name) in self.column_names().iter().enumerate() {
             let column = self.column(child_index);
             writeln!(
