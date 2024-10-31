@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow_array::{ArrayAccessor, BooleanArray, StringViewArray};
+use arrow_array::{Array, ArrayAccessor, BooleanArray, StringViewArray};
 use arrow_schema::ArrowError;
 use memchr::memchr2;
 use memchr::memmem::Finder;
@@ -116,10 +116,17 @@ impl<'a> Predicate<'a> {
             }),
             Predicate::Contains(finder) => {
                 if let Some(string_view_array) = array.as_any().downcast_ref::<StringViewArray>() {
+                    let nulls = string_view_array.logical_nulls();
                     BooleanArray::from(
                         string_view_array
                             .bytes_iter()
-                            .map(|haystack| finder.find(haystack).is_some() != negate)
+                            .enumerate()
+                            .map(|(idx, haystack)| {
+                                if nulls.as_ref().map(|n| n.is_null(idx)).unwrap_or_default() {
+                                    return None;
+                                }
+                                Some(finder.find(haystack).is_some() != negate)
+                            })
                             .collect::<Vec<_>>(),
                     )
                 } else {
@@ -130,11 +137,16 @@ impl<'a> Predicate<'a> {
             }
             Predicate::StartsWith(v) => {
                 if let Some(string_view_array) = array.as_any().downcast_ref::<StringViewArray>() {
+                    let nulls = string_view_array.logical_nulls();
                     BooleanArray::from(
                         string_view_array
                             .prefix_bytes_iter(v.len())
-                            .map(|haystack| {
-                                equals_bytes(haystack, v.as_bytes(), equals_kernel) != negate
+                            .enumerate()
+                            .map(|(idx, haystack)| {
+                                if nulls.as_ref().map(|n| n.is_null(idx)).unwrap_or_default() {
+                                    return None;
+                                }
+                                Some(equals_bytes(haystack, v.as_bytes(), equals_kernel) != negate)
                             })
                             .collect::<Vec<_>>(),
                     )
@@ -166,11 +178,16 @@ impl<'a> Predicate<'a> {
             }
             Predicate::EndsWith(v) => {
                 if let Some(string_view_array) = array.as_any().downcast_ref::<StringViewArray>() {
+                    let nulls = string_view_array.logical_nulls();
                     BooleanArray::from(
                         string_view_array
                             .suffix_bytes_iter(v.len())
-                            .map(|haystack| {
-                                equals_bytes(haystack, v.as_bytes(), equals_kernel) != negate
+                            .enumerate()
+                            .map(|(idx, haystack)| {
+                                if nulls.as_ref().map(|n| n.is_null(idx)).unwrap_or_default() {
+                                    return None;
+                                }
+                                Some(equals_bytes(haystack, v.as_bytes(), equals_kernel) != negate)
                             })
                             .collect::<Vec<_>>(),
                     )
