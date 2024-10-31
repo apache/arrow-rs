@@ -22,10 +22,27 @@ use arrow_buffer::buffer::{bitwise_bin_op_helper, bitwise_unary_op_helper};
 use arrow_buffer::{BooleanBuffer, NullBuffer};
 use arrow_schema::{ArrowError, DataType};
 
-/// Copies original array, setting validity bit to false if a secondary comparison
-/// boolean array is set to true
+/// Returns a new array with validity bit to false if a secondary comparison
+/// boolean array is set to true.
 ///
-/// Typically used to implement NULLIF.
+/// This can be used used to implement SQL `NULLIF` or to combine a filter and a
+/// null mask (set null out an array's values if they don't pass a comparison).
+///
+/// # Use to set null filters
+/// ```
+/// # use arrow_array::{Int32Array, BooleanArray};
+/// # use arrow_array::cast::AsArray;
+/// # use arrow_array::types::Int32Type;
+/// # use arrow_select::nullif::nullif;
+/// // input is [null, 8, 1, 9]
+/// let a = Int32Array::from(vec![None, Some(8), Some(1), Some(9)]);
+/// // filter passes 8 (index 1), filters out others: [true, true, false, null]
+/// let filter = BooleanArray::from(vec![Some(true), Some(true), Some(false), None]);
+/// // nullif nulls all values that don't pass the filter, leaving only [null, 8, null, null]
+/// let filtered = nullif(&a, &filter).unwrap();
+/// let filtered: &Int32Array = filtered.as_primitive();
+/// assert_eq!(filtered, &Int32Array::from(vec![None, Some(8), None, None]));
+/// ```
 pub fn nullif(left: &dyn Array, right: &BooleanArray) -> Result<ArrayRef, ArrowError> {
     let left_data = left.to_data();
 
