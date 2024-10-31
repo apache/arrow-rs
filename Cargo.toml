@@ -94,3 +94,4 @@ arrow-string = { version = "53.2.0", path = "./arrow-string" }
 parquet = { version = "53.2.0", path = "./parquet", default-features = false }
 
 chrono = { version = "0.4.34", default-features = false, features = ["clock"] }
+simdutf8 = { version = "0.1.5" }
