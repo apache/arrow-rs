@@ -450,24 +450,27 @@ impl ArrayData {
                     result += buffer_size;
                 }
                 BufferSpec::VariableWidth => {
-                    let buffer_len: usize;
-                    match self.data_type {
+                    result += match &self.data_type {
                         DataType::Utf8 | DataType::Binary => {
                             let offsets = self.typed_offsets::<i32>()?;
-                            buffer_len = (offsets[self.len] - offsets[0] ) as usize;
+                            (offsets[self.len] - offsets[0]) as usize
                         }
                         DataType::LargeUtf8 | DataType::LargeBinary => {
                             let offsets = self.typed_offsets::<i64>()?;
-                            buffer_len = (offsets[self.len] - offsets[0]) as usize;
+                            (offsets[self.len] - offsets[0]) as usize
                         }
-                        _ => {
+                        // `FlatBufferSizeTracker::write_array_data` just writes these just as raw
+                        // buffer data as opposed to using offsets or anything
+                        DataType::BinaryView | DataType::Utf8View => self.buffers()
+                            .iter()
+                            .map(|buf| buf.len())
+                            .sum::<usize>(),
+                        dt => {
                             return Err(ArrowError::NotYetImplemented(format!(
-                            "Invalid data type for VariableWidth buffer. Expected Utf8, LargeUtf8, Binary or LargeBinary. Got {}",
-                            self.data_type
+                                "Invalid data type for VariableWidth buffer. Expected Utf8, LargeUtf8, Binary or LargeBinary. Got {dt}",
                             )))
                         }
                     };
-                    result += buffer_len;
                 }
                 BufferSpec::BitMap => {
                     let buffer_size = bit_util::ceil(self.len, 8);
