@@ -1736,7 +1736,10 @@ mod tests {
                 )
             ],
             row![
-                ("Int32_list".to_string(), Field::ListInternal(make_list(vec![]))),
+                (
+                    "Int32_list".to_string(),
+                    Field::ListInternal(make_list(vec![]))
+                ),
                 (
                     "String_list".to_string(),
                     Field::ListInternal(make_list(
