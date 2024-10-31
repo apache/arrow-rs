@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Defines maximum and minimum values for `decimal256` and `decimal128` types for varying precisions.
+//! Defines maximum and minimum values for `decimal256`, `decimal128`, `decimal64` and `decimal32` types for varying precisions.
 //!
 //! Also provides functions to validate if a given decimal value is within the valid range of the decimal type.
 
