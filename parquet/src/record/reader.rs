@@ -1719,20 +1719,20 @@ mod tests {
                 (
                     "group_of_lists".to_string(),
                     group![
-                        ((
+                        (
                             "Int32_list_in_group".to_string(),
                             Field::ListInternal(make_list(
                                 [0, 1, 2, 3].map(|i| Field::Int(i)).to_vec()
                             ))
-                        )),
-                        ((
+                        ),
+                        (
                             "String_list_in_group".to_string(),
                             Field::ListInternal(make_list(
                                 ["foo", "zero", "one", "two"]
                                     .map(|s| Field::Str(s.to_string()))
                                     .to_vec()
                             ))
-                        ))
+                        )
                     ]
                 )
             ],
@@ -1750,16 +1750,16 @@ mod tests {
                 (
                     "group_of_lists".to_string(),
                     group![
-                        ((
+                        (
                             "Int32_list_in_group".to_string(),
                             Field::ListInternal(make_list(vec![]))
-                        )),
-                        ((
+                        ),
+                        (
                             "String_list_in_group".to_string(),
                             Field::ListInternal(make_list(
                                 ["three"].map(|s| Field::Str(s.to_string())).to_vec()
                             ))
-                        ))
+                        )
                     ]
                 )
             ],
@@ -1777,16 +1777,16 @@ mod tests {
                 (
                     "group_of_lists".to_string(),
                     group![
-                        ((
+                        (
                             "Int32_list_in_group".to_string(),
                             Field::ListInternal(make_list(vec![Field::Int(4)]))
-                        )),
-                        ((
+                        ),
+                        (
                             "String_list_in_group".to_string(),
                             Field::ListInternal(make_list(
                                 ["four"].map(|s| Field::Str(s.to_string())).to_vec()
                             ))
-                        ))
+                        )
                     ]
                 )
             ],
@@ -1806,20 +1806,20 @@ mod tests {
                 (
                     "group_of_lists".to_string(),
                     group![
-                        ((
+                        (
                             "Int32_list_in_group".to_string(),
                             Field::ListInternal(make_list(
                                 [5, 6, 7, 8].map(|i| Field::Int(i)).to_vec()
                             ))
-                        )),
-                        ((
+                        ),
+                        (
                             "String_list_in_group".to_string(),
                             Field::ListInternal(make_list(
                                 ["five", "six", "seven", "eight"]
                                     .map(|s| Field::Str(s.to_string()))
                                     .to_vec()
                             ))
-                        ))
+                        )
                     ]
                 )
             ],
