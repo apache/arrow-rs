@@ -27,6 +27,49 @@ use arrow_schema::{ArrowError, DataType};
 ///
 /// Typically used to implement NULLIF.
 pub fn nullif(left: &dyn Array, right: &BooleanArray) -> Result<ArrayRef, ArrowError> {
+    nullif_inner(left, right, |r| !r)
+}
+
+/// Returns a new array with the same values and the validity bit to false where
+/// the corresponding element of`right` is not true (either null or false).
+///
+/// This can be used to set elements to null where the corresponding element did
+/// not pass a filter condition.
+///
+/// # Example
+/// ```
+/// # use arrow_array::{Int32Array, BooleanArray};
+/// # use arrow_array::cast::AsArray;
+/// # use arrow_array::types::Int32Type;
+/// # use arrow_select::nullif::nullifnot;
+/// // input is [null, 8, 1, 9]
+/// let a = Int32Array::from(vec![None, Some(8), Some(1), Some(9)]);
+/// // Apply a filter that only passes the first two elements: null and 8
+/// // note `None` and `false` are treated the same (turned to null in the resulting array)
+/// let bool_array = BooleanArray::from(vec![Some(true), Some(true), Some(false), None]);
+/// let filtered = nullifnot(&a, &bool_array).unwrap();
+/// // The resulting array is [null, 8, null, null]
+/// assert_eq!(filtered.as_primitive(), &Int32Array::from(vec![None, Some(8), None, None]));
+/// ```
+pub fn nullifnot(left: &dyn Array, right: &BooleanArray) -> Result<ArrayRef, ArrowError> {
+    nullif_inner(left, right, |r| r)
+}
+
+/// Internal implementation of `nullif` / `nullifnot` functions.
+///
+/// Returns a new array with the same values as `left` but with the validity
+/// bit potentially set to `false` based on the values in `right` and `f`
+///
+/// `f` is called with 64 values of the right array at a time
+///
+/// Specifically, the output array element will be null when:
+/// 1. the value of `left` was null
+/// 2. if `f(r)` returns false, where `r` is the value of `right` at the same indices.
+///
+/// Note:  there is no way to set a value to valid if it was already null as
+/// this would have safety implications (such as for null values in
+/// `DictionaryArrays`)
+fn nullif_inner<F: Fn(u64) -> u64>(left: &dyn Array, right: &BooleanArray, f: F) -> Result<ArrayRef, ArrowError> {
     let left_data = left.to_data();
 
     if left_data.len() != right.len() {
@@ -55,7 +98,7 @@ pub fn nullif(left: &dyn Array, right: &BooleanArray) -> Result<ArrayRef, ArrowE
         None => right.values().clone(),
     };
 
-    // Compute left null bitmap & !right
+    // Compute left null bitmap & f(right)
 
     let (combined, null_count) = match left_data.nulls() {
         Some(left) => {
@@ -67,7 +110,7 @@ pub fn nullif(left: &dyn Array, right: &BooleanArray) -> Result<ArrayRef, ArrowE
                 right.offset(),
                 len,
                 |l, r| {
-                    let t = l & !r;
+                    let t = l & f(r);
                     valid_count += t.count_ones() as usize;
                     t
                 },
@@ -76,8 +119,8 @@ pub fn nullif(left: &dyn Array, right: &BooleanArray) -> Result<ArrayRef, ArrowE
         }
         None => {
             let mut null_count = 0;
-            let buffer = bitwise_unary_op_helper(right.inner(), right.offset(), len, |b| {
-                let t = !b;
+            let buffer = bitwise_unary_op_helper(right.inner(), right.offset(), len, |r| {
+                let t = f(r);
                 null_count += t.count_zeros() as usize;
                 t
             });
@@ -480,6 +523,23 @@ mod tests {
         assert_eq!(r.as_ref(), &expected);
     }
 
+    fn test_nullifnot(values: &Int32Array, filter: &BooleanArray) {
+        let expected: Int32Array = values
+            .iter()
+            .zip(filter.iter())
+            .map(|(a, b)| match b {
+                Some(true) => a,
+                Some(false) | None => None,
+            })
+            .collect();
+
+        let r = nullifnot(values, filter).unwrap();
+        let r_data = r.to_data();
+        r_data.validate().unwrap();
+
+        assert_eq!(r.as_ref(), &expected);
+    }
+
     #[test]
     fn nullif_fuzz() {
         let mut rng = thread_rng();
@@ -505,6 +565,7 @@ mod tests {
                     let b = b.slice(b_start_offset, a_length);
 
                     test_nullif(&a, &b);
+                    test_nullifnot(&a, &b);
                 }
             }
         }
