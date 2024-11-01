@@ -138,8 +138,24 @@ pub fn bit_length(array: &dyn Array) -> Result<ArrayRef, ArrowError> {
             Ok(bit_length_impl::<Int64Type>(list.offsets(), list.nulls()))
         }
         DataType::Utf8View => {
-            let list = array.as_string::<i32>();
-            Ok(bit_length_impl::<Int32Type>(list.offsets(), list.nulls()))
+            let string_view_array = array
+                .as_any()
+                .downcast_ref::<StringViewArray>()
+                .ok_or_else(|| ArrowError::ComputeError("Expected Utf8View array".to_string()))?;
+            let mut bit_lengths = Vec::with_capacity(array.len());
+            for i in 0..array.len() {
+                let bit_length = if string_view_array.is_valid(i) {
+                    (string_view_array.value(i).len() * 8) as i32
+                } else {
+                    0
+                };
+                bit_lengths.push(bit_length);
+            }
+
+            Ok(Arc::new(Int32Array::new(
+                bit_lengths.into(),
+                array.nulls().cloned(),
+            )))
         }
         DataType::Binary => {
             let list = array.as_binary::<i32>();
@@ -462,6 +478,22 @@ mod tests {
                 let result = result.as_any().downcast_ref::<Int64Array>().unwrap();
                 expected.iter().enumerate().for_each(|(i, value)| {
                     assert_eq!(*value as i64, result.value(i));
+                });
+            })
+    }
+
+    #[test]
+    fn bit_length_test_utf8view() {
+        bit_length_cases()
+            .into_iter()
+            .for_each(|(input, len, expected)| {
+                let string_array = StringViewArray::from(input);
+                let result = bit_length(&string_array).unwrap();
+                assert_eq!(len, result.len());
+
+                let result = result.as_any().downcast_ref::<Int32Array>().unwrap();
+                expected.iter().enumerate().for_each(|(i, value)| {
+                    assert_eq!(*value, result.value(i));
                 });
             })
     }
