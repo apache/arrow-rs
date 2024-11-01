@@ -114,27 +114,9 @@ impl<'a> Predicate<'a> {
             Predicate::IEqAscii(v) => BooleanArray::from_unary(array, |haystack| {
                 haystack.eq_ignore_ascii_case(v) != negate
             }),
-            Predicate::Contains(finder) => {
-                if let Some(string_view_array) = array.as_any().downcast_ref::<StringViewArray>() {
-                    let nulls = string_view_array.logical_nulls();
-                    BooleanArray::from(
-                        string_view_array
-                            .bytes_iter()
-                            .enumerate()
-                            .map(|(idx, haystack)| {
-                                if nulls.as_ref().map(|n| n.is_null(idx)).unwrap_or_default() {
-                                    return None;
-                                }
-                                Some(finder.find(haystack).is_some() != negate)
-                            })
-                            .collect::<Vec<_>>(),
-                    )
-                } else {
-                    BooleanArray::from_unary(array, |haystack| {
-                        finder.find(haystack.as_bytes()).is_some() != negate
-                    })
-                }
-            }
+            Predicate::Contains(finder) => BooleanArray::from_unary(array, |haystack| {
+                finder.find(haystack.as_bytes()).is_some() != negate
+            }),
             Predicate::StartsWith(v) => {
                 if let Some(string_view_array) = array.as_any().downcast_ref::<StringViewArray>() {
                     let nulls = string_view_array.logical_nulls();
