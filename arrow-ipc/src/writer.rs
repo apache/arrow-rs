@@ -20,12 +20,15 @@
 //! The `FileWriter` and `StreamWriter` have similar interfaces,
 //! however the `FileWriter` expects a reader that supports `Seek`ing
 
-use std::cmp::min;
-use std::collections::HashMap;
-use std::io::{BufWriter, Write};
-use std::sync::Arc;
+use std::{
+    borrow::Borrow,
+    cmp::min,
+    collections::HashMap,
+    io::{BufWriter, Write},
+    sync::Arc,
+};
 
-use flatbuffers::{FlatBufferBuilder, Push, UnionWIPOffset, Vector, WIPOffset, SIZE_UOFFSET};
+use flatbuffers::{FlatBufferBuilder, UnionWIPOffset, WIPOffset};
 
 use arrow_array::builder::BufferBuilder;
 use arrow_array::cast::*;
@@ -42,59 +45,6 @@ use crate::{
     BodyCompressionBuilder, BodyCompressionMethod, DictionaryBatchBuilder, MessageBuilder,
     MessageHeader, RecordBatchBuilder, CONTINUATION_MARKER,
 };
-
-pub fn msg_overhead_guess(batch: &arrow_array::RecordBatch) -> usize {
-    use std::mem::size_of;
-
-    // mostly taken calculations from arrow-ipc::writer::IpcDataGenerator::record_batch_to_bytes
-
-    let opts = IpcWriteOptions::default();
-
-    const LEN_SIZE: usize = size_of::<i64>();
-
-    fn array_data_size(data: &ArrayData, opts: &IpcWriteOptions) -> usize {
-        // at the beginning of `write_array_data`, the null_buffer is added (if
-        // has_validity_bitmap) and that requires a count field as well
-        let null_buf_len = if has_validity_bitmap(data.data_type(), opts) {
-            LEN_SIZE
-        } else {
-            0
-        };
-        // `write_buffer` writes 2 8-byte lengths per buffer per column (one for the compressed
-        // length, one for the uncompressed length)
-        let buf_lens = data.buffers().len() * LEN_SIZE * 2;
-        // Also added at the beginning of `write_array_data`
-        let field_node_len = LEN_SIZE * 2;
-
-        let child_sizes = data
-            .child_data()
-            .iter()
-            .map(|child| array_data_size(child, opts))
-            .sum::<usize>();
-
-        null_buf_len + buf_lens + field_node_len + child_sizes
-    }
-
-    let column_sizes = batch
-        .columns()
-        .iter()
-        .map(|col| array_data_size(&col.to_data(), &opts))
-        .sum::<usize>();
-
-    // `MessageBuilder::add_version`
-    let overhead = size_of::<crate::gen::Schema::MetadataVersion>() +
-        // `MessageBuilder::add_header_type`
-        size_of::<crate::gen::Message::MessageHeader>() +
-        // `MessageBuilder::add_bodyLength`
-        LEN_SIZE +
-        // `RecordBatchBuilder::add_length` is normally called with batch.num_rows()
-        LEN_SIZE +
-        opts.batch_compression_type.map_or(0, |ty| size_of_val(&ty) + size_of::<BodyCompressionMethod>()) +
-        column_sizes;
-
-    // pad to the default alignment for writing
-    pad_to_alignment(opts.alignment, overhead) + overhead
-}
 
 /// IPC write options used to control the behaviour of the [`IpcDataGenerator`]
 #[derive(Debug, Clone)]
@@ -513,6 +463,25 @@ impl IpcDataGenerator {
         dictionary_tracker: &mut DictionaryTracker,
         write_options: &IpcWriteOptions,
     ) -> Result<(Vec<EncodedData>, EncodedData), ArrowError> {
+        let (encoded_dictionaries, mut encoded_messages) =
+            self.encoded_batch_with_size(batch, dictionary_tracker, write_options, usize::MAX)?;
+
+        assert_eq!(
+            encoded_messages.len(),
+            1,
+            "encoded_batch with max size of usize::MAX should not be able to return more than 1 batch"
+        );
+
+        Ok((encoded_dictionaries, encoded_messages.pop().unwrap()))
+    }
+
+    pub fn encoded_batch_with_size(
+        &self,
+        batch: &RecordBatch,
+        dictionary_tracker: &mut DictionaryTracker,
+        write_options: &IpcWriteOptions,
+        max_flight_data_size: usize,
+    ) -> Result<(Vec<EncodedData>, Vec<EncodedData>), ArrowError> {
         let schema = batch.schema();
         let mut encoded_dictionaries = Vec::with_capacity(schema.flattened_fields().len());
 
@@ -530,7 +499,8 @@ impl IpcDataGenerator {
             )?;
         }
 
-        let encoded_message = chunked_encoded_batch_bytes(batch, write_options)?;
+        let encoded_message =
+            chunked_encoded_batch_bytes(batch, write_options, max_flight_data_size)?;
         Ok((encoded_dictionaries, encoded_message))
     }
 
@@ -542,21 +512,29 @@ impl IpcDataGenerator {
         array_data: &ArrayData,
         write_options: &IpcWriteOptions,
     ) -> Result<EncodedData, ArrowError> {
-        encode_array_datas(
+        let mut encoded_datas = encode_array_datas(
             // TODO: We can abstract this clone away, right?
-            [array_data.clone()],
-            array_data.len() as i64,
+            &[array_data.clone()],
+            array_data.len(),
             |fbb, offset| {
-                fbb.with_builder(DictionaryBatchBuilder::new, |mut bldr| {
-                    bldr.add_data(DictionaryBatchBuilder::add_id, dict_id);
-
-                    bldr.builder.add_data(offset);
-                    bldr.builder.finish().as_union_value()
-                })
+                let mut builder = DictionaryBatchBuilder::new(&mut fbb.fbb);
+                builder.add_id(dict_id);
+                builder.add_data(offset);
+                builder.finish().as_union_value()
             },
             MessageHeader::DictionaryBatch,
+            // ASK: No maximum message size here?
+            usize::MAX,
             write_options,
-        )
+        )?;
+
+        assert_eq!(
+            encoded_datas.len(),
+            1,
+            "encode_array_datas with usize::MAX as the max size should never return more than a single item"
+        );
+
+        Ok(encoded_datas.pop().unwrap())
     }
 }
 
@@ -866,10 +844,11 @@ impl<W: Write> FileWriter<W> {
             ));
         }
 
-        let (encoded_dictionaries, encoded_message) = self.data_gen.encoded_batch(
+        let (encoded_dictionaries, encoded_messages) = self.data_gen.encoded_batch_with_size(
             batch,
             &mut self.dictionary_tracker,
             &self.write_options,
+            usize::MAX,
         )?;
 
         for encoded_dictionary in encoded_dictionaries {
@@ -881,15 +860,22 @@ impl<W: Write> FileWriter<W> {
             self.block_offsets += meta + data;
         }
 
-        let (meta, data) = write_message(&mut self.writer, encoded_message, &self.write_options)?;
-        // add a record block for the footer
-        let block = crate::Block::new(
-            self.block_offsets as i64,
-            meta as i32, // TODO: is this still applicable?
-            data as i64,
-        );
-        self.record_blocks.push(block);
-        self.block_offsets += meta + data;
+        // theoretically, since the maximum size for encoding is usize::MAX, there should never be
+        // more than 1 encoded message. However, since there's no need to assert that (i.e. if
+        // someone changes usize::MAX above to be a lower message, that's fine), we just assume
+        // there can be many messages
+        for encoded_message in encoded_messages {
+            let (meta, data) =
+                write_message(&mut self.writer, encoded_message, &self.write_options)?;
+            // add a record block for the footer
+            let block = crate::Block::new(
+                self.block_offsets as i64,
+                meta as i32, // TODO: is this still applicable?
+                data as i64,
+            );
+            self.record_blocks.push(block);
+            self.block_offsets += meta + data;
+        }
         Ok(())
     }
 
@@ -1063,16 +1049,23 @@ impl<W: Write> StreamWriter<W> {
             ));
         }
 
-        let (encoded_dictionaries, encoded_message) = self
+        let (encoded_dictionaries, encoded_messages) = self
             .data_gen
-            .encoded_batch(batch, &mut self.dictionary_tracker, &self.write_options)
+            .encoded_batch_with_size(
+                batch,
+                &mut self.dictionary_tracker,
+                &self.write_options,
+                usize::MAX,
+            )
             .expect("StreamWriter is configured to not error on dictionary replacement");
 
         for encoded_dictionary in encoded_dictionaries {
             write_message(&mut self.writer, encoded_dictionary, &self.write_options)?;
         }
 
-        write_message(&mut self.writer, encoded_message, &self.write_options)?;
+        for message in encoded_messages {
+            write_message(&mut self.writer, message, &self.write_options)?;
+        }
         Ok(())
     }
 
@@ -1167,6 +1160,7 @@ impl<W: Write> RecordBatchWriter for StreamWriter<W> {
     }
 }
 
+#[derive(Debug)]
 /// Stores the encoded data, which is an crate::Message, and optional Arrow data
 pub struct EncodedData {
     /// An encoded crate::Message
@@ -1310,44 +1304,6 @@ fn get_buffer_element_width(spec: &BufferSpec) -> usize {
     }
 }
 
-/// Common functionality for re-encoding offsets. Returns the new offsets as well as
-/// original start offset and length for use in slicing child data.
-fn reencode_offsets<O: OffsetSizeTrait>(
-    offsets: &Buffer,
-    data: &ArrayData,
-) -> (Buffer, usize, usize) {
-    let offsets_slice: &[O] = offsets.typed_data::<O>();
-    let offset_slice = &offsets_slice[data.offset()..data.offset() + data.len() + 1];
-
-    let start_offset = offset_slice.first().unwrap();
-    let end_offset = offset_slice.last().unwrap();
-
-    let offsets = match start_offset.as_usize() {
-        0 => offsets.clone(),
-        _ => offset_slice.iter().map(|x| *x - *start_offset).collect(),
-    };
-
-    let start_offset = start_offset.as_usize();
-    let end_offset = end_offset.as_usize();
-
-    (offsets, start_offset, end_offset - start_offset)
-}
-
-/// Returns the values and offsets [`Buffer`] for a ByteArray with offset type `O`
-///
-/// In particular, this handles re-encoding the offsets if they don't start at `0`,
-/// slicing the values buffer as appropriate. This helps reduce the encoded
-/// size of sliced arrays, as values that have been sliced away are not encoded
-fn get_byte_array_buffers<O: OffsetSizeTrait>(data: &ArrayData) -> (Buffer, Buffer) {
-    if data.is_empty() {
-        return (MutableBuffer::new(0).into(), MutableBuffer::new(0).into());
-    }
-
-    let (offsets, original_start_offset, len) = reencode_offsets::<O>(&data.buffers()[0], data);
-    let values = data.buffers()[1].slice_with_length(original_start_offset, len);
-    (offsets, values)
-}
-
 /// Similar logic as [`get_byte_array_buffers()`] but slices the child array instead
 /// of a values buffer.
 fn get_list_array_buffers<O: OffsetSizeTrait>(data: &ArrayData) -> (Buffer, ArrayData) {
@@ -1358,7 +1314,7 @@ fn get_list_array_buffers<O: OffsetSizeTrait>(data: &ArrayData) -> (Buffer, Arra
         );
     }
 
-    let (offsets, original_start_offset, len) = reencode_offsets::<O>(&data.buffers()[0], data);
+    let (offsets, original_start_offset, len) = data.reencode_offsets::<O>();
     let child_data = data.child_data()[0].slice(original_start_offset, len);
     (offsets, child_data)
 }
@@ -1373,157 +1329,131 @@ fn pad_to_alignment(alignment: u8, len: usize) -> usize {
     ((len + a) & !a) - len
 }
 
-pub fn create_vector<'fbb, T>(
-    overhead: &mut usize,
-    fbb: &mut FlatBufferBuilder<'fbb>,
-    items: &[T],
-) -> WIPOffset<Vector<'fbb, T::Output>>
-where
-    T: Push,
-{
-    *overhead += SIZE_UOFFSET;
-    fbb.create_vector(items)
-}
-
 fn chunked_encoded_batch_bytes(
     batch: &RecordBatch,
     write_options: &IpcWriteOptions,
-) -> Result<EncodedData, ArrowError> {
+    max_flight_data_size: usize,
+) -> Result<Vec<EncodedData>, ArrowError> {
     encode_array_datas(
-        batch.columns().iter().map(ArrayRef::to_data),
-        batch.num_rows() as i64,
+        &batch
+            .columns()
+            .iter()
+            .map(ArrayRef::to_data)
+            .collect::<Vec<_>>(),
+        batch.num_rows(),
         |_, offset| offset.as_union_value(),
         MessageHeader::RecordBatch,
+        max_flight_data_size,
         write_options,
     )
 }
 
-fn dry_run_header_size(
-    arr_datas: impl IntoIterator<Item = ArrayData>,
-    n_rows: i64,
-    encode_root: impl FnOnce(
-        &mut FlatBufferSizeTracker,
-        WIPOffset<crate::gen::Message::RecordBatch>,
-    ) -> WIPOffset<UnionWIPOffset>,
-    header_type: MessageHeader,
-    write_options: &IpcWriteOptions
-) -> Result<usize, ArrowError> {
-}
-
 fn encode_array_datas(
-    arr_datas: impl IntoIterator<Item = ArrayData>,
-    n_rows: i64,
-    encode_root: impl FnOnce(
+    arr_datas: &[ArrayData],
+    n_rows: usize,
+    encode_root: impl Fn(
         &mut FlatBufferSizeTracker,
         WIPOffset<crate::gen::Message::RecordBatch>,
     ) -> WIPOffset<UnionWIPOffset>,
     header_type: MessageHeader,
+    mut max_msg_size: usize,
     write_options: &IpcWriteOptions,
-) -> Result<EncodedData, ArrowError> {
-    let mut fbb = FlatBufferSizeTracker::default();
+) -> Result<Vec<EncodedData>, ArrowError> {
+    let mut fbb = FlatBufferSizeTracker::for_dry_run(arr_datas.len());
+    fbb.encode_array_datas(
+        arr_datas,
+        n_rows as i64,
+        &encode_root,
+        header_type,
+        write_options,
+    )?;
 
-    let batch_compression_type = write_options.batch_compression_type;
-
-    let compression = batch_compression_type.map(|compression_type| {
-        fbb.with_builder(BodyCompressionBuilder::new, |mut builder| {
-            builder.add_data(
-                BodyCompressionBuilder::add_method,
-                BodyCompressionMethod::BUFFER,
-            );
-            builder.add_data(BodyCompressionBuilder::add_codec, compression_type);
-            builder.builder.finish()
+    fn get_arr_batch_size<AD: Borrow<ArrayData>>(
+        iter: impl Iterator<Item = AD>,
+        alignment: u8,
+    ) -> Result<usize, ArrowError> {
+        iter.map(|arr| {
+            arr.borrow()
+                .get_slice_memory_size()
+                .map(|size| size + pad_to_alignment(alignment, size))
         })
-    });
+        .sum()
+    }
 
-    let mut variadic_buffer_counts = Vec::<i64>::default();
+    let header_len = fbb.fbb.finished_data().len();
+    max_msg_size = max_msg_size.saturating_sub(header_len).max(1);
+
+    let total_size = get_arr_batch_size(arr_datas.iter(), write_options.alignment)?;
+
+    if total_size == 0 {
+        // If there's nothing of size to encode, then existing tests say we shouldn't even return
+        // an empty EncodedData - we just return no EncodedData
+        return Ok(vec![]);
+    }
+
+    let n_batches = bit_util::ceil(total_size, max_msg_size);
+    // let rows_per_batch = n_rows / n_batches;
+    let mut out = Vec::with_capacity(n_batches);
+
+    println!("🐈 n_rows: {n_rows}, n_batches: {n_batches}, header_len: {header_len}, total_size: {total_size}, max_msg_size: {max_msg_size}");
+
     let mut offset = 0;
+    while offset < n_rows {
+        let length = (1..)
+            .find(|len| {
+                // If we've exhausted the available length of the array datas, then just return -
+                // we've got it.
+                if arr_datas.iter().any(|arr| arr.len() < offset + len) {
+                    return true;
+                }
 
-    // TODO: split these up here to only fit as many as can be fit
-    // - get `fbb.fbb.unfinished_data` after writing a fake piece of data for `buffers`. that
-    //   determines the real overhead
-    // - split up the array datas based on how much space they take up alone
-    for array in arr_datas {
-        fbb.write_array_data(
-            &array,
-            &mut offset,
-            array.len(),
-            array.null_count(),
+                let arr_iter = arr_datas.iter().map(|arr| arr.slice(offset, *len));
+
+                // we can unwrap this here b/c this only errors on malformed buffer-type/data-type
+                // combinations, and if any of these arrays had that, this function would've
+                // already short-circuited on an earlier call of this function
+                get_arr_batch_size(arr_iter, write_options.alignment).unwrap() > max_msg_size
+            })
+            // Because this is an unbounded range, this will only panic if we reach usize::MAX and
+            // still haven't found anything. However, the inner part of this loop slices
+            // `ArrayData` with the number that we're iterating over, and that will panic if we
+            // reach usize::MAX because that will be bigger than it can handle to be sliced.
+            .unwrap()
+            - 1;
+
+        let new_arrs = arr_datas
+            .iter()
+            .map(|arr| arr.slice(offset, length))
+            .collect::<Vec<_>>();
+
+        fbb.reset_for_real_run();
+        fbb.encode_array_datas(
+            &new_arrs,
+            length as i64,
+            &encode_root,
+            header_type,
             write_options,
         )?;
 
-        append_variadic_buffer_counts(&mut variadic_buffer_counts, &array);
+        let finished_data = fbb.fbb.finished_data();
+        println!(
+            "🐈 arrow_data: {}, finished_data: {} (n_rows: {length})",
+            fbb.arrow_data.len(),
+            finished_data.len()
+        );
+
+        out.push(EncodedData {
+            ipc_message: finished_data.to_vec(),
+            arrow_data: fbb.arrow_data.clone(),
+        });
+        offset += length;
     }
 
-    // pad the tail of the body data
-    let pad_len = pad_to_alignment(write_options.alignment, fbb.arrow_data.len());
-    fbb.arrow_data.extend_from_slice(&PADDING[..pad_len]);
-
-    let buffers = create_vector(&mut fbb.overhead, &mut fbb.fbb, &fbb.buffers);
-    let nodes = create_vector(&mut fbb.overhead, &mut fbb.fbb, &fbb.nodes);
-    let variadic_buffer = (!variadic_buffer_counts.is_empty())
-        .then(|| create_vector(&mut fbb.overhead, &mut fbb.fbb, &variadic_buffer_counts));
-
-    let root = fbb.with_builder(RecordBatchBuilder::new, |mut bldr| {
-        // Now, this is the only piece of data for this builder that didn't already come from
-        // flatbuffers - the rest in this closure are produced from `create_vector` or a builder's
-        // `finish()`, so their memory is already accounted for. That's why we use the escape hatch
-        // for everything else.
-        //
-        // See the comment on `add_data` for an explanation of why this is needed.
-        bldr.add_data(RecordBatchBuilder::add_length, n_rows);
-
-        bldr.builder.add_nodes(nodes);
-        bldr.builder.add_buffers(buffers);
-        if let Some(c) = compression {
-            bldr.builder.add_compression(c);
-        }
-        if let Some(v) = variadic_buffer {
-            bldr.builder.add_variadicBufferCounts(v);
-        }
-
-        bldr.builder.finish()
-    });
-
-    // Unions are stored as a tag and offset, which (afaict) are both the same size, and we're
-    // generally following a policy of accounting for memory as soon as possible, so we need to
-    // check that here (since `encode_root` returns a Union offset)
-    fbb.overhead += SIZE_UOFFSET * 2;
-    let root = encode_root(&mut fbb, root);
-
-    let arrow_len = fbb.arrow_data.len() as i64;
-    let msg = fbb.with_builder(MessageBuilder::new, |mut bldr| {
-        bldr.add_data(MessageBuilder::add_version, write_options.metadata_version);
-        bldr.add_data(MessageBuilder::add_header_type, header_type);
-        bldr.add_data(MessageBuilder::add_bodyLength, arrow_len);
-
-        // `root` was already tracked when it was turned into a union
-        bldr.builder.add_header(root);
-        bldr.builder.finish()
-    });
-
-    fbb.fbb.finish(msg, None);
-    let ipc_message = fbb.fbb.finished_data().to_vec();
-
-    println!("🐈 ipc_message size: {}", ipc_message.len());
-
-    Ok(EncodedData {
-        ipc_message,
-        arrow_data: fbb.arrow_data,
-    })
+    Ok(out)
 }
 
 #[derive(Default)]
 struct FlatBufferSizeTracker<'fbb> {
-    // tracks the amount of data that is going to be encoded into the final FlatBuffer (or is
-    // already encoded) but is not:
-    // 1. Already tracked by a different field here. E.g. We know that each node in `self.nodes`
-    //    must be encoded into the final thing, so we don't bother tracking the space that those
-    //    will take up in `overhead`, and instead just check `nodes.len() * size_of<FieldNode>()`
-    //    instead.
-    // 2. raw ArrayData that will be encoded into the final product. This overhead tracking is done
-    //    to figure out how many RecordBatches we can encode into each FlatBuffer, so we just need
-    //    to keep track of everything besides those batches/ArrayData.
-    pub overhead: usize,
     // the builder and backing flatbuffer that we use to write the arrow data into.
     fbb: FlatBufferBuilder<'fbb>,
     // tracks the data in `arrow_data` - `buffers` contains the offsets and length of different
@@ -1532,27 +1462,113 @@ struct FlatBufferSizeTracker<'fbb> {
     // the raw array data that we need to send across the wire
     arrow_data: Vec<u8>,
     nodes: Vec<crate::FieldNode>,
+    dry_run: bool,
 }
 
 impl<'fbb> FlatBufferSizeTracker<'fbb> {
-    fn with_builder<'s, B, BFn, F, O>(&'s mut self, b_fn: BFn, f: F) -> O
-    where
-        BFn: Fn(&'s mut FlatBufferBuilder<'fbb>) -> B,
-        F: Fn(BuilderTracker<'s, B>) -> O,
-    {
-        let builder = b_fn(&mut self.fbb);
-        let tracker = BuilderTracker {
-            overhead: &mut self.overhead,
-            builder,
-        };
-
-        f(tracker)
+    #[must_use]
+    fn for_dry_run(capacity: usize) -> Self {
+        Self {
+            dry_run: true,
+            buffers: Vec::with_capacity(capacity),
+            nodes: Vec::with_capacity(capacity),
+            ..Self::default()
+        }
     }
 
-    pub fn total_overhead(&self) -> usize {
-        self.overhead
-            + (self.nodes.len() * size_of::<<crate::FieldNode as Push>::Output>())
-            + (self.buffers.len() * size_of::<<crate::Buffer as Push>::Output>())
+    fn reset_for_real_run(&mut self) {
+        self.fbb.reset();
+        self.buffers.clear();
+        self.arrow_data.clear();
+        self.nodes.clear();
+        self.dry_run = false;
+
+        // this helps us avoid completely re-allocating the buffers by just creating a new `Self`.
+        // So everything should be allocated correctly now besides arrow_data. If we're calling
+        // this after only a dry run, `arrow_data` shouldn't have anything written into it, but
+        // we call this after every real run loop, so we still need to clear it.
+    }
+
+    fn encode_array_datas(
+        &mut self,
+        arr_datas: &[ArrayData],
+        n_rows: i64,
+        encode_root: impl FnOnce(
+            &mut FlatBufferSizeTracker,
+            WIPOffset<crate::gen::Message::RecordBatch>,
+        ) -> WIPOffset<UnionWIPOffset>,
+        header_type: MessageHeader,
+        write_options: &IpcWriteOptions,
+    ) -> Result<(), ArrowError> {
+        let batch_compression_type = write_options.batch_compression_type;
+
+        let compression = batch_compression_type.map(|compression_type| {
+            let mut builder = BodyCompressionBuilder::new(&mut self.fbb);
+            builder.add_method(BodyCompressionMethod::BUFFER);
+            builder.add_codec(compression_type);
+            builder.finish()
+        });
+
+        let mut variadic_buffer_counts = Vec::<i64>::default();
+        let mut offset = 0;
+
+        // TODO: split these up here to only fit as many as can be fit
+        // - get `fbb.fbb.unfinished_data` after writing a fake piece of data for `buffers`. that
+        //   determines the real overhead
+        // - split up the array datas based on how much space they take up alone
+        for array in arr_datas {
+            self.write_array_data(
+                array,
+                &mut offset,
+                array.len(),
+                array.null_count(),
+                write_options,
+            )?;
+
+            append_variadic_buffer_counts(&mut variadic_buffer_counts, array);
+        }
+
+        // pad the tail of the body data
+        let pad_len = pad_to_alignment(write_options.alignment, self.arrow_data.len());
+        self.arrow_data.extend_from_slice(&PADDING[..pad_len]);
+
+        let buffers = self.fbb.create_vector(&self.buffers);
+        let nodes = self.fbb.create_vector(&self.nodes);
+        let variadic_buffer = (!variadic_buffer_counts.is_empty())
+            .then(|| self.fbb.create_vector(&variadic_buffer_counts));
+
+        let root = {
+            let mut builder = RecordBatchBuilder::new(&mut self.fbb);
+
+            builder.add_length(n_rows);
+            builder.add_nodes(nodes);
+            builder.add_buffers(buffers);
+            if let Some(c) = compression {
+                builder.add_compression(c);
+            }
+            if let Some(v) = variadic_buffer {
+                builder.add_variadicBufferCounts(v);
+            }
+
+            builder.finish()
+        };
+
+        let root = encode_root(self, root);
+
+        let arrow_len = self.arrow_data.len() as i64;
+        let msg = {
+            let mut builder = MessageBuilder::new(&mut self.fbb);
+            builder.add_version(write_options.metadata_version);
+            builder.add_header_type(header_type);
+            builder.add_bodyLength(arrow_len);
+
+            // `root` was already tracked when it was turned into a union
+            builder.add_header(root);
+            builder.finish()
+        };
+
+        self.fbb.finish(msg, None);
+        Ok(())
     }
 
     fn write_array_data(
@@ -1591,6 +1607,7 @@ impl<'fbb> FlatBufferSizeTracker<'fbb> {
                 Some(buffer) => buffer.inner().sliced(),
             };
 
+            println!("🐈 writing null buffer");
             self.write_buffer(
                 null_buffer.as_slice(),
                 offset,
@@ -1600,40 +1617,21 @@ impl<'fbb> FlatBufferSizeTracker<'fbb> {
         }
 
         let mut write_byte_array_byffers = |(offsets, values): (Buffer, Buffer)| {
-            for buffer in [offsets, values] {
-                self.write_buffer(
-                    buffer.as_slice(),
-                    offset,
-                    compression_codec,
-                    write_options.alignment,
-                )?;
+            for (idx, buffer) in [offsets, values].into_iter().enumerate() {
+                println!("🐈 writing buf {idx} of tuple");
+                self.write_buffer(&buffer, offset, compression_codec, write_options.alignment)?;
             }
             Ok::<_, ArrowError>(())
         };
 
+        println!("🐈 writing array dt: {:?}", array_data.data_type());
+
         match array_data.data_type() {
             DataType::Binary | DataType::Utf8 => {
-                write_byte_array_byffers(get_byte_array_buffers::<i32>(array_data))?
+                write_byte_array_byffers(array_data.get_byte_array_buffers::<i32>())?
             }
             DataType::LargeBinary | DataType::LargeUtf8 => {
-                write_byte_array_byffers(get_byte_array_buffers::<i64>(array_data))?
-            }
-            DataType::BinaryView | DataType::Utf8View => {
-                // Slicing the views buffer is safe and easy,
-                // but pruning unneeded data buffers is much more nuanced since it's complicated
-                // to prove that no views reference the pruned buffers
-                //
-                // Current implementation just serialize the raw arrays as given and not try to optimize anything.
-                // If users wants to "compact" the arrays prior to sending them over IPC,
-                // they should consider the gc API suggested in #5513
-                for buffer in array_data.buffers() {
-                    self.write_buffer(
-                        buffer.as_slice(),
-                        offset,
-                        compression_codec,
-                        write_options.alignment,
-                    )?;
-                }
+                write_byte_array_byffers(array_data.get_byte_array_buffers::<i64>())?
             }
             dt if DataType::is_numeric(dt)
                 || DataType::is_temporal(dt)
@@ -1703,10 +1701,17 @@ impl<'fbb> FlatBufferSizeTracker<'fbb> {
                     sliced_child_data.null_count(),
                     write_options,
                 )?;
-                println!("🐈 total_overhead: {}", self.total_overhead());
                 return Ok(());
             }
             _ => {
+                // This accommodates for even the `View` types (e.g. BinaryView and Utf8View):
+                // Slicing the views buffer is safe and easy,
+                // but pruning unneeded data buffers is much more nuanced since it's complicated
+                // to prove that no views reference the pruned buffers
+                //
+                // Current implementation just serialize the raw arrays as given and not try to optimize anything.
+                // If users wants to "compact" the arrays prior to sending them over IPC,
+                // they should consider the gc API suggested in #5513
                 for buffer in array_data.buffers() {
                     self.write_buffer(buffer, offset, compression_codec, write_options.alignment)?;
                 }
@@ -1714,7 +1719,8 @@ impl<'fbb> FlatBufferSizeTracker<'fbb> {
         }
 
         let mut write_arr = |arr: &ArrayData| {
-            for data_ref in arr.child_data() {
+            for (idx, data_ref) in arr.child_data().iter().enumerate() {
+                println!("🐈 writing child array {idx}");
                 self.write_array_data(
                     data_ref,
                     offset,
@@ -1726,15 +1732,13 @@ impl<'fbb> FlatBufferSizeTracker<'fbb> {
             Ok::<_, ArrowError>(())
         };
 
-        let res = match array_data.data_type() {
+        match array_data.data_type() {
             DataType::Dictionary(_, _) => Ok(()),
             // unslice the run encoded array.
             DataType::RunEndEncoded(_, _) => write_arr(&unslice_run_array(array_data.clone())?),
             // recursively write out nested structures
             _ => write_arr(array_data),
-        };
-        println!("🐈 total_overhead: {}", self.total_overhead());
-        res
+        }
     }
 
     /// Write a buffer into `arrow_data`, a vector of bytes, and adds its
@@ -1757,19 +1761,28 @@ impl<'fbb> FlatBufferSizeTracker<'fbb> {
         compression_codec: Option<CompressionCodec>,
         alignment: u8,
     ) -> Result<(), ArrowError> {
-        let len: i64 = match compression_codec {
-            Some(compressor) => compressor.compress_to_vec(buffer, &mut self.arrow_data)?,
-            None => {
-                self.arrow_data.extend_from_slice(buffer);
-                buffer.len()
+        println!("🐈 writing buffer of size {}", buffer.len());
+
+        let len: i64 = if self.dry_run {
+            // Flatbuffers will essentially optimize this away if we say the len is 0 for all of
+            // these, so to make sure the header size is the same in the dry run and in the real
+            // thing, we need to set this to a non-zero value
+            1
+        } else {
+            match compression_codec {
+                Some(compressor) => compressor.compress_to_vec(buffer, &mut self.arrow_data)?,
+                None => {
+                    self.arrow_data.extend_from_slice(buffer);
+                    buffer.len()
+                }
             }
-        }
-        .try_into()
-        .map_err(|e| {
-            ArrowError::InvalidArgumentError(format!(
-                "Could not convert compressed size to i64: {e}"
-            ))
-        })?;
+            .try_into()
+            .map_err(|e| {
+                ArrowError::InvalidArgumentError(format!(
+                    "Could not convert compressed size to i64: {e}"
+                ))
+            })?
+        };
 
         // make new index entry
         self.buffers.push(crate::Buffer::new(*offset, len));
@@ -1777,35 +1790,8 @@ impl<'fbb> FlatBufferSizeTracker<'fbb> {
         let pad_len = pad_to_alignment(alignment, len as usize);
         self.arrow_data.extend_from_slice(&PADDING[..pad_len]);
 
-        // We don't add pad_len to self.overhead here mainly because it feels over-zealous to do
-        // so - Once compression is incorporated into this sort of schema, where you're trying to
-        // count bits to fit as much data into these fields as possible,
-
         *offset += len + (pad_len as i64);
         Ok(())
-    }
-}
-
-struct BuilderTracker<'tracker, B> {
-    overhead: &'tracker mut usize,
-    pub builder: B,
-}
-
-impl<'tracker, B> BuilderTracker<'tracker, B> {
-    // This is a method you have to be careful about if you want exact accounting - Specifically,
-    // there's no way (as far as I can figure out, at least) for this method to not count overhead
-    // when the data being added was already pulled from the flatbuffer it's being added to. For
-    // example, if we call `create_vector` on our FlatBufferSizeTracker, then add that to a `B`
-    // using this method, the `Vector`'s size has already been accounted for, so we don't want to
-    // track it again here. Same thing if we produce a value from a Builder's `finish()` method,
-    // then add it with another builder.
-    //
-    // Now, we could to like `D: FlatBufferSized` and then impl that trait for everything and add
-    // specializations for `flatbuffers::WIPOffset` and such... IF we had specialization. Alas, any
-    // sort of blanket-impl-plus-caveats solution requires specialization.
-    fn add_data<D, F: Fn(&mut B, D)>(&mut self, f: F, data: D) {
-        f(&mut self.builder, data);
-        *self.overhead += std::mem::size_of::<D>();
     }
 }
 

@@ -1058,7 +1058,7 @@ impl<R: Read + Seek> FileReader<R> {
     /// Try to create a new file reader.
     ///
     /// There is no internal buffering. If buffered reads are needed you likely want to use
-    /// [`FileReader::try_new_buffered`] instead.    
+    /// [`FileReader::try_new_buffered`] instead.
     ///
     /// # Errors
     ///

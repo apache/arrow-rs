@@ -452,12 +452,12 @@ impl ArrayData {
                 BufferSpec::VariableWidth => {
                     result += match &self.data_type {
                         DataType::Utf8 | DataType::Binary => {
-                            let offsets = self.typed_offsets::<i32>()?;
-                            (offsets[self.len] - offsets[0]) as usize
+                            let (buf1, buf2) = self.get_byte_array_buffers::<i32>();
+                            buf1.len() + buf2.len()
                         }
                         DataType::LargeUtf8 | DataType::LargeBinary => {
-                            let offsets = self.typed_offsets::<i64>()?;
-                            (offsets[self.len] - offsets[0]) as usize
+                            let (buf1, buf2) = self.get_byte_array_buffers::<i64>();
+                            buf1.len() + buf2.len()
                         }
                         // `FlatBufferSizeTracker::write_array_data` just writes these just as raw
                         // buffer data as opposed to using offsets or anything
@@ -490,6 +490,64 @@ impl ArrayData {
             result += child.get_slice_memory_size()?;
         }
         Ok(result)
+    }
+
+    /// Returns the offsets and values [`Buffer`]s for a ByteArray with offset type `O`
+    ///
+    /// In particular, this handles re-encoding the offsets if they don't start at `0`,
+    /// slicing the values buffer as appropriate. This helps reduce the encoded
+    /// size of sliced arrays, as values that have been sliced away are not encoded
+    pub fn get_byte_array_buffers<O: ArrowNativeType + num::Integer>(&self) -> (Buffer, Buffer) {
+        if self.is_empty() {
+            return (MutableBuffer::new(0).into(), MutableBuffer::new(0).into());
+        }
+
+        // get the buffer of offsets, now shifted so they are shifted to be accurate to the slice
+        // of values that we'll be taking (e.g. if they previously said [0, 3, 5, 7], but we slice
+        // to only get the last two, they'll be shifted to be [0, 2], since those would be the
+        // offsets for the last two values in this shifted slice).
+        let (offsets, original_start_offset, len) = self.reencode_offsets::<O>();
+        let values = self.buffers()[1].slice_with_length(original_start_offset, len);
+        (offsets, values)
+    }
+
+    /// Common functionality for re-encoding offsets. Returns the new offsets as well as
+    /// original start offset and length for use in slicing child data.
+    ///
+    /// # Panics
+    ///
+    /// Will panic if you call this on an `ArrayData` that does not have a buffer of offsets as the
+    /// very first buffer (like most variable length arrays)
+    pub fn reencode_offsets<O: ArrowNativeType + num::Integer>(&self) -> (Buffer, usize, usize) {
+        // first we want to see: what is the offset of this `ArrayData` into the buffer (which is a
+        // buffer of offsets into the buffer of data)
+        let orig_offset = self.offset();
+        let o_size = mem::size_of::<O>();
+        // and then slice the buffer to only get the part we care about, keeping in mind the size
+        // of the type that we're treating it as (since it's just encoded as a bunch of u8s as the
+        // base level)
+        let mut offsets =
+            self.buffers()[0].slice_with_length(orig_offset * o_size, self.len * o_size);
+
+        // then we have to turn it into a typed slice that we can read and manipulate below if
+        // needed
+        let offsets_slice = offsets.typed_data::<O>();
+
+        // and now we can see what the very first offset and the very last offset is
+        let start_offset_o = offsets_slice.first().unwrap();
+        let start_offset = start_offset_o.as_usize();
+        let end_offset = offsets_slice.last().unwrap().as_usize();
+
+        // if the start offset is just 0, i.e. it points to the very beginning of the values of
+        // this `ArrayData`, then we don't need to shift anything to be a 'correct' offset 'cause
+        // all the offsets in this buffer are already offset by 0.
+        // But if it's not 0, then we need to shift them all so that the offsets don't start at
+        // some weird value.
+        if start_offset != 0 {
+            offsets = offsets_slice.iter().map(|x| *x - *start_offset_o).collect();
+        };
+
+        (offsets, start_offset, end_offset - start_offset)
     }
 
     /// Returns the total number of bytes of memory occupied
@@ -526,7 +584,9 @@ impl ArrayData {
     ///
     /// Panics if `offset + length > self.len()`.
     pub fn slice(&self, offset: usize, length: usize) -> ArrayData {
-        assert!((offset + length) <= self.len());
+        if (offset + length) > self.len() {
+            panic!("Attempting to slice an array with offset {offset}, len {length} when self.len is {}", self.len);
+        }
 
         if let DataType::Struct(_) = self.data_type() {
             // Slice into children
@@ -540,7 +600,7 @@ impl ArrayData {
                 child_data: self
                     .child_data()
                     .iter()
-                    .map(|data| data.slice(offset, length))
+                    .map(|data| data.slice(offset, length.min(data.len())))
                     .collect(),
                 nulls: self.nulls.as_ref().map(|x| x.slice(offset, length)),
             };

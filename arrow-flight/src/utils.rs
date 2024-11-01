@@ -38,18 +38,34 @@ pub fn flight_data_from_arrow_batch(
     batch: &RecordBatch,
     options: &IpcWriteOptions,
 ) -> (Vec<FlightData>, FlightData) {
+    let (flight_dictionaries, mut flight_batches) = _flight_data_from_arrow_batch(batch, options);
+
+    assert_eq!(
+        flight_batches.len(),
+        1,
+        "encoded_batch with a max size of usize::MAX should never return more than 1 batch"
+    );
+    let flight_batch = flight_batches.pop().unwrap();
+
+    (flight_dictionaries, flight_batch)
+}
+
+fn _flight_data_from_arrow_batch(
+    batch: &RecordBatch,
+    options: &IpcWriteOptions,
+) -> (Vec<FlightData>, Vec<FlightData>) {
     let data_gen = writer::IpcDataGenerator::default();
     let mut dictionary_tracker =
         writer::DictionaryTracker::new_with_preserve_dict_id(false, options.preserve_dict_id());
 
-    let (encoded_dictionaries, encoded_batch) = data_gen
-        .encoded_batch(batch, &mut dictionary_tracker, options)
+    let (encoded_dictionaries, encoded_batches) = data_gen
+        .encoded_batch_with_size(batch, &mut dictionary_tracker, options, usize::MAX)
         .expect("DictionaryTracker configured above to not error on replacement");
 
     let flight_dictionaries = encoded_dictionaries.into_iter().map(Into::into).collect();
-    let flight_batch = encoded_batch.into();
+    let flight_batches = encoded_batches.into_iter().map(Into::into).collect();
 
-    (flight_dictionaries, flight_batch)
+    (flight_dictionaries, flight_batches)
 }
 
 /// Convert a slice of wire protocol `FlightData`s into a vector of `RecordBatch`es
@@ -154,11 +170,15 @@ pub fn batches_to_flight_data(
         writer::DictionaryTracker::new_with_preserve_dict_id(false, options.preserve_dict_id());
 
     for batch in batches.iter() {
-        let (encoded_dictionaries, encoded_batch) =
-            data_gen.encoded_batch(batch, &mut dictionary_tracker, &options)?;
+        let (encoded_dictionaries, encoded_batch) = data_gen.encoded_batch_with_size(
+            batch,
+            &mut dictionary_tracker,
+            &options,
+            usize::MAX,
+        )?;
 
         dictionaries.extend(encoded_dictionaries.into_iter().map(Into::into));
-        flight_data.push(encoded_batch.into());
+        flight_data.extend(encoded_batch.into_iter().map(Into::into));
     }
 
     let mut stream = Vec::with_capacity(1 + dictionaries.len() + flight_data.len());
