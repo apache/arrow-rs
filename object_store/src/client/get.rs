@@ -142,6 +142,11 @@ enum GetResultError {
         expected: Range<usize>,
         actual: Range<usize>,
     },
+
+    #[snafu(display(
+        "Timed out getting data, please increase timeout parameter for {store} client"
+    ))]
+    DataStreamTimeout { store: String },
 }
 
 fn get_result<T: GetClient>(
@@ -243,10 +248,7 @@ fn get_result<T: GetClient>(
 
     let stream = response
         .bytes_stream()
-        .map_err(|source| crate::Error::Generic {
-            store: T::STORE,
-            source: Box::new(source),
-        })
+        .map_err(map_reqwest_error::<T>)
         .boxed();
 
     Ok(GetResult {
@@ -255,6 +257,22 @@ fn get_result<T: GetClient>(
         attributes,
         payload: GetResultPayload::Stream(stream),
     })
+}
+
+fn map_reqwest_error<T: GetClient>(e: reqwest::Error) -> crate::Error {
+    if e.is_timeout() {
+        return crate::Error::Generic {
+            store: T::STORE,
+            source: Box::new(GetResultError::DataStreamTimeout {
+                store: T::STORE.to_string(),
+            }),
+        };
+    } else {
+        crate::Error::Generic {
+            store: T::STORE,
+            source: Box::new(e),
+        }
+    }
 }
 
 #[cfg(test)]
