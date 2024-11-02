@@ -142,13 +142,21 @@ pub fn bit_length(array: &dyn Array) -> Result<ArrayRef, ArrowError> {
         }
         DataType::Utf8View => {
             let list = array.as_string_view();
-            let bit_lengths = list
+            let values = list
                 .views()
                 .iter()
-                .map(|view| (*view as i32) * 8)
-                .collect::<Vec<i32>>();
-            Ok(Arc::new(Int32Array::new(
-                bit_lengths.into(),
+                .enumerate()
+                .map(|(i, _)| {
+                    if list.is_valid(i) {
+                        list.views()[i] as u32 * 8
+                    } else {
+                        0
+                    }
+                })
+                .collect::<Vec<u32>>();
+
+            Ok(Arc::new(UInt32Array::new(
+                values.into(),
                 array.nulls().cloned(),
             )))
         }
@@ -172,6 +180,8 @@ pub fn bit_length(array: &dyn Array) -> Result<ArrayRef, ArrowError> {
 
 #[cfg(test)]
 mod tests {
+    use std::ptr::null;
+
     use super::*;
     use arrow_buffer::Buffer;
     use arrow_data::ArrayData;
@@ -433,7 +443,7 @@ mod tests {
         assert_eq!(&expected, result);
     }
 
-    fn bit_length_cases() -> Vec<(Vec<&'static str>, usize, Vec<i32>)> {
+    fn bit_length_cases() -> Vec<(Vec<&'static str>, usize, Vec<u32>)> {
         // a large array
         let values = ["one", "on", "o", ""];
         let values = values.into_iter().cycle().take(4096).collect();
@@ -455,7 +465,7 @@ mod tests {
                 let array = StringArray::from(input);
                 let result = bit_length(&array).unwrap();
                 assert_eq!(len, result.len());
-                let result = result.as_any().downcast_ref::<Int32Array>().unwrap();
+                let result = result.as_any().downcast_ref::<UInt32Array>().unwrap();
                 expected.iter().enumerate().for_each(|(i, value)| {
                     assert_eq!(*value, result.value(i));
                 });
@@ -485,7 +495,7 @@ mod tests {
                 let string_array = StringViewArray::from(input);
                 let result = bit_length(&string_array).unwrap();
                 assert_eq!(len, result.len());
-                let result = result.as_any().downcast_ref::<Int32Array>().unwrap();
+                let result = result.as_any().downcast_ref::<UInt32Array>().unwrap();
                 expected.iter().enumerate().for_each(|(i, value)| {
                     assert_eq!(*value, result.value(i));
                 });
