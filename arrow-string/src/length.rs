@@ -116,8 +116,6 @@ pub fn length(array: &dyn Array) -> Result<ArrayRef, ArrowError> {
 /// * bit_length of null is null.
 /// * bit_length is in number of bits
 pub fn bit_length(array: &dyn Array) -> Result<ArrayRef, ArrowError> {
-    println!("In Array bit_length()");
-
     if let Some(d) = array.as_any_dictionary_opt() {
         let lengths = bit_length(d.values().as_ref())?;
         return Ok(d.with_values(lengths));
@@ -142,11 +140,8 @@ pub fn bit_length(array: &dyn Array) -> Result<ArrayRef, ArrowError> {
         }
         DataType::Utf8View => {
             let list = array.as_string_view();
-            let values = list
-                .views()
-                .iter()
-                .enumerate()
-                .map(|(i, _)| {
+            let values = (0..list.len())
+                .map(|i| {
                     if list.is_valid(i) {
                         list.views()[i] as u32 * 8
                     } else {
@@ -154,7 +149,6 @@ pub fn bit_length(array: &dyn Array) -> Result<ArrayRef, ArrowError> {
                     }
                 })
                 .collect::<Vec<u32>>();
-
             Ok(Arc::new(UInt32Array::new(
                 values.into(),
                 array.nulls().cloned(),
@@ -180,8 +174,6 @@ pub fn bit_length(array: &dyn Array) -> Result<ArrayRef, ArrowError> {
 
 #[cfg(test)]
 mod tests {
-    use std::ptr::null;
-
     use super::*;
     use arrow_buffer::Buffer;
     use arrow_data::ArrayData;
