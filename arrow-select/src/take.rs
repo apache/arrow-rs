@@ -50,6 +50,10 @@ use num::{One, Zero};
 ///
 /// For selecting values by index from multiple arrays see [`crate::interleave`]
 ///
+/// Note that this kernel, similar to other kernels in this crate,
+/// will avoid allocating where not necessary. Consequently
+/// the returned array may share buffers with the inputs
+///
 /// # Errors
 /// This function errors whenever:
 /// * An index cannot be casted to `usize` (typically 32 bit architectures)
@@ -424,22 +428,25 @@ fn take_bits<I: ArrowPrimitiveType>(
     indices: &PrimitiveArray<I>,
 ) -> BooleanBuffer {
     let len = indices.len();
-    let mut output_buffer = MutableBuffer::new_null(len);
-    let output_slice = output_buffer.as_slice_mut();
 
     match indices.nulls().filter(|n| n.null_count() > 0) {
-        Some(nulls) => nulls.valid_indices().for_each(|idx| {
-            if values.value(indices.value(idx).as_usize()) {
-                bit_util::set_bit(output_slice, idx);
-            }
-        }),
-        None => indices.values().iter().enumerate().for_each(|(i, index)| {
-            if values.value(index.as_usize()) {
-                bit_util::set_bit(output_slice, i);
-            }
-        }),
+        Some(nulls) => {
+            let mut output_buffer = MutableBuffer::new_null(len);
+            let output_slice = output_buffer.as_slice_mut();
+            nulls.valid_indices().for_each(|idx| {
+                if values.value(indices.value(idx).as_usize()) {
+                    bit_util::set_bit(output_slice, idx);
+                }
+            });
+            BooleanBuffer::new(output_buffer.into(), 0, len)
+        }
+        None => {
+            BooleanBuffer::collect_bool(len, |idx: usize| {
+                // SAFETY: idx<indices.len()
+                values.value(unsafe { indices.value_unchecked(idx).as_usize() })
+            })
+        }
     }
-    BooleanBuffer::new(output_buffer.into(), 0, indices.len())
 }
 
 /// `take` implementation for boolean arrays

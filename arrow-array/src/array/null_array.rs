@@ -39,6 +39,7 @@ use std::sync::Arc;
 /// assert!(array.is_nullable());
 /// assert_eq!(array.len(), 10);
 /// assert_eq!(array.null_count(), 0);
+/// assert_eq!(array.logical_null_count(), 10);
 /// assert_eq!(array.logical_nulls().unwrap().null_count(), 10);
 /// ```
 #[derive(Clone)]
@@ -120,6 +121,10 @@ impl Array for NullArray {
         !self.is_empty()
     }
 
+    fn logical_null_count(&self) -> usize {
+        self.len
+    }
+
     fn get_buffer_memory_size(&self) -> usize {
         0
     }
@@ -172,6 +177,7 @@ mod tests {
 
         assert_eq!(null_arr.len(), 32);
         assert_eq!(null_arr.null_count(), 0);
+        assert_eq!(null_arr.logical_null_count(), 32);
         assert_eq!(null_arr.logical_nulls().unwrap().null_count(), 32);
         assert!(null_arr.is_valid(0));
         assert!(null_arr.is_nullable());
@@ -184,6 +190,7 @@ mod tests {
         let array2 = array1.slice(8, 16);
         assert_eq!(array2.len(), 16);
         assert_eq!(array2.null_count(), 0);
+        assert_eq!(array2.logical_null_count(), 16);
         assert_eq!(array2.logical_nulls().unwrap().null_count(), 16);
         assert!(array2.is_valid(0));
         assert!(array2.is_nullable());

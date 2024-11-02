@@ -1006,30 +1006,36 @@ mod tests {
     async fn test_auth() {
         test_all_clients(|mut client| async move {
             // no handshake
-            assert!(client
-                .prepare("select 1;".to_string(), None)
-                .await
-                .unwrap_err()
-                .to_string()
-                .contains("No authorization header"));
+            assert_contains(
+                client
+                    .prepare("select 1;".to_string(), None)
+                    .await
+                    .unwrap_err()
+                    .to_string(),
+                "No authorization header",
+            );
 
             // Invalid credentials
-            assert!(client
-                .handshake("admin", "password2")
-                .await
-                .unwrap_err()
-                .to_string()
-                .contains("Invalid credentials"));
+            assert_contains(
+                client
+                    .handshake("admin", "password2")
+                    .await
+                    .unwrap_err()
+                    .to_string(),
+                "Invalid credentials",
+            );
 
             // Invalid Tokens
             client.handshake("admin", "password").await.unwrap();
             client.set_token("wrong token".to_string());
-            assert!(client
-                .prepare("select 1;".to_string(), None)
-                .await
-                .unwrap_err()
-                .to_string()
-                .contains("invalid token"));
+            assert_contains(
+                client
+                    .prepare("select 1;".to_string(), None)
+                    .await
+                    .unwrap_err()
+                    .to_string(),
+                "invalid token",
+            );
 
             client.clear_token();
 
@@ -1038,5 +1044,16 @@ mod tests {
             client.prepare("select 1;".to_string(), None).await.unwrap();
         })
         .await
+    }
+
+    fn assert_contains(actual: impl AsRef<str>, searched_for: impl AsRef<str>) {
+        let actual = actual.as_ref();
+        let searched_for = searched_for.as_ref();
+        assert!(
+            actual.contains(searched_for),
+            "Expected '{}' to contain '{}'",
+            actual,
+            searched_for
+        );
     }
 }
