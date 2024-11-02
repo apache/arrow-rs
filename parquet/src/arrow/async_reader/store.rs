@@ -179,12 +179,9 @@ impl AsyncFileReader for ParquetObjectReader {
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        convert::Infallible,
-        sync::{
-            atomic::{AtomicUsize, Ordering},
-            Arc,
-        },
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
     };
 
     use futures::TryStreamExt;
@@ -197,6 +194,7 @@ mod tests {
 
     use crate::arrow::async_reader::{AsyncFileReader, ParquetObjectReader};
     use crate::arrow::ParquetRecordBatchStreamBuilder;
+    use crate::errors::ParquetError;
 
     async fn get_meta_store() -> (ObjectMeta, Arc<dyn ObjectStore>) {
         let res = parquet_test_data();
@@ -293,7 +291,7 @@ mod tests {
         let current_id = std::thread::current().id();
 
         let other_id = reader
-            .spawn(|_, _| async move { Ok::<_, Infallible>(std::thread::current().id()) }.boxed())
+            .spawn(|_, _| async move { Ok::<_, ParquetError>(std::thread::current().id()) }.boxed())
             .await
             .unwrap();
 
