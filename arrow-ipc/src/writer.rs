@@ -1370,12 +1370,17 @@ fn encode_array_datas(
 
     fn get_arr_batch_size<AD: Borrow<ArrayData>>(
         iter: impl Iterator<Item = AD>,
-        alignment: u8,
+        write_options: &IpcWriteOptions,
     ) -> Result<usize, ArrowError> {
         iter.map(|arr| {
-            arr.borrow()
-                .get_slice_memory_size()
-                .map(|size| size + pad_to_alignment(alignment, size))
+            let arr = arr.borrow();
+            arr.get_slice_memory_size_with_alignment(Some(write_options.alignment))
+                .map(|size| if has_validity_bitmap(arr.data_type(), write_options) && arr.nulls().is_none() {
+                    let null_len = bit_util::ceil(arr.len(), 8);
+                    size + null_len + pad_to_alignment(write_options.alignment, null_len)
+                } else {
+                    size
+                })
         })
         .sum()
     }
@@ -1383,24 +1388,25 @@ fn encode_array_datas(
     let header_len = fbb.fbb.finished_data().len();
     max_msg_size = max_msg_size.saturating_sub(header_len).max(1);
 
-    let total_size = get_arr_batch_size(arr_datas.iter(), write_options.alignment)?;
+    let total_size = get_arr_batch_size(arr_datas.iter(), write_options)?;
 
-    if total_size == 0 {
+    /*if total_size == 0 {
         // If there's nothing of size to encode, then existing tests say we shouldn't even return
         // an empty EncodedData - we just return no EncodedData
         return Ok(vec![]);
-    }
+    }*/
 
     let n_batches = bit_util::ceil(total_size, max_msg_size);
-    // let rows_per_batch = n_rows / n_batches;
     let mut out = Vec::with_capacity(n_batches);
 
     println!("🐈 n_rows: {n_rows}, n_batches: {n_batches}, header_len: {header_len}, total_size: {total_size}, max_msg_size: {max_msg_size}");
 
     let mut offset = 0;
-    while offset < n_rows {
+    while offset < n_rows.max(1) {
         let length = (1..)
             .find(|len| {
+                println!("🛑 break");
+
                 // If we've exhausted the available length of the array datas, then just return -
                 // we've got it.
                 if arr_datas.iter().any(|arr| arr.len() < offset + len) {
@@ -1412,14 +1418,13 @@ fn encode_array_datas(
                 // we can unwrap this here b/c this only errors on malformed buffer-type/data-type
                 // combinations, and if any of these arrays had that, this function would've
                 // already short-circuited on an earlier call of this function
-                get_arr_batch_size(arr_iter, write_options.alignment).unwrap() > max_msg_size
+                get_arr_batch_size(arr_iter, write_options).unwrap() > max_msg_size
             })
             // Because this is an unbounded range, this will only panic if we reach usize::MAX and
             // still haven't found anything. However, the inner part of this loop slices
             // `ArrayData` with the number that we're iterating over, and that will panic if we
             // reach usize::MAX because that will be bigger than it can handle to be sliced.
-            .unwrap()
-            - 1;
+            .unwrap() - 1;
 
         let new_arrs = arr_datas
             .iter()
@@ -1761,7 +1766,7 @@ impl<'fbb> FlatBufferSizeTracker<'fbb> {
         compression_codec: Option<CompressionCodec>,
         alignment: u8,
     ) -> Result<(), ArrowError> {
-        println!("🐈 writing buffer of size {}", buffer.len());
+        let start_len = self.arrow_data.len();
 
         let len: i64 = if self.dry_run {
             // Flatbuffers will essentially optimize this away if we say the len is 0 for all of
@@ -1789,6 +1794,8 @@ impl<'fbb> FlatBufferSizeTracker<'fbb> {
         // padding and make offset aligned
         let pad_len = pad_to_alignment(alignment, len as usize);
         self.arrow_data.extend_from_slice(&PADDING[..pad_len]);
+
+        println!("🐈 writing buffer of size {} - arrow_data went {} => {}", buffer.len(), start_len, self.arrow_data.len());
 
         *offset += len + (pad_len as i64);
         Ok(())

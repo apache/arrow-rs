@@ -423,6 +423,88 @@ impl ArrayData {
         size
     }
 
+    pub fn get_slice_memory_size_with_alignment(&self, alignment: Option<u8>) -> Result<usize, ArrowError> {
+        let layout = layout(&self.data_type);
+
+        // TODO: I pulled this from arrow-ipc, we should extract it to something where they can
+        // share code
+        #[inline]
+        fn pad_to_alignment(alignment: u8, len: usize) -> usize {
+            let a = usize::from(alignment - 1);
+            ((len + a) & !a) - len
+        }
+
+        let mut result = layout.buffers.iter().map(|spec| {
+            let size = match spec {
+                BufferSpec::FixedWidth { byte_width, .. } => {
+                    let num_elems = match self.data_type {
+                        // On these offsets-plus-values datatypes, their offset buffer (which is
+                        // FixedWidth and thus the one we're looking at right now in this
+                        // FixedWidth arm) contains self.len + 1 elements due to the way the
+                        // offsets are encoded as overlapping pairs of (start, (end+start),
+                        // (end+start), etc).
+                        DataType::Utf8 | DataType::Binary | DataType::LargeUtf8 | DataType::LargeBinary => self.len + 1,
+                        _ => self.len
+                    };
+
+                    num_elems.checked_mul(*byte_width).ok_or_else(|| {
+                        ArrowError::ComputeError(
+                            "Integer overflow computing buffer size".to_string(),
+                        )
+                    })
+                }
+                BufferSpec::VariableWidth => match &self.data_type {
+                    // UTF8 and Binary have two buffers - one for the offsets, one for the values.
+                    // When calculating size, the offset buffer's size is calculated by the
+                    // FixedWidth buffer arm above, so we just need to count the offsets here.
+                    DataType::Utf8 | DataType::Binary => {
+                        self.typed_offsets::<i32>()
+                            .map(|off| (off[self.len] - off[0]) as usize)
+                    }
+                    DataType::LargeUtf8 | DataType::LargeBinary => {
+                        self.typed_offsets::<i64>()
+                            .map(|off| (off[self.len] - off[0]) as usize)
+                    }
+                    // `FlatBufferSizeTracker::write_array_data` just writes these just as raw
+                    // buffer data as opposed to using offsets or anything
+                    DataType::BinaryView | DataType::Utf8View => Ok(
+                        self.buffers()
+                            .iter()
+                            .map(|buf| buf.len())
+                            .sum::<usize>()
+                    ),
+                    dt => Err(ArrowError::NotYetImplemented(format!(
+                        "Invalid data type for VariableWidth buffer. Expected Utf8, LargeUtf8, Binary or LargeBinary. Got {dt}",
+                    ))),
+                }
+                BufferSpec::BitMap => Ok(bit_util::ceil(self.len, 8)),
+                // Nothing to do when AlwaysNull
+                BufferSpec::AlwaysNull => Ok(0)
+            }?;
+
+            Ok(size + alignment.map_or(0, |a| pad_to_alignment(a, size)))
+        }).sum::<Result<usize, ArrowError>>()?;
+
+        println!("🏹 after sum: {result}");
+
+        if self.nulls().is_some() {
+            result += bit_util::ceil(self.len, 8);
+        }
+
+        if let Some(a) = alignment {
+            result += pad_to_alignment(a, result);
+        }
+
+        println!("🏹 after null mask: {result}");
+
+        for child in &self.child_data {
+            result += child.get_slice_memory_size_with_alignment(alignment)?;
+        }
+
+        Ok(result)
+
+    }
+
     /// Returns the total number of the bytes of memory occupied by
     /// the buffers by this slice of [`ArrayData`] (See also diagram on [`ArrayData`]).
     ///
@@ -436,60 +518,7 @@ impl ArrayData {
     /// first `20` elements, then [`Self::get_slice_memory_size`] on the
     /// sliced [`ArrayData`] would return `20 * 8 = 160`.
     pub fn get_slice_memory_size(&self) -> Result<usize, ArrowError> {
-        let mut result: usize = 0;
-        let layout = layout(&self.data_type);
-
-        for spec in layout.buffers.iter() {
-            match spec {
-                BufferSpec::FixedWidth { byte_width, .. } => {
-                    let buffer_size = self.len.checked_mul(*byte_width).ok_or_else(|| {
-                        ArrowError::ComputeError(
-                            "Integer overflow computing buffer size".to_string(),
-                        )
-                    })?;
-                    result += buffer_size;
-                }
-                BufferSpec::VariableWidth => {
-                    result += match &self.data_type {
-                        DataType::Utf8 | DataType::Binary => {
-                            let (buf1, buf2) = self.get_byte_array_buffers::<i32>();
-                            buf1.len() + buf2.len()
-                        }
-                        DataType::LargeUtf8 | DataType::LargeBinary => {
-                            let (buf1, buf2) = self.get_byte_array_buffers::<i64>();
-                            buf1.len() + buf2.len()
-                        }
-                        // `FlatBufferSizeTracker::write_array_data` just writes these just as raw
-                        // buffer data as opposed to using offsets or anything
-                        DataType::BinaryView | DataType::Utf8View => self.buffers()
-                            .iter()
-                            .map(|buf| buf.len())
-                            .sum::<usize>(),
-                        dt => {
-                            return Err(ArrowError::NotYetImplemented(format!(
-                                "Invalid data type for VariableWidth buffer. Expected Utf8, LargeUtf8, Binary or LargeBinary. Got {dt}",
-                            )))
-                        }
-                    };
-                }
-                BufferSpec::BitMap => {
-                    let buffer_size = bit_util::ceil(self.len, 8);
-                    result += buffer_size;
-                }
-                BufferSpec::AlwaysNull => {
-                    // Nothing to do
-                }
-            }
-        }
-
-        if self.nulls().is_some() {
-            result += bit_util::ceil(self.len, 8);
-        }
-
-        for child in &self.child_data {
-            result += child.get_slice_memory_size()?;
-        }
-        Ok(result)
+        self.get_slice_memory_size_with_alignment(None)
     }
 
     /// Returns the offsets and values [`Buffer`]s for a ByteArray with offset type `O`
@@ -497,6 +526,12 @@ impl ArrayData {
     /// In particular, this handles re-encoding the offsets if they don't start at `0`,
     /// slicing the values buffer as appropriate. This helps reduce the encoded
     /// size of sliced arrays, as values that have been sliced away are not encoded
+    ///
+    /// # Panics
+    ///
+    /// Panics if self.buffers does not contain at least 2 buffers (this code expects that the
+    /// first will contain the offsets for this variable-length array and the other will contain
+    /// the values)
     pub fn get_byte_array_buffers<O: ArrowNativeType + num::Integer>(&self) -> (Buffer, Buffer) {
         if self.is_empty() {
             return (MutableBuffer::new(0).into(), MutableBuffer::new(0).into());
@@ -504,8 +539,9 @@ impl ArrayData {
 
         // get the buffer of offsets, now shifted so they are shifted to be accurate to the slice
         // of values that we'll be taking (e.g. if they previously said [0, 3, 5, 7], but we slice
-        // to only get the last two, they'll be shifted to be [0, 2], since those would be the
-        // offsets for the last two values in this shifted slice).
+        // to only get the last offset, they'll be shifted to be [0, 2], since that would be the
+        // offset pair for the last value in this shifted slice).
+        // also, in this example, original_start_offset would be 5 and len would be 2.
         let (offsets, original_start_offset, len) = self.reencode_offsets::<O>();
         let values = self.buffers()[1].slice_with_length(original_start_offset, len);
         (offsets, values)
@@ -517,25 +553,23 @@ impl ArrayData {
     /// # Panics
     ///
     /// Will panic if you call this on an `ArrayData` that does not have a buffer of offsets as the
-    /// very first buffer (like most variable length arrays)
+    /// very first buffer (i.e. expects this to be a valid variable-length array)
     pub fn reencode_offsets<O: ArrowNativeType + num::Integer>(&self) -> (Buffer, usize, usize) {
         // first we want to see: what is the offset of this `ArrayData` into the buffer (which is a
         // buffer of offsets into the buffer of data)
         let orig_offset = self.offset();
-        let o_size = mem::size_of::<O>();
-        // and then slice the buffer to only get the part we care about, keeping in mind the size
-        // of the type that we're treating it as (since it's just encoded as a bunch of u8s as the
-        // base level)
-        let mut offsets =
-            self.buffers()[0].slice_with_length(orig_offset * o_size, self.len * o_size);
+        // and also we need to get the buffer of offsets
+        let offsets_buf = &self.buffers()[0];
 
         // then we have to turn it into a typed slice that we can read and manipulate below if
-        // needed
-        let offsets_slice = offsets.typed_data::<O>();
+        // needed, and slice it according to the size that we need to return
+        // we need to do `self.len + 1` instead of just `self.len` because the offsets are encoded
+        // as overlapping pairs - e.g. an array of two items, starting at idx 0, and spanning two
+        // each, would be encoded as [0, 2, 4].
+        let offsets_slice = &offsets_buf.typed_data::<O>()[orig_offset..][..self.len + 1];
 
         // and now we can see what the very first offset and the very last offset is
-        let start_offset_o = offsets_slice.first().unwrap();
-        let start_offset = start_offset_o.as_usize();
+        let start_offset = offsets_slice.first().unwrap();
         let end_offset = offsets_slice.last().unwrap().as_usize();
 
         // if the start offset is just 0, i.e. it points to the very beginning of the values of
@@ -543,8 +577,12 @@ impl ArrayData {
         // all the offsets in this buffer are already offset by 0.
         // But if it's not 0, then we need to shift them all so that the offsets don't start at
         // some weird value.
-        if start_offset != 0 {
-            offsets = offsets_slice.iter().map(|x| *x - *start_offset_o).collect();
+        let (start_offset, offsets) = match start_offset.as_usize() {
+            0 => (0, offsets_slice.to_vec().into()),
+            start => (
+                start,
+                offsets_slice.iter().map(|x| *x - *start_offset).collect(),
+            ),
         };
 
         (offsets, start_offset, end_offset - start_offset)
@@ -590,11 +628,10 @@ impl ArrayData {
 
         if let DataType::Struct(_) = self.data_type() {
             // Slice into children
-            let new_offset = self.offset + offset;
-            let new_data = ArrayData {
+            ArrayData {
                 data_type: self.data_type().clone(),
                 len: length,
-                offset: new_offset,
+                offset: self.offset + offset,
                 buffers: self.buffers.clone(),
                 // Slice child data, to propagate offsets down to them
                 child_data: self
@@ -603,9 +640,7 @@ impl ArrayData {
                     .map(|data| data.slice(offset, length.min(data.len())))
                     .collect(),
                 nulls: self.nulls.as_ref().map(|x| x.slice(offset, length)),
-            };
-
-            new_data
+            }
         } else {
             let mut new_data = self.clone();
 
@@ -942,6 +977,7 @@ impl ArrayData {
         let required_len = (len + self.offset) * mem::size_of::<T>();
 
         if buffer.len() < required_len {
+            // panic!("just get it over with");
             return Err(ArrowError::InvalidArgumentError(format!(
                 "Buffer {} of {} isn't large enough. Expected {} bytes got {}",
                 idx,
@@ -951,7 +987,7 @@ impl ArrayData {
             )));
         }
 
-        Ok(&buffer.typed_data::<T>()[self.offset..self.offset + len])
+        Ok(&buffer.typed_data::<T>()[self.offset..][..len])
     }
 
     /// Does a cheap sanity check that the `self.len` values in `buffer` are valid
@@ -2249,11 +2285,12 @@ mod tests {
         )
         .unwrap();
         let string_data_slice = string_data.slice(1, 2);
+
+        let data_len = string_data.get_slice_memory_size().unwrap();
+        println!("🥩 checking slice, have {data_len}!");
+        let slice_len = string_data_slice.get_slice_memory_size().unwrap();
         //4 bytes of offset and 2 bytes of data reduced by slicing.
-        assert_eq!(
-            string_data.get_slice_memory_size().unwrap() - 6,
-            string_data_slice.get_slice_memory_size().unwrap()
-        );
+        assert_eq!(data_len - 6, slice_len);
     }
 
     #[test]

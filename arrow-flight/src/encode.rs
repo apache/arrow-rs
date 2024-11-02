@@ -983,12 +983,16 @@ mod tests {
             ))],
         );
 
-        struct_builder.field_builder::<ListBuilder<GenericByteDictionaryBuilder<UInt16Type,GenericStringType<i32>>>>(0).unwrap().append_value(vec![Some("a"), None, Some("b")]);
+        struct_builder.field_builder::<ListBuilder<GenericByteDictionaryBuilder<UInt16Type, GenericStringType<i32>>>>(0)
+            .unwrap()
+            .append_value(vec![Some("a"), None, Some("b")]);
         struct_builder.append(true);
 
         let arr1 = struct_builder.finish();
 
-        struct_builder.field_builder::<ListBuilder<GenericByteDictionaryBuilder<UInt16Type,GenericStringType<i32>>>>(0).unwrap().append_value(vec![Some("c"), None, Some("d")]);
+        struct_builder.field_builder::<ListBuilder<GenericByteDictionaryBuilder<UInt16Type, GenericStringType<i32>>>>(0)
+            .unwrap()
+            .append_value(vec![Some("c"), None, Some("d")]);
         struct_builder.append(true);
 
         let arr2 = struct_builder.finish();
@@ -1497,7 +1501,7 @@ mod tests {
             .encoded_batch_with_size(&batch, &mut dict_tracker, &write_opts, max_flight_data_size)
             .unwrap()
             .1;
-        assert_eq!(split.len(), 3);
+        assert_eq!(split.len(), 2);
         /*assert_eq!(
             split.iter().map(|batch| batch.num_rows()).sum::<usize>(),
             n_rows
