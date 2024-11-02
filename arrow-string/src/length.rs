@@ -19,8 +19,9 @@
 
 use arrow_array::*;
 use arrow_array::{cast::AsArray, types::*};
-use arrow_buffer::{ArrowNativeType, NullBuffer, OffsetBuffer};
+use arrow_buffer::{ArrowNativeType, NullBuffer, OffsetBuffer, ScalarBuffer};
 use arrow_schema::{ArrowError, DataType};
+use cast::as_string_array;
 use std::sync::Arc;
 
 fn length_impl<P: ArrowPrimitiveType>(
@@ -115,6 +116,8 @@ pub fn length(array: &dyn Array) -> Result<ArrayRef, ArrowError> {
 /// * bit_length of null is null.
 /// * bit_length is in number of bits
 pub fn bit_length(array: &dyn Array) -> Result<ArrayRef, ArrowError> {
+    println!("In Array bit_length()");
+
     if let Some(d) = array.as_any_dictionary_opt() {
         let lengths = bit_length(d.values().as_ref())?;
         return Ok(d.with_values(lengths));
@@ -138,20 +141,12 @@ pub fn bit_length(array: &dyn Array) -> Result<ArrayRef, ArrowError> {
             Ok(bit_length_impl::<Int64Type>(list.offsets(), list.nulls()))
         }
         DataType::Utf8View => {
-            let string_view_array = array
-                .as_any()
-                .downcast_ref::<StringViewArray>()
-                .ok_or_else(|| ArrowError::ComputeError("Expected Utf8View array".to_string()))?;
-            let mut bit_lengths = Vec::with_capacity(array.len());
-            for i in 0..array.len() {
-                let bit_length = if string_view_array.is_valid(i) {
-                    (string_view_array.value(i).len() * 8) as i32
-                } else {
-                    0
-                };
-                bit_lengths.push(bit_length);
-            }
-
+            let list = array.as_string_view();
+            let bit_lengths = list
+                .views()
+                .iter()
+                .map(|view| (*view as i32) * 8)
+                .collect::<Vec<i32>>();
             Ok(Arc::new(Int32Array::new(
                 bit_lengths.into(),
                 array.nulls().cloned(),
@@ -490,7 +485,6 @@ mod tests {
                 let string_array = StringViewArray::from(input);
                 let result = bit_length(&string_array).unwrap();
                 assert_eq!(len, result.len());
-
                 let result = result.as_any().downcast_ref::<Int32Array>().unwrap();
                 expected.iter().enumerate().for_each(|(i, value)| {
                     assert_eq!(*value, result.value(i));
