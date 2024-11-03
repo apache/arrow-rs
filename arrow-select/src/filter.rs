@@ -380,7 +380,7 @@ fn filter_array(values: &dyn Array, predicate: &FilterPredicate) -> Result<Array
             DataType::RunEndEncoded(_, _) => {
                 if predicate.filter.len() != values.len() {
                     return Err(ArrowError::InvalidArgumentError(format!(
-                        "Filter predicate of length {} is not equal than target array of length {}",
+                        "Filter predicate of length {} is not equal to the target array of length {}",
                         predicate.filter.len(),
                         values.len()
                     )));
