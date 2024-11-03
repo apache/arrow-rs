@@ -1288,10 +1288,19 @@ mod tests {
         let run_ends = Int64Array::from(vec![2, 3, 8, 10]);
         let values = Int64Array::from(vec![7, -2, 9, -8]);
         let a = RunArray::try_new(&run_ends, &values).expect("Failed to create RunArray");
-        let b = BooleanArray::from(vec![false, true, false]);
+        let b = BooleanArray::from(vec![false, true, true]);
         let c = filter(&a, &b).unwrap();
         let actual: &RunArray<Int64Type> = as_run_array(&c);
-        assert_eq!(1, actual.len());
+        assert_eq!(2, actual.len());
+
+        let expected = RunArray::try_new(
+            &Int64Array::from(vec![1, 2]),
+            &Int64Array::from(vec![7, -2]),
+        )
+        .expect("Failed to make expected RunArray test is broken");
+
+        assert_eq!(&actual.run_ends().values(), &expected.run_ends().values());
+        assert_eq!(actual.values(), expected.values())
     }
 
     #[test]
