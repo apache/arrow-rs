@@ -378,8 +378,17 @@ fn filter_array(values: &dyn Array, predicate: &FilterPredicate) -> Result<Array
                 Ok(Arc::new(filter_fixed_size_binary(values.as_fixed_size_binary(), predicate)))
             }
             DataType::RunEndEncoded(_, _) => {
+                if predicate.filter.len() != values.len() {
+                    return Err(ArrowError::InvalidArgumentError(format!(
+                        "Filter predicate of length {} is not equal than target array of length {}",
+                        predicate.filter.len(),
+                        values.len()
+                    )));
+                }
+
+                // Safety: We have checked that the predicate and values have the same length
                 downcast_run_array!{
-                    values => Ok(Arc::new(filter_run_end_array(values, predicate)?)),
+                    values => Ok(Arc::new(unsafe { filter_run_end_array(values, predicate)? })),
                     t => unimplemented!("Filter not supported for RunEndEncoded type {:?}", t)
                 }
             }
@@ -422,7 +431,10 @@ fn filter_array(values: &dyn Array, predicate: &FilterPredicate) -> Result<Array
 }
 
 /// Filter any supported [`RunArray`] based on a [`FilterPredicate`]
-fn filter_run_end_array<R: RunEndIndexType>(
+///
+/// # Safety
+/// The caller must ensure that the `pred` and `re_arr` are the same length.
+unsafe fn filter_run_end_array<R: RunEndIndexType>(
     re_arr: &RunArray<R>,
     pred: &FilterPredicate,
 ) -> Result<RunArray<R>, ArrowError>
@@ -1278,6 +1290,18 @@ mod tests {
         let c = filter(&a, &b).unwrap();
         let actual: &RunArray<Int64Type> = as_run_array(&c);
         assert_eq!(0, actual.len());
+    }
+
+    #[test]
+    fn test_filter_run_end_encoding_array_safety() {
+        let run_ends = Int64Array::from(vec![2, 3, 8, 10]);
+        let values = Int64Array::from(vec![7, -2, 9, -8]);
+        let a = RunArray::try_new(&run_ends, &values).expect("Failed to create RunArray");
+        let b = BooleanArray::from(vec![
+            true, false, false, false, false, false, false, false, false,
+        ]);
+        let c = filter(&a, &b);
+        assert!(c.is_err());
     }
 
     #[test]
