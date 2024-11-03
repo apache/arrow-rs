@@ -20,7 +20,7 @@
 use std::ops::AddAssign;
 use std::sync::Arc;
 
-use arrow_array::builder::{BooleanBufferBuilder, BooleanBuilder};
+use arrow_array::builder::BooleanBufferBuilder;
 use arrow_array::cast::AsArray;
 use arrow_array::types::{
     ArrowDictionaryKeyType, ArrowPrimitiveType, ByteArrayType, ByteViewType, RunEndIndexType,
@@ -430,19 +430,6 @@ where
     R::Native: Into<i64> + From<bool>,
     R::Native: AddAssign,
 {
-    let mut resized_filter = None;
-    let required_filter_len = re_arr.run_ends().max_value();
-    let diff = required_filter_len - pred.filter.len();
-    if diff > 0 {
-        let mut builder = BooleanBuilder::with_capacity(required_filter_len);
-        pred.filter
-            .values()
-            .iter()
-            .for_each(|v| builder.append_value(v));
-        builder.append_n(diff, false);
-        resized_filter = Some(builder.finish());
-    }
-
     let run_ends: &RunEndBuffer<R::Native> = re_arr.run_ends();
     let mut values_filter = BooleanBufferBuilder::new(run_ends.len());
     let mut new_run_ends = vec![R::default_value(); run_ends.len()];
@@ -450,21 +437,20 @@ where
     let mut start = 0i64;
     let mut i = 0;
     let mut count = R::default_value();
-    let filter_values = if let Some(ref resized_filter) = resized_filter {
-        resized_filter.values()
-    } else {
-        pred.filter.values()
-    };
+    let filter_values = pred.filter.values();
 
     for end in run_ends.inner().into_iter().map(|i| (*i).into()) {
         let mut keep = false;
 
-        // Safety: we create new filter values above if the given values are less than the
-        // run_ends max value so we're always within bounds when calling value_unchecked
-        for pred in (start..end).map(|i| unsafe { filter_values.value_unchecked(i as usize) }) {
+        for pred in filter_values
+            .iter()
+            .skip(start as usize)
+            .take((end - start) as usize)
+        {
             count += R::Native::from(pred);
             keep |= pred
         }
+
         // this is to avoid branching
         new_run_ends[i] = count;
         i += keep as usize;
