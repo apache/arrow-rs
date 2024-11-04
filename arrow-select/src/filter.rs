@@ -436,18 +436,21 @@ where
 
     let mut start = 0i64;
     let mut i = 0;
-    let filter_values = pred.filter.values();
     let mut count = R::default_value();
+    let filter_values = pred.filter.values();
 
     for end in run_ends.inner().into_iter().map(|i| (*i).into()) {
         let mut keep = false;
-        // in filter_array the predicate array is checked to have the same len as the run end array
-        // this means the largest value in the run_ends is == to pred.len()
-        // so we're always within bounds when calling value_unchecked
-        for pred in (start..end).map(|i| unsafe { filter_values.value_unchecked(i as usize) }) {
+
+        for pred in filter_values
+            .iter()
+            .skip(start as usize)
+            .take((end - start) as usize)
+        {
             count += R::Native::from(pred);
             keep |= pred
         }
+
         // this is to avoid branching
         new_run_ends[i] = count;
         i += keep as usize;
@@ -1278,6 +1281,26 @@ mod tests {
         let c = filter(&a, &b).unwrap();
         let actual: &RunArray<Int64Type> = as_run_array(&c);
         assert_eq!(0, actual.len());
+    }
+
+    #[test]
+    fn test_filter_run_end_encoding_array_max_value_gt_predicate_len() {
+        let run_ends = Int64Array::from(vec![2, 3, 8, 10]);
+        let values = Int64Array::from(vec![7, -2, 9, -8]);
+        let a = RunArray::try_new(&run_ends, &values).expect("Failed to create RunArray");
+        let b = BooleanArray::from(vec![false, true, true]);
+        let c = filter(&a, &b).unwrap();
+        let actual: &RunArray<Int64Type> = as_run_array(&c);
+        assert_eq!(2, actual.len());
+
+        let expected = RunArray::try_new(
+            &Int64Array::from(vec![1, 2]),
+            &Int64Array::from(vec![7, -2]),
+        )
+        .expect("Failed to make expected RunArray test is broken");
+
+        assert_eq!(&actual.run_ends().values(), &expected.run_ends().values());
+        assert_eq!(actual.values(), expected.values())
     }
 
     #[test]
