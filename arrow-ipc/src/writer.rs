@@ -2678,6 +2678,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(target_pointer_width = "64")]
     fn test_decimal128_alignment8_is_unaligned() {
         const IPC_ALIGNMENT: usize = 8;
 
