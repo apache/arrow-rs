@@ -1250,7 +1250,8 @@ mod tests {
         test_timestamp::<TimestampNanosecondType>();
     }
 
-    fn test_time<T: ArrowTemporalType>() {
+    #[cfg(target_pointer_width = "64")]
+    fn test_time_with_64_bits<T: ArrowTemporalType>() {
         let buf = r#"
         {"a": 1, "b": "09:26:56.123 AM", "c": 38.30}
         {"a": 2, "b": "23:59:59", "c": 123.456}
@@ -1323,11 +1324,12 @@ mod tests {
     }
 
     #[test]
-    fn test_times() {
-        test_time::<Time32MillisecondType>();
-        test_time::<Time32SecondType>();
-        test_time::<Time64MicrosecondType>();
-        test_time::<Time64NanosecondType>();
+    #[cfg(target_pointer_width = "64")]
+    fn test_times_with_64_bits() {
+        test_time_with_64_bits::<Time32MillisecondType>();
+        test_time_with_64_bits::<Time32SecondType>();
+        test_time_with_64_bits::<Time64MicrosecondType>();
+        test_time_with_64_bits::<Time64NanosecondType>();
     }
 
     #[test]
