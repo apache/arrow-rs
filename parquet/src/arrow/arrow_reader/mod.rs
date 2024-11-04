@@ -925,18 +925,23 @@ mod tests {
 
     use bytes::Bytes;
     use half::f16;
+    #[cfg(target_pointer_width = "64")]
     use num::PrimInt;
     use rand::{thread_rng, Rng, RngCore};
     use tempfile::tempfile;
 
     use arrow_array::builder::*;
     use arrow_array::cast::AsArray;
+    #[cfg(target_pointer_width = "64")]
+    use arrow_array::types::DecimalType;
     use arrow_array::types::{
-        Decimal128Type, Decimal256Type, DecimalType, Float16Type, Float32Type, Float64Type,
-        Time32MillisecondType, Time64MicrosecondType,
+        Decimal128Type, Float16Type, Float32Type, Float64Type, Time32MillisecondType,
+        Time64MicrosecondType,
     };
     use arrow_array::*;
-    use arrow_buffer::{i256, ArrowNativeType, Buffer, IntervalDayTime};
+    #[cfg(target_pointer_width = "64")]
+    use arrow_buffer::ArrowNativeType;
+    use arrow_buffer::{i256, Buffer, IntervalDayTime};
     use arrow_data::ArrayDataBuilder;
     use arrow_schema::{
         ArrowError, DataType as ArrowDataType, Field, Fields, Schema, SchemaRef, TimeUnit,
@@ -3848,6 +3853,7 @@ mod tests {
         assert_eq!(out, batch.slice(2, 1));
     }
 
+    #[cfg(target_pointer_width = "64")]
     fn test_decimal_roundtrip<T: DecimalType>() {
         // Precision <= 9 -> INT32
         // Precision <= 18 -> INT64
@@ -3896,7 +3902,9 @@ mod tests {
     }
 
     #[test]
+    #[cfg(target_pointer_width = "64")]
     fn test_decimal() {
+        use arrow_array::types::Decimal256Type;
         test_decimal_roundtrip::<Decimal128Type>();
         test_decimal_roundtrip::<Decimal256Type>();
     }

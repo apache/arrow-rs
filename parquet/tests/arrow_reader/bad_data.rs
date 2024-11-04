@@ -102,6 +102,7 @@ fn test_arrow_gh_41317() {
 }
 
 #[test]
+#[cfg(target_pointer_width = "64")]
 fn test_arrow_rs_gh_6229_dict_header() {
     let err = read_file("ARROW-RS-GH-6229-DICTHEADER.parquet").unwrap_err();
     assert_eq!(
