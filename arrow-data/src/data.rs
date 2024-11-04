@@ -423,7 +423,10 @@ impl ArrayData {
         size
     }
 
-    pub fn get_slice_memory_size_with_alignment(&self, alignment: Option<u8>) -> Result<usize, ArrowError> {
+    pub fn get_slice_memory_size_with_alignment(
+        &self,
+        alignment: Option<u8>,
+    ) -> Result<usize, ArrowError> {
         let layout = layout(&self.data_type);
 
         // TODO: I pulled this from arrow-ipc, we should extract it to something where they can
@@ -485,24 +488,16 @@ impl ArrayData {
             Ok(size + alignment.map_or(0, |a| pad_to_alignment(a, size)))
         }).sum::<Result<usize, ArrowError>>()?;
 
-        println!("🏹 after sum: {result}");
-
         if self.nulls().is_some() {
-            result += bit_util::ceil(self.len, 8);
+            let null_len = bit_util::ceil(self.len, 8);
+            result += null_len + alignment.map_or(0, |a| pad_to_alignment(a, null_len));
         }
-
-        if let Some(a) = alignment {
-            result += pad_to_alignment(a, result);
-        }
-
-        println!("🏹 after null mask: {result}");
 
         for child in &self.child_data {
             result += child.get_slice_memory_size_with_alignment(alignment)?;
         }
 
         Ok(result)
-
     }
 
     /// Returns the total number of the bytes of memory occupied by
@@ -519,73 +514,6 @@ impl ArrayData {
     /// sliced [`ArrayData`] would return `20 * 8 = 160`.
     pub fn get_slice_memory_size(&self) -> Result<usize, ArrowError> {
         self.get_slice_memory_size_with_alignment(None)
-    }
-
-    /// Returns the offsets and values [`Buffer`]s for a ByteArray with offset type `O`
-    ///
-    /// In particular, this handles re-encoding the offsets if they don't start at `0`,
-    /// slicing the values buffer as appropriate. This helps reduce the encoded
-    /// size of sliced arrays, as values that have been sliced away are not encoded
-    ///
-    /// # Panics
-    ///
-    /// Panics if self.buffers does not contain at least 2 buffers (this code expects that the
-    /// first will contain the offsets for this variable-length array and the other will contain
-    /// the values)
-    pub fn get_byte_array_buffers<O: ArrowNativeType + num::Integer>(&self) -> (Buffer, Buffer) {
-        if self.is_empty() {
-            return (MutableBuffer::new(0).into(), MutableBuffer::new(0).into());
-        }
-
-        // get the buffer of offsets, now shifted so they are shifted to be accurate to the slice
-        // of values that we'll be taking (e.g. if they previously said [0, 3, 5, 7], but we slice
-        // to only get the last offset, they'll be shifted to be [0, 2], since that would be the
-        // offset pair for the last value in this shifted slice).
-        // also, in this example, original_start_offset would be 5 and len would be 2.
-        let (offsets, original_start_offset, len) = self.reencode_offsets::<O>();
-        let values = self.buffers()[1].slice_with_length(original_start_offset, len);
-        (offsets, values)
-    }
-
-    /// Common functionality for re-encoding offsets. Returns the new offsets as well as
-    /// original start offset and length for use in slicing child data.
-    ///
-    /// # Panics
-    ///
-    /// Will panic if you call this on an `ArrayData` that does not have a buffer of offsets as the
-    /// very first buffer (i.e. expects this to be a valid variable-length array)
-    pub fn reencode_offsets<O: ArrowNativeType + num::Integer>(&self) -> (Buffer, usize, usize) {
-        // first we want to see: what is the offset of this `ArrayData` into the buffer (which is a
-        // buffer of offsets into the buffer of data)
-        let orig_offset = self.offset();
-        // and also we need to get the buffer of offsets
-        let offsets_buf = &self.buffers()[0];
-
-        // then we have to turn it into a typed slice that we can read and manipulate below if
-        // needed, and slice it according to the size that we need to return
-        // we need to do `self.len + 1` instead of just `self.len` because the offsets are encoded
-        // as overlapping pairs - e.g. an array of two items, starting at idx 0, and spanning two
-        // each, would be encoded as [0, 2, 4].
-        let offsets_slice = &offsets_buf.typed_data::<O>()[orig_offset..][..self.len + 1];
-
-        // and now we can see what the very first offset and the very last offset is
-        let start_offset = offsets_slice.first().unwrap();
-        let end_offset = offsets_slice.last().unwrap().as_usize();
-
-        // if the start offset is just 0, i.e. it points to the very beginning of the values of
-        // this `ArrayData`, then we don't need to shift anything to be a 'correct' offset 'cause
-        // all the offsets in this buffer are already offset by 0.
-        // But if it's not 0, then we need to shift them all so that the offsets don't start at
-        // some weird value.
-        let (start_offset, offsets) = match start_offset.as_usize() {
-            0 => (0, offsets_slice.to_vec().into()),
-            start => (
-                start,
-                offsets_slice.iter().map(|x| *x - *start_offset).collect(),
-            ),
-        };
-
-        (offsets, start_offset, end_offset - start_offset)
     }
 
     /// Returns the total number of bytes of memory occupied
@@ -2287,7 +2215,6 @@ mod tests {
         let string_data_slice = string_data.slice(1, 2);
 
         let data_len = string_data.get_slice_memory_size().unwrap();
-        println!("🥩 checking slice, have {data_len}!");
         let slice_len = string_data_slice.get_slice_memory_size().unwrap();
         //4 bytes of offset and 2 bytes of data reduced by slicing.
         assert_eq!(data_len - 6, slice_len);

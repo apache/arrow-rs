@@ -261,11 +261,11 @@ impl Buffer {
     }
 
     /// Returns a slice of this buffer starting at a certain bit offset.
-    /// If the offset is byte-aligned the returned buffer is a shallow clone,
+    /// If the offset and length are byte-aligned the returned buffer is a shallow clone,
     /// otherwise a new buffer is allocated and filled with a copy of the bits in the range.
     pub fn bit_slice(&self, offset: usize, len: usize) -> Self {
-        if offset % 8 == 0 {
-            return self.slice(offset / 8);
+        if offset % 8 == 0 && len % 8 == 0 {
+            return self.slice_with_length(offset / 8, len / 8);
         }
 
         bitwise_unary_op_helper(self, offset, len, |a| a)

@@ -327,6 +327,10 @@ impl FlightDataEncoder {
 
     /// Encodes batch into one or more `FlightData` messages in self.queue
     fn encode_batch(&mut self, batch: RecordBatch) -> Result<()> {
+        if batch.num_rows() == 0 {
+            return Ok(());
+        }
+
         let schema = match &self.schema {
             Some(schema) => schema.clone(),
             // encode the schema if this is the first time we have seen it
@@ -338,7 +342,6 @@ impl FlightDataEncoder {
             DictionaryHandling::Hydrate => hydrate_dictionaries(&batch, schema)?,
         };
 
-        // ASK: Is there some sort of order that these need to go through in? Does this mess it up?
         let (flight_dictionaries, flight_batches) = self
             .encoder
             .encode_batch(&batch, self.max_flight_data_size)?;
@@ -595,7 +598,7 @@ impl FlightIpcEncoder {
     }
 
     /// Convert a `RecordBatch` to a Vec of `FlightData` representing
-    /// dictionaries and a `FlightData` representing the batch
+    /// dictionaries and a Vec of `FlightData`s representing the batch
     fn encode_batch(
         &mut self,
         batch: &RecordBatch,
@@ -1200,6 +1203,11 @@ mod tests {
         .into_iter()
         .collect::<UnionFields>();
 
+        let mut field_types = union_fields.iter().map(|(_, field)| field.data_type());
+        let dict_list_ty = field_types.next().unwrap();
+        let struct_ty = field_types.next().unwrap();
+        let string_ty = field_types.next().unwrap();
+
         let struct_fields = vec![Field::new_list(
             "dict_list",
             Field::new_dictionary("item", DataType::UInt16, DataType::Utf8, true),
@@ -1218,9 +1226,9 @@ mod tests {
             type_id_buffer,
             None,
             vec![
-                Arc::new(arr1) as Arc<dyn Array>,
-                new_null_array(union_fields.iter().nth(1).unwrap().1.data_type(), 1),
-                new_null_array(union_fields.iter().nth(2).unwrap().1.data_type(), 1),
+                Arc::new(arr1),
+                new_null_array(struct_ty, 1),
+                new_null_array(string_ty, 1),
             ],
         )
         .unwrap();
@@ -1236,9 +1244,9 @@ mod tests {
             type_id_buffer,
             None,
             vec![
-                new_null_array(union_fields.iter().next().unwrap().1.data_type(), 1),
+                new_null_array(dict_list_ty, 1),
                 Arc::new(arr2),
-                new_null_array(union_fields.iter().nth(2).unwrap().1.data_type(), 1),
+                new_null_array(string_ty, 1),
             ],
         )
         .unwrap();
@@ -1249,8 +1257,8 @@ mod tests {
             type_id_buffer,
             None,
             vec![
-                new_null_array(union_fields.iter().next().unwrap().1.data_type(), 1),
-                new_null_array(union_fields.iter().nth(1).unwrap().1.data_type(), 1),
+                new_null_array(dict_list_ty, 1),
+                new_null_array(struct_ty, 1),
                 Arc::new(StringArray::from(vec!["e"])),
             ],
         )
@@ -1725,7 +1733,6 @@ mod tests {
     /// Note this overhead will likely always be greater than zero to
     /// account for encoding overhead such as IPC headers and padding.
     ///
-    ///
     async fn verify_encoded_split(batch: RecordBatch, allowed_overage: usize) {
         let num_rows = batch.num_rows();
 
@@ -1735,28 +1742,39 @@ mod tests {
         for max_flight_data_size in [1024, 2021, 5000] {
             println!("Encoding {num_rows} with a maximum size of {max_flight_data_size}");
 
-            let mut stream = FlightDataEncoderBuilder::new()
+            let stream = FlightDataEncoderBuilder::new()
                 .with_max_flight_data_size(max_flight_data_size)
                 // use 8-byte alignment - default alignment is 64 which produces bigger ipc data
                 .with_options(IpcWriteOptions::try_new(8, false, MetadataVersion::V5).unwrap())
                 .build(futures::stream::iter([Ok(batch.clone())]));
 
+            let mut stream = FlightDataDecoder::new(stream);
+
             let mut i = 0;
             while let Some(data) = stream.next().await.transpose().unwrap() {
-                let actual_data_size = flight_data_size(&data);
+                let actual_data_size = flight_data_size(&data.inner);
 
                 let actual_overage = actual_data_size.saturating_sub(max_flight_data_size);
 
-                assert!(
-                    actual_overage <= allowed_overage,
-                    "encoded data[{i}]: actual size {actual_data_size}, \
-                         actual_overage: {actual_overage} \
-                         allowed_overage: {allowed_overage}"
-                );
+                let is_1_row =
+                    matches!(data.payload, DecodedPayload::RecordBatch(rb) if rb.num_rows() == 1);
+
+                // If only 1 row was sent over via this recordBatch, there was no way to avoid
+                // going over the limit. There's currently no mechanism for splitting a single row
+                // of results over multiple messages, so we allow going over the limit if it's the
+                // bare minimum over (1 row)
+                if !is_1_row {
+                    assert!(
+                        actual_overage <= allowed_overage,
+                        "encoded data[{i}]: actual size {actual_data_size}, \
+                             actual_overage: {actual_overage} \
+                             allowed_overage: {allowed_overage}"
+                    );
+
+                    max_overage_seen = max_overage_seen.max(actual_overage);
+                }
 
                 i += 1;
-
-                max_overage_seen = max_overage_seen.max(actual_overage)
             }
         }
 

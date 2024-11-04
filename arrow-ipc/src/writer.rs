@@ -1304,6 +1304,73 @@ fn get_buffer_element_width(spec: &BufferSpec) -> usize {
     }
 }
 
+/// Returns the offsets and values [`Buffer`]s for a ByteArray with offset type `O`
+///
+/// In particular, this handles re-encoding the offsets if they don't start at `0`,
+/// slicing the values buffer as appropriate. This helps reduce the encoded
+/// size of sliced arrays, as values that have been sliced away are not encoded
+///
+/// # Panics
+///
+/// Panics if self.buffers does not contain at least 2 buffers (this code expects that the
+/// first will contain the offsets for this variable-length array and the other will contain
+/// the values)
+pub fn get_byte_array_buffers<O: OffsetSizeTrait>(data: &ArrayData) -> (Buffer, Buffer) {
+    if data.is_empty() {
+        return (MutableBuffer::new(0).into(), MutableBuffer::new(0).into());
+    }
+
+    // get the buffer of offsets, now shifted so they are shifted to be accurate to the slice
+    // of values that we'll be taking (e.g. if they previously said [0, 3, 5, 7], but we slice
+    // to only get the last offset, they'll be shifted to be [0, 2], since that would be the
+    // offset pair for the last value in this shifted slice).
+    // also, in this example, original_start_offset would be 5 and len would be 2.
+    let (offsets, original_start_offset, len) = reencode_offsets::<O>(data);
+    let values = data.buffers()[1].slice_with_length(original_start_offset, len);
+    (offsets, values)
+}
+
+/// Common functionality for re-encoding offsets. Returns the new offsets as well as
+/// original start offset and length for use in slicing child data.
+///
+/// # Panics
+///
+/// Will panic if you call this on an `ArrayData` that does not have a buffer of offsets as the
+/// very first buffer (i.e. expects this to be a valid variable-length array)
+pub fn reencode_offsets<O: OffsetSizeTrait>(data: &ArrayData) -> (Buffer, usize, usize) {
+    // first we want to see: what is the offset of this `ArrayData` into the buffer (which is a
+    // buffer of offsets into the buffer of data)
+    let orig_offset = data.offset();
+    // and also we need to get the buffer of offsets
+    let offsets_buf = &data.buffers()[0];
+
+    // then we have to turn it into a typed slice that we can read and manipulate below if
+    // needed, and slice it according to the size that we need to return
+    // we need to do `self.len + 1` instead of just `self.len` because the offsets are encoded
+    // as overlapping pairs - e.g. an array of two items, starting at idx 0, and spanning two
+    // each, would be encoded as [0, 2, 4].
+    let offsets_slice = &offsets_buf.typed_data::<O>()[orig_offset..][..data.len() + 1];
+
+    // and now we can see what the very first offset and the very last offset is
+    let start_offset = offsets_slice.first().unwrap();
+    let end_offset = offsets_slice.last().unwrap().as_usize();
+
+    // if the start offset is just 0, i.e. it points to the very beginning of the values of
+    // this `ArrayData`, then we don't need to shift anything to be a 'correct' offset 'cause
+    // all the offsets in this buffer are already offset by 0.
+    // But if it's not 0, then we need to shift them all so that the offsets don't start at
+    // some weird value.
+    let (start_offset, offsets) = match start_offset.as_usize() {
+        0 => (0, offsets_slice.to_vec().into()),
+        start => (
+            start,
+            offsets_slice.iter().map(|x| *x - *start_offset).collect(),
+        ),
+    };
+
+    (offsets, start_offset, end_offset - start_offset)
+}
+
 /// Similar logic as [`get_byte_array_buffers()`] but slices the child array instead
 /// of a values buffer.
 fn get_list_array_buffers<O: OffsetSizeTrait>(data: &ArrayData) -> (Buffer, ArrayData) {
@@ -1314,7 +1381,7 @@ fn get_list_array_buffers<O: OffsetSizeTrait>(data: &ArrayData) -> (Buffer, Arra
         );
     }
 
-    let (offsets, original_start_offset, len) = data.reencode_offsets::<O>();
+    let (offsets, original_start_offset, len) = reencode_offsets::<O>(data);
     let child_data = data.child_data()[0].slice(original_start_offset, len);
     (offsets, child_data)
 }
@@ -1375,11 +1442,16 @@ fn encode_array_datas(
         iter.map(|arr| {
             let arr = arr.borrow();
             arr.get_slice_memory_size_with_alignment(Some(write_options.alignment))
-                .map(|size| if has_validity_bitmap(arr.data_type(), write_options) && arr.nulls().is_none() {
-                    let null_len = bit_util::ceil(arr.len(), 8);
-                    size + null_len + pad_to_alignment(write_options.alignment, null_len)
-                } else {
-                    size
+                .map(|size| {
+                    let didnt_count_nulls = arr.nulls().is_none();
+                    let will_write_nulls = has_validity_bitmap(arr.data_type(), write_options);
+
+                    if will_write_nulls && didnt_count_nulls {
+                        let null_len = bit_util::ceil(arr.len(), 8);
+                        size + null_len + pad_to_alignment(write_options.alignment, null_len)
+                    } else {
+                        size
+                    }
                 })
         })
         .sum()
@@ -1390,67 +1462,79 @@ fn encode_array_datas(
 
     let total_size = get_arr_batch_size(arr_datas.iter(), write_options)?;
 
-    /*if total_size == 0 {
-        // If there's nothing of size to encode, then existing tests say we shouldn't even return
-        // an empty EncodedData - we just return no EncodedData
-        return Ok(vec![]);
-    }*/
-
     let n_batches = bit_util::ceil(total_size, max_msg_size);
     let mut out = Vec::with_capacity(n_batches);
 
-    println!("🐈 n_rows: {n_rows}, n_batches: {n_batches}, header_len: {header_len}, total_size: {total_size}, max_msg_size: {max_msg_size}");
-
     let mut offset = 0;
     while offset < n_rows.max(1) {
-        let length = (1..)
+        let rows_left = n_rows - offset;
+        let length = (1..=rows_left)
             .find(|len| {
-                println!("🛑 break");
-
                 // If we've exhausted the available length of the array datas, then just return -
                 // we've got it.
-                if arr_datas.iter().any(|arr| arr.len() < offset + len) {
+                if offset + len > n_rows {
                     return true;
                 }
 
-                let arr_iter = arr_datas.iter().map(|arr| arr.slice(offset, *len));
+                let arr_iter = arr_datas
+                    .iter()
+                    // Since we're only returning up above if *all* of the arrays have exhausted
+                    // their available length, it's theoretically possible (though I don't think
+                    // expected or allowed by the invariants that this crate tries to hold) that
+                    // some arrays have different lengths from the others, so we need to call
+                    // `.min(*len)` to ensure we don't get a failed assertion when trying to slice
+                    .map(|arr| arr.slice(offset, arr.len().min(*len)));
 
                 // we can unwrap this here b/c this only errors on malformed buffer-type/data-type
                 // combinations, and if any of these arrays had that, this function would've
                 // already short-circuited on an earlier call of this function
                 get_arr_batch_size(arr_iter, write_options).unwrap() > max_msg_size
             })
-            // Because this is an unbounded range, this will only panic if we reach usize::MAX and
-            // still haven't found anything. However, the inner part of this loop slices
-            // `ArrayData` with the number that we're iterating over, and that will panic if we
-            // reach usize::MAX because that will be bigger than it can handle to be sliced.
-            .unwrap() - 1;
+            // If no rows fit in the given max size, we want to try to get the data across anyways,
+            // so that just means doing a single row. Calling `max(2)` is how we ensure that - if
+            // the very first item would go over the max size, giving us a length of 0, we want to
+            // set this to `2` so that taking away 1 leaves us with one row to encode.
+            .map(|len| len.max(2) - 1)
+            // If all rows can comfortably fit in this given size, then just get them all
+            .unwrap_or(rows_left);
 
         let new_arrs = arr_datas
             .iter()
-            .map(|arr| arr.slice(offset, length))
+            // We could get into a situtation where we were given all 0-row arrays to be sent over
+            // flight - we do need to send a flight message to show that there is no data, but we
+            // also can't have `length` be 0 at this point because it could also be that all rows
+            // are too large to send with the provided limits and so we just want to try to send
+            // one row anyways, so this is just how we cover our bases there.
+            .map(|arr| arr.slice(offset, arr.len().min(length)))
             .collect::<Vec<_>>();
 
-        fbb.reset_for_real_run();
-        fbb.encode_array_datas(
-            &new_arrs,
-            length as i64,
-            &encode_root,
-            header_type,
-            write_options,
-        )?;
+        // If we've got more than one row to encode or if we have 0 rows to encode but we haven't
+        // encoded anything yet, then continue with encoding. We don't need to do encoding, though,
+        // if we've already encoded some rows and there's no rows left
+        if length != 0 || offset == 0 {
+            fbb.reset_for_real_run();
+            fbb.encode_array_datas(
+                &new_arrs,
+                length as i64,
+                &encode_root,
+                header_type,
+                write_options,
+            )?;
 
-        let finished_data = fbb.fbb.finished_data();
-        println!(
-            "🐈 arrow_data: {}, finished_data: {} (n_rows: {length})",
-            fbb.arrow_data.len(),
-            finished_data.len()
-        );
+            let finished_data = fbb.fbb.finished_data();
 
-        out.push(EncodedData {
-            ipc_message: finished_data.to_vec(),
-            arrow_data: fbb.arrow_data.clone(),
-        });
+            out.push(EncodedData {
+                ipc_message: finished_data.to_vec(),
+                arrow_data: fbb.arrow_data.clone(),
+            });
+        }
+
+        // If length == 0, that means they gave us ArrayData with no rows, so a single iteration is
+        // always sufficient.
+        if length == 0 {
+            break;
+        }
+
         offset += length;
     }
 
@@ -1517,10 +1601,6 @@ impl<'fbb> FlatBufferSizeTracker<'fbb> {
         let mut variadic_buffer_counts = Vec::<i64>::default();
         let mut offset = 0;
 
-        // TODO: split these up here to only fit as many as can be fit
-        // - get `fbb.fbb.unfinished_data` after writing a fake piece of data for `buffers`. that
-        //   determines the real overhead
-        // - split up the array datas based on how much space they take up alone
         for array in arr_datas {
             self.write_array_data(
                 array,
@@ -1567,7 +1647,6 @@ impl<'fbb> FlatBufferSizeTracker<'fbb> {
             builder.add_header_type(header_type);
             builder.add_bodyLength(arrow_len);
 
-            // `root` was already tracked when it was turned into a union
             builder.add_header(root);
             builder.finish()
         };
@@ -1589,22 +1668,22 @@ impl<'fbb> FlatBufferSizeTracker<'fbb> {
             .map(TryInto::try_into)
             .transpose()?;
 
-        if !matches!(array_data.data_type(), DataType::Null) {
-            self.nodes
-                .push(crate::FieldNode::new(num_rows as i64, null_count as i64));
-        } else {
-            // NullArray's null_count equals to len, but the `null_count` passed in is from ArrayData
-            // where null_count is always 0.
-            self.nodes
-                .push(crate::FieldNode::new(num_rows as i64, num_rows as i64));
-        }
+        // NullArray's null_count equals to len, but the `null_count` passed in is from ArrayData
+        // where null_count is always 0.
+        self.nodes.push(crate::FieldNode::new(
+            num_rows as i64,
+            match array_data.data_type() {
+                DataType::Null => num_rows,
+                _ => null_count,
+            } as i64,
+        ));
 
         if has_validity_bitmap(array_data.data_type(), write_options) {
             // write null buffer if exists
             let null_buffer = match array_data.nulls() {
                 None => {
-                    // create a buffer and fill it with valid bits
                     let num_bytes = bit_util::ceil(num_rows, 8);
+                    // create a buffer and fill it with valid bits
                     MutableBuffer::new(num_bytes)
                         .with_bitset(num_bytes, true)
                         .into()
@@ -1612,9 +1691,8 @@ impl<'fbb> FlatBufferSizeTracker<'fbb> {
                 Some(buffer) => buffer.inner().sliced(),
             };
 
-            println!("🐈 writing null buffer");
             self.write_buffer(
-                null_buffer.as_slice(),
+                &null_buffer,
                 offset,
                 compression_codec,
                 write_options.alignment,
@@ -1622,21 +1700,18 @@ impl<'fbb> FlatBufferSizeTracker<'fbb> {
         }
 
         let mut write_byte_array_byffers = |(offsets, values): (Buffer, Buffer)| {
-            for (idx, buffer) in [offsets, values].into_iter().enumerate() {
-                println!("🐈 writing buf {idx} of tuple");
+            for buffer in [offsets, values] {
                 self.write_buffer(&buffer, offset, compression_codec, write_options.alignment)?;
             }
             Ok::<_, ArrowError>(())
         };
 
-        println!("🐈 writing array dt: {:?}", array_data.data_type());
-
         match array_data.data_type() {
             DataType::Binary | DataType::Utf8 => {
-                write_byte_array_byffers(array_data.get_byte_array_buffers::<i32>())?
+                write_byte_array_byffers(get_byte_array_buffers::<i32>(array_data))?
             }
             DataType::LargeBinary | DataType::LargeUtf8 => {
-                write_byte_array_byffers(array_data.get_byte_array_buffers::<i64>())?
+                write_byte_array_byffers(get_byte_array_buffers::<i64>(array_data))?
             }
             dt if DataType::is_numeric(dt)
                 || DataType::is_temporal(dt)
@@ -1693,12 +1768,7 @@ impl<'fbb> FlatBufferSizeTracker<'fbb> {
                     DataType::LargeList(_) => get_list_array_buffers::<i64>(array_data),
                     _ => unreachable!(),
                 };
-                self.write_buffer(
-                    offsets.as_slice(),
-                    offset,
-                    compression_codec,
-                    write_options.alignment,
-                )?;
+                self.write_buffer(&offsets, offset, compression_codec, write_options.alignment)?;
                 self.write_array_data(
                     &sliced_child_data,
                     offset,
@@ -1724,8 +1794,7 @@ impl<'fbb> FlatBufferSizeTracker<'fbb> {
         }
 
         let mut write_arr = |arr: &ArrayData| {
-            for (idx, data_ref) in arr.child_data().iter().enumerate() {
-                println!("🐈 writing child array {idx}");
+            for data_ref in arr.child_data() {
                 self.write_array_data(
                     data_ref,
                     offset,
@@ -1766,8 +1835,6 @@ impl<'fbb> FlatBufferSizeTracker<'fbb> {
         compression_codec: Option<CompressionCodec>,
         alignment: u8,
     ) -> Result<(), ArrowError> {
-        let start_len = self.arrow_data.len();
-
         let len: i64 = if self.dry_run {
             // Flatbuffers will essentially optimize this away if we say the len is 0 for all of
             // these, so to make sure the header size is the same in the dry run and in the real
@@ -1794,8 +1861,6 @@ impl<'fbb> FlatBufferSizeTracker<'fbb> {
         // padding and make offset aligned
         let pad_len = pad_to_alignment(alignment, len as usize);
         self.arrow_data.extend_from_slice(&PADDING[..pad_len]);
-
-        println!("🐈 writing buffer of size {} - arrow_data went {} => {}", buffer.len(), start_len, self.arrow_data.len());
 
         *offset += len + (pad_len as i64);
         Ok(())
