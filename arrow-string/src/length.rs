@@ -140,19 +140,12 @@ pub fn bit_length(array: &dyn Array) -> Result<ArrayRef, ArrowError> {
         }
         DataType::Utf8View => {
             let list = array.as_string_view();
-            let values = (0..list.len())
-                .map(|i| {
-                    if list.is_valid(i) {
-                        list.views()[i] as u32 * 8
-                    } else {
-                        0
-                    }
-                })
-                .collect::<Vec<u32>>();
-            Ok(Arc::new(UInt32Array::new(
-                values.into(),
-                array.nulls().cloned(),
-            )))
+            let values = list
+                .views()
+                .iter()
+                .map(|view| (*view as i32).wrapping_mul(8))
+                .collect();
+            Ok(Arc::new(Int32Array::new(values, array.nulls().cloned())))
         }
         DataType::Binary => {
             let list = array.as_binary::<i32>();
@@ -435,7 +428,7 @@ mod tests {
         assert_eq!(&expected, result);
     }
 
-    fn bit_length_cases() -> Vec<(Vec<&'static str>, usize, Vec<u32>)> {
+    fn bit_length_cases() -> Vec<(Vec<&'static str>, usize, Vec<i32>)> {
         // a large array
         let values = ["one", "on", "o", ""];
         let values = values.into_iter().cycle().take(4096).collect();
@@ -457,7 +450,7 @@ mod tests {
                 let array = StringArray::from(input);
                 let result = bit_length(&array).unwrap();
                 assert_eq!(len, result.len());
-                let result = result.as_any().downcast_ref::<UInt32Array>().unwrap();
+                let result = result.as_any().downcast_ref::<Int32Array>().unwrap();
                 expected.iter().enumerate().for_each(|(i, value)| {
                     assert_eq!(*value, result.value(i));
                 });
@@ -487,13 +480,27 @@ mod tests {
                 let string_array = StringViewArray::from(input);
                 let result = bit_length(&string_array).unwrap();
                 assert_eq!(len, result.len());
-                let result = result.as_any().downcast_ref::<UInt32Array>().unwrap();
+                let result = result.as_any().downcast_ref::<Int32Array>().unwrap();
                 expected.iter().enumerate().for_each(|(i, value)| {
                     assert_eq!(*value, result.value(i));
                 });
             })
     }
 
+    #[test]
+    fn bit_length_null_utf8view() {
+        bit_length_null_cases()
+            .into_iter()
+            .for_each(|(input, len, expected)| {
+                let array = StringArray::from(input);
+                let result = bit_length(&array).unwrap();
+                assert_eq!(len, result.len());
+                let result = result.as_any().downcast_ref::<Int32Array>().unwrap();
+
+                let expected: Int32Array = expected.into();
+                assert_eq!(&expected, result);
+            })
+    }
     #[test]
     fn bit_length_binary() {
         let value: Vec<&[u8]> = vec![b"one", &[0xff, 0xf8], b"three"];
