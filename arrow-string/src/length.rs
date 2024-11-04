@@ -138,15 +138,10 @@ pub fn bit_length(array: &dyn Array) -> Result<ArrayRef, ArrowError> {
             let list = array.as_string::<i64>();
             Ok(bit_length_impl::<Int64Type>(list.offsets(), list.nulls()))
         }
-        DataType::Utf8View => {
-            let list = array.as_string_view();
-            let values = list
-                .views()
-                .iter()
-                .map(|view| (*view as i32).wrapping_mul(8))
-                .collect();
-            Ok(Arc::new(Int32Array::new(values, array.nulls().cloned())))
-        }
+        DataType::Utf8View => Ok(Arc::new(Int32Array::from_unary(
+            array.as_string_view(),
+            |x| i32::mul_wrapping(x.bytes().len() as i32, 8),
+        ))),
         DataType::Binary => {
             let list = array.as_binary::<i32>();
             Ok(bit_length_impl::<Int32Type>(list.offsets(), list.nulls()))
