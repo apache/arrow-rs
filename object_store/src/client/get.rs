@@ -143,9 +143,7 @@ enum GetResultError {
         actual: Range<usize>,
     },
 
-    #[snafu(display(
-        "Timed out getting data, please increase timeout parameter for {store} client"
-    ))]
+    #[snafu(display("Request timed out, please increase timeout parameter for {store} client"))]
     DataStreamTimeout { store: String },
 }
 
