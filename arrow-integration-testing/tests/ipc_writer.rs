@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::ipc;
 use arrow::ipc::reader::{FileReader, StreamReader};
 use arrow::ipc::writer::{FileWriter, IpcWriteOptions, StreamWriter};
 use arrow::util::test_util::arrow_test_data;
@@ -91,7 +90,9 @@ fn write_1_0_0_littleendian() {
 }
 
 #[test]
+#[cfg(target_pointer_width = "64")]
 fn write_2_0_0_compression() {
+    use arrow::ipc;
     let testdata = arrow_test_data();
     let version = "2.0.0-compression";
     let paths = ["generated_lz4", "generated_zstd"];
