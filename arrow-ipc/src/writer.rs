@@ -454,6 +454,10 @@ impl IpcDataGenerator {
         Ok(())
     }
 
+    /// Calls [`Self::encoded_batch_with_size`] with no limit, returning the first (and only)
+    /// [`EncodedData`] that is produced. This method should be used over
+    /// [`Self::encoded_batch_with_size`] if the consumer has no concerns about encoded message
+    /// size limits
     pub fn encoded_batch(
         &self,
         batch: &RecordBatch,

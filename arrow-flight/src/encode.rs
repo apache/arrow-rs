@@ -664,9 +664,8 @@ fn hydrate_dictionary(array: &ArrayRef, data_type: &DataType) -> Result<ArrayRef
 #[cfg(test)]
 mod tests {
     use crate::{
-        EncodedData,
         decode::{DecodedPayload, FlightDataDecoder},
-        utils,
+        utils, EncodedData,
     };
     use arrow_array::builder::{
         GenericByteDictionaryBuilder, ListBuilder, StringDictionaryBuilder, StructBuilder,
@@ -1485,21 +1484,20 @@ mod tests {
     #[tokio::test]
     async fn test_split_batch_for_grpc_response() {
         async fn get_decoded(schema: SchemaRef, encoded: Vec<EncodedData>) -> Vec<RecordBatch> {
-            FlightDataDecoder::new(
-                futures::stream::iter(
-                    std::iter::once(SchemaAsIpc::new(&schema, &IpcWriteOptions::default()).into())
-                        .chain(encoded.into_iter().map(FlightData::from))
-                        .map(Ok)
-                )
-            ).collect::<Vec<Result<_>>>()
-                .await
-                .into_iter()
-                .map(|r| r.unwrap())
-                .filter_map(|data| match data.payload {
-                    DecodedPayload::RecordBatch(rb) => Some(rb),
-                    _ => None
-                })
-                .collect()
+            FlightDataDecoder::new(futures::stream::iter(
+                std::iter::once(SchemaAsIpc::new(&schema, &IpcWriteOptions::default()).into())
+                    .chain(encoded.into_iter().map(FlightData::from))
+                    .map(Ok),
+            ))
+            .collect::<Vec<Result<_>>>()
+            .await
+            .into_iter()
+            .map(|r| r.unwrap())
+            .filter_map(|data| match data.payload {
+                DecodedPayload::RecordBatch(rb) => Some(rb),
+                _ => None,
+            })
+            .collect()
         }
 
         let max_flight_data_size = 1024;
