@@ -257,7 +257,7 @@ mod tests {
     }
 
     #[test]
-    fn test_ceil() {
+    fn test_ceil_with_32_bits() {
         assert_eq!(ceil(0, 1), 0);
         assert_eq!(ceil(1, 1), 1);
         assert_eq!(ceil(1, 2), 1);
@@ -266,8 +266,16 @@ mod tests {
         assert_eq!(ceil(8, 8), 1);
         assert_eq!(ceil(9, 8), 2);
         assert_eq!(ceil(9, 9), 1);
-        assert_eq!(ceil(10000000000, 10), 1000000000);
-        assert_eq!(ceil(10, 10000000000), 1);
-        assert_eq!(ceil(10000000000, 1000000000), 10);
+        assert_eq!(ceil(1_000_000_000, 10), 100_000_000);
+        assert_eq!(ceil(10, 1_000_000_000), 1);
+        assert_eq!(ceil(1_000_000_000, 100_000_000), 10);
+    }
+
+    #[test]
+    #[cfg(target_pointer_width = "64")]
+    fn test_ceil_with_64_bits() {
+        assert_eq!(ceil(10_000_000_000_000, 10), 1_000_000_000_000);
+        assert_eq!(ceil(10, 10_000_000_000_000), 1);
+        assert_eq!(ceil(10_000_000_000_000, 1_000_000_000_000), 10);
     }
 }
