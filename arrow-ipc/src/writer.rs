@@ -454,9 +454,6 @@ impl IpcDataGenerator {
         Ok(())
     }
 
-    /// Encodes a batch to a number of [EncodedData] items (dictionary batches + the record batch).
-    /// The [DictionaryTracker] keeps track of dictionaries with new `dict_id`s  (so they are only sent once)
-    /// Make sure the [DictionaryTracker] is initialized at the start of the stream.
     pub fn encoded_batch(
         &self,
         batch: &RecordBatch,
@@ -469,12 +466,22 @@ impl IpcDataGenerator {
         assert_eq!(
             encoded_messages.len(),
             1,
-            "encoded_batch with max size of usize::MAX should not be able to return more than 1 batch"
+            "encoded_batch with max size of usize::MAX should not be able to return more or less than 1 batch"
         );
 
         Ok((encoded_dictionaries, encoded_messages.pop().unwrap()))
     }
 
+    /// Encodes a batch to a number of [EncodedData] items (dictionary batches + the record batch).
+    /// The [DictionaryTracker] keeps track of dictionaries with new `dict_id`s  (so they are only sent once)
+    /// Make sure the [DictionaryTracker] is initialized at the start of the stream.
+    /// The `max_flight_data_size` is used to control how much space each encoded [`RecordBatch`] is
+    /// allowed to take up.
+    ///
+    /// Each [`EncodedData`] in the second element of the returned tuple will be smaller than
+    /// `max_flight_data_size` bytes, if possible at all. However, this API has no support for
+    /// splitting rows into multiple [`EncodedData`]s, so if a row is larger, by itself, than
+    /// `max_flight_data_size`, it will be encoded to a message which is larger than the limit.
     pub fn encoded_batch_with_size(
         &self,
         batch: &RecordBatch,

@@ -423,14 +423,26 @@ impl ArrayData {
         size
     }
 
+    /// Returns the total number of the bytes of memory occupied by the buffers by this slice of
+    /// [`ArrayData`] (See also diagram on [`ArrayData`]).
+    ///
+    /// This is approximately the number of bytes if a new [`ArrayData`] was formed by creating new
+    /// [`Buffer`]s with exactly the data needed.
+    ///
+    /// For example, a [`DataType::Int64`] with `100` elements, [`Self::get_slice_memory_size`]
+    /// would return `100 * 8 = 800`. If the [`ArrayData`] was then [`Self::slice`]d to refer to
+    /// its first `20` elements, then [`Self::get_slice_memory_size`] on the sliced [`ArrayData`]
+    /// would return `20 * 8 = 160`.
+    ///
+    /// The `alignment` parameter is used to add padding to each buffer being counted, to ensure
+    /// the size for each one is aligned to `alignment` bytes (if it is `Some`)
     pub fn get_slice_memory_size_with_alignment(
         &self,
         alignment: Option<u8>,
     ) -> Result<usize, ArrowError> {
         let layout = layout(&self.data_type);
 
-        // TODO: I pulled this from arrow-ipc, we should extract it to something where they can
-        // share code
+        // Just pulled from arrow-ipc
         #[inline]
         fn pad_to_alignment(alignment: u8, len: usize) -> usize {
             let a = usize::from(alignment - 1);
@@ -468,14 +480,6 @@ impl ArrayData {
                         self.typed_offsets::<i64>()
                             .map(|off| (off[self.len] - off[0]) as usize)
                     }
-                    // `FlatBufferSizeTracker::write_array_data` just writes these just as raw
-                    // buffer data as opposed to using offsets or anything
-                    DataType::BinaryView | DataType::Utf8View => Ok(
-                        self.buffers()
-                            .iter()
-                            .map(|buf| buf.len())
-                            .sum::<usize>()
-                    ),
                     dt => Err(ArrowError::NotYetImplemented(format!(
                         "Invalid data type for VariableWidth buffer. Expected Utf8, LargeUtf8, Binary or LargeBinary. Got {dt}",
                     ))),
@@ -500,18 +504,8 @@ impl ArrayData {
         Ok(result)
     }
 
-    /// Returns the total number of the bytes of memory occupied by
-    /// the buffers by this slice of [`ArrayData`] (See also diagram on [`ArrayData`]).
-    ///
-    /// This is approximately the number of bytes if a new
-    /// [`ArrayData`] was formed by creating new [`Buffer`]s with
-    /// exactly the data needed.
-    ///
-    /// For example, a [`DataType::Int64`] with `100` elements,
-    /// [`Self::get_slice_memory_size`] would return `100 * 8 = 800`. If
-    /// the [`ArrayData`] was then [`Self::slice`]ed to refer to its
-    /// first `20` elements, then [`Self::get_slice_memory_size`] on the
-    /// sliced [`ArrayData`] would return `20 * 8 = 160`.
+    /// Equivalent to calling [`Self::get_slice_memory_size_with_alignment()`] with `None` for the
+    /// alignment
     pub fn get_slice_memory_size(&self) -> Result<usize, ArrowError> {
         self.get_slice_memory_size_with_alignment(None)
     }
