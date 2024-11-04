@@ -19,9 +19,8 @@
 
 use arrow_array::*;
 use arrow_array::{cast::AsArray, types::*};
-use arrow_buffer::{ArrowNativeType, NullBuffer, OffsetBuffer, ScalarBuffer};
+use arrow_buffer::{ArrowNativeType, NullBuffer, OffsetBuffer};
 use arrow_schema::{ArrowError, DataType};
-use cast::as_string_array;
 use std::sync::Arc;
 
 fn length_impl<P: ArrowPrimitiveType>(
