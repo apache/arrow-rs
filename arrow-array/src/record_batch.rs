@@ -678,6 +678,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(target_pointer_width = "64")]
     fn byte_size_should_not_regress() {
         let schema = Schema::new(vec![
             Field::new("a", DataType::Int32, false),
