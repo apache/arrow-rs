@@ -78,6 +78,8 @@ hyper-util = "0.1"
 http-body-util = "0.1"
 rand = "0.8"
 tempfile = "3.1.0"
+regex = "1.11.1"
+http = "1.1.0"
 
 [[test]]
 name = "get_range_file"
