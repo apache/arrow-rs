@@ -161,6 +161,12 @@ jobs:
       - name: Run object_store tests
         run: cargo test --features=aws,azure,gcp,http
 
+      - name: Run object_store tests (AWS native conditional put)
+        run: cargo test --features=aws
+        env:
+          AWS_CONDITIONAL_PUT: etag-create-only
+          AWS_COPY_IF_NOT_EXISTS: multipart
+
       - name: GCS Output
         if: ${{ !cancelled() }}
         run: docker logs $GCS_CONTAINER

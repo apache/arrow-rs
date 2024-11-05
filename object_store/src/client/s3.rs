@@ -92,6 +92,13 @@ pub(crate) struct InitiateMultipartUploadResult {
     pub upload_id: String,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub(crate) struct CopyPartResult {
+    #[serde(rename = "ETag")]
+    pub e_tag: String,
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "PascalCase")]
 pub(crate) struct CompleteMultipartUpload {
